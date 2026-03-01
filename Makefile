@@ -2,7 +2,7 @@ BINARY := meshsat
 BUILD_DIR := build
 GO := CGO_ENABLED=0 go
 
-.PHONY: build build-arm64 build-x86_64 run test fmt lint tidy clean docker
+.PHONY: build build-arm64 build-x86_64 run test fmt lint tidy clean docker web build-with-web
 
 build:
 	$(GO) build -o $(BUILD_DIR)/$(BINARY) ./cmd/meshsat
@@ -33,3 +33,10 @@ clean:
 
 docker:
 	docker build -t localhost:5000/cubeos-app/meshsat:latest .
+
+web:
+	cd web && npm ci --no-audit && npm run build
+	rm -rf cmd/meshsat/web/dist
+	cp -r web/dist cmd/meshsat/web/dist
+
+build-with-web: web build

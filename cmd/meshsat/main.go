@@ -57,6 +57,8 @@ func main() {
 
 	// API server
 	srv := api.NewServer(db, mesh, proc)
+	srv.SetWebHandler(webHandler(cfg.WebDir))
+
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      srv.Router(),

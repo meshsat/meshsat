@@ -14,9 +14,10 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	db        *database.DB
-	mesh      transport.MeshTransport
-	processor *engine.Processor
+	db         *database.DB
+	mesh       transport.MeshTransport
+	processor  *engine.Processor
+	webHandler http.Handler
 }
 
 // NewServer creates a new API server.
@@ -26,6 +27,11 @@ func NewServer(db *database.DB, mesh transport.MeshTransport, proc *engine.Proce
 		mesh:      mesh,
 		processor: proc,
 	}
+}
+
+// SetWebHandler sets the handler for serving the web UI.
+func (s *Server) SetWebHandler(h http.Handler) {
+	s.webHandler = h
 }
 
 // Router builds the chi router with all API routes.
@@ -68,6 +74,11 @@ func (s *Server) Router() http.Handler {
 		// Waypoints (Phase 2)
 		r.Post("/waypoints", s.handleSendWaypoint)
 	})
+
+	// Web UI (SPA) — catch-all after API routes
+	if s.webHandler != nil {
+		r.Handle("/*", s.webHandler)
+	}
 
 	return r
 }

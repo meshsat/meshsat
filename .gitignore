@@ -2,3 +2,6 @@ build/
 *.db
 *.exe
 .env
+web/node_modules/
+web/dist/
+cmd/meshsat/web/dist/
