@@ -238,6 +238,7 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 			resp.MessagesIn = status.MessagesIn
 			resp.MessagesOut = status.MessagesOut
 			resp.Errors = status.Errors
+			resp.DLQPending = status.DLQPending
 			resp.LastActivity = status.LastActivity
 			resp.ConnectionUptime = status.ConnectionUptime
 		}
@@ -273,6 +274,7 @@ func (m *Manager) GetSingleStatus(gwType string) (*GatewayStatusResponse, error)
 		resp.MessagesIn = status.MessagesIn
 		resp.MessagesOut = status.MessagesOut
 		resp.Errors = status.Errors
+		resp.DLQPending = status.DLQPending
 		resp.LastActivity = status.LastActivity
 		resp.ConnectionUptime = status.ConnectionUptime
 	}
@@ -300,7 +302,7 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err != nil {
 			return nil, err
 		}
-		return NewIridiumGateway(*cfg, m.sat), nil
+		return NewIridiumGateway(*cfg, m.sat, m.db), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -329,6 +331,7 @@ type GatewayStatusResponse struct {
 	MessagesIn       int64           `json:"messages_in"`
 	MessagesOut      int64           `json:"messages_out"`
 	Errors           int64           `json:"errors"`
+	DLQPending       int64           `json:"dlq_pending,omitempty"`
 	LastActivity     interface{}     `json:"last_activity,omitempty"`
 	ConnectionUptime string          `json:"connection_uptime,omitempty"`
 	Config           json.RawMessage `json:"config,omitempty"`

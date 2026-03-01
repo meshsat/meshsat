@@ -341,3 +341,84 @@ func (db *DB) HasPacket(packetID uint32) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+// DeadLetter represents a failed satellite send queued for retry.
+type DeadLetter struct {
+	ID         int64     `db:"id" json:"id"`
+	PacketID   uint32    `db:"packet_id" json:"packet_id"`
+	Payload    []byte    `db:"payload" json:"payload"`
+	Retries    int       `db:"retries" json:"retries"`
+	MaxRetries int       `db:"max_retries" json:"max_retries"`
+	NextRetry  time.Time `db:"next_retry" json:"next_retry"`
+	Status     string    `db:"status" json:"status"` // pending, sent, expired
+	LastError  string    `db:"last_error" json:"last_error"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+}
+
+// sqliteTime formats a time for SQLite DATETIME comparison (matches CURRENT_TIMESTAMP format).
+const sqliteTimeFormat = "2006-01-02 15:04:05"
+
+// InsertDeadLetter adds a failed send to the dead-letter queue.
+func (db *DB) InsertDeadLetter(packetID uint32, payload []byte, maxRetries int, nextRetry time.Time, lastError string) error {
+	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error)
+		VALUES (?, ?, ?, ?, ?)`,
+		packetID, payload, maxRetries, nextRetry.UTC().Format(sqliteTimeFormat), lastError)
+	return err
+}
+
+// GetPendingDeadLetters returns dead letters ready for retry.
+func (db *DB) GetPendingDeadLetters(limit int) ([]DeadLetter, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	var dls []DeadLetter
+	err := db.Select(&dls,
+		`SELECT * FROM dead_letters WHERE status = 'pending' AND next_retry <= CURRENT_TIMESTAMP
+		 ORDER BY next_retry ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query dead letters: %w", err)
+	}
+	return dls, nil
+}
+
+// MarkDeadLetterSent marks a dead letter as successfully sent.
+func (db *DB) MarkDeadLetterSent(id int64) error {
+	_, err := db.Exec(`UPDATE dead_letters SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
+}
+
+// UpdateDeadLetterRetry increments retry count and schedules next attempt.
+func (db *DB) UpdateDeadLetterRetry(id int64, nextRetry time.Time, lastError string) error {
+	_, err := db.Exec(`UPDATE dead_letters
+		SET retries = retries + 1, next_retry = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		nextRetry.UTC().Format(sqliteTimeFormat), lastError, id)
+	return err
+}
+
+// ExpireDeadLetter marks a dead letter as expired (max retries exhausted).
+func (db *DB) ExpireDeadLetter(id int64, lastError string) error {
+	_, err := db.Exec(`UPDATE dead_letters SET status = 'expired', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		lastError, id)
+	return err
+}
+
+// CountPendingDeadLetters returns the number of pending dead letters.
+func (db *DB) CountPendingDeadLetters() (int, error) {
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM dead_letters WHERE status = 'pending'").Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// PruneDeadLetters removes sent/expired dead letters older than the given number of days.
+func (db *DB) PruneDeadLetters(days int) (int64, error) {
+	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+	res, err := db.Exec("DELETE FROM dead_letters WHERE status IN ('sent', 'expired') AND updated_at < ?", cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune dead letters: %w", err)
+	}
+	return res.RowsAffected()
+}

@@ -11,6 +11,8 @@ type IridiumConfig struct {
 	PollInterval    int    `json:"poll_interval"`              // seconds, 0 = no polling
 	MaxTextLength   int    `json:"max_text_length"`            // max text bytes in SBD (default 320)
 	IncludePosition bool   `json:"include_position"`           // include GPS coords in compact encoding
+	DLQMaxRetries   int    `json:"dlq_max_retries"`            // max retry attempts for failed sends (default 3)
+	DLQRetryBase    int    `json:"dlq_retry_base_secs"`        // base retry interval in seconds (default 120, exponential backoff)
 }
 
 // DefaultIridiumConfig returns sensible defaults.
@@ -23,6 +25,8 @@ func DefaultIridiumConfig() IridiumConfig {
 		PollInterval:    0,
 		MaxTextLength:   320,
 		IncludePosition: true,
+		DLQMaxRetries:   3,
+		DLQRetryBase:    120,
 	}
 }
 

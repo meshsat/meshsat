@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
 
@@ -18,6 +19,7 @@ import (
 type IridiumGateway struct {
 	config IridiumConfig
 	sat    transport.SatTransport
+	db     *database.DB
 	inCh   chan InboundMessage
 
 	outCh chan *transport.MeshMessage // buffered outbound queue
@@ -26,6 +28,7 @@ type IridiumGateway struct {
 	msgsIn     atomic.Int64
 	msgsOut    atomic.Int64
 	errors     atomic.Int64
+	dlqPending atomic.Int64
 	lastActive atomic.Int64
 	startTime  time.Time
 
@@ -34,10 +37,11 @@ type IridiumGateway struct {
 }
 
 // NewIridiumGateway creates a new Iridium satellite gateway.
-func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport) *IridiumGateway {
+func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB) *IridiumGateway {
 	return &IridiumGateway{
 		config: cfg,
 		sat:    sat,
+		db:     db,
 		inCh:   make(chan InboundMessage, 32),
 		outCh:  make(chan *transport.MeshMessage, 10),
 	}
@@ -56,9 +60,25 @@ func (g *IridiumGateway) Start(ctx context.Context) error {
 		g.connected.Store(status.Connected)
 	}
 
+	// Load pending DLQ count
+	if g.db != nil {
+		if count, err := g.db.CountPendingDeadLetters(); err == nil {
+			g.dlqPending.Store(int64(count))
+			if count > 0 {
+				log.Info().Int("pending", count).Msg("iridium: dead-letter queue has pending retries")
+			}
+		}
+	}
+
 	// Start outbound send worker
 	g.wg.Add(1)
 	go g.sendWorker(ctx)
+
+	// Start DLQ retry worker
+	if g.db != nil {
+		g.wg.Add(1)
+		go g.dlqRetryWorker(ctx)
+	}
 
 	// Start SSE listener for ring alerts
 	if g.config.AutoReceive {
@@ -115,6 +135,7 @@ func (g *IridiumGateway) Status() GatewayStatus {
 		MessagesIn:  g.msgsIn.Load(),
 		MessagesOut: g.msgsOut.Load(),
 		Errors:      g.errors.Load(),
+		DLQPending:  g.dlqPending.Load(),
 	}
 	if ts := g.lastActive.Load(); ts > 0 {
 		s.LastActivity = time.Unix(ts, 0)
@@ -160,8 +181,9 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 
 			result, err := g.sat.Send(ctx, data)
 			if err != nil {
-				log.Error().Err(err).Msg("iridium: SBD send failed")
+				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: SBD send failed, queuing to DLQ")
 				g.errors.Add(1)
+				g.enqueueDeadLetter(msg.ID, data, err.Error())
 				continue
 			}
 
@@ -169,6 +191,106 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("iridium: SBD sent")
 		}
+	}
+}
+
+// enqueueDeadLetter persists a failed send to the database for later retry.
+func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errMsg string) {
+	if g.db == nil {
+		return
+	}
+
+	retryBase := g.config.DLQRetryBase
+	if retryBase <= 0 {
+		retryBase = 120
+	}
+	nextRetry := time.Now().Add(time.Duration(retryBase) * time.Second)
+
+	maxRetries := g.config.DLQMaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	if err := g.db.InsertDeadLetter(packetID, payload, maxRetries, nextRetry, errMsg); err != nil {
+		log.Error().Err(err).Uint32("packet_id", packetID).Msg("iridium: failed to enqueue dead letter")
+		return
+	}
+
+	g.dlqPending.Add(1)
+	log.Info().Uint32("packet_id", packetID).Time("next_retry", nextRetry).Msg("iridium: message queued in DLQ")
+}
+
+// dlqRetryWorker periodically retries failed sends from the dead-letter queue.
+func (g *IridiumGateway) dlqRetryWorker(ctx context.Context) {
+	defer g.wg.Done()
+
+	retryBase := g.config.DLQRetryBase
+	if retryBase <= 0 {
+		retryBase = 120
+	}
+
+	// Check every 30s for pending retries
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g.processDLQ(ctx, retryBase)
+		}
+	}
+}
+
+// processDLQ attempts to resend pending dead letters.
+func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
+	pending, err := g.db.GetPendingDeadLetters(5)
+	if err != nil {
+		log.Error().Err(err).Msg("iridium: failed to query DLQ")
+		return
+	}
+
+	for _, dl := range pending {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		result, err := g.sat.Send(ctx, dl.Payload)
+		if err != nil {
+			// Increment retry, check if exhausted
+			if dl.Retries+1 >= dl.MaxRetries {
+				if expErr := g.db.ExpireDeadLetter(dl.ID, err.Error()); expErr != nil {
+					log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to expire dead letter")
+				}
+				g.dlqPending.Add(-1)
+				g.errors.Add(1)
+				log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retries", dl.Retries+1).Msg("iridium: DLQ message expired after max retries")
+			} else {
+				// Exponential backoff: base * 2^retries
+				backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
+				if backoff > 30*time.Minute {
+					backoff = 30 * time.Minute
+				}
+				nextRetry := time.Now().Add(backoff)
+				if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
+					log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
+				}
+				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ retry failed, rescheduled")
+			}
+			continue
+		}
+
+		// Success
+		if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+			log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent")
+		}
+		g.dlqPending.Add(-1)
+		g.msgsOut.Add(1)
+		g.lastActive.Store(time.Now().Unix())
+		log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("mo_status", result.MOStatus).Int("retry", dl.Retries+1).Msg("iridium: DLQ message sent successfully")
 	}
 }
 

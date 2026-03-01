@@ -69,6 +69,22 @@ var migrations = []string{
 		version INTEGER NOT NULL
 	);
 	INSERT INTO schema_version (version) VALUES (1);`,
+
+	// v2: Dead-letter queue for failed satellite (Iridium) sends
+	`CREATE TABLE IF NOT EXISTS dead_letters (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		packet_id    INTEGER NOT NULL,
+		payload      BLOB NOT NULL,
+		retries      INTEGER NOT NULL DEFAULT 0,
+		max_retries  INTEGER NOT NULL DEFAULT 3,
+		next_retry   DATETIME NOT NULL,
+		status       TEXT NOT NULL DEFAULT 'pending',
+		last_error   TEXT DEFAULT '',
+		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_dead_letters_status ON dead_letters(status);
+	CREATE INDEX IF NOT EXISTS idx_dead_letters_next_retry ON dead_letters(next_retry);`,
 }
 
 func (db *DB) migrate() error {

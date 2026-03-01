@@ -42,4 +42,14 @@ func prune(db *database.DB, days int) {
 	if deleted > 0 {
 		log.Info().Int64("deleted", deleted).Int("retention_days", days).Msg("retention prune complete")
 	}
+
+	// Prune sent/expired dead letters (same retention window)
+	dlqDeleted, err := db.PruneDeadLetters(days)
+	if err != nil {
+		log.Error().Err(err).Msg("dlq prune failed")
+		return
+	}
+	if dlqDeleted > 0 {
+		log.Info().Int64("deleted", dlqDeleted).Msg("dlq prune complete")
+	}
 }

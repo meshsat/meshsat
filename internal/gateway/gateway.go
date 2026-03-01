@@ -22,6 +22,7 @@ type GatewayStatus struct {
 	MessagesIn       int64     `json:"messages_in"`
 	MessagesOut      int64     `json:"messages_out"`
 	Errors           int64     `json:"errors"`
+	DLQPending       int64     `json:"dlq_pending,omitempty"`
 	LastActivity     time.Time `json:"last_activity,omitempty"`
 	ConnectionUptime string    `json:"connection_uptime,omitempty"`
 }
