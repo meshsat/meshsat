@@ -1,10 +1,133 @@
 <script setup>
-import { onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
 
-onMounted(() => store.fetchGateways())
+const editing = ref(null) // 'mqtt' or 'iridium'
+const testing = ref(null)
+const saving = ref(false)
+const testResult = ref(null)
+
+// MQTT form
+const mqttForm = ref({
+  broker_url: 'tcp://localhost:1883',
+  username: '',
+  password: '',
+  client_id: 'meshsat',
+  topic_prefix: 'msh/cubeos',
+  channel_name: 'LongFast',
+  qos: 1,
+  tls: false,
+  keep_alive: 60
+})
+
+// Iridium form
+const iridiumForm = ref({
+  forward_portnums: [1],
+  forward_all: false,
+  compression: 'compact',
+  auto_receive: true,
+  poll_interval: 0,
+  max_text_length: 320,
+  include_position: true
+})
+
+const mqttGateway = computed(() => store.gateways.find(g => g.type === 'mqtt'))
+const iridiumGateway = computed(() => store.gateways.find(g => g.type === 'iridium'))
+
+onMounted(() => {
+  store.fetchGateways()
+})
+
+function editGateway(type) {
+  testResult.value = null
+  if (type === 'mqtt' && mqttGateway.value?.config) {
+    const cfg = mqttGateway.value.config
+    mqttForm.value = {
+      broker_url: cfg.broker_url || 'tcp://localhost:1883',
+      username: cfg.username || '',
+      password: cfg.password === '****' ? '' : (cfg.password || ''),
+      client_id: cfg.client_id || 'meshsat',
+      topic_prefix: cfg.topic_prefix || 'msh/cubeos',
+      channel_name: cfg.channel_name || 'LongFast',
+      qos: cfg.qos ?? 1,
+      tls: cfg.tls ?? false,
+      keep_alive: cfg.keep_alive ?? 60
+    }
+  }
+  if (type === 'iridium' && iridiumGateway.value?.config) {
+    const cfg = iridiumGateway.value.config
+    iridiumForm.value = {
+      forward_portnums: cfg.forward_portnums || [1],
+      forward_all: cfg.forward_all ?? false,
+      compression: cfg.compression || 'compact',
+      auto_receive: cfg.auto_receive ?? true,
+      poll_interval: cfg.poll_interval ?? 0,
+      max_text_length: cfg.max_text_length ?? 320,
+      include_position: cfg.include_position ?? true
+    }
+  }
+  editing.value = type
+}
+
+async function saveGateway(type) {
+  saving.value = true
+  try {
+    const config = type === 'mqtt' ? { ...mqttForm.value } : { ...iridiumForm.value }
+    const gw = type === 'mqtt' ? mqttGateway.value : iridiumGateway.value
+    const enabled = gw?.enabled ?? true
+    await store.configureGateway(type, enabled, config)
+    editing.value = null
+  } catch (e) {
+    // error is set in store
+  } finally {
+    saving.value = false
+  }
+}
+
+async function toggleGateway(type) {
+  const gw = type === 'mqtt' ? mqttGateway.value : iridiumGateway.value
+  if (!gw) return
+  try {
+    if (gw.connected || gw.enabled) {
+      await store.stopGateway(type)
+    } else {
+      await store.startGateway(type)
+    }
+  } catch (e) {
+    // error is set in store
+  }
+}
+
+async function testGatewayConnection(type) {
+  testing.value = type
+  testResult.value = null
+  try {
+    await store.testGateway(type)
+    testResult.value = { type, success: true }
+  } catch (e) {
+    testResult.value = { type, success: false, error: e.message }
+  } finally {
+    testing.value = null
+  }
+}
+
+async function removeGateway(type) {
+  if (!confirm(`Remove ${type} gateway configuration?`)) return
+  try {
+    await store.deleteGateway(type)
+  } catch (e) {
+    // error is set in store
+  }
+}
+
+function formatTime(t) {
+  if (!t) return '-'
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return '-'
+  return d.toLocaleTimeString()
+}
 </script>
 
 <template>
@@ -19,31 +142,313 @@ onMounted(() => store.fetchGateways())
       </button>
     </div>
 
-    <div v-if="!store.gateways.length" class="bg-gray-900 rounded-xl p-8 border border-gray-800 text-center">
-      <p class="text-gray-400">No gateways configured</p>
-      <p class="text-sm text-gray-500 mt-2">
-        Gateway management will be available in Phase 4.
-        Configure MQTT or satellite gateways to bridge mesh networks.
-      </p>
+    <!-- Error banner -->
+    <div v-if="store.error" class="bg-red-900/30 border border-red-800 rounded-lg p-3 text-red-300 text-sm">
+      {{ store.error }}
     </div>
 
-    <div v-else class="space-y-4">
-      <div
-        v-for="gw in store.gateways"
-        :key="gw.id ?? gw.name"
-        class="bg-gray-900 rounded-xl p-5 border border-gray-800"
-      >
+    <!-- MQTT Gateway Card -->
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <div class="p-5">
         <div class="flex items-center justify-between">
-          <div>
-            <h3 class="font-medium text-gray-200">{{ gw.name ?? gw.id ?? 'Unknown' }}</h3>
-            <p class="text-sm text-gray-500 mt-0.5">{{ gw.type ?? 'Unknown type' }}</p>
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center">
+              <svg class="w-5 h-5 text-teal-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+              </svg>
+            </div>
+            <div>
+              <h3 class="font-medium text-gray-200">MQTT Gateway</h3>
+              <p class="text-xs text-gray-500 mt-0.5">Bridge mesh messages to MQTT broker</p>
+            </div>
           </div>
-          <span
-            class="text-xs px-2 py-1 rounded-full"
-            :class="gw.status === 'connected' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-gray-800 text-gray-500'"
+          <div class="flex items-center gap-2">
+            <span
+              class="text-xs px-2 py-1 rounded-full"
+              :class="mqttGateway?.connected ? 'bg-emerald-900/30 text-emerald-400' : 'bg-gray-800 text-gray-500'"
+            >
+              {{ mqttGateway?.connected ? 'Connected' : mqttGateway ? 'Disconnected' : 'Not configured' }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Stats row -->
+        <div v-if="mqttGateway" class="mt-4 grid grid-cols-4 gap-3">
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-200">{{ mqttGateway.messages_in ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Messages In</p>
+          </div>
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-200">{{ mqttGateway.messages_out ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Messages Out</p>
+          </div>
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-200">{{ mqttGateway.errors ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Errors</p>
+          </div>
+          <div class="text-center">
+            <p class="text-sm text-gray-300">{{ formatTime(mqttGateway.last_activity) }}</p>
+            <p class="text-xs text-gray-500">Last Activity</p>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="mt-4 flex gap-2">
+          <button
+            v-if="mqttGateway"
+            @click="toggleGateway('mqtt')"
+            class="px-3 py-1.5 text-xs rounded-lg transition-colors"
+            :class="mqttGateway.connected ? 'bg-red-900/30 text-red-400 hover:bg-red-900/50' : 'bg-teal-900/30 text-teal-400 hover:bg-teal-900/50'"
           >
-            {{ gw.status ?? 'unknown' }}
-          </span>
+            {{ mqttGateway.connected ? 'Stop' : 'Start' }}
+          </button>
+          <button
+            v-if="mqttGateway"
+            @click="testGatewayConnection('mqtt')"
+            :disabled="testing === 'mqtt'"
+            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+          >
+            {{ testing === 'mqtt' ? 'Testing...' : 'Test' }}
+          </button>
+          <button
+            @click="editGateway('mqtt')"
+            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors"
+          >
+            Configure
+          </button>
+          <button
+            v-if="mqttGateway"
+            @click="removeGateway('mqtt')"
+            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-400 hover:text-red-400 transition-colors ml-auto"
+          >
+            Remove
+          </button>
+        </div>
+
+        <!-- Test result -->
+        <div v-if="testResult?.type === 'mqtt'" class="mt-3 text-xs px-3 py-2 rounded-lg"
+          :class="testResult.success ? 'bg-emerald-900/20 text-emerald-400' : 'bg-red-900/20 text-red-400'"
+        >
+          {{ testResult.success ? 'Connection successful' : `Test failed: ${testResult.error}` }}
+        </div>
+      </div>
+
+      <!-- MQTT Config Form -->
+      <div v-if="editing === 'mqtt'" class="border-t border-gray-800 p-5 bg-gray-950/50">
+        <h4 class="text-sm font-medium text-gray-300 mb-4">MQTT Configuration</h4>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="col-span-2">
+            <label class="block text-xs text-gray-400 mb-1">Broker URL</label>
+            <input v-model="mqttForm.broker_url" type="text" placeholder="tcp://localhost:1883"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Username</label>
+            <input v-model="mqttForm.username" type="text"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Password</label>
+            <input v-model="mqttForm.password" type="password"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Client ID</label>
+            <input v-model="mqttForm.client_id" type="text"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Topic Prefix</label>
+            <input v-model="mqttForm.topic_prefix" type="text"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Channel Name</label>
+            <input v-model="mqttForm.channel_name" type="text"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">QoS (0-2)</label>
+            <select v-model.number="mqttForm.qos"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none">
+              <option :value="0">0 - At most once</option>
+              <option :value="1">1 - At least once</option>
+              <option :value="2">2 - Exactly once</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-3 mt-4">
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input v-model="mqttForm.tls" type="checkbox" class="accent-teal-500" />
+              TLS
+            </label>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Keep Alive (seconds)</label>
+            <input v-model.number="mqttForm.keep_alive" type="number" min="10" max="600"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+        </div>
+        <div class="flex gap-2 mt-4">
+          <button @click="saveGateway('mqtt')" :disabled="saving"
+            class="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white hover:bg-teal-500 transition-colors disabled:opacity-50">
+            {{ saving ? 'Saving...' : 'Save' }}
+          </button>
+          <button @click="editing = null"
+            class="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Iridium Gateway Card -->
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center">
+              <svg class="w-5 h-5 text-teal-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                <path d="M2 12h20"/>
+              </svg>
+            </div>
+            <div>
+              <h3 class="font-medium text-gray-200">Iridium Satellite</h3>
+              <p class="text-xs text-gray-500 mt-0.5">Bridge mesh messages via Iridium SBD</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span
+              class="text-xs px-2 py-1 rounded-full"
+              :class="iridiumGateway?.connected ? 'bg-emerald-900/30 text-emerald-400' : 'bg-gray-800 text-gray-500'"
+            >
+              {{ iridiumGateway?.connected ? 'Connected' : iridiumGateway ? 'Disconnected' : 'Not configured' }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Stats row -->
+        <div v-if="iridiumGateway" class="mt-4 grid grid-cols-4 gap-3">
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-200">{{ iridiumGateway.messages_in ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Messages In</p>
+          </div>
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-200">{{ iridiumGateway.messages_out ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Messages Out</p>
+          </div>
+          <div class="text-center">
+            <p class="text-lg font-semibold text-gray-200">{{ iridiumGateway.errors ?? 0 }}</p>
+            <p class="text-xs text-gray-500">Errors</p>
+          </div>
+          <div class="text-center">
+            <p class="text-sm text-gray-300">{{ formatTime(iridiumGateway.last_activity) }}</p>
+            <p class="text-xs text-gray-500">Last Activity</p>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="mt-4 flex gap-2">
+          <button
+            v-if="iridiumGateway"
+            @click="toggleGateway('iridium')"
+            class="px-3 py-1.5 text-xs rounded-lg transition-colors"
+            :class="iridiumGateway.connected ? 'bg-red-900/30 text-red-400 hover:bg-red-900/50' : 'bg-teal-900/30 text-teal-400 hover:bg-teal-900/50'"
+          >
+            {{ iridiumGateway.connected ? 'Stop' : 'Start' }}
+          </button>
+          <button
+            v-if="iridiumGateway"
+            @click="testGatewayConnection('iridium')"
+            :disabled="testing === 'iridium'"
+            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+          >
+            {{ testing === 'iridium' ? 'Testing...' : 'Test' }}
+          </button>
+          <button
+            @click="editGateway('iridium')"
+            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors"
+          >
+            Configure
+          </button>
+          <button
+            v-if="iridiumGateway"
+            @click="removeGateway('iridium')"
+            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-400 hover:text-red-400 transition-colors ml-auto"
+          >
+            Remove
+          </button>
+        </div>
+
+        <!-- Test result -->
+        <div v-if="testResult?.type === 'iridium'" class="mt-3 text-xs px-3 py-2 rounded-lg"
+          :class="testResult.success ? 'bg-emerald-900/20 text-emerald-400' : 'bg-red-900/20 text-red-400'"
+        >
+          {{ testResult.success ? 'Modem connected' : `Test failed: ${testResult.error}` }}
+        </div>
+      </div>
+
+      <!-- Iridium Config Form -->
+      <div v-if="editing === 'iridium'" class="border-t border-gray-800 p-5 bg-gray-950/50">
+        <h4 class="text-sm font-medium text-gray-300 mb-4">Iridium Configuration</h4>
+        <div class="space-y-4">
+          <div>
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input v-model="iridiumForm.forward_all" type="checkbox" class="accent-teal-500" />
+              Forward all message types
+            </label>
+            <p class="text-xs text-gray-500 mt-1">When disabled, only forward selected portnums</p>
+          </div>
+          <div v-if="!iridiumForm.forward_all">
+            <label class="block text-xs text-gray-400 mb-1">Forward Portnums (comma-separated)</label>
+            <input
+              :value="iridiumForm.forward_portnums.join(', ')"
+              @input="iridiumForm.forward_portnums = $event.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))"
+              type="text" placeholder="1, 3, 67"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-xs text-gray-500 mt-1">1=Text, 3=Position, 4=NodeInfo, 67=Telemetry</p>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Compression</label>
+              <select v-model="iridiumForm.compression"
+                class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none">
+                <option value="compact">Compact binary</option>
+                <option value="none">None (raw text)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Max Text Length</label>
+              <input v-model.number="iridiumForm.max_text_length" type="number" min="1" max="340"
+                class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            </div>
+          </div>
+          <div class="flex items-center gap-6">
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input v-model="iridiumForm.auto_receive" type="checkbox" class="accent-teal-500" />
+              Auto-receive on ring alerts
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input v-model="iridiumForm.include_position" type="checkbox" class="accent-teal-500" />
+              Include position
+            </label>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Poll Interval (seconds, 0 = disabled)</label>
+            <input v-model.number="iridiumForm.poll_interval" type="number" min="0" max="3600"
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+          </div>
+        </div>
+        <div class="flex gap-2 mt-4">
+          <button @click="saveGateway('iridium')" :disabled="saving"
+            class="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white hover:bg-teal-500 transition-colors disabled:opacity-50">
+            {{ saving ? 'Saving...' : 'Save' }}
+          </button>
+          <button @click="editing = null"
+            class="px-4 py-2 text-sm rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors">
+            Cancel
+          </button>
         </div>
       </div>
     </div>

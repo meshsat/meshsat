@@ -99,6 +99,64 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  async function configureGateway(gwType, enabled, config) {
+    error.value = null
+    try {
+      const result = await api.put(`/gateways/${gwType}`, { enabled, config })
+      await fetchGateways()
+      return result
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function deleteGateway(gwType) {
+    error.value = null
+    try {
+      const result = await api.del(`/gateways/${gwType}`)
+      await fetchGateways()
+      return result
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function startGateway(gwType) {
+    error.value = null
+    try {
+      const result = await api.post(`/gateways/${gwType}/start`)
+      await fetchGateways()
+      return result
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function stopGateway(gwType) {
+    error.value = null
+    try {
+      const result = await api.post(`/gateways/${gwType}/stop`)
+      await fetchGateways()
+      return result
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function testGateway(gwType) {
+    error.value = null
+    try {
+      return await api.post(`/gateways/${gwType}/test`)
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   async function adminReboot(payload) {
     error.value = null
     try {
@@ -178,6 +236,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage,
     fetchTelemetry, fetchPositions, fetchNodes, fetchStatus, fetchGateways,
+    configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,
     connectSSE, closeSSE

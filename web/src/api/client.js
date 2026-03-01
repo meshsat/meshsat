@@ -37,6 +37,8 @@ async function request(method, path, body = null, params = null) {
 export default {
   get: (path, params) => request('GET', path, null, params),
   post: (path, body) => request('POST', path, body),
+  put: (path, body) => request('PUT', path, body),
+  del: (path) => request('DELETE', path),
 
   /**
    * Open an SSE stream using native EventSource.

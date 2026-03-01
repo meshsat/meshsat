@@ -16,6 +16,7 @@ import (
 	"meshsat/internal/config"
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
+	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
 )
 
@@ -43,10 +44,15 @@ func main() {
 
 	// Transport
 	var mesh transport.MeshTransport
+	var sat transport.SatTransport
 	switch cfg.Mode {
 	case "cubeos":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
 		log.Info().Str("hal", cfg.HALURL).Msg("using HAL mesh transport")
+
+		// Satellite transport (optional — only if Iridium is available)
+		sat = transport.NewHALSatTransport(cfg.HALURL, cfg.HALAPIKey)
+		log.Info().Msg("HAL satellite transport available")
 	default:
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode (standalone not yet implemented)")
 	}
@@ -55,8 +61,27 @@ func main() {
 	// Processor
 	proc := engine.NewProcessor(db, mesh)
 
+	// Gateway manager
+	gwMgr := gateway.NewManager(db, sat)
+
+	// Graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start gateway manager (loads enabled configs from DB)
+	if err := gwMgr.Start(ctx); err != nil {
+		log.Error().Err(err).Msg("gateway manager start failed")
+	}
+
+	// Register running gateways with processor for forwarding
+	for _, gw := range gwMgr.Gateways() {
+		proc.AddGateway(gw)
+		proc.StartGatewayReceiver(ctx, gw)
+		log.Info().Str("type", gw.Type()).Msg("gateway registered with processor")
+	}
+
 	// API server
-	srv := api.NewServer(db, mesh, proc)
+	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
 	httpServer := &http.Server{
@@ -66,10 +91,6 @@ func main() {
 		WriteTimeout: 0, // SSE needs no write timeout
 		IdleTimeout:  60 * time.Second,
 	}
-
-	// Graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start event processor
 	go func() {
@@ -95,7 +116,8 @@ func main() {
 	sig := <-sigCh
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
-	cancel() // Stop processor + retention
+	cancel() // Stop processor + retention + gateways
+	gwMgr.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

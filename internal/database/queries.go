@@ -318,6 +318,21 @@ func (db *DB) GetGatewayConfig(gwType string) (*GatewayConfig, error) {
 	return &gc, nil
 }
 
+// GetAllGatewayConfigs returns all gateway configurations.
+func (db *DB) GetAllGatewayConfigs() ([]GatewayConfig, error) {
+	var configs []GatewayConfig
+	if err := db.Select(&configs, "SELECT * FROM gateway_config ORDER BY type"); err != nil {
+		return nil, fmt.Errorf("query gateway configs: %w", err)
+	}
+	return configs, nil
+}
+
+// DeleteGatewayConfig removes a gateway configuration by type.
+func (db *DB) DeleteGatewayConfig(gwType string) error {
+	_, err := db.Exec("DELETE FROM gateway_config WHERE type = ?", gwType)
+	return err
+}
+
 // HasPacket checks if a packet ID already exists (for deduplication).
 func (db *DB) HasPacket(packetID uint32) (bool, error) {
 	var count int

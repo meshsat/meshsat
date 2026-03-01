@@ -208,6 +208,50 @@ func (p *Processor) handlePosition(event transport.MeshEvent) {
 	}
 }
 
+// StartGatewayReceiver drains inbound messages from a gateway and sends them to the mesh.
+func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway) {
+	go func() {
+		ch := gw.Receive()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				log.Info().Str("source", msg.Source).Str("text", msg.Text).Msg("gateway inbound message")
+
+				// Send to mesh
+				req := transport.SendRequest{
+					Text:    msg.Text,
+					To:      msg.To,
+					Channel: msg.Channel,
+				}
+				if err := p.mesh.SendMessage(ctx, req); err != nil {
+					log.Error().Err(err).Str("source", msg.Source).Msg("failed to send gateway message to mesh")
+					continue
+				}
+
+				// Persist as inbound message
+				dbMsg := &database.Message{
+					FromNode:    msg.Source,
+					ToNode:      "mesh",
+					Channel:     msg.Channel,
+					PortNum:     1, // TEXT_MESSAGE
+					PortNumName: "TEXT_MESSAGE_APP",
+					DecodedText: msg.Text,
+					Direction:   "tx",
+					Transport:   msg.Source,
+				}
+				if err := p.db.InsertMessage(dbMsg); err != nil {
+					log.Error().Err(err).Msg("failed to persist gateway inbound message")
+				}
+			}
+		}
+	}()
+}
+
 func (p *Processor) broadcast(event transport.MeshEvent) {
 	p.subsMu.RLock()
 	defer p.subsMu.RUnlock()

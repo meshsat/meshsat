@@ -9,6 +9,7 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
+	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
 )
 
@@ -17,15 +18,17 @@ type Server struct {
 	db         *database.DB
 	mesh       transport.MeshTransport
 	processor  *engine.Processor
+	gwManager  *gateway.Manager
 	webHandler http.Handler
 }
 
 // NewServer creates a new API server.
-func NewServer(db *database.DB, mesh transport.MeshTransport, proc *engine.Processor) *Server {
+func NewServer(db *database.DB, mesh transport.MeshTransport, proc *engine.Processor, gwMgr *gateway.Manager) *Server {
 	return &Server{
 		db:        db,
 		mesh:      mesh,
 		processor: proc,
+		gwManager: gwMgr,
 	}
 }
 
@@ -60,7 +63,14 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/events", s.handleSSE)
 
+		// Gateway management (Phase 4)
 		r.Get("/gateways", s.handleGetGateways)
+		r.Get("/gateways/{type}", s.handleGetGateway)
+		r.Put("/gateways/{type}", s.handlePutGateway)
+		r.Delete("/gateways/{type}", s.handleDeleteGateway)
+		r.Post("/gateways/{type}/start", s.handleStartGateway)
+		r.Post("/gateways/{type}/stop", s.handleStopGateway)
+		r.Post("/gateways/{type}/test", s.handleTestGateway)
 
 		// Admin commands (Phase 2)
 		r.Post("/admin/reboot", s.handleAdminReboot)
