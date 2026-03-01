@@ -55,6 +55,18 @@ func (s *Server) Router() http.Handler {
 		r.Get("/events", s.handleSSE)
 
 		r.Get("/gateways", s.handleGetGateways)
+
+		// Admin commands (Phase 2)
+		r.Post("/admin/reboot", s.handleAdminReboot)
+		r.Post("/admin/factory_reset", s.handleAdminFactoryReset)
+		r.Post("/admin/traceroute", s.handleTraceroute)
+
+		// Radio/module config (Phase 2)
+		r.Post("/config/radio", s.handleSetRadioConfig)
+		r.Post("/config/module", s.handleSetModuleConfig)
+
+		// Waypoints (Phase 2)
+		r.Post("/waypoints", s.handleSendWaypoint)
 	})
 
 	return r

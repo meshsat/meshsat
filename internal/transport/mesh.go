@@ -15,21 +15,30 @@ type MeshEvent struct {
 
 // MeshNode represents a node in the mesh network.
 type MeshNode struct {
-	Num          uint32  `json:"num"`
-	UserID       string  `json:"user_id"`
-	LongName     string  `json:"long_name"`
-	ShortName    string  `json:"short_name"`
-	HWModel      int     `json:"hw_model"`
-	HWModelName  string  `json:"hw_model_name"`
-	Latitude     float64 `json:"latitude"`
-	Longitude    float64 `json:"longitude"`
-	Altitude     int32   `json:"altitude"`
-	Sats         int     `json:"sats"`
-	BatteryLevel int     `json:"battery_level"`
-	Voltage      float32 `json:"voltage"`
-	SNR          float32 `json:"snr"`
-	LastHeard    int64   `json:"last_heard"`
-	LastHeardStr string  `json:"last_heard_str"`
+	Num             uint32   `json:"num"`
+	UserID          string   `json:"user_id"`
+	LongName        string   `json:"long_name"`
+	ShortName       string   `json:"short_name"`
+	HWModel         int      `json:"hw_model"`
+	HWModelName     string   `json:"hw_model_name"`
+	Latitude        float64  `json:"latitude"`
+	Longitude       float64  `json:"longitude"`
+	Altitude        int32    `json:"altitude"`
+	Sats            int      `json:"sats"`
+	BatteryLevel    int      `json:"battery_level"`
+	Voltage         float32  `json:"voltage"`
+	ChannelUtil     float32  `json:"channel_util,omitempty"`
+	AirUtilTx       float32  `json:"air_util_tx,omitempty"`
+	Temperature     *float32 `json:"temperature,omitempty"`
+	Humidity        *float32 `json:"humidity,omitempty"`
+	Pressure        *float32 `json:"pressure,omitempty"`
+	UptimeSeconds   int      `json:"uptime_seconds,omitempty"`
+	SNR             float32  `json:"snr"`
+	RSSI            int32    `json:"rssi,omitempty"`
+	SignalQuality   string   `json:"signal_quality,omitempty"`
+	DiagnosticNotes string   `json:"diagnostic_notes,omitempty"`
+	LastHeard       int64    `json:"last_heard"`
+	LastHeardStr    string   `json:"last_heard_str"`
 }
 
 // MeshMessage represents a decoded mesh packet.
