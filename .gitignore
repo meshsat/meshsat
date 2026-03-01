@@ -1,0 +1,4 @@
+build/
+*.db
+*.exe
+.env

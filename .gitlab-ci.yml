@@ -1,0 +1,97 @@
+# =============================================================================
+# MeshSat Pipeline — Build, Package, Deploy
+# =============================================================================
+# Builds Go binary, builds multi-arch Docker image, pushes to GHCR,
+# and deploys to Pi via SSH.
+# =============================================================================
+
+stages:
+  - build
+  - package
+  - deploy
+
+variables:
+  MESHSAT_IMAGE: "ghcr.io/cubeos-app/meshsat"
+  BUILDER_IMAGE: "ghcr.io/cubeos-app/api-builder:latest"
+
+# -----------------------------------------------------------------------------
+# BUILD — Compile Go binary for ARM64 + AMD64
+# -----------------------------------------------------------------------------
+build:
+  stage: build
+  tags: [multiarch]
+  image: ${BUILDER_IMAGE}
+  script:
+    - cd ${CI_PROJECT_DIR}
+    - go mod download
+
+    - echo "Building ARM64 binary..."
+    - GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o meshsat-arm64 ./cmd/meshsat/
+
+    - echo "Building AMD64 binary..."
+    - GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o meshsat-amd64 ./cmd/meshsat/
+
+    - ls -lh meshsat-arm64 meshsat-amd64
+  artifacts:
+    paths:
+      - meshsat-arm64
+      - meshsat-amd64
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------------------------------------
+# PACKAGE — Build multi-arch Docker image and push to GHCR
+# -----------------------------------------------------------------------------
+package:
+  stage: package
+  tags: [multiarch]
+  image: docker:24
+  needs:
+    - job: build
+      artifacts: true
+  before_script:
+    - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+    - docker buildx create --name meshsatbuilder --driver docker-container --use
+    - docker buildx inspect --bootstrap
+  script:
+    - |
+      docker buildx build --no-cache \
+        --platform linux/amd64,linux/arm64 \
+        --push \
+        -t ${MESHSAT_IMAGE}:${CI_COMMIT_SHORT_SHA} \
+        -t ${MESHSAT_IMAGE}:latest \
+        .
+      echo "Pushed multi-arch ${MESHSAT_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+  after_script:
+    - docker buildx rm meshsatbuilder || true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------------------------------------
+# DEPLOY — Pull latest image on Pi and restart MeshSat (via SSH)
+# -----------------------------------------------------------------------------
+deploy:
+  stage: deploy
+  tags: [multiarch]
+  image: alpine:latest
+  needs:
+    - package
+  before_script:
+    - apk add --no-cache openssh-client curl
+    - eval $(ssh-agent -s)
+    - echo "$CI_DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - ssh-keyscan -H ${PI_DEPLOY_ADDR} >> ~/.ssh/known_hosts 2>/dev/null
+  script:
+    - scp scripts/ci-deploy.sh ${PI_DEPLOY_HOST}:/tmp/ci-deploy-meshsat.sh
+    - |
+      ssh -o ServerAliveInterval=15 ${PI_DEPLOY_HOST} \
+        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' bash /tmp/ci-deploy-meshsat.sh"
+    - ssh ${PI_DEPLOY_HOST} "rm -f /tmp/ci-deploy-meshsat.sh"
+  after_script:
+    - kill $SSH_AGENT_PID 2>/dev/null || true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  environment:
+    name: production

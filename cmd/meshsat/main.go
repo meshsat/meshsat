@@ -1,0 +1,105 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/api"
+	"meshsat/internal/config"
+	"meshsat/internal/database"
+	"meshsat/internal/engine"
+	"meshsat/internal/transport"
+)
+
+func main() {
+	// Console-friendly logging
+	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).
+		With().Timestamp().Caller().Logger()
+
+	cfg := config.Load()
+
+	log.Info().
+		Int("port", cfg.Port).
+		Str("db", cfg.DBPath).
+		Str("hal", cfg.HALURL).
+		Str("mode", cfg.Mode).
+		Msg("starting MeshSat")
+
+	// Database
+	db, err := database.New(cfg.DBPath)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to open database")
+	}
+	defer db.Close()
+	log.Info().Str("path", cfg.DBPath).Msg("database ready")
+
+	// Transport
+	var mesh transport.MeshTransport
+	switch cfg.Mode {
+	case "cubeos":
+		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
+		log.Info().Str("hal", cfg.HALURL).Msg("using HAL mesh transport")
+	default:
+		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode (standalone not yet implemented)")
+	}
+	defer mesh.Close()
+
+	// Processor
+	proc := engine.NewProcessor(db, mesh)
+
+	// API server
+	srv := api.NewServer(db, mesh, proc)
+	httpServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Port),
+		Handler:      srv.Router(),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 0, // SSE needs no write timeout
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start event processor
+	go func() {
+		if err := proc.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("processor stopped with error")
+		}
+	}()
+
+	// Start retention worker
+	go engine.StartRetentionWorker(ctx, db, cfg.RetentionDays)
+
+	// Start HTTP server
+	go func() {
+		log.Info().Int("port", cfg.Port).Msg("HTTP server listening")
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("HTTP server failed")
+		}
+	}()
+
+	// Wait for shutdown signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-sigCh
+	log.Info().Str("signal", sig.String()).Msg("shutting down")
+
+	cancel() // Stop processor + retention
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("HTTP server shutdown error")
+	}
+
+	log.Info().Msg("MeshSat stopped")
+}
