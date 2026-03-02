@@ -323,6 +323,22 @@ func (m *Manager) redactConfig(gwType, configJSON string) json.RawMessage {
 	}
 }
 
+// GetIridiumSignal returns the current satellite signal (blocking AT+CSQ).
+func (m *Manager) GetIridiumSignal(ctx context.Context) (*transport.SignalInfo, error) {
+	if m.sat == nil {
+		return nil, fmt.Errorf("satellite transport not available")
+	}
+	return m.sat.GetSignal(ctx)
+}
+
+// GetIridiumSignalFast returns a cached satellite signal reading (AT+CSQF, ~100ms).
+func (m *Manager) GetIridiumSignalFast(ctx context.Context) (*transport.SignalInfo, error) {
+	if m.sat == nil {
+		return nil, fmt.Errorf("satellite transport not available")
+	}
+	return m.sat.GetSignalFast(ctx)
+}
+
 // GatewayStatusResponse is the API response for gateway status.
 type GatewayStatusResponse struct {
 	Type             string          `json:"type"`

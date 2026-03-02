@@ -46,6 +46,7 @@ type SatTransport interface {
 	Receive(ctx context.Context) ([]byte, error)
 	MailboxCheck(ctx context.Context) (*SBDResult, error)
 	GetSignal(ctx context.Context) (*SignalInfo, error)
+	GetSignalFast(ctx context.Context) (*SignalInfo, error)
 	GetStatus(ctx context.Context) (*SatStatus, error)
 	Close() error
 }

@@ -217,6 +217,24 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  const iridiumSignal = ref(null) // { bars: 0-5, assessment: string, timestamp: string }
+
+  async function fetchIridiumSignalFast() {
+    try {
+      iridiumSignal.value = await api.get('/iridium/signal/fast')
+    } catch {
+      // Signal unavailable — keep last known value
+    }
+  }
+
+  async function fetchIridiumSignal() {
+    try {
+      iridiumSignal.value = await api.get('/iridium/signal')
+    } catch {
+      // Signal unavailable — keep last known value
+    }
+  }
+
   const config = ref(null)
 
   async function fetchConfig() {
@@ -253,6 +271,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config,
+    iridiumSignal,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage,
     fetchTelemetry, fetchPositions, fetchNodes, fetchStatus, fetchGateways,
@@ -260,6 +279,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,
     fetchConfig, setChannel,
+    fetchIridiumSignalFast, fetchIridiumSignal,
     connectSSE, closeSSE
   }
 })

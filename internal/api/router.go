@@ -72,6 +72,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/gateways/{type}/stop", s.handleStopGateway)
 		r.Post("/gateways/{type}/test", s.handleTestGateway)
 
+		// Iridium signal
+		r.Get("/iridium/signal", s.handleGetIridiumSignal)
+		r.Get("/iridium/signal/fast", s.handleGetIridiumSignalFast)
+
 		// Admin commands (Phase 2)
 		r.Post("/admin/reboot", s.handleAdminReboot)
 		r.Post("/admin/factory_reset", s.handleAdminFactoryReset)

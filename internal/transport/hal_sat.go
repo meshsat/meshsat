@@ -159,10 +159,19 @@ func (t *HALSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) 
 	return &result, nil
 }
 
-// GetSignal returns the current satellite signal quality.
+// GetSignal returns the current satellite signal quality (blocking AT+CSQ, up to 60s).
 func (t *HALSatTransport) GetSignal(ctx context.Context) (*SignalInfo, error) {
 	var info SignalInfo
 	if err := t.getJSON(ctx, "/iridium/signal", &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// GetSignalFast returns a cached signal quality reading (AT+CSQF, ~100ms).
+func (t *HALSatTransport) GetSignalFast(ctx context.Context) (*SignalInfo, error) {
+	var info SignalInfo
+	if err := t.getJSON(ctx, "/iridium/signal/fast", &info); err != nil {
 		return nil, err
 	}
 	return &info, nil

@@ -8,6 +8,46 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// handleGetIridiumSignalFast returns a cached Iridium signal reading (AT+CSQF, ~100ms).
+// @Summary Get Iridium signal (fast)
+// @Description Returns cached satellite signal bars using AT+CSQF (non-blocking)
+// @Tags iridium
+// @Success 200 {object} transport.SignalInfo
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/signal/fast [get]
+func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Request) {
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
+		return
+	}
+	sig, err := s.gwManager.GetIridiumSignalFast(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sig)
+}
+
+// handleGetIridiumSignal returns a fresh Iridium signal reading (blocking AT+CSQ, up to 60s).
+// @Summary Get Iridium signal (blocking)
+// @Description Returns fresh satellite signal bars using AT+CSQ (blocks until modem responds)
+// @Tags iridium
+// @Success 200 {object} transport.SignalInfo
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/signal [get]
+func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) {
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
+		return
+	}
+	sig, err := s.gwManager.GetIridiumSignal(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sig)
+}
+
 // handleGetGateways returns the status of all configured gateways.
 // @Summary List all gateways
 // @Description Returns status and config of all gateways (MQTT, Iridium)

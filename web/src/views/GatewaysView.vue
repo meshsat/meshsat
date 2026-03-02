@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
@@ -10,6 +10,41 @@ const saving = ref(false)
 const testResult = ref(null)
 const showMqttHelp = ref(false)
 const showIridiumHelp = ref(false)
+const signalRefreshing = ref(false)
+
+// Signal polling — 10s fast (cached AT+CSQF)
+const SIGNAL_POLL_MS = 10000
+let signalTimer = null
+
+function startSignalPolling() {
+  store.fetchIridiumSignalFast()
+  signalTimer = setInterval(() => {
+    if (!signalRefreshing.value) store.fetchIridiumSignalFast()
+  }, SIGNAL_POLL_MS)
+}
+
+function stopSignalPolling() {
+  if (signalTimer) {
+    clearInterval(signalTimer)
+    signalTimer = null
+  }
+}
+
+async function refreshSignalFull() {
+  if (signalRefreshing.value) return
+  signalRefreshing.value = true
+  try {
+    await store.fetchIridiumSignal()
+  } finally {
+    signalRefreshing.value = false
+  }
+}
+
+function signalBarColor(bars) {
+  if (bars >= 4) return '#10b981' // emerald
+  if (bars >= 2) return '#f59e0b' // amber
+  return '#ef4444'               // red
+}
 
 // MQTT form
 const mqttForm = ref({
@@ -63,6 +98,11 @@ const iridiumGateway = computed(() => store.gateways.find(g => g.type === 'iridi
 
 onMounted(() => {
   store.fetchGateways()
+  startSignalPolling()
+})
+
+onUnmounted(() => {
+  stopSignalPolling()
 })
 
 function editGateway(type) {
@@ -372,7 +412,38 @@ function formatTime(t) {
               <p class="text-xs text-gray-500 mt-0.5">Bridge mesh messages via Iridium SBD</p>
             </div>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-3">
+            <!-- Signal bars -->
+            <div v-if="store.iridiumSignal" class="flex items-center gap-2">
+              <div
+                class="flex items-end gap-0.5 h-4"
+                :title="`Signal: ${store.iridiumSignal.bars}/5 (${store.iridiumSignal.assessment})`"
+              >
+                <div
+                  v-for="bar in 5"
+                  :key="bar"
+                  class="w-1 rounded-sm"
+                  :style="{
+                    height: `${bar * 3}px`,
+                    background: bar <= store.iridiumSignal.bars ? signalBarColor(store.iridiumSignal.bars) : '#374151'
+                  }"
+                />
+              </div>
+              <span class="text-xs text-gray-500">{{ store.iridiumSignal.bars }}/5</span>
+              <button
+                @click="refreshSignalFull"
+                :disabled="signalRefreshing"
+                class="p-0.5 rounded text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40"
+                title="Force refresh signal (blocking scan)"
+              >
+                <svg class="w-3 h-3" :class="{ 'animate-spin': signalRefreshing }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+                  <path d="M21 3v5h-5"/>
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+                  <path d="M8 16H3v5"/>
+                </svg>
+              </button>
+            </div>
             <span
               class="text-xs px-2 py-1 rounded-full"
               :class="iridiumGateway?.connected ? 'bg-emerald-900/30 text-emerald-400' : 'bg-gray-800 text-gray-500'"
