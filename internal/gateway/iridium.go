@@ -351,8 +351,13 @@ func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
 		return
 	}
 
+	if inbound.To == "" && g.config.DefaultDestination != "" {
+		inbound.To = g.config.DefaultDestination
+	}
+
 	g.msgsIn.Add(1)
 	g.lastActive.Store(time.Now().Unix())
+	log.Info().Str("to", inbound.To).Str("text", inbound.Text).Msg("iridium: received MT message")
 
 	select {
 	case g.inCh <- *inbound:
