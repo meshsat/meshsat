@@ -22,7 +22,7 @@ func Load() *Config {
 		Port:          envInt("MESHSAT_PORT", 6050),
 		DBPath:        envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
 		HALURL:        envStr("HAL_URL", "http://cubeos-hal:6005"),
-		HALAPIKey:     envStr("HAL_API_KEY", ""),
+		HALAPIKey:     envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
 		Mode:          envStr("MESHSAT_MODE", "cubeos"),
 		RetentionDays: envInt("MESHSAT_RETENTION_DAYS", 30),
 		WebDir:        envStr("MESHSAT_WEB_DIR", ""),
