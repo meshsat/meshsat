@@ -217,6 +217,26 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  const config = ref(null)
+
+  async function fetchConfig() {
+    try {
+      config.value = await api.get('/config')
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function setChannel(payload) {
+    error.value = null
+    try {
+      return await api.post('/channels', payload)
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   function connectSSE(onEvent) {
     closeSSE()
     sseHandle = api.sse('/events', (event) => {
@@ -232,13 +252,14 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   }
 
   return {
-    messages, messageStats, telemetry, positions, nodes, status, gateways,
+    messages, messageStats, telemetry, positions, nodes, status, gateways, config,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage,
     fetchTelemetry, fetchPositions, fetchNodes, fetchStatus, fetchGateways,
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,
+    fetchConfig, setChannel,
     connectSSE, closeSSE
   }
 })

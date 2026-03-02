@@ -6,10 +6,12 @@ const route = useRoute()
 const sidebarOpen = ref(false)
 
 const navItems = [
-  { path: '/', label: 'Messages', icon: 'M' },
+  { path: '/', label: 'Dashboard', icon: 'D' },
+  { path: '/messages', label: 'Messages', icon: 'M' },
   { path: '/nodes', label: 'Nodes', icon: 'N' },
   { path: '/map', label: 'Map', icon: 'P' },
   { path: '/telemetry', label: 'Telemetry', icon: 'T' },
+  { path: '/channels', label: 'Channels', icon: 'H' },
   { path: '/config', label: 'Config', icon: 'C' },
   { path: '/gateways', label: 'Gateways', icon: 'G' }
 ]

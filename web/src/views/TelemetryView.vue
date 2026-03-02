@@ -32,6 +32,8 @@ const chartOptions = {
   elements: { point: { radius: 0 }, line: { tension: 0.3, borderWidth: 2 } }
 }
 
+const radioConnected = computed(() => store.status?.connected === true)
+
 const nodeOptions = computed(() =>
   store.nodes.map(n => ({
     id: String(n.id ?? n.node_id ?? n.num ?? ''),
@@ -46,7 +48,7 @@ function formatLabel(val) {
 }
 
 const labels = computed(() =>
-  store.telemetry.map(t => formatLabel(t.timestamp ?? t.time))
+  store.telemetry.map(t => formatLabel(t.created_at ?? t.timestamp ?? t.time))
 )
 
 const batteryChart = computed(() => ({
@@ -54,7 +56,7 @@ const batteryChart = computed(() => ({
   datasets: [
     {
       label: 'Battery %',
-      data: store.telemetry.map(t => t.battery ?? null),
+      data: store.telemetry.map(t => t.battery_level ?? null),
       borderColor: '#34d399',
       backgroundColor: 'rgba(52, 211, 153, 0.1)',
       fill: true
@@ -111,7 +113,7 @@ const envChart = computed(() => ({
   ]
 }))
 
-const hasBattery = computed(() => store.telemetry.some(t => t.battery != null))
+const hasBattery = computed(() => store.telemetry.some(t => t.battery_level != null))
 const hasChannel = computed(() => store.telemetry.some(t => t.channel_util != null))
 const hasEnv = computed(() => store.telemetry.some(t => t.temperature != null || t.humidity != null))
 
@@ -125,7 +127,7 @@ async function fetchData() {
 watch([selectedNode, timeRange], fetchData)
 
 onMounted(async () => {
-  await store.fetchNodes()
+  await Promise.all([store.fetchNodes(), store.fetchStatus()])
   if (nodeOptions.value.length) {
     selectedNode.value = nodeOptions.value[0].id
   }
@@ -135,6 +137,11 @@ onMounted(async () => {
 <template>
   <div class="max-w-4xl mx-auto space-y-6">
     <h1 class="text-2xl font-bold">Telemetry</h1>
+
+    <!-- Connection banner -->
+    <div v-if="!radioConnected" class="bg-amber-900/20 border border-amber-800 rounded-lg p-3 text-amber-300 text-sm">
+      Radio not connected. Connect a Meshtastic device to see telemetry data.
+    </div>
 
     <div class="flex flex-col sm:flex-row gap-3">
       <select

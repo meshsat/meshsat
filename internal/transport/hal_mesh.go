@@ -178,6 +178,15 @@ func (t *HALMeshTransport) GetMessages(ctx context.Context, limit int) ([]MeshMe
 	return resp.Messages, nil
 }
 
+// GetConfig retrieves the full Meshtastic device configuration from HAL.
+func (t *HALMeshTransport) GetConfig(ctx context.Context) (map[string]interface{}, error) {
+	var config map[string]interface{}
+	if err := t.getJSON(ctx, "/meshtastic/config", &config); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
 // AdminReboot sends a reboot command to a remote node (Phase 2 HAL endpoint).
 func (t *HALMeshTransport) AdminReboot(ctx context.Context, nodeNum uint32, delay int) error {
 	return t.postJSON(ctx, "/meshtastic/admin/reboot", map[string]interface{}{

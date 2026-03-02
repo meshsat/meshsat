@@ -8,6 +8,8 @@ const editing = ref(null) // 'mqtt' or 'iridium'
 const testing = ref(null)
 const saving = ref(false)
 const testResult = ref(null)
+const showMqttHelp = ref(false)
+const showIridiumHelp = ref(false)
 
 // MQTT form
 const mqttForm = ref({
@@ -32,6 +34,29 @@ const iridiumForm = ref({
   max_text_length: 320,
   include_position: true
 })
+
+// Portnum checkboxes for Iridium
+const PORTNUMS = [
+  { value: 1, label: 'Text Messages', portnum: 'TEXT_MESSAGE' },
+  { value: 3, label: 'Position', portnum: 'POSITION' },
+  { value: 4, label: 'NodeInfo', portnum: 'NODEINFO' },
+  { value: 67, label: 'Telemetry', portnum: 'TELEMETRY' }
+]
+
+function hasPortnum(val) {
+  return iridiumForm.value.forward_portnums.includes(val)
+}
+
+function togglePortnum(val) {
+  const arr = iridiumForm.value.forward_portnums
+  const idx = arr.indexOf(val)
+  if (idx >= 0) {
+    arr.splice(idx, 1)
+  } else {
+    arr.push(val)
+    arr.sort((a, b) => a - b)
+  }
+}
 
 const mqttGateway = computed(() => store.gateways.find(g => g.type === 'mqtt'))
 const iridiumGateway = computed(() => store.gateways.find(g => g.type === 'iridium'))
@@ -79,7 +104,7 @@ async function saveGateway(type) {
     const enabled = gw?.enabled ?? true
     await store.configureGateway(type, enabled, config)
     editing.value = null
-  } catch (e) {
+  } catch {
     // error is set in store
   } finally {
     saving.value = false
@@ -95,7 +120,7 @@ async function toggleGateway(type) {
     } else {
       await store.startGateway(type)
     }
-  } catch (e) {
+  } catch {
     // error is set in store
   }
 }
@@ -117,7 +142,7 @@ async function removeGateway(type) {
   if (!confirm(`Remove ${type} gateway configuration?`)) return
   try {
     await store.deleteGateway(type)
-  } catch (e) {
+  } catch {
     // error is set in store
   }
 }
@@ -240,32 +265,39 @@ function formatTime(t) {
           <div class="col-span-2">
             <label class="block text-xs text-gray-400 mb-1">Broker URL</label>
             <input v-model="mqttForm.broker_url" type="text" placeholder="tcp://localhost:1883"
-              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none"
+              :class="mqttForm.broker_url ? 'border-gray-700' : 'border-red-700'" />
+            <p class="text-[10px] text-gray-600 mt-1">Full broker address. Use tcp:// for plain, tls:// or ssl:// for encrypted connections.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Username</label>
             <input v-model="mqttForm.username" type="text"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">Leave empty for anonymous connections.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Password</label>
             <input v-model="mqttForm.password" type="password"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">Broker authentication password.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Client ID</label>
             <input v-model="mqttForm.client_id" type="text"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">Unique identifier for this MQTT client. Default: meshsat.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Topic Prefix</label>
             <input v-model="mqttForm.topic_prefix" type="text"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">MQTT topic namespace. Messages published to {prefix}/{channel}. Default: msh/cubeos.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Channel Name</label>
             <input v-model="mqttForm.channel_name" type="text"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">Mesh channel to bridge. Must match your radio channel name. Default: LongFast.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">QoS (0-2)</label>
@@ -275,19 +307,41 @@ function formatTime(t) {
               <option :value="1">1 - At least once</option>
               <option :value="2">2 - Exactly once</option>
             </select>
+            <p class="text-[10px] text-gray-600 mt-1">QoS 1 recommended. QoS 2 adds latency but guarantees delivery.</p>
           </div>
           <div class="flex items-center gap-3 mt-4">
             <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
               <input v-model="mqttForm.tls" type="checkbox" class="accent-teal-500" />
               TLS
             </label>
+            <p class="text-[10px] text-gray-600">Enable TLS encryption for the MQTT connection.</p>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Keep Alive (seconds)</label>
             <input v-model.number="mqttForm.keep_alive" type="number" min="10" max="600"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">Ping interval to keep the connection alive. Default: 60s.</p>
           </div>
         </div>
+
+        <!-- Connection Help -->
+        <div class="mt-4">
+          <button @click="showMqttHelp = !showMqttHelp"
+            class="text-xs text-gray-400 hover:text-gray-200 transition-colors">
+            {{ showMqttHelp ? 'Hide' : 'Show' }} Connection Help
+          </button>
+          <div v-if="showMqttHelp" class="mt-2 p-3 rounded-lg bg-gray-800/50 text-xs text-gray-400 space-y-2">
+            <p>Common issues:</p>
+            <ul class="list-disc list-inside space-y-1">
+              <li>Ensure the broker is running and reachable from the MeshSat device.</li>
+              <li>For Mosquitto: check /etc/mosquitto/mosquitto.conf allows external connections (listener 1883).</li>
+              <li>If using TLS, the broker URL should start with tls:// or ssl://.</li>
+              <li>The CubeOS Mosquitto coreapp listens on ports 6040 (MQTT) and 6041 (WebSocket).</li>
+              <li>Check firewall rules if connecting to an external broker.</li>
+            </ul>
+          </div>
+        </div>
+
         <div class="flex gap-2 mt-4">
           <button @click="saveGateway('mqtt')" :disabled="saving"
             class="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white hover:bg-teal-500 transition-colors disabled:opacity-50">
@@ -398,16 +452,23 @@ function formatTime(t) {
               <input v-model="iridiumForm.forward_all" type="checkbox" class="accent-teal-500" />
               Forward all message types
             </label>
-            <p class="text-xs text-gray-500 mt-1">When disabled, only forward selected portnums</p>
+            <p class="text-[10px] text-gray-600 mt-1">When disabled, only forward selected message types via satellite.</p>
           </div>
           <div v-if="!iridiumForm.forward_all">
-            <label class="block text-xs text-gray-400 mb-1">Forward Portnums (comma-separated)</label>
-            <input
-              :value="iridiumForm.forward_portnums.join(', ')"
-              @input="iridiumForm.forward_portnums = $event.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))"
-              type="text" placeholder="1, 3, 67"
-              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
-            <p class="text-xs text-gray-500 mt-1">1=Text, 3=Position, 4=NodeInfo, 67=Telemetry</p>
+            <label class="block text-xs text-gray-400 mb-2">Forward Message Types</label>
+            <div class="space-y-2">
+              <label v-for="pn in PORTNUMS" :key="pn.value"
+                class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  :checked="hasPortnum(pn.value)"
+                  @change="togglePortnum(pn.value)"
+                  class="accent-teal-500"
+                />
+                {{ pn.label }} <span class="text-[10px] text-gray-600">({{ pn.value }})</span>
+              </label>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-2">Select which Meshtastic portnums to forward via Iridium SBD.</p>
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
@@ -417,29 +478,57 @@ function formatTime(t) {
                 <option value="compact">Compact binary</option>
                 <option value="none">None (raw text)</option>
               </select>
+              <p class="text-[10px] text-gray-600 mt-1">Compact binary saves SBD credits. Recommended for production use.</p>
             </div>
             <div>
               <label class="block text-xs text-gray-400 mb-1">Max Text Length</label>
               <input v-model.number="iridiumForm.max_text_length" type="number" min="1" max="340"
                 class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+              <p class="text-[10px] text-gray-600 mt-1">Iridium SBD max payload is 340 bytes. Longer texts are truncated.</p>
             </div>
           </div>
           <div class="flex items-center gap-6">
-            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-              <input v-model="iridiumForm.auto_receive" type="checkbox" class="accent-teal-500" />
-              Auto-receive on ring alerts
-            </label>
-            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-              <input v-model="iridiumForm.include_position" type="checkbox" class="accent-teal-500" />
-              Include position
-            </label>
+            <div>
+              <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input v-model="iridiumForm.auto_receive" type="checkbox" class="accent-teal-500" />
+                Auto-receive on ring alerts
+              </label>
+              <p class="text-[10px] text-gray-600 mt-1">Automatically check for incoming SBD messages when the modem signals.</p>
+            </div>
+            <div>
+              <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input v-model="iridiumForm.include_position" type="checkbox" class="accent-teal-500" />
+                Include position
+              </label>
+              <p class="text-[10px] text-gray-600 mt-1">Attach GPS coordinates to outgoing SBD messages.</p>
+            </div>
           </div>
           <div>
             <label class="block text-xs text-gray-400 mb-1">Poll Interval (seconds, 0 = disabled)</label>
             <input v-model.number="iridiumForm.poll_interval" type="number" min="0" max="3600"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
+            <p class="text-[10px] text-gray-600 mt-1">How often to check for incoming SBD messages. 0 = only on ring alerts. Uses SBD credits.</p>
           </div>
         </div>
+
+        <!-- Connection Help -->
+        <div class="mt-4">
+          <button @click="showIridiumHelp = !showIridiumHelp"
+            class="text-xs text-gray-400 hover:text-gray-200 transition-colors">
+            {{ showIridiumHelp ? 'Hide' : 'Show' }} Connection Help
+          </button>
+          <div v-if="showIridiumHelp" class="mt-2 p-3 rounded-lg bg-gray-800/50 text-xs text-gray-400 space-y-2">
+            <p>Common issues:</p>
+            <ul class="list-disc list-inside space-y-1">
+              <li>Ensure the RockBLOCK modem is connected via USB and the serial port is available.</li>
+              <li>The modem needs a clear view of the sky for satellite communication.</li>
+              <li>Check your RockBLOCK account has active line rental and SBD credits.</li>
+              <li>Signal strength of 2+ bars is needed for reliable message transfer.</li>
+              <li>Each SBD message costs 1 credit (~12 cents). Use compact compression to minimize usage.</li>
+            </ul>
+          </div>
+        </div>
+
         <div class="flex gap-2 mt-4">
           <button @click="saveGateway('iridium')" :disabled="saving"
             class="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white hover:bg-teal-500 transition-colors disabled:opacity-50">

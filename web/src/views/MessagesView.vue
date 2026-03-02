@@ -13,7 +13,9 @@ const loadingMore = ref(false)
 const offset = ref(0)
 const limit = 50
 const hasMore = ref(true)
+const replyingTo = ref(null)
 let sentTimeout = null
+const textInput = ref(null)
 
 function formatTime(val) {
   if (!val) return '—'
@@ -44,6 +46,21 @@ async function loadMore() {
   }
 }
 
+function startReply(msg) {
+  const from = msg.from ?? msg.from_node ?? ''
+  const ch = msg.channel
+  messageTo.value = String(from)
+  if (ch != null) messageChannel.value = String(ch)
+  replyingTo.value = { node: from, channel: ch }
+  if (textInput.value) textInput.value.focus()
+}
+
+function cancelReply() {
+  replyingTo.value = null
+  messageTo.value = ''
+  messageChannel.value = ''
+}
+
 async function handleSend() {
   if (!messageText.value.trim()) return
   sending.value = true
@@ -54,6 +71,9 @@ async function handleSend() {
     if (messageChannel.value !== '') payload.channel = Number(messageChannel.value)
     await store.sendMessage(payload)
     messageText.value = ''
+    replyingTo.value = null
+    messageTo.value = ''
+    messageChannel.value = ''
     sent.value = true
     if (sentTimeout) clearTimeout(sentTimeout)
     sentTimeout = setTimeout(() => { sent.value = false }, 3000)
@@ -102,8 +122,18 @@ onUnmounted(() => {
     <!-- Send form -->
     <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
       <h2 class="text-sm font-semibold text-gray-300 mb-3">Send Message</h2>
+
+      <!-- Reply banner -->
+      <div v-if="replyingTo" class="flex items-center justify-between mb-3 px-3 py-2 rounded-lg bg-teal-900/20 border border-teal-800">
+        <span class="text-xs text-teal-400">
+          Replying to {{ replyingTo.node }} on Ch {{ replyingTo.channel ?? 0 }}
+        </span>
+        <button @click="cancelReply" class="text-xs text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
+      </div>
+
       <div class="flex flex-col sm:flex-row gap-3">
         <input
+          ref="textInput"
           v-model="messageText"
           type="text"
           placeholder="Type a message..."
@@ -144,15 +174,27 @@ onUnmounted(() => {
       </div>
       <div v-else class="divide-y divide-gray-800 max-h-[500px] overflow-y-auto">
         <div v-for="(msg, idx) in store.messages" :key="msg.id ?? idx"
-             class="px-5 py-3 hover:bg-gray-800/50 transition-colors">
+             class="px-5 py-3 hover:bg-gray-800/50 transition-colors group">
           <div class="flex items-center justify-between mb-1">
             <div class="flex items-center gap-2 text-xs text-gray-500">
-              <span class="font-medium">{{ msg.from ?? 'Unknown' }}</span>
-              <span v-if="msg.to">→ {{ msg.to === 0 ? 'Broadcast' : msg.to }}</span>
+              <span class="font-medium">{{ msg.from ?? msg.from_node ?? 'Unknown' }}</span>
+              <span v-if="msg.to ?? msg.to_node">→ {{ (msg.to ?? msg.to_node) === 0 ? 'Broadcast' : (msg.to ?? msg.to_node) }}</span>
               <span v-if="msg.channel != null" class="px-1.5 py-0.5 rounded bg-gray-800">Ch {{ msg.channel }}</span>
               <span v-if="msg.transport" class="px-1.5 py-0.5 rounded bg-teal-900/30 text-teal-400">{{ msg.transport }}</span>
             </div>
-            <span class="text-xs text-gray-500">{{ formatTime(msg.timestamp ?? msg.time ?? msg.rx_time) }}</span>
+            <div class="flex items-center gap-2">
+              <!-- Reply button -->
+              <button
+                @click="startReply(msg)"
+                class="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 text-xs rounded bg-gray-800 text-gray-400 hover:text-teal-400 transition-all"
+                title="Reply"
+              >
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 17l-5-5 5-5M4 12h12a4 4 0 0 1 4 4v1"/>
+                </svg>
+              </button>
+              <span class="text-xs text-gray-500">{{ formatTime(msg.timestamp ?? msg.time ?? msg.rx_time) }}</span>
+            </div>
           </div>
           <p class="text-sm text-gray-200">{{ msg.text ?? msg.decoded_text ?? msg.message ?? '—' }}</p>
         </div>

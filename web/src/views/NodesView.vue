@@ -1,8 +1,10 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
+
+const radioConnected = computed(() => store.status?.connected === true)
 
 function formatLastHeard(val) {
   if (!val) return '—'
@@ -37,7 +39,9 @@ async function handleTraceroute(node) {
   } catch { /* store error */ }
 }
 
-onMounted(() => store.fetchNodes())
+onMounted(() => {
+  Promise.all([store.fetchNodes(), store.fetchStatus()])
+})
 </script>
 
 <template>
@@ -52,7 +56,16 @@ onMounted(() => store.fetchNodes())
       </button>
     </div>
 
-    <div v-if="!store.nodes.length" class="bg-gray-900 rounded-xl p-8 border border-gray-800 text-center text-gray-500">
+    <!-- Connection banner -->
+    <div v-if="!radioConnected" class="bg-amber-900/20 border border-amber-800 rounded-lg p-3 text-amber-300 text-sm">
+      Radio not connected. Connect a Meshtastic device to see nodes.
+    </div>
+
+    <div v-if="!store.nodes.length && radioConnected" class="bg-gray-900 rounded-xl p-8 border border-gray-800 text-center text-gray-500">
+      No nodes discovered yet. Nodes appear when packets are received.
+    </div>
+
+    <div v-else-if="!store.nodes.length && !radioConnected" class="bg-gray-900 rounded-xl p-8 border border-gray-800 text-center text-gray-500">
       No nodes discovered
     </div>
 

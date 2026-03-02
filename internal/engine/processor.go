@@ -170,12 +170,22 @@ func (p *Processor) handleNodeUpdate(event transport.MeshEvent) {
 		return
 	}
 
-	// Persist telemetry if battery/voltage data present
-	if node.BatteryLevel > 0 || node.Voltage > 0 {
+	// Persist telemetry if any telemetry data is present
+	hasTelemetry := node.BatteryLevel > 0 || node.Voltage > 0 ||
+		node.ChannelUtil > 0 || node.AirUtilTx > 0 ||
+		node.Temperature != nil || node.Humidity != nil || node.Pressure != nil ||
+		node.UptimeSeconds > 0
+	if hasTelemetry {
 		t := &database.Telemetry{
-			NodeID:       node.UserID,
-			BatteryLevel: node.BatteryLevel,
-			Voltage:      node.Voltage,
+			NodeID:        node.UserID,
+			BatteryLevel:  node.BatteryLevel,
+			Voltage:       node.Voltage,
+			ChannelUtil:   node.ChannelUtil,
+			AirUtilTx:     node.AirUtilTx,
+			Temperature:   node.Temperature,
+			Humidity:      node.Humidity,
+			Pressure:      node.Pressure,
+			UptimeSeconds: node.UptimeSeconds,
 		}
 		if err := p.db.InsertTelemetry(t); err != nil {
 			log.Error().Err(err).Str("node", node.UserID).Msg("failed to persist telemetry")

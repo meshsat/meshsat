@@ -114,6 +114,7 @@ type MeshTransport interface {
 	GetNodes(ctx context.Context) ([]MeshNode, error)
 	GetStatus(ctx context.Context) (*MeshStatus, error)
 	GetMessages(ctx context.Context, limit int) ([]MeshMessage, error)
+	GetConfig(ctx context.Context) (map[string]interface{}, error)
 	AdminReboot(ctx context.Context, nodeNum uint32, delay int) error
 	AdminFactoryReset(ctx context.Context, nodeNum uint32) error
 	Traceroute(ctx context.Context, nodeNum uint32) error

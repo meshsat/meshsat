@@ -78,8 +78,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/admin/traceroute", s.handleTraceroute)
 
 		// Radio/module config (Phase 2)
+		r.Get("/config", s.handleGetConfig)
 		r.Post("/config/radio", s.handleSetRadioConfig)
 		r.Post("/config/module", s.handleSetModuleConfig)
+
+		// Channel management
+		r.Post("/channels", s.handleSetChannel)
 
 		// Waypoints (Phase 2)
 		r.Post("/waypoints", s.handleSendWaypoint)
