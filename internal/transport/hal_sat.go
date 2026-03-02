@@ -51,12 +51,18 @@ func (t *HALSatTransport) sseLoop(ctx context.Context, ch chan<- SatEvent) {
 		default:
 		}
 
+		start := time.Now()
 		err := t.readSSE(ctx, ch)
 		if ctx.Err() != nil {
 			return
 		}
 
-		log.Warn().Err(err).Dur("backoff", backoff).Msg("iridium SSE disconnected, reconnecting")
+		connDuration := time.Since(start)
+		if connDuration > 10*time.Second {
+			backoff = time.Second
+		}
+
+		log.Warn().Err(err).Dur("backoff", backoff).Dur("was_connected", connDuration).Msg("iridium SSE disconnected, reconnecting")
 
 		select {
 		case <-ctx.Done():
@@ -65,8 +71,8 @@ func (t *HALSatTransport) sseLoop(ctx context.Context, ch chan<- SatEvent) {
 		}
 
 		backoff *= 2
-		if backoff > 30*time.Second {
-			backoff = 30 * time.Second
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
 		}
 	}
 }
