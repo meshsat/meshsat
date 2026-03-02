@@ -52,12 +52,21 @@ func (t *HALMeshTransport) sseLoop(ctx context.Context, ch chan<- MeshEvent) {
 		default:
 		}
 
+		start := time.Now()
 		err := t.readSSE(ctx, ch)
 		if ctx.Err() != nil {
 			return
 		}
 
-		log.Warn().Err(err).Dur("backoff", backoff).Msg("meshtastic SSE disconnected, reconnecting")
+		connDuration := time.Since(start)
+
+		// If the connection lasted more than 10 seconds, it was a real session
+		// that eventually dropped — reset backoff so we reconnect quickly.
+		if connDuration > 10*time.Second {
+			backoff = time.Second
+		}
+
+		log.Warn().Err(err).Dur("backoff", backoff).Dur("was_connected", connDuration).Msg("meshtastic SSE disconnected, reconnecting")
 
 		select {
 		case <-ctx.Done():
@@ -65,10 +74,10 @@ func (t *HALMeshTransport) sseLoop(ctx context.Context, ch chan<- MeshEvent) {
 		case <-time.After(backoff):
 		}
 
-		// Exponential backoff: 1s → 2s → 4s → ... → 30s cap
+		// Exponential backoff: 1s → 2s → 4s → 5s cap (local HAL, reconnect fast)
 		backoff *= 2
-		if backoff > 30*time.Second {
-			backoff = 30 * time.Second
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
 		}
 	}
 }
