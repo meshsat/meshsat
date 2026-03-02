@@ -40,10 +40,15 @@ SERVICE_NAME="meshsat_meshsat"
 HOST_PORT="6050"
 HEALTH_TIMEOUT="90"
 
-# --- Source defaults.env for compose variable substitution ---
+# --- Source env files for compose variable substitution ---
 if [ -f /cubeos/config/defaults.env ]; then
   set -a
   source /cubeos/config/defaults.env
+  set +a
+fi
+if [ -f /cubeos/config/secrets.env ]; then
+  set -a
+  source /cubeos/config/secrets.env
   set +a
 fi
 
