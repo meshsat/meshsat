@@ -13,11 +13,18 @@ import (
 	"meshsat/internal/transport"
 )
 
+// GatewayProvider returns the currently running gateways.
+// The Manager implements this so the Processor always forwards to live instances.
+type GatewayProvider interface {
+	Gateways() []gateway.Gateway
+}
+
 // Processor ingests mesh events, persists them, and routes to gateways.
 type Processor struct {
 	db       *database.DB
 	mesh     transport.MeshTransport
-	gateways []gateway.Gateway
+	gateways []gateway.Gateway          // static list (boot-time only, kept for backward compat)
+	gwProv   GatewayProvider            // dynamic provider — takes precedence when set
 	subs     []chan transport.MeshEvent // SSE re-broadcast subscribers
 	subsMu   sync.RWMutex
 }
@@ -30,9 +37,17 @@ func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
 	}
 }
 
-// AddGateway registers a gateway for message forwarding.
+// AddGateway registers a static gateway for message forwarding.
+// Prefer SetGatewayProvider for dynamic gateway lifecycle.
 func (p *Processor) AddGateway(gw gateway.Gateway) {
 	p.gateways = append(p.gateways, gw)
+}
+
+// SetGatewayProvider sets a dynamic gateway source (e.g. the Manager).
+// When set, Forward() queries this instead of the static gateways list,
+// so gateway stop/start/reconfigure via the API is reflected immediately.
+func (p *Processor) SetGatewayProvider(prov GatewayProvider) {
+	p.gwProv = prov
 }
 
 // Subscribe adds an SSE re-broadcast subscriber. Returns a channel and unsubscribe func.
@@ -136,8 +151,12 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 	log.Debug().Uint32("packet_id", msg.ID).Str("portnum", msg.PortNumName).Msg("message persisted")
 
-	// Forward to active gateways
-	for _, gw := range p.gateways {
+	// Forward to active gateways (prefer dynamic provider over static list)
+	activeGateways := p.gateways
+	if p.gwProv != nil {
+		activeGateways = p.gwProv.Gateways()
+	}
+	for _, gw := range activeGateways {
 		if err := gw.Forward(context.Background(), &msg); err != nil {
 			log.Warn().Err(err).Str("gateway", gw.Type()).Msg("gateway forward failed")
 		}

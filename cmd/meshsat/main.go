@@ -73,9 +73,12 @@ func main() {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
 
-	// Register running gateways with processor for forwarding
+	// Register gateway manager as dynamic provider so processor always
+	// forwards to live gateway instances (survives stop/start/reconfigure)
+	proc.SetGatewayProvider(gwMgr)
+
+	// Start inbound receivers for currently running gateways
 	for _, gw := range gwMgr.Gateways() {
-		proc.AddGateway(gw)
 		proc.StartGatewayReceiver(ctx, gw)
 		log.Info().Str("type", gw.Type()).Msg("gateway registered with processor")
 	}
