@@ -216,16 +216,7 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 		return // rule engine handled (or no match = local-only)
 	}
 
-	// Fallback: forward to all active gateways (legacy behavior when no rules configured)
-	activeGateways := p.gateways
-	if p.gwProv != nil {
-		activeGateways = p.gwProv.Gateways()
-	}
-	for _, gw := range activeGateways {
-		if err := gw.Forward(context.Background(), &msg); err != nil {
-			log.Warn().Err(err).Str("gateway", gw.Type()).Msg("gateway forward failed")
-		}
-	}
+	// No rules configured: messages stay local (no forwarding)
 }
 
 func (p *Processor) handleNodeUpdate(event transport.MeshEvent) {
@@ -328,6 +319,21 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					To:      msg.To,
 					Channel: msg.Channel,
 				}
+
+				// Rule engine evaluation for inbound messages
+				if p.rules != nil && p.rules.RuleCount() > 0 {
+					match := p.rules.EvaluateInbound(msg.Source, msg.Text)
+					if match == nil {
+						log.Debug().Str("source", msg.Source).Msg("no inbound rule matched, dropping")
+						continue
+					}
+					log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Msg("inbound rule matched")
+					req.Channel = match.Rule.DestChannel
+					if match.Rule.DestNode != nil && *match.Rule.DestNode != "" {
+						req.To = *match.Rule.DestNode
+					}
+				}
+				// If no rules engine or no rules loaded, inject as-is (legacy behavior)
 				if err := p.mesh.SendMessage(ctx, req); err != nil {
 					log.Error().Err(err).Str("source", msg.Source).Msg("failed to send gateway message to mesh")
 					continue

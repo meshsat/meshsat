@@ -184,6 +184,10 @@ var migrations = []string{
 		fetched_at     INTEGER NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_tle_cache_fetched ON iridium_tle_cache(fetched_at);`,
+
+	// v6: Inbound rule support — destination channel and target node for mesh injection
+	`ALTER TABLE forwarding_rules ADD COLUMN dest_channel INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE forwarding_rules ADD COLUMN dest_node TEXT;`,
 }
 
 func (db *DB) migrate() error {

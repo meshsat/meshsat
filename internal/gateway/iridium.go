@@ -107,12 +107,9 @@ func (g *IridiumGateway) Stop() error {
 	return nil
 }
 
-// Forward checks forwarding rules and enqueues a message for satellite transmission.
+// Forward enqueues a message for satellite transmission.
+// Filtering is handled by the rules engine before this is called.
 func (g *IridiumGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
-	if !g.shouldForward(msg) {
-		return nil
-	}
-
 	select {
 	case g.outCh <- msg:
 		return nil
@@ -149,18 +146,6 @@ func (g *IridiumGateway) Status() GatewayStatus {
 // Type returns the gateway type identifier.
 func (g *IridiumGateway) Type() string {
 	return "iridium"
-}
-
-func (g *IridiumGateway) shouldForward(msg *transport.MeshMessage) bool {
-	if g.config.ForwardAll {
-		return true
-	}
-	for _, pn := range g.config.ForwardPortnums {
-		if msg.PortNum == pn {
-			return true
-		}
-	}
-	return false
 }
 
 // sendWorker dequeues messages and sends them via SBD (slow, 10-60s per message).

@@ -6,11 +6,13 @@ const store = useMeshsatStore()
 
 const props = defineProps({
   rule: { type: Object, default: null },
-  open: { type: Boolean, default: false }
+  open: { type: Boolean, default: false },
+  initialDirection: { type: String, default: null }
 })
 const emit = defineEmits(['save', 'close'])
 
 const form = ref(getDefault())
+const direction = ref('outbound')
 
 // Friendly picker state
 const selectedChannels = ref([])
@@ -42,14 +44,21 @@ const nodeOptions = computed(() => {
   }))
 })
 
+const isInbound = computed(() => direction.value === 'inbound')
+
 function getDefault() {
   return {
     name: '', enabled: true, priority: 1,
     source_type: 'any', source_channels: '', source_nodes: '', source_portnums: '', source_keyword: '',
-    dest_type: 'iridium',
+    dest_type: 'iridium', dest_channel: 0, dest_node: '',
     sat_priority: 1, sat_max_delay_sec: 0, sat_include_pos: false, sat_max_text_len: 320,
     position_precision: 32, rate_limit_per_min: 0, rate_limit_window: 60
   }
+}
+
+function detectDirection(rule) {
+  if (!rule) return 'outbound'
+  return rule.dest_type === 'mesh' ? 'inbound' : 'outbound'
 }
 
 function parseJSON(val) {
@@ -64,13 +73,17 @@ watch(() => props.rule, (r) => {
       source_channels: r.source_channels || '',
       source_nodes: r.source_nodes || '',
       source_portnums: r.source_portnums || '',
-      source_keyword: r.source_keyword || ''
+      source_keyword: r.source_keyword || '',
+      dest_channel: r.dest_channel || 0,
+      dest_node: r.dest_node || ''
     }
+    direction.value = detectDirection(r)
     selectedChannels.value = parseJSON(r.source_channels)
     selectedNodes.value = parseJSON(r.source_nodes)
     selectedPortnums.value = parseJSON(r.source_portnums)
   } else {
     form.value = getDefault()
+    direction.value = props.initialDirection || 'outbound'
     selectedChannels.value = []
     selectedNodes.value = []
     selectedPortnums.value = []
@@ -81,6 +94,26 @@ watch(() => props.open, (v) => {
   if (v) {
     store.fetchConfig()
     store.fetchNodes()
+    if (!props.rule && props.initialDirection) {
+      direction.value = props.initialDirection
+    }
+  }
+})
+
+// When direction changes, reset source/dest to appropriate defaults
+watch(direction, (dir) => {
+  if (dir === 'inbound') {
+    form.value.source_type = 'external'
+    form.value.dest_type = 'mesh'
+    form.value.dest_channel = 0
+    form.value.dest_node = ''
+  } else {
+    if (form.value.source_type === 'iridium' || form.value.source_type === 'mqtt' || form.value.source_type === 'external') {
+      form.value.source_type = 'any'
+    }
+    if (form.value.dest_type === 'mesh') {
+      form.value.dest_type = 'iridium'
+    }
   }
 })
 
@@ -125,6 +158,7 @@ function save() {
   }
 
   if (data.source_keyword === '') data.source_keyword = null
+  if (data.dest_node === '') data.dest_node = null
 
   emit('save', data)
 }
@@ -136,84 +170,135 @@ function save() {
       <h3 class="text-lg font-medium text-gray-200 mb-4">{{ rule ? 'Edit Rule' : 'New Rule' }}</h3>
 
       <div class="space-y-4">
+        <!-- Direction toggle -->
+        <div>
+          <label class="block text-xs text-gray-400 mb-2">Direction</label>
+          <div class="flex rounded-lg overflow-hidden border border-gray-700">
+            <button @click="direction = 'outbound'"
+              class="flex-1 py-2 text-xs font-medium transition-colors"
+              :class="direction === 'outbound'
+                ? 'bg-tactical-lora/15 text-tactical-lora border-r border-tactical-lora/30'
+                : 'bg-gray-900 text-gray-500 border-r border-gray-700 hover:text-gray-300'">
+              Outbound (Mesh &rarr; External)
+            </button>
+            <button @click="direction = 'inbound'"
+              class="flex-1 py-2 text-xs font-medium transition-colors"
+              :class="direction === 'inbound'
+                ? 'bg-tactical-iridium/15 text-tactical-iridium'
+                : 'bg-gray-900 text-gray-500 hover:text-gray-300'">
+              Inbound (External &rarr; Mesh)
+            </button>
+          </div>
+        </div>
+
         <div>
           <label class="block text-xs text-gray-400 mb-1">Name</label>
           <input v-model="form.name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="Emergency to Satellite">
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <!-- ═══ Outbound source/dest ═══ -->
+        <template v-if="!isInbound">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Filter by</label>
+              <select v-model="form.source_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+                <option value="any">All messages</option>
+                <option value="channel">Specific channels</option>
+                <option value="node">Specific nodes</option>
+                <option value="portnum">Message type</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Forward to</label>
+              <select v-model="form.dest_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+                <option value="iridium">Iridium Satellite</option>
+                <option value="mqtt">MQTT Broker</option>
+                <option value="both">Both</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Channel picker (multi-select badges) -->
+          <div v-if="form.source_type === 'channel'">
+            <label class="block text-xs text-gray-400 mb-2">Select Channels</label>
+            <div class="flex flex-wrap gap-2">
+              <button v-for="ch in channelOptions" :key="ch.index" @click="toggleChannel(ch.index)"
+                class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+                :class="selectedChannels.includes(ch.index)
+                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+                {{ ch.index }}: {{ ch.name }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Node picker (autocomplete with names) -->
+          <div v-if="form.source_type === 'node'">
+            <label class="block text-xs text-gray-400 mb-2">Select Nodes</label>
+            <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600">No nodes discovered yet</div>
+            <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+              <button v-for="node in nodeOptions" :key="node.id" @click="toggleNode(node.id)"
+                class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+                :class="selectedNodes.includes(node.id)
+                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+                {{ node.name }}
+                <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Portnum picker (checkboxes with names) -->
+          <div v-if="form.source_type === 'portnum'">
+            <label class="block text-xs text-gray-400 mb-2">Select Message Types</label>
+            <div class="grid grid-cols-2 gap-2">
+              <label v-for="pn in portnumOptions" :key="pn.value"
+                class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs transition-colors border cursor-pointer"
+                :class="selectedPortnums.includes(pn.value)
+                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+                <input type="checkbox" :checked="selectedPortnums.includes(pn.value)" @change="togglePortnum(pn.value)"
+                  class="rounded bg-gray-900 border-gray-700 text-teal-500">
+                {{ pn.label }}
+                <span class="text-[9px] text-gray-600">#{{ pn.value }}</span>
+              </label>
+            </div>
+          </div>
+        </template>
+
+        <!-- ═══ Inbound source/dest ═══ -->
+        <template v-if="isInbound">
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Source Type</label>
+            <label class="block text-xs text-gray-400 mb-1">Receive from</label>
             <select v-model="form.source_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-              <option value="any">Any message</option>
-              <option value="channel">Channel</option>
-              <option value="node">Node</option>
-              <option value="portnum">Port Number</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">Destination</label>
-            <select v-model="form.dest_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
               <option value="iridium">Iridium Satellite</option>
-              <option value="mqtt">MQTT</option>
-              <option value="both">Both</option>
+              <option value="mqtt">MQTT Broker</option>
+              <option value="external">Any external source</option>
             </select>
           </div>
-        </div>
 
-        <!-- Channel picker (multi-select badges) -->
-        <div v-if="form.source_type === 'channel'">
-          <label class="block text-xs text-gray-400 mb-2">Select Channels</label>
-          <div class="flex flex-wrap gap-2">
-            <button v-for="ch in channelOptions" :key="ch.index" @click="toggleChannel(ch.index)"
-              class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
-              :class="selectedChannels.includes(ch.index)
-                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
-                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
-              {{ ch.index }}: {{ ch.name }}
-            </button>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Deliver to channel</label>
+              <select v-model.number="form.dest_channel" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+                <option v-for="ch in channelOptions" :key="ch.index" :value="ch.index">
+                  {{ ch.index }}: {{ ch.name }}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Target node (optional)</label>
+              <input v-model="form.dest_node" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="!27ca8f1c (broadcast if empty)">
+            </div>
           </div>
-        </div>
-
-        <!-- Node picker (autocomplete with names) -->
-        <div v-if="form.source_type === 'node'">
-          <label class="block text-xs text-gray-400 mb-2">Select Nodes</label>
-          <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600">No nodes discovered yet</div>
-          <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-            <button v-for="node in nodeOptions" :key="node.id" @click="toggleNode(node.id)"
-              class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
-              :class="selectedNodes.includes(node.id)
-                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
-                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
-              {{ node.name }}
-              <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Portnum picker (checkboxes with names) -->
-        <div v-if="form.source_type === 'portnum'">
-          <label class="block text-xs text-gray-400 mb-2">Select Port Numbers</label>
-          <div class="grid grid-cols-2 gap-2">
-            <label v-for="pn in portnumOptions" :key="pn.value"
-              class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs transition-colors border cursor-pointer"
-              :class="selectedPortnums.includes(pn.value)
-                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
-                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
-              <input type="checkbox" :checked="selectedPortnums.includes(pn.value)" @change="togglePortnum(pn.value)"
-                class="rounded bg-gray-900 border-gray-700 text-teal-500">
-              {{ pn.label }}
-              <span class="text-[9px] text-gray-600">#{{ pn.value }}</span>
-            </label>
-          </div>
-        </div>
+        </template>
 
         <div>
           <label class="block text-xs text-gray-400 mb-1">Keyword filter (optional, case-insensitive)</label>
           <input v-model="form.source_keyword" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="emergency">
         </div>
 
-        <div v-if="form.dest_type !== 'mqtt'" class="grid grid-cols-2 gap-3">
+        <div v-if="!isInbound && form.dest_type !== 'mqtt'" class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-gray-400 mb-1">Satellite Priority</label>
             <select v-model.number="form.sat_priority" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
@@ -239,7 +324,7 @@ function save() {
           </div>
         </div>
 
-        <div v-if="form.dest_type !== 'mqtt'" class="flex items-center gap-2">
+        <div v-if="!isInbound && form.dest_type !== 'mqtt'" class="flex items-center gap-2">
           <input type="checkbox" v-model="form.sat_include_pos" id="sat_pos" class="rounded bg-gray-900 border-gray-700">
           <label for="sat_pos" class="text-xs text-gray-400">Include GPS position in satellite payload</label>
         </div>

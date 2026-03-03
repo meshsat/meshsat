@@ -169,6 +169,48 @@ func (e *Engine) recordMatch(ruleID int) {
 	}
 }
 
+// EvaluateInbound returns the first matching inbound rule for a gateway message.
+// Inbound rules have source_type = iridium/mqtt/external and dest_type = mesh.
+// Returns nil if no rule matches.
+func (e *Engine) EvaluateInbound(source string, text string) *MatchResult {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	for _, rule := range e.rules {
+		if !rule.Enabled {
+			continue
+		}
+		if !matchInboundSource(rule, source) {
+			continue
+		}
+		if !MatchesKeyword(rule, text) {
+			continue
+		}
+		// Check rate limiter
+		if limiter, ok := e.rates[rule.ID]; ok {
+			if !limiter.Allow() {
+				continue
+			}
+		}
+		go e.recordMatch(rule.ID)
+		return &MatchResult{Rule: rule}
+	}
+	return nil
+}
+
+func matchInboundSource(rule database.ForwardingRule, source string) bool {
+	switch rule.SourceType {
+	case "iridium":
+		return source == "iridium"
+	case "mqtt":
+		return source == "mqtt"
+	case "external":
+		return source == "iridium" || source == "mqtt"
+	default:
+		return false
+	}
+}
+
 // MatchesKeyword checks if the message text contains the rule's keyword (case-insensitive).
 // This is called after source matching for additional filtering.
 func MatchesKeyword(rule database.ForwardingRule, text string) bool {

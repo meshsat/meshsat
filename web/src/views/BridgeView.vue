@@ -8,6 +8,7 @@ const store = useMeshsatStore()
 const activeTab = ref('outbound')
 const editorOpen = ref(false)
 const editingRule = ref(null)
+const editorDirection = ref(null)
 
 const subTabs = [
   { id: 'outbound', label: 'Outbound' },
@@ -19,12 +20,12 @@ const subTabs = [
 const mqttGw = computed(() => (store.gateways || []).find(g => g.type === 'mqtt'))
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
 
-// Split rules by direction
+// Split rules by direction: inbound rules have dest_type === 'mesh'
 const outboundRules = computed(() =>
-  (store.rules || []).filter(r => r.source_type !== 'external')
+  (store.rules || []).filter(r => r.dest_type !== 'mesh')
 )
 const inboundRules = computed(() =>
-  (store.rules || []).filter(r => r.source_type === 'external')
+  (store.rules || []).filter(r => r.dest_type === 'mesh')
 )
 
 // Queue items with decoded payload
@@ -112,13 +113,15 @@ function gwStatusLabel(gw) {
   return gw.connected ? 'Connected' : gw.enabled ? 'Disconnected' : 'Disabled'
 }
 
-function openCreate() {
+function openCreate(dir = null) {
   editingRule.value = null
+  editorDirection.value = dir
   editorOpen.value = true
 }
 
 function openEdit(rule) {
   editingRule.value = { ...rule }
+  editorDirection.value = null
   editorOpen.value = true
 }
 
@@ -211,8 +214,8 @@ onMounted(() => {
     <div v-if="activeTab === 'outbound'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">Mesh messages forwarded to Iridium / MQTT</p>
-        <button @click="openCreate" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
-          + New Rule
+        <button @click="openCreate('outbound')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+          + New Outbound Rule
         </button>
       </div>
       <div v-if="outboundRules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
@@ -226,7 +229,12 @@ onMounted(() => {
 
     <!-- ═══ Inbound Tab ═══ -->
     <div v-if="activeTab === 'inbound'">
-      <p class="text-xs text-gray-500 mb-3">External messages routed back to the mesh network</p>
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-xs text-gray-500">External messages routed back to the mesh network</p>
+        <button @click="openCreate('inbound')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+          + New Inbound Rule
+        </button>
+      </div>
       <div v-if="inboundRules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
         No inbound rules configured. External messages are received but not routed to mesh.
       </div>
@@ -328,6 +336,6 @@ onMounted(() => {
     </div>
 
     <!-- Rule editor modal -->
-    <RuleEditor :open="editorOpen" :rule="editingRule" @save="saveRule" @close="editorOpen = false" />
+    <RuleEditor :open="editorOpen" :rule="editingRule" :initial-direction="editorDirection" @save="saveRule" @close="editorOpen = false" />
   </div>
 </template>

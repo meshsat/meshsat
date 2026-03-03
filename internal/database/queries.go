@@ -524,6 +524,8 @@ type ForwardingRule struct {
 	SourcePortnums    *string `db:"source_portnums" json:"source_portnums,omitempty"`
 	SourceKeyword     *string `db:"source_keyword" json:"source_keyword,omitempty"`
 	DestType          string  `db:"dest_type" json:"dest_type"`
+	DestChannel       int     `db:"dest_channel" json:"dest_channel"`
+	DestNode          *string `db:"dest_node" json:"dest_node,omitempty"`
 	SatPriority       int     `db:"sat_priority" json:"sat_priority"`
 	SatMaxDelaySec    int     `db:"sat_max_delay_sec" json:"sat_max_delay_sec"`
 	SatIncludePos     bool    `db:"sat_include_pos" json:"sat_include_pos"`
@@ -560,11 +562,11 @@ func (db *DB) GetForwardingRule(id int) (*ForwardingRule, error) {
 func (db *DB) InsertForwardingRule(r *ForwardingRule) (int64, error) {
 	res, err := db.Exec(`INSERT INTO forwarding_rules
 		(name, enabled, priority, source_type, source_channels, source_nodes, source_portnums, source_keyword,
-		 dest_type, sat_priority, sat_max_delay_sec, sat_include_pos, sat_max_text_len,
+		 dest_type, dest_channel, dest_node, sat_priority, sat_max_delay_sec, sat_include_pos, sat_max_text_len,
 		 position_precision, rate_limit_per_min, rate_limit_window)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Name, r.Enabled, r.Priority, r.SourceType, r.SourceChannels, r.SourceNodes, r.SourcePortnums, r.SourceKeyword,
-		r.DestType, r.SatPriority, r.SatMaxDelaySec, r.SatIncludePos, r.SatMaxTextLen,
+		r.DestType, r.DestChannel, r.DestNode, r.SatPriority, r.SatMaxDelaySec, r.SatIncludePos, r.SatMaxTextLen,
 		r.PositionPrecision, r.RateLimitPerMin, r.RateLimitWindow)
 	if err != nil {
 		return 0, err
@@ -576,11 +578,11 @@ func (db *DB) InsertForwardingRule(r *ForwardingRule) (int64, error) {
 func (db *DB) UpdateForwardingRule(r *ForwardingRule) error {
 	_, err := db.Exec(`UPDATE forwarding_rules SET
 		name=?, enabled=?, priority=?, source_type=?, source_channels=?, source_nodes=?, source_portnums=?, source_keyword=?,
-		dest_type=?, sat_priority=?, sat_max_delay_sec=?, sat_include_pos=?, sat_max_text_len=?,
+		dest_type=?, dest_channel=?, dest_node=?, sat_priority=?, sat_max_delay_sec=?, sat_include_pos=?, sat_max_text_len=?,
 		position_precision=?, rate_limit_per_min=?, rate_limit_window=?, updated_at=datetime('now')
 		WHERE id=?`,
 		r.Name, r.Enabled, r.Priority, r.SourceType, r.SourceChannels, r.SourceNodes, r.SourcePortnums, r.SourceKeyword,
-		r.DestType, r.SatPriority, r.SatMaxDelaySec, r.SatIncludePos, r.SatMaxTextLen,
+		r.DestType, r.DestChannel, r.DestNode, r.SatPriority, r.SatMaxDelaySec, r.SatIncludePos, r.SatMaxTextLen,
 		r.PositionPrecision, r.RateLimitPerMin, r.RateLimitWindow, r.ID)
 	return err
 }

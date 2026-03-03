@@ -34,12 +34,23 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "dest_type is required")
 		return
 	}
-	if rule.DestType != "iridium" && rule.DestType != "mqtt" && rule.DestType != "both" {
-		writeError(w, http.StatusBadRequest, "dest_type must be iridium, mqtt, or both")
+	if rule.DestType != "iridium" && rule.DestType != "mqtt" && rule.DestType != "both" && rule.DestType != "mesh" {
+		writeError(w, http.StatusBadRequest, "dest_type must be iridium, mqtt, both, or mesh")
 		return
 	}
 	if rule.SourceType == "" {
 		rule.SourceType = "any"
+	}
+	// Validate inbound rule constraints
+	if rule.DestType == "mesh" {
+		if rule.SourceType != "iridium" && rule.SourceType != "mqtt" && rule.SourceType != "external" {
+			writeError(w, http.StatusBadRequest, "inbound rules require source_type: iridium, mqtt, or external")
+			return
+		}
+		if rule.DestChannel < 0 || rule.DestChannel > 7 {
+			writeError(w, http.StatusBadRequest, "dest_channel must be 0-7")
+			return
+		}
 	}
 
 	id, err := s.db.InsertForwardingRule(&rule)

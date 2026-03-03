@@ -6,18 +6,28 @@ const props = defineProps({
 })
 const emit = defineEmits(['toggle', 'edit', 'delete'])
 
+const isInbound = computed(() => props.rule.dest_type === 'mesh')
+
 const sourceLabel = computed(() => {
   const r = props.rule
+  if (isInbound.value) {
+    switch (r.source_type) {
+      case 'iridium': return 'Iridium Satellite'
+      case 'mqtt': return 'MQTT Broker'
+      case 'external': return 'Any External'
+      default: return r.source_type
+    }
+  }
   switch (r.source_type) {
-    case 'any': return 'Any Message'
+    case 'any': return 'All Messages'
     case 'channel': {
-      try { const ch = JSON.parse(r.source_channels || '[]'); return `Ch ${ch.join(', ')}` } catch { return 'Channel' }
+      try { const ch = JSON.parse(r.source_channels || '[]'); return `Ch ${ch.join(', ')}` } catch { return 'Channels' }
     }
     case 'node': {
       try {
         const n = JSON.parse(r.source_nodes || '[]')
         return n.length > 2 ? `${n.length} nodes` : n.join(', ')
-      } catch { return 'Node' }
+      } catch { return 'Nodes' }
     }
     case 'portnum': {
       const names = { 1: 'Text', 3: 'Position', 4: 'NodeInfo', 67: 'Telemetry', 70: 'Traceroute' }
@@ -31,7 +41,13 @@ const sourceLabel = computed(() => {
 })
 
 const destLabel = computed(() => {
-  const d = props.rule.dest_type
+  const r = props.rule
+  if (isInbound.value) {
+    const chLabel = `Ch ${r.dest_channel || 0}`
+    if (r.dest_node) return `${chLabel} → ${r.dest_node}`
+    return `${chLabel} (broadcast)`
+  }
+  const d = r.dest_type
   if (d === 'both') return 'Iridium + MQTT'
   if (d === 'iridium') return 'Iridium SBD'
   if (d === 'mqtt') return 'MQTT'
@@ -39,13 +55,45 @@ const destLabel = computed(() => {
 })
 
 const destAccent = computed(() => {
+  if (isInbound.value) return 'border-tactical-lora/30 text-tactical-lora'
   const d = props.rule.dest_type
   if (d === 'iridium') return 'border-tactical-iridium/30 text-tactical-iridium'
   if (d === 'mqtt') return 'border-amber-400/30 text-amber-400'
   return 'border-blue-400/30 text-blue-400' // both
 })
 
+const sourceAccent = computed(() => {
+  if (isInbound.value) {
+    const s = props.rule.source_type
+    if (s === 'iridium') return 'bg-tactical-iridium/10 border-tactical-iridium/20'
+    if (s === 'mqtt') return 'bg-amber-400/10 border-amber-400/20'
+    return 'bg-blue-400/10 border-blue-400/20' // external
+  }
+  return 'bg-tactical-lora/10 border-tactical-lora/20'
+})
+
+const sourceIconColor = computed(() => {
+  if (isInbound.value) {
+    const s = props.rule.source_type
+    if (s === 'iridium') return 'text-tactical-iridium'
+    if (s === 'mqtt') return 'text-amber-400'
+    return 'text-blue-400'
+  }
+  return 'text-tactical-lora'
+})
+
+const sourceLabelColor = computed(() => {
+  if (isInbound.value) {
+    const s = props.rule.source_type
+    if (s === 'iridium') return 'text-tactical-iridium'
+    if (s === 'mqtt') return 'text-amber-400'
+    return 'text-blue-400'
+  }
+  return 'text-tactical-lora'
+})
+
 const destBg = computed(() => {
+  if (isInbound.value) return 'bg-tactical-lora/5'
   const d = props.rule.dest_type
   if (d === 'iridium') return 'bg-tactical-iridium/5'
   if (d === 'mqtt') return 'bg-amber-400/5'
@@ -75,11 +123,20 @@ function timeAgo(ts) {
     <!-- Pipeline flow header -->
     <div class="flex items-center gap-0 p-3" :class="destBg">
       <!-- Source -->
-      <div class="flex items-center gap-2 px-3 py-1.5 rounded-l-lg bg-tactical-lora/10 border border-tactical-lora/20">
-        <svg class="w-3.5 h-3.5 text-tactical-lora" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-l-lg border" :class="sourceAccent">
+        <!-- Outbound: mesh radio icon -->
+        <svg v-if="!isInbound" class="w-3.5 h-3.5 text-tactical-lora" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/><path d="M5.5 5.5a10 10 0 0114 0M8 8a6 6 0 018.5 0"/>
         </svg>
-        <span class="text-[11px] font-medium text-tactical-lora">{{ sourceLabel }}</span>
+        <!-- Inbound: satellite/mqtt icon -->
+        <svg v-if="isInbound && (rule.source_type === 'iridium' || rule.source_type === 'external')" class="w-3.5 h-3.5" :class="sourceIconColor" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="10" y="10" width="4" height="4" rx="0.5"/><rect x="2" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
+          <rect x="16" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
+        </svg>
+        <svg v-if="isInbound && rule.source_type === 'mqtt'" class="w-3.5 h-3.5" :class="sourceIconColor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 12h16M12 4v16M7 7l10 10M17 7L7 17"/>
+        </svg>
+        <span class="text-[11px] font-medium" :class="sourceLabelColor">{{ sourceLabel }}</span>
       </div>
 
       <!-- Arrow -->
@@ -91,12 +148,19 @@ function timeAgo(ts) {
 
       <!-- Destination -->
       <div class="flex items-center gap-2 px-3 py-1.5 rounded-r-lg border" :class="destAccent">
-        <svg v-if="rule.dest_type === 'iridium' || rule.dest_type === 'both'" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-          <rect x="10" y="10" width="4" height="4" rx="0.5"/><rect x="2" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
-          <rect x="16" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
-        </svg>
-        <svg v-if="rule.dest_type === 'mqtt'" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M4 12h16M12 4v16M7 7l10 10M17 7L7 17"/>
+        <!-- Outbound: satellite/mqtt icons -->
+        <template v-if="!isInbound">
+          <svg v-if="rule.dest_type === 'iridium' || rule.dest_type === 'both'" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="10" y="10" width="4" height="4" rx="0.5"/><rect x="2" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
+            <rect x="16" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
+          </svg>
+          <svg v-if="rule.dest_type === 'mqtt'" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 12h16M12 4v16M7 7l10 10M17 7L7 17"/>
+          </svg>
+        </template>
+        <!-- Inbound: mesh radio icon -->
+        <svg v-if="isInbound" class="w-3.5 h-3.5 text-tactical-lora" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/><path d="M5.5 5.5a10 10 0 0114 0M8 8a6 6 0 018.5 0"/>
         </svg>
         <span class="text-[11px] font-medium">{{ destLabel }}</span>
       </div>
@@ -119,7 +183,7 @@ function timeAgo(ts) {
         <span v-if="rule.source_keyword" class="text-[9px] text-gray-500 px-1.5 py-px rounded bg-gray-800">
           keyword: {{ rule.source_keyword }}
         </span>
-        <span v-if="rule.dest_type !== 'mqtt'" class="text-[9px] px-1.5 py-px rounded bg-gray-800"
+        <span v-if="!isInbound && rule.dest_type !== 'mqtt'" class="text-[9px] px-1.5 py-px rounded bg-gray-800"
           :class="rule.sat_priority === 0 ? 'text-red-400' : rule.sat_priority === 2 ? 'text-gray-500' : 'text-amber-400'">
           {{ priorityLabel }}
         </span>
