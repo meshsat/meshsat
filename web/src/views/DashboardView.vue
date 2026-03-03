@@ -3,70 +3,176 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
-const recentActivity = ref([])
-const MAX_ACTIVITY = 15
-const pulsingHop = ref(null)
-let pulseTimeout = null
 
-// Status helpers
-const radioConnected = computed(() => store.status?.connected === true)
-const nodeName = computed(() => store.status?.node_name || '—')
-const nodeCount = computed(() => store.nodes?.length ?? 0)
-const totalMessages = computed(() => store.messageStats?.total ?? 0)
+// ── Activity log ──
+const activityLog = ref([])
+const MAX_LOG = 50
+const logPaused = ref(false)
 
-const mqttGw = computed(() => store.gateways.find(g => g.type === 'mqtt'))
-const iridiumGw = computed(() => store.gateways.find(g => g.type === 'iridium'))
+// ── SOS state ──
+const sosArming = ref(false)
 
-// Hop status logic
-const hops = computed(() => [
-  {
-    id: 'mesh',
-    label: 'Mesh Nodes',
-    icon: 'mesh',
-    status: !radioConnected.value ? 'gray' : nodeCount.value > 0 ? 'green' : 'red',
-    detail: radioConnected.value ? `${nodeCount.value} node${nodeCount.value !== 1 ? 's' : ''}` : 'Not connected'
-  },
-  {
-    id: 'hal',
-    label: 'HAL Radio',
-    icon: 'radio',
-    status: radioConnected.value ? 'green' : 'red',
-    detail: radioConnected.value ? 'Connected' : 'Disconnected'
-  },
-  {
-    id: 'meshsat',
-    label: 'MeshSat',
-    icon: 'server',
-    status: 'green',
-    detail: 'Running'
-  }
-])
+// ── Helpers from NodesView ──
+const nowSec = computed(() => Date.now() / 1000)
 
-const mqttHop = computed(() => ({
-  id: 'mqtt',
-  label: 'MQTT Broker',
-  icon: 'mqtt',
-  status: !mqttGw.value ? 'gray' : mqttGw.value.connected ? 'green' : 'red',
-  detail: !mqttGw.value ? 'Not configured' : mqttGw.value.connected ? 'Connected' : 'Disconnected'
-}))
+function isNodeActive(node) {
+  if (!node.last_heard) return false
+  return (nowSec.value - node.last_heard) < 7200
+}
 
-const iridiumHop = computed(() => ({
-  id: 'iridium',
-  label: 'Iridium SBD',
-  icon: 'satellite',
-  status: !iridiumGw.value ? 'gray' : iridiumGw.value.connected ? 'green' : 'red',
-  detail: !iridiumGw.value ? 'Not configured' : iridiumGw.value.connected ? 'Connected' : 'Disconnected'
-}))
+function isNodeRecent(node) {
+  if (!node.last_heard) return false
+  return (nowSec.value - node.last_heard) < 86400
+}
 
-function statusColor(s) {
-  if (s === 'green') return 'bg-emerald-400'
-  if (s === 'red') return 'bg-red-400'
+function signalDot(node) {
+  if (isNodeActive(node)) return 'bg-emerald-400'
+  if (isNodeRecent(node)) return 'bg-amber-400'
   return 'bg-gray-600'
 }
 
-function formatActivityTime(t) {
-  if (!t) return ''
-  return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+function shortId(id) {
+  if (!id) return ''
+  if (id.startsWith('!') && id.length > 6) return id.slice(0, 3) + '..' + id.slice(-4)
+  return id
+}
+
+function formatLastHeard(val) {
+  if (!val) return 'Never'
+  const ts = typeof val === 'number' && val < 1e12 ? val * 1000 : val
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return String(val)
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
+  return d.toLocaleDateString()
+}
+
+function formatUptime(secs) {
+  if (!secs || secs <= 0) return 'N/A'
+  const d = Math.floor(secs / 86400)
+  const h = Math.floor((secs % 86400) / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h ${m}m`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+// ── Computed: Iridium SBD panel ──
+const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
+const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
+const satAssessment = computed(() => store.iridiumSignal?.assessment || 'none')
+const iridiumStatus = computed(() => {
+  if (!iridiumGw.value) return { dot: 'bg-gray-600', text: 'Not Configured' }
+  if (iridiumGw.value.connected) return { dot: 'bg-tactical-iridium', text: 'Connected' }
+  return { dot: 'bg-red-400', text: 'Disconnected' }
+})
+const dlqPending = computed(() => (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length)
+const lastSatTx = computed(() => {
+  const msgs = (store.messages || []).filter(m => m.transport === 'satellite' && m.direction === 'outbound')
+  return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
+})
+const lastSatRx = computed(() => {
+  const msgs = (store.messages || []).filter(m => m.transport === 'satellite' && m.direction === 'inbound')
+  return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
+})
+
+function formatRelativeTime(val) {
+  if (!val) return 'N/A'
+  const ts = typeof val === 'string' ? new Date(val).getTime() : (val < 1e12 ? val * 1000 : val)
+  const diff = Math.floor((Date.now() - ts) / 1000)
+  if (diff < 0) return 'just now'
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
+
+// ── Computed: Meshtastic Mesh panel ──
+const radioConnected = computed(() => store.status?.connected === true)
+const nodeName = computed(() => store.status?.node_name || 'Unknown')
+const activeNodes = computed(() => (store.nodes || []).filter(n => isNodeActive(n)))
+const totalNodes = computed(() => (store.nodes || []).length)
+const topNodes = computed(() => {
+  const sorted = [...(store.nodes || [])].sort((a, b) => (b.last_heard || 0) - (a.last_heard || 0))
+  return sorted.slice(0, 6)
+})
+
+// ── Computed: GPS Position panel ──
+const localNode = computed(() => {
+  const myId = store.status?.node_id
+  if (!myId) return null
+  return (store.nodes || []).find(n => n.num === myId)
+})
+const gpsLat = computed(() => localNode.value?.latitude?.toFixed(6) ?? 'N/A')
+const gpsLon = computed(() => localNode.value?.longitude?.toFixed(6) ?? 'N/A')
+const gpsAlt = computed(() => localNode.value?.altitude != null ? `${localNode.value.altitude}m` : 'N/A')
+const gpsSats = computed(() => localNode.value?.sats ?? 'N/A')
+const gpsFix = computed(() => {
+  if (!localNode.value?.latitude && !localNode.value?.longitude) return false
+  return true
+})
+
+// ── Computed: SBD Queue panel ──
+const dlqItems = computed(() => {
+  return (store.dlq || []).slice(0, 8)
+})
+const satMessages = computed(() => {
+  return (store.messages || []).filter(m => m.transport === 'satellite').slice(0, 5)
+})
+
+function dlqStatusColor(status) {
+  if (status === 'sent' || status === 'delivered') return 'text-emerald-400 bg-emerald-400/10'
+  if (status === 'pending') return 'text-amber-400 bg-amber-400/10'
+  if (status === 'queued' || !status) return 'text-gray-400 bg-gray-400/10'
+  if (status === 'failed') return 'text-red-400 bg-red-400/10'
+  return 'text-gray-400 bg-gray-400/10'
+}
+
+// ── Computed: Power System panel ──
+const batteryLevel = computed(() => localNode.value?.battery_level ?? null)
+const voltage = computed(() => localNode.value?.voltage ?? null)
+const uptimeSeconds = computed(() => localNode.value?.uptime_seconds ?? store.status?.uptime_seconds ?? null)
+const temperature = computed(() => localNode.value?.temperature ?? null)
+
+function batteryColor(level) {
+  if (level == null) return 'bg-gray-600'
+  if (level > 60) return 'bg-tactical-power'
+  if (level > 25) return 'bg-amber-400'
+  return 'bg-red-400'
+}
+
+// ── Computed: SOS panel ──
+const sosActive = computed(() => store.sosStatus?.active === true)
+
+async function toggleSOS() {
+  sosArming.value = true
+  try {
+    if (sosActive.value) {
+      await store.cancelSOS()
+    } else {
+      await store.activateSOS()
+    }
+  } catch { /* store error */ }
+  sosArming.value = false
+}
+
+async function testSOS() {
+  try {
+    await store.sendMessage({ text: 'SOS TEST', transport: 'satellite' })
+  } catch { /* store error */ }
+}
+
+// ── Activity log event handler ──
+function eventTag(type) {
+  if (type === 'signal' || type === 'iridium' || type === 'satellite') return { label: 'IRID', color: 'bg-tactical-iridium/20 text-tactical-iridium' }
+  if (type === 'message' || type === 'text') return { label: 'LORA', color: 'bg-tactical-lora/20 text-tactical-lora' }
+  if (type === 'position') return { label: 'GPS', color: 'bg-tactical-gps/20 text-tactical-gps' }
+  if (type === 'sos') return { label: 'SOS', color: 'bg-tactical-sos/20 text-tactical-sos' }
+  if (type === 'node_update') return { label: 'LORA', color: 'bg-tactical-lora/20 text-tactical-lora' }
+  return { label: 'SYS', color: 'bg-gray-700/50 text-gray-400' }
 }
 
 function eventDescription(event) {
@@ -77,292 +183,402 @@ function eventDescription(event) {
   if (type === 'position') return msg || 'Position update received'
   if (type === 'connected') return 'Radio connected'
   if (type === 'disconnected') return 'Radio disconnected'
+  if (type === 'signal') return msg || 'Iridium signal update'
   if (type === 'config_complete') return 'Config sync complete'
   return msg || type || 'Event'
 }
 
-function eventIcon(type) {
-  if (type === 'message' || type === 'text') return 'M'
-  if (type === 'node_update') return 'N'
-  if (type === 'position') return 'P'
-  if (type === 'connected') return '+'
-  if (type === 'disconnected') return '-'
-  return 'E'
-}
-
-function triggerPulse(hopId) {
-  pulsingHop.value = hopId
-  if (pulseTimeout) clearTimeout(pulseTimeout)
-  pulseTimeout = setTimeout(() => { pulsingHop.value = null }, 500)
-}
-
 function handleSSEEvent(event) {
   const type = event?.type ?? ''
-  recentActivity.value.unshift({
+  activityLog.value.unshift({
     time: new Date().toISOString(),
     type,
     description: eventDescription(event)
   })
-  if (recentActivity.value.length > MAX_ACTIVITY) {
-    recentActivity.value.length = MAX_ACTIVITY
-  }
-
-  // Pulse animation
-  if (type === 'message' || type === 'text') {
-    triggerPulse('meshsat')
-  } else if (type === 'node_update' || type === 'position') {
-    triggerPulse('hal')
+  if (activityLog.value.length > MAX_LOG) {
+    activityLog.value.length = MAX_LOG
   }
 }
+
+function formatLogTime(t) {
+  if (!t) return ''
+  return new Date(t).toISOString().slice(11, 19)
+}
+
+// ── DLQ cancel ──
+async function cancelDLQ(id) {
+  try {
+    await store.fetchDLQ() // refresh after cancel — API doesn't have a cancel endpoint yet
+  } catch { /* ignore */ }
+}
+
+// ── Lifecycle ──
+let pollTimer = null
 
 async function fetchAll() {
   await Promise.all([
     store.fetchStatus(),
     store.fetchNodes(),
     store.fetchMessageStats(),
-    store.fetchGateways()
+    store.fetchGateways(),
+    store.fetchIridiumSignalFast(),
+    store.fetchDLQ(),
+    store.fetchMessages({ limit: 20 }),
+    store.fetchSOSStatus()
   ])
 }
 
 onMounted(() => {
   fetchAll()
   store.connectSSE(handleSSEEvent)
+  pollTimer = setInterval(() => {
+    store.fetchIridiumSignalFast()
+    store.fetchNodes()
+    store.fetchDLQ()
+  }, 15000)
 })
 
 onUnmounted(() => {
   store.closeSSE()
-  if (pulseTimeout) clearTimeout(pulseTimeout)
+  if (pollTimer) clearInterval(pollTimer)
 })
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto space-y-6">
-    <h1 class="text-2xl font-bold">Dashboard</h1>
+  <div class="max-w-[1400px] mx-auto">
+    <!-- 7-Panel Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 
-    <!-- Status Cards -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-        <p class="text-xs text-gray-500">Radio Status</p>
-        <div class="flex items-center gap-2 mt-1">
+      <!-- ═══ Panel 1: Iridium SBD ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">IRIDIUM SBD</h2>
+          <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
+        </div>
+
+        <!-- Signal bars -->
+        <div class="flex items-center gap-3 mb-3">
+          <div class="flex items-end gap-[3px] h-6">
+            <span v-for="i in 5" :key="i"
+              class="w-[5px] rounded-sm transition-colors"
+              :class="satBars >= i ? 'bg-tactical-iridium' : 'bg-gray-700/50'"
+              :style="{ height: `${6 + i * 4}px` }" />
+          </div>
+          <div>
+            <span class="font-mono text-lg font-bold" :class="satBars >= 0 ? 'text-tactical-iridium' : 'text-gray-600'">
+              {{ satBars >= 0 ? satBars : '--' }}
+            </span>
+            <span class="text-[10px] text-gray-500 ml-1">/5</span>
+          </div>
+          <span class="text-[10px] text-gray-500 uppercase">{{ satAssessment }}</span>
+        </div>
+
+        <!-- Status rows -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Gateway</span>
+            <span class="text-gray-300">{{ iridiumStatus.text }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Queue</span>
+            <span :class="dlqPending > 0 ? 'text-amber-400' : 'text-gray-300'">{{ dlqPending }} pending</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Last TX</span>
+            <span class="text-gray-400 font-mono">{{ lastSatTx }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Last RX</span>
+            <span class="text-gray-400 font-mono">{{ lastSatRx }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Credits</span>
+            <span class="text-gray-400 font-mono">N/A</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ Panel 2: Meshtastic Mesh ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-tactical-lora tracking-wide">MESHTASTIC MESH</h2>
           <span class="w-2 h-2 rounded-full" :class="radioConnected ? 'bg-emerald-400' : 'bg-red-400'" />
-          <span class="text-sm font-medium" :class="radioConnected ? 'text-emerald-400' : 'text-red-400'">
+        </div>
+
+        <!-- Connection info -->
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xs" :class="radioConnected ? 'text-emerald-400' : 'text-red-400'">
             {{ radioConnected ? 'Connected' : 'Disconnected' }}
           </span>
+          <span class="text-[10px] text-gray-500 font-mono">{{ nodeName }}</span>
         </div>
-        <p class="text-xs text-gray-500 mt-1">{{ nodeName }}</p>
-      </div>
 
-      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-        <p class="text-xs text-gray-500">Nodes Online</p>
-        <p class="text-2xl font-bold tabular-nums mt-1">{{ nodeCount }}</p>
-      </div>
-
-      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-        <p class="text-xs text-gray-500">Messages (total)</p>
-        <p class="text-2xl font-bold tabular-nums mt-1">{{ totalMessages }}</p>
-      </div>
-
-      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-        <p class="text-xs text-gray-500">Gateways</p>
-        <div class="flex items-center gap-3 mt-2">
-          <div class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full" :class="statusColor(mqttHop.status)" />
-            <span class="text-xs text-gray-400">MQTT</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full" :class="statusColor(iridiumHop.status)" />
-            <span class="text-xs text-gray-400">Iridium</span>
-          </div>
+        <!-- Node count -->
+        <div class="flex items-center gap-2 mb-3">
+          <span class="font-mono text-lg font-bold text-tactical-lora">{{ activeNodes.length }}</span>
+          <span class="text-[10px] text-gray-500">/ {{ totalNodes }} nodes</span>
         </div>
-      </div>
-    </div>
 
-    <!-- Message Flow Diagram -->
-    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-      <h2 class="text-sm font-semibold text-gray-300 mb-4">Message Flow</h2>
-
-      <!-- Desktop: horizontal -->
-      <div class="hidden md:flex items-center gap-0">
-        <!-- Main chain: Mesh → HAL → MeshSat -->
-        <template v-for="(hop, idx) in hops" :key="hop.id">
-          <div class="flex flex-col items-center min-w-[100px]">
-            <div class="w-16 h-16 rounded-xl border flex flex-col items-center justify-center transition-all"
-                 :class="[
-                   hop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
-                   hop.status === 'red' ? 'border-red-800 bg-red-950/30' :
-                   'border-gray-700 bg-gray-800/50',
-                   pulsingHop === hop.id ? 'ring-2 ring-teal-400/50' : ''
-                 ]">
-              <svg class="w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <template v-if="hop.icon === 'mesh'">
-                  <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/>
-                  <path d="M7 6h10M6.5 7.5L11 17M17.5 7.5L13 17"/>
-                </template>
-                <template v-else-if="hop.icon === 'radio'">
-                  <path d="M12 20v-6M8.5 14h7l1.5-9h-10.5z"/>
-                  <path d="M7 4c2.8 2.8 2.8 5.2 0 8M17 4c-2.8 2.8-2.8 5.2 0 8"/>
-                </template>
-                <template v-else-if="hop.icon === 'server'">
-                  <rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/>
-                  <circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="1" fill="currentColor"/>
-                </template>
-              </svg>
-              <span class="w-2 h-2 rounded-full mt-1" :class="statusColor(hop.status)" />
-            </div>
-            <p class="text-xs text-gray-400 mt-2 text-center">{{ hop.label }}</p>
-            <p class="text-[10px] text-gray-600 text-center">{{ hop.detail }}</p>
+        <!-- Top nodes list -->
+        <div class="space-y-1">
+          <div v-for="node in topNodes" :key="node.num"
+            class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.02] transition-colors">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="signalDot(node)" />
+            <span class="text-[11px] text-gray-300 truncate flex-1">{{ node.long_name || 'Unknown' }}</span>
+            <span class="text-[9px] font-mono text-gray-600 shrink-0">{{ shortId(node.user_id) }}</span>
+            <span v-if="node.snr != null" class="text-[9px] font-mono shrink-0"
+              :class="node.snr >= 0 ? 'text-emerald-400/60' : node.snr >= -10 ? 'text-amber-400/60' : 'text-red-400/60'">
+              {{ Number(node.snr).toFixed(0) }}dB
+            </span>
+            <span class="text-[9px] text-gray-600 shrink-0">{{ formatLastHeard(node.last_heard) }}</span>
           </div>
-          <!-- Arrow -->
-          <div v-if="idx < hops.length - 1" class="flex items-center h-16 px-1">
-            <svg class="w-8 h-4 text-gray-600" viewBox="0 0 32 16">
-              <line x1="0" y1="8" x2="24" y2="8" stroke="currentColor" stroke-width="2"
-                    :stroke-dasharray="pulsingHop === hops[idx+1]?.id ? 'none' : '4 3'" />
-              <path d="M22 4l6 4-6 4" fill="none" stroke="currentColor" stroke-width="2"/>
-            </svg>
-          </div>
-        </template>
-
-        <!-- Branch: MeshSat → MQTT + Iridium (Y-fork, side by side) -->
-        <div class="flex items-center ml-1">
-          <!-- Fork lines SVG -->
-          <svg class="w-10 h-24 text-gray-600 shrink-0" viewBox="0 0 40 96">
-            <!-- Top branch line -->
-            <path d="M0 48 L16 48 L32 20" fill="none" stroke="currentColor" stroke-width="2"
-                  :stroke-dasharray="mqttHop.status === 'green' ? 'none' : '4 3'" />
-            <path d="M28 14 L34 20 L28 26" fill="none" stroke="currentColor" stroke-width="2"/>
-            <!-- Bottom branch line -->
-            <path d="M0 48 L16 48 L32 76" fill="none" stroke="currentColor" stroke-width="2"
-                  :stroke-dasharray="iridiumHop.status === 'green' ? 'none' : '4 3'" />
-            <path d="M28 70 L34 76 L28 82" fill="none" stroke="currentColor" stroke-width="2"/>
-          </svg>
-          <!-- Gateway nodes stacked -->
-          <div class="flex flex-col gap-4">
-            <!-- MQTT -->
-            <div class="flex flex-col items-center min-w-[100px]">
-              <div class="w-16 h-10 rounded-lg border flex items-center justify-center gap-2"
-                   :class="mqttHop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
-                           mqttHop.status === 'red' ? 'border-red-800 bg-red-950/30' :
-                           'border-gray-700 bg-gray-800/50'">
-                <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-                </svg>
-                <span class="w-2 h-2 rounded-full" :class="statusColor(mqttHop.status)" />
-              </div>
-              <p class="text-xs text-gray-400 mt-1 text-center">{{ mqttHop.label }}</p>
-              <p class="text-[10px] text-gray-600 text-center">{{ mqttHop.detail }}</p>
-            </div>
-            <!-- Iridium -->
-            <div class="flex flex-col items-center min-w-[100px]">
-              <div class="w-16 h-10 rounded-lg border flex items-center justify-center gap-2"
-                   :class="iridiumHop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
-                           iridiumHop.status === 'red' ? 'border-red-800 bg-red-950/30' :
-                           'border-gray-700 bg-gray-800/50'">
-                <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <circle cx="12" cy="12" r="10"/>
-                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                  <path d="M2 12h20"/>
-                </svg>
-                <span class="w-2 h-2 rounded-full" :class="statusColor(iridiumHop.status)" />
-              </div>
-              <p class="text-xs text-gray-400 mt-1 text-center">{{ iridiumHop.label }}</p>
-              <p class="text-[10px] text-gray-600 text-center">{{ iridiumHop.detail }}</p>
-            </div>
-          </div>
+          <div v-if="!topNodes.length" class="text-[11px] text-gray-600 text-center py-2">No nodes discovered</div>
         </div>
+
+        <router-link to="/nodes" class="block text-center text-[10px] text-tactical-lora/60 hover:text-tactical-lora mt-2 transition-colors">
+          View All Nodes
+        </router-link>
       </div>
 
-      <!-- Mobile: vertical chain -->
-      <div class="md:hidden space-y-2">
-        <template v-for="(hop, idx) in hops" :key="'m-'+hop.id">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-lg border flex items-center justify-center shrink-0"
-                 :class="hop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
-                         hop.status === 'red' ? 'border-red-800 bg-red-950/30' :
-                         'border-gray-700 bg-gray-800/50'">
-              <span class="w-2 h-2 rounded-full" :class="statusColor(hop.status)" />
-            </div>
-            <div>
-              <p class="text-xs font-medium text-gray-300">{{ hop.label }}</p>
-              <p class="text-[10px] text-gray-500">{{ hop.detail }}</p>
-            </div>
-          </div>
-          <div v-if="idx < hops.length - 1" class="flex justify-center">
-            <svg class="w-4 h-6 text-gray-600" viewBox="0 0 16 24">
-              <line x1="8" y1="0" x2="8" y2="18" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/>
-              <path d="M4 16l4 6 4-6" fill="none" stroke="currentColor" stroke-width="2"/>
-            </svg>
-          </div>
-        </template>
-        <!-- Branch arrows for mobile -->
-        <div class="flex justify-center">
-          <svg class="w-4 h-6 text-gray-600" viewBox="0 0 16 24">
-            <line x1="8" y1="0" x2="8" y2="18" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/>
-            <path d="M4 16l4 6 4-6" fill="none" stroke="currentColor" stroke-width="2"/>
-          </svg>
-        </div>
-        <!-- MQTT hop -->
-        <div class="flex items-center gap-3 pl-4">
-          <div class="w-10 h-10 rounded-lg border flex items-center justify-center shrink-0"
-               :class="mqttHop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
-                       mqttHop.status === 'red' ? 'border-red-800 bg-red-950/30' :
-                       'border-gray-700 bg-gray-800/50'">
-            <span class="w-2 h-2 rounded-full" :class="statusColor(mqttHop.status)" />
-          </div>
-          <div>
-            <p class="text-xs font-medium text-gray-300">{{ mqttHop.label }}</p>
-            <p class="text-[10px] text-gray-500">{{ mqttHop.detail }}</p>
-          </div>
-        </div>
-        <!-- Iridium hop -->
-        <div class="flex items-center gap-3 pl-4">
-          <div class="w-10 h-10 rounded-lg border flex items-center justify-center shrink-0"
-               :class="iridiumHop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
-                       iridiumHop.status === 'red' ? 'border-red-800 bg-red-950/30' :
-                       'border-gray-700 bg-gray-800/50'">
-            <span class="w-2 h-2 rounded-full" :class="statusColor(iridiumHop.status)" />
-          </div>
-          <div>
-            <p class="text-xs font-medium text-gray-300">{{ iridiumHop.label }}</p>
-            <p class="text-[10px] text-gray-500">{{ iridiumHop.detail }}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Recent Activity Feed -->
-    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-      <h2 class="text-sm font-semibold text-gray-300 mb-3">Recent Activity</h2>
-      <div v-if="!recentActivity.length" class="text-center text-gray-500 text-sm py-4">
-        No activity yet. Events will appear here as they arrive.
-      </div>
-      <div v-else class="max-h-[300px] overflow-y-auto space-y-1">
-        <div v-for="(item, idx) in recentActivity" :key="idx"
-             class="flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-gray-800/50 transition-colors">
-          <span class="w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold bg-gray-800 text-gray-400 shrink-0 mt-0.5">
-            {{ eventIcon(item.type) }}
+      <!-- ═══ Panel 3: Emergency SOS (row-span-2) ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4 md:col-span-2 lg:col-span-1 lg:row-span-2">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-display font-semibold text-sm text-tactical-sos tracking-wide">EMERGENCY SOS</h2>
+          <span class="text-[10px] font-mono"
+            :class="sosActive ? 'text-tactical-sos' : 'text-gray-600'">
+            {{ sosActive ? 'ARMED' : 'STANDBY' }}
           </span>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm text-gray-300 truncate">{{ item.description }}</p>
-            <p class="text-[10px] text-gray-600">{{ formatActivityTime(item.time) }}</p>
+        </div>
+
+        <!-- SOS Ring -->
+        <div class="flex justify-center mb-4">
+          <div class="relative">
+            <svg viewBox="0 0 120 120" class="w-28 h-28 lg:w-36 lg:h-36">
+              <!-- Outer ring -->
+              <circle cx="60" cy="60" r="54" fill="none" stroke-width="3"
+                :stroke="sosActive ? '#ef4444' : '#1a2230'" />
+              <!-- Animated ring when active -->
+              <circle v-if="sosActive" cx="60" cy="60" r="54" fill="none" stroke-width="3"
+                stroke="#ef4444" stroke-dasharray="12 6" class="animate-spin"
+                style="animation-duration: 8s;" />
+              <!-- Inner fill -->
+              <circle cx="60" cy="60" r="44" :fill="sosActive ? '#ef444420' : '#111820'" />
+              <!-- SOS text -->
+              <text x="60" y="56" text-anchor="middle" font-size="22" font-weight="700"
+                :fill="sosActive ? '#ef4444' : '#4b5563'" font-family="Oxanium, sans-serif">SOS</text>
+              <text x="60" y="74" text-anchor="middle" font-size="9"
+                :fill="sosActive ? '#ef444480' : '#374151'" font-family="JetBrains Mono, monospace">
+                {{ sosActive ? 'ACTIVE' : 'READY' }}
+              </text>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Arm/Disarm button -->
+        <button @click="toggleSOS" :disabled="sosArming"
+          class="w-full py-2.5 rounded-lg text-xs font-semibold transition-all mb-4"
+          :class="sosActive
+            ? 'bg-tactical-sos/20 text-tactical-sos border border-tactical-sos/30 hover:bg-tactical-sos/30'
+            : 'bg-gray-800 text-gray-400 border border-gray-700 hover:text-gray-200 hover:border-gray-600'">
+          {{ sosArming ? '...' : sosActive ? 'CANCEL SOS' : 'ARM SOS' }}
+        </button>
+
+        <!-- Test button -->
+        <button @click="testSOS"
+          class="w-full py-1.5 rounded text-[10px] text-gray-500 hover:text-gray-300 bg-gray-800/50 hover:bg-gray-800 transition-colors mb-4">
+          Send Test
+        </button>
+
+        <!-- Status rows -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">GPS Fix</span>
+            <span :class="gpsFix ? 'text-emerald-400' : 'text-red-400'">{{ gpsFix ? 'Acquired' : 'No Fix' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Position</span>
+            <span class="text-gray-400 font-mono text-[10px]">
+              {{ gpsFix ? `${gpsLat}, ${gpsLon}` : 'N/A' }}
+            </span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Altitude</span>
+            <span class="text-gray-400 font-mono">{{ gpsAlt }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Last Activation</span>
+            <span class="text-gray-400 font-mono">{{ store.sosStatus?.last_activated ? formatRelativeTime(store.sosStatus.last_activated) : 'Never' }}</span>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Quick Actions -->
-    <div class="flex gap-3">
-      <router-link to="/messages"
-        class="px-4 py-2.5 text-sm font-medium rounded-lg bg-teal-600 text-white hover:bg-teal-500 transition-colors">
-        Send Message
-      </router-link>
-      <router-link to="/nodes"
-        class="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors">
-        View Nodes
-      </router-link>
-      <router-link to="/gateways"
-        class="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors">
-        Gateways
-      </router-link>
+      <!-- ═══ Panel 4: GPS Position ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-tactical-gps tracking-wide">GPS POSITION</h2>
+          <span class="w-2 h-2 rounded-full" :class="gpsFix ? 'bg-tactical-gps' : 'bg-gray-600'" />
+        </div>
+
+        <!-- Coordinates -->
+        <div class="space-y-2 mb-3">
+          <div>
+            <span class="text-[10px] text-gray-500 block">LAT</span>
+            <span class="font-mono text-sm text-gray-200">{{ gpsLat }}</span>
+          </div>
+          <div>
+            <span class="text-[10px] text-gray-500 block">LON</span>
+            <span class="font-mono text-sm text-gray-200">{{ gpsLon }}</span>
+          </div>
+        </div>
+
+        <!-- Details -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Satellites</span>
+            <div class="flex items-center gap-1">
+              <svg class="w-3 h-3 text-tactical-gps/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/><path d="M2 12h20"/>
+              </svg>
+              <span class="text-gray-300 font-mono">{{ gpsSats }}</span>
+            </div>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Altitude</span>
+            <span class="text-gray-300 font-mono">{{ gpsAlt }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Speed</span>
+            <span class="text-gray-400 font-mono">N/A</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">HDOP</span>
+            <span class="text-gray-400 font-mono">N/A</span>
+          </div>
+        </div>
+
+        <router-link to="/map" class="block text-center text-[10px] text-tactical-gps/60 hover:text-tactical-gps mt-3 transition-colors">
+          Open Map
+        </router-link>
+      </div>
+
+      <!-- ═══ Panel 5: SBD Message Queue ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">SBD QUEUE</h2>
+          <span v-if="dlqPending > 0"
+            class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-400/10 text-amber-400">
+            {{ dlqPending }} pending
+          </span>
+        </div>
+
+        <!-- Queue items -->
+        <div class="space-y-1 tactical-scroll max-h-[200px] overflow-y-auto">
+          <div v-for="item in dlqItems" :key="item.id"
+            class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50">
+            <span class="text-[10px] font-mono px-1.5 py-px rounded"
+              :class="dlqStatusColor(item.status)">
+              {{ item.status || 'queued' }}
+            </span>
+            <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.payload || item.message || '(binary)' }}</span>
+            <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
+          </div>
+          <div v-if="!dlqItems.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
+        </div>
+
+        <!-- Recent satellite messages -->
+        <div v-if="satMessages.length" class="mt-3 pt-3 border-t border-tactical-border">
+          <span class="text-[10px] text-gray-500 block mb-1.5">Recent Satellite</span>
+          <div class="space-y-1">
+            <div v-for="msg in satMessages" :key="msg.id"
+              class="flex items-center gap-2 text-[11px]">
+              <span class="text-gray-500 font-mono text-[9px] shrink-0">{{ formatRelativeTime(msg.created_at || msg.timestamp) }}</span>
+              <span class="text-gray-400 truncate">{{ msg.text || msg.payload || '(data)' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ Panel 6: Activity Log (col-span-2) ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4 md:col-span-2"
+        @mouseenter="logPaused = true" @mouseleave="logPaused = false">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-gray-400 tracking-wide">ACTIVITY LOG</h2>
+          <div class="flex items-center gap-2">
+            <span v-if="logPaused" class="text-[9px] text-gray-600">PAUSED</span>
+            <span class="text-[10px] text-gray-600 font-mono">{{ activityLog.length }} events</span>
+          </div>
+        </div>
+
+        <div class="tactical-scroll max-h-[220px] overflow-y-auto space-y-0.5">
+          <div v-for="(entry, idx) in activityLog" :key="idx"
+            class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.02] transition-colors">
+            <span class="text-[9px] font-mono text-gray-600 shrink-0 w-14">{{ formatLogTime(entry.time) }}</span>
+            <span class="text-[9px] font-medium px-1.5 py-px rounded shrink-0"
+              :class="eventTag(entry.type).color">
+              {{ eventTag(entry.type).label }}
+            </span>
+            <span class="text-[11px] text-gray-400 truncate">{{ entry.description }}</span>
+          </div>
+          <div v-if="!activityLog.length" class="text-center text-gray-600 text-[11px] py-6">
+            Waiting for events... SSE stream active.
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ Panel 7: Power System ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-tactical-power tracking-wide">POWER SYSTEM</h2>
+          <svg class="w-4 h-4 text-tactical-power/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="6" y="7" width="12" height="14" rx="1"/><line x1="10" y1="7" x2="10" y2="4"/><line x1="14" y1="7" x2="14" y2="4"/>
+            <line x1="10" y1="12" x2="10" y2="17"/><line x1="14" y1="12" x2="14" y2="17"/>
+          </svg>
+        </div>
+
+        <!-- Battery gauge -->
+        <div class="mb-4">
+          <div class="flex items-baseline gap-2 mb-1.5">
+            <span class="font-mono text-2xl font-bold"
+              :class="batteryLevel != null ? (batteryLevel > 60 ? 'text-tactical-power' : batteryLevel > 25 ? 'text-amber-400' : 'text-red-400') : 'text-gray-600'">
+              {{ batteryLevel != null ? `${Math.round(batteryLevel)}%` : 'N/A' }}
+            </span>
+          </div>
+          <div class="h-2 rounded-full bg-gray-800 overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500"
+              :class="batteryColor(batteryLevel)"
+              :style="{ width: batteryLevel != null ? `${Math.max(2, batteryLevel)}%` : '0%' }" />
+          </div>
+        </div>
+
+        <!-- Details -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Voltage</span>
+            <span class="text-gray-300 font-mono">{{ voltage != null ? `${voltage.toFixed(2)}V` : 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Uptime</span>
+            <span class="text-gray-300 font-mono">{{ formatUptime(uptimeSeconds) }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Temperature</span>
+            <span class="text-gray-300 font-mono">{{ temperature != null ? `${temperature.toFixed(1)}C` : 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">UPS</span>
+            <span class="text-gray-400 font-mono">N/A</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Solar</span>
+            <span class="text-gray-400 font-mono">N/A</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Current</span>
+            <span class="text-gray-400 font-mono">N/A</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>

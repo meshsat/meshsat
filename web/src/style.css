@@ -1,3 +1,34 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Tactical grid background pattern */
+body {
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Custom scrollbar for activity log and panels */
+.tactical-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.tactical-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tactical-scroll::-webkit-scrollbar-thumb {
+  background: #1a2230;
+  border-radius: 2px;
+}
+.tactical-scroll::-webkit-scrollbar-thumb:hover {
+  background: #2a3444;
+}
+
+/* Pulsing dot animation for status indicators */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}

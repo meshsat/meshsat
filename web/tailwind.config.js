@@ -6,6 +6,10 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        display: ['Oxanium', 'system-ui', 'sans-serif']
+      },
       colors: {
         mesh: {
           50: '#f0fdfa',
@@ -19,6 +23,16 @@ export default {
           800: '#115e59',
           900: '#134e4a',
           950: '#042f2e'
+        },
+        tactical: {
+          bg: '#0a0e14',
+          surface: '#111820',
+          border: '#1a2230',
+          iridium: '#00d4aa',
+          lora: '#f59e0b',
+          gps: '#818cf8',
+          sos: '#ef4444',
+          power: '#10b981'
         }
       }
     }
