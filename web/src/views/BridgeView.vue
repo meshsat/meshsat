@@ -282,37 +282,43 @@ onMounted(() => {
       </div>
       <div class="space-y-2">
         <div v-for="item in queueItems" :key="item.id"
-          class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+          class="bg-tactical-surface rounded-lg p-3 border border-tactical-border"
+          :class="item.status === 'sent' ? 'opacity-60' : ''">
           <div class="flex items-center gap-2 mb-2">
             <span class="text-[10px] font-mono px-1.5 py-px rounded" :class="item.statusColor">
-              {{ item.status || 'queued' }}
+              {{ item.status === 'sent' ? 'delivered' : item.status || 'queued' }}
             </span>
-            <span class="text-[10px] font-medium" :class="priorityColor(item.priority)">
+            <span v-if="item.status !== 'sent'" class="text-[10px] font-medium" :class="priorityColor(item.priority)">
               {{ priorityLabel(item.priority) }}
             </span>
             <span class="text-[9px] text-gray-600 font-mono">ID:{{ item.id }}</span>
             <span class="flex-1" />
-            <span class="text-[9px] text-gray-600">{{ formatRelative(item.created_at) }}</span>
+            <span class="text-[9px] text-gray-600">{{ item.status === 'sent' ? 'sent ' : '' }}{{ formatRelative(item.created_at) }}</span>
           </div>
 
           <!-- Message preview -->
-          <div class="text-[11px] text-gray-400 font-mono bg-gray-900/50 rounded px-2 py-1.5 mb-2 truncate">
-            {{ item.preview }}
+          <div class="text-[11px] font-mono bg-gray-900/50 rounded px-2 py-1.5 mb-2 truncate"
+            :class="item.status === 'sent' ? 'text-gray-500' : 'text-gray-400'">
+            {{ item.preview || '(no text payload)' }}
           </div>
 
-          <!-- Actions -->
-          <div class="flex items-center gap-2 text-[10px]">
+          <!-- Actions (only for pending items) -->
+          <div v-if="item.status === 'pending'" class="flex items-center gap-2 text-[10px]">
             <span class="text-gray-600">Retries: {{ item.retries }}/{{ item.max_retries }}</span>
-            <span v-if="item.status === 'pending'" class="text-gray-600">
+            <span class="text-gray-600">
               Next: {{ nextRetryCountdown(item.next_retry) }}
             </span>
             <span class="flex-1" />
-            <button v-if="item.status === 'pending'" @click="reprioritize(item.id, 0)"
+            <button @click="reprioritize(item.id, 0)"
               class="px-1.5 py-0.5 rounded bg-red-400/10 text-red-400 hover:bg-red-400/20">Urgent</button>
-            <button v-if="item.status === 'pending'" @click="reprioritize(item.id, 2)"
+            <button @click="reprioritize(item.id, 2)"
               class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:text-gray-200">Low</button>
-            <button v-if="item.status === 'pending'" @click="cancelItem(item.id)"
+            <button @click="cancelItem(item.id)"
               class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:text-red-400">Cancel</button>
+          </div>
+          <!-- Sent/expired status line -->
+          <div v-else-if="item.status === 'expired'" class="text-[10px] text-red-400">
+            Failed after {{ item.retries }}/{{ item.max_retries }} retries: {{ item.last_error }}
           </div>
         </div>
       </div>

@@ -517,7 +517,7 @@ onUnmounted(() => {
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50">
             <span class="text-[10px] font-mono px-1.5 py-px rounded"
               :class="dlqStatusColor(item.status)">
-              {{ item.status || 'queued' }}
+              {{ item.status === 'sent' ? 'delivered' : item.status || 'queued' }}
             </span>
             <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.payload || item.message || '(binary)' }}</span>
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
