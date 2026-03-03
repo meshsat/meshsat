@@ -70,12 +70,16 @@ async function fetchPasses() {
   if (!selectedLocation.value) return
   loadingPasses.value = true
   const loc = selectedLocation.value
+  // Start pass prediction from the lookback time so passes overlap with signal history
+  const windowSec = windowHours.value * 3600
+  const startUnix = Math.floor(Date.now() / 1000) - Math.floor(windowSec * 0.5)
   const data = await store.fetchPasses({
     lat: loc.lat,
     lon: loc.lon,
     alt_m: loc.alt_m || 0,
     hours: windowHours.value,
-    min_elev: 5
+    min_elev: 5,
+    start: startUnix
   })
   if (data?.cache_age_sec !== undefined) {
     cacheAgeSec.value = data.cache_age_sec
@@ -127,8 +131,8 @@ const elevTicks = [0, 15, 30, 45, 60, 75, 90]
 const chartData = computed(() => {
   const now = Date.now() / 1000
   const windowSec = windowHours.value * 3600
-  const startTs = now - windowSec * 0.1  // 10% lookback
-  const endTs = now + windowSec * 0.9
+  const startTs = now - windowSec * 0.5  // 50% past
+  const endTs = now + windowSec * 0.5    // 50% future
 
   function xPos(ts) {
     return padL + ((ts - startTs) / (endTs - startTs)) * plotWidth
@@ -270,8 +274,8 @@ function clearHover() {
 async function fetchSignalHistory() {
   const now = Math.floor(Date.now() / 1000)
   const windowSec = windowHours.value * 3600
-  const from = now - Math.floor(windowSec * 0.1)
-  const to = now + Math.floor(windowSec * 0.9)
+  const from = now - Math.floor(windowSec * 0.5)
+  const to = now + Math.floor(windowSec * 0.5)
   await store.fetchSignalHistory({ source: 'iridium', from, to, mode: 'raw', limit: 2000 })
 }
 

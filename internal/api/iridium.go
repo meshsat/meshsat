@@ -96,8 +96,8 @@ func (s *Server) handleSetCreditBudget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleGetPasses returns upcoming satellite passes for a ground location.
-// Query params: lat, lon, alt_m, hours, min_elev.
+// handleGetPasses returns satellite passes for a ground location.
+// Query params: lat, lon, alt_m, hours, min_elev, start (unix timestamp, default now).
 func (s *Server) handleGetPasses(w http.ResponseWriter, r *http.Request) {
 	if s.tleMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "TLE manager not initialized")
@@ -109,6 +109,7 @@ func (s *Server) handleGetPasses(w http.ResponseWriter, r *http.Request) {
 	altM, _ := strconv.ParseFloat(r.URL.Query().Get("alt_m"), 64)
 	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
 	minElev, _ := strconv.ParseFloat(r.URL.Query().Get("min_elev"), 64)
+	startTime, _ := strconv.ParseInt(r.URL.Query().Get("start"), 10, 64)
 
 	if lat == 0 && lon == 0 {
 		writeError(w, http.StatusBadRequest, "lat and lon are required")
@@ -121,7 +122,7 @@ func (s *Server) handleGetPasses(w http.ResponseWriter, r *http.Request) {
 		minElev = 5.0
 	}
 
-	passes, err := s.tleMgr.GeneratePasses(lat, lon, altM/1000.0, hours, minElev)
+	passes, err := s.tleMgr.GeneratePasses(lat, lon, altM/1000.0, hours, minElev, startTime)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

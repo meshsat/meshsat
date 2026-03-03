@@ -158,9 +158,10 @@ func (m *TLEManager) RefreshTLEs(ctx context.Context) error {
 	return nil
 }
 
-// GeneratePasses computes upcoming satellite passes for a ground location.
+// GeneratePasses computes satellite passes for a ground location.
 // altKm is altitude in kilometers.
-func (m *TLEManager) GeneratePasses(lat, lon, altKm float64, hours int, minElevDeg float64) ([]PassSummary, error) {
+// startTime, if non-zero, sets the window start (unix seconds); otherwise uses now.
+func (m *TLEManager) GeneratePasses(lat, lon, altKm float64, hours int, minElevDeg float64, startTime int64) ([]PassSummary, error) {
 	m.mu.RLock()
 	tles := m.tles
 	m.mu.RUnlock()
@@ -176,7 +177,12 @@ func (m *TLEManager) GeneratePasses(lat, lon, altKm float64, hours int, minElevD
 		minElevDeg = 5.0
 	}
 
-	now := time.Now().UTC()
+	var now time.Time
+	if startTime > 0 {
+		now = time.Unix(startTime, 0).UTC()
+	} else {
+		now = time.Now().UTC()
+	}
 	end := now.Add(time.Duration(hours) * time.Hour)
 
 	var passes []PassSummary
@@ -205,7 +211,7 @@ func (m *TLEManager) GeneratePasses(lat, lon, altKm float64, hours int, minElevD
 				DurationMin: p.Duration.Minutes(),
 				PeakElevDeg: p.MaxElevation,
 				PeakAzimuth: p.MaxElevationAz,
-				IsActive:    p.AOS.Before(now) && p.LOS.After(now),
+				IsActive:    p.AOS.Before(time.Now().UTC()) && p.LOS.After(time.Now().UTC()),
 			})
 		}
 	}

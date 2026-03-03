@@ -105,58 +105,75 @@ func (e *Engine) Evaluate(msg *transport.MeshMessage) *MatchResult {
 }
 
 func matchSource(rule database.ForwardingRule, msg *transport.MeshMessage, fromNode string) bool {
+	// First: match by source_type (node, channel, portnum, any)
+	matched := false
 	switch rule.SourceType {
 	case "any":
-		return true
+		matched = true
 
 	case "channel":
 		if rule.SourceChannels == nil {
-			return true
-		}
-		var channels []int
-		if err := json.Unmarshal([]byte(*rule.SourceChannels), &channels); err != nil {
-			return false
-		}
-		for _, ch := range channels {
-			if uint32(ch) == msg.Channel {
-				return true
+			matched = true
+		} else {
+			var channels []int
+			if err := json.Unmarshal([]byte(*rule.SourceChannels), &channels); err == nil {
+				for _, ch := range channels {
+					if uint32(ch) == msg.Channel {
+						matched = true
+						break
+					}
+				}
 			}
 		}
-		return false
 
 	case "node":
 		if rule.SourceNodes == nil {
-			return true
-		}
-		var nodes []string
-		if err := json.Unmarshal([]byte(*rule.SourceNodes), &nodes); err != nil {
-			return false
-		}
-		for _, n := range nodes {
-			if n == fromNode {
-				return true
+			matched = true
+		} else {
+			var nodes []string
+			if err := json.Unmarshal([]byte(*rule.SourceNodes), &nodes); err == nil {
+				for _, n := range nodes {
+					if n == fromNode {
+						matched = true
+						break
+					}
+				}
 			}
 		}
-		return false
 
 	case "portnum":
-		if rule.SourcePortnums == nil {
-			return true
-		}
-		var portnums []int
-		if err := json.Unmarshal([]byte(*rule.SourcePortnums), &portnums); err != nil {
-			return false
-		}
-		for _, pn := range portnums {
-			if pn == msg.PortNum {
-				return true
-			}
-		}
-		return false
+		// Legacy: source_type=portnum uses source_portnums as the primary match.
+		// The portnum filter below will handle it.
+		matched = true
 
 	default:
 		return false
 	}
+
+	if !matched {
+		return false
+	}
+
+	// Second: always apply source_portnums as a filter, regardless of source_type.
+	// If source_portnums is set, the message portnum must be in the list.
+	if rule.SourcePortnums != nil {
+		var portnums []int
+		if err := json.Unmarshal([]byte(*rule.SourcePortnums), &portnums); err != nil {
+			return false
+		}
+		found := false
+		for _, pn := range portnums {
+			if pn == msg.PortNum {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (e *Engine) recordMatch(ruleID int) {
