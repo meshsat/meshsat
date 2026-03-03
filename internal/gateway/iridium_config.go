@@ -14,6 +14,7 @@ type IridiumConfig struct {
 	DLQMaxRetries      int    `json:"dlq_max_retries"`               // max retry attempts for failed sends (default 3)
 	DLQRetryBase       int    `json:"dlq_retry_base_secs"`           // base retry interval in seconds (default 120, exponential backoff)
 	DefaultDestination string `json:"default_destination,omitempty"` // node ID or name to unicast inbound messages (empty = broadcast)
+	MinSignalBars      int    `json:"min_signal_bars"`               // minimum signal bars to trigger opportunistic DLQ drain (default 1)
 }
 
 // DefaultIridiumConfig returns sensible defaults.
@@ -28,6 +29,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		IncludePosition: true,
 		DLQMaxRetries:   3,
 		DLQRetryBase:    120,
+		MinSignalBars:   1,
 	}
 }
 

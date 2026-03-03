@@ -11,6 +11,7 @@ type SatEvent struct {
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
 	Time    string          `json:"time"`
+	Signal  int             `json:"signal,omitempty"` // bars 0-5, only for "signal" events
 }
 
 // SatStatus represents the connection status of the satellite modem.

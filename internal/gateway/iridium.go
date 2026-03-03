@@ -294,7 +294,7 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 	}
 }
 
-// ringAlertListener subscribes to HAL Iridium SSE for ring alert events.
+// ringAlertListener subscribes to HAL Iridium SSE for ring alert and signal events.
 func (g *IridiumGateway) ringAlertListener(ctx context.Context) {
 	defer g.wg.Done()
 
@@ -312,15 +312,40 @@ func (g *IridiumGateway) ringAlertListener(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if event.Type == "ring_alert" {
+			switch event.Type {
+			case "ring_alert":
 				g.handleRingAlert(ctx)
-			}
-			if event.Type == "status" {
-				// Update connected state from SSE status events
+			case "signal":
+				// Opportunistic DLQ drain: if signal is sufficient and DLQ has pending entries,
+				// drain them now rather than waiting for the periodic retry worker.
+				minBars := g.config.MinSignalBars
+				if minBars <= 0 {
+					minBars = 1
+				}
+				if event.Signal >= minBars && g.dlqPending.Load() > 0 {
+					go g.drainDLQ(ctx)
+				}
+			case "status", "connected", "reconnected":
 				g.connected.Store(true)
+			case "disconnected":
+				g.connected.Store(false)
 			}
 		}
 	}
+}
+
+// drainDLQ attempts to send all pending DLQ messages immediately.
+// Called opportunistically when a good signal event arrives.
+func (g *IridiumGateway) drainDLQ(ctx context.Context) {
+	if g.db == nil {
+		return
+	}
+	retryBase := g.config.DLQRetryBase
+	if retryBase <= 0 {
+		retryBase = 120
+	}
+	log.Info().Int64("pending", g.dlqPending.Load()).Msg("iridium: opportunistic DLQ drain triggered by signal event")
+	g.processDLQ(ctx, retryBase)
 }
 
 func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
