@@ -325,7 +325,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   async function fetchDLQ() {
     try {
       const data = await api.get('/iridium/queue')
-      dlq.value = Array.isArray(data) ? data : []
+      const items = data?.queue ?? data
+      dlq.value = Array.isArray(items) ? items : []
     } catch (e) { error.value = e.message }
   }
 
