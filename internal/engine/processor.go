@@ -339,16 +339,16 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					continue
 				}
 
-				// Persist as inbound message
+				// Persist as inbound message (received from external, relayed to mesh)
 				dbMsg := &database.Message{
 					FromNode:    msg.Source,
-					ToNode:      "mesh",
-					Channel:     msg.Channel,
+					ToNode:      msg.To,
+					Channel:     req.Channel,
 					PortNum:     1, // TEXT_MESSAGE
 					PortNumName: "TEXT_MESSAGE_APP",
 					DecodedText: msg.Text,
-					Direction:   "tx",
-					Transport:   msg.Source,
+					Direction:   "rx",
+					Transport:   msg.Source, // "iridium" or "mqtt"
 				}
 				if err := p.db.InsertMessage(dbMsg); err != nil {
 					log.Error().Err(err).Msg("failed to persist gateway inbound message")

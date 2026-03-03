@@ -72,11 +72,11 @@ const iridiumStatus = computed(() => {
 })
 const dlqPending = computed(() => (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length)
 const lastSatTx = computed(() => {
-  const msgs = (store.messages || []).filter(m => m.transport === 'satellite' && m.direction === 'outbound')
+  const msgs = (store.messages || []).filter(m => m.transport === 'iridium' && m.direction === 'tx')
   return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
 })
 const lastSatRx = computed(() => {
-  const msgs = (store.messages || []).filter(m => m.transport === 'satellite' && m.direction === 'inbound')
+  const msgs = (store.messages || []).filter(m => m.transport === 'iridium' && m.direction === 'rx')
   return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
 })
 
@@ -141,11 +141,12 @@ const dlqItems = computed(() => {
   return (store.dlq || []).slice(0, 8)
 })
 const satMessages = computed(() => {
-  return (store.messages || []).filter(m => m.transport === 'satellite').slice(0, 5)
+  return (store.messages || []).filter(m => m.transport === 'iridium').slice(0, 5)
 })
 
 function dlqStatusColor(status) {
   if (status === 'sent' || status === 'delivered') return 'text-emerald-400 bg-emerald-400/10'
+  if (status === 'received') return 'text-blue-400 bg-blue-400/10'
   if (status === 'pending') return 'text-amber-400 bg-amber-400/10'
   if (status === 'queued' || !status) return 'text-gray-400 bg-gray-400/10'
   if (status === 'failed') return 'text-red-400 bg-red-400/10'
@@ -514,10 +515,15 @@ onUnmounted(() => {
         <!-- Queue items -->
         <div class="space-y-1 tactical-scroll max-h-[200px] overflow-y-auto">
           <div v-for="item in dlqItems" :key="item.id"
-            class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50">
+            class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50"
+            :class="item.status === 'sent' || item.status === 'received' ? 'opacity-60' : ''">
+            <span class="text-[9px] font-mono shrink-0"
+              :class="item.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium'">
+              {{ item.direction === 'inbound' ? 'SBD\u2192Mesh' : 'Mesh\u2192SBD' }}
+            </span>
             <span class="text-[10px] font-mono px-1.5 py-px rounded"
               :class="dlqStatusColor(item.status)">
-              {{ item.status === 'sent' ? 'delivered' : item.status || 'queued' }}
+              {{ item.status === 'sent' ? 'delivered' : item.status === 'received' ? 'received' : item.status || 'queued' }}
             </span>
             <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.payload || item.message || '(binary)' }}</span>
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>

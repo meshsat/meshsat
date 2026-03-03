@@ -186,10 +186,11 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
-        <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Messages</div>
+        <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Messages Today</div>
         <div class="flex items-baseline gap-1.5">
-          <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.today || 0 }}</span>
-          <span class="text-[10px] text-gray-500">today</span>
+          <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.today_text || 0 }}</span>
+          <span class="text-[10px] text-gray-500">text</span>
+          <span class="text-[10px] text-gray-600">/ {{ store.messageStats?.today || 0 }} total</span>
         </div>
         <div class="flex items-center gap-1.5 mt-0.5">
           <span class="text-[10px] text-emerald-400/60">{{ store.messageStats?.by_transport?.radio || 0 }} radio</span>
@@ -214,6 +215,12 @@ onUnmounted(() => {
           <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.total || 0 }}</span>
           <button v-if="store.messageStats?.total > 100" @click="purgeOld"
             class="text-[10px] text-gray-600 hover:text-red-400 transition-colors">clear old</button>
+        </div>
+        <div v-if="store.messageStats?.by_portnum" class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+          <span v-if="store.messageStats.by_portnum['TEXT_MESSAGE_APP']" class="text-[10px] text-emerald-400/60">{{ store.messageStats.by_portnum['TEXT_MESSAGE_APP'] }} text</span>
+          <span v-if="store.messageStats.by_portnum['TELEMETRY_APP']" class="text-[10px] text-amber-400/60">{{ store.messageStats.by_portnum['TELEMETRY_APP'] }} telem</span>
+          <span v-if="store.messageStats.by_portnum['POSITION_APP']" class="text-[10px] text-cyan-400/60">{{ store.messageStats.by_portnum['POSITION_APP'] }} pos</span>
+          <span v-if="store.messageStats.by_portnum['NODEINFO_APP']" class="text-[10px] text-gray-500">{{ store.messageStats.by_portnum['NODEINFO_APP'] }} node</span>
         </div>
       </div>
     </div>

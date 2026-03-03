@@ -188,6 +188,9 @@ var migrations = []string{
 	// v6: Inbound rule support — destination channel and target node for mesh injection
 	`ALTER TABLE forwarding_rules ADD COLUMN dest_channel INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE forwarding_rules ADD COLUMN dest_node TEXT;`,
+
+	// v7: Queue direction tracking for relay visibility
+	`ALTER TABLE dead_letters ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound';`,
 }
 
 func (db *DB) migrate() error {

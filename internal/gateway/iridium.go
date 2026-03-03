@@ -86,11 +86,14 @@ func (g *IridiumGateway) Start(ctx context.Context) error {
 		go g.ringAlertListener(ctx)
 	}
 
-	// Start optional poll worker
-	if g.config.PollInterval > 0 {
-		g.wg.Add(1)
-		go g.pollWorker(ctx)
+	// Start poll worker for MT message retrieval.
+	// If poll_interval is 0 (legacy config), use 300s as fallback to ensure
+	// inbound messages are fetched even when ring alerts don't fire reliably.
+	if g.config.PollInterval <= 0 {
+		g.config.PollInterval = 300
 	}
+	g.wg.Add(1)
+	go g.pollWorker(ctx)
 
 	log.Info().Bool("auto_receive", g.config.AutoReceive).Int("poll_interval", g.config.PollInterval).Msg("iridium gateway started")
 	return nil
@@ -443,6 +446,11 @@ func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
 	g.msgsIn.Add(1)
 	g.lastActive.Store(time.Now().Unix())
 	log.Info().Str("to", inbound.To).Str("text", inbound.Text).Msg("iridium: received MT message")
+
+	// Record inbound receive for queue visibility
+	if g.db != nil {
+		g.db.InsertInboundReceiveRecord(data, inbound.Text)
+	}
 
 	select {
 	case g.inCh <- *inbound:

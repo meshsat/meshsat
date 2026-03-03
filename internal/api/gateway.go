@@ -26,7 +26,30 @@ func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+
+	// When instantaneous reading is 0 (common between passes), fall back to
+	// the most recent non-zero signal recorded in the last 10 minutes.
+	if sig.Bars == 0 && s.db != nil {
+		if latest, err := s.db.GetLatestSignal("iridium"); err == nil && latest != nil {
+			sig.Bars = int(latest.Value)
+			sig.Assessment = signalAssessment(sig.Bars)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, sig)
+}
+
+func signalAssessment(bars int) string {
+	switch {
+	case bars >= 4:
+		return "good"
+	case bars >= 2:
+		return "fair"
+	case bars >= 1:
+		return "poor"
+	default:
+		return "none"
+	}
 }
 
 // handleGetIridiumSignal returns a fresh Iridium signal reading (blocking AT+CSQ, up to 60s).

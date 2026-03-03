@@ -64,6 +64,7 @@ function decodePayload(payload) {
 
 function dlqStatusColor(status) {
   if (status === 'sent' || status === 'delivered') return 'text-emerald-400 bg-emerald-400/10'
+  if (status === 'received') return 'text-blue-400 bg-blue-400/10'
   if (status === 'pending') return 'text-amber-400 bg-amber-400/10'
   if (status === 'failed' || status === 'expired') return 'text-red-400 bg-red-400/10'
   if (status === 'cancelled') return 'text-gray-500 bg-gray-500/10'
@@ -247,7 +248,7 @@ onMounted(() => {
     <!-- ═══ Queue Tab ═══ -->
     <div v-if="activeTab === 'queue'">
       <div class="flex items-center justify-between mb-3">
-        <p class="text-xs text-gray-500">SBD outbound queue — pending, retrying, and recent sends</p>
+        <p class="text-xs text-gray-500">Satellite relay log — outbound sends and inbound receives</p>
         <button @click="composeOpen = !composeOpen"
           class="px-3 py-1.5 rounded bg-tactical-iridium/20 text-tactical-iridium text-xs font-medium hover:bg-tactical-iridium/30 border border-tactical-iridium/20">
           {{ composeOpen ? 'Cancel' : 'Compose' }}
@@ -283,17 +284,21 @@ onMounted(() => {
       <div class="space-y-2">
         <div v-for="item in queueItems" :key="item.id"
           class="bg-tactical-surface rounded-lg p-3 border border-tactical-border"
-          :class="item.status === 'sent' ? 'opacity-60' : ''">
+          :class="(item.status === 'sent' || item.status === 'received') ? 'opacity-60' : ''">
           <div class="flex items-center gap-2 mb-2">
-            <span class="text-[10px] font-mono px-1.5 py-px rounded" :class="item.statusColor">
-              {{ item.status === 'sent' ? 'delivered' : item.status || 'queued' }}
+            <span class="text-[10px] font-mono px-1.5 py-px rounded"
+              :class="item.direction === 'inbound' ? 'text-blue-400 bg-blue-400/10' : 'text-tactical-iridium bg-tactical-iridium/10'">
+              {{ item.direction === 'inbound' ? 'SBD \u2192 Mesh' : 'Mesh \u2192 SBD' }}
             </span>
-            <span v-if="item.status !== 'sent'" class="text-[10px] font-medium" :class="priorityColor(item.priority)">
+            <span class="text-[10px] font-mono px-1.5 py-px rounded" :class="item.statusColor">
+              {{ item.status === 'sent' ? 'delivered' : item.status === 'received' ? 'received' : item.status || 'queued' }}
+            </span>
+            <span v-if="item.status === 'pending'" class="text-[10px] font-medium" :class="priorityColor(item.priority)">
               {{ priorityLabel(item.priority) }}
             </span>
             <span class="text-[9px] text-gray-600 font-mono">ID:{{ item.id }}</span>
             <span class="flex-1" />
-            <span class="text-[9px] text-gray-600">{{ item.status === 'sent' ? 'sent ' : '' }}{{ formatRelative(item.created_at) }}</span>
+            <span class="text-[9px] text-gray-600">{{ formatRelative(item.created_at) }}</span>
           </div>
 
           <!-- Message preview -->

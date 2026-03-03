@@ -82,6 +82,7 @@ type MessageFilter struct {
 type MessageStats struct {
 	Total       int            `json:"total"`
 	Today       int            `json:"today"`
+	TodayText   int            `json:"today_text"`
 	ByTransport map[string]int `json:"by_transport"`
 	ByPortNum   map[string]int `json:"by_portnum"`
 	OldestAt    string         `json:"oldest_at,omitempty"`
@@ -263,6 +264,9 @@ func (db *DB) GetMessageStats() (*MessageStats, error) {
 	// Today's count
 	db.QueryRow("SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now')").Scan(&stats.Today)
 
+	// Today's text message count (portnum 1 = TEXT_MESSAGE)
+	db.QueryRow("SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now') AND portnum = 1").Scan(&stats.TodayText)
+
 	// Date range
 	var oldest, newest *string
 	db.QueryRow("SELECT MIN(created_at) FROM messages").Scan(&oldest)
@@ -381,8 +385,9 @@ type DeadLetter struct {
 	Retries    int       `db:"retries" json:"retries"`
 	MaxRetries int       `db:"max_retries" json:"max_retries"`
 	NextRetry  time.Time `db:"next_retry" json:"next_retry"`
-	Status     string    `db:"status" json:"status"`     // pending, sent, expired, cancelled
-	Priority   int       `db:"priority" json:"priority"` // 0=critical, 1=normal, 2=low
+	Status     string    `db:"status" json:"status"`       // pending, sent, expired, cancelled, received
+	Priority   int       `db:"priority" json:"priority"`   // 0=critical, 1=normal, 2=low
+	Direction  string    `db:"direction" json:"direction"` // outbound (mesh→sat) or inbound (sat→mesh)
 	LastError  string    `db:"last_error" json:"last_error"`
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
@@ -424,7 +429,7 @@ func (db *DB) GetPendingDeadLetters(limit int) ([]DeadLetter, error) {
 	return dls, nil
 }
 
-// GetDeadLetterQueue returns queue entries for display: pending/expired first, then recent sends.
+// GetDeadLetterQueue returns queue entries for display: pending/expired first, then recent sends/receives.
 func (db *DB) GetDeadLetterQueue() ([]DeadLetter, error) {
 	var dls []DeadLetter
 	err := db.Select(&dls,
@@ -440,9 +445,23 @@ func (db *DB) GetDeadLetterQueue() ([]DeadLetter, error) {
 // InsertSentRecord records a successful satellite send for queue visibility.
 func (db *DB) InsertSentRecord(packetID uint32, payload []byte) error {
 	_, err := db.Exec(`INSERT INTO dead_letters
-		(packet_id, payload, retries, max_retries, next_retry, status, priority)
-		VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP, 'sent', 1)`,
+		(packet_id, payload, retries, max_retries, next_retry, status, priority, direction)
+		VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP, 'sent', 1, 'outbound')`,
 		packetID, payload)
+	return err
+}
+
+// InsertInboundReceiveRecord records a received satellite message for queue visibility.
+func (db *DB) InsertInboundReceiveRecord(payload []byte, text string) error {
+	// Store the text as payload for display purposes
+	data := payload
+	if data == nil && text != "" {
+		data = []byte(text)
+	}
+	_, err := db.Exec(`INSERT INTO dead_letters
+		(packet_id, payload, retries, max_retries, next_retry, status, priority, direction)
+		VALUES (0, ?, 0, 0, CURRENT_TIMESTAMP, 'received', 1, 'inbound')`,
+		data)
 	return err
 }
 
@@ -781,6 +800,19 @@ func (db *DB) InsertSignalHistory(source string, timestamp int64, value float64)
 		`INSERT OR IGNORE INTO signal_history (source, timestamp, value) VALUES (?, ?, ?)`,
 		source, timestamp, value)
 	return err
+}
+
+// GetLatestSignal returns the most recent non-zero signal reading from the last 10 minutes.
+func (db *DB) GetLatestSignal(source string) (*SignalHistoryPoint, error) {
+	cutoff := time.Now().Unix() - 600 // 10 minutes ago
+	var p SignalHistoryPoint
+	err := db.Get(&p,
+		`SELECT * FROM signal_history WHERE source = ? AND value > 0 AND timestamp >= ?
+		 ORDER BY timestamp DESC LIMIT 1`, source, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }
 
 // GetSignalHistoryRaw returns raw signal history points within a time range.

@@ -27,7 +27,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		ForwardPortnums: []int{1}, // TEXT_MESSAGE only by default
 		Compression:     "compact",
 		AutoReceive:     true,
-		PollInterval:    0,
+		PollInterval:    300, // 5 minutes — ensures MT messages are fetched even without ring alerts
 		MaxTextLength:   320,
 		IncludePosition: true,
 		DLQMaxRetries:   3,

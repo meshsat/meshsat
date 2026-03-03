@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
 
@@ -7,7 +7,33 @@ const store = useMeshsatStore()
 const loading = ref(true)
 const showRaw = ref(false)
 
-// Raw edit state (legacy)
+// Editable local state per section — initialized from store.config
+const editState = reactive({
+  lora: {},
+  device: {},
+  position: {},
+  power: {},
+  display: {},
+  bluetooth: {}
+})
+
+const saving = reactive({})
+const saved = reactive({})
+
+// Initialize edit state from store config
+function syncFromStore() {
+  const cfg = store.config || {}
+  editState.lora = { ...(cfg.lora || {}) }
+  editState.device = { ...(cfg.device || {}) }
+  editState.position = { ...(cfg.position || {}) }
+  editState.power = { ...(cfg.power || {}) }
+  editState.display = { ...(cfg.display || {}) }
+  editState.bluetooth = { ...(cfg.bluetooth || {}) }
+}
+
+watch(() => store.config, syncFromStore, { deep: true })
+
+// Raw edit state (advanced)
 const radioSection = ref('lora')
 const radioJSON = ref('{}')
 const radioLoading = ref(false)
@@ -95,17 +121,31 @@ const bluetoothFields = [
   { key: 'fixed_pin', label: 'Fixed PIN', type: 'number', min: 100000, max: 999999, tip: 'Six-digit PIN for Bluetooth pairing when using Fixed PIN mode.' }
 ]
 
-const configSections = computed(() => {
-  const cfg = store.config || {}
-  return [
-    { title: 'LoRa Radio', fields: loraFields, data: cfg.lora || {} },
-    { title: 'Device', fields: deviceFields, data: cfg.device || {} },
-    { title: 'Position', fields: positionFields, data: cfg.position || {} },
-    { title: 'Power', fields: powerFields, data: cfg.power || {} },
-    { title: 'Display', fields: displayFields, data: cfg.display || {} },
-    { title: 'Bluetooth', fields: bluetoothFields, data: cfg.bluetooth || {} }
-  ]
-})
+const configSections = [
+  { title: 'LoRa Radio', key: 'lora', fields: loraFields },
+  { title: 'Device', key: 'device', fields: deviceFields },
+  { title: 'Position', key: 'position', fields: positionFields },
+  { title: 'Power', key: 'power', fields: powerFields },
+  { title: 'Display', key: 'display', fields: displayFields },
+  { title: 'Bluetooth', key: 'bluetooth', fields: bluetoothFields }
+]
+
+function onSectionUpdate(sectionKey, newData) {
+  editState[sectionKey] = newData
+}
+
+async function saveSection(sectionKey) {
+  saving[sectionKey] = true
+  saved[sectionKey] = false
+  try {
+    await store.configRadio({ section: sectionKey, config: editState[sectionKey] })
+    saved[sectionKey] = true
+    setTimeout(() => { saved[sectionKey] = false }, 3000)
+    await store.fetchConfig()
+  } catch { /* store error */ } finally {
+    saving[sectionKey] = false
+  }
+}
 
 function isValidJSON(s) {
   try { JSON.parse(s); return true } catch { return false }
@@ -160,6 +200,7 @@ async function handleWaypoint() {
 onMounted(async () => {
   loading.value = true
   await store.fetchConfig()
+  syncFromStore()
   loading.value = false
 })
 </script>
@@ -174,10 +215,10 @@ onMounted(async () => {
           class="px-3 py-1.5 text-xs rounded-lg transition-colors"
           :class="showRaw ? 'bg-teal-500/15 text-teal-400' : 'bg-gray-800 text-gray-400 hover:text-white'"
         >
-          {{ showRaw ? 'Form View' : 'Raw Edit' }}
+          {{ showRaw ? 'Form View' : 'Advanced (JSON)' }}
         </button>
         <button
-          @click="store.fetchConfig()"
+          @click="store.fetchConfig().then(syncFromStore)"
           class="px-3 py-1.5 text-sm rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors"
         >
           Refresh
@@ -185,7 +226,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Friendly form view (read-only display from config) -->
+    <!-- Friendly form view (editable) -->
     <template v-if="!showRaw">
       <div v-if="loading" class="bg-gray-900 rounded-xl p-8 border border-gray-800 text-center text-gray-500">
         Loading configuration...
@@ -197,20 +238,28 @@ onMounted(async () => {
 
       <template v-else>
         <p class="text-xs text-gray-500">
-          Current device configuration (read-only). Use "Raw Edit" to modify settings via JSON.
+          Edit settings and click Save to apply changes to the radio.
         </p>
-        <ConfigSection
-          v-for="section in configSections"
-          :key="section.title"
-          :title="section.title"
-          :fields="section.fields"
-          :model-value="section.data"
-          :collapsed="true"
-        />
+        <div v-for="section in configSections" :key="section.key" class="space-y-2">
+          <ConfigSection
+            :title="section.title"
+            :fields="section.fields"
+            :model-value="editState[section.key]"
+            @update:model-value="onSectionUpdate(section.key, $event)"
+            :collapsed="true"
+          />
+          <div class="flex items-center gap-3 px-1">
+            <button @click="saveSection(section.key)" :disabled="saving[section.key]"
+              class="px-4 py-1.5 text-xs font-medium rounded-lg bg-teal-600 text-white hover:bg-teal-500 disabled:opacity-50 transition-colors">
+              {{ saving[section.key] ? 'Saving...' : `Save ${section.title}` }}
+            </button>
+            <span v-if="saved[section.key]" class="text-xs text-teal-400">Applied</span>
+          </div>
+        </div>
       </template>
     </template>
 
-    <!-- Raw edit view -->
+    <!-- Raw edit view (advanced) -->
     <template v-else>
       <!-- Radio Config -->
       <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
