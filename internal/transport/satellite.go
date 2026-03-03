@@ -33,6 +33,7 @@ type SignalInfo struct {
 type SBDResult struct {
 	MOStatus   int    `json:"mo_status"`
 	MOMSN      int    `json:"mo_msn"`
+	MTReceived bool   `json:"mt_received"` // from HAL (true when MT piggybacked)
 	MTStatus   int    `json:"mt_status"`
 	MTMSN      int    `json:"mt_msn"`
 	MTLength   int    `json:"mt_length"`

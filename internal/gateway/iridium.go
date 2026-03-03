@@ -251,9 +251,10 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 				g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
 			}
 
-			// MT piggyback: check if there are queued MT messages from this session
-			if result.MTQueued > 0 {
-				log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued, piggybacking receive")
+			// MT piggyback: if this SBDIX session received an MT or there are more queued, read them
+			if result.MTReceived || result.MTStatus == 1 || result.MTQueued > 0 {
+				log.Info().Bool("mt_received", result.MTReceived).Int("mt_status", result.MTStatus).
+					Int("mt_queued", result.MTQueued).Msg("iridium: MT available, piggybacking receive")
 				go g.handleRingAlert(ctx)
 			}
 
@@ -495,9 +496,10 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		g.lastActive.Store(time.Now().Unix())
 		log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("mo_status", result.MOStatus).Int("retry", dl.Retries+1).Msg("iridium: DLQ message sent successfully")
 
-		// MT piggyback: check if there are queued MT messages from this session
-		if result.MTQueued > 0 {
-			log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued during DLQ retry, piggybacking receive")
+		// MT piggyback: if this SBDIX session received an MT or there are more queued, read them
+		if result.MTReceived || result.MTStatus == 1 || result.MTQueued > 0 {
+			log.Info().Bool("mt_received", result.MTReceived).Int("mt_status", result.MTStatus).
+				Int("mt_queued", result.MTQueued).Msg("iridium: MT available during DLQ retry, piggybacking receive")
 			go g.handleRingAlert(ctx)
 		}
 	}
@@ -610,9 +612,10 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 		g.lastActive.Store(time.Now().Unix())
 		log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("mo_status", result.MOStatus).Int("retry", dl.Retries+1).Msg("iridium: DLQ message sent successfully via drain")
 
-		// MT piggyback: check if there are queued MT messages from this session
-		if result.MTQueued > 0 {
-			log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued during DLQ drain, piggybacking receive")
+		// MT piggyback: if this SBDIX session received an MT or there are more queued, read them
+		if result.MTReceived || result.MTStatus == 1 || result.MTQueued > 0 {
+			log.Info().Bool("mt_received", result.MTReceived).Int("mt_status", result.MTStatus).
+				Int("mt_queued", result.MTQueued).Msg("iridium: MT available during DLQ drain, piggybacking receive")
 			go g.handleRingAlert(ctx)
 		}
 	}
@@ -642,6 +645,10 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 		return
 	}
 
+	log.Info().Int("mt_status", result.MTStatus).Int("mt_length", result.MTLength).
+		Int("mt_queued", result.MTQueued).Bool("mt_received", result.MTReceived).
+		Int("attempt", attempt).Msg("iridium: mailbox check result")
+
 	if result.MTStatus != 1 || result.MTLength == 0 {
 		// SBDIX succeeded but no MT message delivered. If the modem received a ring alert
 		// (attempt 0) and the gateway didn't deliver the MT, retry — the satellite may
@@ -655,6 +662,8 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 					g.handleRingAlertWithRetry(ctx, attempt+1)
 				}
 			}()
+		} else {
+			log.Info().Msg("iridium: no MT message in this session")
 		}
 		return // no message waiting (or retry scheduled)
 	}
