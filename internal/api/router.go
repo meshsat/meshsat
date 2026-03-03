@@ -76,6 +76,12 @@ func (s *Server) Router() http.Handler {
 		r.Get("/iridium/signal", s.handleGetIridiumSignal)
 		r.Get("/iridium/signal/fast", s.handleGetIridiumSignalFast)
 
+		// Iridium queue — offline compose and priority management
+		r.Get("/iridium/queue", s.handleGetIridiumQueue)
+		r.Post("/iridium/queue", s.handleEnqueueIridiumMessage)
+		r.Post("/iridium/queue/{id}/cancel", s.handleCancelQueueItem)
+		r.Post("/iridium/queue/{id}/priority", s.handleSetQueuePriority)
+
 		// Admin commands (Phase 2)
 		r.Post("/admin/reboot", s.handleAdminReboot)
 		r.Post("/admin/factory_reset", s.handleAdminFactoryReset)

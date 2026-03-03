@@ -350,7 +350,8 @@ type DeadLetter struct {
 	Retries    int       `db:"retries" json:"retries"`
 	MaxRetries int       `db:"max_retries" json:"max_retries"`
 	NextRetry  time.Time `db:"next_retry" json:"next_retry"`
-	Status     string    `db:"status" json:"status"` // pending, sent, expired
+	Status     string    `db:"status" json:"status"`     // pending, sent, expired, cancelled
+	Priority   int       `db:"priority" json:"priority"` // 0=critical, 1=normal, 2=low
 	LastError  string    `db:"last_error" json:"last_error"`
 	CreatedAt  time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
@@ -359,15 +360,25 @@ type DeadLetter struct {
 // sqliteTime formats a time for SQLite DATETIME comparison (matches CURRENT_TIMESTAMP format).
 const sqliteTimeFormat = "2006-01-02 15:04:05"
 
-// InsertDeadLetter adds a failed send to the dead-letter queue.
+// InsertDeadLetter adds a failed send to the dead-letter queue with normal priority.
 func (db *DB) InsertDeadLetter(packetID uint32, payload []byte, maxRetries int, nextRetry time.Time, lastError string) error {
-	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error)
-		VALUES (?, ?, ?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error, priority)
+		VALUES (?, ?, ?, ?, ?, 1)`,
 		packetID, payload, maxRetries, nextRetry.UTC().Format(sqliteTimeFormat), lastError)
 	return err
 }
 
-// GetPendingDeadLetters returns dead letters ready for retry.
+// InsertDirectDeadLetter enqueues a user-composed message directly into the DLQ.
+// packet_id=0 means not associated with a mesh packet. Priority: 0=critical, 1=normal, 2=low.
+func (db *DB) InsertDirectDeadLetter(payload []byte, priority, maxRetries int) error {
+	nextRetry := time.Now().UTC().Format(sqliteTimeFormat)
+	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error, priority)
+		VALUES (0, ?, ?, ?, '', ?)`,
+		payload, maxRetries, nextRetry, priority)
+	return err
+}
+
+// GetPendingDeadLetters returns dead letters ready for retry, ordered by priority then next_retry.
 func (db *DB) GetPendingDeadLetters(limit int) ([]DeadLetter, error) {
 	if limit <= 0 {
 		limit = 10
@@ -375,11 +386,56 @@ func (db *DB) GetPendingDeadLetters(limit int) ([]DeadLetter, error) {
 	var dls []DeadLetter
 	err := db.Select(&dls,
 		`SELECT * FROM dead_letters WHERE status = 'pending' AND next_retry <= CURRENT_TIMESTAMP
-		 ORDER BY next_retry ASC LIMIT ?`, limit)
+		 ORDER BY priority ASC, next_retry ASC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query dead letters: %w", err)
 	}
 	return dls, nil
+}
+
+// GetDeadLetterQueue returns all non-cancelled, non-sent queue entries for display.
+func (db *DB) GetDeadLetterQueue() ([]DeadLetter, error) {
+	var dls []DeadLetter
+	err := db.Select(&dls,
+		`SELECT * FROM dead_letters WHERE status NOT IN ('sent', 'cancelled')
+		 ORDER BY priority ASC, created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query DLQ: %w", err)
+	}
+	return dls, nil
+}
+
+// CancelDeadLetter marks a dead letter as cancelled (will not be retried).
+func (db *DB) CancelDeadLetter(id int64) error {
+	res, err := db.Exec(
+		`UPDATE dead_letters SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'`,
+		id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("dead letter %d not found or not pending", id)
+	}
+	return nil
+}
+
+// SetDeadLetterPriority updates the priority of a pending dead letter.
+func (db *DB) SetDeadLetterPriority(id int64, priority int) error {
+	if priority < 0 || priority > 2 {
+		return fmt.Errorf("priority must be 0 (critical), 1 (normal), or 2 (low)")
+	}
+	res, err := db.Exec(
+		`UPDATE dead_letters SET priority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'`,
+		priority, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("dead letter %d not found or not pending", id)
+	}
+	return nil
 }
 
 // MarkDeadLetterSent marks a dead letter as successfully sent.

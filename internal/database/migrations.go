@@ -85,6 +85,10 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_dead_letters_status ON dead_letters(status);
 	CREATE INDEX IF NOT EXISTS idx_dead_letters_next_retry ON dead_letters(next_retry);`,
+
+	// v3: Add priority to dead-letter queue (0=critical, 1=normal, 2=low)
+	`ALTER TABLE dead_letters ADD COLUMN priority INTEGER NOT NULL DEFAULT 1;
+	CREATE INDEX IF NOT EXISTS idx_dead_letters_priority ON dead_letters(priority, next_retry);`,
 }
 
 func (db *DB) migrate() error {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -222,5 +223,145 @@ func (s *Server) handleTestGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// =============================================================================
+// Iridium Queue — offline compose and priority management
+// =============================================================================
+
+// handleGetIridiumQueue returns all pending/expired DLQ entries.
+// @Summary Get Iridium outbound queue
+// @Description Returns all non-sent, non-cancelled messages in the DLQ
+// @Tags iridium
+// @Success 200 {array} database.DeadLetter
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/queue [get]
+func (s *Server) handleGetIridiumQueue(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	items, err := s.db.GetDeadLetterQueue()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"queue": items})
+}
+
+// handleEnqueueIridiumMessage adds a user-composed message to the DLQ for opportunistic send.
+// @Summary Queue Iridium message for later send
+// @Description Enqueues a message in the DLQ; sent when signal becomes available
+// @Tags iridium
+// @Param body body object true "message body: {message: string, priority: 0|1|2}"
+// @Success 201 {object} map[string]string "queued"
+// @Failure 400 {object} map[string]string "error"
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/queue [post]
+func (s *Server) handleEnqueueIridiumMessage(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 340)) // Iridium SBD max payload
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+
+	var req struct {
+		Message  string `json:"message"`
+		Priority int    `json:"priority"` // 0=critical, 1=normal, 2=low
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "parse body: "+err.Error())
+		return
+	}
+	if req.Message == "" {
+		writeError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	if req.Priority < 0 || req.Priority > 2 {
+		req.Priority = 1
+	}
+	if len(req.Message) > 340 {
+		writeError(w, http.StatusBadRequest, "message exceeds 340-byte SBD limit")
+		return
+	}
+
+	if err := s.db.InsertDirectDeadLetter([]byte(req.Message), req.Priority, 5); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "queued"})
+}
+
+// handleCancelQueueItem cancels a pending DLQ entry.
+// @Summary Cancel a queued Iridium message
+// @Description Marks the queued message as cancelled; it will not be retried
+// @Tags iridium
+// @Param id path int true "DLQ entry ID"
+// @Success 200 {object} map[string]string "cancelled"
+// @Failure 400 {object} map[string]string "error"
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/queue/{id}/cancel [post]
+func (s *Server) handleCancelQueueItem(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.db.CancelDeadLetter(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// handleSetQueuePriority updates the priority of a pending DLQ entry.
+// @Summary Set priority for a queued Iridium message
+// @Description Changes the send priority for a pending queued message
+// @Tags iridium
+// @Param id path int true "DLQ entry ID"
+// @Param body body object true "{priority: 0|1|2}"
+// @Success 200 {object} map[string]string "ok"
+// @Failure 400 {object} map[string]string "error"
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/queue/{id}/priority [post]
+func (s *Server) handleSetQueuePriority(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	var req struct {
+		Priority int `json:"priority"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "parse body: "+err.Error())
+		return
+	}
+
+	if err := s.db.SetDeadLetterPriority(id, req.Priority); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
