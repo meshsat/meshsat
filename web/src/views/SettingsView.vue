@@ -96,6 +96,21 @@ async function saveIridium() {
   await store.configureGateway('iridium', iridiumEnabled.value, iridiumForm.value)
 }
 
+// Credit budget
+const budgetForm = ref({ daily: 0, monthly: 0 })
+
+async function loadBudget() {
+  await store.fetchCredits()
+  if (store.creditSummary) {
+    budgetForm.value.daily = store.creditSummary.daily_budget || 0
+    budgetForm.value.monthly = store.creditSummary.monthly_budget || 0
+  }
+}
+
+async function saveBudget() {
+  await store.setCreditBudget(budgetForm.value.daily, budgetForm.value.monthly)
+}
+
 // Signal polling
 let signalTimer = null
 
@@ -130,7 +145,7 @@ onMounted(() => {
   store.fetchPresets()
   store.fetchIridiumSignalFast()
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
-  setTimeout(() => { loadMQTT(); loadIridium() }, 500)
+  setTimeout(() => { loadMQTT(); loadIridium(); loadBudget() }, 500)
 })
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
@@ -299,6 +314,26 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="iridium_en" class="text-xs text-gray-400">Enable Iridium gateway</label>
         </div>
         <button @click="saveIridium" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Iridium Config</button>
+      </div>
+
+      <!-- Credit Budget (dedicated API) -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mt-4">
+        <h4 class="text-sm font-medium text-gray-200">Credit Budget</h4>
+        <p class="text-xs text-gray-500">Set daily and monthly SBD credit limits. Zero means unlimited.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Daily Limit</label>
+            <input v-model.number="budgetForm.daily" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Monthly Limit</label>
+            <input v-model.number="budgetForm.monthly" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <div v-if="store.creditSummary" class="text-xs text-gray-500">
+          Used today: {{ store.creditSummary.today }} | This month: {{ store.creditSummary.month }} | All time: {{ store.creditSummary.all_time }}
+        </div>
+        <button @click="saveBudget" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Budget</button>
       </div>
     </div>
 

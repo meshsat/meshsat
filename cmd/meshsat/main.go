@@ -98,9 +98,18 @@ func main() {
 		log.Info().Str("type", gw.Type()).Msg("gateway registered with processor")
 	}
 
+	// Signal recorder — persists Iridium signal bar readings to DB
+	sigRecorder := engine.NewSignalRecorder(db, sat)
+	sigRecorder.Start(ctx)
+
+	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction
+	tleMgr := engine.NewTLEManager(db)
+	tleMgr.Start(ctx)
+
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetRuleEngine(ruleEngine)
+	srv.SetTLEManager(tleMgr)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
 	httpServer := &http.Server{
@@ -136,6 +145,8 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
 	cancel() // Stop processor + retention + gateways
+	sigRecorder.Stop()
+	tleMgr.Stop()
 	gwMgr.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -1,5 +1,8 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { useMeshsatStore } from '@/stores/meshsat'
+
+const store = useMeshsatStore()
 
 const props = defineProps({
   rule: { type: Object, default: null },
@@ -8,6 +11,36 @@ const props = defineProps({
 const emit = defineEmits(['save', 'close'])
 
 const form = ref(getDefault())
+
+// Friendly picker state
+const selectedChannels = ref([])
+const selectedNodes = ref([])
+const selectedPortnums = ref([])
+
+const portnumOptions = [
+  { value: 1, label: 'Text Message' },
+  { value: 3, label: 'Position' },
+  { value: 4, label: 'NodeInfo' },
+  { value: 8, label: 'Waypoint' },
+  { value: 67, label: 'Telemetry' },
+  { value: 70, label: 'Traceroute' }
+]
+
+const channelOptions = computed(() => {
+  const channels = store.config?.channels || {}
+  return Array.from({ length: 8 }, (_, i) => {
+    const ch = channels[i]
+    return { index: i, name: ch?.name || `Ch ${i}` }
+  })
+})
+
+const nodeOptions = computed(() => {
+  return (store.nodes || []).map(n => ({
+    num: n.num,
+    id: n.user_id || `!${n.num?.toString(16)}`,
+    name: n.long_name || n.short_name || 'Unknown'
+  }))
+})
 
 function getDefault() {
   return {
@@ -19,6 +52,11 @@ function getDefault() {
   }
 }
 
+function parseJSON(val) {
+  if (!val) return []
+  try { return JSON.parse(val) } catch { return [] }
+}
+
 watch(() => props.rule, (r) => {
   if (r) {
     form.value = {
@@ -28,17 +66,66 @@ watch(() => props.rule, (r) => {
       source_portnums: r.source_portnums || '',
       source_keyword: r.source_keyword || ''
     }
+    selectedChannels.value = parseJSON(r.source_channels)
+    selectedNodes.value = parseJSON(r.source_nodes)
+    selectedPortnums.value = parseJSON(r.source_portnums)
   } else {
     form.value = getDefault()
+    selectedChannels.value = []
+    selectedNodes.value = []
+    selectedPortnums.value = []
   }
 }, { immediate: true })
 
+watch(() => props.open, (v) => {
+  if (v) {
+    store.fetchConfig()
+    store.fetchNodes()
+  }
+})
+
+function toggleChannel(idx) {
+  const i = selectedChannels.value.indexOf(idx)
+  if (i >= 0) selectedChannels.value.splice(i, 1)
+  else selectedChannels.value.push(idx)
+}
+
+function toggleNode(nodeId) {
+  const i = selectedNodes.value.indexOf(nodeId)
+  if (i >= 0) selectedNodes.value.splice(i, 1)
+  else selectedNodes.value.push(nodeId)
+}
+
+function togglePortnum(val) {
+  const i = selectedPortnums.value.indexOf(val)
+  if (i >= 0) selectedPortnums.value.splice(i, 1)
+  else selectedPortnums.value.push(val)
+}
+
 function save() {
   const data = { ...form.value }
-  if (data.source_channels === '') data.source_channels = null
-  if (data.source_nodes === '') data.source_nodes = null
-  if (data.source_portnums === '') data.source_portnums = null
+
+  // Convert picker selections back to JSON strings
+  if (data.source_type === 'channel') {
+    data.source_channels = selectedChannels.value.length ? JSON.stringify(selectedChannels.value) : null
+  } else {
+    data.source_channels = null
+  }
+
+  if (data.source_type === 'node') {
+    data.source_nodes = selectedNodes.value.length ? JSON.stringify(selectedNodes.value) : null
+  } else {
+    data.source_nodes = null
+  }
+
+  if (data.source_type === 'portnum') {
+    data.source_portnums = selectedPortnums.value.length ? JSON.stringify(selectedPortnums.value) : null
+  } else {
+    data.source_portnums = null
+  }
+
   if (data.source_keyword === '') data.source_keyword = null
+
   emit('save', data)
 }
 </script>
@@ -74,17 +161,51 @@ function save() {
           </div>
         </div>
 
+        <!-- Channel picker (multi-select badges) -->
         <div v-if="form.source_type === 'channel'">
-          <label class="block text-xs text-gray-400 mb-1">Channels (JSON array, e.g. [0,2])</label>
-          <input v-model="form.source_channels" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="[0]">
+          <label class="block text-xs text-gray-400 mb-2">Select Channels</label>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="ch in channelOptions" :key="ch.index" @click="toggleChannel(ch.index)"
+              class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+              :class="selectedChannels.includes(ch.index)
+                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+              {{ ch.index }}: {{ ch.name }}
+            </button>
+          </div>
         </div>
+
+        <!-- Node picker (autocomplete with names) -->
         <div v-if="form.source_type === 'node'">
-          <label class="block text-xs text-gray-400 mb-1">Nodes (JSON array, e.g. ["!abcd1234"])</label>
-          <input v-model="form.source_nodes" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder='["!abcd1234"]'>
+          <label class="block text-xs text-gray-400 mb-2">Select Nodes</label>
+          <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600">No nodes discovered yet</div>
+          <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+            <button v-for="node in nodeOptions" :key="node.id" @click="toggleNode(node.id)"
+              class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+              :class="selectedNodes.includes(node.id)
+                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+              {{ node.name }}
+              <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
+            </button>
+          </div>
         </div>
+
+        <!-- Portnum picker (checkboxes with names) -->
         <div v-if="form.source_type === 'portnum'">
-          <label class="block text-xs text-gray-400 mb-1">Portnums (JSON array: 1=Text, 3=Position, 67=Telemetry)</label>
-          <input v-model="form.source_portnums" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="[1,3]">
+          <label class="block text-xs text-gray-400 mb-2">Select Port Numbers</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label v-for="pn in portnumOptions" :key="pn.value"
+              class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs transition-colors border cursor-pointer"
+              :class="selectedPortnums.includes(pn.value)
+                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+              <input type="checkbox" :checked="selectedPortnums.includes(pn.value)" @change="togglePortnum(pn.value)"
+                class="rounded bg-gray-900 border-gray-700 text-teal-500">
+              {{ pn.label }}
+              <span class="text-[9px] text-gray-600">#{{ pn.value }}</span>
+            </label>
+          </div>
         </div>
 
         <div>

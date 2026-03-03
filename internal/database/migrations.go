@@ -147,6 +147,43 @@ var migrations = []string{
 		FOREIGN KEY (rule_id) REFERENCES forwarding_rules(id) ON DELETE SET NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_credit_usage_date ON credit_usage(date);`,
+
+	// v5: Signal history, system config, Iridium locations, TLE cache
+	`CREATE TABLE IF NOT EXISTS signal_history (
+		id        INTEGER PRIMARY KEY AUTOINCREMENT,
+		source    TEXT NOT NULL DEFAULT 'iridium',
+		timestamp INTEGER NOT NULL,
+		value     REAL NOT NULL,
+		UNIQUE(source, timestamp)
+	);
+	CREATE INDEX IF NOT EXISTS idx_signal_history_ts ON signal_history(source, timestamp);
+
+	CREATE TABLE IF NOT EXISTS system_config (
+		key        TEXT PRIMARY KEY,
+		value      TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS iridium_locations (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		name    TEXT NOT NULL,
+		lat     REAL NOT NULL,
+		lon     REAL NOT NULL,
+		alt_m   REAL NOT NULL DEFAULT 0,
+		builtin INTEGER NOT NULL DEFAULT 0
+	);
+	INSERT INTO iridium_locations (name, lat, lon, alt_m, builtin) VALUES
+		('Leiden, NL', 52.1601, 4.4970, 0, 1),
+		('Thessaloniki, GR', 40.6401, 22.9444, 0, 1);
+
+	CREATE TABLE IF NOT EXISTS iridium_tle_cache (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		satellite_name TEXT NOT NULL,
+		line1          TEXT NOT NULL,
+		line2          TEXT NOT NULL,
+		fetched_at     INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_tle_cache_fetched ON iridium_tle_cache(fetched_at);`,
 }
 
 func (db *DB) migrate() error {

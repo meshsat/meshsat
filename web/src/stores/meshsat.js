@@ -347,6 +347,95 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Iridium signal history, credits, passes, locations
+  const signalHistory = ref([])
+  const creditSummary = ref(null)
+  const passes = ref([])
+  const locations = ref([])
+
+  async function fetchSignalHistory(params = {}) {
+    try {
+      const data = await api.get('/iridium/signal/history', params)
+      signalHistory.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function fetchCredits() {
+    try {
+      creditSummary.value = await api.get('/iridium/credits')
+    } catch (e) { error.value = e.message }
+  }
+
+  async function setCreditBudget(daily, monthly) {
+    error.value = null
+    try {
+      await api.post('/iridium/credits/budget', { daily_budget: daily, monthly_budget: monthly })
+      await fetchCredits()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function fetchPasses(params = {}) {
+    try {
+      const data = await api.get('/iridium/passes', params)
+      passes.value = data?.passes || []
+      return data
+    } catch (e) { error.value = e.message; return null }
+  }
+
+  async function refreshTLEs() {
+    error.value = null
+    try {
+      return await api.post('/iridium/passes/refresh')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function fetchLocations() {
+    try {
+      const data = await api.get('/iridium/locations')
+      locations.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createLocation(loc) {
+    error.value = null
+    try {
+      const r = await api.post('/iridium/locations', loc)
+      await fetchLocations()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteLocation(id) {
+    error.value = null
+    try {
+      await api.del(`/iridium/locations/${id}`)
+      await fetchLocations()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function enqueueIridiumMessage(message, priority = 1) {
+    error.value = null
+    try {
+      return await api.post('/iridium/queue', { message, priority })
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function cancelQueueItem(id) {
+    error.value = null
+    try {
+      await api.post(`/iridium/queue/${id}/cancel`)
+      await fetchDLQ()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function setQueuePriority(id, priority) {
+    error.value = null
+    try {
+      await api.post(`/iridium/queue/${id}/priority`, { priority })
+      await fetchDLQ()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   const config = ref(null)
 
   async function fetchConfig() {
@@ -383,7 +472,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config,
-    iridiumSignal, rules, presets, sosStatus, dlq,
+    iridiumSignal, signalHistory, creditSummary, passes, locations,
+    rules, presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
     fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,
@@ -392,6 +482,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     configRadio, configModule, sendWaypoint,
     fetchConfig, setChannel,
     fetchIridiumSignalFast, fetchIridiumSignal,
+    fetchSignalHistory, fetchCredits, setCreditBudget,
+    fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation,
+    enqueueIridiumMessage, cancelQueueItem, setQueuePriority,
     fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,
     activateSOS, cancelSOS, fetchSOSStatus,

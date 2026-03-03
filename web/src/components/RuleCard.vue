@@ -9,19 +9,22 @@ const emit = defineEmits(['toggle', 'edit', 'delete'])
 const sourceLabel = computed(() => {
   const r = props.rule
   switch (r.source_type) {
-    case 'any': return 'any message'
+    case 'any': return 'Any Message'
     case 'channel': {
-      try { const ch = JSON.parse(r.source_channels || '[]'); return `channel ${ch.join(', ')}` } catch { return 'channel' }
+      try { const ch = JSON.parse(r.source_channels || '[]'); return `Ch ${ch.join(', ')}` } catch { return 'Channel' }
     }
     case 'node': {
-      try { const n = JSON.parse(r.source_nodes || '[]'); return `node ${n.join(', ')}` } catch { return 'node' }
+      try {
+        const n = JSON.parse(r.source_nodes || '[]')
+        return n.length > 2 ? `${n.length} nodes` : n.join(', ')
+      } catch { return 'Node' }
     }
     case 'portnum': {
-      const names = { 1: 'Text', 3: 'Position', 4: 'NodeInfo', 67: 'Telemetry' }
+      const names = { 1: 'Text', 3: 'Position', 4: 'NodeInfo', 67: 'Telemetry', 70: 'Traceroute' }
       try {
         const pn = JSON.parse(r.source_portnums || '[]')
         return pn.map(p => names[p] || `#${p}`).join(', ')
-      } catch { return 'portnum' }
+      } catch { return 'Portnum' }
     }
     default: return r.source_type
   }
@@ -30,7 +33,23 @@ const sourceLabel = computed(() => {
 const destLabel = computed(() => {
   const d = props.rule.dest_type
   if (d === 'both') return 'Iridium + MQTT'
-  return d.charAt(0).toUpperCase() + d.slice(1)
+  if (d === 'iridium') return 'Iridium SBD'
+  if (d === 'mqtt') return 'MQTT'
+  return d
+})
+
+const destAccent = computed(() => {
+  const d = props.rule.dest_type
+  if (d === 'iridium') return 'border-tactical-iridium/30 text-tactical-iridium'
+  if (d === 'mqtt') return 'border-amber-400/30 text-amber-400'
+  return 'border-blue-400/30 text-blue-400' // both
+})
+
+const destBg = computed(() => {
+  const d = props.rule.dest_type
+  if (d === 'iridium') return 'bg-tactical-iridium/5'
+  if (d === 'mqtt') return 'bg-amber-400/5'
+  return 'bg-blue-400/5'
 })
 
 const priorityLabel = computed(() => {
@@ -43,7 +62,7 @@ function timeAgo(ts) {
   const diff = Date.now() - new Date(ts).getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'Just now'
-  if (mins < 60) return `${mins} min ago`
+  if (mins < 60) return `${mins}m ago`
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
@@ -51,42 +70,69 @@ function timeAgo(ts) {
 </script>
 
 <template>
-  <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
-    <div class="flex items-start justify-between mb-2">
-      <div class="flex items-center gap-2">
-        <svg class="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+  <div class="bg-tactical-surface rounded-lg border border-tactical-border overflow-hidden"
+    :class="{ 'opacity-50': !rule.enabled }">
+    <!-- Pipeline flow header -->
+    <div class="flex items-center gap-0 p-3" :class="destBg">
+      <!-- Source -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-l-lg bg-tactical-lora/10 border border-tactical-lora/20">
+        <svg class="w-3.5 h-3.5 text-tactical-lora" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/><path d="M5.5 5.5a10 10 0 0114 0M8 8a6 6 0 018.5 0"/>
         </svg>
-        <span class="text-sm font-medium text-gray-200">{{ rule.name }}</span>
+        <span class="text-[11px] font-medium text-tactical-lora">{{ sourceLabel }}</span>
       </div>
+
+      <!-- Arrow -->
+      <div class="flex items-center px-2">
+        <svg class="w-5 h-5 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+        </svg>
+      </div>
+
+      <!-- Destination -->
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-r-lg border" :class="destAccent">
+        <svg v-if="rule.dest_type === 'iridium' || rule.dest_type === 'both'" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="10" y="10" width="4" height="4" rx="0.5"/><rect x="2" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
+          <rect x="16" y="11" width="6" height="2" rx="0.5" opacity="0.7"/>
+        </svg>
+        <svg v-if="rule.dest_type === 'mqtt'" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 12h16M12 4v16M7 7l10 10M17 7L7 17"/>
+        </svg>
+        <span class="text-[11px] font-medium">{{ destLabel }}</span>
+      </div>
+
+      <span class="flex-1" />
+
+      <!-- Toggle -->
       <button @click="emit('toggle')"
         class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
         :class="rule.enabled ? 'bg-teal-500' : 'bg-gray-600'">
         <span class="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform mt-0.5"
-          :class="rule.enabled ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'"></span>
+          :class="rule.enabled ? 'translate-x-4 ml-0.5' : 'translate-x-0.5'" />
       </button>
     </div>
 
-    <div class="text-xs text-gray-400 space-y-1 mb-3">
-      <div><span class="text-gray-500">When</span> {{ sourceLabel }}</div>
-      <div class="flex items-center gap-1">
-        <svg class="w-3 h-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-        </svg>
-        <span><span class="text-gray-500">Forward via</span> {{ destLabel }}</span>
+    <!-- Details -->
+    <div class="px-4 py-2.5">
+      <div class="flex items-center gap-2 mb-1.5">
+        <span class="text-sm font-medium text-gray-200">{{ rule.name }}</span>
+        <span v-if="rule.source_keyword" class="text-[9px] text-gray-500 px-1.5 py-px rounded bg-gray-800">
+          keyword: {{ rule.source_keyword }}
+        </span>
+        <span v-if="rule.dest_type !== 'mqtt'" class="text-[9px] px-1.5 py-px rounded bg-gray-800"
+          :class="rule.sat_priority === 0 ? 'text-red-400' : rule.sat_priority === 2 ? 'text-gray-500' : 'text-amber-400'">
+          {{ priorityLabel }}
+        </span>
       </div>
-      <div v-if="rule.dest_type !== 'mqtt'">
-        <span class="text-gray-500">Priority:</span> {{ priorityLabel }}
-      </div>
-    </div>
 
-    <div class="flex items-center justify-between text-xs">
-      <div class="text-gray-500">
-        Matched: {{ rule.match_count || 0 }} | Last: {{ timeAgo(rule.last_match_at) }}
-      </div>
-      <div class="flex gap-2">
-        <button @click="emit('edit')" class="text-gray-400 hover:text-teal-400">Edit</button>
-        <button @click="emit('delete')" class="text-gray-400 hover:text-red-400">Delete</button>
+      <div class="flex items-center justify-between text-[10px]">
+        <span class="text-gray-600">
+          Matched: {{ rule.match_count || 0 }} | Last: {{ timeAgo(rule.last_match_at) }}
+        </span>
+        <div class="flex gap-2">
+          <button @click="emit('edit')" class="text-gray-500 hover:text-teal-400 transition-colors">Edit</button>
+          <button @click="emit('delete')" class="text-gray-500 hover:text-red-400 transition-colors">Delete</button>
+        </div>
       </div>
     </div>
   </div>

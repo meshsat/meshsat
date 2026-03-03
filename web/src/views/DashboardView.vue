@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
 
 const store = useMeshsatStore()
 
@@ -78,6 +79,26 @@ const lastSatRx = computed(() => {
   const msgs = (store.messages || []).filter(m => m.transport === 'satellite' && m.direction === 'inbound')
   return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
 })
+
+// Signal sparkline from history
+const sparklinePoints = computed(() => {
+  const hist = store.signalHistory || []
+  if (hist.length < 2) return ''
+  const sorted = [...hist].sort((a, b) => a.timestamp - b.timestamp)
+  return buildPolyline(sorted, p => p.value, 200, 40, 0, 5)
+})
+const sparklineArea = computed(() => {
+  const hist = store.signalHistory || []
+  if (hist.length < 2) return ''
+  const sorted = [...hist].sort((a, b) => a.timestamp - b.timestamp)
+  return buildAreaPath(sorted, p => p.value, 200, 40, 0, 5)
+})
+
+// Credits from store
+const creditsToday = computed(() => store.creditSummary?.today ?? 0)
+const creditsMonth = computed(() => store.creditSummary?.month ?? 0)
+const dailyBudget = computed(() => store.creditSummary?.daily_budget || 0)
+const monthlyBudget = computed(() => store.creditSummary?.monthly_budget || 0)
 
 function formatRelativeTime(val) {
   if (!val) return 'N/A'
@@ -224,7 +245,9 @@ async function fetchAll() {
     store.fetchIridiumSignalFast(),
     store.fetchDLQ(),
     store.fetchMessages({ limit: 20 }),
-    store.fetchSOSStatus()
+    store.fetchSOSStatus(),
+    store.fetchSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
+    store.fetchCredits()
   ])
 }
 
@@ -256,7 +279,7 @@ onUnmounted(() => {
           <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
         </div>
 
-        <!-- Signal bars -->
+        <!-- Signal bars + sparkline -->
         <div class="flex items-center gap-3 mb-3">
           <div class="flex items-end gap-[3px] h-6">
             <span v-for="i in 5" :key="i"
@@ -271,6 +294,15 @@ onUnmounted(() => {
             <span class="text-[10px] text-gray-500 ml-1">/5</span>
           </div>
           <span class="text-[10px] text-gray-500 uppercase">{{ satAssessment }}</span>
+        </div>
+
+        <!-- Signal sparkline (6h history) -->
+        <div v-if="sparklinePoints" class="mb-3">
+          <svg viewBox="0 0 200 40" class="w-full h-8" preserveAspectRatio="none">
+            <path :d="sparklineArea" fill="rgba(45,212,191,0.1)" />
+            <polyline :points="sparklinePoints" fill="none" stroke="rgb(45,212,191)" stroke-width="1.5" />
+          </svg>
+          <div class="text-[9px] text-gray-600 text-right">6h signal history</div>
         </div>
 
         <!-- Status rows -->
@@ -292,8 +324,16 @@ onUnmounted(() => {
             <span class="text-gray-400 font-mono">{{ lastSatRx }}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-gray-500">Credits</span>
-            <span class="text-gray-400 font-mono">N/A</span>
+            <span class="text-gray-500">Credits Today</span>
+            <span class="font-mono" :class="dailyBudget > 0 && creditsToday >= dailyBudget ? 'text-red-400' : 'text-gray-300'">
+              {{ creditsToday }}{{ dailyBudget > 0 ? `/${dailyBudget}` : '' }}
+            </span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Credits Month</span>
+            <span class="font-mono" :class="monthlyBudget > 0 && creditsMonth >= monthlyBudget ? 'text-red-400' : 'text-gray-300'">
+              {{ creditsMonth }}{{ monthlyBudget > 0 ? `/${monthlyBudget}` : '' }}
+            </span>
           </div>
         </div>
       </div>

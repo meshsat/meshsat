@@ -21,6 +21,7 @@ type Server struct {
 	processor  *engine.Processor
 	gwManager  *gateway.Manager
 	ruleEngine *rules.Engine
+	tleMgr     *engine.TLEManager
 	sos        *SOSState
 	webHandler http.Handler
 }
@@ -38,6 +39,11 @@ func NewServer(db *database.DB, mesh transport.MeshTransport, proc *engine.Proce
 // SetRuleEngine sets the forwarding rules engine for rule CRUD reload.
 func (s *Server) SetRuleEngine(e *rules.Engine) {
 	s.ruleEngine = e
+}
+
+// SetTLEManager sets the TLE manager for pass prediction.
+func (s *Server) SetTLEManager(m *engine.TLEManager) {
+	s.tleMgr = m
 }
 
 // SetWebHandler sets the handler for serving the web UI.
@@ -85,6 +91,20 @@ func (s *Server) Router() http.Handler {
 		// Iridium signal
 		r.Get("/iridium/signal", s.handleGetIridiumSignal)
 		r.Get("/iridium/signal/fast", s.handleGetIridiumSignalFast)
+		r.Get("/iridium/signal/history", s.handleGetSignalHistory)
+
+		// Iridium credits
+		r.Get("/iridium/credits", s.handleGetCredits)
+		r.Post("/iridium/credits/budget", s.handleSetCreditBudget)
+
+		// Iridium passes (TLE-based prediction)
+		r.Get("/iridium/passes", s.handleGetPasses)
+		r.Post("/iridium/passes/refresh", s.handleRefreshTLEs)
+
+		// Iridium locations (ground stations)
+		r.Get("/iridium/locations", s.handleGetLocations)
+		r.Post("/iridium/locations", s.handleCreateLocation)
+		r.Delete("/iridium/locations/{id}", s.handleDeleteLocation)
 
 		// Iridium queue — offline compose and priority management
 		r.Get("/iridium/queue", s.handleGetIridiumQueue)

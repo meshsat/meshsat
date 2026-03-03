@@ -745,3 +745,244 @@ func (db *DB) GetMonthlyCreditTotal() (int, error) {
 	err := db.QueryRow("SELECT COALESCE(SUM(credits), 0) FROM credit_usage WHERE date >= date('now', 'start of month')").Scan(&total)
 	return total, err
 }
+
+// GetAllTimeCreditTotal returns total credits used all time.
+func (db *DB) GetAllTimeCreditTotal() (int, error) {
+	var total int
+	err := db.QueryRow("SELECT COALESCE(SUM(credits), 0) FROM credit_usage").Scan(&total)
+	return total, err
+}
+
+// ---- Signal History ----
+
+// SignalHistoryPoint represents a recorded signal reading.
+type SignalHistoryPoint struct {
+	ID        int64   `db:"id" json:"id"`
+	Source    string  `db:"source" json:"source"`
+	Timestamp int64   `db:"timestamp" json:"timestamp"`
+	Value     float64 `db:"value" json:"value"`
+}
+
+// InsertSignalHistory records a signal bar reading.
+func (db *DB) InsertSignalHistory(source string, timestamp int64, value float64) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO signal_history (source, timestamp, value) VALUES (?, ?, ?)`,
+		source, timestamp, value)
+	return err
+}
+
+// GetSignalHistoryRaw returns raw signal history points within a time range.
+func (db *DB) GetSignalHistoryRaw(source string, from, to int64, limit int) ([]SignalHistoryPoint, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 500
+	}
+	var points []SignalHistoryPoint
+	err := db.Select(&points,
+		`SELECT * FROM signal_history WHERE source = ? AND timestamp >= ? AND timestamp <= ?
+		 ORDER BY timestamp DESC LIMIT ?`, source, from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query signal history: %w", err)
+	}
+	return points, nil
+}
+
+// SignalHistoryAggregated represents a time-bucketed signal average.
+type SignalHistoryAggregated struct {
+	Bucket int64   `json:"bucket"`
+	Avg    float64 `json:"avg"`
+	Min    float64 `json:"min"`
+	Max    float64 `json:"max"`
+	Count  int     `json:"count"`
+}
+
+// GetSignalHistoryAggregated returns aggregated signal history in time buckets.
+func (db *DB) GetSignalHistoryAggregated(source string, from, to int64, intervalSec int) ([]SignalHistoryAggregated, error) {
+	if intervalSec <= 0 {
+		intervalSec = 300 // 5 minutes default
+	}
+	var points []SignalHistoryAggregated
+	rows, err := db.Query(
+		`SELECT (timestamp / ?) * ? AS bucket,
+		        AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max, COUNT(*) AS count
+		 FROM signal_history WHERE source = ? AND timestamp >= ? AND timestamp <= ?
+		 GROUP BY bucket ORDER BY bucket ASC`,
+		intervalSec, intervalSec, source, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query aggregated signal: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p SignalHistoryAggregated
+		if err := rows.Scan(&p.Bucket, &p.Avg, &p.Min, &p.Max, &p.Count); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	return points, nil
+}
+
+// PruneSignalHistory removes signal history older than the given number of days.
+func (db *DB) PruneSignalHistory(days int) (int64, error) {
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	res, err := db.Exec("DELETE FROM signal_history WHERE timestamp < ?", cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune signal history: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// ---- System Config ----
+
+// GetSystemConfig retrieves a system config value by key.
+func (db *DB) GetSystemConfig(key string) (string, error) {
+	var val string
+	err := db.QueryRow("SELECT value FROM system_config WHERE key = ?", key).Scan(&val)
+	return val, err
+}
+
+// SetSystemConfig upserts a system config key-value pair.
+func (db *DB) SetSystemConfig(key, value string) error {
+	_, err := db.Exec(
+		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, datetime('now'))
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')`,
+		key, value)
+	return err
+}
+
+// ---- Credit Summary ----
+
+// CreditSummary aggregates credit usage with budget limits.
+type CreditSummary struct {
+	Today         int `json:"today"`
+	Month         int `json:"month"`
+	AllTime       int `json:"all_time"`
+	DailyBudget   int `json:"daily_budget"`
+	MonthlyBudget int `json:"monthly_budget"`
+}
+
+// GetCreditSummary returns aggregated credit counts and budget limits.
+func (db *DB) GetCreditSummary() (*CreditSummary, error) {
+	s := &CreditSummary{}
+	var err error
+
+	s.Today, err = db.GetDailyCreditTotal()
+	if err != nil {
+		return nil, fmt.Errorf("daily credits: %w", err)
+	}
+	s.Month, err = db.GetMonthlyCreditTotal()
+	if err != nil {
+		return nil, fmt.Errorf("monthly credits: %w", err)
+	}
+	s.AllTime, err = db.GetAllTimeCreditTotal()
+	if err != nil {
+		return nil, fmt.Errorf("all-time credits: %w", err)
+	}
+
+	// Read budgets from system_config (default 0 = unlimited)
+	if v, e := db.GetSystemConfig("iridium_daily_budget"); e == nil {
+		fmt.Sscanf(v, "%d", &s.DailyBudget)
+	}
+	if v, e := db.GetSystemConfig("iridium_monthly_budget"); e == nil {
+		fmt.Sscanf(v, "%d", &s.MonthlyBudget)
+	}
+
+	return s, nil
+}
+
+// ---- Iridium Locations ----
+
+// IridiumLocation represents a ground station for pass prediction.
+type IridiumLocation struct {
+	ID      int     `db:"id" json:"id"`
+	Name    string  `db:"name" json:"name"`
+	Lat     float64 `db:"lat" json:"lat"`
+	Lon     float64 `db:"lon" json:"lon"`
+	AltM    float64 `db:"alt_m" json:"alt_m"`
+	Builtin bool    `db:"builtin" json:"builtin"`
+}
+
+// GetIridiumLocations returns all ground station locations.
+func (db *DB) GetIridiumLocations() ([]IridiumLocation, error) {
+	var locs []IridiumLocation
+	err := db.Select(&locs, "SELECT * FROM iridium_locations ORDER BY builtin DESC, name ASC")
+	if err != nil {
+		return nil, fmt.Errorf("query locations: %w", err)
+	}
+	return locs, nil
+}
+
+// InsertIridiumLocation adds a custom location.
+func (db *DB) InsertIridiumLocation(name string, lat, lon, altM float64) (int64, error) {
+	res, err := db.Exec(
+		"INSERT INTO iridium_locations (name, lat, lon, alt_m, builtin) VALUES (?, ?, ?, ?, 0)",
+		name, lat, lon, altM)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// DeleteIridiumLocation removes a custom location (builtin locations cannot be deleted).
+func (db *DB) DeleteIridiumLocation(id int) error {
+	res, err := db.Exec("DELETE FROM iridium_locations WHERE id = ? AND builtin = 0", id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("location %d not found or is built-in", id)
+	}
+	return nil
+}
+
+// ---- TLE Cache ----
+
+// TLECacheEntry represents a cached TLE from Celestrak.
+type TLECacheEntry struct {
+	ID            int    `db:"id" json:"id"`
+	SatelliteName string `db:"satellite_name" json:"satellite_name"`
+	Line1         string `db:"line1" json:"line1"`
+	Line2         string `db:"line2" json:"line2"`
+	FetchedAt     int64  `db:"fetched_at" json:"fetched_at"`
+}
+
+// GetTLECache returns all cached TLE entries.
+func (db *DB) GetTLECache() ([]TLECacheEntry, error) {
+	var entries []TLECacheEntry
+	err := db.Select(&entries, "SELECT * FROM iridium_tle_cache ORDER BY satellite_name ASC")
+	if err != nil {
+		return nil, fmt.Errorf("query TLE cache: %w", err)
+	}
+	return entries, nil
+}
+
+// GetTLECacheAge returns the age of the cache in seconds, or -1 if empty.
+func (db *DB) GetTLECacheAge() (int64, error) {
+	var fetchedAt int64
+	err := db.QueryRow("SELECT COALESCE(MAX(fetched_at), 0) FROM iridium_tle_cache").Scan(&fetchedAt)
+	if err != nil || fetchedAt == 0 {
+		return -1, err
+	}
+	return time.Now().Unix() - fetchedAt, nil
+}
+
+// ReplaceTLECache replaces all cached TLEs with new data.
+func (db *DB) ReplaceTLECache(entries []TLECacheEntry) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin TLE replace: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM iridium_tle_cache"); err != nil {
+		return fmt.Errorf("clear TLE cache: %w", err)
+	}
+	for _, e := range entries {
+		if _, err := tx.Exec(
+			"INSERT INTO iridium_tle_cache (satellite_name, line1, line2, fetched_at) VALUES (?, ?, ?, ?)",
+			e.SatelliteName, e.Line1, e.Line2, e.FetchedAt); err != nil {
+			return fmt.Errorf("insert TLE %s: %w", e.SatelliteName, err)
+		}
+	}
+	return tx.Commit()
+}
