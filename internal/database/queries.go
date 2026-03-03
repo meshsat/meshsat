@@ -424,16 +424,26 @@ func (db *DB) GetPendingDeadLetters(limit int) ([]DeadLetter, error) {
 	return dls, nil
 }
 
-// GetDeadLetterQueue returns all non-cancelled, non-sent queue entries for display.
+// GetDeadLetterQueue returns queue entries for display: pending/expired first, then recent sends.
 func (db *DB) GetDeadLetterQueue() ([]DeadLetter, error) {
 	var dls []DeadLetter
 	err := db.Select(&dls,
-		`SELECT * FROM dead_letters WHERE status NOT IN ('sent', 'cancelled')
-		 ORDER BY priority ASC, created_at DESC`)
+		`SELECT * FROM dead_letters WHERE status NOT IN ('cancelled')
+		 ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'expired' THEN 1 ELSE 2 END,
+		 created_at DESC LIMIT 50`)
 	if err != nil {
 		return nil, fmt.Errorf("query DLQ: %w", err)
 	}
 	return dls, nil
+}
+
+// InsertSentRecord records a successful satellite send for queue visibility.
+func (db *DB) InsertSentRecord(packetID uint32, payload []byte) error {
+	_, err := db.Exec(`INSERT INTO dead_letters
+		(packet_id, payload, retries, max_retries, next_retry, status, priority)
+		VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP, 'sent', 1)`,
+		packetID, payload)
+	return err
 }
 
 // CancelDeadLetter marks a dead letter as cancelled (will not be retried).

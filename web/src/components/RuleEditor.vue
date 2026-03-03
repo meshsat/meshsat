@@ -277,19 +277,36 @@ function save() {
             </select>
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs text-gray-400 mb-1">Deliver to channel</label>
-              <select v-model.number="form.dest_channel" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-                <option v-for="ch in channelOptions" :key="ch.index" :value="ch.index">
-                  {{ ch.index }}: {{ ch.name }}
-                </option>
-              </select>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Deliver to channel</label>
+            <select v-model.number="form.dest_channel" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <option v-for="ch in channelOptions" :key="ch.index" :value="ch.index">
+                {{ ch.index }}: {{ ch.name }}
+              </option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-2">Target node (optional — broadcast if none selected)</label>
+            <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+              <button @click="form.dest_node = ''"
+                class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+                :class="!form.dest_node
+                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+                Broadcast (all)
+              </button>
+              <button v-for="node in nodeOptions" :key="node.id" @click="form.dest_node = node.id"
+                class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+                :class="form.dest_node === node.id
+                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+                {{ node.name }}
+                <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
+              </button>
             </div>
-            <div>
-              <label class="block text-xs text-gray-400 mb-1">Target node (optional)</label>
-              <input v-model="form.dest_node" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="!27ca8f1c (broadcast if empty)">
-            </div>
+            <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600 mt-1">No nodes discovered yet — you can type manually below</div>
+            <input v-if="nodeOptions.length === 0" v-model="form.dest_node" class="w-full mt-2 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="!27ca8f1c">
           </div>
         </template>
 

@@ -184,9 +184,10 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("iridium: SBD sent")
 
-			// Record credit usage
+			// Record credit usage and successful send for queue visibility
 			if g.db != nil {
 				g.db.InsertCreditUsage(nil, cost, nil)
+				g.db.InsertSentRecord(msg.ID, data)
 			}
 
 			// MT piggyback: check if there are queued MT messages from this session
