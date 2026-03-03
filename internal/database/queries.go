@@ -430,6 +430,22 @@ func (db *DB) GetPendingDeadLetters(limit int) ([]DeadLetter, error) {
 	return dls, nil
 }
 
+// GetPendingDeadLettersAll returns all pending dead letters regardless of next_retry time.
+// Used by opportunistic drain when signal is available — bypasses backoff timers.
+func (db *DB) GetPendingDeadLettersAll(limit int) ([]DeadLetter, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	var dls []DeadLetter
+	err := db.Select(&dls,
+		`SELECT * FROM dead_letters WHERE status = 'pending'
+		 ORDER BY priority ASC, next_retry ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query dead letters: %w", err)
+	}
+	return dls, nil
+}
+
 // GetDeadLetterQueue returns queue entries for display: pending/expired first, then recent sends/receives.
 func (db *DB) GetDeadLetterQueue() ([]DeadLetter, error) {
 	var dls []DeadLetter

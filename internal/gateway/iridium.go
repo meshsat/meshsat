@@ -400,6 +400,12 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		g.msgsOut.Add(1)
 		g.lastActive.Store(time.Now().Unix())
 		log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("mo_status", result.MOStatus).Int("retry", dl.Retries+1).Msg("iridium: DLQ message sent successfully")
+
+		// MT piggyback: check if there are queued MT messages from this session
+		if result.MTQueued > 0 {
+			log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued during DLQ retry, piggybacking receive")
+			go g.handleRingAlert(ctx)
+		}
 	}
 }
 
@@ -443,7 +449,7 @@ func (g *IridiumGateway) ringAlertListener(ctx context.Context) {
 	}
 }
 
-// drainDLQ attempts to send all pending DLQ messages immediately.
+// drainDLQ attempts to send all pending DLQ messages immediately, bypassing backoff timers.
 // Called opportunistically when a good signal event arrives.
 func (g *IridiumGateway) drainDLQ(ctx context.Context) {
 	if g.db == nil {
@@ -454,21 +460,109 @@ func (g *IridiumGateway) drainDLQ(ctx context.Context) {
 		retryBase = 120
 	}
 	log.Info().Int64("pending", g.dlqPending.Load()).Msg("iridium: opportunistic DLQ drain triggered by signal event")
-	g.processDLQ(ctx, retryBase)
+	g.processDLQImmediate(ctx, retryBase)
+}
+
+// processDLQImmediate sends all pending dead letters regardless of next_retry time.
+// Used when we know signal is available — no point waiting for a backoff timer.
+func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int) {
+	pending, err := g.db.GetPendingDeadLettersAll(5)
+	if err != nil {
+		log.Error().Err(err).Msg("iridium: failed to query DLQ (immediate)")
+		return
+	}
+
+	for _, dl := range pending {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		result, err := g.sat.Send(ctx, dl.Payload)
+		// Treat successful HTTP but failed SBD session as a send error
+		if err == nil && !result.MOSuccess() {
+			err = fmt.Errorf("mo_status=%d", result.MOStatus)
+		}
+		if err != nil {
+			// Increment retry, check if exhausted
+			if dl.Retries+1 >= dl.MaxRetries {
+				if expErr := g.db.ExpireDeadLetter(dl.ID, err.Error()); expErr != nil {
+					log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to expire dead letter")
+				}
+				g.dlqPending.Add(-1)
+				g.errors.Add(1)
+				log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retries", dl.Retries+1).Msg("iridium: DLQ message expired after max retries")
+			} else {
+				backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
+				if backoff > 30*time.Minute {
+					backoff = 30 * time.Minute
+				}
+				nextRetry := time.Now().Add(backoff)
+				if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
+					log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
+				}
+				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ drain retry failed, rescheduled")
+			}
+			continue
+		}
+
+		// Success
+		if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+			log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent")
+		}
+		g.dlqPending.Add(-1)
+		g.msgsOut.Add(1)
+		g.lastActive.Store(time.Now().Unix())
+		log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("mo_status", result.MOStatus).Int("retry", dl.Retries+1).Msg("iridium: DLQ message sent successfully via drain")
+
+		// MT piggyback: check if there are queued MT messages from this session
+		if result.MTQueued > 0 {
+			log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued during DLQ drain, piggybacking receive")
+			go g.handleRingAlert(ctx)
+		}
+	}
 }
 
 func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
-	log.Info().Msg("iridium: ring alert, checking mailbox")
+	g.handleRingAlertWithRetry(ctx, 0)
+}
+
+func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt int) {
+	log.Info().Int("attempt", attempt).Msg("iridium: ring alert, checking mailbox")
 
 	result, err := g.sat.MailboxCheck(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("iridium: mailbox check failed")
+		log.Error().Err(err).Int("attempt", attempt).Msg("iridium: mailbox check failed")
 		g.errors.Add(1)
+		// Retry after 30s if this was a ring-alert-triggered check (max 3 retries)
+		if attempt < 3 {
+			go func() {
+				select {
+				case <-ctx.Done():
+				case <-time.After(30 * time.Second):
+					g.handleRingAlertWithRetry(ctx, attempt+1)
+				}
+			}()
+		}
 		return
 	}
 
 	if result.MTStatus != 1 || result.MTLength == 0 {
-		return // no message waiting
+		// SBDIX succeeded but no MT message delivered. If the modem received a ring alert
+		// (attempt 0) and the gateway didn't deliver the MT, retry — the satellite may
+		// have moved out of range momentarily.
+		if attempt == 0 && !result.MOSuccess() {
+			log.Warn().Int("mo_status", result.MOStatus).Msg("iridium: SBD session failed during mailbox check, retrying in 30s")
+			go func() {
+				select {
+				case <-ctx.Done():
+				case <-time.After(30 * time.Second):
+					g.handleRingAlertWithRetry(ctx, attempt+1)
+				}
+			}()
+		}
+		return // no message waiting (or retry scheduled)
 	}
 
 	data, err := g.sat.Receive(ctx)
