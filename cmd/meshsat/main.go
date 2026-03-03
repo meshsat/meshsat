@@ -91,7 +91,12 @@ func main() {
 	// Wire TLE manager into gateway manager for pass-aware scheduling
 	gwMgr.SetPassPredictor(&tleAdapter{tleMgr})
 
-	// Start gateway manager (loads enabled configs from DB)
+	// Register receiver callback so gateways started via API also get
+	// their inbound channel drained by the processor (fixes silent drop bug).
+	gwMgr.SetReceiverStartFunc(proc.StartGatewayReceiver)
+
+	// Start gateway manager (loads enabled configs from DB).
+	// The receiver callback fires for each gateway started here.
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
@@ -99,12 +104,6 @@ func main() {
 	// Register gateway manager as dynamic provider so processor always
 	// forwards to live gateway instances (survives stop/start/reconfigure)
 	proc.SetGatewayProvider(gwMgr)
-
-	// Start inbound receivers for currently running gateways
-	for _, gw := range gwMgr.Gateways() {
-		proc.StartGatewayReceiver(ctx, gw)
-		log.Info().Str("type", gw.Type()).Msg("gateway registered with processor")
-	}
 
 	// Signal recorder — persists Iridium signal bar readings to DB
 	sigRecorder := engine.NewSignalRecorder(db, sat)

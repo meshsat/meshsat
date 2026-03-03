@@ -320,20 +320,22 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					Channel: msg.Channel,
 				}
 
-				// Rule engine evaluation for inbound messages
-				if p.rules != nil && p.rules.RuleCount() > 0 {
+				// Rule engine evaluation for inbound messages.
+				// If a matching inbound rule exists, use its dest_channel/dest_node.
+				// If no inbound rule matches, fall through to inject as-is (broadcast).
+				// This ensures outbound-only rules don't block inbound message delivery.
+				if p.rules != nil {
 					match := p.rules.EvaluateInbound(msg.Source, msg.Text)
-					if match == nil {
-						log.Debug().Str("source", msg.Source).Msg("no inbound rule matched, dropping")
-						continue
-					}
-					log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Msg("inbound rule matched")
-					req.Channel = match.Rule.DestChannel
-					if match.Rule.DestNode != nil && *match.Rule.DestNode != "" {
-						req.To = *match.Rule.DestNode
+					if match != nil {
+						log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Msg("inbound rule matched")
+						req.Channel = match.Rule.DestChannel
+						if match.Rule.DestNode != nil && *match.Rule.DestNode != "" {
+							req.To = *match.Rule.DestNode
+						}
+					} else {
+						log.Info().Str("source", msg.Source).Msg("no inbound rule matched, injecting as broadcast")
 					}
 				}
-				// If no rules engine or no rules loaded, inject as-is (legacy behavior)
 				if err := p.mesh.SendMessage(ctx, req); err != nil {
 					log.Error().Err(err).Str("source", msg.Source).Msg("failed to send gateway message to mesh")
 					continue

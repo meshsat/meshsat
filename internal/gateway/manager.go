@@ -12,14 +12,19 @@ import (
 	"meshsat/internal/transport"
 )
 
+// ReceiverStartFunc is called when a gateway starts so inbound message receivers
+// can be registered. This breaks the gateway→engine import cycle by using a callback.
+type ReceiverStartFunc func(ctx context.Context, gw Gateway)
+
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
-	db        *database.DB
-	sat       transport.SatTransport // optional, for iridium gateway
-	predictor PassPredictor          // optional, for pass scheduler
-	running   map[string]Gateway
-	mu        sync.RWMutex
-	cancelFn  context.CancelFunc
+	db              *database.DB
+	sat             transport.SatTransport // optional, for iridium gateway
+	predictor       PassPredictor          // optional, for pass scheduler
+	onReceiverStart ReceiverStartFunc      // called when a gateway starts
+	running         map[string]Gateway
+	mu              sync.RWMutex
+	cancelFn        context.CancelFunc
 }
 
 // NewManager creates a new gateway manager.
@@ -34,6 +39,12 @@ func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 // SetPassPredictor sets the pass predictor for pass-aware scheduling on Iridium gateways.
 func (m *Manager) SetPassPredictor(p PassPredictor) {
 	m.predictor = p
+}
+
+// SetReceiverStartFunc sets the callback invoked when a gateway starts,
+// so the processor can register an inbound message receiver for it.
+func (m *Manager) SetReceiverStartFunc(fn ReceiverStartFunc) {
+	m.onReceiverStart = fn
 }
 
 // GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
@@ -75,6 +86,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Lock()
 		m.running[cfg.Type] = gw
 		m.mu.Unlock()
+		if m.onReceiverStart != nil {
+			m.onReceiverStart(ctx, gw)
+		}
 		log.Info().Str("type", cfg.Type).Msg("gateway started from saved config")
 	}
 	return nil
@@ -159,6 +173,10 @@ func (m *Manager) StartGateway(ctx context.Context, gwType string) error {
 	m.mu.Lock()
 	m.running[gwType] = gw
 	m.mu.Unlock()
+
+	if m.onReceiverStart != nil {
+		m.onReceiverStart(ctx, gw)
+	}
 
 	// Mark enabled in DB
 	m.db.SaveGatewayConfig(gwType, true, cfg.Config)
