@@ -191,6 +191,9 @@ var migrations = []string{
 
 	// v7: Queue direction tracking for relay visibility
 	`ALTER TABLE dead_letters ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound';`,
+
+	// v8: Store plaintext preview alongside binary payload for display
+	`ALTER TABLE dead_letters ADD COLUMN text_preview TEXT NOT NULL DEFAULT '';`,
 }
 
 func (db *DB) migrate() error {

@@ -71,18 +71,7 @@ onUnmounted(() => {
       <div class="flex items-center h-12 px-3 lg:px-5 gap-3">
         <!-- Left: Logo + brand -->
         <router-link to="/" class="flex items-center gap-2 shrink-0">
-          <svg class="w-7 h-7 text-tactical-iridium" viewBox="0 0 24 24" fill="currentColor">
-            <!-- Satellite body -->
-            <rect x="9" y="9" width="6" height="6" rx="1" />
-            <!-- Solar panels -->
-            <rect x="1" y="10" width="6" height="4" rx="0.5" opacity="0.85" />
-            <rect x="17" y="10" width="6" height="4" rx="0.5" opacity="0.85" />
-            <!-- Signal waves -->
-            <path d="M6 4a10 10 0 000 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6" />
-            <path d="M4 3a13 13 0 000 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4" />
-            <path d="M18 16a10 10 0 000 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6" />
-            <path d="M20 15a13 13 0 000 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4" />
-          </svg>
+          <img src="/logo.png" alt="MeshSat" class="w-8 h-8 drop-shadow-[0_0_4px_rgba(45,212,191,0.4)]" />
           <span class="font-display font-semibold text-sm text-gray-200 hidden sm:block tracking-wide">MESHSAT</span>
         </router-link>
 

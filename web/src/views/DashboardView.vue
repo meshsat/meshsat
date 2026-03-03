@@ -525,7 +525,7 @@ onUnmounted(() => {
               :class="dlqStatusColor(item.status)">
               {{ item.status === 'sent' ? 'delivered' : item.status === 'received' ? 'received' : item.status || 'queued' }}
             </span>
-            <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.payload || item.message || '(binary)' }}</span>
+            <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.text_preview || '(binary)' }}</span>
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
           </div>
           <div v-if="!dlqItems.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>

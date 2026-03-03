@@ -15,6 +15,7 @@ const showCompose = ref(false)
 
 // Filter
 const filter = ref('text') // 'all', 'text', 'system'
+const selectedNode = ref(null) // null = all nodes, string = specific node mailbox
 
 // SOS
 const sosConfirming = ref(false)
@@ -23,12 +24,50 @@ const sosSending = ref(false)
 const byteCount = computed(() => new TextEncoder().encode(sendText.value).length)
 const feedEl = ref(null)
 
-const filteredMessages = computed(() => {
+// Per-node mailbox list: unique nodes with message counts
+const nodeMailboxes = computed(() => {
   const msgs = store.messages || []
+  const counts = {}
+  for (const m of msgs) {
+    const node = m.from_node || m.to_node
+    if (!node) continue
+    // Count messages from this node
+    if (m.from_node) {
+      if (!counts[m.from_node]) counts[m.from_node] = { sent: 0, recv: 0 }
+      if (m.direction === 'tx') counts[m.from_node].sent++
+      else counts[m.from_node].recv++
+    }
+  }
+  // Build sorted list
+  const list = Object.entries(counts).map(([id, c]) => {
+    const node = (store.nodes || []).find(n => n.user_id === id || String(n.num) === id || n.id === id)
+    return {
+      id,
+      name: node?.long_name || node?.short_name || id,
+      shortName: node?.short_name || id.slice(-2).toUpperCase(),
+      total: c.sent + c.recv,
+      sent: c.sent,
+      recv: c.recv
+    }
+  })
+  list.sort((a, b) => b.total - a.total)
+  return list
+})
+
+const filteredMessages = computed(() => {
+  let msgs = store.messages || []
+  // Node mailbox filter
+  if (selectedNode.value) {
+    msgs = msgs.filter(m => m.from_node === selectedNode.value || m.to_node === selectedNode.value)
+  }
   if (filter.value === 'text') return msgs.filter(m => m.portnum === 1 || m.portnum_name === 'TEXT_MESSAGE_APP')
   if (filter.value === 'system') return msgs.filter(m => m.portnum !== 1 && m.portnum_name !== 'TEXT_MESSAGE_APP')
   return msgs
 })
+
+function selectNode(nodeId) {
+  selectedNode.value = selectedNode.value === nodeId ? null : nodeId
+}
 
 // Group messages by date
 const groupedMessages = computed(() => {
@@ -262,6 +301,33 @@ onUnmounted(() => {
           + Message
         </button>
       </div>
+    </div>
+
+    <!-- Node mailbox selector -->
+    <div v-if="nodeMailboxes.length > 1" class="flex items-center gap-1.5 mb-2 flex-shrink-0 overflow-x-auto no-scrollbar">
+      <button @click="selectedNode = null"
+        class="px-2.5 py-1 rounded text-[11px] font-medium whitespace-nowrap transition-colors shrink-0"
+        :class="!selectedNode ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        All
+      </button>
+      <button v-for="mb in nodeMailboxes" :key="mb.id" @click="selectNode(mb.id)"
+        class="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium whitespace-nowrap transition-colors shrink-0"
+        :class="selectedNode === mb.id ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        <span class="w-4 h-4 rounded-full bg-gray-700 text-[8px] font-bold flex items-center justify-center text-gray-400">
+          {{ mb.shortName }}
+        </span>
+        <span class="truncate max-w-[100px]">{{ mb.name }}</span>
+        <span class="text-[9px] opacity-60">{{ mb.total }}</span>
+      </button>
+    </div>
+
+    <!-- Selected node info bar -->
+    <div v-if="selectedNode" class="flex items-center gap-2 mb-2 flex-shrink-0 px-3 py-1.5 bg-teal-900/20 border border-teal-800/30 rounded-lg">
+      <span class="text-[11px] text-teal-400">Mailbox:</span>
+      <span class="text-xs text-gray-200 font-medium">{{ nodeMailboxes.find(m => m.id === selectedNode)?.name || selectedNode }}</span>
+      <span class="text-[10px] text-gray-500">{{ filteredMessages.length }} messages</span>
+      <span class="flex-1" />
+      <button @click="selectedNode = null" class="text-[10px] text-gray-500 hover:text-gray-300">Clear</button>
     </div>
 
     <!-- Presets dropdown -->

@@ -32,7 +32,7 @@ const inboundRules = computed(() =>
 const queueItems = computed(() =>
   (store.dlq || []).map(item => ({
     ...item,
-    preview: decodePayload(item.payload),
+    preview: decodePayload(item),
     statusColor: dlqStatusColor(item.status)
   }))
 )
@@ -42,22 +42,24 @@ const composeOpen = ref(false)
 const composeMsg = ref('')
 const composePriority = ref(1)
 
-function decodePayload(payload) {
-  if (!payload) return '(empty)'
+function decodePayload(item) {
+  // Prefer text_preview (plaintext stored alongside binary payload)
+  if (item.text_preview) return item.text_preview.slice(0, 80)
+  // Fallback for legacy records without text_preview
+  if (!item.payload) return '(empty)'
+  const payload = item.payload
   if (typeof payload === 'string') {
-    // Try base64 decode
     try {
-      return atob(payload)
+      const decoded = atob(payload)
+      // If it looks like printable text, show it; otherwise show byte count
+      if (/^[\x20-\x7E\n\r\t]+$/.test(decoded)) return decoded.slice(0, 80)
+      return `(${decoded.length} bytes binary)`
     } catch {
       return payload.slice(0, 60)
     }
   }
   if (payload instanceof Array) {
-    try {
-      return new TextDecoder().decode(new Uint8Array(payload)).slice(0, 60)
-    } catch {
-      return `(${payload.length} bytes)`
-    }
+    return `(${payload.length} bytes)`
   }
   return String(payload).slice(0, 60)
 }

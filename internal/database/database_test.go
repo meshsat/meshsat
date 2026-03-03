@@ -43,7 +43,7 @@ func TestDeadLetterLifecycle(t *testing.T) {
 	nextRetry := time.Now().Add(-time.Minute) // already due
 
 	// Insert
-	if err := db.InsertDeadLetter(42, payload, 3, nextRetry, "connection timeout"); err != nil {
+	if err := db.InsertDeadLetter(42, payload, 3, nextRetry, "connection timeout", "test message"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestDeadLetterExpire(t *testing.T) {
 	db := testDB(t)
 
 	nextRetry := time.Now().Add(-time.Minute)
-	if err := db.InsertDeadLetter(99, []byte{0xFF}, 1, nextRetry, "timeout"); err != nil {
+	if err := db.InsertDeadLetter(99, []byte{0xFF}, 1, nextRetry, "timeout", ""); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestDeadLetterPrune(t *testing.T) {
 
 	// Insert and immediately mark sent
 	nextRetry := time.Now().Add(-time.Minute)
-	if err := db.InsertDeadLetter(1, []byte{0x01}, 3, nextRetry, "err"); err != nil {
+	if err := db.InsertDeadLetter(1, []byte{0x01}, 3, nextRetry, "err", ""); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	pending, _ := db.GetPendingDeadLetters(10)
@@ -154,7 +154,7 @@ func TestDeadLetterPruneKeepsRecent(t *testing.T) {
 	db := testDB(t)
 
 	nextRetry := time.Now().Add(-time.Minute)
-	db.InsertDeadLetter(1, []byte{0x01}, 3, nextRetry, "err")
+	db.InsertDeadLetter(1, []byte{0x01}, 3, nextRetry, "err", "")
 	pending, _ := db.GetPendingDeadLetters(10)
 	db.MarkDeadLetterSent(pending[0].ID)
 

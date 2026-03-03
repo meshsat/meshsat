@@ -379,38 +379,39 @@ func (db *DB) HasPacket(packetID uint32) (bool, error) {
 
 // DeadLetter represents a failed satellite send queued for retry.
 type DeadLetter struct {
-	ID         int64     `db:"id" json:"id"`
-	PacketID   uint32    `db:"packet_id" json:"packet_id"`
-	Payload    []byte    `db:"payload" json:"payload"`
-	Retries    int       `db:"retries" json:"retries"`
-	MaxRetries int       `db:"max_retries" json:"max_retries"`
-	NextRetry  time.Time `db:"next_retry" json:"next_retry"`
-	Status     string    `db:"status" json:"status"`       // pending, sent, expired, cancelled, received
-	Priority   int       `db:"priority" json:"priority"`   // 0=critical, 1=normal, 2=low
-	Direction  string    `db:"direction" json:"direction"` // outbound (mesh→sat) or inbound (sat→mesh)
-	LastError  string    `db:"last_error" json:"last_error"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	ID          int64     `db:"id" json:"id"`
+	PacketID    uint32    `db:"packet_id" json:"packet_id"`
+	Payload     []byte    `db:"payload" json:"payload"`
+	Retries     int       `db:"retries" json:"retries"`
+	MaxRetries  int       `db:"max_retries" json:"max_retries"`
+	NextRetry   time.Time `db:"next_retry" json:"next_retry"`
+	Status      string    `db:"status" json:"status"`             // pending, sent, expired, cancelled, received
+	Priority    int       `db:"priority" json:"priority"`         // 0=critical, 1=normal, 2=low
+	Direction   string    `db:"direction" json:"direction"`       // outbound (mesh→sat) or inbound (sat→mesh)
+	TextPreview string    `db:"text_preview" json:"text_preview"` // plaintext for display (binary payload is not human-readable)
+	LastError   string    `db:"last_error" json:"last_error"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // sqliteTime formats a time for SQLite DATETIME comparison (matches CURRENT_TIMESTAMP format).
 const sqliteTimeFormat = "2006-01-02 15:04:05"
 
 // InsertDeadLetter adds a failed send to the dead-letter queue with normal priority.
-func (db *DB) InsertDeadLetter(packetID uint32, payload []byte, maxRetries int, nextRetry time.Time, lastError string) error {
-	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error, priority)
-		VALUES (?, ?, ?, ?, ?, 1)`,
-		packetID, payload, maxRetries, nextRetry.UTC().Format(sqliteTimeFormat), lastError)
+func (db *DB) InsertDeadLetter(packetID uint32, payload []byte, maxRetries int, nextRetry time.Time, lastError string, textPreview string) error {
+	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error, priority, text_preview)
+		VALUES (?, ?, ?, ?, ?, 1, ?)`,
+		packetID, payload, maxRetries, nextRetry.UTC().Format(sqliteTimeFormat), lastError, textPreview)
 	return err
 }
 
 // InsertDirectDeadLetter enqueues a user-composed message directly into the DLQ.
 // packet_id=0 means not associated with a mesh packet. Priority: 0=critical, 1=normal, 2=low.
-func (db *DB) InsertDirectDeadLetter(payload []byte, priority, maxRetries int) error {
+func (db *DB) InsertDirectDeadLetter(payload []byte, priority, maxRetries int, textPreview string) error {
 	nextRetry := time.Now().UTC().Format(sqliteTimeFormat)
-	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error, priority)
-		VALUES (0, ?, ?, ?, '', ?)`,
-		payload, maxRetries, nextRetry, priority)
+	_, err := db.Exec(`INSERT INTO dead_letters (packet_id, payload, max_retries, next_retry, last_error, priority, text_preview)
+		VALUES (0, ?, ?, ?, '', ?, ?)`,
+		payload, maxRetries, nextRetry, priority, textPreview)
 	return err
 }
 
@@ -443,25 +444,24 @@ func (db *DB) GetDeadLetterQueue() ([]DeadLetter, error) {
 }
 
 // InsertSentRecord records a successful satellite send for queue visibility.
-func (db *DB) InsertSentRecord(packetID uint32, payload []byte) error {
+func (db *DB) InsertSentRecord(packetID uint32, payload []byte, textPreview string) error {
 	_, err := db.Exec(`INSERT INTO dead_letters
-		(packet_id, payload, retries, max_retries, next_retry, status, priority, direction)
-		VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP, 'sent', 1, 'outbound')`,
-		packetID, payload)
+		(packet_id, payload, retries, max_retries, next_retry, status, priority, direction, text_preview)
+		VALUES (?, ?, 0, 0, CURRENT_TIMESTAMP, 'sent', 1, 'outbound', ?)`,
+		packetID, payload, textPreview)
 	return err
 }
 
 // InsertInboundReceiveRecord records a received satellite message for queue visibility.
 func (db *DB) InsertInboundReceiveRecord(payload []byte, text string) error {
-	// Store the text as payload for display purposes
 	data := payload
 	if data == nil && text != "" {
 		data = []byte(text)
 	}
 	_, err := db.Exec(`INSERT INTO dead_letters
-		(packet_id, payload, retries, max_retries, next_retry, status, priority, direction)
-		VALUES (0, ?, 0, 0, CURRENT_TIMESTAMP, 'received', 1, 'inbound')`,
-		data)
+		(packet_id, payload, retries, max_retries, next_retry, status, priority, direction, text_preview)
+		VALUES (0, ?, 0, 0, CURRENT_TIMESTAMP, 'received', 1, 'inbound', ?)`,
+		data, text)
 	return err
 }
 

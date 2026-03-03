@@ -171,7 +171,7 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			cost := creditCost(len(data))
 			if !g.budgetAllows(cost, 1) { // default priority = normal
 				log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
-				g.enqueueDeadLetter(msg.ID, data, "budget exceeded")
+				g.enqueueDeadLetter(msg.ID, data, "budget exceeded", msg.DecodedText)
 				continue
 			}
 
@@ -179,7 +179,7 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			if err != nil {
 				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: SBD send failed, queuing to DLQ")
 				g.errors.Add(1)
-				g.enqueueDeadLetter(msg.ID, data, err.Error())
+				g.enqueueDeadLetter(msg.ID, data, err.Error(), msg.DecodedText)
 				continue
 			}
 
@@ -190,7 +190,7 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			// Record credit usage and successful send for queue visibility
 			if g.db != nil {
 				g.db.InsertCreditUsage(nil, cost, nil)
-				g.db.InsertSentRecord(msg.ID, data)
+				g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
 			}
 
 			// MT piggyback: check if there are queued MT messages from this session
@@ -246,7 +246,7 @@ func (g *IridiumGateway) budgetAllows(cost int, priority int) bool {
 }
 
 // enqueueDeadLetter persists a failed send to the database for later retry.
-func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errMsg string) {
+func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errMsg string, textPreview string) {
 	if g.db == nil {
 		return
 	}
@@ -262,7 +262,7 @@ func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errM
 		maxRetries = 3
 	}
 
-	if err := g.db.InsertDeadLetter(packetID, payload, maxRetries, nextRetry, errMsg); err != nil {
+	if err := g.db.InsertDeadLetter(packetID, payload, maxRetries, nextRetry, errMsg, textPreview); err != nil {
 		log.Error().Err(err).Uint32("packet_id", packetID).Msg("iridium: failed to enqueue dead letter")
 		return
 	}

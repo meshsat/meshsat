@@ -314,7 +314,7 @@ func (s *Server) handleEnqueueIridiumMessage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := s.db.InsertDirectDeadLetter([]byte(req.Message), req.Priority, 5); err != nil {
+	if err := s.db.InsertDirectDeadLetter([]byte(req.Message), req.Priority, 5, req.Message); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

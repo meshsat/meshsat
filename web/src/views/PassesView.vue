@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
@@ -8,6 +8,7 @@ const windowHours = ref(24)
 const cacheAgeSec = ref(-1)
 const loadingPasses = ref(false)
 const refreshing = ref(false)
+const showOverlay = ref(true)
 
 // Add location form
 const showAddForm = ref(false)
@@ -104,12 +105,73 @@ async function removeLocation(loc) {
   }
 }
 
+// Signal vs Passes overlay data
+const chartWidth = 800
+const chartHeight = 120
+const chartPadL = 30
+const chartPadR = 10
+
+const overlayData = computed(() => {
+  const now = Date.now() / 1000
+  const windowSec = windowHours.value * 3600
+  const startTs = now - windowSec * 0.1  // 10% lookback
+  const endTs = now + windowSec * 0.9
+
+  const w = chartWidth - chartPadL - chartPadR
+
+  function xPos(ts) {
+    return chartPadL + ((ts - startTs) / (endTs - startTs)) * w
+  }
+
+  // Pass bands
+  const passes = (store.passes || []).map(p => ({
+    x: Math.max(chartPadL, xPos(p.aos)),
+    w: Math.max(2, xPos(p.los) - xPos(p.aos)),
+    elev: p.peak_elev_deg,
+    sat: p.satellite,
+    active: p.is_active,
+    time: formatTime(p.aos)
+  })).filter(p => p.x < chartWidth && p.x + p.w > chartPadL)
+
+  // Signal dots
+  const signals = (store.signalHistory || []).map(s => ({
+    x: xPos(s.timestamp || s.bucket),
+    val: s.value || s.avg || 0,
+    y: chartHeight - 10 - ((s.value || s.avg || 0) / 5) * (chartHeight - 25)
+  })).filter(s => s.x >= chartPadL && s.x <= chartWidth - chartPadR)
+
+  // Time axis labels (every 3h or 6h depending on window)
+  const step = windowHours.value <= 24 ? 3 * 3600 : 6 * 3600
+  const labels = []
+  let t = Math.ceil(startTs / step) * step
+  while (t < endTs) {
+    labels.push({ x: xPos(t), label: formatTime(t) })
+    t += step
+  }
+
+  // Now line
+  const nowX = xPos(now)
+
+  return { passes, signals, labels, nowX, startTs, endTs }
+})
+
+async function fetchSignalHistory() {
+  const now = Math.floor(Date.now() / 1000)
+  const windowSec = windowHours.value * 3600
+  const from = now - Math.floor(windowSec * 0.1)
+  const to = now + Math.floor(windowSec * 0.9)
+  await store.fetchSignalHistory({ source: 'iridium', from, to, mode: 'raw', limit: 2000 })
+}
+
+watch(windowHours, fetchSignalHistory)
+
 onMounted(async () => {
   await store.fetchLocations()
   if (store.locations.length > 0) {
     selectedLocation.value = store.locations[0]
     fetchPasses()
   }
+  fetchSignalHistory()
 })
 </script>
 
@@ -199,6 +261,63 @@ onMounted(async () => {
         <span>Peak: {{ nextPass.peak_elev_deg.toFixed(0) }}deg</span>
         <span>Az: {{ nextPass.peak_azimuth.toFixed(0) }}deg</span>
       </div>
+    </div>
+
+    <!-- Signal vs Passes overlay chart -->
+    <div v-if="showOverlay && (sortedPasses.length > 0 || store.signalHistory.length > 0)"
+      class="bg-tactical-surface rounded-lg border border-tactical-border p-3 mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Signal vs Passes</span>
+        <div class="flex items-center gap-3 text-[10px] text-gray-500">
+          <span class="flex items-center gap-1"><span class="w-3 h-1.5 rounded-sm bg-tactical-iridium/30 inline-block"></span> Pass window</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Signal</span>
+        </div>
+      </div>
+      <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" class="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+        <!-- Y axis labels (signal bars 0-5) -->
+        <text v-for="i in 6" :key="i" :x="chartPadL - 4" :y="chartHeight - 10 - ((i - 1) / 5) * (chartHeight - 25)"
+          text-anchor="end" fill="#4b5563" font-size="8" dominant-baseline="middle">{{ i - 1 }}</text>
+
+        <!-- Y grid lines -->
+        <line v-for="i in 6" :key="'g'+i" :x1="chartPadL" :x2="chartWidth - chartPadR"
+          :y1="chartHeight - 10 - ((i - 1) / 5) * (chartHeight - 25)"
+          :y2="chartHeight - 10 - ((i - 1) / 5) * (chartHeight - 25)"
+          stroke="#374151" stroke-width="0.5" stroke-dasharray="2 3" />
+
+        <!-- Pass windows (vertical bands) -->
+        <rect v-for="(p, idx) in overlayData.passes" :key="'p'+idx"
+          :x="p.x" y="5" :width="p.w" :height="chartHeight - 15"
+          :fill="p.active ? 'rgba(45,212,191,0.25)' : 'rgba(45,212,191,0.1)'"
+          :stroke="p.active ? 'rgba(45,212,191,0.5)' : 'none'" stroke-width="1" rx="2" />
+
+        <!-- Pass labels (for wider bands) -->
+        <text v-for="(p, idx) in overlayData.passes.filter(pp => pp.w > 25)" :key="'pl'+idx"
+          :x="p.x + p.w / 2" y="14" text-anchor="middle" fill="#5eead4" font-size="7" opacity="0.6">
+          {{ p.elev.toFixed(0) }}°
+        </text>
+
+        <!-- Signal data points -->
+        <circle v-for="(s, idx) in overlayData.signals" :key="'s'+idx"
+          :cx="s.x" :cy="s.y" r="2.5"
+          :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'"
+          opacity="0.8" />
+
+        <!-- Signal line connecting dots -->
+        <polyline v-if="overlayData.signals.length > 1"
+          :points="overlayData.signals.map(s => `${s.x},${s.y}`).join(' ')"
+          fill="none" stroke="#10b981" stroke-width="1" opacity="0.4" />
+
+        <!-- Now line -->
+        <line :x1="overlayData.nowX" :x2="overlayData.nowX" y1="5" :y2="chartHeight - 5"
+          stroke="#f59e0b" stroke-width="1" stroke-dasharray="3 2" opacity="0.6" />
+        <text :x="overlayData.nowX" :y="chartHeight - 1" text-anchor="middle" fill="#f59e0b" font-size="7">now</text>
+
+        <!-- X axis time labels -->
+        <text v-for="(l, idx) in overlayData.labels" :key="'l'+idx"
+          :x="l.x" :y="chartHeight - 1" text-anchor="middle" fill="#6b7280" font-size="7">
+          {{ l.label }}
+        </text>
+      </svg>
     </div>
 
     <!-- Pass list -->

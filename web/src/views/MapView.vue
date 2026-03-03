@@ -1,16 +1,25 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
 const mapEl = ref(null)
 const mapReady = ref(false)
 const mapError = ref(false)
+const showMessages = ref(true)
+const showTracks = ref(true)
+
+// Per-node visibility toggles (reactive map: nodeId → boolean)
+const nodeVisibility = reactive({})
 
 let L = null
 let map = null
 let markerLayer = null
 let trackLayer = null
+let messageLayer = null
+
+// Distinct colors for nodes
+const nodeColors = ['#06b6d4', '#8b5cf6', '#f97316', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#ef4444']
 
 function signalColor(q) {
   if (!q) return '#6b7280'
@@ -19,6 +28,38 @@ function signalColor(q) {
   if (u === 'FAIR') return '#f59e0b'
   return '#ef4444'
 }
+
+// Build a lookup: nodeId → {lat, lon, name, color}
+const nodePositionMap = computed(() => {
+  const m = {}
+  for (const node of store.nodes) {
+    if (node.latitude && node.longitude && node.latitude !== 0 && node.longitude !== 0) {
+      m[node.id] = {
+        lat: node.latitude,
+        lon: node.longitude,
+        name: node.name || node.long_name || node.id,
+        signal_quality: node.signal_quality
+      }
+    }
+  }
+  return m
+})
+
+// Unique nodes with positions (for checkboxes)
+const nodesWithPositions = computed(() => {
+  return store.nodes.filter(n =>
+    n.latitude && n.longitude && n.latitude !== 0 && n.longitude !== 0
+  )
+})
+
+// Messages that have a locatable sender
+const locatableMessages = computed(() => {
+  const posMap = nodePositionMap.value
+  return store.messages.filter(msg => {
+    const nodeId = msg.from_node
+    return nodeId && posMap[nodeId]
+  })
+})
 
 async function initMap() {
   try {
@@ -36,6 +77,7 @@ async function initMap() {
 
     markerLayer = L.layerGroup().addTo(map)
     trackLayer = L.layerGroup().addTo(map)
+    messageLayer = L.layerGroup().addTo(map)
     mapReady.value = true
     updateMap()
   } catch {
@@ -47,12 +89,12 @@ function updateMap() {
   if (!map || !L || !markerLayer) return
   markerLayer.clearLayers()
   trackLayer.clearLayers()
+  if (messageLayer) messageLayer.clearLayers()
 
-  const nodesWithPos = store.nodes.filter(n =>
-    n.latitude && n.longitude && n.latitude !== 0 && n.longitude !== 0
-  )
+  const visibleNodes = nodesWithPositions.value.filter(n => nodeVisibility[n.id] !== false)
 
-  for (const node of nodesWithPos) {
+  // Node markers
+  for (const node of visibleNodes) {
     const color = signalColor(node.signal_quality)
     const m = L.circleMarker([node.latitude, node.longitude], {
       radius: 8, fillColor: color, fillOpacity: 0.8, color, weight: 2
@@ -64,37 +106,106 @@ function updateMap() {
     markerLayer.addLayer(m)
   }
 
-  // Track lines from position history
-  const groups = {}
-  for (const p of store.positions) {
-    const nid = p.node_id ?? p.from
-    if (!nid || !p.latitude || !p.longitude) continue
-    if (!groups[nid]) groups[nid] = []
-    groups[nid].push([Number(p.latitude), Number(p.longitude)])
-  }
-  const colors = ['#06b6d4', '#8b5cf6', '#f97316', '#ec4899']
-  let ci = 0
-  for (const nid in groups) {
-    if (groups[nid].length < 2) continue
-    L.polyline(groups[nid], { color: colors[ci % colors.length], weight: 2, opacity: 0.6, dashArray: '4 4' }).addTo(trackLayer)
-    ci++
+  // Track lines
+  if (showTracks.value) {
+    const visibleIds = new Set(visibleNodes.map(n => String(n.id)))
+    const groups = {}
+    for (const p of store.positions) {
+      const nid = String(p.node_id ?? p.from)
+      if (!nid || !p.latitude || !p.longitude) continue
+      if (!visibleIds.has(nid)) continue
+      if (!groups[nid]) groups[nid] = []
+      groups[nid].push([Number(p.latitude), Number(p.longitude)])
+    }
+    let ci = 0
+    for (const nid in groups) {
+      if (groups[nid].length < 2) continue
+      L.polyline(groups[nid], { color: nodeColors[ci % nodeColors.length], weight: 2, opacity: 0.6, dashArray: '4 4' }).addTo(trackLayer)
+      ci++
+    }
   }
 
-  if (nodesWithPos.length) {
-    const bounds = L.latLngBounds(nodesWithPos.map(n => [n.latitude, n.longitude]))
+  // Message markers
+  if (showMessages.value && messageLayer) {
+    const posMap = nodePositionMap.value
+    const visibleIds = new Set(visibleNodes.map(n => String(n.id)))
+
+    for (const msg of store.messages) {
+      const nid = String(msg.from_node)
+      if (!visibleIds.has(nid)) continue
+      const pos = posMap[nid]
+      if (!pos) continue
+
+      // Small offset for multiple messages at same position
+      const jitter = (msg.id % 100) * 0.00005
+      const lat = pos.lat + jitter
+      const lon = pos.lon + jitter
+
+      const isText = msg.portnum === 1
+      const color = isText ? '#2dd4bf' : '#94a3b8'
+      const m = L.circleMarker([lat, lon], {
+        radius: 4, fillColor: color, fillOpacity: 0.9, color: '#1e293b', weight: 1
+      })
+
+      const time = msg.created_at ? new Date(msg.created_at).toLocaleString() : ''
+      let popup = `<div style="max-width:200px"><strong>${pos.name}</strong><br>`
+      popup += `<span style="font-size:11px;color:#888">${time}</span><br>`
+      if (msg.decoded_text) {
+        popup += `<span style="font-family:monospace;font-size:12px">${msg.decoded_text.slice(0, 120)}</span>`
+      } else {
+        popup += `<em style="color:#888">${msg.portnum_name || 'portnum ' + msg.portnum}</em>`
+      }
+      popup += '</div>'
+      m.bindPopup(popup)
+      messageLayer.addLayer(m)
+    }
+  }
+
+  // Fit bounds
+  const allVisible = visibleNodes.map(n => [n.latitude, n.longitude])
+  if (allVisible.length) {
+    const bounds = L.latLngBounds(allVisible)
     map.fitBounds(bounds.pad(0.2), { maxZoom: 15 })
   }
 }
 
+function toggleNode(nodeId) {
+  nodeVisibility[nodeId] = nodeVisibility[nodeId] === false ? true : false
+  updateMap()
+}
+
+function toggleAll(show) {
+  for (const n of nodesWithPositions.value) {
+    nodeVisibility[n.id] = show
+  }
+  updateMap()
+}
+
+function nodeColor(idx) {
+  return nodeColors[idx % nodeColors.length]
+}
+
 watch(() => store.nodes, updateMap, { deep: true })
 watch(() => store.positions, updateMap, { deep: true })
+watch(() => store.messages, updateMap, { deep: true })
+watch(showMessages, updateMap)
+watch(showTracks, updateMap)
 
 onMounted(async () => {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+  // Initialize all node visibility to true
+  for (const n of store.nodes) {
+    if (nodeVisibility[n.id] === undefined) nodeVisibility[n.id] = true
+  }
   await Promise.all([
     store.fetchNodes(),
-    store.fetchPositions({ since, limit: 500 })
+    store.fetchPositions({ since, limit: 500 }),
+    store.fetchMessages({ limit: 200 })
   ])
+  // Set visibility for any newly loaded nodes
+  for (const n of store.nodes) {
+    if (nodeVisibility[n.id] === undefined) nodeVisibility[n.id] = true
+  }
   await initMap()
 })
 
@@ -104,35 +215,86 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto space-y-6">
+  <div class="max-w-5xl mx-auto space-y-4">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-bold">Map</h1>
+      <h1 class="text-lg font-semibold text-gray-200">Map</h1>
       <button
-        @click="store.fetchNodes().then(updateMap)"
-        class="px-3 py-1.5 text-sm rounded-lg bg-gray-800 text-gray-300 hover:text-white transition-colors"
+        @click="store.fetchNodes().then(() => store.fetchMessages({ limit: 200 })).then(updateMap)"
+        class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
       >
         Refresh
       </button>
     </div>
 
-    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-      <div v-if="!mapError" ref="mapEl" class="w-full h-[500px] bg-gray-800" />
+    <!-- Map container -->
+    <div class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+      <div v-if="!mapError" ref="mapEl" class="w-full h-[450px] sm:h-[500px] bg-gray-800" />
       <div v-else class="p-8 text-center text-gray-500">
         Map unavailable. Nodes with GPS will display coordinates below.
       </div>
     </div>
 
-    <!-- Legend -->
-    <div class="flex items-center gap-4 text-xs text-gray-500">
-      <div class="flex items-center gap-1.5">
-        <span class="w-3 h-3 rounded-full bg-emerald-500"></span> Good
+    <!-- Controls bar -->
+    <div class="flex flex-wrap items-center gap-4 text-xs">
+      <!-- Legend -->
+      <div class="flex items-center gap-3 text-gray-500">
+        <div class="flex items-center gap-1.5">
+          <span class="w-3 h-3 rounded-full bg-emerald-500"></span> Good
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3 h-3 rounded-full bg-amber-500"></span> Fair
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-3 h-3 rounded-full bg-red-500"></span> Bad
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-teal-400"></span>
+          <span>Msg</span>
+        </div>
       </div>
-      <div class="flex items-center gap-1.5">
-        <span class="w-3 h-3 rounded-full bg-amber-500"></span> Fair
+
+      <span class="flex-1" />
+
+      <!-- Layer toggles -->
+      <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+        <input type="checkbox" v-model="showMessages" class="rounded bg-gray-800 border-gray-600 text-teal-500 focus:ring-0 w-3 h-3" />
+        Messages
+      </label>
+      <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+        <input type="checkbox" v-model="showTracks" class="rounded bg-gray-800 border-gray-600 text-teal-500 focus:ring-0 w-3 h-3" />
+        Tracks
+      </label>
+    </div>
+
+    <!-- Per-node filter checkboxes -->
+    <div v-if="nodesWithPositions.length" class="bg-tactical-surface rounded-lg border border-tactical-border p-3">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Node Filters</span>
+        <div class="flex gap-2">
+          <button @click="toggleAll(true)" class="text-[10px] text-teal-400 hover:text-teal-300">Show all</button>
+          <button @click="toggleAll(false)" class="text-[10px] text-gray-500 hover:text-gray-300">Hide all</button>
+        </div>
       </div>
-      <div class="flex items-center gap-1.5">
-        <span class="w-3 h-3 rounded-full bg-red-500"></span> Bad
+      <div class="flex flex-wrap gap-2">
+        <label v-for="(node, idx) in nodesWithPositions" :key="node.id"
+          class="flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-xs transition-colors"
+          :class="nodeVisibility[node.id] !== false
+            ? 'bg-gray-700/50 text-gray-200'
+            : 'bg-gray-800/30 text-gray-600'">
+          <input type="checkbox"
+            :checked="nodeVisibility[node.id] !== false"
+            @change="toggleNode(node.id)"
+            class="rounded bg-gray-800 border-gray-600 text-teal-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full" :style="{ backgroundColor: nodeColor(idx) }"></span>
+          {{ node.name || node.long_name || node.id }}
+        </label>
       </div>
+    </div>
+
+    <!-- Stats summary -->
+    <div class="text-[11px] text-gray-600">
+      {{ nodesWithPositions.length }} nodes with GPS
+      <span v-if="locatableMessages.length"> &middot; {{ locatableMessages.length }} locatable messages</span>
     </div>
   </div>
 </template>
