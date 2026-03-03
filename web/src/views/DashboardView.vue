@@ -182,7 +182,7 @@ onUnmounted(() => {
       <h2 class="text-sm font-semibold text-gray-300 mb-4">Message Flow</h2>
 
       <!-- Desktop: horizontal -->
-      <div class="hidden md:flex items-start gap-0">
+      <div class="hidden md:flex items-center gap-0">
         <!-- Main chain: Mesh → HAL → MeshSat -->
         <template v-for="(hop, idx) in hops" :key="hop.id">
           <div class="flex flex-col items-center min-w-[100px]">
@@ -222,17 +222,22 @@ onUnmounted(() => {
           </div>
         </template>
 
-        <!-- Branch: MeshSat → MQTT + Iridium -->
-        <div class="flex flex-col items-start gap-3 ml-1">
-          <!-- MQTT branch -->
-          <div class="flex items-center gap-0">
-            <div class="flex items-center h-10 px-1">
-              <svg class="w-8 h-4 text-gray-600" viewBox="0 0 32 16">
-                <line x1="0" y1="8" x2="24" y2="8" stroke="currentColor" stroke-width="2"
-                      :stroke-dasharray="mqttHop.status === 'green' ? 'none' : '4 3'" />
-                <path d="M22 4l6 4-6 4" fill="none" stroke="currentColor" stroke-width="2"/>
-              </svg>
-            </div>
+        <!-- Branch: MeshSat → MQTT + Iridium (Y-fork, side by side) -->
+        <div class="flex items-center ml-1">
+          <!-- Fork lines SVG -->
+          <svg class="w-10 h-24 text-gray-600 shrink-0" viewBox="0 0 40 96">
+            <!-- Top branch line -->
+            <path d="M0 48 L16 48 L32 20" fill="none" stroke="currentColor" stroke-width="2"
+                  :stroke-dasharray="mqttHop.status === 'green' ? 'none' : '4 3'" />
+            <path d="M28 14 L34 20 L28 26" fill="none" stroke="currentColor" stroke-width="2"/>
+            <!-- Bottom branch line -->
+            <path d="M0 48 L16 48 L32 76" fill="none" stroke="currentColor" stroke-width="2"
+                  :stroke-dasharray="iridiumHop.status === 'green' ? 'none' : '4 3'" />
+            <path d="M28 70 L34 76 L28 82" fill="none" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <!-- Gateway nodes stacked -->
+          <div class="flex flex-col gap-4">
+            <!-- MQTT -->
             <div class="flex flex-col items-center min-w-[100px]">
               <div class="w-16 h-10 rounded-lg border flex items-center justify-center gap-2"
                    :class="mqttHop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
@@ -246,17 +251,7 @@ onUnmounted(() => {
               <p class="text-xs text-gray-400 mt-1 text-center">{{ mqttHop.label }}</p>
               <p class="text-[10px] text-gray-600 text-center">{{ mqttHop.detail }}</p>
             </div>
-          </div>
-
-          <!-- Iridium branch -->
-          <div class="flex items-center gap-0">
-            <div class="flex items-center h-10 px-1">
-              <svg class="w-8 h-4 text-gray-600" viewBox="0 0 32 16">
-                <line x1="0" y1="8" x2="24" y2="8" stroke="currentColor" stroke-width="2"
-                      :stroke-dasharray="iridiumHop.status === 'green' ? 'none' : '4 3'" />
-                <path d="M22 4l6 4-6 4" fill="none" stroke="currentColor" stroke-width="2"/>
-              </svg>
-            </div>
+            <!-- Iridium -->
             <div class="flex flex-col items-center min-w-[100px]">
               <div class="w-16 h-10 rounded-lg border flex items-center justify-center gap-2"
                    :class="iridiumHop.status === 'green' ? 'border-emerald-800 bg-emerald-950/30' :
