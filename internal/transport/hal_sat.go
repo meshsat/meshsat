@@ -139,6 +139,19 @@ func (t *HALSatTransport) Send(ctx context.Context, data []byte) (*SBDResult, er
 	return &result, nil
 }
 
+// SendText transmits a plain-text SBD message (AT+SBDWT, max 120 chars).
+// The message appears as readable text on the RockBLOCK portal.
+func (t *HALSatTransport) SendText(ctx context.Context, text string) (*SBDResult, error) {
+	var result SBDResult
+	if err := t.postJSONResp(ctx, "/iridium/send", map[string]interface{}{
+		"text":   text,
+		"format": "text",
+	}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // Receive retrieves a pending MT message.
 func (t *HALSatTransport) Receive(ctx context.Context) ([]byte, error) {
 	var resp struct {

@@ -27,9 +27,9 @@ func DefaultIridiumConfig() IridiumConfig {
 		ForwardPortnums: []int{1}, // TEXT_MESSAGE only by default
 		Compression:     "compact",
 		AutoReceive:     true,
-		PollInterval:    300, // 5 minutes — ensures MT messages are fetched even without ring alerts
+		PollInterval:    1800, // 30 minutes — safety net for missed ring alerts (SBDSX pre-check avoids credit waste)
 		MaxTextLength:   320,
-		IncludePosition: true,
+		IncludePosition: false, // GPS position not populated — omit to save 10 bytes per message
 		DLQMaxRetries:   3,
 		DLQRetryBase:    120,
 		MinSignalBars:   1,

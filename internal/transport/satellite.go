@@ -44,6 +44,7 @@ type SBDResult struct {
 type SatTransport interface {
 	Subscribe(ctx context.Context) (<-chan SatEvent, error)
 	Send(ctx context.Context, data []byte) (*SBDResult, error)
+	SendText(ctx context.Context, text string) (*SBDResult, error)
 	Receive(ctx context.Context) ([]byte, error)
 	MailboxCheck(ctx context.Context) (*SBDResult, error)
 	GetSignal(ctx context.Context) (*SignalInfo, error)

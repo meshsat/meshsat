@@ -87,10 +87,10 @@ func (g *IridiumGateway) Start(ctx context.Context) error {
 	}
 
 	// Start poll worker for MT message retrieval.
-	// If poll_interval is 0 (legacy config), use 300s as fallback to ensure
-	// inbound messages are fetched even when ring alerts don't fire reliably.
+	// If poll_interval is 0 (legacy config), use 1800s as fallback.
+	// The SBDSX pre-check in MailboxCheck prevents credit waste on each poll.
 	if g.config.PollInterval <= 0 {
-		g.config.PollInterval = 300
+		g.config.PollInterval = 1800
 	}
 	g.wg.Add(1)
 	go g.pollWorker(ctx)
@@ -152,6 +152,8 @@ func (g *IridiumGateway) Type() string {
 }
 
 // sendWorker dequeues messages and sends them via SBD (slow, 10-60s per message).
+// Uses plaintext (AT+SBDWT) for short text messages so they're human-readable on
+// the RockBLOCK portal, and compact binary (AT+SBDWB) for everything else.
 func (g *IridiumGateway) sendWorker(ctx context.Context) {
 	defer g.wg.Done()
 
@@ -160,24 +162,45 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.outCh:
-			data, err := EncodeCompact(msg, g.config.IncludePosition)
-			if err != nil {
-				log.Error().Err(err).Msg("iridium: encode failed")
-				g.errors.Add(1)
-				continue
+			// Decide encoding: plaintext for short ASCII text messages, binary for the rest
+			usePlaintext := canSendPlaintext(msg)
+
+			var data []byte
+			var cost int
+			var result *transport.SBDResult
+			var err error
+
+			if usePlaintext {
+				text := msg.DecodedText
+				cost = creditCost(len(text))
+				if !g.budgetAllows(cost, 1) {
+					log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
+					g.enqueueDeadLetter(msg.ID, []byte(text), "budget exceeded", text)
+					continue
+				}
+
+				result, err = g.sat.SendText(ctx, text)
+				data = []byte(text) // for DLQ/record
+			} else {
+				data, err = EncodeCompact(msg, g.config.IncludePosition)
+				if err != nil {
+					log.Error().Err(err).Msg("iridium: encode failed")
+					g.errors.Add(1)
+					continue
+				}
+
+				cost = creditCost(len(data))
+				if !g.budgetAllows(cost, 1) {
+					log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
+					g.enqueueDeadLetter(msg.ID, data, "budget exceeded", msg.DecodedText)
+					continue
+				}
+
+				result, err = g.sat.Send(ctx, data)
 			}
 
-			// Budget enforcement: calculate cost and check limits
-			cost := creditCost(len(data))
-			if !g.budgetAllows(cost, 1) { // default priority = normal
-				log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
-				g.enqueueDeadLetter(msg.ID, data, "budget exceeded", msg.DecodedText)
-				continue
-			}
-
-			result, err := g.sat.Send(ctx, data)
 			if err != nil {
-				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: SBD send failed, queuing to DLQ")
+				log.Error().Err(err).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD send failed, queuing to DLQ")
 				g.errors.Add(1)
 				g.enqueueDeadLetter(msg.ID, data, err.Error(), msg.DecodedText)
 				continue
@@ -185,7 +208,7 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
-			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("iridium: SBD sent")
+			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD sent")
 
 			// Record credit usage and successful send for queue visibility
 			if g.db != nil {
@@ -200,6 +223,27 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// canSendPlaintext returns true if a message can be sent as readable ASCII text
+// via AT+SBDWT (max 120 chars, no control characters). This makes messages
+// human-readable on the RockBLOCK portal instead of appearing as hex.
+func canSendPlaintext(msg *transport.MeshMessage) bool {
+	// Only text messages qualify
+	if msg.PortNum != 1 { // TEXT_MESSAGE
+		return false
+	}
+	text := msg.DecodedText
+	if len(text) == 0 || len(text) > 120 {
+		return false
+	}
+	// Must be printable ASCII (no control chars, no high bytes)
+	for _, b := range []byte(text) {
+		if b < 0x20 || b > 0x7E {
+			return false
+		}
+	}
+	return true
 }
 
 // creditCost calculates SBD credits for a payload (1 credit per 50 bytes, minimum 1).
