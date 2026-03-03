@@ -40,6 +40,13 @@ type SBDResult struct {
 	StatusText string `json:"status_text"`
 }
 
+// MOSuccess returns true if the MO (Mobile Originated) transfer succeeded.
+// MO status 0-4 indicates successful transfer to the GSS; values >= 5 are failures
+// (e.g. 32 = no network service).
+func (r *SBDResult) MOSuccess() bool {
+	return r.MOStatus >= 0 && r.MOStatus <= 4
+}
+
 // SatTransport abstracts how MeshSat talks to the satellite modem.
 type SatTransport interface {
 	Subscribe(ctx context.Context) (<-chan SatEvent, error)

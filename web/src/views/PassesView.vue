@@ -14,6 +14,12 @@ const showOverlay = ref(true)
 const showAddForm = ref(false)
 const newLoc = ref({ name: '', lat: '', lon: '', alt_m: 0 })
 
+// Chart hover state
+const hoverInfo = ref(null)
+
+// Collapsible pass list
+const showPassList = ref(false)
+
 const windowOptions = [12, 24, 48, 72]
 
 const sortedPasses = computed(() => {
@@ -105,40 +111,75 @@ async function removeLocation(loc) {
   }
 }
 
-// Signal vs Passes overlay data
-const chartWidth = 800
-const chartHeight = 120
-const chartPadL = 30
-const chartPadR = 10
+// Chart dimensions
+const chartWidth = 900
+const chartHeight = 240
+const plotTop = 15
+const plotBottom = 210
+const plotHeight = 195
+const padL = 45
+const padR = 45
+const plotWidth = chartWidth - padL - padR
 
-const overlayData = computed(() => {
+// Elevation Y-axis ticks
+const elevTicks = [0, 15, 30, 45, 60, 75, 90]
+
+const chartData = computed(() => {
   const now = Date.now() / 1000
   const windowSec = windowHours.value * 3600
   const startTs = now - windowSec * 0.1  // 10% lookback
   const endTs = now + windowSec * 0.9
 
-  const w = chartWidth - chartPadL - chartPadR
-
   function xPos(ts) {
-    return chartPadL + ((ts - startTs) / (endTs - startTs)) * w
+    return padL + ((ts - startTs) / (endTs - startTs)) * plotWidth
   }
 
-  // Pass bands
-  const passes = (store.passes || []).map(p => ({
-    x: Math.max(chartPadL, xPos(p.aos)),
-    w: Math.max(2, xPos(p.los) - xPos(p.aos)),
-    elev: p.peak_elev_deg,
-    sat: p.satellite,
-    active: p.is_active,
-    time: formatTime(p.aos)
-  })).filter(p => p.x < chartWidth && p.x + p.w > chartPadL)
+  function signalY(val) {
+    return plotBottom - (val / 5) * plotHeight
+  }
 
-  // Signal dots
-  const signals = (store.signalHistory || []).map(s => ({
-    x: xPos(s.timestamp || s.bucket),
-    val: s.value || s.avg || 0,
-    y: chartHeight - 10 - ((s.value || s.avg || 0) / 5) * (chartHeight - 25)
-  })).filter(s => s.x >= chartPadL && s.x <= chartWidth - chartPadR)
+  function elevY(deg) {
+    return plotBottom - (deg / 90) * plotHeight
+  }
+
+  // Pass triangles: each pass becomes a triangle where height = peak elevation
+  const passes = (store.passes || []).map(p => {
+    const x1 = Math.max(padL, xPos(p.aos))
+    const x2 = Math.min(chartWidth - padR, xPos(p.los))
+    const xMid = (x1 + x2) / 2
+    const peakY = elevY(p.peak_elev_deg)
+    const baseline = plotBottom
+    return {
+      path: `M ${x1},${baseline} L ${xMid},${peakY} L ${x2},${baseline} Z`,
+      x1, x2, xMid, peakY, baseline,
+      elev: p.peak_elev_deg,
+      sat: p.satellite,
+      active: p.is_active,
+      aos: p.aos,
+      los: p.los,
+      time: formatTime(p.aos)
+    }
+  }).filter(p => p.x2 > padL && p.x1 < chartWidth - padR)
+
+  // Signal points
+  const signals = (store.signalHistory || []).map(s => {
+    const val = s.value || s.avg || 0
+    return {
+      x: xPos(s.timestamp || s.bucket),
+      val,
+      y: signalY(val),
+      ts: s.timestamp || s.bucket
+    }
+  }).filter(s => s.x >= padL && s.x <= chartWidth - padR)
+
+  // Signal area path (closed polygon under the signal line)
+  let signalAreaPath = ''
+  let signalLinePts = ''
+  if (signals.length > 1) {
+    const pts = signals.map(s => `${s.x},${s.y}`)
+    signalLinePts = pts.join(' ')
+    signalAreaPath = `M ${signals[0].x},${plotBottom} L ${pts.join(' L ')} L ${signals[signals.length - 1].x},${plotBottom} Z`
+  }
 
   // Time axis labels (every 3h or 6h depending on window)
   const step = windowHours.value <= 24 ? 3 * 3600 : 6 * 3600
@@ -152,8 +193,79 @@ const overlayData = computed(() => {
   // Now line
   const nowX = xPos(now)
 
-  return { passes, signals, labels, nowX, startTs, endTs }
+  // Signal Y-axis ticks (0-5 bars)
+  const signalTicks = [0, 1, 2, 3, 4, 5].map(v => ({
+    val: v,
+    y: signalY(v)
+  }))
+
+  // Elevation Y-axis ticks
+  const elevTickData = elevTicks.map(d => ({
+    deg: d,
+    y: elevY(d)
+  }))
+
+  // Grid lines (at signal bar positions)
+  const gridLines = signalTicks.map(t => t.y)
+
+  return { passes, signals, signalAreaPath, signalLinePts, labels, nowX, startTs, endTs, signalTicks, elevTickData, gridLines, xPos }
 })
+
+function onChartHover(event) {
+  const svg = event.currentTarget
+  const rect = svg.getBoundingClientRect()
+  const mouseX = ((event.clientX - rect.left) / rect.width) * chartWidth
+
+  if (mouseX < padL || mouseX > chartWidth - padR) {
+    hoverInfo.value = null
+    return
+  }
+
+  const data = chartData.value
+  // Convert mouseX to timestamp
+  const frac = (mouseX - padL) / plotWidth
+  const ts = data.startTs + frac * (data.endTs - data.startTs)
+
+  // Find active pass at this timestamp
+  let passLabel = null
+  let passElev = null
+  for (const p of data.passes) {
+    if (ts >= p.aos && ts <= p.los) {
+      passLabel = p.sat
+      passElev = p.elev
+      break
+    }
+  }
+
+  // Find nearest signal point
+  let signalVal = null
+  if (data.signals.length > 0) {
+    let closest = data.signals[0]
+    let minDist = Math.abs(data.signals[0].x - mouseX)
+    for (const s of data.signals) {
+      const d = Math.abs(s.x - mouseX)
+      if (d < minDist) {
+        minDist = d
+        closest = s
+      }
+    }
+    if (minDist < 30) {
+      signalVal = closest.val
+    }
+  }
+
+  hoverInfo.value = {
+    x: mouseX,
+    time: formatTime(ts),
+    passLabel,
+    passElev,
+    signalVal
+  }
+}
+
+function clearHover() {
+  hoverInfo.value = null
+}
 
 async function fetchSignalHistory() {
   const now = Math.floor(Date.now() / 1000)
@@ -269,92 +381,178 @@ onMounted(async () => {
       <div class="flex items-center justify-between mb-2">
         <span class="text-[10px] text-gray-500 uppercase tracking-wider">Signal vs Passes</span>
         <div class="flex items-center gap-3 text-[10px] text-gray-500">
-          <span class="flex items-center gap-1"><span class="w-3 h-1.5 rounded-sm bg-tactical-iridium/30 inline-block"></span> Pass window</span>
+          <span class="flex items-center gap-1">
+            <svg width="12" height="8" class="inline-block"><polygon points="0,8 6,1 12,8" fill="rgba(45,212,191,0.25)" stroke="rgba(45,212,191,0.4)" stroke-width="0.5"/></svg>
+            Pass
+          </span>
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Signal</span>
         </div>
       </div>
-      <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" class="w-full h-auto" preserveAspectRatio="xMidYMid meet">
-        <!-- Y axis labels (signal bars 0-5) -->
-        <text v-for="i in 6" :key="i" :x="chartPadL - 4" :y="chartHeight - 10 - ((i - 1) / 5) * (chartHeight - 25)"
-          text-anchor="end" fill="#4b5563" font-size="8" dominant-baseline="middle">{{ i - 1 }}</text>
+      <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" class="w-full h-auto" preserveAspectRatio="xMidYMid meet"
+        @mousemove="onChartHover" @mouseleave="clearHover" style="cursor: crosshair;">
+        <defs>
+          <!-- Pass triangle gradient -->
+          <linearGradient id="passGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgb(45,212,191)" stop-opacity="0.25" />
+            <stop offset="100%" stop-color="rgb(45,212,191)" stop-opacity="0.03" />
+          </linearGradient>
+          <!-- Active pass gradient -->
+          <linearGradient id="passGradActive" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgb(45,212,191)" stop-opacity="0.45" />
+            <stop offset="100%" stop-color="rgb(45,212,191)" stop-opacity="0.08" />
+          </linearGradient>
+          <!-- Signal area gradient -->
+          <linearGradient id="signalAreaGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#10b981" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="#10b981" stop-opacity="0.02" />
+          </linearGradient>
+          <!-- Clip to plot area -->
+          <clipPath id="plotClip">
+            <rect :x="padL" :y="plotTop" :width="plotWidth" :height="plotBottom - plotTop" />
+          </clipPath>
+        </defs>
 
-        <!-- Y grid lines -->
-        <line v-for="i in 6" :key="'g'+i" :x1="chartPadL" :x2="chartWidth - chartPadR"
-          :y1="chartHeight - 10 - ((i - 1) / 5) * (chartHeight - 25)"
-          :y2="chartHeight - 10 - ((i - 1) / 5) * (chartHeight - 25)"
+        <!-- Horizontal grid lines -->
+        <line v-for="y in chartData.gridLines" :key="'grid'+y"
+          :x1="padL" :x2="chartWidth - padR" :y1="y" :y2="y"
           stroke="#374151" stroke-width="0.5" stroke-dasharray="2 3" />
 
-        <!-- Pass windows (vertical bands) -->
-        <rect v-for="(p, idx) in overlayData.passes" :key="'p'+idx"
-          :x="p.x" y="5" :width="p.w" :height="chartHeight - 15"
-          :fill="p.active ? 'rgba(45,212,191,0.25)' : 'rgba(45,212,191,0.1)'"
-          :stroke="p.active ? 'rgba(45,212,191,0.5)' : 'none'" stroke-width="1" rx="2" />
-
-        <!-- Pass labels (for wider bands) -->
-        <text v-for="(p, idx) in overlayData.passes.filter(pp => pp.w > 25)" :key="'pl'+idx"
-          :x="p.x + p.w / 2" y="14" text-anchor="middle" fill="#5eead4" font-size="7" opacity="0.6">
-          {{ p.elev.toFixed(0) }}°
+        <!-- Left Y-axis labels (signal bars 0-5) -->
+        <text v-for="t in chartData.signalTicks" :key="'sl'+t.val"
+          :x="padL - 6" :y="t.y" text-anchor="end" fill="#6b7280" font-size="8" dominant-baseline="middle">
+          {{ t.val }}
         </text>
+        <text :x="padL - 6" :y="plotTop - 5" text-anchor="end" fill="#6b7280" font-size="7">bars</text>
 
-        <!-- Signal data points -->
-        <circle v-for="(s, idx) in overlayData.signals" :key="'s'+idx"
-          :cx="s.x" :cy="s.y" r="2.5"
-          :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'"
-          opacity="0.8" />
+        <!-- Right Y-axis labels (elevation degrees) -->
+        <text v-for="t in chartData.elevTickData" :key="'el'+t.deg"
+          :x="chartWidth - padR + 6" :y="t.y" text-anchor="start" fill="#5eead4" font-size="8" dominant-baseline="middle" opacity="0.5">
+          {{ t.deg }}
+        </text>
+        <text :x="chartWidth - padR + 6" :y="plotTop - 5" text-anchor="start" fill="#5eead4" font-size="7" opacity="0.5">deg</text>
 
-        <!-- Signal line connecting dots -->
-        <polyline v-if="overlayData.signals.length > 1"
-          :points="overlayData.signals.map(s => `${s.x},${s.y}`).join(' ')"
-          fill="none" stroke="#10b981" stroke-width="1" opacity="0.4" />
+        <!-- Plot area (clipped) -->
+        <g clip-path="url(#plotClip)">
+          <!-- Pass triangles (background layer) -->
+          <path v-for="(p, idx) in chartData.passes" :key="'pt'+idx"
+            :d="p.path" :fill="p.active ? 'url(#passGradActive)' : 'url(#passGrad)'"
+            :stroke="p.active ? 'rgba(45,212,191,0.5)' : 'rgba(45,212,191,0.2)'" stroke-width="1" />
 
-        <!-- Now line -->
-        <line :x1="overlayData.nowX" :x2="overlayData.nowX" y1="5" :y2="chartHeight - 5"
-          stroke="#f59e0b" stroke-width="1" stroke-dasharray="3 2" opacity="0.6" />
-        <text :x="overlayData.nowX" :y="chartHeight - 1" text-anchor="middle" fill="#f59e0b" font-size="7">now</text>
+          <!-- Pass peak labels (for wider triangles) -->
+          <text v-for="(p, idx) in chartData.passes.filter(pp => (pp.x2 - pp.x1) > 20)" :key="'plbl'+idx"
+            :x="p.xMid" :y="p.peakY - 4" text-anchor="middle" fill="#5eead4" font-size="7" opacity="0.6">
+            {{ p.elev.toFixed(0) }}
+          </text>
+
+          <!-- Signal area fill -->
+          <path v-if="chartData.signalAreaPath" :d="chartData.signalAreaPath" fill="url(#signalAreaGrad)" />
+
+          <!-- Signal line -->
+          <polyline v-if="chartData.signalLinePts"
+            :points="chartData.signalLinePts"
+            fill="none" stroke="#10b981" stroke-width="1.5" opacity="0.7" />
+
+          <!-- Signal dots -->
+          <circle v-for="(s, idx) in chartData.signals" :key="'sd'+idx"
+            :cx="s.x" :cy="s.y" r="2.5"
+            :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'"
+            opacity="0.85" />
+
+          <!-- Now line -->
+          <line :x1="chartData.nowX" :x2="chartData.nowX" :y1="plotTop" :y2="plotBottom"
+            stroke="#f59e0b" stroke-width="1" stroke-dasharray="3 2" opacity="0.6" />
+        </g>
+
+        <!-- Now label (outside clip) -->
+        <text :x="chartData.nowX" :y="plotBottom + 18" text-anchor="middle" fill="#f59e0b" font-size="7">now</text>
 
         <!-- X axis time labels -->
-        <text v-for="(l, idx) in overlayData.labels" :key="'l'+idx"
-          :x="l.x" :y="chartHeight - 1" text-anchor="middle" fill="#6b7280" font-size="7">
+        <text v-for="(l, idx) in chartData.labels" :key="'tl'+idx"
+          :x="l.x" :y="plotBottom + 18" text-anchor="middle" fill="#6b7280" font-size="7">
           {{ l.label }}
         </text>
+
+        <!-- Hover crosshair + tooltip -->
+        <g v-if="hoverInfo">
+          <!-- Vertical crosshair -->
+          <line :x1="hoverInfo.x" :x2="hoverInfo.x" :y1="plotTop" :y2="plotBottom"
+            stroke="#9ca3af" stroke-width="0.5" stroke-dasharray="2 2" opacity="0.5" />
+
+          <!-- Tooltip background -->
+          <rect :x="hoverInfo.x + (hoverInfo.x > chartWidth / 2 ? -120 : 8)" :y="plotTop + 2"
+            width="112" :height="hoverInfo.passLabel ? 42 : 28" rx="3"
+            fill="#1f2937" stroke="#374151" stroke-width="0.5" opacity="0.95" />
+
+          <!-- Tooltip text -->
+          <text :x="hoverInfo.x + (hoverInfo.x > chartWidth / 2 ? -114 : 14)" :y="plotTop + 14"
+            fill="#d1d5db" font-size="8">
+            {{ hoverInfo.time }} UTC
+          </text>
+          <text v-if="hoverInfo.passLabel"
+            :x="hoverInfo.x + (hoverInfo.x > chartWidth / 2 ? -114 : 14)" :y="plotTop + 25"
+            fill="#5eead4" font-size="8">
+            {{ hoverInfo.passLabel }} {{ hoverInfo.passElev?.toFixed(0) }}deg
+          </text>
+          <text v-if="hoverInfo.signalVal !== null"
+            :x="hoverInfo.x + (hoverInfo.x > chartWidth / 2 ? -114 : 14)"
+            :y="plotTop + (hoverInfo.passLabel ? 36 : 25)"
+            :fill="hoverInfo.signalVal >= 3 ? '#10b981' : hoverInfo.signalVal >= 1 ? '#f59e0b' : '#ef4444'" font-size="8">
+            Signal: {{ hoverInfo.signalVal }} bars
+          </text>
+        </g>
       </svg>
     </div>
 
-    <!-- Pass list -->
-    <div v-if="loadingPasses" class="text-center text-gray-500 py-8 text-sm">Calculating passes...</div>
-    <div v-else-if="sortedPasses.length === 0" class="text-center text-gray-500 py-8 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
-      No passes found for the selected location and time window.
-    </div>
-    <div v-else class="space-y-1">
-      <div v-for="pass in sortedPasses" :key="`${pass.satellite}-${pass.aos}`"
-        class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors"
-        :class="pass.is_active ? 'bg-tactical-iridium/10 border border-tactical-iridium/20' : pass.isPast ? 'bg-gray-800/30 opacity-50' : 'bg-gray-800/50 hover:bg-gray-800'">
-
-        <!-- Active indicator -->
-        <span v-if="pass.is_active" class="w-2 h-2 rounded-full bg-tactical-iridium animate-pulse shrink-0" />
-        <span v-else class="w-2 h-2 rounded-full bg-gray-700 shrink-0" />
-
-        <!-- Satellite name -->
-        <span class="text-[11px] text-gray-300 w-32 truncate shrink-0">{{ pass.satellite }}</span>
-
-        <!-- Time -->
-        <span class="text-[11px] font-mono text-gray-400 w-20 shrink-0">
-          {{ formatTime(pass.aos) }}-{{ formatTime(pass.los) }}
+    <!-- Collapsible pass list -->
+    <div class="mb-4">
+      <button v-if="!loadingPasses && sortedPasses.length > 0"
+        @click="showPassList = !showPassList"
+        class="flex items-center gap-2 w-full px-3 py-2 rounded-lg bg-gray-800/50 hover:bg-gray-800 border border-gray-700/50 transition-colors text-left">
+        <svg class="w-3 h-3 text-gray-500 transition-transform" :class="showPassList ? 'rotate-90' : ''"
+          viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 2 L8 6 L4 10" />
+        </svg>
+        <span class="text-[11px] text-gray-400">
+          {{ sortedPasses.length }} passes
+          <span v-if="nextPass" class="text-gray-500 ml-2">Next: {{ nextPass.satellite }} at {{ formatTime(nextPass.aos) }}</span>
         </span>
+      </button>
 
-        <!-- Date -->
-        <span class="text-[10px] text-gray-600 w-14 shrink-0">{{ formatDate(pass.aos) }}</span>
+      <div v-if="loadingPasses" class="text-center text-gray-500 py-8 text-sm">Calculating passes...</div>
+      <div v-else-if="sortedPasses.length === 0" class="text-center text-gray-500 py-8 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
+        No passes found for the selected location and time window.
+      </div>
+      <div v-else-if="showPassList" class="space-y-1 mt-2">
+        <div v-for="pass in sortedPasses" :key="`${pass.satellite}-${pass.aos}`"
+          class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors"
+          :class="pass.is_active ? 'bg-tactical-iridium/10 border border-tactical-iridium/20' : pass.isPast ? 'bg-gray-800/30 opacity-50' : 'bg-gray-800/50 hover:bg-gray-800'">
 
-        <!-- Duration -->
-        <span class="text-[10px] font-mono text-gray-500 w-8 shrink-0">{{ formatDuration(pass.duration_min) }}</span>
+          <!-- Active indicator -->
+          <span v-if="pass.is_active" class="w-2 h-2 rounded-full bg-tactical-iridium animate-pulse shrink-0" />
+          <span v-else class="w-2 h-2 rounded-full bg-gray-700 shrink-0" />
 
-        <!-- Elevation bar -->
-        <div class="flex-1 flex items-center gap-2">
-          <div class="flex-1 h-1.5 rounded-full bg-gray-800 overflow-hidden">
-            <div class="h-full rounded-full transition-all" :class="elevColor(pass.peak_elev_deg)"
-              :style="{ width: `${Math.min(100, pass.peak_elev_deg / 90 * 100)}%` }" />
+          <!-- Satellite name -->
+          <span class="text-[11px] text-gray-300 w-32 truncate shrink-0">{{ pass.satellite }}</span>
+
+          <!-- Time -->
+          <span class="text-[11px] font-mono text-gray-400 w-20 shrink-0">
+            {{ formatTime(pass.aos) }}-{{ formatTime(pass.los) }}
+          </span>
+
+          <!-- Date -->
+          <span class="text-[10px] text-gray-600 w-14 shrink-0">{{ formatDate(pass.aos) }}</span>
+
+          <!-- Duration -->
+          <span class="text-[10px] font-mono text-gray-500 w-8 shrink-0">{{ formatDuration(pass.duration_min) }}</span>
+
+          <!-- Elevation bar -->
+          <div class="flex-1 flex items-center gap-2">
+            <div class="flex-1 h-1.5 rounded-full bg-gray-800 overflow-hidden">
+              <div class="h-full rounded-full transition-all" :class="elevColor(pass.peak_elev_deg)"
+                :style="{ width: `${Math.min(100, pass.peak_elev_deg / 90 * 100)}%` }" />
+            </div>
+            <span class="text-[10px] font-mono text-gray-500 w-10 text-right">{{ pass.peak_elev_deg.toFixed(0) }}deg</span>
           </div>
-          <span class="text-[10px] font-mono text-gray-500 w-10 text-right">{{ pass.peak_elev_deg.toFixed(0) }}deg</span>
         </div>
       </div>
     </div>

@@ -206,6 +206,16 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 				continue
 			}
 
+			// Check if SBD session actually succeeded (mo_status 0-4).
+			// HTTP request can succeed but SBD transfer fail (e.g. mo_status=32 = no network).
+			if !result.MOSuccess() {
+				log.Warn().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).
+					Bool("plaintext", usePlaintext).Msg("iridium: SBD session failed, queuing to DLQ")
+				g.errors.Add(1)
+				g.enqueueDeadLetter(msg.ID, data, fmt.Sprintf("mo_status=%d", result.MOStatus), msg.DecodedText)
+				continue
+			}
+
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD sent")
@@ -354,6 +364,10 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		}
 
 		result, err := g.sat.Send(ctx, dl.Payload)
+		// Treat successful HTTP but failed SBD session as a send error
+		if err == nil && !result.MOSuccess() {
+			err = fmt.Errorf("mo_status=%d", result.MOStatus)
+		}
 		if err != nil {
 			// Increment retry, check if exhausted
 			if dl.Retries+1 >= dl.MaxRetries {
