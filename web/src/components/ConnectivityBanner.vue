@@ -4,22 +4,15 @@ import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
 
-const meshStatus = computed(() => {
-  if (!store.status) return { color: 'text-gray-500', label: 'Unknown' }
-  return store.status.connected
-    ? { color: 'text-emerald-400', label: `Connected (${store.status.num_nodes || 0} nodes)` }
-    : { color: 'text-red-400', label: 'Disconnected' }
-})
+const meshConnected = computed(() => store.status?.connected ?? false)
+const nodeCount = computed(() => store.status?.num_nodes || 0)
 
-const satStatus = computed(() => {
-  const sig = store.iridiumSignal
-  if (!sig) return { color: 'text-gray-500', label: 'N/A', bars: 0 }
-  const colors = ['text-red-400', 'text-red-400', 'text-amber-400', 'text-amber-400', 'text-emerald-400', 'text-emerald-400']
-  return {
-    color: colors[sig.bars] || 'text-gray-500',
-    label: `${sig.bars} bar${sig.bars !== 1 ? 's' : ''}`,
-    bars: sig.bars
-  }
+const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
+const satColor = computed(() => {
+  if (satBars.value < 0) return 'text-gray-600'
+  if (satBars.value === 0) return 'text-red-400'
+  if (satBars.value <= 2) return 'text-amber-400'
+  return 'text-emerald-400'
 })
 
 const dlqCount = computed(() => {
@@ -29,22 +22,21 @@ const dlqCount = computed(() => {
 </script>
 
 <template>
-  <div class="bg-gray-900/80 border-b border-gray-800 px-4 py-1.5 flex items-center gap-4 text-xs flex-wrap z-50">
-    <!-- Mesh -->
+  <div class="bg-gray-900/90 border-b border-gray-800/80 px-4 py-1 flex items-center gap-4 text-[11px] z-50">
     <div class="flex items-center gap-1.5">
-      <span class="w-2 h-2 rounded-full" :class="meshStatus.color.replace('text-', 'bg-')"></span>
-      <span class="text-gray-400">Mesh:</span>
-      <span :class="meshStatus.color">{{ meshStatus.label }}</span>
+      <span class="w-1.5 h-1.5 rounded-full" :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'"></span>
+      <span class="text-gray-500">Mesh</span>
+      <span :class="meshConnected ? 'text-gray-300' : 'text-red-400'">{{ meshConnected ? `${nodeCount} nodes` : 'Offline' }}</span>
     </div>
-
-    <span class="text-gray-700">|</span>
-
-    <!-- Satellite -->
     <div class="flex items-center gap-1.5">
-      <span class="w-2 h-2 rounded-full" :class="satStatus.color.replace('text-', 'bg-')"></span>
-      <span class="text-gray-400">Sat:</span>
-      <span :class="satStatus.color">{{ satStatus.label }}</span>
-      <span v-if="dlqCount > 0" class="text-amber-400">({{ dlqCount }} queued)</span>
+      <div class="flex items-end gap-px h-3">
+        <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
+          :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-emerald-400') : 'bg-gray-700'"
+          :style="{ height: `${3 + i * 2}px` }"></span>
+      </div>
+      <span class="text-gray-500">Sat</span>
+      <span :class="satColor">{{ satBars >= 0 ? satBars + '/5' : '--' }}</span>
+      <span v-if="dlqCount > 0" class="text-amber-400/80">{{ dlqCount }}q</span>
     </div>
   </div>
 </template>

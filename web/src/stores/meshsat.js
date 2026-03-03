@@ -19,7 +19,14 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     try {
       const data = await api.get('/messages', params)
       const list = Array.isArray(data) ? data : (data.messages || data.items || [])
-      messages.value = list
+      if (params.offset && params.offset > 0) {
+        // Append for "load more"
+        const existingIds = new Set(messages.value.map(m => m.id))
+        const newMsgs = list.filter(m => !existingIds.has(m.id))
+        messages.value = [...messages.value, ...newMsgs]
+      } else {
+        messages.value = list
+      }
       return list
     } catch (e) {
       error.value = e.message
