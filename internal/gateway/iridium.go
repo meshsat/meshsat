@@ -25,13 +25,14 @@ type IridiumGateway struct {
 
 	outCh chan *transport.MeshMessage // buffered outbound queue
 
-	connected  atomic.Bool
-	msgsIn     atomic.Int64
-	msgsOut    atomic.Int64
-	errors     atomic.Int64
-	dlqPending atomic.Int64
-	lastActive atomic.Int64
-	startTime  time.Time
+	connected      atomic.Bool
+	ringAlertActive atomic.Bool // prevents concurrent handleRingAlert goroutines
+	msgsIn         atomic.Int64
+	msgsOut        atomic.Int64
+	errors         atomic.Int64
+	dlqPending     atomic.Int64
+	lastActive     atomic.Int64
+	startTime      time.Time
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -622,6 +623,11 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 }
 
 func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
+	if !g.ringAlertActive.CompareAndSwap(false, true) {
+		log.Debug().Msg("iridium: ring alert already in progress, skipping")
+		return
+	}
+	defer g.ringAlertActive.Store(false)
 	g.handleRingAlertWithRetry(ctx, 0)
 }
 

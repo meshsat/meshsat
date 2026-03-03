@@ -54,7 +54,6 @@ onMounted(() => {
   store.fetchIridiumSignalFast()
   pollTimer = setInterval(() => {
     store.fetchStatus()
-    store.fetchIridiumSignalFast()
   }, 10000)
 })
 

@@ -200,6 +200,8 @@ function dlqStatusColor(status) {
   if (status === 'pending') return 'text-amber-400 bg-amber-400/10'
   if (status === 'queued' || !status) return 'text-gray-400 bg-gray-400/10'
   if (status === 'failed') return 'text-red-400 bg-red-400/10'
+  if (status === 'expired') return 'text-orange-400 bg-orange-400/10'
+  if (status === 'cancelled') return 'text-gray-500 bg-gray-500/10'
   return 'text-gray-400 bg-gray-400/10'
 }
 

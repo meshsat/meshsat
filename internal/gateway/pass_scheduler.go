@@ -476,15 +476,15 @@ func (ps *PassScheduler) timingForMode(mode ScheduleMode) TimingParams {
 	}
 	activePoll := time.Duration(ps.config.ActivePollSec) * time.Second
 	if activePoll <= 0 {
-		activePoll = 20 * time.Second
+		activePoll = 60 * time.Second
 	}
 
 	switch mode {
 	case ModeActive:
 		return TimingParams{
 			PollInterval:     activePoll,
-			DLQCheckInterval: 10 * time.Second,
-			DLQRetryBase:     15 * time.Second,
+			DLQCheckInterval: 30 * time.Second,
+			DLQRetryBase:     30 * time.Second,
 		}
 	case ModePreWake:
 		return TimingParams{

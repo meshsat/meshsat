@@ -32,7 +32,11 @@ func NewHALSatTransport(halURL, apiKey string) *HALSatTransport {
 }
 
 // Subscribe opens an SSE connection to HAL's Iridium event stream.
+// Cancels any existing subscription before creating a new one.
 func (t *HALSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, error) {
+	if t.cancel != nil {
+		t.cancel() // clean up any existing subscription first
+	}
 	ch := make(chan SatEvent, 32)
 	ctx, t.cancel = context.WithCancel(ctx)
 
