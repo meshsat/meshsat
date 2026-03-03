@@ -675,23 +675,32 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 		return
 	}
 
+	if len(data) == 0 {
+		log.Warn().Msg("iridium: received empty MT buffer")
+		return
+	}
+
 	// Check for ACK message type (3 bytes: type + MOMSN)
-	if len(data) >= 1 && data[0] == MsgTypeACK {
+	if data[0] == MsgTypeACK {
 		g.handleACK(data)
 		return
 	}
 
 	// Check for SOS message type
-	if len(data) >= 1 && data[0] == MsgTypeSOS {
+	if data[0] == MsgTypeSOS {
 		log.Warn().Msg("iridium: received SOS message via satellite")
 		// SOS is handled at the API level; this is just a relay
 	}
 
+	// Try compact binary decode first (MeshSat-to-MeshSat messages).
+	// If that fails, treat the raw data as plain text (RockBLOCK web, email-to-SBD, etc.).
 	inbound, err := DecodeCompact(data)
 	if err != nil {
-		log.Error().Err(err).Msg("iridium: decode failed")
-		g.errors.Add(1)
-		return
+		log.Info().Int("bytes", len(data)).Msg("iridium: not compact binary, treating as plain text")
+		inbound = &InboundMessage{
+			Text:   string(data),
+			Source: "iridium",
+		}
 	}
 
 	if inbound.To == "" && g.config.DefaultDestination != "" {
