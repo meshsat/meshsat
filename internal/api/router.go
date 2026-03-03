@@ -10,6 +10,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
 
@@ -19,6 +20,8 @@ type Server struct {
 	mesh       transport.MeshTransport
 	processor  *engine.Processor
 	gwManager  *gateway.Manager
+	ruleEngine *rules.Engine
+	sos        *SOSState
 	webHandler http.Handler
 }
 
@@ -30,6 +33,11 @@ func NewServer(db *database.DB, mesh transport.MeshTransport, proc *engine.Proce
 		processor: proc,
 		gwManager: gwMgr,
 	}
+}
+
+// SetRuleEngine sets the forwarding rules engine for rule CRUD reload.
+func (s *Server) SetRuleEngine(e *rules.Engine) {
+	s.ruleEngine = e
 }
 
 // SetWebHandler sets the handler for serving the web UI.
@@ -97,6 +105,29 @@ func (s *Server) Router() http.Handler {
 
 		// Waypoints (Phase 2)
 		r.Post("/waypoints", s.handleSendWaypoint)
+
+		// Forwarding rules
+		r.Get("/rules", s.handleGetRules)
+		r.Post("/rules", s.handleCreateRule)
+		r.Get("/rules/{id}", s.handleGetRule)
+		r.Put("/rules/{id}", s.handleUpdateRule)
+		r.Delete("/rules/{id}", s.handleDeleteRule)
+		r.Post("/rules/{id}/enable", s.handleEnableRule)
+		r.Post("/rules/{id}/disable", s.handleDisableRule)
+		r.Post("/rules/reorder", s.handleReorderRules)
+		r.Get("/rules/{id}/stats", s.handleGetRuleStats)
+
+		// Preset messages
+		r.Get("/presets", s.handleGetPresets)
+		r.Post("/presets", s.handleCreatePreset)
+		r.Put("/presets/{id}", s.handleUpdatePreset)
+		r.Delete("/presets/{id}", s.handleDeletePreset)
+		r.Post("/presets/{id}/send", s.handleSendPreset)
+
+		// SOS
+		r.Post("/sos/activate", s.handleSOSActivate)
+		r.Post("/sos/cancel", s.handleSOSCancel)
+		r.Get("/sos/status", s.handleSOSStatus)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

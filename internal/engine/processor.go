@@ -9,7 +9,10 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/dedup"
 	"meshsat/internal/gateway"
+	"meshsat/internal/ratelimit"
+	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
 
@@ -25,6 +28,9 @@ type Processor struct {
 	mesh     transport.MeshTransport
 	gateways []gateway.Gateway          // static list (boot-time only, kept for backward compat)
 	gwProv   GatewayProvider            // dynamic provider — takes precedence when set
+	dedup    *dedup.Deduplicator        // composite-key deduplication
+	rules    *rules.Engine              // forwarding rules engine
+	meshLim  *ratelimit.TokenBucket     // rate limiter for mesh injection
 	subs     []chan transport.MeshEvent // SSE re-broadcast subscribers
 	subsMu   sync.RWMutex
 }
@@ -32,9 +38,20 @@ type Processor struct {
 // NewProcessor creates a new event processor.
 func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
 	return &Processor{
-		db:   db,
-		mesh: mesh,
+		db:      db,
+		mesh:    mesh,
+		meshLim: ratelimit.NewMeshInjectionLimiter(),
 	}
+}
+
+// SetDeduplicator sets the in-memory deduplicator.
+func (p *Processor) SetDeduplicator(d *dedup.Deduplicator) {
+	p.dedup = d
+}
+
+// SetRuleEngine sets the forwarding rules engine.
+func (p *Processor) SetRuleEngine(e *rules.Engine) {
+	p.rules = e
 }
 
 // AddGateway registers a static gateway for message forwarding.
@@ -118,14 +135,21 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 		return
 	}
 
-	// Dedupe by packet ID
-	exists, err := p.db.HasPacket(msg.ID)
-	if err != nil {
-		log.Error().Err(err).Msg("dedupe check failed")
-	}
-	if exists {
-		log.Debug().Uint32("packet_id", msg.ID).Msg("duplicate packet, skipping")
-		return
+	// Dedupe: prefer in-memory composite-key check, fall back to DB
+	if p.dedup != nil {
+		if p.dedup.IsDuplicate(msg.From, msg.ID) {
+			log.Debug().Uint32("packet_id", msg.ID).Msg("duplicate packet (dedup), skipping")
+			return
+		}
+	} else {
+		exists, err := p.db.HasPacket(msg.ID)
+		if err != nil {
+			log.Error().Err(err).Msg("dedupe check failed")
+		}
+		if exists {
+			log.Debug().Uint32("packet_id", msg.ID).Msg("duplicate packet (db), skipping")
+			return
+		}
 	}
 
 	dbMsg := &database.Message{
@@ -151,7 +175,48 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 	log.Debug().Uint32("packet_id", msg.ID).Str("portnum", msg.PortNumName).Msg("message persisted")
 
-	// Forward to active gateways (prefer dynamic provider over static list)
+	// Rule engine evaluation (if configured)
+	if p.rules != nil && p.rules.RuleCount() > 0 {
+		match := p.rules.Evaluate(&msg)
+		if match != nil {
+			// Check keyword filter
+			if !rules.MatchesKeyword(match.Rule, msg.DecodedText) {
+				return
+			}
+
+			log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Str("dest", match.Rule.DestType).Msg("rule matched, forwarding")
+
+			activeGateways := p.gateways
+			if p.gwProv != nil {
+				activeGateways = p.gwProv.Gateways()
+			}
+
+			for _, gw := range activeGateways {
+				// Route based on dest_type
+				switch match.Rule.DestType {
+				case "both":
+					if err := gw.Forward(context.Background(), &msg); err != nil {
+						log.Warn().Err(err).Str("gateway", gw.Type()).Msg("rule forward failed")
+					}
+				case "iridium":
+					if gw.Type() == "iridium" {
+						if err := gw.Forward(context.Background(), &msg); err != nil {
+							log.Warn().Err(err).Msg("iridium rule forward failed")
+						}
+					}
+				case "mqtt":
+					if gw.Type() == "mqtt" {
+						if err := gw.Forward(context.Background(), &msg); err != nil {
+							log.Warn().Err(err).Msg("mqtt rule forward failed")
+						}
+					}
+				}
+			}
+		}
+		return // rule engine handled (or no match = local-only)
+	}
+
+	// Fallback: forward to all active gateways (legacy behavior when no rules configured)
 	activeGateways := p.gateways
 	if p.gwProv != nil {
 		activeGateways = p.gwProv.Gateways()
@@ -250,6 +315,12 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					return
 				}
 				log.Info().Str("source", msg.Source).Str("text", msg.Text).Msg("gateway inbound message")
+
+				// Rate limit mesh injection from external sources
+				if p.meshLim != nil && !p.meshLim.Allow() {
+					log.Warn().Str("source", msg.Source).Msg("mesh injection rate limited, dropping")
+					continue
+				}
 
 				// Send to mesh
 				req := transport.SendRequest{

@@ -1,0 +1,32 @@
+services:
+  meshsat:
+    build: .
+    ports:
+      - "6050:6050"
+    environment:
+      - MESHSAT_MODE=standalone
+      - MESHSAT_PORT=6050
+      - MESHSAT_DB_PATH=/data/meshsat.db
+      - HAL_URL=http://hal:6005
+    volumes:
+      - meshsat-data:/data
+    depends_on:
+      hal:
+        condition: service_started
+    restart: unless-stopped
+
+  hal:
+    image: cubeos-hal:latest
+    privileged: true
+    network_mode: host
+    environment:
+      - CUBEOS_TIER=standalone
+      - HAL_PORT=6005
+    devices:
+      - /dev:/dev
+    volumes:
+      - /sys:/sys:ro
+    restart: unless-stopped
+
+volumes:
+  meshsat-data:

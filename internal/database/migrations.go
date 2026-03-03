@@ -89,6 +89,64 @@ var migrations = []string{
 	// v3: Add priority to dead-letter queue (0=critical, 1=normal, 2=low)
 	`ALTER TABLE dead_letters ADD COLUMN priority INTEGER NOT NULL DEFAULT 1;
 	CREATE INDEX IF NOT EXISTS idx_dead_letters_priority ON dead_letters(priority, next_retry);`,
+
+	// v4: Forwarding rules, preset messages, delivery tracking, credit usage
+	`CREATE TABLE IF NOT EXISTS forwarding_rules (
+		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+		name                TEXT NOT NULL,
+		enabled             INTEGER NOT NULL DEFAULT 1,
+		priority            INTEGER NOT NULL DEFAULT 1,
+		source_type         TEXT NOT NULL DEFAULT 'any',
+		source_channels     TEXT,
+		source_nodes        TEXT,
+		source_portnums     TEXT,
+		source_keyword      TEXT,
+		dest_type           TEXT NOT NULL,
+		sat_priority        INTEGER NOT NULL DEFAULT 1,
+		sat_max_delay_sec   INTEGER NOT NULL DEFAULT 0,
+		sat_include_pos     INTEGER NOT NULL DEFAULT 0,
+		sat_max_text_len    INTEGER NOT NULL DEFAULT 320,
+		position_precision  INTEGER NOT NULL DEFAULT 32,
+		rate_limit_per_min  INTEGER NOT NULL DEFAULT 0,
+		rate_limit_window   INTEGER NOT NULL DEFAULT 60,
+		match_count         INTEGER NOT NULL DEFAULT 0,
+		last_match_at       TEXT,
+		created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS preset_messages (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		name        TEXT NOT NULL,
+		text        TEXT NOT NULL,
+		destination TEXT NOT NULL DEFAULT 'broadcast',
+		icon        TEXT,
+		sort_order  INTEGER NOT NULL DEFAULT 0,
+		created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	INSERT INTO preset_messages (name, text, destination, sort_order) VALUES
+		('I''m OK', 'All good, checking in on schedule.', 'broadcast', 1),
+		('Need Assistance', 'Requesting non-emergency assistance at current position.', 'broadcast', 2),
+		('Returning', 'Heading back to base. ETA will follow.', 'broadcast', 3),
+		('Position Report', '[GPS]', 'broadcast', 4);
+
+	ALTER TABLE messages ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'received';
+	ALTER TABLE messages ADD COLUMN delivery_error TEXT;
+	ALTER TABLE messages ADD COLUMN composed_at TEXT;
+	ALTER TABLE messages ADD COLUMN satellite_cost INTEGER DEFAULT 0;
+	CREATE INDEX IF NOT EXISTS idx_messages_delivery ON messages(delivery_status);
+
+	CREATE TABLE IF NOT EXISTS credit_usage (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id     INTEGER,
+		credits     INTEGER NOT NULL,
+		message_id  INTEGER,
+		date        TEXT NOT NULL DEFAULT (date('now')),
+		created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (rule_id) REFERENCES forwarding_rules(id) ON DELETE SET NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_credit_usage_date ON credit_usage(date);`,
 }
 
 func (db *DB) migrate() error {

@@ -179,6 +179,14 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 				continue
 			}
 
+			// Budget enforcement: calculate cost and check limits
+			cost := creditCost(len(data))
+			if !g.budgetAllows(cost, 1) { // default priority = normal
+				log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
+				g.enqueueDeadLetter(msg.ID, data, "budget exceeded")
+				continue
+			}
+
 			result, err := g.sat.Send(ctx, data)
 			if err != nil {
 				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: SBD send failed, queuing to DLQ")
@@ -190,8 +198,62 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("iridium: SBD sent")
+
+			// Record credit usage
+			if g.db != nil {
+				g.db.InsertCreditUsage(nil, cost, nil)
+			}
+
+			// MT piggyback: check if there are queued MT messages from this session
+			if result.MTQueued > 0 {
+				log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued, piggybacking receive")
+				go g.handleRingAlert(ctx)
+			}
 		}
 	}
+}
+
+// creditCost calculates SBD credits for a payload (1 credit per 50 bytes, minimum 1).
+func creditCost(payloadLen int) int {
+	if payloadLen <= 0 {
+		return 1
+	}
+	cost := (payloadLen + 49) / 50
+	if cost < 1 {
+		return 1
+	}
+	return cost
+}
+
+// budgetAllows checks if a send is within daily/monthly credit limits.
+// Priority 0 (critical) always passes, using the critical reserve.
+func (g *IridiumGateway) budgetAllows(cost int, priority int) bool {
+	if g.db == nil {
+		return true
+	}
+
+	// Critical priority always allowed
+	if priority == 0 {
+		return true
+	}
+
+	// Check daily budget
+	if g.config.DailyBudget > 0 {
+		daily, err := g.db.GetDailyCreditTotal()
+		if err == nil && daily+cost > g.config.DailyBudget {
+			return false
+		}
+	}
+
+	// Check monthly budget
+	if g.config.MonthlyBudget > 0 {
+		monthly, err := g.db.GetMonthlyCreditTotal()
+		if err == nil && monthly+cost > g.config.MonthlyBudget {
+			return false
+		}
+	}
+
+	return true
 }
 
 // enqueueDeadLetter persists a failed send to the database for later retry.
@@ -369,6 +431,18 @@ func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
 		return
 	}
 
+	// Check for ACK message type (3 bytes: type + MOMSN)
+	if len(data) >= 1 && data[0] == MsgTypeACK {
+		g.handleACK(data)
+		return
+	}
+
+	// Check for SOS message type
+	if len(data) >= 1 && data[0] == MsgTypeSOS {
+		log.Warn().Msg("iridium: received SOS message via satellite")
+		// SOS is handled at the API level; this is just a relay
+	}
+
 	inbound, err := DecodeCompact(data)
 	if err != nil {
 		log.Error().Err(err).Msg("iridium: decode failed")
@@ -389,6 +463,29 @@ func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
 	default:
 		log.Warn().Msg("iridium: inbound channel full")
 	}
+}
+
+// handleACK processes an app-level ACK message (3 bytes: type + MOMSN uint16 BE).
+func (g *IridiumGateway) handleACK(data []byte) {
+	if len(data) < 3 {
+		log.Warn().Msg("iridium: ACK too short")
+		return
+	}
+	momsn := binary.BigEndian.Uint16(data[1:3])
+	log.Info().Uint16("momsn", momsn).Msg("iridium: received ACK for MOMSN")
+
+	// Update delivery status to confirmed for the matching message
+	if g.db != nil {
+		g.db.UpdateDeliveryStatusByPacket(uint32(momsn), "confirmed")
+	}
+}
+
+// EncodeACK creates a 3-byte ACK payload for a given MOMSN.
+func EncodeACK(momsn uint16) []byte {
+	buf := make([]byte, 3)
+	buf[0] = MsgTypeACK
+	binary.BigEndian.PutUint16(buf[1:3], momsn)
+	return buf
 }
 
 // pollWorker periodically checks for MT messages.
@@ -415,6 +512,10 @@ const (
 	flagHasSender     = 0x08
 	maxSBDPayload     = 340
 	positionFieldSize = 10 // lat(4) + lon(4) + alt(2)
+
+	// Extended message types (byte 0 values > 0x0F)
+	MsgTypeACK = 0x05 // App-level end-to-end ACK (3 bytes total)
+	MsgTypeSOS = 0x06 // SOS emergency alert (16 bytes)
 )
 
 // EncodeCompact encodes a mesh message into compact binary for SBD transmission.

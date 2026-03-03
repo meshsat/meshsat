@@ -15,6 +15,9 @@ type IridiumConfig struct {
 	DLQRetryBase       int    `json:"dlq_retry_base_secs"`           // base retry interval in seconds (default 120, exponential backoff)
 	DefaultDestination string `json:"default_destination,omitempty"` // node ID or name to unicast inbound messages (empty = broadcast)
 	MinSignalBars      int    `json:"min_signal_bars"`               // minimum signal bars to trigger opportunistic DLQ drain (default 1)
+	DailyBudget        int    `json:"daily_budget"`                  // max credits per day, 0 = unlimited
+	MonthlyBudget      int    `json:"monthly_budget"`                // max credits per month, 0 = unlimited
+	CriticalReserve    int    `json:"critical_reserve"`              // % reserved for priority 0 (default 20)
 }
 
 // DefaultIridiumConfig returns sensible defaults.
@@ -30,6 +33,9 @@ func DefaultIridiumConfig() IridiumConfig {
 		DLQMaxRetries:   3,
 		DLQRetryBase:    120,
 		MinSignalBars:   1,
+		DailyBudget:     0, // unlimited
+		MonthlyBudget:   0, // unlimited
+		CriticalReserve: 20,
 	}
 }
 

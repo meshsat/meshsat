@@ -8,21 +8,25 @@ import (
 
 // Message represents a persisted mesh message.
 type Message struct {
-	ID          int64     `db:"id" json:"id"`
-	PacketID    uint32    `db:"packet_id" json:"packet_id"`
-	FromNode    string    `db:"from_node" json:"from_node"`
-	ToNode      string    `db:"to_node" json:"to_node"`
-	Channel     int       `db:"channel" json:"channel"`
-	PortNum     int       `db:"portnum" json:"portnum"`
-	PortNumName string    `db:"portnum_name" json:"portnum_name"`
-	DecodedText string    `db:"decoded_text" json:"decoded_text"`
-	RxSNR       float32   `db:"rx_snr" json:"rx_snr"`
-	RxTime      int64     `db:"rx_time" json:"rx_time"`
-	HopLimit    int       `db:"hop_limit" json:"hop_limit"`
-	HopStart    int       `db:"hop_start" json:"hop_start"`
-	Direction   string    `db:"direction" json:"direction"`
-	Transport   string    `db:"transport" json:"transport"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	ID             int64     `db:"id" json:"id"`
+	PacketID       uint32    `db:"packet_id" json:"packet_id"`
+	FromNode       string    `db:"from_node" json:"from_node"`
+	ToNode         string    `db:"to_node" json:"to_node"`
+	Channel        int       `db:"channel" json:"channel"`
+	PortNum        int       `db:"portnum" json:"portnum"`
+	PortNumName    string    `db:"portnum_name" json:"portnum_name"`
+	DecodedText    string    `db:"decoded_text" json:"decoded_text"`
+	RxSNR          float32   `db:"rx_snr" json:"rx_snr"`
+	RxTime         int64     `db:"rx_time" json:"rx_time"`
+	HopLimit       int       `db:"hop_limit" json:"hop_limit"`
+	HopStart       int       `db:"hop_start" json:"hop_start"`
+	Direction      string    `db:"direction" json:"direction"`
+	Transport      string    `db:"transport" json:"transport"`
+	DeliveryStatus string    `db:"delivery_status" json:"delivery_status"`
+	DeliveryError  *string   `db:"delivery_error" json:"delivery_error,omitempty"`
+	ComposedAt     *string   `db:"composed_at" json:"composed_at,omitempty"`
+	SatelliteCost  int       `db:"satellite_cost" json:"satellite_cost"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
 }
 
 // Telemetry represents a telemetry snapshot for a node.
@@ -477,4 +481,240 @@ func (db *DB) PruneDeadLetters(days int) (int64, error) {
 		return 0, fmt.Errorf("prune dead letters: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// ---- Forwarding Rules ----
+
+// ForwardingRule represents a message forwarding rule.
+type ForwardingRule struct {
+	ID                int     `db:"id" json:"id"`
+	Name              string  `db:"name" json:"name"`
+	Enabled           bool    `db:"enabled" json:"enabled"`
+	Priority          int     `db:"priority" json:"priority"`
+	SourceType        string  `db:"source_type" json:"source_type"`
+	SourceChannels    *string `db:"source_channels" json:"source_channels,omitempty"`
+	SourceNodes       *string `db:"source_nodes" json:"source_nodes,omitempty"`
+	SourcePortnums    *string `db:"source_portnums" json:"source_portnums,omitempty"`
+	SourceKeyword     *string `db:"source_keyword" json:"source_keyword,omitempty"`
+	DestType          string  `db:"dest_type" json:"dest_type"`
+	SatPriority       int     `db:"sat_priority" json:"sat_priority"`
+	SatMaxDelaySec    int     `db:"sat_max_delay_sec" json:"sat_max_delay_sec"`
+	SatIncludePos     bool    `db:"sat_include_pos" json:"sat_include_pos"`
+	SatMaxTextLen     int     `db:"sat_max_text_len" json:"sat_max_text_len"`
+	PositionPrecision int     `db:"position_precision" json:"position_precision"`
+	RateLimitPerMin   int     `db:"rate_limit_per_min" json:"rate_limit_per_min"`
+	RateLimitWindow   int     `db:"rate_limit_window" json:"rate_limit_window"`
+	MatchCount        int     `db:"match_count" json:"match_count"`
+	LastMatchAt       *string `db:"last_match_at" json:"last_match_at,omitempty"`
+	CreatedAt         string  `db:"created_at" json:"created_at"`
+	UpdatedAt         string  `db:"updated_at" json:"updated_at"`
+}
+
+// GetForwardingRules returns all rules sorted by priority.
+func (db *DB) GetForwardingRules() ([]ForwardingRule, error) {
+	var rules []ForwardingRule
+	err := db.Select(&rules, "SELECT * FROM forwarding_rules ORDER BY priority ASC, id ASC")
+	if err != nil {
+		return nil, fmt.Errorf("query forwarding rules: %w", err)
+	}
+	return rules, nil
+}
+
+// GetForwardingRule returns a single rule by ID.
+func (db *DB) GetForwardingRule(id int) (*ForwardingRule, error) {
+	var rule ForwardingRule
+	if err := db.Get(&rule, "SELECT * FROM forwarding_rules WHERE id = ?", id); err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
+// InsertForwardingRule creates a new forwarding rule and returns its ID.
+func (db *DB) InsertForwardingRule(r *ForwardingRule) (int64, error) {
+	res, err := db.Exec(`INSERT INTO forwarding_rules
+		(name, enabled, priority, source_type, source_channels, source_nodes, source_portnums, source_keyword,
+		 dest_type, sat_priority, sat_max_delay_sec, sat_include_pos, sat_max_text_len,
+		 position_precision, rate_limit_per_min, rate_limit_window)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Name, r.Enabled, r.Priority, r.SourceType, r.SourceChannels, r.SourceNodes, r.SourcePortnums, r.SourceKeyword,
+		r.DestType, r.SatPriority, r.SatMaxDelaySec, r.SatIncludePos, r.SatMaxTextLen,
+		r.PositionPrecision, r.RateLimitPerMin, r.RateLimitWindow)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateForwardingRule updates an existing rule.
+func (db *DB) UpdateForwardingRule(r *ForwardingRule) error {
+	_, err := db.Exec(`UPDATE forwarding_rules SET
+		name=?, enabled=?, priority=?, source_type=?, source_channels=?, source_nodes=?, source_portnums=?, source_keyword=?,
+		dest_type=?, sat_priority=?, sat_max_delay_sec=?, sat_include_pos=?, sat_max_text_len=?,
+		position_precision=?, rate_limit_per_min=?, rate_limit_window=?, updated_at=datetime('now')
+		WHERE id=?`,
+		r.Name, r.Enabled, r.Priority, r.SourceType, r.SourceChannels, r.SourceNodes, r.SourcePortnums, r.SourceKeyword,
+		r.DestType, r.SatPriority, r.SatMaxDelaySec, r.SatIncludePos, r.SatMaxTextLen,
+		r.PositionPrecision, r.RateLimitPerMin, r.RateLimitWindow, r.ID)
+	return err
+}
+
+// DeleteForwardingRule removes a rule by ID.
+func (db *DB) DeleteForwardingRule(id int) error {
+	_, err := db.Exec("DELETE FROM forwarding_rules WHERE id = ?", id)
+	return err
+}
+
+// SetForwardingRuleEnabled enables or disables a rule.
+func (db *DB) SetForwardingRuleEnabled(id int, enabled bool) error {
+	_, err := db.Exec("UPDATE forwarding_rules SET enabled=?, updated_at=datetime('now') WHERE id=?", enabled, id)
+	return err
+}
+
+// ReorderForwardingRules sets priorities based on the given ID order.
+func (db *DB) ReorderForwardingRules(ids []int) error {
+	for i, id := range ids {
+		if _, err := db.Exec("UPDATE forwarding_rules SET priority=?, updated_at=datetime('now') WHERE id=?", i+1, id); err != nil {
+			return fmt.Errorf("reorder rule %d: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// UpdateRuleMatch increments the match count and sets last_match_at.
+func (db *DB) UpdateRuleMatch(id int, matchedAt string) error {
+	_, err := db.Exec("UPDATE forwarding_rules SET match_count = match_count + 1, last_match_at = ? WHERE id = ?", matchedAt, id)
+	return err
+}
+
+// GetRuleStats returns match count, last match time, and estimated monthly credit cost for a rule.
+func (db *DB) GetRuleStats(ruleID int) (matchCount int, lastMatch *string, monthlyCost int, err error) {
+	err = db.QueryRow("SELECT match_count, last_match_at FROM forwarding_rules WHERE id = ?", ruleID).Scan(&matchCount, &lastMatch)
+	if err != nil {
+		return
+	}
+	err = db.QueryRow("SELECT COALESCE(SUM(credits), 0) FROM credit_usage WHERE rule_id = ? AND date >= date('now', '-30 days')", ruleID).Scan(&monthlyCost)
+	return
+}
+
+// ---- Preset Messages ----
+
+// PresetMessage represents a canned/preset message.
+type PresetMessage struct {
+	ID          int     `db:"id" json:"id"`
+	Name        string  `db:"name" json:"name"`
+	Text        string  `db:"text" json:"text"`
+	Destination string  `db:"destination" json:"destination"`
+	Icon        *string `db:"icon" json:"icon,omitempty"`
+	SortOrder   int     `db:"sort_order" json:"sort_order"`
+	CreatedAt   string  `db:"created_at" json:"created_at"`
+}
+
+// GetPresetMessages returns all presets sorted by sort_order.
+func (db *DB) GetPresetMessages() ([]PresetMessage, error) {
+	var presets []PresetMessage
+	err := db.Select(&presets, "SELECT * FROM preset_messages ORDER BY sort_order ASC, id ASC")
+	if err != nil {
+		return nil, fmt.Errorf("query presets: %w", err)
+	}
+	return presets, nil
+}
+
+// InsertPresetMessage creates a new preset.
+func (db *DB) InsertPresetMessage(p *PresetMessage) (int64, error) {
+	res, err := db.Exec(`INSERT INTO preset_messages (name, text, destination, icon, sort_order) VALUES (?, ?, ?, ?, ?)`,
+		p.Name, p.Text, p.Destination, p.Icon, p.SortOrder)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdatePresetMessage updates an existing preset.
+func (db *DB) UpdatePresetMessage(p *PresetMessage) error {
+	_, err := db.Exec("UPDATE preset_messages SET name=?, text=?, destination=?, icon=?, sort_order=? WHERE id=?",
+		p.Name, p.Text, p.Destination, p.Icon, p.SortOrder, p.ID)
+	return err
+}
+
+// DeletePresetMessage removes a preset by ID.
+func (db *DB) DeletePresetMessage(id int) error {
+	_, err := db.Exec("DELETE FROM preset_messages WHERE id = ?", id)
+	return err
+}
+
+// ---- Delivery Status ----
+
+// UpdateDeliveryStatus updates the delivery status of a message.
+func (db *DB) UpdateDeliveryStatus(msgID int64, status string, errMsg *string) error {
+	if errMsg != nil {
+		_, err := db.Exec("UPDATE messages SET delivery_status=?, delivery_error=? WHERE id=?", status, *errMsg, msgID)
+		return err
+	}
+	_, err := db.Exec("UPDATE messages SET delivery_status=? WHERE id=?", status, msgID)
+	return err
+}
+
+// UpdateDeliveryStatusByPacket updates delivery status by packet_id (for ACK matching).
+func (db *DB) UpdateDeliveryStatusByPacket(packetID uint32, status string) error {
+	_, err := db.Exec("UPDATE messages SET delivery_status=? WHERE packet_id=? AND direction='tx'", status, packetID)
+	return err
+}
+
+// InsertMessageWithStatus persists a message with initial delivery status.
+func (db *DB) InsertMessageWithStatus(m *Message, deliveryStatus string) (int64, error) {
+	res, err := db.Exec(`INSERT INTO messages
+		(packet_id, from_node, to_node, channel, portnum, portnum_name, decoded_text,
+		 rx_snr, rx_time, hop_limit, hop_start, direction, transport, delivery_status, composed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.PacketID, m.FromNode, m.ToNode, m.Channel, m.PortNum, m.PortNumName, m.DecodedText,
+		m.RxSNR, m.RxTime, m.HopLimit, m.HopStart, m.Direction, m.Transport, deliveryStatus, m.ComposedAt)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ---- Credit Usage ----
+
+// CreditUsage records credit consumption for a satellite send.
+type CreditUsage struct {
+	ID        int    `db:"id" json:"id"`
+	RuleID    *int   `db:"rule_id" json:"rule_id,omitempty"`
+	Credits   int    `db:"credits" json:"credits"`
+	MessageID *int64 `db:"message_id" json:"message_id,omitempty"`
+	Date      string `db:"date" json:"date"`
+	CreatedAt string `db:"created_at" json:"created_at"`
+}
+
+// InsertCreditUsage records credit consumption.
+func (db *DB) InsertCreditUsage(ruleID *int, credits int, messageID *int64) error {
+	_, err := db.Exec("INSERT INTO credit_usage (rule_id, credits, message_id) VALUES (?, ?, ?)",
+		ruleID, credits, messageID)
+	return err
+}
+
+// GetCreditUsageByDate returns daily credit totals for the given range.
+func (db *DB) GetCreditUsageByDate(since, until string) ([]CreditUsage, error) {
+	var usage []CreditUsage
+	err := db.Select(&usage,
+		`SELECT date, SUM(credits) as credits FROM credit_usage
+		 WHERE date >= ? AND date <= ? GROUP BY date ORDER BY date DESC`, since, until)
+	if err != nil {
+		return nil, fmt.Errorf("query credit usage: %w", err)
+	}
+	return usage, nil
+}
+
+// GetDailyCreditTotal returns total credits used today.
+func (db *DB) GetDailyCreditTotal() (int, error) {
+	var total int
+	err := db.QueryRow("SELECT COALESCE(SUM(credits), 0) FROM credit_usage WHERE date = date('now')").Scan(&total)
+	return total, err
+}
+
+// GetMonthlyCreditTotal returns total credits used this month.
+func (db *DB) GetMonthlyCreditTotal() (int, error) {
+	var total int
+	err := db.QueryRow("SELECT COALESCE(SUM(credits), 0) FROM credit_usage WHERE date >= date('now', 'start of month')").Scan(&total)
+	return total, err
 }

@@ -1,213 +1,143 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import DeliveryStatus from '@/components/DeliveryStatus.vue'
+import PresetGrid from '@/components/PresetGrid.vue'
+import SOSButton from '@/components/SOSButton.vue'
 
 const store = useMeshsatStore()
+const sendText = ref('')
+const sendTo = ref('')
+const sendChannel = ref(0)
+const replyTo = ref(null)
+const showPresets = ref(false)
 
-const messageText = ref('')
-const messageTo = ref('')
-const messageChannel = ref('')
-const sending = ref(false)
-const sent = ref(false)
-const loadingMore = ref(false)
-const offset = ref(0)
-const limit = 50
-const hasMore = ref(true)
-const replyingTo = ref(null)
-let sentTimeout = null
-const textInput = ref(null)
+const byteCount = computed(() => new TextEncoder().encode(sendText.value).length)
 
-function formatTime(val) {
-  if (!val) return '—'
-  const ts = typeof val === 'number' && val < 1e12 ? val * 1000 : val
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return String(val)
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+function transportBadge(t) {
+  if (t === 'radio') return { label: 'Mesh', color: 'bg-emerald-500/20 text-emerald-400' }
+  if (t === 'iridium') return { label: 'Sat', color: 'bg-blue-500/20 text-blue-400' }
+  if (t === 'mqtt') return { label: 'MQTT', color: 'bg-purple-500/20 text-purple-400' }
+  return { label: t, color: 'bg-gray-500/20 text-gray-400' }
 }
 
-async function load() {
-  await Promise.all([
-    store.fetchMessages({ limit, offset: 0 }),
-    store.fetchMessageStats()
-  ])
-  offset.value = store.messages.length
-  hasMore.value = store.messages.length >= limit
+function timeLabel(msg) {
+  const d = new Date(msg.created_at)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-async function loadMore() {
-  if (loadingMore.value || !hasMore.value) return
-  loadingMore.value = true
-  try {
-    const data = await store.fetchMessages({ limit, offset: offset.value })
-    offset.value += data.length
-    hasMore.value = data.length >= limit
-  } finally {
-    loadingMore.value = false
-  }
+async function send() {
+  if (!sendText.value.trim()) return
+  const payload = { text: sendText.value.trim() }
+  if (sendTo.value) payload.to = sendTo.value
+  if (sendChannel.value) payload.channel = sendChannel.value
+  await store.sendMessage(payload)
+  sendText.value = ''
+  replyTo.value = null
+  store.fetchMessages()
 }
 
-function startReply(msg) {
-  const from = msg.from ?? msg.from_node ?? ''
-  const ch = msg.channel
-  messageTo.value = String(from)
-  if (ch != null) messageChannel.value = String(ch)
-  replyingTo.value = { node: from, channel: ch }
-  if (textInput.value) textInput.value.focus()
+function reply(msg) {
+  replyTo.value = msg
+  sendTo.value = msg.from_node
+  sendChannel.value = msg.channel
 }
 
 function cancelReply() {
-  replyingTo.value = null
-  messageTo.value = ''
-  messageChannel.value = ''
-}
-
-async function handleSend() {
-  if (!messageText.value.trim()) return
-  sending.value = true
-  sent.value = false
-  try {
-    const payload = { text: messageText.value.trim() }
-    if (messageTo.value.trim()) payload.to = Number(messageTo.value) || 0
-    if (messageChannel.value !== '') payload.channel = Number(messageChannel.value)
-    await store.sendMessage(payload)
-    messageText.value = ''
-    replyingTo.value = null
-    messageTo.value = ''
-    messageChannel.value = ''
-    sent.value = true
-    if (sentTimeout) clearTimeout(sentTimeout)
-    sentTimeout = setTimeout(() => { sent.value = false }, 3000)
-  } catch { /* store sets error */ } finally {
-    sending.value = false
-  }
+  replyTo.value = null
+  sendTo.value = ''
+  sendChannel.value = 0
 }
 
 onMounted(() => {
-  load()
+  store.fetchMessages()
+  store.fetchPresets()
+  store.fetchSOSStatus()
   store.connectSSE((event) => {
-    const type = event?.type ?? ''
-    if (type === 'message' || type === 'text') {
-      store.fetchMessages({ limit, offset: 0 })
-    }
+    if (event.type === 'message') store.fetchMessages()
   })
 })
 
-onUnmounted(() => {
-  store.closeSSE()
-  if (sentTimeout) clearTimeout(sentTimeout)
-})
+onUnmounted(() => { store.closeSSE() })
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto space-y-6">
-    <h1 class="text-2xl font-bold">Messages</h1>
+  <div class="max-w-2xl mx-auto">
+    <h2 class="text-lg font-semibold text-gray-200 mb-4">Messages</h2>
 
-    <!-- Stats -->
-    <div v-if="store.messageStats" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-      <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-        <p class="text-xs text-gray-500">Total</p>
-        <p class="text-2xl font-bold tabular-nums">{{ store.messageStats.total ?? 0 }}</p>
-      </div>
-      <div v-if="store.messageStats.by_transport" class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-        <p class="text-xs text-gray-500">By Transport</p>
-        <div class="flex flex-wrap gap-1 mt-2">
-          <span v-for="(c, t) in store.messageStats.by_transport" :key="t"
-                class="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-300">
-            {{ t }}: {{ c }}
-          </span>
-        </div>
+    <!-- SOS -->
+    <div class="mb-4">
+      <SOSButton />
+    </div>
+
+    <!-- Presets toggle -->
+    <div class="mb-3">
+      <button @click="showPresets = !showPresets" class="text-xs text-teal-400 hover:text-teal-300">
+        {{ showPresets ? 'Hide presets' : 'Quick send presets' }}
+      </button>
+      <div v-if="showPresets" class="mt-2">
+        <PresetGrid />
       </div>
     </div>
 
-    <!-- Send form -->
-    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-      <h2 class="text-sm font-semibold text-gray-300 mb-3">Send Message</h2>
-
-      <!-- Reply banner -->
-      <div v-if="replyingTo" class="flex items-center justify-between mb-3 px-3 py-2 rounded-lg bg-teal-900/20 border border-teal-800">
-        <span class="text-xs text-teal-400">
-          Replying to {{ replyingTo.node }} on Ch {{ replyingTo.channel ?? 0 }}
-        </span>
-        <button @click="cancelReply" class="text-xs text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
+    <!-- Compose -->
+    <div class="bg-gray-800 rounded-lg p-3 mb-4 border border-gray-700">
+      <div v-if="replyTo" class="flex items-center gap-2 mb-2 px-2 py-1 bg-blue-900/30 rounded text-xs text-blue-400">
+        <span>Replying to {{ replyTo.from_node }}</span>
+        <button @click="cancelReply" class="text-blue-500 hover:text-blue-300 ml-auto">x</button>
       </div>
-
-      <div class="flex flex-col sm:flex-row gap-3">
-        <input
-          ref="textInput"
-          v-model="messageText"
-          type="text"
-          placeholder="Type a message..."
-          maxlength="237"
-          @keyup.enter="handleSend"
-          class="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-700 bg-gray-800 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
-        />
-        <button
-          @click="handleSend"
-          :disabled="!messageText.trim() || sending"
-          class="px-4 py-2 text-sm font-medium rounded-lg bg-teal-600 text-white hover:bg-teal-500 disabled:opacity-50 transition-colors"
-        >
-          {{ sending ? 'Sending...' : 'Send' }}
+      <div class="flex gap-2">
+        <input v-model="sendText" @keyup.enter="send" placeholder="Type a message..."
+          class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 placeholder-gray-500">
+        <button @click="send" :disabled="!sendText.trim()"
+          class="px-4 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-500 disabled:opacity-50 disabled:cursor-not-allowed">
+          Send
         </button>
       </div>
-      <div class="flex gap-3 mt-2">
-        <input
-          v-model="messageTo"
-          type="text"
-          placeholder="To (empty = broadcast)"
-          class="flex-1 px-3 py-1.5 text-xs rounded-lg border border-gray-700 bg-gray-800 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono"
-        />
-        <input
-          v-model="messageChannel"
-          type="number"
-          min="0" max="7"
-          placeholder="Ch"
-          class="w-20 px-3 py-1.5 text-xs rounded-lg border border-gray-700 bg-gray-800 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500"
-        />
+      <div class="flex items-center justify-between mt-2 px-1">
+        <div class="flex gap-3">
+          <input v-model="sendTo" placeholder="To (optional)" class="w-28 px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300 placeholder-gray-600">
+          <select v-model.number="sendChannel" class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
+            <option :value="0">Ch 0</option>
+            <option :value="1">Ch 1</option>
+            <option :value="2">Ch 2</option>
+            <option :value="3">Ch 3</option>
+          </select>
+        </div>
+        <span class="text-xs" :class="byteCount > 320 ? 'text-red-400' : 'text-gray-500'">{{ byteCount }}/340 bytes</span>
       </div>
-      <p v-if="sent" class="text-xs text-teal-400 mt-2">Message sent</p>
     </div>
 
-    <!-- Message list -->
-    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-      <div v-if="!store.messages.length" class="p-8 text-center text-gray-500">
+    <!-- Message list (chat bubbles) -->
+    <div class="space-y-2">
+      <div v-if="store.messages.length === 0" class="text-center text-gray-500 py-8 text-sm">
         No messages yet
       </div>
-      <div v-else class="divide-y divide-gray-800 max-h-[500px] overflow-y-auto">
-        <div v-for="(msg, idx) in store.messages" :key="msg.id ?? idx"
-             class="px-5 py-3 hover:bg-gray-800/50 transition-colors group">
-          <div class="flex items-center justify-between mb-1">
-            <div class="flex items-center gap-2 text-xs text-gray-500">
-              <span class="font-medium">{{ msg.from ?? msg.from_node ?? 'Unknown' }}</span>
-              <span v-if="msg.to ?? msg.to_node">→ {{ (msg.to ?? msg.to_node) === 0 ? 'Broadcast' : (msg.to ?? msg.to_node) }}</span>
-              <span v-if="msg.channel != null" class="px-1.5 py-0.5 rounded bg-gray-800">Ch {{ msg.channel }}</span>
-              <span v-if="msg.transport" class="px-1.5 py-0.5 rounded bg-teal-900/30 text-teal-400">{{ msg.transport }}</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <!-- Reply button -->
-              <button
-                @click="startReply(msg)"
-                class="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 text-xs rounded bg-gray-800 text-gray-400 hover:text-teal-400 transition-all"
-                title="Reply"
-              >
-                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M9 17l-5-5 5-5M4 12h12a4 4 0 0 1 4 4v1"/>
-                </svg>
-              </button>
-              <span class="text-xs text-gray-500">{{ formatTime(msg.timestamp ?? msg.time ?? msg.rx_time) }}</span>
-            </div>
+      <div v-for="msg in store.messages" :key="msg.id"
+        class="flex" :class="msg.direction === 'tx' ? 'justify-end' : 'justify-start'">
+        <div class="max-w-[80%] rounded-lg px-3 py-2"
+          :class="msg.direction === 'tx' ? 'bg-teal-900/40 border border-teal-800' : 'bg-gray-800 border border-gray-700'">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xs font-medium" :class="msg.direction === 'tx' ? 'text-teal-400' : 'text-gray-400'">
+              {{ msg.from_node }}
+            </span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium" :class="transportBadge(msg.transport).color">
+              {{ transportBadge(msg.transport).label }}
+            </span>
+            <DeliveryStatus v-if="msg.delivery_status && msg.delivery_status !== 'received'" :status="msg.delivery_status" />
           </div>
-          <p class="text-sm text-gray-200">{{ msg.text ?? msg.decoded_text ?? msg.message ?? '—' }}</p>
+          <p class="text-sm text-gray-200 break-words">{{ msg.decoded_text }}</p>
+          <div class="flex items-center justify-between mt-1 gap-3">
+            <span class="text-[10px] text-gray-500">{{ timeLabel(msg) }} | Ch {{ msg.channel }}</span>
+            <button v-if="msg.direction === 'rx'" @click="reply(msg)" class="text-[10px] text-gray-500 hover:text-teal-400">Reply</button>
+          </div>
         </div>
       </div>
-      <div v-if="hasMore && store.messages.length" class="px-5 py-3 border-t border-gray-800 text-center">
-        <button
-          @click="loadMore"
-          :disabled="loadingMore"
-          class="text-sm text-teal-400 hover:text-teal-300 disabled:opacity-50"
-        >
-          {{ loadingMore ? 'Loading...' : 'Load More' }}
-        </button>
-      </div>
+    </div>
+
+    <div class="text-center mt-4">
+      <button @click="store.fetchMessages({ offset: store.messages.length })"
+        class="text-xs text-gray-500 hover:text-gray-300">Load more</button>
     </div>
   </div>
 </template>

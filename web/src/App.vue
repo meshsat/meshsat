@@ -1,74 +1,79 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useMeshsatStore } from '@/stores/meshsat'
+import ConnectivityBanner from '@/components/ConnectivityBanner.vue'
 
 const route = useRoute()
-const sidebarOpen = ref(false)
+const store = useMeshsatStore()
 
-const navItems = [
-  { path: '/', label: 'Dashboard', icon: 'D' },
-  { path: '/messages', label: 'Messages', icon: 'M' },
-  { path: '/nodes', label: 'Nodes', icon: 'N' },
-  { path: '/map', label: 'Map', icon: 'P' },
-  { path: '/telemetry', label: 'Telemetry', icon: 'T' },
-  { path: '/channels', label: 'Channels', icon: 'H' },
-  { path: '/config', label: 'Config', icon: 'C' },
-  { path: '/gateways', label: 'Gateways', icon: 'G' }
+const tabs = [
+  { name: 'messages', label: 'Messages', path: '/', icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z' },
+  { name: 'nodes', label: 'Nodes', path: '/nodes', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
+  { name: 'bridge', label: 'Bridge', path: '/bridge', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
+  { name: 'map', label: 'Map', path: '/map', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7' },
+  { name: 'settings', label: 'Settings', path: '/settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' }
 ]
+
+function isActive(tab) {
+  if (tab.path === '/') return route.path === '/'
+  return route.path.startsWith(tab.path)
+}
+
+let pollTimer = null
+onMounted(() => {
+  store.fetchStatus()
+  store.fetchGateways()
+  store.fetchIridiumSignalFast()
+  pollTimer = setInterval(() => {
+    store.fetchStatus()
+    store.fetchIridiumSignalFast()
+  }, 10000)
+})
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-950 text-gray-100 flex">
-    <!-- Mobile sidebar toggle -->
-    <button
-      class="fixed top-4 left-4 z-50 lg:hidden p-2 rounded-lg bg-gray-800 text-gray-300 hover:text-white"
-      @click="sidebarOpen = !sidebarOpen"
-    >
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-      </svg>
-    </button>
-
-    <!-- Sidebar -->
-    <aside
-      :class="[
-        'fixed inset-y-0 left-0 z-40 w-56 bg-gray-900 border-r border-gray-800 transform transition-transform lg:relative lg:translate-x-0',
-        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-      ]"
-    >
-      <div class="p-5 border-b border-gray-800">
-        <h1 class="text-lg font-bold text-teal-400">MeshSat</h1>
-        <p class="text-xs text-gray-500 mt-0.5">Meshtastic Gateway</p>
-      </div>
-      <nav class="p-3 space-y-1">
-        <router-link
-          v-for="item in navItems"
-          :key="item.path"
-          :to="item.path"
-          class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
-          :class="route.path === item.path
-            ? 'bg-teal-500/15 text-teal-400'
-            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'"
-          @click="sidebarOpen = false"
-        >
-          <span class="w-6 h-6 rounded flex items-center justify-center text-xs font-bold bg-gray-800">
-            {{ item.icon }}
-          </span>
-          {{ item.label }}
-        </router-link>
-      </nav>
-    </aside>
-
-    <!-- Sidebar backdrop (mobile) -->
-    <div
-      v-if="sidebarOpen"
-      class="fixed inset-0 z-30 bg-black/50 lg:hidden"
-      @click="sidebarOpen = false"
-    />
+  <div class="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+    <!-- Connectivity Banner -->
+    <ConnectivityBanner />
 
     <!-- Main content -->
-    <main class="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
-      <router-view />
+    <main class="flex-1 pb-16 lg:pb-0 lg:pl-20">
+      <div class="p-4 sm:p-6">
+        <router-view />
+      </div>
     </main>
+
+    <!-- Bottom tab bar (mobile) -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 z-40 lg:hidden">
+      <div class="flex justify-around">
+        <router-link v-for="tab in tabs" :key="tab.name" :to="tab.path"
+          class="flex flex-col items-center py-2 px-3 text-xs transition-colors"
+          :class="isActive(tab) ? 'text-teal-400' : 'text-gray-500 hover:text-gray-300'">
+          <svg class="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" :d="tab.icon" />
+          </svg>
+          <span>{{ tab.label }}</span>
+        </router-link>
+      </div>
+    </nav>
+
+    <!-- Sidebar (desktop) -->
+    <nav class="hidden lg:flex fixed left-0 top-0 bottom-0 w-20 bg-gray-900 border-r border-gray-800 flex-col items-center py-6 z-40">
+      <div class="text-teal-400 font-bold text-xs mb-8 tracking-wider">MESH<br>SAT</div>
+      <div class="flex-1 flex flex-col gap-1">
+        <router-link v-for="tab in tabs" :key="tab.name" :to="tab.path"
+          class="flex flex-col items-center py-3 px-2 rounded-lg text-xs transition-colors"
+          :class="isActive(tab) ? 'text-teal-400 bg-gray-800' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'">
+          <svg class="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" :d="tab.icon" />
+          </svg>
+          <span>{{ tab.label }}</span>
+        </router-link>
+      </div>
+    </nav>
   </div>
 </template>

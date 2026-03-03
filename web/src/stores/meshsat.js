@@ -217,6 +217,87 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Forwarding rules
+  const rules = ref([])
+  async function fetchRules() {
+    try {
+      const data = await api.get('/rules')
+      rules.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+  async function createRule(rule) {
+    error.value = null
+    try { const r = await api.post('/rules', rule); await fetchRules(); return r } catch (e) { error.value = e.message; throw e }
+  }
+  async function updateRule(id, rule) {
+    error.value = null
+    try { const r = await api.put(`/rules/${id}`, rule); await fetchRules(); return r } catch (e) { error.value = e.message; throw e }
+  }
+  async function deleteRule(id) {
+    error.value = null
+    try { await api.del(`/rules/${id}`); await fetchRules() } catch (e) { error.value = e.message; throw e }
+  }
+  async function enableRule(id) {
+    try { await api.post(`/rules/${id}/enable`); await fetchRules() } catch (e) { error.value = e.message }
+  }
+  async function disableRule(id) {
+    try { await api.post(`/rules/${id}/disable`); await fetchRules() } catch (e) { error.value = e.message }
+  }
+  async function reorderRules(ids) {
+    try { await api.post('/rules/reorder', { rule_ids: ids }); await fetchRules() } catch (e) { error.value = e.message }
+  }
+  async function fetchRuleStats(id) {
+    try { return await api.get(`/rules/${id}/stats`) } catch (e) { error.value = e.message; return null }
+  }
+
+  // Preset messages
+  const presets = ref([])
+  async function fetchPresets() {
+    try {
+      const data = await api.get('/presets')
+      presets.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+  async function createPreset(preset) {
+    error.value = null
+    try { const r = await api.post('/presets', preset); await fetchPresets(); return r } catch (e) { error.value = e.message; throw e }
+  }
+  async function updatePreset(id, preset) {
+    error.value = null
+    try { const r = await api.put(`/presets/${id}`, preset); await fetchPresets(); return r } catch (e) { error.value = e.message; throw e }
+  }
+  async function deletePreset(id) {
+    error.value = null
+    try { await api.del(`/presets/${id}`); await fetchPresets() } catch (e) { error.value = e.message; throw e }
+  }
+  async function sendPreset(id) {
+    error.value = null
+    try { return await api.post(`/presets/${id}/send`) } catch (e) { error.value = e.message; throw e }
+  }
+
+  // SOS
+  const sosStatus = ref({ active: false })
+  async function activateSOS() {
+    error.value = null
+    try { sosStatus.value = await api.post('/sos/activate'); return sosStatus.value } catch (e) { error.value = e.message; throw e }
+  }
+  async function cancelSOS() {
+    error.value = null
+    try { sosStatus.value = await api.post('/sos/cancel'); return sosStatus.value } catch (e) { error.value = e.message; throw e }
+  }
+  async function fetchSOSStatus() {
+    try { sosStatus.value = await api.get('/sos/status') } catch (e) { error.value = e.message }
+  }
+
+  // Iridium DLQ
+  const dlq = ref([])
+  async function fetchDLQ() {
+    try {
+      const data = await api.get('/iridium/queue')
+      dlq.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
   const iridiumSignal = ref(null) // { bars: 0-5, assessment: string, timestamp: string }
 
   async function fetchIridiumSignalFast() {
@@ -271,7 +352,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config,
-    iridiumSignal,
+    iridiumSignal, rules, presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage,
     fetchTelemetry, fetchPositions, fetchNodes, fetchStatus, fetchGateways,
@@ -280,6 +361,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     configRadio, configModule, sendWaypoint,
     fetchConfig, setChannel,
     fetchIridiumSignalFast, fetchIridiumSignal,
+    fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
+    fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,
+    activateSOS, cancelSOS, fetchSOSStatus,
+    fetchDLQ,
     connectSSE, closeSSE
   }
 })

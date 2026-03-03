@@ -15,8 +15,10 @@ import (
 	"meshsat/internal/api"
 	"meshsat/internal/config"
 	"meshsat/internal/database"
+	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
 
@@ -42,31 +44,44 @@ func main() {
 	defer db.Close()
 	log.Info().Str("path", cfg.DBPath).Msg("database ready")
 
-	// Transport
+	// Transport — both cubeos and standalone use HAL (sidecar in standalone mode)
 	var mesh transport.MeshTransport
 	var sat transport.SatTransport
 	switch cfg.Mode {
-	case "cubeos":
+	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
-		log.Info().Str("hal", cfg.HALURL).Msg("using HAL mesh transport")
+		log.Info().Str("hal", cfg.HALURL).Str("mode", cfg.Mode).Msg("using HAL mesh transport")
 
 		// Satellite transport (optional — only if Iridium is available)
 		sat = transport.NewHALSatTransport(cfg.HALURL, cfg.HALAPIKey)
 		log.Info().Msg("HAL satellite transport available")
 	default:
-		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode (standalone not yet implemented)")
+		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")
 	}
 	defer mesh.Close()
-
-	// Processor
-	proc := engine.NewProcessor(db, mesh)
-
-	// Gateway manager
-	gwMgr := gateway.NewManager(db, sat)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Deduplicator (in-memory, composite key, 10min TTL, 10k max)
+	deduplicator := dedup.New(10*time.Minute, 10000)
+	deduplicator.StartPruner(ctx)
+	log.Info().Msg("deduplicator ready")
+
+	// Rule engine
+	ruleEngine := rules.NewEngine(db)
+	if err := ruleEngine.ReloadFromDB(); err != nil {
+		log.Warn().Err(err).Msg("failed to load forwarding rules (table may not exist yet)")
+	}
+
+	// Processor
+	proc := engine.NewProcessor(db, mesh)
+	proc.SetDeduplicator(deduplicator)
+	proc.SetRuleEngine(ruleEngine)
+
+	// Gateway manager
+	gwMgr := gateway.NewManager(db, sat)
 
 	// Start gateway manager (loads enabled configs from DB)
 	if err := gwMgr.Start(ctx); err != nil {
@@ -85,6 +100,7 @@ func main() {
 
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
+	srv.SetRuleEngine(ruleEngine)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
 	httpServer := &http.Server{
