@@ -437,6 +437,33 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Location sources (GPS, Iridium, Custom) + AUTO resolution
+  const locationSources = ref(null) // { sources: [...], resolved: { source, lat, lon, ... } }
+
+  async function fetchLocationSources() {
+    try {
+      locationSources.value = await api.get('/locations/resolved')
+    } catch { /* location sources unavailable */ }
+  }
+
+  // Iridium geolocation
+  const iridiumGeolocation = ref(null)
+
+  async function fetchIridiumGeolocation() {
+    try {
+      iridiumGeolocation.value = await api.get('/iridium/geolocation')
+    } catch { /* geolocation unavailable */ }
+  }
+
+  // Iridium scheduler status
+  const schedulerStatus = ref(null)
+
+  async function fetchSchedulerStatus() {
+    try {
+      schedulerStatus.value = await api.get('/iridium/scheduler')
+    } catch { /* scheduler unavailable */ }
+  }
+
   const config = ref(null)
 
   async function fetchConfig() {
@@ -473,7 +500,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config,
-    iridiumSignal, signalHistory, creditSummary, passes, locations,
+    iridiumSignal, signalHistory, creditSummary, passes, locations, schedulerStatus,
+    locationSources, iridiumGeolocation,
     rules, presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
@@ -483,8 +511,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     configRadio, configModule, sendWaypoint,
     fetchConfig, setChannel,
     fetchIridiumSignalFast, fetchIridiumSignal,
-    fetchSignalHistory, fetchCredits, setCreditBudget,
+    fetchSignalHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation,
+    fetchLocationSources, fetchIridiumGeolocation,
     enqueueIridiumMessage, cancelQueueItem, setQueuePriority,
     fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,

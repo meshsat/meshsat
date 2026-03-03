@@ -4,6 +4,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
 const selectedLocation = ref(null)
+const locationMode = ref('auto') // 'auto', 'gps', 'iridium', or 'custom'
 const windowHours = ref(24)
 const cacheAgeSec = ref(-1)
 const loadingPasses = ref(false)
@@ -21,6 +22,60 @@ const hoverInfo = ref(null)
 const showPassList = ref(false)
 
 const windowOptions = [12, 24, 48, 72]
+
+// Location source options for dropdown
+const locationModes = [
+  { value: 'auto', label: 'AUTO', desc: 'GPS > Iridium > Custom' },
+  { value: 'gps', label: 'GPS', desc: 'Meshtastic GPS' },
+  { value: 'iridium', label: 'Iridium', desc: 'AT-MSGEO ~1-100km' },
+  { value: 'custom', label: 'Custom', desc: 'User locations' }
+]
+
+// Resolved location based on current mode
+const activeLocation = computed(() => {
+  const sources = store.locationSources
+  if (!sources) return selectedLocation.value
+
+  if (locationMode.value === 'auto') {
+    return sources.resolved ? {
+      name: `AUTO (${sources.resolved.source.toUpperCase()})`,
+      lat: sources.resolved.lat,
+      lon: sources.resolved.lon,
+      alt_m: (sources.resolved.alt_km || 0) * 1000,
+      _source: sources.resolved.source,
+      _accuracy: sources.resolved.accuracy_km
+    } : selectedLocation.value
+  }
+
+  if (locationMode.value === 'gps') {
+    const gps = (sources.sources || []).find(s => s.source === 'gps')
+    if (gps && gps.lat !== 0) return {
+      name: 'GPS',
+      lat: gps.lat,
+      lon: gps.lon,
+      alt_m: (gps.alt_km || 0) * 1000,
+      _source: 'gps',
+      _accuracy: gps.accuracy_km
+    }
+    return null
+  }
+
+  if (locationMode.value === 'iridium') {
+    const irid = (sources.sources || []).find(s => s.source === 'iridium')
+    if (irid && irid.lat !== 0) return {
+      name: 'Iridium',
+      lat: irid.lat,
+      lon: irid.lon,
+      alt_m: (irid.alt_km || 0) * 1000,
+      _source: 'iridium',
+      _accuracy: irid.accuracy_km
+    }
+    return null
+  }
+
+  // custom mode — use the dropdown selection
+  return selectedLocation.value
+})
 
 const sortedPasses = computed(() => {
   const now = Date.now() / 1000
@@ -67,9 +122,9 @@ function elevColor(elev) {
 }
 
 async function fetchPasses() {
-  if (!selectedLocation.value) return
+  const loc = activeLocation.value || selectedLocation.value
+  if (!loc) return
   loadingPasses.value = true
-  const loc = selectedLocation.value
   // Start pass prediction from the lookback time so passes overlap with signal history
   const windowSec = windowHours.value * 3600
   const startUnix = Math.floor(Date.now() / 1000) - Math.floor(windowSec * 0.5)
@@ -280,13 +335,17 @@ async function fetchSignalHistory() {
 }
 
 watch(windowHours, fetchSignalHistory)
+watch(locationMode, () => { store.fetchLocationSources().then(fetchPasses) })
 
 onMounted(async () => {
-  await store.fetchLocations()
+  await Promise.all([
+    store.fetchLocations(),
+    store.fetchLocationSources()
+  ])
   if (store.locations.length > 0) {
     selectedLocation.value = store.locations[0]
-    fetchPasses()
   }
+  fetchPasses()
   fetchSignalHistory()
 })
 </script>
@@ -306,9 +365,17 @@ onMounted(async () => {
 
     <!-- Controls -->
     <div class="flex flex-wrap items-center gap-3 mb-4">
-      <!-- Location selector -->
+      <!-- Location source mode -->
       <div class="flex items-center gap-2">
-        <label class="text-xs text-gray-500">Location</label>
+        <label class="text-xs text-gray-500">Source</label>
+        <select v-model="locationMode"
+          class="px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-sm text-gray-200">
+          <option v-for="m in locationModes" :key="m.value" :value="m.value">{{ m.label }}</option>
+        </select>
+      </div>
+
+      <!-- Custom location selector (only shown in custom mode) -->
+      <div v-if="locationMode === 'custom'" class="flex items-center gap-2">
         <select v-model="selectedLocation" @change="fetchPasses"
           class="px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-sm text-gray-200">
           <option v-for="loc in store.locations" :key="loc.id" :value="loc">{{ loc.name }}</option>
@@ -319,8 +386,19 @@ onMounted(async () => {
         </button>
       </div>
 
+      <!-- Active location indicator (for auto/gps/iridium modes) -->
+      <div v-if="locationMode !== 'custom' && activeLocation" class="flex items-center gap-1.5 text-[11px]">
+        <span class="w-2 h-2 rounded-full"
+          :class="activeLocation._source === 'gps' ? 'bg-emerald-400' : activeLocation._source === 'iridium' ? 'bg-teal-400' : 'bg-amber-400'" />
+        <span class="text-gray-400">{{ activeLocation.lat?.toFixed(4) }}, {{ activeLocation.lon?.toFixed(4) }}</span>
+        <span v-if="activeLocation._accuracy" class="text-gray-600">(~{{ activeLocation._accuracy < 1 ? (activeLocation._accuracy * 1000).toFixed(0) + 'm' : activeLocation._accuracy.toFixed(0) + 'km' }})</span>
+      </div>
+      <div v-else-if="locationMode !== 'custom' && !activeLocation" class="text-[11px] text-red-400">
+        No {{ locationMode }} fix available
+      </div>
+
       <!-- Time window -->
-      <div class="flex items-center gap-1">
+      <div class="flex items-center gap-1 ml-auto">
         <button v-for="h in windowOptions" :key="h" @click="windowHours = h; fetchPasses()"
           class="px-2.5 py-1 rounded text-xs font-medium transition-colors"
           :class="windowHours === h ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'bg-gray-800 text-gray-500 hover:text-gray-300'">
@@ -329,8 +407,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Add location form -->
-    <div v-if="showAddForm" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-4">
+    <!-- Add location form (custom mode) -->
+    <div v-if="showAddForm && locationMode === 'custom'" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-4">
       <div class="grid grid-cols-4 gap-3">
         <div>
           <label class="block text-xs text-gray-500 mb-1">Name</label>
@@ -350,8 +428,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Location management -->
-    <div v-if="store.locations.length > 0" class="flex flex-wrap gap-2 mb-4">
+    <!-- Location management (custom mode) -->
+    <div v-if="locationMode === 'custom' && store.locations.length > 0" class="flex flex-wrap gap-2 mb-4">
       <div v-for="loc in store.locations" :key="loc.id"
         class="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] bg-gray-800/50 border border-gray-700/50">
         <span class="text-gray-300">{{ loc.name }}</span>

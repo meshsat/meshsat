@@ -199,6 +199,15 @@ func (t *HALSatTransport) GetStatus(ctx context.Context) (*SatStatus, error) {
 	return &status, nil
 }
 
+// GetGeolocation returns the Iridium-derived geolocation estimate (AT-MSGEO).
+func (t *HALSatTransport) GetGeolocation(ctx context.Context) (*GeolocationInfo, error) {
+	var info GeolocationInfo
+	if err := t.getJSON(ctx, "/iridium/geolocation", &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 // Close stops the SSE subscription.
 func (t *HALSatTransport) Close() error {
 	if t.cancel != nil {

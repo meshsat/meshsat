@@ -22,6 +22,7 @@ type Server struct {
 	gwManager  *gateway.Manager
 	ruleEngine *rules.Engine
 	tleMgr     *engine.TLEManager
+	scheduler  *gateway.PassScheduler
 	sos        *SOSState
 	webHandler http.Handler
 }
@@ -49,6 +50,11 @@ func (s *Server) SetTLEManager(m *engine.TLEManager) {
 // SetWebHandler sets the handler for serving the web UI.
 func (s *Server) SetWebHandler(h http.Handler) {
 	s.webHandler = h
+}
+
+// SetPassScheduler sets the pass scheduler for scheduler status endpoint.
+func (s *Server) SetPassScheduler(ps *gateway.PassScheduler) {
+	s.scheduler = ps
 }
 
 // Router builds the chi router with all API routes.
@@ -105,6 +111,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/iridium/locations", s.handleGetLocations)
 		r.Post("/iridium/locations", s.handleCreateLocation)
 		r.Delete("/iridium/locations/{id}", s.handleDeleteLocation)
+
+		// Iridium scheduler (pass-aware smart timing)
+		r.Get("/iridium/scheduler", s.handleGetSchedulerStatus)
+
+		// Iridium geolocation + AUTO location resolution
+		r.Get("/iridium/geolocation", s.handleGetIridiumGeolocation)
+		r.Get("/locations/resolved", s.handleGetGeolocationSources)
 
 		// Iridium queue — offline compose and priority management
 		r.Get("/iridium/queue", s.handleGetIridiumQueue)

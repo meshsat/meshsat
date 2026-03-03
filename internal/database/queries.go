@@ -1046,3 +1046,115 @@ func (db *DB) ReplaceTLECache(entries []TLECacheEntry) error {
 	}
 	return tx.Commit()
 }
+
+// ---- Pass Quality Log ----
+
+// InsertPassQualityLog records the actual signal quality observed during a predicted pass.
+func (db *DB) InsertPassQualityLog(satellite string, aos, los int64, peakElevDeg, actualBarsAvg float64, actualBarsMax, moAttempts, moSuccesses int) error {
+	_, err := db.Exec(
+		`INSERT INTO pass_quality_log (satellite, aos, los, peak_elev_deg, actual_bars_avg, actual_bars_max, mo_attempts, mo_successes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		satellite, aos, los, peakElevDeg, actualBarsAvg, actualBarsMax, moAttempts, moSuccesses)
+	return err
+}
+
+// GetPassQualityByElevation returns the historical signal hit rate for passes in an elevation band.
+// Returns the fraction of passes where actual_bars_avg >= 1 (i.e. had signal), and the sample count.
+func (db *DB) GetPassQualityByElevation(elevLow, elevHigh float64, lookbackDays int) (hitRate float64, samples int, err error) {
+	cutoff := time.Now().AddDate(0, 0, -lookbackDays).Format("2006-01-02 15:04:05")
+	var total, hits int
+	err = db.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN actual_bars_avg >= 1 THEN 1 ELSE 0 END), 0)
+		 FROM pass_quality_log WHERE peak_elev_deg >= ? AND peak_elev_deg < ? AND created_at >= ?`,
+		elevLow, elevHigh, cutoff).Scan(&total, &hits)
+	if err != nil || total == 0 {
+		return 0, 0, err
+	}
+	return float64(hits) / float64(total), total, nil
+}
+
+// GetSignalDuringWindow returns the average and max signal bars recorded during a time window.
+func (db *DB) GetSignalDuringWindow(source string, from, to int64) (avg float64, max int, count int, err error) {
+	err = db.QueryRow(
+		`SELECT COALESCE(AVG(value), 0), COALESCE(MAX(value), 0), COUNT(*)
+		 FROM signal_history WHERE source = ? AND timestamp >= ? AND timestamp <= ?`,
+		source, from, to).Scan(&avg, &max, &count)
+	return
+}
+
+// ---- Iridium Geolocation ----
+
+// GeolocationRecord represents a stored geolocation reading.
+type GeolocationRecord struct {
+	ID         int64   `db:"id" json:"id"`
+	Source     string  `db:"source" json:"source"`
+	Lat        float64 `db:"lat" json:"lat"`
+	Lon        float64 `db:"lon" json:"lon"`
+	AltKm      float64 `db:"alt_km" json:"alt_km"`
+	AccuracyKm float64 `db:"accuracy_km" json:"accuracy_km"`
+	Timestamp  int64   `db:"timestamp" json:"timestamp"`
+}
+
+// InsertGeolocation records an Iridium (or GPS) geolocation reading.
+func (db *DB) InsertGeolocation(source string, lat, lon, altKm, accuracyKm float64, timestamp int64) error {
+	_, err := db.Exec(
+		`INSERT INTO iridium_geolocation (source, lat, lon, alt_km, accuracy_km, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		source, lat, lon, altKm, accuracyKm, timestamp)
+	return err
+}
+
+// GetLatestGeolocation returns the most recent geolocation reading for a given source.
+func (db *DB) GetLatestGeolocation(source string) (*GeolocationRecord, error) {
+	var rec GeolocationRecord
+	err := db.QueryRow(
+		`SELECT id, source, lat, lon, alt_km, accuracy_km, timestamp
+		 FROM iridium_geolocation WHERE source = ? ORDER BY timestamp DESC LIMIT 1`,
+		source).Scan(&rec.ID, &rec.Source, &rec.Lat, &rec.Lon, &rec.AltKm, &rec.AccuracyKm, &rec.Timestamp)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// GetLatestGPSPosition returns the most recent GPS position from the positions table.
+func (db *DB) GetLatestGPSPosition() (*GeolocationRecord, error) {
+	var lat, lon float64
+	var alt int
+	var ts string
+	err := db.QueryRow(
+		`SELECT latitude, longitude, altitude, created_at
+		 FROM positions ORDER BY created_at DESC LIMIT 1`).Scan(&lat, &lon, &alt, &ts)
+	if err != nil {
+		return nil, err
+	}
+	// Parse created_at to unix timestamp
+	t, _ := time.Parse("2006-01-02 15:04:05", ts)
+	return &GeolocationRecord{
+		Source:     "gps",
+		Lat:        lat,
+		Lon:        lon,
+		AltKm:      float64(alt) / 1000.0,
+		AccuracyKm: 0.005, // GPS accuracy ~5m
+		Timestamp:  t.Unix(),
+	}, nil
+}
+
+// GetAllGeolocationSources returns the latest reading from each source (gps, iridium).
+func (db *DB) GetAllGeolocationSources() ([]GeolocationRecord, error) {
+	var results []GeolocationRecord
+
+	// Latest GPS from positions table
+	gps, err := db.GetLatestGPSPosition()
+	if err == nil && gps != nil {
+		results = append(results, *gps)
+	}
+
+	// Latest Iridium geolocation
+	iridium, err := db.GetLatestGeolocation("iridium")
+	if err == nil && iridium != nil {
+		results = append(results, *iridium)
+	}
+
+	return results, nil
+}

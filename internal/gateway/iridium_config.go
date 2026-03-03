@@ -18,24 +18,34 @@ type IridiumConfig struct {
 	DailyBudget        int    `json:"daily_budget"`                  // max credits per day, 0 = unlimited
 	MonthlyBudget      int    `json:"monthly_budget"`                // max credits per month, 0 = unlimited
 	CriticalReserve    int    `json:"critical_reserve"`              // % reserved for priority 0 (default 20)
+	SchedulerEnabled   bool   `json:"scheduler_enabled"`             // enable pass-aware smart scheduling (default true)
+	PreWakeMinutes     int    `json:"pre_wake_minutes"`              // minutes before AOS to enter pre-wake mode (default 5)
+	PostPassGraceSec   int    `json:"post_pass_grace_sec"`           // seconds after LOS to stay in post-pass mode (default 120)
+	IdlePollSec        int    `json:"idle_poll_sec"`                 // MT poll interval in idle mode (default 900)
+	ActivePollSec      int    `json:"active_poll_sec"`               // MT poll interval in active mode (default 20)
 }
 
 // DefaultIridiumConfig returns sensible defaults.
 func DefaultIridiumConfig() IridiumConfig {
 	return IridiumConfig{
-		ForwardAll:      false,
-		ForwardPortnums: []int{1}, // TEXT_MESSAGE only by default
-		Compression:     "compact",
-		AutoReceive:     true,
-		PollInterval:    1800, // 30 minutes — safety net for missed ring alerts (SBDSX pre-check avoids credit waste)
-		MaxTextLength:   320,
-		IncludePosition: false, // GPS position not populated — omit to save 10 bytes per message
-		DLQMaxRetries:   3,
-		DLQRetryBase:    120,
-		MinSignalBars:   1,
-		DailyBudget:     0, // unlimited
-		MonthlyBudget:   0, // unlimited
-		CriticalReserve: 20,
+		ForwardAll:       false,
+		ForwardPortnums:  []int{1}, // TEXT_MESSAGE only by default
+		Compression:      "compact",
+		AutoReceive:      true,
+		PollInterval:     1800, // 30 minutes — safety net for missed ring alerts (SBDSX pre-check avoids credit waste)
+		MaxTextLength:    320,
+		IncludePosition:  false, // GPS position not populated — omit to save 10 bytes per message
+		DLQMaxRetries:    3,
+		DLQRetryBase:     120,
+		MinSignalBars:    1,
+		DailyBudget:      0, // unlimited
+		MonthlyBudget:    0, // unlimited
+		CriticalReserve:  20,
+		SchedulerEnabled: true,
+		PreWakeMinutes:   5,
+		PostPassGraceSec: 120,
+		IdlePollSec:      900,
+		ActivePollSec:    20,
 	}
 }
 

@@ -17,6 +17,7 @@ let map = null
 let markerLayer = null
 let trackLayer = null
 let messageLayer = null
+let locationLayer = null
 
 // Distinct colors for nodes
 const nodeColors = ['#06b6d4', '#8b5cf6', '#f97316', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#ef4444']
@@ -78,6 +79,7 @@ async function initMap() {
     markerLayer = L.layerGroup().addTo(map)
     trackLayer = L.layerGroup().addTo(map)
     messageLayer = L.layerGroup().addTo(map)
+    locationLayer = L.layerGroup().addTo(map)
     mapReady.value = true
     updateMap()
   } catch {
@@ -161,8 +163,73 @@ function updateMap() {
     }
   }
 
+  // Location source markers (GPS, Iridium, Custom)
+  if (locationLayer) {
+    locationLayer.clearLayers()
+    const ls = store.locationSources
+    if (ls && ls.sources) {
+      for (const src of ls.sources) {
+        if (!src.lat || !src.lon) continue
+        const isGps = src.source === 'gps'
+        const isIridium = src.source === 'iridium'
+        const color = isGps ? '#10b981' : isIridium ? '#14b8a6' : '#f59e0b'
+        const label = isGps ? 'GPS' : isIridium ? 'Iridium' : 'Custom'
+        const accTxt = src.accuracy_km != null
+          ? (src.accuracy_km < 1 ? `${(src.accuracy_km * 1000).toFixed(0)}m` : `${src.accuracy_km.toFixed(0)}km`)
+          : ''
+
+        const m = L.circleMarker([src.lat, src.lon], {
+          radius: isGps ? 7 : 10,
+          fillColor: color,
+          fillOpacity: 0.25,
+          color,
+          weight: 2,
+          dashArray: isIridium ? '4 3' : null
+        })
+        let popup = `<strong>${label} Position</strong><br>`
+        popup += `<span style="font-family:monospace;font-size:11px">${src.lat.toFixed(5)}, ${src.lon.toFixed(5)}</span>`
+        if (accTxt) popup += `<br>Accuracy: ~${accTxt}`
+        m.bindPopup(popup)
+        locationLayer.addLayer(m)
+
+        // For Iridium, draw accuracy circle
+        if (isIridium && src.accuracy_km > 0) {
+          const circle = L.circle([src.lat, src.lon], {
+            radius: src.accuracy_km * 1000,
+            fillColor: color,
+            fillOpacity: 0.05,
+            color,
+            weight: 1,
+            dashArray: '4 3'
+          })
+          locationLayer.addLayer(circle)
+        }
+      }
+    }
+
+    // Custom locations from the locations list
+    for (const loc of (store.locations || [])) {
+      const m = L.circleMarker([loc.lat, loc.lon], {
+        radius: 6,
+        fillColor: '#f59e0b',
+        fillOpacity: 0.3,
+        color: '#f59e0b',
+        weight: 1.5
+      })
+      m.bindPopup(`<strong>${loc.name}</strong><br><span style="font-size:11px;color:#888">${loc.builtin ? 'Built-in' : 'Custom'}</span>`)
+      locationLayer.addLayer(m)
+    }
+  }
+
   // Fit bounds
   const allVisible = visibleNodes.map(n => [n.latitude, n.longitude])
+  // Include location sources in bounds
+  const ls = store.locationSources
+  if (ls && ls.sources) {
+    for (const src of ls.sources) {
+      if (src.lat && src.lon) allVisible.push([src.lat, src.lon])
+    }
+  }
   if (allVisible.length) {
     const bounds = L.latLngBounds(allVisible)
     map.fitBounds(bounds.pad(0.2), { maxZoom: 15 })
@@ -200,7 +267,9 @@ onMounted(async () => {
   await Promise.all([
     store.fetchNodes(),
     store.fetchPositions({ since, limit: 500 }),
-    store.fetchMessages({ limit: 200 })
+    store.fetchMessages({ limit: 200 }),
+    store.fetchLocations(),
+    store.fetchLocationSources()
   ])
   // Set visibility for any newly loaded nodes
   for (const n of store.nodes) {
@@ -250,6 +319,16 @@ onUnmounted(() => {
         <div class="flex items-center gap-1.5">
           <span class="w-2 h-2 rounded-full bg-teal-400"></span>
           <span>Msg</span>
+        </div>
+        <span class="text-gray-700">|</span>
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 ring-1 ring-emerald-400/50"></span> GPS
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-teal-400 ring-1 ring-teal-400/50" style="border: 1px dashed"></span> Iridium
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span> Custom
         </div>
       </div>
 

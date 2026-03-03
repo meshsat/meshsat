@@ -83,6 +83,14 @@ func main() {
 	// Gateway manager
 	gwMgr := gateway.NewManager(db, sat)
 
+	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction
+	// Created early so it's available to the gateway manager for pass scheduling
+	tleMgr := engine.NewTLEManager(db)
+	tleMgr.Start(ctx)
+
+	// Wire TLE manager into gateway manager for pass-aware scheduling
+	gwMgr.SetPassPredictor(&tleAdapter{tleMgr})
+
 	// Start gateway manager (loads enabled configs from DB)
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
@@ -102,14 +110,11 @@ func main() {
 	sigRecorder := engine.NewSignalRecorder(db, sat)
 	sigRecorder.Start(ctx)
 
-	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction
-	tleMgr := engine.NewTLEManager(db)
-	tleMgr.Start(ctx)
-
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetRuleEngine(ruleEngine)
 	srv.SetTLEManager(tleMgr)
+	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
 	httpServer := &http.Server{

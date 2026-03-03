@@ -194,6 +194,35 @@ var migrations = []string{
 
 	// v8: Store plaintext preview alongside binary payload for display
 	`ALTER TABLE dead_letters ADD COLUMN text_preview TEXT NOT NULL DEFAULT '';`,
+
+	// v9: Pass quality log for smart scheduler — tracks actual signal during predicted passes
+	`CREATE TABLE IF NOT EXISTS pass_quality_log (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		satellite       TEXT NOT NULL,
+		aos             INTEGER NOT NULL,
+		los             INTEGER NOT NULL,
+		peak_elev_deg   REAL NOT NULL,
+		actual_bars_avg REAL,
+		actual_bars_max INTEGER,
+		mo_attempts     INTEGER NOT NULL DEFAULT 0,
+		mo_successes    INTEGER NOT NULL DEFAULT 0,
+		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_pass_quality_elev ON pass_quality_log(peak_elev_deg);`,
+
+	// v10: Iridium geolocation log — AT-MSGEO readings from the satellite modem
+	`CREATE TABLE IF NOT EXISTS iridium_geolocation (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		source      TEXT NOT NULL DEFAULT 'iridium',
+		lat         REAL NOT NULL,
+		lon         REAL NOT NULL,
+		alt_km      REAL NOT NULL DEFAULT 0,
+		accuracy_km REAL NOT NULL DEFAULT 100,
+		timestamp   INTEGER NOT NULL,
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_iridium_geo_ts ON iridium_geolocation(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_iridium_geo_source ON iridium_geolocation(source, timestamp);`,
 }
 
 func (db *DB) migrate() error {

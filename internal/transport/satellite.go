@@ -47,6 +47,16 @@ func (r *SBDResult) MOSuccess() bool {
 	return r.MOStatus >= 0 && r.MOStatus <= 4
 }
 
+// GeolocationInfo represents an Iridium-derived geolocation estimate (AT-MSGEO).
+// Accuracy ranges from ~1km to ~100km depending on satellite geometry.
+type GeolocationInfo struct {
+	Lat       float64 `json:"lat"`
+	Lon       float64 `json:"lon"`
+	AltKm     float64 `json:"alt_km"`
+	Accuracy  float64 `json:"accuracy_km"` // estimated accuracy in km
+	Timestamp string  `json:"timestamp"`
+}
+
 // SatTransport abstracts how MeshSat talks to the satellite modem.
 type SatTransport interface {
 	Subscribe(ctx context.Context) (<-chan SatEvent, error)
@@ -57,5 +67,6 @@ type SatTransport interface {
 	GetSignal(ctx context.Context) (*SignalInfo, error)
 	GetSignalFast(ctx context.Context) (*SignalInfo, error)
 	GetStatus(ctx context.Context) (*SatStatus, error)
+	GetGeolocation(ctx context.Context) (*GeolocationInfo, error)
 	Close() error
 }

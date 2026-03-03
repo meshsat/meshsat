@@ -17,10 +17,11 @@ import (
 
 // IridiumGateway bridges Meshtastic mesh messages to/from an Iridium satellite modem.
 type IridiumGateway struct {
-	config IridiumConfig
-	sat    transport.SatTransport
-	db     *database.DB
-	inCh   chan InboundMessage
+	config    IridiumConfig
+	sat       transport.SatTransport
+	db        *database.DB
+	scheduler *PassScheduler
+	inCh      chan InboundMessage
 
 	outCh chan *transport.MeshMessage // buffered outbound queue
 
@@ -37,14 +38,26 @@ type IridiumGateway struct {
 }
 
 // NewIridiumGateway creates a new Iridium satellite gateway.
-func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB) *IridiumGateway {
-	return &IridiumGateway{
+// If predictor is non-nil and cfg.SchedulerEnabled is true, a PassScheduler is created.
+func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *IridiumGateway {
+	gw := &IridiumGateway{
 		config: cfg,
 		sat:    sat,
 		db:     db,
 		inCh:   make(chan InboundMessage, 32),
 		outCh:  make(chan *transport.MeshMessage, 10),
 	}
+
+	if cfg.SchedulerEnabled && predictor != nil {
+		gw.scheduler = NewPassScheduler(predictor, db, cfg)
+	}
+
+	return gw
+}
+
+// PassSchedulerRef returns the pass scheduler (may be nil).
+func (g *IridiumGateway) PassSchedulerRef() *PassScheduler {
+	return g.scheduler
 }
 
 // Start subscribes to HAL Iridium SSE for ring alerts and starts the send worker.
@@ -86,6 +99,11 @@ func (g *IridiumGateway) Start(ctx context.Context) error {
 		go g.ringAlertListener(ctx)
 	}
 
+	// Start pass scheduler if configured
+	if g.scheduler != nil {
+		g.scheduler.Start(ctx)
+	}
+
 	// Start poll worker for MT message retrieval.
 	// If poll_interval is 0 (legacy config), use 1800s as fallback.
 	// The SBDSX pre-check in MailboxCheck prevents credit waste on each poll.
@@ -95,7 +113,11 @@ func (g *IridiumGateway) Start(ctx context.Context) error {
 	g.wg.Add(1)
 	go g.pollWorker(ctx)
 
-	log.Info().Bool("auto_receive", g.config.AutoReceive).Int("poll_interval", g.config.PollInterval).Msg("iridium gateway started")
+	schedulerMode := "disabled"
+	if g.scheduler != nil {
+		schedulerMode = "enabled"
+	}
+	log.Info().Bool("auto_receive", g.config.AutoReceive).Int("poll_interval", g.config.PollInterval).Str("scheduler", schedulerMode).Msg("iridium gateway started")
 	return nil
 }
 
@@ -105,6 +127,9 @@ func (g *IridiumGateway) Stop() error {
 		g.cancel()
 	}
 	g.wg.Wait()
+	if g.scheduler != nil {
+		g.scheduler.Stop()
+	}
 	g.connected.Store(false)
 	log.Info().Msg("iridium gateway stopped")
 	return nil
@@ -231,8 +256,38 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 				log.Info().Int("mt_queued", result.MTQueued).Msg("iridium: MT messages queued, piggybacking receive")
 				go g.handleRingAlert(ctx)
 			}
+
+			// Opportunistic geolocation: after successful SBD session, query AT-MSGEO
+			go g.captureGeolocation(ctx)
 		}
 	}
+}
+
+// captureGeolocation fetches the Iridium-derived geolocation after a successful SBD session
+// and stores it in the database. AT-MSGEO is only valid after a recent SBD session.
+func (g *IridiumGateway) captureGeolocation(ctx context.Context) {
+	if g.db == nil {
+		return
+	}
+	geo, err := g.sat.GetGeolocation(ctx)
+	if err != nil {
+		log.Debug().Err(err).Msg("iridium: geolocation unavailable")
+		return
+	}
+	if geo.Lat == 0 && geo.Lon == 0 {
+		return // no fix
+	}
+	ts := time.Now().Unix()
+	if geo.Timestamp != "" {
+		if t, err := time.Parse(time.RFC3339, geo.Timestamp); err == nil {
+			ts = t.Unix()
+		}
+	}
+	if err := g.db.InsertGeolocation("iridium", geo.Lat, geo.Lon, geo.AltKm, geo.Accuracy, ts); err != nil {
+		log.Warn().Err(err).Msg("iridium: failed to store geolocation")
+		return
+	}
+	log.Info().Float64("lat", geo.Lat).Float64("lon", geo.Lon).Float64("accuracy_km", geo.Accuracy).Msg("iridium: geolocation captured")
 }
 
 // canSendPlaintext returns true if a message can be sent as readable ASCII text
@@ -325,7 +380,24 @@ func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errM
 	log.Info().Uint32("packet_id", packetID).Time("next_retry", nextRetry).Msg("iridium: message queued in DLQ")
 }
 
+// getTimingParams returns dynamic timing parameters from the scheduler,
+// or legacy hardcoded intervals if no scheduler is active.
+func (g *IridiumGateway) getTimingParams() TimingParams {
+	if g.scheduler != nil {
+		return g.scheduler.GetTimingParams()
+	}
+	// Legacy fallback — exact same behavior as before
+	return TimingParams{
+		PollInterval:     time.Duration(g.config.PollInterval) * time.Second,
+		DLQCheckInterval: 30 * time.Second,
+		DLQRetryBase:     time.Duration(g.config.DLQRetryBase) * time.Second,
+		Mode:             ModeActive,
+		ModeName:         "legacy",
+	}
+}
+
 // dlqRetryWorker periodically retries failed sends from the dead-letter queue.
+// Uses dynamic timing from the pass scheduler when available.
 func (g *IridiumGateway) dlqRetryWorker(ctx context.Context) {
 	defer g.wg.Done()
 
@@ -334,16 +406,38 @@ func (g *IridiumGateway) dlqRetryWorker(ctx context.Context) {
 		retryBase = 120
 	}
 
-	// Check every 30s for pending retries
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	// Dynamic timing: use Timer instead of Ticker
+	params := g.getTimingParams()
+	timer := time.NewTimer(params.DLQCheckInterval)
+	defer timer.Stop()
+
+	// Channel for mode transitions (nil if no scheduler)
+	var modeCh <-chan ScheduleMode
+	if g.scheduler != nil {
+		modeCh = g.scheduler.ModeCh()
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+
+		case <-timer.C:
 			g.processDLQ(ctx, retryBase)
+			// Refresh interval from scheduler
+			params = g.getTimingParams()
+			timer.Reset(params.DLQCheckInterval)
+
+		case newMode := <-modeCh:
+			// Instant mode transition — adjust timing immediately
+			params = g.getTimingParams()
+			timer.Reset(params.DLQCheckInterval)
+
+			// On Active entry, trigger immediate DLQ drain
+			if newMode == ModeActive && g.dlqPending.Load() > 0 {
+				log.Info().Msg("iridium: scheduler active mode — triggering immediate DLQ drain")
+				go g.drainDLQ(ctx)
+			}
 		}
 	}
 }
@@ -635,17 +729,42 @@ func EncodeACK(momsn uint16) []byte {
 }
 
 // pollWorker periodically checks for MT messages.
+// Uses dynamic timing from the pass scheduler when available.
 func (g *IridiumGateway) pollWorker(ctx context.Context) {
 	defer g.wg.Done()
-	ticker := time.NewTicker(time.Duration(g.config.PollInterval) * time.Second)
-	defer ticker.Stop()
+
+	// Dynamic timing: use Timer instead of Ticker
+	params := g.getTimingParams()
+	timer := time.NewTimer(params.PollInterval)
+	defer timer.Stop()
+
+	// Channel for mode transitions (nil if no scheduler)
+	var modeCh <-chan ScheduleMode
+	if g.scheduler != nil {
+		modeCh = g.scheduler.ModeCh()
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+
+		case <-timer.C:
 			g.handleRingAlert(ctx) // reuse the same logic
+			// Refresh interval from scheduler
+			params = g.getTimingParams()
+			timer.Reset(params.PollInterval)
+
+		case newMode := <-modeCh:
+			// Instant mode transition — adjust timing immediately
+			params = g.getTimingParams()
+			timer.Reset(params.PollInterval)
+
+			// On Active entry, trigger immediate mailbox check
+			if newMode == ModeActive {
+				log.Info().Msg("iridium: scheduler active mode — triggering immediate mailbox check")
+				go g.handleRingAlert(ctx)
+			}
 		}
 	}
 }

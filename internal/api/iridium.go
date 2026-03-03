@@ -203,6 +203,162 @@ func (s *Server) handleDeleteLocation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// handleGetSchedulerStatus returns the current pass scheduler state.
+func (s *Server) handleGetSchedulerStatus(w http.ResponseWriter, r *http.Request) {
+	if s.scheduler == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"enabled":   false,
+			"mode":      "legacy",
+			"mode_name": "Legacy",
+		})
+		return
+	}
+
+	sched := s.scheduler.Schedule()
+	params := s.scheduler.GetTimingParams()
+
+	resp := map[string]interface{}{
+		"enabled":   true,
+		"mode":      params.ModeName,
+		"mode_name": params.Mode.DisplayName(),
+	}
+
+	if sched != nil {
+		resp["location"] = sched.LocationName
+		resp["computed_at"] = sched.ComputedAt
+		resp["upcoming_passes_count"] = len(sched.UpcomingPasses)
+
+		if !sched.NextTransition.IsZero() {
+			resp["next_transition"] = sched.NextTransition
+		}
+
+		// Find next upcoming pass
+		now := time.Now().Unix()
+		for _, p := range sched.UpcomingPasses {
+			if p.LOS >= now {
+				resp["next_pass"] = map[string]interface{}{
+					"satellite":     p.Satellite,
+					"aos":           p.AOS,
+					"los":           p.LOS,
+					"peak_elev_deg": p.PeakElevDeg,
+					"quality_score": p.QualityScore,
+					"priority":      p.Priority,
+					"is_active":     p.AOS <= now && p.LOS >= now,
+				}
+				break
+			}
+		}
+	}
+
+	resp["timing"] = map[string]interface{}{
+		"poll_interval_sec":  int(params.PollInterval.Seconds()),
+		"dlq_check_sec":      int(params.DLQCheckInterval.Seconds()),
+		"dlq_retry_base_sec": int(params.DLQRetryBase.Seconds()),
+	}
+
+	if params.CurrentPass != nil {
+		resp["current_pass"] = map[string]interface{}{
+			"satellite":     params.CurrentPass.Satellite,
+			"peak_elev_deg": params.CurrentPass.PeakElevDeg,
+			"quality_score": params.CurrentPass.QualityScore,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleGetGeolocationSources returns the latest geolocation from each source
+// (GPS, Iridium) plus the AUTO-resolved location.
+func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Request) {
+	sources, err := s.db.GetAllGeolocationSources()
+	if err != nil {
+		sources = nil
+	}
+
+	// Also include custom locations
+	customLocs, _ := s.db.GetIridiumLocations()
+
+	// AUTO resolution: GPS > Iridium > first custom location
+	var resolved *resolvedLocation
+	for _, src := range sources {
+		if src.Source == "gps" && src.Lat != 0 && src.Lon != 0 {
+			resolved = &resolvedLocation{
+				Source:     "gps",
+				Lat:        src.Lat,
+				Lon:        src.Lon,
+				AltKm:      src.AltKm,
+				AccuracyKm: src.AccuracyKm,
+				Timestamp:  src.Timestamp,
+			}
+			break
+		}
+	}
+	if resolved == nil {
+		for _, src := range sources {
+			if src.Source == "iridium" && src.Lat != 0 && src.Lon != 0 {
+				resolved = &resolvedLocation{
+					Source:     "iridium",
+					Lat:        src.Lat,
+					Lon:        src.Lon,
+					AltKm:      src.AltKm,
+					AccuracyKm: src.AccuracyKm,
+					Timestamp:  src.Timestamp,
+				}
+				break
+			}
+		}
+	}
+	if resolved == nil && len(customLocs) > 0 {
+		loc := customLocs[0]
+		resolved = &resolvedLocation{
+			Source:     "custom",
+			Name:       loc.Name,
+			Lat:        loc.Lat,
+			Lon:        loc.Lon,
+			AltKm:      loc.AltM / 1000.0,
+			AccuracyKm: 0,
+		}
+	}
+
+	resp := map[string]interface{}{
+		"sources": sources,
+	}
+	if resolved != nil {
+		resp["resolved"] = resolved
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type resolvedLocation struct {
+	Source     string  `json:"source"`
+	Name       string  `json:"name,omitempty"`
+	Lat        float64 `json:"lat"`
+	Lon        float64 `json:"lon"`
+	AltKm      float64 `json:"alt_km"`
+	AccuracyKm float64 `json:"accuracy_km"`
+	Timestamp  int64   `json:"timestamp,omitempty"`
+}
+
+// handleGetIridiumGeolocation returns the latest Iridium-derived geolocation.
+func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Request) {
+	rec, err := s.db.GetLatestGeolocation("iridium")
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"available": false,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"available":   true,
+		"lat":         rec.Lat,
+		"lon":         rec.Lon,
+		"alt_km":      rec.AltKm,
+		"accuracy_km": rec.AccuracyKm,
+		"timestamp":   rec.Timestamp,
+	})
+}
+
 func now() int64 {
 	return time.Now().Unix()
 }

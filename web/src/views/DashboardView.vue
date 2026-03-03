@@ -103,6 +103,47 @@ const sparklineArea = computed(() => {
   return buildAreaPath(sorted, p => p.value, 200, 40, 0, 5)
 })
 
+// Scheduler status
+const schedulerMode = computed(() => store.schedulerStatus?.mode || 'legacy')
+const schedulerModeName = computed(() => store.schedulerStatus?.mode_name || 'Manual')
+const schedulerEnabled = computed(() => store.schedulerStatus?.enabled === true)
+const schedulerNextPass = computed(() => store.schedulerStatus?.next_pass || null)
+const schedulerNextTransition = computed(() => {
+  const t = store.schedulerStatus?.next_transition
+  if (!t) return ''
+  return formatRelativeTime(t)
+})
+
+function schedulerBadgeClass(mode) {
+  if (mode === 'active') return 'bg-emerald-400/10 text-emerald-400'
+  if (mode === 'pre_wake') return 'bg-amber-400/10 text-amber-400'
+  if (mode === 'post_pass') return 'bg-blue-400/10 text-blue-400'
+  return 'bg-gray-700/50 text-gray-500' // idle or legacy
+}
+
+// Location sources
+const locationResolved = computed(() => store.locationSources?.resolved || null)
+const locationGps = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'gps'))
+const locationIridium = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'iridium'))
+
+function formatAccuracy(km) {
+  if (km == null) return ''
+  if (km < 1) return `${(km * 1000).toFixed(0)}m`
+  return `${km.toFixed(0)}km`
+}
+
+function locationSourceColor(source) {
+  if (source === 'gps') return 'text-emerald-400'
+  if (source === 'iridium') return 'text-teal-400'
+  return 'text-amber-400'
+}
+
+function locationSourceDot(source) {
+  if (source === 'gps') return 'bg-emerald-400'
+  if (source === 'iridium') return 'bg-teal-400'
+  return 'bg-amber-400'
+}
+
 // Credits from store
 const creditsToday = computed(() => store.creditSummary?.today ?? 0)
 const creditsMonth = computed(() => store.creditSummary?.month ?? 0)
@@ -257,7 +298,9 @@ async function fetchAll() {
     store.fetchMessages({ limit: 20 }),
     store.fetchSOSStatus(),
     store.fetchSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
-    store.fetchCredits()
+    store.fetchCredits(),
+    store.fetchSchedulerStatus(),
+    store.fetchLocationSources()
   ])
 }
 
@@ -268,6 +311,8 @@ onMounted(() => {
     store.fetchIridiumSignalFast()
     store.fetchNodes()
     store.fetchDLQ()
+    store.fetchSchedulerStatus()
+    store.fetchLocationSources()
   }, 15000)
 })
 
@@ -304,6 +349,15 @@ onUnmounted(() => {
             <span class="text-[10px] text-gray-500 ml-1">/5</span>
           </div>
           <span class="text-[10px] text-gray-500 uppercase">{{ satAssessment }}</span>
+          <!-- Scheduler mode badge -->
+          <span v-if="schedulerEnabled"
+            class="text-[9px] font-mono px-1.5 py-0.5 rounded ml-auto"
+            :class="schedulerBadgeClass(schedulerMode)">
+            {{ schedulerModeName }}
+          </span>
+          <span v-else class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500 ml-auto">
+            Manual
+          </span>
         </div>
 
         <!-- Signal sparkline (6h history) -->
@@ -332,6 +386,13 @@ onUnmounted(() => {
           <div class="flex justify-between">
             <span class="text-gray-500">Last RX</span>
             <span class="text-gray-400 font-mono">{{ lastSatRx }}</span>
+          </div>
+          <div v-if="schedulerEnabled && schedulerNextPass" class="flex justify-between">
+            <span class="text-gray-500">Next Pass</span>
+            <span class="text-gray-400 font-mono text-[10px]">
+              {{ schedulerNextPass.is_active ? 'NOW' : schedulerNextTransition }}
+              <span class="text-gray-600">({{ schedulerNextPass.priority }})</span>
+            </span>
           </div>
           <div class="flex justify-between">
             <span class="text-gray-500">Credits Today</span>
@@ -511,7 +572,76 @@ onUnmounted(() => {
         </router-link>
       </div>
 
-      <!-- ═══ Panel 5: SBD Message Queue ═══ -->
+      <!-- ═══ Panel 5: Iridium Location ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-teal-400 tracking-wide">IRIDIUM LOCATION</h2>
+          <span v-if="locationResolved"
+            class="text-[9px] font-mono px-1.5 py-0.5 rounded"
+            :class="locationResolved.source === 'gps' ? 'bg-emerald-400/10 text-emerald-400' : locationResolved.source === 'iridium' ? 'bg-teal-400/10 text-teal-400' : 'bg-amber-400/10 text-amber-400'">
+            {{ locationResolved.source.toUpperCase() }}
+          </span>
+          <span v-else class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500">NO FIX</span>
+        </div>
+
+        <!-- Active (resolved) location -->
+        <div v-if="locationResolved" class="mb-3">
+          <span class="text-[10px] text-gray-500 block">AUTO Resolved</span>
+          <div class="font-mono text-sm text-gray-200">
+            {{ locationResolved.lat.toFixed(5) }}, {{ locationResolved.lon.toFixed(5) }}
+          </div>
+          <span v-if="locationResolved.accuracy_km" class="text-[10px] text-gray-500">
+            ~{{ formatAccuracy(locationResolved.accuracy_km) }} accuracy
+          </span>
+        </div>
+        <div v-else class="mb-3 text-[11px] text-gray-600">
+          No location fix from any source
+        </div>
+
+        <!-- Source breakdown -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between items-center">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full" :class="locationGps ? 'bg-emerald-400' : 'bg-gray-600'" />
+              <span class="text-gray-500">GPS</span>
+            </div>
+            <span v-if="locationGps" class="text-gray-300 font-mono text-[10px]">
+              {{ locationGps.lat.toFixed(4) }}, {{ locationGps.lon.toFixed(4) }}
+              <span class="text-gray-600 ml-1">~{{ formatAccuracy(locationGps.accuracy_km) }}</span>
+            </span>
+            <span v-else class="text-gray-600 font-mono">No fix</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full" :class="locationIridium ? 'bg-teal-400' : 'bg-gray-600'" />
+              <span class="text-gray-500">Iridium</span>
+            </div>
+            <span v-if="locationIridium" class="text-gray-300 font-mono text-[10px]">
+              {{ locationIridium.lat.toFixed(4) }}, {{ locationIridium.lon.toFixed(4) }}
+              <span class="text-gray-600 ml-1">~{{ formatAccuracy(locationIridium.accuracy_km) }}</span>
+            </span>
+            <span v-else class="text-gray-600 font-mono">No fix</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span class="text-gray-500">Custom</span>
+            </div>
+            <span class="text-gray-400 font-mono text-[10px]">{{ (store.locations || []).length }} entries</span>
+          </div>
+        </div>
+
+        <!-- Priority legend -->
+        <div class="mt-3 pt-2 border-t border-tactical-border">
+          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (1-100km) > Custom</span>
+        </div>
+
+        <router-link to="/passes" class="block text-center text-[10px] text-teal-400/60 hover:text-teal-400 mt-2 transition-colors">
+          Pass Predictor
+        </router-link>
+      </div>
+
+      <!-- ═══ Panel 6: SBD Message Queue ═══ -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">SBD QUEUE</h2>
@@ -553,7 +683,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 6: Activity Log (col-span-2) ═══ -->
+      <!-- ═══ Panel 7: Activity Log (col-span-2) ═══ -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4 md:col-span-2"
         @mouseenter="logPaused = true" @mouseleave="logPaused = false">
         <div class="flex items-center justify-between mb-3">
@@ -580,7 +710,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 7: Power System ═══ -->
+      <!-- ═══ Panel 8: Power System ═══ -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-display font-semibold text-sm text-tactical-power tracking-wide">POWER SYSTEM</h2>

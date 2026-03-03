@@ -14,11 +14,12 @@ import (
 
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
-	db       *database.DB
-	sat      transport.SatTransport // optional, for iridium gateway
-	running  map[string]Gateway
-	mu       sync.RWMutex
-	cancelFn context.CancelFunc
+	db        *database.DB
+	sat       transport.SatTransport // optional, for iridium gateway
+	predictor PassPredictor          // optional, for pass scheduler
+	running   map[string]Gateway
+	mu        sync.RWMutex
+	cancelFn  context.CancelFunc
 }
 
 // NewManager creates a new gateway manager.
@@ -28,6 +29,24 @@ func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 		sat:     sat,
 		running: make(map[string]Gateway),
 	}
+}
+
+// SetPassPredictor sets the pass predictor for pass-aware scheduling on Iridium gateways.
+func (m *Manager) SetPassPredictor(p PassPredictor) {
+	m.predictor = p
+}
+
+// GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
+func (m *Manager) GetPassScheduler() *PassScheduler {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if gw, ok := m.running["iridium"]; ok {
+		if igw, ok := gw.(*IridiumGateway); ok {
+			return igw.PassSchedulerRef()
+		}
+	}
+	return nil
 }
 
 // Start loads enabled configs from DB and starts their gateways.
@@ -302,7 +321,7 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err != nil {
 			return nil, err
 		}
-		return NewIridiumGateway(*cfg, m.sat, m.db), nil
+		return NewIridiumGateway(*cfg, m.sat, m.db, m.predictor), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}
