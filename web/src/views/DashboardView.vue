@@ -72,12 +72,21 @@ const iridiumStatus = computed(() => {
 })
 const dlqPending = computed(() => (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length)
 const lastSatTx = computed(() => {
-  const msgs = (store.messages || []).filter(m => m.transport === 'iridium' && m.direction === 'tx')
-  return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
+  // Last successful outbound SBD send — from the queue (dead_letters with status=sent, direction=outbound)
+  const sent = (store.dlq || []).filter(d => d.status === 'sent' && d.direction === 'outbound')
+  if (sent.length) {
+    // Queue is sorted by id desc, first entry is most recent
+    return formatRelativeTime(sent[0].updated_at || sent[0].created_at)
+  }
+  return 'N/A'
 })
 const lastSatRx = computed(() => {
-  const msgs = (store.messages || []).filter(m => m.transport === 'iridium' && m.direction === 'rx')
-  return msgs.length ? formatRelativeTime(msgs[0].created_at || msgs[0].timestamp) : 'N/A'
+  // Last inbound SBD receive — from the queue (dead_letters with direction=inbound)
+  const recv = (store.dlq || []).filter(d => d.direction === 'inbound')
+  if (recv.length) {
+    return formatRelativeTime(recv[0].updated_at || recv[0].created_at)
+  }
+  return 'N/A'
 })
 
 // Signal sparkline from history

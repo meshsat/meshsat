@@ -6,6 +6,7 @@ const store = useMeshsatStore()
 const filter = ref('all') // 'all', 'active', 'stale'
 const sortBy = ref('last_heard') // 'last_heard', 'name', 'signal'
 const removing = ref(null)
+const removingStale = ref(false)
 
 const radioConnected = computed(() => store.status?.connected === true)
 const now = computed(() => Date.now() / 1000)
@@ -93,6 +94,17 @@ async function handleTraceroute(node) {
   } catch { /* store error */ }
 }
 
+async function handleRemoveAllStale() {
+  const staleNodes = (store.nodes || []).filter(n => !isActive(n))
+  if (!staleNodes.length) return
+  if (!confirm(`Remove ${staleNodes.length} stale node${staleNodes.length > 1 ? 's' : ''} from the radio's NodeDB?\n\nThis cannot be undone.`)) return
+  removingStale.value = true
+  for (const node of staleNodes) {
+    try { await store.removeNode(node.num) } catch { /* continue */ }
+  }
+  removingStale.value = false
+}
+
 onMounted(() => {
   Promise.all([store.fetchNodes(), store.fetchStatus()])
 })
@@ -110,10 +122,16 @@ onMounted(() => {
           <span v-if="staleCount > 0" class="text-gray-600">{{ staleCount }} stale</span>
         </div>
       </div>
-      <button @click="store.fetchNodes()"
-        class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">
-        Refresh
-      </button>
+      <div class="flex items-center gap-2">
+        <button v-if="staleCount > 0" @click="handleRemoveAllStale" :disabled="removingStale"
+          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-red-400/70 hover:text-red-300 border border-red-900/30 hover:border-red-800/50 transition-colors disabled:opacity-50">
+          {{ removingStale ? 'Removing...' : `Forget ${staleCount} stale` }}
+        </button>
+        <button @click="store.fetchNodes()"
+          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">
+          Refresh
+        </button>
+      </div>
     </div>
 
     <!-- Connection banner -->

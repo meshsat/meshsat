@@ -386,7 +386,7 @@ onMounted(async () => {
         <span class="text-[10px] text-gray-500 uppercase tracking-wider">Signal vs Passes</span>
         <div class="flex items-center gap-3 text-[10px] text-gray-500">
           <span class="flex items-center gap-1">
-            <svg width="12" height="8" class="inline-block"><polygon points="0,8 6,1 12,8" fill="rgba(45,212,191,0.25)" stroke="rgba(45,212,191,0.4)" stroke-width="0.5"/></svg>
+            <svg width="12" height="8" class="inline-block"><polygon points="0,8 6,1 12,8" fill="rgba(129,140,248,0.3)" stroke="rgba(129,140,248,0.5)" stroke-width="0.5"/></svg>
             Pass
           </span>
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Signal</span>
@@ -395,15 +395,15 @@ onMounted(async () => {
       <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" class="w-full h-auto" preserveAspectRatio="xMidYMid meet"
         @mousemove="onChartHover" @mouseleave="clearHover" style="cursor: crosshair;">
         <defs>
-          <!-- Pass triangle gradient -->
+          <!-- Pass triangle gradient (indigo/blue) -->
           <linearGradient id="passGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgb(45,212,191)" stop-opacity="0.25" />
-            <stop offset="100%" stop-color="rgb(45,212,191)" stop-opacity="0.03" />
+            <stop offset="0%" stop-color="rgb(129,140,248)" stop-opacity="0.30" />
+            <stop offset="100%" stop-color="rgb(129,140,248)" stop-opacity="0.03" />
           </linearGradient>
-          <!-- Active pass gradient -->
+          <!-- Active pass gradient (brighter indigo) -->
           <linearGradient id="passGradActive" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgb(45,212,191)" stop-opacity="0.45" />
-            <stop offset="100%" stop-color="rgb(45,212,191)" stop-opacity="0.08" />
+            <stop offset="0%" stop-color="rgb(165,180,252)" stop-opacity="0.50" />
+            <stop offset="100%" stop-color="rgb(165,180,252)" stop-opacity="0.08" />
           </linearGradient>
           <!-- Signal area gradient -->
           <linearGradient id="signalAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -430,21 +430,21 @@ onMounted(async () => {
 
         <!-- Right Y-axis labels (elevation degrees) -->
         <text v-for="t in chartData.elevTickData" :key="'el'+t.deg"
-          :x="chartWidth - padR + 6" :y="t.y" text-anchor="start" fill="#5eead4" font-size="8" dominant-baseline="middle" opacity="0.5">
+          :x="chartWidth - padR + 6" :y="t.y" text-anchor="start" fill="#818cf8" font-size="8" dominant-baseline="middle" opacity="0.5">
           {{ t.deg }}
         </text>
-        <text :x="chartWidth - padR + 6" :y="plotTop - 5" text-anchor="start" fill="#5eead4" font-size="7" opacity="0.5">deg</text>
+        <text :x="chartWidth - padR + 6" :y="plotTop - 5" text-anchor="start" fill="#818cf8" font-size="7" opacity="0.5">deg</text>
 
         <!-- Plot area (clipped) -->
         <g clip-path="url(#plotClip)">
           <!-- Pass triangles (background layer) -->
           <path v-for="(p, idx) in chartData.passes" :key="'pt'+idx"
             :d="p.path" :fill="p.active ? 'url(#passGradActive)' : 'url(#passGrad)'"
-            :stroke="p.active ? 'rgba(45,212,191,0.5)' : 'rgba(45,212,191,0.2)'" stroke-width="1" />
+            :stroke="p.active ? 'rgba(165,180,252,0.5)' : 'rgba(129,140,248,0.2)'" stroke-width="1" />
 
           <!-- Pass peak labels (for wider triangles) -->
           <text v-for="(p, idx) in chartData.passes.filter(pp => (pp.x2 - pp.x1) > 20)" :key="'plbl'+idx"
-            :x="p.xMid" :y="p.peakY - 4" text-anchor="middle" fill="#5eead4" font-size="7" opacity="0.6">
+            :x="p.xMid" :y="p.peakY - 4" text-anchor="middle" fill="#a5b4fc" font-size="7" opacity="0.6">
             {{ p.elev.toFixed(0) }}
           </text>
 
@@ -494,7 +494,7 @@ onMounted(async () => {
           </text>
           <text v-if="hoverInfo.passLabel"
             :x="hoverInfo.x + (hoverInfo.x > chartWidth / 2 ? -114 : 14)" :y="plotTop + 25"
-            fill="#5eead4" font-size="8">
+            fill="#a5b4fc" font-size="8">
             {{ hoverInfo.passLabel }} {{ hoverInfo.passElev?.toFixed(0) }}deg
           </text>
           <text v-if="hoverInfo.signalVal !== null"
