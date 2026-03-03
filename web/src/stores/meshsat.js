@@ -88,6 +88,30 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  async function removeNode(nodeNum) {
+    error.value = null
+    try {
+      await api.del(`/nodes/${nodeNum}`)
+      await fetchNodes()
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function purgeMessages(before) {
+    error.value = null
+    try {
+      const result = await api.del(`/messages?before=${encodeURIComponent(before)}`)
+      await fetchMessages()
+      await fetchMessageStats()
+      return result
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   async function fetchStatus() {
     try {
       status.value = await api.get('/status')
@@ -361,8 +385,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config,
     iridiumSignal, rules, presets, sosStatus, dlq,
     loading, error,
-    fetchMessages, fetchMessageStats, sendMessage,
-    fetchTelemetry, fetchPositions, fetchNodes, fetchStatus, fetchGateways,
+    fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
+    fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,

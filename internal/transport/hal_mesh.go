@@ -235,6 +235,13 @@ func (t *HALMeshTransport) SendWaypoint(ctx context.Context, wp Waypoint) error 
 	return t.postJSON(ctx, "/meshtastic/waypoints", wp)
 }
 
+// RemoveNode sends a remove_by_nodenum admin command to forget a node from the NodeDB.
+func (t *HALMeshTransport) RemoveNode(ctx context.Context, nodeNum uint32) error {
+	return t.postJSON(ctx, "/meshtastic/admin/remove_node", map[string]interface{}{
+		"node_num": nodeNum,
+	})
+}
+
 // Close stops the SSE subscription.
 func (t *HALMeshTransport) Close() error {
 	if t.cancel != nil {

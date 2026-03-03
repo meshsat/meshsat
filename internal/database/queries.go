@@ -81,8 +81,11 @@ type MessageFilter struct {
 // MessageStats holds aggregate message counts.
 type MessageStats struct {
 	Total       int            `json:"total"`
+	Today       int            `json:"today"`
 	ByTransport map[string]int `json:"by_transport"`
 	ByPortNum   map[string]int `json:"by_portnum"`
+	OldestAt    string         `json:"oldest_at,omitempty"`
+	NewestAt    string         `json:"newest_at,omitempty"`
 }
 
 // InsertMessage persists a mesh message.
@@ -257,6 +260,20 @@ func (db *DB) GetMessageStats() (*MessageStats, error) {
 		return nil, fmt.Errorf("count total: %w", err)
 	}
 
+	// Today's count
+	db.QueryRow("SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now')").Scan(&stats.Today)
+
+	// Date range
+	var oldest, newest *string
+	db.QueryRow("SELECT MIN(created_at) FROM messages").Scan(&oldest)
+	db.QueryRow("SELECT MAX(created_at) FROM messages").Scan(&newest)
+	if oldest != nil {
+		stats.OldestAt = *oldest
+	}
+	if newest != nil {
+		stats.NewestAt = *newest
+	}
+
 	rows, err := db.Query("SELECT transport, COUNT(*) FROM messages GROUP BY transport")
 	if err != nil {
 		return nil, fmt.Errorf("count by transport: %w", err)
@@ -286,6 +303,16 @@ func (db *DB) GetMessageStats() (*MessageStats, error) {
 	}
 
 	return stats, nil
+}
+
+// PurgeMessages deletes messages older than the given RFC3339 timestamp.
+// Returns the number of deleted rows.
+func (db *DB) PurgeMessages(before string) (int64, error) {
+	result, err := db.Exec("DELETE FROM messages WHERE created_at < ?", before)
+	if err != nil {
+		return 0, fmt.Errorf("purge messages: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 // PruneOlderThan deletes records older than the given number of days.

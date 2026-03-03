@@ -106,6 +106,25 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 
+// handlePurgeMessages deletes messages older than a given timestamp.
+func (s *Server) handlePurgeMessages(w http.ResponseWriter, r *http.Request) {
+	before := r.URL.Query().Get("before")
+	if before == "" {
+		writeError(w, http.StatusBadRequest, "before parameter required (RFC3339 timestamp)")
+		return
+	}
+
+	deleted, err := s.db.PurgeMessages(before)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to purge: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"deleted": deleted,
+	})
+}
+
 func intParam(s string, fallback int) int {
 	if s == "" {
 		return fallback

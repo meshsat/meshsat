@@ -135,6 +135,16 @@ async function sendPreset(preset) {
   store.fetchMessages()
 }
 
+async function purgeOld() {
+  const days = prompt('Delete messages older than how many days?', '30')
+  if (!days) return
+  const d = new Date()
+  d.setDate(d.getDate() - parseInt(days))
+  if (confirm(`Delete all messages before ${d.toLocaleDateString()}?`)) {
+    await store.purgeMessages(d.toISOString())
+  }
+}
+
 async function sosActivate() {
   sosSending.value = true
   try { await store.activateSOS() } finally { sosSending.value = false; sosConfirming.value = false }
@@ -172,14 +182,19 @@ onUnmounted(() => {
         <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Nodes</div>
         <div class="flex items-baseline gap-1.5">
           <span class="text-lg font-semibold text-gray-100">{{ store.status?.num_nodes || 0 }}</span>
-          <span class="text-[10px] text-gray-500">{{ onlineNodes }} online</span>
+          <span class="text-[10px] text-emerald-400/70">{{ onlineNodes }} active</span>
         </div>
       </div>
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
         <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Messages</div>
         <div class="flex items-baseline gap-1.5">
-          <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.total || store.messages?.length || 0 }}</span>
-          <span class="text-[10px] text-gray-500">{{ textMsgCount }} text</span>
+          <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.today || 0 }}</span>
+          <span class="text-[10px] text-gray-500">today</span>
+        </div>
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <span class="text-[10px] text-emerald-400/60">{{ store.messageStats?.by_transport?.radio || 0 }} radio</span>
+          <span v-if="store.messageStats?.by_transport?.iridium" class="text-[10px] text-blue-400/60">{{ store.messageStats.by_transport.iridium }} sat</span>
+          <span v-if="store.messageStats?.by_transport?.mqtt" class="text-[10px] text-purple-400/60">{{ store.messageStats.by_transport.mqtt }} mqtt</span>
         </div>
       </div>
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
@@ -194,10 +209,11 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
-        <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Bridge</div>
+        <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Total stored</div>
         <div class="flex items-baseline gap-1.5">
-          <span class="text-lg font-semibold text-gray-100">{{ activeRuleCount }}</span>
-          <span class="text-[10px] text-gray-500">{{ activeRuleCount === 1 ? 'rule' : 'rules' }} active</span>
+          <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.total || 0 }}</span>
+          <button v-if="store.messageStats?.total > 100" @click="purgeOld"
+            class="text-[10px] text-gray-600 hover:text-red-400 transition-colors">clear old</button>
         </div>
       </div>
     </div>

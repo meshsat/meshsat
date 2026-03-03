@@ -62,11 +62,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/messages", s.handleGetMessages)
 		r.Get("/messages/stats", s.handleGetMessageStats)
 		r.Post("/messages/send", s.handleSendMessage)
+		r.Delete("/messages", s.handlePurgeMessages)
 
 		r.Get("/telemetry", s.handleGetTelemetry)
 		r.Get("/positions", s.handleGetPositions)
 
 		r.Get("/nodes", s.handleGetNodes)
+		r.Delete("/nodes/{num}", s.handleRemoveNode)
 		r.Get("/status", s.handleGetStatus)
 
 		r.Get("/events", s.handleSSE)

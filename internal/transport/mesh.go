@@ -122,5 +122,6 @@ type MeshTransport interface {
 	SetModuleConfig(ctx context.Context, section string, data json.RawMessage) error
 	SetChannel(ctx context.Context, req ChannelRequest) error
 	SendWaypoint(ctx context.Context, wp Waypoint) error
+	RemoveNode(ctx context.Context, nodeNum uint32) error
 	Close() error
 }

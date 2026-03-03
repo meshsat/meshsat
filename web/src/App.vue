@@ -63,7 +63,7 @@ onUnmounted(() => {
 
     <!-- Sidebar (desktop) -->
     <nav class="hidden lg:flex fixed left-0 top-0 bottom-0 w-20 bg-gray-900 border-r border-gray-800 flex-col items-center py-6 z-40">
-      <div class="text-teal-400 font-bold text-xs mb-8 tracking-wider">MESH<br>SAT</div>
+      <img src="/logo.png" alt="MeshSat" class="w-12 h-12 mb-6 opacity-90" />
       <div class="flex-1 flex flex-col gap-1">
         <router-link v-for="tab in tabs" :key="tab.name" :to="tab.path"
           class="flex flex-col items-center py-3 px-2 rounded-lg text-xs transition-colors"

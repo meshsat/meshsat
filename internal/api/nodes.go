@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
 
 	"meshsat/internal/transport"
 )
@@ -53,4 +56,26 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+// handleRemoveNode removes a node from the radio's NodeDB.
+func (s *Server) handleRemoveNode(w http.ResponseWriter, r *http.Request) {
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
+
+	numStr := chi.URLParam(r, "num")
+	num, err := strconv.ParseUint(numStr, 10, 32)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid node number")
+		return
+	}
+
+	if err := s.mesh.RemoveNode(r.Context(), uint32(num)); err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to remove node: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
