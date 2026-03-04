@@ -506,29 +506,32 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	}
 	status, err := parseSBDSX(resp)
 	if err != nil {
-		log.Warn().Err(err).Msg("iridium: SBDSX parse failed, falling back to SBDIX")
-	} else {
-		log.Info().Bool("mo", status.MOFlag).Bool("mt", status.MTFlag).
-			Bool("ra", status.RAFlag).Int("waiting", status.MTWaiting).
-			Msg("iridium: mailbox SBDSX status")
-
-		// If MT buffer already has data from a piggybacked delivery, report immediately
-		if status.MTFlag {
-			log.Info().Msg("iridium: MT buffer has data (piggybacked), no SBDIX needed")
-			return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
-		}
-
-		// Only perform expensive SBDIX when there's a reason:
-		// - Ring alert (RA) flag set — GSS signalled inbound message
-		// - MT waiting > 0 — GSS reports queued messages
-		// Without these, SBDIX sends an empty MO ("[No payload]") costing 1 credit.
-		if !status.RAFlag && status.MTWaiting == 0 {
-			log.Info().Msg("iridium: no RA, no MT waiting, skipping SBDIX")
-			return &SBDResult{}, nil
-		}
+		// Parse failure — do NOT fall back to SBDIX (burns a credit with empty MO).
+		// Caller (pollWorker) will retry on next interval.
+		log.Warn().Err(err).Msg("iridium: SBDSX parse failed, skipping SBDIX (will retry next poll)")
+		return nil, fmt.Errorf("SBDSX parse failed: %w", err)
 	}
 
-	// Step 2: SBDIX — satellite session
+	log.Info().Bool("mo", status.MOFlag).Bool("mt", status.MTFlag).
+		Bool("ra", status.RAFlag).Int("waiting", status.MTWaiting).
+		Msg("iridium: mailbox SBDSX status")
+
+	// If MT buffer already has data from a piggybacked delivery, report immediately
+	if status.MTFlag {
+		log.Info().Msg("iridium: MT buffer has data (piggybacked), no SBDIX needed")
+		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
+	}
+
+	// Only perform expensive SBDIX when there's a reason:
+	// - Ring alert (RA) flag set — GSS signalled inbound message
+	// - MT waiting > 0 — GSS reports queued messages
+	// Without these, SBDIX sends an empty MO ("[No payload]") costing 1 credit.
+	if !status.RAFlag && status.MTWaiting == 0 {
+		log.Info().Msg("iridium: no RA, no MT waiting, skipping SBDIX")
+		return &SBDResult{}, nil
+	}
+
+	// Step 2: SBDIX — satellite session (RA or MT waiting confirmed)
 	// Clear MO buffer to avoid accidental resend
 	sendAT(t.file, "AT+SBDD0", 3*time.Second)
 
