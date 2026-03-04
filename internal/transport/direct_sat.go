@@ -184,18 +184,34 @@ func (t *DirectSatTransport) startMonitor() {
 	go t.signalPollerLoop()
 }
 
+// stopMonitor stops the ring monitor and signal poller.
+// Caller must hold t.mu. Temporarily releases it so goroutines can exit.
 func (t *DirectSatTransport) stopMonitor() {
 	if !t.ringActive {
 		return
 	}
 	close(t.stopRingCh)
-	<-t.ringDone
 	close(t.stopSignalCh)
-	<-t.signalDone
+	ringDone := t.ringDone
+	signalDone := t.signalDone
+	// Release mutex so goroutines can finish (they need mu to check state)
+	t.mu.Unlock()
+	select {
+	case <-ringDone:
+	case <-time.After(2 * time.Second):
+		log.Warn().Msg("iridium: ring monitor did not exit in time")
+	}
+	select {
+	case <-signalDone:
+	case <-time.After(2 * time.Second):
+		log.Warn().Msg("iridium: signal poller did not exit in time")
+	}
+	t.mu.Lock()
 	t.ringActive = false
 }
 
 // monitorLoop reads serial for unsolicited SBDRING alerts.
+// Holds the mutex during reads (like HAL) to prevent racing with sendAT.
 func (t *DirectSatTransport) monitorLoop() {
 	defer close(t.ringDone)
 
@@ -214,12 +230,12 @@ func (t *DirectSatTransport) monitorLoop() {
 			t.mu.Unlock()
 			return
 		}
-		f := t.file
-		t.mu.Unlock()
 
-		// Read outside lock with 100ms deadline
-		f.SetDeadline(time.Now().Add(100 * time.Millisecond))
-		n, err := f.Read(buf)
+		// Read under lock with 100ms deadline — releases lock quickly on timeout
+		t.file.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		n, err := t.file.Read(buf)
+		t.file.SetDeadline(time.Time{})
+		t.mu.Unlock()
 
 		if err != nil {
 			if isTimeoutError(err) {
@@ -450,7 +466,8 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	return parseSBDRBResponse(all)
 }
 
-// MailboxCheck performs SBDIX to check for queued MT messages.
+// MailboxCheck performs SBDSX (free) then conditional SBDIX (satellite session).
+// Matches HAL's credit-aware two-step approach.
 func (t *DirectSatTransport) MailboxCheck(_ context.Context) (*SBDResult, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -460,6 +477,41 @@ func (t *DirectSatTransport) MailboxCheck(_ context.Context) (*SBDResult, error)
 
 	t.stopMonitor()
 	defer t.startMonitor()
+
+	// Step 1: SBDSX — free local status check
+	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("SBDSX failed: %w", err)
+	}
+	status, err := parseSBDSX(resp)
+	if err != nil {
+		log.Warn().Err(err).Msg("iridium: SBDSX parse failed, falling back to SBDIX")
+	} else {
+		log.Info().Bool("mo", status.MOFlag).Bool("mt", status.MTFlag).
+			Bool("ra", status.RAFlag).Int("waiting", status.MTWaiting).
+			Msg("iridium: mailbox SBDSX status")
+
+		// If MT buffer already has data from a piggybacked delivery, report immediately
+		if status.MTFlag {
+			log.Info().Msg("iridium: MT buffer has data (piggybacked), no SBDIX needed")
+			return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
+		}
+
+		// Only perform expensive SBDIX when there's a reason
+		const staleCheckInterval = 5 * time.Minute
+		stale := time.Since(t.lastSBDIX) > staleCheckInterval
+		if !status.RAFlag && status.MTWaiting == 0 && !stale {
+			log.Info().Msg("iridium: no RA, no MT waiting, skipping SBDIX")
+			return &SBDResult{}, nil
+		}
+		if stale {
+			log.Info().Msg("iridium: stale SBDIX (>5m), forcing check")
+		}
+	}
+
+	// Step 2: SBDIX — satellite session
+	// Clear MO buffer to avoid accidental resend
+	sendAT(t.file, "AT+SBDD0", 3*time.Second)
 
 	return t.sbdixLocked()
 }
@@ -647,6 +699,36 @@ func parseSBDIX(resp string) (sbdixResult, error) {
 	result.mtQueued, _ = strconv.Atoi(strings.TrimSpace(parts[5]))
 
 	return result, nil
+}
+
+// sbdStatus holds the result of AT+SBDSX (free local check, no satellite session).
+type sbdStatus struct {
+	MOFlag    bool
+	MTFlag    bool
+	RAFlag    bool
+	MTWaiting int
+}
+
+func parseSBDSX(resp string) (sbdStatus, error) {
+	idx := strings.Index(resp, "+SBDSX:")
+	if idx == -1 {
+		return sbdStatus{}, fmt.Errorf("no +SBDSX in response")
+	}
+	remainder := strings.TrimSpace(resp[idx+7:])
+	firstLine := strings.Split(remainder, "\n")[0]
+	parts := strings.Split(firstLine, ",")
+	if len(parts) < 6 {
+		return sbdStatus{}, fmt.Errorf("malformed SBDSX response")
+	}
+	s := sbdStatus{}
+	moFlag, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+	s.MOFlag = moFlag != 0
+	mtFlag, _ := strconv.Atoi(strings.TrimSpace(parts[2]))
+	s.MTFlag = mtFlag != 0
+	raFlag, _ := strconv.Atoi(strings.TrimSpace(parts[4]))
+	s.RAFlag = raFlag != 0
+	s.MTWaiting, _ = strconv.Atoi(strings.TrimSpace(parts[5]))
+	return s, nil
 }
 
 func parseCSQ(resp string) int {

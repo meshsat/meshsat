@@ -25,14 +25,14 @@ type IridiumGateway struct {
 
 	outCh chan *transport.MeshMessage // buffered outbound queue
 
-	connected      atomic.Bool
+	connected       atomic.Bool
 	ringAlertActive atomic.Bool // prevents concurrent handleRingAlert goroutines
-	msgsIn         atomic.Int64
-	msgsOut        atomic.Int64
-	errors         atomic.Int64
-	dlqPending     atomic.Int64
-	lastActive     atomic.Int64
-	startTime      time.Time
+	msgsIn          atomic.Int64
+	msgsOut         atomic.Int64
+	errors          atomic.Int64
+	dlqPending      atomic.Int64
+	lastActive      atomic.Int64
+	startTime       time.Time
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
