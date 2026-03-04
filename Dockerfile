@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /meshsat ./cmd/meshsat
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates wget
+RUN apk add --no-cache ca-certificates wget coreutils
 COPY --from=builder /meshsat /usr/local/bin/meshsat
 
 EXPOSE 6050

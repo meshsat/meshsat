@@ -44,7 +44,7 @@ func main() {
 	defer db.Close()
 	log.Info().Str("path", cfg.DBPath).Msg("database ready")
 
-	// Transport — both cubeos and standalone use HAL (sidecar in standalone mode)
+	// Transport — mode selects communication backend
 	var mesh transport.MeshTransport
 	var sat transport.SatTransport
 	switch cfg.Mode {
@@ -55,6 +55,18 @@ func main() {
 		// Satellite transport (optional — only if Iridium is available)
 		sat = transport.NewHALSatTransport(cfg.HALURL, cfg.HALAPIKey)
 		log.Info().Msg("HAL satellite transport available")
+
+	case "direct":
+		// Direct serial — talk to USB devices without HAL
+		directMesh := transport.NewDirectMeshTransport(cfg.MeshtasticPort)
+		mesh = directMesh
+		log.Info().Str("port", cfg.MeshtasticPort).Msg("using direct Meshtastic serial transport")
+
+		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
+		directSat.SetExcludePort(cfg.MeshtasticPort)
+		sat = directSat
+		log.Info().Str("port", cfg.IridiumPort).Msg("using direct Iridium serial transport")
+
 	default:
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")
 	}
