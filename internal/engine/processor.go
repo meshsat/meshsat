@@ -121,23 +121,65 @@ func (p *Processor) Subscribe() (<-chan transport.MeshEvent, func()) {
 }
 
 // Run starts the event processing loop. Blocks until ctx is cancelled.
+// Automatically reconnects to the mesh transport with exponential backoff
+// if the serial connection is lost (matching the Iridium gateway pattern).
 func (p *Processor) Run(ctx context.Context) error {
-	events, err := p.mesh.Subscribe(ctx)
-	if err != nil {
-		return fmt.Errorf("subscribe to mesh: %w", err)
-	}
-
 	log.Info().Msg("event processor started")
+
+	backoff := time.Second
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info().Msg("event processor stopped")
 			return nil
+		default:
+		}
+
+		start := time.Now()
+		err := p.processEvents(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		// Reset backoff if connection lasted > 10s
+		if time.Since(start) > 10*time.Second {
+			backoff = time.Second
+		}
+
+		if err != nil {
+			log.Warn().Err(err).Dur("backoff", backoff).Msg("mesh transport disconnected, reconnecting")
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > 2*time.Minute {
+			backoff = 2 * time.Minute
+		}
+	}
+}
+
+// processEvents subscribes once and processes events until disconnected or ctx cancelled.
+func (p *Processor) processEvents(ctx context.Context) error {
+	events, err := p.mesh.Subscribe(ctx)
+	if err != nil {
+		return fmt.Errorf("subscribe to mesh: %w", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
 		case event, ok := <-events:
 			if !ok {
-				log.Warn().Msg("mesh event channel closed")
-				return nil
+				return fmt.Errorf("event channel closed")
+			}
+			if event.Type == "disconnected" {
+				return fmt.Errorf("mesh transport disconnected")
 			}
 			p.handleEvent(ctx, event)
 			p.broadcast(event)

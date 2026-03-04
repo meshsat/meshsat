@@ -64,13 +64,13 @@ func main() {
 		log.Info().Str("port", cfg.MeshtasticPort).Msg("using direct Meshtastic serial transport")
 
 		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
-		directSat.SetExcludePort(cfg.MeshtasticPort)
+		directSat.SetExcludePortFunc(directMesh.GetPort) // dynamic: resolves at auto-detect time
 		sat = directSat
 		log.Info().Str("port", cfg.IridiumPort).Msg("using direct Iridium serial transport")
 
 		// Cellular transport (optional — only if 4G/LTE modem is available)
 		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
-		directCell.SetExcludePorts([]string{cfg.MeshtasticPort, cfg.IridiumPort})
+		directCell.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort})
 		cell = directCell
 		log.Info().Str("port", cfg.CellularPort).Msg("using direct cellular serial transport")
 

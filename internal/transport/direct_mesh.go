@@ -50,7 +50,9 @@ type DirectMeshTransport struct {
 
 	heartbeatNonce uint32
 
-	eventMu sync.RWMutex
+	readerDone chan struct{} // closed when readerLoop exits
+
+	eventMu    sync.RWMutex
 	eventSubs  map[uint64]chan MeshEvent
 	nextSubID  uint64
 	cancelFunc context.CancelFunc
@@ -66,6 +68,14 @@ func NewDirectMeshTransport(port string) *DirectMeshTransport {
 		configData: make(map[string]interface{}),
 		eventSubs:  make(map[uint64]chan MeshEvent),
 	}
+}
+
+// GetPort returns the resolved serial port path (e.g., "/dev/ttyACM0").
+// Returns "auto" or "" if not yet connected.
+func (t *DirectMeshTransport) GetPort() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.port
 }
 
 // Subscribe opens the serial connection (if not already) and returns a channel
@@ -139,6 +149,7 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	// Start background reader
 	readerCtx, cancel := context.WithCancel(context.Background())
 	t.cancelFunc = cancel
+	t.readerDone = make(chan struct{})
 	go t.readerLoop(readerCtx)
 
 	// Wait for config completion (or timeout)
@@ -172,6 +183,7 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 
 // readerLoop continuously reads serial frames, parses them, and updates state.
 func (t *DirectMeshTransport) readerLoop(ctx context.Context) {
+	defer close(t.readerDone)
 	log.Info().Msg("meshtastic reader loop started")
 	defer log.Info().Msg("meshtastic reader loop stopped")
 
@@ -738,19 +750,26 @@ func (t *DirectMeshTransport) RemoveNode(_ context.Context, nodeNum uint32) erro
 
 func (t *DirectMeshTransport) Close() error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	if t.cancelFunc != nil {
 		t.cancelFunc()
-		// Wait briefly for readerLoop to exit (matches HAL's 2s timeout pattern)
-		t.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
-		t.mu.Lock()
+		// Wait for readerLoop to exit (2s timeout, matching HAL pattern)
+		done := t.readerDone
+		if done != nil {
+			t.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				log.Warn().Msg("meshtastic: reader loop did not exit in time")
+			}
+			t.mu.Lock()
+		}
 	}
 	t.connected = false
 	if t.file != nil {
 		t.file.Close()
 		t.file = nil
 	}
+	t.mu.Unlock()
 	return nil
 }

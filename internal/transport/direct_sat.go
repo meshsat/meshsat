@@ -60,7 +60,8 @@ type DirectSatTransport struct {
 	cancelFunc context.CancelFunc
 
 	// Exclude port (if Meshtastic already claimed it)
-	excludePort string
+	excludePort   string
+	excludePortFn func() string // dynamic resolver (takes precedence over static)
 }
 
 // NewDirectSatTransport creates a new direct serial Iridium transport.
@@ -73,9 +74,23 @@ func NewDirectSatTransport(port string) *DirectSatTransport {
 	}
 }
 
+// GetPort returns the resolved serial port path.
+// Returns "auto" or "" if not yet connected.
+func (t *DirectSatTransport) GetPort() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.port
+}
+
 // SetExcludePort tells auto-detection to skip a port (e.g., Meshtastic's port).
 func (t *DirectSatTransport) SetExcludePort(port string) {
 	t.excludePort = port
+}
+
+// SetExcludePortFunc sets a dynamic port resolver for exclusion.
+// Called at auto-detect time to get the current port of another transport.
+func (t *DirectSatTransport) SetExcludePortFunc(fn func() string) {
+	t.excludePortFn = fn
 }
 
 // Subscribe opens the serial connection and starts ring alert + signal monitoring.
@@ -112,7 +127,13 @@ func (t *DirectSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	port := t.port
 	if port == "" || port == "auto" {
-		port = autoDetectIridium(t.excludePort)
+		exclude := t.excludePort
+		if t.excludePortFn != nil {
+			if resolved := t.excludePortFn(); resolved != "" && resolved != "auto" {
+				exclude = resolved
+			}
+		}
+		port = autoDetectIridium(exclude)
 		if port == "" {
 			return fmt.Errorf("no Iridium modem found")
 		}

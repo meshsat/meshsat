@@ -74,7 +74,8 @@ type DirectCellTransport struct {
 	nextSubID uint64
 
 	// Exclude ports (Meshtastic + Iridium)
-	excludePorts []string
+	excludePorts   []string
+	excludePortFns []func() string // dynamic resolvers (take precedence)
 }
 
 // NewDirectCellTransport creates a new direct serial cellular transport.
@@ -89,6 +90,12 @@ func NewDirectCellTransport(port string) *DirectCellTransport {
 // SetExcludePorts tells auto-detection to skip these ports (e.g., Meshtastic and Iridium ports).
 func (t *DirectCellTransport) SetExcludePorts(ports []string) {
 	t.excludePorts = ports
+}
+
+// SetExcludePortFuncs sets dynamic port resolvers for exclusion.
+// Called at auto-detect time to get current ports of other transports.
+func (t *DirectCellTransport) SetExcludePortFuncs(fns []func() string) {
+	t.excludePortFns = fns
 }
 
 // Subscribe opens the serial connection and starts SMS monitor + signal polling.
@@ -123,7 +130,15 @@ func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, 
 func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	port := t.port
 	if port == "" || port == "auto" {
-		port = autoDetectCellular(t.excludePorts)
+		// Resolve dynamic exclude ports from other transports
+		excludes := make([]string, 0, len(t.excludePorts)+len(t.excludePortFns))
+		for _, fn := range t.excludePortFns {
+			if resolved := fn(); resolved != "" && resolved != "auto" {
+				excludes = append(excludes, resolved)
+			}
+		}
+		excludes = append(excludes, t.excludePorts...)
+		port = autoDetectCellular(excludes)
 		if port == "" {
 			return fmt.Errorf("no cellular modem found")
 		}
