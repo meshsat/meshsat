@@ -260,4 +260,4 @@ Iridium SBD sessions (SBDIX) take 10-60 seconds and require signal strength of a
 
 ## License
 
-Copyright Nuclear Lighters. All rights reserved.
+Copyright 2026 Nuclear Lighters Inc. Licensed under the [Apache License 2.0](LICENSE).
