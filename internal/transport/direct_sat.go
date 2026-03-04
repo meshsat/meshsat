@@ -178,6 +178,10 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	}
 	// AT+SBDMTA=1 — enable ring alert indications
 	sendAT(file, "AT+SBDMTA=1", iridiumReadTimeout)
+	// Clear MO and MT buffers — prevents stale data from previous sessions
+	// triggering endless SBDIX resend loops
+	sendAT(file, "AT+SBDD0", iridiumReadTimeout) // clear MO
+	sendAT(file, "AT+SBDD1", iridiumReadTimeout) // clear MT
 
 	t.connected = true
 	t.lastSBDIX = time.Now() // prevent stale SBDIX from firing immediately after connect
