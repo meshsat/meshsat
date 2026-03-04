@@ -619,14 +619,14 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		log.Info().Msg("iridium: MO buffer has outbound data, sending via SBDIX")
 	}
 
+	// Update GSS sync timestamp BEFORE SBDIX — even if it fails, we attempted.
+	// This enforces the 15-min cooldown and prevents endless retry spam.
+	t.lastGSSSync = time.Now()
+
 	result, err := t.sbdixLocked(ctx)
 	// Always clear MO after SBDIX — DLQ retains payload for retry
 	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
-	}
-	// Update GSS sync timestamp on successful session (mo_status 0-4)
-	if err == nil && result.MOStatus <= 4 {
-		t.lastGSSSync = time.Now()
 	}
 	return result, err
 }
