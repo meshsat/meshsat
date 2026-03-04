@@ -424,6 +424,7 @@ func (g *IridiumGateway) dlqRetryWorker(ctx context.Context) {
 
 		case <-timer.C:
 			params = g.getTimingParams()
+			log.Debug().Str("mode", params.ModeName).Dur("interval", params.DLQCheckInterval).Int64("pending", g.dlqPending.Load()).Msg("iridium: DLQ timer tick")
 			// In active/post-pass modes, bypass next_retry backoff — we have signal now.
 			if params.Mode == ModeActive || params.Mode == ModePostPass {
 				g.processDLQImmediate(ctx, retryBase)
@@ -614,6 +615,7 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 		log.Error().Err(err).Msg("iridium: failed to query DLQ (immediate)")
 		return
 	}
+	log.Debug().Int("count", len(pending)).Msg("iridium: processDLQImmediate queried")
 
 	for _, dl := range pending {
 		select {
