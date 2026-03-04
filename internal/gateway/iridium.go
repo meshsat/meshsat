@@ -380,6 +380,42 @@ func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errM
 	log.Info().Uint32("packet_id", packetID).Time("next_retry", nextRetry).Msg("iridium: message queued in DLQ")
 }
 
+// dlqBackoff computes the retry backoff for a failed DLQ send based on the
+// mo_status code from the ISU AT Command Reference (MAN0009 v2).
+//
+// mo_status=32 ("no network service"): the modem hasn't registered and needs
+// idle radio time to reacquire satellites. Minimum 3 minutes between attempts.
+// mo_status=36 ("must wait 3 minutes since last registration"): explicit 3min wait.
+// mo_status=35 ("ISU is busy"): short backoff, retry soon.
+// mo_status=17 ("gateway not responding"): local timeout, retry soon.
+// mo_status=18 ("connection lost / RF drop"): moderate backoff.
+// All others: exponential backoff with mode-aware cap.
+func dlqBackoff(retryBase int, retries int, moStatus int, params TimingParams) time.Duration {
+	switch moStatus {
+	case 32, 36:
+		// No network / registration cooldown — give modem idle time to reacquire.
+		// ISU needs 3+ minutes between registration attempts.
+		return 3 * time.Minute
+	case 35:
+		// ISU is busy — short wait
+		return 30 * time.Second
+	case 17:
+		// Local session timeout — retry after moderate wait
+		return time.Minute
+	}
+
+	// Default exponential backoff
+	backoff := time.Duration(retryBase) * time.Second * (1 << uint(retries+1))
+	maxBackoff := 30 * time.Minute
+	if params.Mode == ModeActive || params.Mode == ModePostPass {
+		maxBackoff = 2 * time.Minute
+	}
+	if backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+	return backoff
+}
+
 // getTimingParams returns dynamic timing parameters from the scheduler,
 // or legacy hardcoded intervals if no scheduler is active.
 func (g *IridiumGateway) getTimingParams() TimingParams {
@@ -425,12 +461,10 @@ func (g *IridiumGateway) dlqRetryWorker(ctx context.Context) {
 		case <-timer.C:
 			params = g.getTimingParams()
 			log.Debug().Str("mode", params.ModeName).Dur("interval", params.DLQCheckInterval).Int64("pending", g.dlqPending.Load()).Msg("iridium: DLQ timer tick")
-			// In active/post-pass modes, bypass next_retry backoff — we have signal now.
-			if params.Mode == ModeActive || params.Mode == ModePostPass {
-				g.processDLQImmediate(ctx, retryBase)
-			} else {
-				g.processDLQ(ctx, retryBase)
-			}
+			// Timer always respects next_retry. This ensures mo_status=32 backoff
+			// (3min) is honored — the modem needs idle time to re-register.
+			// Only signal-event-triggered drainDLQ bypasses next_retry (signal just appeared).
+			g.processDLQ(ctx, retryBase)
 			timer.Reset(params.DLQCheckInterval)
 
 		case newMode := <-modeCh:
@@ -464,20 +498,20 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 
 		result, err := g.sat.Send(ctx, dl.Payload)
 		// Treat successful HTTP but failed SBD session as a send error
+		moStatus := -1
 		if err == nil && !result.MOSuccess() {
+			moStatus = result.MOStatus
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
-			// Always retry with exponential backoff (capped at 30min). Never expire.
-			backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
-			if backoff > 30*time.Minute {
-				backoff = 30 * time.Minute
-			}
+			backoff := dlqBackoff(retryBase, dl.Retries, moStatus, g.getTimingParams())
 			nextRetry := time.Now().Add(backoff)
 			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
 				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
 			}
-			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ retry failed, rescheduled")
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).
+				Int("mo_status", moStatus).Dur("backoff", backoff).Time("next_retry", nextRetry).
+				Msg("iridium: DLQ retry failed, rescheduled")
 			continue
 		}
 
@@ -626,26 +660,20 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 
 		result, err := g.sat.Send(ctx, dl.Payload)
 		// Treat successful HTTP but failed SBD session as a send error
+		moStatus := -1
 		if err == nil && !result.MOSuccess() {
+			moStatus = result.MOStatus
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
-			// Backoff capped at 2min during active mode (we'll retry on the next
-			// timer tick or signal event), 30min otherwise.
-			backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
-			params := g.getTimingParams()
-			maxBackoff := 30 * time.Minute
-			if params.Mode == ModeActive || params.Mode == ModePostPass {
-				maxBackoff = 2 * time.Minute
-			}
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+			backoff := dlqBackoff(retryBase, dl.Retries, moStatus, g.getTimingParams())
 			nextRetry := time.Now().Add(backoff)
 			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
 				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
 			}
-			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Str("mode", params.ModeName).Msg("iridium: DLQ drain retry failed, rescheduled")
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).
+				Int("mo_status", moStatus).Dur("backoff", backoff).Time("next_retry", nextRetry).
+				Str("mode", g.getTimingParams().ModeName).Msg("iridium: DLQ drain retry failed, rescheduled")
 			continue
 		}
 
