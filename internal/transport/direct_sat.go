@@ -554,7 +554,11 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	return data, nil
 }
 
-// MailboxCheck performs SBDSX (free) then conditional SBDIX (satellite session).
+// MailboxCheck performs SBDSX (free local check) then SBDIX (satellite session).
+// SBDSX is used for diagnostics and to detect piggybacked MT in the local buffer.
+// SBDIX always runs — it's the only way to discover MT messages queued at the GSS,
+// since SBDSX's "waiting" count is only updated by previous SBDIX results.
+// The caller (pollWorker) controls the rate via poll_interval / pass scheduler.
 // Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL MailboxCheck).
 func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) {
 	t.mu.Lock()
@@ -563,19 +567,15 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return nil, fmt.Errorf("not connected")
 	}
 
-	// Step 1: SBDSX — free local status check
+	// Step 1: SBDSX — free local status check (diagnostics + piggybacked MT detection)
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
-		// Serial timeout on a local command means the port is in a bad state.
-		// disconnectLocked no longer closes subscriber channels (safe for SSE streams).
 		log.Warn().Err(err).Msg("iridium: SBDSX failed, forcing serial reconnect")
 		t.disconnectLocked()
 		return nil, fmt.Errorf("SBDSX failed: %w", err)
 	}
 	status, err := parseSBDSX(resp)
 	if err != nil {
-		// Parse failure — do NOT fall back to SBDIX (burns a credit with empty MO).
-		// Caller (pollWorker) will retry on next interval.
 		log.Warn().Err(err).Msg("iridium: SBDSX parse failed, skipping SBDIX (will retry next poll)")
 		return nil, fmt.Errorf("SBDSX parse failed: %w", err)
 	}
@@ -590,19 +590,8 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
 	}
 
-	// Determine if we have a reason to perform an expensive SBDIX:
-	// - MO flag set — outbound message waiting in buffer (from Send/DLQ retry)
-	// - Ring alert (RA) flag set — GSS signalled inbound message
-	// - MT waiting > 0 — GSS reports queued messages
-	// Without any of these, SBDIX sends an empty MO costing 1 credit for nothing.
-	if !status.MOFlag && !status.RAFlag && status.MTWaiting == 0 {
-		log.Info().Msg("iridium: no MO, no RA, no MT waiting, skipping SBDIX")
-		return &SBDResult{}, nil
-	}
-
-	// Step 2: SBDIX — satellite session
-	// If MO buffer has data, send it as-is (don't clear!)
-	// If only inbound (RA/MT), clear MO to avoid accidental resend
+	// Step 2: SBDIX — satellite session (always runs)
+	// If MO buffer has data, send it. Otherwise clear MO to avoid accidental resend.
 	hadMO := status.MOFlag
 	if !hadMO {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
@@ -612,7 +601,6 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 
 	result, err := t.sbdixLocked(ctx)
 	if err == nil && hadMO && result.MOSuccess() {
-		// Clear MO buffer after successful send to prevent stale resend loops
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	}
 	return result, err
