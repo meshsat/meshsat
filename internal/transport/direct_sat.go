@@ -456,8 +456,10 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 
 	// SBDIX
 	result, err := t.sbdixLocked(ctx)
-	if err == nil && result.MOSuccess() {
-		// Clear MO buffer after successful send to prevent stale resends
+	// Always clear MO buffer after SBDIX attempt — the caller (gateway DLQ)
+	// retains the payload for retry. Leaving stale MO data causes MailboxCheck
+	// to endlessly re-trigger SBDIX on every poll cycle.
+	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	}
 	return result, err
@@ -489,8 +491,8 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 	}
 
 	result, err := t.sbdixLocked(ctx)
-	if err == nil && result.MOSuccess() {
-		// Clear MO buffer after successful send to prevent stale resends
+	// Always clear MO after SBDIX attempt (same rationale as Send)
+	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	}
 	return result, err
@@ -600,7 +602,9 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	}
 
 	result, err := t.sbdixLocked(ctx)
-	if err == nil && hadMO && result.MOSuccess() {
+	// Always clear MO after SBDIX — DLQ retains payload for retry.
+	// Prevents stale MO from triggering endless SBDIX on subsequent polls.
+	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	}
 	return result, err
