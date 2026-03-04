@@ -451,7 +451,12 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	}
 
 	// SBDIX
-	return t.sbdixLocked(ctx)
+	result, err := t.sbdixLocked(ctx)
+	if err == nil && result.MOSuccess() {
+		// Clear MO buffer after successful send to prevent stale resends
+		sendAT(t.file, "AT+SBDD0", 3*time.Second)
+	}
+	return result, err
 }
 
 // SendText transmits a text SBD message (AT+SBDWT + AT+SBDIX).
@@ -479,7 +484,12 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 		return nil, fmt.Errorf("AT+SBDWT failed: %s", resp)
 	}
 
-	return t.sbdixLocked(ctx)
+	result, err := t.sbdixLocked(ctx)
+	if err == nil && result.MOSuccess() {
+		// Clear MO buffer after successful send to prevent stale resends
+		sendAT(t.file, "AT+SBDD0", 3*time.Second)
+	}
+	return result, err
 }
 
 // Receive reads the MT buffer (AT+SBDRB).
@@ -589,13 +599,19 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	// Step 2: SBDIX — satellite session
 	// If MO buffer has data, send it as-is (don't clear!)
 	// If only inbound (RA/MT), clear MO to avoid accidental resend
-	if !status.MOFlag {
+	hadMO := status.MOFlag
+	if !hadMO {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	} else {
 		log.Info().Msg("iridium: MO buffer has outbound data, sending via SBDIX")
 	}
 
-	return t.sbdixLocked(ctx)
+	result, err := t.sbdixLocked(ctx)
+	if err == nil && hadMO && result.MOSuccess() {
+		// Clear MO buffer after successful send to prevent stale resend loops
+		sendAT(t.file, "AT+SBDD0", 3*time.Second)
+	}
+	return result, err
 }
 
 // GetSignal returns current signal (blocking AT+CSQ, up to 60s).
