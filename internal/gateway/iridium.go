@@ -516,6 +516,13 @@ func (g *IridiumGateway) ringAlertListener(ctx context.Context) {
 		return
 	}
 
+	// Re-check modem status after Subscribe (which triggers connect for direct transport).
+	// Start()'s initial GetStatus may have run before the modem handshake completed.
+	if status, err := g.sat.GetStatus(ctx); err == nil && status.Connected {
+		g.connected.Store(true)
+		log.Info().Msg("iridium: modem connected (post-subscribe check)")
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
