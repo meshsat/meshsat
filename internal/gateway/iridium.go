@@ -757,9 +757,11 @@ func EncodeACK(momsn uint16) []byte {
 func (g *IridiumGateway) pollWorker(ctx context.Context) {
 	defer g.wg.Done()
 
-	// Dynamic timing: use Timer instead of Ticker
-	params := g.getTimingParams()
-	timer := time.NewTimer(params.PollInterval)
+	// Start with a short initial timer (5s) to let the scheduler compute
+	// its first schedule. The modeCh is shared between pollWorker and
+	// dlqRetryWorker, so mode transitions may be consumed by the other
+	// worker — this ensures we don't get stuck on a 15-minute idle timer.
+	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 
 	// Channel for mode transitions (nil if no scheduler)
@@ -776,12 +778,12 @@ func (g *IridiumGateway) pollWorker(ctx context.Context) {
 		case <-timer.C:
 			g.handleRingAlert(ctx) // reuse the same logic
 			// Refresh interval from scheduler
-			params = g.getTimingParams()
+			params := g.getTimingParams()
 			timer.Reset(params.PollInterval)
 
 		case newMode := <-modeCh:
 			// Instant mode transition — adjust timing immediately
-			params = g.getTimingParams()
+			params := g.getTimingParams()
 			timer.Reset(params.PollInterval)
 
 			// On Active entry, trigger immediate mailbox check
