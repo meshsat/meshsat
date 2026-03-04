@@ -154,6 +154,7 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	sendAT(file, "AT+SBDMTA=1", iridiumReadTimeout)
 
 	t.connected = true
+	t.lastSBDIX = time.Now() // prevent stale SBDIX from firing immediately after connect
 	log.Info().Str("port", port).Str("imei", t.imei).Str("model", t.model).Msg("iridium modem connected")
 
 	t.emitEvent(SatEvent{

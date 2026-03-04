@@ -506,18 +506,55 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 	}
 }
 
-// ringAlertListener subscribes to HAL Iridium SSE for ring alert and signal events.
+// ringAlertListener subscribes to Iridium SSE for ring alert and signal events.
+// Retries Subscribe with exponential backoff (matches signal recorder pattern).
 func (g *IridiumGateway) ringAlertListener(ctx context.Context) {
 	defer g.wg.Done()
 
+	backoff := time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		start := time.Now()
+		err := g.ringAlertListenOnce(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Reset backoff if connection lasted > 10s
+		if time.Since(start) > 10*time.Second {
+			backoff = time.Second
+		}
+
+		if err != nil {
+			log.Warn().Err(err).Dur("backoff", backoff).Msg("iridium: SSE disconnected, reconnecting")
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+	}
+}
+
+// ringAlertListenOnce subscribes once and processes events until disconnected.
+func (g *IridiumGateway) ringAlertListenOnce(ctx context.Context) error {
 	events, err := g.sat.Subscribe(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("iridium: failed to subscribe to SSE")
-		return
+		return fmt.Errorf("subscribe: %w", err)
 	}
 
 	// Re-check modem status after Subscribe (which triggers connect for direct transport).
-	// Start()'s initial GetStatus may have run before the modem handshake completed.
 	if status, err := g.sat.GetStatus(ctx); err == nil && status.Connected {
 		g.connected.Store(true)
 		log.Info().Msg("iridium: modem connected (post-subscribe check)")
@@ -526,10 +563,10 @@ func (g *IridiumGateway) ringAlertListener(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case event, ok := <-events:
 			if !ok {
-				return
+				return fmt.Errorf("event channel closed")
 			}
 			switch event.Type {
 			case "ring_alert":
