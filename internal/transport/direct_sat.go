@@ -518,15 +518,13 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 			return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
 		}
 
-		// Only perform expensive SBDIX when there's a reason
-		const staleCheckInterval = 5 * time.Minute
-		stale := time.Since(t.lastSBDIX) > staleCheckInterval
-		if !status.RAFlag && status.MTWaiting == 0 && !stale {
+		// Only perform expensive SBDIX when there's a reason:
+		// - Ring alert (RA) flag set — GSS signalled inbound message
+		// - MT waiting > 0 — GSS reports queued messages
+		// Without these, SBDIX sends an empty MO ("[No payload]") costing 1 credit.
+		if !status.RAFlag && status.MTWaiting == 0 {
 			log.Info().Msg("iridium: no RA, no MT waiting, skipping SBDIX")
 			return &SBDResult{}, nil
-		}
-		if stale {
-			log.Info().Msg("iridium: stale SBDIX (>5m), forcing check")
 		}
 	}
 
