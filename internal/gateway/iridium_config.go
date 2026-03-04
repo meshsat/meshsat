@@ -11,7 +11,7 @@ type IridiumConfig struct {
 	PollInterval       int    `json:"poll_interval"`                 // seconds, 0 = no polling
 	MaxTextLength      int    `json:"max_text_length"`               // max text bytes in SBD (default 320)
 	IncludePosition    bool   `json:"include_position"`              // include GPS coords in compact encoding
-	DLQMaxRetries      int    `json:"dlq_max_retries"`               // max retry attempts for failed sends (default 3)
+	DLQMaxRetries      int    `json:"dlq_max_retries"`               // max retry attempts for failed sends, 0 = infinite (default 0)
 	DLQRetryBase       int    `json:"dlq_retry_base_secs"`           // base retry interval in seconds (default 120, exponential backoff)
 	DefaultDestination string `json:"default_destination,omitempty"` // node ID or name to unicast inbound messages (empty = broadcast)
 	MinSignalBars      int    `json:"min_signal_bars"`               // minimum signal bars to trigger opportunistic DLQ drain (default 1)
@@ -35,7 +35,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		PollInterval:     1800, // 30 minutes — safety net for missed ring alerts (SBDSX pre-check avoids credit waste)
 		MaxTextLength:    320,
 		IncludePosition:  false, // GPS position not populated — omit to save 10 bytes per message
-		DLQMaxRetries:    3,
+		DLQMaxRetries:    0,     // 0 = infinite retries (default)
 		DLQRetryBase:     120,
 		MinSignalBars:    1,
 		DailyBudget:      0, // unlimited

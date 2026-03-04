@@ -10,6 +10,7 @@ const tabs = [
   { id: 'channels', label: 'Channels' },
   { id: 'mqtt', label: 'MQTT' },
   { id: 'iridium', label: 'Iridium' },
+  { id: 'cellular', label: 'Cellular' },
   { id: 'presets', label: 'Presets' },
   { id: 'about', label: 'About' }
 ]
@@ -75,7 +76,7 @@ async function saveMQTT() {
 const iridiumForm = ref({
   forward_all: false, forward_portnums: [1], compression: 'compact', auto_receive: true,
   poll_interval: 0, max_text_length: 320, include_position: true,
-  dlq_max_retries: 3, dlq_retry_base_secs: 120, min_signal_bars: 1,
+  dlq_max_retries: 0, dlq_retry_base_secs: 120, min_signal_bars: 1,
   daily_budget: 0, monthly_budget: 0, critical_reserve: 20
 })
 const iridiumEnabled = ref(false)
@@ -109,6 +110,31 @@ async function loadBudget() {
 
 async function saveBudget() {
   await store.setCreditBudget(budgetForm.value.daily, budgetForm.value.monthly)
+}
+
+// Cellular gateway
+const cellularForm = ref({
+  sms_destinations: '', allowed_senders: '', sms_prefix: 'MESHSAT', max_segments: 3,
+  apn: '', auto_connect: false,
+  webhook_url: '', webhook_headers: '', inbound_webhook_enabled: false, inbound_webhook_secret: '',
+  dyndns_provider: 'none', dyndns_domain: '', dyndns_token: '', dyndns_interval: 300
+})
+const cellularEnabled = ref(false)
+
+const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+
+function loadCellular() {
+  if (cellularGw.value?.config) {
+    try {
+      const c = typeof cellularGw.value.config === 'string' ? JSON.parse(cellularGw.value.config) : cellularGw.value.config
+      Object.assign(cellularForm.value, c)
+      cellularEnabled.value = cellularGw.value.enabled
+    } catch {}
+  }
+}
+
+async function saveCellular() {
+  await store.configureGateway('cellular', cellularEnabled.value, cellularForm.value)
 }
 
 // Signal polling
@@ -145,7 +171,8 @@ onMounted(() => {
   store.fetchPresets()
   store.fetchIridiumSignalFast()
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
-  setTimeout(() => { loadMQTT(); loadIridium(); loadBudget() }, 500)
+  store.fetchCellularStatus()
+  setTimeout(() => { loadMQTT(); loadIridium(); loadBudget(); loadCellular() }, 500)
 })
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
@@ -334,6 +361,135 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           Used today: {{ store.creditSummary.today }} | This month: {{ store.creditSummary.month }} | All time: {{ store.creditSummary.all_time }}
         </div>
         <button @click="saveBudget" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Budget</button>
+      </div>
+    </div>
+
+    <!-- Cellular -->
+    <div v-if="activeTab === 'cellular'">
+      <!-- Modem Status (read-only) -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
+        <h4 class="text-sm font-medium text-gray-200">Modem Status</h4>
+        <div class="space-y-2 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">IMEI</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus?.imei || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Model</span>
+            <span class="text-gray-300">{{ store.cellularStatus?.model || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Operator</span>
+            <span class="text-gray-300">{{ store.cellularStatus?.operator || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Network Type</span>
+            <span class="text-gray-300">{{ store.cellularStatus?.network_type || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">SIM Status</span>
+            <span class="text-gray-300">{{ store.cellularStatus?.sim_status || 'N/A' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- SMS Configuration -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
+        <h4 class="text-sm font-medium text-gray-200">SMS Configuration</h4>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Destination Numbers (comma-separated)</label>
+          <input v-model="cellularForm.sms_destinations" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="+1234567890,+0987654321">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Allowed Senders (comma-separated, empty = all)</label>
+          <input v-model="cellularForm.allowed_senders" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="+1234567890">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">SMS Prefix</label>
+            <input v-model="cellularForm.sms_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Max Segments</label>
+            <input v-model.number="cellularForm.max_segments" type="number" min="1" max="10" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Connection -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
+        <h4 class="text-sm font-medium text-gray-200">Data Connection</h4>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">APN</label>
+          <input v-model="cellularForm.apn" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet">
+        </div>
+        <label class="flex items-center gap-1 text-xs text-gray-400">
+          <input type="checkbox" v-model="cellularForm.auto_connect" class="rounded bg-gray-900 border-gray-700"> Auto-connect on boot
+        </label>
+        <div class="flex gap-2">
+          <button @click="store.connectCellularData(cellularForm.apn)" class="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Connect</button>
+          <button @click="store.disconnectCellularData()" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Disconnect</button>
+        </div>
+      </div>
+
+      <!-- Webhooks -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
+        <h4 class="text-sm font-medium text-gray-200">Webhooks</h4>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Outbound URL</label>
+          <input v-model="cellularForm.webhook_url" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="https://example.com/webhook">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Outbound Headers (JSON)</label>
+          <input v-model="cellularForm.webhook_headers" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder='{"Authorization": "Bearer ..."}'>
+        </div>
+        <div class="flex gap-4">
+          <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" v-model="cellularForm.inbound_webhook_enabled" class="rounded bg-gray-900 border-gray-700"> Inbound webhook</label>
+        </div>
+        <div v-if="cellularForm.inbound_webhook_enabled">
+          <label class="block text-xs text-gray-500 mb-1">Inbound Secret</label>
+          <input v-model="cellularForm.inbound_webhook_secret" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono">
+        </div>
+      </div>
+
+      <!-- DynDNS -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
+        <h4 class="text-sm font-medium text-gray-200">Dynamic DNS</h4>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Provider</label>
+            <select v-model="cellularForm.dyndns_provider" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <option value="none">None</option>
+              <option value="duckdns">DuckDNS</option>
+              <option value="noip">No-IP</option>
+              <option value="cloudflare">Cloudflare</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Update Interval (sec)</label>
+            <input v-model.number="cellularForm.dyndns_interval" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <div v-if="cellularForm.dyndns_provider !== 'none'">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Domain</label>
+            <input v-model="cellularForm.dyndns_domain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="mydevice.duckdns.org">
+          </div>
+          <div class="mt-3">
+            <label class="block text-xs text-gray-500 mb-1">Token / Credentials</label>
+            <input v-model="cellularForm.dyndns_token" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+      </div>
+
+      <!-- Enable + Save -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center gap-2">
+          <input type="checkbox" v-model="cellularEnabled" id="cellular_en" class="rounded bg-gray-900 border-gray-700">
+          <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
+        </div>
+        <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
       </div>
     </div>
 

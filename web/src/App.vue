@@ -37,6 +37,7 @@ const deviceId = computed(() => {
 // Mesh + Sat status for header
 const meshConnected = computed(() => store.status?.connected ?? false)
 const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
+const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
 
 function updateClock() {
   const now = new Date()
@@ -52,8 +53,10 @@ onMounted(() => {
   store.fetchStatus()
   store.fetchGateways()
   store.fetchIridiumSignalFast()
+  store.fetchCellularSignal()
   pollTimer = setInterval(() => {
     store.fetchStatus()
+    store.fetchCellularSignal()
   }, 10000)
 })
 
@@ -101,6 +104,16 @@ onUnmounted(() => {
             <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
               :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-tactical-iridium') : 'bg-gray-700/50'"
               :style="{ height: `${3 + i * 2}px` }" />
+          </div>
+
+          <!-- Cellular signal bars -->
+          <div v-if="cellBars >= 0" class="hidden md:flex items-center gap-1">
+            <div class="flex items-end gap-px h-3">
+              <span v-for="i in 5" :key="'cell'+i" class="w-[3px] rounded-[1px]"
+                :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
+                :style="{ height: `${3 + i * 2}px` }" />
+            </div>
+            <span class="text-[9px] text-sky-400/60 font-mono">4G</span>
           </div>
 
           <!-- Bridge status badge -->

@@ -218,6 +218,11 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 			log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Str("dest", match.Rule.DestType).Msg("rule matched, forwarding")
 
+			p.Emit(transport.MeshEvent{
+				Type:    "rule_match",
+				Message: fmt.Sprintf("Rule '%s' matched: mesh→%s", match.Rule.Name, match.Rule.DestType),
+			})
+
 			activeGateways := p.gateways
 			if p.gwProv != nil {
 				activeGateways = p.gwProv.Gateways()
@@ -262,6 +267,15 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 				if err := gw.Forward(context.Background(), &msg); err != nil {
 					log.Warn().Err(err).Str("gateway", gwType).Msg("rule forward failed")
+					p.Emit(transport.MeshEvent{
+						Type:    "forward_error",
+						Message: fmt.Sprintf("Failed to forward to %s: %s", gwType, err.Error()),
+					})
+				} else {
+					p.Emit(transport.MeshEvent{
+						Type:    "forward",
+						Message: fmt.Sprintf("Forwarded to %s gateway", gwType),
+					})
 				}
 			}
 		}
@@ -360,6 +374,11 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					return
 				}
 				log.Info().Str("source", msg.Source).Str("text", msg.Text).Msg("gateway inbound message")
+
+				p.Emit(transport.MeshEvent{
+					Type:    "inbound",
+					Message: fmt.Sprintf("Received from %s: %s", msg.Source, truncateText(msg.Text, 80)),
+				})
 
 				// Cross-gateway relay: check if this message should be forwarded
 				// to other gateways WITHOUT touching the mesh.
@@ -495,8 +514,16 @@ func (p *Processor) handleCrossGatewayRelay(ctx context.Context, msg gateway.Inb
 
 		if err := gw.Forward(ctx, relayMsg); err != nil {
 			log.Warn().Err(err).Str("gateway", gwType).Msg("cross-gateway relay forward failed")
+			p.Emit(transport.MeshEvent{
+				Type:    "forward_error",
+				Message: fmt.Sprintf("Relay %s→%s failed: %s", msg.Source, gwType, err.Error()),
+			})
 		} else {
 			log.Info().Str("from", msg.Source).Str("to", gwType).Msg("cross-gateway relay delivered")
+			p.Emit(transport.MeshEvent{
+				Type:    "relay",
+				Message: fmt.Sprintf("Relayed %s→%s", msg.Source, gwType),
+			})
 
 			// Persist relay message
 			dbMsg := &database.Message{
@@ -568,6 +595,19 @@ func (p *Processor) allowPaidTransport(gwType string) bool {
 	}
 	p.paidLimitersMu.Unlock()
 	return limiter.Allow()
+}
+
+// Emit broadcasts a synthetic event to all SSE subscribers.
+// Used by the processor to emit gateway operation events (rule matches, forwards, relays).
+func (p *Processor) Emit(event transport.MeshEvent) {
+	p.broadcast(event)
+}
+
+func truncateText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func (p *Processor) broadcast(event transport.MeshEvent) {

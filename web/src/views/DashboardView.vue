@@ -171,6 +171,15 @@ const topNodes = computed(() => {
   return sorted.slice(0, 6)
 })
 
+// ── Computed: Cellular 4G/LTE panel ──
+const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
+const cellStatus = computed(() => {
+  if (!cellularGw.value) return { dot: 'bg-gray-600', text: 'Not Configured' }
+  if (cellularGw.value.connected) return { dot: 'bg-sky-400', text: 'Connected' }
+  return { dot: 'bg-red-400', text: 'Disconnected' }
+})
+
 // ── Computed: GPS Position panel ──
 const localNode = computed(() => {
   const myId = store.status?.node_id
@@ -246,6 +255,12 @@ function eventTag(type) {
   if (type === 'position') return { label: 'GPS', color: 'bg-tactical-gps/20 text-tactical-gps' }
   if (type === 'sos') return { label: 'SOS', color: 'bg-tactical-sos/20 text-tactical-sos' }
   if (type === 'node_update') return { label: 'LORA', color: 'bg-tactical-lora/20 text-tactical-lora' }
+  if (type === 'rule_match') return { label: 'RULE', color: 'bg-purple-400/20 text-purple-400' }
+  if (type === 'forward') return { label: 'FWD', color: 'bg-tactical-iridium/20 text-tactical-iridium' }
+  if (type === 'forward_error') return { label: 'ERR', color: 'bg-red-400/20 text-red-400' }
+  if (type === 'relay') return { label: 'RELAY', color: 'bg-amber-400/20 text-amber-400' }
+  if (type === 'inbound') return { label: 'IN', color: 'bg-blue-400/20 text-blue-400' }
+  if (type === 'cellular') return { label: 'CELL', color: 'bg-sky-400/20 text-sky-400' }
   return { label: 'SYS', color: 'bg-gray-700/50 text-gray-400' }
 }
 
@@ -259,6 +274,12 @@ function eventDescription(event) {
   if (type === 'disconnected') return 'Radio disconnected'
   if (type === 'signal') return msg || 'Iridium signal update'
   if (type === 'config_complete') return 'Config sync complete'
+  if (type === 'rule_match') return msg || 'Forwarding rule matched'
+  if (type === 'forward') return msg || 'Message forwarded to gateway'
+  if (type === 'forward_error') return msg || 'Forward failed'
+  if (type === 'relay') return msg || 'Cross-gateway relay'
+  if (type === 'inbound') return msg || 'Inbound gateway message'
+  if (type === 'cellular') return msg || 'Cellular event'
   return msg || type || 'Event'
 }
 
@@ -302,7 +323,9 @@ async function fetchAll() {
     store.fetchSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
     store.fetchCredits(),
     store.fetchSchedulerStatus(),
-    store.fetchLocationSources()
+    store.fetchLocationSources(),
+    store.fetchCellularSignal(),
+    store.fetchCellularStatus()
   ])
 }
 
@@ -315,6 +338,7 @@ onMounted(() => {
     store.fetchDLQ()
     store.fetchSchedulerStatus()
     store.fetchLocationSources()
+    store.fetchCellularSignal()
   }, 15000)
 })
 
@@ -453,7 +477,58 @@ onUnmounted(() => {
         </router-link>
       </div>
 
-      <!-- ═══ Panel 3: Emergency SOS (row-span-2) ═══ -->
+      <!-- ═══ Panel 3: Cellular 4G/LTE ═══ -->
+      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display font-semibold text-sm text-sky-400 tracking-wide">CELLULAR 4G/LTE</h2>
+          <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
+        </div>
+
+        <!-- Signal bars -->
+        <div class="flex items-center gap-3 mb-3">
+          <div class="flex items-end gap-[3px] h-6">
+            <span v-for="i in 5" :key="i"
+              class="w-[5px] rounded-sm transition-colors"
+              :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
+              :style="{ height: `${6 + i * 4}px` }" />
+          </div>
+          <div>
+            <span class="font-mono text-lg font-bold" :class="cellBars >= 0 ? 'text-sky-400' : 'text-gray-600'">
+              {{ cellBars >= 0 ? cellBars : '--' }}
+            </span>
+            <span class="text-[10px] text-gray-500 ml-1">/5</span>
+          </div>
+          <span v-if="store.cellularStatus?.network_type" class="text-[10px] text-gray-500 uppercase">
+            {{ store.cellularStatus.network_type }}
+          </span>
+        </div>
+
+        <!-- Status rows -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Gateway</span>
+            <span class="text-gray-300">{{ cellStatus.text }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Operator</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus?.operator || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">IMEI</span>
+            <span class="text-gray-400 font-mono text-[10px]">{{ store.cellularStatus?.imei || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">SMS Sent</span>
+            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_out ?? 0 }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">SMS Received</span>
+            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_in ?? 0 }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ Panel 4: Emergency SOS (row-span-2) ═══ -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4 md:col-span-2 lg:col-span-1 lg:row-span-2">
         <div class="flex items-center justify-between mb-4">
           <h2 class="font-display font-semibold text-sm text-tactical-sos tracking-wide">EMERGENCY SOS</h2>
@@ -525,59 +600,10 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 4: GPS Position ═══ -->
+      <!-- ═══ Panel 4: Unified Location ═══ -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-tactical-gps tracking-wide">GPS POSITION</h2>
-          <span class="w-2 h-2 rounded-full" :class="gpsFix ? 'bg-tactical-gps' : 'bg-gray-600'" />
-        </div>
-
-        <!-- Coordinates -->
-        <div class="space-y-2 mb-3">
-          <div>
-            <span class="text-[10px] text-gray-500 block">LAT</span>
-            <span class="font-mono text-sm text-gray-200">{{ gpsLat }}</span>
-          </div>
-          <div>
-            <span class="text-[10px] text-gray-500 block">LON</span>
-            <span class="font-mono text-sm text-gray-200">{{ gpsLon }}</span>
-          </div>
-        </div>
-
-        <!-- Details -->
-        <div class="space-y-1.5 text-[11px]">
-          <div class="flex justify-between">
-            <span class="text-gray-500">Satellites</span>
-            <div class="flex items-center gap-1">
-              <svg class="w-3 h-3 text-tactical-gps/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/><path d="M2 12h20"/>
-              </svg>
-              <span class="text-gray-300 font-mono">{{ gpsSats }}</span>
-            </div>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">Altitude</span>
-            <span class="text-gray-300 font-mono">{{ gpsAlt }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">Speed</span>
-            <span class="text-gray-400 font-mono">N/A</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">HDOP</span>
-            <span class="text-gray-400 font-mono">N/A</span>
-          </div>
-        </div>
-
-        <router-link to="/map" class="block text-center text-[10px] text-tactical-gps/60 hover:text-tactical-gps mt-3 transition-colors">
-          Open Map
-        </router-link>
-      </div>
-
-      <!-- ═══ Panel 5: Iridium Location ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-teal-400 tracking-wide">IRIDIUM LOCATION</h2>
+          <h2 class="font-display font-semibold text-sm text-tactical-gps tracking-wide">LOCATION</h2>
           <span v-if="locationResolved"
             class="text-[9px] font-mono px-1.5 py-0.5 rounded"
             :class="locationResolved.source === 'gps' ? 'bg-emerald-400/10 text-emerald-400' : locationResolved.source === 'iridium' ? 'bg-teal-400/10 text-teal-400' : 'bg-amber-400/10 text-amber-400'">
@@ -586,11 +612,10 @@ onUnmounted(() => {
           <span v-else class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500">NO FIX</span>
         </div>
 
-        <!-- Active (resolved) location -->
+        <!-- Primary resolved coordinates -->
         <div v-if="locationResolved" class="mb-3">
-          <span class="text-[10px] text-gray-500 block">AUTO Resolved</span>
           <div class="font-mono text-sm text-gray-200">
-            {{ locationResolved.lat.toFixed(5) }}, {{ locationResolved.lon.toFixed(5) }}
+            {{ locationResolved.lat.toFixed(6) }}, {{ locationResolved.lon.toFixed(6) }}
           </div>
           <span v-if="locationResolved.accuracy_km" class="text-[10px] text-gray-500">
             ~{{ formatAccuracy(locationResolved.accuracy_km) }} accuracy
@@ -633,17 +658,34 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- GPS details -->
+        <div class="mt-3 pt-2 border-t border-tactical-border space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Satellites</span>
+            <span class="text-gray-300 font-mono">{{ gpsSats }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Altitude</span>
+            <span class="text-gray-300 font-mono">{{ gpsAlt }}</span>
+          </div>
+        </div>
+
         <!-- Priority legend -->
-        <div class="mt-3 pt-2 border-t border-tactical-border">
+        <div class="mt-2 pt-2 border-t border-tactical-border">
           <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (1-100km) > Custom</span>
         </div>
 
-        <router-link to="/passes" class="block text-center text-[10px] text-teal-400/60 hover:text-teal-400 mt-2 transition-colors">
-          Pass Predictor
-        </router-link>
+        <div class="flex gap-3 mt-2">
+          <router-link to="/map" class="text-[10px] text-tactical-gps/60 hover:text-tactical-gps transition-colors">
+            Open Map
+          </router-link>
+          <router-link to="/passes" class="text-[10px] text-teal-400/60 hover:text-teal-400 transition-colors">
+            Pass Predictor
+          </router-link>
+        </div>
       </div>
 
-      <!-- ═══ Panel 6: SBD Message Queue ═══ -->
+      <!-- ═══ Panel 6: SBD Queue ═══ -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">SBD QUEUE</h2>

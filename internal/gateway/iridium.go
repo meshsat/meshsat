@@ -368,10 +368,7 @@ func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errM
 	}
 	nextRetry := time.Now().Add(time.Duration(retryBase) * time.Second)
 
-	maxRetries := g.config.DLQMaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
+	maxRetries := g.config.DLQMaxRetries // 0 = infinite retries
 
 	if err := g.db.InsertDeadLetter(packetID, payload, maxRetries, nextRetry, errMsg, textPreview); err != nil {
 		log.Error().Err(err).Uint32("packet_id", packetID).Msg("iridium: failed to enqueue dead letter")
@@ -465,26 +462,16 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
-			// Increment retry, check if exhausted
-			if dl.Retries+1 >= dl.MaxRetries {
-				if expErr := g.db.ExpireDeadLetter(dl.ID, err.Error()); expErr != nil {
-					log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to expire dead letter")
-				}
-				g.dlqPending.Add(-1)
-				g.errors.Add(1)
-				log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retries", dl.Retries+1).Msg("iridium: DLQ message expired after max retries")
-			} else {
-				// Exponential backoff: base * 2^retries
-				backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
-				if backoff > 30*time.Minute {
-					backoff = 30 * time.Minute
-				}
-				nextRetry := time.Now().Add(backoff)
-				if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
-					log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
-				}
-				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ retry failed, rescheduled")
+			// Always retry with exponential backoff (capped at 30min). Never expire.
+			backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
+			if backoff > 30*time.Minute {
+				backoff = 30 * time.Minute
 			}
+			nextRetry := time.Now().Add(backoff)
+			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
+				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
+			}
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ retry failed, rescheduled")
 			continue
 		}
 
@@ -626,25 +613,16 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
-			// Increment retry, check if exhausted
-			if dl.Retries+1 >= dl.MaxRetries {
-				if expErr := g.db.ExpireDeadLetter(dl.ID, err.Error()); expErr != nil {
-					log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to expire dead letter")
-				}
-				g.dlqPending.Add(-1)
-				g.errors.Add(1)
-				log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retries", dl.Retries+1).Msg("iridium: DLQ message expired after max retries")
-			} else {
-				backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
-				if backoff > 30*time.Minute {
-					backoff = 30 * time.Minute
-				}
-				nextRetry := time.Now().Add(backoff)
-				if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
-					log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
-				}
-				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ drain retry failed, rescheduled")
+			// Always retry with exponential backoff (capped at 30min). Never expire.
+			backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
+			if backoff > 30*time.Minute {
+				backoff = 30 * time.Minute
 			}
+			nextRetry := time.Now().Add(backoff)
+			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
+				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
+			}
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ drain retry failed, rescheduled")
 			continue
 		}
 
