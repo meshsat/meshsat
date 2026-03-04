@@ -714,9 +714,10 @@ func parseSBDIX(resp string) (sbdixResult, error) {
 
 	remainder := strings.TrimSpace(resp[idx+7:])
 	firstLine := strings.Split(remainder, "\n")[0]
+	firstLine = strings.TrimRight(firstLine, "\r") // strip trailing CR
 	parts := strings.Split(firstLine, ",")
-	if len(parts) < 6 {
-		return sbdixResult{}, fmt.Errorf("malformed SBDIX response (expected 6 fields, got %d)", len(parts))
+	if len(parts) < 5 {
+		return sbdixResult{}, fmt.Errorf("malformed SBDIX response (expected 5-6 fields, got %d): %s", len(parts), firstLine)
 	}
 
 	result := sbdixResult{}
@@ -725,7 +726,9 @@ func parseSBDIX(resp string) (sbdixResult, error) {
 	result.mtStatus, _ = strconv.Atoi(strings.TrimSpace(parts[2]))
 	result.mtMSN, _ = strconv.Atoi(strings.TrimSpace(parts[3]))
 	result.mtLength, _ = strconv.Atoi(strings.TrimSpace(parts[4]))
-	result.mtQueued, _ = strconv.Atoi(strings.TrimSpace(parts[5]))
+	if len(parts) >= 6 {
+		result.mtQueued, _ = strconv.Atoi(strings.TrimSpace(parts[5]))
+	}
 
 	return result, nil
 }
