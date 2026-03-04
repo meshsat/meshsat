@@ -9,6 +9,8 @@ const activeTab = ref('outbound')
 const editorOpen = ref(false)
 const editingRule = ref(null)
 const editorDirection = ref(null)
+const expandedItem = ref(null) // queue item ID for debug panel
+const expandedPane = ref(null) // 'mesh' | 'mqtt' | 'iridium' | 'cellular'
 
 const subTabs = [
   { id: 'outbound', label: 'Outbound' },
@@ -112,6 +114,42 @@ function nextRetryCountdown(ts) {
   return `${Math.floor(diff / 60)}m ${diff % 60}s`
 }
 
+function toggleDebug(id) {
+  expandedItem.value = expandedItem.value === id ? null : id
+}
+
+function togglePane(name) {
+  expandedPane.value = expandedPane.value === name ? null : name
+}
+
+function payloadSize(item) {
+  if (!item.payload) return 0
+  if (typeof item.payload === 'string') {
+    try { return atob(item.payload).length } catch { return item.payload.length }
+  }
+  if (item.payload instanceof Array) return item.payload.length
+  return 0
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return 'N/A'
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return String(ts)
+  return d.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
+}
+
+function gwDebugRows(gw) {
+  if (!gw) return []
+  return [
+    ['Messages In', gw.messages_in ?? 0],
+    ['Messages Out', gw.messages_out ?? 0],
+    ['Errors', gw.errors ?? 0],
+    ['DLQ Pending', gw.dlq_pending ?? 0],
+    ['Uptime', gw.connection_uptime || 'N/A'],
+    ['Last Activity', gw.last_activity ? formatTimestamp(gw.last_activity) : 'N/A'],
+  ]
+}
+
 function gwStatusColor(gw) {
   if (!gw) return 'bg-gray-600'
   return gw.connected ? 'bg-emerald-400' : gw.enabled ? 'bg-amber-400' : 'bg-gray-600'
@@ -192,35 +230,91 @@ onMounted(() => {
       <span class="text-xs text-amber-300">One or more rules may generate high costs on paid transports (Iridium/SMS). Review rules marked with a red badge.</span>
     </div>
 
-    <!-- Status panes -->
+    <!-- Status panes (clickable for debug) -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+        @click="togglePane('mesh')">
         <div class="text-[10px] text-gray-500 mb-1">MESH RADIO</div>
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="store.status?.connected ? 'bg-emerald-400' : 'bg-red-400'" />
           <span class="text-xs text-gray-300">{{ store.status?.connected ? 'Connected' : 'Disconnected' }}</span>
         </div>
       </div>
-      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+        @click="togglePane('mqtt')">
         <div class="text-[10px] text-gray-500 mb-1">MQTT</div>
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="gwStatusColor(mqttGw)" />
           <span class="text-xs text-gray-300">{{ gwStatusLabel(mqttGw) }}</span>
         </div>
       </div>
-      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+        @click="togglePane('iridium')">
         <div class="text-[10px] text-gray-500 mb-1">IRIDIUM</div>
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="gwStatusColor(iridiumGw)" />
           <span class="text-xs text-gray-300">{{ gwStatusLabel(iridiumGw) }}</span>
         </div>
       </div>
-      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+        @click="togglePane('cellular')">
         <div class="text-[10px] text-gray-500 mb-1">CELLULAR</div>
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="gwStatusColor(cellularGw)" />
           <span class="text-xs text-gray-300">{{ gwStatusLabel(cellularGw) }}</span>
         </div>
+      </div>
+    </div>
+
+    <!-- Debug panel for selected pane -->
+    <div v-if="expandedPane" class="bg-gray-900/80 rounded-lg border border-gray-700 p-3 mb-4 text-[10px] font-mono text-gray-400">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[9px] text-gray-500 uppercase tracking-wider">{{ expandedPane }} debug</span>
+        <button @click="expandedPane = null" class="text-gray-600 hover:text-gray-400 text-xs">x</button>
+      </div>
+
+      <!-- Mesh debug -->
+      <div v-if="expandedPane === 'mesh'" class="space-y-1">
+        <div class="flex justify-between"><span class="text-gray-600">Node ID</span><span>{{ store.status?.node_id || 'N/A' }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-600">Node Name</span><span>{{ store.status?.node_name || 'N/A' }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-600">Connected</span><span>{{ store.status?.connected ?? false }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-600">Uptime</span><span>{{ store.status?.uptime_seconds ? Math.floor(store.status.uptime_seconds / 60) + 'm' : 'N/A' }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-600">Nodes Seen</span><span>{{ (store.nodes || []).length }}</span></div>
+      </div>
+
+      <!-- MQTT debug -->
+      <div v-if="expandedPane === 'mqtt'" class="space-y-1">
+        <template v-if="mqttGw">
+          <div v-for="[k, v] in gwDebugRows(mqttGw)" :key="k" class="flex justify-between">
+            <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
+          </div>
+        </template>
+        <div v-else class="text-gray-600">Not configured</div>
+      </div>
+
+      <!-- Iridium debug -->
+      <div v-if="expandedPane === 'iridium'" class="space-y-1">
+        <template v-if="iridiumGw">
+          <div v-for="[k, v] in gwDebugRows(iridiumGw)" :key="k" class="flex justify-between">
+            <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
+          </div>
+          <div class="flex justify-between"><span class="text-gray-600">Signal Bars</span><span>{{ store.iridiumSignal?.bars ?? 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">Assessment</span><span>{{ store.iridiumSignal?.assessment || 'N/A' }}</span></div>
+        </template>
+        <div v-else class="text-gray-600">Not configured</div>
+      </div>
+
+      <!-- Cellular debug -->
+      <div v-if="expandedPane === 'cellular'" class="space-y-1">
+        <template v-if="cellularGw">
+          <div v-for="[k, v] in gwDebugRows(cellularGw)" :key="k" class="flex justify-between">
+            <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
+          </div>
+          <div class="flex justify-between"><span class="text-gray-600">Signal Bars</span><span>{{ store.cellularSignal?.bars ?? 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">Operator</span><span>{{ store.cellularStatus?.operator || 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">IMEI</span><span>{{ store.cellularStatus?.imei || 'N/A' }}</span></div>
+        </template>
+        <div v-else class="text-gray-600">Not configured</div>
       </div>
     </div>
 
@@ -307,8 +401,9 @@ onMounted(() => {
       </div>
       <div class="space-y-2">
         <div v-for="item in queueItems" :key="item.id"
-          class="bg-tactical-surface rounded-lg p-3 border border-tactical-border"
-          :class="(item.status === 'sent' || item.status === 'received') ? 'opacity-60' : ''">
+          class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+          :class="(item.status === 'sent' || item.status === 'received') ? 'opacity-60' : ''"
+          @click="toggleDebug(item.id)">
           <div class="flex items-center gap-2 mb-2">
             <span class="text-[10px] font-mono px-1.5 py-px rounded"
               :class="item.direction === 'inbound' ? 'text-blue-400 bg-blue-400/10' : 'text-tactical-iridium bg-tactical-iridium/10'">
@@ -331,8 +426,27 @@ onMounted(() => {
             {{ item.preview || '(no text payload)' }}
           </div>
 
+          <!-- Debug panel (expanded) -->
+          <div v-if="expandedItem === item.id" class="bg-gray-900/80 rounded border border-gray-700 p-2 mb-2 text-[10px] font-mono text-gray-400 space-y-1"
+            @click.stop>
+            <div class="text-[9px] text-gray-500 uppercase tracking-wider mb-1.5">debug</div>
+            <div class="flex justify-between"><span class="text-gray-600">Packet ID</span><span>{{ item.packet_id || 0 }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Direction</span><span>{{ item.direction || 'outbound' }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Status</span><span>{{ item.status || 'unknown' }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Priority</span><span>{{ priorityLabel(item.priority) }} ({{ item.priority }})</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Payload Size</span><span>{{ payloadSize(item) }} bytes</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Retries</span><span>{{ item.retries }}/{{ item.max_retries }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Next Retry</span><span>{{ item.next_retry ? formatTimestamp(item.next_retry) : 'N/A' }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Created</span><span>{{ formatTimestamp(item.created_at) }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-600">Updated</span><span>{{ formatTimestamp(item.updated_at) }}</span></div>
+            <div v-if="item.last_error" class="mt-1 pt-1 border-t border-gray-800">
+              <div class="text-gray-600 mb-0.5">Last Error</div>
+              <div class="text-red-400/80 break-all">{{ item.last_error }}</div>
+            </div>
+          </div>
+
           <!-- Actions (only for pending items) -->
-          <div v-if="item.status === 'pending'" class="flex items-center gap-2 text-[10px]">
+          <div v-if="item.status === 'pending'" class="flex items-center gap-2 text-[10px]" @click.stop>
             <span class="text-gray-600">Retries: {{ item.retries }}/{{ item.max_retries }}</span>
             <span class="text-gray-600">
               Next: {{ nextRetryCountdown(item.next_retry) }}
