@@ -531,9 +531,10 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	// Step 1: SBDSX — free local status check
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
-		// SBDSX is a local-only command — timeout likely means serial noise, not corruption.
-		// Return error so caller retries on next poll; don't disconnect (preserves SSE streams).
-		log.Warn().Err(err).Msg("iridium: SBDSX failed, will retry next poll")
+		// Serial timeout on a local command means the port is in a bad state.
+		// disconnectLocked no longer closes subscriber channels (safe for SSE streams).
+		log.Warn().Err(err).Msg("iridium: SBDSX failed, forcing serial reconnect")
+		t.disconnectLocked()
 		return nil, fmt.Errorf("SBDSX failed: %w", err)
 	}
 	status, err := parseSBDSX(resp)
