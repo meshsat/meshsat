@@ -27,6 +27,7 @@ type IridiumGateway struct {
 
 	connected       atomic.Bool
 	ringAlertActive atomic.Bool // prevents concurrent handleRingAlert goroutines
+	drainActive     atomic.Bool // prevents concurrent drainDLQ goroutines
 	msgsIn          atomic.Int64
 	msgsOut         atomic.Int64
 	errors          atomic.Int64
@@ -422,9 +423,13 @@ func (g *IridiumGateway) dlqRetryWorker(ctx context.Context) {
 			return
 
 		case <-timer.C:
-			g.processDLQ(ctx, retryBase)
-			// Refresh interval from scheduler
 			params = g.getTimingParams()
+			// In active/post-pass modes, bypass next_retry backoff — we have signal now.
+			if params.Mode == ModeActive || params.Mode == ModePostPass {
+				g.processDLQImmediate(ctx, retryBase)
+			} else {
+				g.processDLQ(ctx, retryBase)
+			}
 			timer.Reset(params.DLQCheckInterval)
 
 		case newMode := <-modeCh:
@@ -584,6 +589,15 @@ func (g *IridiumGateway) drainDLQ(ctx context.Context) {
 	if g.db == nil {
 		return
 	}
+	// Prevent concurrent drain goroutines from piling up on the modem mutex.
+	// Each signal event spawns a goroutine; without this guard, multiple
+	// goroutines queue on the serial lock and each increments retry counters.
+	if !g.drainActive.CompareAndSwap(false, true) {
+		log.Debug().Msg("iridium: DLQ drain already active, skipping")
+		return
+	}
+	defer g.drainActive.Store(false)
+
 	retryBase := g.config.DLQRetryBase
 	if retryBase <= 0 {
 		retryBase = 120
@@ -614,16 +628,22 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
-			// Always retry with exponential backoff (capped at 30min). Never expire.
+			// Backoff capped at 2min during active mode (we'll retry on the next
+			// timer tick or signal event), 30min otherwise.
 			backoff := time.Duration(retryBase) * time.Second * (1 << uint(dl.Retries+1))
-			if backoff > 30*time.Minute {
-				backoff = 30 * time.Minute
+			params := g.getTimingParams()
+			maxBackoff := 30 * time.Minute
+			if params.Mode == ModeActive || params.Mode == ModePostPass {
+				maxBackoff = 2 * time.Minute
+			}
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 			nextRetry := time.Now().Add(backoff)
 			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
 				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
 			}
-			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Msg("iridium: DLQ drain retry failed, rescheduled")
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).Time("next_retry", nextRetry).Str("mode", params.ModeName).Msg("iridium: DLQ drain retry failed, rescheduled")
 			continue
 		}
 
