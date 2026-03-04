@@ -10,6 +10,10 @@ MeshSat runs as a standalone Docker container on any Linux machine with USB-conn
 *Built-in web dashboard showing Iridium status, mesh nodes, SOS controls,
 SBD message queue, and GPS/satellite positioning*
 
+![MeshSat Pass Predictor](docs/images/meshsat_passes.png)
+*Iridium satellite pass predictor with signal correlation —
+optimizes transmission timing in obstructed environments*
+
 ## What It Does
 
 - Bridges Meshtastic mesh radio and Iridium satellite into a single message bus
