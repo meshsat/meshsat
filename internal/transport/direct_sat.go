@@ -99,8 +99,10 @@ func (t *DirectSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 	go func() {
 		<-ctx.Done()
 		t.eventMu.Lock()
-		delete(t.eventSubs, id)
-		close(ch)
+		if _, exists := t.eventSubs[id]; exists {
+			delete(t.eventSubs, id)
+			close(ch)
+		}
 		t.eventMu.Unlock()
 	}()
 
@@ -502,6 +504,10 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	// Step 1: SBDSX — free local status check
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
+		// Serial timeout on a simple command means the port is in a bad state.
+		// Force disconnect so the reconnect loop gets a clean port.
+		log.Warn().Err(err).Msg("iridium: SBDSX failed, forcing serial reconnect")
+		t.disconnectLocked()
 		return nil, fmt.Errorf("SBDSX failed: %w", err)
 	}
 	status, err := parseSBDSX(resp)
@@ -615,6 +621,37 @@ func (t *DirectSatTransport) Close() error {
 	return nil
 }
 
+// disconnectLocked tears down the serial connection and subscriber channels.
+// Caller must hold t.mu. The reconnect loop in the gateway will call
+// Subscribe → connectLocked to re-establish the connection.
+func (t *DirectSatTransport) disconnectLocked() {
+	t.connected = false
+	if t.file != nil {
+		t.file.Close()
+		t.file = nil
+	}
+
+	// Stop monitor and signal poller goroutines cleanly.
+	// stopMonitor temporarily releases t.mu for goroutines to exit.
+	t.stopMonitor()
+
+	// Emit the disconnected event while channels are still open.
+	t.emitEvent(SatEvent{
+		Type:    "disconnected",
+		Message: "Serial connection reset (will reconnect)",
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+
+	// Close all subscriber channels so ringAlertListenOnce returns
+	// and the reconnect loop triggers a fresh Subscribe → connectLocked.
+	t.eventMu.Lock()
+	for id, ch := range t.eventSubs {
+		close(ch)
+		delete(t.eventSubs, id)
+	}
+	t.eventMu.Unlock()
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -656,6 +693,11 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 
 	resp, err := sendAT(t.file, "AT+SBDIX", timeout)
 	if err != nil {
+		// SBDIX timeout corrupts the serial buffer — the modem may still be
+		// processing the satellite session and will send its response later.
+		// Force disconnect so the reconnect loop re-establishes a clean port.
+		log.Warn().Err(err).Msg("iridium: SBDIX failed, forcing serial reconnect")
+		t.disconnectLocked()
 		return nil, fmt.Errorf("SBDIX failed: %w", err)
 	}
 
