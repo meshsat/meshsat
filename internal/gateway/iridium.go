@@ -572,6 +572,7 @@ func (g *IridiumGateway) ringAlertListenOnce(ctx context.Context) error {
 				g.connected.Store(true)
 			case "disconnected":
 				g.connected.Store(false)
+				return fmt.Errorf("modem disconnected")
 			}
 		}
 	}

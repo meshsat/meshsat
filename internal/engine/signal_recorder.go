@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -99,6 +100,9 @@ func (sr *SignalRecorder) readSignals(ctx context.Context) error {
 		case ev, ok := <-events:
 			if !ok {
 				return nil
+			}
+			if ev.Type == "disconnected" {
+				return fmt.Errorf("modem disconnected")
 			}
 			// Only record "signal" events that carry bar count
 			if ev.Type == "signal" && ev.Signal >= 0 {
