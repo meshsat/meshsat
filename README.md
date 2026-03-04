@@ -4,6 +4,12 @@ A gateway that bridges Meshtastic mesh radios and Iridium SBD satellite modems. 
 
 MeshSat runs as a standalone Docker container on any Linux machine with USB-connected devices. No cloud dependencies, no subscriptions beyond your Iridium SBD plan.
 
+## Dashboard
+
+![MeshSat Dashboard](docs/images/meshsat_dashboard.png)
+*Built-in web dashboard showing Iridium status, mesh nodes, SOS controls,
+SBD message queue, and GPS/satellite positioning*
+
 ## What It Does
 
 - Bridges Meshtastic mesh radio and Iridium satellite into a single message bus
