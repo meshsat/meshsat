@@ -14,9 +14,17 @@ MeshSat runs as a standalone Docker container on any Linux machine with USB-conn
 - Exposes a REST API for integration with other systems
 - Runs on ARM64 (Raspberry Pi, Pine64) and x86_64 (Intel NUC, any PC)
 
-## Tested Hardware
+## Hardware
 
-The following devices have been verified end-to-end (satellite to mesh and back):
+![MeshSat Lab - Host and Meshtastic radio](docs/images/meshsat_lab_01.jpg)
+*Lilygo T-Echo (Meshtastic) connected to the MeshSat host with USB GPS dongle*
+
+![MeshSat Lab - RockBLOCK 9603 satellite modem](docs/images/meshsat_lab_02.jpg)
+*RockBLOCK 9603 Iridium modem with patch antenna — needs sky view for satellite access*
+
+### Tested Devices
+
+The following hardware has been verified end-to-end (satellite to mesh and back):
 
 | Device | Role | Interface | Notes |
 |--------|------|-----------|-------|
