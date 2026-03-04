@@ -36,7 +36,8 @@ type DirectSatTransport struct {
 	model     string
 
 	// SBDIX rate limiting
-	lastSBDIX time.Time
+	lastSBDIX    time.Time
+	lastGSSSync  time.Time // last successful SBDIX that reached the GSS (for MT discovery)
 
 	// Signal state
 	signalMu   sync.RWMutex
@@ -556,12 +557,16 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	return data, nil
 }
 
-// MailboxCheck performs SBDSX (free local check) then SBDIX (satellite session).
-// SBDSX is used for diagnostics and to detect piggybacked MT in the local buffer.
-// SBDIX always runs — it's the only way to discover MT messages queued at the GSS,
-// since SBDSX's "waiting" count is only updated by previous SBDIX results.
-// The caller (pollWorker) controls the rate via poll_interval / pass scheduler.
-// Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL MailboxCheck).
+// MailboxCheck performs SBDSX (free local check) then conditional SBDIX.
+// SBDIX only runs when there's a reason — each empty-MO SBDIX costs 1 credit.
+//
+// SBDIX triggers:
+//   - MO buffer has data (outbound message pending)
+//   - Ring alert (RA) flag set
+//   - MT waiting > 0 (from previous SBDIX)
+//   - GSS sync overdue (>15min since last successful SBDIX) — periodic MT discovery
+//
+// Holds mu throughout — monitor is blocked on mu.Lock().
 func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -569,7 +574,7 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return nil, fmt.Errorf("not connected")
 	}
 
-	// Step 1: SBDSX — free local status check (diagnostics + piggybacked MT detection)
+	// Step 1: SBDSX — free local status check
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
 		log.Warn().Err(err).Msg("iridium: SBDSX failed, forcing serial reconnect")
@@ -592,20 +597,36 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
 	}
 
-	// Step 2: SBDIX — satellite session (always runs)
-	// If MO buffer has data, send it. Otherwise clear MO to avoid accidental resend.
-	hadMO := status.MOFlag
-	if !hadMO {
+	// Determine if SBDIX is warranted (each costs 1 credit with empty MO)
+	gssSyncOverdue := time.Since(t.lastGSSSync) > 15*time.Minute
+	hasReason := status.MOFlag || status.RAFlag || status.MTWaiting > 0 || gssSyncOverdue
+
+	if !hasReason {
+		log.Debug().Msg("iridium: no reason for SBDIX, skipping")
+		return &SBDResult{}, nil
+	}
+
+	if gssSyncOverdue && !status.MOFlag && !status.RAFlag && status.MTWaiting == 0 {
+		log.Info().Dur("since_last_sync", time.Since(t.lastGSSSync)).
+			Msg("iridium: GSS sync overdue, forcing SBDIX for MT discovery")
+	}
+
+	// Step 2: SBDIX — satellite session
+	// Clear MO if empty to prevent "[No payload]" sends
+	if !status.MOFlag {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	} else {
 		log.Info().Msg("iridium: MO buffer has outbound data, sending via SBDIX")
 	}
 
 	result, err := t.sbdixLocked(ctx)
-	// Always clear MO after SBDIX — DLQ retains payload for retry.
-	// Prevents stale MO from triggering endless SBDIX on subsequent polls.
+	// Always clear MO after SBDIX — DLQ retains payload for retry
 	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
+	}
+	// Update GSS sync timestamp on successful session (mo_status 0-4)
+	if err == nil && result.MOStatus <= 4 {
+		t.lastGSSSync = time.Now()
 	}
 	return result, err
 }
