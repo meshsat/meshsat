@@ -130,6 +130,8 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		file.Close()
 		return fmt.Errorf("AT&K0 failed: %w", err)
 	}
+	// ATE0 — disable command echo (reduces response parsing noise)
+	sendAT(file, "ATE0", iridiumReadTimeout)
 	// AT&D0 — ignore DTR
 	sendAT(file, "AT&D0", iridiumReadTimeout)
 	// AT — basic check
@@ -186,28 +188,48 @@ func (t *DirectSatTransport) startMonitor() {
 
 // stopMonitor stops the ring monitor and signal poller.
 // Caller must hold t.mu. Temporarily releases it so goroutines can exit.
+// Matches HAL's stopMonitorLocked pattern with non-blocking done checks.
 func (t *DirectSatTransport) stopMonitor() {
 	if !t.ringActive {
 		return
 	}
-	close(t.stopRingCh)
-	close(t.stopSignalCh)
-	ringDone := t.ringDone
-	signalDone := t.signalDone
-	// Release mutex so goroutines can finish (they need mu to check state)
-	t.mu.Unlock()
-	select {
-	case <-ringDone:
-	case <-time.After(2 * time.Second):
-		log.Warn().Msg("iridium: ring monitor did not exit in time")
-	}
-	select {
-	case <-signalDone:
-	case <-time.After(2 * time.Second):
-		log.Warn().Msg("iridium: signal poller did not exit in time")
-	}
-	t.mu.Lock()
 	t.ringActive = false
+
+	// Stop signal poller first (doesn't hold serial port)
+	if t.stopSignalCh != nil {
+		select {
+		case <-t.signalDone:
+			// already exited
+		default:
+			close(t.stopSignalCh)
+			done := t.signalDone
+			t.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				log.Warn().Msg("iridium: signal poller did not exit in time")
+			}
+			t.mu.Lock()
+		}
+		t.stopSignalCh = nil
+		t.signalDone = nil
+	}
+
+	// Stop ring monitor (check if already exited, e.g. serial error)
+	select {
+	case <-t.ringDone:
+		// monitor already exited — just clean up
+	default:
+		close(t.stopRingCh)
+		done := t.ringDone
+		t.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			log.Warn().Msg("iridium: ring monitor did not exit in time")
+		}
+		t.mu.Lock()
+	}
 }
 
 // monitorLoop reads serial for unsolicited SBDRING alerts.
@@ -332,7 +354,8 @@ func (t *DirectSatTransport) isConnected() bool {
 // ============================================================================
 
 // Send transmits binary data via SBD (AT+SBDWB + AT+SBDIX).
-func (t *DirectSatTransport) Send(_ context.Context, data []byte) (*SBDResult, error) {
+// Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL SendBinary).
+func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data is empty")
 	}
@@ -345,10 +368,6 @@ func (t *DirectSatTransport) Send(_ context.Context, data []byte) (*SBDResult, e
 	if !t.connected || t.file == nil {
 		return nil, fmt.Errorf("not connected")
 	}
-
-	// Pause ring alert monitor during send
-	t.stopMonitor()
-	defer t.startMonitor()
 
 	// Clear MO buffer
 	resp, err := sendAT(t.file, "AT+SBDD0", iridiumReadTimeout)
@@ -396,11 +415,12 @@ func (t *DirectSatTransport) Send(_ context.Context, data []byte) (*SBDResult, e
 	}
 
 	// SBDIX
-	return t.sbdixLocked()
+	return t.sbdixLocked(ctx)
 }
 
 // SendText transmits a text SBD message (AT+SBDWT + AT+SBDIX).
-func (t *DirectSatTransport) SendText(_ context.Context, text string) (*SBDResult, error) {
+// Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL pattern).
+func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDResult, error) {
 	if len(text) > 120 {
 		return nil, fmt.Errorf("text too long (max 120 chars for AT+SBDWT)")
 	}
@@ -411,18 +431,16 @@ func (t *DirectSatTransport) SendText(_ context.Context, text string) (*SBDResul
 		return nil, fmt.Errorf("not connected")
 	}
 
-	t.stopMonitor()
-	defer t.startMonitor()
-
 	resp, err := sendAT(t.file, "AT+SBDWT="+text, 5*time.Second)
 	if err != nil || !strings.Contains(resp, "OK") {
 		return nil, fmt.Errorf("AT+SBDWT failed: %s", resp)
 	}
 
-	return t.sbdixLocked()
+	return t.sbdixLocked(ctx)
 }
 
 // Receive reads the MT buffer (AT+SBDRB).
+// Stops monitor because it does raw serial reads (matches HAL ReadBinaryMT).
 func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -432,6 +450,11 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 
 	t.stopMonitor()
 	defer t.startMonitor()
+
+	// Re-check state after stopMonitor (mutex was briefly released)
+	if !t.connected || t.file == nil {
+		return nil, fmt.Errorf("disconnected during monitor stop")
+	}
 
 	// Send AT+SBDRB
 	if _, err := t.file.WriteString("AT+SBDRB\r"); err != nil {
@@ -467,16 +490,13 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 }
 
 // MailboxCheck performs SBDSX (free) then conditional SBDIX (satellite session).
-// Matches HAL's credit-aware two-step approach.
-func (t *DirectSatTransport) MailboxCheck(_ context.Context) (*SBDResult, error) {
+// Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL MailboxCheck).
+func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
 		return nil, fmt.Errorf("not connected")
 	}
-
-	t.stopMonitor()
-	defer t.startMonitor()
 
 	// Step 1: SBDSX — free local status check
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
@@ -513,7 +533,7 @@ func (t *DirectSatTransport) MailboxCheck(_ context.Context) (*SBDResult, error)
 	// Clear MO buffer to avoid accidental resend
 	sendAT(t.file, "AT+SBDD0", 3*time.Second)
 
-	return t.sbdixLocked()
+	return t.sbdixLocked(ctx)
 }
 
 // GetSignal returns current signal (blocking AT+CSQ, up to 60s).
@@ -598,18 +618,26 @@ func (t *DirectSatTransport) Close() error {
 // ============================================================================
 
 // sbdixLocked performs AT+SBDIX with rate limiting. Caller must hold t.mu.
-func (t *DirectSatTransport) sbdixLocked() (*SBDResult, error) {
+// Context-aware rate limit wait matches HAL's sbdixLocked pattern.
+func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error) {
 	if !t.connected || t.file == nil {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	// Rate limit: min 10s between SBDIX
+	// Rate limit: min 10s between SBDIX.
+	// Release mutex during wait so signal polls can get through (matches HAL).
 	if elapsed := time.Since(t.lastSBDIX); elapsed < minSBDIXInterval {
 		wait := minSBDIXInterval - elapsed
 		log.Info().Dur("wait", wait).Msg("iridium SBDIX rate limit")
 		t.mu.Unlock()
-		time.Sleep(wait)
+		select {
+		case <-ctx.Done():
+			t.mu.Lock()
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
 		t.mu.Lock()
+		// Re-check state after re-acquiring (HAL pattern)
 		if !t.connected || t.file == nil {
 			return nil, fmt.Errorf("disconnected during rate limit wait")
 		}
