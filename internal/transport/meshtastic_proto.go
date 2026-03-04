@@ -709,6 +709,80 @@ func parseDeviceMetricsProto(data []byte) (*ProtoDeviceMetrics, error) {
 	return dm, nil
 }
 
+// ProtoEnvironmentMetrics represents environment sensor data (Telemetry field 2).
+type ProtoEnvironmentMetrics struct {
+	Temperature float32
+	Humidity    float32
+	Pressure    float32
+}
+
+// parseEnvironmentMetrics extracts environment metrics from a Telemetry message.
+// Telemetry field 2 = environment_metrics submessage.
+// Returns nil if no environment data is present.
+func parseEnvironmentMetrics(data []byte) *ProtoEnvironmentMetrics {
+	offset := 0
+	for offset < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, offset)
+		if err != nil {
+			return nil
+		}
+		offset = newPos
+
+		if fieldNum == 2 && wireType == wireLengthDelimited {
+			val, newPos, err := readLengthDelimited(data, offset)
+			if err != nil {
+				return nil
+			}
+			_ = newPos
+			return parseEnvironmentMetricsProto(val)
+		}
+		offset = skipField(data, offset, wireType)
+		if offset < 0 {
+			return nil
+		}
+	}
+	return nil
+}
+
+func parseEnvironmentMetricsProto(data []byte) *ProtoEnvironmentMetrics {
+	em := &ProtoEnvironmentMetrics{}
+	offset := 0
+	for offset < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, offset)
+		if err != nil {
+			return em
+		}
+		offset = newPos
+
+		switch fieldNum {
+		case 1: // temperature (float = fixed32)
+			if offset+4 > len(data) {
+				return em
+			}
+			em.Temperature = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			offset += 4
+		case 2: // relative_humidity (float = fixed32)
+			if offset+4 > len(data) {
+				return em
+			}
+			em.Humidity = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			offset += 4
+		case 3: // barometric_pressure (float = fixed32)
+			if offset+4 > len(data) {
+				return em
+			}
+			em.Pressure = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			offset += 4
+		default:
+			offset = skipField(data, offset, wireType)
+			if offset < 0 {
+				return em
+			}
+		}
+	}
+	return em
+}
+
 // ============================================================================
 // Builders — construct ToRadio protobuf messages
 // ============================================================================

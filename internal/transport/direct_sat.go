@@ -126,6 +126,9 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	t.file = file
 	t.port = port
 
+	// Drain any stale data from the serial buffer before first command
+	drainPort(file)
+
 	// Initialize modem
 	// AT&K0 — disable flow control
 	if _, err := sendAT(file, "AT&K0", iridiumReadTimeout); err != nil {
@@ -396,6 +399,9 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	payload.Write(data)
 	binary.Write(&payload, binary.BigEndian, checksum)
 
+	if t.file == nil {
+		return nil, fmt.Errorf("disconnected")
+	}
 	if _, err := t.file.Write(payload.Bytes()); err != nil {
 		return nil, fmt.Errorf("binary write failed: %w", err)
 	}
@@ -405,9 +411,12 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	if err != nil {
 		return nil, fmt.Errorf("binary write response failed: %w", err)
 	}
+	writeOK := false
 	for _, line := range strings.Split(writeResp, "\n") {
 		line = strings.TrimSpace(line)
 		switch line {
+		case "0":
+			writeOK = true
 		case "1":
 			return nil, fmt.Errorf("binary write timeout on modem")
 		case "2":
@@ -415,6 +424,9 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		case "3":
 			return nil, fmt.Errorf("binary write wrong size")
 		}
+	}
+	if !writeOK {
+		return nil, fmt.Errorf("binary write: no success confirmation from modem")
 	}
 
 	// SBDIX
@@ -427,12 +439,19 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 	if len(text) > 120 {
 		return nil, fmt.Errorf("text too long (max 120 chars for AT+SBDWT)")
 	}
+	// Reject characters that corrupt AT command framing
+	if strings.ContainsAny(text, "\r\n\x00") {
+		return nil, fmt.Errorf("text contains invalid characters (CR, LF, or null)")
+	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
 		return nil, fmt.Errorf("not connected")
 	}
+
+	// Clear MO buffer before write to prevent stale data resend
+	sendAT(t.file, "AT+SBDD0", iridiumReadTimeout)
 
 	resp, err := sendAT(t.file, "AT+SBDWT="+text, 5*time.Second)
 	if err != nil || !strings.Contains(resp, "OK") {
@@ -489,7 +508,15 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 		}
 	}
 
-	return parseSBDRBResponse(all)
+	data, err := parseSBDRBResponse(all)
+	if err != nil {
+		return nil, err
+	}
+
+	// Clear MT buffer after successful read to prevent re-reading stale data
+	sendAT(t.file, "AT+SBDD1", iridiumReadTimeout)
+
+	return data, nil
 }
 
 // MailboxCheck performs SBDSX (free) then conditional SBDIX (satellite session).
@@ -504,10 +531,9 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	// Step 1: SBDSX — free local status check
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
-		// Serial timeout on a simple command means the port is in a bad state.
-		// Force disconnect so the reconnect loop gets a clean port.
-		log.Warn().Err(err).Msg("iridium: SBDSX failed, forcing serial reconnect")
-		t.disconnectLocked()
+		// SBDSX is a local-only command — timeout likely means serial noise, not corruption.
+		// Return error so caller retries on next poll; don't disconnect (preserves SSE streams).
+		log.Warn().Err(err).Msg("iridium: SBDSX failed, will retry next poll")
 		return nil, fmt.Errorf("SBDSX failed: %w", err)
 	}
 	status, err := parseSBDSX(resp)
@@ -606,12 +632,8 @@ func (t *DirectSatTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.ringActive {
-		close(t.stopRingCh)
-		// Don't wait — we're shutting down
-		close(t.stopSignalCh)
-		t.ringActive = false
-	}
+	// Use stopMonitor for clean goroutine shutdown (waits with 2s timeout)
+	t.stopMonitor()
 
 	t.connected = false
 	if t.file != nil {
@@ -621,9 +643,10 @@ func (t *DirectSatTransport) Close() error {
 	return nil
 }
 
-// disconnectLocked tears down the serial connection and subscriber channels.
-// Caller must hold t.mu. The reconnect loop in the gateway will call
-// Subscribe → connectLocked to re-establish the connection.
+// disconnectLocked tears down the serial connection.
+// Caller must hold t.mu. The gateway's ctx.Done() unsubscribe goroutine
+// handles channel cleanup — we must NOT close subscriber channels here,
+// as that kills ALL SSE streams and causes reconnection storms.
 func (t *DirectSatTransport) disconnectLocked() {
 	t.connected = false
 	if t.file != nil {
@@ -635,21 +658,12 @@ func (t *DirectSatTransport) disconnectLocked() {
 	// stopMonitor temporarily releases t.mu for goroutines to exit.
 	t.stopMonitor()
 
-	// Emit the disconnected event while channels are still open.
+	// Emit the disconnected event — subscribers stay open for reconnect.
 	t.emitEvent(SatEvent{
 		Type:    "disconnected",
 		Message: "Serial connection reset (will reconnect)",
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
-
-	// Close all subscriber channels so ringAlertListenOnce returns
-	// and the reconnect loop triggers a fresh Subscribe → connectLocked.
-	t.eventMu.Lock()
-	for id, ch := range t.eventSubs {
-		close(ch)
-		delete(t.eventSubs, id)
-	}
-	t.eventMu.Unlock()
 }
 
 // ============================================================================

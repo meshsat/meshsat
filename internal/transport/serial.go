@@ -28,7 +28,9 @@ const (
 // openSerial opens a serial port and configures it via stty.
 func openSerial(path string, baud int) (*os.File, error) {
 	// Configure port via stty (raw mode, 8N1, no flow control)
-	cmd := exec.Command("stty", "-F", path,
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "stty", "-F", path,
 		fmt.Sprintf("%d", baud),
 		"raw", "-echo", "-echoe", "-echok",
 		"cs8", "-cstopb", "-parenb", "-crtscts", "-hupcl",
@@ -138,6 +140,7 @@ func (r *meshFrameReader) extractFrame() []byte {
 		payloadLen := int(r.accum[2])<<8 | int(r.accum[3])
 
 		if payloadLen > meshMaxPayload {
+			log.Warn().Int("len", payloadLen).Msg("meshtastic: corrupted frame, skipping")
 			r.accum = r.accum[2:]
 			continue
 		}

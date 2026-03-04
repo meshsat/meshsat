@@ -48,7 +48,9 @@ type DirectMeshTransport struct {
 	configData map[string]interface{}
 	configMu   sync.RWMutex
 
-	eventMu    sync.RWMutex
+	heartbeatNonce uint32
+
+	eventMu sync.RWMutex
 	eventSubs  map[uint64]chan MeshEvent
 	nextSubID  uint64
 	cancelFunc context.CancelFunc
@@ -151,6 +153,9 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 		select {
 		case <-deadline:
 			log.Warn().Msg("meshtastic config handshake timed out, continuing with partial NodeDB")
+			t.mu.Lock()
+			t.configDone = true
+			t.mu.Unlock()
 			return nil
 		case <-ticker.C:
 			t.mu.RLock()
@@ -290,19 +295,32 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 }
 
 func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
+	// Filter encrypted packets we can't decode
+	if pkt.Decoded == nil && len(pkt.Encrypted) > 0 {
+		log.Debug().Uint32("from", pkt.From).Msg("meshtastic: dropping encrypted packet (no key)")
+		return
+	}
+
 	msg := protoPacketToMeshMessage(pkt)
 
-	// Update node DB from any packet
+	// Update node DB from any packet — create node if unknown
 	t.nodesMu.Lock()
-	if node, ok := t.nodes[pkt.From]; ok {
-		node.LastHeard = msg.RxTime
-		node.LastHeardStr = msg.Timestamp
-		if pkt.RxSNR != 0 {
-			node.SNR = pkt.RxSNR
-		}
-		if pkt.RxRSSI != 0 {
-			node.RSSI = pkt.RxRSSI
-		}
+	node, ok := t.nodes[pkt.From]
+	if !ok {
+		node = &MeshNode{Num: pkt.From}
+		t.nodes[pkt.From] = node
+	}
+	node.LastHeard = msg.RxTime
+	node.LastHeardStr = msg.Timestamp
+	if pkt.RxSNR != 0 {
+		node.SNR = pkt.RxSNR
+	}
+	if pkt.RxRSSI != 0 {
+		node.RSSI = pkt.RxRSSI
+	}
+	// Update signal quality on every packet
+	if node.SNR != 0 || node.RSSI != 0 {
+		node.SignalQuality, node.DiagnosticNotes = computeSignalQuality(float64(node.RSSI), float64(node.SNR))
 	}
 	t.nodesMu.Unlock()
 
@@ -349,23 +367,23 @@ func (t *DirectMeshTransport) handlePositionPacket(pkt *ProtoMeshPacket) {
 
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
-	if ok {
-		node.Latitude = float64(pos.LatitudeI) / 1e7
-		node.Longitude = float64(pos.LongitudeI) / 1e7
-		node.Altitude = pos.Altitude
-		node.Sats = int(pos.SatsInView)
+	if !ok {
+		node = &MeshNode{Num: pkt.From}
+		t.nodes[pkt.From] = node
 	}
+	node.Latitude = float64(pos.LatitudeI) / 1e7
+	node.Longitude = float64(pos.LongitudeI) / 1e7
+	node.Altitude = pos.Altitude
+	node.Sats = int(pos.SatsInView)
 	t.nodesMu.Unlock()
 
-	if ok {
-		dataJSON, _ := json.Marshal(node)
-		t.emitEvent(MeshEvent{
-			Type:    "position",
-			Message: fmt.Sprintf("position update from !%08x", pkt.From),
-			Data:    dataJSON,
-			Time:    time.Now().UTC().Format(time.RFC3339),
-		})
-	}
+	dataJSON, _ := json.Marshal(node)
+	t.emitEvent(MeshEvent{
+		Type:    "position",
+		Message: fmt.Sprintf("position update from !%08x", pkt.From),
+		Data:    dataJSON,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func (t *DirectMeshTransport) handleNodeInfoPacket(pkt *ProtoMeshPacket) {
@@ -403,44 +421,92 @@ func (t *DirectMeshTransport) handleTelemetryPacket(pkt *ProtoMeshPacket) {
 	if pkt.Decoded == nil || pkt.Decoded.Payload == nil {
 		return
 	}
+
+	// Try device metrics first (Telemetry field 1)
 	dm, err := parseDeviceMetrics(pkt.Decoded.Payload)
-	if err != nil || dm == nil {
+	if err != nil {
+		return
+	}
+
+	// Try environment metrics (Telemetry field 2)
+	env := parseEnvironmentMetrics(pkt.Decoded.Payload)
+
+	// Nothing useful parsed
+	if dm == nil && env == nil {
 		return
 	}
 
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
-	if ok {
-		node.BatteryLevel = int(dm.BatteryLevel)
-		node.Voltage = dm.Voltage
-		node.ChannelUtil = dm.ChannelUtil
-		node.AirUtilTx = dm.AirUtilTx
-		node.UptimeSeconds = int(dm.UptimeSeconds)
+	if !ok {
+		node = &MeshNode{Num: pkt.From}
+		t.nodes[pkt.From] = node
+	}
+	if dm != nil {
+		if dm.BatteryLevel > 0 {
+			node.BatteryLevel = int(dm.BatteryLevel)
+		}
+		if dm.Voltage > 0 {
+			node.Voltage = dm.Voltage
+		}
+		if dm.ChannelUtil > 0 {
+			node.ChannelUtil = dm.ChannelUtil
+		}
+		if dm.AirUtilTx > 0 {
+			node.AirUtilTx = dm.AirUtilTx
+		}
+		if dm.UptimeSeconds > 0 {
+			node.UptimeSeconds = int(dm.UptimeSeconds)
+		}
+	}
+	if env != nil {
+		if env.Temperature != 0 {
+			node.Temperature = &env.Temperature
+		}
+		if env.Humidity != 0 {
+			node.Humidity = &env.Humidity
+		}
+		if env.Pressure != 0 {
+			node.Pressure = &env.Pressure
+		}
 	}
 	t.nodesMu.Unlock()
 
-	if ok {
-		dataJSON, _ := json.Marshal(node)
-		t.emitEvent(MeshEvent{
-			Type:    "node_update",
-			Message: fmt.Sprintf("telemetry from !%08x", pkt.From),
-			Data:    dataJSON,
-			Time:    time.Now().UTC().Format(time.RFC3339),
-		})
-	}
+	dataJSON, _ := json.Marshal(node)
+	t.emitEvent(MeshEvent{
+		Type:    "node_update",
+		Message: fmt.Sprintf("telemetry from !%08x", pkt.From),
+		Data:    dataJSON,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func (t *DirectMeshTransport) sendHeartbeat() {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
 		return
 	}
-	// Heartbeat: send empty ToRadio (field 4 = heartbeat, value = 0)
-	hb := []byte{0x20, 0x00} // field 4, varint 0
+	t.heartbeatNonce++
+	hb := buildHeartbeat(t.heartbeatNonce)
 	if err := sendFrame(t.file, hb); err != nil {
 		log.Warn().Err(err).Msg("meshtastic heartbeat send failed")
 	}
+}
+
+// buildHeartbeat builds a ToRadio heartbeat message (field 7, Heartbeat submessage).
+// The nonce field inside Heartbeat (field 1) lets the firmware detect stale connections.
+func buildHeartbeat(nonce uint32) []byte {
+	// Heartbeat submessage: field 1 (nonce) = varint
+	inner := make([]byte, 0, 8)
+	inner = append(inner, 0x08) // field 1, varint
+	inner = appendVarint(inner, uint64(nonce))
+	// ToRadio field 7 (heartbeat), length-delimited
+	buf := make([]byte, 0, len(inner)+4)
+	buf = append(buf, 0x3A) // field 7, wire type 2 (length-delimited)
+	buf = appendVarint(buf, uint64(len(inner)))
+	buf = append(buf, inner...)
+	return buf
 }
 
 func (t *DirectMeshTransport) emitEvent(event MeshEvent) {
@@ -676,6 +742,10 @@ func (t *DirectMeshTransport) Close() error {
 
 	if t.cancelFunc != nil {
 		t.cancelFunc()
+		// Wait briefly for readerLoop to exit (matches HAL's 2s timeout pattern)
+		t.mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		t.mu.Lock()
 	}
 	t.connected = false
 	if t.file != nil {
