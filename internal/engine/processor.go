@@ -207,6 +207,13 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 	log.Debug().Uint32("packet_id", msg.ID).Str("portnum", msg.PortNumName).Msg("message persisted")
 
+	// Prevent gateway→mesh→gateway feedback loops:
+	// If this message text was recently injected from a gateway, don't forward it back.
+	if p.isRecentGatewayInjection(msg.DecodedText) {
+		log.Debug().Uint32("packet_id", msg.ID).Msg("skipping forward: message originated from gateway (loop prevention)")
+		return
+	}
+
 	// Rule engine evaluation (if configured)
 	if p.rules != nil && p.rules.RuleCount() > 0 {
 		match := p.rules.Evaluate(&msg)
@@ -418,6 +425,10 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					continue
 				}
 
+				// Mark this text as gateway-injected so the mesh echo doesn't
+				// get forwarded back to gateways (prevents feedback loops).
+				p.markGatewayInjection(msg.Text)
+
 				// Persist as inbound message (received from external, relayed to mesh)
 				dbMsg := &database.Message{
 					FromNode:    msg.Source,
@@ -544,6 +555,33 @@ func (p *Processor) handleCrossGatewayRelay(ctx context.Context, msg gateway.Inb
 
 func relayDedupKey(source, text string) string {
 	h := sha256.Sum256([]byte(source + "|" + text))
+	return fmt.Sprintf("%x", h[:8])
+}
+
+// markGatewayInjection records that a message text was injected from a gateway
+// into the mesh, so the resulting mesh echo won't be forwarded back.
+func (p *Processor) markGatewayInjection(text string) {
+	key := gwInjectDedupKey(text)
+	p.relayDedupMu.Lock()
+	p.relayDedup[key] = time.Now()
+	p.relayDedupMu.Unlock()
+}
+
+// isRecentGatewayInjection returns true if this text was recently injected
+// from a gateway into the mesh (within 5 minutes).
+func (p *Processor) isRecentGatewayInjection(text string) bool {
+	if text == "" {
+		return false
+	}
+	key := gwInjectDedupKey(text)
+	p.relayDedupMu.Lock()
+	ts, ok := p.relayDedup[key]
+	p.relayDedupMu.Unlock()
+	return ok && time.Since(ts) < 5*time.Minute
+}
+
+func gwInjectDedupKey(text string) string {
+	h := sha256.Sum256([]byte("gw_inject|" + text))
 	return fmt.Sprintf("%x", h[:8])
 }
 
