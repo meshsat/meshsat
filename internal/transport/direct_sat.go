@@ -576,18 +576,24 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
 	}
 
-	// Only perform expensive SBDIX when there's a reason:
+	// Determine if we have a reason to perform an expensive SBDIX:
+	// - MO flag set — outbound message waiting in buffer (from Send/DLQ retry)
 	// - Ring alert (RA) flag set — GSS signalled inbound message
 	// - MT waiting > 0 — GSS reports queued messages
-	// Without these, SBDIX sends an empty MO ("[No payload]") costing 1 credit.
-	if !status.RAFlag && status.MTWaiting == 0 {
-		log.Info().Msg("iridium: no RA, no MT waiting, skipping SBDIX")
+	// Without any of these, SBDIX sends an empty MO costing 1 credit for nothing.
+	if !status.MOFlag && !status.RAFlag && status.MTWaiting == 0 {
+		log.Info().Msg("iridium: no MO, no RA, no MT waiting, skipping SBDIX")
 		return &SBDResult{}, nil
 	}
 
-	// Step 2: SBDIX — satellite session (RA or MT waiting confirmed)
-	// Clear MO buffer to avoid accidental resend
-	sendAT(t.file, "AT+SBDD0", 3*time.Second)
+	// Step 2: SBDIX — satellite session
+	// If MO buffer has data, send it as-is (don't clear!)
+	// If only inbound (RA/MT), clear MO to avoid accidental resend
+	if !status.MOFlag {
+		sendAT(t.file, "AT+SBDD0", 3*time.Second)
+	} else {
+		log.Info().Msg("iridium: MO buffer has outbound data, sending via SBDIX")
+	}
 
 	return t.sbdixLocked(ctx)
 }
