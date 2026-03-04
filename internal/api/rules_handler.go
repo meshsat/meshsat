@@ -8,15 +8,32 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"meshsat/internal/database"
+	"meshsat/internal/rules"
 )
 
+// ruleWithRisk wraps a forwarding rule with its cost risk assessment.
+type ruleWithRisk struct {
+	database.ForwardingRule
+	Risk *rules.RiskAssessment `json:"risk,omitempty"`
+}
+
 func (s *Server) handleGetRules(w http.ResponseWriter, r *http.Request) {
-	rules, err := s.db.GetForwardingRules()
+	ruleList, err := s.db.GetForwardingRules()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, rules)
+
+	// Attach risk assessments
+	result := make([]ruleWithRisk, len(ruleList))
+	for i, rule := range ruleList {
+		assessment := rules.AnalyzeRule(rule)
+		result[i] = ruleWithRisk{
+			ForwardingRule: rule,
+			Risk:           &assessment,
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +51,8 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "dest_type is required")
 		return
 	}
-	if rule.DestType != "iridium" && rule.DestType != "mqtt" && rule.DestType != "both" && rule.DestType != "mesh" {
-		writeError(w, http.StatusBadRequest, "dest_type must be iridium, mqtt, both, or mesh")
+	if rule.DestType != "iridium" && rule.DestType != "mqtt" && rule.DestType != "both" && rule.DestType != "mesh" && rule.DestType != "cellular" && rule.DestType != "all" {
+		writeError(w, http.StatusBadRequest, "dest_type must be iridium, mqtt, cellular, both, all, or mesh")
 		return
 	}
 	if rule.SourceType == "" {
@@ -43,8 +60,8 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate inbound rule constraints
 	if rule.DestType == "mesh" {
-		if rule.SourceType != "iridium" && rule.SourceType != "mqtt" && rule.SourceType != "external" {
-			writeError(w, http.StatusBadRequest, "inbound rules require source_type: iridium, mqtt, or external")
+		if rule.SourceType != "iridium" && rule.SourceType != "mqtt" && rule.SourceType != "cellular" && rule.SourceType != "external" {
+			writeError(w, http.StatusBadRequest, "inbound rules require source_type: iridium, mqtt, cellular, or external")
 			return
 		}
 		if rule.DestChannel < 0 || rule.DestChannel > 7 {
@@ -65,7 +82,11 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rule.ID = int(id)
-	writeJSON(w, http.StatusCreated, rule)
+	assessment := rules.AnalyzeRule(rule)
+	writeJSON(w, http.StatusCreated, ruleWithRisk{
+		ForwardingRule: rule,
+		Risk:           &assessment,
+	})
 }
 
 func (s *Server) handleGetRule(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +127,11 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 		s.ruleEngine.ReloadFromDB()
 	}
 
-	writeJSON(w, http.StatusOK, rule)
+	assessment := rules.AnalyzeRule(rule)
+	writeJSON(w, http.StatusOK, ruleWithRisk{
+		ForwardingRule: rule,
+		Risk:           &assessment,
+	})
 }
 
 func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {

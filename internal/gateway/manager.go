@@ -19,9 +19,10 @@ type ReceiverStartFunc func(ctx context.Context, gw Gateway)
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
 	db              *database.DB
-	sat             transport.SatTransport // optional, for iridium gateway
-	predictor       PassPredictor          // optional, for pass scheduler
-	onReceiverStart ReceiverStartFunc      // called when a gateway starts
+	sat             transport.SatTransport  // optional, for iridium gateway
+	cell            transport.CellTransport // optional, for cellular gateway
+	predictor       PassPredictor           // optional, for pass scheduler
+	onReceiverStart ReceiverStartFunc       // called when a gateway starts
 	running         map[string]Gateway
 	mu              sync.RWMutex
 	cancelFn        context.CancelFunc
@@ -34,6 +35,11 @@ func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 		sat:     sat,
 		running: make(map[string]Gateway),
 	}
+}
+
+// SetCellTransport sets the cellular transport for the cellular gateway.
+func (m *Manager) SetCellTransport(cell transport.CellTransport) {
+	m.cell = cell
 }
 
 // SetPassPredictor sets the pass predictor for pass-aware scheduling on Iridium gateways.
@@ -235,6 +241,21 @@ func (m *Manager) TestGateway(gwType string) error {
 			return fmt.Errorf("iridium modem not connected")
 		}
 		return nil
+	case "cellular":
+		if m.cell == nil {
+			return fmt.Errorf("cellular transport not available")
+		}
+		status, err := m.cell.GetStatus(context.Background())
+		if err != nil {
+			return err
+		}
+		if !status.Connected {
+			return fmt.Errorf("cellular modem not connected")
+		}
+		if status.SIMState != "READY" {
+			return fmt.Errorf("SIM not ready: %s", status.SIMState)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -340,6 +361,18 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 			return nil, err
 		}
 		return NewIridiumGateway(*cfg, m.sat, m.db, m.predictor), nil
+	case "cellular":
+		if m.cell == nil {
+			return nil, fmt.Errorf("cellular transport not available")
+		}
+		cfg, err := ParseCellularConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		return NewCellularGateway(*cfg, m.cell), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -355,9 +388,77 @@ func (m *Manager) redactConfig(gwType, configJSON string) json.RawMessage {
 		redacted := cfg.Redacted()
 		data, _ := json.Marshal(redacted)
 		return data
+	case "cellular":
+		cfg, err := ParseCellularConfig(configJSON)
+		if err != nil {
+			return json.RawMessage(configJSON)
+		}
+		redacted := cfg.Redacted()
+		data, _ := json.Marshal(redacted)
+		return data
 	default:
 		return json.RawMessage(configJSON)
 	}
+}
+
+// GetCellularSignal returns the current cellular signal.
+func (m *Manager) GetCellularSignal(ctx context.Context) (*transport.CellSignalInfo, error) {
+	if m.cell == nil {
+		return nil, fmt.Errorf("cellular transport not available")
+	}
+	return m.cell.GetSignal(ctx)
+}
+
+// GetCellularStatus returns the cellular modem status.
+func (m *Manager) GetCellularStatus(ctx context.Context) (*transport.CellStatus, error) {
+	if m.cell == nil {
+		return nil, fmt.Errorf("cellular transport not available")
+	}
+	return m.cell.GetStatus(ctx)
+}
+
+// GetCellularDataStatus returns the LTE data connection status.
+func (m *Manager) GetCellularDataStatus(ctx context.Context) (*transport.CellDataStatus, error) {
+	if m.cell == nil {
+		return nil, fmt.Errorf("cellular transport not available")
+	}
+	return m.cell.GetDataStatus(ctx)
+}
+
+// ConnectCellularData brings up the LTE data connection.
+func (m *Manager) ConnectCellularData(ctx context.Context, apn string) error {
+	if m.cell == nil {
+		return fmt.Errorf("cellular transport not available")
+	}
+	return m.cell.ConnectData(ctx, apn)
+}
+
+// DisconnectCellularData tears down the LTE data connection.
+func (m *Manager) DisconnectCellularData(ctx context.Context) error {
+	if m.cell == nil {
+		return fmt.Errorf("cellular transport not available")
+	}
+	return m.cell.DisconnectData(ctx)
+}
+
+// GetCellularGateway returns the running cellular gateway (for webhook forwarding).
+func (m *Manager) GetCellularGateway() *CellularGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if gw, ok := m.running["cellular"]; ok {
+		if cgw, ok := gw.(*CellularGateway); ok {
+			return cgw
+		}
+	}
+	return nil
+}
+
+// GetDynDNSUpdater returns the DynDNS updater from the running cellular gateway, if any.
+func (m *Manager) GetDynDNSUpdater() *DynDNSUpdater {
+	if cgw := m.GetCellularGateway(); cgw != nil {
+		return cgw.dyndns
+	}
+	return nil
 }
 
 // GetIridiumSignal returns the current satellite signal (blocking AT+CSQ).

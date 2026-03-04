@@ -108,7 +108,7 @@ watch(direction, (dir) => {
     form.value.dest_channel = 0
     form.value.dest_node = ''
   } else {
-    if (form.value.source_type === 'iridium' || form.value.source_type === 'mqtt' || form.value.source_type === 'external') {
+    if (form.value.source_type === 'iridium' || form.value.source_type === 'mqtt' || form.value.source_type === 'cellular' || form.value.source_type === 'external') {
       form.value.source_type = 'any'
     }
     if (form.value.dest_type === 'mesh') {
@@ -213,7 +213,9 @@ function save() {
               <select v-model="form.dest_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
                 <option value="iridium">Iridium Satellite</option>
                 <option value="mqtt">MQTT Broker</option>
-                <option value="both">Both</option>
+                <option value="cellular">Cellular (SMS)</option>
+                <option value="both">Iridium + MQTT</option>
+                <option value="all">All Gateways</option>
               </select>
             </div>
           </div>
@@ -273,6 +275,7 @@ function save() {
             <select v-model="form.source_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
               <option value="iridium">Iridium Satellite</option>
               <option value="mqtt">MQTT Broker</option>
+              <option value="cellular">Cellular (SMS)</option>
               <option value="external">Any external source</option>
             </select>
           </div>
@@ -315,7 +318,7 @@ function save() {
           <input v-model="form.source_keyword" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="emergency">
         </div>
 
-        <div v-if="!isInbound && form.dest_type !== 'mqtt'" class="grid grid-cols-2 gap-3">
+        <div v-if="!isInbound && (form.dest_type === 'iridium' || form.dest_type === 'both' || form.dest_type === 'all')" class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-gray-400 mb-1">Satellite Priority</label>
             <select v-model.number="form.sat_priority" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
@@ -341,7 +344,7 @@ function save() {
           </div>
         </div>
 
-        <div v-if="!isInbound && form.dest_type !== 'mqtt'" class="flex items-center gap-2">
+        <div v-if="!isInbound && (form.dest_type === 'iridium' || form.dest_type === 'both' || form.dest_type === 'all')" class="flex items-center gap-2">
           <input type="checkbox" v-model="form.sat_include_pos" id="sat_pos" class="rounded bg-gray-900 border-gray-700">
           <label for="sat_pos" class="text-xs text-gray-400">Include GPS position in satellite payload</label>
         </div>

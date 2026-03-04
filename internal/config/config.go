@@ -18,6 +18,10 @@ type Config struct {
 	// Direct mode device ports ("auto" or "" = auto-detect)
 	MeshtasticPort string
 	IridiumPort    string
+	CellularPort   string
+
+	// Cost safety: global rate limit for paid transports (messages/hour)
+	PaidRateLimit int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -32,6 +36,8 @@ func Load() *Config {
 		WebDir:         envStr("MESHSAT_WEB_DIR", ""),
 		MeshtasticPort: envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
 		IridiumPort:    envStr("MESHSAT_IRIDIUM_PORT", "auto"),
+		CellularPort:   envStr("MESHSAT_CELLULAR_PORT", "auto"),
+		PaidRateLimit:  envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 	}
 }
 

@@ -16,15 +16,17 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	db         *database.DB
-	mesh       transport.MeshTransport
-	processor  *engine.Processor
-	gwManager  *gateway.Manager
-	ruleEngine *rules.Engine
-	tleMgr     *engine.TLEManager
-	scheduler  *gateway.PassScheduler
-	sos        *SOSState
-	webHandler http.Handler
+	db            *database.DB
+	mesh          transport.MeshTransport
+	processor     *engine.Processor
+	gwManager     *gateway.Manager
+	ruleEngine    *rules.Engine
+	tleMgr        *engine.TLEManager
+	scheduler     *gateway.PassScheduler
+	cellTransport transport.CellTransport
+	paidRateLimit int
+	sos           *SOSState
+	webHandler    http.Handler
 }
 
 // NewServer creates a new API server.
@@ -45,6 +47,16 @@ func (s *Server) SetRuleEngine(e *rules.Engine) {
 // SetTLEManager sets the TLE manager for pass prediction.
 func (s *Server) SetTLEManager(m *engine.TLEManager) {
 	s.tleMgr = m
+}
+
+// SetCellTransport sets the cellular transport for cellular API endpoints.
+func (s *Server) SetCellTransport(cell transport.CellTransport) {
+	s.cellTransport = cell
+}
+
+// SetPaidRateLimit sets the global paid transport rate limit for cost analysis.
+func (s *Server) SetPaidRateLimit(limit int) {
+	s.paidRateLimit = limit
 }
 
 // SetWebHandler sets the handler for serving the web UI.
@@ -118,6 +130,19 @@ func (s *Server) Router() http.Handler {
 		// Iridium geolocation + AUTO location resolution
 		r.Get("/iridium/geolocation", s.handleGetIridiumGeolocation)
 		r.Get("/locations/resolved", s.handleGetGeolocationSources)
+
+		// Cellular modem
+		r.Get("/cellular/signal", s.handleGetCellularSignal)
+		r.Get("/cellular/signal/history", s.handleGetCellularSignalHistory)
+		r.Get("/cellular/status", s.handleGetCellularStatus)
+		r.Post("/cellular/data/connect", s.handleCellularDataConnect)
+		r.Post("/cellular/data/disconnect", s.handleCellularDataDisconnect)
+		r.Get("/cellular/data/status", s.handleCellularDataStatus)
+		r.Get("/cellular/dyndns/status", s.handleGetDynDNSStatus)
+		r.Post("/cellular/dyndns/update", s.handleDynDNSForceUpdate)
+
+		// Webhook receiver (inbound)
+		r.Post("/webhooks/cellular/inbound", s.handleWebhookCellularInbound)
 
 		// Iridium queue — offline compose and priority management
 		r.Get("/iridium/queue", s.handleGetIridiumQueue)

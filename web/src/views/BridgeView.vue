@@ -19,6 +19,12 @@ const subTabs = [
 
 const mqttGw = computed(() => (store.gateways || []).find(g => g.type === 'mqtt'))
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
+const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+
+// Cost risk warning — true when any rule has danger-level risk
+const hasDangerRules = computed(() =>
+  (store.rules || []).some(r => r.risk?.level === 'danger')
+)
 
 // Split rules by direction: inbound rules have dest_type === 'mesh'
 const outboundRules = computed(() =>
@@ -177,8 +183,17 @@ onMounted(() => {
       <h2 class="text-lg font-semibold text-gray-200">Bridge</h2>
     </div>
 
+    <!-- Cost warning banner -->
+    <div v-if="hasDangerRules" class="bg-amber-900/20 border border-amber-700/40 rounded-lg p-3 mb-4 flex items-center gap-2">
+      <svg class="w-4 h-4 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <span class="text-xs text-amber-300">One or more rules may generate high costs on paid transports (Iridium/SMS). Review rules marked with a red badge.</span>
+    </div>
+
     <!-- Status panes -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
         <div class="text-[10px] text-gray-500 mb-1">MESH RADIO</div>
         <div class="flex items-center gap-2">
@@ -198,6 +213,13 @@ onMounted(() => {
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="gwStatusColor(iridiumGw)" />
           <span class="text-xs text-gray-300">{{ gwStatusLabel(iridiumGw) }}</span>
+        </div>
+      </div>
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+        <div class="text-[10px] text-gray-500 mb-1">CELLULAR</div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full" :class="gwStatusColor(cellularGw)" />
+          <span class="text-xs text-gray-300">{{ gwStatusLabel(cellularGw) }}</span>
         </div>
       </div>
     </div>

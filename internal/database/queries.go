@@ -1158,3 +1158,66 @@ func (db *DB) GetAllGeolocationSources() ([]GeolocationRecord, error) {
 
 	return results, nil
 }
+
+// ============================================================================
+// Cellular Signal History
+// ============================================================================
+
+// CellularSignalPoint represents a cellular signal reading.
+type CellularSignalPoint struct {
+	ID         int64  `db:"id" json:"id"`
+	Timestamp  int64  `db:"timestamp" json:"timestamp"`
+	Bars       int    `db:"bars" json:"bars"`
+	DBm        int    `db:"dbm" json:"dbm"`
+	Technology string `db:"technology" json:"technology"`
+	Operator   string `db:"operator" json:"operator"`
+}
+
+// InsertCellularSignal persists a cellular signal reading.
+func (db *DB) InsertCellularSignal(timestamp int64, bars, dbm int, technology, operator string) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO cellular_signal_history (timestamp, bars, dbm, technology, operator)
+		 VALUES (?, ?, ?, ?, ?)`,
+		timestamp, bars, dbm, technology, operator)
+	return err
+}
+
+// GetLatestCellularSignal returns the most recent cellular signal reading.
+func (db *DB) GetLatestCellularSignal() (*CellularSignalPoint, error) {
+	cutoff := time.Now().Unix() - 600 // 10 minutes
+	row := db.QueryRow(
+		`SELECT id, timestamp, bars, dbm, technology, operator
+		 FROM cellular_signal_history WHERE timestamp >= ?
+		 ORDER BY timestamp DESC LIMIT 1`, cutoff)
+	var p CellularSignalPoint
+	err := row.Scan(&p.ID, &p.Timestamp, &p.Bars, &p.DBm, &p.Technology, &p.Operator)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// GetCellularSignalHistory returns cellular signal history within a time range.
+func (db *DB) GetCellularSignalHistory(from, to int64, limit int) ([]CellularSignalPoint, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 500
+	}
+	rows, err := db.Query(
+		`SELECT id, timestamp, bars, dbm, technology, operator
+		 FROM cellular_signal_history WHERE timestamp >= ? AND timestamp <= ?
+		 ORDER BY timestamp DESC LIMIT ?`, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var points []CellularSignalPoint
+	for rows.Next() {
+		var p CellularSignalPoint
+		if err := rows.Scan(&p.ID, &p.Timestamp, &p.Bars, &p.DBm, &p.Technology, &p.Operator); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	return points, nil
+}

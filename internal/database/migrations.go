@@ -223,6 +223,18 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_iridium_geo_ts ON iridium_geolocation(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_iridium_geo_source ON iridium_geolocation(source, timestamp);`,
+
+	// v11: Cellular signal history for 4G/LTE modem
+	`CREATE TABLE IF NOT EXISTS cellular_signal_history (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp  INTEGER NOT NULL,
+		bars       INTEGER NOT NULL,
+		dbm        INTEGER NOT NULL,
+		technology TEXT NOT NULL DEFAULT 'unknown',
+		operator   TEXT NOT NULL DEFAULT '',
+		UNIQUE(timestamp)
+	);
+	CREATE INDEX IF NOT EXISTS idx_cell_signal_ts ON cellular_signal_history(timestamp);`,
 }
 
 func (db *DB) migrate() error {

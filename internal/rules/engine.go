@@ -221,11 +221,46 @@ func matchInboundSource(rule database.ForwardingRule, source string) bool {
 		return source == "iridium"
 	case "mqtt":
 		return source == "mqtt"
+	case "cellular":
+		return source == "cellular"
 	case "external":
-		return source == "iridium" || source == "mqtt"
+		return source == "iridium" || source == "mqtt" || source == "cellular"
 	default:
 		return false
 	}
+}
+
+// EvaluateRelay returns the first matching inbound rule that routes to a non-mesh
+// destination (cross-gateway relay). Used by the processor to forward messages
+// between external gateways without touching the mesh.
+func (e *Engine) EvaluateRelay(source string, text string) *MatchResult {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	for _, rule := range e.rules {
+		if !rule.Enabled {
+			continue
+		}
+		// Relay rules are inbound rules whose dest_type is NOT "mesh"
+		// i.e., they route from one external source to another external dest
+		if rule.DestType == "mesh" {
+			continue
+		}
+		if !matchInboundSource(rule, source) {
+			continue
+		}
+		if !MatchesKeyword(rule, text) {
+			continue
+		}
+		if limiter, ok := e.rates[rule.ID]; ok {
+			if !limiter.Allow() {
+				continue
+			}
+		}
+		go e.recordMatch(rule.ID)
+		return &MatchResult{Rule: rule}
+	}
+	return nil
 }
 
 // MatchesKeyword checks if the message text contains the rule's keyword (case-insensitive).

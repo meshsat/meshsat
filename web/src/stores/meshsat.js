@@ -464,6 +464,67 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch { /* scheduler unavailable */ }
   }
 
+  // Cellular modem
+  const cellularSignal = ref(null)
+  const cellularStatus = ref(null)
+  const cellularSignalHistory = ref([])
+  const cellularDataStatus = ref(null)
+  const dyndnsStatus = ref(null)
+
+  async function fetchCellularSignal() {
+    try {
+      cellularSignal.value = await api.get('/cellular/signal')
+    } catch { /* cellular unavailable */ }
+  }
+
+  async function fetchCellularStatus() {
+    try {
+      cellularStatus.value = await api.get('/cellular/status')
+    } catch { /* cellular unavailable */ }
+  }
+
+  async function fetchCellularSignalHistory(params = {}) {
+    try {
+      const data = await api.get('/cellular/signal/history', params)
+      cellularSignalHistory.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function fetchCellularDataStatus() {
+    try {
+      cellularDataStatus.value = await api.get('/cellular/data/status')
+    } catch { /* data status unavailable */ }
+  }
+
+  async function connectCellularData(apn) {
+    error.value = null
+    try {
+      await api.post('/cellular/data/connect', { apn })
+      await fetchCellularDataStatus()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function disconnectCellularData() {
+    error.value = null
+    try {
+      await api.post('/cellular/data/disconnect')
+      await fetchCellularDataStatus()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function fetchDynDNSStatus() {
+    try {
+      dyndnsStatus.value = await api.get('/cellular/dyndns/status')
+    } catch { /* dyndns unavailable */ }
+  }
+
+  async function forceDynDNSUpdate() {
+    error.value = null
+    try {
+      dyndnsStatus.value = await api.post('/cellular/dyndns/update')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   const config = ref(null)
 
   async function fetchConfig() {
@@ -502,6 +563,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config,
     iridiumSignal, signalHistory, creditSummary, passes, locations, schedulerStatus,
     locationSources, iridiumGeolocation,
+    cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     rules, presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
@@ -514,6 +576,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchSignalHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation,
     fetchLocationSources, fetchIridiumGeolocation,
+    fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
+    fetchCellularDataStatus, connectCellularData, disconnectCellularData,
+    fetchDynDNSStatus, forceDynDNSUpdate,
     enqueueIridiumMessage, cancelQueueItem, setQueuePriority,
     fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,

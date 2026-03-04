@@ -47,6 +47,7 @@ func main() {
 	// Transport — mode selects communication backend
 	var mesh transport.MeshTransport
 	var sat transport.SatTransport
+	var cell transport.CellTransport
 	switch cfg.Mode {
 	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
@@ -66,6 +67,12 @@ func main() {
 		directSat.SetExcludePort(cfg.MeshtasticPort)
 		sat = directSat
 		log.Info().Str("port", cfg.IridiumPort).Msg("using direct Iridium serial transport")
+
+		// Cellular transport (optional — only if 4G/LTE modem is available)
+		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
+		directCell.SetExcludePorts([]string{cfg.MeshtasticPort, cfg.IridiumPort})
+		cell = directCell
+		log.Info().Str("port", cfg.CellularPort).Msg("using direct cellular serial transport")
 
 	default:
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")
@@ -94,6 +101,9 @@ func main() {
 
 	// Gateway manager
 	gwMgr := gateway.NewManager(db, sat)
+	if cell != nil {
+		gwMgr.SetCellTransport(cell)
+	}
 
 	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction
 	// Created early so it's available to the gateway manager for pass scheduling
@@ -121,11 +131,20 @@ func main() {
 	sigRecorder := engine.NewSignalRecorder(db, sat)
 	sigRecorder.Start(ctx)
 
+	// Cellular signal recorder (optional)
+	var cellSigRecorder *engine.CellSignalRecorder
+	if cell != nil {
+		cellSigRecorder = engine.NewCellSignalRecorder(db, cell)
+		cellSigRecorder.Start(ctx)
+	}
+
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetRuleEngine(ruleEngine)
 	srv.SetTLEManager(tleMgr)
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
+	srv.SetCellTransport(cell)
+	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
 	httpServer := &http.Server{
@@ -162,6 +181,9 @@ func main() {
 
 	cancel() // Stop processor + retention + gateways
 	sigRecorder.Stop()
+	if cellSigRecorder != nil {
+		cellSigRecorder.Stop()
+	}
 	tleMgr.Stop()
 	gwMgr.Stop()
 
