@@ -138,7 +138,7 @@ const dashMinElev = computed(() => {
 
 // Mini pass+signal+GSS chart for widget (6h window)
 const miniChartData = computed(() => {
-  const W = 280, H = 50, padL = 0, padR = 0
+  const W = 400, H = 80, padL = 20, padR = 20
   const now = Date.now() / 1000
   const windowSec = 6 * 3600
   const startTs = now - windowSec * 0.5
@@ -147,23 +147,33 @@ const miniChartData = computed(() => {
   function xPos(ts) { return padL + ((ts - startTs) / (endTs - startTs)) * (W - padL - padR) }
   function signalY(val) { return H - (val / 5) * H }
 
+  function elevY(deg) { return H - (deg / 90) * H }
+
   // Pass triangles
   const passes = (store.passes || []).map(p => {
-    const x1 = Math.max(0, xPos(p.aos))
-    const x2 = Math.min(W, xPos(p.los))
+    const x1 = Math.max(padL, xPos(p.aos))
+    const x2 = Math.min(W - padR, xPos(p.los))
     const xMid = (x1 + x2) / 2
-    const peakY = H - (p.peak_elev_deg / 90) * H
-    return { path: `M ${x1},${H} L ${xMid},${peakY} L ${x2},${H} Z`, x1, x2, sat: p.satellite, elev: p.peak_elev_deg, active: p.is_active }
-  }).filter(p => p.x2 > 0 && p.x1 < W)
+    const peakY = elevY(p.peak_elev_deg)
+    return { path: `M ${x1},${H} L ${xMid},${peakY} L ${x2},${H} Z`, x1, x2, xMid, peakY, sat: p.satellite, elev: p.peak_elev_deg, active: p.is_active }
+  }).filter(p => p.x2 > padL && p.x1 < W - padR)
 
-  // Signal line
-  const signals = (store.signalHistory || []).map(s => ({
-    x: xPos(s.timestamp || s.bucket),
-    y: signalY(s.value || s.avg || 0)
-  })).filter(s => s.x >= 0 && s.x <= W)
+  // Signal line + dots
+  const signals = (store.signalHistory || []).map(s => {
+    const val = s.value || s.avg || 0
+    return {
+      x: xPos(s.timestamp || s.bucket),
+      y: signalY(val),
+      val
+    }
+  }).filter(s => s.x >= padL && s.x <= W - padR)
 
   let signalLine = ''
-  if (signals.length > 1) signalLine = signals.map(s => `${s.x},${s.y}`).join(' ')
+  let signalArea = ''
+  if (signals.length > 1) {
+    signalLine = signals.map(s => `${s.x},${s.y}`).join(' ')
+    signalArea = `M ${signals[0].x},${H} L ${signals.map(s => `${s.x},${s.y}`).join(' L ')} L ${signals[signals.length - 1].x},${H} Z`
+  }
 
   // GSS dots
   const gss = (store.gssHistory || []).map(g => ({
@@ -184,7 +194,7 @@ const miniChartData = computed(() => {
     t += step
   }
 
-  return { passes, signalLine, gss, nowX, labels, W, H }
+  return { passes, signals, signalLine, signalArea, gss, nowX, labels, W, H, padL, padR }
 })
 
 // Fetch passes using resolved location + shared min elevation
@@ -547,8 +557,31 @@ const widgetComponents = {
 }
 
 // Widget-specific grid classes
+// ── Node detail modal ──
+const nodeDetailModal = ref(false)
+const nodeDetailData = ref(null)
+const nodeDetailTelemetry = ref([])
+const nodeDetailNeighbors = ref([])
+const nodeDetailLoading = ref(false)
+
+async function openNodeDetail(node) {
+  nodeDetailData.value = node
+  nodeDetailModal.value = true
+  nodeDetailLoading.value = true
+  const nodeId = node.user_id || `!${node.num.toString(16).padStart(8, '0')}`
+  try {
+    const data = await store.fetchTelemetry({ node: nodeId, limit: 50 })
+    nodeDetailTelemetry.value = data || []
+  } catch { nodeDetailTelemetry.value = [] }
+  try {
+    await store.fetchNeighborInfo()
+    nodeDetailNeighbors.value = (store.neighborInfo || []).filter(n => n.node_id === node.num)
+  } catch { nodeDetailNeighbors.value = [] }
+  nodeDetailLoading.value = false
+}
+
 function widgetGridClass(id) {
-  if (id === 'sos') return 'md:col-span-2 lg:col-span-1 lg:row-span-2'
+  if (id === 'queue') return 'md:col-span-2 lg:col-span-1 lg:row-span-2'
   if (id === 'activity') return 'md:col-span-2'
   return ''
 }
@@ -598,27 +631,34 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <!-- Signal sparkline (6h history) -->
-        <div v-if="sparklinePoints" class="mb-3">
-          <svg viewBox="0 0 200 40" class="w-full h-8" preserveAspectRatio="none">
-            <path :d="sparklineArea" fill="rgba(45,212,191,0.1)" />
-            <polyline :points="sparklinePoints" fill="none" stroke="rgb(45,212,191)" stroke-width="1.5" />
-          </svg>
-          <div class="text-[9px] text-gray-600 text-right">6h signal history</div>
-        </div>
-
-        <!-- Pass + Signal + GSS mini-chart (6h) -->
+        <!-- Signal vs Passes overlay chart (6h) -->
         <div v-if="miniChartData.passes.length > 0 || miniChartData.signalLine || miniChartData.gss.length > 0" class="mb-3">
-          <svg :viewBox="`0 0 ${miniChartData.W} ${miniChartData.H + 12}`" class="w-full h-14" preserveAspectRatio="none">
+          <svg :viewBox="`0 0 ${miniChartData.W} ${miniChartData.H + 12}`" class="w-full h-24" preserveAspectRatio="xMidYMid meet">
+            <!-- Grid lines -->
+            <line v-for="v in [1,2,3,4,5]" :key="'mg'+v"
+              :x1="miniChartData.padL" :x2="miniChartData.W - miniChartData.padR"
+              :y1="miniChartData.H - (v / 5) * miniChartData.H" :y2="miniChartData.H - (v / 5) * miniChartData.H"
+              stroke="#374151" stroke-width="0.3" stroke-dasharray="2 3" />
             <!-- Pass triangles -->
             <path v-for="(p, i) in miniChartData.passes" :key="'mp'+i"
               :d="p.path" :fill="p.active ? 'rgba(165,180,252,0.35)' : 'rgba(129,140,248,0.15)'"
               :stroke="p.active ? 'rgba(165,180,252,0.5)' : 'rgba(129,140,248,0.2)'" stroke-width="0.5" />
+            <!-- Pass peak labels -->
+            <text v-for="(p, i) in miniChartData.passes.filter(pp => (pp.x2 - pp.x1) > 15)" :key="'mpl'+i"
+              :x="p.xMid" :y="p.peakY - 3" text-anchor="middle" fill="#a5b4fc" font-size="5" opacity="0.6">
+              {{ p.elev.toFixed(0) }}
+            </text>
+            <!-- Signal area fill -->
+            <path v-if="miniChartData.signalArea" :d="miniChartData.signalArea" fill="rgba(16,185,129,0.08)" />
             <!-- Signal line -->
             <polyline v-if="miniChartData.signalLine"
-              :points="miniChartData.signalLine" fill="none" stroke="#10b981" stroke-width="1" opacity="0.6" />
+              :points="miniChartData.signalLine" fill="none" stroke="#10b981" stroke-width="1.2" opacity="0.7" />
+            <!-- Signal dots -->
+            <circle v-for="(s, i) in miniChartData.signals" :key="'ms'+i"
+              :cx="s.x" :cy="s.y" r="1.5"
+              :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'" opacity="0.85" />
             <!-- GSS dots -->
-            <circle v-for="(g, i) in miniChartData.gss" :key="'mg'+i"
+            <circle v-for="(g, i) in miniChartData.gss" :key="'mg2'+i"
               :cx="g.x" :cy="g.y" r="2"
               :fill="g.success ? '#e879f9' : '#f87171'" :opacity="g.success ? 0.9 : 0.6" />
             <!-- Now line -->
@@ -716,7 +756,8 @@ function widgetGridClass(id) {
 
         <div class="space-y-1">
           <div v-for="node in topNodes" :key="node.num"
-            class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.02] transition-colors">
+            class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.04] transition-colors cursor-pointer"
+            @click="openNodeDetail(node)">
             <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="signalDot(node)" />
             <span class="text-[11px] text-gray-300 truncate flex-1">{{ node.long_name || 'Unknown' }}</span>
             <span class="text-[9px] font-mono text-gray-600 shrink-0">{{ shortId(node.user_id) }}</span>
@@ -752,7 +793,7 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <h2 class="font-display font-semibold text-sm text-sky-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('cellular')">CELLULAR 4G/LTE</h2>
+            <h2 class="font-display font-semibold text-sm text-sky-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('cellular')">CELLULAR MODEM</h2>
           </div>
           <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
         </div>
@@ -797,13 +838,26 @@ function widgetGridClass(id) {
             <span class="text-gray-300 font-mono">{{ cellularGw?.messages_in ?? 0 }}</span>
           </div>
         </div>
+
+        <!-- SMS History (placeholder) -->
+        <div class="mt-3 pt-2 border-t border-tactical-border">
+          <div class="flex items-center gap-1.5 mb-1.5">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wider">Recent SMS</span>
+            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-gray-700/50 text-gray-500">not wired yet</span>
+          </div>
+          <div class="space-y-1">
+            <div class="flex items-center gap-2 py-1 px-2 rounded bg-tactical-bg/50 text-[11px] text-gray-600 italic">
+              SMS send/receive history will appear here when a modem is connected.
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- ═══ Emergency SOS (row-span-2) ═══ -->
+      <!-- ═══ Emergency SOS (compact) ═══ -->
       <div v-if="wid === 'sos'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
         draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
             <h2 class="font-display font-semibold text-sm text-tactical-sos tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('sos')">EMERGENCY SOS</h2>
@@ -814,37 +868,35 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <div class="flex justify-center mb-4">
-          <div class="relative">
-            <svg viewBox="0 0 120 120" class="w-28 h-28 lg:w-36 lg:h-36">
-              <circle cx="60" cy="60" r="54" fill="none" stroke-width="3"
-                :stroke="sosActive ? '#ef4444' : '#1a2230'" />
-              <circle v-if="sosActive" cx="60" cy="60" r="54" fill="none" stroke-width="3"
-                stroke="#ef4444" stroke-dasharray="12 6" class="animate-spin"
-                style="animation-duration: 8s;" />
-              <circle cx="60" cy="60" r="44" :fill="sosActive ? '#ef444420' : '#111820'" />
-              <text x="60" y="56" text-anchor="middle" font-size="22" font-weight="700"
-                :fill="sosActive ? '#ef4444' : '#4b5563'" font-family="Oxanium, sans-serif">SOS</text>
-              <text x="60" y="74" text-anchor="middle" font-size="9"
-                :fill="sosActive ? '#ef444480' : '#374151'" font-family="JetBrains Mono, monospace">
-                {{ sosActive ? 'ACTIVE' : 'READY' }}
-              </text>
-            </svg>
+        <div class="flex items-center gap-3 mb-3">
+          <svg viewBox="0 0 120 120" class="w-16 h-16 shrink-0">
+            <circle cx="60" cy="60" r="54" fill="none" stroke-width="3"
+              :stroke="sosActive ? '#ef4444' : '#1a2230'" />
+            <circle v-if="sosActive" cx="60" cy="60" r="54" fill="none" stroke-width="3"
+              stroke="#ef4444" stroke-dasharray="12 6" class="animate-spin"
+              style="animation-duration: 8s;" />
+            <circle cx="60" cy="60" r="44" :fill="sosActive ? '#ef444420' : '#111820'" />
+            <text x="60" y="56" text-anchor="middle" font-size="22" font-weight="700"
+              :fill="sosActive ? '#ef4444' : '#4b5563'" font-family="Oxanium, sans-serif">SOS</text>
+            <text x="60" y="74" text-anchor="middle" font-size="9"
+              :fill="sosActive ? '#ef444480' : '#374151'" font-family="JetBrains Mono, monospace">
+              {{ sosActive ? 'ACTIVE' : 'READY' }}
+            </text>
+          </svg>
+          <div class="flex-1 space-y-1.5">
+            <button @click="toggleSOS" :disabled="sosArming"
+              class="w-full py-2 rounded-lg text-xs font-semibold transition-all"
+              :class="sosActive
+                ? 'bg-tactical-sos/20 text-tactical-sos border border-tactical-sos/30 hover:bg-tactical-sos/30'
+                : 'bg-gray-800 text-gray-400 border border-gray-700 hover:text-gray-200 hover:border-gray-600'">
+              {{ sosArming ? '...' : sosActive ? 'CANCEL SOS' : 'ARM SOS' }}
+            </button>
+            <button @click="testSOS"
+              class="w-full py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 bg-gray-800/50 hover:bg-gray-800 transition-colors">
+              Send Test
+            </button>
           </div>
         </div>
-
-        <button @click="toggleSOS" :disabled="sosArming"
-          class="w-full py-2.5 rounded-lg text-xs font-semibold transition-all mb-4"
-          :class="sosActive
-            ? 'bg-tactical-sos/20 text-tactical-sos border border-tactical-sos/30 hover:bg-tactical-sos/30'
-            : 'bg-gray-800 text-gray-400 border border-gray-700 hover:text-gray-200 hover:border-gray-600'">
-          {{ sosArming ? '...' : sosActive ? 'CANCEL SOS' : 'ARM SOS' }}
-        </button>
-
-        <button @click="testSOS"
-          class="w-full py-1.5 rounded text-[10px] text-gray-500 hover:text-gray-300 bg-gray-800/50 hover:bg-gray-800 transition-colors mb-4">
-          Send Test
-        </button>
 
         <div class="space-y-1.5 text-[11px]">
           <div class="flex justify-between">
@@ -864,6 +916,17 @@ function widgetGridClass(id) {
           <div class="flex justify-between">
             <span class="text-gray-500">Last Activation</span>
             <span class="text-gray-400 font-mono">{{ store.sosStatus?.last_activated ? formatRelativeTime(store.sosStatus.last_activated) : 'Never' }}</span>
+          </div>
+        </div>
+
+        <!-- Cell Broadcast Alerts -->
+        <div class="mt-3 pt-2 border-t border-tactical-border">
+          <div class="flex items-center gap-1.5 mb-1">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wider">Cell Broadcast Alerts</span>
+            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-gray-700/50 text-gray-500">not wired yet</span>
+          </div>
+          <div class="text-[10px] text-gray-600 italic">
+            Government emergency alerts (EU-Alert, WEA, CMAS) will appear here when a cellular modem with CBS support is connected.
           </div>
         </div>
       </div>
@@ -969,7 +1032,7 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <div class="space-y-1 tactical-scroll max-h-[200px] overflow-y-auto">
+        <div class="space-y-1 tactical-scroll max-h-[350px] overflow-y-auto">
           <div v-for="item in dlqItems" :key="item.id"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
             :class="item.status === 'sent' || item.status === 'received' ? 'opacity-60' : ''"
@@ -1120,6 +1183,135 @@ function widgetGridClass(id) {
             <div>
               <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Raw JSON</h4>
               <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(queueDetailItem, null, 2) }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ═══ Node Detail Modal ═══ -->
+    <Teleport to="body">
+      <div v-if="nodeDetailModal && nodeDetailData" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="nodeDetailModal = false">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+          <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-full bg-gray-700/50 flex items-center justify-center text-xs font-bold text-gray-400">
+                {{ (nodeDetailData.short_name || '??').slice(0, 2).toUpperCase() }}
+              </div>
+              <div>
+                <h3 class="font-display font-semibold text-sm text-tactical-lora tracking-wide">
+                  {{ nodeDetailData.long_name || nodeDetailData.user_id || 'Unknown' }}
+                </h3>
+                <span class="text-[10px] text-gray-500 font-mono">{{ shortId(nodeDetailData.user_id) }}</span>
+              </div>
+            </div>
+            <button @click="nodeDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
+          </div>
+          <div class="p-4 space-y-4">
+            <!-- Identity -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Identity</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">Node Num</span><span class="text-gray-300 font-mono">{{ nodeDetailData.num }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">User ID</span><span class="text-gray-300 font-mono">{{ nodeDetailData.user_id || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Short Name</span><span class="text-gray-300">{{ nodeDetailData.short_name || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Long Name</span><span class="text-gray-300">{{ nodeDetailData.long_name || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Hardware</span><span class="text-gray-300">{{ nodeDetailData.hw_model_name || 'Unknown' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Role</span><span class="text-gray-300">{{ nodeDetailData.role || 'N/A' }}</span></div>
+              </div>
+            </div>
+
+            <!-- Radio -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Radio</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">SNR</span>
+                  <span :class="(nodeDetailData.snr ?? -999) >= 0 ? 'text-emerald-400' : (nodeDetailData.snr ?? -999) >= -10 ? 'text-amber-400' : 'text-red-400'" class="font-mono">
+                    {{ nodeDetailData.snr != null ? `${Number(nodeDetailData.snr).toFixed(1)} dB` : 'N/A' }}
+                  </span>
+                </div>
+                <div class="flex justify-between"><span class="text-gray-500">RSSI</span><span class="text-gray-300 font-mono">{{ nodeDetailData.rssi ? `${nodeDetailData.rssi} dBm` : 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Signal Quality</span>
+                  <span v-if="nodeDetailData.signal_quality" class="font-mono">{{ nodeDetailData.signal_quality }}</span>
+                  <span v-else class="text-gray-600">N/A</span>
+                </div>
+                <div class="flex justify-between"><span class="text-gray-500">Hops Away</span><span class="text-gray-300 font-mono">{{ nodeDetailData.hops_away ?? 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Last Heard</span><span class="text-gray-400 font-mono">{{ formatLastHeard(nodeDetailData.last_heard) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Last Message</span><span class="text-gray-400 font-mono">{{ nodeDetailData.last_message_time ? formatLastHeard(nodeDetailData.last_message_time) : 'Never' }}</span></div>
+              </div>
+            </div>
+
+            <!-- Position -->
+            <div v-if="nodeDetailData.latitude || nodeDetailData.longitude">
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Position</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">Latitude</span><span class="text-gray-300 font-mono">{{ nodeDetailData.latitude?.toFixed(6) || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Longitude</span><span class="text-gray-300 font-mono">{{ nodeDetailData.longitude?.toFixed(6) || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Altitude</span><span class="text-gray-300 font-mono">{{ nodeDetailData.altitude ? `${nodeDetailData.altitude}m` : 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Satellites</span><span class="text-gray-300 font-mono">{{ nodeDetailData.sats ?? 'N/A' }}</span></div>
+              </div>
+            </div>
+
+            <!-- Power -->
+            <div v-if="nodeDetailData.battery_level > 0 || nodeDetailData.voltage > 0">
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Power</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">Battery</span>
+                  <span class="font-mono" :class="nodeDetailData.battery_level > 50 ? 'text-emerald-400' : nodeDetailData.battery_level > 20 ? 'text-amber-400' : 'text-red-400'">
+                    {{ nodeDetailData.battery_level ? `${Math.round(nodeDetailData.battery_level)}%` : 'N/A' }}
+                  </span>
+                </div>
+                <div class="flex justify-between"><span class="text-gray-500">Voltage</span><span class="text-gray-300 font-mono">{{ nodeDetailData.voltage ? `${nodeDetailData.voltage.toFixed(2)}V` : 'N/A' }}</span></div>
+              </div>
+            </div>
+
+            <!-- Telemetry History -->
+            <div v-if="nodeDetailLoading" class="text-xs text-gray-500">Loading telemetry...</div>
+            <div v-else-if="nodeDetailTelemetry.length > 0">
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Telemetry History ({{ nodeDetailTelemetry.length }})</h4>
+              <div class="overflow-x-auto">
+                <table class="w-full text-[10px] text-gray-400">
+                  <thead>
+                    <tr class="text-gray-600">
+                      <th class="text-left pr-2 py-1">Time</th>
+                      <th class="text-right pr-2 py-1">Battery</th>
+                      <th class="text-right pr-2 py-1">Voltage</th>
+                      <th class="text-right pr-2 py-1">Ch Util</th>
+                      <th class="text-right pr-2 py-1">Air Util</th>
+                      <th class="text-right py-1">Uptime</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="t in nodeDetailTelemetry.slice(0, 15)" :key="t.id" class="border-t border-gray-800/50">
+                      <td class="pr-2 py-0.5 text-gray-600">{{ new Date(t.created_at).toLocaleTimeString() }}</td>
+                      <td class="text-right pr-2 py-0.5">{{ t.battery_level }}%</td>
+                      <td class="text-right pr-2 py-0.5">{{ t.voltage?.toFixed(2) }}V</td>
+                      <td class="text-right pr-2 py-0.5">{{ t.channel_util?.toFixed(1) }}%</td>
+                      <td class="text-right pr-2 py-0.5">{{ t.air_util_tx?.toFixed(1) }}%</td>
+                      <td class="text-right py-0.5">{{ t.uptime_seconds ? `${Math.floor(t.uptime_seconds / 3600)}h` : '-' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Neighbors -->
+            <div v-if="nodeDetailNeighbors.length > 0">
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Neighbors</h4>
+              <div class="flex flex-wrap gap-2">
+                <div v-for="ni in nodeDetailNeighbors" :key="ni.node_id" class="bg-gray-900/50 rounded px-2 py-1 text-[10px]">
+                  <div v-for="n in ni.neighbors" :key="n.node_id" class="flex items-center gap-2 py-0.5">
+                    <span class="text-gray-400 font-mono">!{{ n.node_id.toString(16).padStart(8, '0') }}</span>
+                    <span :class="n.snr >= 0 ? 'text-emerald-400/70' : 'text-amber-400/70'">SNR {{ n.snr?.toFixed(1) }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Raw JSON -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Raw Data</h4>
+              <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(nodeDetailData, null, 2) }}</pre>
             </div>
           </div>
         </div>

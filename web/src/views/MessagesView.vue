@@ -2,9 +2,32 @@
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
-import { transportBadge, portnumLabel, shortId } from '@/utils/format'
+import { transportBadge, portnumLabel, shortId, formatRelativeTime, formatTimestamp } from '@/utils/format'
 
 const store = useMeshsatStore()
+
+// Tab: 'mesh' or 'sbd'
+const activeTab = ref('mesh')
+
+// SBD queue detail modal
+const sbdDetailModal = ref(false)
+const sbdDetailItem = ref(null)
+
+function openSbdDetail(item) {
+  sbdDetailItem.value = item
+  sbdDetailModal.value = true
+}
+
+function dlqStatusColor(status) {
+  if (status === 'sent' || status === 'delivered') return 'text-emerald-400 bg-emerald-400/10'
+  if (status === 'received') return 'text-blue-400 bg-blue-400/10'
+  if (status === 'pending') return 'text-amber-400 bg-amber-400/10'
+  if (status === 'queued' || !status) return 'text-gray-400 bg-gray-400/10'
+  if (status === 'failed') return 'text-red-400 bg-red-400/10'
+  if (status === 'expired') return 'text-orange-400 bg-orange-400/10'
+  if (status === 'cancelled') return 'text-gray-500 bg-gray-500/10'
+  return 'text-gray-400 bg-gray-400/10'
+}
 
 // Compose state
 const sendText = ref('')
@@ -202,6 +225,7 @@ onMounted(() => {
   store.fetchNodes()
   store.fetchPresets()
   store.fetchMessageStats()
+  store.fetchDLQ()
   store.connectSSE((event) => {
     if (event.type === 'message') store.fetchMessages()
   })
@@ -219,6 +243,85 @@ onUnmounted(() => {
 
 <template>
   <div class="max-w-5xl mx-auto flex flex-col h-[calc(100vh-5rem)] lg:h-[calc(100vh-3rem)]">
+
+    <!-- Tab selector -->
+    <div class="flex gap-1 mb-3 flex-shrink-0">
+      <button @click="activeTab = 'mesh'"
+        class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
+        :class="activeTab === 'mesh' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        Mesh Messages
+      </button>
+      <button @click="activeTab = 'sbd'"
+        class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
+        :class="activeTab === 'sbd' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        SBD Queue
+        <span v-if="(store.dlq || []).filter(d => d.status === 'pending' || !d.status).length > 0"
+          class="ml-1 text-[9px] px-1 py-px rounded bg-amber-400/20 text-amber-400">
+          {{ (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length }}
+        </span>
+      </button>
+    </div>
+
+    <!-- ═══ SBD Queue Tab ═══ -->
+    <div v-if="activeTab === 'sbd'" class="flex-1 overflow-y-auto min-h-0">
+      <div v-if="!(store.dlq || []).length" class="flex flex-col items-center justify-center h-full text-gray-500">
+        <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+        </svg>
+        <span class="text-sm">No SBD messages in queue</span>
+      </div>
+      <div v-else class="space-y-1">
+        <div v-for="item in (store.dlq || [])" :key="item.id"
+          class="flex items-center gap-2 py-2 px-3 rounded-lg bg-gray-800/40 hover:bg-gray-800/60 cursor-pointer transition-colors"
+          @click="openSbdDetail(item)">
+          <span class="text-[9px] font-mono shrink-0"
+            :class="item.direction === 'inbound' ? 'text-blue-400' : 'text-teal-400'">
+            {{ item.direction === 'inbound' ? 'SBD\u2192Mesh' : 'Mesh\u2192SBD' }}
+          </span>
+          <span class="text-[10px] font-mono px-1.5 py-px rounded" :class="dlqStatusColor(item.status)">
+            {{ item.status || 'queued' }}
+          </span>
+          <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.text_preview || '(binary)' }}</span>
+          <span v-if="item.retries > 0" class="text-[9px] text-amber-400/60 font-mono shrink-0">{{ item.retries }}x</span>
+          <span class="text-[10px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
+        </div>
+      </div>
+
+      <!-- SBD Detail Modal -->
+      <Teleport to="body">
+        <div v-if="sbdDetailModal && sbdDetailItem" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="sbdDetailModal = false">
+          <div class="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+            <div class="sticky top-0 bg-gray-900 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
+              <h3 class="font-semibold text-sm text-teal-400">SBD ITEM #{{ sbdDetailItem.id }}</h3>
+              <button @click="sbdDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
+            </div>
+            <div class="p-4 space-y-4">
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">Direction</span><span class="text-gray-300 font-mono">{{ sbdDetailItem.direction || 'outbound' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Status</span><span class="font-mono px-1.5 py-px rounded" :class="dlqStatusColor(sbdDetailItem.status)">{{ sbdDetailItem.status || 'queued' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Priority</span><span class="text-gray-300 font-mono">{{ sbdDetailItem.priority ?? 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Retries</span><span class="text-gray-300 font-mono">{{ sbdDetailItem.retries ?? 0 }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Created</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(sbdDetailItem.created_at) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Updated</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(sbdDetailItem.updated_at) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Last Error</span><span class="text-gray-400 font-mono text-[10px] truncate">{{ sbdDetailItem.last_error || 'None' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Packet ID</span><span class="text-gray-300 font-mono">{{ sbdDetailItem.packet_id || 'N/A' }}</span></div>
+              </div>
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase mb-1">Payload</h4>
+                <div class="text-[11px] text-gray-300">{{ sbdDetailItem.text_preview || '(none)' }}</div>
+              </div>
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase mb-1">Raw</h4>
+                <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-800 rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(sbdDetailItem, null, 2) }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+    </div>
+
+    <!-- ═══ Mesh Messages Tab ═══ -->
+    <template v-if="activeTab === 'mesh'">
 
     <!-- Status cards row -->
     <div class="grid grid-cols-3 gap-2 mb-3 flex-shrink-0">
@@ -486,5 +589,7 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
+
+    </template>
   </div>
 </template>

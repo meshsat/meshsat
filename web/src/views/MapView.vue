@@ -17,8 +17,24 @@ const showCustom = ref(true)
 // Per-node visibility toggles (reactive map: nodeId → boolean)
 const nodeVisibility = reactive({})
 
+// Map theme
+function loadMapTheme() {
+  return localStorage.getItem('meshsat-map-theme') || 'dark'
+}
+const mapTheme = ref(loadMapTheme())
+
+const tileUrls = {
+  dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  light: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+}
+const tileAttrs = {
+  dark: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OSM',
+  light: '&copy; OSM'
+}
+
 let L = null
 let map = null
+let tileLayer = null
 let markerLayer = null
 let trackLayer = null
 let messageLayer = null
@@ -77,8 +93,8 @@ async function initMap() {
     if (!mapEl.value) return
 
     map = L.map(mapEl.value).setView([0, 0], 2)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OSM',
+    tileLayer = L.tileLayer(tileUrls[mapTheme.value], {
+      attribution: tileAttrs[mapTheme.value],
       maxZoom: 19
     }).addTo(map)
 
@@ -252,6 +268,18 @@ function updateMap() {
   }
 }
 
+function toggleMapTheme() {
+  mapTheme.value = mapTheme.value === 'dark' ? 'light' : 'dark'
+  localStorage.setItem('meshsat-map-theme', mapTheme.value)
+  if (map && tileLayer && L) {
+    map.removeLayer(tileLayer)
+    tileLayer = L.tileLayer(tileUrls[mapTheme.value], {
+      attribution: tileAttrs[mapTheme.value],
+      maxZoom: 19
+    }).addTo(map)
+  }
+}
+
 function toggleNode(nodeId) {
   nodeVisibility[nodeId] = nodeVisibility[nodeId] === false ? true : false
   updateMap()
@@ -312,12 +340,19 @@ onUnmounted(() => {
   <div class="max-w-5xl mx-auto space-y-4">
     <div class="flex items-center justify-between">
       <h1 class="text-lg font-semibold text-gray-200">Map</h1>
-      <button
-        @click="store.fetchNodes().then(() => store.fetchMessages({ limit: 200 })).then(updateMap)"
-        class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
-      >
-        Refresh
-      </button>
+      <div class="flex items-center gap-2">
+        <button @click="toggleMapTheme"
+          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
+          :title="mapTheme === 'dark' ? 'Switch to light map' : 'Switch to dark map'">
+          {{ mapTheme === 'dark' ? 'Light' : 'Dark' }}
+        </button>
+        <button
+          @click="store.fetchNodes().then(() => store.fetchMessages({ limit: 200 })).then(updateMap)"
+          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
+        >
+          Refresh
+        </button>
+      </div>
     </div>
 
     <!-- Map container -->
