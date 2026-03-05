@@ -338,6 +338,11 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	if node.SNR != 0 || node.RSSI != 0 {
 		node.SignalQuality, node.DiagnosticNotes = computeSignalQuality(float64(node.RSSI), float64(node.SNR))
 	}
+	// Track last text message exchange time
+	if pkt.Decoded != nil && pkt.Decoded.PortNum == PortNumTextMessage {
+		node.LastMessageTime = msg.RxTime
+		node.LastMessageStr = msg.Timestamp
+	}
 	t.nodesMu.Unlock()
 
 	// Handle specific portnums

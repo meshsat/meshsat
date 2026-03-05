@@ -198,6 +198,9 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
             <div class="text-xs" :class="isActive(node) ? 'text-gray-400' : 'text-gray-600'">
               {{ formatLastHeard(node.last_heard) }}
             </div>
+            <div v-if="node.last_message_time" class="text-[10px] text-gray-600 mt-0.5" title="Last text message">
+              msg {{ formatLastHeard(node.last_message_time) }}
+            </div>
             <div class="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
               <button @click="handleTraceroute(node)" title="Traceroute"
                 class="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/50 text-gray-400 hover:text-teal-400 transition-colors">

@@ -39,6 +39,8 @@ type MeshNode struct {
 	DiagnosticNotes string   `json:"diagnostic_notes,omitempty"`
 	LastHeard       int64    `json:"last_heard"`
 	LastHeardStr    string   `json:"last_heard_str"`
+	LastMessageTime int64    `json:"last_message_time,omitempty"`
+	LastMessageStr  string   `json:"last_message_str,omitempty"`
 }
 
 // MeshMessage represents a decoded mesh packet.
