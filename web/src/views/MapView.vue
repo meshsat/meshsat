@@ -6,8 +6,13 @@ const store = useMeshsatStore()
 const mapEl = ref(null)
 const mapReady = ref(false)
 const mapError = ref(false)
+
+// Layer toggles
 const showMessages = ref(true)
 const showTracks = ref(true)
+const showGps = ref(true)
+const showIridium = ref(true)
+const showCustom = ref(true)
 
 // Per-node visibility toggles (reactive map: nodeId → boolean)
 const nodeVisibility = reactive({})
@@ -174,6 +179,12 @@ function updateMap() {
         if (!src.lat || !src.lon) continue
         const isGps = src.source === 'gps'
         const isIridium = src.source === 'iridium'
+
+        // Skip based on layer toggles
+        if (isGps && !showGps.value) continue
+        if (isIridium && !showIridium.value) continue
+        if (!isGps && !isIridium && !showCustom.value) continue
+
         const color = isGps ? '#10b981' : isIridium ? '#a855f7' : '#f59e0b'
         const label = isGps ? 'GPS' : isIridium ? 'Iridium' : 'Custom'
         const accKm = isIridium ? Math.max(src.accuracy_km || 0, 100) : (src.accuracy_km || 0)
@@ -211,22 +222,23 @@ function updateMap() {
     }
 
     // Custom locations from the locations list
-    for (const loc of (store.locations || [])) {
-      const m = L.circleMarker([loc.lat, loc.lon], {
-        radius: 6,
-        fillColor: '#f59e0b',
-        fillOpacity: 0.3,
-        color: '#f59e0b',
-        weight: 1.5
-      })
-      m.bindPopup(`<strong>${loc.name}</strong><br><span style="font-size:11px;color:#888">${loc.builtin ? 'Built-in' : 'Custom'}</span>`)
-      locationLayer.addLayer(m)
+    if (showCustom.value) {
+      for (const loc of (store.locations || [])) {
+        const m = L.circleMarker([loc.lat, loc.lon], {
+          radius: 6,
+          fillColor: '#f59e0b',
+          fillOpacity: 0.3,
+          color: '#f59e0b',
+          weight: 1.5
+        })
+        m.bindPopup(`<strong>${loc.name}</strong><br><span style="font-size:11px;color:#888">${loc.builtin ? 'Built-in' : 'Custom'}</span>`)
+        locationLayer.addLayer(m)
+      }
     }
   }
 
-  // Fit bounds
+  // Fit bounds (include all sources regardless of toggle for initial view)
   const allVisible = visibleNodes.map(n => [n.latitude, n.longitude])
-  // Include location sources in bounds
   const ls = store.locationSources
   if (ls && ls.sources) {
     for (const src of ls.sources) {
@@ -267,6 +279,9 @@ watch(() => store.positions, debouncedUpdateMap, { deep: true })
 watch(() => store.messages, debouncedUpdateMap, { deep: true })
 watch(showMessages, updateMap)
 watch(showTracks, updateMap)
+watch(showGps, updateMap)
+watch(showIridium, updateMap)
+watch(showCustom, updateMap)
 
 onMounted(async () => {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
@@ -313,46 +328,52 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Controls bar -->
-    <div class="flex flex-wrap items-center gap-4 text-xs">
-      <!-- Legend -->
-      <div class="flex items-center gap-3 text-gray-500">
-        <div class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded-full bg-emerald-500"></span> Good
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded-full bg-amber-500"></span> Fair
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded-full bg-red-500"></span> Bad
-        </div>
-        <div class="flex items-center gap-1.5">
+    <!-- Layer controls -->
+    <div class="bg-tactical-surface rounded-lg border border-tactical-border p-3">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Layers</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-4 text-xs">
+        <!-- Location sources -->
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showGps" class="rounded bg-gray-800 border-gray-600 text-emerald-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          GPS
+        </label>
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showIridium" class="rounded bg-gray-800 border-gray-600 text-purple-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+          Iridium
+        </label>
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showCustom" class="rounded bg-gray-800 border-gray-600 text-amber-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          Custom
+        </label>
+
+        <span class="w-px h-4 bg-gray-700" />
+
+        <!-- Mesh data layers -->
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showMessages" class="rounded bg-gray-800 border-gray-600 text-sky-500 focus:ring-0 w-3 h-3" />
           <span class="w-2 h-2 rounded-full bg-sky-400"></span>
-          <span>Msg</span>
-        </div>
-        <span class="text-gray-700">|</span>
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 ring-1 ring-emerald-400/50"></span> GPS
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-purple-400 ring-1 ring-purple-400/50" style="border: 1px dashed"></span> Iridium
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-amber-400"></span> Custom
+          Messages
+        </label>
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showTracks" class="rounded bg-gray-800 border-gray-600 text-cyan-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+          Tracks
+        </label>
+
+        <span class="flex-1" />
+
+        <!-- Signal legend (not toggleable, just reference) -->
+        <div class="flex items-center gap-3 text-gray-600">
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> Good</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span> Fair</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span> Bad</span>
         </div>
       </div>
-
-      <span class="flex-1" />
-
-      <!-- Layer toggles -->
-      <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
-        <input type="checkbox" v-model="showMessages" class="rounded bg-gray-800 border-gray-600 text-teal-500 focus:ring-0 w-3 h-3" />
-        Messages
-      </label>
-      <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
-        <input type="checkbox" v-model="showTracks" class="rounded bg-gray-800 border-gray-600 text-teal-500 focus:ring-0 w-3 h-3" />
-        Tracks
-      </label>
     </div>
 
     <!-- Per-node filter checkboxes -->
