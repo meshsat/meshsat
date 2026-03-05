@@ -348,6 +348,32 @@ func (s *Server) handleCancelQueueItem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
+// handleDeleteQueueItem permanently deletes a DLQ entry.
+// @Summary Delete a queued Iridium message
+// @Description Permanently removes a dead letter entry from the database
+// @Tags iridium
+// @Param id path int true "DLQ entry ID"
+// @Success 200 {object} map[string]string "deleted"
+// @Failure 400 {object} map[string]string "error"
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/queue/{id} [delete]
+func (s *Server) handleDeleteQueueItem(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.db.DeleteDeadLetter(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 // handleSetQueuePriority updates the priority of a pending DLQ entry.
 // @Summary Set priority for a queued Iridium message
 // @Description Changes the send priority for a pending queued message

@@ -546,6 +546,19 @@ func (db *DB) CountPendingDeadLetters() (int, error) {
 	return count, nil
 }
 
+// DeleteDeadLetter permanently removes a dead letter entry by ID.
+func (db *DB) DeleteDeadLetter(id int64) error {
+	res, err := db.Exec("DELETE FROM dead_letters WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete dead letter: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("dead letter %d not found", id)
+	}
+	return nil
+}
+
 // PruneDeadLetters removes sent/expired dead letters older than the given number of days.
 func (db *DB) PruneDeadLetters(days int) (int64, error) {
 	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)

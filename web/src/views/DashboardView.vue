@@ -287,7 +287,7 @@ const gpsFix = computed(() => {
 
 // ── Computed: SBD Queue panel (filter out expired) ──
 const dlqItems = computed(() => {
-  return (store.dlq || []).filter(d => d.status !== 'expired').slice(0, 8)
+  return (store.dlq || []).filter(d => d.status !== 'expired').slice(0, 20)
 })
 const satMessages = computed(() => {
   return (store.messages || []).filter(m => m.transport === 'iridium').slice(0, 5)
@@ -328,35 +328,78 @@ async function testSOS() {
 // ── Activity log event handler ──
 function eventTag(type) {
   if (type === 'signal' || type === 'iridium' || type === 'satellite') return { label: 'IRID', color: 'bg-tactical-iridium/20 text-tactical-iridium' }
-  if (type === 'message' || type === 'text') return { label: 'LORA', color: 'bg-tactical-lora/20 text-tactical-lora' }
+  if (type === 'message' || type === 'text') return { label: 'MSG', color: 'bg-tactical-lora/20 text-tactical-lora' }
+  if (type === 'telemetry') return { label: 'TELEM', color: 'bg-amber-400/20 text-amber-400' }
   if (type === 'position') return { label: 'GPS', color: 'bg-tactical-gps/20 text-tactical-gps' }
   if (type === 'sos') return { label: 'SOS', color: 'bg-tactical-sos/20 text-tactical-sos' }
-  if (type === 'node_update') return { label: 'LORA', color: 'bg-tactical-lora/20 text-tactical-lora' }
+  if (type === 'node_update' || type === 'nodeinfo') return { label: 'NODE', color: 'bg-tactical-lora/20 text-tactical-lora' }
   if (type === 'rule_match') return { label: 'RULE', color: 'bg-purple-400/20 text-purple-400' }
   if (type === 'forward') return { label: 'FWD', color: 'bg-tactical-iridium/20 text-tactical-iridium' }
   if (type === 'forward_error') return { label: 'ERR', color: 'bg-red-400/20 text-red-400' }
   if (type === 'relay') return { label: 'RELAY', color: 'bg-amber-400/20 text-amber-400' }
   if (type === 'inbound') return { label: 'IN', color: 'bg-blue-400/20 text-blue-400' }
   if (type === 'cellular') return { label: 'CELL', color: 'bg-sky-400/20 text-sky-400' }
+  if (type === 'mailbox') return { label: 'MAIL', color: 'bg-tactical-iridium/20 text-tactical-iridium' }
+  if (type === 'scheduler') return { label: 'SCHED', color: 'bg-indigo-400/20 text-indigo-400' }
+  if (type === 'dlq') return { label: 'QUEUE', color: 'bg-amber-400/20 text-amber-400' }
   return { label: 'SYS', color: 'bg-gray-700/50 text-gray-400' }
+}
+
+function humanizePortnum(msg) {
+  if (!msg) return ''
+  // Extract portnum from SSE message like "from !70833f60 portnum=TELEMETRY_APP"
+  const match = msg.match(/portnum=(\w+)/)
+  if (!match) return msg
+  const portnum = match[1]
+  const nodeMatch = msg.match(/from\s+(!?[a-f0-9]+)/i)
+  const node = nodeMatch ? nodeMatch[1] : 'unknown'
+  const labels = {
+    'TELEMETRY_APP': 'telemetry (battery, voltage, channel utilization)',
+    'POSITION_APP': 'position update (GPS coordinates)',
+    'NODEINFO_APP': 'node info (name, hardware, role)',
+    'TEXT_MESSAGE_APP': 'text message',
+    'ADMIN_APP': 'admin command',
+    'ROUTING_APP': 'routing data',
+    'TRACEROUTE_APP': 'traceroute response',
+    'WAYPOINT_APP': 'waypoint',
+    'NEIGHBORINFO_APP': 'neighbor info (nearby nodes)',
+    'RANGE_TEST_APP': 'range test',
+    'SERIAL_APP': 'serial data',
+    'STORE_FORWARD_APP': 'store & forward',
+    'PAXCOUNTER_APP': 'people counter'
+  }
+  return `${labels[portnum] || portnum.toLowerCase().replace(/_APP$/, '')} from ${node}`
 }
 
 function eventDescription(event) {
   const type = event?.type ?? ''
   const msg = event?.message ?? ''
-  if (type === 'message' || type === 'text') return msg || 'New message received'
-  if (type === 'node_update') return msg || 'Node data updated'
-  if (type === 'position') return msg || 'Position update received'
-  if (type === 'connected') return 'Radio connected'
-  if (type === 'disconnected') return 'Radio disconnected'
-  if (type === 'signal') return msg || 'Iridium signal update'
-  if (type === 'config_complete') return 'Config sync complete'
-  if (type === 'rule_match') return msg || 'Forwarding rule matched'
-  if (type === 'forward') return msg || 'Message forwarded to gateway'
-  if (type === 'forward_error') return msg || 'Forward failed'
+  if (type === 'message' || type === 'text') {
+    if (msg.includes('portnum=')) return humanizePortnum(msg)
+    return msg || 'New message received'
+  }
+  if (type === 'telemetry') return humanizePortnum(msg) || 'Device telemetry received'
+  if (type === 'node_update' || type === 'nodeinfo') return msg || 'Node info updated (name, hardware)'
+  if (type === 'position') return msg || 'GPS position update received'
+  if (type === 'connected') return 'Meshtastic radio connected'
+  if (type === 'disconnected') return 'Meshtastic radio disconnected'
+  if (type === 'signal') {
+    // Parse signal bar value if available
+    const barMatch = msg.match(/bars?[=: ]+(\d)/i)
+    if (barMatch) return `Iridium signal: ${barMatch[1]}/5 bars`
+    return msg || 'Iridium signal update'
+  }
+  if (type === 'config_complete') return 'Radio configuration sync complete'
+  if (type === 'rule_match') return msg || 'Bridge forwarding rule matched'
+  if (type === 'forward') return msg || 'Message forwarded via satellite'
+  if (type === 'forward_error') return msg || 'Satellite forward failed'
   if (type === 'relay') return msg || 'Cross-gateway relay'
-  if (type === 'inbound') return msg || 'Inbound gateway message'
-  if (type === 'cellular') return msg || 'Cellular event'
+  if (type === 'inbound') return msg || 'Inbound satellite message received'
+  if (type === 'cellular') return msg || 'Cellular modem event'
+  if (type === 'mailbox') return msg || 'Mailbox check completed'
+  if (type === 'scheduler') return msg || 'Pass scheduler state change'
+  if (type === 'dlq') return msg || 'Queue state changed'
+  if (type === 'subscribed') return msg || `subscribed to MeshSat event stream`
   return msg || type || 'Event'
 }
 
@@ -843,7 +886,7 @@ function widgetGridClass(id) {
         <div class="mt-3 pt-2 border-t border-tactical-border">
           <div class="flex items-center gap-1.5 mb-1.5">
             <span class="text-[10px] text-gray-500 uppercase tracking-wider">Recent SMS</span>
-            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-gray-700/50 text-gray-500">not wired yet</span>
+            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-red-900/30 text-red-400">not wired yet</span>
           </div>
           <div class="space-y-1">
             <div class="flex items-center gap-2 py-1 px-2 rounded bg-tactical-bg/50 text-[11px] text-gray-600 italic">
@@ -923,7 +966,7 @@ function widgetGridClass(id) {
         <div class="mt-3 pt-2 border-t border-tactical-border">
           <div class="flex items-center gap-1.5 mb-1">
             <span class="text-[10px] text-gray-500 uppercase tracking-wider">Cell Broadcast Alerts</span>
-            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-gray-700/50 text-gray-500">not wired yet</span>
+            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-red-900/30 text-red-400">not wired yet</span>
           </div>
           <div class="text-[10px] text-gray-600 italic">
             Government emergency alerts (EU-Alert, WEA, CMAS) will appear here when a cellular modem with CBS support is connected.

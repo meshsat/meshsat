@@ -54,11 +54,13 @@ onMounted(() => {
   store.fetchGateways()
   store.fetchIridiumSignalFast()
   store.fetchCellularSignal()
+  store.fetchCellularStatus()
   pollTimer = setInterval(() => {
     store.fetchStatus()
     store.fetchGateways()
     store.fetchIridiumSignalFast()
     store.fetchCellularSignal()
+    store.fetchCellularStatus()
   }, 10000)
 })
 
@@ -80,7 +82,7 @@ onUnmounted(() => {
       <div class="flex items-center h-12 px-3 lg:px-5 gap-3">
         <!-- Left: Brand text -->
         <router-link to="/" class="flex items-center shrink-0">
-          <span class="font-display font-semibold text-sm text-gray-200 tracking-wide">MESHSAT</span>
+          <span class="font-display font-semibold text-sm text-gray-200 tracking-wide">MeshSat</span>
         </router-link>
 
         <!-- Center: Nav tabs (scrollable on mobile) -->
@@ -119,7 +121,7 @@ onUnmounted(() => {
                 :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
                 :style="{ height: `${3 + i * 2}px` }" />
             </div>
-            <span class="text-[9px] text-sky-400/60 font-mono">4G</span>
+            <span class="text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'CELL' }}</span>
           </div>
 
           <!-- Bridge status badge -->

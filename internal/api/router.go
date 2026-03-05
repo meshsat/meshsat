@@ -151,6 +151,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/iridium/queue", s.handleGetIridiumQueue)
 		r.Post("/iridium/queue", s.handleEnqueueIridiumMessage)
 		r.Post("/iridium/queue/{id}/cancel", s.handleCancelQueueItem)
+		r.Delete("/iridium/queue/{id}", s.handleDeleteQueueItem)
 		r.Post("/iridium/queue/{id}/priority", s.handleSetQueuePriority)
 
 		// Admin commands (Phase 2)

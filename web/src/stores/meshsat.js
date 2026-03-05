@@ -437,6 +437,14 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  async function deleteQueueItem(id) {
+    error.value = null
+    try {
+      await api.delete(`/iridium/queue/${id}`)
+      await fetchDLQ()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   async function setQueuePriority(id, priority) {
     error.value = null
     try {
@@ -659,7 +667,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
     fetchCellularDataStatus, connectCellularData, disconnectCellularData,
     fetchDynDNSStatus, forceDynDNSUpdate,
-    enqueueIridiumMessage, cancelQueueItem, setQueuePriority,
+    enqueueIridiumMessage, cancelQueueItem, deleteQueueItem, setQueuePriority,
     fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,
     activateSOS, cancelSOS, fetchSOSStatus,
