@@ -24,7 +24,14 @@ const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
 const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'sos', 'location', 'queue', 'activity']
-const widgetOrder = ref(JSON.parse(localStorage.getItem('meshsat-widget-order') || 'null') || [...DEFAULT_WIDGET_ORDER])
+function loadWidgetOrder() {
+  try {
+    const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
+    if (Array.isArray(stored) && stored.length === DEFAULT_WIDGET_ORDER.length) return stored
+  } catch { /* corrupt data */ }
+  return [...DEFAULT_WIDGET_ORDER]
+}
+const widgetOrder = ref(loadWidgetOrder())
 const dragWidget = ref(null)
 const dragOver = ref(null)
 
@@ -65,7 +72,7 @@ function onDragEnd() {
 }
 
 // ── Helpers from NodesView ──
-const nowSec = computed(() => Date.now() / 1000)
+const nowSec = ref(Date.now() / 1000)
 
 function isNodeActive(node) {
   if (!node.last_heard) return false
@@ -339,7 +346,7 @@ function formatLogTime(t) {
 // ── DLQ cancel ──
 async function cancelDLQ(id) {
   try {
-    await store.fetchDLQ() // refresh after cancel — API doesn't have a cancel endpoint yet
+    await store.cancelQueueItem(id)
   } catch { /* ignore */ }
 }
 
@@ -480,6 +487,7 @@ onMounted(() => {
   fetchAll()
   store.connectSSE(handleSSEEvent)
   pollTimer = setInterval(() => {
+    nowSec.value = Date.now() / 1000
     store.fetchIridiumSignalFast()
     store.fetchNodes()
     store.fetchDLQ()

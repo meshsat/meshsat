@@ -29,13 +29,16 @@ const nodeMailboxes = computed(() => {
   const msgs = store.messages || []
   const counts = {}
   for (const m of msgs) {
-    const node = m.from_node || m.to_node
-    if (!node) continue
-    // Count messages from this node
+    // Count both from_node and to_node
     if (m.from_node) {
       if (!counts[m.from_node]) counts[m.from_node] = { sent: 0, recv: 0 }
       if (m.direction === 'tx') counts[m.from_node].sent++
       else counts[m.from_node].recv++
+    }
+    if (m.to_node && m.to_node !== m.from_node) {
+      if (!counts[m.to_node]) counts[m.to_node] = { sent: 0, recv: 0 }
+      if (m.direction === 'tx') counts[m.to_node].recv++
+      else counts[m.to_node].sent++
     }
   }
   // Build sorted list
@@ -148,11 +151,15 @@ async function send() {
   const payload = { text: sendText.value.trim() }
   if (sendTo.value) payload.to = sendTo.value
   if (sendChannel.value) payload.channel = sendChannel.value
-  await store.sendMessage(payload)
-  sendText.value = ''
-  replyTo.value = null
-  showCompose.value = false
-  store.fetchMessages()
+  try {
+    await store.sendMessage(payload)
+    sendText.value = ''
+    replyTo.value = null
+    showCompose.value = false
+    store.fetchMessages()
+  } catch {
+    // Error is set in store — input preserved for retry
+  }
 }
 
 function reply(msg) {
@@ -174,14 +181,18 @@ async function sendPreset(preset) {
   store.fetchMessages()
 }
 
+const purgeConfirming = ref(false)
+const purgeDays = ref(30)
+
 async function purgeOld() {
-  const days = prompt('Delete messages older than how many days?', '30')
-  if (!days) return
-  const d = new Date()
-  d.setDate(d.getDate() - parseInt(days))
-  if (confirm(`Delete all messages before ${d.toLocaleDateString()}?`)) {
-    await store.purgeMessages(d.toISOString())
+  if (!purgeConfirming.value) {
+    purgeConfirming.value = true
+    return
   }
+  const d = new Date()
+  d.setDate(d.getDate() - purgeDays.value)
+  await store.purgeMessages(d.toISOString())
+  purgeConfirming.value = false
 }
 
 async function sosActivate() {
@@ -252,7 +263,7 @@ onUnmounted(() => {
         <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Total stored</div>
         <div class="flex items-baseline gap-1.5">
           <span class="text-lg font-semibold text-gray-100">{{ store.messageStats?.total || 0 }}</span>
-          <button v-if="store.messageStats?.total > 100" @click="purgeOld"
+          <button v-if="store.messageStats?.total > 100 && !purgeConfirming" @click="purgeOld"
             class="text-[10px] text-gray-600 hover:text-red-400 transition-colors">clear old</button>
         </div>
         <div v-if="store.messageStats?.by_portnum" class="flex items-center gap-1.5 mt-0.5 flex-wrap">

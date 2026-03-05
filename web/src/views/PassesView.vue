@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
-const selectedLocation = ref(null)
+const selectedLocationId = ref(null)
 const locationMode = ref('auto') // 'auto', 'gps', 'iridium', or 'custom'
 const windowHours = ref(24)
 const cacheAgeSec = ref(-1)
@@ -31,10 +31,14 @@ const locationModes = [
   { value: 'custom', label: 'Custom', desc: 'User locations' }
 ]
 
+const selectedLocation = computed(() =>
+  store.locations.find(l => l.id === selectedLocationId.value) || null
+)
+
 // Resolved location based on current mode
 const activeLocation = computed(() => {
   const sources = store.locationSources
-  if (!sources) return selectedLocation.value
+  if (!sources) return selectedLocation
 
   if (locationMode.value === 'auto') {
     return sources.resolved ? {
@@ -44,7 +48,7 @@ const activeLocation = computed(() => {
       alt_m: (sources.resolved.alt_km || 0) * 1000,
       _source: sources.resolved.source,
       _accuracy: sources.resolved.accuracy_km
-    } : selectedLocation.value
+    } : selectedLocation
   }
 
   if (locationMode.value === 'gps') {
@@ -74,7 +78,7 @@ const activeLocation = computed(() => {
   }
 
   // custom mode — use the dropdown selection
-  return selectedLocation.value
+  return selectedLocation
 })
 
 const sortedPasses = computed(() => {
@@ -122,7 +126,7 @@ function elevColor(elev) {
 }
 
 async function fetchPasses() {
-  const loc = activeLocation.value || selectedLocation.value
+  const loc = activeLocation.value || selectedLocation
   if (!loc) return
   loadingPasses.value = true
   // Start pass prediction from the lookback time so passes overlap with signal history
@@ -164,8 +168,8 @@ async function removeLocation(loc) {
   if (loc.builtin) return
   if (!confirm(`Delete "${loc.name}"?`)) return
   await store.deleteLocation(loc.id)
-  if (selectedLocation.value?.id === loc.id) {
-    selectedLocation.value = store.locations[0] || null
+  if (selectedLocationId.value === loc.id) {
+    selectedLocationId.value = store.locations[0]?.id || null
     fetchPasses()
   }
 }
@@ -343,7 +347,7 @@ onMounted(async () => {
     store.fetchLocationSources()
   ])
   if (store.locations.length > 0) {
-    selectedLocation.value = store.locations[0]
+    selectedLocationId.value = store.locations[0].id
   }
   fetchPasses()
   fetchSignalHistory()
@@ -376,9 +380,9 @@ onMounted(async () => {
 
       <!-- Custom location selector (only shown in custom mode) -->
       <div v-if="locationMode === 'custom'" class="flex items-center gap-2">
-        <select v-model="selectedLocation" @change="fetchPasses"
+        <select v-model="selectedLocationId" @change="fetchPasses"
           class="px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-sm text-gray-200">
-          <option v-for="loc in store.locations" :key="loc.id" :value="loc">{{ loc.name }}</option>
+          <option v-for="loc in store.locations" :key="loc.id" :value="loc.id">{{ loc.name }}</option>
         </select>
         <button @click="showAddForm = !showAddForm"
           class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-xs text-gray-400 hover:text-teal-400">

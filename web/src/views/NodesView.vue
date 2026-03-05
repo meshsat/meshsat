@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 const store = useMeshsatStore()
@@ -9,7 +9,7 @@ const removing = ref(null)
 const removingStale = ref(false)
 
 const radioConnected = computed(() => store.status?.connected === true)
-const now = computed(() => Date.now() / 1000)
+const now = ref(Date.now() / 1000)
 
 function isActive(node) {
   if (!node.last_heard) return false
@@ -105,9 +105,12 @@ async function handleRemoveAllStale() {
   removingStale.value = false
 }
 
+let nowTimer = null
 onMounted(() => {
   Promise.all([store.fetchNodes(), store.fetchStatus()])
+  nowTimer = setInterval(() => { now.value = Date.now() / 1000 }, 15000)
 })
+onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
 </script>
 
 <template>

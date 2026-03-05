@@ -56,6 +56,8 @@ onMounted(() => {
   store.fetchCellularSignal()
   pollTimer = setInterval(() => {
     store.fetchStatus()
+    store.fetchGateways()
+    store.fetchIridiumSignalFast()
     store.fetchCellularSignal()
   }, 10000)
 })

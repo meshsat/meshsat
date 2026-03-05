@@ -18,6 +18,7 @@ let markerLayer = null
 let trackLayer = null
 let messageLayer = null
 let locationLayer = null
+let initialBoundsFit = false
 
 // Distinct colors for nodes
 const nodeColors = ['#06b6d4', '#8b5cf6', '#f97316', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#ef4444']
@@ -139,7 +140,8 @@ function updateMap() {
       if (!pos) continue
 
       // Small offset for multiple messages at same position
-      const jitter = (msg.id % 100) * 0.00005
+      const numId = typeof msg.id === 'number' ? msg.id : parseInt(msg.id, 10) || 0
+      const jitter = (numId % 100) * 0.00005
       const lat = pos.lat + jitter
       const lon = pos.lon + jitter
 
@@ -230,9 +232,10 @@ function updateMap() {
       if (src.lat && src.lon) allVisible.push([src.lat, src.lon])
     }
   }
-  if (allVisible.length) {
+  if (allVisible.length && !initialBoundsFit) {
     const bounds = L.latLngBounds(allVisible)
     map.fitBounds(bounds.pad(0.2), { maxZoom: 15 })
+    initialBoundsFit = true
   }
 }
 
@@ -252,9 +255,15 @@ function nodeColor(idx) {
   return nodeColors[idx % nodeColors.length]
 }
 
-watch(() => store.nodes, updateMap, { deep: true })
-watch(() => store.positions, updateMap, { deep: true })
-watch(() => store.messages, updateMap, { deep: true })
+let updateTimer = null
+function debouncedUpdateMap() {
+  if (updateTimer) clearTimeout(updateTimer)
+  updateTimer = setTimeout(updateMap, 100)
+}
+
+watch(() => store.nodes, debouncedUpdateMap, { deep: true })
+watch(() => store.positions, debouncedUpdateMap, { deep: true })
+watch(() => store.messages, debouncedUpdateMap, { deep: true })
 watch(showMessages, updateMap)
 watch(showTracks, updateMap)
 

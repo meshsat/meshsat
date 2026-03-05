@@ -182,7 +182,9 @@ async function saveRule(data) {
 }
 
 async function toggleRule(rule) {
-  rule.enabled ? await store.disableRule(rule.id) : await store.enableRule(rule.id)
+  const current = (store.rules || []).find(r => r.id === rule.id)
+  if (!current) return
+  current.enabled ? await store.disableRule(rule.id) : await store.enableRule(rule.id)
 }
 
 async function removeRule(rule) {

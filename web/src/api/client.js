@@ -31,7 +31,9 @@ async function request(method, path, body = null, params = null) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)
   }
-  return res.json()
+  if (res.status === 204 || res.headers.get('content-length') === '0') return null
+  const text = await res.text()
+  return text ? JSON.parse(text) : null
 }
 
 export default {

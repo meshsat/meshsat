@@ -7,7 +7,8 @@ const routes = [
   { path: '/bridge', name: 'bridge', component: () => import('@/views/BridgeView.vue') },
   { path: '/map', name: 'map', component: () => import('@/views/MapView.vue') },
   { path: '/passes', name: 'passes', component: () => import('@/views/PassesView.vue') },
-  { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') }
+  { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+  { path: '/:pathMatch(.*)*', redirect: '/' }
 ]
 
 export default createRouter({

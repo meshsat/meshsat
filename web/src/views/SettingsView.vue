@@ -165,14 +165,14 @@ async function removePreset(p) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   store.fetchConfig()
-  store.fetchGateways()
+  await store.fetchGateways()
   store.fetchPresets()
   store.fetchIridiumSignalFast()
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
   store.fetchCellularStatus()
-  setTimeout(() => { loadMQTT(); loadIridium(); loadBudget(); loadCellular() }, 500)
+  loadMQTT(); loadIridium(); loadBudget(); loadCellular()
 })
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
