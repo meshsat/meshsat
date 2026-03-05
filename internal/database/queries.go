@@ -1346,3 +1346,98 @@ func (db *DB) GetCellularSignalHistory(from, to int64, limit int) ([]CellularSig
 	}
 	return points, nil
 }
+
+// ── SMS Contacts ──
+
+// SMSContact represents a contact in the address book.
+type SMSContact struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Phone     string    `json:"phone"`
+	Notes     string    `json:"notes"`
+	AutoFwd   bool      `json:"auto_fwd"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// GetSMSContacts returns all contacts.
+func (db *DB) GetSMSContacts() ([]SMSContact, error) {
+	rows, err := db.Query("SELECT id, name, phone, notes, auto_fwd, created_at, updated_at FROM sms_contacts ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var contacts []SMSContact
+	for rows.Next() {
+		var c SMSContact
+		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.Notes, &c.AutoFwd, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		contacts = append(contacts, c)
+	}
+	return contacts, nil
+}
+
+// CreateSMSContact creates a new SMS contact.
+func (db *DB) CreateSMSContact(name, phone, notes string, autoFwd bool) (int64, error) {
+	res, err := db.Exec("INSERT INTO sms_contacts (name, phone, notes, auto_fwd) VALUES (?, ?, ?, ?)", name, phone, notes, autoFwd)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateSMSContact updates an existing contact.
+func (db *DB) UpdateSMSContact(id int64, name, phone, notes string, autoFwd bool) error {
+	_, err := db.Exec("UPDATE sms_contacts SET name=?, phone=?, notes=?, auto_fwd=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", name, phone, notes, autoFwd, id)
+	return err
+}
+
+// DeleteSMSContact removes a contact.
+func (db *DB) DeleteSMSContact(id int64) error {
+	_, err := db.Exec("DELETE FROM sms_contacts WHERE id=?", id)
+	return err
+}
+
+// ── Webhook Log ──
+
+// WebhookLogEntry represents a webhook activity record.
+type WebhookLogEntry struct {
+	ID        int64     `json:"id"`
+	Direction string    `json:"direction"`
+	URL       string    `json:"url"`
+	Method    string    `json:"method"`
+	Status    int       `json:"status"`
+	Payload   string    `json:"payload"`
+	Response  string    `json:"response"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// InsertWebhookLog records a webhook event.
+func (db *DB) InsertWebhookLog(direction, url, method string, status int, payload, response, errMsg string) error {
+	_, err := db.Exec("INSERT INTO webhook_log (direction, url, method, status, payload, response, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		direction, url, method, status, payload, response, errMsg)
+	return err
+}
+
+// GetWebhookLog returns recent webhook activity.
+func (db *DB) GetWebhookLog(limit int) ([]WebhookLogEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.Query("SELECT id, direction, url, method, status, payload, response, error, created_at FROM webhook_log ORDER BY created_at DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []WebhookLogEntry
+	for rows.Next() {
+		var e WebhookLogEntry
+		if err := rows.Scan(&e.ID, &e.Direction, &e.URL, &e.Method, &e.Status, &e.Payload, &e.Response, &e.Error, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}

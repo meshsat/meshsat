@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
 
@@ -19,6 +20,7 @@ import (
 type CellularGateway struct {
 	config CellularConfig
 	cell   transport.CellTransport
+	db     *database.DB
 	inCh   chan InboundMessage
 	outCh  chan *transport.MeshMessage
 
@@ -37,10 +39,11 @@ type CellularGateway struct {
 }
 
 // NewCellularGateway creates a new cellular gateway.
-func NewCellularGateway(cfg CellularConfig, cell transport.CellTransport) *CellularGateway {
+func NewCellularGateway(cfg CellularConfig, cell transport.CellTransport, db *database.DB) *CellularGateway {
 	return &CellularGateway{
 		config: cfg,
 		cell:   cell,
+		db:     db,
 		inCh:   make(chan InboundMessage, 32),
 		outCh:  make(chan *transport.MeshMessage, 10),
 	}
@@ -192,6 +195,9 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Str("from", fromNode).Int("destinations", len(g.config.DestinationNumbers)).Msg("cellular: SMS sent")
+
+			// Fire outbound webhook if configured
+			g.postWebhook(msg)
 		}
 	}
 }
@@ -312,12 +318,22 @@ func (g *CellularGateway) postWebhook(msg *transport.MeshMessage) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Warn().Err(err).Str("url", g.config.WebhookOutURL).Msg("cellular: webhook POST failed")
+		if g.db != nil {
+			_ = g.db.InsertWebhookLog("outbound", g.config.WebhookOutURL, "POST", 0, string(body), "", err.Error())
+		}
 		return
 	}
 	resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		log.Warn().Int("status", resp.StatusCode).Str("url", g.config.WebhookOutURL).Msg("cellular: webhook returned error")
+	}
+	if g.db != nil {
+		errMsg := ""
+		if resp.StatusCode >= 400 {
+			errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		_ = g.db.InsertWebhookLog("outbound", g.config.WebhookOutURL, "POST", resp.StatusCode, string(body), "", errMsg)
 	}
 }
 

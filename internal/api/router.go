@@ -144,8 +144,16 @@ func (s *Server) Router() http.Handler {
 		r.Get("/cellular/dyndns/status", s.handleGetDynDNSStatus)
 		r.Post("/cellular/dyndns/update", s.handleDynDNSForceUpdate)
 
-		// Webhook receiver (inbound)
+		// Webhook receiver (inbound) + log
 		r.Post("/webhooks/cellular/inbound", s.handleWebhookCellularInbound)
+		r.Get("/webhooks/log", s.handleGetWebhookLog)
+
+		// SMS contacts (address book)
+		r.Get("/cellular/contacts", s.handleGetSMSContacts)
+		r.Post("/cellular/contacts", s.handleCreateSMSContact)
+		r.Put("/cellular/contacts/{id}", s.handleUpdateSMSContact)
+		r.Delete("/cellular/contacts/{id}", s.handleDeleteSMSContact)
+		r.Post("/cellular/sms/send", s.handleSendSMS)
 
 		// Iridium queue — offline compose and priority management
 		r.Get("/iridium/queue", s.handleGetIridiumQueue)

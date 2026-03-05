@@ -644,6 +644,72 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // SMS Contacts
+  const smsContacts = ref([])
+
+  async function fetchSMSContacts() {
+    try {
+      smsContacts.value = await api.get('/cellular/contacts')
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function createSMSContact(payload) {
+    error.value = null
+    try {
+      const res = await api.post('/cellular/contacts', payload)
+      await fetchSMSContacts()
+      return res
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function updateSMSContact(id, payload) {
+    error.value = null
+    try {
+      await api.put(`/cellular/contacts/${id}`, payload)
+      await fetchSMSContacts()
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function deleteSMSContact(id) {
+    error.value = null
+    try {
+      await api.del(`/cellular/contacts/${id}`)
+      await fetchSMSContacts()
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function sendSMS(to, text) {
+    error.value = null
+    try {
+      return await api.post('/cellular/sms/send', { to, text })
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  // Webhook Log
+  const webhookLog = ref([])
+
+  async function fetchWebhookLog(limit = 100) {
+    try {
+      webhookLog.value = await api.get('/webhooks/log', { limit })
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
@@ -672,6 +738,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,
     activateSOS, cancelSOS, fetchSOSStatus,
     fetchDLQ,
+    smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
+    webhookLog, fetchWebhookLog,
     connectSSE, closeSSE
   }
 })

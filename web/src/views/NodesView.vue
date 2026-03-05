@@ -6,6 +6,51 @@ import { formatLastHeard, signalQualityClass, nodeStatusDot, shortId, isNodeActi
 const store = useMeshsatStore()
 const activeTab = ref('mesh') // 'mesh' or 'sms'
 const filter = ref('all') // 'all', 'active', 'stale'
+
+// SMS contacts state
+const showContactForm = ref(false)
+const editingContact = ref(null)
+const contactForm = ref({ name: '', phone: '', notes: '', auto_fwd: false })
+const sendingTo = ref(null)
+const smsText = ref('')
+
+function openNewContact() {
+  editingContact.value = null
+  contactForm.value = { name: '', phone: '', notes: '', auto_fwd: false }
+  showContactForm.value = true
+}
+
+function openEditContact(c) {
+  editingContact.value = c.id
+  contactForm.value = { name: c.name, phone: c.phone, notes: c.notes, auto_fwd: !!c.auto_fwd }
+  showContactForm.value = true
+}
+
+async function saveContact() {
+  if (!contactForm.value.name || !contactForm.value.phone) return
+  try {
+    if (editingContact.value) {
+      await store.updateSMSContact(editingContact.value, contactForm.value)
+    } else {
+      await store.createSMSContact(contactForm.value)
+    }
+    showContactForm.value = false
+  } catch { /* store error */ }
+}
+
+async function deleteContact(id) {
+  if (!confirm('Delete this contact?')) return
+  try { await store.deleteSMSContact(id) } catch { /* store error */ }
+}
+
+async function handleSendSMS(phone) {
+  if (!smsText.value.trim()) return
+  try {
+    await store.sendSMS(phone, smsText.value.trim())
+    smsText.value = ''
+    sendingTo.value = null
+  } catch { /* store error */ }
+}
 const sortBy = ref('last_heard') // 'last_heard', 'name', 'signal'
 const removing = ref(null)
 const removingStale = ref(false)
@@ -95,7 +140,7 @@ async function handleRemoveAllStale() {
 
 let nowTimer = null
 onMounted(() => {
-  Promise.all([store.fetchNodes(), store.fetchStatus()])
+  Promise.all([store.fetchNodes(), store.fetchStatus(), store.fetchSMSContacts()])
   nowTimer = setInterval(() => { now.value = Date.now() / 1000 }, 15000)
 })
 onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
@@ -137,20 +182,111 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
         class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
         :class="activeTab === 'sms' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
         SMS Contacts
-        <span class="ml-1 text-[9px] px-1 py-px rounded bg-red-900/30 text-red-400">soon</span>
+        <span class="text-[9px] ml-1 opacity-60">({{ store.smsContacts?.length || 0 }})</span>
       </button>
     </div>
 
     <!-- ═══ SMS Contacts Tab ═══ -->
-    <div v-if="activeTab === 'sms'" class="flex flex-col items-center justify-center py-16 text-gray-500">
-      <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.25A2.25 2.25 0 013 16.878V8.25A2.25 2.25 0 015.25 6h13.5A2.25 2.25 0 0121 8.25v2.875M15 12h.008v.008H15V12z" />
-      </svg>
-      <span class="text-sm font-medium mb-1">SMS Address Book</span>
-      <span class="text-[12px] text-gray-600 text-center max-w-xs">
-        Manage SMS contacts for cellular messaging. Add phone numbers, names, and set up auto-forwarding rules per contact.
-      </span>
-      <span class="text-[10px] text-red-400/60 mt-3 font-mono">Feature coming soon</span>
+    <div v-if="activeTab === 'sms'">
+      <!-- Add contact button -->
+      <div class="flex justify-end mb-3">
+        <button @click="openNewContact"
+          class="px-3 py-1.5 text-xs rounded bg-teal-600/20 text-teal-400 border border-teal-600/30 hover:bg-teal-600/30 transition-colors">
+          + Add Contact
+        </button>
+      </div>
+
+      <!-- Contact form modal -->
+      <div v-if="showContactForm" class="bg-gray-800/60 rounded-lg border border-gray-700/50 p-4 mb-4">
+        <h3 class="text-sm font-medium text-gray-300 mb-3">{{ editingContact ? 'Edit Contact' : 'New Contact' }}</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-[11px] text-gray-500 mb-1 block">Name</label>
+            <input v-model="contactForm.name" type="text" placeholder="John Doe"
+              class="w-full px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-sm text-gray-200 focus:outline-none focus:border-teal-600" />
+          </div>
+          <div>
+            <label class="text-[11px] text-gray-500 mb-1 block">Phone</label>
+            <input v-model="contactForm.phone" type="text" placeholder="+31612345678"
+              class="w-full px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-sm text-gray-200 focus:outline-none focus:border-teal-600" />
+          </div>
+          <div class="col-span-2">
+            <label class="text-[11px] text-gray-500 mb-1 block">Notes</label>
+            <input v-model="contactForm.notes" type="text" placeholder="Optional notes"
+              class="w-full px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-sm text-gray-200 focus:outline-none focus:border-teal-600" />
+          </div>
+          <div class="col-span-2 flex items-center gap-2">
+            <input v-model="contactForm.auto_fwd" type="checkbox" id="auto-fwd"
+              class="rounded bg-gray-900 border-gray-700" />
+            <label for="auto-fwd" class="text-xs text-gray-400">Auto-forward mesh messages to this contact</label>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-3">
+          <button @click="showContactForm = false"
+            class="px-3 py-1.5 text-xs rounded bg-gray-700/50 text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
+          <button @click="saveContact"
+            class="px-3 py-1.5 text-xs rounded bg-teal-600/20 text-teal-400 border border-teal-600/30 hover:bg-teal-600/30 transition-colors">
+            {{ editingContact ? 'Update' : 'Create' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div v-if="!store.smsContacts?.length && !showContactForm"
+        class="flex flex-col items-center justify-center py-16 text-gray-500">
+        <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.25A2.25 2.25 0 013 16.878V8.25A2.25 2.25 0 015.25 6h13.5A2.25 2.25 0 0121 8.25v2.875" />
+        </svg>
+        <span class="text-sm font-medium mb-1">No SMS Contacts</span>
+        <span class="text-[12px] text-gray-600">Add phone numbers for cellular messaging and auto-forwarding.</span>
+      </div>
+
+      <!-- Contact list -->
+      <div v-else class="space-y-1.5">
+        <div v-for="c in store.smsContacts" :key="c.id"
+          class="bg-gray-800/40 rounded-lg border border-gray-700/50 px-4 py-3 group hover:bg-gray-800/60 transition-colors">
+          <div class="flex items-start gap-3">
+            <!-- Avatar -->
+            <div class="w-9 h-9 rounded-full bg-sky-900/40 flex items-center justify-center text-xs font-bold text-sky-400 flex-shrink-0">
+              {{ (c.name || '?').slice(0, 2).toUpperCase() }}
+            </div>
+            <!-- Info -->
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-gray-200">{{ c.name }}</span>
+                <span v-if="c.auto_fwd" class="text-[9px] px-1.5 py-px rounded bg-teal-900/30 text-teal-400">auto-fwd</span>
+              </div>
+              <div class="text-[11px] text-gray-500 font-mono mt-0.5">{{ c.phone }}</div>
+              <div v-if="c.notes" class="text-[11px] text-gray-600 mt-0.5">{{ c.notes }}</div>
+            </div>
+            <!-- Actions -->
+            <div class="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button @click="sendingTo = sendingTo === c.id ? null : c.id" title="Send SMS"
+                class="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/50 text-gray-400 hover:text-teal-400 transition-colors">
+                SMS
+              </button>
+              <button @click="openEditContact(c)" title="Edit"
+                class="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/50 text-gray-400 hover:text-amber-400 transition-colors">
+                Edit
+              </button>
+              <button @click="deleteContact(c.id)" title="Delete"
+                class="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/50 text-gray-400 hover:text-red-400 transition-colors">
+                Del
+              </button>
+            </div>
+          </div>
+          <!-- Inline SMS send -->
+          <div v-if="sendingTo === c.id" class="mt-2 pl-12 flex gap-2">
+            <input v-model="smsText" type="text" placeholder="Type message..."
+              class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600"
+              @keydown.enter="handleSendSMS(c.phone)" />
+            <button @click="handleSendSMS(c.phone)"
+              class="px-3 py-1.5 text-xs rounded bg-teal-600/20 text-teal-400 border border-teal-600/30 hover:bg-teal-600/30 transition-colors">
+              Send
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <template v-if="activeTab === 'mesh'">

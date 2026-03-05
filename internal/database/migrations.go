@@ -236,7 +236,7 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_cell_signal_ts ON cellular_signal_history(timestamp);`,
 
-	// v12: Neighbor info tracking and range test log
+	// v12: Neighbor info tracking and range test log (DO NOT EDIT)
 	`CREATE TABLE IF NOT EXISTS neighbor_info (
 		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
 		node_id             INTEGER NOT NULL,
@@ -263,6 +263,32 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_range_tests_from ON range_tests(from_node);
 	CREATE INDEX IF NOT EXISTS idx_range_tests_created ON range_tests(created_at);`,
+
+	// v13: SMS contacts (address book) and webhook activity log
+	`CREATE TABLE IF NOT EXISTS sms_contacts (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		name       TEXT NOT NULL,
+		phone      TEXT NOT NULL UNIQUE,
+		notes      TEXT NOT NULL DEFAULT '',
+		auto_fwd   INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_sms_contacts_phone ON sms_contacts(phone);
+
+	CREATE TABLE IF NOT EXISTS webhook_log (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		direction  TEXT NOT NULL DEFAULT 'outbound',
+		url        TEXT NOT NULL DEFAULT '',
+		method     TEXT NOT NULL DEFAULT 'POST',
+		status     INTEGER NOT NULL DEFAULT 0,
+		payload    TEXT NOT NULL DEFAULT '',
+		response   TEXT NOT NULL DEFAULT '',
+		error      TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_webhook_log_created ON webhook_log(created_at);
+	CREATE INDEX IF NOT EXISTS idx_webhook_log_direction ON webhook_log(direction);`,
 }
 
 func (db *DB) migrate() error {

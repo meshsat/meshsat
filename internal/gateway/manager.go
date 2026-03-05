@@ -372,7 +372,7 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewCellularGateway(*cfg, m.cell), nil
+		return NewCellularGateway(*cfg, m.cell, m.db), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}

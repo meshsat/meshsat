@@ -40,6 +40,26 @@ const showPresetEditor = ref(false)
 const editingPreset = ref(null)
 const presetForm = ref({ name: '', text: '', destination: 'broadcast' })
 
+// SMS quick-send state
+const smsTo = ref('')
+const smsMsgText = ref('')
+const smsSent = ref(false)
+const smsErr = ref('')
+
+async function doSendSMS() {
+  if (!smsTo.value || !smsMsgText.value) return
+  smsSent.value = false
+  smsErr.value = ''
+  try {
+    await store.sendSMS(smsTo.value, smsMsgText.value)
+    smsSent.value = true
+    smsMsgText.value = ''
+    setTimeout(() => { smsSent.value = false }, 3000)
+  } catch (e) {
+    smsErr.value = e.message || 'Send failed'
+  }
+}
+
 // Filter
 const filter = ref('all') // 'all', 'text', 'system'
 const selectedNode = ref(null) // null = all nodes, string = specific node mailbox
@@ -226,6 +246,8 @@ onMounted(() => {
   store.fetchPresets()
   store.fetchMessageStats()
   store.fetchDLQ()
+  store.fetchSMSContacts()
+  store.fetchWebhookLog()
   store.connectSSE((event) => {
     if (event.type === 'message') store.fetchMessages()
   })
@@ -260,8 +282,10 @@ onUnmounted(() => {
           class="ml-1 text-[9px] px-1 py-px rounded bg-amber-400/20 text-amber-400">
           {{ (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length }}
         </span>
-        <span v-if="tab.key === 'sms' || tab.key === 'webhooks'"
-          class="ml-1 text-[9px] px-1 py-px rounded bg-red-900/30 text-red-400">soon</span>
+        <span v-if="tab.key === 'webhooks' && (store.webhookLog || []).length > 0"
+          class="ml-1 text-[9px] px-1 py-px rounded bg-purple-400/20 text-purple-400">
+          {{ store.webhookLog.length }}
+        </span>
       </button>
     </div>
 
@@ -324,27 +348,79 @@ onUnmounted(() => {
     </div>
 
     <!-- ═══ SMS Tab ═══ -->
-    <div v-if="activeTab === 'sms'" class="flex-1 flex flex-col items-center justify-center text-gray-500">
-      <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
-      </svg>
-      <span class="text-sm font-medium mb-1">SMS Messaging</span>
-      <span class="text-[12px] text-gray-600 text-center max-w-xs">
-        Send and receive SMS messages via the cellular modem. Connect a USB LTE modem with AT command support to enable this feature.
-      </span>
-      <span class="text-[10px] text-red-400/60 mt-3 font-mono">Feature coming soon</span>
+    <div v-if="activeTab === 'sms'" class="flex-1 overflow-y-auto min-h-0">
+      <!-- Quick send -->
+      <div class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-3 mb-3">
+        <div class="text-[11px] text-gray-500 mb-2">Quick Send SMS</div>
+        <div class="flex gap-2">
+          <input v-model="smsTo" type="text" placeholder="+31612345678"
+            class="w-40 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600" />
+          <input v-model="smsMsgText" type="text" placeholder="Message text..."
+            class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600"
+            @keydown.enter="doSendSMS" />
+          <button @click="doSendSMS" :disabled="!smsTo || !smsMsgText"
+            class="px-3 py-1.5 text-xs rounded bg-sky-600/20 text-sky-400 border border-sky-600/30 hover:bg-sky-600/30 transition-colors disabled:opacity-40">
+            Send
+          </button>
+        </div>
+        <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1.5">SMS sent successfully</div>
+        <div v-if="smsErr" class="text-[10px] text-red-400 mt-1.5">{{ smsErr }}</div>
+      </div>
+
+      <!-- Contacts quick-dial -->
+      <div v-if="(store.smsContacts || []).length > 0" class="mb-3">
+        <div class="text-[11px] text-gray-500 mb-1.5">Contacts</div>
+        <div class="flex flex-wrap gap-1.5">
+          <button v-for="c in store.smsContacts" :key="c.id" @click="smsTo = c.phone"
+            class="px-2 py-1 text-[10px] rounded bg-gray-800/60 text-gray-400 hover:text-sky-400 border border-gray-700/50 hover:border-sky-600/30 transition-colors">
+            {{ c.name }} <span class="text-gray-600 font-mono">{{ c.phone }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="text-center text-[11px] text-gray-600 mt-8">
+        Received SMS messages appear in the Mesh Messages tab when forwarded via bridge rules.
+        <br />Manage contacts in the <span class="text-teal-400/70">Peers</span> tab.
+      </div>
     </div>
 
     <!-- ═══ Webhooks Tab ═══ -->
-    <div v-if="activeTab === 'webhooks'" class="flex-1 flex flex-col items-center justify-center text-gray-500">
-      <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.556-9.556a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
-      </svg>
-      <span class="text-sm font-medium mb-1">Webhooks</span>
-      <span class="text-[12px] text-gray-600 text-center max-w-xs">
-        View inbound and outbound webhook activity. Configure webhook endpoints in Bridge rules to forward messages to external HTTP services.
-      </span>
-      <span class="text-[10px] text-red-400/60 mt-3 font-mono">Feature coming soon</span>
+    <div v-if="activeTab === 'webhooks'" class="flex-1 overflow-y-auto min-h-0">
+      <div class="flex items-center justify-between mb-3">
+        <div class="text-[11px] text-gray-500">Recent webhook activity</div>
+        <button @click="store.fetchWebhookLog()"
+          class="px-2.5 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">
+          Refresh
+        </button>
+      </div>
+
+      <div v-if="!(store.webhookLog || []).length" class="flex flex-col items-center justify-center py-16 text-gray-500">
+        <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.556-9.556a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+        </svg>
+        <span class="text-sm font-medium mb-1">No Webhook Activity</span>
+        <span class="text-[12px] text-gray-600 text-center max-w-xs">
+          Configure outbound webhook URLs in the cellular gateway settings, or send inbound webhooks to <span class="font-mono text-gray-500">/api/webhooks/cellular/inbound</span>.
+        </span>
+      </div>
+
+      <div v-else class="space-y-1">
+        <div v-for="entry in store.webhookLog" :key="entry.id"
+          class="flex items-center gap-2 py-2 px-3 rounded-lg bg-gray-800/40 hover:bg-gray-800/60 transition-colors">
+          <span class="text-[9px] font-mono shrink-0 w-14"
+            :class="entry.direction === 'inbound' ? 'text-blue-400' : 'text-purple-400'">
+            {{ entry.direction === 'inbound' ? 'IN' : 'OUT' }}
+          </span>
+          <span class="text-[10px] font-mono px-1.5 py-px rounded shrink-0"
+            :class="entry.status >= 200 && entry.status < 300 ? 'text-emerald-400 bg-emerald-400/10' : entry.status >= 400 ? 'text-red-400 bg-red-400/10' : 'text-gray-400 bg-gray-400/10'">
+            {{ entry.status || '-' }}
+          </span>
+          <span class="text-[10px] text-gray-500 font-mono shrink-0">{{ entry.method }}</span>
+          <span class="text-[11px] text-gray-400 truncate flex-1" :title="entry.url">{{ entry.url }}</span>
+          <span v-if="entry.error" class="text-[10px] text-red-400/70 truncate max-w-[120px]" :title="entry.error">{{ entry.error }}</span>
+          <span class="text-[10px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(entry.created_at) }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- ═══ Mesh Messages Tab ═══ -->
