@@ -24,6 +24,35 @@ const showPassList = ref(false)
 
 const windowOptions = [12, 24, 48, 72]
 
+// Elevation presets for environment
+const elevPresets = [
+  { value: 5, label: 'Clear Sky', desc: 'Open field, rooftop, ocean' },
+  { value: 20, label: 'Partial', desc: 'Some trees, low buildings' },
+  { value: 40, label: 'Urban', desc: 'Tall buildings, narrow streets' },
+  { value: 60, label: 'Canyon', desc: 'Deep valley, dense urban' }
+]
+
+function loadMinElev() {
+  try {
+    const v = parseInt(localStorage.getItem('meshsat-min-elev'))
+    if (v >= 0 && v <= 90) return v
+  } catch {}
+  return 5
+}
+
+const minElevDeg = ref(loadMinElev())
+const showElevCustom = computed(() => !elevPresets.some(p => p.value === minElevDeg.value))
+
+function setMinElev(val) {
+  minElevDeg.value = val
+  localStorage.setItem('meshsat-min-elev', String(val))
+  fetchPasses()
+}
+
+watch(minElevDeg, (val) => {
+  localStorage.setItem('meshsat-min-elev', String(val))
+})
+
 // Location source options for dropdown
 const locationModes = [
   { value: 'auto', label: 'AUTO', desc: 'GPS > Custom > Iridium' },
@@ -128,7 +157,7 @@ async function fetchPasses() {
     lon: loc.lon,
     alt_m: loc.alt_m || 0,
     hours: windowHours.value,
-    min_elev: 5,
+    min_elev: minElevDeg.value,
     start: startUnix
   })
   if (data?.cache_age_sec !== undefined) {
@@ -414,6 +443,23 @@ onMounted(async () => {
           :class="windowHours === h ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'bg-gray-800 text-gray-500 hover:text-gray-300'">
           {{ h }}h
         </button>
+      </div>
+    </div>
+
+    <!-- Minimum elevation (environment) -->
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <label class="text-xs text-gray-500">Min Elev</label>
+      <button v-for="p in elevPresets" :key="p.value" @click="setMinElev(p.value)"
+        class="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+        :class="minElevDeg === p.value ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'bg-gray-800 text-gray-500 hover:text-gray-300'"
+        :title="p.desc">
+        {{ p.label }} {{ p.value }}°
+      </button>
+      <div class="flex items-center gap-2 ml-2">
+        <input type="range" min="0" max="80" step="5" :value="minElevDeg"
+          @input="setMinElev(parseInt($event.target.value))"
+          class="w-20 h-1 accent-teal-400 bg-gray-700 rounded cursor-pointer" />
+        <span class="text-[11px] font-mono text-gray-400 w-8">{{ minElevDeg }}°</span>
       </div>
     </div>
 

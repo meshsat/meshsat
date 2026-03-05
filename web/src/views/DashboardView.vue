@@ -127,6 +127,15 @@ const sparklineArea = computed(() => {
   return buildAreaPath(sorted, p => p.value, 200, 40, 0, 5)
 })
 
+// Read min elevation from Passes page setting (shared via localStorage)
+const dashMinElev = computed(() => {
+  try {
+    const v = parseInt(localStorage.getItem('meshsat-min-elev'))
+    if (v >= 0 && v <= 90) return v
+  } catch {}
+  return 5
+})
+
 // Mini pass+signal+GSS chart for widget (6h window)
 const miniChartData = computed(() => {
   const W = 280, H = 50, padL = 0, padR = 0
@@ -178,7 +187,7 @@ const miniChartData = computed(() => {
   return { passes, signalLine, gss, nowX, labels, W, H }
 })
 
-// Fetch passes using resolved location
+// Fetch passes using resolved location + shared min elevation
 async function fetchDashPasses() {
   const resolved = store.locationSources?.resolved
   if (!resolved) return
@@ -186,7 +195,7 @@ async function fetchDashPasses() {
   await store.fetchPasses({
     lat: resolved.lat, lon: resolved.lon,
     alt_m: (resolved.alt_km || 0) * 1000,
-    hours: 6, min_elev: 5, start: now - 3 * 3600
+    hours: 6, min_elev: dashMinElev.value, start: now - 3 * 3600
   })
 }
 
