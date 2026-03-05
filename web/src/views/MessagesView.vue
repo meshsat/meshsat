@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
 import { transportBadge, portnumLabel, shortId, formatRelativeTime, formatTimestamp } from '@/utils/format'

@@ -5,6 +5,7 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -362,9 +363,11 @@ func (t *DirectCellTransport) readAndEmitSMS(index int) {
 	}
 
 	log.Info().Str("sender", sms.Sender).Str("text", sms.Text).Msg("cellular: SMS received")
+	smsJSON, _ := json.Marshal(sms)
 	t.emitEvent(CellEvent{
 		Type:    "sms_received",
 		Message: sms.Text,
+		Data:    smsJSON,
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
 }
@@ -597,6 +600,11 @@ func (t *DirectCellTransport) Close() error {
 		close(t.stopMonitorCh)
 		close(t.stopSignalCh)
 		t.monitorActive = false
+		t.mu.Unlock()
+		// Wait for goroutines to finish before closing the fd
+		<-t.monitorDone
+		<-t.signalDone
+		t.mu.Lock()
 	}
 
 	t.connected = false

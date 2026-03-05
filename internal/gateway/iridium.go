@@ -989,9 +989,15 @@ func EncodeCompact(msg *transport.MeshMessage, includePosition bool) ([]byte, er
 		buf = append(buf, posBytes...)
 	}
 
-	// Text
+	// Text — length is 1 byte (max 255; SBD payload is 340 so this is sufficient)
 	text := []byte(msg.DecodedText)
 	maxText := maxSBDPayload - len(buf) - 1 // -1 for length byte
+	if maxText > 255 {
+		maxText = 255
+	}
+	if maxText < 0 {
+		maxText = 0
+	}
 	if len(text) > maxText {
 		text = text[:maxText]
 	}

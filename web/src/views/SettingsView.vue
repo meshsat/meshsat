@@ -71,7 +71,10 @@ const cannedLoading = ref(false)
 
 async function loadCannedMessages() {
   cannedLoading.value = true
-  try { await store.getCannedMessages() } catch {}
+  try {
+    const data = await store.getCannedMessages()
+    if (data && data.messages) cannedText.value = data.messages
+  } catch {}
   cannedLoading.value = false
 }
 

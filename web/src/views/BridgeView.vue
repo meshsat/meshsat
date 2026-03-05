@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { priorityLabel, priorityColor, formatTimestamp, formatRelativeTime } from '@/utils/format'
 import RuleCard from '@/components/RuleCard.vue'
@@ -208,13 +208,24 @@ async function sendComposed() {
   store.fetchDLQ()
 }
 
-onMounted(() => {
+let pollTimer = null
+
+function refreshBridgeData() {
   store.fetchRules()
   store.fetchGateways()
   store.fetchDLQ()
   store.fetchStatus()
   store.fetchDeliveries()
   store.fetchDeliveryStats()
+}
+
+onMounted(() => {
+  refreshBridgeData()
+  pollTimer = setInterval(refreshBridgeData, 10000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
 })
 </script>
 

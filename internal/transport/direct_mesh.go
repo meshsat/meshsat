@@ -639,14 +639,22 @@ func (t *DirectMeshTransport) GetMessages(_ context.Context, limit int) ([]MeshM
 	t.msgMu.RLock()
 	defer t.msgMu.RUnlock()
 
-	n := len(t.messages)
+	total := len(t.messages)
+	n := total
 	if limit > 0 && limit < n {
 		n = limit
 	}
-	// Return most recent messages
 	result := make([]MeshMessage, n)
-	if n <= len(t.messages) {
-		copy(result, t.messages[len(t.messages)-n:])
+	if total < meshMsgBufSize {
+		// Buffer hasn't wrapped — messages are in order
+		copy(result, t.messages[total-n:])
+	} else {
+		// Ring buffer wrapped — reconstruct chronological order
+		// msgIdx points to the oldest entry; most recent is at msgIdx-1
+		ordered := make([]MeshMessage, total)
+		copy(ordered, t.messages[t.msgIdx:])
+		copy(ordered[total-t.msgIdx:], t.messages[:t.msgIdx])
+		copy(result, ordered[total-n:])
 	}
 	return result, nil
 }

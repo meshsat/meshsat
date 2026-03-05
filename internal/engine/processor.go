@@ -97,6 +97,20 @@ func (p *Processor) Subscribe() (<-chan transport.MeshEvent, func()) {
 func (p *Processor) Run(ctx context.Context) error {
 	log.Info().Msg("event processor started")
 
+	// Periodically prune the relay dedup map to prevent unbounded growth
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				p.pruneRelayDedup()
+			}
+		}
+	}()
+
 	backoff := time.Second
 
 	for {

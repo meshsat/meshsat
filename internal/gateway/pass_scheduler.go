@@ -284,7 +284,6 @@ func (ps *PassScheduler) recompute() {
 	mode, nextTransition := ps.determineMode(scored)
 
 	ps.mu.Lock()
-	oldMode := ps.mode
 	ps.mode = mode
 	ps.schedule = &PassSchedule{
 		ComputedAt:     time.Now(),
@@ -298,12 +297,7 @@ func (ps *PassScheduler) recompute() {
 	}
 	ps.mu.Unlock()
 
-	if oldMode != mode {
-		select {
-		case ps.modeCh <- mode:
-		default:
-		}
-	}
+	// Mode transition is handled by run() — don't emit here to avoid duplicates.
 
 	log.Debug().
 		Str("location", loc.Name).

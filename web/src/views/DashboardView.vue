@@ -1,8 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
-import { formatRelativeTime, formatTimestamp, formatLastHeard, formatUptime, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, isNodeRecent, nodeStatusDot } from '@/utils/format'
+import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot } from '@/utils/format'
 
 const store = useMeshsatStore()
 
@@ -607,7 +607,7 @@ function getWidgetDiagnostics(widgetId) {
     case 'activity':
       return {
         'Event Count': activityLog.value.length,
-        'SSE Connected': !!store._sseHandle,
+        'SSE Connected': store.sseConnected,
         'Events by Type': activityLog.value.reduce((acc, e) => {
           acc[e.type] = (acc[e.type] || 0) + 1
           return acc

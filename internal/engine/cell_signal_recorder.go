@@ -98,7 +98,21 @@ func (r *CellSignalRecorder) readSignals(ctx context.Context) error {
 			}
 			if ev.Type == "signal" && ev.Signal >= 0 {
 				ts := time.Now().Unix()
-				if err := r.db.InsertCellularSignal(ts, ev.Signal, -113+(2*ev.Signal), "LTE", ""); err != nil {
+				// ev.Signal is bars (0-5); approximate dBm from bars
+				dBm := -113
+				switch ev.Signal {
+				case 1:
+					dBm = -111
+				case 2:
+					dBm = -103
+				case 3:
+					dBm = -93
+				case 4:
+					dBm = -83
+				case 5:
+					dBm = -73
+				}
+				if err := r.db.InsertCellularSignal(ts, ev.Signal, dBm, "LTE", ""); err != nil {
 					log.Warn().Err(err).Msg("cellular signal recorder: insert failed")
 				}
 			}

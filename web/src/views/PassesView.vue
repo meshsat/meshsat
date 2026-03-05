@@ -77,7 +77,7 @@ const selectedLocation = computed(() =>
 // Resolved location based on current mode
 const activeLocation = computed(() => {
   const sources = store.locationSources
-  if (!sources) return selectedLocation
+  if (!sources) return selectedLocation.value
 
   if (locationMode.value === 'auto') {
     return sources.resolved ? {
@@ -87,7 +87,7 @@ const activeLocation = computed(() => {
       alt_m: (sources.resolved.alt_km || 0) * 1000,
       _source: sources.resolved.source,
       _accuracy: sources.resolved.accuracy_km
-    } : selectedLocation
+    } : selectedLocation.value
   }
 
   if (locationMode.value === 'gps') {
@@ -155,7 +155,7 @@ function elevColor(elev) {
 }
 
 async function fetchPasses() {
-  const loc = activeLocation.value || selectedLocation
+  const loc = activeLocation.value || selectedLocation.value
   if (!loc) return
   loadingPasses.value = true
   // Start pass prediction from the lookback time so passes overlap with signal history

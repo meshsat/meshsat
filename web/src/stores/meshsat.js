@@ -12,6 +12,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   const gateways = ref([])
   const loading = ref(false)
   const error = ref(null)
+  const sseConnected = ref(false)
 
   let sseHandle = null
 
@@ -440,7 +441,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   async function deleteQueueItem(id) {
     error.value = null
     try {
-      await api.delete(`/iridium/queue/${id}`)
+      await api.del(`/iridium/queue/${id}`)
       await fetchDLQ()
     } catch (e) { error.value = e.message; throw e }
   }
@@ -635,6 +636,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     sseHandle = api.sse('/events', (event) => {
       if (onEvent) onEvent(event)
     })
+    sseConnected.value = true
   }
 
   function closeSSE() {
@@ -642,6 +644,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
       sseHandle.close()
       sseHandle = null
     }
+    sseConnected.value = false
   }
 
   // SMS Contacts
@@ -735,9 +738,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
-  async function fetchMessageDeliveries(ref) {
+  async function fetchMessageDeliveries(msgRef) {
     try {
-      return await api.get(`/deliveries/message/${ref}`)
+      return await api.get(`/deliveries/message/${msgRef}`)
     } catch (e) { error.value = e.message; return [] }
   }
 
@@ -794,6 +797,6 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,
-    connectSSE, closeSSE
+    sseConnected, connectSSE, closeSSE
   }
 })

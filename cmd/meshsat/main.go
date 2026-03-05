@@ -79,6 +79,12 @@ func main() {
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")
 	}
 	defer mesh.Close()
+	if sat != nil {
+		defer sat.Close()
+	}
+	if cell != nil {
+		defer cell.Close()
+	}
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

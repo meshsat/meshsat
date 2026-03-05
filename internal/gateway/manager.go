@@ -173,14 +173,22 @@ func (m *Manager) StartGateway(ctx context.Context, gwType string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("gateway %s is already running", gwType)
 	}
+	// Place sentinel to prevent concurrent starts
+	m.running[gwType] = nil
 	m.mu.Unlock()
 
 	gw, err := m.createGateway(cfg.Type, cfg.Config)
 	if err != nil {
+		m.mu.Lock()
+		delete(m.running, gwType)
+		m.mu.Unlock()
 		return err
 	}
 
 	if err := gw.Start(ctx); err != nil {
+		m.mu.Lock()
+		delete(m.running, gwType)
+		m.mu.Unlock()
 		return fmt.Errorf("start %s: %w", gwType, err)
 	}
 
