@@ -17,7 +17,7 @@ onMounted(() => {
     <div class="space-y-4">
       <div class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-4 text-center">
         <div class="font-display font-bold text-2xl text-teal-400 mb-1">MeshSat</div>
-        <div class="text-[12px] text-gray-500">Meshtastic + Satellite Gateway</div>
+        <div class="text-[12px] text-gray-500">Any-to-Any Message Routing Gateway</div>
         <div class="text-[11px] text-gray-600 mt-2 font-mono">v0.2.0</div>
       </div>
 
@@ -66,19 +66,23 @@ onMounted(() => {
           </div>
           <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-tactical-iridium"></span>
-            <span class="text-gray-400">Iridium 9603N SBD</span>
+            <span class="text-gray-400">Iridium SBD</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-teal-400"></span>
+            <span class="text-gray-400">Astrocast LEO</span>
           </div>
           <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-sky-400"></span>
-            <span class="text-gray-400">Cellular 4G/LTE SMS</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-purple-400"></span>
-            <span class="text-gray-400">MQTT</span>
+            <span class="text-gray-400">Cellular SMS</span>
           </div>
           <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-            <span class="text-gray-400">Webhooks</span>
+            <span class="text-gray-400">Webhook HTTP</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+            <span class="text-gray-400">MQTT Broker</span>
           </div>
         </div>
       </div>
