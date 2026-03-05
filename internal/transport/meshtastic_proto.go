@@ -526,26 +526,26 @@ func parseNodeInfo(data []byte) (*ProtoNodeInfo, error) {
 			}
 			info.User, _ = parseUser(val)
 			pos = newPos
-		case 4: // position (Position)
+		case 3: // position (Position)
 			val, newPos, err := readLengthDelimited(data, pos)
 			if err != nil {
 				return info, nil
 			}
 			info.Position, _ = parsePosition(val)
 			pos = newPos
-		case 6: // snr (float = fixed32)
+		case 4: // snr (float = fixed32)
 			if pos+4 > len(data) {
 				return info, nil
 			}
 			info.SNR = math.Float32frombits(binary.LittleEndian.Uint32(data[pos : pos+4]))
 			pos += 4
-		case 7: // last_heard (fixed32)
+		case 5: // last_heard (fixed32)
 			if pos+4 > len(data) {
 				return info, nil
 			}
 			info.LastHeard = binary.LittleEndian.Uint32(data[pos : pos+4])
 			pos += 4
-		case 8: // device_metrics (DeviceMetrics)
+		case 6: // device_metrics (DeviceMetrics)
 			val, newPos, err := readLengthDelimited(data, pos)
 			if err != nil {
 				return info, nil
@@ -595,7 +595,7 @@ func parseUser(data []byte) (*ProtoUser, error) {
 			}
 			user.ShortName = string(val)
 			pos = newPos
-		case 6: // hw_model (enum = varint)
+		case 5: // hw_model (enum = varint)
 			val, n := readVarint(data, pos)
 			if n <= 0 {
 				return user, nil
@@ -643,7 +643,7 @@ func parsePosition(data []byte) (*ProtoPosition, error) {
 			}
 			p.Altitude = int32(val)
 			offset += n
-		case 9: // sats_in_view (uint32)
+		case 19: // sats_in_view (uint32)
 			val, n := readVarint(data, offset)
 			if n <= 0 {
 				return p, nil
@@ -673,9 +673,17 @@ func parseDeviceMetrics(data []byte) (*ProtoDeviceMetrics, error) {
 		offset = newPos
 
 		switch fieldNum {
-		case 1:
+		case 1: // Telemetry.time (fixed32) — skip
+			if wireType == wireFixed32 {
+				offset += 4
+			} else {
+				offset = skipField(data, offset, wireType)
+				if offset < 0 {
+					return dm, nil
+				}
+			}
+		case 2: // Telemetry.device_metrics (length-delimited submessage)
 			if wireType == wireLengthDelimited {
-				// Telemetry wrapper — field 1 = device_metrics submessage
 				val, newPos, err := readLengthDelimited(data, offset)
 				if err != nil {
 					return dm, nil
@@ -683,19 +691,10 @@ func parseDeviceMetrics(data []byte) (*ProtoDeviceMetrics, error) {
 				offset = newPos
 				return parseDeviceMetricsProto(val)
 			}
-			// Varint: raw device_metrics, field 1 = battery_level
-			val, n := readVarint(data, offset)
-			if n <= 0 {
+			offset = skipField(data, offset, wireType)
+			if offset < 0 {
 				return dm, nil
 			}
-			dm.BatteryLevel = uint32(val)
-			offset += n
-		case 2: // voltage (float = fixed32)
-			if offset+4 > len(data) {
-				return dm, nil
-			}
-			dm.Voltage = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
 		default:
 			offset = skipField(data, offset, wireType)
 			if offset < 0 {
@@ -768,7 +767,7 @@ type ProtoEnvironmentMetrics struct {
 }
 
 // parseEnvironmentMetrics extracts environment metrics from a Telemetry message.
-// Telemetry field 2 = environment_metrics submessage.
+// Telemetry field 3 = environment_metrics submessage.
 // Returns nil if no environment data is present.
 func parseEnvironmentMetrics(data []byte) *ProtoEnvironmentMetrics {
 	offset := 0
@@ -779,7 +778,7 @@ func parseEnvironmentMetrics(data []byte) *ProtoEnvironmentMetrics {
 		}
 		offset = newPos
 
-		if fieldNum == 2 && wireType == wireLengthDelimited {
+		if fieldNum == 3 && wireType == wireLengthDelimited {
 			val, newPos, err := readLengthDelimited(data, offset)
 			if err != nil {
 				return nil

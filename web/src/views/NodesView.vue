@@ -173,12 +173,12 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
           <!-- Info -->
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-gray-200 truncate">{{ node.long_name || 'Unknown' }}</span>
-              <span class="text-[10px] text-gray-600 font-mono">{{ shortId(node.user_id) }}</span>
+              <span class="text-sm font-medium text-gray-200 truncate">{{ node.long_name || node.user_id || `!${node.num.toString(16).padStart(8, '0')}` }}</span>
+              <span v-if="node.user_id" class="text-[10px] text-gray-600 font-mono">{{ shortId(node.user_id) }}</span>
             </div>
             <div class="flex items-center gap-3 mt-1 text-[11px]">
               <span v-if="node.hw_model_name" class="text-gray-500">{{ node.hw_model_name }}</span>
-              <span v-if="node.snr != null" :class="node.snr >= 0 ? 'text-emerald-400/70' : node.snr >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
+              <span v-if="node.snr != null && Math.abs(node.snr) < 100" :class="node.snr >= 0 ? 'text-emerald-400/70' : node.snr >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
                 SNR {{ Number(node.snr).toFixed(1) }}
               </span>
               <span v-if="node.rssi" class="text-gray-500">{{ node.rssi }} dBm</span>
@@ -186,9 +186,9 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
                 :class="signalClass(node.signal_quality)">
                 {{ node.signal_quality }}
               </span>
-              <span v-if="node.battery_level" class="text-gray-500">
+              <span v-if="node.battery_level > 0 && node.battery_level <= 100" class="text-gray-500">
                 {{ Math.round(node.battery_level) }}%
-                <span v-if="node.voltage" class="text-gray-600">{{ node.voltage.toFixed(1) }}V</span>
+                <span v-if="node.voltage > 0 && node.voltage < 10" class="text-gray-600">{{ node.voltage.toFixed(1) }}V</span>
               </span>
             </div>
           </div>

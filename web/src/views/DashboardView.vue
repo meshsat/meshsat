@@ -720,7 +720,7 @@ function widgetGridClass(id) {
             <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="signalDot(node)" />
             <span class="text-[11px] text-gray-300 truncate flex-1">{{ node.long_name || 'Unknown' }}</span>
             <span class="text-[9px] font-mono text-gray-600 shrink-0">{{ shortId(node.user_id) }}</span>
-            <span v-if="node.snr != null" class="text-[9px] font-mono shrink-0"
+            <span v-if="node.snr != null && Math.abs(node.snr) < 100" class="text-[9px] font-mono shrink-0"
               :class="node.snr >= 0 ? 'text-emerald-400/60' : node.snr >= -10 ? 'text-amber-400/60' : 'text-red-400/60'">
               {{ Number(node.snr).toFixed(0) }}dB
             </span>
