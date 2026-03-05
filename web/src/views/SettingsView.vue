@@ -76,7 +76,8 @@ const iridiumForm = ref({
   forward_all: false, forward_portnums: [1], compression: 'compact', auto_receive: true,
   mailbox_mode: 'ring_alert_only', poll_interval: 1800, max_text_length: 320, include_position: true,
   dlq_max_retries: 0, dlq_retry_base_secs: 120, min_signal_bars: 1,
-  daily_budget: 0, monthly_budget: 0, critical_reserve: 20
+  daily_budget: 0, monthly_budget: 0, critical_reserve: 20,
+  min_elev_deg: 5
 })
 const checkingMailbox = ref(false)
 
@@ -332,6 +333,17 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <div>
             <label class="block text-xs text-gray-500 mb-1">Min Signal Bars</label>
             <input v-model.number="iridiumForm.min_signal_bars" type="number" min="0" max="5" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Min Elevation (°)</label>
+            <input v-model.number="iridiumForm.min_elev_deg" type="number" min="0" max="90" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <p class="text-[10px] text-gray-600 mt-0.5">Pass scheduler min elevation (5=clear sky, 40=urban, 60=canyon)</p>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Critical Reserve (%)</label>
+            <input v-model.number="iridiumForm.critical_reserve" type="number" min="0" max="100" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">

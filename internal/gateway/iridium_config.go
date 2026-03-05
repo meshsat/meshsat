@@ -24,6 +24,7 @@ type IridiumConfig struct {
 	PostPassGraceSec   int    `json:"post_pass_grace_sec"`           // seconds after LOS to stay in post-pass mode (default 120)
 	IdlePollSec        int    `json:"idle_poll_sec"`                 // MT poll interval in idle mode (default 900)
 	ActivePollSec      int    `json:"active_poll_sec"`               // MT poll interval in active mode (default 20)
+	MinElevDeg         int    `json:"min_elev_deg"`                  // minimum pass elevation for scheduler (default 5, higher for obstructed environments)
 }
 
 // DefaultIridiumConfig returns sensible defaults.
@@ -48,6 +49,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		PostPassGraceSec: 120,
 		IdlePollSec:      900,
 		ActivePollSec:    20,
+		MinElevDeg:       5,
 	}
 }
 

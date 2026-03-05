@@ -43,9 +43,18 @@ function loadMinElev() {
 const minElevDeg = ref(loadMinElev())
 const showElevCustom = computed(() => !elevPresets.some(p => p.value === minElevDeg.value))
 
-function setMinElev(val) {
+async function setMinElev(val) {
   minElevDeg.value = val
   localStorage.setItem('meshsat-min-elev', String(val))
+  // Sync to backend gateway config so scheduler uses the same value
+  try {
+    const gw = (store.gateways || []).find(g => g.type === 'iridium')
+    if (gw) {
+      const cfg = typeof gw.config === 'string' ? JSON.parse(gw.config) : { ...gw.config }
+      cfg.min_elev_deg = val
+      await store.configureGateway('iridium', gw.enabled, cfg)
+    }
+  } catch {}
   fetchPasses()
 }
 

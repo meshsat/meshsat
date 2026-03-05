@@ -1082,6 +1082,27 @@ func (db *DB) GetSignalDuringWindow(source string, from, to int64) (avg float64,
 	return
 }
 
+// GetGSSSuccessRateByElevation returns the GSS registration success rate for passes
+// whose peak elevation falls within the given band, over the last lookbackDays days.
+// It correlates GSS events (signal_history source='gss') with pass_quality_log entries.
+func (db *DB) GetGSSSuccessRateByElevation(elevLow, elevHigh float64, lookbackDays int) (successRate float64, samples int, err error) {
+	cutoff := time.Now().AddDate(0, 0, -lookbackDays).Format("2006-01-02 15:04:05")
+	// For each logged pass in the elevation band, check if any GSS success occurred during AOS-LOS
+	var total, successes int
+	err = db.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN EXISTS (
+			SELECT 1 FROM signal_history WHERE source = 'gss' AND value >= 1
+			AND timestamp >= p.aos AND timestamp <= p.los
+		) THEN 1 ELSE 0 END), 0)
+		 FROM pass_quality_log p
+		 WHERE p.peak_elev_deg >= ? AND p.peak_elev_deg < ? AND p.created_at >= ?`,
+		elevLow, elevHigh, cutoff).Scan(&total, &successes)
+	if err != nil || total == 0 {
+		return 0, 0, err
+	}
+	return float64(successes) / float64(total), total, nil
+}
+
 // ---- Iridium Geolocation ----
 
 // GeolocationRecord represents a stored geolocation reading.

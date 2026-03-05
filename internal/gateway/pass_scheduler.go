@@ -99,11 +99,17 @@ type PassSchedule struct {
 	UpcomingPasses []ScoredPass `json:"upcoming_passes"`
 }
 
+// PassCounterSource provides per-pass MO attempt/success counters from the gateway.
+type PassCounterSource interface {
+	ResetPassCounters() (attempts, successes int64)
+}
+
 // PassScheduler dynamically adjusts gateway timing based on TLE pass predictions.
 type PassScheduler struct {
-	tleMgr PassPredictor
-	db     *database.DB
-	config IridiumConfig
+	tleMgr   PassPredictor
+	db       *database.DB
+	config   IridiumConfig
+	counters PassCounterSource // gateway's per-pass counters (set after construction)
 
 	mu       sync.RWMutex
 	schedule *PassSchedule
@@ -123,6 +129,11 @@ func NewPassScheduler(tleMgr PassPredictor, db *database.DB, cfg IridiumConfig) 
 		modeCh: make(chan ScheduleMode, 4), // buffered to avoid blocking
 		mode:   ModeIdle,
 	}
+}
+
+// SetCounterSource sets the gateway's per-pass counter source.
+func (ps *PassScheduler) SetCounterSource(src PassCounterSource) {
+	ps.counters = src
 }
 
 // Start launches the scheduler recompute loop.
@@ -259,7 +270,11 @@ func (ps *PassScheduler) recompute() {
 		return
 	}
 
-	passes, err := ps.tleMgr.GeneratePasses(loc.Lat, loc.Lon, loc.AltM/1000.0, 12, 5.0, 0)
+	minElev := float64(ps.config.MinElevDeg)
+	if minElev <= 0 {
+		minElev = 5.0
+	}
+	passes, err := ps.tleMgr.GeneratePasses(loc.Lat, loc.Lon, loc.AltM/1000.0, 12, minElev, 0)
 	if err != nil {
 		log.Warn().Err(err).Msg("iridium: scheduler failed to generate passes")
 		return
@@ -354,8 +369,10 @@ func (ps *PassScheduler) scorePass(p PassPrediction) float64 {
 	return elevScore*0.5 + histScore*0.4 + durScore*0.1
 }
 
-// historicalHitRate queries the pass quality log for the signal success rate
-// at similar elevation bands. Falls back to an elevation-based prior for new installations.
+// historicalHitRate queries GSS registration success and pass quality logs for
+// the actual success rate at similar elevation bands.
+// Prefers GSS data (ground truth) over signal-bar heuristics.
+// Falls back to an elevation-based prior for new installations.
 func (ps *PassScheduler) historicalHitRate(peakElevDeg float64) float64 {
 	if ps.db == nil {
 		return elevationPrior(peakElevDeg)
@@ -365,13 +382,19 @@ func (ps *PassScheduler) historicalHitRate(peakElevDeg float64) float64 {
 	bandLow := math.Floor(peakElevDeg/15.0) * 15.0
 	bandHigh := bandLow + 15.0
 
-	hitRate, samples, err := ps.db.GetPassQualityByElevation(bandLow, bandHigh, 30)
-	if err != nil || samples < 3 {
-		// Not enough data — use elevation-based prior
-		return elevationPrior(peakElevDeg)
+	// Prefer GSS registration success data (actual SBDIX outcomes)
+	gssRate, gssSamples, err := ps.db.GetGSSSuccessRateByElevation(bandLow, bandHigh, 30)
+	if err == nil && gssSamples >= 3 {
+		return gssRate
 	}
 
-	return hitRate
+	// Fall back to signal bar pass quality
+	hitRate, samples, err := ps.db.GetPassQualityByElevation(bandLow, bandHigh, 30)
+	if err == nil && samples >= 3 {
+		return hitRate
+	}
+
+	return elevationPrior(peakElevDeg)
 }
 
 // elevationPrior provides a reasonable prior for signal success based on elevation.
@@ -558,6 +581,14 @@ func (ps *PassScheduler) logPassQuality() {
 		return
 	}
 
+	// Collect MO attempt/success counters from the gateway
+	var moAttempts, moSuccesses int
+	if ps.counters != nil {
+		a, s := ps.counters.ResetPassCounters()
+		moAttempts = int(a)
+		moSuccesses = int(s)
+	}
+
 	if err := ps.db.InsertPassQualityLog(
 		lastPass.Satellite,
 		lastPass.AOS,
@@ -565,7 +596,7 @@ func (ps *PassScheduler) logPassQuality() {
 		lastPass.PeakElevDeg,
 		avg,
 		maxBars,
-		0, 0, // mo_attempts/successes tracked elsewhere
+		moAttempts, moSuccesses,
 	); err != nil {
 		log.Warn().Err(err).Msg("iridium: failed to log pass quality")
 	} else {
@@ -575,6 +606,8 @@ func (ps *PassScheduler) logPassQuality() {
 			Float64("avg_bars", avg).
 			Int("max_bars", maxBars).
 			Int("signal_readings", count).
+			Int("mo_attempts", moAttempts).
+			Int("mo_successes", moSuccesses).
 			Msg("iridium: pass quality logged")
 	}
 }

@@ -33,6 +33,8 @@ type IridiumGateway struct {
 	errors          atomic.Int64
 	dlqPending      atomic.Int64
 	lastActive      atomic.Int64
+	passAttempts    atomic.Int64 // SBDIX attempts during current Active pass
+	passSuccesses   atomic.Int64 // successful SBDIX sessions during current Active pass
 	startTime       time.Time
 
 	cancel context.CancelFunc
@@ -52,6 +54,7 @@ func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *databa
 
 	if cfg.SchedulerEnabled && predictor != nil {
 		gw.scheduler = NewPassScheduler(predictor, db, cfg)
+		gw.scheduler.SetCounterSource(gw)
 	}
 
 	return gw
@@ -905,6 +908,13 @@ func (g *IridiumGateway) pollWorker(ctx context.Context) {
 	}
 }
 
+// ResetPassCounters resets and returns the per-pass MO attempt/success counters.
+func (g *IridiumGateway) ResetPassCounters() (attempts, successes int64) {
+	attempts = g.passAttempts.Swap(0)
+	successes = g.passSuccesses.Swap(0)
+	return
+}
+
 // ManualMailboxCheck triggers a one-shot mailbox check (for "Check Mailbox Now" button).
 func (g *IridiumGateway) ManualMailboxCheck(ctx context.Context) {
 	go g.handleRingAlert(ctx)
@@ -912,7 +922,14 @@ func (g *IridiumGateway) ManualMailboxCheck(ctx context.Context) {
 
 // recordGSSRegistration persists an SBDIX session outcome to signal_history (source="gss").
 // value=1 for successful GSS registration (mo_status 0-4), value=0 for failure.
+// Also tracks per-pass attempt/success counters for pass quality logging.
 func (g *IridiumGateway) recordGSSRegistration(success bool, moStatus int) {
+	// Track per-pass MO attempt/success counters
+	g.passAttempts.Add(1)
+	if success {
+		g.passSuccesses.Add(1)
+	}
+
 	if g.db == nil {
 		return
 	}
