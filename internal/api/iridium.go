@@ -278,7 +278,8 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 	// Also include custom locations
 	customLocs, _ := s.db.GetIridiumLocations()
 
-	// AUTO resolution: GPS > Iridium > first custom location
+	// AUTO resolution: GPS > Builtin/Custom > Iridium
+	// Iridium geolocation (~10-100km accuracy) is less reliable than known locations.
 	var resolved *resolvedLocation
 	for _, src := range sources {
 		if src.Source == "gps" && src.Lat != 0 && src.Lon != 0 {
@@ -291,6 +292,17 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 				Timestamp:  src.Timestamp,
 			}
 			break
+		}
+	}
+	if resolved == nil && len(customLocs) > 0 {
+		loc := customLocs[0]
+		resolved = &resolvedLocation{
+			Source:     "custom",
+			Name:       loc.Name,
+			Lat:        loc.Lat,
+			Lon:        loc.Lon,
+			AltKm:      loc.AltM / 1000.0,
+			AccuracyKm: 0,
 		}
 	}
 	if resolved == nil {
@@ -306,17 +318,6 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 				}
 				break
 			}
-		}
-	}
-	if resolved == nil && len(customLocs) > 0 {
-		loc := customLocs[0]
-		resolved = &resolvedLocation{
-			Source:     "custom",
-			Name:       loc.Name,
-			Lat:        loc.Lat,
-			Lon:        loc.Lon,
-			AltKm:      loc.AltM / 1000.0,
-			AccuracyKm: 0,
 		}
 	}
 

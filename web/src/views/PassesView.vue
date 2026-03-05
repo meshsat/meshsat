@@ -26,7 +26,7 @@ const windowOptions = [12, 24, 48, 72]
 
 // Location source options for dropdown
 const locationModes = [
-  { value: 'auto', label: 'AUTO', desc: 'GPS > Iridium > Custom' },
+  { value: 'auto', label: 'AUTO', desc: 'GPS > Custom > Iridium' },
   { value: 'gps', label: 'GPS', desc: 'Meshtastic GPS' },
   { value: 'iridium', label: 'Iridium', desc: 'AT-MSGEO ~1-100km' },
   { value: 'custom', label: 'Custom', desc: 'User locations' }
