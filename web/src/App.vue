@@ -69,13 +69,17 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-tactical-bg text-gray-100 flex flex-col">
+  <div class="min-h-screen bg-tactical-bg text-gray-100 flex flex-col relative">
+    <!-- Fullscreen background logo -->
+    <div class="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
+      <img src="/logo-bg.png" alt="" class="w-[60vmin] h-[60vmin] object-contain opacity-[0.04]" />
+    </div>
+
     <!-- Sticky horizontal header -->
     <header class="sticky top-0 z-50 bg-tactical-surface/95 backdrop-blur border-b border-tactical-border">
       <div class="flex items-center h-12 px-3 lg:px-5 gap-3">
-        <!-- Left: Logo + brand -->
-        <router-link to="/" class="flex items-center gap-2 shrink-0">
-          <img src="/logo-nav.png" alt="MeshSat" class="h-9 w-9 object-contain drop-shadow-[0_0_8px_rgba(45,212,191,0.6)]" />
+        <!-- Left: Brand text -->
+        <router-link to="/" class="flex items-center shrink-0">
           <span class="font-display font-semibold text-sm text-gray-200 tracking-wide">MESHSAT</span>
         </router-link>
 
