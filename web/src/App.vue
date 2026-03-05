@@ -75,7 +75,7 @@ onUnmounted(() => {
       <div class="flex items-center h-12 px-3 lg:px-5 gap-3">
         <!-- Left: Logo + brand -->
         <router-link to="/" class="flex items-center gap-2 shrink-0">
-          <img src="/logo.png" alt="MeshSat" class="w-10 h-10 drop-shadow-[0_0_8px_rgba(45,212,191,0.6)]" />
+          <img src="/logo-nav.png" alt="MeshSat" class="h-9 w-9 object-contain drop-shadow-[0_0_8px_rgba(45,212,191,0.6)]" />
           <span class="font-display font-semibold text-sm text-gray-200 tracking-wide">MESHSAT</span>
         </router-link>
 
