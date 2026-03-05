@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
 
@@ -12,6 +12,57 @@ const logPaused = ref(false)
 
 // ── SOS state ──
 const sosArming = ref(false)
+
+// ── Stats modal ──
+const statsModal = ref(false)
+const statsTitle = ref('')
+const statsData = ref(null)
+
+// ── Queue item detail modal ──
+const queueDetailModal = ref(false)
+const queueDetailItem = ref(null)
+
+// ── Widget drag-and-drop ──
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'sos', 'location', 'queue', 'activity']
+const widgetOrder = ref(JSON.parse(localStorage.getItem('meshsat-widget-order') || 'null') || [...DEFAULT_WIDGET_ORDER])
+const dragWidget = ref(null)
+const dragOver = ref(null)
+
+function onDragStart(e, widgetId) {
+  dragWidget.value = widgetId
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', widgetId)
+}
+
+function onDragOver(e, widgetId) {
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'move'
+  dragOver.value = widgetId
+}
+
+function onDragLeave() {
+  dragOver.value = null
+}
+
+function onDrop(e, targetId) {
+  e.preventDefault()
+  dragOver.value = null
+  const sourceId = dragWidget.value
+  if (!sourceId || sourceId === targetId) return
+  const order = [...widgetOrder.value]
+  const srcIdx = order.indexOf(sourceId)
+  const tgtIdx = order.indexOf(targetId)
+  if (srcIdx === -1 || tgtIdx === -1) return
+  order.splice(srcIdx, 1)
+  order.splice(tgtIdx, 0, sourceId)
+  widgetOrder.value = order
+  localStorage.setItem('meshsat-widget-order', JSON.stringify(order))
+}
+
+function onDragEnd() {
+  dragWidget.value = null
+  dragOver.value = null
+}
 
 // ── Helpers from NodesView ──
 const nowSec = computed(() => Date.now() / 1000)
@@ -72,16 +123,13 @@ const iridiumStatus = computed(() => {
 })
 const dlqPending = computed(() => (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length)
 const lastSatTx = computed(() => {
-  // Last successful outbound SBD send — from the queue (dead_letters with status=sent, direction=outbound)
   const sent = (store.dlq || []).filter(d => d.status === 'sent' && d.direction === 'outbound')
   if (sent.length) {
-    // Queue is sorted by id desc, first entry is most recent
     return formatRelativeTime(sent[0].updated_at || sent[0].created_at)
   }
   return 'N/A'
 })
 const lastSatRx = computed(() => {
-  // Last inbound SBD receive — from the queue (dead_letters with direction=inbound)
   const recv = (store.dlq || []).filter(d => d.direction === 'inbound')
   if (recv.length) {
     return formatRelativeTime(recv[0].updated_at || recv[0].created_at)
@@ -132,18 +180,6 @@ function formatAccuracy(km) {
   return `${km.toFixed(0)}km`
 }
 
-function locationSourceColor(source) {
-  if (source === 'gps') return 'text-emerald-400'
-  if (source === 'iridium') return 'text-teal-400'
-  return 'text-amber-400'
-}
-
-function locationSourceDot(source) {
-  if (source === 'gps') return 'bg-emerald-400'
-  if (source === 'iridium') return 'bg-teal-400'
-  return 'bg-amber-400'
-}
-
 // Credits from store
 const creditsToday = computed(() => store.creditSummary?.today ?? 0)
 const creditsMonth = computed(() => store.creditSummary?.month ?? 0)
@@ -159,6 +195,13 @@ function formatRelativeTime(val) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   return `${Math.floor(diff / 86400)}d ago`
+}
+
+function formatTimestamp(val) {
+  if (!val) return 'N/A'
+  const ts = typeof val === 'string' ? new Date(val) : new Date(val < 1e12 ? val * 1000 : val)
+  if (isNaN(ts.getTime())) return String(val)
+  return ts.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
 }
 
 // ── Computed: Meshtastic Mesh panel ──
@@ -195,9 +238,9 @@ const gpsFix = computed(() => {
   return true
 })
 
-// ── Computed: SBD Queue panel ──
+// ── Computed: SBD Queue panel (filter out expired) ──
 const dlqItems = computed(() => {
-  return (store.dlq || []).slice(0, 8)
+  return (store.dlq || []).filter(d => d.status !== 'expired').slice(0, 8)
 })
 const satMessages = computed(() => {
   return (store.messages || []).filter(m => m.transport === 'iridium').slice(0, 5)
@@ -212,19 +255,6 @@ function dlqStatusColor(status) {
   if (status === 'expired') return 'text-orange-400 bg-orange-400/10'
   if (status === 'cancelled') return 'text-gray-500 bg-gray-500/10'
   return 'text-gray-400 bg-gray-400/10'
-}
-
-// ── Computed: Power System panel ──
-const batteryLevel = computed(() => localNode.value?.battery_level ?? null)
-const voltage = computed(() => localNode.value?.voltage ?? null)
-const uptimeSeconds = computed(() => localNode.value?.uptime_seconds ?? store.status?.uptime_seconds ?? null)
-const temperature = computed(() => localNode.value?.temperature ?? null)
-
-function batteryColor(level) {
-  if (level == null) return 'bg-gray-600'
-  if (level > 60) return 'bg-tactical-power'
-  if (level > 25) return 'bg-amber-400'
-  return 'bg-red-400'
 }
 
 // ── Computed: SOS panel ──
@@ -283,6 +313,7 @@ function eventDescription(event) {
   return msg || type || 'Event'
 }
 
+let saveLogTimer = null
 function handleSSEEvent(event) {
   const type = event?.type ?? ''
   activityLog.value.unshift({
@@ -293,6 +324,11 @@ function handleSSEEvent(event) {
   if (activityLog.value.length > MAX_LOG) {
     activityLog.value.length = MAX_LOG
   }
+  // Debounced save to localStorage
+  if (saveLogTimer) clearTimeout(saveLogTimer)
+  saveLogTimer = setTimeout(() => {
+    localStorage.setItem('meshsat-activity-log', JSON.stringify(activityLog.value))
+  }, 500)
 }
 
 function formatLogTime(t) {
@@ -305,6 +341,108 @@ async function cancelDLQ(id) {
   try {
     await store.fetchDLQ() // refresh after cancel — API doesn't have a cancel endpoint yet
   } catch { /* ignore */ }
+}
+
+// ── Stats modal helpers ──
+function openWidgetStats(widgetId) {
+  statsTitle.value = widgetId.toUpperCase().replace('_', ' ')
+  statsData.value = getWidgetDiagnostics(widgetId)
+  statsModal.value = true
+}
+
+function getWidgetDiagnostics(widgetId) {
+  switch (widgetId) {
+    case 'iridium':
+      return {
+        'Gateway': iridiumGw.value || 'Not configured',
+        'Signal': store.iridiumSignal || 'No data',
+        'Signal History (last 10)': (store.signalHistory || []).slice(-10),
+        'Scheduler': store.schedulerStatus || 'Not available',
+        'Credits': store.creditSummary || 'No data',
+        'Queue Depth': dlqPending.value,
+        'DLQ Total': (store.dlq || []).length,
+        'Last TX': lastSatTx.value,
+        'Last RX': lastSatRx.value
+      }
+    case 'mesh':
+      return {
+        'Status': store.status || 'Not connected',
+        'Total Nodes': totalNodes.value,
+        'Active Nodes': activeNodes.value.length,
+        'All Nodes': store.nodes || [],
+        'Config': store.config || 'Not loaded'
+      }
+    case 'cellular':
+      return {
+        'Gateway': cellularGw.value || 'Not configured',
+        'Signal': store.cellularSignal || 'No data',
+        'Status': store.cellularStatus || 'No data',
+        'Messages Out': cellularGw.value?.messages_out ?? 0,
+        'Messages In': cellularGw.value?.messages_in ?? 0
+      }
+    case 'queue':
+      return {
+        'All Items (unfiltered)': store.dlq || [],
+        'Stats': {
+          pending: (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length,
+          sent: (store.dlq || []).filter(d => d.status === 'sent').length,
+          failed: (store.dlq || []).filter(d => d.status === 'failed').length,
+          expired: (store.dlq || []).filter(d => d.status === 'expired').length,
+          cancelled: (store.dlq || []).filter(d => d.status === 'cancelled').length,
+          received: (store.dlq || []).filter(d => d.status === 'received').length
+        }
+      }
+    case 'location':
+      return {
+        'Resolved': locationResolved.value || 'No fix',
+        'Sources': store.locationSources?.sources || [],
+        'GPS Fix': gpsFix.value,
+        'Satellites': gpsSats.value,
+        'Altitude': gpsAlt.value,
+        'Custom Locations': (store.locations || []).length
+      }
+    case 'sos':
+      return {
+        'SOS Status': store.sosStatus || { active: false },
+        'GPS Fix': gpsFix.value,
+        'Position': gpsFix.value ? `${gpsLat.value}, ${gpsLon.value}` : 'N/A',
+        'Altitude': gpsAlt.value
+      }
+    case 'activity':
+      return {
+        'Event Count': activityLog.value.length,
+        'SSE Connected': !!store._sseHandle,
+        'Events by Type': activityLog.value.reduce((acc, e) => {
+          acc[e.type] = (acc[e.type] || 0) + 1
+          return acc
+        }, {}),
+        'Recent Events (last 10)': activityLog.value.slice(0, 10)
+      }
+    default:
+      return {}
+  }
+}
+
+function openQueueItemDetail(item) {
+  queueDetailItem.value = item
+  queueDetailModal.value = true
+}
+
+function queueItemFlowSteps(item) {
+  const steps = []
+  if (item.created_at) steps.push({ label: 'Queued', time: item.created_at, active: true })
+  if (item.retries > 0) steps.push({ label: `Retrying (${item.retries}x)`, time: item.updated_at, active: item.status === 'pending' })
+  if (item.status === 'sent') steps.push({ label: 'Sent', time: item.updated_at, active: true })
+  else if (item.status === 'failed') steps.push({ label: 'Failed', time: item.updated_at, active: false })
+  else if (item.status === 'expired') steps.push({ label: 'Expired', time: item.updated_at, active: false })
+  else if (item.status === 'cancelled') steps.push({ label: 'Cancelled', time: item.updated_at, active: false })
+  else if (item.status === 'received') steps.push({ label: 'Received', time: item.updated_at, active: true })
+  return steps
+}
+
+function toHex(str) {
+  if (!str) return ''
+  return [...str].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ')
 }
 
 // ── Lifecycle ──
@@ -330,6 +468,15 @@ async function fetchAll() {
 }
 
 onMounted(() => {
+  // Restore activity log from localStorage
+  try {
+    const saved = localStorage.getItem('meshsat-activity-log')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed)) activityLog.value = parsed.slice(0, MAX_LOG)
+    }
+  } catch { /* ignore corrupt data */ }
+
   fetchAll()
   store.connectSSE(handleSSEEvent)
   pollTimer = setInterval(() => {
@@ -345,18 +492,44 @@ onMounted(() => {
 onUnmounted(() => {
   store.closeSSE()
   if (pollTimer) clearInterval(pollTimer)
+  if (saveLogTimer) clearTimeout(saveLogTimer)
 })
+
+// Widget component map for drag-and-drop rendering
+const widgetComponents = {
+  iridium: 'iridium',
+  mesh: 'mesh',
+  cellular: 'cellular',
+  sos: 'sos',
+  location: 'location',
+  queue: 'queue',
+  activity: 'activity'
+}
+
+// Widget-specific grid classes
+function widgetGridClass(id) {
+  if (id === 'sos') return 'md:col-span-2 lg:col-span-1 lg:row-span-2'
+  if (id === 'activity') return 'md:col-span-2'
+  return ''
+}
 </script>
 
 <template>
   <div class="max-w-[1400px] mx-auto">
-    <!-- 7-Panel Grid -->
+    <!-- 7-Panel Grid (drag-and-drop reorderable) -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 
-      <!-- ═══ Panel 1: Iridium SBD ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+      <template v-for="wid in widgetOrder" :key="wid">
+
+      <!-- ═══ Iridium SBD ═══ -->
+      <div v-if="wid === 'iridium'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">IRIDIUM SBD</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('iridium')">IRIDIUM SBD</h2>
+          </div>
           <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
         </div>
 
@@ -375,7 +548,6 @@ onUnmounted(() => {
             <span class="text-[10px] text-gray-500 ml-1">/5</span>
           </div>
           <span class="text-[10px] text-gray-500 uppercase">{{ satAssessment }}</span>
-          <!-- Scheduler mode badge -->
           <span v-if="schedulerEnabled"
             class="text-[9px] font-mono px-1.5 py-0.5 rounded ml-auto"
             :class="schedulerBadgeClass(schedulerMode)">
@@ -435,14 +607,18 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 2: Meshtastic Mesh ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+      <!-- ═══ Meshtastic Mesh ═══ -->
+      <div v-if="wid === 'mesh'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-tactical-lora tracking-wide">MESHTASTIC MESH</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-tactical-lora tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('mesh')">MESHTASTIC MESH</h2>
+          </div>
           <span class="w-2 h-2 rounded-full" :class="radioConnected ? 'bg-emerald-400' : 'bg-red-400'" />
         </div>
 
-        <!-- Connection info -->
         <div class="flex items-center gap-2 mb-3">
           <span class="text-xs" :class="radioConnected ? 'text-emerald-400' : 'text-red-400'">
             {{ radioConnected ? 'Connected' : 'Disconnected' }}
@@ -450,13 +626,11 @@ onUnmounted(() => {
           <span class="text-[10px] text-gray-500 font-mono">{{ nodeName }}</span>
         </div>
 
-        <!-- Node count -->
         <div class="flex items-center gap-2 mb-3">
           <span class="font-mono text-lg font-bold text-tactical-lora">{{ activeNodes.length }}</span>
           <span class="text-[10px] text-gray-500">/ {{ totalNodes }} nodes</span>
         </div>
 
-        <!-- Top nodes list -->
         <div class="space-y-1">
           <div v-for="node in topNodes" :key="node.num"
             class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.02] transition-colors">
@@ -477,14 +651,18 @@ onUnmounted(() => {
         </router-link>
       </div>
 
-      <!-- ═══ Panel 3: Cellular 4G/LTE ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+      <!-- ═══ Cellular 4G/LTE ═══ -->
+      <div v-if="wid === 'cellular'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-sky-400 tracking-wide">CELLULAR 4G/LTE</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-sky-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('cellular')">CELLULAR 4G/LTE</h2>
+          </div>
           <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
         </div>
 
-        <!-- Signal bars -->
         <div class="flex items-center gap-3 mb-3">
           <div class="flex items-end gap-[3px] h-6">
             <span v-for="i in 5" :key="i"
@@ -503,7 +681,6 @@ onUnmounted(() => {
           </span>
         </div>
 
-        <!-- Status rows -->
         <div class="space-y-1.5 text-[11px]">
           <div class="flex justify-between">
             <span class="text-gray-500">Gateway</span>
@@ -528,30 +705,30 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 4: Emergency SOS (row-span-2) ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4 md:col-span-2 lg:col-span-1 lg:row-span-2">
+      <!-- ═══ Emergency SOS (row-span-2) ═══ -->
+      <div v-if="wid === 'sos'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="font-display font-semibold text-sm text-tactical-sos tracking-wide">EMERGENCY SOS</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-tactical-sos tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('sos')">EMERGENCY SOS</h2>
+          </div>
           <span class="text-[10px] font-mono"
             :class="sosActive ? 'text-tactical-sos' : 'text-gray-600'">
             {{ sosActive ? 'ARMED' : 'STANDBY' }}
           </span>
         </div>
 
-        <!-- SOS Ring -->
         <div class="flex justify-center mb-4">
           <div class="relative">
             <svg viewBox="0 0 120 120" class="w-28 h-28 lg:w-36 lg:h-36">
-              <!-- Outer ring -->
               <circle cx="60" cy="60" r="54" fill="none" stroke-width="3"
                 :stroke="sosActive ? '#ef4444' : '#1a2230'" />
-              <!-- Animated ring when active -->
               <circle v-if="sosActive" cx="60" cy="60" r="54" fill="none" stroke-width="3"
                 stroke="#ef4444" stroke-dasharray="12 6" class="animate-spin"
                 style="animation-duration: 8s;" />
-              <!-- Inner fill -->
               <circle cx="60" cy="60" r="44" :fill="sosActive ? '#ef444420' : '#111820'" />
-              <!-- SOS text -->
               <text x="60" y="56" text-anchor="middle" font-size="22" font-weight="700"
                 :fill="sosActive ? '#ef4444' : '#4b5563'" font-family="Oxanium, sans-serif">SOS</text>
               <text x="60" y="74" text-anchor="middle" font-size="9"
@@ -562,7 +739,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Arm/Disarm button -->
         <button @click="toggleSOS" :disabled="sosArming"
           class="w-full py-2.5 rounded-lg text-xs font-semibold transition-all mb-4"
           :class="sosActive
@@ -571,13 +747,11 @@ onUnmounted(() => {
           {{ sosArming ? '...' : sosActive ? 'CANCEL SOS' : 'ARM SOS' }}
         </button>
 
-        <!-- Test button -->
         <button @click="testSOS"
           class="w-full py-1.5 rounded text-[10px] text-gray-500 hover:text-gray-300 bg-gray-800/50 hover:bg-gray-800 transition-colors mb-4">
           Send Test
         </button>
 
-        <!-- Status rows -->
         <div class="space-y-1.5 text-[11px]">
           <div class="flex justify-between">
             <span class="text-gray-500">GPS Fix</span>
@@ -600,10 +774,15 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 4: Unified Location ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+      <!-- ═══ Unified Location ═══ -->
+      <div v-if="wid === 'location'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-tactical-gps tracking-wide">LOCATION</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-tactical-gps tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('location')">LOCATION</h2>
+          </div>
           <span v-if="locationResolved"
             class="text-[9px] font-mono px-1.5 py-0.5 rounded"
             :class="locationResolved.source === 'gps' ? 'bg-emerald-400/10 text-emerald-400' : locationResolved.source === 'iridium' ? 'bg-teal-400/10 text-teal-400' : 'bg-amber-400/10 text-amber-400'">
@@ -612,7 +791,6 @@ onUnmounted(() => {
           <span v-else class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500">NO FIX</span>
         </div>
 
-        <!-- Primary resolved coordinates -->
         <div v-if="locationResolved" class="mb-3">
           <div class="font-mono text-sm text-gray-200">
             {{ locationResolved.lat.toFixed(6) }}, {{ locationResolved.lon.toFixed(6) }}
@@ -625,7 +803,6 @@ onUnmounted(() => {
           No location fix from any source
         </div>
 
-        <!-- Source breakdown -->
         <div class="space-y-1.5 text-[11px]">
           <div class="flex justify-between items-center">
             <div class="flex items-center gap-1.5">
@@ -658,7 +835,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- GPS details -->
         <div class="mt-3 pt-2 border-t border-tactical-border space-y-1.5 text-[11px]">
           <div class="flex justify-between">
             <span class="text-gray-500">Satellites</span>
@@ -670,7 +846,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Priority legend -->
         <div class="mt-2 pt-2 border-t border-tactical-border">
           <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (1-100km) > Custom</span>
         </div>
@@ -685,21 +860,26 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 6: SBD Queue ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+      <!-- ═══ SBD Queue ═══ -->
+      <div v-if="wid === 'queue'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">SBD QUEUE</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('queue')">SBD QUEUE</h2>
+          </div>
           <span v-if="dlqPending > 0"
             class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-400/10 text-amber-400">
             {{ dlqPending }} pending
           </span>
         </div>
 
-        <!-- Queue items -->
         <div class="space-y-1 tactical-scroll max-h-[200px] overflow-y-auto">
           <div v-for="item in dlqItems" :key="item.id"
-            class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50"
-            :class="item.status === 'sent' || item.status === 'received' ? 'opacity-60' : ''">
+            class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
+            :class="item.status === 'sent' || item.status === 'received' ? 'opacity-60' : ''"
+            @click="openQueueItemDetail(item)">
             <span class="text-[9px] font-mono shrink-0"
               :class="item.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium'">
               {{ item.direction === 'inbound' ? 'SBD\u2192Mesh' : 'Mesh\u2192SBD' }}
@@ -714,7 +894,6 @@ onUnmounted(() => {
           <div v-if="!dlqItems.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
         </div>
 
-        <!-- Recent satellite messages -->
         <div v-if="satMessages.length" class="mt-3 pt-3 border-t border-tactical-border">
           <span class="text-[10px] text-gray-500 block mb-1.5">Recent Satellite</span>
           <div class="space-y-1">
@@ -727,11 +906,16 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 7: Activity Log (col-span-2) ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4 md:col-span-2"
-        @mouseenter="logPaused = true" @mouseleave="logPaused = false">
+      <!-- ═══ Activity Log (col-span-2) ═══ -->
+      <div v-if="wid === 'activity'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        @mouseenter="logPaused = true" @mouseleave="logPaused = false"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-gray-400 tracking-wide">ACTIVITY LOG</h2>
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-gray-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('activity')">ACTIVITY LOG</h2>
+          </div>
           <div class="flex items-center gap-2">
             <span v-if="logPaused" class="text-[9px] text-gray-600">PAUSED</span>
             <span class="text-[10px] text-gray-600 font-mono">{{ activityLog.length }} events</span>
@@ -754,60 +938,98 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ═══ Panel 8: Power System ═══ -->
-      <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-semibold text-sm text-tactical-power tracking-wide">POWER SYSTEM</h2>
-          <svg class="w-4 h-4 text-tactical-power/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="6" y="7" width="12" height="14" rx="1"/><line x1="10" y1="7" x2="10" y2="4"/><line x1="14" y1="7" x2="14" y2="4"/>
-            <line x1="10" y1="12" x2="10" y2="17"/><line x1="14" y1="12" x2="14" y2="17"/>
-          </svg>
-        </div>
+      </template>
+    </div>
 
-        <!-- Battery gauge -->
-        <div class="mb-4">
-          <div class="flex items-baseline gap-2 mb-1.5">
-            <span class="font-mono text-2xl font-bold"
-              :class="batteryLevel != null ? (batteryLevel > 60 ? 'text-tactical-power' : batteryLevel > 25 ? 'text-amber-400' : 'text-red-400') : 'text-gray-600'">
-              {{ batteryLevel != null ? `${Math.round(batteryLevel)}%` : 'N/A' }}
-            </span>
+    <!-- ═══ Stats Modal (Widget Diagnostics) ═══ -->
+    <Teleport to="body">
+      <div v-if="statsModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="statsModal = false">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+          <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
+            <h3 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">{{ statsTitle }} — DIAGNOSTICS</h3>
+            <button @click="statsModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
-          <div class="h-2 rounded-full bg-gray-800 overflow-hidden">
-            <div class="h-full rounded-full transition-all duration-500"
-              :class="batteryColor(batteryLevel)"
-              :style="{ width: batteryLevel != null ? `${Math.max(2, batteryLevel)}%` : '0%' }" />
-          </div>
-        </div>
-
-        <!-- Details -->
-        <div class="space-y-1.5 text-[11px]">
-          <div class="flex justify-between">
-            <span class="text-gray-500">Voltage</span>
-            <span class="text-gray-300 font-mono">{{ voltage != null ? `${voltage.toFixed(2)}V` : 'N/A' }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">Uptime</span>
-            <span class="text-gray-300 font-mono">{{ formatUptime(uptimeSeconds) }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">Temperature</span>
-            <span class="text-gray-300 font-mono">{{ temperature != null ? `${temperature.toFixed(1)}C` : 'N/A' }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">UPS</span>
-            <span class="text-gray-400 font-mono">N/A</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">Solar</span>
-            <span class="text-gray-400 font-mono">N/A</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-gray-500">Current</span>
-            <span class="text-gray-400 font-mono">N/A</span>
+          <div class="p-4">
+            <pre class="text-[11px] font-mono text-gray-300 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[60vh] overflow-y-auto">{{ JSON.stringify(statsData, null, 2) }}</pre>
           </div>
         </div>
       </div>
+    </Teleport>
 
-    </div>
+    <!-- ═══ Queue Item Detail Modal ═══ -->
+    <Teleport to="body">
+      <div v-if="queueDetailModal && queueDetailItem" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="queueDetailModal = false">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+          <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
+            <h3 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">QUEUE ITEM #{{ queueDetailItem.id }}</h3>
+            <button @click="queueDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
+          </div>
+          <div class="p-4 space-y-4">
+            <!-- Message metadata -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Message Metadata</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem.id }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Packet ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem.packet_id || 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Direction</span><span class="text-gray-300 font-mono">{{ queueDetailItem.direction || 'outbound' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Status</span><span class="font-mono px-1.5 py-px rounded" :class="dlqStatusColor(queueDetailItem.status)">{{ queueDetailItem.status || 'queued' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Priority</span><span class="text-gray-300 font-mono">{{ queueDetailItem.priority ?? 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Created</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem.created_at) }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Updated</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem.updated_at) }}</span></div>
+              </div>
+            </div>
+
+            <!-- Payload -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Payload</h4>
+              <div class="text-[11px] space-y-1">
+                <div><span class="text-gray-500">Preview: </span><span class="text-gray-300">{{ queueDetailItem.text_preview || '(none)' }}</span></div>
+                <div v-if="queueDetailItem.payload"><span class="text-gray-500">Hex: </span><span class="text-gray-400 font-mono text-[10px] break-all">{{ toHex(queueDetailItem.payload) }}</span></div>
+              </div>
+            </div>
+
+            <!-- Retry state -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Retry State</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">Retries</span><span class="text-gray-300 font-mono">{{ queueDetailItem.retries ?? 0 }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Max Retries</span><span class="text-gray-300 font-mono">{{ queueDetailItem.max_retries ?? 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Next Retry</span><span class="text-gray-400 font-mono text-[10px]">{{ queueDetailItem.next_retry ? formatTimestamp(queueDetailItem.next_retry) : 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Last Error</span><span class="text-gray-400 font-mono text-[10px] truncate">{{ queueDetailItem.last_error || 'None' }}</span></div>
+              </div>
+            </div>
+
+            <!-- Routing -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Routing</h4>
+              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div class="flex justify-between"><span class="text-gray-500">Dest Channel</span><span class="text-gray-300 font-mono">{{ queueDetailItem.dest_channel ?? 'N/A' }}</span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Dest Node</span><span class="text-gray-300 font-mono">{{ queueDetailItem.dest_node || 'N/A' }}</span></div>
+              </div>
+            </div>
+
+            <!-- Flow timeline -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Flow Timeline</h4>
+              <div class="flex items-center gap-2 flex-wrap">
+                <div v-for="(step, idx) in queueItemFlowSteps(queueDetailItem)" :key="idx"
+                  class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full" :class="step.active ? 'bg-emerald-400' : 'bg-red-400'" />
+                  <span class="text-[10px] font-mono" :class="step.active ? 'text-emerald-400' : 'text-red-400'">{{ step.label }}</span>
+                  <span class="text-[9px] text-gray-600 font-mono">{{ formatTimestamp(step.time) }}</span>
+                  <span v-if="idx < queueItemFlowSteps(queueDetailItem).length - 1" class="text-gray-700">&#8594;</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Raw JSON -->
+            <div>
+              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Raw JSON</h4>
+              <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(queueDetailItem, null, 2) }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
