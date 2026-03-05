@@ -229,9 +229,12 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			if err != nil {
 				log.Error().Err(err).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD send failed, queuing to DLQ")
 				g.errors.Add(1)
+				g.recordGSSRegistration(false, 0)
 				g.enqueueDeadLetter(msg.ID, data, err.Error(), msg.DecodedText)
 				continue
 			}
+
+			g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
 
 			// Check if SBD session actually succeeded (mo_status 0-4).
 			// HTTP request can succeed but SBD transfer fail (e.g. mo_status=32 = no network).
@@ -509,6 +512,7 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
+			g.recordGSSRegistration(false, moStatus)
 			backoff := dlqBackoff(retryBase, dl.Retries, moStatus, g.getTimingParams())
 			nextRetry := time.Now().Add(backoff)
 			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
@@ -519,6 +523,8 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 				Msg("iridium: DLQ retry failed, rescheduled")
 			continue
 		}
+
+		g.recordGSSRegistration(true, result.MOStatus)
 
 		// Success
 		if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
@@ -671,6 +677,7 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 			err = fmt.Errorf("mo_status=%d", result.MOStatus)
 		}
 		if err != nil {
+			g.recordGSSRegistration(false, moStatus)
 			backoff := dlqBackoff(retryBase, dl.Retries, moStatus, g.getTimingParams())
 			nextRetry := time.Now().Add(backoff)
 			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
@@ -681,6 +688,8 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 				Str("mode", g.getTimingParams().ModeName).Msg("iridium: DLQ drain retry failed, rescheduled")
 			continue
 		}
+
+		g.recordGSSRegistration(true, result.MOStatus)
 
 		// Success
 		if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
@@ -716,6 +725,7 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 	if err != nil {
 		log.Error().Err(err).Int("attempt", attempt).Msg("iridium: mailbox check failed")
 		g.errors.Add(1)
+		g.recordGSSRegistration(false, 0)
 		// Retry after 30s if this was a ring-alert-triggered check (max 3 retries)
 		if attempt < 3 {
 			go func() {
@@ -728,6 +738,9 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 		}
 		return
 	}
+
+	// Record GSS registration result
+	g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
 
 	log.Info().Int("mt_status", result.MTStatus).Int("mt_length", result.MTLength).
 		Int("mt_queued", result.MTQueued).Bool("mt_received", result.MTReceived).
@@ -895,6 +908,22 @@ func (g *IridiumGateway) pollWorker(ctx context.Context) {
 // ManualMailboxCheck triggers a one-shot mailbox check (for "Check Mailbox Now" button).
 func (g *IridiumGateway) ManualMailboxCheck(ctx context.Context) {
 	go g.handleRingAlert(ctx)
+}
+
+// recordGSSRegistration persists an SBDIX session outcome to signal_history (source="gss").
+// value=1 for successful GSS registration (mo_status 0-4), value=0 for failure.
+func (g *IridiumGateway) recordGSSRegistration(success bool, moStatus int) {
+	if g.db == nil {
+		return
+	}
+	val := float64(0)
+	if success {
+		val = 1
+	}
+	ts := time.Now().Unix()
+	if err := g.db.InsertSignalHistory("gss", ts, val); err != nil {
+		log.Debug().Err(err).Msg("iridium: failed to record GSS registration")
+	}
 }
 
 // --- Compact binary codec for 340-byte SBD ---

@@ -259,10 +259,22 @@ const chartData = computed(() => {
     y: elevY(d)
   }))
 
+  // GSS registration events (dots at bottom of chart)
+  const gssEvents = (store.gssHistory || []).map(g => {
+    const ts = g.timestamp || g.bucket
+    const success = (g.value || g.avg || 0) >= 1
+    return {
+      x: xPos(ts),
+      y: plotBottom - 6,
+      success,
+      ts
+    }
+  }).filter(g => g.x >= padL && g.x <= chartWidth - padR)
+
   // Grid lines (at signal bar positions)
   const gridLines = signalTicks.map(t => t.y)
 
-  return { passes, signals, signalAreaPath, signalLinePts, labels, nowX, startTs, endTs, signalTicks, elevTickData, gridLines, xPos }
+  return { passes, signals, signalAreaPath, signalLinePts, gssEvents, labels, nowX, startTs, endTs, signalTicks, elevTickData, gridLines, xPos }
 })
 
 function onChartHover(event) {
@@ -326,7 +338,10 @@ async function fetchSignalHistory() {
   const windowSec = windowHours.value * 3600
   const from = now - Math.floor(windowSec * 0.5)
   const to = now + Math.floor(windowSec * 0.5)
-  await store.fetchSignalHistory({ source: 'iridium', from, to, mode: 'raw', limit: 2000 })
+  await Promise.all([
+    store.fetchSignalHistory({ source: 'iridium', from, to, mode: 'raw', limit: 2000 }),
+    store.fetchGSSHistory({ from, to, mode: 'raw', limit: 2000 })
+  ])
 }
 
 watch(windowHours, fetchSignalHistory)
@@ -463,6 +478,8 @@ onMounted(async () => {
             Pass
           </span>
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Signal</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-fuchsia-400 inline-block"></span> GSS OK</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span> GSS Fail</span>
         </div>
       </div>
       <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" class="w-full h-auto" preserveAspectRatio="xMidYMid meet"
@@ -534,6 +551,13 @@ onMounted(async () => {
             :cx="s.x" :cy="s.y" r="2.5"
             :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'"
             opacity="0.85" />
+
+          <!-- GSS registration dots -->
+          <circle v-for="(g, idx) in chartData.gssEvents" :key="'gss'+idx"
+            :cx="g.x" :cy="g.y" r="3"
+            :fill="g.success ? '#e879f9' : '#f87171'"
+            :opacity="g.success ? 0.9 : 0.7"
+            :stroke="g.success ? '#d946ef' : '#ef4444'" stroke-width="0.5" />
 
           <!-- Now line -->
           <line :x1="chartData.nowX" :x2="chartData.nowX" :y1="plotTop" :y2="plotBottom"

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
-import { formatRelativeTime, formatTimestamp, formatLastHeard, formatUptime, formatAccuracy, shortId, isNodeActive, isNodeRecent, nodeStatusDot } from '@/utils/format'
+import { formatRelativeTime, formatTimestamp, formatLastHeard, formatUptime, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, isNodeRecent, nodeStatusDot } from '@/utils/format'
 
 const store = useMeshsatStore()
 
@@ -126,6 +126,69 @@ const sparklineArea = computed(() => {
   const sorted = [...hist].sort((a, b) => a.timestamp - b.timestamp)
   return buildAreaPath(sorted, p => p.value, 200, 40, 0, 5)
 })
+
+// Mini pass+signal+GSS chart for widget (6h window)
+const miniChartData = computed(() => {
+  const W = 280, H = 50, padL = 0, padR = 0
+  const now = Date.now() / 1000
+  const windowSec = 6 * 3600
+  const startTs = now - windowSec * 0.5
+  const endTs = now + windowSec * 0.5
+
+  function xPos(ts) { return padL + ((ts - startTs) / (endTs - startTs)) * (W - padL - padR) }
+  function signalY(val) { return H - (val / 5) * H }
+
+  // Pass triangles
+  const passes = (store.passes || []).map(p => {
+    const x1 = Math.max(0, xPos(p.aos))
+    const x2 = Math.min(W, xPos(p.los))
+    const xMid = (x1 + x2) / 2
+    const peakY = H - (p.peak_elev_deg / 90) * H
+    return { path: `M ${x1},${H} L ${xMid},${peakY} L ${x2},${H} Z`, x1, x2, sat: p.satellite, elev: p.peak_elev_deg, active: p.is_active }
+  }).filter(p => p.x2 > 0 && p.x1 < W)
+
+  // Signal line
+  const signals = (store.signalHistory || []).map(s => ({
+    x: xPos(s.timestamp || s.bucket),
+    y: signalY(s.value || s.avg || 0)
+  })).filter(s => s.x >= 0 && s.x <= W)
+
+  let signalLine = ''
+  if (signals.length > 1) signalLine = signals.map(s => `${s.x},${s.y}`).join(' ')
+
+  // GSS dots
+  const gss = (store.gssHistory || []).map(g => ({
+    x: xPos(g.timestamp || g.bucket),
+    y: H - 4,
+    success: (g.value || g.avg || 0) >= 1
+  })).filter(g => g.x >= 0 && g.x <= W)
+
+  // Now line
+  const nowX = xPos(now)
+
+  // Time labels
+  const labels = []
+  const step = 3600
+  let t = Math.ceil(startTs / step) * step
+  while (t < endTs) {
+    labels.push({ x: xPos(t), label: formatTimeHHMM(t) })
+    t += step
+  }
+
+  return { passes, signalLine, gss, nowX, labels, W, H }
+})
+
+// Fetch passes using resolved location
+async function fetchDashPasses() {
+  const resolved = store.locationSources?.resolved
+  if (!resolved) return
+  const now = Math.floor(Date.now() / 1000)
+  await store.fetchPasses({
+    lat: resolved.lat, lon: resolved.lon,
+    alt_m: (resolved.alt_km || 0) * 1000,
+    hours: 6, min_elev: 5, start: now - 3 * 3600
+  })
+}
 
 // Scheduler status
 const schedulerMode = computed(() => store.schedulerStatus?.mode || 'legacy')
@@ -413,6 +476,7 @@ async function fetchAll() {
     store.fetchMessages({ limit: 20 }),
     store.fetchSOSStatus(),
     store.fetchSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
+    store.fetchGSSHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
     store.fetchCredits(),
     store.fetchSchedulerStatus(),
     store.fetchLocationSources(),
@@ -431,7 +495,7 @@ onMounted(() => {
     }
   } catch { /* ignore corrupt data */ }
 
-  fetchAll()
+  fetchAll().then(fetchDashPasses)
   store.connectSSE(handleSSEEvent)
   pollTimer = setInterval(() => {
     nowSec.value = Date.now() / 1000
@@ -520,6 +584,37 @@ function widgetGridClass(id) {
             <polyline :points="sparklinePoints" fill="none" stroke="rgb(45,212,191)" stroke-width="1.5" />
           </svg>
           <div class="text-[9px] text-gray-600 text-right">6h signal history</div>
+        </div>
+
+        <!-- Pass + Signal + GSS mini-chart (6h) -->
+        <div v-if="miniChartData.passes.length > 0 || miniChartData.signalLine || miniChartData.gss.length > 0" class="mb-3">
+          <svg :viewBox="`0 0 ${miniChartData.W} ${miniChartData.H + 12}`" class="w-full h-14" preserveAspectRatio="none">
+            <!-- Pass triangles -->
+            <path v-for="(p, i) in miniChartData.passes" :key="'mp'+i"
+              :d="p.path" :fill="p.active ? 'rgba(165,180,252,0.35)' : 'rgba(129,140,248,0.15)'"
+              :stroke="p.active ? 'rgba(165,180,252,0.5)' : 'rgba(129,140,248,0.2)'" stroke-width="0.5" />
+            <!-- Signal line -->
+            <polyline v-if="miniChartData.signalLine"
+              :points="miniChartData.signalLine" fill="none" stroke="#10b981" stroke-width="1" opacity="0.6" />
+            <!-- GSS dots -->
+            <circle v-for="(g, i) in miniChartData.gss" :key="'mg'+i"
+              :cx="g.x" :cy="g.y" r="2"
+              :fill="g.success ? '#e879f9' : '#f87171'" :opacity="g.success ? 0.9 : 0.6" />
+            <!-- Now line -->
+            <line :x1="miniChartData.nowX" :x2="miniChartData.nowX" y1="0" :y2="miniChartData.H"
+              stroke="#f59e0b" stroke-width="0.5" stroke-dasharray="2 1" opacity="0.5" />
+            <!-- Time labels -->
+            <text v-for="(l, i) in miniChartData.labels" :key="'ml'+i"
+              :x="l.x" :y="miniChartData.H + 9" text-anchor="middle" fill="#4b5563" font-size="6">{{ l.label }}</text>
+          </svg>
+          <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
+            <span class="flex items-center gap-2">
+              <span class="flex items-center gap-0.5"><svg width="8" height="6"><polygon points="0,6 4,1 8,6" fill="rgba(129,140,248,0.3)"/></svg> Pass</span>
+              <span class="flex items-center gap-0.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span> Sig</span>
+              <span class="flex items-center gap-0.5"><span class="w-1.5 h-1.5 rounded-full bg-fuchsia-400 inline-block"></span> GSS</span>
+            </span>
+            <span>6h window</span>
+          </div>
         </div>
 
         <!-- Status rows -->
