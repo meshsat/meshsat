@@ -48,7 +48,7 @@ const (
 	AdminFieldSetFixedPosition     = 41
 	AdminFieldRemoveFixedPosition  = 42
 	AdminFieldFactoryReset         = 94
-	AdminFieldRemoveByNodenum      = 96
+	AdminFieldRemoveByNodenum      = 38
 	AdminFieldRebootSeconds        = 97
 )
 
@@ -968,7 +968,7 @@ func buildAdminFactoryReset(myNodeNum, destNode uint32) []byte {
 	return buildAdminToRadio(myNodeNum, destNode, admin)
 }
 
-// buildAdminRemoveNode builds a ToRadio with AdminMessage field 96 (remove_by_nodenum).
+// buildAdminRemoveNode builds a ToRadio with AdminMessage field 38 (remove_by_nodenum).
 func buildAdminRemoveNode(myNodeNum, nodeNum uint32) []byte {
 	admin := make([]byte, 0, 16)
 	admin = appendVarint(admin, AdminFieldRemoveByNodenum<<3|0)
