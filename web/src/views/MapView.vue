@@ -146,7 +146,7 @@ function updateMap() {
       const lon = pos.lon + jitter
 
       const isText = msg.portnum === 1
-      const color = isText ? '#2dd4bf' : '#94a3b8'
+      const color = isText ? '#38bdf8' : '#94a3b8'
       const m = L.circleMarker([lat, lon], {
         radius: 4, fillColor: color, fillOpacity: 0.9, color: '#1e293b', weight: 1
       })
@@ -174,16 +174,17 @@ function updateMap() {
         if (!src.lat || !src.lon) continue
         const isGps = src.source === 'gps'
         const isIridium = src.source === 'iridium'
-        const color = isGps ? '#10b981' : isIridium ? '#14b8a6' : '#f59e0b'
+        const color = isGps ? '#10b981' : isIridium ? '#a855f7' : '#f59e0b'
         const label = isGps ? 'GPS' : isIridium ? 'Iridium' : 'Custom'
-        const accTxt = src.accuracy_km != null
-          ? (src.accuracy_km < 1 ? `${(src.accuracy_km * 1000).toFixed(0)}m` : `${src.accuracy_km.toFixed(0)}km`)
+        const accKm = isIridium ? Math.max(src.accuracy_km || 0, 100) : (src.accuracy_km || 0)
+        const accTxt = accKm > 0
+          ? (accKm < 1 ? `${(accKm * 1000).toFixed(0)}m` : `${accKm.toFixed(0)}km`)
           : ''
 
         const m = L.circleMarker([src.lat, src.lon], {
           radius: isGps ? 7 : 10,
           fillColor: color,
-          fillOpacity: 0.25,
+          fillOpacity: isIridium ? 0.4 : 0.25,
           color,
           weight: 2,
           dashArray: isIridium ? '4 3' : null
@@ -194,12 +195,12 @@ function updateMap() {
         m.bindPopup(popup)
         locationLayer.addLayer(m)
 
-        // For Iridium, draw accuracy circle
-        if (isIridium && src.accuracy_km > 0) {
+        // For Iridium, always draw accuracy circle (min 100km)
+        if (isIridium) {
           const circle = L.circle([src.lat, src.lon], {
-            radius: src.accuracy_km * 1000,
+            radius: accKm * 1000,
             fillColor: color,
-            fillOpacity: 0.05,
+            fillOpacity: 0.06,
             color,
             weight: 1,
             dashArray: '4 3'
@@ -326,7 +327,7 @@ onUnmounted(() => {
           <span class="w-3 h-3 rounded-full bg-red-500"></span> Bad
         </div>
         <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-teal-400"></span>
+          <span class="w-2 h-2 rounded-full bg-sky-400"></span>
           <span>Msg</span>
         </div>
         <span class="text-gray-700">|</span>
@@ -334,7 +335,7 @@ onUnmounted(() => {
           <span class="w-2 h-2 rounded-full bg-emerald-400 ring-1 ring-emerald-400/50"></span> GPS
         </div>
         <div class="flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-teal-400 ring-1 ring-teal-400/50" style="border: 1px dashed"></span> Iridium
+          <span class="w-2 h-2 rounded-full bg-purple-400 ring-1 ring-purple-400/50" style="border: 1px dashed"></span> Iridium
         </div>
         <div class="flex items-center gap-1.5">
           <span class="w-2 h-2 rounded-full bg-amber-400"></span> Custom
