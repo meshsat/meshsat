@@ -18,6 +18,7 @@ type IridiumConfig struct {
 	DailyBudget        int    `json:"daily_budget"`                  // max credits per day, 0 = unlimited
 	MonthlyBudget      int    `json:"monthly_budget"`                // max credits per month, 0 = unlimited
 	CriticalReserve    int    `json:"critical_reserve"`              // % reserved for priority 0 (default 20)
+	MailboxMode        string `json:"mailbox_mode"`                  // "ring_alert_only" (default), "scheduled", "off"
 	SchedulerEnabled   bool   `json:"scheduler_enabled"`             // enable pass-aware smart scheduling (default true)
 	PreWakeMinutes     int    `json:"pre_wake_minutes"`              // minutes before AOS to enter pre-wake mode (default 5)
 	PostPassGraceSec   int    `json:"post_pass_grace_sec"`           // seconds after LOS to stay in post-pass mode (default 120)
@@ -41,6 +42,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		DailyBudget:      0, // unlimited
 		MonthlyBudget:    0, // unlimited
 		CriticalReserve:  20,
+		MailboxMode:      "ring_alert_only",
 		SchedulerEnabled: true,
 		PreWakeMinutes:   5,
 		PostPassGraceSec: 120,
@@ -57,6 +59,12 @@ func ParseIridiumConfig(data string) (*IridiumConfig, error) {
 	}
 	if cfg.MaxTextLength <= 0 || cfg.MaxTextLength > 320 {
 		cfg.MaxTextLength = 320
+	}
+	switch cfg.MailboxMode {
+	case "ring_alert_only", "scheduled", "off":
+		// valid
+	default:
+		cfg.MailboxMode = "ring_alert_only"
 	}
 	return &cfg, nil
 }

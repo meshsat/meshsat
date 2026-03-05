@@ -6,6 +6,14 @@ import { formatRelativeTime, formatTimestamp, formatLastHeard, formatUptime, for
 
 const store = useMeshsatStore()
 
+// ── Manual mailbox check ──
+const dashCheckingMailbox = ref(false)
+async function dashCheckMailbox() {
+  dashCheckingMailbox.value = true
+  try { await store.manualMailboxCheck() } catch {}
+  dashCheckingMailbox.value = false
+}
+
 // ── Activity log ──
 const activityLog = ref([])
 const MAX_LOG = 50
@@ -552,6 +560,12 @@ function widgetGridClass(id) {
             </span>
           </div>
         </div>
+
+        <!-- Check Mailbox Now -->
+        <button @click="dashCheckMailbox" :disabled="dashCheckingMailbox || !iridiumGw?.connected"
+          class="mt-3 w-full px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-[11px] text-gray-400 hover:text-tactical-iridium hover:border-tactical-iridium/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          {{ dashCheckingMailbox ? 'Checking...' : 'Check Mailbox Now' }}
+        </button>
       </div>
 
       <!-- ═══ Meshtastic Mesh ═══ -->

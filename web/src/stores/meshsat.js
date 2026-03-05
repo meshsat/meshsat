@@ -464,6 +464,13 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch { /* scheduler unavailable */ }
   }
 
+  async function manualMailboxCheck() {
+    error.value = null
+    try {
+      return await api.post('/iridium/mailbox/check')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Cellular modem
   const cellularSignal = ref(null)
   const cellularStatus = ref(null)
@@ -574,7 +581,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchConfig, setChannel,
     fetchIridiumSignalFast, fetchIridiumSignal,
     fetchSignalHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
-    fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation,
+    fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck,
     fetchLocationSources, fetchIridiumGeolocation,
     fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
     fetchCellularDataStatus, connectCellularData, disconnectCellularData,

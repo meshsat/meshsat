@@ -74,10 +74,17 @@ async function saveMQTT() {
 // Iridium gateway
 const iridiumForm = ref({
   forward_all: false, forward_portnums: [1], compression: 'compact', auto_receive: true,
-  poll_interval: 0, max_text_length: 320, include_position: true,
+  mailbox_mode: 'ring_alert_only', poll_interval: 1800, max_text_length: 320, include_position: true,
   dlq_max_retries: 0, dlq_retry_base_secs: 120, min_signal_bars: 1,
   daily_budget: 0, monthly_budget: 0, critical_reserve: 20
 })
+const checkingMailbox = ref(false)
+
+async function doCheckMailbox() {
+  checkingMailbox.value = true
+  try { await store.manualMailboxCheck() } catch {}
+  checkingMailbox.value = false
+}
 const iridiumEnabled = ref(false)
 
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
@@ -280,14 +287,51 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             {{ iridiumGw?.connected ? 'Connected' : 'Disconnected' }}
           </span>
         </div>
+
+        <!-- Mailbox Polling Mode -->
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Mailbox Polling Mode</label>
+          <select v-model="iridiumForm.mailbox_mode" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <option value="ring_alert_only">Ring Alert Only (no periodic polling, saves credits)</option>
+            <option value="scheduled">Scheduled (pass-aware periodic polling)</option>
+            <option value="off">Off (no mailbox checking)</option>
+          </select>
+          <p class="text-[10px] text-gray-600 mt-1">
+            <template v-if="iridiumForm.mailbox_mode === 'ring_alert_only'">Waits for Iridium ring alerts and satellite pass events. Zero credit waste.</template>
+            <template v-else-if="iridiumForm.mailbox_mode === 'scheduled'">Periodically checks mailbox using pass-aware scheduling. Costs 1 credit per empty check.</template>
+            <template v-else>No mailbox checking at all. Inbound messages will not be received.</template>
+          </p>
+        </div>
+
+        <!-- Poll interval (only shown for scheduled mode) -->
+        <div v-if="iridiumForm.mailbox_mode === 'scheduled'" class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Idle Poll Interval (sec)</label>
+            <input v-model.number="iridiumForm.idle_poll_sec" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Active Poll Interval (sec)</label>
+            <input v-model.number="iridiumForm.active_poll_sec" type="number" min="10" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+
+        <!-- Check Mailbox Now -->
+        <div class="flex items-center gap-3">
+          <button @click="doCheckMailbox" :disabled="checkingMailbox || !iridiumGw?.connected"
+            class="px-3 py-1.5 rounded bg-gray-700 border border-gray-600 text-xs text-gray-300 hover:text-teal-400 hover:border-teal-600/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            {{ checkingMailbox ? 'Checking...' : 'Check Mailbox Now' }}
+          </button>
+          <span class="text-[10px] text-gray-600">Triggers a one-shot SBDIX session (costs 1 credit if mailbox is empty)</span>
+        </div>
+
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-gray-500 mb-1">Max Text Length</label>
             <input v-model.number="iridiumForm.max_text_length" type="number" min="1" max="340" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Poll Interval (sec, 0=off)</label>
-            <input v-model.number="iridiumForm.poll_interval" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label class="block text-xs text-gray-500 mb-1">Min Signal Bars</label>
+            <input v-model.number="iridiumForm.min_signal_bars" type="number" min="0" max="5" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">

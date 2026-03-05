@@ -360,6 +360,15 @@ func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// handleManualMailboxCheck triggers a one-shot mailbox check.
+func (s *Server) handleManualMailboxCheck(w http.ResponseWriter, r *http.Request) {
+	if err := s.gwManager.ManualMailboxCheck(r.Context()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "mailbox check triggered"})
+}
+
 func now() int64 {
 	return time.Now().Unix()
 }

@@ -127,6 +127,9 @@ func (s *Server) Router() http.Handler {
 		// Iridium scheduler (pass-aware smart timing)
 		r.Get("/iridium/scheduler", s.handleGetSchedulerStatus)
 
+		// Iridium mailbox — manual one-shot check
+		r.Post("/iridium/mailbox/check", s.handleManualMailboxCheck)
+
 		// Iridium geolocation + AUTO location resolution
 		r.Get("/iridium/geolocation", s.handleGetIridiumGeolocation)
 		r.Get("/locations/resolved", s.handleGetGeolocationSources)

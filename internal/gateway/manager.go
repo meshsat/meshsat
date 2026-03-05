@@ -477,6 +477,22 @@ func (m *Manager) GetIridiumSignalFast(ctx context.Context) (*transport.SignalIn
 	return m.sat.GetSignalFast(ctx)
 }
 
+// ManualMailboxCheck triggers a one-shot mailbox check on the running Iridium gateway.
+func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
+	m.mu.RLock()
+	gw, ok := m.running["iridium"]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("iridium gateway not running")
+	}
+	iGw, ok := gw.(*IridiumGateway)
+	if !ok {
+		return fmt.Errorf("iridium gateway has unexpected type")
+	}
+	iGw.ManualMailboxCheck(ctx)
+	return nil
+}
+
 // GatewayStatusResponse is the API response for gateway status.
 type GatewayStatusResponse struct {
 	Type             string          `json:"type"`

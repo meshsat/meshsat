@@ -831,16 +831,18 @@ func EncodeACK(momsn uint16) []byte {
 }
 
 // pollWorker periodically checks for MT messages.
-// Uses dynamic timing from the pass scheduler when available.
+// Behavior depends on mailbox_mode config:
+//   - "off": no polling, no ring alert response (worker exits immediately)
+//   - "ring_alert_only": only responds to scheduler mode transitions (Active entry)
+//   - "scheduled": periodic polling with pass-aware dynamic intervals
 func (g *IridiumGateway) pollWorker(ctx context.Context) {
 	defer g.wg.Done()
 
-	// Start with a short initial timer (5s) to let the scheduler compute
-	// its first schedule. The modeCh is shared between pollWorker and
-	// dlqRetryWorker, so mode transitions may be consumed by the other
-	// worker — this ensures we don't get stuck on a 15-minute idle timer.
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
+	mode := g.config.MailboxMode
+	if mode == "off" {
+		log.Info().Msg("iridium: mailbox polling disabled (mode=off)")
+		return
+	}
 
 	// Channel for mode transitions (nil if no scheduler)
 	var modeCh <-chan ScheduleMode
@@ -848,29 +850,51 @@ func (g *IridiumGateway) pollWorker(ctx context.Context) {
 		modeCh = g.scheduler.ModeCh()
 	}
 
+	if mode == "ring_alert_only" {
+		log.Info().Msg("iridium: mailbox mode=ring_alert_only — no periodic polling, waiting for ring alerts/pass events")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case newMode := <-modeCh:
+				if newMode == ModeActive {
+					log.Info().Msg("iridium: scheduler active mode — triggering mailbox check (ring_alert_only)")
+					go g.handleRingAlert(ctx)
+				}
+			}
+		}
+	}
+
+	// mode == "scheduled": periodic polling with pass-aware intervals
+	log.Info().Msg("iridium: mailbox mode=scheduled — periodic polling enabled")
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
 		case <-timer.C:
-			g.handleRingAlert(ctx) // reuse the same logic
-			// Refresh interval from scheduler
+			g.handleRingAlert(ctx)
 			params := g.getTimingParams()
 			timer.Reset(params.PollInterval)
 
 		case newMode := <-modeCh:
-			// Instant mode transition — adjust timing immediately
 			params := g.getTimingParams()
 			timer.Reset(params.PollInterval)
 
-			// On Active entry, trigger immediate mailbox check
 			if newMode == ModeActive {
 				log.Info().Msg("iridium: scheduler active mode — triggering immediate mailbox check")
 				go g.handleRingAlert(ctx)
 			}
 		}
 	}
+}
+
+// ManualMailboxCheck triggers a one-shot mailbox check (for "Check Mailbox Now" button).
+func (g *IridiumGateway) ManualMailboxCheck(ctx context.Context) {
+	go g.handleRingAlert(ctx)
 }
 
 // --- Compact binary codec for 340-byte SBD ---
