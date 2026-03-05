@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
+import { transportBadge, portnumLabel, shortId } from '@/utils/format'
 
 const store = useMeshsatStore()
 
@@ -12,14 +13,13 @@ const sendChannel = ref(0)
 const replyTo = ref(null)
 const showPresets = ref(false)
 const showCompose = ref(false)
+const showPresetEditor = ref(false)
+const editingPreset = ref(null)
+const presetForm = ref({ name: '', text: '', destination: 'broadcast' })
 
 // Filter
 const filter = ref('text') // 'all', 'text', 'system'
 const selectedNode = ref(null) // null = all nodes, string = specific node mailbox
-
-// SOS
-const sosConfirming = ref(false)
-const sosSending = ref(false)
 
 const byteCount = computed(() => new TextEncoder().encode(sendText.value).length)
 const feedEl = ref(null)
@@ -98,34 +98,6 @@ const textMsgCount = computed(() => {
   return (store.messages || []).filter(m => m.portnum === 1 || m.portnum_name === 'TEXT_MESSAGE_APP').length
 })
 
-const activeRuleCount = computed(() => {
-  return (store.rules || []).filter(r => r.enabled).length
-})
-
-const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
-
-function transportBadge(t) {
-  if (t === 'radio') return { label: 'Mesh', cls: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' }
-  if (t === 'iridium') return { label: 'Sat', cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' }
-  if (t === 'mqtt') return { label: 'MQTT', cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30' }
-  return { label: t || '?', cls: 'bg-gray-500/20 text-gray-400 border-gray-500/30' }
-}
-
-function portnumLabel(pn, name) {
-  if (pn === 1) return null // text messages don't need a label
-  if (pn === 3 || name === 'POSITION_APP') return 'Position'
-  if (pn === 4 || name === 'NODEINFO_APP') return 'Node Info'
-  if (pn === 67 || name === 'TELEMETRY_APP') return 'Telemetry'
-  if (pn === 8 || name === 'WAYPOINT_APP') return 'Waypoint'
-  if (pn === 70 || name === 'TRACEROUTE_APP') return 'Traceroute'
-  return name || `Port ${pn}`
-}
-
-function shortNode(id) {
-  if (!id) return '?'
-  if (id.startsWith('!') && id.length > 6) return id.slice(0, 3) + '..' + id.slice(-4)
-  return id
-}
 
 function timeLabel(msg) {
   const d = new Date(msg.created_at)
@@ -181,6 +153,35 @@ async function sendPreset(preset) {
   store.fetchMessages()
 }
 
+function editPreset(p) {
+  editingPreset.value = p.id
+  presetForm.value = { name: p.name, text: p.text, destination: p.destination }
+  showPresetEditor.value = true
+}
+
+function newPreset() {
+  editingPreset.value = null
+  presetForm.value = { name: '', text: '', destination: 'broadcast' }
+  showPresetEditor.value = true
+}
+
+async function savePresetForm() {
+  if (editingPreset.value) {
+    await store.updatePreset(editingPreset.value, presetForm.value)
+  } else {
+    await store.createPreset(presetForm.value)
+  }
+  editingPreset.value = null
+  presetForm.value = { name: '', text: '', destination: 'broadcast' }
+  showPresetEditor.value = false
+}
+
+async function removePreset(p) {
+  if (confirm(`Delete preset "${p.name}"?`)) {
+    await store.deletePreset(p.id)
+  }
+}
+
 const purgeConfirming = ref(false)
 const purgeDays = ref(30)
 
@@ -195,18 +196,11 @@ async function purgeOld() {
   purgeConfirming.value = false
 }
 
-async function sosActivate() {
-  sosSending.value = true
-  try { await store.activateSOS() } finally { sosSending.value = false; sosConfirming.value = false }
-}
-
 let pollTimer = null
 onMounted(() => {
   store.fetchMessages()
   store.fetchNodes()
   store.fetchPresets()
-  store.fetchSOSStatus()
-  store.fetchRules()
   store.fetchMessageStats()
   store.connectSSE((event) => {
     if (event.type === 'message') store.fetchMessages()
@@ -227,7 +221,7 @@ onUnmounted(() => {
   <div class="max-w-5xl mx-auto flex flex-col h-[calc(100vh-5rem)] lg:h-[calc(100vh-3rem)]">
 
     <!-- Status cards row -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3 flex-shrink-0">
+    <div class="grid grid-cols-3 gap-2 mb-3 flex-shrink-0">
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
         <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Nodes</div>
         <div class="flex items-baseline gap-1.5">
@@ -246,17 +240,6 @@ onUnmounted(() => {
           <span class="text-[10px] text-emerald-400/60">{{ store.messageStats?.by_transport?.radio || 0 }} radio</span>
           <span v-if="store.messageStats?.by_transport?.iridium" class="text-[10px] text-blue-400/60">{{ store.messageStats.by_transport.iridium }} sat</span>
           <span v-if="store.messageStats?.by_transport?.mqtt" class="text-[10px] text-purple-400/60">{{ store.messageStats.by_transport.mqtt }} mqtt</span>
-        </div>
-      </div>
-      <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
-        <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Satellite</div>
-        <div class="flex items-center gap-2">
-          <div class="flex items-end gap-0.5 h-4">
-            <span v-for="i in 5" :key="i" class="w-1 rounded-sm transition-colors"
-              :class="satBars >= i ? 'bg-emerald-400' : 'bg-gray-700'"
-              :style="{ height: `${4 + i * 3}px` }"></span>
-          </div>
-          <span class="text-xs text-gray-400">{{ satBars >= 0 ? satBars + '/5' : 'N/A' }}</span>
         </div>
       </div>
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
@@ -299,13 +282,6 @@ onUnmounted(() => {
           </svg>
           Presets
         </button>
-        <!-- SOS - small but distinct -->
-        <button v-if="!store.sosStatus?.active && !sosConfirming"
-          @click="sosConfirming = true"
-          class="px-2.5 py-1 rounded text-xs font-bold text-red-400 hover:bg-red-900/30 border border-red-800/50 hover:border-red-700 transition-colors"
-          title="Emergency SOS">
-          SOS
-        </button>
         <!-- Compose toggle -->
         <button @click="showCompose = !showCompose"
           class="px-3 py-1 rounded text-xs font-medium bg-teal-600 text-white hover:bg-teal-500 transition-colors">
@@ -343,45 +319,53 @@ onUnmounted(() => {
 
     <!-- Presets dropdown -->
     <div v-if="showPresets" class="mb-2 flex-shrink-0">
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-gray-800/60 rounded-lg p-2 border border-gray-700/50">
-        <button v-for="preset in store.presets" :key="preset.id"
-          @click="sendPreset(preset)"
-          class="px-3 py-2 rounded bg-gray-700/50 hover:bg-gray-600/50 border border-gray-600/30 text-left transition-colors">
-          <div class="text-xs font-medium text-gray-200 truncate">{{ preset.name }}</div>
-          <div class="text-[10px] text-gray-500 truncate mt-0.5">{{ preset.text }}</div>
-        </button>
-        <div v-if="!store.presets?.length" class="col-span-full text-center text-xs text-gray-500 py-2">
-          No presets configured
+      <div class="bg-gray-800/60 rounded-lg p-2 border border-gray-700/50">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          <div v-for="preset in store.presets" :key="preset.id"
+            class="px-3 py-2 rounded bg-gray-700/50 hover:bg-gray-600/50 border border-gray-600/30 text-left transition-colors group relative">
+            <button @click="sendPreset(preset)" class="w-full text-left">
+              <div class="text-xs font-medium text-gray-200 truncate">{{ preset.name }}</div>
+              <div class="text-[10px] text-gray-500 truncate mt-0.5">{{ preset.text }}</div>
+            </button>
+            <div class="absolute top-1 right-1 hidden group-hover:flex gap-1">
+              <button @click.stop="editPreset(preset)" class="text-[9px] text-gray-500 hover:text-teal-400 px-1">Edit</button>
+              <button @click.stop="removePreset(preset)" class="text-[9px] text-gray-500 hover:text-red-400 px-1">Del</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="!store.presets?.length" class="text-center text-xs text-gray-500 py-2">
+          No presets yet
+        </div>
+        <div class="flex justify-end mt-2">
+          <button @click="newPreset" class="text-[10px] text-teal-400 hover:text-teal-300">+ New Preset</button>
         </div>
       </div>
     </div>
 
-    <!-- SOS confirmation -->
-    <div v-if="sosConfirming && !store.sosStatus?.active" class="mb-2 flex-shrink-0 bg-red-900/30 border border-red-800/60 rounded-lg px-4 py-3">
-      <div class="flex items-center justify-between">
-        <div>
-          <div class="text-sm font-medium text-red-300">Send emergency alert?</div>
-          <div class="text-[11px] text-red-400/70 mt-0.5">GPS position will be broadcast via all transports</div>
+    <!-- Preset editor modal -->
+    <div v-if="showPresetEditor" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" @click.self="showPresetEditor = false">
+      <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md p-5">
+        <h3 class="text-sm font-medium text-gray-200 mb-4">{{ editingPreset ? 'Edit Preset' : 'New Preset' }}</h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Name</label>
+            <input v-model="presetForm.name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="I'm OK">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Text</label>
+            <textarea v-model="presetForm.text" rows="2" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="All good, checking in on schedule."></textarea>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Destination</label>
+            <input v-model="presetForm.destination" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="broadcast">
+          </div>
+          <div class="flex gap-2 mt-4">
+            <button @click="showPresetEditor = false" class="flex-1 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>
+            <button @click="savePresetForm" class="flex-1 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-500">
+              {{ editingPreset ? 'Update' : 'Create' }}
+            </button>
+          </div>
         </div>
-        <div class="flex gap-2 ml-4">
-          <button @click="sosConfirming = false" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
-          <button @click="sosActivate" :disabled="sosSending"
-            class="px-3 py-1.5 rounded bg-red-600 text-white text-xs font-bold hover:bg-red-500 disabled:opacity-50">
-            {{ sosSending ? 'Sending...' : 'Confirm SOS' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Active SOS banner -->
-    <div v-if="store.sosStatus?.active" class="mb-2 flex-shrink-0 bg-red-900/40 border border-red-600/60 rounded-lg px-4 py-2 animate-pulse">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full bg-red-500"></span>
-          <span class="text-sm font-bold text-red-400">SOS ACTIVE</span>
-          <span class="text-xs text-red-300/70">{{ store.sosStatus.sends || 0 }}/3 sent</span>
-        </div>
-        <button @click="store.cancelSOS()" class="px-3 py-1 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
       </div>
     </div>
 
@@ -391,7 +375,7 @@ onUnmounted(() => {
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
         </svg>
-        <span>{{ shortNode(replyTo.from_node) }}</span>
+        <span>{{ shortId(replyTo.from_node) }}</span>
         <button @click="cancelReply" class="ml-auto text-blue-500 hover:text-blue-300">
           <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -454,7 +438,7 @@ onUnmounted(() => {
             <div class="max-w-[75%] min-w-[120px]">
               <div class="flex items-center gap-1.5 mb-0.5" :class="msg.direction === 'tx' ? 'flex-row-reverse' : ''">
                 <span class="text-[11px] font-medium" :class="msg.direction === 'tx' ? 'text-teal-400' : 'text-gray-400'">
-                  {{ shortNode(msg.from_node) }}
+                  {{ shortId(msg.from_node) }}
                 </span>
                 <span class="px-1 py-px rounded text-[9px] font-medium border"
                   :class="transportBadge(msg.transport).cls">
@@ -483,7 +467,7 @@ onUnmounted(() => {
           <div v-else class="flex items-center gap-2 px-3 py-1 mx-1 group">
             <span class="w-1.5 h-1.5 rounded-full flex-shrink-0"
               :class="msg.portnum === 3 ? 'bg-cyan-500/60' : msg.portnum === 67 ? 'bg-amber-500/60' : 'bg-gray-600'"></span>
-            <span class="text-[11px] text-gray-500 font-medium">{{ shortNode(msg.from_node) }}</span>
+            <span class="text-[11px] text-gray-500 font-medium">{{ shortId(msg.from_node) }}</span>
             <span class="text-[11px] text-gray-600">{{ portnumLabel(msg.portnum, msg.portnum_name) }}</span>
             <span v-if="msg.decoded_text" class="text-[11px] text-gray-500 truncate max-w-[200px]">{{ msg.decoded_text }}</span>
             <span class="px-1 py-px rounded text-[9px] border" :class="transportBadge(msg.transport).cls">

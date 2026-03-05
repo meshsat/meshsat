@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { formatLastHeard, signalQualityClass, nodeStatusDot, shortId, isNodeActive, isNodeRecent } from '@/utils/format'
 
 const store = useMeshsatStore()
 const filter = ref('all') // 'all', 'active', 'stale'
@@ -11,15 +12,11 @@ const removingStale = ref(false)
 const radioConnected = computed(() => store.status?.connected === true)
 const now = ref(Date.now() / 1000)
 
-function isActive(node) {
-  if (!node.last_heard) return false
-  return (now.value - node.last_heard) < 7200 // 2 hours
-}
-
-function isRecent(node) {
-  if (!node.last_heard) return false
-  return (now.value - node.last_heard) < 86400 // 24 hours
-}
+// Template-friendly wrappers (now.value not accessible in template expressions)
+const isActive = (node) => isNodeActive(node, now.value)
+const isRecent = (node) => isNodeRecent(node, now.value)
+const signalClass = (q) => signalQualityClass(q)
+const signalDot = (node) => nodeStatusDot(node, now.value)
 
 const filteredNodes = computed(() => {
   let list = [...(store.nodes || [])]
@@ -37,39 +34,6 @@ const filteredNodes = computed(() => {
 
 const activeCount = computed(() => (store.nodes || []).filter(n => isActive(n)).length)
 const staleCount = computed(() => (store.nodes || []).filter(n => !isActive(n)).length)
-
-function formatLastHeard(val) {
-  if (!val) return 'Never'
-  const ts = typeof val === 'number' && val < 1e12 ? val * 1000 : val
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return String(val)
-  const diff = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
-  return d.toLocaleDateString()
-}
-
-function signalClass(q) {
-  if (!q) return 'text-gray-600'
-  const u = q.toUpperCase()
-  if (u === 'GOOD') return 'text-emerald-400'
-  if (u === 'FAIR') return 'text-amber-400'
-  return 'text-red-400'
-}
-
-function signalDot(node) {
-  if (isActive(node)) return 'bg-emerald-400'
-  if (isRecent(node)) return 'bg-amber-400'
-  return 'bg-gray-600'
-}
-
-function shortId(id) {
-  if (!id) return ''
-  if (id.startsWith('!') && id.length > 6) return id.slice(0, 3) + '..' + id.slice(-4)
-  return id
-}
 
 async function handleRemove(node) {
   const name = node.long_name || node.user_id || node.num

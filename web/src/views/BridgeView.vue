@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { priorityLabel, priorityColor, formatTimestamp, formatRelativeTime } from '@/utils/format'
 import RuleCard from '@/components/RuleCard.vue'
 import RuleEditor from '@/components/RuleEditor.vue'
 
@@ -15,8 +16,7 @@ const expandedPane = ref(null) // 'mesh' | 'mqtt' | 'iridium' | 'cellular'
 const subTabs = [
   { id: 'outbound', label: 'Outbound' },
   { id: 'inbound', label: 'Inbound' },
-  { id: 'queue', label: 'Queue' },
-  { id: 'rules', label: 'Rules' }
+  { id: 'queue', label: 'Queue' }
 ]
 
 const mqttGw = computed(() => (store.gateways || []).find(g => g.type === 'mqtt'))
@@ -81,30 +81,6 @@ function dlqStatusColor(status) {
   return 'text-gray-400 bg-gray-400/10'
 }
 
-function priorityLabel(p) {
-  return p === 0 ? 'Critical' : p === 2 ? 'Low' : 'Normal'
-}
-
-function priorityColor(p) {
-  return p === 0 ? 'text-red-400' : p === 2 ? 'text-gray-500' : 'text-amber-400'
-}
-
-function formatTime(ts) {
-  if (!ts) return ''
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return String(ts)
-  return d.toISOString().slice(11, 19) + 'Z'
-}
-
-function formatRelative(ts) {
-  if (!ts) return 'N/A'
-  const d = new Date(ts)
-  const diff = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (diff < 0) return 'soon'
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  return `${Math.floor(diff / 3600)}h ago`
-}
 
 function nextRetryCountdown(ts) {
   if (!ts) return ''
@@ -131,12 +107,6 @@ function payloadSize(item) {
   return 0
 }
 
-function formatTimestamp(ts) {
-  if (!ts) return 'N/A'
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return String(ts)
-  return d.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
-}
 
 function gwDebugRows(gw) {
   if (!gw) return []
@@ -419,7 +389,7 @@ onMounted(() => {
             </span>
             <span class="text-[9px] text-gray-600 font-mono">ID:{{ item.id }}</span>
             <span class="flex-1" />
-            <span class="text-[9px] text-gray-600">{{ formatRelative(item.created_at) }}</span>
+            <span class="text-[9px] text-gray-600">{{ formatRelativeTime(item.created_at) }}</span>
           </div>
 
           <!-- Message preview -->
@@ -466,23 +436,6 @@ onMounted(() => {
             Failed after {{ item.retries }}/{{ item.max_retries }} retries: {{ item.last_error }}
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- ═══ Rules Tab ═══ -->
-    <div v-if="activeTab === 'rules'">
-      <div class="flex items-center justify-between mb-3">
-        <p class="text-xs text-gray-500">All forwarding rules — full management</p>
-        <button @click="openCreate" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
-          + New Rule
-        </button>
-      </div>
-      <div v-if="store.rules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
-        No forwarding rules configured.
-      </div>
-      <div class="space-y-3">
-        <RuleCard v-for="rule in store.rules" :key="rule.id" :rule="rule"
-          @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
       </div>
     </div>
 

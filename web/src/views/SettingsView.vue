@@ -11,7 +11,6 @@ const tabs = [
   { id: 'mqtt', label: 'MQTT' },
   { id: 'iridium', label: 'Iridium' },
   { id: 'cellular', label: 'Cellular' },
-  { id: 'presets', label: 'Presets' },
   { id: 'about', label: 'About' }
 ]
 
@@ -140,35 +139,9 @@ async function saveCellular() {
 // Signal polling
 let signalTimer = null
 
-// Presets
-const presetForm = ref({ name: '', text: '', destination: 'broadcast' })
-const editingPreset = ref(null)
-
-async function savePreset() {
-  if (editingPreset.value) {
-    await store.updatePreset(editingPreset.value, presetForm.value)
-  } else {
-    await store.createPreset(presetForm.value)
-  }
-  editingPreset.value = null
-  presetForm.value = { name: '', text: '', destination: 'broadcast' }
-}
-
-function editPreset(p) {
-  editingPreset.value = p.id
-  presetForm.value = { name: p.name, text: p.text, destination: p.destination }
-}
-
-async function removePreset(p) {
-  if (confirm(`Delete preset "${p.name}"?`)) {
-    await store.deletePreset(p.id)
-  }
-}
-
 onMounted(async () => {
   store.fetchConfig()
   await store.fetchGateways()
-  store.fetchPresets()
   store.fetchIridiumSignalFast()
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
   store.fetchCellularStatus()
@@ -303,13 +276,9 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
         <div class="flex items-center justify-between mb-2">
           <span class="text-sm font-medium text-gray-200">Iridium Satellite</span>
-          <div class="flex items-center gap-2">
-            <div class="flex gap-0.5">
-              <span v-for="i in 5" :key="i" class="w-1 rounded-full" :class="store.iridiumSignal?.bars >= i ? 'bg-emerald-400' : 'bg-gray-700'"
-                :style="{ height: (8 + i * 3) + 'px' }"></span>
-            </div>
-            <span class="text-xs text-gray-400">{{ store.iridiumSignal?.bars || 0 }} bars</span>
-          </div>
+          <span class="text-xs" :class="iridiumGw?.connected ? 'text-emerald-400' : 'text-gray-500'">
+            {{ iridiumGw?.connected ? 'Connected' : 'Disconnected' }}
+          </span>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -490,41 +459,6 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
         </div>
         <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
-      </div>
-    </div>
-
-    <!-- Presets -->
-    <div v-if="activeTab === 'presets'">
-      <div class="space-y-3 mb-4">
-        <div v-for="p in store.presets" :key="p.id" class="bg-gray-800 rounded-lg p-3 border border-gray-700 flex items-center justify-between">
-          <div>
-            <div class="text-sm text-gray-200">{{ p.name }}</div>
-            <div class="text-xs text-gray-500 mt-0.5">{{ p.text }}</div>
-          </div>
-          <div class="flex gap-2">
-            <button @click="editPreset(p)" class="text-xs text-gray-400 hover:text-teal-400">Edit</button>
-            <button @click="removePreset(p)" class="text-xs text-gray-400 hover:text-red-400">Delete</button>
-          </div>
-        </div>
-      </div>
-      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
-        <h4 class="text-sm text-gray-300">{{ editingPreset ? 'Edit Preset' : 'New Preset' }}</h4>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Name</label>
-          <input v-model="presetForm.name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="I'm OK">
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Text</label>
-          <textarea v-model="presetForm.text" rows="2" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="All good, checking in on schedule."></textarea>
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Destination</label>
-          <input v-model="presetForm.destination" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="broadcast">
-        </div>
-        <div class="flex gap-2">
-          <button v-if="editingPreset" @click="editingPreset = null; presetForm = { name: '', text: '', destination: 'broadcast' }" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs">Cancel</button>
-          <button @click="savePreset" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">{{ editingPreset ? 'Update' : 'Create' }}</button>
-        </div>
       </div>
     </div>
 

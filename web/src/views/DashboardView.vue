@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
+import { formatRelativeTime, formatTimestamp, formatLastHeard, formatUptime, formatAccuracy, shortId, isNodeActive, isNodeRecent, nodeStatusDot } from '@/utils/format'
 
 const store = useMeshsatStore()
 
@@ -74,50 +75,10 @@ function onDragEnd() {
 // ── Helpers from NodesView ──
 const nowSec = ref(Date.now() / 1000)
 
-function isNodeActive(node) {
-  if (!node.last_heard) return false
-  return (nowSec.value - node.last_heard) < 7200
-}
-
-function isNodeRecent(node) {
-  if (!node.last_heard) return false
-  return (nowSec.value - node.last_heard) < 86400
-}
-
 function signalDot(node) {
-  if (isNodeActive(node)) return 'bg-emerald-400'
-  if (isNodeRecent(node)) return 'bg-amber-400'
-  return 'bg-gray-600'
+  return nodeStatusDot(node, nowSec.value)
 }
 
-function shortId(id) {
-  if (!id) return ''
-  if (id.startsWith('!') && id.length > 6) return id.slice(0, 3) + '..' + id.slice(-4)
-  return id
-}
-
-function formatLastHeard(val) {
-  if (!val) return 'Never'
-  const ts = typeof val === 'number' && val < 1e12 ? val * 1000 : val
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return String(val)
-  const diff = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`
-  return d.toLocaleDateString()
-}
-
-function formatUptime(secs) {
-  if (!secs || secs <= 0) return 'N/A'
-  const d = Math.floor(secs / 86400)
-  const h = Math.floor((secs % 86400) / 3600)
-  const m = Math.floor((secs % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h ${m}m`
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
-}
 
 // ── Computed: Iridium SBD panel ──
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
@@ -181,11 +142,6 @@ const locationResolved = computed(() => store.locationSources?.resolved || null)
 const locationGps = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'gps'))
 const locationIridium = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'iridium'))
 
-function formatAccuracy(km) {
-  if (km == null) return ''
-  if (km < 1) return `${(km * 1000).toFixed(0)}m`
-  return `${km.toFixed(0)}km`
-}
 
 // Credits from store
 const creditsToday = computed(() => store.creditSummary?.today ?? 0)
@@ -193,28 +149,11 @@ const creditsMonth = computed(() => store.creditSummary?.month ?? 0)
 const dailyBudget = computed(() => store.creditSummary?.daily_budget || 0)
 const monthlyBudget = computed(() => store.creditSummary?.monthly_budget || 0)
 
-function formatRelativeTime(val) {
-  if (!val) return 'N/A'
-  const ts = typeof val === 'string' ? new Date(val).getTime() : (val < 1e12 ? val * 1000 : val)
-  const diff = Math.floor((Date.now() - ts) / 1000)
-  if (diff < 0) return 'just now'
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
-}
-
-function formatTimestamp(val) {
-  if (!val) return 'N/A'
-  const ts = typeof val === 'string' ? new Date(val) : new Date(val < 1e12 ? val * 1000 : val)
-  if (isNaN(ts.getTime())) return String(val)
-  return ts.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
-}
 
 // ── Computed: Meshtastic Mesh panel ──
 const radioConnected = computed(() => store.status?.connected === true)
 const nodeName = computed(() => store.status?.node_name || 'Unknown')
-const activeNodes = computed(() => (store.nodes || []).filter(n => isNodeActive(n)))
+const activeNodes = computed(() => (store.nodes || []).filter(n => isNodeActive(n, nowSec.value)))
 const totalNodes = computed(() => (store.nodes || []).length)
 const topNodes = computed(() => {
   const sorted = [...(store.nodes || [])].sort((a, b) => (b.last_heard || 0) - (a.last_heard || 0))

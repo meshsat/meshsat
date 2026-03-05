@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { formatTimeHHMM, formatDuration } from '@/utils/format'
 
 const store = useMeshsatStore()
 const selectedLocationId = ref(null)
@@ -95,20 +96,10 @@ const nextPass = computed(() => {
   return sortedPasses.value.find(p => p.aos > now)
 })
 
-function formatTime(unix) {
-  if (!unix) return ''
-  return new Date(unix * 1000).toISOString().slice(11, 16)
-}
-
 function formatDate(unix) {
   if (!unix) return ''
   const d = new Date(unix * 1000)
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
-}
-
-function formatDuration(min) {
-  if (!min) return ''
-  return `${Math.round(min)}m`
 }
 
 function formatCacheAge(sec) {
@@ -220,7 +211,7 @@ const chartData = computed(() => {
       active: p.is_active,
       aos: p.aos,
       los: p.los,
-      time: formatTime(p.aos)
+      time: formatTimeHHMM(p.aos)
     }
   }).filter(p => p.x2 > padL && p.x1 < chartWidth - padR)
 
@@ -249,7 +240,7 @@ const chartData = computed(() => {
   const labels = []
   let t = Math.ceil(startTs / step) * step
   while (t < endTs) {
-    labels.push({ x: xPos(t), label: formatTime(t) })
+    labels.push({ x: xPos(t), label: formatTimeHHMM(t) })
     t += step
   }
 
@@ -319,7 +310,7 @@ function onChartHover(event) {
 
   hoverInfo.value = {
     x: mouseX,
-    time: formatTime(ts),
+    time: formatTimeHHMM(ts),
     passLabel,
     passElev,
     signalVal
@@ -450,7 +441,7 @@ onMounted(async () => {
           <div class="text-sm text-tactical-iridium font-medium mt-0.5">{{ nextPass.satellite }}</div>
         </div>
         <div class="text-right">
-          <div class="text-lg font-mono font-bold text-tactical-iridium">{{ formatTime(nextPass.aos) }}</div>
+          <div class="text-lg font-mono font-bold text-tactical-iridium">{{ formatTimeHHMM(nextPass.aos) }}</div>
           <div class="text-[10px] text-gray-500">{{ formatDate(nextPass.aos) }} UTC</div>
         </div>
       </div>
@@ -600,7 +591,7 @@ onMounted(async () => {
         </svg>
         <span class="text-[11px] text-gray-400">
           {{ sortedPasses.length }} passes
-          <span v-if="nextPass" class="text-gray-500 ml-2">Next: {{ nextPass.satellite }} at {{ formatTime(nextPass.aos) }}</span>
+          <span v-if="nextPass" class="text-gray-500 ml-2">Next: {{ nextPass.satellite }} at {{ formatTimeHHMM(nextPass.aos) }}</span>
         </span>
       </button>
 
@@ -622,7 +613,7 @@ onMounted(async () => {
 
           <!-- Time -->
           <span class="text-[11px] font-mono text-gray-400 w-20 shrink-0">
-            {{ formatTime(pass.aos) }}-{{ formatTime(pass.los) }}
+            {{ formatTimeHHMM(pass.aos) }}-{{ formatTimeHHMM(pass.los) }}
           </span>
 
           <!-- Date -->
