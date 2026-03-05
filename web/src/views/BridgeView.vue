@@ -17,6 +17,7 @@ const expandedPane = ref(null) // 'mesh' | 'mqtt' | 'iridium' | 'cellular'
 const subTabs = [
   { id: 'outbound', label: 'Outbound' },
   { id: 'inbound', label: 'Inbound' },
+  { id: 'cross', label: 'Cross-Bridge' },
   { id: 'deliveries', label: 'Deliveries' },
   { id: 'queue', label: 'Queue' }
 ]
@@ -52,12 +53,15 @@ const hasDangerRules = computed(() =>
   (store.rules || []).some(r => r.risk?.level === 'danger')
 )
 
-// Split rules by direction: inbound rules have dest_type === 'mesh'
+// Group rules by route direction for display
 const outboundRules = computed(() =>
-  (store.rules || []).filter(r => r.dest_type !== 'mesh')
+  (store.rules || []).filter(r => r.dest_type !== 'mesh' && ['any', 'mesh', 'channel', 'node', 'portnum'].includes(r.source_type))
 )
 const inboundRules = computed(() =>
   (store.rules || []).filter(r => r.dest_type === 'mesh')
+)
+const crossRules = computed(() =>
+  (store.rules || []).filter(r => r.dest_type !== 'mesh' && !['any', 'mesh', 'channel', 'node', 'portnum'].includes(r.source_type))
 )
 
 // Queue items with decoded payload
@@ -156,7 +160,8 @@ function gwStatusLabel(gw) {
 
 function openCreate(dir = null) {
   editingRule.value = null
-  editorDirection.value = dir
+  // 'cross' maps to no preset direction — user picks source + dest freely
+  editorDirection.value = dir === 'cross' ? null : dir
   editorOpen.value = true
 }
 
@@ -358,6 +363,8 @@ onMounted(() => {
         class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
         :class="activeTab === tab.id ? 'bg-tactical-iridium/10 text-tactical-iridium' : 'text-gray-500 hover:text-gray-300'">
         {{ tab.label }}
+        <span v-if="tab.id === 'cross' && crossRules.length > 0"
+          class="ml-1 px-1 py-px rounded text-[9px] bg-purple-400/10 text-purple-400">{{ crossRules.length }}</span>
         <span v-if="tab.id === 'deliveries' && deliveryStatsSummary.queued + deliveryStatsSummary.retry > 0"
           class="ml-1 px-1 py-px rounded text-[9px] bg-blue-400/10 text-blue-400">{{ deliveryStatsSummary.queued + deliveryStatsSummary.retry }}</span>
         <span v-if="tab.id === 'queue' && queueItems.length > 0"
@@ -368,7 +375,7 @@ onMounted(() => {
     <!-- ═══ Outbound Tab ═══ -->
     <div v-if="activeTab === 'outbound'">
       <div class="flex items-center justify-between mb-3">
-        <p class="text-xs text-gray-500">Mesh messages forwarded to Iridium / MQTT</p>
+        <p class="text-xs text-gray-500">Mesh messages forwarded to external channels</p>
         <button @click="openCreate('outbound')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
           + New Outbound Rule
         </button>
@@ -395,6 +402,23 @@ onMounted(() => {
       </div>
       <div class="space-y-3">
         <RuleCard v-for="rule in inboundRules" :key="rule.id" :rule="rule"
+          @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
+      </div>
+    </div>
+
+    <!-- ═══ Cross-Bridge Tab ═══ -->
+    <div v-if="activeTab === 'cross'">
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-xs text-gray-500">Inter-channel bridging (e.g. Iridium &rarr; MQTT, Cellular &rarr; Webhook)</p>
+        <button @click="openCreate('cross')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+          + New Bridge Rule
+        </button>
+      </div>
+      <div v-if="crossRules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
+        No cross-bridge rules. External channels operate independently.
+      </div>
+      <div class="space-y-3">
+        <RuleCard v-for="rule in crossRules" :key="rule.id" :rule="rule"
           @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
       </div>
     </div>

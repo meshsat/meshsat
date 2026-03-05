@@ -12,12 +12,21 @@ const props = defineProps({
 const emit = defineEmits(['save', 'close'])
 
 const form = ref(getDefault())
-const direction = ref('outbound')
 
 // Friendly picker state
 const selectedChannels = ref([])
 const selectedNodes = ref([])
 const selectedPortnums = ref([])
+
+// All transport channels for source/dest pickers
+const allChannels = [
+  { id: 'mesh', label: 'Meshtastic LoRa', icon: 'M' },
+  { id: 'iridium', label: 'Iridium SBD', icon: 'I' },
+  { id: 'astrocast', label: 'Astrocast', icon: 'A' },
+  { id: 'mqtt', label: 'MQTT Broker', icon: 'Q' },
+  { id: 'cellular', label: 'Cellular SMS', icon: 'C' },
+  { id: 'webhook', label: 'Webhook HTTP', icon: 'W' },
+]
 
 const portnumOptions = [
   { value: 1, label: 'Text Message' },
@@ -28,7 +37,7 @@ const portnumOptions = [
   { value: 70, label: 'Traceroute' }
 ]
 
-const channelOptions = computed(() => {
+const meshChannelOptions = computed(() => {
   const channels = store.config?.channels || {}
   return Array.from({ length: 8 }, (_, i) => {
     const ch = channels[i]
@@ -44,7 +53,29 @@ const nodeOptions = computed(() => {
   }))
 })
 
-const isInbound = computed(() => direction.value === 'inbound')
+// Source is mesh-like when source_type uses mesh filters
+const isMeshSource = computed(() =>
+  ['any', 'mesh', 'channel', 'node', 'portnum'].includes(form.value.source_type)
+)
+
+// Destination options: all channels except the source (self-loop prevention)
+const destOptions = computed(() => {
+  const src = form.value.source_type
+  // For mesh-like source types, exclude mesh from dest
+  if (isMeshSource.value) {
+    return allChannels.filter(c => c.id !== 'mesh')
+  }
+  // For specific external source, exclude that source from dest
+  return allChannels.filter(c => c.id !== src)
+})
+
+// Is dest going to mesh?
+const isDestMesh = computed(() => form.value.dest_type === 'mesh')
+
+// Is dest a satellite channel?
+const isDestSatellite = computed(() =>
+  form.value.dest_type === 'iridium' || form.value.dest_type === 'astrocast'
+)
 
 function getDefault() {
   return {
@@ -54,11 +85,6 @@ function getDefault() {
     sat_priority: 1, sat_max_delay_sec: 0, sat_include_pos: false, sat_max_text_len: 320,
     position_precision: 32, rate_limit_per_min: 0, rate_limit_window: 60
   }
-}
-
-function detectDirection(rule) {
-  if (!rule) return 'outbound'
-  return rule.dest_type === 'mesh' ? 'inbound' : 'outbound'
 }
 
 function parseJSON(val) {
@@ -77,13 +103,16 @@ watch(() => props.rule, (r) => {
       dest_channel: r.dest_channel || 0,
       dest_node: r.dest_node || ''
     }
-    direction.value = detectDirection(r)
     selectedChannels.value = parseJSON(r.source_channels)
     selectedNodes.value = parseJSON(r.source_nodes)
     selectedPortnums.value = parseJSON(r.source_portnums)
   } else {
     form.value = getDefault()
-    direction.value = props.initialDirection || 'outbound'
+    // Apply initial direction hint
+    if (props.initialDirection === 'inbound') {
+      form.value.source_type = 'external'
+      form.value.dest_type = 'mesh'
+    }
     selectedChannels.value = []
     selectedNodes.value = []
     selectedPortnums.value = []
@@ -94,26 +123,18 @@ watch(() => props.open, (v) => {
   if (v) {
     store.fetchConfig()
     store.fetchNodes()
-    if (!props.rule && props.initialDirection) {
-      direction.value = props.initialDirection
-    }
   }
 })
 
-// When direction changes, reset source/dest to appropriate defaults
-watch(direction, (dir) => {
-  if (dir === 'inbound') {
-    form.value.source_type = 'external'
-    form.value.dest_type = 'mesh'
-    form.value.dest_channel = 0
-    form.value.dest_node = ''
-  } else {
-    if (['iridium', 'astrocast', 'mqtt', 'cellular', 'webhook', 'external'].includes(form.value.source_type)) {
-      form.value.source_type = 'any'
-    }
-    if (form.value.dest_type === 'mesh') {
-      form.value.dest_type = 'iridium'
-    }
+// When source changes, ensure dest isn't a self-loop
+watch(() => form.value.source_type, (src) => {
+  if (isMeshSource.value && form.value.dest_type === 'mesh') {
+    form.value.dest_type = 'iridium'
+  }
+  if (!isMeshSource.value && form.value.dest_type === src) {
+    // Pick first available dest that isn't self
+    const first = allChannels.find(c => c.id !== src)
+    if (first) form.value.dest_type = first.id
   }
 })
 
@@ -153,6 +174,9 @@ function save() {
 
   if (data.source_type === 'portnum') {
     data.source_portnums = selectedPortnums.value.length ? JSON.stringify(selectedPortnums.value) : null
+  } else if (['any', 'mesh'].includes(data.source_type)) {
+    // Portnum filter is available for 'any' and 'mesh' source types too
+    data.source_portnums = selectedPortnums.value.length ? JSON.stringify(selectedPortnums.value) : null
   } else {
     data.source_portnums = null
   }
@@ -162,6 +186,17 @@ function save() {
 
   emit('save', data)
 }
+
+// Route description for the visual flow indicator
+const routeLabel = computed(() => {
+  const src = form.value.source_type
+  const dst = form.value.dest_type
+  const srcLabel = src === 'any' ? 'Any'
+    : src === 'external' ? 'Any external'
+    : allChannels.find(c => c.id === src)?.label || src
+  const dstLabel = allChannels.find(c => c.id === dst)?.label || dst
+  return `${srcLabel} \u2192 ${dstLabel}`
+})
 </script>
 
 <template>
@@ -170,25 +205,10 @@ function save() {
       <h3 class="text-lg font-medium text-gray-200 mb-4">{{ rule ? 'Edit Rule' : 'New Rule' }}</h3>
 
       <div class="space-y-4">
-        <!-- Direction toggle -->
-        <div>
-          <label class="block text-xs text-gray-400 mb-2">Direction</label>
-          <div class="flex rounded-lg overflow-hidden border border-gray-700">
-            <button @click="direction = 'outbound'"
-              class="flex-1 py-2 text-xs font-medium transition-colors"
-              :class="direction === 'outbound'
-                ? 'bg-tactical-lora/15 text-tactical-lora border-r border-tactical-lora/30'
-                : 'bg-gray-900 text-gray-500 border-r border-gray-700 hover:text-gray-300'">
-              Outbound (Mesh &rarr; External)
-            </button>
-            <button @click="direction = 'inbound'"
-              class="flex-1 py-2 text-xs font-medium transition-colors"
-              :class="direction === 'inbound'
-                ? 'bg-tactical-iridium/15 text-tactical-iridium'
-                : 'bg-gray-900 text-gray-500 hover:text-gray-300'">
-              Inbound (External &rarr; Mesh)
-            </button>
-          </div>
+        <!-- Route flow indicator -->
+        <div class="bg-gray-900/60 rounded-lg border border-gray-700/50 px-3 py-2 text-center">
+          <span class="text-xs text-gray-500">Route: </span>
+          <span class="text-xs font-medium text-teal-400">{{ routeLabel }}</span>
         </div>
 
         <div>
@@ -196,103 +216,95 @@ function save() {
           <input v-model="form.name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="Emergency to Satellite">
         </div>
 
-        <!-- ═══ Outbound source/dest ═══ -->
-        <template v-if="!isInbound">
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs text-gray-400 mb-1">Filter by</label>
-              <select v-model="form.source_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-                <option value="any">All messages</option>
-                <option value="channel">Specific channels</option>
-                <option value="node">Specific nodes</option>
-                <option value="portnum">Message type</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs text-gray-400 mb-1">Forward to</label>
-              <select v-model="form.dest_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-                <option value="iridium">Iridium Satellite</option>
-                <option value="astrocast">Astrocast Satellite</option>
-                <option value="mqtt">MQTT Broker</option>
-                <option value="cellular">Cellular (SMS)</option>
-                <option value="webhook">Webhook HTTP</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Channel picker (multi-select badges) -->
-          <div v-if="form.source_type === 'channel'">
-            <label class="block text-xs text-gray-400 mb-2">Select Channels</label>
-            <div class="flex flex-wrap gap-2">
-              <button v-for="ch in channelOptions" :key="ch.index" @click="toggleChannel(ch.index)"
-                class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
-                :class="selectedChannels.includes(ch.index)
-                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
-                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
-                {{ ch.index }}: {{ ch.name }}
-              </button>
-            </div>
-          </div>
-
-          <!-- Node picker (autocomplete with names) -->
-          <div v-if="form.source_type === 'node'">
-            <label class="block text-xs text-gray-400 mb-2">Select Nodes</label>
-            <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600">No nodes discovered yet</div>
-            <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-              <button v-for="node in nodeOptions" :key="node.id" @click="toggleNode(node.id)"
-                class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
-                :class="selectedNodes.includes(node.id)
-                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
-                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
-                {{ node.name }}
-                <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Portnum picker (checkboxes with names) -->
-          <div v-if="form.source_type === 'portnum'">
-            <label class="block text-xs text-gray-400 mb-2">Select Message Types</label>
-            <div class="grid grid-cols-2 gap-2">
-              <label v-for="pn in portnumOptions" :key="pn.value"
-                class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs transition-colors border cursor-pointer"
-                :class="selectedPortnums.includes(pn.value)
-                  ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
-                  : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
-                <input type="checkbox" :checked="selectedPortnums.includes(pn.value)" @change="togglePortnum(pn.value)"
-                  class="rounded bg-gray-900 border-gray-700 text-teal-500">
-                {{ pn.label }}
-                <span class="text-[9px] text-gray-600">#{{ pn.value }}</span>
-              </label>
-            </div>
-          </div>
-        </template>
-
-        <!-- ═══ Inbound source/dest ═══ -->
-        <template v-if="isInbound">
-          <div>
-            <label class="block text-xs text-gray-400 mb-1">Receive from</label>
-            <select v-model="form.source_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-              <option value="iridium">Iridium Satellite</option>
-              <option value="astrocast">Astrocast Satellite</option>
+        <!-- ═══ Source ═══ -->
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Source</label>
+          <select v-model="form.source_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <optgroup label="Mesh filters">
+              <option value="any">Any message (mesh)</option>
+              <option value="channel">Specific mesh channels</option>
+              <option value="node">Specific mesh nodes</option>
+              <option value="portnum">Specific message types</option>
+            </optgroup>
+            <optgroup label="External sources">
+              <option value="iridium">Iridium SBD</option>
+              <option value="astrocast">Astrocast</option>
               <option value="mqtt">MQTT Broker</option>
-              <option value="cellular">Cellular (SMS)</option>
+              <option value="cellular">Cellular SMS</option>
               <option value="webhook">Webhook HTTP</option>
               <option value="external">Any external source</option>
-            </select>
-          </div>
+            </optgroup>
+          </select>
+        </div>
 
+        <!-- Mesh channel picker -->
+        <div v-if="form.source_type === 'channel'">
+          <label class="block text-xs text-gray-400 mb-2">Select Channels</label>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="ch in meshChannelOptions" :key="ch.index" @click="toggleChannel(ch.index)"
+              class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+              :class="selectedChannels.includes(ch.index)
+                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+              {{ ch.index }}: {{ ch.name }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Mesh node picker -->
+        <div v-if="form.source_type === 'node'">
+          <label class="block text-xs text-gray-400 mb-2">Select Nodes</label>
+          <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600">No nodes discovered yet</div>
+          <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+            <button v-for="node in nodeOptions" :key="node.id" @click="toggleNode(node.id)"
+              class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
+              :class="selectedNodes.includes(node.id)
+                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+              {{ node.name }}
+              <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Portnum picker -->
+        <div v-if="form.source_type === 'portnum'">
+          <label class="block text-xs text-gray-400 mb-2">Select Message Types</label>
+          <div class="grid grid-cols-2 gap-2">
+            <label v-for="pn in portnumOptions" :key="pn.value"
+              class="flex items-center gap-2 px-2.5 py-1.5 rounded text-xs transition-colors border cursor-pointer"
+              :class="selectedPortnums.includes(pn.value)
+                ? 'bg-teal-600/20 text-teal-400 border-teal-600/30'
+                : 'bg-gray-900 text-gray-500 border-gray-700 hover:border-gray-600'">
+              <input type="checkbox" :checked="selectedPortnums.includes(pn.value)" @change="togglePortnum(pn.value)"
+                class="rounded bg-gray-900 border-gray-700 text-teal-500">
+              {{ pn.label }}
+              <span class="text-[9px] text-gray-600">#{{ pn.value }}</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ═══ Destination ═══ -->
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Destination</label>
+          <select v-model="form.dest_type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <option v-for="ch in destOptions" :key="ch.id" :value="ch.id">{{ ch.label }}</option>
+          </select>
+        </div>
+
+        <!-- Mesh destination options (channel + target node) -->
+        <template v-if="isDestMesh">
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Deliver to channel</label>
+            <label class="block text-xs text-gray-400 mb-1">Deliver to mesh channel</label>
             <select v-model.number="form.dest_channel" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-              <option v-for="ch in channelOptions" :key="ch.index" :value="ch.index">
+              <option v-for="ch in meshChannelOptions" :key="ch.index" :value="ch.index">
                 {{ ch.index }}: {{ ch.name }}
               </option>
             </select>
           </div>
 
           <div>
-            <label class="block text-xs text-gray-400 mb-2">Target node (optional — broadcast if none selected)</label>
+            <label class="block text-xs text-gray-400 mb-2">Target node (optional — broadcast if empty)</label>
             <div class="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
               <button @click="form.dest_node = ''"
                 class="px-2.5 py-1 rounded text-xs font-medium transition-colors border"
@@ -310,7 +322,7 @@ function save() {
                 <span class="text-[9px] text-gray-600 ml-1">{{ node.id }}</span>
               </button>
             </div>
-            <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600 mt-1">No nodes discovered yet — you can type manually below</div>
+            <div v-if="nodeOptions.length === 0" class="text-xs text-gray-600 mt-1">No nodes discovered yet</div>
             <input v-if="nodeOptions.length === 0" v-model="form.dest_node" class="w-full mt-2 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="!27ca8f1c">
           </div>
         </template>
@@ -320,7 +332,8 @@ function save() {
           <input v-model="form.source_keyword" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="emergency">
         </div>
 
-        <div v-if="!isInbound && (form.dest_type === 'iridium' || form.dest_type === 'astrocast')" class="grid grid-cols-2 gap-3">
+        <!-- Satellite options -->
+        <div v-if="isDestSatellite" class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-gray-400 mb-1">Satellite Priority</label>
             <select v-model.number="form.sat_priority" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
@@ -346,7 +359,7 @@ function save() {
           </div>
         </div>
 
-        <div v-if="!isInbound && (form.dest_type === 'iridium' || form.dest_type === 'astrocast')" class="flex items-center gap-2">
+        <div v-if="isDestSatellite" class="flex items-center gap-2">
           <input type="checkbox" v-model="form.sat_include_pos" id="sat_pos" class="rounded bg-gray-900 border-gray-700">
           <label for="sat_pos" class="text-xs text-gray-400">Include GPS position in satellite payload</label>
         </div>
