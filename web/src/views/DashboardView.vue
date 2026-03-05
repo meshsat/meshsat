@@ -253,6 +253,17 @@ const topNodes = computed(() => {
 })
 const neighborCount = computed(() => (store.neighborInfo || []).length)
 
+// Mesh SNR sparkline — per-node SNR as bars
+const meshSNRBars = computed(() => {
+  const nodes = activeNodes.value.filter(n => n.snr != null && Math.abs(n.snr) < 100)
+  return nodes.map(n => ({
+    name: n.short_name || n.long_name || '?',
+    snr: n.snr,
+    // Normalize SNR from -20..+10 to 0..1
+    height: Math.max(0.05, Math.min(1, (n.snr + 20) / 30))
+  })).slice(0, 12)
+})
+
 // ── Mesh widget actions ──
 const broadcastingPosition = ref(false)
 async function dashBroadcastPosition() {
@@ -261,7 +272,30 @@ async function dashBroadcastPosition() {
   broadcastingPosition.value = false
 }
 
-// ── Computed: Cellular 4G/LTE panel ──
+// ── Cellular signal history (local tracking) ──
+const cellSignalHistory = ref([])
+const MAX_CELL_HISTORY = 30
+
+function trackCellularSignal() {
+  const bars = store.cellularSignal?.bars
+  if (bars != null && bars >= 0) {
+    cellSignalHistory.value.push({ ts: Date.now(), val: bars })
+    if (cellSignalHistory.value.length > MAX_CELL_HISTORY) cellSignalHistory.value.shift()
+  }
+}
+
+const cellSparklinePoints = computed(() => {
+  const hist = cellSignalHistory.value
+  if (hist.length < 2) return ''
+  const W = 120, H = 20
+  return hist.map((h, i) => {
+    const x = (i / (hist.length - 1)) * W
+    const y = H - (h.val / 5) * H
+    return `${x},${y}`
+  }).join(' ')
+})
+
+// ── Computed: Cellular panel ──
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
 const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
 const cellStatus = computed(() => {
@@ -374,13 +408,34 @@ function humanizePortnum(msg) {
 function eventDescription(event) {
   const type = event?.type ?? ''
   const msg = event?.message ?? ''
+  const data = event?.data || null
   if (type === 'message' || type === 'text') {
     if (msg.includes('portnum=')) return humanizePortnum(msg)
     return msg || 'New message received'
   }
   if (type === 'telemetry') return humanizePortnum(msg) || 'Device telemetry received'
-  if (type === 'node_update' || type === 'nodeinfo') return msg || 'Node info updated (name, hardware)'
-  if (type === 'position') return msg || 'GPS position update received'
+  if (type === 'node_update' || type === 'nodeinfo') {
+    // If telemetry data is in the event, show actual values
+    if (msg.includes('telemetry') && data) {
+      const parts = []
+      const nodeId = msg.match(/!([a-f0-9]+)/)?.[0] || ''
+      if (data.battery_level > 0) parts.push(`bat ${Math.round(data.battery_level)}%`)
+      if (data.voltage > 0 && data.voltage < 10) parts.push(`${data.voltage.toFixed(1)}V`)
+      if (data.channel_util > 0) parts.push(`ch ${data.channel_util.toFixed(0)}%`)
+      if (data.air_util_tx > 0) parts.push(`air ${data.air_util_tx.toFixed(0)}%`)
+      if (data.temperature != null && data.temperature !== 0) parts.push(`${data.temperature.toFixed(1)}°C`)
+      if (parts.length > 0) return `telemetry ${nodeId}: ${parts.join(', ')}`
+    }
+    if (data?.long_name && !msg.includes('telemetry')) return `node ${data.long_name} (${data.hw_model_name || 'unknown hw'})`
+    return msg || 'Node info updated'
+  }
+  if (type === 'position') {
+    if (data?.latitude && data?.longitude) {
+      const nodeId = msg.match(/!([a-f0-9]+)/)?.[0] || ''
+      return `position ${nodeId}: ${data.latitude.toFixed(4)}, ${data.longitude.toFixed(4)}${data.altitude ? ` ${data.altitude}m` : ''}`
+    }
+    return msg || 'GPS position update received'
+  }
   if (type === 'connected') return 'Meshtastic radio connected'
   if (type === 'disconnected') return 'Meshtastic radio disconnected'
   if (type === 'signal') {
@@ -406,10 +461,18 @@ function eventDescription(event) {
 let saveLogTimer = null
 function handleSSEEvent(event) {
   const type = event?.type ?? ''
+  // Parse data JSON if present
+  let parsedData = null
+  if (event?.data) {
+    try {
+      parsedData = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+    } catch { /* not JSON */ }
+  }
+  const enriched = { ...event, data: parsedData }
   activityLog.value.unshift({
     time: new Date().toISOString(),
     type,
-    description: eventDescription(event)
+    description: eventDescription(enriched)
   })
   if (activityLog.value.length > MAX_LOG) {
     activityLog.value.length = MAX_LOG
@@ -578,7 +641,7 @@ onMounted(() => {
     store.fetchDLQ()
     store.fetchSchedulerStatus()
     store.fetchLocationSources()
-    store.fetchCellularSignal()
+    store.fetchCellularSignal().then(trackCellularSignal)
   }, 15000)
 })
 
@@ -797,6 +860,21 @@ function widgetGridClass(id) {
           </span>
         </div>
 
+        <!-- Mesh SNR bar chart (per-node) -->
+        <div v-if="meshSNRBars.length > 0" class="mb-3">
+          <div class="flex items-end gap-1 h-8">
+            <div v-for="(bar, i) in meshSNRBars" :key="i"
+              class="flex-1 rounded-t transition-all"
+              :class="bar.snr >= 0 ? 'bg-emerald-500/40' : bar.snr >= -10 ? 'bg-amber-500/40' : 'bg-red-500/40'"
+              :style="{ height: `${bar.height * 32}px` }"
+              :title="`${bar.name}: ${bar.snr.toFixed(1)} dB`" />
+          </div>
+          <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
+            <span>SNR per node</span>
+            <span>{{ meshSNRBars.filter(b => b.snr >= 0).length }}/{{ meshSNRBars.length }} good</span>
+          </div>
+        </div>
+
         <div class="space-y-1">
           <div v-for="node in topNodes" :key="node.num"
             class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.04] transition-colors cursor-pointer"
@@ -857,6 +935,14 @@ function widgetGridClass(id) {
           <span v-if="store.cellularStatus?.network_type" class="text-[10px] text-gray-500 uppercase">
             {{ store.cellularStatus.network_type }}
           </span>
+        </div>
+
+        <!-- Signal history sparkline -->
+        <div v-if="cellSparklinePoints" class="mb-3">
+          <svg viewBox="0 0 120 20" class="w-full h-5" preserveAspectRatio="none">
+            <polyline :points="cellSparklinePoints" fill="none" stroke="#38bdf8" stroke-width="1" opacity="0.6" />
+          </svg>
+          <div class="text-[8px] text-gray-600 text-right">signal history</div>
         </div>
 
         <div class="space-y-1.5 text-[11px]">
@@ -1062,12 +1148,12 @@ function widgetGridClass(id) {
 
       <!-- ═══ SBD Queue ═══ -->
       <div v-if="wid === 'queue'"
-        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4 flex flex-col', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
         draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('queue')">SBD QUEUE</h2>
+            <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('queue')">MESSAGE QUEUE</h2>
           </div>
           <span v-if="dlqPending > 0"
             class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-400/10 text-amber-400">
@@ -1075,7 +1161,7 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <div class="space-y-1 tactical-scroll max-h-[350px] overflow-y-auto">
+        <div class="space-y-1 tactical-scroll flex-1 overflow-y-auto">
           <div v-for="item in dlqItems" :key="item.id"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
             :class="item.status === 'sent' || item.status === 'received' ? 'opacity-60' : ''"

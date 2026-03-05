@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { formatTimeHHMM } from '@/utils/format'
 
 const route = useRoute()
 const store = useMeshsatStore()
@@ -22,11 +23,6 @@ function isActive(tab) {
   return route.path.startsWith(tab.path)
 }
 
-// Bridge status from gateways
-const bridgeActive = computed(() => {
-  return (store.gateways || []).some(g => g.connected)
-})
-
 const deviceId = computed(() => {
   const id = store.status?.node_id
   if (!id) return '----'
@@ -34,10 +30,51 @@ const deviceId = computed(() => {
   return '!' + hex.slice(-8)
 })
 
-// Mesh + Sat status for header
+// Mesh status
 const meshConnected = computed(() => store.status?.connected ?? false)
+const nodeCount = computed(() => {
+  const total = (store.nodes || []).length
+  const cutoff = Date.now() / 1000 - 7200
+  const active = (store.nodes || []).filter(n => n.last_heard > cutoff).length
+  return { active, total }
+})
+// Average mesh SNR from all active nodes
+const meshAvgSNR = computed(() => {
+  const cutoff = Date.now() / 1000 - 7200
+  const activeNodes = (store.nodes || []).filter(n => n.last_heard > cutoff && n.snr != null && Math.abs(n.snr) < 100)
+  if (!activeNodes.length) return null
+  const avg = activeNodes.reduce((sum, n) => sum + n.snr, 0) / activeNodes.length
+  return avg
+})
+
+// Iridium
 const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
+
+// Next pass countdown
+const nextPassInfo = computed(() => {
+  const now = Date.now() / 1000
+  const passes = store.passes || []
+  // Find the first upcoming or active pass
+  const active = passes.find(p => p.is_active)
+  if (active) return { label: 'NOW', color: 'text-tactical-iridium' }
+  const next = passes.find(p => p.aos > now)
+  if (!next) return null
+  const diffSec = next.aos - now
+  if (diffSec < 60) return { label: `${Math.round(diffSec)}s`, color: 'text-tactical-iridium' }
+  if (diffSec < 3600) return { label: `${Math.round(diffSec / 60)}m`, color: 'text-gray-400' }
+  if (diffSec < 86400) return { label: `${Math.round(diffSec / 3600)}h`, color: 'text-gray-500' }
+  return { label: formatTimeHHMM(next.aos), color: 'text-gray-600' }
+})
+
+// Cellular
 const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
+
+// GPS fix
+const gpsFix = computed(() => {
+  const sources = store.locationSources?.sources || []
+  const gps = sources.find(s => s.source === 'gps')
+  return gps && gps.lat !== 0
+})
 
 function updateClock() {
   const now = new Date()
@@ -51,16 +88,33 @@ onMounted(() => {
   updateClock()
   clockTimer = setInterval(updateClock, 1000)
   store.fetchStatus()
+  store.fetchNodes()
   store.fetchGateways()
   store.fetchIridiumSignalFast()
   store.fetchCellularSignal()
   store.fetchCellularStatus()
+  store.fetchLocationSources()
+  // Fetch passes for next-pass countdown (use resolved location)
+  store.fetchLocations().then(() => {
+    store.fetchLocationSources().then(() => {
+      const resolved = store.locationSources?.resolved
+      if (resolved) {
+        store.fetchPasses({
+          lat: resolved.lat, lon: resolved.lon,
+          alt_m: (resolved.alt_km || 0) * 1000,
+          hours: 12, min_elev: 5
+        })
+      }
+    })
+  })
   pollTimer = setInterval(() => {
     store.fetchStatus()
+    store.fetchNodes()
     store.fetchGateways()
     store.fetchIridiumSignalFast()
     store.fetchCellularSignal()
     store.fetchCellularStatus()
+    store.fetchLocationSources()
   }, 10000)
 })
 
@@ -98,23 +152,40 @@ onUnmounted(() => {
           </div>
         </nav>
 
-        <!-- Right: Status + clock -->
+        <!-- Right: Status indicators -->
         <div class="flex items-center gap-3 shrink-0">
-          <!-- Mesh indicator -->
+
+          <!-- Iridium: signal bars + next pass -->
+          <div class="hidden md:flex items-center gap-1.5">
+            <div class="flex items-end gap-px h-3">
+              <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
+                :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-tactical-iridium') : 'bg-gray-700/50'"
+                :style="{ height: `${3 + i * 2}px` }" />
+            </div>
+            <span v-if="nextPassInfo" class="text-[9px] font-mono" :class="nextPassInfo.color">
+              {{ nextPassInfo.label }}
+            </span>
+          </div>
+
+          <!-- Divider -->
+          <span class="hidden md:block w-px h-4 bg-gray-700/50" />
+
+          <!-- Mesh: avg SNR + device ID + node count -->
           <div class="hidden md:flex items-center gap-1.5">
             <span class="w-1.5 h-1.5 rounded-full"
-              :class="meshConnected ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'" />
-            <span class="text-[10px] text-gray-500">MESH</span>
+              :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'" />
+            <span v-if="meshAvgSNR !== null" class="text-[9px] font-mono"
+              :class="meshAvgSNR >= 0 ? 'text-emerald-400/70' : meshAvgSNR >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
+              {{ meshAvgSNR.toFixed(0) }}dB
+            </span>
+            <span class="text-[9px] font-mono text-gray-500">{{ deviceId }}</span>
+            <span class="text-[9px] font-mono text-gray-600">{{ nodeCount.active }}/{{ nodeCount.total }}</span>
           </div>
 
-          <!-- Sat signal bars -->
-          <div class="hidden md:flex items-end gap-px h-3">
-            <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
-              :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-tactical-iridium') : 'bg-gray-700/50'"
-              :style="{ height: `${3 + i * 2}px` }" />
-          </div>
+          <!-- Divider -->
+          <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
-          <!-- Cellular signal bars -->
+          <!-- Cellular: signal bars + type -->
           <div v-if="cellBars >= 0" class="hidden md:flex items-center gap-1">
             <div class="flex items-end gap-px h-3">
               <span v-for="i in 5" :key="'cell'+i" class="w-[3px] rounded-[1px]"
@@ -124,15 +195,14 @@ onUnmounted(() => {
             <span class="text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'CELL' }}</span>
           </div>
 
-          <!-- Bridge status badge -->
-          <div v-if="bridgeActive"
-            class="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded bg-tactical-iridium/10 border border-tactical-iridium/20">
-            <span class="w-1.5 h-1.5 rounded-full bg-tactical-iridium animate-pulse-dot" />
-            <span class="text-[10px] font-medium text-tactical-iridium">BRIDGE</span>
+          <!-- GPS fix indicator -->
+          <div class="hidden md:flex items-center gap-1">
+            <span class="w-1.5 h-1.5 rounded-full" :class="gpsFix ? 'bg-tactical-gps' : 'bg-gray-600'" />
+            <span class="text-[9px]" :class="gpsFix ? 'text-tactical-gps/70' : 'text-gray-600'">GPS</span>
           </div>
 
-          <!-- Device ID -->
-          <span class="text-[10px] font-mono text-gray-600 hidden lg:block">{{ deviceId }}</span>
+          <!-- Divider -->
+          <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
           <!-- UTC Clock -->
           <span class="text-[10px] font-mono text-gray-500 tabular-nums">{{ utcTime }}</span>
