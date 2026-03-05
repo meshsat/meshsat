@@ -1,11 +1,9 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,12 +75,6 @@ func (g *CellularGateway) Start(ctx context.Context) error {
 	g.wg.Add(1)
 	go g.smsListener(ctx)
 
-	// Start webhook outbound worker if configured
-	if g.config.WebhookOutURL != "" {
-		g.wg.Add(1)
-		go g.webhookOutWorker(ctx)
-	}
-
 	// Start DynDNS updater if configured
 	if g.config.DynDNS.Enabled {
 		g.dyndns = NewDynDNSUpdater(g.config.DynDNS)
@@ -90,7 +82,6 @@ func (g *CellularGateway) Start(ctx context.Context) error {
 	}
 
 	log.Info().Int("destinations", len(g.config.DestinationNumbers)).
-		Bool("webhook_out", g.config.WebhookOutURL != "").
 		Bool("dyndns", g.config.DynDNS.Enabled).
 		Msg("cellular gateway started")
 	return nil
@@ -195,9 +186,6 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Str("from", fromNode).Int("destinations", len(g.config.DestinationNumbers)).Msg("cellular: SMS sent")
-
-			// Fire outbound webhook if configured
-			g.postWebhook(msg)
 		}
 	}
 }
@@ -263,77 +251,6 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 				// Signal events are tracked by the transport, no gateway action needed
 			}
 		}
-	}
-}
-
-// webhookOutWorker monitors the outCh (same messages) and posts to the webhook URL.
-// This runs in parallel with sendWorker — messages go to both SMS and webhook.
-func (g *CellularGateway) webhookOutWorker(ctx context.Context) {
-	defer g.wg.Done()
-
-	// Use a separate channel mirroring outCh to avoid interfering with SMS worker.
-	// Instead, we hook into the same outbound flow by subscribing to a broadcast pattern.
-	// For simplicity, the webhook fires from Forward() path instead.
-	// This goroutine handles retries and backoff for webhook delivery.
-
-	// Actually, we share the outCh — the sendWorker already dequeues.
-	// So webhooks are fired inline from sendWorker via postWebhook.
-	// This goroutine is a no-op placeholder for future async webhook queue.
-	<-ctx.Done()
-}
-
-// postWebhook sends a message to the configured webhook URL.
-func (g *CellularGateway) postWebhook(msg *transport.MeshMessage) {
-	if g.config.WebhookOutURL == "" {
-		return
-	}
-
-	payload := map[string]interface{}{
-		"from":      fmt.Sprintf("!%08x", msg.From),
-		"to":        fmt.Sprintf("!%08x", msg.To),
-		"channel":   msg.Channel,
-		"portnum":   msg.PortNum,
-		"text":      msg.DecodedText,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"source":    "meshsat",
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Warn().Err(err).Msg("cellular: webhook marshal failed")
-		return
-	}
-
-	req, err := http.NewRequest("POST", g.config.WebhookOutURL, bytes.NewReader(body))
-	if err != nil {
-		log.Warn().Err(err).Msg("cellular: webhook request failed")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range g.config.WebhookOutHeaders {
-		req.Header.Set(k, v)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Warn().Err(err).Str("url", g.config.WebhookOutURL).Msg("cellular: webhook POST failed")
-		if g.db != nil {
-			_ = g.db.InsertWebhookLog("outbound", g.config.WebhookOutURL, "POST", 0, string(body), "", err.Error())
-		}
-		return
-	}
-	resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		log.Warn().Int("status", resp.StatusCode).Str("url", g.config.WebhookOutURL).Msg("cellular: webhook returned error")
-	}
-	if g.db != nil {
-		errMsg := ""
-		if resp.StatusCode >= 400 {
-			errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
-		_ = g.db.InsertWebhookLog("outbound", g.config.WebhookOutURL, "POST", resp.StatusCode, string(body), "", errMsg)
 	}
 }
 

@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -15,7 +13,6 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
 	"meshsat/internal/gateway"
-	"meshsat/internal/ratelimit"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -26,53 +23,28 @@ type GatewayProvider interface {
 	Gateways() []gateway.Gateway
 }
 
-// paidTransportRateLimit is the global hourly rate limit for paid gateways.
-var paidTransportRateLimit = 60
-
-func init() {
-	if v := os.Getenv("MESHSAT_PAID_RATE_LIMIT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			paidTransportRateLimit = n
-		}
-	}
-}
-
-// SetPaidRateLimit sets the global hourly rate limit for paid transports.
-func SetPaidRateLimit(limit int) {
-	if limit > 0 {
-		paidTransportRateLimit = limit
-	}
-}
-
 // Processor ingests mesh events, persists them, and routes to gateways.
 type Processor struct {
-	db       *database.DB
-	mesh     transport.MeshTransport
-	gateways []gateway.Gateway          // static list (boot-time only, kept for backward compat)
-	gwProv   GatewayProvider            // dynamic provider — takes precedence when set
-	dedup    *dedup.Deduplicator        // composite-key deduplication
-	rules    *rules.Engine              // forwarding rules engine
-	meshLim  *ratelimit.TokenBucket     // rate limiter for mesh injection
-	subs     []chan transport.MeshEvent // SSE re-broadcast subscribers
-	subsMu   sync.RWMutex
+	db         *database.DB
+	mesh       transport.MeshTransport
+	gwProv     GatewayProvider            // dynamic provider (gateway manager)
+	dedup      *dedup.Deduplicator        // composite-key deduplication
+	rules      *rules.Engine              // forwarding rules engine
+	dispatcher *Dispatcher                // v0.2.0 delivery fan-out
+	subs       []chan transport.MeshEvent // SSE re-broadcast subscribers
+	subsMu     sync.RWMutex
 
-	// Cross-gateway relay deduplication (source+text hash → timestamp, 5min TTL)
+	// Gateway injection dedup (text hash → timestamp, 5min TTL)
 	relayDedupMu sync.Mutex
 	relayDedup   map[string]time.Time
-
-	// Per-gateway paid transport rate limiters (iridium, cellular)
-	paidLimiters   map[string]*ratelimit.TokenBucket
-	paidLimitersMu sync.RWMutex
 }
 
 // NewProcessor creates a new event processor.
 func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
 	return &Processor{
-		db:           db,
-		mesh:         mesh,
-		meshLim:      ratelimit.NewMeshInjectionLimiter(),
-		relayDedup:   make(map[string]time.Time),
-		paidLimiters: make(map[string]*ratelimit.TokenBucket),
+		db:         db,
+		mesh:       mesh,
+		relayDedup: make(map[string]time.Time),
 	}
 }
 
@@ -86,10 +58,9 @@ func (p *Processor) SetRuleEngine(e *rules.Engine) {
 	p.rules = e
 }
 
-// AddGateway registers a static gateway for message forwarding.
-// Prefer SetGatewayProvider for dynamic gateway lifecycle.
-func (p *Processor) AddGateway(gw gateway.Gateway) {
-	p.gateways = append(p.gateways, gw)
+// SetDispatcher sets the v0.2.0 dispatcher for structured delivery fan-out.
+func (p *Processor) SetDispatcher(d *Dispatcher) {
+	p.dispatcher = d
 }
 
 // SetGatewayProvider sets a dynamic gateway source (e.g. the Manager).
@@ -262,82 +233,21 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 		return
 	}
 
-	// Rule engine evaluation (if configured)
+	// Dispatch via rules engine + delivery ledger
 	if p.rules != nil && p.rules.RuleCount() > 0 {
-		match := p.rules.Evaluate(&msg)
-		if match != nil {
-			// Check keyword filter
-			if !rules.MatchesKeyword(match.Rule, msg.DecodedText) {
-				return
-			}
-
-			log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Str("dest", match.Rule.DestType).Msg("rule matched, forwarding")
-
-			p.Emit(transport.MeshEvent{
-				Type:    "rule_match",
-				Message: fmt.Sprintf("Rule '%s' matched: mesh→%s", match.Rule.Name, match.Rule.DestType),
-			})
-
-			activeGateways := p.gateways
-			if p.gwProv != nil {
-				activeGateways = p.gwProv.Gateways()
-			}
-
-			for _, gw := range activeGateways {
-				gwType := gw.Type()
-				destType := match.Rule.DestType
-
-				// Check if this gateway should receive based on dest_type
-				shouldForward := false
-				switch destType {
-				case "both":
-					shouldForward = gwType == "iridium" || gwType == "mqtt"
-				case "all":
-					shouldForward = true
-				case "iridium":
-					shouldForward = gwType == "iridium"
-				case "mqtt":
-					shouldForward = gwType == "mqtt"
-				case "cellular":
-					shouldForward = gwType == "cellular"
-				}
-
-				if !shouldForward {
-					continue
-				}
-
-				// Paid transport safety: exclude telemetry/traceroute unless explicitly opted in
-				if isPaidTransport(gwType) && !isPortnumExplicitlyIncluded(match.Rule, msg.PortNum) {
-					if msg.PortNum == 67 || msg.PortNum == 70 { // TELEMETRY_APP, TRACEROUTE_APP
-						log.Debug().Str("gateway", gwType).Int("portnum", msg.PortNum).Msg("telemetry excluded from paid transport")
-						continue
-					}
-				}
-
-				// Global paid transport rate limit
-				if isPaidTransport(gwType) && !p.allowPaidTransport(gwType) {
-					log.Warn().Str("gateway", gwType).Msg("paid transport global rate limit exceeded")
-					continue
-				}
-
-				if err := gw.Forward(context.Background(), &msg); err != nil {
-					log.Warn().Err(err).Str("gateway", gwType).Msg("rule forward failed")
-					p.Emit(transport.MeshEvent{
-						Type:    "forward_error",
-						Message: fmt.Sprintf("Failed to forward to %s: %s", gwType, err.Error()),
-					})
-				} else {
-					p.Emit(transport.MeshEvent{
-						Type:    "forward",
-						Message: fmt.Sprintf("Forwarded to %s gateway", gwType),
-					})
-				}
+		fromNode := fmt.Sprintf("!%08x", msg.From)
+		routeMsg := rules.RouteMessage{
+			Text:    msg.DecodedText,
+			From:    fromNode,
+			Channel: int(msg.Channel),
+			PortNum: msg.PortNum,
+		}
+		if p.dispatcher != nil {
+			if n := p.dispatcher.Dispatch("mesh", routeMsg, nil); n > 0 {
+				log.Info().Int("deliveries", n).Uint32("packet_id", msg.ID).Msg("dispatched to delivery ledger")
 			}
 		}
-		return // rule engine handled (or no match = local-only)
 	}
-
-	// No rules configured: messages stay local (no forwarding)
 }
 
 func (p *Processor) handleNodeUpdate(event transport.MeshEvent) {
@@ -445,9 +355,8 @@ func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
 	}
 }
 
-// StartGatewayReceiver drains inbound messages from a gateway and sends them to the mesh.
-// Also handles cross-gateway relay: before mesh injection, check if the message should
-// be forwarded to other gateways (e.g., iridium→cellular relay).
+// StartGatewayReceiver drains inbound messages from a gateway and dispatches
+// them through the v0.2.0 rules engine + delivery ledger.
 func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway) {
 	go func() {
 		ch := gw.Receive()
@@ -466,175 +375,37 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					Message: fmt.Sprintf("Received from %s: %s", msg.Source, truncateText(msg.Text, 80)),
 				})
 
-				// Cross-gateway relay: check if this message should be forwarded
-				// to other gateways WITHOUT touching the mesh.
-				p.handleCrossGatewayRelay(ctx, msg)
-
-				// Rate limit mesh injection from external sources
-				if p.meshLim != nil && !p.meshLim.Allow() {
-					log.Warn().Str("source", msg.Source).Msg("mesh injection rate limited, dropping")
-					continue
-				}
-
-				// Send to mesh
-				req := transport.SendRequest{
-					Text:    msg.Text,
-					To:      msg.To,
-					Channel: msg.Channel,
-				}
-
-				// Rule engine evaluation for inbound messages.
-				// If a matching inbound rule exists, use its dest_channel/dest_node.
-				// If no inbound rule matches, fall through to inject as-is (broadcast).
-				// This ensures outbound-only rules don't block inbound message delivery.
-				if p.rules != nil {
-					match := p.rules.EvaluateInbound(msg.Source, msg.Text)
-					if match != nil {
-						log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).Msg("inbound rule matched")
-						req.Channel = match.Rule.DestChannel
-						if match.Rule.DestNode != nil && *match.Rule.DestNode != "" {
-							req.To = *match.Rule.DestNode
-						}
-					} else {
-						log.Info().Str("source", msg.Source).Msg("no inbound rule matched, injecting as broadcast")
+				// Dispatch through rules engine
+				if p.dispatcher != nil && p.rules != nil {
+					routeMsg := rules.RouteMessage{
+						Text: msg.Text,
+						From: msg.Source,
+					}
+					if n := p.dispatcher.Dispatch(msg.Source, routeMsg, []byte(msg.Text)); n > 0 {
+						log.Info().Int("deliveries", n).Str("source", msg.Source).Msg("inbound dispatched")
 					}
 				}
-				if err := p.mesh.SendMessage(ctx, req); err != nil {
-					log.Error().Err(err).Str("source", msg.Source).Msg("failed to send gateway message to mesh")
-					continue
-				}
 
-				// Mark this text as gateway-injected so the mesh echo doesn't
-				// get forwarded back to gateways (prevents feedback loops).
-				p.markGatewayInjection(msg.Text)
-
-				// Persist as inbound message (received from external, relayed to mesh)
+				// Persist inbound message
 				dbMsg := &database.Message{
 					FromNode:    msg.Source,
 					ToNode:      msg.To,
-					Channel:     req.Channel,
-					PortNum:     1, // TEXT_MESSAGE
+					Channel:     msg.Channel,
+					PortNum:     1,
 					PortNumName: "TEXT_MESSAGE_APP",
 					DecodedText: msg.Text,
 					Direction:   "rx",
-					Transport:   msg.Source, // "iridium", "mqtt", or "cellular"
+					Transport:   msg.Source,
 				}
 				if err := p.db.InsertMessage(dbMsg); err != nil {
 					log.Error().Err(err).Msg("failed to persist gateway inbound message")
 				}
+
+				// Mark for loop prevention
+				p.markGatewayInjection(msg.Text)
 			}
 		}
 	}()
-}
-
-// handleCrossGatewayRelay checks if an inbound gateway message should be forwarded
-// to other gateways (cross-gateway relay). This enables gateway-to-gateway forwarding
-// without touching the mesh (e.g., iridium→cellular, mqtt→iridium).
-func (p *Processor) handleCrossGatewayRelay(ctx context.Context, msg gateway.InboundMessage) {
-	if p.rules == nil {
-		return
-	}
-
-	// Check relay dedup (prevent loops)
-	dedupKey := relayDedupKey(msg.Source, msg.Text)
-	p.relayDedupMu.Lock()
-	if ts, ok := p.relayDedup[dedupKey]; ok && time.Since(ts) < 5*time.Minute {
-		p.relayDedupMu.Unlock()
-		log.Debug().Str("source", msg.Source).Msg("relay dedup: skipping duplicate")
-		return
-	}
-	p.relayDedup[dedupKey] = time.Now()
-	p.relayDedupMu.Unlock()
-
-	// Prune old relay dedup entries periodically
-	go p.pruneRelayDedup()
-
-	match := p.rules.EvaluateRelay(msg.Source, msg.Text)
-	if match == nil {
-		return
-	}
-
-	log.Info().Int("rule_id", match.Rule.ID).Str("rule", match.Rule.Name).
-		Str("source", msg.Source).Str("dest", match.Rule.DestType).Msg("cross-gateway relay matched")
-
-	activeGateways := p.gateways
-	if p.gwProv != nil {
-		activeGateways = p.gwProv.Gateways()
-	}
-
-	// Build a synthetic MeshMessage for the Forward() interface
-	relayMsg := &transport.MeshMessage{
-		PortNum:     1, // TEXT_MESSAGE
-		PortNumName: "TEXT_MESSAGE_APP",
-		DecodedText: msg.Text,
-	}
-
-	for _, gw := range activeGateways {
-		gwType := gw.Type()
-
-		// Skip source gateway (prevent self-relay)
-		if gwType == msg.Source {
-			continue
-		}
-
-		// Check dest_type matching
-		shouldRelay := false
-		switch match.Rule.DestType {
-		case "all":
-			shouldRelay = true
-		case "both":
-			shouldRelay = gwType == "iridium" || gwType == "mqtt"
-		case "iridium":
-			shouldRelay = gwType == "iridium"
-		case "mqtt":
-			shouldRelay = gwType == "mqtt"
-		case "cellular":
-			shouldRelay = gwType == "cellular"
-		}
-
-		if !shouldRelay {
-			continue
-		}
-
-		// Global paid transport rate limit
-		if isPaidTransport(gwType) && !p.allowPaidTransport(gwType) {
-			log.Warn().Str("gateway", gwType).Msg("relay: paid transport global rate limit exceeded")
-			continue
-		}
-
-		if err := gw.Forward(ctx, relayMsg); err != nil {
-			log.Warn().Err(err).Str("gateway", gwType).Msg("cross-gateway relay forward failed")
-			p.Emit(transport.MeshEvent{
-				Type:    "forward_error",
-				Message: fmt.Sprintf("Relay %s→%s failed: %s", msg.Source, gwType, err.Error()),
-			})
-		} else {
-			log.Info().Str("from", msg.Source).Str("to", gwType).Msg("cross-gateway relay delivered")
-			p.Emit(transport.MeshEvent{
-				Type:    "relay",
-				Message: fmt.Sprintf("Relayed %s→%s", msg.Source, gwType),
-			})
-
-			// Persist relay message
-			dbMsg := &database.Message{
-				FromNode:    msg.Source,
-				ToNode:      gwType,
-				PortNum:     1,
-				PortNumName: "TEXT_MESSAGE_APP",
-				DecodedText: msg.Text,
-				Direction:   "relay",
-				Transport:   gwType,
-			}
-			if err := p.db.InsertMessage(dbMsg); err != nil {
-				log.Error().Err(err).Msg("failed to persist relay message")
-			}
-		}
-	}
-}
-
-func relayDedupKey(source, text string) string {
-	h := sha256.Sum256([]byte(source + "|" + text))
-	return fmt.Sprintf("%x", h[:8])
 }
 
 // markGatewayInjection records that a message text was injected from a gateway
@@ -673,45 +444,6 @@ func (p *Processor) pruneRelayDedup() {
 			delete(p.relayDedup, k)
 		}
 	}
-}
-
-// isPaidTransport returns true if the gateway type is a paid transport.
-func isPaidTransport(gwType string) bool {
-	return gwType == "iridium" || gwType == "cellular"
-}
-
-// isPortnumExplicitlyIncluded checks if a portnum is explicitly listed in the rule's source_portnums.
-func isPortnumExplicitlyIncluded(rule database.ForwardingRule, portnum int) bool {
-	if rule.SourcePortnums == nil {
-		return false // not explicitly included = use default exclusion
-	}
-	var portnums []int
-	if err := json.Unmarshal([]byte(*rule.SourcePortnums), &portnums); err != nil {
-		return false
-	}
-	for _, pn := range portnums {
-		if pn == portnum {
-			return true
-		}
-	}
-	return false
-}
-
-// allowPaidTransport enforces the global hourly rate limit for paid gateways.
-func (p *Processor) allowPaidTransport(gwType string) bool {
-	p.paidLimitersMu.Lock()
-	limiter, ok := p.paidLimiters[gwType]
-	if !ok {
-		// Create a limiter: paidTransportRateLimit messages per hour → rate per minute
-		ratePerMin := paidTransportRateLimit / 60
-		if ratePerMin < 1 {
-			ratePerMin = 1
-		}
-		limiter = ratelimit.NewRuleLimiter(ratePerMin, 60)
-		p.paidLimiters[gwType] = limiter
-	}
-	p.paidLimitersMu.Unlock()
-	return limiter.Allow()
 }
 
 // Emit broadcasts a synthetic event to all SSE subscribers.

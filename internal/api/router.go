@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"meshsat/internal/channel"
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
@@ -23,6 +24,7 @@ type Server struct {
 	ruleEngine    *rules.Engine
 	tleMgr        *engine.TLEManager
 	scheduler     *gateway.PassScheduler
+	registry      *channel.Registry
 	cellTransport transport.CellTransport
 	paidRateLimit int
 	sos           *SOSState
@@ -62,6 +64,11 @@ func (s *Server) SetPaidRateLimit(limit int) {
 // SetWebHandler sets the handler for serving the web UI.
 func (s *Server) SetWebHandler(h http.Handler) {
 	s.webHandler = h
+}
+
+// SetRegistry sets the channel registry for the channels API.
+func (s *Server) SetRegistry(r *channel.Registry) {
+	s.registry = r
 }
 
 // SetPassScheduler sets the pass scheduler for scheduler status endpoint.
@@ -145,7 +152,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/cellular/dyndns/update", s.handleDynDNSForceUpdate)
 
 		// Webhook receiver (inbound) + log
-		r.Post("/webhooks/cellular/inbound", s.handleWebhookCellularInbound)
+		r.Post("/webhooks/inbound", s.handleWebhookInbound)
+		r.Post("/webhooks/cellular/inbound", s.handleWebhookCellularInbound) // backwards compat
 		r.Get("/webhooks/log", s.handleGetWebhookLog)
 
 		// SMS contacts (address book)
@@ -198,6 +206,17 @@ func (s *Server) Router() http.Handler {
 		// Canned messages
 		r.Get("/canned-messages", s.handleGetCannedMessages)
 		r.Post("/canned-messages", s.handleSetCannedMessages)
+
+		// Transport channel registry (v0.2.0)
+		r.Get("/transport/channels", s.handleGetChannels)
+
+		// Delivery ledger (v0.2.0)
+		r.Get("/deliveries", s.handleGetDeliveries)
+		r.Get("/deliveries/stats", s.handleGetDeliveryStats)
+		r.Get("/deliveries/{id}", s.handleGetDelivery)
+		r.Post("/deliveries/{id}/cancel", s.handleCancelDelivery)
+		r.Post("/deliveries/{id}/retry", s.handleRetryDelivery)
+		r.Get("/deliveries/message/{ref}", s.handleGetMessageDeliveries)
 
 		// Forwarding rules
 		r.Get("/rules", s.handleGetRules)

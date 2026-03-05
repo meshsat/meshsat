@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -19,10 +21,11 @@ type ReceiverStartFunc func(ctx context.Context, gw Gateway)
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
 	db              *database.DB
-	sat             transport.SatTransport  // optional, for iridium gateway
-	cell            transport.CellTransport // optional, for cellular gateway
-	predictor       PassPredictor           // optional, for pass scheduler
-	onReceiverStart ReceiverStartFunc       // called when a gateway starts
+	sat             transport.SatTransport       // optional, for iridium gateway
+	cell            transport.CellTransport      // optional, for cellular gateway
+	astro           transport.AstrocastTransport // optional, for astrocast gateway
+	predictor       PassPredictor                // optional, for pass scheduler
+	onReceiverStart ReceiverStartFunc            // called when a gateway starts
 	running         map[string]Gateway
 	mu              sync.RWMutex
 	cancelFn        context.CancelFunc
@@ -40,6 +43,11 @@ func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 // SetCellTransport sets the cellular transport for the cellular gateway.
 func (m *Manager) SetCellTransport(cell transport.CellTransport) {
 	m.cell = cell
+}
+
+// SetAstrocastTransport sets the Astrocast transport for the astrocast gateway.
+func (m *Manager) SetAstrocastTransport(astro transport.AstrocastTransport) {
+	m.astro = astro
 }
 
 // SetPassPredictor sets the pass predictor for pass-aware scheduling on Iridium gateways.
@@ -256,6 +264,37 @@ func (m *Manager) TestGateway(gwType string) error {
 			return fmt.Errorf("SIM not ready: %s", status.SIMState)
 		}
 		return nil
+	case "webhook":
+		whCfg, err := ParseWebhookConfig(cfg.Config)
+		if err != nil {
+			return err
+		}
+		if whCfg.OutboundURL == "" {
+			return fmt.Errorf("no outbound URL configured")
+		}
+		client := &http.Client{Timeout: time.Duration(whCfg.TimeoutSec) * time.Second}
+		req, err := http.NewRequest("HEAD", whCfg.OutboundURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("webhook endpoint unreachable: %w", err)
+		}
+		resp.Body.Close()
+		return nil
+	case "astrocast":
+		if m.astro == nil {
+			return fmt.Errorf("astrocast transport not available")
+		}
+		status, err := m.astro.GetStatus(context.Background())
+		if err != nil {
+			return err
+		}
+		if !status.Connected {
+			return fmt.Errorf("astrocast module not connected")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -373,6 +412,27 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 			return nil, err
 		}
 		return NewCellularGateway(*cfg, m.cell, m.db), nil
+	case "webhook":
+		cfg, err := ParseWebhookConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		return NewWebhookGateway(*cfg, m.db), nil
+	case "astrocast":
+		if m.astro == nil {
+			return nil, fmt.Errorf("astrocast transport not available")
+		}
+		cfg, err := ParseAstrocastConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		return NewAstrocastGateway(*cfg, m.astro, m.db), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -390,6 +450,14 @@ func (m *Manager) redactConfig(gwType, configJSON string) json.RawMessage {
 		return data
 	case "cellular":
 		cfg, err := ParseCellularConfig(configJSON)
+		if err != nil {
+			return json.RawMessage(configJSON)
+		}
+		redacted := cfg.Redacted()
+		data, _ := json.Marshal(redacted)
+		return data
+	case "webhook":
+		cfg, err := ParseWebhookConfig(configJSON)
 		if err != nil {
 			return json.RawMessage(configJSON)
 		}
@@ -448,6 +516,18 @@ func (m *Manager) GetCellularGateway() *CellularGateway {
 	if gw, ok := m.running["cellular"]; ok {
 		if cgw, ok := gw.(*CellularGateway); ok {
 			return cgw
+		}
+	}
+	return nil
+}
+
+// GetWebhookGateway returns the running webhook gateway, if any.
+func (m *Manager) GetWebhookGateway() *WebhookGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if gw, ok := m.running["webhook"]; ok {
+		if wgw, ok := gw.(*WebhookGateway); ok {
+			return wgw
 		}
 	}
 	return nil

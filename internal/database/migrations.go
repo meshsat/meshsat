@@ -289,6 +289,47 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_webhook_log_created ON webhook_log(created_at);
 	CREATE INDEX IF NOT EXISTS idx_webhook_log_direction ON webhook_log(direction);`,
+
+	// v14: Message delivery ledger — unified delivery tracking across all channels
+	`CREATE TABLE IF NOT EXISTS message_deliveries (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		msg_ref      TEXT NOT NULL,
+		rule_id      INTEGER,
+		channel      TEXT NOT NULL,
+		status       TEXT NOT NULL DEFAULT 'queued',
+		priority     INTEGER NOT NULL DEFAULT 1,
+		payload      BLOB,
+		text_preview TEXT NOT NULL DEFAULT '',
+		retries      INTEGER NOT NULL DEFAULT 0,
+		max_retries  INTEGER NOT NULL DEFAULT 3,
+		next_retry   DATETIME,
+		last_error   TEXT DEFAULT '',
+		channel_ref  TEXT DEFAULT '',
+		cost         INTEGER DEFAULT 0,
+		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_deliveries_msg ON message_deliveries(msg_ref);
+	CREATE INDEX IF NOT EXISTS idx_deliveries_channel_status ON message_deliveries(channel, status);
+	CREATE INDEX IF NOT EXISTS idx_deliveries_retry ON message_deliveries(status, next_retry);
+
+	-- Migrate existing dead_letters to message_deliveries
+	INSERT INTO message_deliveries (msg_ref, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, last_error, created_at, updated_at)
+		SELECT
+			COALESCE(CAST(id AS TEXT), ''),
+			'iridium',
+			CASE WHEN status = 'dead' THEN 'dead' WHEN status = 'pending' THEN 'queued' ELSE status END,
+			COALESCE(priority, 1),
+			payload,
+			COALESCE(text_preview, ''),
+			COALESCE(retries, 0),
+			COALESCE(max_retries, 3),
+			next_retry,
+			COALESCE(last_error, ''),
+			created_at,
+			COALESCE(updated_at, created_at)
+		FROM dead_letters
+		WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='dead_letters');`,
 }
 
 func (db *DB) migrate() error {

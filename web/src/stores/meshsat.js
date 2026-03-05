@@ -699,6 +699,58 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Delivery ledger (v0.2.0)
+  const deliveries = ref([])
+  const deliveryStats = ref([])
+
+  async function fetchDeliveries(params = {}) {
+    try {
+      const data = await api.get('/deliveries', params)
+      deliveries.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function fetchDeliveryStats() {
+    try {
+      const data = await api.get('/deliveries/stats')
+      deliveryStats.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function cancelDelivery(id) {
+    error.value = null
+    try {
+      await api.post(`/deliveries/${id}/cancel`)
+      await fetchDeliveries()
+      await fetchDeliveryStats()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function retryDelivery(id) {
+    error.value = null
+    try {
+      await api.post(`/deliveries/${id}/retry`)
+      await fetchDeliveries()
+      await fetchDeliveryStats()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function fetchMessageDeliveries(ref) {
+    try {
+      return await api.get(`/deliveries/message/${ref}`)
+    } catch (e) { error.value = e.message; return [] }
+  }
+
+  // Transport channels (v0.2.0)
+  const transportChannels = ref([])
+
+  async function fetchTransportChannels() {
+    try {
+      const data = await api.get('/transport/channels')
+      transportChannels.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
   // Webhook Log
   const webhookLog = ref([])
 
@@ -739,6 +791,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     activateSOS, cancelSOS, fetchSOSStatus,
     fetchDLQ,
     smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
+    deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
+    transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,
     connectSSE, closeSSE
   }

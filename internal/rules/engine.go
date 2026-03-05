@@ -11,8 +11,17 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/ratelimit"
-	"meshsat/internal/transport"
 )
+
+// RouteMessage is a transport-agnostic message envelope for unified rule evaluation.
+type RouteMessage struct {
+	Text    string // message text
+	From    string // source identifier (node ID, phone number, etc.)
+	To      string // optional target
+	Channel int    // mesh channel (0 if non-mesh)
+	PortNum int    // portnum (1=text, 67=telemetry, etc.)
+	RawData []byte // original payload
+}
 
 // MatchResult contains the matched rule and resolved destination details.
 type MatchResult struct {
@@ -70,24 +79,36 @@ func (e *Engine) RuleCount() int {
 	return len(e.rules)
 }
 
-// Evaluate returns the first matching rule for a given mesh message.
-// Returns nil if no rule matches.
-func (e *Engine) Evaluate(msg *transport.MeshMessage) *MatchResult {
+// EvaluateRoute returns ALL matching rules for a message from a given source channel.
+// Multi-match: a message can match multiple rules with different destinations.
+// Self-loop prevention: rules where dest_type == source are skipped.
+func (e *Engine) EvaluateRoute(source string, msg RouteMessage) []MatchResult {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	fromNode := fmt.Sprintf("!%08x", msg.From)
+	var results []MatchResult
 
 	for _, rule := range e.rules {
 		if !rule.Enabled {
 			continue
 		}
 
-		if !matchSource(rule, msg, fromNode) {
+		// Self-loop prevention
+		if rule.DestType == source {
 			continue
 		}
 
-		// Check rate limiter
+		// Match source
+		if !matchRouteSource(rule, source, msg) {
+			continue
+		}
+
+		// Keyword filter
+		if !MatchesKeyword(rule, msg.Text) {
+			continue
+		}
+
+		// Rate limiter
 		if limiter, ok := e.rates[rule.ID]; ok {
 			if !limiter.Allow() {
 				log.Debug().Int("rule_id", rule.ID).Str("rule", rule.Name).Msg("rule rate limited")
@@ -95,85 +116,143 @@ func (e *Engine) Evaluate(msg *transport.MeshMessage) *MatchResult {
 			}
 		}
 
-		// Update match stats (async, don't block evaluation)
 		go e.recordMatch(rule.ID)
-
-		return &MatchResult{Rule: rule}
+		results = append(results, MatchResult{Rule: rule})
 	}
 
-	return nil
+	return results
 }
 
-func matchSource(rule database.ForwardingRule, msg *transport.MeshMessage, fromNode string) bool {
-	// First: match by source_type (node, channel, portnum, any)
-	matched := false
+// matchRouteSource checks if a rule's source_type matches the given source channel and message.
+func matchRouteSource(rule database.ForwardingRule, source string, msg RouteMessage) bool {
 	switch rule.SourceType {
 	case "any":
-		matched = true
+		return matchRoutePortnums(rule, msg.PortNum)
+
+	case "mesh":
+		if source != "mesh" {
+			return false
+		}
+		return matchRouteMeshFilters(rule, msg) && matchRoutePortnums(rule, msg.PortNum)
 
 	case "channel":
-		if rule.SourceChannels == nil {
-			matched = true
-		} else {
+		// Legacy: mesh channel filter
+		if source != "mesh" {
+			return false
+		}
+		if rule.SourceChannels != nil {
 			var channels []int
 			if err := json.Unmarshal([]byte(*rule.SourceChannels), &channels); err == nil {
+				found := false
 				for _, ch := range channels {
-					if uint32(ch) == msg.Channel {
-						matched = true
+					if ch == msg.Channel {
+						found = true
 						break
 					}
 				}
+				if !found {
+					return false
+				}
 			}
 		}
+		return matchRoutePortnums(rule, msg.PortNum)
 
 	case "node":
-		if rule.SourceNodes == nil {
-			matched = true
-		} else {
+		// Legacy: mesh node filter
+		if source != "mesh" {
+			return false
+		}
+		if rule.SourceNodes != nil {
 			var nodes []string
 			if err := json.Unmarshal([]byte(*rule.SourceNodes), &nodes); err == nil {
+				found := false
 				for _, n := range nodes {
-					if n == fromNode {
-						matched = true
+					if n == msg.From {
+						found = true
 						break
 					}
 				}
+				if !found {
+					return false
+				}
 			}
 		}
+		return matchRoutePortnums(rule, msg.PortNum)
 
 	case "portnum":
-		// Legacy: source_type=portnum uses source_portnums as the primary match.
-		// The portnum filter below will handle it.
-		matched = true
+		if source != "mesh" {
+			return false
+		}
+		return matchRoutePortnums(rule, msg.PortNum)
+
+	case "iridium":
+		return source == "iridium"
+	case "astrocast":
+		return source == "astrocast"
+	case "cellular":
+		return source == "cellular"
+	case "webhook":
+		return source == "webhook"
+	case "mqtt":
+		return source == "mqtt"
+	case "external":
+		return source != "mesh"
 
 	default:
 		return false
 	}
+}
 
-	if !matched {
-		return false
-	}
-
-	// Second: always apply source_portnums as a filter, regardless of source_type.
-	// If source_portnums is set, the message portnum must be in the list.
-	if rule.SourcePortnums != nil {
-		var portnums []int
-		if err := json.Unmarshal([]byte(*rule.SourcePortnums), &portnums); err != nil {
-			return false
-		}
-		found := false
-		for _, pn := range portnums {
-			if pn == msg.PortNum {
-				found = true
-				break
+func matchRouteMeshFilters(rule database.ForwardingRule, msg RouteMessage) bool {
+	// Channel filter
+	if rule.SourceChannels != nil {
+		var channels []int
+		if err := json.Unmarshal([]byte(*rule.SourceChannels), &channels); err == nil {
+			found := false
+			for _, ch := range channels {
+				if ch == msg.Channel {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
 			}
 		}
-		if !found {
-			return false
+	}
+	// Node filter
+	if rule.SourceNodes != nil {
+		var nodes []string
+		if err := json.Unmarshal([]byte(*rule.SourceNodes), &nodes); err == nil {
+			found := false
+			for _, n := range nodes {
+				if n == msg.From {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
 		}
 	}
-
 	return true
+}
+
+func matchRoutePortnums(rule database.ForwardingRule, portNum int) bool {
+	if rule.SourcePortnums == nil {
+		return true
+	}
+	var portnums []int
+	if err := json.Unmarshal([]byte(*rule.SourcePortnums), &portnums); err != nil {
+		return false
+	}
+	for _, pn := range portnums {
+		if pn == portNum {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) recordMatch(ruleID int) {
@@ -184,83 +263,6 @@ func (e *Engine) recordMatch(ruleID int) {
 	if err := e.db.UpdateRuleMatch(ruleID, now); err != nil {
 		log.Warn().Err(err).Int("rule_id", ruleID).Msg("failed to update rule match stats")
 	}
-}
-
-// EvaluateInbound returns the first matching inbound rule for a gateway message.
-// Inbound rules have source_type = iridium/mqtt/external and dest_type = mesh.
-// Returns nil if no rule matches.
-func (e *Engine) EvaluateInbound(source string, text string) *MatchResult {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	for _, rule := range e.rules {
-		if !rule.Enabled {
-			continue
-		}
-		if !matchInboundSource(rule, source) {
-			continue
-		}
-		if !MatchesKeyword(rule, text) {
-			continue
-		}
-		// Check rate limiter
-		if limiter, ok := e.rates[rule.ID]; ok {
-			if !limiter.Allow() {
-				continue
-			}
-		}
-		go e.recordMatch(rule.ID)
-		return &MatchResult{Rule: rule}
-	}
-	return nil
-}
-
-func matchInboundSource(rule database.ForwardingRule, source string) bool {
-	switch rule.SourceType {
-	case "iridium":
-		return source == "iridium"
-	case "mqtt":
-		return source == "mqtt"
-	case "cellular":
-		return source == "cellular"
-	case "external":
-		return source == "iridium" || source == "mqtt" || source == "cellular"
-	default:
-		return false
-	}
-}
-
-// EvaluateRelay returns the first matching inbound rule that routes to a non-mesh
-// destination (cross-gateway relay). Used by the processor to forward messages
-// between external gateways without touching the mesh.
-func (e *Engine) EvaluateRelay(source string, text string) *MatchResult {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	for _, rule := range e.rules {
-		if !rule.Enabled {
-			continue
-		}
-		// Relay rules are inbound rules whose dest_type is NOT "mesh"
-		// i.e., they route from one external source to another external dest
-		if rule.DestType == "mesh" {
-			continue
-		}
-		if !matchInboundSource(rule, source) {
-			continue
-		}
-		if !MatchesKeyword(rule, text) {
-			continue
-		}
-		if limiter, ok := e.rates[rule.ID]; ok {
-			if !limiter.Allow() {
-				continue
-			}
-		}
-		go e.recordMatch(rule.ID)
-		return &MatchResult{Rule: rule}
-	}
-	return nil
 }
 
 // MatchesKeyword checks if the message text contains the rule's keyword (case-insensitive).

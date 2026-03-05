@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/api"
+	"meshsat/internal/channel"
 	"meshsat/internal/config"
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
@@ -88,10 +89,20 @@ func main() {
 	deduplicator.StartPruner(ctx)
 	log.Info().Msg("deduplicator ready")
 
+	// Channel registry (v0.2.0)
+	registry := channel.NewRegistry()
+	channel.RegisterDefaults(registry)
+	log.Info().Int("channels", len(registry.IDs())).Msg("channel registry ready")
+
 	// Rule engine
 	ruleEngine := rules.NewEngine(db)
 	if err := ruleEngine.ReloadFromDB(); err != nil {
 		log.Warn().Err(err).Msg("failed to load forwarding rules (table may not exist yet)")
+	}
+
+	// Migrate compound dest_types (both/all → per-channel rules)
+	if err := rules.MigrateCompoundDestTypes(db); err != nil {
+		log.Warn().Err(err).Msg("compound dest_type migration failed")
 	}
 
 	// Processor
@@ -127,6 +138,13 @@ func main() {
 	// forwards to live gateway instances (survives stop/start/reconfigure)
 	proc.SetGatewayProvider(gwMgr)
 
+	// Dispatcher — structured delivery fan-out (v0.2.0)
+	dispatcher := engine.NewDispatcher(db, ruleEngine, registry, gwMgr, mesh)
+	dispatcher.SetEmitter(proc.Emit)
+	dispatcher.Start(ctx)
+	proc.SetDispatcher(dispatcher)
+	log.Info().Msg("dispatcher + delivery workers started")
+
 	// Signal recorder — persists Iridium signal bar readings to DB
 	sigRecorder := engine.NewSignalRecorder(db, sat)
 	sigRecorder.Start(ctx)
@@ -141,6 +159,7 @@ func main() {
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetRuleEngine(ruleEngine)
+	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)

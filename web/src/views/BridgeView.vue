@@ -4,6 +4,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import { priorityLabel, priorityColor, formatTimestamp, formatRelativeTime } from '@/utils/format'
 import RuleCard from '@/components/RuleCard.vue'
 import RuleEditor from '@/components/RuleEditor.vue'
+import DeliveryStatus from '@/components/DeliveryStatus.vue'
 
 const store = useMeshsatStore()
 const activeTab = ref('outbound')
@@ -16,12 +17,35 @@ const expandedPane = ref(null) // 'mesh' | 'mqtt' | 'iridium' | 'cellular'
 const subTabs = [
   { id: 'outbound', label: 'Outbound' },
   { id: 'inbound', label: 'Inbound' },
+  { id: 'deliveries', label: 'Deliveries' },
   { id: 'queue', label: 'Queue' }
 ]
+
+// Delivery filters
+const deliveryFilter = ref({ channel: '', status: '' })
+
+const filteredDeliveries = computed(() => {
+  let list = store.deliveries || []
+  if (deliveryFilter.value.channel) list = list.filter(d => d.channel === deliveryFilter.value.channel)
+  if (deliveryFilter.value.status) list = list.filter(d => d.status === deliveryFilter.value.status)
+  return list
+})
+
+// Delivery stats summary
+const deliveryStatsSummary = computed(() => {
+  const stats = store.deliveryStats || []
+  const totals = { queued: 0, sending: 0, sent: 0, retry: 0, failed: 0, dead: 0 }
+  for (const s of stats) {
+    if (totals[s.status] !== undefined) totals[s.status] += s.count
+  }
+  return totals
+})
 
 const mqttGw = computed(() => (store.gateways || []).find(g => g.type === 'mqtt'))
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+const astrocastGw = computed(() => (store.gateways || []).find(g => g.type === 'astrocast'))
+const webhookGw = computed(() => (store.gateways || []).find(g => g.type === 'webhook'))
 
 // Cost risk warning — true when any rule has danger-level risk
 const hasDangerRules = computed(() =>
@@ -184,6 +208,8 @@ onMounted(() => {
   store.fetchGateways()
   store.fetchDLQ()
   store.fetchStatus()
+  store.fetchDeliveries()
+  store.fetchDeliveryStats()
 })
 </script>
 
@@ -203,7 +229,7 @@ onMounted(() => {
     </div>
 
     <!-- Status panes (clickable for debug) -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+    <div class="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-4">
       <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
         @click="togglePane('mesh')">
         <div class="text-[10px] text-gray-500 mb-1">MESH RADIO</div>
@@ -234,6 +260,22 @@ onMounted(() => {
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="gwStatusColor(cellularGw)" />
           <span class="text-xs text-gray-300">{{ gwStatusLabel(cellularGw) }}</span>
+        </div>
+      </div>
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+        @click="togglePane('astrocast')">
+        <div class="text-[10px] text-gray-500 mb-1">ASTROCAST</div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full" :class="gwStatusColor(astrocastGw)" />
+          <span class="text-xs text-gray-300">{{ gwStatusLabel(astrocastGw) }}</span>
+        </div>
+      </div>
+      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
+        @click="togglePane('webhook')">
+        <div class="text-[10px] text-gray-500 mb-1">WEBHOOK</div>
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full" :class="gwStatusColor(webhookGw)" />
+          <span class="text-xs text-gray-300">{{ gwStatusLabel(webhookGw) }}</span>
         </div>
       </div>
     </div>
@@ -288,6 +330,26 @@ onMounted(() => {
         </template>
         <div v-else class="text-gray-600">Not configured</div>
       </div>
+
+      <!-- Astrocast debug -->
+      <div v-if="expandedPane === 'astrocast'" class="space-y-1">
+        <template v-if="astrocastGw">
+          <div v-for="[k, v] in gwDebugRows(astrocastGw)" :key="k" class="flex justify-between">
+            <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
+          </div>
+        </template>
+        <div v-else class="text-gray-600">Not configured</div>
+      </div>
+
+      <!-- Webhook debug -->
+      <div v-if="expandedPane === 'webhook'" class="space-y-1">
+        <template v-if="webhookGw">
+          <div v-for="[k, v] in gwDebugRows(webhookGw)" :key="k" class="flex justify-between">
+            <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
+          </div>
+        </template>
+        <div v-else class="text-gray-600">Not configured</div>
+      </div>
     </div>
 
     <!-- Sub-tab bar -->
@@ -296,6 +358,8 @@ onMounted(() => {
         class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
         :class="activeTab === tab.id ? 'bg-tactical-iridium/10 text-tactical-iridium' : 'text-gray-500 hover:text-gray-300'">
         {{ tab.label }}
+        <span v-if="tab.id === 'deliveries' && deliveryStatsSummary.queued + deliveryStatsSummary.retry > 0"
+          class="ml-1 px-1 py-px rounded text-[9px] bg-blue-400/10 text-blue-400">{{ deliveryStatsSummary.queued + deliveryStatsSummary.retry }}</span>
         <span v-if="tab.id === 'queue' && queueItems.length > 0"
           class="ml-1 px-1 py-px rounded text-[9px] bg-amber-400/10 text-amber-400">{{ queueItems.length }}</span>
       </button>
@@ -332,6 +396,82 @@ onMounted(() => {
       <div class="space-y-3">
         <RuleCard v-for="rule in inboundRules" :key="rule.id" :rule="rule"
           @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
+      </div>
+    </div>
+
+    <!-- ═══ Deliveries Tab ═══ -->
+    <div v-if="activeTab === 'deliveries'">
+      <!-- Stats summary -->
+      <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
+        <div v-for="(count, status) in deliveryStatsSummary" :key="status"
+          class="bg-tactical-surface rounded-lg p-2 border border-tactical-border text-center">
+          <div class="text-[10px] text-gray-500 uppercase">{{ status }}</div>
+          <div class="text-sm font-mono" :class="status === 'dead' || status === 'failed' ? 'text-red-400' : status === 'sent' ? 'text-emerald-400' : 'text-gray-300'">
+            {{ count }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="flex items-center gap-3 mb-3">
+        <select v-model="deliveryFilter.channel" @change="store.fetchDeliveries({ channel: deliveryFilter.channel, status: deliveryFilter.status })"
+          class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
+          <option value="">All channels</option>
+          <option value="mesh">Mesh</option>
+          <option value="iridium">Iridium</option>
+          <option value="astrocast">Astrocast</option>
+          <option value="mqtt">MQTT</option>
+          <option value="cellular">Cellular</option>
+          <option value="webhook">Webhook</option>
+        </select>
+        <select v-model="deliveryFilter.status" @change="store.fetchDeliveries({ channel: deliveryFilter.channel, status: deliveryFilter.status })"
+          class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
+          <option value="">All statuses</option>
+          <option value="queued">Queued</option>
+          <option value="sending">Sending</option>
+          <option value="sent">Sent</option>
+          <option value="retry">Retry</option>
+          <option value="failed">Failed</option>
+          <option value="dead">Dead</option>
+        </select>
+        <button @click="store.fetchDeliveries(); store.fetchDeliveryStats()"
+          class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-xs text-gray-400 hover:text-gray-200">
+          Refresh
+        </button>
+      </div>
+
+      <!-- Delivery list -->
+      <div v-if="filteredDeliveries.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
+        No deliveries yet. Messages will appear here when rules match.
+      </div>
+      <div class="space-y-2">
+        <div v-for="del in filteredDeliveries" :key="del.id"
+          class="bg-tactical-surface rounded-lg p-3 border border-tactical-border">
+          <div class="flex items-center gap-2 mb-1.5">
+            <span class="text-[10px] font-mono px-1.5 py-px rounded bg-gray-800 text-gray-400">{{ del.channel }}</span>
+            <DeliveryStatus :status="del.status" />
+            <span v-if="del.rule_id" class="text-[9px] text-gray-600 font-mono">rule:{{ del.rule_id }}</span>
+            <span class="flex-1" />
+            <span class="text-[9px] text-gray-600">{{ formatRelativeTime(del.created_at) }}</span>
+          </div>
+          <div class="text-[11px] font-mono bg-gray-900/50 rounded px-2 py-1 mb-1.5 truncate text-gray-400">
+            {{ del.text_preview || '(no text)' }}
+          </div>
+          <div class="flex items-center gap-2 text-[10px]">
+            <span class="text-gray-600">Retries: {{ del.retries }}/{{ del.max_retries || '~' }}</span>
+            <span v-if="del.next_retry" class="text-gray-600">Next: {{ nextRetryCountdown(del.next_retry) }}</span>
+            <span v-if="del.last_error" class="text-red-400/70 truncate max-w-[200px]" :title="del.last_error">{{ del.last_error }}</span>
+            <span class="flex-1" />
+            <button v-if="del.status === 'queued' || del.status === 'retry'"
+              @click="store.cancelDelivery(del.id)" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:text-red-400 text-[10px]">
+              Cancel
+            </button>
+            <button v-if="del.status === 'failed' || del.status === 'dead'"
+              @click="store.retryDelivery(del.id)" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:text-teal-400 text-[10px]">
+              Retry
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
