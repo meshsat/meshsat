@@ -286,7 +286,12 @@ func (g *IridiumGateway) captureGeolocation(ctx context.Context) {
 			ts = t.Unix()
 		}
 	}
-	if err := g.db.InsertGeolocation("iridium", geo.Lat, geo.Lon, geo.AltKm, geo.Accuracy, ts); err != nil {
+	// Sanitize altitude: AT-MSGEO can return satellite altitude (~780-5000km)
+	altKm := geo.AltKm
+	if altKm > 10.0 || altKm < -1.0 {
+		altKm = 0.0
+	}
+	if err := g.db.InsertGeolocation("iridium", geo.Lat, geo.Lon, altKm, geo.Accuracy, ts); err != nil {
 		log.Warn().Err(err).Msg("iridium: failed to store geolocation")
 		return
 	}

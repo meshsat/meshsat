@@ -176,6 +176,11 @@ func (m *TLEManager) GeneratePasses(lat, lon, altKm float64, hours int, minElevD
 	if minElevDeg <= 0 {
 		minElevDeg = 5.0
 	}
+	// Clamp altitude to sane ground-level max (10km).
+	// AT-MSGEO can return satellite altitude (~780-5000km) which breaks SGP4.
+	if altKm > 10.0 || altKm < 0 {
+		altKm = 0.0
+	}
 
 	var now time.Time
 	if startTime > 0 {

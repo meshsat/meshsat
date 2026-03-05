@@ -918,10 +918,17 @@ func parseMSGEO(resp string) (*GeolocationInfo, error) {
 	lon, _ := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
 	alt, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
 
+	// Sanitize altitude: AT-MSGEO sometimes returns satellite altitude (~780km)
+	// or garbage values. Ground stations are always below 10km.
+	altKm := alt
+	if altKm > 10.0 || altKm < -1.0 {
+		altKm = 0.0
+	}
+
 	return &GeolocationInfo{
 		Lat:       lat / 1000.0, // Iridium returns milli-degrees
 		Lon:       lon / 1000.0,
-		AltKm:     alt,
+		AltKm:     altKm,
 		Accuracy:  10.0, // Iridium geolocation ~10km typical
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}, nil
