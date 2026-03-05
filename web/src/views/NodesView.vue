@@ -8,6 +8,10 @@ const filter = ref('all') // 'all', 'active', 'stale'
 const sortBy = ref('last_heard') // 'last_heard', 'name', 'signal'
 const removing = ref(null)
 const removingStale = ref(false)
+const expandedNode = ref(null)
+const nodeTelemetry = ref([])
+const nodeNeighbors = ref([])
+const telemetryLoading = ref(false)
 
 const radioConnected = computed(() => store.status?.connected === true)
 const now = ref(Date.now() / 1000)
@@ -56,6 +60,25 @@ async function handleTraceroute(node) {
   try {
     await store.adminTraceroute({ node_id: node.num })
   } catch { /* store error */ }
+}
+
+async function toggleNodeDetail(node) {
+  if (expandedNode.value === node.num) {
+    expandedNode.value = null
+    return
+  }
+  expandedNode.value = node.num
+  telemetryLoading.value = true
+  const nodeId = node.user_id || `!${node.num.toString(16).padStart(8, '0')}`
+  try {
+    const data = await store.fetchTelemetry({ node: nodeId, limit: 50 })
+    nodeTelemetry.value = data || []
+  } catch { nodeTelemetry.value = [] }
+  try {
+    await store.fetchNeighborInfo()
+    nodeNeighbors.value = (store.neighborInfo || []).filter(n => n.node_id === node.num)
+  } catch { nodeNeighbors.value = [] }
+  telemetryLoading.value = false
 }
 
 async function handleRemoveAllStale() {
@@ -197,6 +220,76 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
           <span>{{ node.latitude?.toFixed(5) }}, {{ node.longitude?.toFixed(5) }}</span>
           <span v-if="node.altitude">{{ node.altitude }}m</span>
           <span v-if="node.sats">{{ node.sats }} sats</span>
+        </div>
+
+        <!-- Expand toggle -->
+        <div class="mt-1.5 pl-12">
+          <button @click="toggleNodeDetail(node)" class="text-[10px] text-gray-600 hover:text-teal-400 transition-colors">
+            {{ expandedNode === node.num ? 'Hide details' : 'Show details' }}
+          </button>
+        </div>
+
+        <!-- Expanded detail (telemetry + neighbors) -->
+        <div v-if="expandedNode === node.num" class="mt-3 pl-12 space-y-3">
+          <div v-if="telemetryLoading" class="text-xs text-gray-500">Loading...</div>
+
+          <!-- Telemetry history -->
+          <div v-if="nodeTelemetry.length > 0">
+            <h4 class="text-xs font-medium text-gray-400 mb-1.5">Telemetry History ({{ nodeTelemetry.length }} records)</h4>
+            <div class="overflow-x-auto">
+              <table class="w-full text-[10px] text-gray-400">
+                <thead>
+                  <tr class="text-gray-600">
+                    <th class="text-left pr-2 py-1">Time</th>
+                    <th class="text-right pr-2 py-1">Battery</th>
+                    <th class="text-right pr-2 py-1">Voltage</th>
+                    <th class="text-right pr-2 py-1">Ch Util</th>
+                    <th class="text-right pr-2 py-1">Air Util</th>
+                    <th class="text-right pr-2 py-1">Temp</th>
+                    <th class="text-right py-1">Uptime</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="t in nodeTelemetry.slice(0, 20)" :key="t.id" class="border-t border-gray-800/50">
+                    <td class="pr-2 py-0.5 text-gray-600">{{ new Date(t.created_at).toLocaleTimeString() }}</td>
+                    <td class="text-right pr-2 py-0.5">{{ t.battery_level }}%</td>
+                    <td class="text-right pr-2 py-0.5">{{ t.voltage?.toFixed(2) }}V</td>
+                    <td class="text-right pr-2 py-0.5">{{ t.channel_util?.toFixed(1) }}%</td>
+                    <td class="text-right pr-2 py-0.5">{{ t.air_util_tx?.toFixed(1) }}%</td>
+                    <td class="text-right pr-2 py-0.5">{{ t.temperature != null ? `${t.temperature.toFixed(1)}°` : '-' }}</td>
+                    <td class="text-right py-0.5">{{ t.uptime_seconds ? `${Math.floor(t.uptime_seconds / 3600)}h` : '-' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <!-- Mini sparkline: battery over time -->
+            <div class="mt-2 flex items-end gap-px h-8">
+              <div v-for="(t, i) in nodeTelemetry.slice(0, 30).reverse()" :key="i"
+                class="flex-1 rounded-t"
+                :class="t.battery_level > 50 ? 'bg-emerald-500/40' : t.battery_level > 20 ? 'bg-amber-500/40' : 'bg-red-500/40'"
+                :style="{ height: `${Math.max(2, t.battery_level * 0.3)}px` }"
+                :title="`${t.battery_level}% at ${new Date(t.created_at).toLocaleTimeString()}`">
+              </div>
+            </div>
+            <div class="text-[9px] text-gray-600 mt-0.5">Battery level over time</div>
+          </div>
+
+          <!-- Neighbor info -->
+          <div v-if="nodeNeighbors.length > 0">
+            <h4 class="text-xs font-medium text-gray-400 mb-1.5">Neighbors</h4>
+            <div class="flex flex-wrap gap-2">
+              <div v-for="ni in nodeNeighbors" :key="ni.node_id" class="bg-gray-900/50 rounded px-2 py-1 text-[10px]">
+                <div v-for="n in ni.neighbors" :key="n.node_id" class="flex items-center gap-2 py-0.5">
+                  <span class="text-gray-400 font-mono">!{{ n.node_id.toString(16).padStart(8, '0') }}</span>
+                  <span :class="n.snr >= 0 ? 'text-emerald-400/70' : 'text-amber-400/70'">SNR {{ n.snr?.toFixed(1) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!telemetryLoading && nodeTelemetry.length === 0 && nodeNeighbors.length === 0" class="text-xs text-gray-600">
+            No telemetry or neighbor data for this node.
+          </div>
         </div>
       </div>
     </div>

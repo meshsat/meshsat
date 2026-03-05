@@ -235,10 +235,21 @@ const radioConnected = computed(() => store.status?.connected === true)
 const nodeName = computed(() => store.status?.node_name || 'Unknown')
 const activeNodes = computed(() => (store.nodes || []).filter(n => isNodeActive(n, nowSec.value)))
 const totalNodes = computed(() => (store.nodes || []).length)
+const staleNodes = computed(() => (store.nodes || []).filter(n => !isNodeActive(n, nowSec.value)))
+const staleCount = computed(() => staleNodes.value.length)
 const topNodes = computed(() => {
   const sorted = [...(store.nodes || [])].sort((a, b) => (b.last_heard || 0) - (a.last_heard || 0))
   return sorted.slice(0, 6)
 })
+const neighborCount = computed(() => (store.neighborInfo || []).length)
+
+// ── Mesh widget actions ──
+const broadcastingPosition = ref(false)
+async function dashBroadcastPosition() {
+  broadcastingPosition.value = true
+  try { await store.sendPosition() } catch {}
+  broadcastingPosition.value = false
+}
 
 // ── Computed: Cellular 4G/LTE panel ──
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
@@ -490,7 +501,8 @@ async function fetchAll() {
     store.fetchSchedulerStatus(),
     store.fetchLocationSources(),
     store.fetchCellularSignal(),
-    store.fetchCellularStatus()
+    store.fetchCellularStatus(),
+    store.fetchNeighborInfo()
   ])
 }
 
@@ -694,6 +706,12 @@ function widgetGridClass(id) {
         <div class="flex items-center gap-2 mb-3">
           <span class="font-mono text-lg font-bold text-tactical-lora">{{ activeNodes.length }}</span>
           <span class="text-[10px] text-gray-500">/ {{ totalNodes }} nodes</span>
+          <span v-if="staleCount > 0" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-400/10 text-amber-400">
+            {{ staleCount }} stale
+          </span>
+          <span v-if="neighborCount > 0" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-tactical-lora/10 text-tactical-lora/70">
+            {{ neighborCount }} neighbors
+          </span>
         </div>
 
         <div class="space-y-1">
@@ -711,9 +729,20 @@ function widgetGridClass(id) {
           <div v-if="!topNodes.length" class="text-[11px] text-gray-600 text-center py-2">No nodes discovered</div>
         </div>
 
-        <router-link to="/nodes" class="block text-center text-[10px] text-tactical-lora/60 hover:text-tactical-lora mt-2 transition-colors">
-          View All Nodes
-        </router-link>
+        <div class="flex items-center justify-between mt-2 pt-2 border-t border-tactical-border">
+          <div class="flex gap-3">
+            <router-link to="/nodes" class="text-[10px] text-tactical-lora/60 hover:text-tactical-lora transition-colors">
+              View All Nodes
+            </router-link>
+            <router-link v-if="staleCount > 0" to="/nodes" class="text-[10px] text-amber-400/60 hover:text-amber-400 transition-colors">
+              Manage Stale
+            </router-link>
+          </div>
+          <button v-if="radioConnected" @click="dashBroadcastPosition" :disabled="broadcastingPosition"
+            class="text-[10px] px-2 py-0.5 rounded border border-tactical-lora/30 text-tactical-lora/70 hover:bg-tactical-lora/10 transition-colors disabled:opacity-40">
+            {{ broadcastingPosition ? 'Sending...' : 'Broadcast Position' }}
+          </button>
+        </div>
       </div>
 
       <!-- ═══ Cellular 4G/LTE ═══ -->

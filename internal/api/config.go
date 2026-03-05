@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"meshsat/internal/transport"
 )
 
@@ -99,6 +101,66 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, config)
+}
+
+// handleGetConfigSection requests a specific config section from the device.
+// @Summary Get config section
+// @Description Requests a specific radio config section from the device (response arrives via config_complete SSE event)
+// @Tags config
+// @Param section path string true "Config section: device, position, power, network, display, lora, bluetooth, security"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/config/{section} [get]
+func (s *Server) handleGetConfigSection(w http.ResponseWriter, r *http.Request) {
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
+
+	section := chi.URLParam(r, "section")
+	if section == "" {
+		writeError(w, http.StatusBadRequest, "section is required")
+		return
+	}
+
+	if err := s.mesh.GetConfigSection(r.Context(), section); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "config request sent for section: " + section,
+	})
+}
+
+// handleGetModuleConfigSection requests a specific module config section from the device.
+// @Summary Get module config section
+// @Description Requests a specific module config section (response arrives via config_complete SSE event)
+// @Tags config
+// @Param section path string true "Module section: mqtt, serial, external_notification, store_forward, range_test, telemetry, canned_message, audio, remote_hardware, neighbor_info"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/config/module/{section} [get]
+func (s *Server) handleGetModuleConfigSection(w http.ResponseWriter, r *http.Request) {
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
+
+	section := chi.URLParam(r, "section")
+	if section == "" {
+		writeError(w, http.StatusBadRequest, "section is required")
+		return
+	}
+
+	if err := s.mesh.GetModuleConfigSection(r.Context(), section); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "module config request sent for section: " + section,
+	})
 }
 
 // handleSetChannel configures a radio channel.

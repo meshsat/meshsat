@@ -242,6 +242,72 @@ func (t *HALMeshTransport) RemoveNode(ctx context.Context, nodeNum uint32) error
 	})
 }
 
+// GetConfigSection requests a specific config section from the device via HAL.
+func (t *HALMeshTransport) GetConfigSection(ctx context.Context, section string) error {
+	return t.postJSON(ctx, "/meshtastic/config/get", map[string]string{"section": section})
+}
+
+// GetModuleConfigSection requests a specific module config section via HAL.
+func (t *HALMeshTransport) GetModuleConfigSection(ctx context.Context, section string) error {
+	return t.postJSON(ctx, "/meshtastic/config/module/get", map[string]string{"section": section})
+}
+
+// SendPosition broadcasts MeshSat's own position to the mesh via HAL.
+func (t *HALMeshTransport) SendPosition(ctx context.Context, lat, lon float64, alt int32) error {
+	return t.postJSON(ctx, "/meshtastic/position/send", map[string]interface{}{
+		"latitude": lat, "longitude": lon, "altitude": alt,
+	})
+}
+
+// SetFixedPosition sets a fixed GPS position on the device via HAL.
+func (t *HALMeshTransport) SetFixedPosition(ctx context.Context, lat, lon float64, alt int32) error {
+	return t.postJSON(ctx, "/meshtastic/admin/set_fixed_position", map[string]interface{}{
+		"latitude": lat, "longitude": lon, "altitude": alt,
+	})
+}
+
+// RemoveFixedPosition removes the fixed position from the device via HAL.
+func (t *HALMeshTransport) RemoveFixedPosition(ctx context.Context) error {
+	return t.postJSON(ctx, "/meshtastic/admin/remove_fixed_position", nil)
+}
+
+// RequestStoreForward requests message history from a store & forward server via HAL.
+func (t *HALMeshTransport) RequestStoreForward(ctx context.Context, nodeNum uint32, window uint32) error {
+	return t.postJSON(ctx, "/meshtastic/store_forward/request", map[string]interface{}{
+		"node_id": nodeNum, "window": window,
+	})
+}
+
+// SendRangeTest sends a range test packet via HAL.
+func (t *HALMeshTransport) SendRangeTest(ctx context.Context, text string, to uint32) error {
+	return t.postJSON(ctx, "/meshtastic/range_test/send", map[string]interface{}{
+		"text": text, "to": to,
+	})
+}
+
+// SetCannedMessages sets the canned messages on the device via HAL.
+func (t *HALMeshTransport) SetCannedMessages(ctx context.Context, messages string) error {
+	return t.postJSON(ctx, "/meshtastic/admin/set_canned_messages", map[string]string{
+		"messages": messages,
+	})
+}
+
+// GetCannedMessages requests canned messages from the device via HAL.
+func (t *HALMeshTransport) GetCannedMessages(ctx context.Context) error {
+	return t.postJSON(ctx, "/meshtastic/admin/get_canned_messages", nil)
+}
+
+// GetNeighborInfo returns cached neighbor info from HAL.
+func (t *HALMeshTransport) GetNeighborInfo(ctx context.Context) ([]NeighborInfo, error) {
+	var resp struct {
+		Neighbors []NeighborInfo `json:"neighbors"`
+	}
+	if err := t.getJSON(ctx, "/meshtastic/neighbors", &resp); err != nil {
+		return nil, err
+	}
+	return resp.Neighbors, nil
+}
+
 // Close stops the SSE subscription.
 func (t *HALMeshTransport) Close() error {
 	if t.cancel != nil {

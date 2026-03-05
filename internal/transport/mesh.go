@@ -106,6 +106,31 @@ type Waypoint struct {
 	Expire      int64   `json:"expire"`
 }
 
+// NeighborInfo represents neighbor info received from a node.
+type NeighborInfo struct {
+	NodeID                   uint32     `json:"node_id"`
+	LastSentByID             uint32     `json:"last_sent_by_id"`
+	NodeBroadcastIntervalSec uint32     `json:"node_broadcast_interval_secs"`
+	Neighbors                []Neighbor `json:"neighbors"`
+	LastUpdated              string     `json:"last_updated"`
+}
+
+// Neighbor represents a single neighbor edge.
+type Neighbor struct {
+	NodeID                   uint32  `json:"node_id"`
+	SNR                      float32 `json:"snr"`
+	LastRxTime               uint32  `json:"last_rx_time"`
+	NodeBroadcastIntervalSec uint32  `json:"node_broadcast_interval_secs"`
+}
+
+// StoreForwardInfo represents store & forward stats from an S&F server node.
+type StoreForwardInfo struct {
+	RequestResponse int                    `json:"rr"`
+	Text            string                 `json:"text,omitempty"`
+	Stats           map[string]interface{} `json:"stats,omitempty"`
+	History         map[string]interface{} `json:"history,omitempty"`
+}
+
 // MeshTransport abstracts how MeshSat talks to the Meshtastic radio.
 type MeshTransport interface {
 	Subscribe(ctx context.Context) (<-chan MeshEvent, error)
@@ -123,5 +148,18 @@ type MeshTransport interface {
 	SetChannel(ctx context.Context, req ChannelRequest) error
 	SendWaypoint(ctx context.Context, wp Waypoint) error
 	RemoveNode(ctx context.Context, nodeNum uint32) error
+
+	// New capabilities
+	GetConfigSection(ctx context.Context, section string) error
+	GetModuleConfigSection(ctx context.Context, section string) error
+	SendPosition(ctx context.Context, lat, lon float64, alt int32) error
+	SetFixedPosition(ctx context.Context, lat, lon float64, alt int32) error
+	RemoveFixedPosition(ctx context.Context) error
+	RequestStoreForward(ctx context.Context, nodeNum uint32, window uint32) error
+	SendRangeTest(ctx context.Context, text string, to uint32) error
+	SetCannedMessages(ctx context.Context, messages string) error
+	GetCannedMessages(ctx context.Context) error
+	GetNeighborInfo(ctx context.Context) ([]NeighborInfo, error)
+
 	Close() error
 }

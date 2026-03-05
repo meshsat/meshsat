@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -1216,6 +1217,96 @@ func (db *DB) GetLatestCellularSignal() (*CellularSignalPoint, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// NeighborRecord represents a persisted neighbor info record.
+type NeighborRecord struct {
+	ID                int64   `json:"id"`
+	NodeID            uint32  `json:"node_id"`
+	NeighborNodeID    uint32  `json:"neighbor_node_id"`
+	SNR               float32 `json:"snr"`
+	LastRxTime        int64   `json:"last_rx_time"`
+	BroadcastInterval int     `json:"broadcast_interval"`
+	CreatedAt         string  `json:"created_at"`
+}
+
+// InsertNeighborInfo persists neighbor info from a NeighborInfo packet.
+func (db *DB) InsertNeighborInfo(nodeID, neighborNodeID uint32, snr float32, lastRxTime uint32, broadcastInterval uint32) error {
+	_, err := db.Exec(`INSERT INTO neighbor_info (node_id, neighbor_node_id, snr, last_rx_time, broadcast_interval)
+		VALUES (?, ?, ?, ?, ?)`, nodeID, neighborNodeID, snr, lastRxTime, broadcastInterval)
+	return err
+}
+
+// GetNeighborInfo returns the latest neighbor info for a node.
+func (db *DB) GetNeighborInfo(nodeID uint32, limit int) ([]NeighborRecord, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	query := `SELECT id, node_id, neighbor_node_id, snr, last_rx_time, broadcast_interval, created_at
+		FROM neighbor_info`
+	var rows *sql.Rows
+	var err error
+	if nodeID > 0 {
+		rows, err = db.Query(query+` WHERE node_id = ? ORDER BY created_at DESC LIMIT ?`, nodeID, limit)
+	} else {
+		rows, err = db.Query(query+` ORDER BY created_at DESC LIMIT ?`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []NeighborRecord
+	for rows.Next() {
+		var r NeighborRecord
+		if err := rows.Scan(&r.ID, &r.NodeID, &r.NeighborNodeID, &r.SNR, &r.LastRxTime, &r.BroadcastInterval, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
+}
+
+// RangeTestRecord represents a persisted range test result.
+type RangeTestRecord struct {
+	ID        int64   `json:"id"`
+	FromNode  string  `json:"from_node"`
+	ToNode    string  `json:"to_node"`
+	Text      string  `json:"text"`
+	RxSNR     float32 `json:"rx_snr"`
+	RxRSSI    int     `json:"rx_rssi"`
+	HopLimit  int     `json:"hop_limit"`
+	HopStart  int     `json:"hop_start"`
+	Direction string  `json:"direction"`
+	CreatedAt string  `json:"created_at"`
+}
+
+// InsertRangeTest persists a range test result.
+func (db *DB) InsertRangeTest(fromNode, toNode, text string, rxSNR float32, rxRSSI, hopLimit, hopStart int, direction string) error {
+	_, err := db.Exec(`INSERT INTO range_tests (from_node, to_node, text, rx_snr, rx_rssi, hop_limit, hop_start, direction)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, fromNode, toNode, text, rxSNR, rxRSSI, hopLimit, hopStart, direction)
+	return err
+}
+
+// GetRangeTests returns range test history.
+func (db *DB) GetRangeTests(limit int) ([]RangeTestRecord, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := db.Query(`SELECT id, from_node, to_node, text, rx_snr, rx_rssi, hop_limit, hop_start, direction, created_at
+		FROM range_tests ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []RangeTestRecord
+	for rows.Next() {
+		var r RangeTestRecord
+		if err := rows.Scan(&r.ID, &r.FromNode, &r.ToNode, &r.Text, &r.RxSNR, &r.RxRSSI, &r.HopLimit, &r.HopStart, &r.Direction, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, nil
 }
 
 // GetCellularSignalHistory returns cellular signal history within a time range.

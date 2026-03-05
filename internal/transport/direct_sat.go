@@ -36,8 +36,8 @@ type DirectSatTransport struct {
 	model     string
 
 	// SBDIX rate limiting
-	lastSBDIX    time.Time
-	lastGSSSync  time.Time // last successful SBDIX that reached the GSS (for MT discovery)
+	lastSBDIX   time.Time
+	lastGSSSync time.Time // last successful SBDIX that reached the GSS (for MT discovery)
 
 	// Signal state
 	signalMu   sync.RWMutex

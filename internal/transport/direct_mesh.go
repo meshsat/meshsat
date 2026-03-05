@@ -48,6 +48,9 @@ type DirectMeshTransport struct {
 	configData map[string]interface{}
 	configMu   sync.RWMutex
 
+	neighbors   map[uint32]*NeighborInfo
+	neighborsMu sync.RWMutex
+
 	heartbeatNonce uint32
 
 	readerDone chan struct{} // closed when readerLoop exits
@@ -66,6 +69,7 @@ func NewDirectMeshTransport(port string) *DirectMeshTransport {
 		nodes:      make(map[uint32]*MeshNode),
 		messages:   make([]MeshMessage, 0, meshMsgBufSize),
 		configData: make(map[string]interface{}),
+		neighbors:  make(map[uint32]*NeighborInfo),
 		eventSubs:  make(map[uint64]chan MeshEvent),
 	}
 }
@@ -345,6 +349,12 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 			t.handleNodeInfoPacket(pkt)
 		case PortNumTelemetry:
 			t.handleTelemetryPacket(pkt)
+		case PortNumNeighborInfo:
+			t.handleNeighborInfoPacket(pkt)
+		case PortNumStoreForward:
+			t.handleStoreForwardPacket(pkt)
+		case PortNumRangeTest:
+			t.handleRangeTestPacket(pkt)
 		}
 	}
 
@@ -738,6 +748,196 @@ func (t *DirectMeshTransport) SendWaypoint(_ context.Context, wp Waypoint) error
 	return sendFrame(t.file, toRadio)
 }
 
+func (t *DirectMeshTransport) handleNeighborInfoPacket(pkt *ProtoMeshPacket) {
+	if pkt.Decoded == nil || pkt.Decoded.Payload == nil {
+		return
+	}
+	ni, err := parseNeighborInfo(pkt.Decoded.Payload)
+	if err != nil || ni == nil {
+		return
+	}
+
+	info := &NeighborInfo{
+		NodeID:                   ni.NodeID,
+		LastSentByID:             ni.LastSentByID,
+		NodeBroadcastIntervalSec: ni.NodeBroadcastIntervalSec,
+		LastUpdated:              time.Now().UTC().Format(time.RFC3339),
+	}
+	for _, n := range ni.Neighbors {
+		info.Neighbors = append(info.Neighbors, Neighbor{
+			NodeID:                   n.NodeID,
+			SNR:                      n.SNR,
+			LastRxTime:               n.LastRxTime,
+			NodeBroadcastIntervalSec: n.NodeBroadcastIntervalSec,
+		})
+	}
+
+	t.neighborsMu.Lock()
+	t.neighbors[ni.NodeID] = info
+	t.neighborsMu.Unlock()
+
+	dataJSON, _ := json.Marshal(info)
+	t.emitEvent(MeshEvent{
+		Type:    "neighbor_info",
+		Message: fmt.Sprintf("neighbor info from !%08x (%d neighbors)", ni.NodeID, len(ni.Neighbors)),
+		Data:    dataJSON,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (t *DirectMeshTransport) handleStoreForwardPacket(pkt *ProtoMeshPacket) {
+	if pkt.Decoded == nil || pkt.Decoded.Payload == nil {
+		return
+	}
+	sf := parseStoreForward(pkt.Decoded.Payload)
+	if sf == nil {
+		return
+	}
+
+	info := &StoreForwardInfo{RequestResponse: sf.RequestResponse}
+	if sf.Text != nil {
+		info.Text = string(sf.Text)
+	}
+
+	dataJSON, _ := json.Marshal(info)
+	t.emitEvent(MeshEvent{
+		Type:    "store_forward",
+		Message: fmt.Sprintf("store_forward rr=%d from !%08x", sf.RequestResponse, pkt.From),
+		Data:    dataJSON,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (t *DirectMeshTransport) handleRangeTestPacket(pkt *ProtoMeshPacket) {
+	if pkt.Decoded == nil || pkt.Decoded.Payload == nil {
+		return
+	}
+	text := string(pkt.Decoded.Payload)
+	dataJSON, _ := json.Marshal(map[string]interface{}{
+		"from":    pkt.From,
+		"text":    text,
+		"rx_snr":  pkt.RxSNR,
+		"rx_rssi": pkt.RxRSSI,
+	})
+	t.emitEvent(MeshEvent{
+		Type:    "range_test",
+		Message: fmt.Sprintf("range test from !%08x: %s", pkt.From, text),
+		Data:    dataJSON,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (t *DirectMeshTransport) GetConfigSection(_ context.Context, section string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	enumVal, ok := configSectionToEnum(section)
+	if !ok {
+		return fmt.Errorf("unknown config section: %s", section)
+	}
+	toRadio := buildAdminGetConfig(t.myNodeNum, enumVal)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) GetModuleConfigSection(_ context.Context, section string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	enumVal, ok := moduleConfigSectionToEnum(section)
+	if !ok {
+		return fmt.Errorf("unknown module config section: %s", section)
+	}
+	toRadio := buildAdminGetModuleConfig(t.myNodeNum, enumVal)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) SendPosition(_ context.Context, lat, lon float64, alt int32) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	packet := buildPositionPacket(lat, lon, alt, uint32(time.Now().Unix()))
+	toRadio := buildToRadioPacket(packet)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) SetFixedPosition(_ context.Context, lat, lon float64, alt int32) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	toRadio := buildAdminSetFixedPosition(t.myNodeNum, lat, lon, alt)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) RemoveFixedPosition(_ context.Context) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	toRadio := buildAdminRemoveFixedPosition(t.myNodeNum)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) RequestStoreForward(_ context.Context, nodeNum uint32, window uint32) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	packet := buildStoreForwardRequest(nodeNum, window)
+	toRadio := buildToRadioPacket(packet)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) SendRangeTest(_ context.Context, text string, to uint32) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	packet := buildRangeTestPacket(text, to)
+	toRadio := buildToRadioPacket(packet)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) SetCannedMessages(_ context.Context, messages string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	toRadio := buildAdminSetCannedMessages(t.myNodeNum, messages)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) GetCannedMessages(_ context.Context) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	toRadio := buildAdminGetCannedMessages(t.myNodeNum)
+	return sendFrame(t.file, toRadio)
+}
+
+func (t *DirectMeshTransport) GetNeighborInfo(_ context.Context) ([]NeighborInfo, error) {
+	t.neighborsMu.RLock()
+	defer t.neighborsMu.RUnlock()
+	result := make([]NeighborInfo, 0, len(t.neighbors))
+	for _, ni := range t.neighbors {
+		result = append(result, *ni)
+	}
+	return result, nil
+}
+
 func (t *DirectMeshTransport) RemoveNode(_ context.Context, nodeNum uint32) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -745,7 +945,14 @@ func (t *DirectMeshTransport) RemoveNode(_ context.Context, nodeNum uint32) erro
 		return fmt.Errorf("not connected")
 	}
 	toRadio := buildAdminRemoveNode(t.myNodeNum, nodeNum)
-	return sendFrame(t.file, toRadio)
+	if err := sendFrame(t.file, toRadio); err != nil {
+		return err
+	}
+	// Remove from in-memory node map so GetNodes reflects the deletion immediately
+	t.nodesMu.Lock()
+	delete(t.nodes, nodeNum)
+	t.nodesMu.Unlock()
+	return nil
 }
 
 func (t *DirectMeshTransport) Close() error {

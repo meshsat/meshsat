@@ -8,9 +8,14 @@ const activeTab = ref('radio')
 const tabs = [
   { id: 'radio', label: 'Radio' },
   { id: 'channels', label: 'Channels' },
+  { id: 'position', label: 'Position' },
+  { id: 'canned', label: 'Canned Msg' },
   { id: 'mqtt', label: 'MQTT' },
+  { id: 'device_mqtt', label: 'Device MQTT' },
   { id: 'iridium', label: 'Iridium' },
   { id: 'cellular', label: 'Cellular' },
+  { id: 'store_forward', label: 'S&F' },
+  { id: 'range_test', label: 'Range Test' },
   { id: 'about', label: 'About' }
 ]
 
@@ -19,6 +24,17 @@ const radioSection = ref('lora')
 const radioConfig = ref({})
 const radioEditing = ref(false)
 const radioJSON = ref('')
+
+const radioRefreshing = ref(false)
+
+async function refreshRadioSection() {
+  radioRefreshing.value = true
+  try {
+    await store.fetchConfigSection(radioSection.value)
+    setTimeout(() => store.fetchConfig(), 1500) // wait for device response
+  } catch {}
+  radioRefreshing.value = false
+}
 
 async function saveRadioConfig() {
   try {
@@ -29,6 +45,80 @@ async function saveRadioConfig() {
   } catch (e) {
     store.error = e.message
   }
+}
+
+// Position sharing
+const posForm = ref({ latitude: 0, longitude: 0, altitude: 0 })
+const positionSending = ref(false)
+
+async function doSendPosition() {
+  positionSending.value = true
+  try { await store.sendPosition(posForm.value) } catch {}
+  positionSending.value = false
+}
+
+async function doSetFixedPosition() {
+  try { await store.setFixedPosition(posForm.value) } catch {}
+}
+
+async function doRemoveFixedPosition() {
+  try { await store.removeFixedPosition() } catch {}
+}
+
+// Canned messages
+const cannedText = ref('')
+const cannedLoading = ref(false)
+
+async function loadCannedMessages() {
+  cannedLoading.value = true
+  try { await store.getCannedMessages() } catch {}
+  cannedLoading.value = false
+}
+
+async function saveCannedMessages() {
+  try { await store.setCannedMessages(cannedText.value) } catch {}
+}
+
+// Device MQTT module
+const deviceMqttForm = ref({})
+const deviceMqttJSON = ref('')
+const deviceMqttEditing = ref(false)
+
+async function saveDeviceMqtt() {
+  try {
+    const data = JSON.parse(deviceMqttJSON.value)
+    await store.configModule({ section: 'mqtt', config: data })
+    deviceMqttEditing.value = false
+  } catch (e) {
+    store.error = e.message
+  }
+}
+
+async function refreshDeviceMqtt() {
+  try {
+    await store.fetchModuleConfigSection('mqtt')
+    setTimeout(() => store.fetchConfig(), 1500)
+  } catch {}
+}
+
+// Store & Forward
+const sfForm = ref({ node_id: 0, window: 3600 })
+
+async function doRequestSF() {
+  try { await store.requestStoreForward(sfForm.value) } catch {}
+}
+
+// Range Test
+const rtForm = ref({ text: '', to: 0 })
+const rtSending = ref(false)
+
+async function doSendRangeTest() {
+  rtSending.value = true
+  try {
+    await store.sendRangeTest(rtForm.value)
+    await store.fetchRangeTests()
+  } catch {}
+  rtSending.value = false
 }
 
 // Channels
@@ -154,6 +244,7 @@ onMounted(async () => {
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
   store.fetchCellularStatus()
   loadMQTT(); loadIridium(); loadBudget(); loadCellular()
+  store.fetchRangeTests()
 })
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
@@ -184,6 +275,9 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             <option value="power">Power</option>
             <option value="bluetooth">Bluetooth</option>
           </select>
+          <button @click="refreshRadioSection" :disabled="radioRefreshing" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-xs text-gray-400 hover:text-teal-400 disabled:opacity-40">
+            {{ radioRefreshing ? 'Refreshing...' : 'Refresh' }}
+          </button>
           <button @click="radioEditing = !radioEditing" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-xs text-gray-400 hover:text-teal-400">
             {{ radioEditing ? 'Cancel' : 'Edit JSON' }}
           </button>
@@ -515,6 +609,139 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
         </div>
         <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
+      </div>
+    </div>
+
+    <!-- Position -->
+    <div v-if="activeTab === 'position'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">Share Position</h4>
+        <p class="text-xs text-gray-500">Broadcast MeshSat's location as a position packet to the mesh.</p>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Latitude</label>
+            <input v-model.number="posForm.latitude" type="number" step="0.000001" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Longitude</label>
+            <input v-model.number="posForm.longitude" type="number" step="0.000001" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Altitude (m)</label>
+            <input v-model.number="posForm.altitude" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button @click="doSendPosition" :disabled="positionSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
+            {{ positionSending ? 'Sending...' : 'Send Position' }}
+          </button>
+        </div>
+      </div>
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mt-4">
+        <h4 class="text-sm font-medium text-gray-200">Fixed Position</h4>
+        <p class="text-xs text-gray-500">Set a fixed GPS position on the device (disables GPS module, uses this position).</p>
+        <div class="flex gap-2">
+          <button @click="doSetFixedPosition" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Set Fixed Position</button>
+          <button @click="doRemoveFixedPosition" class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Remove Fixed</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Canned Messages -->
+    <div v-if="activeTab === 'canned'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">Canned Messages</h4>
+        <p class="text-xs text-gray-500">Configure quick-send messages on the device. Separate messages with pipe (|) characters.</p>
+        <button @click="loadCannedMessages" :disabled="cannedLoading" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:text-teal-400 disabled:opacity-40">
+          {{ cannedLoading ? 'Requesting...' : 'Request from Device' }}
+        </button>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Messages (pipe-separated)</label>
+          <textarea v-model="cannedText" rows="4" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="OK|Help|SOS|Returning to base|Position report"></textarea>
+        </div>
+        <button @click="saveCannedMessages" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save to Device</button>
+      </div>
+    </div>
+
+    <!-- Device MQTT Module -->
+    <div v-if="activeTab === 'device_mqtt'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium text-gray-200">Device Built-in MQTT</span>
+          <button @click="refreshDeviceMqtt" class="text-xs text-gray-400 hover:text-teal-400">Refresh from Device</button>
+        </div>
+        <p class="text-xs text-gray-500">Configure the Meshtastic device's built-in MQTT module. This is separate from MeshSat's MQTT gateway.</p>
+        <div v-if="!deviceMqttEditing">
+          <pre class="bg-gray-900 rounded-lg p-4 text-xs text-gray-400 overflow-x-auto">{{ JSON.stringify(store.config?.['module_1'] || {}, null, 2) }}</pre>
+          <button @click="deviceMqttEditing = true" class="mt-2 px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:text-teal-400">Edit JSON</button>
+        </div>
+        <div v-else>
+          <textarea v-model="deviceMqttJSON" rows="8" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder='{"1": true, "4": "mqtt.meshtastic.org"}'></textarea>
+          <p class="text-[10px] text-gray-600 mt-1">ModuleConfig.MQTTConfig fields: 1=enabled, 2=address, 3=username, 4=password, 5=encryption_enabled, 6=json_enabled, 7=tls_enabled, 8=root</p>
+          <div class="flex gap-2 mt-2">
+            <button @click="deviceMqttEditing = false" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs">Cancel</button>
+            <button @click="saveDeviceMqtt" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs">Apply</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Store & Forward -->
+    <div v-if="activeTab === 'store_forward'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">Store & Forward</h4>
+        <p class="text-xs text-gray-500">Request missed messages from a Store & Forward server node. The S&F node must have the store_forward module enabled.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">S&F Server Node ID (decimal)</label>
+            <input v-model.number="sfForm.node_id" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="e.g. 1234567890">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">History Window (seconds)</label>
+            <input v-model.number="sfForm.window" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <button @click="doRequestSF" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Request History</button>
+        <p class="text-[10px] text-gray-600">Responses will appear as messages in the Messages view via SSE events.</p>
+      </div>
+    </div>
+
+    <!-- Range Test -->
+    <div v-if="activeTab === 'range_test'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">Range Test</h4>
+        <p class="text-xs text-gray-500">Send a range test packet. Receiving nodes with Range Test enabled will log it.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Text (optional)</label>
+            <input v-model="rtForm.text" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="auto-generated if empty">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">To Node (0 = broadcast)</label>
+            <input v-model.number="rtForm.to" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <button @click="doSendRangeTest" :disabled="rtSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
+          {{ rtSending ? 'Sending...' : 'Send Range Test' }}
+        </button>
+      </div>
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 mt-4">
+        <h4 class="text-sm font-medium text-gray-200 mb-3">Range Test History</h4>
+        <div v-if="store.rangeTests.length === 0" class="text-xs text-gray-500">No range test results yet.</div>
+        <div v-else class="space-y-2">
+          <div v-for="rt in store.rangeTests" :key="rt.id" class="flex items-center justify-between text-xs bg-gray-900 rounded px-3 py-2">
+            <div>
+              <span class="text-gray-400">{{ rt.from_node }}</span>
+              <span class="text-gray-600 mx-1">&rarr;</span>
+              <span class="text-gray-400">{{ rt.to_node || 'broadcast' }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-gray-500">SNR {{ rt.rx_snr?.toFixed(1) }}</span>
+              <span class="text-gray-500">RSSI {{ rt.rx_rssi }}</span>
+              <span class="text-gray-600">{{ new Date(rt.created_at).toLocaleTimeString() }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

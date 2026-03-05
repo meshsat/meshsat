@@ -540,6 +540,68 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Neighbor info
+  const neighborInfo = ref([])
+  async function fetchNeighborInfo() {
+    try {
+      const data = await api.get('/neighbors')
+      neighborInfo.value = data?.neighbors || []
+    } catch (e) { error.value = e.message }
+  }
+
+  // Range test
+  const rangeTests = ref([])
+  async function sendRangeTest(payload = {}) {
+    error.value = null
+    try { return await api.post('/range-test/send', payload) } catch (e) { error.value = e.message; throw e }
+  }
+  async function fetchRangeTests(params = {}) {
+    try {
+      const data = await api.get('/range-test', params)
+      rangeTests.value = data?.range_tests || []
+    } catch (e) { error.value = e.message }
+  }
+
+  // Position sharing
+  async function sendPosition(payload) {
+    error.value = null
+    try { return await api.post('/position/send', payload) } catch (e) { error.value = e.message; throw e }
+  }
+  async function setFixedPosition(payload) {
+    error.value = null
+    try { return await api.post('/position/fixed', payload) } catch (e) { error.value = e.message; throw e }
+  }
+  async function removeFixedPosition() {
+    error.value = null
+    try { return await api.del('/position/fixed') } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Store & Forward
+  async function requestStoreForward(payload) {
+    error.value = null
+    try { return await api.post('/store-forward/request', payload) } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Canned messages
+  async function getCannedMessages() {
+    error.value = null
+    try { return await api.get('/canned-messages') } catch (e) { error.value = e.message; throw e }
+  }
+  async function setCannedMessages(messages) {
+    error.value = null
+    try { return await api.post('/canned-messages', { messages }) } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Config section read
+  async function fetchConfigSection(section) {
+    error.value = null
+    try { return await api.get(`/config/${section}`) } catch (e) { error.value = e.message; throw e }
+  }
+  async function fetchModuleConfigSection(section) {
+    error.value = null
+    try { return await api.get(`/config/module/${section}`) } catch (e) { error.value = e.message; throw e }
+  }
+
   const config = ref(null)
 
   async function fetchConfig() {
@@ -575,7 +637,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   }
 
   return {
-    messages, messageStats, telemetry, positions, nodes, status, gateways, config,
+    messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
     locationSources, iridiumGeolocation,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
@@ -586,7 +648,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,
-    fetchConfig, setChannel,
+    fetchConfig, setChannel, fetchConfigSection, fetchModuleConfigSection,
+    fetchNeighborInfo, sendRangeTest, fetchRangeTests,
+    sendPosition, setFixedPosition, removeFixedPosition,
+    requestStoreForward, getCannedMessages, setCannedMessages,
     fetchIridiumSignalFast, fetchIridiumSignal,
     fetchSignalHistory, fetchGSSHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck,

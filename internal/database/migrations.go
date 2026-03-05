@@ -235,6 +235,34 @@ var migrations = []string{
 		UNIQUE(timestamp)
 	);
 	CREATE INDEX IF NOT EXISTS idx_cell_signal_ts ON cellular_signal_history(timestamp);`,
+
+	// v12: Neighbor info tracking and range test log
+	`CREATE TABLE IF NOT EXISTS neighbor_info (
+		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+		node_id             INTEGER NOT NULL,
+		neighbor_node_id    INTEGER NOT NULL,
+		snr                 REAL NOT NULL DEFAULT 0,
+		last_rx_time        INTEGER NOT NULL DEFAULT 0,
+		broadcast_interval  INTEGER NOT NULL DEFAULT 0,
+		created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_neighbor_info_node ON neighbor_info(node_id);
+	CREATE INDEX IF NOT EXISTS idx_neighbor_info_created ON neighbor_info(created_at);
+
+	CREATE TABLE IF NOT EXISTS range_tests (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		from_node   TEXT NOT NULL,
+		to_node     TEXT NOT NULL DEFAULT '',
+		text        TEXT NOT NULL DEFAULT '',
+		rx_snr      REAL DEFAULT 0,
+		rx_rssi     INTEGER DEFAULT 0,
+		hop_limit   INTEGER DEFAULT 0,
+		hop_start   INTEGER DEFAULT 0,
+		direction   TEXT NOT NULL DEFAULT 'rx',
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_range_tests_from ON range_tests(from_node);
+	CREATE INDEX IF NOT EXISTS idx_range_tests_created ON range_tests(created_at);`,
 }
 
 func (db *DB) migrate() error {

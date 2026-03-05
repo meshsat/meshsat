@@ -195,6 +195,12 @@ func (p *Processor) handleEvent(ctx context.Context, event transport.MeshEvent) 
 		p.handleNodeUpdate(event)
 	case "position":
 		p.handlePosition(event)
+	case "neighbor_info":
+		p.handleNeighborInfoEvent(event)
+	case "range_test":
+		p.handleRangeTestEvent(event)
+	case "store_forward":
+		log.Info().Str("message", event.Message).Msg("store_forward event")
 	case "connected", "disconnected", "config_complete":
 		log.Info().Str("type", event.Type).Str("message", event.Message).Msg("mesh status event")
 	default:
@@ -405,6 +411,37 @@ func (p *Processor) handlePosition(event transport.MeshEvent) {
 	}
 	if err := p.db.InsertPosition(dbPos); err != nil {
 		log.Error().Err(err).Str("node", pos.NodeID).Msg("failed to persist position")
+	}
+}
+
+func (p *Processor) handleNeighborInfoEvent(event transport.MeshEvent) {
+	var ni transport.NeighborInfo
+	if err := json.Unmarshal(event.Data, &ni); err != nil {
+		log.Warn().Err(err).Msg("failed to parse neighbor_info event")
+		return
+	}
+	for _, n := range ni.Neighbors {
+		if err := p.db.InsertNeighborInfo(ni.NodeID, n.NodeID, n.SNR, n.LastRxTime, n.NodeBroadcastIntervalSec); err != nil {
+			log.Error().Err(err).Uint32("node", ni.NodeID).Msg("failed to persist neighbor info")
+		}
+	}
+	log.Debug().Uint32("node", ni.NodeID).Int("neighbors", len(ni.Neighbors)).Msg("neighbor info persisted")
+}
+
+func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
+	var rt struct {
+		From   uint32  `json:"from"`
+		Text   string  `json:"text"`
+		RxSNR  float32 `json:"rx_snr"`
+		RxRSSI int     `json:"rx_rssi"`
+	}
+	if err := json.Unmarshal(event.Data, &rt); err != nil {
+		log.Warn().Err(err).Msg("failed to parse range_test event")
+		return
+	}
+	fromNode := fmt.Sprintf("!%08x", rt.From)
+	if err := p.db.InsertRangeTest(fromNode, "", rt.Text, rt.RxSNR, rt.RxRSSI, 0, 0, "rx"); err != nil {
+		log.Error().Err(err).Str("from", fromNode).Msg("failed to persist range test")
 	}
 }
 

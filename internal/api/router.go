@@ -160,14 +160,35 @@ func (s *Server) Router() http.Handler {
 
 		// Radio/module config (Phase 2)
 		r.Get("/config", s.handleGetConfig)
+		r.Get("/config/{section}", s.handleGetConfigSection)
 		r.Post("/config/radio", s.handleSetRadioConfig)
 		r.Post("/config/module", s.handleSetModuleConfig)
+		r.Get("/config/module/{section}", s.handleGetModuleConfigSection)
 
 		// Channel management
 		r.Post("/channels", s.handleSetChannel)
 
 		// Waypoints (Phase 2)
 		r.Post("/waypoints", s.handleSendWaypoint)
+
+		// Position sharing
+		r.Post("/position/send", s.handleSendPosition)
+		r.Post("/position/fixed", s.handleSetFixedPosition)
+		r.Delete("/position/fixed", s.handleRemoveFixedPosition)
+
+		// Neighbor info
+		r.Get("/neighbors", s.handleGetNeighborInfo)
+
+		// Store & Forward
+		r.Post("/store-forward/request", s.handleRequestStoreForward)
+
+		// Range test
+		r.Post("/range-test/send", s.handleSendRangeTest)
+		r.Get("/range-test", s.handleGetRangeTests)
+
+		// Canned messages
+		r.Get("/canned-messages", s.handleGetCannedMessages)
+		r.Post("/canned-messages", s.handleSetCannedMessages)
 
 		// Forwarding rules
 		r.Get("/rules", s.handleGetRules)

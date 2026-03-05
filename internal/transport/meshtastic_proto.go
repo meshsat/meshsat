@@ -20,24 +20,69 @@ import (
 
 // Meshtastic PortNum values
 const (
-	PortNumTextMessage = 1
-	PortNumPosition    = 3
-	PortNumNodeInfo    = 4
-	PortNumAdminApp    = 6
-	PortNumWaypoint    = 8
-	PortNumSerial      = 64
-	PortNumTelemetry   = 67
-	PortNumTraceroute  = 70
-	PortNumPrivate     = 256
+	PortNumTextMessage  = 1
+	PortNumPosition     = 3
+	PortNumNodeInfo     = 4
+	PortNumAdminApp     = 6
+	PortNumWaypoint     = 8
+	PortNumSerial       = 64
+	PortNumStoreForward = 65
+	PortNumRangeTest    = 66
+	PortNumTelemetry    = 67
+	PortNumTraceroute   = 70
+	PortNumNeighborInfo = 71
+	PortNumPrivate      = 256
 )
 
 // Admin message field numbers
 const (
-	AdminFieldSetConfig       = 34
-	AdminFieldSetModuleConfig = 35
-	AdminFieldFactoryReset    = 94
-	AdminFieldRemoveByNodenum = 96
-	AdminFieldRebootSeconds   = 97
+	AdminFieldGetChannelRequest    = 1
+	AdminFieldGetConfigRequest     = 5
+	AdminFieldGetModuleConfigReq   = 7
+	AdminFieldGetCannedMsgReq      = 10
+	AdminFieldGetCannedMsgResponse = 11
+	AdminFieldSetChannel           = 33
+	AdminFieldSetConfig            = 34
+	AdminFieldSetModuleConfig      = 35
+	AdminFieldSetCannedMessages    = 36
+	AdminFieldSetFixedPosition     = 41
+	AdminFieldRemoveFixedPosition  = 42
+	AdminFieldFactoryReset         = 94
+	AdminFieldRemoveByNodenum      = 96
+	AdminFieldRebootSeconds        = 97
+)
+
+// Config section enum values (for get_config_request)
+const (
+	ConfigTypeDevice    = 0
+	ConfigTypePosition  = 1
+	ConfigTypePower     = 2
+	ConfigTypeNetwork   = 3
+	ConfigTypeDisplay   = 4
+	ConfigTypeLora      = 5
+	ConfigTypeBluetooth = 6
+	ConfigTypeSecurity  = 7
+)
+
+// ModuleConfig section enum values (for get_module_config_request)
+const (
+	ModuleConfigMQTT                 = 0
+	ModuleConfigSerial               = 1
+	ModuleConfigExternalNotification = 2
+	ModuleConfigStoreForward         = 3
+	ModuleConfigRangeTest            = 4
+	ModuleConfigTelemetry            = 5
+	ModuleConfigCannedMessage        = 6
+	ModuleConfigAudio                = 7
+	ModuleConfigRemoteHardware       = 8
+	ModuleConfigNeighborInfo         = 9
+)
+
+// StoreAndForward RequestResponse enum values
+const (
+	SFClientHistory = 65
+	SFClientStats   = 66
+	SFClientPing    = 67
 )
 
 func portNumName(pn int) string {
@@ -56,8 +101,14 @@ func portNumName(pn int) string {
 		return "TELEMETRY_APP"
 	case PortNumSerial:
 		return "SERIAL_APP"
+	case PortNumStoreForward:
+		return "STORE_FORWARD_APP"
+	case PortNumRangeTest:
+		return "RANGE_TEST_APP"
 	case PortNumTraceroute:
 		return "TRACEROUTE_APP"
+	case PortNumNeighborInfo:
+		return "NEIGHBORINFO_APP"
 	case PortNumPrivate:
 		return "PRIVATE_APP"
 	default:
@@ -1179,6 +1230,476 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 		}
 	}
 	return msg
+}
+
+// ============================================================================
+// Neighbor info types and parsers
+// ============================================================================
+
+// ProtoNeighbor represents a single neighbor edge.
+type ProtoNeighbor struct {
+	NodeID                   uint32  `json:"node_id"`
+	SNR                      float32 `json:"snr"`
+	LastRxTime               uint32  `json:"last_rx_time"`
+	NodeBroadcastIntervalSec uint32  `json:"node_broadcast_interval_secs"`
+}
+
+// ProtoNeighborInfo represents a NeighborInfo message (portnum 71).
+type ProtoNeighborInfo struct {
+	NodeID                   uint32          `json:"node_id"`
+	LastSentByID             uint32          `json:"last_sent_by_id"`
+	NodeBroadcastIntervalSec uint32          `json:"node_broadcast_interval_secs"`
+	Neighbors                []ProtoNeighbor `json:"neighbors"`
+}
+
+func parseNeighborInfo(data []byte) (*ProtoNeighborInfo, error) {
+	ni := &ProtoNeighborInfo{}
+	pos := 0
+	for pos < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, pos)
+		if err != nil {
+			return ni, nil
+		}
+		pos = newPos
+		switch fieldNum {
+		case 1: // node_id
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return ni, nil
+			}
+			ni.NodeID = uint32(val)
+			pos += n
+		case 2: // last_sent_by_id
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return ni, nil
+			}
+			ni.LastSentByID = uint32(val)
+			pos += n
+		case 3: // node_broadcast_interval_secs
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return ni, nil
+			}
+			ni.NodeBroadcastIntervalSec = uint32(val)
+			pos += n
+		case 4: // neighbors (repeated, length-delimited)
+			val, newPos, err := readLengthDelimited(data, pos)
+			if err != nil {
+				return ni, nil
+			}
+			pos = newPos
+			neighbor := parseNeighbor(val)
+			ni.Neighbors = append(ni.Neighbors, neighbor)
+		default:
+			pos = skipField(data, pos, wireType)
+			if pos < 0 {
+				return ni, nil
+			}
+		}
+	}
+	return ni, nil
+}
+
+func parseNeighbor(data []byte) ProtoNeighbor {
+	n := ProtoNeighbor{}
+	pos := 0
+	for pos < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, pos)
+		if err != nil {
+			return n
+		}
+		pos = newPos
+		switch fieldNum {
+		case 1: // node_id
+			val, nn := readVarint(data, pos)
+			if nn <= 0 {
+				return n
+			}
+			n.NodeID = uint32(val)
+			pos += nn
+		case 2: // snr (float = fixed32)
+			if pos+4 > len(data) {
+				return n
+			}
+			n.SNR = math.Float32frombits(binary.LittleEndian.Uint32(data[pos : pos+4]))
+			pos += 4
+		case 3: // last_rx_time (fixed32)
+			if pos+4 > len(data) {
+				return n
+			}
+			n.LastRxTime = binary.LittleEndian.Uint32(data[pos : pos+4])
+			pos += 4
+		case 4: // node_broadcast_interval_secs
+			val, nn := readVarint(data, pos)
+			if nn <= 0 {
+				return n
+			}
+			n.NodeBroadcastIntervalSec = uint32(val)
+			pos += nn
+		default:
+			pos = skipField(data, pos, wireType)
+			if pos < 0 {
+				return n
+			}
+		}
+	}
+	return n
+}
+
+// ============================================================================
+// Store & Forward types
+// ============================================================================
+
+// ProtoStoreForward represents a parsed StoreAndForward message (portnum 65).
+type ProtoStoreForward struct {
+	RequestResponse int             `json:"rr"`
+	Text            []byte          `json:"text,omitempty"`
+	Stats           *ProtoSFStats   `json:"stats,omitempty"`
+	History         *ProtoSFHistory `json:"history,omitempty"`
+}
+
+// ProtoSFStats represents StoreAndForward.Statistics.
+type ProtoSFStats struct {
+	MessagesTotal uint32 `json:"messages_total"`
+	MessagesSaved uint32 `json:"messages_saved"`
+	MessagesMax   uint32 `json:"messages_max"`
+	UpTime        uint32 `json:"up_time"`
+	Requests      uint32 `json:"requests"`
+	Heartbeat     bool   `json:"heartbeat"`
+	ReturnMax     uint32 `json:"return_max"`
+	ReturnWindow  uint32 `json:"return_window"`
+}
+
+// ProtoSFHistory represents StoreAndForward.History.
+type ProtoSFHistory struct {
+	HistoryMessages uint32 `json:"history_messages"`
+	Window          uint32 `json:"window"`
+	LastRequest     uint32 `json:"last_request"`
+}
+
+func parseStoreForward(data []byte) *ProtoStoreForward {
+	sf := &ProtoStoreForward{}
+	pos := 0
+	for pos < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, pos)
+		if err != nil {
+			return sf
+		}
+		pos = newPos
+		switch fieldNum {
+		case 1: // rr (enum = varint)
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return sf
+			}
+			sf.RequestResponse = int(val)
+			pos += n
+		case 2: // stats (length-delimited)
+			val, newPos, err := readLengthDelimited(data, pos)
+			if err != nil {
+				return sf
+			}
+			pos = newPos
+			sf.Stats = parseSFStats(val)
+		case 3: // history (length-delimited)
+			val, newPos, err := readLengthDelimited(data, pos)
+			if err != nil {
+				return sf
+			}
+			pos = newPos
+			sf.History = parseSFHistory(val)
+		case 5: // text (bytes)
+			val, newPos, err := readLengthDelimited(data, pos)
+			if err != nil {
+				return sf
+			}
+			pos = newPos
+			sf.Text = val
+		default:
+			pos = skipField(data, pos, wireType)
+			if pos < 0 {
+				return sf
+			}
+		}
+	}
+	return sf
+}
+
+func parseSFStats(data []byte) *ProtoSFStats {
+	s := &ProtoSFStats{}
+	pos := 0
+	for pos < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, pos)
+		if err != nil {
+			return s
+		}
+		pos = newPos
+		switch fieldNum {
+		case 1:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.MessagesTotal = uint32(val)
+			pos += n
+		case 2:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.MessagesSaved = uint32(val)
+			pos += n
+		case 3:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.MessagesMax = uint32(val)
+			pos += n
+		case 4:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.UpTime = uint32(val)
+			pos += n
+		case 5:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.Requests = uint32(val)
+			pos += n
+		case 7:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.Heartbeat = val != 0
+			pos += n
+		case 8:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.ReturnMax = uint32(val)
+			pos += n
+		case 9:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return s
+			}
+			s.ReturnWindow = uint32(val)
+			pos += n
+		default:
+			pos = skipField(data, pos, wireType)
+			if pos < 0 {
+				return s
+			}
+		}
+	}
+	return s
+}
+
+func parseSFHistory(data []byte) *ProtoSFHistory {
+	h := &ProtoSFHistory{}
+	pos := 0
+	for pos < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, pos)
+		if err != nil {
+			return h
+		}
+		pos = newPos
+		switch fieldNum {
+		case 1:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return h
+			}
+			h.HistoryMessages = uint32(val)
+			pos += n
+		case 2:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return h
+			}
+			h.Window = uint32(val)
+			pos += n
+		case 3:
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return h
+			}
+			h.LastRequest = uint32(val)
+			pos += n
+		default:
+			pos = skipField(data, pos, wireType)
+			if pos < 0 {
+				return h
+			}
+		}
+	}
+	return h
+}
+
+// ============================================================================
+// New builders
+// ============================================================================
+
+// buildPositionPacket builds a Position protobuf and wraps it as a POSITION_APP MeshPacket.
+func buildPositionPacket(lat, lon float64, alt int32, timestamp uint32) []byte {
+	latI := int32(lat * 1e7)
+	lonI := int32(lon * 1e7)
+
+	pos := make([]byte, 0, 32)
+	// field 1: latitude_i (sfixed32)
+	pos = append(pos, 0x0D)
+	pos = appendFixed32(pos, uint32(latI))
+	// field 2: longitude_i (sfixed32)
+	pos = append(pos, 0x15)
+	pos = appendFixed32(pos, uint32(lonI))
+	// field 3: altitude (int32 varint)
+	if alt != 0 {
+		pos = append(pos, 0x18)
+		pos = appendVarint(pos, uint64(alt))
+	}
+	// field 4: time (fixed32)
+	if timestamp > 0 {
+		pos = append(pos, 0x25)
+		pos = appendFixed32(pos, timestamp)
+	}
+
+	return buildRawPacket(pos, PortNumPosition, 0, 0, true)
+}
+
+// buildAdminGetConfig builds a get_config_request admin message.
+// configType is the ConfigType enum value (0=device, 1=position, ..., 7=security).
+func buildAdminGetConfig(myNodeNum uint32, configType int) []byte {
+	admin := make([]byte, 0, 8)
+	admin = appendVarint(admin, uint64(AdminFieldGetConfigRequest)<<3|0) // field 5, varint
+	admin = appendVarint(admin, uint64(configType))
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminGetModuleConfig builds a get_module_config_request admin message.
+// moduleType is the ModuleConfigType enum value.
+func buildAdminGetModuleConfig(myNodeNum uint32, moduleType int) []byte {
+	admin := make([]byte, 0, 8)
+	admin = appendVarint(admin, uint64(AdminFieldGetModuleConfigReq)<<3|0) // field 7, varint
+	admin = appendVarint(admin, uint64(moduleType))
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminGetChannel builds a get_channel_request admin message.
+func buildAdminGetChannel(myNodeNum uint32, channelIndex int) []byte {
+	admin := make([]byte, 0, 8)
+	admin = appendVarint(admin, uint64(AdminFieldGetChannelRequest)<<3|0) // field 1, varint
+	admin = appendVarint(admin, uint64(channelIndex))
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminSetCannedMessages builds an AdminMessage to set canned messages.
+// Admin field 36 (set_canned_message_module_messages) = string.
+func buildAdminSetCannedMessages(myNodeNum uint32, messages string) []byte {
+	admin := make([]byte, 0, len(messages)+8)
+	admin = appendVarint(admin, uint64(AdminFieldSetCannedMessages)<<3|2) // field 36, length-delimited
+	admin = appendVarint(admin, uint64(len(messages)))
+	admin = append(admin, []byte(messages)...)
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminGetCannedMessages builds a get_canned_message_module_messages_request.
+// Admin field 10 = bool (true to request).
+func buildAdminGetCannedMessages(myNodeNum uint32) []byte {
+	admin := make([]byte, 0, 8)
+	admin = appendVarint(admin, uint64(AdminFieldGetCannedMsgReq)<<3|0) // field 10, varint
+	admin = appendVarint(admin, 1)                                      // true
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildStoreForwardRequest builds a StoreAndForward CLIENT_HISTORY request.
+// Sends to a specific S&F server node. window = seconds of history to request.
+func buildStoreForwardRequest(destNode uint32, window uint32) []byte {
+	// StoreAndForward: field 1 = rr (varint, CLIENT_HISTORY=65), field 3 = history
+	sf := make([]byte, 0, 16)
+	sf = append(sf, 0x08) // field 1, varint
+	sf = appendVarint(sf, uint64(SFClientHistory))
+	// History submessage: field 2 = window
+	if window > 0 {
+		hist := make([]byte, 0, 8)
+		hist = append(hist, 0x10) // field 2, varint
+		hist = appendVarint(hist, uint64(window))
+		sf = append(sf, 0x1A) // field 3, length-delimited
+		sf = appendVarint(sf, uint64(len(hist)))
+		sf = append(sf, hist...)
+	}
+
+	return buildRawPacket(sf, PortNumStoreForward, destNode, 0, true)
+}
+
+// buildRangeTestPacket builds a range test packet (portnum 66).
+func buildRangeTestPacket(text string, to uint32) []byte {
+	return buildRawPacket([]byte(text), PortNumRangeTest, to, 0, true)
+}
+
+// buildAdminSetFixedPosition builds an AdminMessage to set a fixed GPS position.
+// Admin field 41 = Position message (length-delimited).
+func buildAdminSetFixedPosition(myNodeNum uint32, lat, lon float64, alt int32) []byte {
+	latI := int32(lat * 1e7)
+	lonI := int32(lon * 1e7)
+
+	pos := make([]byte, 0, 24)
+	pos = append(pos, 0x0D) // field 1: latitude_i (sfixed32)
+	pos = appendFixed32(pos, uint32(latI))
+	pos = append(pos, 0x15) // field 2: longitude_i (sfixed32)
+	pos = appendFixed32(pos, uint32(lonI))
+	if alt != 0 {
+		pos = append(pos, 0x18) // field 3: altitude (varint)
+		pos = appendVarint(pos, uint64(alt))
+	}
+	pos = append(pos, 0x25) // field 4: time (fixed32)
+	pos = appendFixed32(pos, uint32(time.Now().Unix()))
+
+	admin := make([]byte, 0, len(pos)+8)
+	admin = appendVarint(admin, uint64(AdminFieldSetFixedPosition)<<3|2) // field 41, length-delimited
+	admin = appendVarint(admin, uint64(len(pos)))
+	admin = append(admin, pos...)
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminRemoveFixedPosition builds an AdminMessage to remove fixed position.
+// Admin field 42 = bool (true).
+func buildAdminRemoveFixedPosition(myNodeNum uint32) []byte {
+	admin := make([]byte, 0, 8)
+	admin = appendVarint(admin, uint64(AdminFieldRemoveFixedPosition)<<3|0) // field 42, varint
+	admin = appendVarint(admin, 1)
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// configSectionToEnum maps section name strings to Config enum values.
+func configSectionToEnum(section string) (int, bool) {
+	m := map[string]int{
+		"device": ConfigTypeDevice, "position": ConfigTypePosition, "power": ConfigTypePower,
+		"network": ConfigTypeNetwork, "display": ConfigTypeDisplay, "lora": ConfigTypeLora,
+		"bluetooth": ConfigTypeBluetooth, "security": ConfigTypeSecurity,
+	}
+	v, ok := m[section]
+	return v, ok
+}
+
+// moduleConfigSectionToEnum maps section name strings to ModuleConfig enum values.
+func moduleConfigSectionToEnum(section string) (int, bool) {
+	m := map[string]int{
+		"mqtt": ModuleConfigMQTT, "serial": ModuleConfigSerial,
+		"external_notification": ModuleConfigExternalNotification,
+		"store_forward":         ModuleConfigStoreForward, "range_test": ModuleConfigRangeTest,
+		"telemetry": ModuleConfigTelemetry, "canned_message": ModuleConfigCannedMessage,
+		"audio": ModuleConfigAudio, "remote_hardware": ModuleConfigRemoteHardware,
+		"neighbor_info": ModuleConfigNeighborInfo,
+	}
+	v, ok := m[section]
+	return v, ok
 }
 
 // Iridium signal descriptions (shared with DirectSatTransport)
