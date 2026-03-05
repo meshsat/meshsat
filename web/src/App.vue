@@ -11,11 +11,13 @@ const utcTime = ref('')
 const tabs = [
   { name: 'dashboard', label: 'Dashboard', path: '/' },
   { name: 'comms', label: 'Comms', path: '/messages' },
-  { name: 'nodes', label: 'Nodes', path: '/nodes' },
-  { name: 'map', label: 'Map', path: '/map' },
+  { name: 'nodes', label: 'Peers', path: '/nodes' },
   { name: 'bridge', label: 'Bridge', path: '/bridge' },
   { name: 'passes', label: 'Passes', path: '/passes' },
-  { name: 'settings', label: 'Settings', path: '/settings' }
+  { name: 'map', label: 'Map', path: '/map' },
+  { name: 'settings', label: 'Settings', path: '/settings' },
+  { name: 'help', label: 'Help', path: '/help' },
+  { name: 'about', label: 'About', path: '/about' }
 ]
 
 function isActive(tab) {
@@ -155,8 +157,9 @@ onUnmounted(() => {
         <!-- Right: Status indicators -->
         <div class="flex items-center gap-3 shrink-0">
 
-          <!-- Iridium: signal bars + next pass -->
+          <!-- Iridium: label + signal bars + next pass -->
           <div class="hidden md:flex items-center gap-1.5">
+            <span class="text-[9px] font-medium text-tactical-iridium/70">IRD</span>
             <div class="flex items-end gap-px h-3">
               <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
                 :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-tactical-iridium') : 'bg-gray-700/50'"
@@ -170,8 +173,9 @@ onUnmounted(() => {
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
-          <!-- Mesh: avg SNR + device ID + node count -->
+          <!-- Mesh: label + avg SNR + device ID + node count -->
           <div class="hidden md:flex items-center gap-1.5">
+            <span class="text-[9px] font-medium text-tactical-lora/70">MESH</span>
             <span class="w-1.5 h-1.5 rounded-full"
               :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'" />
             <span v-if="meshAvgSNR !== null" class="text-[9px] font-mono"
@@ -185,14 +189,18 @@ onUnmounted(() => {
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
-          <!-- Cellular: signal bars + type -->
-          <div v-if="cellBars >= 0" class="hidden md:flex items-center gap-1">
-            <div class="flex items-end gap-px h-3">
-              <span v-for="i in 5" :key="'cell'+i" class="w-[3px] rounded-[1px]"
-                :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
-                :style="{ height: `${3 + i * 2}px` }" />
-            </div>
-            <span class="text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'CELL' }}</span>
+          <!-- Cellular: label + signal bars + type -->
+          <div class="hidden md:flex items-center gap-1">
+            <span class="text-[9px] font-medium text-sky-400/70">CELL</span>
+            <template v-if="cellBars >= 0">
+              <div class="flex items-end gap-px h-3">
+                <span v-for="i in 5" :key="'cell'+i" class="w-[3px] rounded-[1px]"
+                  :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
+                  :style="{ height: `${3 + i * 2}px` }" />
+              </div>
+              <span class="text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'LTE' }}</span>
+            </template>
+            <span v-else class="text-[9px] text-gray-600 font-mono">--</span>
           </div>
 
           <!-- GPS fix indicator -->

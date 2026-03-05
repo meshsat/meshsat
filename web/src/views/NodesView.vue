@@ -4,6 +4,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import { formatLastHeard, signalQualityClass, nodeStatusDot, shortId, isNodeActive, isNodeRecent } from '@/utils/format'
 
 const store = useMeshsatStore()
+const activeTab = ref('mesh') // 'mesh' or 'sms'
 const filter = ref('all') // 'all', 'active', 'stale'
 const sortBy = ref('last_heard') // 'last_heard', 'name', 'signal'
 const removing = ref(null)
@@ -105,7 +106,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
     <!-- Header -->
     <div class="flex items-center justify-between mb-4">
       <div>
-        <h1 class="text-lg font-semibold text-gray-200">Mesh Nodes</h1>
+        <h1 class="text-lg font-semibold text-gray-200">Peers</h1>
         <div class="text-xs text-gray-500 mt-0.5">
           {{ store.nodes?.length || 0 }} total
           <span class="text-emerald-400/80">{{ activeCount }} active</span>
@@ -123,6 +124,36 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
         </button>
       </div>
     </div>
+
+    <!-- Tab selector -->
+    <div class="flex gap-1 mb-4">
+      <button @click="activeTab = 'mesh'"
+        class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
+        :class="activeTab === 'mesh' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        Mesh Nodes
+        <span class="text-[9px] ml-1 opacity-60">({{ store.nodes?.length || 0 }})</span>
+      </button>
+      <button @click="activeTab = 'sms'"
+        class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
+        :class="activeTab === 'sms' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        SMS Contacts
+        <span class="ml-1 text-[9px] px-1 py-px rounded bg-red-900/30 text-red-400">soon</span>
+      </button>
+    </div>
+
+    <!-- ═══ SMS Contacts Tab ═══ -->
+    <div v-if="activeTab === 'sms'" class="flex flex-col items-center justify-center py-16 text-gray-500">
+      <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.25A2.25 2.25 0 013 16.878V8.25A2.25 2.25 0 015.25 6h13.5A2.25 2.25 0 0121 8.25v2.875M15 12h.008v.008H15V12z" />
+      </svg>
+      <span class="text-sm font-medium mb-1">SMS Address Book</span>
+      <span class="text-[12px] text-gray-600 text-center max-w-xs">
+        Manage SMS contacts for cellular messaging. Add phone numbers, names, and set up auto-forwarding rules per contact.
+      </span>
+      <span class="text-[10px] text-red-400/60 mt-3 font-mono">Feature coming soon</span>
+    </div>
+
+    <template v-if="activeTab === 'mesh'">
 
     <!-- Connection banner -->
     <div v-if="!radioConnected" class="bg-amber-900/20 border border-amber-800/50 rounded-lg p-3 text-amber-300/80 text-sm mb-4">
@@ -303,5 +334,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
         {{ staleCount }} stale node{{ staleCount > 1 ? 's' : '' }} (not heard in 2+ hours) — click to manage
       </button>
     </div>
+
+    </template>
   </div>
 </template>

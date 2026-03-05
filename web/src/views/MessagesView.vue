@@ -6,7 +6,7 @@ import { transportBadge, portnumLabel, shortId, formatRelativeTime, formatTimest
 
 const store = useMeshsatStore()
 
-// Tab: 'mesh' or 'sbd'
+// Tab: 'mesh', 'sbd', 'sms', or 'webhooks'
 const activeTab = ref('mesh')
 
 // SBD queue detail modal
@@ -41,7 +41,7 @@ const editingPreset = ref(null)
 const presetForm = ref({ name: '', text: '', destination: 'broadcast' })
 
 // Filter
-const filter = ref('text') // 'all', 'text', 'system'
+const filter = ref('all') // 'all', 'text', 'system'
 const selectedNode = ref(null) // null = all nodes, string = specific node mailbox
 
 const byteCount = computed(() => new TextEncoder().encode(sendText.value).length)
@@ -245,20 +245,23 @@ onUnmounted(() => {
   <div class="max-w-5xl mx-auto flex flex-col h-[calc(100vh-5rem)] lg:h-[calc(100vh-3rem)]">
 
     <!-- Tab selector -->
-    <div class="flex gap-1 mb-3 flex-shrink-0">
-      <button @click="activeTab = 'mesh'"
-        class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
-        :class="activeTab === 'mesh' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
-        Mesh Messages
-      </button>
-      <button @click="activeTab = 'sbd'"
-        class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
-        :class="activeTab === 'sbd' ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
-        SBD Queue
-        <span v-if="(store.dlq || []).filter(d => d.status === 'pending' || !d.status).length > 0"
+    <div class="flex gap-1 mb-3 flex-shrink-0 overflow-x-auto no-scrollbar">
+      <button v-for="tab in [
+        { key: 'mesh', label: 'Mesh Messages' },
+        { key: 'sbd', label: 'SBD Queue' },
+        { key: 'sms', label: 'SMS' },
+        { key: 'webhooks', label: 'Webhooks' }
+      ]" :key="tab.key"
+        @click="activeTab = tab.key"
+        class="px-3 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap"
+        :class="activeTab === tab.key ? 'bg-teal-600/20 text-teal-400 border border-teal-600/30' : 'bg-gray-800/40 text-gray-500 hover:text-gray-300 border border-transparent'">
+        {{ tab.label }}
+        <span v-if="tab.key === 'sbd' && (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length > 0"
           class="ml-1 text-[9px] px-1 py-px rounded bg-amber-400/20 text-amber-400">
           {{ (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length }}
         </span>
+        <span v-if="tab.key === 'sms' || tab.key === 'webhooks'"
+          class="ml-1 text-[9px] px-1 py-px rounded bg-red-900/30 text-red-400">soon</span>
       </button>
     </div>
 
@@ -318,6 +321,30 @@ onUnmounted(() => {
           </div>
         </div>
       </Teleport>
+    </div>
+
+    <!-- ═══ SMS Tab ═══ -->
+    <div v-if="activeTab === 'sms'" class="flex-1 flex flex-col items-center justify-center text-gray-500">
+      <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
+      </svg>
+      <span class="text-sm font-medium mb-1">SMS Messaging</span>
+      <span class="text-[12px] text-gray-600 text-center max-w-xs">
+        Send and receive SMS messages via the cellular modem. Connect a USB LTE modem with AT command support to enable this feature.
+      </span>
+      <span class="text-[10px] text-red-400/60 mt-3 font-mono">Feature coming soon</span>
+    </div>
+
+    <!-- ═══ Webhooks Tab ═══ -->
+    <div v-if="activeTab === 'webhooks'" class="flex-1 flex flex-col items-center justify-center text-gray-500">
+      <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.556-9.556a4.5 4.5 0 00-6.364 0l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+      </svg>
+      <span class="text-sm font-medium mb-1">Webhooks</span>
+      <span class="text-[12px] text-gray-600 text-center max-w-xs">
+        View inbound and outbound webhook activity. Configure webhook endpoints in Bridge rules to forward messages to external HTTP services.
+      </span>
+      <span class="text-[10px] text-red-400/60 mt-3 font-mono">Feature coming soon</span>
     </div>
 
     <!-- ═══ Mesh Messages Tab ═══ -->

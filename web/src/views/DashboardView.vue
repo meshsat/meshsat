@@ -285,15 +285,27 @@ function trackCellularSignal() {
 }
 
 const cellSparklinePoints = computed(() => {
-  const hist = cellSignalHistory.value
-  if (hist.length < 2) return ''
-  const W = 120, H = 20
+  let hist = cellSignalHistory.value
+  // Use placeholder mock data if no real data
+  if (hist.length < 2) {
+    hist = [0, 1, 2, 2, 3, 2, 1, 0, 0, 1, 2, 3, 4, 3, 2, 1, 0, 0, 1, 2].map((v, i) => ({ ts: i, val: v }))
+  }
+  const W = 200, H = 72
   return hist.map((h, i) => {
     const x = (i / (hist.length - 1)) * W
     const y = H - (h.val / 5) * H
     return `${x},${y}`
   }).join(' ')
 })
+const cellSparklineArea = computed(() => {
+  const pts = cellSparklinePoints.value
+  if (!pts) return ''
+  const pairs = pts.split(' ')
+  const first = pairs[0]?.split(',')[0] || '0'
+  const last = pairs[pairs.length - 1]?.split(',')[0] || '200'
+  return `M ${first},72 L ${pts.replace(/ /g, ' L ')} L ${last},72 Z`
+})
+const cellSparklineIsMock = computed(() => cellSignalHistory.value.length < 2)
 
 // ── Computed: Cellular panel ──
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
@@ -305,18 +317,30 @@ const cellStatus = computed(() => {
 })
 
 // ── Computed: GPS Position panel ──
-const localNode = computed(() => {
-  const myId = store.status?.node_id
-  if (!myId) return null
-  return (store.nodes || []).find(n => n.num === myId)
+// Use location sources API (not local node position which can be stale/cached)
+const gpsLat = computed(() => {
+  const gps = locationGps.value
+  if (gps?.lat && gps.lat !== 0) return gps.lat.toFixed(6)
+  return locationResolved.value?.lat?.toFixed(6) ?? 'N/A'
 })
-const gpsLat = computed(() => localNode.value?.latitude?.toFixed(6) ?? 'N/A')
-const gpsLon = computed(() => localNode.value?.longitude?.toFixed(6) ?? 'N/A')
-const gpsAlt = computed(() => localNode.value?.altitude != null ? `${localNode.value.altitude}m` : 'N/A')
-const gpsSats = computed(() => localNode.value?.sats ?? 'N/A')
+const gpsLon = computed(() => {
+  const gps = locationGps.value
+  if (gps?.lon && gps.lon !== 0) return gps.lon.toFixed(6)
+  return locationResolved.value?.lon?.toFixed(6) ?? 'N/A'
+})
+const gpsAlt = computed(() => {
+  const resolved = locationResolved.value
+  if (resolved?.alt_km != null) return `${(resolved.alt_km * 1000).toFixed(0)}m`
+  return 'N/A'
+})
+const gpsSats = computed(() => {
+  const gps = locationGps.value
+  return gps?.sats ?? 'N/A'
+})
 const gpsFix = computed(() => {
-  if (!localNode.value?.latitude && !localNode.value?.longitude) return false
-  return true
+  // Only true if GPS source explicitly has a non-zero position
+  const gps = locationGps.value
+  return gps && gps.lat !== 0 && gps.lon !== 0
 })
 
 // ── Computed: SBD Queue panel (filter out expired) ──
@@ -405,26 +429,45 @@ function humanizePortnum(msg) {
   return `${labels[portnum] || portnum.toLowerCase().replace(/_APP$/, '')} from ${node}`
 }
 
+function telemetryFromData(data, msg) {
+  if (!data) return null
+  const parts = []
+  const nodeId = msg?.match(/!([a-f0-9]+)/)?.[0] || ''
+  if (data.battery_level > 0) parts.push(`bat ${Math.round(data.battery_level)}%`)
+  if (data.voltage > 0 && data.voltage < 10) parts.push(`${data.voltage.toFixed(1)}V`)
+  if (data.channel_util > 0) parts.push(`ch ${data.channel_util.toFixed(0)}%`)
+  if (data.air_util_tx > 0) parts.push(`air ${data.air_util_tx.toFixed(0)}%`)
+  if (data.temperature != null && data.temperature !== 0) parts.push(`${data.temperature.toFixed(1)}°C`)
+  if (parts.length > 0) return `telemetry ${nodeId}: ${parts.join(', ')}`
+  return null
+}
+
 function eventDescription(event) {
   const type = event?.type ?? ''
   const msg = event?.message ?? ''
   const data = event?.data || null
   if (type === 'message' || type === 'text') {
+    // For telemetry messages, try to show actual values from data
+    if (msg.includes('TELEMETRY') && data) {
+      const desc = telemetryFromData(data, msg)
+      if (desc) return desc
+    }
+    if (msg.includes('POSITION') && data?.latitude && data?.longitude) {
+      const nodeId = msg.match(/!([a-f0-9]+)/)?.[0] || ''
+      return `position ${nodeId}: ${data.latitude.toFixed(4)}, ${data.longitude.toFixed(4)}`
+    }
     if (msg.includes('portnum=')) return humanizePortnum(msg)
     return msg || 'New message received'
   }
-  if (type === 'telemetry') return humanizePortnum(msg) || 'Device telemetry received'
+  if (type === 'telemetry') {
+    const desc = telemetryFromData(data, msg)
+    if (desc) return desc
+    return humanizePortnum(msg) || 'Device telemetry received'
+  }
   if (type === 'node_update' || type === 'nodeinfo') {
-    // If telemetry data is in the event, show actual values
     if (msg.includes('telemetry') && data) {
-      const parts = []
-      const nodeId = msg.match(/!([a-f0-9]+)/)?.[0] || ''
-      if (data.battery_level > 0) parts.push(`bat ${Math.round(data.battery_level)}%`)
-      if (data.voltage > 0 && data.voltage < 10) parts.push(`${data.voltage.toFixed(1)}V`)
-      if (data.channel_util > 0) parts.push(`ch ${data.channel_util.toFixed(0)}%`)
-      if (data.air_util_tx > 0) parts.push(`air ${data.air_util_tx.toFixed(0)}%`)
-      if (data.temperature != null && data.temperature !== 0) parts.push(`${data.temperature.toFixed(1)}°C`)
-      if (parts.length > 0) return `telemetry ${nodeId}: ${parts.join(', ')}`
+      const desc = telemetryFromData(data, msg)
+      if (desc) return desc
     }
     if (data?.long_name && !msg.includes('telemetry')) return `node ${data.long_name} (${data.hw_model_name || 'unknown hw'})`
     return msg || 'Node info updated'
@@ -860,15 +903,28 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <!-- Mesh SNR bar chart (per-node) -->
+        <!-- Mesh SNR bar chart (per-node) — same height as Iridium chart -->
         <div v-if="meshSNRBars.length > 0" class="mb-3">
-          <div class="flex items-end gap-1 h-8">
-            <div v-for="(bar, i) in meshSNRBars" :key="i"
-              class="flex-1 rounded-t transition-all"
-              :class="bar.snr >= 0 ? 'bg-emerald-500/40' : bar.snr >= -10 ? 'bg-amber-500/40' : 'bg-red-500/40'"
-              :style="{ height: `${bar.height * 32}px` }"
-              :title="`${bar.name}: ${bar.snr.toFixed(1)} dB`" />
-          </div>
+          <svg viewBox="0 0 200 80" class="w-full h-24" preserveAspectRatio="xMidYMid meet">
+            <!-- Grid lines at -20, -10, 0, +10 dB -->
+            <line v-for="v in [-20, -10, 0, 10]" :key="'snrg'+v"
+              x1="0" x2="200" :y1="80 - ((v + 20) / 30) * 72" :y2="80 - ((v + 20) / 30) * 72"
+              stroke="#374151" stroke-width="0.3" stroke-dasharray="2 3" />
+            <text v-for="v in [-20, -10, 0, 10]" :key="'snrl'+v"
+              x="2" :y="80 - ((v + 20) / 30) * 72 - 2" fill="#4b5563" font-size="6">{{ v }}dB</text>
+            <!-- Bars -->
+            <rect v-for="(bar, i) in meshSNRBars" :key="'snrb'+i"
+              :x="10 + i * (180 / meshSNRBars.length) + 2"
+              :y="80 - bar.height * 72"
+              :width="Math.max(4, 180 / meshSNRBars.length - 4)"
+              :height="bar.height * 72"
+              rx="1"
+              :fill="bar.snr >= 0 ? 'rgba(16,185,129,0.5)' : bar.snr >= -10 ? 'rgba(245,158,11,0.5)' : 'rgba(239,68,68,0.5)'" />
+            <!-- Node name labels -->
+            <text v-for="(bar, i) in meshSNRBars" :key="'snrn'+i"
+              :x="10 + i * (180 / meshSNRBars.length) + Math.max(4, 180 / meshSNRBars.length - 4) / 2 + 2"
+              y="78" text-anchor="middle" fill="#6b7280" font-size="5">{{ bar.name.slice(0,4) }}</text>
+          </svg>
           <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
             <span>SNR per node</span>
             <span>{{ meshSNRBars.filter(b => b.snr >= 0).length }}/{{ meshSNRBars.length }} good</span>
@@ -937,12 +993,27 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <!-- Signal history sparkline -->
-        <div v-if="cellSparklinePoints" class="mb-3">
-          <svg viewBox="0 0 120 20" class="w-full h-5" preserveAspectRatio="none">
-            <polyline :points="cellSparklinePoints" fill="none" stroke="#38bdf8" stroke-width="1" opacity="0.6" />
+        <!-- Signal history chart — same height as Iridium chart -->
+        <div class="mb-3">
+          <svg viewBox="0 0 200 84" class="w-full h-24" preserveAspectRatio="xMidYMid meet">
+            <!-- Grid lines at 1-5 bars -->
+            <line v-for="v in [1,2,3,4,5]" :key="'cg'+v"
+              x1="0" x2="200" :y1="72 - (v / 5) * 72" :y2="72 - (v / 5) * 72"
+              stroke="#374151" stroke-width="0.3" stroke-dasharray="2 3" />
+            <text v-for="v in [1,3,5]" :key="'cl'+v"
+              x="2" :y="72 - (v / 5) * 72 - 2" fill="#4b5563" font-size="6">{{ v }}</text>
+            <!-- Area fill -->
+            <path v-if="cellSparklineArea" :d="cellSparklineArea" fill="rgba(56,189,248,0.08)" />
+            <!-- Line -->
+            <polyline v-if="cellSparklinePoints" :points="cellSparklinePoints" fill="none" stroke="#38bdf8" stroke-width="1.2" :opacity="cellSparklineIsMock ? 0.3 : 0.7" />
           </svg>
-          <div class="text-[8px] text-gray-600 text-right">signal history</div>
+          <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
+            <span class="flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-sky-400 inline-block"></span> Signal bars
+            </span>
+            <span v-if="cellSparklineIsMock" class="text-gray-700 italic">placeholder — no data yet</span>
+            <span v-else>{{ cellSignalHistory.length }} samples</span>
+          </div>
         </div>
 
         <div class="space-y-1.5 text-[11px]">
@@ -1092,10 +1163,10 @@ function widgetGridClass(id) {
         <div class="space-y-1.5 text-[11px]">
           <div class="flex justify-between items-center">
             <div class="flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 rounded-full" :class="locationGps ? 'bg-emerald-400' : 'bg-gray-600'" />
+              <span class="w-1.5 h-1.5 rounded-full" :class="gpsFix ? 'bg-emerald-400' : 'bg-gray-600'" />
               <span class="text-gray-500">GPS</span>
             </div>
-            <span v-if="locationGps" class="text-gray-300 font-mono text-[10px]">
+            <span v-if="gpsFix && locationGps" class="text-gray-300 font-mono text-[10px]">
               {{ locationGps.lat.toFixed(4) }}, {{ locationGps.lon.toFixed(4) }}
               <span class="text-gray-600 ml-1">~{{ formatAccuracy(locationGps.accuracy_km) }}</span>
             </span>
