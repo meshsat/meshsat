@@ -127,6 +127,10 @@ func main() {
 	tleMgr := engine.NewTLEManager(db)
 	tleMgr.Start(ctx)
 
+	// Astrocast TLE manager — daily Celestrak refresh for Astrocast LEO constellation
+	astroTleMgr := engine.NewAstrocastTLEManager(db)
+	astroTleMgr.Start(ctx)
+
 	// Wire TLE manager into gateway manager for pass-aware scheduling
 	gwMgr.SetPassPredictor(&tleAdapter{tleMgr})
 
@@ -167,6 +171,7 @@ func main() {
 	srv.SetRuleEngine(ruleEngine)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
+	srv.SetAstrocastTLEManager(astroTleMgr)
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
@@ -210,6 +215,7 @@ func main() {
 		cellSigRecorder.Stop()
 	}
 	tleMgr.Stop()
+	astroTleMgr.Stop()
 	gwMgr.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

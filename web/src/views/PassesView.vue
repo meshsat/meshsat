@@ -8,9 +8,13 @@ const selectedLocationId = ref(null)
 const locationMode = ref('auto') // 'auto', 'gps', 'iridium', or 'custom'
 const windowHours = ref(24)
 const cacheAgeSec = ref(-1)
+const astroCacheAgeSec = ref(-1)
 const loadingPasses = ref(false)
 const refreshing = ref(false)
 const showOverlay = ref(true)
+
+// Constellation tab
+const constellation = ref('iridium') // 'iridium' or 'astrocast'
 
 // Add location form
 const showAddForm = ref(false)
@@ -48,11 +52,12 @@ async function setMinElev(val) {
   localStorage.setItem('meshsat-min-elev', String(val))
   // Sync to backend gateway config so scheduler uses the same value
   try {
-    const gw = (store.gateways || []).find(g => g.type === 'iridium')
+    const gwType = constellation.value
+    const gw = (store.gateways || []).find(g => g.type === gwType)
     if (gw) {
       const cfg = typeof gw.config === 'string' ? JSON.parse(gw.config) : { ...gw.config }
       cfg.min_elev_deg = val
-      await store.configureGateway('iridium', gw.enabled, cfg)
+      await store.configureGateway(gwType, gw.enabled, cfg)
     }
   } catch {}
   fetchPasses()
@@ -120,9 +125,13 @@ const activeLocation = computed(() => {
   return selectedLocation
 })
 
+const activePasses = computed(() =>
+  constellation.value === 'astrocast' ? store.astrocastPasses : store.passes
+)
+
 const sortedPasses = computed(() => {
   const now = Date.now() / 1000
-  return (store.passes || []).map(p => ({
+  return (activePasses.value || []).map(p => ({
     ...p,
     isNext: !p.is_active && p.aos > now,
     isPast: p.los < now
@@ -161,16 +170,24 @@ async function fetchPasses() {
   // Start pass prediction from the lookback time so passes overlap with signal history
   const windowSec = windowHours.value * 3600
   const startUnix = Math.floor(Date.now() / 1000) - Math.floor(windowSec * 0.5)
-  const data = await store.fetchPasses({
+  const params = {
     lat: loc.lat,
     lon: loc.lon,
     alt_m: loc.alt_m || 0,
     hours: windowHours.value,
     min_elev: minElevDeg.value,
     start: startUnix
-  })
-  if (data?.cache_age_sec !== undefined) {
-    cacheAgeSec.value = data.cache_age_sec
+  }
+  if (constellation.value === 'astrocast') {
+    const data = await store.fetchAstrocastPasses(params)
+    if (data?.cache_age_sec !== undefined) {
+      astroCacheAgeSec.value = data.cache_age_sec
+    }
+  } else {
+    const data = await store.fetchPasses(params)
+    if (data?.cache_age_sec !== undefined) {
+      cacheAgeSec.value = data.cache_age_sec
+    }
   }
   loadingPasses.value = false
 }
@@ -178,7 +195,11 @@ async function fetchPasses() {
 async function doRefreshTLEs() {
   refreshing.value = true
   try {
-    await store.refreshTLEs()
+    if (constellation.value === 'astrocast') {
+      await store.refreshAstrocastTLEs()
+    } else {
+      await store.refreshTLEs()
+    }
     await fetchPasses()
   } catch { /* store error */ }
   refreshing.value = false
@@ -235,7 +256,7 @@ const chartData = computed(() => {
   }
 
   // Pass triangles: each pass becomes a triangle where height = peak elevation
-  const passes = (store.passes || []).map(p => {
+  const passes = (activePasses.value || []).map(p => {
     const x1 = Math.max(padL, xPos(p.aos))
     const x2 = Math.min(chartWidth - padR, xPos(p.los))
     const xMid = (x1 + x2) / 2
@@ -372,6 +393,7 @@ function clearHover() {
 }
 
 async function fetchSignalHistory() {
+  if (constellation.value !== 'iridium') return
   const now = Math.floor(Date.now() / 1000)
   const windowSec = windowHours.value * 3600
   const from = now - Math.floor(windowSec * 0.5)
@@ -384,6 +406,7 @@ async function fetchSignalHistory() {
 
 watch(windowHours, fetchSignalHistory)
 watch(locationMode, () => { store.fetchLocationSources().then(fetchPasses) })
+watch(constellation, () => { fetchPasses(); fetchSignalHistory() })
 
 onMounted(async () => {
   await Promise.all([
@@ -401,11 +424,26 @@ onMounted(async () => {
 <template>
   <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-gray-200">Pass Predictor</h2>
+      <div class="flex items-center gap-3">
+        <h2 class="text-lg font-semibold text-gray-200">Pass Predictor</h2>
+        <div class="flex rounded-lg bg-gray-800 border border-gray-700 p-0.5">
+          <button @click="constellation = 'iridium'"
+            class="px-3 py-1 rounded text-xs font-medium transition-colors"
+            :class="constellation === 'iridium' ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'text-gray-500 hover:text-gray-300'">
+            Iridium
+          </button>
+          <button @click="constellation = 'astrocast'"
+            class="px-3 py-1 rounded text-xs font-medium transition-colors"
+            :class="constellation === 'astrocast' ? 'bg-amber-500/20 text-amber-400' : 'text-gray-500 hover:text-gray-300'">
+            Astrocast
+          </button>
+        </div>
+      </div>
       <div class="flex items-center gap-2 text-[10px] text-gray-500">
-        <span>TLE: {{ formatCacheAge(cacheAgeSec) }}</span>
+        <span>TLE: {{ formatCacheAge(constellation === 'astrocast' ? astroCacheAgeSec : cacheAgeSec) }}</span>
         <button @click="doRefreshTLEs" :disabled="refreshing"
-          class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:text-tactical-iridium hover:border-tactical-iridium/30 transition-colors">
+          class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-400 transition-colors"
+          :class="constellation === 'astrocast' ? 'hover:text-amber-400 hover:border-amber-400/30' : 'hover:text-tactical-iridium hover:border-tactical-iridium/30'">
           {{ refreshing ? 'Refreshing...' : 'Refresh TLEs' }}
         </button>
       </div>
@@ -449,7 +487,9 @@ onMounted(async () => {
       <div class="flex items-center gap-1 ml-auto">
         <button v-for="h in windowOptions" :key="h" @click="windowHours = h; fetchPasses()"
           class="px-2.5 py-1 rounded text-xs font-medium transition-colors"
-          :class="windowHours === h ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'bg-gray-800 text-gray-500 hover:text-gray-300'">
+          :class="windowHours === h
+            ? (constellation === 'astrocast' ? 'bg-amber-500/20 text-amber-400' : 'bg-tactical-iridium/20 text-tactical-iridium')
+            : 'bg-gray-800 text-gray-500 hover:text-gray-300'">
           {{ h }}h
         </button>
       </div>
@@ -460,7 +500,9 @@ onMounted(async () => {
       <label class="text-xs text-gray-500">Min Elev</label>
       <button v-for="p in elevPresets" :key="p.value" @click="setMinElev(p.value)"
         class="px-2.5 py-1 rounded text-xs font-medium transition-colors"
-        :class="minElevDeg === p.value ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'bg-gray-800 text-gray-500 hover:text-gray-300'"
+        :class="minElevDeg === p.value
+          ? (constellation === 'astrocast' ? 'bg-amber-500/20 text-amber-400' : 'bg-tactical-iridium/20 text-tactical-iridium')
+          : 'bg-gray-800 text-gray-500 hover:text-gray-300'"
         :title="p.desc">
         {{ p.label }} {{ p.value }}°
       </button>
@@ -504,14 +546,15 @@ onMounted(async () => {
     </div>
 
     <!-- Next pass highlight -->
-    <div v-if="nextPass" class="bg-tactical-iridium/5 border border-tactical-iridium/20 rounded-lg p-4 mb-4">
+    <div v-if="nextPass" class="rounded-lg p-4 mb-4"
+      :class="constellation === 'astrocast' ? 'bg-amber-500/5 border border-amber-500/20' : 'bg-tactical-iridium/5 border border-tactical-iridium/20'">
       <div class="flex items-center justify-between">
         <div>
-          <span class="text-[10px] text-tactical-iridium/60 uppercase">Next Pass</span>
-          <div class="text-sm text-tactical-iridium font-medium mt-0.5">{{ nextPass.satellite }}</div>
+          <span class="text-[10px] uppercase" :class="constellation === 'astrocast' ? 'text-amber-400/60' : 'text-tactical-iridium/60'">Next Pass</span>
+          <div class="text-sm font-medium mt-0.5" :class="constellation === 'astrocast' ? 'text-amber-400' : 'text-tactical-iridium'">{{ nextPass.satellite }}</div>
         </div>
         <div class="text-right">
-          <div class="text-lg font-mono font-bold text-tactical-iridium">{{ formatTimeHHMM(nextPass.aos) }}</div>
+          <div class="text-lg font-mono font-bold" :class="constellation === 'astrocast' ? 'text-amber-400' : 'text-tactical-iridium'">{{ formatTimeHHMM(nextPass.aos) }}</div>
           <div class="text-[10px] text-gray-500">{{ formatDate(nextPass.aos) }} UTC</div>
         </div>
       </div>
@@ -523,18 +566,24 @@ onMounted(async () => {
     </div>
 
     <!-- Signal vs Passes overlay chart -->
-    <div v-if="showOverlay && (sortedPasses.length > 0 || store.signalHistory.length > 0)"
+    <div v-if="showOverlay && (sortedPasses.length > 0 || (constellation === 'iridium' && store.signalHistory.length > 0))"
       class="bg-tactical-surface rounded-lg border border-tactical-border p-3 mb-4">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Signal vs Passes</span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">
+          {{ constellation === 'iridium' ? 'Signal vs Passes' : 'Astrocast Passes' }}
+        </span>
         <div class="flex items-center gap-3 text-[10px] text-gray-500">
           <span class="flex items-center gap-1">
-            <svg width="12" height="8" class="inline-block"><polygon points="0,8 6,1 12,8" fill="rgba(129,140,248,0.3)" stroke="rgba(129,140,248,0.5)" stroke-width="0.5"/></svg>
+            <svg width="12" height="8" class="inline-block"><polygon points="0,8 6,1 12,8"
+              :fill="constellation === 'astrocast' ? 'rgba(245,158,11,0.3)' : 'rgba(129,140,248,0.3)'"
+              :stroke="constellation === 'astrocast' ? 'rgba(245,158,11,0.5)' : 'rgba(129,140,248,0.5)'" stroke-width="0.5"/></svg>
             Pass
           </span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Signal</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-fuchsia-400 inline-block"></span> GSS OK</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span> GSS Fail</span>
+          <template v-if="constellation === 'iridium'">
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Signal</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-fuchsia-400 inline-block"></span> GSS OK</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span> GSS Fail</span>
+          </template>
         </div>
       </div>
       <svg :viewBox="`0 0 ${chartWidth} ${chartHeight}`" class="w-full h-auto" preserveAspectRatio="xMidYMid meet"
@@ -549,6 +598,16 @@ onMounted(async () => {
           <linearGradient id="passGradActive" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="rgb(165,180,252)" stop-opacity="0.50" />
             <stop offset="100%" stop-color="rgb(165,180,252)" stop-opacity="0.08" />
+          </linearGradient>
+          <!-- Astrocast pass gradient (amber) -->
+          <linearGradient id="astroPassGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgb(245,158,11)" stop-opacity="0.30" />
+            <stop offset="100%" stop-color="rgb(245,158,11)" stop-opacity="0.03" />
+          </linearGradient>
+          <!-- Astrocast active pass gradient -->
+          <linearGradient id="astroPassGradActive" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgb(251,191,36)" stop-opacity="0.50" />
+            <stop offset="100%" stop-color="rgb(251,191,36)" stop-opacity="0.08" />
           </linearGradient>
           <!-- Signal area gradient -->
           <linearGradient id="signalAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -566,53 +625,65 @@ onMounted(async () => {
           :x1="padL" :x2="chartWidth - padR" :y1="y" :y2="y"
           stroke="#374151" stroke-width="0.5" stroke-dasharray="2 3" />
 
-        <!-- Left Y-axis labels (signal bars 0-5) -->
-        <text v-for="t in chartData.signalTicks" :key="'sl'+t.val"
-          :x="padL - 6" :y="t.y" text-anchor="end" fill="#6b7280" font-size="8" dominant-baseline="middle">
-          {{ t.val }}
-        </text>
-        <text :x="padL - 6" :y="plotTop - 5" text-anchor="end" fill="#6b7280" font-size="7">bars</text>
+        <!-- Left Y-axis labels (signal bars 0-5, Iridium only) -->
+        <template v-if="constellation === 'iridium'">
+          <text v-for="t in chartData.signalTicks" :key="'sl'+t.val"
+            :x="padL - 6" :y="t.y" text-anchor="end" fill="#6b7280" font-size="8" dominant-baseline="middle">
+            {{ t.val }}
+          </text>
+          <text :x="padL - 6" :y="plotTop - 5" text-anchor="end" fill="#6b7280" font-size="7">bars</text>
+        </template>
 
         <!-- Right Y-axis labels (elevation degrees) -->
         <text v-for="t in chartData.elevTickData" :key="'el'+t.deg"
-          :x="chartWidth - padR + 6" :y="t.y" text-anchor="start" fill="#818cf8" font-size="8" dominant-baseline="middle" opacity="0.5">
+          :x="chartWidth - padR + 6" :y="t.y" text-anchor="start"
+          :fill="constellation === 'astrocast' ? '#f59e0b' : '#818cf8'" font-size="8" dominant-baseline="middle" opacity="0.5">
           {{ t.deg }}
         </text>
-        <text :x="chartWidth - padR + 6" :y="plotTop - 5" text-anchor="start" fill="#818cf8" font-size="7" opacity="0.5">deg</text>
+        <text :x="chartWidth - padR + 6" :y="plotTop - 5" text-anchor="start"
+          :fill="constellation === 'astrocast' ? '#f59e0b' : '#818cf8'" font-size="7" opacity="0.5">deg</text>
 
         <!-- Plot area (clipped) -->
         <g clip-path="url(#plotClip)">
           <!-- Pass triangles (background layer) -->
           <path v-for="(p, idx) in chartData.passes" :key="'pt'+idx"
-            :d="p.path" :fill="p.active ? 'url(#passGradActive)' : 'url(#passGrad)'"
-            :stroke="p.active ? 'rgba(165,180,252,0.5)' : 'rgba(129,140,248,0.2)'" stroke-width="1" />
+            :d="p.path"
+            :fill="constellation === 'astrocast'
+              ? (p.active ? 'url(#astroPassGradActive)' : 'url(#astroPassGrad)')
+              : (p.active ? 'url(#passGradActive)' : 'url(#passGrad)')"
+            :stroke="constellation === 'astrocast'
+              ? (p.active ? 'rgba(251,191,36,0.5)' : 'rgba(245,158,11,0.2)')
+              : (p.active ? 'rgba(165,180,252,0.5)' : 'rgba(129,140,248,0.2)')" stroke-width="1" />
 
           <!-- Pass peak labels (for wider triangles) -->
           <text v-for="(p, idx) in chartData.passes.filter(pp => (pp.x2 - pp.x1) > 20)" :key="'plbl'+idx"
-            :x="p.xMid" :y="p.peakY - 4" text-anchor="middle" fill="#a5b4fc" font-size="7" opacity="0.6">
+            :x="p.xMid" :y="p.peakY - 4" text-anchor="middle"
+            :fill="constellation === 'astrocast' ? '#fbbf24' : '#a5b4fc'" font-size="7" opacity="0.6">
             {{ p.elev.toFixed(0) }}
           </text>
 
-          <!-- Signal area fill -->
-          <path v-if="chartData.signalAreaPath" :d="chartData.signalAreaPath" fill="url(#signalAreaGrad)" />
+          <!-- Signal area fill (Iridium only) -->
+          <template v-if="constellation === 'iridium'">
+            <path v-if="chartData.signalAreaPath" :d="chartData.signalAreaPath" fill="url(#signalAreaGrad)" />
 
-          <!-- Signal line -->
-          <polyline v-if="chartData.signalLinePts"
-            :points="chartData.signalLinePts"
-            fill="none" stroke="#10b981" stroke-width="1.5" opacity="0.7" />
+            <!-- Signal line -->
+            <polyline v-if="chartData.signalLinePts"
+              :points="chartData.signalLinePts"
+              fill="none" stroke="#10b981" stroke-width="1.5" opacity="0.7" />
 
-          <!-- Signal dots -->
-          <circle v-for="(s, idx) in chartData.signals" :key="'sd'+idx"
-            :cx="s.x" :cy="s.y" r="2.5"
-            :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'"
-            opacity="0.85" />
+            <!-- Signal dots -->
+            <circle v-for="(s, idx) in chartData.signals" :key="'sd'+idx"
+              :cx="s.x" :cy="s.y" r="2.5"
+              :fill="s.val >= 3 ? '#10b981' : s.val >= 1 ? '#f59e0b' : '#ef4444'"
+              opacity="0.85" />
 
-          <!-- GSS registration dots -->
-          <circle v-for="(g, idx) in chartData.gssEvents" :key="'gss'+idx"
-            :cx="g.x" :cy="g.y" r="3"
-            :fill="g.success ? '#e879f9' : '#f87171'"
-            :opacity="g.success ? 0.9 : 0.7"
-            :stroke="g.success ? '#d946ef' : '#ef4444'" stroke-width="0.5" />
+            <!-- GSS registration dots -->
+            <circle v-for="(g, idx) in chartData.gssEvents" :key="'gss'+idx"
+              :cx="g.x" :cy="g.y" r="3"
+              :fill="g.success ? '#e879f9' : '#f87171'"
+              :opacity="g.success ? 0.9 : 0.7"
+              :stroke="g.success ? '#d946ef' : '#ef4444'" stroke-width="0.5" />
+          </template>
 
           <!-- Now line -->
           <line :x1="chartData.nowX" :x2="chartData.nowX" :y1="plotTop" :y2="plotBottom"
@@ -646,7 +717,7 @@ onMounted(async () => {
           </text>
           <text v-if="hoverInfo.passLabel"
             :x="hoverInfo.x + (hoverInfo.x > chartWidth / 2 ? -114 : 14)" :y="plotTop + 25"
-            fill="#a5b4fc" font-size="8">
+            :fill="constellation === 'astrocast' ? '#fbbf24' : '#a5b4fc'" font-size="8">
             {{ hoverInfo.passLabel }} {{ hoverInfo.passElev?.toFixed(0) }}deg
           </text>
           <text v-if="hoverInfo.signalVal !== null"
@@ -681,10 +752,13 @@ onMounted(async () => {
       <div v-else-if="showPassList" class="space-y-1 mt-2">
         <div v-for="pass in sortedPasses" :key="`${pass.satellite}-${pass.aos}`"
           class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors"
-          :class="pass.is_active ? 'bg-tactical-iridium/10 border border-tactical-iridium/20' : pass.isPast ? 'bg-gray-800/30 opacity-50' : 'bg-gray-800/50 hover:bg-gray-800'">
+          :class="pass.is_active
+            ? (constellation === 'astrocast' ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-tactical-iridium/10 border border-tactical-iridium/20')
+            : pass.isPast ? 'bg-gray-800/30 opacity-50' : 'bg-gray-800/50 hover:bg-gray-800'">
 
           <!-- Active indicator -->
-          <span v-if="pass.is_active" class="w-2 h-2 rounded-full bg-tactical-iridium animate-pulse shrink-0" />
+          <span v-if="pass.is_active" class="w-2 h-2 rounded-full animate-pulse shrink-0"
+            :class="constellation === 'astrocast' ? 'bg-amber-400' : 'bg-tactical-iridium'" />
           <span v-else class="w-2 h-2 rounded-full bg-gray-700 shrink-0" />
 
           <!-- Satellite name -->

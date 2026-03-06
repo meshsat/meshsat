@@ -1061,6 +1061,49 @@ func (db *DB) ReplaceTLECache(entries []TLECacheEntry) error {
 	return tx.Commit()
 }
 
+// ---- Astrocast TLE Cache ----
+
+// GetAstrocastTLECache returns all cached Astrocast TLE entries.
+func (db *DB) GetAstrocastTLECache() ([]TLECacheEntry, error) {
+	var entries []TLECacheEntry
+	err := db.Select(&entries, "SELECT * FROM astrocast_tle_cache ORDER BY satellite_name ASC")
+	if err != nil {
+		return nil, fmt.Errorf("query Astrocast TLE cache: %w", err)
+	}
+	return entries, nil
+}
+
+// GetAstrocastTLECacheAge returns the age of the Astrocast TLE cache in seconds, or -1 if empty.
+func (db *DB) GetAstrocastTLECacheAge() (int64, error) {
+	var fetchedAt int64
+	err := db.QueryRow("SELECT COALESCE(MAX(fetched_at), 0) FROM astrocast_tle_cache").Scan(&fetchedAt)
+	if err != nil || fetchedAt == 0 {
+		return -1, err
+	}
+	return time.Now().Unix() - fetchedAt, nil
+}
+
+// ReplaceAstrocastTLECache replaces all cached Astrocast TLEs with new data.
+func (db *DB) ReplaceAstrocastTLECache(entries []TLECacheEntry) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin Astrocast TLE replace: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM astrocast_tle_cache"); err != nil {
+		return fmt.Errorf("clear Astrocast TLE cache: %w", err)
+	}
+	for _, e := range entries {
+		if _, err := tx.Exec(
+			"INSERT INTO astrocast_tle_cache (satellite_name, line1, line2, fetched_at) VALUES (?, ?, ?, ?)",
+			e.SatelliteName, e.Line1, e.Line2, e.FetchedAt); err != nil {
+			return fmt.Errorf("insert Astrocast TLE %s: %w", e.SatelliteName, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // ---- Pass Quality Log ----
 
 // InsertPassQualityLog records the actual signal quality observed during a predicted pass.

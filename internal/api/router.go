@@ -25,6 +25,7 @@ type Server struct {
 	tleMgr        *engine.TLEManager
 	scheduler     *gateway.PassScheduler
 	registry      *channel.Registry
+	astroTleMgr   *engine.AstrocastTLEManager
 	cellTransport transport.CellTransport
 	paidRateLimit int
 	sos           *SOSState
@@ -140,6 +141,10 @@ func (s *Server) Router() http.Handler {
 		// Iridium geolocation + AUTO location resolution
 		r.Get("/iridium/geolocation", s.handleGetIridiumGeolocation)
 		r.Get("/locations/resolved", s.handleGetGeolocationSources)
+
+		// Astrocast LEO satellite passes
+		r.Get("/astrocast/passes", s.handleGetAstrocastPasses)
+		r.Post("/astrocast/passes/refresh", s.handleRefreshAstrocastTLEs)
 
 		// Cellular modem
 		r.Get("/cellular/signal", s.handleGetCellularSignal)

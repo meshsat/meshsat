@@ -330,6 +330,16 @@ var migrations = []string{
 			COALESCE(updated_at, created_at)
 		FROM dead_letters
 		WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='dead_letters');`,
+
+	// v15: Astrocast LEO satellite TLE cache (separate from Iridium)
+	`CREATE TABLE IF NOT EXISTS astrocast_tle_cache (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		satellite_name TEXT NOT NULL,
+		line1          TEXT NOT NULL,
+		line2          TEXT NOT NULL,
+		fetched_at     INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_astro_tle_cache_fetched ON astrocast_tle_cache(fetched_at);`,
 }
 
 func (db *DB) migrate() error {

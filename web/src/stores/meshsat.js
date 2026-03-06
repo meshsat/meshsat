@@ -472,6 +472,24 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch { /* geolocation unavailable */ }
   }
 
+  // Astrocast LEO passes
+  const astrocastPasses = ref([])
+
+  async function fetchAstrocastPasses(params = {}) {
+    try {
+      const data = await api.get('/astrocast/passes', params)
+      astrocastPasses.value = data?.passes || []
+      return data
+    } catch (e) { error.value = e.message; return null }
+  }
+
+  async function refreshAstrocastTLEs() {
+    error.value = null
+    try {
+      return await api.post('/astrocast/passes/refresh')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Iridium scheduler status
   const schedulerStatus = ref(null)
 
@@ -767,7 +785,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
-    iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
+    iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
     locationSources, iridiumGeolocation,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     rules, presets, sosStatus, dlq,
@@ -783,7 +801,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     requestStoreForward, getCannedMessages, setCannedMessages,
     fetchIridiumSignalFast, fetchIridiumSignal,
     fetchSignalHistory, fetchGSSHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
-    fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck,
+    fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck, fetchAstrocastPasses, refreshAstrocastTLEs,
     fetchLocationSources, fetchIridiumGeolocation,
     fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
     fetchCellularDataStatus, connectCellularData, disconnectCellularData,
