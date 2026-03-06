@@ -17,7 +17,7 @@ import (
 	"meshsat/internal/database"
 )
 
-const defaultAstrocastCelestrakURL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=astrocast&FORMAT=3le"
+const defaultAstrocastCelestrakURL = "https://celestrak.org/NORAD/elements/gp.php?NAME=ASTROCAST&FORMAT=3le"
 
 // AstrocastTLEManager handles daily TLE refresh for the Astrocast LEO constellation.
 type AstrocastTLEManager struct {
