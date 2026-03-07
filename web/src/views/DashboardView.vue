@@ -750,7 +750,7 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('iridium')">IRIDIUM SBD</h2>
+            <h2 class="font-display font-semibold text-sm text-red-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('iridium')">IRIDIUM SBD</h2>
           </div>
           <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
         </div>
