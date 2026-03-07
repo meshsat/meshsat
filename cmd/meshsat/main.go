@@ -49,6 +49,7 @@ func main() {
 	var mesh transport.MeshTransport
 	var sat transport.SatTransport
 	var cell transport.CellTransport
+	var astro transport.AstrocastTransport
 	switch cfg.Mode {
 	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
@@ -75,6 +76,12 @@ func main() {
 		cell = directCell
 		log.Info().Str("port", cfg.CellularPort).Msg("using direct cellular serial transport")
 
+		// Astrocast transport (optional — only if Astronode S module is available)
+		directAstro := transport.NewDirectAstrocastTransport(cfg.AstrocastPort)
+		directAstro.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort})
+		astro = directAstro
+		log.Info().Str("port", cfg.AstrocastPort).Msg("using direct Astronode S serial transport")
+
 	default:
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")
 	}
@@ -84,6 +91,9 @@ func main() {
 	}
 	if cell != nil {
 		defer cell.Close()
+	}
+	if astro != nil {
+		defer astro.Close()
 	}
 
 	// Graceful shutdown
@@ -120,6 +130,9 @@ func main() {
 	gwMgr := gateway.NewManager(db, sat)
 	if cell != nil {
 		gwMgr.SetCellTransport(cell)
+	}
+	if astro != nil {
+		gwMgr.SetAstrocastTransport(astro)
 	}
 
 	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction

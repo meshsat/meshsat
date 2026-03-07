@@ -19,6 +19,7 @@ type Config struct {
 	MeshtasticPort string
 	IridiumPort    string
 	CellularPort   string
+	AstrocastPort  string
 
 	// Cost safety: global rate limit for paid transports (messages/hour)
 	PaidRateLimit int
@@ -37,6 +38,7 @@ func Load() *Config {
 		MeshtasticPort: envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
 		IridiumPort:    envStr("MESHSAT_IRIDIUM_PORT", "auto"),
 		CellularPort:   envStr("MESHSAT_CELLULAR_PORT", "auto"),
+		AstrocastPort:  envStr("MESHSAT_ASTROCAST_PORT", "auto"),
 		PaidRateLimit:  envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 	}
 }
