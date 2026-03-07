@@ -28,8 +28,8 @@ export default {
           bg: '#0a0e14',
           surface: '#111820',
           border: '#1a2230',
-          iridium: '#00d4aa',
-          lora: '#f59e0b',
+          iridium: '#f59e0b',
+          lora: '#00d4aa',
           gps: '#818cf8',
           sos: '#ef4444',
           power: '#10b981'
