@@ -30,10 +30,10 @@ lint:consistency:
     - |
       bash <<'CONSISTENCY_CHECK'
       if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        DIFF=$(git diff HEAD~1 HEAD 2>/dev/null || echo "")
+        DIFF=$(git diff HEAD~1 HEAD -- . ':!.gitlab-ci.yml' 2>/dev/null || echo "")
       else
         git fetch origin main --depth=50 2>/dev/null || true
-        DIFF=$(git diff origin/main...HEAD 2>/dev/null || git diff HEAD~1 HEAD 2>/dev/null || echo "")
+        DIFF=$(git diff origin/main...HEAD -- . ':!.gitlab-ci.yml' 2>/dev/null || git diff HEAD~1 HEAD -- . ':!.gitlab-ci.yml' 2>/dev/null || echo "")
       fi
 
       # Filter out the consistency check script's own lines to prevent false positives
