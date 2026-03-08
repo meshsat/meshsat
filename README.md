@@ -1,8 +1,13 @@
 # MeshSat
 
-A gateway that bridges Meshtastic mesh radios and Iridium SBD satellite modems. Send messages between off-grid mesh networks and global satellite coverage from a single box.
+[![Pipeline](https://gitlab.nuclearlighters.net/products/cubeos/meshsat/badges/main/pipeline.svg)](https://gitlab.nuclearlighters.net/products/cubeos/meshsat/-/pipelines)
+![Go 1.24+](https://img.shields.io/badge/go-1.24+-blue)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
+![Docker: ghcr.io/cubeos-app/meshsat](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)
 
-MeshSat runs as a standalone Docker container on any Linux machine with USB-connected devices. No cloud dependencies, no subscriptions beyond your Iridium SBD plan.
+MeshSat bridges Meshtastic mesh networks to multiple satellite and data channels from a single gateway. Iridium SBD, Astrocast LEO, cellular SMS, MQTT, and webhooks are all available as routing destinations. The bridge rules engine routes messages between any source and any destination without requiring code changes.
+
+MeshSat runs as a standalone Docker container on any Linux machine with USB-connected devices. No cloud dependencies, no subscriptions beyond your satellite or cellular plan.
 
 ## Dashboard
 
@@ -11,18 +16,31 @@ MeshSat runs as a standalone Docker container on any Linux machine with USB-conn
 SBD message queue, and GPS/satellite positioning*
 
 ![MeshSat Pass Predictor](docs/images/meshsat_passes.png)
-*Iridium satellite pass predictor with signal correlation —
+*Satellite pass predictor with signal correlation --
 optimizes transmission timing in obstructed environments*
 
 ## What It Does
 
-- Bridges Meshtastic mesh radio and Iridium satellite into a single message bus
-- Routes messages between devices using configurable bridge rules (mesh-to-satellite, satellite-to-mesh, or both)
+- Bridges Meshtastic mesh radio to multiple satellite and data channels via configurable bridge rules
+- Routes messages using a rules engine that supports any-to-any source/destination combinations
 - Auto-detects USB devices on startup (no manual port configuration needed)
 - Stores all messages, telemetry, GPS positions, and signal data in a local SQLite database
 - Provides a built-in web dashboard for monitoring, sending messages, and managing devices
-- Exposes a REST API for integration with other systems
-- Runs on ARM64 (Raspberry Pi, Pine64) and x86_64 (Intel NUC, any PC)
+- Predicts satellite passes using SGP4/TLE propagation and schedules transmissions around optimal windows
+- Manages a delivery queue with channel-specific retry and backoff (ISU-aware for Iridium)
+- Exposes a REST API with 130+ endpoints for integration with other systems
+- Runs on ARM64 (Raspberry Pi, BPI-M4 Zero) and x86_64 (Intel NUC, any PC)
+
+## Deployment Modes
+
+| | Standalone mode | CubeOS mode |
+|---|---|---|
+| Set via | `MESHSAT_MODE=direct` | `MESHSAT_MODE=cubeos` (default) |
+| Serial access | Direct to /dev/ttyACM0, /dev/ttyUSB0 | Via HAL REST API |
+| Deploy with | `docker-compose.standalone.yml` | CubeOS orchestrator |
+| Who it's for | Any Linux machine | CubeOS installations |
+
+This README covers standalone mode. For CubeOS mode, see [CubeOS docs](https://cubeos.app).
 
 ## Hardware
 
@@ -30,19 +48,21 @@ optimizes transmission timing in obstructed environments*
 *Lilygo T-Echo (Meshtastic) connected to the MeshSat host with USB GPS dongle*
 
 ![MeshSat Lab - RockBLOCK 9603 satellite modem](docs/images/meshsat_lab_02.jpg)
-*RockBLOCK 9603 Iridium modem with patch antenna — needs sky view for satellite access*
+*RockBLOCK 9603 Iridium modem with patch antenna -- needs sky view for satellite access*
 
-### Tested Devices
+### Supported Devices
 
-The following hardware has been verified end-to-end (satellite to mesh and back):
-
-| Device | Role | Interface | Notes |
-|--------|------|-----------|-------|
-| Lilygo T-Echo (nRF52840) | Meshtastic radio | `/dev/ttyACM0` | 915 MHz, USB-C |
-| Iridium 9600 SBD Transceiver | Satellite modem | `/dev/ttyUSB0` | RS-232 via USB adapter, 19200 baud |
-| Raspberry Pi 5 | Host | — | ARM64, 4 GB RAM, Debian Bookworm |
-
-Other Meshtastic devices should work out of the box. MeshSat recognizes the standard Meshtastic USB vendor/product IDs (Espressif, CH340, CP2102, Nordic, Adafruit). If your device is not detected, you can pin the port manually with `MESHSAT_MESHTASTIC_PORT`.
+| Category | Device | Status | Notes |
+|----------|--------|--------|-------|
+| Meshtastic | Lilygo T-Echo (nRF52840) | Tested | 915 MHz, USB-C, end-to-end verified |
+| Meshtastic | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
+| Satellite | RockBLOCK 9603 (Iridium 9603N) | Tested | RS-232 via USB adapter, 19200 baud |
+| Satellite | Astrocast Astronode S | In Progress | Code complete, awaiting hardware for testing |
+| Cellular | SIM7600G-H | In Progress | AT command driver complete, signal testing pending |
+| Host | Raspberry Pi 5 | Tested | ARM64, 4 GB RAM, Debian Bookworm |
+| Host | Raspberry Pi 4 | Should work | Same platform as Pi 5 |
+| Host | BPI-M4 Zero | Planned | Armbian base, pending hardware verification |
+| Host | Any x86_64 / ARM64 Linux | Should work | Docker + USB serial required |
 
 ## Quick Start
 
@@ -151,26 +171,26 @@ INF server started port=6050
 
 Navigate to `http://<your-ip>:6050` in any browser. The dashboard shows:
 
-- **Messages** — live message feed from all connected devices
-- **Nodes** — mesh network nodes with signal quality and last-heard times
-- **Map** — node positions on a Leaflet map (if GPS data is available)
-- **Telemetry** — battery voltage, temperature, and other device metrics
-- **Config** — radio settings, gateway configuration, and bridge rules
+- **Messages** -- live message feed from all connected devices
+- **Nodes** -- mesh network nodes with signal quality and last-heard times
+- **Map** -- node positions on a Leaflet map (if GPS data is available)
+- **Telemetry** -- battery voltage, temperature, and other device metrics
+- **Config** -- radio settings, gateway configuration, and bridge rules
 
 ### Step 4: Set up bridge rules
 
-To route messages between Meshtastic and Iridium, create bridge rules in the Config tab. A bridge rule specifies:
+To route messages between channels, create bridge rules in the Config tab. Rules are direction-aware (outbound mesh-to-satellite, inbound satellite-to-mesh, or both) and the rules engine is the single authority for all forwarding decisions. A bridge rule specifies:
 
-- **Source gateway** — where messages come from (e.g., `meshtastic`)
-- **Destination gateway** — where messages go (e.g., `iridium`)
-- **Direction** — outbound (mesh to satellite), inbound (satellite to mesh), or both
-- **Filter** — optional: match specific channels, node IDs, or message types
+- **Source gateway** -- where messages come from (e.g., `meshtastic`)
+- **Destination gateway** -- where messages go (e.g., `iridium`)
+- **Direction** -- outbound, inbound, or both
+- **Filter** -- optional: match specific channels, node IDs, or message types
 
 Example: to forward all text messages from a specific Meshtastic node to Iridium SBD, create an outbound rule with the source node filter and destination set to your Iridium gateway.
 
 ### Step 5: Verify end-to-end
 
-Send a test message from your Meshtastic device. If bridge rules are configured, it should appear in the RockBLOCK portal (or wherever your SBD messages are delivered). Send a message from the RockBLOCK portal back — it should arrive on your Meshtastic device.
+Send a test message from your Meshtastic device. If bridge rules are configured, it should appear in the RockBLOCK portal (or wherever your SBD messages are delivered). Send a message from the RockBLOCK portal back -- it should arrive on your Meshtastic device.
 
 ## Configuration
 
@@ -180,10 +200,14 @@ All configuration is via environment variables:
 |----------|---------|-------------|
 | `MESHSAT_MODE` | `cubeos` | Set to `direct` for standalone USB access |
 | `MESHSAT_PORT` | `6050` | HTTP port for dashboard and API |
-| `MESHSAT_DB_PATH` | `/cubeos/data/meshsat.db` | SQLite database file path |
+| `MESHSAT_DB_PATH` | `/data/meshsat.db` | SQLite database file path |
 | `MESHSAT_MESHTASTIC_PORT` | `auto` | Serial port for Meshtastic (`auto` = scan USB) |
 | `MESHSAT_IRIDIUM_PORT` | `auto` | Serial port for Iridium (`auto` = scan USB) |
+| `MESHSAT_CELLULAR_PORT` | `auto` | Serial port for cellular modem (`auto` = scan USB) |
 | `MESHSAT_RETENTION_DAYS` | `30` | Days to keep historical data |
+| `MESHSAT_PAID_RATE_LIMIT` | `60` | Minimum seconds between paid gateway sends |
+| `MESHSAT_WEB_DIR` | *(empty)* | Override embedded SPA path (development only) |
+| `HAL_URL` | `http://10.42.24.1:6005` | HAL endpoint (CubeOS mode only) |
 
 ### Running with only one device
 
@@ -204,7 +228,7 @@ MeshSat needs raw access to USB serial devices (`/dev/ttyACM*`, `/dev/ttyUSB*`) 
 
 ## API
 
-MeshSat exposes a REST API on the same port as the dashboard:
+MeshSat exposes a REST API on the same port as the dashboard. The major endpoint groups are listed below. Full API details are available at `http://<your-ip>:6050/api/` when MeshSat is running.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -212,20 +236,49 @@ MeshSat exposes a REST API on the same port as the dashboard:
 | GET | `/api/messages` | Paginated message history |
 | GET | `/api/messages/stats` | Message counts by transport and type |
 | POST | `/api/messages/send` | Send a text message to the mesh |
+| DELETE | `/api/messages` | Purge all messages |
 | GET | `/api/telemetry` | Time-series device telemetry |
 | GET | `/api/positions` | GPS position history |
 | GET | `/api/nodes` | Mesh nodes with signal quality |
+| DELETE | `/api/nodes/{num}` | Remove a node |
 | GET | `/api/status` | Connection status for all transports |
 | GET | `/api/events` | Server-Sent Events stream |
 | GET | `/api/gateways` | Gateway status and configuration |
+| GET/PUT/DELETE | `/api/gateways/{type}` | Gateway config CRUD |
+| POST | `/api/gateways/{type}/start` | Start a gateway |
+| POST | `/api/gateways/{type}/stop` | Stop a gateway |
+| POST | `/api/gateways/{type}/test` | Test a gateway |
 | GET | `/api/iridium/signal` | Current Iridium signal strength |
-| GET | `/api/iridium/scheduler` | Pass scheduler status |
+| GET | `/api/iridium/signal/history` | Signal strength history |
+| GET | `/api/iridium/passes` | Predicted satellite passes (SGP4/TLE) |
+| POST | `/api/iridium/passes/refresh` | Refresh TLE data |
+| GET | `/api/iridium/scheduler` | Pass-aware scheduler status |
+| POST | `/api/iridium/mailbox/check` | Manual mailbox check |
+| GET | `/api/iridium/credits` | Credit balance |
+| GET | `/api/iridium/queue` | Queued SBD messages |
+| GET | `/api/astrocast/passes` | Astrocast LEO pass predictions |
+| GET | `/api/cellular/signal` | Cellular signal strength |
+| GET | `/api/cellular/status` | Cellular modem status |
+| POST | `/api/cellular/sms/send` | Send SMS message |
+| POST | `/api/webhooks/inbound` | Receive inbound webhook |
+| GET | `/api/webhooks/log` | Webhook delivery log |
+| GET | `/api/deliveries` | Delivery ledger (all channels) |
+| GET | `/api/deliveries/stats` | Delivery statistics |
+| GET | `/api/rules` | List forwarding rules |
+| POST | `/api/rules` | Create forwarding rule |
+| GET/PUT/DELETE | `/api/rules/{id}` | Rule CRUD |
+| GET | `/api/transport/channels` | Transport channel registry |
 | POST | `/api/admin/reboot` | Reboot a remote mesh node |
 | POST | `/api/admin/traceroute` | Traceroute to a mesh node |
 | POST | `/api/config/radio` | Update radio configuration |
 | POST | `/api/config/module` | Update module configuration |
+| GET | `/api/neighbors` | Neighbor info from mesh |
+| POST | `/api/sos/activate` | Activate SOS mode |
+| GET | `/api/sos/status` | SOS status |
+| GET | `/api/presets` | List preset messages |
+| POST | `/api/presets/{id}/send` | Send a preset message |
 
-Full API details are available at `http://<your-ip>:6050/api/` when MeshSat is running.
+Additional endpoints exist for contacts, canned messages, waypoints, position sharing, range tests, store-and-forward, geolocation, DynDNS, and cellular data management. The full list totals 130+ endpoints.
 
 ## CubeOS Integration
 
@@ -234,25 +287,30 @@ MeshSat also runs as a managed service inside [CubeOS](https://cubeos.app), wher
 ## Architecture
 
 ```
-USB Devices          MeshSat Container              Clients
------------     ---------------------------     ----------------
-                │                           │
-/dev/ttyACM0 ──►│  DirectMeshTransport      │
-  (Meshtastic)  │    ├── Serial framing     │──► Web Dashboard
-                │    ├── Protobuf codec     │    (port 6050)
-                │    └── Config handshake   │
-                │              │            │──► REST API
-                │         Processor +       │    (port 6050)
-                │         Rule Engine       │
-                │              │            │──► SSE Events
-/dev/ttyUSB0 ──►│  DirectSatTransport       │    (port 6050)
-  (Iridium)     │    ├── AT commands        │
-                │    ├── SBD binary codec   │
-                │    └── Signal polling     │
-                │                           │
-                │  SQLite (/data/meshsat.db)│
-                ---------------------------
+USB Devices             MeshSat Container                   Clients
+-----------      --------------------------------      ----------------
+                 |                                |
+/dev/ttyACM0 -->-|  DirectMeshTransport            |
+  (Meshtastic)   |    Serial framing + Protobuf    |-->  Web Dashboard
+                 |                                |     (Vue SPA, port 6050)
+                 |         Processor               |
+                 |            |                    |-->  REST API
+                 |       Rules Engine              |     (130+ endpoints)
+                 |       (any-to-any)              |
+                 |            |                    |-->  SSE Events
+                 |      GatewayManager             |     (real-time updates)
+                 |       |    |    |    |          |
+/dev/ttyUSB0 -->-|  Iridium  MQTT  Cell  Webhook  |
+  (Iridium)      |  Gateway  GW    GW    GW       |
+                 |                                |
+/dev/ttyUSB1 -->-|  Astrocast    Delivery Ledger  |
+  (Cellular)     |  Gateway     (SQLite tracking) |
+                 |                                |
+                 |  SQLite DB (/data/meshsat.db)   |
+                 --------------------------------
 ```
+
+Each gateway implements a common interface and is managed by the GatewayManager. Adding a new channel requires implementing the Gateway interface and registering it -- no switch statements to update. The delivery ledger tracks per-message, per-channel lifecycle state with channel-specific retry and backoff.
 
 ## Troubleshooting
 
@@ -270,12 +328,28 @@ The config handshake takes 5-10 seconds. Wait for the "config complete" log line
 
 **Iridium signal shows 0 bars**
 
-Check antenna connections. The Iridium 9600 requires a clear view of the sky and a properly connected antenna. If using an external antenna with a u.FL pigtail, verify the connector is seated firmly.
+Check antenna connections. The RockBLOCK 9603 requires a clear view of the sky and a properly connected antenna. If using an external antenna with a u.FL pigtail, verify the connector is seated firmly.
 
 **SBDIX failures or timeouts**
 
 Iridium SBD sessions (SBDIX) take 10-60 seconds and require signal strength of at least 2 bars. MeshSat rate-limits SBDIX to one session per 10 seconds. If messages are queuing in the dead letter queue, check signal strength and antenna placement.
 
+## Roadmap
+
+**v0.1.x (current)** -- Iridium SBD + Meshtastic bridge with configurable rules engine, MQTT gateway, pass-aware scheduler with SGP4/TLE prediction, dead letter queue with ISU-aware backoff, device management (config, neighbor info, range test), SOS mode, and a full Vue.js SPA dashboard with REST API.
+
+**v0.2.0 (in progress)** -- Any-to-any routing fabric. Channel registry with self-describing adapters, unified rules engine supporting all 30 directional routes between 6 channels, structured dispatcher with per-channel delivery workers, Astrocast and cellular gateway integration, SMAZ2 compression for constrained satellite payloads, and a redesigned frontend with channel-aware rule editing and unified delivery tracking.
+
+**v0.3.0 (planned)** -- Semantic compression using rate-adaptive multi-stage vector quantization (MSVQ-SC) for maximizing satellite payload efficiency. Reticulum-inspired routing with cryptographic announce broadcasting, path discovery, and link establishment across the channel fabric.
+
+## Community
+
+- GitHub: [github.com/cubeos-app/meshsat](https://github.com/cubeos-app/meshsat)
+- Issues: Use GitHub Issues for bugs and feature requests
+- Discord: Coming soon
+
+PRs welcome. See open issues for where help is needed.
+
 ## License
 
-Copyright 2026 Nuclear Lighters Inc. Licensed under the [Apache License 2.0](LICENSE).
+Copyright 2026 Nuclear Lighters Inc. Licensed under the [GNU General Public License v3.0](LICENSE).
