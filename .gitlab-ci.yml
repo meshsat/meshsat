@@ -6,6 +6,7 @@
 # =============================================================================
 
 stages:
+  - validate
   - build
   - package
   - deploy
@@ -13,6 +14,108 @@ stages:
 variables:
   MESHSAT_IMAGE: "ghcr.io/cubeos-app/meshsat"
   BUILDER_IMAGE: "ghcr.io/cubeos-app/api-builder:latest"
+
+# -----------------------------------------------------------------------------
+# CONSISTENCY CHECK — CubeOS critical rules gate
+# -----------------------------------------------------------------------------
+lint:consistency:
+  stage: validate
+  image: alpine:latest
+  tags: [multiarch]
+  variables:
+    GIT_DEPTH: 50
+  before_script:
+    - apk add --no-cache git bash
+  script:
+    - |
+      bash <<'CONSISTENCY_CHECK'
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        DIFF=$(git diff HEAD~1 HEAD 2>/dev/null || echo "")
+      else
+        git fetch origin main --depth=50 2>/dev/null || true
+        DIFF=$(git diff origin/main...HEAD 2>/dev/null || git diff HEAD~1 HEAD 2>/dev/null || echo "")
+      fi
+
+      # Filter out the consistency check script's own lines to prevent false positives
+      DIFF=$(echo "$DIFF" | grep -v 'VIOLATIONS+=\|WARNINGS+=\|CONSISTENCY_CHECK\|grep.*-[cq]E' || echo "$DIFF")
+
+      if [ -z "$DIFF" ]; then
+        echo "No diff to check. Skipping."
+        exit 0
+      fi
+
+      REPO_NAME="meshsat"
+      VIOLATIONS=()
+      WARNINGS=()
+
+      # Rule 1: HAL boundary
+      if echo "$DIFF" | grep -qE '^\+.*\bnsenter\b'; then
+        VIOLATIONS+=("HAL boundary: nsenter found — all host ops must go through HAL")
+      fi
+      if echo "$DIFF" | grep -qE '^\+.*exec\.Command.*systemctl'; then
+        VIOLATIONS+=("HAL boundary: direct systemctl call — use HAL REST endpoint")
+      fi
+
+      # Rule 2: CGO
+      if echo "$DIFF" | grep -qE '^\+.*import "C"'; then
+        VIOLATIONS+=("CGO: import C found — all Go must compile with CGO_ENABLED=0")
+      fi
+
+      # Rule 3: docker run
+      if echo "$DIFF" | grep -E '^\+\s*docker run ' | grep -qvE '(#|comment)'; then
+        VIOLATIONS+=("Orchestration: docker run found — use docker stack deploy")
+      fi
+
+      # Rule 4: Swagger annotations on new handlers
+      NEW_HANDLERS=$(echo "$DIFF" | grep -cE '^\+func [A-Z][a-zA-Z]*(Handler|Handle|Endpoint)\(' || true)
+      NEW_SWAGGER=$(echo "$DIFF" | grep -cE '^\+.*@Summary' || true)
+      if [ "$NEW_HANDLERS" -gt 0 ] && [ "$NEW_SWAGGER" -eq 0 ]; then
+        WARNINGS+=("Swagger: $NEW_HANDLERS new handler(s) with no @Summary annotation")
+      fi
+
+      # Rule 5: Migration edits (append-only)
+      if echo "$DIFF" | grep -qE '^--- .*migrations\.go'; then
+        EDITED=$(echo "$DIFF" | grep -cE '^\-.*migration|^\-.*CREATE TABLE|^\-.*ALTER TABLE' || true)
+        if [ "$EDITED" -gt 0 ]; then
+          VIOLATIONS+=("Database: existing migration modified — migrations are append-only")
+        fi
+      fi
+
+      # Rule 6: Pi-hole deprecated CLI
+      if echo "$DIFF" | grep -qE '^\+.*(pihole -a|pihole --|pihole reloaddns|docker exec.*pihole.*--config)'; then
+        VIOLATIONS+=("Pi-hole: deprecated CLI — use v6 REST API at port 6001")
+      fi
+
+      # Rule 7: YouTrack issue ID
+      if ! echo "$CI_COMMIT_MESSAGE" | grep -qE '\[CUBEOS-[0-9]+\]'; then
+        if ! echo "$CI_COMMIT_MESSAGE" | grep -qE '^chore: bump version'; then
+          WARNINGS+=("Traceability: commit has no [CUBEOS-XX] reference")
+        fi
+      fi
+
+      echo ""
+      echo "=== Consistency Check: $REPO_NAME ==="
+      if [ ${#VIOLATIONS[@]} -gt 0 ]; then
+        echo "VIOLATIONS (pipeline blocked):"
+        for v in "${VIOLATIONS[@]}"; do echo "  [BLOCK] $v"; done
+      fi
+      if [ ${#WARNINGS[@]} -gt 0 ]; then
+        echo "WARNINGS (review recommended):"
+        for w in "${WARNINGS[@]}"; do echo "  [WARN]  $w"; done
+      fi
+      if [ ${#VIOLATIONS[@]} -eq 0 ] && [ ${#WARNINGS[@]} -eq 0 ]; then
+        echo "  All checks passed."
+      fi
+      echo ""
+      if [ ${#VIOLATIONS[@]} -gt 0 ]; then
+        echo "FAILED: ${#VIOLATIONS[@]} violation(s). Fix before merging."
+        exit 1
+      fi
+      echo "PASSED"
+      CONSISTENCY_CHECK
+  rules:
+    - when: always
+  allow_failure: false
 
 # -----------------------------------------------------------------------------
 # BUILD — Compile Go binary for ARM64 + AMD64
