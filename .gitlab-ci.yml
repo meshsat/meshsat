@@ -74,8 +74,9 @@ lint:consistency:
       fi
 
       # Rule 5: Migration edits (append-only)
+      # Only check content lines (^-[^-]) to avoid matching diff headers (--- a/file).
       if echo "$DIFF" | grep -qE '^--- .*migrations\.go'; then
-        EDITED=$(echo "$DIFF" | grep -cE '^\-.*migration|^\-.*CREATE TABLE|^\-.*ALTER TABLE' || true)
+        EDITED=$(echo "$DIFF" | grep -cE '^\-[^-].*(CREATE TABLE|ALTER TABLE|INSERT INTO|UPDATE .* SET)' || true)
         if [ "$EDITED" -gt 0 ]; then
           VIOLATIONS+=("Database: existing migration modified — migrations are append-only")
         fi
