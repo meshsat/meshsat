@@ -3,11 +3,15 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/database"
 )
 
 // handleGetSignalHistory returns raw or aggregated signal history.
@@ -285,8 +289,8 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 	// Also include custom locations
 	customLocs, _ := s.db.GetIridiumLocations()
 
-	// AUTO resolution: GPS > Custom (Iridium geolocation removed — it returns
-	// satellite sub-point, not ground station position, making it useless).
+	// AUTO resolution: GPS > Custom. Iridium geolocation is NOT used for
+	// auto-resolution because it represents satellite sub-points (~200 km accuracy).
 	var resolved *resolvedLocation
 	for _, src := range sources {
 		if src.Source == "gps" && src.Lat != 0 && src.Lon != 0 {
@@ -326,6 +330,91 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 		resp["gps"] = map[string]interface{}{
 			"fix":  gs.Fix,
 			"sats": gs.Sats,
+		}
+	}
+
+	// Include recent Iridium satellite sub-points for multi-pass visualization
+	iridiumPoints, _ := s.db.GetRecentIridiumGeolocations(6)
+	if len(iridiumPoints) > 0 {
+		resp["iridium_passes"] = iridiumPoints
+
+		// Compute centroid if 3+ points (multi-pass position estimate)
+		if len(iridiumPoints) >= 3 {
+			var latSum, lonSum float64
+			for _, p := range iridiumPoints {
+				latSum += p.Lat
+				lonSum += p.Lon
+			}
+			n := float64(len(iridiumPoints))
+			// Accuracy improves with more observations: ~200/sqrt(n) km
+			accKm := 200.0 / math.Sqrt(n)
+			resp["iridium_centroid"] = map[string]interface{}{
+				"lat":         latSum / n,
+				"lon":         lonSum / n,
+				"accuracy_km": accKm,
+				"points":      len(iridiumPoints),
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleGetIridiumGeolocation triggers an AT-MSGEO reading and stores the result.
+// The response contains the satellite sub-point, not the modem position.
+func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Request) {
+	geo, err := s.gwManager.GetIridiumGeolocation(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+
+	// Persist for multi-pass visualization
+	ts, _ := time.Parse(time.RFC3339, geo.Timestamp)
+	if err := s.db.InsertIridiumGeolocation(geo.Lat, geo.Lon, geo.Accuracy, "", ts.Unix()); err != nil {
+		log.Warn().Err(err).Msg("failed to persist iridium geolocation")
+	}
+
+	writeJSON(w, http.StatusOK, geo)
+}
+
+// handleGetIridiumGeoHistory returns recent AT-MSGEO readings for multi-pass visualization.
+func (s *Server) handleGetIridiumGeoHistory(w http.ResponseWriter, r *http.Request) {
+	hoursStr := r.URL.Query().Get("hours")
+	hours := 6
+	if hoursStr != "" {
+		if h, err := strconv.Atoi(hoursStr); err == nil && h > 0 && h <= 168 {
+			hours = h
+		}
+	}
+
+	points, err := s.db.GetRecentIridiumGeolocations(hours)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if points == nil {
+		points = []database.IridiumGeoPoint{}
+	}
+
+	resp := map[string]interface{}{
+		"points": points,
+		"hours":  hours,
+	}
+
+	// Compute centroid if 3+ points
+	if len(points) >= 3 {
+		var latSum, lonSum float64
+		for _, p := range points {
+			latSum += p.Lat
+			lonSum += p.Lon
+		}
+		n := float64(len(points))
+		resp["centroid"] = map[string]interface{}{
+			"lat":         latSum / n,
+			"lon":         lonSum / n,
+			"accuracy_km": 200.0 / math.Sqrt(n),
+			"points":      len(points),
 		}
 	}
 

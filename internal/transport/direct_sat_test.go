@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"math"
 	"testing"
 )
 
@@ -166,7 +167,7 @@ func TestParseCSQ(t *testing.T) {
 		want int
 	}{
 		{"+CSQ:3\r\nOK", 3},
-		{"+CSQF:5\r\nOK", 5},
+		{"+CSQF:5\r\nOK", 5}, // Real firmware returns "+CSQF:" for AT+CSQF (ModemManager confirms)
 		{"+CSQ: 0\r\nOK", 0},
 		{"+CSQ:6\r\nOK", 0},  // out of range (0-5)
 		{"+CSQ:-1\r\nOK", 0}, // negative
@@ -199,5 +200,130 @@ func TestParseATValue(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("parseATValue(%q) = %q, want %q", tt.resp, got, tt.want)
 		}
+	}
+}
+
+// ============================================================================
+// ECEF to Geodetic Conversion Tests
+// ============================================================================
+
+func TestECEFToGeodetic(t *testing.T) {
+	tests := []struct {
+		name    string
+		x, y, z float64
+		wantLat float64
+		wantLon float64
+		tolDeg  float64
+	}{
+		{
+			name: "equator prime meridian (0,0)",
+			x:    6376, y: 0, z: 0,
+			wantLat: 0, wantLon: 0,
+			tolDeg: 0.1,
+		},
+		{
+			name: "north pole",
+			x:    0, y: 0, z: 6376,
+			wantLat: 90, wantLon: 0,
+			tolDeg: 0.1,
+		},
+		{
+			name: "south pole",
+			x:    0, y: 0, z: -6376,
+			wantLat: -90, wantLon: 0,
+			tolDeg: 0.1,
+		},
+		{
+			name: "approximate Leiden NL (~52N, ~4.5E)",
+			// ECEF for 52°N, 4.5°E at earth radius ~6371 km:
+			// x = R*cos(52)*cos(4.5) ≈ 3910
+			// y = R*cos(52)*sin(4.5) ≈ 308
+			// z = R*sin(52) ≈ 5020
+			// Rounded to 4 km resolution:
+			x: 3912, y: 308, z: 5020,
+			wantLat: 52, wantLon: 4.5,
+			tolDeg: 1.0, // 4 km resolution ≈ ~0.04° but we're generous
+		},
+		{
+			name: "southern hemisphere, western hemisphere",
+			// Approx Buenos Aires: 34.6°S, 58.4°W
+			// x = R*cos(-34.6)*cos(-58.4) ≈ 2748
+			// y = R*cos(-34.6)*sin(-58.4) ≈ -4468
+			// z = R*sin(-34.6) ≈ -3620
+			x: 2748, y: -4468, z: -3620,
+			wantLat: -34.6, wantLon: -58.4,
+			tolDeg: 1.0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lat, lon := ecefToGeodetic(tt.x, tt.y, tt.z)
+			if math.Abs(lat-tt.wantLat) > tt.tolDeg {
+				t.Errorf("lat = %.2f, want %.2f (±%.1f°)", lat, tt.wantLat, tt.tolDeg)
+			}
+			if math.Abs(lon-tt.wantLon) > tt.tolDeg {
+				t.Errorf("lon = %.2f, want %.2f (±%.1f°)", lon, tt.wantLon, tt.tolDeg)
+			}
+		})
+	}
+}
+
+func TestParseMSGEO_ECEF(t *testing.T) {
+	// Simulated response: satellite over Leiden area
+	resp := "-MSGEO: 3912, 308, 5020, 1A2B3C4D\r\nOK"
+	info, err := parseMSGEO(resp)
+	if err != nil {
+		t.Fatalf("parseMSGEO failed: %v", err)
+	}
+	// Should be approximately 52°N, 4.5°E
+	if math.Abs(info.Lat-52.0) > 2.0 {
+		t.Errorf("lat = %.2f, expected ~52", info.Lat)
+	}
+	if math.Abs(info.Lon-4.5) > 2.0 {
+		t.Errorf("lon = %.2f, expected ~4.5", info.Lon)
+	}
+	if info.Accuracy != 200.0 {
+		t.Errorf("accuracy = %.0f, expected 200", info.Accuracy)
+	}
+}
+
+func TestParseMSGEO_ZeroCoords(t *testing.T) {
+	resp := "-MSGEO: 0, 0, 0, 00000000\r\nOK"
+	_, err := parseMSGEO(resp)
+	if err == nil {
+		t.Error("expected error for zero ECEF coordinates")
+	}
+}
+
+func TestParseMSGEO_MalformedShort(t *testing.T) {
+	resp := "-MSGEO: 3912, 308\r\nOK" // only 2 fields, need 4
+	_, err := parseMSGEO(resp)
+	if err == nil {
+		t.Error("expected error for malformed MSGEO (too few fields)")
+	}
+}
+
+func TestParseMSGEO_Missing(t *testing.T) {
+	_, err := parseMSGEO("OK")
+	if err == nil {
+		t.Error("expected error for missing -MSGEO prefix")
+	}
+}
+
+func TestParseIridiumTimestamp(t *testing.T) {
+	// Iridium epoch: 2007-03-08 03:50:35 UTC
+	// Tick = 0 should return epoch
+	ts := parseIridiumTimestamp("0")
+	// Zero ticks falls through to time.Now() fallback (err != nil for "0" as base-16)
+	// Actually "0" parses as 0 in hex, but ticks==0 triggers fallback
+	if ts.Year() < 2025 {
+		t.Errorf("zero ticks should fallback to now, got %v", ts)
+	}
+
+	// Non-zero tick: 0x10000 = 65536 ticks × 90ms = 5,898,240 ms ≈ 1h 38m
+	ts2 := parseIridiumTimestamp("10000")
+	expected := iridiumEpoch.Add(65536 * 90 * 1000000) // nanoseconds
+	if math.Abs(float64(ts2.Unix()-expected.Unix())) > 1 {
+		t.Errorf("timestamp mismatch: got %v, expected %v", ts2, expected)
 	}
 }

@@ -1237,6 +1237,51 @@ func (db *DB) GetAllGeolocationSources() ([]GeolocationRecord, error) {
 	return results, nil
 }
 
+// IridiumGeoPoint represents a single AT-MSGEO reading (satellite sub-point).
+type IridiumGeoPoint struct {
+	ID          int64   `json:"id"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
+	AccuracyKm  float64 `json:"accuracy_km"`
+	SatelliteID string  `json:"satellite_id"`
+	Timestamp   int64   `json:"timestamp"`
+}
+
+// GetRecentIridiumGeolocations returns Iridium satellite sub-point readings
+// from the last N hours, for multi-pass position visualization.
+func (db *DB) GetRecentIridiumGeolocations(hours int) ([]IridiumGeoPoint, error) {
+	cutoff := time.Now().Unix() - int64(hours)*3600
+	rows, err := db.Query(
+		`SELECT id, lat, lon, accuracy_km, COALESCE(satellite_id, ''), timestamp
+		 FROM iridium_geolocation
+		 WHERE source = 'iridium' AND timestamp > ?
+		 ORDER BY timestamp DESC LIMIT 50`,
+		cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []IridiumGeoPoint
+	for rows.Next() {
+		var p IridiumGeoPoint
+		if err := rows.Scan(&p.ID, &p.Lat, &p.Lon, &p.AccuracyKm, &p.SatelliteID, &p.Timestamp); err != nil {
+			continue
+		}
+		results = append(results, p)
+	}
+	return results, rows.Err()
+}
+
+// InsertIridiumGeolocation stores an Iridium satellite sub-point reading.
+func (db *DB) InsertIridiumGeolocation(lat, lon, accuracyKm float64, satelliteID string, timestamp int64) error {
+	_, err := db.Exec(
+		`INSERT INTO iridium_geolocation (source, lat, lon, alt_km, accuracy_km, satellite_id, timestamp)
+		 VALUES ('iridium', ?, ?, 0, ?, ?, ?)`,
+		lat, lon, accuracyKm, satelliteID, timestamp)
+	return err
+}
+
 // ============================================================================
 // Cellular Signal History
 // ============================================================================

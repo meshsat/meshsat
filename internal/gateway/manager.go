@@ -565,6 +565,15 @@ func (m *Manager) GetIridiumSignalFast(ctx context.Context) (*transport.SignalIn
 	return m.sat.GetSignalFast(ctx)
 }
 
+// GetIridiumGeolocation returns Iridium-derived geolocation (AT-MSGEO).
+// Returns satellite sub-point coordinates, not the modem's position.
+func (m *Manager) GetIridiumGeolocation(ctx context.Context) (*transport.GeolocationInfo, error) {
+	if m.sat == nil {
+		return nil, fmt.Errorf("satellite transport not available")
+	}
+	return m.sat.GetGeolocation(ctx)
+}
+
 // ManualMailboxCheck triggers a one-shot mailbox check on the running Iridium gateway.
 func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
 	m.mu.RLock()

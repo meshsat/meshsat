@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -888,6 +889,10 @@ func parseSBDSX(resp string) (sbdStatus, error) {
 	return s, nil
 }
 
+// parseCSQ parses AT+CSQ or AT+CSQF response. MAN0009 §5.95-96 documents
+// "+CSQ:" as the response prefix for both commands, but real 9603N firmware
+// returns "+CSQF:" for AT+CSQF (confirmed by ModemManager and real hardware).
+// We check for both prefixes to handle all firmware versions.
 func parseCSQ(resp string) int {
 	idx := strings.Index(resp, "+CSQF:")
 	offset := 6
@@ -908,8 +913,14 @@ func parseCSQ(resp string) int {
 	return sig
 }
 
+// parseMSGEO parses AT-MSGEO response. Per MAN0009 §5.163, the response is:
+//
+//	-MSGEO: <x>,<y>,<z>,<timestamp>
+//
+// where x,y,z are ECEF Cartesian coordinates in kilometres (range -6376 to +6376,
+// resolution 4 km). The timestamp is a hex Iridium system time value.
+// We convert ECEF to geodetic (lat/lon) for display.
 func parseMSGEO(resp string) (*GeolocationInfo, error) {
-	// -MSGEO: <lat>,<lon>,<alt>,<timestamp>
 	idx := strings.Index(resp, "-MSGEO:")
 	if idx == -1 {
 		return nil, fmt.Errorf("no -MSGEO in response")
@@ -917,28 +928,61 @@ func parseMSGEO(resp string) (*GeolocationInfo, error) {
 	remainder := strings.TrimSpace(resp[idx+7:])
 	firstLine := strings.Split(remainder, "\n")[0]
 	parts := strings.Split(firstLine, ",")
-	if len(parts) < 3 {
-		return nil, fmt.Errorf("malformed MSGEO response")
+	if len(parts) < 4 {
+		return nil, fmt.Errorf("malformed MSGEO response (need 4 fields, got %d)", len(parts))
 	}
 
-	lat, _ := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
-	lon, _ := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-	alt, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+	x, _ := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	y, _ := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	z, _ := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
 
-	// Sanitize altitude: AT-MSGEO sometimes returns satellite altitude (~780km)
-	// or garbage values. Ground stations are always below 10km.
-	altKm := alt
-	if altKm > 10.0 || altKm < -1.0 {
-		altKm = 0.0
+	// Reject zero coordinates (modem has no fix)
+	if x == 0 && y == 0 && z == 0 {
+		return nil, fmt.Errorf("MSGEO returned zero coordinates (no fix)")
 	}
+
+	// ECEF to geodetic conversion (spherical approximation — sufficient at 4 km resolution)
+	lat, lon := ecefToGeodetic(x, y, z)
+
+	// Accuracy: ECEF resolution is 4 km per axis, so positional uncertainty
+	// is ~sqrt(3)*4 ≈ 7 km best case. Real-world accuracy is worse because
+	// the coordinates represent the satellite sub-point, not the modem.
+	// The modem is somewhere within the satellite's beam footprint (~400 km).
+	// We report 200 km as a conservative median estimate.
+	accuracy := 200.0
+
+	// Parse Iridium system timestamp (hex, 90ms ticks since Iridium epoch 2007-03-08T03:50:35Z)
+	ts := parseIridiumTimestamp(strings.TrimSpace(parts[3]))
 
 	return &GeolocationInfo{
-		Lat:       lat / 1000.0, // Iridium returns milli-degrees
-		Lon:       lon / 1000.0,
-		AltKm:     altKm,
-		Accuracy:  10.0, // Iridium geolocation ~10km typical
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Lat:       lat,
+		Lon:       lon,
+		AltKm:     0, // ECEF gives satellite altitude, not ground altitude
+		Accuracy:  accuracy,
+		Timestamp: ts.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+// ecefToGeodetic converts ECEF (x, y, z) in km to geodetic (lat, lon) in degrees.
+// Uses spherical approximation — more than sufficient for 4 km resolution ECEF data.
+func ecefToGeodetic(x, y, z float64) (lat, lon float64) {
+	lon = math.Atan2(y, x) * 180.0 / math.Pi
+	lat = math.Atan2(z, math.Sqrt(x*x+y*y)) * 180.0 / math.Pi
+	return lat, lon
+}
+
+// iridiumEpoch is 2007-03-08 03:50:35 UTC (Iridium system time origin).
+var iridiumEpoch = time.Date(2007, 3, 8, 3, 50, 35, 0, time.UTC)
+
+// parseIridiumTimestamp parses a hex Iridium system timestamp (90ms ticks since epoch).
+func parseIridiumTimestamp(hexStr string) time.Time {
+	hexStr = strings.TrimSpace(hexStr)
+	ticks, err := strconv.ParseUint(hexStr, 16, 64)
+	if err != nil || ticks == 0 {
+		return time.Now().UTC()
+	}
+	ms := ticks * 90
+	return iridiumEpoch.Add(time.Duration(ms) * time.Millisecond)
 }
 
 func parseSBDRBResponse(raw []byte) ([]byte, error) {
@@ -946,7 +990,10 @@ func parseSBDRBResponse(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("response too short for binary read")
 	}
 
-	// Skip AT echo — find plausible length value
+	// Skip AT echo — find plausible length value.
+	// 9603N hardware buffer limit is 270 bytes MT (9603 Developer's Guide §3.3).
+	// The 1960-byte figure in MAN0009 §5.147 applies to the 9522A/B L-Band
+	// transceiver, not the 9603N.
 	startIdx := 0
 	for i := 0; i <= len(raw)-4; i++ {
 		length := binary.BigEndian.Uint16(raw[i : i+2])

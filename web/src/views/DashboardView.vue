@@ -230,6 +230,8 @@ function schedulerBadgeClass(mode) {
 // Location sources
 const locationResolved = computed(() => store.locationSources?.resolved || null)
 const locationGps = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'gps'))
+const iridiumPasses = computed(() => store.locationSources?.iridium_passes || [])
+const iridiumCentroid = computed(() => store.locationSources?.iridium_centroid || null)
 
 
 // Credits from store
@@ -1181,6 +1183,20 @@ function widgetGridClass(id) {
             </div>
             <span class="text-gray-400 font-mono text-[10px]">{{ (store.locations || []).length }} entries</span>
           </div>
+          <div class="flex justify-between items-center">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full" :class="iridiumPasses.length ? 'bg-orange-400' : 'bg-gray-600'" />
+              <span class="text-gray-500">Iridium</span>
+            </div>
+            <span v-if="iridiumCentroid" class="text-gray-300 font-mono text-[10px]">
+              {{ iridiumCentroid.lat.toFixed(4) }}, {{ iridiumCentroid.lon.toFixed(4) }}
+              <span class="text-gray-600 ml-1">~{{ formatAccuracy(iridiumCentroid.accuracy_km) }}</span>
+            </span>
+            <span v-else-if="iridiumPasses.length" class="text-orange-400/60 font-mono text-[10px]">
+              {{ iridiumPasses.length }} pass{{ iridiumPasses.length !== 1 ? 'es' : '' }} (need 3+)
+            </span>
+            <span v-else class="text-gray-600 font-mono text-[10px]">No passes</span>
+          </div>
         </div>
 
         <div class="mt-3 pt-2 border-t border-tactical-border space-y-1.5 text-[11px]">
@@ -1195,7 +1211,7 @@ function widgetGridClass(id) {
         </div>
 
         <div class="mt-2 pt-2 border-t border-tactical-border">
-          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Custom</span>
+          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (centroid) > Custom</span>
         </div>
 
         <div class="flex gap-3 mt-2">

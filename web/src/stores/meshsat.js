@@ -455,12 +455,21 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   }
 
   // Location sources (GPS, Custom) + AUTO resolution
-  const locationSources = ref(null) // { sources: [...], resolved: { source, lat, lon, ... } }
+  const locationSources = ref(null) // { sources: [...], resolved: { source, lat, lon, ... }, iridium_passes: [...], iridium_centroid: {...} }
 
   async function fetchLocationSources() {
     try {
       locationSources.value = await api.get('/locations/resolved')
     } catch { /* location sources unavailable */ }
+  }
+
+  // Iridium geolocation history (satellite sub-points for multi-pass viz)
+  const iridiumGeoHistory = ref(null)
+
+  async function fetchIridiumGeoHistory(hours = 6) {
+    try {
+      iridiumGeoHistory.value = await api.get('/iridium/geolocation/history', { hours })
+    } catch { /* iridium geo unavailable */ }
   }
 
   // Astrocast LEO passes
@@ -777,7 +786,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
-    locationSources,
+    locationSources, iridiumGeoHistory,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     rules, presets, sosStatus, dlq,
     loading, error,
@@ -793,7 +802,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchIridiumSignalFast, fetchIridiumSignal,
     fetchSignalHistory, fetchGSSHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck, fetchAstrocastPasses, refreshAstrocastTLEs,
-    fetchLocationSources,
+    fetchLocationSources, fetchIridiumGeoHistory,
     fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
     fetchCellularDataStatus, connectCellularData, disconnectCellularData,
     fetchDynDNSStatus, forceDynDNSUpdate,

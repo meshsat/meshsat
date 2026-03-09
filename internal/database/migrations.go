@@ -345,6 +345,11 @@ var migrations = []string{
 	// Only update pending/queued entries; leave expired/sent/dead entries as-is.
 	`UPDATE dead_letters SET max_retries = 0 WHERE status = 'pending';
 	UPDATE message_deliveries SET max_retries = 0 WHERE status = 'queued';`,
+
+	// v17: Add satellite_id to iridium_geolocation for multi-pass visualization.
+	// AT-MSGEO returns the satellite sub-point, not the modem position.
+	// Storing per-satellite readings enables multi-pass position estimation.
+	`ALTER TABLE iridium_geolocation ADD COLUMN satellite_id TEXT NOT NULL DEFAULT '';`,
 }
 
 func (db *DB) migrate() error {

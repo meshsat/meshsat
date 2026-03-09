@@ -12,6 +12,7 @@ const showMessages = ref(true)
 const showTracks = ref(true)
 const showGps = ref(true)
 const showCustom = ref(true)
+const showIridium = ref(true)
 
 // Per-node visibility toggles (reactive map: nodeId → boolean)
 const nodeVisibility = reactive({})
@@ -38,6 +39,7 @@ let markerLayer = null
 let trackLayer = null
 let messageLayer = null
 let locationLayer = null
+let iridiumLayer = null
 let initialBoundsFit = false
 
 // Distinct colors for nodes
@@ -101,6 +103,7 @@ async function initMap() {
     trackLayer = L.layerGroup().addTo(map)
     messageLayer = L.layerGroup().addTo(map)
     locationLayer = L.layerGroup().addTo(map)
+    iridiumLayer = L.layerGroup().addTo(map)
     mapReady.value = true
     updateMap()
   } catch {
@@ -236,6 +239,87 @@ function updateMap() {
     }
   }
 
+  // Iridium satellite sub-point markers (multi-pass visualization)
+  if (iridiumLayer) {
+    iridiumLayer.clearLayers()
+    if (showIridium.value) {
+      const ls2 = store.locationSources
+      const passes = ls2?.iridium_passes || []
+      const centroid = ls2?.iridium_centroid
+
+      // Individual satellite sub-points (orange pins)
+      for (let i = 0; i < passes.length; i++) {
+        const p = passes[i]
+        if (!p.lat || !p.lon) continue
+        const age = Date.now() / 1000 - p.timestamp
+        const opacity = Math.max(0.3, 1.0 - age / (6 * 3600)) // fade over 6h
+
+        const m = L.circleMarker([p.lat, p.lon], {
+          radius: 5,
+          fillColor: '#f97316',
+          fillOpacity: opacity,
+          color: '#ea580c',
+          weight: 1.5
+        })
+        const timeStr = new Date(p.timestamp * 1000).toLocaleTimeString()
+        let popup = `<strong>Iridium Pass #${passes.length - i}</strong><br>`
+        popup += `<span style="font-family:monospace;font-size:11px">${p.lat.toFixed(3)}, ${p.lon.toFixed(3)}</span>`
+        popup += `<br><span style="font-size:11px;color:#888">${timeStr}</span>`
+        popup += `<br>Accuracy: ~200 km (satellite sub-point)`
+        if (p.satellite_id) popup += `<br>Sat: ${p.satellite_id}`
+        m.bindPopup(popup)
+        iridiumLayer.addLayer(m)
+      }
+
+      // Connect passes with dashed line (shows satellite track)
+      if (passes.length >= 2) {
+        const coords = passes.filter(p => p.lat && p.lon).map(p => [p.lat, p.lon])
+        if (coords.length >= 2) {
+          L.polyline(coords, {
+            color: '#f97316',
+            weight: 1.5,
+            opacity: 0.4,
+            dashArray: '4 6'
+          }).addTo(iridiumLayer)
+        }
+      }
+
+      // Polygon (triangle/quad) for 3+ points
+      if (passes.length >= 3) {
+        const coords = passes.filter(p => p.lat && p.lon).map(p => [p.lat, p.lon])
+        if (coords.length >= 3) {
+          L.polygon(coords, {
+            color: '#f97316',
+            weight: 1,
+            opacity: 0.3,
+            fillColor: '#f97316',
+            fillOpacity: 0.08
+          }).addTo(iridiumLayer)
+        }
+      }
+
+      // Centroid marker (estimated position)
+      if (centroid && centroid.lat && centroid.lon) {
+        const accTxt = centroid.accuracy_km < 1
+          ? `${(centroid.accuracy_km * 1000).toFixed(0)}m`
+          : `${centroid.accuracy_km.toFixed(0)} km`
+        const m = L.circleMarker([centroid.lat, centroid.lon], {
+          radius: 9,
+          fillColor: '#f97316',
+          fillOpacity: 0.6,
+          color: '#c2410c',
+          weight: 3
+        })
+        let popup = `<strong>Iridium Estimated Position</strong><br>`
+        popup += `<span style="font-family:monospace;font-size:11px">${centroid.lat.toFixed(4)}, ${centroid.lon.toFixed(4)}</span>`
+        popup += `<br>Accuracy: ~${accTxt}`
+        popup += `<br>Based on ${centroid.points} satellite passes`
+        m.bindPopup(popup)
+        iridiumLayer.addLayer(m)
+      }
+    }
+  }
+
   // Fit bounds (include all sources regardless of toggle for initial view)
   const allVisible = visibleNodes.map(n => [n.latitude, n.longitude])
   const ls = store.locationSources
@@ -292,6 +376,7 @@ watch(showMessages, updateMap)
 watch(showTracks, updateMap)
 watch(showGps, updateMap)
 watch(showCustom, updateMap)
+watch(showIridium, updateMap)
 
 onMounted(async () => {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
@@ -361,6 +446,11 @@ onUnmounted(() => {
           <input type="checkbox" v-model="showCustom" class="rounded bg-gray-800 border-gray-600 text-amber-500 focus:ring-0 w-3 h-3" />
           <span class="w-2 h-2 rounded-full bg-amber-400"></span>
           Custom
+        </label>
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showIridium" class="rounded bg-gray-800 border-gray-600 text-orange-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full bg-orange-400"></span>
+          Iridium
         </label>
 
         <span class="w-px h-4 bg-gray-700" />

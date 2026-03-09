@@ -49,12 +49,14 @@ func (r *SBDResult) MOSuccess() bool {
 }
 
 // GeolocationInfo represents an Iridium-derived geolocation estimate (AT-MSGEO).
-// Accuracy ranges from ~1km to ~100km depending on satellite geometry.
+// The coordinates represent the satellite sub-point (where the satellite was
+// when it last communicated with the modem), NOT the modem's position.
+// Multiple readings over time can be overlaid to estimate modem position.
 type GeolocationInfo struct {
 	Lat       float64 `json:"lat"`
 	Lon       float64 `json:"lon"`
 	AltKm     float64 `json:"alt_km"`
-	Accuracy  float64 `json:"accuracy_km"` // estimated accuracy in km
+	Accuracy  float64 `json:"accuracy_km"` // estimated accuracy in km (~200 km for single reading)
 	Timestamp string  `json:"timestamp"`
 }
 
