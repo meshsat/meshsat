@@ -62,8 +62,9 @@ func main() {
 	case "direct":
 		// Direct serial — talk to USB devices without HAL
 		directMesh := transport.NewDirectMeshTransport(cfg.MeshtasticPort)
+		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		mesh = directMesh
-		log.Info().Str("port", cfg.MeshtasticPort).Msg("using direct Meshtastic serial transport")
+		log.Info().Str("port", cfg.MeshtasticPort).Int("watchdog_min", cfg.MeshWatchdogMin).Msg("using direct Meshtastic serial transport")
 
 		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
 		directSat.SetExcludePortFunc(directMesh.GetPort) // dynamic: resolves at auto-detect time

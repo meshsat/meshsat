@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -59,6 +60,12 @@ type DirectMeshTransport struct {
 	eventSubs  map[uint64]chan MeshEvent
 	nextSubID  uint64
 	cancelFunc context.CancelFunc
+
+	// Serial health watchdog: tracks last packet received from a remote node.
+	// If no external packets arrive within watchdogMin minutes despite known
+	// nodes, the reader loop forces a serial reconnect.
+	lastExternalPkt atomic.Int64 // unix timestamp of last non-self packet
+	watchdogMin     int          // 0 = disabled
 }
 
 // NewDirectMeshTransport creates a new direct serial Meshtastic transport.
@@ -72,6 +79,14 @@ func NewDirectMeshTransport(port string) *DirectMeshTransport {
 		neighbors:  make(map[uint32]*NeighborInfo),
 		eventSubs:  make(map[uint64]chan MeshEvent),
 	}
+}
+
+// SetWatchdogMinutes configures the serial health watchdog timeout.
+// If no external LoRa packets arrive within this many minutes despite
+// known remote nodes, the serial connection is force-recycled.
+// 0 disables the watchdog (default).
+func (t *DirectMeshTransport) SetWatchdogMinutes(min int) {
+	t.watchdogMin = min
 }
 
 // GetPort returns the resolved serial port path (e.g., "/dev/ttyACM0").
@@ -191,8 +206,20 @@ func (t *DirectMeshTransport) readerLoop(ctx context.Context) {
 	log.Info().Msg("meshtastic reader loop started")
 	defer log.Info().Msg("meshtastic reader loop stopped")
 
+	// Seed watchdog timestamp so it doesn't trigger immediately after connect.
+	t.lastExternalPkt.Store(time.Now().Unix())
+
 	heartbeat := time.NewTicker(meshHeartbeatPeriod)
 	defer heartbeat.Stop()
+
+	// Serial health watchdog — detects stale CDC sessions where the firmware
+	// stops forwarding LoRa packets despite the serial fd remaining open.
+	var watchdog *time.Ticker
+	if t.watchdogMin > 0 {
+		watchdog = time.NewTicker(time.Duration(t.watchdogMin) * time.Minute)
+		defer watchdog.Stop()
+		log.Info().Int("minutes", t.watchdogMin).Msg("meshtastic serial watchdog enabled")
+	}
 
 	for {
 		select {
@@ -202,6 +229,17 @@ func (t *DirectMeshTransport) readerLoop(ctx context.Context) {
 			t.sendHeartbeat()
 			continue
 		default:
+		}
+
+		// Check watchdog between reads (non-blocking)
+		if watchdog != nil {
+			select {
+			case <-watchdog.C:
+				if t.watchdogTriggered() {
+					return
+				}
+			default:
+			}
 		}
 
 		payload, err := t.reader.readFrame(ctx)
@@ -227,6 +265,54 @@ func (t *DirectMeshTransport) readerLoop(ctx context.Context) {
 
 		t.handleFromRadio(payload)
 	}
+}
+
+// watchdogTriggered checks if the serial session is stale and forces a reconnect if needed.
+// Returns true if a reconnect was triggered (caller should exit readerLoop).
+func (t *DirectMeshTransport) watchdogTriggered() bool {
+	// Only trigger if we have remote nodes (otherwise there's nothing to receive)
+	t.nodesMu.RLock()
+	myNum := t.myNodeNum
+	remoteCount := 0
+	for num := range t.nodes {
+		if num != myNum {
+			remoteCount++
+		}
+	}
+	t.nodesMu.RUnlock()
+
+	if remoteCount == 0 {
+		return false
+	}
+
+	lastPkt := t.lastExternalPkt.Load()
+	silenceSec := time.Now().Unix() - lastPkt
+	thresholdSec := int64(t.watchdogMin) * 60
+
+	if silenceSec < thresholdSec {
+		return false
+	}
+
+	log.Warn().
+		Int64("silence_sec", silenceSec).
+		Int("remote_nodes", remoteCount).
+		Int("threshold_min", t.watchdogMin).
+		Msg("meshtastic serial watchdog: no external packets received, forcing reconnect")
+
+	t.mu.Lock()
+	t.connected = false
+	if t.file != nil {
+		t.file.Close()
+		t.file = nil
+	}
+	t.mu.Unlock()
+
+	t.emitEvent(MeshEvent{
+		Type:    "disconnected",
+		Message: fmt.Sprintf("Serial watchdog: no external packets for %d min, reconnecting", t.watchdogMin),
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+	return true
 }
 
 func (t *DirectMeshTransport) handleFromRadio(data []byte) {
@@ -318,6 +404,14 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	}
 
 	msg := protoPacketToMeshMessage(pkt)
+
+	// Track last external packet for serial health watchdog
+	t.mu.RLock()
+	myNum := t.myNodeNum
+	t.mu.RUnlock()
+	if pkt.From != myNum {
+		t.lastExternalPkt.Store(time.Now().Unix())
+	}
 
 	// Update node DB from any packet — create node if unknown
 	t.nodesMu.Lock()
