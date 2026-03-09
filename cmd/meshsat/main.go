@@ -50,6 +50,7 @@ func main() {
 	var sat transport.SatTransport
 	var cell transport.CellTransport
 	var astro transport.AstrocastTransport
+	var gpsExcludePorts []func() string // populated in direct mode for GPS reader
 	switch cfg.Mode {
 	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
@@ -82,6 +83,9 @@ func main() {
 		directAstro.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort})
 		astro = directAstro
 		log.Info().Str("port", cfg.AstrocastPort).Msg("using direct Astronode S serial transport")
+
+		// GPS reader exclude ports — all radio devices so GPS auto-detect skips them
+		gpsExcludePorts = []func() string{directMesh.GetPort, directSat.GetPort}
 
 	default:
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")
@@ -178,6 +182,14 @@ func main() {
 	if cell != nil {
 		cellSigRecorder = engine.NewCellSignalRecorder(db, cell)
 		cellSigRecorder.Start(ctx)
+	}
+
+	// GPS reader — reads NMEA from u-blox GPS receiver (direct mode only)
+	if gpsExcludePorts != nil {
+		gpsReader := transport.NewGPSReader("auto", db)
+		gpsReader.SetExcludePortFuncs(gpsExcludePorts)
+		go gpsReader.Start(ctx)
+		log.Info().Msg("GPS reader started (auto-detect)")
 	}
 
 	// API server

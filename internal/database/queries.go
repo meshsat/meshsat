@@ -1222,10 +1222,16 @@ func (db *DB) GetLatestGPSPosition() (*GeolocationRecord, error) {
 func (db *DB) GetAllGeolocationSources() ([]GeolocationRecord, error) {
 	var results []GeolocationRecord
 
-	// Latest GPS from positions table
-	gps, err := db.GetLatestGPSPosition()
+	// Latest GPS from dedicated GPS reader (iridium_geolocation table, source="gps")
+	gps, err := db.GetLatestGeolocation("gps")
 	if err == nil && gps != nil {
 		results = append(results, *gps)
+	} else {
+		// Fallback: GPS position from Meshtastic node positions table
+		meshGPS, err2 := db.GetLatestGPSPosition()
+		if err2 == nil && meshGPS != nil {
+			results = append(results, *meshGPS)
+		}
 	}
 
 	// Latest Iridium geolocation

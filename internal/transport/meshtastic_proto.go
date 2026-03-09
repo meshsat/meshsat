@@ -50,6 +50,7 @@ const (
 	AdminFieldFactoryReset         = 94
 	AdminFieldRemoveByNodenum      = 38
 	AdminFieldRebootSeconds        = 97
+	AdminFieldSetTimeUnixSec       = 99
 )
 
 // Config section enum values (for get_config_request)
@@ -995,6 +996,16 @@ func buildAdminReboot(myNodeNum, destNode uint32, delaySecs int) []byte {
 	admin = appendVarint(admin, AdminFieldRebootSeconds<<3|0)
 	admin = appendVarint(admin, uint64(delaySecs))
 	return buildAdminToRadio(myNodeNum, destNode, admin)
+}
+
+// buildAdminSetTime builds a ToRadio with AdminMessage field 99 (set_time_unixsec).
+// Sends the current UTC time as a fixed32 to the local node so it can stamp packets correctly.
+func buildAdminSetTime(myNodeNum uint32, unixSec uint32) []byte {
+	admin := make([]byte, 0, 16)
+	// field 99, wire type 5 (fixed32) → (99 << 3) | 5 = 797
+	admin = appendVarint(admin, uint64(AdminFieldSetTimeUnixSec)<<3|5)
+	admin = appendFixed32(admin, unixSec)
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminFactoryReset builds a ToRadio with AdminMessage field 94.

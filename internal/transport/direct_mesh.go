@@ -388,6 +388,10 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 			Message: fmt.Sprintf("config download complete (%d nodes)", n),
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
+
+		// Push UTC time to the radio so it stamps packets with correct time.
+		// T-Echo/T-Beam without GPS fix have no time source — this fixes "17h ago" display issues.
+		t.sendTimeSync()
 	}
 
 	// MeshPacket
@@ -600,6 +604,24 @@ func (t *DirectMeshTransport) handleTelemetryPacket(pkt *ProtoMeshPacket) {
 		Data:    dataJSON,
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// sendTimeSync pushes the current UTC time to the local Meshtastic radio via
+// AdminMessage.set_time_unixsec (field 99). This is critical for devices without
+// GPS (like indoor T-Echo) — without it, timestamps display as hours/days off.
+func (t *DirectMeshTransport) sendTimeSync() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.connected || t.file == nil {
+		return
+	}
+	now := uint32(time.Now().Unix())
+	frame := buildAdminSetTime(t.myNodeNum, now)
+	if err := sendFrame(t.file, frame); err != nil {
+		log.Warn().Err(err).Msg("meshtastic time sync failed")
+		return
+	}
+	log.Info().Uint32("unix_sec", now).Msg("meshtastic time synced to radio")
 }
 
 func (t *DirectMeshTransport) sendHeartbeat() {
