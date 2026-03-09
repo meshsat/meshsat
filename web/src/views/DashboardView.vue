@@ -232,6 +232,41 @@ const locationResolved = computed(() => store.locationSources?.resolved || null)
 const locationGps = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'gps'))
 const iridiumPasses = computed(() => store.locationSources?.iridium_passes || [])
 const iridiumCentroid = computed(() => store.locationSources?.iridium_centroid || null)
+const dashCellInfo = computed(() => store.cellInfo?.latest || store.cellInfo?.live || null)
+const unackedAlerts = computed(() => (store.cellBroadcasts || []).filter(a => !a.acknowledged))
+
+// SIM PIN state
+const pinInput = ref('')
+const pinUnlocking = ref(false)
+const pinError = ref('')
+
+async function unlockPIN() {
+  pinError.value = ''
+  pinUnlocking.value = true
+  try {
+    await store.submitCellularPIN(pinInput.value)
+    pinInput.value = ''
+  } catch (e) {
+    pinError.value = e.message || 'PIN rejected'
+  }
+  pinUnlocking.value = false
+}
+
+function cbsAlertBg(severity) {
+  if (severity === 'extreme') return 'bg-red-900/30'
+  if (severity === 'severe') return 'bg-orange-900/30'
+  if (severity === 'amber') return 'bg-amber-900/30'
+  if (severity === 'test') return 'bg-blue-900/20'
+  return 'bg-tactical-bg/50'
+}
+
+function cbsAlertColor(severity) {
+  if (severity === 'extreme') return 'text-red-400'
+  if (severity === 'severe') return 'text-orange-400'
+  if (severity === 'amber') return 'text-amber-400'
+  if (severity === 'test') return 'text-blue-400'
+  return 'text-gray-400'
+}
 
 
 // Credits from store
@@ -665,6 +700,9 @@ async function fetchAll() {
     store.fetchLocationSources(),
     store.fetchCellularSignal(),
     store.fetchCellularStatus(),
+    store.fetchSMSMessages({ limit: 10 }),
+    store.fetchCellBroadcasts({ limit: 10 }),
+    store.fetchCellInfo(),
     store.fetchNeighborInfo()
   ])
 }
@@ -1043,17 +1081,42 @@ function widgetGridClass(id) {
           </div>
         </div>
 
-        <!-- SMS History (placeholder) -->
+        <!-- SIM PIN Unlock (when PIN is required) -->
+        <div v-if="store.cellularStatus?.sim_state === 'PIN_REQUIRED'" class="mt-3 pt-2 border-t border-tactical-border">
+          <div class="flex items-center gap-2">
+            <input type="password" v-model="pinInput" maxlength="8" placeholder="SIM PIN"
+              class="flex-1 bg-tactical-bg border border-tactical-border rounded px-2 py-1 text-[11px] text-gray-200 font-mono" />
+            <button @click="unlockPIN" :disabled="pinUnlocking"
+              class="text-[10px] px-2 py-1 rounded bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-50">
+              {{ pinUnlocking ? 'Unlocking...' : 'Unlock' }}
+            </button>
+          </div>
+          <div v-if="pinError" class="text-[10px] text-red-400 mt-1">{{ pinError }}</div>
+        </div>
+
+        <!-- Recent SMS -->
         <div class="mt-3 pt-2 border-t border-tactical-border">
           <div class="flex items-center gap-1.5 mb-1.5">
             <span class="text-[10px] text-gray-500 uppercase tracking-wider">Recent SMS</span>
-            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-red-900/30 text-red-400">not wired yet</span>
+            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-sky-900/30 text-sky-400">{{ (store.smsMessages || []).length }}</span>
           </div>
-          <div class="space-y-1">
-            <div class="flex items-center gap-2 py-1 px-2 rounded bg-tactical-bg/50 text-[11px] text-gray-600 italic">
-              SMS send/receive history will appear here when a modem is connected.
+          <div v-if="(store.smsMessages || []).length" class="space-y-1">
+            <div v-for="sms in (store.smsMessages || []).slice(0, 5)" :key="sms.id"
+              class="flex items-start gap-1.5 py-1 px-2 rounded bg-tactical-bg/50 text-[11px]">
+              <span :class="sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400'" class="font-mono text-[9px] mt-0.5">
+                {{ sms.direction === 'tx' ? 'TX' : 'RX' }}
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="text-gray-300 truncate">{{ sms.text || '(empty)' }}</div>
+                <div class="text-[9px] text-gray-600">{{ sms.phone }} · {{ formatRelativeTime(sms.created_at) }}</div>
+              </div>
+              <span class="text-[9px] font-mono"
+                :class="sms.status === 'sent' || sms.status === 'delivered' ? 'text-emerald-400' : sms.status === 'failed' ? 'text-red-400' : 'text-gray-500'">
+                {{ sms.status }}
+              </span>
             </div>
           </div>
+          <div v-else class="text-[11px] text-gray-600 italic py-1 px-2">No SMS history yet</div>
         </div>
       </div>
 
@@ -1127,10 +1190,28 @@ function widgetGridClass(id) {
         <div class="mt-3 pt-2 border-t border-tactical-border">
           <div class="flex items-center gap-1.5 mb-1">
             <span class="text-[10px] text-gray-500 uppercase tracking-wider">Cell Broadcast Alerts</span>
-            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-red-900/30 text-red-400">not wired yet</span>
+            <span v-if="unackedAlerts.length" class="text-[9px] font-mono px-1.5 py-px rounded bg-red-900/30 text-red-400">{{ unackedAlerts.length }}</span>
           </div>
-          <div class="text-[10px] text-gray-600 italic">
-            Government emergency alerts (EU-Alert, WEA, CMAS) will appear here when a cellular modem with CBS support is connected.
+          <div v-if="(store.cellBroadcasts || []).length" class="space-y-1">
+            <div v-for="alert in (store.cellBroadcasts || []).slice(0, 5)" :key="alert.id"
+              class="flex items-start gap-1.5 py-1 px-2 rounded text-[11px]"
+              :class="alert.acknowledged ? 'bg-tactical-bg/30' : cbsAlertBg(alert.severity)">
+              <span class="font-mono text-[9px] font-bold mt-0.5"
+                :class="cbsAlertColor(alert.severity)">
+                {{ alert.severity.toUpperCase() }}
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="text-gray-200 text-[10px]">{{ alert.text || '(no text)' }}</div>
+                <div class="text-[9px] text-gray-600">{{ formatRelativeTime(alert.created_at) }}</div>
+              </div>
+              <button v-if="!alert.acknowledged" @click="store.ackCellBroadcast(alert.id)"
+                class="text-[9px] px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-400 hover:text-gray-200">
+                ACK
+              </button>
+            </div>
+          </div>
+          <div v-else class="text-[10px] text-gray-600 italic">
+            Government emergency alerts (EU-Alert, WEA, CMAS) will appear here when received.
           </div>
         </div>
       </div>
@@ -1197,6 +1278,17 @@ function widgetGridClass(id) {
             </span>
             <span v-else class="text-gray-600 font-mono text-[10px]">No passes</span>
           </div>
+          <div class="flex justify-between items-center">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full" :class="dashCellInfo?.cell_id ? 'bg-sky-400' : 'bg-gray-600'" />
+              <span class="text-gray-500">Cellular</span>
+            </div>
+            <span v-if="dashCellInfo?.cell_id" class="text-gray-300 font-mono text-[10px]">
+              {{ dashCellInfo.mcc }}/{{ dashCellInfo.mnc }} CID={{ dashCellInfo.cell_id }}
+              <span v-if="dashCellInfo.network_type" class="text-sky-400/60 ml-1">{{ dashCellInfo.network_type }}</span>
+            </span>
+            <span v-else class="text-gray-600 font-mono text-[10px]">No data</span>
+          </div>
         </div>
 
         <div class="mt-3 pt-2 border-t border-tactical-border space-y-1.5 text-[11px]">
@@ -1211,7 +1303,7 @@ function widgetGridClass(id) {
         </div>
 
         <div class="mt-2 pt-2 border-t border-tactical-border">
-          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (centroid) > Custom</span>
+          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (centroid) > Cellular > Custom</span>
         </div>
 
         <div class="flex gap-3 mt-2">

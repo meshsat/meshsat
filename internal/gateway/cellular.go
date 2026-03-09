@@ -179,7 +179,13 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 				if err := g.cell.SendSMS(ctx, number, text); err != nil {
 					log.Error().Err(err).Str("to", number).Msg("cellular: SMS send failed")
 					g.errors.Add(1)
+					if g.db != nil {
+						g.db.InsertSMSMessage("tx", number, text, "failed", time.Now().Unix())
+					}
 					continue
+				}
+				if g.db != nil {
+					g.db.InsertSMSMessage("tx", number, text, "sent", time.Now().Unix())
 				}
 			}
 
@@ -220,6 +226,11 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 					}
 				}
 
+				// Persist received SMS
+				if g.db != nil {
+					g.db.InsertSMSMessage("rx", sender, event.Message, "delivered", time.Now().Unix())
+				}
+
 				// Check allowed senders
 				if len(g.config.AllowedSenders) > 0 && !isAllowedSender(sender, g.config.AllowedSenders) {
 					log.Info().Str("sender", sender).Msg("cellular: SMS from non-allowed sender, ignoring")
@@ -241,6 +252,25 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 				case g.inCh <- inbound:
 				default:
 					log.Warn().Msg("cellular: inbound channel full")
+				}
+
+			case "cbs_received":
+				// Persist cell broadcast alert
+				if g.db != nil && event.Data != nil {
+					var cbs transport.CellBroadcastMsg
+					if err := json.Unmarshal(event.Data, &cbs); err == nil {
+						g.db.InsertCellBroadcast(cbs.SerialNumber, cbs.MessageID, cbs.Channel, cbs.Severity, cbs.Text, time.Now().Unix())
+						log.Info().Int("mid", cbs.MessageID).Str("severity", cbs.Severity).Msg("cellular: CBS alert persisted")
+					}
+				}
+
+			case "cell_info_update":
+				// Persist cell tower info
+				if g.db != nil && event.Data != nil {
+					var ci transport.CellInfo
+					if err := json.Unmarshal(event.Data, &ci); err == nil {
+						g.db.InsertCellInfo(ci.MCC, ci.MNC, ci.LAC, ci.CellID, ci.NetworkType, ci.RSRP, ci.RSRQ, time.Now().Unix())
+					}
 				}
 
 			case "connected":

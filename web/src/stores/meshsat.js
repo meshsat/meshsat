@@ -472,6 +472,50 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch { /* iridium geo unavailable */ }
   }
 
+  // SMS message history
+  const smsMessages = ref([])
+
+  async function fetchSMSMessages(params = {}) {
+    try {
+      smsMessages.value = await api.get('/cellular/sms', params)
+    } catch { /* sms unavailable */ }
+  }
+
+  // Cell broadcast alerts
+  const cellBroadcasts = ref([])
+
+  async function fetchCellBroadcasts(params = {}) {
+    try {
+      cellBroadcasts.value = await api.get('/cellular/broadcasts', params)
+    } catch { /* cbs unavailable */ }
+  }
+
+  async function ackCellBroadcast(id) {
+    try {
+      await api.post(`/cellular/broadcasts/${id}/ack`)
+      await fetchCellBroadcasts({ limit: 20 })
+    } catch { /* ack failed */ }
+  }
+
+  // Cell tower info
+  const cellInfo = ref(null)
+
+  async function fetchCellInfo() {
+    try {
+      cellInfo.value = await api.get('/cellular/info')
+    } catch { /* cell info unavailable */ }
+  }
+
+  // SIM PIN unlock
+  async function submitCellularPIN(pin) {
+    error.value = null
+    try {
+      const result = await api.post('/cellular/pin', { pin })
+      await fetchCellularStatus()
+      return result
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Astrocast LEO passes
   const astrocastPasses = ref([])
 
@@ -788,6 +832,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
     locationSources, iridiumGeoHistory,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
+    smsMessages, cellBroadcasts, cellInfo,
     rules, presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
@@ -806,6 +851,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
     fetchCellularDataStatus, connectCellularData, disconnectCellularData,
     fetchDynDNSStatus, forceDynDNSUpdate,
+    fetchSMSMessages, fetchCellBroadcasts, ackCellBroadcast, fetchCellInfo, submitCellularPIN,
     enqueueIridiumMessage, cancelQueueItem, deleteQueueItem, setQueuePriority,
     fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,

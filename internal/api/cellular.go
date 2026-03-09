@@ -198,6 +198,121 @@ func (s *Server) handleWebhookCellularInbound(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
+// --- SIM PIN Unlock ---
+
+func (s *Server) handleSubmitCellularPIN(w http.ResponseWriter, r *http.Request) {
+	if s.cellTransport == nil {
+		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
+		return
+	}
+
+	var req struct {
+		PIN string `json:"pin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if len(req.PIN) < 4 || len(req.PIN) > 8 {
+		writeError(w, http.StatusBadRequest, "PIN must be 4-8 digits")
+		return
+	}
+
+	if err := s.cellTransport.UnlockPIN(r.Context(), req.PIN); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
+}
+
+// --- Cell Info ---
+
+func (s *Server) handleGetCellInfo(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]interface{}{}
+
+	// Live cell info from modem
+	if s.cellTransport != nil {
+		info, err := s.cellTransport.GetCellInfo(r.Context())
+		if err == nil && info != nil {
+			resp["live"] = info
+		}
+	}
+
+	// Latest persisted cell info from DB
+	dbInfo, err := s.db.GetLatestCellInfo()
+	if err == nil && dbInfo != nil {
+		resp["latest"] = dbInfo
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// --- Cell Broadcast Alerts ---
+
+func (s *Server) handleGetCellBroadcasts(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
+			limit = l
+		}
+	}
+	unackedOnly := r.URL.Query().Get("unacked_only") == "true"
+
+	alerts, err := s.db.GetCellBroadcasts(limit, unackedOnly)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if alerts == nil {
+		alerts = []database.CellBroadcast{}
+	}
+	writeJSON(w, http.StatusOK, alerts)
+}
+
+func (s *Server) handleAckCellBroadcast(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.db.AckCellBroadcast(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "acknowledged"})
+}
+
+// --- SMS History ---
+
+func (s *Server) handleGetSMSMessages(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 500 {
+			limit = l
+		}
+	}
+	offsetStr := r.URL.Query().Get("offset")
+	offset := 0
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	msgs, err := s.db.GetSMSMessages(limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if msgs == nil {
+		msgs = []database.SMSMessageRecord{}
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
 // --- SMS Contacts ---
 
 func (s *Server) handleGetSMSContacts(w http.ResponseWriter, r *http.Request) {
@@ -303,9 +418,11 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.cellTransport.SendSMS(r.Context(), req.To, req.Text); err != nil {
+		s.db.InsertSMSMessage("tx", req.To, req.Text, "failed", time.Now().Unix())
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.db.InsertSMSMessage("tx", req.To, req.Text, "sent", time.Now().Unix())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 

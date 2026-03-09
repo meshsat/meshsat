@@ -13,6 +13,7 @@ const showTracks = ref(true)
 const showGps = ref(true)
 const showCustom = ref(true)
 const showIridium = ref(true)
+const showCellular = ref(true)
 
 // Per-node visibility toggles (reactive map: nodeId → boolean)
 const nodeVisibility = reactive({})
@@ -40,6 +41,7 @@ let trackLayer = null
 let messageLayer = null
 let locationLayer = null
 let iridiumLayer = null
+let cellularLayer = null
 let initialBoundsFit = false
 
 // Distinct colors for nodes
@@ -104,6 +106,7 @@ async function initMap() {
     messageLayer = L.layerGroup().addTo(map)
     locationLayer = L.layerGroup().addTo(map)
     iridiumLayer = L.layerGroup().addTo(map)
+    cellularLayer = L.layerGroup().addTo(map)
     mapReady.value = true
     updateMap()
   } catch {
@@ -320,6 +323,43 @@ function updateMap() {
     }
   }
 
+  // --- Cellular cell tower info ---
+  if (cellularLayer) {
+    cellularLayer.clearLayers()
+    if (showCellular.value) {
+      const ci = store.cellInfo?.latest || store.cellInfo?.live
+      if (ci && ci.cell_id) {
+        // Show cell info as a marker if we have location data, otherwise skip
+        // For now, show cell info popup at resolved/GPS location as context overlay
+        const cellLabel = `Cell: ${ci.mcc}/${ci.mnc} LAC=${ci.lac} CID=${ci.cell_id}`
+        const netType = ci.network_type || ''
+        const rsrp = ci.rsrp != null ? `${ci.rsrp} dBm` : 'N/A'
+
+        // If we have a resolved location, place the cell info marker there
+        const resolved = store.locationSources?.resolved
+        if (resolved && resolved.lat && resolved.lon) {
+          const m = L.circleMarker([resolved.lat, resolved.lon], {
+            radius: 14,
+            color: '#38bdf8',
+            fillColor: '#38bdf8',
+            fillOpacity: 0.08,
+            weight: 1,
+            dashArray: '4,4'
+          })
+          m.bindPopup(`<div style="font-size:11px">
+            <b>Cell Tower Info</b><br/>
+            MCC/MNC: ${ci.mcc}/${ci.mnc}<br/>
+            LAC: ${ci.lac}<br/>
+            Cell ID: ${ci.cell_id}<br/>
+            Network: ${netType}<br/>
+            RSRP: ${rsrp}
+          </div>`)
+          cellularLayer.addLayer(m)
+        }
+      }
+    }
+  }
+
   // Fit bounds (include all sources regardless of toggle for initial view)
   const allVisible = visibleNodes.map(n => [n.latitude, n.longitude])
   const ls = store.locationSources
@@ -377,6 +417,7 @@ watch(showTracks, updateMap)
 watch(showGps, updateMap)
 watch(showCustom, updateMap)
 watch(showIridium, updateMap)
+watch(showCellular, updateMap)
 
 onMounted(async () => {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
@@ -389,7 +430,8 @@ onMounted(async () => {
     store.fetchPositions({ since, limit: 500 }),
     store.fetchMessages({ limit: 200 }),
     store.fetchLocations(),
-    store.fetchLocationSources()
+    store.fetchLocationSources(),
+    store.fetchCellInfo()
   ])
   // Set visibility for any newly loaded nodes
   for (const n of store.nodes) {
@@ -451,6 +493,11 @@ onUnmounted(() => {
           <input type="checkbox" v-model="showIridium" class="rounded bg-gray-800 border-gray-600 text-orange-500 focus:ring-0 w-3 h-3" />
           <span class="w-2 h-2 rounded-full bg-orange-400"></span>
           Iridium
+        </label>
+        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
+          <input type="checkbox" v-model="showCellular" class="rounded bg-gray-800 border-gray-600 text-sky-500 focus:ring-0 w-3 h-3" />
+          <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+          Cellular
         </label>
 
         <span class="w-px h-4 bg-gray-700" />

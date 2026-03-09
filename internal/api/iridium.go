@@ -289,8 +289,7 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 	// Also include custom locations
 	customLocs, _ := s.db.GetIridiumLocations()
 
-	// AUTO resolution: GPS > Custom. Iridium geolocation is NOT used for
-	// auto-resolution because it represents satellite sub-points (~200 km accuracy).
+	// AUTO resolution: GPS > Iridium centroid (3+ passes) > Custom.
 	var resolved *resolvedLocation
 	for _, src := range sources {
 		if src.Source == "gps" && src.Lat != 0 && src.Lon != 0 {
@@ -305,6 +304,7 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 			break
 		}
 	}
+
 	if resolved == nil && len(customLocs) > 0 {
 		loc := customLocs[0]
 		resolved = &resolvedLocation{
@@ -322,6 +322,12 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 	}
 	if resolved != nil {
 		resp["resolved"] = resolved
+	}
+
+	// Include cell tower info (if available)
+	cellInfo, cellErr := s.db.GetLatestCellInfo()
+	if cellErr == nil && cellInfo != nil && cellInfo.CellID != "" {
+		resp["cell_info"] = cellInfo
 	}
 
 	// Include live GPS metadata (satellite count, fix status) from GPS reader

@@ -350,6 +350,47 @@ var migrations = []string{
 	// AT-MSGEO returns the satellite sub-point, not the modem position.
 	// Storing per-satellite readings enables multi-pass position estimation.
 	`ALTER TABLE iridium_geolocation ADD COLUMN satellite_id TEXT NOT NULL DEFAULT '';`,
+
+	// v18: Cellular SMS history, cell broadcast alerts, and cell tower info.
+	`CREATE TABLE IF NOT EXISTS sms_messages (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		direction  TEXT NOT NULL DEFAULT 'rx',
+		phone      TEXT NOT NULL DEFAULT '',
+		text       TEXT NOT NULL DEFAULT '',
+		status     TEXT NOT NULL DEFAULT 'delivered',
+		error      TEXT NOT NULL DEFAULT '',
+		timestamp  INTEGER NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_sms_messages_ts ON sms_messages(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_sms_messages_dir ON sms_messages(direction);
+
+	CREATE TABLE IF NOT EXISTS cell_broadcasts (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		serial_number  INTEGER NOT NULL DEFAULT 0,
+		message_id     INTEGER NOT NULL DEFAULT 0,
+		channel        INTEGER NOT NULL DEFAULT 0,
+		severity       TEXT NOT NULL DEFAULT 'unknown',
+		text           TEXT NOT NULL DEFAULT '',
+		acknowledged   INTEGER NOT NULL DEFAULT 0,
+		timestamp      INTEGER NOT NULL,
+		created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_cbs_ts ON cell_broadcasts(timestamp);
+
+	CREATE TABLE IF NOT EXISTS cell_info (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		mcc         TEXT NOT NULL DEFAULT '',
+		mnc         TEXT NOT NULL DEFAULT '',
+		lac         TEXT NOT NULL DEFAULT '',
+		cell_id     TEXT NOT NULL DEFAULT '',
+		network_type TEXT NOT NULL DEFAULT '',
+		rsrp        INTEGER,
+		rsrq        INTEGER,
+		timestamp   INTEGER NOT NULL,
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_cell_info_ts ON cell_info(timestamp);`,
 }
 
 func (db *DB) migrate() error {

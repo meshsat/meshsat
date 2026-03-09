@@ -51,6 +51,26 @@ type CellDataStatus struct {
 	Interface string `json:"interface"` // e.g. "wwan0"
 }
 
+// CellInfo represents cell tower information from the modem.
+type CellInfo struct {
+	MCC         string `json:"mcc"`
+	MNC         string `json:"mnc"`
+	LAC         string `json:"lac"`
+	CellID      string `json:"cell_id"`
+	NetworkType string `json:"network_type"` // GSM, WCDMA, LTE, NR5G
+	RSRP        *int   `json:"rsrp,omitempty"`
+	RSRQ        *int   `json:"rsrq,omitempty"`
+}
+
+// CellBroadcastMsg represents a cell broadcast (CBS/CMAS/EU-Alert) message.
+type CellBroadcastMsg struct {
+	SerialNumber int    `json:"serial_number"`
+	MessageID    int    `json:"message_id"`
+	Channel      int    `json:"channel"`
+	Severity     string `json:"severity"` // extreme, severe, amber, test, unknown
+	Text         string `json:"text"`
+}
+
 // CellTransport abstracts how MeshSat talks to a cellular modem.
 type CellTransport interface {
 	Subscribe(ctx context.Context) (<-chan CellEvent, error)
@@ -60,5 +80,7 @@ type CellTransport interface {
 	GetDataStatus(ctx context.Context) (*CellDataStatus, error)
 	ConnectData(ctx context.Context, apn string) error
 	DisconnectData(ctx context.Context) error
+	UnlockPIN(ctx context.Context, pin string) error
+	GetCellInfo(ctx context.Context) (*CellInfo, error)
 	Close() error
 }

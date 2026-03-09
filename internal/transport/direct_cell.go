@@ -179,17 +179,27 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	if err != nil || strings.Contains(resp, "ERROR") {
 		log.Warn().Msg("cellular: SMS text mode not supported, SMS will not work")
 	}
-	// AT+CNMI=2,1,0,0,0 — SMS notification (unsolicited +CMTI)
-	sendAT(sp, "AT+CNMI=2,1,0,0,0", cellATTimeout)
+	// AT+CNMI=2,1,2,0,0 — SMS notification (+CMTI) and CBS delivery (+CBM)
+	sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
 	// AT+CPIN? — SIM status
 	resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
 	t.simState = parseCPIN(resp)
+	// AT+CREG=2 — enable extended registration (LAC, CellID, act)
+	sendAT(sp, "AT+CREG=2", cellATTimeout)
 	// AT+CREG? — registration
 	resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
 	t.regStatus = parseCREG(resp)
-	// AT+COPS? — operator
+	t.netType = parseCREGNetType(resp)
+	// AT+COPS? — operator (also extracts network type if CREG didn't)
 	resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
 	t.operator = parseCOPS(resp)
+	if t.netType == "" {
+		t.netType = parseCOPSNetType(resp)
+	}
+	// AT+CSCB=0 — subscribe to all CBS channels (cell broadcast alerts)
+	if t.simState == "READY" {
+		sendAT(sp, "AT+CSCB=0", cellATTimeout)
+	}
 
 	t.connected = true
 	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).
@@ -327,9 +337,13 @@ func (t *DirectCellTransport) smsMonitorLoop() {
 						go t.readAndEmitSMS(idx)
 					}
 				}
+				// +CBM: <sn>,<mid>,<dcs>,<page>,<pages> — cell broadcast header
+				if strings.HasPrefix(s, "+CBM:") {
+					go t.readAndEmitCBS(s)
+				}
 				line = line[:0]
 			}
-			if len(line) > 256 {
+			if len(line) > 512 {
 				line = line[:0]
 			}
 		}
@@ -371,6 +385,35 @@ func (t *DirectCellTransport) readAndEmitSMS(index int) {
 	})
 }
 
+// readAndEmitCBS reads the CBS message body after the +CBM header line.
+func (t *DirectCellTransport) readAndEmitCBS(header string) {
+	// Read the CBS body — it follows the +CBM header line
+	t.mu.Lock()
+	if !t.connected || t.file == nil {
+		t.mu.Unlock()
+		return
+	}
+	// Read body with short timeout (CBS data comes immediately after header)
+	body, _ := readATResponse(t.file, 2*time.Second)
+	t.mu.Unlock()
+
+	cbs := parseCBM(header, body)
+	if cbs == nil {
+		return
+	}
+
+	log.Info().Int("mid", cbs.MessageID).Str("severity", cbs.Severity).
+		Str("text", cbs.Text).Msg("cellular: CBS alert received")
+
+	cbsJSON, _ := json.Marshal(cbs)
+	t.emitEvent(CellEvent{
+		Type:    "cbs_received",
+		Message: cbs.Text,
+		Data:    cbsJSON,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 // cellSignalPollerLoop polls AT+CSQ every 60s.
 func (t *DirectCellTransport) cellSignalPollerLoop() {
 	defer close(t.signalDone)
@@ -399,6 +442,28 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 			info := parseCellCSQ(resp)
 			if info == nil {
 				continue
+			}
+
+			// Also query cell info for network type and RSRP/RSRQ
+			t.mu.Lock()
+			cellResp, cellErr := sendAT(t.file, "AT+QENG=\"servingcell\"", 5*time.Second)
+			t.mu.Unlock()
+			if cellErr == nil && strings.Contains(cellResp, "+QENG:") {
+				ci := parseQENG(cellResp)
+				if ci != nil {
+					if ci.NetworkType != "" {
+						info.Technology = ci.NetworkType
+						t.netType = ci.NetworkType
+					}
+					// Emit cell info update
+					ciJSON, _ := json.Marshal(ci)
+					t.emitEvent(CellEvent{
+						Type:    "cell_info_update",
+						Message: fmt.Sprintf("Cell: %s/%s CID=%s", ci.MCC, ci.MNC, ci.CellID),
+						Data:    ciJSON,
+						Time:    time.Now().UTC().Format(time.RFC3339),
+					})
+				}
 			}
 
 			t.signalMu.Lock()
@@ -899,6 +964,282 @@ func probeCellularAT(port string) bool {
 		return false
 	}
 	return strings.Contains(resp, "+CPIN:")
+}
+
+// GetPort returns the resolved serial port path.
+func (t *DirectCellTransport) GetPort() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.port
+}
+
+// UnlockPIN submits the SIM PIN to unlock the modem.
+func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	cmd := fmt.Sprintf("AT+CPIN=\"%s\"", pin)
+	resp, err := sendAT(t.file, cmd, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("PIN command failed: %w", err)
+	}
+	if strings.Contains(resp, "ERROR") {
+		return fmt.Errorf("PIN rejected: %s", strings.TrimSpace(resp))
+	}
+
+	// Wait for modem to settle after PIN unlock
+	time.Sleep(2 * time.Second)
+
+	t.simState = "READY"
+
+	// Run post-unlock initialization: registration, operator, SMS, CBS
+	sendAT(t.file, "AT+CREG=2", cellATTimeout) // extended registration format
+	resp, _ = sendAT(t.file, "AT+CREG?", cellATTimeout)
+	t.regStatus = parseCREG(resp)
+	t.netType = parseCREGNetType(resp)
+
+	resp, _ = sendAT(t.file, "AT+COPS?", cellATTimeout)
+	t.operator = parseCOPS(resp)
+	if t.netType == "" {
+		t.netType = parseCOPSNetType(resp)
+	}
+
+	// Enable CBS delivery (unsolicited +CBM URCs)
+	sendAT(t.file, "AT+CNMI=2,1,2,0,0", cellATTimeout)
+	sendAT(t.file, "AT+CSCB=0", cellATTimeout) // subscribe to all CBS channels
+
+	log.Info().Str("sim", t.simState).Str("reg", t.regStatus).Str("net", t.netType).
+		Str("operator", t.operator).Msg("cellular: SIM PIN accepted, modem initialized")
+
+	t.emitEvent(CellEvent{
+		Type:    "network_change",
+		Message: fmt.Sprintf("SIM unlocked, registered on %s (%s)", t.operator, t.netType),
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+
+	return nil
+}
+
+// GetCellInfo queries cell tower information from the modem.
+// Tries AT+QENG (Quectel proprietary) first, falls back to extended AT+CREG?.
+func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.connected || t.file == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	// Try Quectel AT+QENG="servingcell"
+	resp, err := sendAT(t.file, "AT+QENG=\"servingcell\"", 5*time.Second)
+	if err == nil && strings.Contains(resp, "+QENG:") {
+		info := parseQENG(resp)
+		if info != nil {
+			return info, nil
+		}
+	}
+
+	// Fallback: extended AT+CREG? (if AT+CREG=2 was sent during init)
+	resp, err = sendAT(t.file, "AT+CREG?", cellATTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return parseCREGExtended(resp), nil
+}
+
+// parseQENG parses AT+QENG="servingcell" response (Quectel modems).
+// LTE format: +QENG: "servingcell","NOCHANGE","LTE","FDD",262,01,1A2D003,148,100,1,5,5,9E3F,-109,-13,-80,16,38
+func parseQENG(resp string) *CellInfo {
+	idx := strings.Index(resp, "+QENG:")
+	if idx == -1 {
+		return nil
+	}
+	line := strings.Split(resp[idx:], "\n")[0]
+	// Remove +QENG: prefix and split by comma
+	parts := strings.Split(line[6:], ",")
+	// Strip quotes from all parts
+	for i := range parts {
+		parts[i] = strings.Trim(strings.TrimSpace(parts[i]), "\"")
+	}
+
+	if len(parts) < 5 {
+		return nil
+	}
+
+	info := &CellInfo{}
+
+	// Detect technology from parts[2]
+	tech := ""
+	if len(parts) > 2 {
+		tech = strings.ToUpper(parts[2])
+	}
+
+	switch tech {
+	case "LTE":
+		info.NetworkType = "LTE"
+		// +QENG: "servingcell","NOCHANGE","LTE","FDD",MCC,MNC,CellID,PCID,EARFCN,...,RSRP,RSRQ,RSSI,SINR,...
+		if len(parts) >= 8 {
+			info.MCC = parts[4]
+			info.MNC = parts[5]
+			info.CellID = parts[6]
+		}
+		if len(parts) >= 15 {
+			if v, err := strconv.Atoi(parts[13]); err == nil {
+				info.RSRP = &v
+			}
+			if v, err := strconv.Atoi(parts[14]); err == nil {
+				info.RSRQ = &v
+			}
+		}
+	case "WCDMA":
+		info.NetworkType = "3G"
+		if len(parts) >= 7 {
+			info.MCC = parts[3]
+			info.MNC = parts[4]
+			info.LAC = parts[5]
+			info.CellID = parts[6]
+		}
+	case "GSM":
+		info.NetworkType = "2G"
+		if len(parts) >= 7 {
+			info.MCC = parts[3]
+			info.MNC = parts[4]
+			info.LAC = parts[5]
+			info.CellID = parts[6]
+		}
+	default:
+		info.NetworkType = tech
+	}
+
+	return info
+}
+
+// parseCREGExtended parses AT+CREG? extended response for LAC/CellID/act.
+// Format: +CREG: 2,1,"1A2D","003E9E3F",7
+func parseCREGExtended(resp string) *CellInfo {
+	idx := strings.Index(resp, "+CREG:")
+	if idx == -1 {
+		return nil
+	}
+	remainder := strings.TrimSpace(resp[idx+6:])
+	parts := strings.Split(strings.Split(remainder, "\n")[0], ",")
+	info := &CellInfo{}
+
+	if len(parts) >= 4 {
+		info.LAC = strings.Trim(strings.TrimSpace(parts[2]), "\"")
+		info.CellID = strings.Trim(strings.TrimSpace(parts[3]), "\"")
+	}
+	if len(parts) >= 5 {
+		act, _ := strconv.Atoi(strings.TrimSpace(parts[4]))
+		info.NetworkType = actToNetworkType(act)
+	}
+	return info
+}
+
+// parseCREGNetType extracts the access technology from AT+CREG? response.
+func parseCREGNetType(resp string) string {
+	idx := strings.Index(resp, "+CREG:")
+	if idx == -1 {
+		return ""
+	}
+	parts := strings.Split(strings.Split(strings.TrimSpace(resp[idx+6:]), "\n")[0], ",")
+	if len(parts) >= 5 {
+		act, _ := strconv.Atoi(strings.TrimSpace(parts[4]))
+		return actToNetworkType(act)
+	}
+	// Fallback: parse from stat field only (2 fields = basic mode)
+	return ""
+}
+
+// parseCOPSNetType extracts network type from AT+COPS? response.
+// Format: +COPS: 0,0,"OperatorName",7
+func parseCOPSNetType(resp string) string {
+	idx := strings.Index(resp, "+COPS:")
+	if idx == -1 {
+		return ""
+	}
+	parts := strings.Split(resp[idx+6:], ",")
+	if len(parts) >= 4 {
+		act, _ := strconv.Atoi(strings.TrimSpace(strings.Split(parts[3], "\n")[0]))
+		return actToNetworkType(act)
+	}
+	return ""
+}
+
+// actToNetworkType maps 3GPP access technology to human-readable name.
+func actToNetworkType(act int) string {
+	switch act {
+	case 0:
+		return "2G"
+	case 1:
+		return "2G" // GSM Compact
+	case 2:
+		return "3G"
+	case 3:
+		return "2G" // GSM w/ EGPRS
+	case 4:
+		return "3G" // UTRAN w/ HSDPA
+	case 5:
+		return "3G" // UTRAN w/ HSUPA
+	case 6:
+		return "3G" // UTRAN w/ HSDPA+HSUPA
+	case 7:
+		return "LTE"
+	case 8:
+		return "5G" // EC-GSM-IoT
+	default:
+		return ""
+	}
+}
+
+// parseCBM parses a +CBM unsolicited response code (cell broadcast).
+// Format: +CBM: <sn>,<mid>,<dcs>,<page>,<pages>\r\n<data>
+func parseCBM(header, body string) *CellBroadcastMsg {
+	idx := strings.Index(header, "+CBM:")
+	if idx == -1 {
+		return nil
+	}
+	parts := strings.Split(strings.TrimSpace(header[idx+5:]), ",")
+	if len(parts) < 3 {
+		return nil
+	}
+
+	sn, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+	mid, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+
+	msg := &CellBroadcastMsg{
+		SerialNumber: sn,
+		MessageID:    mid,
+		Channel:      mid, // CBS channel = message ID
+		Text:         strings.TrimSpace(body),
+		Severity:     cbsSeverity(mid),
+	}
+	return msg
+}
+
+// cbsSeverity maps CBS message IDs to severity levels.
+// Based on ETSI TS 123 041 and 3GPP TS 23.041.
+func cbsSeverity(mid int) string {
+	switch {
+	case mid >= 4370 && mid <= 4379:
+		return "extreme" // EU-Alert Level 1 / CMAS Presidential
+	case mid >= 4380 && mid <= 4389:
+		return "severe" // EU-Alert Level 2 / CMAS Extreme
+	case mid >= 4390 && mid <= 4395:
+		return "amber" // AMBER Alert
+	case mid == 4396 || mid == 4397:
+		return "test" // Monthly test / exercise
+	case mid >= 4398 && mid <= 4399:
+		return "info" // EU-Alert Level 3 / CMAS Severe
+	case mid == 919:
+		return "test" // ETWS test
+	case mid >= 4352 && mid <= 4359:
+		return "extreme" // ETWS earthquake/tsunami
+	default:
+		return "unknown"
+	}
 }
 
 // findSerialPorts is a glob helper for serial port detection.

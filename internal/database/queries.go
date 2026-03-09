@@ -1509,6 +1509,158 @@ func (db *DB) InsertWebhookLog(direction, url, method string, status int, payloa
 	return err
 }
 
+// ============================================================================
+// SMS Message History
+// ============================================================================
+
+// SMSMessageRecord represents a stored SMS message.
+type SMSMessageRecord struct {
+	ID        int64  `json:"id"`
+	Direction string `json:"direction"` // rx or tx
+	Phone     string `json:"phone"`
+	Text      string `json:"text"`
+	Status    string `json:"status"` // delivered, sent, failed
+	Error     string `json:"error,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+	CreatedAt string `json:"created_at"`
+}
+
+// InsertSMSMessage persists an SMS message (sent or received).
+func (db *DB) InsertSMSMessage(direction, phone, text, status string, timestamp int64) (int64, error) {
+	result, err := db.Exec(
+		`INSERT INTO sms_messages (direction, phone, text, status, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		direction, phone, text, status, timestamp)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// GetSMSMessages returns recent SMS messages.
+func (db *DB) GetSMSMessages(limit, offset int) ([]SMSMessageRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := db.Query(
+		`SELECT id, direction, phone, text, status, error, timestamp, created_at
+		 FROM sms_messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var msgs []SMSMessageRecord
+	for rows.Next() {
+		var m SMSMessageRecord
+		if err := rows.Scan(&m.ID, &m.Direction, &m.Phone, &m.Text, &m.Status, &m.Error, &m.Timestamp, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, nil
+}
+
+// ============================================================================
+// Cell Broadcast Alerts
+// ============================================================================
+
+// CellBroadcast represents a cell broadcast alert (EU-Alert, WEA, CMAS).
+type CellBroadcast struct {
+	ID           int64  `json:"id"`
+	SerialNumber int    `json:"serial_number"`
+	MessageID    int    `json:"message_id"`
+	Channel      int    `json:"channel"`
+	Severity     string `json:"severity"`
+	Text         string `json:"text"`
+	Acknowledged bool   `json:"acknowledged"`
+	Timestamp    int64  `json:"timestamp"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// InsertCellBroadcast persists a cell broadcast alert.
+func (db *DB) InsertCellBroadcast(serialNumber, messageID, channel int, severity, text string, timestamp int64) (int64, error) {
+	result, err := db.Exec(
+		`INSERT INTO cell_broadcasts (serial_number, message_id, channel, severity, text, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+		serialNumber, messageID, channel, severity, text, timestamp)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// GetCellBroadcasts returns recent cell broadcast alerts.
+func (db *DB) GetCellBroadcasts(limit int, unackedOnly bool) ([]CellBroadcast, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := `SELECT id, serial_number, message_id, channel, severity, text, acknowledged, timestamp, created_at
+		FROM cell_broadcasts`
+	if unackedOnly {
+		query += ` WHERE acknowledged = 0`
+	}
+	query += ` ORDER BY timestamp DESC LIMIT ?`
+	rows, err := db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var alerts []CellBroadcast
+	for rows.Next() {
+		var a CellBroadcast
+		var acked int
+		if err := rows.Scan(&a.ID, &a.SerialNumber, &a.MessageID, &a.Channel, &a.Severity, &a.Text, &acked, &a.Timestamp, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		a.Acknowledged = acked != 0
+		alerts = append(alerts, a)
+	}
+	return alerts, nil
+}
+
+// AckCellBroadcast marks a cell broadcast alert as acknowledged.
+func (db *DB) AckCellBroadcast(id int64) error {
+	_, err := db.Exec(`UPDATE cell_broadcasts SET acknowledged = 1 WHERE id = ?`, id)
+	return err
+}
+
+// ============================================================================
+// Cell Tower Info
+// ============================================================================
+
+// CellInfoRecord represents a cell tower info reading.
+type CellInfoRecord struct {
+	ID          int64  `json:"id"`
+	MCC         string `json:"mcc"`
+	MNC         string `json:"mnc"`
+	LAC         string `json:"lac"`
+	CellID      string `json:"cell_id"`
+	NetworkType string `json:"network_type"`
+	RSRP        *int   `json:"rsrp,omitempty"`
+	RSRQ        *int   `json:"rsrq,omitempty"`
+	Timestamp   int64  `json:"timestamp"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// InsertCellInfo persists a cell tower info reading.
+func (db *DB) InsertCellInfo(mcc, mnc, lac, cellID, networkType string, rsrp, rsrq *int, timestamp int64) error {
+	_, err := db.Exec(
+		`INSERT INTO cell_info (mcc, mnc, lac, cell_id, network_type, rsrp, rsrq, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		mcc, mnc, lac, cellID, networkType, rsrp, rsrq, timestamp)
+	return err
+}
+
+// GetLatestCellInfo returns the most recent cell tower info.
+func (db *DB) GetLatestCellInfo() (*CellInfoRecord, error) {
+	var r CellInfoRecord
+	err := db.QueryRow(
+		`SELECT id, mcc, mnc, lac, cell_id, network_type, rsrp, rsrq, timestamp, created_at
+		 FROM cell_info ORDER BY timestamp DESC LIMIT 1`).Scan(
+		&r.ID, &r.MCC, &r.MNC, &r.LAC, &r.CellID, &r.NetworkType, &r.RSRP, &r.RSRQ, &r.Timestamp, &r.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 // GetWebhookLog returns recent webhook activity.
 func (db *DB) GetWebhookLog(limit int) ([]WebhookLogEntry, error) {
 	if limit <= 0 {
