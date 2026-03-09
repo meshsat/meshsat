@@ -5,7 +5,7 @@ import { formatTimeHHMM, formatDuration } from '@/utils/format'
 
 const store = useMeshsatStore()
 const selectedLocationId = ref(null)
-const locationMode = ref('auto') // 'auto', 'gps', 'iridium', or 'custom'
+const locationMode = ref('auto') // 'auto', 'gps', or 'custom'
 const windowHours = ref(24)
 const cacheAgeSec = ref(-1)
 const astroCacheAgeSec = ref(-1)
@@ -69,9 +69,8 @@ watch(minElevDeg, (val) => {
 
 // Location source options for dropdown
 const locationModes = [
-  { value: 'auto', label: 'AUTO', desc: 'GPS > Custom > Iridium' },
-  { value: 'gps', label: 'GPS', desc: 'Meshtastic GPS' },
-  { value: 'iridium', label: 'Iridium', desc: 'AT-MSGEO ~1-100km' },
+  { value: 'auto', label: 'AUTO', desc: 'GPS > Custom' },
+  { value: 'gps', label: 'GPS', desc: 'u-blox GPS receiver' },
   { value: 'custom', label: 'Custom', desc: 'User locations' }
 ]
 
@@ -104,19 +103,6 @@ const activeLocation = computed(() => {
       alt_m: (gps.alt_km || 0) * 1000,
       _source: 'gps',
       _accuracy: gps.accuracy_km
-    }
-    return null
-  }
-
-  if (locationMode.value === 'iridium') {
-    const irid = (sources.sources || []).find(s => s.source === 'iridium')
-    if (irid && irid.lat !== 0) return {
-      name: 'Iridium',
-      lat: irid.lat,
-      lon: irid.lon,
-      alt_m: (irid.alt_km || 0) * 1000,
-      _source: 'iridium',
-      _accuracy: irid.accuracy_km
     }
     return null
   }
@@ -475,7 +461,7 @@ onMounted(async () => {
       <!-- Active location indicator (for auto/gps/iridium modes) -->
       <div v-if="locationMode !== 'custom' && activeLocation" class="flex items-center gap-1.5 text-[11px]">
         <span class="w-2 h-2 rounded-full"
-          :class="activeLocation._source === 'gps' ? 'bg-emerald-400' : activeLocation._source === 'iridium' ? 'bg-teal-400' : 'bg-amber-400'" />
+          :class="activeLocation._source === 'gps' ? 'bg-emerald-400' : 'bg-amber-400'" />
         <span class="text-gray-400">{{ activeLocation.lat?.toFixed(4) }}, {{ activeLocation.lon?.toFixed(4) }}</span>
         <span v-if="activeLocation._accuracy" class="text-gray-600">(~{{ activeLocation._accuracy < 1 ? (activeLocation._accuracy * 1000).toFixed(0) + 'm' : activeLocation._accuracy.toFixed(0) + 'km' }})</span>
       </div>

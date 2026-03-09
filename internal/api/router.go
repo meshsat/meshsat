@@ -138,8 +138,7 @@ func (s *Server) Router() http.Handler {
 		// Iridium mailbox — manual one-shot check
 		r.Post("/iridium/mailbox/check", s.handleManualMailboxCheck)
 
-		// Iridium geolocation + AUTO location resolution
-		r.Get("/iridium/geolocation", s.handleGetIridiumGeolocation)
+		// Location resolution (GPS > Custom)
 		r.Get("/locations/resolved", s.handleGetGeolocationSources)
 
 		// Astrocast LEO satellite passes

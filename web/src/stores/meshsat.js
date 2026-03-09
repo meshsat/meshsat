@@ -454,22 +454,13 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
-  // Location sources (GPS, Iridium, Custom) + AUTO resolution
+  // Location sources (GPS, Custom) + AUTO resolution
   const locationSources = ref(null) // { sources: [...], resolved: { source, lat, lon, ... } }
 
   async function fetchLocationSources() {
     try {
       locationSources.value = await api.get('/locations/resolved')
     } catch { /* location sources unavailable */ }
-  }
-
-  // Iridium geolocation
-  const iridiumGeolocation = ref(null)
-
-  async function fetchIridiumGeolocation() {
-    try {
-      iridiumGeolocation.value = await api.get('/iridium/geolocation')
-    } catch { /* geolocation unavailable */ }
   }
 
   // Astrocast LEO passes
@@ -786,7 +777,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
-    locationSources, iridiumGeolocation,
+    locationSources,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     rules, presets, sosStatus, dlq,
     loading, error,
@@ -802,7 +793,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchIridiumSignalFast, fetchIridiumSignal,
     fetchSignalHistory, fetchGSSHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck, fetchAstrocastPasses, refreshAstrocastTLEs,
-    fetchLocationSources, fetchIridiumGeolocation,
+    fetchLocationSources,
     fetchCellularSignal, fetchCellularStatus, fetchCellularSignalHistory,
     fetchCellularDataStatus, connectCellularData, disconnectCellularData,
     fetchDynDNSStatus, forceDynDNSUpdate,

@@ -11,7 +11,6 @@ const mapError = ref(false)
 const showMessages = ref(true)
 const showTracks = ref(true)
 const showGps = ref(true)
-const showIridium = ref(true)
 const showCustom = ref(true)
 
 // Per-node visibility toggles (reactive map: nodeId → boolean)
@@ -186,7 +185,7 @@ function updateMap() {
     }
   }
 
-  // Location source markers (GPS, Iridium, Custom)
+  // Location source markers (GPS, Custom)
   if (locationLayer) {
     locationLayer.clearLayers()
     const ls = store.locationSources
@@ -194,46 +193,30 @@ function updateMap() {
       for (const src of ls.sources) {
         if (!src.lat || !src.lon) continue
         const isGps = src.source === 'gps'
-        const isIridium = src.source === 'iridium'
 
         // Skip based on layer toggles
         if (isGps && !showGps.value) continue
-        if (isIridium && !showIridium.value) continue
-        if (!isGps && !isIridium && !showCustom.value) continue
+        if (!isGps && !showCustom.value) continue
 
-        const color = isGps ? '#10b981' : isIridium ? '#a855f7' : '#f59e0b'
-        const label = isGps ? 'GPS' : isIridium ? 'Iridium' : 'Custom'
-        const accKm = isIridium ? Math.max(src.accuracy_km || 0, 100) : (src.accuracy_km || 0)
+        const color = isGps ? '#10b981' : '#f59e0b'
+        const label = isGps ? 'GPS' : 'Custom'
+        const accKm = src.accuracy_km || 0
         const accTxt = accKm > 0
           ? (accKm < 1 ? `${(accKm * 1000).toFixed(0)}m` : `${accKm.toFixed(0)}km`)
           : ''
 
         const m = L.circleMarker([src.lat, src.lon], {
-          radius: isGps ? 7 : 10,
+          radius: 7,
           fillColor: color,
-          fillOpacity: isIridium ? 0.4 : 0.25,
+          fillOpacity: 0.25,
           color,
-          weight: 2,
-          dashArray: isIridium ? '4 3' : null
+          weight: 2
         })
         let popup = `<strong>${label} Position</strong><br>`
         popup += `<span style="font-family:monospace;font-size:11px">${src.lat.toFixed(5)}, ${src.lon.toFixed(5)}</span>`
         if (accTxt) popup += `<br>Accuracy: ~${accTxt}`
         m.bindPopup(popup)
         locationLayer.addLayer(m)
-
-        // For Iridium, always draw accuracy circle (min 100km)
-        if (isIridium) {
-          const circle = L.circle([src.lat, src.lon], {
-            radius: accKm * 1000,
-            fillColor: color,
-            fillOpacity: 0.06,
-            color,
-            weight: 1,
-            dashArray: '4 3'
-          })
-          locationLayer.addLayer(circle)
-        }
       }
     }
 
@@ -308,7 +291,6 @@ watch(() => store.messages, debouncedUpdateMap, { deep: true })
 watch(showMessages, updateMap)
 watch(showTracks, updateMap)
 watch(showGps, updateMap)
-watch(showIridium, updateMap)
 watch(showCustom, updateMap)
 
 onMounted(async () => {
@@ -374,11 +356,6 @@ onUnmounted(() => {
           <input type="checkbox" v-model="showGps" class="rounded bg-gray-800 border-gray-600 text-emerald-500 focus:ring-0 w-3 h-3" />
           <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
           GPS
-        </label>
-        <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
-          <input type="checkbox" v-model="showIridium" class="rounded bg-gray-800 border-gray-600 text-purple-500 focus:ring-0 w-3 h-3" />
-          <span class="w-2 h-2 rounded-full bg-purple-400"></span>
-          Iridium
         </label>
         <label class="flex items-center gap-1.5 cursor-pointer text-gray-400 hover:text-gray-200">
           <input type="checkbox" v-model="showCustom" class="rounded bg-gray-800 border-gray-600 text-amber-500 focus:ring-0 w-3 h-3" />

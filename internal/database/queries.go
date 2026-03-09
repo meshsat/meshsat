@@ -1218,7 +1218,7 @@ func (db *DB) GetLatestGPSPosition() (*GeolocationRecord, error) {
 	}, nil
 }
 
-// GetAllGeolocationSources returns the latest reading from each source (gps, iridium).
+// GetAllGeolocationSources returns the latest reading from each available source.
 func (db *DB) GetAllGeolocationSources() ([]GeolocationRecord, error) {
 	var results []GeolocationRecord
 
@@ -1232,12 +1232,6 @@ func (db *DB) GetAllGeolocationSources() ([]GeolocationRecord, error) {
 		if err2 == nil && meshGPS != nil {
 			results = append(results, *meshGPS)
 		}
-	}
-
-	// Latest Iridium geolocation
-	iridium, err := db.GetLatestGeolocation("iridium")
-	if err == nil && iridium != nil {
-		results = append(results, *iridium)
 	}
 
 	return results, nil

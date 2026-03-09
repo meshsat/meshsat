@@ -925,6 +925,10 @@ func buildMeshPacket(decodedData []byte, to uint32, channel uint32) []byte {
 	pkt = appendVarint(pkt, uint64(len(decodedData)))
 	pkt = append(pkt, decodedData...)
 
+	// field 7 (rx_time): current UTC timestamp so receiving nodes display correct time
+	pkt = append(pkt, 0x3D) // field 7, wire type 5 (fixed32)
+	pkt = appendFixed32(pkt, uint32(time.Now().Unix()))
+
 	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
 	pkt = appendVarint(pkt, 3)
 
@@ -955,6 +959,9 @@ func buildRawPacket(payload []byte, portnum int, to uint32, channel uint32, want
 	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited
 	pkt = appendVarint(pkt, uint64(len(data)))
 	pkt = append(pkt, data...)
+	// field 7 (rx_time): current UTC timestamp
+	pkt = append(pkt, 0x3D) // field 7, wire type 5 (fixed32)
+	pkt = appendFixed32(pkt, uint32(time.Now().Unix()))
 	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
 	pkt = appendVarint(pkt, 3)
 	if wantAck {
@@ -999,13 +1006,13 @@ func buildAdminReboot(myNodeNum, destNode uint32, delaySecs int) []byte {
 }
 
 // buildAdminSetTime builds a ToRadio with AdminMessage field 99 (set_time_unixsec).
-// Sends the current UTC time as a fixed32 to the local node so it can stamp packets correctly.
-func buildAdminSetTime(myNodeNum uint32, unixSec uint32) []byte {
+// Sends the current UTC time as a fixed32 to the specified destination node.
+func buildAdminSetTime(myNodeNum, destNode uint32, unixSec uint32) []byte {
 	admin := make([]byte, 0, 16)
 	// field 99, wire type 5 (fixed32) → (99 << 3) | 5 = 797
 	admin = appendVarint(admin, uint64(AdminFieldSetTimeUnixSec)<<3|5)
 	admin = appendFixed32(admin, unixSec)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	return buildAdminToRadio(myNodeNum, destNode, admin)
 }
 
 // buildAdminFactoryReset builds a ToRadio with AdminMessage field 94.

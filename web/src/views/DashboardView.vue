@@ -230,7 +230,6 @@ function schedulerBadgeClass(mode) {
 // Location sources
 const locationResolved = computed(() => store.locationSources?.resolved || null)
 const locationGps = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'gps'))
-const locationIridium = computed(() => (store.locationSources?.sources || []).find(s => s.source === 'iridium'))
 
 
 // Credits from store
@@ -1142,7 +1141,7 @@ function widgetGridClass(id) {
           </div>
           <span v-if="locationResolved"
             class="text-[9px] font-mono px-1.5 py-0.5 rounded"
-            :class="locationResolved.source === 'gps' ? 'bg-emerald-400/10 text-emerald-400' : locationResolved.source === 'iridium' ? 'bg-teal-400/10 text-teal-400' : 'bg-amber-400/10 text-amber-400'">
+            :class="locationResolved.source === 'gps' ? 'bg-emerald-400/10 text-emerald-400' : 'bg-amber-400/10 text-amber-400'">
             {{ locationResolved.source.toUpperCase() }}
           </span>
           <span v-else class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500">NO FIX</span>
@@ -1169,17 +1168,6 @@ function widgetGridClass(id) {
             <span v-if="gpsFix && locationGps" class="text-gray-300 font-mono text-[10px]">
               {{ locationGps.lat.toFixed(4) }}, {{ locationGps.lon.toFixed(4) }}
               <span class="text-gray-600 ml-1">~{{ formatAccuracy(locationGps.accuracy_km) }}</span>
-            </span>
-            <span v-else class="text-gray-600 font-mono">No fix</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <div class="flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 rounded-full" :class="locationIridium ? 'bg-teal-400' : 'bg-gray-600'" />
-              <span class="text-gray-500">Iridium</span>
-            </div>
-            <span v-if="locationIridium" class="text-gray-300 font-mono text-[10px]">
-              {{ locationIridium.lat.toFixed(4) }}, {{ locationIridium.lon.toFixed(4) }}
-              <span class="text-gray-600 ml-1">~{{ formatAccuracy(locationIridium.accuracy_km) }}</span>
             </span>
             <span v-else class="text-gray-600 font-mono">No fix</span>
           </div>

@@ -606,22 +606,55 @@ func (t *DirectMeshTransport) handleTelemetryPacket(pkt *ProtoMeshPacket) {
 	})
 }
 
-// sendTimeSync pushes the current UTC time to the local Meshtastic radio via
+// sendTimeSync pushes the current UTC time to ALL mesh nodes via
 // AdminMessage.set_time_unixsec (field 99). This is critical for devices without
-// GPS (like indoor T-Echo) — without it, timestamps display as hours/days off.
+// GPS (like indoor T-Echo/T-Deck) — without it, timestamps display as hours/days off.
+// Syncs local node first, then all known remote nodes.
 func (t *DirectMeshTransport) sendTimeSync() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
+		t.mu.Unlock()
 		return
 	}
+	myNode := t.myNodeNum
+	t.mu.Unlock()
+
 	now := uint32(time.Now().Unix())
-	frame := buildAdminSetTime(t.myNodeNum, now)
-	if err := sendFrame(t.file, frame); err != nil {
-		log.Warn().Err(err).Msg("meshtastic time sync failed")
+
+	// Sync local node first
+	frame := buildAdminSetTime(myNode, myNode, now)
+	t.mu.Lock()
+	err := sendFrame(t.file, frame)
+	t.mu.Unlock()
+	if err != nil {
+		log.Warn().Err(err).Msg("meshtastic time sync (local) failed")
 		return
 	}
-	log.Info().Uint32("unix_sec", now).Msg("meshtastic time synced to radio")
+	log.Info().Uint32("unix_sec", now).Msg("meshtastic time synced to local radio")
+
+	// Sync all known remote nodes (via LoRa relay)
+	t.nodesMu.RLock()
+	var remoteNodes []uint32
+	for num := range t.nodes {
+		if num != myNode {
+			remoteNodes = append(remoteNodes, num)
+		}
+	}
+	t.nodesMu.RUnlock()
+
+	for _, nodeNum := range remoteNodes {
+		frame = buildAdminSetTime(myNode, nodeNum, now)
+		t.mu.Lock()
+		err = sendFrame(t.file, frame)
+		t.mu.Unlock()
+		if err != nil {
+			log.Warn().Err(err).Uint32("node", nodeNum).Msg("meshtastic time sync (remote) failed")
+			continue
+		}
+		log.Info().Uint32("node", nodeNum).Uint32("unix_sec", now).Msg("meshtastic time synced to remote node")
+		// Small delay between admin messages to avoid flooding
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func (t *DirectMeshTransport) sendHeartbeat() {

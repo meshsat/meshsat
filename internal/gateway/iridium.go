@@ -265,43 +265,8 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 					Int("mt_queued", result.MTQueued).Msg("iridium: MT available, piggybacking receive")
 				go g.handleRingAlert(ctx)
 			}
-
-			// Opportunistic geolocation: after successful SBD session, query AT-MSGEO
-			go g.captureGeolocation(ctx)
 		}
 	}
-}
-
-// captureGeolocation fetches the Iridium-derived geolocation after a successful SBD session
-// and stores it in the database. AT-MSGEO is only valid after a recent SBD session.
-func (g *IridiumGateway) captureGeolocation(ctx context.Context) {
-	if g.db == nil {
-		return
-	}
-	geo, err := g.sat.GetGeolocation(ctx)
-	if err != nil {
-		log.Debug().Err(err).Msg("iridium: geolocation unavailable")
-		return
-	}
-	if geo.Lat == 0 && geo.Lon == 0 {
-		return // no fix
-	}
-	ts := time.Now().Unix()
-	if geo.Timestamp != "" {
-		if t, err := time.Parse(time.RFC3339, geo.Timestamp); err == nil {
-			ts = t.Unix()
-		}
-	}
-	// Sanitize altitude: AT-MSGEO can return satellite altitude (~780-5000km)
-	altKm := geo.AltKm
-	if altKm > 10.0 || altKm < -1.0 {
-		altKm = 0.0
-	}
-	if err := g.db.InsertGeolocation("iridium", geo.Lat, geo.Lon, altKm, geo.Accuracy, ts); err != nil {
-		log.Warn().Err(err).Msg("iridium: failed to store geolocation")
-		return
-	}
-	log.Info().Float64("lat", geo.Lat).Float64("lon", geo.Lon).Float64("accuracy_km", geo.Accuracy).Msg("iridium: geolocation captured")
 }
 
 // canSendPlaintext returns true if a message can be sent as readable ASCII text

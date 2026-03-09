@@ -285,8 +285,8 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 	// Also include custom locations
 	customLocs, _ := s.db.GetIridiumLocations()
 
-	// AUTO resolution: GPS > Builtin/Custom > Iridium
-	// Iridium geolocation (~10-100km accuracy) is less reliable than known locations.
+	// AUTO resolution: GPS > Custom (Iridium geolocation removed — it returns
+	// satellite sub-point, not ground station position, making it useless).
 	var resolved *resolvedLocation
 	for _, src := range sources {
 		if src.Source == "gps" && src.Lat != 0 && src.Lon != 0 {
@@ -312,21 +312,6 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 			AccuracyKm: 0,
 		}
 	}
-	if resolved == nil {
-		for _, src := range sources {
-			if src.Source == "iridium" && src.Lat != 0 && src.Lon != 0 {
-				resolved = &resolvedLocation{
-					Source:     "iridium",
-					Lat:        src.Lat,
-					Lon:        src.Lon,
-					AltKm:      src.AltKm,
-					AccuracyKm: src.AccuracyKm,
-					Timestamp:  src.Timestamp,
-				}
-				break
-			}
-		}
-	}
 
 	resp := map[string]interface{}{
 		"sources": sources,
@@ -346,25 +331,6 @@ type resolvedLocation struct {
 	AltKm      float64 `json:"alt_km"`
 	AccuracyKm float64 `json:"accuracy_km"`
 	Timestamp  int64   `json:"timestamp,omitempty"`
-}
-
-// handleGetIridiumGeolocation returns the latest Iridium-derived geolocation.
-func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Request) {
-	rec, err := s.db.GetLatestGeolocation("iridium")
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"available": false,
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"available":   true,
-		"lat":         rec.Lat,
-		"lon":         rec.Lon,
-		"alt_km":      rec.AltKm,
-		"accuracy_km": rec.AccuracyKm,
-		"timestamp":   rec.Timestamp,
-	})
 }
 
 // handleManualMailboxCheck triggers a one-shot mailbox check.
