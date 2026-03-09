@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 const (
@@ -30,7 +31,7 @@ type DirectSatTransport struct {
 	port string // "/dev/ttyUSB1" or "auto"
 
 	mu        sync.Mutex
-	file      *os.File
+	file      serial.Port
 	connected bool
 	imei      string
 	model     string
@@ -126,67 +127,67 @@ func (t *DirectSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 }
 
 func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
-	port := t.port
-	if port == "" || port == "auto" {
+	portPath := t.port
+	if portPath == "" || portPath == "auto" {
 		exclude := t.excludePort
 		if t.excludePortFn != nil {
 			if resolved := t.excludePortFn(); resolved != "" && resolved != "auto" {
 				exclude = resolved
 			}
 		}
-		port = autoDetectIridium(exclude)
-		if port == "" {
+		portPath = autoDetectIridium(exclude)
+		if portPath == "" {
 			return fmt.Errorf("no Iridium modem found")
 		}
 	}
 
-	file, err := openSerial(port, iridiumBaud)
+	sp, err := openSerial(portPath, iridiumBaud)
 	if err != nil {
 		return err
 	}
 
-	t.file = file
-	t.port = port
+	t.file = sp
+	t.port = portPath
 
 	// Drain any stale data from the serial buffer before first command
-	drainPort(file)
+	drainPort(sp)
 
 	// Initialize modem
 	// AT&K0 — disable flow control
-	if _, err := sendAT(file, "AT&K0", iridiumReadTimeout); err != nil {
-		file.Close()
+	if _, err := sendAT(sp, "AT&K0", iridiumReadTimeout); err != nil {
+		sp.Close()
 		return fmt.Errorf("AT&K0 failed: %w", err)
 	}
 	// ATE0 — disable command echo (reduces response parsing noise)
-	sendAT(file, "ATE0", iridiumReadTimeout)
+	sendAT(sp, "ATE0", iridiumReadTimeout)
 	// AT&D0 — ignore DTR
-	sendAT(file, "AT&D0", iridiumReadTimeout)
+	sendAT(sp, "AT&D0", iridiumReadTimeout)
 	// AT — basic check
-	resp, err := sendAT(file, "AT", iridiumReadTimeout)
+	resp, err := sendAT(sp, "AT", iridiumReadTimeout)
 	if err != nil || !strings.Contains(resp, "OK") {
-		file.Close()
+		sp.Close()
 		return fmt.Errorf("AT check failed")
 	}
 	// AT+CGSN — get IMEI
-	resp, err = sendAT(file, "AT+CGSN", iridiumReadTimeout)
+	resp, err = sendAT(sp, "AT+CGSN", iridiumReadTimeout)
 	if err == nil {
 		t.imei = parseATValue(resp)
 	}
 	// AT+CGMM — get model
-	resp, err = sendAT(file, "AT+CGMM", iridiumReadTimeout)
+	resp, err = sendAT(sp, "AT+CGMM", iridiumReadTimeout)
 	if err == nil {
 		t.model = parseATValue(resp)
 	}
 	// AT+SBDMTA=1 — enable ring alert indications
-	sendAT(file, "AT+SBDMTA=1", iridiumReadTimeout)
+	sendAT(sp, "AT+SBDMTA=1", iridiumReadTimeout)
 	// Clear MO and MT buffers — prevents stale data from previous sessions
 	// triggering endless SBDIX resend loops
-	sendAT(file, "AT+SBDD0", iridiumReadTimeout) // clear MO
-	sendAT(file, "AT+SBDD1", iridiumReadTimeout) // clear MT
+	sendAT(sp, "AT+SBDD0", iridiumReadTimeout) // clear MO
+	sendAT(sp, "AT+SBDD1", iridiumReadTimeout) // clear MT
 
 	t.connected = true
 	t.lastSBDIX = time.Now() // prevent stale SBDIX from firing immediately after connect
-	log.Info().Str("port", port).Str("imei", t.imei).Str("model", t.model).Msg("iridium modem connected")
+	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).Msg("iridium modem connected")
 
 	t.emitEvent(SatEvent{
 		Type:    "connected",
@@ -285,16 +286,15 @@ func (t *DirectSatTransport) monitorLoop() {
 			return
 		}
 
-		// Read under lock with 100ms deadline — releases lock quickly on timeout
-		t.file.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		// Read under lock with 100ms timeout — releases lock quickly
+		t.file.SetReadTimeout(100 * time.Millisecond)
 		n, err := t.file.Read(buf)
-		t.file.SetDeadline(time.Time{})
 		t.mu.Unlock()
 
+		if n == 0 && err == nil {
+			continue // read timeout, no data
+		}
 		if err != nil {
-			if isTimeoutError(err) {
-				continue
-			}
 			select {
 			case <-t.stopRingCh:
 				return
@@ -517,13 +517,13 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	}
 
 	// Send AT+SBDRB
-	if _, err := t.file.WriteString("AT+SBDRB\r"); err != nil {
+	if _, err := t.file.Write([]byte("AT+SBDRB\r")); err != nil {
 		return nil, fmt.Errorf("write failed: %w", err)
 	}
 
-	// Read binary response
-	t.file.SetDeadline(time.Now().Add(5 * time.Second))
-	defer t.file.SetDeadline(time.Time{})
+	// Read binary response with 5s timeout
+	t.file.SetReadTimeout(5 * time.Second)
+	defer t.file.SetReadTimeout(100 * time.Millisecond) // restore monitor timeout
 
 	var all []byte
 	buf := make([]byte, 512)
@@ -535,10 +535,10 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 				break
 			}
 		}
+		if n == 0 && err == nil && len(all) >= 4 {
+			break // timeout with enough data
+		}
 		if err != nil {
-			if isTimeoutError(err) && len(all) >= 4 {
-				break
-			}
 			if len(all) < 4 {
 				return nil, fmt.Errorf("binary read failed: %w", err)
 			}

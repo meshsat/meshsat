@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -143,15 +142,19 @@ func (g *GPSReader) autoDetectGPS() string {
 	return ""
 }
 
-func (g *GPSReader) readLoop(ctx context.Context, port string) {
-	file, err := openSerial(port, gpsBaud)
+func (g *GPSReader) readLoop(ctx context.Context, portPath string) {
+	sp, err := openSerial(portPath, gpsBaud)
 	if err != nil {
-		log.Error().Err(err).Str("port", port).Msg("gps: failed to open serial")
+		log.Error().Err(err).Str("port", portPath).Msg("gps: failed to open serial")
 		return
 	}
-	defer file.Close()
+	defer sp.Close()
 
-	scanner := bufio.NewScanner(file)
+	// Set read timeout so scanner returns periodically for ctx/ticker checks.
+	// When Read returns n=0,err=nil (timeout), Scanner.Scan() returns false
+	// with nil error — we recreate the scanner and loop.
+	sp.SetReadTimeout(gpsReadTimeout)
+	scanner := bufio.NewScanner(sp)
 	storeTicker := time.NewTicker(gpsPollPeriod)
 	defer storeTicker.Stop()
 
@@ -169,19 +172,16 @@ func (g *GPSReader) readLoop(ctx context.Context, port string) {
 		default:
 		}
 
-		file.SetReadDeadline(time.Now().Add(gpsReadTimeout))
 		if !scanner.Scan() {
 			if ctx.Err() != nil {
 				return
 			}
 			if err := scanner.Err(); err != nil {
-				if !os.IsTimeout(err) {
-					log.Warn().Err(err).Msg("gps: serial read error")
-					return
-				}
+				log.Warn().Err(err).Msg("gps: serial read error")
+				return
 			}
-			// Reset scanner after timeout
-			scanner = bufio.NewScanner(file)
+			// Scan returned false with nil error = read timeout (no data)
+			scanner = bufio.NewScanner(sp)
 			continue
 		}
 

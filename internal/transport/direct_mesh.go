@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 const (
@@ -30,7 +30,7 @@ type DirectMeshTransport struct {
 	port string // "/dev/ttyACM0" or "auto"
 
 	mu        sync.RWMutex
-	file      *os.File
+	file      serial.Port
 	reader    *meshFrameReader
 	connected bool
 
@@ -129,35 +129,38 @@ func (t *DirectMeshTransport) Subscribe(ctx context.Context) (<-chan MeshEvent, 
 }
 
 func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
-	port := t.port
-	if port == "" || port == "auto" {
-		port = autoDetectMeshtastic()
-		if port == "" {
+	portPath := t.port
+	if portPath == "" || portPath == "auto" {
+		portPath = autoDetectMeshtastic()
+		if portPath == "" {
 			return fmt.Errorf("no Meshtastic device found")
 		}
 	}
 
-	file, err := openSerial(port, meshBaud)
+	sp, err := openSerial(portPath, meshBaud)
 	if err != nil {
 		return err
 	}
 
-	t.file = file
-	t.reader = &meshFrameReader{file: file}
-	t.port = port
-	log.Info().Str("port", port).Msg("meshtastic serial opened")
+	// Set read timeout for frame reader loop
+	sp.SetReadTimeout(meshReadTimeout)
+
+	t.file = sp
+	t.reader = &meshFrameReader{port: sp}
+	t.port = portPath
+	log.Info().Str("port", portPath).Msg("meshtastic serial opened")
 
 	// Wake device
-	if err := wakeDevice(file); err != nil {
-		file.Close()
+	if err := wakeDevice(sp); err != nil {
+		sp.Close()
 		return err
 	}
 
 	// Config handshake — send want_config_id
 	t.configID = uint32(time.Now().UnixNano() & 0xFFFFFFFF)
 	configReq := buildWantConfigID(t.configID)
-	if err := sendFrame(file, configReq); err != nil {
-		file.Close()
+	if err := sendFrame(sp, configReq); err != nil {
+		sp.Close()
 		return fmt.Errorf("send want_config_id: %w", err)
 	}
 	log.Info().Uint32("config_id", t.configID).Msg("meshtastic config handshake started")

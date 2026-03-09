@@ -7,12 +7,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 // Meshtastic serial framing constants
@@ -25,34 +25,33 @@ const (
 	meshReadTimeout      = 500 * time.Millisecond
 )
 
-// openSerial opens a serial port and configures it via stty.
-func openSerial(path string, baud int) (*os.File, error) {
-	// Configure port via stty (raw mode, 8N1, no flow control)
-	cmd := exec.Command("stty", "-F", path,
-		fmt.Sprintf("%d", baud),
-		"raw", "-echo", "-echoe", "-echok",
-		"cs8", "-cstopb", "-parenb", "-crtscts", "-hupcl",
-		"min", "1", "time", "1",
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("stty %s: %s: %w", path, strings.TrimSpace(string(out)), err)
+// openSerial opens and configures a serial port using go.bug.st/serial (pure Go, no stty).
+func openSerial(path string, baud int) (serial.Port, error) {
+	mode := &serial.Mode{
+		BaudRate: baud,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
 	}
 
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	port, err := serial.Open(path, mode)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	return file, nil
+	// Default read timeout — callers override as needed
+	port.SetReadTimeout(100 * time.Millisecond)
+
+	return port, nil
 }
 
 // wakeDevice sends the Meshtastic wake sequence (32 bytes of 0xC3).
-func wakeDevice(file *os.File) error {
+func wakeDevice(port serial.Port) error {
 	wake := make([]byte, meshWakeLen)
 	for i := range wake {
 		wake[i] = meshStart2
 	}
-	if _, err := file.Write(wake); err != nil {
+	if _, err := port.Write(wake); err != nil {
 		return fmt.Errorf("wake write: %w", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -60,7 +59,7 @@ func wakeDevice(file *os.File) error {
 }
 
 // sendFrame sends a Meshtastic framed packet: [0x94][0xC3][len_msb][len_lsb][payload].
-func sendFrame(file *os.File, payload []byte) error {
+func sendFrame(port serial.Port, payload []byte) error {
 	if len(payload) > meshMaxPayload {
 		return fmt.Errorf("payload too large (%d > %d)", len(payload), meshMaxPayload)
 	}
@@ -71,14 +70,14 @@ func sendFrame(file *os.File, payload []byte) error {
 		byte(len(payload) & 0xFF),
 	}
 	buf := append(header, payload...)
-	_, err := file.Write(buf)
+	_, err := port.Write(buf)
 	return err
 }
 
 // meshFrameReader maintains a persistent accumulation buffer for extracting
 // complete Meshtastic protobuf frames from a serial stream.
 type meshFrameReader struct {
-	file  *os.File
+	port  serial.Port
 	accum []byte
 }
 
@@ -99,17 +98,13 @@ func (r *meshFrameReader) readFrame(ctx context.Context) ([]byte, error) {
 			return payload, nil
 		}
 
-		// Set read deadline so file.Read() cannot block forever
-		r.file.SetReadDeadline(time.Now().Add(meshReadTimeout))
-		n, err := r.file.Read(buf)
-		if err != nil {
-			if os.IsTimeout(err) {
-				continue
-			}
-			return nil, err
+		// Read with timeout (set during port init) so we can check ctx
+		n, err := r.port.Read(buf)
+		if n == 0 && err == nil {
+			continue // read timeout, no data
 		}
-		if n == 0 {
-			continue
+		if err != nil {
+			return nil, err
 		}
 
 		r.accum = append(r.accum, buf[:n]...)
@@ -171,37 +166,34 @@ func findStartMarker(data []byte) int {
 
 // sendAT sends an AT command and reads the response until OK/ERROR/READY.
 // Used by Iridium direct transport. Caller must hold any relevant mutex.
-func sendAT(file *os.File, command string, timeout time.Duration) (string, error) {
+func sendAT(port serial.Port, command string, timeout time.Duration) (string, error) {
 	// Drain pending data
-	drainPort(file)
+	drainPort(port)
 
 	// Send command with CR (no LF — Iridium protocol)
-	if _, err := file.WriteString(command + "\r"); err != nil {
+	if _, err := port.Write([]byte(command + "\r")); err != nil {
 		return "", fmt.Errorf("write failed: %w", err)
 	}
 
-	return readATResponse(file, timeout)
+	return readATResponse(port, timeout)
 }
 
 // readATResponse reads until "OK" or "ERROR" is found, or timeout expires.
-func readATResponse(file *os.File, timeout time.Duration) (string, error) {
+func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var resp strings.Builder
 	buf := make([]byte, 256)
 
+	// Use 50ms read slices for responsive timeout checking
+	port.SetReadTimeout(50 * time.Millisecond)
+
 	for {
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return resp.String(), fmt.Errorf("read timeout")
 		}
 
-		// Short slices for responsive timeout checking
-		sliceEnd := time.Now().Add(50 * time.Millisecond)
-		if sliceEnd.After(deadline) {
-			sliceEnd = deadline
-		}
-		file.SetDeadline(sliceEnd)
-		n, err := file.Read(buf)
-		file.SetDeadline(time.Time{})
+		n, err := port.Read(buf)
 
 		if n > 0 {
 			resp.Write(buf[:n])
@@ -216,37 +208,22 @@ func readATResponse(file *os.File, timeout time.Duration) (string, error) {
 			}
 		}
 
-		if err != nil && !isTimeoutError(err) {
+		if err != nil {
 			return resp.String(), err
 		}
 	}
 }
 
 // drainPort clears any pending data from the serial port.
-func drainPort(file *os.File) {
-	file.SetDeadline(time.Now().Add(100 * time.Millisecond))
+func drainPort(port serial.Port) {
+	port.SetReadTimeout(100 * time.Millisecond)
 	buf := make([]byte, 1024)
 	for {
-		n, err := file.Read(buf)
-		if n == 0 || err != nil {
+		n, _ := port.Read(buf)
+		if n == 0 {
 			break
 		}
 	}
-	file.SetDeadline(time.Time{})
-}
-
-// isTimeoutError checks if an error is a timeout.
-func isTimeoutError(err error) bool {
-	if os.IsTimeout(err) {
-		return true
-	}
-	type timeouter interface {
-		Timeout() bool
-	}
-	if te, ok := err.(timeouter); ok {
-		return te.Timeout()
-	}
-	return false
 }
 
 // ============================================================================
@@ -363,19 +340,19 @@ func autoDetectIridium(excludePort string) string {
 }
 
 // probeAT sends a quick AT handshake to check if a port is an AT modem.
-func probeAT(port string) bool {
-	file, err := openSerial(port, 19200)
+func probeAT(portPath string) bool {
+	port, err := openSerial(portPath, 19200)
 	if err != nil {
 		return false
 	}
-	defer file.Close()
+	defer port.Close()
 
 	// Try AT&K0 (disable flow control) then AT
-	resp, err := sendAT(file, "AT&K0", 2*time.Second)
+	resp, err := sendAT(port, "AT&K0", 2*time.Second)
 	if err == nil && strings.Contains(resp, "OK") {
 		return true
 	}
 
-	resp, err = sendAT(file, "AT", 2*time.Second)
+	resp, err = sendAT(port, "AT", 2*time.Second)
 	return err == nil && strings.Contains(resp, "OK")
 }

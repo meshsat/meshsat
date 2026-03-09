@@ -8,10 +8,12 @@ require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/rs/zerolog v1.34.0
+	go.bug.st/serial v1.6.4
 	modernc.org/sqlite v1.46.1
 )
 
 require (
+	github.com/creack/goselect v0.1.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

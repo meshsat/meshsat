@@ -6,13 +6,13 @@ package transport
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 const (
@@ -36,7 +36,7 @@ type DirectAstrocastTransport struct {
 	port string // "/dev/ttyUSB2" or "auto"
 
 	mu        sync.Mutex
-	file      *os.File
+	file      serial.Port
 	connected bool
 
 	// Event subscribers
@@ -282,28 +282,28 @@ func (t *DirectAstrocastTransport) connectLocked(ctx context.Context) error {
 		}
 	}
 
-	file, err := openSerial(port, astroDefaultBaud)
+	sp, err := openSerial(port, astroDefaultBaud)
 	if err != nil {
 		return err
 	}
 
-	t.file = file
+	t.file = sp
 	t.port = port
 
 	// Drain stale data
-	drainPort(file)
+	drainPort(sp)
 
 	// Probe: read event register to verify communication
 	evtFrame := EncodeAstroFrame(AstroCmdEvtRR, nil)
-	if _, err := file.Write(evtFrame); err != nil {
-		file.Close()
+	if _, err := sp.Write(evtFrame); err != nil {
+		sp.Close()
 		t.file = nil
 		return fmt.Errorf("EVT_RR probe write: %w", err)
 	}
 
 	resp, err := t.readFrameLocked(astroFrameTimeout)
 	if err != nil {
-		file.Close()
+		sp.Close()
 		t.file = nil
 		return fmt.Errorf("EVT_RR probe read: %w", err)
 	}
@@ -450,18 +450,14 @@ func (t *DirectAstrocastTransport) readFrameLocked(timeout time.Duration) (*Astr
 	var accum []byte
 	buf := make([]byte, astroMaxReadBuf)
 
+	t.file.SetReadTimeout(100 * time.Millisecond)
+
 	for {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("frame read timeout")
 		}
 
-		sliceEnd := time.Now().Add(100 * time.Millisecond)
-		if sliceEnd.After(deadline) {
-			sliceEnd = deadline
-		}
-		t.file.SetDeadline(sliceEnd)
 		n, err := t.file.Read(buf)
-		t.file.SetDeadline(time.Time{})
 
 		if n > 0 {
 			accum = append(accum, buf[:n]...)
@@ -472,7 +468,10 @@ func (t *DirectAstrocastTransport) readFrameLocked(timeout time.Duration) (*Astr
 			}
 		}
 
-		if err != nil && !isTimeoutError(err) {
+		if n == 0 && err == nil {
+			continue // read timeout, no data
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -588,18 +587,18 @@ func autoDetectAstrocast(excludePorts []string) string {
 }
 
 // probeAstronode sends an EVT_RR command to check if a port is an Astronode S module.
-func probeAstronode(port string) bool {
-	file, err := openSerial(port, astroDefaultBaud)
+func probeAstronode(portPath string) bool {
+	sp, err := openSerial(portPath, astroDefaultBaud)
 	if err != nil {
 		return false
 	}
-	defer file.Close()
+	defer sp.Close()
 
-	drainPort(file)
+	drainPort(sp)
 
 	// Send EVT_RR (read event register) — benign probe
 	frame := EncodeAstroFrame(AstroCmdEvtRR, nil)
-	if _, err := file.Write(frame); err != nil {
+	if _, err := sp.Write(frame); err != nil {
 		return false
 	}
 
@@ -608,10 +607,9 @@ func probeAstronode(port string) bool {
 	var accum []byte
 	buf := make([]byte, 128)
 
+	sp.SetReadTimeout(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		file.SetDeadline(time.Now().Add(200 * time.Millisecond))
-		n, err := file.Read(buf)
-		file.SetDeadline(time.Time{})
+		n, err := sp.Read(buf)
 
 		if n > 0 {
 			accum = append(accum, buf[:n]...)
@@ -630,7 +628,7 @@ func probeAstronode(port string) bool {
 			}
 		}
 
-		if err != nil && !isTimeoutError(err) {
+		if err != nil {
 			return false
 		}
 	}

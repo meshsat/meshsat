@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 )
 
 const (
@@ -42,7 +42,7 @@ type DirectCellTransport struct {
 	port string // "/dev/ttyUSB2" or "auto"
 
 	mu        sync.Mutex
-	file      *os.File
+	file      serial.Port
 	connected bool
 	imei      string
 	model     string
@@ -129,8 +129,8 @@ func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, 
 }
 
 func (t *DirectCellTransport) connectLocked(_ context.Context) error {
-	port := t.port
-	if port == "" || port == "auto" {
+	portPath := t.port
+	if portPath == "" || portPath == "auto" {
 		// Resolve dynamic exclude ports from other transports
 		excludes := make([]string, 0, len(t.excludePorts)+len(t.excludePortFns))
 		for _, fn := range t.excludePortFns {
@@ -139,60 +139,60 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 			}
 		}
 		excludes = append(excludes, t.excludePorts...)
-		port = autoDetectCellular(excludes)
-		if port == "" {
+		portPath = autoDetectCellular(excludes)
+		if portPath == "" {
 			return fmt.Errorf("no cellular modem found")
 		}
 	}
 
-	file, err := openSerial(port, cellBaud)
+	sp, err := openSerial(portPath, cellBaud)
 	if err != nil {
 		return err
 	}
 
-	t.file = file
-	t.port = port
+	t.file = sp
+	t.port = portPath
 
 	// Initialize modem
 	// ATE0 — disable echo
-	sendAT(file, "ATE0", cellATTimeout)
+	sendAT(sp, "ATE0", cellATTimeout)
 	// AT&K0 — disable flow control
-	sendAT(file, "AT&K0", cellATTimeout)
+	sendAT(sp, "AT&K0", cellATTimeout)
 	// AT — basic check
-	resp, err := sendAT(file, "AT", cellATTimeout)
+	resp, err := sendAT(sp, "AT", cellATTimeout)
 	if err != nil || !strings.Contains(resp, "OK") {
-		file.Close()
+		sp.Close()
 		return fmt.Errorf("AT check failed")
 	}
 	// AT+CGSN — get IMEI
-	resp, err = sendAT(file, "AT+CGSN", cellATTimeout)
+	resp, err = sendAT(sp, "AT+CGSN", cellATTimeout)
 	if err == nil {
 		t.imei = parseATValue(resp)
 	}
 	// AT+CGMM — get model
-	resp, err = sendAT(file, "AT+CGMM", cellATTimeout)
+	resp, err = sendAT(sp, "AT+CGMM", cellATTimeout)
 	if err == nil {
 		t.model = parseATValue(resp)
 	}
 	// AT+CMGF=1 — text mode SMS
-	resp, err = sendAT(file, "AT+CMGF=1", cellATTimeout)
+	resp, err = sendAT(sp, "AT+CMGF=1", cellATTimeout)
 	if err != nil || strings.Contains(resp, "ERROR") {
 		log.Warn().Msg("cellular: SMS text mode not supported, SMS will not work")
 	}
 	// AT+CNMI=2,1,0,0,0 — SMS notification (unsolicited +CMTI)
-	sendAT(file, "AT+CNMI=2,1,0,0,0", cellATTimeout)
+	sendAT(sp, "AT+CNMI=2,1,0,0,0", cellATTimeout)
 	// AT+CPIN? — SIM status
-	resp, _ = sendAT(file, "AT+CPIN?", cellATTimeout)
+	resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
 	t.simState = parseCPIN(resp)
 	// AT+CREG? — registration
-	resp, _ = sendAT(file, "AT+CREG?", cellATTimeout)
+	resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
 	t.regStatus = parseCREG(resp)
 	// AT+COPS? — operator
-	resp, _ = sendAT(file, "AT+COPS?", cellATTimeout)
+	resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
 	t.operator = parseCOPS(resp)
 
 	t.connected = true
-	log.Info().Str("port", port).Str("imei", t.imei).Str("model", t.model).
+	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).
 		Str("sim", t.simState).Str("operator", t.operator).Msg("cellular modem connected")
 
 	t.emitEvent(CellEvent{
@@ -287,15 +287,14 @@ func (t *DirectCellTransport) smsMonitorLoop() {
 			return
 		}
 
-		t.file.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		t.file.SetReadTimeout(100 * time.Millisecond)
 		n, err := t.file.Read(buf)
-		t.file.SetDeadline(time.Time{})
 		t.mu.Unlock()
 
+		if n == 0 && err == nil {
+			continue // read timeout, no data
+		}
 		if err != nil {
-			if isTimeoutError(err) {
-				continue
-			}
 			select {
 			case <-t.stopMonitorCh:
 				return
@@ -431,18 +430,17 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 	// AT+CMGS="number"
 	cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
 	drainPort(t.file)
-	if _, err := t.file.WriteString(cmd + "\r"); err != nil {
+	if _, err := t.file.Write([]byte(cmd + "\r")); err != nil {
 		return fmt.Errorf("write CMGS failed: %w", err)
 	}
 
 	// Wait for ">" prompt
 	deadline := time.Now().Add(5 * time.Second)
-	t.file.SetDeadline(deadline)
+	t.file.SetReadTimeout(50 * time.Millisecond)
 	buf := make([]byte, 256)
 	var resp strings.Builder
 	for {
 		if time.Now().After(deadline) {
-			t.file.SetDeadline(time.Time{})
 			return fmt.Errorf("timeout waiting for > prompt")
 		}
 		n, err := t.file.Read(buf)
@@ -452,15 +450,13 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 				break
 			}
 		}
-		if err != nil && !isTimeoutError(err) {
-			t.file.SetDeadline(time.Time{})
+		if err != nil {
 			return fmt.Errorf("read failed: %w", err)
 		}
 	}
-	t.file.SetDeadline(time.Time{})
 
 	// Send text + Ctrl+Z
-	if _, err := t.file.WriteString(text + "\x1A"); err != nil {
+	if _, err := t.file.Write([]byte(text + "\x1A")); err != nil {
 		return fmt.Errorf("write text failed: %w", err)
 	}
 
