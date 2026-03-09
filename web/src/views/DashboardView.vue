@@ -333,11 +333,14 @@ const gpsAlt = computed(() => {
   return 'N/A'
 })
 const gpsSats = computed(() => {
-  const gps = locationGps.value
-  return gps?.sats ?? 'N/A'
+  const gpsStatus = store.locationSources?.gps
+  if (gpsStatus) return gpsStatus.sats
+  return 'N/A'
 })
 const gpsFix = computed(() => {
-  // Only true if GPS source explicitly has a non-zero position
+  const gpsStatus = store.locationSources?.gps
+  if (gpsStatus) return gpsStatus.fix
+  // Fallback: check if GPS source has non-zero position
   const gps = locationGps.value
   return gps && gps.lat !== 0 && gps.lon !== 0
 })
@@ -1192,7 +1195,7 @@ function widgetGridClass(id) {
         </div>
 
         <div class="mt-2 pt-2 border-t border-tactical-border">
-          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Iridium (1-100km) > Custom</span>
+          <span class="text-[9px] text-gray-600">Priority: GPS (5m) > Custom</span>
         </div>
 
         <div class="flex gap-3 mt-2">

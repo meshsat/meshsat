@@ -27,6 +27,7 @@ type Server struct {
 	registry      *channel.Registry
 	astroTleMgr   *engine.AstrocastTLEManager
 	cellTransport transport.CellTransport
+	gpsReader     *transport.GPSReader
 	paidRateLimit int
 	sos           *SOSState
 	webHandler    http.Handler
@@ -55,6 +56,11 @@ func (s *Server) SetTLEManager(m *engine.TLEManager) {
 // SetCellTransport sets the cellular transport for cellular API endpoints.
 func (s *Server) SetCellTransport(cell transport.CellTransport) {
 	s.cellTransport = cell
+}
+
+// SetGPSReader sets the GPS reader for satellite count and status.
+func (s *Server) SetGPSReader(r *transport.GPSReader) {
+	s.gpsReader = r
 }
 
 // SetPaidRateLimit sets the global paid transport rate limit for cost analysis.

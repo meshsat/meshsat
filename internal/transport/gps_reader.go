@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -39,10 +40,24 @@ type GPSStore interface {
 }
 
 // GPSReader reads NMEA from a u-blox GPS serial port.
+// GPSStatus holds the latest GPS fix metadata for API consumers.
+type GPSStatus struct {
+	Fix  bool
+	Sats int
+	AltM float64
+	Lat  float64
+	Lon  float64
+	Time time.Time
+}
+
+// GPSReader reads NMEA from a u-blox GPS serial port.
 type GPSReader struct {
 	port         string // "auto" or explicit path
 	excludePorts []func() string
 	store        GPSStore
+
+	mu     sync.RWMutex
+	status GPSStatus
 }
 
 // NewGPSReader creates a GPS reader. Pass "auto" for port to use VID:PID detection.
@@ -57,6 +72,13 @@ func NewGPSReader(port string, store GPSStore) *GPSReader {
 // (e.g., Meshtastic and Iridium ports).
 func (g *GPSReader) SetExcludePortFuncs(fns []func() string) {
 	g.excludePorts = fns
+}
+
+// GetStatus returns the latest GPS fix metadata (thread-safe).
+func (g *GPSReader) GetStatus() GPSStatus {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.status
 }
 
 // Start begins the GPS reader background loop. Blocks until ctx is cancelled.
@@ -167,6 +189,16 @@ func (g *GPSReader) readLoop(ctx context.Context, port string) {
 		if pos, ok := parseNMEA(line); ok {
 			lastFix = pos
 			hasFix = true
+			g.mu.Lock()
+			g.status = GPSStatus{
+				Fix:  pos.Fix,
+				Sats: pos.Sats,
+				AltM: pos.AltM,
+				Lat:  pos.Lat,
+				Lon:  pos.Lon,
+				Time: pos.Timestamp,
+			}
+			g.mu.Unlock()
 		}
 	}
 }

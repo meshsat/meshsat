@@ -320,6 +320,15 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 		resp["resolved"] = resolved
 	}
 
+	// Include live GPS metadata (satellite count, fix status) from GPS reader
+	if s.gpsReader != nil {
+		gs := s.gpsReader.GetStatus()
+		resp["gps"] = map[string]interface{}{
+			"fix":  gs.Fix,
+			"sats": gs.Sats,
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 

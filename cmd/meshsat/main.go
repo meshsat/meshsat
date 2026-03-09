@@ -185,8 +185,9 @@ func main() {
 	}
 
 	// GPS reader — reads NMEA from u-blox GPS receiver (direct mode only)
+	var gpsReader *transport.GPSReader
 	if gpsExcludePorts != nil {
-		gpsReader := transport.NewGPSReader("auto", db)
+		gpsReader = transport.NewGPSReader("auto", db)
 		gpsReader.SetExcludePortFuncs(gpsExcludePorts)
 		go gpsReader.Start(ctx)
 		log.Info().Msg("GPS reader started (auto-detect)")
@@ -200,6 +201,7 @@ func main() {
 	srv.SetAstrocastTLEManager(astroTleMgr)
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)
+	srv.SetGPSReader(gpsReader)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
