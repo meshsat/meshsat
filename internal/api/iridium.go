@@ -369,9 +369,9 @@ func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Persist for multi-pass visualization
-	ts, _ := time.Parse(time.RFC3339, geo.Timestamp)
-	if err := s.db.InsertIridiumGeolocation(geo.Lat, geo.Lon, geo.Accuracy, "", ts.Unix()); err != nil {
+	// Persist for multi-pass visualization — use wall clock as observation time
+	// (AT-MSGEO timestamp is satellite ephemeris age, not observation time)
+	if err := s.db.InsertIridiumGeolocation(geo.Lat, geo.Lon, geo.Accuracy, "", time.Now().Unix()); err != nil {
 		log.Warn().Err(err).Msg("failed to persist iridium geolocation")
 	}
 
