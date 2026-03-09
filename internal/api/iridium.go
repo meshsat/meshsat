@@ -38,6 +38,13 @@ func (s *Server) handleGetSignalHistory(w http.ResponseWriter, r *http.Request) 
 		to = now()
 	}
 
+	// Guard against clock skew: if the client's "from" is ahead of
+	// the server's "now()" (e.g. server clock is behind), extend "to"
+	// so the query window is valid.
+	if from > to {
+		to = from + 6*3600
+	}
+
 	if intervalStr != "" {
 		interval, _ := strconv.Atoi(intervalStr)
 		if interval > 0 {

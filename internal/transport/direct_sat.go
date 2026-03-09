@@ -826,11 +826,18 @@ func (r sbdixResult) statusText() string {
 
 func parseSBDIX(resp string) (sbdixResult, error) {
 	idx := strings.Index(resp, "+SBDIX:")
+	skip := 7 // len("+SBDIX:")
 	if idx == -1 {
-		return sbdixResult{}, fmt.Errorf("no +SBDIX in response: %s", resp)
+		// Fallback: serial read interleaving can consume the "+SBD" prefix,
+		// leaving just "IX: <fields>". Accept this truncated form.
+		idx = strings.Index(resp, "IX:")
+		skip = 3 // len("IX:")
+		if idx == -1 {
+			return sbdixResult{}, fmt.Errorf("no +SBDIX in response: %s", resp)
+		}
 	}
 
-	remainder := strings.TrimSpace(resp[idx+7:])
+	remainder := strings.TrimSpace(resp[idx+skip:])
 	firstLine := strings.Split(remainder, "\n")[0]
 	firstLine = strings.TrimRight(firstLine, "\r") // strip trailing CR
 	parts := strings.Split(firstLine, ",")
