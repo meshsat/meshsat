@@ -507,15 +507,17 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		default:
 		}
 
-		// Enforce max_retries: expire dead letters that have exceeded their limit.
-		// MaxRetries=0 means infinite retries (no limit).
-		if dl.MaxRetries > 0 && dl.Retries >= dl.MaxRetries {
-			if expErr := g.db.ExpireDeadLetter(dl.ID, fmt.Sprintf("max retries exhausted (%d/%d)", dl.Retries, dl.MaxRetries)); expErr != nil {
+		// Enforce expiry policy: use live config per-priority max_retries.
+		// This allows operators to change expiry at runtime for all pending entries.
+		// MaxRetries=0 means infinite retries (never expire).
+		maxRetries := g.config.ExpiryPolicy.MaxRetriesForPriority(dl.Priority)
+		if maxRetries > 0 && dl.Retries >= maxRetries {
+			if expErr := g.db.ExpireDeadLetter(dl.ID, fmt.Sprintf("max retries exhausted (%d/%d)", dl.Retries, maxRetries)); expErr != nil {
 				log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to expire dead letter")
 			} else {
 				g.dlqPending.Add(-1)
 				log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retries", dl.Retries).
-					Int("max_retries", dl.MaxRetries).Str("text", dl.TextPreview).
+					Int("max_retries", maxRetries).Int("priority", dl.Priority).Str("text", dl.TextPreview).
 					Msg("iridium: DLQ entry expired — max retries exhausted")
 			}
 			continue
@@ -686,14 +688,15 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 		default:
 		}
 
-		// Enforce max_retries (same as processDLQ).
-		if dl.MaxRetries > 0 && dl.Retries >= dl.MaxRetries {
-			if expErr := g.db.ExpireDeadLetter(dl.ID, fmt.Sprintf("max retries exhausted (%d/%d)", dl.Retries, dl.MaxRetries)); expErr != nil {
+		// Enforce expiry policy (same as processDLQ — live config per-priority).
+		maxRetries := g.config.ExpiryPolicy.MaxRetriesForPriority(dl.Priority)
+		if maxRetries > 0 && dl.Retries >= maxRetries {
+			if expErr := g.db.ExpireDeadLetter(dl.ID, fmt.Sprintf("max retries exhausted (%d/%d)", dl.Retries, maxRetries)); expErr != nil {
 				log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to expire dead letter")
 			} else {
 				g.dlqPending.Add(-1)
 				log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retries", dl.Retries).
-					Int("max_retries", dl.MaxRetries).Str("text", dl.TextPreview).
+					Int("max_retries", maxRetries).Int("priority", dl.Priority).Str("text", dl.TextPreview).
 					Msg("iridium: DLQ entry expired — max retries exhausted")
 			}
 			continue

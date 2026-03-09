@@ -340,6 +340,11 @@ var migrations = []string{
 		fetched_at     INTEGER NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_astro_tle_cache_fetched ON astrocast_tle_cache(fetched_at);`,
+
+	// v16: Default to never-expire for DLQ entries (max_retries=0 means infinite retries).
+	// Only update pending/queued entries; leave expired/sent/dead entries as-is.
+	`UPDATE dead_letters SET max_retries = 0 WHERE status = 'pending';
+	UPDATE message_deliveries SET max_retries = 0 WHERE status = 'queued';`,
 }
 
 func (db *DB) migrate() error {

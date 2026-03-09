@@ -171,7 +171,8 @@ const iridiumForm = ref({
   mailbox_mode: 'ring_alert_only', poll_interval: 1800, max_text_length: 320, include_position: true,
   dlq_max_retries: 0, dlq_retry_base_secs: 120, min_signal_bars: 1,
   daily_budget: 0, monthly_budget: 0, critical_reserve: 20,
-  min_elev_deg: 5
+  min_elev_deg: 5,
+  expiry_policy: { critical_max_retries: 0, normal_max_retries: 0, low_max_retries: 0 }
 })
 const checkingMailbox = ref(false)
 
@@ -189,6 +190,10 @@ function loadIridium() {
     try {
       const c = typeof iridiumGw.value.config === 'string' ? JSON.parse(iridiumGw.value.config) : iridiumGw.value.config
       Object.assign(iridiumForm.value, c)
+      // Ensure expiry_policy exists with defaults (backward compat with configs saved before this feature)
+      if (!iridiumForm.value.expiry_policy || typeof iridiumForm.value.expiry_policy !== 'object') {
+        iridiumForm.value.expiry_policy = { critical_max_retries: 0, normal_max_retries: 0, low_max_retries: 0 }
+      }
       iridiumEnabled.value = iridiumGw.value.enabled
     } catch {}
   }
@@ -482,6 +487,29 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" v-model="iridiumForm.include_position" class="rounded bg-gray-900 border-gray-700"> Include position</label>
           <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" v-model="iridiumForm.forward_all" class="rounded bg-gray-900 border-gray-700"> Forward all</label>
         </div>
+
+        <!-- Per-Priority Message Expiration -->
+        <div class="border-t border-gray-700 pt-3 mt-1">
+          <h4 class="text-xs font-medium text-gray-300 mb-2">Message Expiration by Priority</h4>
+          <p class="text-[10px] text-gray-600 mb-3">Configure how many retry attempts before a queued message expires. 0 or "Never expire" means infinite retries.</p>
+          <div class="space-y-2">
+            <div v-for="p in [{key: 'critical_max_retries', label: 'Critical (P0)', color: 'text-red-400'}, {key: 'normal_max_retries', label: 'Normal (P1)', color: 'text-gray-300'}, {key: 'low_max_retries', label: 'Low (P2)', color: 'text-gray-500'}]" :key="p.key"
+              class="flex items-center gap-3">
+              <span class="text-xs w-24" :class="p.color">{{ p.label }}</span>
+              <label class="flex items-center gap-1 text-xs text-gray-400">
+                <input type="checkbox" :checked="iridiumForm.expiry_policy[p.key] === 0"
+                  @change="iridiumForm.expiry_policy[p.key] = $event.target.checked ? 0 : 10"
+                  class="rounded bg-gray-900 border-gray-700">
+                Never expire
+              </label>
+              <input v-if="iridiumForm.expiry_policy[p.key] > 0"
+                v-model.number="iridiumForm.expiry_policy[p.key]" type="number" min="1" max="999"
+                class="w-20 px-2 py-1 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <span v-if="iridiumForm.expiry_policy[p.key] > 0" class="text-[10px] text-gray-600">retries</span>
+            </div>
+          </div>
+        </div>
+
         <div class="flex items-center gap-2">
           <input type="checkbox" v-model="iridiumEnabled" id="iridium_en" class="rounded bg-gray-900 border-gray-700">
           <label for="iridium_en" class="text-xs text-gray-400">Enable Iridium gateway</label>
