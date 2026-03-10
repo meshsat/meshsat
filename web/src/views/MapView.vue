@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import 'leaflet/dist/leaflet.css'
 
 const store = useMeshsatStore()
 const mapEl = ref(null)
@@ -91,7 +92,6 @@ const locatableMessages = computed(() => {
 async function initMap() {
   try {
     const leaflet = await import('leaflet')
-    await import('leaflet/dist/leaflet.css')
     L = leaflet.default || leaflet
 
     if (!mapEl.value) return
@@ -110,7 +110,8 @@ async function initMap() {
     cellularLayer = L.layerGroup().addTo(map)
     mapReady.value = true
     updateMap()
-  } catch {
+  } catch (err) {
+    console.error('Map init failed:', err)
     mapError.value = true
   }
 }

@@ -32,8 +32,20 @@ type CellularGateway struct {
 	// DynDNS updater
 	dyndns *DynDNSUpdater
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	emitEvent EventEmitFunc
+}
+
+// SetEventEmitter sets the SSE event emitter callback.
+func (g *CellularGateway) SetEventEmitter(fn EventEmitFunc) {
+	g.emitEvent = fn
+}
+
+func (g *CellularGateway) emit(eventType, message string) {
+	if g.emitEvent != nil {
+		g.emitEvent(eventType, message)
+	}
 }
 
 // NewCellularGateway creates a new cellular gateway.
@@ -192,6 +204,7 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Str("from", fromNode).Int("destinations", len(g.config.DestinationNumbers)).Msg("cellular: SMS sent")
+			g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(g.config.DestinationNumbers)))
 		}
 	}
 }
@@ -243,6 +256,7 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 				g.msgsIn.Add(1)
 				g.lastActive.Store(time.Now().Unix())
 				log.Info().Str("sender", sender).Str("text", event.Message).Msg("cellular: SMS received, forwarding to mesh")
+				g.emit("cellular", fmt.Sprintf("SMS received from %s, forwarding to mesh", sender))
 
 				select {
 				case g.inCh <- inbound:

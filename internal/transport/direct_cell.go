@@ -73,16 +73,17 @@ type DirectCellTransport struct {
 	cmdCh chan atCommand
 
 	// Cached modem state — protected by stateMu (separate from serial access).
-	stateMu   sync.RWMutex
-	connected bool
-	imei      string
-	model     string
-	operator  string
-	netType   string
-	simState  string
-	regStatus string
-	mcc       string // from AT+COPS? numeric format (e.g. "204" from PLMN "20408")
-	mnc       string // from AT+COPS? numeric format (e.g. "08" from PLMN "20408")
+	stateMu     sync.RWMutex
+	connected   bool
+	imei        string
+	model       string
+	operator    string
+	phoneNumber string
+	netType     string
+	simState    string
+	regStatus   string
+	mcc         string // from AT+COPS? numeric format (e.g. "204" from PLMN "20408")
+	mnc         string // from AT+COPS? numeric format (e.g. "08" from PLMN "20408")
 
 	// Data connection state
 	dataMu     sync.RWMutex
@@ -261,12 +262,20 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 
+	// Query subscriber number (AT+CNUM) — may return empty if SIM doesn't store it
+	var phoneNumber string
+	if simState == "READY" {
+		resp, _ = sendAT(sp, "AT+CNUM", cellATTimeout)
+		phoneNumber = parseCNUM(resp)
+	}
+
 	// Update cached state under stateMu (separate from serial access).
 	t.stateMu.Lock()
 	t.imei = imei
 	t.model = model
 	t.simState = simState
 	t.operator = operator
+	t.phoneNumber = phoneNumber
 	t.netType = netType
 	t.regStatus = regStatus
 	t.mcc = mcc
@@ -554,9 +563,56 @@ func (t *DirectCellTransport) pollSignalAndCellInfo() {
 	// AT+COPS? gives AcT (network type) on all 3GPP modems.
 	// Critical for Huawei E220 and similar modems that omit AcT from CREG.
 	var copsNetType string
+	var copsOperator string
 	copsResp, copsErr := t.execAT("AT+COPS?", cellATTimeout)
 	if copsErr == nil {
 		copsNetType = parseCOPSNetType(copsResp)
+		copsOperator = parseCOPS(copsResp)
+	}
+
+	// Update operator and MCC/MNC if previously empty (e.g. modem was searching after PIN unlock)
+	if copsOperator != "" {
+		t.stateMu.Lock()
+		if t.operator == "" {
+			t.operator = copsOperator
+			log.Info().Str("operator", copsOperator).Msg("cellular: operator name discovered")
+		}
+		t.stateMu.Unlock()
+	}
+	// Refresh MCC/MNC if not yet available (modem just finished registering)
+	t.stateMu.RLock()
+	needMCCMNC := t.mcc == "" && t.mnc == ""
+	t.stateMu.RUnlock()
+	if needMCCMNC && copsOperator != "" {
+		t.execAT("AT+COPS=3,2", cellATTimeout)
+		numResp, numErr := t.execAT("AT+COPS?", cellATTimeout)
+		if numErr == nil {
+			mcc, mnc := parseCOPSNumericPLMN(numResp)
+			if mcc != "" {
+				t.stateMu.Lock()
+				t.mcc = mcc
+				t.mnc = mnc
+				t.stateMu.Unlock()
+				log.Info().Str("mcc", mcc).Str("mnc", mnc).Msg("cellular: PLMN discovered")
+			}
+		}
+		t.execAT("AT+COPS=3,0", cellATTimeout)
+	}
+	// Discover phone number if not yet available
+	t.stateMu.RLock()
+	needPhone := t.phoneNumber == ""
+	t.stateMu.RUnlock()
+	if needPhone && copsOperator != "" {
+		numResp, numErr := t.execAT("AT+CNUM", cellATTimeout)
+		if numErr == nil {
+			phone := parseCNUM(numResp)
+			if phone != "" {
+				t.stateMu.Lock()
+				t.phoneNumber = phone
+				t.stateMu.Unlock()
+				log.Info().Str("phone", phone).Msg("cellular: phone number discovered")
+			}
+		}
 	}
 
 	if ci != nil {
@@ -715,6 +771,7 @@ func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) 
 		NetworkType:  t.netType,
 		SIMState:     t.simState,
 		Registration: t.regStatus,
+		PhoneNumber:  t.phoneNumber,
 	}, nil
 }
 
@@ -946,6 +1003,21 @@ func parseCOPS(resp string) string {
 	return ""
 }
 
+// parseCNUM parses AT+CNUM response → phone number.
+// Format: +CNUM: "","+31612345678",145   or  +CNUM: "Own Number","+31612345678",145
+func parseCNUM(resp string) string {
+	idx := strings.Index(resp, "+CNUM:")
+	if idx == -1 {
+		return ""
+	}
+	// Extract the number between the first and second quote pairs after the colon
+	parts := strings.Split(resp[idx+6:], "\"")
+	if len(parts) >= 4 {
+		return parts[3] // second quoted field is the number
+	}
+	return ""
+}
+
 // parseCMTI parses +CMTI: "SM",3 → index 3.
 func parseCMTI(line string) int {
 	idx := strings.Index(line, "+CMTI:")
@@ -1138,11 +1210,16 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	t.execAT("AT+CNMI=2,1,2,0,0", cellATTimeout)
 	t.execAT("AT+CSCB=0", cellATTimeout)
 
+	// Query subscriber number after PIN unlock
+	resp, _ = t.execAT("AT+CNUM", cellATTimeout)
+	phoneNumber := parseCNUM(resp)
+
 	t.stateMu.Lock()
 	t.simState = "READY"
 	t.regStatus = regStatus
 	t.netType = netType
 	t.operator = operator
+	t.phoneNumber = phoneNumber
 	t.mcc = mcc
 	t.mnc = mnc
 	t.stateMu.Unlock()

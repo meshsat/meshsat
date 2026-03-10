@@ -21,9 +21,10 @@ type CellStatus struct {
 	IMEI         string `json:"imei"`
 	Model        string `json:"model"`
 	Operator     string `json:"operator"`
-	NetworkType  string `json:"network_type"` // 2G, 3G, 4G, LTE
-	SIMState     string `json:"sim_state"`    // READY, NOT_INSERTED, PIN_REQUIRED
-	Registration string `json:"registration"` // not_registered, registered_home, searching, denied, registered_roaming
+	NetworkType  string `json:"network_type"`           // 2G, 3G, 4G, LTE
+	SIMState     string `json:"sim_state"`              // READY, NOT_INSERTED, PIN_REQUIRED
+	Registration string `json:"registration"`           // not_registered, registered_home, searching, denied, registered_roaming
+	PhoneNumber  string `json:"phone_number,omitempty"` // subscriber number from AT+CNUM
 }
 
 // CellSignalInfo represents cellular signal quality.

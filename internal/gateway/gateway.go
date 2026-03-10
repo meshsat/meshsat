@@ -27,6 +27,10 @@ type GatewayStatus struct {
 	ConnectionUptime string    `json:"connection_uptime,omitempty"`
 }
 
+// EventEmitFunc is a callback for gateways to emit events to the SSE stream.
+// This breaks the gateway→engine import cycle by using a callback.
+type EventEmitFunc func(eventType, message string)
+
 // Gateway abstracts an external message bridge (MQTT, future Iridium).
 type Gateway interface {
 	Start(ctx context.Context) error

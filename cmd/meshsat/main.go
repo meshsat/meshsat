@@ -172,6 +172,13 @@ func main() {
 	// Register receiver callback so gateways started via API also get
 	// their inbound channel drained by the processor (fixes silent drop bug).
 	gwMgr.SetReceiverStartFunc(proc.StartGatewayReceiver)
+	gwMgr.SetEventEmitFunc(func(eventType, message string) {
+		proc.Emit(transport.MeshEvent{
+			Type:    eventType,
+			Message: message,
+			Time:    time.Now().UTC().Format(time.RFC3339),
+		})
+	})
 
 	// Start gateway manager (loads enabled configs from DB).
 	// The receiver callback fires for each gateway started here.

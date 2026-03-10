@@ -26,6 +26,7 @@ type Manager struct {
 	astro           transport.AstrocastTransport // optional, for astrocast gateway
 	predictor       PassPredictor                // optional, for pass scheduler
 	onReceiverStart ReceiverStartFunc            // called when a gateway starts
+	onEventEmit     EventEmitFunc                // SSE event emitter callback
 	running         map[string]Gateway           // legacy: keyed by type ("iridium")
 	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
@@ -61,6 +62,11 @@ func (m *Manager) SetPassPredictor(p PassPredictor) {
 // so the processor can register an inbound message receiver for it.
 func (m *Manager) SetReceiverStartFunc(fn ReceiverStartFunc) {
 	m.onReceiverStart = fn
+}
+
+// SetEventEmitFunc sets the callback for gateways to emit events to the SSE stream.
+func (m *Manager) SetEventEmitFunc(fn EventEmitFunc) {
+	m.onEventEmit = fn
 }
 
 // GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
@@ -555,7 +561,11 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err != nil {
 			return nil, err
 		}
-		return NewIridiumGateway(*cfg, m.sat, m.db, m.predictor), nil
+		gw := NewIridiumGateway(*cfg, m.sat, m.db, m.predictor)
+		if m.onEventEmit != nil {
+			gw.SetEventEmitter(m.onEventEmit)
+		}
+		return gw, nil
 	case "cellular":
 		if m.cell == nil {
 			return nil, fmt.Errorf("cellular transport not available")
@@ -567,7 +577,11 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewCellularGateway(*cfg, m.cell, m.db), nil
+		gw := NewCellularGateway(*cfg, m.cell, m.db)
+		if m.onEventEmit != nil {
+			gw.SetEventEmitter(m.onEventEmit)
+		}
+		return gw, nil
 	case "webhook":
 		cfg, err := ParseWebhookConfig(configJSON)
 		if err != nil {

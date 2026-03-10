@@ -419,6 +419,71 @@ function dlqStatusColor(status) {
   return 'text-gray-400 bg-gray-400/10'
 }
 
+// ── Unified message queue (all sources, sorted by date newest first) ──
+const unifiedQueue = computed(() => {
+  const items = []
+
+  // SBD queue items
+  for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
+    items.push({
+      _type: 'sbd',
+      _key: 'sbd-' + d.id,
+      _time: d.updated_at || d.created_at,
+      _dir: d.direction === 'inbound' ? 'IN' : 'OUT',
+      _dirClass: d.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium',
+      _label: d.direction === 'inbound' ? 'SBD\u2193' : 'SBD\u2191',
+      _status: d.status === 'sent' ? 'delivered' : d.status === 'received' ? 'received' : d.status || 'queued',
+      _statusClass: dlqStatusColor(d.status),
+      _text: d.text_preview || '(binary)',
+      _opacity: d.status === 'sent' || d.status === 'received' ? 'opacity-60' : '',
+      _raw: d
+    })
+  }
+
+  // SMS messages
+  for (const sms of (store.smsMessages || [])) {
+    items.push({
+      _type: 'sms',
+      _key: 'sms-' + sms.id,
+      _time: sms.created_at,
+      _dir: sms.direction === 'tx' ? 'OUT' : 'IN',
+      _dirClass: sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400',
+      _label: sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193',
+      _status: sms.status || 'queued',
+      _statusClass: sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400',
+      _text: (sms.phone ? sms.phone + ': ' : '') + (sms.text || '(empty)'),
+      _opacity: '',
+      _raw: sms
+    })
+  }
+
+  // Satellite transport messages
+  for (const msg of (store.messages || []).filter(m => m.transport === 'iridium')) {
+    items.push({
+      _type: 'sat',
+      _key: 'sat-' + msg.id,
+      _time: msg.created_at || msg.timestamp,
+      _dir: '',
+      _dirClass: 'text-gray-500',
+      _label: 'SAT',
+      _status: '',
+      _statusClass: '',
+      _text: msg.text || msg.payload || '(data)',
+      _opacity: 'opacity-60',
+      _raw: msg
+    })
+  }
+
+  // Sort by time, newest first
+  items.sort((a, b) => {
+    const ta = new Date(a._time || 0).getTime()
+    const tb = new Date(b._time || 0).getTime()
+    return tb - ta
+  })
+
+  return items.slice(0, 30)
+})
+
 // ── Computed: SOS panel ──
 const sosActive = computed(() => store.sosStatus?.active === true)
 
@@ -1108,6 +1173,10 @@ function widgetGridClass(id) {
             <span class="text-gray-500">Operator</span>
             <span class="text-gray-300 font-mono">{{ store.cellularStatus?.operator || 'N/A' }}</span>
           </div>
+          <div v-if="store.cellularStatus?.phone_number" class="flex justify-between">
+            <span class="text-gray-500">Phone</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus.phone_number }}</span>
+          </div>
           <div class="flex justify-between">
             <span class="text-gray-500">Network</span>
             <span class="text-gray-300 font-mono">{{ store.cellularStatus?.network_type || store.cellInfo?.latest?.network_type || 'N/A' }}</span>
@@ -1396,56 +1465,21 @@ function widgetGridClass(id) {
         </div>
 
         <div class="space-y-1 tactical-scroll flex-1 overflow-y-auto">
-          <div v-for="item in dlqItems" :key="item.id"
+          <div v-for="item in unifiedQueue" :key="item._key"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
-            :class="item.status === 'sent' || item.status === 'received' ? 'opacity-60' : ''"
-            @click="openQueueItemDetail(item)">
-            <span class="text-[9px] font-mono shrink-0"
-              :class="item.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium'">
-              {{ item.direction === 'inbound' ? 'SBD\u2192Mesh' : 'Mesh\u2192SBD' }}
+            :class="item._opacity"
+            @click="item._type === 'sbd' ? openQueueItemDetail(item._raw) : null">
+            <span class="text-[9px] font-mono shrink-0" :class="item._dirClass">
+              {{ item._label }}
             </span>
-            <span class="text-[10px] font-mono px-1.5 py-px rounded"
-              :class="dlqStatusColor(item.status)">
-              {{ item.status === 'sent' ? 'delivered' : item.status === 'received' ? 'received' : item.status || 'queued' }}
+            <span v-if="item._status" class="text-[10px] font-mono px-1.5 py-px rounded"
+              :class="item._statusClass">
+              {{ item._status }}
             </span>
-            <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.text_preview || '(binary)' }}</span>
-            <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
+            <span class="text-[11px] text-gray-300 truncate flex-1">{{ item._text }}</span>
+            <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item._time) }}</span>
           </div>
-          <div v-if="!dlqItems.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
-        </div>
-
-        <!-- SMS Messages -->
-        <div v-if="(store.smsMessages || []).length" class="mt-3 pt-3 border-t border-tactical-border">
-          <div class="flex items-center gap-1.5 mb-1.5">
-            <span class="text-[10px] text-gray-500 uppercase tracking-wider">SMS</span>
-            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-sky-900/30 text-sky-400">{{ (store.smsMessages || []).length }}</span>
-          </div>
-          <div class="space-y-1">
-            <div v-for="sms in (store.smsMessages || []).slice(0, 5)" :key="'sms-'+sms.id"
-              class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50">
-              <span class="text-[9px] font-mono shrink-0"
-                :class="sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400'">
-                {{ sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193' }}
-              </span>
-              <span class="text-[10px] font-mono px-1.5 py-px rounded"
-                :class="sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400'">
-                {{ sms.status || 'queued' }}
-              </span>
-              <span class="text-[11px] text-gray-300 truncate flex-1">{{ sms.phone ? sms.phone + ': ' : '' }}{{ sms.text || '(empty)' }}</span>
-              <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(sms.created_at) }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="satMessages.length" class="mt-3 pt-3 border-t border-tactical-border">
-          <span class="text-[10px] text-gray-500 block mb-1.5">Recent Satellite</span>
-          <div class="space-y-1">
-            <div v-for="msg in satMessages" :key="msg.id"
-              class="flex items-center gap-2 text-[11px]">
-              <span class="text-gray-500 font-mono text-[9px] shrink-0">{{ formatRelativeTime(msg.created_at || msg.timestamp) }}</span>
-              <span class="text-gray-400 truncate">{{ msg.text || msg.payload || '(data)' }}</span>
-            </div>
-          </div>
+          <div v-if="!unifiedQueue.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
         </div>
       </div>
 

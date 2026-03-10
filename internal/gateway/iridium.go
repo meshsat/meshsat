@@ -37,8 +37,9 @@ type IridiumGateway struct {
 	passSuccesses   atomic.Int64 // successful SBDIX sessions during current Active pass
 	startTime       time.Time
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	emitEvent EventEmitFunc
 }
 
 // NewIridiumGateway creates a new Iridium satellite gateway.
@@ -58,6 +59,18 @@ func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *databa
 	}
 
 	return gw
+}
+
+// SetEventEmitter sets the SSE event emitter callback.
+func (g *IridiumGateway) SetEventEmitter(fn EventEmitFunc) {
+	g.emitEvent = fn
+}
+
+// emit sends an event to the SSE stream if an emitter is configured.
+func (g *IridiumGateway) emit(eventType, message string) {
+	if g.emitEvent != nil {
+		g.emitEvent(eventType, message)
+	}
 }
 
 // PassSchedulerRef returns the pass scheduler (may be nil).
@@ -252,6 +265,7 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
 			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD sent")
+			g.emit("forward", fmt.Sprintf("Iridium SBD sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
 
 			// Record credit usage and successful send for queue visibility
 			if g.db != nil {
@@ -354,6 +368,7 @@ func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errM
 
 	g.dlqPending.Add(1)
 	log.Info().Uint32("packet_id", packetID).Time("next_retry", nextRetry).Msg("iridium: message queued in DLQ")
+	g.emit("forward_error", fmt.Sprintf("Iridium send failed, queued for retry: %s", errMsg))
 }
 
 // dlqBackoff computes the retry backoff for a failed DLQ send based on the
@@ -580,6 +595,7 @@ func (g *IridiumGateway) ringAlertListenOnce(ctx context.Context) error {
 	if status, err := g.sat.GetStatus(ctx); err == nil && status.Connected {
 		g.connected.Store(true)
 		log.Info().Msg("iridium: modem connected (post-subscribe check)")
+		g.emit("iridium", "Iridium modem connected")
 	}
 
 	for {
@@ -718,6 +734,7 @@ func (g *IridiumGateway) handleRingAlert(ctx context.Context) {
 
 func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt int) {
 	log.Info().Int("attempt", attempt).Msg("iridium: ring alert, checking mailbox")
+	g.emit("mailbox", fmt.Sprintf("Mailbox check started (attempt %d)", attempt+1))
 
 	result, err := g.sat.MailboxCheck(ctx)
 	if err != nil {
@@ -805,6 +822,7 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 	g.msgsIn.Add(1)
 	g.lastActive.Store(time.Now().Unix())
 	log.Info().Str("to", inbound.To).Str("text", inbound.Text).Msg("iridium: received MT message")
+	g.emit("inbound", fmt.Sprintf("Iridium MT received: %s", inbound.Text))
 
 	// Record inbound receive for queue visibility
 	if g.db != nil {
