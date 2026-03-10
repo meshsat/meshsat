@@ -84,3 +84,12 @@ func (r *Registry) CanReceive(id string) bool {
 	d, ok := r.channels[id]
 	return ok && d.CanReceive
 }
+
+// BinaryCapable returns true if the channel supports raw binary payloads.
+// Text-only channels (SMS, MQTT, webhook) return false.
+func (r *Registry) BinaryCapable(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.channels[id]
+	return ok && d.BinaryCapable
+}

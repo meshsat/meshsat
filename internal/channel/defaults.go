@@ -5,12 +5,13 @@ import "time"
 // RegisterDefaults registers the 6 built-in channels.
 func RegisterDefaults(r *Registry) {
 	r.Register(ChannelDescriptor{
-		ID:         "mesh",
-		Label:      "Meshtastic LoRa",
-		IsPaid:     false,
-		CanSend:    true,
-		CanReceive: true,
-		MaxPayload: 237,
+		ID:            "mesh",
+		Label:         "Meshtastic LoRa",
+		IsPaid:        false,
+		CanSend:       true,
+		CanReceive:    true,
+		BinaryCapable: true,
+		MaxPayload:    237,
 		RetryConfig: RetryConfig{
 			Enabled:    false,
 			MaxRetries: 1,
@@ -22,12 +23,13 @@ func RegisterDefaults(r *Registry) {
 	})
 
 	r.Register(ChannelDescriptor{
-		ID:         "iridium",
-		Label:      "Iridium SBD",
-		IsPaid:     true,
-		CanSend:    true,
-		CanReceive: true,
-		MaxPayload: 340,
+		ID:            "iridium",
+		Label:         "Iridium SBD",
+		IsPaid:        true,
+		CanSend:       true,
+		CanReceive:    true,
+		BinaryCapable: true,
+		MaxPayload:    340,
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 180 * time.Second,
@@ -42,12 +44,13 @@ func RegisterDefaults(r *Registry) {
 	})
 
 	r.Register(ChannelDescriptor{
-		ID:         "astrocast",
-		Label:      "Astrocast",
-		IsPaid:     true,
-		CanSend:    true,
-		CanReceive: true,
-		MaxPayload: 160,
+		ID:            "astrocast",
+		Label:         "Astrocast",
+		IsPaid:        true,
+		CanSend:       true,
+		CanReceive:    true,
+		BinaryCapable: true,
+		MaxPayload:    160,
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 300 * time.Second,

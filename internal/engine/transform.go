@@ -139,6 +139,66 @@ func reverseTransform(t TransformSpec, data []byte) ([]byte, error) {
 	}
 }
 
+// ValidateTransforms checks if a transform chain is compatible with a channel.
+// Returns a list of warnings (non-fatal) and errors (fatal).
+func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload int) (warnings []string, errors []string) {
+	transforms, err := parseTransforms(transformsJSON)
+	if err != nil {
+		return nil, []string{"invalid transforms JSON: " + err.Error()}
+	}
+	if len(transforms) == 0 {
+		return nil, nil
+	}
+
+	hasBinaryOutput := false // does the chain produce binary output?
+	endsWithBase64 := false
+	hasBase64 := false
+
+	for _, t := range transforms {
+		switch t.Type {
+		case "encrypt":
+			hasBinaryOutput = true
+			endsWithBase64 = false
+			if t.Params["key"] == "" {
+				errors = append(errors, "encrypt transform requires a 'key' param")
+			}
+		case "zstd", "smaz2":
+			hasBinaryOutput = true
+			endsWithBase64 = false
+		case "base64":
+			hasBinaryOutput = false // base64 output is text-safe
+			endsWithBase64 = true
+			hasBase64 = true
+		}
+	}
+
+	// Check: text-only transport with binary output
+	if !binaryCapable && hasBinaryOutput && !endsWithBase64 {
+		errors = append(errors, "text-only transport (SMS/MQTT/webhook) requires base64 as the final transform after encrypt/compress")
+	}
+
+	// Estimate usable capacity on constrained channels.
+	// Work backwards from maxPayload through the transform chain (reversed).
+	if maxPayload > 0 {
+		usable := maxPayload
+		for i := len(transforms) - 1; i >= 0; i-- {
+			switch transforms[i].Type {
+			case "base64":
+				usable = usable * 3 / 4 // base64 decoding recovers 3/4
+			case "encrypt":
+				usable -= 28 // 12 nonce + 16 GCM tag
+			}
+		}
+		if usable < 20 {
+			warnings = append(warnings, fmt.Sprintf("transforms leave very little usable payload (~%d bytes of %d)", usable, maxPayload))
+		} else if hasBase64 && float64(usable)/float64(maxPayload) < 0.6 {
+			warnings = append(warnings, fmt.Sprintf("transforms reduce usable capacity to ~%d bytes (of %d max)", usable, maxPayload))
+		}
+	}
+
+	return warnings, errors
+}
+
 // encryptAESGCM encrypts data using AES-256-GCM with the given hex-encoded key.
 // Output format: 12-byte nonce || ciphertext+tag
 func encryptAESGCM(data []byte, hexKey string) ([]byte, error) {

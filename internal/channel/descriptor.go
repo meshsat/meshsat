@@ -4,14 +4,15 @@ import "time"
 
 // ChannelDescriptor describes a transport channel's capabilities.
 type ChannelDescriptor struct {
-	ID          string        `json:"id"`
-	Label       string        `json:"label"`
-	IsPaid      bool          `json:"is_paid"`
-	CanSend     bool          `json:"can_send"`
-	CanReceive  bool          `json:"can_receive"`
-	MaxPayload  int           `json:"max_payload"` // 0 = unlimited
-	RetryConfig RetryConfig   `json:"retry_config"`
-	Options     []OptionField `json:"options,omitempty"`
+	ID            string        `json:"id"`
+	Label         string        `json:"label"`
+	IsPaid        bool          `json:"is_paid"`
+	CanSend       bool          `json:"can_send"`
+	CanReceive    bool          `json:"can_receive"`
+	BinaryCapable bool          `json:"binary_capable"` // false = text-only (SMS, MQTT, webhook), needs base64 after encrypt/compress
+	MaxPayload    int           `json:"max_payload"`    // 0 = unlimited
+	RetryConfig   RetryConfig   `json:"retry_config"`
+	Options       []OptionField `json:"options,omitempty"`
 }
 
 // RetryConfig defines channel-specific retry behavior.

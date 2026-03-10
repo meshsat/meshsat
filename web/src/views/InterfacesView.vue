@@ -69,12 +69,18 @@ function getEncryptionKey(iface) {
   return enc?.params?.key || ''
 }
 
+const textOnlyChannels = ['cellular', 'mqtt', 'webhook']
+
+function isTextOnly(iface) {
+  return textOnlyChannels.includes(iface.channel_type)
+}
+
 async function toggleEncryption(iface) {
   const transforms = getTransforms(iface, 'egress')
   if (hasEncryption(iface)) {
-    // Remove encryption transform
-    const filtered = transforms.filter(t => t.type !== 'encrypt')
-    const ingressFiltered = getTransforms(iface, 'ingress').filter(t => t.type !== 'encrypt')
+    // Remove encryption and base64 (if auto-added for text channels)
+    const filtered = transforms.filter(t => t.type !== 'encrypt' && t.type !== 'base64')
+    const ingressFiltered = getTransforms(iface, 'ingress').filter(t => t.type !== 'encrypt' && t.type !== 'base64')
     await store.updateInterface(iface.id, {
       ...iface,
       egress_transforms: JSON.stringify(filtered),
@@ -89,6 +95,13 @@ async function toggleEncryption(iface) {
       transforms.push({ type: 'encrypt', params: { key } })
       const ingressTransforms = getTransforms(iface, 'ingress')
       ingressTransforms.push({ type: 'encrypt', params: { key } })
+
+      // Auto-add base64 for text-only channels (SMS, MQTT, webhook)
+      if (isTextOnly(iface)) {
+        transforms.push({ type: 'base64' })
+        ingressTransforms.push({ type: 'base64' })
+      }
+
       await store.updateInterface(iface.id, {
         ...iface,
         egress_transforms: JSON.stringify(transforms),
@@ -286,6 +299,10 @@ onUnmounted(() => {
         <div v-if="expandedIface === iface.id && hasEncryption(iface)" class="mt-2 p-2 rounded bg-gray-900 border border-gray-700">
           <div class="text-[10px] text-gray-500 mb-1">PSK (share with receiving end)</div>
           <code class="text-xs text-amber-400 break-all select-all">{{ getEncryptionKey(iface) }}</code>
+          <div v-if="isTextOnly(iface)" class="mt-2 text-[10px] text-yellow-500">
+            Text-only transport — base64 encoding auto-added (33% overhead).
+            Effective capacity: ~{{ Math.floor(160 * 0.75 - 28) }} bytes per SMS segment.
+          </div>
         </div>
       </div>
 

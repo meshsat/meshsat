@@ -267,6 +267,66 @@ func TestTransformPipeline_CompressThenEncrypt(t *testing.T) {
 	}
 }
 
+func TestValidateTransforms_TextChannelNeedsBase64(t *testing.T) {
+	// Text-only channel (SMS) with encrypt but no base64 → error
+	_, errs := ValidateTransforms(`[{"type":"encrypt","params":{"key":"aabb"}}]`, false, 160)
+	if len(errs) == 0 {
+		t.Error("expected error for encrypt on text-only channel without base64")
+	}
+
+	// Same with smaz2
+	_, errs = ValidateTransforms(`[{"type":"smaz2"}]`, false, 160)
+	if len(errs) == 0 {
+		t.Error("expected error for smaz2 on text-only channel without base64")
+	}
+
+	// With base64 at end → no error
+	key, _ := GenerateEncryptionKey()
+	_, errs = ValidateTransforms(`[{"type":"encrypt","params":{"key":"`+key+`"}},{"type":"base64"}]`, false, 160)
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+}
+
+func TestValidateTransforms_BinaryChannelNoBase64Needed(t *testing.T) {
+	key, _ := GenerateEncryptionKey()
+	_, errs := ValidateTransforms(`[{"type":"encrypt","params":{"key":"`+key+`"}}]`, true, 340)
+	if len(errs) != 0 {
+		t.Errorf("binary channel should allow encrypt without base64: %v", errs)
+	}
+}
+
+func TestValidateTransforms_OverheadWarning(t *testing.T) {
+	key, _ := GenerateEncryptionKey()
+	// Encrypt on 160-byte binary channel (28 bytes overhead, usable=132, 82%)
+	warns, _ := ValidateTransforms(`[{"type":"encrypt","params":{"key":"`+key+`"}}]`, true, 160)
+	for _, w := range warns {
+		t.Logf("warning: %s", w)
+	}
+
+	// Encrypt + base64 on 160-char text channel
+	// Usable: 160 * 3/4 = 120 (base64 decode), 120 - 28 = 92 bytes usable (57.5%)
+	// 92/160 = 57.5% < 60% → should warn
+	warns, _ = ValidateTransforms(`[{"type":"encrypt","params":{"key":"`+key+`"}},{"type":"base64"}]`, false, 160)
+	if len(warns) == 0 {
+		t.Error("expected overhead warning for encrypt+base64 on 160-char channel")
+	}
+	for _, w := range warns {
+		t.Logf("warning: %s", w)
+	}
+}
+
+func TestValidateTransforms_EmptyIsValid(t *testing.T) {
+	warns, errs := ValidateTransforms("", false, 160)
+	if len(warns) != 0 || len(errs) != 0 {
+		t.Errorf("empty transforms should be valid, got warns=%v errs=%v", warns, errs)
+	}
+	warns, errs = ValidateTransforms("[]", true, 340)
+	if len(warns) != 0 || len(errs) != 0 {
+		t.Errorf("empty array transforms should be valid, got warns=%v errs=%v", warns, errs)
+	}
+}
+
 func TestGenerateEncryptionKey(t *testing.T) {
 	key, err := GenerateEncryptionKey()
 	if err != nil {

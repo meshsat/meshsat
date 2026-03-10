@@ -305,6 +305,7 @@ func (s *Server) Router() http.Handler {
 
 		// Crypto utilities (v0.3.0)
 		r.Post("/crypto/generate-key", s.handleGenerateEncryptionKey)
+		r.Post("/crypto/validate-transforms", s.handleValidateTransforms)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

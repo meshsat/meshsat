@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/engine"
 )
 
 // ---- Interfaces ----
@@ -75,11 +76,78 @@ func (s *Server) handleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	}
 	iface.ID = id
 
+	// Validate transforms against channel capabilities
+	if warns, errs := s.validateInterfaceTransforms(iface); len(errs) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error":    "transform validation failed",
+			"errors":   errs,
+			"warnings": warns,
+		})
+		return
+	}
+
 	if err := s.ifaceMgr.UpdateInterface(iface); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, iface)
+}
+
+// handleValidateTransforms checks transform chain compatibility with a channel type.
+func (s *Server) handleValidateTransforms(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ChannelType string `json:"channel_type"`
+		Transforms  string `json:"transforms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	binaryCapable := false
+	maxPayload := 0
+	if s.registry != nil {
+		binaryCapable = s.registry.BinaryCapable(req.ChannelType)
+		if desc, ok := s.registry.Get(req.ChannelType); ok {
+			maxPayload = desc.MaxPayload
+		}
+	}
+
+	warns, errs := engine.ValidateTransforms(req.Transforms, binaryCapable, maxPayload)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"valid":    len(errs) == 0,
+		"errors":   errs,
+		"warnings": warns,
+	})
+}
+
+func (s *Server) validateInterfaceTransforms(iface database.Interface) (warnings []string, errors []string) {
+	binaryCapable := false
+	maxPayload := 0
+	if s.registry != nil {
+		binaryCapable = s.registry.BinaryCapable(iface.ChannelType)
+		if desc, ok := s.registry.Get(iface.ChannelType); ok {
+			maxPayload = desc.MaxPayload
+		}
+	}
+
+	var allWarns, allErrs []string
+	for _, dir := range []struct {
+		label string
+		json  string
+	}{
+		{"egress", iface.EgressTransforms},
+		{"ingress", iface.IngressTransforms},
+	} {
+		w, e := engine.ValidateTransforms(dir.json, binaryCapable, maxPayload)
+		for _, msg := range w {
+			allWarns = append(allWarns, dir.label+": "+msg)
+		}
+		for _, msg := range e {
+			allErrs = append(allErrs, dir.label+": "+msg)
+		}
+	}
+	return allWarns, allErrs
 }
 
 func (s *Server) handleDeleteInterface(w http.ResponseWriter, r *http.Request) {
