@@ -143,3 +143,43 @@ func TestParseCREGNetType(t *testing.T) {
 		t.Errorf("parseCREGNetType = %q, want LTE", got)
 	}
 }
+
+func TestParseCOPSNumericPLMN(t *testing.T) {
+	tests := []struct {
+		resp    string
+		wantMCC string
+		wantMNC string
+	}{
+		{"+COPS: 0,2,\"20408\",2\r\nOK", "204", "08"},
+		{"+COPS: 0,2,\"310260\",7\r\nOK", "310", "260"},
+		{"+COPS: 0,2,\"26201\",2\r\nOK", "262", "01"},
+		{"+COPS: 0,0,\"KPN\",7\r\nOK", "", ""}, // not numeric format
+		{"+COPS: 0\r\nOK", "", ""},             // not registered
+		{"ERROR", "", ""},
+	}
+	for _, tt := range tests {
+		mcc, mnc := parseCOPSNumericPLMN(tt.resp)
+		if mcc != tt.wantMCC || mnc != tt.wantMNC {
+			t.Errorf("parseCOPSNumericPLMN(%q) = (%q, %q), want (%q, %q)",
+				tt.resp, mcc, mnc, tt.wantMCC, tt.wantMNC)
+		}
+	}
+}
+
+func TestParseCREGExtended_NoAcT(t *testing.T) {
+	// Huawei E220 returns CREG with only 4 parts (no AcT field)
+	resp := "+CREG: 2,1,\"0C1C\",\"D421\"\r\nOK"
+	info := parseCREGExtended(resp)
+	if info == nil {
+		t.Fatal("parseCREGExtended returned nil")
+	}
+	if info.LAC != "0C1C" {
+		t.Errorf("LAC = %q, want 0C1C", info.LAC)
+	}
+	if info.CellID != "D421" {
+		t.Errorf("CellID = %q, want D421", info.CellID)
+	}
+	if info.NetworkType != "" {
+		t.Errorf("NetworkType = %q, want empty (no AcT field)", info.NetworkType)
+	}
+}

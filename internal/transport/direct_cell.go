@@ -34,6 +34,7 @@ var knownCellularVIDPIDs = map[string]bool{
 	"2c7c:0125": true, // Quectel EC25
 	"2c7c:0296": true, // Quectel BG96
 	"2c7c:0512": true, // Quectel EG512R
+	"12d1:1003": true, // Huawei E220/E1550/E169 (3G HSDPA)
 	"12d1:15c1": true, // Huawei ME909s
 }
 
@@ -54,6 +55,8 @@ type DirectCellTransport struct {
 	netType   string
 	simState  string
 	regStatus string
+	mcc       string // from AT+COPS? numeric format (e.g. "204" from PLMN "20408")
+	mnc       string // from AT+COPS? numeric format (e.g. "08" from PLMN "20408")
 
 	// Data connection state
 	dataMu     sync.RWMutex
@@ -205,7 +208,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	simState := parseCPIN(resp)
 	log.Debug().Str("sim_state", simState).Msg("cellular: SIM state detected")
 
-	var operator, netType, regStatus string
+	var operator, netType, regStatus, mcc, mnc string
 	// Only query network registration and operator when SIM is ready.
 	// AT+COPS? on an unregistered modem (SIM locked) can hang or trigger
 	// a slow network scan that exceeds the AT timeout.
@@ -220,6 +223,15 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		if netType == "" {
 			netType = parseCOPSNetType(resp)
 		}
+		// Query COPS in numeric format to get MCC/MNC from PLMN code.
+		// Huawei E220 and many 3G modems don't provide MCC/MNC via CREG.
+		sendAT(sp, "AT+COPS=3,2", cellATTimeout) // set numeric format
+		resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
+		mcc, mnc = parseCOPSNumericPLMN(resp)
+		if netType == "" {
+			netType = parseCOPSNetType(resp)
+		}
+		sendAT(sp, "AT+COPS=3,0", cellATTimeout) // restore long alpha format
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 
@@ -231,6 +243,8 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	t.operator = operator
 	t.netType = netType
 	t.regStatus = regStatus
+	t.mcc = mcc
+	t.mnc = mnc
 	t.connected = true
 	t.stateMu.Unlock()
 	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).
@@ -477,8 +491,8 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 				continue
 			}
 
-			// Also query cell info for network type and RSRP/RSRQ.
-			// Try AT+QENG (Quectel proprietary) first, fall back to AT+CREG?.
+			// Also query cell info for network type, MCC/MNC, LAC/CellID.
+			// Try AT+QENG (Quectel proprietary) first, fall back to AT+CREG? + AT+COPS?.
 			var ci *CellInfo
 			t.mu.Lock()
 			cellResp, cellErr := sendAT(t.file, "AT+QENG=\"servingcell\"", 5*time.Second)
@@ -486,18 +500,39 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 				ci = parseQENG(cellResp)
 			}
 			if ci == nil {
-				// Fallback: extended AT+CREG? (works on all modems)
+				// Fallback: AT+CREG? gives LAC/CellID (and AcT on some modems)
 				cregResp, cregErr := sendAT(t.file, "AT+CREG?", cellATTimeout)
 				if cregErr == nil {
 					ci = parseCREGExtended(cregResp)
 				}
 			}
+			// AT+COPS? gives AcT (network type) on all 3GPP modems.
+			// Critical for Huawei E220 and similar modems that omit AcT from CREG.
+			var copsNetType string
+			copsResp, copsErr := sendAT(t.file, "AT+COPS?", cellATTimeout)
+			if copsErr == nil {
+				copsNetType = parseCOPSNetType(copsResp)
+			}
 			t.mu.Unlock()
+
 			if ci != nil {
-				// Enrich with cached state when fields are missing
+				// Fill in network type from COPS AcT (most reliable source)
+				if ci.NetworkType == "" && copsNetType != "" {
+					ci.NetworkType = copsNetType
+				}
+				// Fill in MCC/MNC from cached COPS numeric PLMN
 				t.stateMu.RLock()
+				cachedMCC := t.mcc
+				cachedMNC := t.mnc
 				cachedNet := t.netType
 				t.stateMu.RUnlock()
+				if ci.MCC == "" && cachedMCC != "" {
+					ci.MCC = cachedMCC
+				}
+				if ci.MNC == "" && cachedMNC != "" {
+					ci.MNC = cachedMNC
+				}
+				// Last resort: use cached netType
 				if ci.NetworkType == "" && cachedNet != "" {
 					ci.NetworkType = cachedNet
 				}
@@ -515,6 +550,17 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 					Data:    ciJSON,
 					Time:    time.Now().UTC().Format(time.RFC3339),
 				})
+			}
+
+			// Ensure signal technology is set even without cell info
+			if info.Technology == "" {
+				if copsNetType != "" {
+					info.Technology = copsNetType
+				} else {
+					t.stateMu.RLock()
+					info.Technology = t.netType
+					t.stateMu.RUnlock()
+				}
 			}
 
 			t.signalMu.Lock()
@@ -606,6 +652,11 @@ func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, err
 	if info == nil {
 		return nil, fmt.Errorf("failed to parse signal")
 	}
+
+	// Fill in technology from cached state
+	t.stateMu.RLock()
+	info.Technology = t.netType
+	t.stateMu.RUnlock()
 
 	t.signalMu.Lock()
 	t.lastSignal = *info
@@ -770,7 +821,7 @@ func parseCellCSQ(resp string) *CellSignalInfo {
 	return &CellSignalInfo{
 		Bars:       bars,
 		DBm:        dbm,
-		Technology: "LTE",
+		Technology: "", // filled by caller from COPS/CREG data
 		Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		Assessment: cellSignalAssessment(bars),
 	}
@@ -1057,6 +1108,14 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	if netType == "" {
 		netType = parseCOPSNetType(resp)
 	}
+	// Get MCC/MNC from COPS numeric PLMN
+	sendAT(t.file, "AT+COPS=3,2", cellATTimeout)
+	resp, _ = sendAT(t.file, "AT+COPS?", cellATTimeout)
+	mcc, mnc := parseCOPSNumericPLMN(resp)
+	if netType == "" {
+		netType = parseCOPSNetType(resp)
+	}
+	sendAT(t.file, "AT+COPS=3,0", cellATTimeout) // restore long alpha format
 
 	sendAT(t.file, "AT+CNMI=2,1,2,0,0", cellATTimeout)
 	sendAT(t.file, "AT+CSCB=0", cellATTimeout)
@@ -1066,6 +1125,8 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	t.regStatus = regStatus
 	t.netType = netType
 	t.operator = operator
+	t.mcc = mcc
+	t.mnc = mnc
 	t.stateMu.Unlock()
 
 	log.Info().Str("sim", "READY").Str("reg", regStatus).Str("net", netType).
@@ -1081,7 +1142,7 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 }
 
 // GetCellInfo queries cell tower information from the modem.
-// Tries AT+QENG (Quectel proprietary) first, falls back to extended AT+CREG?.
+// Tries AT+QENG (Quectel proprietary) first, falls back to AT+CREG? + AT+COPS?.
 func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) {
 	if !t.mu.TryLock() {
 		return nil, fmt.Errorf("modem busy (initializing)")
@@ -1100,12 +1161,33 @@ func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) 
 		}
 	}
 
-	// Fallback: extended AT+CREG? (if AT+CREG=2 was sent during init)
+	// Fallback: AT+CREG? for LAC/CellID, AT+COPS? for AcT
+	var ci *CellInfo
 	resp, err = sendAT(t.file, "AT+CREG?", cellATTimeout)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		ci = parseCREGExtended(resp)
 	}
-	return parseCREGExtended(resp), nil
+	if ci == nil {
+		ci = &CellInfo{}
+	}
+	// Get network type from COPS AcT
+	resp, err = sendAT(t.file, "AT+COPS?", cellATTimeout)
+	if err == nil && ci.NetworkType == "" {
+		ci.NetworkType = parseCOPSNetType(resp)
+	}
+	// Fill MCC/MNC from cached COPS numeric PLMN
+	t.stateMu.RLock()
+	if ci.MCC == "" {
+		ci.MCC = t.mcc
+	}
+	if ci.MNC == "" {
+		ci.MNC = t.mnc
+	}
+	if ci.NetworkType == "" {
+		ci.NetworkType = t.netType
+	}
+	t.stateMu.RUnlock()
+	return ci, nil
 }
 
 // parseQENG parses AT+QENG="servingcell" response (Quectel modems).
@@ -1225,6 +1307,27 @@ func parseCOPSNetType(resp string) string {
 		return actToNetworkType(act)
 	}
 	return ""
+}
+
+// parseCOPSNumericPLMN extracts MCC/MNC from AT+COPS? in numeric format (format=2).
+// Response: +COPS: 0,2,"20408",2 → MCC="204", MNC="08"
+// PLMN is MCC (3 digits) + MNC (2 or 3 digits) concatenated.
+func parseCOPSNumericPLMN(resp string) (mcc, mnc string) {
+	idx := strings.Index(resp, "+COPS:")
+	if idx == -1 {
+		return "", ""
+	}
+	// Extract the quoted PLMN string
+	parts := strings.Split(resp[idx+6:], "\"")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	plmn := parts[1]
+	if len(plmn) < 5 {
+		return "", ""
+	}
+	// MCC is always 3 digits, MNC is the remainder (2 or 3 digits)
+	return plmn[:3], plmn[3:]
 }
 
 // actToNetworkType maps 3GPP access technology to human-readable name.
