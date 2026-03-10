@@ -7,6 +7,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/compress"
 )
 
 // TransformSpec defines a single transform step.
@@ -88,6 +90,12 @@ func applyTransform(t TransformSpec, data []byte) ([]byte, error) {
 		dst := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
 		base64.StdEncoding.Encode(dst, data)
 		return dst, nil
+	case "smaz2":
+		dict := compress.DictDefault
+		if t.Params["dict"] == "meshtastic" {
+			dict = compress.DictMeshtastic
+		}
+		return compress.Compress(data, dict), nil
 	default:
 		log.Warn().Str("type", t.Type).Msg("transform: unknown type, skipping")
 		return data, nil
@@ -110,6 +118,12 @@ func reverseTransform(t TransformSpec, data []byte) ([]byte, error) {
 			return nil, err
 		}
 		return dst[:n], nil
+	case "smaz2":
+		dict := compress.DictDefault
+		if t.Params["dict"] == "meshtastic" {
+			dict = compress.DictMeshtastic
+		}
+		return compress.Decompress(data, dict)
 	default:
 		log.Warn().Str("type", t.Type).Msg("transform: unknown reverse type, skipping")
 		return data, nil
