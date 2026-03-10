@@ -60,6 +60,22 @@ async function doSendSMS() {
   }
 }
 
+// Per-message delivery chain
+const deliveryModal = ref(false)
+const deliveryItems = ref([])
+const deliveryMsgRef = ref('')
+
+async function showDeliveries(msg) {
+  const ref = msg.msg_ref || String(msg.id)
+  deliveryMsgRef.value = ref
+  deliveryItems.value = []
+  deliveryModal.value = true
+  try {
+    const data = await store.fetchMessageDeliveries(ref)
+    deliveryItems.value = Array.isArray(data) ? data : []
+  } catch { /* store error */ }
+}
+
 // Filter
 const filter = ref('all') // 'all', 'text', 'system'
 const selectedNode = ref(null) // null = all nodes, string = specific node mailbox
@@ -674,6 +690,10 @@ onUnmounted(() => {
               <div class="flex items-center gap-2 mt-0.5 px-1" :class="msg.direction === 'tx' ? 'flex-row-reverse' : ''">
                 <span class="text-[10px] text-gray-600">{{ timeLabel(msg) }}</span>
                 <DeliveryStatus v-if="msg.delivery_status && msg.delivery_status !== 'received'" :status="msg.delivery_status" />
+                <button v-if="msg.msg_ref || msg.id" @click="showDeliveries(msg)"
+                  class="text-[10px] text-gray-600 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                  Deliveries
+                </button>
                 <button v-if="msg.direction === 'rx'" @click="reply(msg)"
                   class="text-[10px] text-gray-600 hover:text-teal-400 opacity-0 group-hover:opacity-100 transition-opacity">
                   Reply
@@ -707,5 +727,42 @@ onUnmounted(() => {
     </div>
 
     </template>
+
+    <!-- Per-message delivery chain modal -->
+    <Teleport to="body">
+      <div v-if="deliveryModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="deliveryModal = false">
+        <div class="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-lg max-h-[70vh] overflow-y-auto m-4">
+          <div class="sticky top-0 bg-gray-900 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
+            <h3 class="font-semibold text-sm text-blue-400">Deliveries for {{ deliveryMsgRef }}</h3>
+            <button @click="deliveryModal = false" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
+          </div>
+          <div class="p-4">
+            <div v-if="!deliveryItems.length" class="text-sm text-gray-500 text-center py-6">No deliveries found for this message.</div>
+            <div v-else class="space-y-2">
+              <div v-for="del in deliveryItems" :key="del.id" class="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                <div class="flex items-center gap-2 mb-1 text-[11px]">
+                  <span class="font-mono px-1.5 py-px rounded bg-gray-700 text-gray-400">{{ del.channel }}</span>
+                  <span class="font-mono px-1.5 py-px rounded"
+                    :class="del.status === 'sent' ? 'bg-emerald-400/10 text-emerald-400' : del.status === 'failed' || del.status === 'dead' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600 text-gray-400'">
+                    {{ del.status }}
+                  </span>
+                  <span v-if="del.rule_id" class="text-gray-600 font-mono">rule:{{ del.rule_id }}</span>
+                  <span class="flex-1" />
+                  <span class="text-gray-600 font-mono text-[10px]">{{ formatRelativeTime(del.created_at) }}</span>
+                </div>
+                <div v-if="del.last_error" class="text-[10px] text-red-400/70 mt-1">{{ del.last_error }}</div>
+                <div class="flex items-center gap-3 text-[10px] text-gray-600 mt-1">
+                  <span>Retries: {{ del.retries }}/{{ del.max_retries || '~' }}</span>
+                  <button v-if="del.status === 'failed' || del.status === 'dead'"
+                    @click="store.retryDelivery(del.id)" class="text-teal-400 hover:text-teal-300">Retry</button>
+                  <button v-if="del.status === 'queued' || del.status === 'retry'"
+                    @click="store.cancelDelivery(del.id)" class="text-red-400 hover:text-red-300">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

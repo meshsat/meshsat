@@ -19,7 +19,8 @@ const tabs = [
   { id: 'rules', label: 'Access Rules' },
   { id: 'devices', label: 'Devices' },
   { id: 'groups', label: 'Object Groups' },
-  { id: 'failover', label: 'Failover' }
+  { id: 'failover', label: 'Failover' },
+  { id: 'channels', label: 'Channels' }
 ]
 
 // Interface form
@@ -351,6 +352,7 @@ onMounted(() => {
   store.fetchAccessRules()
   store.fetchObjectGroups()
   store.fetchFailoverGroups()
+  store.fetchTransportChannels()
   pollTimer = setInterval(() => {
     store.fetchInterfaces()
     store.fetchDevices()
@@ -840,6 +842,41 @@ onUnmounted(() => {
 
       <div v-if="!(store.failoverGroups || []).length" class="text-sm text-gray-500 text-center py-8">
         No failover groups configured. Create one to enable automatic failover between interfaces.
+      </div>
+    </div>
+
+    <!-- ═══ Transport Channels Tab ═══ -->
+    <div v-if="activeTab === 'channels'">
+      <div class="mb-4 text-sm text-gray-400">
+        Transport channel registry — {{ (store.transportChannels || []).length }} channels registered
+      </div>
+      <div v-for="ch in store.transportChannels" :key="ch.id || ch.name" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+              :class="ch.online ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-500'">
+              {{ ch.online ? 'online' : 'offline' }}
+            </span>
+            <div>
+              <span class="text-sm font-medium text-gray-200">{{ ch.id || ch.name }}</span>
+              <span class="text-xs text-gray-500 ml-2">{{ ch.type || ch.channel_type }}</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 text-[10px] text-gray-500">
+            <span v-if="ch.binary_capable" class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">binary</span>
+            <span v-else class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-500">text-only</span>
+            <span v-if="ch.max_payload" class="font-mono">{{ ch.max_payload }}B max</span>
+          </div>
+        </div>
+        <div v-if="ch.description" class="text-xs text-gray-500 mt-1.5">{{ ch.description }}</div>
+        <div class="mt-1.5 flex flex-wrap gap-2 text-[10px] text-gray-600">
+          <span v-if="ch.interface_id">Interface: <span class="text-gray-400">{{ ch.interface_id }}</span></span>
+          <span v-if="ch.transport">Transport: <span class="text-gray-400">{{ ch.transport }}</span></span>
+          <span v-if="ch.cost != null">Cost: <span class="text-gray-400">{{ ch.cost }}</span></span>
+        </div>
+      </div>
+      <div v-if="!(store.transportChannels || []).length" class="text-sm text-gray-500 text-center py-8">
+        No transport channels registered. Channels appear when interfaces are bound to devices.
       </div>
     </div>
   </div>

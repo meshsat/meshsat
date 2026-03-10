@@ -1017,6 +1017,17 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Iridium geolocation trigger (v0.3.0)
+  const iridiumGeolocation = ref(null)
+
+  async function triggerIridiumGeolocation() {
+    error.value = null
+    try {
+      iridiumGeolocation.value = await api.get('/iridium/geolocation')
+      return iridiumGeolocation.value
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Failover Groups (v0.3.0)
   async function fetchFailoverGroups() {
     try {
@@ -1076,6 +1087,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,
+    iridiumGeolocation, triggerIridiumGeolocation,
     interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice, generateEncryptionKey,
     devices, fetchDevices,
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,

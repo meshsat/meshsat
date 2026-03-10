@@ -14,6 +14,14 @@ async function dashCheckMailbox() {
   dashCheckingMailbox.value = false
 }
 
+// ── Iridium geolocation trigger ──
+const dashGeoLoading = ref(false)
+async function dashTriggerGeo() {
+  dashGeoLoading.value = true
+  try { await store.triggerIridiumGeolocation() } catch {}
+  dashGeoLoading.value = false
+}
+
 // ── Activity log ──
 const activityLog = ref([])
 const MAX_LOG = 50
@@ -936,6 +944,16 @@ function widgetGridClass(id) {
           class="mt-3 w-full px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-[11px] text-gray-400 hover:text-tactical-iridium hover:border-tactical-iridium/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
           {{ dashCheckingMailbox ? 'Checking...' : 'Check Mailbox Now' }}
         </button>
+
+        <!-- Iridium Geolocation -->
+        <button @click="dashTriggerGeo" :disabled="dashGeoLoading || !iridiumGw?.connected"
+          class="mt-1.5 w-full px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-[11px] text-gray-400 hover:text-tactical-gps hover:border-tactical-gps/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          {{ dashGeoLoading ? 'Querying...' : 'Satellite Geolocation' }}
+        </button>
+        <div v-if="store.iridiumGeolocation" class="mt-1 text-[10px] text-gray-500 font-mono">
+          {{ store.iridiumGeolocation.lat?.toFixed(4) }}, {{ store.iridiumGeolocation.lon?.toFixed(4) }}
+          <span v-if="store.iridiumGeolocation.accuracy" class="text-gray-600">+/-{{ store.iridiumGeolocation.accuracy }}km</span>
+        </div>
       </div>
 
       <!-- ═══ Meshtastic Mesh ═══ -->

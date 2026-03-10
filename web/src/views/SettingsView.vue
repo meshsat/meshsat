@@ -37,6 +37,24 @@ const importResult = ref(null)
 const exporting = ref(false)
 const importing = ref(false)
 
+// Factory reset
+const factoryResetConfirm = ref(false)
+const factoryResetNodeId = ref('')
+const factoryResetResult = ref('')
+
+async function doFactoryReset() {
+  if (!factoryResetNodeId.value) return
+  factoryResetResult.value = ''
+  try {
+    const res = await store.adminFactoryReset({ node_id: parseInt(factoryResetNodeId.value) })
+    factoryResetResult.value = res?.status || 'factory reset command sent'
+    factoryResetConfirm.value = false
+    factoryResetNodeId.value = ''
+  } catch (e) {
+    factoryResetResult.value = e.message || 'factory reset failed'
+  }
+}
+
 async function doExportConfig() {
   exporting.value = true
   exportedConfig.value = ''
@@ -281,6 +299,21 @@ function loadAstrocast() {
 
 async function saveAstrocast() {
   await store.configureGateway('astrocast', astrocastEnabled.value, astrocastForm.value)
+}
+
+const astrocastTesting = ref(false)
+const astrocastTestResult = ref('')
+
+async function doTestAstrocast() {
+  astrocastTesting.value = true
+  astrocastTestResult.value = ''
+  try {
+    await store.testGateway('astrocast')
+    astrocastTestResult.value = 'ok'
+  } catch (e) {
+    astrocastTestResult.value = e.message || 'failed'
+  }
+  astrocastTesting.value = false
 }
 
 // Cellular gateway
@@ -687,6 +720,26 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="astrocast_en" class="text-xs text-gray-400">Enable Astrocast gateway</label>
         </div>
         <button @click="saveAstrocast" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Astrocast Config</button>
+
+        <!-- Gateway controls -->
+        <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-700">
+          <button @click="store.startGateway('astrocast')" :disabled="astrocastGw?.connected"
+            class="px-3 py-1.5 rounded bg-emerald-600/20 text-emerald-400 text-xs border border-emerald-600/30 hover:bg-emerald-600/30 disabled:opacity-40">
+            Start
+          </button>
+          <button @click="store.stopGateway('astrocast')" :disabled="!astrocastGw?.connected"
+            class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600 disabled:opacity-40">
+            Stop
+          </button>
+          <button @click="doTestAstrocast"
+            class="px-3 py-1.5 rounded bg-blue-600/20 text-blue-400 text-xs border border-blue-600/30 hover:bg-blue-600/30">
+            {{ astrocastTesting ? 'Testing...' : 'Test Connection' }}
+          </button>
+          <span v-if="astrocastTestResult" class="text-[10px] ml-1"
+            :class="astrocastTestResult === 'ok' ? 'text-emerald-400' : 'text-red-400'">
+            {{ astrocastTestResult === 'ok' ? 'Connected' : astrocastTestResult }}
+          </span>
+        </div>
       </div>
     </div>
 
@@ -1121,6 +1174,36 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div class="flex items-center justify-between">
           <span class="text-xs text-gray-500">Nodes</span>
           <span class="text-sm text-gray-300">{{ store.status?.num_nodes || 0 }}</span>
+        </div>
+      </div>
+
+      <!-- Factory Reset (Meshtastic node) -->
+      <div class="bg-red-900/10 rounded-lg p-4 border border-red-800/30 mt-4">
+        <h4 class="text-sm font-medium text-red-400 mb-2">Factory Reset</h4>
+        <p class="text-xs text-gray-500 mb-3">Send a factory reset command to the connected Meshtastic node. This will erase all settings on the radio and reset it to defaults.</p>
+        <div v-if="!factoryResetConfirm" class="flex items-center gap-2">
+          <button @click="factoryResetConfirm = true"
+            class="px-4 py-2 rounded bg-red-900/30 text-red-400 text-xs border border-red-700/40 hover:bg-red-900/50">
+            Factory Reset Node
+          </button>
+        </div>
+        <div v-else class="space-y-2">
+          <p class="text-xs text-red-300">Are you sure? This cannot be undone. Enter the node ID to confirm.</p>
+          <div class="flex items-center gap-2">
+            <input v-model="factoryResetNodeId" placeholder="Node ID (decimal)" type="number"
+              class="flex-1 px-3 py-2 rounded bg-gray-900 border border-red-700/40 text-sm text-gray-200 font-mono" />
+            <button @click="doFactoryReset" :disabled="!factoryResetNodeId"
+              class="px-4 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-500 disabled:opacity-40">
+              Confirm Reset
+            </button>
+            <button @click="factoryResetConfirm = false"
+              class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">
+              Cancel
+            </button>
+          </div>
+          <div v-if="factoryResetResult" class="text-xs" :class="factoryResetResult.includes('sent') ? 'text-amber-400' : 'text-red-400'">
+            {{ factoryResetResult }}
+          </div>
         </div>
       </div>
     </div>
