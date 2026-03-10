@@ -1,7 +1,16 @@
 package transport
 
-// DirectCellTransport implements CellTransport with direct serial access to a SIM7600 4G/LTE modem.
-// Follows the same patterns as DirectSatTransport — mutex-protected AT commands, background monitors.
+// DirectCellTransport implements CellTransport with direct serial access to a
+// cellular modem (Huawei E220, SIM7600, Quectel EC25, etc.).
+//
+// Architecture (inspired by warthog618/modem):
+//   - A single "I/O loop" goroutine owns the serial port exclusively.
+//   - It reads unsolicited result codes (URCs like +CMTI, +CBM) between
+//     short read timeouts and processes queued AT commands from a channel.
+//   - All external callers (signal poller, API handlers, SMS send) submit
+//     AT commands via the cmdCh channel and receive results via a response channel.
+//   - This eliminates mutex starvation that occurred when the SMS monitor's
+//     tight read loop starved the signal poller.
 
 import (
 	"context"
@@ -38,15 +47,32 @@ var knownCellularVIDPIDs = map[string]bool{
 	"12d1:15c1": true, // Huawei ME909s
 }
 
-// DirectCellTransport implements CellTransport via direct serial access to a 4G/LTE modem.
+// atCommand is a queued AT command for the I/O loop.
+type atCommand struct {
+	cmd     string                            // AT command string (empty = raw func)
+	timeout time.Duration                     // response timeout
+	resp    chan atResult                     // response channel (buffered, cap 1)
+	fn      func(serial.Port) (string, error) // optional raw function (for SMS send, etc.)
+}
+
+type atResult struct {
+	resp string
+	err  error
+}
+
+// DirectCellTransport implements CellTransport via direct serial access to a cellular modem.
 type DirectCellTransport struct {
 	port string // "/dev/ttyUSB2" or "auto"
 
-	mu   sync.Mutex // protects serial port (t.file) access only
+	// Serial port — only accessed by the I/O loop goroutine after init.
+	// connectLocked() opens it; ioLoop() owns it thereafter.
+	mu   sync.Mutex // protects file during connect/close only
 	file serial.Port
 
-	// Cached modem state — protected by stateMu (separate from serial mu).
-	// This allows GetStatus to read state without contending with serial I/O.
+	// Command channel — all AT commands go through here to the I/O loop.
+	cmdCh chan atCommand
+
+	// Cached modem state — protected by stateMu (separate from serial access).
 	stateMu   sync.RWMutex
 	connected bool
 	imei      string
@@ -70,11 +96,10 @@ type DirectCellTransport struct {
 	lastSignal CellSignalInfo
 
 	// Background goroutines
-	stopMonitorCh chan struct{}
-	monitorDone   chan struct{}
-	stopSignalCh  chan struct{}
-	signalDone    chan struct{}
-	monitorActive bool
+	stopCh  chan struct{} // signals all goroutines to stop
+	ioDone  chan struct{} // closed when I/O loop exits
+	sigDone chan struct{} // closed when signal poller exits
+	running bool
 
 	// SSE subscribers
 	eventMu   sync.RWMutex
@@ -106,7 +131,7 @@ func (t *DirectCellTransport) SetExcludePortFuncs(fns []func() string) {
 	t.excludePortFns = fns
 }
 
-// Subscribe opens the serial connection and starts SMS monitor + signal polling.
+// Subscribe opens the serial connection and starts the I/O loop + signal polling.
 func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, error) {
 	t.mu.Lock()
 	if t.file == nil {
@@ -179,6 +204,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	t.port = portPath
 
 	// Initialize modem — each command has cellATTimeout (3s) as safety net.
+	// Init runs before the I/O loop starts, so direct serial access is safe.
 	log.Debug().Msg("cellular: init ATE0")
 	sendAT(sp, "ATE0", cellATTimeout)
 	sendAT(sp, "AT&K0", cellATTimeout)
@@ -235,7 +261,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 
-	// Update cached state under stateMu (separate from serial mu).
+	// Update cached state under stateMu (separate from serial access).
 	t.stateMu.Lock()
 	t.imei = imei
 	t.model = model
@@ -248,7 +274,9 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	t.connected = true
 	t.stateMu.Unlock()
 	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).
-		Str("sim", t.simState).Str("operator", t.operator).Msg("cellular modem connected")
+		Str("sim", t.simState).Str("operator", t.operator).
+		Str("mcc", mcc).Str("mnc", mnc).Str("net", netType).
+		Msg("cellular modem connected")
 
 	t.emitEvent(CellEvent{
 		Type:    "connected",
@@ -256,106 +284,106 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
 
-	// Start background monitors
-	t.startMonitors()
+	// Start I/O loop and signal poller
+	t.startLoops()
 
 	return nil
 }
 
-func (t *DirectCellTransport) startMonitors() {
-	if t.monitorActive {
+func (t *DirectCellTransport) startLoops() {
+	if t.running {
 		return
 	}
-	t.monitorActive = true
+	t.running = true
 
-	t.stopMonitorCh = make(chan struct{})
-	t.monitorDone = make(chan struct{})
-	go t.smsMonitorLoop()
+	t.cmdCh = make(chan atCommand, 16)
+	t.stopCh = make(chan struct{})
+	t.ioDone = make(chan struct{})
+	t.sigDone = make(chan struct{})
 
-	t.stopSignalCh = make(chan struct{})
-	t.signalDone = make(chan struct{})
-	go t.cellSignalPollerLoop()
+	go t.ioLoop()
+	go t.signalPollerLoop()
 }
 
-func (t *DirectCellTransport) stopMonitors() {
-	if !t.monitorActive {
-		return
+// execAT sends an AT command via the I/O loop and waits for the result.
+// This is the only way to execute AT commands after init.
+func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string, error) {
+	ch := make(chan atResult, 1)
+	select {
+	case t.cmdCh <- atCommand{cmd: cmd, timeout: timeout, resp: ch}:
+	case <-t.stopCh:
+		return "", fmt.Errorf("transport stopped")
 	}
-	t.monitorActive = false
-
-	// Stop signal poller
-	if t.stopSignalCh != nil {
-		select {
-		case <-t.signalDone:
-		default:
-			close(t.stopSignalCh)
-			done := t.signalDone
-			t.mu.Unlock()
-			select {
-			case <-done:
-			case <-time.After(2 * time.Second):
-				log.Warn().Msg("cellular: signal poller did not exit in time")
-			}
-			t.mu.Lock()
-		}
-		t.stopSignalCh = nil
-		t.signalDone = nil
-	}
-
-	// Stop SMS monitor
-	if t.stopMonitorCh != nil {
-		select {
-		case <-t.monitorDone:
-		default:
-			close(t.stopMonitorCh)
-			done := t.monitorDone
-			t.mu.Unlock()
-			select {
-			case <-done:
-			case <-time.After(2 * time.Second):
-				log.Warn().Msg("cellular: SMS monitor did not exit in time")
-			}
-			t.mu.Lock()
-		}
-		t.stopMonitorCh = nil
-		t.monitorDone = nil
+	select {
+	case r := <-ch:
+		return r.resp, r.err
+	case <-t.stopCh:
+		return "", fmt.Errorf("transport stopped")
 	}
 }
 
-// smsMonitorLoop reads serial for unsolicited +CMTI notifications (incoming SMS).
-func (t *DirectCellTransport) smsMonitorLoop() {
-	defer close(t.monitorDone)
+// execRawFn sends a raw function to execute on the serial port via the I/O loop.
+// Used for multi-step operations like SMS send that need direct port access.
+func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), timeout time.Duration) (string, error) {
+	ch := make(chan atResult, 1)
+	select {
+	case t.cmdCh <- atCommand{fn: fn, timeout: timeout, resp: ch}:
+	case <-t.stopCh:
+		return "", fmt.Errorf("transport stopped")
+	}
+	select {
+	case r := <-ch:
+		return r.resp, r.err
+	case <-t.stopCh:
+		return "", fmt.Errorf("transport stopped")
+	}
+}
 
-	buf := make([]byte, 1)
+// ioLoop is the sole goroutine that reads/writes the serial port.
+// It reads URCs (unsolicited notifications) with short timeouts and
+// processes queued AT commands between reads.
+func (t *DirectCellTransport) ioLoop() {
+	defer close(t.ioDone)
+
+	buf := make([]byte, 256)
 	var line []byte
 
 	for {
+		// Check for stop signal
 		select {
-		case <-t.stopMonitorCh:
+		case <-t.stopCh:
 			return
 		default:
 		}
 
-		t.mu.Lock()
-		if t.file == nil {
-			t.mu.Unlock()
-			return
+		// Process any pending AT commands first (non-blocking)
+		drained := true
+		for drained {
+			select {
+			case cmd := <-t.cmdCh:
+				t.executeCommand(cmd)
+			default:
+				drained = false
+			}
 		}
 
-		t.file.SetReadTimeout(100 * time.Millisecond)
+		// Read serial with short timeout for URCs
+		if t.file == nil {
+			return
+		}
+		t.file.SetReadTimeout(200 * time.Millisecond)
 		n, err := t.file.Read(buf)
-		t.mu.Unlock()
 
 		if n == 0 && err == nil {
 			continue // read timeout, no data
 		}
 		if err != nil {
 			select {
-			case <-t.stopMonitorCh:
+			case <-t.stopCh:
 				return
 			default:
 			}
-			log.Error().Err(err).Msg("cellular monitor serial error")
+			log.Error().Err(err).Msg("cellular I/O loop serial error")
 			t.emitEvent(CellEvent{
 				Type:    "disconnected",
 				Message: "Serial connection lost",
@@ -373,20 +401,13 @@ func (t *DirectCellTransport) smsMonitorLoop() {
 			return
 		}
 
-		if n > 0 {
-			line = append(line, buf[0])
-			if buf[0] == '\n' {
+		// Accumulate bytes into lines, dispatch URCs
+		for i := 0; i < n; i++ {
+			line = append(line, buf[i])
+			if buf[i] == '\n' {
 				s := strings.TrimSpace(string(line))
-				// +CMTI: "SM",3 — new SMS at index 3
-				if strings.HasPrefix(s, "+CMTI:") {
-					idx := parseCMTI(s)
-					if idx >= 0 {
-						go t.readAndEmitSMS(idx)
-					}
-				}
-				// +CBM: <sn>,<mid>,<dcs>,<page>,<pages> — cell broadcast header
-				if strings.HasPrefix(s, "+CBM:") {
-					go t.readAndEmitCBS(s)
+				if s != "" {
+					t.handleURC(s)
 				}
 				line = line[:0]
 			}
@@ -397,25 +418,53 @@ func (t *DirectCellTransport) smsMonitorLoop() {
 	}
 }
 
-// readAndEmitSMS reads an SMS by index and emits it as an event.
-func (t *DirectCellTransport) readAndEmitSMS(index int) {
-	t.mu.Lock()
+// executeCommand runs a single AT command or raw function on the serial port.
+// Called only from ioLoop — no concurrent access.
+func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 	if t.file == nil {
-		t.mu.Unlock()
+		cmd.resp <- atResult{err: fmt.Errorf("not connected")}
 		return
 	}
 
-	// AT+CMGR=index — read SMS
-	resp, err := sendAT(t.file, fmt.Sprintf("AT+CMGR=%d", index), cellATTimeout)
+	if cmd.fn != nil {
+		// Raw function — caller handles serial I/O directly
+		resp, err := cmd.fn(t.file)
+		cmd.resp <- atResult{resp: resp, err: err}
+		return
+	}
+
+	// Standard AT command
+	resp, err := sendAT(t.file, cmd.cmd, cmd.timeout)
+	cmd.resp <- atResult{resp: resp, err: err}
+}
+
+// handleURC processes unsolicited result codes from the modem.
+// Called only from ioLoop.
+func (t *DirectCellTransport) handleURC(line string) {
+	// +CMTI: "SM",3 — new SMS notification
+	if strings.HasPrefix(line, "+CMTI:") {
+		idx := parseCMTI(line)
+		if idx >= 0 {
+			go t.readAndEmitSMS(idx)
+		}
+		return
+	}
+	// +CBM: <sn>,<mid>,<dcs>,<page>,<pages> — cell broadcast header
+	if strings.HasPrefix(line, "+CBM:") {
+		go t.readAndEmitCBS(line)
+		return
+	}
+}
+
+// readAndEmitSMS reads an SMS by index (via the I/O loop) and emits it as an event.
+func (t *DirectCellTransport) readAndEmitSMS(index int) {
+	resp, err := t.execAT(fmt.Sprintf("AT+CMGR=%d", index), cellATTimeout)
 	if err != nil {
-		t.mu.Unlock()
 		log.Warn().Err(err).Int("index", index).Msg("cellular: failed to read SMS")
 		return
 	}
-
 	// Delete after reading
-	sendAT(t.file, fmt.Sprintf("AT+CMGD=%d", index), cellATTimeout)
-	t.mu.Unlock()
+	t.execAT(fmt.Sprintf("AT+CMGD=%d", index), cellATTimeout)
 
 	sms := parseCMGR(resp)
 	if sms == nil {
@@ -434,15 +483,10 @@ func (t *DirectCellTransport) readAndEmitSMS(index int) {
 
 // readAndEmitCBS reads the CBS message body after the +CBM header line.
 func (t *DirectCellTransport) readAndEmitCBS(header string) {
-	// Read the CBS body — it follows the +CBM header line
-	t.mu.Lock()
-	if t.file == nil {
-		t.mu.Unlock()
-		return
-	}
-	// Read body with short timeout (CBS data comes immediately after header)
-	body, _ := readATResponse(t.file, 2*time.Second)
-	t.mu.Unlock()
+	// Read the CBS body via I/O loop
+	body, _ := t.execRawFn(func(sp serial.Port) (string, error) {
+		return readATResponse(sp, 2*time.Second)
+	}, 3*time.Second)
 
 	cbs := parseCBM(header, body)
 	if cbs == nil {
@@ -461,120 +505,114 @@ func (t *DirectCellTransport) readAndEmitCBS(header string) {
 	})
 }
 
-// cellSignalPollerLoop polls AT+CSQ every 60s.
-func (t *DirectCellTransport) cellSignalPollerLoop() {
-	defer close(t.signalDone)
+// signalPollerLoop polls AT+CSQ every 60s via the command channel.
+func (t *DirectCellTransport) signalPollerLoop() {
+	defer close(t.sigDone)
 	ticker := time.NewTicker(cellSignalPoll)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-t.stopSignalCh:
+		case <-t.stopCh:
 			return
 		case <-ticker.C:
-			t.mu.Lock()
-			if t.file == nil {
-				t.mu.Unlock()
-				return
-			}
-
-			resp, err := sendAT(t.file, "AT+CSQ", 5*time.Second)
-			t.mu.Unlock()
-
-			if err != nil {
-				log.Warn().Err(err).Msg("cellular signal poll failed")
-				continue
-			}
-
-			info := parseCellCSQ(resp)
-			if info == nil {
-				continue
-			}
-
-			// Also query cell info for network type, MCC/MNC, LAC/CellID.
-			// Try AT+QENG (Quectel proprietary) first, fall back to AT+CREG? + AT+COPS?.
-			var ci *CellInfo
-			t.mu.Lock()
-			cellResp, cellErr := sendAT(t.file, "AT+QENG=\"servingcell\"", 5*time.Second)
-			if cellErr == nil && strings.Contains(cellResp, "+QENG:") {
-				ci = parseQENG(cellResp)
-			}
-			if ci == nil {
-				// Fallback: AT+CREG? gives LAC/CellID (and AcT on some modems)
-				cregResp, cregErr := sendAT(t.file, "AT+CREG?", cellATTimeout)
-				if cregErr == nil {
-					ci = parseCREGExtended(cregResp)
-				}
-			}
-			// AT+COPS? gives AcT (network type) on all 3GPP modems.
-			// Critical for Huawei E220 and similar modems that omit AcT from CREG.
-			var copsNetType string
-			copsResp, copsErr := sendAT(t.file, "AT+COPS?", cellATTimeout)
-			if copsErr == nil {
-				copsNetType = parseCOPSNetType(copsResp)
-			}
-			t.mu.Unlock()
-
-			if ci != nil {
-				// Fill in network type from COPS AcT (most reliable source)
-				if ci.NetworkType == "" && copsNetType != "" {
-					ci.NetworkType = copsNetType
-				}
-				// Fill in MCC/MNC from cached COPS numeric PLMN
-				t.stateMu.RLock()
-				cachedMCC := t.mcc
-				cachedMNC := t.mnc
-				cachedNet := t.netType
-				t.stateMu.RUnlock()
-				if ci.MCC == "" && cachedMCC != "" {
-					ci.MCC = cachedMCC
-				}
-				if ci.MNC == "" && cachedMNC != "" {
-					ci.MNC = cachedMNC
-				}
-				// Last resort: use cached netType
-				if ci.NetworkType == "" && cachedNet != "" {
-					ci.NetworkType = cachedNet
-				}
-				if ci.NetworkType != "" {
-					info.Technology = ci.NetworkType
-					t.stateMu.Lock()
-					t.netType = ci.NetworkType
-					t.stateMu.Unlock()
-				}
-				// Emit cell info update
-				ciJSON, _ := json.Marshal(ci)
-				t.emitEvent(CellEvent{
-					Type:    "cell_info_update",
-					Message: fmt.Sprintf("Cell: %s/%s CID=%s", ci.MCC, ci.MNC, ci.CellID),
-					Data:    ciJSON,
-					Time:    time.Now().UTC().Format(time.RFC3339),
-				})
-			}
-
-			// Ensure signal technology is set even without cell info
-			if info.Technology == "" {
-				if copsNetType != "" {
-					info.Technology = copsNetType
-				} else {
-					t.stateMu.RLock()
-					info.Technology = t.netType
-					t.stateMu.RUnlock()
-				}
-			}
-
-			t.signalMu.Lock()
-			t.lastSignal = *info
-			t.signalMu.Unlock()
-
-			t.emitEvent(CellEvent{
-				Type:    "signal",
-				Message: fmt.Sprintf("Signal: %d bars (%d dBm)", info.Bars, info.DBm),
-				Signal:  info.Bars,
-				Time:    info.Timestamp,
-			})
+			t.pollSignalAndCellInfo()
 		}
 	}
+}
+
+// pollSignalAndCellInfo queries signal strength and cell info from the modem.
+func (t *DirectCellTransport) pollSignalAndCellInfo() {
+	// AT+CSQ — signal strength
+	resp, err := t.execAT("AT+CSQ", 5*time.Second)
+	if err != nil {
+		log.Warn().Err(err).Msg("cellular signal poll failed")
+		return
+	}
+
+	info := parseCellCSQ(resp)
+	if info == nil {
+		return
+	}
+
+	// Query cell info: AT+QENG (Quectel) → AT+CREG? (3GPP) → AT+COPS? (AcT)
+	var ci *CellInfo
+	cellResp, cellErr := t.execAT("AT+QENG=\"servingcell\"", 5*time.Second)
+	if cellErr == nil && strings.Contains(cellResp, "+QENG:") {
+		ci = parseQENG(cellResp)
+	}
+	if ci == nil {
+		cregResp, cregErr := t.execAT("AT+CREG?", cellATTimeout)
+		if cregErr == nil {
+			ci = parseCREGExtended(cregResp)
+		}
+	}
+	// AT+COPS? gives AcT (network type) on all 3GPP modems.
+	// Critical for Huawei E220 and similar modems that omit AcT from CREG.
+	var copsNetType string
+	copsResp, copsErr := t.execAT("AT+COPS?", cellATTimeout)
+	if copsErr == nil {
+		copsNetType = parseCOPSNetType(copsResp)
+	}
+
+	if ci != nil {
+		// Fill in network type from COPS AcT (most reliable source)
+		if ci.NetworkType == "" && copsNetType != "" {
+			ci.NetworkType = copsNetType
+		}
+		// Fill in MCC/MNC from cached COPS numeric PLMN
+		t.stateMu.RLock()
+		cachedMCC := t.mcc
+		cachedMNC := t.mnc
+		cachedNet := t.netType
+		t.stateMu.RUnlock()
+		if ci.MCC == "" && cachedMCC != "" {
+			ci.MCC = cachedMCC
+		}
+		if ci.MNC == "" && cachedMNC != "" {
+			ci.MNC = cachedMNC
+		}
+		// Last resort: use cached netType
+		if ci.NetworkType == "" && cachedNet != "" {
+			ci.NetworkType = cachedNet
+		}
+		if ci.NetworkType != "" {
+			info.Technology = ci.NetworkType
+			t.stateMu.Lock()
+			t.netType = ci.NetworkType
+			t.stateMu.Unlock()
+		}
+		// Emit cell info update
+		ciJSON, _ := json.Marshal(ci)
+		t.emitEvent(CellEvent{
+			Type:    "cell_info_update",
+			Message: fmt.Sprintf("Cell: %s/%s LAC=%s CID=%s", ci.MCC, ci.MNC, ci.LAC, ci.CellID),
+			Data:    ciJSON,
+			Time:    time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	// Ensure signal technology is set even without cell info
+	if info.Technology == "" {
+		if copsNetType != "" {
+			info.Technology = copsNetType
+		} else {
+			t.stateMu.RLock()
+			info.Technology = t.netType
+			t.stateMu.RUnlock()
+		}
+	}
+
+	t.signalMu.Lock()
+	t.lastSignal = *info
+	t.signalMu.Unlock()
+
+	t.emitEvent(CellEvent{
+		Type:    "signal",
+		Message: fmt.Sprintf("Signal: %d bars (%d dBm)", info.Bars, info.DBm),
+		Signal:  info.Bars,
+		Time:    info.Timestamp,
+	})
 }
 
 // SendSMS sends an SMS to the specified number.
@@ -583,67 +621,59 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 		text = text[:maxSMSLength]
 	}
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.file == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	// AT+CMGS="number"
-	cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
-	drainPort(t.file)
-	if _, err := t.file.Write([]byte(cmd + "\r")); err != nil {
-		return fmt.Errorf("write CMGS failed: %w", err)
-	}
-
-	// Wait for ">" prompt
-	deadline := time.Now().Add(5 * time.Second)
-	t.file.SetReadTimeout(50 * time.Millisecond)
-	buf := make([]byte, 256)
-	var resp strings.Builder
-	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for > prompt")
+	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
+		// AT+CMGS="number"
+		cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
+		drainPort(sp)
+		if _, err := sp.Write([]byte(cmd + "\r")); err != nil {
+			return "", fmt.Errorf("write CMGS failed: %w", err)
 		}
-		n, err := t.file.Read(buf)
-		if n > 0 {
-			resp.Write(buf[:n])
-			if strings.Contains(resp.String(), ">") {
-				break
+
+		// Wait for ">" prompt
+		deadline := time.Now().Add(5 * time.Second)
+		sp.SetReadTimeout(50 * time.Millisecond)
+		buf := make([]byte, 256)
+		var resp strings.Builder
+		for {
+			if time.Now().After(deadline) {
+				return "", fmt.Errorf("timeout waiting for > prompt")
+			}
+			n, err := sp.Read(buf)
+			if n > 0 {
+				resp.Write(buf[:n])
+				if strings.Contains(resp.String(), ">") {
+					break
+				}
+			}
+			if err != nil {
+				return "", fmt.Errorf("read failed: %w", err)
 			}
 		}
-		if err != nil {
-			return fmt.Errorf("read failed: %w", err)
+
+		// Send text + Ctrl+Z
+		if _, err := sp.Write([]byte(text + "\x1A")); err != nil {
+			return "", fmt.Errorf("write text failed: %w", err)
 		}
-	}
 
-	// Send text + Ctrl+Z
-	if _, err := t.file.Write([]byte(text + "\x1A")); err != nil {
-		return fmt.Errorf("write text failed: %w", err)
-	}
+		// Read response (wait for OK or ERROR)
+		smsResp, err := readATResponse(sp, cellSMSSendTimeout)
+		if err != nil {
+			return "", fmt.Errorf("SMS send failed: %w", err)
+		}
+		if strings.Contains(smsResp, "ERROR") {
+			return "", fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
+		}
 
-	// Read response (wait for OK or ERROR)
-	smsResp, err := readATResponse(t.file, cellSMSSendTimeout)
-	if err != nil {
-		return fmt.Errorf("SMS send failed: %w", err)
-	}
-	if strings.Contains(smsResp, "ERROR") {
-		return fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
-	}
+		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent")
+		return "OK", nil
+	}, cellSMSSendTimeout+10*time.Second)
 
-	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent")
-	return nil
+	return err
 }
 
 // GetSignal returns current signal strength.
 func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.file == nil {
-		return nil, fmt.Errorf("not connected")
-	}
-
-	resp, err := sendAT(t.file, "AT+CSQ", 5*time.Second)
+	resp, err := t.execAT("AT+CSQ", 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -681,29 +711,23 @@ func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) 
 	}, nil
 }
 
-// ConnectData brings up the LTE data connection.
+// ConnectData brings up the LTE/3G data connection.
 func (t *DirectCellTransport) ConnectData(_ context.Context, apn string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.file == nil {
-		return fmt.Errorf("not connected")
-	}
-
 	// Set APN
 	cmd := fmt.Sprintf("AT+CGDCONT=1,\"IP\",\"%s\"", apn)
-	resp, err := sendAT(t.file, cmd, cellATTimeout)
+	resp, err := t.execAT(cmd, cellATTimeout)
 	if err != nil || strings.Contains(resp, "ERROR") {
 		return fmt.Errorf("set APN failed: %s", resp)
 	}
 
 	// Activate PDP context
-	resp, err = sendAT(t.file, "AT+CGACT=1,1", 30*time.Second)
+	resp, err = t.execAT("AT+CGACT=1,1", 30*time.Second)
 	if err != nil || strings.Contains(resp, "ERROR") {
 		return fmt.Errorf("activate PDP failed: %s", resp)
 	}
 
 	// Query assigned IP
-	resp, err = sendAT(t.file, "AT+CGPADDR=1", cellATTimeout)
+	resp, err = t.execAT("AT+CGPADDR=1", cellATTimeout)
 	ip := ""
 	if err == nil {
 		ip = parseCGPADDR(resp)
@@ -720,15 +744,9 @@ func (t *DirectCellTransport) ConnectData(_ context.Context, apn string) error {
 	return nil
 }
 
-// DisconnectData tears down the LTE data connection.
+// DisconnectData tears down the LTE/3G data connection.
 func (t *DirectCellTransport) DisconnectData(_ context.Context) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.file == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	resp, err := sendAT(t.file, "AT+CGACT=0,1", 10*time.Second)
+	resp, err := t.execAT("AT+CGACT=0,1", 10*time.Second)
 	if err != nil || strings.Contains(resp, "ERROR") {
 		return fmt.Errorf("deactivate PDP failed: %s", resp)
 	}
@@ -759,14 +777,13 @@ func (t *DirectCellTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.monitorActive {
-		close(t.stopMonitorCh)
-		close(t.stopSignalCh)
-		t.monitorActive = false
+	if t.running {
+		close(t.stopCh)
+		t.running = false
 		t.mu.Unlock()
 		// Wait for goroutines to finish before closing the fd
-		<-t.monitorDone
-		<-t.signalDone
+		<-t.ioDone
+		<-t.sigDone
 		t.mu.Lock()
 	}
 
@@ -1079,14 +1096,8 @@ func (t *DirectCellTransport) GetPort() string {
 
 // UnlockPIN submits the SIM PIN to unlock the modem.
 func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.file == nil {
-		return fmt.Errorf("not connected")
-	}
-
 	cmd := fmt.Sprintf("AT+CPIN=\"%s\"", pin)
-	resp, err := sendAT(t.file, cmd, 10*time.Second)
+	resp, err := t.execAT(cmd, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("PIN command failed: %w", err)
 	}
@@ -1098,27 +1109,27 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	time.Sleep(2 * time.Second)
 
 	// Run post-unlock initialization: registration, operator, SMS, CBS
-	sendAT(t.file, "AT+CREG=2", cellATTimeout)
-	resp, _ = sendAT(t.file, "AT+CREG?", cellATTimeout)
+	t.execAT("AT+CREG=2", cellATTimeout)
+	resp, _ = t.execAT("AT+CREG?", cellATTimeout)
 	regStatus := parseCREG(resp)
 	netType := parseCREGNetType(resp)
 
-	resp, _ = sendAT(t.file, "AT+COPS?", cellATTimeout)
+	resp, _ = t.execAT("AT+COPS?", cellATTimeout)
 	operator := parseCOPS(resp)
 	if netType == "" {
 		netType = parseCOPSNetType(resp)
 	}
 	// Get MCC/MNC from COPS numeric PLMN
-	sendAT(t.file, "AT+COPS=3,2", cellATTimeout)
-	resp, _ = sendAT(t.file, "AT+COPS?", cellATTimeout)
+	t.execAT("AT+COPS=3,2", cellATTimeout)
+	resp, _ = t.execAT("AT+COPS?", cellATTimeout)
 	mcc, mnc := parseCOPSNumericPLMN(resp)
 	if netType == "" {
 		netType = parseCOPSNetType(resp)
 	}
-	sendAT(t.file, "AT+COPS=3,0", cellATTimeout) // restore long alpha format
+	t.execAT("AT+COPS=3,0", cellATTimeout) // restore long alpha format
 
-	sendAT(t.file, "AT+CNMI=2,1,2,0,0", cellATTimeout)
-	sendAT(t.file, "AT+CSCB=0", cellATTimeout)
+	t.execAT("AT+CNMI=2,1,2,0,0", cellATTimeout)
+	t.execAT("AT+CSCB=0", cellATTimeout)
 
 	t.stateMu.Lock()
 	t.simState = "READY"
@@ -1144,16 +1155,8 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 // GetCellInfo queries cell tower information from the modem.
 // Tries AT+QENG (Quectel proprietary) first, falls back to AT+CREG? + AT+COPS?.
 func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) {
-	if !t.mu.TryLock() {
-		return nil, fmt.Errorf("modem busy (initializing)")
-	}
-	defer t.mu.Unlock()
-	if t.file == nil {
-		return nil, fmt.Errorf("not connected")
-	}
-
 	// Try Quectel AT+QENG="servingcell"
-	resp, err := sendAT(t.file, "AT+QENG=\"servingcell\"", 5*time.Second)
+	resp, err := t.execAT("AT+QENG=\"servingcell\"", 5*time.Second)
 	if err == nil && strings.Contains(resp, "+QENG:") {
 		info := parseQENG(resp)
 		if info != nil {
@@ -1163,7 +1166,7 @@ func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) 
 
 	// Fallback: AT+CREG? for LAC/CellID, AT+COPS? for AcT
 	var ci *CellInfo
-	resp, err = sendAT(t.file, "AT+CREG?", cellATTimeout)
+	resp, err = t.execAT("AT+CREG?", cellATTimeout)
 	if err == nil {
 		ci = parseCREGExtended(resp)
 	}
@@ -1171,7 +1174,7 @@ func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) 
 		ci = &CellInfo{}
 	}
 	// Get network type from COPS AcT
-	resp, err = sendAT(t.file, "AT+COPS?", cellATTimeout)
+	resp, err = t.execAT("AT+COPS?", cellATTimeout)
 	if err == nil && ci.NetworkType == "" {
 		ci.NetworkType = parseCOPSNetType(resp)
 	}
