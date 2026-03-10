@@ -217,18 +217,14 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 
 			switch event.Type {
 			case "sms_received":
-				// Parse sender from event data
+				// DB persistence is handled by CellSignalRecorder (engine layer).
+				// Gateway only handles forwarding to mesh.
 				sender := ""
 				if event.Data != nil {
 					var sms transport.SMSMessage
 					if err := json.Unmarshal(event.Data, &sms); err == nil {
 						sender = sms.Sender
 					}
-				}
-
-				// Persist received SMS
-				if g.db != nil {
-					g.db.InsertSMSMessage("rx", sender, event.Message, "delivered", time.Now().Unix())
 				}
 
 				// Check allowed senders
@@ -254,31 +250,15 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 					log.Warn().Msg("cellular: inbound channel full")
 				}
 
-			case "cbs_received":
-				// Persist cell broadcast alert
-				if g.db != nil && event.Data != nil {
-					var cbs transport.CellBroadcastMsg
-					if err := json.Unmarshal(event.Data, &cbs); err == nil {
-						g.db.InsertCellBroadcast(cbs.SerialNumber, cbs.MessageID, cbs.Channel, cbs.Severity, cbs.Text, time.Now().Unix())
-						log.Info().Int("mid", cbs.MessageID).Str("severity", cbs.Severity).Msg("cellular: CBS alert persisted")
-					}
-				}
-
-			case "cell_info_update":
-				// Persist cell tower info
-				if g.db != nil && event.Data != nil {
-					var ci transport.CellInfo
-					if err := json.Unmarshal(event.Data, &ci); err == nil {
-						g.db.InsertCellInfo(ci.MCC, ci.MNC, ci.LAC, ci.CellID, ci.NetworkType, ci.RSRP, ci.RSRQ, time.Now().Unix())
-					}
-				}
+			case "cbs_received", "cell_info_update":
+				// DB persistence handled by CellSignalRecorder (engine layer)
 
 			case "connected":
 				g.connected.Store(true)
 			case "disconnected":
 				g.connected.Store(false)
 			case "signal":
-				// Signal events are tracked by the transport, no gateway action needed
+				// Signal events tracked by CellSignalRecorder
 			}
 		}
 	}
