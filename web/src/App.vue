@@ -17,6 +17,7 @@ const tabs = [
   { name: 'passes', label: 'Passes', path: '/passes' },
   { name: 'map', label: 'Map', path: '/map' },
   { name: 'settings', label: 'Settings', path: '/settings' },
+  { name: 'audit', label: 'Audit', path: '/audit' },
   { name: 'help', label: 'Help', path: '/help' },
   { name: 'about', label: 'About', path: '/about' }
 ]
@@ -25,6 +26,9 @@ function isActive(tab) {
   if (tab.path === '/') return route.path === '/'
   return route.path.startsWith(tab.path)
 }
+
+// SOS indicator (persistent across all views)
+const sosActive = computed(() => store.sosStatus?.active === true)
 
 const deviceId = computed(() => {
   const id = store.status?.node_id
@@ -93,6 +97,7 @@ onMounted(() => {
   store.fetchStatus()
   store.fetchNodes()
   store.fetchGateways()
+  store.fetchSOSStatus()
   store.fetchIridiumSignalFast()
   store.fetchCellularSignal()
   store.fetchCellularStatus()
@@ -218,6 +223,13 @@ onUnmounted(() => {
         </div>
       </div>
     </header>
+
+    <!-- SOS Active Banner (visible on all views) -->
+    <div v-if="sosActive" class="bg-red-900/80 border-b border-red-600 px-4 py-2 flex items-center justify-center gap-3 animate-pulse">
+      <svg class="w-5 h-5 text-red-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+      <span class="text-sm font-bold text-red-200 tracking-wider">SOS ACTIVE</span>
+      <span class="text-xs text-red-300/70">Emergency beacon transmitting on all channels</span>
+    </div>
 
     <!-- Main content -->
     <main class="flex-1">

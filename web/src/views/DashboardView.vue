@@ -724,6 +724,8 @@ async function fetchAll() {
     store.fetchSMSMessages({ limit: 10 }),
     store.fetchCellBroadcasts({ limit: 10 }),
     store.fetchCellInfo(),
+    store.fetchCellularDataStatus(),
+    store.fetchDynDNSStatus(),
     store.fetchNeighborInfo()
   ])
 }
@@ -1107,6 +1109,21 @@ function widgetGridClass(id) {
           <div class="flex justify-between">
             <span class="text-gray-500">SMS Received</span>
             <span class="text-gray-300 font-mono">{{ cellularGw?.messages_in ?? smsRxCount }}</span>
+          </div>
+          <div v-if="store.cellularDataStatus" class="flex justify-between">
+            <span class="text-gray-500">Data</span>
+            <span class="font-mono text-[10px]" :class="store.cellularDataStatus.connected ? 'text-emerald-400' : 'text-gray-500'">
+              {{ store.cellularDataStatus.connected ? 'Connected' : 'Disconnected' }}
+              <span v-if="store.cellularDataStatus.ip" class="text-gray-500 ml-1">{{ store.cellularDataStatus.ip }}</span>
+            </span>
+          </div>
+          <div v-if="store.dyndnsStatus" class="flex justify-between">
+            <span class="text-gray-500">DynDNS</span>
+            <span class="text-gray-400 font-mono text-[10px]">{{ store.dyndnsStatus.domain || 'N/A' }}
+              <span :class="store.dyndnsStatus.last_update_ok ? 'text-emerald-400' : 'text-amber-400'">
+                {{ store.dyndnsStatus.last_update_ok ? 'OK' : 'pending' }}
+              </span>
+            </span>
           </div>
         </div>
 

@@ -341,6 +341,19 @@ onUnmounted(() => {
                 <h4 class="text-[10px] text-gray-500 uppercase mb-1">Raw</h4>
                 <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-800 rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(sbdDetailItem, null, 2) }}</pre>
               </div>
+              <!-- Actions -->
+              <div v-if="sbdDetailItem.status === 'pending' || !sbdDetailItem.status" class="flex items-center gap-2 pt-2 border-t border-gray-700">
+                <span class="text-[10px] text-gray-500">Priority:</span>
+                <button @click="store.setQueuePriority(sbdDetailItem.id, 0); sbdDetailItem.priority = 0"
+                  class="px-2 py-1 rounded text-[10px]" :class="sbdDetailItem.priority === 0 ? 'bg-red-400/20 text-red-400' : 'bg-gray-700 text-gray-400 hover:text-red-400'">Critical</button>
+                <button @click="store.setQueuePriority(sbdDetailItem.id, 1); sbdDetailItem.priority = 1"
+                  class="px-2 py-1 rounded text-[10px]" :class="sbdDetailItem.priority === 1 ? 'bg-amber-400/20 text-amber-400' : 'bg-gray-700 text-gray-400 hover:text-amber-400'">Normal</button>
+                <button @click="store.setQueuePriority(sbdDetailItem.id, 2); sbdDetailItem.priority = 2"
+                  class="px-2 py-1 rounded text-[10px]" :class="sbdDetailItem.priority === 2 ? 'bg-gray-600 text-gray-400' : 'bg-gray-700 text-gray-400'">Low</button>
+                <span class="flex-1" />
+                <button @click="store.cancelQueueItem(sbdDetailItem.id); sbdDetailModal = false"
+                  class="px-3 py-1 rounded text-[10px] bg-red-900/30 text-red-400 hover:bg-red-900/50">Cancel Item</button>
+              </div>
             </div>
           </div>
         </div>

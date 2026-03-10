@@ -18,6 +18,7 @@ const tabs = [
   { id: 'zigbee', label: 'ZigBee' },
   { id: 'store_forward', label: 'S&F' },
   { id: 'range_test', label: 'Range Test' },
+  { id: 'config_mgmt', label: 'Export/Import' },
   { id: 'about', label: 'About' }
 ]
 
@@ -28,6 +29,46 @@ const radioEditing = ref(false)
 const radioJSON = ref('')
 
 const radioRefreshing = ref(false)
+
+// Config export/import
+const exportedConfig = ref('')
+const importText = ref('')
+const importResult = ref(null)
+const exporting = ref(false)
+const importing = ref(false)
+
+async function doExportConfig() {
+  exporting.value = true
+  exportedConfig.value = ''
+  try {
+    const data = await store.exportConfig()
+    exportedConfig.value = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
+  } catch { /* store error */ }
+  exporting.value = false
+}
+
+function downloadConfig() {
+  if (!exportedConfig.value) return
+  const blob = new Blob([exportedConfig.value], { type: 'text/yaml' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `meshsat-config-${new Date().toISOString().slice(0, 10)}.yaml`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function doImportConfig() {
+  if (!importText.value.trim()) return
+  importing.value = true
+  importResult.value = null
+  try {
+    importResult.value = await store.importConfig(importText.value)
+  } catch (e) {
+    importResult.value = { error: e.message }
+  }
+  importing.value = false
+}
 
 async function refreshRadioSection() {
   radioRefreshing.value = true
@@ -1017,6 +1058,46 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <span class="text-gray-500">RSSI {{ rt.rx_rssi }}</span>
               <span class="text-gray-600">{{ new Date(rt.created_at).toLocaleTimeString() }}</span>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Config Export/Import -->
+    <div v-if="activeTab === 'config_mgmt'">
+      <div class="space-y-4">
+        <!-- Export -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-3">Export Running Config</h3>
+          <p class="text-xs text-gray-500 mb-3">Download the current interface configuration as YAML (Cisco-style running-config format).</p>
+          <div class="flex gap-2 mb-3">
+            <button @click="doExportConfig" :disabled="exporting"
+              class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-50">
+              {{ exporting ? 'Exporting...' : 'Export Config' }}
+            </button>
+            <button v-if="exportedConfig" @click="downloadConfig"
+              class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">
+              Download YAML
+            </button>
+          </div>
+          <div v-if="exportedConfig">
+            <pre class="text-[11px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-[400px] overflow-y-auto select-all border border-gray-700">{{ exportedConfig }}</pre>
+          </div>
+        </div>
+
+        <!-- Import -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-3">Import Config</h3>
+          <p class="text-xs text-gray-500 mb-3">Paste a YAML config to import. This will merge/overwrite current interface and rule configuration.</p>
+          <textarea v-model="importText" rows="8" placeholder="Paste YAML config here..."
+            class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono mb-3"></textarea>
+          <button @click="doImportConfig" :disabled="importing || !importText.trim()"
+            class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
+            {{ importing ? 'Importing...' : 'Import Config' }}
+          </button>
+          <div v-if="importResult" class="mt-3 p-3 rounded text-sm"
+            :class="importResult.error ? 'bg-red-900/20 border border-red-700 text-red-300' : 'bg-emerald-900/20 border border-emerald-700 text-emerald-300'">
+            {{ importResult.error || importResult.message || 'Config imported successfully' }}
           </div>
         </div>
       </div>

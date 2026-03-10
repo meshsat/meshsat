@@ -970,6 +970,53 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Audit Log (v0.3.0)
+  const auditLog = ref([])
+  const auditSigner = ref(null)
+
+  async function fetchAuditLog(params = {}) {
+    try {
+      const data = await api.get('/audit', params)
+      auditLog.value = Array.isArray(data) ? data : (data?.entries || [])
+    } catch (e) { error.value = e.message }
+  }
+
+  async function verifyAuditLog() {
+    error.value = null
+    try {
+      return await api.get('/audit/verify')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function fetchAuditSigner() {
+    try {
+      auditSigner.value = await api.get('/audit/signer')
+    } catch (e) { error.value = e.message }
+  }
+
+  // Config Export/Import (v0.3.0)
+  async function exportConfig() {
+    error.value = null
+    try {
+      return await api.get('/config/export')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function importConfig(yamlContent) {
+    error.value = null
+    try {
+      return await api.post('/config/import', { content: yamlContent })
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Transform validation (v0.3.0)
+  async function validateTransforms(transforms, channelType) {
+    error.value = null
+    try {
+      return await api.post('/crypto/validate-transforms', { transforms, channel_type: channelType })
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Failover Groups (v0.3.0)
   async function fetchFailoverGroups() {
     try {
@@ -1034,6 +1081,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
     objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,
     failoverGroups, fetchFailoverGroups, createFailoverGroup, deleteFailoverGroup,
+    auditLog, auditSigner, fetchAuditLog, verifyAuditLog, fetchAuditSigner,
+    exportConfig, importConfig, validateTransforms,
     sseConnected, connectSSE, closeSSE
   }
 })
