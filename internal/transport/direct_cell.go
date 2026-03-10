@@ -198,17 +198,21 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
 	t.simState = parseCPIN(resp)
 	log.Debug().Str("sim_state", t.simState).Msg("cellular: SIM state detected")
-	sendAT(sp, "AT+CREG=2", cellATTimeout)
-	resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
-	t.regStatus = parseCREG(resp)
-	t.netType = parseCREGNetType(resp)
-	log.Debug().Msg("cellular: init AT+COPS?")
-	resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
-	t.operator = parseCOPS(resp)
-	if t.netType == "" {
-		t.netType = parseCOPSNetType(resp)
-	}
+
+	// Only query network registration and operator when SIM is ready.
+	// AT+COPS? on an unregistered modem (SIM locked) can hang or trigger
+	// a slow network scan that exceeds the AT timeout.
 	if t.simState == "READY" {
+		sendAT(sp, "AT+CREG=2", cellATTimeout)
+		resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
+		t.regStatus = parseCREG(resp)
+		t.netType = parseCREGNetType(resp)
+		log.Debug().Msg("cellular: init AT+COPS?")
+		resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
+		t.operator = parseCOPS(resp)
+		if t.netType == "" {
+			t.netType = parseCOPSNetType(resp)
+		}
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 

@@ -179,17 +179,19 @@ func sendAT(port serial.Port, command string, timeout time.Duration) (string, er
 }
 
 // readATResponse reads until "OK" or "ERROR" is found, or timeout expires.
+// Hard caps: timeout is enforced even if the modem sends continuous data,
+// and response buffer is capped at 4KB to prevent runaway reads.
 func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var resp strings.Builder
 	buf := make([]byte, 256)
+	const maxResp = 4096
 
 	// Use 50ms read slices for responsive timeout checking
 	port.SetReadTimeout(50 * time.Millisecond)
 
 	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
+		if time.Now().After(deadline) {
 			return resp.String(), fmt.Errorf("read timeout")
 		}
 
@@ -205,6 +207,11 @@ func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 				strings.HasSuffix(strings.TrimSpace(full), "ERROR") ||
 				strings.Contains(full, "READY") {
 				return full, nil
+			}
+
+			// Safety: stop reading if response is unreasonably large
+			if resp.Len() > maxResp {
+				return full, fmt.Errorf("response too large (%d bytes)", resp.Len())
 			}
 		}
 
