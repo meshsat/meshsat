@@ -1199,6 +1199,17 @@ function widgetGridClass(id) {
             </span>
             <span class="text-[10px] text-gray-500 ml-1">/5</span>
           </div>
+          <span v-if="store.cellularSignal?.assessment && store.cellularSignal.assessment !== 'none'"
+            class="text-[10px] font-medium px-1.5 py-0.5 rounded"
+            :class="{
+              'bg-emerald-900/30 text-emerald-400': store.cellularSignal.assessment === 'excellent',
+              'bg-sky-900/30 text-sky-400': store.cellularSignal.assessment === 'good',
+              'bg-amber-900/30 text-amber-400': store.cellularSignal.assessment === 'fair',
+              'bg-red-900/30 text-red-400': store.cellularSignal.assessment === 'poor'
+            }">
+            {{ store.cellularSignal.assessment }}
+          </span>
+          <span v-if="store.cellularSignal?.dbm" class="text-[10px] text-gray-600 font-mono">{{ store.cellularSignal.dbm }} dBm</span>
           <span v-if="store.cellularStatus?.network_type" class="text-[10px] text-gray-500 uppercase">
             {{ store.cellularStatus.network_type }}
           </span>

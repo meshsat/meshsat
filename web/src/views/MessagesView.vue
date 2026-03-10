@@ -46,6 +46,40 @@ const smsMsgText = ref('')
 const smsSent = ref(false)
 const smsErr = ref('')
 
+// Cell broadcast helpers
+const cbsFilter = ref('all')
+const filteredBroadcasts = computed(() => {
+  const all = store.cellBroadcasts || []
+  if (cbsFilter.value === 'all') return all
+  if (cbsFilter.value === 'unacked') return all.filter(a => !a.acknowledged)
+  return all.filter(a => a.severity === cbsFilter.value)
+})
+
+function cbsSeverityClass(severity) {
+  switch (severity) {
+    case 'extreme': return 'bg-red-900/40 text-red-400'
+    case 'severe': return 'bg-orange-900/40 text-orange-400'
+    case 'amber': return 'bg-amber-900/40 text-amber-400'
+    case 'test': return 'bg-blue-900/40 text-blue-400'
+    default: return 'bg-gray-700/40 text-gray-400'
+  }
+}
+
+function cbsCardClass(severity) {
+  switch (severity) {
+    case 'extreme': return 'bg-red-950/30 border-red-900/40'
+    case 'severe': return 'bg-orange-950/30 border-orange-900/40'
+    case 'amber': return 'bg-amber-950/30 border-amber-900/40'
+    case 'test': return 'bg-blue-950/30 border-blue-900/40'
+    default: return 'bg-gray-800/40 border-gray-700/40'
+  }
+}
+
+function smsContactName(phone) {
+  const c = (store.smsContacts || []).find(c => c.phone === phone)
+  return c ? c.name : ''
+}
+
 async function doSendSMS() {
   if (!smsTo.value || !smsMsgText.value) return
   smsSent.value = false
@@ -263,6 +297,8 @@ onMounted(() => {
   store.fetchMessageStats()
   store.fetchDLQ()
   store.fetchSMSContacts()
+  store.fetchSMSMessages()
+  store.fetchCellBroadcasts()
   store.fetchWebhookLog()
   store.connectSSE((event) => {
     if (event.type === 'message') store.fetchMessages()
@@ -288,6 +324,7 @@ onUnmounted(() => {
         { key: 'mesh', label: 'Mesh Messages' },
         { key: 'sbd', label: 'SBD Queue' },
         { key: 'sms', label: 'SMS' },
+        { key: 'broadcasts', label: 'Broadcasts' },
         { key: 'webhooks', label: 'Webhooks' }
       ]" :key="tab.key"
         @click="activeTab = tab.key"
@@ -407,9 +444,85 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="text-center text-[11px] text-gray-600 mt-8">
-        Received SMS messages appear in the Mesh Messages tab when forwarded via bridge rules.
-        <br />Manage contacts in the <span class="text-teal-400/70">Peers</span> tab.
+      <!-- SMS History -->
+      <div class="mt-3">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[11px] text-gray-500">SMS History</div>
+          <button @click="store.fetchSMSMessages()" class="px-2.5 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">Refresh</button>
+        </div>
+        <div v-if="!(store.smsMessages || []).length" class="text-center text-[11px] text-gray-600 py-8">No SMS messages yet.</div>
+        <div v-else class="space-y-1">
+          <div v-for="sms in store.smsMessages" :key="sms.id"
+            class="flex items-start gap-2 py-2 px-3 rounded-lg bg-gray-800/40 border border-gray-700/30">
+            <span class="mt-0.5 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+              :class="sms.direction === 'tx' ? 'bg-sky-900/30 text-sky-400' : 'bg-emerald-900/30 text-emerald-400'">
+              {{ sms.direction === 'tx' ? 'OUT' : 'IN' }}
+            </span>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-200 font-mono">{{ sms.phone }}</span>
+                <span v-if="smsContactName(sms.phone)" class="text-[10px] text-gray-500">{{ smsContactName(sms.phone) }}</span>
+              </div>
+              <div class="text-[11px] text-gray-300 mt-0.5">{{ sms.text || '(empty)' }}</div>
+              <div class="text-[9px] text-gray-600 mt-0.5">{{ formatTimestamp(sms.created_at) }}</div>
+            </div>
+            <span class="text-[9px] font-mono mt-0.5 px-1.5 py-0.5 rounded"
+              :class="dlqStatusColor(sms.status)">
+              {{ sms.status }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Broadcasts Tab ═══ -->
+    <div v-if="activeTab === 'broadcasts'" class="flex-1 overflow-y-auto min-h-0">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <div class="text-[11px] text-gray-500">Cell Broadcast Alerts</div>
+          <select v-model="cbsFilter" class="px-2 py-1 text-[10px] rounded bg-gray-800 border border-gray-700 text-gray-300">
+            <option value="all">All</option>
+            <option value="extreme">Extreme</option>
+            <option value="severe">Severe</option>
+            <option value="amber">AMBER</option>
+            <option value="test">Test</option>
+            <option value="unacked">Unacknowledged</option>
+          </select>
+        </div>
+        <button @click="store.fetchCellBroadcasts()"
+          class="px-2.5 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">
+          Refresh
+        </button>
+      </div>
+
+      <div v-if="!filteredBroadcasts.length" class="flex flex-col items-center justify-center py-16 text-gray-500">
+        <svg class="w-10 h-10 mb-3 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 01-1.44-4.282m3.102.069a18.03 18.03 0 01-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 018.835 2.535M10.34 6.66a23.847 23.847 0 008.835-2.535m0 0A23.74 23.74 0 0018.795 3m.38 1.125a23.91 23.91 0 011.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 001.014-5.395m0-3.46c.495.413.811 1.035.811 1.73 0 .695-.316 1.317-.811 1.73m0-3.46a24.347 24.347 0 010 3.46" />
+        </svg>
+        <div class="text-[11px]">No cell broadcasts received</div>
+        <div class="text-[10px] text-gray-600 mt-1">Government emergency alerts (EU-Alert, WEA, CMAS) appear here</div>
+      </div>
+      <div v-else class="space-y-1.5">
+        <div v-for="alert in filteredBroadcasts" :key="alert.id"
+          class="flex items-start gap-2 py-2 px-3 rounded-lg border"
+          :class="alert.acknowledged ? 'bg-gray-800/30 border-gray-700/30' : cbsCardClass(alert.severity)">
+          <span class="mt-0.5 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+            :class="cbsSeverityClass(alert.severity)">
+            {{ (alert.severity || 'info').toUpperCase() }}
+          </span>
+          <div class="flex-1 min-w-0">
+            <div class="text-[11px] text-gray-200">{{ alert.text || '(no text)' }}</div>
+            <div class="text-[9px] text-gray-600 mt-0.5">
+              {{ formatTimestamp(alert.created_at) }}
+              <span v-if="alert.message_id" class="ml-2 text-gray-700">ID:{{ alert.message_id }} Ch:{{ alert.channel }}</span>
+            </div>
+          </div>
+          <button v-if="!alert.acknowledged" @click="store.ackCellBroadcast(alert.id)"
+            class="text-[10px] px-2 py-1 rounded bg-gray-700/50 text-gray-400 hover:text-gray-200 shrink-0">
+            ACK
+          </button>
+          <span v-else class="text-[9px] text-gray-600">acked</span>
+        </div>
       </div>
     </div>
 
