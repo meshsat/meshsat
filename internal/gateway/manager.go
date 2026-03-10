@@ -317,6 +317,17 @@ func (m *Manager) TestGateway(gwType string) error {
 			return fmt.Errorf("astrocast module not connected")
 		}
 		return nil
+	case "zigbee":
+		m.mu.RLock()
+		gw, ok := m.running["zigbee"]
+		m.mu.RUnlock()
+		if !ok {
+			return fmt.Errorf("zigbee gateway not running")
+		}
+		if !gw.Status().Connected {
+			return fmt.Errorf("zigbee coordinator not connected")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -578,6 +589,15 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 			return nil, err
 		}
 		return NewAstrocastGateway(*cfg, m.astro, m.db), nil
+	case "zigbee":
+		cfg, err := ParseZigBeeConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		return NewZigBeeGateway(*cfg), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -608,6 +628,13 @@ func (m *Manager) redactConfig(gwType, configJSON string) json.RawMessage {
 		}
 		redacted := cfg.Redacted()
 		data, _ := json.Marshal(redacted)
+		return data
+	case "zigbee":
+		cfg, err := ParseZigBeeConfig(configJSON)
+		if err != nil {
+			return json.RawMessage(configJSON)
+		}
+		data, _ := json.Marshal(cfg.Redacted())
 		return data
 	default:
 		return json.RawMessage(configJSON)
@@ -673,6 +700,18 @@ func (m *Manager) GetWebhookGateway() *WebhookGateway {
 	if gw, ok := m.running["webhook"]; ok {
 		if wgw, ok := gw.(*WebhookGateway); ok {
 			return wgw
+		}
+	}
+	return nil
+}
+
+// GetZigBeeGateway returns the running ZigBee gateway, if any.
+func (m *Manager) GetZigBeeGateway() *ZigBeeGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if gw, ok := m.running["zigbee"]; ok {
+		if zgw, ok := gw.(*ZigBeeGateway); ok {
+			return zgw
 		}
 	}
 	return nil

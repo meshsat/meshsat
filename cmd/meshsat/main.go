@@ -84,6 +84,11 @@ func main() {
 		astro = directAstro
 		log.Info().Str("port", cfg.AstrocastPort).Msg("using direct Astronode S serial transport")
 
+		// ZigBee transport (optional — only if CC2652P coordinator is available)
+		// ZigBee is managed by the gateway layer (auto-detect happens in ZigBeeGateway.Start),
+		// but we log the configured port here for visibility.
+		log.Info().Str("port", cfg.ZigBeePort).Msg("zigbee port configured (started via gateway manager)")
+
 		// GPS reader exclude ports — all radio devices so GPS auto-detect skips them
 		gpsExcludePorts = []func() string{directMesh.GetPort, directSat.GetPort}
 

@@ -303,6 +303,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/audit/verify", s.handleVerifyAuditChain)
 		r.Get("/audit/signer", s.handleGetSignerID)
 
+		// ZigBee coordinator (v0.3.0)
+		r.Get("/zigbee/devices", s.handleGetZigBeeDevices)
+		r.Get("/zigbee/status", s.handleGetZigBeeStatus)
+
 		// Crypto utilities (v0.3.0)
 		r.Post("/crypto/generate-key", s.handleGenerateEncryptionKey)
 		r.Post("/crypto/validate-transforms", s.handleValidateTransforms)
