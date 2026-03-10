@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
 )
@@ -179,6 +180,7 @@ func (s *Server) handleCreateAccessRule(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	rule.ID = id
+	s.reloadAccessRules()
 	writeJSON(w, http.StatusCreated, rule)
 }
 
@@ -201,6 +203,7 @@ func (s *Server) handleUpdateAccessRule(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.reloadAccessRules()
 	writeJSON(w, http.StatusOK, rule)
 }
 
@@ -215,6 +218,7 @@ func (s *Server) handleDeleteAccessRule(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.reloadAccessRules()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -341,4 +345,13 @@ func (s *Server) handleDeleteFailoverGroup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reloadAccessRules refreshes the in-memory access rules after CRUD mutations.
+func (s *Server) reloadAccessRules() {
+	if s.accessEval != nil {
+		if err := s.accessEval.ReloadFromDB(); err != nil {
+			log.Error().Err(err).Msg("failed to reload access rules")
+		}
+	}
 }

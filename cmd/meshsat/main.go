@@ -121,10 +121,16 @@ func main() {
 		log.Error().Err(err).Msg("interface manager start failed")
 	}
 
-	// Rule engine
+	// Rule engine (legacy forwarding rules)
 	ruleEngine := rules.NewEngine(db)
 	if err := ruleEngine.ReloadFromDB(); err != nil {
 		log.Warn().Err(err).Msg("failed to load forwarding rules (table may not exist yet)")
+	}
+
+	// v0.3.0 Access rule evaluator
+	accessEval := rules.NewAccessEvaluator(db)
+	if err := accessEval.ReloadFromDB(); err != nil {
+		log.Warn().Err(err).Msg("failed to load access rules (table may not exist yet)")
 	}
 
 	// Migrate compound dest_types (both/all → per-channel rules)
@@ -172,9 +178,10 @@ func main() {
 	// forwards to live gateway instances (survives stop/start/reconfigure)
 	proc.SetGatewayProvider(gwMgr)
 
-	// Dispatcher — structured delivery fan-out (v0.2.0)
+	// Dispatcher — structured delivery fan-out (v0.2.0 + v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, ruleEngine, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
+	dispatcher.SetAccessEvaluator(accessEval)
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)
 	log.Info().Msg("dispatcher + delivery workers started")
@@ -203,6 +210,7 @@ func main() {
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetRuleEngine(ruleEngine)
+	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
 	srv.SetAstrocastTLEManager(astroTleMgr)

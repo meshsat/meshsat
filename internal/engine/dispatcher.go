@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 type Dispatcher struct {
 	db       *database.DB
 	rules    *rules.Engine
+	access   *rules.AccessEvaluator // v0.3.0 access rule evaluation
 	registry *channel.Registry
 	gwProv   GatewayProvider
 	mesh     transport.MeshTransport
@@ -42,6 +44,11 @@ func NewDispatcher(db *database.DB, rulesEngine *rules.Engine, reg *channel.Regi
 // SetEmitter sets the SSE broadcast callback.
 func (d *Dispatcher) SetEmitter(fn func(transport.MeshEvent)) {
 	d.emit = fn
+}
+
+// SetAccessEvaluator sets the v0.3.0 access rule evaluator.
+func (d *Dispatcher) SetAccessEvaluator(ae *rules.AccessEvaluator) {
+	d.access = ae
 }
 
 // Start launches per-channel delivery workers.
@@ -119,6 +126,69 @@ func (d *Dispatcher) Dispatch(source string, msg rules.RouteMessage, payload []b
 			d.emit(transport.MeshEvent{
 				Type:    "delivery_queued",
 				Message: fmt.Sprintf("Rule '%s': %s→%s queued", m.Rule.Name, source, m.Rule.DestType),
+			})
+		}
+	}
+
+	return count
+}
+
+// DispatchAccess evaluates v0.3.0 access rules for a message arriving on an interface.
+// Returns the number of deliveries created. Uses interface IDs for routing.
+func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessage, payload []byte) int {
+	if d.access == nil {
+		return 0
+	}
+
+	matches := d.access.EvaluateIngress(sourceInterface, msg)
+	if len(matches) == 0 {
+		return 0
+	}
+
+	msgRef := fmt.Sprintf("%s-%d", time.Now().UTC().Format("20060102-150405"), time.Now().UnixNano()%100000)
+
+	count := 0
+	for _, m := range matches {
+		// Resolve retry config from channel registry using the channel_type portion
+		channelType := m.ForwardTo
+		if idx := strings.LastIndex(m.ForwardTo, "_"); idx > 0 {
+			channelType = m.ForwardTo[:idx]
+		}
+		desc, ok := d.registry.Get(channelType)
+		maxRetries := 3
+		if ok && desc.RetryConfig.Enabled {
+			maxRetries = desc.RetryConfig.MaxRetries
+		}
+
+		preview := msg.Text
+		if len(preview) > 200 {
+			preview = preview[:200]
+		}
+
+		ruleID := m.Rule.ID
+		del := database.MessageDelivery{
+			MsgRef:      msgRef,
+			RuleID:      &ruleID,
+			Channel:     m.ForwardTo, // interface ID as delivery target
+			Status:      "queued",
+			Priority:    m.Rule.Priority,
+			Payload:     payload,
+			TextPreview: preview,
+			MaxRetries:  maxRetries,
+		}
+
+		if _, err := d.db.InsertDelivery(del); err != nil {
+			log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", m.ForwardTo).Msg("failed to create access delivery")
+			continue
+		}
+
+		count++
+		log.Info().Int64("rule_id", m.Rule.ID).Str("dest", m.ForwardTo).Str("msg_ref", msgRef).Msg("access delivery queued")
+
+		if d.emit != nil {
+			d.emit(transport.MeshEvent{
+				Type:    "delivery_queued",
+				Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", m.Rule.Name, sourceInterface, m.ForwardTo),
 			})
 		}
 	}

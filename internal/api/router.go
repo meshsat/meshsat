@@ -22,6 +22,7 @@ type Server struct {
 	processor     *engine.Processor
 	gwManager     *gateway.Manager
 	ruleEngine    *rules.Engine
+	accessEval    *rules.AccessEvaluator
 	tleMgr        *engine.TLEManager
 	scheduler     *gateway.PassScheduler
 	registry      *channel.Registry
@@ -82,6 +83,11 @@ func (s *Server) SetRegistry(r *channel.Registry) {
 // SetPassScheduler sets the pass scheduler for scheduler status endpoint.
 func (s *Server) SetPassScheduler(ps *gateway.PassScheduler) {
 	s.scheduler = ps
+}
+
+// SetAccessEvaluator sets the v0.3.0 access rule evaluator for rule CRUD reload.
+func (s *Server) SetAccessEvaluator(ae *rules.AccessEvaluator) {
+	s.accessEval = ae
 }
 
 // SetInterfaceManager sets the interface manager for v0.3.0 interface CRUD.
