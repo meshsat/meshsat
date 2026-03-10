@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
 import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot } from '@/utils/format'
@@ -774,6 +774,43 @@ function toHex(str) {
   return [...str].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ')
 }
 
+// ── Interface selector (for multi-device widgets) ──
+const selectedInterface = reactive({})
+
+function loadSelectedInterfaces() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('meshsat-selected-interfaces'))
+    if (saved && typeof saved === 'object') Object.assign(selectedInterface, saved)
+  } catch { /* ignore */ }
+}
+
+function selectInterface(channelType, ifaceId) {
+  selectedInterface[channelType] = ifaceId
+  localStorage.setItem('meshsat-selected-interfaces', JSON.stringify(selectedInterface))
+}
+
+const interfacesByType = computed(() => {
+  const m = {}
+  for (const iface of (store.interfaces || [])) {
+    const t = iface.channel_type || iface.type
+    if (!m[t]) m[t] = []
+    m[t].push(iface)
+  }
+  return m
+})
+
+function widgetInterfaces(channelType) {
+  return interfacesByType.value[channelType] || []
+}
+
+function widgetSelectedId(channelType) {
+  const ifaces = widgetInterfaces(channelType)
+  if (!ifaces.length) return null
+  const sel = selectedInterface[channelType]
+  if (sel && ifaces.find(i => i.id === sel)) return sel
+  return ifaces[0].id
+}
+
 // ── Lifecycle ──
 let pollTimer = null
 
@@ -799,7 +836,8 @@ async function fetchAll() {
     store.fetchCellInfo(),
     store.fetchCellularDataStatus(),
     store.fetchDynDNSStatus(),
-    store.fetchNeighborInfo()
+    store.fetchNeighborInfo(),
+    store.fetchInterfaces()
   ])
 }
 
@@ -813,6 +851,7 @@ onMounted(() => {
     }
   } catch { /* ignore corrupt data */ }
 
+  loadSelectedInterfaces()
   fetchAll().then(fetchDashPasses)
   store.connectSSE(handleSSEEvent)
   pollTimer = setInterval(() => {
@@ -888,7 +927,15 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <h2 class="font-display font-semibold text-sm text-red-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('iridium')">IRIDIUM SBD</h2>
+            <select v-if="widgetInterfaces('iridium').length > 1"
+              :value="widgetSelectedId('iridium')"
+              @change="selectInterface('iridium', $event.target.value)"
+              class="font-display font-semibold text-sm text-red-400 tracking-wide bg-transparent border-none cursor-pointer appearance-none pr-4 focus:outline-none hover:text-red-300"
+              style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M0 0l5 6 5-6z%27 fill=%27%23f87171%27/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right center;">
+              <option v-for="iface in widgetInterfaces('iridium')" :key="iface.id" :value="iface.id"
+                class="bg-gray-900 text-gray-200">{{ iface.label || iface.id }}</option>
+            </select>
+            <h2 v-else class="font-display font-semibold text-sm text-red-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('iridium')">IRIDIUM SBD</h2>
           </div>
           <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
         </div>
@@ -1028,7 +1075,15 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <h2 class="font-display font-semibold text-sm text-tactical-lora tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('mesh')">MESHTASTIC MESH</h2>
+            <select v-if="widgetInterfaces('mesh').length > 1"
+              :value="widgetSelectedId('mesh')"
+              @change="selectInterface('mesh', $event.target.value)"
+              class="font-display font-semibold text-sm text-tactical-lora tracking-wide bg-transparent border-none cursor-pointer appearance-none pr-4 focus:outline-none hover:text-emerald-300"
+              style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M0 0l5 6 5-6z%27 fill=%27%2334d399%27/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right center;">
+              <option v-for="iface in widgetInterfaces('mesh')" :key="iface.id" :value="iface.id"
+                class="bg-gray-900 text-gray-200">{{ iface.label || iface.id }}</option>
+            </select>
+            <h2 v-else class="font-display font-semibold text-sm text-tactical-lora tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('mesh')">MESHTASTIC MESH</h2>
           </div>
           <span class="w-2 h-2 rounded-full" :class="radioConnected ? 'bg-emerald-400' : 'bg-red-400'" />
         </div>
@@ -1118,7 +1173,15 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <h2 class="font-display font-semibold text-sm text-sky-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('cellular')">CELLULAR MODEM</h2>
+            <select v-if="widgetInterfaces('cellular').length > 1"
+              :value="widgetSelectedId('cellular')"
+              @change="selectInterface('cellular', $event.target.value)"
+              class="font-display font-semibold text-sm text-sky-400 tracking-wide bg-transparent border-none cursor-pointer appearance-none pr-4 focus:outline-none hover:text-sky-300"
+              style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M0 0l5 6 5-6z%27 fill=%27%2338bdf8%27/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right center;">
+              <option v-for="iface in widgetInterfaces('cellular')" :key="iface.id" :value="iface.id"
+                class="bg-gray-900 text-gray-200">{{ iface.label || iface.id }}</option>
+            </select>
+            <h2 v-else class="font-display font-semibold text-sm text-sky-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('cellular')">CELLULAR MODEM</h2>
           </div>
           <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
         </div>
