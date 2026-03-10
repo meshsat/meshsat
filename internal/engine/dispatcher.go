@@ -18,15 +18,17 @@ import (
 
 // Dispatcher evaluates rules and fans out messages to per-channel delivery workers.
 type Dispatcher struct {
-	db       *database.DB
-	rules    *rules.Engine
-	access   *rules.AccessEvaluator // v0.3.0 access rule evaluation
-	failover *FailoverResolver      // v0.3.0 failover group resolution
-	registry *channel.Registry
-	gwProv   GatewayProvider
-	mesh     transport.MeshTransport
-	workers  map[string]*DeliveryWorker
-	emit     func(transport.MeshEvent) // SSE broadcast callback
+	db         *database.DB
+	rules      *rules.Engine
+	access     *rules.AccessEvaluator // v0.3.0 access rule evaluation
+	failover   *FailoverResolver      // v0.3.0 failover group resolution
+	signing    *SigningService        // v0.3.0 non-repudiation signing + audit
+	transforms *TransformPipeline     // v0.3.0 per-interface transform pipeline
+	registry   *channel.Registry
+	gwProv     GatewayProvider
+	mesh       transport.MeshTransport
+	workers    map[string]*DeliveryWorker
+	emit       func(transport.MeshEvent) // SSE broadcast callback
 
 	mu sync.RWMutex
 }
@@ -58,6 +60,16 @@ func (d *Dispatcher) SetFailoverResolver(fr *FailoverResolver) {
 	d.failover = fr
 }
 
+// SetSigningService sets the v0.3.0 signing service for non-repudiation.
+func (d *Dispatcher) SetSigningService(ss *SigningService) {
+	d.signing = ss
+}
+
+// SetTransformPipeline sets the v0.3.0 per-interface transform pipeline.
+func (d *Dispatcher) SetTransformPipeline(tp *TransformPipeline) {
+	d.transforms = tp
+}
+
 // Start launches per-channel delivery workers.
 func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
@@ -69,12 +81,14 @@ func (d *Dispatcher) Start(ctx context.Context) {
 			continue
 		}
 		w := &DeliveryWorker{
-			channelID: desc.ID,
-			desc:      desc,
-			db:        d.db,
-			gwProv:    d.gwProv,
-			mesh:      d.mesh,
-			emit:      d.emit,
+			channelID:  desc.ID,
+			desc:       desc,
+			db:         d.db,
+			gwProv:     d.gwProv,
+			mesh:       d.mesh,
+			emit:       d.emit,
+			signing:    d.signing,
+			transforms: d.transforms,
 		}
 		d.workers[desc.ID] = w
 		go w.Run(ctx)
@@ -133,12 +147,14 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 		}
 
 		w := &DeliveryWorker{
-			channelID: iface.ID,
-			desc:      desc,
-			db:        d.db,
-			gwProv:    d.gwProv,
-			mesh:      d.mesh,
-			emit:      d.emit,
+			channelID:  iface.ID,
+			desc:       desc,
+			db:         d.db,
+			gwProv:     d.gwProv,
+			mesh:       d.mesh,
+			emit:       d.emit,
+			signing:    d.signing,
+			transforms: d.transforms,
 		}
 		d.workers[iface.ID] = w
 		go w.Run(ctx)
@@ -170,12 +186,14 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 	}
 
 	w := &DeliveryWorker{
-		channelID: ifaceID,
-		desc:      desc,
-		db:        d.db,
-		gwProv:    d.gwProv,
-		mesh:      d.mesh,
-		emit:      d.emit,
+		channelID:  ifaceID,
+		desc:       desc,
+		db:         d.db,
+		gwProv:     d.gwProv,
+		mesh:       d.mesh,
+		emit:       d.emit,
+		signing:    d.signing,
+		transforms: d.transforms,
 	}
 	d.workers[ifaceID] = w
 
@@ -387,9 +405,23 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			del.ExpiresAt = &exp
 		}
 
-		if _, err := d.db.InsertDelivery(del); err != nil {
+		// Sign the payload for non-repudiation
+		if d.signing != nil && len(payload) > 0 {
+			del.Signature = d.signing.Sign(payload)
+			del.SignerID = d.signing.SignerID()
+		}
+
+		delID, err := d.db.InsertDelivery(del)
+		if err != nil {
 			log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Msg("failed to create access delivery")
 			continue
+		}
+
+		// Audit the dispatch event
+		if d.signing != nil {
+			ifacePtr := &sourceInterface
+			dir := "egress"
+			d.signing.AuditEvent("dispatch", ifacePtr, &dir, &delID, &ruleID, preview)
 		}
 
 		count++
@@ -408,12 +440,14 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 
 // DeliveryWorker polls the delivery queue for a single channel and attempts delivery.
 type DeliveryWorker struct {
-	channelID string
-	desc      channel.ChannelDescriptor
-	db        *database.DB
-	gwProv    GatewayProvider
-	mesh      transport.MeshTransport
-	emit      func(transport.MeshEvent)
+	channelID  string
+	desc       channel.ChannelDescriptor
+	db         *database.DB
+	gwProv     GatewayProvider
+	mesh       transport.MeshTransport
+	emit       func(transport.MeshEvent)
+	signing    *SigningService
+	transforms *TransformPipeline
 }
 
 // Run polls the delivery queue and processes pending deliveries.
@@ -453,6 +487,30 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	if err := w.db.SetDeliveryStatus(del.ID, "sending", "", ""); err != nil {
 		log.Error().Err(err).Int64("id", del.ID).Msg("failed to set delivery sending")
 		return
+	}
+
+	// Apply egress transforms from the destination interface config
+	if w.transforms != nil {
+		iface, err := w.db.GetInterface(w.channelID)
+		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
+			if len(del.Payload) > 0 {
+				transformed, tErr := w.transforms.ApplyEgress(del.Payload, iface.EgressTransforms)
+				if tErr != nil {
+					log.Error().Err(tErr).Str("interface", w.channelID).Msg("egress transform failed, sending untransformed")
+				} else {
+					del.Payload = transformed
+					// Update text preview for text-based transports
+					del.TextPreview = string(transformed)
+				}
+			} else if del.TextPreview != "" {
+				transformed, tErr := w.transforms.ApplyEgress([]byte(del.TextPreview), iface.EgressTransforms)
+				if tErr != nil {
+					log.Error().Err(tErr).Str("interface", w.channelID).Msg("egress transform failed, sending untransformed")
+				} else {
+					del.TextPreview = string(transformed)
+				}
+			}
+		}
 	}
 
 	var deliveryErr error
@@ -507,6 +565,14 @@ func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {
 
 	log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("delivery sent")
 
+	// Audit the successful delivery
+	if w.signing != nil {
+		ifacePtr := &w.channelID
+		dir := "egress"
+		delID := del.ID
+		w.signing.AuditEvent("deliver", ifacePtr, &dir, &delID, del.RuleID, del.TextPreview)
+	}
+
 	if w.emit != nil {
 		w.emit(transport.MeshEvent{
 			Type:    "delivery_sent",
@@ -524,6 +590,16 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 		if err := w.db.SetDeliveryStatus(del.ID, "dead", errMsg, ""); err != nil {
 			log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery dead")
 		}
+
+		// Audit the drop event
+		if w.signing != nil {
+			ifacePtr := &w.channelID
+			dir := "egress"
+			delID := del.ID
+			detail := fmt.Sprintf("retries exhausted (%d): %s", newRetries, errMsg)
+			w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, detail)
+		}
+
 		log.Warn().Int64("id", del.ID).Str("channel", w.channelID).Int("retries", newRetries).Msg("delivery exhausted retries, moved to dead")
 
 		if w.emit != nil {

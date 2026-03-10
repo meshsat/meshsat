@@ -178,12 +178,25 @@ func main() {
 	// forwards to live gateway instances (survives stop/start/reconfigure)
 	proc.SetGatewayProvider(gwMgr)
 
+	// Signing service (v0.3.0 — Ed25519 non-repudiation + hash-chain audit log)
+	var signingService *engine.SigningService
+	if ss, err := engine.NewSigningService(db); err != nil {
+		log.Warn().Err(err).Msg("signing service init failed - non-repudiation disabled")
+	} else {
+		signingService = ss
+	}
+
 	// Dispatcher — structured delivery fan-out (v0.2.0 + v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, ruleEngine, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
 	dispatcher.SetAccessEvaluator(accessEval)
 	failoverResolver := engine.NewFailoverResolver(db, ifaceMgr)
 	dispatcher.SetFailoverResolver(failoverResolver)
+	if signingService != nil {
+		dispatcher.SetSigningService(signingService)
+	}
+	transforms := engine.NewTransformPipeline()
+	dispatcher.SetTransformPipeline(transforms)
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)
 	log.Info().Msg("dispatcher + delivery workers started")
@@ -231,6 +244,9 @@ func main() {
 	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
 	srv.SetGPSReader(gpsReader)
 	srv.SetInterfaceManager(ifaceMgr)
+	if signingService != nil {
+		srv.SetSigningService(signingService)
+	}
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 

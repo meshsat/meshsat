@@ -30,6 +30,7 @@ type Server struct {
 	cellTransport transport.CellTransport
 	gpsReader     *transport.GPSReader
 	ifaceMgr      *engine.InterfaceManager
+	signing       *engine.SigningService
 	paidRateLimit int
 	sos           *SOSState
 	webHandler    http.Handler
@@ -296,6 +297,11 @@ func (s *Server) Router() http.Handler {
 		// Config export/import (v0.3.0 — Cisco-style running-config)
 		r.Get("/config/export", s.handleConfigExport)
 		r.Post("/config/import", s.handleConfigImport)
+
+		// Audit log and non-repudiation (v0.3.0)
+		r.Get("/audit", s.handleGetAuditLog)
+		r.Get("/audit/verify", s.handleVerifyAuditChain)
+		r.Get("/audit/signer", s.handleGetSignerID)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

@@ -26,6 +26,8 @@ type MessageDelivery struct {
 	TTLSeconds  int        `json:"ttl_seconds"`          // 0 means no expiry
 	ExpiresAt   *string    `json:"expires_at,omitempty"` // UTC timestamp when delivery expires
 	QoSLevel    int        `json:"qos_level"`            // QoS level from access rule (default 1)
+	Signature   []byte     `json:"signature,omitempty"`  // Ed25519 signature (64 bytes)
+	SignerID    string     `json:"signer_id,omitempty"`  // hex-encoded Ed25519 public key
 	CreatedAt   string     `json:"created_at"`
 	UpdatedAt   string     `json:"updated_at"`
 }
@@ -53,10 +55,10 @@ func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
 		visited = "[]"
 	}
 	res, err := db.Exec(`INSERT INTO message_deliveries
-		(msg_ref, rule_id, channel, status, priority, payload, text_preview, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(msg_ref, rule_id, channel, status, priority, payload, text_preview, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, signature, signer_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.MaxRetries, d.NextRetry, visited,
-		d.TTLSeconds, d.ExpiresAt, d.QoSLevel)
+		d.TTLSeconds, d.ExpiresAt, d.QoSLevel, d.Signature, d.SignerID)
 	if err != nil {
 		return 0, fmt.Errorf("insert delivery: %w", err)
 	}
