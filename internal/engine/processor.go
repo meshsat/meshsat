@@ -21,6 +21,7 @@ import (
 // The Manager implements this so the Processor always forwards to live instances.
 type GatewayProvider interface {
 	Gateways() []gateway.Gateway
+	GatewayByInterfaceID(id string) gateway.Gateway // v0.3.0: lookup by interface ID
 }
 
 // Processor ingests mesh events, persists them, and routes to gateways.

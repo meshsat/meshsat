@@ -199,13 +199,20 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		return fmt.Errorf("no gateway provider")
 	}
 
+	msg := &transport.MeshMessage{
+		PortNum:     1,
+		PortNumName: "TEXT_MESSAGE_APP",
+		DecodedText: del.TextPreview,
+	}
+
+	// v0.3.0: try interface ID-based lookup first (e.g. "iridium_0", "mqtt_0")
+	if gw := w.gwProv.GatewayByInterfaceID(w.channelID); gw != nil {
+		return gw.Forward(ctx, msg)
+	}
+
+	// Legacy: match by gateway type string
 	for _, gw := range w.gwProv.Gateways() {
 		if gw.Type() == w.channelID {
-			msg := &transport.MeshMessage{
-				PortNum:     1,
-				PortNumName: "TEXT_MESSAGE_APP",
-				DecodedText: del.TextPreview,
-			}
 			return gw.Forward(ctx, msg)
 		}
 	}

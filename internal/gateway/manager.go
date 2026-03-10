@@ -26,7 +26,8 @@ type Manager struct {
 	astro           transport.AstrocastTransport // optional, for astrocast gateway
 	predictor       PassPredictor                // optional, for pass scheduler
 	onReceiverStart ReceiverStartFunc            // called when a gateway starts
-	running         map[string]Gateway
+	running         map[string]Gateway           // legacy: keyed by type ("iridium")
+	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
 	cancelFn        context.CancelFunc
 }
@@ -34,9 +35,10 @@ type Manager struct {
 // NewManager creates a new gateway manager.
 func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 	return &Manager{
-		db:      db,
-		sat:     sat,
-		running: make(map[string]Gateway),
+		db:             db,
+		sat:            sat,
+		running:        make(map[string]Gateway),
+		runningByIface: make(map[string]Gateway),
 	}
 }
 
@@ -78,6 +80,7 @@ func (m *Manager) GetPassScheduler() *PassScheduler {
 func (m *Manager) Start(ctx context.Context) error {
 	ctx, m.cancelFn = context.WithCancel(ctx)
 
+	// Legacy path: load from gateway_config table
 	configs, err := m.db.GetAllGatewayConfigs()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to load gateway configs, continuing without gateways")
@@ -105,6 +108,12 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		log.Info().Str("type", cfg.Type).Msg("gateway started from saved config")
 	}
+
+	// v0.3.0 path: also bootstrap from interfaces table.
+	// For each enabled interface with a known gateway channel_type, register
+	// the running gateway under the interface ID so GatewayByInterfaceID works.
+	m.bootstrapInterfaceGateways()
+
 	return nil
 }
 
@@ -121,6 +130,7 @@ func (m *Manager) Stop() {
 		}
 	}
 	m.running = make(map[string]Gateway)
+	m.runningByIface = make(map[string]Gateway)
 }
 
 // Configure creates or updates a gateway configuration and optionally starts it.
@@ -194,6 +204,8 @@ func (m *Manager) StartGateway(ctx context.Context, gwType string) error {
 
 	m.mu.Lock()
 	m.running[gwType] = gw
+	// Sync v0.3.0 interface map: register under matching interface IDs
+	m.syncIfaceMap(gwType, gw)
 	m.mu.Unlock()
 
 	if m.onReceiverStart != nil {
@@ -215,6 +227,8 @@ func (m *Manager) StopGateway(gwType string) error {
 		return fmt.Errorf("gateway %s is not running", gwType)
 	}
 	delete(m.running, gwType)
+	// Clean interface map entries pointing to this gateway
+	m.unsyncIfaceMap(gw)
 	m.mu.Unlock()
 
 	if err := gw.Stop(); err != nil {
@@ -317,6 +331,129 @@ func (m *Manager) Gateways() []Gateway {
 		gws = append(gws, gw)
 	}
 	return gws
+}
+
+// GatewayByInterfaceID returns the running gateway bound to a specific interface ID.
+// Returns nil if no gateway is running for that interface.
+func (m *Manager) GatewayByInterfaceID(id string) Gateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.runningByIface[id]
+}
+
+// StartInterfaceGateway starts a gateway for an interface, using its channel_type and config.
+func (m *Manager) StartInterfaceGateway(ctx context.Context, ifaceID, channelType, configJSON string) error {
+	m.mu.Lock()
+	if _, ok := m.runningByIface[ifaceID]; ok {
+		m.mu.Unlock()
+		return fmt.Errorf("interface %s gateway already running", ifaceID)
+	}
+	m.mu.Unlock()
+
+	gw, err := m.createGateway(channelType, configJSON)
+	if err != nil {
+		return fmt.Errorf("create gateway for interface %s: %w", ifaceID, err)
+	}
+
+	if err := gw.Start(ctx); err != nil {
+		return fmt.Errorf("start gateway for interface %s: %w", ifaceID, err)
+	}
+
+	m.mu.Lock()
+	m.runningByIface[ifaceID] = gw
+	// Also register in legacy map if not already present (backwards compat)
+	if _, ok := m.running[channelType]; !ok {
+		m.running[channelType] = gw
+	}
+	m.mu.Unlock()
+
+	if m.onReceiverStart != nil {
+		m.onReceiverStart(ctx, gw)
+	}
+
+	log.Info().Str("interface", ifaceID).Str("type", channelType).Msg("interface gateway started")
+	return nil
+}
+
+// StopInterfaceGateway stops the gateway bound to a specific interface ID.
+func (m *Manager) StopInterfaceGateway(ifaceID string) error {
+	m.mu.Lock()
+	gw, ok := m.runningByIface[ifaceID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("no gateway running for interface %s", ifaceID)
+	}
+	delete(m.runningByIface, ifaceID)
+	// Remove from legacy map if it points to the same gateway
+	for k, v := range m.running {
+		if v == gw {
+			delete(m.running, k)
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	if err := gw.Stop(); err != nil {
+		return fmt.Errorf("stop gateway for interface %s: %w", ifaceID, err)
+	}
+
+	log.Info().Str("interface", ifaceID).Msg("interface gateway stopped")
+	return nil
+}
+
+// bootstrapInterfaceGateways maps existing running gateways to their interface IDs.
+// This bridges the legacy gateway_config start path with the v0.3.0 interface model.
+func (m *Manager) bootstrapInterfaceGateways() {
+	ifaces, err := m.db.GetAllInterfaces()
+	if err != nil {
+		log.Warn().Err(err).Msg("gwmgr: failed to load interfaces for gateway mapping")
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mapped := 0
+	for _, iface := range ifaces {
+		if !iface.Enabled {
+			continue
+		}
+		// If a legacy gateway is running for this channel_type, also index it by interface ID
+		if gw, ok := m.running[iface.ChannelType]; ok {
+			if _, already := m.runningByIface[iface.ID]; !already {
+				m.runningByIface[iface.ID] = gw
+				mapped++
+			}
+		}
+	}
+
+	if mapped > 0 {
+		log.Info().Int("count", mapped).Msg("gwmgr: mapped running gateways to interface IDs")
+	}
+}
+
+// syncIfaceMap registers a gateway under all matching interface IDs.
+// Must be called with m.mu held.
+func (m *Manager) syncIfaceMap(gwType string, gw Gateway) {
+	ifaces, err := m.db.GetAllInterfaces()
+	if err != nil {
+		return
+	}
+	for _, iface := range ifaces {
+		if iface.Enabled && iface.ChannelType == gwType {
+			m.runningByIface[iface.ID] = gw
+		}
+	}
+}
+
+// unsyncIfaceMap removes all interface map entries pointing to a gateway.
+// Must be called with m.mu held.
+func (m *Manager) unsyncIfaceMap(gw Gateway) {
+	for id, g := range m.runningByIface {
+		if g == gw {
+			delete(m.runningByIface, id)
+		}
+	}
 }
 
 // GetStatus returns status info for all known gateway types (configured or running).
