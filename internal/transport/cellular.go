@@ -49,7 +49,9 @@ type CellDataStatus struct {
 	Active    bool   `json:"active"`
 	APN       string `json:"apn"`
 	IPAddress string `json:"ip_address"`
-	Interface string `json:"interface"` // e.g. "wwan0"
+	Interface string `json:"interface"`           // e.g. "wwan0"
+	TxBytes   int64  `json:"tx_bytes,omitempty"`  // bytes transmitted on data interface
+	RxBytes   int64  `json:"rx_bytes,omitempty"`  // bytes received on data interface
 }
 
 // CellInfo represents cell tower information from the modem.

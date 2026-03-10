@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -812,13 +813,20 @@ func (t *DirectCellTransport) DisconnectData(_ context.Context) error {
 // GetDataStatus returns the current data connection state.
 func (t *DirectCellTransport) GetDataStatus(_ context.Context) (*CellDataStatus, error) {
 	t.dataMu.RLock()
-	defer t.dataMu.RUnlock()
-	return &CellDataStatus{
+	iface := t.dataIface
+	status := &CellDataStatus{
 		Active:    t.dataActive,
 		APN:       t.dataAPN,
 		IPAddress: t.dataIP,
-		Interface: t.dataIface,
-	}, nil
+		Interface: iface,
+	}
+	t.dataMu.RUnlock()
+
+	// Read interface byte counters from /proc/net/dev
+	if iface != "" {
+		status.TxBytes, status.RxBytes = readIfaceBytes(iface)
+	}
+	return status, nil
 }
 
 // SetDataAutoReconnect enables automatic data reconnection when the connection drops.
@@ -1238,6 +1246,28 @@ func detectDataInterface() string {
 		}
 	}
 	return "wwan0" // default
+}
+
+// readIfaceBytes reads TX and RX byte counters from /proc/net/dev for the given interface.
+func readIfaceBytes(ifaceName string) (txBytes, rxBytes int64) {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, ifaceName+":") {
+			continue
+		}
+		// Format: iface: rx_bytes rx_packets ... tx_bytes tx_packets ...
+		parts := strings.Fields(strings.SplitN(line, ":", 2)[1])
+		if len(parts) >= 10 {
+			rxBytes, _ = strconv.ParseInt(parts[0], 10, 64)
+			txBytes, _ = strconv.ParseInt(parts[8], 10, 64)
+		}
+		break
+	}
+	return txBytes, rxBytes
 }
 
 // ============================================================================

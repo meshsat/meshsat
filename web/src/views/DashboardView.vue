@@ -370,6 +370,29 @@ const cellStatus = computed(() => {
   return { dot: 'bg-gray-600', text: 'No Modem' }
 })
 
+// RSRP/RSRQ color classes (3GPP thresholds)
+function cellRsrpClass(rsrp) {
+  if (rsrp == null) return 'text-gray-500'
+  if (rsrp >= -80) return 'text-emerald-400'  // excellent
+  if (rsrp >= -90) return 'text-sky-400'      // good
+  if (rsrp >= -100) return 'text-amber-400'   // fair
+  return 'text-red-400'                        // poor
+}
+function cellRsrqClass(rsrq) {
+  if (rsrq == null) return 'text-gray-500'
+  if (rsrq >= -10) return 'text-emerald-400'
+  if (rsrq >= -15) return 'text-sky-400'
+  if (rsrq >= -20) return 'text-amber-400'
+  return 'text-red-400'
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i]
+}
+
 // ── Computed: GPS Position panel ──
 // Use location sources API (not local node position which can be stale/cached)
 const gpsLat = computed(() => {
@@ -1255,13 +1278,30 @@ function widgetGridClass(id) {
             <span class="text-gray-500">Network</span>
             <span class="text-gray-300 font-mono">{{ store.cellularStatus?.network_type || store.cellInfo?.latest?.network_type || 'N/A' }}</span>
           </div>
+          <div v-if="store.cellularStatus?.registration" class="flex justify-between">
+            <span class="text-gray-500">Registration</span>
+            <span class="font-mono text-[10px]"
+              :class="store.cellularStatus.registration === 'registered_roaming' ? 'text-amber-400' : store.cellularStatus.registration === 'registered_home' ? 'text-emerald-400' : 'text-gray-500'">
+              {{ store.cellularStatus.registration === 'registered_home' ? 'Home' : store.cellularStatus.registration === 'registered_roaming' ? 'Roaming' : store.cellularStatus.registration === 'searching' ? 'Searching...' : store.cellularStatus.registration }}
+            </span>
+          </div>
           <div class="flex justify-between">
             <span class="text-gray-500">IMEI</span>
             <span class="text-gray-400 font-mono text-[10px]">{{ store.cellularStatus?.imei || 'N/A' }}</span>
           </div>
           <div v-if="store.cellInfo?.latest" class="flex justify-between">
             <span class="text-gray-500">Cell</span>
-            <span class="text-gray-400 font-mono text-[10px]">MCC{{ store.cellInfo.latest.mcc }}/MNC{{ store.cellInfo.latest.mnc }} CID:{{ store.cellInfo.latest.cell_id }}</span>
+            <span class="text-gray-400 font-mono text-[10px]">MCC{{ store.cellInfo.latest.mcc }}/MNC{{ store.cellInfo.latest.mnc }}
+              <span v-if="store.cellInfo.latest.lac">LAC:{{ store.cellInfo.latest.lac }}</span>
+              CID:{{ store.cellInfo.latest.cell_id }}</span>
+          </div>
+          <div v-if="store.cellInfo?.latest?.rsrp != null || store.cellInfo?.latest?.rsrq != null" class="flex justify-between">
+            <span class="text-gray-500">RSRP/RSRQ</span>
+            <span class="font-mono text-[10px]">
+              <span :class="cellRsrpClass(store.cellInfo.latest.rsrp)">{{ store.cellInfo.latest.rsrp }} dBm</span>
+              <span class="text-gray-600 mx-0.5">/</span>
+              <span :class="cellRsrqClass(store.cellInfo.latest.rsrq)">{{ store.cellInfo.latest.rsrq }} dB</span>
+            </span>
           </div>
           <div class="flex justify-between">
             <span class="text-gray-500">SMS Sent</span>
@@ -1273,9 +1313,15 @@ function widgetGridClass(id) {
           </div>
           <div v-if="store.cellularDataStatus" class="flex justify-between">
             <span class="text-gray-500">Data</span>
-            <span class="font-mono text-[10px]" :class="store.cellularDataStatus.connected ? 'text-emerald-400' : 'text-gray-500'">
-              {{ store.cellularDataStatus.connected ? 'Connected' : 'Disconnected' }}
-              <span v-if="store.cellularDataStatus.ip" class="text-gray-500 ml-1">{{ store.cellularDataStatus.ip }}</span>
+            <span class="font-mono text-[10px]" :class="(store.cellularDataStatus.active || store.cellularDataStatus.connected) ? 'text-emerald-400' : 'text-gray-500'">
+              {{ (store.cellularDataStatus.active || store.cellularDataStatus.connected) ? 'Connected' : 'Disconnected' }}
+              <span v-if="store.cellularDataStatus.ip_address || store.cellularDataStatus.ip" class="text-gray-500 ml-1">{{ store.cellularDataStatus.ip_address || store.cellularDataStatus.ip }}</span>
+            </span>
+          </div>
+          <div v-if="store.cellularDataStatus?.tx_bytes || store.cellularDataStatus?.rx_bytes" class="flex justify-between">
+            <span class="text-gray-500">Usage</span>
+            <span class="text-gray-400 font-mono text-[10px]">
+              TX {{ formatBytes(store.cellularDataStatus.tx_bytes) }} / RX {{ formatBytes(store.cellularDataStatus.rx_bytes) }}
             </span>
           </div>
           <div v-if="store.dyndnsStatus" class="flex justify-between">
