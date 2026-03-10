@@ -15,6 +15,7 @@ const tabs = [
   { id: 'iridium', label: 'Iridium' },
   { id: 'astrocast', label: 'Astrocast' },
   { id: 'cellular', label: 'Cellular' },
+  { id: 'zigbee', label: 'ZigBee' },
   { id: 'store_forward', label: 'S&F' },
   { id: 'range_test', label: 'Range Test' },
   { id: 'about', label: 'About' }
@@ -283,6 +284,46 @@ async function saveCellular() {
   await store.configureGateway('cellular', cellularEnabled.value, cellularForm.value)
 }
 
+// ZigBee gateway
+const zigbeeForm = ref({
+  serial_port: 'auto', inbound_channel: 0, inbound_dest: '',
+  forward_all: false, default_dst_addr: 65535, default_dst_ep: 1, default_cluster: 6
+})
+const zigbeeEnabled = ref(false)
+const zigbeeStatus = ref(null)
+const zigbeeDevices = ref([])
+
+const zigbeeGw = computed(() => (store.gateways || []).find(g => g.type === 'zigbee'))
+
+function loadZigBee() {
+  if (zigbeeGw.value?.config) {
+    try {
+      const c = typeof zigbeeGw.value.config === 'string' ? JSON.parse(zigbeeGw.value.config) : zigbeeGw.value.config
+      Object.assign(zigbeeForm.value, c)
+      zigbeeEnabled.value = zigbeeGw.value.enabled
+    } catch {}
+  }
+}
+
+async function saveZigBee() {
+  await store.configureGateway('zigbee', zigbeeEnabled.value, zigbeeForm.value)
+}
+
+async function fetchZigBeeStatus() {
+  try {
+    const resp = await fetch('/api/zigbee/status')
+    zigbeeStatus.value = await resp.json()
+  } catch {}
+}
+
+async function fetchZigBeeDevices() {
+  try {
+    const resp = await fetch('/api/zigbee/devices')
+    const data = await resp.json()
+    zigbeeDevices.value = data.devices || []
+  } catch {}
+}
+
 // Signal polling
 let signalTimer = null
 
@@ -293,7 +334,8 @@ onMounted(async () => {
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
   store.fetchCellularStatus()
   store.fetchCellularSignal()
-  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular()
+  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee()
+  fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
 })
 
@@ -756,6 +798,94 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
         </div>
         <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
+      </div>
+    </div>
+
+    <!-- ZigBee -->
+    <div v-if="activeTab === 'zigbee'" class="space-y-4">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium text-gray-200">ZigBee 3.0 Coordinator</span>
+          <span class="text-xs" :class="zigbeeStatus?.connected ? 'text-emerald-400' : 'text-gray-500'">
+            {{ zigbeeStatus?.connected ? 'Connected' : 'Disconnected' }}
+          </span>
+        </div>
+
+        <div v-if="zigbeeStatus?.firmware" class="text-[11px] text-gray-500">
+          Firmware: {{ zigbeeStatus.firmware }}
+          <span v-if="zigbeeStatus?.uptime" class="ml-3">Uptime: {{ zigbeeStatus.uptime }}</span>
+        </div>
+
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Serial Port</label>
+          <input v-model="zigbeeForm.serial_port" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="auto">
+          <p class="text-[10px] text-gray-600 mt-0.5">"auto" scans USB ports for CC2652P/CC2531 coordinator dongles</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Default Dest Address</label>
+            <input v-model.number="zigbeeForm.default_dst_addr" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <p class="text-[10px] text-gray-600 mt-0.5">65535 = broadcast (0xFFFF)</p>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Default Endpoint</label>
+            <input v-model.number="zigbeeForm.default_dst_ep" type="number" min="1" max="240" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Default Cluster ID</label>
+            <input v-model.number="zigbeeForm.default_cluster" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <p class="text-[10px] text-gray-600 mt-0.5">6 = On/Off, 8 = Level Control</p>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Inbound Mesh Channel</label>
+            <input v-model.number="zigbeeForm.inbound_channel" type="number" min="0" max="7" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+
+        <div class="flex flex-wrap gap-4">
+          <label class="flex items-center gap-1 text-xs text-gray-400">
+            <input type="checkbox" v-model="zigbeeForm.forward_all" class="rounded bg-gray-900 border-gray-700">
+            Forward all mesh messages to ZigBee
+          </label>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input type="checkbox" v-model="zigbeeEnabled" id="zigbee_en" class="rounded bg-gray-900 border-gray-700">
+          <label for="zigbee_en" class="text-xs text-gray-400">Enable ZigBee gateway</label>
+        </div>
+        <button @click="saveZigBee" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save ZigBee Config</button>
+      </div>
+
+      <!-- Paired Devices -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium text-gray-200">Paired Devices ({{ zigbeeDevices.length }})</span>
+          <button @click="fetchZigBeeDevices" class="text-xs text-teal-400 hover:text-teal-300">Refresh</button>
+        </div>
+        <div v-if="zigbeeDevices.length === 0" class="text-xs text-gray-500 py-2">
+          No devices paired yet. Pair a ZigBee device by putting it in pairing mode.
+        </div>
+        <div v-else class="divide-y divide-gray-700/50">
+          <div v-for="dev in zigbeeDevices" :key="dev.short_addr" class="py-2 flex items-center justify-between text-xs">
+            <div>
+              <span class="text-gray-200 font-mono">0x{{ dev.short_addr.toString(16).padStart(4, '0').toUpperCase() }}</span>
+              <span v-if="dev.ieee_addr" class="text-gray-500 ml-2 font-mono">{{ dev.ieee_addr }}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-gray-500">EP {{ dev.endpoint }}</span>
+              <span :class="dev.lqi > 150 ? 'text-emerald-400' : dev.lqi > 80 ? 'text-amber-400' : 'text-red-400'">
+                LQI {{ dev.lqi }}
+              </span>
+              <span class="text-gray-600" v-if="dev.last_seen">
+                {{ new Date(dev.last_seen).toLocaleTimeString() }}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
