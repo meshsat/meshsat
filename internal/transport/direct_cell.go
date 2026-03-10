@@ -301,7 +301,6 @@ func (t *DirectCellTransport) startLoops() {
 	t.ioDone = make(chan struct{})
 	t.sigDone = make(chan struct{})
 
-	log.Debug().Msg("cellular: starting I/O loop and signal poller")
 	go t.ioLoop()
 	go t.signalPollerLoop()
 }
@@ -344,11 +343,7 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 // It reads URCs (unsolicited notifications) with short timeouts and
 // processes queued AT commands between reads.
 func (t *DirectCellTransport) ioLoop() {
-	defer func() {
-		log.Debug().Msg("cellular: I/O loop exiting")
-		close(t.ioDone)
-	}()
-	log.Debug().Msg("cellular: I/O loop goroutine started")
+	defer close(t.ioDone)
 
 	buf := make([]byte, 256)
 	var line []byte
@@ -512,18 +507,17 @@ func (t *DirectCellTransport) readAndEmitCBS(header string) {
 
 // signalPollerLoop polls AT+CSQ every 60s via the command channel.
 func (t *DirectCellTransport) signalPollerLoop() {
-	defer func() {
-		log.Debug().Msg("cellular: signal poller exiting")
-		close(t.sigDone)
-	}()
-	log.Debug().Msg("cellular: signal poller goroutine started")
+	defer close(t.sigDone)
+
+	// Immediate first poll so signal data is available without 60s delay.
+	t.pollSignalAndCellInfo()
+
 	ticker := time.NewTicker(cellSignalPoll)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-t.stopCh:
-			log.Debug().Msg("cellular: signal poller received stop signal")
 			return
 		case <-ticker.C:
 			t.pollSignalAndCellInfo()
@@ -533,7 +527,6 @@ func (t *DirectCellTransport) signalPollerLoop() {
 
 // pollSignalAndCellInfo queries signal strength and cell info from the modem.
 func (t *DirectCellTransport) pollSignalAndCellInfo() {
-	log.Debug().Msg("cellular: signal poll tick")
 	// AT+CSQ — signal strength
 	resp, err := t.execAT("AT+CSQ", 5*time.Second)
 	if err != nil {
