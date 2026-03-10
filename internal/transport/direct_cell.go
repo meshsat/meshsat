@@ -145,58 +145,69 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		}
 	}
 
-	sp, err := openSerial(portPath, cellBaud)
-	if err != nil {
-		return err
+	log.Debug().Str("port", portPath).Msg("cellular: opening serial port")
+	// openSerial can block on some USB serial drivers — run with timeout.
+	type openResult struct {
+		port serial.Port
+		err  error
 	}
+	openCh := make(chan openResult, 1)
+	go func() {
+		p, e := openSerial(portPath, cellBaud)
+		openCh <- openResult{p, e}
+	}()
+	var sp serial.Port
+	select {
+	case res := <-openCh:
+		if res.err != nil {
+			return res.err
+		}
+		sp = res.port
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("timeout opening %s (10s)", portPath)
+	}
+	log.Debug().Str("port", portPath).Msg("cellular: serial port opened")
 
 	t.file = sp
 	t.port = portPath
 
-	// Initialize modem
-	// ATE0 — disable echo
+	// Initialize modem — each command has cellATTimeout (3s) as safety net.
+	log.Debug().Msg("cellular: init ATE0")
 	sendAT(sp, "ATE0", cellATTimeout)
-	// AT&K0 — disable flow control
 	sendAT(sp, "AT&K0", cellATTimeout)
-	// AT — basic check
 	resp, err := sendAT(sp, "AT", cellATTimeout)
 	if err != nil || !strings.Contains(resp, "OK") {
 		sp.Close()
 		return fmt.Errorf("AT check failed")
 	}
-	// AT+CGSN — get IMEI
+	log.Debug().Msg("cellular: init AT+CGSN")
 	resp, err = sendAT(sp, "AT+CGSN", cellATTimeout)
 	if err == nil {
 		t.imei = parseATValue(resp)
 	}
-	// AT+CGMM — get model
 	resp, err = sendAT(sp, "AT+CGMM", cellATTimeout)
 	if err == nil {
 		t.model = parseATValue(resp)
 	}
-	// AT+CMGF=1 — text mode SMS
 	resp, err = sendAT(sp, "AT+CMGF=1", cellATTimeout)
 	if err != nil || strings.Contains(resp, "ERROR") {
 		log.Warn().Msg("cellular: SMS text mode not supported, SMS will not work")
 	}
-	// AT+CNMI=2,1,2,0,0 — SMS notification (+CMTI) and CBS delivery (+CBM)
 	sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
-	// AT+CPIN? — SIM status
+	log.Debug().Msg("cellular: init AT+CPIN?")
 	resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
 	t.simState = parseCPIN(resp)
-	// AT+CREG=2 — enable extended registration (LAC, CellID, act)
+	log.Debug().Str("sim_state", t.simState).Msg("cellular: SIM state detected")
 	sendAT(sp, "AT+CREG=2", cellATTimeout)
-	// AT+CREG? — registration
 	resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
 	t.regStatus = parseCREG(resp)
 	t.netType = parseCREGNetType(resp)
-	// AT+COPS? — operator (also extracts network type if CREG didn't)
+	log.Debug().Msg("cellular: init AT+COPS?")
 	resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
 	t.operator = parseCOPS(resp)
 	if t.netType == "" {
 		t.netType = parseCOPSNetType(resp)
 	}
-	// AT+CSCB=0 — subscribe to all CBS channels (cell broadcast alerts)
 	if t.simState == "READY" {
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
@@ -565,7 +576,14 @@ func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, err
 
 // GetStatus returns modem connection status.
 func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) {
-	t.mu.Lock()
+	if !t.mu.TryLock() {
+		// Mutex held (e.g., during initialization) — return non-blocking status.
+		return &CellStatus{
+			Connected: false,
+			Port:      t.port,
+			SIMState:  "INITIALIZING",
+		}, nil
+	}
 	defer t.mu.Unlock()
 	return &CellStatus{
 		Connected:    t.connected,
@@ -1026,7 +1044,9 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 // GetCellInfo queries cell tower information from the modem.
 // Tries AT+QENG (Quectel proprietary) first, falls back to extended AT+CREG?.
 func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) {
-	t.mu.Lock()
+	if !t.mu.TryLock() {
+		return nil, fmt.Errorf("modem busy (initializing)")
+	}
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
 		return nil, fmt.Errorf("not connected")

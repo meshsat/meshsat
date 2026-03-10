@@ -218,7 +218,8 @@ func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 func drainPort(port serial.Port) {
 	port.SetReadTimeout(100 * time.Millisecond)
 	buf := make([]byte, 1024)
-	for {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
 		n, _ := port.Read(buf)
 		if n == 0 {
 			break
