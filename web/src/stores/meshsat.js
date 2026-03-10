@@ -887,6 +887,13 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  async function generateEncryptionKey() {
+    error.value = null
+    try {
+      return await api.post('/crypto/generate-key')
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Devices (v0.3.0)
   async function fetchDevices() {
     try {
@@ -1022,7 +1029,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,
-    interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice,
+    interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice, generateEncryptionKey,
     devices, fetchDevices,
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
     objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,

@@ -7,6 +7,8 @@ const activeTab = ref('interfaces')
 const showCreateIface = ref(false)
 const showCreateRule = ref(false)
 const editingRule = ref(null)
+const expandedIface = ref(null)
+const generatingKey = ref(false)
 
 const tabs = [
   { id: 'interfaces', label: 'Interfaces' },
@@ -50,6 +52,52 @@ async function doBindDevice(ifaceId, deviceId) {
 
 async function doUnbindDevice(ifaceId) {
   try { await store.unbindDevice(ifaceId) } catch { /* store error */ }
+}
+
+function getTransforms(iface, direction) {
+  const json = direction === 'egress' ? iface.egress_transforms : iface.ingress_transforms
+  if (!json || json === '[]') return []
+  try { return JSON.parse(json) } catch { return [] }
+}
+
+function hasEncryption(iface) {
+  return getTransforms(iface, 'egress').some(t => t.type === 'encrypt')
+}
+
+function getEncryptionKey(iface) {
+  const enc = getTransforms(iface, 'egress').find(t => t.type === 'encrypt')
+  return enc?.params?.key || ''
+}
+
+async function toggleEncryption(iface) {
+  const transforms = getTransforms(iface, 'egress')
+  if (hasEncryption(iface)) {
+    // Remove encryption transform
+    const filtered = transforms.filter(t => t.type !== 'encrypt')
+    const ingressFiltered = getTransforms(iface, 'ingress').filter(t => t.type !== 'encrypt')
+    await store.updateInterface(iface.id, {
+      ...iface,
+      egress_transforms: JSON.stringify(filtered),
+      ingress_transforms: JSON.stringify(ingressFiltered)
+    })
+  } else {
+    // Generate key and add encryption transform
+    generatingKey.value = true
+    try {
+      const res = await store.generateEncryptionKey()
+      const key = res.key
+      transforms.push({ type: 'encrypt', params: { key } })
+      const ingressTransforms = getTransforms(iface, 'ingress')
+      ingressTransforms.push({ type: 'encrypt', params: { key } })
+      await store.updateInterface(iface.id, {
+        ...iface,
+        egress_transforms: JSON.stringify(transforms),
+        ingress_transforms: JSON.stringify(ingressTransforms)
+      })
+    } finally {
+      generatingKey.value = false
+    }
+  }
 }
 
 // Access rule form
@@ -219,6 +267,25 @@ onUnmounted(() => {
               </button>
             </span>
           </span>
+        </div>
+
+        <!-- Encryption status -->
+        <div class="mt-2 flex items-center gap-2 text-xs">
+          <button @click="toggleEncryption(iface)" :disabled="generatingKey"
+            class="px-2 py-1 rounded text-xs"
+            :class="hasEncryption(iface) ? 'bg-amber-500/20 text-amber-400' : 'bg-gray-700 text-gray-500 hover:bg-gray-600'">
+            {{ hasEncryption(iface) ? 'AES-256-GCM' : 'No encryption' }}
+          </button>
+          <button v-if="hasEncryption(iface)" @click="expandedIface = expandedIface === iface.id ? null : iface.id"
+            class="px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600">
+            {{ expandedIface === iface.id ? 'Hide key' : 'Show key' }}
+          </button>
+        </div>
+
+        <!-- Expanded encryption key -->
+        <div v-if="expandedIface === iface.id && hasEncryption(iface)" class="mt-2 p-2 rounded bg-gray-900 border border-gray-700">
+          <div class="text-[10px] text-gray-500 mb-1">PSK (share with receiving end)</div>
+          <code class="text-xs text-amber-400 break-all select-all">{{ getEncryptionKey(iface) }}</code>
         </div>
       </div>
 

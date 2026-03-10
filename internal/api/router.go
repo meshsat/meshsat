@@ -302,6 +302,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/audit", s.handleGetAuditLog)
 		r.Get("/audit/verify", s.handleVerifyAuditChain)
 		r.Get("/audit/signer", s.handleGetSignerID)
+
+		// Crypto utilities (v0.3.0)
+		r.Post("/crypto/generate-key", s.handleGenerateEncryptionKey)
 	})
 
 	// Web UI (SPA) — catch-all after API routes
