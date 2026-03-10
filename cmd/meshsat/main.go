@@ -201,6 +201,7 @@ func main() {
 	srv.SetAstrocastTLEManager(astroTleMgr)
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)
+	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
 	srv.SetGPSReader(gpsReader)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))

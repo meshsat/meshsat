@@ -13,16 +13,27 @@ import (
 )
 
 func (s *Server) handleGetCellularSignal(w http.ResponseWriter, r *http.Request) {
-	if s.cellTransport == nil {
-		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
+	// Try live modem first
+	if s.cellTransport != nil {
+		signal, err := s.cellTransport.GetSignal(r.Context())
+		if err == nil {
+			writeJSON(w, http.StatusOK, signal)
+			return
+		}
+	}
+	// Fall back to latest DB reading
+	point, err := s.db.GetLatestCellularSignal()
+	if err != nil || point == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"bars": 0, "dbm": -113, "technology": "", "assessment": "none"})
 		return
 	}
-	signal, err := s.cellTransport.GetSignal(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, signal)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"bars":       point.Bars,
+		"dbm":        point.DBm,
+		"technology": point.Technology,
+		"assessment": signalAssessment(point.Bars),
+		"timestamp":  time.Unix(point.Timestamp, 0).UTC().Format(time.RFC3339),
+	})
 }
 
 func (s *Server) handleGetCellularSignalHistory(w http.ResponseWriter, r *http.Request) {
@@ -57,16 +68,28 @@ func (s *Server) handleGetCellularSignalHistory(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request) {
-	if s.cellTransport == nil {
-		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
+	// Try live modem first
+	if s.cellTransport != nil {
+		status, err := s.cellTransport.GetStatus(r.Context())
+		if err == nil {
+			writeJSON(w, http.StatusOK, status)
+			return
+		}
+	}
+	// Fall back to DB cell info for basic status
+	ci, err := s.db.GetLatestCellInfo()
+	if err == nil && ci != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"connected":    true,
+			"network_type": ci.NetworkType,
+			"sim_state":    "READY",
+		})
 		return
 	}
-	status, err := s.cellTransport.GetStatus(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, status)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"connected": false,
+		"sim_state": "UNKNOWN",
+	})
 }
 
 func (s *Server) handleCellularDataConnect(w http.ResponseWriter, r *http.Request) {
