@@ -67,6 +67,55 @@ if docker service inspect meshsat_meshsat > /dev/null 2>&1; then
 fi
 
 # =============================================================================
+# Scale down any MeshSat Swarm service replicas to 0
+# =============================================================================
+# Check common swarm service names — scale to 0 before starting direct container
+# to avoid port conflicts on 6050
+for SVC_NAME in meshsat_meshsat cubeos_meshsat; do
+  if docker service inspect "$SVC_NAME" > /dev/null 2>&1; then
+    echo "Found Swarm service $SVC_NAME — scaling to 0 replicas to avoid conflicts..."
+    docker service scale "${SVC_NAME}=0" 2>/dev/null || true
+    sleep 2
+    echo "  $SVC_NAME scaled to 0."
+  fi
+done
+
+# =============================================================================
+# Ensure HAL disables Meshtastic/Iridium serial access (MeshSat owns the ports)
+# =============================================================================
+HAL_COMPOSE="/cubeos/coreapps/cubeos-hal/appconfig/docker-compose.yml"
+if [ -f "$HAL_COMPOSE" ]; then
+  echo "HAL compose found — ensuring HAL_DISABLE_MESHTASTIC and HAL_DISABLE_IRIDIUM are set..."
+
+  # Uncomment HAL_DISABLE_MESHTASTIC if commented out
+  if grep -q '# *- *HAL_DISABLE_MESHTASTIC=true' "$HAL_COMPOSE"; then
+    sed -i 's/# *- *HAL_DISABLE_MESHTASTIC=true/- HAL_DISABLE_MESHTASTIC=true/' "$HAL_COMPOSE"
+    echo "  Uncommented HAL_DISABLE_MESHTASTIC=true"
+  elif grep -q 'HAL_DISABLE_MESHTASTIC=true' "$HAL_COMPOSE"; then
+    echo "  HAL_DISABLE_MESHTASTIC=true already active"
+  else
+    echo "  WARN: HAL_DISABLE_MESHTASTIC line not found in HAL compose — skipping"
+  fi
+
+  # Uncomment HAL_DISABLE_IRIDIUM if commented out
+  if grep -q '# *- *HAL_DISABLE_IRIDIUM=true' "$HAL_COMPOSE"; then
+    sed -i 's/# *- *HAL_DISABLE_IRIDIUM=true/- HAL_DISABLE_IRIDIUM=true/' "$HAL_COMPOSE"
+    echo "  Uncommented HAL_DISABLE_IRIDIUM=true"
+  elif grep -q 'HAL_DISABLE_IRIDIUM=true' "$HAL_COMPOSE"; then
+    echo "  HAL_DISABLE_IRIDIUM=true already active"
+  else
+    echo "  WARN: HAL_DISABLE_IRIDIUM line not found in HAL compose — skipping"
+  fi
+
+  echo "Recreating HAL container with updated config..."
+  cd /cubeos/coreapps/cubeos-hal/appconfig && docker compose up -d --force-recreate 2>&1
+  sleep 3
+  echo "  HAL container recreated with serial devices disabled."
+else
+  echo "No HAL compose found at $HAL_COMPOSE — skipping HAL reconfiguration."
+fi
+
+# =============================================================================
 # Deploy: Docker Compose (direct serial mode, privileged)
 # =============================================================================
 if [ ! -f "$DIRECT_COMPOSE_FILE" ]; then

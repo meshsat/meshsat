@@ -799,6 +799,7 @@ function toHex(str) {
 
 // ── Interface selector (for multi-device widgets) ──
 const selectedInterface = reactive({})
+const openDropdown = ref(null) // which channel type dropdown is open
 
 function loadSelectedInterfaces() {
   try {
@@ -810,6 +811,15 @@ function loadSelectedInterfaces() {
 function selectInterface(channelType, ifaceId) {
   selectedInterface[channelType] = ifaceId
   localStorage.setItem('meshsat-selected-interfaces', JSON.stringify(selectedInterface))
+  openDropdown.value = null
+}
+
+function toggleDropdown(channelType) {
+  openDropdown.value = openDropdown.value === channelType ? null : channelType
+}
+
+function closeDropdowns() {
+  openDropdown.value = null
 }
 
 const interfacesByType = computed(() => {
@@ -832,6 +842,20 @@ function widgetSelectedId(channelType) {
   const sel = selectedInterface[channelType]
   if (sel && ifaces.find(i => i.id === sel)) return sel
   return ifaces[0].id
+}
+
+function widgetSelectedLabel(channelType, fallback) {
+  const ifaces = widgetInterfaces(channelType)
+  if (!ifaces.length) return fallback
+  const selId = widgetSelectedId(channelType)
+  const found = ifaces.find(i => i.id === selId)
+  return found?.label || found?.id || fallback
+}
+
+const widgetTypeColors = {
+  iridium: { text: 'text-red-400', hover: 'hover:text-red-300', bg: 'bg-red-400', activeBg: 'bg-red-400/10', chevron: '%23f87171' },
+  mesh: { text: 'text-tactical-lora', hover: 'hover:text-emerald-300', bg: 'bg-emerald-400', activeBg: 'bg-emerald-400/10', chevron: '%2334d399' },
+  cellular: { text: 'text-sky-400', hover: 'hover:text-sky-300', bg: 'bg-sky-400', activeBg: 'bg-sky-400/10', chevron: '%2338bdf8' },
 }
 
 // ── Lifecycle ──
@@ -930,14 +954,14 @@ async function openNodeDetail(node) {
 }
 
 function widgetGridClass(id) {
-  if (id === 'queue') return 'md:col-span-2 lg:col-span-1 lg:row-span-2'
+  if (id === 'queue') return 'md:col-span-2 lg:col-span-1'
   if (id === 'activity') return 'md:col-span-2'
   return ''
 }
 </script>
 
 <template>
-  <div class="max-w-[1400px] mx-auto">
+  <div class="max-w-[1400px] mx-auto" @click="closeDropdowns">
     <!-- 7-Panel Grid (drag-and-drop reorderable) -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 
@@ -950,15 +974,31 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <select v-if="widgetInterfaces('iridium').length > 1"
-              :value="widgetSelectedId('iridium')"
-              @change="selectInterface('iridium', $event.target.value)"
-              class="font-display font-semibold text-sm text-red-400 tracking-wide bg-transparent border-none cursor-pointer appearance-none pr-4 focus:outline-none hover:text-red-300"
-              style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M0 0l5 6 5-6z%27 fill=%27%23f87171%27/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right center;">
-              <option v-for="iface in widgetInterfaces('iridium')" :key="iface.id" :value="iface.id"
-                class="bg-gray-900 text-gray-200">{{ iface.label || iface.id }}</option>
-            </select>
-            <h2 v-else class="font-display font-semibold text-sm text-red-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('iridium')">IRIDIUM SBD</h2>
+            <div class="relative">
+              <button class="font-display font-semibold text-sm text-red-400 tracking-wide flex items-center gap-1.5 hover:text-red-300 transition-colors"
+                @click.stop="toggleDropdown('iridium')">
+                {{ widgetSelectedLabel('iridium', 'IRIDIUM SBD').toUpperCase() }}
+                <svg class="w-3 h-3 transition-transform" :class="openDropdown === 'iridium' ? 'rotate-180' : ''" viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 5 5-5"/></svg>
+              </button>
+              <div v-if="openDropdown === 'iridium'"
+                class="absolute top-full left-0 mt-1 z-50 min-w-[180px] bg-gray-900 border border-tactical-border rounded-lg shadow-xl overflow-hidden"
+                @click.stop>
+                <div v-for="iface in widgetInterfaces('iridium')" :key="iface.id"
+                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.06] transition-colors"
+                  :class="widgetSelectedId('iridium') === iface.id ? 'bg-red-400/10' : ''"
+                  @click="selectInterface('iridium', iface.id)">
+                  <span class="w-1.5 h-1.5 rounded-full" :class="iface.state === 'online' ? 'bg-emerald-400' : 'bg-gray-600'" />
+                  <span class="text-xs font-medium" :class="widgetSelectedId('iridium') === iface.id ? 'text-red-400' : 'text-gray-300'">{{ iface.label || iface.id }}</span>
+                  <span class="text-[9px] text-gray-600 ml-auto font-mono">{{ iface.device_path || '' }}</span>
+                </div>
+                <div v-if="!widgetInterfaces('iridium').length"
+                  class="px-3 py-2 text-[11px] text-gray-500">No interfaces configured</div>
+                <div class="border-t border-tactical-border px-3 py-1.5 cursor-pointer hover:bg-white/[0.04]"
+                  @click="openWidgetStats('iridium'); openDropdown = null">
+                  <span class="text-[10px] text-gray-500">View diagnostics</span>
+                </div>
+              </div>
+            </div>
           </div>
           <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
         </div>
@@ -1098,15 +1138,31 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <select v-if="widgetInterfaces('mesh').length > 1"
-              :value="widgetSelectedId('mesh')"
-              @change="selectInterface('mesh', $event.target.value)"
-              class="font-display font-semibold text-sm text-tactical-lora tracking-wide bg-transparent border-none cursor-pointer appearance-none pr-4 focus:outline-none hover:text-emerald-300"
-              style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M0 0l5 6 5-6z%27 fill=%27%2334d399%27/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right center;">
-              <option v-for="iface in widgetInterfaces('mesh')" :key="iface.id" :value="iface.id"
-                class="bg-gray-900 text-gray-200">{{ iface.label || iface.id }}</option>
-            </select>
-            <h2 v-else class="font-display font-semibold text-sm text-tactical-lora tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('mesh')">MESHTASTIC MESH</h2>
+            <div class="relative">
+              <button class="font-display font-semibold text-sm text-tactical-lora tracking-wide flex items-center gap-1.5 hover:text-emerald-300 transition-colors"
+                @click.stop="toggleDropdown('mesh')">
+                {{ widgetSelectedLabel('mesh', 'MESHTASTIC MESH').toUpperCase() }}
+                <svg class="w-3 h-3 transition-transform" :class="openDropdown === 'mesh' ? 'rotate-180' : ''" viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 5 5-5"/></svg>
+              </button>
+              <div v-if="openDropdown === 'mesh'"
+                class="absolute top-full left-0 mt-1 z-50 min-w-[180px] bg-gray-900 border border-tactical-border rounded-lg shadow-xl overflow-hidden"
+                @click.stop>
+                <div v-for="iface in widgetInterfaces('mesh')" :key="iface.id"
+                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.06] transition-colors"
+                  :class="widgetSelectedId('mesh') === iface.id ? 'bg-emerald-400/10' : ''"
+                  @click="selectInterface('mesh', iface.id)">
+                  <span class="w-1.5 h-1.5 rounded-full" :class="iface.state === 'online' ? 'bg-emerald-400' : 'bg-gray-600'" />
+                  <span class="text-xs font-medium" :class="widgetSelectedId('mesh') === iface.id ? 'text-tactical-lora' : 'text-gray-300'">{{ iface.label || iface.id }}</span>
+                  <span class="text-[9px] text-gray-600 ml-auto font-mono">{{ iface.device_path || '' }}</span>
+                </div>
+                <div v-if="!widgetInterfaces('mesh').length"
+                  class="px-3 py-2 text-[11px] text-gray-500">No interfaces configured</div>
+                <div class="border-t border-tactical-border px-3 py-1.5 cursor-pointer hover:bg-white/[0.04]"
+                  @click="openWidgetStats('mesh'); openDropdown = null">
+                  <span class="text-[10px] text-gray-500">View diagnostics</span>
+                </div>
+              </div>
+            </div>
           </div>
           <span class="w-2 h-2 rounded-full" :class="radioConnected ? 'bg-emerald-400' : 'bg-red-400'" />
         </div>
@@ -1196,15 +1252,31 @@ function widgetGridClass(id) {
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
-            <select v-if="widgetInterfaces('cellular').length > 1"
-              :value="widgetSelectedId('cellular')"
-              @change="selectInterface('cellular', $event.target.value)"
-              class="font-display font-semibold text-sm text-sky-400 tracking-wide bg-transparent border-none cursor-pointer appearance-none pr-4 focus:outline-none hover:text-sky-300"
-              style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M0 0l5 6 5-6z%27 fill=%27%2338bdf8%27/%3E%3C/svg%3E'); background-repeat: no-repeat; background-position: right center;">
-              <option v-for="iface in widgetInterfaces('cellular')" :key="iface.id" :value="iface.id"
-                class="bg-gray-900 text-gray-200">{{ iface.label || iface.id }}</option>
-            </select>
-            <h2 v-else class="font-display font-semibold text-sm text-sky-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('cellular')">CELLULAR MODEM</h2>
+            <div class="relative">
+              <button class="font-display font-semibold text-sm text-sky-400 tracking-wide flex items-center gap-1.5 hover:text-sky-300 transition-colors"
+                @click.stop="toggleDropdown('cellular')">
+                {{ widgetSelectedLabel('cellular', 'CELLULAR MODEM').toUpperCase() }}
+                <svg class="w-3 h-3 transition-transform" :class="openDropdown === 'cellular' ? 'rotate-180' : ''" viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 5 5-5"/></svg>
+              </button>
+              <div v-if="openDropdown === 'cellular'"
+                class="absolute top-full left-0 mt-1 z-50 min-w-[180px] bg-gray-900 border border-tactical-border rounded-lg shadow-xl overflow-hidden"
+                @click.stop>
+                <div v-for="iface in widgetInterfaces('cellular')" :key="iface.id"
+                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.06] transition-colors"
+                  :class="widgetSelectedId('cellular') === iface.id ? 'bg-sky-400/10' : ''"
+                  @click="selectInterface('cellular', iface.id)">
+                  <span class="w-1.5 h-1.5 rounded-full" :class="iface.state === 'online' ? 'bg-emerald-400' : 'bg-gray-600'" />
+                  <span class="text-xs font-medium" :class="widgetSelectedId('cellular') === iface.id ? 'text-sky-400' : 'text-gray-300'">{{ iface.label || iface.id }}</span>
+                  <span class="text-[9px] text-gray-600 ml-auto font-mono">{{ iface.device_path || '' }}</span>
+                </div>
+                <div v-if="!widgetInterfaces('cellular').length"
+                  class="px-3 py-2 text-[11px] text-gray-500">No interfaces configured</div>
+                <div class="border-t border-tactical-border px-3 py-1.5 cursor-pointer hover:bg-white/[0.04]"
+                  @click="openWidgetStats('cellular'); openDropdown = null">
+                  <span class="text-[10px] text-gray-500">View diagnostics</span>
+                </div>
+              </div>
+            </div>
           </div>
           <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
         </div>
@@ -1584,7 +1656,7 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <div class="space-y-1 tactical-scroll flex-1 overflow-y-auto">
+        <div class="space-y-1 tactical-scroll max-h-[220px] overflow-y-auto">
           <div v-for="item in unifiedQueue" :key="item._key"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
             :class="item._opacity"
