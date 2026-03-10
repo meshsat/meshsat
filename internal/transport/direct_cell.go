@@ -41,8 +41,12 @@ var knownCellularVIDPIDs = map[string]bool{
 type DirectCellTransport struct {
 	port string // "/dev/ttyUSB2" or "auto"
 
-	mu        sync.Mutex
-	file      serial.Port
+	mu   sync.Mutex // protects serial port (t.file) access only
+	file serial.Port
+
+	// Cached modem state — protected by stateMu (separate from serial mu).
+	// This allows GetStatus to read state without contending with serial I/O.
+	stateMu   sync.RWMutex
 	connected bool
 	imei      string
 	model     string
@@ -102,7 +106,7 @@ func (t *DirectCellTransport) SetExcludePortFuncs(fns []func() string) {
 // Subscribe opens the serial connection and starts SMS monitor + signal polling.
 func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, error) {
 	t.mu.Lock()
-	if !t.connected {
+	if t.file == nil {
 		if err := t.connectLocked(ctx); err != nil {
 			t.mu.Unlock()
 			return nil, fmt.Errorf("connect: %w", err)
@@ -182,12 +186,14 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	}
 	log.Debug().Msg("cellular: init AT+CGSN")
 	resp, err = sendAT(sp, "AT+CGSN", cellATTimeout)
+	imei := ""
 	if err == nil {
-		t.imei = parseATValue(resp)
+		imei = parseATValue(resp)
 	}
 	resp, err = sendAT(sp, "AT+CGMM", cellATTimeout)
+	model := ""
 	if err == nil {
-		t.model = parseATValue(resp)
+		model = parseATValue(resp)
 	}
 	resp, err = sendAT(sp, "AT+CMGF=1", cellATTimeout)
 	if err != nil || strings.Contains(resp, "ERROR") {
@@ -196,27 +202,37 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
 	log.Debug().Msg("cellular: init AT+CPIN?")
 	resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
-	t.simState = parseCPIN(resp)
-	log.Debug().Str("sim_state", t.simState).Msg("cellular: SIM state detected")
+	simState := parseCPIN(resp)
+	log.Debug().Str("sim_state", simState).Msg("cellular: SIM state detected")
 
+	var operator, netType, regStatus string
 	// Only query network registration and operator when SIM is ready.
 	// AT+COPS? on an unregistered modem (SIM locked) can hang or trigger
 	// a slow network scan that exceeds the AT timeout.
-	if t.simState == "READY" {
+	if simState == "READY" {
 		sendAT(sp, "AT+CREG=2", cellATTimeout)
 		resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
-		t.regStatus = parseCREG(resp)
-		t.netType = parseCREGNetType(resp)
+		regStatus = parseCREG(resp)
+		netType = parseCREGNetType(resp)
 		log.Debug().Msg("cellular: init AT+COPS?")
 		resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
-		t.operator = parseCOPS(resp)
-		if t.netType == "" {
-			t.netType = parseCOPSNetType(resp)
+		operator = parseCOPS(resp)
+		if netType == "" {
+			netType = parseCOPSNetType(resp)
 		}
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 
+	// Update cached state under stateMu (separate from serial mu).
+	t.stateMu.Lock()
+	t.imei = imei
+	t.model = model
+	t.simState = simState
+	t.operator = operator
+	t.netType = netType
+	t.regStatus = regStatus
 	t.connected = true
+	t.stateMu.Unlock()
 	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).
 		Str("sim", t.simState).Str("operator", t.operator).Msg("cellular modem connected")
 
@@ -332,12 +348,14 @@ func (t *DirectCellTransport) smsMonitorLoop() {
 				Time:    time.Now().UTC().Format(time.RFC3339),
 			})
 			t.mu.Lock()
-			t.connected = false
 			if t.file != nil {
 				t.file.Close()
 				t.file = nil
 			}
 			t.mu.Unlock()
+			t.stateMu.Lock()
+			t.connected = false
+			t.stateMu.Unlock()
 			return
 		}
 
@@ -368,7 +386,7 @@ func (t *DirectCellTransport) smsMonitorLoop() {
 // readAndEmitSMS reads an SMS by index and emits it as an event.
 func (t *DirectCellTransport) readAndEmitSMS(index int) {
 	t.mu.Lock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		t.mu.Unlock()
 		return
 	}
@@ -404,7 +422,7 @@ func (t *DirectCellTransport) readAndEmitSMS(index int) {
 func (t *DirectCellTransport) readAndEmitCBS(header string) {
 	// Read the CBS body — it follows the +CBM header line
 	t.mu.Lock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		t.mu.Unlock()
 		return
 	}
@@ -441,7 +459,7 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 			return
 		case <-ticker.C:
 			t.mu.Lock()
-			if !t.connected || t.file == nil {
+			if t.file == nil {
 				t.mu.Unlock()
 				return
 			}
@@ -468,7 +486,9 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 				if ci != nil {
 					if ci.NetworkType != "" {
 						info.Technology = ci.NetworkType
+						t.stateMu.Lock()
 						t.netType = ci.NetworkType
+						t.stateMu.Unlock()
 					}
 					// Emit cell info update
 					ciJSON, _ := json.Marshal(ci)
@@ -503,7 +523,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		return fmt.Errorf("not connected")
 	}
 
@@ -557,7 +577,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		return nil, fmt.Errorf("not connected")
 	}
 
@@ -580,15 +600,8 @@ func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, err
 
 // GetStatus returns modem connection status.
 func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) {
-	if !t.mu.TryLock() {
-		// Mutex held (e.g., during initialization) — return non-blocking status.
-		return &CellStatus{
-			Connected: false,
-			Port:      t.port,
-			SIMState:  "INITIALIZING",
-		}, nil
-	}
-	defer t.mu.Unlock()
+	t.stateMu.RLock()
+	defer t.stateMu.RUnlock()
 	return &CellStatus{
 		Connected:    t.connected,
 		Port:         t.port,
@@ -605,7 +618,7 @@ func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) 
 func (t *DirectCellTransport) ConnectData(_ context.Context, apn string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		return fmt.Errorf("not connected")
 	}
 
@@ -644,7 +657,7 @@ func (t *DirectCellTransport) ConnectData(_ context.Context, apn string) error {
 func (t *DirectCellTransport) DisconnectData(_ context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		return fmt.Errorf("not connected")
 	}
 
@@ -690,7 +703,9 @@ func (t *DirectCellTransport) Close() error {
 		t.mu.Lock()
 	}
 
+	t.stateMu.Lock()
 	t.connected = false
+	t.stateMu.Unlock()
 	if t.file != nil {
 		t.file.Close()
 		t.file = nil
@@ -999,7 +1014,7 @@ func (t *DirectCellTransport) GetPort() string {
 func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		return fmt.Errorf("not connected")
 	}
 
@@ -1015,30 +1030,34 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	// Wait for modem to settle after PIN unlock
 	time.Sleep(2 * time.Second)
 
-	t.simState = "READY"
-
 	// Run post-unlock initialization: registration, operator, SMS, CBS
-	sendAT(t.file, "AT+CREG=2", cellATTimeout) // extended registration format
+	sendAT(t.file, "AT+CREG=2", cellATTimeout)
 	resp, _ = sendAT(t.file, "AT+CREG?", cellATTimeout)
-	t.regStatus = parseCREG(resp)
-	t.netType = parseCREGNetType(resp)
+	regStatus := parseCREG(resp)
+	netType := parseCREGNetType(resp)
 
 	resp, _ = sendAT(t.file, "AT+COPS?", cellATTimeout)
-	t.operator = parseCOPS(resp)
-	if t.netType == "" {
-		t.netType = parseCOPSNetType(resp)
+	operator := parseCOPS(resp)
+	if netType == "" {
+		netType = parseCOPSNetType(resp)
 	}
 
-	// Enable CBS delivery (unsolicited +CBM URCs)
 	sendAT(t.file, "AT+CNMI=2,1,2,0,0", cellATTimeout)
-	sendAT(t.file, "AT+CSCB=0", cellATTimeout) // subscribe to all CBS channels
+	sendAT(t.file, "AT+CSCB=0", cellATTimeout)
 
-	log.Info().Str("sim", t.simState).Str("reg", t.regStatus).Str("net", t.netType).
-		Str("operator", t.operator).Msg("cellular: SIM PIN accepted, modem initialized")
+	t.stateMu.Lock()
+	t.simState = "READY"
+	t.regStatus = regStatus
+	t.netType = netType
+	t.operator = operator
+	t.stateMu.Unlock()
+
+	log.Info().Str("sim", "READY").Str("reg", regStatus).Str("net", netType).
+		Str("operator", operator).Msg("cellular: SIM PIN accepted, modem initialized")
 
 	t.emitEvent(CellEvent{
 		Type:    "network_change",
-		Message: fmt.Sprintf("SIM unlocked, registered on %s (%s)", t.operator, t.netType),
+		Message: fmt.Sprintf("SIM unlocked, registered on %s (%s)", operator, netType),
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
 
@@ -1052,7 +1071,7 @@ func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) 
 		return nil, fmt.Errorf("modem busy (initializing)")
 	}
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if t.file == nil {
 		return nil, fmt.Errorf("not connected")
 	}
 
