@@ -21,6 +21,7 @@ type Dispatcher struct {
 	db       *database.DB
 	rules    *rules.Engine
 	access   *rules.AccessEvaluator // v0.3.0 access rule evaluation
+	failover *FailoverResolver      // v0.3.0 failover group resolution
 	registry *channel.Registry
 	gwProv   GatewayProvider
 	mesh     transport.MeshTransport
@@ -50,6 +51,11 @@ func (d *Dispatcher) SetEmitter(fn func(transport.MeshEvent)) {
 // SetAccessEvaluator sets the v0.3.0 access rule evaluator.
 func (d *Dispatcher) SetAccessEvaluator(ae *rules.AccessEvaluator) {
 	d.access = ae
+}
+
+// SetFailoverResolver sets the v0.3.0 failover group resolver.
+func (d *Dispatcher) SetFailoverResolver(fr *FailoverResolver) {
+	d.failover = fr
 }
 
 // Start launches per-channel delivery workers.
@@ -282,10 +288,42 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 
 	count := 0
 	for _, m := range matches {
+		// Resolve failover groups to concrete interface ID
+		destInterface := m.ForwardTo
+		if d.failover != nil {
+			resolved := d.failover.Resolve(m.ForwardTo)
+			if resolved == "" {
+				log.Warn().Str("target", m.ForwardTo).Msg("failover: no available interface, dropping delivery")
+				continue
+			}
+			destInterface = resolved
+		}
+
+		// Post-resolution loop prevention: check resolved target against visited set
+		if destInterface == sourceInterface {
+			log.Debug().Str("target", destInterface).Str("source", sourceInterface).
+				Msg("failover: resolved target is source interface, skipping")
+			continue
+		}
+		if len(msg.Visited) > 0 {
+			skip := false
+			for _, v := range msg.Visited {
+				if v == destInterface {
+					log.Debug().Str("target", destInterface).Strs("visited", msg.Visited).
+						Msg("failover: resolved target already in visited set, skipping")
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+		}
+
 		// Resolve retry config from channel registry using the channel_type portion
-		channelType := m.ForwardTo
-		if idx := strings.LastIndex(m.ForwardTo, "_"); idx > 0 {
-			channelType = m.ForwardTo[:idx]
+		channelType := destInterface
+		if idx := strings.LastIndex(destInterface, "_"); idx > 0 {
+			channelType = destInterface[:idx]
 		}
 		desc, ok := d.registry.Get(channelType)
 		maxRetries := 3
@@ -332,7 +370,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		del := database.MessageDelivery{
 			MsgRef:      msgRef,
 			RuleID:      &ruleID,
-			Channel:     m.ForwardTo, // interface ID as delivery target
+			Channel:     destInterface, // resolved interface ID as delivery target
 			Status:      "queued",
 			Priority:    m.Rule.Priority,
 			Payload:     payload,
@@ -350,17 +388,17 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 
 		if _, err := d.db.InsertDelivery(del); err != nil {
-			log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", m.ForwardTo).Msg("failed to create access delivery")
+			log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Msg("failed to create access delivery")
 			continue
 		}
 
 		count++
-		log.Info().Int64("rule_id", m.Rule.ID).Str("dest", m.ForwardTo).Str("msg_ref", msgRef).Msg("access delivery queued")
+		log.Info().Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Str("msg_ref", msgRef).Msg("access delivery queued")
 
 		if d.emit != nil {
 			d.emit(transport.MeshEvent{
 				Type:    "delivery_queued",
-				Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", m.Rule.Name, sourceInterface, m.ForwardTo),
+				Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", m.Rule.Name, sourceInterface, destInterface),
 			})
 		}
 	}

@@ -182,6 +182,8 @@ func main() {
 	dispatcher := engine.NewDispatcher(db, ruleEngine, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
 	dispatcher.SetAccessEvaluator(accessEval)
+	failoverResolver := engine.NewFailoverResolver(db, ifaceMgr)
+	dispatcher.SetFailoverResolver(failoverResolver)
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)
 	log.Info().Msg("dispatcher + delivery workers started")
