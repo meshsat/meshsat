@@ -156,6 +156,7 @@ package:
       artifacts: true
   before_script:
     - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+    - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
     - docker buildx create --name meshsatbuilder --driver docker-container --use
     - docker buildx inspect --bootstrap
   script:
