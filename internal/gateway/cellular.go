@@ -72,6 +72,16 @@ func (g *CellularGateway) Start(ctx context.Context) error {
 		g.connected.Store(status.Connected)
 	}
 
+	// Configure multi-APN failover and auto-reconnect (direct mode only)
+	if dt, ok := g.cell.(*transport.DirectCellTransport); ok {
+		if len(g.config.APNFailoverList) > 0 {
+			dt.SetAPNList(g.config.APNFailoverList)
+		}
+		if g.config.AutoReconnect {
+			dt.SetDataAutoReconnect(true)
+		}
+	}
+
 	// Auto-connect LTE data if configured
 	if g.config.AutoConnectData && g.config.APN != "" {
 		if err := g.cell.ConnectData(ctx, g.config.APN); err != nil {

@@ -86,11 +86,15 @@ type DirectCellTransport struct {
 	mnc         string // from AT+COPS? numeric format (e.g. "08" from PLMN "20408")
 
 	// Data connection state
-	dataMu     sync.RWMutex
-	dataActive bool
-	dataAPN    string
-	dataIP     string
-	dataIface  string
+	dataMu          sync.RWMutex
+	dataActive      bool
+	dataAPN         string
+	dataIP          string
+	dataIface       string
+	dataAutoReconn  bool     // auto-reconnect on drop
+	dataAPNList     []string // multi-APN failover list
+	dataAPNIdx      int      // current APN index in failover list
+	dataReconnFails int      // consecutive reconnect failures
 
 	// Signal state
 	signalMu   sync.RWMutex
@@ -530,6 +534,7 @@ func (t *DirectCellTransport) signalPollerLoop() {
 			return
 		case <-ticker.C:
 			t.pollSignalAndCellInfo()
+			t.checkDataConnection()
 		}
 	}
 }
@@ -776,39 +781,18 @@ func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) 
 }
 
 // ConnectData brings up the LTE/3G data connection.
+// Enables auto-reconnect so the connection is restored if it drops.
 func (t *DirectCellTransport) ConnectData(_ context.Context, apn string) error {
-	// Set APN
-	cmd := fmt.Sprintf("AT+CGDCONT=1,\"IP\",\"%s\"", apn)
-	resp, err := t.execAT(cmd, cellATTimeout)
-	if err != nil || strings.Contains(resp, "ERROR") {
-		return fmt.Errorf("set APN failed: %s", resp)
-	}
-
-	// Activate PDP context
-	resp, err = t.execAT("AT+CGACT=1,1", 30*time.Second)
-	if err != nil || strings.Contains(resp, "ERROR") {
-		return fmt.Errorf("activate PDP failed: %s", resp)
-	}
-
-	// Query assigned IP
-	resp, err = t.execAT("AT+CGPADDR=1", cellATTimeout)
-	ip := ""
-	if err == nil {
-		ip = parseCGPADDR(resp)
-	}
-
+	// Store APN for reconnect
 	t.dataMu.Lock()
-	t.dataActive = true
 	t.dataAPN = apn
-	t.dataIP = ip
-	t.dataIface = detectDataInterface()
+	t.dataAutoReconn = true
 	t.dataMu.Unlock()
 
-	log.Info().Str("apn", apn).Str("ip", ip).Msg("cellular: data connected")
-	return nil
+	return t.tryConnectAPN(apn)
 }
 
-// DisconnectData tears down the LTE/3G data connection.
+// DisconnectData tears down the LTE/3G data connection and disables auto-reconnect.
 func (t *DirectCellTransport) DisconnectData(_ context.Context) error {
 	resp, err := t.execAT("AT+CGACT=0,1", 10*time.Second)
 	if err != nil || strings.Contains(resp, "ERROR") {
@@ -817,6 +801,7 @@ func (t *DirectCellTransport) DisconnectData(_ context.Context) error {
 
 	t.dataMu.Lock()
 	t.dataActive = false
+	t.dataAutoReconn = false
 	t.dataIP = ""
 	t.dataMu.Unlock()
 
@@ -834,6 +819,165 @@ func (t *DirectCellTransport) GetDataStatus(_ context.Context) (*CellDataStatus,
 		IPAddress: t.dataIP,
 		Interface: t.dataIface,
 	}, nil
+}
+
+// SetDataAutoReconnect enables automatic data reconnection when the connection drops.
+func (t *DirectCellTransport) SetDataAutoReconnect(enabled bool) {
+	t.dataMu.Lock()
+	t.dataAutoReconn = enabled
+	t.dataMu.Unlock()
+}
+
+// SetAPNList sets the ordered APN failover list. ConnectData tries each in order.
+func (t *DirectCellTransport) SetAPNList(apns []string) {
+	t.dataMu.Lock()
+	t.dataAPNList = apns
+	t.dataAPNIdx = 0
+	t.dataMu.Unlock()
+}
+
+// connectDataWithFailover tries each APN in the failover list until one succeeds.
+// If apnList is empty, falls back to the single dataAPN.
+func (t *DirectCellTransport) connectDataWithFailover() error {
+	t.dataMu.RLock()
+	apns := t.dataAPNList
+	currentAPN := t.dataAPN
+	startIdx := t.dataAPNIdx
+	t.dataMu.RUnlock()
+
+	if len(apns) == 0 {
+		if currentAPN == "" {
+			return fmt.Errorf("no APN configured")
+		}
+		return t.tryConnectAPN(currentAPN)
+	}
+
+	// Try each APN starting from current index, wrapping around
+	for i := 0; i < len(apns); i++ {
+		idx := (startIdx + i) % len(apns)
+		apn := apns[idx]
+		if err := t.tryConnectAPN(apn); err != nil {
+			log.Warn().Err(err).Str("apn", apn).Int("idx", idx).Msg("cellular: APN connect failed, trying next")
+			continue
+		}
+		// Success — remember which APN worked
+		t.dataMu.Lock()
+		t.dataAPNIdx = idx
+		t.dataMu.Unlock()
+		return nil
+	}
+	return fmt.Errorf("all APNs failed (%d tried)", len(apns))
+}
+
+// tryConnectAPN attempts to connect with a single APN.
+func (t *DirectCellTransport) tryConnectAPN(apn string) error {
+	cmd := fmt.Sprintf("AT+CGDCONT=1,\"IP\",\"%s\"", apn)
+	resp, err := t.execAT(cmd, cellATTimeout)
+	if err != nil || strings.Contains(resp, "ERROR") {
+		return fmt.Errorf("set APN failed: %s", resp)
+	}
+
+	resp, err = t.execAT("AT+CGACT=1,1", 30*time.Second)
+	if err != nil || strings.Contains(resp, "ERROR") {
+		return fmt.Errorf("activate PDP failed: %s", resp)
+	}
+
+	resp, err = t.execAT("AT+CGPADDR=1", cellATTimeout)
+	ip := ""
+	if err == nil {
+		ip = parseCGPADDR(resp)
+	}
+
+	t.dataMu.Lock()
+	t.dataActive = true
+	t.dataAPN = apn
+	t.dataIP = ip
+	t.dataIface = detectDataInterface()
+	t.dataReconnFails = 0
+	t.dataMu.Unlock()
+
+	log.Info().Str("apn", apn).Str("ip", ip).Msg("cellular: data connected")
+	t.emitEvent(CellEvent{
+		Type:    "data_connected",
+		Message: fmt.Sprintf("Data connected: APN=%s IP=%s", apn, ip),
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+	return nil
+}
+
+// checkDataConnection verifies the data connection is alive and reconnects if needed.
+// Called from the signal poller loop (every 60s).
+func (t *DirectCellTransport) checkDataConnection() {
+	t.dataMu.RLock()
+	active := t.dataActive
+	autoReconn := t.dataAutoReconn
+	apn := t.dataAPN
+	fails := t.dataReconnFails
+	t.dataMu.RUnlock()
+
+	if !active || !autoReconn {
+		return
+	}
+
+	// Check if PDP context is still active via AT+CGACT?
+	resp, err := t.execAT("AT+CGACT?", cellATTimeout)
+	if err != nil {
+		return // modem unresponsive, skip this cycle
+	}
+
+	// Parse response: +CGACT: 1,1 means context 1 is active
+	pdpActive := strings.Contains(resp, "+CGACT: 1,1")
+
+	// Also check if we still have an IP
+	if pdpActive {
+		ipResp, ipErr := t.execAT("AT+CGPADDR=1", cellATTimeout)
+		if ipErr == nil {
+			ip := parseCGPADDR(ipResp)
+			if ip != "" && ip != "0.0.0.0" {
+				// Connection is healthy, update IP if it changed
+				t.dataMu.Lock()
+				if t.dataIP != ip {
+					log.Info().Str("old_ip", t.dataIP).Str("new_ip", ip).Msg("cellular: data IP changed")
+					t.dataIP = ip
+				}
+				t.dataReconnFails = 0
+				t.dataMu.Unlock()
+				return
+			}
+		}
+	}
+
+	// Connection lost — attempt reconnect with backoff
+	maxBackoff := 5 // max consecutive failures before giving up this cycle
+	if fails >= maxBackoff {
+		// Only try once every 5 cycles (5 min) after max failures
+		if fails%maxBackoff != 0 {
+			t.dataMu.Lock()
+			t.dataReconnFails++
+			t.dataMu.Unlock()
+			return
+		}
+	}
+
+	log.Warn().Str("apn", apn).Int("fails", fails).Msg("cellular: data connection lost, reconnecting")
+	t.emitEvent(CellEvent{
+		Type:    "data_reconnecting",
+		Message: fmt.Sprintf("Data connection lost, reconnecting (attempt %d)", fails+1),
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+
+	// Try multi-APN failover if configured, else single APN
+	if err := t.connectDataWithFailover(); err != nil {
+		t.dataMu.Lock()
+		t.dataReconnFails++
+		t.dataMu.Unlock()
+		log.Error().Err(err).Int("fails", fails+1).Msg("cellular: data reconnect failed")
+		t.emitEvent(CellEvent{
+			Type:    "data_reconnect_failed",
+			Message: fmt.Sprintf("Data reconnect failed: %s", err),
+			Time:    time.Now().UTC().Format(time.RFC3339),
+		})
+	}
 }
 
 // Close shuts down the transport.

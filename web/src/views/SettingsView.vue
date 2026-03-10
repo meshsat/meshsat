@@ -319,7 +319,7 @@ async function doTestAstrocast() {
 // Cellular gateway
 const cellularForm = ref({
   sms_destinations: '', allowed_senders: '', sms_prefix: 'MESHSAT', max_segments: 3,
-  apn: '', auto_connect: false,
+  apn: '', auto_connect: false, auto_reconnect: false, apn_failover_list: '',
   webhook_url: '', webhook_headers: '', inbound_webhook_enabled: false, inbound_webhook_secret: '',
   dyndns_provider: 'none', dyndns_domain: '', dyndns_token: '', dyndns_interval: 300
 })
@@ -348,6 +348,10 @@ function loadCellular() {
   if (cellularGw.value?.config) {
     try {
       const c = typeof cellularGw.value.config === 'string' ? JSON.parse(cellularGw.value.config) : cellularGw.value.config
+      // Convert array fields to comma-separated strings for form inputs
+      if (Array.isArray(c.apn_failover_list)) {
+        c.apn_failover_list = c.apn_failover_list.join(', ')
+      }
       Object.assign(cellularForm.value, c)
       cellularEnabled.value = cellularGw.value.enabled
     } catch {}
@@ -355,7 +359,12 @@ function loadCellular() {
 }
 
 async function saveCellular() {
-  await store.configureGateway('cellular', cellularEnabled.value, cellularForm.value)
+  const cfg = { ...cellularForm.value }
+  // Convert comma-separated APN failover list to array
+  if (typeof cfg.apn_failover_list === 'string') {
+    cfg.apn_failover_list = cfg.apn_failover_list.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  await store.configureGateway('cellular', cellularEnabled.value, cfg)
 }
 
 // ZigBee gateway
@@ -825,9 +834,18 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label class="block text-xs text-gray-500 mb-1">APN</label>
           <input v-model="cellularForm.apn" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet">
         </div>
-        <label class="flex items-center gap-1 text-xs text-gray-400">
-          <input type="checkbox" v-model="cellularForm.auto_connect" class="rounded bg-gray-900 border-gray-700"> Auto-connect on boot
-        </label>
+        <div class="flex gap-4">
+          <label class="flex items-center gap-1 text-xs text-gray-400">
+            <input type="checkbox" v-model="cellularForm.auto_connect" class="rounded bg-gray-900 border-gray-700"> Auto-connect on boot
+          </label>
+          <label class="flex items-center gap-1 text-xs text-gray-400">
+            <input type="checkbox" v-model="cellularForm.auto_reconnect" class="rounded bg-gray-900 border-gray-700"> Auto-reconnect on drop
+          </label>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">APN Failover List (comma-separated, tried in order if primary fails)</label>
+          <input v-model="cellularForm.apn_failover_list" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet,data,broadband">
+        </div>
         <div class="flex gap-2">
           <button @click="store.connectCellularData(cellularForm.apn)" class="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Connect</button>
           <button @click="store.disconnectCellularData()" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Disconnect</button>

@@ -15,8 +15,10 @@ type CellularConfig struct {
 	ForwardAll         bool              `json:"forward_all"`                 // forward all message types
 	InboundChannel     int               `json:"inbound_channel"`             // mesh channel for inbound SMS (default 0)
 	InboundDestNode    string            `json:"inbound_dest_node,omitempty"` // target node for inbound SMS (empty = broadcast)
-	APN                string            `json:"apn,omitempty"`               // LTE data APN
+	APN                string            `json:"apn,omitempty"`               // LTE data APN (primary)
+	APNFailoverList    []string          `json:"apn_failover_list,omitempty"` // ordered APN failover list (tried if primary fails)
 	AutoConnectData    bool              `json:"auto_connect_data"`           // auto-connect LTE data on start
+	AutoReconnect      bool              `json:"auto_reconnect"`              // auto-reconnect on data drop
 	WebhookOutURL      string            `json:"webhook_out_url,omitempty"`   // outbound webhook URL
 	WebhookOutHeaders  map[string]string `json:"webhook_out_headers,omitempty"`
 	WebhookInEnabled   bool              `json:"webhook_in_enabled"`          // enable inbound webhook endpoint
