@@ -407,7 +407,9 @@ func FindUSBSerial(port string) string {
 }
 
 // ClassifyDevice returns the device type for a given VID:PID string.
-// Returns one of: "meshtastic", "iridium", "cellular", "astrocast", "gps", "unknown".
+// Returns one of: "meshtastic", "iridium", "cellular", "astrocast", "zigbee", "gps", "unknown".
+// Note: some VID:PIDs (CP210x, CH343) are shared by multiple device types.
+// For ambiguous matches, returns the most common type. Use protocol probing to disambiguate.
 func ClassifyDevice(vidpid string) string {
 	if knownMeshtasticVIDPIDs[vidpid] {
 		return "meshtastic"
@@ -421,8 +423,19 @@ func ClassifyDevice(vidpid string) string {
 	if knownCellularVIDPIDs[vidpid] {
 		return "cellular"
 	}
+	if knownZigBeeOnlyVIDPIDs[vidpid] {
+		return "zigbee"
+	}
 	if gpsVIDPIDs[vidpid] {
 		return "gps"
 	}
 	return "unknown"
+}
+
+// ZigBee-only VID:PIDs (not shared with other device types).
+// Shared VIDs (CP210x, CH343) are handled by ClassifyDevice returning "meshtastic"
+// and then protocol probing to disambiguate.
+var knownZigBeeOnlyVIDPIDs = map[string]bool{
+	"0451:16a8": true, // TI CC2531 (ZigBee only)
+	"1cf1:0030": true, // dresden elektronik ConBee/RaspBee
 }

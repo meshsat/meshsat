@@ -20,7 +20,7 @@ const tabs = [
 
 // Interface form
 const ifaceForm = ref({ id: '', channel_type: 'mesh', label: '', enabled: true })
-const channelTypes = ['mesh', 'iridium', 'astrocast', 'cellular', 'webhook', 'mqtt']
+const channelTypes = ['mesh', 'iridium', 'astrocast', 'cellular', 'zigbee', 'webhook', 'mqtt']
 
 function resetIfaceForm() {
   ifaceForm.value = { id: '', channel_type: 'mesh', label: '', enabled: true }

@@ -81,6 +81,27 @@ func RegisterDefaults(r *Registry) {
 	})
 
 	r.Register(ChannelDescriptor{
+		ID:            "zigbee",
+		Label:         "ZigBee 3.0",
+		IsPaid:        false,
+		CanSend:       true,
+		CanReceive:    true,
+		BinaryCapable: true,
+		MaxPayload:    100, // ~100 bytes after ZigBee APS/NWK headers
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 2 * time.Second,
+			MaxWait:     30 * time.Second,
+			MaxRetries:  3,
+			BackoffFunc: "exponential",
+		},
+		Options: []OptionField{
+			{Key: "cluster_id", Label: "Cluster ID", Type: "text", Default: "0x0006"},
+			{Key: "endpoint", Label: "Endpoint", Type: "number", Default: "1"},
+		},
+	})
+
+	r.Register(ChannelDescriptor{
 		ID:         "webhook",
 		Label:      "Webhook HTTP",
 		IsPaid:     false,
