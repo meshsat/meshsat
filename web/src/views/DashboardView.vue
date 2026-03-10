@@ -316,9 +316,21 @@ async function dashBroadcastPosition() {
   broadcastingPosition.value = false
 }
 
-// ── Cellular signal history (local tracking) ──
+// ── Cellular signal history (local tracking + persisted seed) ──
 const cellSignalHistory = ref([])
 const MAX_CELL_HISTORY = 30
+
+function seedCellSignalFromHistory() {
+  const hist = store.cellularSignalHistory || []
+  if (hist.length && cellSignalHistory.value.length === 0) {
+    // Seed from persisted DB history (bars field from CellSignalRecorder)
+    const seeded = hist.slice(-MAX_CELL_HISTORY).map(h => ({
+      ts: new Date(h.recorded_at || h.timestamp).getTime(),
+      val: h.bars ?? 0
+    })).filter(h => h.val >= 0)
+    if (seeded.length) cellSignalHistory.value = seeded
+  }
+}
 
 function trackCellularSignal() {
   const bars = store.cellularSignal?.bars
@@ -329,11 +341,8 @@ function trackCellularSignal() {
 }
 
 const cellSparklinePoints = computed(() => {
-  let hist = cellSignalHistory.value
-  // Use placeholder mock data if no real data
-  if (hist.length < 2) {
-    hist = [0, 1, 2, 2, 3, 2, 1, 0, 0, 1, 2, 3, 4, 3, 2, 1, 0, 0, 1, 2].map((v, i) => ({ ts: i, val: v }))
-  }
+  const hist = cellSignalHistory.value
+  if (hist.length < 2) return ''
   const W = 200, H = 72
   return hist.map((h, i) => {
     const x = (i / (hist.length - 1)) * W
@@ -349,7 +358,7 @@ const cellSparklineArea = computed(() => {
   const last = pairs[pairs.length - 1]?.split(',')[0] || '200'
   return `M ${first},72 L ${pts.replace(/ /g, ' L ')} L ${last},72 Z`
 })
-const cellSparklineIsMock = computed(() => cellSignalHistory.value.length < 2)
+const cellSparklineNoData = computed(() => cellSignalHistory.value.length < 2)
 
 // ── Computed: Cellular panel ──
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
@@ -366,7 +375,9 @@ const cellStatus = computed(() => {
   // No gateway but transport has data (standalone mode)
   if (cs?.sim_state === 'READY') return { dot: 'bg-sky-400', text: 'Modem Ready' }
   if (cs?.sim_state === 'PIN_REQUIRED') return { dot: 'bg-amber-400', text: 'PIN Required' }
-  if (cs) return { dot: 'bg-amber-400', text: cs.sim_state || 'Initializing' }
+  if (cs?.sim_state) return { dot: 'bg-amber-400', text: cs.sim_state }
+  // Modem port known but not connected — show Disconnected, not Initializing
+  if (cs?.port) return { dot: 'bg-red-400', text: 'Disconnected' }
   return { dot: 'bg-gray-600', text: 'No Modem' }
 })
 
@@ -776,6 +787,7 @@ function getWidgetDiagnostics(widgetId) {
 }
 
 function openQueueItemDetail(item) {
+  // item is a unified queue entry with _type, _raw, etc.
   queueDetailItem.value = item
   queueDetailModal.value = true
 }
@@ -878,6 +890,7 @@ async function fetchAll() {
     store.fetchLocationSources(),
     store.fetchCellularSignal(),
     store.fetchCellularStatus(),
+    store.fetchCellularSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
     store.fetchSMSMessages({ limit: 10 }),
     store.fetchCellBroadcasts({ limit: 10 }),
     store.fetchCellInfo(),
@@ -899,7 +912,7 @@ onMounted(() => {
   } catch { /* ignore corrupt data */ }
 
   loadSelectedInterfaces()
-  fetchAll().then(() => { trackCellularSignal(); fetchDashPasses() })
+  fetchAll().then(() => { seedCellSignalFromHistory(); trackCellularSignal(); fetchDashPasses() })
   store.connectSSE(handleSSEEvent)
   pollTimer = setInterval(() => {
     nowSec.value = Date.now() / 1000
@@ -1322,13 +1335,15 @@ function widgetGridClass(id) {
             <!-- Area fill -->
             <path v-if="cellSparklineArea" :d="cellSparklineArea" fill="rgba(56,189,248,0.08)" />
             <!-- Line -->
-            <polyline v-if="cellSparklinePoints" :points="cellSparklinePoints" fill="none" stroke="#38bdf8" stroke-width="1.2" :opacity="cellSparklineIsMock ? 0.3 : 0.7" />
+            <polyline v-if="cellSparklinePoints" :points="cellSparklinePoints" fill="none" stroke="#38bdf8" stroke-width="1.2" opacity="0.7" />
+            <!-- No data placeholder -->
+            <text v-if="cellSparklineNoData" x="100" y="40" text-anchor="middle" fill="#4b5563" font-size="8">No signal data</text>
           </svg>
           <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
             <span class="flex items-center gap-1">
               <span class="w-1.5 h-1.5 rounded-full bg-sky-400 inline-block"></span> Signal bars
             </span>
-            <span v-if="cellSparklineIsMock" class="text-gray-700 italic">placeholder — no data yet</span>
+            <span v-if="cellSparklineNoData" class="text-gray-700 italic">waiting for signal data</span>
             <span v-else>{{ cellSignalHistory.length }} samples</span>
           </div>
         </div>
@@ -1419,30 +1434,6 @@ function widgetGridClass(id) {
           <div v-if="pinError" class="text-[10px] text-red-400 mt-1">{{ pinError }}</div>
         </div>
 
-        <!-- Recent SMS -->
-        <div class="mt-3 pt-2 border-t border-tactical-border">
-          <div class="flex items-center gap-1.5 mb-1.5">
-            <span class="text-[10px] text-gray-500 uppercase tracking-wider">Recent SMS</span>
-            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-sky-900/30 text-sky-400">{{ (store.smsMessages || []).length }}</span>
-          </div>
-          <div v-if="(store.smsMessages || []).length" class="space-y-1">
-            <div v-for="sms in (store.smsMessages || []).slice(0, 5)" :key="sms.id"
-              class="flex items-start gap-1.5 py-1 px-2 rounded bg-tactical-bg/50 text-[11px]">
-              <span :class="sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400'" class="font-mono text-[9px] mt-0.5">
-                {{ sms.direction === 'tx' ? 'TX' : 'RX' }}
-              </span>
-              <div class="flex-1 min-w-0">
-                <div class="text-gray-300 truncate">{{ sms.text || '(empty)' }}</div>
-                <div class="text-[9px] text-gray-600">{{ sms.phone }} · {{ formatRelativeTime(sms.created_at) }}</div>
-              </div>
-              <span class="text-[9px] font-mono"
-                :class="sms.status === 'sent' || sms.status === 'delivered' ? 'text-emerald-400' : sms.status === 'failed' ? 'text-red-400' : 'text-gray-500'">
-                {{ sms.status }}
-              </span>
-            </div>
-          </div>
-          <div v-else class="text-[11px] text-gray-600 italic py-1 px-2">No SMS history yet</div>
-        </div>
       </div>
 
       <!-- ═══ Emergency SOS (compact) ═══ -->
@@ -1660,7 +1651,7 @@ function widgetGridClass(id) {
           <div v-for="item in unifiedQueue" :key="item._key"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
             :class="item._opacity"
-            @click="item._type === 'sbd' ? openQueueItemDetail(item._raw) : null">
+            @click="openQueueItemDetail(item)">
             <span class="text-[9px] font-mono shrink-0" :class="item._dirClass">
               {{ item._label }}
             </span>
@@ -1730,71 +1721,99 @@ function widgetGridClass(id) {
       <div v-if="queueDetailModal && queueDetailItem" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="queueDetailModal = false">
         <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
           <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
-            <h3 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">QUEUE ITEM #{{ queueDetailItem.id }}</h3>
+            <h3 class="font-display font-semibold text-sm tracking-wide"
+              :class="queueDetailItem._type === 'sms' ? 'text-sky-400' : 'text-tactical-iridium'">
+              {{ queueDetailItem._type === 'sms' ? 'SMS' : queueDetailItem._type === 'sbd' ? 'SBD' : 'MESSAGE' }}
+              #{{ queueDetailItem._raw?.id || '' }}
+            </h3>
             <button @click="queueDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
           <div class="p-4 space-y-4">
-            <!-- Message metadata -->
-            <div>
-              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Message Metadata</h4>
-              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
-                <div class="flex justify-between"><span class="text-gray-500">ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem.id }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Packet ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem.packet_id || 'N/A' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Direction</span><span class="text-gray-300 font-mono">{{ queueDetailItem.direction || 'outbound' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Status</span><span class="font-mono px-1.5 py-px rounded" :class="dlqStatusColor(queueDetailItem.status)">{{ queueDetailItem.status || 'queued' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Priority</span><span class="text-gray-300 font-mono">{{ queueDetailItem.priority ?? 'N/A' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Created</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem.created_at) }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Updated</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem.updated_at) }}</span></div>
-              </div>
-            </div>
 
-            <!-- Payload -->
-            <div>
-              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Payload</h4>
-              <div class="text-[11px] space-y-1">
-                <div><span class="text-gray-500">Preview: </span><span class="text-gray-300">{{ queueDetailItem.text_preview || '(none)' }}</span></div>
-                <div v-if="queueDetailItem.payload"><span class="text-gray-500">Hex: </span><span class="text-gray-400 font-mono text-[10px] break-all">{{ toHex(queueDetailItem.payload) }}</span></div>
-              </div>
-            </div>
-
-            <!-- Retry state -->
-            <div>
-              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Retry State</h4>
-              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
-                <div class="flex justify-between"><span class="text-gray-500">Retries</span><span class="text-gray-300 font-mono">{{ queueDetailItem.retries ?? 0 }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Max Retries</span><span class="text-gray-300 font-mono">{{ queueDetailItem.max_retries ?? 'N/A' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Next Retry</span><span class="text-gray-400 font-mono text-[10px]">{{ queueDetailItem.next_retry ? formatTimestamp(queueDetailItem.next_retry) : 'N/A' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Last Error</span><span class="text-gray-400 font-mono text-[10px] truncate">{{ queueDetailItem.last_error || 'None' }}</span></div>
-              </div>
-            </div>
-
-            <!-- Routing -->
-            <div>
-              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Routing</h4>
-              <div class="grid grid-cols-2 gap-1.5 text-[11px]">
-                <div class="flex justify-between"><span class="text-gray-500">Dest Channel</span><span class="text-gray-300 font-mono">{{ queueDetailItem.dest_channel ?? 'N/A' }}</span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Dest Node</span><span class="text-gray-300 font-mono">{{ queueDetailItem.dest_node || 'N/A' }}</span></div>
-              </div>
-            </div>
-
-            <!-- Flow timeline -->
-            <div>
-              <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Flow Timeline</h4>
-              <div class="flex items-center gap-2 flex-wrap">
-                <div v-for="(step, idx) in queueItemFlowSteps(queueDetailItem)" :key="idx"
-                  class="flex items-center gap-1.5">
-                  <span class="w-2 h-2 rounded-full" :class="step.active ? 'bg-emerald-400' : 'bg-red-400'" />
-                  <span class="text-[10px] font-mono" :class="step.active ? 'text-emerald-400' : 'text-red-400'">{{ step.label }}</span>
-                  <span class="text-[9px] text-gray-600 font-mono">{{ formatTimestamp(step.time) }}</span>
-                  <span v-if="idx < queueItemFlowSteps(queueDetailItem).length - 1" class="text-gray-700">&#8594;</span>
+            <!-- ── SMS detail ── -->
+            <template v-if="queueDetailItem._type === 'sms'">
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">SMS Details</h4>
+                <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div class="flex justify-between"><span class="text-gray-500">ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.id }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Direction</span>
+                    <span class="font-mono px-1.5 py-px rounded" :class="queueDetailItem._raw.direction === 'tx' ? 'bg-sky-400/10 text-sky-400' : 'bg-emerald-400/10 text-emerald-400'">
+                      {{ queueDetailItem._raw.direction === 'tx' ? 'Outbound' : 'Inbound' }}
+                    </span>
+                  </div>
+                  <div class="flex justify-between"><span class="text-gray-500">Phone</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.phone || 'N/A' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Contact</span><span class="text-gray-300">{{ queueDetailItem._raw.contact_name || 'Unknown' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Status</span>
+                    <span class="font-mono px-1.5 py-px rounded" :class="queueDetailItem._statusClass">{{ queueDetailItem._raw.status || 'queued' }}</span>
+                  </div>
+                  <div class="flex justify-between"><span class="text-gray-500">Timestamp</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem._raw.created_at) }}</span></div>
                 </div>
               </div>
-            </div>
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Message</h4>
+                <div class="bg-tactical-bg rounded p-3 text-[12px] text-gray-200 font-mono whitespace-pre-wrap break-words">{{ queueDetailItem._raw.text || '(empty)' }}</div>
+              </div>
+            </template>
 
-            <!-- Raw JSON -->
+            <!-- ── SBD / generic detail ── -->
+            <template v-else>
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Message Metadata</h4>
+                <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div class="flex justify-between"><span class="text-gray-500">ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.id }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Packet ID</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.packet_id || 'N/A' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Direction</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.direction || 'outbound' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Status</span><span class="font-mono px-1.5 py-px rounded" :class="dlqStatusColor(queueDetailItem._raw.status)">{{ queueDetailItem._raw.status || 'queued' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Priority</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.priority ?? 'N/A' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Created</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem._raw.created_at) }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Updated</span><span class="text-gray-400 font-mono text-[10px]">{{ formatTimestamp(queueDetailItem._raw.updated_at) }}</span></div>
+                </div>
+              </div>
+
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Payload</h4>
+                <div class="text-[11px] space-y-1">
+                  <div><span class="text-gray-500">Preview: </span><span class="text-gray-300">{{ queueDetailItem._raw.text_preview || queueDetailItem._raw.decoded_text || '(none)' }}</span></div>
+                  <div v-if="queueDetailItem._raw.payload"><span class="text-gray-500">Hex: </span><span class="text-gray-400 font-mono text-[10px] break-all">{{ toHex(queueDetailItem._raw.payload) }}</span></div>
+                </div>
+              </div>
+
+              <div v-if="queueDetailItem._type === 'sbd'">
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Retry State</h4>
+                <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div class="flex justify-between"><span class="text-gray-500">Retries</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.retries ?? 0 }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Max Retries</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.max_retries ?? 'N/A' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Next Retry</span><span class="text-gray-400 font-mono text-[10px]">{{ queueDetailItem._raw.next_retry ? formatTimestamp(queueDetailItem._raw.next_retry) : 'N/A' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Last Error</span><span class="text-gray-400 font-mono text-[10px] truncate">{{ queueDetailItem._raw.last_error || 'None' }}</span></div>
+                </div>
+              </div>
+
+              <div v-if="queueDetailItem._type === 'sbd'">
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Routing</h4>
+                <div class="grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div class="flex justify-between"><span class="text-gray-500">Dest Channel</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.dest_channel ?? 'N/A' }}</span></div>
+                  <div class="flex justify-between"><span class="text-gray-500">Dest Node</span><span class="text-gray-300 font-mono">{{ queueDetailItem._raw.dest_node || 'N/A' }}</span></div>
+                </div>
+              </div>
+
+              <div>
+                <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Flow Timeline</h4>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <div v-for="(step, idx) in queueItemFlowSteps(queueDetailItem._raw)" :key="idx"
+                    class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full" :class="step.active ? 'bg-emerald-400' : 'bg-red-400'" />
+                    <span class="text-[10px] font-mono" :class="step.active ? 'text-emerald-400' : 'text-red-400'">{{ step.label }}</span>
+                    <span class="text-[9px] text-gray-600 font-mono">{{ formatTimestamp(step.time) }}</span>
+                    <span v-if="idx < queueItemFlowSteps(queueDetailItem._raw).length - 1" class="text-gray-700">&#8594;</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- Raw JSON (all types) -->
             <div>
               <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Raw JSON</h4>
-              <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(queueDetailItem, null, 2) }}</pre>
+              <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(queueDetailItem._raw, null, 2) }}</pre>
             </div>
           </div>
         </div>

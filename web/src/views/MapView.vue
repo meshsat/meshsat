@@ -96,7 +96,7 @@ async function initMap() {
 
     if (!mapEl.value) return
 
-    map = L.map(mapEl.value).setView([0, 0], 2)
+    map = L.map(mapEl.value).setView([52.16, 4.49], 6)
     tileLayer = L.tileLayer(tileUrls[mapTheme.value], {
       attribution: tileAttrs[mapTheme.value],
       maxZoom: 19
@@ -109,6 +109,10 @@ async function initMap() {
     iridiumLayer = L.layerGroup().addTo(map)
     cellularLayer = L.layerGroup().addTo(map)
     mapReady.value = true
+
+    // Leaflet needs a size recalc after the container is rendered in the DOM
+    setTimeout(() => { if (map) map.invalidateSize() }, 200)
+
     updateMap()
   } catch (err) {
     console.error('Map init failed:', err)
@@ -442,6 +446,13 @@ onMounted(async () => {
     if (nodeVisibility[nid] === undefined) nodeVisibility[nid] = true
   }
   await initMap()
+  // Center on resolved location if available and no nodes have GPS
+  if (map && !nodesWithPositions.value.length) {
+    const resolved = store.locationSources?.resolved
+    if (resolved && resolved.lat && resolved.lon) {
+      map.setView([resolved.lat, resolved.lon], 10)
+    }
+  }
 })
 
 onUnmounted(() => {
