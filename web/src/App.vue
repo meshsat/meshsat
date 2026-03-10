@@ -13,6 +13,7 @@ const tabs = [
   { name: 'comms', label: 'Comms', path: '/messages' },
   { name: 'nodes', label: 'Peers', path: '/nodes' },
   { name: 'bridge', label: 'Bridge', path: '/bridge' },
+  { name: 'interfaces', label: 'Interfaces', path: '/interfaces' },
   { name: 'passes', label: 'Passes', path: '/passes' },
   { name: 'map', label: 'Map', path: '/map' },
   { name: 'settings', label: 'Settings', path: '/settings' },

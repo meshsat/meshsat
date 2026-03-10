@@ -5,6 +5,7 @@ const routes = [
   { path: '/messages', name: 'messages', component: () => import('@/views/MessagesView.vue') },
   { path: '/nodes', name: 'nodes', component: () => import('@/views/NodesView.vue') },
   { path: '/bridge', name: 'bridge', component: () => import('@/views/BridgeView.vue') },
+  { path: '/interfaces', name: 'interfaces', component: () => import('@/views/InterfacesView.vue') },
   { path: '/passes', name: 'passes', component: () => import('@/views/PassesView.vue') },
   { path: '/map', name: 'map', component: () => import('@/views/MapView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },

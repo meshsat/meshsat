@@ -827,6 +827,167 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Interfaces (v0.3.0)
+  const interfaces = ref([])
+  const devices = ref([])
+  const accessRules = ref([])
+  const objectGroups = ref([])
+  const failoverGroups = ref([])
+
+  async function fetchInterfaces() {
+    try {
+      const data = await api.get('/interfaces')
+      interfaces.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createInterface(iface) {
+    error.value = null
+    try {
+      const r = await api.post('/interfaces', iface)
+      await fetchInterfaces()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function updateInterface(id, iface) {
+    error.value = null
+    try {
+      const r = await api.put(`/interfaces/${id}`, iface)
+      await fetchInterfaces()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteInterface(id) {
+    error.value = null
+    try {
+      await api.del(`/interfaces/${id}`)
+      await fetchInterfaces()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function bindDevice(ifaceId, deviceId) {
+    error.value = null
+    try {
+      const r = await api.post(`/interfaces/${ifaceId}/bind`, { device_id: deviceId })
+      await fetchInterfaces()
+      await fetchDevices()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function unbindDevice(ifaceId) {
+    error.value = null
+    try {
+      const r = await api.post(`/interfaces/${ifaceId}/unbind`)
+      await fetchInterfaces()
+      await fetchDevices()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Devices (v0.3.0)
+  async function fetchDevices() {
+    try {
+      const data = await api.get('/devices')
+      devices.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  // Access Rules (v0.3.0)
+  async function fetchAccessRules() {
+    try {
+      const data = await api.get('/access-rules')
+      accessRules.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createAccessRule(rule) {
+    error.value = null
+    try {
+      const r = await api.post('/access-rules', rule)
+      await fetchAccessRules()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function updateAccessRule(id, rule) {
+    error.value = null
+    try {
+      const r = await api.put(`/access-rules/${id}`, rule)
+      await fetchAccessRules()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteAccessRule(id) {
+    error.value = null
+    try {
+      await api.del(`/access-rules/${id}`)
+      await fetchAccessRules()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Object Groups (v0.3.0)
+  async function fetchObjectGroups() {
+    try {
+      const data = await api.get('/object-groups')
+      objectGroups.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createObjectGroup(group) {
+    error.value = null
+    try {
+      const r = await api.post('/object-groups', group)
+      await fetchObjectGroups()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function updateObjectGroup(id, group) {
+    error.value = null
+    try {
+      const r = await api.put(`/object-groups/${id}`, group)
+      await fetchObjectGroups()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteObjectGroup(id) {
+    error.value = null
+    try {
+      await api.del(`/object-groups/${id}`)
+      await fetchObjectGroups()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Failover Groups (v0.3.0)
+  async function fetchFailoverGroups() {
+    try {
+      const data = await api.get('/failover-groups')
+      failoverGroups.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createFailoverGroup(group) {
+    error.value = null
+    try {
+      const r = await api.post('/failover-groups', group)
+      await fetchFailoverGroups()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteFailoverGroup(id) {
+    error.value = null
+    try {
+      await api.del(`/failover-groups/${id}`)
+      await fetchFailoverGroups()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
@@ -861,6 +1022,11 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,
+    interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice,
+    devices, fetchDevices,
+    accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
+    objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,
+    failoverGroups, fetchFailoverGroups, createFailoverGroup, deleteFailoverGroup,
     sseConnected, connectSSE, closeSSE
   }
 })
