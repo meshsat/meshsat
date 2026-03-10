@@ -20,7 +20,7 @@ func setupTestDispatcher(t *testing.T) (*Dispatcher, *database.DB) {
 	reg := channel.NewRegistry()
 	channel.RegisterDefaults(reg)
 
-	d := NewDispatcher(db, nil, reg, nil, nil)
+	d := NewDispatcher(db, reg, nil, nil)
 	return d, db
 }
 

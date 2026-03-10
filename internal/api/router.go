@@ -21,7 +21,6 @@ type Server struct {
 	mesh          transport.MeshTransport
 	processor     *engine.Processor
 	gwManager     *gateway.Manager
-	ruleEngine    *rules.Engine
 	accessEval    *rules.AccessEvaluator
 	tleMgr        *engine.TLEManager
 	scheduler     *gateway.PassScheduler
@@ -44,11 +43,6 @@ func NewServer(db *database.DB, mesh transport.MeshTransport, proc *engine.Proce
 		processor: proc,
 		gwManager: gwMgr,
 	}
-}
-
-// SetRuleEngine sets the forwarding rules engine for rule CRUD reload.
-func (s *Server) SetRuleEngine(e *rules.Engine) {
-	s.ruleEngine = e
 }
 
 // SetTLEManager sets the TLE manager for pass prediction.

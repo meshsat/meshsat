@@ -30,7 +30,6 @@ type Processor struct {
 	mesh       transport.MeshTransport
 	gwProv     GatewayProvider            // dynamic provider (gateway manager)
 	dedup      *dedup.Deduplicator        // composite-key deduplication
-	rules      *rules.Engine              // forwarding rules engine
 	dispatcher *Dispatcher                // v0.2.0 delivery fan-out
 	subs       []chan transport.MeshEvent // SSE re-broadcast subscribers
 	subsMu     sync.RWMutex
@@ -52,11 +51,6 @@ func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
 // SetDeduplicator sets the in-memory deduplicator.
 func (p *Processor) SetDeduplicator(d *dedup.Deduplicator) {
 	p.dedup = d
-}
-
-// SetRuleEngine sets the forwarding rules engine.
-func (p *Processor) SetRuleEngine(e *rules.Engine) {
-	p.rules = e
 }
 
 // SetDispatcher sets the v0.2.0 dispatcher for structured delivery fan-out.
@@ -258,14 +252,6 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 	}
 
 	if p.dispatcher != nil {
-		// Legacy path: forwarding_rules engine
-		if p.rules != nil && p.rules.RuleCount() > 0 {
-			if n := p.dispatcher.Dispatch("mesh", routeMsg, nil); n > 0 {
-				log.Info().Int("deliveries", n).Uint32("packet_id", msg.ID).Msg("dispatched to delivery ledger")
-			}
-		}
-
-		// v0.3.0 path: access_rules engine (interface-based routing)
 		if n := p.dispatcher.DispatchAccess("mesh_0", routeMsg, nil); n > 0 {
 			log.Info().Int("deliveries", n).Uint32("packet_id", msg.ID).Msg("dispatched via access rules")
 		}
@@ -403,13 +389,6 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 						Text: msg.Text,
 						From: msg.Source,
 					}
-					// Legacy path
-					if p.rules != nil {
-						if n := p.dispatcher.Dispatch(msg.Source, routeMsg, []byte(msg.Text)); n > 0 {
-							log.Info().Int("deliveries", n).Str("source", msg.Source).Msg("inbound dispatched")
-						}
-					}
-					// v0.3.0 path: map source type to interface ID
 					sourceIface := msg.Source + "_0"
 					if n := p.dispatcher.DispatchAccess(sourceIface, routeMsg, []byte(msg.Text)); n > 0 {
 						log.Info().Int("deliveries", n).Str("interface", sourceIface).Msg("inbound dispatched via access rules")

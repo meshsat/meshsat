@@ -16,10 +16,9 @@ import (
 	"meshsat/internal/transport"
 )
 
-// Dispatcher evaluates rules and fans out messages to per-channel delivery workers.
+// Dispatcher evaluates access rules and fans out messages to per-channel delivery workers.
 type Dispatcher struct {
 	db         *database.DB
-	rules      *rules.Engine
 	access     *rules.AccessEvaluator // v0.3.0 access rule evaluation
 	failover   *FailoverResolver      // v0.3.0 failover group resolution
 	signing    *SigningService        // v0.3.0 non-repudiation signing + audit
@@ -33,11 +32,10 @@ type Dispatcher struct {
 	mu sync.RWMutex
 }
 
-// NewDispatcher creates a dispatcher wired to the rules engine, channel registry, and gateways.
-func NewDispatcher(db *database.DB, rulesEngine *rules.Engine, reg *channel.Registry, gwProv GatewayProvider, mesh transport.MeshTransport) *Dispatcher {
+// NewDispatcher creates a dispatcher wired to the channel registry and gateways.
+func NewDispatcher(db *database.DB, reg *channel.Registry, gwProv GatewayProvider, mesh transport.MeshTransport) *Dispatcher {
 	return &Dispatcher{
 		db:       db,
-		rules:    rulesEngine,
 		registry: reg,
 		gwProv:   gwProv,
 		mesh:     mesh,
@@ -229,65 +227,6 @@ func (d *Dispatcher) StopWorker(ifaceID string) {
 	}
 
 	log.Info().Str("interface", ifaceID).Msg("delivery worker stopped (state change)")
-}
-
-// Dispatch evaluates rules for a message from a source channel and creates delivery rows.
-// Returns the number of deliveries created.
-func (d *Dispatcher) Dispatch(source string, msg rules.RouteMessage, payload []byte) int {
-	if d.rules == nil {
-		return 0
-	}
-
-	matches := d.rules.EvaluateRoute(source, msg)
-	if len(matches) == 0 {
-		return 0
-	}
-
-	// Generate a message reference for grouping deliveries
-	msgRef := fmt.Sprintf("%s-%d", time.Now().UTC().Format("20060102-150405"), time.Now().UnixNano()%100000)
-
-	count := 0
-	for _, m := range matches {
-		desc, ok := d.registry.Get(m.Rule.DestType)
-		maxRetries := 3
-		if ok && desc.RetryConfig.Enabled {
-			maxRetries = desc.RetryConfig.MaxRetries
-		}
-
-		preview := msg.Text
-		if len(preview) > 200 {
-			preview = preview[:200]
-		}
-
-		ruleID := int64(m.Rule.ID)
-		del := database.MessageDelivery{
-			MsgRef:      msgRef,
-			RuleID:      &ruleID,
-			Channel:     m.Rule.DestType,
-			Status:      "queued",
-			Priority:    m.Rule.Priority,
-			Payload:     payload,
-			TextPreview: preview,
-			MaxRetries:  maxRetries,
-		}
-
-		if _, err := d.db.InsertDelivery(del); err != nil {
-			log.Error().Err(err).Int("rule_id", m.Rule.ID).Str("dest", m.Rule.DestType).Msg("failed to create delivery")
-			continue
-		}
-
-		count++
-		log.Info().Int("rule_id", m.Rule.ID).Str("dest", m.Rule.DestType).Str("msg_ref", msgRef).Msg("delivery queued")
-
-		if d.emit != nil {
-			d.emit(transport.MeshEvent{
-				Type:    "delivery_queued",
-				Message: fmt.Sprintf("Rule '%s': %s→%s queued", m.Rule.Name, source, m.Rule.DestType),
-			})
-		}
-	}
-
-	return count
 }
 
 // DispatchAccess evaluates v0.3.0 access rules for a message arriving on an interface.

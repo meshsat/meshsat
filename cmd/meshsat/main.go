@@ -126,27 +126,15 @@ func main() {
 		log.Error().Err(err).Msg("interface manager start failed")
 	}
 
-	// Rule engine (legacy forwarding rules)
-	ruleEngine := rules.NewEngine(db)
-	if err := ruleEngine.ReloadFromDB(); err != nil {
-		log.Warn().Err(err).Msg("failed to load forwarding rules (table may not exist yet)")
-	}
-
 	// v0.3.0 Access rule evaluator
 	accessEval := rules.NewAccessEvaluator(db)
 	if err := accessEval.ReloadFromDB(); err != nil {
 		log.Warn().Err(err).Msg("failed to load access rules (table may not exist yet)")
 	}
 
-	// Migrate compound dest_types (both/all → per-channel rules)
-	if err := rules.MigrateCompoundDestTypes(db); err != nil {
-		log.Warn().Err(err).Msg("compound dest_type migration failed")
-	}
-
 	// Processor
 	proc := engine.NewProcessor(db, mesh)
 	proc.SetDeduplicator(deduplicator)
-	proc.SetRuleEngine(ruleEngine)
 
 	// Gateway manager
 	gwMgr := gateway.NewManager(db, sat)
@@ -198,8 +186,8 @@ func main() {
 		signingService = ss
 	}
 
-	// Dispatcher — structured delivery fan-out (v0.2.0 + v0.3.0 access rules)
-	dispatcher := engine.NewDispatcher(db, ruleEngine, registry, gwMgr, mesh)
+	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
+	dispatcher := engine.NewDispatcher(db, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
 	dispatcher.SetAccessEvaluator(accessEval)
 	failoverResolver := engine.NewFailoverResolver(db, ifaceMgr)
@@ -246,7 +234,6 @@ func main() {
 
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
-	srv.SetRuleEngine(ruleEngine)
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)

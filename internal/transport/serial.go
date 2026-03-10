@@ -448,9 +448,27 @@ func ClassifyDevice(vidpid string) string {
 	return "unknown"
 }
 
+// ambiguousZigBeeVIDPIDs lists VID:PIDs shared between Meshtastic and ZigBee.
+// ClassifyDeviceWithProbe uses ZNP protocol probing to disambiguate these.
+var ambiguousZigBeeVIDPIDs = map[string]bool{
+	"10c4:ea60": true, // CP210x — Meshtastic OR SONOFF ZBDongle-P (CC2652P)
+	"1a86:55d4": true, // CH343 — Meshtastic OR SONOFF ZBDongle-E (EFR32MG21)
+}
+
+// ClassifyDeviceWithProbe is like ClassifyDevice but does ZNP protocol probing
+// for VID:PIDs shared between Meshtastic and ZigBee. portPath is the serial
+// device path (e.g. "/dev/ttyUSB3") needed for the ZNP probe.
+func ClassifyDeviceWithProbe(vidpid, portPath string) string {
+	base := ClassifyDevice(vidpid)
+	if base == "meshtastic" && ambiguousZigBeeVIDPIDs[vidpid] && portPath != "" {
+		if ProbeZNP(portPath) {
+			return "zigbee"
+		}
+	}
+	return base
+}
+
 // ZigBee-only VID:PIDs (not shared with other device types).
-// Shared VIDs (CP210x, CH343) are handled by ClassifyDevice returning "meshtastic"
-// and then protocol probing to disambiguate.
 var knownZigBeeOnlyVIDPIDs = map[string]bool{
 	"0451:16a8": true, // TI CC2531 (ZigBee only)
 	"1cf1:0030": true, // dresden elektronik ConBee/RaspBee

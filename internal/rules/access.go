@@ -12,6 +12,17 @@ import (
 	"meshsat/internal/ratelimit"
 )
 
+// RouteMessage is a transport-agnostic message envelope for unified rule evaluation.
+type RouteMessage struct {
+	Text    string   // message text
+	From    string   // source identifier (node ID, phone number, etc.)
+	To      string   // optional target
+	Channel int      // mesh channel (0 if non-mesh)
+	PortNum int      // portnum (1=text, 67=telemetry, etc.)
+	RawData []byte   // original payload
+	Visited []string // visited interface IDs for loop prevention
+}
+
 // AccessFilters is the parsed representation of an access rule's filters JSON.
 type AccessFilters struct {
 	Keyword  string `json:"keyword"`

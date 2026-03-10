@@ -367,7 +367,7 @@ func (m *InterfaceManager) scanDevices() {
 	for _, port := range ports {
 		deviceID := transport.FindUSBDeviceID(port)
 		vidpid := strings.SplitN(deviceID, "+", 2)[0] // VID:PID portion
-		devType := transport.ClassifyDevice(vidpid)
+		devType := transport.ClassifyDeviceWithProbe(vidpid, port)
 
 		detected = append(detected, DetectedDevice{
 			Port:       port,
