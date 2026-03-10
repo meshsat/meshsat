@@ -477,28 +477,37 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 				continue
 			}
 
-			// Also query cell info for network type and RSRP/RSRQ
+			// Also query cell info for network type and RSRP/RSRQ.
+			// Try AT+QENG (Quectel proprietary) first, fall back to AT+CREG?.
+			var ci *CellInfo
 			t.mu.Lock()
 			cellResp, cellErr := sendAT(t.file, "AT+QENG=\"servingcell\"", 5*time.Second)
-			t.mu.Unlock()
 			if cellErr == nil && strings.Contains(cellResp, "+QENG:") {
-				ci := parseQENG(cellResp)
-				if ci != nil {
-					if ci.NetworkType != "" {
-						info.Technology = ci.NetworkType
-						t.stateMu.Lock()
-						t.netType = ci.NetworkType
-						t.stateMu.Unlock()
-					}
-					// Emit cell info update
-					ciJSON, _ := json.Marshal(ci)
-					t.emitEvent(CellEvent{
-						Type:    "cell_info_update",
-						Message: fmt.Sprintf("Cell: %s/%s CID=%s", ci.MCC, ci.MNC, ci.CellID),
-						Data:    ciJSON,
-						Time:    time.Now().UTC().Format(time.RFC3339),
-					})
+				ci = parseQENG(cellResp)
+			}
+			if ci == nil {
+				// Fallback: extended AT+CREG? (works on all modems)
+				cregResp, cregErr := sendAT(t.file, "AT+CREG?", cellATTimeout)
+				if cregErr == nil {
+					ci = parseCREGExtended(cregResp)
 				}
+			}
+			t.mu.Unlock()
+			if ci != nil {
+				if ci.NetworkType != "" {
+					info.Technology = ci.NetworkType
+					t.stateMu.Lock()
+					t.netType = ci.NetworkType
+					t.stateMu.Unlock()
+				}
+				// Emit cell info update
+				ciJSON, _ := json.Marshal(ci)
+				t.emitEvent(CellEvent{
+					Type:    "cell_info_update",
+					Message: fmt.Sprintf("Cell: %s/%s CID=%s", ci.MCC, ci.MNC, ci.CellID),
+					Data:    ciJSON,
+					Time:    time.Now().UTC().Format(time.RFC3339),
+				})
 			}
 
 			t.signalMu.Lock()
