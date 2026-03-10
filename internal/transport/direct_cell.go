@@ -494,6 +494,13 @@ func (t *DirectCellTransport) cellSignalPollerLoop() {
 			}
 			t.mu.Unlock()
 			if ci != nil {
+				// Enrich with cached state when fields are missing
+				t.stateMu.RLock()
+				cachedNet := t.netType
+				t.stateMu.RUnlock()
+				if ci.NetworkType == "" && cachedNet != "" {
+					ci.NetworkType = cachedNet
+				}
 				if ci.NetworkType != "" {
 					info.Technology = ci.NetworkType
 					t.stateMu.Lock()
