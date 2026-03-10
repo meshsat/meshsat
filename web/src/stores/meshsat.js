@@ -1028,7 +1028,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     locationSources, iridiumGeoHistory,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     smsMessages, cellBroadcasts, cellInfo,
-    rules, presets, sosStatus, dlq,
+    presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
     fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,

@@ -102,7 +102,7 @@ const nodeMailboxes = computed(() => {
   }
   // Build sorted list
   const list = Object.entries(counts).map(([id, c]) => {
-    const node = (store.nodes || []).find(n => n.user_id === id || String(n.num) === id || n.id === id)
+    const node = (store.nodes || []).find(n => n.user_id === id || String(n.num) === id)
     return {
       id,
       name: node?.long_name || node?.short_name || id,
