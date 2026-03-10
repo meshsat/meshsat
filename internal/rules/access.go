@@ -86,10 +86,28 @@ func (e *AccessEvaluator) ReloadFromDB() error {
 		}
 	}
 
+	// Load SMS contacts once for contact_group resolution
+	var contacts []database.SMSContact
+	hasContactGroups := false
 	for _, g := range groups {
-		var members []string
-		if err := json.Unmarshal([]byte(g.Members), &members); err == nil {
-			e.groups[g.ID] = members
+		if g.Type == "contact_group" {
+			hasContactGroups = true
+			break
+		}
+	}
+	if hasContactGroups {
+		contacts, _ = e.db.GetSMSContacts()
+	}
+
+	for _, g := range groups {
+		if g.Type == "contact_group" {
+			// Resolve contact_group: members are contact IDs or special "auto_fwd"
+			e.groups[g.ID] = resolveContactGroup(g.Members, contacts)
+		} else {
+			var members []string
+			if err := json.Unmarshal([]byte(g.Members), &members); err == nil {
+				e.groups[g.ID] = members
+			}
 		}
 	}
 
@@ -326,6 +344,51 @@ func (e *AccessEvaluator) matchObjectGroups(rule database.AccessRule, msg RouteM
 	}
 
 	return true
+}
+
+// resolveContactGroup expands contact_group members to phone numbers.
+// Members can be:
+//   - SMS contact IDs (as strings, e.g. "1", "5") → resolved to phone numbers
+//   - "auto_fwd" → all contacts with auto_fwd=true
+//   - phone numbers directly (e.g. "+1234567890") → passed through
+func resolveContactGroup(membersJSON string, contacts []database.SMSContact) []string {
+	var memberIDs []string
+	if err := json.Unmarshal([]byte(membersJSON), &memberIDs); err != nil {
+		return nil
+	}
+
+	phoneSet := make(map[string]bool)
+	for _, m := range memberIDs {
+		if m == "auto_fwd" {
+			// Include all contacts with auto_fwd enabled
+			for _, c := range contacts {
+				if c.AutoFwd {
+					phoneSet[c.Phone] = true
+				}
+			}
+			continue
+		}
+
+		// Try to parse as contact ID (numeric)
+		matched := false
+		for _, c := range contacts {
+			if strconv.FormatInt(c.ID, 10) == m {
+				phoneSet[c.Phone] = true
+				matched = true
+				break
+			}
+		}
+		// If not a contact ID, treat as raw phone number
+		if !matched && m != "" {
+			phoneSet[m] = true
+		}
+	}
+
+	phones := make([]string, 0, len(phoneSet))
+	for p := range phoneSet {
+		phones = append(phones, p)
+	}
+	return phones
 }
 
 func (e *AccessEvaluator) recordMatch(ruleID int64) {

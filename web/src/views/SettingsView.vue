@@ -325,6 +325,40 @@ const cellularForm = ref({
 })
 const cellularEnabled = ref(false)
 
+// SMS Contact management
+const showContactForm = ref(false)
+const editingContact = ref(null)
+const contactForm = ref({ name: '', phone: '', notes: '', auto_fwd: false })
+
+function editContact(c) {
+  editingContact.value = c.id
+  contactForm.value = { name: c.name, phone: c.phone, notes: c.notes || '', auto_fwd: !!c.auto_fwd }
+  showContactForm.value = true
+}
+
+function cancelContact() {
+  showContactForm.value = false
+  editingContact.value = null
+  contactForm.value = { name: '', phone: '', notes: '', auto_fwd: false }
+}
+
+async function saveContact() {
+  if (!contactForm.value.name || !contactForm.value.phone) return
+  try {
+    if (editingContact.value) {
+      await store.updateSMSContact(editingContact.value, contactForm.value)
+    } else {
+      await store.createSMSContact(contactForm.value)
+    }
+    cancelContact()
+  } catch { /* store error */ }
+}
+
+async function deleteContact(id) {
+  if (!confirm('Delete this contact?')) return
+  try { await store.deleteSMSContact(id) } catch { /* store error */ }
+}
+
 // SIM PIN unlock
 const settingsPinInput = ref('')
 const settingsPinUnlocking = ref(false)
@@ -417,6 +451,7 @@ onMounted(async () => {
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
   store.fetchCellularStatus()
   store.fetchCellularSignal()
+  store.fetchSMSContacts()
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
@@ -910,6 +945,56 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
         </div>
         <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
+      </div>
+
+      <!-- SMS Contacts -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mt-4">
+        <div class="flex items-center justify-between">
+          <h4 class="text-sm font-medium text-gray-200">SMS Contacts</h4>
+          <button @click="showContactForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">+ Add</button>
+        </div>
+
+        <!-- Add/Edit form -->
+        <div v-if="showContactForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Name</label>
+              <input v-model="contactForm.name" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Alice">
+            </div>
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Phone</label>
+              <input v-model="contactForm.phone" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+1234567890">
+            </div>
+          </div>
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">Notes</label>
+            <input v-model="contactForm.notes" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Optional notes">
+          </div>
+          <label class="flex items-center gap-1 text-xs text-gray-400">
+            <input type="checkbox" v-model="contactForm.auto_fwd" class="rounded bg-gray-800 border-gray-600"> Auto-forward SMS from this contact to mesh
+          </label>
+          <div class="flex gap-2">
+            <button @click="saveContact" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">
+              {{ editingContact ? 'Update' : 'Add' }}
+            </button>
+            <button @click="cancelContact" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Contact list -->
+        <div v-if="(store.smsContacts || []).length === 0 && !showContactForm" class="text-xs text-gray-500 py-2">No contacts yet.</div>
+        <div v-for="c in store.smsContacts" :key="c.id" class="flex items-center justify-between py-1.5 border-b border-gray-700 last:border-0">
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-200">{{ c.name }}</span>
+            <span class="text-xs text-gray-500 font-mono">{{ c.phone }}</span>
+            <span v-if="c.auto_fwd" class="px-1.5 py-0.5 rounded text-[9px] bg-teal-900 text-teal-300">auto-fwd</span>
+            <span v-if="c.notes" class="text-[10px] text-gray-600">{{ c.notes }}</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <button @click="editContact(c)" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Edit</button>
+            <button @click="deleteContact(c.id)" class="px-2 py-1 rounded bg-gray-700 text-red-400 text-[10px] hover:bg-gray-600">Del</button>
+          </div>
+        </div>
       </div>
     </div>
 

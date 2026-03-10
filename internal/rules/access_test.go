@@ -373,3 +373,37 @@ func TestAccessEvaluator_VisitedAllowsNonVisited(t *testing.T) {
 		t.Errorf("expected forward to iridium_0, got %s", results[0].ForwardTo)
 	}
 }
+
+func TestResolveContactGroup(t *testing.T) {
+	contacts := []database.SMSContact{
+		{ID: 1, Name: "Alice", Phone: "+1111111111", AutoFwd: true},
+		{ID: 2, Name: "Bob", Phone: "+2222222222", AutoFwd: false},
+		{ID: 3, Name: "Carol", Phone: "+3333333333", AutoFwd: true},
+	}
+
+	tests := []struct {
+		name    string
+		members string
+		want    map[string]bool
+	}{
+		{"by ID", `["1","3"]`, map[string]bool{"+1111111111": true, "+3333333333": true}},
+		{"auto_fwd", `["auto_fwd"]`, map[string]bool{"+1111111111": true, "+3333333333": true}},
+		{"mixed IDs and auto_fwd", `["2","auto_fwd"]`, map[string]bool{"+1111111111": true, "+2222222222": true, "+3333333333": true}},
+		{"raw phone passthrough", `["+9999999999"]`, map[string]bool{"+9999999999": true}},
+		{"empty", `[]`, map[string]bool{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveContactGroup(tt.members, contacts)
+			if len(got) != len(tt.want) {
+				t.Fatalf("expected %d phones, got %d: %v", len(tt.want), len(got), got)
+			}
+			for _, p := range got {
+				if !tt.want[p] {
+					t.Errorf("unexpected phone %s", p)
+				}
+			}
+		})
+	}
+}

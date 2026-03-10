@@ -221,7 +221,7 @@ const forwardTargets = computed(() => {
 })
 
 // --- Object Group Form ---
-const groupTypes = ['node_group', 'sender_group', 'portnum_group']
+const groupTypes = ['node_group', 'sender_group', 'contact_group', 'portnum_group']
 const groupForm = ref({ id: '', type: 'node_group', label: '', members: '' })
 
 function openNewGroup() {
@@ -232,11 +232,15 @@ function openNewGroup() {
 
 function openEditGroup(group) {
   editingGroup.value = group.id
+  const isContact = group.type === 'contact_group'
   groupForm.value = {
     id: group.id,
     type: group.type || 'node_group',
     label: group.label || '',
-    members: Array.isArray(group.members) ? group.members.join(', ') : (group.members || '')
+    // contact_group stores members as JSON array of IDs; others as comma-separated text
+    members: isContact
+      ? (group.members || '[]')
+      : (Array.isArray(group.members) ? group.members.join(', ') : (group.members || ''))
   }
   showCreateGroup.value = true
 }
@@ -262,6 +266,31 @@ async function saveGroup() {
 async function removeGroup(id) {
   if (!confirm(`Delete object group ${id}?`)) return
   try { await store.deleteObjectGroup(id) } catch { /* store error */ }
+}
+
+// Contact group helpers — members stored as JSON array of contact ID strings + "auto_fwd"
+function contactGroupMembers() {
+  try {
+    const raw = groupForm.value.members
+    return Array.isArray(raw) ? raw : JSON.parse(raw || '[]')
+  } catch { return [] }
+}
+const contactGroupHasAutoFwd = computed(() => contactGroupMembers().includes('auto_fwd'))
+function contactGroupHas(id) { return contactGroupMembers().includes(String(id)) }
+function toggleContactAutoFwd() {
+  const members = contactGroupMembers()
+  const idx = members.indexOf('auto_fwd')
+  if (idx >= 0) members.splice(idx, 1)
+  else members.push('auto_fwd')
+  groupForm.value.members = JSON.stringify(members)
+}
+function toggleContact(id) {
+  const members = contactGroupMembers()
+  const sid = String(id)
+  const idx = members.indexOf(sid)
+  if (idx >= 0) members.splice(idx, 1)
+  else members.push(sid)
+  groupForm.value.members = JSON.stringify(members)
 }
 
 // --- Failover Group Form ---
@@ -332,7 +361,7 @@ const unassignedDevices = computed(() =>
 
 // Object groups by type (for access rule dropdowns)
 const nodeGroups = computed(() => (store.objectGroups || []).filter(g => g.type === 'node_group'))
-const senderGroups = computed(() => (store.objectGroups || []).filter(g => g.type === 'sender_group'))
+const senderGroups = computed(() => (store.objectGroups || []).filter(g => g.type === 'sender_group' || g.type === 'contact_group'))
 const portnumGroups = computed(() => (store.objectGroups || []).filter(g => g.type === 'portnum_group'))
 
 // Parse filters from stored rules for display
@@ -353,6 +382,7 @@ onMounted(() => {
   store.fetchObjectGroups()
   store.fetchFailoverGroups()
   store.fetchTransportChannels()
+  store.fetchSMSContacts()
   pollTimer = setInterval(() => {
     store.fetchInterfaces()
     store.fetchDevices()
@@ -715,6 +745,7 @@ onUnmounted(() => {
             <select v-model="groupForm.type" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
               <option value="node_group">Node Group</option>
               <option value="sender_group">Sender Group</option>
+              <option value="contact_group">SMS Contact Group</option>
               <option value="portnum_group">Portnum Group</option>
             </select>
           </div>
@@ -724,14 +755,35 @@ onUnmounted(() => {
               class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
           </div>
         </div>
-        <div class="mb-3">
+        <div class="mb-3" v-if="groupForm.type !== 'contact_group'">
           <label class="text-[10px] text-gray-600 mb-1 block">Members (comma-separated)</label>
           <textarea v-model="groupForm.members" rows="2" placeholder="!abcd1234, !efgh5678 or 1, 3, 67"
             class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono"></textarea>
           <div class="text-[9px] text-gray-600 mt-1">
             <span v-if="groupForm.type === 'node_group'">Node IDs (hex, e.g. !abcd1234)</span>
-            <span v-else-if="groupForm.type === 'sender_group'">Sender addresses</span>
+            <span v-else-if="groupForm.type === 'sender_group'">Sender addresses (phone numbers)</span>
             <span v-else>Portnum numbers (e.g. 1=TEXT, 3=POSITION, 67=TELEMETRY)</span>
+          </div>
+        </div>
+        <!-- Contact picker for contact_group -->
+        <div class="mb-3" v-if="groupForm.type === 'contact_group'">
+          <label class="text-[10px] text-gray-600 mb-1 block">SMS Contacts</label>
+          <div v-if="(store.smsContacts || []).length === 0" class="text-xs text-gray-500 py-2">
+            No SMS contacts. Add contacts in Settings &gt; Cellular first.
+          </div>
+          <div v-else class="space-y-1 max-h-40 overflow-y-auto bg-gray-900 rounded border border-gray-700 p-2">
+            <label class="flex items-center gap-2 text-xs text-gray-300 py-0.5 cursor-pointer hover:text-gray-100">
+              <input type="checkbox" :checked="contactGroupHasAutoFwd" @change="toggleContactAutoFwd"
+                class="rounded bg-gray-800 border-gray-600"> All auto-forward contacts
+            </label>
+            <div class="border-t border-gray-700 my-1"></div>
+            <label v-for="c in store.smsContacts" :key="c.id"
+              class="flex items-center gap-2 text-xs text-gray-300 py-0.5 cursor-pointer hover:text-gray-100">
+              <input type="checkbox" :checked="contactGroupHas(c.id)" @change="toggleContact(c.id)"
+                class="rounded bg-gray-800 border-gray-600">
+              {{ c.name }} <span class="text-gray-500 font-mono">{{ c.phone }}</span>
+              <span v-if="c.auto_fwd" class="text-[9px] text-teal-500">auto-fwd</span>
+            </label>
           </div>
         </div>
         <div class="flex gap-2">
