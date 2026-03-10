@@ -344,7 +344,11 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 // It reads URCs (unsolicited notifications) with short timeouts and
 // processes queued AT commands between reads.
 func (t *DirectCellTransport) ioLoop() {
-	defer close(t.ioDone)
+	defer func() {
+		log.Debug().Msg("cellular: I/O loop exiting")
+		close(t.ioDone)
+	}()
+	log.Debug().Msg("cellular: I/O loop goroutine started")
 
 	buf := make([]byte, 256)
 	var line []byte
@@ -508,13 +512,18 @@ func (t *DirectCellTransport) readAndEmitCBS(header string) {
 
 // signalPollerLoop polls AT+CSQ every 60s via the command channel.
 func (t *DirectCellTransport) signalPollerLoop() {
-	defer close(t.sigDone)
+	defer func() {
+		log.Debug().Msg("cellular: signal poller exiting")
+		close(t.sigDone)
+	}()
+	log.Debug().Msg("cellular: signal poller goroutine started")
 	ticker := time.NewTicker(cellSignalPoll)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-t.stopCh:
+			log.Debug().Msg("cellular: signal poller received stop signal")
 			return
 		case <-ticker.C:
 			t.pollSignalAndCellInfo()
