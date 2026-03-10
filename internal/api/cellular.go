@@ -490,3 +490,97 @@ func (s *Server) handleGetWebhookLog(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, entries)
 }
+
+// ─── SIM Card Management ─────────────────────────────────────────────────────
+
+func (s *Server) handleGetSIMCards(w http.ResponseWriter, r *http.Request) {
+	cards, err := s.db.GetSIMCards()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if cards == nil {
+		cards = []database.SIMCard{}
+	}
+	writeJSON(w, http.StatusOK, cards)
+}
+
+func (s *Server) handleCreateSIMCard(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ICCID string `json:"iccid"`
+		Label string `json:"label"`
+		Phone string `json:"phone"`
+		PIN   string `json:"pin"`
+		Notes string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.ICCID == "" {
+		writeError(w, http.StatusBadRequest, "iccid is required")
+		return
+	}
+	if req.Label == "" {
+		req.Label = "SIM " + req.ICCID[len(req.ICCID)-4:]
+	}
+	id, err := s.db.CreateSIMCard(req.ICCID, req.Label, req.Phone, req.PIN, req.Notes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
+}
+
+func (s *Server) handleUpdateSIMCard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req struct {
+		Label string `json:"label"`
+		Phone string `json:"phone"`
+		PIN   string `json:"pin"`
+		Notes string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if err := s.db.UpdateSIMCard(id, req.Label, req.Phone, req.PIN, req.Notes); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *Server) handleDeleteSIMCard(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.db.DeleteSIMCard(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleGetCurrentSIMICCID(w http.ResponseWriter, r *http.Request) {
+	if s.cellTransport == nil {
+		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
+		return
+	}
+	status, err := s.cellTransport.GetStatus(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"iccid":     status.ICCID,
+		"sim_state": status.SIMState,
+		"imei":      status.IMEI,
+	})
+}

@@ -569,6 +569,22 @@ var migrations = []string{
 	// Data was migrated to access_rules in v19. The legacy rules.Engine
 	// gracefully handles the missing table by returning empty results.
 	`DROP TABLE IF EXISTS forwarding_rules;`,
+
+	// v21: SIM card management — store per-SIM settings (phone, PIN, label).
+	// ICCID (from AT+CCID) uniquely identifies each SIM card across modems.
+	// When a saved SIM is inserted, its settings are auto-applied.
+	`CREATE TABLE IF NOT EXISTS sim_cards (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		iccid      TEXT NOT NULL UNIQUE,
+		label      TEXT NOT NULL DEFAULT '',
+		phone      TEXT NOT NULL DEFAULT '',
+		pin        TEXT NOT NULL DEFAULT '',
+		notes      TEXT NOT NULL DEFAULT '',
+		last_seen  DATETIME,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_sim_cards_iccid ON sim_cards(iccid);`,
 }
 
 func (db *DB) migrate() error {

@@ -899,7 +899,7 @@ onMounted(() => {
   } catch { /* ignore corrupt data */ }
 
   loadSelectedInterfaces()
-  fetchAll().then(fetchDashPasses)
+  fetchAll().then(() => { trackCellularSignal(); fetchDashPasses() })
   store.connectSSE(handleSSEEvent)
   pollTimer = setInterval(() => {
     nowSec.value = Date.now() / 1000

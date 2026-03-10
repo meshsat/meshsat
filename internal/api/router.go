@@ -189,6 +189,13 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/cellular/contacts/{id}", s.handleDeleteSMSContact)
 		r.Post("/cellular/sms/send", s.handleSendSMS)
 
+		// SIM card management
+		r.Get("/cellular/sim-cards", s.handleGetSIMCards)
+		r.Post("/cellular/sim-cards", s.handleCreateSIMCard)
+		r.Put("/cellular/sim-cards/{id}", s.handleUpdateSIMCard)
+		r.Delete("/cellular/sim-cards/{id}", s.handleDeleteSIMCard)
+		r.Get("/cellular/sim-cards/current", s.handleGetCurrentSIMICCID)
+
 		// Iridium queue — offline compose and priority management
 		r.Get("/iridium/queue", s.handleGetIridiumQueue)
 		r.Post("/iridium/queue", s.handleEnqueueIridiumMessage)

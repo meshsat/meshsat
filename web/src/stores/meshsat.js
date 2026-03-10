@@ -678,6 +678,55 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     sseConnected.value = false
   }
 
+  // SIM Cards
+  const simCards = ref([])
+
+  async function fetchSIMCards() {
+    try {
+      simCards.value = await api.get('/cellular/sim-cards')
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function createSIMCard(payload) {
+    error.value = null
+    try {
+      const res = await api.post('/cellular/sim-cards', payload)
+      await fetchSIMCards()
+      return res
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function updateSIMCard(id, payload) {
+    error.value = null
+    try {
+      await api.put(`/cellular/sim-cards/${id}`, payload)
+      await fetchSIMCards()
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function deleteSIMCard(id) {
+    error.value = null
+    try {
+      await api.del(`/cellular/sim-cards/${id}`)
+      await fetchSIMCards()
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function readCurrentICCID() {
+    return await api.get('/cellular/sim-cards/current')
+  }
+
   // SMS Contacts
   const smsContacts = ref([])
 
@@ -1052,6 +1101,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,
     activateSOS, cancelSOS, fetchSOSStatus,
     fetchDLQ,
+    simCards, fetchSIMCards, createSIMCard, updateSIMCard, deleteSIMCard, readCurrentICCID,
     smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
     transportChannels, fetchTransportChannels,

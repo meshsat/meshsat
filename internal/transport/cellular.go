@@ -24,8 +24,21 @@ type CellStatus struct {
 	NetworkType  string `json:"network_type"`           // 2G, 3G, 4G, LTE
 	SIMState     string `json:"sim_state"`              // READY, NOT_INSERTED, PIN_REQUIRED
 	Registration string `json:"registration"`           // not_registered, registered_home, searching, denied, registered_roaming
-	PhoneNumber  string `json:"phone_number,omitempty"` // subscriber number from AT+CNUM
+	PhoneNumber  string `json:"phone_number,omitempty"` // subscriber number from AT+CNUM or SIM card DB
+	ICCID        string `json:"iccid,omitempty"`        // SIM card ICCID from AT+CCID
+	SIMLabel     string `json:"sim_label,omitempty"`    // user-assigned SIM card label
 }
+
+// SIMCardInfo holds saved SIM card settings for auto-apply during modem init.
+type SIMCardInfo struct {
+	ICCID string
+	Phone string
+	PIN   string
+	Label string
+}
+
+// SIMCardLookupFunc looks up saved settings for a SIM card by its ICCID.
+type SIMCardLookupFunc func(iccid string) (*SIMCardInfo, error)
 
 // CellSignalInfo represents cellular signal quality.
 type CellSignalInfo struct {

@@ -359,6 +359,53 @@ async function deleteContact(id) {
   try { await store.deleteSMSContact(id) } catch { /* store error */ }
 }
 
+// SIM Card management
+const showSimForm = ref(false)
+const editingSim = ref(null)
+const simForm = ref({ iccid: '', label: '', phone: '', pin: '', notes: '' })
+const simReadingICCID = ref(false)
+
+function editSim(s) {
+  editingSim.value = s.id
+  simForm.value = { iccid: s.iccid, label: s.label, phone: s.phone || '', pin: s.pin || '', notes: s.notes || '' }
+  showSimForm.value = true
+}
+
+function cancelSim() {
+  showSimForm.value = false
+  editingSim.value = null
+  simForm.value = { iccid: '', label: '', phone: '', pin: '', notes: '' }
+}
+
+async function readCurrentICCID() {
+  simReadingICCID.value = true
+  try {
+    const data = await store.readCurrentICCID()
+    if (data?.iccid) {
+      simForm.value.iccid = data.iccid
+      if (!simForm.value.label) simForm.value.label = 'SIM ' + data.iccid.slice(-4)
+    }
+  } catch { /* ignore */ }
+  simReadingICCID.value = false
+}
+
+async function saveSim() {
+  if (!simForm.value.iccid) return
+  try {
+    if (editingSim.value) {
+      await store.updateSIMCard(editingSim.value, simForm.value)
+    } else {
+      await store.createSIMCard(simForm.value)
+    }
+    cancelSim()
+  } catch { /* store error */ }
+}
+
+async function deleteSim(id) {
+  if (!confirm('Delete this SIM card?')) return
+  try { await store.deleteSIMCard(id) } catch { /* store error */ }
+}
+
 // SIM PIN unlock
 const settingsPinInput = ref('')
 const settingsPinUnlocking = ref(false)
@@ -452,6 +499,7 @@ onMounted(async () => {
   store.fetchCellularStatus()
   store.fetchCellularSignal()
   store.fetchSMSContacts()
+  store.fetchSIMCards()
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
@@ -817,6 +865,18 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             <span class="text-gray-500">Registration</span>
             <span class="text-gray-300">{{ store.cellularStatus?.registration || 'N/A' }}</span>
           </div>
+          <div v-if="store.cellularStatus?.iccid" class="flex justify-between">
+            <span class="text-gray-500">ICCID</span>
+            <span class="text-gray-300 font-mono text-[10px]">{{ store.cellularStatus.iccid }}</span>
+          </div>
+          <div v-if="store.cellularStatus?.phone_number" class="flex justify-between">
+            <span class="text-gray-500">Phone</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus.phone_number }}</span>
+          </div>
+          <div v-if="store.cellularStatus?.sim_label" class="flex justify-between">
+            <span class="text-gray-500">SIM Card</span>
+            <span class="text-sky-400">{{ store.cellularStatus.sim_label }}</span>
+          </div>
           <div class="flex justify-between">
             <span class="text-gray-500">Signal</span>
             <span class="text-gray-300">{{ store.cellularSignal?.bars ?? 'N/A' }}/5 bars ({{ store.cellularSignal?.dbm ?? 'N/A' }} dBm)</span>
@@ -945,6 +1005,81 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
         </div>
         <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
+      </div>
+
+      <!-- SIM Cards -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mt-4">
+        <div class="flex items-center justify-between">
+          <h4 class="text-sm font-medium text-gray-200">SIM Cards</h4>
+          <button @click="showSimForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">+ Add</button>
+        </div>
+
+        <!-- Current SIM indicator -->
+        <div v-if="store.cellularStatus?.iccid" class="flex items-center gap-2 px-2 py-1.5 rounded bg-sky-900/20 border border-sky-800/30">
+          <span class="w-1.5 h-1.5 rounded-full bg-sky-400" />
+          <span class="text-[10px] text-sky-400">Current SIM:</span>
+          <span class="text-[10px] text-gray-300 font-mono">{{ store.cellularStatus.iccid }}</span>
+          <span v-if="store.cellularStatus.sim_label" class="text-[10px] text-sky-300">({{ store.cellularStatus.sim_label }})</span>
+        </div>
+
+        <!-- Add/Edit form -->
+        <div v-if="showSimForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">ICCID</label>
+            <div class="flex gap-2">
+              <input v-model="simForm.iccid" class="flex-1 px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="8931..." :disabled="!!editingSim">
+              <button v-if="!editingSim" @click="readCurrentICCID" :disabled="simReadingICCID"
+                class="px-2 py-1.5 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600 disabled:opacity-40 whitespace-nowrap">
+                {{ simReadingICCID ? 'Reading...' : 'Read from Modem' }}
+              </button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Label</label>
+              <input v-model="simForm.label" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="My SIM">
+            </div>
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Phone Number</label>
+              <input v-model="simForm.phone" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+31612345678">
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">PIN Code</label>
+              <input v-model="simForm.pin" type="password" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="1234">
+            </div>
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Notes</label>
+              <input v-model="simForm.notes" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Optional">
+            </div>
+          </div>
+          <div class="text-[9px] text-gray-600">PIN is stored locally for auto-unlock when this SIM is inserted.</div>
+          <div class="flex gap-2">
+            <button @click="saveSim" :disabled="!simForm.iccid" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500 disabled:opacity-40">
+              {{ editingSim ? 'Update' : 'Add' }}
+            </button>
+            <button @click="cancelSim" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
+          </div>
+        </div>
+
+        <!-- SIM card list -->
+        <div v-if="(store.simCards || []).length === 0 && !showSimForm" class="text-xs text-gray-500 py-2">No SIM cards saved yet. Add one to remember its settings.</div>
+        <div v-for="s in store.simCards" :key="s.id" class="flex items-center justify-between py-1.5 border-b border-gray-700 last:border-0">
+          <div class="flex items-center gap-2">
+            <span class="w-1.5 h-1.5 rounded-full" :class="store.cellularStatus?.iccid === s.iccid ? 'bg-sky-400' : 'bg-gray-600'" />
+            <span class="text-sm text-gray-200">{{ s.label || 'Unnamed' }}</span>
+            <span class="text-[10px] text-gray-500 font-mono">{{ s.iccid.slice(0, 6) }}...{{ s.iccid.slice(-4) }}</span>
+            <span v-if="s.phone" class="text-xs text-gray-400 font-mono">{{ s.phone }}</span>
+            <span v-if="s.pin" class="px-1 py-0.5 rounded text-[9px] bg-amber-900/30 text-amber-400">PIN</span>
+            <span v-if="store.cellularStatus?.iccid === s.iccid" class="px-1.5 py-0.5 rounded text-[9px] bg-sky-900/30 text-sky-300">active</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <span v-if="s.last_seen" class="text-[9px] text-gray-600 mr-2">{{ new Date(s.last_seen).toLocaleDateString() }}</span>
+            <button @click="editSim(s)" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Edit</button>
+            <button @click="deleteSim(s.id)" class="px-2 py-1 rounded bg-gray-700 text-red-400 text-[10px] hover:bg-gray-600">Del</button>
+          </div>
+        </div>
       </div>
 
       <!-- SMS Contacts -->

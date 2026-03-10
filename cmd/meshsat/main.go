@@ -75,6 +75,19 @@ func main() {
 		// Cellular transport (optional — only if 4G/LTE modem is available)
 		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
 		directCell.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort})
+		directCell.SetSIMCardLookup(
+			func(iccid string) (*transport.SIMCardInfo, error) {
+				sim, err := db.GetSIMCardByICCID(iccid)
+				if err != nil || sim == nil {
+					return nil, err
+				}
+				return &transport.SIMCardInfo{
+					ICCID: sim.ICCID, Phone: sim.Phone,
+					PIN: sim.PIN, Label: sim.Label,
+				}, nil
+			},
+			func(iccid string) { _ = db.TouchSIMCardLastSeen(iccid) },
+		)
 		cell = directCell
 		log.Info().Str("port", cfg.CellularPort).Msg("using direct cellular serial transport")
 

@@ -1566,3 +1566,76 @@ func (db *DB) GetWebhookLog(limit int) ([]WebhookLogEntry, error) {
 	}
 	return entries, nil
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIM Card Management
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// SIMCard represents a saved SIM card with its settings.
+type SIMCard struct {
+	ID        int64      `json:"id"`
+	ICCID     string     `json:"iccid"`
+	Label     string     `json:"label"`
+	Phone     string     `json:"phone"`
+	PIN       string     `json:"pin,omitempty"`
+	Notes     string     `json:"notes"`
+	LastSeen  *time.Time `json:"last_seen,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// GetSIMCards returns all saved SIM cards.
+func (db *DB) GetSIMCards() ([]SIMCard, error) {
+	rows, err := db.Query("SELECT id, iccid, label, phone, pin, notes, last_seen, created_at, updated_at FROM sim_cards ORDER BY label")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cards []SIMCard
+	for rows.Next() {
+		var c SIMCard
+		if err := rows.Scan(&c.ID, &c.ICCID, &c.Label, &c.Phone, &c.PIN, &c.Notes, &c.LastSeen, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		cards = append(cards, c)
+	}
+	return cards, nil
+}
+
+// GetSIMCardByICCID looks up a SIM card by its ICCID.
+func (db *DB) GetSIMCardByICCID(iccid string) (*SIMCard, error) {
+	var c SIMCard
+	err := db.QueryRow("SELECT id, iccid, label, phone, pin, notes, last_seen, created_at, updated_at FROM sim_cards WHERE iccid=?", iccid).
+		Scan(&c.ID, &c.ICCID, &c.Label, &c.Phone, &c.PIN, &c.Notes, &c.LastSeen, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// CreateSIMCard creates a new SIM card entry.
+func (db *DB) CreateSIMCard(iccid, label, phone, pin, notes string) (int64, error) {
+	res, err := db.Exec("INSERT INTO sim_cards (iccid, label, phone, pin, notes) VALUES (?, ?, ?, ?, ?)", iccid, label, phone, pin, notes)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateSIMCard updates an existing SIM card.
+func (db *DB) UpdateSIMCard(id int64, label, phone, pin, notes string) error {
+	_, err := db.Exec("UPDATE sim_cards SET label=?, phone=?, pin=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", label, phone, pin, notes, id)
+	return err
+}
+
+// DeleteSIMCard removes a SIM card.
+func (db *DB) DeleteSIMCard(id int64) error {
+	_, err := db.Exec("DELETE FROM sim_cards WHERE id=?", id)
+	return err
+}
+
+// TouchSIMCardLastSeen updates the last_seen timestamp for a SIM card.
+func (db *DB) TouchSIMCardLastSeen(iccid string) error {
+	_, err := db.Exec("UPDATE sim_cards SET last_seen=CURRENT_TIMESTAMP WHERE iccid=?", iccid)
+	return err
+}

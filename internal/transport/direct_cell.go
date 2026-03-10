@@ -115,6 +115,12 @@ type DirectCellTransport struct {
 	// Exclude ports (Meshtastic + Iridium)
 	excludePorts   []string
 	excludePortFns []func() string // dynamic resolvers (take precedence)
+
+	// SIM card management
+	iccid       string             // cached ICCID from AT+CCID
+	simLabel    string             // user label from SIM card DB
+	simLookupFn SIMCardLookupFunc  // injected DB lookup
+	simTouchFn  func(iccid string) // update last_seen in DB
 }
 
 // NewDirectCellTransport creates a new direct serial cellular transport.
@@ -124,6 +130,13 @@ func NewDirectCellTransport(port string) *DirectCellTransport {
 		port:      port,
 		eventSubs: make(map[uint64]chan CellEvent),
 	}
+}
+
+// SetSIMCardLookup injects a callback for looking up saved SIM card settings by ICCID.
+// touchFn is called to update the last_seen timestamp when a saved SIM is detected.
+func (t *DirectCellTransport) SetSIMCardLookup(fn SIMCardLookupFunc, touchFn func(string)) {
+	t.simLookupFn = fn
+	t.simTouchFn = touchFn
 }
 
 // SetExcludePorts tells auto-detection to skip these ports (e.g., Meshtastic and Iridium ports).
@@ -267,11 +280,40 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 
+	// Query ICCID (AT+CCID) — unique SIM card identifier, works on most modems
+	var iccid string
+	if simState == "READY" || simState == "PIN_REQUIRED" {
+		resp, _ = sendAT(sp, "AT+CCID", cellATTimeout)
+		iccid = parseICCID(resp)
+		if iccid == "" {
+			// Fallback: some modems use AT+ICCID
+			resp, _ = sendAT(sp, "AT+ICCID", cellATTimeout)
+			iccid = parseICCID(resp)
+		}
+	}
+
+	// Look up saved SIM card settings by ICCID
+	var simPhone, simLabel string
+	if iccid != "" && t.simLookupFn != nil {
+		if info, err := t.simLookupFn(iccid); err == nil && info != nil {
+			simPhone = info.Phone
+			simLabel = info.Label
+			log.Info().Str("iccid", iccid).Str("label", info.Label).Msg("cellular: recognized saved SIM card")
+			if t.simTouchFn != nil {
+				t.simTouchFn(iccid)
+			}
+		}
+	}
+
 	// Query subscriber number (AT+CNUM) — may return empty if SIM doesn't store it
 	var phoneNumber string
 	if simState == "READY" {
 		resp, _ = sendAT(sp, "AT+CNUM", cellATTimeout)
 		phoneNumber = parseCNUM(resp)
+		// Fall back to saved SIM card phone number
+		if phoneNumber == "" && simPhone != "" {
+			phoneNumber = simPhone
+		}
 	}
 
 	// Update cached state under stateMu (separate from serial access).
@@ -281,6 +323,8 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	t.simState = simState
 	t.operator = operator
 	t.phoneNumber = phoneNumber
+	t.iccid = iccid
+	t.simLabel = simLabel
 	t.netType = netType
 	t.regStatus = regStatus
 	t.mcc = mcc
@@ -778,6 +822,8 @@ func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) 
 		SIMState:     t.simState,
 		Registration: t.regStatus,
 		PhoneNumber:  t.phoneNumber,
+		ICCID:        t.iccid,
+		SIMLabel:     t.simLabel,
 	}, nil
 }
 
@@ -1151,6 +1197,37 @@ func parseCOPS(resp string) string {
 	parts := strings.Split(remainder, "\"")
 	if len(parts) >= 2 {
 		return parts[1]
+	}
+	return ""
+}
+
+// parseICCID extracts the ICCID from AT+CCID or AT+ICCID response.
+// Responses vary by modem: "+CCID: 8931...", "ICCID: 8931...", or just "8931..." on its own line.
+func parseICCID(resp string) string {
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		// Strip known prefixes
+		for _, prefix := range []string{"+CCID:", "+ICCID:", "CCID:", "ICCID:"} {
+			if strings.HasPrefix(line, prefix) {
+				line = strings.TrimSpace(line[len(prefix):])
+				break
+			}
+		}
+		// Remove surrounding quotes
+		line = strings.Trim(line, "\"' ")
+		// ICCID is 19-20 digits
+		if len(line) >= 19 && len(line) <= 22 {
+			allDigit := true
+			for _, ch := range line {
+				if ch < '0' || ch > '9' {
+					allDigit = false
+					break
+				}
+			}
+			if allDigit {
+				return line
+			}
+		}
 	}
 	return ""
 }
