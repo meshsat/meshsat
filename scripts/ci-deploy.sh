@@ -2,20 +2,22 @@
 # =============================================================================
 # MeshSat — Pi-side deploy script (executed via SSH from GPU VM)
 # =============================================================================
-# Mode-aware: detects direct-mode container vs Swarm stack and deploys
-# accordingly. Direct mode uses docker-compose.direct.yml (privileged,
-# host network, serial access). Swarm mode uses docker-compose.yml.
+# Deploys MeshSat as a standalone Docker Compose container (direct serial mode).
+# MeshSat standalone requires privileged access to /dev and /sys for serial
+# devices — it NEVER runs as a Swarm service.
+#
+# If a leftover Swarm service exists, it is removed automatically.
 # =============================================================================
 set -euo pipefail
 
-COMPOSE_FILE="/cubeos/coreapps/meshsat/appconfig/docker-compose.yml"
 DIRECT_COMPOSE_FILE="/cubeos/coreapps/meshsat/appconfig/docker-compose.direct.yml"
 GHCR_IMAGE="ghcr.io/cubeos-app/meshsat"
 LOCAL_REG_IMAGE="localhost:5000/cubeos-app/meshsat:latest"
-STACK_NAME="meshsat"
 DIRECT_CONTAINER="cubeos-meshsat-direct"
+HOST_PORT="6050"
+HEALTH_TIMEOUT="90"
 
-echo "=== MeshSat Deploy ==="
+echo "=== MeshSat Deploy (standalone direct mode) ==="
 
 # --- GHCR login ---
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -33,10 +35,6 @@ docker tag "${GHCR_IMAGE}:latest" "${LOCAL_REG_IMAGE}" 2>/dev/null || true
 docker push "${LOCAL_REG_IMAGE}" 2>/dev/null && \
   echo "  Pushed to local registry: ${LOCAL_REG_IMAGE}" || \
   echo "  WARN: Local registry push failed (non-fatal)"
-
-SERVICE_NAME="meshsat_meshsat"
-HOST_PORT="6050"
-HEALTH_TIMEOUT="90"
 
 # --- Source env files for compose variable substitution ---
 if [ -f /cubeos/config/defaults.env ]; then
@@ -58,110 +56,29 @@ if [ -f /cubeos/coreapps/image-versions.env ]; then
 fi
 
 # =============================================================================
-# Detect deployment mode: direct container vs Swarm stack
+# Clean up any leftover Swarm service (legacy — MeshSat should never be Swarm)
 # =============================================================================
-DIRECT_MODE=false
-if docker inspect "${DIRECT_CONTAINER}" > /dev/null 2>&1; then
-  DIRECT_MODE=true
-  echo "Detected direct-mode container (${DIRECT_CONTAINER})"
+if docker service inspect meshsat_meshsat > /dev/null 2>&1; then
+  echo "WARNING: Found leftover Swarm service meshsat_meshsat — removing..."
+  docker service rm meshsat_meshsat 2>/dev/null || true
+  docker stack rm meshsat 2>/dev/null || true
+  sleep 3
+  echo "  Swarm service removed."
 fi
 
-if [ "$DIRECT_MODE" = true ]; then
-  # --- Direct mode: docker-compose recreate ---
-  if [ ! -f "$DIRECT_COMPOSE_FILE" ]; then
-    echo "ERROR: Direct compose file not found at $DIRECT_COMPOSE_FILE"
-    exit 1
-  fi
-
-  echo "Deploying in direct serial mode (docker-compose)..."
-  cd /cubeos/coreapps/meshsat/appconfig
-  docker compose -f docker-compose.direct.yml up -d --force-recreate --pull never 2>&1
-
-  echo "  Container recreated — waiting for health..."
-else
-  # --- Swarm mode: stack deploy or service update ---
-  if [ ! -f "$COMPOSE_FILE" ]; then
-    echo "ERROR: MeshSat compose file not found at $COMPOSE_FILE"
-    exit 1
-  fi
-
-  if docker service inspect ${SERVICE_NAME} > /dev/null 2>&1; then
-    echo "Service exists — updating image (detached)..."
-    docker service update \
-      --image "${LOCAL_REG_IMAGE}" \
-      --update-order stop-first \
-      --force \
-      --detach \
-      ${SERVICE_NAME}
-
-    echo "  Update issued — waiting for convergence..."
-    CONVERGE_ELAPSED=0
-    CONVERGE_MAX=90
-    set +e
-    while [ $CONVERGE_ELAPSED -lt $CONVERGE_MAX ]; do
-      UPDATE_STATE=$(docker service inspect ${SERVICE_NAME} \
-        --format '{{.UpdateStatus.State}}' 2>/dev/null || echo "unknown")
-
-      case "$UPDATE_STATE" in
-        completed)
-          echo "  Update converged in ${CONVERGE_ELAPSED}s"
-          break
-          ;;
-        updating)
-          echo "  ${CONVERGE_ELAPSED}/${CONVERGE_MAX}s — updating..."
-          ;;
-        paused|rollback_*)
-          echo "  ERROR: Update failed (state: ${UPDATE_STATE})"
-          docker service ps ${SERVICE_NAME} --no-trunc 2>/dev/null | head -5
-          docker service logs ${SERVICE_NAME} --tail 20 2>/dev/null || true
-          exit 1
-          ;;
-        *)
-          echo "  ${CONVERGE_ELAPSED}s — state: ${UPDATE_STATE}"
-          ;;
-      esac
-
-      sleep 3
-      CONVERGE_ELAPSED=$((CONVERGE_ELAPSED + 3))
-    done
-    set -e
-
-    if [ $CONVERGE_ELAPSED -ge $CONVERGE_MAX ]; then
-      echo "  ERROR: Update did not converge within ${CONVERGE_MAX}s"
-      docker service ps ${SERVICE_NAME} --no-trunc 2>/dev/null | head -5
-      docker service logs ${SERVICE_NAME} --tail 20 2>/dev/null || true
-      exit 1
-    fi
-  else
-    echo "Service doesn't exist — deploying fresh stack..."
-    docker stack deploy -c "$COMPOSE_FILE" --resolve-image=never "$STACK_NAME"
-
-    echo "  Stack deployed — waiting for convergence..."
-    sleep 5
-    CONVERGE_ELAPSED=0
-    CONVERGE_MAX=60
-    set +e
-    while [ $CONVERGE_ELAPSED -lt $CONVERGE_MAX ]; do
-      STATE=$(docker service ps ${SERVICE_NAME} \
-        --filter "desired-state=running" \
-        --format "{{.CurrentState}}" 2>/dev/null | head -1)
-
-      case "$STATE" in
-        Running*)
-          echo "  Converged: ${STATE} (${CONVERGE_ELAPSED}s)"
-          break
-          ;;
-        *)
-          echo "  ${CONVERGE_ELAPSED}s — ${STATE:-scheduling...}"
-          ;;
-      esac
-
-      sleep 3
-      CONVERGE_ELAPSED=$((CONVERGE_ELAPSED + 3))
-    done
-    set -e
-  fi
+# =============================================================================
+# Deploy: Docker Compose (direct serial mode, privileged)
+# =============================================================================
+if [ ! -f "$DIRECT_COMPOSE_FILE" ]; then
+  echo "ERROR: Compose file not found at $DIRECT_COMPOSE_FILE"
+  exit 1
 fi
+
+echo "Deploying standalone container (docker-compose)..."
+cd /cubeos/coreapps/meshsat/appconfig
+docker compose -f docker-compose.direct.yml up -d --force-recreate --pull never 2>&1
+
+echo "  Container recreated — waiting for health..."
 
 # --- Health check ---
 echo ""
@@ -177,15 +94,9 @@ while [ ${SECONDS_WAITED} -lt ${HEALTH_TIMEOUT} ]; do
     echo ""
     echo "=== Deployment Summary ==="
     echo "Image:   ${LOCAL_REG_IMAGE}"
-    if [ "$DIRECT_MODE" = true ]; then
-      echo "Mode:    direct (docker-compose, serial)"
-      echo ""
-      docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep meshsat
-    else
-      echo "Mode:    swarm (HAL transport)"
-      echo ""
-      docker service ls | grep ${STACK_NAME}
-    fi
+    echo "Mode:    standalone direct (docker-compose, serial)"
+    echo ""
+    docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep meshsat
     echo ""
     echo "API: http://127.0.0.1:${HOST_PORT}/api/"
     exit 0
@@ -200,21 +111,10 @@ echo ""
 echo "Health check failed after ${HEALTH_TIMEOUT}s"
 echo ""
 echo "=== Diagnostics ==="
-if [ "$DIRECT_MODE" = true ]; then
-  echo "Container status:"
-  docker ps -a --format 'table {{.Names}}\t{{.Status}}' | grep meshsat || echo "  Not found"
-  echo ""
-  echo "Recent logs:"
-  docker logs ${DIRECT_CONTAINER} --tail 30 2>/dev/null || echo "  No logs available"
-else
-  echo "Service status:"
-  docker service ls | grep ${STACK_NAME} || echo "  Stack not found"
-  echo ""
-  echo "Service tasks:"
-  docker service ps ${SERVICE_NAME} --no-trunc 2>/dev/null | head -5 || echo "  Service not found"
-  echo ""
-  echo "Recent logs:"
-  docker service logs ${SERVICE_NAME} --tail 30 2>/dev/null || echo "  No logs available"
-fi
+echo "Container status:"
+docker ps -a --format 'table {{.Names}}\t{{.Status}}' | grep meshsat || echo "  Not found"
+echo ""
+echo "Recent logs:"
+docker logs ${DIRECT_CONTAINER} --tail 30 2>/dev/null || echo "  No logs available"
 echo ""
 exit 1
