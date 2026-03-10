@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 type CellSignalRecorder struct {
 	db   *database.DB
 	cell transport.CellTransport
+	proc *Processor // optional: forward events to SSE stream
 
 	// Track latest network technology and operator from cell_info events
 	// so signal insertions use actual values instead of hardcoded "LTE".
@@ -34,6 +36,11 @@ type CellSignalRecorder struct {
 // NewCellSignalRecorder creates a new cellular signal recorder.
 func NewCellSignalRecorder(db *database.DB, cell transport.CellTransport) *CellSignalRecorder {
 	return &CellSignalRecorder{db: db, cell: cell, lastTech: "LTE"}
+}
+
+// SetProcessor sets the event processor for SSE forwarding.
+func (r *CellSignalRecorder) SetProcessor(p *Processor) {
+	r.proc = p
 }
 
 // Start launches the SSE subscription loop.
@@ -120,6 +127,19 @@ func (r *CellSignalRecorder) readEvents(ctx context.Context) error {
 	}
 }
 
+// emitSSE forwards a cellular event to the web UI via the processor's SSE stream.
+func (r *CellSignalRecorder) emitSSE(evType, message string, data json.RawMessage) {
+	if r.proc == nil {
+		return
+	}
+	r.proc.Emit(transport.MeshEvent{
+		Type:    evType,
+		Message: message,
+		Data:    data,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 func (r *CellSignalRecorder) handleSignal(ev transport.CellEvent) {
 	if ev.Signal < 0 {
 		return
@@ -148,6 +168,8 @@ func (r *CellSignalRecorder) handleSignal(ev transport.CellEvent) {
 	if err := r.db.InsertCellularSignal(ts, ev.Signal, dBm, tech, op); err != nil {
 		log.Warn().Err(err).Msg("cellular event recorder: signal insert failed")
 	}
+
+	r.emitSSE("cellular", fmt.Sprintf("Signal: %d/5 bars (%d dBm) %s %s", ev.Signal, dBm, tech, op), nil)
 }
 
 func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
@@ -162,6 +184,7 @@ func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
 		log.Warn().Err(err).Msg("cellular event recorder: SMS insert failed")
 	}
 	log.Info().Str("sender", sender).Msg("cellular: inbound SMS persisted")
+	r.emitSSE("cellular", fmt.Sprintf("SMS received from %s: %s", sender, truncateStr(ev.Message, 60)), ev.Data)
 }
 
 func (r *CellSignalRecorder) handleCBSReceived(ev transport.CellEvent) {
@@ -176,6 +199,7 @@ func (r *CellSignalRecorder) handleCBSReceived(ev transport.CellEvent) {
 		log.Warn().Err(err).Msg("cellular event recorder: CBS insert failed")
 	}
 	log.Info().Int("mid", cbs.MessageID).Str("severity", cbs.Severity).Msg("cellular: CBS alert persisted")
+	r.emitSSE("cellular", fmt.Sprintf("CBS alert [%s]: %s", cbs.Severity, truncateStr(cbs.Text, 80)), ev.Data)
 }
 
 func (r *CellSignalRecorder) handleCellInfoUpdate(ev transport.CellEvent) {
@@ -199,4 +223,13 @@ func (r *CellSignalRecorder) handleCellInfoUpdate(ev transport.CellEvent) {
 		}
 		r.techMu.Unlock()
 	}
+
+	r.emitSSE("cellular", fmt.Sprintf("Cell info: %s/%s LAC=%s CID=%s %s", ci.MCC, ci.MNC, ci.LAC, ci.CellID, ci.NetworkType), ev.Data)
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

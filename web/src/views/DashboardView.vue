@@ -346,10 +346,20 @@ const cellSparklineIsMock = computed(() => cellSignalHistory.value.length < 2)
 // ── Computed: Cellular panel ──
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
 const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
+const smsTxCount = computed(() => (store.smsMessages || []).filter(m => m.direction === 'tx').length)
+const smsRxCount = computed(() => (store.smsMessages || []).filter(m => m.direction === 'rx').length)
 const cellStatus = computed(() => {
-  if (!cellularGw.value) return { dot: 'bg-gray-600', text: 'Not Configured' }
-  if (cellularGw.value.connected) return { dot: 'bg-sky-400', text: 'Connected' }
-  return { dot: 'bg-red-400', text: 'Disconnected' }
+  // Check transport status first (direct modem connection)
+  const cs = store.cellularStatus
+  if (cs?.connected) return { dot: 'bg-sky-400', text: 'Connected' }
+  // Check gateway status
+  if (cellularGw.value?.connected) return { dot: 'bg-sky-400', text: 'Connected' }
+  if (cellularGw.value) return { dot: 'bg-red-400', text: 'Disconnected' }
+  // No gateway but transport has data (standalone mode)
+  if (cs?.sim_state === 'READY') return { dot: 'bg-sky-400', text: 'Modem Ready' }
+  if (cs?.sim_state === 'PIN_REQUIRED') return { dot: 'bg-amber-400', text: 'PIN Required' }
+  if (cs) return { dot: 'bg-amber-400', text: cs.sim_state || 'Initializing' }
+  return { dot: 'bg-gray-600', text: 'No Modem' }
 })
 
 // ── Computed: GPS Position panel ──
@@ -609,11 +619,22 @@ function getWidgetDiagnostics(widgetId) {
       }
     case 'cellular':
       return {
-        'Gateway': cellularGw.value || 'Not configured',
+        'Connection': cellStatus.value.text,
+        'Model': store.cellularStatus?.model || 'N/A',
+        'IMEI': store.cellularStatus?.imei || 'N/A',
+        'Operator': store.cellularStatus?.operator || 'N/A',
+        'Network Type': store.cellularStatus?.network_type || 'N/A',
+        'SIM State': store.cellularStatus?.sim_state || 'N/A',
+        'Registration': store.cellularStatus?.registration || 'N/A',
         'Signal': store.cellularSignal || 'No data',
-        'Status': store.cellularStatus || 'No data',
-        'Messages Out': cellularGw.value?.messages_out ?? 0,
-        'Messages In': cellularGw.value?.messages_in ?? 0
+        'Cell Info': store.cellInfo || 'No data',
+        'Signal History (last 10)': (store.cellularSignalHistory || []).slice(-10),
+        'SMS Messages': (store.smsMessages || []).length,
+        'SMS Contacts': (store.smsContacts || []).length,
+        'Cell Broadcasts': (store.cellBroadcasts || []).length,
+        'Gateway': cellularGw.value || 'Not configured (standalone mode)',
+        'Messages Out': cellularGw.value?.messages_out ?? (store.smsMessages || []).filter(m => m.direction === 'tx').length,
+        'Messages In': cellularGw.value?.messages_in ?? (store.smsMessages || []).filter(m => m.direction === 'rx').length
       }
     case 'queue':
       return {
@@ -1060,7 +1081,7 @@ function widgetGridClass(id) {
 
         <div class="space-y-1.5 text-[11px]">
           <div class="flex justify-between">
-            <span class="text-gray-500">Gateway</span>
+            <span class="text-gray-500">Status</span>
             <span class="text-gray-300">{{ cellStatus.text }}</span>
           </div>
           <div class="flex justify-between">
@@ -1068,16 +1089,24 @@ function widgetGridClass(id) {
             <span class="text-gray-300 font-mono">{{ store.cellularStatus?.operator || 'N/A' }}</span>
           </div>
           <div class="flex justify-between">
+            <span class="text-gray-500">Network</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus?.network_type || store.cellInfo?.latest?.network_type || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
             <span class="text-gray-500">IMEI</span>
             <span class="text-gray-400 font-mono text-[10px]">{{ store.cellularStatus?.imei || 'N/A' }}</span>
           </div>
+          <div v-if="store.cellInfo?.latest" class="flex justify-between">
+            <span class="text-gray-500">Cell</span>
+            <span class="text-gray-400 font-mono text-[10px]">MCC{{ store.cellInfo.latest.mcc }}/MNC{{ store.cellInfo.latest.mnc }} CID:{{ store.cellInfo.latest.cell_id }}</span>
+          </div>
           <div class="flex justify-between">
             <span class="text-gray-500">SMS Sent</span>
-            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_out ?? 0 }}</span>
+            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_out ?? smsTxCount }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-gray-500">SMS Received</span>
-            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_in ?? 0 }}</span>
+            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_in ?? smsRxCount }}</span>
           </div>
         </div>
 
@@ -1348,6 +1377,29 @@ function widgetGridClass(id) {
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
           </div>
           <div v-if="!dlqItems.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
+        </div>
+
+        <!-- SMS Messages -->
+        <div v-if="(store.smsMessages || []).length" class="mt-3 pt-3 border-t border-tactical-border">
+          <div class="flex items-center gap-1.5 mb-1.5">
+            <span class="text-[10px] text-gray-500 uppercase tracking-wider">SMS</span>
+            <span class="text-[9px] font-mono px-1.5 py-px rounded bg-sky-900/30 text-sky-400">{{ (store.smsMessages || []).length }}</span>
+          </div>
+          <div class="space-y-1">
+            <div v-for="sms in (store.smsMessages || []).slice(0, 5)" :key="'sms-'+sms.id"
+              class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50">
+              <span class="text-[9px] font-mono shrink-0"
+                :class="sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400'">
+                {{ sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193' }}
+              </span>
+              <span class="text-[10px] font-mono px-1.5 py-px rounded"
+                :class="sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400'">
+                {{ sms.status || 'queued' }}
+              </span>
+              <span class="text-[11px] text-gray-300 truncate flex-1">{{ sms.phone ? sms.phone + ': ' : '' }}{{ sms.text || '(empty)' }}</span>
+              <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(sms.created_at) }}</span>
+            </div>
+          </div>
         </div>
 
         <div v-if="satMessages.length" class="mt-3 pt-3 border-t border-tactical-border">

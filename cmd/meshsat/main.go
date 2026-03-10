@@ -181,6 +181,7 @@ func main() {
 	var cellSigRecorder *engine.CellSignalRecorder
 	if cell != nil {
 		cellSigRecorder = engine.NewCellSignalRecorder(db, cell)
+		cellSigRecorder.SetProcessor(proc) // forward events to SSE stream
 		cellSigRecorder.Start(ctx)
 	}
 

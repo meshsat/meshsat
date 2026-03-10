@@ -44,7 +44,22 @@ const deliveryStatsSummary = computed(() => {
 
 const mqttGw = computed(() => (store.gateways || []).find(g => g.type === 'mqtt'))
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
-const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+const cellularGwRaw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+// Synthesize a gateway-like object from transport status when no gateway is configured
+const cellularGw = computed(() => {
+  if (cellularGwRaw.value) return cellularGwRaw.value
+  const cs = store.cellularStatus
+  if (!cs) return null
+  return {
+    type: 'cellular',
+    enabled: true,
+    connected: cs.connected || cs.sim_state === 'READY',
+    messages_in: (store.smsMessages || []).filter(m => m.direction === 'rx').length,
+    messages_out: (store.smsMessages || []).filter(m => m.direction === 'tx').length,
+    errors: 0,
+    config: { operator: cs.operator, network_type: cs.network_type, imei: cs.imei }
+  }
+})
 const astrocastGw = computed(() => (store.gateways || []).find(g => g.type === 'astrocast'))
 const webhookGw = computed(() => (store.gateways || []).find(g => g.type === 'webhook'))
 
@@ -217,6 +232,11 @@ function refreshBridgeData() {
   store.fetchStatus()
   store.fetchDeliveries()
   store.fetchDeliveryStats()
+  store.fetchCellularStatus()
+  store.fetchCellularSignal()
+  store.fetchCellInfo()
+  store.fetchSMSMessages({ limit: 10 })
+  store.fetchSMSContacts()
 }
 
 onMounted(() => {
@@ -336,15 +356,21 @@ onUnmounted(() => {
 
       <!-- Cellular debug -->
       <div v-if="expandedPane === 'cellular'" class="space-y-1">
-        <template v-if="cellularGw">
+        <template v-if="cellularGw || store.cellularStatus">
           <div v-for="[k, v] in gwDebugRows(cellularGw)" :key="k" class="flex justify-between">
             <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
           </div>
           <div class="flex justify-between"><span class="text-gray-600">Signal Bars</span><span>{{ store.cellularSignal?.bars ?? 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">Signal dBm</span><span>{{ store.cellularSignal?.dbm ?? 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">Technology</span><span>{{ store.cellularSignal?.technology || store.cellularStatus?.network_type || 'N/A' }}</span></div>
           <div class="flex justify-between"><span class="text-gray-600">Operator</span><span>{{ store.cellularStatus?.operator || 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">Model</span><span>{{ store.cellularStatus?.model || 'N/A' }}</span></div>
           <div class="flex justify-between"><span class="text-gray-600">IMEI</span><span>{{ store.cellularStatus?.imei || 'N/A' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">SIM</span><span>{{ store.cellularStatus?.sim_state || 'N/A' }}</span></div>
+          <div v-if="store.cellInfo?.latest" class="flex justify-between"><span class="text-gray-600">Cell Tower</span><span>MCC{{ store.cellInfo.latest.mcc }}/MNC{{ store.cellInfo.latest.mnc }} CID={{ store.cellInfo.latest.cell_id }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">SMS Contacts</span><span>{{ (store.smsContacts || []).length }}</span></div>
         </template>
-        <div v-else class="text-gray-600">Not configured</div>
+        <div v-else class="text-gray-600">No modem detected</div>
       </div>
 
       <!-- Astrocast debug -->

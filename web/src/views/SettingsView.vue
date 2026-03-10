@@ -250,6 +250,23 @@ const cellularForm = ref({
 })
 const cellularEnabled = ref(false)
 
+// SIM PIN unlock
+const settingsPinInput = ref('')
+const settingsPinUnlocking = ref(false)
+const settingsPinError = ref('')
+async function unlockSettingsPIN() {
+  settingsPinUnlocking.value = true
+  settingsPinError.value = ''
+  try {
+    await store.submitCellularPIN(settingsPinInput.value)
+    settingsPinInput.value = ''
+    await store.fetchCellularStatus()
+  } catch (e) {
+    settingsPinError.value = e.message || 'PIN unlock failed'
+  }
+  settingsPinUnlocking.value = false
+}
+
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
 
 function loadCellular() {
@@ -275,6 +292,7 @@ onMounted(async () => {
   store.fetchIridiumSignalFast()
   signalTimer = setInterval(() => store.fetchIridiumSignalFast(), 10000)
   store.fetchCellularStatus()
+  store.fetchCellularSignal()
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular()
   store.fetchRangeTests()
 })
@@ -612,10 +630,33 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             <span class="text-gray-300">{{ store.cellularStatus?.network_type || 'N/A' }}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-gray-500">SIM Status</span>
-            <span class="text-gray-300">{{ store.cellularStatus?.sim_status || 'N/A' }}</span>
+            <span class="text-gray-500">SIM State</span>
+            <span class="text-gray-300">{{ store.cellularStatus?.sim_state || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Registration</span>
+            <span class="text-gray-300">{{ store.cellularStatus?.registration || 'N/A' }}</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Signal</span>
+            <span class="text-gray-300">{{ store.cellularSignal?.bars ?? 'N/A' }}/5 bars ({{ store.cellularSignal?.dbm ?? 'N/A' }} dBm)</span>
           </div>
         </div>
+      </div>
+
+      <!-- SIM PIN Unlock -->
+      <div v-if="store.cellularStatus?.sim_state === 'PIN_REQUIRED'" class="bg-amber-900/20 rounded-lg p-4 border border-amber-700/40 space-y-3 mb-4">
+        <h4 class="text-sm font-medium text-amber-400">SIM PIN Required</h4>
+        <p class="text-xs text-gray-400">The SIM card requires a PIN to unlock. Enter the 4-8 digit PIN below.</p>
+        <div class="flex items-center gap-2">
+          <input type="password" v-model="settingsPinInput" maxlength="8" placeholder="SIM PIN"
+            class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" />
+          <button @click="unlockSettingsPIN" :disabled="settingsPinUnlocking"
+            class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
+            {{ settingsPinUnlocking ? 'Unlocking...' : 'Unlock SIM' }}
+          </button>
+        </div>
+        <div v-if="settingsPinError" class="text-xs text-red-400">{{ settingsPinError }}</div>
       </div>
 
       <!-- SMS Configuration -->
