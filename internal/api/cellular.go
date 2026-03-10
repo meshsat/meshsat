@@ -76,20 +76,40 @@ func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	// Fall back to DB cell info for basic status
-	ci, err := s.db.GetLatestCellInfo()
-	if err == nil && ci != nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"connected":    true,
-			"network_type": ci.NetworkType,
-			"sim_state":    "READY",
-		})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	// Fall back to DB: combine cell_info + signal_history for a rich status
+	result := map[string]interface{}{
 		"connected": false,
 		"sim_state": "UNKNOWN",
-	})
+	}
+	ci, err := s.db.GetLatestCellInfo()
+	if err == nil && ci != nil {
+		result["connected"] = true
+		result["sim_state"] = "READY"
+		result["network_type"] = ci.NetworkType
+		result["mcc"] = ci.MCC
+		result["mnc"] = ci.MNC
+		result["lac"] = ci.LAC
+		result["cell_id"] = ci.CellID
+		result["rsrp"] = ci.RSRP
+		result["rsrq"] = ci.RSRQ
+		// Construct operator from MCC+MNC
+		if ci.MCC != "" && ci.MNC != "" {
+			result["operator"] = ci.MCC + ci.MNC
+		}
+	}
+	// Enrich with latest signal reading (has operator PLMN)
+	sig, sigErr := s.db.GetLatestCellularSignal()
+	if sigErr == nil && sig != nil {
+		if sig.Operator != "" {
+			result["operator"] = sig.Operator
+		}
+		if sig.Technology != "" {
+			result["network_type"] = sig.Technology
+		}
+		result["connected"] = true
+		result["sim_state"] = "READY"
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleCellularDataConnect(w http.ResponseWriter, r *http.Request) {
