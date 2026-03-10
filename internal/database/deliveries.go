@@ -22,6 +22,10 @@ type MessageDelivery struct {
 	LastError   string     `json:"last_error,omitempty"`
 	ChannelRef  string     `json:"channel_ref,omitempty"`
 	Cost        int        `json:"cost"`
+	Visited     string     `json:"visited"`              // JSON array of visited interface IDs (loop prevention)
+	TTLSeconds  int        `json:"ttl_seconds"`          // 0 means no expiry
+	ExpiresAt   *string    `json:"expires_at,omitempty"` // UTC timestamp when delivery expires
+	QoSLevel    int        `json:"qos_level"`            // QoS level from access rule (default 1)
 	CreatedAt   string     `json:"created_at"`
 	UpdatedAt   string     `json:"updated_at"`
 }
@@ -44,10 +48,15 @@ type DeliveryStats struct {
 
 // InsertDelivery creates a new delivery row and returns its ID.
 func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
+	visited := d.Visited
+	if visited == "" {
+		visited = "[]"
+	}
 	res, err := db.Exec(`INSERT INTO message_deliveries
-		(msg_ref, rule_id, channel, status, priority, payload, text_preview, max_retries, next_retry)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.MaxRetries, d.NextRetry)
+		(msg_ref, rule_id, channel, status, priority, payload, text_preview, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.MaxRetries, d.NextRetry, visited,
+		d.TTLSeconds, d.ExpiresAt, d.QoSLevel)
 	if err != nil {
 		return 0, fmt.Errorf("insert delivery: %w", err)
 	}
@@ -57,13 +66,14 @@ func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
 // GetDelivery returns a single delivery by ID.
 func (db *DB) GetDelivery(id int64) (*MessageDelivery, error) {
 	row := db.QueryRow(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
-		retries, max_retries, next_retry, last_error, channel_ref, cost, created_at, updated_at
+		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
+		ttl_seconds, expires_at, qos_level, created_at, updated_at
 		FROM message_deliveries WHERE id = ?`, id)
 
 	var d MessageDelivery
 	err := row.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 		&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-		&d.Cost, &d.CreatedAt, &d.UpdatedAt)
+		&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get delivery %d: %w", id, err)
 	}
@@ -88,7 +98,7 @@ func (db *DB) GetDeliveries(f DeliveryFilter) ([]MessageDelivery, error) {
 		args = append(args, f.MsgRef)
 	}
 
-	query := "SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, last_error, channel_ref, cost, created_at, updated_at FROM message_deliveries"
+	query := "SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, last_error, channel_ref, cost, visited, ttl_seconds, expires_at, qos_level, created_at, updated_at FROM message_deliveries"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -111,7 +121,7 @@ func (db *DB) GetDeliveries(f DeliveryFilter) ([]MessageDelivery, error) {
 		var d MessageDelivery
 		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-			&d.Cost, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan delivery: %w", err)
 		}
 		result = append(result, d)
@@ -125,9 +135,12 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 		limit = 10
 	}
 	rows, err := db.Query(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
-		retries, max_retries, next_retry, last_error, channel_ref, cost, created_at, updated_at
+		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
+		ttl_seconds, expires_at, qos_level, created_at, updated_at
 		FROM message_deliveries
-		WHERE channel = ? AND status IN ('queued', 'retry') AND (next_retry IS NULL OR next_retry <= datetime('now'))
+		WHERE channel = ? AND status IN ('queued', 'retry')
+		  AND (next_retry IS NULL OR next_retry <= datetime('now'))
+		  AND (expires_at IS NULL OR expires_at > datetime('now'))
 		ORDER BY priority ASC, created_at ASC
 		LIMIT ?`, channel, limit)
 	if err != nil {
@@ -140,7 +153,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 		var d MessageDelivery
 		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-			&d.Cost, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan pending delivery: %w", err)
 		}
 		result = append(result, d)
@@ -224,6 +237,16 @@ func (db *DB) RetryDelivery(id int64) error {
 		return fmt.Errorf("delivery %d not retryable (not failed/dead)", id)
 	}
 	return nil
+}
+
+// ExpireDeliveries marks all expired queued/retry/held deliveries as 'expired'.
+func (db *DB) ExpireDeliveries() (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')
+		WHERE status IN ('queued', 'retry', 'held') AND expires_at IS NOT NULL AND expires_at <= datetime('now')`)
+	if err != nil {
+		return 0, fmt.Errorf("expire deliveries: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // HoldDeliveriesForChannel moves queued/retry deliveries to 'held' status for a channel.

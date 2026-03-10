@@ -320,3 +320,56 @@ func TestAccessEvaluator_EgressDirection(t *testing.T) {
 		t.Fatalf("expected 0 ingress matches for egress rule, got %d", len(results))
 	}
 }
+
+func TestAccessEvaluator_VisitedLoopPrevention(t *testing.T) {
+	eval := &AccessEvaluator{
+		rates:  make(map[int64]*ratelimit.TokenBucket),
+		groups: make(map[string][]string),
+		rules: []database.AccessRule{
+			{
+				ID:          1,
+				InterfaceID: "mesh_0",
+				Direction:   "ingress",
+				Enabled:     true,
+				Action:      "forward",
+				ForwardTo:   "iridium_0",
+				Filters:     "{}",
+			},
+		},
+	}
+
+	// Message with iridium_0 already in visited set — should be blocked (loop prevention)
+	msg := RouteMessage{Text: "hello", From: "!abc", PortNum: 1, Visited: []string{"iridium_0"}}
+	results := eval.EvaluateIngress("mesh_0", msg)
+	if len(results) != 0 {
+		t.Fatalf("expected 0 matches (visited loop prevention), got %d", len(results))
+	}
+}
+
+func TestAccessEvaluator_VisitedAllowsNonVisited(t *testing.T) {
+	eval := &AccessEvaluator{
+		rates:  make(map[int64]*ratelimit.TokenBucket),
+		groups: make(map[string][]string),
+		rules: []database.AccessRule{
+			{
+				ID:          1,
+				InterfaceID: "mesh_0",
+				Direction:   "ingress",
+				Enabled:     true,
+				Action:      "forward",
+				ForwardTo:   "iridium_0",
+				Filters:     "{}",
+			},
+		},
+	}
+
+	// Message with cellular_0 in visited set — iridium_0 is NOT visited, should match
+	msg := RouteMessage{Text: "hello", From: "!abc", PortNum: 1, Visited: []string{"cellular_0"}}
+	results := eval.EvaluateIngress("mesh_0", msg)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 match (iridium_0 not in visited set), got %d", len(results))
+	}
+	if results[0].ForwardTo != "iridium_0" {
+		t.Errorf("expected forward to iridium_0, got %s", results[0].ForwardTo)
+	}
+}

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -76,6 +77,24 @@ func (d *Dispatcher) Start(ctx context.Context) {
 
 	// v0.3.0 workers: one per interface ID (for DispatchAccess deliveries)
 	d.startInterfaceWorkers(ctx)
+
+	// Start TTL reaper — expires deliveries past their TTL every 60 seconds
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n, err := d.db.ExpireDeliveries(); err != nil {
+					log.Error().Err(err).Msg("delivery reaper error")
+				} else if n > 0 {
+					log.Info().Int64("expired", n).Msg("delivery reaper: expired deliveries")
+				}
+			}
+		}
+	}()
 }
 
 // startInterfaceWorkers launches delivery workers for each enabled interface.
@@ -279,6 +298,36 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			preview = preview[:200]
 		}
 
+		// Build visited set: start with source interface, append any previously visited
+		visited := fmt.Sprintf(`["%s"]`, sourceInterface)
+		if len(msg.Visited) > 0 {
+			// Merge: source + previous visited (deduplicated)
+			seen := map[string]bool{sourceInterface: true}
+			all := []string{sourceInterface}
+			for _, v := range msg.Visited {
+				if !seen[v] {
+					seen[v] = true
+					all = append(all, v)
+				}
+			}
+			parts := make([]string, len(all))
+			for i, v := range all {
+				parts[i] = fmt.Sprintf(`"%s"`, v)
+			}
+			visited = "[" + strings.Join(parts, ",") + "]"
+		}
+
+		// Parse TTL from forward_options
+		var ttlSeconds int
+		if m.Rule.ForwardOptions != "" && m.Rule.ForwardOptions != "{}" {
+			var fwdOpts struct {
+				TTLSeconds int `json:"ttl_seconds"`
+			}
+			if err := json.Unmarshal([]byte(m.Rule.ForwardOptions), &fwdOpts); err == nil && fwdOpts.TTLSeconds > 0 {
+				ttlSeconds = fwdOpts.TTLSeconds
+			}
+		}
+
 		ruleID := m.Rule.ID
 		del := database.MessageDelivery{
 			MsgRef:      msgRef,
@@ -289,6 +338,15 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			Payload:     payload,
 			TextPreview: preview,
 			MaxRetries:  maxRetries,
+			Visited:     visited,
+			QoSLevel:    m.Rule.QoSLevel,
+		}
+
+		// Set TTL expiry if configured
+		if ttlSeconds > 0 {
+			del.TTLSeconds = ttlSeconds
+			exp := time.Now().Add(time.Duration(ttlSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
+			del.ExpiresAt = &exp
 		}
 
 		if _, err := d.db.InsertDelivery(del); err != nil {

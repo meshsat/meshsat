@@ -128,6 +128,22 @@ func (e *AccessEvaluator) evaluate(interfaceID, direction string, msg RouteMessa
 			continue
 		}
 
+		// Loop prevention: skip targets already in visited set (AS-path style)
+		if direction == "ingress" && len(msg.Visited) > 0 {
+			skip := false
+			for _, v := range msg.Visited {
+				if v == rule.ForwardTo {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				log.Debug().Int64("rule_id", rule.ID).Str("forward_to", rule.ForwardTo).
+					Strs("visited", msg.Visited).Msg("access rule: loop prevented (visited set)")
+				continue
+			}
+		}
+
 		// Evaluate filters
 		if !e.matchFilters(rule, msg) {
 			continue
