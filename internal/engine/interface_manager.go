@@ -86,7 +86,8 @@ type InterfaceManager struct {
 	devices  []DetectedDevice             // last scan result
 	cancelFn context.CancelFunc
 
-	scanInterval time.Duration
+	scanInterval  time.Duration
+	onStateChange func(ifaceID, channelType string, newState InterfaceState)
 }
 
 // NewInterfaceManager creates a new interface manager.
@@ -95,6 +96,18 @@ func NewInterfaceManager(db *database.DB) *InterfaceManager {
 		db:           db,
 		states:       make(map[string]*interfaceRuntime),
 		scanInterval: 5 * time.Second,
+	}
+}
+
+// SetStateChangeCallback registers a callback that fires when an interface changes state.
+func (m *InterfaceManager) SetStateChangeCallback(fn func(ifaceID, channelType string, newState InterfaceState)) {
+	m.onStateChange = fn
+}
+
+// notifyStateChange fires the callback if registered. Must NOT be called with mu held.
+func (m *InterfaceManager) notifyStateChange(ifaceID, channelType string, state InterfaceState) {
+	if m.onStateChange != nil {
+		m.onStateChange(ifaceID, channelType, state)
 	}
 }
 
@@ -287,21 +300,41 @@ func (m *InterfaceManager) UnbindDevice(interfaceID string) error {
 // SetOnline marks an interface as ONLINE. Called by transport layer when connected.
 func (m *InterfaceManager) SetOnline(id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var channelType string
+	changed := false
 	if rt, ok := m.states[id]; ok {
+		if rt.state != StateOnline {
+			changed = true
+			channelType = rt.iface.ChannelType
+		}
 		rt.state = StateOnline
 		rt.lastActivity = time.Now()
 		rt.errorMsg = ""
+	}
+	m.mu.Unlock()
+
+	if changed {
+		m.notifyStateChange(id, channelType, StateOnline)
 	}
 }
 
 // SetError marks an interface as ERROR with a reason.
 func (m *InterfaceManager) SetError(id, errMsg string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var channelType string
+	changed := false
 	if rt, ok := m.states[id]; ok {
+		if rt.state != StateError {
+			changed = true
+			channelType = rt.iface.ChannelType
+		}
 		rt.state = StateError
 		rt.errorMsg = errMsg
+	}
+	m.mu.Unlock()
+
+	if changed {
+		m.notifyStateChange(id, channelType, StateError)
 	}
 }
 
@@ -344,8 +377,14 @@ func (m *InterfaceManager) scanDevices() {
 		})
 	}
 
+	type stateChange struct {
+		ifaceID     string
+		channelType string
+		newState    InterfaceState
+	}
+	var changes []stateChange
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Build device_id → port lookup from detected devices
 	devicePorts := make(map[string]string) // device_id → port
@@ -373,13 +412,16 @@ func (m *InterfaceManager) scanDevices() {
 				rt.state = StateBinding
 				rt.iface.DevicePort = port
 				log.Info().Str("id", rt.iface.ID).Str("port", port).Msg("ifacemgr: device detected, binding")
+				changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateBinding})
 			}
 		} else {
 			// Device gone
 			if rt.state == StateOnline || rt.state == StateBinding {
+				oldState := rt.state
 				rt.state = StateOffline
 				rt.iface.DevicePort = ""
-				log.Warn().Str("id", rt.iface.ID).Msg("ifacemgr: device disconnected")
+				log.Warn().Str("id", rt.iface.ID).Str("old_state", oldState.String()).Msg("ifacemgr: device disconnected")
+				changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOffline})
 			}
 		}
 	}
@@ -396,6 +438,12 @@ func (m *InterfaceManager) scanDevices() {
 	}
 
 	m.devices = detected
+	m.mu.Unlock()
+
+	// Fire state change callbacks outside the lock
+	for _, c := range changes {
+		m.notifyStateChange(c.ifaceID, c.channelType, c.newState)
+	}
 }
 
 func (m *InterfaceManager) statusFromRuntime(rt *interfaceRuntime) *InterfaceStatus {

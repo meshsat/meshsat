@@ -126,6 +126,68 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 	}
 }
 
+// StartWorker starts a delivery worker for a specific interface ID.
+// Called when an interface transitions to ONLINE.
+func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelType string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if _, exists := d.workers[ifaceID]; exists {
+		return // already running
+	}
+
+	desc, ok := d.registry.Get(channelType)
+	if !ok {
+		desc = channel.ChannelDescriptor{
+			ID:      channelType,
+			CanSend: true,
+		}
+	}
+
+	w := &DeliveryWorker{
+		channelID: ifaceID,
+		desc:      desc,
+		db:        d.db,
+		gwProv:    d.gwProv,
+		mesh:      d.mesh,
+		emit:      d.emit,
+	}
+	d.workers[ifaceID] = w
+
+	// Unhold any deliveries that were held while interface was offline
+	if n, err := d.db.UnholdDeliveriesForChannel(ifaceID); err != nil {
+		log.Error().Err(err).Str("interface", ifaceID).Msg("failed to unhold deliveries")
+	} else if n > 0 {
+		log.Info().Str("interface", ifaceID).Int64("count", n).Msg("unheld deliveries on interface online")
+	}
+
+	go w.Run(ctx)
+	log.Info().Str("interface", ifaceID).Str("type", channelType).Msg("delivery worker started (state change)")
+}
+
+// StopWorker stops the delivery worker for a specific interface ID and holds pending deliveries.
+// Called when an interface transitions to OFFLINE or ERROR.
+func (d *Dispatcher) StopWorker(ifaceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if _, exists := d.workers[ifaceID]; !exists {
+		return
+	}
+	// Note: the worker will stop on its next tick when ctx is cancelled.
+	// We remove it from the map so it won't be found by new dispatches.
+	delete(d.workers, ifaceID)
+
+	// Hold pending deliveries so they aren't lost
+	if n, err := d.db.HoldDeliveriesForChannel(ifaceID); err != nil {
+		log.Error().Err(err).Str("interface", ifaceID).Msg("failed to hold deliveries")
+	} else if n > 0 {
+		log.Info().Str("interface", ifaceID).Int64("count", n).Msg("held deliveries on interface offline")
+	}
+
+	log.Info().Str("interface", ifaceID).Msg("delivery worker stopped (state change)")
+}
+
 // Dispatch evaluates rules for a message from a source channel and creates delivery rows.
 // Returns the number of deliveries created.
 func (d *Dispatcher) Dispatch(source string, msg rules.RouteMessage, payload []byte) int {

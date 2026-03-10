@@ -564,6 +564,11 @@ var migrations = []string{
 			created_at,
 			updated_at
 		FROM forwarding_rules;`,
+
+	// v20: Drop legacy forwarding_rules table.
+	// Data was migrated to access_rules in v19. The legacy rules.Engine
+	// gracefully handles the missing table by returning empty results.
+	`DROP TABLE IF EXISTS forwarding_rules;`,
 }
 
 func (db *DB) migrate() error {

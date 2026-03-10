@@ -225,3 +225,25 @@ func (db *DB) RetryDelivery(id int64) error {
 	}
 	return nil
 }
+
+// HoldDeliveriesForChannel moves queued/retry deliveries to 'held' status for a channel.
+// Called when an interface goes offline — deliveries are preserved but won't be attempted.
+func (db *DB) HoldDeliveriesForChannel(channel string) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'held', held_at = datetime('now'), updated_at = datetime('now')
+		WHERE channel = ? AND status IN ('queued', 'retry')`, channel)
+	if err != nil {
+		return 0, fmt.Errorf("hold deliveries for %s: %w", channel, err)
+	}
+	return res.RowsAffected()
+}
+
+// UnholdDeliveriesForChannel moves held deliveries back to 'queued' status for a channel.
+// Called when an interface comes back online.
+func (db *DB) UnholdDeliveriesForChannel(channel string) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'queued', held_at = NULL, updated_at = datetime('now')
+		WHERE channel = ? AND status = 'held'`, channel)
+	if err != nil {
+		return 0, fmt.Errorf("unhold deliveries for %s: %w", channel, err)
+	}
+	return res.RowsAffected()
+}

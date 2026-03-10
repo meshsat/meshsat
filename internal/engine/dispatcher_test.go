@@ -20,100 +20,108 @@ func setupTestDispatcher(t *testing.T) (*Dispatcher, *database.DB) {
 	reg := channel.NewRegistry()
 	channel.RegisterDefaults(reg)
 
-	engine := &rules.Engine{}
-	d := NewDispatcher(db, engine, reg, nil, nil)
+	d := NewDispatcher(db, nil, reg, nil, nil)
 	return d, db
 }
 
-func TestDispatch_CreatesDeliveries(t *testing.T) {
+func TestDispatchAccess_CreatesDeliveries(t *testing.T) {
 	d, db := setupTestDispatcher(t)
 
-	// Insert a rule
-	rule := &database.ForwardingRule{
-		Name:       "Test",
-		Enabled:    true,
-		Priority:   1,
-		SourceType: "any",
-		DestType:   "mqtt",
-	}
-	if _, err := db.InsertForwardingRule(rule); err != nil {
-		t.Fatal(err)
-	}
+	// Create an interface and access rule
+	db.InsertInterface(&database.Interface{ID: "mesh_0", ChannelType: "mesh", Enabled: true})
+	db.InsertInterface(&database.Interface{ID: "mqtt_0", ChannelType: "mqtt", Enabled: true})
+	db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0",
+		Direction:   "ingress",
+		Name:        "Test",
+		Enabled:     true,
+		Priority:    1,
+		Action:      "forward",
+		ForwardTo:   "mqtt_0",
+		Filters:     "{}",
+	})
 
-	// Create a real rules engine with the rule loaded
-	re := rules.NewEngine(db)
-	if err := re.ReloadFromDB(); err != nil {
+	ae := rules.NewAccessEvaluator(db)
+	if err := ae.ReloadFromDB(); err != nil {
 		t.Fatal(err)
 	}
-	d.rules = re
+	d.SetAccessEvaluator(ae)
 
 	msg := rules.RouteMessage{Text: "hello", From: "!12345678", PortNum: 1}
-	count := d.Dispatch("mesh", msg, []byte("hello"))
+	count := d.DispatchAccess("mesh_0", msg, []byte("hello"))
 	if count != 1 {
 		t.Fatalf("expected 1 delivery, got %d", count)
 	}
 
-	// Verify delivery was persisted
-	deliveries, err := db.GetPendingDeliveries("mqtt", 10)
+	deliveries, err := db.GetPendingDeliveries("mqtt_0", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(deliveries) != 1 {
 		t.Fatalf("expected 1 pending delivery, got %d", len(deliveries))
 	}
-	if deliveries[0].Channel != "mqtt" {
-		t.Errorf("expected channel mqtt, got %s", deliveries[0].Channel)
+	if deliveries[0].Channel != "mqtt_0" {
+		t.Errorf("expected channel mqtt_0, got %s", deliveries[0].Channel)
 	}
 	if deliveries[0].Status != "queued" {
 		t.Errorf("expected status queued, got %s", deliveries[0].Status)
 	}
 }
 
-func TestDispatch_MultiMatch(t *testing.T) {
+func TestDispatchAccess_MultiMatch(t *testing.T) {
 	d, db := setupTestDispatcher(t)
 
-	// Two rules, different destinations
-	for _, dest := range []string{"mqtt", "iridium"} {
-		r := &database.ForwardingRule{
-			Name: "To " + dest, Enabled: true, Priority: 1,
-			SourceType: "any", DestType: dest,
-		}
-		if _, err := db.InsertForwardingRule(r); err != nil {
-			t.Fatal(err)
-		}
+	db.InsertInterface(&database.Interface{ID: "mesh_0", ChannelType: "mesh", Enabled: true})
+	db.InsertInterface(&database.Interface{ID: "mqtt_0", ChannelType: "mqtt", Enabled: true})
+	db.InsertInterface(&database.Interface{ID: "iridium_0", ChannelType: "iridium", Enabled: true})
+
+	for _, dest := range []string{"mqtt_0", "iridium_0"} {
+		db.InsertAccessRule(&database.AccessRule{
+			InterfaceID: "mesh_0",
+			Direction:   "ingress",
+			Name:        "To " + dest,
+			Enabled:     true,
+			Priority:    1,
+			Action:      "forward",
+			ForwardTo:   dest,
+			Filters:     "{}",
+		})
 	}
 
-	re := rules.NewEngine(db)
-	if err := re.ReloadFromDB(); err != nil {
+	ae := rules.NewAccessEvaluator(db)
+	if err := ae.ReloadFromDB(); err != nil {
 		t.Fatal(err)
 	}
-	d.rules = re
+	d.SetAccessEvaluator(ae)
 
-	count := d.Dispatch("mesh", rules.RouteMessage{Text: "test", PortNum: 1}, nil)
+	count := d.DispatchAccess("mesh_0", rules.RouteMessage{Text: "test", PortNum: 1}, nil)
 	if count != 2 {
 		t.Fatalf("expected 2 deliveries, got %d", count)
 	}
 }
 
-func TestDispatch_SelfLoopPrevented(t *testing.T) {
+func TestDispatchAccess_SelfLoopPrevented(t *testing.T) {
 	d, db := setupTestDispatcher(t)
 
-	r := &database.ForwardingRule{
-		Name: "Loop", Enabled: true, Priority: 1,
-		SourceType: "any", DestType: "mqtt",
-	}
-	if _, err := db.InsertForwardingRule(r); err != nil {
+	db.InsertInterface(&database.Interface{ID: "mqtt_0", ChannelType: "mqtt", Enabled: true})
+	db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mqtt_0",
+		Direction:   "ingress",
+		Name:        "Loop",
+		Enabled:     true,
+		Priority:    1,
+		Action:      "forward",
+		ForwardTo:   "mqtt_0", // self-loop
+		Filters:     "{}",
+	})
+
+	ae := rules.NewAccessEvaluator(db)
+	if err := ae.ReloadFromDB(); err != nil {
 		t.Fatal(err)
 	}
+	d.SetAccessEvaluator(ae)
 
-	re := rules.NewEngine(db)
-	if err := re.ReloadFromDB(); err != nil {
-		t.Fatal(err)
-	}
-	d.rules = re
-
-	// Source is mqtt, dest is mqtt — should be prevented
-	count := d.Dispatch("mqtt", rules.RouteMessage{Text: "test"}, nil)
+	count := d.DispatchAccess("mqtt_0", rules.RouteMessage{Text: "test"}, nil)
 	if count != 0 {
 		t.Fatalf("expected 0 deliveries (self-loop), got %d", count)
 	}

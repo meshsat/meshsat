@@ -186,6 +186,16 @@ func main() {
 	proc.SetDispatcher(dispatcher)
 	log.Info().Msg("dispatcher + delivery workers started")
 
+	// Wire interface state changes to dispatcher worker lifecycle
+	ifaceMgr.SetStateChangeCallback(func(ifaceID, channelType string, newState engine.InterfaceState) {
+		switch newState {
+		case engine.StateOnline:
+			dispatcher.StartWorker(ctx, ifaceID, channelType)
+		case engine.StateOffline, engine.StateError:
+			dispatcher.StopWorker(ifaceID)
+		}
+	})
+
 	// Signal recorder — persists Iridium signal bar readings to DB
 	sigRecorder := engine.NewSignalRecorder(db, sat)
 	sigRecorder.Start(ctx)

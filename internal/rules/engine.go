@@ -53,6 +53,15 @@ func (e *Engine) ReloadFromDB() error {
 
 	rules, err := e.db.GetForwardingRules()
 	if err != nil {
+		// Graceful degradation: forwarding_rules table dropped in v20 migration.
+		// Return empty ruleset so legacy dispatch path is dormant.
+		if strings.Contains(err.Error(), "no such table") {
+			log.Info().Msg("forwarding_rules table dropped — legacy rules engine dormant")
+			e.mu.Lock()
+			e.rules = nil
+			e.mu.Unlock()
+			return nil
+		}
 		return fmt.Errorf("load forwarding rules: %w", err)
 	}
 
