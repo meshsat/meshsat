@@ -249,18 +249,25 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 	}
 
 	// Dispatch via rules engine + delivery ledger
-	if p.rules != nil && p.rules.RuleCount() > 0 {
-		fromNode := fmt.Sprintf("!%08x", msg.From)
-		routeMsg := rules.RouteMessage{
-			Text:    msg.DecodedText,
-			From:    fromNode,
-			Channel: int(msg.Channel),
-			PortNum: msg.PortNum,
-		}
-		if p.dispatcher != nil {
+	fromNode := fmt.Sprintf("!%08x", msg.From)
+	routeMsg := rules.RouteMessage{
+		Text:    msg.DecodedText,
+		From:    fromNode,
+		Channel: int(msg.Channel),
+		PortNum: msg.PortNum,
+	}
+
+	if p.dispatcher != nil {
+		// Legacy path: forwarding_rules engine
+		if p.rules != nil && p.rules.RuleCount() > 0 {
 			if n := p.dispatcher.Dispatch("mesh", routeMsg, nil); n > 0 {
 				log.Info().Int("deliveries", n).Uint32("packet_id", msg.ID).Msg("dispatched to delivery ledger")
 			}
+		}
+
+		// v0.3.0 path: access_rules engine (interface-based routing)
+		if n := p.dispatcher.DispatchAccess("mesh_0", routeMsg, nil); n > 0 {
+			log.Info().Int("deliveries", n).Uint32("packet_id", msg.ID).Msg("dispatched via access rules")
 		}
 	}
 }
@@ -391,13 +398,21 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				})
 
 				// Dispatch through rules engine
-				if p.dispatcher != nil && p.rules != nil {
+				if p.dispatcher != nil {
 					routeMsg := rules.RouteMessage{
 						Text: msg.Text,
 						From: msg.Source,
 					}
-					if n := p.dispatcher.Dispatch(msg.Source, routeMsg, []byte(msg.Text)); n > 0 {
-						log.Info().Int("deliveries", n).Str("source", msg.Source).Msg("inbound dispatched")
+					// Legacy path
+					if p.rules != nil {
+						if n := p.dispatcher.Dispatch(msg.Source, routeMsg, []byte(msg.Text)); n > 0 {
+							log.Info().Int("deliveries", n).Str("source", msg.Source).Msg("inbound dispatched")
+						}
+					}
+					// v0.3.0 path: map source type to interface ID
+					sourceIface := msg.Source + "_0"
+					if n := p.dispatcher.DispatchAccess(sourceIface, routeMsg, []byte(msg.Text)); n > 0 {
+						log.Info().Int("deliveries", n).Str("interface", sourceIface).Msg("inbound dispatched via access rules")
 					}
 				}
 

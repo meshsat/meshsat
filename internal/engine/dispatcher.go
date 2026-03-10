@@ -56,6 +56,7 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Legacy workers: one per channel registry entry
 	for _, desc := range d.registry.List() {
 		if !desc.CanSend {
 			continue
@@ -71,6 +72,57 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		d.workers[desc.ID] = w
 		go w.Run(ctx)
 		log.Info().Str("channel", desc.ID).Msg("delivery worker started")
+	}
+
+	// v0.3.0 workers: one per interface ID (for DispatchAccess deliveries)
+	d.startInterfaceWorkers(ctx)
+}
+
+// startInterfaceWorkers launches delivery workers for each enabled interface.
+// These workers pick up deliveries created by DispatchAccess (keyed by interface ID).
+func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
+	ifaces, err := d.db.GetAllInterfaces()
+	if err != nil {
+		log.Warn().Err(err).Msg("dispatcher: failed to load interfaces for workers")
+		return
+	}
+
+	started := 0
+	for _, iface := range ifaces {
+		if !iface.Enabled {
+			continue
+		}
+		// Skip if a worker already exists (legacy or duplicate)
+		if _, exists := d.workers[iface.ID]; exists {
+			continue
+		}
+
+		// Resolve channel descriptor for retry config
+		desc, ok := d.registry.Get(iface.ChannelType)
+		if !ok {
+			// Use a default descriptor for unknown types
+			desc = channel.ChannelDescriptor{
+				ID:      iface.ChannelType,
+				CanSend: true,
+			}
+		}
+
+		w := &DeliveryWorker{
+			channelID: iface.ID,
+			desc:      desc,
+			db:        d.db,
+			gwProv:    d.gwProv,
+			mesh:      d.mesh,
+			emit:      d.emit,
+		}
+		d.workers[iface.ID] = w
+		go w.Run(ctx)
+		started++
+		log.Info().Str("interface", iface.ID).Str("type", iface.ChannelType).Msg("interface delivery worker started")
+	}
+
+	if started > 0 {
+		log.Info().Int("count", started).Msg("dispatcher: interface delivery workers started")
 	}
 }
 
@@ -247,7 +299,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 
 	var deliveryErr error
 
-	if w.channelID == "mesh" {
+	if w.channelID == "mesh" || w.channelID == "mesh_0" {
 		// Mesh delivery: inject into mesh transport
 		deliveryErr = w.mesh.SendMessage(ctx, transport.SendRequest{
 			Text: del.TextPreview,
