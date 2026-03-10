@@ -301,6 +301,7 @@ func (t *DirectCellTransport) startLoops() {
 	t.ioDone = make(chan struct{})
 	t.sigDone = make(chan struct{})
 
+	log.Debug().Msg("cellular: starting I/O loop and signal poller")
 	go t.ioLoop()
 	go t.signalPollerLoop()
 }
@@ -523,6 +524,7 @@ func (t *DirectCellTransport) signalPollerLoop() {
 
 // pollSignalAndCellInfo queries signal strength and cell info from the modem.
 func (t *DirectCellTransport) pollSignalAndCellInfo() {
+	log.Debug().Msg("cellular: signal poll tick")
 	// AT+CSQ — signal strength
 	resp, err := t.execAT("AT+CSQ", 5*time.Second)
 	if err != nil {
@@ -606,6 +608,9 @@ func (t *DirectCellTransport) pollSignalAndCellInfo() {
 	t.signalMu.Lock()
 	t.lastSignal = *info
 	t.signalMu.Unlock()
+
+	log.Debug().Int("bars", info.Bars).Int("dBm", info.DBm).Str("tech", info.Technology).
+		Msg("cellular: signal poll complete")
 
 	t.emitEvent(CellEvent{
 		Type:    "signal",
