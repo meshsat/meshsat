@@ -139,16 +139,16 @@ func TestParseSysVersionRsp(t *testing.T) {
 func TestParseAFIncomingMsg(t *testing.T) {
 	// Build a synthetic AF_INCOMING_MSG payload
 	data := make([]byte, 22)
-	data[0] = 0x00 // GroupID low
-	data[1] = 0x00 // GroupID high
-	data[2] = 0x06 // ClusterID low (on/off)
-	data[3] = 0x00 // ClusterID high
-	data[4] = 0x34 // SrcAddr low
-	data[5] = 0x12 // SrcAddr high
-	data[6] = 0x01 // SrcEP
-	data[7] = 0x01 // DstEP
-	data[8] = 0x00 // WasBcast
-	data[9] = 0xFF // LQI
+	data[0] = 0x00  // GroupID low
+	data[1] = 0x00  // GroupID high
+	data[2] = 0x06  // ClusterID low (on/off)
+	data[3] = 0x00  // ClusterID high
+	data[4] = 0x34  // SrcAddr low
+	data[5] = 0x12  // SrcAddr high
+	data[6] = 0x01  // SrcEP
+	data[7] = 0x01  // DstEP
+	data[8] = 0x00  // WasBcast
+	data[9] = 0xFF  // LQI
 	data[10] = 0x00 // SecUse
 	data[11] = 0x00 // Timestamp (4 bytes)
 	data[12] = 0x00

@@ -318,7 +318,9 @@ func autoDetectMeshtastic() string {
 	return ""
 }
 
-// autoDetectIridium scans serial ports for an Iridium modem using AT probe.
+// autoDetectIridium scans serial ports for an Iridium modem.
+// First pass: prefer ports with known Iridium VID:PID (FTDI 0403:6001/6015).
+// Second pass: AT probe on remaining unknown ports, skipping all other known device types.
 func autoDetectIridium(excludePort string) string {
 	var ports []string
 	if matches, err := filepath.Glob("/dev/ttyUSB*"); err == nil {
@@ -328,17 +330,31 @@ func autoDetectIridium(excludePort string) string {
 		ports = append(ports, matches...)
 	}
 
+	// First pass: match by known Iridium VID:PID (no AT probe needed)
 	for _, port := range ports {
 		if port == excludePort {
 			continue
 		}
-		// Skip known Meshtastic/GPS devices
 		vidpid := findUSBVIDPID(port)
-		if knownMeshtasticVIDPIDs[vidpid] || gpsVIDPIDs[vidpid] {
+		if knownIridiumVIDPIDs[vidpid] {
+			log.Info().Str("port", port).Str("vidpid", vidpid).Msg("iridium auto-detected by VID:PID")
+			return port
+		}
+	}
+
+	// Second pass: AT probe on unknown ports, skip all recognized device types
+	for _, port := range ports {
+		if port == excludePort {
+			continue
+		}
+		vidpid := findUSBVIDPID(port)
+		if knownMeshtasticVIDPIDs[vidpid] || gpsVIDPIDs[vidpid] ||
+			knownCellularVIDPIDs[vidpid] || knownAstrocastVIDPIDs[vidpid] ||
+			knownZigBeeOnlyVIDPIDs[vidpid] {
 			continue
 		}
 
-		// AT probe
+		// AT probe on truly unknown ports only
 		if probeAT(port) {
 			log.Info().Str("port", port).Msg("iridium auto-detected by AT probe")
 			return port
