@@ -249,38 +249,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
-  // Forwarding rules
-  const rules = ref([])
-  async function fetchRules() {
-    try {
-      const data = await api.get('/rules')
-      rules.value = Array.isArray(data) ? data : []
-    } catch (e) { error.value = e.message }
-  }
-  async function createRule(rule) {
-    error.value = null
-    try { const r = await api.post('/rules', rule); await fetchRules(); return r } catch (e) { error.value = e.message; throw e }
-  }
-  async function updateRule(id, rule) {
-    error.value = null
-    try { const r = await api.put(`/rules/${id}`, rule); await fetchRules(); return r } catch (e) { error.value = e.message; throw e }
-  }
-  async function deleteRule(id) {
-    error.value = null
-    try { await api.del(`/rules/${id}`); await fetchRules() } catch (e) { error.value = e.message; throw e }
-  }
-  async function enableRule(id) {
-    try { await api.post(`/rules/${id}/enable`); await fetchRules() } catch (e) { error.value = e.message }
-  }
-  async function disableRule(id) {
-    try { await api.post(`/rules/${id}/disable`); await fetchRules() } catch (e) { error.value = e.message }
-  }
-  async function reorderRules(ids) {
-    try { await api.post('/rules/reorder', { rule_ids: ids }); await fetchRules() } catch (e) { error.value = e.message }
-  }
-  async function fetchRuleStats(id) {
-    try { return await api.get(`/rules/${id}/stats`) } catch (e) { error.value = e.message; return null }
-  }
+  // Legacy forwarding rules removed — use accessRules instead (see below)
 
   // Preset messages
   const presets = ref([])
@@ -1079,7 +1048,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchDynDNSStatus, forceDynDNSUpdate,
     fetchSMSMessages, fetchCellBroadcasts, ackCellBroadcast, fetchCellInfo, submitCellularPIN,
     enqueueIridiumMessage, cancelQueueItem, deleteQueueItem, setQueuePriority,
-    fetchRules, createRule, updateRule, deleteRule, enableRule, disableRule, reorderRules, fetchRuleStats,
+    // Legacy forwarding rules removed — use accessRules (fetchAccessRules, createAccessRule, etc.)
     fetchPresets, createPreset, updatePreset, deletePreset, sendPreset,
     activateSOS, cancelSOS, fetchSOSStatus,
     fetchDLQ,

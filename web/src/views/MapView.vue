@@ -60,10 +60,11 @@ const nodePositionMap = computed(() => {
   const m = {}
   for (const node of store.nodes) {
     if (node.latitude && node.longitude && node.latitude !== 0 && node.longitude !== 0) {
-      m[node.id] = {
+      const nid = node.user_id || String(node.num)
+      m[nid] = {
         lat: node.latitude,
         lon: node.longitude,
-        name: node.name || node.long_name || node.id,
+        name: node.long_name || node.short_name || nid,
         signal_quality: node.signal_quality
       }
     }
@@ -75,7 +76,7 @@ const nodePositionMap = computed(() => {
 const nodesWithPositions = computed(() => {
   return store.nodes.filter(n =>
     n.latitude && n.longitude && n.latitude !== 0 && n.longitude !== 0
-  )
+  ).map(n => ({ ...n, _id: n.user_id || String(n.num) }))
 })
 
 // Messages that have a locatable sender
@@ -120,7 +121,7 @@ function updateMap() {
   trackLayer.clearLayers()
   if (messageLayer) messageLayer.clearLayers()
 
-  const visibleNodes = nodesWithPositions.value.filter(n => nodeVisibility[n.id] !== false)
+  const visibleNodes = nodesWithPositions.value.filter(n => nodeVisibility[n._id] !== false)
 
   // Node markers
   for (const node of visibleNodes) {
@@ -128,7 +129,7 @@ function updateMap() {
     const m = L.circleMarker([node.latitude, node.longitude], {
       radius: 8, fillColor: color, fillOpacity: 0.8, color, weight: 2
     })
-    let html = `<strong>${node.name ?? node.long_name ?? node.id}</strong>`
+    let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
     if (node.battery != null) html += `<br>Battery: ${Math.round(node.battery)}%`
     if (node.snr != null) html += `<br>SNR: ${Number(node.snr).toFixed(1)} dB`
     m.bindPopup(html)
@@ -137,7 +138,7 @@ function updateMap() {
 
   // Track lines
   if (showTracks.value) {
-    const visibleIds = new Set(visibleNodes.map(n => String(n.id)))
+    const visibleIds = new Set(visibleNodes.map(n => n._id))
     const groups = {}
     for (const p of store.positions) {
       const nid = String(p.node_id ?? p.from)
@@ -157,7 +158,7 @@ function updateMap() {
   // Message markers
   if (showMessages.value && messageLayer) {
     const posMap = nodePositionMap.value
-    const visibleIds = new Set(visibleNodes.map(n => String(n.id)))
+    const visibleIds = new Set(visibleNodes.map(n => n._id))
 
     for (const msg of store.messages) {
       const nid = String(msg.from_node)
@@ -394,7 +395,7 @@ function toggleNode(nodeId) {
 
 function toggleAll(show) {
   for (const n of nodesWithPositions.value) {
-    nodeVisibility[n.id] = show
+    nodeVisibility[n._id] = show
   }
   updateMap()
 }
@@ -423,7 +424,8 @@ onMounted(async () => {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
   // Initialize all node visibility to true
   for (const n of store.nodes) {
-    if (nodeVisibility[n.id] === undefined) nodeVisibility[n.id] = true
+    const nid = n.user_id || String(n.num)
+    if (nodeVisibility[nid] === undefined) nodeVisibility[nid] = true
   }
   await Promise.all([
     store.fetchNodes(),
@@ -435,7 +437,8 @@ onMounted(async () => {
   ])
   // Set visibility for any newly loaded nodes
   for (const n of store.nodes) {
-    if (nodeVisibility[n.id] === undefined) nodeVisibility[n.id] = true
+    const nid = n.user_id || String(n.num)
+    if (nodeVisibility[nid] === undefined) nodeVisibility[nid] = true
   }
   await initMap()
 })
@@ -535,17 +538,17 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="flex flex-wrap gap-2">
-        <label v-for="(node, idx) in nodesWithPositions" :key="node.id"
+        <label v-for="(node, idx) in nodesWithPositions" :key="node._id"
           class="flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-xs transition-colors"
-          :class="nodeVisibility[node.id] !== false
+          :class="nodeVisibility[node._id] !== false
             ? 'bg-gray-700/50 text-gray-200'
             : 'bg-gray-800/30 text-gray-600'">
           <input type="checkbox"
-            :checked="nodeVisibility[node.id] !== false"
-            @change="toggleNode(node.id)"
+            :checked="nodeVisibility[node._id] !== false"
+            @change="toggleNode(node._id)"
             class="rounded bg-gray-800 border-gray-600 text-teal-500 focus:ring-0 w-3 h-3" />
           <span class="w-2 h-2 rounded-full" :style="{ backgroundColor: nodeColor(idx) }"></span>
-          {{ node.name || node.long_name || node.id }}
+          {{ node.long_name || node.short_name || node._id }}
         </label>
       </div>
     </div>

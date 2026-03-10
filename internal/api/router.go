@@ -250,16 +250,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/deliveries/{id}/retry", s.handleRetryDelivery)
 		r.Get("/deliveries/message/{ref}", s.handleGetMessageDeliveries)
 
-		// Forwarding rules
-		r.Get("/rules", s.handleGetRules)
-		r.Post("/rules", s.handleCreateRule)
-		r.Get("/rules/{id}", s.handleGetRule)
-		r.Put("/rules/{id}", s.handleUpdateRule)
-		r.Delete("/rules/{id}", s.handleDeleteRule)
-		r.Post("/rules/{id}/enable", s.handleEnableRule)
-		r.Post("/rules/{id}/disable", s.handleDisableRule)
-		r.Post("/rules/reorder", s.handleReorderRules)
-		r.Get("/rules/{id}/stats", s.handleGetRuleStats)
+		// Legacy /rules routes removed — use /access-rules instead
 
 		// Preset messages
 		r.Get("/presets", s.handleGetPresets)

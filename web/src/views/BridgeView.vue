@@ -2,15 +2,10 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { priorityLabel, priorityColor, formatTimestamp, formatRelativeTime } from '@/utils/format'
-import RuleCard from '@/components/RuleCard.vue'
-import RuleEditor from '@/components/RuleEditor.vue'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
 
 const store = useMeshsatStore()
 const activeTab = ref('outbound')
-const editorOpen = ref(false)
-const editingRule = ref(null)
-const editorDirection = ref(null)
 const expandedItem = ref(null) // queue item ID for debug panel
 const expandedPane = ref(null) // 'mesh' | 'mqtt' | 'iridium' | 'cellular'
 
@@ -63,20 +58,18 @@ const cellularGw = computed(() => {
 const astrocastGw = computed(() => (store.gateways || []).find(g => g.type === 'astrocast'))
 const webhookGw = computed(() => (store.gateways || []).find(g => g.type === 'webhook'))
 
-// Cost risk warning — true when any rule has danger-level risk
-const hasDangerRules = computed(() =>
-  (store.rules || []).some(r => r.risk?.level === 'danger')
-)
-
-// Group rules by route direction for display
+// Group access rules by route direction for display
+// Outbound = rules on mesh interface ingress that forward to non-mesh
 const outboundRules = computed(() =>
-  (store.rules || []).filter(r => r.dest_type !== 'mesh' && ['any', 'mesh', 'channel', 'node', 'portnum'].includes(r.source_type))
+  (store.accessRules || []).filter(r => r.interface_id?.startsWith('mesh') && r.direction === 'ingress' && r.action === 'forward' && r.forward_to && !r.forward_to.startsWith('mesh'))
 )
+// Inbound = rules on non-mesh interfaces that forward to mesh
 const inboundRules = computed(() =>
-  (store.rules || []).filter(r => r.dest_type === 'mesh')
+  (store.accessRules || []).filter(r => !r.interface_id?.startsWith('mesh') && r.direction === 'ingress' && r.action === 'forward' && r.forward_to?.startsWith('mesh'))
 )
+// Cross = rules between non-mesh interfaces
 const crossRules = computed(() =>
-  (store.rules || []).filter(r => r.dest_type !== 'mesh' && !['any', 'mesh', 'channel', 'node', 'portnum'].includes(r.source_type))
+  (store.accessRules || []).filter(r => !r.interface_id?.startsWith('mesh') && r.direction === 'ingress' && r.action === 'forward' && r.forward_to && !r.forward_to.startsWith('mesh'))
 )
 
 // Queue items with decoded payload
@@ -173,37 +166,9 @@ function gwStatusLabel(gw) {
   return gw.connected ? 'Connected' : gw.enabled ? 'Disconnected' : 'Disabled'
 }
 
-function openCreate(dir = null) {
-  editingRule.value = null
-  // 'cross' maps to no preset direction — user picks source + dest freely
-  editorDirection.value = dir === 'cross' ? null : dir
-  editorOpen.value = true
-}
-
-function openEdit(rule) {
-  editingRule.value = { ...rule }
-  editorDirection.value = null
-  editorOpen.value = true
-}
-
-async function saveRule(data) {
-  if (editingRule.value?.id) {
-    await store.updateRule(editingRule.value.id, data)
-  } else {
-    await store.createRule(data)
-  }
-  editorOpen.value = false
-}
-
-async function toggleRule(rule) {
-  const current = (store.rules || []).find(r => r.id === rule.id)
-  if (!current) return
-  current.enabled ? await store.disableRule(rule.id) : await store.enableRule(rule.id)
-}
-
 async function removeRule(rule) {
   if (confirm(`Delete rule "${rule.name}"?`)) {
-    await store.deleteRule(rule.id)
+    await store.deleteAccessRule(rule.id)
   }
 }
 
@@ -226,7 +191,7 @@ async function sendComposed() {
 let pollTimer = null
 
 function refreshBridgeData() {
-  store.fetchRules()
+  store.fetchAccessRules()
   store.fetchGateways()
   store.fetchDLQ()
   store.fetchStatus()
@@ -253,15 +218,6 @@ onUnmounted(() => {
   <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold text-gray-200">Bridge</h2>
-    </div>
-
-    <!-- Cost warning banner -->
-    <div v-if="hasDangerRules" class="bg-amber-900/20 border border-amber-700/40 rounded-lg p-3 mb-4 flex items-center gap-2">
-      <svg class="w-4 h-4 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-      </svg>
-      <span class="text-xs text-amber-300">One or more rules may generate high costs on paid transports (Iridium/SMS). Review rules marked with a red badge.</span>
     </div>
 
     <!-- Status panes (clickable for debug) -->
@@ -413,16 +369,26 @@ onUnmounted(() => {
     <div v-if="activeTab === 'outbound'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">Mesh messages forwarded to external channels</p>
-        <button @click="openCreate('outbound')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
-          + New Outbound Rule
-        </button>
+        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+          Manage in Interfaces
+        </a>
       </div>
       <div v-if="outboundRules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
         No outbound rules. Mesh messages stay local.
       </div>
       <div class="space-y-3">
-        <RuleCard v-for="rule in outboundRules" :key="rule.id" :rule="rule"
-          @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
+        <div v-for="rule in outboundRules" :key="rule.id"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3"
+          :class="{ 'opacity-50': !rule.enabled }">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-400/10 text-teal-400">{{ rule.action }}</span>
+            <span class="text-sm font-medium text-gray-200">{{ rule.name || `Rule #${rule.id}` }}</span>
+            <span class="text-xs text-gray-500">{{ rule.interface_id }} --> {{ rule.forward_to }}</span>
+            <span class="flex-1" />
+            <span class="text-[10px] text-gray-600">{{ rule.match_count || 0 }} hits</span>
+            <button @click="removeRule(rule)" class="px-2 py-1 text-[10px] rounded bg-red-900/30 text-red-400 hover:bg-red-900/50">Del</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -430,16 +396,26 @@ onUnmounted(() => {
     <div v-if="activeTab === 'inbound'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">External messages routed back to the mesh network</p>
-        <button @click="openCreate('inbound')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
-          + New Inbound Rule
-        </button>
+        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+          Manage in Interfaces
+        </a>
       </div>
       <div v-if="inboundRules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
         No inbound rules configured. External messages are received but not routed to mesh.
       </div>
       <div class="space-y-3">
-        <RuleCard v-for="rule in inboundRules" :key="rule.id" :rule="rule"
-          @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
+        <div v-for="rule in inboundRules" :key="rule.id"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3"
+          :class="{ 'opacity-50': !rule.enabled }">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-400/10 text-blue-400">{{ rule.action }}</span>
+            <span class="text-sm font-medium text-gray-200">{{ rule.name || `Rule #${rule.id}` }}</span>
+            <span class="text-xs text-gray-500">{{ rule.interface_id }} --> {{ rule.forward_to }}</span>
+            <span class="flex-1" />
+            <span class="text-[10px] text-gray-600">{{ rule.match_count || 0 }} hits</span>
+            <button @click="removeRule(rule)" class="px-2 py-1 text-[10px] rounded bg-red-900/30 text-red-400 hover:bg-red-900/50">Del</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -447,16 +423,26 @@ onUnmounted(() => {
     <div v-if="activeTab === 'cross'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">Inter-channel bridging (e.g. Iridium &rarr; MQTT, Cellular &rarr; Webhook)</p>
-        <button @click="openCreate('cross')" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
-          + New Bridge Rule
-        </button>
+        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+          Manage in Interfaces
+        </a>
       </div>
       <div v-if="crossRules.length === 0" class="text-center text-gray-500 py-6 text-sm bg-gray-800/50 rounded-lg border border-gray-700">
         No cross-bridge rules. External channels operate independently.
       </div>
       <div class="space-y-3">
-        <RuleCard v-for="rule in crossRules" :key="rule.id" :rule="rule"
-          @toggle="toggleRule(rule)" @edit="openEdit(rule)" @delete="removeRule(rule)" />
+        <div v-for="rule in crossRules" :key="rule.id"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3"
+          :class="{ 'opacity-50': !rule.enabled }">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-400/10 text-purple-400">{{ rule.action }}</span>
+            <span class="text-sm font-medium text-gray-200">{{ rule.name || `Rule #${rule.id}` }}</span>
+            <span class="text-xs text-gray-500">{{ rule.interface_id }} --> {{ rule.forward_to }}</span>
+            <span class="flex-1" />
+            <span class="text-[10px] text-gray-600">{{ rule.match_count || 0 }} hits</span>
+            <button @click="removeRule(rule)" class="px-2 py-1 text-[10px] rounded bg-red-900/30 text-red-400 hover:bg-red-900/50">Del</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -640,7 +626,5 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Rule editor modal -->
-    <RuleEditor :open="editorOpen" :rule="editingRule" :initial-direction="editorDirection" @save="saveRule" @close="editorOpen = false" />
   </div>
 </template>
