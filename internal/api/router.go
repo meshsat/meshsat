@@ -28,6 +28,7 @@ type Server struct {
 	astroTleMgr   *engine.AstrocastTLEManager
 	cellTransport transport.CellTransport
 	gpsReader     *transport.GPSReader
+	ifaceMgr      *engine.InterfaceManager
 	paidRateLimit int
 	sos           *SOSState
 	webHandler    http.Handler
@@ -81,6 +82,11 @@ func (s *Server) SetRegistry(r *channel.Registry) {
 // SetPassScheduler sets the pass scheduler for scheduler status endpoint.
 func (s *Server) SetPassScheduler(ps *gateway.PassScheduler) {
 	s.scheduler = ps
+}
+
+// SetInterfaceManager sets the interface manager for v0.3.0 interface CRUD.
+func (s *Server) SetInterfaceManager(m *engine.InterfaceManager) {
+	s.ifaceMgr = m
 }
 
 // Router builds the chi router with all API routes.
@@ -259,6 +265,27 @@ func (s *Server) Router() http.Handler {
 		r.Post("/sos/activate", s.handleSOSActivate)
 		r.Post("/sos/cancel", s.handleSOSCancel)
 		r.Get("/sos/status", s.handleSOSStatus)
+
+		// v0.3.0 Interface-based routing
+		r.Get("/interfaces", s.handleGetInterfaces)
+		r.Get("/interfaces/{id}", s.handleGetInterface)
+		r.Post("/interfaces", s.handleCreateInterface)
+		r.Put("/interfaces/{id}", s.handleUpdateInterface)
+		r.Delete("/interfaces/{id}", s.handleDeleteInterface)
+		r.Post("/interfaces/{id}/bind", s.handleBindDevice)
+		r.Post("/interfaces/{id}/unbind", s.handleUnbindDevice)
+		r.Get("/devices", s.handleGetDevices)
+		r.Get("/access-rules", s.handleGetAccessRules)
+		r.Post("/access-rules", s.handleCreateAccessRule)
+		r.Put("/access-rules/{id}", s.handleUpdateAccessRule)
+		r.Delete("/access-rules/{id}", s.handleDeleteAccessRule)
+		r.Get("/object-groups", s.handleGetObjectGroups)
+		r.Post("/object-groups", s.handleCreateObjectGroup)
+		r.Put("/object-groups/{id}", s.handleUpdateObjectGroup)
+		r.Delete("/object-groups/{id}", s.handleDeleteObjectGroup)
+		r.Get("/failover-groups", s.handleGetFailoverGroups)
+		r.Post("/failover-groups", s.handleCreateFailoverGroup)
+		r.Delete("/failover-groups/{id}", s.handleDeleteFailoverGroup)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

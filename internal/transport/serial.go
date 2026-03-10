@@ -364,3 +364,65 @@ func probeAT(portPath string) bool {
 	resp, err = sendAT(port, "AT", 2*time.Second)
 	return err == nil && strings.Contains(resp, "OK")
 }
+
+// Known Iridium VID:PID pairs
+var knownIridiumVIDPIDs = map[string]bool{
+	"0403:6001": true, // FTDI FT232R (Iridium 9603N)
+	"0403:6015": true, // FTDI X series (Iridium dev kits)
+}
+
+// FindUSBDeviceID returns a stable hardware identifier for a USB tty port.
+// Format is "VID:PID+SERIAL" if a USB serial number is available, or "VID:PID" otherwise.
+// Returns empty string if the port is not a USB device.
+func FindUSBDeviceID(port string) string {
+	vidpid := findUSBVIDPID(port)
+	if vidpid == "" {
+		return ""
+	}
+	ser := FindUSBSerial(port)
+	if ser != "" {
+		return vidpid + "+" + ser
+	}
+	return vidpid
+}
+
+// FindUSBSerial reads the USB serial number from sysfs for a given tty port.
+func FindUSBSerial(port string) string {
+	devName := filepath.Base(port)
+	sysPath := fmt.Sprintf("/sys/class/tty/%s/device", devName)
+	current, err := filepath.EvalSymlinks(sysPath)
+	if err != nil {
+		return ""
+	}
+
+	for i := 0; i < 5; i++ {
+		current = filepath.Dir(current)
+		data, _ := os.ReadFile(filepath.Join(current, "serial"))
+		ser := strings.TrimSpace(string(data))
+		if ser != "" {
+			return ser
+		}
+	}
+	return ""
+}
+
+// ClassifyDevice returns the device type for a given VID:PID string.
+// Returns one of: "meshtastic", "iridium", "cellular", "astrocast", "gps", "unknown".
+func ClassifyDevice(vidpid string) string {
+	if knownMeshtasticVIDPIDs[vidpid] {
+		return "meshtastic"
+	}
+	if knownIridiumVIDPIDs[vidpid] {
+		return "iridium"
+	}
+	if knownAstrocastVIDPIDs[vidpid] {
+		return "astrocast"
+	}
+	if knownCellularVIDPIDs[vidpid] {
+		return "cellular"
+	}
+	if gpsVIDPIDs[vidpid] {
+		return "gps"
+	}
+	return "unknown"
+}

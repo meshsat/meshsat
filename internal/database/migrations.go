@@ -391,6 +391,179 @@ var migrations = []string{
 		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_cell_info_ts ON cell_info(timestamp);`,
+
+	// v19: Interface-based routing model (v0.3.0 foundation — Cisco ASA-style).
+	// New tables: interfaces, access_rules, object_groups, failover_groups,
+	// failover_members, audit_log. Enhanced message_deliveries with S&F columns.
+	// Data migration: gateway_config → interfaces, forwarding_rules → access_rules.
+	// Old tables kept for backward compatibility until P4 rewire completes.
+	`-- Interfaces: named, hardware-bound communication endpoints
+	CREATE TABLE IF NOT EXISTS interfaces (
+		id                 TEXT PRIMARY KEY,
+		channel_type       TEXT NOT NULL,
+		label              TEXT NOT NULL DEFAULT '',
+		enabled            INTEGER NOT NULL DEFAULT 1,
+		device_id          TEXT NOT NULL DEFAULT '',
+		device_port        TEXT NOT NULL DEFAULT '',
+		config             TEXT NOT NULL DEFAULT '{}',
+		ingress_transforms TEXT NOT NULL DEFAULT '[]',
+		egress_transforms  TEXT NOT NULL DEFAULT '[]',
+		ingress_seq        INTEGER NOT NULL DEFAULT 0,
+		egress_seq         INTEGER NOT NULL DEFAULT 0,
+		created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_interfaces_type ON interfaces(channel_type);
+
+	-- Object groups: reusable filter sets for access rules
+	CREATE TABLE IF NOT EXISTS object_groups (
+		id         TEXT PRIMARY KEY,
+		type       TEXT NOT NULL,
+		label      TEXT NOT NULL DEFAULT '',
+		members    TEXT NOT NULL DEFAULT '[]',
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	-- Access rules: per-interface ingress/egress forwarding and drop rules
+	CREATE TABLE IF NOT EXISTS access_rules (
+		id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+		interface_id         TEXT NOT NULL,
+		direction            TEXT NOT NULL,
+		priority             INTEGER NOT NULL DEFAULT 100,
+		name                 TEXT NOT NULL DEFAULT '',
+		enabled              INTEGER NOT NULL DEFAULT 1,
+		action               TEXT NOT NULL DEFAULT 'forward',
+		forward_to           TEXT NOT NULL DEFAULT '',
+		filters              TEXT NOT NULL DEFAULT '{}',
+		filter_node_group    TEXT,
+		filter_sender_group  TEXT,
+		filter_portnum_group TEXT,
+		schedule_type        TEXT NOT NULL DEFAULT 'none',
+		schedule_config      TEXT NOT NULL DEFAULT '{}',
+		forward_options      TEXT NOT NULL DEFAULT '{}',
+		qos_level            INTEGER NOT NULL DEFAULT 1,
+		rate_limit_per_min   INTEGER NOT NULL DEFAULT 0,
+		rate_limit_window    INTEGER NOT NULL DEFAULT 60,
+		match_count          INTEGER NOT NULL DEFAULT 0,
+		last_match_at        TEXT,
+		created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (interface_id) REFERENCES interfaces(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_access_rules_iface_dir ON access_rules(interface_id, direction, priority);
+	CREATE INDEX IF NOT EXISTS idx_access_rules_enabled ON access_rules(enabled);
+
+	-- Failover groups: HA groups of same-type interfaces
+	CREATE TABLE IF NOT EXISTS failover_groups (
+		id         TEXT PRIMARY KEY,
+		label      TEXT NOT NULL DEFAULT '',
+		mode       TEXT NOT NULL DEFAULT 'failover',
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	-- Failover group membership with priority ordering
+	CREATE TABLE IF NOT EXISTS failover_members (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		group_id     TEXT NOT NULL,
+		interface_id TEXT NOT NULL,
+		priority     INTEGER NOT NULL DEFAULT 0,
+		created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (group_id) REFERENCES failover_groups(id) ON DELETE CASCADE,
+		FOREIGN KEY (interface_id) REFERENCES interfaces(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_failover_members_group ON failover_members(group_id, priority);
+
+	-- Audit log: tamper-evident hash-chain event log
+	CREATE TABLE IF NOT EXISTS audit_log (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp    TEXT NOT NULL DEFAULT (datetime('now')),
+		interface_id TEXT,
+		direction    TEXT,
+		event_type   TEXT NOT NULL,
+		seq_num      INTEGER,
+		delivery_id  INTEGER,
+		rule_id      INTEGER,
+		detail       TEXT NOT NULL DEFAULT '{}',
+		prev_hash    TEXT NOT NULL DEFAULT '',
+		hash         TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_audit_log_iface ON audit_log(interface_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log(event_type);
+
+	-- Enhance message_deliveries with store-and-forward and QoS columns
+	ALTER TABLE message_deliveries ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE message_deliveries ADD COLUMN expires_at TEXT;
+	ALTER TABLE message_deliveries ADD COLUMN held_at TEXT;
+	ALTER TABLE message_deliveries ADD COLUMN visited TEXT NOT NULL DEFAULT '[]';
+	ALTER TABLE message_deliveries ADD COLUMN qos_level INTEGER NOT NULL DEFAULT 1;
+	ALTER TABLE message_deliveries ADD COLUMN seq_num INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE message_deliveries ADD COLUMN signature BLOB;
+	ALTER TABLE message_deliveries ADD COLUMN signer_id TEXT;
+	ALTER TABLE message_deliveries ADD COLUMN ack_status TEXT;
+	ALTER TABLE message_deliveries ADD COLUMN ack_timestamp TEXT;
+
+	-- Data migration: seed interfaces from gateway_config
+	-- mesh_0 always exists (mesh transport is always present)
+	INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
+		VALUES ('mesh_0', 'mesh', 'Meshtastic LoRa', 1, '{}');
+
+	-- Migrate existing gateway configs to interfaces
+	INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
+		SELECT
+			type || '_0',
+			type,
+			CASE type
+				WHEN 'iridium' THEN 'Iridium SBD'
+				WHEN 'mqtt' THEN 'MQTT Broker'
+				WHEN 'webhook' THEN 'Webhook HTTP'
+				WHEN 'cellular' THEN 'Cellular SMS'
+				WHEN 'astrocast' THEN 'Astrocast'
+				ELSE type
+			END,
+			enabled,
+			config
+		FROM gateway_config;
+
+	-- Data migration: convert forwarding_rules to access_rules
+	-- Each forwarding rule becomes an ingress rule on the source interface
+	-- source_type 'any' maps to mesh_0 ingress (most common case)
+	INSERT INTO access_rules (interface_id, direction, priority, name, enabled, action, forward_to, filters, qos_level, rate_limit_per_min, rate_limit_window, match_count, last_match_at, created_at, updated_at)
+		SELECT
+			CASE source_type
+				WHEN 'any' THEN 'mesh_0'
+				WHEN 'mesh' THEN 'mesh_0'
+				WHEN 'channel' THEN 'mesh_0'
+				WHEN 'node' THEN 'mesh_0'
+				WHEN 'portnum' THEN 'mesh_0'
+				WHEN 'iridium' THEN 'iridium_0'
+				WHEN 'astrocast' THEN 'astrocast_0'
+				WHEN 'cellular' THEN 'cellular_0'
+				WHEN 'webhook' THEN 'webhook_0'
+				WHEN 'mqtt' THEN 'mqtt_0'
+				WHEN 'external' THEN 'mesh_0'
+				ELSE 'mesh_0'
+			END,
+			'ingress',
+			priority,
+			name,
+			enabled,
+			'forward',
+			dest_type || '_0',
+			json_object(
+				'keyword', COALESCE(source_keyword, ''),
+				'channels', COALESCE(source_channels, ''),
+				'nodes', COALESCE(source_nodes, ''),
+				'portnums', COALESCE(source_portnums, '')
+			),
+			1,
+			rate_limit_per_min,
+			rate_limit_window,
+			match_count,
+			last_match_at,
+			created_at,
+			updated_at
+		FROM forwarding_rules;`,
 }
 
 func (db *DB) migrate() error {

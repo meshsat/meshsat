@@ -115,6 +115,12 @@ func main() {
 	channel.RegisterDefaults(registry)
 	log.Info().Int("channels", len(registry.IDs())).Msg("channel registry ready")
 
+	// Interface manager (v0.3.0 — interface-based routing foundation)
+	ifaceMgr := engine.NewInterfaceManager(db)
+	if err := ifaceMgr.Start(ctx); err != nil {
+		log.Error().Err(err).Msg("interface manager start failed")
+	}
+
 	// Rule engine
 	ruleEngine := rules.NewEngine(db)
 	if err := ruleEngine.ReloadFromDB(); err != nil {
@@ -204,6 +210,7 @@ func main() {
 	srv.SetCellTransport(cell)
 	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
 	srv.SetGPSReader(gpsReader)
+	srv.SetInterfaceManager(ifaceMgr)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
@@ -244,6 +251,7 @@ func main() {
 	if cellSigRecorder != nil {
 		cellSigRecorder.Stop()
 	}
+	ifaceMgr.Stop()
 	tleMgr.Stop()
 	astroTleMgr.Stop()
 	gwMgr.Stop()
