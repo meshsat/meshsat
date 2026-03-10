@@ -292,6 +292,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/failover-groups", s.handleGetFailoverGroups)
 		r.Post("/failover-groups", s.handleCreateFailoverGroup)
 		r.Delete("/failover-groups/{id}", s.handleDeleteFailoverGroup)
+
+		// Config export/import (v0.3.0 — Cisco-style running-config)
+		r.Get("/config/export", s.handleConfigExport)
+		r.Post("/config/import", s.handleConfigImport)
 	})
 
 	// Web UI (SPA) — catch-all after API routes
