@@ -751,6 +751,24 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 
 	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS send starting")
 	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
+		// Ensure modem is in a clean state before CMGS.
+		// Previous commands (signal polls, other SMS) may leave residual data.
+		drainPort(sp)
+
+		// Probe with AT to verify modem is responsive and not mid-command
+		probeResp, probeErr := sendAT(sp, "AT", 5*time.Second)
+		if probeErr != nil || !strings.Contains(probeResp, "OK") {
+			// Modem may be stuck in SMS input mode from a previous failed CMGS.
+			// Send Escape (0x1B) to abort, drain, then retry probe.
+			sp.Write([]byte{0x1B})
+			time.Sleep(500 * time.Millisecond)
+			drainPort(sp)
+			probeResp, probeErr = sendAT(sp, "AT", 5*time.Second)
+			if probeErr != nil {
+				return "", fmt.Errorf("modem not responding: %w", probeErr)
+			}
+		}
+
 		// AT+CMGS="number"
 		cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
 		drainPort(sp)
@@ -795,8 +813,13 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 		}
 
 		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
+
+		// Post-send settle — give the modem time to finalize before accepting
+		// the next command. The Huawei E220 on 2G needs this between CMGS calls.
+		time.Sleep(2 * time.Second)
+
 		return "OK", nil
-	}, cellSMSSendTimeout+10*time.Second)
+	}, cellSMSSendTimeout+15*time.Second)
 
 	return err
 }
