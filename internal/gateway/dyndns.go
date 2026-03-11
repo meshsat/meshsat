@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -123,6 +125,10 @@ func (d *DynDNSUpdater) check() {
 }
 
 func (d *DynDNSUpdater) update(ip string) error {
+	if d.config.Provider == "cloudflare" {
+		return d.updateCloudflare(ip)
+	}
+
 	url := d.buildURL(ip)
 	if url == "" {
 		return fmt.Errorf("unsupported provider: %s", d.config.Provider)
@@ -150,6 +156,110 @@ func (d *DynDNSUpdater) update(ip string) error {
 	result := strings.TrimSpace(string(body))
 
 	return d.validateResponse(result)
+}
+
+// updateCloudflare uses the Cloudflare API v4 to update a DNS A record.
+// Requires: Token (API token), ZoneID, Domain (FQDN of A record).
+// RecordID is auto-resolved on first call if not set.
+func (d *DynDNSUpdater) updateCloudflare(ip string) error {
+	if d.config.ZoneID == "" {
+		return fmt.Errorf("cloudflare: zone_id is required")
+	}
+	if d.config.Token == "" {
+		return fmt.Errorf("cloudflare: token (API token) is required")
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	// Auto-resolve record ID if not configured
+	recordID := d.config.RecordID
+	if recordID == "" {
+		var err error
+		recordID, err = d.cloudflareResolveRecord(client)
+		if err != nil {
+			return fmt.Errorf("cloudflare: resolve record: %w", err)
+		}
+		d.config.RecordID = recordID
+	}
+
+	// PUT the updated A record
+	payload := map[string]interface{}{
+		"type":    "A",
+		"name":    d.config.Domain,
+		"content": ip,
+		"ttl":     120,
+		"proxied": false,
+	}
+	body, _ := json.Marshal(payload)
+
+	apiURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s",
+		d.config.ZoneID, recordID)
+	req, err := http.NewRequest("PUT", apiURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+d.config.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "MeshSat DynDNS/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	var cfResp struct {
+		Success bool `json:"success"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(respBody, &cfResp); err != nil {
+		return fmt.Errorf("cloudflare: parse response: %w", err)
+	}
+	if !cfResp.Success {
+		msg := "unknown error"
+		if len(cfResp.Errors) > 0 {
+			msg = cfResp.Errors[0].Message
+		}
+		return fmt.Errorf("cloudflare: %s", msg)
+	}
+	return nil
+}
+
+// cloudflareResolveRecord looks up the DNS record ID by domain name within the zone.
+func (d *DynDNSUpdater) cloudflareResolveRecord(client *http.Client) (string, error) {
+	apiURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records?type=A&name=%s",
+		d.config.ZoneID, d.config.Domain)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+d.config.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "MeshSat DynDNS/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var cfResp struct {
+		Success bool `json:"success"`
+		Result  []struct {
+			ID string `json:"id"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &cfResp); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+	if !cfResp.Success || len(cfResp.Result) == 0 {
+		return "", fmt.Errorf("no A record found for %s in zone %s", d.config.Domain, d.config.ZoneID)
+	}
+	return cfResp.Result[0].ID, nil
 }
 
 func (d *DynDNSUpdater) buildURL(ip string) string {

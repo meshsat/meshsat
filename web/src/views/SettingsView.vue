@@ -321,7 +321,7 @@ const cellularForm = ref({
   sms_destinations: '', allowed_senders: '', sms_prefix: 'MESHSAT', max_segments: 3,
   apn: '', auto_connect: false, auto_reconnect: false, apn_failover_list: '',
   webhook_url: '', webhook_headers: '', inbound_webhook_enabled: false, inbound_webhook_secret: '',
-  dyndns_provider: 'none', dyndns_domain: '', dyndns_token: '', dyndns_interval: 300
+  dyndns_provider: 'none', dyndns_domain: '', dyndns_token: '', dyndns_zone_id: '', dyndns_interval: 300
 })
 const cellularEnabled = ref(false)
 
@@ -433,6 +433,15 @@ function loadCellular() {
       if (Array.isArray(c.apn_failover_list)) {
         c.apn_failover_list = c.apn_failover_list.join(', ')
       }
+      // Flatten nested dyndns object to form fields
+      if (c.dyndns && typeof c.dyndns === 'object') {
+        cellularForm.value.dyndns_provider = c.dyndns.provider || 'none'
+        cellularForm.value.dyndns_domain = c.dyndns.domain || ''
+        cellularForm.value.dyndns_token = c.dyndns.token || ''
+        cellularForm.value.dyndns_zone_id = c.dyndns.zone_id || ''
+        cellularForm.value.dyndns_interval = c.dyndns.interval || 300
+        delete c.dyndns
+      }
       Object.assign(cellularForm.value, c)
       cellularEnabled.value = cellularGw.value.enabled
     } catch {}
@@ -445,6 +454,21 @@ async function saveCellular() {
   if (typeof cfg.apn_failover_list === 'string') {
     cfg.apn_failover_list = cfg.apn_failover_list.split(',').map(s => s.trim()).filter(Boolean)
   }
+  // Rebuild nested dyndns object from flat form fields
+  const provider = cfg.dyndns_provider || 'none'
+  cfg.dyndns = {
+    enabled: provider !== 'none',
+    provider: provider === 'none' ? '' : provider,
+    domain: cfg.dyndns_domain || '',
+    token: cfg.dyndns_token || '',
+    zone_id: cfg.dyndns_zone_id || '',
+    interval: cfg.dyndns_interval || 300,
+  }
+  delete cfg.dyndns_provider
+  delete cfg.dyndns_domain
+  delete cfg.dyndns_token
+  delete cfg.dyndns_zone_id
+  delete cfg.dyndns_interval
   await store.configureGateway('cellular', cellularEnabled.value, cfg)
 }
 
@@ -978,6 +1002,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <option value="duckdns">DuckDNS</option>
               <option value="noip">No-IP</option>
               <option value="dynu">Dynu</option>
+              <option value="cloudflare">Cloudflare</option>
               <option value="custom">Custom</option>
             </select>
           </div>
@@ -989,10 +1014,14 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div v-if="cellularForm.dyndns_provider !== 'none'">
           <div>
             <label class="block text-xs text-gray-500 mb-1">Domain</label>
-            <input v-model="cellularForm.dyndns_domain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="mydevice.duckdns.org">
+            <input v-model="cellularForm.dyndns_domain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" :placeholder="cellularForm.dyndns_provider === 'cloudflare' ? 'meshsat.example.com' : 'mydevice.duckdns.org'">
+          </div>
+          <div v-if="cellularForm.dyndns_provider === 'cloudflare'" class="mt-3">
+            <label class="block text-xs text-gray-500 mb-1">Zone ID</label>
+            <input v-model="cellularForm.dyndns_zone_id" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="Cloudflare Zone ID (from domain overview)">
           </div>
           <div class="mt-3">
-            <label class="block text-xs text-gray-500 mb-1">Token / Credentials</label>
+            <label class="block text-xs text-gray-500 mb-1">{{ cellularForm.dyndns_provider === 'cloudflare' ? 'API Token' : 'Token / Credentials' }}</label>
             <input v-model="cellularForm.dyndns_token" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>

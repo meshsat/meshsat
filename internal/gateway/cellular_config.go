@@ -29,13 +29,15 @@ type CellularConfig struct {
 // DynDNSConfig holds dynamic DNS updater configuration.
 type DynDNSConfig struct {
 	Enabled   bool   `json:"enabled"`
-	Provider  string `json:"provider"`   // "duckdns", "noip", "dynu", "custom"
-	Domain    string `json:"domain"`     // e.g., "mymeshsat" for DuckDNS
-	Token     string `json:"token"`      // DuckDNS token or API key
-	Username  string `json:"username"`   // for DynDNS v2 providers
-	Password  string `json:"password"`   // for DynDNS v2 providers
+	Provider  string `json:"provider"`   // "duckdns", "noip", "dynu", "cloudflare", "custom"
+	Domain    string `json:"domain"`     // e.g., "mymeshsat" for DuckDNS, FQDN for Cloudflare
+	Token     string `json:"token"`      // DuckDNS token, Cloudflare API token, or other API key
+	Username  string `json:"username"`   // for DynDNS v2 providers (noip, dynu)
+	Password  string `json:"password"`   // for DynDNS v2 providers (noip, dynu)
 	CustomURL string `json:"custom_url"` // for "custom" provider: template with {ip} and {hostname}
 	Interval  int    `json:"interval"`   // update check interval in seconds (default 300)
+	ZoneID    string `json:"zone_id"`    // Cloudflare DNS Zone ID
+	RecordID  string `json:"record_id"`  // Cloudflare DNS Record ID (auto-resolved if empty)
 }
 
 // DefaultCellularConfig returns sensible defaults.
