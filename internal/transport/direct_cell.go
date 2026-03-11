@@ -32,7 +32,7 @@ const (
 	cellBaud           = 115200
 	cellATTimeout      = 3 * time.Second
 	cellSignalPoll     = 60 * time.Second
-	cellSMSSendTimeout = 30 * time.Second
+	cellSMSSendTimeout = 60 * time.Second
 	maxSMSLength       = 160
 )
 
@@ -372,9 +372,14 @@ func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string,
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
 	}
+	// Wait with timeout to prevent indefinite blocking if ioLoop hangs
+	timer := time.NewTimer(timeout + 10*time.Second)
+	defer timer.Stop()
 	select {
 	case r := <-ch:
 		return r.resp, r.err
+	case <-timer.C:
+		return "", fmt.Errorf("AT command %q timed out after %v", cmd, timeout+10*time.Second)
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
 	}
@@ -389,9 +394,14 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
 	}
+	// Wait with timeout to prevent indefinite blocking if ioLoop hangs
+	timer := time.NewTimer(timeout + 10*time.Second)
+	defer timer.Stop()
 	select {
 	case r := <-ch:
 		return r.resp, r.err
+	case <-timer.C:
+		return "", fmt.Errorf("raw command timed out after %v", timeout+10*time.Second)
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
 	}
@@ -734,6 +744,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 		text = text[:maxSMSLength]
 	}
 
+	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS send starting")
 	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
 		// AT+CMGS="number"
 		cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
@@ -743,13 +754,13 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 		}
 
 		// Wait for ">" prompt
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(10 * time.Second)
 		sp.SetReadTimeout(50 * time.Millisecond)
 		buf := make([]byte, 256)
 		var resp strings.Builder
 		for {
 			if time.Now().After(deadline) {
-				return "", fmt.Errorf("timeout waiting for > prompt")
+				return "", fmt.Errorf("timeout waiting for > prompt (got: %q)", resp.String())
 			}
 			n, err := sp.Read(buf)
 			if n > 0 {
@@ -762,6 +773,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 				return "", fmt.Errorf("read failed: %w", err)
 			}
 		}
+		log.Debug().Msg("cellular: got > prompt, sending text")
 
 		// Send text + Ctrl+Z
 		if _, err := sp.Write([]byte(text + "\x1A")); err != nil {
@@ -777,7 +789,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 			return "", fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
 		}
 
-		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent")
+		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
 		return "OK", nil
 	}, cellSMSSendTimeout+10*time.Second)
 
