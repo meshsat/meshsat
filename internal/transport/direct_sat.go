@@ -461,8 +461,17 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	// bytes after the "0\r\nOK\r\n" confirmation. Without this drain,
 	// SBDIX response parsing fails with "no +SBDIX in response" because
 	// the binary garbage gets prepended to the actual SBDIX response.
+	time.Sleep(500 * time.Millisecond)
+	drainPort(t.file)
+	// Second drain pass — some modems trickle bytes slowly after SBDWB
 	time.Sleep(200 * time.Millisecond)
 	drainPort(t.file)
+
+	// Verify modem is responsive with a simple AT probe before SBDIX
+	if probeResp, probeErr := sendAT(t.file, "AT", 3*time.Second); probeErr != nil || !strings.Contains(probeResp, "OK") {
+		drainPort(t.file)
+		log.Warn().Str("probe", probeResp).Msg("iridium: modem not clean after SBDWB, extra drain")
+	}
 
 	// SBDIX
 	result, err := t.sbdixLocked(ctx)

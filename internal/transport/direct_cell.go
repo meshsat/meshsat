@@ -781,6 +781,12 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 			}
 		}
 
+		// Ensure text mode is set before every CMGS.
+		// The modem may lose this after reconnect or power glitch (CMS ERROR 305).
+		if cmgfResp, cmgfErr := sendAT(sp, "AT+CMGF=1", 3*time.Second); cmgfErr != nil || strings.Contains(cmgfResp, "ERROR") {
+			return "", fmt.Errorf("failed to set text mode: %v", cmgfErr)
+		}
+
 		// AT+CMGS="number"
 		cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
 		drainPort(sp)
