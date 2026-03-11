@@ -441,6 +441,16 @@ func (w *DeliveryWorker) processBatch(ctx context.Context) {
 }
 
 func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelivery) {
+	// Safety check: re-read delivery status before processing. Between GetPendingDeliveries
+	// and now, the delivery may have been completed by another path (e.g. MailboxCheck piggyback)
+	// or the process may have restarted and RecoverStaleDeliveries re-queued it.
+	if fresh, err := w.db.GetDelivery(del.ID); err == nil {
+		if fresh.Status == "sent" || fresh.Status == "dead" || fresh.Status == "cancelled" {
+			log.Debug().Int64("id", del.ID).Str("status", fresh.Status).Msg("delivery already terminal, skipping")
+			return
+		}
+	}
+
 	// Mark as sending
 	if err := w.db.SetDeliveryStatus(del.ID, "sending", "", ""); err != nil {
 		log.Error().Err(err).Int64("id", del.ID).Msg("failed to set delivery sending")

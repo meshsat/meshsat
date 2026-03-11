@@ -779,25 +779,44 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 	}
 
 	// Rate limit: min 10s between SBDIX.
-	// Release mutex during wait so signal polls can get through (matches HAL).
+	// Stop monitor+poller during wait instead of releasing mutex — prevents
+	// other goroutines from consuming serial bytes that corrupt SBDIX parsing.
 	if elapsed := time.Since(t.lastSBDIX); elapsed < minSBDIXInterval {
 		wait := minSBDIXInterval - elapsed
 		log.Info().Dur("wait", wait).Msg("iridium SBDIX rate limit")
+		t.stopMonitor()
 		t.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			t.mu.Lock()
+			t.startMonitor()
 			return nil, ctx.Err()
 		case <-time.After(wait):
 		}
 		t.mu.Lock()
-		// Re-check state after re-acquiring (HAL pattern)
+		// Re-check state after re-acquiring
 		if !t.connected || t.file == nil {
+			t.startMonitor()
 			return nil, fmt.Errorf("disconnected during rate limit wait")
 		}
+		// Drain any bytes the modem sent during the wait (unsolicited URCs, echo)
+		drainPort(t.file)
+	} else {
+		// Even without rate-limit wait, stop monitor before SBDIX to prevent
+		// concurrent serial reads from corrupting the response
+		t.stopMonitor()
 	}
 
 	t.lastSBDIX = time.Now()
+
+	// Drain serial buffer and verify modem is responsive before SBDIX.
+	// Without this, residual bytes from prior AT commands (signal polls, etc.)
+	// get prepended to the SBDIX response, causing "no +SBDIX in response" errors.
+	drainPort(t.file)
+	if probeResp, probeErr := sendAT(t.file, "AT", 3*time.Second); probeErr != nil || !strings.Contains(probeResp, "OK") {
+		drainPort(t.file)
+		log.Warn().Str("probe", probeResp).Msg("iridium: modem not clean before SBDIX, extra drain")
+	}
 
 	timeout := iridiumSBDIXTimeout
 	if v := os.Getenv("IRIDIUM_SBDIX_TIMEOUT"); v != "" {
@@ -807,6 +826,9 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 	}
 
 	resp, err := sendAT(t.file, "AT+SBDIX", timeout)
+	// Restart monitor after SBDIX (whether success or failure)
+	t.startMonitor()
+
 	if err != nil {
 		// SBDIX timeout corrupts the serial buffer — the modem may still be
 		// processing the satellite session and will send its response later.
