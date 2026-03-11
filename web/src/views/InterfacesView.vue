@@ -127,12 +127,31 @@ async function toggleTransform(iface, transformType) {
 }
 
 // --- Access Rule Form (structured) ---
+// Portnum lookup for human-readable labels
+const portnumLabels = {
+  1: 'Text Message', 3: 'Position', 4: 'Remote Hardware',
+  32: 'Waypoint', 33: 'Audio', 34: 'Detection Sensor',
+  67: 'Telemetry', 68: 'Simulator', 70: 'Traceroute',
+  71: 'Neighbor Info', 72: 'Map Report', 73: 'Paxcounter'
+}
+// Common portnums shown as quick-pick checkboxes
+const commonPortnums = [
+  { id: 1, label: 'Text Message' },
+  { id: 3, label: 'Position' },
+  { id: 67, label: 'Telemetry' },
+  { id: 32, label: 'Waypoint' },
+  { id: 71, label: 'Neighbor Info' },
+  { id: 70, label: 'Traceroute' }
+]
+
 const ruleForm = ref({
   interface_id: '', direction: 'ingress', priority: 10, name: '', enabled: true,
   action: 'forward', forward_to: '', qos_level: 0,
+  nodes: [], portnums: [], keyword: '',
   node_group: '', sender_group: '', portnum_group: '',
   rate_per_min: 0, rate_window_sec: 60,
-  schedule_type: 'none', schedule_value: ''
+  schedule_type: 'none', schedule_value: '',
+  showAdvancedFilters: false
 })
 
 function openNewRule() {
@@ -140,9 +159,11 @@ function openNewRule() {
   ruleForm.value = {
     interface_id: '', direction: 'ingress', priority: 10, name: '', enabled: true,
     action: 'forward', forward_to: '', qos_level: 0,
+    nodes: [], portnums: [], keyword: '',
     node_group: '', sender_group: '', portnum_group: '',
     rate_per_min: 0, rate_window_sec: 60,
-    schedule_type: 'none', schedule_value: ''
+    schedule_type: 'none', schedule_value: '',
+    showAdvancedFilters: false
   }
   showCreateRule.value = true
 }
@@ -150,6 +171,12 @@ function openNewRule() {
 function openEditRule(rule) {
   editingRule.value = rule.id
   const filters = typeof rule.filters === 'string' ? JSON.parse(rule.filters || '{}') : (rule.filters || {})
+  // Parse inline nodes/portnums arrays from filters JSON
+  let nodes = []
+  let portnums = []
+  try { if (filters.nodes) nodes = typeof filters.nodes === 'string' ? JSON.parse(filters.nodes) : filters.nodes } catch {}
+  try { if (filters.portnums) portnums = (typeof filters.portnums === 'string' ? JSON.parse(filters.portnums) : filters.portnums).map(Number) } catch {}
+  const hasAdvanced = !!(filters.node_group || filters.sender_group || filters.portnum_group)
   ruleForm.value = {
     interface_id: rule.interface_id || '',
     direction: rule.direction || 'ingress',
@@ -159,13 +186,17 @@ function openEditRule(rule) {
     action: rule.action || 'forward',
     forward_to: rule.forward_to || '',
     qos_level: rule.qos_level || 0,
+    nodes,
+    portnums,
+    keyword: filters.keyword || '',
     node_group: filters.node_group || '',
     sender_group: filters.sender_group || '',
     portnum_group: filters.portnum_group || '',
     rate_per_min: rule.rate_per_min || 0,
     rate_window_sec: rule.rate_window_sec || 60,
     schedule_type: rule.schedule_type || 'none',
-    schedule_value: rule.schedule_value || ''
+    schedule_value: rule.schedule_value || '',
+    showAdvancedFilters: hasAdvanced
   }
   showCreateRule.value = true
 }
@@ -173,6 +204,11 @@ function openEditRule(rule) {
 async function saveRule() {
   if (!ruleForm.value.interface_id || !ruleForm.value.name) return
   const filters = {}
+  // Inline filters (direct node/portnum pickers)
+  if (ruleForm.value.nodes && ruleForm.value.nodes.length > 0) filters.nodes = JSON.stringify(ruleForm.value.nodes)
+  if (ruleForm.value.portnums && ruleForm.value.portnums.length > 0) filters.portnums = JSON.stringify(ruleForm.value.portnums)
+  if (ruleForm.value.keyword) filters.keyword = ruleForm.value.keyword
+  // Object group filters (advanced)
   if (ruleForm.value.node_group) filters.node_group = ruleForm.value.node_group
   if (ruleForm.value.sender_group) filters.sender_group = ruleForm.value.sender_group
   if (ruleForm.value.portnum_group) filters.portnum_group = ruleForm.value.portnum_group
@@ -359,6 +395,26 @@ const unassignedDevices = computed(() =>
   (store.devices || []).filter(d => !d.bound_to)
 )
 
+// Known mesh nodes for the node picker
+const knownNodes = computed(() => {
+  return (store.nodes || []).map(n => ({
+    id: n.user_id || `!${(n.num >>> 0).toString(16).padStart(8, '0')}`,
+    label: n.long_name || n.short_name || n.user_id || `!${(n.num >>> 0).toString(16).padStart(8, '0')}`,
+    short: n.short_name || '??'
+  }))
+})
+
+// Helper: resolve node ID to display name
+function nodeDisplayName(nodeId) {
+  const node = knownNodes.value.find(n => n.id === nodeId)
+  return node ? node.label : nodeId
+}
+
+// Helper: resolve portnum to display name
+function portnumDisplayName(pn) {
+  return portnumLabels[pn] || `Portnum ${pn}`
+}
+
 // Object groups by type (for access rule dropdowns)
 const nodeGroups = computed(() => (store.objectGroups || []).filter(g => g.type === 'node_group'))
 const senderGroups = computed(() => (store.objectGroups || []).filter(g => g.type === 'sender_group' || g.type === 'contact_group'))
@@ -383,6 +439,7 @@ onMounted(() => {
   store.fetchFailoverGroups()
   store.fetchTransportChannels()
   store.fetchSMSContacts()
+  store.fetchNodes()
   pollTimer = setInterval(() => {
     store.fetchInterfaces()
     store.fetchDevices()
@@ -572,30 +629,74 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Filters: Object Group selectors -->
+        <!-- Filters: Node picker -->
         <div class="border-t border-gray-700 pt-3 mb-3">
-          <div class="text-[10px] text-gray-500 uppercase mb-2">Filters (Object Groups)</div>
-          <div class="grid grid-cols-3 gap-3">
-            <div>
-              <label class="text-[10px] text-gray-600 mb-1 block">Node Group</label>
-              <select v-model="ruleForm.node_group" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
-                <option value="">Any node</option>
-                <option v-for="g in nodeGroups" :key="g.id" :value="g.id">{{ g.id }} ({{ g.label || g.members }})</option>
-              </select>
+          <div class="text-[10px] text-gray-500 uppercase mb-2">Filters</div>
+
+          <!-- Node filter -->
+          <div class="mb-3">
+            <label class="text-[10px] text-gray-600 mb-1 block">From nodes (empty = any node)</label>
+            <div v-if="knownNodes.length > 0" class="flex flex-wrap gap-1.5 bg-gray-900 rounded border border-gray-700 p-2 max-h-32 overflow-y-auto">
+              <label v-for="node in knownNodes" :key="node.id"
+                class="flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                :class="ruleForm.nodes.includes(node.id) ? 'bg-teal-900/50 text-teal-300 border border-teal-700' : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'">
+                <input type="checkbox" :value="node.id" v-model="ruleForm.nodes" class="rounded w-3 h-3" />
+                <span class="font-mono text-[10px] bg-gray-700/50 px-1 rounded">{{ node.short }}</span>
+                <span class="truncate max-w-[120px]">{{ node.label }}</span>
+              </label>
             </div>
-            <div>
-              <label class="text-[10px] text-gray-600 mb-1 block">Sender Group</label>
-              <select v-model="ruleForm.sender_group" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
-                <option value="">Any sender</option>
-                <option v-for="g in senderGroups" :key="g.id" :value="g.id">{{ g.id }} ({{ g.label || g.members }})</option>
-              </select>
+            <div v-else class="text-xs text-gray-600 py-1">No mesh nodes discovered yet</div>
+          </div>
+
+          <!-- Portnum filter -->
+          <div class="mb-3">
+            <label class="text-[10px] text-gray-600 mb-1 block">Message types (empty = all types)</label>
+            <div class="flex flex-wrap gap-1.5">
+              <label v-for="pn in commonPortnums" :key="pn.id"
+                class="flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                :class="ruleForm.portnums.includes(pn.id) ? 'bg-teal-900/50 text-teal-300 border border-teal-700' : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'">
+                <input type="checkbox" :value="pn.id" v-model="ruleForm.portnums" class="rounded w-3 h-3" />
+                {{ pn.label }}
+              </label>
             </div>
-            <div>
-              <label class="text-[10px] text-gray-600 mb-1 block">Portnum Group</label>
-              <select v-model="ruleForm.portnum_group" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
-                <option value="">Any portnum</option>
-                <option v-for="g in portnumGroups" :key="g.id" :value="g.id">{{ g.id }} ({{ g.label || g.members }})</option>
-              </select>
+            <div class="text-[9px] text-gray-600 mt-1">Tip: select "Text Message" only to avoid forwarding telemetry/position spam</div>
+          </div>
+
+          <!-- Keyword filter -->
+          <div class="mb-3">
+            <label class="text-[10px] text-gray-600 mb-1 block">Keyword (optional, case-insensitive)</label>
+            <input v-model="ruleForm.keyword" placeholder="Only match messages containing..."
+              class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300" />
+          </div>
+
+          <!-- Advanced: Object Groups (collapsible) -->
+          <div>
+            <button @click="ruleForm.showAdvancedFilters = !ruleForm.showAdvancedFilters"
+              class="text-[10px] text-gray-500 hover:text-gray-400 flex items-center gap-1">
+              <span>{{ ruleForm.showAdvancedFilters ? 'v' : '>' }}</span> Advanced: Object Groups
+            </button>
+            <div v-if="ruleForm.showAdvancedFilters" class="grid grid-cols-3 gap-3 mt-2">
+              <div>
+                <label class="text-[10px] text-gray-600 mb-1 block">Node Group</label>
+                <select v-model="ruleForm.node_group" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
+                  <option value="">None</option>
+                  <option v-for="g in nodeGroups" :key="g.id" :value="g.id">{{ g.id }} ({{ g.label || g.members }})</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-600 mb-1 block">Sender Group</label>
+                <select v-model="ruleForm.sender_group" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
+                  <option value="">None</option>
+                  <option v-for="g in senderGroups" :key="g.id" :value="g.id">{{ g.id }} ({{ g.label || g.members }})</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-600 mb-1 block">Portnum Group</label>
+                <select v-model="ruleForm.portnum_group" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300">
+                  <option value="">None</option>
+                  <option v-for="g in portnumGroups" :key="g.id" :value="g.id">{{ g.id }} ({{ g.label || g.members }})</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -682,9 +783,18 @@ onUnmounted(() => {
         </div>
         <!-- Show parsed filters -->
         <div class="mt-1.5 flex flex-wrap gap-1.5 text-[10px]">
-          <span v-if="parseFilters(rule).node_group" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">nodes: {{ parseFilters(rule).node_group }}</span>
-          <span v-if="parseFilters(rule).sender_group" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">senders: {{ parseFilters(rule).sender_group }}</span>
-          <span v-if="parseFilters(rule).portnum_group" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">portnums: {{ parseFilters(rule).portnum_group }}</span>
+          <template v-if="parseFilters(rule).nodes">
+            <span v-for="n in (typeof parseFilters(rule).nodes === 'string' ? JSON.parse(parseFilters(rule).nodes) : parseFilters(rule).nodes)" :key="n"
+              class="px-1.5 py-0.5 rounded bg-teal-900/30 text-teal-400">{{ nodeDisplayName(n) }}</span>
+          </template>
+          <template v-if="parseFilters(rule).portnums">
+            <span v-for="pn in (typeof parseFilters(rule).portnums === 'string' ? JSON.parse(parseFilters(rule).portnums) : parseFilters(rule).portnums)" :key="pn"
+              class="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">{{ portnumDisplayName(pn) }}</span>
+          </template>
+          <span v-if="parseFilters(rule).keyword" class="px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-400">keyword: {{ parseFilters(rule).keyword }}</span>
+          <span v-if="parseFilters(rule).node_group" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">node grp: {{ parseFilters(rule).node_group }}</span>
+          <span v-if="parseFilters(rule).sender_group" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">sender grp: {{ parseFilters(rule).sender_group }}</span>
+          <span v-if="parseFilters(rule).portnum_group" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">portnum grp: {{ parseFilters(rule).portnum_group }}</span>
           <span v-if="rule.rate_per_min > 0" class="px-1.5 py-0.5 rounded bg-amber-400/10 text-amber-400">rate: {{ rule.rate_per_min }}/min</span>
           <span v-if="rule.schedule_type && rule.schedule_type !== 'none'" class="px-1.5 py-0.5 rounded bg-blue-400/10 text-blue-400">{{ rule.schedule_type }}: {{ rule.schedule_value }}</span>
           <span v-if="rule.qos_level > 0" class="px-1.5 py-0.5 rounded bg-purple-400/10 text-purple-400">QoS {{ rule.qos_level }}</span>
