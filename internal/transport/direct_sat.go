@@ -632,6 +632,28 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	return result, err
 }
 
+// MOBufferEmpty checks AT+SBDSX and returns true if the MO buffer is empty,
+// meaning a previous SBDIX already transmitted and cleared it. This is a free
+// local check (no satellite session, no credits).
+func (t *DirectSatTransport) MOBufferEmpty(ctx context.Context) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.connected || t.file == nil {
+		return false, fmt.Errorf("not connected")
+	}
+
+	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
+	if err != nil {
+		return false, fmt.Errorf("SBDSX failed: %w", err)
+	}
+
+	status, err := parseSBDSX(resp)
+	if err != nil {
+		return false, err
+	}
+	return !status.MOFlag, nil
+}
+
 // GetSignal returns current signal (blocking AT+CSQ, up to 60s).
 func (t *DirectSatTransport) GetSignal(ctx context.Context) (*SignalInfo, error) {
 	return t.getSignalInternal(ctx, "AT+CSQ", 60*time.Second)

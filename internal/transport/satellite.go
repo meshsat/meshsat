@@ -71,5 +71,8 @@ type SatTransport interface {
 	GetSignalFast(ctx context.Context) (*SignalInfo, error)
 	GetStatus(ctx context.Context) (*SatStatus, error)
 	GetGeolocation(ctx context.Context) (*GeolocationInfo, error)
+	// MOBufferEmpty checks AT+SBDSX and returns true if the MO buffer is empty
+	// (meaning a previous SBDIX already transmitted and cleared it).
+	MOBufferEmpty(ctx context.Context) (bool, error)
 	Close() error
 }

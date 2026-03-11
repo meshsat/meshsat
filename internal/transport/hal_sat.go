@@ -212,6 +212,12 @@ func (t *HALSatTransport) GetGeolocation(ctx context.Context) (*GeolocationInfo,
 	return &info, nil
 }
 
+// MOBufferEmpty checks if the MO buffer is empty. In HAL mode, this requires
+// a HAL endpoint that doesn't exist yet — return false to let the DLQ retry normally.
+func (t *HALSatTransport) MOBufferEmpty(ctx context.Context) (bool, error) {
+	return false, fmt.Errorf("MOBufferEmpty not supported via HAL")
+}
+
 // Close stops the SSE subscription.
 func (t *HALSatTransport) Close() error {
 	if t.cancel != nil {

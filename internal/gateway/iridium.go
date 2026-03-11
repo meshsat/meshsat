@@ -503,6 +503,21 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 			continue
 		}
 
+		// Pre-check: if MO buffer is empty, the ISU already transmitted this message
+		// autonomously (e.g. after mo_status=32 the ISU retried on its own).
+		// SBDSX is free (no satellite session, no credits).
+		if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
+			if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+				log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+			}
+			g.dlqPending.Add(-1)
+			g.msgsOut.Add(1)
+			g.lastActive.Store(time.Now().Unix())
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+				Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
+			continue
+		}
+
 		result, err := g.sat.Send(ctx, dl.Payload)
 		// Treat successful HTTP but failed SBD session as a send error
 		moStatus := -1
@@ -680,6 +695,21 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 					Int("max_retries", maxRetries).Int("priority", dl.Priority).Str("text", dl.TextPreview).
 					Msg("iridium: DLQ entry expired — max retries exhausted")
 			}
+			continue
+		}
+
+		// Pre-check: if MO buffer is empty, the ISU already transmitted this message
+		// autonomously (e.g. after mo_status=32 the ISU retried on its own).
+		if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
+			if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+				log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+			}
+			g.dlqPending.Add(-1)
+			g.msgsOut.Add(1)
+			g.lastActive.Store(time.Now().Unix())
+			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+				Str("mode", g.getTimingParams().ModeName).
+				Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
 			continue
 		}
 
