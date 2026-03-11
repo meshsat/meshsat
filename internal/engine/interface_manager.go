@@ -99,6 +99,16 @@ func NewInterfaceManager(db *database.DB) *InterfaceManager {
 	}
 }
 
+// channelNeedsDevice returns true if the channel type requires a USB serial device binding.
+func channelNeedsDevice(channelType string) bool {
+	switch channelType {
+	case "mqtt", "webhook":
+		return false
+	default:
+		return true // mesh, iridium, cellular, astrocast, zigbee all need hardware
+	}
+}
+
 // SetStateChangeCallback registers a callback that fires when an interface changes state.
 func (m *InterfaceManager) SetStateChangeCallback(fn func(ifaceID, channelType string, newState InterfaceState)) {
 	m.onStateChange = fn
@@ -124,7 +134,11 @@ func (m *InterfaceManager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	for _, iface := range ifaces {
 		rt := &interfaceRuntime{iface: iface}
-		if iface.DeviceID == "" {
+		if !channelNeedsDevice(iface.ChannelType) && iface.Enabled {
+			// Network-based interfaces (mqtt, webhook) — online when enabled
+			rt.state = StateOnline
+			rt.lastActivity = time.Now()
+		} else if iface.DeviceID == "" {
 			rt.state = StateUnbound
 		} else {
 			rt.state = StateOffline
@@ -407,12 +421,13 @@ func (m *InterfaceManager) scanDevices() {
 		}
 
 		if found {
-			// Device present
-			if rt.state == StateOffline {
-				rt.state = StateBinding
+			// Device present — promote to online (direct mode transports manage their own connections)
+			if rt.state == StateOffline || rt.state == StateBinding {
+				rt.state = StateOnline
 				rt.iface.DevicePort = port
-				log.Info().Str("id", rt.iface.ID).Str("port", port).Msg("ifacemgr: device detected, binding")
-				changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateBinding})
+				rt.lastActivity = time.Now()
+				log.Info().Str("id", rt.iface.ID).Str("port", port).Msg("ifacemgr: device detected, online")
+				changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOnline})
 			}
 		} else {
 			// Device gone
@@ -422,6 +437,44 @@ func (m *InterfaceManager) scanDevices() {
 				rt.iface.DevicePort = ""
 				log.Warn().Str("id", rt.iface.ID).Str("old_state", oldState.String()).Msg("ifacemgr: device disconnected")
 				changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOffline})
+			}
+		}
+	}
+
+	// Auto-bind: if an unbound interface's channel_type matches exactly one
+	// unassigned detected device, bind them automatically.
+	// Build set of already-bound device IDs
+	boundDeviceIDs := make(map[string]bool)
+	for _, rt := range m.states {
+		if rt.iface.DeviceID != "" {
+			boundDeviceIDs[rt.iface.DeviceID] = true
+		}
+	}
+
+	for _, rt := range m.states {
+		if rt.iface.DeviceID != "" || !rt.iface.Enabled {
+			continue // already bound or disabled
+		}
+		// Find unassigned devices matching this channel type
+		var candidates []DetectedDevice
+		for _, d := range detected {
+			if d.DeviceType == rt.iface.ChannelType && !boundDeviceIDs[d.DeviceID] {
+				candidates = append(candidates, d)
+			}
+		}
+		// Auto-bind only when exactly one candidate (unambiguous)
+		if len(candidates) == 1 {
+			dev := candidates[0]
+			rt.iface.DeviceID = dev.DeviceID
+			rt.iface.DevicePort = dev.Port
+			rt.state = StateOnline
+			rt.lastActivity = time.Now()
+			boundDeviceIDs[dev.DeviceID] = true
+			log.Info().Str("id", rt.iface.ID).Str("device", dev.DeviceID).Str("port", dev.Port).Msg("ifacemgr: auto-bound device, online")
+			changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOnline})
+			// Persist binding to DB (best-effort, don't block scan)
+			if m.db != nil {
+				_ = m.db.UpdateInterface(&rt.iface)
 			}
 		}
 	}
