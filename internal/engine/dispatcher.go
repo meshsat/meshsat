@@ -79,6 +79,14 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Recover stale "sending" deliveries from previous crash/restart.
+	// These were mid-delivery when the process died and are now stuck.
+	if n, err := d.db.RecoverStaleDeliveries(); err != nil {
+		log.Error().Err(err).Msg("dispatcher: failed to recover stale deliveries")
+	} else if n > 0 {
+		log.Info().Int64("recovered", n).Msg("dispatcher: recovered stale 'sending' deliveries to 'retry'")
+	}
+
 	// Legacy workers: one per channel registry entry
 	for _, desc := range d.registry.List() {
 		if !desc.CanSend {
@@ -150,6 +158,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			}
 		}
 
+		workerCtx, workerCancel := context.WithCancel(ctx)
 		w := &DeliveryWorker{
 			channelID:  iface.ID,
 			desc:       desc,
@@ -159,9 +168,10 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			emit:       d.emit,
 			signing:    d.signing,
 			transforms: d.transforms,
+			cancel:     workerCancel,
 		}
 		d.workers[iface.ID] = w
-		go w.Run(ctx)
+		go w.Run(workerCtx)
 		started++
 		log.Info().Str("interface", iface.ID).Str("type", iface.ChannelType).Msg("interface delivery worker started")
 	}
@@ -189,6 +199,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		}
 	}
 
+	workerCtx, workerCancel := context.WithCancel(ctx)
 	w := &DeliveryWorker{
 		channelID:  ifaceID,
 		desc:       desc,
@@ -198,6 +209,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		emit:       d.emit,
 		signing:    d.signing,
 		transforms: d.transforms,
+		cancel:     workerCancel,
 	}
 	d.workers[ifaceID] = w
 
@@ -208,7 +220,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		log.Info().Str("interface", ifaceID).Int64("count", n).Msg("unheld deliveries on interface online")
 	}
 
-	go w.Run(ctx)
+	go w.Run(workerCtx)
 	log.Info().Str("interface", ifaceID).Str("type", channelType).Msg("delivery worker started (state change)")
 }
 
@@ -218,11 +230,14 @@ func (d *Dispatcher) StopWorker(ifaceID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if _, exists := d.workers[ifaceID]; !exists {
+	w, exists := d.workers[ifaceID]
+	if !exists {
 		return
 	}
-	// Note: the worker will stop on its next tick when ctx is cancelled.
-	// We remove it from the map so it won't be found by new dispatches.
+	// Cancel the worker's context so its goroutine exits promptly
+	if w.cancel != nil {
+		w.cancel()
+	}
 	delete(d.workers, ifaceID)
 
 	// Hold pending deliveries so they aren't lost
@@ -389,6 +404,7 @@ type DeliveryWorker struct {
 	emit       func(transport.MeshEvent)
 	signing    *SigningService
 	transforms *TransformPipeline
+	cancel     context.CancelFunc // per-worker cancellation
 }
 
 // Run polls the delivery queue and processes pending deliveries.
@@ -482,10 +498,21 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		return fmt.Errorf("no gateway provider")
 	}
 
+	// Reconstruct MeshMessage from payload (full JSON) or fall back to text-only
 	msg := &transport.MeshMessage{
 		PortNum:     1,
 		PortNumName: "TEXT_MESSAGE_APP",
 		DecodedText: del.TextPreview,
+	}
+	if len(del.Payload) > 0 {
+		var fullMsg transport.MeshMessage
+		if err := json.Unmarshal(del.Payload, &fullMsg); err == nil {
+			msg = &fullMsg
+			// Ensure text is current (may have been transformed)
+			if del.TextPreview != "" {
+				msg.DecodedText = del.TextPreview
+			}
+		}
 	}
 
 	// Resolve per-rule SMS destinations from forward_options

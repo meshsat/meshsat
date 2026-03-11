@@ -241,6 +241,17 @@ func (db *DB) RetryDelivery(id int64) error {
 	return nil
 }
 
+// RecoverStaleDeliveries resets deliveries stuck in 'sending' status back to 'retry'.
+// This happens when the process crashes or restarts mid-delivery.
+func (db *DB) RecoverStaleDeliveries() (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'retry', last_error = 'recovered after restart', next_retry = datetime('now'), updated_at = datetime('now')
+		WHERE status = 'sending'`)
+	if err != nil {
+		return 0, fmt.Errorf("recover stale deliveries: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // ExpireDeliveries marks all expired queued/retry/held deliveries as 'expired'.
 func (db *DB) ExpireDeliveries() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')

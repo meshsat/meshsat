@@ -252,7 +252,10 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 	}
 
 	if p.dispatcher != nil {
-		if n := p.dispatcher.DispatchAccess("mesh_0", routeMsg, nil); n > 0 {
+		// Pass the full message JSON as payload so delivery workers have
+		// access to all metadata (From, ID, Channel, RxTime, etc.).
+		payload, _ := json.Marshal(msg)
+		if n := p.dispatcher.DispatchAccess("mesh_0", routeMsg, payload); n > 0 {
 			log.Info().Int("deliveries", n).Uint32("packet_id", msg.ID).Msg("dispatched via access rules")
 		}
 	}

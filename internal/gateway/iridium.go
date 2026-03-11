@@ -153,16 +153,77 @@ func (g *IridiumGateway) Stop() error {
 	return nil
 }
 
-// Forward enqueues a message for satellite transmission.
-// Filtering is handled by the rules engine before this is called.
+// Forward sends a message via satellite SBD synchronously.
+// Returns the actual send result so the delivery ledger reflects reality.
 func (g *IridiumGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
-	select {
-	case g.outCh <- msg:
-		return nil
-	default:
-		g.errors.Add(1)
-		return fmt.Errorf("iridium outbound queue full")
+	return g.sendSBDSync(ctx, msg)
+}
+
+// sendSBDSync sends a message via SBD and returns the actual result.
+// This is the synchronous path used by the delivery worker (via Forward).
+func (g *IridiumGateway) sendSBDSync(ctx context.Context, msg *transport.MeshMessage) error {
+	usePlaintext := canSendPlaintext(msg)
+
+	var data []byte
+	var cost int
+	var result *transport.SBDResult
+	var err error
+
+	if usePlaintext {
+		text := msg.DecodedText
+		cost = creditCost(len(text))
+		if !g.budgetAllows(cost, 1) {
+			return fmt.Errorf("iridium: budget exceeded (cost=%d)", cost)
+		}
+
+		result, err = g.sat.SendText(ctx, text)
+		data = []byte(text)
+	} else {
+		data, err = EncodeCompact(msg, g.config.IncludePosition)
+		if err != nil {
+			g.errors.Add(1)
+			return fmt.Errorf("iridium: encode failed: %w", err)
+		}
+
+		cost = creditCost(len(data))
+		if !g.budgetAllows(cost, 1) {
+			return fmt.Errorf("iridium: budget exceeded (cost=%d)", cost)
+		}
+
+		result, err = g.sat.Send(ctx, data)
 	}
+
+	if err != nil {
+		g.errors.Add(1)
+		g.recordGSSRegistration(false, 0)
+		return fmt.Errorf("iridium: SBD send failed: %w", err)
+	}
+
+	g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
+
+	if !result.MOSuccess() {
+		g.errors.Add(1)
+		return fmt.Errorf("iridium: SBD session failed (mo_status=%d)", result.MOStatus)
+	}
+
+	g.msgsOut.Add(1)
+	g.lastActive.Store(time.Now().Unix())
+	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD sent")
+	g.emit("forward", fmt.Sprintf("Iridium SBD sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
+
+	if g.db != nil {
+		g.db.InsertCreditUsage(nil, cost, nil)
+		g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
+	}
+
+	// MT piggyback
+	if result.MTReceived || result.MTStatus == 1 || result.MTQueued > 0 {
+		log.Info().Bool("mt_received", result.MTReceived).Int("mt_status", result.MTStatus).
+			Int("mt_queued", result.MTQueued).Msg("iridium: MT available, piggybacking receive")
+		go g.handleRingAlert(ctx)
+	}
+
+	return nil
 }
 
 // Receive returns the inbound message channel.
@@ -194,9 +255,7 @@ func (g *IridiumGateway) Type() string {
 	return "iridium"
 }
 
-// sendWorker dequeues messages and sends them via SBD (slow, 10-60s per message).
-// Uses plaintext (AT+SBDWT) for short text messages so they're human-readable on
-// the RockBLOCK portal, and compact binary (AT+SBDWB) for everything else.
+// sendWorker dequeues messages from outCh (legacy/non-dispatcher callers).
 func (g *IridiumGateway) sendWorker(ctx context.Context) {
 	defer g.wg.Done()
 
@@ -205,79 +264,8 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.outCh:
-			// Decide encoding: plaintext for short ASCII text messages, binary for the rest
-			usePlaintext := canSendPlaintext(msg)
-
-			var data []byte
-			var cost int
-			var result *transport.SBDResult
-			var err error
-
-			if usePlaintext {
-				text := msg.DecodedText
-				cost = creditCost(len(text))
-				if !g.budgetAllows(cost, 1) {
-					log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
-					g.enqueueDeadLetter(msg.ID, []byte(text), "budget exceeded", text)
-					continue
-				}
-
-				result, err = g.sat.SendText(ctx, text)
-				data = []byte(text) // for DLQ/record
-			} else {
-				data, err = EncodeCompact(msg, g.config.IncludePosition)
-				if err != nil {
-					log.Error().Err(err).Msg("iridium: encode failed")
-					g.errors.Add(1)
-					continue
-				}
-
-				cost = creditCost(len(data))
-				if !g.budgetAllows(cost, 1) {
-					log.Warn().Int("cost", cost).Uint32("packet_id", msg.ID).Msg("iridium: budget exceeded, queuing to DLQ")
-					g.enqueueDeadLetter(msg.ID, data, "budget exceeded", msg.DecodedText)
-					continue
-				}
-
-				result, err = g.sat.Send(ctx, data)
-			}
-
-			if err != nil {
-				log.Error().Err(err).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD send failed, queuing to DLQ")
-				g.errors.Add(1)
-				g.recordGSSRegistration(false, 0)
-				g.enqueueDeadLetter(msg.ID, data, err.Error(), msg.DecodedText)
-				continue
-			}
-
-			g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
-
-			// Check if SBD session actually succeeded (mo_status 0-4).
-			// HTTP request can succeed but SBD transfer fail (e.g. mo_status=32 = no network).
-			if !result.MOSuccess() {
-				log.Warn().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).
-					Bool("plaintext", usePlaintext).Msg("iridium: SBD session failed, queuing to DLQ")
-				g.errors.Add(1)
-				g.enqueueDeadLetter(msg.ID, data, fmt.Sprintf("mo_status=%d", result.MOStatus), msg.DecodedText)
-				continue
-			}
-
-			g.msgsOut.Add(1)
-			g.lastActive.Store(time.Now().Unix())
-			log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD sent")
-			g.emit("forward", fmt.Sprintf("Iridium SBD sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
-
-			// Record credit usage and successful send for queue visibility
-			if g.db != nil {
-				g.db.InsertCreditUsage(nil, cost, nil)
-				g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
-			}
-
-			// MT piggyback: if this SBDIX session received an MT or there are more queued, read them
-			if result.MTReceived || result.MTStatus == 1 || result.MTQueued > 0 {
-				log.Info().Bool("mt_received", result.MTReceived).Int("mt_status", result.MTStatus).
-					Int("mt_queued", result.MTQueued).Msg("iridium: MT available, piggybacking receive")
-				go g.handleRingAlert(ctx)
+			if err := g.sendSBDSync(ctx, msg); err != nil {
+				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: sendWorker SBD failed")
 			}
 		}
 	}
