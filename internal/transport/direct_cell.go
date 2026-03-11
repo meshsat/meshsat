@@ -371,6 +371,9 @@ func (t *DirectCellTransport) startLoops() {
 // execAT sends an AT command via the I/O loop and waits for the result.
 // This is the only way to execute AT commands after init.
 func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string, error) {
+	if t.cmdCh == nil {
+		return "", fmt.Errorf("transport not ready (ioLoop not started)")
+	}
 	ch := make(chan atResult, 1)
 	select {
 	case t.cmdCh <- atCommand{cmd: cmd, timeout: timeout, resp: ch}:
@@ -393,6 +396,9 @@ func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string,
 // execRawFn sends a raw function to execute on the serial port via the I/O loop.
 // Used for multi-step operations like SMS send that need direct port access.
 func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), timeout time.Duration) (string, error) {
+	if t.cmdCh == nil {
+		return "", fmt.Errorf("transport not ready (ioLoop not started)")
+	}
 	ch := make(chan atResult, 1)
 	select {
 	case t.cmdCh <- atCommand{fn: fn, timeout: timeout, resp: ch}:
