@@ -105,7 +105,12 @@ const iridiumStatus = computed(() => {
   if (iridiumGw.value.connected) return { dot: 'bg-tactical-iridium', text: 'Connected' }
   return { dot: 'bg-red-400', text: 'Disconnected' }
 })
-const dlqPending = computed(() => (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length)
+const dlqPending = computed(() => {
+  // Count pending from deliveries (unified) first, fall back to DLQ
+  const dels = store.deliveries || []
+  if (dels.length) return dels.filter(d => d.status === 'pending' || d.status === 'held').length
+  return (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length
+})
 const lastSatTx = computed(() => {
   const sent = (store.dlq || []).filter(d => d.status === 'sent' && d.direction === 'outbound')
   if (sent.length) {
@@ -454,58 +459,82 @@ function dlqStatusColor(status) {
 }
 
 // ── Unified message queue (all sources, sorted by date newest first) ──
+// Channel label/color mapping for deliveries
+function deliveryLabel(channel) {
+  if (channel?.startsWith('iridium')) return { label: 'SBD', color: 'text-tactical-iridium' }
+  if (channel?.startsWith('cellular')) return { label: 'SMS', color: 'text-sky-400' }
+  if (channel?.startsWith('mqtt')) return { label: 'MQTT', color: 'text-purple-400' }
+  if (channel?.startsWith('astrocast')) return { label: 'ASTR', color: 'text-orange-400' }
+  if (channel?.startsWith('webhook')) return { label: 'HOOK', color: 'text-pink-400' }
+  if (channel?.startsWith('mesh')) return { label: 'MESH', color: 'text-emerald-400' }
+  if (channel?.startsWith('zigbee')) return { label: 'ZB', color: 'text-yellow-400' }
+  return { label: channel || '?', color: 'text-gray-500' }
+}
+
+function deliveryStatusColor(status) {
+  if (status === 'sent' || status === 'delivered') return 'bg-emerald-400/10 text-emerald-400'
+  if (status === 'pending' || status === 'held') return 'bg-amber-400/10 text-amber-400'
+  if (status === 'failed' || status === 'dead') return 'bg-red-400/10 text-red-400'
+  return 'bg-gray-600/20 text-gray-400'
+}
+
 const unifiedQueue = computed(() => {
   const items = []
+  const dels = store.deliveries || []
 
-  // SBD queue items
-  for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
-    items.push({
-      _type: 'sbd',
-      _key: 'sbd-' + d.id,
-      _time: d.updated_at || d.created_at,
-      _dir: d.direction === 'inbound' ? 'IN' : 'OUT',
-      _dirClass: d.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium',
-      _label: d.direction === 'inbound' ? 'SBD\u2193' : 'SBD\u2191',
-      _status: d.status === 'sent' ? 'delivered' : d.status === 'received' ? 'received' : d.status || 'queued',
-      _statusClass: dlqStatusColor(d.status),
-      _text: d.text_preview || '(binary)',
-      _opacity: d.status === 'sent' || d.status === 'received' ? 'opacity-60' : '',
-      _raw: d
-    })
-  }
+  // Primary source: unified delivery ledger (has all channels)
+  if (dels.length) {
+    for (const d of dels) {
+      const ch = deliveryLabel(d.channel)
+      const isInbound = d.visited && !d.visited.includes(d.channel)
+      items.push({
+        _type: d.channel?.startsWith('iridium') ? 'sbd' : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
+        _key: 'del-' + d.id,
+        _time: d.updated_at || d.created_at,
+        _dir: isInbound ? 'IN' : 'OUT',
+        _dirClass: ch.color,
+        _label: ch.label + (isInbound ? '\u2193' : '\u2191'),
+        _status: d.status || 'queued',
+        _statusClass: deliveryStatusColor(d.status),
+        _text: d.text_preview || '(binary)',
+        _opacity: d.status === 'sent' ? 'opacity-60' : '',
+        _raw: d
+      })
+    }
+  } else {
+    // Fallback: SBD DLQ items (legacy path if deliveries not available)
+    for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
+      items.push({
+        _type: 'sbd',
+        _key: 'sbd-' + d.id,
+        _time: d.updated_at || d.created_at,
+        _dir: d.direction === 'inbound' ? 'IN' : 'OUT',
+        _dirClass: d.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium',
+        _label: d.direction === 'inbound' ? 'SBD\u2193' : 'SBD\u2191',
+        _status: d.status === 'sent' ? 'delivered' : d.status === 'received' ? 'received' : d.status || 'queued',
+        _statusClass: dlqStatusColor(d.status),
+        _text: d.text_preview || '(binary)',
+        _opacity: d.status === 'sent' || d.status === 'received' ? 'opacity-60' : '',
+        _raw: d
+      })
+    }
 
-  // SMS messages
-  for (const sms of (store.smsMessages || [])) {
-    items.push({
-      _type: 'sms',
-      _key: 'sms-' + sms.id,
-      _time: sms.created_at,
-      _dir: sms.direction === 'tx' ? 'OUT' : 'IN',
-      _dirClass: sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400',
-      _label: sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193',
-      _status: sms.status || 'queued',
-      _statusClass: sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400',
-      _text: (sms.phone ? sms.phone + ': ' : '') + (sms.text || '(empty)'),
-      _opacity: '',
-      _raw: sms
-    })
-  }
-
-  // Satellite transport messages
-  for (const msg of (store.messages || []).filter(m => m.transport === 'iridium')) {
-    items.push({
-      _type: 'sat',
-      _key: 'sat-' + msg.id,
-      _time: msg.created_at || msg.timestamp,
-      _dir: '',
-      _dirClass: 'text-gray-500',
-      _label: 'SAT',
-      _status: '',
-      _statusClass: '',
-      _text: msg.text || msg.payload || '(data)',
-      _opacity: 'opacity-60',
-      _raw: msg
-    })
+    // Fallback: SMS messages
+    for (const sms of (store.smsMessages || [])) {
+      items.push({
+        _type: 'sms',
+        _key: 'sms-' + sms.id,
+        _time: sms.created_at,
+        _dir: sms.direction === 'tx' ? 'OUT' : 'IN',
+        _dirClass: sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400',
+        _label: sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193',
+        _status: sms.status || 'queued',
+        _statusClass: sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400',
+        _text: (sms.phone ? sms.phone + ': ' : '') + (sms.text || '(empty)'),
+        _opacity: '',
+        _raw: sms
+      })
+    }
   }
 
   // Sort by time, newest first
@@ -891,6 +920,7 @@ async function fetchAll() {
     store.fetchCellularSignal(),
     store.fetchCellularStatus(),
     store.fetchCellularSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
+    store.fetchDeliveries({ limit: 30 }),
     store.fetchSMSMessages({ limit: 10 }),
     store.fetchCellBroadcasts({ limit: 10 }),
     store.fetchCellInfo(),
@@ -919,6 +949,7 @@ onMounted(() => {
     store.fetchIridiumSignalFast()
     store.fetchNodes()
     store.fetchDLQ()
+    store.fetchDeliveries({ limit: 30 })
     store.fetchSchedulerStatus()
     store.fetchLocationSources()
     store.fetchCellularSignal().then(trackCellularSignal)
