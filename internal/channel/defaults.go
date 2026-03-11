@@ -34,7 +34,7 @@ func RegisterDefaults(r *Registry) {
 			Enabled:     true,
 			InitialWait: 180 * time.Second,
 			MaxWait:     30 * time.Minute,
-			MaxRetries:  0, // infinite
+			MaxRetries:  10, // sane default — prevents runaway retries burning Iridium credits
 			BackoffFunc: "isu",
 		},
 		Options: []OptionField{

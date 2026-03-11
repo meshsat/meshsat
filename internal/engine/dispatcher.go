@@ -80,6 +80,14 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Cancel runaway deliveries with excessive retries (safety net for past bugs).
+	// Deliveries with max_retries=0 (infinite) are capped at 15 retries.
+	if n, err := d.db.CancelRunawayDeliveries(15); err != nil {
+		log.Error().Err(err).Msg("dispatcher: failed to cancel runaway deliveries")
+	} else if n > 0 {
+		log.Warn().Int64("cancelled", n).Msg("dispatcher: cancelled runaway deliveries exceeding retry limits")
+	}
+
 	// Recover stale "sending" deliveries from previous crash/restart.
 	// These were mid-delivery when the process died and are now stuck.
 	if n, err := d.db.RecoverStaleDeliveries(); err != nil {

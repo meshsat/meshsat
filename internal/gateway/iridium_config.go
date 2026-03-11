@@ -59,7 +59,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		PollInterval:     1800, // 30 minutes — safety net for missed ring alerts (SBDSX pre-check avoids credit waste)
 		MaxTextLength:    320,
 		IncludePosition:  false, // GPS position not populated — omit to save 10 bytes per message
-		DLQMaxRetries:    0,     // 0 = infinite retries (default)
+		DLQMaxRetries:    10,    // legacy global max retries (default 10)
 		DLQRetryBase:     120,
 		MinSignalBars:    1,
 		DailyBudget:      0, // unlimited
@@ -73,9 +73,9 @@ func DefaultIridiumConfig() IridiumConfig {
 		ActivePollSec:    20,
 		MinElevDeg:       5,
 		ExpiryPolicy: ExpiryPolicy{
-			CriticalMaxRetries: 0, // never expire
-			NormalMaxRetries:   0, // never expire
-			LowMaxRetries:      0, // never expire
+			CriticalMaxRetries: 20, // critical messages get more attempts
+			NormalMaxRetries:   10, // standard limit
+			LowMaxRetries:      5,  // low-priority expires faster
 		},
 	}
 }

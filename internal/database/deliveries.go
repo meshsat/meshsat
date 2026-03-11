@@ -241,6 +241,23 @@ func (db *DB) RetryDelivery(id int64) error {
 	return nil
 }
 
+// CancelRunawayDeliveries kills queued/retry deliveries whose retry count exceeds
+// their max_retries setting. This cleans up deliveries that accumulated excessive
+// retries due to bugs (e.g. SBDIX parse failures causing false retries).
+// Deliveries with max_retries=0 (infinite) are capped at the safetyLimit.
+func (db *DB) CancelRunawayDeliveries(safetyLimit int) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries
+		SET status = 'dead', last_error = 'cancelled: exceeded retry limit on startup cleanup', updated_at = datetime('now')
+		WHERE status IN ('queued', 'retry')
+		  AND ((max_retries > 0 AND retries >= max_retries)
+		    OR (max_retries = 0 AND retries >= ?))`,
+		safetyLimit)
+	if err != nil {
+		return 0, fmt.Errorf("cancel runaway deliveries: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // RecoverStaleDeliveries resets deliveries stuck in 'sending' status back to 'retry'.
 // This happens when the process crashes or restarts mid-delivery.
 func (db *DB) RecoverStaleDeliveries() (int64, error) {

@@ -585,6 +585,14 @@ var migrations = []string{
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_sim_cards_iccid ON sim_cards(iccid);`,
+
+	// v22: Set sane max_retries defaults on existing Iridium deliveries.
+	// Infinite retries (max_retries=0) on paid satellite channels caused runaway
+	// credit waste when SBDIX parsing bugs triggered false retry loops (CUBEOS-72).
+	`UPDATE message_deliveries SET max_retries = 10
+		WHERE channel = 'iridium' AND max_retries = 0 AND status IN ('queued', 'retry', 'held');
+	 UPDATE dead_letters SET max_retries = 10
+		WHERE max_retries = 0 AND status = 'pending';`,
 }
 
 func (db *DB) migrate() error {
