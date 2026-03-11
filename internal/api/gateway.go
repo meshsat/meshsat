@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -21,8 +23,21 @@ func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
 		return
 	}
-	sig, err := s.gwManager.GetIridiumSignalFast(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	sig, err := s.gwManager.GetIridiumSignalFast(ctx)
 	if err != nil {
+		// On timeout, fall back to latest DB reading
+		if s.db != nil {
+			if latest, dbErr := s.db.GetLatestSignal("iridium"); dbErr == nil && latest != nil {
+				writeJSON(w, http.StatusOK, map[string]interface{}{
+					"bars":       int(latest.Value),
+					"assessment": signalAssessment(int(latest.Value)),
+					"cached":     true,
+				})
+				return
+			}
+		}
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}

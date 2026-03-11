@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -13,9 +14,11 @@ import (
 )
 
 func (s *Server) handleGetCellularSignal(w http.ResponseWriter, r *http.Request) {
-	// Try live modem first
+	// Try live modem with a short timeout — don't block if serial is busy
 	if s.cellTransport != nil {
-		signal, err := s.cellTransport.GetSignal(r.Context())
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		signal, err := s.cellTransport.GetSignal(ctx)
 		if err == nil {
 			writeJSON(w, http.StatusOK, signal)
 			return
@@ -273,9 +276,11 @@ func (s *Server) handleSubmitCellularPIN(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleGetCellInfo(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{}
 
-	// Live cell info from modem
+	// Live cell info from modem with short timeout
 	if s.cellTransport != nil {
-		info, err := s.cellTransport.GetCellInfo(r.Context())
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		info, err := s.cellTransport.GetCellInfo(ctx)
 		if err == nil && info != nil {
 			resp["live"] = info
 		}
