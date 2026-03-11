@@ -180,6 +180,14 @@ func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
 			sender = sms.Sender
 		}
 	}
+
+	// Dedup: skip if identical SMS (same sender+text) was inserted in the last 60 seconds.
+	// Modems can re-send +CMTI if AT+CMGD fails or the URC is retransmitted.
+	if dup, _ := r.db.IsDuplicateSMS(sender, ev.Message, 60); dup {
+		log.Info().Str("sender", sender).Msg("cellular: duplicate SMS suppressed")
+		return
+	}
+
 	if _, err := r.db.InsertSMSMessage("rx", sender, ev.Message, "delivered", time.Now().Unix()); err != nil {
 		log.Warn().Err(err).Msg("cellular event recorder: SMS insert failed")
 	}

@@ -1421,6 +1421,17 @@ func (db *DB) InsertSMSMessage(direction, phone, text, status string, timestamp 
 	return result.LastInsertId()
 }
 
+// IsDuplicateSMS checks if an identical SMS (same direction=rx, phone, text) was
+// inserted within the last windowSec seconds. Used to suppress modem re-sends.
+func (db *DB) IsDuplicateSMS(phone, text string, windowSec int) (bool, error) {
+	cutoff := time.Now().Unix() - int64(windowSec)
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sms_messages WHERE direction='rx' AND phone=? AND text=? AND timestamp>?`,
+		phone, text, cutoff).Scan(&count)
+	return count > 0, err
+}
+
 // GetSMSMessages returns recent SMS messages.
 func (db *DB) GetSMSMessages(limit, offset int) ([]SMSMessageRecord, error) {
 	if limit <= 0 || limit > 500 {

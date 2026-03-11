@@ -481,28 +481,31 @@ function deliveryStatusColor(status) {
 const unifiedQueue = computed(() => {
   const items = []
   const dels = store.deliveries || []
+  const seenSmsIds = new Set()
 
   // Primary source: unified delivery ledger (has all channels)
-  if (dels.length) {
-    for (const d of dels) {
-      const ch = deliveryLabel(d.channel)
-      const isInbound = d.visited && !d.visited.includes(d.channel)
-      items.push({
-        _type: d.channel?.startsWith('iridium') ? 'sbd' : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
-        _key: 'del-' + d.id,
-        _time: d.updated_at || d.created_at,
-        _dir: isInbound ? 'IN' : 'OUT',
-        _dirClass: ch.color,
-        _label: ch.label + (isInbound ? '\u2193' : '\u2191'),
-        _status: d.status || 'queued',
-        _statusClass: deliveryStatusColor(d.status),
-        _text: d.text_preview || '(binary)',
-        _opacity: d.status === 'sent' ? 'opacity-60' : '',
-        _raw: d
-      })
-    }
-  } else {
-    // Fallback: SBD DLQ items (legacy path if deliveries not available)
+  for (const d of dels) {
+    const ch = deliveryLabel(d.channel)
+    const isInbound = d.visited && !d.visited.includes(d.channel)
+    items.push({
+      _type: d.channel?.startsWith('iridium') ? 'sbd' : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
+      _key: 'del-' + d.id,
+      _time: d.updated_at || d.created_at,
+      _dir: isInbound ? 'IN' : 'OUT',
+      _dirClass: ch.color,
+      _label: ch.label + (isInbound ? '\u2193' : '\u2191'),
+      _status: d.status || 'queued',
+      _statusClass: deliveryStatusColor(d.status),
+      _text: d.text_preview || '(binary)',
+      _opacity: d.status === 'sent' ? 'opacity-60' : '',
+      _raw: d
+    })
+    // Track cellular deliveries so we don't double-count with smsMessages
+    if (d.channel?.startsWith('cellular') && d.msg_ref) seenSmsIds.add(d.msg_ref)
+  }
+
+  // Fallback: SBD DLQ items (legacy path if deliveries not available)
+  if (!dels.length) {
     for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
       items.push({
         _type: 'sbd',
@@ -518,23 +521,24 @@ const unifiedQueue = computed(() => {
         _raw: d
       })
     }
+  }
 
-    // Fallback: SMS messages
-    for (const sms of (store.smsMessages || [])) {
-      items.push({
-        _type: 'sms',
-        _key: 'sms-' + sms.id,
-        _time: sms.created_at,
-        _dir: sms.direction === 'tx' ? 'OUT' : 'IN',
-        _dirClass: sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400',
-        _label: sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193',
-        _status: sms.status || 'queued',
-        _statusClass: sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400',
-        _text: (sms.phone ? sms.phone + ': ' : '') + (sms.text || '(empty)'),
-        _opacity: '',
-        _raw: sms
-      })
-    }
+  // Always include SMS messages (not just as fallback) — skip those already in deliveries
+  for (const sms of (store.smsMessages || [])) {
+    if (seenSmsIds.has(String(sms.id))) continue
+    items.push({
+      _type: 'sms',
+      _key: 'sms-' + sms.id,
+      _time: sms.created_at,
+      _dir: sms.direction === 'tx' ? 'OUT' : 'IN',
+      _dirClass: sms.direction === 'tx' ? 'text-sky-400' : 'text-emerald-400',
+      _label: sms.direction === 'tx' ? 'SMS\u2191' : 'SMS\u2193',
+      _status: sms.status || 'queued',
+      _statusClass: sms.status === 'sent' || sms.status === 'delivered' ? 'bg-emerald-400/10 text-emerald-400' : sms.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400',
+      _text: (sms.phone ? sms.phone + ': ' : '') + (sms.text || '(empty)'),
+      _opacity: '',
+      _raw: sms
+    })
   }
 
   // Sort by time, newest first

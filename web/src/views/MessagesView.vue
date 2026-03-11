@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
 import { transportBadge, portnumLabel, shortId, formatRelativeTime, formatTimestamp } from '@/utils/format'
@@ -8,6 +8,113 @@ const store = useMeshsatStore()
 
 // Tab: 'mesh', 'sbd', 'sms', or 'webhooks'
 const activeTab = ref('mesh')
+
+// ── SMS Conversation State ──
+const smsActivePhone = ref(null)
+const smsShowKeyMgmt = ref(false)
+const smsKeyInput = ref('')
+const smsKeyErr = ref('')
+
+// Per-conversation encryption keys stored in localStorage
+const SMS_KEYS_STORAGE = 'meshsat_sms_conv_keys'
+const smsConvKeys = reactive(JSON.parse(localStorage.getItem(SMS_KEYS_STORAGE) || '{}'))
+
+function smsSetConvKey() {
+  const key = smsKeyInput.value.trim()
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+    smsKeyErr.value = 'Key must be 64 hex characters (32 bytes)'
+    return
+  }
+  smsConvKeys[smsActivePhone.value] = key.toLowerCase()
+  localStorage.setItem(SMS_KEYS_STORAGE, JSON.stringify(smsConvKeys))
+  smsKeyInput.value = ''
+  smsKeyErr.value = ''
+}
+
+function smsDeleteConvKey() {
+  delete smsConvKeys[smsActivePhone.value]
+  localStorage.setItem(SMS_KEYS_STORAGE, JSON.stringify(smsConvKeys))
+}
+
+// AES-256-GCM decryption using Web Crypto API
+// Encrypted format: base64( 12-byte nonce || ciphertext || 16-byte tag )
+async function tryDecryptSMS(text, hexKey) {
+  if (!hexKey || !text) return null
+  try {
+    // Try base64 decode
+    const raw = Uint8Array.from(atob(text), c => c.charCodeAt(0))
+    if (raw.length < 28) return null // 12 nonce + 16 tag minimum
+    const nonce = raw.slice(0, 12)
+    const ciphertextAndTag = raw.slice(12)
+    const keyBytes = new Uint8Array(hexKey.match(/.{2}/g).map(b => parseInt(b, 16)))
+    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt'])
+    const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, cryptoKey, ciphertextAndTag)
+    return new TextDecoder().decode(plainBuf)
+  } catch {
+    return null
+  }
+}
+
+// Detect if text looks like base64-encoded ciphertext
+function looksEncrypted(text) {
+  if (!text || text.length < 40) return false
+  return /^[A-Za-z0-9+/=]{40,}$/.test(text.trim())
+}
+
+// SMS conversations grouped by phone number
+const smsConversations = computed(() => {
+  const msgs = store.smsMessages || []
+  const byPhone = {}
+  for (const sms of msgs) {
+    const phone = sms.phone || '(unknown)'
+    if (!byPhone[phone]) byPhone[phone] = { phone, messages: [], lastTime: sms.created_at, lastText: '', count: 0 }
+    byPhone[phone].messages.push(sms)
+    byPhone[phone].count++
+    // Track most recent message
+    const t = new Date(sms.created_at || 0).getTime()
+    if (t >= new Date(byPhone[phone].lastTime || 0).getTime()) {
+      byPhone[phone].lastTime = sms.created_at
+      byPhone[phone].lastText = sms.text || '(empty)'
+    }
+  }
+  // Add contact names and sort by most recent
+  const list = Object.values(byPhone).map(conv => {
+    conv.contactName = smsContactName(conv.phone)
+    return conv
+  })
+  list.sort((a, b) => new Date(b.lastTime || 0) - new Date(a.lastTime || 0))
+  return list
+})
+
+// Active conversation messages with on-the-fly decrypt
+const smsActiveConversation = computed(() => {
+  if (!smsActivePhone.value) return []
+  const msgs = (store.smsMessages || []).filter(s => s.phone === smsActivePhone.value)
+  const key = smsConvKeys[smsActivePhone.value]
+  // Sort oldest first (chat style)
+  const sorted = [...msgs].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
+  return sorted.map(sms => {
+    const encrypted = looksEncrypted(sms.text)
+    return { ...sms, _encrypted: encrypted && !key, _decrypted: false, _displayText: sms.text || '(empty)' }
+  })
+})
+
+// Async decrypt — runs when conversation or key changes
+const smsDecryptedTexts = ref({})
+watch([smsActivePhone, () => smsConvKeys[smsActivePhone.value], () => store.smsMessages], async () => {
+  const phone = smsActivePhone.value
+  if (!phone) return
+  const key = smsConvKeys[phone]
+  const msgs = (store.smsMessages || []).filter(s => s.phone === phone)
+  const results = {}
+  for (const sms of msgs) {
+    if (key && looksEncrypted(sms.text)) {
+      const plain = await tryDecryptSMS(sms.text, key)
+      if (plain) results[sms.id] = plain
+    }
+  }
+  smsDecryptedTexts.value = results
+}, { immediate: true, deep: true })
 
 // SBD queue detail modal
 const sbdDetailModal = ref(false)
@@ -415,63 +522,137 @@ onUnmounted(() => {
 
     <!-- ═══ SMS Tab ═══ -->
     <div v-if="activeTab === 'sms'" class="flex-1 overflow-y-auto min-h-0">
-      <!-- Quick send -->
-      <div class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-3 mb-3">
-        <div class="text-[11px] text-gray-500 mb-2">Quick Send SMS</div>
-        <div class="flex gap-2">
-          <input v-model="smsTo" type="text" placeholder="+31612345678"
-            class="w-40 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600" />
-          <input v-model="smsMsgText" type="text" placeholder="Message text..."
-            class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600"
+      <!-- Conversation list (no phone selected) -->
+      <div v-if="!smsActivePhone">
+        <!-- Quick send -->
+        <div class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-3 mb-3">
+          <div class="text-[11px] text-gray-500 mb-2">Quick Send SMS</div>
+          <div class="flex gap-2">
+            <input v-model="smsTo" type="text" placeholder="+31612345678"
+              class="w-40 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600" />
+            <input v-model="smsMsgText" type="text" placeholder="Message text..."
+              class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600"
+              @keydown.enter="doSendSMS" />
+            <button @click="doSendSMS" :disabled="!smsTo || !smsMsgText"
+              class="px-3 py-1.5 text-xs rounded bg-sky-600/20 text-sky-400 border border-sky-600/30 hover:bg-sky-600/30 transition-colors disabled:opacity-40">
+              Send
+            </button>
+          </div>
+          <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1.5">SMS sent successfully</div>
+          <div v-if="smsErr" class="text-[10px] text-red-400 mt-1.5">{{ smsErr }}</div>
+        </div>
+
+        <!-- Contacts quick-dial -->
+        <div v-if="(store.smsContacts || []).length > 0" class="mb-3">
+          <div class="text-[11px] text-gray-500 mb-1.5">Contacts</div>
+          <div class="flex flex-wrap gap-1.5">
+            <button v-for="c in store.smsContacts" :key="c.id" @click="smsTo = c.phone"
+              class="px-2 py-1 text-[10px] rounded bg-gray-800/60 text-gray-400 hover:text-sky-400 border border-gray-700/50 hover:border-sky-600/30 transition-colors">
+              {{ c.name }} <span class="text-gray-600 font-mono">{{ c.phone }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Conversations -->
+        <div class="mt-3">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[11px] text-gray-500">Conversations</div>
+            <button @click="store.fetchSMSMessages()" class="px-2.5 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">Refresh</button>
+          </div>
+          <div v-if="!smsConversations.length" class="text-center text-[11px] text-gray-600 py-8">No SMS messages yet.</div>
+          <div v-else class="space-y-1">
+            <div v-for="conv in smsConversations" :key="conv.phone"
+              @click="smsActivePhone = conv.phone; smsTo = conv.phone"
+              class="flex items-center gap-3 py-2.5 px-3 rounded-lg bg-gray-800/40 border border-gray-700/30 cursor-pointer hover:bg-gray-700/40 transition-colors">
+              <div class="w-8 h-8 rounded-full bg-sky-900/40 flex items-center justify-center text-sky-400 text-xs font-bold shrink-0">
+                {{ (conv.contactName || conv.phone).slice(0, 2).toUpperCase() }}
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-200 font-mono">{{ conv.phone }}</span>
+                  <span v-if="conv.contactName" class="text-[10px] text-gray-500">{{ conv.contactName }}</span>
+                  <span v-if="smsConvKeys[conv.phone]" class="text-[9px] text-amber-400/60" title="Encryption key set">ENC</span>
+                </div>
+                <div class="text-[11px] text-gray-400 mt-0.5 truncate">{{ conv.lastText }}</div>
+              </div>
+              <div class="text-right shrink-0">
+                <div class="text-[9px] text-gray-600 font-mono">{{ formatRelativeTime(conv.lastTime) }}</div>
+                <div class="text-[10px] text-gray-500 mt-0.5">{{ conv.count }} msg{{ conv.count !== 1 ? 's' : '' }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Conversation chat view (phone selected) -->
+      <div v-else class="flex flex-col h-full">
+        <!-- Header -->
+        <div class="flex items-center gap-2 pb-3 border-b border-gray-700/50 mb-3 shrink-0">
+          <button @click="smsActivePhone = null" class="px-2 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">Back</button>
+          <div class="flex-1 min-w-0">
+            <span class="text-xs text-gray-200 font-mono">{{ smsActivePhone }}</span>
+            <span v-if="smsContactName(smsActivePhone)" class="text-[10px] text-gray-500 ml-2">{{ smsContactName(smsActivePhone) }}</span>
+          </div>
+          <button @click="smsShowKeyMgmt = !smsShowKeyMgmt"
+            class="px-2 py-1 text-[10px] rounded transition-colors"
+            :class="smsConvKeys[smsActivePhone] ? 'bg-amber-900/30 text-amber-400 hover:bg-amber-900/50' : 'bg-gray-800 text-gray-400 hover:text-gray-200'">
+            {{ smsConvKeys[smsActivePhone] ? 'ENC' : 'Key' }}
+          </button>
+        </div>
+
+        <!-- Key management panel -->
+        <div v-if="smsShowKeyMgmt" class="bg-gray-800/60 rounded-lg border border-gray-700/50 p-3 mb-3 shrink-0">
+          <div class="text-[11px] text-gray-500 mb-2">Per-Conversation Encryption Key (AES-256-GCM)</div>
+          <div class="flex gap-2">
+            <input v-model="smsKeyInput" type="text" :placeholder="smsConvKeys[smsActivePhone] ? '(key set — enter new to replace)' : '64-char hex key'"
+              class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 font-mono focus:outline-none focus:border-amber-600" />
+            <button @click="smsSetConvKey" :disabled="!smsKeyInput"
+              class="px-3 py-1.5 text-xs rounded bg-amber-600/20 text-amber-400 border border-amber-600/30 hover:bg-amber-600/30 transition-colors disabled:opacity-40">
+              Set
+            </button>
+            <button v-if="smsConvKeys[smsActivePhone]" @click="smsDeleteConvKey"
+              class="px-3 py-1.5 text-xs rounded bg-red-900/20 text-red-400 border border-red-600/30 hover:bg-red-900/30 transition-colors">
+              Delete
+            </button>
+          </div>
+          <div v-if="smsKeyErr" class="text-[10px] text-red-400 mt-1.5">{{ smsKeyErr }}</div>
+          <div v-if="smsConvKeys[smsActivePhone]" class="text-[10px] text-amber-400/60 mt-1.5">Key active — messages will be decrypted on the fly</div>
+        </div>
+
+        <!-- Chat messages -->
+        <div class="flex-1 overflow-y-auto min-h-0 space-y-1 mb-3">
+          <div v-for="sms in smsActiveConversation" :key="sms.id"
+            class="flex" :class="sms.direction === 'tx' ? 'justify-end' : 'justify-start'">
+            <div class="max-w-[80%] py-1.5 px-3 rounded-lg text-[11px]"
+              :class="sms.direction === 'tx' ? 'bg-sky-900/30 border border-sky-800/40 text-gray-200' : 'bg-gray-800/60 border border-gray-700/40 text-gray-300'">
+              <div class="break-words whitespace-pre-wrap"
+                :class="looksEncrypted(sms.text) && !smsDecryptedTexts[sms.id] ? 'font-mono text-[10px] text-gray-500' : ''">
+                {{ smsDecryptedTexts[sms.id] || sms.text || '(empty)' }}
+              </div>
+              <div class="text-[9px] mt-1 flex items-center gap-2"
+                :class="sms.direction === 'tx' ? 'text-sky-400/40' : 'text-gray-600'">
+                <span>{{ formatTimestamp(sms.created_at) }}</span>
+                <span v-if="looksEncrypted(sms.text) && !smsDecryptedTexts[sms.id]" class="text-amber-400/40" title="Encrypted — add key to decrypt">locked</span>
+                <span v-if="smsDecryptedTexts[sms.id]" class="text-emerald-400/40" title="Decrypted with conversation key">decrypted</span>
+                <span class="font-mono">{{ sms.status }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-if="!smsActiveConversation.length" class="text-center text-[11px] text-gray-600 py-8">No messages in this conversation.</div>
+        </div>
+
+        <!-- Compose bar -->
+        <div class="flex gap-2 pt-2 border-t border-gray-700/50 shrink-0">
+          <input v-model="smsMsgText" type="text" placeholder="Type a message..."
+            class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-sky-600"
             @keydown.enter="doSendSMS" />
-          <button @click="doSendSMS" :disabled="!smsTo || !smsMsgText"
+          <button @click="doSendSMS" :disabled="!smsMsgText"
             class="px-3 py-1.5 text-xs rounded bg-sky-600/20 text-sky-400 border border-sky-600/30 hover:bg-sky-600/30 transition-colors disabled:opacity-40">
             Send
           </button>
         </div>
-        <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1.5">SMS sent successfully</div>
-        <div v-if="smsErr" class="text-[10px] text-red-400 mt-1.5">{{ smsErr }}</div>
-      </div>
-
-      <!-- Contacts quick-dial -->
-      <div v-if="(store.smsContacts || []).length > 0" class="mb-3">
-        <div class="text-[11px] text-gray-500 mb-1.5">Contacts</div>
-        <div class="flex flex-wrap gap-1.5">
-          <button v-for="c in store.smsContacts" :key="c.id" @click="smsTo = c.phone"
-            class="px-2 py-1 text-[10px] rounded bg-gray-800/60 text-gray-400 hover:text-sky-400 border border-gray-700/50 hover:border-sky-600/30 transition-colors">
-            {{ c.name }} <span class="text-gray-600 font-mono">{{ c.phone }}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- SMS History -->
-      <div class="mt-3">
-        <div class="flex items-center justify-between mb-2">
-          <div class="text-[11px] text-gray-500">SMS History</div>
-          <button @click="store.fetchSMSMessages()" class="px-2.5 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">Refresh</button>
-        </div>
-        <div v-if="!(store.smsMessages || []).length" class="text-center text-[11px] text-gray-600 py-8">No SMS messages yet.</div>
-        <div v-else class="space-y-1">
-          <div v-for="sms in store.smsMessages" :key="sms.id"
-            class="flex items-start gap-2 py-2 px-3 rounded-lg bg-gray-800/40 border border-gray-700/30">
-            <span class="mt-0.5 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
-              :class="sms.direction === 'tx' ? 'bg-sky-900/30 text-sky-400' : 'bg-emerald-900/30 text-emerald-400'">
-              {{ sms.direction === 'tx' ? 'OUT' : 'IN' }}
-            </span>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-gray-200 font-mono">{{ sms.phone }}</span>
-                <span v-if="smsContactName(sms.phone)" class="text-[10px] text-gray-500">{{ smsContactName(sms.phone) }}</span>
-              </div>
-              <div class="text-[11px] text-gray-300 mt-0.5">{{ sms.text || '(empty)' }}</div>
-              <div class="text-[9px] text-gray-600 mt-0.5">{{ formatTimestamp(sms.created_at) }}</div>
-            </div>
-            <span class="text-[9px] font-mono mt-0.5 px-1.5 py-0.5 rounded"
-              :class="dlqStatusColor(sms.status)">
-              {{ sms.status }}
-            </span>
-          </div>
-        </div>
+        <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1">Sent</div>
+        <div v-if="smsErr" class="text-[10px] text-red-400 mt-1">{{ smsErr }}</div>
       </div>
     </div>
 
