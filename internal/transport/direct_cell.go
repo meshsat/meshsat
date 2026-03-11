@@ -280,15 +280,20 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		sendAT(sp, "AT+CSCB=0", cellATTimeout)
 	}
 
-	// Query ICCID (AT+CCID) — unique SIM card identifier, works on most modems
+	// Query ICCID (AT+CCID) — unique SIM card identifier
+	// Try multiple commands: standard, Huawei proprietary, and SIM file read
 	var iccid string
 	if simState == "READY" || simState == "PIN_REQUIRED" {
-		resp, _ = sendAT(sp, "AT+CCID", cellATTimeout)
-		iccid = parseICCID(resp)
-		if iccid == "" {
-			// Fallback: some modems use AT+ICCID
-			resp, _ = sendAT(sp, "AT+ICCID", cellATTimeout)
+		for _, cmd := range []string{"AT+CCID", "AT+ICCID", "AT^ICCID", "AT+CRSM=176,12258,0,0,10"} {
+			resp, _ = sendAT(sp, cmd, cellATTimeout)
 			iccid = parseICCID(resp)
+			if iccid != "" {
+				log.Debug().Str("cmd", cmd).Str("iccid", iccid).Msg("cellular: ICCID read OK")
+				break
+			}
+		}
+		if iccid == "" {
+			log.Warn().Msg("cellular: ICCID not available (modem does not support AT+CCID/AT^ICCID/CRSM)")
 		}
 	}
 
@@ -1213,13 +1218,24 @@ func parseCOPS(resp string) string {
 	return ""
 }
 
-// parseICCID extracts the ICCID from AT+CCID or AT+ICCID response.
-// Responses vary by modem: "+CCID: 8931...", "ICCID: 8931...", or just "8931..." on its own line.
+// parseICCID extracts the ICCID from AT+CCID, AT+ICCID, AT^ICCID, or AT+CRSM response.
+// Responses vary by modem: "+CCID: 8931...", "^ICCID: 8931...", or just "8931..." on its own line.
+// AT+CRSM returns "+CRSM: 144,0,"98..." with hex-swapped BCD digits.
 func parseICCID(resp string) string {
 	for _, line := range strings.Split(resp, "\n") {
 		line = strings.TrimSpace(line)
+
+		// Handle AT+CRSM response: +CRSM: 144,0,"98310..."
+		// The third field is hex-encoded BCD with nibble-swapped digit pairs
+		if strings.HasPrefix(line, "+CRSM:") {
+			if iccid := parseCRSMICCID(line); iccid != "" {
+				return iccid
+			}
+			continue
+		}
+
 		// Strip known prefixes
-		for _, prefix := range []string{"+CCID:", "+ICCID:", "CCID:", "ICCID:"} {
+		for _, prefix := range []string{"+CCID:", "+ICCID:", "^ICCID:", "CCID:", "ICCID:"} {
 			if strings.HasPrefix(line, prefix) {
 				line = strings.TrimSpace(line[len(prefix):])
 				break
@@ -1240,6 +1256,38 @@ func parseICCID(resp string) string {
 				return line
 			}
 		}
+	}
+	return ""
+}
+
+// parseCRSMICCID parses ICCID from AT+CRSM=176,12258,0,0,10 response.
+// Format: +CRSM: 144,0,"98310680XXXXXXXXFF" — hex BCD with nibble-swapped pairs.
+// Each byte AB represents digits BA (e.g. 98 → 89, 31 → 13).
+func parseCRSMICCID(line string) string {
+	// Find the quoted hex string
+	q1 := strings.Index(line, "\"")
+	if q1 < 0 {
+		return ""
+	}
+	q2 := strings.Index(line[q1+1:], "\"")
+	if q2 < 0 {
+		return ""
+	}
+	hex := line[q1+1 : q1+1+q2]
+	if len(hex) < 10 {
+		return ""
+	}
+	// Nibble-swap each pair
+	var iccid strings.Builder
+	for i := 0; i+1 < len(hex); i += 2 {
+		iccid.WriteByte(hex[i+1])
+		if hex[i] != 'F' && hex[i] != 'f' {
+			iccid.WriteByte(hex[i])
+		}
+	}
+	result := iccid.String()
+	if len(result) >= 19 && len(result) <= 22 {
+		return result
 	}
 	return ""
 }

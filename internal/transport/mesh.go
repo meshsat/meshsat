@@ -57,6 +57,9 @@ type MeshMessage struct {
 	HopLimit    int     `json:"hop_limit"`
 	HopStart    int     `json:"hop_start"`
 	Timestamp   string  `json:"timestamp"`
+
+	// Per-rule routing metadata (set by dispatcher, used by gateways)
+	SMSDestinations []string `json:"-"` // override phone numbers for cellular SMS
 }
 
 // MeshStatus represents the connection status of the Meshtastic device.

@@ -197,7 +197,13 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 				text = text[:maxLen]
 			}
 
-			for _, number := range g.config.DestinationNumbers {
+			// Use per-rule SMS destinations if set, otherwise fall back to gateway config
+			destinations := msg.SMSDestinations
+			if len(destinations) == 0 {
+				destinations = g.config.DestinationNumbers
+			}
+
+			for _, number := range destinations {
 				if err := g.cell.SendSMS(ctx, number, text); err != nil {
 					log.Error().Err(err).Str("to", number).Msg("cellular: SMS send failed")
 					g.errors.Add(1)
@@ -213,8 +219,8 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 
 			g.msgsOut.Add(1)
 			g.lastActive.Store(time.Now().Unix())
-			log.Info().Str("from", fromNode).Int("destinations", len(g.config.DestinationNumbers)).Msg("cellular: SMS sent")
-			g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(g.config.DestinationNumbers)))
+			log.Info().Str("from", fromNode).Int("destinations", len(destinations)).Msg("cellular: SMS sent")
+			g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(destinations)))
 		}
 	}
 }

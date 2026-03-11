@@ -32,6 +32,12 @@ type Dispatcher struct {
 	mu sync.RWMutex
 }
 
+// forwardOptions holds parsed forward_options JSON from access rules.
+type forwardOptions struct {
+	TTLSeconds  int     `json:"ttl_seconds"`
+	SMSContacts []int64 `json:"sms_contacts"` // SMS contact IDs → resolved to phone numbers at delivery time
+}
+
 // NewDispatcher creates a dispatcher wired to the channel registry and gateways.
 func NewDispatcher(db *database.DB, reg *channel.Registry, gwProv GatewayProvider, mesh transport.MeshTransport) *Dispatcher {
 	return &Dispatcher{
@@ -312,16 +318,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			visited = "[" + strings.Join(parts, ",") + "]"
 		}
 
-		// Parse TTL from forward_options
-		var ttlSeconds int
+		// Parse forward_options
+		var fwdOpts forwardOptions
 		if m.Rule.ForwardOptions != "" && m.Rule.ForwardOptions != "{}" {
-			var fwdOpts struct {
-				TTLSeconds int `json:"ttl_seconds"`
-			}
-			if err := json.Unmarshal([]byte(m.Rule.ForwardOptions), &fwdOpts); err == nil && fwdOpts.TTLSeconds > 0 {
-				ttlSeconds = fwdOpts.TTLSeconds
-			}
+			json.Unmarshal([]byte(m.Rule.ForwardOptions), &fwdOpts)
 		}
+		ttlSeconds := fwdOpts.TTLSeconds
 
 		ruleID := m.Rule.ID
 		del := database.MessageDelivery{
@@ -480,6 +482,31 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		PortNum:     1,
 		PortNumName: "TEXT_MESSAGE_APP",
 		DecodedText: del.TextPreview,
+	}
+
+	// Resolve per-rule SMS destinations from forward_options
+	if del.RuleID != nil && w.db != nil {
+		if rule, err := w.db.GetAccessRule(*del.RuleID); err == nil && rule != nil {
+			if rule.ForwardOptions != "" && rule.ForwardOptions != "{}" {
+				var opts forwardOptions
+				if err := json.Unmarshal([]byte(rule.ForwardOptions), &opts); err == nil && len(opts.SMSContacts) > 0 {
+					contacts, _ := w.db.GetSMSContacts()
+					contactMap := make(map[int64]string)
+					for _, c := range contacts {
+						contactMap[c.ID] = c.Phone
+					}
+					for _, cid := range opts.SMSContacts {
+						if phone, ok := contactMap[cid]; ok {
+							msg.SMSDestinations = append(msg.SMSDestinations, phone)
+						}
+					}
+					if len(msg.SMSDestinations) > 0 {
+						log.Debug().Strs("sms_to", msg.SMSDestinations).Int64("rule_id", *del.RuleID).
+							Msg("resolved per-rule SMS destinations from contacts")
+					}
+				}
+			}
+		}
 	}
 
 	// v0.3.0: try interface ID-based lookup first (e.g. "iridium_0", "mqtt_0")

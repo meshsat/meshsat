@@ -977,7 +977,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <option value="none">None</option>
               <option value="duckdns">DuckDNS</option>
               <option value="noip">No-IP</option>
-              <option value="cloudflare">Cloudflare</option>
+              <option value="dynu">Dynu</option>
               <option value="custom">Custom</option>
             </select>
           </div>

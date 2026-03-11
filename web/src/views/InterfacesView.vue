@@ -148,6 +148,7 @@ const ruleForm = ref({
   interface_id: '', direction: 'ingress', priority: 10, name: '', enabled: true,
   action: 'forward', forward_to: '', qos_level: 0,
   nodes: [], portnums: [], keyword: '',
+  sms_contacts: [],
   node_group: '', sender_group: '', portnum_group: '',
   rate_per_min: 0, rate_window_sec: 60,
   schedule_type: 'none', schedule_value: '',
@@ -176,6 +177,12 @@ function openEditRule(rule) {
   let portnums = []
   try { if (filters.nodes) nodes = typeof filters.nodes === 'string' ? JSON.parse(filters.nodes) : filters.nodes } catch {}
   try { if (filters.portnums) portnums = (typeof filters.portnums === 'string' ? JSON.parse(filters.portnums) : filters.portnums).map(Number) } catch {}
+  // Parse SMS contacts from forward_options
+  let smsContacts = []
+  try {
+    const fwdOpts = typeof rule.forward_options === 'string' ? JSON.parse(rule.forward_options || '{}') : (rule.forward_options || {})
+    if (fwdOpts.sms_contacts) smsContacts = fwdOpts.sms_contacts
+  } catch {}
   const hasAdvanced = !!(filters.node_group || filters.sender_group || filters.portnum_group)
   ruleForm.value = {
     interface_id: rule.interface_id || '',
@@ -189,6 +196,7 @@ function openEditRule(rule) {
     nodes,
     portnums,
     keyword: filters.keyword || '',
+    sms_contacts: smsContacts,
     node_group: filters.node_group || '',
     sender_group: filters.sender_group || '',
     portnum_group: filters.portnum_group || '',
@@ -213,6 +221,12 @@ async function saveRule() {
   if (ruleForm.value.sender_group) filters.sender_group = ruleForm.value.sender_group
   if (ruleForm.value.portnum_group) filters.portnum_group = ruleForm.value.portnum_group
 
+  // Build forward_options (SMS contacts, TTL, etc.)
+  const fwdOpts = {}
+  if (ruleForm.value.sms_contacts && ruleForm.value.sms_contacts.length > 0) {
+    fwdOpts.sms_contacts = ruleForm.value.sms_contacts.map(Number)
+  }
+
   const payload = {
     interface_id: ruleForm.value.interface_id,
     direction: ruleForm.value.direction,
@@ -223,6 +237,7 @@ async function saveRule() {
     forward_to: ruleForm.value.forward_to,
     qos_level: ruleForm.value.qos_level,
     filters: JSON.stringify(filters),
+    forward_options: JSON.stringify(fwdOpts),
     rate_per_min: ruleForm.value.rate_per_min || 0,
     rate_window_sec: ruleForm.value.rate_window_sec || 60,
     schedule_type: ruleForm.value.schedule_type,
@@ -667,6 +682,21 @@ onUnmounted(() => {
             <label class="text-[10px] text-gray-600 mb-1 block">Keyword (optional, case-insensitive)</label>
             <input v-model="ruleForm.keyword" placeholder="Only match messages containing..."
               class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300" />
+          </div>
+
+          <!-- SMS Contact picker (shown when forwarding to cellular) -->
+          <div v-if="ruleForm.action === 'forward' && ruleForm.forward_to && ruleForm.forward_to.startsWith('cellular')" class="mb-3">
+            <label class="text-[10px] text-gray-600 mb-1 block">SMS recipients (empty = use gateway default numbers)</label>
+            <div v-if="(store.smsContacts || []).length > 0" class="flex flex-wrap gap-1.5 bg-gray-900 rounded border border-gray-700 p-2 max-h-32 overflow-y-auto">
+              <label v-for="contact in store.smsContacts" :key="contact.id"
+                class="flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                :class="ruleForm.sms_contacts.includes(contact.id) ? 'bg-teal-900/50 text-teal-300 border border-teal-700' : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'">
+                <input type="checkbox" :value="contact.id" v-model="ruleForm.sms_contacts" class="rounded w-3 h-3" />
+                <span class="font-medium">{{ contact.name }}</span>
+                <span class="text-gray-500 font-mono text-[10px]">{{ contact.phone }}</span>
+              </label>
+            </div>
+            <div v-else class="text-xs text-gray-600 py-1">No SMS contacts. Add contacts in Settings > Cellular first.</div>
           </div>
 
           <!-- Advanced: Object Groups (collapsible) -->
