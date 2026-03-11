@@ -285,6 +285,28 @@ func findUSBVIDPID(port string) string {
 	return ""
 }
 
+// findUSBInterfaceNum returns the USB interface number (e.g., "00", "01") for a serial port.
+// Used to distinguish multi-interface modems like Huawei E220 where interface 0 is PPP/data
+// and interface 1 is the AT command port.
+func findUSBInterfaceNum(port string) string {
+	devName := filepath.Base(port)
+	sysPath := fmt.Sprintf("/sys/class/tty/%s/device", devName)
+	current, err := filepath.EvalSymlinks(sysPath)
+	if err != nil {
+		return ""
+	}
+
+	// Walk up sysfs to find bInterfaceNumber
+	for i := 0; i < 5; i++ {
+		data, err := os.ReadFile(filepath.Join(current, "bInterfaceNumber"))
+		if err == nil {
+			return strings.TrimSpace(string(data))
+		}
+		current = filepath.Dir(current)
+	}
+	return ""
+}
+
 // autoDetectMeshtastic scans serial ports for a Meshtastic device.
 // Three-pass strategy: VID:PID match → ACM fallback (excluding GPS).
 func autoDetectMeshtastic() string {

@@ -48,6 +48,14 @@ var knownCellularVIDPIDs = map[string]bool{
 	"12d1:15c1": true, // Huawei ME909s
 }
 
+// cellularATInterface maps VID:PIDs that expose multiple USB interfaces to the
+// interface number used for AT commands. Interface 0 on Huawei modems is the
+// PPP/data port — AT commands hang on it. Interface 1 is the AT/PCUI port.
+var cellularATInterface = map[string]string{
+	"12d1:1003": "01", // Huawei E220: iface 0=modem/PPP, iface 1=AT/PCUI
+	"12d1:15c1": "01", // Huawei ME909s: same layout
+}
+
 // atCommand is a queued AT command for the I/O loop.
 type atCommand struct {
 	cmd     string                            // AT command string (empty = raw func)
@@ -1588,16 +1596,31 @@ func autoDetectCellular(excludePorts []string) string {
 		ports = append(ports, matches...)
 	}
 
-	// Pass 1: VID:PID match
+	// Pass 1: VID:PID match with multi-interface awareness.
+	// Modems like Huawei E220 expose 2 USB interfaces — interface 0 is PPP/data
+	// (AT commands hang on it), interface 1 is the AT command port.
 	for _, port := range ports {
 		if excluded[port] {
 			continue
 		}
 		vidpid := findUSBVIDPID(port)
-		if knownCellularVIDPIDs[vidpid] {
-			log.Info().Str("port", port).Str("vidpid", vidpid).Msg("cellular auto-detected by VID:PID")
-			return port
+		if !knownCellularVIDPIDs[vidpid] {
+			continue
 		}
+		// Check if this VID:PID requires a specific USB interface for AT commands
+		if wantIface, multi := cellularATInterface[vidpid]; multi {
+			gotIface := findUSBInterfaceNum(port)
+			if gotIface != wantIface {
+				log.Debug().Str("port", port).Str("vidpid", vidpid).
+					Str("iface", gotIface).Str("want", wantIface).
+					Msg("cellular: skipping wrong USB interface (not AT port)")
+				continue
+			}
+		}
+		log.Info().Str("port", port).Str("vidpid", vidpid).
+			Str("iface", findUSBInterfaceNum(port)).
+			Msg("cellular auto-detected by VID:PID")
+		return port
 	}
 
 	// Pass 2: AT+CPIN? probe (distinguishes cellular from Iridium)
