@@ -323,7 +323,7 @@ async function dashBroadcastPosition() {
 
 // ── Cellular signal history (local tracking + persisted seed) ──
 const cellSignalHistory = ref([])
-const MAX_CELL_HISTORY = 30
+const MAX_CELL_HISTORY = 1440 // 6 hours at 15s polling
 
 function seedCellSignalFromHistory() {
   const hist = store.cellularSignalHistory || []
@@ -349,8 +349,10 @@ const cellSparklinePoints = computed(() => {
   const hist = cellSignalHistory.value
   if (hist.length < 2) return ''
   const W = 200, H = 72
-  return hist.map((h, i) => {
-    const x = (i / (hist.length - 1)) * W
+  const tMin = hist[0].ts, tMax = hist[hist.length - 1].ts
+  const tRange = tMax - tMin || 1
+  return hist.map(h => {
+    const x = ((h.ts - tMin) / tRange) * W
     const y = H - (h.val / 5) * H
     return `${x},${y}`
   }).join(' ')
@@ -364,6 +366,16 @@ const cellSparklineArea = computed(() => {
   return `M ${first},72 L ${pts.replace(/ /g, ' L ')} L ${last},72 Z`
 })
 const cellSparklineNoData = computed(() => cellSignalHistory.value.length < 2)
+const cellHistoryTimeRange = computed(() => {
+  const hist = cellSignalHistory.value
+  if (hist.length < 2) return ''
+  const spanMs = hist[hist.length - 1].ts - hist[0].ts
+  const mins = Math.round(spanMs / 60000)
+  if (mins < 60) return `${mins}m`
+  const hrs = Math.floor(mins / 60)
+  const rm = mins % 60
+  return rm ? `${hrs}h${rm}m` : `${hrs}h`
+})
 
 // ── Computed: Cellular panel ──
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
@@ -1002,7 +1014,7 @@ async function openNodeDetail(node) {
 }
 
 function widgetGridClass(id) {
-  if (id === 'queue') return 'md:col-span-2 lg:col-span-1'
+  if (id === 'queue') return 'md:col-span-2 lg:col-span-1 lg:row-span-2'
   if (id === 'activity') return 'md:col-span-2'
   return ''
 }
@@ -1379,7 +1391,7 @@ function widgetGridClass(id) {
               <span class="w-1.5 h-1.5 rounded-full bg-sky-400 inline-block"></span> Signal bars
             </span>
             <span v-if="cellSparklineNoData" class="text-gray-700 italic">waiting for signal data</span>
-            <span v-else>{{ cellSignalHistory.length }} samples</span>
+            <span v-else>{{ cellSignalHistory.length }} samples / {{ cellHistoryTimeRange }}</span>
           </div>
         </div>
 
@@ -1669,7 +1681,7 @@ function widgetGridClass(id) {
 
       <!-- ═══ SBD Queue ═══ -->
       <div v-if="wid === 'queue'"
-        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4 flex flex-col', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4 flex flex-col min-h-[420px]', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
         draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
@@ -1682,7 +1694,7 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <div class="space-y-1 tactical-scroll max-h-[220px] overflow-y-auto">
+        <div class="space-y-1 tactical-scroll max-h-[500px] overflow-y-auto flex-1">
           <div v-for="item in unifiedQueue" :key="item._key"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
             :class="item._opacity"

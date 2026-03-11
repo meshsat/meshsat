@@ -569,8 +569,8 @@ onUnmounted(() => {
               </div>
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="text-xs text-gray-200 font-mono">{{ conv.phone }}</span>
-                  <span v-if="conv.contactName" class="text-[10px] text-gray-500">{{ conv.contactName }}</span>
+                  <span v-if="conv.contactName" class="text-xs text-gray-200">{{ conv.contactName }}</span>
+                  <span class="text-xs font-mono" :class="conv.contactName ? 'text-gray-500 text-[10px]' : 'text-gray-200'">{{ conv.phone }}</span>
                   <span v-if="smsConvKeys[conv.phone]" class="text-[9px] text-amber-400/60" title="Encryption key set">ENC</span>
                 </div>
                 <div class="text-[11px] text-gray-400 mt-0.5 truncate">{{ conv.lastText }}</div>
@@ -590,8 +590,8 @@ onUnmounted(() => {
         <div class="flex items-center gap-2 pb-3 border-b border-gray-700/50 mb-3 shrink-0">
           <button @click="smsActivePhone = null" class="px-2 py-1 text-[10px] rounded bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors">Back</button>
           <div class="flex-1 min-w-0">
-            <span class="text-xs text-gray-200 font-mono">{{ smsActivePhone }}</span>
-            <span v-if="smsContactName(smsActivePhone)" class="text-[10px] text-gray-500 ml-2">{{ smsContactName(smsActivePhone) }}</span>
+            <span v-if="smsContactName(smsActivePhone)" class="text-xs text-gray-200">{{ smsContactName(smsActivePhone) }}</span>
+            <span class="text-xs font-mono" :class="smsContactName(smsActivePhone) ? 'text-gray-500 text-[10px] ml-2' : 'text-gray-200'">{{ smsActivePhone }}</span>
           </div>
           <button @click="smsShowKeyMgmt = !smsShowKeyMgmt"
             class="px-2 py-1 text-[10px] rounded transition-colors"
