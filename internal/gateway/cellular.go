@@ -176,9 +176,13 @@ func (g *CellularGateway) ForwardWebhookInbound(msg InboundMessage) {
 // sendSMSSync formats and sends the message as SMS synchronously.
 // Returns error if ANY destination fails (first error).
 func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMessage) error {
-	// Format: [MeshSat] !nodeID ch0: text
+	// Format: MeshSat !nodeID ch0: text
 	fromNode := fmt.Sprintf("!%08x", msg.From)
 	text := fmt.Sprintf("%s %s ch%d: %s", g.config.SMSPrefix, fromNode, msg.Channel, msg.DecodedText)
+
+	// Sanitize to GSM 7-bit basic charset — some modems (Huawei E220)
+	// fail with CMS ERROR 305 on extension table characters like [ ] { } | \ ^ ~
+	text = SanitizeSMSText(text)
 
 	// Truncate to SMS limit
 	maxLen := 160 * g.config.MaxSMSSegments

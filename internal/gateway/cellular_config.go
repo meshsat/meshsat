@@ -9,7 +9,7 @@ import (
 type CellularConfig struct {
 	DestinationNumbers []string          `json:"destination_numbers"`         // phone numbers to send SMS to
 	AllowedSenders     []string          `json:"allowed_senders,omitempty"`   // phone numbers allowed to send inbound (empty = all)
-	SMSPrefix          string            `json:"sms_prefix"`                  // prefix for outbound SMS (default "[MeshSat]")
+	SMSPrefix          string            `json:"sms_prefix"`                  // prefix for outbound SMS (default "MeshSat")
 	MaxSMSSegments     int               `json:"max_sms_segments"`            // max SMS segments per message (default 1 = 160 chars)
 	ForwardPortnums    []int             `json:"forward_portnums,omitempty"`  // portnums to forward (empty = use ForwardAll)
 	ForwardAll         bool              `json:"forward_all"`                 // forward all message types
@@ -43,7 +43,7 @@ type DynDNSConfig struct {
 // DefaultCellularConfig returns sensible defaults.
 func DefaultCellularConfig() CellularConfig {
 	return CellularConfig{
-		SMSPrefix:      "[MeshSat]",
+		SMSPrefix:      "MeshSat",
 		MaxSMSSegments: 1,
 		ForwardAll:     false,
 		InboundChannel: 0,
@@ -71,7 +71,7 @@ func (c *CellularConfig) Validate() error {
 		c.MaxSMSSegments = 1
 	}
 	if c.SMSPrefix == "" {
-		c.SMSPrefix = "[MeshSat]"
+		c.SMSPrefix = "MeshSat"
 	}
 	if c.DynDNS.Enabled {
 		if c.DynDNS.Provider == "" {
