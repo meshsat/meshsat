@@ -793,7 +793,10 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 			}
 			n, err := sp.Read(buf)
 			if n > 0 {
-				resp.Write(buf[:n])
+				chunk := buf[:n]
+				resp.Write(chunk)
+				log.Debug().Str("hex", fmt.Sprintf("%x", chunk)).Int("n", n).
+					Msg("cellular: CMGS prompt bytes")
 				if strings.Contains(resp.String(), ">") {
 					break
 				}
@@ -802,15 +805,27 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 				return "", fmt.Errorf("read failed: %w", err)
 			}
 		}
-		log.Debug().Msg("cellular: got > prompt, sending text")
+		log.Debug().Str("prompt_buf", resp.String()).Msg("cellular: got > prompt, sending text")
 
-		// Send text + Ctrl+Z
-		if _, err := sp.Write([]byte(text + "\x1A")); err != nil {
+		// Drain any remaining echo data after > prompt before sending text
+		drainPort(sp)
+
+		// Send text body first, then Ctrl+Z separately.
+		// Some modems (Huawei E220 on 2G) need Ctrl-Z as a distinct write.
+		if _, err := sp.Write([]byte(text)); err != nil {
 			return "", fmt.Errorf("write text failed: %w", err)
 		}
+		time.Sleep(100 * time.Millisecond)
+		if _, err := sp.Write([]byte{0x1A}); err != nil {
+			return "", fmt.Errorf("write Ctrl-Z failed: %w", err)
+		}
 
-		// Read response (wait for OK or ERROR)
-		smsResp, err := readATResponse(sp, cellSMSSendTimeout)
+		log.Debug().Str("to", to).Int("text_len", len(text)).Msg("cellular: text+Ctrl-Z sent, waiting for response")
+
+		// Read CMGS response with detailed byte logging.
+		// The Huawei E220 on 2G can take 60-120s to respond after Ctrl-Z.
+		smsResp, err := readCMGSResponse(sp, cellSMSSendTimeout)
+
 		if err != nil {
 			return "", fmt.Errorf("SMS send failed: %w", err)
 		}
@@ -818,7 +833,14 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 			return "", fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
 		}
 
-		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
+		// +CMGS: <mr> means the SMS was accepted by the network — success
+		// even if OK hasn't arrived yet (readATResponse now terminates on +CMGS:)
+		if strings.Contains(smsResp, "+CMGS:") {
+			log.Info().Str("to", to).Str("cmgs_resp", strings.TrimSpace(smsResp)).
+				Msg("cellular: SMS sent (got +CMGS)")
+		} else {
+			log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
+		}
 
 		// Post-send settle — give the modem time to finalize before accepting
 		// the next command. The Huawei E220 on 2G needs this between CMGS calls.
@@ -1077,6 +1099,71 @@ func (t *DirectCellTransport) checkDataConnection() {
 			Message: fmt.Sprintf("Data reconnect failed: %s", err),
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
+	}
+}
+
+// readCMGSResponse reads the response after AT+CMGS text + Ctrl-Z.
+// It logs every byte received for debugging modem behavior and accepts
+// +CMGS: <mr> as a success indicator (not just OK).
+func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var resp strings.Builder
+	buf := make([]byte, 256)
+	const maxResp = 4096
+	lastLogTime := time.Now()
+
+	port.SetReadTimeout(50 * time.Millisecond)
+
+	for {
+		now := time.Now()
+		if now.After(deadline) {
+			log.Warn().Str("accumulated", fmt.Sprintf("%q", resp.String())).
+				Int("bytes", resp.Len()).Msg("cellular: CMGS response timeout — raw bytes received")
+			return resp.String(), fmt.Errorf("read timeout")
+		}
+
+		n, err := port.Read(buf)
+
+		if n > 0 {
+			chunk := buf[:n]
+			resp.Write(chunk)
+			log.Debug().Str("hex", fmt.Sprintf("%x", chunk)).
+				Str("ascii", fmt.Sprintf("%q", string(chunk))).
+				Int("total", resp.Len()).
+				Msg("cellular: CMGS response bytes")
+
+			full := resp.String()
+
+			if strings.Contains(full, "+CMGS:") {
+				// +CMGS: <mr> — SMS accepted by network. Success.
+				return full, nil
+			}
+			if strings.Contains(full, "\r\nOK\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(full), "OK") {
+				return full, nil
+			}
+			if strings.Contains(full, "\r\nERROR\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(full), "ERROR") ||
+				strings.Contains(full, "+CMS ERROR:") {
+				return full, nil
+			}
+
+			if resp.Len() > maxResp {
+				return full, fmt.Errorf("response too large (%d bytes)", resp.Len())
+			}
+		} else {
+			// No data — log progress every 15s so we know we're still waiting
+			if now.Sub(lastLogTime) >= 15*time.Second {
+				remaining := time.Until(deadline).Truncate(time.Second)
+				log.Debug().Dur("remaining", remaining).Int("bytes_so_far", resp.Len()).
+					Msg("cellular: still waiting for CMGS response")
+				lastLogTime = now
+			}
+		}
+
+		if err != nil {
+			return resp.String(), err
+		}
 	}
 }
 

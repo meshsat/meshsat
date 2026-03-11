@@ -205,7 +205,8 @@ func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 				strings.HasSuffix(strings.TrimSpace(full), "OK") ||
 				strings.Contains(full, "\r\nERROR\r\n") ||
 				strings.HasSuffix(strings.TrimSpace(full), "ERROR") ||
-				strings.Contains(full, "READY") {
+				strings.Contains(full, "READY") ||
+				strings.Contains(full, "+CMGS:") {
 				return full, nil
 			}
 
