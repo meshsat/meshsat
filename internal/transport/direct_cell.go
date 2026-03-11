@@ -763,15 +763,17 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 
 	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS send starting")
 	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
+		log.Debug().Msg("cellular: SMS raw fn entered, draining")
 		// Ensure modem is in a clean state before CMGS.
-		// Previous commands (signal polls, other SMS) may leave residual data.
 		drainPort(sp)
 
 		// Probe with AT to verify modem is responsive and not mid-command
+		log.Debug().Msg("cellular: SMS probing AT")
 		probeResp, probeErr := sendAT(sp, "AT", 5*time.Second)
+		log.Debug().Err(probeErr).Str("resp", fmt.Sprintf("%q", probeResp)).Msg("cellular: SMS probe result")
 		if probeErr != nil || !strings.Contains(probeResp, "OK") {
 			// Modem may be stuck in SMS input mode from a previous failed CMGS.
-			// Send Escape (0x1B) to abort, drain, then retry probe.
+			log.Debug().Msg("cellular: SMS probe failed, sending ESC")
 			sp.Write([]byte{0x1B})
 			time.Sleep(500 * time.Millisecond)
 			drainPort(sp)
@@ -782,7 +784,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 		}
 
 		// Ensure text mode is set before every CMGS.
-		// The modem may lose this after reconnect or power glitch (CMS ERROR 305).
+		log.Debug().Msg("cellular: SMS setting CMGF=1")
 		if cmgfResp, cmgfErr := sendAT(sp, "AT+CMGF=1", 3*time.Second); cmgfErr != nil || strings.Contains(cmgfResp, "ERROR") {
 			return "", fmt.Errorf("failed to set text mode: %v", cmgfErr)
 		}
