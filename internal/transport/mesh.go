@@ -60,6 +60,7 @@ type MeshMessage struct {
 
 	// Per-rule routing metadata (set by dispatcher, used by gateways)
 	SMSDestinations []string `json:"-"` // override phone numbers for cellular SMS
+	Encrypted       bool     `json:"-"` // payload was encrypted by transform pipeline
 }
 
 // MeshStatus represents the connection status of the Meshtastic device.

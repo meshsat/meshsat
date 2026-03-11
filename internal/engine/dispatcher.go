@@ -12,6 +12,7 @@ import (
 
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -447,27 +448,49 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	}
 
 	// Apply egress transforms from the destination interface config.
-	// Skip transforms for cellular (SMS) — SMS is a text-only, human-facing
-	// transport. Encrypting SMS content makes it unreadable to the recipient.
-	// Ingress transforms on cellular (decrypt incoming SMS) still apply normally.
-	isCellular := strings.HasPrefix(w.channelID, "cellular")
-	if w.transforms != nil && !isCellular {
+	// For cellular (SMS), the transform pipeline produces base64 ciphertext
+	// that the MeshSat Android app decrypts. The gateway detects encrypted
+	// payloads and sends them as raw base64 (no prefix/metadata).
+	//
+	// GSM safety: AES-GCM uses a random nonce, so base64 output varies per
+	// attempt. Standard base64 (A-Z a-z 0-9 + / =) is GSM 7-bit safe, but
+	// as defense-in-depth for cellular we validate and retry (new nonce) if
+	// any non-GSM character appears.
+	encrypted := false
+	if w.transforms != nil {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
+			encrypted = strings.Contains(iface.EgressTransforms, "encrypt")
+			isCellular := strings.HasPrefix(w.channelID, "cellular")
+
+			applyToData := func(data []byte) ([]byte, error) {
+				return w.transforms.ApplyEgress(data, iface.EgressTransforms)
+			}
+
+			var inputData []byte
 			if len(del.Payload) > 0 {
-				transformed, tErr := w.transforms.ApplyEgress(del.Payload, iface.EgressTransforms)
+				inputData = del.Payload
+			} else if del.TextPreview != "" {
+				inputData = []byte(del.TextPreview)
+			}
+
+			if len(inputData) > 0 {
+				transformed, tErr := applyToData(inputData)
+				// For cellular with encryption: retry up to 5 times if output
+				// is not GSM-safe (new AES-GCM nonce = different base64 output)
+				if tErr == nil && isCellular && encrypted {
+					for retry := 0; retry < 5 && !gateway.IsGSMSafe(string(transformed)); retry++ {
+						log.Warn().Int("retry", retry+1).Msg("cellular: encrypted output not GSM-safe, re-encrypting with new nonce")
+						transformed, tErr = applyToData(inputData)
+						if tErr != nil {
+							break
+						}
+					}
+				}
 				if tErr != nil {
 					log.Error().Err(tErr).Str("interface", w.channelID).Msg("egress transform failed, sending untransformed")
 				} else {
 					del.Payload = transformed
-					// Update text preview for text-based transports
-					del.TextPreview = string(transformed)
-				}
-			} else if del.TextPreview != "" {
-				transformed, tErr := w.transforms.ApplyEgress([]byte(del.TextPreview), iface.EgressTransforms)
-				if tErr != nil {
-					log.Error().Err(tErr).Str("interface", w.channelID).Msg("egress transform failed, sending untransformed")
-				} else {
 					del.TextPreview = string(transformed)
 				}
 			}
@@ -483,7 +506,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		})
 	} else {
 		// Gateway delivery: find the gateway and forward
-		deliveryErr = w.forwardToGateway(ctx, del)
+		deliveryErr = w.forwardToGateway(ctx, del, encrypted)
 	}
 
 	if deliveryErr != nil {
@@ -493,7 +516,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	}
 }
 
-func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.MessageDelivery) error {
+func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.MessageDelivery, encrypted bool) error {
 	if w.gwProv == nil {
 		return fmt.Errorf("no gateway provider")
 	}
@@ -514,6 +537,7 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 			}
 		}
 	}
+	msg.Encrypted = encrypted
 
 	// Resolve per-rule SMS destinations from forward_options
 	if del.RuleID != nil && w.db != nil {

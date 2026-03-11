@@ -181,6 +181,26 @@ func main() {
 		})
 	})
 
+	// Wire node name resolver so SMS shows human-readable sender names
+	gwMgr.SetNodeNameResolver(func(nodeID uint32) string {
+		nodes, err := mesh.GetNodes(ctx)
+		if err != nil {
+			return ""
+		}
+		for _, n := range nodes {
+			if n.Num == nodeID {
+				if n.LongName != "" {
+					return n.LongName
+				}
+				if n.ShortName != "" {
+					return n.ShortName
+				}
+				return ""
+			}
+		}
+		return ""
+	})
+
 	// Start gateway manager (loads enabled configs from DB).
 	// The receiver callback fires for each gateway started here.
 	if err := gwMgr.Start(ctx); err != nil {

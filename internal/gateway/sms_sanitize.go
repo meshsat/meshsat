@@ -29,6 +29,21 @@ func SanitizeSMSText(text string) string {
 	return string(out)
 }
 
+// IsGSMSafe returns true if every rune in text is in the GSM 7-bit basic set.
+// Used to validate encrypted SMS payloads before sending — if the base64 output
+// contains any non-GSM character, the caller should re-encrypt with a new nonce.
+func IsGSMSafe(text string) bool {
+	for _, r := range text {
+		if _, unsafe := gsmUnsafeReplacements[r]; unsafe {
+			return false
+		}
+		if !isGSM7BitBasic(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // gsmUnsafeReplacements maps characters that cause CMS ERROR 305 on some
 // modems to safe ASCII alternatives. Extend this map for new problem chars.
 var gsmUnsafeReplacements = map[rune][]byte{

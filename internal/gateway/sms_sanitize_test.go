@@ -29,3 +29,32 @@ func TestSanitizeSMSText(t *testing.T) {
 		})
 	}
 }
+
+func TestIsGSMSafe(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"plain ASCII", "Hello world", true},
+		{"base64 standard", "DHwK3nAbCdEfGh+/xy==", true},
+		{"base64 all chars", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=", true},
+		{"brackets unsafe", "[test]", false},
+		{"curly braces", "{test}", false},
+		{"pipe", "a|b", false},
+		{"backslash", "a\\b", false},
+		{"tilde", "~test", false},
+		{"caret", "^test", false},
+		{"euro", "5€", false},
+		{"emoji", "Hello 🌍", false},
+		{"empty", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsGSMSafe(tt.in)
+			if got != tt.want {
+				t.Errorf("IsGSMSafe(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}

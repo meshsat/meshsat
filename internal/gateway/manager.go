@@ -27,6 +27,7 @@ type Manager struct {
 	predictor       PassPredictor                // optional, for pass scheduler
 	onReceiverStart ReceiverStartFunc            // called when a gateway starts
 	onEventEmit     EventEmitFunc                // SSE event emitter callback
+	nodeNameFn      func(uint32) string          // resolves mesh node ID to name
 	running         map[string]Gateway           // legacy: keyed by type ("iridium")
 	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
@@ -67,6 +68,11 @@ func (m *Manager) SetReceiverStartFunc(fn ReceiverStartFunc) {
 // SetEventEmitFunc sets the callback for gateways to emit events to the SSE stream.
 func (m *Manager) SetEventEmitFunc(fn EventEmitFunc) {
 	m.onEventEmit = fn
+}
+
+// SetNodeNameResolver sets the function used to resolve mesh node IDs to names for SMS.
+func (m *Manager) SetNodeNameResolver(fn func(uint32) string) {
+	m.nodeNameFn = fn
 }
 
 // GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
@@ -580,6 +586,9 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		gw := NewCellularGateway(*cfg, m.cell, m.db)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
+		}
+		if m.nodeNameFn != nil {
+			gw.SetNodeNameResolver(m.nodeNameFn)
 		}
 		return gw, nil
 	case "webhook":

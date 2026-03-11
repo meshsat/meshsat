@@ -32,6 +32,9 @@ type CellularGateway struct {
 	// DynDNS updater
 	dyndns *DynDNSUpdater
 
+	// Node name resolver (set by engine wiring)
+	nodeNameFn func(uint32) string
+
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	emitEvent EventEmitFunc
@@ -40,6 +43,11 @@ type CellularGateway struct {
 // SetEventEmitter sets the SSE event emitter callback.
 func (g *CellularGateway) SetEventEmitter(fn EventEmitFunc) {
 	g.emitEvent = fn
+}
+
+// SetNodeNameResolver sets a function that resolves mesh node IDs to human-readable names.
+func (g *CellularGateway) SetNodeNameResolver(fn func(uint32) string) {
+	g.nodeNameFn = fn
 }
 
 func (g *CellularGateway) emit(eventType, message string) {
@@ -176,13 +184,26 @@ func (g *CellularGateway) ForwardWebhookInbound(msg InboundMessage) {
 // sendSMSSync formats and sends the message as SMS synchronously.
 // Returns error if ANY destination fails (first error).
 func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMessage) error {
-	// Format: MeshSat !nodeID ch0: text
-	fromNode := fmt.Sprintf("!%08x", msg.From)
-	text := fmt.Sprintf("%s %s ch%d: %s", g.config.SMSPrefix, fromNode, msg.Channel, msg.DecodedText)
+	var text string
 
-	// Sanitize to GSM 7-bit basic charset — some modems (Huawei E220)
-	// fail with CMS ERROR 305 on extension table characters like [ ] { } | \ ^ ~
-	text = SanitizeSMSText(text)
+	if msg.Encrypted {
+		// Encrypted: send raw base64 ciphertext only — no prefix, no metadata.
+		// The MeshSat Android app expects pure base64 for decryption.
+		// GSM safety was already validated by the dispatcher (re-encrypt loop).
+		text = msg.DecodedText
+	} else {
+		// Plain text: human-readable format with sender name
+		sender := g.resolveNodeName(msg.From)
+		if msg.Channel > 0 {
+			text = fmt.Sprintf("%s %s ch%d: %s", g.config.SMSPrefix, sender, msg.Channel, msg.DecodedText)
+		} else {
+			text = fmt.Sprintf("%s %s: %s", g.config.SMSPrefix, sender, msg.DecodedText)
+		}
+
+		// Sanitize to GSM 7-bit basic charset — some modems (Huawei E220)
+		// fail with CMS ERROR 305 on extension table characters like [ ] { } | \ ^ ~
+		text = SanitizeSMSText(text)
+	}
 
 	// Truncate to SMS limit
 	maxLen := 160 * g.config.MaxSMSSegments
@@ -221,7 +242,7 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 	g.msgsOut.Add(1)
 	g.lastActive.Store(time.Now().Unix())
 	if firstErr == nil {
-		log.Info().Str("from", fromNode).Int("destinations", len(destinations)).Msg("cellular: SMS sent")
+		log.Info().Uint32("from", msg.From).Int("destinations", len(destinations)).Msg("cellular: SMS sent")
 		g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(destinations)))
 	}
 	return firstErr
@@ -310,6 +331,17 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// resolveNodeName returns a human-readable name for a mesh node ID.
+// Uses the node name resolver if set, falls back to short hex ID.
+func (g *CellularGateway) resolveNodeName(nodeID uint32) string {
+	if g.nodeNameFn != nil {
+		if name := g.nodeNameFn(nodeID); name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("!%08x", nodeID)
 }
 
 func isAllowedSender(sender string, allowed []string) bool {
