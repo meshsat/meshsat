@@ -429,6 +429,22 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 // processes queued AT commands between reads.
 func (t *DirectCellTransport) ioLoop() {
 	defer close(t.ioDone)
+	defer func() {
+		// Drain pending commands so callers don't hang forever
+		for {
+			select {
+			case cmd := <-t.cmdCh:
+				cmd.resp <- atResult{err: fmt.Errorf("ioLoop exited")}
+			default:
+				goto drained
+			}
+		}
+	drained:
+		t.mu.Lock()
+		t.running = false
+		t.mu.Unlock()
+		log.Warn().Msg("cellular: ioLoop exited, t.running reset to false")
+	}()
 
 	buf := make([]byte, 256)
 	var line []byte
