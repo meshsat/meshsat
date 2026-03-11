@@ -56,29 +56,45 @@ if [ -f /cubeos/coreapps/image-versions.env ]; then
 fi
 
 # =============================================================================
-# Clean up any leftover Swarm service (legacy — MeshSat should never be Swarm)
+# Clean up any leftover Swarm stack/service (MeshSat must NEVER be Swarm)
 # =============================================================================
-if docker service inspect meshsat_meshsat > /dev/null 2>&1; then
-  echo "WARNING: Found leftover Swarm service meshsat_meshsat — removing..."
-  docker service rm meshsat_meshsat 2>/dev/null || true
+# Remove the stack first (this removes all services in the stack).
+# docker stack rm is async — we must wait for containers to actually stop.
+SWARM_CLEANUP_NEEDED=false
+
+if docker stack ls 2>/dev/null | grep -q '^meshsat '; then
+  SWARM_CLEANUP_NEEDED=true
+  echo "WARNING: Found Swarm stack 'meshsat' — removing..."
   docker stack rm meshsat 2>/dev/null || true
-  sleep 3
-  echo "  Swarm service removed."
 fi
 
-# =============================================================================
-# Scale down any MeshSat Swarm service replicas to 0
-# =============================================================================
-# Check common swarm service names — scale to 0 before starting direct container
-# to avoid port conflicts on 6050
 for SVC_NAME in meshsat_meshsat cubeos_meshsat; do
   if docker service inspect "$SVC_NAME" > /dev/null 2>&1; then
-    echo "Found Swarm service $SVC_NAME — scaling to 0 replicas to avoid conflicts..."
-    docker service scale "${SVC_NAME}=0" 2>/dev/null || true
-    sleep 2
-    echo "  $SVC_NAME scaled to 0."
+    SWARM_CLEANUP_NEEDED=true
+    echo "WARNING: Found Swarm service $SVC_NAME — removing..."
+    docker service rm "$SVC_NAME" 2>/dev/null || true
   fi
 done
+
+if [ "$SWARM_CLEANUP_NEEDED" = true ]; then
+  echo "  Waiting for Swarm containers to drain..."
+  for i in $(seq 1 20); do
+    REMAINING=$(docker ps -q --filter "name=meshsat_meshsat" 2>/dev/null | wc -l)
+    if [ "$REMAINING" -eq 0 ]; then
+      echo "  Swarm containers drained after ${i}s."
+      break
+    fi
+    sleep 1
+  done
+  # Force-remove any stragglers
+  docker ps -aq --filter "name=meshsat_meshsat" | xargs -r docker rm -f 2>/dev/null || true
+  # Disable the Swarm compose file to prevent re-deployment by orchestrator
+  SWARM_COMPOSE="/cubeos/coreapps/meshsat/appconfig/docker-compose.yml"
+  if [ -f "$SWARM_COMPOSE" ]; then
+    mv "$SWARM_COMPOSE" "${SWARM_COMPOSE}.disabled"
+    echo "  Renamed docker-compose.yml -> docker-compose.yml.disabled (prevents Swarm re-deploy)"
+  fi
+fi
 
 # =============================================================================
 # Ensure HAL disables Meshtastic/Iridium serial access (MeshSat owns the ports)
