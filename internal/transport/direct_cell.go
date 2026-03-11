@@ -406,6 +406,12 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 	case r := <-ch:
 		return r.resp, r.err
 	case <-timer.C:
+		// ioLoop is stuck — the raw function is blocking on a serial Read
+		// that will never return. Close the serial port to unblock it.
+		// The reconnect loop will re-establish a clean connection.
+		log.Warn().Dur("timeout", timeout+10*time.Second).
+			Msg("cellular: raw command timed out, forcing serial reconnect")
+		t.forceReconnect()
 		return "", fmt.Errorf("raw command timed out after %v", timeout+10*time.Second)
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
@@ -1075,6 +1081,21 @@ func (t *DirectCellTransport) checkDataConnection() {
 }
 
 // Close shuts down the transport.
+// forceReconnect closes the serial port to unblock a stuck ioLoop.
+// The ioLoop detects the closed fd, emits "disconnected", and returns.
+// The interface manager will re-bind the device on its next scan cycle.
+func (t *DirectCellTransport) forceReconnect() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.file != nil {
+		log.Warn().Msg("cellular: closing serial port to force reconnect")
+		t.file.Close()
+		// Don't nil t.file here — let the ioLoop detect the error and clean up.
+		// Setting it nil here could race with the ioLoop's read.
+	}
+}
+
 func (t *DirectCellTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
