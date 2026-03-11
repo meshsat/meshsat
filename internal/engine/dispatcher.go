@@ -430,8 +430,12 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		return
 	}
 
-	// Apply egress transforms from the destination interface config
-	if w.transforms != nil {
+	// Apply egress transforms from the destination interface config.
+	// Skip transforms for cellular (SMS) — SMS is a text-only, human-facing
+	// transport. Encrypting SMS content makes it unreadable to the recipient.
+	// Ingress transforms on cellular (decrypt incoming SMS) still apply normally.
+	isCellular := strings.HasPrefix(w.channelID, "cellular")
+	if w.transforms != nil && !isCellular {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
 			if len(del.Payload) > 0 {

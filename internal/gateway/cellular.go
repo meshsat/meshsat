@@ -123,15 +123,10 @@ func (g *CellularGateway) Stop() error {
 	return nil
 }
 
-// Forward enqueues a message for cellular transmission.
+// Forward sends a message as SMS synchronously. The caller (delivery worker)
+// gets the actual send result so the delivery ledger reflects reality.
 func (g *CellularGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
-	select {
-	case g.outCh <- msg:
-		return nil
-	default:
-		g.errors.Add(1)
-		return fmt.Errorf("cellular outbound queue full")
-	}
+	return g.sendSMSSync(ctx, msg)
 }
 
 // Receive returns the inbound message channel.
@@ -178,7 +173,57 @@ func (g *CellularGateway) ForwardWebhookInbound(msg InboundMessage) {
 	}
 }
 
-// sendWorker dequeues messages and sends them as SMS to configured numbers.
+// sendSMSSync formats and sends the message as SMS synchronously.
+// Returns error if ANY destination fails (first error).
+func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMessage) error {
+	// Format: [MeshSat] !nodeID ch0: text
+	fromNode := fmt.Sprintf("!%08x", msg.From)
+	text := fmt.Sprintf("%s %s ch%d: %s", g.config.SMSPrefix, fromNode, msg.Channel, msg.DecodedText)
+
+	// Truncate to SMS limit
+	maxLen := 160 * g.config.MaxSMSSegments
+	if len(text) > maxLen {
+		text = text[:maxLen]
+	}
+
+	// Use per-rule SMS destinations if set, otherwise fall back to gateway config
+	destinations := msg.SMSDestinations
+	if len(destinations) == 0 {
+		destinations = g.config.DestinationNumbers
+	}
+
+	if len(destinations) == 0 {
+		return fmt.Errorf("no SMS destinations configured")
+	}
+
+	var firstErr error
+	for _, number := range destinations {
+		if err := g.cell.SendSMS(ctx, number, text); err != nil {
+			log.Error().Err(err).Str("to", number).Msg("cellular: SMS send failed")
+			g.errors.Add(1)
+			if g.db != nil {
+				g.db.InsertSMSMessage("tx", number, text, "failed", time.Now().Unix())
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("SMS to %s: %w", number, err)
+			}
+			continue
+		}
+		if g.db != nil {
+			g.db.InsertSMSMessage("tx", number, text, "sent", time.Now().Unix())
+		}
+	}
+
+	g.msgsOut.Add(1)
+	g.lastActive.Store(time.Now().Unix())
+	if firstErr == nil {
+		log.Info().Str("from", fromNode).Int("destinations", len(destinations)).Msg("cellular: SMS sent")
+		g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(destinations)))
+	}
+	return firstErr
+}
+
+// sendWorker dequeues messages from outCh (legacy/non-dispatcher callers).
 func (g *CellularGateway) sendWorker(ctx context.Context) {
 	defer g.wg.Done()
 
@@ -187,40 +232,9 @@ func (g *CellularGateway) sendWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.outCh:
-			// Format: [MeshSat] !nodeID ch0: text
-			fromNode := fmt.Sprintf("!%08x", msg.From)
-			text := fmt.Sprintf("%s %s ch%d: %s", g.config.SMSPrefix, fromNode, msg.Channel, msg.DecodedText)
-
-			// Truncate to SMS limit
-			maxLen := 160 * g.config.MaxSMSSegments
-			if len(text) > maxLen {
-				text = text[:maxLen]
+			if err := g.sendSMSSync(ctx, msg); err != nil {
+				log.Error().Err(err).Msg("cellular: sendWorker SMS failed")
 			}
-
-			// Use per-rule SMS destinations if set, otherwise fall back to gateway config
-			destinations := msg.SMSDestinations
-			if len(destinations) == 0 {
-				destinations = g.config.DestinationNumbers
-			}
-
-			for _, number := range destinations {
-				if err := g.cell.SendSMS(ctx, number, text); err != nil {
-					log.Error().Err(err).Str("to", number).Msg("cellular: SMS send failed")
-					g.errors.Add(1)
-					if g.db != nil {
-						g.db.InsertSMSMessage("tx", number, text, "failed", time.Now().Unix())
-					}
-					continue
-				}
-				if g.db != nil {
-					g.db.InsertSMSMessage("tx", number, text, "sent", time.Now().Unix())
-				}
-			}
-
-			g.msgsOut.Add(1)
-			g.lastActive.Store(time.Now().Unix())
-			log.Info().Str("from", fromNode).Int("destinations", len(destinations)).Msg("cellular: SMS sent")
-			g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(destinations)))
 		}
 	}
 }

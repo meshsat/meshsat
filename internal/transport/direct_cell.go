@@ -32,7 +32,7 @@ const (
 	cellBaud           = 115200
 	cellATTimeout      = 3 * time.Second
 	cellSignalPoll     = 60 * time.Second
-	cellSMSSendTimeout = 60 * time.Second
+	cellSMSSendTimeout = 120 * time.Second
 	maxSMSLength       = 160
 )
 
