@@ -825,7 +825,16 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 		}
 	}
 
-	resp, err := sendAT(t.file, "AT+SBDIX", timeout)
+	// Send SBDIX using custom reader that waits for "+SBDIX:" or "ERROR",
+	// not just "OK". The modem sometimes outputs binary/residual data followed
+	// by "OK" before the actual +SBDIX: response, which confuses the generic
+	// readATResponse (it stops at the first "OK").
+	drainPort(t.file)
+	if _, err := t.file.Write([]byte("AT+SBDIX\r")); err != nil {
+		t.startMonitor()
+		return nil, fmt.Errorf("SBDIX write failed: %w", err)
+	}
+	resp, err := readSBDIXResponse(t.file, timeout)
 	// Restart monitor after SBDIX (whether success or failure)
 	t.startMonitor()
 
@@ -877,6 +886,56 @@ type sbdixResult struct {
 	mtMSN    int
 	mtLength int
 	mtQueued int
+}
+
+// readSBDIXResponse reads the serial port waiting specifically for "+SBDIX:" or
+// "+SBDI:" (older firmware). Unlike readATResponse which stops at the first "OK",
+// this skips intermediate binary/residual data that may precede the +SBDIX: line.
+// The modem outputs binary buffer remnants before the actual SBDIX response when
+// the MO buffer held data from a previous binary write (AT+SBDWB).
+func readSBDIXResponse(port serial.Port, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var resp strings.Builder
+	buf := make([]byte, 256)
+	const maxResp = 4096
+
+	port.SetReadTimeout(50 * time.Millisecond)
+
+	for {
+		if time.Now().After(deadline) {
+			return resp.String(), fmt.Errorf("read timeout")
+		}
+
+		n, err := port.Read(buf)
+		if n > 0 {
+			resp.Write(buf[:n])
+			full := resp.String()
+
+			// Wait for the +SBDIX response followed by OK/ERROR
+			hasSBDIX := strings.Contains(full, "+SBDIX:") || strings.Contains(full, "IX:")
+			hasTerminator := strings.Contains(full, "\r\nOK\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(full), "OK") ||
+				strings.Contains(full, "\r\nERROR\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(full), "ERROR")
+
+			if hasSBDIX && hasTerminator {
+				return full, nil
+			}
+			// If we see ERROR without +SBDIX, the command was rejected
+			if !hasSBDIX && (strings.Contains(full, "\r\nERROR\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(full), "ERROR")) {
+				return full, nil
+			}
+
+			if resp.Len() > maxResp {
+				return full, fmt.Errorf("response too large (%d bytes)", resp.Len())
+			}
+		}
+
+		if err != nil {
+			return resp.String(), err
+		}
+	}
 }
 
 func (r sbdixResult) statusText() string {
