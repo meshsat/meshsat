@@ -782,6 +782,72 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Unified contacts (multi-transport address book)
+  const contacts = ref([])
+  const activeConversation = ref([])
+
+  async function fetchContacts() {
+    try {
+      contacts.value = await api.get('/contacts')
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createContact(payload) {
+    error.value = null
+    try {
+      const res = await api.post('/contacts', payload)
+      await fetchContacts()
+      return res
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function updateContact(id, payload) {
+    error.value = null
+    try {
+      await api.put(`/contacts/${id}`, payload)
+      await fetchContacts()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteContact(id) {
+    error.value = null
+    try {
+      await api.del(`/contacts/${id}`)
+      await fetchContacts()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function addContactAddress(contactId, payload) {
+    error.value = null
+    try {
+      const res = await api.post(`/contacts/${contactId}/addresses`, payload)
+      await fetchContacts()
+      return res
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function updateContactAddress(contactId, addrId, payload) {
+    error.value = null
+    try {
+      await api.put(`/contacts/${contactId}/addresses/${addrId}`, payload)
+      await fetchContacts()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteContactAddress(contactId, addrId) {
+    error.value = null
+    try {
+      await api.del(`/contacts/${contactId}/addresses/${addrId}`)
+      await fetchContacts()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function fetchConversation(contactId, limit = 100) {
+    try {
+      activeConversation.value = await api.get(`/contacts/${contactId}/conversation`, { limit })
+    } catch (e) { error.value = e.message }
+  }
+
   // Delivery ledger (v0.2.0)
   const deliveries = ref([])
   const deliveryStats = ref([])
@@ -1103,6 +1169,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchDLQ,
     simCards, fetchSIMCards, createSIMCard, updateSIMCard, deleteSIMCard, readCurrentICCID,
     smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
+    contacts, activeConversation, fetchContacts, createContact, updateContact, deleteContact,
+    addContactAddress, updateContactAddress, deleteContactAddress, fetchConversation,
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,

@@ -593,6 +593,41 @@ var migrations = []string{
 		WHERE channel = 'iridium' AND max_retries = 0 AND status IN ('queued', 'retry', 'held');
 	 UPDATE dead_letters SET max_retries = 10
 		WHERE max_retries = 0 AND status = 'pending';`,
+
+	// v23: Unified contacts — one entity, many transport addresses (CUBEOS-73).
+	// Replaces the single-transport sms_contacts with a multi-address model.
+	// Existing sms_contacts are migrated: each becomes a contact + SMS address.
+	`CREATE TABLE IF NOT EXISTS contacts (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		display_name TEXT NOT NULL,
+		notes        TEXT NOT NULL DEFAULT '',
+		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS contact_addresses (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		contact_id     INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+		type           TEXT NOT NULL,
+		address        TEXT NOT NULL,
+		label          TEXT NOT NULL DEFAULT '',
+		encryption_key TEXT NOT NULL DEFAULT '',
+		is_primary     INTEGER NOT NULL DEFAULT 0,
+		auto_fwd       INTEGER NOT NULL DEFAULT 0,
+		created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(type, address)
+	);
+	CREATE INDEX IF NOT EXISTS idx_contact_addresses_contact ON contact_addresses(contact_id);
+	CREATE INDEX IF NOT EXISTS idx_contact_addresses_lookup ON contact_addresses(type, address);
+
+	-- Migrate existing sms_contacts into unified contacts
+	INSERT INTO contacts (display_name, notes, created_at, updated_at)
+		SELECT name, COALESCE(notes, ''), created_at, updated_at FROM sms_contacts;
+
+	INSERT INTO contact_addresses (contact_id, type, address, label, is_primary, auto_fwd, created_at)
+		SELECT c.id, 'sms', sc.phone, 'Phone', 1, sc.auto_fwd, sc.created_at
+		FROM sms_contacts sc
+		JOIN contacts c ON c.display_name = sc.name AND c.created_at = sc.created_at;`,
 }
 
 func (db *DB) migrate() error {

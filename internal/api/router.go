@@ -182,12 +182,24 @@ func (s *Server) Router() http.Handler {
 		r.Post("/webhooks/cellular/inbound", s.handleWebhookCellularInbound) // backwards compat
 		r.Get("/webhooks/log", s.handleGetWebhookLog)
 
-		// SMS contacts (address book)
+		// SMS contacts (legacy — backward compatible, reads from sms_contacts)
 		r.Get("/cellular/contacts", s.handleGetSMSContacts)
 		r.Post("/cellular/contacts", s.handleCreateSMSContact)
 		r.Put("/cellular/contacts/{id}", s.handleUpdateSMSContact)
 		r.Delete("/cellular/contacts/{id}", s.handleDeleteSMSContact)
 		r.Post("/cellular/sms/send", s.handleSendSMS)
+
+		// Unified contacts (multi-transport address book)
+		r.Get("/contacts", s.handleGetContacts)
+		r.Post("/contacts", s.handleCreateContact)
+		r.Get("/contacts/lookup", s.handleLookupContact)
+		r.Get("/contacts/{id}", s.handleGetContact)
+		r.Put("/contacts/{id}", s.handleUpdateContact)
+		r.Delete("/contacts/{id}", s.handleDeleteContact)
+		r.Post("/contacts/{id}/addresses", s.handleAddContactAddress)
+		r.Put("/contacts/{id}/addresses/{aid}", s.handleUpdateContactAddress)
+		r.Delete("/contacts/{id}/addresses/{aid}", s.handleDeleteContactAddress)
+		r.Get("/contacts/{id}/conversation", s.handleGetConversation)
 
 		// SIM card management
 		r.Get("/cellular/sim-cards", s.handleGetSIMCards)
