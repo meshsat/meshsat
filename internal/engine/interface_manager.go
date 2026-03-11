@@ -50,15 +50,17 @@ func (s InterfaceState) MarshalJSON() ([]byte, error) {
 
 // InterfaceStatus is the runtime status of a single interface.
 type InterfaceStatus struct {
-	ID           string         `json:"id"`
-	ChannelType  string         `json:"channel_type"`
-	Label        string         `json:"label"`
-	Enabled      bool           `json:"enabled"`
-	State        InterfaceState `json:"state"`
-	DeviceID     string         `json:"device_id,omitempty"`
-	DevicePort   string         `json:"device_port,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	LastActivity time.Time      `json:"last_activity,omitempty"`
+	ID                string         `json:"id"`
+	ChannelType       string         `json:"channel_type"`
+	Label             string         `json:"label"`
+	Enabled           bool           `json:"enabled"`
+	State             InterfaceState `json:"state"`
+	DeviceID          string         `json:"device_id,omitempty"`
+	DevicePort        string         `json:"device_port,omitempty"`
+	Error             string         `json:"error,omitempty"`
+	LastActivity      time.Time      `json:"last_activity,omitempty"`
+	IngressTransforms string         `json:"ingress_transforms,omitempty"`
+	EgressTransforms  string         `json:"egress_transforms,omitempty"`
 }
 
 // DetectedDevice represents a USB device found during hotplug scan.
@@ -501,14 +503,16 @@ func (m *InterfaceManager) scanDevices() {
 
 func (m *InterfaceManager) statusFromRuntime(rt *interfaceRuntime) *InterfaceStatus {
 	return &InterfaceStatus{
-		ID:           rt.iface.ID,
-		ChannelType:  rt.iface.ChannelType,
-		Label:        rt.iface.Label,
-		Enabled:      rt.iface.Enabled,
-		State:        rt.state,
-		DeviceID:     rt.iface.DeviceID,
-		DevicePort:   rt.iface.DevicePort,
-		Error:        rt.errorMsg,
-		LastActivity: rt.lastActivity,
+		ID:                rt.iface.ID,
+		ChannelType:       rt.iface.ChannelType,
+		Label:             rt.iface.Label,
+		Enabled:           rt.iface.Enabled,
+		State:             rt.state,
+		DeviceID:          rt.iface.DeviceID,
+		DevicePort:        rt.iface.DevicePort,
+		Error:             rt.errorMsg,
+		LastActivity:      rt.lastActivity,
+		IngressTransforms: rt.iface.IngressTransforms,
+		EgressTransforms:  rt.iface.EgressTransforms,
 	}
 }
