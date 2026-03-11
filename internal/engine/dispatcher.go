@@ -468,7 +468,12 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 			}
 
 			var inputData []byte
-			if len(del.Payload) > 0 {
+			if isCellular && encrypted && del.TextPreview != "" {
+				// For cellular SMS with encryption: encrypt ONLY the text preview
+				// (human-readable message), not the full JSON payload.
+				// The MeshSat Android app decrypts to get plain text, not JSON.
+				inputData = []byte(del.TextPreview)
+			} else if len(del.Payload) > 0 {
 				inputData = del.Payload
 			} else if del.TextPreview != "" {
 				inputData = []byte(del.TextPreview)
