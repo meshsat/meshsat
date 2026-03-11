@@ -456,6 +456,14 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		return nil, fmt.Errorf("binary write: no success confirmation from modem")
 	}
 
+	// Drain any residual bytes from the binary write before SBDIX.
+	// The modem may echo parts of the binary payload or send trailing
+	// bytes after the "0\r\nOK\r\n" confirmation. Without this drain,
+	// SBDIX response parsing fails with "no +SBDIX in response" because
+	// the binary garbage gets prepended to the actual SBDIX response.
+	time.Sleep(200 * time.Millisecond)
+	drainPort(t.file)
+
 	// SBDIX
 	result, err := t.sbdixLocked(ctx)
 	// Always clear MO buffer after SBDIX attempt — the caller (gateway DLQ)
