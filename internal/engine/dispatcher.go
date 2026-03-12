@@ -2,10 +2,14 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -16,6 +20,50 @@ import (
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
+
+// DefaultMaxHops is the maximum number of interfaces a message may traverse
+// before being dropped. Prevents unbounded forwarding chains in misconfigured
+// rule sets. Override with MESHSAT_MAX_HOPS environment variable.
+const DefaultMaxHops = 8
+
+// DefaultDeliveryDedupTTL is the time window for content-hash dedup at the
+// delivery level. If the same payload is dispatched to the same interface
+// within this window, the duplicate is suppressed.
+const DefaultDeliveryDedupTTL = 5 * time.Minute
+
+// DefaultMaxQueueDepth is the default max deliveries per interface queue.
+// Override with MESHSAT_MAX_QUEUE_DEPTH environment variable.
+const DefaultMaxQueueDepth = 500
+
+// DefaultMaxQueueBytes is the default max payload bytes per interface queue.
+// Override with MESHSAT_MAX_QUEUE_BYTES environment variable.
+const DefaultMaxQueueBytes = 1 * 1024 * 1024 // 1 MB
+
+// PassStateProvider reports the current satellite pass scheduling mode.
+// Implemented by gateway.PassScheduler; defined here to avoid import cycle.
+type PassStateProvider interface {
+	// PassMode returns the current pass scheduling mode:
+	// 0=Idle, 1=PreWake, 2=Active, 3=PostPass
+	PassMode() int
+}
+
+// LoopMetrics tracks loop prevention statistics for monitoring.
+type LoopMetrics struct {
+	HopLimitDrops   atomic.Int64 // messages dropped due to max hop count
+	VisitedSetDrops atomic.Int64 // deliveries skipped by visited-set check
+	SelfLoopDrops   atomic.Int64 // deliveries skipped by self-loop check
+	DeliveryDedups  atomic.Int64 // deliveries suppressed by content-hash dedup
+}
+
+// Snapshot returns a point-in-time copy of the counters.
+func (m *LoopMetrics) Snapshot() map[string]int64 {
+	return map[string]int64{
+		"hop_limit_drops":   m.HopLimitDrops.Load(),
+		"visited_set_drops": m.VisitedSetDrops.Load(),
+		"self_loop_drops":   m.SelfLoopDrops.Load(),
+		"delivery_dedups":   m.DeliveryDedups.Load(),
+	}
+}
 
 // Dispatcher evaluates access rules and fans out messages to per-channel delivery workers.
 type Dispatcher struct {
@@ -29,6 +77,18 @@ type Dispatcher struct {
 	mesh       transport.MeshTransport
 	workers    map[string]*DeliveryWorker
 	emit       func(transport.MeshEvent) // SSE broadcast callback
+	passSched  PassStateProvider         // satellite pass scheduler (nil if no satellite interfaces)
+
+	// Loop prevention
+	maxHops          int                  // max interfaces a message may traverse
+	loopMetrics      LoopMetrics          // counters for monitoring
+	deliveryDedup    map[string]time.Time // content-hash → timestamp for delivery-level dedup
+	deliveryDedupMu  sync.Mutex
+	deliveryDedupTTL time.Duration
+
+	// Queue limits
+	maxQueueDepth int   // max deliveries per interface queue
+	maxQueueBytes int64 // max payload bytes per interface queue
 
 	mu sync.RWMutex
 }
@@ -41,13 +101,41 @@ type forwardOptions struct {
 
 // NewDispatcher creates a dispatcher wired to the channel registry and gateways.
 func NewDispatcher(db *database.DB, reg *channel.Registry, gwProv GatewayProvider, mesh transport.MeshTransport) *Dispatcher {
-	return &Dispatcher{
-		db:       db,
-		registry: reg,
-		gwProv:   gwProv,
-		mesh:     mesh,
-		workers:  make(map[string]*DeliveryWorker),
+	maxHops := DefaultMaxHops
+	if v := os.Getenv("MESHSAT_MAX_HOPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxHops = n
+		}
 	}
+	maxQueueDepth := DefaultMaxQueueDepth
+	if v := os.Getenv("MESHSAT_MAX_QUEUE_DEPTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxQueueDepth = n
+		}
+	}
+	maxQueueBytes := int64(DefaultMaxQueueBytes)
+	if v := os.Getenv("MESHSAT_MAX_QUEUE_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			maxQueueBytes = n
+		}
+	}
+	return &Dispatcher{
+		db:               db,
+		registry:         reg,
+		gwProv:           gwProv,
+		mesh:             mesh,
+		workers:          make(map[string]*DeliveryWorker),
+		maxHops:          maxHops,
+		maxQueueDepth:    maxQueueDepth,
+		maxQueueBytes:    maxQueueBytes,
+		deliveryDedup:    make(map[string]time.Time),
+		deliveryDedupTTL: DefaultDeliveryDedupTTL,
+	}
+}
+
+// LoopMetrics returns a reference to the loop prevention metrics.
+func (d *Dispatcher) LoopMetrics() *LoopMetrics {
+	return &d.loopMetrics
 }
 
 // SetEmitter sets the SSE broadcast callback.
@@ -73,6 +161,19 @@ func (d *Dispatcher) SetSigningService(ss *SigningService) {
 // SetTransformPipeline sets the v0.3.0 per-interface transform pipeline.
 func (d *Dispatcher) SetTransformPipeline(tp *TransformPipeline) {
 	d.transforms = tp
+}
+
+// SetPassStateProvider sets the satellite pass scheduler for pass-aware delivery.
+func (d *Dispatcher) SetPassStateProvider(ps PassStateProvider) {
+	d.passSched = ps
+}
+
+// satellitePassSched returns the pass scheduler for satellite channels, nil otherwise.
+func (d *Dispatcher) satellitePassSched(desc channel.ChannelDescriptor) PassStateProvider {
+	if desc.IsSatellite && d.passSched != nil {
+		return d.passSched
+	}
+	return nil
 }
 
 // Start launches per-channel delivery workers.
@@ -110,6 +211,8 @@ func (d *Dispatcher) Start(ctx context.Context) {
 			emit:       d.emit,
 			signing:    d.signing,
 			transforms: d.transforms,
+			access:     d.access,
+			passSched:  d.satellitePassSched(desc),
 		}
 		d.workers[desc.ID] = w
 		go w.Run(ctx)
@@ -118,6 +221,20 @@ func (d *Dispatcher) Start(ctx context.Context) {
 
 	// v0.3.0 workers: one per interface ID (for DispatchAccess deliveries)
 	d.startInterfaceWorkers(ctx)
+
+	// Prune delivery dedup cache every 2 minutes
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.pruneDeliveryDedup()
+			}
+		}
+	}()
 
 	// Start TTL reaper — expires deliveries past their TTL every 60 seconds
 	go func() {
@@ -177,6 +294,8 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			emit:       d.emit,
 			signing:    d.signing,
 			transforms: d.transforms,
+			access:     d.access,
+			passSched:  d.satellitePassSched(desc),
 			cancel:     workerCancel,
 		}
 		d.workers[iface.ID] = w
@@ -218,6 +337,8 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		emit:       d.emit,
 		signing:    d.signing,
 		transforms: d.transforms,
+		access:     d.access,
+		passSched:  d.satellitePassSched(desc),
 		cancel:     workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -266,6 +387,15 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		return 0
 	}
 
+	// Max hop count: drop messages that have traversed too many interfaces
+	if len(msg.Visited) >= d.maxHops {
+		d.loopMetrics.HopLimitDrops.Add(1)
+		log.Warn().Int("hops", len(msg.Visited)).Int("max", d.maxHops).
+			Strs("visited", msg.Visited).Str("source", sourceInterface).
+			Msg("loop prevention: max hop count exceeded, dropping message")
+		return 0
+	}
+
 	matches := d.access.EvaluateIngress(sourceInterface, msg)
 	if len(matches) == 0 {
 		return 0
@@ -288,6 +418,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 
 		// Post-resolution loop prevention: check resolved target against visited set
 		if destInterface == sourceInterface {
+			d.loopMetrics.SelfLoopDrops.Add(1)
 			log.Debug().Str("target", destInterface).Str("source", sourceInterface).
 				Msg("failover: resolved target is source interface, skipping")
 			continue
@@ -296,6 +427,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			skip := false
 			for _, v := range msg.Visited {
 				if v == destInterface {
+					d.loopMetrics.VisitedSetDrops.Add(1)
 					log.Debug().Str("target", destInterface).Strs("visited", msg.Visited).
 						Msg("failover: resolved target already in visited set, skipping")
 					skip = true
@@ -349,6 +481,53 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 		ttlSeconds := fwdOpts.TTLSeconds
 
+		// Apply per-channel-type default TTL when rule doesn't specify one
+		if ttlSeconds == 0 && ok && desc.DefaultTTL > 0 {
+			ttlSeconds = int(desc.DefaultTTL / time.Second)
+		}
+
+		// Content-hash dedup: suppress duplicate payload→interface deliveries within TTL window
+		if d.isDeliveryDuplicate(destInterface, payload) {
+			d.loopMetrics.DeliveryDedups.Add(1)
+			log.Debug().Str("dest", destInterface).Msg("delivery dedup: same payload recently delivered to this interface, skipping")
+			continue
+		}
+
+		// Queue limit check: higher-priority messages evict lower-priority ones.
+		// P0 critical messages always get through (evict any non-P0).
+		if d.maxQueueDepth > 0 {
+			depth, dErr := d.db.QueueDepth(destInterface)
+			if dErr == nil && depth >= d.maxQueueDepth {
+				// Check if we can evict: new message must be strictly higher priority
+				// (lower number) than the lowest-priority queued delivery.
+				lowestPri, lErr := d.db.LowestActivePriority(destInterface)
+				if lErr != nil || m.Rule.Priority >= lowestPri {
+					// Nothing evictable or new message is same/lower priority
+					log.Warn().Str("dest", destInterface).Int("depth", depth).Int("max", d.maxQueueDepth).
+						Int("new_priority", m.Rule.Priority).
+						Msg("queue depth limit reached, rejecting delivery")
+					continue
+				}
+				// Evict lowest-priority delivery to make room
+				if n, eErr := d.db.EvictLowestPriority(destInterface); eErr != nil || n == 0 {
+					log.Warn().Str("dest", destInterface).Err(eErr).
+						Msg("queue depth limit: eviction failed, rejecting delivery")
+					continue
+				}
+				log.Info().Str("dest", destInterface).Int("evicted_priority", lowestPri).
+					Int("new_priority", m.Rule.Priority).
+					Msg("queue full: evicted lower-priority delivery to admit higher-priority")
+			}
+		}
+		if d.maxQueueBytes > 0 {
+			qBytes, bErr := d.db.QueueBytes(destInterface)
+			if bErr == nil && qBytes+int64(len(payload)) > d.maxQueueBytes {
+				log.Warn().Str("dest", destInterface).Int64("bytes", qBytes).Int64("max", d.maxQueueBytes).
+					Msg("queue bytes limit reached, rejecting delivery")
+				continue
+			}
+		}
+
 		ruleID := m.Rule.ID
 		del := database.MessageDelivery{
 			MsgRef:      msgRef,
@@ -363,8 +542,8 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			QoSLevel:    m.Rule.QoSLevel,
 		}
 
-		// Set TTL expiry if configured
-		if ttlSeconds > 0 {
+		// Set TTL expiry if configured (P0 critical messages exempt — never expire)
+		if ttlSeconds > 0 && m.Rule.Priority > 0 {
 			del.TTLSeconds = ttlSeconds
 			exp := time.Now().Add(time.Duration(ttlSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
 			del.ExpiresAt = &exp
@@ -403,6 +582,37 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 	return count
 }
 
+// isDeliveryDuplicate checks whether the same payload was recently dispatched to
+// the same interface. Uses a SHA-256 content hash with a configurable TTL window.
+func (d *Dispatcher) isDeliveryDuplicate(destInterface string, payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	h := sha256.Sum256(append([]byte(destInterface+"|"), payload...))
+	key := fmt.Sprintf("%x", h[:12])
+
+	d.deliveryDedupMu.Lock()
+	defer d.deliveryDedupMu.Unlock()
+
+	if ts, ok := d.deliveryDedup[key]; ok && time.Since(ts) < d.deliveryDedupTTL {
+		return true
+	}
+	d.deliveryDedup[key] = time.Now()
+	return false
+}
+
+// pruneDeliveryDedup removes expired entries from the delivery dedup cache.
+func (d *Dispatcher) pruneDeliveryDedup() {
+	d.deliveryDedupMu.Lock()
+	defer d.deliveryDedupMu.Unlock()
+	now := time.Now()
+	for k, ts := range d.deliveryDedup {
+		if now.Sub(ts) > d.deliveryDedupTTL {
+			delete(d.deliveryDedup, k)
+		}
+	}
+}
+
 // DeliveryWorker polls the delivery queue for a single channel and attempts delivery.
 type DeliveryWorker struct {
 	channelID  string
@@ -413,7 +623,9 @@ type DeliveryWorker struct {
 	emit       func(transport.MeshEvent)
 	signing    *SigningService
 	transforms *TransformPipeline
-	cancel     context.CancelFunc // per-worker cancellation
+	access     *rules.AccessEvaluator // egress rule check before send
+	passSched  PassStateProvider      // satellite pass scheduler (nil for non-satellite)
+	cancel     context.CancelFunc     // per-worker cancellation
 }
 
 // Run polls the delivery queue and processes pending deliveries.
@@ -432,6 +644,19 @@ func (w *DeliveryWorker) Run(ctx context.Context) {
 }
 
 func (w *DeliveryWorker) processBatch(ctx context.Context) {
+	// Pass-aware scheduling: for satellite interfaces, only drain during Active/PostPass passes.
+	if w.passSched != nil {
+		mode := w.passSched.PassMode()
+		if mode == 0 { // Idle — no pass within pre-wake window
+			return
+		}
+		if mode == 1 { // PreWake — pass approaching, prepare queue but don't drain
+			w.prepareQueue()
+			return
+		}
+		// Mode 2 (Active) or 3 (PostPass): proceed with drain
+	}
+
 	deliveries, err := w.db.GetPendingDeliveries(w.channelID, 10)
 	if err != nil {
 		log.Error().Err(err).Str("channel", w.channelID).Msg("failed to fetch pending deliveries")
@@ -448,6 +673,23 @@ func (w *DeliveryWorker) processBatch(ctx context.Context) {
 	}
 }
 
+// prepareQueue runs during PreWake: expires stale deliveries and logs queue
+// readiness so that when the pass becomes Active the queue is clean and ordered.
+func (w *DeliveryWorker) prepareQueue() {
+	// Expire any deliveries whose TTL has lapsed while waiting for a pass
+	if n, err := w.db.ExpireDeliveriesForChannel(w.channelID); err != nil {
+		log.Error().Err(err).Str("channel", w.channelID).Msg("pre-wake: TTL expiry check failed")
+	} else if n > 0 {
+		log.Info().Str("channel", w.channelID).Int64("expired", n).Msg("pre-wake: expired stale deliveries")
+	}
+
+	// Log queue state for observability
+	depth, _ := w.db.QueueDepth(w.channelID)
+	if depth > 0 {
+		log.Debug().Str("channel", w.channelID).Int("queued", depth).Msg("pre-wake: queue ready for active pass")
+	}
+}
+
 func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelivery) {
 	// Safety check: re-read delivery status before processing. Between GetPendingDeliveries
 	// and now, the delivery may have been completed by another path (e.g. MailboxCheck piggyback)
@@ -456,6 +698,50 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		if fresh.Status == "sent" || fresh.Status == "dead" || fresh.Status == "cancelled" {
 			log.Debug().Int64("id", del.ID).Str("status", fresh.Status).Msg("delivery already terminal, skipping")
 			return
+		}
+	}
+
+	// Egress rule check: evaluate egress rules on the destination interface before sending.
+	// Only applies when egress rules are configured for this interface (no rules = implicit allow).
+	// If egress denies, mark the delivery as 'denied' and skip sending.
+	if w.access != nil && w.access.HasEgressRules(w.channelID) {
+		egressMsg := rules.RouteMessage{
+			Text: del.TextPreview,
+		}
+		// Parse visited set for loop prevention context
+		if del.Visited != "" && del.Visited != "[]" {
+			var visited []string
+			if err := json.Unmarshal([]byte(del.Visited), &visited); err == nil {
+				egressMsg.Visited = visited
+			}
+		}
+		matches := w.access.EvaluateEgress(w.channelID, egressMsg)
+		if len(matches) == 0 {
+			// Implicit deny — egress rules exist but none matched
+			if err := w.db.SetDeliveryStatus(del.ID, "denied", "egress rules denied", ""); err != nil {
+				log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery denied")
+			}
+			log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("delivery denied by egress rules")
+			if w.signing != nil {
+				ifacePtr := &w.channelID
+				dir := "egress"
+				delID := del.ID
+				w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, "egress rules denied")
+			}
+			return
+		}
+	}
+
+	// TTL expiry check before send: verify delivery hasn't expired (P0 exempt)
+	if del.Priority > 0 && del.ExpiresAt != nil && *del.ExpiresAt != "" {
+		if expT, err := time.Parse("2006-01-02 15:04:05", *del.ExpiresAt); err == nil {
+			if time.Now().UTC().After(expT) {
+				if err := w.db.SetDeliveryStatus(del.ID, "expired", "TTL expired before send", ""); err != nil {
+					log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery expired")
+				}
+				log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("delivery expired before send attempt")
+				return
+			}
 		}
 	}
 

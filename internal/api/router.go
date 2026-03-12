@@ -30,6 +30,7 @@ type Server struct {
 	gpsReader     *transport.GPSReader
 	ifaceMgr      *engine.InterfaceManager
 	signing       *engine.SigningService
+	dispatcher    *engine.Dispatcher
 	paidRateLimit int
 	sos           *SOSState
 	webHandler    http.Handler
@@ -88,6 +89,11 @@ func (s *Server) SetAccessEvaluator(ae *rules.AccessEvaluator) {
 // SetInterfaceManager sets the interface manager for v0.3.0 interface CRUD.
 func (s *Server) SetInterfaceManager(m *engine.InterfaceManager) {
 	s.ifaceMgr = m
+}
+
+// SetDispatcher sets the dispatcher for loop metrics exposure.
+func (s *Server) SetDispatcher(d *engine.Dispatcher) {
+	s.dispatcher = d
 }
 
 // Router builds the chi router with all API routes.
@@ -314,6 +320,9 @@ func (s *Server) Router() http.Handler {
 		// Crypto utilities (v0.3.0)
 		r.Post("/crypto/generate-key", s.handleGenerateEncryptionKey)
 		r.Post("/crypto/validate-transforms", s.handleValidateTransforms)
+
+		// Loop prevention metrics (v0.3.0)
+		r.Get("/loop-metrics", s.handleGetLoopMetrics)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

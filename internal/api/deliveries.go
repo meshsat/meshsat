@@ -107,3 +107,22 @@ func (s *Server) handleGetMessageDeliveries(w http.ResponseWriter, r *http.Reque
 	}
 	writeJSON(w, http.StatusOK, deliveries)
 }
+
+// handleGetLoopMetrics returns loop prevention counters.
+// @Summary Get loop prevention metrics
+// @Description Returns counters for hop limit drops, visited set drops, self-loop drops, and delivery dedups
+// @Tags routing
+// @Success 200 {object} map[string]int64
+// @Router /api/loop-metrics [get]
+func (s *Server) handleGetLoopMetrics(w http.ResponseWriter, r *http.Request) {
+	if s.dispatcher == nil {
+		writeJSON(w, http.StatusOK, map[string]int64{
+			"hop_limit_drops":   0,
+			"visited_set_drops": 0,
+			"self_loop_drops":   0,
+			"delivery_dedups":   0,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.dispatcher.LoopMetrics().Snapshot())
+}

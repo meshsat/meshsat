@@ -30,6 +30,8 @@ func RegisterDefaults(r *Registry) {
 		CanReceive:    true,
 		BinaryCapable: true,
 		MaxPayload:    340,
+		DefaultTTL:    3600 * time.Second,
+		IsSatellite:   true,
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 180 * time.Second,
@@ -51,6 +53,8 @@ func RegisterDefaults(r *Registry) {
 		CanReceive:    true,
 		BinaryCapable: true,
 		MaxPayload:    160,
+		DefaultTTL:    3600 * time.Second,
+		IsSatellite:   true,
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 300 * time.Second,
@@ -71,6 +75,7 @@ func RegisterDefaults(r *Registry) {
 		CanSend:    true,
 		CanReceive: true,
 		MaxPayload: 160,
+		DefaultTTL: 86400 * time.Second,
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 30 * time.Second,
@@ -128,6 +133,7 @@ func RegisterDefaults(r *Registry) {
 		CanSend:    true,
 		CanReceive: true,
 		MaxPayload: 0, // unlimited
+		DefaultTTL: 300 * time.Second,
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 1 * time.Second,

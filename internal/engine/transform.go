@@ -23,11 +23,18 @@ type TransformSpec struct {
 }
 
 // TransformPipeline applies ordered transforms to payloads.
-type TransformPipeline struct{}
+type TransformPipeline struct {
+	llamazip *compress.LlamaZipClient
+}
 
 // NewTransformPipeline creates a new pipeline.
 func NewTransformPipeline() *TransformPipeline {
 	return &TransformPipeline{}
+}
+
+// SetLlamaZipClient sets the optional llama-zip sidecar client.
+func (tp *TransformPipeline) SetLlamaZipClient(c *compress.LlamaZipClient) {
+	tp.llamazip = c
 }
 
 // ApplyEgress applies egress transforms in order (compress, encode, etc.)
@@ -42,7 +49,7 @@ func (tp *TransformPipeline) ApplyEgress(data []byte, transformsJSON string) ([]
 
 	result := data
 	for _, t := range transforms {
-		result, err = applyTransform(t, result)
+		result, err = tp.applyTransform(t, result)
 		if err != nil {
 			return nil, fmt.Errorf("egress transform %q: %w", t.Type, err)
 		}
@@ -63,7 +70,7 @@ func (tp *TransformPipeline) ApplyIngress(data []byte, transformsJSON string) ([
 	// Reverse order for ingress
 	result := data
 	for i := len(transforms) - 1; i >= 0; i-- {
-		result, err = reverseTransform(transforms[i], result)
+		result, err = tp.reverseTransform(transforms[i], result)
 		if err != nil {
 			return nil, fmt.Errorf("ingress transform %q: %w", transforms[i].Type, err)
 		}
@@ -82,7 +89,7 @@ func parseTransforms(jsonStr string) ([]TransformSpec, error) {
 	return specs, nil
 }
 
-func applyTransform(t TransformSpec, data []byte) ([]byte, error) {
+func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byte, error) {
 	switch t.Type {
 	case "zstd":
 		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
@@ -101,6 +108,24 @@ func applyTransform(t TransformSpec, data []byte) ([]byte, error) {
 			dict = compress.DictMeshtastic
 		}
 		return compress.Compress(data, dict), nil
+	case "llamazip":
+		if tp.llamazip == nil || !tp.llamazip.IsReady() {
+			log.Warn().Msg("transform: llamazip sidecar not available, falling back to smaz2")
+			dict := compress.DictMeshtastic
+			return compress.Compress(data, dict), nil
+		}
+		compressed, durationMs, err := tp.llamazip.Compress(data)
+		if err != nil {
+			log.Warn().Err(err).Msg("transform: llamazip compress failed, falling back to smaz2")
+			dict := compress.DictMeshtastic
+			return compress.Compress(data, dict), nil
+		}
+		log.Debug().
+			Int("original", len(data)).
+			Int("compressed", len(compressed)).
+			Int("duration_ms", durationMs).
+			Msg("transform: llamazip compressed")
+		return compressed, nil
 	case "encrypt":
 		return encryptAESGCM(data, t.Params["key"])
 	default:
@@ -109,7 +134,7 @@ func applyTransform(t TransformSpec, data []byte) ([]byte, error) {
 	}
 }
 
-func reverseTransform(t TransformSpec, data []byte) ([]byte, error) {
+func (tp *TransformPipeline) reverseTransform(t TransformSpec, data []byte) ([]byte, error) {
 	switch t.Type {
 	case "zstd":
 		decoder, err := zstd.NewReader(nil)
@@ -131,6 +156,15 @@ func reverseTransform(t TransformSpec, data []byte) ([]byte, error) {
 			dict = compress.DictMeshtastic
 		}
 		return compress.Decompress(data, dict)
+	case "llamazip":
+		if tp.llamazip == nil || !tp.llamazip.IsReady() {
+			return nil, fmt.Errorf("llamazip sidecar not available for decompression")
+		}
+		decompressed, _, err := tp.llamazip.Decompress(data)
+		if err != nil {
+			return nil, fmt.Errorf("llamazip decompress: %w", err)
+		}
+		return decompressed, nil
 	case "encrypt":
 		return decryptAESGCM(data, t.Params["key"])
 	default:
@@ -162,7 +196,7 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			if t.Params["key"] == "" {
 				errors = append(errors, "encrypt transform requires a 'key' param")
 			}
-		case "zstd", "smaz2":
+		case "zstd", "smaz2", "llamazip":
 			hasBinaryOutput = true
 			endsWithBase64 = false
 		case "base64":

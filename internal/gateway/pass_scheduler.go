@@ -200,6 +200,11 @@ func (ps *PassScheduler) Mode() ScheduleMode {
 	return ps.mode
 }
 
+// PassMode returns the current mode as an int, satisfying engine.PassStateProvider.
+func (ps *PassScheduler) PassMode() int {
+	return int(ps.Mode())
+}
+
 // run is the main scheduler loop. It recomputes passes periodically and
 // sets precise timers for mode transitions.
 func (ps *PassScheduler) run(ctx context.Context) {

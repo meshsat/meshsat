@@ -27,25 +27,32 @@ type Config struct {
 
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
+
+	// llama-zip gRPC sidecar address (empty = disabled)
+	LlamaZipAddr string
+	// llama-zip RPC timeout in seconds
+	LlamaZipTimeoutSec int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
-		Port:            envInt("MESHSAT_PORT", 6050),
-		DBPath:          envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
-		HALURL:          envStr("HAL_URL", "http://cubeos-hal:6005"),
-		HALAPIKey:       envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
-		Mode:            envStr("MESHSAT_MODE", "cubeos"),
-		RetentionDays:   envInt("MESHSAT_RETENTION_DAYS", 30),
-		WebDir:          envStr("MESHSAT_WEB_DIR", ""),
-		MeshtasticPort:  envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
-		IridiumPort:     envStr("MESHSAT_IRIDIUM_PORT", "auto"),
-		CellularPort:    envStr("MESHSAT_CELLULAR_PORT", "auto"),
-		AstrocastPort:   envStr("MESHSAT_ASTROCAST_PORT", "auto"),
-		ZigBeePort:      envStr("MESHSAT_ZIGBEE_PORT", "auto"),
-		PaidRateLimit:   envInt("MESHSAT_PAID_RATE_LIMIT", 60),
-		MeshWatchdogMin: envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		Port:               envInt("MESHSAT_PORT", 6050),
+		DBPath:             envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
+		HALURL:             envStr("HAL_URL", "http://cubeos-hal:6005"),
+		HALAPIKey:          envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
+		Mode:               envStr("MESHSAT_MODE", "cubeos"),
+		RetentionDays:      envInt("MESHSAT_RETENTION_DAYS", 30),
+		WebDir:             envStr("MESHSAT_WEB_DIR", ""),
+		MeshtasticPort:     envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
+		IridiumPort:        envStr("MESHSAT_IRIDIUM_PORT", "auto"),
+		CellularPort:       envStr("MESHSAT_CELLULAR_PORT", "auto"),
+		AstrocastPort:      envStr("MESHSAT_ASTROCAST_PORT", "auto"),
+		ZigBeePort:         envStr("MESHSAT_ZIGBEE_PORT", "auto"),
+		PaidRateLimit:      envInt("MESHSAT_PAID_RATE_LIMIT", 60),
+		MeshWatchdogMin:    envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		LlamaZipAddr:       envStr("MESHSAT_LLAMAZIP_ADDR", ""),
+		LlamaZipTimeoutSec: envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
 	}
 }
 

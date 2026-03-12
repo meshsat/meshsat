@@ -142,7 +142,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 		FROM message_deliveries
 		WHERE channel = ? AND status IN ('queued', 'retry')
 		  AND (next_retry IS NULL OR next_retry <= datetime('now'))
-		  AND (expires_at IS NULL OR expires_at > datetime('now'))
+		  AND (priority = 0 OR expires_at IS NULL OR expires_at > datetime('now'))
 		ORDER BY priority ASC, created_at ASC
 		LIMIT ?`, channel, limit)
 	if err != nil {
@@ -241,6 +241,55 @@ func (db *DB) RetryDelivery(id int64) error {
 	return nil
 }
 
+// QueueDepth returns the number of active (non-terminal) deliveries for a channel.
+func (db *DB) QueueDepth(channel string) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM message_deliveries WHERE channel = ? AND status IN ('queued', 'retry', 'held', 'sending')`, channel).Scan(&count)
+	return count, err
+}
+
+// QueueBytes returns the total payload size of active deliveries for a channel.
+func (db *DB) QueueBytes(channel string) (int64, error) {
+	var total int64
+	err := db.QueryRow(`SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM message_deliveries WHERE channel = ? AND status IN ('queued', 'retry', 'held', 'sending')`, channel).Scan(&total)
+	return total, err
+}
+
+// LowestActivePriority returns the lowest priority (highest number) of active
+// deliveries in a channel's queue. Returns -1 if no evictable delivery exists.
+// Only considers non-P0 deliveries (P0 critical messages are never evicted).
+func (db *DB) LowestActivePriority(channel string) (int, error) {
+	var priority int
+	err := db.QueryRow(`SELECT priority FROM message_deliveries
+		WHERE channel = ? AND status IN ('queued', 'retry', 'held')
+		  AND priority > 0
+		ORDER BY priority DESC
+		LIMIT 1`, channel).Scan(&priority)
+	if err != nil {
+		return -1, err
+	}
+	return priority, nil
+}
+
+// EvictLowestPriority removes the single lowest-priority (highest priority number)
+// active delivery from a channel's queue, marking it 'dead'. Returns the number
+// of rows affected. Only evicts non-P0 deliveries.
+func (db *DB) EvictLowestPriority(channel string) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead',
+		last_error = 'evicted: queue full, lower priority', updated_at = datetime('now')
+		WHERE id = (
+			SELECT id FROM message_deliveries
+			WHERE channel = ? AND status IN ('queued', 'retry', 'held')
+			  AND priority > 0
+			ORDER BY priority DESC, created_at DESC
+			LIMIT 1
+		)`, channel)
+	if err != nil {
+		return 0, fmt.Errorf("evict delivery for %s: %w", channel, err)
+	}
+	return res.RowsAffected()
+}
+
 // CancelRunawayDeliveries kills queued/retry deliveries whose retry count exceeds
 // their max_retries setting. This cleans up deliveries that accumulated excessive
 // retries due to bugs (e.g. SBDIX parse failures causing false retries).
@@ -270,11 +319,25 @@ func (db *DB) RecoverStaleDeliveries() (int64, error) {
 }
 
 // ExpireDeliveries marks all expired queued/retry/held deliveries as 'expired'.
+// P0 critical messages (priority=0) are exempt — they never expire.
 func (db *DB) ExpireDeliveries() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')
-		WHERE status IN ('queued', 'retry', 'held') AND expires_at IS NOT NULL AND expires_at <= datetime('now')`)
+		WHERE status IN ('queued', 'retry', 'held') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
+		  AND priority > 0`)
 	if err != nil {
 		return 0, fmt.Errorf("expire deliveries: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// ExpireDeliveriesForChannel marks expired deliveries for a specific channel.
+// P0 critical messages (priority=0) are exempt — they never expire.
+func (db *DB) ExpireDeliveriesForChannel(channel string) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')
+		WHERE channel = ? AND status IN ('queued', 'retry', 'held') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
+		  AND priority > 0`, channel)
+	if err != nil {
+		return 0, fmt.Errorf("expire deliveries for %s: %w", channel, err)
 	}
 	return res.RowsAffected()
 }
@@ -291,9 +354,20 @@ func (db *DB) HoldDeliveriesForChannel(channel string) (int64, error) {
 }
 
 // UnholdDeliveriesForChannel moves held deliveries back to 'queued' status for a channel.
-// Called when an interface comes back online.
+// Called when an interface comes back online. Extends expires_at by the duration spent
+// in held state (TTL clock pauses while held).
 func (db *DB) UnholdDeliveriesForChannel(channel string) (int64, error) {
-	res, err := db.Exec(`UPDATE message_deliveries SET status = 'queued', held_at = NULL, updated_at = datetime('now')
+	// Extend expires_at by (now - held_at) seconds for deliveries that have both
+	// a held_at timestamp and an expires_at. This pauses the TTL clock while held.
+	res, err := db.Exec(`UPDATE message_deliveries
+		SET status = 'queued',
+		    expires_at = CASE
+		        WHEN expires_at IS NOT NULL AND held_at IS NOT NULL
+		        THEN datetime(expires_at, '+' || CAST((strftime('%s', 'now') - strftime('%s', held_at)) AS TEXT) || ' seconds')
+		        ELSE expires_at
+		    END,
+		    held_at = NULL,
+		    updated_at = datetime('now')
 		WHERE channel = ? AND status = 'held'`, channel)
 	if err != nil {
 		return 0, fmt.Errorf("unhold deliveries for %s: %w", channel, err)

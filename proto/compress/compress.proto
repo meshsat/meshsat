@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package compress;
+
+option go_package = "meshsat/internal/compress/compresspb";
+
+// CompressionService provides LLM-based text compression via llama-zip.
+service CompressionService {
+  // Compress compresses text using LLM arithmetic coding.
+  rpc Compress(CompressRequest) returns (CompressResponse);
+
+  // Decompress decompresses data previously compressed by this service.
+  rpc Decompress(DecompressRequest) returns (DecompressResponse);
+
+  // Health returns sidecar readiness (model loaded, GPU/CPU status).
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message CompressRequest {
+  bytes data = 1;
+}
+
+message CompressResponse {
+  bytes compressed = 1;
+  // Original size for ratio calculation.
+  int32 original_size = 2;
+  // Compression duration in milliseconds.
+  int32 duration_ms = 3;
+}
+
+message DecompressRequest {
+  bytes compressed = 1;
+}
+
+message DecompressResponse {
+  bytes data = 1;
+  // Decompression duration in milliseconds.
+  int32 duration_ms = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  string model_name = 2;
+  // Model size in bytes.
+  int64 model_size_bytes = 3;
+  string device = 4; // "cpu" or "cuda"
+}

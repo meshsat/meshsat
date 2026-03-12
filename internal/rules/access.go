@@ -131,8 +131,21 @@ func (e *AccessEvaluator) EvaluateIngress(interfaceID string, msg RouteMessage) 
 
 // EvaluateEgress evaluates egress access rules before sending to a destination interface.
 // Returns all matching rules. Empty result means implicit deny (drop).
+// If no egress rules are configured for this interface, returns nil (implicit allow).
 func (e *AccessEvaluator) EvaluateEgress(interfaceID string, msg RouteMessage) []AccessMatchResult {
 	return e.evaluate(interfaceID, "egress", msg)
+}
+
+// HasEgressRules returns true if any enabled egress rules exist for the given interface.
+func (e *AccessEvaluator) HasEgressRules(interfaceID string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, rule := range e.rules {
+		if rule.Enabled && rule.InterfaceID == interfaceID && rule.Direction == "egress" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *AccessEvaluator) evaluate(interfaceID, direction string, msg RouteMessage) []AccessMatchResult {

@@ -1,0 +1,38 @@
+# llama-zip sidecar evaluation stack.
+# Usage: docker compose -f docker-compose.standalone.yml -f docker-compose.llamazip.yml up --build
+#
+# This extends the standalone compose with a Python gRPC sidecar running
+# llama-zip + SmolLM2-135M Q4 for LLM-based compression evaluation.
+services:
+  meshsat:
+    environment:
+      - MESHSAT_LLAMAZIP_ADDR=llamazip:50051
+      - MESHSAT_LLAMAZIP_TIMEOUT=30
+    depends_on:
+      llamazip:
+        condition: service_healthy
+
+  llamazip:
+    build:
+      context: .
+      dockerfile: sidecar/llama-zip/Dockerfile
+    environment:
+      - LLAMAZIP_LISTEN=0.0.0.0:50051
+      - LLAMAZIP_MODEL_REPO=bartowski/SmolLM2-135M-Instruct-GGUF
+      - LLAMAZIP_MODEL_FILE=SmolLM2-135M-Instruct-Q4_K_M.gguf
+      - LLAMAZIP_MODEL_CACHE=/models
+      - LLAMAZIP_WORKERS=2
+      - LLAMAZIP_N_CTX=2048
+    volumes:
+      - llamazip-models:/models
+    healthcheck:
+      # Use grpc_health_probe or fallback to python check
+      test: ["CMD", "python", "-c", "import grpc; ch = grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  llamazip-models:

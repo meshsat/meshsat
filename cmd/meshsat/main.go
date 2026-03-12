@@ -14,6 +14,7 @@ import (
 
 	"meshsat/internal/api"
 	"meshsat/internal/channel"
+	"meshsat/internal/compress"
 	"meshsat/internal/config"
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
@@ -229,6 +230,16 @@ func main() {
 		dispatcher.SetSigningService(signingService)
 	}
 	transforms := engine.NewTransformPipeline()
+	if cfg.LlamaZipAddr != "" {
+		lzClient := compress.NewLlamaZipClient(cfg.LlamaZipAddr, time.Duration(cfg.LlamaZipTimeoutSec)*time.Second)
+		if err := lzClient.Connect(ctx); err != nil {
+			log.Warn().Err(err).Str("addr", cfg.LlamaZipAddr).Msg("llamazip sidecar not available (compression fallback: smaz2)")
+		} else {
+			transforms.SetLlamaZipClient(lzClient)
+			defer lzClient.Close()
+			log.Info().Str("addr", cfg.LlamaZipAddr).Msg("llamazip sidecar connected")
+		}
+	}
 	dispatcher.SetTransformPipeline(transforms)
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)
@@ -279,6 +290,7 @@ func main() {
 	if signingService != nil {
 		srv.SetSigningService(signingService)
 	}
+	srv.SetDispatcher(dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 
