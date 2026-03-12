@@ -645,6 +645,20 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_routing_dest_iface ON routing_destinations(source_iface);
 	CREATE INDEX IF NOT EXISTS idx_routing_dest_seen ON routing_destinations(last_seen);`,
+
+	// v25: Routing links — tracks established encrypted links between nodes (MESHSAT-20).
+	// Each link represents a 3-packet X25519 → ECDH → AES-256 handshake.
+	`CREATE TABLE IF NOT EXISTS routing_links (
+		link_id        TEXT PRIMARY KEY,
+		dest_hash      TEXT NOT NULL DEFAULT '',
+		state          TEXT NOT NULL DEFAULT 'pending',
+		is_initiator   INTEGER NOT NULL DEFAULT 0,
+		created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		last_activity  TEXT NOT NULL DEFAULT (datetime('now')),
+		closed_at      TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_routing_links_dest ON routing_links(dest_hash);
+	CREATE INDEX IF NOT EXISTS idx_routing_links_state ON routing_links(state);`,
 }
 
 func (db *DB) migrate() error {
