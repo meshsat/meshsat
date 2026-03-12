@@ -628,6 +628,23 @@ var migrations = []string{
 		SELECT c.id, 'sms', sc.phone, 'Phone', 1, sc.auto_fwd, sc.created_at
 		FROM sms_contacts sc
 		JOIN contacts c ON c.display_name = sc.name AND c.created_at = sc.created_at;`,
+
+	// v24: Reticulum-inspired routing — destination table for announce discovery (MESHSAT-20).
+	// Stores known remote identities discovered via announce packets.
+	// dest_hash is the 16-byte truncated SHA-256(signing_pub || encryption_pub), hex-encoded.
+	`CREATE TABLE IF NOT EXISTS routing_destinations (
+		dest_hash      TEXT PRIMARY KEY,
+		signing_pub    BLOB NOT NULL,
+		encryption_pub BLOB NOT NULL,
+		app_data       BLOB,
+		hop_count      INTEGER NOT NULL DEFAULT 0,
+		source_iface   TEXT NOT NULL DEFAULT '',
+		first_seen     TEXT NOT NULL DEFAULT (datetime('now')),
+		last_seen      TEXT NOT NULL DEFAULT (datetime('now')),
+		announce_count INTEGER NOT NULL DEFAULT 1
+	);
+	CREATE INDEX IF NOT EXISTS idx_routing_dest_iface ON routing_destinations(source_iface);
+	CREATE INDEX IF NOT EXISTS idx_routing_dest_seen ON routing_destinations(last_seen);`,
 }
 
 func (db *DB) migrate() error {
