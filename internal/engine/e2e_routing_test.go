@@ -153,6 +153,9 @@ func (m *mockMeshTransport) GetCannedMessages(ctx context.Context) error { retur
 func (m *mockMeshTransport) GetNeighborInfo(ctx context.Context) ([]transport.NeighborInfo, error) {
 	return nil, nil
 }
+func (m *mockMeshTransport) SendEncryptedRelay(ctx context.Context, encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) error {
+	return nil
+}
 func (m *mockMeshTransport) Close() error { return nil }
 
 func (m *mockMeshTransport) messages() []transport.SendRequest {

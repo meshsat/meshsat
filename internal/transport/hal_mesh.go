@@ -144,6 +144,17 @@ func (t *HALMeshTransport) SendRaw(ctx context.Context, req RawRequest) error {
 	return t.postJSON(ctx, "/meshtastic/messages/send_raw", req)
 }
 
+// SendEncryptedRelay re-injects an encrypted payload via HAL (AES-256-CTR passthrough).
+func (t *HALMeshTransport) SendEncryptedRelay(ctx context.Context, encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) error {
+	req := struct {
+		Payload  []byte `json:"payload"`
+		To       uint32 `json:"to"`
+		Channel  uint32 `json:"channel"`
+		HopLimit uint32 `json:"hop_limit"`
+	}{encryptedPayload, to, channel, hopLimit}
+	return t.postJSON(ctx, "/meshtastic/messages/send_encrypted_relay", req)
+}
+
 // GetNodes returns all known mesh nodes.
 func (t *HALMeshTransport) GetNodes(ctx context.Context) ([]MeshNode, error) {
 	var resp struct {

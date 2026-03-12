@@ -970,6 +970,37 @@ func buildRawPacket(payload []byte, portnum int, to uint32, channel uint32, want
 	return pkt
 }
 
+// buildEncryptedPacket builds a MeshPacket with the encrypted field (field 5)
+// instead of decoded (field 4). Used for AES-256-CTR passthrough relay —
+// re-injecting encrypted Meshtastic payloads into the mesh without decryption.
+func buildEncryptedPacket(encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) []byte {
+	pkt := make([]byte, 0, len(encryptedPayload)+32)
+
+	if to == 0 {
+		to = 0xFFFFFFFF // Broadcast
+	}
+	pkt = append(pkt, 0x15) // field 2 (to), wire type 5 (fixed32)
+	pkt = appendFixed32(pkt, to)
+
+	if channel > 0 {
+		pkt = append(pkt, 0x18) // field 3 (channel), varint
+		pkt = appendVarint(pkt, uint64(channel))
+	}
+
+	// field 5 (encrypted), length-delimited — NOT field 4 (decoded)
+	pkt = append(pkt, 0x2A) // field 5, wire type 2 (length-delimited)
+	pkt = appendVarint(pkt, uint64(len(encryptedPayload)))
+	pkt = append(pkt, encryptedPayload...)
+
+	if hopLimit == 0 {
+		hopLimit = 3
+	}
+	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
+	pkt = appendVarint(pkt, uint64(hopLimit))
+
+	return pkt
+}
+
 // buildAdminToRadio wraps an admin message in Data → MeshPacket → ToRadio.
 func buildAdminToRadio(myNodeNum, destNode uint32, adminPayload []byte) []byte {
 	// Data: portnum=ADMIN_APP, payload=adminPayload, want_response=true
@@ -1282,6 +1313,11 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 		if pkt.Decoded.PortNum == PortNumTextMessage {
 			msg.DecodedText = string(pkt.Decoded.Payload)
 		}
+	} else if len(pkt.Encrypted) > 0 {
+		// AES-256-CTR passthrough: carry raw encrypted payload for relay
+		msg.PortNumName = "ENCRYPTED_RELAY"
+		msg.EncryptedPayload = make([]byte, len(pkt.Encrypted))
+		copy(msg.EncryptedPayload, pkt.Encrypted)
 	}
 	return msg
 }

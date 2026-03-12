@@ -404,10 +404,12 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 }
 
 func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
-	// Filter encrypted packets we can't decode
+	// Encrypted passthrough: relay encrypted packets with envelope metadata
+	// instead of dropping them. The encrypted payload is preserved as-is
+	// for re-injection into the mesh on the receiving side (AES-256-CTR passthrough).
 	if pkt.Decoded == nil && len(pkt.Encrypted) > 0 {
-		log.Debug().Uint32("from", pkt.From).Msg("meshtastic: dropping encrypted packet (no key)")
-		return
+		log.Debug().Uint32("from", pkt.From).Int("enc_len", len(pkt.Encrypted)).
+			Msg("meshtastic: encrypted packet — passthrough relay")
 	}
 
 	msg := protoPacketToMeshMessage(pkt)
@@ -746,6 +748,22 @@ func (t *DirectMeshTransport) SendRaw(ctx context.Context, req RawRequest) error
 	}
 
 	packet := buildRawPacket(payload, req.PortNum, to, uint32(req.Channel), req.WantAck)
+	toRadio := buildToRadioPacket(packet)
+	return sendFrame(t.file, toRadio)
+}
+
+// SendEncryptedRelay re-injects an encrypted Meshtastic payload into the mesh
+// without decryption (AES-256-CTR passthrough). The encrypted bytes are placed
+// in MeshPacket field 5 (encrypted) instead of field 4 (decoded), so the
+// receiving radio decrypts using its channel PSK.
+func (t *DirectMeshTransport) SendEncryptedRelay(_ context.Context, encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	packet := buildEncryptedPacket(encryptedPayload, to, channel, hopLimit)
 	toRadio := buildToRadioPacket(packet)
 	return sendFrame(t.file, toRadio)
 }

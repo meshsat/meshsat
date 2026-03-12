@@ -426,6 +426,172 @@ func TestDecodeZigzag(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Encrypted Passthrough Tests
+// ============================================================================
+
+func TestProtoPacketToMeshMessage_EncryptedRelay(t *testing.T) {
+	encPayload := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04}
+
+	pkt := &ProtoMeshPacket{
+		From:      0x12345678,
+		To:        0xFFFFFFFF,
+		Channel:   2,
+		ID:        0xAABBCCDD,
+		Encrypted: encPayload,
+		RxTime:    1700000000,
+		RxSNR:     -5.5,
+		HopLimit:  3,
+		HopStart:  3,
+		// Decoded is nil — encrypted packet
+	}
+
+	msg := protoPacketToMeshMessage(pkt)
+
+	if msg.From != 0x12345678 {
+		t.Errorf("From = %08x, want 12345678", msg.From)
+	}
+	if msg.To != 0xFFFFFFFF {
+		t.Errorf("To = %08x, want FFFFFFFF", msg.To)
+	}
+	if msg.Channel != 2 {
+		t.Errorf("Channel = %d, want 2", msg.Channel)
+	}
+	if msg.ID != 0xAABBCCDD {
+		t.Errorf("ID = %08x, want AABBCCDD", msg.ID)
+	}
+	if msg.PortNumName != "ENCRYPTED_RELAY" {
+		t.Errorf("PortNumName = %q, want ENCRYPTED_RELAY", msg.PortNumName)
+	}
+	if msg.PortNum != 0 {
+		t.Errorf("PortNum = %d, want 0 (unknown for encrypted)", msg.PortNum)
+	}
+	if msg.DecodedText != "" {
+		t.Errorf("DecodedText = %q, want empty", msg.DecodedText)
+	}
+	if len(msg.EncryptedPayload) != len(encPayload) {
+		t.Fatalf("EncryptedPayload len = %d, want %d", len(msg.EncryptedPayload), len(encPayload))
+	}
+	for i, b := range msg.EncryptedPayload {
+		if b != encPayload[i] {
+			t.Errorf("EncryptedPayload[%d] = %02x, want %02x", i, b, encPayload[i])
+		}
+	}
+	// Verify it's a copy, not a reference to the original
+	encPayload[0] = 0xFF
+	if msg.EncryptedPayload[0] == 0xFF {
+		t.Error("EncryptedPayload shares memory with original — should be a copy")
+	}
+}
+
+func TestProtoPacketToMeshMessage_DecodedNotEncrypted(t *testing.T) {
+	// When Decoded is present, EncryptedPayload should remain nil
+	pkt := &ProtoMeshPacket{
+		From:    0x11111111,
+		To:      0x22222222,
+		Channel: 0,
+		ID:      42,
+		Decoded: &ProtoData{
+			PortNum: PortNumTextMessage,
+			Payload: []byte("hello"),
+		},
+		Encrypted: nil,
+		RxTime:    1700000000,
+	}
+
+	msg := protoPacketToMeshMessage(pkt)
+
+	if msg.PortNumName != "TEXT_MESSAGE_APP" {
+		t.Errorf("PortNumName = %q, want TEXT_MESSAGE_APP", msg.PortNumName)
+	}
+	if msg.DecodedText != "hello" {
+		t.Errorf("DecodedText = %q, want hello", msg.DecodedText)
+	}
+	if msg.EncryptedPayload != nil {
+		t.Error("EncryptedPayload should be nil for decoded packets")
+	}
+}
+
+func TestBuildEncryptedPacket(t *testing.T) {
+	encPayload := []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE}
+	pkt := buildEncryptedPacket(encPayload, 0x12345678, 3, 5)
+
+	// Parse the built packet and verify structure
+	parsed, err := parseMeshPacket(pkt)
+	if err != nil {
+		t.Fatalf("parseMeshPacket error: %v", err)
+	}
+	if parsed.To != 0x12345678 {
+		t.Errorf("To = %08x, want 12345678", parsed.To)
+	}
+	if parsed.Channel != 3 {
+		t.Errorf("Channel = %d, want 3", parsed.Channel)
+	}
+	if parsed.HopLimit != 5 {
+		t.Errorf("HopLimit = %d, want 5", parsed.HopLimit)
+	}
+	if parsed.Decoded != nil {
+		t.Error("Decoded should be nil for encrypted packet")
+	}
+	if len(parsed.Encrypted) != len(encPayload) {
+		t.Fatalf("Encrypted len = %d, want %d", len(parsed.Encrypted), len(encPayload))
+	}
+	for i, b := range parsed.Encrypted {
+		if b != encPayload[i] {
+			t.Errorf("Encrypted[%d] = %02x, want %02x", i, b, encPayload[i])
+		}
+	}
+}
+
+func TestBuildEncryptedPacket_Broadcast(t *testing.T) {
+	pkt := buildEncryptedPacket([]byte{0x01}, 0, 0, 0)
+	parsed, err := parseMeshPacket(pkt)
+	if err != nil {
+		t.Fatalf("parseMeshPacket error: %v", err)
+	}
+	if parsed.To != 0xFFFFFFFF {
+		t.Errorf("To = %08x, want FFFFFFFF (broadcast)", parsed.To)
+	}
+	if parsed.HopLimit != 3 {
+		t.Errorf("HopLimit = %d, want 3 (default)", parsed.HopLimit)
+	}
+}
+
+func TestBuildEncryptedPacket_RoundTrip(t *testing.T) {
+	// Build an encrypted packet, parse it, convert to MeshMessage, verify passthrough
+	encPayload := make([]byte, 64)
+	for i := range encPayload {
+		encPayload[i] = byte(i)
+	}
+
+	pkt := buildEncryptedPacket(encPayload, 0xDEADBEEF, 1, 7)
+	parsed, err := parseMeshPacket(pkt)
+	if err != nil {
+		t.Fatalf("parseMeshPacket error: %v", err)
+	}
+
+	msg := protoPacketToMeshMessage(parsed)
+
+	if msg.To != 0xDEADBEEF {
+		t.Errorf("To = %08x, want DEADBEEF", msg.To)
+	}
+	if msg.Channel != 1 {
+		t.Errorf("Channel = %d, want 1", msg.Channel)
+	}
+	if msg.PortNumName != "ENCRYPTED_RELAY" {
+		t.Errorf("PortNumName = %q, want ENCRYPTED_RELAY", msg.PortNumName)
+	}
+	if len(msg.EncryptedPayload) != 64 {
+		t.Fatalf("EncryptedPayload len = %d, want 64", len(msg.EncryptedPayload))
+	}
+	for i, b := range msg.EncryptedPayload {
+		if b != byte(i) {
+			t.Errorf("EncryptedPayload[%d] = %02x, want %02x", i, b, byte(i))
+			break
+		}
+	}
+}
+
 func TestEncodeZigzag(t *testing.T) {
 	tests := []struct {
 		val  int64

@@ -58,6 +58,11 @@ type MeshMessage struct {
 	HopStart    int     `json:"hop_start"`
 	Timestamp   string  `json:"timestamp"`
 
+	// Encrypted relay: raw Meshtastic-encrypted payload for passthrough relay.
+	// When non-nil, this message carries an encrypted payload that should be
+	// relayed as-is without decryption (AES-256-CTR passthrough mode).
+	EncryptedPayload []byte `json:"encrypted_payload,omitempty"`
+
 	// Per-rule routing metadata (set by dispatcher, used by gateways)
 	SMSDestinations []string `json:"-"` // override phone numbers for cellular SMS
 	Encrypted       bool     `json:"-"` // payload was encrypted by transform pipeline
@@ -166,6 +171,7 @@ type MeshTransport interface {
 	SetCannedMessages(ctx context.Context, messages string) error
 	GetCannedMessages(ctx context.Context) error
 	GetNeighborInfo(ctx context.Context) ([]NeighborInfo, error)
+	SendEncryptedRelay(ctx context.Context, encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) error
 
 	Close() error
 }
