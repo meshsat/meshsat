@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -2031,5 +2032,1089 @@ func TestSF_QueueEviction_SamePriorityRejected(t *testing.T) {
 	all, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: "dead", Limit: 10})
 	if len(all) != 0 {
 		t.Errorf("expected 0 dead deliveries (no eviction), got %d", len(all))
+	}
+}
+
+// --- Additional deliver() unit tests ---
+
+// TestDeliver_InfiniteRetries verifies that a delivery with maxRetries=0 (infinite)
+// never moves to 'dead' status, even after many failures.
+func TestDeliver_InfiniteRetries(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "infinite-retry", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("persist"), TextPreview: "persist",
+		MaxRetries: 0, Visited: "[]",
+	})
+
+	// Fail 5 times in a row — should never go dead
+	for i := 0; i < 5; i++ {
+		gw.mu.Lock()
+		gw.failNext = true
+		gw.mu.Unlock()
+
+		del, _ := h.db.GetDelivery(id)
+		// Reset status to queued for next attempt (simulates retry timer expiring)
+		if del.Status == "retry" {
+			h.db.SetDeliveryStatus(id, "queued", "", "")
+			del.Status = "queued"
+		}
+		w.deliver(context.Background(), *del)
+
+		result, _ := h.db.GetDelivery(id)
+		if result.Status == "dead" {
+			t.Fatalf("maxRetries=0 delivery should never go dead, but it did after %d failures", i+1)
+		}
+		if result.Status != "retry" {
+			t.Fatalf("expected status 'retry' after failure %d, got %s", i+1, result.Status)
+		}
+	}
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Retries != 5 {
+		t.Errorf("expected 5 retries, got %d", result.Retries)
+	}
+}
+
+// TestDeliver_GatewayForwardError verifies that when gateway.Forward returns an
+// error, the delivery moves to retry with the error message recorded.
+func TestDeliver_GatewayForwardError(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "gw-error", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("fail me"), TextPreview: "fail me",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "gw-error", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("fail me"), TextPreview: "fail me",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "retry" {
+		t.Errorf("expected status 'retry', got %s", result.Status)
+	}
+	if result.LastError == "" {
+		t.Error("expected last_error to contain the gateway error message")
+	}
+	if result.NextRetry == nil {
+		t.Error("expected next_retry to be scheduled")
+	}
+}
+
+// TestDeliver_JSONPayloadReconstruction verifies that forwardToGateway correctly
+// reconstructs a MeshMessage from valid JSON payload, preserving all fields.
+func TestDeliver_JSONPayloadReconstruction(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// Construct a full MeshMessage as JSON payload
+	origMsg := transport.MeshMessage{
+		PortNum:     1,
+		PortNumName: "TEXT_MESSAGE_APP",
+		DecodedText: "from JSON payload",
+		From:        12345,
+		To:          67890,
+	}
+	payload, _ := json.Marshal(origMsg)
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "json-payload", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: payload, TextPreview: "from JSON payload",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "json-payload", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: payload, TextPreview: "from JSON payload",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	msgs := gw.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].From != 12345 {
+		t.Errorf("expected From=12345, got %d", msgs[0].From)
+	}
+	if msgs[0].To != 67890 {
+		t.Errorf("expected To=67890, got %d", msgs[0].To)
+	}
+	if msgs[0].DecodedText != "from JSON payload" {
+		t.Errorf("expected text 'from JSON payload', got %q", msgs[0].DecodedText)
+	}
+}
+
+// TestDeliver_EgressWithVisitedSetParsing verifies that deliver() correctly
+// parses the visited set JSON from the delivery record and passes it to the
+// egress rule evaluator for loop prevention context.
+func TestDeliver_EgressWithVisitedSetParsing(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	// Egress rule that allows anything (just to confirm visited set is parsed)
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mqtt_0", Direction: "egress", Name: "Allow All",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	ae := rules.NewAccessEvaluator(h.db)
+	ae.ReloadFromDB()
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.access = ae
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "visited-egress", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("visited test"), TextPreview: "visited test",
+		MaxRetries: 3, Visited: `["mesh_0","iridium_0"]`,
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "visited-egress", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("visited test"), TextPreview: "visited test",
+		MaxRetries: 3, Visited: `["mesh_0","iridium_0"]`,
+	}
+	w.deliver(context.Background(), del)
+
+	// Should be sent (egress allows all)
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent' (egress allows all), got %s", result.Status)
+	}
+}
+
+// TestSF_FullLifecycle_QueuedHeldQueuedSent tests the complete store-and-forward
+// lifecycle: dispatch → QUEUED → HELD (offline) → QUEUED (online) → SENDING → SENT.
+func TestSF_FullLifecycle_QueuedHeldQueuedSent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "To MQTT",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	// Step 1: Dispatch → QUEUED
+	msg := rules.RouteMessage{Text: "lifecycle test", From: "!node", PortNum: 1}
+	count := h.dispatch.DispatchAccess("mesh_0", msg, []byte("lifecycle test"))
+	if count != 1 {
+		t.Fatalf("dispatch: expected 1, got %d", count)
+	}
+
+	deliveries, _ := h.db.GetPendingDeliveries("mqtt_0", 1)
+	if len(deliveries) != 1 || deliveries[0].Status != "queued" {
+		t.Fatal("step 1: expected 1 queued delivery")
+	}
+	delID := deliveries[0].ID
+
+	// Step 2: Interface offline → HELD
+	n, err := h.db.HoldDeliveriesForChannel("mqtt_0")
+	if err != nil || n != 1 {
+		t.Fatalf("hold: expected 1, got %d (err=%v)", n, err)
+	}
+	held, _ := h.db.GetDelivery(delID)
+	if held.Status != "held" {
+		t.Errorf("step 2: expected 'held', got %s", held.Status)
+	}
+
+	// Step 3: Interface online → QUEUED (unhold)
+	n, err = h.db.UnholdDeliveriesForChannel("mqtt_0")
+	if err != nil || n != 1 {
+		t.Fatalf("unhold: expected 1, got %d (err=%v)", n, err)
+	}
+	unheld, _ := h.db.GetDelivery(delID)
+	if unheld.Status != "queued" {
+		t.Errorf("step 3: expected 'queued', got %s", unheld.Status)
+	}
+
+	// Step 4: Delivery worker processes → SENDING → SENT
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.deliver(context.Background(), *unheld)
+
+	final, _ := h.db.GetDelivery(delID)
+	if final.Status != "sent" {
+		t.Errorf("step 4: expected 'sent', got %s", final.Status)
+	}
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 gateway message, got %d", len(gw.messages()))
+	}
+}
+
+// TestSF_TTLClockPauseDuringHeld_VerifyExtension verifies the TTL clock pause
+// mechanism: after a delivery spends time in HELD state, the expires_at is
+// extended by the duration it was held. We simulate held time by backdating
+// held_at in the DB rather than sleeping (SQLite uses second-level precision).
+func TestSF_TTLClockPauseDuringHeld_VerifyExtension(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+
+	// Insert a delivery with TTL = 300s, expires_at = now + 300s
+	ttl := 300
+	expiresAt := time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format("2006-01-02 15:04:05")
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "ttl-pause", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("ttl pause"), TextPreview: "ttl pause",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: ttl, ExpiresAt: &expiresAt,
+	})
+
+	// Hold the delivery (simulates offline)
+	h.db.HoldDeliveriesForChannel("mqtt_0")
+	held, _ := h.db.GetDelivery(id)
+	if held.Status != "held" {
+		t.Fatalf("expected held, got %s", held.Status)
+	}
+
+	// Backdate held_at by 60 seconds to simulate being held for 1 minute
+	// (avoids real sleep since SQLite datetime has second-level precision)
+	h.db.Exec(`UPDATE message_deliveries SET held_at = datetime('now', '-60 seconds') WHERE id = ?`, id)
+
+	// Unhold — expires_at should be extended by ~60s
+	h.db.UnholdDeliveriesForChannel("mqtt_0")
+	unheld, _ := h.db.GetDelivery(id)
+	if unheld.Status != "queued" {
+		t.Fatalf("expected queued after unhold, got %s", unheld.Status)
+	}
+
+	// The new expires_at should be ~60s later than the original
+	if unheld.ExpiresAt == nil {
+		t.Fatal("expected expires_at to still be set")
+	}
+	origExp, _ := time.Parse("2006-01-02 15:04:05", expiresAt)
+	newExp, _ := time.Parse("2006-01-02 15:04:05", *unheld.ExpiresAt)
+	extension := newExp.Sub(origExp)
+	if extension < 55*time.Second || extension > 65*time.Second {
+		t.Errorf("expected ~60s extension, got %v (orig=%v, new=%v)", extension, origExp, newExp)
+	}
+}
+
+// TestDeliver_SuccessAfterRetry verifies that a delivery in 'retry' status
+// that succeeds on the next attempt moves to 'sent'.
+func TestDeliver_SuccessAfterRetry(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// First attempt fails
+	gw.mu.Lock()
+	gw.failNext = true
+	gw.mu.Unlock()
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "retry-then-succeed", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("retry msg"), TextPreview: "retry msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "retry-then-succeed", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("retry msg"), TextPreview: "retry msg",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	mid, _ := h.db.GetDelivery(id)
+	if mid.Status != "retry" {
+		t.Fatalf("expected 'retry' after first failure, got %s", mid.Status)
+	}
+	if mid.Retries != 1 {
+		t.Fatalf("expected retries=1, got %d", mid.Retries)
+	}
+
+	// Second attempt succeeds (failNext was consumed)
+	w.deliver(context.Background(), *mid)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent' after successful retry, got %s", result.Status)
+	}
+
+	msgs := gw.messages()
+	if len(msgs) != 1 {
+		t.Errorf("expected 1 gateway message, got %d", len(msgs))
+	}
+}
+
+// TestSF_HoldAlsoHoldsRetryStatus verifies that HoldDeliveriesForChannel
+// transitions both 'queued' AND 'retry' deliveries to 'held' status.
+func TestSF_HoldAlsoHoldsRetryStatus(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+
+	// Insert one queued and one retry delivery
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "hold-queued", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("q"), TextPreview: "q",
+		MaxRetries: 3, Visited: "[]",
+	})
+	id2, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "hold-retry", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("r"), TextPreview: "r",
+		MaxRetries: 3, Visited: "[]",
+	})
+	// Move second to retry status
+	h.db.SetDeliveryStatus(id2, "retry", "test error", "")
+
+	n, err := h.db.HoldDeliveriesForChannel("mqtt_0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 held (queued + retry), got %d", n)
+	}
+
+	held, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: "held", Limit: 10})
+	if len(held) != 2 {
+		t.Errorf("expected 2 held deliveries in DB, got %d", len(held))
+	}
+}
+
+// TestSF_HoldIgnoresTerminalStates verifies that HoldDeliveriesForChannel does
+// NOT affect deliveries in terminal states (sent, dead, expired, denied, cancelled).
+func TestSF_HoldIgnoresTerminalStates(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+
+	terminals := []string{"sent", "dead", "expired", "denied"}
+	for _, s := range terminals {
+		id, _ := h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef: "terminal-" + s, Channel: "mqtt_0", Status: "queued",
+			Priority: 1, Payload: []byte(s), TextPreview: s,
+			MaxRetries: 3, Visited: "[]",
+		})
+		h.db.SetDeliveryStatus(id, s, "", "")
+	}
+
+	// Also insert one queued delivery that should be held
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "holdable", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("hold me"), TextPreview: "hold me",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	n, _ := h.db.HoldDeliveriesForChannel("mqtt_0")
+	if n != 1 {
+		t.Errorf("expected only 1 delivery held (the queued one), got %d", n)
+	}
+
+	// Terminal deliveries should remain unchanged
+	for _, s := range terminals {
+		all, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: s, Limit: 10})
+		if len(all) != 1 {
+			t.Errorf("terminal status %q should remain, got %d", s, len(all))
+		}
+	}
+}
+
+// --- Additional deliver() unit tests for MESHSAT-44 ---
+
+// TestDeliver_RetriesExhaustedExactBoundary verifies the exact boundary where
+// retries == max_retries - 1 and the next failure moves to dead.
+func TestDeliver_RetriesExhaustedExactBoundary(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.emit = func(e transport.MeshEvent) {} // swallow events
+
+	// max_retries=3, retries=2 → next failure is the 3rd attempt → dead
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "boundary", Channel: "mqtt_0", Status: "retry",
+		Priority: 1, Payload: []byte("boundary"), TextPreview: "boundary",
+		MaxRetries: 3, Visited: "[]",
+	})
+	h.db.Exec("UPDATE message_deliveries SET retries = 2 WHERE id = ?", id)
+
+	del, _ := h.db.GetDelivery(id)
+	w.deliver(context.Background(), *del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "dead" {
+		t.Errorf("expected 'dead' at exact boundary (retries=2, max=3), got %s", result.Status)
+	}
+	if result.Retries != 2 {
+		// Retries stored in DB is the value from the delivery struct before handleFailure increments
+		// handleFailure uses newRetries = del.Retries + 1 for comparison but UpdateDeliveryRetry records it
+		t.Logf("retries in DB after dead: %d", result.Retries)
+	}
+}
+
+// TestDeliver_RetriesOneBelowBoundary verifies that retries == max_retries - 2
+// still moves to retry (not dead).
+func TestDeliver_RetriesOneBelowBoundary(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// max_retries=3, retries=1 → next failure is the 2nd attempt → retry
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "below-boundary", Channel: "mqtt_0", Status: "retry",
+		Priority: 1, Payload: []byte("below"), TextPreview: "below",
+		MaxRetries: 3, Visited: "[]",
+	})
+	h.db.Exec("UPDATE message_deliveries SET retries = 1 WHERE id = ?", id)
+
+	del, _ := h.db.GetDelivery(id)
+	w.deliver(context.Background(), *del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "retry" {
+		t.Errorf("expected 'retry' one below boundary, got %s", result.Status)
+	}
+}
+
+// TestDeliver_TTLNilExpiresAt verifies that when TTLSeconds > 0 but ExpiresAt
+// is nil (edge case), the delivery is still sent without panic.
+func TestDeliver_TTLNilExpiresAt(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "nil-expires", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("nil expires"), TextPreview: "nil expires",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 300,
+		// ExpiresAt intentionally nil
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "nil-expires", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("nil expires"), TextPreview: "nil expires",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 300,
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent' with nil ExpiresAt, got %s", result.Status)
+	}
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 gateway message, got %d", len(gw.messages()))
+	}
+}
+
+// TestDeliver_TTLEmptyExpiresAtString verifies that an empty ExpiresAt string
+// is treated the same as nil (no expiry check).
+func TestDeliver_TTLEmptyExpiresAtString(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	empty := ""
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "empty-expires", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("empty exp"), TextPreview: "empty exp",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 300, ExpiresAt: &empty,
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "empty-expires", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("empty exp"), TextPreview: "empty exp",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 300, ExpiresAt: &empty,
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent' with empty ExpiresAt, got %s", result.Status)
+	}
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 gateway message, got %d", len(gw.messages()))
+	}
+}
+
+// TestDeliver_EgressTransformApplied verifies that deliver() applies egress
+// transforms from the interface config before sending.
+func TestDeliver_EgressTransformApplied(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Set egress transforms on the interface (base64 encode)
+	h.db.Exec(`UPDATE interfaces SET egress_transforms = ? WHERE id = ?`,
+		`[{"type":"base64"}]`, "mqtt_0")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.transforms = NewTransformPipeline()
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "transform-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("transform me"), TextPreview: "transform me",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "transform-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("transform me"), TextPreview: "transform me",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent', got %s", result.Status)
+	}
+
+	// Gateway should have received a base64-encoded payload
+	msgs := gw.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	// The text should be base64 encoded version of "transform me"
+	if msgs[0].DecodedText == "transform me" {
+		t.Error("expected transformed (base64-encoded) text, but got original text")
+	}
+}
+
+// TestDeliver_EgressTransformNoConfig verifies that deliver() sends untransformed
+// when the interface has no egress_transforms configured.
+func TestDeliver_EgressTransformNoConfig(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.transforms = NewTransformPipeline()
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "no-transform", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("plain text"), TextPreview: "plain text",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "no-transform", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("plain text"), TextPreview: "plain text",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	msgs := gw.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	// With no transforms, text should be unmodified
+	if msgs[0].DecodedText != "plain text" {
+		t.Errorf("expected original text 'plain text', got %q", msgs[0].DecodedText)
+	}
+}
+
+// TestDeliver_DispatchAuditEvent verifies that DispatchAccess creates a
+// 'dispatch' audit event when signing is configured.
+func TestDeliver_DispatchAuditEvent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Audit Test",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "audit dispatch", From: "!node", PortNum: 1}
+	count := h.dispatch.DispatchAccess("mesh_0", msg, []byte("audit dispatch"))
+	if count != 1 {
+		t.Fatalf("expected 1 delivery, got %d", count)
+	}
+
+	entries, _ := h.db.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.EventType == "dispatch" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'dispatch' audit event from DispatchAccess")
+	}
+}
+
+// TestDeliver_SignatureAttached verifies that DispatchAccess attaches an Ed25519
+// signature and signer ID to the delivery when signing is configured.
+func TestDeliver_SignatureAttached(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Sig Test",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	payload := []byte("signed payload")
+	msg := rules.RouteMessage{Text: "signed payload", From: "!node", PortNum: 1}
+	h.dispatch.DispatchAccess("mesh_0", msg, payload)
+
+	deliveries, _ := h.db.GetPendingDeliveries("mqtt_0", 1)
+	if len(deliveries) != 1 {
+		t.Fatal("expected 1 delivery")
+	}
+
+	// GetDelivery doesn't return signature columns, so query directly
+	var sig []byte
+	var signerID string
+	err := h.db.QueryRow(`SELECT signature, signer_id FROM message_deliveries WHERE id = ?`,
+		deliveries[0].ID).Scan(&sig, &signerID)
+	if err != nil {
+		t.Fatalf("failed to query signature: %v", err)
+	}
+	if len(sig) != 64 {
+		t.Errorf("expected 64-byte Ed25519 signature, got %d bytes", len(sig))
+	}
+	if signerID == "" {
+		t.Error("expected signer_id to be set")
+	}
+}
+
+// TestSF_QueueEviction_P0AlwaysAdmitted verifies that P0 critical messages
+// always get admitted to the queue by evicting lower-priority messages, even
+// when the queue is at capacity.
+func TestSF_QueueEviction_P0AlwaysAdmitted(t *testing.T) {
+	h := setupE2E(t)
+	h.dispatch.maxQueueDepth = 2
+
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+
+	// Rule with priority 1 (P1) for normal messages
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "P1 Route",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: `{"keyword":"normal"}`,
+	})
+	// Rule with priority 0 (P0) for critical messages
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "P0 Route",
+		Enabled: true, Priority: 0, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: `{"keyword":"CRITICAL"}`,
+	})
+	h.loadRules(t)
+
+	// Fill queue with 2 P1 deliveries
+	for i := 0; i < 2; i++ {
+		msg := rules.RouteMessage{Text: fmt.Sprintf("normal-%d", i), From: "!node", PortNum: 1}
+		h.dispatch.DispatchAccess("mesh_0", msg, []byte(fmt.Sprintf("normal-payload-%d", i)))
+	}
+
+	// P0 should evict a P1 and get admitted
+	msg := rules.RouteMessage{Text: "CRITICAL emergency", From: "!node", PortNum: 1}
+	count := h.dispatch.DispatchAccess("mesh_0", msg, []byte("CRITICAL-payload"))
+	if count != 1 {
+		t.Errorf("expected P0 admitted (evicting P1), got count=%d", count)
+	}
+
+	// Should have 1 dead (evicted) delivery
+	dead, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: "dead", Limit: 10})
+	if len(dead) != 1 {
+		t.Errorf("expected 1 evicted delivery, got %d", len(dead))
+	}
+}
+
+// TestSF_QueueBytesLimitRejects verifies that deliveries are rejected when
+// the queue's total payload bytes would exceed the max.
+func TestSF_QueueBytesLimitRejects(t *testing.T) {
+	h := setupE2E(t)
+	h.dispatch.maxQueueBytes = 100 // Very small limit
+
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Bytes Test",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	// First message: 50 bytes → accepted
+	payload1 := make([]byte, 50)
+	for i := range payload1 {
+		payload1[i] = 'A'
+	}
+	msg1 := rules.RouteMessage{Text: string(payload1), From: "!node", PortNum: 1}
+	c1 := h.dispatch.DispatchAccess("mesh_0", msg1, payload1)
+	if c1 != 1 {
+		t.Fatalf("first 50-byte payload should be accepted, got count=%d", c1)
+	}
+
+	// Second message: 60 bytes → should be rejected (50 + 60 > 100)
+	payload2 := make([]byte, 60)
+	for i := range payload2 {
+		payload2[i] = 'B'
+	}
+	msg2 := rules.RouteMessage{Text: string(payload2), From: "!node", PortNum: 1}
+	c2 := h.dispatch.DispatchAccess("mesh_0", msg2, payload2)
+	if c2 != 0 {
+		t.Errorf("second payload should be rejected (bytes limit), got count=%d", c2)
+	}
+}
+
+// TestDeliver_TextOnlyPayload verifies that deliver() handles a delivery with
+// no binary payload, falling back to TextPreview for the message.
+func TestDeliver_TextOnlyPayload(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "text-only", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, TextPreview: "text only message",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "text-only", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, TextPreview: "text only message",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent', got %s", result.Status)
+	}
+	msgs := gw.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].DecodedText != "text only message" {
+		t.Errorf("expected text 'text only message', got %q", msgs[0].DecodedText)
+	}
+}
+
+// TestDeliver_EmptyVisitedString verifies that deliver() handles a delivery
+// with an empty Visited string without error in egress evaluation.
+func TestDeliver_EmptyVisitedString(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Set up an egress rule to trigger visited set parsing
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mqtt_0", Direction: "egress", Name: "Allow All",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	ae := rules.NewAccessEvaluator(h.db)
+	ae.ReloadFromDB()
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.access = ae
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "empty-visited", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("empty visited"), TextPreview: "empty visited",
+		MaxRetries: 3, Visited: "",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "empty-visited", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("empty visited"), TextPreview: "empty visited",
+		MaxRetries: 3, Visited: "",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent' with empty visited string, got %s", result.Status)
+	}
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 message, got %d", len(gw.messages()))
+	}
+}
+
+// TestDeliver_MeshDeliveryWithEmptyPayload verifies that mesh delivery works
+// when payload is nil but TextPreview is set.
+func TestDeliver_MeshDeliveryWithEmptyPayload(t *testing.T) {
+	h := setupE2E(t)
+
+	w := &DeliveryWorker{
+		channelID: "mesh_0",
+		db:        h.db,
+		mesh:      h.meshTx,
+	}
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "mesh-no-payload", Channel: "mesh_0", Status: "queued",
+		Priority: 1, TextPreview: "mesh text only",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "mesh-no-payload", Channel: "mesh_0", Status: "queued",
+		Priority: 1, TextPreview: "mesh text only",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent', got %s", result.Status)
+	}
+	msgs := h.meshTx.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 mesh message, got %d", len(msgs))
+	}
+	if msgs[0].Text != "mesh text only" {
+		t.Errorf("expected text 'mesh text only', got %q", msgs[0].Text)
+	}
+}
+
+// TestDeliver_HandleFailureRecordsLastError verifies that the gateway error
+// message is recorded in last_error on failure.
+func TestDeliver_HandleFailureRecordsLastError(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "error-msg", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("error"), TextPreview: "error",
+		MaxRetries: 5, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "error-msg", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("error"), TextPreview: "error",
+		MaxRetries: 5, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.LastError != "mock delivery failure" {
+		t.Errorf("expected last_error='mock delivery failure', got %q", result.LastError)
+	}
+}
+
+// TestDeliver_HandleFailureDead_RecordsRetryCount verifies that when a delivery
+// goes dead, the last_error contains the retry count information.
+func TestDeliver_HandleFailureDead_RecordsRetryCount(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "dead-retry-count", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("dead"), TextPreview: "dead",
+		MaxRetries: 1, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "dead-retry-count", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("dead"), TextPreview: "dead",
+		MaxRetries: 1, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "dead" {
+		t.Fatalf("expected 'dead', got %s", result.Status)
+	}
+	if result.LastError == "" {
+		t.Error("expected last_error to contain error message")
+	}
+}
+
+// TestDeliver_TTLDefaultFromChannelDescriptor verifies that when a rule has no
+// TTL override, the channel descriptor's default TTL is applied.
+func TestDeliver_TTLDefaultFromChannelDescriptor(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	h.setOnline("mesh_0")
+	h.setOnline("iridium_0")
+
+	// Rule with no forward_options (no TTL override)
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Default TTL",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "iridium_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "ttl default", From: "!node", PortNum: 1}
+	h.dispatch.DispatchAccess("mesh_0", msg, []byte("ttl default"))
+
+	deliveries, _ := h.db.GetPendingDeliveries("iridium_0", 1)
+	if len(deliveries) != 1 {
+		t.Fatal("expected 1 delivery")
+	}
+
+	// Iridium default TTL is 3600s — verify TTLSeconds is set
+	full, _ := h.db.GetDelivery(deliveries[0].ID)
+	if full.TTLSeconds == 0 {
+		t.Error("expected TTLSeconds to be set from iridium channel default (3600s)")
+	}
+	if full.ExpiresAt == nil || *full.ExpiresAt == "" {
+		t.Error("expected ExpiresAt to be set from default TTL")
+	}
+}
+
+// TestDeliver_TTLRuleOverridesDefault verifies that a rule's forward_options.ttl_seconds
+// overrides the channel descriptor's default TTL.
+func TestDeliver_TTLRuleOverridesDefault(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	h.setOnline("mesh_0")
+	h.setOnline("iridium_0")
+
+	// Rule with TTL override of 120 seconds
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Override TTL",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "iridium_0",
+		Filters:        "{}",
+		ForwardOptions: `{"ttl_seconds":120}`,
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "ttl override", From: "!node", PortNum: 1}
+	h.dispatch.DispatchAccess("mesh_0", msg, []byte("ttl override"))
+
+	deliveries, _ := h.db.GetPendingDeliveries("iridium_0", 1)
+	if len(deliveries) != 1 {
+		t.Fatal("expected 1 delivery")
+	}
+
+	full, _ := h.db.GetDelivery(deliveries[0].ID)
+	if full.TTLSeconds != 120 {
+		t.Errorf("expected TTLSeconds=120 (rule override), got %d", full.TTLSeconds)
+	}
+}
+
+// TestDeliver_P0NoTTLSet verifies that P0 critical messages do not get TTL
+// set even when channel default and rule TTL are configured.
+func TestDeliver_P0NoTTLSet(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	h.setOnline("mesh_0")
+	h.setOnline("iridium_0")
+
+	// P0 rule with TTL override
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "P0 No TTL",
+		Enabled: true, Priority: 0, Action: "forward", ForwardTo: "iridium_0",
+		Filters:        "{}",
+		ForwardOptions: `{"ttl_seconds":120}`,
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "p0 critical", From: "!node", PortNum: 1}
+	h.dispatch.DispatchAccess("mesh_0", msg, []byte("p0 critical"))
+
+	deliveries, _ := h.db.GetPendingDeliveries("iridium_0", 1)
+	if len(deliveries) != 1 {
+		t.Fatal("expected 1 delivery")
+	}
+
+	full, _ := h.db.GetDelivery(deliveries[0].ID)
+	// P0 critical messages should have TTLSeconds=0 and ExpiresAt=nil
+	if full.TTLSeconds != 0 {
+		t.Errorf("P0 should have TTLSeconds=0, got %d", full.TTLSeconds)
+	}
+	if full.ExpiresAt != nil && *full.ExpiresAt != "" {
+		t.Errorf("P0 should have nil ExpiresAt, got %v", full.ExpiresAt)
+	}
+}
+
+// TestProcessBatch_BatchSize verifies that processBatch fetches up to 10
+// deliveries per tick (the batch size limit).
+func TestProcessBatch_BatchSize(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// Insert 15 deliveries — batch size is 10, so first processBatch should
+	// only deliver up to 10
+	for i := 0; i < 15; i++ {
+		h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef:      fmt.Sprintf("batch-%d", i),
+			Channel:     "mqtt_0",
+			Status:      "queued",
+			Priority:    1,
+			Payload:     []byte(fmt.Sprintf("msg-%d", i)),
+			TextPreview: fmt.Sprintf("msg-%d", i),
+			MaxRetries:  3,
+			Visited:     "[]",
+		})
+	}
+
+	w.processBatch(context.Background())
+
+	sent := len(gw.messages())
+	if sent > 10 {
+		t.Errorf("processBatch should send at most 10 per tick, but sent %d", sent)
+	}
+	if sent == 0 {
+		t.Error("expected at least some deliveries to be processed")
+	}
+
+	// Second batch should pick up remaining
+	w.processBatch(context.Background())
+	total := len(gw.messages())
+	if total != 15 {
+		t.Errorf("expected 15 total after 2 batches, got %d", total)
 	}
 }
