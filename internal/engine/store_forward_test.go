@@ -317,7 +317,7 @@ func TestSF_PriorityOrdering(t *testing.T) {
 }
 
 // TestSF_ExpireDeliveries_Reaper verifies that the batch reaper marks expired
-// deliveries (queued, retry, held) but skips P0.
+// queued/retry deliveries but skips P0 and held deliveries (TTL paused while held).
 func TestSF_ExpireDeliveries_Reaper(t *testing.T) {
 	h := setupE2E(t)
 
@@ -342,7 +342,7 @@ func TestSF_ExpireDeliveries_Reaper(t *testing.T) {
 		Priority: 1, Payload: []byte("y"), TextPreview: "y", MaxRetries: 3,
 		Visited: "[]", TTLSeconds: 3600, ExpiresAt: &future,
 	})
-	// Expired held delivery (should be reaped)
+	// Expired held delivery (should NOT be reaped — TTL clock paused while held)
 	h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "expired-held", Channel: "mqtt_0", Status: "held",
 		Priority: 2, Payload: []byte("z"), TextPreview: "z", MaxRetries: 3,
@@ -353,8 +353,8 @@ func TestSF_ExpireDeliveries_Reaper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Errorf("expected 2 expired by reaper, got %d", n)
+	if n != 1 {
+		t.Errorf("expected 1 expired by reaper (queued P1 only), got %d", n)
 	}
 
 	// P0 should still be queued
@@ -367,6 +367,12 @@ func TestSF_ExpireDeliveries_Reaper(t *testing.T) {
 	}
 	if !foundP0 {
 		t.Error("P0 delivery should remain queued (exempt from expiry)")
+	}
+
+	// Held delivery should still be held (TTL paused)
+	held, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: "held", Limit: 10})
+	if len(held) != 1 {
+		t.Errorf("expected 1 held delivery (TTL paused), got %d", len(held))
 	}
 }
 

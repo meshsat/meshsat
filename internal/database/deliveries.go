@@ -55,9 +55,9 @@ func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
 		visited = "[]"
 	}
 	res, err := db.Exec(`INSERT INTO message_deliveries
-		(msg_ref, rule_id, channel, status, priority, payload, text_preview, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, signature, signer_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.MaxRetries, d.NextRetry, visited,
+		(msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, signature, signer_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.Retries, d.MaxRetries, d.NextRetry, visited,
 		d.TTLSeconds, d.ExpiresAt, d.QoSLevel, d.Signature, d.SignerID)
 	if err != nil {
 		return 0, fmt.Errorf("insert delivery: %w", err)
@@ -318,11 +318,12 @@ func (db *DB) RecoverStaleDeliveries() (int64, error) {
 	return res.RowsAffected()
 }
 
-// ExpireDeliveries marks all expired queued/retry/held deliveries as 'expired'.
+// ExpireDeliveries marks all expired queued/retry deliveries as 'expired'.
 // P0 critical messages (priority=0) are exempt — they never expire.
+// Held deliveries are excluded: TTL clock pauses while held (store-and-forward).
 func (db *DB) ExpireDeliveries() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')
-		WHERE status IN ('queued', 'retry', 'held') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
+		WHERE status IN ('queued', 'retry') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
 		  AND priority > 0`)
 	if err != nil {
 		return 0, fmt.Errorf("expire deliveries: %w", err)
@@ -332,9 +333,10 @@ func (db *DB) ExpireDeliveries() (int64, error) {
 
 // ExpireDeliveriesForChannel marks expired deliveries for a specific channel.
 // P0 critical messages (priority=0) are exempt — they never expire.
+// Held deliveries are excluded: TTL clock pauses while held (store-and-forward).
 func (db *DB) ExpireDeliveriesForChannel(channel string) (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')
-		WHERE channel = ? AND status IN ('queued', 'retry', 'held') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
+		WHERE channel = ? AND status IN ('queued', 'retry') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
 		  AND priority > 0`, channel)
 	if err != nil {
 		return 0, fmt.Errorf("expire deliveries for %s: %w", channel, err)

@@ -197,29 +197,8 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		log.Info().Int64("recovered", n).Msg("dispatcher: recovered stale 'sending' deliveries to 'retry'")
 	}
 
-	// Legacy workers: one per channel registry entry
-	for _, desc := range d.registry.List() {
-		if !desc.CanSend {
-			continue
-		}
-		w := &DeliveryWorker{
-			channelID:  desc.ID,
-			desc:       desc,
-			db:         d.db,
-			gwProv:     d.gwProv,
-			mesh:       d.mesh,
-			emit:       d.emit,
-			signing:    d.signing,
-			transforms: d.transforms,
-			access:     d.access,
-			passSched:  d.satellitePassSched(desc),
-		}
-		d.workers[desc.ID] = w
-		go w.Run(ctx)
-		log.Info().Str("channel", desc.ID).Msg("delivery worker started")
-	}
-
-	// v0.3.0 workers: one per interface ID (for DispatchAccess deliveries)
+	// Per-interface delivery workers: one worker per enabled interface instance.
+	// All delivery routing uses interface IDs (e.g. "mqtt_0", "iridium_0").
 	d.startInterfaceWorkers(ctx)
 
 	// Prune delivery dedup cache every 2 minutes
