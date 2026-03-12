@@ -890,6 +890,15 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; return [] }
   }
 
+  // Loop prevention metrics (v0.3.0)
+  const loopMetrics = ref(null)
+
+  async function fetchLoopMetrics() {
+    try {
+      loopMetrics.value = await api.get('/loop-metrics')
+    } catch (e) { error.value = e.message }
+  }
+
   // Transport channels (v0.2.0)
   const transportChannels = ref([])
 
@@ -1172,6 +1181,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     contacts, activeConversation, fetchContacts, createContact, updateContact, deleteContact,
     addContactAddress, updateContactAddress, deleteContactAddress, fetchConversation,
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
+    loopMetrics, fetchLoopMetrics,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,
     iridiumGeolocation, triggerIridiumGeolocation,

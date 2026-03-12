@@ -196,6 +196,7 @@ function refreshBridgeData() {
   store.fetchDLQ()
   store.fetchStatus()
   store.fetchDeliveries()
+  store.fetchLoopMetrics()
   store.fetchDeliveryStats()
   store.fetchCellularStatus()
   store.fetchCellularSignal()
@@ -456,6 +457,15 @@ onUnmounted(() => {
           <div class="text-sm font-mono" :class="status === 'dead' || status === 'failed' ? 'text-red-400' : status === 'sent' ? 'text-emerald-400' : 'text-gray-300'">
             {{ count }}
           </div>
+        </div>
+      </div>
+
+      <!-- Loop prevention metrics -->
+      <div v-if="store.loopMetrics" class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+        <div v-for="(val, key) in store.loopMetrics" :key="key"
+          class="bg-tactical-surface rounded-lg p-2 border border-tactical-border text-center">
+          <div class="text-[10px] text-gray-500 uppercase">{{ key.replace(/_/g, ' ') }}</div>
+          <div class="text-sm font-mono" :class="val > 0 ? 'text-amber-400' : 'text-gray-500'">{{ val }}</div>
         </div>
       </div>
 
