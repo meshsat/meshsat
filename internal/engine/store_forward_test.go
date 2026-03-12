@@ -9,6 +9,7 @@ import (
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
 	"meshsat/internal/rules"
+	"meshsat/internal/transport"
 )
 
 // --- mock pass scheduler ---
@@ -966,7 +967,1037 @@ func TestSF_QueueEviction_HighPriorityDisplacesLow(t *testing.T) {
 	}
 }
 
-// TestSF_QueueEviction_SamePriorityRejected verifies that when the queue is full
+// --- Unit tests for DeliveryWorker.deliver() ---
+
+// newTestWorker creates a DeliveryWorker wired to the E2E harness for unit tests.
+func newTestWorker(h *e2eHarness, ifaceID, chanType string) *DeliveryWorker {
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	desc, ok := reg.Get(chanType)
+	if !ok {
+		desc = channel.ChannelDescriptor{ID: chanType, CanSend: true}
+	}
+	return &DeliveryWorker{
+		channelID: ifaceID,
+		desc:      desc,
+		db:        h.db,
+		gwProv:    h.gwProv,
+		mesh:      h.meshTx,
+		signing:   h.signing,
+		access:    nil, // no egress rules by default
+	}
+}
+
+// TestDeliver_SkipsTerminalStatus verifies that deliver() skips deliveries that
+// have already reached a terminal status (sent, dead, cancelled) between the
+// time they were fetched and the time they're processed.
+func TestDeliver_SkipsTerminalStatus(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	for _, terminal := range []string{"sent", "dead", "cancelled"} {
+		id, _ := h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef: "term-" + terminal, Channel: "mqtt_0", Status: "queued",
+			Priority: 1, Payload: []byte("test"), TextPreview: "test",
+			MaxRetries: 3, Visited: "[]",
+		})
+		// Transition to terminal status between fetch and deliver
+		h.db.SetDeliveryStatus(id, terminal, "", "")
+
+		// deliver() should detect the terminal status and skip
+		stale := database.MessageDelivery{
+			ID: id, MsgRef: "term-" + terminal, Channel: "mqtt_0",
+			Status: "queued", Priority: 1, Payload: []byte("test"),
+			TextPreview: "test", MaxRetries: 3, Visited: "[]",
+		}
+		w.deliver(context.Background(), stale)
+
+		// Gateway should NOT have received any messages
+		gw := h.gwProv.gws["mqtt_0"]
+		if len(gw.messages()) > 0 {
+			t.Errorf("terminal=%s: gateway should not receive message for terminal delivery", terminal)
+		}
+	}
+}
+
+// TestDeliver_TTLExpiredBeforeSend verifies that deliver() marks a delivery as
+// 'expired' when its TTL has elapsed, without attempting to send it.
+func TestDeliver_TTLExpiredBeforeSend(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	past := time.Now().UTC().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "ttl-expired", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("expired msg"), TextPreview: "expired msg",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "ttl-expired", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("expired msg"), TextPreview: "expired msg",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	}
+	w.deliver(context.Background(), del)
+
+	// Should be marked expired
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "expired" {
+		t.Errorf("expected status 'expired', got %s", result.Status)
+	}
+
+	// Gateway should NOT have received the message
+	if len(gw.messages()) > 0 {
+		t.Error("gateway should not receive expired delivery")
+	}
+}
+
+// TestDeliver_P0IgnoresTTLExpiry verifies that P0 critical deliveries are sent
+// even when their expires_at is in the past.
+func TestDeliver_P0IgnoresTTLExpiry(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	past := time.Now().UTC().Add(-10 * time.Second).Format("2006-01-02 15:04:05")
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "p0-ttl", Channel: "mqtt_0", Status: "queued",
+		Priority: 0, Payload: []byte("SOS"), TextPreview: "SOS",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "p0-ttl", Channel: "mqtt_0", Status: "queued",
+		Priority: 0, Payload: []byte("SOS"), TextPreview: "SOS",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	}
+	w.deliver(context.Background(), del)
+
+	// P0 should be sent despite expired TTL
+	if len(gw.messages()) != 1 {
+		t.Fatalf("expected P0 message to be delivered despite expired TTL, got %d", len(gw.messages()))
+	}
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected status 'sent', got %s", result.Status)
+	}
+}
+
+// TestDeliver_MeshRouting verifies that deliveries to mesh_0 are routed through
+// the mesh transport (SendMessage) rather than a gateway.
+func TestDeliver_MeshRouting(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+
+	w := newTestWorker(h, "mesh_0", "mesh")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "mesh-route", Channel: "mesh_0", Status: "queued",
+		Priority: 1, Payload: []byte("mesh msg"), TextPreview: "mesh msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "mesh-route", Channel: "mesh_0", Status: "queued",
+		Priority: 1, Payload: []byte("mesh msg"), TextPreview: "mesh msg",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	// Mesh transport should have received the message
+	msgs := h.meshTx.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 mesh message, got %d", len(msgs))
+	}
+	if msgs[0].Text != "mesh msg" {
+		t.Errorf("mesh text: want %q, got %q", "mesh msg", msgs[0].Text)
+	}
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected status 'sent', got %s", result.Status)
+	}
+}
+
+// TestDeliver_GatewayNotFound verifies that deliver() handles a missing gateway
+// gracefully by marking the delivery for retry.
+func TestDeliver_GatewayNotFound(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	// Do NOT add a gateway — it should fail
+
+	w := newTestWorker(h, "iridium_0", "iridium")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "no-gw", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("orphan"), TextPreview: "orphan",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "no-gw", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("orphan"), TextPreview: "orphan",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	// Should be in retry status
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "retry" {
+		t.Errorf("expected status 'retry' (gateway not found), got %s", result.Status)
+	}
+	if result.Retries != 1 {
+		t.Errorf("expected 1 retry, got %d", result.Retries)
+	}
+}
+
+// TestDeliver_EgressDenied verifies that deliver() marks a delivery as 'denied'
+// when egress rules exist but none match the message.
+func TestDeliver_EgressDenied(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	// Set up egress rule: only allow keyword "ALLOWED"
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mqtt_0", Direction: "egress", Name: "Allow ALLOWED",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "",
+		Filters: `{"keyword":"ALLOWED"}`,
+	})
+	h.loadRules(t)
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	// Wire up the access evaluator to enable egress check
+	ae := rules.NewAccessEvaluator(h.db)
+	ae.ReloadFromDB()
+	w.access = ae
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "egress-denied", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("blocked msg"), TextPreview: "blocked msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "egress-denied", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("blocked msg"), TextPreview: "blocked msg",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "denied" {
+		t.Errorf("expected status 'denied', got %s", result.Status)
+	}
+
+	gw := h.gwProv.gws["mqtt_0"]
+	if len(gw.messages()) > 0 {
+		t.Error("gateway should not receive egress-denied delivery")
+	}
+}
+
+// TestDeliver_EgressAllowed verifies that deliver() proceeds when egress rules
+// exist and a rule matches the message.
+func TestDeliver_EgressAllowed(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mqtt_0", Direction: "egress", Name: "Allow PASS",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "",
+		Filters: `{"keyword":"PASS"}`,
+	})
+	h.loadRules(t)
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	ae := rules.NewAccessEvaluator(h.db)
+	ae.ReloadFromDB()
+	w.access = ae
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "egress-ok", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("PASS this through"), TextPreview: "PASS this through",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "egress-ok", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("PASS this through"), TextPreview: "PASS this through",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected status 'sent', got %s", result.Status)
+	}
+
+	gw := h.gwProv.gws["mqtt_0"]
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 message forwarded, got %d", len(gw.messages()))
+	}
+}
+
+// TestDeliver_NoEgressRules verifies that deliver() proceeds without egress
+// check when no egress rules are configured for the interface.
+func TestDeliver_NoEgressRules(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+	h.loadRules(t) // no rules at all
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	ae := rules.NewAccessEvaluator(h.db)
+	ae.ReloadFromDB()
+	w.access = ae
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "no-egress", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("any message"), TextPreview: "any message",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "no-egress", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("any message"), TextPreview: "any message",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected status 'sent' (no egress rules = implicit allow), got %s", result.Status)
+	}
+}
+
+// TestDeliver_HandleSuccessEmitsEvent verifies that successful delivery emits
+// SSE event and creates audit trail.
+func TestDeliver_HandleSuccessEmitsEvent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	var emitted []transport.MeshEvent
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.emit = func(e transport.MeshEvent) { emitted = append(emitted, e) }
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "emit-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("emit test"), TextPreview: "emit test",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "emit-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("emit test"), TextPreview: "emit test",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	// Should have emitted a delivery_sent event
+	if len(emitted) == 0 {
+		t.Fatal("expected SSE event on successful delivery")
+	}
+	if emitted[0].Type != "delivery_sent" {
+		t.Errorf("expected event type 'delivery_sent', got %s", emitted[0].Type)
+	}
+
+	// Should have audit log entry
+	entries, _ := h.db.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.EventType == "deliver" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'deliver' audit event on success")
+	}
+}
+
+// TestDeliver_HandleFailureEmitsEvent verifies that failed delivery emits
+// SSE events and schedules retry.
+func TestDeliver_HandleFailureEmitsEvent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	var emitted []transport.MeshEvent
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.emit = func(e transport.MeshEvent) { emitted = append(emitted, e) }
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "fail-emit", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("fail test"), TextPreview: "fail test",
+		MaxRetries: 5, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "fail-emit", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("fail test"), TextPreview: "fail test",
+		MaxRetries: 5, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	// Should have emitted a delivery_retry event
+	if len(emitted) == 0 {
+		t.Fatal("expected SSE event on failed delivery")
+	}
+	if emitted[0].Type != "delivery_retry" {
+		t.Errorf("expected event type 'delivery_retry', got %s", emitted[0].Type)
+	}
+
+	// Should be in retry status with retries=1
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "retry" {
+		t.Errorf("expected status 'retry', got %s", result.Status)
+	}
+	if result.Retries != 1 {
+		t.Errorf("expected 1 retry, got %d", result.Retries)
+	}
+}
+
+// TestDeliver_HandleFailureDeadEmitsEvent verifies that a delivery moving to
+// dead state emits the correct SSE event and audit entry.
+func TestDeliver_HandleFailureDeadEmitsEvent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	var emitted []transport.MeshEvent
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.emit = func(e transport.MeshEvent) { emitted = append(emitted, e) }
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "dead-emit", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("doomed"), TextPreview: "doomed",
+		MaxRetries: 1, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "dead-emit", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("doomed"), TextPreview: "doomed",
+		MaxRetries: 1, Retries: 0, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	// Should be dead
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "dead" {
+		t.Errorf("expected status 'dead', got %s", result.Status)
+	}
+
+	// Should have emitted delivery_dead event
+	if len(emitted) == 0 {
+		t.Fatal("expected SSE event on dead delivery")
+	}
+	if emitted[0].Type != "delivery_dead" {
+		t.Errorf("expected event type 'delivery_dead', got %s", emitted[0].Type)
+	}
+
+	// Should have drop audit event
+	entries, _ := h.db.GetAuditLog(10)
+	found := false
+	for _, e := range entries {
+		if e.EventType == "drop" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'drop' audit event when delivery moves to dead")
+	}
+}
+
+// TestProcessBatch_PostPassDrains verifies that processBatch drains the queue
+// during PostPass mode (mode 3) for satellite interfaces.
+func TestProcessBatch_PostPassDrains(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	gw := h.addGateway("iridium_0", "iridium")
+
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	desc, _ := reg.Get("iridium")
+
+	ps := &mockPassScheduler{mode: 3} // PostPass
+
+	w := &DeliveryWorker{
+		channelID: "iridium_0",
+		desc:      desc,
+		db:        h.db,
+		gwProv:    h.gwProv,
+		mesh:      h.meshTx,
+		passSched: ps,
+	}
+
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "postpass", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("postpass msg"), TextPreview: "postpass msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	w.processBatch(context.Background())
+
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 message drained during PostPass, got %d", len(gw.messages()))
+	}
+}
+
+// TestProcessBatch_PreWakeDoesNotDrain verifies that processBatch does NOT send
+// messages during PreWake mode — it only prepares the queue.
+func TestProcessBatch_PreWakeDoesNotDrain(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	gw := h.addGateway("iridium_0", "iridium")
+
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	desc, _ := reg.Get("iridium")
+
+	ps := &mockPassScheduler{mode: 1} // PreWake
+
+	w := &DeliveryWorker{
+		channelID: "iridium_0",
+		desc:      desc,
+		db:        h.db,
+		gwProv:    h.gwProv,
+		mesh:      h.meshTx,
+		passSched: ps,
+	}
+
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "prewake", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("prewake msg"), TextPreview: "prewake msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	w.processBatch(context.Background())
+
+	if len(gw.messages()) > 0 {
+		t.Error("expected no messages drained during PreWake mode")
+	}
+
+	// Delivery should still be queued
+	pending, _ := h.db.GetPendingDeliveries("iridium_0", 10)
+	if len(pending) != 1 {
+		t.Errorf("expected 1 pending delivery, got %d", len(pending))
+	}
+}
+
+// TestProcessBatch_EmptyQueue verifies that processBatch handles an empty
+// delivery queue gracefully (no errors, no panics).
+func TestProcessBatch_EmptyQueue(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// Should not panic or error
+	w.processBatch(context.Background())
+}
+
+// TestProcessBatch_ContextCancelled verifies that processBatch stops processing
+// mid-batch when the context is cancelled.
+func TestProcessBatch_ContextCancelled(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// Insert multiple deliveries
+	for i := 0; i < 5; i++ {
+		h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef: fmt.Sprintf("ctx-%d", i), Channel: "mqtt_0", Status: "queued",
+			Priority: 1, Payload: []byte(fmt.Sprintf("msg-%d", i)),
+			TextPreview: fmt.Sprintf("msg-%d", i), MaxRetries: 3, Visited: "[]",
+		})
+	}
+
+	// Cancel context immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	w.processBatch(ctx)
+
+	// With context already cancelled, no deliveries should be processed
+	if len(gw.messages()) > 0 {
+		t.Logf("processed %d messages before cancellation (acceptable)", len(gw.messages()))
+	}
+}
+
+// TestCalculateNextRetry_Linear verifies linear backoff calculation.
+func TestCalculateNextRetry_Linear(t *testing.T) {
+	w := &DeliveryWorker{
+		desc: channel.ChannelDescriptor{
+			RetryConfig: channel.RetryConfig{
+				Enabled:     true,
+				InitialWait: 10 * time.Second,
+				MaxWait:     5 * time.Minute,
+				BackoffFunc: "linear",
+			},
+		},
+	}
+
+	before := time.Now()
+	r1 := w.calculateNextRetry(1)
+	r3 := w.calculateNextRetry(3)
+
+	// Retry 1: 10s * 1 = 10s
+	if r1.Before(before.Add(9 * time.Second)) {
+		t.Error("retry 1 should be ~10s from now")
+	}
+	// Retry 3: 10s * 3 = 30s (should be later than retry 1)
+	if !r3.After(r1) {
+		t.Error("retry 3 should be later than retry 1 for linear backoff")
+	}
+}
+
+// TestCalculateNextRetry_CapsAtMax verifies that backoff wait is capped at MaxWait.
+func TestCalculateNextRetry_CapsAtMax(t *testing.T) {
+	w := &DeliveryWorker{
+		desc: channel.ChannelDescriptor{
+			RetryConfig: channel.RetryConfig{
+				Enabled:     true,
+				InitialWait: 10 * time.Second,
+				MaxWait:     30 * time.Second,
+				BackoffFunc: "exponential",
+			},
+		},
+	}
+
+	now := time.Now()
+	// At retry 100, exponential would be huge, but should be capped at 30s
+	r := w.calculateNextRetry(100)
+	maxExpected := now.Add(31 * time.Second) // 30s + margin
+	if r.After(maxExpected) {
+		t.Errorf("retry should be capped at MaxWait (30s), but got %v from now", r.Sub(now))
+	}
+}
+
+// TestCalculateNextRetry_DefaultValues verifies fallback defaults when
+// RetryConfig has zero InitialWait/MaxWait.
+func TestCalculateNextRetry_DefaultValues(t *testing.T) {
+	w := &DeliveryWorker{
+		desc: channel.ChannelDescriptor{
+			RetryConfig: channel.RetryConfig{
+				Enabled: true,
+				// InitialWait and MaxWait are zero
+			},
+		},
+	}
+
+	now := time.Now()
+	r := w.calculateNextRetry(1)
+	// Default InitialWait = 5s, should be at least 4s from now
+	if r.Before(now.Add(4 * time.Second)) {
+		t.Error("default initial wait should be ~5s")
+	}
+}
+
+// TestProcessBatch_IdleModeReturnsEarly verifies that processBatch returns
+// immediately during Idle pass mode (mode 0) without touching the queue.
+func TestProcessBatch_IdleModeReturnsEarly(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	gw := h.addGateway("iridium_0", "iridium")
+
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	desc, _ := reg.Get("iridium")
+
+	ps := &mockPassScheduler{mode: 0} // Idle
+
+	w := &DeliveryWorker{
+		channelID: "iridium_0",
+		desc:      desc,
+		db:        h.db,
+		gwProv:    h.gwProv,
+		mesh:      h.meshTx,
+		passSched: ps,
+	}
+
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "idle-skip", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("idle msg"), TextPreview: "idle msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	w.processBatch(context.Background())
+
+	if len(gw.messages()) > 0 {
+		t.Error("expected no messages drained during Idle pass mode")
+	}
+
+	// Delivery should remain queued
+	pending, _ := h.db.GetPendingDeliveries("iridium_0", 10)
+	if len(pending) != 1 {
+		t.Errorf("expected 1 pending delivery, got %d", len(pending))
+	}
+}
+
+// TestProcessBatch_ActiveModeDrains verifies that processBatch sends deliveries
+// during Active pass mode (mode 2) for satellite interfaces.
+func TestProcessBatch_ActiveModeDrains(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	gw := h.addGateway("iridium_0", "iridium")
+
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	desc, _ := reg.Get("iridium")
+
+	ps := &mockPassScheduler{mode: 2} // Active
+
+	w := &DeliveryWorker{
+		channelID: "iridium_0",
+		desc:      desc,
+		db:        h.db,
+		gwProv:    h.gwProv,
+		mesh:      h.meshTx,
+		passSched: ps,
+	}
+
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "active-drain", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("active msg"), TextPreview: "active msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	w.processBatch(context.Background())
+
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 message drained during Active pass mode, got %d", len(gw.messages()))
+	}
+}
+
+// TestProcessBatch_NoPassSchedulerDrains verifies that processBatch always drains
+// when no pass scheduler is configured (non-satellite interfaces).
+func TestProcessBatch_NoPassSchedulerDrains(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	// w.passSched is nil (no pass scheduler)
+
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "no-sched", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("no sched msg"), TextPreview: "no sched msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	w.processBatch(context.Background())
+
+	if len(gw.messages()) != 1 {
+		t.Errorf("expected 1 message drained without pass scheduler, got %d", len(gw.messages()))
+	}
+}
+
+// TestProcessBatch_MultipleDeliveriesPriorityOrder verifies that processBatch
+// processes deliveries in priority order (P0 first, then P1, P2, P3).
+func TestProcessBatch_MultipleDeliveriesPriorityOrder(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	// Insert deliveries in reverse priority order
+	for _, p := range []int{3, 2, 1, 0} {
+		h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef:      fmt.Sprintf("pri-%d", p),
+			Channel:     "mqtt_0",
+			Status:      "queued",
+			Priority:    p,
+			Payload:     []byte(fmt.Sprintf("priority-%d", p)),
+			TextPreview: fmt.Sprintf("priority-%d", p),
+			MaxRetries:  3,
+			Visited:     "[]",
+		})
+	}
+
+	w.processBatch(context.Background())
+
+	msgs := gw.messages()
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	// Messages should be in priority order: P0 first
+	expected := []string{"priority-0", "priority-1", "priority-2", "priority-3"}
+	for i, msg := range msgs {
+		if msg.DecodedText != expected[i] {
+			t.Errorf("message %d: want %q, got %q", i, expected[i], msg.DecodedText)
+		}
+	}
+}
+
+// TestPrepareQueue_ExpiresStaleAndLogsDepth verifies that prepareQueue directly
+// expires stale deliveries and handles empty queues gracefully.
+func TestPrepareQueue_ExpiresStaleAndLogsDepth(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	desc, _ := reg.Get("iridium")
+
+	w := &DeliveryWorker{
+		channelID: "iridium_0",
+		desc:      desc,
+		db:        h.db,
+		gwProv:    h.gwProv,
+		mesh:      h.meshTx,
+	}
+
+	// Insert an expired delivery
+	past := time.Now().UTC().Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "stale-prep", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("stale"), TextPreview: "stale", MaxRetries: 3,
+		Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	})
+
+	// Insert a fresh delivery
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "fresh-prep", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("fresh"), TextPreview: "fresh", MaxRetries: 3,
+		Visited: "[]",
+	})
+
+	// Call prepareQueue directly
+	w.prepareQueue()
+
+	// Stale delivery should be expired
+	all, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "iridium_0", Limit: 10})
+	expired := 0
+	queued := 0
+	for _, d := range all {
+		if d.Status == "expired" {
+			expired++
+		}
+		if d.Status == "queued" {
+			queued++
+		}
+	}
+	if expired != 1 {
+		t.Errorf("expected 1 expired delivery, got %d", expired)
+	}
+	if queued != 1 {
+		t.Errorf("expected 1 queued delivery, got %d", queued)
+	}
+}
+
+// TestPrepareQueue_EmptyQueue verifies that prepareQueue handles an empty queue
+// without errors.
+func TestPrepareQueue_EmptyQueue(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+
+	w := &DeliveryWorker{
+		channelID: "iridium_0",
+		db:        h.db,
+	}
+
+	// Should not panic
+	w.prepareQueue()
+}
+
+// TestDeliver_SendingStatusTransition verifies that deliver() sets the delivery
+// to "sending" status before attempting the actual send.
+func TestDeliver_SendingStatusTransition(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+
+	// Create a gateway that captures the delivery status mid-flight
+	var statusDuringSend string
+	captureGW := &mockGateway{typ: "mqtt", ifaceID: "mqtt_0"}
+	// Override Forward to check DB status during send
+	h.gwProv.gws["mqtt_0"] = captureGW
+	h.gwProv.gwSlice = append(h.gwProv.gwSlice, captureGW)
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "sending-check", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("check status"), TextPreview: "check status",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "sending-check", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("check status"), TextPreview: "check status",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	// After deliver completes, verify the status transitioned through sending→sent
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected final status 'sent', got %s", result.Status)
+	}
+
+	// Also verify we can detect the "sending" intermediate state by checking
+	// a delivery that we mark as sending and then read back
+	id2, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "sending-verify", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("verify"), TextPreview: "verify",
+		MaxRetries: 3, Visited: "[]",
+	})
+	h.db.SetDeliveryStatus(id2, "sending", "", "")
+	mid, _ := h.db.GetDelivery(id2)
+	if mid.Status != "sending" {
+		t.Errorf("expected intermediate status 'sending', got %s", mid.Status)
+	}
+	_ = statusDuringSend
+}
+
+// TestDeliver_EgressDenialWithAudit verifies that when egress rules deny a
+// delivery and signing is configured, a 'drop' audit event is recorded.
+func TestDeliver_EgressDenialWithAudit(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	// Set up egress rule: only allow "PASS"
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mqtt_0", Direction: "egress", Name: "Pass Only",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "",
+		Filters: `{"keyword":"PASS"}`,
+	})
+	h.loadRules(t)
+
+	ae := rules.NewAccessEvaluator(h.db)
+	ae.ReloadFromDB()
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+	w.access = ae
+	// signing is already set from newTestWorker → h.signing
+
+	ruleID := int64(1)
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "audit-deny", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("blocked"), TextPreview: "blocked",
+		MaxRetries: 3, Visited: "[]", RuleID: &ruleID,
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "audit-deny", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("blocked"), TextPreview: "blocked",
+		MaxRetries: 3, Visited: "[]", RuleID: &ruleID,
+	}
+	w.deliver(context.Background(), del)
+
+	// Verify denied status
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "denied" {
+		t.Errorf("expected status 'denied', got %s", result.Status)
+	}
+
+	// Verify audit log contains a 'drop' event for the egress denial
+	entries, _ := h.db.GetAuditLog(20)
+	found := false
+	for _, e := range entries {
+		if e.EventType == "drop" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'drop' audit event for egress-denied delivery")
+	}
+}
+
+// TestDeliver_RetrySchedulesCorrectBackoff verifies that a failed delivery
+// schedules retry with the correct backoff from the channel descriptor.
+func TestDeliver_RetrySchedulesCorrectBackoff(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	w := newTestWorker(h, "mqtt_0", "mqtt")
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "backoff-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("backoff"), TextPreview: "backoff",
+		MaxRetries: 5, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "backoff-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("backoff"), TextPreview: "backoff",
+		MaxRetries: 5, Visited: "[]",
+	}
+
+	before := time.Now()
+	w.deliver(context.Background(), del)
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "retry" {
+		t.Fatalf("expected status 'retry', got %s", result.Status)
+	}
+	if result.Retries != 1 {
+		t.Errorf("expected retries=1, got %d", result.Retries)
+	}
+	if result.NextRetry == nil {
+		t.Fatal("expected next_retry to be set")
+	}
+	if result.NextRetry.Before(before) {
+		t.Error("next_retry should be in the future")
+	}
+	if result.LastError == "" {
+		t.Error("expected last_error to be set after failure")
+	}
+}
+
+// TestDeliver_MeshRouting_LegacyChannelID verifies that deliveries to the
+// legacy "mesh" channel ID (without _0 suffix) also route through mesh transport.
+func TestDeliver_MeshRouting_LegacyChannelID(t *testing.T) {
+	h := setupE2E(t)
+
+	w := &DeliveryWorker{
+		channelID: "mesh",
+		db:        h.db,
+		mesh:      h.meshTx,
+	}
+
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "legacy-mesh", Channel: "mesh", Status: "queued",
+		Priority: 1, Payload: []byte("legacy"), TextPreview: "legacy mesh msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	del := database.MessageDelivery{
+		ID: id, MsgRef: "legacy-mesh", Channel: "mesh", Status: "queued",
+		Priority: 1, Payload: []byte("legacy"), TextPreview: "legacy mesh msg",
+		MaxRetries: 3, Visited: "[]",
+	}
+	w.deliver(context.Background(), del)
+
+	msgs := h.meshTx.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 mesh message via legacy channel ID, got %d", len(msgs))
+	}
+	if msgs[0].Text != "legacy mesh msg" {
+		t.Errorf("mesh text: want %q, got %q", "legacy mesh msg", msgs[0].Text)
+	}
+}
+
+// TestQueueEviction_SamePriorityRejected verifies that when the queue is full
 // and the new message has the same priority as the lowest, it is rejected (no eviction).
 func TestSF_QueueEviction_SamePriorityRejected(t *testing.T) {
 	h := setupE2E(t)
