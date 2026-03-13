@@ -11,6 +11,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -31,6 +32,9 @@ type Server struct {
 	ifaceMgr      *engine.InterfaceManager
 	signing       *engine.SigningService
 	dispatcher    *engine.Dispatcher
+	linkMgr       *routing.LinkManager
+	destTable     *routing.DestinationTable
+	routingID     *routing.Identity
 	paidRateLimit int
 	sos           *SOSState
 	webHandler    http.Handler
@@ -94,6 +98,21 @@ func (s *Server) SetInterfaceManager(m *engine.InterfaceManager) {
 // SetDispatcher sets the dispatcher for loop metrics exposure.
 func (s *Server) SetDispatcher(d *engine.Dispatcher) {
 	s.dispatcher = d
+}
+
+// SetLinkManager sets the routing link manager for link API endpoints.
+func (s *Server) SetLinkManager(lm *routing.LinkManager) {
+	s.linkMgr = lm
+}
+
+// SetDestinationTable sets the routing destination table for routing API.
+func (s *Server) SetDestinationTable(dt *routing.DestinationTable) {
+	s.destTable = dt
+}
+
+// SetRoutingIdentity sets the local routing identity for routing API.
+func (s *Server) SetRoutingIdentity(id *routing.Identity) {
+	s.routingID = id
 }
 
 // Router builds the chi router with all API routes.
@@ -323,6 +342,13 @@ func (s *Server) Router() http.Handler {
 
 		// Loop prevention metrics (v0.3.0)
 		r.Get("/loop-metrics", s.handleGetLoopMetrics)
+
+		// Routing — links and destinations (v0.2.0)
+		r.Post("/links", s.handleCreateLink)
+		r.Get("/links", s.handleGetLinks)
+		r.Delete("/links/{id}", s.handleDeleteLink)
+		r.Get("/routing/destinations", s.handleGetRoutingDestinations)
+		r.Get("/routing/identity", s.handleGetRoutingIdentity)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

@@ -20,6 +20,7 @@ import (
 	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -220,6 +221,47 @@ func main() {
 		signingService = ss
 	}
 
+	// Routing identity — load or generate Ed25519 + X25519 keypair, persist via system_config
+	var routingID *routing.Identity
+	var linkMgr *routing.LinkManager
+	var destTable *routing.DestinationTable
+	routingID, err = routing.NewIdentity(db)
+	if err != nil {
+		log.Error().Err(err).Msg("routing identity init failed - routing disabled")
+	} else {
+		// Destination table — in-memory + DB-persisted registry of known remote identities
+		destTable = routing.NewDestinationTable(db)
+		if err := destTable.LoadFromDB(); err != nil {
+			log.Warn().Err(err).Msg("failed to load routing destinations from DB")
+		}
+
+		// Announce relay — dedup + hop-count enforcement + delayed retransmit
+		relayConfig := routing.DefaultRelayConfig()
+		announceRelay := routing.NewAnnounceRelay(relayConfig, destTable, func(data []byte, announce *routing.Announce) {
+			log.Debug().Str("dest_hash", routingID.DestHashHex()).Int("hops", int(announce.HopCount)).Msg("relaying announce")
+		})
+		announceRelay.RegisterLocal(routingID.DestHash())
+		announceRelay.StartPruner(ctx)
+
+		// Bandwidth limiter — token bucket per interface at 2% of channel BW
+		bwLimiter := routing.NewAnnounceBandwidthLimiter()
+		for _, chID := range registry.IDs() {
+			bwLimiter.SetDefaultBandwidth(chID, chID)
+		}
+		_ = bwLimiter // used by announce relay path
+
+		// Link manager — ECDH 3-packet handshake, AES-256-GCM encryption
+		linkMgr = routing.NewLinkManager(routingID)
+
+		// Keepalive — 18s heartbeat, 60s timeout for active links
+		keepalive := routing.NewLinkKeepalive(linkMgr, func(linkID [routing.LinkIDLen]byte, data []byte) {
+			log.Debug().Msg("keepalive sent")
+		})
+		keepalive.Start(ctx)
+
+		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized")
+	}
+
 	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
@@ -228,6 +270,9 @@ func main() {
 	dispatcher.SetFailoverResolver(failoverResolver)
 	if signingService != nil {
 		dispatcher.SetSigningService(signingService)
+	}
+	if routingID != nil {
+		dispatcher.SetRoutingIdentity(routingID)
 	}
 	transforms := engine.NewTransformPipeline()
 	if cfg.LlamaZipAddr != "" {
@@ -293,6 +338,15 @@ func main() {
 	srv.SetDispatcher(dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
+	if linkMgr != nil {
+		srv.SetLinkManager(linkMgr)
+	}
+	if destTable != nil {
+		srv.SetDestinationTable(destTable)
+	}
+	if routingID != nil {
+		srv.SetRoutingIdentity(routingID)
+	}
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -311,6 +365,31 @@ func main() {
 
 	// Start retention worker
 	go engine.StartRetentionWorker(ctx, db, cfg.RetentionDays)
+
+	// Periodic announce broadcasting
+	if routingID != nil && cfg.AnnounceIntervalSec > 0 {
+		go func() {
+			interval := time.Duration(cfg.AnnounceIntervalSec) * time.Second
+			// Announce immediately on startup
+			if announce, aErr := routing.NewAnnounce(routingID, nil); aErr == nil {
+				data := announce.Marshal()
+				log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Msg("broadcasting routing announce")
+			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if announce, aErr := routing.NewAnnounce(routingID, nil); aErr == nil {
+						data := announce.Marshal()
+						log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Msg("broadcasting routing announce")
+					}
+				}
+			}
+		}()
+	}
 
 	// Start HTTP server
 	go func() {

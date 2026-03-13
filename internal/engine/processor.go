@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
 	"meshsat/internal/gateway"
+	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -33,6 +35,12 @@ type Processor struct {
 	dispatcher *Dispatcher                // v0.2.0 delivery fan-out
 	subs       []chan transport.MeshEvent // SSE re-broadcast subscribers
 	subsMu     sync.RWMutex
+
+	// Routing subsystem (v0.2.0 — Reticulum-inspired)
+	announceRelay *routing.AnnounceRelay
+	linkMgr       *routing.LinkManager
+	keepalive     *routing.LinkKeepalive
+	destTable     *routing.DestinationTable
 
 	// Gateway injection dedup (text hash → timestamp, 5min TTL)
 	relayDedupMu sync.Mutex
@@ -63,6 +71,16 @@ func (p *Processor) SetDispatcher(d *Dispatcher) {
 // so gateway stop/start/reconfigure via the API is reflected immediately.
 func (p *Processor) SetGatewayProvider(prov GatewayProvider) {
 	p.gwProv = prov
+}
+
+// SetRouting wires the routing subsystem into the processor event loop.
+// When set, incoming PRIVATE_APP packets are dispatched to the announce relay,
+// link manager, and keepalive handler.
+func (p *Processor) SetRouting(relay *routing.AnnounceRelay, linkMgr *routing.LinkManager, keepalive *routing.LinkKeepalive, destTable *routing.DestinationTable) {
+	p.announceRelay = relay
+	p.linkMgr = linkMgr
+	p.keepalive = keepalive
+	p.destTable = destTable
 }
 
 // Subscribe adds an SSE re-broadcast subscriber. Returns a channel and unsubscribe func.
@@ -235,6 +253,12 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 	log.Debug().Uint32("packet_id", msg.ID).Str("portnum", msg.PortNumName).Msg("message persisted")
 
+	// Route PRIVATE_APP packets to the routing subsystem (announces, links, keepalives)
+	if msg.PortNum == transport.PortNumPrivate && len(msg.RawPayload) > 0 {
+		p.handleRoutingPacket(event, msg.RawPayload)
+		return // routing packets are not forwarded through the rules engine
+	}
+
 	// Prevent gateway→mesh→gateway feedback loops:
 	// If this message text was recently injected from a gateway, don't forward it back.
 	if p.isRecentGatewayInjection(msg.DecodedText) {
@@ -366,6 +390,101 @@ func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
 	}
 }
 
+// handleRoutingPacket dispatches a PRIVATE_APP payload to the appropriate
+// routing subsystem handler based on the first byte (packet type).
+func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+
+	firstByte := payload[0]
+
+	// Announce packets: first byte has FlagIsAnnounce (0x01) bit set
+	if firstByte&routing.FlagIsAnnounce != 0 {
+		if p.announceRelay != nil {
+			ctx := context.Background()
+			if p.announceRelay.HandleAnnounce(ctx, payload, "mesh_0") {
+				log.Debug().Int("size", len(payload)).Msg("routing: announce processed")
+			}
+		}
+		return
+	}
+
+	switch firstByte {
+	case routing.PacketLinkRequest:
+		if p.linkMgr != nil {
+			respData, err := p.linkMgr.HandleLinkRequest(payload)
+			if err != nil {
+				log.Debug().Err(err).Msg("routing: link request handling failed")
+			} else {
+				log.Debug().Msg("routing: link request processed")
+				p.sendRoutingPacket(respData)
+			}
+		}
+
+	case routing.PacketLinkResponse:
+		if p.linkMgr != nil {
+			// Look up the destination's signing pub from the destination table
+			// so we can verify the link response signature.
+			var signingPub []byte
+			if p.destTable != nil {
+				resp, err := routing.UnmarshalLinkResponse(payload)
+				if err == nil {
+					link := p.linkMgr.GetPendingLink(resp.LinkID)
+					if link != nil {
+						dest := p.destTable.Lookup(link.DestHash)
+						if dest != nil {
+							signingPub = dest.SigningPub
+						}
+					}
+				}
+			}
+			confirmData, err := p.linkMgr.HandleLinkResponse(payload, signingPub)
+			if err != nil {
+				log.Debug().Err(err).Msg("routing: link response handling failed")
+			} else {
+				log.Debug().Msg("routing: link response processed, link established")
+				p.sendRoutingPacket(confirmData)
+			}
+		}
+
+	case routing.PacketLinkConfirm:
+		if p.linkMgr != nil {
+			if err := p.linkMgr.HandleLinkConfirm(payload); err != nil {
+				log.Debug().Err(err).Msg("routing: link confirm handling failed")
+			} else {
+				log.Debug().Msg("routing: link confirm processed")
+			}
+		}
+
+	case routing.PacketKeepalive:
+		if p.keepalive != nil {
+			if err := p.keepalive.HandleKeepalive(payload); err != nil {
+				log.Debug().Err(err).Msg("routing: keepalive handling failed")
+			}
+		}
+
+	default:
+		log.Debug().Int("type", int(firstByte)).Msg("routing: unknown packet type")
+	}
+}
+
+// sendRoutingPacket transmits a routing protocol packet via mesh as a PRIVATE_APP raw payload.
+func (p *Processor) sendRoutingPacket(data []byte) {
+	if len(data) == 0 || p.mesh == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req := transport.RawRequest{
+		PortNum: transport.PortNumPrivate,
+		Payload: base64Encode(data),
+	}
+	if err := p.mesh.SendRaw(ctx, req); err != nil {
+		log.Warn().Err(err).Int("size", len(data)).Msg("routing: failed to send packet")
+	}
+}
+
 // StartGatewayReceiver drains inbound messages from a gateway and dispatches
 // them through the v0.2.0 rules engine + delivery ledger.
 func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway) {
@@ -482,4 +601,8 @@ func (p *Processor) broadcast(event transport.MeshEvent) {
 			// Slow subscriber, drop event
 		}
 	}
+}
+
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
 }

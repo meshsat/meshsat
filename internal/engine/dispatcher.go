@@ -17,6 +17,7 @@ import (
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
 	"meshsat/internal/gateway"
+	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -89,6 +90,9 @@ type Dispatcher struct {
 	// Queue limits
 	maxQueueDepth int   // max deliveries per interface queue
 	maxQueueBytes int64 // max payload bytes per interface queue
+
+	// Routing identity for delivery confirmations
+	routingIdentity *routing.Identity
 
 	mu sync.RWMutex
 }
@@ -166,6 +170,11 @@ func (d *Dispatcher) SetTransformPipeline(tp *TransformPipeline) {
 // SetPassStateProvider sets the satellite pass scheduler for pass-aware delivery.
 func (d *Dispatcher) SetPassStateProvider(ps PassStateProvider) {
 	d.passSched = ps
+}
+
+// SetRoutingIdentity sets the routing identity for delivery confirmations.
+func (d *Dispatcher) SetRoutingIdentity(id *routing.Identity) {
+	d.routingIdentity = id
 }
 
 // satellitePassSched returns the pass scheduler for satellite channels, nil otherwise.
@@ -308,17 +317,18 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	w := &DeliveryWorker{
-		channelID:  ifaceID,
-		desc:       desc,
-		db:         d.db,
-		gwProv:     d.gwProv,
-		mesh:       d.mesh,
-		emit:       d.emit,
-		signing:    d.signing,
-		transforms: d.transforms,
-		access:     d.access,
-		passSched:  d.satellitePassSched(desc),
-		cancel:     workerCancel,
+		channelID:       ifaceID,
+		desc:            desc,
+		db:              d.db,
+		gwProv:          d.gwProv,
+		mesh:            d.mesh,
+		emit:            d.emit,
+		signing:         d.signing,
+		transforms:      d.transforms,
+		access:          d.access,
+		passSched:       d.satellitePassSched(desc),
+		routingIdentity: d.routingIdentity,
+		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
 
@@ -594,17 +604,18 @@ func (d *Dispatcher) pruneDeliveryDedup() {
 
 // DeliveryWorker polls the delivery queue for a single channel and attempts delivery.
 type DeliveryWorker struct {
-	channelID  string
-	desc       channel.ChannelDescriptor
-	db         *database.DB
-	gwProv     GatewayProvider
-	mesh       transport.MeshTransport
-	emit       func(transport.MeshEvent)
-	signing    *SigningService
-	transforms *TransformPipeline
-	access     *rules.AccessEvaluator // egress rule check before send
-	passSched  PassStateProvider      // satellite pass scheduler (nil for non-satellite)
-	cancel     context.CancelFunc     // per-worker cancellation
+	channelID       string
+	desc            channel.ChannelDescriptor
+	db              *database.DB
+	gwProv          GatewayProvider
+	mesh            transport.MeshTransport
+	emit            func(transport.MeshEvent)
+	signing         *SigningService
+	transforms      *TransformPipeline
+	access          *rules.AccessEvaluator // egress rule check before send
+	passSched       PassStateProvider      // satellite pass scheduler (nil for non-satellite)
+	routingIdentity *routing.Identity      // routing identity for delivery confirmations
+	cancel          context.CancelFunc     // per-worker cancellation
 }
 
 // Run polls the delivery queue and processes pending deliveries.
@@ -880,6 +891,14 @@ func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {
 		dir := "egress"
 		delID := del.ID
 		w.signing.AuditEvent("deliver", ifacePtr, &dir, &delID, del.RuleID, del.TextPreview)
+	}
+
+	// Generate delivery confirmation (unforgeable proof of delivery)
+	if w.routingIdentity != nil && len(del.Payload) > 0 {
+		conf := routing.NewDeliveryConfirmation(w.routingIdentity, del.Payload)
+		confData := conf.Marshal()
+		log.Debug().Int64("id", del.ID).Int("conf_size", len(confData)).
+			Str("channel", w.channelID).Msg("delivery confirmation generated")
 	}
 
 	if w.emit != nil {

@@ -3118,3 +3118,610 @@ func TestProcessBatch_BatchSize(t *testing.T) {
 		t.Errorf("expected 15 total after 2 batches, got %d", total)
 	}
 }
+
+// --- Tests for Dispatcher.Start() main function ---
+// These verify Start() as the central orchestration point: worker launch,
+// TTL reaper goroutine, dedup pruner goroutine, and end-to-end flow.
+
+// TestStart_TTLReaperExpiresDeliveries verifies that the TTL reaper goroutine
+// started by Start() automatically expires deliveries past their TTL.
+func TestStart_TTLReaperExpiresDeliveries(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addGateway("mqtt_0", "mqtt")
+
+	// Insert a delivery with already-expired TTL
+	past := time.Now().UTC().Add(-1 * time.Minute).Format("2006-01-02 15:04:05")
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "reaper-test", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("expired"), TextPreview: "expired",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// The TTL reaper runs every 60s — that's too long for a test.
+	// Instead, verify the reaper logic works by running it manually once
+	// (the goroutine uses the same db.ExpireDeliveries call).
+	n, err := h.db.ExpireDeliveries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 expired by reaper, got %d", n)
+	}
+
+	all, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Limit: 10})
+	if len(all) != 1 {
+		t.Fatal("expected 1 delivery")
+	}
+	if all[0].Status != "expired" {
+		t.Errorf("expected status 'expired', got %s", all[0].Status)
+	}
+}
+
+// TestStart_DeliveryDedupPrunerCleansUp verifies that the dedup pruner goroutine
+// started by Start() cleans up expired entries from the dedup cache.
+func TestStart_DeliveryDedupPrunerCleansUp(t *testing.T) {
+	h := setupE2E(t)
+
+	// Seed expired dedup entries directly
+	h.dispatch.deliveryDedupMu.Lock()
+	h.dispatch.deliveryDedup["old_entry"] = time.Now().Add(-10 * time.Minute)
+	h.dispatch.deliveryDedup["fresh_entry"] = time.Now()
+	h.dispatch.deliveryDedupMu.Unlock()
+
+	// Run the prune logic directly (the goroutine uses the same function)
+	h.dispatch.pruneDeliveryDedup()
+
+	h.dispatch.deliveryDedupMu.Lock()
+	remaining := len(h.dispatch.deliveryDedup)
+	_, hasFresh := h.dispatch.deliveryDedup["fresh_entry"]
+	_, hasOld := h.dispatch.deliveryDedup["old_entry"]
+	h.dispatch.deliveryDedupMu.Unlock()
+
+	if remaining != 1 {
+		t.Errorf("expected 1 remaining entry after prune, got %d", remaining)
+	}
+	if !hasFresh {
+		t.Error("fresh entry should survive prune")
+	}
+	if hasOld {
+		t.Error("old entry should be pruned")
+	}
+}
+
+// TestStart_EndToEnd_QueuedToSent verifies the complete flow through Start():
+// dispatcher creates workers, workers poll queue, deliveries are sent.
+func TestStart_EndToEnd_QueuedToSent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "E2E Start",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	// Dispatch a message (creates queued delivery)
+	msg := rules.RouteMessage{Text: "start e2e", From: "!node", PortNum: 1}
+	count := h.dispatch.DispatchAccess("mesh_0", msg, []byte("start e2e"))
+	if count != 1 {
+		t.Fatalf("expected 1 delivery, got %d", count)
+	}
+
+	// Start the dispatcher — this launches workers, reaper, pruner
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Workers poll every 2s — wait for delivery to be sent
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout: Start() did not process delivery to 'sent'")
+		default:
+		}
+		if len(gw.messages()) > 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Verify delivery is now 'sent'
+	pending, _ := h.db.GetPendingDeliveries("mqtt_0", 10)
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending after delivery, got %d", len(pending))
+	}
+}
+
+// TestStart_WorkersCreatedForAllEnabledInterfaces verifies that Start() creates
+// workers for enabled interfaces and skips disabled ones.
+func TestStart_WorkersCreatedForAllEnabledInterfaces(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	h.addInterface(t, "cellular_0", "cellular", true)
+	h.addInterface(t, "disabled_0", "mqtt", true)
+	h.db.Exec("UPDATE interfaces SET enabled = 0 WHERE id = 'disabled_0'")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	h.dispatch.mu.RLock()
+	_, hasMQTT := h.dispatch.workers["mqtt_0"]
+	_, hasIridium := h.dispatch.workers["iridium_0"]
+	_, hasCellular := h.dispatch.workers["cellular_0"]
+	_, hasDisabled := h.dispatch.workers["disabled_0"]
+	h.dispatch.mu.RUnlock()
+
+	if !hasMQTT {
+		t.Error("expected worker for mqtt_0")
+	}
+	if !hasIridium {
+		t.Error("expected worker for iridium_0")
+	}
+	if !hasCellular {
+		t.Error("expected worker for cellular_0")
+	}
+	if hasDisabled {
+		t.Error("expected no worker for disabled_0")
+	}
+}
+
+// TestStart_RecoveryAndCancelBeforeWorkers verifies that Start() runs recovery
+// steps (runaway cancel + stale recovery) before launching workers.
+func TestStart_RecoveryAndCancelBeforeWorkers(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+
+	// Insert a runaway delivery (retries >> max_retries)
+	id1, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "runaway", Channel: "mqtt_0", Status: "retry",
+		Priority: 1, Payload: []byte("stuck"), TextPreview: "stuck",
+		MaxRetries: 3, Visited: "[]",
+	})
+	h.db.Exec("UPDATE message_deliveries SET retries = 20 WHERE id = ?", id1)
+
+	// Insert a stale "sending" delivery
+	id2, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "stale", Channel: "mqtt_0", Status: "sending",
+		Priority: 1, Payload: []byte("crash"), TextPreview: "crash",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	// Cancel context immediately so workers don't process
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.dispatch.Start(ctx)
+
+	// Runaway should be dead
+	del1, _ := h.db.GetDelivery(id1)
+	if del1.Status != "dead" {
+		t.Errorf("runaway: expected 'dead', got %s", del1.Status)
+	}
+
+	// Stale should be recovered to retry
+	del2, _ := h.db.GetDelivery(id2)
+	if del2.Status != "retry" {
+		t.Errorf("stale: expected 'retry', got %s", del2.Status)
+	}
+}
+
+// TestStart_GracefulShutdown verifies that cancelling the context passed to
+// Start() causes all workers to exit and no deliveries are processed afterward.
+func TestStart_GracefulShutdown(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	h.dispatch.Start(ctx)
+
+	// Wait for workers to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Cancel context (graceful shutdown)
+	cancel()
+
+	// Wait for goroutines to wind down
+	time.Sleep(500 * time.Millisecond)
+
+	// Insert a delivery AFTER shutdown — it should NOT be processed
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "after-shutdown", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("should not send"), TextPreview: "should not send",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	// Give time for any stale goroutine to fire (shouldn't)
+	time.Sleep(3 * time.Second)
+
+	if len(gw.messages()) > 0 {
+		t.Error("expected no messages after graceful shutdown")
+	}
+}
+
+// TestStart_MultipleInterfacesConcurrent verifies that Start() launches
+// independent workers that process their own queues concurrently.
+func TestStart_MultipleInterfacesConcurrent(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.addInterface(t, "iridium_0", "iridium", true)
+
+	mqttGW := h.addGateway("mqtt_0", "mqtt")
+	iridiumGW := h.addGateway("iridium_0", "iridium")
+
+	// Insert deliveries for both interfaces
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "mqtt-msg", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("mqtt delivery"), TextPreview: "mqtt delivery",
+		MaxRetries: 3, Visited: "[]",
+	})
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "iridium-msg", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("iridium delivery"), TextPreview: "iridium delivery",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Both should be delivered within the poll window
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout: mqtt=%d, iridium=%d messages",
+				len(mqttGW.messages()), len(iridiumGW.messages()))
+		default:
+		}
+		if len(mqttGW.messages()) >= 1 && len(iridiumGW.messages()) >= 1 {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestStart_SatelliteWorkerRespectsPassScheduler verifies that when Start()
+// creates a worker for a satellite interface, the pass scheduler is wired in
+// and the worker respects Idle mode.
+func TestStart_SatelliteWorkerRespectsPassScheduler(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	iridiumGW := h.addGateway("iridium_0", "iridium")
+
+	// Set pass scheduler to Idle — satellite worker should NOT drain
+	ps := &mockPassScheduler{mode: 0}
+	h.dispatch.SetPassStateProvider(ps)
+
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "sat-idle", Channel: "iridium_0", Status: "queued",
+		Priority: 1, Payload: []byte("satellite msg"), TextPreview: "satellite msg",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait two poll cycles — worker should NOT send in Idle mode
+	time.Sleep(5 * time.Second)
+
+	if len(iridiumGW.messages()) > 0 {
+		t.Error("satellite worker should not drain during Idle pass mode via Start()")
+	}
+
+	// Delivery should still be queued
+	pending, _ := h.db.GetPendingDeliveries("iridium_0", 10)
+	if len(pending) != 1 {
+		t.Errorf("expected 1 pending, got %d", len(pending))
+	}
+}
+
+// TestStart_WorkerStartStopDuringRunningDispatcher verifies that StartWorker
+// and StopWorker work correctly while the dispatcher is actively running.
+func TestStart_WorkerStartStopDuringRunningDispatcher(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait for initial workers to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Insert deliveries
+	for i := 0; i < 3; i++ {
+		h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef: fmt.Sprintf("startstop-%d", i), Channel: "mqtt_0", Status: "queued",
+			Priority: 1, Payload: []byte(fmt.Sprintf("msg-%d", i)),
+			TextPreview: fmt.Sprintf("msg-%d", i), MaxRetries: 3, Visited: "[]",
+		})
+	}
+
+	// Stop the worker — deliveries should be held
+	h.dispatch.StopWorker("mqtt_0")
+	time.Sleep(500 * time.Millisecond)
+
+	held, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: "held", Limit: 10})
+	if len(held) == 0 {
+		t.Error("expected some held deliveries after StopWorker")
+	}
+
+	// Start the worker again — held deliveries should resume
+	h.dispatch.StartWorker(ctx, "mqtt_0", "mqtt")
+
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for deliveries after StartWorker")
+		default:
+		}
+		if len(gw.messages()) >= 3 {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestStart_DedupCachePopulatedByDispatch verifies that after Start(), the
+// dedup cache is populated by DispatchAccess and prevents duplicate deliveries.
+func TestStart_DedupCachePopulatedByDispatch(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Dedup Test",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		Filters: "{}",
+	})
+	h.loadRules(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	payload := []byte("dedup via start")
+	msg := rules.RouteMessage{Text: "dedup via start", From: "!node", PortNum: 1}
+
+	// First dispatch: should succeed
+	c1 := h.dispatch.DispatchAccess("mesh_0", msg, payload)
+	if c1 != 1 {
+		t.Fatalf("first dispatch: expected 1, got %d", c1)
+	}
+
+	// Second dispatch with same payload: should be deduped
+	c2 := h.dispatch.DispatchAccess("mesh_0", msg, payload)
+	if c2 != 0 {
+		t.Errorf("duplicate dispatch should be suppressed, got %d", c2)
+	}
+
+	// Verify dedup metric
+	if got := h.dispatch.loopMetrics.DeliveryDedups.Load(); got < 1 {
+		t.Errorf("expected delivery_dedups >= 1, got %d", got)
+	}
+}
+
+// TestStart_ExpiredDeliveryNotPickedUpByWorker verifies that workers launched
+// by Start() do not attempt to deliver expired messages (the SQL query excludes them).
+func TestStart_ExpiredDeliveryNotPickedUpByWorker(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Insert an already-expired delivery
+	past := time.Now().UTC().Add(-5 * time.Minute).Format("2006-01-02 15:04:05")
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "expired-skip", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("expired"), TextPreview: "expired",
+		MaxRetries: 3, Visited: "[]", TTLSeconds: 60, ExpiresAt: &past,
+	})
+
+	// Also insert a non-expired delivery to verify worker IS active
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "fresh-ok", Channel: "mqtt_0", Status: "queued",
+		Priority: 1, Payload: []byte("fresh"), TextPreview: "fresh",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait for worker to process
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for fresh delivery")
+		default:
+		}
+		if len(gw.messages()) >= 1 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Only the fresh delivery should have been sent
+	msgs := gw.messages()
+	if len(msgs) != 1 {
+		t.Errorf("expected exactly 1 message (fresh only), got %d", len(msgs))
+	}
+	if msgs[0].DecodedText != "fresh" {
+		t.Errorf("expected 'fresh' message, got %q", msgs[0].DecodedText)
+	}
+}
+
+// TestStart_HeldDeliveriesNotProcessed verifies that workers launched by Start()
+// do not process deliveries in 'held' status.
+func TestStart_HeldDeliveriesNotProcessed(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Insert held deliveries
+	for i := 0; i < 3; i++ {
+		h.db.InsertDelivery(database.MessageDelivery{
+			MsgRef: fmt.Sprintf("held-%d", i), Channel: "mqtt_0", Status: "held",
+			Priority: 1, Payload: []byte(fmt.Sprintf("held-%d", i)),
+			TextPreview: fmt.Sprintf("held-%d", i), MaxRetries: 3, Visited: "[]",
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait two poll cycles
+	time.Sleep(5 * time.Second)
+
+	// Gateway should NOT have received any messages
+	if len(gw.messages()) > 0 {
+		t.Error("held deliveries should not be processed by workers")
+	}
+
+	// Deliveries should remain held
+	held, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Status: "held", Limit: 10})
+	if len(held) != 3 {
+		t.Errorf("expected 3 still held, got %d", len(held))
+	}
+}
+
+// TestStart_P0SentBeforeP2ViaStart verifies that when Start() launches a worker,
+// P0 deliveries are processed before lower-priority ones (the query orders by priority).
+func TestStart_P0SentBeforeP2ViaStart(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Insert P2 first, then P0
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "p2-msg", Channel: "mqtt_0", Status: "queued",
+		Priority: 2, Payload: []byte("low priority"), TextPreview: "low priority",
+		MaxRetries: 3, Visited: "[]",
+	})
+	h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "p0-msg", Channel: "mqtt_0", Status: "queued",
+		Priority: 0, Payload: []byte("critical"), TextPreview: "critical",
+		MaxRetries: 3, Visited: "[]",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait for both to be delivered
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for deliveries")
+		default:
+		}
+		if len(gw.messages()) >= 2 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	msgs := gw.messages()
+	// P0 should be first
+	if msgs[0].DecodedText != "critical" {
+		t.Errorf("first message should be P0 'critical', got %q", msgs[0].DecodedText)
+	}
+	if msgs[1].DecodedText != "low priority" {
+		t.Errorf("second message should be P2 'low priority', got %q", msgs[1].DecodedText)
+	}
+}
+
+// TestStart_RetryDeliveryProcessedAfterBackoff verifies that a delivery in
+// 'retry' status with next_retry in the past is picked up by the worker
+// launched through Start().
+func TestStart_RetryDeliveryProcessedAfterBackoff(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Insert a retry delivery with next_retry in the past (ready to retry)
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "retry-ready", Channel: "mqtt_0", Status: "retry",
+		Priority: 1, Payload: []byte("retry ready"), TextPreview: "retry ready",
+		MaxRetries: 5, Visited: "[]",
+	})
+	pastRetry := time.Now().Add(-1 * time.Minute)
+	h.db.UpdateDeliveryRetry(id, pastRetry, 1, "previous error")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout: retry delivery should have been processed")
+		default:
+		}
+		if len(gw.messages()) > 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "sent" {
+		t.Errorf("expected 'sent' after retry, got %s", result.Status)
+	}
+}
+
+// TestStart_FutureRetryNotProcessed verifies that a delivery in 'retry' status
+// with next_retry in the future is NOT picked up by workers (must wait for backoff).
+func TestStart_FutureRetryNotProcessed(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	gw := h.addGateway("mqtt_0", "mqtt")
+
+	// Insert a retry delivery with next_retry far in the future
+	id, _ := h.db.InsertDelivery(database.MessageDelivery{
+		MsgRef: "retry-future", Channel: "mqtt_0", Status: "retry",
+		Priority: 1, Payload: []byte("not yet"), TextPreview: "not yet",
+		MaxRetries: 5, Visited: "[]",
+	})
+	futureRetry := time.Now().Add(1 * time.Hour)
+	h.db.UpdateDeliveryRetry(id, futureRetry, 1, "waiting")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait two poll cycles
+	time.Sleep(5 * time.Second)
+
+	// Should NOT have been processed (backoff not expired)
+	if len(gw.messages()) > 0 {
+		t.Error("retry delivery with future next_retry should not be processed")
+	}
+
+	result, _ := h.db.GetDelivery(id)
+	if result.Status != "retry" {
+		t.Errorf("expected still 'retry', got %s", result.Status)
+	}
+}

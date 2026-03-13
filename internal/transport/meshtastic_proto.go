@@ -1313,6 +1313,10 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 		if pkt.Decoded.PortNum == PortNumTextMessage {
 			msg.DecodedText = string(pkt.Decoded.Payload)
 		}
+		if len(pkt.Decoded.Payload) > 0 {
+			msg.RawPayload = make([]byte, len(pkt.Decoded.Payload))
+			copy(msg.RawPayload, pkt.Decoded.Payload)
+		}
 	} else if len(pkt.Encrypted) > 0 {
 		// AES-256-CTR passthrough: carry raw encrypted payload for relay
 		msg.PortNumName = "ENCRYPTED_RELAY"

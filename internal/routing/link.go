@@ -429,6 +429,13 @@ func (lm *LinkManager) GetLink(linkID [LinkIDLen]byte) *Link {
 	return lm.links[linkID]
 }
 
+// GetPendingLink returns a pending link by ID (awaiting response).
+func (lm *LinkManager) GetPendingLink(linkID [LinkIDLen]byte) *Link {
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+	return lm.pending[linkID]
+}
+
 // ActiveLinks returns all established links.
 func (lm *LinkManager) ActiveLinks() []*Link {
 	lm.mu.RLock()

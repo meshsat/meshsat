@@ -58,6 +58,10 @@ type MeshMessage struct {
 	HopStart    int     `json:"hop_start"`
 	Timestamp   string  `json:"timestamp"`
 
+	// RawPayload carries the binary payload for non-text portnums (e.g. PRIVATE_APP).
+	// Used by the routing subsystem to process announce, link, and keepalive packets.
+	RawPayload []byte `json:"raw_payload,omitempty"`
+
 	// Encrypted relay: raw Meshtastic-encrypted payload for passthrough relay.
 	// When non-nil, this message carries an encrypted payload that should be
 	// relayed as-is without decryption (AES-256-CTR passthrough mode).

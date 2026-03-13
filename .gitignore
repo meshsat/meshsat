@@ -6,3 +6,7 @@ web/node_modules/
 web/dist/
 cmd/meshsat/web/dist/*
 !cmd/meshsat/web/dist/index.html
+
+# Claude Code — local-only, NEVER commit
+CLAUDE.md
+.claude/
