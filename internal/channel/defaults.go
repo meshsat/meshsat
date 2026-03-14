@@ -2,7 +2,7 @@ package channel
 
 import "time"
 
-// RegisterDefaults registers the 6 built-in channels.
+// RegisterDefaults registers the 7 built-in channels.
 func RegisterDefaults(r *Registry) {
 	r.Register(ChannelDescriptor{
 		ID:            "mesh",

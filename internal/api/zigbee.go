@@ -5,6 +5,12 @@ import (
 )
 
 // handleGetZigBeeDevices returns all paired ZigBee devices.
+// @Summary List ZigBee devices
+// @Description Returns all paired ZigBee devices with short address, IEEE address, LQI, and last seen time
+// @Tags zigbee
+// @Produce json
+// @Success 200 {object} map[string]interface{} "devices, connected, firmware"
+// @Router /api/zigbee/devices [get]
 func (s *Server) handleGetZigBeeDevices(w http.ResponseWriter, r *http.Request) {
 	zgw := s.gwManager.GetZigBeeGateway()
 	if zgw == nil {
@@ -32,6 +38,12 @@ func (s *Server) handleGetZigBeeDevices(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleGetZigBeeStatus returns the ZigBee coordinator status.
+// @Summary Get ZigBee coordinator status
+// @Description Returns the ZigBee coordinator connection state, message counts, firmware version, and uptime
+// @Tags zigbee
+// @Produce json
+// @Success 200 {object} map[string]interface{} "connected, running, messages_in, messages_out, errors, firmware, device_count"
+// @Router /api/zigbee/status [get]
 func (s *Server) handleGetZigBeeStatus(w http.ResponseWriter, r *http.Request) {
 	zgw := s.gwManager.GetZigBeeGateway()
 	if zgw == nil {
