@@ -1,0 +1,39 @@
+# MSVQ-SC sidecar evaluation stack (rate-adaptive lossy semantic compression).
+# Usage: docker compose -f docker-compose.standalone.yml -f docker-compose.msvqsc.yml up --build
+#
+# This extends the standalone compose with a Python gRPC sidecar running
+# MSVQ-SC (multi-stage residual vector quantization) for lossy semantic
+# compression. Requires pre-trained codebook + corpus + ONNX encoder in
+# the msvqsc-models volume (run train.py first).
+services:
+  meshsat:
+    environment:
+      - MESHSAT_MSVQSC_ADDR=msvqsc:50052
+      - MESHSAT_MSVQSC_TIMEOUT=30
+      - MESHSAT_MSVQSC_CODEBOOK=/models/msvqsc/codebook_v1.bin
+    volumes:
+      - msvqsc-models:/models/msvqsc:ro
+    depends_on:
+      msvqsc:
+        condition: service_healthy
+
+  msvqsc:
+    build:
+      context: .
+      dockerfile: sidecar/msvqsc/Dockerfile
+    environment:
+      - MSVQSC_LISTEN=0.0.0.0:50052
+      - MSVQSC_MODEL_DIR=/models
+      - MSVQSC_WORKERS=2
+    volumes:
+      - msvqsc-models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; ch = grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+    restart: unless-stopped
+
+volumes:
+  msvqsc-models:

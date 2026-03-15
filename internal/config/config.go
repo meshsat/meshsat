@@ -33,6 +33,13 @@ type Config struct {
 	// llama-zip RPC timeout in seconds
 	LlamaZipTimeoutSec int
 
+	// MSVQ-SC gRPC sidecar address (empty = disabled)
+	MSVQSCAddr string
+	// MSVQ-SC RPC timeout in seconds
+	MSVQSCTimeoutSec int
+	// MSVQ-SC codebook file path (empty = no pure-Go decode)
+	MSVQSCCodebook string
+
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
 }
@@ -56,6 +63,9 @@ func Load() *Config {
 		MeshWatchdogMin:     envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
 		LlamaZipAddr:        envStr("MESHSAT_LLAMAZIP_ADDR", ""),
 		LlamaZipTimeoutSec:  envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
+		MSVQSCAddr:          envStr("MESHSAT_MSVQSC_ADDR", ""),
+		MSVQSCTimeoutSec:    envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
+		MSVQSCCodebook:      envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
 	}
 }

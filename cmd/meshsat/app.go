@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -240,6 +241,36 @@ func (a *App) Setup(ctx context.Context) error {
 		} else {
 			a.Transforms.SetLlamaZipClient(lzClient)
 			a.cleanups = append(a.cleanups, func() { lzClient.Close() })
+		}
+	}
+	if cfg.MSVQSCAddr != "" {
+		msvqscClient := compress.NewMSVQSCClient(cfg.MSVQSCAddr, time.Duration(cfg.MSVQSCTimeoutSec)*time.Second)
+		if err := msvqscClient.Connect(ctx); err != nil {
+			log.Warn().Err(err).Str("addr", cfg.MSVQSCAddr).Msg("msvqsc sidecar not available (lossy compression disabled)")
+		} else {
+			a.Transforms.SetMSVQSCClient(msvqscClient)
+			a.cleanups = append(a.cleanups, func() { msvqscClient.Close() })
+		}
+	}
+	if cfg.MSVQSCCodebook != "" {
+		cbData, err := os.ReadFile(cfg.MSVQSCCodebook)
+		if err != nil {
+			log.Warn().Err(err).Str("path", cfg.MSVQSCCodebook).Msg("msvqsc codebook not found (pure-Go decode disabled)")
+		} else {
+			cb, err := compress.LoadCodebook(cbData)
+			if err != nil {
+				log.Warn().Err(err).Msg("msvqsc codebook parse failed")
+			} else {
+				// Try to load corpus index from same directory
+				corpusPath := cfg.MSVQSCCodebook[:len(cfg.MSVQSCCodebook)-len("codebook_v1.bin")] + "corpus_index.bin"
+				if ciData, err := os.ReadFile(corpusPath); err == nil {
+					if err := cb.LoadCorpusIndex(ciData); err != nil {
+						log.Warn().Err(err).Msg("msvqsc corpus index parse failed")
+					}
+				}
+				a.Transforms.SetCodebook(cb)
+				log.Info().Int("stages", cb.Stages).Int("K", cb.K).Int("corpus", len(cb.Corpus)).Msg("msvqsc codebook loaded (pure-Go decode enabled)")
+			}
 		}
 	}
 	a.Dispatcher.SetTransformPipeline(a.Transforms)

@@ -25,6 +25,8 @@ type TransformSpec struct {
 // TransformPipeline applies ordered transforms to payloads.
 type TransformPipeline struct {
 	llamazip *compress.LlamaZipClient
+	msvqsc   *compress.MSVQSCClient
+	codebook *compress.Codebook
 }
 
 // NewTransformPipeline creates a new pipeline.
@@ -35,6 +37,16 @@ func NewTransformPipeline() *TransformPipeline {
 // SetLlamaZipClient sets the optional llama-zip sidecar client.
 func (tp *TransformPipeline) SetLlamaZipClient(c *compress.LlamaZipClient) {
 	tp.llamazip = c
+}
+
+// SetMSVQSCClient sets the optional MSVQ-SC sidecar client (lossy semantic compression).
+func (tp *TransformPipeline) SetMSVQSCClient(c *compress.MSVQSCClient) {
+	tp.msvqsc = c
+}
+
+// SetCodebook sets the MSVQ-SC codebook for pure-Go decode (no sidecar needed).
+func (tp *TransformPipeline) SetCodebook(cb *compress.Codebook) {
+	tp.codebook = cb
 }
 
 // ApplyEgress applies egress transforms in order (compress, encode, etc.)
@@ -126,6 +138,37 @@ func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byt
 			Int("duration_ms", durationMs).
 			Msg("transform: llamazip compressed")
 		return compressed, nil
+	case "msvqsc":
+		// Lossy semantic compression via multi-stage residual VQ.
+		if tp.msvqsc == nil || !tp.msvqsc.IsReady() {
+			log.Warn().Msg("transform: msvqsc sidecar not available, falling back to smaz2")
+			dict := compress.DictMeshtastic
+			return compress.Compress(data, dict), nil
+		}
+		maxStages := 0 // default: use all stages
+		if s := t.Params["stages"]; s != "" && s != "auto" {
+			for _, c := range s {
+				if c >= '0' && c <= '9' {
+					maxStages = maxStages*10 + int(c-'0')
+				}
+			}
+		} else if s == "auto" {
+			channelType := t.Params["channel"]
+			maxStages = compress.SuggestStages(channelType)
+		}
+		encoded, stages, fidelity, err := tp.msvqsc.Encode(data, maxStages)
+		if err != nil {
+			log.Warn().Err(err).Msg("transform: msvqsc encode failed, falling back to smaz2")
+			dict := compress.DictMeshtastic
+			return compress.Compress(data, dict), nil
+		}
+		log.Debug().
+			Int("original", len(data)).
+			Int("encoded", len(encoded)).
+			Int("stages", stages).
+			Float32("fidelity", fidelity).
+			Msg("transform: msvqsc encoded (lossy)")
+		return encoded, nil
 	case "encrypt":
 		return encryptAESGCM(data, t.Params["key"])
 	default:
@@ -165,6 +208,24 @@ func (tp *TransformPipeline) reverseTransform(t TransformSpec, data []byte) ([]b
 			return nil, fmt.Errorf("llamazip decompress: %w", err)
 		}
 		return decompressed, nil
+	case "msvqsc":
+		// Prefer pure-Go codebook decode (no sidecar needed)
+		if tp.codebook != nil {
+			text, err := tp.codebook.DecodeIndices(data)
+			if err != nil {
+				return nil, fmt.Errorf("msvqsc codebook decode: %w", err)
+			}
+			return []byte(text), nil
+		}
+		// Fall back to sidecar decode
+		if tp.msvqsc != nil && tp.msvqsc.IsReady() {
+			decoded, _, err := tp.msvqsc.Decode(data)
+			if err != nil {
+				return nil, fmt.Errorf("msvqsc sidecar decode: %w", err)
+			}
+			return decoded, nil
+		}
+		return nil, fmt.Errorf("msvqsc: neither codebook nor sidecar available for decode")
 	case "encrypt":
 		return decryptAESGCM(data, t.Params["key"])
 	default:
@@ -196,7 +257,7 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			if t.Params["key"] == "" {
 				errors = append(errors, "encrypt transform requires a 'key' param")
 			}
-		case "zstd", "smaz2", "llamazip":
+		case "zstd", "smaz2", "llamazip", "msvqsc":
 			hasBinaryOutput = true
 			endsWithBase64 = false
 		case "base64":

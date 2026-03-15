@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package msvqsc;
+
+option go_package = "meshsat/internal/compress/msvqscpb";
+
+// MSVQSCService provides rate-adaptive lossy semantic compression via
+// multi-stage residual vector quantization (arXiv:2510.02646).
+service MSVQSCService {
+  // Encode compresses text into codebook indices (lossy).
+  rpc Encode(EncodeRequest) returns (EncodeResponse);
+
+  // Decode reconstructs approximate text from codebook indices.
+  rpc Decode(DecodeRequest) returns (DecodeResponse);
+
+  // Health returns sidecar readiness (model loaded, codebook status).
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message EncodeRequest {
+  bytes data = 1;
+  // Maximum VQ stages to use (fewer = more compression, lower fidelity).
+  // 0 means use all available stages.
+  int32 max_stages = 2;
+}
+
+message EncodeResponse {
+  // Packed wire format: [1B header] [2B index per stage]
+  bytes encoded = 1;
+  // Number of VQ stages actually used.
+  int32 stages_used = 2;
+  // Estimated reconstruction fidelity (cosine similarity 0.0-1.0).
+  float estimated_fidelity = 3;
+  int32 original_size = 4;
+  int32 duration_ms = 5;
+}
+
+message DecodeRequest {
+  // Packed wire format from EncodeResponse.encoded.
+  bytes encoded = 1;
+}
+
+message DecodeResponse {
+  // Reconstructed text (approximate).
+  bytes data = 1;
+  int32 stages_used = 2;
+  int32 duration_ms = 3;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  string encoder_model = 2;
+  int32 codebook_stages = 3;
+  int32 codebook_entries = 4;
+  int32 embedding_dim = 5;
+  int32 corpus_size = 6;
+  string device = 7;
+}

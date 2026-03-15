@@ -1,0 +1,9 @@
+grpcio==1.72.0
+grpcio-tools==1.72.0
+protobuf==5.29.4
+onnxruntime==1.21.1
+transformers==4.48.3
+numpy>=1.26.0,<2.0.0
+sentence-transformers==3.4.1
+vector-quantize-pytorch==1.21.3
+torch>=2.2.0
