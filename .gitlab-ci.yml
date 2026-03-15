@@ -127,6 +127,8 @@ build:
   stage: build
   tags: [multiarch]
   image: ${BUILDER_IMAGE}
+  before_script:
+    - apk add --no-cache nodejs npm
   script:
     - cd ${CI_PROJECT_DIR}
 
