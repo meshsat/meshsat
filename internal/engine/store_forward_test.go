@@ -1140,13 +1140,13 @@ func TestDeliver_GatewayNotFound(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "no-gw", Channel: "iridium_0", Status: "queued",
 		Priority: 1, Payload: []byte("orphan"), TextPreview: "orphan",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	})
 
 	del := database.MessageDelivery{
 		ID: id, MsgRef: "no-gw", Channel: "iridium_0", Status: "queued",
 		Priority: 1, Payload: []byte("orphan"), TextPreview: "orphan",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	}
 	w.deliver(context.Background(), del)
 
@@ -1341,13 +1341,13 @@ func TestDeliver_HandleFailureEmitsEvent(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "fail-emit", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("fail test"), TextPreview: "fail test",
-		MaxRetries: 5, Visited: "[]",
+		MaxRetries: 5, Visited: "[]", QoSLevel: 1,
 	})
 
 	del := database.MessageDelivery{
 		ID: id, MsgRef: "fail-emit", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("fail test"), TextPreview: "fail test",
-		MaxRetries: 5, Visited: "[]",
+		MaxRetries: 5, Visited: "[]", QoSLevel: 1,
 	}
 	w.deliver(context.Background(), del)
 
@@ -1384,13 +1384,13 @@ func TestDeliver_HandleFailureDeadEmitsEvent(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "dead-emit", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("doomed"), TextPreview: "doomed",
-		MaxRetries: 1, Visited: "[]",
+		MaxRetries: 1, Visited: "[]", QoSLevel: 1,
 	})
 
 	del := database.MessageDelivery{
 		ID: id, MsgRef: "dead-emit", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("doomed"), TextPreview: "doomed",
-		MaxRetries: 1, Retries: 0, Visited: "[]",
+		MaxRetries: 1, Retries: 0, Visited: "[]", QoSLevel: 1,
 	}
 	w.deliver(context.Background(), del)
 
@@ -1935,13 +1935,13 @@ func TestDeliver_RetrySchedulesCorrectBackoff(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "backoff-test", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("backoff"), TextPreview: "backoff",
-		MaxRetries: 5, Visited: "[]",
+		MaxRetries: 5, Visited: "[]", QoSLevel: 1,
 	})
 
 	del := database.MessageDelivery{
 		ID: id, MsgRef: "backoff-test", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("backoff"), TextPreview: "backoff",
-		MaxRetries: 5, Visited: "[]",
+		MaxRetries: 5, Visited: "[]", QoSLevel: 1,
 	}
 
 	before := time.Now()
@@ -2049,7 +2049,7 @@ func TestDeliver_InfiniteRetries(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "infinite-retry", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("persist"), TextPreview: "persist",
-		MaxRetries: 0, Visited: "[]",
+		MaxRetries: 0, Visited: "[]", QoSLevel: 1,
 	})
 
 	// Fail 5 times in a row — should never go dead
@@ -2094,13 +2094,13 @@ func TestDeliver_GatewayForwardError(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "gw-error", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("fail me"), TextPreview: "fail me",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	})
 
 	del := database.MessageDelivery{
 		ID: id, MsgRef: "gw-error", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("fail me"), TextPreview: "fail me",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	}
 	w.deliver(context.Background(), del)
 
@@ -2333,13 +2333,13 @@ func TestDeliver_SuccessAfterRetry(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "retry-then-succeed", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("retry msg"), TextPreview: "retry msg",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	})
 
 	del := database.MessageDelivery{
 		ID: id, MsgRef: "retry-then-succeed", Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("retry msg"), TextPreview: "retry msg",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	}
 	w.deliver(context.Background(), del)
 
@@ -2355,8 +2355,9 @@ func TestDeliver_SuccessAfterRetry(t *testing.T) {
 	w.deliver(context.Background(), *mid)
 
 	result, _ := h.db.GetDelivery(id)
-	if result.Status != "sent" {
-		t.Errorf("expected 'sent' after successful retry, got %s", result.Status)
+	// QoS 1: successful delivery is "delivered" (acked), not just "sent"
+	if result.Status != "delivered" {
+		t.Errorf("expected 'delivered' after successful retry (QoS 1), got %s", result.Status)
 	}
 
 	msgs := gw.messages()
@@ -2485,7 +2486,7 @@ func TestDeliver_RetriesOneBelowBoundary(t *testing.T) {
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
 		MsgRef: "below-boundary", Channel: "mqtt_0", Status: "retry",
 		Priority: 1, Payload: []byte("below"), TextPreview: "below",
-		MaxRetries: 3, Visited: "[]",
+		MaxRetries: 3, Visited: "[]", QoSLevel: 1,
 	})
 	h.db.Exec("UPDATE message_deliveries SET retries = 1 WHERE id = ?", id)
 
@@ -3723,5 +3724,205 @@ func TestStart_FutureRetryNotProcessed(t *testing.T) {
 	result, _ := h.db.GetDelivery(id)
 	if result.Status != "retry" {
 		t.Errorf("expected still 'retry', got %s", result.Status)
+	}
+}
+
+// --- QoS Behavioral Tests ---
+
+// TestQoS0_BestEffort_NoRetry verifies that QoS 0 deliveries that fail are
+// marked dead immediately with no retry attempt.
+func TestQoS0_BestEffort_NoRetry(t *testing.T) {
+	h := setupE2E(t)
+
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	gw := h.addGateway("mqtt_0", "mqtt")
+	gw.failNext = true
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "QoS0 to MQTT",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		QoSLevel: 0, Filters: "{}",
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "best-effort msg", From: "!node", PortNum: 1}
+	n := h.dispatch.DispatchAccess("mesh_0", msg, []byte("qos0-payload"))
+	if n != 1 {
+		t.Fatalf("expected 1 delivery, got %d", n)
+	}
+
+	// Verify MaxRetries is 0 for QoS 0
+	dels, _ := h.db.GetPendingDeliveries("mqtt_0", 10)
+	if len(dels) != 1 {
+		t.Fatalf("expected 1 pending, got %d", len(dels))
+	}
+	if dels[0].MaxRetries != 0 {
+		t.Errorf("QoS 0 should have MaxRetries=0, got %d", dels[0].MaxRetries)
+	}
+	if dels[0].QoSLevel != 0 {
+		t.Errorf("expected QoSLevel=0, got %d", dels[0].QoSLevel)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	// Wait for worker to process
+	time.Sleep(4 * time.Second)
+
+	// Should be dead (no retry)
+	result, _ := h.db.GetDelivery(dels[0].ID)
+	if result.Status != "dead" {
+		t.Errorf("QoS 0 failed delivery should be 'dead', got %s", result.Status)
+	}
+	if result.Retries != 0 {
+		t.Errorf("QoS 0 should have 0 retries, got %d", result.Retries)
+	}
+}
+
+// TestQoS1_AckOnSuccess verifies that QoS 1 deliveries that succeed are
+// marked as "delivered" with ack_status "acked".
+func TestQoS1_AckOnSuccess(t *testing.T) {
+	h := setupE2E(t)
+
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	h.addGateway("mqtt_0", "mqtt")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "QoS1 to MQTT",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		QoSLevel: 1, Filters: "{}",
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "at-least-once msg", From: "!node", PortNum: 1}
+	h.dispatch.DispatchAccess("mesh_0", msg, []byte("qos1-payload"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	time.Sleep(4 * time.Second)
+
+	dels, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Limit: 10})
+	if len(dels) == 0 {
+		t.Fatal("expected at least 1 delivery")
+	}
+	del := dels[0]
+	if del.Status != "delivered" {
+		t.Errorf("QoS 1 successful delivery should be 'delivered', got %s", del.Status)
+	}
+	if del.AckStatus == nil || *del.AckStatus != "acked" {
+		t.Errorf("QoS 1 should have ack_status='acked', got %v", del.AckStatus)
+	}
+	if del.AckTimestamp == nil || *del.AckTimestamp == "" {
+		t.Error("QoS 1 acked delivery should have ack_timestamp set")
+	}
+}
+
+// TestQoS0_SendOnceNoAck verifies that QoS 0 deliveries that succeed are
+// marked as "sent" with no ack_status (nil).
+func TestQoS0_SendOnceNoAck(t *testing.T) {
+	h := setupE2E(t)
+
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	h.addGateway("mqtt_0", "mqtt")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "QoS0 to MQTT",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		QoSLevel: 0, Filters: "{}",
+	})
+	h.loadRules(t)
+
+	msg := rules.RouteMessage{Text: "fire-and-forget", From: "!node", PortNum: 1}
+	h.dispatch.DispatchAccess("mesh_0", msg, []byte("qos0-success"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.dispatch.Start(ctx)
+
+	time.Sleep(4 * time.Second)
+
+	dels, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Limit: 10})
+	if len(dels) == 0 {
+		t.Fatal("expected at least 1 delivery")
+	}
+	del := dels[0]
+	if del.Status != "sent" {
+		t.Errorf("QoS 0 successful delivery should be 'sent', got %s", del.Status)
+	}
+	if del.AckStatus != nil {
+		t.Errorf("QoS 0 should have nil ack_status, got %v", *del.AckStatus)
+	}
+}
+
+// TestSeqNum_IncrementOnDispatch verifies that sequence numbers are assigned
+// and increment on each dispatch.
+func TestSeqNum_IncrementOnDispatch(t *testing.T) {
+	h := setupE2E(t)
+
+	h.addInterface(t, "mesh_0", "mesh", true)
+	h.addInterface(t, "mqtt_0", "mqtt", true)
+	h.setOnline("mesh_0")
+	h.setOnline("mqtt_0")
+
+	h.db.InsertAccessRule(&database.AccessRule{
+		InterfaceID: "mesh_0", Direction: "ingress", Name: "Seq Test",
+		Enabled: true, Priority: 1, Action: "forward", ForwardTo: "mqtt_0",
+		QoSLevel: 1, Filters: "{}",
+	})
+	h.loadRules(t)
+
+	// Dispatch 3 messages with unique payloads
+	for i := 0; i < 3; i++ {
+		msg := rules.RouteMessage{Text: fmt.Sprintf("seq-msg-%d", i), From: "!node", PortNum: 1}
+		h.dispatch.DispatchAccess("mesh_0", msg, []byte(fmt.Sprintf("seq-payload-%d-%d", i, time.Now().UnixNano())))
+	}
+
+	// Get deliveries and verify seq_num increments
+	dels, _ := h.db.GetDeliveries(database.DeliveryFilter{Channel: "mqtt_0", Limit: 10})
+	if len(dels) != 3 {
+		t.Fatalf("expected 3 deliveries, got %d", len(dels))
+	}
+
+	// Deliveries are returned newest-first, so reverse order for seq check
+	seqs := make([]int64, len(dels))
+	for i, d := range dels {
+		seqs[i] = d.SeqNum
+	}
+
+	// All seq nums should be > 0
+	for i, s := range seqs {
+		if s <= 0 {
+			t.Errorf("delivery %d has seq_num=%d, expected > 0", i, s)
+		}
+	}
+
+	// Verify all 3 seq nums are distinct (1, 2, 3 in some order)
+	seen := make(map[int64]bool)
+	for _, s := range seqs {
+		seen[s] = true
+	}
+	if len(seen) != 3 {
+		t.Errorf("expected 3 distinct seq nums, got %v", seqs)
+	}
+
+	// Verify egress_seq counter on the interface
+	iface, _ := h.db.GetInterface("mqtt_0")
+	if iface.EgressSeq != 3 {
+		t.Errorf("expected egress_seq=3, got %d", iface.EgressSeq)
 	}
 }

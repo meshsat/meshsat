@@ -524,6 +524,9 @@ onUnmounted(() => {
             <div>
               <span class="text-sm font-medium text-gray-200">{{ iface.id }}</span>
               <span class="text-xs text-gray-500 ml-2">{{ iface.label || iface.channel_type }}</span>
+              <span v-if="iface.ingress_seq || iface.egress_seq" class="ml-2 text-[9px] font-mono text-gray-600">
+                in:{{ iface.ingress_seq || 0 }} out:{{ iface.egress_seq || 0 }}
+              </span>
             </div>
           </div>
           <div class="flex items-center gap-2">

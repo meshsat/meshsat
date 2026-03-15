@@ -30,7 +30,7 @@ const filteredDeliveries = computed(() => {
 // Delivery stats summary
 const deliveryStatsSummary = computed(() => {
   const stats = store.deliveryStats || []
-  const totals = { queued: 0, sending: 0, sent: 0, retry: 0, failed: 0, dead: 0 }
+  const totals = { queued: 0, sending: 0, sent: 0, delivered: 0, retry: 0, failed: 0, dead: 0 }
   for (const s of stats) {
     if (totals[s.status] !== undefined) totals[s.status] += s.count
   }
@@ -115,6 +115,13 @@ function dlqStatusColor(status) {
   if (status === 'failed' || status === 'expired') return 'text-red-400 bg-red-400/10'
   if (status === 'cancelled') return 'text-gray-500 bg-gray-500/10'
   return 'text-gray-400 bg-gray-400/10'
+}
+
+function ackBadgeClass(ackStatus) {
+  if (ackStatus === 'acked') return 'text-emerald-400 bg-emerald-400/10'
+  if (ackStatus === 'pending') return 'text-amber-400 bg-amber-400/10'
+  if (ackStatus === 'timeout' || ackStatus === 'nacked') return 'text-red-400 bg-red-400/10'
+  return ''
 }
 
 
@@ -454,7 +461,7 @@ onUnmounted(() => {
         <div v-for="(count, status) in deliveryStatsSummary" :key="status"
           class="bg-tactical-surface rounded-lg p-2 border border-tactical-border text-center">
           <div class="text-[10px] text-gray-500 uppercase">{{ status }}</div>
-          <div class="text-sm font-mono" :class="status === 'dead' || status === 'failed' ? 'text-red-400' : status === 'sent' ? 'text-emerald-400' : 'text-gray-300'">
+          <div class="text-sm font-mono" :class="status === 'dead' || status === 'failed' ? 'text-red-400' : status === 'sent' || status === 'delivered' ? 'text-emerald-400' : 'text-gray-300'">
             {{ count }}
           </div>
         </div>
@@ -487,6 +494,7 @@ onUnmounted(() => {
           <option value="queued">Queued</option>
           <option value="sending">Sending</option>
           <option value="sent">Sent</option>
+          <option value="delivered">Delivered</option>
           <option value="retry">Retry</option>
           <option value="failed">Failed</option>
           <option value="dead">Dead</option>
@@ -507,6 +515,8 @@ onUnmounted(() => {
           <div class="flex items-center gap-2 mb-1.5">
             <span class="text-[10px] font-mono px-1.5 py-px rounded bg-gray-800 text-gray-400">{{ del.channel }}</span>
             <DeliveryStatus :status="del.status" />
+            <span v-if="del.seq_num" class="text-[9px] font-mono text-gray-500">#{{ del.seq_num }}</span>
+            <span v-if="del.ack_status" class="text-[9px] font-mono px-1 py-px rounded" :class="ackBadgeClass(del.ack_status)">{{ del.ack_status }}</span>
             <span v-if="del.rule_id" class="text-[9px] text-gray-600 font-mono">rule:{{ del.rule_id }}</span>
             <span class="flex-1" />
             <span class="text-[9px] text-gray-600">{{ formatRelativeTime(del.created_at) }}</span>

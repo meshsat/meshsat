@@ -224,6 +224,20 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		}
 	}()
 
+	// Start ACK timeout reaper — marks timed-out pending ACKs every 60 seconds
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.reapAckTimeouts()
+			}
+		}
+	}()
+
 	// Start TTL reaper — expires deliveries past their TTL every 60 seconds
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
@@ -518,6 +532,11 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 
 		ruleID := m.Rule.ID
+		// QoS 0 (best-effort): no retries
+		if m.Rule.QoSLevel == 0 {
+			maxRetries = 0
+		}
+
 		del := database.MessageDelivery{
 			MsgRef:      msgRef,
 			RuleID:      &ruleID,
@@ -536,6 +555,11 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			del.TTLSeconds = ttlSeconds
 			exp := time.Now().Add(time.Duration(ttlSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
 			del.ExpiresAt = &exp
+		}
+
+		// Assign egress sequence number
+		if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
+			del.SeqNum = seq
 		}
 
 		// Sign the payload for non-repudiation
@@ -598,6 +622,37 @@ func (d *Dispatcher) pruneDeliveryDedup() {
 	for k, ts := range d.deliveryDedup {
 		if now.Sub(ts) > d.deliveryDedupTTL {
 			delete(d.deliveryDedup, k)
+		}
+	}
+}
+
+// reapAckTimeouts checks all interface workers for pending ACKs that have timed out (5 minutes).
+func (d *Dispatcher) reapAckTimeouts() {
+	d.mu.RLock()
+	channels := make([]string, 0, len(d.workers))
+	for ch := range d.workers {
+		channels = append(channels, ch)
+	}
+	d.mu.RUnlock()
+
+	for _, ch := range channels {
+		timedOut, err := d.db.GetPendingAcks(ch, 300) // 5-minute timeout
+		if err != nil {
+			log.Error().Err(err).Str("channel", ch).Msg("ack reaper: failed to query pending acks")
+			continue
+		}
+		for _, del := range timedOut {
+			if err := d.db.SetDeliveryAck(del.ID, "timeout"); err != nil {
+				log.Error().Err(err).Int64("id", del.ID).Msg("ack reaper: failed to set timeout")
+				continue
+			}
+			log.Warn().Int64("id", del.ID).Str("channel", ch).Msg("ack reaper: delivery ACK timed out")
+			if d.emit != nil {
+				d.emit(transport.MeshEvent{
+					Type:    "delivery_ack_timeout",
+					Message: fmt.Sprintf("ACK timeout for delivery %d on %s", del.ID, ch),
+				})
+			}
 		}
 	}
 }
@@ -883,7 +938,16 @@ func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {
 		log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery sent")
 	}
 
-	log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("delivery sent")
+	// QoS 1+: transport success IS the ACK (Iridium mo_status=0, MQTT PUBACK, HTTP 2xx).
+	// Immediately mark as acked → delivered.
+	if del.QoSLevel >= 1 {
+		if err := w.db.SetDeliveryAck(del.ID, "acked"); err != nil {
+			log.Error().Err(err).Int64("id", del.ID).Msg("failed to set delivery ack")
+		}
+		log.Info().Int64("id", del.ID).Str("channel", w.channelID).Int("qos", del.QoSLevel).Msg("delivery sent + acked")
+	} else {
+		log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("delivery sent (QoS 0, no ack)")
+	}
 
 	// Audit the successful delivery
 	if w.signing != nil {
@@ -902,16 +966,36 @@ func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {
 	}
 
 	if w.emit != nil {
+		evtType := "delivery_sent"
+		if del.QoSLevel >= 1 {
+			evtType = "delivery_acked"
+		}
 		w.emit(transport.MeshEvent{
-			Type:    "delivery_sent",
+			Type:    evtType,
 			Message: fmt.Sprintf("Delivered to %s", w.channelID),
 		})
 	}
 }
 
 func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr error) {
-	newRetries := del.Retries + 1
 	errMsg := deliveryErr.Error()
+
+	// QoS 0 (best-effort): mark dead immediately, no retry
+	if del.QoSLevel == 0 {
+		if err := w.db.SetDeliveryStatus(del.ID, "dead", errMsg, ""); err != nil {
+			log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark QoS 0 delivery dead")
+		}
+		log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("QoS 0 delivery failed, no retry (best-effort)")
+		if w.emit != nil {
+			w.emit(transport.MeshEvent{
+				Type:    "delivery_dead",
+				Message: fmt.Sprintf("QoS 0 delivery to %s failed (best-effort, no retry): %s", w.channelID, errMsg),
+			})
+		}
+		return
+	}
+
+	newRetries := del.Retries + 1
 
 	// Check if retries exhausted
 	if del.MaxRetries > 0 && newRetries >= del.MaxRetries {

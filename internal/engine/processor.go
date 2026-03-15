@@ -276,6 +276,11 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 	}
 
 	if p.dispatcher != nil {
+		// Increment ingress sequence number for the source interface
+		if _, err := p.db.IncrementIngressSeq("mesh_0"); err != nil {
+			log.Warn().Err(err).Msg("failed to increment ingress seq for mesh_0")
+		}
+
 		// Pass the full message JSON as payload so delivery workers have
 		// access to all metadata (From, ID, Channel, RxTime, etc.).
 		payload, _ := json.Marshal(msg)
@@ -512,6 +517,10 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 						From: msg.Source,
 					}
 					sourceIface := msg.Source + "_0"
+					// Increment ingress sequence number for the source interface
+					if _, err := p.db.IncrementIngressSeq(sourceIface); err != nil {
+						log.Warn().Err(err).Str("interface", sourceIface).Msg("failed to increment ingress seq")
+					}
 					if n := p.dispatcher.DispatchAccess(sourceIface, routeMsg, []byte(msg.Text)); n > 0 {
 						log.Info().Int("deliveries", n).Str("interface", sourceIface).Msg("inbound dispatched via access rules")
 					}
