@@ -120,22 +120,13 @@ lint:consistency:
 
 # -----------------------------------------------------------------------------
 # BUILD — Compile Go binary for ARM64 + AMD64
-# Web assets are built first and embedded into the Go binary via //go:embed.
-# Go cross-compilation is native (no QEMU) — fast on any host arch.
 # -----------------------------------------------------------------------------
 build:
   stage: build
   tags: [multiarch]
   image: ${BUILDER_IMAGE}
-  before_script:
-    - apk add --no-cache nodejs npm
   script:
     - cd ${CI_PROJECT_DIR}
-
-    - echo "Building web frontend..."
-    - cd web && npm ci --no-audit && npm run build && cd ..
-    - cp -r web/dist cmd/meshsat/web/dist
-
     - go mod download
 
     - echo "Building ARM64 binary..."
@@ -170,7 +161,7 @@ package:
     - docker buildx inspect --bootstrap
   script:
     - |
-      docker buildx build \
+      docker buildx build --no-cache \
         --platform linux/amd64,linux/arm64 \
         --push \
         -t ${MESHSAT_IMAGE}:${CI_COMMIT_SHORT_SHA} \
