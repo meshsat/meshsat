@@ -326,6 +326,7 @@ func (s *Server) Router() http.Handler {
 		// Config export/import (v0.3.0 — Cisco-style running-config)
 		r.Get("/config/export", s.handleConfigExport)
 		r.Post("/config/import", s.handleConfigImport)
+		r.Post("/config/diff", s.handleConfigDiff)
 
 		// Audit log and non-repudiation (v0.3.0)
 		r.Get("/audit", s.handleGetAuditLog)

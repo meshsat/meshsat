@@ -186,6 +186,105 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ConfigDiffResult shows what would change if a YAML config were imported.
+type ConfigDiffResult struct {
+	Interfaces     DiffCounts `json:"interfaces"`
+	AccessRules    DiffCounts `json:"access_rules"`
+	ObjectGroups   DiffCounts `json:"object_groups"`
+	FailoverGroups DiffCounts `json:"failover_groups"`
+}
+
+// DiffCounts summarizes additions, removals, and changes for a config entity type.
+type DiffCounts struct {
+	Add    int `json:"add"`
+	Remove int `json:"remove"`
+	Change int `json:"change"`
+	Keep   int `json:"keep"`
+}
+
+// handleConfigDiff shows what would change between the running config and an uploaded YAML.
+// @Summary Preview configuration changes
+// @Description Accepts a YAML document and returns a diff summary showing what would be added, removed, changed, or kept — without applying any changes.
+// @Tags config
+// @Accept application/yaml
+// @Produce json
+// @Param config body string true "YAML configuration document"
+// @Success 200 {object} ConfigDiffResult
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/config/diff [post]
+func (s *Server) handleConfigDiff(w http.ResponseWriter, r *http.Request) {
+	var incoming ConfigExport
+	if err := yaml.NewDecoder(r.Body).Decode(&incoming); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid YAML: "+err.Error())
+		return
+	}
+
+	// Load current running config
+	currentIfaces, err := s.db.GetAllInterfaces()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load interfaces")
+		return
+	}
+	currentRules, err := s.db.GetAllAccessRules()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load access rules")
+		return
+	}
+	currentGroups, err := s.db.GetAllObjectGroups()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load object groups")
+		return
+	}
+	currentFGroups, err := s.db.GetAllFailoverGroups()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load failover groups")
+		return
+	}
+
+	result := ConfigDiffResult{
+		Interfaces:     diffByID(mapIDs(currentIfaces, func(i database.Interface) string { return i.ID }), mapIDs(incoming.Interfaces, func(i InterfaceExport) string { return i.ID })),
+		AccessRules:    diffByName(mapNames(currentRules, func(r database.AccessRule) string { return r.Name }), mapNames(incoming.AccessRules, func(r AccessRuleExport) string { return r.Name })),
+		ObjectGroups:   diffByID(mapIDs(currentGroups, func(g database.ObjectGroup) string { return g.ID }), mapIDs(incoming.ObjectGroups, func(g ObjectGroupExport) string { return g.ID })),
+		FailoverGroups: diffByID(mapIDs(currentFGroups, func(g database.FailoverGroup) string { return g.ID }), mapIDs(incoming.FailoverGroups, func(g FailoverGroupExport) string { return g.ID })),
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func mapIDs[T any](items []T, idFn func(T) string) map[string]bool {
+	m := make(map[string]bool, len(items))
+	for _, item := range items {
+		m[idFn(item)] = true
+	}
+	return m
+}
+
+func mapNames[T any](items []T, nameFn func(T) string) map[string]bool {
+	return mapIDs(items, nameFn)
+}
+
+func diffByID(current, incoming map[string]bool) DiffCounts {
+	var d DiffCounts
+	for id := range incoming {
+		if current[id] {
+			d.Change++ // exists in both — potentially changed
+		} else {
+			d.Add++
+		}
+	}
+	for id := range current {
+		if !incoming[id] {
+			d.Remove++
+		}
+	}
+	return d
+}
+
+func diffByName(current, incoming map[string]bool) DiffCounts {
+	return diffByID(current, incoming)
+}
+
 // handleConfigImport imports a full interface + access rules configuration from YAML.
 // @Summary Import running configuration
 // @Description Accepts a YAML document and replaces all interfaces, access rules, object groups, and failover groups. This is a full replace (not merge) applied as a transaction.
