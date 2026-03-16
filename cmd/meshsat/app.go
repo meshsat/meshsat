@@ -320,6 +320,21 @@ func (a *App) Setup(ctx context.Context) error {
 	}
 	srv.SetDispatcher(a.Dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
+
+	// Field intelligence features
+	healthScorer := engine.NewHealthScorer(db)
+	srv.SetHealthScorer(healthScorer)
+
+	deadman := engine.NewDeadManSwitch(db, 4*time.Hour)
+	deadman.Start(ctx)
+	srv.SetDeadManSwitch(deadman)
+	a.cleanups = append(a.cleanups, func() { deadman.Stop() })
+
+	burstQueue := engine.NewBurstQueue(db, 10, 30*time.Minute)
+	srv.SetBurstQueue(burstQueue)
+
+	geofenceMon := engine.NewGeofenceMonitor()
+	srv.SetGeofenceMonitor(geofenceMon)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 	if a.LinkMgr != nil {
 		srv.SetLinkManager(a.LinkMgr)
