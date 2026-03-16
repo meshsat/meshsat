@@ -399,6 +399,24 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		return 0
 	}
 
+	// Apply ingress transforms to decrypt/decompress incoming payload
+	if d.transforms != nil && len(payload) > 0 {
+		iface, err := d.db.GetInterface(sourceInterface)
+		if err == nil && iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
+			decoded, err := d.transforms.ApplyIngress(payload, iface.IngressTransforms)
+			if err != nil {
+				log.Warn().Err(err).Str("source", sourceInterface).
+					Msg("ingress transform failed, forwarding raw payload")
+			} else {
+				payload = decoded
+				msg.Text = string(decoded)
+				log.Debug().Str("source", sourceInterface).
+					Int("raw", len(payload)).Int("decoded", len(decoded)).
+					Msg("ingress transforms applied")
+			}
+		}
+	}
+
 	matches := d.access.EvaluateIngress(sourceInterface, msg)
 	if len(matches) == 0 {
 		return 0
