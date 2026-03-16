@@ -5,8 +5,20 @@ import 'leaflet/dist/leaflet.css'
 
 const store = useMeshsatStore()
 const mapEl = ref(null)
+const mapContainer = ref(null)
 const mapReady = ref(false)
 const mapError = ref(false)
+
+// Auto-refresh
+const autoRefresh = ref(false)
+let autoRefreshTimer = null
+
+// Click-to-copy coordinates
+const clickedCoords = ref(null)
+const coordsCopied = ref(false)
+
+// Fullscreen
+const isFullscreen = ref(false)
 
 // Geofence management
 const showGeofencePanel = ref(false)
@@ -170,6 +182,9 @@ async function initMap() {
     cellularLayer = L.layerGroup().addTo(map)
     geofenceLayer = L.layerGroup().addTo(map)
     mapReady.value = true
+
+    // Map click for coordinate display
+    map.on('click', onMapClick)
 
     // Leaflet needs a size recalc after the container is rendered in the DOM
     setTimeout(() => { if (map) map.invalidateSize() }, 200)
@@ -442,6 +457,71 @@ function updateMap() {
   }
 }
 
+// Auto-refresh: poll every 30s when enabled
+function toggleAutoRefresh() {
+  autoRefresh.value = !autoRefresh.value
+  if (autoRefresh.value) {
+    autoRefreshTimer = setInterval(async () => {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+      await Promise.all([
+        store.fetchNodes(),
+        store.fetchPositions({ since, limit: 500 }),
+        store.fetchMessages({ limit: 200 }),
+        store.fetchLocationSources(),
+        store.fetchCellInfo()
+      ])
+      updateMap()
+    }, 30000)
+  } else {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+}
+
+// Click-to-copy coordinates on map click
+function onMapClick(e) {
+  const lat = e.latlng.lat.toFixed(6)
+  const lon = e.latlng.lng.toFixed(6)
+  clickedCoords.value = `${lat}, ${lon}`
+  coordsCopied.value = false
+}
+
+async function copyCoords() {
+  if (!clickedCoords.value) return
+  try {
+    await navigator.clipboard.writeText(clickedCoords.value)
+    coordsCopied.value = true
+    setTimeout(() => { coordsCopied.value = false }, 2000)
+  } catch {
+    // Fallback for non-secure contexts
+    const ta = document.createElement('textarea')
+    ta.value = clickedCoords.value
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    coordsCopied.value = true
+    setTimeout(() => { coordsCopied.value = false }, 2000)
+  }
+}
+
+// Fullscreen toggle
+function toggleFullscreen() {
+  const el = mapContainer.value
+  if (!el) return
+  if (!document.fullscreenElement) {
+    el.requestFullscreen?.() || el.webkitRequestFullscreen?.()
+  } else {
+    document.exitFullscreen?.() || document.webkitExitFullscreen?.()
+  }
+}
+
+function onFullscreenChange() {
+  isFullscreen.value = !!document.fullscreenElement
+  // Leaflet needs size recalc after fullscreen change
+  setTimeout(() => { if (map) map.invalidateSize() }, 200)
+}
+
 function toggleMapTheme() {
   mapTheme.value = mapTheme.value === 'dark' ? 'light' : 'dark'
   localStorage.setItem('meshsat-map-theme', mapTheme.value)
@@ -517,10 +597,13 @@ onMounted(async () => {
       map.setView([resolved.lat, resolved.lon], 10)
     }
   }
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   if (map) { map.remove(); map = null }
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
 
@@ -529,10 +612,21 @@ onUnmounted(() => {
     <div class="flex items-center justify-between">
       <h1 class="text-lg font-semibold text-gray-200">Map</h1>
       <div class="flex items-center gap-2">
+        <button @click="toggleAutoRefresh"
+          class="px-3 py-1.5 text-xs rounded transition-colors"
+          :class="autoRefresh ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-gray-800 text-gray-300 hover:text-white'"
+          title="Auto-refresh every 30s">
+          {{ autoRefresh ? 'Auto: ON' : 'Auto: OFF' }}
+        </button>
         <button @click="toggleMapTheme"
           class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
           :title="mapTheme === 'dark' ? 'Switch to light map' : 'Switch to dark map'">
           {{ mapTheme === 'dark' ? 'Light' : 'Dark' }}
+        </button>
+        <button @click="toggleFullscreen"
+          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
+          :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'">
+          {{ isFullscreen ? 'Exit FS' : 'Fullscreen' }}
         </button>
         <button
           @click="store.fetchNodes().then(() => store.fetchMessages({ limit: 200 })).then(updateMap)"
@@ -544,10 +638,21 @@ onUnmounted(() => {
     </div>
 
     <!-- Map container -->
-    <div class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
-      <div v-if="!mapError" ref="mapEl" class="w-full h-[450px] sm:h-[500px] bg-gray-800" />
+    <div ref="mapContainer" class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden relative">
+      <div v-if="!mapError" ref="mapEl" class="w-full bg-gray-800"
+        :class="isFullscreen ? 'h-screen' : 'h-[450px] sm:h-[500px]'" />
       <div v-else class="p-8 text-center text-gray-500">
         Map unavailable. Nodes with GPS will display coordinates below.
+      </div>
+      <!-- Clicked coordinates overlay -->
+      <div v-if="clickedCoords" class="absolute bottom-2 left-2 z-[1000] flex items-center gap-2 px-2.5 py-1.5 rounded bg-gray-900/90 border border-gray-700 backdrop-blur-sm">
+        <code class="text-[11px] text-gray-300 font-mono">{{ clickedCoords }}</code>
+        <button @click.stop="copyCoords"
+          class="text-[10px] px-1.5 py-0.5 rounded transition-colors"
+          :class="coordsCopied ? 'text-emerald-400 bg-emerald-400/10' : 'text-gray-400 hover:text-white bg-gray-700'">
+          {{ coordsCopied ? 'Copied' : 'Copy' }}
+        </button>
+        <button @click.stop="clickedCoords = null" class="text-[10px] text-gray-500 hover:text-gray-300">&times;</button>
       </div>
     </div>
 
