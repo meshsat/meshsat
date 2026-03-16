@@ -14,6 +14,7 @@ package transport
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -1510,7 +1511,19 @@ func parseCMGR(resp string) *SMSMessage {
 		return nil
 	}
 
-	// Extract sender from header
+	// Detect PDU mode: if header has no quotes and body is all hex, decode PDU
+	if !strings.Contains(header, "\"") || isHexString(text) {
+		sms := decodeSMSPDU(text)
+		if sms != nil {
+			log.Debug().Str("sender", sms.Sender).Int("len", len(sms.Text)).
+				Msg("cellular: decoded SMS from PDU mode")
+			return sms
+		}
+		// PDU decode failed — store raw as fallback
+		log.Warn().Str("pdu", text[:min(40, len(text))]).Msg("cellular: PDU decode failed, storing raw")
+	}
+
+	// Text mode: extract sender from header
 	headerParts := strings.Split(header, "\"")
 	sender := ""
 	if len(headerParts) >= 4 {
@@ -1522,6 +1535,134 @@ func parseCMGR(resp string) *SMSMessage {
 		Text:   text,
 		Time:   time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// isHexString returns true if s contains only hex characters (PDU indicator).
+func isHexString(s string) bool {
+	if len(s) < 10 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// decodeSMSPDU decodes an SMS-DELIVER PDU hex string into sender + text.
+// Handles GSM 7-bit (DCS=0) and UCS-2 (DCS=8) encodings.
+func decodeSMSPDU(pduHex string) *SMSMessage {
+	data, err := hex.DecodeString(pduHex)
+	if err != nil || len(data) < 10 {
+		return nil
+	}
+
+	// SMSC info: first byte = length of SMSC info (including type)
+	smscLen := int(data[0])
+	if smscLen+1 >= len(data) {
+		return nil
+	}
+	sms := data[smscLen+1:]
+	if len(sms) < 4 {
+		return nil
+	}
+
+	// SMS-DELIVER: byte 0 = flags, byte 1 = sender address length (digits)
+	addrLen := int(sms[1])
+	addrType := sms[2]
+	addrBytes := (addrLen + 1) / 2
+	if 3+addrBytes >= len(sms) {
+		return nil
+	}
+
+	// Decode sender BCD
+	sender := decodeBCDAddress(sms[3:3+addrBytes], addrType)
+
+	offset := 3 + addrBytes
+	if offset+9 >= len(sms) {
+		return nil
+	}
+	// PID, DCS
+	dcs := sms[offset+1]
+	// Skip 7-byte timestamp
+	udl := int(sms[offset+9])
+	ud := sms[offset+10:]
+
+	var text string
+	switch {
+	case dcs == 0: // GSM 7-bit
+		text = decodeGSM7Bit(ud, udl)
+	case dcs == 8: // UCS-2
+		text = decodeUCS2(ud, udl)
+	default: // 8-bit or unknown — try as raw bytes
+		text = string(ud[:min(udl, len(ud))])
+	}
+
+	return &SMSMessage{
+		Sender: sender,
+		Text:   text,
+		Time:   time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// decodeBCDAddress decodes a BCD-encoded phone number with swapped nibbles.
+func decodeBCDAddress(data []byte, addrType byte) string {
+	var sb strings.Builder
+	if addrType == 0x91 { // international
+		sb.WriteByte('+')
+	}
+	for _, b := range data {
+		lo := b & 0x0F
+		hi := (b >> 4) & 0x0F
+		if lo != 0x0F {
+			sb.WriteByte('0' + lo)
+		}
+		if hi != 0x0F {
+			sb.WriteByte('0' + hi)
+		}
+	}
+	return sb.String()
+}
+
+// decodeGSM7Bit unpacks GSM 7-bit encoded data into a string.
+func decodeGSM7Bit(data []byte, numChars int) string {
+	// GSM 7-bit default alphabet (basic set)
+	const gsm7 = "@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\x1b\u00c6\u00e6\u00df\u00c9 !\"#\u00a4%&'()*+,-./0123456789:;<=>?\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0"
+	runes := []rune(gsm7)
+
+	var result []rune
+	bits := 0
+	acc := 0
+	for _, b := range data {
+		acc |= int(b) << bits
+		bits += 8
+		for bits >= 7 && len(result) < numChars {
+			code := acc & 0x7F
+			acc >>= 7
+			bits -= 7
+			if code < len(runes) {
+				result = append(result, runes[code])
+			} else {
+				result = append(result, rune(code))
+			}
+		}
+	}
+	return string(result)
+}
+
+// decodeUCS2 decodes UCS-2/UTF-16BE encoded SMS data.
+func decodeUCS2(data []byte, numBytes int) string {
+	n := min(numBytes, len(data))
+	if n%2 != 0 {
+		n--
+	}
+	var sb strings.Builder
+	for i := 0; i+1 < n; i += 2 {
+		r := rune(int(data[i])<<8 | int(data[i+1]))
+		sb.WriteRune(r)
+	}
+	return sb.String()
 }
 
 // parseCGPADDR parses AT+CGPADDR=1 response → IP address.
