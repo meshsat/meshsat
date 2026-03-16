@@ -294,6 +294,41 @@ func (db *DB) DeleteAccessRule(id int64) error {
 	return err
 }
 
+// SetAccessRuleEnabled sets the enabled flag on an access rule.
+func (db *DB) SetAccessRuleEnabled(id int64, enabled bool) error {
+	_, err := db.Exec("UPDATE access_rules SET enabled = ?, updated_at = datetime('now') WHERE id = ?", enabled, id)
+	if err != nil {
+		return fmt.Errorf("set access rule enabled: %w", err)
+	}
+	return nil
+}
+
+// SetAccessRulePriority sets the priority of an access rule (for reordering).
+func (db *DB) SetAccessRulePriority(id int64, priority int) error {
+	_, err := db.Exec("UPDATE access_rules SET priority = ?, updated_at = datetime('now') WHERE id = ?", priority, id)
+	if err != nil {
+		return fmt.Errorf("set access rule priority: %w", err)
+	}
+	return nil
+}
+
+// AccessRuleStats holds match statistics for a rule.
+type AccessRuleStats struct {
+	ID          int64  `json:"id" db:"id"`
+	MatchCount  int64  `json:"match_count" db:"match_count"`
+	LastMatchAt string `json:"last_match_at" db:"last_match_at"`
+}
+
+// GetAccessRuleStats returns match statistics for an access rule.
+func (db *DB) GetAccessRuleStats(id int64) (*AccessRuleStats, error) {
+	var stats AccessRuleStats
+	err := db.Get(&stats, "SELECT id, match_count, COALESCE(last_match_at, '') as last_match_at FROM access_rules WHERE id = ?", id)
+	if err != nil {
+		return nil, fmt.Errorf("get access rule stats: %w", err)
+	}
+	return &stats, nil
+}
+
 // UpdateAccessRuleMatch increments the match count and sets last_match_at to now.
 func (db *DB) UpdateAccessRuleMatch(id int64) error {
 	_, err := db.Exec(
@@ -329,6 +364,21 @@ func (db *DB) InsertFailoverGroup(g *FailoverGroup) error {
 		return fmt.Errorf("insert failover group: %w", err)
 	}
 	return nil
+}
+
+// UpdateFailoverGroup updates a failover group's label and mode.
+func (db *DB) UpdateFailoverGroup(g *FailoverGroup) error {
+	_, err := db.Exec("UPDATE failover_groups SET label = ?, mode = ? WHERE id = ?", g.Label, g.Mode, g.ID)
+	if err != nil {
+		return fmt.Errorf("update failover group: %w", err)
+	}
+	return nil
+}
+
+// DeleteFailoverMembers removes all members from a failover group.
+func (db *DB) DeleteFailoverMembers(groupID string) error {
+	_, err := db.Exec("DELETE FROM failover_members WHERE group_id = ?", groupID)
+	return err
 }
 
 // DeleteFailoverGroup removes a failover group by ID.

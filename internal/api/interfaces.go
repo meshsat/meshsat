@@ -163,6 +163,39 @@ func (s *Server) handleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleEnableInterface enables an interface.
+func (s *Server) handleEnableInterface(w http.ResponseWriter, r *http.Request) {
+	s.setInterfaceEnabled(w, r, true)
+}
+
+// handleDisableInterface disables an interface.
+func (s *Server) handleDisableInterface(w http.ResponseWriter, r *http.Request) {
+	s.setInterfaceEnabled(w, r, false)
+}
+
+func (s *Server) setInterfaceEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	if s.ifaceMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	iface, err := s.db.GetInterface(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	iface.Enabled = enabled
+	if err := s.db.UpdateInterface(iface); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": state})
+}
+
 // ---- Device Binding ----
 
 func (s *Server) handleBindDevice(w http.ResponseWriter, r *http.Request) {
@@ -273,6 +306,76 @@ func (s *Server) handleUpdateAccessRule(w http.ResponseWriter, r *http.Request) 
 	}
 	s.reloadAccessRules()
 	writeJSON(w, http.StatusOK, rule)
+}
+
+// handleEnableAccessRule enables an access rule.
+func (s *Server) handleEnableAccessRule(w http.ResponseWriter, r *http.Request) {
+	s.setAccessRuleEnabled(w, r, true)
+}
+
+// handleDisableAccessRule disables an access rule.
+func (s *Server) handleDisableAccessRule(w http.ResponseWriter, r *http.Request) {
+	s.setAccessRuleEnabled(w, r, false)
+}
+
+func (s *Server) setAccessRuleEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid rule ID")
+		return
+	}
+	if err := s.db.SetAccessRuleEnabled(id, enabled); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.reloadAccessRules()
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": state})
+}
+
+// handleReorderAccessRules reorders rules within an interface+direction.
+func (s *Server) handleReorderAccessRules(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		InterfaceID string  `json:"interface_id"`
+		Direction   string  `json:"direction"`
+		RuleIDs     []int64 `json:"rule_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.InterfaceID == "" || req.Direction == "" || len(req.RuleIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "interface_id, direction, and rule_ids are required")
+		return
+	}
+	for i, id := range req.RuleIDs {
+		if err := s.db.SetAccessRulePriority(id, i+1); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.reloadAccessRules()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reordered"})
+}
+
+// handleGetAccessRuleStats returns match count and cost estimate for a rule.
+func (s *Server) handleGetAccessRuleStats(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid rule ID")
+		return
+	}
+	stats, err := s.db.GetAccessRuleStats(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 func (s *Server) handleDeleteAccessRule(w http.ResponseWriter, r *http.Request) {
@@ -404,6 +507,36 @@ func (s *Server) handleCreateFailoverGroup(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	writeJSON(w, http.StatusCreated, req)
+}
+
+func (s *Server) handleUpdateFailoverGroup(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		database.FailoverGroup
+		Members []database.FailoverMember `json:"members"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	req.ID = id
+	if err := s.db.UpdateFailoverGroup(&req.FailoverGroup); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Replace members: delete existing, insert new
+	if err := s.db.DeleteFailoverMembers(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, m := range req.Members {
+		m.GroupID = id
+		if err := s.db.InsertFailoverMember(&m); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, req)
 }
 
 func (s *Server) handleDeleteFailoverGroup(w http.ResponseWriter, r *http.Request) {
