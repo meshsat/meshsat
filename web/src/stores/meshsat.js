@@ -1131,6 +1131,85 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Health Scores (v0.3.0)
+  const healthScores = ref([])
+
+  async function fetchHealthScores() {
+    try {
+      const data = await api.get('/interfaces/health')
+      healthScores.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  // Dead Man's Switch
+  const deadmanEnabled = ref(false)
+  const deadmanTimeout = ref(240)
+  const deadmanConfig = ref(null)
+
+  async function fetchDeadmanConfig() {
+    try {
+      const data = await api.get('/deadman')
+      deadmanConfig.value = data
+      deadmanEnabled.value = data.enabled || false
+      deadmanTimeout.value = data.timeout_min || 240
+    } catch (e) { error.value = e.message }
+  }
+
+  async function setDeadmanConfig(enabled, timeoutMin) {
+    error.value = null
+    try {
+      const data = await api.post('/deadman', { enabled, timeout_min: timeoutMin })
+      deadmanConfig.value = data
+      deadmanEnabled.value = data.enabled || false
+      deadmanTimeout.value = data.timeout_min || 240
+      return data
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Burst Queue
+  const burstStatus = ref({ pending: 0, max_size: 10, max_age_min: 30 })
+
+  async function fetchBurstStatus() {
+    try {
+      burstStatus.value = await api.get('/burst/status')
+    } catch (e) { error.value = e.message }
+  }
+
+  async function flushBurst() {
+    error.value = null
+    try {
+      const result = await api.post('/burst/flush')
+      await fetchBurstStatus()
+      return result
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  // Geofences
+  const geofences = ref([])
+
+  async function fetchGeofences() {
+    try {
+      const data = await api.get('/geofences')
+      geofences.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function createGeofence(zone) {
+    error.value = null
+    try {
+      await api.post('/geofences', zone)
+      await fetchGeofences()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteGeofence(id) {
+    error.value = null
+    try {
+      await api.del(`/geofences/${id}`)
+      await fetchGeofences()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Failover Groups (v0.3.0)
   async function fetchFailoverGroups() {
     try {
@@ -1203,6 +1282,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     failoverGroups, fetchFailoverGroups, createFailoverGroup, deleteFailoverGroup,
     auditLog, auditSigner, fetchAuditLog, verifyAuditLog, fetchAuditSigner,
     exportConfig, importConfig, validateTransforms,
+    healthScores, fetchHealthScores,
+    deadmanEnabled, deadmanTimeout, deadmanConfig, fetchDeadmanConfig, setDeadmanConfig,
+    burstStatus, fetchBurstStatus, flushBurst,
+    geofences, fetchGeofences, createGeofence, deleteGeofence,
     sseConnected, connectSSE, closeSSE
   }
 })

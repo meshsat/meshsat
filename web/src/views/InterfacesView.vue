@@ -14,6 +14,17 @@ const expandedIface = ref(null)
 const generatingKey = ref(false)
 const showTransforms = ref(null)
 
+// Health score helpers
+function healthScoreFor(ifaceId) {
+  return (store.healthScores || []).find(h => h.interface_id === ifaceId)
+}
+
+function healthScoreClass(score) {
+  if (score >= 80) return 'bg-emerald-400/20 text-emerald-400'
+  if (score >= 50) return 'bg-amber-400/20 text-amber-400'
+  return 'bg-red-400/20 text-red-400'
+}
+
 const tabs = [
   { id: 'interfaces', label: 'Interfaces' },
   { id: 'rules', label: 'Access Rules' },
@@ -455,6 +466,7 @@ onMounted(() => {
   store.fetchTransportChannels()
   store.fetchSMSContacts()
   store.fetchNodes()
+  store.fetchHealthScores()
   pollTimer = setInterval(() => {
     store.fetchInterfaces()
     store.fetchDevices()
@@ -526,6 +538,10 @@ onUnmounted(() => {
               <span class="text-xs text-gray-500 ml-2">{{ iface.label || iface.channel_type }}</span>
               <span v-if="iface.ingress_seq || iface.egress_seq" class="ml-2 text-[9px] font-mono text-gray-600">
                 in:{{ iface.ingress_seq || 0 }} out:{{ iface.egress_seq || 0 }}
+              </span>
+              <span v-if="healthScoreFor(iface.id)" class="ml-2 px-2 py-0.5 rounded-full text-xs font-medium"
+                :class="healthScoreClass(healthScoreFor(iface.id).score)">
+                {{ healthScoreFor(iface.id).score }}/100
               </span>
             </div>
           </div>

@@ -110,6 +110,16 @@ func (b *BurstQueue) Pending() int {
 	return len(b.pending)
 }
 
+// GetMaxSize returns the maximum queue size.
+func (b *BurstQueue) GetMaxSize() int {
+	return b.maxSize
+}
+
+// GetMaxAge returns the maximum message age before auto-flush.
+func (b *BurstQueue) GetMaxAge() time.Duration {
+	return b.maxAge
+}
+
 // ShouldFlush returns true if maxAge exceeded or maxSize reached.
 func (b *BurstQueue) ShouldFlush() bool {
 	b.mu.Lock()

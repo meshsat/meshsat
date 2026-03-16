@@ -40,7 +40,7 @@ const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'sos', 'location', 'queue', 'activity']
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'sos', 'location', 'queue', 'burst', 'activity']
 function loadWidgetOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
@@ -915,6 +915,25 @@ const widgetTypeColors = {
   cellular: { text: 'text-sky-400', hover: 'hover:text-sky-300', bg: 'bg-sky-400', activeBg: 'bg-sky-400/10', chevron: '%2338bdf8' },
 }
 
+// ── Health Score helpers ──
+function healthScoreFor(ifaceId) {
+  return (store.healthScores || []).find(h => h.interface_id === ifaceId)
+}
+
+function healthScoreClass(score) {
+  if (score >= 80) return 'bg-emerald-400/20 text-emerald-400'
+  if (score >= 50) return 'bg-amber-400/20 text-amber-400'
+  return 'bg-red-400/20 text-red-400'
+}
+
+// ── Burst queue ──
+const burstFlushing = ref(false)
+async function doBurstFlush() {
+  burstFlushing.value = true
+  try { await store.flushBurst() } catch {}
+  burstFlushing.value = false
+}
+
 // ── Lifecycle ──
 let pollTimer = null
 
@@ -943,7 +962,9 @@ async function fetchAll() {
     store.fetchCellularDataStatus(),
     store.fetchDynDNSStatus(),
     store.fetchNeighborInfo(),
-    store.fetchInterfaces()
+    store.fetchInterfaces(),
+    store.fetchHealthScores(),
+    store.fetchBurstStatus()
   ])
 }
 
@@ -986,6 +1007,7 @@ const widgetComponents = {
   sos: 'sos',
   location: 'location',
   queue: 'queue',
+  burst: 'burst',
   activity: 'activity'
 }
 
@@ -1287,6 +1309,21 @@ function widgetGridClass(id) {
             <span class="text-[9px] text-gray-600 shrink-0">{{ formatLastHeard(node.last_heard) }}</span>
           </div>
           <div v-if="!topNodes.length" class="text-[11px] text-gray-600 text-center py-2">No nodes discovered</div>
+        </div>
+
+        <!-- Channel Health Scores -->
+        <div v-if="store.healthScores.length" class="mt-2 pt-2 border-t border-tactical-border">
+          <span class="text-[9px] text-gray-500 uppercase tracking-wider">Channel Health</span>
+          <div class="flex flex-wrap gap-1.5 mt-1.5">
+            <div v-for="hs in store.healthScores" :key="hs.interface_id"
+              class="flex items-center gap-1.5">
+              <span class="text-[10px] text-gray-400 truncate max-w-[80px]">{{ hs.interface_id }}</span>
+              <span class="px-2 py-0.5 rounded-full text-xs font-medium"
+                :class="healthScoreClass(hs.score)">
+                {{ hs.score }}/100
+              </span>
+            </div>
+          </div>
         </div>
 
         <div class="flex items-center justify-between mt-2 pt-2 border-t border-tactical-border">
@@ -1710,6 +1747,49 @@ function widgetGridClass(id) {
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item._time) }}</span>
           </div>
           <div v-if="!unifiedQueue.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
+        </div>
+      </div>
+
+      <!-- ═══ Satellite Burst Queue ═══ -->
+      <div v-if="wid === 'burst'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="font-display font-semibold text-sm text-amber-400 tracking-wide">BURST QUEUE</span>
+          </div>
+          <span class="text-[9px] font-mono px-1.5 py-0.5 rounded"
+            :class="store.burstStatus.pending > 0 ? 'bg-amber-400/10 text-amber-400' : 'bg-gray-700/50 text-gray-500'">
+            {{ store.burstStatus.pending }} pending
+          </span>
+        </div>
+
+        <div class="flex items-center gap-3 mb-3">
+          <span class="font-mono text-lg font-bold" :class="store.burstStatus.pending > 0 ? 'text-amber-400' : 'text-gray-600'">
+            {{ store.burstStatus.pending }}
+          </span>
+          <span class="text-[10px] text-gray-500">/ {{ store.burstStatus.max_size }} max</span>
+        </div>
+
+        <div class="space-y-2 text-[11px] text-gray-400 mb-3">
+          <div class="flex items-center justify-between">
+            <span>Max queue size</span>
+            <span class="font-mono text-gray-300">{{ store.burstStatus.max_size }}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span>Max age</span>
+            <span class="font-mono text-gray-300">{{ store.burstStatus.max_age_min }} min</span>
+          </div>
+        </div>
+
+        <button v-if="store.burstStatus.pending > 0"
+          @click="doBurstFlush" :disabled="burstFlushing"
+          class="w-full px-3 py-2 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500 transition-colors disabled:opacity-40">
+          {{ burstFlushing ? 'Flushing...' : 'Flush Now' }}
+        </button>
+        <div v-else class="text-[11px] text-gray-600 text-center py-2">
+          Queue empty — messages will be batched for next satellite pass
         </div>
       </div>
 

@@ -8,6 +8,66 @@ const mapEl = ref(null)
 const mapReady = ref(false)
 const mapError = ref(false)
 
+// Geofence management
+const showGeofencePanel = ref(false)
+const showNewZoneForm = ref(false)
+const newZone = ref({ id: '', name: '', alert_on: 'both', polygon: '' })
+const geofenceCreating = ref(false)
+let geofenceLayer = null
+
+function resetNewZone() {
+  newZone.value = { id: '', name: '', alert_on: 'both', polygon: '' }
+}
+
+async function createGeofenceZone() {
+  const lines = newZone.value.polygon.trim().split('\n').filter(l => l.trim())
+  if (lines.length < 3) { store.error = 'Polygon needs at least 3 vertices'; return }
+  const polygon = lines.map(l => {
+    const parts = l.trim().split(/[,\s]+/)
+    return { lat: parseFloat(parts[0]), lon: parseFloat(parts[1]) }
+  })
+  if (polygon.some(p => isNaN(p.lat) || isNaN(p.lon))) { store.error = 'Invalid coordinate format'; return }
+
+  geofenceCreating.value = true
+  try {
+    await store.createGeofence({
+      id: newZone.value.id || newZone.value.name.toLowerCase().replace(/\s+/g, '-'),
+      name: newZone.value.name,
+      alert_on: newZone.value.alert_on,
+      polygon
+    })
+    showNewZoneForm.value = false
+    resetNewZone()
+    renderGeofences()
+  } catch {}
+  geofenceCreating.value = false
+}
+
+async function removeGeofence(id) {
+  if (!confirm(`Delete geofence zone "${id}"?`)) return
+  try {
+    await store.deleteGeofence(id)
+    renderGeofences()
+  } catch {}
+}
+
+function renderGeofences() {
+  if (!map || !L || !geofenceLayer) return
+  geofenceLayer.clearLayers()
+  for (const zone of store.geofences) {
+    if (!zone.polygon || zone.polygon.length < 3) continue
+    const coords = zone.polygon.map(p => [p.lat, p.lon])
+    const color = zone.alert_on === 'enter' ? '#f59e0b' : zone.alert_on === 'exit' ? '#ef4444' : '#8b5cf6'
+    const poly = L.polygon(coords, {
+      color, weight: 2, opacity: 0.6,
+      fillColor: color, fillOpacity: 0.1,
+      dashArray: '6 4'
+    })
+    poly.bindPopup(`<strong>${zone.name || zone.id}</strong><br><span style="font-size:11px">Alert on: ${zone.alert_on}</span>`)
+    geofenceLayer.addLayer(poly)
+  }
+}
+
 // Layer toggles
 const showMessages = ref(true)
 const showTracks = ref(true)
@@ -108,6 +168,7 @@ async function initMap() {
     locationLayer = L.layerGroup().addTo(map)
     iridiumLayer = L.layerGroup().addTo(map)
     cellularLayer = L.layerGroup().addTo(map)
+    geofenceLayer = L.layerGroup().addTo(map)
     mapReady.value = true
 
     // Leaflet needs a size recalc after the container is rendered in the DOM
@@ -424,6 +485,7 @@ watch(showGps, updateMap)
 watch(showCustom, updateMap)
 watch(showIridium, updateMap)
 watch(showCellular, updateMap)
+watch(() => store.geofences, renderGeofences, { deep: true })
 
 onMounted(async () => {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
@@ -438,7 +500,8 @@ onMounted(async () => {
     store.fetchMessages({ limit: 200 }),
     store.fetchLocations(),
     store.fetchLocationSources(),
-    store.fetchCellInfo()
+    store.fetchCellInfo(),
+    store.fetchGeofences()
   ])
   // Set visibility for any newly loaded nodes
   for (const n of store.nodes) {
@@ -446,6 +509,7 @@ onMounted(async () => {
     if (nodeVisibility[nid] === undefined) nodeVisibility[nid] = true
   }
   await initMap()
+  renderGeofences()
   // Center on resolved location if available and no nodes have GPS
   if (map && !nodesWithPositions.value.length) {
     const resolved = store.locationSources?.resolved
@@ -565,10 +629,81 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Geofence Zones -->
+    <div class="bg-tactical-surface rounded-lg border border-tactical-border p-3">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Geofence Zones</span>
+        <div class="flex gap-2">
+          <button @click="showGeofencePanel = !showGeofencePanel"
+            class="text-[10px] text-teal-400 hover:text-teal-300">
+            {{ showGeofencePanel ? 'Hide' : 'Manage' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Zone count summary -->
+      <div v-if="!showGeofencePanel" class="text-[11px] text-gray-500">
+        {{ store.geofences.length }} zone{{ store.geofences.length !== 1 ? 's' : '' }} configured
+      </div>
+
+      <!-- Expanded panel -->
+      <div v-if="showGeofencePanel" class="space-y-2">
+        <!-- Zone list -->
+        <div v-for="zone in store.geofences" :key="zone.id"
+          class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50">
+          <span class="w-2 h-2 rounded-full"
+            :class="zone.alert_on === 'enter' ? 'bg-amber-400' : zone.alert_on === 'exit' ? 'bg-red-400' : 'bg-violet-400'" />
+          <span class="text-xs text-gray-300 flex-1 truncate">{{ zone.name || zone.id }}</span>
+          <span class="text-[9px] font-mono text-gray-500">{{ zone.alert_on }}</span>
+          <span class="text-[9px] text-gray-600">{{ zone.polygon?.length || 0 }} pts</span>
+          <button @click="removeGeofence(zone.id)"
+            class="text-[9px] text-red-400/60 hover:text-red-400 transition-colors">
+            Delete
+          </button>
+        </div>
+        <div v-if="!store.geofences.length" class="text-[11px] text-gray-600 text-center py-2">
+          No geofence zones configured
+        </div>
+
+        <!-- New Zone button / form -->
+        <button v-if="!showNewZoneForm" @click="showNewZoneForm = true"
+          class="w-full px-3 py-2 rounded border border-dashed border-gray-700 text-xs text-gray-400 hover:text-teal-400 hover:border-teal-400/30 transition-colors">
+          + New Zone
+        </button>
+
+        <div v-if="showNewZoneForm" class="space-y-2 bg-tactical-bg/50 rounded-lg p-3">
+          <div class="flex gap-2">
+            <input v-model="newZone.name" placeholder="Zone name"
+              class="flex-1 px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200" />
+            <select v-model="newZone.alert_on"
+              class="px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option value="both">Alert: Both</option>
+              <option value="enter">Alert: Enter</option>
+              <option value="exit">Alert: Exit</option>
+            </select>
+          </div>
+          <textarea v-model="newZone.polygon" rows="4"
+            placeholder="Polygon vertices (one per line):&#10;52.370216, 4.895168&#10;52.373086, 4.892568&#10;52.371463, 4.899351"
+            class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono" />
+          <div class="flex gap-2">
+            <button @click="createGeofenceZone" :disabled="geofenceCreating || !newZone.name"
+              class="flex-1 px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500 disabled:opacity-40">
+              {{ geofenceCreating ? 'Creating...' : 'Create Zone' }}
+            </button>
+            <button @click="showNewZoneForm = false; resetNewZone()"
+              class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Stats summary -->
     <div class="text-[11px] text-gray-600">
       {{ nodesWithPositions.length }} nodes with GPS
       <span v-if="locatableMessages.length"> &middot; {{ locatableMessages.length }} locatable messages</span>
+      <span v-if="store.geofences.length"> &middot; {{ store.geofences.length }} geofence zones</span>
     </div>
   </div>
 </template>

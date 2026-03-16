@@ -40,6 +40,8 @@ type Server struct {
 	webHandler     http.Handler
 	healthScorer   *engine.HealthScorer
 	geofenceMon    *engine.GeofenceMonitor
+	deadman        *engine.DeadManSwitch
+	burstQueue     *engine.BurstQueue
 }
 
 // NewServer creates a new API server.
@@ -125,6 +127,16 @@ func (s *Server) SetHealthScorer(hs *engine.HealthScorer) {
 // SetGeofenceMonitor sets the geofence monitor for geofence API endpoints.
 func (s *Server) SetGeofenceMonitor(gm *engine.GeofenceMonitor) {
 	s.geofenceMon = gm
+}
+
+// SetDeadManSwitch sets the dead man's switch for deadman API endpoints.
+func (s *Server) SetDeadManSwitch(dm *engine.DeadManSwitch) {
+	s.deadman = dm
+}
+
+// SetBurstQueue sets the burst queue for burst API endpoints.
+func (s *Server) SetBurstQueue(bq *engine.BurstQueue) {
+	s.burstQueue = bq
 }
 
 // Router builds the chi router with all API routes.
@@ -378,6 +390,14 @@ func (s *Server) Router() http.Handler {
 		r.Get("/geofences", s.handleGetGeofences)
 		r.Post("/geofences", s.handleCreateGeofence)
 		r.Delete("/geofences/{id}", s.handleDeleteGeofence)
+
+		// Dead man's switch
+		r.Get("/deadman", s.handleGetDeadmanConfig)
+		r.Post("/deadman", s.handleSetDeadmanConfig)
+
+		// Burst queue
+		r.Get("/burst/status", s.handleGetBurstStatus)
+		r.Post("/burst/flush", s.handleFlushBurst)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

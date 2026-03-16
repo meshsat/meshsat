@@ -18,6 +18,7 @@ const tabs = [
   { id: 'zigbee', label: 'ZigBee' },
   { id: 'store_forward', label: 'S&F' },
   { id: 'range_test', label: 'Range Test' },
+  { id: 'deadman', label: 'Dead Man' },
   { id: 'config_mgmt', label: 'Export/Import' },
   { id: 'about', label: 'About' }
 ]
@@ -29,6 +30,34 @@ const radioEditing = ref(false)
 const radioJSON = ref('')
 
 const radioRefreshing = ref(false)
+
+// Dead Man's Switch
+const deadmanSaving = ref(false)
+const deadmanLocalEnabled = ref(false)
+const deadmanLocalTimeout = ref(240)
+
+async function loadDeadman() {
+  await store.fetchDeadmanConfig()
+  deadmanLocalEnabled.value = store.deadmanEnabled
+  deadmanLocalTimeout.value = store.deadmanTimeout
+}
+
+async function saveDeadman() {
+  deadmanSaving.value = true
+  try {
+    await store.setDeadmanConfig(deadmanLocalEnabled.value, deadmanLocalTimeout.value)
+  } catch {}
+  deadmanSaving.value = false
+}
+
+const deadmanLastActivity = computed(() => {
+  const cfg = store.deadmanConfig
+  if (!cfg || !cfg.last_activity) return null
+  const elapsed = Math.floor(Date.now() / 1000 - cfg.last_activity)
+  if (elapsed < 60) return `${elapsed}s ago`
+  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
+  return `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m ago`
+})
 
 // Config export/import
 const exportedConfig = ref('')
@@ -524,7 +553,7 @@ onMounted(async () => {
   store.fetchCellularSignal()
   store.fetchSMSContacts()
   store.fetchSIMCards()
-  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee()
+  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
 })
@@ -1380,6 +1409,57 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Dead Man's Switch -->
+    <div v-if="activeTab === 'deadman'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-4">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-200 mb-1">Dead Man's Switch</h3>
+          <p class="text-xs text-gray-500">Auto-send SOS if no activity for a configured period. When triggered, sends SOS with last GPS position to all transports.</p>
+        </div>
+
+        <!-- Enable toggle -->
+        <div class="flex items-center justify-between">
+          <label for="deadman_en" class="text-sm text-gray-300">Enable Dead Man's Switch</label>
+          <div class="flex items-center gap-2">
+            <input type="checkbox" v-model="deadmanLocalEnabled" id="deadman_en" class="rounded bg-gray-900 border-gray-700">
+          </div>
+        </div>
+
+        <!-- Timeout -->
+        <div class="flex items-center justify-between">
+          <label for="deadman_timeout" class="text-sm text-gray-300">Timeout (minutes)</label>
+          <input v-model.number="deadmanLocalTimeout" id="deadman_timeout" type="number" min="1" max="10080"
+            class="w-24 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono text-right" />
+        </div>
+
+        <!-- Status -->
+        <div v-if="store.deadmanConfig" class="space-y-2 pt-2 border-t border-gray-700">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-500">Status</span>
+            <span class="text-xs font-mono"
+              :class="store.deadmanConfig.triggered ? 'text-red-400' : store.deadmanConfig.enabled ? 'text-emerald-400' : 'text-gray-500'">
+              {{ store.deadmanConfig.triggered ? 'TRIGGERED' : store.deadmanConfig.enabled ? 'Armed' : 'Disabled' }}
+            </span>
+          </div>
+          <div v-if="deadmanLastActivity" class="flex items-center justify-between">
+            <span class="text-xs text-gray-500">Last activity</span>
+            <span class="text-xs font-mono text-gray-300">{{ deadmanLastActivity }}</span>
+          </div>
+        </div>
+
+        <!-- Warning -->
+        <div class="bg-amber-900/10 border border-amber-700/30 rounded-lg p-3">
+          <p class="text-xs text-amber-400/80">When triggered, sends SOS with last GPS position to all transports. The switch resets on any user activity.</p>
+        </div>
+
+        <!-- Save button -->
+        <button @click="saveDeadman" :disabled="deadmanSaving"
+          class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
+          {{ deadmanSaving ? 'Saving...' : 'Save' }}
+        </button>
       </div>
     </div>
 

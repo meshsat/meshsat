@@ -84,6 +84,26 @@ func (d *DeadManSwitch) SetSOSCallback(fn func(lat, lon float64, lastSeen time.T
 	d.sosCallback = fn
 }
 
+// IsEnabled returns whether the dead man's switch is enabled.
+func (d *DeadManSwitch) IsEnabled() bool {
+	return d.enabled.Load()
+}
+
+// GetTimeout returns the current timeout duration.
+func (d *DeadManSwitch) GetTimeout() time.Duration {
+	return d.timeout
+}
+
+// SetTimeout updates the timeout duration.
+func (d *DeadManSwitch) SetTimeout(t time.Duration) {
+	d.timeout = t
+}
+
+// LastActivity returns the unix timestamp of the last Touch().
+func (d *DeadManSwitch) LastActivity() int64 {
+	return d.lastActive.Load()
+}
+
 func (d *DeadManSwitch) check() {
 	if !d.enabled.Load() {
 		return
