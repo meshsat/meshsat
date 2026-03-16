@@ -35,9 +35,11 @@ type Server struct {
 	linkMgr       *routing.LinkManager
 	destTable     *routing.DestinationTable
 	routingID     *routing.Identity
-	paidRateLimit int
-	sos           *SOSState
-	webHandler    http.Handler
+	paidRateLimit  int
+	sos            *SOSState
+	webHandler     http.Handler
+	healthScorer   *engine.HealthScorer
+	geofenceMon    *engine.GeofenceMonitor
 }
 
 // NewServer creates a new API server.
@@ -113,6 +115,16 @@ func (s *Server) SetDestinationTable(dt *routing.DestinationTable) {
 // SetRoutingIdentity sets the local routing identity for routing API.
 func (s *Server) SetRoutingIdentity(id *routing.Identity) {
 	s.routingID = id
+}
+
+// SetHealthScorer sets the health scorer for interface health endpoints.
+func (s *Server) SetHealthScorer(hs *engine.HealthScorer) {
+	s.healthScorer = hs
+}
+
+// SetGeofenceMonitor sets the geofence monitor for geofence API endpoints.
+func (s *Server) SetGeofenceMonitor(gm *engine.GeofenceMonitor) {
+	s.geofenceMon = gm
 }
 
 // Router builds the chi router with all API routes.
@@ -312,6 +324,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/interfaces/{id}/unbind", s.handleUnbindDevice)
 		r.Post("/interfaces/{id}/enable", s.handleEnableInterface)
 		r.Post("/interfaces/{id}/disable", s.handleDisableInterface)
+		r.Get("/interfaces/health", s.handleGetHealthScores)
 		r.Get("/devices", s.handleGetDevices)
 		r.Get("/access-rules", s.handleGetAccessRules)
 		r.Post("/access-rules", s.handleCreateAccessRule)
@@ -351,12 +364,20 @@ func (s *Server) Router() http.Handler {
 		// Loop prevention metrics (v0.3.0)
 		r.Get("/loop-metrics", s.handleGetLoopMetrics)
 
+		// Mesh topology (graph visualization)
+		r.Get("/topology", s.handleGetTopology)
+
 		// Routing — links and destinations (v0.2.0)
 		r.Post("/links", s.handleCreateLink)
 		r.Get("/links", s.handleGetLinks)
 		r.Delete("/links/{id}", s.handleDeleteLink)
 		r.Get("/routing/destinations", s.handleGetRoutingDestinations)
 		r.Get("/routing/identity", s.handleGetRoutingIdentity)
+
+		// Geofence zones
+		r.Get("/geofences", s.handleGetGeofences)
+		r.Post("/geofences", s.handleCreateGeofence)
+		r.Delete("/geofences/{id}", s.handleDeleteGeofence)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

@@ -890,6 +890,16 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; return [] }
   }
 
+  // Topology (mesh network graph)
+  const topology = ref({ nodes: [], links: [], stats: {} })
+
+  async function fetchTopology() {
+    try {
+      const data = await api.get('/topology')
+      topology.value = data
+    } catch (e) { error.value = e.message }
+  }
+
   // Loop prevention metrics (v0.3.0)
   const loopMetrics = ref(null)
 
@@ -1181,6 +1191,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     contacts, activeConversation, fetchContacts, createContact, updateContact, deleteContact,
     addContactAddress, updateContactAddress, deleteContactAddress, fetchConversation,
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,
+    topology, fetchTopology,
     loopMetrics, fetchLoopMetrics,
     transportChannels, fetchTransportChannels,
     webhookLog, fetchWebhookLog,

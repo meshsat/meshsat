@@ -548,6 +548,18 @@ func (s *Server) handleDeleteFailoverGroup(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ---- Health Scores ----
+
+// handleGetHealthScores returns composite health scores for all interfaces.
+func (s *Server) handleGetHealthScores(w http.ResponseWriter, r *http.Request) {
+	if s.healthScorer == nil {
+		writeError(w, http.StatusServiceUnavailable, "health scorer not available")
+		return
+	}
+	scores := s.healthScorer.ScoreAll()
+	writeJSON(w, http.StatusOK, scores)
+}
+
 // reloadAccessRules refreshes the in-memory access rules after CRUD mutations.
 func (s *Server) reloadAccessRules() {
 	if s.accessEval != nil {
