@@ -10,6 +10,7 @@ stages:
   - build
   - package
   - deploy
+  - pages
 
 variables:
   MESHSAT_IMAGE: "ghcr.io/cubeos-app/meshsat"
@@ -217,3 +218,24 @@ deploy:
     - if: $CI_COMMIT_BRANCH == "main"
   environment:
     name: production
+
+# -----------------------------------------------------------------------------
+# PAGES — Build Hugo documentation site and deploy to GitLab Pages
+# -----------------------------------------------------------------------------
+pages:
+  stage: pages
+  tags: [multiarch]
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache hugo git
+  script:
+    - cd docs/site
+    - hugo --minify --baseURL "${CI_PAGES_URL}"
+    - mv public ../../public
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - docs/site/**/*
