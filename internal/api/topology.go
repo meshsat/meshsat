@@ -11,8 +11,8 @@ import (
 
 // TopologyNode represents a node in the mesh topology graph.
 type TopologyNode struct {
-	ID       string  `json:"id"`        // node ID (hex)
-	Label    string  `json:"label"`     // long name or short name
+	ID       string  `json:"id"`    // node ID (hex)
+	Label    string  `json:"label"` // long name or short name
 	Lat      float64 `json:"lat,omitempty"`
 	Lon      float64 `json:"lon,omitempty"`
 	Battery  int     `json:"battery"`   // percent, 0 if unknown

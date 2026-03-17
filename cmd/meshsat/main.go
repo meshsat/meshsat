@@ -347,6 +347,11 @@ func main() {
 	if routingID != nil {
 		srv.SetRoutingIdentity(routingID)
 	}
+	srv.SetOnMOCallback(func(imei string) {
+		if err := db.TouchDeviceLastSeen(imei); err != nil {
+			log.Warn().Err(err).Str("imei", imei).Msg("failed to update device last_seen")
+		}
+	})
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),

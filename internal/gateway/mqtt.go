@@ -267,6 +267,29 @@ func (g *MQTTGateway) dedupCleaner(ctx context.Context) {
 	}
 }
 
+// PublishRaw publishes a raw payload to an arbitrary MQTT topic.
+// Used by the hub namespace (e.g., mo/raw, mo/decoded) which differs from
+// the bridge's Forward() method that uses the msh/ topic prefix.
+func (g *MQTTGateway) PublishRaw(topic string, qos byte, retain bool, payload []byte) error {
+	if !g.connected.Load() {
+		return fmt.Errorf("mqtt not connected")
+	}
+
+	token := g.client.Publish(topic, qos, retain, payload)
+	if !token.WaitTimeout(5 * time.Second) {
+		g.errors.Add(1)
+		return fmt.Errorf("mqtt publish timeout")
+	}
+	if token.Error() != nil {
+		g.errors.Add(1)
+		return fmt.Errorf("mqtt publish: %w", token.Error())
+	}
+
+	g.msgsOut.Add(1)
+	g.lastActive.Store(time.Now().Unix())
+	return nil
+}
+
 // TestConnection attempts a temporary connection to validate config.
 func (g *MQTTGateway) TestConnection() error {
 	opts := mqtt.NewClientOptions().
