@@ -1,0 +1,55 @@
+baseURL = "https://meshsat.io"
+languageCode = "en-us"
+title = "MeshSat"
+theme = "PaperMod"
+
+[params]
+  description = "One gateway, every channel. If a message can travel, MeshSat will send it."
+  author = "Kyriakos Papadopoulos"
+  ShowReadingTime = true
+  ShowShareButtons = false
+  ShowPostNavLinks = true
+  ShowBreadCrumbs = true
+  ShowCodeCopyButtons = true
+  defaultTheme = "dark"
+
+  [params.homeInfoParams]
+    Title = "MeshSat"
+    Content = "One gateway, every channel. If a message can travel, MeshSat will send it."
+
+  [[params.socialIcons]]
+    name = "github"
+    url = "https://github.com/cubeos-app/meshsat"
+
+[menu]
+  [[menu.main]]
+    name = "Getting Started"
+    url = "/getting-started/"
+    weight = 10
+  [[menu.main]]
+    name = "Channels"
+    url = "/channels/"
+    weight = 20
+  [[menu.main]]
+    name = "Hardware"
+    url = "/hardware/"
+    weight = 30
+  [[menu.main]]
+    name = "MeshSat Hub"
+    url = "/meshsat-hub/"
+    weight = 40
+  [[menu.main]]
+    name = "Architecture"
+    url = "/architecture/"
+    weight = 45
+  [[menu.main]]
+    name = "Contributing"
+    url = "/contributing/"
+    weight = 50
+  [[menu.main]]
+    name = "Roadmap"
+    url = "/roadmap/"
+    weight = 60
+
+[markup.goldmark.renderer]
+  unsafe = true
