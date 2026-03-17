@@ -1,0 +1,37 @@
+# MeshSat Hub — Caddy Reverse Proxy Configuration
+#
+# Caddy automatically provisions and renews Let's Encrypt TLS certificates.
+# Set the DOMAIN environment variable in .env (e.g., hub.example.com).
+
+{$DOMAIN} {
+	# Reverse proxy to MeshSat Hub
+	reverse_proxy meshsat:6050 {
+		# Health check — removes upstream if unhealthy
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+
+		# Streaming support for SSE (/api/events)
+		flush_interval -1
+	}
+
+	# Security headers
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		-Server
+	}
+
+	# Gzip compression for API responses
+	encode gzip zstd
+
+	# Request logging
+	log {
+		output file /data/access.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+}

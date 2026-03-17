@@ -1,0 +1,96 @@
+# MeshSat Hub — Production Docker Compose
+#
+# Usage:
+#   cp .env.example .env   # edit with your domain and settings
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+#   - Docker Engine 24+ with Compose v2
+#   - Public DNS A record pointing to this server
+#   - Ports 80 and 443 open (Caddy handles TLS)
+#   - Port 8883 open if external MQTT/TLS is needed
+
+services:
+  # ── MeshSat Hub ──────────────────────────────────────────────
+  meshsat:
+    image: ghcr.io/cubeos-app/meshsat:${MESHSAT_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - MESHSAT_MODE=direct
+      - MESHSAT_PORT=6050
+      - MESHSAT_DB_PATH=/cubeos/data/meshsat.db
+      - MESHSAT_RETENTION_DAYS=${MESHSAT_RETENTION_DAYS:-90}
+      - MESHSAT_BACKUP_DIR=/cubeos/data/backups
+      - MESHSAT_BACKUP_INTERVAL_HOURS=${MESHSAT_BACKUP_INTERVAL_HOURS:-12}
+      - MESHSAT_BACKUP_MAX_KEEP=${MESHSAT_BACKUP_MAX_KEEP:-14}
+      - MESHSAT_PAID_RATE_LIMIT=${MESHSAT_PAID_RATE_LIMIT:-60}
+      - MESHSAT_ANNOUNCE_INTERVAL=${MESHSAT_ANNOUNCE_INTERVAL:-300}
+      # Optional sidecars (uncomment to enable)
+      # - MESHSAT_LLAMAZIP_ADDR=llamazip:50051
+      # - MESHSAT_MSVQSC_ADDR=msvqsc:50052
+    volumes:
+      - meshsat-data:/cubeos/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:6050/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  # ── Caddy Reverse Proxy ──────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - internal
+    environment:
+      - DOMAIN=${DOMAIN:?Set DOMAIN in .env}
+    depends_on:
+      meshsat:
+        condition: service_healthy
+
+  # ── Mosquitto MQTT Broker ────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"       # MQTT (internal / LAN only — firewall this in production)
+      - "8883:8883"       # MQTTS (TLS via Caddy or native — see mosquitto.conf)
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/broker/uptime", "-C", "1", "-W", "3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  meshsat-data:
+  caddy-data:
+  caddy-config:
+  mosquitto-data:
+  mosquitto-log:
+
+networks:
+  internal:
+    driver: bridge
