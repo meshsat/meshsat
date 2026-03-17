@@ -16,7 +16,7 @@ type LatLon struct {
 type GeofenceZone struct {
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
-	Polygon []LatLon `json:"polygon"` // ordered vertices
+	Polygon []LatLon `json:"polygon"`  // ordered vertices
 	AlertOn string   `json:"alert_on"` // "enter", "exit", "both"
 	Message string   `json:"message"`  // alert message template
 }

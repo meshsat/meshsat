@@ -166,8 +166,8 @@ func TestGeofenceMonitor_Callback(t *testing.T) {
 		cbEvents = append(cbEvents, event)
 	})
 
-	gm.CheckPosition("node1", 0, 0)    // enter
-	gm.CheckPosition("node1", 5, 5)    // exit
+	gm.CheckPosition("node1", 0, 0) // enter
+	gm.CheckPosition("node1", 5, 5) // exit
 
 	if len(cbEvents) != 2 {
 		t.Fatalf("expected 2 callback events, got %d", len(cbEvents))

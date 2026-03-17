@@ -152,4 +152,3 @@ func channelCostScore(channelType string) int {
 		return 50
 	}
 }
-

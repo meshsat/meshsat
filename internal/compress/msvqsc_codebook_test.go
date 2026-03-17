@@ -34,10 +34,10 @@ func buildTestCodebook() []byte {
 
 	buf := make([]byte, 0, 10+stages*k*dim*4)
 	buf = append(buf, "MSVQ"...)
-	buf = append(buf, 1)                                           // version
-	buf = append(buf, byte(stages))                                // stages
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(k))        // K
-	buf = binary.LittleEndian.AppendUint16(buf, uint16(dim))      // dim
+	buf = append(buf, 1)                                     // version
+	buf = append(buf, byte(stages))                          // stages
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(k))   // K
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(dim)) // dim
 
 	for s := 0; s < stages; s++ {
 		for e := 0; e < k; e++ {
@@ -166,7 +166,7 @@ func TestDecodeIndices(t *testing.T) {
 	wire := []byte{
 		(2 << 4) | 1, // header: 2 stages, version 1
 		0x00, 0x00,   // stage 0, index 0
-		0x00, 0x00,   // stage 1, index 0
+		0x00, 0x00, // stage 1, index 0
 	}
 
 	text, err := cb.DecodeIndices(wire)

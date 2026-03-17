@@ -25,8 +25,8 @@ const (
 	wireIndexSize  = 2 // 2 bytes per stage index (uint16 LE)
 	wireVersion    = 1
 
-	codebookMagic     = "MSVQ"
-	corpusIndexMagic  = "MCIX"
+	codebookMagic    = "MSVQ"
+	corpusIndexMagic = "MCIX"
 )
 
 // LoadCodebook parses a codebook binary file.

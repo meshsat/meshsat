@@ -26,11 +26,11 @@ func (m *mockMSVQSCServer) Encode(_ context.Context, req *pb.EncodeRequest) (*pb
 	wire := make([]byte, 1+int(stages)*2)
 	wire[0] = byte((stages&0x0F)<<4 | 1) // stages + version 1
 	return &pb.EncodeResponse{
-		Encoded:          wire,
-		StagesUsed:       stages,
+		Encoded:           wire,
+		StagesUsed:        stages,
 		EstimatedFidelity: 0.95,
-		OriginalSize:     int32(len(req.Data)),
-		DurationMs:       1,
+		OriginalSize:      int32(len(req.Data)),
+		DurationMs:        1,
 	}, nil
 }
 
