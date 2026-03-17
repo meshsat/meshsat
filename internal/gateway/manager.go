@@ -621,6 +621,24 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 			return nil, err
 		}
 		return NewZigBeeGateway(*cfg), nil
+	case "tak":
+		cfg, err := ParseTAKConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		return NewTAKGateway(*cfg, m.db), nil
+	case "aprs":
+		cfg, err := ParseAPRSConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		return NewAPRSGateway(*cfg, m.db), nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}
@@ -654,6 +672,20 @@ func (m *Manager) redactConfig(gwType, configJSON string) json.RawMessage {
 		return data
 	case "zigbee":
 		cfg, err := ParseZigBeeConfig(configJSON)
+		if err != nil {
+			return json.RawMessage(configJSON)
+		}
+		data, _ := json.Marshal(cfg.Redacted())
+		return data
+	case "tak":
+		cfg, err := ParseTAKConfig(configJSON)
+		if err != nil {
+			return json.RawMessage(configJSON)
+		}
+		data, _ := json.Marshal(cfg.Redacted())
+		return data
+	case "aprs":
+		cfg, err := ParseAPRSConfig(configJSON)
 		if err != nil {
 			return json.RawMessage(configJSON)
 		}
@@ -723,6 +755,18 @@ func (m *Manager) GetWebhookGateway() *WebhookGateway {
 	if gw, ok := m.running["webhook"]; ok {
 		if wgw, ok := gw.(*WebhookGateway); ok {
 			return wgw
+		}
+	}
+	return nil
+}
+
+// GetMQTTGateway returns the running MQTT gateway, if any.
+func (m *Manager) GetMQTTGateway() *MQTTGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if gw, ok := m.running["mqtt"]; ok {
+		if mgw, ok := gw.(*MQTTGateway); ok {
+			return mgw
 		}
 	}
 	return nil

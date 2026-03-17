@@ -2,7 +2,7 @@ package channel
 
 import "time"
 
-// RegisterDefaults registers the 7 built-in channels.
+// RegisterDefaults registers the 9 built-in channels.
 func RegisterDefaults(r *Registry) {
 	r.Register(ChannelDescriptor{
 		ID:            "mesh",
@@ -123,6 +123,49 @@ func RegisterDefaults(r *Registry) {
 		Options: []OptionField{
 			{Key: "url", Label: "Webhook URL", Type: "text", Default: ""},
 			{Key: "method", Label: "HTTP Method", Type: "select", Default: "POST", Options: []string{"POST", "PUT"}},
+		},
+	})
+
+	r.Register(ChannelDescriptor{
+		ID:         "aprs",
+		Label:      "APRS (Direwolf)",
+		IsPaid:     false,
+		CanSend:    true,
+		CanReceive: true,
+		MaxPayload: 256, // practical APRS packet limit
+		RetryConfig: RetryConfig{
+			Enabled:    false,
+			MaxRetries: 1,
+		},
+		Options: []OptionField{
+			{Key: "callsign", Label: "Callsign", Type: "text", Default: ""},
+			{Key: "ssid", Label: "SSID", Type: "number", Default: "10"},
+			{Key: "kiss_host", Label: "Direwolf KISS Host", Type: "text", Default: "localhost"},
+			{Key: "kiss_port", Label: "Direwolf KISS Port", Type: "number", Default: "8001"},
+			{Key: "frequency_mhz", Label: "Frequency (MHz)", Type: "text", Default: "144.800"},
+		},
+	})
+
+	r.Register(ChannelDescriptor{
+		ID:         "tak",
+		Label:      "TAK/CoT",
+		IsPaid:     false,
+		CanSend:    true,
+		CanReceive: true,
+		MaxPayload: 0, // unlimited (TCP)
+		DefaultTTL: 300 * time.Second,
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 5 * time.Second,
+			MaxWait:     5 * time.Minute,
+			MaxRetries:  5,
+			BackoffFunc: "exponential",
+		},
+		Options: []OptionField{
+			{Key: "tak_host", Label: "TAK Server Host", Type: "text", Default: ""},
+			{Key: "tak_port", Label: "TAK Server Port", Type: "number", Default: "8087"},
+			{Key: "tak_ssl", Label: "Use TLS", Type: "checkbox", Default: "false"},
+			{Key: "callsign_prefix", Label: "Callsign Prefix", Type: "text", Default: "MESHSAT"},
 		},
 	})
 
