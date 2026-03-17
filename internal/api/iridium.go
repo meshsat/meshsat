@@ -446,6 +446,63 @@ func (s *Server) handleManualMailboxCheck(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"status": "mailbox check triggered"})
 }
 
+// handleGetCreditBalance returns the latest polled credit balance from Cloudloop.
+// @Summary Get polled Iridium credit balance
+// @Description Returns the latest credit balance fetched from Cloudloop API
+// @Tags iridium
+// @Produce json
+// @Param history query int false "Number of historical snapshots to include (default 0)"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/iridium/credits/balance [get]
+func (s *Server) handleGetCreditBalance(w http.ResponseWriter, r *http.Request) {
+	latest, err := s.db.GetLatestCreditBalance()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := map[string]interface{}{}
+	if latest != nil {
+		resp["balance"] = latest.Balance
+		resp["currency"] = latest.Currency
+		resp["source"] = latest.Source
+		resp["fetched_at"] = latest.FetchedAt
+	}
+
+	histStr := r.URL.Query().Get("history")
+	if histStr != "" {
+		limit, _ := strconv.Atoi(histStr)
+		if limit > 0 {
+			history, err := s.db.GetCreditBalanceHistory(limit)
+			if err == nil {
+				resp["history"] = history
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleRefreshCreditBalance triggers an immediate credit balance poll.
+// @Summary Trigger immediate credit balance poll
+// @Description Forces an immediate fetch of the credit balance from Cloudloop API
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/credits/balance/refresh [post]
+func (s *Server) handleRefreshCreditBalance(w http.ResponseWriter, r *http.Request) {
+	if s.creditPoller == nil {
+		writeError(w, http.StatusServiceUnavailable, "credit balance poller not configured")
+		return
+	}
+	if err := s.creditPoller.FetchNow(r.Context()); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "refreshed"})
+}
+
 func now() int64 {
 	return time.Now().Unix()
 }

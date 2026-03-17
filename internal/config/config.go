@@ -42,6 +42,37 @@ type Config struct {
 
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
+
+	// APRS-IS IGate
+	APRSISEnabled  bool
+	APRSISServer   string
+	APRSISCallsign string
+	APRSISPasscode string
+
+	// Hub store — database backend selection
+	HubMode        string // "standalone" (SQLite) or "cluster" (PostgreSQL)
+	HubDatabaseURL string // PostgreSQL connection URL (cluster mode only)
+	HubDBPath      string // SQLite path (standalone mode only)
+	HubRedisURL    string // Redis URL for rate limiting + dedup (cluster mode)
+
+	// Message bus (NATS JetStream or Paho MQTT fallback)
+	HubBusBackend  string // "nats" (default) or "mqtt" (Paho fallback)
+	HubNATSURL     string // External NATS URL for cluster mode (nats://host:4222)
+	HubNATSDataDir string // JetStream storage directory (embedded mode)
+	HubMQTTPort    int    // MQTT adapter port for embedded NATS (default 1883)
+	HubNATSPort    int    // NATS client port for embedded NATS (default 4222)
+	HubMQTTURL     string // MQTT broker URL for Paho fallback (tcp://host:1883)
+
+	// Cloudloop API (Iridium credit balance polling)
+	HubCloudloopAPIKey       string
+	HubCloudloopAPISecret    string
+	HubCloudloopBaseURL      string
+	HubCreditPollIntervalMin int
+
+	// Backup
+	BackupDir           string
+	BackupIntervalHours int
+	BackupMaxKeep       int
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -67,6 +98,32 @@ func Load() *Config {
 		MSVQSCTimeoutSec:    envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
 		MSVQSCCodebook:      envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
+
+		APRSISEnabled:  envStr("HUB_APRSIS_ENABLED", "") == "true" || envStr("HUB_APRSIS_ENABLED", "") == "1",
+		APRSISServer:   envStr("HUB_APRSIS_SERVER", "euro.aprs2.net:14580"),
+		APRSISCallsign: envStr("HUB_APRSIS_CALLSIGN", ""),
+		APRSISPasscode: envStr("HUB_APRSIS_PASSCODE", ""),
+
+		HubMode:        envStr("HUB_MODE", "standalone"),
+		HubDatabaseURL: envStr("HUB_DATABASE_URL", ""),
+		HubDBPath:      envStr("HUB_DB_PATH", "/data/hub.db"),
+		HubRedisURL:    envStr("HUB_REDIS_URL", ""),
+
+		HubBusBackend:  envStr("HUB_BUS_BACKEND", "nats"),
+		HubNATSURL:     envStr("HUB_NATS_URL", ""),
+		HubNATSDataDir: envStr("HUB_NATS_DATA_DIR", "/cubeos/data/nats"),
+		HubMQTTPort:    envInt("HUB_MQTT_PORT", 1883),
+		HubNATSPort:    envInt("HUB_NATS_PORT", 4222),
+		HubMQTTURL:     envStr("HUB_MQTT_URL", ""),
+
+		HubCloudloopAPIKey:       envStr("HUB_CLOUDLOOP_API_KEY", ""),
+		HubCloudloopAPISecret:    envStr("HUB_CLOUDLOOP_API_SECRET", ""),
+		HubCloudloopBaseURL:      envStr("HUB_CLOUDLOOP_BASE_URL", "https://api.cloudloop.com"),
+		HubCreditPollIntervalMin: envInt("HUB_CREDIT_POLL_INTERVAL_MIN", 60),
+
+		BackupDir:           envStr("MESHSAT_BACKUP_DIR", "/cubeos/data/backups"),
+		BackupIntervalHours: envInt("MESHSAT_BACKUP_INTERVAL_HOURS", 24),
+		BackupMaxKeep:       envInt("MESHSAT_BACKUP_MAX_KEEP", 7),
 	}
 }
 
