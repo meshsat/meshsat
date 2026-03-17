@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"meshsat/internal/auth"
 	"meshsat/internal/vpn"
 )
 
@@ -102,7 +103,8 @@ func (s *Server) handleProvisionVPNPeer(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	d, err := s.db.GetDevice(deviceID)
+	tid := auth.TenantIDFromContext(r.Context())
+	d, err := s.db.GetDevice(deviceID, tid)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return

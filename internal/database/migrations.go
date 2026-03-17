@@ -746,6 +746,53 @@ var migrations = []string{
 		updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_vpn_peers_wg_peer ON vpn_peers(wg_peer_id);`,
+
+	// v32: OAuth2/OIDC user registry (MESHSAT-94).
+	// Tracks users who have authenticated via OIDC. The external_id is the
+	// OIDC subject claim, unique per identity provider. Sessions are in-memory
+	// (sufficient for single-node Hub; cluster mode would use Redis).
+	`CREATE TABLE IF NOT EXISTS auth_users (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		external_id TEXT NOT NULL,
+		provider    TEXT NOT NULL DEFAULT 'oidc',
+		email       TEXT NOT NULL DEFAULT '',
+		name        TEXT NOT NULL DEFAULT '',
+		username    TEXT NOT NULL DEFAULT '',
+		picture     TEXT NOT NULL DEFAULT '',
+		role        TEXT NOT NULL DEFAULT 'user',
+		last_login  TEXT NOT NULL DEFAULT (datetime('now')),
+		created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(provider, external_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users(email);
+	CREATE INDEX IF NOT EXISTS idx_auth_users_ext ON auth_users(provider, external_id);`,
+
+	// v33: Tenant isolation (MESHSAT-96).
+	// Add tenant_id to all user-facing resource tables. Default 'default' preserves
+	// backward compatibility — existing data and single-tenant deployments continue
+	// to work without configuration. When HUB_AUTH_ENABLED=true and a tenant claim
+	// is present in the OIDC token, all CRUD operations are scoped to the tenant.
+	`ALTER TABLE devices ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_devices_tenant ON devices(tenant_id);
+
+	ALTER TABLE contacts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_contacts_tenant ON contacts(tenant_id);
+
+	ALTER TABLE interfaces ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_interfaces_tenant ON interfaces(tenant_id);
+
+	ALTER TABLE access_rules ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_access_rules_tenant ON access_rules(tenant_id);
+
+	ALTER TABLE object_groups ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_object_groups_tenant ON object_groups(tenant_id);
+
+	ALTER TABLE failover_groups ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_failover_groups_tenant ON failover_groups(tenant_id);
+
+	ALTER TABLE audit_log ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);`,
 }
 
 func (db *DB) migrate() error {

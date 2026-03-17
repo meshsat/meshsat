@@ -9,6 +9,7 @@ type Contact struct {
 	ID          int64            `json:"id"`
 	DisplayName string           `json:"display_name"`
 	Notes       string           `json:"notes"`
+	TenantID    string           `json:"tenant_id"`
 	Addresses   []ContactAddress `json:"addresses,omitempty"`
 	CreatedAt   string           `json:"created_at"`
 	UpdatedAt   string           `json:"updated_at"`
@@ -39,9 +40,9 @@ type UnifiedMessage struct {
 	RawJSON   string `json:"raw,omitempty"`
 }
 
-// GetContacts returns all contacts with their addresses.
-func (db *DB) GetContacts() ([]Contact, error) {
-	rows, err := db.Query("SELECT id, display_name, notes, created_at, updated_at FROM contacts ORDER BY display_name")
+// GetContacts returns all contacts with their addresses, scoped to the given tenant.
+func (db *DB) GetContacts(tenantID string) ([]Contact, error) {
+	rows, err := db.Query("SELECT id, display_name, notes, tenant_id, created_at, updated_at FROM contacts WHERE tenant_id = ? ORDER BY display_name", tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("get contacts: %w", err)
 	}
@@ -50,7 +51,7 @@ func (db *DB) GetContacts() ([]Contact, error) {
 	var contacts []Contact
 	for rows.Next() {
 		var c Contact
-		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.TenantID, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan contact: %w", err)
 		}
 		contacts = append(contacts, c)
@@ -67,11 +68,37 @@ func (db *DB) GetContacts() ([]Contact, error) {
 	return contacts, nil
 }
 
-// GetContact returns a single contact with addresses.
-func (db *DB) GetContact(id int64) (*Contact, error) {
+// GetContactsAnyTenant returns all contacts across all tenants.
+// Used by system-level operations (backup, restore).
+func (db *DB) GetContactsAnyTenant() ([]Contact, error) {
+	rows, err := db.Query("SELECT id, display_name, notes, tenant_id, created_at, updated_at FROM contacts ORDER BY display_name")
+	if err != nil {
+		return nil, fmt.Errorf("get all contacts: %w", err)
+	}
+	defer rows.Close()
+	var contacts []Contact
+	for rows.Next() {
+		var c Contact
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.TenantID, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan contact: %w", err)
+		}
+		contacts = append(contacts, c)
+	}
+	for i := range contacts {
+		addrs, err := db.GetContactAddresses(contacts[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		contacts[i].Addresses = addrs
+	}
+	return contacts, nil
+}
+
+// GetContact returns a single contact with addresses, scoped to the given tenant.
+func (db *DB) GetContact(id int64, tenantID string) (*Contact, error) {
 	var c Contact
-	err := db.QueryRow("SELECT id, display_name, notes, created_at, updated_at FROM contacts WHERE id = ?", id).
-		Scan(&c.ID, &c.DisplayName, &c.Notes, &c.CreatedAt, &c.UpdatedAt)
+	err := db.QueryRow("SELECT id, display_name, notes, tenant_id, created_at, updated_at FROM contacts WHERE id = ? AND tenant_id = ?", id, tenantID).
+		Scan(&c.ID, &c.DisplayName, &c.Notes, &c.TenantID, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get contact %d: %w", id, err)
 	}
@@ -84,24 +111,30 @@ func (db *DB) GetContact(id int64) (*Contact, error) {
 }
 
 // CreateContact creates a new contact and returns its ID.
-func (db *DB) CreateContact(name, notes string) (int64, error) {
-	res, err := db.Exec("INSERT INTO contacts (display_name, notes) VALUES (?, ?)", name, notes)
+func (db *DB) CreateContact(name, notes, tenantID string) (int64, error) {
+	res, err := db.Exec("INSERT INTO contacts (display_name, notes, tenant_id) VALUES (?, ?, ?)", name, notes, tenantID)
 	if err != nil {
 		return 0, fmt.Errorf("create contact: %w", err)
 	}
 	return res.LastInsertId()
 }
 
-// UpdateContact updates a contact's name and notes.
-func (db *DB) UpdateContact(id int64, name, notes string) error {
-	_, err := db.Exec("UPDATE contacts SET display_name = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		name, notes, id)
-	return err
+// UpdateContact updates a contact's name and notes, scoped to the given tenant.
+func (db *DB) UpdateContact(id int64, name, notes, tenantID string) error {
+	res, err := db.Exec("UPDATE contacts SET display_name = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?",
+		name, notes, id, tenantID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("contact %d not found for tenant %s", id, tenantID)
+	}
+	return nil
 }
 
-// DeleteContact removes a contact and all its addresses (CASCADE).
-func (db *DB) DeleteContact(id int64) error {
-	// SQLite foreign_keys must be enabled for CASCADE; do explicit delete as safety net
+// DeleteContact removes a contact and all its addresses (CASCADE), scoped to the given tenant.
+func (db *DB) DeleteContact(id int64, tenantID string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -110,8 +143,13 @@ func (db *DB) DeleteContact(id int64) error {
 	if _, err := tx.Exec("DELETE FROM contact_addresses WHERE contact_id = ?", id); err != nil {
 		return fmt.Errorf("delete addresses for contact %d: %w", id, err)
 	}
-	if _, err := tx.Exec("DELETE FROM contacts WHERE id = ?", id); err != nil {
+	res, err := tx.Exec("DELETE FROM contacts WHERE id = ? AND tenant_id = ?", id, tenantID)
+	if err != nil {
 		return fmt.Errorf("delete contact %d: %w", id, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("contact %d not found for tenant %s", id, tenantID)
 	}
 	return tx.Commit()
 }
@@ -162,14 +200,16 @@ func (db *DB) DeleteContactAddress(id int64) error {
 	return err
 }
 
-// ResolveContact looks up a contact by transport type and address.
-func (db *DB) ResolveContact(addrType, address string) (*Contact, error) {
+// ResolveContact looks up a contact by transport type and address, scoped to the given tenant.
+func (db *DB) ResolveContact(addrType, address, tenantID string) (*Contact, error) {
 	var contactID int64
-	err := db.QueryRow("SELECT contact_id FROM contact_addresses WHERE type = ? AND address = ?", addrType, address).Scan(&contactID)
+	err := db.QueryRow(
+		"SELECT ca.contact_id FROM contact_addresses ca JOIN contacts c ON c.id = ca.contact_id WHERE ca.type = ? AND ca.address = ? AND c.tenant_id = ?",
+		addrType, address, tenantID).Scan(&contactID)
 	if err != nil {
 		return nil, err
 	}
-	return db.GetContact(contactID)
+	return db.GetContact(contactID, tenantID)
 }
 
 // GetUnifiedConversation returns all messages across all addresses for a contact, sorted by time.
@@ -269,7 +309,7 @@ func sortUnifiedMessages(msgs []UnifiedMessage) {
 }
 
 // LookupContactByAddress returns the contact name for a given address type + address.
-// Returns empty string if not found. Used by conversation views to resolve names.
+// Returns empty string if not found. Not tenant-scoped — used by engine-level display logic.
 func (db *DB) LookupContactByAddress(addrType, address string) string {
 	var name string
 	_ = db.QueryRow(
@@ -278,12 +318,12 @@ func (db *DB) LookupContactByAddress(addrType, address string) string {
 	return name
 }
 
-// GetContactsWithAddressType returns contacts that have at least one address of the given type.
-func (db *DB) GetContactsWithAddressType(addrType string) ([]Contact, error) {
+// GetContactsWithAddressType returns contacts that have at least one address of the given type, scoped to tenant.
+func (db *DB) GetContactsWithAddressType(addrType, tenantID string) ([]Contact, error) {
 	rows, err := db.Query(
-		`SELECT DISTINCT c.id, c.display_name, c.notes, c.created_at, c.updated_at
+		`SELECT DISTINCT c.id, c.display_name, c.notes, c.tenant_id, c.created_at, c.updated_at
 		 FROM contacts c JOIN contact_addresses ca ON c.id = ca.contact_id
-		 WHERE ca.type = ? ORDER BY c.display_name`, addrType)
+		 WHERE ca.type = ? AND c.tenant_id = ? ORDER BY c.display_name`, addrType, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +332,7 @@ func (db *DB) GetContactsWithAddressType(addrType string) ([]Contact, error) {
 	var contacts []Contact
 	for rows.Next() {
 		var c Contact
-		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.TenantID, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		contacts = append(contacts, c)
@@ -309,7 +349,9 @@ func (db *DB) GetContactsWithAddressType(addrType string) ([]Contact, error) {
 
 // SyncSMSContactToUnified ensures an SMS contact exists in the unified contacts table.
 // Used as a bridge during transition — old code creating sms_contacts also syncs to unified.
+// Uses "default" tenant since this is called from engine-level code without HTTP context.
 func (db *DB) SyncSMSContactToUnified(name, phone, notes string, autoFwd bool) error {
+	const syncTenantID = "default"
 	// Check if address already exists
 	var existing int
 	err := db.QueryRow("SELECT COUNT(*) FROM contact_addresses WHERE type = 'sms' AND address = ?", phone).Scan(&existing)
@@ -328,7 +370,7 @@ func (db *DB) SyncSMSContactToUnified(name, phone, notes string, autoFwd bool) e
 	}
 
 	// Create new unified contact
-	cID, err := db.CreateContact(name, notes)
+	cID, err := db.CreateContact(name, notes, syncTenantID)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"meshsat/internal/auth"
 	"meshsat/internal/database"
 	"meshsat/internal/device"
 )
@@ -66,7 +67,8 @@ func toDeviceResponse(d *database.Device) deviceResponse {
 // @Success 200 {array} deviceResponse
 // @Router /api/device-registry [get]
 func (s *Server) handleGetRegisteredDevices(w http.ResponseWriter, r *http.Request) {
-	devices, err := s.db.GetDevices()
+	tid := auth.TenantIDFromContext(r.Context())
+	devices, err := s.db.GetDevices(tid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list devices")
 		return
@@ -93,7 +95,8 @@ func (s *Server) handleGetRegisteredDevice(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	d, err := s.db.GetDevice(id)
+	tid := auth.TenantIDFromContext(r.Context())
+	d, err := s.db.GetDevice(id, tid)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
@@ -132,8 +135,10 @@ func (s *Server) handleCreateRegisteredDevice(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Check for duplicate IMEI
-	existing, _ := s.db.GetDeviceByIMEI(req.IMEI)
+	tid := auth.TenantIDFromContext(r.Context())
+
+	// Check for duplicate IMEI within tenant
+	existing, _ := s.db.GetDeviceByIMEI(req.IMEI, tid)
 	if existing != nil {
 		writeError(w, http.StatusConflict, "device with this IMEI already exists")
 		return
@@ -142,12 +147,12 @@ func (s *Server) handleCreateRegisteredDevice(w http.ResponseWriter, r *http.Req
 	if req.Label == "" {
 		req.Label = "Device " + req.IMEI[len(req.IMEI)-4:]
 	}
-	id, err := s.db.CreateDevice(req.IMEI, req.Label, req.Type, req.Notes)
+	id, err := s.db.CreateDevice(req.IMEI, req.Label, req.Type, req.Notes, tid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create device: "+err.Error())
 		return
 	}
-	d, _ := s.db.GetDevice(id)
+	d, _ := s.db.GetDevice(id, tid)
 
 	// Fire device-created callback (e.g., auto-provision VPN peer)
 	if s.onDeviceCreated != nil {
@@ -174,8 +179,9 @@ func (s *Server) handleUpdateRegisteredDevice(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	// Verify device exists
-	if _, err := s.db.GetDevice(id); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	// Verify device exists in this tenant
+	if _, err := s.db.GetDevice(id, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
@@ -188,11 +194,11 @@ func (s *Server) handleUpdateRegisteredDevice(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := s.db.UpdateDevice(id, req.Label, req.Type, req.Notes); err != nil {
+	if err := s.db.UpdateDevice(id, req.Label, req.Type, req.Notes, tid); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update device")
 		return
 	}
-	d, _ := s.db.GetDevice(id)
+	d, _ := s.db.GetDevice(id, tid)
 	writeJSON(w, http.StatusOK, toDeviceResponse(d))
 }
 
@@ -210,7 +216,8 @@ func (s *Server) handleDeleteRegisteredDevice(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	if _, err := s.db.GetDevice(id); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	if _, err := s.db.GetDevice(id, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
@@ -219,7 +226,7 @@ func (s *Server) handleDeleteRegisteredDevice(w http.ResponseWriter, r *http.Req
 		s.onDeviceDeleted(id)
 	}
 
-	if err := s.db.DeleteDevice(id); err != nil {
+	if err := s.db.DeleteDevice(id, tid); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete device")
 		return
 	}

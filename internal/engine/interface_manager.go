@@ -127,7 +127,7 @@ func (m *InterfaceManager) notifyStateChange(ifaceID, channelType string, state 
 func (m *InterfaceManager) Start(ctx context.Context) error {
 	ctx, m.cancelFn = context.WithCancel(ctx)
 
-	ifaces, err := m.db.GetAllInterfaces()
+	ifaces, err := m.db.GetAllInterfacesAnyTenant()
 	if err != nil {
 		log.Warn().Err(err).Msg("ifacemgr: failed to load interfaces from DB")
 		return nil

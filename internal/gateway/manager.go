@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/store"
 	"meshsat/internal/transport"
 )
 
@@ -25,9 +26,11 @@ type Manager struct {
 	cell            transport.CellTransport      // optional, for cellular gateway
 	astro           transport.AstrocastTransport // optional, for astrocast gateway
 	predictor       PassPredictor                // optional, for pass scheduler
+	constellation   *ConstellationManager        // unified satellite send interface
 	onReceiverStart ReceiverStartFunc            // called when a gateway starts
 	onEventEmit     EventEmitFunc                // SSE event emitter callback
 	nodeNameFn      func(uint32) string          // resolves mesh node ID to name
+	hubStore        store.Store                  // optional, for webhook delivery logs
 	running         map[string]Gateway           // legacy: keyed by type ("iridium")
 	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
@@ -39,6 +42,7 @@ func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 	return &Manager{
 		db:             db,
 		sat:            sat,
+		constellation:  NewConstellationManager(db),
 		running:        make(map[string]Gateway),
 		runningByIface: make(map[string]Gateway),
 	}
@@ -73,6 +77,16 @@ func (m *Manager) SetEventEmitFunc(fn EventEmitFunc) {
 // SetNodeNameResolver sets the function used to resolve mesh node IDs to names for SMS.
 func (m *Manager) SetNodeNameResolver(fn func(uint32) string) {
 	m.nodeNameFn = fn
+}
+
+// SetHubStore sets the hub store for webhook delivery log persistence.
+func (m *Manager) SetHubStore(s store.Store) {
+	m.hubStore = s
+}
+
+// GetConstellationManager returns the constellation manager for unified satellite sends.
+func (m *Manager) GetConstellationManager() *ConstellationManager {
+	return m.constellation
 }
 
 // GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
@@ -115,6 +129,10 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Lock()
 		m.running[cfg.Type] = gw
 		m.mu.Unlock()
+		// Register satellite backends with constellation manager
+		if sb, ok := gw.(SatelliteBackend); ok && m.constellation != nil {
+			m.constellation.RegisterBackend(sb)
+		}
 		if m.onReceiverStart != nil {
 			m.onReceiverStart(ctx, gw)
 		}
@@ -220,6 +238,11 @@ func (m *Manager) StartGateway(ctx context.Context, gwType string) error {
 	m.syncIfaceMap(gwType, gw)
 	m.mu.Unlock()
 
+	// Register satellite backends with constellation manager
+	if sb, ok := gw.(SatelliteBackend); ok && m.constellation != nil {
+		m.constellation.RegisterBackend(sb)
+	}
+
 	if m.onReceiverStart != nil {
 		m.onReceiverStart(ctx, gw)
 	}
@@ -242,6 +265,11 @@ func (m *Manager) StopGateway(gwType string) error {
 	// Clean interface map entries pointing to this gateway
 	m.unsyncIfaceMap(gw)
 	m.mu.Unlock()
+
+	// Unregister from constellation manager
+	if sb, ok := gw.(SatelliteBackend); ok && m.constellation != nil {
+		m.constellation.UnregisterBackend(sb.ConstellationID())
+	}
 
 	if err := gw.Stop(); err != nil {
 		return err
@@ -427,7 +455,7 @@ func (m *Manager) StopInterfaceGateway(ifaceID string) error {
 // bootstrapInterfaceGateways maps existing running gateways to their interface IDs.
 // This bridges the legacy gateway_config start path with the v0.3.0 interface model.
 func (m *Manager) bootstrapInterfaceGateways() {
-	ifaces, err := m.db.GetAllInterfaces()
+	ifaces, err := m.db.GetAllInterfacesAnyTenant()
 	if err != nil {
 		log.Warn().Err(err).Msg("gwmgr: failed to load interfaces for gateway mapping")
 		return
@@ -458,7 +486,7 @@ func (m *Manager) bootstrapInterfaceGateways() {
 // syncIfaceMap registers a gateway under all matching interface IDs.
 // Must be called with m.mu held.
 func (m *Manager) syncIfaceMap(gwType string, gw Gateway) {
-	ifaces, err := m.db.GetAllInterfaces()
+	ifaces, err := m.db.GetAllInterfacesAnyTenant()
 	if err != nil {
 		return
 	}
@@ -599,7 +627,11 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewWebhookGateway(*cfg, m.db), nil
+		gw := NewWebhookGateway(*cfg, m.db)
+		if m.hubStore != nil {
+			gw.SetHubStore(m.hubStore)
+		}
+		return gw, nil
 	case "astrocast":
 		if m.astro == nil {
 			return nil, fmt.Errorf("astrocast transport not available")

@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"gopkg.in/yaml.v3"
+
+	"meshsat/internal/auth"
 )
 
 // deviceConfigVersionResponse is the API response for a config version.
@@ -35,7 +37,8 @@ func (s *Server) handleGetDeviceConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	if _, err := s.db.GetDevice(deviceID); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	if _, err := s.db.GetDevice(deviceID, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
@@ -74,7 +77,8 @@ func (s *Server) handlePutDeviceConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	if _, err := s.db.GetDevice(deviceID); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	if _, err := s.db.GetDevice(deviceID, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
@@ -128,7 +132,8 @@ func (s *Server) handleGetDeviceConfigVersions(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	if _, err := s.db.GetDevice(deviceID); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	if _, err := s.db.GetDevice(deviceID, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
@@ -166,7 +171,8 @@ func (s *Server) handleGetDeviceConfigVersion(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	if _, err := s.db.GetDevice(deviceID); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	if _, err := s.db.GetDevice(deviceID, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
@@ -206,7 +212,8 @@ func (s *Server) handleRollbackDeviceConfig(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid device ID")
 		return
 	}
-	if _, err := s.db.GetDevice(deviceID); err != nil {
+	tid := auth.TenantIDFromContext(r.Context())
+	if _, err := s.db.GetDevice(deviceID, tid); err != nil {
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}

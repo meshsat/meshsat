@@ -27,6 +27,7 @@ type Provider struct {
 	verifier     *oidc.IDTokenVerifier
 	issuerURL    string
 	clientID     string
+	tenantClaim  string // OIDC claim name for tenant ID extraction
 
 	// End-session endpoint for RP-Initiated Logout (discovered from OIDC metadata).
 	endSessionURL string
@@ -49,6 +50,7 @@ type ProviderConfig struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       string // space-separated, e.g. "openid profile email"
+	TenantClaim  string // OIDC claim name for tenant ID (e.g. "tenant_id", "org_id")
 }
 
 // UserInfo represents the authenticated user extracted from an OIDC token.
@@ -58,6 +60,7 @@ type UserInfo struct {
 	Name     string `json:"name"`
 	Username string `json:"preferred_username"`
 	Picture  string `json:"picture,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
 }
 
 // NewProvider creates a new OIDC provider by performing discovery on the issuer URL.
@@ -109,6 +112,7 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 		verifier:      verifier,
 		issuerURL:     cfg.IssuerURL,
 		clientID:      cfg.ClientID,
+		tenantClaim:   cfg.TenantClaim,
 		endSessionURL: providerClaims.EndSessionURL,
 		states:        make(map[string]*authState),
 	}
@@ -206,6 +210,7 @@ func (p *Provider) Exchange(ctx context.Context, code, codeVerifier string) (*Us
 		Name:     claims.Name,
 		Username: claims.PreferredUsername,
 		Picture:  claims.Picture,
+		TenantID: p.extractTenantClaim(idToken),
 	}
 
 	return user, token, nil
@@ -234,6 +239,7 @@ func (p *Provider) VerifyIDToken(ctx context.Context, rawToken string) (*UserInf
 		Name:     claims.Name,
 		Username: claims.PreferredUsername,
 		Picture:  claims.Picture,
+		TenantID: p.extractTenantClaim(idToken),
 	}, nil
 }
 
@@ -278,6 +284,7 @@ func (p *Provider) RefreshTokens(ctx context.Context, refreshToken string) (*Use
 		Name:     claims.Name,
 		Username: claims.PreferredUsername,
 		Picture:  claims.Picture,
+		TenantID: p.extractTenantClaim(idToken),
 	}, newToken, nil
 }
 
@@ -347,6 +354,29 @@ func (p *Provider) cleanupStates(ctx context.Context) {
 			p.stateMu.Unlock()
 		}
 	}
+}
+
+// TenantClaim returns the configured OIDC claim name for tenant extraction.
+func (p *Provider) TenantClaim() string {
+	return p.tenantClaim
+}
+
+// extractTenantClaim extracts the tenant ID from an OIDC ID token using the configured claim name.
+// Returns empty string if no tenant claim is configured or the claim is not present.
+func (p *Provider) extractTenantClaim(idToken *oidc.IDToken) string {
+	if p.tenantClaim == "" {
+		return ""
+	}
+	var allClaims map[string]interface{}
+	if err := idToken.Claims(&allClaims); err != nil {
+		return ""
+	}
+	if val, ok := allClaims[p.tenantClaim]; ok {
+		if s, ok := val.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func randomState() (string, error) {

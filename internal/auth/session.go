@@ -20,6 +20,7 @@ const (
 type Session struct {
 	ID        string
 	User      UserInfo
+	TenantID  string // resolved tenant for this session
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
@@ -57,6 +58,7 @@ func (s *SessionStore) Create(user *UserInfo, oauth2Token *oauth2.Token, rawIDTo
 	session := &Session{
 		ID:        id,
 		User:      *user,
+		TenantID:  user.TenantID,
 		CreatedAt: now,
 		ExpiresAt: now.Add(SessionMaxAge),
 		IDToken:   rawIDToken,

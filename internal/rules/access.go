@@ -42,7 +42,7 @@ type AccessMatchResult struct {
 type AccessEvaluator struct {
 	mu     sync.RWMutex
 	rules  []database.AccessRule
-	rates  map[int64]*ratelimit.TokenBucket
+	rates  map[int64]ratelimit.Limiter
 	groups map[string][]string // object group ID → resolved members
 	db     *database.DB
 }
@@ -51,7 +51,7 @@ type AccessEvaluator struct {
 func NewAccessEvaluator(db *database.DB) *AccessEvaluator {
 	return &AccessEvaluator{
 		db:     db,
-		rates:  make(map[int64]*ratelimit.TokenBucket),
+		rates:  make(map[int64]ratelimit.Limiter),
 		groups: make(map[string][]string),
 	}
 }
@@ -62,12 +62,12 @@ func (e *AccessEvaluator) ReloadFromDB() error {
 		return nil
 	}
 
-	rules, err := e.db.GetAllAccessRules()
+	rules, err := e.db.GetAllAccessRulesAnyTenant()
 	if err != nil {
 		return err
 	}
 
-	groups, err := e.db.GetAllObjectGroups()
+	groups, err := e.db.GetAllObjectGroupsAnyTenant()
 	if err != nil {
 		log.Warn().Err(err).Msg("access-eval: failed to load object groups")
 		groups = nil
@@ -77,7 +77,7 @@ func (e *AccessEvaluator) ReloadFromDB() error {
 	defer e.mu.Unlock()
 
 	e.rules = rules
-	e.rates = make(map[int64]*ratelimit.TokenBucket)
+	e.rates = make(map[int64]ratelimit.Limiter)
 	e.groups = make(map[string][]string)
 
 	for _, r := range rules {

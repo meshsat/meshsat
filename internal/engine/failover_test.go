@@ -26,7 +26,7 @@ func setupFailoverTest(t *testing.T) (*FailoverResolver, *InterfaceManager, *dat
 	}
 
 	// Load interfaces into manager runtime (simulates Start without device scanning)
-	ifaces, _ := db.GetAllInterfaces()
+	ifaces, _ := db.GetAllInterfacesAnyTenant()
 	ifaceMgr.mu.Lock()
 	for _, iface := range ifaces {
 		ifaceMgr.states[iface.ID] = &interfaceRuntime{
