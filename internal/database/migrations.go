@@ -672,6 +672,20 @@ var migrations = []string{
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_imei ON devices(imei);`,
+
+	// v27: Per-device YAML configuration versioning (MESHSAT-99).
+	// Stores immutable config snapshots per device with auto-incrementing version numbers.
+	// Each save creates a new version; rollback creates a new version from an old snapshot.
+	`CREATE TABLE IF NOT EXISTS device_config_versions (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		device_id  INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		version    INTEGER NOT NULL,
+		yaml       TEXT NOT NULL,
+		comment    TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(device_id, version)
+	);
+	CREATE INDEX IF NOT EXISTS idx_device_config_device ON device_config_versions(device_id, version DESC);`,
 }
 
 func (db *DB) migrate() error {

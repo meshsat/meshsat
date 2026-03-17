@@ -42,6 +42,7 @@ type Server struct {
 	geofenceMon   *engine.GeofenceMonitor
 	deadman       *engine.DeadManSwitch
 	burstQueue    *engine.BurstQueue
+	onMOCallback  func(imei string)
 }
 
 // NewServer creates a new API server.
@@ -408,6 +409,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/device-registry/{id}", s.handleGetRegisteredDevice)
 		r.Put("/device-registry/{id}", s.handleUpdateRegisteredDevice)
 		r.Delete("/device-registry/{id}", s.handleDeleteRegisteredDevice)
+
+		// Device configuration versioning (MESHSAT-99)
+		r.Get("/device-registry/{id}/config", s.handleGetDeviceConfig)
+		r.Put("/device-registry/{id}/config", s.handlePutDeviceConfig)
+		r.Get("/device-registry/{id}/config/versions", s.handleGetDeviceConfigVersions)
+		r.Get("/device-registry/{id}/config/versions/{version}", s.handleGetDeviceConfigVersion)
+		r.Post("/device-registry/{id}/config/rollback/{version}", s.handleRollbackDeviceConfig)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

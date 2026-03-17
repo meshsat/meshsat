@@ -69,10 +69,20 @@ func (db *DB) UpdateDevice(id int64, label, deviceType, notes string) error {
 	return err
 }
 
-// DeleteDevice removes a device by ID.
+// DeleteDevice removes a device and its config versions by ID.
 func (db *DB) DeleteDevice(id int64) error {
-	_, err := db.Exec("DELETE FROM devices WHERE id=?", id)
-	return err
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM device_config_versions WHERE device_id = ?", id); err != nil {
+		return fmt.Errorf("delete config versions for device %d: %w", id, err)
+	}
+	if _, err := tx.Exec("DELETE FROM devices WHERE id = ?", id); err != nil {
+		return fmt.Errorf("delete device %d: %w", id, err)
+	}
+	return tx.Commit()
 }
 
 // TouchDeviceLastSeen updates the last_seen timestamp for a device by IMEI.
