@@ -659,6 +659,19 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_routing_links_dest ON routing_links(dest_hash);
 	CREATE INDEX IF NOT EXISTS idx_routing_links_state ON routing_links(state);`,
+
+	// v26: Device registry — tracks physical devices by IMEI (MESHSAT-98).
+	`CREATE TABLE IF NOT EXISTS devices (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		imei       TEXT NOT NULL UNIQUE,
+		label      TEXT NOT NULL DEFAULT '',
+		type       TEXT NOT NULL DEFAULT '',
+		notes      TEXT NOT NULL DEFAULT '',
+		last_seen  TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_imei ON devices(imei);`,
 }
 
 func (db *DB) migrate() error {

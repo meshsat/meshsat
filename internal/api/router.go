@@ -35,13 +35,13 @@ type Server struct {
 	linkMgr       *routing.LinkManager
 	destTable     *routing.DestinationTable
 	routingID     *routing.Identity
-	paidRateLimit  int
-	sos            *SOSState
-	webHandler     http.Handler
-	healthScorer   *engine.HealthScorer
-	geofenceMon    *engine.GeofenceMonitor
-	deadman        *engine.DeadManSwitch
-	burstQueue     *engine.BurstQueue
+	paidRateLimit int
+	sos           *SOSState
+	webHandler    http.Handler
+	healthScorer  *engine.HealthScorer
+	geofenceMon   *engine.GeofenceMonitor
+	deadman       *engine.DeadManSwitch
+	burstQueue    *engine.BurstQueue
 }
 
 // NewServer creates a new API server.
@@ -231,6 +231,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/webhooks/cellular/inbound", s.handleWebhookCellularInbound) // backwards compat
 		r.Get("/webhooks/log", s.handleGetWebhookLog)
 
+		// RockBLOCK webhook (Iridium SBD MO via HTTP)
+		r.Post("/webhook/rockblock", s.handleRockBLOCKWebhook)
+
 		// SMS contacts (legacy — backward compatible, reads from sms_contacts)
 		r.Get("/cellular/contacts", s.handleGetSMSContacts)
 		r.Post("/cellular/contacts", s.handleCreateSMSContact)
@@ -398,6 +401,13 @@ func (s *Server) Router() http.Handler {
 		// Burst queue
 		r.Get("/burst/status", s.handleGetBurstStatus)
 		r.Post("/burst/flush", s.handleFlushBurst)
+
+		// Device registry (IMEI-keyed)
+		r.Get("/device-registry", s.handleGetRegisteredDevices)
+		r.Post("/device-registry", s.handleCreateRegisteredDevice)
+		r.Get("/device-registry/{id}", s.handleGetRegisteredDevice)
+		r.Put("/device-registry/{id}", s.handleUpdateRegisteredDevice)
+		r.Delete("/device-registry/{id}", s.handleDeleteRegisteredDevice)
 	})
 
 	// Web UI (SPA) — catch-all after API routes
