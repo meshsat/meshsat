@@ -730,6 +730,22 @@ var migrations = []string{
 		fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_credit_balance_fetched ON credit_balance(fetched_at);`,
+
+	// v31: WireGuard VPN peer management (MESHSAT-119).
+	// Maps registered devices to WireGuard peers for tunnel termination.
+	`CREATE TABLE IF NOT EXISTS vpn_peers (
+		device_id      INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+		wg_peer_id     TEXT NOT NULL DEFAULT '',
+		public_key     TEXT NOT NULL DEFAULT '',
+		allocated_ip   TEXT NOT NULL DEFAULT '',
+		enabled        INTEGER NOT NULL DEFAULT 1,
+		last_handshake TEXT NOT NULL DEFAULT '',
+		transfer_rx    INTEGER NOT NULL DEFAULT 0,
+		transfer_tx    INTEGER NOT NULL DEFAULT 0,
+		created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_vpn_peers_wg_peer ON vpn_peers(wg_peer_id);`,
 }
 
 func (db *DB) migrate() error {

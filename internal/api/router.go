@@ -17,41 +17,45 @@ import (
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
+	"meshsat/internal/vpn"
 )
 
 // Server holds the API dependencies.
 type Server struct {
-	db             *database.DB
-	mesh           transport.MeshTransport
-	processor      *engine.Processor
-	gwManager      *gateway.Manager
-	accessEval     *rules.AccessEvaluator
-	tleMgr         *engine.TLEManager
-	scheduler      *gateway.PassScheduler
-	registry       *channel.Registry
-	astroTleMgr    *engine.AstrocastTLEManager
-	cellTransport  transport.CellTransport
-	gpsReader      *transport.GPSReader
-	ifaceMgr       *engine.InterfaceManager
-	signing        *engine.SigningService
-	dispatcher     *engine.Dispatcher
-	linkMgr        *routing.LinkManager
-	destTable      *routing.DestinationTable
-	routingID      *routing.Identity
-	paidRateLimit  int
-	sos            *SOSState
-	webHandler     http.Handler
-	healthScorer   *engine.HealthScorer
-	geofenceMon    *engine.GeofenceMonitor
-	deadman        *engine.DeadManSwitch
-	burstQueue     *engine.BurstQueue
-	onMOCallback   func(imei string)
-	satRateLimiter *ratelimit.SatelliteRateLimiter
-	backupDir      string
-	msgBus         bus.MessageBus // hub message bus (NATS or Paho)
-	rockblockDedup dedup.Dedup    // dedup by imei:momsn
-	webhookDedup   dedup.Dedup    // dedup by eventID:webhookID
-	creditPoller   *engine.CreditPoller
+	db              *database.DB
+	mesh            transport.MeshTransport
+	processor       *engine.Processor
+	gwManager       *gateway.Manager
+	accessEval      *rules.AccessEvaluator
+	tleMgr          *engine.TLEManager
+	scheduler       *gateway.PassScheduler
+	registry        *channel.Registry
+	astroTleMgr     *engine.AstrocastTLEManager
+	cellTransport   transport.CellTransport
+	gpsReader       *transport.GPSReader
+	ifaceMgr        *engine.InterfaceManager
+	signing         *engine.SigningService
+	dispatcher      *engine.Dispatcher
+	linkMgr         *routing.LinkManager
+	destTable       *routing.DestinationTable
+	routingID       *routing.Identity
+	paidRateLimit   int
+	sos             *SOSState
+	webHandler      http.Handler
+	healthScorer    *engine.HealthScorer
+	geofenceMon     *engine.GeofenceMonitor
+	deadman         *engine.DeadManSwitch
+	burstQueue      *engine.BurstQueue
+	onMOCallback    func(imei string)
+	satRateLimiter  *ratelimit.SatelliteRateLimiter
+	backupDir       string
+	msgBus          bus.MessageBus // hub message bus (NATS or Paho)
+	rockblockDedup  dedup.Dedup    // dedup by imei:momsn
+	webhookDedup    dedup.Dedup    // dedup by eventID:webhookID
+	creditPoller    *engine.CreditPoller
+	vpnMgr          *vpn.Manager        // WireGuard VPN peer manager (nil = disabled)
+	onDeviceCreated func(int64, string) // callback when device is registered
+	onDeviceDeleted func(int64)         // callback when device is deleted
 }
 
 // NewServer creates a new API server.
@@ -172,6 +176,16 @@ func (s *Server) SetMessageBus(mb bus.MessageBus) {
 // SetCreditPoller sets the Cloudloop credit balance poller for manual refresh.
 func (s *Server) SetCreditPoller(cp *engine.CreditPoller) {
 	s.creditPoller = cp
+}
+
+// SetOnDeviceCreated sets a callback fired after a new device is registered.
+func (s *Server) SetOnDeviceCreated(fn func(deviceID int64, label string)) {
+	s.onDeviceCreated = fn
+}
+
+// SetOnDeviceDeleted sets a callback fired after a device is deleted.
+func (s *Server) SetOnDeviceDeleted(fn func(deviceID int64)) {
+	s.onDeviceDeleted = fn
 }
 
 // Router builds the chi router with all API routes.
@@ -477,6 +491,17 @@ func (s *Server) Router() http.Handler {
 		r.Post("/backup/restore", s.handleBackupRestore)
 		r.Get("/backup/schedule", s.handleBackupSchedule)
 		r.Put("/backup/schedule", s.handleSetBackupSchedule)
+
+		// WireGuard VPN tunnel management (MESHSAT-119)
+		r.Get("/vpn/status", s.handleGetVPNStatus)
+		r.Get("/vpn/peers", s.handleGetVPNPeers)
+		r.Get("/vpn/peers/{device_id}", s.handleGetVPNPeer)
+		r.Post("/vpn/peers/{device_id}", s.handleProvisionVPNPeer)
+		r.Delete("/vpn/peers/{device_id}", s.handleDeleteVPNPeer)
+		r.Post("/vpn/peers/{device_id}/enable", s.handleEnableVPNPeer)
+		r.Post("/vpn/peers/{device_id}/disable", s.handleDisableVPNPeer)
+		r.Get("/vpn/peers/{device_id}/config", s.handleGetVPNPeerConfig)
+		r.Get("/vpn/peers/{device_id}/qrcode", s.handleGetVPNPeerQRCode)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

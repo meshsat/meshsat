@@ -148,6 +148,12 @@ func (s *Server) handleCreateRegisteredDevice(w http.ResponseWriter, r *http.Req
 		return
 	}
 	d, _ := s.db.GetDevice(id)
+
+	// Fire device-created callback (e.g., auto-provision VPN peer)
+	if s.onDeviceCreated != nil {
+		go s.onDeviceCreated(id, req.Label)
+	}
+
 	writeJSON(w, http.StatusCreated, toDeviceResponse(d))
 }
 
@@ -208,6 +214,11 @@ func (s *Server) handleDeleteRegisteredDevice(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "device not found")
 		return
 	}
+	// Fire device-deleted callback synchronously before DB cascade removes vpn_peers row
+	if s.onDeviceDeleted != nil {
+		s.onDeviceDeleted(id)
+	}
+
 	if err := s.db.DeleteDevice(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete device")
 		return
