@@ -90,11 +90,13 @@ func (s *Server) handleSetSatelliteRateLimit(w http.ResponseWriter, r *http.Requ
 	}
 
 	var req struct {
-		DailyLimit   *int     `json:"daily_limit"`
-		MonthlyLimit *int     `json:"monthly_limit"`
-		BurstSize    *int     `json:"burst_size"`
-		RefillRate   *float64 `json:"refill_rate"`
-		Enabled      *bool    `json:"enabled"`
+		DailyLimit         *int     `json:"daily_limit"`
+		MonthlyLimit       *int     `json:"monthly_limit"`
+		BurstSize          *int     `json:"burst_size"`
+		RefillRate         *float64 `json:"refill_rate"`
+		Enabled            *bool    `json:"enabled"`
+		DailyCreditLimit   *int     `json:"daily_credit_limit"`
+		MonthlyCreditLimit *int     `json:"monthly_credit_limit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -129,6 +131,12 @@ func (s *Server) handleSetSatelliteRateLimit(w http.ResponseWriter, r *http.Requ
 	}
 	if req.Enabled != nil {
 		rl.Enabled = *req.Enabled
+	}
+	if req.DailyCreditLimit != nil {
+		rl.DailyCreditLimit = *req.DailyCreditLimit
+	}
+	if req.MonthlyCreditLimit != nil {
+		rl.MonthlyCreditLimit = *req.MonthlyCreditLimit
 	}
 
 	if err := s.db.UpsertSatelliteRateLimit(rl); err != nil {

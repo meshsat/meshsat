@@ -814,6 +814,13 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);`,
+
+	// v35: Per-device SBD credit budget limits (MESHSAT-101).
+	// Adds daily_credit_limit and monthly_credit_limit to satellite_rate_limits.
+	// Existing daily_limit/monthly_limit cap send count; these new columns cap
+	// credit consumption (1 credit = 50 bytes). 0 = unlimited (no cap).
+	`ALTER TABLE satellite_rate_limits ADD COLUMN daily_credit_limit INTEGER NOT NULL DEFAULT 0;
+	 ALTER TABLE satellite_rate_limits ADD COLUMN monthly_credit_limit INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func (db *DB) migrate() error {

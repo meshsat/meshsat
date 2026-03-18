@@ -14,9 +14,11 @@ import (
 type ThrottleReason string
 
 const (
-	ThrottleBurst   ThrottleReason = "burst_limit"
-	ThrottleDaily   ThrottleReason = "daily_limit"
-	ThrottleMonthly ThrottleReason = "monthly_limit"
+	ThrottleBurst          ThrottleReason = "burst_limit"
+	ThrottleDaily          ThrottleReason = "daily_limit"
+	ThrottleMonthly        ThrottleReason = "monthly_limit"
+	ThrottleDailyCredits   ThrottleReason = "daily_credit_limit"
+	ThrottleMonthlyCredits ThrottleReason = "monthly_credit_limit"
 )
 
 // ThrottleEvent is emitted when a device is rate-limited.
@@ -98,8 +100,9 @@ func (s *SatelliteRateLimiter) ReloadDevice(deviceID int64) error {
 }
 
 // Allow checks if a satellite send is permitted for the given device.
+// creditCost is the number of SBD credits this send will consume (1 credit per 50 bytes, min 1).
 // Returns (allowed, reason). SOS messages always bypass rate limiting.
-func (s *SatelliteRateLimiter) Allow(deviceID int64, isSOS bool) (bool, ThrottleReason) {
+func (s *SatelliteRateLimiter) Allow(deviceID int64, isSOS bool, creditCost int) (bool, ThrottleReason) {
 	// SOS messages ALWAYS bypass rate limiting
 	if isSOS {
 		return true, ""
@@ -135,18 +138,32 @@ func (s *SatelliteRateLimiter) Allow(deviceID int64, isSOS bool) (bool, Throttle
 		return false, ThrottleBurst
 	}
 
-	// Check daily cap
-	dailySends, _, _ := s.db.GetSatelliteUsageToday(deviceID)
+	// Fetch usage counters once
+	dailySends, dailyCredits, _ := s.db.GetSatelliteUsageToday(deviceID)
+	monthlySends, monthlyCredits, _ := s.db.GetSatelliteUsageMonth(deviceID)
+
+	// Check daily send cap
 	if cfg.DailyLimit > 0 && dailySends >= cfg.DailyLimit {
-		s.emitAlert(deviceID, ThrottleDaily, fmt.Sprintf("daily limit reached (%d/%d)", dailySends, cfg.DailyLimit))
+		s.emitAlert(deviceID, ThrottleDaily, fmt.Sprintf("daily send limit reached (%d/%d)", dailySends, cfg.DailyLimit))
 		return false, ThrottleDaily
 	}
 
-	// Check monthly cap
-	monthlySends, _, _ := s.db.GetSatelliteUsageMonth(deviceID)
+	// Check daily credit budget
+	if cfg.DailyCreditLimit > 0 && dailyCredits+creditCost > cfg.DailyCreditLimit {
+		s.emitAlert(deviceID, ThrottleDailyCredits, fmt.Sprintf("daily credit budget exceeded (%d+%d > %d)", dailyCredits, creditCost, cfg.DailyCreditLimit))
+		return false, ThrottleDailyCredits
+	}
+
+	// Check monthly send cap
 	if cfg.MonthlyLimit > 0 && monthlySends >= cfg.MonthlyLimit {
-		s.emitAlert(deviceID, ThrottleMonthly, fmt.Sprintf("monthly limit reached (%d/%d)", monthlySends, cfg.MonthlyLimit))
+		s.emitAlert(deviceID, ThrottleMonthly, fmt.Sprintf("monthly send limit reached (%d/%d)", monthlySends, cfg.MonthlyLimit))
 		return false, ThrottleMonthly
+	}
+
+	// Check monthly credit budget
+	if cfg.MonthlyCreditLimit > 0 && monthlyCredits+creditCost > cfg.MonthlyCreditLimit {
+		s.emitAlert(deviceID, ThrottleMonthlyCredits, fmt.Sprintf("monthly credit budget exceeded (%d+%d > %d)", monthlyCredits, creditCost, cfg.MonthlyCreditLimit))
+		return false, ThrottleMonthlyCredits
 	}
 
 	return true, ""
@@ -182,6 +199,14 @@ func (s *SatelliteRateLimiter) GetDeviceUsage(deviceID int64) map[string]interfa
 		result["monthly_limit"] = cfg.MonthlyLimit
 		result["daily_remaining"] = max(0, cfg.DailyLimit-dailySends)
 		result["monthly_remaining"] = max(0, cfg.MonthlyLimit-monthlySends)
+		result["daily_credit_limit"] = cfg.DailyCreditLimit
+		result["monthly_credit_limit"] = cfg.MonthlyCreditLimit
+		if cfg.DailyCreditLimit > 0 {
+			result["daily_credits_remaining"] = max(0, cfg.DailyCreditLimit-dailyCredits)
+		}
+		if cfg.MonthlyCreditLimit > 0 {
+			result["monthly_credits_remaining"] = max(0, cfg.MonthlyCreditLimit-monthlyCredits)
+		}
 		result["enabled"] = cfg.Enabled
 	}
 

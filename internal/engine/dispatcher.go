@@ -807,14 +807,20 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		}
 	}
 
-	// Per-device satellite rate limiting (MESHSAT-124): check before sending via satellite interfaces.
+	// Per-device satellite rate limiting (MESHSAT-124, MESHSAT-101): check before sending via satellite interfaces.
+	// Enforces burst control, daily/monthly send caps, and daily/monthly credit budgets.
 	// SOS messages (priority 0) always bypass rate limiting.
 	if w.satRateLimiter != nil && w.desc.IsSatellite {
 		isSOS := del.Priority == 0
 		// Resolve device_id from the interface's bound device
 		if iface, err := w.db.GetInterface(w.channelID); err == nil && iface.DeviceID != "" {
 			if dev, err := w.db.GetDeviceByIMEIAnyTenant(iface.DeviceID); err == nil {
-				allowed, reason := w.satRateLimiter.Allow(dev.ID, isSOS)
+				// Calculate credit cost for budget enforcement (1 credit per 50 bytes, min 1)
+				creditCost := 1
+				if len(del.Payload) > 50 {
+					creditCost = (len(del.Payload) + 49) / 50
+				}
+				allowed, reason := w.satRateLimiter.Allow(dev.ID, isSOS, creditCost)
 				if !allowed {
 					if err := w.db.SetDeliveryStatus(del.ID, "throttled", fmt.Sprintf("rate limited: %s", reason), ""); err != nil {
 						log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery throttled")
