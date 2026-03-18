@@ -7,13 +7,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"meshsat/internal/bus"
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
-	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
-	"meshsat/internal/ratelimit"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -21,37 +18,31 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	db             *database.DB
-	mesh           transport.MeshTransport
-	processor      *engine.Processor
-	gwManager      *gateway.Manager
-	accessEval     *rules.AccessEvaluator
-	tleMgr         *engine.TLEManager
-	scheduler      *gateway.PassScheduler
-	registry       *channel.Registry
-	astroTleMgr    *engine.AstrocastTLEManager
-	cellTransport  transport.CellTransport
-	gpsReader      *transport.GPSReader
-	ifaceMgr       *engine.InterfaceManager
-	signing        *engine.SigningService
-	dispatcher     *engine.Dispatcher
-	linkMgr        *routing.LinkManager
-	destTable      *routing.DestinationTable
-	routingID      *routing.Identity
-	paidRateLimit  int
-	sos            *SOSState
-	webHandler     http.Handler
-	healthScorer   *engine.HealthScorer
-	geofenceMon    *engine.GeofenceMonitor
-	deadman        *engine.DeadManSwitch
-	burstQueue     *engine.BurstQueue
-	onMOCallback   func(imei string)
-	satRateLimiter *ratelimit.SatelliteRateLimiter
-	backupDir      string
-	msgBus         bus.MessageBus // hub message bus (NATS or Paho)
-	rockblockDedup dedup.Dedup    // dedup by imei:momsn
-	webhookDedup   dedup.Dedup    // dedup by eventID:webhookID
-	creditPoller   *engine.CreditPoller
+	db            *database.DB
+	mesh          transport.MeshTransport
+	processor     *engine.Processor
+	gwManager     *gateway.Manager
+	accessEval    *rules.AccessEvaluator
+	tleMgr        *engine.TLEManager
+	scheduler     *gateway.PassScheduler
+	registry      *channel.Registry
+	astroTleMgr   *engine.AstrocastTLEManager
+	cellTransport transport.CellTransport
+	gpsReader     *transport.GPSReader
+	ifaceMgr      *engine.InterfaceManager
+	signing       *engine.SigningService
+	dispatcher    *engine.Dispatcher
+	linkMgr       *routing.LinkManager
+	destTable     *routing.DestinationTable
+	routingID     *routing.Identity
+	paidRateLimit int
+	sos           *SOSState
+	webHandler    http.Handler
+	healthScorer  *engine.HealthScorer
+	geofenceMon   *engine.GeofenceMonitor
+	deadman       *engine.DeadManSwitch
+	burstQueue    *engine.BurstQueue
+	onMOCallback  func(imei string)
 }
 
 // NewServer creates a new API server.
@@ -149,31 +140,6 @@ func (s *Server) SetBurstQueue(bq *engine.BurstQueue) {
 	s.burstQueue = bq
 }
 
-// SetSatelliteRateLimiter sets the per-device satellite rate limiter.
-func (s *Server) SetSatelliteRateLimiter(rl *ratelimit.SatelliteRateLimiter) {
-	s.satRateLimiter = rl
-}
-
-// SetRockBLOCKDedup sets the deduplicator for RockBLOCK webhook messages (imei:momsn).
-func (s *Server) SetRockBLOCKDedup(d dedup.Dedup) {
-	s.rockblockDedup = d
-}
-
-// SetWebhookDedup sets the deduplicator for webhook inbound messages (eventID:webhookID).
-func (s *Server) SetWebhookDedup(d dedup.Dedup) {
-	s.webhookDedup = d
-}
-
-// SetMessageBus sets the hub message bus for publishing to MQTT/NATS topics.
-func (s *Server) SetMessageBus(mb bus.MessageBus) {
-	s.msgBus = mb
-}
-
-// SetCreditPoller sets the Cloudloop credit balance poller for manual refresh.
-func (s *Server) SetCreditPoller(cp *engine.CreditPoller) {
-	s.creditPoller = cp
-}
-
 // Router builds the chi router with all API routes.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
@@ -219,8 +185,6 @@ func (s *Server) Router() http.Handler {
 		// Iridium credits
 		r.Get("/iridium/credits", s.handleGetCredits)
 		r.Post("/iridium/credits/budget", s.handleSetCreditBudget)
-		r.Get("/iridium/credits/balance", s.handleGetCreditBalance)
-		r.Post("/iridium/credits/balance/refresh", s.handleRefreshCreditBalance)
 
 		// Iridium passes (TLE-based prediction)
 		r.Get("/iridium/passes", s.handleGetPasses)
@@ -247,13 +211,6 @@ func (s *Server) Router() http.Handler {
 		// Astrocast LEO satellite passes
 		r.Get("/astrocast/passes", s.handleGetAstrocastPasses)
 		r.Post("/astrocast/passes/refresh", s.handleRefreshAstrocastTLEs)
-
-		// Constellation abstraction layer (multi-constellation satellite)
-		r.Get("/constellation/status", s.handleGetConstellationStatus)
-		r.Put("/constellation/strategy", s.handleSetDefaultStrategy)
-		r.Get("/constellation/devices/{device_id}/pref", s.handleGetDeviceConstellationPref)
-		r.Put("/constellation/devices/{device_id}/pref", s.handleSetDeviceConstellationPref)
-		r.Delete("/constellation/devices/{device_id}/pref", s.handleDeleteDeviceConstellationPref)
 
 		// Cellular modem
 		r.Get("/cellular/signal", s.handleGetCellularSignal)
@@ -453,30 +410,12 @@ func (s *Server) Router() http.Handler {
 		r.Put("/device-registry/{id}", s.handleUpdateRegisteredDevice)
 		r.Delete("/device-registry/{id}", s.handleDeleteRegisteredDevice)
 
-		// Satellite rate limiting (MESHSAT-124)
-		r.Get("/satellite/rate-limits", s.handleGetSatelliteRateLimits)
-		r.Get("/satellite/rate-limits/{device_id}", s.handleGetSatelliteRateLimit)
-		r.Put("/satellite/rate-limits/{device_id}", s.handleSetSatelliteRateLimit)
-		r.Delete("/satellite/rate-limits/{device_id}", s.handleDeleteSatelliteRateLimit)
-		r.Post("/satellite/rate-limits/{device_id}/override", s.handleSatelliteRateLimitOverride)
-		r.Post("/satellite/rate-limits/{device_id}/reset", s.handleResetSatelliteUsage)
-		r.Get("/satellite/usage", s.handleGetSatelliteUsage)
-
 		// Device configuration versioning (MESHSAT-99)
 		r.Get("/device-registry/{id}/config", s.handleGetDeviceConfig)
 		r.Put("/device-registry/{id}/config", s.handlePutDeviceConfig)
 		r.Get("/device-registry/{id}/config/versions", s.handleGetDeviceConfigVersions)
 		r.Get("/device-registry/{id}/config/versions/{version}", s.handleGetDeviceConfigVersion)
 		r.Post("/device-registry/{id}/config/rollback/{version}", s.handleRollbackDeviceConfig)
-
-		// Full state backup/restore (MESHSAT-125)
-		r.Post("/backup/create", s.handleBackupCreate)
-		r.Get("/backup/list", s.handleBackupList)
-		r.Get("/backup/download/{filename}", s.handleBackupDownload)
-		r.Post("/backup/preview", s.handleBackupPreview)
-		r.Post("/backup/restore", s.handleBackupRestore)
-		r.Get("/backup/schedule", s.handleBackupSchedule)
-		r.Put("/backup/schedule", s.handleSetBackupSchedule)
 	})
 
 	// Web UI (SPA) — catch-all after API routes

@@ -686,50 +686,6 @@ var migrations = []string{
 		UNIQUE(device_id, version)
 	);
 	CREATE INDEX IF NOT EXISTS idx_device_config_device ON device_config_versions(device_id, version DESC);`,
-
-	// v28: Per-device satellite rate limiting (MESHSAT-124).
-	// satellite_rate_limits: token bucket config + daily/monthly caps per device.
-	// satellite_usage: daily usage counters for enforcing caps.
-	`CREATE TABLE IF NOT EXISTS satellite_rate_limits (
-		device_id     INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
-		daily_limit   INTEGER NOT NULL DEFAULT 50,
-		monthly_limit INTEGER NOT NULL DEFAULT 1000,
-		burst_size    INTEGER NOT NULL DEFAULT 10,
-		refill_rate   REAL NOT NULL DEFAULT 0.0167,
-		enabled       INTEGER NOT NULL DEFAULT 1,
-		override_until TEXT,
-		updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-	);
-	CREATE TABLE IF NOT EXISTS satellite_usage (
-		id        INTEGER PRIMARY KEY AUTOINCREMENT,
-		device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-		day       TEXT NOT NULL,
-		sends     INTEGER NOT NULL DEFAULT 0,
-		credits   INTEGER NOT NULL DEFAULT 0,
-		UNIQUE(device_id, day)
-	);
-	CREATE INDEX IF NOT EXISTS idx_sat_usage_device_day ON satellite_usage(device_id, day DESC);`,
-
-	// v29: Per-device constellation preferences (MESHSAT-121).
-	// Stores which satellite constellation a device prefers and the selection strategy
-	// when multiple constellations are available. Used by ConstellationManager.
-	`CREATE TABLE IF NOT EXISTS device_constellation_prefs (
-		device_id                INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
-		preferred_constellation  TEXT NOT NULL DEFAULT '',
-		strategy                 TEXT NOT NULL DEFAULT 'availability',
-		updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
-	);`,
-
-	// v30: Cloudloop credit balance polling (MESHSAT-100).
-	// Stores credit balance snapshots fetched from Ground Control/Cloudloop API.
-	`CREATE TABLE IF NOT EXISTS credit_balance (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		balance    INTEGER NOT NULL,
-		currency   TEXT NOT NULL DEFAULT 'credits',
-		source     TEXT NOT NULL DEFAULT 'cloudloop',
-		fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
-	);
-	CREATE INDEX IF NOT EXISTS idx_credit_balance_fetched ON credit_balance(fetched_at);`,
 }
 
 func (db *DB) migrate() error {

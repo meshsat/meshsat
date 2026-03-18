@@ -848,64 +848,6 @@ func (db *DB) GetCreditSummary() (*CreditSummary, error) {
 	return s, nil
 }
 
-// ---- Credit Balance (Cloudloop polling) ----
-
-// CreditBalance represents a polled credit balance snapshot.
-type CreditBalance struct {
-	ID        int64  `db:"id" json:"id"`
-	Balance   int    `db:"balance" json:"balance"`
-	Currency  string `db:"currency" json:"currency"`
-	Source    string `db:"source" json:"source"`
-	FetchedAt string `db:"fetched_at" json:"fetched_at"`
-}
-
-// InsertCreditBalance stores a new credit balance snapshot.
-func (db *DB) InsertCreditBalance(balance int, currency, source string) error {
-	_, err := db.Exec(
-		`INSERT INTO credit_balance (balance, currency, source, fetched_at) VALUES (?, ?, ?, datetime('now'))`,
-		balance, currency, source)
-	return err
-}
-
-// GetLatestCreditBalance returns the most recent credit balance.
-func (db *DB) GetLatestCreditBalance() (*CreditBalance, error) {
-	var cb CreditBalance
-	err := db.QueryRow(
-		`SELECT id, balance, currency, source, fetched_at FROM credit_balance ORDER BY fetched_at DESC LIMIT 1`,
-	).Scan(&cb.ID, &cb.Balance, &cb.Currency, &cb.Source, &cb.FetchedAt)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &cb, nil
-}
-
-// GetCreditBalanceHistory returns recent credit balance snapshots.
-func (db *DB) GetCreditBalanceHistory(limit int) ([]CreditBalance, error) {
-	if limit <= 0 {
-		limit = 24
-	}
-	rows, err := db.Query(
-		`SELECT id, balance, currency, source, fetched_at FROM credit_balance ORDER BY fetched_at DESC LIMIT ?`,
-		limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var balances []CreditBalance
-	for rows.Next() {
-		var cb CreditBalance
-		if err := rows.Scan(&cb.ID, &cb.Balance, &cb.Currency, &cb.Source, &cb.FetchedAt); err != nil {
-			return nil, err
-		}
-		balances = append(balances, cb)
-	}
-	return balances, rows.Err()
-}
-
 // ---- Iridium Locations ----
 
 // IridiumLocation represents a ground station for pass prediction.

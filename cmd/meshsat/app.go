@@ -11,11 +11,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/api"
-	"meshsat/internal/backup"
-	"meshsat/internal/bus"
-	embeddedNATS "meshsat/internal/bus/embedded"
-	natsBus "meshsat/internal/bus/nats"
-	pahoBus "meshsat/internal/bus/paho"
 	"meshsat/internal/channel"
 	"meshsat/internal/compress"
 	"meshsat/internal/config"
@@ -23,7 +18,6 @@ import (
 	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
-	"meshsat/internal/ratelimit"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -58,19 +52,6 @@ type App struct {
 	LinkMgr         *routing.LinkManager
 	BWLimiter       *routing.AnnounceBandwidthLimiter
 	Keepalive       *routing.LinkKeepalive
-
-	// Satellite rate limiter (per-device, MESHSAT-124)
-	SatRateLimiter *ratelimit.SatelliteRateLimiter
-
-	// Backup scheduler (MESHSAT-125)
-	BackupScheduler *backup.Scheduler
-
-	// Cloudloop credit balance poller (MESHSAT-100)
-	CreditPoller *engine.CreditPoller
-
-	// Message bus (NATS JetStream or Paho MQTT fallback)
-	MsgBus      bus.MessageBus
-	EmbeddedNAT *embeddedNATS.Server // non-nil in standalone mode
 
 	// Transports (set before calling Setup)
 	Mesh  transport.MeshTransport
@@ -293,21 +274,6 @@ func (a *App) Setup(ctx context.Context) error {
 		}
 	}
 	a.Dispatcher.SetTransformPipeline(a.Transforms)
-
-	// Per-device satellite rate limiter (MESHSAT-124)
-	a.SatRateLimiter = ratelimit.NewSatelliteRateLimiter(db)
-	a.SatRateLimiter.SetAlertFunc(func(evt ratelimit.ThrottleEvent) {
-		a.Processor.Emit(transport.MeshEvent{
-			Type:    "satellite_throttled",
-			Message: fmt.Sprintf("Device %s throttled: %s (%s)", evt.IMEI, evt.Message, evt.Reason),
-			Time:    time.Now().UTC().Format(time.RFC3339),
-		})
-	})
-	if err := a.SatRateLimiter.LoadFromDB(); err != nil {
-		log.Warn().Err(err).Msg("satellite rate limiter: failed to load configs (table may not exist yet)")
-	}
-	a.Dispatcher.SetSatelliteRateLimiter(a.SatRateLimiter)
-
 	a.Dispatcher.Start(ctx)
 	a.Processor.SetDispatcher(a.Dispatcher)
 
@@ -339,11 +305,6 @@ func (a *App) Setup(ctx context.Context) error {
 		go a.GPSReader.Start(ctx)
 	}
 
-	// Message bus (NATS JetStream or Paho MQTT fallback)
-	if err := a.initBus(cfg); err != nil {
-		log.Error().Err(err).Msg("message bus init failed — hub publish disabled")
-	}
-
 	// API server
 	srv := api.NewServer(db, a.Mesh, a.Processor, a.GatewayMgr)
 	srv.SetAccessEvaluator(a.AccessEval)
@@ -358,12 +319,7 @@ func (a *App) Setup(ctx context.Context) error {
 		srv.SetSigningService(a.Signing)
 	}
 	srv.SetDispatcher(a.Dispatcher)
-	srv.SetSatelliteRateLimiter(a.SatRateLimiter)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
-	srv.SetBackupDir(cfg.BackupDir)
-	if a.MsgBus != nil {
-		srv.SetMessageBus(a.MsgBus)
-	}
 
 	// Field intelligence features
 	healthScorer := engine.NewHealthScorer(db)
@@ -391,21 +347,6 @@ func (a *App) Setup(ctx context.Context) error {
 	}
 	a.Server = srv
 
-	// Cloudloop credit balance poller (MESHSAT-100)
-	if cfg.HubCloudloopAPIKey != "" && cfg.HubCloudloopAPISecret != "" {
-		interval := time.Duration(cfg.HubCreditPollIntervalMin) * time.Minute
-		if interval <= 0 {
-			interval = 60 * time.Minute
-		}
-		a.CreditPoller = engine.NewCreditPoller(db, cfg.HubCloudloopBaseURL, cfg.HubCloudloopAPIKey, cfg.HubCloudloopAPISecret, interval)
-		srv.SetCreditPoller(a.CreditPoller)
-	}
-
-	// Backup scheduler (MESHSAT-125)
-	if cfg.BackupDir != "" && cfg.BackupIntervalHours > 0 {
-		a.BackupScheduler = backup.NewScheduler(db, cfg.BackupDir, time.Duration(cfg.BackupIntervalHours)*time.Hour, cfg.BackupMaxKeep)
-	}
-
 	a.HTTPServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      srv.Router(),
@@ -431,16 +372,6 @@ func (a *App) Start(ctx context.Context) {
 	// Periodic announce broadcasting
 	if a.RoutingIdentity != nil && a.Config.AnnounceIntervalSec > 0 {
 		go a.announceLoop(ctx)
-	}
-
-	// Cloudloop credit balance polling (MESHSAT-100)
-	if a.CreditPoller != nil {
-		a.CreditPoller.Start(ctx)
-	}
-
-	// Periodic backups (MESHSAT-125)
-	if a.BackupScheduler != nil {
-		go a.BackupScheduler.Start(ctx)
 	}
 
 	go func() {
@@ -503,16 +434,6 @@ func (a *App) Shutdown() {
 	a.AstroTLEMgr.Stop()
 	a.GatewayMgr.Stop()
 
-	if a.CreditPoller != nil {
-		a.CreditPoller.Stop()
-	}
-	if a.MsgBus != nil {
-		a.MsgBus.Close()
-	}
-	if a.EmbeddedNAT != nil {
-		a.EmbeddedNAT.Shutdown()
-	}
-
 	for _, fn := range a.cleanups {
 		fn()
 	}
@@ -522,54 +443,6 @@ func (a *App) Shutdown() {
 	if err := a.HTTPServer.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("HTTP server shutdown error")
 	}
-}
-
-// initBus initializes the message bus based on configuration.
-func (a *App) initBus(cfg *config.Config) error {
-	switch cfg.HubBusBackend {
-	case "mqtt":
-		brokerURL := cfg.HubMQTTURL
-		if brokerURL == "" {
-			brokerURL = "tcp://localhost:1883"
-		}
-		pb, err := pahoBus.New(pahoBus.Config{BrokerURL: brokerURL})
-		if err != nil {
-			return fmt.Errorf("paho bus: %w", err)
-		}
-		a.MsgBus = pb
-	default: // "nats"
-		if cfg.HubNATSURL != "" {
-			nb, err := natsBus.New(cfg.HubNATSURL)
-			if err != nil {
-				return fmt.Errorf("nats bus: %w", err)
-			}
-			a.MsgBus = nb
-		} else {
-			embCfg := embeddedNATS.Config{
-				MQTTPort:   cfg.HubMQTTPort,
-				ClientPort: cfg.HubNATSPort,
-				DataDir:    cfg.HubNATSDataDir,
-			}
-			embSrv, err := embeddedNATS.Start(embCfg)
-			if err != nil {
-				return fmt.Errorf("embedded nats: %w", err)
-			}
-			a.EmbeddedNAT = embSrv
-
-			nc, err := embSrv.ClientConn()
-			if err != nil {
-				embSrv.Shutdown()
-				return fmt.Errorf("embedded nats client: %w", err)
-			}
-			nb, err := natsBus.NewFromConn(nc)
-			if err != nil {
-				embSrv.Shutdown()
-				return fmt.Errorf("embedded nats jetstream: %w", err)
-			}
-			a.MsgBus = nb
-		}
-	}
-	return nil
 }
 
 func base64Encode(data []byte) string {
