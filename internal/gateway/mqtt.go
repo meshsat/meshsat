@@ -102,15 +102,35 @@ func (g *MQTTGateway) Start(ctx context.Context) error {
 	return nil
 }
 
-// subscribe sets up the MQTT topic subscription.
+// subscribe sets up the MQTT topic subscription with retry on failure.
 func (g *MQTTGateway) subscribe() {
 	topic := fmt.Sprintf("%s/%s/+", g.config.TopicPrefix, g.config.ChannelName)
-	token := g.client.Subscribe(topic, byte(g.config.QoS), g.onMessage)
-	if token.WaitTimeout(10*time.Second) && token.Error() != nil {
-		log.Error().Err(token.Error()).Str("topic", topic).Msg("mqtt subscribe failed")
-		g.errors.Add(1)
-	} else {
-		log.Info().Str("topic", topic).Msg("mqtt subscribed")
+
+	const maxRetries = 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := g.client.Subscribe(topic, byte(g.config.QoS), g.onMessage)
+		if !token.WaitTimeout(10 * time.Second) {
+			log.Error().Str("topic", topic).Int("attempt", attempt).Msg("mqtt subscribe timeout")
+			g.errors.Add(1)
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Error().Str("topic", topic).Msg("mqtt subscribe failed after all retries — messages will be lost")
+			return
+		}
+		if token.Error() != nil {
+			log.Error().Err(token.Error()).Str("topic", topic).Int("attempt", attempt).Msg("mqtt subscribe failed")
+			g.errors.Add(1)
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Error().Str("topic", topic).Msg("mqtt subscribe failed after all retries — messages will be lost")
+			return
+		}
+		log.Info().Str("topic", topic).Int("attempt", attempt).Msg("mqtt subscribed")
+		return
 	}
 }
 
