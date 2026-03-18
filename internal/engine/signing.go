@@ -61,7 +61,7 @@ func NewSigningService(db *database.DB) (*SigningService, error) {
 	ss.signerID = hex.EncodeToString(ss.publicKey)
 
 	// Load last audit hash for chain continuity
-	entries, err := db.GetAuditLog(1)
+	entries, err := db.GetAuditLogAnyTenant(1)
 	if err == nil && len(entries) > 0 {
 		ss.lastHash = entries[0].Hash
 	}
@@ -132,7 +132,7 @@ func (ss *SigningService) AuditEvent(eventType string, interfaceID, direction *s
 // VerifyChain verifies the integrity of the last N audit log entries.
 // Returns the number of valid entries and the first broken index (or -1 if all valid).
 func (ss *SigningService) VerifyChain(limit int) (valid int, brokenAt int) {
-	entries, err := ss.db.GetAuditLog(limit)
+	entries, err := ss.db.GetAuditLogAnyTenant(limit)
 	if err != nil || len(entries) == 0 {
 		return 0, -1
 	}

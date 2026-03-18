@@ -1313,7 +1313,7 @@ func TestDeliver_HandleSuccessEmitsEvent(t *testing.T) {
 	}
 
 	// Should have audit log entry
-	entries, _ := h.db.GetAuditLog(10)
+	entries, _ := h.db.GetAuditLogAnyTenant(10)
 	found := false
 	for _, e := range entries {
 		if e.EventType == "deliver" {
@@ -1409,7 +1409,7 @@ func TestDeliver_HandleFailureDeadEmitsEvent(t *testing.T) {
 	}
 
 	// Should have drop audit event
-	entries, _ := h.db.GetAuditLog(10)
+	entries, _ := h.db.GetAuditLogAnyTenant(10)
 	found := false
 	for _, e := range entries {
 		if e.EventType == "drop" {
@@ -1909,7 +1909,7 @@ func TestDeliver_EgressDenialWithAudit(t *testing.T) {
 	}
 
 	// Verify audit log contains a 'drop' event for the egress denial
-	entries, _ := h.db.GetAuditLog(20)
+	entries, _ := h.db.GetAuditLogAnyTenant(20)
 	found := false
 	for _, e := range entries {
 		if e.EventType == "drop" {
@@ -2661,7 +2661,7 @@ func TestDeliver_DispatchAuditEvent(t *testing.T) {
 		t.Fatalf("expected 1 delivery, got %d", count)
 	}
 
-	entries, _ := h.db.GetAuditLog(10)
+	entries, _ := h.db.GetAuditLogAnyTenant(10)
 	found := false
 	for _, e := range entries {
 		if e.EventType == "dispatch" {

@@ -7,7 +7,7 @@ import (
 )
 
 func TestRequireAuth_NilProvider_PassThrough(t *testing.T) {
-	handler := RequireAuth(nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireAuth(nil, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	}))
@@ -22,7 +22,7 @@ func TestRequireAuth_NilProvider_PassThrough(t *testing.T) {
 }
 
 func TestRequireAuth_NilProvider_NoUserInContext(t *testing.T) {
-	handler := RequireAuth(nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireAuth(nil, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := UserFromContext(r.Context())
 		if user != nil {
 			t.Error("expected nil user when provider is nil")
@@ -45,7 +45,7 @@ func TestRequireAuth_SessionCookie(t *testing.T) {
 	sessionID, _ := store.Create(user, nil, "")
 
 	var gotUser *UserInfo
-	handler := RequireAuth(nil, store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireAuth(nil, store, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// When provider is nil, it passes through regardless
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -81,7 +81,7 @@ func TestRequireAuth_NoAuth_Returns401(t *testing.T) {
 	}
 	store := NewSessionStore()
 
-	handler := RequireAuth(provider, store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireAuth(provider, store, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -103,7 +103,7 @@ func TestRequireAuth_ValidSessionCookie(t *testing.T) {
 	sessionID, _ := store.Create(user, nil, "")
 
 	var ctxUser *UserInfo
-	handler := RequireAuth(provider, store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireAuth(provider, store, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctxUser = UserFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -137,7 +137,7 @@ func TestRequireAuth_ExpiredSessionCookie_Returns401(t *testing.T) {
 	store.sessions[sessionID].ExpiresAt = store.sessions[sessionID].ExpiresAt.Add(-25 * 60 * 60 * 1e9) // -25h
 	store.mu.Unlock()
 
-	handler := RequireAuth(provider, store)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequireAuth(provider, store, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

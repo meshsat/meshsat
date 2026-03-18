@@ -793,6 +793,27 @@ var migrations = []string{
 
 	ALTER TABLE audit_log ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default';
 	CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log(tenant_id);`,
+
+	// v34: API keys with RBAC (MESHSAT-97).
+	// Per-device or tenant-wide API keys for programmatic access. Only the SHA-256 hash
+	// is stored; the plaintext key is returned once at creation. The key_prefix (first 8
+	// chars) allows identifying keys without exposing the secret. Role hierarchy:
+	// viewer (read-only) < operator (read-write) < owner (full admin).
+	`CREATE TABLE IF NOT EXISTS api_keys (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		key_hash    TEXT NOT NULL UNIQUE,
+		key_prefix  TEXT NOT NULL,
+		tenant_id   TEXT NOT NULL DEFAULT 'default',
+		device_id   INTEGER,
+		role        TEXT NOT NULL DEFAULT 'viewer',
+		label       TEXT NOT NULL DEFAULT '',
+		last_used   TEXT,
+		expires_at  TEXT,
+		created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+	CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);`,
 }
 
 func (db *DB) migrate() error {

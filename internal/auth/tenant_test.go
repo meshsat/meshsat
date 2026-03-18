@@ -13,7 +13,7 @@ func TestTenantMiddleware_FromUserClaim(t *testing.T) {
 	sessionID, _ := store.Create(user, nil, "")
 
 	var gotTenantID string
-	handler := RequireAuth(provider, store)(
+	handler := RequireAuth(provider, store, nil)(
 		TenantMiddleware("", false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotTenantID = TenantIDFromContext(r.Context())
 			w.WriteHeader(http.StatusOK)
