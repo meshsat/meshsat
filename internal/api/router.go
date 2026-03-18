@@ -7,7 +7,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"meshsat/internal/auth"
 	"meshsat/internal/bus"
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
@@ -18,52 +17,41 @@ import (
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
-	"meshsat/internal/vpn"
 )
 
 // Server holds the API dependencies.
 type Server struct {
-	db              *database.DB
-	mesh            transport.MeshTransport
-	processor       *engine.Processor
-	gwManager       *gateway.Manager
-	accessEval      *rules.AccessEvaluator
-	tleMgr          *engine.TLEManager
-	scheduler       *gateway.PassScheduler
-	registry        *channel.Registry
-	astroTleMgr     *engine.AstrocastTLEManager
-	cellTransport   transport.CellTransport
-	gpsReader       *transport.GPSReader
-	ifaceMgr        *engine.InterfaceManager
-	signing         *engine.SigningService
-	dispatcher      *engine.Dispatcher
-	linkMgr         *routing.LinkManager
-	destTable       *routing.DestinationTable
-	routingID       *routing.Identity
-	paidRateLimit   int
-	sos             *SOSState
-	webHandler      http.Handler
-	healthScorer    *engine.HealthScorer
-	geofenceMon     *engine.GeofenceMonitor
-	deadman         *engine.DeadManSwitch
-	burstQueue      *engine.BurstQueue
-	onMOCallback    func(imei string)
-	satRateLimiter  *ratelimit.SatelliteRateLimiter
-	backupDir       string
-	msgBus          bus.MessageBus // hub message bus (NATS or Paho)
-	rockblockDedup  dedup.Dedup    // dedup by imei:momsn
-	webhookDedup    dedup.Dedup    // dedup by eventID:webhookID
-	creditPoller    *engine.CreditPoller
-	vpnMgr          *vpn.Manager        // WireGuard VPN peer manager (nil = disabled)
-	onDeviceCreated func(int64, string) // callback when device is registered
-	onDeviceDeleted func(int64)         // callback when device is deleted
-	authProvider     *auth.Provider          // OIDC provider (nil = auth disabled)
-	authSessions     *auth.SessionStore     // session store (nil = auth disabled)
-	authHandlers     *auth.Handlers         // auth HTTP handlers (nil = auth disabled)
-	apiKeyValidator  auth.APIKeyValidator   // API key lookup (nil = API keys disabled)
-	tenantEnabled    bool                   // true = apply tenant isolation middleware
-	tenantClaim      string                 // OIDC claim name for tenant ID
-	tenantEnforce    bool                   // true = reject requests without tenant
+	db             *database.DB
+	mesh           transport.MeshTransport
+	processor      *engine.Processor
+	gwManager      *gateway.Manager
+	accessEval     *rules.AccessEvaluator
+	tleMgr         *engine.TLEManager
+	scheduler      *gateway.PassScheduler
+	registry       *channel.Registry
+	astroTleMgr    *engine.AstrocastTLEManager
+	cellTransport  transport.CellTransport
+	gpsReader      *transport.GPSReader
+	ifaceMgr       *engine.InterfaceManager
+	signing        *engine.SigningService
+	dispatcher     *engine.Dispatcher
+	linkMgr        *routing.LinkManager
+	destTable      *routing.DestinationTable
+	routingID      *routing.Identity
+	paidRateLimit  int
+	sos            *SOSState
+	webHandler     http.Handler
+	healthScorer   *engine.HealthScorer
+	geofenceMon    *engine.GeofenceMonitor
+	deadman        *engine.DeadManSwitch
+	burstQueue     *engine.BurstQueue
+	onMOCallback   func(imei string)
+	satRateLimiter *ratelimit.SatelliteRateLimiter
+	backupDir      string
+	msgBus         bus.MessageBus // hub message bus (NATS or Paho)
+	rockblockDedup dedup.Dedup    // dedup by imei:momsn
+	webhookDedup   dedup.Dedup    // dedup by eventID:webhookID
+	creditPoller   *engine.CreditPoller
 }
 
 // NewServer creates a new API server.
@@ -186,31 +174,6 @@ func (s *Server) SetCreditPoller(cp *engine.CreditPoller) {
 	s.creditPoller = cp
 }
 
-// SetOnDeviceCreated sets a callback fired after a new device is registered.
-func (s *Server) SetOnDeviceCreated(fn func(deviceID int64, label string)) {
-	s.onDeviceCreated = fn
-}
-
-// SetOnDeviceDeleted sets a callback fired after a device is deleted.
-func (s *Server) SetOnDeviceDeleted(fn func(deviceID int64)) {
-	s.onDeviceDeleted = fn
-}
-
-// SetAuth configures OAuth2/OIDC authentication for the API.
-func (s *Server) SetAuth(provider *auth.Provider, sessions *auth.SessionStore, handlers *auth.Handlers, apiKeyValidator auth.APIKeyValidator) {
-	s.authProvider = provider
-	s.authSessions = sessions
-	s.authHandlers = handlers
-	s.apiKeyValidator = apiKeyValidator
-}
-
-// SetTenant configures per-tenant data isolation for the API.
-func (s *Server) SetTenant(enabled bool, claimName string, enforce bool) {
-	s.tenantEnabled = enabled
-	s.tenantClaim = claimName
-	s.tenantEnforce = enforce
-}
-
 // Router builds the chi router with all API routes.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
@@ -220,41 +183,11 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(corsMiddleware)
 
-	// Health check (always public)
+	// Health check
 	r.Get("/health", s.handleHealth)
 
-	// Auth routes (always public)
-	r.Route("/auth", func(r chi.Router) {
-		if s.authHandlers != nil {
-			r.Get("/status", s.authHandlers.HandleStatus)
-			r.Get("/login", s.authHandlers.HandleLogin)
-			r.Get("/callback", s.authHandlers.HandleCallback)
-			r.Post("/logout", s.authHandlers.HandleLogout)
-			r.Post("/refresh", s.authHandlers.HandleTokenRefresh)
-			// /auth/me is protected — uses the auth middleware
-			r.Group(func(r chi.Router) {
-				r.Use(auth.RequireAuth(s.authProvider, s.authSessions, s.apiKeyValidator))
-				r.Get("/me", s.authHandlers.HandleMe)
-			})
-		} else {
-			r.Get("/status", auth.HandleAuthDisabledStatus)
-		}
-	})
-
-	// API routes — protected by auth middleware when auth is enabled
+	// API routes
 	r.Route("/api", func(r chi.Router) {
-		r.Use(auth.RequireAuth(s.authProvider, s.authSessions, s.apiKeyValidator))
-		if s.tenantEnabled {
-			r.Use(auth.TenantMiddleware(s.tenantClaim, s.tenantEnforce))
-		}
-		// API key management (requires owner role)
-		r.Route("/auth/keys", func(r chi.Router) {
-			r.Use(auth.RequireRole(auth.RoleOwner))
-			r.Get("/", s.handleListAPIKeys)
-			r.Post("/", s.handleCreateAPIKey)
-			r.Delete("/{id}", s.handleDeleteAPIKey)
-		})
-
 		r.Get("/messages", s.handleGetMessages)
 		r.Get("/messages/stats", s.handleGetMessageStats)
 		r.Post("/messages/send", s.handleSendMessage)
@@ -544,17 +477,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/backup/restore", s.handleBackupRestore)
 		r.Get("/backup/schedule", s.handleBackupSchedule)
 		r.Put("/backup/schedule", s.handleSetBackupSchedule)
-
-		// WireGuard VPN tunnel management (MESHSAT-119)
-		r.Get("/vpn/status", s.handleGetVPNStatus)
-		r.Get("/vpn/peers", s.handleGetVPNPeers)
-		r.Get("/vpn/peers/{device_id}", s.handleGetVPNPeer)
-		r.Post("/vpn/peers/{device_id}", s.handleProvisionVPNPeer)
-		r.Delete("/vpn/peers/{device_id}", s.handleDeleteVPNPeer)
-		r.Post("/vpn/peers/{device_id}/enable", s.handleEnableVPNPeer)
-		r.Post("/vpn/peers/{device_id}/disable", s.handleDisableVPNPeer)
-		r.Get("/vpn/peers/{device_id}/config", s.handleGetVPNPeerConfig)
-		r.Get("/vpn/peers/{device_id}/qrcode", s.handleGetVPNPeerQRCode)
 	})
 
 	// Web UI (SPA) — catch-all after API routes
@@ -569,7 +491,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-HAL-Key, X-Tenant-ID")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-HAL-Key")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)

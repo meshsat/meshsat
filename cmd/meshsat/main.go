@@ -1,11 +1,3 @@
-// MeshSat — Multi-channel communications gateway
-//
-// @title MeshSat API
-// @version 1.0
-// @description Multi-channel communications gateway bridging Meshtastic, Iridium, Astrocast, Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.
-// @host localhost:6050
-// @BasePath /
-// @schemes http https
 package main
 
 import (
@@ -21,12 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/api"
-	"meshsat/internal/aprsis"
-	"meshsat/internal/auth"
-	"meshsat/internal/bus"
-	embeddedNATS "meshsat/internal/bus/embedded"
-	natsBus "meshsat/internal/bus/nats"
-	pahoBus "meshsat/internal/bus/paho"
 	"meshsat/internal/channel"
 	"meshsat/internal/compress"
 	"meshsat/internal/config"
@@ -36,9 +22,6 @@ import (
 	"meshsat/internal/gateway"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
-	"meshsat/internal/store"
-	hubpg "meshsat/internal/store/postgres"
-	hubsqlite "meshsat/internal/store/sqlite"
 	"meshsat/internal/transport"
 )
 
@@ -63,29 +46,6 @@ func main() {
 	}
 	defer db.Close()
 	log.Info().Str("path", cfg.DBPath).Msg("database ready")
-
-	// Hub store — persistent storage for webhooks, delivery logs, device state
-	var hubStore store.Store
-	switch cfg.HubMode {
-	case "cluster":
-		if cfg.HubDatabaseURL == "" {
-			log.Fatal().Msg("HUB_DATABASE_URL required in cluster mode")
-		}
-		pgStore, err := hubpg.New(context.Background(), cfg.HubDatabaseURL)
-		if err != nil {
-			log.Fatal().Err(err).Msg("failed to open hub PostgreSQL store")
-		}
-		hubStore = pgStore
-		log.Info().Msg("hub store: PostgreSQL (cluster mode)")
-	default:
-		sqliteStore, err := hubsqlite.New(cfg.HubDBPath)
-		if err != nil {
-			log.Fatal().Err(err).Msg("failed to open hub SQLite store")
-		}
-		hubStore = sqliteStore
-		log.Info().Str("path", cfg.HubDBPath).Msg("hub store: SQLite (standalone mode)")
-	}
-	defer hubStore.Close()
 
 	// Transport — mode selects communication backend
 	var mesh transport.MeshTransport
@@ -199,7 +159,6 @@ func main() {
 	if astro != nil {
 		gwMgr.SetAstrocastTransport(astro)
 	}
-	gwMgr.SetHubStore(hubStore)
 
 	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction
 	// Created early so it's available to the gateway manager for pass scheduling
@@ -362,77 +321,6 @@ func main() {
 		log.Info().Msg("GPS reader started (auto-detect)")
 	}
 
-	// Message bus (NATS JetStream or Paho MQTT fallback)
-	var msgBus bus.MessageBus
-	switch cfg.HubBusBackend {
-	case "mqtt":
-		// Paho MQTT fallback — connect to external MQTT broker
-		brokerURL := cfg.HubMQTTURL
-		if brokerURL == "" {
-			brokerURL = "tcp://localhost:1883"
-		}
-		pahoBus, busErr := pahoBus.New(pahoBus.Config{BrokerURL: brokerURL})
-		if busErr != nil {
-			log.Warn().Err(busErr).Msg("paho bus: failed to connect — hub publish disabled")
-		} else {
-			msgBus = pahoBus
-		}
-	default: // "nats"
-		if cfg.HubNATSURL != "" {
-			// Cluster mode — connect to external NATS
-			natsBusInst, busErr := natsBus.New(cfg.HubNATSURL)
-			if busErr != nil {
-				log.Fatal().Err(busErr).Str("url", cfg.HubNATSURL).Msg("nats bus: failed to connect")
-			}
-			msgBus = natsBusInst
-		} else {
-			// Standalone mode — embedded NATS (in-process, no Mosquitto needed)
-			embCfg := embeddedNATS.Config{
-				MQTTPort:   cfg.HubMQTTPort,
-				ClientPort: cfg.HubNATSPort,
-				DataDir:    cfg.HubNATSDataDir,
-			}
-			embSrv, busErr := embeddedNATS.Start(embCfg)
-			if busErr != nil {
-				log.Fatal().Err(busErr).Msg("embedded nats: failed to start")
-			}
-			defer embSrv.Shutdown()
-
-			nc, busErr := embSrv.ClientConn()
-			if busErr != nil {
-				log.Fatal().Err(busErr).Msg("embedded nats: failed to create in-process client")
-			}
-			natsBusInst, busErr := natsBus.NewFromConn(nc)
-			if busErr != nil {
-				log.Fatal().Err(busErr).Msg("embedded nats: failed to init jetstream")
-			}
-			msgBus = natsBusInst
-		}
-	}
-
-	// APRS-IS IGate (optional — inject satellite positions to aprs.fi)
-	var aprsisClient *aprsis.Client
-	if cfg.APRSISEnabled && cfg.APRSISCallsign != "" {
-		aprsisClient = aprsis.NewClient(aprsis.Config{
-			Server:   cfg.APRSISServer,
-			Callsign: cfg.APRSISCallsign,
-			Passcode: cfg.APRSISPasscode,
-			Filter:   "r/52/5/500",
-		})
-		go aprsisClient.Start(ctx)
-		log.Info().Str("server", cfg.APRSISServer).Str("callsign", cfg.APRSISCallsign).Msg("APRS-IS IGate starting")
-
-		// Wire subscriber via message bus (NATS or Paho)
-		if msgBus != nil {
-			aprsisSub := aprsis.NewSubscriber(aprsisClient, msgBus, cfg.APRSISCallsign)
-			aprsisSub.SubscribePositions()
-			aprsisSub.StartReverse()
-			log.Info().Msg("APRS-IS subscriber wired to message bus")
-		} else {
-			log.Warn().Msg("APRS-IS enabled but message bus not available — position injection disabled")
-		}
-	}
-
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetAccessEvaluator(accessEval)
@@ -450,9 +338,6 @@ func main() {
 	srv.SetDispatcher(dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
-	if msgBus != nil {
-		srv.SetMessageBus(msgBus)
-	}
 	if linkMgr != nil {
 		srv.SetLinkManager(linkMgr)
 	}
@@ -467,46 +352,6 @@ func main() {
 			log.Warn().Err(err).Str("imei", imei).Msg("failed to update device last_seen")
 		}
 	})
-
-	// OAuth2/OIDC authentication (MESHSAT-94)
-	if cfg.AuthEnabled {
-		if cfg.OIDCIssuerURL == "" || cfg.OIDCClientID == "" {
-			log.Fatal().Msg("HUB_AUTH_ENABLED=true requires HUB_OIDC_ISSUER_URL and HUB_OIDC_CLIENT_ID")
-		}
-		authProvider, authErr := auth.NewProvider(ctx, auth.ProviderConfig{
-			IssuerURL:    cfg.OIDCIssuerURL,
-			ClientID:     cfg.OIDCClientID,
-			ClientSecret: cfg.OIDCClientSecret,
-			RedirectURL:  cfg.OIDCRedirectURL,
-			Scopes:       cfg.OIDCScopes,
-			TenantClaim:  cfg.TenantClaim,
-		})
-		if authErr != nil {
-			log.Fatal().Err(authErr).Msg("failed to initialize OIDC provider")
-		}
-		authSessions := auth.NewSessionStore()
-		go authSessions.StartCleanup(ctx.Done())
-		authHandlers := auth.NewHandlers(authProvider, authSessions, cfg.AuthCookieDomain, cfg.AuthCookieSecure)
-		// API key validator wraps DB lookup for the auth middleware
-		apiKeyValidator := auth.APIKeyValidator(func(keyHash string) (*auth.APIKeyResult, error) {
-			rec, err := db.GetAPIKeyByHash(keyHash)
-			if err != nil {
-				return nil, err
-			}
-			go db.TouchAPIKeyLastUsed(rec.ID)
-			return &auth.APIKeyResult{
-				ID:       rec.ID,
-				TenantID: rec.TenantID,
-				DeviceID: rec.DeviceID,
-				Role:     auth.Role(rec.Role),
-				Label:    rec.Label,
-			}, nil
-		})
-		srv.SetAuth(authProvider, authSessions, authHandlers, apiKeyValidator)
-		log.Info().Str("issuer", cfg.OIDCIssuerURL).Msg("OAuth2/OIDC authentication enabled")
-	} else {
-		log.Info().Msg("authentication disabled (HUB_AUTH_ENABLED not set)")
-	}
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -566,12 +411,6 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
 	cancel() // Stop processor + retention + gateways
-	if msgBus != nil {
-		msgBus.Close()
-	}
-	if aprsisClient != nil {
-		aprsisClient.Stop()
-	}
 	sigRecorder.Stop()
 	if cellSigRecorder != nil {
 		cellSigRecorder.Stop()

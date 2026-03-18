@@ -8,7 +8,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
-	"meshsat/internal/auth"
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 )
@@ -249,8 +248,7 @@ func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 // ---- Access Rules ----
 
 func (s *Server) handleGetAccessRules(w http.ResponseWriter, r *http.Request) {
-	tid := auth.TenantIDFromContext(r.Context())
-	rules, err := s.db.GetAllAccessRules(tid)
+	rules, err := s.db.GetAllAccessRules()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -398,8 +396,7 @@ func (s *Server) handleDeleteAccessRule(w http.ResponseWriter, r *http.Request) 
 // ---- Object Groups ----
 
 func (s *Server) handleGetObjectGroups(w http.ResponseWriter, r *http.Request) {
-	tid := auth.TenantIDFromContext(r.Context())
-	groups, err := s.db.GetAllObjectGroups(tid)
+	groups, err := s.db.GetAllObjectGroups()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -462,8 +459,7 @@ type failoverGroupWithMembers struct {
 }
 
 func (s *Server) handleGetFailoverGroups(w http.ResponseWriter, r *http.Request) {
-	tid := auth.TenantIDFromContext(r.Context())
-	groups, err := s.db.GetAllFailoverGroups(tid)
+	groups, err := s.db.GetAllFailoverGroups()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

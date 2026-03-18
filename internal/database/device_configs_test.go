@@ -7,7 +7,7 @@ import (
 
 func TestDeviceConfigCreateAndList(t *testing.T) {
 	db := testDB(t)
-	devID, err := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, err := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 	if err != nil {
 		t.Fatalf("create device: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestDeviceConfigCreateAndList(t *testing.T) {
 
 func TestDeviceConfigGetLatest(t *testing.T) {
 	db := testDB(t)
-	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 
 	db.CreateDeviceConfigVersion(devID, "key: v1", "first")
 	db.CreateDeviceConfigVersion(devID, "key: v2", "second")
@@ -60,7 +60,7 @@ func TestDeviceConfigGetLatest(t *testing.T) {
 
 func TestDeviceConfigGetByVersion(t *testing.T) {
 	db := testDB(t)
-	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 
 	db.CreateDeviceConfigVersion(devID, "key: v1", "first")
 	db.CreateDeviceConfigVersion(devID, "key: v2", "second")
@@ -76,7 +76,7 @@ func TestDeviceConfigGetByVersion(t *testing.T) {
 
 func TestDeviceConfigAutoIncrement(t *testing.T) {
 	db := testDB(t)
-	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 
 	for i := 1; i <= 3; i++ {
 		v, err := db.CreateDeviceConfigVersion(devID, "key: val", "")
@@ -91,13 +91,13 @@ func TestDeviceConfigAutoIncrement(t *testing.T) {
 
 func TestDeviceConfigCascadeDelete(t *testing.T) {
 	db := testDB(t)
-	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 
 	db.CreateDeviceConfigVersion(devID, "key: v1", "first")
 	db.CreateDeviceConfigVersion(devID, "key: v2", "second")
 
 	// Delete device — configs should cascade
-	if err := db.DeleteDevice(devID, "default"); err != nil {
+	if err := db.DeleteDevice(devID); err != nil {
 		t.Fatalf("delete device: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestDeviceConfigCascadeDelete(t *testing.T) {
 
 func TestDeviceConfigDeleteVersion(t *testing.T) {
 	db := testDB(t)
-	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 
 	db.CreateDeviceConfigVersion(devID, "key: v1", "first")
 	db.CreateDeviceConfigVersion(devID, "key: v2", "second")

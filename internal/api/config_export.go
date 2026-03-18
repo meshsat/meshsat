@@ -8,7 +8,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
-	"meshsat/internal/auth"
 	"meshsat/internal/database"
 )
 
@@ -85,30 +84,28 @@ type FailoverMemberExport struct {
 // @Failure 500 {object} map[string]string
 // @Router /api/config/export [get]
 func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
-	tid := auth.TenantIDFromContext(r.Context())
-
-	ifaces, err := s.db.GetAllInterfaces(tid)
+	ifaces, err := s.db.GetAllInterfaces()
 	if err != nil {
 		log.Error().Err(err).Msg("config export: failed to load interfaces")
 		writeError(w, http.StatusInternalServerError, "failed to load interfaces")
 		return
 	}
 
-	rules, err := s.db.GetAllAccessRules(tid)
+	rules, err := s.db.GetAllAccessRules()
 	if err != nil {
 		log.Error().Err(err).Msg("config export: failed to load access rules")
 		writeError(w, http.StatusInternalServerError, "failed to load access rules")
 		return
 	}
 
-	groups, err := s.db.GetAllObjectGroups(tid)
+	groups, err := s.db.GetAllObjectGroups()
 	if err != nil {
 		log.Error().Err(err).Msg("config export: failed to load object groups")
 		writeError(w, http.StatusInternalServerError, "failed to load object groups")
 		return
 	}
 
-	fgroups, err := s.db.GetAllFailoverGroups(tid)
+	fgroups, err := s.db.GetAllFailoverGroups()
 	if err != nil {
 		log.Error().Err(err).Msg("config export: failed to load failover groups")
 		writeError(w, http.StatusInternalServerError, "failed to load failover groups")
@@ -224,23 +221,22 @@ func (s *Server) handleConfigDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load current running config
-	tid := auth.TenantIDFromContext(r.Context())
-	currentIfaces, err := s.db.GetAllInterfaces(tid)
+	currentIfaces, err := s.db.GetAllInterfaces()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load interfaces")
 		return
 	}
-	currentRules, err := s.db.GetAllAccessRules(tid)
+	currentRules, err := s.db.GetAllAccessRules()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load access rules")
 		return
 	}
-	currentGroups, err := s.db.GetAllObjectGroups(tid)
+	currentGroups, err := s.db.GetAllObjectGroups()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load object groups")
 		return
 	}
-	currentFGroups, err := s.db.GetAllFailoverGroups(tid)
+	currentFGroups, err := s.db.GetAllFailoverGroups()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load failover groups")
 		return

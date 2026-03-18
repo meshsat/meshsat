@@ -8,15 +8,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"meshsat/internal/auth"
 	"meshsat/internal/database"
 )
 
 // ── Unified Contacts CRUD ──
 
 func (s *Server) handleGetContacts(w http.ResponseWriter, r *http.Request) {
-	tid := auth.TenantIDFromContext(r.Context())
-	contacts, err := s.db.GetContacts(tid)
+	contacts, err := s.db.GetContacts()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list contacts")
 		return
@@ -33,8 +31,7 @@ func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid contact ID")
 		return
 	}
-	tid := auth.TenantIDFromContext(r.Context())
-	c, err := s.db.GetContact(id, tid)
+	c, err := s.db.GetContact(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "contact not found")
 		return
@@ -55,13 +52,12 @@ func (s *Server) handleCreateContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "display_name is required")
 		return
 	}
-	tid := auth.TenantIDFromContext(r.Context())
-	id, err := s.db.CreateContact(req.DisplayName, req.Notes, tid)
+	id, err := s.db.CreateContact(req.DisplayName, req.Notes)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create contact")
 		return
 	}
-	c, _ := s.db.GetContact(id, tid)
+	c, _ := s.db.GetContact(id)
 	writeJSON(w, http.StatusCreated, c)
 }
 
@@ -83,12 +79,11 @@ func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "display_name is required")
 		return
 	}
-	tid := auth.TenantIDFromContext(r.Context())
-	if err := s.db.UpdateContact(id, req.DisplayName, req.Notes, tid); err != nil {
+	if err := s.db.UpdateContact(id, req.DisplayName, req.Notes); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update contact")
 		return
 	}
-	c, _ := s.db.GetContact(id, tid)
+	c, _ := s.db.GetContact(id)
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -98,8 +93,7 @@ func (s *Server) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid contact ID")
 		return
 	}
-	tid := auth.TenantIDFromContext(r.Context())
-	if err := s.db.DeleteContact(id, tid); err != nil {
+	if err := s.db.DeleteContact(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete contact")
 		return
 	}
@@ -130,14 +124,6 @@ func (s *Server) handleAddContactAddress(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "type and address are required")
 		return
 	}
-
-	// Verify contact belongs to this tenant
-	tid := auth.TenantIDFromContext(r.Context())
-	if _, err := s.db.GetContact(contactID, tid); err != nil {
-		writeError(w, http.StatusNotFound, "contact not found")
-		return
-	}
-
 	id, err := s.db.AddContactAddress(contactID, req.Type, req.Address, req.Label, req.EncryptionKey, req.IsPrimary, req.AutoFwd)
 	if err != nil {
 		writeError(w, http.StatusConflict, fmt.Sprintf("address already exists or invalid: %v", err))
@@ -146,7 +132,7 @@ func (s *Server) handleAddContactAddress(w http.ResponseWriter, r *http.Request)
 
 	// Also sync to legacy sms_contacts table for backward compatibility
 	if req.Type == "sms" {
-		c, _ := s.db.GetContact(contactID, tid)
+		c, _ := s.db.GetContact(contactID)
 		if c != nil {
 			_, _ = s.db.CreateSMSContact(c.DisplayName, req.Address, c.Notes, req.AutoFwd)
 		}
@@ -227,8 +213,7 @@ func (s *Server) handleLookupContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "type and address query params required")
 		return
 	}
-	tid := auth.TenantIDFromContext(r.Context())
-	c, err := s.db.ResolveContact(addrType, address, tid)
+	c, err := s.db.ResolveContact(addrType, address)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "no contact for this address")
 		return

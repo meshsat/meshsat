@@ -17,7 +17,6 @@ type Interface struct {
 	EgressTransforms  string `db:"egress_transforms" json:"egress_transforms"`
 	IngressSeq        int64  `db:"ingress_seq" json:"ingress_seq"`
 	EgressSeq         int64  `db:"egress_seq" json:"egress_seq"`
-	TenantID          string `db:"tenant_id" json:"tenant_id"`
 	CreatedAt         string `db:"created_at" json:"created_at"`
 	UpdatedAt         string `db:"updated_at" json:"updated_at"`
 }
@@ -28,7 +27,6 @@ type ObjectGroup struct {
 	Type      string `db:"type" json:"type"`
 	Label     string `db:"label" json:"label"`
 	Members   string `db:"members" json:"members"`
-	TenantID  string `db:"tenant_id" json:"tenant_id"`
 	CreatedAt string `db:"created_at" json:"created_at"`
 }
 
@@ -36,7 +34,6 @@ type ObjectGroup struct {
 type AccessRule struct {
 	ID                 int64   `db:"id" json:"id"`
 	InterfaceID        string  `db:"interface_id" json:"interface_id"`
-	TenantID           string  `db:"tenant_id" json:"tenant_id"`
 	Direction          string  `db:"direction" json:"direction"`
 	Priority           int     `db:"priority" json:"priority"`
 	Name               string  `db:"name" json:"name"`
@@ -64,7 +61,6 @@ type FailoverGroup struct {
 	ID        string `db:"id" json:"id"`
 	Label     string `db:"label" json:"label"`
 	Mode      string `db:"mode" json:"mode"`
-	TenantID  string `db:"tenant_id" json:"tenant_id"`
 	CreatedAt string `db:"created_at" json:"created_at"`
 }
 
@@ -103,21 +99,11 @@ func (db *DB) GetInterface(id string) (*Interface, error) {
 	return &iface, nil
 }
 
-// GetAllInterfaces returns all interfaces ordered by channel_type and id, scoped to tenant.
-func (db *DB) GetAllInterfaces(tenantID string) ([]Interface, error) {
-	var ifaces []Interface
-	if err := db.Select(&ifaces, "SELECT * FROM interfaces WHERE tenant_id = ? ORDER BY channel_type, id", tenantID); err != nil {
-		return nil, fmt.Errorf("query interfaces: %w", err)
-	}
-	return ifaces, nil
-}
-
-// GetAllInterfacesAnyTenant returns all interfaces across all tenants.
-// Used by engine-level code (InterfaceManager, dispatcher) that operates without tenant context.
-func (db *DB) GetAllInterfacesAnyTenant() ([]Interface, error) {
+// GetAllInterfaces returns all interfaces ordered by channel_type and id.
+func (db *DB) GetAllInterfaces() ([]Interface, error) {
 	var ifaces []Interface
 	if err := db.Select(&ifaces, "SELECT * FROM interfaces ORDER BY channel_type, id"); err != nil {
-		return nil, fmt.Errorf("query all interfaces: %w", err)
+		return nil, fmt.Errorf("query interfaces: %w", err)
 	}
 	return ifaces, nil
 }
@@ -131,14 +117,14 @@ func (db *DB) GetInterfacesByType(channelType string) ([]Interface, error) {
 	return ifaces, nil
 }
 
-// InsertInterface creates a new interface record. TenantID must be set on the struct.
+// InsertInterface creates a new interface record.
 func (db *DB) InsertInterface(iface *Interface) error {
 	_, err := db.Exec(`INSERT INTO interfaces
 		(id, channel_type, label, enabled, device_id, device_port, config,
-		 ingress_transforms, egress_transforms, ingress_seq, egress_seq, tenant_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 ingress_transforms, egress_transforms, ingress_seq, egress_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		iface.ID, iface.ChannelType, iface.Label, iface.Enabled, iface.DeviceID, iface.DevicePort, iface.Config,
-		iface.IngressTransforms, iface.EgressTransforms, iface.IngressSeq, iface.EgressSeq, iface.TenantID)
+		iface.IngressTransforms, iface.EgressTransforms, iface.IngressSeq, iface.EgressSeq)
 	if err != nil {
 		return fmt.Errorf("insert interface: %w", err)
 	}
@@ -198,20 +184,20 @@ func (db *DB) GetObjectGroup(id string) (*ObjectGroup, error) {
 	return &g, nil
 }
 
-// GetAllObjectGroups returns all object groups, scoped to tenant.
-func (db *DB) GetAllObjectGroups(tenantID string) ([]ObjectGroup, error) {
+// GetAllObjectGroups returns all object groups.
+func (db *DB) GetAllObjectGroups() ([]ObjectGroup, error) {
 	var groups []ObjectGroup
-	if err := db.Select(&groups, "SELECT * FROM object_groups WHERE tenant_id = ? ORDER BY type, id", tenantID); err != nil {
+	if err := db.Select(&groups, "SELECT * FROM object_groups ORDER BY type, id"); err != nil {
 		return nil, fmt.Errorf("query object groups: %w", err)
 	}
 	return groups, nil
 }
 
-// InsertObjectGroup creates a new object group. TenantID must be set on the struct.
+// InsertObjectGroup creates a new object group.
 func (db *DB) InsertObjectGroup(g *ObjectGroup) error {
-	_, err := db.Exec(`INSERT INTO object_groups (id, type, label, members, tenant_id)
-		VALUES (?, ?, ?, ?, ?)`,
-		g.ID, g.Type, g.Label, g.Members, g.TenantID)
+	_, err := db.Exec(`INSERT INTO object_groups (id, type, label, members)
+		VALUES (?, ?, ?, ?)`,
+		g.ID, g.Type, g.Label, g.Members)
 	if err != nil {
 		return fmt.Errorf("insert object group: %w", err)
 	}
@@ -232,15 +218,6 @@ func (db *DB) UpdateObjectGroup(g *ObjectGroup) error {
 func (db *DB) DeleteObjectGroup(id string) error {
 	_, err := db.Exec("DELETE FROM object_groups WHERE id = ?", id)
 	return err
-}
-
-// GetAllObjectGroupsAnyTenant returns all object groups across all tenants.
-func (db *DB) GetAllObjectGroupsAnyTenant() ([]ObjectGroup, error) {
-	var groups []ObjectGroup
-	if err := db.Select(&groups, "SELECT * FROM object_groups ORDER BY type, id"); err != nil {
-		return nil, fmt.Errorf("query all object groups: %w", err)
-	}
-	return groups, nil
 }
 
 // ---- Access Rule CRUD ----
@@ -266,17 +243,8 @@ func (db *DB) GetAccessRules(interfaceID string, direction string) ([]AccessRule
 	return rules, nil
 }
 
-// GetAllAccessRules returns all access rules ordered by priority, scoped to tenant.
-func (db *DB) GetAllAccessRules(tenantID string) ([]AccessRule, error) {
-	var rules []AccessRule
-	if err := db.Select(&rules, "SELECT * FROM access_rules WHERE tenant_id = ? ORDER BY priority ASC, id ASC", tenantID); err != nil {
-		return nil, fmt.Errorf("query all access rules: %w", err)
-	}
-	return rules, nil
-}
-
-// GetAllAccessRulesAnyTenant returns all access rules across all tenants.
-func (db *DB) GetAllAccessRulesAnyTenant() ([]AccessRule, error) {
+// GetAllAccessRules returns all access rules ordered by priority.
+func (db *DB) GetAllAccessRules() ([]AccessRule, error) {
 	var rules []AccessRule
 	if err := db.Select(&rules, "SELECT * FROM access_rules ORDER BY priority ASC, id ASC"); err != nil {
 		return nil, fmt.Errorf("query all access rules: %w", err)
@@ -284,18 +252,18 @@ func (db *DB) GetAllAccessRulesAnyTenant() ([]AccessRule, error) {
 	return rules, nil
 }
 
-// InsertAccessRule creates a new access rule and returns its ID. TenantID must be set on the struct.
+// InsertAccessRule creates a new access rule and returns its ID.
 func (db *DB) InsertAccessRule(r *AccessRule) (int64, error) {
 	res, err := db.Exec(`INSERT INTO access_rules
 		(interface_id, direction, priority, name, enabled, action, forward_to, filters,
 		 filter_node_group, filter_sender_group, filter_portnum_group,
 		 schedule_type, schedule_config, forward_options,
-		 qos_level, rate_limit_per_min, rate_limit_window, tenant_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 qos_level, rate_limit_per_min, rate_limit_window)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.InterfaceID, r.Direction, r.Priority, r.Name, r.Enabled, r.Action, r.ForwardTo, r.Filters,
 		r.FilterNodeGroup, r.FilterSenderGroup, r.FilterPortnumGroup,
 		r.ScheduleType, r.ScheduleConfig, r.ForwardOptions,
-		r.QoSLevel, r.RateLimitPerMin, r.RateLimitWindow, r.TenantID)
+		r.QoSLevel, r.RateLimitPerMin, r.RateLimitWindow)
 	if err != nil {
 		return 0, fmt.Errorf("insert access rule: %w", err)
 	}
@@ -379,28 +347,19 @@ func (db *DB) GetFailoverGroup(id string) (*FailoverGroup, error) {
 	return &g, nil
 }
 
-// GetAllFailoverGroups returns all failover groups, scoped to tenant.
-func (db *DB) GetAllFailoverGroups(tenantID string) ([]FailoverGroup, error) {
+// GetAllFailoverGroups returns all failover groups.
+func (db *DB) GetAllFailoverGroups() ([]FailoverGroup, error) {
 	var groups []FailoverGroup
-	if err := db.Select(&groups, "SELECT * FROM failover_groups WHERE tenant_id = ? ORDER BY id", tenantID); err != nil {
+	if err := db.Select(&groups, "SELECT * FROM failover_groups ORDER BY id"); err != nil {
 		return nil, fmt.Errorf("query failover groups: %w", err)
 	}
 	return groups, nil
 }
 
-// GetAllFailoverGroupsAnyTenant returns all failover groups across all tenants.
-func (db *DB) GetAllFailoverGroupsAnyTenant() ([]FailoverGroup, error) {
-	var groups []FailoverGroup
-	if err := db.Select(&groups, "SELECT * FROM failover_groups ORDER BY id"); err != nil {
-		return nil, fmt.Errorf("query all failover groups: %w", err)
-	}
-	return groups, nil
-}
-
-// InsertFailoverGroup creates a new failover group. TenantID must be set on the struct.
+// InsertFailoverGroup creates a new failover group.
 func (db *DB) InsertFailoverGroup(g *FailoverGroup) error {
-	_, err := db.Exec(`INSERT INTO failover_groups (id, label, mode, tenant_id) VALUES (?, ?, ?, ?)`,
-		g.ID, g.Label, g.Mode, g.TenantID)
+	_, err := db.Exec(`INSERT INTO failover_groups (id, label, mode) VALUES (?, ?, ?)`,
+		g.ID, g.Label, g.Mode)
 	if err != nil {
 		return fmt.Errorf("insert failover group: %w", err)
 	}

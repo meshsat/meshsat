@@ -245,7 +245,7 @@ func TestDeviceOnMOCallback(t *testing.T) {
 
 	// Create a device
 	imei := "300234063904190"
-	s.db.CreateDevice(imei, "Test", "", "", "default")
+	s.db.CreateDevice(imei, "Test", "", "")
 
 	var callbackIMEI string
 	s.SetOnMOCallback(func(i string) {

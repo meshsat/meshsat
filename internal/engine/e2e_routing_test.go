@@ -331,7 +331,7 @@ func TestE2E_MeshToIridium_SingleRule(t *testing.T) {
 	// so we verify signing through the audit log instead.
 
 	// Verify audit log was created
-	entries, err := h.db.GetAuditLogAnyTenant(10)
+	entries, err := h.db.GetAuditLog(10)
 	if err != nil {
 		t.Fatal(err)
 	}

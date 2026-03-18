@@ -73,12 +73,6 @@ type Config struct {
 	BackupDir           string
 	BackupIntervalHours int
 	BackupMaxKeep       int
-
-	// VPN (WireGuard tunnel termination — MESHSAT-119)
-	VPNEnabled    bool   // true to enable WireGuard VPN peer management
-	VPNAPIBaseURL string // wg-rest-api (wireguard-ui) internal URL
-	VPNAPIUser    string // wireguard-ui basic auth username
-	VPNAPIPass    string // wireguard-ui basic auth password
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -130,11 +124,6 @@ func Load() *Config {
 		BackupDir:           envStr("MESHSAT_BACKUP_DIR", "/cubeos/data/backups"),
 		BackupIntervalHours: envInt("MESHSAT_BACKUP_INTERVAL_HOURS", 24),
 		BackupMaxKeep:       envInt("MESHSAT_BACKUP_MAX_KEEP", 7),
-
-		VPNEnabled:    envStr("HUB_VPN_ENABLED", "") == "true" || envStr("HUB_VPN_ENABLED", "") == "1",
-		VPNAPIBaseURL: envStr("HUB_VPN_API_URL", "http://wg-rest-api:5000"),
-		VPNAPIUser:    envStr("HUB_VPN_API_USER", "admin"),
-		VPNAPIPass:    envStr("HUB_VPN_API_PASSWORD", ""),
 	}
 }
 

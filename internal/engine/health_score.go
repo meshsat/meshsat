@@ -73,7 +73,7 @@ func (h *HealthScorer) Score(interfaceID string) HealthScore {
 
 // ScoreAll computes health scores for all registered interfaces.
 func (h *HealthScorer) ScoreAll() []HealthScore {
-	ifaces, err := h.db.GetAllInterfacesAnyTenant()
+	ifaces, err := h.db.GetAllInterfaces()
 	if err != nil {
 		log.Error().Err(err).Msg("health score: failed to list interfaces")
 		return nil

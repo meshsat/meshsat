@@ -17,7 +17,6 @@ import (
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
 	"meshsat/internal/gateway"
-	"meshsat/internal/ratelimit"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -94,9 +93,6 @@ type Dispatcher struct {
 
 	// Routing identity for delivery confirmations
 	routingIdentity *routing.Identity
-
-	// Satellite rate limiter (per-device)
-	satRateLimiter *ratelimit.SatelliteRateLimiter
 
 	mu sync.RWMutex
 }
@@ -179,11 +175,6 @@ func (d *Dispatcher) SetPassStateProvider(ps PassStateProvider) {
 // SetRoutingIdentity sets the routing identity for delivery confirmations.
 func (d *Dispatcher) SetRoutingIdentity(id *routing.Identity) {
 	d.routingIdentity = id
-}
-
-// SetSatelliteRateLimiter sets the per-device satellite rate limiter.
-func (d *Dispatcher) SetSatelliteRateLimiter(rl *ratelimit.SatelliteRateLimiter) {
-	d.satRateLimiter = rl
 }
 
 // satellitePassSched returns the pass scheduler for satellite channels, nil otherwise.
@@ -269,7 +260,7 @@ func (d *Dispatcher) Start(ctx context.Context) {
 // startInterfaceWorkers launches delivery workers for each enabled interface.
 // These workers pick up deliveries created by DispatchAccess (keyed by interface ID).
 func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
-	ifaces, err := d.db.GetAllInterfacesAnyTenant()
+	ifaces, err := d.db.GetAllInterfaces()
 	if err != nil {
 		log.Warn().Err(err).Msg("dispatcher: failed to load interfaces for workers")
 		return
@@ -297,18 +288,17 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 
 		workerCtx, workerCancel := context.WithCancel(ctx)
 		w := &DeliveryWorker{
-			channelID:      iface.ID,
-			desc:           desc,
-			db:             d.db,
-			gwProv:         d.gwProv,
-			mesh:           d.mesh,
-			emit:           d.emit,
-			signing:        d.signing,
-			transforms:     d.transforms,
-			access:         d.access,
-			passSched:      d.satellitePassSched(desc),
-			satRateLimiter: d.satRateLimiter,
-			cancel:         workerCancel,
+			channelID:  iface.ID,
+			desc:       desc,
+			db:         d.db,
+			gwProv:     d.gwProv,
+			mesh:       d.mesh,
+			emit:       d.emit,
+			signing:    d.signing,
+			transforms: d.transforms,
+			access:     d.access,
+			passSched:  d.satellitePassSched(desc),
+			cancel:     workerCancel,
 		}
 		d.workers[iface.ID] = w
 		go w.Run(workerCtx)
@@ -352,7 +342,6 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		access:          d.access,
 		passSched:       d.satellitePassSched(desc),
 		routingIdentity: d.routingIdentity,
-		satRateLimiter:  d.satRateLimiter,
 		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -696,11 +685,10 @@ type DeliveryWorker struct {
 	emit            func(transport.MeshEvent)
 	signing         *SigningService
 	transforms      *TransformPipeline
-	access          *rules.AccessEvaluator          // egress rule check before send
-	passSched       PassStateProvider               // satellite pass scheduler (nil for non-satellite)
-	routingIdentity *routing.Identity               // routing identity for delivery confirmations
-	satRateLimiter  *ratelimit.SatelliteRateLimiter // per-device satellite rate limiter
-	cancel          context.CancelFunc              // per-worker cancellation
+	access          *rules.AccessEvaluator // egress rule check before send
+	passSched       PassStateProvider      // satellite pass scheduler (nil for non-satellite)
+	routingIdentity *routing.Identity      // routing identity for delivery confirmations
+	cancel          context.CancelFunc     // per-worker cancellation
 }
 
 // Run polls the delivery queue and processes pending deliveries.
@@ -804,38 +792,6 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 				w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, "egress rules denied")
 			}
 			return
-		}
-	}
-
-	// Per-device satellite rate limiting (MESHSAT-124, MESHSAT-101): check before sending via satellite interfaces.
-	// Enforces burst control, daily/monthly send caps, and daily/monthly credit budgets.
-	// SOS messages (priority 0) always bypass rate limiting.
-	if w.satRateLimiter != nil && w.desc.IsSatellite {
-		isSOS := del.Priority == 0
-		// Resolve device_id from the interface's bound device
-		if iface, err := w.db.GetInterface(w.channelID); err == nil && iface.DeviceID != "" {
-			if dev, err := w.db.GetDeviceByIMEIAnyTenant(iface.DeviceID); err == nil {
-				// Calculate credit cost for budget enforcement (1 credit per 50 bytes, min 1)
-				creditCost := 1
-				if len(del.Payload) > 50 {
-					creditCost = (len(del.Payload) + 49) / 50
-				}
-				allowed, reason := w.satRateLimiter.Allow(dev.ID, isSOS, creditCost)
-				if !allowed {
-					if err := w.db.SetDeliveryStatus(del.ID, "throttled", fmt.Sprintf("rate limited: %s", reason), ""); err != nil {
-						log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery throttled")
-					}
-					log.Warn().Int64("id", del.ID).Str("channel", w.channelID).Str("reason", string(reason)).
-						Int64("device_id", dev.ID).Msg("delivery throttled by satellite rate limiter")
-					if w.emit != nil {
-						w.emit(transport.MeshEvent{
-							Type:    "delivery_throttled",
-							Message: fmt.Sprintf("Delivery to %s throttled: %s", w.channelID, reason),
-						})
-					}
-					return
-				}
-			}
 		}
 	}
 
@@ -998,19 +954,6 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {
 	if err := w.db.SetDeliveryStatus(del.ID, "sent", "", ""); err != nil {
 		log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery sent")
-	}
-
-	// Record satellite usage for rate limiting (MESHSAT-124)
-	if w.satRateLimiter != nil && w.desc.IsSatellite {
-		if iface, err := w.db.GetInterface(w.channelID); err == nil && iface.DeviceID != "" {
-			if dev, err := w.db.GetDeviceByIMEIAnyTenant(iface.DeviceID); err == nil {
-				credits := 1 // 1 credit per SBD send (approximation)
-				if len(del.Payload) > 50 {
-					credits = (len(del.Payload) + 49) / 50 // 1 credit per 50 bytes
-				}
-				w.satRateLimiter.RecordUsage(dev.ID, credits)
-			}
-		}
 	}
 
 	// QoS 1+: transport success IS the ACK (Iridium mo_status=0, MQTT PUBACK, HTTP 2xx).

@@ -149,7 +149,7 @@ func TestAuditEventWithAllFields(t *testing.T) {
 	ruleID := int64(7)
 	ss.AuditEvent("deliver", &ifaceID, &dir, &delID, &ruleID, "delivered via Iridium SBD")
 
-	entries, err := db.GetAuditLogAnyTenant(1)
+	entries, err := db.GetAuditLog(1)
 	if err != nil {
 		t.Fatalf("GetAuditLog: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestAuditChainContinuity(t *testing.T) {
 	ss.AuditEvent("dispatch", nil, nil, nil, nil, "event 1")
 	ss.AuditEvent("deliver", nil, nil, nil, nil, "event 2")
 
-	entries, err := db.GetAuditLogAnyTenant(10)
+	entries, err := db.GetAuditLog(10)
 	if err != nil {
 		t.Fatalf("GetAuditLog: %v", err)
 	}

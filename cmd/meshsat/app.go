@@ -27,7 +27,6 @@ import (
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
-	"meshsat/internal/vpn"
 )
 
 // App holds all initialized MeshSat components. Extracted from main() to
@@ -68,9 +67,6 @@ type App struct {
 
 	// Cloudloop credit balance poller (MESHSAT-100)
 	CreditPoller *engine.CreditPoller
-
-	// VPN manager (WireGuard tunnel termination — MESHSAT-119)
-	VPNMgr *vpn.Manager
 
 	// Message bus (NATS JetStream or Paho MQTT fallback)
 	MsgBus      bus.MessageBus
@@ -408,30 +404,6 @@ func (a *App) Setup(ctx context.Context) error {
 	// Backup scheduler (MESHSAT-125)
 	if cfg.BackupDir != "" && cfg.BackupIntervalHours > 0 {
 		a.BackupScheduler = backup.NewScheduler(db, cfg.BackupDir, time.Duration(cfg.BackupIntervalHours)*time.Hour, cfg.BackupMaxKeep)
-	}
-
-	// VPN manager — WireGuard tunnel termination (MESHSAT-119)
-	if cfg.VPNEnabled {
-		vpnClient := vpn.NewClient(cfg.VPNAPIBaseURL, cfg.VPNAPIUser, cfg.VPNAPIPass)
-		a.VPNMgr = vpn.NewManager(db, vpnClient)
-		if err := a.VPNMgr.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("VPN manager start failed — VPN features disabled")
-			a.VPNMgr = nil
-		} else {
-			srv.SetVPNManager(a.VPNMgr)
-			// Auto-provision VPN peer on device registration
-			srv.SetOnDeviceCreated(func(deviceID int64, label string) {
-				if err := a.VPNMgr.ProvisionPeer(deviceID, label); err != nil {
-					log.Warn().Err(err).Int64("device_id", deviceID).Msg("auto-provision VPN peer failed")
-				}
-			})
-			// Auto-remove VPN peer on device deletion
-			srv.SetOnDeviceDeleted(func(deviceID int64) {
-				if err := a.VPNMgr.RemovePeer(deviceID); err != nil {
-					log.Warn().Err(err).Int64("device_id", deviceID).Msg("auto-remove VPN peer failed")
-				}
-			})
-		}
 	}
 
 	a.HTTPServer = &http.Server{

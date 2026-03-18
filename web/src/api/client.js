@@ -1,9 +1,8 @@
 /**
  * MeshSat API Client
  *
- * Fetch wrapper with session cookie auth support.
- * When auth is enabled, the browser sends the meshsat_session cookie automatically.
- * On 401 responses, redirects to the login page.
+ * Simple unauthenticated fetch wrapper for standalone deployment.
+ * All endpoints are relative to /api on the same origin.
  */
 
 const BASE = '/api'
@@ -19,38 +18,15 @@ async function request(method, path, body = null, params = null) {
     if (s) url += `?${s}`
   }
 
-  const headers = { 'Content-Type': 'application/json' }
-
-  // Pass tenant ID header when auth is enabled (extracted from user context by the backend)
-  // This ensures the API client works correctly for service-to-service calls with API keys
-  // that may set tenant via header rather than OIDC claim.
-
   const opts = {
     method,
-    headers,
-    credentials: 'same-origin' // ensures cookies are sent
+    headers: { 'Content-Type': 'application/json' }
   }
   if (body && method !== 'GET') {
     opts.body = JSON.stringify(body)
   }
 
   const res = await fetch(url, opts)
-
-  // Handle auth failures — redirect to login
-  if (res.status === 401) {
-    // Check if auth is enabled before redirecting
-    try {
-      const statusRes = await fetch('/auth/status')
-      const statusData = await statusRes.json()
-      if (statusData.enabled && !statusData.authenticated) {
-        window.location.href = '/login'
-        return null
-      }
-    } catch {
-      // Fall through to normal error handling
-    }
-  }
-
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)
@@ -76,7 +52,7 @@ export default {
    */
   sse(path, onEvent, onError) {
     const url = `${BASE}${path}`
-    const source = new EventSource(url, { withCredentials: true })
+    const source = new EventSource(url)
 
     source.onmessage = (e) => {
       try {

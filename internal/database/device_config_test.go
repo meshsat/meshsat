@@ -9,7 +9,7 @@ func TestDeviceConfigVersionCRUD(t *testing.T) {
 	db := testDB(t)
 
 	// Create a device first
-	devID, err := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, err := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 	if err != nil {
 		t.Fatalf("create device: %v", err)
 	}
@@ -81,11 +81,11 @@ func TestDeviceConfigVersionCRUD(t *testing.T) {
 func TestDeviceConfigVersionCascadeDelete(t *testing.T) {
 	db := testDB(t)
 
-	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "", "default")
+	devID, _ := db.CreateDevice("300234063904190", "Unit 1", "rockblock", "")
 	db.CreateDeviceConfigVersion(devID, "key: value", "test")
 
 	// Delete the device — config versions should be cascade-deleted
-	if err := db.DeleteDevice(devID, "default"); err != nil {
+	if err := db.DeleteDevice(devID); err != nil {
 		t.Fatalf("delete device: %v", err)
 	}
 
