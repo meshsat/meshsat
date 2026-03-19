@@ -1,0 +1,2533 @@
+basePath: /
+definitions:
+  api.ConfigDiffResult:
+    properties:
+      access_rules:
+        $ref: '#/definitions/api.DiffCounts'
+      failover_groups:
+        $ref: '#/definitions/api.DiffCounts'
+      interfaces:
+        $ref: '#/definitions/api.DiffCounts'
+      object_groups:
+        $ref: '#/definitions/api.DiffCounts'
+    type: object
+  api.DiffCounts:
+    properties:
+      add:
+        type: integer
+      change:
+        type: integer
+      keep:
+        type: integer
+      remove:
+        type: integer
+    type: object
+  api.TopologyGraph:
+    properties:
+      links:
+        items:
+          $ref: '#/definitions/api.TopologyLink'
+        type: array
+      nodes:
+        items:
+          $ref: '#/definitions/api.TopologyNode'
+        type: array
+      stats:
+        $ref: '#/definitions/api.TopologyStats'
+    type: object
+  api.TopologyLink:
+    properties:
+      hops:
+        description: hop count
+        type: integer
+      snr:
+        description: link quality
+        type: number
+      source:
+        description: node ID
+        type: string
+      target:
+        description: node ID
+        type: string
+    type: object
+  api.TopologyNode:
+    properties:
+      battery:
+        description: percent, 0 if unknown
+        type: integer
+      id:
+        description: node ID (hex)
+        type: string
+      label:
+        description: long name or short name
+        type: string
+      last_seen:
+        description: unix timestamp
+        type: integer
+      lat:
+        type: number
+      lon:
+        type: number
+      online:
+        description: seen in last 15 minutes
+        type: boolean
+      snr:
+        description: last known SNR
+        type: number
+    type: object
+  api.TopologyStats:
+    properties:
+      avg_snr:
+        type: number
+      online_nodes:
+        type: integer
+      total_links:
+        type: integer
+      total_nodes:
+        type: integer
+    type: object
+  api.createLinkRequest:
+    properties:
+      dest_hash:
+        type: string
+    type: object
+  api.deviceConfigVersionResponse:
+    properties:
+      comment:
+        type: string
+      created_at:
+        type: string
+      version:
+        type: integer
+      yaml:
+        type: string
+    type: object
+  api.deviceResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: integer
+      imei:
+        type: string
+      label:
+        type: string
+      last_seen:
+        type: string
+      notes:
+        type: string
+      status:
+        type: string
+      type:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  api.linkResponse:
+    properties:
+      created_at:
+        type: string
+      dest_hash:
+        type: string
+      is_initiator:
+        type: boolean
+      last_activity:
+        type: string
+      link_id:
+        type: string
+      state:
+        type: string
+    type: object
+  api.routingDestinationResponse:
+    properties:
+      announce_count:
+        type: integer
+      dest_hash:
+        type: string
+      encryption_pub:
+        type: string
+      first_seen:
+        type: string
+      hop_count:
+        type: integer
+      last_seen:
+        type: string
+      signing_pub:
+        type: string
+      source_iface:
+        type: string
+    type: object
+  backup.BackupDiff:
+    properties:
+      access_rules:
+        $ref: '#/definitions/backup.DiffCounts'
+      contacts:
+        $ref: '#/definitions/backup.DiffCounts'
+      device_configs:
+        $ref: '#/definitions/backup.DiffCounts'
+      devices:
+        $ref: '#/definitions/backup.DiffCounts'
+      failover_groups:
+        $ref: '#/definitions/backup.DiffCounts'
+      interfaces:
+        $ref: '#/definitions/backup.DiffCounts'
+      iridium_locations:
+        $ref: '#/definitions/backup.DiffCounts'
+      object_groups:
+        $ref: '#/definitions/backup.DiffCounts'
+      preset_messages:
+        $ref: '#/definitions/backup.DiffCounts'
+      satellite_rate_limits:
+        $ref: '#/definitions/backup.DiffCounts'
+      sim_cards:
+        $ref: '#/definitions/backup.DiffCounts'
+      system_config:
+        $ref: '#/definitions/backup.DiffCounts'
+    type: object
+  backup.BackupInfo:
+    properties:
+      created_at:
+        type: string
+      filename:
+        type: string
+      size:
+        type: integer
+    type: object
+  backup.DiffCounts:
+    properties:
+      add:
+        type: integer
+      change:
+        type: integer
+      remove:
+        type: integer
+    type: object
+  database.DeadLetter:
+    properties:
+      created_at:
+        type: string
+      direction:
+        description: outbound (mesh→sat) or inbound (sat→mesh)
+        type: string
+      id:
+        type: integer
+      last_error:
+        type: string
+      max_retries:
+        type: integer
+      next_retry:
+        type: string
+      packet_id:
+        type: integer
+      payload:
+        items:
+          type: integer
+        type: array
+      priority:
+        description: 0=critical, 1=normal, 2=low
+        type: integer
+      retries:
+        type: integer
+      status:
+        description: pending, sent, expired, cancelled, received
+        type: string
+      text_preview:
+        description: plaintext for display (binary payload is not human-readable)
+        type: string
+      updated_at:
+        type: string
+    type: object
+  database.MessageStats:
+    properties:
+      by_portnum:
+        additionalProperties:
+          type: integer
+        type: object
+      by_transport:
+        additionalProperties:
+          type: integer
+        type: object
+      newest_at:
+        type: string
+      oldest_at:
+        type: string
+      today:
+        type: integer
+      today_text:
+        type: integer
+      total:
+        type: integer
+    type: object
+  database.SatelliteRateLimit:
+    properties:
+      burst_size:
+        type: integer
+      daily_limit:
+        type: integer
+      device_id:
+        type: integer
+      enabled:
+        type: boolean
+      monthly_limit:
+        type: integer
+      override_until:
+        type: string
+      refill_rate:
+        type: number
+      updated_at:
+        type: string
+    type: object
+  transport.ChannelRequest:
+    properties:
+      downlink_enabled:
+        type: boolean
+      index:
+        type: integer
+      name:
+        type: string
+      psk:
+        description: base64
+        type: string
+      role:
+        type: string
+      uplink_enabled:
+        type: boolean
+    type: object
+  transport.MeshStatus:
+    properties:
+      address:
+        type: string
+      connected:
+        type: boolean
+      hw_model:
+        type: integer
+      hw_model_name:
+        type: string
+      node_id:
+        type: string
+      node_name:
+        type: string
+      num_nodes:
+        type: integer
+      transport:
+        type: string
+    type: object
+  transport.SendRequest:
+    properties:
+      channel:
+        type: integer
+      text:
+        type: string
+      to:
+        type: string
+    type: object
+  transport.SignalInfo:
+    properties:
+      assessment:
+        description: '"none", "poor", "fair", "good", "excellent"'
+        type: string
+      bars:
+        description: 0-5
+        type: integer
+      timestamp:
+        type: string
+    type: object
+  transport.Waypoint:
+    properties:
+      description:
+        type: string
+      expire:
+        type: integer
+      icon:
+        type: integer
+      id:
+        type: integer
+      latitude:
+        type: number
+      longitude:
+        type: number
+      name:
+        type: string
+    type: object
+host: localhost:6050
+info:
+  contact: {}
+  description: Multi-channel communications gateway bridging Meshtastic, Iridium,
+    Astrocast, Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.
+  title: MeshSat API
+  version: "1.0"
+paths:
+  /api/admin/factory_reset:
+    post:
+      consumes:
+      - application/json
+      description: Sends a factory reset command — all device state returned to defaults
+      parameters:
+      - description: Target node
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            node_id:
+              format: int32
+              type: integer
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Factory reset a mesh node
+      tags:
+      - admin
+  /api/admin/reboot:
+    post:
+      consumes:
+      - application/json
+      description: Forwards a reboot command through HAL to a local or remote mesh
+        node
+      parameters:
+      - description: Target node and delay
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            delay_secs:
+              type: integer
+            node_id:
+              format: int32
+              type: integer
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reboot a mesh node
+      tags:
+      - admin
+  /api/admin/traceroute:
+    post:
+      consumes:
+      - application/json
+      description: Sends a traceroute to discover the path to a destination node
+      parameters:
+      - description: Destination node
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            node_id:
+              format: int32
+              type: integer
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Traceroute to a mesh node
+      tags:
+      - admin
+  /api/backup/create:
+    post:
+      description: Exports all Hub configuration state (interfaces, rules, devices,
+        contacts, encryption keys) as a ZIP archive. The backup is saved to disk and
+        returned as a download.
+      produces:
+      - application/zip
+      responses:
+        "200":
+          description: Backup ZIP archive
+          schema:
+            type: file
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create backup
+      tags:
+      - backup
+  /api/backup/download/{filename}:
+    get:
+      description: Downloads a previously saved backup file by filename.
+      parameters:
+      - description: Backup filename
+        in: path
+        name: filename
+        required: true
+        type: string
+      produces:
+      - application/zip
+      responses:
+        "200":
+          description: Backup ZIP archive
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Download backup
+      tags:
+      - backup
+  /api/backup/list:
+    get:
+      description: Returns a list of backup files stored on disk, newest first.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/backup.BackupInfo'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List backups
+      tags:
+      - backup
+  /api/backup/preview:
+    post:
+      consumes:
+      - application/zip
+      description: Uploads a backup ZIP and returns a diff summary showing what would
+        be added, removed, or changed — without applying.
+      parameters:
+      - description: Backup ZIP file
+        in: formData
+        name: backup
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/backup.BackupDiff'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview backup restore
+      tags:
+      - backup
+  /api/backup/restore:
+    post:
+      consumes:
+      - application/zip
+      description: Uploads a backup ZIP and replaces all Hub configuration state.
+        This is a full replace applied as a transaction. Use /api/backup/preview first
+        to see what will change.
+      parameters:
+      - description: Backup ZIP file
+        in: formData
+        name: backup
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Restore result
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Restore from backup
+      tags:
+      - backup
+  /api/backup/schedule:
+    get:
+      description: Returns the auto-backup schedule configuration.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get backup schedule
+      tags:
+      - backup
+    put:
+      consumes:
+      - application/json
+      description: Updates the auto-backup interval in hours. Set to 0 to disable.
+        Takes effect on next restart.
+      parameters:
+      - description: interval_hours
+        in: body
+        name: body
+        required: true
+        schema:
+          additionalProperties:
+            type: integer
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set backup schedule
+      tags:
+      - backup
+  /api/canned-messages:
+    get:
+      description: Requests the device to send back its canned messages via admin
+        channel
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get canned messages
+      tags:
+      - config
+    post:
+      consumes:
+      - application/json
+      description: Sets the canned messages on the Meshtastic device. Messages are
+        pipe-separated.
+      parameters:
+      - description: Pipe-separated canned messages (e.g. 'OK|Help|SOS')
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            messages:
+              type: string
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set canned messages
+      tags:
+      - config
+  /api/channels:
+    post:
+      consumes:
+      - application/json
+      description: Configures a Meshtastic radio channel via HAL
+      parameters:
+      - description: Channel configuration
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/transport.ChannelRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set channel configuration
+      tags:
+      - config
+  /api/config:
+    get:
+      description: Retrieves the full Meshtastic device configuration via HAL
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get device configuration
+      tags:
+      - config
+  /api/config/{section}:
+    get:
+      description: Requests a specific radio config section from the device (response
+        arrives via config_complete SSE event)
+      parameters:
+      - description: 'Config section: device, position, power, network, display, lora,
+          bluetooth, security'
+        in: path
+        name: section
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get config section
+      tags:
+      - config
+  /api/config/diff:
+    post:
+      consumes:
+      - application/yaml
+      description: Accepts a YAML document and returns a diff summary showing what
+        would be added, removed, changed, or kept — without applying any changes.
+      parameters:
+      - description: YAML configuration document
+        in: body
+        name: config
+        required: true
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ConfigDiffResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview configuration changes
+      tags:
+      - config
+  /api/config/export:
+    get:
+      description: Returns a YAML document containing all interfaces, access rules,
+        object groups, and failover groups. Excludes runtime fields (device_id, device_port,
+        counters, timestamps).
+      produces:
+      - application/yaml
+      responses:
+        "200":
+          description: YAML configuration document
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Export running configuration
+      tags:
+      - config
+  /api/config/import:
+    post:
+      consumes:
+      - application/yaml
+      description: Accepts a YAML document and replaces all interfaces, access rules,
+        object groups, and failover groups. This is a full replace (not merge) applied
+        as a transaction.
+      parameters:
+      - description: YAML configuration document
+        in: body
+        name: config
+        required: true
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Count of imported entities per type
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Import running configuration
+      tags:
+      - config
+  /api/config/module:
+    post:
+      consumes:
+      - application/json
+      description: Sends a module configuration update to the Meshtastic device via
+        HAL
+      parameters:
+      - description: Module config section and data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            config:
+              type: object
+            section:
+              type: string
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set module configuration
+      tags:
+      - config
+  /api/config/module/{section}:
+    get:
+      description: Requests a specific module config section (response arrives via
+        config_complete SSE event)
+      parameters:
+      - description: 'Module section: mqtt, serial, external_notification, store_forward,
+          range_test, telemetry, canned_message, audio, remote_hardware, neighbor_info'
+        in: path
+        name: section
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get module config section
+      tags:
+      - config
+  /api/config/radio:
+    post:
+      consumes:
+      - application/json
+      description: Sends a radio configuration update to the Meshtastic device via
+        HAL
+      parameters:
+      - description: Radio config section and data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            config:
+              type: object
+            section:
+              type: string
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set radio configuration
+      tags:
+      - config
+  /api/device-registry:
+    get:
+      description: Returns all registered devices with computed status (online/offline/never_seen).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/api.deviceResponse'
+            type: array
+      summary: List registered devices
+      tags:
+      - devices
+    post:
+      consumes:
+      - application/json
+      description: Registers a new device. Validates IMEI (15-digit Luhn check). Rejects
+        duplicate IMEIs with 409.
+      parameters:
+      - description: Device data
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.deviceResponse'
+        "400":
+          description: invalid IMEI or missing fields
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: duplicate IMEI
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a registered device
+      tags:
+      - devices
+  /api/device-registry/{id}:
+    delete:
+      description: Removes a device by ID.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a registered device
+      tags:
+      - devices
+    get:
+      description: Returns a single device by ID with computed status.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.deviceResponse'
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a registered device
+      tags:
+      - devices
+    put:
+      consumes:
+      - application/json
+      description: Updates label, type, and notes of an existing device.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Update data
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.deviceResponse'
+        "400":
+          description: invalid ID or JSON
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a registered device
+      tags:
+      - devices
+  /api/device-registry/{id}/config:
+    get:
+      description: Returns the latest YAML configuration version for a device, or
+        204 if no config exists.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.deviceConfigVersionResponse'
+        "204":
+          description: No configuration exists
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: device not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get current device configuration
+      tags:
+      - devices
+    put:
+      consumes:
+      - application/json
+      description: Saves a new YAML configuration version for a device. The YAML is
+        validated before saving.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Config data
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.deviceConfigVersionResponse'
+        "400":
+          description: invalid YAML or missing fields
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: device not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Save device configuration
+      tags:
+      - devices
+  /api/device-registry/{id}/config/rollback/{version}:
+    post:
+      description: Creates a new config version with the YAML content from the specified
+        version.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Version number to rollback to
+        in: path
+        name: version
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.deviceConfigVersionResponse'
+        "400":
+          description: invalid ID or version
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: device or version not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Rollback device configuration to a previous version
+      tags:
+      - devices
+  /api/device-registry/{id}/config/versions:
+    get:
+      description: Returns all configuration versions for a device, newest first.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/api.deviceConfigVersionResponse'
+            type: array
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: device not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List device configuration versions
+      tags:
+      - devices
+  /api/device-registry/{id}/config/versions/{version}:
+    get:
+      description: Returns a single configuration version by version number.
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Version number
+        in: path
+        name: version
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.deviceConfigVersionResponse'
+        "400":
+          description: invalid ID or version
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: device or version not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a specific device configuration version
+      tags:
+      - devices
+  /api/events:
+    get:
+      description: Server-Sent Events stream of real-time mesh events
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream
+          schema:
+            type: string
+      summary: Subscribe to mesh events (SSE)
+      tags:
+      - events
+  /api/gateways:
+    get:
+      description: Returns status and config of all gateways (MQTT, Iridium)
+      responses:
+        "200":
+          description: gateways
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List all gateways
+      tags:
+      - gateways
+  /api/gateways/{type}:
+    delete:
+      description: Stop and remove a gateway configuration
+      parameters:
+      - description: Gateway type (mqtt, iridium)
+        in: path
+        name: type
+        required: true
+        type: string
+      responses:
+        "200":
+          description: ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete gateway
+      tags:
+      - gateways
+    get:
+      description: Returns status and config for a specific gateway type
+      parameters:
+      - description: Gateway type (mqtt, iridium)
+        in: path
+        name: type
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get gateway status
+      tags:
+      - gateways
+    put:
+      description: Create or update gateway configuration
+      parameters:
+      - description: Gateway type (mqtt, iridium)
+        in: path
+        name: type
+        required: true
+        type: string
+      - description: Gateway config with enabled flag
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      responses:
+        "200":
+          description: ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Configure gateway
+      tags:
+      - gateways
+  /api/gateways/{type}/start:
+    post:
+      description: Start a configured gateway
+      parameters:
+      - description: Gateway type (mqtt, iridium)
+        in: path
+        name: type
+        required: true
+        type: string
+      responses:
+        "200":
+          description: ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start gateway
+      tags:
+      - gateways
+  /api/gateways/{type}/stop:
+    post:
+      description: Stop a running gateway
+      parameters:
+      - description: Gateway type (mqtt, iridium)
+        in: path
+        name: type
+        required: true
+        type: string
+      responses:
+        "200":
+          description: ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stop gateway
+      tags:
+      - gateways
+  /api/gateways/{type}/test:
+    post:
+      description: Test connectivity for a configured gateway
+      parameters:
+      - description: Gateway type (mqtt, iridium)
+        in: path
+        name: type
+        required: true
+        type: string
+      responses:
+        "200":
+          description: ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Test gateway
+      tags:
+      - gateways
+  /api/iridium/queue:
+    get:
+      description: Returns all non-sent, non-cancelled messages in the DLQ
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/database.DeadLetter'
+            type: array
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Iridium outbound queue
+      tags:
+      - iridium
+    post:
+      description: Enqueues a message in the DLQ; sent when signal becomes available
+      parameters:
+      - description: 'message body: {message: string, priority: 0|1|2}'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      responses:
+        "201":
+          description: queued
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Queue Iridium message for later send
+      tags:
+      - iridium
+  /api/iridium/queue/{id}:
+    delete:
+      description: Permanently removes a dead letter entry from the database
+      parameters:
+      - description: DLQ entry ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a queued Iridium message
+      tags:
+      - iridium
+  /api/iridium/queue/{id}/cancel:
+    post:
+      description: Marks the queued message as cancelled; it will not be retried
+      parameters:
+      - description: DLQ entry ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: cancelled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Cancel a queued Iridium message
+      tags:
+      - iridium
+  /api/iridium/queue/{id}/priority:
+    post:
+      description: Changes the send priority for a pending queued message
+      parameters:
+      - description: DLQ entry ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: '{priority: 0|1|2}'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      responses:
+        "200":
+          description: ok
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set priority for a queued Iridium message
+      tags:
+      - iridium
+  /api/iridium/signal:
+    get:
+      description: Returns fresh satellite signal bars using AT+CSQ (blocks until
+        modem responds)
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/transport.SignalInfo'
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Iridium signal (blocking)
+      tags:
+      - iridium
+  /api/iridium/signal/fast:
+    get:
+      description: Returns cached satellite signal bars using AT+CSQF (non-blocking)
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/transport.SignalInfo'
+        "503":
+          description: unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Iridium signal (fast)
+      tags:
+      - iridium
+  /api/links:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/api.linkResponse'
+            type: array
+      summary: List active links
+      tags:
+      - routing
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Destination hash (hex)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.createLinkRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Initiate a link to a remote destination
+      tags:
+      - routing
+  /api/links/{id}:
+    delete:
+      parameters:
+      - description: Link ID (hex)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      summary: Close a link
+      tags:
+      - routing
+  /api/loop-metrics:
+    get:
+      description: Returns counters for hop limit drops, visited set drops, self-loop
+        drops, and delivery dedups
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+      summary: Get loop prevention metrics
+      tags:
+      - routing
+  /api/messages:
+    get:
+      description: Returns paginated mesh messages with optional filters
+      parameters:
+      - description: Filter by node ID (!hex format)
+        in: query
+        name: node
+        type: string
+      - description: Start time (RFC3339)
+        in: query
+        name: since
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: until
+        type: string
+      - description: Filter by port number
+        in: query
+        name: portnum
+        type: integer
+      - description: Filter by transport (radio, mqtt, satellite)
+        in: query
+        name: transport
+        type: string
+      - description: Filter by direction (rx, tx)
+        in: query
+        name: direction
+        type: string
+      - description: Results per page (default 50, max 1000)
+        in: query
+        name: limit
+        type: integer
+      - description: Offset for pagination
+        in: query
+        name: offset
+        type: integer
+      responses:
+        "200":
+          description: messages, total, limit, offset
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get message history
+      tags:
+      - messages
+  /api/messages/send:
+    post:
+      description: Sends a text message through the Meshtastic radio
+      parameters:
+      - description: Message to send
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/transport.SendRequest'
+      responses:
+        "200":
+          description: success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send a mesh message
+      tags:
+      - messages
+  /api/messages/stats:
+    get:
+      description: Returns message counts grouped by transport and port number
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/database.MessageStats'
+      summary: Get message statistics
+      tags:
+      - messages
+  /api/neighbors:
+    get:
+      description: Returns neighbor info data from all nodes that have sent NeighborInfo
+        packets
+      parameters:
+      - description: Filter by node ID (decimal)
+        in: query
+        name: node
+        type: integer
+      - description: Max records (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get neighbor info
+      tags:
+      - neighbors
+  /api/nodes:
+    get:
+      description: Returns all known nodes from the Meshtastic radio's NodeDB
+      responses:
+        "200":
+          description: count, nodes
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: mesh transport unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get mesh nodes
+      tags:
+      - nodes
+  /api/position/fixed:
+    delete:
+      description: Removes the fixed GPS position from the Meshtastic device
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Remove fixed position
+      tags:
+      - position
+    post:
+      consumes:
+      - application/json
+      description: Sets a fixed GPS position on the Meshtastic device via admin message
+      parameters:
+      - description: Position
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            altitude:
+              type: integer
+            latitude:
+              type: number
+            longitude:
+              type: number
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set fixed position
+      tags:
+      - position
+  /api/position/send:
+    post:
+      consumes:
+      - application/json
+      description: Sends a Position packet to the mesh with the specified coordinates
+      parameters:
+      - description: Position
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            altitude:
+              type: integer
+            latitude:
+              type: number
+            longitude:
+              type: number
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Share own position
+      tags:
+      - position
+  /api/positions:
+    get:
+      description: Returns GPS track data for maps and position analysis
+      parameters:
+      - description: Node ID (!hex format)
+        in: query
+        name: node
+        type: string
+      - description: Start time (RFC3339)
+        in: query
+        name: since
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: until
+        type: string
+      - description: Max records (default 100, max 10000)
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: positions, node_id
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get position history
+      tags:
+      - positions
+  /api/range-test:
+    get:
+      description: Returns stored range test results
+      parameters:
+      - description: Max records (default 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get range test history
+      tags:
+      - range_test
+  /api/range-test/send:
+    post:
+      consumes:
+      - application/json
+      description: Sends a range test packet to the mesh (portnum 66)
+      parameters:
+      - description: Range test text and optional destination
+        in: body
+        name: body
+        schema:
+          properties:
+            text:
+              type: string
+            to:
+              format: int32
+              type: integer
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send range test
+      tags:
+      - range_test
+  /api/routing/destinations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/api.routingDestinationResponse'
+            type: array
+      summary: List known routing destinations
+      tags:
+      - routing
+  /api/routing/identity:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get local routing identity
+      tags:
+      - routing
+  /api/satellite/rate-limits:
+    get:
+      description: Returns rate limit configuration for all devices.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/database.SatelliteRateLimit'
+            type: array
+      summary: List satellite rate limit configs
+      tags:
+      - satellite-rate-limits
+  /api/satellite/rate-limits/{device_id}:
+    delete:
+      description: Removes rate limit configuration, reverting to unlimited.
+      parameters:
+      - description: Device ID
+        in: path
+        name: device_id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete satellite rate limit for a device
+      tags:
+      - satellite-rate-limits
+    get:
+      description: Returns rate limit config and current usage for a specific device.
+      parameters:
+      - description: Device ID
+        in: path
+        name: device_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get satellite rate limit for a device
+      tags:
+      - satellite-rate-limits
+    put:
+      consumes:
+      - application/json
+      description: Creates or updates rate limit configuration for a device.
+      parameters:
+      - description: Device ID
+        in: path
+        name: device_id
+        required: true
+        type: integer
+      - description: Rate limit config
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/database.SatelliteRateLimit'
+        "400":
+          description: invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: device not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set satellite rate limit for a device
+      tags:
+      - satellite-rate-limits
+  /api/satellite/rate-limits/{device_id}/override:
+    post:
+      consumes:
+      - application/json
+      description: Sets a temporary override that bypasses rate limiting for the specified
+        duration.
+      parameters:
+      - description: Device ID
+        in: path
+        name: device_id
+        required: true
+        type: integer
+      - description: Override config
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 'Admin override: temporarily bypass rate limit'
+      tags:
+      - satellite-rate-limits
+  /api/satellite/rate-limits/{device_id}/reset:
+    post:
+      description: Clears all usage counters for a device (admin override).
+      parameters:
+      - description: Device ID
+        in: path
+        name: device_id
+        required: true
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: invalid ID
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reset satellite usage counters
+      tags:
+      - satellite-rate-limits
+  /api/satellite/usage:
+    get:
+      description: Returns current usage stats for all devices with rate limits.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      summary: Get satellite usage summary
+      tags:
+      - satellite-rate-limits
+  /api/status:
+    get:
+      description: Returns current Meshtastic device connection status
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/transport.MeshStatus'
+        "503":
+          description: mesh transport unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get mesh status
+      tags:
+      - nodes
+  /api/store-forward/request:
+    post:
+      consumes:
+      - application/json
+      description: Sends a CLIENT_HISTORY request to a Store & Forward server node
+        to retrieve missed messages
+      parameters:
+      - description: S&F server node and history window in seconds
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            node_id:
+              format: int32
+              type: integer
+            window:
+              format: int32
+              type: integer
+          type: object
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Request store & forward history
+      tags:
+      - store_forward
+  /api/telemetry:
+    get:
+      description: Returns time-series telemetry data (battery, voltage, channel util,
+        environment)
+      parameters:
+      - description: Node ID (!hex format)
+        in: query
+        name: node
+        type: string
+      - description: Start time (RFC3339)
+        in: query
+        name: since
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: until
+        type: string
+      - description: Max records (default 100, max 10000)
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: telemetry, node_id
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get telemetry history
+      tags:
+      - telemetry
+  /api/topology:
+    get:
+      description: Returns nodes and inferred links for topology visualization
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TopologyGraph'
+        "503":
+          description: mesh transport unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get mesh topology
+      tags:
+      - topology
+  /api/waypoints:
+    post:
+      consumes:
+      - application/json
+      description: Sends a waypoint to the mesh network via HAL
+      parameters:
+      - description: Waypoint data
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/transport.Waypoint'
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send a waypoint
+      tags:
+      - waypoints
+  /api/webhook/rockblock:
+    post:
+      consumes:
+      - application/x-www-form-urlencoded
+      description: |-
+        Receives MO (Mobile Originated) messages from the RockBLOCK webhook service.
+        Verifies shared secret, hex-decodes payload, attempts SMAZ2 decompression,
+        and publishes to MQTT hub namespace topics (mo/raw, mo/decoded, position).
+      parameters:
+      - description: RockBLOCK IMEI
+        in: formData
+        name: imei
+        required: true
+        type: string
+      - description: MO message sequence number
+        in: formData
+        name: momsn
+        required: true
+        type: integer
+      - description: Transmission time (YY-MM-DD HH:MM:SS)
+        in: formData
+        name: transmit_time
+        required: true
+        type: string
+      - description: Iridium satellite latitude
+        in: formData
+        name: iridium_latitude
+        required: true
+        type: number
+      - description: Iridium satellite longitude
+        in: formData
+        name: iridium_longitude
+        required: true
+        type: number
+      - description: Circular error probable (km)
+        in: formData
+        name: iridium_cep
+        required: true
+        type: number
+      - description: Hex-encoded payload
+        in: formData
+        name: data
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: accepted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: malformed payload
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: invalid secret
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: RockBLOCK webhook receiver
+      tags:
+      - webhooks
+  /api/zigbee/devices:
+    get:
+      description: Returns all paired ZigBee devices with short address, IEEE address,
+        LQI, and last seen time
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: devices, connected, firmware
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List ZigBee devices
+      tags:
+      - zigbee
+  /api/zigbee/status:
+    get:
+      description: Returns the ZigBee coordinator connection state, message counts,
+        firmware version, and uptime
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: connected, running, messages_in, messages_out, errors, firmware,
+            device_count
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get ZigBee coordinator status
+      tags:
+      - zigbee
+  /health:
+    get:
+      description: Returns MeshSat service health and database status
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health check
+      tags:
+      - system
+schemes:
+- http
+- https
+swagger: "2.0"

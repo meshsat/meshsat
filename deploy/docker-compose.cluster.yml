@@ -1,0 +1,27 @@
+# MeshSat Hub — NATS Cluster Mode
+#
+# Multi-site deployment with NATS clustering. Each site runs its own NATS
+# node that routes to other sites. Field devices connect to local MQTT
+# port 1883, and messages replicate across the cluster.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.cluster.yml up -d
+#
+# Set NATS_ROUTES in .env to a comma-separated list of peer NATS route URLs:
+#   NATS_ROUTES=nats://nats-nl.example.com:6222,nats://nats-gr.example.com:6222
+
+services:
+  nats:
+    command: >
+      --jetstream
+      --store_dir /data
+      --mqtt_port 1883
+      --cluster_name meshsat
+      --cluster nats://0.0.0.0:6222
+      --routes ${NATS_ROUTES}
+      --http_port 8222
+    ports:
+      - "4222:4222"       # NATS client
+      - "6222:6222"       # NATS cluster routing
+      - "1883:1883"       # MQTT adapter
+      - "8222:8222"       # NATS monitoring

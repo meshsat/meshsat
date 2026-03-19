@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/channel"
+	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/gateway"
 	"meshsat/internal/routing"
@@ -397,6 +398,13 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			Strs("visited", msg.Visited).Str("source", sourceInterface).
 			Msg("loop prevention: max hop count exceeded, dropping message")
 		return 0
+	}
+
+	// Strip protocol version byte before applying ingress transforms.
+	if len(payload) > 0 {
+		protoVer, stripped := codec.StripVersionByte(payload)
+		codec.LogVersionInfo(protoVer, sourceInterface)
+		payload = stripped
 	}
 
 	// Apply ingress transforms to decrypt/decompress incoming payload
@@ -862,6 +870,8 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 				if tErr != nil {
 					log.Error().Err(tErr).Str("interface", w.channelID).Msg("egress transform failed, sending untransformed")
 				} else {
+					// Prepend protocol version byte after all transforms.
+					transformed = codec.PrependVersionByte(transformed)
 					del.Payload = transformed
 					del.TextPreview = string(transformed)
 				}

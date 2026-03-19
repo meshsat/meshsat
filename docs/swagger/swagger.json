@@ -1,0 +1,3785 @@
+{
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "Multi-channel communications gateway bridging Meshtastic, Iridium, Astrocast, Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.",
+        "title": "MeshSat API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:6050",
+    "basePath": "/",
+    "paths": {
+        "/api/admin/factory_reset": {
+            "post": {
+                "description": "Sends a factory reset command — all device state returned to defaults",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Factory reset a mesh node",
+                "parameters": [
+                    {
+                        "description": "Target node",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "node_id": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/admin/reboot": {
+            "post": {
+                "description": "Forwards a reboot command through HAL to a local or remote mesh node",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Reboot a mesh node",
+                "parameters": [
+                    {
+                        "description": "Target node and delay",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "delay_secs": {
+                                    "type": "integer"
+                                },
+                                "node_id": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/admin/traceroute": {
+            "post": {
+                "description": "Sends a traceroute to discover the path to a destination node",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Traceroute to a mesh node",
+                "parameters": [
+                    {
+                        "description": "Destination node",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "node_id": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backup/create": {
+            "post": {
+                "description": "Exports all Hub configuration state (interfaces, rules, devices, contacts, encryption keys) as a ZIP archive. The backup is saved to disk and returned as a download.",
+                "produces": [
+                    "application/zip"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "Create backup",
+                "responses": {
+                    "200": {
+                        "description": "Backup ZIP archive",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backup/download/{filename}": {
+            "get": {
+                "description": "Downloads a previously saved backup file by filename.",
+                "produces": [
+                    "application/zip"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "Download backup",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Backup filename",
+                        "name": "filename",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Backup ZIP archive",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backup/list": {
+            "get": {
+                "description": "Returns a list of backup files stored on disk, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "List backups",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/backup.BackupInfo"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backup/preview": {
+            "post": {
+                "description": "Uploads a backup ZIP and returns a diff summary showing what would be added, removed, or changed — without applying.",
+                "consumes": [
+                    "application/zip"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "Preview backup restore",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Backup ZIP file",
+                        "name": "backup",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/backup.BackupDiff"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backup/restore": {
+            "post": {
+                "description": "Uploads a backup ZIP and replaces all Hub configuration state. This is a full replace applied as a transaction. Use /api/backup/preview first to see what will change.",
+                "consumes": [
+                    "application/zip"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "Restore from backup",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Backup ZIP file",
+                        "name": "backup",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Restore result",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/backup/schedule": {
+            "get": {
+                "description": "Returns the auto-backup schedule configuration.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "Get backup schedule",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Updates the auto-backup interval in hours. Set to 0 to disable. Takes effect on next restart.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "backup"
+                ],
+                "summary": "Set backup schedule",
+                "parameters": [
+                    {
+                        "description": "interval_hours",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/canned-messages": {
+            "get": {
+                "description": "Requests the device to send back its canned messages via admin channel",
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get canned messages",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Sets the canned messages on the Meshtastic device. Messages are pipe-separated.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set canned messages",
+                "parameters": [
+                    {
+                        "description": "Pipe-separated canned messages (e.g. 'OK|Help|SOS')",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messages": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/channels": {
+            "post": {
+                "description": "Configures a Meshtastic radio channel via HAL",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set channel configuration",
+                "parameters": [
+                    {
+                        "description": "Channel configuration",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/transport.ChannelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config": {
+            "get": {
+                "description": "Retrieves the full Meshtastic device configuration via HAL",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get device configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/diff": {
+            "post": {
+                "description": "Accepts a YAML document and returns a diff summary showing what would be added, removed, changed, or kept — without applying any changes.",
+                "consumes": [
+                    "application/yaml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Preview configuration changes",
+                "parameters": [
+                    {
+                        "description": "YAML configuration document",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ConfigDiffResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/export": {
+            "get": {
+                "description": "Returns a YAML document containing all interfaces, access rules, object groups, and failover groups. Excludes runtime fields (device_id, device_port, counters, timestamps).",
+                "produces": [
+                    "application/yaml"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Export running configuration",
+                "responses": {
+                    "200": {
+                        "description": "YAML configuration document",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/import": {
+            "post": {
+                "description": "Accepts a YAML document and replaces all interfaces, access rules, object groups, and failover groups. This is a full replace (not merge) applied as a transaction.",
+                "consumes": [
+                    "application/yaml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Import running configuration",
+                "parameters": [
+                    {
+                        "description": "YAML configuration document",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Count of imported entities per type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/module": {
+            "post": {
+                "description": "Sends a module configuration update to the Meshtastic device via HAL",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set module configuration",
+                "parameters": [
+                    {
+                        "description": "Module config section and data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "config": {
+                                    "type": "object"
+                                },
+                                "section": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/module/{section}": {
+            "get": {
+                "description": "Requests a specific module config section (response arrives via config_complete SSE event)",
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get module config section",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Module section: mqtt, serial, external_notification, store_forward, range_test, telemetry, canned_message, audio, remote_hardware, neighbor_info",
+                        "name": "section",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/radio": {
+            "post": {
+                "description": "Sends a radio configuration update to the Meshtastic device via HAL",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set radio configuration",
+                "parameters": [
+                    {
+                        "description": "Radio config section and data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "config": {
+                                    "type": "object"
+                                },
+                                "section": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/{section}": {
+            "get": {
+                "description": "Requests a specific radio config section from the device (response arrives via config_complete SSE event)",
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get config section",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Config section: device, position, power, network, display, lora, bluetooth, security",
+                        "name": "section",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/device-registry": {
+            "get": {
+                "description": "Returns all registered devices with computed status (online/offline/never_seen).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "List registered devices",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.deviceResponse"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Registers a new device. Validates IMEI (15-digit Luhn check). Rejects duplicate IMEIs with 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Create a registered device",
+                "parameters": [
+                    {
+                        "description": "Device data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid IMEI or missing fields",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "duplicate IMEI",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/device-registry/{id}": {
+            "get": {
+                "description": "Returns a single device by ID with computed status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Get a registered device",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Updates label, type, and notes of an existing device.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Update a registered device",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Update data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID or JSON",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes a device by ID.",
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Delete a registered device",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/device-registry/{id}/config": {
+            "get": {
+                "description": "Returns the latest YAML configuration version for a device, or 204 if no config exists.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Get current device configuration",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceConfigVersionResponse"
+                        }
+                    },
+                    "204": {
+                        "description": "No configuration exists"
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "device not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Saves a new YAML configuration version for a device. The YAML is validated before saving.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Save device configuration",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Config data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceConfigVersionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid YAML or missing fields",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "device not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/device-registry/{id}/config/rollback/{version}": {
+            "post": {
+                "description": "Creates a new config version with the YAML content from the specified version.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Rollback device configuration to a previous version",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Version number to rollback to",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceConfigVersionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID or version",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "device or version not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/device-registry/{id}/config/versions": {
+            "get": {
+                "description": "Returns all configuration versions for a device, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "List device configuration versions",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.deviceConfigVersionResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "device not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/device-registry/{id}/config/versions/{version}": {
+            "get": {
+                "description": "Returns a single configuration version by version number.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Get a specific device configuration version",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Version number",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.deviceConfigVersionResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID or version",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "device or version not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/events": {
+            "get": {
+                "description": "Server-Sent Events stream of real-time mesh events",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "events"
+                ],
+                "summary": "Subscribe to mesh events (SSE)",
+                "responses": {
+                    "200": {
+                        "description": "SSE stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/gateways": {
+            "get": {
+                "description": "Returns status and config of all gateways (MQTT, Iridium)",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "List all gateways",
+                "responses": {
+                    "200": {
+                        "description": "gateways",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/gateways/{type}": {
+            "get": {
+                "description": "Returns status and config for a specific gateway type",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "Get gateway status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gateway type (mqtt, iridium)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Create or update gateway configuration",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "Configure gateway",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gateway type (mqtt, iridium)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Gateway config with enabled flag",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Stop and remove a gateway configuration",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "Delete gateway",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gateway type (mqtt, iridium)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/gateways/{type}/start": {
+            "post": {
+                "description": "Start a configured gateway",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "Start gateway",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gateway type (mqtt, iridium)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/gateways/{type}/stop": {
+            "post": {
+                "description": "Stop a running gateway",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "Stop gateway",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gateway type (mqtt, iridium)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/gateways/{type}/test": {
+            "post": {
+                "description": "Test connectivity for a configured gateway",
+                "tags": [
+                    "gateways"
+                ],
+                "summary": "Test gateway",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Gateway type (mqtt, iridium)",
+                        "name": "type",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/iridium/queue": {
+            "get": {
+                "description": "Returns all non-sent, non-cancelled messages in the DLQ",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Get Iridium outbound queue",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/database.DeadLetter"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Enqueues a message in the DLQ; sent when signal becomes available",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Queue Iridium message for later send",
+                "parameters": [
+                    {
+                        "description": "message body: {message: string, priority: 0|1|2}",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "queued",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/iridium/queue/{id}": {
+            "delete": {
+                "description": "Permanently removes a dead letter entry from the database",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Delete a queued Iridium message",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "DLQ entry ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "deleted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/iridium/queue/{id}/cancel": {
+            "post": {
+                "description": "Marks the queued message as cancelled; it will not be retried",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Cancel a queued Iridium message",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "DLQ entry ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "cancelled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/iridium/queue/{id}/priority": {
+            "post": {
+                "description": "Changes the send priority for a pending queued message",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Set priority for a queued Iridium message",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "DLQ entry ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "{priority: 0|1|2}",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/iridium/signal": {
+            "get": {
+                "description": "Returns fresh satellite signal bars using AT+CSQ (blocks until modem responds)",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Get Iridium signal (blocking)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/transport.SignalInfo"
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/iridium/signal/fast": {
+            "get": {
+                "description": "Returns cached satellite signal bars using AT+CSQF (non-blocking)",
+                "tags": [
+                    "iridium"
+                ],
+                "summary": "Get Iridium signal (fast)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/transport.SignalInfo"
+                        }
+                    },
+                    "503": {
+                        "description": "unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/links": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "routing"
+                ],
+                "summary": "List active links",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.linkResponse"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "routing"
+                ],
+                "summary": "Initiate a link to a remote destination",
+                "parameters": [
+                    {
+                        "description": "Destination hash (hex)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.createLinkRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/links/{id}": {
+            "delete": {
+                "tags": [
+                    "routing"
+                ],
+                "summary": "Close a link",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Link ID (hex)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/api/loop-metrics": {
+            "get": {
+                "description": "Returns counters for hop limit drops, visited set drops, self-loop drops, and delivery dedups",
+                "tags": [
+                    "routing"
+                ],
+                "summary": "Get loop prevention metrics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer",
+                                "format": "int64"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/messages": {
+            "get": {
+                "description": "Returns paginated mesh messages with optional filters",
+                "tags": [
+                    "messages"
+                ],
+                "summary": "Get message history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by node ID (!hex format)",
+                        "name": "node",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start time (RFC3339)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End time (RFC3339)",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Filter by port number",
+                        "name": "portnum",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by transport (radio, mqtt, satellite)",
+                        "name": "transport",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by direction (rx, tx)",
+                        "name": "direction",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Results per page (default 50, max 1000)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Offset for pagination",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "messages, total, limit, offset",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/messages/send": {
+            "post": {
+                "description": "Sends a text message through the Meshtastic radio",
+                "tags": [
+                    "messages"
+                ],
+                "summary": "Send a mesh message",
+                "parameters": [
+                    {
+                        "description": "Message to send",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/transport.SendRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/messages/stats": {
+            "get": {
+                "description": "Returns message counts grouped by transport and port number",
+                "tags": [
+                    "messages"
+                ],
+                "summary": "Get message statistics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/database.MessageStats"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/neighbors": {
+            "get": {
+                "description": "Returns neighbor info data from all nodes that have sent NeighborInfo packets",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "neighbors"
+                ],
+                "summary": "Get neighbor info",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Filter by node ID (decimal)",
+                        "name": "node",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max records (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/nodes": {
+            "get": {
+                "description": "Returns all known nodes from the Meshtastic radio's NodeDB",
+                "tags": [
+                    "nodes"
+                ],
+                "summary": "Get mesh nodes",
+                "responses": {
+                    "200": {
+                        "description": "count, nodes",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "mesh transport unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/position/fixed": {
+            "post": {
+                "description": "Sets a fixed GPS position on the Meshtastic device via admin message",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "position"
+                ],
+                "summary": "Set fixed position",
+                "parameters": [
+                    {
+                        "description": "Position",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "altitude": {
+                                    "type": "integer"
+                                },
+                                "latitude": {
+                                    "type": "number"
+                                },
+                                "longitude": {
+                                    "type": "number"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the fixed GPS position from the Meshtastic device",
+                "tags": [
+                    "position"
+                ],
+                "summary": "Remove fixed position",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/position/send": {
+            "post": {
+                "description": "Sends a Position packet to the mesh with the specified coordinates",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "position"
+                ],
+                "summary": "Share own position",
+                "parameters": [
+                    {
+                        "description": "Position",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "altitude": {
+                                    "type": "integer"
+                                },
+                                "latitude": {
+                                    "type": "number"
+                                },
+                                "longitude": {
+                                    "type": "number"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/positions": {
+            "get": {
+                "description": "Returns GPS track data for maps and position analysis",
+                "tags": [
+                    "positions"
+                ],
+                "summary": "Get position history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Node ID (!hex format)",
+                        "name": "node",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start time (RFC3339)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End time (RFC3339)",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max records (default 100, max 10000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "positions, node_id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/range-test": {
+            "get": {
+                "description": "Returns stored range test results",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "range_test"
+                ],
+                "summary": "Get range test history",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Max records (default 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/range-test/send": {
+            "post": {
+                "description": "Sends a range test packet to the mesh (portnum 66)",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "range_test"
+                ],
+                "summary": "Send range test",
+                "parameters": [
+                    {
+                        "description": "Range test text and optional destination",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "text": {
+                                    "type": "string"
+                                },
+                                "to": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/routing/destinations": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "routing"
+                ],
+                "summary": "List known routing destinations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/api.routingDestinationResponse"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/routing/identity": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "routing"
+                ],
+                "summary": "Get local routing identity",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/satellite/rate-limits": {
+            "get": {
+                "description": "Returns rate limit configuration for all devices.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "List satellite rate limit configs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/database.SatelliteRateLimit"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/satellite/rate-limits/{device_id}": {
+            "get": {
+                "description": "Returns rate limit config and current usage for a specific device.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "Get satellite rate limit for a device",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "device_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Creates or updates rate limit configuration for a device.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "Set satellite rate limit for a device",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "device_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rate limit config",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/database.SatelliteRateLimit"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "device not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes rate limit configuration, reverting to unlimited.",
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "Delete satellite rate limit for a device",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "device_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/satellite/rate-limits/{device_id}/override": {
+            "post": {
+                "description": "Sets a temporary override that bypasses rate limiting for the specified duration.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "Admin override: temporarily bypass rate limit",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "device_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Override config",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/satellite/rate-limits/{device_id}/reset": {
+            "post": {
+                "description": "Clears all usage counters for a device (admin override).",
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "Reset satellite usage counters",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Device ID",
+                        "name": "device_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid ID",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/satellite/usage": {
+            "get": {
+                "description": "Returns current usage stats for all devices with rate limits.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "satellite-rate-limits"
+                ],
+                "summary": "Get satellite usage summary",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/status": {
+            "get": {
+                "description": "Returns current Meshtastic device connection status",
+                "tags": [
+                    "nodes"
+                ],
+                "summary": "Get mesh status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/transport.MeshStatus"
+                        }
+                    },
+                    "503": {
+                        "description": "mesh transport unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/store-forward/request": {
+            "post": {
+                "description": "Sends a CLIENT_HISTORY request to a Store \u0026 Forward server node to retrieve missed messages",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "store_forward"
+                ],
+                "summary": "Request store \u0026 forward history",
+                "parameters": [
+                    {
+                        "description": "S\u0026F server node and history window in seconds",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "node_id": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                },
+                                "window": {
+                                    "type": "integer",
+                                    "format": "int32"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/telemetry": {
+            "get": {
+                "description": "Returns time-series telemetry data (battery, voltage, channel util, environment)",
+                "tags": [
+                    "telemetry"
+                ],
+                "summary": "Get telemetry history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Node ID (!hex format)",
+                        "name": "node",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start time (RFC3339)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End time (RFC3339)",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max records (default 100, max 10000)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "telemetry, node_id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/topology": {
+            "get": {
+                "description": "Returns nodes and inferred links for topology visualization",
+                "tags": [
+                    "topology"
+                ],
+                "summary": "Get mesh topology",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.TopologyGraph"
+                        }
+                    },
+                    "503": {
+                        "description": "mesh transport unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/waypoints": {
+            "post": {
+                "description": "Sends a waypoint to the mesh network via HAL",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "waypoints"
+                ],
+                "summary": "Send a waypoint",
+                "parameters": [
+                    {
+                        "description": "Waypoint data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/transport.Waypoint"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/webhook/rockblock": {
+            "post": {
+                "description": "Receives MO (Mobile Originated) messages from the RockBLOCK webhook service.\nVerifies shared secret, hex-decodes payload, attempts SMAZ2 decompression,\nand publishes to MQTT hub namespace topics (mo/raw, mo/decoded, position).",
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "RockBLOCK webhook receiver",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "RockBLOCK IMEI",
+                        "name": "imei",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "MO message sequence number",
+                        "name": "momsn",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Transmission time (YY-MM-DD HH:MM:SS)",
+                        "name": "transmit_time",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "number",
+                        "description": "Iridium satellite latitude",
+                        "name": "iridium_latitude",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "number",
+                        "description": "Iridium satellite longitude",
+                        "name": "iridium_longitude",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "number",
+                        "description": "Circular error probable (km)",
+                        "name": "iridium_cep",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Hex-encoded payload",
+                        "name": "data",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "malformed payload",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "invalid secret",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/zigbee/devices": {
+            "get": {
+                "description": "Returns all paired ZigBee devices with short address, IEEE address, LQI, and last seen time",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "zigbee"
+                ],
+                "summary": "List ZigBee devices",
+                "responses": {
+                    "200": {
+                        "description": "devices, connected, firmware",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/zigbee/status": {
+            "get": {
+                "description": "Returns the ZigBee coordinator connection state, message counts, firmware version, and uptime",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "zigbee"
+                ],
+                "summary": "Get ZigBee coordinator status",
+                "responses": {
+                    "200": {
+                        "description": "connected, running, messages_in, messages_out, errors, firmware, device_count",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "Returns MeshSat service health and database status",
+                "tags": [
+                    "system"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.ConfigDiffResult": {
+            "type": "object",
+            "properties": {
+                "access_rules": {
+                    "$ref": "#/definitions/api.DiffCounts"
+                },
+                "failover_groups": {
+                    "$ref": "#/definitions/api.DiffCounts"
+                },
+                "interfaces": {
+                    "$ref": "#/definitions/api.DiffCounts"
+                },
+                "object_groups": {
+                    "$ref": "#/definitions/api.DiffCounts"
+                }
+            }
+        },
+        "api.DiffCounts": {
+            "type": "object",
+            "properties": {
+                "add": {
+                    "type": "integer"
+                },
+                "change": {
+                    "type": "integer"
+                },
+                "keep": {
+                    "type": "integer"
+                },
+                "remove": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.TopologyGraph": {
+            "type": "object",
+            "properties": {
+                "links": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.TopologyLink"
+                    }
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.TopologyNode"
+                    }
+                },
+                "stats": {
+                    "$ref": "#/definitions/api.TopologyStats"
+                }
+            }
+        },
+        "api.TopologyLink": {
+            "type": "object",
+            "properties": {
+                "hops": {
+                    "description": "hop count",
+                    "type": "integer"
+                },
+                "snr": {
+                    "description": "link quality",
+                    "type": "number"
+                },
+                "source": {
+                    "description": "node ID",
+                    "type": "string"
+                },
+                "target": {
+                    "description": "node ID",
+                    "type": "string"
+                }
+            }
+        },
+        "api.TopologyNode": {
+            "type": "object",
+            "properties": {
+                "battery": {
+                    "description": "percent, 0 if unknown",
+                    "type": "integer"
+                },
+                "id": {
+                    "description": "node ID (hex)",
+                    "type": "string"
+                },
+                "label": {
+                    "description": "long name or short name",
+                    "type": "string"
+                },
+                "last_seen": {
+                    "description": "unix timestamp",
+                    "type": "integer"
+                },
+                "lat": {
+                    "type": "number"
+                },
+                "lon": {
+                    "type": "number"
+                },
+                "online": {
+                    "description": "seen in last 15 minutes",
+                    "type": "boolean"
+                },
+                "snr": {
+                    "description": "last known SNR",
+                    "type": "number"
+                }
+            }
+        },
+        "api.TopologyStats": {
+            "type": "object",
+            "properties": {
+                "avg_snr": {
+                    "type": "number"
+                },
+                "online_nodes": {
+                    "type": "integer"
+                },
+                "total_links": {
+                    "type": "integer"
+                },
+                "total_nodes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.createLinkRequest": {
+            "type": "object",
+            "properties": {
+                "dest_hash": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.deviceConfigVersionResponse": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "yaml": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.deviceResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "imei": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "last_seen": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.linkResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "dest_hash": {
+                    "type": "string"
+                },
+                "is_initiator": {
+                    "type": "boolean"
+                },
+                "last_activity": {
+                    "type": "string"
+                },
+                "link_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.routingDestinationResponse": {
+            "type": "object",
+            "properties": {
+                "announce_count": {
+                    "type": "integer"
+                },
+                "dest_hash": {
+                    "type": "string"
+                },
+                "encryption_pub": {
+                    "type": "string"
+                },
+                "first_seen": {
+                    "type": "string"
+                },
+                "hop_count": {
+                    "type": "integer"
+                },
+                "last_seen": {
+                    "type": "string"
+                },
+                "signing_pub": {
+                    "type": "string"
+                },
+                "source_iface": {
+                    "type": "string"
+                }
+            }
+        },
+        "backup.BackupDiff": {
+            "type": "object",
+            "properties": {
+                "access_rules": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "contacts": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "device_configs": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "devices": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "failover_groups": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "interfaces": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "iridium_locations": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "object_groups": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "preset_messages": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "satellite_rate_limits": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "sim_cards": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                },
+                "system_config": {
+                    "$ref": "#/definitions/backup.DiffCounts"
+                }
+            }
+        },
+        "backup.BackupInfo": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "backup.DiffCounts": {
+            "type": "object",
+            "properties": {
+                "add": {
+                    "type": "integer"
+                },
+                "change": {
+                    "type": "integer"
+                },
+                "remove": {
+                    "type": "integer"
+                }
+            }
+        },
+        "database.DeadLetter": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "direction": {
+                    "description": "outbound (mesh→sat) or inbound (sat→mesh)",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "max_retries": {
+                    "type": "integer"
+                },
+                "next_retry": {
+                    "type": "string"
+                },
+                "packet_id": {
+                    "type": "integer"
+                },
+                "payload": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "priority": {
+                    "description": "0=critical, 1=normal, 2=low",
+                    "type": "integer"
+                },
+                "retries": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "pending, sent, expired, cancelled, received",
+                    "type": "string"
+                },
+                "text_preview": {
+                    "description": "plaintext for display (binary payload is not human-readable)",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "database.MessageStats": {
+            "type": "object",
+            "properties": {
+                "by_portnum": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "by_transport": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "newest_at": {
+                    "type": "string"
+                },
+                "oldest_at": {
+                    "type": "string"
+                },
+                "today": {
+                    "type": "integer"
+                },
+                "today_text": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "database.SatelliteRateLimit": {
+            "type": "object",
+            "properties": {
+                "burst_size": {
+                    "type": "integer"
+                },
+                "daily_limit": {
+                    "type": "integer"
+                },
+                "device_id": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "monthly_limit": {
+                    "type": "integer"
+                },
+                "override_until": {
+                    "type": "string"
+                },
+                "refill_rate": {
+                    "type": "number"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "transport.ChannelRequest": {
+            "type": "object",
+            "properties": {
+                "downlink_enabled": {
+                    "type": "boolean"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "psk": {
+                    "description": "base64",
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "uplink_enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "transport.MeshStatus": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "connected": {
+                    "type": "boolean"
+                },
+                "hw_model": {
+                    "type": "integer"
+                },
+                "hw_model_name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "string"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "num_nodes": {
+                    "type": "integer"
+                },
+                "transport": {
+                    "type": "string"
+                }
+            }
+        },
+        "transport.SendRequest": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "transport.SignalInfo": {
+            "type": "object",
+            "properties": {
+                "assessment": {
+                    "description": "\"none\", \"poor\", \"fair\", \"good\", \"excellent\"",
+                    "type": "string"
+                },
+                "bars": {
+                    "description": "0-5",
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "transport.Waypoint": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "expire": {
+                    "type": "integer"
+                },
+                "icon": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "latitude": {
+                    "type": "number"
+                },
+                "longitude": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

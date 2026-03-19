@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/certpin"
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
@@ -132,7 +133,8 @@ func (g *WebhookGateway) ForwardWebhookInbound(msg InboundMessage) {
 func (g *WebhookGateway) sendWorker(ctx context.Context) {
 	defer g.wg.Done()
 
-	client := &http.Client{Timeout: time.Duration(g.config.TimeoutSec) * time.Second}
+	pin := certpin.FromEnv("MESHSAT_HUB_CERT_PIN", "MESHSAT_HUB_CERT_PIN_BACKUP")
+	client := certpin.PinnedClient(pin, time.Duration(g.config.TimeoutSec)*time.Second)
 
 	for {
 		select {
