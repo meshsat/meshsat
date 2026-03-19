@@ -104,9 +104,11 @@ export function nodeStatusDot(node, nowSec) {
 // ── Transport / Message helpers ──
 
 export function transportBadge(t) {
-  if (t === 'radio') return { label: 'Mesh', cls: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' }
-  if (t === 'iridium') return { label: 'Sat', cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' }
-  if (t === 'mqtt') return { label: 'MQTT', cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30' }
+  if (t === 'radio') return { label: 'Mesh', cls: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' }
+  if (t === 'iridium') return { label: 'Sat', cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30' }
+  if (t === 'cellular') return { label: 'Cell', cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30' }
+  if (t === 'sms') return { label: 'SMS', cls: 'bg-green-500/20 text-green-400 border-green-500/30' }
+  if (t === 'mqtt') return { label: 'MQTT', cls: 'bg-gray-500/20 text-gray-400 border-gray-500/30' }
   return { label: t || '?', cls: 'bg-gray-500/20 text-gray-400 border-gray-500/30' }
 }
 

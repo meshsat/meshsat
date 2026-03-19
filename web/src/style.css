@@ -17,11 +17,11 @@ body {
   background: transparent;
 }
 .tactical-scroll::-webkit-scrollbar-thumb {
-  background: #1a2230;
+  background: #374151;
   border-radius: 2px;
 }
 .tactical-scroll::-webkit-scrollbar-thumb:hover {
-  background: #2a3444;
+  background: #4B5563;
 }
 
 /* Pulsing dot animation for status indicators */
