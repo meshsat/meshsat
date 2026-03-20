@@ -14,12 +14,17 @@ const DefaultRouteTTL = 30 * time.Minute
 type InterfaceType string
 
 const (
+	IfaceMesh       InterfaceType = "mesh"
 	IfaceMQTT       InterfaceType = "mqtt"
 	IfaceTor        InterfaceType = "tor"
 	IfaceWireGuard  InterfaceType = "wireguard"
 	IfaceIridium    InterfaceType = "iridium"
+	IfaceCellular   InterfaceType = "cellular"
 	IfaceAstrocast  InterfaceType = "astrocast"
 	IfaceGlobalstar InterfaceType = "globalstar"
+	IfaceZigBee     InterfaceType = "zigbee"
+	IfaceAPRS       InterfaceType = "aprs"
+	IfaceWebhook    InterfaceType = "webhook"
 	IfaceLocal      InterfaceType = "local"
 )
 
@@ -27,14 +32,16 @@ const (
 // Free interfaces return 0; satellite interfaces return their typical cost.
 func InterfaceCost(iface InterfaceType) float64 {
 	switch iface {
-	case IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceLocal:
+	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceWebhook, IfaceLocal:
 		return 0
-	case IfaceIridium:
-		return 0.05
+	case IfaceCellular:
+		return 0.005 // SMS cost
 	case IfaceAstrocast:
 		return 0.01
 	case IfaceGlobalstar:
 		return 0.02
+	case IfaceIridium:
+		return 0.05
 	default:
 		return 1.0
 	}

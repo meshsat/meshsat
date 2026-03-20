@@ -52,6 +52,7 @@ type App struct {
 	LinkMgr         *routing.LinkManager
 	BWLimiter       *routing.AnnounceBandwidthLimiter
 	Keepalive       *routing.LinkKeepalive
+	TransportNode   *routing.TransportNode
 
 	// Transports (set before calling Setup)
 	Mesh  transport.MeshTransport
@@ -212,13 +213,31 @@ func (a *App) Setup(ctx context.Context) error {
 		})
 		a.Keepalive.Start(ctx)
 
-		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized")
+		// Interface registry — wraps transports as Reticulum interfaces
+		ifaceReg := routing.NewInterfaceRegistry()
+		ifaceReg.Register(routing.NewReticulumInterface("mesh_0", "mesh", 230, func(fwdCtx context.Context, packet []byte) error {
+			return mesh.SendRaw(fwdCtx, transport.RawRequest{
+				PortNum: 256, // PRIVATE_APP
+				Payload: base64Encode(packet),
+			})
+		}))
+		// TODO: register iridium_0, cellular_0, zigbee_0, aprs_0 when gateways support raw packet send
+
+		// Transport Node — cross-interface packet forwarding via routing table
+		a.TransportNode = routing.NewTransportNode(routingID, 30*time.Minute, ifaceReg.Send)
+		a.TransportNode.Enable()
+		a.TransportNode.StartExpiry(ctx)
+
+		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized (transport node enabled)")
 	}
 
 	// Wire routing into the processor event loop so incoming PRIVATE_APP
 	// packets (announces, link handshakes, keepalives) are handled.
 	if a.AnnounceRelay != nil {
 		a.Processor.SetRouting(a.AnnounceRelay, a.LinkMgr, a.Keepalive, a.DestTable)
+	}
+	if a.TransportNode != nil {
+		a.Processor.SetTransportNode(a.TransportNode)
 	}
 
 	// Dispatcher

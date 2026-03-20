@@ -42,6 +42,7 @@ type Processor struct {
 	linkMgr       *routing.LinkManager
 	keepalive     *routing.LinkKeepalive
 	destTable     *routing.DestinationTable
+	transportNode *routing.TransportNode
 
 	// Gateway injection dedup (text hash → timestamp, 5min TTL)
 	relayDedupMu sync.Mutex
@@ -82,6 +83,12 @@ func (p *Processor) SetRouting(relay *routing.AnnounceRelay, linkMgr *routing.Li
 	p.linkMgr = linkMgr
 	p.keepalive = keepalive
 	p.destTable = destTable
+}
+
+// SetTransportNode enables Transport Node packet forwarding. When set,
+// non-local Reticulum packets are forwarded via the routing table.
+func (p *Processor) SetTransportNode(tn *routing.TransportNode) {
+	p.transportNode = tn
 }
 
 // Subscribe adds an SSE re-broadcast subscriber. Returns a channel and unsubscribe func.
@@ -416,20 +423,40 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 					ctx := context.Background()
 					if p.announceRelay.HandleAnnounce(ctx, payload, "mesh_0") {
 						log.Debug().Int("size", len(payload)).Msg("routing: Reticulum announce processed")
+						// Feed to transport node routing table
+						if p.transportNode != nil {
+							ann, err := routing.UnmarshalAnnounce(payload)
+							if err == nil {
+								p.transportNode.ProcessAnnounce(ann, "mesh_0")
+							}
+						}
 					}
 				}
 				return
 
 			case reticulum.PacketLinkRequest:
-				log.Debug().Msg("routing: Reticulum link request (not yet wired)")
+				// Try transport forwarding first (relay to dest if not for us)
+				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
+					log.Debug().Msg("routing: Reticulum link request forwarded via transport")
+					return
+				}
+				log.Debug().Msg("routing: Reticulum link request (local handling not yet wired)")
 				return
 
 			case reticulum.PacketProof:
-				log.Debug().Msg("routing: Reticulum proof (not yet wired)")
+				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
+					log.Debug().Msg("routing: Reticulum proof forwarded via transport")
+					return
+				}
+				log.Debug().Msg("routing: Reticulum proof (local handling not yet wired)")
 				return
 
 			case reticulum.PacketData:
-				log.Debug().Msg("routing: Reticulum data packet (not yet wired)")
+				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
+					log.Debug().Msg("routing: Reticulum data packet forwarded via transport")
+					return
+				}
+				log.Debug().Msg("routing: Reticulum data packet (local handling not yet wired)")
 				return
 			}
 		}
