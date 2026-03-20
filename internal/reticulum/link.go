@@ -1,23 +1,26 @@
 package reticulum
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"io"
 )
 
 // Link packet wire sizes.
 const (
 	// LinkRequestLen: type(1) + dest_hash(16) + ephemeral_pub(32) + random(16) = 65.
 	LinkRequestLen = 1 + TruncatedHashLen + EncryptionPubLen + 16
-	// LinkResponseLen: type(1) + link_id(32) + ephemeral_pub(32) + signature(64) = 129.
-	LinkResponseLen = 1 + LinkIDLen + EncryptionPubLen + SignatureLen
-	// LinkConfirmLen: type(1) + link_id(32) + proof(32) = 65.
-	LinkConfirmLen = 1 + LinkIDLen + 32
+	// LinkProofLen: type(1) + link_id(32) + ephemeral_pub(32) + signature(64) = 129.
+	LinkProofLen = 1 + LinkIDLen + EncryptionPubLen + SignatureLen
 )
 
-// LinkRequest is the first packet in the 3-packet handshake.
+// LinkRequest is the first packet in the 2-packet handshake.
 type LinkRequest struct {
 	DestHash     [DestHashLen]byte
 	EphemeralPub *ecdh.PublicKey // fresh X25519 key
@@ -61,120 +64,199 @@ func (lr *LinkRequest) ComputeLinkID() [LinkIDLen]byte {
 	return sha256.Sum256(lr.Marshal())
 }
 
-// LinkResponse is the second packet: destination's ephemeral key + signature.
-type LinkResponse struct {
+// LinkProof is the second (and final) packet: responder's ephemeral key + signature.
+// This completes the 2-packet Reticulum link handshake.
+type LinkProof struct {
 	LinkID       [LinkIDLen]byte
 	EphemeralPub *ecdh.PublicKey
 	Signature    []byte // Ed25519 over (link_id + ephemeral_pub)
 }
 
-// Marshal serializes a link response.
-func (resp *LinkResponse) Marshal() []byte {
-	buf := make([]byte, 0, LinkResponseLen)
-	buf = append(buf, BridgeLinkResponse)
-	buf = append(buf, resp.LinkID[:]...)
-	buf = append(buf, resp.EphemeralPub.Bytes()...)
-	buf = append(buf, resp.Signature...)
+// Marshal serializes a link proof.
+func (lp *LinkProof) Marshal() []byte {
+	buf := make([]byte, 0, LinkProofLen)
+	buf = append(buf, BridgeLinkProof)
+	buf = append(buf, lp.LinkID[:]...)
+	buf = append(buf, lp.EphemeralPub.Bytes()...)
+	buf = append(buf, lp.Signature...)
 	return buf
 }
 
-// UnmarshalLinkResponse parses a link response.
-func UnmarshalLinkResponse(data []byte) (*LinkResponse, error) {
-	if len(data) < LinkResponseLen {
+// UnmarshalLinkProof parses a link proof.
+func UnmarshalLinkProof(data []byte) (*LinkProof, error) {
+	if len(data) < LinkProofLen {
 		return nil, ErrTooShort
 	}
-	if data[0] != BridgeLinkResponse {
+	if data[0] != BridgeLinkProof {
 		return nil, ErrWrongType
 	}
-	resp := &LinkResponse{}
+	lp := &LinkProof{}
 	pos := 1
-	copy(resp.LinkID[:], data[pos:pos+LinkIDLen])
+	copy(lp.LinkID[:], data[pos:pos+LinkIDLen])
 	pos += LinkIDLen
 	pub, err := ecdh.X25519().NewPublicKey(data[pos : pos+EncryptionPubLen])
 	if err != nil {
 		return nil, fmt.Errorf("reticulum: invalid ephemeral key: %w", err)
 	}
-	resp.EphemeralPub = pub
+	lp.EphemeralPub = pub
 	pos += EncryptionPubLen
-	resp.Signature = make([]byte, ed25519.SignatureSize)
-	copy(resp.Signature, data[pos:pos+ed25519.SignatureSize])
-	return resp, nil
+	lp.Signature = make([]byte, ed25519.SignatureSize)
+	copy(lp.Signature, data[pos:pos+ed25519.SignatureSize])
+	return lp, nil
 }
 
-// VerifyLinkResponse verifies the link response signature against a known
-// signing public key. The signature covers (link_id + ephemeral_pub).
-func (resp *LinkResponse) Verify(signingPub ed25519.PublicKey) bool {
-	signable := make([]byte, 0, LinkIDLen+EncryptionPubLen)
-	signable = append(signable, resp.LinkID[:]...)
-	signable = append(signable, resp.EphemeralPub.Bytes()...)
-	return VerifySignature(signingPub, signable, resp.Signature)
+// Verify checks the link proof signature against a known signing public key.
+// The signature covers (link_id + ephemeral_pub).
+func (lp *LinkProof) Verify(signingPub ed25519.PublicKey) bool {
+	signable := LinkProofSignable(lp.LinkID, lp.EphemeralPub)
+	return VerifySignature(signingPub, signable, lp.Signature)
 }
 
-// LinkConfirm is the third packet: proof that the initiator derived the shared secret.
-type LinkConfirm struct {
-	LinkID [LinkIDLen]byte
-	Proof  [32]byte // SHA-256(shared_secret + link_id + "confirm")
-}
-
-// Marshal serializes a link confirmation.
-func (lc *LinkConfirm) Marshal() []byte {
-	buf := make([]byte, 0, LinkConfirmLen)
-	buf = append(buf, BridgeLinkConfirm)
-	buf = append(buf, lc.LinkID[:]...)
-	buf = append(buf, lc.Proof[:]...)
-	return buf
-}
-
-// UnmarshalLinkConfirm parses a link confirmation.
-func UnmarshalLinkConfirm(data []byte) (*LinkConfirm, error) {
-	if len(data) < LinkConfirmLen {
-		return nil, ErrTooShort
-	}
-	if data[0] != BridgeLinkConfirm {
-		return nil, ErrWrongType
-	}
-	lc := &LinkConfirm{}
-	pos := 1
-	copy(lc.LinkID[:], data[pos:pos+LinkIDLen])
-	pos += LinkIDLen
-	copy(lc.Proof[:], data[pos:pos+32])
-	return lc, nil
-}
-
-// ComputeConfirmProof computes SHA-256(shared_secret + link_id + "confirm").
-func ComputeConfirmProof(sharedSecret []byte, linkID [LinkIDLen]byte) [32]byte {
-	h := sha256.New()
-	h.Write(sharedSecret)
-	h.Write(linkID[:])
-	h.Write([]byte("confirm"))
-	var proof [32]byte
-	copy(proof[:], h.Sum(nil))
-	return proof
-}
-
-// DeriveSymKeys derives send and receive AES-256 keys from the ECDH shared secret.
-// The initiator uses (key1=send, key2=recv); the responder uses (key1=recv, key2=send).
-func DeriveSymKeys(sharedSecret []byte, linkID [LinkIDLen]byte) (key1, key2 []byte) {
-	h1 := sha256.New()
-	h1.Write(sharedSecret)
-	h1.Write(linkID[:])
-	h1.Write([]byte("key1"))
-	key1 = h1.Sum(nil)
-
-	h2 := sha256.New()
-	h2.Write(sharedSecret)
-	h2.Write(linkID[:])
-	h2.Write([]byte("key2"))
-	key2 = h2.Sum(nil)
-
-	return key1, key2
-}
-
-// LinkResponseSignable returns the bytes that a link response signature covers:
+// LinkProofSignable returns the bytes that a link proof signature covers:
 // link_id(32) + ephemeral_pub(32).
-func LinkResponseSignable(linkID [LinkIDLen]byte, ephPub *ecdh.PublicKey) []byte {
+func LinkProofSignable(linkID [LinkIDLen]byte, ephPub *ecdh.PublicKey) []byte {
 	buf := make([]byte, 0, LinkIDLen+EncryptionPubLen)
 	buf = append(buf, linkID[:]...)
 	buf = append(buf, ephPub.Bytes()...)
 	return buf
+}
+
+// ---------------------------------------------------------------------------
+// HKDF-SHA256 key derivation (RFC 5869)
+// ---------------------------------------------------------------------------
+
+// hkdfExtract computes HKDF-Extract: PRK = HMAC-SHA256(salt, IKM).
+func hkdfExtract(salt, ikm []byte) []byte {
+	mac := hmac.New(sha256.New, salt)
+	mac.Write(ikm)
+	return mac.Sum(nil)
+}
+
+// hkdfExpand computes HKDF-Expand: derives output keying material from PRK.
+func hkdfExpand(prk, info []byte, length int) []byte {
+	mac := hmac.New(sha256.New, prk)
+	var prev []byte
+	result := make([]byte, 0, length)
+	counter := byte(1)
+	for len(result) < length {
+		mac.Reset()
+		mac.Write(prev)
+		mac.Write(info)
+		mac.Write([]byte{counter})
+		prev = mac.Sum(nil)
+		result = append(result, prev...)
+		counter++
+	}
+	return result[:length]
+}
+
+// DeriveSymKeys derives four AES-256 and HMAC-SHA256 keys from the ECDH
+// shared secret using HKDF-SHA256. Returns (encKey1, hmacKey1, encKey2, hmacKey2).
+//
+// The initiator uses (encKey1, hmacKey1) for sending and (encKey2, hmacKey2)
+// for receiving. The responder reverses the assignment.
+func DeriveSymKeys(sharedSecret []byte, linkID [LinkIDLen]byte) (encKey1, hmacKey1, encKey2, hmacKey2 []byte) {
+	prk := hkdfExtract(linkID[:], sharedSecret)
+
+	encKey1 = hkdfExpand(prk, []byte("meshsat.link.enc1"), SymKeyLen)
+	hmacKey1 = hkdfExpand(prk, []byte("meshsat.link.hmac1"), HMACLen)
+	encKey2 = hkdfExpand(prk, []byte("meshsat.link.enc2"), SymKeyLen)
+	hmacKey2 = hkdfExpand(prk, []byte("meshsat.link.hmac2"), HMACLen)
+	return
+}
+
+// ---------------------------------------------------------------------------
+// AES-256-CBC + HMAC-SHA256 encrypt-then-MAC
+// ---------------------------------------------------------------------------
+
+// CBCHMACEncrypt encrypts plaintext with AES-256-CBC and appends HMAC-SHA256.
+// Wire format: IV(16) + ciphertext(N, PKCS7-padded) + HMAC(32).
+func CBCHMACEncrypt(encKey, hmacKey, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(encKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// PKCS7 pad
+	padLen := aes.BlockSize - (len(plaintext) % aes.BlockSize)
+	padded := make([]byte, len(plaintext)+padLen)
+	copy(padded, plaintext)
+	for i := len(plaintext); i < len(padded); i++ {
+		padded[i] = byte(padLen)
+	}
+
+	// Random IV
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, fmt.Errorf("generate IV: %w", err)
+	}
+
+	// CBC encrypt
+	ciphertext := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ciphertext, padded)
+
+	// Assemble: IV + ciphertext
+	result := make([]byte, 0, aes.BlockSize+len(ciphertext)+HMACLen)
+	result = append(result, iv...)
+	result = append(result, ciphertext...)
+
+	// HMAC-SHA256 over IV + ciphertext (encrypt-then-MAC)
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write(result) // covers IV + ciphertext
+	result = append(result, mac.Sum(nil)...)
+
+	return result, nil
+}
+
+// CBCHMACDecrypt verifies HMAC-SHA256 and decrypts AES-256-CBC ciphertext.
+// Expects wire format: IV(16) + ciphertext(N) + HMAC(32).
+func CBCHMACDecrypt(encKey, hmacKey, data []byte) ([]byte, error) {
+	minLen := aes.BlockSize + aes.BlockSize + HMACLen // IV + at least 1 block + HMAC
+	if len(data) < minLen {
+		return nil, fmt.Errorf("reticulum: ciphertext too short (%d < %d)", len(data), minLen)
+	}
+
+	// Split: IV | ciphertext | HMAC tag
+	tagStart := len(data) - HMACLen
+	ivAndCT := data[:tagStart]
+	tag := data[tagStart:]
+
+	// Verify HMAC first (encrypt-then-MAC: verify before decrypt)
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write(ivAndCT)
+	expected := mac.Sum(nil)
+	if !hmac.Equal(tag, expected) {
+		return nil, fmt.Errorf("reticulum: HMAC verification failed")
+	}
+
+	iv := ivAndCT[:aes.BlockSize]
+	ciphertext := ivAndCT[aes.BlockSize:]
+
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("reticulum: ciphertext not block-aligned")
+	}
+
+	block, err := aes.NewCipher(encKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// CBC decrypt
+	plaintext := make([]byte, len(ciphertext))
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plaintext, ciphertext)
+
+	// PKCS7 unpad
+	if len(plaintext) == 0 {
+		return nil, fmt.Errorf("reticulum: empty plaintext after decrypt")
+	}
+	padLen := int(plaintext[len(plaintext)-1])
+	if padLen == 0 || padLen > aes.BlockSize || padLen > len(plaintext) {
+		return nil, fmt.Errorf("reticulum: invalid PKCS7 padding")
+	}
+	for i := len(plaintext) - padLen; i < len(plaintext); i++ {
+		if plaintext[i] != byte(padLen) {
+			return nil, fmt.Errorf("reticulum: invalid PKCS7 padding")
+		}
+	}
+	return plaintext[:len(plaintext)-padLen], nil
 }

@@ -5,7 +5,6 @@ import (
 )
 
 func TestLinkEstablishment_FullHandshake(t *testing.T) {
-	// Two identities: initiator (Alice) and responder (Bob)
 	alice := testIdentity(t)
 	bob := testIdentity(t)
 
@@ -24,27 +23,18 @@ func TestLinkEstablishment_FullHandshake(t *testing.T) {
 		t.Errorf("request length: got %d, want %d", len(reqData), LinkRequestLen)
 	}
 
-	// Step 2: Bob receives the request and sends a response
-	respData, err := bobLM.HandleLinkRequest(reqData)
+	// Step 2: Bob receives the request and sends a proof
+	proofData, err := bobLM.HandleLinkRequest(reqData)
 	if err != nil {
 		t.Fatalf("handle link request: %v", err)
 	}
-	if len(respData) != LinkResponseLen {
-		t.Errorf("response length: got %d, want %d", len(respData), LinkResponseLen)
+	if len(proofData) != LinkProofLen {
+		t.Errorf("proof length: got %d, want %d", len(proofData), LinkProofLen)
 	}
 
-	// Step 3: Alice receives the response and sends a confirm
-	confirmData, err := aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
-	if err != nil {
-		t.Fatalf("handle link response: %v", err)
-	}
-	if len(confirmData) != LinkConfirmLen {
-		t.Errorf("confirm length: got %d, want %d", len(confirmData), LinkConfirmLen)
-	}
-
-	// Step 4: Bob receives the confirm
-	if err := bobLM.HandleLinkConfirm(confirmData); err != nil {
-		t.Fatalf("handle link confirm: %v", err)
+	// Step 3: Alice receives the proof — link established (2-packet handshake)
+	if err := aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey()); err != nil {
+		t.Fatalf("handle link proof: %v", err)
 	}
 
 	// Verify both sides have established links
@@ -56,14 +46,11 @@ func TestLinkEstablishment_FullHandshake(t *testing.T) {
 	if len(bobLinks) != 1 {
 		t.Fatalf("bob should have 1 active link, got %d", len(bobLinks))
 	}
-
-	// Verify link IDs match
 	if aliceLinks[0].ID != bobLinks[0].ID {
 		t.Error("link IDs should match")
 	}
 
-	// Total wire bytes: 65 + 129 + 65 = 259 bytes
-	totalBytes := len(reqData) + len(respData) + len(confirmData)
+	totalBytes := len(reqData) + len(proofData)
 	if totalBytes > 340 {
 		t.Errorf("total handshake %d bytes exceeds single Iridium SBD (340)", totalBytes)
 	}
@@ -77,16 +64,14 @@ func TestLinkEstablishment_EncryptDecrypt(t *testing.T) {
 	aliceLM := NewLinkManager(alice)
 	bobLM := NewLinkManager(bob)
 
-	// Full handshake
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
-	confirmData, _ := aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
-	bobLM.HandleLinkConfirm(confirmData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
+	aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey())
 
 	aliceLink := aliceLM.ActiveLinks()[0]
 	bobLink := bobLM.ActiveLinks()[0]
 
-	// Alice encrypts, Bob decrypts
+	// Alice encrypts, Bob decrypts (AES-256-CBC + HMAC-SHA256)
 	plaintext := []byte("hello from alice")
 	ciphertext, err := aliceLink.Encrypt(plaintext)
 	if err != nil {
@@ -125,7 +110,6 @@ func TestLinkEstablishment_WrongDestination(t *testing.T) {
 	aliceLM := NewLinkManager(alice)
 	charlieLM := NewLinkManager(charlie)
 
-	// Alice sends request to Bob, but Charlie tries to handle it
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
 	_, err := charlieLM.HandleLinkRequest(reqData)
 	if err == nil {
@@ -142,31 +126,11 @@ func TestLinkEstablishment_BadSignature(t *testing.T) {
 	bobLM := NewLinkManager(bob)
 
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
 
-	// Alice verifies with Charlie's key instead of Bob's
-	_, err := aliceLM.HandleLinkResponse(respData, charlie.SigningPublicKey())
+	err := aliceLM.HandleLinkProof(proofData, charlie.SigningPublicKey())
 	if err == nil {
-		t.Fatal("should reject response with wrong signing key")
-	}
-}
-
-func TestLinkEstablishment_BadConfirmProof(t *testing.T) {
-	alice := testIdentity(t)
-	bob := testIdentity(t)
-
-	aliceLM := NewLinkManager(alice)
-	bobLM := NewLinkManager(bob)
-
-	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
-	confirmData, _ := aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
-
-	// Tamper with the proof
-	confirmData[len(confirmData)-1] ^= 0xff
-	err := bobLM.HandleLinkConfirm(confirmData)
-	if err == nil {
-		t.Fatal("should reject tampered confirm proof")
+		t.Fatal("should reject proof with wrong signing key")
 	}
 }
 
@@ -175,16 +139,14 @@ func TestLinkEstablishment_NoPendingLink(t *testing.T) {
 	bob := testIdentity(t)
 	bobLM := NewLinkManager(bob)
 
-	// Craft a valid-looking response with a random link ID
 	aliceLM := NewLinkManager(alice)
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
 
-	// A fresh link manager has no pending links
 	freshLM := NewLinkManager(alice)
-	_, err := freshLM.HandleLinkResponse(respData, bob.SigningPublicKey())
+	err := freshLM.HandleLinkProof(proofData, bob.SigningPublicKey())
 	if err == nil {
-		t.Fatal("should reject response with no pending link")
+		t.Fatal("should reject proof with no pending link")
 	}
 }
 
@@ -196,8 +158,8 @@ func TestLinkManager_CloseLink(t *testing.T) {
 	bobLM := NewLinkManager(bob)
 
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
-	aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
+	aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey())
 
 	links := aliceLM.ActiveLinks()
 	if len(links) != 1 {
@@ -226,7 +188,7 @@ func TestLinkRequest_Roundtrip(t *testing.T) {
 	}
 }
 
-func TestLinkResponse_Roundtrip(t *testing.T) {
+func TestLinkProof_Roundtrip(t *testing.T) {
 	alice := testIdentity(t)
 	bob := testIdentity(t)
 
@@ -234,9 +196,9 @@ func TestLinkResponse_Roundtrip(t *testing.T) {
 	bobLM := NewLinkManager(bob)
 
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
 
-	parsed, err := UnmarshalLinkResponse(respData)
+	parsed, err := UnmarshalLinkProof(proofData)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,15 +214,8 @@ func TestUnmarshalLinkRequest_TooShort(t *testing.T) {
 	}
 }
 
-func TestUnmarshalLinkResponse_TooShort(t *testing.T) {
-	_, err := UnmarshalLinkResponse([]byte{PacketLinkResponse, 0x00})
-	if err == nil {
-		t.Fatal("should fail on short data")
-	}
-}
-
-func TestUnmarshalLinkConfirm_TooShort(t *testing.T) {
-	_, err := UnmarshalLinkConfirm([]byte{PacketLinkConfirm, 0x00})
+func TestUnmarshalLinkProof_TooShort(t *testing.T) {
+	_, err := UnmarshalLinkProof([]byte{PacketLinkProof, 0x00})
 	if err == nil {
 		t.Fatal("should fail on short data")
 	}

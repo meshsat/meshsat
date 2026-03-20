@@ -146,9 +146,11 @@ const (
 	MaxAnnounceHops = PathfinderM
 
 	// Bridge link/keepalive type bytes (first byte of packet).
-	BridgeLinkRequest  byte = 0x10
-	BridgeLinkResponse byte = 0x11
-	BridgeLinkConfirm  byte = 0x12
-	BridgeLinkData     byte = 0x13
-	BridgeKeepalive    byte = 0x14
+	BridgeLinkRequest byte = 0x10
+	BridgeLinkProof   byte = 0x11
+	BridgeLinkData    byte = 0x12
+	BridgeKeepalive   byte = 0x13
+
+	// HMACLen is the HMAC-SHA256 tag length.
+	HMACLen = 32
 )

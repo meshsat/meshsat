@@ -52,61 +52,35 @@ func TestLinkRequestWrongType(t *testing.T) {
 	}
 }
 
-func TestLinkResponseRoundTrip(t *testing.T) {
+func TestLinkProofRoundTrip(t *testing.T) {
 	id, _ := GenerateIdentity()
 	var linkID [LinkIDLen]byte
 	rand.Read(linkID[:])
 
 	ephKey, _ := ecdh.X25519().GenerateKey(rand.Reader)
-	signable := LinkResponseSignable(linkID, ephKey.PublicKey())
+	signable := LinkProofSignable(linkID, ephKey.PublicKey())
 	sig := id.Sign(signable)
 
-	resp := &LinkResponse{
+	lp := &LinkProof{
 		LinkID:       linkID,
 		EphemeralPub: ephKey.PublicKey(),
 		Signature:    sig,
 	}
 
-	wire := resp.Marshal()
-	if len(wire) != LinkResponseLen {
-		t.Fatalf("wire len: got %d, want %d", len(wire), LinkResponseLen)
+	wire := lp.Marshal()
+	if len(wire) != LinkProofLen {
+		t.Fatalf("wire len: got %d, want %d", len(wire), LinkProofLen)
 	}
 
-	resp2, err := UnmarshalLinkResponse(wire)
+	lp2, err := UnmarshalLinkProof(wire)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp2.LinkID != linkID {
+	if lp2.LinkID != linkID {
 		t.Fatal("link ID mismatch")
 	}
-	if !resp2.Verify(id.SigningPublicKey()) {
-		t.Fatal("link response signature verification failed")
-	}
-}
-
-func TestLinkConfirmRoundTrip(t *testing.T) {
-	var linkID [LinkIDLen]byte
-	rand.Read(linkID[:])
-	secret := make([]byte, 32)
-	rand.Read(secret)
-
-	proof := ComputeConfirmProof(secret, linkID)
-	lc := &LinkConfirm{LinkID: linkID, Proof: proof}
-
-	wire := lc.Marshal()
-	if len(wire) != LinkConfirmLen {
-		t.Fatalf("wire len: got %d, want %d", len(wire), LinkConfirmLen)
-	}
-
-	lc2, err := UnmarshalLinkConfirm(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lc2.LinkID != linkID {
-		t.Fatal("link ID mismatch")
-	}
-	if lc2.Proof != proof {
-		t.Fatal("proof mismatch")
+	if !lp2.Verify(id.SigningPublicKey()) {
+		t.Fatal("link proof signature verification failed")
 	}
 }
 
@@ -120,23 +94,75 @@ func TestComputeLinkID(t *testing.T) {
 	}
 }
 
-func TestDeriveSymKeys(t *testing.T) {
+func TestDeriveSymKeys_HKDF(t *testing.T) {
 	secret := make([]byte, 32)
 	rand.Read(secret)
 	var linkID [LinkIDLen]byte
 	rand.Read(linkID[:])
 
-	k1, k2 := DeriveSymKeys(secret, linkID)
-	if len(k1) != SymKeyLen || len(k2) != SymKeyLen {
-		t.Fatalf("key lengths: %d, %d", len(k1), len(k2))
-	}
-	if bytes.Equal(k1, k2) {
-		t.Fatal("key1 and key2 should differ")
+	enc1, hmac1, enc2, hmac2 := DeriveSymKeys(secret, linkID)
+	if len(enc1) != SymKeyLen || len(hmac1) != HMACLen || len(enc2) != SymKeyLen || len(hmac2) != HMACLen {
+		t.Fatalf("key lengths: %d, %d, %d, %d", len(enc1), len(hmac1), len(enc2), len(hmac2))
 	}
 
-	k1b, k2b := DeriveSymKeys(secret, linkID)
-	if !bytes.Equal(k1, k1b) || !bytes.Equal(k2, k2b) {
+	// All four keys should be distinct
+	keys := [][]byte{enc1, hmac1, enc2, hmac2}
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			if bytes.Equal(keys[i], keys[j]) {
+				t.Fatalf("keys[%d] and keys[%d] should differ", i, j)
+			}
+		}
+	}
+
+	// Deterministic
+	e1b, h1b, e2b, h2b := DeriveSymKeys(secret, linkID)
+	if !bytes.Equal(enc1, e1b) || !bytes.Equal(hmac1, h1b) || !bytes.Equal(enc2, e2b) || !bytes.Equal(hmac2, h2b) {
 		t.Fatal("key derivation not deterministic")
+	}
+}
+
+func TestCBCHMACEncryptDecrypt(t *testing.T) {
+	encKey := make([]byte, SymKeyLen)
+	hmacKey := make([]byte, HMACLen)
+	rand.Read(encKey)
+	rand.Read(hmacKey)
+
+	plaintext := []byte("hello reticulum link")
+	ct, err := CBCHMACEncrypt(encKey, hmacKey, plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pt, err := CBCHMACDecrypt(encKey, hmacKey, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(pt, plaintext) {
+		t.Fatalf("decrypted: got %q, want %q", pt, plaintext)
+	}
+}
+
+func TestCBCHMACDecrypt_TamperedHMAC(t *testing.T) {
+	encKey := make([]byte, SymKeyLen)
+	hmacKey := make([]byte, HMACLen)
+	rand.Read(encKey)
+	rand.Read(hmacKey)
+
+	ct, _ := CBCHMACEncrypt(encKey, hmacKey, []byte("test"))
+	ct[len(ct)-1] ^= 0xff // tamper with HMAC
+	_, err := CBCHMACDecrypt(encKey, hmacKey, ct)
+	if err == nil {
+		t.Fatal("should reject tampered HMAC")
+	}
+}
+
+func TestCBCHMACDecrypt_TooShort(t *testing.T) {
+	encKey := make([]byte, SymKeyLen)
+	hmacKey := make([]byte, HMACLen)
+	_, err := CBCHMACDecrypt(encKey, hmacKey, make([]byte, 10))
+	if err == nil {
+		t.Fatal("should reject short ciphertext")
 	}
 }
 
@@ -261,11 +287,8 @@ func TestUnmarshalShortPackets(t *testing.T) {
 	if _, err := UnmarshalLinkRequest(nil); err == nil {
 		t.Fatal("nil link request should error")
 	}
-	if _, err := UnmarshalLinkResponse(nil); err == nil {
-		t.Fatal("nil link response should error")
-	}
-	if _, err := UnmarshalLinkConfirm(nil); err == nil {
-		t.Fatal("nil link confirm should error")
+	if _, err := UnmarshalLinkProof(nil); err == nil {
+		t.Fatal("nil link proof should error")
 	}
 	if _, err := UnmarshalKeepalive(nil); err == nil {
 		t.Fatal("nil keepalive should error")

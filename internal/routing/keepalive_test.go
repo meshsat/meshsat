@@ -50,11 +50,10 @@ func TestLinkKeepalive_SendsForActiveLinks(t *testing.T) {
 	aliceLM := NewLinkManager(alice)
 	bobLM := NewLinkManager(bob)
 
-	// Establish a link
+	// Establish a link (2-packet handshake)
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
-	confirmData, _ := aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
-	bobLM.HandleLinkConfirm(confirmData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
+	aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey())
 
 	var sent int
 	var mu sync.Mutex
@@ -84,9 +83,8 @@ func TestLinkKeepalive_HandleKeepalive(t *testing.T) {
 	bobLM := NewLinkManager(bob)
 
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
-	confirmData, _ := aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
-	bobLM.HandleLinkConfirm(confirmData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
+	aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey())
 
 	link := bobLM.ActiveLinks()[0]
 	oldActivity := link.LastActivity
@@ -113,9 +111,8 @@ func TestLinkKeepalive_Timeout(t *testing.T) {
 	bobLM := NewLinkManager(bob)
 
 	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
-	respData, _ := bobLM.HandleLinkRequest(reqData)
-	confirmData, _ := aliceLM.HandleLinkResponse(respData, bob.SigningPublicKey())
-	bobLM.HandleLinkConfirm(confirmData)
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
+	aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey())
 
 	// Force the link to look old
 	link := aliceLM.ActiveLinks()[0]

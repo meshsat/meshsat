@@ -1,12 +1,9 @@
 package routing
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,17 +16,15 @@ import (
 
 // Link packet type identifiers — re-exported from reticulum for processor dispatch.
 const (
-	PacketLinkRequest  = reticulum.BridgeLinkRequest  // 0x10
-	PacketLinkResponse = reticulum.BridgeLinkResponse // 0x11
-	PacketLinkConfirm  = reticulum.BridgeLinkConfirm  // 0x12
-	PacketLinkData     = reticulum.BridgeLinkData     // 0x13
-	PacketKeepalive    = reticulum.BridgeKeepalive    // 0x14
+	PacketLinkRequest = reticulum.BridgeLinkRequest // 0x10
+	PacketLinkProof   = reticulum.BridgeLinkProof   // 0x11
+	PacketLinkData    = reticulum.BridgeLinkData    // 0x12
+	PacketKeepalive   = reticulum.BridgeKeepalive   // 0x13
 
 	// Wire sizes — re-exported from reticulum.
-	LinkIDLen       = reticulum.LinkIDLen       // 32
-	LinkRequestLen  = reticulum.LinkRequestLen  // 65
-	LinkResponseLen = reticulum.LinkResponseLen // 129
-	LinkConfirmLen  = reticulum.LinkConfirmLen  // 65
+	LinkIDLen      = reticulum.LinkIDLen      // 32
+	LinkRequestLen = reticulum.LinkRequestLen // 65
+	LinkProofLen   = reticulum.LinkProofLen   // 129
 
 	// LinkSymKeyLen is the AES-256 key length derived from ECDH.
 	LinkSymKeyLen = reticulum.SymKeyLen // 32
@@ -37,23 +32,21 @@ const (
 
 // Type aliases for wire format types — delegate to reticulum package.
 type (
-	LinkRequest  = reticulum.LinkRequest
-	LinkResponse = reticulum.LinkResponse
-	LinkConfirm  = reticulum.LinkConfirm
+	LinkRequest = reticulum.LinkRequest
+	LinkProof   = reticulum.LinkProof
 )
 
 // Wire format functions — delegate to reticulum package.
 var (
-	UnmarshalLinkRequest  = reticulum.UnmarshalLinkRequest
-	UnmarshalLinkResponse = reticulum.UnmarshalLinkResponse
-	UnmarshalLinkConfirm  = reticulum.UnmarshalLinkConfirm
+	UnmarshalLinkRequest = reticulum.UnmarshalLinkRequest
+	UnmarshalLinkProof   = reticulum.UnmarshalLinkProof
 )
 
 // LinkState represents the current state of a link.
 type LinkState int
 
 const (
-	LinkStatePending     LinkState = iota // request sent, waiting for response
+	LinkStatePending     LinkState = iota // request sent, waiting for proof
 	LinkStateEstablished                  // ECDH complete, symmetric keys derived
 	LinkStateClosed                       // explicitly closed or timed out
 )
@@ -66,10 +59,10 @@ type Link struct {
 	LocalEphKey  *ecdh.PrivateKey // our ephemeral X25519 key
 	RemoteEphPub *ecdh.PublicKey  // their ephemeral X25519 key
 	SharedSecret []byte           // raw ECDH shared secret
-	SendKey      []byte           // AES-256 key for sending (derived)
-	RecvKey      []byte           // AES-256 key for receiving (derived)
-	SendNonce    uint64           // incrementing nonce for sending
-	RecvNonce    uint64           // incrementing nonce for receiving
+	SendKey      []byte           // AES-256-CBC key for sending (HKDF-derived)
+	SendHMAC     []byte           // HMAC-SHA256 key for sending (HKDF-derived)
+	RecvKey      []byte           // AES-256-CBC key for receiving (HKDF-derived)
+	RecvHMAC     []byte           // HMAC-SHA256 key for receiving (HKDF-derived)
 	CreatedAt    time.Time
 	LastActivity time.Time
 	IsInitiator  bool // true if we initiated the link
@@ -80,7 +73,7 @@ type LinkManager struct {
 	mu       sync.RWMutex
 	identity *Identity
 	links    map[[LinkIDLen]byte]*Link
-	pending  map[[LinkIDLen]byte]*Link // pending link requests (awaiting response)
+	pending  map[[LinkIDLen]byte]*Link // pending link requests (awaiting proof)
 }
 
 // NewLinkManager creates a link manager for establishing encrypted links.
@@ -133,7 +126,8 @@ func (lm *LinkManager) InitiateLink(destHash [DestHashLen]byte) ([]byte, *Link, 
 }
 
 // HandleLinkRequest processes an incoming link request addressed to us.
-// Returns the serialized response packet or nil if rejected.
+// Returns the serialized proof packet. The link is established immediately
+// on the responder side (2-packet handshake: no confirm needed).
 func (lm *LinkManager) HandleLinkRequest(data []byte) ([]byte, error) {
 	req, err := UnmarshalLinkRequest(data)
 	if err != nil {
@@ -160,11 +154,11 @@ func (lm *LinkManager) HandleLinkRequest(data []byte) ([]byte, error) {
 	}
 
 	// Sign: link_id + our ephemeral pub
-	signable := reticulum.LinkResponseSignable(linkID, ephKey.PublicKey())
+	signable := reticulum.LinkProofSignable(linkID, ephKey.PublicKey())
 	signature := lm.identity.Sign(signable)
 
-	// Derive symmetric keys (responder: key1=recv, key2=send)
-	key1, key2 := reticulum.DeriveSymKeys(sharedSecret, linkID)
+	// Derive symmetric keys via HKDF (responder: key1=recv, key2=send)
+	encKey1, hmacKey1, encKey2, hmacKey2 := reticulum.DeriveSymKeys(sharedSecret, linkID)
 
 	now := time.Now()
 	link := &Link{
@@ -174,8 +168,10 @@ func (lm *LinkManager) HandleLinkRequest(data []byte) ([]byte, error) {
 		LocalEphKey:  ephKey,
 		RemoteEphPub: req.EphemeralPub,
 		SharedSecret: sharedSecret,
-		RecvKey:      key1, // responder receives on key1
-		SendKey:      key2, // responder sends on key2
+		RecvKey:      encKey1,  // responder receives on key1
+		RecvHMAC:     hmacKey1, // responder HMAC recv on hmacKey1
+		SendKey:      encKey2,  // responder sends on key2
+		SendHMAC:     hmacKey2, // responder HMAC send on hmacKey2
 		CreatedAt:    now,
 		LastActivity: now,
 		IsInitiator:  false,
@@ -185,97 +181,62 @@ func (lm *LinkManager) HandleLinkRequest(data []byte) ([]byte, error) {
 	lm.links[linkID] = link
 	lm.mu.Unlock()
 
-	resp := &LinkResponse{
+	proof := &LinkProof{
 		LinkID:       linkID,
 		EphemeralPub: ephKey.PublicKey(),
 		Signature:    signature,
 	}
 
-	log.Info().Str("link_id", hashHex32(linkID)).Msg("link request accepted, response sent")
-	return resp.Marshal(), nil
+	log.Info().Str("link_id", hashHex32(linkID)).Msg("link request accepted, proof sent")
+	return proof.Marshal(), nil
 }
 
-// HandleLinkResponse processes an incoming link response to our pending request.
+// HandleLinkProof processes an incoming link proof for our pending request.
 // The signingPub is the destination's known public key (from the destination table).
-// Returns the serialized confirm packet or an error.
-func (lm *LinkManager) HandleLinkResponse(data []byte, signingPub ed25519.PublicKey) ([]byte, error) {
-	resp, err := UnmarshalLinkResponse(data)
-	if err != nil {
-		return nil, err
-	}
-
-	lm.mu.Lock()
-	link, ok := lm.pending[resp.LinkID]
-	if !ok {
-		lm.mu.Unlock()
-		return nil, errors.New("no pending link for this ID")
-	}
-	delete(lm.pending, resp.LinkID)
-	lm.mu.Unlock()
-
-	// Verify signature
-	if !resp.Verify(signingPub) {
-		return nil, errors.New("link response signature verification failed")
-	}
-
-	// ECDH: our ephemeral × their ephemeral
-	sharedSecret, err := link.LocalEphKey.ECDH(resp.EphemeralPub)
-	if err != nil {
-		return nil, fmt.Errorf("ECDH: %w", err)
-	}
-
-	// Derive symmetric keys (initiator: key1=send, key2=recv)
-	key1, key2 := reticulum.DeriveSymKeys(sharedSecret, resp.LinkID)
-
-	link.RemoteEphPub = resp.EphemeralPub
-	link.SharedSecret = sharedSecret
-	link.SendKey = key1 // initiator sends on key1
-	link.RecvKey = key2 // initiator receives on key2
-	link.State = LinkStateEstablished
-	link.LastActivity = time.Now()
-
-	lm.mu.Lock()
-	lm.links[resp.LinkID] = link
-	lm.mu.Unlock()
-
-	// Build confirm proof
-	proof := reticulum.ComputeConfirmProof(sharedSecret, resp.LinkID)
-	confirm := &LinkConfirm{
-		LinkID: resp.LinkID,
-		Proof:  proof,
-	}
-
-	log.Info().Str("link_id", hashHex32(resp.LinkID)).Msg("link established (initiator)")
-	return confirm.Marshal(), nil
-}
-
-// HandleLinkConfirm processes an incoming link confirmation.
-// Verifies the proof matches the shared secret.
-func (lm *LinkManager) HandleLinkConfirm(data []byte) error {
-	confirm, err := UnmarshalLinkConfirm(data)
+// On success the link is established (2-packet handshake complete).
+func (lm *LinkManager) HandleLinkProof(data []byte, signingPub ed25519.PublicKey) error {
+	proof, err := UnmarshalLinkProof(data)
 	if err != nil {
 		return err
 	}
 
-	lm.mu.RLock()
-	link, ok := lm.links[confirm.LinkID]
-	lm.mu.RUnlock()
-
+	lm.mu.Lock()
+	link, ok := lm.pending[proof.LinkID]
 	if !ok {
-		return errors.New("no link for this ID")
+		lm.mu.Unlock()
+		return errors.New("no pending link for this ID")
 	}
-	if link.State != LinkStateEstablished {
-		return errors.New("link not in established state")
+	delete(lm.pending, proof.LinkID)
+	lm.mu.Unlock()
+
+	// Verify signature
+	if !proof.Verify(signingPub) {
+		return errors.New("link proof signature verification failed")
 	}
 
-	// Verify proof
-	expected := reticulum.ComputeConfirmProof(link.SharedSecret, confirm.LinkID)
-	if confirm.Proof != expected {
-		return errors.New("link confirm proof mismatch")
+	// ECDH: our ephemeral × their ephemeral
+	sharedSecret, err := link.LocalEphKey.ECDH(proof.EphemeralPub)
+	if err != nil {
+		return fmt.Errorf("ECDH: %w", err)
 	}
 
+	// Derive symmetric keys via HKDF (initiator: key1=send, key2=recv)
+	encKey1, hmacKey1, encKey2, hmacKey2 := reticulum.DeriveSymKeys(sharedSecret, proof.LinkID)
+
+	link.RemoteEphPub = proof.EphemeralPub
+	link.SharedSecret = sharedSecret
+	link.SendKey = encKey1   // initiator sends on key1
+	link.SendHMAC = hmacKey1 // initiator HMAC send on hmacKey1
+	link.RecvKey = encKey2   // initiator receives on key2
+	link.RecvHMAC = hmacKey2 // initiator HMAC recv on hmacKey2
+	link.State = LinkStateEstablished
 	link.LastActivity = time.Now()
-	log.Info().Str("link_id", hashHex32(confirm.LinkID)).Msg("link confirmed (responder)")
+
+	lm.mu.Lock()
+	lm.links[proof.LinkID] = link
+	lm.mu.Unlock()
+
+	log.Info().Str("link_id", hashHex32(proof.LinkID)).Msg("link established (initiator)")
 	return nil
 }
 
@@ -286,7 +247,7 @@ func (lm *LinkManager) GetLink(linkID [LinkIDLen]byte) *Link {
 	return lm.links[linkID]
 }
 
-// GetPendingLink returns a pending link by ID (awaiting response).
+// GetPendingLink returns a pending link by ID (awaiting proof).
 func (lm *LinkManager) GetPendingLink(linkID [LinkIDLen]byte) *Link {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
@@ -317,66 +278,22 @@ func (lm *LinkManager) CloseLink(linkID [LinkIDLen]byte) {
 	delete(lm.pending, linkID)
 }
 
-// Encrypt encrypts data using the link's send key with AES-256-GCM.
-// Returns the encrypted data with nonce prepended.
+// Encrypt encrypts data using the link's send key with AES-256-CBC + HMAC-SHA256.
+// Wire format: IV(16) + ciphertext(PKCS7-padded) + HMAC(32).
 func (l *Link) Encrypt(plaintext []byte) ([]byte, error) {
 	if l.State != LinkStateEstablished || len(l.SendKey) != LinkSymKeyLen {
 		return nil, errors.New("link not established")
 	}
-
-	block, err := aes.NewCipher(l.SendKey)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	// Nonce: 8-byte counter + 4-byte zero padding (GCM standard nonce = 12 bytes)
-	nonce := make([]byte, aead.NonceSize())
-	binary.BigEndian.PutUint64(nonce, l.SendNonce)
-	l.SendNonce++
-
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
-
-	// Prepend nonce to ciphertext
-	result := make([]byte, len(nonce)+len(ciphertext))
-	copy(result, nonce)
-	copy(result[len(nonce):], ciphertext)
-	return result, nil
+	return reticulum.CBCHMACEncrypt(l.SendKey, l.SendHMAC, plaintext)
 }
 
-// Decrypt decrypts data using the link's receive key with AES-256-GCM.
-// Expects nonce prepended to ciphertext.
+// Decrypt verifies HMAC and decrypts data using the link's receive key.
+// Expects wire format: IV(16) + ciphertext + HMAC(32).
 func (l *Link) Decrypt(data []byte) ([]byte, error) {
 	if l.State != LinkStateEstablished || len(l.RecvKey) != LinkSymKeyLen {
 		return nil, errors.New("link not established")
 	}
-
-	block, err := aes.NewCipher(l.RecvKey)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(data) < aead.NonceSize() {
-		return nil, errors.New("ciphertext too short")
-	}
-
-	nonce := data[:aead.NonceSize()]
-	ciphertext := data[aead.NonceSize():]
-
-	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt: %w", err)
-	}
-
-	l.RecvNonce++
-	return plaintext, nil
+	return reticulum.CBCHMACDecrypt(l.RecvKey, l.RecvHMAC, data)
 }
 
 func hashHex32(h [32]byte) string {

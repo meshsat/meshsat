@@ -400,7 +400,7 @@ func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
 // routing subsystem handler. It first tries to parse the payload as a
 // Reticulum packet (header + payload). If the packet type is recognized,
 // it's handled accordingly. Otherwise, it falls back to Bridge-legacy
-// type byte detection (0x10-0x14).
+// type byte detection (0x10-0x13).
 func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byte) {
 	if len(payload) == 0 {
 		return
@@ -435,7 +435,7 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 		}
 	}
 
-	// Fallback: Bridge-legacy packet type bytes (0x10-0x14).
+	// Fallback: Bridge-legacy packet type bytes (0x10-0x13).
 	firstByte := payload[0]
 	switch firstByte {
 	case routing.PacketLinkRequest:
@@ -449,13 +449,13 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 			}
 		}
 
-	case routing.PacketLinkResponse:
+	case routing.PacketLinkProof:
 		if p.linkMgr != nil {
 			var signingPub []byte
 			if p.destTable != nil {
-				resp, err := routing.UnmarshalLinkResponse(payload)
+				proof, err := routing.UnmarshalLinkProof(payload)
 				if err == nil {
-					link := p.linkMgr.GetPendingLink(resp.LinkID)
+					link := p.linkMgr.GetPendingLink(proof.LinkID)
 					if link != nil {
 						dest := p.destTable.Lookup(link.DestHash)
 						if dest != nil {
@@ -464,21 +464,10 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 					}
 				}
 			}
-			confirmData, err := p.linkMgr.HandleLinkResponse(payload, signingPub)
-			if err != nil {
-				log.Debug().Err(err).Msg("routing: link response handling failed")
+			if err := p.linkMgr.HandleLinkProof(payload, signingPub); err != nil {
+				log.Debug().Err(err).Msg("routing: link proof handling failed")
 			} else {
-				log.Debug().Msg("routing: link response processed, link established")
-				p.sendRoutingPacket(confirmData)
-			}
-		}
-
-	case routing.PacketLinkConfirm:
-		if p.linkMgr != nil {
-			if err := p.linkMgr.HandleLinkConfirm(payload); err != nil {
-				log.Debug().Err(err).Msg("routing: link confirm handling failed")
-			} else {
-				log.Debug().Msg("routing: link confirm processed")
+				log.Debug().Msg("routing: link proof processed, link established")
 			}
 		}
 
