@@ -2,13 +2,24 @@ package transport
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
-// Astronode S binary protocol commands
+// Astronode S ASCII hex protocol commands (official opcode map)
 const (
 	AstroCmdCfgWR  uint8 = 0x05 // Write configuration
+	AstroCmdWifWR  uint8 = 0x06 // Wi-Fi configuration
+	AstroCmdSscWR  uint8 = 0x07 // Satellite search config
+	AstroCmdCfgSR  uint8 = 0x10 // Save config to flash
+	AstroCmdCfgFR  uint8 = 0x11 // Factory reset
+	AstroCmdCfgRR  uint8 = 0x15 // Read configuration
+	AstroCmdRtcRR  uint8 = 0x17 // Read RTC time
 	AstroCmdNcoRR  uint8 = 0x18 // Read next contact opportunity
+	AstroCmdMgiRR  uint8 = 0x19 // Read module GUID
+	AstroCmdMsnRR  uint8 = 0x1A // Read serial number
+	AstroCmdMpnRR  uint8 = 0x1B // Read product number
 	AstroCmdPldER  uint8 = 0x25 // Enqueue uplink payload
 	AstroCmdPldDR  uint8 = 0x26 // Dequeue downlink payload
 	AstroCmdPldFR  uint8 = 0x27 // Free (ack) downlink slot
@@ -18,51 +29,119 @@ const (
 	AstroCmdCmdRR  uint8 = 0x47 // Read downlink command
 	AstroCmdCmdCR  uint8 = 0x48 // Clear downlink command
 	AstroCmdResetR uint8 = 0x55 // Reset module
+	AstroCmdGpoSR  uint8 = 0x62 // GPIO output set
+	AstroCmdGpiRR  uint8 = 0x63 // GPIO input read
 	AstroCmdEvtRR  uint8 = 0x65 // Read event register
-	AstroCmdSatSR  uint8 = 0x66 // Satellite search status
+	AstroCmdCtxSR  uint8 = 0x66 // Context save (NOT satellite search)
 	AstroCmdPerRR  uint8 = 0x67 // Read performance counters
+	AstroCmdPerCR  uint8 = 0x68 // Clear performance counters
 	AstroCmdMstRR  uint8 = 0x69 // Read module state
 	AstroCmdLcdRR  uint8 = 0x6A // Read last contact details
 	AstroCmdEndRR  uint8 = 0x6B // Read environment details
 )
 
-// Astronode event types from EVT_RR
+// Astronode event register bits from EVT_RR (correct per official docs)
 const (
-	AstroEvtSatDetected   uint8 = 0x01
-	AstroEvtUplinkDone    uint8 = 0x02
-	AstroEvtDownlinkReady uint8 = 0x04
-	AstroEvtReset         uint8 = 0x08
+	AstroEvtSAKAvail uint8 = 0x01 // Bit 0: satellite acknowledged a queued message
+	AstroEvtReset    uint8 = 0x02 // Bit 1: module reset happened
+	AstroEvtCmdAvail uint8 = 0x04 // Bit 2: downlink command waiting
+	AstroEvtBusy     uint8 = 0x08 // Bit 3: module communicating with satellite
 )
 
-// AstroFrame represents a binary frame for the Astronode S protocol.
+// Astronode error codes (2 bytes LE in error response payload)
+const (
+	AstroErrCRCNotValid     uint16 = 0x0001 // CRC not valid
+	AstroErrLengthNotValid  uint16 = 0x0011 // Length not valid
+	AstroErrOpcodeNotValid  uint16 = 0x0121 // Opcode not valid
+	AstroErrFormatNotValid  uint16 = 0x0601 // Format not valid
+	AstroErrFlashWriteFail  uint16 = 0x0611 // Flash writing failed
+	AstroErrBufferFull      uint16 = 0x2501 // Buffer full (PLD_ER)
+	AstroErrDuplicateID     uint16 = 0x2511 // Duplicate ID
+	AstroErrBufferEmpty     uint16 = 0x2601 // Buffer empty (PLD_DR)
+	AstroErrInvalidPosition uint16 = 0x3501 // Invalid position (GEO_WR)
+	AstroErrNoACK           uint16 = 0x4501 // No ACK (SAK_RR)
+	AstroErrNothingToClear  uint16 = 0x4601 // Nothing to clear (SAK_CR)
+)
+
+// TLV tag IDs for MST_RR response
+const (
+	AstroTLVMsgQueued       uint8 = 0x41 // 1 byte: messages queued for uplink
+	AstroTLVAckMsgQueued    uint8 = 0x42 // 1 byte: ack messages queued
+	AstroTLVLastResetReason uint8 = 0x43 // 1 byte: last reset reason
+	AstroTLVUptime          uint8 = 0x44 // 4 bytes: uptime in seconds
+)
+
+// TLV tag IDs for LCD_RR response
+const (
+	AstroTLVStartTime uint8 = 0x51 // 4 bytes: contact start time
+	AstroTLVEndTime   uint8 = 0x52 // 4 bytes: contact end time
+	AstroTLVPeakRSSI  uint8 = 0x53 // 1 byte: peak RSSI (unsigned)
+	AstroTLVPeakTime  uint8 = 0x54 // 4 bytes: peak RSSI time
+)
+
+// TLV tag IDs for END_RR response
+const (
+	AstroTLVLastMACResult   uint8 = 0x61 // 1 byte: last MAC result
+	AstroTLVLastRSSI        uint8 = 0x62 // 1 byte: last RSSI (unsigned)
+	AstroTLVTimeSinceSatDet uint8 = 0x63 // 4 bytes: seconds since last satellite detection
+)
+
+// Answer timeout per official spec
+const AstroAnswerTimeoutMs = 1500
+
+// AstroMaxResponse is the maximum response size from the module.
+const AstroMaxResponse = 178
+
+// AstroFrame represents a decoded frame from the Astronode S protocol.
 type AstroFrame struct {
 	CommandID uint8
 	Payload   []byte
 }
 
-// EncodeAstroFrame encodes a command into the Astronode binary frame format:
-// [STX(0x02)] [LEN:2 LE] [CMD:1] [PAYLOAD:N] [CRC16:2 LE] [ETX(0x03)]
+// EncodeAstroFrame encodes a command into the Astronode ASCII hex frame format:
+// [STX 0x02] [OPCODE as 2 hex chars] [PAYLOAD as 2N hex chars] [CRC16 as 4 hex chars (byte-swapped)] [ETX 0x03]
+// CRC16-CCITT is computed over the RAW opcode + payload bytes, then byte-swapped before hex encoding.
 func EncodeAstroFrame(cmd uint8, payload []byte) []byte {
-	dataLen := 1 + len(payload) // cmd + payload
-	frame := make([]byte, 0, 1+2+dataLen+2+1)
+	// Build raw data for CRC: opcode + payload
+	rawData := make([]byte, 1+len(payload))
+	rawData[0] = cmd
+	copy(rawData[1:], payload)
 
-	frame = append(frame, 0x02)                                      // STX
-	frame = append(frame, byte(dataLen&0xFF), byte(dataLen>>8&0xFF)) // LEN (LE)
-	frame = append(frame, cmd)                                       // CMD
-	frame = append(frame, payload...)                                // PAYLOAD
+	// CRC16-CCITT over raw bytes
+	crc := CRC16CCITT(rawData)
 
-	// CRC16 over CMD + PAYLOAD
-	crc := CRC16CCITT(frame[3 : 3+dataLen])
-	frame = append(frame, byte(crc&0xFF), byte(crc>>8&0xFF)) // CRC (LE)
-	frame = append(frame, 0x03)                              // ETX
+	// Byte-swap CRC: send low byte first, then high byte
+	crcSwapped := [2]byte{byte(crc & 0xFF), byte(crc >> 8)}
+
+	// Build ASCII hex frame
+	// STX + hex(opcode) + hex(payload) + hex(crc_swapped) + ETX
+	hexLen := 2 + len(payload)*2 + 4 // opcode(2) + payload(2N) + crc(4)
+	frame := make([]byte, 0, 1+hexLen+1)
+
+	frame = append(frame, 0x02) // STX
+
+	// Encode opcode as 2 uppercase hex chars
+	frame = append(frame, hexByte(cmd)...)
+
+	// Encode payload as 2N uppercase hex chars
+	for _, b := range payload {
+		frame = append(frame, hexByte(b)...)
+	}
+
+	// Encode byte-swapped CRC as 4 uppercase hex chars
+	frame = append(frame, hexByte(crcSwapped[0])...)
+	frame = append(frame, hexByte(crcSwapped[1])...)
+
+	frame = append(frame, 0x03) // ETX
 
 	return frame
 }
 
-// DecodeAstroFrame decodes a binary frame from the Astronode S module.
-// Returns the command ID and payload, or error if frame is malformed.
+// DecodeAstroFrame decodes an ASCII hex frame from the Astronode S module.
+// Frame format: [STX 0x02] [hex data] [ETX 0x03]
+// Hex data contains: opcode(2 chars) + payload(2N chars) + CRC(4 chars, byte-swapped)
 func DecodeAstroFrame(data []byte) (*AstroFrame, error) {
-	if len(data) < 6 { // STX + LEN(2) + CMD(1) + CRC(2) + ETX = minimum 7, but cmd alone = 6 usable
+	if len(data) < 2 {
 		return nil, fmt.Errorf("astro frame too short: %d bytes", len(data))
 	}
 	if data[0] != 0x02 {
@@ -72,23 +151,58 @@ func DecodeAstroFrame(data []byte) (*AstroFrame, error) {
 		return nil, fmt.Errorf("astro frame missing ETX (got 0x%02x)", data[len(data)-1])
 	}
 
-	dataLen := int(binary.LittleEndian.Uint16(data[1:3]))
-	if 3+dataLen+2+1 != len(data) {
-		return nil, fmt.Errorf("astro frame length mismatch: header says %d, got %d total", dataLen, len(data))
+	// Extract hex content between STX and ETX
+	hexContent := data[1 : len(data)-1]
+
+	// Minimum: opcode(2) + CRC(4) = 6 hex chars
+	if len(hexContent) < 6 {
+		return nil, fmt.Errorf("astro frame hex content too short: %d chars", len(hexContent))
+	}
+	if len(hexContent)%2 != 0 {
+		return nil, fmt.Errorf("astro frame hex content has odd length: %d", len(hexContent))
 	}
 
-	// Verify CRC
-	crcData := data[3 : 3+dataLen]
-	expectedCRC := CRC16CCITT(crcData)
-	gotCRC := binary.LittleEndian.Uint16(data[3+dataLen : 3+dataLen+2])
-	if expectedCRC != gotCRC {
+	// Decode all hex content to raw bytes
+	rawBytes, err := hex.DecodeString(strings.ToUpper(string(hexContent)))
+	if err != nil {
+		return nil, fmt.Errorf("astro frame hex decode: %w", err)
+	}
+
+	// rawBytes = [opcode(1)] [payload(N)] [crc_lo(1)] [crc_hi(1)]
+	if len(rawBytes) < 3 { // opcode + 2 CRC bytes minimum
+		return nil, fmt.Errorf("astro frame decoded data too short: %d bytes", len(rawBytes))
+	}
+
+	// Split: opcode+payload vs CRC
+	opcodeAndPayload := rawBytes[:len(rawBytes)-2]
+	crcBytes := rawBytes[len(rawBytes)-2:]
+
+	// CRC was byte-swapped: received as [lo, hi], reconstruct as uint16
+	gotCRC := uint16(crcBytes[0]) | uint16(crcBytes[1])<<8
+
+	// Compute expected CRC over raw opcode + payload
+	expectedCRC := CRC16CCITT(opcodeAndPayload)
+
+	if gotCRC != expectedCRC {
 		return nil, fmt.Errorf("astro frame CRC mismatch: expected 0x%04x, got 0x%04x", expectedCRC, gotCRC)
 	}
 
+	cmd := opcodeAndPayload[0]
+	var payload []byte
+	if len(opcodeAndPayload) > 1 {
+		payload = opcodeAndPayload[1:]
+	}
+
 	return &AstroFrame{
-		CommandID: data[3],
-		Payload:   data[4 : 3+dataLen],
+		CommandID: cmd,
+		Payload:   payload,
 	}, nil
+}
+
+// hexByte encodes a single byte as 2 uppercase hex ASCII characters.
+func hexByte(b byte) []byte {
+	const hexChars = "0123456789ABCDEF"
+	return []byte{hexChars[b>>4], hexChars[b&0x0F]}
 }
 
 // CRC16CCITT computes CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
@@ -105,6 +219,61 @@ func CRC16CCITT(data []byte) uint16 {
 		}
 	}
 	return crc
+}
+
+// parseTLV parses TLV-encoded data from an Astronode response payload.
+// Returns a map of tag -> value (raw bytes). Each TLV entry is:
+// [tag:1] [length:1] [value:N]
+func parseTLV(data []byte) (map[uint8][]byte, error) {
+	result := make(map[uint8][]byte)
+	i := 0
+	for i < len(data) {
+		if i+2 > len(data) {
+			return result, fmt.Errorf("TLV truncated at offset %d: need tag+length", i)
+		}
+		tag := data[i]
+		length := int(data[i+1])
+		i += 2
+		if i+length > len(data) {
+			return result, fmt.Errorf("TLV truncated at offset %d: tag 0x%02x needs %d bytes, have %d", i-2, tag, length, len(data)-i)
+		}
+		val := make([]byte, length)
+		copy(val, data[i:i+length])
+		result[tag] = val
+		i += length
+	}
+	return result, nil
+}
+
+// tlvUint8 extracts a uint8 value from a TLV map, returning 0 if not found.
+func tlvUint8(tlv map[uint8][]byte, tag uint8) uint8 {
+	v, ok := tlv[tag]
+	if !ok || len(v) < 1 {
+		return 0
+	}
+	return v[0]
+}
+
+// tlvUint32LE extracts a uint32 little-endian value from a TLV map, returning 0 if not found.
+func tlvUint32LE(tlv map[uint8][]byte, tag uint8) uint32 {
+	v, ok := tlv[tag]
+	if !ok || len(v) < 4 {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(v)
+}
+
+// IsErrorResponse returns true if the frame is an error response (opcode 0xFF).
+func IsErrorResponse(f *AstroFrame) bool {
+	return f.CommandID == 0xFF
+}
+
+// ParseErrorCode extracts the 2-byte LE error code from an error response payload.
+func ParseErrorCode(payload []byte) uint16 {
+	if len(payload) < 2 {
+		return 0
+	}
+	return binary.LittleEndian.Uint16(payload[:2])
 }
 
 // Fragment header format (1 byte):

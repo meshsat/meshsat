@@ -100,6 +100,21 @@ func (m *mockAstrocastTransport) GetEnvironment(_ context.Context) (*transport.A
 func (m *mockAstrocastTransport) GetPerformance(_ context.Context) (*transport.AstrocastPerformance, error) {
 	return nil, nil
 }
+func (m *mockAstrocastTransport) ReadConfig(_ context.Context) (*transport.AstrocastConfig, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) SaveConfig(_ context.Context) error         { return nil }
+func (m *mockAstrocastTransport) FactoryReset(_ context.Context) error       { return nil }
+func (m *mockAstrocastTransport) ReadRTC(_ context.Context) (uint32, error)  { return 0, nil }
+func (m *mockAstrocastTransport) ReadGUID(_ context.Context) (string, error) { return "", nil }
+func (m *mockAstrocastTransport) ReadSerialNumber(_ context.Context) (string, error) {
+	return "", nil
+}
+func (m *mockAstrocastTransport) ReadProductNumber(_ context.Context) (string, error) {
+	return "", nil
+}
+func (m *mockAstrocastTransport) SaveContext(_ context.Context) error      { return nil }
+func (m *mockAstrocastTransport) ClearPerformance(_ context.Context) error { return nil }
 
 func (m *mockAstrocastTransport) sentPayloads() [][]byte {
 	m.mu.Lock()
