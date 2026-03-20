@@ -6,8 +6,8 @@ package reticulum
 const (
 	// HDLCFlag is the frame delimiter byte.
 	HDLCFlag byte = 0x7E
-	// HDLCEsc is the escape byte.
-	HDLCEsc byte = 0x1B
+	// HDLCEsc is the escape byte (PPP-style, same as RFC 1662).
+	HDLCEsc byte = 0x7D
 	// HDLCEscMask is XORed with escaped bytes.
 	HDLCEscMask byte = 0x20
 )

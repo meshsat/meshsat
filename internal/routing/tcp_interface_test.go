@@ -308,10 +308,10 @@ func TestTCPInterface_HDLCFramingCompat(t *testing.T) {
 	escaped := make([]byte, 0, len(rawPacket)*2)
 	for _, b := range rawPacket {
 		switch b {
-		case 0x1B: // ESC
-			escaped = append(escaped, 0x1B, 0x1B^0x20)
+		case 0x7D: // ESC
+			escaped = append(escaped, 0x7D, 0x7D^0x20)
 		case 0x7E: // FLAG
-			escaped = append(escaped, 0x1B, 0x7E^0x20)
+			escaped = append(escaped, 0x7D, 0x7E^0x20)
 		default:
 			escaped = append(escaped, b)
 		}
