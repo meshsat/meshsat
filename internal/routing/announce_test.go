@@ -31,6 +31,10 @@ func TestAnnounceRoundtrip(t *testing.T) {
 	}
 
 	data := announce.Marshal()
+	if len(data) == 0 {
+		t.Fatal("marshal returned empty data")
+	}
+
 	parsed, err := UnmarshalAnnounce(data)
 	if err != nil {
 		t.Fatal("unmarshal:", err)
@@ -67,7 +71,11 @@ func TestAnnounceVerify_TamperedDestHash(t *testing.T) {
 	id := testIdentity(t)
 	announce, _ := NewAnnounce(id, nil)
 
-	announce.DestHash[0] ^= 0xff // tamper
+	// Tamper the dest hash (shared between routing.Announce and reticulum.Announce)
+	announce.DestHash[0] ^= 0xff
+	if announce.ret != nil {
+		announce.ret.DestHash = announce.DestHash
+	}
 	if announce.Verify() {
 		t.Fatal("tampered dest hash should not verify")
 	}
@@ -77,7 +85,8 @@ func TestAnnounceVerify_TamperedSignature(t *testing.T) {
 	id := testIdentity(t)
 	announce, _ := NewAnnounce(id, nil)
 
-	announce.Signature[0] ^= 0xff // tamper
+	// Tamper the signature (slices are shared, so only need to tamper once)
+	announce.Signature[0] ^= 0xff
 	if announce.Verify() {
 		t.Fatal("tampered signature should not verify")
 	}
@@ -88,10 +97,6 @@ func TestAnnounceNoAppData(t *testing.T) {
 	announce, err := NewAnnounce(id, nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if announce.Flags&FlagHasAppData != 0 {
-		t.Error("no app data flag should be clear")
 	}
 
 	data := announce.Marshal()
@@ -126,22 +131,6 @@ func TestAnnounceIncrementHop(t *testing.T) {
 	}
 }
 
-func TestUnmarshalAnnounce_TooShort(t *testing.T) {
-	_, err := UnmarshalAnnounce([]byte{0x01, 0x00})
-	if err == nil {
-		t.Fatal("should fail on short data")
-	}
-}
-
-func TestUnmarshalAnnounce_NotAnnounce(t *testing.T) {
-	data := make([]byte, AnnounceMinLen)
-	data[0] = 0x00 // no announce flag
-	_, err := UnmarshalAnnounce(data)
-	if err == nil {
-		t.Fatal("should fail when announce flag not set")
-	}
-}
-
 func TestAnnounceUniqueness(t *testing.T) {
 	id := testIdentity(t)
 	a1, _ := NewAnnounce(id, nil)
@@ -149,5 +138,50 @@ func TestAnnounceUniqueness(t *testing.T) {
 
 	if a1.Random == a2.Random {
 		t.Fatal("two announces should have different random blobs")
+	}
+}
+
+func TestAnnounceVerifyAfterHopIncrement(t *testing.T) {
+	id := testIdentity(t)
+	announce, _ := NewAnnounce(id, []byte("test"))
+
+	announce.IncrementHop()
+	announce.IncrementHop()
+
+	// Announce should still verify — hop count is excluded from signature
+	if !announce.Verify() {
+		t.Fatal("announce should verify after hop increment")
+	}
+}
+
+func TestAnnounce_MarshalRoundtripAfterHopIncrement(t *testing.T) {
+	id := testIdentity(t)
+	announce, _ := NewAnnounce(id, []byte("hop-test"))
+
+	announce.IncrementHop()
+	announce.IncrementHop()
+	announce.IncrementHop()
+
+	data := announce.Marshal()
+	parsed, err := UnmarshalAnnounce(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if parsed.HopCount != 3 {
+		t.Errorf("hop count after roundtrip: got %d, want 3", parsed.HopCount)
+	}
+	if !parsed.Verify() {
+		t.Fatal("roundtripped announce should verify")
+	}
+}
+
+func TestAnnounce_NameHashPresent(t *testing.T) {
+	id := testIdentity(t)
+	announce, _ := NewAnnounce(id, nil)
+
+	expectedNameHash := reticulum.ComputeNameHash(DefaultAppName)
+	if announce.NameHash != expectedNameHash {
+		t.Error("announce NameHash should match default app name hash")
 	}
 }

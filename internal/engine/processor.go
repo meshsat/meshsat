@@ -14,6 +14,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
 	"meshsat/internal/gateway"
+	"meshsat/internal/reticulum"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -396,25 +397,46 @@ func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
 }
 
 // handleRoutingPacket dispatches a PRIVATE_APP payload to the appropriate
-// routing subsystem handler based on the first byte (packet type).
+// routing subsystem handler. It first tries to parse the payload as a
+// Reticulum packet (header + payload). If the packet type is recognized,
+// it's handled accordingly. Otherwise, it falls back to Bridge-legacy
+// type byte detection (0x10-0x14).
 func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byte) {
 	if len(payload) == 0 {
 		return
 	}
 
-	firstByte := payload[0]
+	// Try Reticulum header parsing first (requires at least HeaderMinSize bytes).
+	if len(payload) >= reticulum.HeaderMinSize {
+		hdr, err := reticulum.UnmarshalHeader(payload)
+		if err == nil {
+			switch hdr.PacketType {
+			case reticulum.PacketAnnounce:
+				if p.announceRelay != nil {
+					ctx := context.Background()
+					if p.announceRelay.HandleAnnounce(ctx, payload, "mesh_0") {
+						log.Debug().Int("size", len(payload)).Msg("routing: Reticulum announce processed")
+					}
+				}
+				return
 
-	// Announce packets: first byte has FlagIsAnnounce (0x01) bit set
-	if firstByte&routing.FlagIsAnnounce != 0 {
-		if p.announceRelay != nil {
-			ctx := context.Background()
-			if p.announceRelay.HandleAnnounce(ctx, payload, "mesh_0") {
-				log.Debug().Int("size", len(payload)).Msg("routing: announce processed")
+			case reticulum.PacketLinkRequest:
+				log.Debug().Msg("routing: Reticulum link request (not yet wired)")
+				return
+
+			case reticulum.PacketProof:
+				log.Debug().Msg("routing: Reticulum proof (not yet wired)")
+				return
+
+			case reticulum.PacketData:
+				log.Debug().Msg("routing: Reticulum data packet (not yet wired)")
+				return
 			}
 		}
-		return
 	}
 
+	// Fallback: Bridge-legacy packet type bytes (0x10-0x14).
+	firstByte := payload[0]
 	switch firstByte {
 	case routing.PacketLinkRequest:
 		if p.linkMgr != nil {
@@ -429,8 +451,6 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 
 	case routing.PacketLinkResponse:
 		if p.linkMgr != nil {
-			// Look up the destination's signing pub from the destination table
-			// so we can verify the link response signature.
 			var signingPub []byte
 			if p.destTable != nil {
 				resp, err := routing.UnmarshalLinkResponse(payload)
