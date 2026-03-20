@@ -1,28 +1,21 @@
 package routing
 
 import (
-	"crypto/ecdh"
-	"crypto/ed25519"
-	"crypto/rand"
 	"testing"
+
+	"meshsat/internal/reticulum"
 )
 
 // testIdentity creates an in-memory identity (no DB) for tests.
 func testIdentity(t *testing.T) *Identity {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	retID, err := reticulum.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := &Identity{
-		signingKey:    priv,
-		signingPub:    pub,
-		encryptionKey: encKey,
-		encryptionPub: encKey.PublicKey(),
+		retID:   retID,
+		appName: DefaultAppName,
 	}
 	id.computeDestHash()
 	return id

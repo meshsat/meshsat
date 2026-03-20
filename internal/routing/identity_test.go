@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"testing"
+
+	"meshsat/internal/reticulum"
 )
 
 func TestComputeDestHash(t *testing.T) {
@@ -41,6 +43,23 @@ func TestComputeDestHash_DifferentKeys(t *testing.T) {
 	}
 }
 
+func TestComputeDestHash_MatchesReticulum(t *testing.T) {
+	// Verify that routing.ComputeDestHash produces the same result
+	// as calling the reticulum package directly.
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	enc, _ := ecdh.X25519().GenerateKey(rand.Reader)
+
+	routingHash := ComputeDestHash(pub, enc.PublicKey())
+
+	nameHash := reticulum.ComputeNameHash(DefaultAppName)
+	identityHash := reticulum.ComputeIdentityHash(enc.PublicKey(), pub)
+	reticulumHash := reticulum.ComputeDestHash(nameHash, identityHash)
+
+	if routingHash != reticulumHash {
+		t.Fatal("routing.ComputeDestHash should match reticulum.ComputeDestHash")
+	}
+}
+
 func TestVerifyWith(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	data := []byte("test message")
@@ -54,5 +73,11 @@ func TestVerifyWith(t *testing.T) {
 	}
 	if VerifyWith(nil, data, sig) {
 		t.Fatal("nil key should not verify")
+	}
+}
+
+func TestDefaultAppName(t *testing.T) {
+	if DefaultAppName != "meshsat.bridge" {
+		t.Fatalf("DefaultAppName: got %q, want %q", DefaultAppName, "meshsat.bridge")
 	}
 }

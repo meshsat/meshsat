@@ -3,8 +3,6 @@ package routing
 import (
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"sync"
@@ -12,28 +10,48 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/reticulum"
 )
 
 // DestHashLen is the length of a destination hash (truncated SHA-256).
-const DestHashLen = 16
+const DestHashLen = reticulum.TruncatedHashLen
 
-// Identity holds the Reticulum-inspired routing keypair: an Ed25519 signing
-// key and an X25519 encryption key. The destination hash is the first 16 bytes
-// of SHA-256(signingPub || encryptionPub).
+// DefaultAppName is the Reticulum application name for MeshSat Bridge.
+// The dest hash is computed as SHA256(nameHash || identityHash)[:16]
+// where nameHash = SHA256("meshsat.bridge")[:10].
+const DefaultAppName = "meshsat.bridge"
+
+// Identity holds the Reticulum routing keypair: an Ed25519 signing key and
+// an X25519 encryption key. It wraps reticulum.Identity for wire-compatible
+// cryptographic operations and adds database persistence.
+//
+// Destination hash is computed using the Reticulum 3-stage method:
+//
+//	name_hash     = SHA256(app_name)[:10]
+//	identity_hash = SHA256(enc_pub || sig_pub)[:16]
+//	dest_hash     = SHA256(name_hash || identity_hash)[:16]
 type Identity struct {
-	mu            sync.RWMutex
-	signingKey    ed25519.PrivateKey
-	signingPub    ed25519.PublicKey
-	encryptionKey *ecdh.PrivateKey
-	encryptionPub *ecdh.PublicKey
-	destHash      [DestHashLen]byte
-	db            *database.DB
+	mu       sync.RWMutex
+	retID    *reticulum.Identity // underlying Reticulum identity
+	appName  string
+	destHash [DestHashLen]byte
+	db       *database.DB
 }
 
 // NewIdentity loads or generates a routing identity. Keys are persisted to the
 // system_config table under routing_signing_key and routing_encryption_key.
 func NewIdentity(db *database.DB) (*Identity, error) {
-	id := &Identity{db: db}
+	return NewIdentityWithAppName(db, DefaultAppName)
+}
+
+// NewIdentityWithAppName loads or generates a routing identity with a custom
+// Reticulum app name. Different app names produce different destination hashes
+// for the same keypair.
+func NewIdentityWithAppName(db *database.DB, appName string) (*Identity, error) {
+	id := &Identity{
+		db:      db,
+		appName: appName,
+	}
 
 	sigHex, _ := db.GetSystemConfig("routing_signing_key")
 	encHex, _ := db.GetSystemConfig("routing_encryption_key")
@@ -52,7 +70,10 @@ func NewIdentity(db *database.DB) (*Identity, error) {
 	}
 
 	id.computeDestHash()
-	log.Info().Str("dest_hash", id.DestHashHex()).Msg("routing identity initialized")
+	log.Info().
+		Str("dest_hash", id.DestHashHex()).
+		Str("app_name", appName).
+		Msg("routing identity initialized")
 	return id, nil
 }
 
@@ -70,55 +91,82 @@ func (id *Identity) DestHashHex() string {
 	return hex.EncodeToString(id.destHash[:])
 }
 
+// AppName returns the Reticulum app name used for dest hash computation.
+func (id *Identity) AppName() string {
+	id.mu.RLock()
+	defer id.mu.RUnlock()
+	return id.appName
+}
+
+// NameHash returns the 10-byte name hash for this identity's app name.
+func (id *Identity) NameHash() [reticulum.NameHashLen]byte {
+	id.mu.RLock()
+	defer id.mu.RUnlock()
+	return reticulum.ComputeNameHash(id.appName)
+}
+
 // SigningPublicKey returns the Ed25519 public signing key (32 bytes).
 func (id *Identity) SigningPublicKey() ed25519.PublicKey {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
-	return id.signingPub
+	return id.retID.SigningPublicKey()
 }
 
 // EncryptionPublicKey returns the X25519 public encryption key (32 bytes).
 func (id *Identity) EncryptionPublicKey() *ecdh.PublicKey {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
-	return id.encryptionPub
+	return id.retID.EncryptionPublicKey()
+}
+
+// PublicBytes returns the 64-byte public key: [32B X25519][32B Ed25519].
+// This matches the Reticulum wire format order.
+func (id *Identity) PublicBytes() []byte {
+	id.mu.RLock()
+	defer id.mu.RUnlock()
+	return id.retID.PublicBytes()
+}
+
+// ReticulumIdentity returns the underlying reticulum.Identity for direct use
+// with the reticulum wire format library.
+func (id *Identity) ReticulumIdentity() *reticulum.Identity {
+	id.mu.RLock()
+	defer id.mu.RUnlock()
+	return id.retID
 }
 
 // Sign creates an Ed25519 signature of the given data.
 func (id *Identity) Sign(data []byte) []byte {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
-	return ed25519.Sign(id.signingKey, data)
+	return id.retID.Sign(data)
 }
 
 // Verify checks an Ed25519 signature against this identity's signing key.
 func (id *Identity) Verify(data, signature []byte) bool {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
-	return ed25519.Verify(id.signingPub, data, signature)
+	return reticulum.VerifySignature(id.retID.SigningPublicKey(), data, signature)
 }
 
 // VerifyWith checks an Ed25519 signature against an arbitrary public key.
 func VerifyWith(pubKey ed25519.PublicKey, data, signature []byte) bool {
-	if len(pubKey) != ed25519.PublicKeySize {
-		return false
-	}
-	return ed25519.Verify(pubKey, data, signature)
+	return reticulum.VerifySignature(pubKey, data, signature)
 }
 
-// ComputeDestHash computes the 16-byte destination hash for arbitrary public keys.
+// ComputeDestHash computes the Reticulum 3-stage destination hash for
+// arbitrary public keys using the default app name.
+//
+// Deprecated: For new code, use reticulum.ComputeDestHash with explicit
+// name hash and identity hash. This wrapper exists for backward compatibility.
 func ComputeDestHash(signingPub ed25519.PublicKey, encryptionPub *ecdh.PublicKey) [DestHashLen]byte {
-	h := sha256.New()
-	h.Write(signingPub)
-	h.Write(encryptionPub.Bytes())
-	sum := h.Sum(nil)
-	var dest [DestHashLen]byte
-	copy(dest[:], sum[:DestHashLen])
-	return dest
+	nameHash := reticulum.ComputeNameHash(DefaultAppName)
+	identityHash := reticulum.ComputeIdentityHash(encryptionPub, signingPub)
+	return reticulum.ComputeDestHash(nameHash, identityHash)
 }
 
 func (id *Identity) computeDestHash() {
-	id.destHash = ComputeDestHash(id.signingPub, id.encryptionPub)
+	id.destHash = id.retID.DestHash(id.appName)
 }
 
 func (id *Identity) loadKeys(sigHex, encHex string) error {
@@ -126,40 +174,32 @@ func (id *Identity) loadKeys(sigHex, encHex string) error {
 	if err != nil || len(sigBytes) != ed25519.PrivateKeySize {
 		return fmt.Errorf("invalid signing key")
 	}
-	id.signingKey = ed25519.PrivateKey(sigBytes)
-	id.signingPub = id.signingKey.Public().(ed25519.PublicKey)
 
 	encBytes, err := hex.DecodeString(encHex)
 	if err != nil {
 		return fmt.Errorf("invalid encryption key hex")
 	}
-	id.encryptionKey, err = ecdh.X25519().NewPrivateKey(encBytes)
+
+	retID, err := reticulum.LoadIdentity(encBytes, sigBytes)
 	if err != nil {
-		return fmt.Errorf("invalid encryption key: %w", err)
+		return fmt.Errorf("load reticulum identity: %w", err)
 	}
-	id.encryptionPub = id.encryptionKey.PublicKey()
+	id.retID = retID
 	return nil
 }
 
 func (id *Identity) generateKeys() error {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	retID, err := reticulum.GenerateIdentity()
 	if err != nil {
-		return fmt.Errorf("generate ed25519: %w", err)
+		return fmt.Errorf("generate reticulum identity: %w", err)
 	}
-	id.signingKey = priv
-	id.signingPub = pub
-
-	id.encryptionKey, err = ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		return fmt.Errorf("generate x25519: %w", err)
-	}
-	id.encryptionPub = id.encryptionKey.PublicKey()
+	id.retID = retID
 	return nil
 }
 
 func (id *Identity) persistKeys() error {
-	if err := id.db.SetSystemConfig("routing_signing_key", hex.EncodeToString(id.signingKey)); err != nil {
+	if err := id.db.SetSystemConfig("routing_signing_key", hex.EncodeToString(id.retID.SigningPrivateBytes())); err != nil {
 		return err
 	}
-	return id.db.SetSystemConfig("routing_encryption_key", hex.EncodeToString(id.encryptionKey.Bytes()))
+	return id.db.SetSystemConfig("routing_encryption_key", hex.EncodeToString(id.retID.EncryptionPrivateBytes()))
 }
