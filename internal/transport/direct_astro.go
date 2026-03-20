@@ -256,6 +256,362 @@ func (t *DirectAstrocastTransport) Close() error {
 	return nil
 }
 
+// ReadSAK reads the satellite acknowledgment register. Returns nil if no ACK pending.
+func (t *DirectAstrocastTransport) ReadSAK(ctx context.Context) (*AstrocastSAK, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdSakRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write SAK_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("SAK_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, nil // no ACK pending
+	}
+
+	if len(resp.Payload) < 2 {
+		return nil, nil
+	}
+
+	return &AstrocastSAK{
+		PayloadID: uint16(resp.Payload[0]) | uint16(resp.Payload[1])<<8,
+	}, nil
+}
+
+// ClearSAK clears the satellite acknowledgment register.
+func (t *DirectAstrocastTransport) ClearSAK(ctx context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdSakCR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return fmt.Errorf("write SAK_CR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return fmt.Errorf("SAK_CR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		errCode := uint8(0)
+		if len(resp.Payload) > 0 {
+			errCode = resp.Payload[0]
+		}
+		return fmt.Errorf("SAK_CR rejected (error code 0x%02x)", errCode)
+	}
+
+	return nil
+}
+
+// ReadCommand reads a downlink command from the Astrocast cloud. Returns nil if none pending.
+func (t *DirectAstrocastTransport) ReadCommand(ctx context.Context) (*AstrocastCommand, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdCmdRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write CMD_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("CMD_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, nil // no command pending
+	}
+
+	// Response: [created_date:4 LE] [data:N]
+	if len(resp.Payload) < 4 {
+		return nil, nil
+	}
+
+	createdDate := uint32(resp.Payload[0]) | uint32(resp.Payload[1])<<8 |
+		uint32(resp.Payload[2])<<16 | uint32(resp.Payload[3])<<24
+
+	return &AstrocastCommand{
+		CreatedDate: createdDate,
+		Data:        resp.Payload[4:],
+	}, nil
+}
+
+// ClearCommand clears the downlink command register.
+func (t *DirectAstrocastTransport) ClearCommand(ctx context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdCmdCR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return fmt.Errorf("write CMD_CR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return fmt.Errorf("CMD_CR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		errCode := uint8(0)
+		if len(resp.Payload) > 0 {
+			errCode = resp.Payload[0]
+		}
+		return fmt.Errorf("CMD_CR rejected (error code 0x%02x)", errCode)
+	}
+
+	return nil
+}
+
+// WriteGeolocation writes a GPS position to the module. This is free (no MTU cost).
+func (t *DirectAstrocastTransport) WriteGeolocation(ctx context.Context, geo AstrocastGeolocation) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return err
+	}
+
+	// Payload: [latitude:4 LE signed] [longitude:4 LE signed]
+	payload := make([]byte, 8)
+	payload[0] = byte(geo.Latitude)
+	payload[1] = byte(geo.Latitude >> 8)
+	payload[2] = byte(geo.Latitude >> 16)
+	payload[3] = byte(geo.Latitude >> 24)
+	payload[4] = byte(geo.Longitude)
+	payload[5] = byte(geo.Longitude >> 8)
+	payload[6] = byte(geo.Longitude >> 16)
+	payload[7] = byte(geo.Longitude >> 24)
+
+	frame := EncodeAstroFrame(AstroCmdGeoWR, payload)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return fmt.Errorf("write GEO_WR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return fmt.Errorf("GEO_WR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		errCode := uint8(0)
+		if len(resp.Payload) > 0 {
+			errCode = resp.Payload[0]
+		}
+		return fmt.Errorf("GEO_WR rejected (error code 0x%02x)", errCode)
+	}
+
+	return nil
+}
+
+// GetNextContact returns the time until the next satellite contact opportunity.
+func (t *DirectAstrocastTransport) GetNextContact(ctx context.Context) (*AstrocastNextContact, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdNcoRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write NCO_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("NCO_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, fmt.Errorf("NCO_RR not available")
+	}
+
+	// Response: [delay:4 LE]
+	if len(resp.Payload) < 4 {
+		return nil, fmt.Errorf("NCO_RR payload too short: %d bytes", len(resp.Payload))
+	}
+
+	delay := uint32(resp.Payload[0]) | uint32(resp.Payload[1])<<8 |
+		uint32(resp.Payload[2])<<16 | uint32(resp.Payload[3])<<24
+
+	return &AstrocastNextContact{Delay: delay}, nil
+}
+
+// GetModuleState returns the module's internal state (queue depths, uptime, last reset).
+func (t *DirectAstrocastTransport) GetModuleState(ctx context.Context) (*AstrocastModuleState, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdMstRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write MST_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("MST_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, fmt.Errorf("MST_RR not available")
+	}
+
+	// Response: [uplink_pending:1] [downlink_pending:1] [uptime:4 LE] [last_reset_reason:1]
+	if len(resp.Payload) < 7 {
+		return nil, fmt.Errorf("MST_RR payload too short: %d bytes", len(resp.Payload))
+	}
+
+	uptime := uint32(resp.Payload[2]) | uint32(resp.Payload[3])<<8 |
+		uint32(resp.Payload[4])<<16 | uint32(resp.Payload[5])<<24
+
+	return &AstrocastModuleState{
+		UplinkPending:   resp.Payload[0],
+		DownlinkPending: resp.Payload[1],
+		Uptime:          uptime,
+		LastResetReason: resp.Payload[6],
+	}, nil
+}
+
+// GetLastContact returns details about the last satellite contact.
+func (t *DirectAstrocastTransport) GetLastContact(ctx context.Context) (*AstrocastLastContact, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdLcdRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write LCD_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("LCD_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, fmt.Errorf("LCD_RR not available")
+	}
+
+	// Response: [time_since_last:4 LE] [peak_rssi:2 LE signed] [time_peak_rssi:4 LE]
+	if len(resp.Payload) < 10 {
+		return nil, fmt.Errorf("LCD_RR payload too short: %d bytes", len(resp.Payload))
+	}
+
+	timeSince := uint32(resp.Payload[0]) | uint32(resp.Payload[1])<<8 |
+		uint32(resp.Payload[2])<<16 | uint32(resp.Payload[3])<<24
+	peakRSSI := int16(uint16(resp.Payload[4]) | uint16(resp.Payload[5])<<8)
+	timePeak := uint32(resp.Payload[6]) | uint32(resp.Payload[7])<<8 |
+		uint32(resp.Payload[8])<<16 | uint32(resp.Payload[9])<<24
+
+	return &AstrocastLastContact{
+		TimeSinceLast: timeSince,
+		PeakRSSI:      peakRSSI,
+		TimePeakRSSI:  timePeak,
+	}, nil
+}
+
+// GetEnvironment returns signal environment details.
+func (t *DirectAstrocastTransport) GetEnvironment(ctx context.Context) (*AstrocastEnvironment, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdEndRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write END_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("END_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, fmt.Errorf("END_RR not available")
+	}
+
+	// Response: [last_sat_rssi:2 LE signed]
+	if len(resp.Payload) < 2 {
+		return nil, fmt.Errorf("END_RR payload too short: %d bytes", len(resp.Payload))
+	}
+
+	rssi := int16(uint16(resp.Payload[0]) | uint16(resp.Payload[1])<<8)
+
+	return &AstrocastEnvironment{LastSatRSSI: rssi}, nil
+}
+
+// GetPerformance returns performance counters (fragments sent/acked, reset count).
+func (t *DirectAstrocastTransport) GetPerformance(ctx context.Context) (*AstrocastPerformance, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.ensureConnectedLocked(ctx); err != nil {
+		return nil, err
+	}
+
+	frame := EncodeAstroFrame(AstroCmdPerRR, nil)
+	if _, err := t.file.Write(frame); err != nil {
+		t.disconnectLocked()
+		return nil, fmt.Errorf("write PER_RR: %w", err)
+	}
+
+	resp, err := t.readFrameLocked(astroFrameTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("PER_RR response: %w", err)
+	}
+
+	if resp.CommandID == 0xFF {
+		return nil, fmt.Errorf("PER_RR not available")
+	}
+
+	// Response: [fragments_sent:4 LE] [fragments_ackd:4 LE] [reset_count:4 LE]
+	if len(resp.Payload) < 12 {
+		return nil, fmt.Errorf("PER_RR payload too short: %d bytes", len(resp.Payload))
+	}
+
+	readU32 := func(b []byte) uint32 {
+		return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	}
+
+	return &AstrocastPerformance{
+		FragmentsSent: readU32(resp.Payload[0:4]),
+		FragmentsAckd: readU32(resp.Payload[4:8]),
+		ResetCount:    readU32(resp.Payload[8:12]),
+	}, nil
+}
+
 // ============================================================================
 // Internal: connection management
 // ============================================================================

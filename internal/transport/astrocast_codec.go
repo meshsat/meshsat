@@ -8,12 +8,22 @@ import (
 // Astronode S binary protocol commands
 const (
 	AstroCmdCfgWR  uint8 = 0x05 // Write configuration
+	AstroCmdNcoRR  uint8 = 0x18 // Read next contact opportunity
 	AstroCmdPldER  uint8 = 0x25 // Enqueue uplink payload
 	AstroCmdPldDR  uint8 = 0x26 // Dequeue downlink payload
 	AstroCmdPldFR  uint8 = 0x27 // Free (ack) downlink slot
+	AstroCmdGeoWR  uint8 = 0x35 // Write geolocation
+	AstroCmdSakRR  uint8 = 0x45 // Read satellite ACK
+	AstroCmdSakCR  uint8 = 0x46 // Clear satellite ACK
+	AstroCmdCmdRR  uint8 = 0x47 // Read downlink command
+	AstroCmdCmdCR  uint8 = 0x48 // Clear downlink command
+	AstroCmdResetR uint8 = 0x55 // Reset module
 	AstroCmdEvtRR  uint8 = 0x65 // Read event register
 	AstroCmdSatSR  uint8 = 0x66 // Satellite search status
-	AstroCmdResetR uint8 = 0x55 // Reset module
+	AstroCmdPerRR  uint8 = 0x67 // Read performance counters
+	AstroCmdMstRR  uint8 = 0x69 // Read module state
+	AstroCmdLcdRR  uint8 = 0x6A // Read last contact details
+	AstroCmdEndRR  uint8 = 0x6B // Read environment details
 )
 
 // Astronode event types from EVT_RR

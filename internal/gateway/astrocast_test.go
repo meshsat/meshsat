@@ -73,6 +73,34 @@ func (m *mockAstrocastTransport) Subscribe(ctx context.Context) (<-chan transpor
 
 func (m *mockAstrocastTransport) Close() error { return nil }
 
+// Stub implementations for extended AstrocastTransport interface
+func (m *mockAstrocastTransport) ReadSAK(_ context.Context) (*transport.AstrocastSAK, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) ClearSAK(_ context.Context) error { return nil }
+func (m *mockAstrocastTransport) ReadCommand(_ context.Context) (*transport.AstrocastCommand, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) ClearCommand(_ context.Context) error { return nil }
+func (m *mockAstrocastTransport) WriteGeolocation(_ context.Context, _ transport.AstrocastGeolocation) error {
+	return nil
+}
+func (m *mockAstrocastTransport) GetNextContact(_ context.Context) (*transport.AstrocastNextContact, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) GetModuleState(_ context.Context) (*transport.AstrocastModuleState, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) GetLastContact(_ context.Context) (*transport.AstrocastLastContact, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) GetEnvironment(_ context.Context) (*transport.AstrocastEnvironment, error) {
+	return nil, nil
+}
+func (m *mockAstrocastTransport) GetPerformance(_ context.Context) (*transport.AstrocastPerformance, error) {
+	return nil, nil
+}
+
 func (m *mockAstrocastTransport) sentPayloads() [][]byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()

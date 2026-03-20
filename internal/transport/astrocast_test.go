@@ -182,6 +182,225 @@ func TestReassemblyExpire(t *testing.T) {
 	}
 }
 
+func TestNewCommandConstants(t *testing.T) {
+	// Verify all new command opcodes match the Astronode S binary protocol spec
+	cmds := map[string]uint8{
+		"NCO_RR": AstroCmdNcoRR,
+		"GEO_WR": AstroCmdGeoWR,
+		"SAK_RR": AstroCmdSakRR,
+		"SAK_CR": AstroCmdSakCR,
+		"CMD_RR": AstroCmdCmdRR,
+		"CMD_CR": AstroCmdCmdCR,
+		"PER_RR": AstroCmdPerRR,
+		"MST_RR": AstroCmdMstRR,
+		"LCD_RR": AstroCmdLcdRR,
+		"END_RR": AstroCmdEndRR,
+	}
+	expected := map[string]uint8{
+		"NCO_RR": 0x18,
+		"GEO_WR": 0x35,
+		"SAK_RR": 0x45,
+		"SAK_CR": 0x46,
+		"CMD_RR": 0x47,
+		"CMD_CR": 0x48,
+		"PER_RR": 0x67,
+		"MST_RR": 0x69,
+		"LCD_RR": 0x6A,
+		"END_RR": 0x6B,
+	}
+	for name, got := range cmds {
+		want := expected[name]
+		if got != want {
+			t.Errorf("%s = 0x%02x, want 0x%02x", name, got, want)
+		}
+	}
+}
+
+func TestEncodeDecodeNewCommands(t *testing.T) {
+	// Verify round-trip for each new command
+	newCmds := []struct {
+		name    string
+		cmd     uint8
+		payload []byte
+	}{
+		{"SAK_RR", AstroCmdSakRR, nil},
+		{"SAK_CR", AstroCmdSakCR, nil},
+		{"CMD_RR", AstroCmdCmdRR, nil},
+		{"CMD_CR", AstroCmdCmdCR, nil},
+		{"GEO_WR", AstroCmdGeoWR, []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}},
+		{"NCO_RR", AstroCmdNcoRR, nil},
+		{"MST_RR", AstroCmdMstRR, nil},
+		{"LCD_RR", AstroCmdLcdRR, nil},
+		{"END_RR", AstroCmdEndRR, nil},
+		{"PER_RR", AstroCmdPerRR, nil},
+	}
+
+	for _, tt := range newCmds {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded := EncodeAstroFrame(tt.cmd, tt.payload)
+			if encoded[0] != 0x02 || encoded[len(encoded)-1] != 0x03 {
+				t.Fatal("missing STX/ETX")
+			}
+
+			frame, err := DecodeAstroFrame(encoded)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if frame.CommandID != tt.cmd {
+				t.Fatalf("CommandID = 0x%02x, want 0x%02x", frame.CommandID, tt.cmd)
+			}
+			if !bytes.Equal(frame.Payload, tt.payload) {
+				t.Fatalf("Payload mismatch")
+			}
+		})
+	}
+}
+
+func TestGeoWRPayloadEncoding(t *testing.T) {
+	// Verify geolocation payload layout: [lat:4 LE] [lon:4 LE]
+	lat := int32(485000000)   // 48.5 degrees * 1e7
+	lon := int32(-1234000000) // -123.4 degrees * 1e7 (negative = west)
+
+	payload := make([]byte, 8)
+	payload[0] = byte(lat)
+	payload[1] = byte(lat >> 8)
+	payload[2] = byte(lat >> 16)
+	payload[3] = byte(lat >> 24)
+	payload[4] = byte(lon)
+	payload[5] = byte(lon >> 8)
+	payload[6] = byte(lon >> 16)
+	payload[7] = byte(lon >> 24)
+
+	// Decode back
+	gotLat := int32(uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24)
+	gotLon := int32(uint32(payload[4]) | uint32(payload[5])<<8 | uint32(payload[6])<<16 | uint32(payload[7])<<24)
+
+	if gotLat != lat {
+		t.Fatalf("latitude roundtrip: got %d, want %d", gotLat, lat)
+	}
+	if gotLon != lon {
+		t.Fatalf("longitude roundtrip: got %d, want %d", gotLon, lon)
+	}
+
+	// Encode as full frame
+	frame := EncodeAstroFrame(AstroCmdGeoWR, payload)
+	decoded, err := DecodeAstroFrame(frame)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if decoded.CommandID != AstroCmdGeoWR {
+		t.Fatalf("CommandID = 0x%02x, want 0x%02x", decoded.CommandID, AstroCmdGeoWR)
+	}
+	if len(decoded.Payload) != 8 {
+		t.Fatalf("Payload len = %d, want 8", len(decoded.Payload))
+	}
+}
+
+func TestMSTResponseParsing(t *testing.T) {
+	// Simulate MST_RR response: [uplink:1][downlink:1][uptime:4 LE][reset_reason:1]
+	payload := []byte{
+		3,                      // uplink_pending
+		1,                      // downlink_pending
+		0x58, 0x02, 0x00, 0x00, // uptime = 600 seconds
+		2, // last_reset_reason = watchdog
+	}
+
+	frame := EncodeAstroFrame(AstroCmdMstRR, payload)
+	decoded, err := DecodeAstroFrame(frame)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	if decoded.Payload[0] != 3 {
+		t.Fatalf("uplink_pending = %d, want 3", decoded.Payload[0])
+	}
+	if decoded.Payload[1] != 1 {
+		t.Fatalf("downlink_pending = %d, want 1", decoded.Payload[1])
+	}
+	uptime := uint32(decoded.Payload[2]) | uint32(decoded.Payload[3])<<8 |
+		uint32(decoded.Payload[4])<<16 | uint32(decoded.Payload[5])<<24
+	if uptime != 600 {
+		t.Fatalf("uptime = %d, want 600", uptime)
+	}
+	if decoded.Payload[6] != 2 {
+		t.Fatalf("last_reset_reason = %d, want 2", decoded.Payload[6])
+	}
+}
+
+func TestLCDResponseParsing(t *testing.T) {
+	// Simulate LCD_RR response: [time_since:4 LE][peak_rssi:2 LE signed][time_peak:4 LE]
+	payload := make([]byte, 10)
+	// time_since_last = 120 seconds
+	payload[0] = 0x78
+	payload[1] = 0x00
+	payload[2] = 0x00
+	payload[3] = 0x00
+	// peak_rssi = -85 dBm (signed int16)
+	rssi := int16(-85)
+	payload[4] = byte(uint16(rssi))
+	payload[5] = byte(uint16(rssi) >> 8)
+	// time_peak_rssi = 60 seconds
+	payload[6] = 0x3C
+	payload[7] = 0x00
+	payload[8] = 0x00
+	payload[9] = 0x00
+
+	frame := EncodeAstroFrame(AstroCmdLcdRR, payload)
+	decoded, err := DecodeAstroFrame(frame)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	gotRSSI := int16(uint16(decoded.Payload[4]) | uint16(decoded.Payload[5])<<8)
+	if gotRSSI != -85 {
+		t.Fatalf("peak_rssi = %d, want -85", gotRSSI)
+	}
+}
+
+func TestPERResponseParsing(t *testing.T) {
+	// Simulate PER_RR response: [sent:4 LE][ackd:4 LE][resets:4 LE]
+	payload := make([]byte, 12)
+	// fragments_sent = 1000
+	payload[0] = 0xE8
+	payload[1] = 0x03
+	payload[2] = 0x00
+	payload[3] = 0x00
+	// fragments_ackd = 950
+	payload[4] = 0xB6
+	payload[5] = 0x03
+	payload[6] = 0x00
+	payload[7] = 0x00
+	// reset_count = 5
+	payload[8] = 0x05
+	payload[9] = 0x00
+	payload[10] = 0x00
+	payload[11] = 0x00
+
+	frame := EncodeAstroFrame(AstroCmdPerRR, payload)
+	decoded, err := DecodeAstroFrame(frame)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	readU32 := func(b []byte) uint32 {
+		return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	}
+
+	sent := readU32(decoded.Payload[0:4])
+	ackd := readU32(decoded.Payload[4:8])
+	resets := readU32(decoded.Payload[8:12])
+
+	if sent != 1000 {
+		t.Fatalf("fragments_sent = %d, want 1000", sent)
+	}
+	if ackd != 950 {
+		t.Fatalf("fragments_ackd = %d, want 950", ackd)
+	}
+	if resets != 5 {
+		t.Fatalf("reset_count = %d, want 5", resets)
+	}
+}
+
 func TestFragmentMessageMaxFragments(t *testing.T) {
 	// 700 bytes — exceeds 4*159=636, should be truncated to 4 fragments
 	data := bytes.Repeat([]byte{0x44}, 700)
