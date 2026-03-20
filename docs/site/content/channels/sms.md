@@ -20,6 +20,7 @@ Any USB modem that supports AT+CMGS (send SMS) and AT+CMGR (read SMS):
 - Huawei E3372
 - Quectel EC25/EG25
 - SIMCom SIM7600
+- LILYGO T-Call A7670E (tested, requires ATdebug firmware)
 
 ## Features
 

@@ -686,11 +686,17 @@ func (t *DirectCellTransport) pollSignalAndCellInfo() {
 		return
 	}
 
-	// Query cell info: AT+QENG (Quectel) → AT+CREG? (3GPP) → AT+COPS? (AcT)
+	// Query cell info: AT+QENG (Quectel) → AT+CPSI? (SIMCom) → AT+CREG? (3GPP) → AT+COPS? (AcT)
 	var ci *CellInfo
 	cellResp, cellErr := t.execAT("AT+QENG=\"servingcell\"", 5*time.Second)
 	if cellErr == nil && strings.Contains(cellResp, "+QENG:") {
 		ci = parseQENG(cellResp)
+	}
+	if ci == nil {
+		cpsiResp, cpsiErr := t.execAT("AT+CPSI?", 5*time.Second)
+		if cpsiErr == nil && strings.Contains(cpsiResp, "+CPSI:") {
+			ci = parseCPSI(cpsiResp)
+		}
 	}
 	if ci == nil {
 		cregResp, cregErr := t.execAT("AT+CREG?", cellATTimeout)
@@ -1909,12 +1915,21 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 }
 
 // GetCellInfo queries cell tower information from the modem.
-// Tries AT+QENG (Quectel proprietary) first, falls back to AT+CREG? + AT+COPS?.
+// Tries AT+QENG (Quectel) → AT+CPSI? (SIMCom) → AT+CREG? + AT+COPS? (3GPP).
 func (t *DirectCellTransport) GetCellInfo(_ context.Context) (*CellInfo, error) {
 	// Try Quectel AT+QENG="servingcell"
 	resp, err := t.execAT("AT+QENG=\"servingcell\"", 5*time.Second)
 	if err == nil && strings.Contains(resp, "+QENG:") {
 		info := parseQENG(resp)
+		if info != nil {
+			return info, nil
+		}
+	}
+
+	// Try SIMCom AT+CPSI? (A7670E, SIM7600, etc.)
+	resp, err = t.execAT("AT+CPSI?", 5*time.Second)
+	if err == nil && strings.Contains(resp, "+CPSI:") {
+		info := parseCPSI(resp)
 		if info != nil {
 			return info, nil
 		}
@@ -2008,6 +2023,77 @@ func parseQENG(resp string) *CellInfo {
 			info.MNC = parts[4]
 			info.LAC = parts[5]
 			info.CellID = parts[6]
+		}
+	default:
+		info.NetworkType = tech
+	}
+
+	return info
+}
+
+// parseCPSI parses AT+CPSI? response (SIMCom modems: A7670E, SIM7600, etc.).
+// LTE format:  +CPSI: LTE,Online,262-01,0x1A2D,123456789,148,EUTRAN-BAND3,1800,5,5,-109,-13,-80,16
+// GSM format:  +CPSI: GSM,Online,262-01,0x1A2D,12345,24,-
+// WCDMA format: +CPSI: WCDMA,Online,262-01,0x1A2D,12345678,148,UTRAN-BAND1,10700,-75,-5,-80
+func parseCPSI(resp string) *CellInfo {
+	idx := strings.Index(resp, "+CPSI:")
+	if idx == -1 {
+		return nil
+	}
+	line := strings.Split(resp[idx+6:], "\n")[0]
+	parts := strings.Split(strings.TrimSpace(line), ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	if len(parts) < 3 {
+		return nil
+	}
+
+	info := &CellInfo{}
+	tech := strings.ToUpper(parts[0])
+
+	// Parse MCC-MNC from "262-01" format
+	if len(parts) >= 3 {
+		plmn := parts[2]
+		if dash := strings.Index(plmn, "-"); dash > 0 {
+			info.MCC = plmn[:dash]
+			info.MNC = plmn[dash+1:]
+		}
+	}
+
+	switch tech {
+	case "LTE":
+		info.NetworkType = "LTE"
+		if len(parts) >= 4 {
+			info.LAC = parts[3] // TAC in hex (e.g. 0x1A2D)
+		}
+		if len(parts) >= 5 {
+			info.CellID = parts[4]
+		}
+		// RSRP at index 10, RSRQ at index 11 for LTE
+		if len(parts) >= 12 {
+			if v, err := strconv.Atoi(parts[10]); err == nil {
+				info.RSRP = &v
+			}
+			if v, err := strconv.Atoi(parts[11]); err == nil {
+				info.RSRQ = &v
+			}
+		}
+	case "WCDMA":
+		info.NetworkType = "3G"
+		if len(parts) >= 4 {
+			info.LAC = parts[3]
+		}
+		if len(parts) >= 5 {
+			info.CellID = parts[4]
+		}
+	case "GSM":
+		info.NetworkType = "2G"
+		if len(parts) >= 4 {
+			info.LAC = parts[3]
+		}
+		if len(parts) >= 5 {
+			info.CellID = parts[4]
 		}
 	default:
 		info.NetworkType = tech
