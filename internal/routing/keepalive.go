@@ -6,68 +6,23 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/reticulum"
 )
 
-// Keepalive constants derived from the Reticulum spec.
+// Keepalive constants — re-exported from reticulum.
 const (
-	// KeepaliveBitsPerSec is the bandwidth consumed per link for keepalive.
-	// 0.45 bps means 100 links on a 1200 bps channel = 3.75% capacity.
-	KeepaliveBitsPerSec = 0.45
-
-	// KeepaliveInterval is the time between keepalive packets.
-	// At 0.45 bps with a 1-byte (8-bit) keepalive: interval = 8/0.45 ≈ 17.8s
-	KeepaliveInterval = 18 * time.Second
-
-	// KeepaliveTimeout is how long without activity before a link is considered dead.
-	// ~3 missed keepalives.
-	KeepaliveTimeout = 60 * time.Second
-
-	// KeepalivePacketSize is the size of a keepalive packet.
-	// link_id(32) + random(1) = 33 bytes. Minimal but prevents replay.
-	KeepalivePacketLen = 33
-
-	PacketKeepalive byte = 0x14
+	KeepaliveBitsPerSec = reticulum.KeepaliveBitsPerSec
+	KeepaliveInterval   = reticulum.KeepaliveInterval
+	KeepaliveTimeout    = reticulum.KeepaliveTimeout
+	KeepalivePacketLen  = reticulum.KeepalivePacketLen
 )
 
-// KeepalivePacket is a minimal heartbeat sent to keep a link alive.
-type KeepalivePacket struct {
-	LinkID [LinkIDLen]byte
-	Random byte // 1 byte of randomness to prevent dedup from swallowing keepalives
-}
+// Type alias for wire format type — delegate to reticulum package.
+type KeepalivePacket = reticulum.KeepalivePacket
 
-// MarshalKeepalive serializes a keepalive packet.
-func (kp *KeepalivePacket) Marshal() []byte {
-	buf := make([]byte, 1+KeepalivePacketLen)
-	buf[0] = PacketKeepalive
-	copy(buf[1:], kp.LinkID[:])
-	buf[1+LinkIDLen] = kp.Random
-	return buf
-}
-
-// UnmarshalKeepalive parses a keepalive packet.
-func UnmarshalKeepalive(data []byte) (*KeepalivePacket, error) {
-	if len(data) < 1+KeepalivePacketLen {
-		return nil, errTooShort
-	}
-	if data[0] != PacketKeepalive {
-		return nil, errWrongType
-	}
-	kp := &KeepalivePacket{}
-	copy(kp.LinkID[:], data[1:1+LinkIDLen])
-	kp.Random = data[1+LinkIDLen]
-	return kp, nil
-}
-
-var (
-	errTooShort  = errNew("packet too short")
-	errWrongType = errNew("wrong packet type")
-)
-
-func errNew(s string) error { return &constError{s} }
-
-type constError struct{ s string }
-
-func (e *constError) Error() string { return e.s }
+// Wire format functions — delegate to reticulum package.
+var UnmarshalKeepalive = reticulum.UnmarshalKeepalive
 
 // SendCallback is called to transmit a keepalive packet on the network.
 type SendCallback func(linkID [LinkIDLen]byte, data []byte)
@@ -143,7 +98,7 @@ func (lk *LinkKeepalive) HandleKeepalive(data []byte) error {
 
 	link := lk.linkMgr.GetLink(kp.LinkID)
 	if link == nil {
-		return errNew("unknown link")
+		return reticulum.ErrWrongType // unknown link
 	}
 
 	link.LastActivity = time.Now()
@@ -158,9 +113,5 @@ func BandwidthPerLink() float64 {
 // MaxLinksForBandwidth returns the maximum number of concurrent links that
 // fit within the given bandwidth budget (bps) at the given capacity percentage.
 func MaxLinksForBandwidth(bandwidthBps int, capacityPct float64) int {
-	if bandwidthBps <= 0 || capacityPct <= 0 {
-		return 0
-	}
-	budget := float64(bandwidthBps) * capacityPct / 100.0
-	return int(budget / KeepaliveBitsPerSec)
+	return reticulum.MaxLinksForBandwidth(bandwidthBps, capacityPct)
 }

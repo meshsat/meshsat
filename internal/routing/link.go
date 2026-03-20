@@ -6,38 +6,47 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/reticulum"
 )
 
-// Link packet type identifiers.
+// Link packet type identifiers — re-exported from reticulum for processor dispatch.
 const (
-	PacketLinkRequest  byte = 0x10
-	PacketLinkResponse byte = 0x11
-	PacketLinkConfirm  byte = 0x12
-	PacketLinkData     byte = 0x13
+	PacketLinkRequest  = reticulum.BridgeLinkRequest  // 0x10
+	PacketLinkResponse = reticulum.BridgeLinkResponse // 0x11
+	PacketLinkConfirm  = reticulum.BridgeLinkConfirm  // 0x12
+	PacketLinkData     = reticulum.BridgeLinkData     // 0x13
+	PacketKeepalive    = reticulum.BridgeKeepalive    // 0x14
 
-	// Wire sizes.
-	LinkIDLen = 32 // SHA-256 of the link request
-
-	// LinkRequestLen: type(1) + dest_hash(16) + ephemeral_pub(32) + random(16) = 65 bytes.
-	LinkRequestLen = 1 + DestHashLen + 32 + 16
-	// LinkResponseLen: type(1) + link_id(32) + ephemeral_pub(32) + signature(64) = 129 bytes.
-	LinkResponseLen = 1 + LinkIDLen + 32 + ed25519.SignatureSize
-	// LinkConfirmLen: type(1) + link_id(32) + proof(32) = 65 bytes.
-	LinkConfirmLen = 1 + LinkIDLen + 32
-
-	// Total 3-packet handshake: 65 + 129 + 65 = 259 bytes (fits in single Iridium SBD at 340).
+	// Wire sizes — re-exported from reticulum.
+	LinkIDLen       = reticulum.LinkIDLen       // 32
+	LinkRequestLen  = reticulum.LinkRequestLen  // 65
+	LinkResponseLen = reticulum.LinkResponseLen // 129
+	LinkConfirmLen  = reticulum.LinkConfirmLen  // 65
 
 	// LinkSymKeyLen is the AES-256 key length derived from ECDH.
-	LinkSymKeyLen = 32
+	LinkSymKeyLen = reticulum.SymKeyLen // 32
+)
+
+// Type aliases for wire format types — delegate to reticulum package.
+type (
+	LinkRequest  = reticulum.LinkRequest
+	LinkResponse = reticulum.LinkResponse
+	LinkConfirm  = reticulum.LinkConfirm
+)
+
+// Wire format functions — delegate to reticulum package.
+var (
+	UnmarshalLinkRequest  = reticulum.UnmarshalLinkRequest
+	UnmarshalLinkResponse = reticulum.UnmarshalLinkResponse
+	UnmarshalLinkConfirm  = reticulum.UnmarshalLinkConfirm
 )
 
 // LinkState represents the current state of a link.
@@ -64,153 +73,6 @@ type Link struct {
 	CreatedAt    time.Time
 	LastActivity time.Time
 	IsInitiator  bool // true if we initiated the link
-}
-
-// LinkRequest is the first packet in the 3-packet handshake.
-type LinkRequest struct {
-	DestHash     [DestHashLen]byte
-	EphemeralPub *ecdh.PublicKey // fresh X25519 key
-	Random       [16]byte
-}
-
-// LinkResponse is the second packet: destination's ephemeral key + signature.
-type LinkResponse struct {
-	LinkID       [LinkIDLen]byte
-	EphemeralPub *ecdh.PublicKey
-	Signature    []byte // Ed25519 signature over (link_id + ephemeral_pub)
-}
-
-// LinkConfirm is the third packet: proof that the initiator derived the shared secret.
-type LinkConfirm struct {
-	LinkID [LinkIDLen]byte
-	Proof  [32]byte // SHA-256(shared_secret + link_id + "confirm")
-}
-
-// MarshalLinkRequest serializes a link request to wire format.
-func (lr *LinkRequest) Marshal() []byte {
-	buf := make([]byte, 0, LinkRequestLen)
-	buf = append(buf, PacketLinkRequest)
-	buf = append(buf, lr.DestHash[:]...)
-	buf = append(buf, lr.EphemeralPub.Bytes()...)
-	buf = append(buf, lr.Random[:]...)
-	return buf
-}
-
-// UnmarshalLinkRequest parses a link request from wire format.
-func UnmarshalLinkRequest(data []byte) (*LinkRequest, error) {
-	if len(data) < LinkRequestLen {
-		return nil, errors.New("link request too short")
-	}
-	if data[0] != PacketLinkRequest {
-		return nil, errors.New("not a link request")
-	}
-	lr := &LinkRequest{}
-	pos := 1
-	copy(lr.DestHash[:], data[pos:pos+DestHashLen])
-	pos += DestHashLen
-	pub, err := ecdh.X25519().NewPublicKey(data[pos : pos+32])
-	if err != nil {
-		return nil, fmt.Errorf("invalid ephemeral key: %w", err)
-	}
-	lr.EphemeralPub = pub
-	pos += 32
-	copy(lr.Random[:], data[pos:pos+16])
-	return lr, nil
-}
-
-// ComputeLinkID computes the link ID as SHA-256 of the marshaled link request.
-func (lr *LinkRequest) ComputeLinkID() [LinkIDLen]byte {
-	data := lr.Marshal()
-	return sha256.Sum256(data)
-}
-
-// MarshalLinkResponse serializes a link response.
-func (resp *LinkResponse) Marshal() []byte {
-	buf := make([]byte, 0, LinkResponseLen)
-	buf = append(buf, PacketLinkResponse)
-	buf = append(buf, resp.LinkID[:]...)
-	buf = append(buf, resp.EphemeralPub.Bytes()...)
-	buf = append(buf, resp.Signature...)
-	return buf
-}
-
-// UnmarshalLinkResponse parses a link response.
-func UnmarshalLinkResponse(data []byte) (*LinkResponse, error) {
-	if len(data) < LinkResponseLen {
-		return nil, errors.New("link response too short")
-	}
-	if data[0] != PacketLinkResponse {
-		return nil, errors.New("not a link response")
-	}
-	resp := &LinkResponse{}
-	pos := 1
-	copy(resp.LinkID[:], data[pos:pos+LinkIDLen])
-	pos += LinkIDLen
-	pub, err := ecdh.X25519().NewPublicKey(data[pos : pos+32])
-	if err != nil {
-		return nil, fmt.Errorf("invalid ephemeral key: %w", err)
-	}
-	resp.EphemeralPub = pub
-	pos += 32
-	resp.Signature = make([]byte, ed25519.SignatureSize)
-	copy(resp.Signature, data[pos:pos+ed25519.SignatureSize])
-	return resp, nil
-}
-
-// MarshalLinkConfirm serializes a link confirmation.
-func (lc *LinkConfirm) Marshal() []byte {
-	buf := make([]byte, 0, LinkConfirmLen)
-	buf = append(buf, PacketLinkConfirm)
-	buf = append(buf, lc.LinkID[:]...)
-	buf = append(buf, lc.Proof[:]...)
-	return buf
-}
-
-// UnmarshalLinkConfirm parses a link confirmation.
-func UnmarshalLinkConfirm(data []byte) (*LinkConfirm, error) {
-	if len(data) < LinkConfirmLen {
-		return nil, errors.New("link confirm too short")
-	}
-	if data[0] != PacketLinkConfirm {
-		return nil, errors.New("not a link confirm")
-	}
-	lc := &LinkConfirm{}
-	pos := 1
-	copy(lc.LinkID[:], data[pos:pos+LinkIDLen])
-	pos += LinkIDLen
-	copy(lc.Proof[:], data[pos:pos+32])
-	return lc, nil
-}
-
-// computeConfirmProof computes SHA-256(shared_secret + link_id + "confirm").
-func computeConfirmProof(sharedSecret []byte, linkID [LinkIDLen]byte) [32]byte {
-	h := sha256.New()
-	h.Write(sharedSecret)
-	h.Write(linkID[:])
-	h.Write([]byte("confirm"))
-	var proof [32]byte
-	copy(proof[:], h.Sum(nil))
-	return proof
-}
-
-// deriveSymKeys derives send and receive AES-256 keys from the shared secret.
-// The initiator uses (key1=send, key2=recv); the responder uses (key1=recv, key2=send).
-func deriveSymKeys(sharedSecret []byte, linkID [LinkIDLen]byte) (key1, key2 []byte) {
-	// Key 1: SHA-256(shared_secret + link_id + "key1")
-	h1 := sha256.New()
-	h1.Write(sharedSecret)
-	h1.Write(linkID[:])
-	h1.Write([]byte("key1"))
-	key1 = h1.Sum(nil)
-
-	// Key 2: SHA-256(shared_secret + link_id + "key2")
-	h2 := sha256.New()
-	h2.Write(sharedSecret)
-	h2.Write(linkID[:])
-	h2.Write([]byte("key2"))
-	key2 = h2.Sum(nil)
-
-	return key1, key2
 }
 
 // LinkManager manages link establishment, tracking, and data encryption.
@@ -242,7 +104,7 @@ func (lm *LinkManager) InitiateLink(destHash [DestHashLen]byte) ([]byte, *Link, 
 		DestHash:     destHash,
 		EphemeralPub: ephKey.PublicKey(),
 	}
-	if _, err := io.ReadFull(rand.Reader, req.Random[:]); err != nil {
+	if _, err := rand.Read(req.Random[:]); err != nil {
 		return nil, nil, fmt.Errorf("generate random: %w", err)
 	}
 
@@ -298,13 +160,11 @@ func (lm *LinkManager) HandleLinkRequest(data []byte) ([]byte, error) {
 	}
 
 	// Sign: link_id + our ephemeral pub
-	signable := make([]byte, 0, LinkIDLen+32)
-	signable = append(signable, linkID[:]...)
-	signable = append(signable, ephKey.PublicKey().Bytes()...)
+	signable := reticulum.LinkResponseSignable(linkID, ephKey.PublicKey())
 	signature := lm.identity.Sign(signable)
 
 	// Derive symmetric keys (responder: key1=recv, key2=send)
-	key1, key2 := deriveSymKeys(sharedSecret, linkID)
+	key1, key2 := reticulum.DeriveSymKeys(sharedSecret, linkID)
 
 	now := time.Now()
 	link := &Link{
@@ -353,11 +213,8 @@ func (lm *LinkManager) HandleLinkResponse(data []byte, signingPub ed25519.Public
 	delete(lm.pending, resp.LinkID)
 	lm.mu.Unlock()
 
-	// Verify signature: Ed25519(signing_key, link_id + ephemeral_pub)
-	signable := make([]byte, 0, LinkIDLen+32)
-	signable = append(signable, resp.LinkID[:]...)
-	signable = append(signable, resp.EphemeralPub.Bytes()...)
-	if !VerifyWith(signingPub, signable, resp.Signature) {
+	// Verify signature
+	if !resp.Verify(signingPub) {
 		return nil, errors.New("link response signature verification failed")
 	}
 
@@ -368,7 +225,7 @@ func (lm *LinkManager) HandleLinkResponse(data []byte, signingPub ed25519.Public
 	}
 
 	// Derive symmetric keys (initiator: key1=send, key2=recv)
-	key1, key2 := deriveSymKeys(sharedSecret, resp.LinkID)
+	key1, key2 := reticulum.DeriveSymKeys(sharedSecret, resp.LinkID)
 
 	link.RemoteEphPub = resp.EphemeralPub
 	link.SharedSecret = sharedSecret
@@ -382,7 +239,7 @@ func (lm *LinkManager) HandleLinkResponse(data []byte, signingPub ed25519.Public
 	lm.mu.Unlock()
 
 	// Build confirm proof
-	proof := computeConfirmProof(sharedSecret, resp.LinkID)
+	proof := reticulum.ComputeConfirmProof(sharedSecret, resp.LinkID)
 	confirm := &LinkConfirm{
 		LinkID: resp.LinkID,
 		Proof:  proof,
@@ -412,7 +269,7 @@ func (lm *LinkManager) HandleLinkConfirm(data []byte) error {
 	}
 
 	// Verify proof
-	expected := computeConfirmProof(link.SharedSecret, confirm.LinkID)
+	expected := reticulum.ComputeConfirmProof(link.SharedSecret, confirm.LinkID)
 	if confirm.Proof != expected {
 		return errors.New("link confirm proof mismatch")
 	}
@@ -523,7 +380,6 @@ func (l *Link) Decrypt(data []byte) ([]byte, error) {
 }
 
 func hashHex32(h [32]byte) string {
-	// Show first 16 bytes (32 hex chars) for readability
 	const hextable = "0123456789abcdef"
 	buf := make([]byte, 32)
 	for i := 0; i < 16; i++ {
