@@ -24,6 +24,7 @@ const (
 	IfaceGlobalstar InterfaceType = "globalstar"
 	IfaceZigBee     InterfaceType = "zigbee"
 	IfaceAPRS       InterfaceType = "aprs"
+	IfaceTCP        InterfaceType = "tcp"
 	IfaceWebhook    InterfaceType = "webhook"
 	IfaceLocal      InterfaceType = "local"
 )
@@ -32,7 +33,7 @@ const (
 // Free interfaces return 0; satellite interfaces return their typical cost.
 func InterfaceCost(iface InterfaceType) float64 {
 	switch iface {
-	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceWebhook, IfaceLocal:
+	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceTCP, IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceWebhook, IfaceLocal:
 		return 0
 	case IfaceCellular:
 		return 0.005 // SMS cost

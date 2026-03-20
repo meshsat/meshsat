@@ -40,6 +40,12 @@ type Config struct {
 	// MSVQ-SC codebook file path (empty = no pure-Go decode)
 	MSVQSCCodebook string
 
+	// TCP Reticulum interface — RNS-compatible HDLC over TCP
+	// Listen address for inbound RNS nodes (e.g. "0.0.0.0:4242"). Empty = disabled.
+	TCPListenAddr string
+	// Remote RNS node to connect to (e.g. "rns-node.example.com:4242"). Empty = disabled.
+	TCPConnectAddr string
+
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
 }
@@ -66,6 +72,8 @@ func Load() *Config {
 		MSVQSCAddr:          envStr("MESHSAT_MSVQSC_ADDR", ""),
 		MSVQSCTimeoutSec:    envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
 		MSVQSCCodebook:      envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
+		TCPListenAddr:       envStr("MESHSAT_TCP_LISTEN", ""),
+		TCPConnectAddr:      envStr("MESHSAT_TCP_CONNECT", ""),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
 	}
 }

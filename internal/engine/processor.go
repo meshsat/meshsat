@@ -269,7 +269,7 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 
 	// Route PRIVATE_APP packets to the routing subsystem (announces, links, keepalives)
 	if msg.PortNum == transport.PortNumPrivate && len(msg.RawPayload) > 0 {
-		p.handleRoutingPacket(event, msg.RawPayload)
+		p.handleRoutingPacket(event, msg.RawPayload, "mesh_0")
 		return // routing packets are not forwarded through the rules engine
 	}
 
@@ -413,8 +413,9 @@ func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
 // routing subsystem handler. It first tries to parse the payload as a
 // Reticulum packet (header + payload). If the packet type is recognized,
 // it's handled accordingly. Otherwise, it falls back to Bridge-legacy
-// type byte detection (0x10-0x13).
-func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byte) {
+// type byte detection (0x10-0x13). The sourceIface parameter identifies
+// which interface the packet was received on (e.g. "mesh_0", "tcp_0").
+func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byte, sourceIface string) {
 	if len(payload) == 0 {
 		return
 	}
@@ -427,13 +428,13 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 			case reticulum.PacketAnnounce:
 				if p.announceRelay != nil {
 					ctx := context.Background()
-					if p.announceRelay.HandleAnnounce(ctx, payload, "mesh_0") {
-						log.Debug().Int("size", len(payload)).Msg("routing: Reticulum announce processed")
+					if p.announceRelay.HandleAnnounce(ctx, payload, sourceIface) {
+						log.Debug().Int("size", len(payload)).Str("iface", sourceIface).Msg("routing: Reticulum announce processed")
 						// Feed to transport node routing table
 						if p.transportNode != nil {
 							ann, err := routing.UnmarshalAnnounce(payload)
 							if err == nil {
-								p.transportNode.ProcessAnnounce(ann, "mesh_0")
+								p.transportNode.ProcessAnnounce(ann, sourceIface)
 							}
 						}
 					}
@@ -442,7 +443,7 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 
 			case reticulum.PacketLinkRequest:
 				// Try transport forwarding first (relay to dest if not for us)
-				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
+				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, sourceIface) {
 					log.Debug().Msg("routing: Reticulum link request forwarded via transport")
 					return
 				}
@@ -450,7 +451,7 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				return
 
 			case reticulum.PacketProof:
-				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
+				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, sourceIface) {
 					log.Debug().Msg("routing: Reticulum proof forwarded via transport")
 					return
 				}
@@ -462,16 +463,16 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				switch hdr.Context {
 				case reticulum.ContextRequest:
 					if p.pathFinder != nil {
-						p.pathFinder.HandlePathRequest(hdr.Data, "mesh_0")
+						p.pathFinder.HandlePathRequest(hdr.Data, sourceIface)
 						return
 					}
 				case reticulum.ContextPathResponse:
 					if p.pathFinder != nil {
-						p.pathFinder.HandlePathResponse(hdr.Data, "mesh_0")
+						p.pathFinder.HandlePathResponse(hdr.Data, sourceIface)
 						return
 					}
 				}
-				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
+				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, sourceIface) {
 					log.Debug().Msg("routing: Reticulum data packet forwarded via transport")
 					return
 				}
@@ -527,6 +528,16 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	default:
 		log.Debug().Int("type", int(firstByte)).Msg("routing: unknown packet type")
 	}
+}
+
+// InjectReticulumPacket feeds a raw Reticulum packet into the routing subsystem
+// as if it arrived from the named interface. This is used by non-mesh transports
+// (e.g. TCPInterface) that deliver already-unframed Reticulum packets.
+func (p *Processor) InjectReticulumPacket(packet []byte, sourceIface string) {
+	if len(packet) == 0 {
+		return
+	}
+	p.handleRoutingPacket(transport.MeshEvent{}, packet, sourceIface)
 }
 
 // sendRoutingPacket transmits a routing protocol packet via mesh as a PRIVATE_APP raw payload.

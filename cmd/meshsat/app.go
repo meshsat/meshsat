@@ -55,6 +55,7 @@ type App struct {
 	TransportNode   *routing.TransportNode
 	IfaceRegistry   *routing.InterfaceRegistry
 	PathFinder      *routing.PathFinder
+	TCPIface        *routing.TCPInterface
 
 	// Transports (set before calling Setup)
 	Mesh  transport.MeshTransport
@@ -241,6 +242,27 @@ func (a *App) Setup(ctx context.Context) error {
 				_, err := a.Astro.Send(fwdCtx, packet)
 				return err
 			}))
+		}
+
+		// TCP/HDLC — RNS-compatible Reticulum interface over TCP (free, ~64KB MTU)
+		if cfg.TCPListenAddr != "" || cfg.TCPConnectAddr != "" {
+			tcpIface := routing.NewTCPInterface(routing.TCPInterfaceConfig{
+				Name:              "tcp_0",
+				ListenAddr:        cfg.TCPListenAddr,
+				ConnectAddr:       cfg.TCPConnectAddr,
+				Reconnect:         true,
+				ReconnectInterval: 10 * time.Second,
+			}, func(packet []byte) {
+				// Feed received packets into the routing subsystem
+				a.Processor.InjectReticulumPacket(packet, "tcp_0")
+			})
+			if err := tcpIface.Start(ctx); err != nil {
+				log.Error().Err(err).Msg("tcp interface start failed")
+			} else {
+				a.TCPIface = tcpIface
+				ifaceReg.Register(routing.NewReticulumInterface("tcp_0", "tcp", 65535, tcpIface.Send))
+				log.Info().Str("listen", cfg.TCPListenAddr).Str("connect", cfg.TCPConnectAddr).Msg("tcp reticulum interface started")
+			}
 		}
 
 		// Cellular SMS — text-only, needs base64 wrapper (not registered as raw binary interface)
@@ -476,7 +498,14 @@ func (a *App) broadcastAnnounce() {
 		PortNum: 256, // PRIVATE_APP
 		Payload: base64Encode(data),
 	}); err != nil {
-		log.Warn().Err(err).Msg("failed to broadcast announce")
+		log.Warn().Err(err).Msg("failed to broadcast announce via mesh")
+	}
+
+	// Also announce via TCP interface (if active)
+	if a.TCPIface != nil && a.TCPIface.IsOnline() {
+		if err := a.TCPIface.Send(ctx, data); err != nil {
+			log.Warn().Err(err).Msg("failed to broadcast announce via tcp")
+		}
 	}
 }
 
@@ -490,6 +519,9 @@ func (a *App) Shutdown() {
 	a.TLEMgr.Stop()
 	a.AstroTLEMgr.Stop()
 	a.GatewayMgr.Stop()
+	if a.TCPIface != nil {
+		a.TCPIface.Stop()
+	}
 
 	for _, fn := range a.cleanups {
 		fn()
