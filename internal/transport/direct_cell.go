@@ -47,6 +47,7 @@ var knownCellularVIDPIDs = map[string]bool{
 	"2c7c:0512": true, // Quectel EG512R
 	"12d1:1003": true, // Huawei E220/E1550/E169 (3G HSDPA)
 	"12d1:15c1": true, // Huawei ME909s
+	"1a86:55d3": true, // CH9102F (LILYGO T-Call A7670E with ATdebug firmware)
 }
 
 // cellularATInterface maps VID:PIDs that expose multiple USB interfaces to the
@@ -315,6 +316,40 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 			log.Info().Str("iccid", iccid).Str("label", info.Label).Msg("cellular: recognized saved SIM card")
 			if t.simTouchFn != nil {
 				t.simTouchFn(iccid)
+			}
+
+			// Auto-unlock SIM PIN from saved settings
+			if simState == "PIN_REQUIRED" && info.PIN != "" {
+				log.Info().Str("iccid", iccid).Msg("cellular: auto-unlocking SIM PIN from saved settings")
+				pinCmd := fmt.Sprintf("AT+CPIN=\"%s\"", info.PIN)
+				resp, err = sendAT(sp, pinCmd, 10*time.Second)
+				if err == nil && !strings.Contains(resp, "ERROR") {
+					time.Sleep(2 * time.Second) // modem settles after PIN unlock
+					simState = "READY"
+					log.Info().Msg("cellular: SIM PIN auto-unlocked successfully")
+
+					// Re-query network state now that SIM is unlocked
+					sendAT(sp, "AT+CREG=2", cellATTimeout)
+					resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
+					regStatus = parseCREG(resp)
+					netType = parseCREGNetType(resp)
+					resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
+					operator = parseCOPS(resp)
+					if netType == "" {
+						netType = parseCOPSNetType(resp)
+					}
+					sendAT(sp, "AT+COPS=3,2", cellATTimeout)
+					resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
+					mcc, mnc = parseCOPSNumericPLMN(resp)
+					if netType == "" {
+						netType = parseCOPSNetType(resp)
+					}
+					sendAT(sp, "AT+COPS=3,0", cellATTimeout)
+					sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
+					sendAT(sp, "AT+CSCB=0", cellATTimeout)
+				} else {
+					log.Warn().Err(err).Msg("cellular: auto-PIN-unlock failed (wrong PIN or modem error)")
+				}
 			}
 		}
 	}
