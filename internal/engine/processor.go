@@ -43,6 +43,7 @@ type Processor struct {
 	keepalive     *routing.LinkKeepalive
 	destTable     *routing.DestinationTable
 	transportNode *routing.TransportNode
+	pathFinder    *routing.PathFinder
 
 	// Gateway injection dedup (text hash → timestamp, 5min TTL)
 	relayDedupMu sync.Mutex
@@ -89,6 +90,11 @@ func (p *Processor) SetRouting(relay *routing.AnnounceRelay, linkMgr *routing.Li
 // non-local Reticulum packets are forwarded via the routing table.
 func (p *Processor) SetTransportNode(tn *routing.TransportNode) {
 	p.transportNode = tn
+}
+
+// SetPathFinder enables path discovery for unknown destinations.
+func (p *Processor) SetPathFinder(pf *routing.PathFinder) {
+	p.pathFinder = pf
 }
 
 // Subscribe adds an SSE re-broadcast subscriber. Returns a channel and unsubscribe func.
@@ -452,6 +458,19 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				return
 
 			case reticulum.PacketData:
+				// Check context for path discovery packets
+				switch hdr.Context {
+				case reticulum.ContextRequest:
+					if p.pathFinder != nil {
+						p.pathFinder.HandlePathRequest(hdr.Data, "mesh_0")
+						return
+					}
+				case reticulum.ContextPathResponse:
+					if p.pathFinder != nil {
+						p.pathFinder.HandlePathResponse(hdr.Data, "mesh_0")
+						return
+					}
+				}
 				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, "mesh_0") {
 					log.Debug().Msg("routing: Reticulum data packet forwarded via transport")
 					return

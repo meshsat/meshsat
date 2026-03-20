@@ -54,6 +54,7 @@ type App struct {
 	Keepalive       *routing.LinkKeepalive
 	TransportNode   *routing.TransportNode
 	IfaceRegistry   *routing.InterfaceRegistry
+	PathFinder      *routing.PathFinder
 
 	// Transports (set before calling Setup)
 	Mesh  transport.MeshTransport
@@ -252,6 +253,16 @@ func (a *App) Setup(ctx context.Context) error {
 		a.TransportNode.Enable()
 		a.TransportNode.StartExpiry(ctx)
 
+		// Path discovery — flooding-based route resolution for unknown destinations
+		a.PathFinder = routing.NewPathFinder(
+			routing.DefaultPathFinderConfig(),
+			a.TransportNode.Router(),
+			a.IfaceRegistry,
+			routingID,
+			ifaceReg.Send,
+		)
+		a.PathFinder.StartPruner(ctx)
+
 		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized (transport node enabled)")
 	}
 
@@ -262,6 +273,9 @@ func (a *App) Setup(ctx context.Context) error {
 	}
 	if a.TransportNode != nil {
 		a.Processor.SetTransportNode(a.TransportNode)
+	}
+	if a.PathFinder != nil {
+		a.Processor.SetPathFinder(a.PathFinder)
 	}
 
 	// Dispatcher
