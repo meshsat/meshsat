@@ -53,6 +53,7 @@ type App struct {
 	BWLimiter       *routing.AnnounceBandwidthLimiter
 	Keepalive       *routing.LinkKeepalive
 	TransportNode   *routing.TransportNode
+	IfaceRegistry   *routing.InterfaceRegistry
 
 	// Transports (set before calling Setup)
 	Mesh  transport.MeshTransport
@@ -214,14 +215,37 @@ func (a *App) Setup(ctx context.Context) error {
 		a.Keepalive.Start(ctx)
 
 		// Interface registry — wraps transports as Reticulum interfaces
-		ifaceReg := routing.NewInterfaceRegistry()
+		a.IfaceRegistry = routing.NewInterfaceRegistry()
+		ifaceReg := a.IfaceRegistry
+
+		// LoRa/Meshtastic — free, ~230 byte MTU (SF7), PRIVATE_APP portnum 256
 		ifaceReg.Register(routing.NewReticulumInterface("mesh_0", "mesh", 230, func(fwdCtx context.Context, packet []byte) error {
 			return mesh.SendRaw(fwdCtx, transport.RawRequest{
 				PortNum: 256, // PRIVATE_APP
 				Payload: base64Encode(packet),
 			})
 		}))
-		// TODO: register iridium_0, cellular_0, zigbee_0, aprs_0 when gateways support raw packet send
+
+		// Iridium SBD — $0.05/msg, 340 byte MO MTU, raw binary via SBD
+		if a.Sat != nil {
+			ifaceReg.Register(routing.NewReticulumInterface("iridium_0", "iridium", 340, func(fwdCtx context.Context, packet []byte) error {
+				_, err := a.Sat.Send(fwdCtx, packet)
+				return err
+			}))
+		}
+
+		// Astrocast — $0.01/msg, ~200 byte uplink MTU, raw binary
+		if a.Astro != nil {
+			ifaceReg.Register(routing.NewReticulumInterface("astrocast_0", "astrocast", 200, func(fwdCtx context.Context, packet []byte) error {
+				_, err := a.Astro.Send(fwdCtx, packet)
+				return err
+			}))
+		}
+
+		// Cellular SMS — text-only, needs base64 wrapper (not registered as raw binary interface)
+		// APRS/AX.25 — text-only APRS format (needs bidirectional binary API, deferred)
+		// ZigBee — raw binary capable but managed by GatewayManager (registered dynamically)
+		// MQTT — PublishRaw() exists, registered dynamically when gateway starts
 
 		// Transport Node — cross-interface packet forwarding via routing table
 		a.TransportNode = routing.NewTransportNode(routingID, 30*time.Minute, ifaceReg.Send)
