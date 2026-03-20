@@ -47,7 +47,8 @@ var knownCellularVIDPIDs = map[string]bool{
 	"2c7c:0512": true, // Quectel EG512R
 	"12d1:1003": true, // Huawei E220/E1550/E169 (3G HSDPA)
 	"12d1:15c1": true, // Huawei ME909s
-	"1a86:55d3": true, // CH9102F (LILYGO T-Call A7670E with ATdebug firmware)
+	"1a86:55d3": true, // CH9102F variant (LILYGO T-Call A7670E)
+	"1a86:55d4": true, // CH9102F (LILYGO T-Call A7670E with ATdebug firmware)
 }
 
 // cellularATInterface maps VID:PIDs that expose multiple USB interfaces to the

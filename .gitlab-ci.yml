@@ -89,9 +89,9 @@ lint:consistency:
       fi
 
       # Rule 7: YouTrack issue ID
-      if ! echo "$CI_COMMIT_MESSAGE" | grep -qE '\[CUBEOS-[0-9]+\]'; then
+      if ! echo "$CI_COMMIT_MESSAGE" | grep -qE '\[(CUBEOS|MESHSAT)-[0-9]+\]'; then
         if ! echo "$CI_COMMIT_MESSAGE" | grep -qE '^chore: bump version'; then
-          WARNINGS+=("Traceability: commit has no [CUBEOS-XX] reference")
+          WARNINGS+=("Traceability: commit has no [MESHSAT-XX] or [CUBEOS-XX] reference")
         fi
       fi
 
@@ -175,7 +175,12 @@ package:
     - if: $CI_COMMIT_BRANCH == "main"
 
 # -----------------------------------------------------------------------------
-# DEPLOY — Pull latest image on Pi and restart MeshSat (via SSH)
+# DEPLOY — Pull latest image on each device and restart MeshSat (via SSH)
+# Deploys to all configured devices in parallel using matrix strategy.
+# Each device has a primary and fallback address (e.g., wired vs wireless).
+# CI variables required per device:
+#   DEPLOY_ADDR_MULE01, DEPLOY_ADDR_ALT_MULE01
+#   DEPLOY_ADDR_BANANAPI01, DEPLOY_ADDR_ALT_BANANAPI01
 # -----------------------------------------------------------------------------
 deploy:
   stage: deploy
@@ -183,15 +188,22 @@ deploy:
   image: alpine:latest
   needs:
     - package
+  parallel:
+    matrix:
+      - DEPLOY_TARGET: [mule01, bananapi01]
   before_script:
     - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
     - echo "$CI_DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    # Resolve deploy target — try primary, fall back to alt interface
+    # Resolve deploy addresses from per-device CI variables
     - |
+      UPPER_TARGET=$(echo "$DEPLOY_TARGET" | tr 'a-z' 'A-Z')
+      eval "PRIMARY=\${DEPLOY_ADDR_${UPPER_TARGET}:-}"
+      eval "ALT=\${DEPLOY_ADDR_ALT_${UPPER_TARGET}:-}"
+
       _RESOLVED=""
-      for ADDR in ${PI_DEPLOY_ADDR} ${PI_DEPLOY_ADDR_ALT}; do
+      for ADDR in $PRIMARY $ALT; do
         [ -z "$ADDR" ] && continue
         ssh-keyscan -H "$ADDR" >> ~/.ssh/known_hosts 2>/dev/null || true
         if ssh -o ConnectTimeout=5 -o BatchMode=yes "cubeos@${ADDR}" true 2>/dev/null; then
@@ -200,13 +212,17 @@ deploy:
         fi
       done
       if [ -z "$_RESOLVED" ]; then
-        echo "ERROR: Pi unreachable at ${PI_DEPLOY_ADDR} / ${PI_DEPLOY_ADDR_ALT}"
-        exit 1
+        echo "WARNING: ${DEPLOY_TARGET} unreachable at ${PRIMARY} / ${ALT} — skipping"
+        exit 0
       fi
-      export PI_DEPLOY_ADDR="$_RESOLVED"
       export PI_DEPLOY_HOST="cubeos@${_RESOLVED}"
-      echo "Deploy target: ${PI_DEPLOY_HOST}"
+      echo "Deploy target: ${DEPLOY_TARGET} → ${PI_DEPLOY_HOST}"
   script:
+    - |
+      if [ -z "${PI_DEPLOY_HOST:-}" ]; then
+        echo "Skipped (device unreachable)"
+        exit 0
+      fi
     - scp scripts/ci-deploy.sh ${PI_DEPLOY_HOST}:/tmp/ci-deploy-meshsat.sh
     - |
       ssh -o ServerAliveInterval=15 ${PI_DEPLOY_HOST} \
@@ -216,8 +232,10 @@ deploy:
     - kill $SSH_AGENT_PID 2>/dev/null || true
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
+  allow_failure:
+    exit_codes: 0  # unreachable devices don't block the pipeline
   environment:
-    name: production
+    name: production/$DEPLOY_TARGET
 
 # -----------------------------------------------------------------------------
 # PAGES — Build Hugo documentation site and deploy to GitLab Pages
