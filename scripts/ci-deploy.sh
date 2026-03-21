@@ -141,6 +141,15 @@ fi
 
 echo "Deploying standalone container (docker-compose)..."
 cd /cubeos/coreapps/meshsat/appconfig
+
+# Source per-device overrides if present (e.g. MESHSAT_IRIDIUM_PORT=/dev/ttyS4 for BananaPi)
+if [ -f /cubeos/config/meshsat.env ]; then
+  echo "  Loading per-device overrides from /cubeos/config/meshsat.env"
+  set -a
+  source /cubeos/config/meshsat.env
+  set +a
+fi
+
 docker compose -f docker-compose.direct.yml up -d --force-recreate --pull never 2>&1
 
 echo "  Container recreated — waiting for health..."
