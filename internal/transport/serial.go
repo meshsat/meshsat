@@ -350,19 +350,32 @@ func autoDetectMeshtastic() string {
 	}
 	allPorts := append(acmPorts, usbPorts...)
 
-	// Pass 1: VID:PID match (most reliable)
+	// Pass 1: Unambiguous VID:PID match (Meshtastic-only, not shared with ZigBee/cellular)
 	for _, port := range allPorts {
 		vidpid := findUSBVIDPID(port)
-		if knownMeshtasticVIDPIDs[vidpid] {
+		if knownMeshtasticVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] {
 			log.Info().Str("port", port).Str("vidpid", vidpid).Msg("meshtastic auto-detected by VID:PID")
 			return port
 		}
 	}
 
-	// Pass 2: ACM devices not recognized as GPS (ESP32-S3 native USB may lack sysfs VID)
+	// Pass 2: Ambiguous VID:PID (shared with ZigBee) — skip cellular VID:PIDs entirely
+	for _, port := range allPorts {
+		vidpid := findUSBVIDPID(port)
+		if knownMeshtasticVIDPIDs[vidpid] && ambiguousZigBeeVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] {
+			// Skip if ZigBee responds on this port
+			if ProbeZNP(port) {
+				continue
+			}
+			log.Info().Str("port", port).Str("vidpid", vidpid).Msg("meshtastic auto-detected by VID:PID (ambiguous)")
+			return port
+		}
+	}
+
+	// Pass 3: ACM devices not recognized as GPS (ESP32-S3 native USB may lack sysfs VID)
 	for _, port := range acmPorts {
 		vidpid := findUSBVIDPID(port)
-		if gpsVIDPIDs[vidpid] {
+		if gpsVIDPIDs[vidpid] || knownCellularVIDPIDs[vidpid] {
 			continue
 		}
 		log.Info().Str("port", port).Msg("meshtastic auto-detected (ACM fallback)")
