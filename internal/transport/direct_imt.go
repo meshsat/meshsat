@@ -23,6 +23,7 @@ type DirectIMTTransport struct {
 	port string // "/dev/ttyUSB0" or "auto"
 
 	mu        sync.Mutex
+	connectMu sync.Mutex // separate from mu — protects connect() without blocking status reads
 	conn      *jsprConn
 	file      serial.Port
 	connected bool
@@ -108,12 +109,14 @@ func (t *DirectIMTTransport) SetExcludePortFuncs(fns []func() string) {
 
 // Subscribe opens the JSPR connection and starts background polling.
 func (t *DirectIMTTransport) Subscribe(ctx context.Context) (<-chan SatEvent, error) {
+	// Connect without holding the mutex — jsprBegin() does serial I/O that can
+	// take 30+ seconds on timeout. Holding mu would block GetStatus/GetSignalFast.
+	if err := t.connectOnce(); err != nil {
+		return nil, fmt.Errorf("subscribe: %w", err)
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
-	if err := t.connect(); err != nil {
-		return nil, err
-	}
 
 	ctx, t.cancelFunc = context.WithCancel(ctx)
 
@@ -133,6 +136,13 @@ func (t *DirectIMTTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 	go t.signalPoller(ctx)
 
 	return ch, nil
+}
+
+// connectOnce ensures a single connect attempt at a time without blocking status reads.
+func (t *DirectIMTTransport) connectOnce() error {
+	t.connectMu.Lock()
+	defer t.connectMu.Unlock()
+	return t.connect()
 }
 
 // connect opens the serial port and initialises the JSPR session.
