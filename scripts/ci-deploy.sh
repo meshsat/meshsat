@@ -97,6 +97,14 @@ if [ "$SWARM_CLEANUP_NEEDED" = true ]; then
 fi
 
 # =============================================================================
+# Stop MeshSat BEFORE HAL changes to prevent stale serial fd issues
+# =============================================================================
+echo "Stopping MeshSat container before HAL reconfiguration..."
+docker stop ${DIRECT_CONTAINER} 2>/dev/null || true
+docker rm -f ${DIRECT_CONTAINER} 2>/dev/null || true
+sleep 2
+
+# =============================================================================
 # Ensure HAL disables Meshtastic/Iridium serial access (MeshSat owns the ports)
 # =============================================================================
 HAL_COMPOSE="/cubeos/coreapps/cubeos-hal/appconfig/docker-compose.yml"
