@@ -1170,17 +1170,18 @@ func buildTraceroutePacket(destNode uint32) []byte {
 }
 
 // buildRequestNodeInfo builds a MeshPacket requesting NodeInfo from a remote node.
-// Sends portnum=NODEINFO_APP (4) with want_response=true and empty payload.
-func buildRequestNodeInfo(destNode uint32) []byte {
-	// Data: portnum=NODEINFO_APP, empty payload, want_response=true
-	data := make([]byte, 0, 16)
+// Sends portnum=NODEINFO_APP (4) with want_response=true. The remote node
+// responds with its User (name, hardware) as a NODEINFO_APP packet.
+func buildRequestNodeInfo(myNodeNum, destNode uint32) []byte {
+	// Data: portnum=NODEINFO_APP, want_response=true (no payload needed for request)
+	data := make([]byte, 0, 8)
 	data = append(data, 0x08) // Data field 1: portnum
 	data = appendVarint(data, uint64(PortNumNodeInfo))
-	data = append(data, 0x12) // Data field 2: payload (empty)
-	data = appendVarint(data, 0)
 	data = append(data, 0x18, 0x01) // Data field 3: want_response = true
 
 	pkt := make([]byte, 0, len(data)+32)
+	pkt = append(pkt, 0x0D) // field 1 (from), fixed32
+	pkt = appendFixed32(pkt, myNodeNum)
 	pkt = append(pkt, 0x15) // field 2 (to), fixed32
 	pkt = appendFixed32(pkt, destNode)
 	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited

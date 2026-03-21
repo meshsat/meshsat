@@ -1085,7 +1085,7 @@ func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32)
 	if !t.connected || t.file == nil {
 		return fmt.Errorf("not connected")
 	}
-	toRadio := buildRequestNodeInfo(nodeNum)
+	toRadio := buildRequestNodeInfo(t.myNodeNum, nodeNum)
 	return sendFrame(t.file, toRadio)
 }
 
