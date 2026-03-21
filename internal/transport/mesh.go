@@ -170,6 +170,7 @@ type MeshTransport interface {
 	SendPosition(ctx context.Context, lat, lon float64, alt int32) error
 	SetFixedPosition(ctx context.Context, lat, lon float64, alt int32) error
 	RemoveFixedPosition(ctx context.Context) error
+	SetOwner(ctx context.Context, longName, shortName string) error
 	RequestStoreForward(ctx context.Context, nodeNum uint32, window uint32) error
 	SendRangeTest(ctx context.Context, text string, to uint32) error
 	SetCannedMessages(ctx context.Context, messages string) error

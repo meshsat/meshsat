@@ -191,3 +191,39 @@ func (s *Server) handleSetChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "channel updated"})
 }
+
+// handleSetOwner sets the device owner (long_name + short_name).
+// @Summary Set device owner
+// @Description Sets the Meshtastic device owner name via AdminMessage field 32
+// @Tags config
+// @Accept json
+// @Param body body object{long_name=string,short_name=string} true "Owner names"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/config/owner [post]
+func (s *Server) handleSetOwner(w http.ResponseWriter, r *http.Request) {
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
+
+	var req struct {
+		LongName  string `json:"long_name"`
+		ShortName string `json:"short_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.LongName == "" && req.ShortName == "" {
+		writeError(w, http.StatusBadRequest, "at least one of long_name or short_name is required")
+		return
+	}
+
+	if err := s.mesh.SetOwner(r.Context(), req.LongName, req.ShortName); err != nil {
+		writeError(w, http.StatusInternalServerError, "set owner failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "owner updated"})
+}

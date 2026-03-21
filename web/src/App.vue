@@ -18,6 +18,7 @@ const tabs = [
   { name: 'topology', label: 'Topology', path: '/topology' },
   { name: 'map', label: 'Map', path: '/map' },
   { name: 'settings', label: 'Settings', path: '/settings' },
+  { name: 'radio', label: 'Radio', path: '/radio' },
   { name: 'audit', label: 'Audit', path: '/audit' },
   { name: 'help', label: 'Help', path: '/help' },
   { name: 'about', label: 'About', path: '/about' }

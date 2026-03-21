@@ -50,6 +50,7 @@ const (
 	AdminFieldFactoryReset         = 94
 	AdminFieldRemoveByNodenum      = 38
 	AdminFieldRebootSeconds        = 97
+	AdminFieldSetOwner             = 32
 	AdminFieldSetTimeUnixSec       = 99
 )
 
@@ -1759,6 +1760,28 @@ func buildAdminSetFixedPosition(myNodeNum uint32, lat, lon float64, alt int32) [
 	admin = appendVarint(admin, uint64(AdminFieldSetFixedPosition)<<3|2) // field 41, length-delimited
 	admin = appendVarint(admin, uint64(len(pos)))
 	admin = append(admin, pos...)
+	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminSetOwner builds an AdminMessage to set the device owner name.
+// Admin field 32 = User message (length-delimited).
+func buildAdminSetOwner(myNodeNum uint32, longName, shortName string) []byte {
+	user := make([]byte, 0, 64)
+	if longName != "" {
+		user = append(user, 0x12) // field 2: long_name (length-delimited)
+		user = appendVarint(user, uint64(len(longName)))
+		user = append(user, []byte(longName)...)
+	}
+	if shortName != "" {
+		user = append(user, 0x1A) // field 3: short_name (length-delimited)
+		user = appendVarint(user, uint64(len(shortName)))
+		user = append(user, []byte(shortName)...)
+	}
+
+	admin := make([]byte, 0, len(user)+8)
+	admin = appendVarint(admin, uint64(AdminFieldSetOwner)<<3|2) // field 32, length-delimited
+	admin = appendVarint(admin, uint64(len(user)))
+	admin = append(admin, user...)
 	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
 }
 

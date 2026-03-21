@@ -285,6 +285,7 @@ func (s *Server) Router() http.Handler {
 
 		// Channel management
 		r.Post("/channels", s.handleSetChannel)
+		r.Post("/config/owner", s.handleSetOwner)
 
 		// Waypoints (Phase 2)
 		r.Post("/waypoints", s.handleSendWaypoint)

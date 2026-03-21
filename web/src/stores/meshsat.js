@@ -662,6 +662,16 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  async function setOwner(payload) {
+    error.value = null
+    try {
+      return await api.post('/config/owner', payload)
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   function connectSSE(onEvent) {
     closeSSE()
     sseHandle = api.sse('/events', (event) => {
@@ -1248,7 +1258,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,
-    fetchConfig, setChannel, fetchConfigSection, fetchModuleConfigSection,
+    fetchConfig, setChannel, setOwner, fetchConfigSection, fetchModuleConfigSection,
     fetchNeighborInfo, sendRangeTest, fetchRangeTests,
     sendPosition, setFixedPosition, removeFixedPosition,
     requestStoreForward, getCannedMessages, setCannedMessages,

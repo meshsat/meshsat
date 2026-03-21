@@ -1069,6 +1069,16 @@ func (t *DirectMeshTransport) RemoveFixedPosition(_ context.Context) error {
 	return sendFrame(t.file, toRadio)
 }
 
+func (t *DirectMeshTransport) SetOwner(_ context.Context, longName, shortName string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	toRadio := buildAdminSetOwner(t.myNodeNum, longName, shortName)
+	return sendFrame(t.file, toRadio)
+}
+
 func (t *DirectMeshTransport) RequestStoreForward(_ context.Context, nodeNum uint32, window uint32) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
