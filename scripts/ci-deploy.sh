@@ -163,17 +163,23 @@ ENVEOF
     ;;
 esac
 
-# Inject per-device env vars into the compose file if meshsat.env has overrides
+# Inject per-device env vars directly into the compose environment section
 if [ -s /cubeos/config/meshsat.env ]; then
   echo "  Per-device overrides:"
-  grep -v '^#' /cubeos/config/meshsat.env | grep '=' | sed 's/^/    /' || true
-
-  # Ensure compose file has env_file directive
-  if ! grep -q 'env_file' docker-compose.direct.yml 2>/dev/null; then
-    # Insert env_file after the 'environment:' line
-    sed -i '/^    environment:/a\    env_file:\n      - /cubeos/config/meshsat.env' docker-compose.direct.yml
-    echo "  Injected env_file directive into compose file"
-  fi
+  while IFS='=' read -r key value; do
+    [ -z "$key" ] && continue
+    [[ "$key" =~ ^# ]] && continue
+    echo "    $key=$value"
+    # Add to compose environment if not already present
+    if ! grep -q "$key" docker-compose.direct.yml 2>/dev/null; then
+      sed -i "/^      - MESHSAT_MODE=direct/a\\      - ${key}=${value}" docker-compose.direct.yml
+      echo "    → injected into compose file"
+    else
+      # Update existing value
+      sed -i "s|${key}=.*|${key}=${value}|" docker-compose.direct.yml
+      echo "    → updated in compose file"
+    fi
+  done < /cubeos/config/meshsat.env
 fi
 
 docker compose -f docker-compose.direct.yml up -d --force-recreate --pull never 2>&1
