@@ -268,6 +268,9 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/iridium/queue/{id}", s.handleDeleteQueueItem)
 		r.Post("/iridium/queue/{id}/priority", s.handleSetQueuePriority)
 
+		// Radio setup detection (MESHSAT-235)
+		r.Get("/radio/setup", s.handleGetRadioSetup)
+
 		// Admin commands (Phase 2)
 		r.Post("/admin/reboot", s.handleAdminReboot)
 		r.Post("/admin/factory_reset", s.handleAdminFactoryReset)
