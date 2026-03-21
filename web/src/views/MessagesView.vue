@@ -187,6 +187,28 @@ function smsContactName(phone) {
   return c ? c.name : ''
 }
 
+// Universal name resolver: mesh node name > SMS contact name > fallback to shortId
+function displayName(id) {
+  if (!id) return '?'
+  // Mesh node lookup
+  const node = (store.nodes || []).find(n => n.user_id === id || ('!' + (n.num >>> 0).toString(16).padStart(8, '0')) === id)
+  if (node?.long_name) return node.long_name
+  if (node?.short_name) return node.short_name
+  // SMS contact lookup
+  const contact = (store.smsContacts || []).find(c => c.phone === id)
+  if (contact?.name) return contact.name
+  // Unified contact lookup
+  const uContact = (store.contacts || []).find(c => c.name && (c.addresses || []).some(a => a.address === id))
+  if (uContact?.name) return uContact.name
+  return shortId(id)
+}
+
+function displayInitials(id) {
+  const name = displayName(id)
+  if (name.startsWith('!')) return name.slice(-2).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
 async function doSendSMS() {
   if (!smsTo.value || !smsMsgText.value) return
   smsSent.value = false
@@ -904,7 +926,7 @@ onUnmounted(() => {
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
         </svg>
-        <span>{{ shortId(replyTo.from_node) }}</span>
+        <span>{{ displayName(replyTo.from_node) }}</span>
         <button @click="cancelReply" class="ml-auto text-blue-500 hover:text-blue-300">
           <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -961,13 +983,13 @@ onUnmounted(() => {
             <!-- Avatar circle -->
             <div class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5"
               :class="msg.direction === 'tx' ? 'bg-teal-900/50 text-teal-400' : 'bg-gray-700 text-gray-400'">
-              {{ (msg.from_node || '?').slice(-2).toUpperCase() }}
+              {{ displayInitials(msg.from_node) }}
             </div>
             <!-- Bubble -->
             <div class="max-w-[75%] min-w-[120px]">
               <div class="flex items-center gap-1.5 mb-0.5" :class="msg.direction === 'tx' ? 'flex-row-reverse' : ''">
                 <span class="text-[11px] font-medium" :class="msg.direction === 'tx' ? 'text-teal-400' : 'text-gray-400'">
-                  {{ shortId(msg.from_node) }}
+                  {{ displayName(msg.from_node) }}
                 </span>
                 <span class="px-1 py-px rounded text-[9px] font-medium border"
                   :class="transportBadge(msg.transport).cls">
@@ -1000,7 +1022,7 @@ onUnmounted(() => {
           <div v-else class="flex items-center gap-2 px-3 py-1 mx-1 group">
             <span class="w-1.5 h-1.5 rounded-full flex-shrink-0"
               :class="msg.portnum === 3 ? 'bg-cyan-500/60' : msg.portnum === 67 ? 'bg-amber-500/60' : 'bg-gray-600'"></span>
-            <span class="text-[11px] text-gray-500 font-medium">{{ shortId(msg.from_node) }}</span>
+            <span class="text-[11px] text-gray-500 font-medium">{{ displayName(msg.from_node) }}</span>
             <span class="text-[11px] text-gray-600">{{ portnumLabel(msg.portnum, msg.portnum_name) }}</span>
             <span v-if="msg.decoded_text" class="text-[11px] text-gray-500 truncate max-w-[200px]">{{ msg.decoded_text }}</span>
             <span class="px-1 py-px rounded text-[9px] border" :class="transportBadge(msg.transport).cls">
