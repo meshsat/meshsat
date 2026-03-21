@@ -82,10 +82,17 @@ func main() {
 		if cfg.IMTPort != "" && cfg.IMTPort != "auto" {
 			useIMT = true // explicit port — trust the user
 		} else if cfg.IMTPort == "auto" {
-			// Early probe: check if a 9704 responds to JSPR handshake
-			if probed := transport.ProbeIMT([]string{directMesh.GetPort()}); probed != "" {
-				useIMT = true
-				log.Info().Str("port", probed).Msg("RockBLOCK 9704 detected at startup")
+			// Early probe: check if a 9704 responds to JSPR handshake.
+			// Retry once after 2s — USB device may not be ready immediately after container start.
+			for attempt := 0; attempt < 2; attempt++ {
+				if probed := transport.ProbeIMT(nil); probed != "" {
+					useIMT = true
+					log.Info().Str("port", probed).Int("attempt", attempt).Msg("RockBLOCK 9704 detected at startup")
+					break
+				}
+				if attempt == 0 {
+					time.Sleep(2 * time.Second)
+				}
 			}
 		}
 		if useIMT {
