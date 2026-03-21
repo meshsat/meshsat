@@ -161,6 +161,20 @@ func (t *DirectCellTransport) SetExcludePortFuncs(fns []func() string) {
 	t.excludePortFns = fns
 }
 
+// SetPort sets the serial port path. Called by DeviceSupervisor.
+func (t *DirectCellTransport) SetPort(port string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.port = port
+}
+
+// IsConnected returns true if the transport has an active serial connection.
+func (t *DirectCellTransport) IsConnected() bool {
+	t.stateMu.Lock()
+	defer t.stateMu.Unlock()
+	return t.connected
+}
+
 // Subscribe opens the serial connection and starts the I/O loop + signal polling.
 func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, error) {
 	t.mu.Lock()

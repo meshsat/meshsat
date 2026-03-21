@@ -77,6 +77,20 @@ func (t *DirectAstrocastTransport) SetExcludePortFuncs(fns []func() string) {
 	t.excludePortFns = fns
 }
 
+// SetPort sets the serial port path. Called by DeviceSupervisor.
+func (t *DirectAstrocastTransport) SetPort(port string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.port = port
+}
+
+// IsConnected returns true if the transport has an active serial connection.
+func (t *DirectAstrocastTransport) IsConnected() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.connected
+}
+
 // Send enqueues an uplink payload via the Astronode S protocol (PLD_ER command).
 func (t *DirectAstrocastTransport) Send(ctx context.Context, data []byte) (*AstrocastResult, error) {
 	if len(data) == 0 {

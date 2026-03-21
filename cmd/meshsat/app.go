@@ -58,13 +58,17 @@ type App struct {
 	TCPIface        *routing.TCPInterface
 
 	// Transports (set before calling Setup)
-	Mesh  transport.MeshTransport
-	Sat   transport.SatTransport
-	Cell  transport.CellTransport
-	Astro transport.AstrocastTransport
+	Mesh   transport.MeshTransport
+	Sat    transport.SatTransport
+	IMTSat transport.SatTransport // optional IMT (9704) transport for coexistence
+	Cell   transport.CellTransport
+	Astro  transport.AstrocastTransport
 
 	// Optional: GPS exclude port funcs (direct mode only)
 	GPSExcludePorts []func() string
+
+	// Device supervisor (direct mode only — continuous USB discovery)
+	DevSupervisor *transport.DeviceSupervisor
 
 	// Cleanup funcs for llamazip etc.
 	cleanups []func()
@@ -103,6 +107,9 @@ func (a *App) Setup(ctx context.Context) error {
 
 	// Gateway manager
 	a.GatewayMgr = gateway.NewManager(db, a.Sat)
+	if a.IMTSat != nil {
+		a.GatewayMgr.SetIMTTransport(a.IMTSat)
+	}
 	if a.Cell != nil {
 		a.GatewayMgr.SetCellTransport(a.Cell)
 	}
@@ -230,8 +237,21 @@ func (a *App) Setup(ctx context.Context) error {
 
 		// Iridium SBD — $0.05/msg, 340 byte MO MTU, raw binary via SBD
 		if a.Sat != nil {
-			ifaceReg.Register(routing.NewReticulumInterface("iridium_0", "iridium", 340, func(fwdCtx context.Context, packet []byte) error {
+			iridiumMTU := 340
+			if a.IMTSat != nil {
+				// If IMT is the primary sat transport, register with 100KB MTU
+				iridiumMTU = 100000
+			}
+			ifaceReg.Register(routing.NewReticulumInterface("iridium_0", "iridium", iridiumMTU, func(fwdCtx context.Context, packet []byte) error {
 				_, err := a.Sat.Send(fwdCtx, packet)
+				return err
+			}))
+		}
+
+		// Iridium IMT — separate interface for 9704 when coexisting with 9603
+		if a.IMTSat != nil && a.IMTSat != a.Sat {
+			ifaceReg.Register(routing.NewReticulumInterface("iridium_imt_0", "iridium_imt", 100000, func(fwdCtx context.Context, packet []byte) error {
+				_, err := a.IMTSat.Send(fwdCtx, packet)
 				return err
 			}))
 		}
@@ -394,6 +414,9 @@ func (a *App) Setup(ctx context.Context) error {
 	srv.SetCellTransport(a.Cell)
 	srv.SetGPSReader(a.GPSReader)
 	srv.SetInterfaceManager(a.InterfaceMgr)
+	if a.DevSupervisor != nil {
+		srv.SetDeviceSupervisor(a.DevSupervisor)
+	}
 	if a.Signing != nil {
 		srv.SetSigningService(a.Signing)
 	}
@@ -511,6 +534,9 @@ func (a *App) broadcastAnnounce() {
 
 // Shutdown gracefully stops all components.
 func (a *App) Shutdown() {
+	if a.DevSupervisor != nil {
+		a.DevSupervisor.Stop()
+	}
 	a.SignalRecorder.Stop()
 	if a.CellRecorder != nil {
 		a.CellRecorder.Stop()

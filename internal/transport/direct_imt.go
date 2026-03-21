@@ -78,6 +78,20 @@ func (t *DirectIMTTransport) SetExcludePortFunc(fn func() string) {
 	t.excludePortFn = fn
 }
 
+// SetPort sets the serial port path. Called by DeviceSupervisor.
+func (t *DirectIMTTransport) SetPort(port string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.port = port
+}
+
+// IsConnected returns true if the transport has an active serial connection.
+func (t *DirectIMTTransport) IsConnected() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.connected
+}
+
 // SetExcludePortFuncs sets multiple dynamic port resolvers for exclusion.
 func (t *DirectIMTTransport) SetExcludePortFuncs(fns []func() string) {
 	if len(fns) > 0 {

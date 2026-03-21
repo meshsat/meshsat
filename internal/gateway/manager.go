@@ -22,7 +22,8 @@ type ReceiverStartFunc func(ctx context.Context, gw Gateway)
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
 	db              *database.DB
-	sat             transport.SatTransport       // optional, for iridium gateway
+	sat             transport.SatTransport       // optional, for iridium SBD gateway (9603)
+	imtSat          transport.SatTransport       // optional, for iridium IMT gateway (9704)
 	cell            transport.CellTransport      // optional, for cellular gateway
 	astro           transport.AstrocastTransport // optional, for astrocast gateway
 	predictor       PassPredictor                // optional, for pass scheduler
@@ -48,6 +49,11 @@ func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 // SetCellTransport sets the cellular transport for the cellular gateway.
 func (m *Manager) SetCellTransport(cell transport.CellTransport) {
 	m.cell = cell
+}
+
+// SetIMTTransport sets the Iridium IMT (9704) transport for coexistence with SBD.
+func (m *Manager) SetIMTTransport(imtSat transport.SatTransport) {
+	m.imtSat = imtSat
 }
 
 // SetAstrocastTransport sets the Astrocast transport for the astrocast gateway.
@@ -81,9 +87,12 @@ func (m *Manager) GetPassScheduler() *PassScheduler {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if gw, ok := m.running["iridium"]; ok {
-		if igw, ok := gw.(*IridiumGateway); ok {
-			return igw.PassSchedulerRef()
+	// Check SBD gateway first, then IMT
+	for _, gwType := range []string{"iridium", "iridium_imt"} {
+		if gw, ok := m.running[gwType]; ok {
+			if igw, ok := gw.(*IridiumGateway); ok {
+				return igw.PassSchedulerRef()
+			}
 		}
 	}
 	return nil
@@ -282,6 +291,22 @@ func (m *Manager) TestGateway(gwType string) error {
 		}
 		if !status.Connected {
 			return fmt.Errorf("iridium modem not connected")
+		}
+		return nil
+	case "iridium_imt":
+		sat := m.imtSat
+		if sat == nil {
+			sat = m.sat
+		}
+		if sat == nil {
+			return fmt.Errorf("IMT satellite transport not available")
+		}
+		status, err := sat.GetStatus(context.Background())
+		if err != nil {
+			return err
+		}
+		if !status.Connected {
+			return fmt.Errorf("iridium IMT modem not connected")
 		}
 		return nil
 	case "cellular":
@@ -574,6 +599,24 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 			gw.SetEventEmitter(m.onEventEmit)
 		}
 		return gw, nil
+	case "iridium_imt":
+		sat := m.imtSat
+		if sat == nil {
+			// Fall back to primary sat transport if no dedicated IMT transport
+			sat = m.sat
+		}
+		if sat == nil {
+			return nil, fmt.Errorf("IMT satellite transport not available")
+		}
+		cfg, err := ParseIridiumConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		gw := NewIridiumIMTGateway(*cfg, sat, m.db, m.predictor)
+		if m.onEventEmit != nil {
+			gw.SetEventEmitter(m.onEventEmit)
+		}
+		return gw, nil
 	case "cellular":
 		if m.cell == nil {
 			return nil, fmt.Errorf("cellular transport not available")
@@ -802,6 +845,27 @@ func (m *Manager) GetSatModemInfo(ctx context.Context) (*transport.SatStatus, er
 	return m.sat.GetStatus(ctx)
 }
 
+// GetIMTModemInfo returns the IMT (9704) modem connection status.
+func (m *Manager) GetIMTModemInfo(ctx context.Context) (*transport.SatStatus, error) {
+	if m.imtSat == nil {
+		return nil, fmt.Errorf("IMT transport not available")
+	}
+	return m.imtSat.GetStatus(ctx)
+}
+
+// GetIMTSignalFast returns a cached IMT signal reading.
+func (m *Manager) GetIMTSignalFast(ctx context.Context) (*transport.SignalInfo, error) {
+	if m.imtSat == nil {
+		return nil, fmt.Errorf("IMT transport not available")
+	}
+	return m.imtSat.GetSignalFast(ctx)
+}
+
+// HasIMTTransport returns true if an IMT (9704) transport is available.
+func (m *Manager) HasIMTTransport() bool {
+	return m.imtSat != nil
+}
+
 // GetIridiumSignal returns the current satellite signal (blocking AT+CSQ).
 func (m *Manager) GetIridiumSignal(ctx context.Context) (*transport.SignalInfo, error) {
 	if m.sat == nil {
@@ -830,7 +894,11 @@ func (m *Manager) GetIridiumGeolocation(ctx context.Context) (*transport.Geoloca
 // ManualMailboxCheck triggers a one-shot mailbox check on the running Iridium gateway.
 func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
 	m.mu.RLock()
+	// Try SBD first, then IMT
 	gw, ok := m.running["iridium"]
+	if !ok {
+		gw, ok = m.running["iridium_imt"]
+	}
 	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("iridium gateway not running")

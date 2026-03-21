@@ -96,6 +96,29 @@ func (t *DirectSatTransport) SetExcludePortFunc(fn func() string) {
 	t.excludePortFn = fn
 }
 
+// SetPort sets the serial port path. Called by DeviceSupervisor.
+func (t *DirectSatTransport) SetPort(port string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.port = port
+}
+
+// IsConnected returns true if the transport has an active serial connection.
+func (t *DirectSatTransport) IsConnected() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.connected
+}
+
+// Reconnect closes any existing connection and reconnects on the current port.
+func (t *DirectSatTransport) Reconnect(ctx context.Context) error {
+	t.Close()
+	t.mu.Lock()
+	err := t.connectLocked(ctx)
+	t.mu.Unlock()
+	return err
+}
+
 // Subscribe opens the serial connection and starts ring alert + signal monitoring.
 func (t *DirectSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, error) {
 	t.mu.Lock()

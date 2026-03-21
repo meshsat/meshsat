@@ -89,6 +89,31 @@ func (t *DirectMeshTransport) SetWatchdogMinutes(min int) {
 	t.watchdogMin = min
 }
 
+// SetPort sets the serial port path. Called by DeviceSupervisor when a device
+// is discovered. If already connected on a different port, the caller should
+// Close() first.
+func (t *DirectMeshTransport) SetPort(port string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.port = port
+}
+
+// IsConnected returns true if the transport has an active serial connection.
+func (t *DirectMeshTransport) IsConnected() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.connected
+}
+
+// Reconnect closes any existing connection and reconnects on the current port.
+func (t *DirectMeshTransport) Reconnect(ctx context.Context) error {
+	t.Close()
+	t.mu.Lock()
+	err := t.connectLocked(ctx)
+	t.mu.Unlock()
+	return err
+}
+
 // GetPort returns the resolved serial port path (e.g., "/dev/ttyACM0").
 // Returns "auto" or "" if not yet connected.
 func (t *DirectMeshTransport) GetPort() string {

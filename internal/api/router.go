@@ -43,6 +43,7 @@ type Server struct {
 	deadman       *engine.DeadManSwitch
 	burstQueue    *engine.BurstQueue
 	onMOCallback  func(imei string)
+	devSupervisor *transport.DeviceSupervisor
 }
 
 // NewServer creates a new API server.
@@ -138,6 +139,11 @@ func (s *Server) SetDeadManSwitch(dm *engine.DeadManSwitch) {
 // SetBurstQueue sets the burst queue for burst API endpoints.
 func (s *Server) SetBurstQueue(bq *engine.BurstQueue) {
 	s.burstQueue = bq
+}
+
+// SetDeviceSupervisor sets the device supervisor for USB device inventory.
+func (s *Server) SetDeviceSupervisor(ds *transport.DeviceSupervisor) {
+	s.devSupervisor = ds
 }
 
 // Router builds the chi router with all API routes.
@@ -350,6 +356,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/interfaces/{id}/disable", s.handleDisableInterface)
 		r.Get("/interfaces/health", s.handleGetHealthScores)
 		r.Get("/devices", s.handleGetDevices)
+		r.Get("/devices/usb", s.handleGetUSBDevices)
+		r.Get("/devices/usb/events", s.handleUSBDeviceEvents)
+		r.Post("/devices/usb/scan", s.handleTriggerUSBScan)
 		r.Get("/access-rules", s.handleGetAccessRules)
 		r.Post("/access-rules", s.handleCreateAccessRule)
 		r.Put("/access-rules/{id}", s.handleUpdateAccessRule)

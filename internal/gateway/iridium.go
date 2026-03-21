@@ -16,6 +16,7 @@ import (
 )
 
 // IridiumGateway bridges Meshtastic mesh messages to/from an Iridium satellite modem.
+// Works with both SBD (9603, 340-byte limit) and IMT (9704, 100KB limit) transports.
 type IridiumGateway struct {
 	config    IridiumConfig
 	sat       transport.SatTransport
@@ -40,9 +41,11 @@ type IridiumGateway struct {
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	emitEvent EventEmitFunc
+
+	isIMT bool // true for 9704 IMT transport (100KB messages, no compact encoding needed)
 }
 
-// NewIridiumGateway creates a new Iridium satellite gateway.
+// NewIridiumGateway creates a new Iridium SBD satellite gateway (RockBLOCK 9603).
 // If predictor is non-nil and cfg.SchedulerEnabled is true, a PassScheduler is created.
 func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *IridiumGateway {
 	gw := &IridiumGateway{
@@ -58,6 +61,14 @@ func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *databa
 		gw.scheduler.SetCounterSource(gw)
 	}
 
+	return gw
+}
+
+// NewIridiumIMTGateway creates an Iridium IMT satellite gateway (RockBLOCK 9704).
+// IMT uses JSPR protocol with 100KB message capacity — no compact encoding needed.
+func NewIridiumIMTGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *IridiumGateway {
+	gw := NewIridiumGateway(cfg, sat, db, predictor)
+	gw.isIMT = true
 	return gw
 }
 
@@ -159,26 +170,44 @@ func (g *IridiumGateway) Forward(ctx context.Context, msg *transport.MeshMessage
 	return g.sendSBDSync(ctx, msg)
 }
 
-// sendSBDSync sends a message via SBD and returns the actual result.
+// sendSBDSync sends a message via SBD/IMT and returns the actual result.
 // This is the synchronous path used by the delivery worker (via Forward).
 func (g *IridiumGateway) sendSBDSync(ctx context.Context, msg *transport.MeshMessage) error {
-	usePlaintext := canSendPlaintext(msg)
-
 	var data []byte
 	var cost int
 	var result *transport.SBDResult
 	var err error
 
-	if usePlaintext {
+	if g.isIMT {
+		// IMT (9704): 100KB capacity — send as plaintext, no compact encoding needed
+		text := msg.DecodedText
+		if text == "" && len(msg.RawPayload) > 0 {
+			// Non-text message — send raw binary payload
+			data = msg.RawPayload
+			cost = creditCost(len(data))
+			if !g.budgetAllows(cost, 1) {
+				return fmt.Errorf("iridium_imt: budget exceeded (cost=%d)", cost)
+			}
+			result, err = g.sat.Send(ctx, data)
+		} else {
+			data = []byte(text)
+			cost = creditCost(len(data))
+			if !g.budgetAllows(cost, 1) {
+				return fmt.Errorf("iridium_imt: budget exceeded (cost=%d)", cost)
+			}
+			result, err = g.sat.SendText(ctx, text)
+		}
+	} else if canSendPlaintext(msg) {
+		// SBD (9603): short ASCII text — send as readable plaintext
 		text := msg.DecodedText
 		cost = creditCost(len(text))
 		if !g.budgetAllows(cost, 1) {
 			return fmt.Errorf("iridium: budget exceeded (cost=%d)", cost)
 		}
-
 		result, err = g.sat.SendText(ctx, text)
 		data = []byte(text)
 	} else {
+		// SBD (9603): non-text or long message — use compact binary encoding (340-byte limit)
 		data, err = EncodeCompact(msg, g.config.IncludePosition)
 		if err != nil {
 			g.errors.Add(1)
@@ -208,8 +237,12 @@ func (g *IridiumGateway) sendSBDSync(ctx context.Context, msg *transport.MeshMes
 
 	g.msgsOut.Add(1)
 	g.lastActive.Store(time.Now().Unix())
-	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Bool("plaintext", usePlaintext).Msg("iridium: SBD sent")
-	g.emit("forward", fmt.Sprintf("Iridium SBD sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
+	gwLabel := "SBD"
+	if g.isIMT {
+		gwLabel = "IMT"
+	}
+	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Str("transport", gwLabel).Msg("iridium: message sent")
+	g.emit("forward", fmt.Sprintf("Iridium %s sent (mo_status=%d, packet=%d)", gwLabel, result.MOStatus, msg.ID))
 
 	if g.db != nil {
 		g.db.InsertCreditUsage(nil, cost, nil)
@@ -252,6 +285,9 @@ func (g *IridiumGateway) Status() GatewayStatus {
 
 // Type returns the gateway type identifier.
 func (g *IridiumGateway) Type() string {
+	if g.isIMT {
+		return "iridium_imt"
+	}
 	return "iridium"
 }
 
