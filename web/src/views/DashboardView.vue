@@ -553,6 +553,25 @@ const unifiedQueue = computed(() => {
     })
   }
 
+  // Mesh radio text messages
+  for (const m of (store.messages || []).filter(m => m.portnum === 1 || m.portnum_name === 'TEXT_MESSAGE_APP')) {
+    const fromNode = (store.nodes || []).find(n => n.user_id === m.from_node)
+    const fromName = fromNode?.long_name || fromNode?.short_name || m.from_node || '?'
+    items.push({
+      _type: 'mesh',
+      _key: 'mesh-' + m.id,
+      _time: m.created_at,
+      _dir: m.direction === 'tx' ? 'OUT' : 'IN',
+      _dirClass: 'text-tactical-lora',
+      _label: m.direction === 'tx' ? 'MESH\u2191' : 'MESH\u2193',
+      _status: m.delivery_status || 'received',
+      _statusClass: 'bg-emerald-400/10 text-emerald-400',
+      _text: fromName + ': ' + (m.decoded_text || '(empty)'),
+      _opacity: '',
+      _raw: m
+    })
+  }
+
   // Sort by time, newest first
   items.sort((a, b) => {
     const ta = new Date(a._time || 0).getTime()
