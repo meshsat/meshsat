@@ -52,7 +52,8 @@ func main() {
 	var sat transport.SatTransport
 	var cell transport.CellTransport
 	var astro transport.AstrocastTransport
-	var gpsExcludePorts []func() string // populated in direct mode for GPS reader
+	var imtTransport transport.SatTransport // IMT (9704) transport for coexistence
+	var gpsExcludePorts []func() string     // populated in direct mode for GPS reader
 	switch cfg.Mode {
 	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
@@ -63,49 +64,16 @@ func main() {
 		log.Info().Msg("HAL satellite transport available")
 
 	case "direct":
-		// Direct serial — talk to USB devices without HAL
+		// Direct serial — talk to USB devices without HAL.
+		// DeviceSupervisor handles discovery, identification, and auto-reconnect.
 		directMesh := transport.NewDirectMeshTransport(cfg.MeshtasticPort)
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		mesh = directMesh
-		log.Info().Str("port", cfg.MeshtasticPort).Int("watchdog_min", cfg.MeshWatchdogMin).Msg("using direct Meshtastic serial transport")
 
-		// Iridium: probe for 9704 (IMT/JSPR) at startup, fall back to 9603 (SBD/AT)
 		directIMT := transport.NewDirectIMTTransport(cfg.IMTPort)
-		directIMT.SetExcludePortFunc(directMesh.GetPort)
-
 		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
-		directSat.SetExcludePortFunc(directMesh.GetPort)
 
-		// Check if a 9704 is actually present before preferring IMT.
-		// For "auto" mode, probe now so we pick the right transport at startup.
-		useIMT := false
-		if cfg.IMTPort != "" && cfg.IMTPort != "auto" {
-			useIMT = true // explicit port — trust the user
-		} else if cfg.IMTPort == "auto" {
-			// Early probe: check if a 9704 responds to JSPR handshake.
-			// Retry once after 2s — USB device may not be ready immediately after container start.
-			for attempt := 0; attempt < 2; attempt++ {
-				if probed := transport.ProbeIMT(nil); probed != "" {
-					useIMT = true
-					log.Info().Str("port", probed).Int("attempt", attempt).Msg("RockBLOCK 9704 detected at startup")
-					break
-				}
-				if attempt == 0 {
-					time.Sleep(2 * time.Second)
-				}
-			}
-		}
-		if useIMT {
-			sat = directIMT
-			log.Info().Str("port", cfg.IMTPort).Msg("using RockBLOCK 9704 IMT transport")
-		} else {
-			sat = directSat
-			log.Info().Str("port", cfg.IridiumPort).Msg("using RockBLOCK 9603 SBD transport")
-		}
-
-		// Cellular transport (optional — only if 4G/LTE modem is available)
 		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
-		directCell.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort, directIMT.GetPort})
 		directCell.SetSIMCardLookup(
 			func(iccid string) (*transport.SIMCardInfo, error) {
 				sim, err := db.GetSIMCardByICCID(iccid)
@@ -120,18 +88,95 @@ func main() {
 			func(iccid string) { _ = db.TouchSIMCardLastSeen(iccid) },
 		)
 		cell = directCell
-		log.Info().Str("port", cfg.CellularPort).Msg("using direct cellular serial transport")
 
-		// Astrocast transport (optional — only if Astronode S module is available)
 		directAstro := transport.NewDirectAstrocastTransport(cfg.AstrocastPort)
-		directAstro.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort, directIMT.GetPort})
 		astro = directAstro
-		log.Info().Str("port", cfg.AstrocastPort).Msg("using direct Astronode S serial transport")
 
-		// ZigBee transport (optional — only if CC2652P coordinator is available)
-		// ZigBee is managed by the gateway layer (auto-detect happens in ZigBeeGateway.Start),
-		// but we log the configured port here for visibility.
-		log.Info().Str("port", cfg.ZigBeePort).Msg("zigbee port configured (started via gateway manager)")
+		// DeviceSupervisor: replaces one-shot auto-detect with continuous
+		// two-tier polling (30s port scan + 15s reconciliation).
+		supervisor := transport.NewDeviceSupervisor()
+
+		// Register explicit port overrides from env vars
+		supervisor.SetExplicitPort(transport.RoleMeshtastic, cfg.MeshtasticPort)
+		supervisor.SetExplicitPort(transport.RoleIridium9704, cfg.IMTPort)
+		supervisor.SetExplicitPort(transport.RoleIridium9603, cfg.IridiumPort)
+		supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
+		supervisor.SetExplicitPort(transport.RoleAstrocast, cfg.AstrocastPort)
+		supervisor.SetExplicitPort(transport.RoleZigBee, cfg.ZigBeePort)
+
+		// Wire driver callbacks: supervisor notifies transports when ports are
+		// discovered or lost, replacing the old exclude-port daisy chain.
+		supervisor.SetCallbacks(transport.RoleMeshtastic, &transport.DriverCallbacks{
+			OnPortFound: func(port string) {
+				directMesh.SetPort(port)
+				log.Info().Str("port", port).Msg("supervisor: meshtastic port assigned")
+			},
+			OnPortLost: func(port string) {
+				directMesh.Close()
+				log.Warn().Str("port", port).Msg("supervisor: meshtastic port lost")
+			},
+		})
+
+		supervisor.SetCallbacks(transport.RoleIridium9704, &transport.DriverCallbacks{
+			OnPortFound: func(port string) {
+				directIMT.SetPort(port)
+				log.Info().Str("port", port).Msg("supervisor: 9704 IMT port assigned")
+			},
+			OnPortLost: func(port string) {
+				directIMT.Close()
+				log.Warn().Str("port", port).Msg("supervisor: 9704 IMT port lost")
+			},
+		})
+
+		supervisor.SetCallbacks(transport.RoleIridium9603, &transport.DriverCallbacks{
+			OnPortFound: func(port string) {
+				directSat.SetPort(port)
+				log.Info().Str("port", port).Msg("supervisor: 9603 SBD port assigned")
+			},
+			OnPortLost: func(port string) {
+				directSat.Close()
+				log.Warn().Str("port", port).Msg("supervisor: 9603 SBD port lost")
+			},
+		})
+
+		supervisor.SetCallbacks(transport.RoleCellular, &transport.DriverCallbacks{
+			OnPortFound: func(port string) {
+				directCell.SetPort(port)
+				log.Info().Str("port", port).Msg("supervisor: cellular port assigned")
+			},
+			OnPortLost: func(port string) {
+				directCell.Close()
+				log.Warn().Str("port", port).Msg("supervisor: cellular port lost")
+			},
+		})
+
+		supervisor.SetCallbacks(transport.RoleAstrocast, &transport.DriverCallbacks{
+			OnPortFound: func(port string) {
+				directAstro.SetPort(port)
+				log.Info().Str("port", port).Msg("supervisor: astronode port assigned")
+			},
+			OnPortLost: func(port string) {
+				directAstro.Close()
+				log.Warn().Str("port", port).Msg("supervisor: astronode port lost")
+			},
+		})
+
+		supervisor.Start()
+		defer supervisor.Stop()
+
+		// Determine satellite transport: check if 9704 was found during initial scan.
+		// The supervisor does its initial scan synchronously in Start(), so by now
+		// we know whether a 9704 is present.
+		if directIMT.GetPort() != "" && directIMT.GetPort() != "auto" {
+			sat = directIMT
+			imtTransport = directIMT
+			log.Info().Str("port", directIMT.GetPort()).Msg("using RockBLOCK 9704 IMT as primary satellite transport")
+		} else {
+			sat = directSat
+			log.Info().Str("port", directSat.GetPort()).Msg("using RockBLOCK 9603 SBD transport")
+		}
+
+		log.Info().Msg("device supervisor active — continuous port discovery enabled")
 
 		// GPS reader exclude ports — all radio devices so GPS auto-detect skips them
 		gpsExcludePorts = []func() string{directMesh.GetPort, directSat.GetPort, directIMT.GetPort}
@@ -182,6 +227,9 @@ func main() {
 
 	// Gateway manager
 	gwMgr := gateway.NewManager(db, sat)
+	if imtTransport != nil {
+		gwMgr.SetIMTTransport(imtTransport)
+	}
 	if cell != nil {
 		gwMgr.SetCellTransport(cell)
 	}
