@@ -96,8 +96,17 @@ function signalDot(node) {
 }
 
 
-// ── Computed: Iridium SBD panel ──
+// ── Computed: Iridium panel ──
 const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
+const satModemModel = computed(() => store.satModem?.model || '')
+const satModemIMEI = computed(() => store.satModem?.imei || '')
+const iridiumWidgetTitle = computed(() => {
+  const m = satModemModel.value
+  if (m.includes('9704')) return 'IRIDIUM IMT'
+  if (m.includes('9603')) return 'IRIDIUM SBD'
+  return 'IRIDIUM'
+})
+const isIMT = computed(() => satModemModel.value.includes('9704'))
 const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
 const satAssessment = computed(() => store.iridiumSignal?.assessment || 'none')
 const iridiumStatus = computed(() => {
@@ -1015,6 +1024,7 @@ async function fetchAll() {
     store.fetchMessageStats(),
     store.fetchGateways(),
     store.fetchIridiumSignalFast(),
+    store.fetchSatModem(),
     store.fetchDLQ(),
     store.fetchMessages({ limit: 100 }),
     store.fetchSOSStatus(),
@@ -1132,7 +1142,7 @@ function widgetGridClass(id) {
             <div class="relative">
               <button class="font-display font-semibold text-sm text-red-400 tracking-wide flex items-center gap-1.5 hover:text-red-300 transition-colors"
                 @click.stop="toggleDropdown('iridium')">
-                {{ widgetSelectedLabel('iridium', 'IRIDIUM SBD').toUpperCase() }}
+                {{ widgetSelectedLabel('iridium', iridiumWidgetTitle).toUpperCase() }}
                 <svg class="w-3 h-3 transition-transform" :class="openDropdown === 'iridium' ? 'rotate-180' : ''" viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 5 5-5"/></svg>
               </button>
               <div v-if="openDropdown === 'iridium'"
@@ -1236,6 +1246,14 @@ function widgetGridClass(id) {
             <span class="text-gray-500">Gateway</span>
             <span class="text-gray-300">{{ iridiumStatus.text }}</span>
           </div>
+          <div v-if="satModemModel" class="flex justify-between">
+            <span class="text-gray-500">Modem</span>
+            <span class="text-gray-300 font-mono text-[10px]">{{ satModemModel }}</span>
+          </div>
+          <div v-if="satModemIMEI" class="flex justify-between">
+            <span class="text-gray-500">IMEI</span>
+            <span class="text-gray-400 font-mono text-[10px]">{{ satModemIMEI }}</span>
+          </div>
           <div class="flex justify-between">
             <span class="text-gray-500">Queue</span>
             <span :class="dlqPending > 0 ? 'text-amber-400' : 'text-gray-300'">{{ dlqPending }} pending</span>
@@ -1275,8 +1293,8 @@ function widgetGridClass(id) {
           {{ dashCheckingMailbox ? 'Checking...' : 'Check Mailbox Now' }}
         </button>
 
-        <!-- Iridium Geolocation -->
-        <button @click="dashTriggerGeo" :disabled="dashGeoLoading || !iridiumGw?.connected"
+        <!-- Iridium Geolocation (SBD only — 9704 uses u-blox GPS instead) -->
+        <button v-if="!isIMT" @click="dashTriggerGeo" :disabled="dashGeoLoading || !iridiumGw?.connected"
           class="mt-1.5 w-full px-3 py-1.5 rounded bg-gray-800 border border-gray-700 text-[11px] text-gray-400 hover:text-tactical-gps hover:border-tactical-gps/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
           {{ dashGeoLoading ? 'Querying...' : 'Satellite Geolocation' }}
         </button>

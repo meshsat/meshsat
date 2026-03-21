@@ -87,6 +87,26 @@ func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, sig)
 }
 
+// handleGetSatModemInfo returns the satellite modem type, IMEI, and connection status.
+// @Summary Get satellite modem info
+// @Description Returns the modem model (RockBLOCK 9603/9704), IMEI, port, and connection state
+// @Tags iridium
+// @Success 200 {object} transport.SatStatus
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/modem [get]
+func (s *Server) handleGetSatModemInfo(w http.ResponseWriter, r *http.Request) {
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
+		return
+	}
+	info, err := s.gwManager.GetSatModemInfo(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 // handleGetGateways returns the status of all configured gateways.
 // @Summary List all gateways
 // @Description Returns status and config of all gateways (MQTT, Iridium)

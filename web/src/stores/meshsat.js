@@ -301,6 +301,13 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   }
 
   const iridiumSignal = ref(null) // { bars: 0-5, assessment: string, timestamp: string }
+  const satModem = ref(null) // { connected, port, imei, model, operator, firmware_ver }
+
+  async function fetchSatModem() {
+    try {
+      satModem.value = await api.get('/iridium/modem')
+    } catch { /* modem unavailable */ }
+  }
 
   async function fetchIridiumSignalFast() {
     try {
@@ -1257,7 +1264,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
-    iridiumSignal, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
+    iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
     locationSources, iridiumGeoHistory,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     smsMessages, cellBroadcasts, cellInfo,
@@ -1272,7 +1279,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchNeighborInfo, sendRangeTest, fetchRangeTests,
     sendPosition, setFixedPosition, removeFixedPosition,
     requestStoreForward, getCannedMessages, setCannedMessages,
-    fetchIridiumSignalFast, fetchIridiumSignal,
+    fetchSatModem, fetchIridiumSignalFast, fetchIridiumSignal,
     fetchSignalHistory, fetchGSSHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck, fetchAstrocastPasses, refreshAstrocastTLEs,
     fetchLocationSources, fetchIridiumGeoHistory,

@@ -794,6 +794,14 @@ func (m *Manager) GetDynDNSUpdater() *DynDNSUpdater {
 	return nil
 }
 
+// GetSatModemInfo returns the satellite modem connection status (model, IMEI, firmware).
+func (m *Manager) GetSatModemInfo(ctx context.Context) (*transport.SatStatus, error) {
+	if m.sat == nil {
+		return nil, fmt.Errorf("satellite transport not available")
+	}
+	return m.sat.GetStatus(ctx)
+}
+
 // GetIridiumSignal returns the current satellite signal (blocking AT+CSQ).
 func (m *Manager) GetIridiumSignal(ctx context.Context) (*transport.SignalInfo, error) {
 	if m.sat == nil {

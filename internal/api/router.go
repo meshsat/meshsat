@@ -178,6 +178,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/gateways/{type}/stop", s.handleStopGateway)
 		r.Post("/gateways/{type}/test", s.handleTestGateway)
 
+		// Iridium modem info
+		r.Get("/iridium/modem", s.handleGetSatModemInfo)
+
 		// Iridium signal
 		r.Get("/iridium/signal", s.handleGetIridiumSignal)
 		r.Get("/iridium/signal/fast", s.handleGetIridiumSignalFast)
