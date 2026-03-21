@@ -10,9 +10,10 @@ services:
       - MESHSAT_MODE=direct
       - MESHSAT_PORT=6050
       - MESHSAT_DB_PATH=/data/meshsat.db
-      # Auto-detect ports by default; override to pin specific devices:
-      # - MESHSAT_MESHTASTIC_PORT=/dev/ttyACM0
-      # - MESHSAT_IRIDIUM_PORT=/dev/ttyUSB0
+      - MESHSAT_IRIDIUM_PORT=${MESHSAT_IRIDIUM_PORT:-auto}
+      - MESHSAT_IMT_PORT=${MESHSAT_IMT_PORT:-auto}
+      - MESHSAT_MESHTASTIC_PORT=${MESHSAT_MESHTASTIC_PORT:-auto}
+      - MESHSAT_CELLULAR_PORT=${MESHSAT_CELLULAR_PORT:-auto}
     volumes:
       - meshsat-data:/data
       - /dev:/dev
