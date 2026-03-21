@@ -196,6 +196,28 @@ const telemetryLoading = ref(false)
 const radioConnected = computed(() => store.status?.connected === true)
 const now = ref(Date.now() / 1000)
 
+// Active Meshtastic channels from config
+const activeChannels = computed(() => {
+  const cfg = store.config
+  if (!cfg) return []
+  const channels = []
+  for (let i = 0; i < 8; i++) {
+    const ch = cfg['channel_' + i]
+    if (!ch) continue
+    const role = ch['3'] || 0
+    if (role === 0) continue
+    const settings = ch['2'] || {}
+    const name = settings['3'] || settings['4'] || ''
+    const psk = settings['2'] || settings['3'] || ''
+    let pskLabel = ''
+    if (typeof psk === 'string' && psk.length > 4) {
+      try { const raw = atob(psk); let xor = 0; for (let j = 0; j < raw.length; j++) xor ^= raw.charCodeAt(j); pskLabel = String.fromCharCode(0x41 + (xor % 26)) } catch { pskLabel = '?' }
+    }
+    channels.push({ index: i, name: name || (i === 0 ? 'Default' : `Ch ${i}`), role: role === 1 ? 'PRIMARY' : 'SECONDARY', pskHash: pskLabel })
+  }
+  return channels
+})
+
 // Template-friendly wrappers (now.value not accessible in template expressions)
 const isActive = (node) => isNodeActive(node, now.value)
 const isRecent = (node) => isNodeRecent(node, now.value)
@@ -274,7 +296,7 @@ async function handleRemoveAllStale() {
 
 let nowTimer = null
 onMounted(() => {
-  Promise.all([store.fetchNodes(), store.fetchStatus(), store.fetchSMSContacts(), store.fetchContacts()])
+  Promise.all([store.fetchNodes(), store.fetchStatus(), store.fetchSMSContacts(), store.fetchContacts(), store.fetchConfig()])
   nowTimer = setInterval(() => { now.value = Date.now() / 1000 }, 15000)
 })
 onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
@@ -681,6 +703,17 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
     <!-- Connection banner -->
     <div v-if="!radioConnected" class="bg-amber-900/20 border border-amber-800/50 rounded-lg p-3 text-amber-300/80 text-sm mb-4">
       Radio not connected. Connect a Meshtastic device to see nodes.
+    </div>
+
+    <!-- Active Meshtastic channels -->
+    <div v-if="activeChannels.length" class="flex items-center gap-2 mb-3 flex-wrap">
+      <span class="text-[10px] text-gray-500 uppercase tracking-wider mr-1">Channels:</span>
+      <router-link v-for="ch in activeChannels" :key="ch.index" to="/radio"
+        class="flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] hover:bg-white/[0.04] transition-colors"
+        :class="ch.role === 'PRIMARY' ? 'border-tactical-lora/30 text-tactical-lora' : 'border-gray-600/30 text-gray-400'">
+        <span class="font-medium">{{ ch.name }}</span><span v-if="ch.pskHash" class="text-gray-600">-{{ ch.pskHash }}</span>
+        <span class="text-[8px] px-1 rounded" :class="ch.role === 'PRIMARY' ? 'bg-tactical-lora/10' : 'bg-gray-700/30'">{{ ch.role === 'PRIMARY' ? 'P' : 'S' }}</span>
+      </router-link>
     </div>
 
     <!-- Filter + sort toolbar -->

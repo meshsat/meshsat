@@ -302,6 +302,39 @@ const topNodes = computed(() => {
 })
 const neighborCount = computed(() => (store.neighborInfo || []).length)
 
+// Active Meshtastic channels parsed from config
+const activeChannels = computed(() => {
+  const cfg = store.config
+  if (!cfg) return []
+  const channels = []
+  for (let i = 0; i < 8; i++) {
+    const ch = cfg['channel_' + i]
+    if (!ch) continue
+    const role = ch['3'] || 0 // field 3 = role enum: 0=DISABLED, 1=PRIMARY, 2=SECONDARY
+    if (role === 0) continue
+    const settings = ch['2'] || {}
+    const name = settings['3'] || settings['4'] || '' // field 3=name (new proto), field 4=name (old proto)
+    const psk = settings['2'] || settings['3'] || '' // field 2=psk
+    // Compute PSK hash letter (Meshtastic style: A-Z from XOR of PSK bytes)
+    let pskLabel = ''
+    if (typeof psk === 'string' && psk.length > 4) {
+      try {
+        const raw = atob(psk)
+        let xor = 0
+        for (let j = 0; j < raw.length; j++) xor ^= raw.charCodeAt(j)
+        pskLabel = String.fromCharCode(0x41 + (xor % 26))
+      } catch { pskLabel = '?' }
+    }
+    channels.push({
+      index: i,
+      name: name || (i === 0 ? 'Default' : `Ch ${i}`),
+      role: role === 1 ? 'PRIMARY' : 'SECONDARY',
+      pskHash: pskLabel
+    })
+  }
+  return channels
+})
+
 // Mesh SNR sparkline — per-node SNR as bars
 const meshSNRBars = computed(() => {
   const nodes = activeNodes.value.filter(n => n.snr != null && Math.abs(n.snr) < 100)
@@ -1003,7 +1036,8 @@ async function fetchAll() {
     store.fetchInterfaces(),
     store.fetchHealthScores(),
     store.fetchBurstStatus(),
-    store.fetchWebhookLog()
+    store.fetchWebhookLog(),
+    store.fetchConfig()
   ])
 }
 
@@ -1362,6 +1396,19 @@ function widgetGridClass(id) {
                 {{ hs.score }}/100
               </span>
             </div>
+          </div>
+        </div>
+
+        <!-- Meshtastic Channels -->
+        <div v-if="activeChannels.length" class="mt-2 pt-2 border-t border-tactical-border">
+          <span class="text-[9px] text-gray-500 uppercase tracking-wider">Channels</span>
+          <div class="flex flex-wrap gap-1.5 mt-1.5">
+            <router-link v-for="ch in activeChannels" :key="ch.index" to="/radio"
+              class="flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] hover:bg-white/[0.04] transition-colors"
+              :class="ch.role === 'PRIMARY' ? 'border-tactical-lora/30 text-tactical-lora' : 'border-gray-600/30 text-gray-400'">
+              <span class="font-medium">{{ ch.name }}</span><span v-if="ch.pskHash" class="text-gray-600">-{{ ch.pskHash }}</span>
+              <span class="text-[8px] px-1 rounded" :class="ch.role === 'PRIMARY' ? 'bg-tactical-lora/10' : 'bg-gray-700/30'">{{ ch.role === 'PRIMARY' ? 'P' : 'S' }}</span>
+            </router-link>
           </div>
         </div>
 
