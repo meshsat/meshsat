@@ -398,8 +398,8 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 
 // classifyByVIDPID returns the role for a known VID:PID, or RoleNone for unknown/ambiguous.
 func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
-	// Check for unambiguous matches first
-	if knownMeshtasticVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid] {
+	// Check for unambiguous Meshtastic (not shared with ZigBee or cellular)
+	if knownMeshtasticVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] {
 		return RoleMeshtastic
 	}
 
@@ -413,8 +413,8 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 		return RoleZigBee
 	}
 
-	// Cellular VID:PIDs (check interface for multi-port modems)
-	if knownCellularVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid] {
+	// Cellular VID:PIDs — check before ambiguous handler since CH9102F is in both
+	if knownCellularVIDPIDs[vidpid] {
 		// For multi-interface modems, only claim the AT port
 		if iface, ok := cellularATInterface[vidpid]; ok {
 			if findUSBInterfaceNum(port) != iface {
