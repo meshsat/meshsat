@@ -425,10 +425,12 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	// Update node DB from any packet — create node if unknown
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
+	isNewNode := !ok
 	if !ok {
 		node = &MeshNode{Num: pkt.From}
 		t.nodes[pkt.From] = node
 	}
+	needsNodeInfo := node.LongName == "" && pkt.From != myNum
 	node.LastHeard = msg.RxTime
 	node.LastHeardStr = msg.Timestamp
 	if pkt.RxSNR != 0 {
@@ -447,6 +449,20 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 		node.LastMessageStr = msg.Timestamp
 	}
 	t.nodesMu.Unlock()
+
+	// Auto-request NodeInfo from unknown nodes (no name yet).
+	// Only on first discovery or if still nameless, and not for NodeInfo packets
+	// (which will be handled below and fill in the name).
+	if needsNodeInfo && (isNewNode || pkt.Decoded == nil || pkt.Decoded.PortNum != PortNumNodeInfo) {
+		t.mu.RLock()
+		connected := t.connected && t.file != nil
+		t.mu.RUnlock()
+		if connected {
+			log.Debug().Uint32("node", pkt.From).Msg("auto-requesting NodeInfo from unnamed node")
+			toRadio := buildRequestNodeInfo(myNum, pkt.From)
+			_ = sendFrame(t.file, toRadio)
+		}
+	}
 
 	// Handle specific portnums
 	if pkt.Decoded != nil {
