@@ -1116,9 +1116,9 @@ func buildSetChannel(myNodeNum uint32, index uint32, name string, psk []byte, ro
 		channel = appendVarint(channel, uint64(role))
 	}
 
-	// AdminMessage field 2: set_channel
+	// AdminMessage field 33: set_channel
 	admin := make([]byte, 0, len(channel)+8)
-	admin = append(admin, 0x12) // field 2, length-delimited
+	admin = appendVarint(admin, uint64(AdminFieldSetChannel)<<3|2) // field 33, length-delimited
 	admin = appendVarint(admin, uint64(len(channel)))
 	admin = append(admin, channel...)
 
