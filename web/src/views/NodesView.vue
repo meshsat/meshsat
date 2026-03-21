@@ -188,6 +188,7 @@ async function handleSendSMS(phone) {
 const sortBy = ref('last_heard') // 'last_heard', 'name', 'signal'
 const removing = ref(null)
 const removingStale = ref(false)
+const requestingInfo = ref(null)
 const expandedNode = ref(null)
 const nodeTelemetry = ref([])
 const nodeNeighbors = ref([])
@@ -256,6 +257,16 @@ async function handleReboot(node) {
   try {
     await store.adminReboot({ node_id: node.num, delay_secs: 5 })
   } catch { /* store error */ }
+}
+
+async function handleRequestInfo(node) {
+  requestingInfo.value = node.num
+  try {
+    await store.requestNodeInfo(node.num)
+    // Refresh nodes after a short delay to pick up the response
+    setTimeout(() => store.fetchNodes(), 3000)
+  } catch { /* store error */ }
+  requestingInfo.value = null
 }
 
 async function handleTraceroute(node) {
@@ -789,6 +800,10 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
               msg {{ formatLastHeard(node.last_message_time) }}
             </div>
             <div class="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button @click="handleRequestInfo(node)" :disabled="requestingInfo === node.num" title="Request NodeInfo"
+                class="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/50 text-gray-400 hover:text-emerald-400 transition-colors disabled:opacity-50">
+                {{ requestingInfo === node.num ? '...' : 'Refresh' }}
+              </button>
               <button @click="handleTraceroute(node)" title="Traceroute"
                 class="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/50 text-gray-400 hover:text-teal-400 transition-colors">
                 Trace

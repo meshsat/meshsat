@@ -287,6 +287,13 @@ func (t *HALMeshTransport) SetOwner(_ context.Context, _, _ string) error {
 	return fmt.Errorf("set_owner not supported via HAL transport")
 }
 
+// RequestNodeInfo requests NodeInfo from a remote node via HAL.
+func (t *HALMeshTransport) RequestNodeInfo(ctx context.Context, nodeNum uint32) error {
+	return t.postJSON(ctx, "/meshtastic/admin/request_nodeinfo", map[string]interface{}{
+		"node_num": nodeNum,
+	})
+}
+
 // RequestStoreForward requests message history from a store & forward server via HAL.
 func (t *HALMeshTransport) RequestStoreForward(ctx context.Context, nodeNum uint32, window uint32) error {
 	return t.postJSON(ctx, "/meshtastic/store_forward/request", map[string]interface{}{

@@ -1169,6 +1169,30 @@ func buildTraceroutePacket(destNode uint32) []byte {
 	return buildRawPacket([]byte{}, PortNumTraceroute, destNode, 0, true)
 }
 
+// buildRequestNodeInfo builds a MeshPacket requesting NodeInfo from a remote node.
+// Sends portnum=NODEINFO_APP (4) with want_response=true and empty payload.
+func buildRequestNodeInfo(destNode uint32) []byte {
+	// Data: portnum=NODEINFO_APP, empty payload, want_response=true
+	data := make([]byte, 0, 16)
+	data = append(data, 0x08) // Data field 1: portnum
+	data = appendVarint(data, uint64(PortNumNodeInfo))
+	data = append(data, 0x12) // Data field 2: payload (empty)
+	data = appendVarint(data, 0)
+	data = append(data, 0x18, 0x01) // Data field 3: want_response = true
+
+	pkt := make([]byte, 0, len(data)+32)
+	pkt = append(pkt, 0x15) // field 2 (to), fixed32
+	pkt = appendFixed32(pkt, destNode)
+	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited
+	pkt = appendVarint(pkt, uint64(len(data)))
+	pkt = append(pkt, data...)
+	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
+	pkt = appendVarint(pkt, 3)
+	pkt = append(pkt, 0x50, 0x01) // field 10 (want_ack), varint 1
+
+	return buildToRadioPacket(pkt)
+}
+
 // ============================================================================
 // Generic protobuf-to-map decoder (for config sections)
 // ============================================================================

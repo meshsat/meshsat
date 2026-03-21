@@ -227,3 +227,38 @@ func (s *Server) handleSetOwner(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "owner updated"})
 }
+
+// handleRequestNodeInfo requests a NodeInfo update from a remote mesh node.
+// @Summary Request NodeInfo
+// @Description Sends a NodeInfo request to a remote Meshtastic node to refresh its name/info
+// @Tags config
+// @Accept json
+// @Param body body object{node_num=integer} true "Target node number"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/nodes/request-info [post]
+func (s *Server) handleRequestNodeInfo(w http.ResponseWriter, r *http.Request) {
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
+
+	var req struct {
+		NodeNum uint32 `json:"node_num"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.NodeNum == 0 {
+		writeError(w, http.StatusBadRequest, "node_num is required")
+		return
+	}
+
+	if err := s.mesh.RequestNodeInfo(r.Context(), req.NodeNum); err != nil {
+		writeError(w, http.StatusInternalServerError, "request nodeinfo failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "nodeinfo request sent"})
+}

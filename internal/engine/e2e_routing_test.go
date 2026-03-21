@@ -156,8 +156,9 @@ func (m *mockMeshTransport) GetNeighborInfo(ctx context.Context) ([]transport.Ne
 func (m *mockMeshTransport) SendEncryptedRelay(ctx context.Context, encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) error {
 	return nil
 }
-func (m *mockMeshTransport) SetOwner(_ context.Context, _, _ string) error { return nil }
-func (m *mockMeshTransport) Close() error { return nil }
+func (m *mockMeshTransport) SetOwner(_ context.Context, _, _ string) error     { return nil }
+func (m *mockMeshTransport) RequestNodeInfo(_ context.Context, _ uint32) error { return nil }
+func (m *mockMeshTransport) Close() error                                      { return nil }
 
 func (m *mockMeshTransport) messages() []transport.SendRequest {
 	m.mu.Lock()

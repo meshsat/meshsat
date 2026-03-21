@@ -1079,6 +1079,16 @@ func (t *DirectMeshTransport) SetOwner(_ context.Context, longName, shortName st
 	return sendFrame(t.file, toRadio)
 }
 
+func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return fmt.Errorf("not connected")
+	}
+	toRadio := buildRequestNodeInfo(nodeNum)
+	return sendFrame(t.file, toRadio)
+}
+
 func (t *DirectMeshTransport) RequestStoreForward(_ context.Context, nodeNum uint32, window uint32) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

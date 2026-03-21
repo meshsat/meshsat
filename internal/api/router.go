@@ -164,6 +164,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/nodes", s.handleGetNodes)
 		r.Delete("/nodes/{num}", s.handleRemoveNode)
+		r.Post("/nodes/request-info", s.handleRequestNodeInfo)
 		r.Get("/status", s.handleGetStatus)
 
 		r.Get("/events", s.handleSSE)

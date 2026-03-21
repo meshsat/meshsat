@@ -662,6 +662,16 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  async function requestNodeInfo(nodeNum) {
+    error.value = null
+    try {
+      return await api.post('/nodes/request-info', { node_num: nodeNum })
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   async function setOwner(payload) {
     error.value = null
     try {
@@ -1258,7 +1268,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,
-    fetchConfig, setChannel, setOwner, fetchConfigSection, fetchModuleConfigSection,
+    fetchConfig, setChannel, setOwner, requestNodeInfo, fetchConfigSection, fetchModuleConfigSection,
     fetchNeighborInfo, sendRangeTest, fetchRangeTests,
     sendPosition, setFixedPosition, removeFixedPosition,
     requestStoreForward, getCannedMessages, setCannedMessages,
