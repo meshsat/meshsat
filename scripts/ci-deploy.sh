@@ -124,7 +124,11 @@ if [ -f "$HAL_COMPOSE" ]; then
   fi
 
   echo "Recreating HAL container with updated config..."
-  cd /cubeos/coreapps/cubeos-hal/appconfig && docker compose up -d --force-recreate 2>&1
+  cd /cubeos/coreapps/cubeos-hal/appconfig
+  # Force-stop the container first if it refuses to be removed
+  docker stop cubeos-hal 2>/dev/null || true
+  docker rm -f cubeos-hal 2>/dev/null || true
+  docker compose up -d 2>&1
   sleep 3
   echo "  HAL container recreated with serial devices disabled."
 else
