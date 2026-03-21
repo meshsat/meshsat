@@ -553,8 +553,10 @@ const unifiedQueue = computed(() => {
     })
   }
 
-  // Mesh radio text messages
+  // Mesh radio text messages (LoRa, Reticulum)
+  const seenMeshIds = new Set(dels.filter(d => d.channel?.startsWith('mesh')).map(d => d.msg_ref))
   for (const m of (store.messages || []).filter(m => m.portnum === 1 || m.portnum_name === 'TEXT_MESSAGE_APP')) {
+    if (seenMeshIds.has(String(m.id))) continue
     const fromNode = (store.nodes || []).find(n => n.user_id === m.from_node)
     const fromName = fromNode?.long_name || fromNode?.short_name || m.from_node || '?'
     items.push({
@@ -569,6 +571,23 @@ const unifiedQueue = computed(() => {
       _text: fromName + ': ' + (m.decoded_text || '(empty)'),
       _opacity: '',
       _raw: m
+    })
+  }
+
+  // Webhook inbound messages
+  for (const w of (store.webhookLog || [])) {
+    items.push({
+      _type: 'webhook',
+      _key: 'wh-' + (w.id || w.created_at),
+      _time: w.created_at,
+      _dir: w.direction === 'outbound' ? 'OUT' : 'IN',
+      _dirClass: 'text-pink-400',
+      _label: w.direction === 'outbound' ? 'HOOK\u2191' : 'HOOK\u2193',
+      _status: w.status || 'received',
+      _statusClass: w.status === 'delivered' || w.status === 'sent' ? 'bg-emerald-400/10 text-emerald-400' : w.status === 'failed' ? 'bg-red-400/10 text-red-400' : 'bg-gray-600/20 text-gray-400',
+      _text: w.text || w.payload_preview || '(webhook)',
+      _opacity: '',
+      _raw: w
     })
   }
 
@@ -964,7 +983,7 @@ async function fetchAll() {
     store.fetchGateways(),
     store.fetchIridiumSignalFast(),
     store.fetchDLQ(),
-    store.fetchMessages({ limit: 20 }),
+    store.fetchMessages({ limit: 100 }),
     store.fetchSOSStatus(),
     store.fetchSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
     store.fetchGSSHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
@@ -983,7 +1002,8 @@ async function fetchAll() {
     store.fetchNeighborInfo(),
     store.fetchInterfaces(),
     store.fetchHealthScores(),
-    store.fetchBurstStatus()
+    store.fetchBurstStatus(),
+    store.fetchWebhookLog()
   ])
 }
 
