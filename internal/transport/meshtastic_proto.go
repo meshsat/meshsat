@@ -1083,23 +1083,23 @@ func buildAdminSetModuleConfig(myNodeNum uint32, configData []byte) []byte {
 
 // buildSetChannel builds a ToRadio for channel configuration.
 func buildSetChannel(myNodeNum uint32, index uint32, name string, psk []byte, role int, uplinkEnabled, downlinkEnabled bool) []byte {
-	// ChannelSettings
+	// ChannelSettings (see meshtastic/channel.proto)
 	settings := make([]byte, 0, 64)
 	if len(psk) > 0 {
-		settings = append(settings, 0x1A) // field 3, length-delimited
+		settings = append(settings, 0x12) // field 2 (psk), length-delimited
 		settings = appendVarint(settings, uint64(len(psk)))
 		settings = append(settings, psk...)
 	}
 	if name != "" {
-		settings = append(settings, 0x22) // field 4, length-delimited
+		settings = append(settings, 0x1A) // field 3 (name), length-delimited
 		settings = appendVarint(settings, uint64(len(name)))
 		settings = append(settings, []byte(name)...)
 	}
 	if uplinkEnabled {
-		settings = append(settings, 0x30, 0x01) // field 6
+		settings = append(settings, 0x28, 0x01) // field 5 (uplink_enabled)
 	}
 	if downlinkEnabled {
-		settings = append(settings, 0x38, 0x01) // field 7
+		settings = append(settings, 0x30, 0x01) // field 6 (downlink_enabled)
 	}
 
 	// Channel message
