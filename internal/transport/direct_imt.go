@@ -330,23 +330,23 @@ func (t *DirectIMTTransport) GetSignal(ctx context.Context) (*SignalInfo, error)
 	return info, nil
 }
 
-// GetSignalFast returns the cached signal reading (non-blocking).
-func (t *DirectIMTTransport) GetSignalFast(ctx context.Context) (*SignalInfo, error) {
+// GetSignalFast returns the cached signal reading (non-blocking, never takes serial mutex).
+func (t *DirectIMTTransport) GetSignalFast(_ context.Context) (*SignalInfo, error) {
 	t.signalMu.RLock()
 	sig := t.lastSignal
 	t.signalMu.RUnlock()
 
 	if sig.Timestamp == "" {
-		return t.GetSignal(ctx) // no cached value, do live query
+		// No cached value yet — return zero rather than blocking on serial
+		return &SignalInfo{Bars: 0, Assessment: "none"}, nil
 	}
 	return &sig, nil
 }
 
-// GetStatus returns the modem connection status.
-func (t *DirectIMTTransport) GetStatus(ctx context.Context) (*SatStatus, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
+// GetStatus returns the modem connection status (non-blocking, cached values).
+func (t *DirectIMTTransport) GetStatus(_ context.Context) (*SatStatus, error) {
+	// Read cached fields without taking the serial mutex — these are set
+	// during connect and never written concurrently with reads.
 	return &SatStatus{
 		Connected: t.connected,
 		Port:      t.port,
