@@ -183,12 +183,14 @@ if [ -s /cubeos/config/meshsat.env ]; then
     echo "    $key=$value"
     # Add to compose environment if not already present
     if ! grep -q "$key" docker-compose.direct.yml 2>/dev/null; then
-      sed -i "/^      - MESHSAT_MODE=direct/a\\      - ${key}=${value}" docker-compose.direct.yml
+      sudo sed -i "/^      - MESHSAT_MODE=direct/a\\      - ${key}=${value}" docker-compose.direct.yml
       echo "    → injected into compose file"
-    else
-      # Update existing value
-      sed -i "s|${key}=.*|${key}=${value}|" docker-compose.direct.yml
+    elif ! grep -q "${key}=${value}" docker-compose.direct.yml 2>/dev/null; then
+      # Update existing value if different
+      sudo sed -i "s|${key}=.*|${key}=${value}|" docker-compose.direct.yml
       echo "    → updated in compose file"
+    else
+      echo "    → already set"
     fi
   done < /cubeos/config/meshsat.env
 fi
