@@ -17,7 +17,9 @@ package transport
 //  7. GPS NMEA probe (~2s) — not implemented, GPS uses VID:PID only
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,6 +117,7 @@ func (s *DeviceSupervisor) run() {
 	s.registerExplicitPorts()
 
 	// Initial scan
+	s.recoverMissingTTY()
 	s.scanSerialPorts()
 	s.reconcileSerialDevices()
 
@@ -128,10 +131,12 @@ func (s *DeviceSupervisor) run() {
 		case <-s.stopCh:
 			return
 		case <-portTicker.C:
+			s.recoverMissingTTY()
 			s.scanSerialPorts()
 		case <-serialTicker.C:
 			s.reconcileSerialDevices()
 		case <-s.scanNowCh:
+			s.recoverMissingTTY()
 			s.scanSerialPorts()
 			s.reconcileSerialDevices()
 		}
@@ -548,4 +553,122 @@ func (s *DeviceSupervisor) MarkConnected(port string) {
 // MarkDisconnected updates a device's state to Disconnected (called by transport on serial error).
 func (s *DeviceSupervisor) MarkDisconnected(port string) {
 	s.registry.SetState(port, StateDisconnected)
+}
+
+// ============================================================================
+// USB TTY Recovery
+// ============================================================================
+
+// recoverMissingTTY checks for USB devices that are enumerated in sysfs but
+// have no /dev/tty* entry. This happens when a container holds a stale fd
+// during USB replug — the kernel can't rebind cdc_acm. Recovery: unbind the
+// USB device from its driver and rebind it, forcing the kernel to create a
+// fresh tty. This is a capability neither HAL nor any standard Linux device
+// manager provides.
+func (s *DeviceSupervisor) recoverMissingTTY() {
+	entries, err := os.ReadDir("/sys/bus/usb/devices")
+	if err != nil {
+		return
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		// Skip interfaces (contain ':') and root hubs
+		if strings.Contains(name, ":") || strings.HasPrefix(name, "usb") {
+			continue
+		}
+
+		devDir := filepath.Join("/sys/bus/usb/devices", name)
+		vid := readSysfsFile(filepath.Join(devDir, "idVendor"))
+		pid := readSysfsFile(filepath.Join(devDir, "idProduct"))
+		if vid == "" || pid == "" {
+			continue
+		}
+
+		vidpid := vid + ":" + pid
+
+		// Only recover devices we care about
+		if !knownMeshtasticVIDPIDs[vidpid] && !knownIridiumVIDPIDs[vidpid] &&
+			!knownIMTVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] &&
+			!knownAstrocastVIDPIDs[vidpid] {
+			continue
+		}
+
+		// Check if this USB device has a tty associated
+		if hasTTYDevice(devDir) {
+			continue // tty exists, no recovery needed
+		}
+
+		// USB device is enumerated but no tty — try rebind
+		log.Warn().Str("device", name).Str("vidpid", vidpid).Msg("device-supervisor: USB device has no tty, attempting rebind")
+
+		driverPath := filepath.Join(devDir, "driver")
+		driverLink, err := os.Readlink(driverPath)
+		if err != nil {
+			log.Debug().Str("device", name).Msg("device-supervisor: no driver bound, skipping rebind")
+			continue
+		}
+		driverName := filepath.Base(driverLink)
+
+		unbindPath := filepath.Join("/sys/bus/usb/drivers", driverName, "unbind")
+		bindPath := filepath.Join("/sys/bus/usb/drivers", driverName, "bind")
+
+		// Unbind
+		if err := os.WriteFile(unbindPath, []byte(name), 0200); err != nil {
+			log.Warn().Err(err).Str("device", name).Msg("device-supervisor: unbind failed")
+			continue
+		}
+		time.Sleep(500 * time.Millisecond)
+
+		// Rebind
+		if err := os.WriteFile(bindPath, []byte(name), 0200); err != nil {
+			log.Warn().Err(err).Str("device", name).Msg("device-supervisor: rebind failed")
+			continue
+		}
+		time.Sleep(1 * time.Second)
+
+		if hasTTYDevice(devDir) {
+			log.Info().Str("device", name).Str("vidpid", vidpid).Msg("device-supervisor: USB rebind recovered tty device")
+		} else {
+			log.Warn().Str("device", name).Str("vidpid", vidpid).Msg("device-supervisor: USB rebind did not recover tty")
+		}
+	}
+}
+
+// hasTTYDevice checks if a USB device directory has an associated tty.
+func hasTTYDevice(usbDevDir string) bool {
+	// Walk interface subdirs looking for tty/ttyXXX
+	entries, err := os.ReadDir(usbDevDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !strings.Contains(e.Name(), ":") {
+			continue // not an interface dir
+		}
+		ttyDir := filepath.Join(usbDevDir, e.Name(), "tty")
+		if info, err := os.Stat(ttyDir); err == nil && info.IsDir() {
+			return true
+		}
+		// Also check for ttyUSB (FTDI-style: interface/ttyUSBX)
+		ifaceEntries, err := os.ReadDir(filepath.Join(usbDevDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, ie := range ifaceEntries {
+			if strings.HasPrefix(ie.Name(), "ttyUSB") || strings.HasPrefix(ie.Name(), "ttyACM") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readSysfsFile reads a sysfs attribute file and returns trimmed content.
+func readSysfsFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }

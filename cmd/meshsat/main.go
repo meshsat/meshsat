@@ -216,24 +216,18 @@ func main() {
 	}
 
 	// v0.3.0 Access rule evaluator
-	log.Debug().Msg("startup: loading access rules...")
 	accessEval := rules.NewAccessEvaluator(db)
 	if err := accessEval.ReloadFromDB(); err != nil {
 		log.Warn().Err(err).Msg("failed to load access rules (table may not exist yet)")
 	}
-	log.Debug().Msg("startup: access rules loaded")
 
 	// Processor
-	log.Debug().Msg("startup: creating processor...")
 	proc := engine.NewProcessor(db, mesh)
 	proc.SetDeduplicator(deduplicator)
-	log.Debug().Msg("startup: processor ready")
 
 	// Gateway manager
-	log.Debug().Msg("startup: creating gateway manager...")
 	gwMgr := gateway.NewManager(db, sat)
 	if imtTransport != nil {
-		log.Debug().Msg("startup: setting IMT transport on gateway manager...")
 		gwMgr.SetIMTTransport(imtTransport)
 	}
 	if cell != nil {
