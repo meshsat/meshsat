@@ -52,8 +52,9 @@ func main() {
 	var sat transport.SatTransport
 	var cell transport.CellTransport
 	var astro transport.AstrocastTransport
-	var imtTransport transport.SatTransport // IMT (9704) transport for coexistence
-	var gpsExcludePorts []func() string     // populated in direct mode for GPS reader
+	var imtTransport transport.SatTransport    // IMT (9704) transport for coexistence
+	var gpsExcludePorts []func() string        // populated in direct mode for GPS reader
+	var supervisor *transport.DeviceSupervisor // populated in direct mode for USB discovery
 	switch cfg.Mode {
 	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
@@ -94,7 +95,7 @@ func main() {
 
 		// DeviceSupervisor: replaces one-shot auto-detect with continuous
 		// two-tier polling (30s port scan + 15s reconciliation).
-		supervisor := transport.NewDeviceSupervisor()
+		supervisor = transport.NewDeviceSupervisor()
 
 		// Register explicit port overrides from env vars
 		supervisor.SetExplicitPort(transport.RoleMeshtastic, cfg.MeshtasticPort)
@@ -423,6 +424,9 @@ func main() {
 	}
 	if routingID != nil {
 		srv.SetRoutingIdentity(routingID)
+	}
+	if supervisor != nil {
+		srv.SetDeviceSupervisor(supervisor)
 	}
 	srv.SetOnMOCallback(func(imei string) {
 		if err := db.TouchDeviceLastSeen(imei); err != nil {

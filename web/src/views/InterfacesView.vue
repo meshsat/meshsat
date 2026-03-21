@@ -454,12 +454,39 @@ function parseFilters(rule) {
   } catch { return {} }
 }
 
+// Device supervisor styling helpers
+function devStateClass(state) {
+  const map = {
+    connected: 'bg-green-900 text-green-300',
+    ready: 'bg-blue-900 text-blue-300',
+    detected: 'bg-yellow-900 text-yellow-300',
+    identifying: 'bg-yellow-900 text-yellow-300',
+    disconnected: 'bg-red-900 text-red-300',
+    removed: 'bg-gray-700 text-gray-500',
+  }
+  return map[state] || 'bg-gray-700 text-gray-400'
+}
+
+function devRoleClass(role) {
+  const map = {
+    meshtastic: 'bg-purple-900 text-purple-300',
+    iridium_9704: 'bg-orange-900 text-orange-300',
+    iridium_9603: 'bg-orange-900 text-orange-300',
+    cellular: 'bg-blue-900 text-blue-300',
+    astrocast: 'bg-cyan-900 text-cyan-300',
+    gps: 'bg-green-900 text-green-300',
+    zigbee: 'bg-yellow-900 text-yellow-300',
+  }
+  return map[role] || 'bg-gray-700 text-gray-400'
+}
+
 // Polling
 let pollTimer = null
 
 onMounted(() => {
   store.fetchInterfaces()
   store.fetchDevices()
+  store.fetchUSBDevices()
   store.fetchAccessRules()
   store.fetchObjectGroups()
   store.fetchFailoverGroups()
@@ -470,6 +497,7 @@ onMounted(() => {
   pollTimer = setInterval(() => {
     store.fetchInterfaces()
     store.fetchDevices()
+    store.fetchUSBDevices()
     store.fetchAccessRules()
     store.fetchObjectGroups()
     store.fetchFailoverGroups()
@@ -857,8 +885,31 @@ onUnmounted(() => {
 
     <!-- ═══ Devices Tab ═══ -->
     <div v-if="activeTab === 'devices'">
-      <div class="mb-4 text-sm text-gray-400">
-        {{ (store.devices || []).length }} USB devices detected
+      <!-- Supervisor device inventory (claim-based, with state) -->
+      <div v-if="(store.usbDevices || []).length" class="mb-6">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-sm text-gray-400">{{ store.usbDevices.length }} serial devices (supervisor)</span>
+          <button @click="store.fetchUSBDevices()" class="text-xs text-gray-500 hover:text-gray-300">Refresh</button>
+        </div>
+        <div v-for="dev in store.usbDevices" :key="dev.dev_path" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm font-medium text-gray-200">{{ dev.dev_path }}</span>
+              <span class="text-xs text-gray-500 ml-2">{{ dev.vid_pid }}</span>
+              <span v-if="dev.role" class="ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                :class="devRoleClass(dev.role)">{{ dev.role }}</span>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+              :class="devStateClass(dev.state)">{{ dev.state }}</span>
+          </div>
+          <div v-if="dev.usb_serial" class="text-xs text-gray-600 mt-1">Serial: {{ dev.usb_serial }}</div>
+          <div v-if="dev.error" class="text-xs text-red-400 mt-1">{{ dev.error }}</div>
+        </div>
+      </div>
+
+      <!-- Interface manager device list (binding-aware) -->
+      <div class="mb-3 text-sm text-gray-400">
+        {{ (store.devices || []).length }} USB devices (interface bindings)
       </div>
       <div v-for="dev in store.devices" :key="dev.device_id" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3">
         <div class="flex items-center justify-between">
@@ -875,7 +926,7 @@ onUnmounted(() => {
         <div class="text-xs text-gray-600 mt-1">ID: {{ dev.device_id }}</div>
         <div v-if="dev.usb_serial" class="text-xs text-gray-600">Serial: {{ dev.usb_serial }}</div>
       </div>
-      <div v-if="!(store.devices || []).length" class="text-sm text-gray-500 text-center py-8">
+      <div v-if="!(store.devices || []).length && !(store.usbDevices || []).length" class="text-sm text-gray-500 text-center py-8">
         No USB serial devices detected.
       </div>
     </div>

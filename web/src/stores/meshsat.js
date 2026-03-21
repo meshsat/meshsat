@@ -960,6 +960,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   // Interfaces (v0.3.0)
   const interfaces = ref([])
   const devices = ref([])
+  const usbDevices = ref([])
   const accessRules = ref([])
   const objectGroups = ref([])
   const failoverGroups = ref([])
@@ -1030,6 +1031,14 @@ export const useMeshsatStore = defineStore('meshsat', () => {
       const data = await api.get('/devices')
       devices.value = Array.isArray(data) ? data : []
     } catch (e) { error.value = e.message }
+  }
+
+  // USB device supervisor inventory (MESHSAT-246)
+  async function fetchUSBDevices() {
+    try {
+      const data = await api.get('/devices/usb')
+      usbDevices.value = Array.isArray(data) ? data : []
+    } catch (e) { /* supervisor may not be available in HAL mode */ }
   }
 
   // Access Rules (v0.3.0)
@@ -1303,7 +1312,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     webhookLog, fetchWebhookLog,
     iridiumGeolocation, triggerIridiumGeolocation,
     interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice, generateEncryptionKey,
-    devices, fetchDevices,
+    devices, fetchDevices, usbDevices, fetchUSBDevices,
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
     objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,
     failoverGroups, fetchFailoverGroups, createFailoverGroup, deleteFailoverGroup,
