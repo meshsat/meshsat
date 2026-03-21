@@ -151,8 +151,8 @@ func (m *InterfaceManager) Start(ctx context.Context) error {
 
 	log.Info().Int("count", len(ifaces)).Msg("ifacemgr: loaded interfaces from DB")
 
-	// Initial device scan
-	m.scanDevices()
+	// Skip initial device scan — DeviceSupervisor handles port identification
+	// in direct mode. The scanLoop still runs for periodic state reconciliation.
 
 	// Periodic scan loop
 	go m.scanLoop(ctx)
