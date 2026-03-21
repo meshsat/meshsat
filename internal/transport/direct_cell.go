@@ -547,12 +547,14 @@ func (t *DirectCellTransport) ioLoop() {
 			return
 		}
 
-		// Accumulate bytes into lines, dispatch URCs
+		// Accumulate bytes into lines, dispatch URCs.
+		// Lines containing ANSI escape sequences (ATdebug firmware output)
+		// are silently dropped — they are not AT unsolicited result codes.
 		for i := 0; i < n; i++ {
 			line = append(line, buf[i])
 			if buf[i] == '\n' {
 				s := strings.TrimSpace(string(line))
-				if s != "" {
+				if s != "" && !strings.Contains(s, "\x1b") {
 					t.handleURC(s)
 				}
 				line = line[:0]
@@ -1186,6 +1188,7 @@ func (t *DirectCellTransport) checkDataConnection() {
 // readCMGSResponse reads the response after AT+CMGS text + Ctrl-Z.
 // It logs every byte received for debugging modem behavior and accepts
 // +CMGS: <mr> as a success indicator (not just OK).
+// ATdebug firmware debug lines (ANSI escapes) are stripped before checking terminators.
 func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var resp strings.Builder
@@ -1198,9 +1201,10 @@ func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 	for {
 		now := time.Now()
 		if now.After(deadline) {
-			log.Warn().Str("accumulated", fmt.Sprintf("%q", resp.String())).
+			clean := stripATDebugLines(resp.String())
+			log.Warn().Str("accumulated", fmt.Sprintf("%q", clean)).
 				Int("bytes", resp.Len()).Msg("cellular: CMGS response timeout — raw bytes received")
-			return resp.String(), fmt.Errorf("read timeout")
+			return clean, fmt.Errorf("read timeout")
 		}
 
 		n, err := port.Read(buf)
@@ -1213,24 +1217,24 @@ func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 				Int("total", resp.Len()).
 				Msg("cellular: CMGS response bytes")
 
-			full := resp.String()
+			clean := stripATDebugLines(resp.String())
 
-			if strings.Contains(full, "+CMGS:") {
+			if strings.Contains(clean, "+CMGS:") {
 				// +CMGS: <mr> — SMS accepted by network. Success.
-				return full, nil
+				return clean, nil
 			}
-			if strings.Contains(full, "\r\nOK\r\n") ||
-				strings.HasSuffix(strings.TrimSpace(full), "OK") {
-				return full, nil
+			if strings.Contains(clean, "\r\nOK\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(clean), "OK") {
+				return clean, nil
 			}
-			if strings.Contains(full, "\r\nERROR\r\n") ||
-				strings.HasSuffix(strings.TrimSpace(full), "ERROR") ||
-				strings.Contains(full, "+CMS ERROR:") {
-				return full, nil
+			if strings.Contains(clean, "\r\nERROR\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(clean), "ERROR") ||
+				strings.Contains(clean, "+CMS ERROR:") {
+				return clean, nil
 			}
 
 			if resp.Len() > maxResp {
-				return full, fmt.Errorf("response too large (%d bytes)", resp.Len())
+				return clean, fmt.Errorf("response too large (%d bytes)", resp.Len())
 			}
 		} else {
 			// No data — log progress every 15s so we know we're still waiting
@@ -1243,7 +1247,7 @@ func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 		}
 
 		if err != nil {
-			return resp.String(), err
+			return stripATDebugLines(resp.String()), err
 		}
 	}
 }

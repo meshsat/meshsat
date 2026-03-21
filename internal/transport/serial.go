@@ -164,6 +164,30 @@ func findStartMarker(data []byte) int {
 	return -1
 }
 
+// stripATDebugLines removes lines containing ANSI escape sequences from AT responses.
+// The LILYGO T-Call A7670E with ATdebug firmware injects colored debug lines
+// (e.g., "\x1b[34mDEBUG \x1b[0m| 22:58:49 453 [GPS] ...") into the serial stream
+// between AT commands and their responses. These must be filtered out before
+// checking for AT terminators (OK/ERROR) and before returning to parsers.
+// The ESC byte (0x1B) never appears in legitimate AT responses.
+func stripATDebugLines(raw string) string {
+	if !strings.Contains(raw, "\x1b") {
+		return raw // fast path: no ANSI codes
+	}
+	var clean strings.Builder
+	clean.Grow(len(raw))
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.Contains(line, "\x1b") {
+			continue // drop lines with ANSI escape sequences
+		}
+		if clean.Len() > 0 {
+			clean.WriteByte('\n')
+		}
+		clean.WriteString(line)
+	}
+	return clean.String()
+}
+
 // sendAT sends an AT command and reads the response until OK/ERROR/READY.
 // Used by Iridium direct transport. Caller must hold any relevant mutex.
 func sendAT(port serial.Port, command string, timeout time.Duration) (string, error) {
@@ -181,6 +205,8 @@ func sendAT(port serial.Port, command string, timeout time.Duration) (string, er
 // readATResponse reads until "OK" or "ERROR" is found, or timeout expires.
 // Hard caps: timeout is enforced even if the modem sends continuous data,
 // and response buffer is capped at 4KB to prevent runaway reads.
+// Debug output from ATdebug firmware (ANSI escape lines) is stripped before
+// checking terminators and before returning.
 func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var resp strings.Builder
@@ -192,32 +218,37 @@ func readATResponse(port serial.Port, timeout time.Duration) (string, error) {
 
 	for {
 		if time.Now().After(deadline) {
-			return resp.String(), fmt.Errorf("read timeout")
+			return stripATDebugLines(resp.String()), fmt.Errorf("read timeout")
 		}
 
 		n, err := port.Read(buf)
 
 		if n > 0 {
 			resp.Write(buf[:n])
-			full := resp.String()
 
-			if strings.Contains(full, "\r\nOK\r\n") ||
-				strings.HasSuffix(strings.TrimSpace(full), "OK") ||
-				strings.Contains(full, "\r\nERROR\r\n") ||
-				strings.HasSuffix(strings.TrimSpace(full), "ERROR") ||
-				strings.Contains(full, "READY") ||
-				strings.Contains(full, "+CMGS:") {
-				return full, nil
+			// Strip ATdebug lines before checking terminators.
+			// Raw buffer may exceed 4KB due to debug output, but the
+			// cleaned response (what callers see) will be much smaller.
+			clean := stripATDebugLines(resp.String())
+
+			if strings.Contains(clean, "\r\nOK\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(clean), "OK") ||
+				strings.Contains(clean, "\r\nERROR\r\n") ||
+				strings.HasSuffix(strings.TrimSpace(clean), "ERROR") ||
+				strings.Contains(clean, "READY") ||
+				strings.Contains(clean, "+CMGS:") {
+				return clean, nil
 			}
 
-			// Safety: stop reading if response is unreasonably large
+			// Safety: stop reading if cleaned response is unreasonably large.
+			// Use raw length for the cap since debug output is the concern.
 			if resp.Len() > maxResp {
-				return full, fmt.Errorf("response too large (%d bytes)", resp.Len())
+				return clean, fmt.Errorf("response too large (%d bytes)", resp.Len())
 			}
 		}
 
 		if err != nil {
-			return resp.String(), err
+			return stripATDebugLines(resp.String()), err
 		}
 	}
 }
