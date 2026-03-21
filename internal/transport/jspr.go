@@ -1,0 +1,886 @@
+package transport
+
+// JSPR (JSON Serial Protocol for REST) implementation for RockBLOCK 9704.
+// Ported from the MIT-licensed C library at github.com/rock7/RockBLOCK-9704.
+//
+// Protocol: line-based text over serial at 230400 baud.
+//   Request:  "METHOD target {json}\r"
+//   Response: "CODE target {json}\r"
+// Unsolicited messages use code 299.
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
+)
+
+// JSPR constants
+const (
+	jsprBaud            = 230400
+	jsprRxBufSize       = 8192
+	jsprMaxTargetLen    = 30
+	jsprMaxSegmentData  = 1446
+	jsprIMTCRCSize      = 2
+	jsprMaxPayload      = 100000 // 100 KB max message
+	jsprMaxTopics       = 20
+	jsprReadTimeout     = 50 * time.Millisecond // poll granularity
+	jsprResponseTimeout = 10 * time.Second      // max wait for a response
+	jsprMOTimeout       = 180 * time.Second     // max wait for MO final status
+
+	// Well-known topic IDs
+	jsprRawTopic    = 244
+	jsprPurpleTopic = 313
+	jsprPinkTopic   = 314
+	jsprRedTopic    = 315
+	jsprOrangeTopic = 316
+	jsprYellowTopic = 317
+)
+
+// JSPR response codes
+const (
+	jsprCodeOK          = 200
+	jsprCodeUnsolicited = 299
+	jsprCodeNoAPI       = 400
+	jsprCodeBadReqType  = 401
+	jsprCodeAlreadySet  = 402
+	jsprCodeCmdTooLong  = 403
+	jsprCodeUnknown     = 404
+	jsprCodeMalformed   = 405
+	jsprCodeNotAllowed  = 406
+	jsprCodeBadJSON     = 407
+	jsprCodeFailed      = 408
+	jsprCodeUnauth      = 409
+	jsprCodeNoSIM       = 410
+	jsprCodeSerialErr   = 500
+)
+
+// jsprResponse represents a parsed JSPR response from the modem.
+type jsprResponse struct {
+	Code   int
+	Target string
+	JSON   json.RawMessage
+}
+
+// jsprConn manages the JSPR serial connection and protocol state.
+type jsprConn struct {
+	port serial.Port
+	mu   sync.Mutex // serialises all serial I/O
+
+	// Unsolicited message buffer
+	unsolMu   sync.Mutex
+	unsol     []jsprResponse
+	unsolCond *sync.Cond
+
+	// MO state
+	moRef int // request_reference counter (1-100)
+}
+
+// newJSPRConn wraps an already-opened serial port for JSPR communication.
+func newJSPRConn(port serial.Port) *jsprConn {
+	c := &jsprConn{
+		port:  port,
+		moRef: 0,
+	}
+	c.unsolCond = sync.NewCond(&c.unsolMu)
+	return c
+}
+
+// nextRef increments and returns the next request_reference (1-100, wrapping).
+func (c *jsprConn) nextRef() int {
+	c.moRef++
+	if c.moRef > 100 {
+		c.moRef = 1
+	}
+	return c.moRef
+}
+
+// sendRequest sends a JSPR request and waits for a matching response.
+// Method is "GET" or "PUT". Unsolicited (299) messages are buffered.
+func (c *jsprConn) sendRequest(method, target string, payload interface{}) (*jsprResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("jspr: marshal payload: %w", err)
+	}
+
+	line := fmt.Sprintf("%s %s %s\r", method, target, string(jsonBytes))
+	if _, err := c.port.Write([]byte(line)); err != nil {
+		return nil, fmt.Errorf("jspr: write: %w", err)
+	}
+
+	return c.readResponseFor(target, jsprResponseTimeout)
+}
+
+// readResponseFor reads serial data until a response matching the target is found.
+// Unsolicited (299) messages are buffered for the poll loop to consume.
+func (c *jsprConn) readResponseFor(target string, timeout time.Duration) (*jsprResponse, error) {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		resp, err := c.readOneLine(time.Until(deadline))
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			continue // timeout on this read, try again
+		}
+
+		if resp.Code == jsprCodeUnsolicited {
+			c.bufferUnsolicited(*resp)
+			continue
+		}
+
+		if resp.Target == target {
+			return resp, nil
+		}
+		// Mismatched target — discard and continue
+		log.Debug().Str("expected", target).Str("got", resp.Target).Msg("jspr: discarding mismatched response")
+	}
+
+	return nil, fmt.Errorf("jspr: timeout waiting for %s response", target)
+}
+
+// readOneLine reads one JSPR response line from serial.
+// Returns nil, nil on read timeout (no data available).
+func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
+	deadline := time.Now().Add(maxWait)
+	var buf [1]byte
+	var line strings.Builder
+	line.Grow(256)
+
+	c.port.SetReadTimeout(jsprReadTimeout)
+
+	for time.Now().Before(deadline) {
+		n, err := c.port.Read(buf[:])
+		if n == 0 && err == nil {
+			if line.Len() == 0 {
+				return nil, nil // no data at all
+			}
+			continue // partial line, keep reading
+		}
+		if err != nil {
+			if line.Len() == 0 {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("jspr: read error: %w", err)
+		}
+
+		b := buf[0]
+
+		// Strip non-printable chars before response code (modem may send DC1=0x11 on boot)
+		if line.Len() == 0 && (b < 0x20 || b > 0x7E) && b != '\r' {
+			continue
+		}
+
+		if b == '\r' {
+			if line.Len() == 0 {
+				continue // empty line
+			}
+			return parseJSPRLine(line.String())
+		}
+
+		if line.Len() >= jsprRxBufSize {
+			return nil, fmt.Errorf("jspr: line too long (%d bytes)", line.Len())
+		}
+
+		line.WriteByte(b)
+	}
+
+	if line.Len() > 0 {
+		return nil, fmt.Errorf("jspr: incomplete line at timeout: %q", line.String())
+	}
+	return nil, nil
+}
+
+// poll reads all available unsolicited messages from serial without blocking.
+// Returns the number of messages buffered.
+func (c *jsprConn) poll() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := 0
+	for {
+		resp, err := c.readOneLine(100 * time.Millisecond)
+		if err != nil {
+			log.Debug().Err(err).Msg("jspr: poll read error")
+			break
+		}
+		if resp == nil {
+			break // no more data
+		}
+
+		if resp.Code == jsprCodeUnsolicited {
+			c.bufferUnsolicited(*resp)
+			count++
+		} else {
+			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Msg("jspr: discarding non-unsolicited during poll")
+		}
+	}
+	return count
+}
+
+// bufferUnsolicited adds an unsolicited response to the queue and signals waiters.
+func (c *jsprConn) bufferUnsolicited(resp jsprResponse) {
+	c.unsolMu.Lock()
+	c.unsol = append(c.unsol, resp)
+	c.unsolMu.Unlock()
+	c.unsolCond.Broadcast()
+}
+
+// takeUnsolicited removes and returns all unsolicited messages matching a target.
+func (c *jsprConn) takeUnsolicited(target string) []jsprResponse {
+	c.unsolMu.Lock()
+	defer c.unsolMu.Unlock()
+
+	var matched []jsprResponse
+	var remaining []jsprResponse
+	for _, r := range c.unsol {
+		if r.Target == target {
+			matched = append(matched, r)
+		} else {
+			remaining = append(remaining, r)
+		}
+	}
+	c.unsol = remaining
+	return matched
+}
+
+// takeFirstUnsolicited removes and returns the first unsolicited message matching a target.
+func (c *jsprConn) takeFirstUnsolicited(target string) *jsprResponse {
+	c.unsolMu.Lock()
+	defer c.unsolMu.Unlock()
+
+	for i, r := range c.unsol {
+		if r.Target == target {
+			c.unsol = append(c.unsol[:i], c.unsol[i+1:]...)
+			return &r
+		}
+	}
+	return nil
+}
+
+// drainSerial clears any pending data from the serial port.
+func (c *jsprConn) drainSerial() {
+	c.port.SetReadTimeout(100 * time.Millisecond)
+	buf := make([]byte, 1024)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		n, _ := c.port.Read(buf)
+		if n == 0 {
+			break
+		}
+	}
+}
+
+// parseJSPRLine parses a JSPR response line: "CODE target {json}"
+func parseJSPRLine(line string) (*jsprResponse, error) {
+	if len(line) < 3 {
+		return nil, fmt.Errorf("jspr: line too short: %q", line)
+	}
+
+	// Response code: first 3 chars
+	codeStr := line[:3]
+	code := 0
+	for _, ch := range codeStr {
+		if ch < '0' || ch > '9' {
+			return nil, fmt.Errorf("jspr: invalid response code: %q", codeStr)
+		}
+		code = code*10 + int(ch-'0')
+	}
+
+	rest := line[3:]
+	if len(rest) == 0 || rest[0] != ' ' {
+		return nil, fmt.Errorf("jspr: missing space after code: %q", line)
+	}
+	rest = rest[1:]
+
+	// Target: up to next space
+	spaceIdx := strings.IndexByte(rest, ' ')
+	if spaceIdx < 0 {
+		// No JSON payload
+		return &jsprResponse{Code: code, Target: rest, JSON: json.RawMessage("{}")}, nil
+	}
+
+	target := rest[:spaceIdx]
+	jsonPart := rest[spaceIdx+1:]
+
+	// Find JSON (from first '{' to end)
+	braceIdx := strings.IndexByte(jsonPart, '{')
+	if braceIdx < 0 {
+		return &jsprResponse{Code: code, Target: target, JSON: json.RawMessage("{}")}, nil
+	}
+
+	return &jsprResponse{
+		Code:   code,
+		Target: target,
+		JSON:   json.RawMessage(jsonPart[braceIdx:]),
+	}, nil
+}
+
+// ============================================================================
+// CRC-16/CCITT (XModem) — polynomial 0x1021, init 0x0000
+// ============================================================================
+
+var crc16CCITTTable [256]uint16
+
+func init() {
+	for i := 0; i < 256; i++ {
+		crc := uint16(i) << 8
+		for j := 0; j < 8; j++ {
+			if crc&0x8000 != 0 {
+				crc = (crc << 1) ^ 0x1021
+			} else {
+				crc <<= 1
+			}
+		}
+		crc16CCITTTable[i] = crc
+	}
+}
+
+// crc16CCITT computes CRC-16/CCITT (XModem) over the given data.
+func crc16CCITT(data []byte) uint16 {
+	crc := uint16(0x0000)
+	for _, b := range data {
+		crc = (crc << 8) ^ crc16CCITTTable[byte(crc>>8)^b]
+	}
+	return crc
+}
+
+// appendIMTCRC appends 2-byte CRC-16/CCITT (big-endian) to payload.
+func appendIMTCRC(data []byte) []byte {
+	crc := crc16CCITT(data)
+	return append(data, byte(crc>>8), byte(crc&0xFF))
+}
+
+// verifyIMTCRC checks that the last 2 bytes are a valid CRC of the preceding data.
+// Returns the payload without CRC, or error if invalid.
+func verifyIMTCRC(data []byte) ([]byte, error) {
+	if len(data) < jsprIMTCRCSize {
+		return nil, fmt.Errorf("data too short for CRC: %d bytes", len(data))
+	}
+	payload := data[:len(data)-jsprIMTCRCSize]
+	expected := crc16CCITT(payload)
+	got := uint16(data[len(data)-2])<<8 | uint16(data[len(data)-1])
+	if got != expected {
+		return nil, fmt.Errorf("CRC mismatch: expected 0x%04X, got 0x%04X", expected, got)
+	}
+	return payload, nil
+}
+
+// ============================================================================
+// JSPR high-level operations
+// ============================================================================
+
+// jsprAPIVersion represents the API version structure.
+type jsprAPIVersion struct {
+	Major int `json:"major"`
+	Minor int `json:"minor"`
+	Patch int `json:"patch"`
+}
+
+type jsprAPIVersionResponse struct {
+	SupportedVersions []jsprAPIVersion `json:"supported_versions"`
+	ActiveVersion     *jsprAPIVersion  `json:"active_version,omitempty"`
+}
+
+type jsprAPIVersionPut struct {
+	ActiveVersion jsprAPIVersion `json:"active_version"`
+}
+
+type jsprSimConfigResponse struct {
+	Interface string `json:"interface"`
+}
+
+type jsprSimConfigPut struct {
+	Interface string `json:"interface"`
+}
+
+type jsprOperationalStateResponse struct {
+	State  string `json:"state"`
+	Reason int    `json:"reason"`
+}
+
+type jsprOperationalStatePut struct {
+	State string `json:"state"`
+}
+
+type jsprConstellationState struct {
+	ConstellationVisible bool `json:"constellation_visible"`
+	SignalBars           int  `json:"signal_bars"`
+	SignalLevel          int  `json:"signal_level"`
+}
+
+type jsprHWInfo struct {
+	HWVersion    string `json:"hw_version"`
+	SerialNumber string `json:"serial_number"`
+	IMEI         string `json:"imei"`
+	BoardTemp    int    `json:"board_temp"`
+}
+
+type jsprSimStatus struct {
+	CardPresent  bool   `json:"card_present"`
+	SIMConnected bool   `json:"sim_connected"`
+	ICCID        string `json:"iccid"`
+}
+
+type jsprFirmwareGet struct {
+	Slot string `json:"slot"`
+}
+
+type jsprFirmwareResponse struct {
+	Slot     string         `json:"slot"`
+	Validity int            `json:"validity"`
+	Version  jsprAPIVersion `json:"version"`
+	Hash     string         `json:"hash"`
+}
+
+type jsprMORequest struct {
+	TopicID          int `json:"topic_id"`
+	MessageLength    int `json:"message_length"`
+	RequestReference int `json:"request_reference"`
+}
+
+type jsprMOResponse struct {
+	TopicID          int    `json:"topic_id"`
+	RequestReference int    `json:"request_reference"`
+	MessageResponse  string `json:"message_response"`
+	MessageID        int    `json:"message_id"`
+}
+
+type jsprMOSegmentRequest struct {
+	TopicID       int `json:"topic_id"`
+	MessageID     int `json:"message_id"`
+	SegmentLength int `json:"segment_length"`
+	SegmentStart  int `json:"segment_start"`
+}
+
+type jsprMOSegmentPut struct {
+	TopicID       int    `json:"topic_id"`
+	MessageID     int    `json:"message_id"`
+	SegmentLength int    `json:"segment_length"`
+	SegmentStart  int    `json:"segment_start"`
+	Data          string `json:"data"` // base64
+}
+
+type jsprMOStatus struct {
+	TopicID       int    `json:"topic_id"`
+	MessageID     int    `json:"message_id"`
+	FinalMOStatus string `json:"final_mo_status"`
+}
+
+type jsprMTAnnounce struct {
+	TopicID          int `json:"topic_id"`
+	MessageID        int `json:"message_id"`
+	MessageLengthMax int `json:"message_length_max"`
+}
+
+type jsprMTSegment struct {
+	TopicID       int    `json:"topic_id"`
+	MessageID     int    `json:"message_id"`
+	SegmentLength int    `json:"segment_length"`
+	SegmentStart  int    `json:"segment_start"`
+	Data          string `json:"data"` // base64
+}
+
+type jsprMTStatus struct {
+	TopicID       int    `json:"topic_id"`
+	MessageID     int    `json:"message_id"`
+	FinalMTStatus string `json:"final_mt_status"`
+}
+
+type jsprProvisioningTopic struct {
+	TopicID            int    `json:"topic_id"`
+	TopicName          string `json:"topic_name"`
+	Priority           string `json:"priority"`
+	DiscardTimeSeconds int    `json:"discard_time_seconds"`
+	MaxQueueDepth      int    `json:"max_queue_depth"`
+}
+
+type jsprProvisioningResponse struct {
+	Provisioning []jsprProvisioningTopic `json:"provisioning"`
+}
+
+// ============================================================================
+// High-level JSPR operations (used by DirectIMTTransport)
+// ============================================================================
+
+// jsprBegin initialises the modem: negotiates API version, configures SIM, sets active state.
+func (c *jsprConn) jsprBegin() error {
+	c.drainSerial()
+
+	// 1. Negotiate API version
+	resp, err := c.sendRequest("GET", "apiVersion", struct{}{})
+	if err != nil {
+		return fmt.Errorf("jspr begin: get apiVersion: %w", err)
+	}
+	if resp.Code != jsprCodeOK {
+		return fmt.Errorf("jspr begin: apiVersion returned code %d", resp.Code)
+	}
+
+	var apiResp jsprAPIVersionResponse
+	if err := json.Unmarshal(resp.JSON, &apiResp); err != nil {
+		return fmt.Errorf("jspr begin: parse apiVersion: %w", err)
+	}
+
+	if apiResp.ActiveVersion == nil {
+		// Set API version to v1.0.0
+		putResp, err := c.sendRequest("PUT", "apiVersion", jsprAPIVersionPut{
+			ActiveVersion: jsprAPIVersion{Major: 1, Minor: 0, Patch: 0},
+		})
+		if err != nil {
+			return fmt.Errorf("jspr begin: set apiVersion: %w", err)
+		}
+		if putResp.Code != jsprCodeOK && putResp.Code != jsprCodeAlreadySet {
+			return fmt.Errorf("jspr begin: set apiVersion returned code %d", putResp.Code)
+		}
+	}
+
+	// 2. Configure SIM
+	simResp, err := c.sendRequest("GET", "simConfig", struct{}{})
+	if err != nil {
+		return fmt.Errorf("jspr begin: get simConfig: %w", err)
+	}
+
+	var simCfg jsprSimConfigResponse
+	if err := json.Unmarshal(simResp.JSON, &simCfg); err != nil {
+		return fmt.Errorf("jspr begin: parse simConfig: %w", err)
+	}
+
+	if simCfg.Interface != "internal" {
+		putResp, err := c.sendRequest("PUT", "simConfig", jsprSimConfigPut{Interface: "internal"})
+		if err != nil {
+			return fmt.Errorf("jspr begin: set simConfig: %w", err)
+		}
+		if putResp.Code != jsprCodeOK {
+			return fmt.Errorf("jspr begin: set simConfig returned code %d", putResp.Code)
+		}
+		// Wait for simStatus unsolicited
+		time.Sleep(500 * time.Millisecond)
+		c.poll()
+	}
+
+	// 3. Set operational state to active
+	stateResp, err := c.sendRequest("GET", "operationalState", struct{}{})
+	if err != nil {
+		return fmt.Errorf("jspr begin: get operationalState: %w", err)
+	}
+
+	var opState jsprOperationalStateResponse
+	if err := json.Unmarshal(stateResp.JSON, &opState); err != nil {
+		return fmt.Errorf("jspr begin: parse operationalState: %w", err)
+	}
+
+	if opState.State != "active" {
+		// May need to go through inactive first
+		if opState.State != "inactive" {
+			c.sendRequest("PUT", "operationalState", jsprOperationalStatePut{State: "inactive"})
+			time.Sleep(200 * time.Millisecond)
+		}
+		putResp, err := c.sendRequest("PUT", "operationalState", jsprOperationalStatePut{State: "active"})
+		if err != nil {
+			return fmt.Errorf("jspr begin: set active: %w", err)
+		}
+		if putResp.Code != jsprCodeOK {
+			return fmt.Errorf("jspr begin: set active returned code %d", putResp.Code)
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond) // modem needs settling time after begin
+	return nil
+}
+
+// jsprGetHWInfo queries hardware info (IMEI, serial, firmware, board temp).
+func (c *jsprConn) jsprGetHWInfo() (*jsprHWInfo, error) {
+	resp, err := c.sendRequest("GET", "hwInfo", struct{}{})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != jsprCodeOK {
+		return nil, fmt.Errorf("hwInfo returned code %d", resp.Code)
+	}
+	var info jsprHWInfo
+	if err := json.Unmarshal(resp.JSON, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// jsprGetSignal queries constellation/signal state.
+func (c *jsprConn) jsprGetSignal() (*jsprConstellationState, error) {
+	resp, err := c.sendRequest("GET", "constellationState", struct{}{})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != jsprCodeOK {
+		return nil, fmt.Errorf("constellationState returned code %d", resp.Code)
+	}
+	var sig jsprConstellationState
+	if err := json.Unmarshal(resp.JSON, &sig); err != nil {
+		return nil, err
+	}
+	return &sig, nil
+}
+
+// jsprGetSIMStatus queries SIM status.
+func (c *jsprConn) jsprGetSIMStatus() (*jsprSimStatus, error) {
+	resp, err := c.sendRequest("GET", "simStatus", struct{}{})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != jsprCodeOK {
+		return nil, fmt.Errorf("simStatus returned code %d", resp.Code)
+	}
+	var sim jsprSimStatus
+	if err := json.Unmarshal(resp.JSON, &sim); err != nil {
+		return nil, err
+	}
+	return &sim, nil
+}
+
+// jsprSendMO sends a Mobile Originated message via JSPR.
+// Handles the full flow: messageOriginate → segment responses → final status.
+// Returns final MO status string and any error.
+func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
+	if len(payload) > jsprMaxPayload {
+		return "", fmt.Errorf("payload too large: %d bytes (max %d)", len(payload), jsprMaxPayload)
+	}
+
+	// Append CRC to payload
+	dataWithCRC := appendIMTCRC(payload)
+	ref := c.nextRef()
+
+	// 1. Initiate MO
+	resp, err := c.sendRequest("PUT", "messageOriginate", jsprMORequest{
+		TopicID:          topicID,
+		MessageLength:    len(dataWithCRC),
+		RequestReference: ref,
+	})
+	if err != nil {
+		return "", fmt.Errorf("messageOriginate: %w", err)
+	}
+	if resp.Code != jsprCodeOK {
+		return "", fmt.Errorf("messageOriginate returned code %d", resp.Code)
+	}
+
+	var moResp jsprMOResponse
+	if err := json.Unmarshal(resp.JSON, &moResp); err != nil {
+		return "", fmt.Errorf("parse messageOriginate response: %w", err)
+	}
+	if moResp.MessageResponse != "message_accepted" {
+		return moResp.MessageResponse, fmt.Errorf("message not accepted: %s", moResp.MessageResponse)
+	}
+
+	msgID := moResp.MessageID
+
+	// 2. Poll for segment requests and final status
+	deadline := time.Now().Add(jsprMOTimeout)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		c.port.SetReadTimeout(jsprReadTimeout)
+		c.mu.Unlock()
+
+		c.poll()
+
+		// Check for segment requests
+		segReqs := c.takeUnsolicited("messageOriginateSegment")
+		for _, segReq := range segReqs {
+			var seg jsprMOSegmentRequest
+			if err := json.Unmarshal(segReq.JSON, &seg); err != nil {
+				log.Warn().Err(err).Msg("jspr: failed to parse segment request")
+				continue
+			}
+			if seg.MessageID != msgID {
+				continue
+			}
+
+			// Supply the requested segment
+			start := seg.SegmentStart
+			end := start + seg.SegmentLength
+			if end > len(dataWithCRC) {
+				end = len(dataWithCRC)
+			}
+
+			segData := base64.StdEncoding.EncodeToString(dataWithCRC[start:end])
+			c.mu.Lock()
+			putLine := fmt.Sprintf("PUT messageOriginateSegment %s\r", mustMarshal(jsprMOSegmentPut{
+				TopicID:       topicID,
+				MessageID:     msgID,
+				SegmentLength: end - start,
+				SegmentStart:  start,
+				Data:          segData,
+			}))
+			_, err := c.port.Write([]byte(putLine))
+			c.mu.Unlock()
+			if err != nil {
+				return "", fmt.Errorf("write segment: %w", err)
+			}
+
+			// Read segment PUT response
+			c.mu.Lock()
+			segResp, err := c.readResponseFor("messageOriginateSegment", 5*time.Second)
+			c.mu.Unlock()
+			if err != nil {
+				log.Warn().Err(err).Msg("jspr: segment PUT response error")
+			} else if segResp.Code != jsprCodeOK {
+				log.Warn().Int("code", segResp.Code).Msg("jspr: segment PUT non-200")
+			}
+		}
+
+		// Check for final MO status
+		statusMsgs := c.takeUnsolicited("messageOriginateStatus")
+		for _, statusMsg := range statusMsgs {
+			var status jsprMOStatus
+			if err := json.Unmarshal(statusMsg.JSON, &status); err != nil {
+				continue
+			}
+			if status.MessageID == msgID {
+				return status.FinalMOStatus, nil
+			}
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return "", fmt.Errorf("MO timeout after %s", jsprMOTimeout)
+}
+
+// jsprReceiveMT processes a buffered MT message announcement.
+// Returns the reassembled payload (CRC-stripped) and topic ID.
+func (c *jsprConn) jsprReceiveMT(announce jsprMTAnnounce) ([]byte, int, error) {
+	maxLen := announce.MessageLengthMax
+	buf := make([]byte, maxLen)
+	received := 0
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		c.poll()
+
+		// Collect segments
+		segs := c.takeUnsolicited("messageTerminateSegment")
+		for _, seg := range segs {
+			var s jsprMTSegment
+			if err := json.Unmarshal(seg.JSON, &s); err != nil {
+				continue
+			}
+			if s.MessageID != announce.MessageID {
+				continue
+			}
+
+			decoded, err := base64.StdEncoding.DecodeString(s.Data)
+			if err != nil {
+				log.Warn().Err(err).Msg("jspr: MT segment base64 decode failed")
+				continue
+			}
+
+			end := s.SegmentStart + len(decoded)
+			if end > maxLen {
+				end = maxLen
+			}
+			copy(buf[s.SegmentStart:end], decoded)
+			received += len(decoded)
+		}
+
+		// Check for final status
+		statuses := c.takeUnsolicited("messageTerminateStatus")
+		for _, st := range statuses {
+			var status jsprMTStatus
+			if err := json.Unmarshal(st.JSON, &status); err != nil {
+				continue
+			}
+			if status.MessageID == announce.MessageID {
+				if status.FinalMTStatus != "complete" {
+					return nil, announce.TopicID, fmt.Errorf("MT failed: %s", status.FinalMTStatus)
+				}
+				// Strip CRC
+				payload, err := verifyIMTCRC(buf[:received])
+				if err != nil {
+					// Try without CRC verification — data may still be usable
+					log.Warn().Err(err).Msg("jspr: MT CRC verification failed, using raw data")
+					if received > jsprIMTCRCSize {
+						return buf[:received-jsprIMTCRCSize], announce.TopicID, nil
+					}
+					return nil, announce.TopicID, err
+				}
+				return payload, announce.TopicID, nil
+			}
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return nil, announce.TopicID, fmt.Errorf("MT receive timeout for message %d", announce.MessageID)
+}
+
+// mustMarshal marshals to JSON, panicking on error (only for internal protocol structs).
+func mustMarshal(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("jspr: marshal failed: %v", err))
+	}
+	return string(b)
+}
+
+// probeJSPR sends a GET apiVersion to check if a port is a JSPR modem at 230400 baud.
+func probeJSPR(portPath string) bool {
+	port, err := openSerial(portPath, jsprBaud)
+	if err != nil {
+		return false
+	}
+	defer port.Close()
+
+	// Drain any pending data
+	port.SetReadTimeout(100 * time.Millisecond)
+	buf := make([]byte, 1024)
+	for {
+		n, _ := port.Read(buf)
+		if n == 0 {
+			break
+		}
+	}
+
+	// Send GET apiVersion
+	if _, err := port.Write([]byte("GET apiVersion {}\r")); err != nil {
+		return false
+	}
+
+	// Read response with timeout
+	port.SetReadTimeout(jsprReadTimeout)
+	deadline := time.Now().Add(3 * time.Second)
+	var line strings.Builder
+	var b [1]byte
+
+	for time.Now().Before(deadline) {
+		n, err := port.Read(b[:])
+		if n == 0 && err == nil {
+			continue
+		}
+		if err != nil {
+			return false
+		}
+		if b[0] == '\r' {
+			if line.Len() >= 3 {
+				resp, err := parseJSPRLine(line.String())
+				if err == nil && resp.Code == jsprCodeOK && resp.Target == "apiVersion" {
+					return true
+				}
+			}
+			line.Reset()
+			continue
+		}
+		// Skip non-printable
+		if b[0] < 0x20 || b[0] > 0x7E {
+			continue
+		}
+		line.WriteByte(b[0])
+	}
+
+	return false
+}
