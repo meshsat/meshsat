@@ -145,8 +145,8 @@ cd /cubeos/coreapps/meshsat/appconfig
 # Per-device overrides based on hostname
 # Create /cubeos/config/meshsat.env if it doesn't exist, with device-specific defaults
 if [ ! -f /cubeos/config/meshsat.env ]; then
-  HOSTNAME=$(hostname)
-  case "$HOSTNAME" in
+  DEVICE="${DEPLOY_TARGET:-$(hostname)}"
+  case "$DEVICE" in
     *bananapi*)
       echo "  Creating per-device env for BananaPi (Iridium 9603N on UART4)"
       cat > /cubeos/config/meshsat.env <<ENVEOF

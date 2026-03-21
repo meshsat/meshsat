@@ -226,7 +226,7 @@ deploy:
     - scp scripts/ci-deploy.sh ${PI_DEPLOY_HOST}:/tmp/ci-deploy-meshsat.sh
     - |
       ssh -o ServerAliveInterval=15 ${PI_DEPLOY_HOST} \
-        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' bash /tmp/ci-deploy-meshsat.sh"
+        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' DEPLOY_TARGET='${DEPLOY_TARGET}' bash /tmp/ci-deploy-meshsat.sh"
     - ssh ${PI_DEPLOY_HOST} "rm -f /tmp/ci-deploy-meshsat.sh"
   after_script:
     - kill $SSH_AGENT_PID 2>/dev/null || true
