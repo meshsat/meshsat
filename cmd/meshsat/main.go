@@ -69,14 +69,20 @@ func main() {
 		mesh = directMesh
 		log.Info().Str("port", cfg.MeshtasticPort).Int("watchdog_min", cfg.MeshWatchdogMin).Msg("using direct Meshtastic serial transport")
 
+		// Iridium: try 9704 (IMT/JSPR) first, fall back to 9603 (SBD/AT)
+		directIMT := transport.NewDirectIMTTransport(cfg.IMTPort)
+		directIMT.SetExcludePortFunc(directMesh.GetPort)
+
 		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
-		directSat.SetExcludePortFunc(directMesh.GetPort) // dynamic: resolves at auto-detect time
-		sat = directSat
-		log.Info().Str("port", cfg.IridiumPort).Msg("using direct Iridium serial transport")
+		directSat.SetExcludePortFunc(directMesh.GetPort)
+
+		// Prefer IMT (9704: 100KB, JSPR) over SBD (9603: 340B, AT) when available
+		sat = directIMT
+		log.Info().Str("sbd_port", cfg.IridiumPort).Str("imt_port", cfg.IMTPort).Msg("using direct Iridium serial transports (IMT primary, SBD fallback)")
 
 		// Cellular transport (optional — only if 4G/LTE modem is available)
 		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
-		directCell.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort})
+		directCell.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort, directIMT.GetPort})
 		directCell.SetSIMCardLookup(
 			func(iccid string) (*transport.SIMCardInfo, error) {
 				sim, err := db.GetSIMCardByICCID(iccid)
@@ -95,7 +101,7 @@ func main() {
 
 		// Astrocast transport (optional — only if Astronode S module is available)
 		directAstro := transport.NewDirectAstrocastTransport(cfg.AstrocastPort)
-		directAstro.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort})
+		directAstro.SetExcludePortFuncs([]func() string{directMesh.GetPort, directSat.GetPort, directIMT.GetPort})
 		astro = directAstro
 		log.Info().Str("port", cfg.AstrocastPort).Msg("using direct Astronode S serial transport")
 
@@ -105,7 +111,7 @@ func main() {
 		log.Info().Str("port", cfg.ZigBeePort).Msg("zigbee port configured (started via gateway manager)")
 
 		// GPS reader exclude ports — all radio devices so GPS auto-detect skips them
-		gpsExcludePorts = []func() string{directMesh.GetPort, directSat.GetPort}
+		gpsExcludePorts = []func() string{directMesh.GetPort, directSat.GetPort, directIMT.GetPort}
 
 	default:
 		log.Fatal().Str("mode", cfg.Mode).Msg("unsupported mode")

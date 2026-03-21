@@ -18,6 +18,7 @@ type Config struct {
 	// Direct mode device ports ("auto" or "" = auto-detect)
 	MeshtasticPort string
 	IridiumPort    string
+	IMTPort        string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
 	CellularPort   string
 	AstrocastPort  string
 	ZigBeePort     string
@@ -62,6 +63,7 @@ func Load() *Config {
 		WebDir:              envStr("MESHSAT_WEB_DIR", ""),
 		MeshtasticPort:      envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
 		IridiumPort:         envStr("MESHSAT_IRIDIUM_PORT", "auto"),
+		IMTPort:             envStr("MESHSAT_IMT_PORT", "auto"),
 		CellularPort:        envStr("MESHSAT_CELLULAR_PORT", "auto"),
 		AstrocastPort:       envStr("MESHSAT_ASTROCAST_PORT", "auto"),
 		ZigBeePort:          envStr("MESHSAT_ZIGBEE_PORT", "auto"),
