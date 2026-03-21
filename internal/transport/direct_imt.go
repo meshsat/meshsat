@@ -181,7 +181,7 @@ func (t *DirectIMTTransport) resolvePort() string {
 	if t.port != "" && t.port != "auto" {
 		return t.port
 	}
-	return autoDetectIMT(t.getExcludePorts())
+	return ProbeIMT(t.getExcludePorts())
 }
 
 // getExcludePorts returns a list of ports to exclude from auto-detection.

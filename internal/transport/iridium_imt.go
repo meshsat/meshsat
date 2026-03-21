@@ -22,11 +22,11 @@ var knownIMTVIDPIDs = map[string]bool{
 	"0403:6015": true, // FTDI X series (RockBLOCK 9704, also 9603N dev kits)
 }
 
-// autoDetectIMT scans serial ports for a RockBLOCK 9704 using two-pass detection.
+// ProbeIMT scans serial ports for a RockBLOCK 9704 using two-pass detection.
 // Pass 1: match by known VID:PID + verify with JSPR handshake at 230400 baud.
 // Pass 2: JSPR probe on remaining unrecognised ports.
 // excludePorts lists port paths that are already claimed by other transports.
-func autoDetectIMT(excludePorts []string) string {
+func ProbeIMT(excludePorts []string) string {
 	excluded := make(map[string]bool, len(excludePorts))
 	for _, p := range excludePorts {
 		excluded[p] = true

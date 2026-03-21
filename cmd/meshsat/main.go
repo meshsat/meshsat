@@ -69,16 +69,32 @@ func main() {
 		mesh = directMesh
 		log.Info().Str("port", cfg.MeshtasticPort).Int("watchdog_min", cfg.MeshWatchdogMin).Msg("using direct Meshtastic serial transport")
 
-		// Iridium: try 9704 (IMT/JSPR) first, fall back to 9603 (SBD/AT)
+		// Iridium: probe for 9704 (IMT/JSPR) at startup, fall back to 9603 (SBD/AT)
 		directIMT := transport.NewDirectIMTTransport(cfg.IMTPort)
 		directIMT.SetExcludePortFunc(directMesh.GetPort)
 
 		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
 		directSat.SetExcludePortFunc(directMesh.GetPort)
 
-		// Prefer IMT (9704: 100KB, JSPR) over SBD (9603: 340B, AT) when available
-		sat = directIMT
-		log.Info().Str("sbd_port", cfg.IridiumPort).Str("imt_port", cfg.IMTPort).Msg("using direct Iridium serial transports (IMT primary, SBD fallback)")
+		// Check if a 9704 is actually present before preferring IMT.
+		// For "auto" mode, probe now so we pick the right transport at startup.
+		useIMT := false
+		if cfg.IMTPort != "" && cfg.IMTPort != "auto" {
+			useIMT = true // explicit port — trust the user
+		} else if cfg.IMTPort == "auto" {
+			// Early probe: check if a 9704 responds to JSPR handshake
+			if probed := transport.ProbeIMT([]string{directMesh.GetPort()}); probed != "" {
+				useIMT = true
+				log.Info().Str("port", probed).Msg("RockBLOCK 9704 detected at startup")
+			}
+		}
+		if useIMT {
+			sat = directIMT
+			log.Info().Str("port", cfg.IMTPort).Msg("using RockBLOCK 9704 IMT transport")
+		} else {
+			sat = directSat
+			log.Info().Str("port", cfg.IridiumPort).Msg("using RockBLOCK 9603 SBD transport")
+		}
 
 		// Cellular transport (optional — only if 4G/LTE modem is available)
 		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
