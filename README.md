@@ -56,11 +56,22 @@ All devices are auto-detected on startup.*
 | 4 | **INIU 25000mAh** (100W USB-C PD) | Portable power bank -- powers all components via USB |
 | 5 | **Raspberry Pi 5** (8 GB RAM) | MeshSat Bridge host -- standalone mode, Debian Bookworm |
 
+![MeshSat Compact Kit](docs/images/meshsat_compact_kit.jpg)
+*MeshSat compact kit -- minimal two-transport gateway (mesh + satellite) in a pocket-sized waterproof case.*
+
+| # | Component | Description |
+|---|-----------|-------------|
+| 1 | **XIAO ESP32-S3 + SX1262 LoRa Module** | Meshtastic mesh radio -- 868/915 MHz, WiFi + BLE, ultra-compact form factor |
+| 2 | **RockBLOCK 9704** (Iridium IMT, SMA) | Iridium satellite modem -- JSPR protocol, 100 KB messages, FTDI USB |
+| 3 | **Anker Prime 20,000mAh** (200W, 2x USB-C + USB-A) | Portable power bank -- powers all components via USB-C |
+| 4 | **BananaPi BPI-M4 Zero** (4 GB RAM + 32 GB eMMC) | MeshSat Bridge host -- Allwinner H618, metal case, Pi Zero 2W alternative |
+
 ### Supported Devices
 
 | Category | Device | Status | Notes |
 |----------|--------|--------|-------|
 | **Meshtastic** | Heltec LoRa V4 (ESP32-S3 + SX1262 + GPS) | Tested | 915 MHz, OLED, 2 MB PSRAM, 16 MB flash |
+| | XIAO ESP32-S3 + SX1262 LoRa Module | Tested | 868/915 MHz, ultra-compact, WiFi + BLE |
 | | Lilygo T-Echo (nRF52840) | Tested | 915 MHz, USB-C, e-ink display |
 | | Lilygo T-Deck | Tested | ESP32-S3, keyboard, screen |
 | | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
