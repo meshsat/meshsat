@@ -47,6 +47,7 @@ type IridiumConfig struct {
 	ActivePollSec      int          `json:"active_poll_sec"`               // MT poll interval in active mode (default 20)
 	MinElevDeg         int          `json:"min_elev_deg"`                  // minimum pass elevation for scheduler (default 5, higher for obstructed environments)
 	ExpiryPolicy       ExpiryPolicy `json:"expiry_policy"`                 // per-priority message expiration (0 = never expire)
+	PowerProfile       string       `json:"power_profile"`                 // "default" or "low_power" (sleep between operations)
 }
 
 // DefaultIridiumConfig returns sensible defaults.
@@ -72,6 +73,7 @@ func DefaultIridiumConfig() IridiumConfig {
 		IdlePollSec:      900,
 		ActivePollSec:    20,
 		MinElevDeg:       5,
+		PowerProfile:     "default",
 		ExpiryPolicy: ExpiryPolicy{
 			CriticalMaxRetries: 20, // critical messages get more attempts
 			NormalMaxRetries:   10, // standard limit
@@ -94,6 +96,12 @@ func ParseIridiumConfig(data string) (*IridiumConfig, error) {
 		// valid
 	default:
 		cfg.MailboxMode = "ring_alert_only"
+	}
+	switch cfg.PowerProfile {
+	case "default", "low_power":
+		// valid
+	default:
+		cfg.PowerProfile = "default"
 	}
 	return &cfg, nil
 }

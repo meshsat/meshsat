@@ -211,6 +211,9 @@ func (s *Server) Router() http.Handler {
 		// Iridium mailbox — manual one-shot check
 		r.Post("/iridium/mailbox/check", s.handleManualMailboxCheck)
 
+		// Iridium system time (AT-MSSTM)
+		r.Get("/iridium/time", s.handleGetIridiumTime)
+
 		// Iridium geolocation (AT-MSGEO satellite sub-point)
 		r.Get("/iridium/geolocation", s.handleGetIridiumGeolocation)
 		r.Get("/iridium/geolocation/history", s.handleGetIridiumGeoHistory)

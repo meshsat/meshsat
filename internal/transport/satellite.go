@@ -20,6 +20,14 @@ type SatStatus struct {
 	Port      string `json:"port"`
 	IMEI      string `json:"imei"`
 	Model     string `json:"model"`
+	Firmware  string `json:"firmware,omitempty"`
+}
+
+// IridiumTime represents the Iridium network system time from AT-MSSTM.
+type IridiumTime struct {
+	SystemTime uint32 `json:"system_time"` // raw 90ms tick count
+	EpochUTC   string `json:"epoch_utc"`   // converted to RFC3339
+	IsValid    bool   `json:"is_valid"`    // false if modem returned "no network service"
 }
 
 // SignalInfo represents satellite signal quality.
@@ -74,5 +82,13 @@ type SatTransport interface {
 	// MOBufferEmpty checks AT+SBDSX and returns true if the MO buffer is empty
 	// (meaning a previous SBDIX already transmitted and cleared it).
 	MOBufferEmpty(ctx context.Context) (bool, error)
+	// GetSystemTime returns the Iridium network time via AT-MSSTM.
+	GetSystemTime(ctx context.Context) (*IridiumTime, error)
+	// GetFirmwareVersion returns the modem firmware version string.
+	GetFirmwareVersion(ctx context.Context) (string, error)
+	// Sleep puts the modem into low-power sleep mode (if sleep pin is configured).
+	Sleep(ctx context.Context) error
+	// Wake brings the modem out of sleep mode (if sleep pin is configured).
+	Wake(ctx context.Context) error
 	Close() error
 }

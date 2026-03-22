@@ -327,3 +327,54 @@ func TestParseIridiumTimestamp(t *testing.T) {
 		t.Errorf("timestamp mismatch: got %v, expected %v", ts2, expected)
 	}
 }
+
+// ============================================================================
+// MSSTM Parser Tests
+// ============================================================================
+
+func TestParseMSSTM_Valid(t *testing.T) {
+	resp := "\r\n-MSSTM: 3a2b1c00\r\n\r\nOK\r\n"
+	result, err := parseMSSTM(resp)
+	if err != nil {
+		t.Fatalf("parseMSSTM failed: %v", err)
+	}
+	if !result.IsValid {
+		t.Error("expected IsValid=true")
+	}
+	if result.SystemTime != 0x3a2b1c00 {
+		t.Errorf("SystemTime = %x, want 3a2b1c00", result.SystemTime)
+	}
+	if result.EpochUTC == "" {
+		t.Error("EpochUTC should not be empty")
+	}
+}
+
+func TestParseMSSTM_NoNetwork(t *testing.T) {
+	resp := "\r\n-MSSTM: no network service\r\n\r\nOK\r\n"
+	result, err := parseMSSTM(resp)
+	if err != nil {
+		t.Fatalf("parseMSSTM failed: %v", err)
+	}
+	if result.IsValid {
+		t.Error("expected IsValid=false for no network")
+	}
+}
+
+func TestParseMSSTM_Missing(t *testing.T) {
+	_, err := parseMSSTM("OK")
+	if err == nil {
+		t.Error("expected error for missing MSSTM prefix")
+	}
+}
+
+func TestParseMSSTM_Epoch(t *testing.T) {
+	// Tick 0 should correspond to MSSTM epoch (May 11, 2014 14:23:55 UTC)
+	resp := "-MSSTM: 00000000\r\nOK\r\n"
+	result, err := parseMSSTM(resp)
+	if err != nil {
+		t.Fatalf("parseMSSTM failed: %v", err)
+	}
+	if result.EpochUTC != "2014-05-11T14:23:55Z" {
+		t.Errorf("epoch = %s, want 2014-05-11T14:23:55Z", result.EpochUTC)
+	}
+}

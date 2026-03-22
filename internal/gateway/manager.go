@@ -891,6 +891,14 @@ func (m *Manager) GetIridiumGeolocation(ctx context.Context) (*transport.Geoloca
 	return m.sat.GetGeolocation(ctx)
 }
 
+// GetIridiumTime returns the Iridium network system time (AT-MSSTM).
+func (m *Manager) GetIridiumTime(ctx context.Context) (*transport.IridiumTime, error) {
+	if m.sat == nil {
+		return nil, fmt.Errorf("satellite transport not available")
+	}
+	return m.sat.GetSystemTime(ctx)
+}
+
 // ManualMailboxCheck triggers a one-shot mailbox check on the running Iridium gateway.
 func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
 	m.mu.RLock()

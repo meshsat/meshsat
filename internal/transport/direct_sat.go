@@ -36,6 +36,15 @@ type DirectSatTransport struct {
 	connected bool
 	imei      string
 	model     string
+	firmware  string
+
+	// MSSTM workaround: older firmware TA16005 hangs on SBDIX without prior MSSTM
+	needsMSSTMWorkaround bool
+
+	// Sleep/wake power management (GPIO pin, 0 = disabled)
+	sleepPin     int
+	awake        bool
+	lastWakeTime time.Time
 
 	// SBDIX rate limiting
 	lastSBDIX   time.Time
@@ -165,6 +174,18 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		}
 	}
 
+	// Configure sleep pin GPIO (if set) and ensure modem is awake
+	if t.sleepPin > 0 {
+		if err := gpioSetup(t.sleepPin, 0); err != nil { // 0 = awake
+			log.Warn().Err(err).Int("pin", t.sleepPin).Msg("iridium: sleep pin setup failed, continuing without")
+			t.sleepPin = 0
+		} else {
+			t.awake = true
+			t.lastWakeTime = time.Now()
+			log.Info().Int("pin", t.sleepPin).Msg("iridium: sleep pin configured")
+		}
+	}
+
 	sp, err := openSerial(portPath, iridiumBaud)
 	if err != nil {
 		return err
@@ -202,6 +223,16 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	if err == nil {
 		t.model = parseATValue(resp)
 	}
+	// AT+CGMR — get firmware version
+	resp, err = sendAT(sp, "AT+CGMR", iridiumReadTimeout)
+	if err == nil {
+		t.firmware = parseATValue(resp)
+		// TA16005 firmware has a bug where SBDIX hangs unless AT-MSSTM is sent first
+		t.needsMSSTMWorkaround = strings.Contains(t.firmware, "TA16005")
+		if t.needsMSSTMWorkaround {
+			log.Warn().Str("firmware", t.firmware).Msg("iridium: TA16005 detected, enabling MSSTM workaround")
+		}
+	}
 	// AT+SBDMTA=1 — enable ring alert indications
 	sendAT(sp, "AT+SBDMTA=1", iridiumReadTimeout)
 	// Clear MO and MT buffers — prevents stale data from previous sessions
@@ -210,12 +241,14 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	sendAT(sp, "AT+SBDD1", iridiumReadTimeout) // clear MT
 
 	t.connected = true
+	t.awake = true
+	t.lastWakeTime = time.Now()
 	t.lastSBDIX = time.Now() // prevent stale SBDIX from firing immediately after connect
-	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).Msg("iridium modem connected")
+	log.Info().Str("port", portPath).Str("imei", t.imei).Str("model", t.model).Str("firmware", t.firmware).Msg("iridium modem connected")
 
 	t.emitEvent(SatEvent{
 		Type:    "connected",
-		Message: fmt.Sprintf("Connected to %s (IMEI: %s)", t.model, t.imei),
+		Message: fmt.Sprintf("Connected to %s (IMEI: %s, FW: %s)", t.model, t.imei, t.firmware),
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
 
@@ -733,6 +766,7 @@ func (t *DirectSatTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 		Port:      t.port,
 		IMEI:      t.imei,
 		Model:     t.model,
+		Firmware:  t.firmware,
 	}, nil
 }
 
@@ -752,12 +786,106 @@ func (t *DirectSatTransport) GetGeolocation(_ context.Context) (*GeolocationInfo
 	return parseMSGEO(resp)
 }
 
+// GetSystemTime returns the Iridium network time via AT-MSSTM.
+// The response is a hex tick count since the Iridium epoch (May 11, 2014 14:23:55 UTC),
+// with each tick representing 90ms.
+func (t *DirectSatTransport) GetSystemTime(_ context.Context) (*IridiumTime, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.connected || t.file == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	resp, err := sendAT(t.file, "AT-MSSTM", 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseMSSTM(resp)
+}
+
+// GetFirmwareVersion returns the cached modem firmware version.
+func (t *DirectSatTransport) GetFirmwareVersion(_ context.Context) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.connected {
+		return "", fmt.Errorf("not connected")
+	}
+	return t.firmware, nil
+}
+
+// SetSleepPin configures the GPIO pin for modem sleep/wake control.
+// Pin 0 means disabled (default). Must be called before Connect().
+func (t *DirectSatTransport) SetSleepPin(pin int) {
+	t.sleepPin = pin
+}
+
+// Sleep puts the modem into low-power sleep mode via GPIO.
+// Enforces a minimum 2-second on-time before allowing sleep.
+func (t *DirectSatTransport) Sleep(_ context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sleepLocked()
+}
+
+func (t *DirectSatTransport) sleepLocked() error {
+	if t.sleepPin <= 0 {
+		return fmt.Errorf("sleep pin not configured")
+	}
+	if !t.awake {
+		return nil // already asleep
+	}
+	// Enforce minimum 2s on-time
+	if elapsed := time.Since(t.lastWakeTime); elapsed < 2*time.Second {
+		time.Sleep(2*time.Second - elapsed)
+	}
+	if err := gpioWrite(t.sleepPin, 1); err != nil {
+		return fmt.Errorf("sleep pin write: %w", err)
+	}
+	t.awake = false
+	t.stopMonitor()
+	log.Info().Int("pin", t.sleepPin).Msg("iridium: modem sleeping")
+	return nil
+}
+
+// Wake brings the modem out of sleep mode via GPIO.
+func (t *DirectSatTransport) Wake(_ context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.wakeLocked()
+}
+
+func (t *DirectSatTransport) wakeLocked() error {
+	if t.sleepPin <= 0 {
+		return nil // no sleep pin, always awake
+	}
+	if t.awake {
+		return nil // already awake
+	}
+	if err := gpioWrite(t.sleepPin, 0); err != nil {
+		return fmt.Errorf("wake pin write: %w", err)
+	}
+	// Give modem time to boot before AT commands
+	time.Sleep(250 * time.Millisecond)
+	t.awake = true
+	t.lastWakeTime = time.Now()
+	t.startMonitor()
+	log.Info().Int("pin", t.sleepPin).Msg("iridium: modem waking")
+	return nil
+}
+
 func (t *DirectSatTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// Use stopMonitor for clean goroutine shutdown (waits with 2s timeout)
 	t.stopMonitor()
+
+	// Put modem to sleep before closing (saves power)
+	if t.sleepPin > 0 && t.awake {
+		_ = t.sleepLocked()
+		gpioUnexport(t.sleepPin)
+	}
 
 	t.connected = false
 	if t.file != nil {
@@ -846,6 +974,12 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			timeout = time.Duration(n) * time.Second
 		}
+	}
+
+	// MSSTM workaround: TA16005 firmware hangs on SBDIX unless AT-MSSTM is sent first.
+	// This forces the modem to sync with the network before the SBD session.
+	if t.needsMSSTMWorkaround {
+		sendAT(t.file, "AT-MSSTM", 5*time.Second)
 	}
 
 	// Send SBDIX using custom reader that waits for "+SBDIX:" or "ERROR",
@@ -1188,4 +1322,43 @@ func parseATValue(resp string) string {
 		return line
 	}
 	return ""
+}
+
+// msstmEpoch is the Iridium MSSTM time origin: May 11, 2014 14:23:55 UTC.
+// This is different from the MSGEO epoch (2007-03-08).
+var msstmEpoch = time.Date(2014, 5, 11, 14, 23, 55, 0, time.UTC)
+
+// parseMSSTM parses an AT-MSSTM response.
+// Response format: "-MSSTM: XXXXXXXX" (8 hex chars, 90ms ticks since msstmEpoch)
+// or "no network service" if not registered.
+func parseMSSTM(resp string) (*IridiumTime, error) {
+	if strings.Contains(resp, "no network") {
+		return &IridiumTime{IsValid: false}, nil
+	}
+
+	// Find hex value after "-MSSTM:" or "MSSTM:"
+	idx := strings.Index(resp, "MSSTM:")
+	if idx < 0 {
+		return nil, fmt.Errorf("no MSSTM in response: %q", resp)
+	}
+	hex := strings.TrimSpace(resp[idx+6:])
+	// Trim trailing OK/newlines
+	if nl := strings.IndexAny(hex, "\r\n"); nl >= 0 {
+		hex = hex[:nl]
+	}
+	hex = strings.TrimSpace(hex)
+
+	ticks, err := strconv.ParseUint(hex, 16, 32)
+	if err != nil {
+		return nil, fmt.Errorf("parse MSSTM hex %q: %w", hex, err)
+	}
+
+	ms := ticks * 90
+	t := msstmEpoch.Add(time.Duration(ms) * time.Millisecond)
+
+	return &IridiumTime{
+		SystemTime: uint32(ticks),
+		EpochUTC:   t.UTC().Format(time.RFC3339),
+		IsValid:    true,
+	}, nil
 }

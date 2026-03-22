@@ -16,12 +16,13 @@ type Config struct {
 	WebDir        string // "" = embedded, path = serve from disk
 
 	// Direct mode device ports ("auto" or "" = auto-detect)
-	MeshtasticPort string
-	IridiumPort    string
-	IMTPort        string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
-	CellularPort   string
-	AstrocastPort  string
-	ZigBeePort     string
+	MeshtasticPort  string
+	IridiumPort     string
+	IridiumSleepPin int    // GPIO pin for 9603N sleep/wake (0 = disabled)
+	IMTPort         string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
+	CellularPort    string
+	AstrocastPort   string
+	ZigBeePort      string
 
 	// Cost safety: global rate limit for paid transports (messages/hour)
 	PaidRateLimit int
@@ -63,6 +64,7 @@ func Load() *Config {
 		WebDir:              envStr("MESHSAT_WEB_DIR", ""),
 		MeshtasticPort:      envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
 		IridiumPort:         envStr("MESHSAT_IRIDIUM_PORT", "auto"),
+		IridiumSleepPin:     envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
 		IMTPort:             envStr("MESHSAT_IMT_PORT", "auto"),
 		CellularPort:        envStr("MESHSAT_CELLULAR_PORT", "auto"),
 		AstrocastPort:       envStr("MESHSAT_ASTROCAST_PORT", "auto"),

@@ -366,6 +366,22 @@ func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// handleGetIridiumTime returns the Iridium network system time (AT-MSSTM).
+// @Summary Get Iridium system time
+// @Description Returns the Iridium network time via AT-MSSTM (90ms tick resolution)
+// @Tags iridium
+// @Success 200 {object} transport.IridiumTime
+// @Failure 503 {object} map[string]string "unavailable"
+// @Router /api/iridium/time [get]
+func (s *Server) handleGetIridiumTime(w http.ResponseWriter, r *http.Request) {
+	info, err := s.gwManager.GetIridiumTime(r.Context())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 // handleGetIridiumGeolocation triggers an AT-MSGEO reading and stores the result.
 // The response contains the satellite sub-point, not the modem position.
 func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Request) {

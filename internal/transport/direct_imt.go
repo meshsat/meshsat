@@ -391,6 +391,28 @@ func (t *DirectIMTTransport) MOBufferEmpty(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// GetSystemTime is not available on IMT (9704 uses JSPR, not AT commands).
+func (t *DirectIMTTransport) GetSystemTime(ctx context.Context) (*IridiumTime, error) {
+	return nil, fmt.Errorf("imt: system time not available (JSPR protocol)")
+}
+
+// GetFirmwareVersion returns the cached hardware version from JSPR status.
+func (t *DirectIMTTransport) GetFirmwareVersion(ctx context.Context) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.hwVersion, nil
+}
+
+// Sleep is not supported on IMT — the 9704 has no sleep pin interface.
+func (t *DirectIMTTransport) Sleep(ctx context.Context) error {
+	return fmt.Errorf("imt: sleep not supported")
+}
+
+// Wake is not supported on IMT.
+func (t *DirectIMTTransport) Wake(ctx context.Context) error {
+	return nil // always awake
+}
+
 // Close stops background goroutines and closes the serial port.
 func (t *DirectIMTTransport) Close() error {
 	if t.cancelFunc != nil {

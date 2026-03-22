@@ -73,6 +73,9 @@ func main() {
 
 		directIMT := transport.NewDirectIMTTransport(cfg.IMTPort)
 		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
+		if cfg.IridiumSleepPin > 0 {
+			directSat.SetSleepPin(cfg.IridiumSleepPin)
+		}
 
 		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
 		directCell.SetSIMCardLookup(

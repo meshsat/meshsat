@@ -218,6 +218,26 @@ func (t *HALSatTransport) MOBufferEmpty(ctx context.Context) (bool, error) {
 	return false, fmt.Errorf("MOBufferEmpty not supported via HAL")
 }
 
+// GetSystemTime is not supported via HAL.
+func (t *HALSatTransport) GetSystemTime(ctx context.Context) (*IridiumTime, error) {
+	return nil, fmt.Errorf("GetSystemTime not supported via HAL")
+}
+
+// GetFirmwareVersion is not supported via HAL.
+func (t *HALSatTransport) GetFirmwareVersion(ctx context.Context) (string, error) {
+	return "", fmt.Errorf("GetFirmwareVersion not supported via HAL")
+}
+
+// Sleep is not supported via HAL.
+func (t *HALSatTransport) Sleep(ctx context.Context) error {
+	return fmt.Errorf("sleep not supported via HAL")
+}
+
+// Wake is not supported via HAL.
+func (t *HALSatTransport) Wake(ctx context.Context) error {
+	return fmt.Errorf("wake not supported via HAL")
+}
+
 // Close stops the SSE subscription.
 func (t *HALSatTransport) Close() error {
 	if t.cancel != nil {
