@@ -97,7 +97,12 @@ function signalDot(node) {
 
 
 // ── Computed: Iridium panel ──
-const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
+const iridiumGw = computed(() => {
+  const gws = store.gateways || []
+  // Prefer whichever Iridium gateway is connected (9704 IMT or 9603 SBD)
+  return gws.find(g => (g.type === 'iridium' || g.type === 'iridium_imt') && g.connected)
+    || gws.find(g => g.type === 'iridium' || g.type === 'iridium_imt')
+})
 const satModemModel = computed(() => store.satModem?.model || '')
 const satModemIMEI = computed(() => store.satModem?.imei || '')
 const iridiumWidgetTitle = computed(() => {
