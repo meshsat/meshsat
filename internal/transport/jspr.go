@@ -111,12 +111,46 @@ func (c *jsprConn) sendRequest(method, target string, payload interface{}) (*jsp
 		return nil, fmt.Errorf("jspr: marshal payload: %w", err)
 	}
 
-	line := fmt.Sprintf("%s %s %s\r", method, target, string(jsonBytes))
+	// The RockBLOCK 9704 firmware's JSON parser requires spaces after colons
+	// and commas, matching the format used by the official C library (snprintf
+	// with "key": value). Go's json.Marshal produces compact JSON without
+	// spaces, which the modem rejects with 407 BAD_JSON.
+	jsonStr := jsprSpacedJSON(jsonBytes)
+	line := fmt.Sprintf("%s %s %s\r", method, target, jsonStr)
 	if _, err := c.port.Write([]byte(line)); err != nil {
 		return nil, fmt.Errorf("jspr: write: %w", err)
 	}
 
 	return c.readResponseFor(target, jsprResponseTimeout)
+}
+
+// jsprSpacedJSON adds spaces after colons and commas in JSON to match the
+// official RockBLOCK-9704 C library format. The modem firmware's parser
+// rejects compact JSON (407 BAD_JSON). Safe for all JSPR payloads since
+// values never contain bare colons or commas (strings are quoted, base64
+// uses [A-Za-z0-9+/=]).
+func jsprSpacedJSON(data []byte) string {
+	s := string(data)
+	// Only process non-empty objects — leave "{}" as-is
+	if s == "{}" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	inString := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '"' && (i == 0 || s[i-1] != '\\') {
+			inString = !inString
+		}
+		b.WriteByte(ch)
+		if !inString {
+			if ch == ':' || ch == ',' {
+				b.WriteByte(' ')
+			}
+		}
+	}
+	return b.String()
 }
 
 // readResponseFor reads serial data until a response matching the target is found.
@@ -560,9 +594,15 @@ func (c *jsprConn) jsprBegin() error {
 	}
 
 	if apiResp.ActiveVersion == nil {
-		// Set API version to v1.0.0
+		// Select the first supported version (matching the official C library which
+		// uses supportedVersions[0]). Fall back to v1.0.0 if the list is empty.
+		ver := jsprAPIVersion{Major: 1, Minor: 0, Patch: 0}
+		if len(apiResp.SupportedVersions) > 0 {
+			ver = apiResp.SupportedVersions[0]
+		}
+		log.Debug().Int("major", ver.Major).Int("minor", ver.Minor).Int("patch", ver.Patch).Msg("jspr: setting API version")
 		putResp, err := c.sendRequest("PUT", "apiVersion", jsprAPIVersionPut{
-			ActiveVersion: jsprAPIVersion{Major: 1, Minor: 0, Patch: 0},
+			ActiveVersion: ver,
 		})
 		if err != nil {
 			return fmt.Errorf("jspr begin: set apiVersion: %w", err)
