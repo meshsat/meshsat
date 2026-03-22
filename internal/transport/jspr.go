@@ -141,6 +141,13 @@ func (c *jsprConn) readResponseFor(target string, timeout time.Duration) (*jsprR
 		if resp.Target == target {
 			return resp, nil
 		}
+		// Error responses (code >= 400) may use a generic target like "MALFORMED"
+		// instead of echoing the requested target. Accept them so the caller can
+		// fail fast and retry, rather than waiting for timeout.
+		if resp.Code >= 400 {
+			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Str("expected", target).Msg("jspr: accepting error response with mismatched target")
+			return resp, nil
+		}
 		// Mismatched target — discard and continue
 		log.Debug().Str("expected", target).Str("got", resp.Target).Msg("jspr: discarding mismatched response")
 	}
@@ -513,21 +520,43 @@ type jsprProvisioningResponse struct {
 // ============================================================================
 
 // jsprBegin initialises the modem: negotiates API version, configures SIM, sets active state.
+// Matches the handshake sequence from the official RockBLOCK-9704 C library.
 func (c *jsprConn) jsprBegin() error {
 	c.drainSerial()
+	time.Sleep(5 * time.Millisecond) // settling time after drain (per official library)
 
-	// 1. Negotiate API version
-	resp, err := c.sendRequest("GET", "apiVersion", struct{}{})
-	if err != nil {
-		return fmt.Errorf("jspr begin: get apiVersion: %w", err)
-	}
-	if resp.Code != jsprCodeOK {
-		return fmt.Errorf("jspr begin: apiVersion returned code %d", resp.Code)
-	}
-
+	// 1. Negotiate API version — retry up to 3 times with delay (official library does 2).
+	//    The modem may respond with "403 MALFORMED" on the first attempt if it is
+	//    still processing bootInfo or has stale data from a prior probe session.
 	var apiResp jsprAPIVersionResponse
-	if err := json.Unmarshal(resp.JSON, &apiResp); err != nil {
-		return fmt.Errorf("jspr begin: parse apiVersion: %w", err)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(5 * time.Millisecond)
+			c.drainSerial() // clear any stale data between retries
+		}
+
+		resp, err := c.sendRequest("GET", "apiVersion", struct{}{})
+		if err != nil {
+			lastErr = fmt.Errorf("attempt %d: %w", attempt+1, err)
+			log.Debug().Err(err).Int("attempt", attempt+1).Msg("jspr: GET apiVersion failed, retrying")
+			continue
+		}
+		if resp.Code != jsprCodeOK {
+			lastErr = fmt.Errorf("attempt %d: code %d (target=%s)", attempt+1, resp.Code, resp.Target)
+			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Int("attempt", attempt+1).Msg("jspr: GET apiVersion error, retrying")
+			continue
+		}
+
+		if err := json.Unmarshal(resp.JSON, &apiResp); err != nil {
+			lastErr = fmt.Errorf("attempt %d: parse: %w", attempt+1, err)
+			continue
+		}
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		return fmt.Errorf("jspr begin: get apiVersion: %w", lastErr)
 	}
 
 	if apiResp.ActiveVersion == nil {
