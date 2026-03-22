@@ -1,6 +1,5 @@
 # MeshSat
 
-[![Pipeline](https://gitlab.nuclearlighters.net/products/cubeos/meshsat/badges/main/pipeline.svg)](https://gitlab.nuclearlighters.net/products/cubeos/meshsat/-/pipelines)
 ![Go 1.24+](https://img.shields.io/badge/go-1.24+-blue)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 ![Docker: ghcr.io/cubeos-app/meshsat](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)
