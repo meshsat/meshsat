@@ -67,17 +67,41 @@ func main() {
 	case "direct":
 		// Direct serial — talk to USB devices without HAL.
 		// DeviceSupervisor handles discovery, identification, and auto-reconnect.
-		directMesh := transport.NewDirectMeshTransport(cfg.MeshtasticPort)
+		// Transports are created with empty port ("") so they don't run their own
+		// auto-detect — the supervisor assigns ports via SetPort() callbacks.
+		// Only use explicit ports if the user set a non-"auto" value.
+		meshPort := cfg.MeshtasticPort
+		if meshPort == "auto" {
+			meshPort = ""
+		}
+		imtPort := cfg.IMTPort
+		if imtPort == "auto" {
+			imtPort = ""
+		}
+		iridiumPort := cfg.IridiumPort
+		if iridiumPort == "auto" {
+			iridiumPort = ""
+		}
+		cellPort := cfg.CellularPort
+		if cellPort == "auto" {
+			cellPort = ""
+		}
+		astroPort := cfg.AstrocastPort
+		if astroPort == "auto" {
+			astroPort = ""
+		}
+
+		directMesh := transport.NewDirectMeshTransport(meshPort)
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		mesh = directMesh
 
-		directIMT := transport.NewDirectIMTTransport(cfg.IMTPort)
-		directSat := transport.NewDirectSatTransport(cfg.IridiumPort)
+		directIMT := transport.NewDirectIMTTransport(imtPort)
+		directSat := transport.NewDirectSatTransport(iridiumPort)
 		if cfg.IridiumSleepPin > 0 {
 			directSat.SetSleepPin(cfg.IridiumSleepPin)
 		}
 
-		directCell := transport.NewDirectCellTransport(cfg.CellularPort)
+		directCell := transport.NewDirectCellTransport(cellPort)
 		directCell.SetSIMCardLookup(
 			func(iccid string) (*transport.SIMCardInfo, error) {
 				sim, err := db.GetSIMCardByICCID(iccid)
@@ -93,7 +117,7 @@ func main() {
 		)
 		cell = directCell
 
-		directAstro := transport.NewDirectAstrocastTransport(cfg.AstrocastPort)
+		directAstro := transport.NewDirectAstrocastTransport(astroPort)
 		astro = directAstro
 
 		// DeviceSupervisor: replaces one-shot auto-detect with continuous
