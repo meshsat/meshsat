@@ -45,18 +45,22 @@ type MeshNode struct {
 
 // MeshMessage represents a decoded mesh packet.
 type MeshMessage struct {
-	From        uint32  `json:"from"`
-	To          uint32  `json:"to"`
-	Channel     uint32  `json:"channel"`
-	ID          uint32  `json:"id"`
-	PortNum     int     `json:"portnum"`
-	PortNumName string  `json:"portnum_name"`
-	DecodedText string  `json:"decoded_text"`
-	RxTime      int64   `json:"rx_time"`
-	RxSNR       float32 `json:"rx_snr"`
-	HopLimit    int     `json:"hop_limit"`
-	HopStart    int     `json:"hop_start"`
-	Timestamp   string  `json:"timestamp"`
+	From        uint32       `json:"from"`
+	To          uint32       `json:"to"`
+	Channel     uint32       `json:"channel"`
+	ID          uint32       `json:"id"`
+	PortNum     int          `json:"portnum"`
+	PortNumName string       `json:"portnum_name"`
+	DecodedText string       `json:"decoded_text"`
+	RxTime      int64        `json:"rx_time"`
+	RxSNR       float32      `json:"rx_snr"`
+	HopLimit    int          `json:"hop_limit"`
+	HopStart    int          `json:"hop_start"`
+	Timestamp   string       `json:"timestamp"`
+	RequestID   uint32       `json:"request_id,omitempty"` // correlates ACK/NAK to original request
+	ReplyID     uint32       `json:"reply_id,omitempty"`   // correlates response to request
+	ViaMqtt     bool         `json:"via_mqtt,omitempty"`   // packet was relayed via MQTT
+	Routing     *RoutingInfo `json:"routing,omitempty"`    // parsed ROUTING_APP data (ACK/NAK/error)
 
 	// RawPayload carries the binary payload for non-text portnums (e.g. PRIVATE_APP).
 	// Used by the routing subsystem to process announce, link, and keepalive packets.

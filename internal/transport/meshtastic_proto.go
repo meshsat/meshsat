@@ -23,6 +23,7 @@ const (
 	PortNumTextMessage  = 1
 	PortNumPosition     = 3
 	PortNumNodeInfo     = 4
+	PortNumRouting      = 5
 	PortNumAdminApp     = 6
 	PortNumWaypoint     = 8
 	PortNumSerial       = 64
@@ -33,6 +34,93 @@ const (
 	PortNumNeighborInfo = 71
 	PortNumPrivate      = 256
 )
+
+// Routing error reasons (from meshtastic/protobufs mesh.proto Routing.Error)
+const (
+	RoutingErrorNone          = 0
+	RoutingErrorNoRoute       = 1
+	RoutingErrorGotNAK        = 2
+	RoutingErrorTimeout       = 3
+	RoutingErrorNoInterface   = 4
+	RoutingErrorMaxRetransmit = 5
+	RoutingErrorNoChannel     = 6
+	RoutingErrorTooLarge      = 7
+	RoutingErrorNoResponse    = 8
+	RoutingErrorDutyCycle     = 9
+	RoutingErrorBadRequest    = 32
+	RoutingErrorNotAuthorized = 33
+)
+
+// RoutingInfo holds parsed ROUTING_APP data (ACK/NAK/error).
+type RoutingInfo struct {
+	ErrorReason uint32 `json:"error_reason"`
+	ErrorName   string `json:"error_name"`
+}
+
+// routingErrorName returns a human-readable name for a routing error.
+func routingErrorName(reason uint32) string {
+	switch reason {
+	case RoutingErrorNone:
+		return "ACK"
+	case RoutingErrorNoRoute:
+		return "NO_ROUTE"
+	case RoutingErrorGotNAK:
+		return "GOT_NAK"
+	case RoutingErrorTimeout:
+		return "TIMEOUT"
+	case RoutingErrorNoInterface:
+		return "NO_INTERFACE"
+	case RoutingErrorMaxRetransmit:
+		return "MAX_RETRANSMIT"
+	case RoutingErrorNoChannel:
+		return "NO_CHANNEL"
+	case RoutingErrorTooLarge:
+		return "TOO_LARGE"
+	case RoutingErrorNoResponse:
+		return "NO_RESPONSE"
+	case RoutingErrorDutyCycle:
+		return "DUTY_CYCLE_LIMIT"
+	case RoutingErrorBadRequest:
+		return "BAD_REQUEST"
+	case RoutingErrorNotAuthorized:
+		return "NOT_AUTHORIZED"
+	default:
+		return fmt.Sprintf("UNKNOWN_%d", reason)
+	}
+}
+
+// parseRouting parses a ROUTING_APP payload (protobuf Routing message).
+// Field 1 (route_request): ignored (unused in current firmware)
+// Field 2 (route_reply): ignored
+// Field 3 (error_reason): varint — the routing error code
+func parseRouting(data []byte) *RoutingInfo {
+	info := &RoutingInfo{}
+	pos := 0
+	for pos < len(data) {
+		fieldNum, wireType, newPos, err := readTag(data, pos)
+		if err != nil {
+			break
+		}
+		pos = newPos
+
+		switch fieldNum {
+		case 3: // error_reason (varint)
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				break
+			}
+			info.ErrorReason = uint32(val)
+			pos += n
+		default:
+			pos = skipField(data, pos, wireType)
+			if pos < 0 {
+				break
+			}
+		}
+	}
+	info.ErrorName = routingErrorName(info.ErrorReason)
+	return info
+}
 
 // Admin message field numbers
 const (
@@ -95,6 +183,8 @@ func portNumName(pn int) string {
 		return "POSITION_APP"
 	case PortNumNodeInfo:
 		return "NODEINFO_APP"
+	case PortNumRouting:
+		return "ROUTING_APP"
 	case PortNumAdminApp:
 		return "ADMIN_APP"
 	case PortNumWaypoint:
@@ -230,7 +320,9 @@ type ProtoMeshPacket struct {
 	RxSNR     float32
 	RxRSSI    int32
 	HopLimit  uint32
+	WantAck   bool
 	HopStart  uint32
+	ViaMqtt   bool // field 14 — set when packet was relayed via MQTT
 }
 
 // ProtoData represents a decoded Data submessage.
@@ -238,6 +330,8 @@ type ProtoData struct {
 	PortNum      uint32
 	Payload      []byte
 	WantResponse bool
+	RequestID    uint32 // field 6 — correlates ACK/NAK to original request
+	ReplyID      uint32 // field 7 — correlates response to request
 }
 
 // ProtoMyNodeInfo represents my_info from config download.
@@ -443,12 +537,26 @@ func parseMeshPacket(data []byte) (*ProtoMeshPacket, error) {
 			}
 			pkt.HopLimit = uint32(val)
 			pos += n
+		case 10: // want_ack (bool varint)
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return pkt, nil
+			}
+			pkt.WantAck = val != 0
+			pos += n
 		case 12: // rx_rssi (int32 varint)
 			val, n := readVarint(data, pos)
 			if n <= 0 {
 				return pkt, nil
 			}
 			pkt.RxRSSI = int32(val)
+			pos += n
+		case 14: // via_mqtt (bool varint)
+			val, n := readVarint(data, pos)
+			if n <= 0 {
+				return pkt, nil
+			}
+			pkt.ViaMqtt = val != 0
 			pos += n
 		case 15: // hop_start (varint)
 			val, n := readVarint(data, pos)
@@ -500,6 +608,18 @@ func parseData(data []byte) (*ProtoData, error) {
 			}
 			d.WantResponse = val != 0
 			pos += n
+		case 6: // request_id (fixed32)
+			if pos+4 > len(data) {
+				return d, nil
+			}
+			d.RequestID = binary.LittleEndian.Uint32(data[pos : pos+4])
+			pos += 4
+		case 7: // reply_id (fixed32)
+			if pos+4 > len(data) {
+				return d, nil
+			}
+			d.ReplyID = binary.LittleEndian.Uint32(data[pos : pos+4])
+			pos += 4
 		default:
 			pos = skipField(data, pos, wireType)
 			if pos < 0 {
@@ -1325,6 +1445,7 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 		RxSNR:    pkt.RxSNR,
 		HopLimit: int(pkt.HopLimit),
 		HopStart: int(pkt.HopStart),
+		ViaMqtt:  pkt.ViaMqtt,
 	}
 	if pkt.RxTime > 0 {
 		msg.RxTime = int64(pkt.RxTime)
@@ -1336,8 +1457,15 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 	if pkt.Decoded != nil {
 		msg.PortNum = int(pkt.Decoded.PortNum)
 		msg.PortNumName = portNumName(int(pkt.Decoded.PortNum))
+		msg.RequestID = pkt.Decoded.RequestID
+		msg.ReplyID = pkt.Decoded.ReplyID
+
 		if pkt.Decoded.PortNum == PortNumTextMessage {
 			msg.DecodedText = string(pkt.Decoded.Payload)
+		}
+		// Parse ROUTING_APP for ACK/NAK/error information
+		if pkt.Decoded.PortNum == PortNumRouting && len(pkt.Decoded.Payload) > 0 {
+			msg.Routing = parseRouting(pkt.Decoded.Payload)
 		}
 		if len(pkt.Decoded.Payload) > 0 {
 			msg.RawPayload = make([]byte, len(pkt.Decoded.Payload))
