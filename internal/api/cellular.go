@@ -14,8 +14,14 @@ import (
 )
 
 func (s *Server) handleGetCellularSignal(w http.ResponseWriter, r *http.Request) {
-	// Try live modem with a short timeout — don't block if serial is busy
+	// Prefer cached signal from background poller — instant, no serial contention.
+	// Only fall through to live AT+CSQ if no cached data exists yet.
 	if s.cellTransport != nil {
+		if fast, err := s.cellTransport.GetSignalFast(r.Context()); err == nil {
+			writeJSON(w, http.StatusOK, fast)
+			return
+		}
+		// No cached data — try live modem with a short timeout
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		signal, err := s.cellTransport.GetSignal(ctx)
