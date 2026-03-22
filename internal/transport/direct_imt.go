@@ -543,6 +543,8 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 }
 
 // signalPoller periodically queries signal strength.
+// On timeout (indoor, no constellation), records 0 bars so the signal history
+// chart gets data points instead of staying empty.
 func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 	defer close(t.sigDone)
 
@@ -556,6 +558,13 @@ func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 		case <-ticker.C:
 			if _, err := t.GetSignal(ctx); err != nil {
 				log.Debug().Err(err).Msg("imt: signal poll failed")
+				// Record 0 bars on timeout so the signal chart has data points.
+				// The official C library returns -1 (no signal) on timeout.
+				now := time.Now().UTC().Format(time.RFC3339)
+				info := SignalInfo{Bars: 0, Timestamp: now, Assessment: "none"}
+				t.signalMu.Lock()
+				t.lastSignal = info
+				t.signalMu.Unlock()
 			}
 		}
 	}

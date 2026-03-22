@@ -124,6 +124,27 @@ func (c *jsprConn) sendRequest(method, target string, payload interface{}) (*jsp
 	return c.readResponseFor(target, jsprResponseTimeout)
 }
 
+// sendRequestWithTimeout is like sendRequest but with a custom timeout.
+// Used for commands like constellationState where the official library
+// uses a 1-second timeout instead of the default 10 seconds.
+func (c *jsprConn) sendRequestWithTimeout(method, target string, payload interface{}, timeout time.Duration) (*jsprResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("jspr: marshal payload: %w", err)
+	}
+
+	jsonStr := jsprSpacedJSON(jsonBytes)
+	line := fmt.Sprintf("%s %s %s\r", method, target, jsonStr)
+	if _, err := c.port.Write([]byte(line)); err != nil {
+		return nil, fmt.Errorf("jspr: write: %w", err)
+	}
+
+	return c.readResponseFor(target, timeout)
+}
+
 // jsprSpacedJSON adds spaces after colons and commas in JSON to match the
 // official RockBLOCK-9704 C library format. The modem firmware's parser
 // rejects compact JSON (407 BAD_JSON). Safe for all JSPR payloads since
@@ -683,8 +704,10 @@ func (c *jsprConn) jsprGetHWInfo() (*jsprHWInfo, error) {
 }
 
 // jsprGetSignal queries constellation/signal state.
+// Uses a 2-second timeout matching the official C library's 1-second timeout
+// for this command. The modem may not respond when no constellation is visible.
 func (c *jsprConn) jsprGetSignal() (*jsprConstellationState, error) {
-	resp, err := c.sendRequest("GET", "constellationState", struct{}{})
+	resp, err := c.sendRequestWithTimeout("GET", "constellationState", struct{}{}, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}
