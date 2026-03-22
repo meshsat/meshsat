@@ -186,14 +186,28 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 	for _, port := range activePorts {
 		activeSet[port] = true
 
-		// Already in registry? Just update LastSeen.
-		if existing := s.registry.FindByRole(RoleNone); existing != nil && existing.DevPath == port {
-			// Already known
-			continue
-		}
-
 		vidpid := findUSBVIDPID(port)
 		usbSerial := FindUSBSerial(port)
+
+		// Check if port already exists in registry
+		existing := s.registry.FindByPort(port)
+		if existing != nil {
+			// Port exists — check if the device changed (VID:PID swap).
+			// If the VID:PID changed, a different device was plugged into the same port.
+			// Release the old claim and re-identify.
+			if existing.VIDPID != "" && vidpid != "" && existing.VIDPID != vidpid {
+				log.Info().Str("port", port).Str("old_vidpid", existing.VIDPID).Str("new_vidpid", vidpid).
+					Str("old_role", string(existing.Role)).Msg("device-supervisor: device swapped on port, re-identifying")
+				if existing.Role != RoleNone {
+					s.notifyPortLost(existing.Role, port)
+				}
+				s.registry.Remove(port)
+				// Fall through to register as new
+			} else {
+				// Same device, update LastSeen
+				continue
+			}
+		}
 
 		entry := SerialDeviceEntry{
 			DevPath:   port,
@@ -244,17 +258,20 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 		activeSet[p] = true
 	}
 
-	// Prune: check claimed ports that vanished
+	// Prune: check claimed ports that vanished — notify driver and remove from registry.
+	// Full removal (not just state change) ensures a different device on the same port
+	// will be identified fresh instead of inheriting the old role.
 	for _, entry := range s.registry.ListAll() {
-		if entry.DevPath != "" && entry.Role != RoleNone && !activeSet[entry.DevPath] {
-			s.registry.SetState(entry.DevPath, StateDisconnected)
-			s.registry.ReleasePort(entry.DevPath)
-			s.notifyPortLost(entry.Role, entry.DevPath)
+		if entry.DevPath != "" && !activeSet[entry.DevPath] {
+			if entry.Role != RoleNone {
+				s.notifyPortLost(entry.Role, entry.DevPath)
+				log.Info().Str("port", entry.DevPath).Str("role", string(entry.Role)).Msg("device-supervisor: serial port vanished")
+			}
+			s.registry.Remove(entry.DevPath)
 			s.emitEvent(DeviceEvent{
 				Type:   "device_disconnected",
 				Device: entry,
 			})
-			log.Info().Str("port", entry.DevPath).Str("role", string(entry.Role)).Msg("device-supervisor: serial port vanished")
 		}
 	}
 
@@ -447,6 +464,9 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 }
 
 // reconnectDisconnected checks if any role lost its port but the port reappeared.
+// IMPORTANT: Re-verifies VID:PID before reconnecting — a different device may have
+// been plugged into the same port. If VID:PID changed, the old entry is removed
+// and the port will be re-identified in the next reconcile cycle.
 func (s *DeviceSupervisor) reconnectDisconnected() {
 	for _, entry := range s.registry.ListAll() {
 		if entry.State != StateDisconnected {
@@ -466,7 +486,25 @@ func (s *DeviceSupervisor) reconnectDisconnected() {
 				break
 			}
 		}
-		if found && entry.Role != RoleNone {
+		if !found {
+			continue
+		}
+
+		// Port reappeared — verify it's the same device by checking VID:PID.
+		// If the VID:PID changed (different device on same port), remove the
+		// stale entry and let the identify cascade handle it fresh.
+		currentVIDPID := findUSBVIDPID(entry.DevPath)
+		if entry.VIDPID != "" && currentVIDPID != "" && entry.VIDPID != currentVIDPID {
+			log.Info().Str("port", entry.DevPath).
+				Str("old_vidpid", entry.VIDPID).Str("new_vidpid", currentVIDPID).
+				Str("old_role", string(entry.Role)).
+				Msg("device-supervisor: port reappeared with different device, re-identifying")
+			s.registry.Remove(entry.DevPath)
+			continue // will be picked up as new device in next scan
+		}
+
+		// Same device (or platform UART with no VID:PID) — reconnect
+		if entry.Role != RoleNone {
 			s.registry.SetState(entry.DevPath, StateReady)
 			log.Info().Str("port", entry.DevPath).Str("role", string(entry.Role)).Msg("device-supervisor: port reappeared, reconnecting")
 			s.notifyPortFound(entry.Role, entry.DevPath)

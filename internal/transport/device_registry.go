@@ -133,6 +133,18 @@ func (r *DeviceRegistry) GetPortRole(devPath string) DeviceRole {
 	return r.claims[devPath]
 }
 
+// FindByPort returns the device entry for a specific port path, or nil.
+func (r *DeviceRegistry) FindByPort(devPath string) *SerialDeviceEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if entry, exists := r.devices[devPath]; exists {
+		e := *entry
+		return &e
+	}
+	return nil
+}
+
 // FindByRole returns the first device with a given role, or nil.
 func (r *DeviceRegistry) FindByRole(role DeviceRole) *SerialDeviceEntry {
 	r.mu.RLock()
