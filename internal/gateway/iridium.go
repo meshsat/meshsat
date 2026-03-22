@@ -527,19 +527,22 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 			continue
 		}
 
-		// Pre-check: if MO buffer is empty, the ISU already transmitted this message
-		// autonomously (e.g. after mo_status=32 the ISU retried on its own).
-		// SBDSX is free (no satellite session, no credits).
-		if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
-			if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
-				log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+		// Pre-check: if MO buffer is empty AND we previously loaded it (retries > 0),
+		// the ISU already transmitted this message autonomously (e.g. after mo_status=32
+		// the ISU retried on its own). SBDSX is free (no satellite session, no credits).
+		// Skip this check on first attempt — the buffer is naturally empty before we load it.
+		if dl.Retries > 0 {
+			if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
+				if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+					log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+				}
+				g.dlqPending.Add(-1)
+				g.msgsOut.Add(1)
+				g.lastActive.Store(time.Now().Unix())
+				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+					Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
+				continue
 			}
-			g.dlqPending.Add(-1)
-			g.msgsOut.Add(1)
-			g.lastActive.Store(time.Now().Unix())
-			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
-				Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
-			continue
 		}
 
 		result, err := g.sat.Send(ctx, dl.Payload)
@@ -722,19 +725,22 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 			continue
 		}
 
-		// Pre-check: if MO buffer is empty, the ISU already transmitted this message
-		// autonomously (e.g. after mo_status=32 the ISU retried on its own).
-		if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
-			if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
-				log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+		// Pre-check: if MO buffer is empty AND we previously loaded it (retries > 0),
+		// the ISU already transmitted this message autonomously.
+		// Skip on first attempt — buffer is naturally empty before first load.
+		if dl.Retries > 0 {
+			if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
+				if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+					log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+				}
+				g.dlqPending.Add(-1)
+				g.msgsOut.Add(1)
+				g.lastActive.Store(time.Now().Unix())
+				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+					Str("mode", g.getTimingParams().ModeName).
+					Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
+				continue
 			}
-			g.dlqPending.Add(-1)
-			g.msgsOut.Add(1)
-			g.lastActive.Store(time.Now().Unix())
-			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
-				Str("mode", g.getTimingParams().ModeName).
-				Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
-			continue
 		}
 
 		result, err := g.sat.Send(ctx, dl.Payload)
