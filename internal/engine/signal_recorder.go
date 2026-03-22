@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,9 +11,10 @@ import (
 	"meshsat/internal/transport"
 )
 
-// SignalRecorder subscribes to HAL Iridium SSE events and persists signal bar
-// readings to the signal_history table. It also runs a daily pruner to remove
-// entries older than 90 days.
+// SignalRecorder polls the satellite transport for signal readings and persists
+// them to the signal_history table. Uses GetSignalFast (non-blocking cached read)
+// so it works alongside the gateway's Subscribe without conflicting goroutines.
+// Also runs a daily pruner to remove entries older than 90 days.
 type SignalRecorder struct {
 	db  *database.DB
 	sat transport.SatTransport
@@ -28,12 +28,12 @@ func NewSignalRecorder(db *database.DB, sat transport.SatTransport) *SignalRecor
 	return &SignalRecorder{db: db, sat: sat}
 }
 
-// Start launches the SSE subscription loop and daily pruner.
+// Start launches the signal polling loop and daily pruner.
 func (sr *SignalRecorder) Start(ctx context.Context) {
 	ctx, sr.cancel = context.WithCancel(ctx)
 
 	sr.wg.Add(2)
-	go sr.subscribeLoop(ctx)
+	go sr.pollLoop(ctx)
 	go sr.dailyPruner(ctx)
 
 	log.Info().Msg("signal recorder started")
@@ -48,68 +48,39 @@ func (sr *SignalRecorder) Stop() {
 	log.Info().Msg("signal recorder stopped")
 }
 
-func (sr *SignalRecorder) subscribeLoop(ctx context.Context) {
+// pollLoop periodically reads the cached signal from the transport and records
+// it to the database. Uses GetSignalFast which returns the last polled value
+// without issuing serial commands — safe to call regardless of transport state.
+func (sr *SignalRecorder) pollLoop(ctx context.Context) {
 	defer sr.wg.Done()
-	backoff := time.Second
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	var lastBars int = -1
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
-
-		start := time.Now()
-		err := sr.readSignals(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-
-		// Reset backoff if connection lasted > 10s
-		if time.Since(start) > 10*time.Second {
-			backoff = time.Second
-		}
-
-		if err != nil {
-			log.Warn().Err(err).Dur("backoff", backoff).Msg("signal recorder: SSE disconnected, reconnecting")
-		}
-
-		// Exponential backoff capped at 2 minutes
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > 2*time.Minute {
-			backoff = 2 * time.Minute
-		}
-	}
-}
-
-func (sr *SignalRecorder) readSignals(ctx context.Context) error {
-	events, err := sr.sat.Subscribe(ctx)
-	if err != nil {
-		return err
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case ev, ok := <-events:
-			if !ok {
-				return nil
+		case <-ticker.C:
+			sig, err := sr.sat.GetSignalFast(ctx)
+			if err != nil || sig == nil {
+				continue // transport not connected yet
 			}
-			if ev.Type == "disconnected" {
-				return fmt.Errorf("modem disconnected")
+			// Only record when we have a valid reading (timestamp set)
+			if sig.Timestamp == "" {
+				continue
 			}
-			// Only record "signal" events that carry bar count
-			if ev.Type == "signal" && ev.Signal >= 0 {
-				ts := time.Now().Unix()
-				if err := sr.db.InsertSignalHistory("iridium", ts, float64(ev.Signal)); err != nil {
-					log.Warn().Err(err).Msg("signal recorder: insert failed")
-				}
+			// Record every reading (even if same as last) for history chart continuity
+			ts := time.Now().Unix()
+			if err := sr.db.InsertSignalHistory("iridium", ts, float64(sig.Bars)); err != nil {
+				log.Warn().Err(err).Msg("signal recorder: insert failed")
+				continue
+			}
+			if sig.Bars != lastBars {
+				log.Debug().Int("bars", sig.Bars).Msg("signal recorder: recorded")
+				lastBars = sig.Bars
 			}
 		}
 	}
