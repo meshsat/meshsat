@@ -5,9 +5,11 @@
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 ![Docker: ghcr.io/cubeos-app/meshsat](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)
 
-MeshSat is a multi-transport mesh and satellite gateway that bridges Meshtastic LoRa networks to satellite, cellular, and data channels. Eight transport types -- Meshtastic LoRa, Iridium SBD, Astrocast LEO, Cellular SMS, ZigBee, MQTT, Webhooks, and direct serial -- are all available as routing destinations. Access rules route messages between any pair of interfaces with per-rule filtering, failover groups, and transform pipelines.
+MeshSat is a multi-transport mesh and satellite gateway that bridges Meshtastic LoRa networks to satellite, cellular, and tactical data channels. Eleven transport types -- Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704), Astrocast LEO, Cellular SMS, ZigBee, MQTT, Webhooks, APRS, TAK, and direct serial -- are all available as routing destinations. Access rules route messages between any pair of interfaces with per-rule filtering, failover groups, and transform pipelines.
 
 MeshSat runs as a standalone Docker container on any Linux machine with USB-connected devices. No cloud dependencies, no subscriptions beyond your satellite or cellular plan.
+
+For multi-tenant fleet management, see [MeshSat Hub](https://hub.meshsat.net).
 
 ## Dashboard
 
@@ -21,21 +23,24 @@ optimizes transmission timing in obstructed environments*
 
 ## Features
 
-- **8 transports:** Meshtastic LoRa, Iridium SBD, Astrocast LEO, Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, direct serial
+- **11 transports:** Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704, 100 KB messages), Astrocast LEO, Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, APRS (Direwolf KISS), TAK (CoT XML), direct serial
 - **3 compression tiers:** SMAZ2 (lossless, <1ms), llama-zip (LLM-based lossless, ~200ms), MSVQ-SC (lossy semantic, rate-adaptive)
-- **Reticulum-inspired routing** with Ed25519 identity, cryptographic announce broadcasting, link management, and keepalive
+- **Reticulum-inspired routing** with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking, TCP/HDLC interface for RNS interop, and resource transfers with chunked reliable delivery
 - **Transform pipelines** per interface: compress (zstd, SMAZ2) + encrypt (AES-256-GCM) + encode (base64)
 - **Channel registry** with self-describing adapters and MTU awareness
 - **Dispatcher** with failover groups, delivery ledger, per-channel workers, and visited-set loop prevention
 - **Access rules engine** with object groups (node, portnum, sender, contact), rate limiting, and implicit deny
+- **DeviceSupervisor** with USB hotplug detection, VID:PID identification cascade, and claim-based port management
+- **Field intelligence:** Dead Man's Switch, geofence alerts, channel health scores, satellite burst queue, mesh topology visualization
 - **Config export/import** in YAML format (Cisco `show running-config` style)
-- **Web dashboard** (Vue.js SPA, 11 views) for monitoring, sending messages, and managing devices
-- **REST API** with 106+ endpoints for integration
+- **Web dashboard** (Vue.js SPA, 13 views) for monitoring, sending messages, radio configuration, mesh topology, and device management
+- **REST API** with 280+ endpoints for integration
 - **Ed25519 signing service** with hash-chain audit log for tamper detection
 - **Auto-detects** USB devices on startup via VID:PID tables and protocol probing
 - **Satellite pass prediction** using SGP4/TLE propagation with signal correlation
 - **Android companion app** ([meshsat-android](https://github.com/cubeos-app/meshsat-android)) with BLE mesh, SPP Iridium, SMS, MSVQ-SC, and AES-GCM
-- Runs on ARM64 (Raspberry Pi 5/4) and x86_64
+- **Multi-tenant fleet management** via [MeshSat Hub](https://hub.meshsat.net) (separate product)
+- Runs on ARM64 (Raspberry Pi 5/4, BananaPi) and x86_64
 
 ## Hardware
 
@@ -61,6 +66,7 @@ All devices are auto-detected on startup.*
 | | Lilygo T-Deck | Tested | ESP32-S3, keyboard, screen |
 | | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
 | **Satellite** | RockBLOCK 9603 (Iridium 9603N) | Tested | SBD protocol, 340-byte MO, 19200 baud, UART or RS-232 |
+| | RockBLOCK 9704 (Iridium IMT) | Tested | JSPR protocol, 100 KB messages, 230400 baud, FTDI USB |
 | | Astrocast Astronode S | Code complete | ASCII hex frame protocol, fragmentation, pass prediction |
 | **Cellular** | LILYGO T-Call A7670 (A7670E LTE) | Tested | 4G LTE / 2G GSM, AT commands, SMS + data |
 | | SIM7600G-H (4G LTE) | Tested | USB modem, AT commands, SMS + data |
@@ -141,7 +147,7 @@ Use one of the methods above. MeshSat will scan USB devices, connect to each one
 
 ### Step 3: Open the dashboard
 
-Navigate to `http://<your-ip>:6050`. The dashboard provides 11 views: Dashboard, Messages, Nodes, Map, Passes, Bridge, Interfaces, Settings, Audit, Help, and About.
+Navigate to `http://<your-ip>:6050`. The dashboard provides 13 views: Dashboard, Messages, Nodes, Map, Passes, Bridge, Interfaces, Radio Config, Topology, Settings, Audit, Help, and About.
 
 ### Step 4: Set up access rules
 
@@ -153,22 +159,61 @@ Send a test message from your Meshtastic device. If access rules are configured,
 
 ## Configuration
 
-All configuration is via environment variables:
+All configuration is via environment variables. MeshSat works fine with just a single device connected -- missing devices are logged as warnings.
+
+**Core:**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MESHSAT_MODE` | `cubeos` | Set to `direct` for standalone USB access |
 | `MESHSAT_PORT` | `6050` | HTTP port for dashboard and API |
 | `MESHSAT_DB_PATH` | `/data/meshsat.db` | SQLite database file path |
-| `MESHSAT_MESHTASTIC_PORT` | `auto` | Serial port for Meshtastic (`auto` = scan USB) |
-| `MESHSAT_IRIDIUM_PORT` | `auto` | Serial port for Iridium (`auto` = scan USB) |
-| `MESHSAT_CELLULAR_PORT` | `auto` | Serial port for cellular modem (`auto` = scan USB) |
-| `MESHSAT_ZIGBEE_PORT` | `auto` | Serial port for ZigBee coordinator (`auto` = scan USB) |
 | `MESHSAT_RETENTION_DAYS` | `30` | Days to keep historical data |
-| `MESHSAT_PAID_RATE_LIMIT` | `60` | Minimum seconds between paid gateway sends |
 | `MESHSAT_WEB_DIR` | *(empty)* | Override embedded SPA path (development only) |
 
-MeshSat works fine with just a single device connected. Missing devices are logged as warnings.
+**Serial ports** (`auto` = scan USB via VID:PID + protocol probing):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESHSAT_MESHTASTIC_PORT` | `auto` | Meshtastic radio serial port |
+| `MESHSAT_IRIDIUM_PORT` | `auto` | Iridium 9603N (SBD) serial port |
+| `MESHSAT_IMT_PORT` | `auto` | RockBLOCK 9704 (IMT/JSPR) serial port |
+| `MESHSAT_CELLULAR_PORT` | `auto` | Cellular modem serial port |
+| `MESHSAT_ASTROCAST_PORT` | `auto` | Astrocast Astronode serial port |
+| `MESHSAT_ZIGBEE_PORT` | `auto` | ZigBee coordinator serial port |
+
+**Iridium 9603N:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESHSAT_IRIDIUM_SLEEP_PIN` | `0` | GPIO pin for 9603N sleep/wake (0 = disabled) |
+| `IRIDIUM_SBDIX_TIMEOUT` | `90` | SBDIX AT command timeout in seconds |
+
+**Rate limiting & routing:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESHSAT_PAID_RATE_LIMIT` | `60` | Minimum seconds between paid satellite sends |
+| `MESHSAT_MAX_HOPS` | `8` | Maximum interfaces a message may traverse |
+| `MESHSAT_MESH_WATCHDOG_MIN` | `10` | Minutes of silence before Meshtastic serial reconnect (0 = disabled) |
+
+**Compression sidecars:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESHSAT_LLAMAZIP_ADDR` | *(empty)* | llama-zip gRPC sidecar address (empty = disabled) |
+| `MESHSAT_LLAMAZIP_TIMEOUT` | `30` | llama-zip RPC timeout in seconds |
+| `MESHSAT_MSVQSC_ADDR` | *(empty)* | MSVQ-SC gRPC sidecar address (empty = disabled) |
+| `MESHSAT_MSVQSC_TIMEOUT` | `30` | MSVQ-SC RPC timeout in seconds |
+| `MESHSAT_MSVQSC_CODEBOOK` | *(empty)* | Path to MSVQ-SC codebook file (enables pure-Go decode) |
+
+**Reticulum TCP interface:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESHSAT_TCP_LISTEN` | *(empty)* | TCP listen address for RNS interop (e.g. `:4242`) |
+| `MESHSAT_TCP_CONNECT` | *(empty)* | TCP remote RNS node address |
+| `MESHSAT_ANNOUNCE_INTERVAL` | `300` | Routing announce broadcast interval in seconds |
 
 ## Deployment Modes
 
@@ -184,51 +229,65 @@ For CubeOS mode, see [CubeOS docs](https://cubeos.app).
 ## Architecture
 
 ```
-USB Devices             MeshSat Container                        Clients
------------      -----------------------------------------      ----------------
-                 |                                         |
-/dev/ttyACM0 -->-|  DirectMeshTransport                     |
-  (Meshtastic)   |    Protobuf binary framing               |-->  Web Dashboard
-                 |                                         |     (Vue 3 SPA, 11 views)
-/dev/ttyUSB0 -->-|  DirectSatTransport (Iridium 9603N)      |
-  (Iridium)      |    AT commands, SBDIX/SBDSX              |-->  REST API
-                 |                                         |     (106+ endpoints)
-/dev/ttyUSB1 -->-|  DirectCellTransport (SIM7600G-H)        |
-  (Cellular)     |    AT commands, SMS, data                |-->  SSE Events
-                 |                                         |     (real-time updates)
-/dev/ttyUSB2 -->-|  DirectZigBeeTransport (CC2652P)         |
-  (ZigBee)       |    Z-Stack ZNP binary protocol           |
-                 |                                         |
-                 |  Compression Pipeline                    |
-                 |    SMAZ2 | llama-zip | MSVQ-SC           |
-                 |                                         |
-                 |  Reticulum Routing                       |
-                 |    Ed25519 identity, announce, links      |
-                 |                                         |
-                 |         InterfaceManager                 |
-                 |           (state machine, USB hotplug)   |
-                 |              |                           |
-                 |         AccessEvaluator                  |
-                 |           (rules, object groups, rates)  |
-                 |              |                           |
-                 |         Dispatcher                       |
-                 |           (delivery workers per iface)   |
-                 |              |                           |
-                 |      TransformPipeline                   |
-                 |        (zstd, smaz2, aes-256-gcm, b64)   |
-                 |              |                           |
-                 |  +---------+---------+---------+------+  |
-                 |  |Iridium  |MQTT     |Cell     |Wbook |  |
-                 |  |Gateway  |Gateway  |Gateway  |GW    |  |
-                 |  +---------+---------+---------+------+  |
-                 |  |Astrocast|ZigBee   |Failover         |  |
-                 |  |Gateway  |Gateway  |Resolver         |  |
-                 |  +---------+---------+-----------------+  |
-                 |                                         |
-                 |  SigningService (Ed25519 hash chain)     |
-                 |  Delivery Ledger (SQLite tracking)       |
-                 |  SQLite DB (/data/meshsat.db, v25)       |
-                 -----------------------------------------
+USB / UART / TCP       MeshSat Container                              Clients
+------------------     -----------------------------------------------  ----------------
+                       |                                             |
+/dev/ttyACM0 -------->-|  DirectMeshTransport (Meshtastic)            |
+  (Meshtastic)         |    Protobuf binary framing                   |->  Web Dashboard
+                       |                                             |    (Vue 3 SPA,
+/dev/ttyUSB0 -------->-|  DirectSatTransport (Iridium 9603N)          |     13 views)
+  (Iridium SBD)        |    AT commands, SBDIX/SBDSX, sleep/wake GPIO |
+                       |                                             |->  REST API
+Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+ endpoints)
+  (Iridium IMT)        |    JSPR protocol, 230400 baud, 100 KB msgs  |
+                       |                                             |->  SSE Events
+/dev/ttyUSB1 -------->-|  DirectCellTransport (A7670E / SIM7600G)     |    (real-time)
+  (Cellular)           |    AT commands, SMS, data                    |
+                       |                                             |
+/dev/ttyUSB2 -------->-|  DirectAstrocastTransport (Astronode S)      |
+  (Astrocast)          |    ASCII hex frames, CRC-16, fragmentation  |
+                       |                                             |
+/dev/ttyUSB3 -------->-|  DirectZigBeeTransport (CC2652P)             |
+  (ZigBee)             |    Z-Stack ZNP binary protocol              |
+                       |                                             |
+                       |  DeviceSupervisor                            |
+                       |    USB hotplug, VID:PID cascade, port claims |
+                       |                                             |
+                       |  Compression Pipeline                        |
+                       |    SMAZ2 | llama-zip | MSVQ-SC              |
+                       |                                             |
+                       |  Reticulum Routing                           |
+                       |    Ed25519 identity, announce relay, links   |
+                       |    TCP/HDLC interface, path discovery        |
+                       |                                             |
+                       |         InterfaceManager                     |
+                       |           (state machine, bind/unbind)       |
+                       |              |                               |
+                       |         AccessEvaluator                      |
+                       |           (rules, object groups, rates)      |
+                       |              |                               |
+                       |         Dispatcher                           |
+                       |           (delivery workers per iface)       |
+                       |              |                               |
+                       |      TransformPipeline                       |
+                       |        (zstd, smaz2, aes-256-gcm, b64)       |
+                       |              |                               |
+                       |  +--------+--------+--------+------+------+  |
+                       |  |Iridium |MQTT    |Cell    |Wbook |APRS  |  |
+                       |  |Gateway |Gateway |Gateway |GW    |GW    |  |
+                       |  +--------+--------+--------+------+------+  |
+                       |  |Astro   |ZigBee  |TAK     |Failover     |  |
+                       |  |Gateway |Gateway |Gateway |Resolver     |  |
+                       |  +--------+--------+--------+-------------+  |
+                       |                                             |
+                       |  Field Intelligence                          |
+                       |    Dead Man's Switch, Geofence Alerts,       |
+                       |    Health Scores, Burst Queue, Topology      |
+                       |                                             |
+                       |  SigningService (Ed25519 hash chain)         |
+                       |  Delivery Ledger (SQLite tracking)           |
+                       |  SQLite DB (/data/meshsat.db, v30)           |
+                       -----------------------------------------------
 ```
 
 ## Troubleshooting
@@ -247,14 +306,19 @@ USB Devices             MeshSat Container                        Clients
 
 **v0.2.0** -- Any-to-any routing fabric. Channel registry, unified rules engine, structured dispatcher, Astrocast and cellular integration, SMAZ2 compression, ZigBee gateway, InterfaceManager with USB hotplug, object groups, failover groups, transform pipelines, Ed25519 audit log, config export/import.
 
-**v0.3.0 (current)** -- 3-tier compression (SMAZ2 lossless, llama-zip LLM lossless, MSVQ-SC lossy semantic with rate-adaptive codebook). Reticulum-inspired routing with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking. Android companion app.
+**v0.3.0 (current)** -- 3-tier compression (SMAZ2 lossless, llama-zip LLM lossless, MSVQ-SC lossy semantic with rate-adaptive codebook). Reticulum-inspired routing with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking, TCP/HDLC RNS interop. RockBLOCK 9704 IMT transport (100 KB messages). APRS and TAK gateways. DeviceSupervisor with USB hotplug. Field intelligence (dead man's switch, geofence, health scores, burst queue, topology). Android companion app.
 
 **Future** -- meshsat-android beta release, community templates, Grafana dashboard for transport metrics.
+
+## Related Projects
+
+- **MeshSat Hub** -- Multi-tenant fleet management platform: [hub.meshsat.net](https://hub.meshsat.net)
+- **MeshSat Android** -- Standalone mobile gateway app: [github.com/cubeos-app/meshsat-android](https://github.com/cubeos-app/meshsat-android)
+- **CubeOS** -- Self-hosted OS for SBCs and edge devices: [cubeos.app](https://cubeos.app)
 
 ## Community
 
 - GitHub: [github.com/cubeos-app/meshsat](https://github.com/cubeos-app/meshsat)
-- Android: [github.com/cubeos-app/meshsat-android](https://github.com/cubeos-app/meshsat-android)
 - Issues: Use GitHub Issues for bugs and feature requests
 
 PRs welcome. See open issues for where help is needed.
