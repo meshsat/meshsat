@@ -163,6 +163,11 @@ func (a *App) Setup(ctx context.Context) error {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
 
+	// Wire device supervisor events into gateway manager for hot-swap support
+	if a.DevSupervisor != nil {
+		a.GatewayMgr.WatchDeviceEvents(ctx, a.DevSupervisor)
+	}
+
 	a.Processor.SetGatewayProvider(a.GatewayMgr)
 
 	// Signing service

@@ -34,6 +34,7 @@ type Manager struct {
 	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
 	cancelFn        context.CancelFunc
+	supervisor      *transport.DeviceSupervisor // optional, for device event watching
 }
 
 // NewManager creates a new gateway manager.
@@ -153,6 +154,110 @@ func (m *Manager) Stop() {
 	}
 	m.running = make(map[string]Gateway)
 	m.runningByIface = make(map[string]Gateway)
+}
+
+// WatchDeviceEvents subscribes to DeviceSupervisor events and automatically
+// stops/restarts gateways when hardware is disconnected, reconnected, or swapped.
+// This bridges the gap where gateway configs were loaded from DB at startup but
+// never reconciled with live hardware state.
+func (m *Manager) WatchDeviceEvents(ctx context.Context, supervisor *transport.DeviceSupervisor) {
+	m.supervisor = supervisor
+	events, unsub := supervisor.SubscribeEvents()
+
+	go func() {
+		defer unsub()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				m.handleDeviceEvent(ctx, ev)
+			}
+		}
+	}()
+
+	log.Info().Msg("gwmgr: watching device supervisor events for hot-swap")
+}
+
+// handleDeviceEvent reacts to a single device supervisor event.
+func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEvent) {
+	if ev.Device == nil {
+		return
+	}
+
+	gwType := roleToGatewayType(ev.Device.Role)
+	if gwType == "" {
+		return // not a gateway-backed device (meshtastic, gps, unknown)
+	}
+
+	switch ev.Type {
+	case "device_disconnected", "device_removed":
+		m.mu.RLock()
+		_, running := m.running[gwType]
+		m.mu.RUnlock()
+		if running {
+			log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+				Str("event", ev.Type).Msg("gwmgr: device lost, stopping gateway")
+			// Stop gateway but don't mark disabled in DB — we want to restart on reconnect
+			m.mu.Lock()
+			if gw, ok := m.running[gwType]; ok {
+				gw.Stop()
+				delete(m.running, gwType)
+				m.unsyncIfaceMap(gw)
+			}
+			m.mu.Unlock()
+		}
+
+	case "device_connected":
+		// Device reconnected or newly identified — restart gateway if enabled in DB
+		m.mu.RLock()
+		_, alreadyRunning := m.running[gwType]
+		m.mu.RUnlock()
+		if alreadyRunning {
+			return // already running, no action needed
+		}
+
+		cfg, err := m.db.GetGatewayConfig(gwType)
+		if err != nil {
+			return // no saved config for this gateway type
+		}
+		if !cfg.Enabled {
+			log.Debug().Str("type", gwType).Msg("gwmgr: device connected but gateway disabled in config")
+			return
+		}
+
+		log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+			Msg("gwmgr: device reconnected, restarting gateway")
+
+		// Small delay to let the transport layer finish connecting
+		time.AfterFunc(2*time.Second, func() {
+			if err := m.StartGateway(ctx, gwType); err != nil {
+				log.Error().Err(err).Str("type", gwType).Msg("gwmgr: failed to restart gateway after device reconnect")
+			}
+		})
+	}
+}
+
+// roleToGatewayType maps a DeviceSupervisor device role to a gateway type string.
+// Returns "" for roles that don't correspond to a gateway (meshtastic, gps).
+func roleToGatewayType(role transport.DeviceRole) string {
+	switch role {
+	case transport.RoleIridium9603:
+		return "iridium"
+	case transport.RoleIridium9704:
+		return "iridium_imt"
+	case transport.RoleCellular:
+		return "cellular"
+	case transport.RoleAstrocast:
+		return "astrocast"
+	case transport.RoleZigBee:
+		return "zigbee"
+	default:
+		return ""
+	}
 }
 
 // Configure creates or updates a gateway configuration and optionally starts it.
