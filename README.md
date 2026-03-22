@@ -39,11 +39,18 @@ optimizes transmission timing in obstructed environments*
 
 ## Hardware
 
-![MeshSat Lab - Host and Meshtastic radio](docs/images/meshsat_lab_01.jpg)
-*Lilygo T-Echo (Meshtastic) connected to the MeshSat host with USB GPS dongle*
+![MeshSat Field Kit](docs/images/meshsat_field_kit.jpg)
+*MeshSat field kit -- a self-contained, portable multi-transport gateway in a waterproof hard case.
+Meshtastic and cellular are USB-connected; the RockBLOCK 9603 is UART-wired to the Pi 5 GPIO.
+All devices are auto-detected on startup.*
 
-![MeshSat Lab - RockBLOCK 9603 satellite modem](docs/images/meshsat_lab_02.jpg)
-*RockBLOCK 9603 Iridium modem with patch antenna -- needs sky view for satellite access*
+| # | Component | Description |
+|---|-----------|-------------|
+| 1 | **Heltec LoRa V4** (ESP32-S3 + SX1262 + GPS) | Meshtastic mesh radio -- 915 MHz LoRa, OLED display, 2 MB PSRAM, 16 MB flash |
+| 2 | **RockBLOCK 9603** (Iridium 9603N, SMA) | Iridium satellite modem -- SBD protocol, 340-byte MO buffer, UART via Pi 5 GPIO |
+| 3 | **LILYGO T-Call A7670** (ESP32 + A7670E) | 4G LTE / 2G GSM cellular modem -- AT commands, SMS + data |
+| 4 | **INIU 25000mAh** (100W USB-C PD) | Portable power bank -- powers all components via USB |
+| 5 | **Raspberry Pi 5** (8 GB RAM) | MeshSat Bridge host -- standalone mode, Debian Bookworm |
 
 ### Supported Devices
 
