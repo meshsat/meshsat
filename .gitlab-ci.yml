@@ -212,16 +212,16 @@ deploy:
         fi
       done
       if [ -z "$_RESOLVED" ]; then
-        echo "WARNING: ${DEPLOY_TARGET} unreachable at ${PRIMARY} / ${ALT} — skipping"
-        exit 0
+        echo "ERROR: ${DEPLOY_TARGET} unreachable at ${PRIMARY} / ${ALT} — deploy FAILED"
+        exit 1
       fi
       export PI_DEPLOY_HOST="cubeos@${_RESOLVED}"
       echo "Deploy target: ${DEPLOY_TARGET} → ${PI_DEPLOY_HOST}"
   script:
     - |
       if [ -z "${PI_DEPLOY_HOST:-}" ]; then
-        echo "Skipped (device unreachable)"
-        exit 0
+        echo "ERROR: device unreachable — deploy FAILED"
+        exit 1
       fi
     - scp scripts/ci-deploy.sh ${PI_DEPLOY_HOST}:/tmp/ci-deploy-meshsat.sh
     - |
@@ -232,8 +232,7 @@ deploy:
     - kill $SSH_AGENT_PID 2>/dev/null || true
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
-  allow_failure:
-    exit_codes: 0  # unreachable devices don't block the pipeline
+  allow_failure: true  # deploy failures don't block the pipeline but show as warnings
   environment:
     name: production/$DEPLOY_TARGET
 
