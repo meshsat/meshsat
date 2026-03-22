@@ -56,16 +56,20 @@ All devices are auto-detected on startup.*
 
 | Category | Device | Status | Notes |
 |----------|--------|--------|-------|
-| Meshtastic | Lilygo T-Echo (nRF52840) | Tested | 915 MHz, USB-C, end-to-end verified |
-| Meshtastic | Lilygo T-Deck | Tested | ESP32-S3, keyboard, screen |
-| Meshtastic | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
-| Satellite | RockBLOCK 9603 (Iridium 9603N) | Tested | RS-232 via USB adapter, 19200 baud |
-| Satellite | Astrocast Astronode S | Code complete | Binary frame protocol, fragmentation, pass prediction |
-| Cellular | SIM7600G-H (4G LTE) | Tested | USB modem, AT commands, SMS + data |
-| Cellular | Huawei E220 (3G HSDPA) | Tested | USB modem, AT commands, SMS + data |
-| ZigBee | SONOFF ZigBee 3.0 USB Dongle Plus (CC2652P) | Code complete | Z-Stack ZNP protocol, VID:PID auto-detect with ZNP probe |
-| Host | Raspberry Pi 5 | Tested | ARM64, 4 GB RAM, Debian Bookworm |
-| Host | Any x86_64 / ARM64 Linux | Should work | Docker + USB serial required |
+| **Meshtastic** | Heltec LoRa V4 (ESP32-S3 + SX1262 + GPS) | Tested | 915 MHz, OLED, 2 MB PSRAM, 16 MB flash |
+| | Lilygo T-Echo (nRF52840) | Tested | 915 MHz, USB-C, e-ink display |
+| | Lilygo T-Deck | Tested | ESP32-S3, keyboard, screen |
+| | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
+| **Satellite** | RockBLOCK 9603 (Iridium 9603N) | Tested | SBD protocol, 340-byte MO, 19200 baud, UART or RS-232 |
+| | Astrocast Astronode S | Code complete | ASCII hex frame protocol, fragmentation, pass prediction |
+| **Cellular** | LILYGO T-Call A7670 (A7670E LTE) | Tested | 4G LTE / 2G GSM, AT commands, SMS + data |
+| | SIM7600G-H (4G LTE) | Tested | USB modem, AT commands, SMS + data |
+| | Huawei E220 (3G HSDPA) | Tested | USB modem, AT commands, SMS + data |
+| **ZigBee** | SONOFF ZigBee 3.0 USB Dongle Plus (CC2652P) | Code complete | Z-Stack ZNP protocol, VID:PID auto-detect with ZNP probe |
+| **Host** | Raspberry Pi 5 (8 GB) | Tested | ARM64, Debian Bookworm |
+| | Raspberry Pi 4 (4 GB) | Tested | ARM64, Debian Bookworm |
+| | BananaPi BPI-M4 Zero (4 GB + 32 GB eMMC) | Tested | Allwinner H618, ARM64, Ubuntu |
+| | Any x86_64 / ARM64 Linux | Should work | Docker + USB serial required |
 
 ## Quick Start
 
