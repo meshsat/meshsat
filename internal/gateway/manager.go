@@ -1055,12 +1055,35 @@ func (m *Manager) GetDynDNSUpdater() *DynDNSUpdater {
 	return nil
 }
 
+// activeSatTransport returns whichever satellite transport is currently connected.
+// Checks IMT (9704) first since it's the newer modem, then SBD (9603).
+// Returns nil if no satellite transport is connected.
+func (m *Manager) activeSatTransport(ctx context.Context) transport.SatTransport {
+	if m.imtSat != nil {
+		if st, err := m.imtSat.GetStatus(ctx); err == nil && st.Connected {
+			return m.imtSat
+		}
+	}
+	if m.sat != nil {
+		if st, err := m.sat.GetStatus(ctx); err == nil && st.Connected {
+			return m.sat
+		}
+	}
+	// Neither connected — return whichever is configured (prefer IMT)
+	if m.imtSat != nil {
+		return m.imtSat
+	}
+	return m.sat
+}
+
 // GetSatModemInfo returns the satellite modem connection status (model, IMEI, firmware).
+// Automatically selects the active transport (9603 SBD or 9704 IMT).
 func (m *Manager) GetSatModemInfo(ctx context.Context) (*transport.SatStatus, error) {
-	if m.sat == nil {
+	sat := m.activeSatTransport(ctx)
+	if sat == nil {
 		return nil, fmt.Errorf("satellite transport not available")
 	}
-	return m.sat.GetStatus(ctx)
+	return sat.GetStatus(ctx)
 }
 
 // GetIMTModemInfo returns the IMT (9704) modem connection status.
@@ -1084,24 +1107,28 @@ func (m *Manager) HasIMTTransport() bool {
 	return m.imtSat != nil
 }
 
-// GetIridiumSignal returns the current satellite signal (blocking AT+CSQ).
+// GetIridiumSignal returns the current satellite signal (blocking query).
+// Automatically selects the active transport.
 func (m *Manager) GetIridiumSignal(ctx context.Context) (*transport.SignalInfo, error) {
-	if m.sat == nil {
+	sat := m.activeSatTransport(ctx)
+	if sat == nil {
 		return nil, fmt.Errorf("satellite transport not available")
 	}
-	return m.sat.GetSignal(ctx)
+	return sat.GetSignal(ctx)
 }
 
-// GetIridiumSignalFast returns a cached satellite signal reading (AT+CSQF, ~100ms).
+// GetIridiumSignalFast returns a cached satellite signal reading (non-blocking).
+// Automatically selects the active transport.
 func (m *Manager) GetIridiumSignalFast(ctx context.Context) (*transport.SignalInfo, error) {
-	if m.sat == nil {
+	sat := m.activeSatTransport(ctx)
+	if sat == nil {
 		return nil, fmt.Errorf("satellite transport not available")
 	}
-	return m.sat.GetSignalFast(ctx)
+	return sat.GetSignalFast(ctx)
 }
 
 // GetIridiumGeolocation returns Iridium-derived geolocation (AT-MSGEO).
-// Returns satellite sub-point coordinates, not the modem's position.
+// Only available on SBD (9603). Returns error for IMT (9704).
 func (m *Manager) GetIridiumGeolocation(ctx context.Context) (*transport.GeolocationInfo, error) {
 	if m.sat == nil {
 		return nil, fmt.Errorf("satellite transport not available")
