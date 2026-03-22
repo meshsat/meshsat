@@ -222,15 +222,22 @@ func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEven
 
 		cfg, err := m.db.GetGatewayConfig(gwType)
 		if err != nil {
-			return // no saved config for this gateway type
-		}
-		if !cfg.Enabled {
-			log.Debug().Str("type", gwType).Msg("gwmgr: device connected but gateway disabled in config")
-			return
+			// No config exists — auto-create a default enabled config
+			log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+				Msg("gwmgr: device connected, auto-creating gateway config")
+			if err := m.db.SaveGatewayConfig(gwType, true, "{}"); err != nil {
+				log.Warn().Err(err).Str("type", gwType).Msg("gwmgr: failed to create default config")
+				return
+			}
+		} else if !cfg.Enabled {
+			// Config exists but disabled — re-enable since hardware is back
+			log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+				Msg("gwmgr: device connected, re-enabling gateway")
+			m.db.SaveGatewayConfig(gwType, true, cfg.Config)
 		}
 
 		log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
-			Msg("gwmgr: device reconnected, restarting gateway")
+			Msg("gwmgr: device connected, starting gateway")
 
 		// Small delay to let the transport layer finish connecting
 		time.AfterFunc(2*time.Second, func() {
