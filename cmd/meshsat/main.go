@@ -296,6 +296,9 @@ func main() {
 	// when hardware is connected, disconnected, or hot-swapped.
 	if supervisor != nil {
 		gwMgr.WatchDeviceEvents(ctx, supervisor)
+		// Reconcile DB configs with actual hardware: stop gateways for missing
+		// devices, start gateways for detected devices with enabled configs.
+		gwMgr.ReconcileWithHardware(ctx)
 	}
 
 	// Register gateway manager as dynamic provider so processor always

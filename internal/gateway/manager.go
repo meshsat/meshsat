@@ -260,6 +260,87 @@ func roleToGatewayType(role transport.DeviceRole) string {
 	}
 }
 
+// gatewayTypeToRole maps a gateway type to the device role that provides its hardware.
+// Returns RoleNone for gateway types that don't need hardware (mqtt, webhook, tak, aprs).
+func gatewayTypeToRole(gwType string) transport.DeviceRole {
+	switch gwType {
+	case "iridium":
+		return transport.RoleIridium9603
+	case "iridium_imt":
+		return transport.RoleIridium9704
+	case "cellular":
+		return transport.RoleCellular
+	case "astrocast":
+		return transport.RoleAstrocast
+	case "zigbee":
+		return transport.RoleZigBee
+	default:
+		return transport.RoleNone
+	}
+}
+
+// ReconcileWithHardware cross-checks running gateways against actual hardware
+// detected by the device supervisor. Stops gateways whose hardware is no longer
+// present and starts gateways for newly detected hardware with enabled DB configs.
+// Should be called after Start() and WatchDeviceEvents().
+func (m *Manager) ReconcileWithHardware(ctx context.Context) {
+	if m.supervisor == nil {
+		return
+	}
+	registry := m.supervisor.Registry()
+
+	// Phase 1: Stop running gateways whose hardware is missing.
+	m.mu.RLock()
+	var toStop []string
+	for gwType := range m.running {
+		role := gatewayTypeToRole(gwType)
+		if role == transport.RoleNone {
+			continue // software-only gateway (mqtt, webhook, etc.)
+		}
+		if registry.FindByRole(role) == nil {
+			toStop = append(toStop, gwType)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, gwType := range toStop {
+		log.Info().Str("type", gwType).Msg("gwmgr: reconcile — stopping gateway (hardware not present)")
+		m.mu.Lock()
+		if gw, ok := m.running[gwType]; ok {
+			gw.Stop()
+			delete(m.running, gwType)
+			m.unsyncIfaceMap(gw)
+		}
+		m.mu.Unlock()
+	}
+
+	// Phase 2: Start gateways for detected hardware with enabled DB configs.
+	for _, entry := range registry.ListAll() {
+		gwType := roleToGatewayType(entry.Role)
+		if gwType == "" {
+			continue
+		}
+
+		m.mu.RLock()
+		_, running := m.running[gwType]
+		m.mu.RUnlock()
+		if running {
+			continue
+		}
+
+		cfg, err := m.db.GetGatewayConfig(gwType)
+		if err != nil || !cfg.Enabled {
+			continue
+		}
+
+		log.Info().Str("type", gwType).Str("port", entry.DevPath).
+			Msg("gwmgr: reconcile — starting gateway for detected hardware")
+		if err := m.StartGateway(ctx, gwType); err != nil {
+			log.Warn().Err(err).Str("type", gwType).Msg("gwmgr: reconcile — failed to start gateway")
+		}
+	}
+}
+
 // Configure creates or updates a gateway configuration and optionally starts it.
 func (m *Manager) Configure(ctx context.Context, gwType string, enabled bool, configJSON string) error {
 	// Validate by trying to create
