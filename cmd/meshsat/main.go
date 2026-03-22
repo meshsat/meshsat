@@ -168,17 +168,16 @@ func main() {
 		supervisor.Start()
 		defer supervisor.Stop()
 
-		// Determine satellite transport: check if 9704 was found during initial scan.
-		// The supervisor does its initial scan synchronously in Start(), so by now
-		// we know whether a 9704 is present.
-		if directIMT.GetPort() != "" && directIMT.GetPort() != "auto" {
-			sat = directIMT
-			imtTransport = directIMT
-			log.Info().Str("port", directIMT.GetPort()).Msg("using RockBLOCK 9704 IMT as primary satellite transport")
-		} else {
-			sat = directSat
-			log.Info().Str("port", directSat.GetPort()).Msg("using RockBLOCK 9603 SBD transport")
-		}
+		// Always register both satellite transports. The supervisor assigns ports
+		// dynamically via callbacks — no need to choose one at startup.
+		// "iridium" (SBD) gateway always uses directSat (9603).
+		// "iridium_imt" (IMT) gateway always uses directIMT (9704).
+		sat = directSat
+		imtTransport = directIMT
+		log.Info().
+			Str("sbd_port", directSat.GetPort()).
+			Str("imt_port", directIMT.GetPort()).
+			Msg("satellite transports registered (ports assigned dynamically by supervisor)")
 
 		log.Info().Msg("device supervisor active — continuous port discovery enabled")
 
@@ -191,6 +190,9 @@ func main() {
 	defer mesh.Close()
 	if sat != nil {
 		defer sat.Close()
+	}
+	if imtTransport != nil {
+		defer imtTransport.Close()
 	}
 	if cell != nil {
 		defer cell.Close()
