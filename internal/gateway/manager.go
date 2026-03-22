@@ -279,9 +279,13 @@ func gatewayTypeToRole(gwType string) transport.DeviceRole {
 	}
 }
 
-// ReconcileWithHardware cross-checks running gateways against actual hardware
-// detected by the device supervisor. Stops gateways whose hardware is no longer
-// present and starts gateways for newly detected hardware with enabled DB configs.
+// ReconcileWithHardware cross-checks running gateways and DB configs against
+// actual hardware detected by the device supervisor. This is the key to
+// zero-config operation: plug hardware into any device and it just works.
+//
+// Phase 1: Disable and stop gateways whose hardware is missing.
+// Phase 2: Auto-create default configs and start gateways for detected hardware.
+//
 // Should be called after Start() and WatchDeviceEvents().
 func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 	if m.supervisor == nil {
@@ -289,32 +293,42 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 	}
 	registry := m.supervisor.Registry()
 
-	// Phase 1: Stop running gateways whose hardware is missing.
-	m.mu.RLock()
-	var toStop []string
-	for gwType := range m.running {
-		role := gatewayTypeToRole(gwType)
-		if role == transport.RoleNone {
-			continue // software-only gateway (mqtt, webhook, etc.)
-		}
-		if registry.FindByRole(role) == nil {
-			toStop = append(toStop, gwType)
+	// Build set of hardware-backed gateway types actually present.
+	presentTypes := make(map[string]bool)
+	for _, entry := range registry.ListAll() {
+		if gwType := roleToGatewayType(entry.Role); gwType != "" {
+			presentTypes[gwType] = true
 		}
 	}
-	m.mu.RUnlock()
 
-	for _, gwType := range toStop {
-		log.Info().Str("type", gwType).Msg("gwmgr: reconcile — stopping gateway (hardware not present)")
+	// Phase 1: Disable DB configs and stop gateways for missing hardware.
+	configs, _ := m.db.GetAllGatewayConfigs()
+	for _, cfg := range configs {
+		role := gatewayTypeToRole(cfg.Type)
+		if role == transport.RoleNone {
+			continue // software-only gateway (mqtt, webhook, tak, aprs)
+		}
+		if presentTypes[cfg.Type] {
+			continue // hardware present
+		}
+
+		// Hardware gone — disable in DB so it doesn't start next boot
+		if cfg.Enabled {
+			log.Info().Str("type", cfg.Type).Msg("gwmgr: reconcile — disabling gateway (hardware not present)")
+			m.db.SaveGatewayConfig(cfg.Type, false, cfg.Config)
+		}
+
+		// Stop if running
 		m.mu.Lock()
-		if gw, ok := m.running[gwType]; ok {
+		if gw, ok := m.running[cfg.Type]; ok {
 			gw.Stop()
-			delete(m.running, gwType)
+			delete(m.running, cfg.Type)
 			m.unsyncIfaceMap(gw)
 		}
 		m.mu.Unlock()
 	}
 
-	// Phase 2: Start gateways for detected hardware with enabled DB configs.
+	// Phase 2: Auto-create and start gateways for detected hardware.
 	for _, entry := range registry.ListAll() {
 		gwType := roleToGatewayType(entry.Role)
 		if gwType == "" {
@@ -328,9 +342,20 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 			continue
 		}
 
+		// Check if config exists — if not, auto-create a default one
 		cfg, err := m.db.GetGatewayConfig(gwType)
-		if err != nil || !cfg.Enabled {
-			continue
+		if err != nil {
+			log.Info().Str("type", gwType).Str("port", entry.DevPath).
+				Msg("gwmgr: reconcile — auto-creating config for detected hardware")
+			if err := m.db.SaveGatewayConfig(gwType, true, "{}"); err != nil {
+				log.Warn().Err(err).Str("type", gwType).Msg("gwmgr: reconcile — failed to create default config")
+				continue
+			}
+		} else if !cfg.Enabled {
+			// Hardware is back — re-enable
+			log.Info().Str("type", gwType).Str("port", entry.DevPath).
+				Msg("gwmgr: reconcile — re-enabling gateway (hardware detected)")
+			m.db.SaveGatewayConfig(gwType, true, cfg.Config)
 		}
 
 		log.Info().Str("type", gwType).Str("port", entry.DevPath).

@@ -144,8 +144,17 @@ func (s *DeviceSupervisor) run() {
 }
 
 // registerExplicitPorts claims ports that were explicitly configured via env vars.
+// Skips ports that don't exist on the filesystem — stale env vars should not
+// prevent auto-detection from working.
 func (s *DeviceSupervisor) registerExplicitPorts() {
 	for role, port := range s.explicitPorts {
+		// Verify the port actually exists before registering
+		if _, err := os.Stat(port); err != nil {
+			log.Warn().Str("port", port).Str("role", string(role)).
+				Msg("device-supervisor: explicit port does not exist, skipping (will auto-detect)")
+			continue
+		}
+
 		now := time.Now()
 		vidpid := findUSBVIDPID(port)
 		usbSerial := FindUSBSerial(port)

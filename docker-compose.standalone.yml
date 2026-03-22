@@ -10,10 +10,6 @@ services:
       - MESHSAT_MODE=direct
       - MESHSAT_PORT=6050
       - MESHSAT_DB_PATH=/data/meshsat.db
-      - MESHSAT_IRIDIUM_PORT=${MESHSAT_IRIDIUM_PORT:-auto}
-      - MESHSAT_IMT_PORT=${MESHSAT_IMT_PORT:-auto}
-      - MESHSAT_MESHTASTIC_PORT=${MESHSAT_MESHTASTIC_PORT:-auto}
-      - MESHSAT_CELLULAR_PORT=${MESHSAT_CELLULAR_PORT:-auto}
     volumes:
       - meshsat-data:/data
       - /dev:/dev
