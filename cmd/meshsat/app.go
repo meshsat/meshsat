@@ -391,8 +391,13 @@ func (a *App) Setup(ctx context.Context) error {
 		}
 	})
 
-	// Signal recorder
-	a.SignalRecorder = engine.NewSignalRecorder(db, a.Sat)
+	// Signal recorder — use whichever satellite transport is available.
+	// Prefer IMT (9704) over SBD (9603) since it's the primary on pifour01.
+	signalSat := a.Sat
+	if a.IMTSat != nil {
+		signalSat = a.IMTSat
+	}
+	a.SignalRecorder = engine.NewSignalRecorder(db, signalSat)
 	a.SignalRecorder.Start(ctx)
 
 	// Cellular signal recorder (optional)
