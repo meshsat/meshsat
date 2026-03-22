@@ -868,7 +868,8 @@ func probeJSPR(portPath string) bool {
 		if b[0] == '\r' {
 			if line.Len() >= 3 {
 				resp, err := parseJSPRLine(line.String())
-				if err == nil && resp.Code == jsprCodeOK && resp.Target == "apiVersion" {
+				if err == nil && resp.Code > 0 {
+					// Any valid JSPR response (200, 403, etc.) proves this is a 9704
 					return true
 				}
 			}
