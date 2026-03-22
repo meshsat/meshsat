@@ -953,10 +953,27 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 }
 
 // GetSignal returns current signal strength.
-func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, error) {
-	resp, err := t.execAT("AT+CSQ", 5*time.Second)
-	if err != nil {
-		return nil, err
+// Respects the caller's context deadline so the API handler's timeout works.
+func (t *DirectCellTransport) GetSignal(ctx context.Context) (*CellSignalInfo, error) {
+	type atRes struct {
+		resp string
+		err  error
+	}
+	ch := make(chan atRes, 1)
+	go func() {
+		resp, err := t.execAT("AT+CSQ", 5*time.Second)
+		ch <- atRes{resp, err}
+	}()
+
+	var resp string
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		if r.err != nil {
+			return nil, r.err
+		}
+		resp = r.resp
 	}
 
 	info := parseCellCSQ(resp)
@@ -974,6 +991,18 @@ func (t *DirectCellTransport) GetSignal(_ context.Context) (*CellSignalInfo, err
 	t.signalMu.Unlock()
 
 	return info, nil
+}
+
+// GetSignalFast returns the cached signal reading from the last poll cycle (~60s).
+// Never blocks on AT commands — returns immediately. Returns nil if no signal data yet.
+func (t *DirectCellTransport) GetSignalFast(_ context.Context) (*CellSignalInfo, error) {
+	t.signalMu.RLock()
+	defer t.signalMu.RUnlock()
+	if t.lastSignal.DBm == 0 && t.lastSignal.Bars == 0 {
+		return nil, fmt.Errorf("no cached signal data")
+	}
+	info := t.lastSignal
+	return &info, nil
 }
 
 // GetStatus returns modem connection status.

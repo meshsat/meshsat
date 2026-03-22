@@ -39,6 +39,36 @@ func (s *Server) handleGetCellularSignal(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleGetCellularSignalFast returns cached signal from the last poll cycle.
+// @Summary      Get cached cellular signal (non-blocking)
+// @Description  Returns the last known signal reading without blocking on AT commands.
+// @Tags         cellular
+// @Produce      json
+// @Success      200  {object}  transport.CellSignalInfo
+// @Router       /cellular/signal/fast [get]
+func (s *Server) handleGetCellularSignalFast(w http.ResponseWriter, r *http.Request) {
+	if s.cellTransport != nil {
+		signal, err := s.cellTransport.GetSignalFast(r.Context())
+		if err == nil {
+			writeJSON(w, http.StatusOK, signal)
+			return
+		}
+	}
+	// Fall back to latest DB reading
+	point, err := s.db.GetLatestCellularSignal()
+	if err != nil || point == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"bars": 0, "dbm": -113, "technology": "", "assessment": "none"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"bars":       point.Bars,
+		"dbm":        point.DBm,
+		"technology": point.Technology,
+		"assessment": signalAssessment(point.Bars),
+		"timestamp":  time.Unix(point.Timestamp, 0).UTC().Format(time.RFC3339),
+	})
+}
+
 func (s *Server) handleGetCellularSignalHistory(w http.ResponseWriter, r *http.Request) {
 	hoursStr := r.URL.Query().Get("hours")
 	hours := 24

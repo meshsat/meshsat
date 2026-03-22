@@ -227,6 +227,7 @@ func (s *Server) Router() http.Handler {
 
 		// Cellular modem
 		r.Get("/cellular/signal", s.handleGetCellularSignal)
+		r.Get("/cellular/signal/fast", s.handleGetCellularSignalFast)
 		r.Get("/cellular/signal/history", s.handleGetCellularSignalHistory)
 		r.Get("/cellular/status", s.handleGetCellularStatus)
 		r.Post("/cellular/pin", s.handleSubmitCellularPIN)

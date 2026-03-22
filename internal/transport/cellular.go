@@ -92,6 +92,7 @@ type CellTransport interface {
 	Subscribe(ctx context.Context) (<-chan CellEvent, error)
 	SendSMS(ctx context.Context, to string, text string) error
 	GetSignal(ctx context.Context) (*CellSignalInfo, error)
+	GetSignalFast(ctx context.Context) (*CellSignalInfo, error)
 	GetStatus(ctx context.Context) (*CellStatus, error)
 	GetDataStatus(ctx context.Context) (*CellDataStatus, error)
 	ConnectData(ctx context.Context, apn string) error
