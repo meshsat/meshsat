@@ -161,6 +161,9 @@ func (t *DirectSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 
 func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	portPath := t.port
+	if portPath == "supervisor" {
+		return fmt.Errorf("waiting for device supervisor to assign port")
+	}
 	if portPath == "" || portPath == "auto" {
 		exclude := t.excludePort
 		if t.excludePortFn != nil {

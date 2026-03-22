@@ -807,6 +807,9 @@ func (t *DirectAstrocastTransport) ensureConnectedLocked(ctx context.Context) er
 
 func (t *DirectAstrocastTransport) connectLocked(ctx context.Context) error {
 	port := t.port
+	if port == "supervisor" {
+		return fmt.Errorf("waiting for device supervisor to assign port")
+	}
 	if port == "" || port == "auto" {
 		var excludePorts []string
 		for _, fn := range t.excludePortFns {

@@ -67,28 +67,28 @@ func main() {
 	case "direct":
 		// Direct serial — talk to USB devices without HAL.
 		// DeviceSupervisor handles discovery, identification, and auto-reconnect.
-		// Transports are created with empty port ("") so they don't run their own
-		// auto-detect — the supervisor assigns ports via SetPort() callbacks.
+		// Transports are created with port "supervisor" so they don't run their
+		// own auto-detect — the supervisor assigns ports via SetPort() callbacks.
 		// Only use explicit ports if the user set a non-"auto" value.
-		meshPort := cfg.MeshtasticPort
-		if meshPort == "auto" {
-			meshPort = ""
+		meshPort := "supervisor"
+		if cfg.MeshtasticPort != "" && cfg.MeshtasticPort != "auto" {
+			meshPort = cfg.MeshtasticPort
 		}
-		imtPort := cfg.IMTPort
-		if imtPort == "auto" {
-			imtPort = ""
+		imtPort := "supervisor"
+		if cfg.IMTPort != "" && cfg.IMTPort != "auto" {
+			imtPort = cfg.IMTPort
 		}
-		iridiumPort := cfg.IridiumPort
-		if iridiumPort == "auto" {
-			iridiumPort = ""
+		iridiumPort := "supervisor"
+		if cfg.IridiumPort != "" && cfg.IridiumPort != "auto" {
+			iridiumPort = cfg.IridiumPort
 		}
-		cellPort := cfg.CellularPort
-		if cellPort == "auto" {
-			cellPort = ""
+		cellPort := "supervisor"
+		if cfg.CellularPort != "" && cfg.CellularPort != "auto" {
+			cellPort = cfg.CellularPort
 		}
-		astroPort := cfg.AstrocastPort
-		if astroPort == "auto" {
-			astroPort = ""
+		astroPort := "supervisor"
+		if cfg.AstrocastPort != "" && cfg.AstrocastPort != "auto" {
+			astroPort = cfg.AstrocastPort
 		}
 
 		directMesh := transport.NewDirectMeshTransport(meshPort)

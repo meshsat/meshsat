@@ -202,6 +202,9 @@ func (t *DirectIMTTransport) connect() error {
 
 // resolvePort determines the serial port to use.
 func (t *DirectIMTTransport) resolvePort() string {
+	if t.port == "supervisor" {
+		return "" // wait for device supervisor to assign port
+	}
 	if t.port != "" && t.port != "auto" {
 		return t.port
 	}

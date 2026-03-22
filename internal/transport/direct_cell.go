@@ -206,6 +206,9 @@ func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, 
 
 func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	portPath := t.port
+	if portPath == "supervisor" {
+		return fmt.Errorf("waiting for device supervisor to assign port")
+	}
 	if portPath == "" || portPath == "auto" {
 		// Resolve dynamic exclude ports from other transports
 		excludes := make([]string, 0, len(t.excludePorts)+len(t.excludePortFns))

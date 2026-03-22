@@ -155,6 +155,9 @@ func (t *DirectMeshTransport) Subscribe(ctx context.Context) (<-chan MeshEvent, 
 
 func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	portPath := t.port
+	if portPath == "supervisor" {
+		return fmt.Errorf("waiting for device supervisor to assign port")
+	}
 	if portPath == "" || portPath == "auto" {
 		portPath = autoDetectMeshtastic()
 		if portPath == "" {
