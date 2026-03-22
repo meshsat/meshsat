@@ -201,6 +201,10 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 				if existing.Role != RoleNone {
 					s.notifyPortLost(existing.Role, port)
 				}
+				s.emitEvent(DeviceEvent{
+					Type:   "device_disconnected",
+					Device: existing,
+				})
 				s.registry.Remove(port)
 				// Fall through to register as new
 			} else {

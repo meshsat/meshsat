@@ -290,6 +290,12 @@ func main() {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
 
+	// Wire device supervisor → gateway manager: auto-start/stop gateways
+	// when hardware is connected, disconnected, or hot-swapped.
+	if supervisor != nil {
+		gwMgr.WatchDeviceEvents(ctx, supervisor)
+	}
+
 	// Register gateway manager as dynamic provider so processor always
 	// forwards to live gateway instances (survives stop/start/reconfigure)
 	proc.SetGatewayProvider(gwMgr)
