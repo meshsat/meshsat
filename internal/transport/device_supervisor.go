@@ -4,7 +4,7 @@ package transport
 // Ported from HAL's DeviceSupervisor, adapted for Bridge's full transport set.
 //
 // Two tiers:
-//   - Tier 1 (30s): Serial port inventory via /dev/ttyUSB* + /dev/ttyACM*
+//   - Tier 1 (30s): Serial port inventory via /dev/ttyUSB* + /dev/ttyACM* + /dev/ttyAMA*
 //   - Tier 2 (15s): Identify unclaimed ports, reconnect disconnected drivers
 //
 // Identification cascade (fast to slow):
@@ -175,7 +175,7 @@ func (s *DeviceSupervisor) registerExplicitPorts() {
 // scanSerialPorts discovers all serial ports and updates the registry.
 func (s *DeviceSupervisor) scanSerialPorts() {
 	var activePorts []string
-	for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*"} {
+	for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttyAMA*"} {
 		matches, _ := filepath.Glob(pattern)
 		activePorts = append(activePorts, matches...)
 	}
@@ -234,7 +234,7 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 func (s *DeviceSupervisor) reconcileSerialDevices() {
 	// Scan current ports
 	var activePorts []string
-	for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*"} {
+	for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttyAMA*"} {
 		matches, _ := filepath.Glob(pattern)
 		activePorts = append(activePorts, matches...)
 	}
@@ -454,7 +454,7 @@ func (s *DeviceSupervisor) reconnectDisconnected() {
 		}
 		// Check if the port is back
 		found := false
-		for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*"} {
+		for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttyAMA*"} {
 			matches, _ := filepath.Glob(pattern)
 			for _, m := range matches {
 				if m == entry.DevPath {
