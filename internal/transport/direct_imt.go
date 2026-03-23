@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"go.bug.st/serial"
 )
 
 // DirectIMTTransport implements SatTransport via JSPR for the RockBLOCK 9704.
@@ -25,7 +24,7 @@ type DirectIMTTransport struct {
 	mu        sync.Mutex
 	connectMu sync.Mutex // separate from mu — protects connect() without blocking status reads
 	conn      *jsprConn
-	file      serial.Port
+	file      jsprPort
 	connected bool
 	imei      string
 	hwVersion string
@@ -156,7 +155,11 @@ func (t *DirectIMTTransport) connect() error {
 		return fmt.Errorf("imt: no RockBLOCK 9704 found")
 	}
 
-	file, err := openSerial(portPath, jsprBaud)
+	// Use rawSerialPort (os.File + epoll) instead of go.bug.st/serial.
+	// go.bug.st/serial's VMIN/VTIME timeouts hang after Write() on the
+	// FTDI FT234XD chip in the RockBLOCK 9704. rawSerialPort uses Go's
+	// runtime poller (epoll) for read deadlines, matching pyserial's approach.
+	file, err := openRawSerial(portPath, jsprBaud)
 	if err != nil {
 		return fmt.Errorf("imt: open %s: %w", portPath, err)
 	}

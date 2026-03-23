@@ -17,8 +17,18 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"go.bug.st/serial"
 )
+
+// jsprPort is the serial port interface used by jsprConn.
+// Both go.bug.st/serial.Port and rawSerialPort satisfy this interface.
+// rawSerialPort is preferred for long-lived JSPR connections because
+// go.bug.st/serial's VMIN/VTIME timeouts hang after Write() on FTDI chips.
+type jsprPort interface {
+	Read([]byte) (int, error)
+	Write([]byte) (int, error)
+	SetReadTimeout(time.Duration) error
+	Close() error
+}
 
 // JSPR constants
 const (
@@ -84,7 +94,7 @@ type jsprWriteRequest struct {
 
 // jsprConn manages the JSPR serial connection and protocol state.
 type jsprConn struct {
-	port serial.Port
+	port jsprPort
 
 	// Write channel — all serial writes go through the reader goroutine.
 	// go-serial does NOT support concurrent Read() and Write() on the same fd;
@@ -114,7 +124,7 @@ type jsprConn struct {
 }
 
 // newJSPRConn wraps an already-opened serial port for JSPR communication.
-func newJSPRConn(port serial.Port) *jsprConn {
+func newJSPRConn(port jsprPort) *jsprConn {
 	c := &jsprConn{
 		port:    port,
 		moRef:   0,
