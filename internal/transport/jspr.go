@@ -741,9 +741,9 @@ func (c *jsprConn) jsprGetSIMStatus() (*jsprSimStatus, error) {
 // Returns the list of topics. An empty list means the modem is not yet
 // provisioned on the Iridium network (needs 10-30 min with sky view on first activation).
 func (c *jsprConn) jsprCheckProvisioning() ([]jsprProvisioningTopic, error) {
-	resp, err := c.sendRequest("GET", "checkProvisioning", struct{}{})
+	resp, err := c.sendRequest("GET", "messageProvisioning", struct{}{})
 	if err != nil {
-		return nil, fmt.Errorf("checkProvisioning: %w", err)
+		return nil, fmt.Errorf("messageProvisioning: %w", err)
 	}
 	if resp.Code != jsprCodeOK {
 		return nil, fmt.Errorf("checkProvisioning returned code %d", resp.Code)
@@ -751,7 +751,7 @@ func (c *jsprConn) jsprCheckProvisioning() ([]jsprProvisioningTopic, error) {
 
 	var prov jsprProvisioningResponse
 	if err := json.Unmarshal(resp.JSON, &prov); err != nil {
-		return nil, fmt.Errorf("parse checkProvisioning: %w", err)
+		return nil, fmt.Errorf("parse messageProvisioning: %w", err)
 	}
 	return prov.Provisioning, nil
 }
