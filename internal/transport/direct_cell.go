@@ -340,7 +340,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 			if simState == "PIN_REQUIRED" && info.PIN != "" {
 				log.Info().Str("iccid", iccid).Msg("cellular: auto-unlocking SIM PIN from saved settings")
 				pinCmd := fmt.Sprintf("AT+CPIN=\"%s\"", info.PIN)
-				resp, err = sendAT(sp, pinCmd, 10*time.Second)
+				resp, err = sendAT(sp, pinCmd, 30*time.Second)
 				if err == nil && !strings.Contains(resp, "ERROR") {
 					time.Sleep(2 * time.Second) // modem settles after PIN unlock
 					simState = "READY"
@@ -1904,7 +1904,7 @@ func (t *DirectCellTransport) GetPort() string {
 // UnlockPIN submits the SIM PIN to unlock the modem.
 func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	cmd := fmt.Sprintf("AT+CPIN=\"%s\"", pin)
-	resp, err := t.execAT(cmd, 10*time.Second)
+	resp, err := t.execAT(cmd, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("PIN command failed: %w", err)
 	}
