@@ -96,6 +96,11 @@ type jsprConn struct {
 
 	// MO state
 	moRef int // request_reference counter (1-100)
+
+	// Persistent line buffer for the reader goroutine.
+	// Survives across readOneLine calls so partial reads accumulate correctly
+	// when the modem pauses mid-line (common on the 9704 at 230400 baud).
+	lineBuf strings.Builder
 }
 
 // newJSPRConn wraps an already-opened serial port for JSPR communication.
@@ -311,54 +316,60 @@ func jsprSpacedJSON(data []byte) string {
 }
 
 // readOneLine reads one JSPR response line from serial.
-// Returns nil, nil on read timeout (no data available).
+// Uses c.lineBuf to persist partial reads across calls — this is critical because
+// the 9704 modem at 230400 baud can pause mid-line (e.g., between code and JSON body),
+// causing a single response to span multiple read windows.
+// Returns nil, nil on read timeout (no data available and no partial line buffered).
 func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
 	deadline := time.Now().Add(maxWait)
 	var buf [1]byte
-	var line strings.Builder
-	line.Grow(256)
 
 	c.port.SetReadTimeout(jsprReadTimeout)
 
 	for time.Now().Before(deadline) {
 		n, err := c.port.Read(buf[:])
 		if n == 0 && err == nil {
-			if line.Len() == 0 {
-				return nil, nil // no data at all
+			if c.lineBuf.Len() == 0 {
+				return nil, nil // no data at all, no partial line
 			}
-			continue // partial line, keep reading
+			continue // partial line in buffer, keep reading until deadline
 		}
 		if err != nil {
-			if line.Len() == 0 {
+			if c.lineBuf.Len() == 0 {
 				return nil, nil
 			}
+			// Read error with partial data — discard the partial line
+			c.lineBuf.Reset()
 			return nil, fmt.Errorf("jspr: read error: %w", err)
 		}
 
 		b := buf[0]
 
 		// Strip non-printable chars before response code (modem may send DC1=0x11 on boot)
-		if line.Len() == 0 && (b < 0x20 || b > 0x7E) && b != '\r' {
+		if c.lineBuf.Len() == 0 && (b < 0x20 || b > 0x7E) && b != '\r' {
 			continue
 		}
 
 		if b == '\r' {
-			if line.Len() == 0 {
+			if c.lineBuf.Len() == 0 {
 				continue // empty line
 			}
-			return parseJSPRLine(line.String())
+			line := c.lineBuf.String()
+			c.lineBuf.Reset()
+			return parseJSPRLine(line)
 		}
 
-		if line.Len() >= jsprRxBufSize {
-			return nil, fmt.Errorf("jspr: line too long (%d bytes)", line.Len())
+		if c.lineBuf.Len() >= jsprRxBufSize {
+			c.lineBuf.Reset()
+			return nil, fmt.Errorf("jspr: line too long, discarded")
 		}
 
-		line.WriteByte(b)
+		c.lineBuf.WriteByte(b)
 	}
 
-	if line.Len() > 0 {
-		return nil, fmt.Errorf("jspr: incomplete line at timeout: %q", line.String())
-	}
+	// Deadline reached. If we have partial data, DON'T discard it —
+	// the next call will continue accumulating. Just return nil to let
+	// the readerLoop check the stop channel and come back.
 	return nil, nil
 }
 
