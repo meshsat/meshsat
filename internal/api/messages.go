@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
 )
 
@@ -75,20 +77,15 @@ func (s *Server) handleGetMessageStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// handleSendMessage sends a text message via the mesh transport.
-// @Summary Send a mesh message
-// @Description Sends a text message through the Meshtastic radio
+// handleSendMessage sends a text message via the mesh transport or a satellite gateway.
+// @Summary Send a message
+// @Description Sends a text message through the Meshtastic radio or a satellite gateway
 // @Tags messages
 // @Param body body transport.SendRequest true "Message to send"
 // @Success 200 {object} map[string]string "success"
 // @Failure 400 {object} map[string]string "error"
 // @Router /api/messages/send [post]
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	if s.mesh == nil {
-		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
-		return
-	}
-
 	var req transport.SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -99,6 +96,45 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If a gateway is specified, route through the gateway manager.
+	if req.Gateway != "" {
+		if s.gwManager == nil {
+			writeError(w, http.StatusServiceUnavailable, "gateway manager unavailable")
+			return
+		}
+		var target gateway.Gateway
+		for _, gw := range s.gwManager.Gateways() {
+			if gw.Type() == req.Gateway {
+				target = gw
+				break
+			}
+		}
+		if target == nil {
+			writeError(w, http.StatusBadRequest, "unknown gateway: "+req.Gateway)
+			return
+		}
+		st := target.Status()
+		if !st.Connected {
+			writeError(w, http.StatusServiceUnavailable, req.Gateway+" gateway not connected")
+			return
+		}
+		msg := &transport.MeshMessage{
+			DecodedText: req.Text,
+			RxTime:      time.Now().Unix(),
+		}
+		if err := target.Forward(r.Context(), msg); err != nil {
+			writeError(w, http.StatusInternalServerError, "gateway send failed: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "sent", "gateway": req.Gateway})
+		return
+	}
+
+	// Default: send via Meshtastic mesh radio.
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
 	if err := s.mesh.SendMessage(r.Context(), req); err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to send: "+err.Error())
 		return
