@@ -153,6 +153,8 @@ func (c *jsprConn) readerLoop() {
 			continue // no data, loop back and check stop
 		}
 
+		log.Debug().Int("code", resp.Code).Str("target", resp.Target).Msg("jspr: reader got response")
+
 		if resp.Code == jsprCodeUnsolicited {
 			c.bufferUnsolicited(*resp)
 			continue
@@ -163,6 +165,7 @@ func (c *jsprConn) readerLoop() {
 		if pr, ok := c.pending[resp.Target]; ok {
 			delete(c.pending, resp.Target)
 			c.pendingMu.Unlock()
+			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Msg("jspr: dispatched to caller")
 			// Non-blocking send (channel is buffered with capacity 1)
 			select {
 			case pr.ch <- *resp:
@@ -265,7 +268,7 @@ func (c *jsprConn) sendRequestWithTimeout(method, target string, payload interfa
 
 	// Write command — brief lock
 	c.writeMu.Lock()
-	_, writeErr := c.port.Write([]byte(line))
+	n, writeErr := c.port.Write([]byte(line))
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		c.pendingMu.Lock()
@@ -273,6 +276,7 @@ func (c *jsprConn) sendRequestWithTimeout(method, target string, payload interfa
 		c.pendingMu.Unlock()
 		return nil, fmt.Errorf("jspr: write: %w", writeErr)
 	}
+	log.Debug().Str("target", target).Int("bytes", n).Str("method", method).Msg("jspr: command written")
 
 	// Wait for response from reader goroutine
 	select {
