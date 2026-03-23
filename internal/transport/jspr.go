@@ -737,6 +737,25 @@ func (c *jsprConn) jsprGetSIMStatus() (*jsprSimStatus, error) {
 	return &sim, nil
 }
 
+// jsprCheckProvisioning queries the modem for its provisioned topics.
+// Returns the list of topics. An empty list means the modem is not yet
+// provisioned on the Iridium network (needs 10-30 min with sky view on first activation).
+func (c *jsprConn) jsprCheckProvisioning() ([]jsprProvisioningTopic, error) {
+	resp, err := c.sendRequest("GET", "checkProvisioning", struct{}{})
+	if err != nil {
+		return nil, fmt.Errorf("checkProvisioning: %w", err)
+	}
+	if resp.Code != jsprCodeOK {
+		return nil, fmt.Errorf("checkProvisioning returned code %d", resp.Code)
+	}
+
+	var prov jsprProvisioningResponse
+	if err := json.Unmarshal(resp.JSON, &prov); err != nil {
+		return nil, fmt.Errorf("parse checkProvisioning: %w", err)
+	}
+	return prov.Provisioning, nil
+}
+
 // jsprSendMO sends a Mobile Originated message via JSPR.
 // Handles the full flow: messageOriginate → segment responses → final status.
 // Returns final MO status string and any error.

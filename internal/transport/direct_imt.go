@@ -270,6 +270,40 @@ func (t *DirectIMTTransport) SendText(ctx context.Context, text string) (*SBDRes
 	return t.Send(ctx, []byte(text))
 }
 
+// CheckProvisioning queries the modem for its provisioned topics.
+// Returns the topic list; empty means not yet provisioned.
+func (t *DirectIMTTransport) CheckProvisioning() ([]ProvisioningTopic, error) {
+	t.mu.Lock()
+	if !t.connected || t.conn == nil {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("imt: not connected")
+	}
+	conn := t.conn
+	t.mu.Unlock()
+
+	topics, err := conn.jsprCheckProvisioning()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]ProvisioningTopic, len(topics))
+	for i, t := range topics {
+		result[i] = ProvisioningTopic{
+			TopicID:   t.TopicID,
+			TopicName: t.TopicName,
+			Priority:  t.Priority,
+		}
+	}
+	return result, nil
+}
+
+// ProvisioningTopic represents a provisioned topic on the 9704 modem.
+type ProvisioningTopic struct {
+	TopicID   int    `json:"topic_id"`
+	TopicName string `json:"topic_name"`
+	Priority  string `json:"priority"`
+}
+
 // Receive returns the next buffered MT message, or blocks briefly.
 func (t *DirectIMTTransport) Receive(ctx context.Context) ([]byte, error) {
 	t.mtMu.Lock()

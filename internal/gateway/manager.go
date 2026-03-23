@@ -1094,6 +1094,19 @@ func (m *Manager) GetIMTModemInfo(ctx context.Context) (*transport.SatStatus, er
 	return m.imtSat.GetStatus(ctx)
 }
 
+// CheckIMTProvisioning queries the 9704 modem for its provisioned topics.
+// An empty list means the modem hasn't completed provisioning with the Iridium network.
+func (m *Manager) CheckIMTProvisioning() ([]transport.ProvisioningTopic, error) {
+	if m.imtSat == nil {
+		return nil, fmt.Errorf("IMT transport not available")
+	}
+	imt, ok := m.imtSat.(*transport.DirectIMTTransport)
+	if !ok {
+		return nil, fmt.Errorf("IMT transport does not support provisioning check")
+	}
+	return imt.CheckProvisioning()
+}
+
 // GetIMTSignalFast returns a cached IMT signal reading.
 func (m *Manager) GetIMTSignalFast(ctx context.Context) (*transport.SignalInfo, error) {
 	if m.imtSat == nil {

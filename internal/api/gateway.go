@@ -107,6 +107,28 @@ func (s *Server) handleGetSatModemInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleCheckProvisioning returns the 9704 modem's provisioned topics.
+// @Summary Check IMT provisioning
+// @Description Returns provisioned topics from the RockBLOCK 9704. Empty list means not provisioned.
+// @Tags iridium
+// @Success 200 {object} map[string]interface{} "provisioning"
+// @Router /api/iridium/provisioning [get]
+func (s *Server) handleCheckProvisioning(w http.ResponseWriter, r *http.Request) {
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
+		return
+	}
+	topics, err := s.gwManager.CheckIMTProvisioning()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"provisioned": len(topics) > 0,
+		"topics":      topics,
+	})
+}
+
 // handleGetGateways returns the status of all configured gateways.
 // @Summary List all gateways
 // @Description Returns status and config of all gateways (MQTT, Iridium)
