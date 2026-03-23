@@ -9,9 +9,9 @@ package transport
 // timeouts. On FTDI chips, the kernel tty driver's VTIME timer state can
 // get corrupted after a Write() call, causing Read() to block indefinitely.
 //
-// Fix: use poll() syscall for read timeouts and unix.Read()/unix.Write() for
-// I/O. This is the same approach Python's pyserial uses (select/poll + read),
-// which works correctly with the same hardware.
+// Fix: use ioctl(FIONREAD) to peek at available bytes before reading, matching
+// the official RockBLOCK 9704 C library's serialPeek() pattern. poll()/epoll
+// also fail on this FTDI chip (stop reporting POLLIN after initial burst).
 
 import (
 	"fmt"
@@ -83,37 +83,27 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 }
 
 // Read reads from the serial port with the configured timeout.
-// Uses poll() syscall to wait for data, then unix.Read() to fetch it.
+// Uses ioctl(FIONREAD) to peek at available bytes, matching the official
+// RockBLOCK 9704 C library's serialPeek() pattern. This avoids poll()/epoll
+// notification issues on the FTDI FT234XD driver where poll() stops
+// reporting POLLIN after the first few seconds of operation.
 // Returns (0, nil) on timeout to match go.bug.st/serial's behavior.
 func (p *rawSerialPort) Read(buf []byte) (int, error) {
-	if p.timeout > 0 {
-		timeoutMs := int(p.timeout / time.Millisecond)
-		if timeoutMs < 1 {
-			timeoutMs = 1
-		}
-		fds := []unix.PollFd{{Fd: int32(p.fd), Events: unix.POLLIN}}
-		n, err := unix.Poll(fds, timeoutMs)
+	deadline := time.Now().Add(p.timeout)
+	for time.Now().Before(deadline) {
+		// Peek at bytes available — ioctl(FIONREAD), same as C library's serialPeek()
+		avail, err := unix.IoctlGetInt(p.fd, unix.TIOCINQ)
 		if err != nil {
-			// EINTR is normal (signal interrupted poll) — treat as timeout
-			if err == unix.EINTR {
-				return 0, nil
-			}
-			return 0, fmt.Errorf("poll: %w", err)
+			return 0, fmt.Errorf("fionread: %w", err)
 		}
-		if n == 0 {
-			return 0, nil // timeout, no data — matches go.bug.st/serial behavior
+		if avail > 0 {
+			return unix.Read(p.fd, buf)
 		}
-		// Check for errors on the fd
-		if fds[0].Revents&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 {
-			return 0, fmt.Errorf("poll: fd error (revents=0x%x)", fds[0].Revents)
-		}
+		// No data yet — brief sleep to avoid busy-spinning.
+		// 1ms matches ~29 bytes at 230400 baud, well within tolerance.
+		time.Sleep(time.Millisecond)
 	}
-
-	n, err := unix.Read(p.fd, buf)
-	if err != nil {
-		return 0, fmt.Errorf("read: %w", err)
-	}
-	return n, nil
+	return 0, nil // timeout
 }
 
 // Write writes data to the serial port.
