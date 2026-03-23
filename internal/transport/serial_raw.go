@@ -84,9 +84,34 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	termios.Iflag &^= unix.IXON | unix.IXOFF | unix.IXANY | unix.ICRNL
 	termios.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHOE | unix.ISIG
 
+	log.Debug().
+		Uint32("cflag_before_set", termios.Cflag).
+		Uint32("ispeed", termios.Ispeed).
+		Uint32("ospeed", termios.Ospeed).
+		Uint32("baud_const", baudConst).
+		Msg("ftdi: termios2 about to set")
+
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS2, termios); err != nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("set termios2 %s: %w", path, err)
+	}
+
+	// Verify the baud rate was actually applied
+	verify, err := unix.IoctlGetTermios(fd, unix.TCGETS2)
+	if err == nil {
+		actualBaud := verify.Cflag & unix.CBAUD
+		log.Info().
+			Uint32("requested", baudConst).
+			Uint32("actual_cbaud", actualBaud).
+			Uint32("actual_ispeed", verify.Ispeed).
+			Uint32("actual_ospeed", verify.Ospeed).
+			Msg("ftdi: baud rate verification after TCSETS2")
+		if actualBaud != baudConst {
+			log.Error().
+				Uint32("requested", baudConst).
+				Uint32("actual", actualBaud).
+				Msg("ftdi: BAUD RATE MISMATCH — TCSETS2 did not apply")
+		}
 	}
 
 	unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH)
