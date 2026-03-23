@@ -18,6 +18,7 @@ import (
 	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hubreporter"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -56,6 +57,11 @@ type App struct {
 	IfaceRegistry   *routing.InterfaceRegistry
 	PathFinder      *routing.PathFinder
 	TCPIface        *routing.TCPInterface
+
+	// Hub uplink (optional — connects bridge to MeshSat Hub)
+	HubReporter  *hubreporter.HubReporter
+	HubInventory *hubreporter.DeviceInventory
+	HubEventTap  *hubreporter.EventTap
 
 	// Transports (set before calling Setup)
 	Mesh   transport.MeshTransport
@@ -467,6 +473,110 @@ func (a *App) Setup(ctx context.Context) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Hub uplink — connects bridge to MeshSat Hub MQTT broker (optional)
+	if cfg.HubURL != "" {
+		reporterCfg := hubreporter.ReporterConfig{
+			HubURL:         cfg.HubURL,
+			BridgeID:       cfg.BridgeID,
+			Username:       cfg.HubUsername,
+			Password:       cfg.HubPassword,
+			TLSCert:        cfg.HubTLSCert,
+			TLSKey:         cfg.HubTLSKey,
+			HealthInterval: time.Duration(cfg.HubHealthInterval) * time.Second,
+		}
+
+		startTime := time.Now()
+
+		birthFn := func() hubreporter.BridgeBirth {
+			birth := hubreporter.BridgeBirth{
+				Version:     "0.18.0",
+				Hostname:    cfg.BridgeID,
+				Mode:        cfg.Mode,
+				TenantID:    "default",
+				CoTType:     hubreporter.CoTBridge,
+				CoTCallsign: fmt.Sprintf("MESHSAT-%s", cfg.BridgeID),
+				UptimeSec:   int64(time.Since(startTime).Seconds()),
+			}
+			if h, err := os.Hostname(); err == nil {
+				birth.Hostname = h
+			}
+			// Collect interface info
+			if a.InterfaceMgr != nil {
+				for _, iface := range a.InterfaceMgr.GetAllStatus() {
+					birth.Interfaces = append(birth.Interfaces, hubreporter.InterfaceInfo{
+						Name:   iface.ID,
+						Type:   iface.ChannelType,
+						Status: string(iface.State),
+						Port:   iface.DevicePort,
+					})
+				}
+			}
+			// Capabilities from active transports
+			if a.Mesh != nil {
+				birth.Capabilities = append(birth.Capabilities, "meshtastic")
+			}
+			if a.Sat != nil {
+				birth.Capabilities = append(birth.Capabilities, "iridium_sbd")
+			}
+			if a.IMTSat != nil {
+				birth.Capabilities = append(birth.Capabilities, "iridium_imt")
+			}
+			if a.Cell != nil {
+				birth.Capabilities = append(birth.Capabilities, "cellular")
+			}
+			if a.Astro != nil {
+				birth.Capabilities = append(birth.Capabilities, "astrocast")
+			}
+			if a.RoutingIdentity != nil {
+				birth.Capabilities = append(birth.Capabilities, "reticulum")
+				birth.Reticulum = &hubreporter.ReticulumInfo{
+					IdentityHash:     a.RoutingIdentity.DestHashHex(),
+					TransportEnabled: true,
+				}
+			}
+			return birth
+		}
+
+		// Outbox for offline message queueing
+		outbox := hubreporter.NewOutbox(a.DB.DB.DB, 10000, 7*24*time.Hour)
+
+		healthFn := func() hubreporter.BridgeHealth {
+			health := hubreporter.BridgeHealth{
+				UptimeSec: int64(time.Since(startTime).Seconds()),
+			}
+			// Collect interface health
+			if a.InterfaceMgr != nil {
+				for _, iface := range a.InterfaceMgr.GetAllStatus() {
+					health.Interfaces = append(health.Interfaces, hubreporter.InterfaceHealth{
+						Name:   iface.ID,
+						Status: string(iface.State),
+					})
+				}
+			}
+			// Outbox stats
+			if stats, err := outbox.Stats(); err == nil {
+				health.Outbox = &stats
+			}
+			return health
+		}
+
+		reporter := hubreporter.NewHubReporter(reporterCfg, birthFn, healthFn)
+		reporter.SetOutbox(outbox)
+		a.HubReporter = reporter
+
+		// Command handler — processes commands from the Hub (ping, flush_burst, etc.)
+		cmdHandler := hubreporter.NewCommandHandler(reporter, cfg.BridgeID, healthFn)
+		reporter.SetCommandHandler(cmdHandler)
+
+		// Device inventory + event tap — tracks mesh devices and streams
+		// position/telemetry to the Hub. The EventTap subscribes to the
+		// processor's event broadcast in Start().
+		a.HubInventory = hubreporter.NewDeviceInventory(reporter, cfg.BridgeID)
+		a.HubEventTap = hubreporter.NewEventTap(reporter, a.HubInventory, cfg.BridgeID)
+
+		log.Info().Str("hub", cfg.HubURL).Str("bridge_id", cfg.BridgeID).Msg("hub reporter configured (will start with app)")
+	}
+
 	return nil
 }
 
@@ -484,6 +594,36 @@ func (a *App) Start(ctx context.Context) {
 	// Periodic announce broadcasting
 	if a.RoutingIdentity != nil && a.Config.AnnounceIntervalSec > 0 {
 		go a.announceLoop(ctx)
+	}
+
+	// Hub reporter — start MQTT uplink after all components are ready
+	if a.HubReporter != nil {
+		go func() {
+			if err := a.HubReporter.Start(ctx); err != nil {
+				log.Error().Err(err).Msg("hub reporter start failed (bridge will operate without hub)")
+			}
+		}()
+
+		// Event tap — subscribe to processor's event stream and forward
+		// positions/telemetry/node info to the Hub via MQTT.
+		if a.HubEventTap != nil {
+			eventCh, unsub := a.Processor.Subscribe()
+			a.cleanups = append(a.cleanups, unsub)
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case event, ok := <-eventCh:
+						if !ok {
+							return
+						}
+						a.HubEventTap.HandleMeshEvent(event)
+					}
+				}
+			}()
+			log.Info().Msg("hub event tap started (streaming positions/telemetry to hub)")
+		}
 	}
 
 	go func() {
@@ -544,6 +684,15 @@ func (a *App) broadcastAnnounce() {
 
 // Shutdown gracefully stops all components.
 func (a *App) Shutdown() {
+	// Unregister all devices from hub inventory before stopping reporter
+	if a.HubInventory != nil {
+		a.HubInventory.UnregisterAll("bridge_shutdown")
+	}
+	// Stop hub reporter — publishes bridge death before disconnecting
+	if a.HubReporter != nil {
+		a.HubReporter.Stop()
+	}
+
 	if a.DevSupervisor != nil {
 		a.DevSupervisor.Stop()
 	}

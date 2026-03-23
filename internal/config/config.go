@@ -50,6 +50,15 @@ type Config struct {
 
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
+
+	// Hub uplink — connects bridge to MeshSat Hub MQTT broker
+	HubURL            string // MQTT broker URL (empty = hub disabled)
+	BridgeID          string // unique bridge identifier (default: hostname)
+	HubUsername       string // MQTT username
+	HubPassword       string // MQTT password
+	HubTLSCert        string // path to client TLS certificate
+	HubTLSKey         string // path to client TLS key
+	HubHealthInterval int    // health publish interval in seconds (default 30)
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -79,7 +88,23 @@ func Load() *Config {
 		TCPListenAddr:       envStr("MESHSAT_TCP_LISTEN", ""),
 		TCPConnectAddr:      envStr("MESHSAT_TCP_CONNECT", ""),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
+
+		HubURL:            envStr("MESHSAT_HUB_URL", ""),
+		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),
+		HubUsername:       envStr("MESHSAT_HUB_USERNAME", ""),
+		HubPassword:       envStr("MESHSAT_HUB_PASSWORD", ""),
+		HubTLSCert:        envStr("MESHSAT_HUB_TLS_CERT", ""),
+		HubTLSKey:         envStr("MESHSAT_HUB_TLS_KEY", ""),
+		HubHealthInterval: envInt("MESHSAT_HUB_HEALTH_INTERVAL", 30),
 	}
+}
+
+func defaultHostname() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "meshsat"
+	}
+	return h
 }
 
 func envStr(key, fallback string) string {

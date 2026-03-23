@@ -730,6 +730,19 @@ var migrations = []string{
 		fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_credit_balance_fetched ON credit_balance(fetched_at);`,
+
+	// v31: Hub outbox — offline message queue for store-and-forward (MESHSAT-289).
+	// When the Hub MQTT broker is unreachable, hub-bound messages are queued
+	// locally and replayed in FIFO order when the connection is restored.
+	`CREATE TABLE IF NOT EXISTS hub_outbox (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		topic       TEXT NOT NULL,
+		payload     TEXT NOT NULL,
+		qos         INTEGER NOT NULL DEFAULT 1,
+		retry_count INTEGER NOT NULL DEFAULT 0,
+		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_hub_outbox_created ON hub_outbox(created_at);`,
 }
 
 func (db *DB) migrate() error {
