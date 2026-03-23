@@ -1117,6 +1117,11 @@ func (m *Manager) GetIridiumSignal(ctx context.Context) (*transport.SignalInfo, 
 	return sat.GetSignal(ctx)
 }
 
+// GetSignalFast implements engine.SignalProvider for the signal recorder.
+func (m *Manager) GetSignalFast(ctx context.Context) (*transport.SignalInfo, error) {
+	return m.GetIridiumSignalFast(ctx)
+}
+
 // GetIridiumSignalFast returns a cached satellite signal reading (non-blocking).
 // Automatically selects the active transport.
 func (m *Manager) GetIridiumSignalFast(ctx context.Context) (*transport.SignalInfo, error) {

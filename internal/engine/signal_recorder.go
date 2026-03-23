@@ -11,21 +11,27 @@ import (
 	"meshsat/internal/transport"
 )
 
+// SignalProvider abstracts signal reading so the recorder can use either a direct
+// transport or the gateway manager's auto-selecting method.
+type SignalProvider interface {
+	GetSignalFast(ctx context.Context) (*transport.SignalInfo, error)
+}
+
 // SignalRecorder polls the satellite transport for signal readings and persists
 // them to the signal_history table. Uses GetSignalFast (non-blocking cached read)
 // so it works alongside the gateway's Subscribe without conflicting goroutines.
 // Also runs a daily pruner to remove entries older than 90 days.
 type SignalRecorder struct {
-	db  *database.DB
-	sat transport.SatTransport
+	db       *database.DB
+	provider SignalProvider
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
 // NewSignalRecorder creates a new signal recorder.
-func NewSignalRecorder(db *database.DB, sat transport.SatTransport) *SignalRecorder {
-	return &SignalRecorder{db: db, sat: sat}
+func NewSignalRecorder(db *database.DB, provider SignalProvider) *SignalRecorder {
+	return &SignalRecorder{db: db, provider: provider}
 }
 
 // Start launches the signal polling loop and daily pruner.
@@ -64,7 +70,7 @@ func (sr *SignalRecorder) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sig, err := sr.sat.GetSignalFast(ctx)
+			sig, err := sr.provider.GetSignalFast(ctx)
 			if err != nil || sig == nil {
 				continue // transport not connected yet
 			}

@@ -543,8 +543,9 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 }
 
 // signalPoller periodically queries signal strength.
-// On timeout (indoor, no constellation), records 0 bars so the signal history
-// chart gets data points instead of staying empty.
+// On timeout, only records 0 bars if no recent unsolicited reading exists.
+// Unsolicited 299 constellationState messages (processed by pollLoop) are the
+// primary signal source — the active GET query often times out (MESHSAT-275).
 func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 	defer close(t.sigDone)
 
@@ -558,13 +559,26 @@ func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 		case <-ticker.C:
 			if _, err := t.GetSignal(ctx); err != nil {
 				log.Debug().Err(err).Msg("imt: signal poll failed")
-				// Record 0 bars on timeout so the signal chart has data points.
-				// The official C library returns -1 (no signal) on timeout.
-				now := time.Now().UTC().Format(time.RFC3339)
-				info := SignalInfo{Bars: 0, Timestamp: now, Assessment: "none"}
-				t.signalMu.Lock()
-				t.lastSignal = info
-				t.signalMu.Unlock()
+				// Only record 0 bars if we have no recent reading from unsolicited
+				// 299 messages. A reading is "recent" if it's less than 2 minutes old.
+				t.signalMu.RLock()
+				existing := t.lastSignal
+				t.signalMu.RUnlock()
+
+				stale := true
+				if existing.Timestamp != "" {
+					if ts, err := time.Parse(time.RFC3339, existing.Timestamp); err == nil {
+						stale = time.Since(ts) > 2*time.Minute
+					}
+				}
+
+				if stale {
+					now := time.Now().UTC().Format(time.RFC3339)
+					info := SignalInfo{Bars: 0, Timestamp: now, Assessment: "none"}
+					t.signalMu.Lock()
+					t.lastSignal = info
+					t.signalMu.Unlock()
+				}
 			}
 		}
 	}

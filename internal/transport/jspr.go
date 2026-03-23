@@ -921,58 +921,73 @@ func mustMarshal(v interface{}) string {
 }
 
 // probeJSPR sends a GET apiVersion to check if a port is a JSPR modem at 230400 baud.
+// Retries up to 3 times with drain+settle between attempts, matching the official
+// RockBLOCK-9704 C library handshake sequence. The modem often responds with
+// "403 MALFORMED" on the first attempt after cold boot or port re-open.
 func probeJSPR(portPath string) bool {
 	port, err := openSerial(portPath, jsprBaud)
 	if err != nil {
+		log.Debug().Err(err).Str("port", portPath).Msg("jspr probe: open failed")
 		return false
 	}
 	defer port.Close()
 
-	// Drain any pending data
-	port.SetReadTimeout(100 * time.Millisecond)
-	buf := make([]byte, 1024)
-	for {
-		n, _ := port.Read(buf)
-		if n == 0 {
-			break
+	for attempt := 0; attempt < 3; attempt++ {
+		// Drain any pending data
+		port.SetReadTimeout(100 * time.Millisecond)
+		buf := make([]byte, 1024)
+		for {
+			n, _ := port.Read(buf)
+			if n == 0 {
+				break
+			}
 		}
-	}
+		time.Sleep(5 * time.Millisecond) // settling time after drain (per official library)
 
-	// Send GET apiVersion
-	if _, err := port.Write([]byte("GET apiVersion {}\r")); err != nil {
-		return false
-	}
-
-	// Read response with timeout
-	port.SetReadTimeout(jsprReadTimeout)
-	deadline := time.Now().Add(3 * time.Second)
-	var line strings.Builder
-	var b [1]byte
-
-	for time.Now().Before(deadline) {
-		n, err := port.Read(b[:])
-		if n == 0 && err == nil {
-			continue
-		}
-		if err != nil {
+		// Send GET apiVersion
+		if _, err := port.Write([]byte("GET apiVersion {}\r")); err != nil {
+			log.Debug().Err(err).Str("port", portPath).Int("attempt", attempt+1).Msg("jspr probe: write failed")
 			return false
 		}
-		if b[0] == '\r' {
-			if line.Len() >= 3 {
-				resp, err := parseJSPRLine(line.String())
-				if err == nil && resp.Code > 0 {
-					// Any valid JSPR response (200, 403, etc.) proves this is a 9704
-					return true
-				}
+
+		// Read response with timeout
+		port.SetReadTimeout(jsprReadTimeout)
+		deadline := time.Now().Add(3 * time.Second)
+		var line strings.Builder
+		var b [1]byte
+		gotResponse := false
+
+		for time.Now().Before(deadline) {
+			n, err := port.Read(b[:])
+			if n == 0 && err == nil {
+				continue
 			}
-			line.Reset()
-			continue
+			if err != nil {
+				break
+			}
+			if b[0] == '\r' {
+				if line.Len() >= 3 {
+					resp, err := parseJSPRLine(line.String())
+					if err == nil && resp.Code > 0 {
+						// Any valid JSPR response (200, 403, etc.) proves this is a 9704
+						return true
+					}
+					log.Debug().Str("line", line.String()).Err(err).Int("attempt", attempt+1).Msg("jspr probe: unparseable response")
+				}
+				gotResponse = true
+				line.Reset()
+				continue
+			}
+			// Skip non-printable
+			if b[0] < 0x20 || b[0] > 0x7E {
+				continue
+			}
+			line.WriteByte(b[0])
 		}
-		// Skip non-printable
-		if b[0] < 0x20 || b[0] > 0x7E {
-			continue
+
+		if !gotResponse {
+			log.Debug().Str("port", portPath).Int("attempt", attempt+1).Msg("jspr probe: no response (timeout)")
 		}
-		line.WriteByte(b[0])
 	}
 
 	return false
