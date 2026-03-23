@@ -87,44 +87,39 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	return &rawSerialPort{fd: fd, timeout: 500 * time.Millisecond}, nil
 }
 
-// Read matches the C library's readLinux() function:
-//  1. select() with timeout to wait for data
-//  2. read() to fetch available bytes
+// Read waits for data using ioctl(FIONREAD) polling, then reads with unix.Read().
+//
+// The C library uses select() for read timeouts, but on the FTDI FT234XD
+// driver (kernel 6.17), select()/poll()/epoll all stop notifying after the
+// initial serial burst — a known issue with the ftdi_sio driver's tty
+// wake-up mechanism. ioctl(FIONREAD) bypasses the notification system entirely
+// by directly querying the tty input buffer, matching the C library's
+// serialPeek() (peekLinux) function which also uses ioctl(FIONREAD).
 //
 // Returns (0, nil) on timeout to match go.bug.st/serial's behavior.
 func (p *rawSerialPort) Read(buf []byte) (int, error) {
-	// Match C library: struct timeval timeout = {0, 500000};
-	// fd_set read_fds; FD_SET(fd, &read_fds);
-	// select(fd+1, &read_fds, NULL, NULL, &timeout);
-	timeoutUs := p.timeout.Microseconds()
-	tv := unix.Timeval{
-		Sec:  timeoutUs / 1_000_000,
-		Usec: timeoutUs % 1_000_000,
-	}
-
-	var readFds unix.FdSet
-	readFds.Set(p.fd)
-
-	n, err := unix.Select(p.fd+1, &readFds, nil, nil, &tv)
-	if err != nil {
-		if err == unix.EINTR {
-			return 0, nil // signal interrupted — treat as timeout
+	deadline := time.Now().Add(p.timeout)
+	for time.Now().Before(deadline) {
+		// ioctl(FIONREAD) — same as C library's peekLinux()/serialPeek()
+		avail, err := unix.IoctlGetInt(p.fd, unix.TIOCINQ)
+		if err != nil {
+			return 0, fmt.Errorf("fionread: %w", err)
 		}
-		return 0, fmt.Errorf("select: %w", err)
-	}
-	if n == 0 {
-		return 0, nil // timeout, no data
-	}
-
-	// Data available — read it
-	nr, err := unix.Read(p.fd, buf)
-	if err != nil {
-		if err == unix.EAGAIN {
-			return 0, nil // non-blocking fd, no data after all
+		if avail > 0 {
+			n, err := unix.Read(p.fd, buf)
+			if err != nil {
+				if err == unix.EAGAIN {
+					continue // race: data consumed between peek and read
+				}
+				return 0, fmt.Errorf("read: %w", err)
+			}
+			return n, nil
 		}
-		return 0, fmt.Errorf("read: %w", err)
+		// No data — sleep 2ms to avoid busy-spinning.
+		// At 230400 baud, 2ms ≈ 58 bytes — well within tolerance.
+		time.Sleep(2 * time.Millisecond)
 	}
-	return nr, nil
+	return 0, nil // timeout
 }
 
 // Write matches the C library's writeLinux() — write() with EAGAIN retry.
