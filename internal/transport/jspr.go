@@ -144,7 +144,13 @@ func (c *jsprConn) readerLoop() {
 		default:
 		}
 
+		// Acquire writeMu during read to prevent concurrent R/W on the serial port.
+		// The go-serial library may not support simultaneous Read() and Write() on
+		// the same fd — concurrent access can cause the Read() to hang permanently.
+		// writeMu is released between reads so sendRequest can acquire it to write.
+		c.writeMu.Lock()
 		resp, err := c.readOneLine(100 * time.Millisecond)
+		c.writeMu.Unlock()
 		if err != nil {
 			log.Debug().Err(err).Msg("jspr: reader loop read error")
 			continue
