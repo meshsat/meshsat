@@ -20,12 +20,16 @@ import (
 	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hubreporter"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
+	"runtime"
 )
 
 func main() {
+	startTime := time.Now()
+
 	// Console-friendly logging
 	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).
 		With().Timestamp().Caller().Logger()
@@ -518,6 +522,82 @@ func main() {
 		}()
 	}
 
+	// Hub Reporter — bridge-to-hub uplink (MESHSAT-280)
+	var hubReporter *hubreporter.HubReporter
+	if cfg.HubURL != "" {
+		reporterCfg := hubreporter.ReporterConfig{
+			HubURL:         cfg.HubURL,
+			BridgeID:       cfg.BridgeID,
+			Username:       cfg.HubUsername,
+			Password:       cfg.HubPassword,
+			TLSCert:        cfg.HubTLSCert,
+			TLSKey:         cfg.HubTLSKey,
+			HealthInterval: time.Duration(cfg.HubHealthInterval) * time.Second,
+		}
+		birthFn := func() hubreporter.BridgeBirth {
+			ifaces := []hubreporter.InterfaceInfo{}
+			caps := []string{}
+			if mesh != nil {
+				ifaces = append(ifaces, hubreporter.InterfaceInfo{Name: "mesh_0", Type: "meshtastic", Status: "online"})
+				caps = append(caps, "meshtastic")
+			}
+			for _, gs := range gwMgr.GetStatus() {
+				status := "offline"
+				if gs.Connected {
+					status = "online"
+				}
+				ifaces = append(ifaces, hubreporter.InterfaceInfo{Name: gs.Type, Type: gs.Type, Status: status})
+				caps = append(caps, gs.Type)
+			}
+			if routingID != nil {
+				caps = append(caps, "reticulum")
+			}
+			birth := hubreporter.BridgeBirth{
+				Protocol:     hubreporter.ProtocolVersion,
+				BridgeID:     cfg.BridgeID,
+				Version:      "0.18.0",
+				Hostname:     cfg.BridgeID,
+				Mode:         cfg.Mode,
+				TenantID:     "default",
+				Interfaces:   ifaces,
+				Capabilities: caps,
+				CoTType:      hubreporter.CoTBridge,
+				CoTCallsign:  "MESHSAT-" + cfg.BridgeID,
+				Timestamp:    time.Now().UTC(),
+			}
+			if routingID != nil {
+				birth.Reticulum = &hubreporter.ReticulumInfo{
+					IdentityHash:     routingID.DestHashHex(),
+					TransportEnabled: true,
+				}
+			}
+			return birth
+		}
+		healthFn := func() hubreporter.BridgeHealth {
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			health := hubreporter.BridgeHealth{
+				Protocol:  hubreporter.ProtocolVersion,
+				BridgeID:  cfg.BridgeID,
+				UptimeSec: int64(time.Since(startTime).Seconds()),
+				MemPct:    float64(m.Alloc) / float64(m.Sys) * 100,
+				Timestamp: time.Now().UTC(),
+			}
+			return health
+		}
+		hubReporter = hubreporter.NewHubReporter(reporterCfg, birthFn, healthFn)
+
+		// Outbox for offline queuing
+		outbox := hubreporter.NewOutbox(db.DB.DB, 10000, 7*24*time.Hour)
+		hubReporter.SetOutbox(outbox)
+
+		if err := hubReporter.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("hub reporter start failed")
+		} else {
+			log.Info().Str("hub", cfg.HubURL).Str("bridge_id", cfg.BridgeID).Msg("hub reporter started")
+		}
+	}
+
 	// Start HTTP server
 	go func() {
 		log.Info().Int("port", cfg.Port).Msg("HTTP server listening")
@@ -533,6 +613,9 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
 	cancel() // Stop processor + retention + gateways
+	if hubReporter != nil {
+		hubReporter.Stop()
+	}
 	sigRecorder.Stop()
 	if cellSigRecorder != nil {
 		cellSigRecorder.Stop()
