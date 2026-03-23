@@ -39,9 +39,9 @@ const (
 	jsprIMTCRCSize      = 2
 	jsprMaxPayload      = 100000 // 100 KB max message
 	jsprMaxTopics       = 20
-	jsprReadTimeout     = 50 * time.Millisecond // poll granularity
-	jsprResponseTimeout = 10 * time.Second      // max wait for a response
-	jsprMOTimeout       = 180 * time.Second     // max wait for MO final status
+	jsprReadTimeout     = 500 * time.Millisecond // per-byte select() timeout — matches C library
+	jsprResponseTimeout = 10 * time.Second       // max wait for a response
+	jsprMOTimeout       = 180 * time.Second      // max wait for MO final status
 
 	// Well-known topic IDs
 	jsprRawTopic    = 244
@@ -176,7 +176,7 @@ func (c *jsprConn) readerLoop() {
 		default:
 		}
 
-		resp, err := c.readOneLine(100 * time.Millisecond)
+		resp, err := c.readOneLine(jsprReadTimeout)
 		if err != nil {
 			log.Debug().Err(err).Msg("jspr: reader loop read error")
 			continue
@@ -359,7 +359,12 @@ func jsprSpacedJSON(data []byte) string {
 // Uses c.lineBuf to persist partial reads across calls — this is critical because
 // the 9704 modem at 230400 baud can pause mid-line (e.g., between code and JSON body),
 // causing a single response to span multiple read windows.
-// Returns nil, nil on read timeout (no data available and no partial line buffered).
+//
+// Matches the C library's receiveJspr(): read byte-by-byte via serialRead(buf, 1)
+// until \r terminator. serialRead uses select(500ms) internally — if it times out,
+// receiveJspr exits. Our Read() uses the same select() timeout (jsprReadTimeout=500ms).
+//
+// Returns nil, nil on read timeout (no data available).
 func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
 	deadline := time.Now().Add(maxWait)
 	var buf [1]byte
@@ -369,10 +374,10 @@ func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
 	for time.Now().Before(deadline) {
 		n, err := c.port.Read(buf[:])
 		if n == 0 && err == nil {
-			if c.lineBuf.Len() == 0 {
-				return nil, nil // no data at all, no partial line
-			}
-			continue // partial line in buffer, keep reading until deadline
+			// select() timed out — no data available within jsprReadTimeout.
+			// This matches C library: serialRead returns -1, receiveJspr exits.
+			// Return to readerLoop so it can check writeCh and readerStop.
+			return nil, nil
 		}
 		if err != nil {
 			if c.lineBuf.Len() == 0 {
@@ -386,6 +391,7 @@ func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
 		b := buf[0]
 
 		// Strip non-printable chars before response code (modem may send DC1=0x11 on boot)
+		// Matches C library: resultCodeIndexStart++ to skip past DC1 characters
 		if c.lineBuf.Len() == 0 && (b < 0x20 || b > 0x7E) && b != '\r' {
 			continue
 		}
