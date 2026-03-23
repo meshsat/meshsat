@@ -190,6 +190,73 @@ func TestMQTTConfigRedacted(t *testing.T) {
 	}
 }
 
+func TestMQTTConfigTLSValidation(t *testing.T) {
+	// cert without key should fail
+	cfg := MQTTConfig{
+		BrokerURL: "ssl://broker:8883",
+		TLSCert:   "/tmp/nonexistent.pem",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error when tls_cert set without tls_key")
+	}
+
+	// key without cert should fail
+	cfg = MQTTConfig{
+		BrokerURL: "ssl://broker:8883",
+		TLSKey:    "/tmp/nonexistent.pem",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error when tls_key set without tls_cert")
+	}
+
+	// nonexistent cert file should fail
+	cfg = MQTTConfig{
+		BrokerURL: "ssl://broker:8883",
+		TLSCert:   "/tmp/nonexistent-cert.pem",
+		TLSKey:    "/tmp/nonexistent-key.pem",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for nonexistent tls_cert file")
+	}
+
+	// nonexistent CA file should fail
+	cfg = MQTTConfig{
+		BrokerURL: "ssl://broker:8883",
+		TLSCA:     "/tmp/nonexistent-ca.pem",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for nonexistent tls_ca file")
+	}
+}
+
+func TestMQTTConfigBuildTLSConfig(t *testing.T) {
+	// No TLS fields → nil config
+	cfg := MQTTConfig{}
+	tlsCfg, err := cfg.buildTLSConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tlsCfg != nil {
+		t.Error("expected nil tls config when no TLS fields set")
+	}
+
+	// TLSInsecure only → non-nil config with InsecureSkipVerify
+	cfg = MQTTConfig{TLSInsecure: true}
+	tlsCfg, err = cfg.buildTLSConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tlsCfg == nil {
+		t.Fatal("expected non-nil tls config")
+	}
+	if !tlsCfg.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify should be true")
+	}
+	if tlsCfg.MinVersion != 0x0303 { // tls.VersionTLS12
+		t.Errorf("MinVersion: got %#x, want TLS 1.2", tlsCfg.MinVersion)
+	}
+}
+
 func TestIridiumConfigParse(t *testing.T) {
 	input := `{"forward_all":true,"poll_interval":300}`
 	cfg, err := ParseIridiumConfig(input)

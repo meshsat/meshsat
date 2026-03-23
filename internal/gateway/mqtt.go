@@ -71,6 +71,13 @@ func (g *MQTTGateway) Start(ctx context.Context) error {
 		opts.SetPassword(g.config.Password)
 	}
 
+	// TLS client certificates and/or CA verification
+	if tlsCfg, err := g.config.buildTLSConfig(); err != nil {
+		return fmt.Errorf("mqtt tls config: %w", err)
+	} else if tlsCfg != nil {
+		opts.SetTLSConfig(tlsCfg)
+	}
+
 	opts.SetOnConnectHandler(func(_ mqtt.Client) {
 		g.connected.Store(true)
 		g.lastActive.Store(time.Now().Unix())
@@ -322,6 +329,12 @@ func (g *MQTTGateway) TestConnection() error {
 	}
 	if g.config.Password != "" {
 		opts.SetPassword(g.config.Password)
+	}
+
+	if tlsCfg, err := g.config.buildTLSConfig(); err != nil {
+		return fmt.Errorf("mqtt tls config: %w", err)
+	} else if tlsCfg != nil {
+		opts.SetTLSConfig(tlsCfg)
 	}
 
 	c := mqtt.NewClient(opts)
