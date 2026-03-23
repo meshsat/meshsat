@@ -155,8 +155,12 @@ func (c *jsprConn) readerLoop() {
 		case <-c.readerStop:
 			return
 		case wr := <-c.writeCh:
-			// Process a pending write request before the next read
+			// Process a pending write request inline.
 			_, err := c.port.Write(wr.data)
+			// Re-set the read timeout after every write. On some serial port
+			// implementations, Write() can reset internal port state, causing
+			// the next Read() to block indefinitely without this.
+			c.port.SetReadTimeout(jsprReadTimeout)
 			wr.err <- err
 			continue
 		default:
