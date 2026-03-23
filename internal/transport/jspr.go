@@ -74,12 +74,22 @@ type pendingRequest struct {
 	deadline time.Time
 }
 
+// jsprWriteRequest is sent to the reader goroutine's write channel.
+// The reader goroutine performs the actual serial Write inline between reads,
+// because go-serial does not support concurrent Read/Write on the same fd.
+type jsprWriteRequest struct {
+	data []byte
+	err  chan error // result channel (buffered, cap 1)
+}
+
 // jsprConn manages the JSPR serial connection and protocol state.
 type jsprConn struct {
 	port serial.Port
 
-	// Write mutex — protects serial writes only (held for microseconds)
-	writeMu sync.Mutex
+	// Write channel — all serial writes go through the reader goroutine.
+	// go-serial does NOT support concurrent Read() and Write() on the same fd;
+	// concurrent access causes Read() to hang permanently.
+	writeCh chan jsprWriteRequest
 
 	// Pending request map — keyed by JSPR target name
 	pendingMu sync.Mutex
@@ -109,6 +119,7 @@ func newJSPRConn(port serial.Port) *jsprConn {
 		port:    port,
 		moRef:   0,
 		pending: make(map[string]*pendingRequest),
+		writeCh: make(chan jsprWriteRequest, 4),
 	}
 	c.unsolCond = sync.NewCond(&c.unsolMu)
 	return c
@@ -132,8 +143,10 @@ func (c *jsprConn) stopReader() {
 	}
 }
 
-// readerLoop is the ONLY goroutine that reads from the serial port.
-// It dispatches responses to pending callers and buffers unsolicited messages.
+// readerLoop is the ONLY goroutine that touches the serial port.
+// It handles both reads AND writes because go-serial does not support
+// concurrent Read() and Write() — concurrent access hangs Read() permanently.
+// Writes are sent via c.writeCh and executed inline between reads.
 func (c *jsprConn) readerLoop() {
 	defer close(c.readerDone)
 
@@ -141,16 +154,15 @@ func (c *jsprConn) readerLoop() {
 		select {
 		case <-c.readerStop:
 			return
+		case wr := <-c.writeCh:
+			// Process a pending write request before the next read
+			_, err := c.port.Write(wr.data)
+			wr.err <- err
+			continue
 		default:
 		}
 
-		// Acquire writeMu during read to prevent concurrent R/W on the serial port.
-		// The go-serial library may not support simultaneous Read() and Write() on
-		// the same fd — concurrent access can cause the Read() to hang permanently.
-		// writeMu is released between reads so sendRequest can acquire it to write.
-		c.writeMu.Lock()
 		resp, err := c.readOneLine(100 * time.Millisecond)
-		c.writeMu.Unlock()
 		if err != nil {
 			log.Debug().Err(err).Msg("jspr: reader loop read error")
 			continue
@@ -240,7 +252,7 @@ func (c *jsprConn) nextRef() int {
 }
 
 // sendRequest sends a JSPR request and waits for a matching response.
-// Method is "GET" or "PUT". The write is protected by writeMu (held briefly).
+// Method is "GET" or "PUT". The write goes through writeCh to the reader goroutine.
 // The response is delivered asynchronously by the reader goroutine.
 func (c *jsprConn) sendRequest(method, target string, payload interface{}) (*jsprResponse, error) {
 	return c.sendRequestWithTimeout(method, target, payload, jsprResponseTimeout)
@@ -272,17 +284,21 @@ func (c *jsprConn) sendRequestWithTimeout(method, target string, payload interfa
 	c.pending[target] = pr
 	c.pendingMu.Unlock()
 
-	// Write command — brief lock
-	c.writeMu.Lock()
-	n, writeErr := c.port.Write([]byte(line))
-	c.writeMu.Unlock()
+	// Send write request to the reader goroutine (which owns the serial port).
+	// go-serial does not support concurrent Read/Write — all I/O must be serialized.
+	wr := jsprWriteRequest{
+		data: []byte(line),
+		err:  make(chan error, 1),
+	}
+	c.writeCh <- wr
+	writeErr := <-wr.err
 	if writeErr != nil {
 		c.pendingMu.Lock()
 		delete(c.pending, target)
 		c.pendingMu.Unlock()
 		return nil, fmt.Errorf("jspr: write: %w", writeErr)
 	}
-	log.Debug().Str("target", target).Int("bytes", n).Str("method", method).Msg("jspr: command written")
+	log.Debug().Str("target", target).Int("bytes", len(line)).Str("method", method).Msg("jspr: command written")
 
 	// Wait for response from reader goroutine
 	select {
