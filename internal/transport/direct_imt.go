@@ -47,9 +47,10 @@ type DirectIMTTransport struct {
 	excludePort   string
 	excludePortFn func() string
 
-	cancelFunc context.CancelFunc
-	pollDone   chan struct{}
-	sigDone    chan struct{}
+	cancelFunc   context.CancelFunc
+	pollDone     chan struct{}
+	sigDone      chan struct{}
+	watchdogDone chan struct{}
 }
 
 // NewDirectIMTTransport creates a new direct serial IMT transport for the RockBLOCK 9704.
@@ -134,6 +135,10 @@ func (t *DirectIMTTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 	t.sigDone = make(chan struct{})
 	go t.signalPoller(ctx)
 
+	// Start watchdog — monitors serial reads and cycles port when URBs die
+	t.watchdogDone = make(chan struct{})
+	go t.serialWatchdog(ctx)
+
 	return ch, nil
 }
 
@@ -155,10 +160,9 @@ func (t *DirectIMTTransport) connect() error {
 		return fmt.Errorf("imt: no RockBLOCK 9704 found")
 	}
 
-	// Use rawSerialPort (os.File + epoll) instead of go.bug.st/serial.
-	// go.bug.st/serial's VMIN/VTIME timeouts hang after Write() on the
-	// FTDI FT234XD chip in the RockBLOCK 9704. rawSerialPort uses Go's
-	// runtime poller (epoll) for read deadlines, matching pyserial's approach.
+	// rawSerialPort bypasses go.bug.st/serial and uses raw syscalls with
+	// FTDI-specific workarounds (latency timer 1ms, autosuspend disabled,
+	// FIONREAD polling). See serial_raw.go for full documentation.
 	file, err := openRawSerial(portPath, jsprBaud)
 	if err != nil {
 		return fmt.Errorf("imt: open %s: %w", portPath, err)
@@ -472,6 +476,9 @@ func (t *DirectIMTTransport) Close() error {
 	if t.sigDone != nil {
 		<-t.sigDone
 	}
+	if t.watchdogDone != nil {
+		<-t.watchdogDone
+	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -681,6 +688,99 @@ func (t *DirectIMTTransport) emitEvent(ev SatEvent) {
 		default:
 		}
 	}
+}
+
+// serialWatchdog monitors the serial port for URB death and cycles the
+// connection when reads stall. On ARM Linux with ftdi_sio, the USB host
+// controller can permanently kill read URBs (-EPIPE / urb stopped: -32).
+// The only recovery is closing and reopening the serial port, which forces
+// the kernel to cancel stale URBs and submit fresh ones.
+//
+// The watchdog checks the rawSerialPort's lastRead timestamp every 60 seconds.
+// If no data has been read for 2 minutes, it cycles the port.
+func (t *DirectIMTTransport) serialWatchdog(ctx context.Context) {
+	defer close(t.watchdogDone)
+
+	const (
+		checkInterval = 60 * time.Second
+		staleTimeout  = 2 * time.Minute
+	)
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.mu.Lock()
+			if !t.connected || t.file == nil {
+				t.mu.Unlock()
+				continue
+			}
+			raw, ok := t.file.(*rawSerialPort)
+			t.mu.Unlock()
+
+			if !ok {
+				continue
+			}
+
+			lastRead := raw.LastRead()
+			stale := time.Since(lastRead)
+			if stale < staleTimeout {
+				continue
+			}
+
+			log.Warn().
+				Dur("stale", stale).
+				Str("port", raw.Path()).
+				Msg("imt: serial watchdog — no data received, cycling port (URB likely dead)")
+
+			t.emitEvent(SatEvent{
+				Type:    "watchdog",
+				Message: fmt.Sprintf("Serial watchdog cycling port (no data for %s)", stale.Truncate(time.Second)),
+				Time:    time.Now().UTC().Format(time.RFC3339),
+			})
+
+			if err := t.reconnect(); err != nil {
+				log.Error().Err(err).Msg("imt: serial watchdog reconnect failed")
+			} else {
+				log.Info().Msg("imt: serial watchdog reconnected successfully")
+			}
+		}
+	}
+}
+
+// reconnect closes the current serial connection and opens a fresh one.
+// This forces the kernel to cancel dead URBs and submit new ones.
+func (t *DirectIMTTransport) reconnect() error {
+	t.connectMu.Lock()
+	defer t.connectMu.Unlock()
+
+	t.mu.Lock()
+	// Stop the reader goroutine
+	if t.conn != nil {
+		t.conn.stopReader()
+	}
+	// Close the serial port — cancels all URBs in the kernel
+	if t.file != nil {
+		t.file.Close()
+	}
+	t.file = nil
+	t.conn = nil
+	t.connected = false
+	t.mu.Unlock()
+
+	// Brief pause for the kernel to clean up USB state
+	time.Sleep(500 * time.Millisecond)
+
+	// Reconnect
+	if err := t.connect(); err != nil {
+		return fmt.Errorf("reconnect: %w", err)
+	}
+
+	return nil
 }
 
 // assessSignal maps signal bars (0-5) to a human-readable assessment.
