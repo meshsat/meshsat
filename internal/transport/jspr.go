@@ -719,7 +719,9 @@ func (c *jsprConn) jsprBegin() error {
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(5 * time.Millisecond)
-			c.drainSerial() // clear any stale data between retries
+			// NOTE: do NOT call drainSerial() here — the readerLoop is already
+			// running and reading from the same fd. Concurrent reads race.
+			// The reader goroutine will naturally consume any stale data.
 		}
 
 		resp, err := c.sendRequest("GET", "apiVersion", struct{}{})

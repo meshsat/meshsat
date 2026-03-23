@@ -172,6 +172,32 @@ func (p *rawSerialPort) Read(buf []byte) (int, error) {
 	return 0, nil
 }
 
+// DiagnosticCheck probes the fd state without reading data (safe to call
+// concurrently with readerLoop). Returns a string describing what FIONREAD
+// and select() report.
+func (p *rawSerialPort) DiagnosticCheck() string {
+	// Check FIONREAD (non-destructive — just queries buffer count)
+	avail, fErr := unix.IoctlGetInt(p.fd, unix.TIOCINQ)
+	if fErr != nil {
+		return fmt.Sprintf("fionread_err=%v", fErr)
+	}
+
+	// Check select() readiness with 0 timeout (non-blocking poll)
+	tv := unix.Timeval{Sec: 0, Usec: 0}
+	var readFds unix.FdSet
+	readFds.Set(p.fd)
+	ready, sErr := unix.Select(p.fd+1, &readFds, nil, nil, &tv)
+
+	selectState := "not_ready"
+	if sErr != nil {
+		selectState = fmt.Sprintf("err=%v", sErr)
+	} else if ready > 0 {
+		selectState = "ready"
+	}
+
+	return fmt.Sprintf("fionread=%d select=%s fd=%d", avail, selectState, p.fd)
+}
+
 // Write with EAGAIN retry — matches C library's writeLinux().
 func (p *rawSerialPort) Write(data []byte) (int, error) {
 	sent := 0
