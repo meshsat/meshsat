@@ -639,13 +639,6 @@ func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 			// Active signal query — matches official C library rbGetSignal()
 			sig, err := conn.jsprGetSignal()
 			if err != nil {
-				// Diagnostic: probe fd state without reading (safe concurrent with readerLoop)
-				t.mu.Lock()
-				if raw, ok := t.file.(*rawSerialPort); ok {
-					diag := raw.DiagnosticCheck()
-					log.Warn().Str("diag", diag).Dur("stale", time.Since(raw.LastRead())).Msg("imt: fd diagnostic")
-				}
-				t.mu.Unlock()
 				log.Debug().Err(err).Msg("imt: signal poll failed (active GET)")
 				// Fall back: if no recent reading, record 0 bars
 				t.signalMu.RLock()

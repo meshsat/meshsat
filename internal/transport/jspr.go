@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -160,13 +159,6 @@ func (c *jsprConn) stopReader() {
 // Writes are sent via c.writeCh and executed inline between reads.
 func (c *jsprConn) readerLoop() {
 	defer close(c.readerDone)
-
-	// Pin this goroutine to a single OS thread for the lifetime of the loop.
-	// The FTDI USB serial driver and tty layer may have thread-local state
-	// (URB completion, tty flip buffer) that breaks when Go's scheduler
-	// migrates the goroutine between threads mid-syscall.
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 
 	for {
 		select {
