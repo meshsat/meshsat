@@ -1,45 +1,44 @@
 package transport
 
-// rawSerialPort opens a serial port using raw Linux syscalls and os.File,
-// bypassing go.bug.st/serial. This fixes a bug where go.bug.st/serial's
-// port.Read() hangs permanently after port.Write() on FTDI USB-serial chips
-// (specifically the FT234XD in the RockBLOCK 9704).
+// rawSerialPort opens a serial port using raw Linux syscalls, bypassing
+// go.bug.st/serial. This fixes a bug where go.bug.st/serial's port.Read()
+// hangs permanently after port.Write() on FTDI USB-serial chips (specifically
+// the FT234XD in the RockBLOCK 9704).
 //
 // Root cause: go.bug.st/serial uses VMIN/VTIME termios settings for read
 // timeouts. On FTDI chips, the kernel tty driver's VTIME timer state can
 // get corrupted after a Write() call, causing Read() to block indefinitely.
 //
-// Fix: use Go's runtime poller (epoll) with SetReadDeadline() for timeouts
-// instead of VMIN/VTIME. This matches how Python's pyserial works (which
-// has no issue with the same hardware).
+// Fix: use poll() syscall for read timeouts and unix.Read()/unix.Write() for
+// I/O. This is the same approach Python's pyserial uses (select/poll + read),
+// which works correctly with the same hardware.
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// rawSerialPort wraps an os.File for serial I/O with epoll-based timeouts.
-// Implements the jsprPort interface used by jsprConn.
+// rawSerialPort wraps a raw file descriptor for serial I/O with poll()-based
+// timeouts. Implements the jsprPort interface used by jsprConn.
 type rawSerialPort struct {
-	file    *os.File
+	fd      int
 	timeout time.Duration
 }
 
-// openRawSerial opens a serial port using raw syscalls and returns an os.File-backed
-// serial port that uses Go's runtime poller (epoll) for read timeouts.
-// This avoids the VMIN/VTIME hang bug in go.bug.st/serial on FTDI chips.
+// openRawSerial opens a serial port using raw syscalls and returns a
+// poll()-based serial port. This avoids both the VMIN/VTIME hang bug in
+// go.bug.st/serial and epoll notification issues with FTDI serial devices.
 func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	baudConst, ok := baudRateMap[baud]
 	if !ok {
 		return nil, fmt.Errorf("unsupported baud rate: %d", baud)
 	}
 
-	// Open with O_NONBLOCK so the open itself doesn't block on modem signals,
-	// and so Go's runtime poller can register the fd with epoll.
-	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
+	// Open with O_NOCTTY to avoid becoming the controlling terminal.
+	// Do NOT use O_NONBLOCK — we use blocking I/O with poll() for timeouts.
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
@@ -61,9 +60,9 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	// 8N1, enable receiver, ignore modem control lines
 	termios.Cflag |= unix.CS8 | unix.CREAD | unix.CLOCAL
 
-	// VMIN=0, VTIME=0 — non-blocking at the termios level.
-	// Actual timeout control is via Go's epoll-based SetReadDeadline.
-	termios.Cc[unix.VMIN] = 0
+	// VMIN=1, VTIME=0 — blocking reads (return when at least 1 byte available).
+	// Actual timeout control is via poll() before each read.
+	termios.Cc[unix.VMIN] = 1
 	termios.Cc[unix.VTIME] = 0
 
 	// Set baud rate via Cflag speed bits and Ispeed/Ospeed fields
@@ -80,50 +79,58 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	// Flush any stale data in the kernel buffers
 	unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH)
 
-	// Wrap in os.File — Go's runtime registers the non-blocking fd with epoll,
-	// enabling SetReadDeadline/SetWriteDeadline support.
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		unix.Close(fd)
-		return nil, fmt.Errorf("os.NewFile failed for %s", path)
-	}
-
-	return &rawSerialPort{file: file, timeout: 100 * time.Millisecond}, nil
+	return &rawSerialPort{fd: fd, timeout: 100 * time.Millisecond}, nil
 }
 
 // Read reads from the serial port with the configured timeout.
+// Uses poll() syscall to wait for data, then unix.Read() to fetch it.
 // Returns (0, nil) on timeout to match go.bug.st/serial's behavior.
 func (p *rawSerialPort) Read(buf []byte) (int, error) {
 	if p.timeout > 0 {
-		p.file.SetReadDeadline(time.Now().Add(p.timeout))
-	} else {
-		p.file.SetReadDeadline(time.Time{}) // no deadline
-	}
-	n, err := p.file.Read(buf)
-	if err != nil {
-		if os.IsTimeout(err) {
-			return 0, nil // match go.bug.st/serial: timeout = 0 bytes, no error
+		timeoutMs := int(p.timeout / time.Millisecond)
+		if timeoutMs < 1 {
+			timeoutMs = 1
 		}
-		return n, err
+		fds := []unix.PollFd{{Fd: int32(p.fd), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds, timeoutMs)
+		if err != nil {
+			// EINTR is normal (signal interrupted poll) — treat as timeout
+			if err == unix.EINTR {
+				return 0, nil
+			}
+			return 0, fmt.Errorf("poll: %w", err)
+		}
+		if n == 0 {
+			return 0, nil // timeout, no data — matches go.bug.st/serial behavior
+		}
+		// Check for errors on the fd
+		if fds[0].Revents&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 {
+			return 0, fmt.Errorf("poll: fd error (revents=0x%x)", fds[0].Revents)
+		}
+	}
+
+	n, err := unix.Read(p.fd, buf)
+	if err != nil {
+		return 0, fmt.Errorf("read: %w", err)
 	}
 	return n, nil
 }
 
 // Write writes data to the serial port.
 func (p *rawSerialPort) Write(data []byte) (int, error) {
-	return p.file.Write(data)
+	return unix.Write(p.fd, data)
 }
 
 // SetReadTimeout sets the timeout for subsequent Read calls.
-// The timeout is applied via SetReadDeadline on each Read, not via VMIN/VTIME.
+// The timeout is applied via poll() before each read.
 func (p *rawSerialPort) SetReadTimeout(d time.Duration) error {
 	p.timeout = d
 	return nil
 }
 
-// Close closes the serial port.
+// Close closes the serial port file descriptor.
 func (p *rawSerialPort) Close() error {
-	return p.file.Close()
+	return unix.Close(p.fd)
 }
 
 var baudRateMap = map[int]uint32{
