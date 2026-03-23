@@ -67,10 +67,27 @@ type jsprResponse struct {
 	JSON   json.RawMessage
 }
 
+// pendingRequest represents an in-flight JSPR command awaiting a response.
+type pendingRequest struct {
+	target   string
+	ch       chan jsprResponse // buffered, capacity 1
+	deadline time.Time
+}
+
 // jsprConn manages the JSPR serial connection and protocol state.
 type jsprConn struct {
 	port serial.Port
-	mu   sync.Mutex // serialises all serial I/O
+
+	// Write mutex — protects serial writes only (held for microseconds)
+	writeMu sync.Mutex
+
+	// Pending request map — keyed by JSPR target name
+	pendingMu sync.Mutex
+	pending   map[string]*pendingRequest
+
+	// Reader goroutine lifecycle
+	readerDone chan struct{}
+	readerStop chan struct{}
 
 	// Unsolicited message buffer
 	unsolMu   sync.Mutex
@@ -84,11 +101,119 @@ type jsprConn struct {
 // newJSPRConn wraps an already-opened serial port for JSPR communication.
 func newJSPRConn(port serial.Port) *jsprConn {
 	c := &jsprConn{
-		port:  port,
-		moRef: 0,
+		port:    port,
+		moRef:   0,
+		pending: make(map[string]*pendingRequest),
 	}
 	c.unsolCond = sync.NewCond(&c.unsolMu)
 	return c
+}
+
+// startReader launches the background reader goroutine.
+// Must be called after drainSerial() and before any sendRequest calls.
+func (c *jsprConn) startReader() {
+	c.readerStop = make(chan struct{})
+	c.readerDone = make(chan struct{})
+	go c.readerLoop()
+}
+
+// stopReader signals the reader goroutine to stop and waits for it to exit.
+func (c *jsprConn) stopReader() {
+	if c.readerStop != nil {
+		close(c.readerStop)
+	}
+	if c.readerDone != nil {
+		<-c.readerDone
+	}
+}
+
+// readerLoop is the ONLY goroutine that reads from the serial port.
+// It dispatches responses to pending callers and buffers unsolicited messages.
+func (c *jsprConn) readerLoop() {
+	defer close(c.readerDone)
+
+	for {
+		select {
+		case <-c.readerStop:
+			return
+		default:
+		}
+
+		resp, err := c.readOneLine(100 * time.Millisecond)
+		if err != nil {
+			log.Debug().Err(err).Msg("jspr: reader loop read error")
+			continue
+		}
+		if resp == nil {
+			continue // no data, loop back and check stop
+		}
+
+		if resp.Code == jsprCodeUnsolicited {
+			c.bufferUnsolicited(*resp)
+			continue
+		}
+
+		// Dispatch to pending request
+		c.pendingMu.Lock()
+		if pr, ok := c.pending[resp.Target]; ok {
+			delete(c.pending, resp.Target)
+			c.pendingMu.Unlock()
+			// Non-blocking send (channel is buffered with capacity 1)
+			select {
+			case pr.ch <- *resp:
+			default:
+			}
+			continue
+		}
+
+		// Error responses (code >= 400) may use a generic target like "MALFORMED"
+		// instead of echoing the requested target. Try any pending request.
+		if resp.Code >= 400 {
+			var anyPR *pendingRequest
+			var anyKey string
+			for k, pr := range c.pending {
+				anyPR = pr
+				anyKey = k
+				break
+			}
+			if anyPR != nil {
+				delete(c.pending, anyKey)
+				c.pendingMu.Unlock()
+				log.Debug().Int("code", resp.Code).Str("target", resp.Target).Str("expected", anyPR.target).Msg("jspr: delivering error response with mismatched target")
+				select {
+				case anyPR.ch <- *resp:
+				default:
+				}
+				continue
+			}
+		}
+		c.pendingMu.Unlock()
+
+		log.Debug().Int("code", resp.Code).Str("target", resp.Target).Msg("jspr: discarding unmatched response")
+	}
+}
+
+// waitForUnsolicited waits until a new unsolicited message is buffered, or timeout.
+// Returns true if signalled, false on timeout.
+func (c *jsprConn) waitForUnsolicited(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		c.unsolMu.Lock()
+		c.unsolCond.Wait()
+		c.unsolMu.Unlock()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		// Unblock the waiting goroutine by broadcasting.
+		// The goroutine will wake up, unlock, and exit.
+		c.unsolCond.Broadcast()
+		<-done
+		return false
+	}
 }
 
 // nextRef increments and returns the next request_reference (1-100, wrapping).
@@ -101,11 +226,16 @@ func (c *jsprConn) nextRef() int {
 }
 
 // sendRequest sends a JSPR request and waits for a matching response.
-// Method is "GET" or "PUT". Unsolicited (299) messages are buffered.
+// Method is "GET" or "PUT". The write is protected by writeMu (held briefly).
+// The response is delivered asynchronously by the reader goroutine.
 func (c *jsprConn) sendRequest(method, target string, payload interface{}) (*jsprResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return c.sendRequestWithTimeout(method, target, payload, jsprResponseTimeout)
+}
 
+// sendRequestWithTimeout is like sendRequest but with a custom timeout.
+// Used for commands like constellationState where the official library
+// uses a 1-second timeout instead of the default 10 seconds.
+func (c *jsprConn) sendRequestWithTimeout(method, target string, payload interface{}, timeout time.Duration) (*jsprResponse, error) {
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("jspr: marshal payload: %w", err)
@@ -117,32 +247,38 @@ func (c *jsprConn) sendRequest(method, target string, payload interface{}) (*jsp
 	// spaces, which the modem rejects with 407 BAD_JSON.
 	jsonStr := jsprSpacedJSON(jsonBytes)
 	line := fmt.Sprintf("%s %s %s\r", method, target, jsonStr)
-	if _, err := c.port.Write([]byte(line)); err != nil {
-		return nil, fmt.Errorf("jspr: write: %w", err)
+
+	// Register pending request before writing (avoid race with reader)
+	pr := &pendingRequest{
+		target:   target,
+		ch:       make(chan jsprResponse, 1),
+		deadline: time.Now().Add(timeout),
+	}
+	c.pendingMu.Lock()
+	c.pending[target] = pr
+	c.pendingMu.Unlock()
+
+	// Write command — brief lock
+	c.writeMu.Lock()
+	_, writeErr := c.port.Write([]byte(line))
+	c.writeMu.Unlock()
+	if writeErr != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, target)
+		c.pendingMu.Unlock()
+		return nil, fmt.Errorf("jspr: write: %w", writeErr)
 	}
 
-	return c.readResponseFor(target, jsprResponseTimeout)
-}
-
-// sendRequestWithTimeout is like sendRequest but with a custom timeout.
-// Used for commands like constellationState where the official library
-// uses a 1-second timeout instead of the default 10 seconds.
-func (c *jsprConn) sendRequestWithTimeout(method, target string, payload interface{}, timeout time.Duration) (*jsprResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	jsonBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("jspr: marshal payload: %w", err)
+	// Wait for response from reader goroutine
+	select {
+	case resp := <-pr.ch:
+		return &resp, nil
+	case <-time.After(timeout):
+		c.pendingMu.Lock()
+		delete(c.pending, target)
+		c.pendingMu.Unlock()
+		return nil, fmt.Errorf("jspr: timeout waiting for %s response", target)
 	}
-
-	jsonStr := jsprSpacedJSON(jsonBytes)
-	line := fmt.Sprintf("%s %s %s\r", method, target, jsonStr)
-	if _, err := c.port.Write([]byte(line)); err != nil {
-		return nil, fmt.Errorf("jspr: write: %w", err)
-	}
-
-	return c.readResponseFor(target, timeout)
 }
 
 // jsprSpacedJSON adds spaces after colons and commas in JSON to match the
@@ -172,42 +308,6 @@ func jsprSpacedJSON(data []byte) string {
 		}
 	}
 	return b.String()
-}
-
-// readResponseFor reads serial data until a response matching the target is found.
-// Unsolicited (299) messages are buffered for the poll loop to consume.
-func (c *jsprConn) readResponseFor(target string, timeout time.Duration) (*jsprResponse, error) {
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		resp, err := c.readOneLine(time.Until(deadline))
-		if err != nil {
-			return nil, err
-		}
-		if resp == nil {
-			continue // timeout on this read, try again
-		}
-
-		if resp.Code == jsprCodeUnsolicited {
-			c.bufferUnsolicited(*resp)
-			continue
-		}
-
-		if resp.Target == target {
-			return resp, nil
-		}
-		// Error responses (code >= 400) may use a generic target like "MALFORMED"
-		// instead of echoing the requested target. Accept them so the caller can
-		// fail fast and retry, rather than waiting for timeout.
-		if resp.Code >= 400 {
-			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Str("expected", target).Msg("jspr: accepting error response with mismatched target")
-			return resp, nil
-		}
-		// Mismatched target — discard and continue
-		log.Debug().Str("expected", target).Str("got", resp.Target).Msg("jspr: discarding mismatched response")
-	}
-
-	return nil, fmt.Errorf("jspr: timeout waiting for %s response", target)
 }
 
 // readOneLine reads one JSPR response line from serial.
@@ -260,33 +360,6 @@ func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
 		return nil, fmt.Errorf("jspr: incomplete line at timeout: %q", line.String())
 	}
 	return nil, nil
-}
-
-// poll reads all available unsolicited messages from serial without blocking.
-// Returns the number of messages buffered.
-func (c *jsprConn) poll() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	count := 0
-	for {
-		resp, err := c.readOneLine(100 * time.Millisecond)
-		if err != nil {
-			log.Debug().Err(err).Msg("jspr: poll read error")
-			break
-		}
-		if resp == nil {
-			break // no more data
-		}
-
-		if resp.Code == jsprCodeUnsolicited {
-			c.bufferUnsolicited(*resp)
-			count++
-		} else {
-			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Msg("jspr: discarding non-unsolicited during poll")
-		}
-	}
-	return count
 }
 
 // bufferUnsolicited adds an unsolicited response to the queue and signals waiters.
@@ -577,7 +650,8 @@ type jsprProvisioningResponse struct {
 // jsprBegin initialises the modem: negotiates API version, configures SIM, sets active state.
 // Matches the handshake sequence from the official RockBLOCK-9704 C library.
 func (c *jsprConn) jsprBegin() error {
-	c.drainSerial()
+	// drainSerial() is called by the caller before startReader(), so serial
+	// is already clean at this point. Just add the settling delay.
 	time.Sleep(5 * time.Millisecond) // settling time after drain (per official library)
 
 	// 1. Negotiate API version — retry up to 3 times with delay (official library does 2).
@@ -652,9 +726,8 @@ func (c *jsprConn) jsprBegin() error {
 		if putResp.Code != jsprCodeOK {
 			return fmt.Errorf("jspr begin: set simConfig returned code %d", putResp.Code)
 		}
-		// Wait for simStatus unsolicited
+		// Wait for simStatus unsolicited (reader goroutine buffers it)
 		time.Sleep(500 * time.Millisecond)
-		c.poll()
 	}
 
 	// 3. Set operational state to active
@@ -791,15 +864,10 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 
 	msgID := moResp.MessageID
 
-	// 2. Poll for segment requests and final status
+	// 2. Wait for segment requests and final status via unsolicited buffer.
+	// The reader goroutine handles all serial reads; we just consume the buffer.
 	deadline := time.Now().Add(jsprMOTimeout)
 	for time.Now().Before(deadline) {
-		c.mu.Lock()
-		c.port.SetReadTimeout(jsprReadTimeout)
-		c.mu.Unlock()
-
-		c.poll()
-
 		// Check for segment requests
 		segReqs := c.takeUnsolicited("messageOriginateSegment")
 		for _, segReq := range segReqs {
@@ -812,7 +880,7 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 				continue
 			}
 
-			// Supply the requested segment
+			// Supply the requested segment via sendRequest (async)
 			start := seg.SegmentStart
 			end := start + seg.SegmentLength
 			if end > len(dataWithCRC) {
@@ -820,24 +888,13 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 			}
 
 			segData := base64.StdEncoding.EncodeToString(dataWithCRC[start:end])
-			c.mu.Lock()
-			putLine := fmt.Sprintf("PUT messageOriginateSegment %s\r", mustMarshal(jsprMOSegmentPut{
+			segResp, err := c.sendRequestWithTimeout("PUT", "messageOriginateSegment", jsprMOSegmentPut{
 				TopicID:       topicID,
 				MessageID:     msgID,
 				SegmentLength: end - start,
 				SegmentStart:  start,
 				Data:          segData,
-			}))
-			_, err := c.port.Write([]byte(putLine))
-			c.mu.Unlock()
-			if err != nil {
-				return "", fmt.Errorf("write segment: %w", err)
-			}
-
-			// Read segment PUT response
-			c.mu.Lock()
-			segResp, err := c.readResponseFor("messageOriginateSegment", 5*time.Second)
-			c.mu.Unlock()
+			}, 5*time.Second)
 			if err != nil {
 				log.Warn().Err(err).Msg("jspr: segment PUT response error")
 			} else if segResp.Code != jsprCodeOK {
@@ -857,7 +914,8 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 			}
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the reader goroutine to deliver more unsolicited messages
+		c.waitForUnsolicited(50 * time.Millisecond)
 	}
 
 	return "", fmt.Errorf("MO timeout after %s", jsprMOTimeout)
@@ -872,9 +930,7 @@ func (c *jsprConn) jsprReceiveMT(announce jsprMTAnnounce) ([]byte, int, error) {
 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		c.poll()
-
-		// Collect segments
+		// Collect segments from unsolicited buffer (reader goroutine fills it)
 		segs := c.takeUnsolicited("messageTerminateSegment")
 		for _, seg := range segs {
 			var s jsprMTSegment
@@ -924,7 +980,8 @@ func (c *jsprConn) jsprReceiveMT(announce jsprMTAnnounce) ([]byte, int, error) {
 			}
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the reader goroutine to deliver more unsolicited messages
+		c.waitForUnsolicited(50 * time.Millisecond)
 	}
 
 	return nil, announce.TopicID, fmt.Errorf("MT receive timeout for message %d", announce.MessageID)

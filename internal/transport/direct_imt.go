@@ -165,8 +165,13 @@ func (t *DirectIMTTransport) connect() error {
 	t.port = portPath
 	t.conn = newJSPRConn(file)
 
-	// JSPR handshake
+	// Drain stale serial data, then start the async reader goroutine
+	t.conn.drainSerial()
+	t.conn.startReader()
+
+	// JSPR handshake (uses async sendRequest via reader goroutine)
 	if err := t.conn.jsprBegin(); err != nil {
+		t.conn.stopReader()
 		file.Close()
 		t.file = nil
 		t.conn = nil
@@ -315,13 +320,16 @@ func (t *DirectIMTTransport) Receive(ctx context.Context) ([]byte, error) {
 	}
 	t.mtMu.Unlock()
 
-	// No pending MT — poll once and check again
+	// No pending MT — process any announcements and check again
+	t.processMTAnnouncements()
+
+	// Brief wait for reader goroutine to deliver new unsolicited messages
 	t.mu.Lock()
-	if t.conn != nil {
-		t.conn.poll()
-		t.processMTAnnouncements()
-	}
+	conn := t.conn
 	t.mu.Unlock()
+	if conn != nil {
+		conn.waitForUnsolicited(100 * time.Millisecond)
+	}
 
 	t.mtMu.Lock()
 	defer t.mtMu.Unlock()
@@ -341,10 +349,10 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		t.mu.Unlock()
 		return &SBDResult{MOStatus: 32, StatusText: "not connected"}, nil
 	}
-
-	t.conn.poll()
-	t.processMTAnnouncements()
 	t.mu.Unlock()
+
+	// Reader goroutine handles serial reads; just process any buffered announcements
+	t.processMTAnnouncements()
 
 	t.mtMu.Lock()
 	pending := len(t.mtPending)
@@ -465,6 +473,11 @@ func (t *DirectIMTTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Stop the reader goroutine before closing the serial port
+	if t.conn != nil {
+		t.conn.stopReader()
+	}
+
 	if t.file != nil {
 		t.file.Close()
 		t.file = nil
@@ -488,13 +501,13 @@ func (t *DirectIMTTransport) Close() error {
 // Background goroutines
 // ============================================================================
 
-// pollLoop continuously polls the modem for unsolicited messages (MT, signal changes).
-// The official RockBLOCK 9704 C library recommends polling every 10-50ms to catch
-// all unsolicited 299 constellationState updates (the primary signal source).
+// pollLoop processes unsolicited messages buffered by the reader goroutine.
+// The reader goroutine handles all serial reads at full speed; this loop
+// only consumes the unsolicited buffer for signal updates and MT announcements.
 func (t *DirectIMTTransport) pollLoop(ctx context.Context) {
 	defer close(t.pollDone)
 
-	ticker := time.NewTicker(50 * time.Millisecond) // poll every 50ms per official C library
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -507,10 +520,11 @@ func (t *DirectIMTTransport) pollLoop(ctx context.Context) {
 				t.mu.Unlock()
 				continue
 			}
-			t.conn.poll()
+			conn := t.conn
+			t.mu.Unlock()
 
-			// Process signal updates
-			sigMsgs := t.conn.takeUnsolicited("constellationState")
+			// Process signal updates from unsolicited buffer
+			sigMsgs := conn.takeUnsolicited("constellationState")
 			for _, msg := range sigMsgs {
 				var sig jsprConstellationState
 				if err := json.Unmarshal(msg.JSON, &sig); err == nil {
@@ -532,22 +546,24 @@ func (t *DirectIMTTransport) pollLoop(ctx context.Context) {
 				}
 			}
 
-			// Process MT message announcements
+			// Process MT message announcements (in a goroutine so jsprReceiveMT
+			// doesn't block the poll loop)
 			t.processMTAnnouncements()
-
-			t.mu.Unlock()
 		}
 	}
 }
 
 // processMTAnnouncements handles any buffered messageTerminate announcements.
-// Must be called with t.mu held.
+// Each MT receive runs in a separate goroutine so it doesn't block the poll loop.
 func (t *DirectIMTTransport) processMTAnnouncements() {
-	if t.conn == nil {
+	t.mu.Lock()
+	conn := t.conn
+	t.mu.Unlock()
+	if conn == nil {
 		return
 	}
 
-	announcements := t.conn.takeUnsolicited("messageTerminate")
+	announcements := conn.takeUnsolicited("messageTerminate")
 	for _, ann := range announcements {
 		var mt jsprMTAnnounce
 		if err := json.Unmarshal(ann.JSON, &mt); err != nil {
@@ -557,24 +573,26 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 
 		log.Info().Int("message_id", mt.MessageID).Int("topic", mt.TopicID).Int("max_len", mt.MessageLengthMax).Msg("imt: MT message announced")
 
-		// Receive the full message (handles segment collection)
-		payload, topicID, err := t.conn.jsprReceiveMT(mt)
-		if err != nil {
-			log.Error().Err(err).Int("message_id", mt.MessageID).Msg("imt: MT receive failed")
-			continue
-		}
+		// Receive the full message in a goroutine so it doesn't block pollLoop
+		go func(conn *jsprConn, mt jsprMTAnnounce) {
+			payload, topicID, err := conn.jsprReceiveMT(mt)
+			if err != nil {
+				log.Error().Err(err).Int("message_id", mt.MessageID).Msg("imt: MT receive failed")
+				return
+			}
 
-		log.Info().Int("topic", topicID).Int("size", len(payload)).Msg("imt: MT message received")
+			log.Info().Int("topic", topicID).Int("size", len(payload)).Msg("imt: MT message received")
 
-		t.mtMu.Lock()
-		t.mtPending = append(t.mtPending, payload)
-		t.mtMu.Unlock()
+			t.mtMu.Lock()
+			t.mtPending = append(t.mtPending, payload)
+			t.mtMu.Unlock()
 
-		t.emitEvent(SatEvent{
-			Type:    "mt_received",
-			Message: fmt.Sprintf("MT message received (%d bytes, topic %d)", len(payload), topicID),
-			Time:    time.Now().UTC().Format(time.RFC3339),
-		})
+			t.emitEvent(SatEvent{
+				Type:    "mt_received",
+				Message: fmt.Sprintf("MT message received (%d bytes, topic %d)", len(payload), topicID),
+				Time:    time.Now().UTC().Format(time.RFC3339),
+			})
+		}(conn, mt)
 	}
 }
 
