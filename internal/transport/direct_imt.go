@@ -596,15 +596,16 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 	}
 }
 
-// signalPoller ensures the signal recorder always has a timestamped reading.
-// The primary signal source is unsolicited 299 constellationState messages
-// processed by pollLoop (per the official RockBLOCK 9704 C library design).
-// This goroutine does NOT send active GET queries — those consistently time out
-// (MESHSAT-275) because the modem only responds to GET constellationState when
-// a satellite happens to be visible at query time (1s official timeout).
-// Instead, this goroutine stamps the cached reading so the signal recorder
-// picks it up, and only records 0 bars if no unsolicited update has arrived
-// within 5 minutes (indicating the modem has no satellite visibility).
+// signalPoller actively queries the modem for signal strength every 30 seconds,
+// matching the official RockBLOCK 9704 C library's rbGetSignal() pattern which
+// sends "GET constellationState {}" and waits for the response.
+//
+// Previously (MESHSAT-275) this was changed to passive-only (unsolicited 299),
+// but that was caused by the OLD synchronous JSPR code blocking the pollLoop.
+// With the async reader goroutine, active GET queries work correctly.
+//
+// Signal is also updated by unsolicited 299 constellationState messages
+// processed by pollLoop — both sources feed lastSignal.
 func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 	defer close(t.sigDone)
 
@@ -616,35 +617,53 @@ func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.signalMu.RLock()
-			existing := t.lastSignal
-			t.signalMu.RUnlock()
+			t.mu.Lock()
+			conn := t.conn
+			connected := t.connected
+			t.mu.Unlock()
 
-			now := time.Now().UTC()
-
-			if existing.Timestamp != "" {
-				if ts, err := time.Parse(time.RFC3339, existing.Timestamp); err == nil {
-					if now.Sub(ts) <= 5*time.Minute {
-						// Recent unsolicited reading exists — re-stamp it so the
-						// signal recorder sees a fresh timestamp and records it.
-						refreshed := SignalInfo{
-							Bars:       existing.Bars,
-							Timestamp:  now.Format(time.RFC3339),
-							Assessment: existing.Assessment,
-						}
-						t.signalMu.Lock()
-						t.lastSignal = refreshed
-						t.signalMu.Unlock()
-						continue
-					}
-				}
+			if !connected || conn == nil {
+				continue
 			}
 
-			// No recent unsolicited update — record 0 bars.
-			info := SignalInfo{Bars: 0, Timestamp: now.Format(time.RFC3339), Assessment: "none"}
+			// Active signal query — matches official C library rbGetSignal()
+			sig, err := conn.jsprGetSignal()
+			if err != nil {
+				log.Debug().Err(err).Msg("imt: signal poll failed (active GET)")
+				// Fall back: if no recent reading, record 0 bars
+				t.signalMu.RLock()
+				existing := t.lastSignal
+				t.signalMu.RUnlock()
+				now := time.Now().UTC()
+				if existing.Timestamp != "" {
+					if ts, parseErr := time.Parse(time.RFC3339, existing.Timestamp); parseErr == nil {
+						if now.Sub(ts) <= 5*time.Minute {
+							continue // recent unsolicited reading still valid
+						}
+					}
+				}
+				info := SignalInfo{Bars: 0, Timestamp: now.Format(time.RFC3339), Assessment: "none"}
+				t.signalMu.Lock()
+				t.lastSignal = info
+				t.signalMu.Unlock()
+				continue
+			}
+
+			info := SignalInfo{
+				Bars:       sig.SignalBars,
+				Timestamp:  time.Now().UTC().Format(time.RFC3339),
+				Assessment: assessSignal(sig.SignalBars),
+			}
 			t.signalMu.Lock()
 			t.lastSignal = info
 			t.signalMu.Unlock()
+
+			t.emitEvent(SatEvent{
+				Type:    "signal",
+				Message: fmt.Sprintf("Signal: %d/5", sig.SignalBars),
+				Signal:  sig.SignalBars,
+				Time:    time.Now().UTC().Format(time.RFC3339),
+			})
 		}
 	}
 }
