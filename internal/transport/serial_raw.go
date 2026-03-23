@@ -57,13 +57,19 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	// Configure termios — matches C library's configurePortLinux()
-	termios, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	// Configure termios using TCGETS2/TCSETS2 for proper baud rate support.
+	// Standard TCGETS/TCSETS only handles baud rates up to B38400 in the CBAUD
+	// field. Baud rates above 38400 (like 230400) require TCGETS2/TCSETS2 which
+	// properly handles the extended baud rate range via Ispeed/Ospeed fields.
+	// Using TCGETS/TCSETS with B230400 silently fails on ARM64 — the baud rate
+	// stays at the kernel default (9600), causing the JSPR modem to not respond.
+	termios, err := unix.IoctlGetTermios(fd, unix.TCGETS2)
 	if err != nil {
 		unix.Close(fd)
-		return nil, fmt.Errorf("get termios %s: %w", path, err)
+		return nil, fmt.Errorf("get termios2 %s: %w", path, err)
 	}
 
+	// Set baud rate via CBAUD + Ispeed/Ospeed (TCSETS2 supports all rates)
 	termios.Cflag &^= unix.CBAUD
 	termios.Cflag |= baudConst
 	termios.Ispeed = baudConst
@@ -78,9 +84,9 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	termios.Iflag &^= unix.IXON | unix.IXOFF | unix.IXANY | unix.ICRNL
 	termios.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHOE | unix.ISIG
 
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, termios); err != nil {
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS2, termios); err != nil {
 		unix.Close(fd)
-		return nil, fmt.Errorf("set termios %s: %w", path, err)
+		return nil, fmt.Errorf("set termios2 %s: %w", path, err)
 	}
 
 	unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH)
