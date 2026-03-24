@@ -88,9 +88,10 @@ class JSPRHelper:
         self.running = True
         self._write_lock = threading.Lock()
         self._emit_lock = threading.Lock()
-        # Lock held during send_mo to prevent serial_thread from stealing responses
-        self._mo_lock = threading.Lock()
-        self._mo_active = False
+        # Serial read coordination between serial_thread and send_mo.
+        # serial_thread must acquire _serial_read_lock before every jspr_receive.
+        # send_mo acquires it for the entire MO flow, blocking serial_thread.
+        self._serial_read_lock = threading.Lock()
 
         # Set FTDI latency timer to 1ms if possible
         dev = os.path.basename(port)
@@ -182,14 +183,11 @@ class JSPRHelper:
         4. Wait for 200 + 299 status
         5. Emit mo_result to Go
         """
-        # Acquire serial read lock — serial_thread must not read during MO
-        self._mo_active = True
-        # Wait for serial_thread to exit jspr_receive (it checks _mo_active every 0.01s)
-        time.sleep(0.05)
-        try:
+        # Acquire serial read lock — blocks serial_thread from reading
+        # until the entire MO flow completes. serial_thread acquires this
+        # lock before every jspr_receive call, so it will wait.
+        with self._serial_read_lock:
             self._do_send_mo(topic_id, payload_b64, length, request_reference)
-        finally:
-            self._mo_active = False
 
     def _do_send_mo(self, topic_id, payload_b64, length, request_reference):
         log = lambda msg: (sys.stderr.write(f"jspr-helper.py: MO: {msg}\n"), sys.stderr.flush())
@@ -349,11 +347,10 @@ class JSPRHelper:
     def serial_thread(self):
         """Read JSPR responses from serial, emit JSON on stdout."""
         while self.running:
-            # Skip reads while MO is active (send_mo handles serial directly)
-            if self._mo_active:
-                time.sleep(0.05)
-                continue
-            resp = self.jspr_receive(timeout=0.5)
+            # Acquire read lock — send_mo holds this during the entire MO flow,
+            # so we block here instead of competing for serial data.
+            with self._serial_read_lock:
+                resp = self.jspr_receive(timeout=0.5)
             if resp:
                 if resp["code"] == 299:
                     self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
