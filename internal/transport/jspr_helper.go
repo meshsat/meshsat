@@ -255,6 +255,14 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 	cmdBytes = append(cmdBytes, '\n')
 
 	log.Debug().Int("topic", topicID).Int("length", length).Msg("imt: sending send_mo to helper")
+
+	// Touch lastRead so the serial watchdog doesn't cycle the port during
+	// the MO flow. The helper blocks on serial for up to 2 minutes waiting
+	// for the satellite link, during which no stdout data reaches Go.
+	h.mu.Lock()
+	h.lastRead = time.Now()
+	h.mu.Unlock()
+
 	_, writeErr := h.stdin.Write(cmdBytes)
 	if writeErr != nil {
 		return fmt.Errorf("write send_mo: %w", writeErr)
