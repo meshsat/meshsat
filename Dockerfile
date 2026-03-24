@@ -24,7 +24,7 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates wget coreutils python3 py3-pyserial
 COPY --from=builder /meshsat /usr/local/bin/meshsat
 COPY --from=builder /jspr-helper /usr/local/bin/jspr-helper
-COPY cmd/jspr-helper/jspr_helper.py /usr/local/bin/jspr_helper.py
+COPY --chmod=755 cmd/jspr-helper/jspr_helper.py /usr/local/bin/jspr_helper.py
 
 EXPOSE 6050
 
