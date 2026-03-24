@@ -39,4 +39,10 @@ web:
 	rm -rf cmd/meshsat/web/dist
 	cp -r web/dist cmd/meshsat/web/dist
 
+jspr-helper:
+	gcc -O2 -Wall -o $(BUILD_DIR)/jspr-helper cmd/jspr-helper/main.c
+
+jspr-helper-arm64:
+	aarch64-linux-gnu-gcc -O2 -Wall -o $(BUILD_DIR)/jspr-helper-arm64 cmd/jspr-helper/main.c
+
 build-with-web: web build
