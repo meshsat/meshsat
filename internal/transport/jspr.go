@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 // jsprPort is the serial port interface used by jsprConn.
@@ -1060,47 +1061,78 @@ func mustMarshal(v interface{}) string {
 // RockBLOCK-9704 C library handshake sequence. The modem often responds with
 // "403 MALFORMED" on the first attempt after cold boot or port re-open.
 func probeJSPR(portPath string) bool {
-	port, err := openSerial(portPath, jsprBaud)
+	// Use raw fd with TCSETS2 for correct baud rate on ARM64, and
+	// O_NONBLOCK + select() for the probe (short-lived, needs timeouts).
+	// The long-lived connection uses VMIN=1 VTIME=0 (blocking), but the
+	// probe can't block forever — it needs to timeout and move on.
+	fd, err := unix.Open(portPath, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		log.Debug().Err(err).Str("port", portPath).Msg("jspr probe: open failed")
 		return false
 	}
-	defer port.Close()
+	defer unix.Close(fd)
+
+	// Set baud rate via TCSETS2
+	termios, err := unix.IoctlGetTermios(fd, unix.TCGETS2)
+	if err != nil {
+		return false
+	}
+	termios.Cflag &^= unix.CBAUD
+	termios.Cflag |= unix.B230400
+	termios.Ispeed = unix.B230400
+	termios.Ospeed = unix.B230400
+	termios.Cflag &^= unix.CSIZE
+	termios.Cflag |= unix.CS8
+	termios.Cflag &^= unix.PARENB | unix.CSTOPB
+	termios.Cflag |= unix.CLOCAL | unix.CREAD
+	termios.Iflag &^= unix.IXON | unix.IXOFF | unix.IXANY | unix.ICRNL
+	termios.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHOE | unix.ISIG
+	unix.IoctlSetTermios(fd, unix.TCSETS2, termios)
+	unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH)
+
+	// Helper: select+read with timeout
+	readByte := func(timeoutMs int) (byte, bool) {
+		tv := unix.Timeval{Usec: int64(timeoutMs) * 1000}
+		var fds unix.FdSet
+		fds.Set(fd)
+		n, _ := unix.Select(fd+1, &fds, nil, nil, &tv)
+		if n <= 0 {
+			return 0, false
+		}
+		var b [1]byte
+		nr, err := unix.Read(fd, b[:])
+		if nr <= 0 || err != nil {
+			return 0, false
+		}
+		return b[0], true
+	}
 
 	for attempt := 0; attempt < 3; attempt++ {
-		// Drain any pending data
-		port.SetReadTimeout(100 * time.Millisecond)
-		buf := make([]byte, 1024)
+		// Drain
 		for {
-			n, _ := port.Read(buf)
-			if n == 0 {
+			if _, ok := readByte(100); !ok {
 				break
 			}
 		}
-		time.Sleep(5 * time.Millisecond) // settling time after drain (per official library)
+		time.Sleep(5 * time.Millisecond)
 
 		// Send GET apiVersion
-		if _, err := port.Write([]byte("GET apiVersion {}\r")); err != nil {
+		if _, err := unix.Write(fd, []byte("GET apiVersion {}\r")); err != nil {
 			log.Debug().Err(err).Str("port", portPath).Int("attempt", attempt+1).Msg("jspr probe: write failed")
 			return false
 		}
 
 		// Read response with timeout
-		port.SetReadTimeout(jsprReadTimeout)
 		deadline := time.Now().Add(3 * time.Second)
 		var line strings.Builder
-		var b [1]byte
 		gotResponse := false
 
 		for time.Now().Before(deadline) {
-			n, err := port.Read(b[:])
-			if n == 0 && err == nil {
+			ch, ok := readByte(500)
+			if !ok {
 				continue
 			}
-			if err != nil {
-				break
-			}
-			if b[0] == '\r' {
+			if ch == '\r' {
 				if line.Len() >= 3 {
 					resp, err := parseJSPRLine(line.String())
 					if err == nil && resp.Code > 0 {
@@ -1114,10 +1146,10 @@ func probeJSPR(portPath string) bool {
 				continue
 			}
 			// Skip non-printable
-			if b[0] < 0x20 || b[0] > 0x7E {
+			if ch < 0x20 || ch > 0x7E {
 				continue
 			}
-			line.WriteByte(b[0])
+			line.WriteByte(ch)
 		}
 
 		if !gotResponse {
