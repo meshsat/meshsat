@@ -166,13 +166,25 @@ func (c *jsprConn) readerLoop() {
 		case <-c.readerStop:
 			return
 		case wr := <-c.writeCh:
-			// Process a pending write request inline.
-			_, err := c.port.Write(wr.data)
+			// Process a pending write request inline with timeout.
+			// If the serial port hangs (device disconnected), we must not block
+			// the reader goroutine forever.
+			writeDone := make(chan error, 1)
+			go func() {
+				_, err := c.port.Write(wr.data)
+				writeDone <- err
+			}()
+			var writeErr error
+			select {
+			case writeErr = <-writeDone:
+			case <-time.After(5 * time.Second):
+				writeErr = fmt.Errorf("jspr: write timeout (5s)")
+			}
 			// Re-set the read timeout after every write. On some serial port
 			// implementations, Write() can reset internal port state, causing
 			// the next Read() to block indefinitely without this.
 			c.port.SetReadTimeout(jsprReadTimeout)
-			wr.err <- err
+			wr.err <- writeErr
 			continue
 		default:
 		}

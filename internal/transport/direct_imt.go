@@ -726,23 +726,29 @@ func (t *DirectIMTTransport) serialWatchdog(ctx context.Context) {
 				t.mu.Unlock()
 				continue
 			}
-			raw, ok := t.file.(*rawSerialPort)
+			file := t.file
 			t.mu.Unlock()
 
+			lr, ok := file.(interface{ LastRead() time.Time })
 			if !ok {
 				continue
 			}
 
-			lastRead := raw.LastRead()
+			lastRead := lr.LastRead()
 			stale := time.Since(lastRead)
 			if stale < staleTimeout {
 				continue
 			}
 
+			portPath := ""
+			if pp, ok := file.(interface{ Path() string }); ok {
+				portPath = pp.Path()
+			}
+
 			log.Warn().
 				Dur("stale", stale).
-				Str("port", raw.Path()).
-				Msg("imt: serial watchdog — no data received, cycling port (URB likely dead)")
+				Str("port", portPath).
+				Msg("imt: serial watchdog — no data received, cycling port")
 
 			t.emitEvent(SatEvent{
 				Type:    "watchdog",
@@ -790,15 +796,29 @@ func (t *DirectIMTTransport) reconnect() error {
 	return nil
 }
 
-// findJSPRHelper locates the jspr-helper C binary.
+// findJSPRHelper locates the jspr-helper executable.
+// Prefers the Python script (reliable serial I/O via pyserial) over the C binary.
 func findJSPRHelper() string {
-	candidates := []string{
+	// Python script — preferred
+	pyCandidates := []string{
+		"/usr/local/bin/jspr_helper.py",
+		"/usr/bin/jspr_helper.py",
+		"./cmd/jspr-helper/jspr_helper.py",
+	}
+	for _, p := range pyCandidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	// C binary — fallback
+	cCandidates := []string{
 		"/usr/local/bin/jspr-helper",
 		"/usr/bin/jspr-helper",
 		"./build/jspr-helper",
 		"./jspr-helper",
 	}
-	for _, p := range candidates {
+	for _, p := range cCandidates {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
