@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -160,26 +162,31 @@ func (t *DirectIMTTransport) connect() error {
 		return fmt.Errorf("imt: no RockBLOCK 9704 found")
 	}
 
-	// Open serial port directly — TCSETS2 for 230400 baud on ARM64,
-	// select()+read() matching the official C library pattern.
-	port, err := openRawSerial(portPath, jsprBaud)
-	if err != nil {
-		return fmt.Errorf("imt: open serial %s: %w", portPath, err)
+	// Use the jspr-helper C binary for serial I/O. Go's runtime interferes
+	// with serial syscalls (select/read) on USB serial devices — the C helper
+	// handles all serial I/O and communicates via stdin/stdout JSON lines.
+	helperPath := findJSPRHelper()
+	if helperPath == "" {
+		return fmt.Errorf("imt: jspr-helper binary not found (checked /usr/local/bin, /usr/bin, ./build)")
 	}
 
-	t.file = port
+	helper, err := startJSPRHelper(helperPath, portPath, jsprBaud)
+	if err != nil {
+		return fmt.Errorf("imt: start helper: %w", err)
+	}
+
+	t.file = helper
 	t.port = portPath
-	t.conn = newJSPRConn(port)
+	t.conn = newJSPRConn(helper)
 
-	// Drain any stale data in the serial buffer before starting the reader.
-	t.conn.drainSerial()
-
+	// The C helper drains stale data on startup. Start the Go reader goroutine
+	// which reads from the helper's buffered output (not from serial directly).
 	t.conn.startReader()
 
 	// JSPR handshake (uses async sendRequest via reader goroutine)
 	if err := t.conn.jsprBegin(); err != nil {
 		t.conn.stopReader()
-		port.Close()
+		helper.Close()
 		t.file = nil
 		t.conn = nil
 		return fmt.Errorf("imt: JSPR begin failed: %w", err)
@@ -719,29 +726,23 @@ func (t *DirectIMTTransport) serialWatchdog(ctx context.Context) {
 				t.mu.Unlock()
 				continue
 			}
-			file := t.file
+			raw, ok := t.file.(*rawSerialPort)
 			t.mu.Unlock()
 
-			lr, ok := file.(interface{ LastRead() time.Time })
 			if !ok {
 				continue
 			}
 
-			lastRead := lr.LastRead()
+			lastRead := raw.LastRead()
 			stale := time.Since(lastRead)
 			if stale < staleTimeout {
 				continue
 			}
 
-			portPath := ""
-			if pp, ok := file.(interface{ Path() string }); ok {
-				portPath = pp.Path()
-			}
-
 			log.Warn().
 				Dur("stale", stale).
-				Str("port", portPath).
-				Msg("imt: serial watchdog — no data received, cycling port")
+				Str("port", raw.Path()).
+				Msg("imt: serial watchdog — no data received, cycling port (URB likely dead)")
 
 			t.emitEvent(SatEvent{
 				Type:    "watchdog",
@@ -787,6 +788,26 @@ func (t *DirectIMTTransport) reconnect() error {
 	}
 
 	return nil
+}
+
+// findJSPRHelper locates the jspr-helper C binary.
+func findJSPRHelper() string {
+	candidates := []string{
+		"/usr/local/bin/jspr-helper",
+		"/usr/bin/jspr-helper",
+		"./build/jspr-helper",
+		"./jspr-helper",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	// Check PATH
+	if p, err := exec.LookPath("jspr-helper"); err == nil {
+		return p
+	}
+	return ""
 }
 
 // assessSignal maps signal bars (0-5) to a human-readable assessment.
