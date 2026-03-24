@@ -89,7 +89,7 @@ func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) 
 
 // handleGetSatModemInfo returns the satellite modem type, IMEI, and connection status.
 // @Summary Get satellite modem info
-// @Description Returns the modem model (RockBLOCK 9603/9704), IMEI, port, and connection state
+// @Description Returns the modem model (RockBLOCK 9603/9704), IMEI, port, type ("sbd" or "imt"), and connection state
 // @Tags iridium
 // @Success 200 {object} transport.SatStatus
 // @Failure 503 {object} map[string]string

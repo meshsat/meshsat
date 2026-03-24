@@ -982,18 +982,8 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 		}
 
 		// Check for final MO status
-		c.unsolMu.Lock()
-		var unsolTargets []string
-		for _, u := range c.unsol {
-			unsolTargets = append(unsolTargets, fmt.Sprintf("%d:%s", u.Code, u.Target))
-		}
-		c.unsolMu.Unlock()
-		if len(unsolTargets) > 0 {
-			log.Debug().Strs("buffered", unsolTargets).Msg("jspr: unsolicited buffer before status check")
-		}
 		statusMsgs := c.takeUnsolicited("messageOriginateStatus")
 		for _, statusMsg := range statusMsgs {
-			log.Debug().RawJSON("json", statusMsg.JSON).Int("expected_msg_id", msgID).Msg("jspr: MO status unsolicited")
 			var status jsprMOStatus
 			if err := json.Unmarshal(statusMsg.JSON, &status); err != nil {
 				log.Warn().Err(err).Msg("jspr: failed to parse MO status")

@@ -370,6 +370,10 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 
 	t.mtMu.Lock()
 	pending := len(t.mtPending)
+	firstLen := 0
+	if pending > 0 {
+		firstLen = len(t.mtPending[0])
+	}
 	t.mtMu.Unlock()
 
 	result := &SBDResult{
@@ -380,6 +384,10 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	}
 	if pending > 0 {
 		result.MTStatus = 1
+		// Set MTLength so handleRingAlertWithRetry proceeds to Receive().
+		// On SBD this is the actual MT size from SBDIX; on IMT we report
+		// the first pending message length as a non-zero indicator.
+		result.MTLength = firstLen
 	}
 
 	return result, nil
@@ -435,6 +443,7 @@ func (t *DirectIMTTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 		Port:      t.port,
 		IMEI:      t.imei,
 		Model:     "RockBLOCK 9704",
+		Type:      "imt",
 	}, nil
 }
 

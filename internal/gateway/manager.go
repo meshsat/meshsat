@@ -1155,9 +1155,10 @@ func (m *Manager) GetIridiumGeolocation(ctx context.Context) (*transport.Geoloca
 }
 
 // GetIridiumTime returns the Iridium network system time (AT-MSSTM).
+// Only available on SBD (9603). IMT (9704) uses JSPR and has no AT-MSSTM.
 func (m *Manager) GetIridiumTime(ctx context.Context) (*transport.IridiumTime, error) {
 	if m.sat == nil {
-		return nil, fmt.Errorf("satellite transport not available")
+		return nil, fmt.Errorf("system time requires SBD (9603) modem — not available with IMT (9704)")
 	}
 	return m.sat.GetSystemTime(ctx)
 }

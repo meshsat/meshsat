@@ -223,12 +223,10 @@ func (h *jsprHelperPort) Write(data []byte) (int, error) {
 	}
 	cmdBytes = append(cmdBytes, '\n')
 
-	log.Debug().Str("method", method).Str("target", target).Int("bytes", len(cmdBytes)).Msg("imt: writing command to helper stdin")
-	n, err := h.stdin.Write(cmdBytes)
+	_, err := h.stdin.Write(cmdBytes)
 	if err != nil {
 		return 0, fmt.Errorf("write to helper: %w", err)
 	}
-	log.Debug().Int("written", n).Str("target", target).Msg("imt: command written to helper stdin")
 
 	return len(data), nil
 }

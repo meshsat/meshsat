@@ -20,6 +20,7 @@ type SatStatus struct {
 	Port      string `json:"port"`
 	IMEI      string `json:"imei"`
 	Model     string `json:"model"`
+	Type      string `json:"type"` // "sbd" (9603) or "imt" (9704)
 	Firmware  string `json:"firmware,omitempty"`
 }
 

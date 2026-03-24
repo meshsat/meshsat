@@ -38,7 +38,12 @@ const deliveryStatsSummary = computed(() => {
 })
 
 const mqttGw = computed(() => (store.gateways || []).find(g => g.type === 'mqtt'))
-const iridiumGw = computed(() => (store.gateways || []).find(g => g.type === 'iridium'))
+const iridiumGw = computed(() => {
+  const gws = store.gateways || []
+  return gws.find(g => (g.type === 'iridium' || g.type === 'iridium_imt') && g.connected)
+    || gws.find(g => g.type === 'iridium' || g.type === 'iridium_imt')
+})
+const bridgeIsIMT = computed(() => iridiumGw.value?.type === 'iridium_imt')
 const cellularGwRaw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
 // Synthesize a gateway-like object from transport status when no gateway is configured
 const cellularGw = computed(() => {
@@ -248,7 +253,7 @@ onUnmounted(() => {
       </div>
       <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
         @click="togglePane('iridium')">
-        <div class="text-[10px] text-gray-500 mb-1">IRIDIUM</div>
+        <div class="text-[10px] text-gray-500 mb-1">{{ bridgeIsIMT ? 'IRIDIUM IMT' : 'IRIDIUM SBD' }}</div>
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full" :class="gwStatusColor(iridiumGw)" />
           <span class="text-xs text-gray-300">{{ gwStatusLabel(iridiumGw) }}</span>
@@ -309,6 +314,9 @@ onUnmounted(() => {
       <!-- Iridium debug -->
       <div v-if="expandedPane === 'iridium'" class="space-y-1">
         <template v-if="iridiumGw">
+          <div class="flex justify-between"><span class="text-gray-600">Transport</span><span>{{ bridgeIsIMT ? 'IMT (9704, JSPR)' : 'SBD (9603, AT)' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">Max Message</span><span>{{ bridgeIsIMT ? '100 KB' : '340 B' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-600">MT Mode</span><span>{{ bridgeIsIMT ? 'Push (unsolicited)' : 'Poll (SBDIX)' }}</span></div>
           <div v-for="[k, v] in gwDebugRows(iridiumGw)" :key="k" class="flex justify-between">
             <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
           </div>

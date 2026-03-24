@@ -222,25 +222,26 @@ func (g *IridiumGateway) sendSBDSync(ctx context.Context, msg *transport.MeshMes
 		result, err = g.sat.Send(ctx, data)
 	}
 
+	gwLabel := "SBD"
+	if g.isIMT {
+		gwLabel = "IMT"
+	}
+
 	if err != nil {
 		g.errors.Add(1)
 		g.recordGSSRegistration(false, 0)
-		return fmt.Errorf("iridium: SBD send failed: %w", err)
+		return fmt.Errorf("iridium: %s send failed: %w", gwLabel, err)
 	}
 
 	g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
 
 	if !result.MOSuccess() {
 		g.errors.Add(1)
-		return fmt.Errorf("iridium: SBD session failed (mo_status=%d)", result.MOStatus)
+		return fmt.Errorf("iridium: %s session failed (mo_status=%d)", gwLabel, result.MOStatus)
 	}
 
 	g.msgsOut.Add(1)
 	g.lastActive.Store(time.Now().Unix())
-	gwLabel := "SBD"
-	if g.isIMT {
-		gwLabel = "IMT"
-	}
 	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Str("transport", gwLabel).Msg("iridium: message sent")
 	g.emit("forward", fmt.Sprintf("Iridium %s sent (mo_status=%d, packet=%d)", gwLabel, result.MOStatus, msg.ID))
 
@@ -301,7 +302,7 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 			return
 		case msg := <-g.outCh:
 			if err := g.sendSBDSync(ctx, msg); err != nil {
-				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: sendWorker SBD failed")
+				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: sendWorker failed")
 			}
 		}
 	}
@@ -826,7 +827,7 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 		// (attempt 0) and the gateway didn't deliver the MT, retry — the satellite may
 		// have moved out of range momentarily.
 		if attempt == 0 && !result.MOSuccess() {
-			log.Warn().Int("mo_status", result.MOStatus).Msg("iridium: SBD session failed during mailbox check, retrying in 30s")
+			log.Warn().Int("mo_status", result.MOStatus).Msg("iridium: session failed during mailbox check, retrying in 30s")
 			go func() {
 				select {
 				case <-ctx.Done():

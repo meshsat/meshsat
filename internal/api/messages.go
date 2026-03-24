@@ -79,7 +79,8 @@ func (s *Server) handleGetMessageStats(w http.ResponseWriter, r *http.Request) {
 
 // handleSendMessage sends a text message via the mesh transport or a satellite gateway.
 // @Summary Send a message
-// @Description Sends a text message through the Meshtastic radio or a satellite gateway
+// @Description Sends a text message through the Meshtastic radio or a satellite gateway.
+// @Description Set gateway to "iridium" (9603 SBD), "iridium_imt" (9704 IMT), "mqtt", "cellular", "astrocast", or "webhook".
 // @Tags messages
 // @Param body body transport.SendRequest true "Message to send"
 // @Success 200 {object} map[string]string "success"

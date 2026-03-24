@@ -769,6 +769,7 @@ func (t *DirectSatTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 		Port:      t.port,
 		IMEI:      t.imei,
 		Model:     t.model,
+		Type:      "sbd",
 		Firmware:  t.firmware,
 	}, nil
 }

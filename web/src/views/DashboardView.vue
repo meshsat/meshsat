@@ -1137,7 +1137,7 @@ function widgetGridClass(id) {
 
       <template v-for="wid in widgetOrder" :key="wid">
 
-      <!-- ═══ Iridium SBD ═══ -->
+      <!-- ═══ Iridium (SBD 9603 / IMT 9704) ═══ -->
       <div v-if="wid === 'iridium'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
         draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
