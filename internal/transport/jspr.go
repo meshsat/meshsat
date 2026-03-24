@@ -982,6 +982,7 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 				continue
 			}
 			if status.MessageID == msgID {
+				log.Info().Str("final_status", status.FinalMOStatus).Int("msg_id", msgID).Msg("jspr: MO final status received")
 				return status.FinalMOStatus, nil
 			}
 		}
