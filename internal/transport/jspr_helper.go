@@ -233,6 +233,37 @@ func (h *jsprHelperPort) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
+// SendMOCommand sends a send_mo command to the helper, which handles the entire
+// MO flow inline (messageOriginate + segment exchange + wait for status).
+// The helper returns the result as a mo_result message on stdout.
+func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, requestRef int) error {
+	cmdObj := struct {
+		Cmd              string `json:"cmd"`
+		TopicID          int    `json:"topic_id"`
+		Data             string `json:"data"`
+		Length           int    `json:"length"`
+		RequestReference int    `json:"request_reference"`
+	}{
+		Cmd:              "send_mo",
+		TopicID:          topicID,
+		Data:             dataB64,
+		Length:           length,
+		RequestReference: requestRef,
+	}
+	cmdBytes, err := json.Marshal(cmdObj)
+	if err != nil {
+		return fmt.Errorf("marshal send_mo: %w", err)
+	}
+	cmdBytes = append(cmdBytes, '\n')
+
+	log.Debug().Int("topic", topicID).Int("length", length).Msg("imt: sending send_mo to helper")
+	_, writeErr := h.stdin.Write(cmdBytes)
+	if writeErr != nil {
+		return fmt.Errorf("write send_mo: %w", writeErr)
+	}
+	return nil
+}
+
 // splitJSPRLine splits "METHOD target {json}" into parts.
 func splitJSPRLine(line string) []string {
 	// Find first space (after METHOD)

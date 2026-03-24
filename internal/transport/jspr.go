@@ -913,6 +913,13 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 	dataWithCRC := appendIMTCRC(payload)
 	ref := c.nextRef()
 
+	// If using the helper subprocess, delegate the entire MO flow to it.
+	// The helper responds to segment requests inline on the serial thread,
+	// avoiding the ~1s async latency that causes "segment_not_supplied".
+	if helper, ok := c.port.(*jsprHelperPort); ok {
+		return c.jsprSendMOViaHelper(helper, topicID, dataWithCRC, ref)
+	}
+
 	// 1. Initiate MO
 	resp, err := c.sendRequest("PUT", "messageOriginate", jsprMORequest{
 		TopicID:          topicID,
@@ -1003,6 +1010,45 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 	}
 
 	return "", fmt.Errorf("MO timeout after %s", jsprMOTimeout)
+}
+
+// jsprSendMOViaHelper delegates the entire MO flow to the Python helper.
+// The helper handles messageOriginate + segment exchange inline on the serial
+// thread, responding to segment requests in sub-millisecond time.
+// The result comes back as a "mo_result" message (code 200, target messageOriginateStatus).
+func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, dataWithCRC []byte, ref int) (string, error) {
+	dataB64 := base64.StdEncoding.EncodeToString(dataWithCRC)
+
+	if err := helper.SendMOCommand(topicID, dataB64, len(dataWithCRC), ref); err != nil {
+		return "", fmt.Errorf("send_mo command: %w", err)
+	}
+
+	// The helper will emit intermediate responses (200 messageOriginate, 200 messageOriginateSegment)
+	// and a final mo_result. The readLoop converts these to JSPR wire format.
+	// We wait for the final status via the pending request mechanism.
+	pr := &pendingRequest{
+		target:   "messageOriginateStatus",
+		ch:       make(chan jsprResponse, 1),
+		deadline: time.Now().Add(jsprMOTimeout),
+	}
+	c.pendingMu.Lock()
+	c.pending["messageOriginateStatus"] = pr
+	c.pendingMu.Unlock()
+
+	select {
+	case resp := <-pr.ch:
+		var status jsprMOStatus
+		if err := json.Unmarshal(resp.JSON, &status); err != nil {
+			return "", fmt.Errorf("parse mo_result: %w", err)
+		}
+		log.Info().Str("final_status", status.FinalMOStatus).Int("msg_id", status.MessageID).Msg("jspr: MO via helper complete")
+		return status.FinalMOStatus, nil
+	case <-time.After(jsprMOTimeout):
+		c.pendingMu.Lock()
+		delete(c.pending, "messageOriginateStatus")
+		c.pendingMu.Unlock()
+		return "", fmt.Errorf("MO helper timeout after %s", jsprMOTimeout)
+	}
 }
 
 // jsprReceiveMT processes a buffered MT message announcement.
