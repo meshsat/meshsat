@@ -35,7 +35,10 @@ type EventEmitFunc func(eventType, message string)
 type Gateway interface {
 	Start(ctx context.Context) error
 	Stop() error
+	// Forward sends synchronously — blocks until complete. Used by delivery worker.
 	Forward(ctx context.Context, msg *transport.MeshMessage) error
+	// Enqueue accepts a message for async send and returns immediately.
+	Enqueue(msg *transport.MeshMessage) error
 	Receive() <-chan InboundMessage
 	Status() GatewayStatus
 	Type() string

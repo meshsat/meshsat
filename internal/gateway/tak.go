@@ -96,6 +96,11 @@ func (g *TAKGateway) Forward(ctx context.Context, msg *transport.MeshMessage) er
 	}
 }
 
+// Enqueue submits a message for outbound delivery via the gateway.
+func (g *TAKGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.Forward(context.Background(), msg)
+}
+
 // Receive returns the inbound message channel.
 func (g *TAKGateway) Receive() <-chan InboundMessage {
 	return g.inCh

@@ -170,6 +170,17 @@ func (g *IridiumGateway) Forward(ctx context.Context, msg *transport.MeshMessage
 	return g.sendSBDSync(ctx, msg)
 }
 
+// Enqueue accepts a message for async send via the outbound queue.
+// Returns immediately — the sendWorker processes it in the background.
+func (g *IridiumGateway) Enqueue(msg *transport.MeshMessage) error {
+	select {
+	case g.outCh <- msg:
+		return nil
+	default:
+		return fmt.Errorf("outbound queue full")
+	}
+}
+
 // sendSBDSync sends a message via SBD/IMT and returns the actual result.
 // This is the synchronous path used by the delivery worker (via Forward).
 func (g *IridiumGateway) sendSBDSync(ctx context.Context, msg *transport.MeshMessage) error {

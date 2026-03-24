@@ -123,11 +123,11 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			DecodedText: req.Text,
 			RxTime:      time.Now().Unix(),
 		}
-		if err := target.Forward(r.Context(), msg); err != nil {
-			writeError(w, http.StatusInternalServerError, "gateway send failed: "+err.Error())
+		if err := target.Enqueue(msg); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "queue full: "+err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "sent", "gateway": req.Gateway})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "queued", "gateway": req.Gateway})
 		return
 	}
 

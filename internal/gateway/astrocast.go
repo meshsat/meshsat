@@ -94,6 +94,11 @@ func (g *AstrocastGateway) Forward(ctx context.Context, msg *transport.MeshMessa
 	}
 }
 
+// Enqueue submits a message for outbound delivery via the gateway.
+func (g *AstrocastGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.Forward(context.Background(), msg)
+}
+
 // Receive returns the inbound message channel.
 func (g *AstrocastGateway) Receive() <-chan InboundMessage {
 	return g.inCh

@@ -137,6 +137,11 @@ func (g *CellularGateway) Forward(ctx context.Context, msg *transport.MeshMessag
 	return g.sendSMSSync(ctx, msg)
 }
 
+// Enqueue submits a message for outbound delivery via the gateway.
+func (g *CellularGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.Forward(context.Background(), msg)
+}
+
 // Receive returns the inbound message channel.
 func (g *CellularGateway) Receive() <-chan InboundMessage {
 	return g.inCh

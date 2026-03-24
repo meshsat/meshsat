@@ -89,6 +89,11 @@ func (g *APRSGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 	}
 }
 
+// Enqueue submits a message for outbound delivery via the gateway.
+func (g *APRSGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.Forward(context.Background(), msg)
+}
+
 // Receive returns the inbound message channel.
 func (g *APRSGateway) Receive() <-chan InboundMessage {
 	return g.inCh

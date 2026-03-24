@@ -85,6 +85,11 @@ func (g *WebhookGateway) Forward(ctx context.Context, msg *transport.MeshMessage
 	}
 }
 
+// Enqueue submits a message for outbound delivery via the gateway.
+func (g *WebhookGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.Forward(context.Background(), msg)
+}
+
 // Receive returns the inbound message channel.
 func (g *WebhookGateway) Receive() <-chan InboundMessage {
 	return g.inCh

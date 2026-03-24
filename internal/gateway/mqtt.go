@@ -244,6 +244,11 @@ func (g *MQTTGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 	return nil
 }
 
+// Enqueue submits a message for outbound delivery via the gateway.
+func (g *MQTTGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.Forward(context.Background(), msg)
+}
+
 // Receive returns the inbound message channel.
 func (g *MQTTGateway) Receive() <-chan InboundMessage {
 	return g.inCh
