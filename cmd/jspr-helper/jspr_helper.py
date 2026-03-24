@@ -109,7 +109,8 @@ class JSPRHelper:
             self.ser.flush()
 
     def jspr_receive(self, timeout=2.0):
-        """Read one JSPR line: 'CODE target {json}\r'. Returns dict or None."""
+        """Read one JSPR line: 'CODE target {json}\r'. Returns dict or None.
+        Caller must hold appropriate lock if concurrent reads are possible."""
         buf = bytearray()
         deadline = time.monotonic() + timeout
         while self.running and time.monotonic() < deadline:
@@ -181,12 +182,14 @@ class JSPRHelper:
         4. Wait for 200 + 299 status
         5. Emit mo_result to Go
         """
-        with self._mo_lock:
-            self._mo_active = True
-            try:
-                self._do_send_mo(topic_id, payload_b64, length, request_reference)
-            finally:
-                self._mo_active = False
+        # Acquire serial read lock — serial_thread must not read during MO
+        self._mo_active = True
+        # Wait for serial_thread to exit jspr_receive (it checks _mo_active every 0.01s)
+        time.sleep(0.05)
+        try:
+            self._do_send_mo(topic_id, payload_b64, length, request_reference)
+        finally:
+            self._mo_active = False
 
     def _do_send_mo(self, topic_id, payload_b64, length, request_reference):
         log = lambda msg: (sys.stderr.write(f"jspr-helper.py: MO: {msg}\n"), sys.stderr.flush())
@@ -227,7 +230,7 @@ class JSPRHelper:
                     # Also emit to Go so it sees the 200
                     self.emit("response", code, target, json_str)
                     if resp_str != "message_accepted":
-                        self.emit("mo_result", 0, "messageOriginateStatus",
+                        self.emit("mo_result", 200, "messageOriginateStatus",
                                   jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}))
                         return
                 except (json.JSONDecodeError, KeyError):
@@ -293,7 +296,7 @@ class JSPRHelper:
 
         # Timeout
         log("TIMEOUT waiting for MO completion")
-        self.emit("mo_result", 0, "messageOriginateStatus",
+        self.emit("mo_result", 200, "messageOriginateStatus",
                   jd({"final_mo_status": "helper_timeout", "message_id": msg_id or 0, "topic_id": topic_id}))
 
     def stdin_thread(self):
@@ -348,9 +351,9 @@ class JSPRHelper:
         while self.running:
             # Skip reads while MO is active (send_mo handles serial directly)
             if self._mo_active:
-                time.sleep(0.01)
+                time.sleep(0.05)
                 continue
-            resp = self.jspr_receive()
+            resp = self.jspr_receive(timeout=0.5)
             if resp:
                 if resp["code"] == 299:
                     self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
