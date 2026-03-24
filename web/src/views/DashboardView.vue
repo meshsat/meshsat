@@ -1147,7 +1147,7 @@ function widgetGridClass(id) {
             <div class="relative">
               <button class="font-display font-semibold text-sm text-red-400 tracking-wide flex items-center gap-1.5 hover:text-red-300 transition-colors"
                 @click.stop="toggleDropdown('iridium')">
-                {{ widgetSelectedLabel('iridium', iridiumWidgetTitle).toUpperCase() }}
+                {{ iridiumWidgetTitle.toUpperCase() }}
                 <svg class="w-3 h-3 transition-transform" :class="openDropdown === 'iridium' ? 'rotate-180' : ''" viewBox="0 0 12 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l5 5 5-5"/></svg>
               </button>
               <div v-if="openDropdown === 'iridium'"
