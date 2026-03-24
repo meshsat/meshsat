@@ -520,7 +520,7 @@ function dlqStatusColor(status) {
 // ── Unified message queue (all sources, sorted by date newest first) ──
 // Channel label/color mapping for deliveries
 function deliveryLabel(channel) {
-  if (channel?.startsWith('iridium')) return { label: 'SBD', color: 'text-tactical-iridium' }
+  if (channel?.startsWith('iridium')) return { label: isIMT.value ? 'IMT' : 'SBD', color: 'text-tactical-iridium' }
   if (channel?.startsWith('cellular')) return { label: 'SMS', color: 'text-sky-400' }
   if (channel?.startsWith('mqtt')) return { label: 'MQTT', color: 'text-purple-400' }
   if (channel?.startsWith('astrocast')) return { label: 'ASTR', color: 'text-orange-400' }
@@ -547,7 +547,7 @@ const unifiedQueue = computed(() => {
     const ch = deliveryLabel(d.channel)
     const isInbound = d.visited && !d.visited.includes(d.channel)
     items.push({
-      _type: d.channel?.startsWith('iridium') ? 'sbd' : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
+      _type: d.channel?.startsWith('iridium') ? (isIMT.value ? 'imt' : 'sbd') : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
       _key: 'del-' + d.id,
       _time: d.updated_at || d.created_at,
       _dir: isInbound ? 'IN' : 'OUT',
@@ -563,23 +563,27 @@ const unifiedQueue = computed(() => {
     if (d.channel?.startsWith('cellular') && d.msg_ref) seenSmsIds.add(d.msg_ref)
   }
 
-  // Fallback: SBD DLQ items (legacy path if deliveries not available)
-  if (!dels.length) {
-    for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
-      items.push({
-        _type: 'sbd',
-        _key: 'sbd-' + d.id,
-        _time: d.updated_at || d.created_at,
-        _dir: d.direction === 'inbound' ? 'IN' : 'OUT',
-        _dirClass: d.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium',
-        _label: d.direction === 'inbound' ? 'SBD\u2193' : 'SBD\u2191',
-        _status: d.status === 'sent' ? 'delivered' : d.status === 'received' ? 'received' : d.status || 'queued',
-        _statusClass: dlqStatusColor(d.status),
-        _text: d.text_preview || '(binary)',
-        _opacity: d.status === 'sent' || d.status === 'received' ? 'opacity-60' : '',
-        _raw: d
-      })
-    }
+  // Satellite queue items (DLQ: direct API sends, retries, received MT).
+  // Always include — these records come from InsertSentRecord/InsertInboundReceiveRecord
+  // which are NOT duplicated in the delivery ledger for direct API sends.
+  // When deliveries exist, skip DLQ items that overlap (pending retries with matching delivery).
+  const satLabel = isIMT.value ? 'IMT' : 'SBD'
+  for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
+    // Skip DLQ pending/dead items when deliveries already show them (dispatcher path)
+    if (dels.length && (d.status === 'pending' || d.status === 'dead')) continue
+    items.push({
+      _type: isIMT.value ? 'imt' : 'sbd',
+      _key: 'sat-' + d.id,
+      _time: d.updated_at || d.created_at,
+      _dir: d.direction === 'inbound' ? 'IN' : 'OUT',
+      _dirClass: d.direction === 'inbound' ? 'text-blue-400' : 'text-tactical-iridium',
+      _label: satLabel + (d.direction === 'inbound' ? '\u2193' : '\u2191'),
+      _status: d.status === 'sent' ? 'delivered' : d.status === 'received' ? 'received' : d.status || 'queued',
+      _statusClass: dlqStatusColor(d.status),
+      _text: d.text_preview || '(binary)',
+      _opacity: d.status === 'sent' || d.status === 'received' ? 'opacity-60' : '',
+      _raw: d
+    })
   }
 
   // Always include SMS messages (not just as fallback) — skip those already in deliveries
