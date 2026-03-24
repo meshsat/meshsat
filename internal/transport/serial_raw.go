@@ -3,11 +3,9 @@ package transport
 // rawSerialPort provides serial I/O for the RockBLOCK 9704 (FTDI FT234XD).
 //
 // Uses TCGETS2/TCSETS2 for baud rates above 38400 (standard TCSETS silently
-// fails on ARM64). Blocking read() with VMIN=0/VTIME for timeouts — the
-// read() syscall is required to keep the Linux USB serial driver's tty
-// unthrottled and URBs resubmitting. FIONREAD/select/poll polling without
-// calling read() breaks the URB submission chain and causes permanent
-// read stalls.
+// fails on ARM64). O_NONBLOCK + select() + read() for I/O — matching the
+// official RockBLOCK 9704 C library exactly. Termios is set ONCE on open
+// and never modified (repeated TCSETS2 ioctl calls disrupt the tty driver).
 
 import (
 	"fmt"
@@ -20,8 +18,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// rawSerialPort wraps a raw file descriptor for serial I/O.
-// Uses blocking read() with VMIN/VTIME for timeouts.
 type rawSerialPort struct {
 	fd       int
 	path     string
@@ -29,108 +25,66 @@ type rawSerialPort struct {
 	lastRead time.Time
 }
 
-// openRawSerial opens a serial port with proper baud rate via TCSETS2.
 func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	baudConst, ok := baudRateMap[baud]
 	if !ok {
 		return nil, fmt.Errorf("unsupported baud rate: %d", baud)
 	}
 
-	// Open WITHOUT O_NONBLOCK — we use blocking read() with VTIME for timeouts.
-	// O_NONBLOCK is removed so read() actually enters the tty read path, which
-	// keeps the USB serial driver's URBs resubmitting. With O_NONBLOCK + FIONREAD
-	// polling, read() is never called and URBs stop being submitted.
-	// O_NOCTTY prevents this from becoming the controlling terminal.
-	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY, 0)
+	// Match C library: O_RDWR | O_NOCTTY | O_SYNC | O_NONBLOCK
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_SYNC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	// TCGETS2/TCSETS2 for baud rates above 38400.
+	// TCGETS2/TCSETS2 for correct baud rate on ARM64
 	termios, err := unix.IoctlGetTermios(fd, unix.TCGETS2)
 	if err != nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("get termios2 %s: %w", path, err)
 	}
 
-	// Baud rate
 	termios.Cflag &^= unix.CBAUD
 	termios.Cflag |= baudConst
 	termios.Ispeed = baudConst
 	termios.Ospeed = baudConst
-
-	// 8N1
 	termios.Cflag &^= unix.CSIZE
 	termios.Cflag |= unix.CS8
-	termios.Cflag &^= unix.PARENB
-	termios.Cflag &^= unix.CSTOPB
+	termios.Cflag &^= unix.PARENB | unix.CSTOPB
 	termios.Cflag |= unix.CLOCAL | unix.CREAD
-
-	// Raw mode
 	termios.Iflag &^= unix.IXON | unix.IXOFF | unix.IXANY | unix.ICRNL
 	termios.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHOE | unix.ISIG
-
-	// VMIN=1, VTIME=0 — block until at least 1 byte arrives (same as minicom).
-	// This keeps a thread permanently in the kernel's tty read wait queue,
-	// which is required for the USB serial driver's unthrottle mechanism to
-	// work. VMIN=0 with any VTIME causes the read to return periodically,
-	// creating windows where no thread is waiting and the driver throttles.
-	termios.Cc[unix.VMIN] = 1
-	termios.Cc[unix.VTIME] = 0
+	// C library does not set VMIN/VTIME — leave at kernel defaults
 
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS2, termios); err != nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("set termios2 %s: %w", path, err)
 	}
 
-	// Verify baud rate
-	verify, err := unix.IoctlGetTermios(fd, unix.TCGETS2)
-	if err == nil {
-		actualBaud := verify.Cflag & unix.CBAUD
-		log.Info().
-			Uint32("requested", baudConst).
-			Uint32("actual_cbaud", actualBaud).
-			Uint32("actual_ispeed", verify.Ispeed).
-			Uint32("actual_ospeed", verify.Ospeed).
-			Msg("ftdi: baud rate after TCSETS2")
-		if actualBaud != baudConst {
-			log.Error().Uint32("requested", baudConst).Uint32("actual", actualBaud).
-				Msg("ftdi: BAUD RATE MISMATCH")
-		}
+	// Verify baud
+	if v, err := unix.IoctlGetTermios(fd, unix.TCGETS2); err == nil {
+		log.Info().Uint32("requested", baudConst).Uint32("actual_cbaud", v.Cflag&unix.CBAUD).
+			Uint32("ispeed", v.Ispeed).Uint32("ospeed", v.Ospeed).Msg("ftdi: baud rate after TCSETS2")
 	}
 
-	// Flush stale data
 	unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH)
 
-	p := &rawSerialPort{
-		fd:       fd,
-		path:     path,
-		timeout:  500 * time.Millisecond,
-		lastRead: time.Now(),
-	}
-
+	p := &rawSerialPort{fd: fd, path: path, timeout: 500 * time.Millisecond, lastRead: time.Now()}
 	p.tuneFTDI()
 	return p, nil
 }
 
-// tuneFTDI sets latency timer to 1ms and disables USB autosuspend via sysfs.
 func (p *rawSerialPort) tuneFTDI() {
 	devName := filepath.Base(p.path)
-
 	latencyPath := fmt.Sprintf("/sys/bus/usb-serial/devices/%s/latency_timer", devName)
 	if err := os.WriteFile(latencyPath, []byte("1"), 0644); err != nil {
-		log.Debug().Err(err).Str("path", latencyPath).Msg("ftdi: failed to set latency_timer (non-fatal)")
+		log.Debug().Err(err).Str("path", latencyPath).Msg("ftdi: failed to set latency_timer")
 	} else {
 		log.Info().Str("device", devName).Msg("ftdi: latency_timer set to 1ms")
 	}
-
-	usbDevPath := findUSBDeviceSysfs(devName)
-	if usbDevPath != "" {
-		controlPath := filepath.Join(usbDevPath, "power", "control")
-		if err := os.WriteFile(controlPath, []byte("on"), 0644); err != nil {
-			log.Debug().Err(err).Str("path", controlPath).Msg("ftdi: failed to disable autosuspend (non-fatal)")
-		} else {
-			log.Info().Str("device", devName).Msg("ftdi: USB autosuspend disabled")
+	if usbDev := findUSBDeviceSysfs(devName); usbDev != "" {
+		if err := os.WriteFile(filepath.Join(usbDev, "power", "control"), []byte("on"), 0644); err != nil {
+			log.Debug().Err(err).Msg("ftdi: failed to disable autosuspend")
 		}
 	}
 }
@@ -151,57 +105,70 @@ func findUSBDeviceSysfs(devName string) string {
 	return ""
 }
 
-// Read calls unix.Read() — blocks until at least 1 byte arrives (VMIN=1).
-// This keeps a thread permanently in the kernel's tty read wait queue,
-// matching minicom's behavior. The USB serial driver requires an active
-// waiter in the read path to keep URBs being resubmitted.
+// Read uses select() + read() — matching the C library's readLinux() exactly.
+// select() waits for data with timeout, then read() fetches it.
+// Both select() and read() are real syscalls that keep the tty driver active.
 func (p *rawSerialPort) Read(buf []byte) (int, error) {
-	n, err := unix.Read(p.fd, buf)
+	timeoutUs := p.timeout.Microseconds()
+	tv := unix.Timeval{
+		Sec:  timeoutUs / 1_000_000,
+		Usec: timeoutUs % 1_000_000,
+	}
+	var fds unix.FdSet
+	fds.Set(p.fd)
+
+	n, err := unix.Select(p.fd+1, &fds, nil, nil, &tv)
 	if err != nil {
 		if err == unix.EINTR {
 			return 0, nil
 		}
+		return 0, fmt.Errorf("select: %w", err)
+	}
+	if n == 0 {
+		return 0, nil // timeout
+	}
+
+	nr, err := unix.Read(p.fd, buf)
+	if err != nil {
+		if err == unix.EAGAIN {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("read: %w", err)
 	}
-	if n > 0 {
+	if nr > 0 {
 		p.lastRead = time.Now()
 	}
-	return n, nil
+	return nr, nil
 }
 
-// Write sends data to the serial port. Blocking at 230400 baud is <1ms
-// for typical JSPR commands (~30 bytes).
+// Write with EAGAIN retry — matches C library's writeLinux().
 func (p *rawSerialPort) Write(data []byte) (int, error) {
-	return unix.Write(p.fd, data)
+	sent := 0
+	for sent < len(data) {
+		n, err := unix.Write(p.fd, data[sent:])
+		if err != nil {
+			if err == unix.EAGAIN {
+				continue
+			}
+			return sent, fmt.Errorf("write: %w", err)
+		}
+		sent += n
+	}
+	return sent, nil
 }
 
-// SetReadTimeout is a no-op — VTIME is set once during openRawSerial and
-// never changed. Repeated TCGETS2/TCSETS2 ioctl calls disrupt the USB serial
-// driver's tty state, causing reads to stall. Minicom works because it sets
-// termios once and never touches it again.
+// SetReadTimeout — no-op. Termios is set once and never changed.
 func (p *rawSerialPort) SetReadTimeout(d time.Duration) error {
 	p.timeout = d
 	return nil
 }
 
-// Close closes the serial port.
-func (p *rawSerialPort) Close() error {
-	return unix.Close(p.fd)
-}
-
-// LastRead returns the time of the last successful read.
-func (p *rawSerialPort) LastRead() time.Time {
-	return p.lastRead
-}
-
-// Path returns the serial device path.
-func (p *rawSerialPort) Path() string {
-	return p.path
-}
+func (p *rawSerialPort) Close() error        { return unix.Close(p.fd) }
+func (p *rawSerialPort) LastRead() time.Time { return p.lastRead }
+func (p *rawSerialPort) Path() string        { return p.path }
 
 func readLatencyTimer(devName string) string {
-	path := fmt.Sprintf("/sys/bus/usb-serial/devices/%s/latency_timer", devName)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(fmt.Sprintf("/sys/bus/usb-serial/devices/%s/latency_timer", devName))
 	if err != nil {
 		return "unknown"
 	}
@@ -209,12 +176,7 @@ func readLatencyTimer(devName string) string {
 }
 
 var baudRateMap = map[int]uint32{
-	9600:   unix.B9600,
-	19200:  unix.B19200,
-	38400:  unix.B38400,
-	57600:  unix.B57600,
-	115200: unix.B115200,
-	230400: unix.B230400,
-	460800: unix.B460800,
-	921600: unix.B921600,
+	9600: unix.B9600, 19200: unix.B19200, 38400: unix.B38400,
+	57600: unix.B57600, 115200: unix.B115200, 230400: unix.B230400,
+	460800: unix.B460800, 921600: unix.B921600,
 }
