@@ -177,25 +177,11 @@ func (p *rawSerialPort) Write(data []byte) (int, error) {
 	return unix.Write(p.fd, data)
 }
 
-// SetReadTimeout adjusts VTIME for subsequent reads.
+// SetReadTimeout is a no-op — VTIME is set once during openRawSerial and
+// never changed. Repeated TCGETS2/TCSETS2 ioctl calls disrupt the USB serial
+// driver's tty state, causing reads to stall. Minicom works because it sets
+// termios once and never touches it again.
 func (p *rawSerialPort) SetReadTimeout(d time.Duration) error {
-	// Convert to deciseconds (VTIME unit). Minimum 1 (100ms).
-	ds := int(d.Milliseconds() / 100)
-	if ds < 1 {
-		ds = 1
-	}
-	if ds > 255 {
-		ds = 255
-	}
-
-	termios, err := unix.IoctlGetTermios(p.fd, unix.TCGETS2)
-	if err != nil {
-		return fmt.Errorf("get termios for timeout: %w", err)
-	}
-	termios.Cc[unix.VTIME] = uint8(ds)
-	if err := unix.IoctlSetTermios(p.fd, unix.TCSETS2, termios); err != nil {
-		return fmt.Errorf("set termios for timeout: %w", err)
-	}
 	p.timeout = d
 	return nil
 }
