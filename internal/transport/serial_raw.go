@@ -70,12 +70,13 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	termios.Iflag &^= unix.IXON | unix.IXOFF | unix.IXANY | unix.ICRNL
 	termios.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHOE | unix.ISIG
 
-	// VMIN=0, VTIME=5 (500ms timeout in 100ms units).
-	// read() returns when data is available OR after VTIME expires.
-	// This is the key: the read() syscall exercises the tty read path,
-	// which triggers tty_unthrottle() and keeps URBs being resubmitted.
-	termios.Cc[unix.VMIN] = 0
-	termios.Cc[unix.VTIME] = 5 // 500ms in deciseconds
+	// VMIN=1, VTIME=0 — block until at least 1 byte arrives (same as minicom).
+	// This keeps a thread permanently in the kernel's tty read wait queue,
+	// which is required for the USB serial driver's unthrottle mechanism to
+	// work. VMIN=0 with any VTIME causes the read to return periodically,
+	// creating windows where no thread is waiting and the driver throttles.
+	termios.Cc[unix.VMIN] = 1
+	termios.Cc[unix.VTIME] = 0
 
 	if err := unix.IoctlSetTermios(fd, unix.TCSETS2, termios); err != nil {
 		unix.Close(fd)
@@ -150,13 +151,10 @@ func findUSBDeviceSysfs(devName string) string {
 	return ""
 }
 
-// Read calls unix.Read() directly — a blocking read with VTIME timeout.
-// The read() syscall is REQUIRED to keep the USB serial driver healthy:
-// it exercises the tty read path which triggers tty_unthrottle() and URB
-// resubmission. Polling with FIONREAD/select/poll without calling read()
-// causes the URB chain to break and reads to stall permanently.
-//
-// Returns (0, nil) on VTIME timeout to match go.bug.st/serial's behavior.
+// Read calls unix.Read() — blocks until at least 1 byte arrives (VMIN=1).
+// This keeps a thread permanently in the kernel's tty read wait queue,
+// matching minicom's behavior. The USB serial driver requires an active
+// waiter in the read path to keep URBs being resubmitted.
 func (p *rawSerialPort) Read(buf []byte) (int, error) {
 	n, err := unix.Read(p.fd, buf)
 	if err != nil {
@@ -168,7 +166,7 @@ func (p *rawSerialPort) Read(buf []byte) (int, error) {
 	if n > 0 {
 		p.lastRead = time.Now()
 	}
-	return n, nil // n=0 on VTIME timeout
+	return n, nil
 }
 
 // Write sends data to the serial port. Blocking at 230400 baud is <1ms
