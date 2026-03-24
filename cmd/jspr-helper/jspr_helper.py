@@ -201,7 +201,7 @@ class JSPRHelper:
         msg_id = None
         segment_sent = False
         final_status = None
-        deadline = time.monotonic() + 120  # 2 min overall timeout
+        deadline = time.monotonic() + 240  # 4 min — must exceed Go-side jsprMOTimeout (3 min)
 
         while self.running and time.monotonic() < deadline:
             resp = self.jspr_receive(timeout=2.0)
