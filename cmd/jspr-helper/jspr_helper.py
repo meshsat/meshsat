@@ -117,14 +117,22 @@ class JSPRHelper:
         """Read JSON commands from Go's stdin pipe, send JSPR on serial."""
         stdin_fd = sys.stdin.fileno()
         buf = ""
+        sys.stderr.write("jspr-helper.py: stdin_thread started\n")
+        sys.stderr.flush()
         while self.running:
             try:
                 data = os.read(stdin_fd, 4096)
-            except OSError:
+            except OSError as e:
+                sys.stderr.write(f"jspr-helper.py: stdin read error: {e}\n")
+                sys.stderr.flush()
                 break
             if not data:
+                sys.stderr.write("jspr-helper.py: stdin EOF\n")
+                sys.stderr.flush()
                 break  # EOF
 
+            sys.stderr.write(f"jspr-helper.py: stdin got {len(data)} bytes\n")
+            sys.stderr.flush()
             buf += data.decode("utf-8", errors="replace")
 
             while "\n" in buf:
@@ -142,6 +150,8 @@ class JSPRHelper:
                     else:
                         json_body = str(json_field)
                     if method and target:
+                        sys.stderr.write(f"jspr-helper.py: TX {method} {target}\n")
+                        sys.stderr.flush()
                         self.jspr_send(method, target, json_body)
                 except (json.JSONDecodeError, KeyError) as e:
                     sys.stderr.write(f"jspr-helper.py: parse error: {e}\n")

@@ -1,10 +1,12 @@
 package transport
 
-// jsprHelper manages the jspr-helper C subprocess for RockBLOCK 9704 serial I/O.
+// jsprHelper manages the jspr-helper subprocess for RockBLOCK 9704 serial I/O.
 //
 // Go's runtime interferes with serial I/O syscalls (select/read behave
-// differently than in C). The C helper handles all serial communication and
+// differently than in C). The helper handles all serial communication and
 // forwards JSPR messages via stdin/stdout JSON lines.
+//
+// Two implementations: Python script (preferred, uses pyserial) or C binary (fallback).
 //
 // Protocol:
 //   Go → helper (stdin):  {"cmd":"send","method":"GET","target":"apiVersion","json":"{}"}
@@ -17,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,9 +55,14 @@ type jsprHelperPort struct {
 	lastRead time.Time
 }
 
-// startJSPRHelper launches the C helper subprocess.
+// startJSPRHelper launches the helper subprocess (Python or C).
 func startJSPRHelper(helperPath, serialPort string, baud int) (*jsprHelperPort, error) {
-	cmd := exec.Command(helperPath, serialPort, fmt.Sprintf("%d", baud))
+	var cmd *exec.Cmd
+	if strings.HasSuffix(helperPath, ".py") {
+		cmd = exec.Command("python3", helperPath, serialPort, fmt.Sprintf("%d", baud))
+	} else {
+		cmd = exec.Command(helperPath, serialPort, fmt.Sprintf("%d", baud))
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -195,14 +203,32 @@ func (h *jsprHelperPort) Write(data []byte) (int, error) {
 		jsonPart = parts[2]
 	}
 
-	// Send as JSON to helper's stdin
-	cmd := fmt.Sprintf(`{"cmd":"send","method":"%s","target":"%s","json":"%s"}`+"\n",
-		method, target, jsonPart)
+	// Send as JSON to helper's stdin.
+	// The json field is sent as a nested object (not a string) so the helper
+	// can forward it directly to the modem without re-encoding.
+	cmdObj := struct {
+		Cmd    string          `json:"cmd"`
+		Method string          `json:"method"`
+		Target string          `json:"target"`
+		JSON   json.RawMessage `json:"json"`
+	}{
+		Cmd:    "send",
+		Method: method,
+		Target: target,
+		JSON:   json.RawMessage(jsonPart),
+	}
+	cmdBytes, marshalErr := json.Marshal(cmdObj)
+	if marshalErr != nil {
+		return 0, fmt.Errorf("marshal helper cmd: %w", marshalErr)
+	}
+	cmdBytes = append(cmdBytes, '\n')
 
-	_, err := h.stdin.Write([]byte(cmd))
+	log.Debug().Str("method", method).Str("target", target).Int("bytes", len(cmdBytes)).Msg("imt: writing command to helper stdin")
+	n, err := h.stdin.Write(cmdBytes)
 	if err != nil {
 		return 0, fmt.Errorf("write to helper: %w", err)
 	}
+	log.Debug().Int("written", n).Str("target", target).Msg("imt: command written to helper stdin")
 
 	return len(data), nil
 }
