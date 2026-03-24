@@ -977,12 +977,14 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 		// Check for final MO status
 		statusMsgs := c.takeUnsolicited("messageOriginateStatus")
 		for _, statusMsg := range statusMsgs {
+			log.Debug().RawJSON("json", statusMsg.JSON).Int("expected_msg_id", msgID).Msg("jspr: MO status unsolicited")
 			var status jsprMOStatus
 			if err := json.Unmarshal(statusMsg.JSON, &status); err != nil {
+				log.Warn().Err(err).Msg("jspr: failed to parse MO status")
 				continue
 			}
+			log.Info().Str("final_status", status.FinalMOStatus).Int("status_msg_id", status.MessageID).Int("expected_msg_id", msgID).Msg("jspr: MO final status received")
 			if status.MessageID == msgID {
-				log.Info().Str("final_status", status.FinalMOStatus).Int("msg_id", msgID).Msg("jspr: MO final status received")
 				return status.FinalMOStatus, nil
 			}
 		}
