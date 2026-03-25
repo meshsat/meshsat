@@ -88,11 +88,12 @@ class JSPRHelper:
         self.running = True
         self._write_lock = threading.Lock()
         self._emit_lock = threading.Lock()
-        # Serial operation lock — protects the modem from concurrent commands.
+        # Serial operation lock — held by send_mo for entire MO flow.
         # serial_thread acquires it before every jspr_receive.
-        # stdin_thread acquires it before every jspr_send (regular commands).
-        # send_mo acquires it for the entire MO flow, blocking both threads.
+        # stdin_thread checks _mo_in_progress before sending; if True,
+        # acquires the lock to wait until MO completes.
         self._serial_lock = threading.Lock()
+        self._mo_in_progress = False
 
         # Set FTDI latency timer to 1ms if possible
         dev = os.path.basename(port)
@@ -186,8 +187,12 @@ class JSPRHelper:
         """
         # Acquire serial lock — blocks serial_thread and stdin_thread
         # until the entire MO flow completes.
+        self._mo_in_progress = True
         with self._serial_lock:
-            self._do_send_mo(topic_id, payload_b64, length, request_reference)
+            try:
+                self._do_send_mo(topic_id, payload_b64, length, request_reference)
+            finally:
+                self._mo_in_progress = False
 
     def _do_send_mo(self, topic_id, payload_b64, length, request_reference):
         log = lambda msg: (sys.stderr.write(f"jspr-helper.py: MO: {msg}\n"), sys.stderr.flush())
@@ -337,10 +342,13 @@ class JSPRHelper:
                         else:
                             json_body = str(json_field)
                         if method and target:
-                            # Acquire serial lock — blocks while MO is in progress.
-                            # Without this, signal poller GET commands interleave with
-                            # the MO flow and cause the modem to abort/ignore MO.
-                            with self._serial_lock:
+                            # If MO is in progress, wait for it to finish before
+                            # sending. Without this, signal poller GET commands
+                            # interleave with MO and cause the modem to abort it.
+                            if self._mo_in_progress:
+                                with self._serial_lock:
+                                    self.jspr_send(method, target, json_body)
+                            else:
                                 self.jspr_send(method, target, json_body)
                 except (json.JSONDecodeError, KeyError) as e:
                     sys.stderr.write(f"jspr-helper.py: parse error: {e}\n")
