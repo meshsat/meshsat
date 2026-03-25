@@ -3,25 +3,27 @@
 jspr-helper.py: JSPR serial helper for RockBLOCK 9704.
 Uses pyserial for reliable serial I/O on ARM64.
 
-Two threads:
-- stdin_thread: reads JSON commands from Go, sends JSPR on serial
-- serial_thread: reads JSPR responses/unsolicited from serial, emits JSON on stdout
+Architecture: SINGLE-THREAD EVENT LOOP (MESHSAT-334)
+- One thread owns the serial port — no concurrent read/write
+- Bulk reads via ser.in_waiting + ser.read(n) — no byte-by-byte
+- stdin is read via non-blocking os.read on a separate thread that
+  queues commands for the event loop to process
+- This matches the standalone test script pattern that works 100%
 
 Commands from Go (stdin JSON):
 - {"cmd":"send", "method":"GET", "target":"apiVersion", "json":{}}
-    → sends single JSPR line, response comes back via serial_thread
+    -> sends single JSPR line, response comes back via event loop
 - {"cmd":"send_mo", "topic_id":244, "data":"BASE64", "length":42, "request_reference":1}
-    → handles entire MO flow inline (originate + segment + wait for status)
-    → returns {"type":"mo_result", "code":200, "target":"messageOriginateStatus", "json":{...}}
+    -> handles entire MO flow inline (originate + segment + wait for status)
+    -> returns {"type":"mo_result", "code":200, "target":"messageOriginateStatus", "json":{...}}
 """
 import sys
 import os
 import json
 import time
-import base64
-import struct
 import signal
 import threading
+import queue
 
 import serial
 
@@ -74,10 +76,50 @@ def jd(obj):
     return json.dumps(obj, separators=(", ", ": "))
 
 
+def log(msg):
+    sys.stderr.write(f"jspr-helper.py: {msg}\n")
+    sys.stderr.flush()
+
+
+def parse_jspr_line(raw):
+    """Parse a raw JSPR line into {code, target, json_str} or None."""
+    text = raw.decode("ascii", errors="ignore")
+
+    # Skip leading non-printable (DC1 on boot, \n leftover)
+    i = 0
+    while i < len(text) and not text[i].isdigit():
+        i += 1
+    text = text[i:]
+
+    if len(text) < 3:
+        return None
+
+    try:
+        code = int(text[:3])
+    except ValueError:
+        return None
+    if code < 200 or code > 500:
+        return None
+
+    rest = text[4:]  # skip "CODE "
+
+    space = rest.find(" ")
+    if space >= 0:
+        target = rest[:space]
+        remainder = rest[space + 1:]
+        brace = remainder.find("{")
+        json_str = remainder[brace:] if brace >= 0 else "{}"
+    else:
+        target = rest
+        json_str = "{}"
+
+    return {"code": code, "target": target, "json_str": json_str}
+
+
 class JSPRHelper:
     def __init__(self, port, baud=230400):
         self.ser = serial.Serial(
-            port, baud, timeout=0.5,
+            port, baud, timeout=0.05,  # short timeout for non-blocking-style reads
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
@@ -86,14 +128,8 @@ class JSPRHelper:
         self.ser.reset_input_buffer()
         self.ser.reset_output_buffer()
         self.running = True
-        self._write_lock = threading.Lock()
-        self._emit_lock = threading.Lock()
-        # Serial operation lock — held by send_mo for entire MO flow.
-        # serial_thread acquires it before every jspr_receive.
-        # stdin_thread checks _mo_in_progress before sending; if True,
-        # acquires the lock to wait until MO completes.
-        self._serial_lock = threading.Lock()
-        self._mo_in_progress = False
+        self._rx_buf = bytearray()
+        self._cmd_queue = queue.Queue()
 
         # Set FTDI latency timer to 1ms if possible
         dev = os.path.basename(port)
@@ -104,80 +140,48 @@ class JSPRHelper:
         except Exception:
             pass
 
-    def jspr_send(self, method, target, json_body):
-        """Send a JSPR command: 'METHOD target {json}\r'"""
-        line = f"{method} {target} {json_body}\r"
-        with self._write_lock:
-            self.ser.write(line.encode("ascii"))
-            self.ser.flush()
+    # ── Serial I/O (ONLY called from event loop thread) ──────────────
 
-    def jspr_receive(self, timeout=2.0):
-        """Read one JSPR line: 'CODE target {json}\r'. Returns dict or None.
-        Caller must hold appropriate lock if concurrent reads are possible.
-        Uses _rx_buf to persist partial reads across calls — at 230400 baud
-        on ARM64 USB, data can arrive in chunks that split a single line."""
-        if not hasattr(self, '_rx_buf'):
-            self._rx_buf = bytearray()
-        deadline = time.monotonic() + timeout
-        while self.running and time.monotonic() < deadline:
-            ch = self.ser.read(1)
-            if not ch:
-                if len(self._rx_buf) == 0:
-                    return None
-                continue
-            if ch == b"\r":
-                break
-            self._rx_buf.append(ch[0])
-        else:
-            # Deadline reached with partial data — keep _rx_buf for next call
-            return None
-
-        if not self._rx_buf:
-            return None
-
-        buf = self._rx_buf
+    def serial_write(self, method, target, json_body):
+        """Send a JSPR command with buffer reset and pacing.
+        Only called from the event loop thread."""
+        # Drain any complete lines before clearing (don't lose unsolicited data)
+        for resp in self.serial_read_lines():
+            if resp["code"] == 299:
+                self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
+            else:
+                self.emit("response", resp["code"], resp["target"], resp["json_str"])
+        # Reset stale partial data in kernel/FTDI buffer
+        self.ser.reset_input_buffer()
         self._rx_buf = bytearray()
+        time.sleep(0.005)  # 5ms pacing — prevent command coalescence in USB frame
+        line = f"{method} {target} {json_body}\r"
+        self.ser.write(line.encode("ascii"))
+        self.ser.flush()
 
-        text = buf.decode("ascii", errors="ignore")
+    def serial_read_lines(self):
+        """Bulk-read all available data and return complete JSPR lines.
+        Matches the standalone test script pattern: ser.in_waiting + ser.read(n).
+        Only called from the event loop thread."""
+        lines = []
+        n = self.ser.in_waiting
+        if n > 0:
+            data = self.ser.read(n)
+            self._rx_buf += data
 
-        # Skip leading non-printable (DC1 on boot, \n leftover)
-        i = 0
-        while i < len(text) and not text[i].isdigit():
-            i += 1
-        text = text[i:]
+        while b"\r" in self._rx_buf:
+            line, self._rx_buf = self._rx_buf.split(b"\r", 1)
+            line = line.strip()
+            if line:
+                parsed = parse_jspr_line(line)
+                if parsed:
+                    lines.append(parsed)
+        return lines
 
-        if len(text) < 3:
-            sys.stderr.write(f"jspr-helper.py: jspr_receive SHORT: {repr(buf)}\n")
-            sys.stderr.flush()
-            return None
-
-        try:
-            code = int(text[:3])
-        except ValueError:
-            sys.stderr.write(f"jspr-helper.py: jspr_receive BADCODE: {repr(text[:20])}\n")
-            sys.stderr.flush()
-            return None
-        if code < 200 or code > 500:
-            sys.stderr.write(f"jspr-helper.py: jspr_receive RANGE: code={code} {repr(text[:40])}\n")
-            sys.stderr.flush()
-            return None
-
-        rest = text[4:]  # skip "CODE "
-
-        space = rest.find(" ")
-        if space >= 0:
-            target = rest[:space]
-            remainder = rest[space + 1:]
-            brace = remainder.find("{")
-            json_str = remainder[brace:] if brace >= 0 else "{}"
-        else:
-            target = rest
-            json_str = "{}"
-
-        return {"code": code, "target": target, "json_str": json_str}
+    # ── Stdout emission ──────────────────────────────────────────────
 
     def emit(self, msg_type, code, target, json_str):
-        """Write JSON line to stdout for Go to read (thread-safe)."""
+        """Write JSON line to stdout for Go to read."""
         try:
             json_obj = json.loads(json_str)
         except (json.JSONDecodeError, TypeError):
@@ -186,143 +190,162 @@ class JSPRHelper:
             {"type": msg_type, "code": code, "target": target, "json": json_obj},
             separators=(",", ":"),
         )
-        with self._emit_lock:
-            # Write directly to fd 1 (stdout pipe) using os.write to bypass
-            # Python's I/O layer. sys.stdout.write() + flush() fails to deliver
-            # data through the pipe to Go — the TextIOWrapper's buffer never
-            # reaches the kernel pipe. os.write() goes directly to the kernel.
-            data = (line + "\n").encode("utf-8")
-            os.write(1, data)
+        data = (line + "\n").encode("utf-8")
+        os.write(1, data)
 
-    def send_mo(self, topic_id, payload_b64, length, request_reference):
-        """Handle entire MO flow inline on serial — no async hops.
+    # ── MO flow (blocking inline state machine) ─────────────────────
 
-        Matches the working pyserial test script exactly:
-        1. PUT messageOriginate
-        2. Wait for 200 + 299 segment request
-        3. Immediately PUT messageOriginateSegment
-        4. Wait for 200 + 299 status
-        5. Emit mo_result to Go
-        """
-        # Acquire serial lock — blocks serial_thread and stdin_thread
-        # until the entire MO flow completes.
-        self._mo_in_progress = True
-        with self._serial_lock:
-            try:
-                self._do_send_mo(topic_id, payload_b64, length, request_reference)
-            finally:
-                self._mo_in_progress = False
+    def _serial_write_raw(self, method, target, json_body):
+        """Write a JSPR command directly — no buffer reset.
+        Used mid-MO where we must not discard pending serial data."""
+        time.sleep(0.005)  # 5ms pacing
+        line = f"{method} {target} {json_body}\r"
+        self.ser.write(line.encode("ascii"))
+        self.ser.flush()
 
-    def _do_send_mo(self, topic_id, payload_b64, length, request_reference):
-        log = lambda msg: (sys.stderr.write(f"jspr-helper.py: MO: {msg}\n"), sys.stderr.flush())
+    def do_send_mo(self, topic_id, payload_b64, length, request_reference):
+        """Handle entire MO flow inline — single thread, no async.
+        Matches the standalone test script exactly."""
+        mlog = lambda msg: log(f"MO: {msg}")
 
-        # 1. PUT messageOriginate
+        try:
+            self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog)
+        finally:
+            self._drain_stale_commands()
+
+    def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog):
+        # Clear any stale data before MO — clean request boundary
+        for resp in self.serial_read_lines():
+            if resp["code"] == 299:
+                self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
+            else:
+                self.emit("response", resp["code"], resp["target"], resp["json_str"])
+        self.ser.reset_input_buffer()
+        self._rx_buf = bytearray()
+        time.sleep(0.010)  # 10ms settle
+
+        # 1. PUT messageOriginate (raw write — no buffer reset)
         cmd = jd({"topic_id": topic_id, "message_length": length, "request_reference": request_reference})
-        log(f"TX PUT messageOriginate {cmd}")
-        self.jspr_send("PUT", "messageOriginate", cmd)
+        mlog(f"TX PUT messageOriginate {cmd}")
+        self._serial_write_raw("PUT", "messageOriginate", cmd)
 
-        # 2. Poll for 200 response, 299 segment request, and handle inline
+        # 2. Poll for responses — handle entire flow inline
         msg_id = None
         segment_sent = False
-        final_status = None
-        deadline = time.monotonic() + 240  # 4 min — must exceed Go-side jsprMOTimeout (3 min)
+        deadline = time.monotonic() + 240  # 4 min — exceeds Go-side 3 min timeout
 
         while self.running and time.monotonic() < deadline:
-            resp = self.jspr_receive(timeout=2.0)
-            if resp is None:
+            lines = self.serial_read_lines()
+            if not lines:
+                time.sleep(0.010)
                 continue
 
-            code = resp["code"]
-            target = resp["target"]
-            json_str = resp["json_str"]
-            log(f"RX {code} {target}")
+            for resp in lines:
+                code = resp["code"]
+                target = resp["target"]
+                json_str = resp["json_str"]
+                mlog(f"RX {code} {target}")
 
-            # Forward unsolicited constellationState etc to Go (don't swallow them)
-            if code == 299 and target not in ("messageOriginateSegment", "messageOriginateStatus"):
-                self.emit("unsolicited", code, target, json_str)
-                continue
+                # Forward unsolicited non-MO messages to Go
+                if code == 299 and target not in ("messageOriginateSegment", "messageOriginateStatus"):
+                    self.emit("unsolicited", code, target, json_str)
+                    continue
 
-            # 200 messageOriginate — extract message_id
-            if code == 200 and target == "messageOriginate":
-                try:
-                    d = json.loads(json_str)
-                    msg_id = d.get("message_id")
-                    resp_str = d.get("message_response", "")
-                    log(f"message_id={msg_id} response={resp_str}")
-                    # Also emit to Go so it sees the 200
+                # 200 messageOriginate — extract message_id
+                if code == 200 and target == "messageOriginate":
+                    try:
+                        d = json.loads(json_str)
+                        msg_id = d.get("message_id")
+                        resp_str = d.get("message_response", "")
+                        mlog(f"message_id={msg_id} response={resp_str}")
+                        self.emit("response", code, target, json_str)
+                        if resp_str != "message_accepted":
+                            self.emit("mo_result", 200, "messageOriginateStatus",
+                                      jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}))
+                            return
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    continue
+
+                # 299 messageOriginateSegment — respond IMMEDIATELY (raw write)
+                if code == 299 and target == "messageOriginateSegment" and not segment_sent:
+                    try:
+                        d = json.loads(json_str)
+                        seg_cmd = jd({
+                            "topic_id": d.get("topic_id", topic_id),
+                            "message_id": d.get("message_id", msg_id),
+                            "segment_length": d.get("segment_length", length),
+                            "segment_start": d.get("segment_start", 0),
+                            "data": payload_b64,
+                        })
+                        mlog(f"TX PUT messageOriginateSegment (msg_id={d.get('message_id', msg_id)})")
+                        self._serial_write_raw("PUT", "messageOriginateSegment", seg_cmd)
+                        segment_sent = True
+                    except (json.JSONDecodeError, KeyError) as e:
+                        mlog(f"segment parse error: {e}")
+                    continue
+
+                # 200 messageOriginateSegment — segment accepted
+                if code == 200 and target == "messageOriginateSegment":
+                    mlog("segment accepted")
                     self.emit("response", code, target, json_str)
-                    if resp_str != "message_accepted":
-                        self.emit("mo_result", 200, "messageOriginateStatus",
-                                  jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}))
+                    continue
+
+                # 299 messageOriginateStatus — final result
+                if code == 299 and target == "messageOriginateStatus":
+                    try:
+                        d = json.loads(json_str)
+                        status_msg_id = d.get("message_id", -1)
+                        final = d.get("final_mo_status", "unknown")
+                        mlog(f"status msg_id={status_msg_id} final={final}")
+                        if msg_id is not None and status_msg_id != msg_id:
+                            mlog(f"STALE status (expected msg_id={msg_id}), ignoring")
+                            continue
+                        self.emit("mo_result", 200, "messageOriginateStatus", json_str)
                         return
-                except (json.JSONDecodeError, KeyError):
-                    pass
-                continue
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    continue
 
-            # 299 messageOriginateSegment — respond IMMEDIATELY
-            if code == 299 and target == "messageOriginateSegment" and not segment_sent:
-                try:
-                    d = json.loads(json_str)
-                    seg_topic = d.get("topic_id", topic_id)
-                    seg_msg_id = d.get("message_id", msg_id)
-                    seg_len = d.get("segment_length", length)
-                    seg_start = d.get("segment_start", 0)
-
-                    seg_cmd = jd({
-                        "topic_id": seg_topic,
-                        "message_id": seg_msg_id,
-                        "segment_length": seg_len,
-                        "segment_start": seg_start,
-                        "data": payload_b64,
-                    })
-                    log(f"TX PUT messageOriginateSegment (msg_id={seg_msg_id})")
-                    self.jspr_send("PUT", "messageOriginateSegment", seg_cmd)
-                    segment_sent = True
-                except (json.JSONDecodeError, KeyError) as e:
-                    log(f"segment parse error: {e}")
-                continue
-
-            # 200 messageOriginateSegment — segment accepted
-            if code == 200 and target == "messageOriginateSegment":
-                log("segment accepted")
-                self.emit("response", code, target, json_str)
-                continue
-
-            # 299 messageOriginateStatus — final result
-            if code == 299 and target == "messageOriginateStatus":
-                try:
-                    d = json.loads(json_str)
-                    status_msg_id = d.get("message_id", -1)
-                    final = d.get("final_mo_status", "unknown")
-                    log(f"status msg_id={status_msg_id} final={final}")
-                    if msg_id is not None and status_msg_id != msg_id:
-                        log(f"STALE status (expected msg_id={msg_id}), ignoring")
-                        continue
-                    self.emit("mo_result", 200, "messageOriginateStatus", json_str)
+                # Non-200 error for messageOriginate
+                if code >= 400 and target == "messageOriginate":
+                    mlog(f"messageOriginate error: {code}")
+                    self.emit("mo_result", code, target, json_str)
                     return
-                except (json.JSONDecodeError, KeyError):
-                    pass
-                continue
 
-            # Non-200 error for messageOriginate
-            if code >= 400 and target == "messageOriginate":
-                log(f"messageOriginate error: {code}")
-                self.emit("mo_result", code, target, json_str)
-                return
-
-            # Forward anything else to Go
-            if code == 299:
-                self.emit("unsolicited", code, target, json_str)
-            else:
-                self.emit("response", code, target, json_str)
+                # Forward anything else to Go
+                if code == 299:
+                    self.emit("unsolicited", code, target, json_str)
+                else:
+                    self.emit("response", code, target, json_str)
 
         # Timeout
-        log("TIMEOUT waiting for MO completion")
+        mlog("TIMEOUT waiting for MO completion")
         self.emit("mo_result", 200, "messageOriginateStatus",
                   jd({"final_mo_status": "helper_timeout", "message_id": msg_id or 0, "topic_id": topic_id}))
 
-    def stdin_thread(self):
-        """Read JSON commands from Go's stdin pipe, send JSPR on serial."""
+    def _drain_stale_commands(self):
+        """Discard queued commands accumulated during MO flow.
+        Signal poll commands (GET constellationState) pile up while
+        MO blocks the event loop — executing them all at once would
+        cause a rapid burst of writes. Discard them; the next poll
+        cycle will issue a fresh one."""
+        drained = 0
+        while True:
+            try:
+                self._cmd_queue.get_nowait()
+                drained += 1
+            except queue.Empty:
+                break
+        if drained:
+            log(f"MO: drained {drained} stale queued commands")
+
+    # ── Stdin reader thread ──────────────────────────────────────────
+    # This is the ONLY other thread. It reads from Go's stdin pipe and
+    # queues commands for the event loop. It NEVER touches the serial port.
+
+    def stdin_reader(self):
+        """Read JSON commands from Go and queue them. Never touches serial."""
         stdin_fd = sys.stdin.fileno()
         buf = ""
         while self.running:
@@ -331,7 +354,7 @@ class JSPRHelper:
             except OSError:
                 break
             if not data:
-                break  # EOF
+                break  # EOF — Go process died
 
             buf += data.decode("utf-8", errors="replace")
 
@@ -342,60 +365,13 @@ class JSPRHelper:
                     continue
                 try:
                     cmd = json.loads(line)
-                    cmd_type = cmd.get("cmd", "send")
-
-                    if cmd_type == "send_mo":
-                        # MO send — handle entire flow inline
-                        self.send_mo(
-                            topic_id=cmd.get("topic_id", 244),
-                            payload_b64=cmd.get("data", ""),
-                            length=cmd.get("length", 0),
-                            request_reference=cmd.get("request_reference", 1),
-                        )
-                    elif cmd_type == "send":
-                        method = cmd.get("method", "")
-                        target = cmd.get("target", "")
-                        json_field = cmd.get("json", {})
-                        if isinstance(json_field, dict):
-                            json_body = json.dumps(json_field, separators=(", ", ": "))
-                        else:
-                            json_body = str(json_field)
-                        if method and target:
-                            # If MO is in progress, wait for it to finish before
-                            # sending. Without this, signal poller GET commands
-                            # interleave with MO and cause the modem to abort it.
-                            if self._mo_in_progress:
-                                with self._serial_lock:
-                                    self.jspr_send(method, target, json_body)
-                            else:
-                                self.jspr_send(method, target, json_body)
-                except (json.JSONDecodeError, KeyError) as e:
-                    sys.stderr.write(f"jspr-helper.py: parse error: {e}\n")
-                    sys.stderr.flush()
+                    self._cmd_queue.put(cmd)
+                except json.JSONDecodeError as e:
+                    log(f"stdin parse error: {e}")
 
         self.running = False
 
-    def serial_thread(self):
-        """Read JSPR responses from serial, emit JSON on stdout."""
-        try:
-            while self.running:
-                # Acquire serial lock — send_mo holds this during the entire MO flow,
-                # so we block here instead of competing for serial data.
-                with self._serial_lock:
-                    resp = self.jspr_receive(timeout=0.5)
-                if resp:
-                    # Log non-constellation unsolicited for MT debugging
-                    if resp["code"] == 299 and resp["target"] != "constellationState":
-                        sys.stderr.write(f"jspr-helper.py: RX unsolicited {resp['code']} {resp['target']} {resp['json_str'][:100]}\n")
-                        sys.stderr.flush()
-                    if resp["code"] == 299:
-                        self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
-                    else:
-                        self.emit("response", resp["code"], resp["target"], resp["json_str"])
-        except Exception as e:
-            sys.stderr.write(f"jspr-helper.py: serial_thread error: {e}\n")
-            sys.stderr.flush()
-            self.running = False
+    # ── Main event loop (single thread owns serial) ──────────────────
 
     def run(self):
         # Drain stale serial data
@@ -403,51 +379,87 @@ class JSPRHelper:
         if self.ser.in_waiting > 0:
             self.ser.read(self.ser.in_waiting)
 
-        t_stdin = threading.Thread(target=self.stdin_thread, daemon=True)
-        t_serial = threading.Thread(target=self.serial_thread, daemon=True)
-
+        # Start stdin reader (only thread besides event loop, never touches serial)
+        t_stdin = threading.Thread(target=self.stdin_reader, daemon=True)
         t_stdin.start()
-        t_serial.start()
 
-        # Wait until either thread signals shutdown
+        # Event loop — single thread owns the serial port
         while self.running:
-            time.sleep(0.1)
+            # 1. Read serial (bulk)
+            lines = self.serial_read_lines()
+            for resp in lines:
+                code = resp["code"]
+                target = resp["target"]
+                json_str = resp["json_str"]
+
+                if code == 299 and target != "constellationState":
+                    log(f"RX unsolicited {code} {target} {json_str[:100]}")
+
+                if code == 299:
+                    self.emit("unsolicited", code, target, json_str)
+                else:
+                    self.emit("response", code, target, json_str)
+
+            # 2. Process queued commands from Go
+            try:
+                cmd = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                cmd = None
+
+            if cmd:
+                cmd_type = cmd.get("cmd", "send")
+
+                if cmd_type == "send_mo":
+                    # MO — blocking inline state machine, no other serial
+                    # activity until complete
+                    self.do_send_mo(
+                        topic_id=cmd.get("topic_id", 244),
+                        payload_b64=cmd.get("data", ""),
+                        length=cmd.get("length", 0),
+                        request_reference=cmd.get("request_reference", 1),
+                    )
+                elif cmd_type == "send":
+                    method = cmd.get("method", "")
+                    target = cmd.get("target", "")
+                    json_field = cmd.get("json", {})
+                    if isinstance(json_field, dict):
+                        json_body = json.dumps(json_field, separators=(", ", ": "))
+                    else:
+                        json_body = str(json_field)
+                    if method and target:
+                        self.serial_write(method, target, json_body)
+
+            # 3. Brief sleep to avoid busy-spinning (matches C library's 10ms)
+            if not lines and cmd is None:
+                time.sleep(0.01)
 
         self.ser.close()
 
 
 def main():
     if len(sys.argv) < 2:
-        sys.stderr.write("Usage: jspr_helper.py /dev/ttyUSB0 [baud]\n")
+        log("Usage: jspr_helper.py /dev/ttyUSB0 [baud]")
         sys.exit(1)
 
     port = sys.argv[1]
     baud = int(sys.argv[2]) if len(sys.argv) > 2 else 230400
+
+    helper = JSPRHelper(port, baud)
 
     def handle_signal(sig, frame):
         helper.running = False
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    # NOTE: Do NOT use os.fdopen(sys.stdout.fileno(), "w", buffering=1) here.
-    # It creates a second Python file object on fd 1 whose buffer conflicts
-    # with the original sys.stdout. Data written via the new object may never
-    # reach the pipe that Go reads from. emit() uses os.write(1, ...) directly
-    # to bypass all Python I/O buffering.
+    log(f"connected to {port} at {baud} baud")
 
-    sys.stderr.write(f"jspr-helper.py: connected to {port} at {baud} baud\n")
-    sys.stderr.flush()
-
-    helper = JSPRHelper(port, baud)
     try:
         helper.run()
     except Exception as e:
-        sys.stderr.write(f"jspr-helper.py: fatal: {e}\n")
-        sys.stderr.flush()
+        log(f"fatal: {e}")
         sys.exit(1)
 
-    sys.stderr.write("jspr-helper.py: shutdown\n")
-    sys.stderr.flush()
+    log("shutdown")
 
 
 if __name__ == "__main__":
