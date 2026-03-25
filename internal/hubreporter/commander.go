@@ -1,6 +1,8 @@
 package hubreporter
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -8,11 +10,32 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+func decodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
+// CommandDeps holds optional subsystem references for command execution.
+type CommandDeps struct {
+	// SendText queues a text message to an interface via the delivery pipeline.
+	// Parameters: interfaceID, text. Returns deliveryID, msgRef, error.
+	SendText func(interfaceID, text string) (int64, string, error)
+
+	// SendMT sends a message via satellite (Iridium MO). Returns error.
+	SendMT func(ctx context.Context, payload []byte) error
+
+	// FlushBurst flushes the burst queue and returns the payload.
+	FlushBurst func(ctx context.Context) ([]byte, int, error)
+
+	// BurstPending returns the number of pending burst messages.
+	BurstPending func() int
+}
+
 // CommandHandler processes commands received from the Hub via MQTT.
 type CommandHandler struct {
 	reporter *HubReporter
 	bridgeID string
 	handlers map[string]func(cmd Command) (json.RawMessage, error)
+	deps     CommandDeps
 }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
@@ -24,7 +47,6 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 		handlers: make(map[string]func(cmd Command) (json.RawMessage, error)),
 	}
 
-	// Register built-in command handlers.
 	ch.handlers["ping"] = func(cmd Command) (json.RawMessage, error) {
 		health := healthFn()
 		data, err := json.Marshal(health)
@@ -34,38 +56,133 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 		return data, nil
 	}
 
-	ch.handlers["flush_burst"] = func(cmd Command) (json.RawMessage, error) {
-		// Placeholder: burst queue flush requires gateway access.
-		log.Info().Str("request_id", cmd.RequestID).Msg("commander: flush_burst requested (not wired)")
-		return json.RawMessage(`{"message":"flush_burst not available"}`), nil
-	}
-
-	ch.handlers["send_text"] = func(cmd Command) (json.RawMessage, error) {
-		// Placeholder: actual text sending requires gateway access.
-		log.Info().Str("request_id", cmd.RequestID).Str("target", cmd.TargetDevice).Msg("commander: send_text requested (placeholder)")
-		return json.RawMessage(`{"message":"send_text accepted (placeholder)"}`), nil
-	}
-
-	ch.handlers["send_mt"] = func(cmd Command) (json.RawMessage, error) {
-		// Placeholder: actual MT sending requires satellite transport access.
-		log.Info().Str("request_id", cmd.RequestID).Str("target", cmd.TargetDevice).Msg("commander: send_mt requested (placeholder)")
-		return json.RawMessage(`{"message":"send_mt accepted (placeholder)"}`), nil
-	}
+	ch.handlers["flush_burst"] = ch.handleFlushBurst
+	ch.handlers["send_text"] = ch.handleSendText
+	ch.handlers["send_mt"] = ch.handleSendMT
 
 	ch.handlers["config_update"] = func(cmd Command) (json.RawMessage, error) {
-		// Placeholder: config updates require config manager access.
-		log.Info().Str("request_id", cmd.RequestID).Msg("commander: config_update requested (placeholder)")
-		return json.RawMessage(`{"message":"config_update accepted (placeholder)"}`), nil
+		// Config updates require careful validation — accept but log only.
+		log.Info().Str("request_id", cmd.RequestID).Msg("commander: config_update received (not implemented)")
+		return json.RawMessage(`{"message":"config_update not yet implemented"}`), nil
 	}
 
 	ch.handlers["reboot"] = func(cmd Command) (json.RawMessage, error) {
-		// NEVER actually reboot without explicit confirmation.
-		// Actual execution deferred to explicit approval mechanism.
 		log.Warn().Str("request_id", cmd.RequestID).Msg("commander: reboot requested — NOT executing (requires explicit approval)")
 		return json.RawMessage(`{"message":"reboot acknowledged but not executed (requires explicit approval)"}`), nil
 	}
 
 	return ch
+}
+
+// SetDeps sets the subsystem dependencies for command execution.
+func (ch *CommandHandler) SetDeps(deps CommandDeps) {
+	ch.deps = deps
+}
+
+// handleFlushBurst flushes the satellite burst queue.
+func (ch *CommandHandler) handleFlushBurst(cmd Command) (json.RawMessage, error) {
+	if ch.deps.FlushBurst == nil {
+		return nil, fmt.Errorf("burst queue not available")
+	}
+	payload, count, err := ch.deps.FlushBurst(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("flush burst: %w", err)
+	}
+	result := struct {
+		Messages int `json:"messages_flushed"`
+		Bytes    int `json:"payload_bytes"`
+	}{count, len(payload)}
+	data, _ := json.Marshal(result)
+	log.Info().Int("messages", count).Int("bytes", len(payload)).
+		Str("request_id", cmd.RequestID).Msg("commander: burst queue flushed")
+	return data, nil
+}
+
+// sendTextPayload is the expected JSON payload for send_text commands.
+type sendTextPayload struct {
+	InterfaceID string `json:"interface_id"` // target interface (e.g. "iridium_imt_0", "mesh_0")
+	Text        string `json:"text"`
+}
+
+// handleSendText sends a text message via the delivery pipeline.
+func (ch *CommandHandler) handleSendText(cmd Command) (json.RawMessage, error) {
+	if ch.deps.SendText == nil {
+		return nil, fmt.Errorf("dispatcher not available")
+	}
+
+	var p sendTextPayload
+	if err := json.Unmarshal(cmd.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid send_text payload: %w", err)
+	}
+	if p.Text == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	if p.InterfaceID == "" {
+		return nil, fmt.Errorf("interface_id is required")
+	}
+
+	deliveryID, msgRef, err := ch.deps.SendText(p.InterfaceID, p.Text)
+	if err != nil {
+		return nil, fmt.Errorf("queue send: %w", err)
+	}
+
+	result := struct {
+		DeliveryID int64  `json:"delivery_id"`
+		MsgRef     string `json:"msg_ref"`
+	}{deliveryID, msgRef}
+	data, _ := json.Marshal(result)
+	log.Info().Int64("delivery_id", deliveryID).Str("msg_ref", msgRef).
+		Str("interface", p.InterfaceID).Str("request_id", cmd.RequestID).
+		Msg("commander: text queued for delivery")
+	return data, nil
+}
+
+// sendMTPayload is the expected JSON payload for send_mt commands.
+type sendMTPayload struct {
+	Data string `json:"data"` // base64-encoded payload
+	Text string `json:"text"` // plain text (alternative to data)
+}
+
+// handleSendMT sends a message via satellite (queued through delivery pipeline).
+func (ch *CommandHandler) handleSendMT(cmd Command) (json.RawMessage, error) {
+	if ch.deps.SendText == nil {
+		return nil, fmt.Errorf("dispatcher not available")
+	}
+
+	var p sendMTPayload
+	if err := json.Unmarshal(cmd.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid send_mt payload: %w", err)
+	}
+
+	text := p.Text
+	if text == "" && p.Data != "" {
+		// Decode base64 payload
+		decoded, err := decodeBase64(p.Data)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base64 data: %w", err)
+		}
+		text = string(decoded)
+	}
+	if text == "" {
+		return nil, fmt.Errorf("text or data is required")
+	}
+
+	// Route to first available satellite interface
+	ifaceID := "iridium_imt_0"
+	deliveryID, msgRef, err := ch.deps.SendText(ifaceID, text)
+	if err != nil {
+		return nil, fmt.Errorf("queue MT: %w", err)
+	}
+
+	result := struct {
+		DeliveryID int64  `json:"delivery_id"`
+		MsgRef     string `json:"msg_ref"`
+		Interface  string `json:"interface"`
+	}{deliveryID, msgRef, ifaceID}
+	data, _ := json.Marshal(result)
+	log.Info().Int64("delivery_id", deliveryID).Str("msg_ref", msgRef).
+		Str("request_id", cmd.RequestID).Msg("commander: MT queued for satellite delivery")
+	return data, nil
 }
 
 // HandleCommand processes a command payload received from the Hub.

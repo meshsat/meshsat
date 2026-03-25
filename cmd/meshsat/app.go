@@ -75,6 +75,7 @@ type App struct {
 
 	// Device supervisor (direct mode only — continuous USB discovery)
 	DevSupervisor *transport.DeviceSupervisor
+	BurstQueue    *engine.BurstQueue
 
 	// Cleanup funcs for llamazip etc.
 	cleanups []func()
@@ -450,6 +451,7 @@ func (a *App) Setup(ctx context.Context) error {
 
 	burstQueue := engine.NewBurstQueue(db, 10, 30*time.Minute)
 	srv.SetBurstQueue(burstQueue)
+	a.BurstQueue = burstQueue
 
 	geofenceMon := engine.NewGeofenceMonitor()
 	srv.SetGeofenceMonitor(geofenceMon)
@@ -566,6 +568,23 @@ func (a *App) Setup(ctx context.Context) error {
 
 		// Command handler — processes commands from the Hub (ping, flush_burst, etc.)
 		cmdHandler := hubreporter.NewCommandHandler(reporter, cfg.BridgeID, healthFn)
+		cmdHandler.SetDeps(hubreporter.CommandDeps{
+			SendText: func(ifaceID, text string) (int64, string, error) {
+				return a.Dispatcher.QueueDirectSend(ifaceID, text)
+			},
+			FlushBurst: func(ctx context.Context) ([]byte, int, error) {
+				if a.BurstQueue == nil {
+					return nil, 0, fmt.Errorf("burst queue not initialized")
+				}
+				return a.BurstQueue.Flush(ctx)
+			},
+			BurstPending: func() int {
+				if a.BurstQueue == nil {
+					return 0
+				}
+				return a.BurstQueue.Pending()
+			},
+		})
 		reporter.SetCommandHandler(cmdHandler)
 
 		// Device inventory + event tap — tracks mesh devices and streams
