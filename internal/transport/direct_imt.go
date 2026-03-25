@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 // DirectIMTTransport implements SatTransport via JSPR for the RockBLOCK 9704.
@@ -833,11 +834,13 @@ func (t *DirectIMTTransport) reconnect() error {
 	return nil
 }
 
-// usbResetIMTDevice performs a USB unbind/bind cycle on the device behind the
-// given serial port. The RockBLOCK 9704 (FTDI FT234XD) gets into a hung state
-// after repeated failed serial sessions — the firmware stops responding to JSPR
-// commands even though the USB enumeration is fine. A USB driver unbind/bind
-// forces a full re-initialization of the FTDI chip and modem firmware.
+// usbResetIMTDevice resets the USB device behind the given serial port using
+// the USBDEVFS_RESET ioctl. The RockBLOCK 9704 (FTDI FT234XD) gets into a
+// hung state after repeated failed serial sessions — the firmware stops
+// responding to JSPR commands. A USB reset forces full re-enumeration.
+//
+// Uses the ioctl approach (works inside Docker containers) rather than sysfs
+// unbind/bind (which requires writable sysfs, blocked inside containers).
 //
 // Returns true if the reset was performed successfully.
 func usbResetIMTDevice(portPath string) bool {
@@ -850,30 +853,40 @@ func usbResetIMTDevice(portPath string) bool {
 		}
 	}
 
-	// Check the sysfs device path exists before attempting reset.
-	sysPath := fmt.Sprintf("/sys/class/tty/%s/device", devName)
-	if _, err := os.Stat(sysPath); err != nil {
-		log.Debug().Str("path", sysPath).Msg("imt: usb reset — device not in sysfs")
-		return false
-	}
-
-	// Unbind and rebind the USB driver. This forces the FTDI chip and modem
-	// firmware to fully re-initialize, recovering from hung states.
+	// Find the USB bus/device numbers from sysfs.
+	// /sys/class/tty/ttyUSB0/device/../../ → USB device dir with busnum/devnum
 	out, err := exec.Command("sh", "-c", fmt.Sprintf(
 		`DEV=$(readlink -f /sys/class/tty/%s/device/../../) && `+
-			`DEVNAME=$(basename "$DEV") && `+
-			`DRIVER=$(basename "$(readlink "$DEV/driver")") && `+
-			`echo "$DEVNAME" > /sys/bus/usb/drivers/"$DRIVER"/unbind && `+
-			`sleep 2 && `+
-			`echo "$DEVNAME" > /sys/bus/usb/drivers/"$DRIVER"/bind && `+
-			`echo "ok"`, devName)).CombinedOutput()
-
+			`cat "$DEV/busnum" && cat "$DEV/devnum"`, devName)).CombinedOutput()
 	if err != nil {
-		log.Warn().Err(err).Str("output", string(out)).Msg("imt: USB reset failed")
+		log.Debug().Err(err).Str("output", string(out)).Msg("imt: usb reset — can't resolve bus/dev numbers")
 		return false
 	}
 
-	log.Info().Str("port", portPath).Msg("imt: USB device reset completed")
+	// Parse busnum and devnum
+	var busNum, devNum int
+	if _, err := fmt.Sscanf(string(out), "%d\n%d", &busNum, &devNum); err != nil {
+		log.Debug().Err(err).Str("output", string(out)).Msg("imt: usb reset — can't parse bus/dev")
+		return false
+	}
+
+	// Open /dev/bus/usb/BBB/DDD and issue USBDEVFS_RESET ioctl
+	usbDevPath := fmt.Sprintf("/dev/bus/usb/%03d/%03d", busNum, devNum)
+	fd, err := unix.Open(usbDevPath, unix.O_WRONLY, 0)
+	if err != nil {
+		log.Warn().Err(err).Str("path", usbDevPath).Msg("imt: USB reset — can't open USB device")
+		return false
+	}
+	defer unix.Close(fd)
+
+	// USBDEVFS_RESET = _IO('U', 20) = 0x5514
+	const usbdevfsReset = 0x5514
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), usbdevfsReset, 0); errno != 0 {
+		log.Warn().Int("errno", int(errno)).Str("path", usbDevPath).Msg("imt: USB reset ioctl failed")
+		return false
+	}
+
+	log.Info().Str("port", portPath).Str("usb", usbDevPath).Msg("imt: USB device reset completed")
 	return true
 }
 
