@@ -143,21 +143,13 @@ class JSPRHelper:
     # ── Serial I/O (ONLY called from event loop thread) ──────────────
 
     def serial_write(self, method, target, json_body):
-        """Send a JSPR command with buffer reset and pacing.
-        Only called from the event loop thread."""
-        # Drain any complete lines before clearing (don't lose unsolicited data)
-        for resp in self.serial_read_lines():
-            if resp["code"] == 299:
-                self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
-            else:
-                self.emit("response", resp["code"], resp["target"], resp["json_str"])
-        # Reset stale partial data in kernel/FTDI buffer
-        self.ser.reset_input_buffer()
-        self._rx_buf = bytearray()
+        """Send a JSPR command with pacing.
+        Only called from the event loop thread.
+        Does NOT reset input buffer — that would discard modem responses
+        that are in flight (e.g. stale MO status arriving between commands)."""
         time.sleep(0.005)  # 5ms pacing — prevent command coalescence in USB frame
         line = f"{method} {target} {json_body}\r"
         self.ser.write(line.encode("ascii"))
-        self.ser.flush()
 
     def serial_read_lines(self):
         """Bulk-read all available data and return complete JSPR lines.
@@ -214,7 +206,7 @@ class JSPRHelper:
             self._drain_stale_commands()
 
     def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog):
-        # Clear any stale data before MO — clean request boundary
+        # Drain pending data — emit complete lines, then clear partial data
         for resp in self.serial_read_lines():
             if resp["code"] == 299:
                 self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
@@ -222,9 +214,16 @@ class JSPRHelper:
                 self.emit("response", resp["code"], resp["target"], resp["json_str"])
         self.ser.reset_input_buffer()
         self._rx_buf = bytearray()
-        time.sleep(0.010)  # 10ms settle
+        time.sleep(0.1)  # 100ms settle — match standalone test script
 
-        # 1. PUT messageOriginate (raw write — no buffer reset)
+        # Drain any stale messageOriginateStatus from previous MO
+        for resp in self.serial_read_lines():
+            if resp["code"] == 299 and resp["target"] == "messageOriginateStatus":
+                mlog(f"drained stale status: {resp['json_str'][:80]}")
+            elif resp["code"] == 299:
+                self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
+
+        # 1. PUT messageOriginate
         cmd = jd({"topic_id": topic_id, "message_length": length, "request_reference": request_reference})
         mlog(f"TX PUT messageOriginate {cmd}")
         self._serial_write_raw("PUT", "messageOriginate", cmd)
@@ -232,9 +231,21 @@ class JSPRHelper:
         # 2. Poll for responses — handle entire flow inline
         msg_id = None
         segment_sent = False
-        deadline = time.monotonic() + 240  # 4 min — exceeds Go-side 3 min timeout
+        # Two-phase timeout: 30s for initial 200 response, then 4 min for satellite
+        initial_deadline = time.monotonic() + 30
+        full_deadline = time.monotonic() + 240
+        got_200 = False
 
-        while self.running and time.monotonic() < deadline:
+        while self.running:
+            # Check appropriate deadline
+            if not got_200 and time.monotonic() > initial_deadline:
+                mlog("no 200 response to messageOriginate within 30s — modem not responding")
+                self.emit("mo_result", 200, "messageOriginateStatus",
+                          jd({"final_mo_status": "no_response", "message_id": 0, "topic_id": topic_id}))
+                return
+            if time.monotonic() > full_deadline:
+                break
+
             lines = self.serial_read_lines()
             if not lines:
                 time.sleep(0.010)
@@ -257,6 +268,7 @@ class JSPRHelper:
                         d = json.loads(json_str)
                         msg_id = d.get("message_id")
                         resp_str = d.get("message_response", "")
+                        got_200 = True
                         mlog(f"message_id={msg_id} response={resp_str}")
                         self.emit("response", code, target, json_str)
                         if resp_str != "message_accepted":
