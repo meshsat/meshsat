@@ -53,6 +53,7 @@ type DirectIMTTransport struct {
 	pollDone     chan struct{}
 	sigDone      chan struct{}
 	watchdogDone chan struct{}
+	usbResetDone bool // prevents recursive USB reset in connect()
 }
 
 // NewDirectIMTTransport creates a new direct serial IMT transport for the RockBLOCK 9704.
@@ -204,6 +205,18 @@ func (t *DirectIMTTransport) connect() error {
 		helper.Close()
 		t.file = nil
 		t.conn = nil
+
+		// The modem gets into a hung state after repeated failed serial
+		// sessions. A USB device reset (unbind/bind) recovers it.
+		if !t.usbResetDone && usbResetIMTDevice(portPath) {
+			t.usbResetDone = true // prevent infinite recursion
+			log.Info().Msg("imt: USB reset succeeded, retrying connect")
+			time.Sleep(2 * time.Second)
+			err := t.connect()
+			t.usbResetDone = false // allow future resets
+			return err
+		}
+
 		return fmt.Errorf("imt: JSPR begin failed after 3 attempts: %w", beginErr)
 	}
 
@@ -818,6 +831,50 @@ func (t *DirectIMTTransport) reconnect() error {
 	}
 
 	return nil
+}
+
+// usbResetIMTDevice performs a USB unbind/bind cycle on the device behind the
+// given serial port. The RockBLOCK 9704 (FTDI FT234XD) gets into a hung state
+// after repeated failed serial sessions — the firmware stops responding to JSPR
+// commands even though the USB enumeration is fine. A USB driver unbind/bind
+// forces a full re-initialization of the FTDI chip and modem firmware.
+//
+// Returns true if the reset was performed successfully.
+func usbResetIMTDevice(portPath string) bool {
+	// portPath is e.g. "/dev/ttyUSB0" — extract "ttyUSB0"
+	devName := portPath
+	for i := len(devName) - 1; i >= 0; i-- {
+		if devName[i] == '/' {
+			devName = devName[i+1:]
+			break
+		}
+	}
+
+	// Check the sysfs device path exists before attempting reset.
+	sysPath := fmt.Sprintf("/sys/class/tty/%s/device", devName)
+	if _, err := os.Stat(sysPath); err != nil {
+		log.Debug().Str("path", sysPath).Msg("imt: usb reset — device not in sysfs")
+		return false
+	}
+
+	// Unbind and rebind the USB driver. This forces the FTDI chip and modem
+	// firmware to fully re-initialize, recovering from hung states.
+	out, err := exec.Command("sh", "-c", fmt.Sprintf(
+		`DEV=$(readlink -f /sys/class/tty/%s/device/../../) && `+
+			`DEVNAME=$(basename "$DEV") && `+
+			`DRIVER=$(basename "$(readlink "$DEV/driver")") && `+
+			`echo "$DEVNAME" > /sys/bus/usb/drivers/"$DRIVER"/unbind && `+
+			`sleep 2 && `+
+			`echo "$DEVNAME" > /sys/bus/usb/drivers/"$DRIVER"/bind && `+
+			`echo "ok"`, devName)).CombinedOutput()
+
+	if err != nil {
+		log.Warn().Err(err).Str("output", string(out)).Msg("imt: USB reset failed")
+		return false
+	}
+
+	log.Info().Str("port", portPath).Msg("imt: USB device reset completed")
+	return true
 }
 
 // findJSPRHelper locates the jspr-helper executable.
