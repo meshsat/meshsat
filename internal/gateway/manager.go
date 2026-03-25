@@ -737,8 +737,13 @@ func (m *Manager) syncIfaceMap(gwType string, gw Gateway) {
 	if err != nil {
 		return
 	}
+	// "iridium_imt" gateway uses interfaces with channel_type "iridium"
+	matchType := gwType
+	if matchType == "iridium_imt" {
+		matchType = "iridium"
+	}
 	for _, iface := range ifaces {
-		if iface.Enabled && iface.ChannelType == gwType {
+		if iface.Enabled && iface.ChannelType == matchType {
 			m.runningByIface[iface.ID] = gw
 		}
 	}
