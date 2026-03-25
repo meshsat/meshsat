@@ -205,6 +205,27 @@ func (m *Manager) Start(ctx context.Context) error {
 		return nil
 	}
 
+	// Track how many transports are registered per type to avoid starting
+	// more gateway instances than we have distinct hardware.
+	m.transportsMu.RLock()
+	transportCount := make(map[string]int)
+	for id := range m.satTransports {
+		// Map transport instance ID to gateway type
+		if strings.Contains(id, "imt") {
+			transportCount["iridium_imt"]++
+		} else if strings.HasPrefix(id, "iridium") {
+			transportCount["iridium"]++
+		}
+	}
+	for range m.cellTransports {
+		transportCount["cellular"]++
+	}
+	for range m.astroTransports {
+		transportCount["astrocast"]++
+	}
+	m.transportsMu.RUnlock()
+
+	startedByType := make(map[string]int)
 	for _, cfg := range configs {
 		if !cfg.Enabled {
 			continue
@@ -213,6 +234,22 @@ func (m *Manager) Start(ctx context.Context) error {
 		if instanceID == "" {
 			instanceID = cfg.Type + "_0"
 		}
+
+		// For hardware-backed gateways, don't start more instances than
+		// registered transports. This prevents stale DB configs from
+		// spawning duplicate gateways that share the same transport.
+		if role := gatewayTypeToRole(cfg.Type); role != transport.RoleNone {
+			maxTransports := transportCount[cfg.Type]
+			if maxTransports == 0 {
+				maxTransports = 1 // at least try the default
+			}
+			if startedByType[cfg.Type] >= maxTransports {
+				log.Info().Str("type", cfg.Type).Str("instance", instanceID).
+					Msg("skipping gateway — no additional transport registered")
+				continue
+			}
+		}
+
 		gw, err := m.createGatewayForInstance(cfg.Type, instanceID, cfg.Config)
 		if err != nil {
 			log.Error().Err(err).Str("type", cfg.Type).Str("instance", instanceID).Msg("failed to create gateway")
@@ -229,6 +266,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		if m.onReceiverStart != nil {
 			m.onReceiverStart(ctx, gw)
 		}
+		startedByType[cfg.Type]++
 		log.Info().Str("type", cfg.Type).Str("instance", instanceID).Msg("gateway started from saved config")
 	}
 
@@ -483,39 +521,53 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 	}
 
 	// Phase 2: Auto-create and start gateways for detected hardware.
-	for _, entry := range registry.ListAll() {
-		gwType := roleToGatewayType(entry.Role)
-		if gwType == "" {
+	// Count running gateways per type to avoid creating more instances than hardware.
+	m.mu.RLock()
+	runningByType := make(map[string]int)
+	for _, gw := range m.running {
+		if gw != nil {
+			runningByType[gw.Type()]++
+		}
+	}
+	m.mu.RUnlock()
+
+	for gwType, hwCount := range presentTypes {
+		// Skip if we already have enough running instances for this type
+		if runningByType[gwType] >= hwCount {
 			continue
 		}
 
-		instanceID := m.findOrCreateInstance(gwType)
+		// Need to start (hwCount - runningByType[gwType]) more instances
+		needed := hwCount - runningByType[gwType]
+		for i := 0; i < needed; i++ {
+			instanceID := m.findOrCreateInstance(gwType)
 
-		m.mu.RLock()
-		_, running := m.running[instanceID]
-		m.mu.RUnlock()
-		if running {
-			continue
-		}
-
-		cfg, err := m.db.GetGatewayConfigByInstance(instanceID)
-		if err != nil {
-			log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", entry.DevPath).
-				Msg("gwmgr: reconcile — auto-creating config for detected hardware")
-			if err := m.db.SaveGatewayConfigInstance(gwType, instanceID, true, "{}"); err != nil {
-				log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: reconcile — failed to create default config")
+			m.mu.RLock()
+			_, running := m.running[instanceID]
+			m.mu.RUnlock()
+			if running {
 				continue
 			}
-		} else if !cfg.Enabled {
-			log.Info().Str("instance", instanceID).Str("port", entry.DevPath).
-				Msg("gwmgr: reconcile — re-enabling gateway (hardware detected)")
-			m.db.SaveGatewayConfigInstance(gwType, instanceID, true, cfg.Config)
-		}
 
-		log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", entry.DevPath).
-			Msg("gwmgr: reconcile — starting gateway for detected hardware")
-		if err := m.StartGatewayInstance(ctx, instanceID); err != nil {
-			log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: reconcile — failed to start gateway")
+			cfg, err := m.db.GetGatewayConfigByInstance(instanceID)
+			if err != nil {
+				log.Info().Str("type", gwType).Str("instance", instanceID).
+					Msg("gwmgr: reconcile — auto-creating config for detected hardware")
+				if err := m.db.SaveGatewayConfigInstance(gwType, instanceID, true, "{}"); err != nil {
+					log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: reconcile — failed to create default config")
+					continue
+				}
+			} else if !cfg.Enabled {
+				log.Info().Str("instance", instanceID).
+					Msg("gwmgr: reconcile — re-enabling gateway (hardware detected)")
+				m.db.SaveGatewayConfigInstance(gwType, instanceID, true, cfg.Config)
+			}
+
+			log.Info().Str("type", gwType).Str("instance", instanceID).
+				Msg("gwmgr: reconcile — starting gateway for detected hardware")
+			if err := m.StartGatewayInstance(ctx, instanceID); err != nil {
+				log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: reconcile — failed to start gateway")
+			}
 		}
 	}
 }
