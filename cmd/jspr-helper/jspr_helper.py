@@ -113,21 +113,30 @@ class JSPRHelper:
 
     def jspr_receive(self, timeout=2.0):
         """Read one JSPR line: 'CODE target {json}\r'. Returns dict or None.
-        Caller must hold appropriate lock if concurrent reads are possible."""
-        buf = bytearray()
+        Caller must hold appropriate lock if concurrent reads are possible.
+        Uses _rx_buf to persist partial reads across calls — at 230400 baud
+        on ARM64 USB, data can arrive in chunks that split a single line."""
+        if not hasattr(self, '_rx_buf'):
+            self._rx_buf = bytearray()
         deadline = time.monotonic() + timeout
         while self.running and time.monotonic() < deadline:
             ch = self.ser.read(1)
             if not ch:
-                if len(buf) == 0:
+                if len(self._rx_buf) == 0:
                     return None
                 continue
             if ch == b"\r":
                 break
-            buf.append(ch[0])
-
-        if not buf:
+            self._rx_buf.append(ch[0])
+        else:
+            # Deadline reached with partial data — keep _rx_buf for next call
             return None
+
+        if not self._rx_buf:
+            return None
+
+        buf = self._rx_buf
+        self._rx_buf = bytearray()
 
         text = buf.decode("ascii", errors="ignore")
 
@@ -138,13 +147,19 @@ class JSPRHelper:
         text = text[i:]
 
         if len(text) < 3:
+            sys.stderr.write(f"jspr-helper.py: jspr_receive SHORT: {repr(buf)}\n")
+            sys.stderr.flush()
             return None
 
         try:
             code = int(text[:3])
         except ValueError:
+            sys.stderr.write(f"jspr-helper.py: jspr_receive BADCODE: {repr(text[:20])}\n")
+            sys.stderr.flush()
             return None
         if code < 200 or code > 500:
+            sys.stderr.write(f"jspr-helper.py: jspr_receive RANGE: code={code} {repr(text[:40])}\n")
+            sys.stderr.flush()
             return None
 
         rest = text[4:]  # skip "CODE "
@@ -369,6 +384,10 @@ class JSPRHelper:
                 with self._serial_lock:
                     resp = self.jspr_receive(timeout=0.5)
                 if resp:
+                    # Log non-constellation unsolicited for MT debugging
+                    if resp["code"] == 299 and resp["target"] != "constellationState":
+                        sys.stderr.write(f"jspr-helper.py: RX unsolicited {resp['code']} {resp['target']} {resp['json_str'][:100]}\n")
+                        sys.stderr.flush()
                     if resp["code"] == 299:
                         self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
                     else:

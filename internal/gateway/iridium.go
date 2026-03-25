@@ -663,6 +663,12 @@ func (g *IridiumGateway) ringAlertListenOnce(ctx context.Context) error {
 			switch event.Type {
 			case "ring_alert":
 				g.handleRingAlert(ctx)
+			case "mt_received":
+				// IMT (9704): MT is push-based — the transport already received
+				// the full message and buffered it in mtPending. Trigger the same
+				// handleRingAlert path which calls MailboxCheck → Receive.
+				log.Info().Str("detail", event.Message).Msg("iridium: MT push received from IMT transport")
+				g.handleRingAlert(ctx)
 			case "signal":
 				// Opportunistic DLQ drain: if signal is sufficient and DLQ has pending entries,
 				// drain them now rather than waiting for the periodic retry worker.
