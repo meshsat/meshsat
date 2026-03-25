@@ -489,6 +489,28 @@ func FindUSBSerial(port string) string {
 	return ""
 }
 
+// findUSBProduct reads the USB product string from sysfs for a given tty port.
+// Returns strings like "FT230X Basic UART" or "FT232R USB UART".
+// Does NOT open the serial port — reads from sysfs only.
+func findUSBProduct(port string) string {
+	devName := filepath.Base(port)
+	sysPath := fmt.Sprintf("/sys/class/tty/%s/device", devName)
+	current, err := filepath.EvalSymlinks(sysPath)
+	if err != nil {
+		return ""
+	}
+
+	for i := 0; i < 5; i++ {
+		current = filepath.Dir(current)
+		data, _ := os.ReadFile(filepath.Join(current, "product"))
+		prod := strings.TrimSpace(string(data))
+		if prod != "" {
+			return prod
+		}
+	}
+	return ""
+}
+
 // ClassifyDevice returns the device type for a given VID:PID string.
 // Returns one of: "meshtastic", "iridium", "cellular", "astrocast", "zigbee", "gps", "unknown".
 // Note: some VID:PIDs (CP210x, CH343) are shared by multiple device types.

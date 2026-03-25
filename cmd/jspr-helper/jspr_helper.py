@@ -172,8 +172,12 @@ class JSPRHelper:
             separators=(",", ":"),
         )
         with self._emit_lock:
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+            # Write directly to fd 1 (stdout pipe) using os.write to bypass
+            # Python's I/O layer. sys.stdout.write() + flush() fails to deliver
+            # data through the pipe to Go — the TextIOWrapper's buffer never
+            # reaches the kernel pipe. os.write() goes directly to the kernel.
+            data = (line + "\n").encode("utf-8")
+            os.write(1, data)
 
     def send_mo(self, topic_id, payload_b64, length, request_reference):
         """Handle entire MO flow inline on serial — no async hops.
@@ -358,16 +362,21 @@ class JSPRHelper:
 
     def serial_thread(self):
         """Read JSPR responses from serial, emit JSON on stdout."""
-        while self.running:
-            # Acquire serial lock — send_mo holds this during the entire MO flow,
-            # so we block here instead of competing for serial data.
-            with self._serial_lock:
-                resp = self.jspr_receive(timeout=0.5)
-            if resp:
-                if resp["code"] == 299:
-                    self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
-                else:
-                    self.emit("response", resp["code"], resp["target"], resp["json_str"])
+        try:
+            while self.running:
+                # Acquire serial lock — send_mo holds this during the entire MO flow,
+                # so we block here instead of competing for serial data.
+                with self._serial_lock:
+                    resp = self.jspr_receive(timeout=0.5)
+                if resp:
+                    if resp["code"] == 299:
+                        self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
+                    else:
+                        self.emit("response", resp["code"], resp["target"], resp["json_str"])
+        except Exception as e:
+            sys.stderr.write(f"jspr-helper.py: serial_thread error: {e}\n")
+            sys.stderr.flush()
+            self.running = False
 
     def run(self):
         # Drain stale serial data
@@ -401,7 +410,11 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    sys.stdout = os.fdopen(sys.stdout.fileno(), "w", buffering=1)
+    # NOTE: Do NOT use os.fdopen(sys.stdout.fileno(), "w", buffering=1) here.
+    # It creates a second Python file object on fd 1 whose buffer conflicts
+    # with the original sys.stdout. Data written via the new object may never
+    # reach the pipe that Go reads from. emit() uses os.write(1, ...) directly
+    # to bypass all Python I/O buffering.
 
     sys.stderr.write(f"jspr-helper.py: connected to {port} at {baud} baud\n")
     sys.stderr.flush()

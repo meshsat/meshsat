@@ -324,7 +324,13 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	}
 
 	// Step 2: JSPR probe for 9704 (~500ms)
-	if probeJSPR(port) {
+	// Skip on platform UARTs (ttyAMA*) — they have no FTDI chip and never respond to JSPR.
+	// Also skip on ports with known non-FTDI VID:PIDs.
+	// NOTE: probeJSPR uses O_NONBLOCK + select() which is unreliable on ARM64 FTDI;
+	// prefer VID:PID + USB product string identification (Step 1) when possible.
+	if strings.HasPrefix(filepath.Base(port), "ttyAMA") {
+		// Platform UART — skip JSPR probe entirely
+	} else if probeJSPR(port) {
 		role := RoleIridium9704
 		if s.registry.ClaimPort(port, role) {
 			s.registry.SetRole(port, role)
@@ -468,7 +474,20 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 		return RoleMeshtastic
 	}
 
-	// FTDI VID:PIDs could be Iridium 9603, 9704, or Astrocast — needs protocol probe
+	// FTDI VID:PIDs — disambiguate by USB product string (sysfs, no serial open).
+	// probeJSPR uses O_NONBLOCK + select() which doesn't work on FTDI USB-serial
+	// on ARM64: select() always times out because the USB subsystem needs blocking
+	// reads to trigger URB submission. The USB product string reliably distinguishes:
+	//   FT230X/FT234X → RockBLOCK 9704 (IMT/JSPR at 230400)
+	//   FT232R        → Iridium 9603N (SBD/AT at 19200)
+	if knownIMTVIDPIDs[vidpid] {
+		product := findUSBProduct(port)
+		if strings.Contains(product, "FT230X") || strings.Contains(product, "FT234X") {
+			log.Info().Str("port", port).Str("product", product).
+				Msg("device-supervisor: identified as 9704 by USB product string (skipping JSPR probe)")
+			return RoleIridium9704
+		}
+	}
 	if knownIridiumVIDPIDs[vidpid] || knownAstrocastVIDPIDs[vidpid] {
 		return RoleNone // fall through to protocol probes
 	}

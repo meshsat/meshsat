@@ -183,13 +183,28 @@ func (t *DirectIMTTransport) connect() error {
 	// which reads from the helper's buffered output (not from serial directly).
 	t.conn.startReader()
 
-	// JSPR handshake (uses async sendRequest via reader goroutine)
-	if err := t.conn.jsprBegin(); err != nil {
+	// JSPR handshake (uses async sendRequest via reader goroutine).
+	// Retry without killing the helper — on ARM64, closing and reopening
+	// the FTDI serial port corrupts USB URBs in the host controller.
+	// Keeping the helper (and serial port) alive avoids this.
+	var beginErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		beginErr = t.conn.jsprBegin()
+		if beginErr == nil {
+			break
+		}
+		log.Warn().Err(beginErr).Int("attempt", attempt).
+			Msg("imt: JSPR handshake failed, retrying with same helper")
+		if attempt < 3 {
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if beginErr != nil {
 		t.conn.stopReader()
 		helper.Close()
 		t.file = nil
 		t.conn = nil
-		return fmt.Errorf("imt: JSPR begin failed: %w", err)
+		return fmt.Errorf("imt: JSPR begin failed after 3 attempts: %w", beginErr)
 	}
 
 	// Get hardware info

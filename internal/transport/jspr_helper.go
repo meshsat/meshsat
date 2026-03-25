@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -75,8 +76,9 @@ func startJSPRHelper(helperPath, serialPort string, baud int) (*jsprHelperPort, 
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	// Helper's stderr goes to our stderr (for debug logging)
-	cmd.Stderr = nil // inherit
+	// Helper's stderr goes to our stderr (for debug logging).
+	// Must use os.Stderr explicitly — nil opens /dev/null in Go.
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		stdin.Close()
