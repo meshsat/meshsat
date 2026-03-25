@@ -614,14 +614,27 @@ func (m *Manager) GatewayByInterfaceID(id string) Gateway {
 func (m *Manager) ResolveGatewayInterface(gwType string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// Check v0.3.0 interface-keyed map first
 	for ifaceID, gw := range m.runningByIface {
 		if gw.Type() == gwType {
 			return ifaceID
 		}
 	}
-	// Fallback: check legacy running map
-	if gw, ok := m.running[gwType]; ok {
-		return gw.Type() + "_0"
+	// Fallback: legacy type-keyed map. Look up actual interface ID from DB
+	// because interface IDs don't always match gateway type (e.g. iridium_imt
+	// gateway runs on interface "iridium_0", not "iridium_imt_0").
+	if _, ok := m.running[gwType]; ok {
+		if m.db != nil {
+			// Find the first interface whose channel_type matches the gateway's base type
+			baseType := gwType
+			// "iridium_imt" and "iridium" both use channel_type "iridium"
+			if baseType == "iridium_imt" {
+				baseType = "iridium"
+			}
+			if ifaces, err := m.db.GetInterfacesByType(baseType); err == nil && len(ifaces) > 0 {
+				return ifaces[0].ID
+			}
+		}
 	}
 	return ""
 }
