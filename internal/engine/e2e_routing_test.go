@@ -42,6 +42,9 @@ func (m *mockGateway) Receive() <-chan gateway.InboundMessage {
 func (m *mockGateway) Status() gateway.GatewayStatus {
 	return gateway.GatewayStatus{Connected: true}
 }
+func (m *mockGateway) Enqueue(msg *transport.MeshMessage) error {
+	return m.Forward(context.Background(), msg)
+}
 func (m *mockGateway) Type() string { return m.typ }
 
 func (m *mockGateway) messages() []*transport.MeshMessage {

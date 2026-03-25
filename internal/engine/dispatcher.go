@@ -621,6 +621,57 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 	return count
 }
 
+// QueueDirectSend inserts a delivery record for a direct API send (no access rule).
+// The DeliveryWorker for the target interface picks it up within 2 seconds.
+// Returns the delivery ID and msg_ref for status tracking.
+func (d *Dispatcher) QueueDirectSend(interfaceID string, text string) (int64, string, error) {
+	msgRef := time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
+
+	payload := []byte(text)
+	preview := text
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+
+	del := database.MessageDelivery{
+		MsgRef:      msgRef,
+		Channel:     interfaceID,
+		Status:      "queued",
+		Priority:    1,
+		Payload:     payload,
+		TextPreview: preview,
+		MaxRetries:  3,
+		QoSLevel:    1,
+	}
+
+	// Assign egress sequence number
+	if seq, err := d.db.IncrementEgressSeq(interfaceID); err == nil {
+		del.SeqNum = seq
+	}
+
+	// Sign for non-repudiation
+	if d.signing != nil {
+		del.Signature = d.signing.Sign(payload)
+		del.SignerID = d.signing.SignerID()
+	}
+
+	delID, err := d.db.InsertDelivery(del)
+	if err != nil {
+		return 0, "", fmt.Errorf("queue delivery: %w", err)
+	}
+
+	log.Info().Int64("id", delID).Str("channel", interfaceID).Str("msg_ref", msgRef).Msg("direct send queued via delivery ledger")
+
+	if d.emit != nil {
+		d.emit(transport.MeshEvent{
+			Type:    "delivery_queued",
+			Message: fmt.Sprintf("Direct send queued: %s → %s", preview, interfaceID),
+		})
+	}
+
+	return delID, msgRef, nil
+}
+
 // isDeliveryDuplicate checks whether the same payload was recently dispatched to
 // the same interface. Uses a SHA-256 content hash with a configurable TTL window.
 func (d *Dispatcher) isDeliveryDuplicate(destInterface string, payload []byte) bool {

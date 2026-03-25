@@ -609,6 +609,23 @@ func (m *Manager) GatewayByInterfaceID(id string) Gateway {
 	return m.runningByIface[id]
 }
 
+// ResolveGatewayInterface maps a gateway type (e.g. "iridium_imt", "iridium", "mqtt")
+// to the interface ID of the first running gateway of that type.
+func (m *Manager) ResolveGatewayInterface(gwType string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for ifaceID, gw := range m.runningByIface {
+		if gw.Type() == gwType {
+			return ifaceID
+		}
+	}
+	// Fallback: check legacy running map
+	if gw, ok := m.running[gwType]; ok {
+		return gw.Type() + "_0"
+	}
+	return ""
+}
+
 // StartInterfaceGateway starts a gateway for an interface, using its channel_type and config.
 func (m *Manager) StartInterfaceGateway(ctx context.Context, ifaceID, channelType, configJSON string) error {
 	m.mu.Lock()

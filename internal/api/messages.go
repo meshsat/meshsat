@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
 	"meshsat/internal/database"
-	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
 )
 
@@ -97,37 +95,34 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If a gateway is specified, route through the gateway manager.
+	// If a gateway is specified, queue via the delivery ledger.
+	// The DeliveryWorker picks it up within 2 seconds and sends via the gateway.
 	if req.Gateway != "" {
+		if s.dispatcher == nil {
+			writeError(w, http.StatusServiceUnavailable, "dispatcher unavailable")
+			return
+		}
+		// Resolve gateway type to interface ID (e.g. "iridium_imt" → "iridium_0")
 		if s.gwManager == nil {
 			writeError(w, http.StatusServiceUnavailable, "gateway manager unavailable")
 			return
 		}
-		var target gateway.Gateway
-		for _, gw := range s.gwManager.Gateways() {
-			if gw.Type() == req.Gateway {
-				target = gw
-				break
-			}
-		}
-		if target == nil {
+		ifaceID := s.gwManager.ResolveGatewayInterface(req.Gateway)
+		if ifaceID == "" {
 			writeError(w, http.StatusBadRequest, "unknown gateway: "+req.Gateway)
 			return
 		}
-		st := target.Status()
-		if !st.Connected {
-			writeError(w, http.StatusServiceUnavailable, req.Gateway+" gateway not connected")
+		delID, msgRef, err := s.dispatcher.QueueDirectSend(ifaceID, req.Text)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "queue failed: "+err.Error())
 			return
 		}
-		msg := &transport.MeshMessage{
-			DecodedText: req.Text,
-			RxTime:      time.Now().Unix(),
-		}
-		if err := target.Enqueue(msg); err != nil {
-			writeError(w, http.StatusServiceUnavailable, "queue full: "+err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "queued", "gateway": req.Gateway})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      "queued",
+			"gateway":     req.Gateway,
+			"delivery_id": delID,
+			"msg_ref":     msgRef,
+		})
 		return
 	}
 
