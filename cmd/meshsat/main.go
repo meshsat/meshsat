@@ -392,6 +392,27 @@ func main() {
 		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized")
 	}
 
+	// TCP/HDLC — RNS-compatible Reticulum interface over TCP
+	var tcpIface *routing.TCPInterface
+	if cfg.TCPListenAddr != "" || cfg.TCPConnectAddr != "" {
+		tcpIface = routing.NewTCPInterface(routing.TCPInterfaceConfig{
+			Name:              "tcp_0",
+			ListenAddr:        cfg.TCPListenAddr,
+			ConnectAddr:       cfg.TCPConnectAddr,
+			Reconnect:         true,
+			ReconnectInterval: 10 * time.Second,
+		}, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("tcp: received reticulum packet")
+			proc.InjectReticulumPacket(packet, "tcp_0")
+		})
+		if err := tcpIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("tcp interface start failed")
+			tcpIface = nil
+		} else {
+			log.Info().Str("listen", cfg.TCPListenAddr).Str("connect", cfg.TCPConnectAddr).Msg("tcp reticulum interface started")
+		}
+	}
+
 	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
@@ -510,12 +531,21 @@ func main() {
 	// Periodic announce broadcasting
 	if routingID != nil && cfg.AnnounceIntervalSec > 0 {
 		go func() {
-			interval := time.Duration(cfg.AnnounceIntervalSec) * time.Second
-			// Announce immediately on startup
-			if announce, aErr := routing.NewAnnounce(routingID, nil); aErr == nil {
+			broadcastAnnounce := func() {
+				announce, aErr := routing.NewAnnounce(routingID, nil)
+				if aErr != nil {
+					return
+				}
 				data := announce.Marshal()
 				log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Msg("broadcasting routing announce")
+				if tcpIface != nil && tcpIface.IsOnline() {
+					if err := tcpIface.Send(ctx, data); err != nil {
+						log.Warn().Err(err).Msg("failed to broadcast announce via tcp")
+					}
+				}
 			}
+			interval := time.Duration(cfg.AnnounceIntervalSec) * time.Second
+			broadcastAnnounce() // immediate on startup
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
 			for {
@@ -523,10 +553,7 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if announce, aErr := routing.NewAnnounce(routingID, nil); aErr == nil {
-						data := announce.Marshal()
-						log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Msg("broadcasting routing announce")
-					}
+					broadcastAnnounce()
 				}
 			}
 		}()
@@ -634,6 +661,9 @@ func main() {
 	tleMgr.Stop()
 	astroTleMgr.Stop()
 	gwMgr.Stop()
+	if tcpIface != nil {
+		tcpIface.Stop()
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
