@@ -483,8 +483,12 @@ func main() {
 		log.Info().Msg("GPS reader started (auto-detect)")
 	}
 
+	// Burst queue — satellite message batching for pass-based sends
+	burstQueue := engine.NewBurstQueue(db, 10, 30*time.Minute)
+
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
+	srv.SetBurstQueue(burstQueue)
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
@@ -635,6 +639,21 @@ func main() {
 		// Outbox for offline queuing
 		outbox := hubreporter.NewOutbox(db.DB.DB, 10000, 7*24*time.Hour)
 		hubReporter.SetOutbox(outbox)
+
+		// Command handler — processes commands from the Hub (ping, send_mt, etc.)
+		cmdHandler := hubreporter.NewCommandHandler(hubReporter, cfg.BridgeID, healthFn)
+		cmdHandler.SetDeps(hubreporter.CommandDeps{
+			SendText: func(ifaceID, text string) (int64, string, error) {
+				return dispatcher.QueueDirectSend(ifaceID, text)
+			},
+			FlushBurst: func(ctx context.Context) ([]byte, int, error) {
+				return burstQueue.Flush(ctx)
+			},
+			BurstPending: func() int {
+				return burstQueue.Pending()
+			},
+		})
+		hubReporter.SetCommandHandler(cmdHandler)
 
 		if err := hubReporter.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("hub reporter start failed")
