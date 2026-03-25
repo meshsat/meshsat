@@ -75,9 +75,12 @@ lint:consistency:
       fi
 
       # Rule 5: Migration edits (append-only)
-      # Only check content lines (^-[^-]) to avoid matching diff headers (--- a/file).
+      # Extract only the migrations.go hunk from the diff, then check for removed SQL lines.
+      # Previous version checked the entire diff, causing false positives when queries.go
+      # had removed SQL lines in the same commit as a new migration.
       if echo "$DIFF" | grep -qE '^--- .*migrations\.go'; then
-        EDITED=$(echo "$DIFF" | grep -cE '^\-[^-].*(CREATE TABLE|ALTER TABLE|INSERT INTO|UPDATE .* SET)' || true)
+        MIG_DIFF=$(echo "$DIFF" | sed -n '/^diff.*migrations\.go/,/^diff --git/p')
+        EDITED=$(echo "$MIG_DIFF" | grep -cE '^\-[^-].*(CREATE TABLE|ALTER TABLE|INSERT INTO|UPDATE .* SET)' || true)
         if [ "$EDITED" -gt 0 ]; then
           VIOLATIONS+=("Database: existing migration modified — migrations are append-only")
         fi
