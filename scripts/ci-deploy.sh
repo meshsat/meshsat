@@ -136,9 +136,12 @@ if [ -f "$HAL_COMPOSE" ]; then
   # Force-stop the container first if it refuses to be removed
   docker stop cubeos-hal 2>/dev/null || true
   docker rm -f cubeos-hal 2>/dev/null || true
-  docker compose up -d 2>&1
-  sleep 3
-  echo "  HAL container recreated with serial devices disabled."
+  if docker compose up -d 2>&1; then
+    sleep 3
+    echo "  HAL container recreated with serial devices disabled."
+  else
+    echo "  WARN: HAL container recreation failed (HAL image may not be available — non-fatal on standalone-only devices)"
+  fi
 else
   echo "No HAL compose found at $HAL_COMPOSE — skipping HAL reconfiguration."
 fi
