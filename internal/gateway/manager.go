@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,36 +31,131 @@ type Manager struct {
 	onReceiverStart ReceiverStartFunc            // called when a gateway starts
 	onEventEmit     EventEmitFunc                // SSE event emitter callback
 	nodeNameFn      func(uint32) string          // resolves mesh node ID to name
-	running         map[string]Gateway           // legacy: keyed by type ("iridium")
+	running         map[string]Gateway           // keyed by instance_id ("iridium_0", "iridium_1")
 	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
 	cancelFn        context.CancelFunc
 	supervisor      *transport.DeviceSupervisor // optional, for device event watching
+
+	// Multi-instance transport registry: maps instance_id → transport
+	satTransports   map[string]transport.SatTransport       // instance_id → SatTransport
+	cellTransports  map[string]transport.CellTransport      // instance_id → CellTransport
+	astroTransports map[string]transport.AstrocastTransport // instance_id → AstrocastTransport
+	transportsMu    sync.RWMutex
 }
 
 // NewManager creates a new gateway manager.
 func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
-	return &Manager{
-		db:             db,
-		sat:            sat,
-		running:        make(map[string]Gateway),
-		runningByIface: make(map[string]Gateway),
+	m := &Manager{
+		db:              db,
+		sat:             sat,
+		running:         make(map[string]Gateway),
+		runningByIface:  make(map[string]Gateway),
+		satTransports:   make(map[string]transport.SatTransport),
+		cellTransports:  make(map[string]transport.CellTransport),
+		astroTransports: make(map[string]transport.AstrocastTransport),
 	}
+	// Register primary SBD transport as default instance
+	if sat != nil {
+		m.satTransports["iridium_0"] = sat
+	}
+	return m
 }
 
 // SetCellTransport sets the cellular transport for the cellular gateway.
 func (m *Manager) SetCellTransport(cell transport.CellTransport) {
 	m.cell = cell
+	m.transportsMu.Lock()
+	m.cellTransports["cellular_0"] = cell
+	m.transportsMu.Unlock()
 }
 
 // SetIMTTransport sets the Iridium IMT (9704) transport for coexistence with SBD.
 func (m *Manager) SetIMTTransport(imtSat transport.SatTransport) {
 	m.imtSat = imtSat
+	m.transportsMu.Lock()
+	m.satTransports["iridium_imt_0"] = imtSat
+	m.transportsMu.Unlock()
 }
 
 // SetAstrocastTransport sets the Astrocast transport for the astrocast gateway.
 func (m *Manager) SetAstrocastTransport(astro transport.AstrocastTransport) {
 	m.astro = astro
+	m.transportsMu.Lock()
+	m.astroTransports["astrocast_0"] = astro
+	m.transportsMu.Unlock()
+}
+
+// RegisterSatTransport registers a satellite transport for a specific instance.
+func (m *Manager) RegisterSatTransport(instanceID string, sat transport.SatTransport) {
+	m.transportsMu.Lock()
+	defer m.transportsMu.Unlock()
+	m.satTransports[instanceID] = sat
+}
+
+// RegisterCellTransport registers a cellular transport for a specific instance.
+func (m *Manager) RegisterCellTransport(instanceID string, cell transport.CellTransport) {
+	m.transportsMu.Lock()
+	defer m.transportsMu.Unlock()
+	m.cellTransports[instanceID] = cell
+}
+
+// RegisterAstrocastTransport registers an Astrocast transport for a specific instance.
+func (m *Manager) RegisterAstrocastTransport(instanceID string, astro transport.AstrocastTransport) {
+	m.transportsMu.Lock()
+	defer m.transportsMu.Unlock()
+	m.astroTransports[instanceID] = astro
+}
+
+// UnregisterTransport removes a transport instance.
+func (m *Manager) UnregisterTransport(instanceID string) {
+	m.transportsMu.Lock()
+	defer m.transportsMu.Unlock()
+	delete(m.satTransports, instanceID)
+	delete(m.cellTransports, instanceID)
+	delete(m.astroTransports, instanceID)
+}
+
+// getSatTransport returns the satellite transport for an instance, falling back to legacy.
+func (m *Manager) getSatTransport(instanceID string) transport.SatTransport {
+	m.transportsMu.RLock()
+	defer m.transportsMu.RUnlock()
+	if sat, ok := m.satTransports[instanceID]; ok {
+		return sat
+	}
+	// Fallback: check legacy single-instance transports by type prefix
+	if len(instanceID) > 4 && instanceID[:4] == "irid" {
+		// iridium_imt_X → check imtSat, then sat
+		if strings.Contains(instanceID, "imt") {
+			if m.imtSat != nil {
+				return m.imtSat
+			}
+			return m.sat
+		}
+		// iridium_X → check sat
+		return m.sat
+	}
+	return m.sat
+}
+
+// getCellTransport returns the cellular transport for an instance, falling back to legacy.
+func (m *Manager) getCellTransport(instanceID string) transport.CellTransport {
+	m.transportsMu.RLock()
+	defer m.transportsMu.RUnlock()
+	if cell, ok := m.cellTransports[instanceID]; ok {
+		return cell
+	}
+	return m.cell
+}
+
+// getAstroTransport returns the Astrocast transport for an instance, falling back to legacy.
+func (m *Manager) getAstroTransport(instanceID string) transport.AstrocastTransport {
+	m.transportsMu.RLock()
+	defer m.transportsMu.RUnlock()
+	if astro, ok := m.astroTransports[instanceID]; ok {
+		return astro
+	}
+	return m.astro
 }
 
 // SetPassPredictor sets the pass predictor for pass-aware scheduling on Iridium gateways.
@@ -88,12 +184,12 @@ func (m *Manager) GetPassScheduler() *PassScheduler {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Check SBD gateway first, then IMT
-	for _, gwType := range []string{"iridium", "iridium_imt"} {
-		if gw, ok := m.running[gwType]; ok {
-			if igw, ok := gw.(*IridiumGateway); ok {
-				return igw.PassSchedulerRef()
-			}
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
+		if igw, ok := gw.(*IridiumGateway); ok {
+			return igw.PassSchedulerRef()
 		}
 	}
 	return nil
@@ -103,7 +199,6 @@ func (m *Manager) GetPassScheduler() *PassScheduler {
 func (m *Manager) Start(ctx context.Context) error {
 	ctx, m.cancelFn = context.WithCancel(ctx)
 
-	// Legacy path: load from gateway_config table
 	configs, err := m.db.GetAllGatewayConfigs()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to load gateway configs, continuing without gateways")
@@ -114,28 +209,30 @@ func (m *Manager) Start(ctx context.Context) error {
 		if !cfg.Enabled {
 			continue
 		}
-		gw, err := m.createGateway(cfg.Type, cfg.Config)
+		instanceID := cfg.InstanceID
+		if instanceID == "" {
+			instanceID = cfg.Type + "_0"
+		}
+		gw, err := m.createGatewayForInstance(cfg.Type, instanceID, cfg.Config)
 		if err != nil {
-			log.Error().Err(err).Str("type", cfg.Type).Msg("failed to create gateway")
+			log.Error().Err(err).Str("type", cfg.Type).Str("instance", instanceID).Msg("failed to create gateway")
 			continue
 		}
 		if err := gw.Start(ctx); err != nil {
-			log.Error().Err(err).Str("type", cfg.Type).Msg("failed to start gateway")
+			log.Error().Err(err).Str("type", cfg.Type).Str("instance", instanceID).Msg("failed to start gateway")
 			continue
 		}
 		m.mu.Lock()
-		m.running[cfg.Type] = gw
+		m.running[instanceID] = gw
 		m.syncIfaceMap(cfg.Type, gw)
 		m.mu.Unlock()
 		if m.onReceiverStart != nil {
 			m.onReceiverStart(ctx, gw)
 		}
-		log.Info().Str("type", cfg.Type).Msg("gateway started from saved config")
+		log.Info().Str("type", cfg.Type).Str("instance", instanceID).Msg("gateway started from saved config")
 	}
 
 	// v0.3.0 path: also bootstrap from interfaces table.
-	// For each enabled interface with a known gateway channel_type, register
-	// the running gateway under the interface ID so GatewayByInterfaceID works.
 	m.bootstrapInterfaceGateways()
 
 	return nil
@@ -148,9 +245,9 @@ func (m *Manager) Stop() {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for gwType, gw := range m.running {
+	for instanceID, gw := range m.running {
 		if err := gw.Stop(); err != nil {
-			log.Error().Err(err).Str("type", gwType).Msg("failed to stop gateway")
+			log.Error().Err(err).Str("instance", instanceID).Msg("failed to stop gateway")
 		}
 	}
 	m.running = make(map[string]Gateway)
@@ -194,59 +291,105 @@ func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEven
 		return // not a gateway-backed device (meshtastic, gps, unknown)
 	}
 
+	// Resolve which instance owns this port
+	instanceID := ""
+	if m.supervisor != nil {
+		instanceID = m.supervisor.GetPortInstance(ev.Device.DevPath)
+	}
+
 	switch ev.Type {
 	case "device_disconnected", "device_removed":
+		if instanceID == "" {
+			// Legacy fallback: find any running instance of this type
+			instanceID = m.findRunningInstance(gwType)
+		}
+		if instanceID == "" {
+			return
+		}
+
 		m.mu.RLock()
-		_, running := m.running[gwType]
+		_, running := m.running[instanceID]
 		m.mu.RUnlock()
 		if running {
-			log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+			log.Info().Str("instance", instanceID).Str("port", ev.Device.DevPath).
 				Str("event", ev.Type).Msg("gwmgr: device lost, stopping gateway")
-			// Stop gateway but don't mark disabled in DB — we want to restart on reconnect
 			m.mu.Lock()
-			if gw, ok := m.running[gwType]; ok {
+			if gw, ok := m.running[instanceID]; ok {
 				gw.Stop()
-				delete(m.running, gwType)
+				delete(m.running, instanceID)
 				m.unsyncIfaceMap(gw)
 			}
 			m.mu.Unlock()
 		}
 
 	case "device_connected":
-		// Device reconnected or newly identified — restart gateway if enabled in DB
-		m.mu.RLock()
-		_, alreadyRunning := m.running[gwType]
-		m.mu.RUnlock()
-		if alreadyRunning {
-			return // already running, no action needed
+		// Determine instance ID for this new device
+		if instanceID == "" {
+			// Auto-assign: find or create an instance for this type
+			instanceID = m.findOrCreateInstance(gwType)
 		}
 
-		cfg, err := m.db.GetGatewayConfig(gwType)
+		m.mu.RLock()
+		_, alreadyRunning := m.running[instanceID]
+		m.mu.RUnlock()
+		if alreadyRunning {
+			return
+		}
+
+		cfg, err := m.db.GetGatewayConfigByInstance(instanceID)
 		if err != nil {
-			// No config exists — auto-create a default enabled config
-			log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+			log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", ev.Device.DevPath).
 				Msg("gwmgr: device connected, auto-creating gateway config")
-			if err := m.db.SaveGatewayConfig(gwType, true, "{}"); err != nil {
-				log.Warn().Err(err).Str("type", gwType).Msg("gwmgr: failed to create default config")
+			if err := m.db.SaveGatewayConfigInstance(gwType, instanceID, true, "{}"); err != nil {
+				log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: failed to create default config")
 				return
 			}
 		} else if !cfg.Enabled {
-			// Config exists but disabled — re-enable since hardware is back
-			log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+			log.Info().Str("instance", instanceID).Str("port", ev.Device.DevPath).
 				Msg("gwmgr: device connected, re-enabling gateway")
-			m.db.SaveGatewayConfig(gwType, true, cfg.Config)
+			m.db.SaveGatewayConfigInstance(gwType, instanceID, true, cfg.Config)
 		}
 
-		log.Info().Str("type", gwType).Str("port", ev.Device.DevPath).
+		log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", ev.Device.DevPath).
 			Msg("gwmgr: device connected, starting gateway")
 
-		// Small delay to let the transport layer finish connecting
+		capturedInstance := instanceID
 		time.AfterFunc(2*time.Second, func() {
-			if err := m.StartGateway(ctx, gwType); err != nil {
-				log.Error().Err(err).Str("type", gwType).Msg("gwmgr: failed to restart gateway after device reconnect")
+			if err := m.StartGatewayInstance(ctx, capturedInstance); err != nil {
+				log.Error().Err(err).Str("instance", capturedInstance).Msg("gwmgr: failed to restart gateway after device reconnect")
 			}
 		})
 	}
+}
+
+// findRunningInstance returns the first running instance ID of a given gateway type.
+func (m *Manager) findRunningInstance(gwType string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for instanceID, gw := range m.running {
+		if gw != nil && gw.Type() == gwType {
+			return instanceID
+		}
+	}
+	return ""
+}
+
+// findOrCreateInstance returns an available instance ID for a gateway type.
+// If an existing instance has no running gateway, reuse it. Otherwise allocate next.
+func (m *Manager) findOrCreateInstance(gwType string) string {
+	configs, _ := m.db.GetGatewayConfigsByType(gwType)
+	m.mu.RLock()
+	for _, cfg := range configs {
+		if _, running := m.running[cfg.InstanceID]; !running {
+			m.mu.RUnlock()
+			return cfg.InstanceID
+		}
+	}
+	m.mu.RUnlock()
+
+	// All existing instances are running — allocate next
+	nextID, _ := m.db.NextGatewayInstanceID(gwType)
+	return nextID
 }
 
 // roleToGatewayType maps a DeviceSupervisor device role to a gateway type string.
@@ -301,11 +444,11 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 	}
 	registry := m.supervisor.Registry()
 
-	// Build set of hardware-backed gateway types actually present.
-	presentTypes := make(map[string]bool)
+	// Build set of hardware-backed gateway types actually present (with count).
+	presentTypes := make(map[string]int) // gwType → count of devices
 	for _, entry := range registry.ListAll() {
 		if gwType := roleToGatewayType(entry.Role); gwType != "" {
-			presentTypes[gwType] = true
+			presentTypes[gwType]++
 		}
 	}
 
@@ -316,21 +459,24 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 		if role == transport.RoleNone {
 			continue // software-only gateway (mqtt, webhook, tak, aprs)
 		}
-		if presentTypes[cfg.Type] {
-			continue // hardware present
+		if presentTypes[cfg.Type] > 0 {
+			continue // hardware present for this type
 		}
 
-		// Hardware gone — disable in DB so it doesn't start next boot
+		instanceID := cfg.InstanceID
+		if instanceID == "" {
+			instanceID = cfg.Type + "_0"
+		}
+
 		if cfg.Enabled {
-			log.Info().Str("type", cfg.Type).Msg("gwmgr: reconcile — disabling gateway (hardware not present)")
-			m.db.SaveGatewayConfig(cfg.Type, false, cfg.Config)
+			log.Info().Str("instance", instanceID).Msg("gwmgr: reconcile — disabling gateway (hardware not present)")
+			m.db.SaveGatewayConfigInstance(cfg.Type, instanceID, false, cfg.Config)
 		}
 
-		// Stop if running
 		m.mu.Lock()
-		if gw, ok := m.running[cfg.Type]; ok {
+		if gw, ok := m.running[instanceID]; ok {
 			gw.Stop()
-			delete(m.running, cfg.Type)
+			delete(m.running, instanceID)
 			m.unsyncIfaceMap(gw)
 		}
 		m.mu.Unlock()
@@ -343,132 +489,159 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 			continue
 		}
 
+		instanceID := m.findOrCreateInstance(gwType)
+
 		m.mu.RLock()
-		_, running := m.running[gwType]
+		_, running := m.running[instanceID]
 		m.mu.RUnlock()
 		if running {
 			continue
 		}
 
-		// Check if config exists — if not, auto-create a default one
-		cfg, err := m.db.GetGatewayConfig(gwType)
+		cfg, err := m.db.GetGatewayConfigByInstance(instanceID)
 		if err != nil {
-			log.Info().Str("type", gwType).Str("port", entry.DevPath).
+			log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", entry.DevPath).
 				Msg("gwmgr: reconcile — auto-creating config for detected hardware")
-			if err := m.db.SaveGatewayConfig(gwType, true, "{}"); err != nil {
-				log.Warn().Err(err).Str("type", gwType).Msg("gwmgr: reconcile — failed to create default config")
+			if err := m.db.SaveGatewayConfigInstance(gwType, instanceID, true, "{}"); err != nil {
+				log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: reconcile — failed to create default config")
 				continue
 			}
 		} else if !cfg.Enabled {
-			// Hardware is back — re-enable
-			log.Info().Str("type", gwType).Str("port", entry.DevPath).
+			log.Info().Str("instance", instanceID).Str("port", entry.DevPath).
 				Msg("gwmgr: reconcile — re-enabling gateway (hardware detected)")
-			m.db.SaveGatewayConfig(gwType, true, cfg.Config)
+			m.db.SaveGatewayConfigInstance(gwType, instanceID, true, cfg.Config)
 		}
 
-		log.Info().Str("type", gwType).Str("port", entry.DevPath).
+		log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", entry.DevPath).
 			Msg("gwmgr: reconcile — starting gateway for detected hardware")
-		if err := m.StartGateway(ctx, gwType); err != nil {
-			log.Warn().Err(err).Str("type", gwType).Msg("gwmgr: reconcile — failed to start gateway")
+		if err := m.StartGatewayInstance(ctx, instanceID); err != nil {
+			log.Warn().Err(err).Str("instance", instanceID).Msg("gwmgr: reconcile — failed to start gateway")
 		}
 	}
 }
 
 // Configure creates or updates a gateway configuration and optionally starts it.
 func (m *Manager) Configure(ctx context.Context, gwType string, enabled bool, configJSON string) error {
-	// Validate by trying to create
-	if _, err := m.createGateway(gwType, configJSON); err != nil {
+	return m.ConfigureInstance(ctx, gwType, gwType+"_0", enabled, configJSON)
+}
+
+// ConfigureInstance creates or updates a specific gateway instance configuration.
+func (m *Manager) ConfigureInstance(ctx context.Context, gwType, instanceID string, enabled bool, configJSON string) error {
+	if _, err := m.createGatewayForInstance(gwType, instanceID, configJSON); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	if err := m.db.SaveGatewayConfig(gwType, enabled, configJSON); err != nil {
+	if err := m.db.SaveGatewayConfigInstance(gwType, instanceID, enabled, configJSON); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	// Stop existing if running
 	m.mu.Lock()
-	if existing, ok := m.running[gwType]; ok {
+	if existing, ok := m.running[instanceID]; ok {
 		existing.Stop()
-		delete(m.running, gwType)
+		delete(m.running, instanceID)
+		m.unsyncIfaceMap(existing)
 	}
 	m.mu.Unlock()
 
-	// Start if enabled
 	if enabled {
-		return m.StartGateway(ctx, gwType)
+		return m.StartGatewayInstance(ctx, instanceID)
 	}
 	return nil
 }
 
-// Delete stops and removes a gateway configuration.
+// Delete stops and removes a gateway configuration (legacy — first instance).
 func (m *Manager) Delete(gwType string) error {
+	return m.DeleteInstance(gwType + "_0")
+}
+
+// DeleteInstance stops and removes a specific gateway instance.
+func (m *Manager) DeleteInstance(instanceID string) error {
 	m.mu.Lock()
-	if gw, ok := m.running[gwType]; ok {
+	if gw, ok := m.running[instanceID]; ok {
 		gw.Stop()
-		delete(m.running, gwType)
+		delete(m.running, instanceID)
+		m.unsyncIfaceMap(gw)
 	}
 	m.mu.Unlock()
 
-	return m.db.DeleteGatewayConfig(gwType)
+	return m.db.DeleteGatewayConfigInstance(instanceID)
 }
 
-// StartGateway starts a specific gateway from its saved config.
+// StartGateway starts the first instance of a gateway type from its saved config.
 func (m *Manager) StartGateway(ctx context.Context, gwType string) error {
 	cfg, err := m.db.GetGatewayConfig(gwType)
 	if err != nil {
 		return fmt.Errorf("get config: %w", err)
 	}
+	instanceID := cfg.InstanceID
+	if instanceID == "" {
+		instanceID = gwType + "_0"
+	}
+	return m.StartGatewayInstance(ctx, instanceID)
+}
+
+// StartGatewayInstance starts a specific gateway instance from its saved config.
+func (m *Manager) StartGatewayInstance(ctx context.Context, instanceID string) error {
+	cfg, err := m.db.GetGatewayConfigByInstance(instanceID)
+	if err != nil {
+		return fmt.Errorf("get config for %s: %w", instanceID, err)
+	}
 
 	m.mu.Lock()
-	if _, ok := m.running[gwType]; ok {
+	if _, ok := m.running[instanceID]; ok {
 		m.mu.Unlock()
-		return fmt.Errorf("gateway %s is already running", gwType)
+		return fmt.Errorf("gateway %s is already running", instanceID)
 	}
-	// Place sentinel to prevent concurrent starts
-	m.running[gwType] = nil
+	m.running[instanceID] = nil // sentinel
 	m.mu.Unlock()
 
-	gw, err := m.createGateway(cfg.Type, cfg.Config)
+	gw, err := m.createGatewayForInstance(cfg.Type, instanceID, cfg.Config)
 	if err != nil {
 		m.mu.Lock()
-		delete(m.running, gwType)
+		delete(m.running, instanceID)
 		m.mu.Unlock()
 		return err
 	}
 
 	if err := gw.Start(ctx); err != nil {
 		m.mu.Lock()
-		delete(m.running, gwType)
+		delete(m.running, instanceID)
 		m.mu.Unlock()
-		return fmt.Errorf("start %s: %w", gwType, err)
+		return fmt.Errorf("start %s: %w", instanceID, err)
 	}
 
 	m.mu.Lock()
-	m.running[gwType] = gw
-	// Sync v0.3.0 interface map: register under matching interface IDs
-	m.syncIfaceMap(gwType, gw)
+	m.running[instanceID] = gw
+	m.syncIfaceMap(cfg.Type, gw)
 	m.mu.Unlock()
 
 	if m.onReceiverStart != nil {
 		m.onReceiverStart(ctx, gw)
 	}
 
-	// Mark enabled in DB
-	m.db.SaveGatewayConfig(gwType, true, cfg.Config)
+	m.db.SaveGatewayConfigInstance(cfg.Type, instanceID, true, cfg.Config)
 
 	return nil
 }
 
-// StopGateway stops a specific running gateway.
+// StopGateway stops the first running instance of a gateway type.
 func (m *Manager) StopGateway(gwType string) error {
-	m.mu.Lock()
-	gw, ok := m.running[gwType]
-	if !ok {
-		m.mu.Unlock()
+	instanceID := m.findRunningInstance(gwType)
+	if instanceID == "" {
 		return fmt.Errorf("gateway %s is not running", gwType)
 	}
-	delete(m.running, gwType)
-	// Clean interface map entries pointing to this gateway
+	return m.StopGatewayInstance(instanceID)
+}
+
+// StopGatewayInstance stops a specific running gateway instance.
+func (m *Manager) StopGatewayInstance(instanceID string) error {
+	m.mu.Lock()
+	gw, ok := m.running[instanceID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("gateway %s is not running", instanceID)
+	}
+	delete(m.running, instanceID)
 	m.unsyncIfaceMap(gw)
 	m.mu.Unlock()
 
@@ -476,10 +649,9 @@ func (m *Manager) StopGateway(gwType string) error {
 		return err
 	}
 
-	// Mark disabled in DB
-	cfg, err := m.db.GetGatewayConfig(gwType)
+	cfg, err := m.db.GetGatewayConfigByInstance(instanceID)
 	if err == nil {
-		m.db.SaveGatewayConfig(gwType, false, cfg.Config)
+		m.db.SaveGatewayConfigInstance(cfg.Type, instanceID, false, cfg.Config)
 	}
 
 	return nil
@@ -500,39 +672,33 @@ func (m *Manager) TestGateway(gwType string) error {
 		}
 		gw := NewMQTTGateway(*mqttCfg)
 		return gw.TestConnection()
-	case "iridium":
-		if m.sat == nil {
-			return fmt.Errorf("satellite transport not available")
+	case "iridium", "iridium_imt":
+		instanceID := cfg.InstanceID
+		if instanceID == "" {
+			instanceID = gwType + "_0"
 		}
-		status, err := m.sat.GetStatus(context.Background())
-		if err != nil {
-			return err
-		}
-		if !status.Connected {
-			return fmt.Errorf("iridium modem not connected")
-		}
-		return nil
-	case "iridium_imt":
-		sat := m.imtSat
+		sat := m.getSatTransport(instanceID)
 		if sat == nil {
-			sat = m.sat
-		}
-		if sat == nil {
-			return fmt.Errorf("IMT satellite transport not available")
+			return fmt.Errorf("satellite transport not available for %s", instanceID)
 		}
 		status, err := sat.GetStatus(context.Background())
 		if err != nil {
 			return err
 		}
 		if !status.Connected {
-			return fmt.Errorf("iridium IMT modem not connected")
+			return fmt.Errorf("modem not connected (%s)", instanceID)
 		}
 		return nil
 	case "cellular":
-		if m.cell == nil {
+		instanceID := cfg.InstanceID
+		if instanceID == "" {
+			instanceID = "cellular_0"
+		}
+		cell := m.getCellTransport(instanceID)
+		if cell == nil {
 			return fmt.Errorf("cellular transport not available")
 		}
-		status, err := m.cell.GetStatus(context.Background())
+		status, err := cell.GetStatus(context.Background())
 		if err != nil {
 			return err
 		}
@@ -564,10 +730,15 @@ func (m *Manager) TestGateway(gwType string) error {
 		resp.Body.Close()
 		return nil
 	case "astrocast":
-		if m.astro == nil {
+		instanceID := cfg.InstanceID
+		if instanceID == "" {
+			instanceID = "astrocast_0"
+		}
+		astro := m.getAstroTransport(instanceID)
+		if astro == nil {
 			return fmt.Errorf("astrocast transport not available")
 		}
-		status, err := m.astro.GetStatus(context.Background())
+		status, err := astro.GetStatus(context.Background())
 		if err != nil {
 			return err
 		}
@@ -576,13 +747,14 @@ func (m *Manager) TestGateway(gwType string) error {
 		}
 		return nil
 	case "zigbee":
-		m.mu.RLock()
-		gw, ok := m.running["zigbee"]
-		m.mu.RUnlock()
-		if !ok {
+		zigbeeID := m.findRunningInstance("zigbee")
+		if zigbeeID == "" {
 			return fmt.Errorf("zigbee gateway not running")
 		}
-		if !gw.Status().Connected {
+		m.mu.RLock()
+		zgw := m.running[zigbeeID]
+		m.mu.RUnlock()
+		if zgw == nil || !zgw.Status().Connected {
 			return fmt.Errorf("zigbee coordinator not connected")
 		}
 		return nil
@@ -615,19 +787,19 @@ func (m *Manager) GatewayByInterfaceID(id string) Gateway {
 func (m *Manager) ResolveGatewayInterface(gwType string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// Check v0.3.0 interface-keyed map first
+	// Check interface-keyed map first
 	for ifaceID, gw := range m.runningByIface {
-		if gw.Type() == gwType {
+		if gw != nil && gw.Type() == gwType {
 			return ifaceID
 		}
 	}
-	// Fallback: legacy type-keyed map. Look up actual interface ID from DB
-	// because interface IDs don't always match gateway type (e.g. iridium_imt
-	// gateway runs on interface "iridium_0", not "iridium_imt_0").
-	if _, ok := m.running[gwType]; ok {
-		if m.db != nil {
-			if ifaces, err := m.db.GetInterfacesByType(gwType); err == nil && len(ifaces) > 0 {
-				return ifaces[0].ID
+	// Check instance-keyed running map
+	for _, gw := range m.running {
+		if gw != nil && gw.Type() == gwType {
+			if m.db != nil {
+				if ifaces, err := m.db.GetInterfacesByType(gwType); err == nil && len(ifaces) > 0 {
+					return ifaces[0].ID
+				}
 			}
 		}
 	}
@@ -643,7 +815,7 @@ func (m *Manager) StartInterfaceGateway(ctx context.Context, ifaceID, channelTyp
 	}
 	m.mu.Unlock()
 
-	gw, err := m.createGateway(channelType, configJSON)
+	gw, err := m.createGatewayForInstance(channelType, ifaceID, configJSON)
 	if err != nil {
 		return fmt.Errorf("create gateway for interface %s: %w", ifaceID, err)
 	}
@@ -654,10 +826,8 @@ func (m *Manager) StartInterfaceGateway(ctx context.Context, ifaceID, channelTyp
 
 	m.mu.Lock()
 	m.runningByIface[ifaceID] = gw
-	// Also register in legacy map if not already present (backwards compat)
-	if _, ok := m.running[channelType]; !ok {
-		m.running[channelType] = gw
-	}
+	// Also register in instance map
+	m.running[ifaceID] = gw
 	m.mu.Unlock()
 
 	if m.onReceiverStart != nil {
@@ -695,7 +865,7 @@ func (m *Manager) StopInterfaceGateway(ifaceID string) error {
 }
 
 // bootstrapInterfaceGateways maps existing running gateways to their interface IDs.
-// This bridges the legacy gateway_config start path with the v0.3.0 interface model.
+// This bridges the gateway_config start path with the interface model.
 func (m *Manager) bootstrapInterfaceGateways() {
 	ifaces, err := m.db.GetAllInterfaces()
 	if err != nil {
@@ -711,11 +881,14 @@ func (m *Manager) bootstrapInterfaceGateways() {
 		if !iface.Enabled {
 			continue
 		}
-		// If a legacy gateway is running for this channel_type, also index it by interface ID
-		if gw, ok := m.running[iface.ChannelType]; ok {
-			if _, already := m.runningByIface[iface.ID]; !already {
-				m.runningByIface[iface.ID] = gw
-				mapped++
+		// Find a running gateway of matching channel_type
+		for _, gw := range m.running {
+			if gw != nil && gw.Type() == iface.ChannelType {
+				if _, already := m.runningByIface[iface.ID]; !already {
+					m.runningByIface[iface.ID] = gw
+					mapped++
+				}
+				break
 			}
 		}
 	}
@@ -749,7 +922,7 @@ func (m *Manager) unsyncIfaceMap(gw Gateway) {
 	}
 }
 
-// GetStatus returns status info for all known gateway types (configured or running).
+// GetStatus returns status info for all known gateway instances (configured or running).
 func (m *Manager) GetStatus() []GatewayStatusResponse {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -762,12 +935,17 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 	}
 
 	for _, cfg := range configs {
+		instanceID := cfg.InstanceID
+		if instanceID == "" {
+			instanceID = cfg.Type + "_0"
+		}
 		resp := GatewayStatusResponse{
-			Type:    cfg.Type,
-			Enabled: cfg.Enabled,
+			Type:       cfg.Type,
+			InstanceID: instanceID,
+			Enabled:    cfg.Enabled,
 		}
 
-		if gw, ok := m.running[cfg.Type]; ok {
+		if gw, ok := m.running[instanceID]; ok && gw != nil {
 			status := gw.Status()
 			resp.Connected = status.Connected
 			resp.MessagesIn = status.MessagesIn
@@ -778,7 +956,6 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 			resp.ConnectionUptime = status.ConnectionUptime
 		}
 
-		// Include redacted config
 		resp.Config = m.redactConfig(cfg.Type, cfg.Config)
 
 		results = append(results, resp)
@@ -787,23 +964,29 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 	return results
 }
 
-// GetSingleStatus returns status for a specific gateway type.
+// GetSingleStatus returns status for a specific gateway type (first instance).
 func (m *Manager) GetSingleStatus(gwType string) (*GatewayStatusResponse, error) {
 	cfg, err := m.db.GetGatewayConfig(gwType)
 	if err != nil {
 		return nil, fmt.Errorf("gateway %s not configured", gwType)
 	}
 
+	instanceID := cfg.InstanceID
+	if instanceID == "" {
+		instanceID = gwType + "_0"
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	resp := &GatewayStatusResponse{
-		Type:    cfg.Type,
-		Enabled: cfg.Enabled,
-		Config:  m.redactConfig(cfg.Type, cfg.Config),
+		Type:       cfg.Type,
+		InstanceID: instanceID,
+		Enabled:    cfg.Enabled,
+		Config:     m.redactConfig(cfg.Type, cfg.Config),
 	}
 
-	if gw, ok := m.running[cfg.Type]; ok {
+	if gw, ok := m.running[instanceID]; ok && gw != nil {
 		status := gw.Status()
 		resp.Connected = status.Connected
 		resp.MessagesIn = status.MessagesIn
@@ -817,8 +1000,13 @@ func (m *Manager) GetSingleStatus(gwType string) (*GatewayStatusResponse, error)
 	return resp, nil
 }
 
-// createGateway is a factory method that creates a gateway from type and JSON config.
+// createGateway is a legacy wrapper that creates a gateway for the default instance.
 func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
+	return m.createGatewayForInstance(gwType, gwType+"_0", configJSON)
+}
+
+// createGatewayForInstance creates a gateway bound to a specific transport instance.
+func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string) (Gateway, error) {
 	switch gwType {
 	case "mqtt":
 		cfg, err := ParseMQTTConfig(configJSON)
@@ -830,26 +1018,23 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		}
 		return NewMQTTGateway(*cfg), nil
 	case "iridium":
-		if m.sat == nil {
-			return nil, fmt.Errorf("satellite transport not available")
+		sat := m.getSatTransport(instanceID)
+		if sat == nil {
+			return nil, fmt.Errorf("satellite transport not available for %s", instanceID)
 		}
 		cfg, err := ParseIridiumConfig(configJSON)
 		if err != nil {
 			return nil, err
 		}
-		gw := NewIridiumGateway(*cfg, m.sat, m.db, m.predictor)
+		gw := NewIridiumGateway(*cfg, sat, m.db, m.predictor)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
 		}
 		return gw, nil
 	case "iridium_imt":
-		sat := m.imtSat
+		sat := m.getSatTransport(instanceID)
 		if sat == nil {
-			// Fall back to primary sat transport if no dedicated IMT transport
-			sat = m.sat
-		}
-		if sat == nil {
-			return nil, fmt.Errorf("IMT satellite transport not available")
+			return nil, fmt.Errorf("IMT satellite transport not available for %s", instanceID)
 		}
 		cfg, err := ParseIridiumConfig(configJSON)
 		if err != nil {
@@ -861,8 +1046,9 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		}
 		return gw, nil
 	case "cellular":
-		if m.cell == nil {
-			return nil, fmt.Errorf("cellular transport not available")
+		cell := m.getCellTransport(instanceID)
+		if cell == nil {
+			return nil, fmt.Errorf("cellular transport not available for %s", instanceID)
 		}
 		cfg, err := ParseCellularConfig(configJSON)
 		if err != nil {
@@ -871,7 +1057,7 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		gw := NewCellularGateway(*cfg, m.cell, m.db)
+		gw := NewCellularGateway(*cfg, cell, m.db)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
 		}
@@ -889,8 +1075,9 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		}
 		return NewWebhookGateway(*cfg, m.db), nil
 	case "astrocast":
-		if m.astro == nil {
-			return nil, fmt.Errorf("astrocast transport not available")
+		astro := m.getAstroTransport(instanceID)
+		if astro == nil {
+			return nil, fmt.Errorf("astrocast transport not available for %s", instanceID)
 		}
 		cfg, err := ParseAstrocastConfig(configJSON)
 		if err != nil {
@@ -899,7 +1086,7 @@ func (m *Manager) createGateway(gwType, configJSON string) (Gateway, error) {
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewAstrocastGateway(*cfg, m.astro, m.db), nil
+		return NewAstrocastGateway(*cfg, astro, m.db), nil
 	case "zigbee":
 		cfg, err := ParseZigBeeConfig(configJSON)
 		if err != nil {
@@ -1024,11 +1211,14 @@ func (m *Manager) DisconnectCellularData(ctx context.Context) error {
 	return m.cell.DisconnectData(ctx)
 }
 
-// GetCellularGateway returns the running cellular gateway (for webhook forwarding).
+// GetCellularGateway returns the first running cellular gateway (for webhook forwarding).
 func (m *Manager) GetCellularGateway() *CellularGateway {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if gw, ok := m.running["cellular"]; ok {
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
 		if cgw, ok := gw.(*CellularGateway); ok {
 			return cgw
 		}
@@ -1040,7 +1230,10 @@ func (m *Manager) GetCellularGateway() *CellularGateway {
 func (m *Manager) GetWebhookGateway() *WebhookGateway {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if gw, ok := m.running["webhook"]; ok {
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
 		if wgw, ok := gw.(*WebhookGateway); ok {
 			return wgw
 		}
@@ -1052,7 +1245,10 @@ func (m *Manager) GetWebhookGateway() *WebhookGateway {
 func (m *Manager) GetMQTTGateway() *MQTTGateway {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if gw, ok := m.running["mqtt"]; ok {
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
 		if mgw, ok := gw.(*MQTTGateway); ok {
 			return mgw
 		}
@@ -1064,7 +1260,10 @@ func (m *Manager) GetMQTTGateway() *MQTTGateway {
 func (m *Manager) GetZigBeeGateway() *ZigBeeGateway {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if gw, ok := m.running["zigbee"]; ok {
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
 		if zgw, ok := gw.(*ZigBeeGateway); ok {
 			return zgw
 		}
@@ -1188,29 +1387,27 @@ func (m *Manager) GetIridiumTime(ctx context.Context) (*transport.IridiumTime, e
 	return m.sat.GetSystemTime(ctx)
 }
 
-// ManualMailboxCheck triggers a one-shot mailbox check on the running Iridium gateway.
+// ManualMailboxCheck triggers a one-shot mailbox check on the first running Iridium gateway.
 func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
 	m.mu.RLock()
-	// Try SBD first, then IMT
-	gw, ok := m.running["iridium"]
-	if !ok {
-		gw, ok = m.running["iridium_imt"]
+	defer m.mu.RUnlock()
+
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
+		if iGw, ok := gw.(*IridiumGateway); ok {
+			iGw.ManualMailboxCheck(ctx)
+			return nil
+		}
 	}
-	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("iridium gateway not running")
-	}
-	iGw, ok := gw.(*IridiumGateway)
-	if !ok {
-		return fmt.Errorf("iridium gateway has unexpected type")
-	}
-	iGw.ManualMailboxCheck(ctx)
-	return nil
+	return fmt.Errorf("iridium gateway not running")
 }
 
 // GatewayStatusResponse is the API response for gateway status.
 type GatewayStatusResponse struct {
 	Type             string          `json:"type"`
+	InstanceID       string          `json:"instance_id,omitempty"`
 	Enabled          bool            `json:"enabled"`
 	Connected        bool            `json:"connected"`
 	MessagesIn       int64           `json:"messages_in"`

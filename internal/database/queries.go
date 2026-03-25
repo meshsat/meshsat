@@ -60,11 +60,12 @@ type Position struct {
 
 // GatewayConfig represents stored gateway configuration.
 type GatewayConfig struct {
-	ID        int64     `db:"id" json:"id"`
-	Type      string    `db:"type" json:"type"`
-	Enabled   bool      `db:"enabled" json:"enabled"`
-	Config    string    `db:"config" json:"config"`
-	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+	ID         int64     `db:"id" json:"id"`
+	Type       string    `db:"type" json:"type"`
+	InstanceID string    `db:"instance_id" json:"instance_id"`
+	Enabled    bool      `db:"enabled" json:"enabled"`
+	Config     string    `db:"config" json:"config"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // MessageFilter controls query parameters for message listing.
@@ -336,37 +337,90 @@ func (db *DB) PruneOlderThan(days int) (int64, error) {
 	return total, nil
 }
 
-// SaveGatewayConfig upserts gateway configuration.
+// SaveGatewayConfig upserts gateway configuration by type (legacy — uses first instance).
 func (db *DB) SaveGatewayConfig(gwType string, enabled bool, config string) error {
-	_, err := db.Exec(`INSERT INTO gateway_config (type, enabled, config, updated_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(type) DO UPDATE SET enabled=excluded.enabled, config=excluded.config, updated_at=CURRENT_TIMESTAMP`,
-		gwType, enabled, config)
+	return db.SaveGatewayConfigInstance(gwType, gwType+"_0", enabled, config)
+}
+
+// SaveGatewayConfigInstance upserts gateway configuration for a specific instance.
+func (db *DB) SaveGatewayConfigInstance(gwType, instanceID string, enabled bool, config string) error {
+	_, err := db.Exec(`INSERT INTO gateway_config (type, instance_id, enabled, config, updated_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(type, instance_id) DO UPDATE SET enabled=excluded.enabled, config=excluded.config, updated_at=CURRENT_TIMESTAMP`,
+		gwType, instanceID, enabled, config)
 	return err
 }
 
-// GetGatewayConfig retrieves gateway configuration by type.
+// GetGatewayConfig retrieves gateway configuration by type (legacy — returns first instance).
 func (db *DB) GetGatewayConfig(gwType string) (*GatewayConfig, error) {
 	var gc GatewayConfig
-	if err := db.Get(&gc, "SELECT * FROM gateway_config WHERE type = ?", gwType); err != nil {
+	if err := db.Get(&gc, "SELECT * FROM gateway_config WHERE type = ? ORDER BY instance_id LIMIT 1", gwType); err != nil {
 		return nil, err
 	}
 	return &gc, nil
 }
 
+// GetGatewayConfigByInstance retrieves gateway configuration by instance ID.
+func (db *DB) GetGatewayConfigByInstance(instanceID string) (*GatewayConfig, error) {
+	var gc GatewayConfig
+	if err := db.Get(&gc, "SELECT * FROM gateway_config WHERE instance_id = ?", instanceID); err != nil {
+		return nil, err
+	}
+	return &gc, nil
+}
+
+// GetGatewayConfigsByType returns all instances of a gateway type.
+func (db *DB) GetGatewayConfigsByType(gwType string) ([]GatewayConfig, error) {
+	var configs []GatewayConfig
+	if err := db.Select(&configs, "SELECT * FROM gateway_config WHERE type = ? ORDER BY instance_id", gwType); err != nil {
+		return nil, fmt.Errorf("query gateway configs by type: %w", err)
+	}
+	return configs, nil
+}
+
 // GetAllGatewayConfigs returns all gateway configurations.
 func (db *DB) GetAllGatewayConfigs() ([]GatewayConfig, error) {
 	var configs []GatewayConfig
-	if err := db.Select(&configs, "SELECT * FROM gateway_config ORDER BY type"); err != nil {
+	if err := db.Select(&configs, "SELECT * FROM gateway_config ORDER BY type, instance_id"); err != nil {
 		return nil, fmt.Errorf("query gateway configs: %w", err)
 	}
 	return configs, nil
 }
 
-// DeleteGatewayConfig removes a gateway configuration by type.
+// DeleteGatewayConfig removes a gateway configuration by type (legacy — deletes first instance).
 func (db *DB) DeleteGatewayConfig(gwType string) error {
-	_, err := db.Exec("DELETE FROM gateway_config WHERE type = ?", gwType)
+	_, err := db.Exec("DELETE FROM gateway_config WHERE type = ? AND instance_id = ?", gwType, gwType+"_0")
 	return err
+}
+
+// DeleteGatewayConfigInstance removes a specific gateway instance configuration.
+func (db *DB) DeleteGatewayConfigInstance(instanceID string) error {
+	_, err := db.Exec("DELETE FROM gateway_config WHERE instance_id = ?", instanceID)
+	return err
+}
+
+// NextGatewayInstanceID returns the next available instance ID for a gateway type
+// (e.g. "iridium_0" → "iridium_1" → "iridium_2").
+func (db *DB) NextGatewayInstanceID(gwType string) (string, error) {
+	var maxID string
+	err := db.QueryRow("SELECT COALESCE(MAX(instance_id), '') FROM gateway_config WHERE type = ?", gwType).Scan(&maxID)
+	if err != nil {
+		return gwType + "_0", nil
+	}
+	if maxID == "" {
+		return gwType + "_0", nil
+	}
+	// Parse suffix number
+	for i := len(maxID) - 1; i >= 0; i-- {
+		if maxID[i] == '_' {
+			n := 0
+			if _, err := fmt.Sscanf(maxID[i+1:], "%d", &n); err == nil {
+				return fmt.Sprintf("%s_%d", gwType, n+1), nil
+			}
+			break
+		}
+	}
+	return gwType + "_0", nil
 }
 
 // HasPacket checks if a packet ID already exists (for deduplication).

@@ -35,8 +35,10 @@ type DeviceEvent struct {
 
 // DriverCallbacks holds functions the supervisor calls when ports are discovered or lost.
 type DriverCallbacks struct {
+	InstanceID  string            // unique identifier for multi-instance (e.g. "iridium_0")
 	OnPortFound func(port string) // called when a port is identified for this role
 	OnPortLost  func(port string) // called when a claimed port vanishes
+	HasPort     func() bool       // returns true if this instance already has a port assigned
 }
 
 // DeviceSupervisor periodically scans serial ports and manages identification,
@@ -44,9 +46,13 @@ type DriverCallbacks struct {
 type DeviceSupervisor struct {
 	registry *DeviceRegistry
 
-	// Driver callbacks keyed by role
+	// Driver callbacks keyed by role — multiple callbacks per role for multi-instance
 	callbacksMu sync.RWMutex
-	callbacks   map[DeviceRole]*DriverCallbacks
+	callbacks   map[DeviceRole][]*DriverCallbacks
+
+	// Port-to-instance tracking: which instance ID claimed each port
+	portInstances   map[string]string // devPath → instanceID
+	portInstancesMu sync.RWMutex
 
 	// Explicit port overrides (from env vars) — skip auto-detect for these roles
 	explicitPorts map[DeviceRole]string
@@ -64,7 +70,8 @@ type DeviceSupervisor struct {
 func NewDeviceSupervisor() *DeviceSupervisor {
 	return &DeviceSupervisor{
 		registry:      NewDeviceRegistry(),
-		callbacks:     make(map[DeviceRole]*DriverCallbacks),
+		callbacks:     make(map[DeviceRole][]*DriverCallbacks),
+		portInstances: make(map[string]string),
 		explicitPorts: make(map[DeviceRole]string),
 		stopCh:        make(chan struct{}),
 		scanNowCh:     make(chan struct{}, 1),
@@ -77,11 +84,44 @@ func (s *DeviceSupervisor) Registry() *DeviceRegistry {
 	return s.registry
 }
 
-// SetCallbacks registers driver callbacks for a role.
+// SetCallbacks registers driver callbacks for a role (legacy — single instance).
+// For multi-instance, use AddCallbacks instead.
 func (s *DeviceSupervisor) SetCallbacks(role DeviceRole, cb *DriverCallbacks) {
 	s.callbacksMu.Lock()
 	defer s.callbacksMu.Unlock()
-	s.callbacks[role] = cb
+	if cb.InstanceID == "" {
+		cb.InstanceID = string(role) + "_0"
+	}
+	// Legacy: replace all callbacks for this role with a single one
+	s.callbacks[role] = []*DriverCallbacks{cb}
+}
+
+// AddCallbacks registers additional driver callbacks for a role (multi-instance).
+// Multiple callbacks for the same role enables multiple modems of the same type.
+func (s *DeviceSupervisor) AddCallbacks(role DeviceRole, cb *DriverCallbacks) {
+	s.callbacksMu.Lock()
+	defer s.callbacksMu.Unlock()
+	s.callbacks[role] = append(s.callbacks[role], cb)
+}
+
+// RemoveCallbacks removes driver callbacks for a specific instance.
+func (s *DeviceSupervisor) RemoveCallbacks(role DeviceRole, instanceID string) {
+	s.callbacksMu.Lock()
+	defer s.callbacksMu.Unlock()
+	cbs := s.callbacks[role]
+	for i, cb := range cbs {
+		if cb.InstanceID == instanceID {
+			s.callbacks[role] = append(cbs[:i], cbs[i+1:]...)
+			return
+		}
+	}
+}
+
+// GetPortInstance returns the instance ID that claimed a port, or "".
+func (s *DeviceSupervisor) GetPortInstance(port string) string {
+	s.portInstancesMu.RLock()
+	defer s.portInstancesMu.RUnlock()
+	return s.portInstances[port]
 }
 
 // SetExplicitPort sets an explicit port for a role (from env var).
@@ -561,8 +601,28 @@ func (s *DeviceSupervisor) notifyPortFound(role DeviceRole, port string) {
 	s.callbacksMu.RLock()
 	defer s.callbacksMu.RUnlock()
 
-	if cb, ok := s.callbacks[role]; ok && cb.OnPortFound != nil {
-		cb.OnPortFound(port)
+	cbs := s.callbacks[role]
+	if len(cbs) == 0 {
+		return
+	}
+
+	// Multi-instance: find the first callback that doesn't already have a port.
+	// If all have ports, notify the first one (legacy behavior).
+	for _, cb := range cbs {
+		if cb.HasPort != nil && !cb.HasPort() && cb.OnPortFound != nil {
+			cb.OnPortFound(port)
+			s.portInstancesMu.Lock()
+			s.portInstances[port] = cb.InstanceID
+			s.portInstancesMu.Unlock()
+			return
+		}
+	}
+	// Fallback: all instances have ports or no HasPort func — notify first
+	if cbs[0].OnPortFound != nil {
+		cbs[0].OnPortFound(port)
+		s.portInstancesMu.Lock()
+		s.portInstances[port] = cbs[0].InstanceID
+		s.portInstancesMu.Unlock()
 	}
 }
 
@@ -570,8 +630,28 @@ func (s *DeviceSupervisor) notifyPortLost(role DeviceRole, port string) {
 	s.callbacksMu.RLock()
 	defer s.callbacksMu.RUnlock()
 
-	if cb, ok := s.callbacks[role]; ok && cb.OnPortLost != nil {
-		cb.OnPortLost(port)
+	// Find the instance that owns this port and notify it
+	s.portInstancesMu.RLock()
+	instanceID := s.portInstances[port]
+	s.portInstancesMu.RUnlock()
+
+	cbs := s.callbacks[role]
+	for _, cb := range cbs {
+		if cb.InstanceID == instanceID && cb.OnPortLost != nil {
+			cb.OnPortLost(port)
+			s.portInstancesMu.Lock()
+			delete(s.portInstances, port)
+			s.portInstancesMu.Unlock()
+			return
+		}
+	}
+
+	// Fallback: no instance match (legacy) — notify first callback
+	if len(cbs) > 0 && cbs[0].OnPortLost != nil {
+		cbs[0].OnPortLost(port)
+		s.portInstancesMu.Lock()
+		delete(s.portInstances, port)
+		s.portInstancesMu.Unlock()
 	}
 }
 

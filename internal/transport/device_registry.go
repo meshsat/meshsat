@@ -159,6 +159,21 @@ func (r *DeviceRegistry) FindByRole(role DeviceRole) *SerialDeviceEntry {
 	return nil
 }
 
+// FindAllByRole returns all devices with a given role.
+func (r *DeviceRegistry) FindAllByRole(role DeviceRole) []*SerialDeviceEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var result []*SerialDeviceEntry
+	for _, entry := range r.devices {
+		if entry.Role == role {
+			e := *entry
+			result = append(result, &e)
+		}
+	}
+	return result
+}
+
 // ListAll returns a snapshot of all devices.
 func (r *DeviceRegistry) ListAll() []*SerialDeviceEntry {
 	r.mu.RLock()

@@ -750,6 +750,24 @@ var migrations = []string{
 	// delivery worker can route to the correct gateway.
 	`INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
 		VALUES ('iridium_imt_0', 'iridium_imt', 'Iridium IMT (9704)', 1, '{}');`,
+
+	// v33: Multi-instance gateway support — xN modems of same type [MESHSAT-335].
+	// Recreate gateway_config with instance_id column. The original table had
+	// UNIQUE(type) which prevents multiple modems of the same type. The new table
+	// uses UNIQUE(type, instance_id) instead. Backfill existing rows with "{type}_0".
+	`CREATE TABLE IF NOT EXISTS gateway_config_new (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		type        TEXT NOT NULL,
+		instance_id TEXT NOT NULL DEFAULT '',
+		enabled     BOOLEAN NOT NULL DEFAULT 0,
+		config      TEXT NOT NULL DEFAULT '{}',
+		updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(type, instance_id)
+	);
+	INSERT OR IGNORE INTO gateway_config_new (id, type, instance_id, enabled, config, updated_at)
+		SELECT id, type, type || '_0', enabled, config, updated_at FROM gateway_config;
+	DROP TABLE gateway_config;
+	ALTER TABLE gateway_config_new RENAME TO gateway_config;`,
 }
 
 func (db *DB) migrate() error {
