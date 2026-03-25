@@ -38,12 +38,18 @@ type Processor struct {
 	subsMu     sync.RWMutex
 
 	// Routing subsystem (v0.2.0 — Reticulum-inspired)
-	announceRelay *routing.AnnounceRelay
-	linkMgr       *routing.LinkManager
-	keepalive     *routing.LinkKeepalive
-	destTable     *routing.DestinationTable
-	transportNode *routing.TransportNode
-	pathFinder    *routing.PathFinder
+	announceRelay   *routing.AnnounceRelay
+	linkMgr         *routing.LinkManager
+	keepalive       *routing.LinkKeepalive
+	destTable       *routing.DestinationTable
+	transportNode   *routing.TransportNode
+	pathFinder      *routing.PathFinder
+	routingIdentity *routing.Identity
+
+	// Packet sender: sends a Reticulum packet to a specific interface.
+	// Set by main.go to route responses (link proofs, data) to TCP or mesh.
+	packetSenders   map[string]func(ctx context.Context, data []byte) error
+	packetSendersMu sync.RWMutex
 
 	// Gateway injection dedup (text hash → timestamp, 5min TTL)
 	relayDedupMu sync.Mutex
@@ -53,9 +59,10 @@ type Processor struct {
 // NewProcessor creates a new event processor.
 func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
 	return &Processor{
-		db:         db,
-		mesh:       mesh,
-		relayDedup: make(map[string]time.Time),
+		db:            db,
+		mesh:          mesh,
+		relayDedup:    make(map[string]time.Time),
+		packetSenders: make(map[string]func(ctx context.Context, data []byte) error),
 	}
 }
 
@@ -95,6 +102,39 @@ func (p *Processor) SetTransportNode(tn *routing.TransportNode) {
 // SetPathFinder enables path discovery for unknown destinations.
 func (p *Processor) SetPathFinder(pf *routing.PathFinder) {
 	p.pathFinder = pf
+}
+
+// SetRoutingIdentity sets the local routing identity for packet filtering.
+func (p *Processor) SetRoutingIdentity(id *routing.Identity) {
+	p.routingIdentity = id
+}
+
+// RegisterPacketSender registers a function that sends Reticulum packets to a
+// specific interface (e.g. "tcp_0", "mesh_0"). Used to route link proofs and
+// data packets back to the interface they were received on.
+func (p *Processor) RegisterPacketSender(ifaceID string, fn func(ctx context.Context, data []byte) error) {
+	p.packetSendersMu.Lock()
+	defer p.packetSendersMu.Unlock()
+	p.packetSenders[ifaceID] = fn
+}
+
+// sendReticulumPacket sends a Reticulum packet to the specified interface.
+// Falls back to mesh broadcast if no specific sender is registered.
+func (p *Processor) sendReticulumPacket(data []byte, ifaceID string) {
+	p.packetSendersMu.RLock()
+	sender, ok := p.packetSenders[ifaceID]
+	p.packetSendersMu.RUnlock()
+
+	if ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := sender(ctx, data); err != nil {
+			log.Warn().Err(err).Str("iface", ifaceID).Msg("routing: failed to send packet to interface")
+		}
+		return
+	}
+	// Fallback to mesh broadcast
+	p.sendRoutingPacket(data)
 }
 
 // Subscribe adds an SSE re-broadcast subscriber. Returns a channel and unsubscribe func.
@@ -447,7 +487,25 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 					log.Debug().Msg("routing: Reticulum link request forwarded via transport")
 					return
 				}
-				log.Debug().Msg("routing: Reticulum link request (local handling not yet wired)")
+				// Local handling: if addressed to us, process the link request
+				if p.linkMgr != nil && p.isAddressedToUs(hdr) {
+					respData, err := p.linkMgr.HandleLinkRequest(hdr.Data)
+					if err != nil {
+						log.Debug().Err(err).Msg("routing: Reticulum link request handling failed")
+					} else {
+						log.Info().Str("iface", sourceIface).Msg("routing: Reticulum link request accepted, sending proof")
+						// Wrap proof in Reticulum header and send back
+						proofPkt := &reticulum.Header{
+							PacketType: reticulum.PacketProof,
+							DestType:   hdr.DestType,
+							DestHash:   hdr.DestHash,
+						}
+						proofPkt.Data = respData
+						p.sendReticulumPacket(proofPkt.Marshal(), sourceIface)
+					}
+				} else {
+					log.Debug().Msg("routing: Reticulum link request not for us, no transport route")
+				}
 				return
 
 			case reticulum.PacketProof:
@@ -455,7 +513,27 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 					log.Debug().Msg("routing: Reticulum proof forwarded via transport")
 					return
 				}
-				log.Debug().Msg("routing: Reticulum proof (local handling not yet wired)")
+				// Local handling: if we have a pending link, process the proof
+				if p.linkMgr != nil && len(hdr.Data) > 0 {
+					var signingPub []byte
+					if p.destTable != nil {
+						proof, err := routing.UnmarshalLinkProof(hdr.Data)
+						if err == nil {
+							link := p.linkMgr.GetPendingLink(proof.LinkID)
+							if link != nil {
+								dest := p.destTable.Lookup(link.DestHash)
+								if dest != nil {
+									signingPub = dest.SigningPub
+								}
+							}
+						}
+					}
+					if err := p.linkMgr.HandleLinkProof(hdr.Data, signingPub); err != nil {
+						log.Debug().Err(err).Msg("routing: Reticulum proof handling failed")
+					} else {
+						log.Info().Str("iface", sourceIface).Msg("routing: Reticulum proof processed, link established")
+					}
+				}
 				return
 
 			case reticulum.PacketData:
@@ -476,7 +554,15 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 					log.Debug().Msg("routing: Reticulum data packet forwarded via transport")
 					return
 				}
-				log.Debug().Msg("routing: Reticulum data packet (local handling not yet wired)")
+				// Local handling: if addressed to us and we have an established link, decrypt
+				if p.isAddressedToUs(hdr) && p.linkMgr != nil && len(hdr.Data) > 0 {
+					log.Info().Int("size", len(hdr.Data)).Str("iface", sourceIface).
+						Msg("routing: Reticulum data packet received for local identity")
+					// Data packets on established links contain encrypted payload.
+					// Decryption and application delivery will be wired in a follow-up.
+				} else {
+					log.Debug().Msg("routing: Reticulum data packet not for us, no transport route")
+				}
 				return
 			}
 		}
@@ -528,6 +614,15 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	default:
 		log.Debug().Int("type", int(firstByte)).Msg("routing: unknown packet type")
 	}
+}
+
+// isAddressedToUs checks if a Reticulum packet's destination hash matches our identity.
+func (p *Processor) isAddressedToUs(hdr *reticulum.Header) bool {
+	if p.routingIdentity == nil {
+		return false
+	}
+	ourHash := p.routingIdentity.DestHash()
+	return hdr.DestHash == ourHash
 }
 
 // InjectReticulumPacket feeds a raw Reticulum packet into the routing subsystem

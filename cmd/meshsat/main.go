@@ -389,6 +389,11 @@ func main() {
 		})
 		keepalive.Start(ctx)
 
+		// Wire routing subsystem into processor so incoming Reticulum packets
+		// (from TCP or mesh) are dispatched to announce relay, link manager, etc.
+		proc.SetRouting(announceRelay, linkMgr, keepalive, destTable)
+		proc.SetRoutingIdentity(routingID)
+
 		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized")
 	}
 
@@ -409,6 +414,9 @@ func main() {
 			log.Error().Err(err).Msg("tcp interface start failed")
 			tcpIface = nil
 		} else {
+			// Register TCP as a packet sender so the processor can route
+			// link proofs and data packets back to TCP peers.
+			proc.RegisterPacketSender("tcp_0", tcpIface.Send)
 			log.Info().Str("listen", cfg.TCPListenAddr).Str("connect", cfg.TCPConnectAddr).Msg("tcp reticulum interface started")
 		}
 	}
