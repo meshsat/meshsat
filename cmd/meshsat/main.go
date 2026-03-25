@@ -139,6 +139,7 @@ func main() {
 		// Wire driver callbacks: supervisor notifies transports when ports are
 		// discovered or lost, replacing the old exclude-port daisy chain.
 		supervisor.SetCallbacks(transport.RoleMeshtastic, &transport.DriverCallbacks{
+			InstanceID: "mesh_0",
 			OnPortFound: func(port string) {
 				directMesh.SetPort(port)
 				log.Info().Str("port", port).Msg("supervisor: meshtastic port assigned")
@@ -147,9 +148,11 @@ func main() {
 				directMesh.Close()
 				log.Warn().Str("port", port).Msg("supervisor: meshtastic port lost")
 			},
+			HasPort: func() bool { return directMesh.GetPort() != "" && directMesh.GetPort() != "supervisor" },
 		})
 
 		supervisor.SetCallbacks(transport.RoleIridium9704, &transport.DriverCallbacks{
+			InstanceID: "iridium_imt_0",
 			OnPortFound: func(port string) {
 				directIMT.SetPort(port)
 				log.Info().Str("port", port).Msg("supervisor: 9704 IMT port assigned")
@@ -158,9 +161,11 @@ func main() {
 				directIMT.Close()
 				log.Warn().Str("port", port).Msg("supervisor: 9704 IMT port lost")
 			},
+			HasPort: func() bool { return directIMT.GetPort() != "" && directIMT.GetPort() != "supervisor" },
 		})
 
 		supervisor.SetCallbacks(transport.RoleIridium9603, &transport.DriverCallbacks{
+			InstanceID: "iridium_0",
 			OnPortFound: func(port string) {
 				directSat.SetPort(port)
 				log.Info().Str("port", port).Msg("supervisor: 9603 SBD port assigned")
@@ -169,9 +174,11 @@ func main() {
 				directSat.Close()
 				log.Warn().Str("port", port).Msg("supervisor: 9603 SBD port lost")
 			},
+			HasPort: func() bool { return directSat.GetPort() != "" && directSat.GetPort() != "supervisor" },
 		})
 
 		supervisor.SetCallbacks(transport.RoleCellular, &transport.DriverCallbacks{
+			InstanceID: "cellular_0",
 			OnPortFound: func(port string) {
 				directCell.SetPort(port)
 				log.Info().Str("port", port).Msg("supervisor: cellular port assigned")
@@ -180,9 +187,11 @@ func main() {
 				directCell.Close()
 				log.Warn().Str("port", port).Msg("supervisor: cellular port lost")
 			},
+			HasPort: func() bool { return directCell.GetPort() != "" && directCell.GetPort() != "supervisor" },
 		})
 
 		supervisor.SetCallbacks(transport.RoleAstrocast, &transport.DriverCallbacks{
+			InstanceID: "astrocast_0",
 			OnPortFound: func(port string) {
 				directAstro.SetPort(port)
 				log.Info().Str("port", port).Msg("supervisor: astronode port assigned")
@@ -191,6 +200,7 @@ func main() {
 				directAstro.Close()
 				log.Warn().Str("port", port).Msg("supervisor: astronode port lost")
 			},
+			HasPort: func() bool { return directAstro.GetPort() != "" && directAstro.GetPort() != "supervisor" },
 		})
 
 		supervisor.Start()
