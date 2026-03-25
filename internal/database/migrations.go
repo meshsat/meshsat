@@ -743,6 +743,13 @@ var migrations = []string{
 		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_hub_outbox_created ON hub_outbox(created_at);`,
+
+	// v32: Add iridium_imt interface for RockBLOCK 9704 (IMT/JSPR) [MESHSAT-244].
+	// SBD (9603) and IMT (9704) are fundamentally different protocols with different
+	// message sizes, costs, and capabilities. They need separate interface IDs so the
+	// delivery worker can route to the correct gateway.
+	`INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
+		VALUES ('iridium_imt_0', 'iridium_imt', 'Iridium IMT (9704)', 1, '{}');`,
 }
 
 func (db *DB) migrate() error {

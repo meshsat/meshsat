@@ -125,6 +125,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		m.mu.Lock()
 		m.running[cfg.Type] = gw
+		m.syncIfaceMap(cfg.Type, gw)
 		m.mu.Unlock()
 		if m.onReceiverStart != nil {
 			m.onReceiverStart(ctx, gw)
@@ -625,13 +626,7 @@ func (m *Manager) ResolveGatewayInterface(gwType string) string {
 	// gateway runs on interface "iridium_0", not "iridium_imt_0").
 	if _, ok := m.running[gwType]; ok {
 		if m.db != nil {
-			// Find the first interface whose channel_type matches the gateway's base type
-			baseType := gwType
-			// "iridium_imt" and "iridium" both use channel_type "iridium"
-			if baseType == "iridium_imt" {
-				baseType = "iridium"
-			}
-			if ifaces, err := m.db.GetInterfacesByType(baseType); err == nil && len(ifaces) > 0 {
+			if ifaces, err := m.db.GetInterfacesByType(gwType); err == nil && len(ifaces) > 0 {
 				return ifaces[0].ID
 			}
 		}
@@ -737,13 +732,8 @@ func (m *Manager) syncIfaceMap(gwType string, gw Gateway) {
 	if err != nil {
 		return
 	}
-	// "iridium_imt" gateway uses interfaces with channel_type "iridium"
-	matchType := gwType
-	if matchType == "iridium_imt" {
-		matchType = "iridium"
-	}
 	for _, iface := range ifaces {
-		if iface.Enabled && iface.ChannelType == matchType {
+		if iface.Enabled && iface.ChannelType == gwType {
 			m.runningByIface[iface.ID] = gw
 		}
 	}
