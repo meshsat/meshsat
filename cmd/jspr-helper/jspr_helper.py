@@ -88,10 +88,11 @@ class JSPRHelper:
         self.running = True
         self._write_lock = threading.Lock()
         self._emit_lock = threading.Lock()
-        # Serial read coordination between serial_thread and send_mo.
-        # serial_thread must acquire _serial_read_lock before every jspr_receive.
-        # send_mo acquires it for the entire MO flow, blocking serial_thread.
-        self._serial_read_lock = threading.Lock()
+        # Serial operation lock — protects the modem from concurrent commands.
+        # serial_thread acquires it before every jspr_receive.
+        # stdin_thread acquires it before every jspr_send (regular commands).
+        # send_mo acquires it for the entire MO flow, blocking both threads.
+        self._serial_lock = threading.Lock()
 
         # Set FTDI latency timer to 1ms if possible
         dev = os.path.basename(port)
@@ -183,10 +184,9 @@ class JSPRHelper:
         4. Wait for 200 + 299 status
         5. Emit mo_result to Go
         """
-        # Acquire serial read lock — blocks serial_thread from reading
-        # until the entire MO flow completes. serial_thread acquires this
-        # lock before every jspr_receive call, so it will wait.
-        with self._serial_read_lock:
+        # Acquire serial lock — blocks serial_thread and stdin_thread
+        # until the entire MO flow completes.
+        with self._serial_lock:
             self._do_send_mo(topic_id, payload_b64, length, request_reference)
 
     def _do_send_mo(self, topic_id, payload_b64, length, request_reference):
@@ -337,7 +337,11 @@ class JSPRHelper:
                         else:
                             json_body = str(json_field)
                         if method and target:
-                            self.jspr_send(method, target, json_body)
+                            # Acquire serial lock — blocks while MO is in progress.
+                            # Without this, signal poller GET commands interleave with
+                            # the MO flow and cause the modem to abort/ignore MO.
+                            with self._serial_lock:
+                                self.jspr_send(method, target, json_body)
                 except (json.JSONDecodeError, KeyError) as e:
                     sys.stderr.write(f"jspr-helper.py: parse error: {e}\n")
                     sys.stderr.flush()
@@ -347,9 +351,9 @@ class JSPRHelper:
     def serial_thread(self):
         """Read JSPR responses from serial, emit JSON on stdout."""
         while self.running:
-            # Acquire read lock — send_mo holds this during the entire MO flow,
+            # Acquire serial lock — send_mo holds this during the entire MO flow,
             # so we block here instead of competing for serial data.
-            with self._serial_read_lock:
+            with self._serial_lock:
                 resp = self.jspr_receive(timeout=0.5)
             if resp:
                 if resp["code"] == 299:
