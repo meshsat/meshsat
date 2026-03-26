@@ -443,6 +443,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/routing/peers", s.handleGetPeers)
 		r.Post("/routing/peers", s.handleAddPeer)
 		r.Delete("/routing/peers/{addr}", s.handleRemovePeer)
+		r.Get("/routing/hub", s.handleGetHubConfig)
+		r.Put("/routing/hub", s.handleSetHubConfig)
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)

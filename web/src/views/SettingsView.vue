@@ -706,6 +706,26 @@ async function removePeer(addr) {
   } catch (e) { routingWarning.value = e.message }
 }
 
+// Hub connection
+const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false })
+const hubWarning = ref('')
+
+async function loadHubConfig() {
+  try {
+    const data = await api.get('/routing/hub')
+    if (data) Object.assign(hubForm.value, data)
+  } catch {}
+}
+async function saveHubConfig() {
+  hubWarning.value = ''
+  try {
+    const data = await api.put('/routing/hub', hubForm.value)
+    if (data?.warning) hubWarning.value = data.warning
+    hubForm.value.password = ''
+    if (data) { hubForm.value.has_password = data.has_password }
+  } catch (e) { hubWarning.value = e.message }
+}
+
 async function toggleFloodable(iface) {
   const enabling = !iface.floodable
   if (enabling && iface.cost > 0) {
@@ -734,7 +754,7 @@ onMounted(async () => {
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
-  loadRoutingConfig(); fetchPeers()
+  loadRoutingConfig(); fetchPeers(); loadHubConfig()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
 })
@@ -1842,6 +1862,42 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <span v-else class="text-[10px] text-gray-600">env</span>
             </div>
           </div>
+        </div>
+
+        <!-- Hub Connection -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-1">Hub Connection</h3>
+          <p class="text-xs text-gray-500 mb-3">Paste the MQTT credentials from the Hub Fleet page to connect this bridge.</p>
+          <div class="space-y-2 mb-3">
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">MQTT URL</label>
+              <input type="text" v-model="hubForm.url" placeholder="mqtt://hub.meshsat.net:6071"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">Bridge ID</label>
+                <input type="text" v-model="hubForm.bridge_id" placeholder="rocket01"
+                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">Username</label>
+                <input type="text" v-model="hubForm.username" placeholder="rocket01"
+                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+              </div>
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Password</label>
+              <input type="password" v-model="hubForm.password" placeholder="paste from Fleet page (shown only once)"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="saveHubConfig" class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600">Save</button>
+            <span v-if="hubForm.has_password" class="text-[10px] text-emerald-400">credentials saved</span>
+            <span v-else class="text-[10px] text-gray-500">not configured</span>
+          </div>
+          <p v-if="hubWarning" class="mt-2 text-[10px] text-amber-400 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">{{ hubWarning }}</p>
         </div>
 
         <!-- Flood Control -->

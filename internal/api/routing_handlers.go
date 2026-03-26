@@ -504,3 +504,86 @@ func (s *Server) savePeers(peers []string) {
 	data, _ := json.Marshal(peers)
 	_ = s.db.SetSystemConfig(peersConfigKey, string(data))
 }
+
+// ============================================================================
+// Hub connection — MQTT credentials for bridge-to-hub uplink
+// ============================================================================
+
+const hubConfigKey = "hub_connection"
+
+type hubConnectionConfig struct {
+	URL      string `json:"url"`
+	BridgeID string `json:"bridge_id"`
+	Username string `json:"username"`
+	Password string `json:"password,omitempty"`
+	HasPass  bool   `json:"has_password"`
+	Warning  string `json:"warning,omitempty"`
+}
+
+// handleGetHubConfig returns the current Hub connection config (password redacted).
+// @Summary Get Hub connection config
+// @Tags routing
+// @Produce json
+// @Success 200 {object} hubConnectionConfig
+// @Router /api/routing/hub [get]
+func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.loadHubConfig()
+	cfg.Password = "" // never expose password in GET
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleSetHubConfig saves Hub MQTT credentials. Takes effect on next restart.
+// @Summary Set Hub connection config
+// @Tags routing
+// @Accept json
+// @Produce json
+// @Param body body hubConnectionConfig true "Hub MQTT credentials"
+// @Success 200 {object} hubConnectionConfig
+// @Router /api/routing/hub [put]
+func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
+	var req hubConnectionConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	prev := s.loadHubConfig()
+
+	if req.URL != "" {
+		prev.URL = req.URL
+	}
+	if req.BridgeID != "" {
+		prev.BridgeID = req.BridgeID
+	}
+	if req.Username != "" {
+		prev.Username = req.Username
+	}
+	if req.Password != "" {
+		prev.Password = req.Password
+		prev.HasPass = true
+	}
+
+	s.saveHubConfig(prev)
+
+	resp := prev
+	resp.Password = ""
+	resp.Warning = "Hub connection config saved. Restart the bridge for changes to take effect."
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) loadHubConfig() hubConnectionConfig {
+	raw, err := s.db.GetSystemConfig(hubConfigKey)
+	if err != nil || raw == "" {
+		return hubConnectionConfig{}
+	}
+	var cfg hubConnectionConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return hubConnectionConfig{}
+	}
+	return cfg
+}
+
+func (s *Server) saveHubConfig(cfg hubConnectionConfig) {
+	data, _ := json.Marshal(cfg)
+	_ = s.db.SetSystemConfig(hubConfigKey, string(data))
+}

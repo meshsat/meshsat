@@ -783,13 +783,39 @@ func main() {
 	}
 
 	// Hub Reporter — bridge-to-hub uplink (MESHSAT-280)
+	// DB-persisted config (from Settings > Routing > Hub) overrides env vars.
+	hubURL, hubBridgeID := cfg.HubURL, cfg.BridgeID
+	hubUsername, hubPassword := cfg.HubUsername, cfg.HubPassword
+	if raw, dbErr := db.GetSystemConfig("hub_connection"); dbErr == nil && raw != "" {
+		var hc struct {
+			URL      string `json:"url"`
+			BridgeID string `json:"bridge_id"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if json.Unmarshal([]byte(raw), &hc) == nil {
+			if hc.URL != "" {
+				hubURL = hc.URL
+			}
+			if hc.BridgeID != "" {
+				hubBridgeID = hc.BridgeID
+			}
+			if hc.Username != "" {
+				hubUsername = hc.Username
+			}
+			if hc.Password != "" {
+				hubPassword = hc.Password
+			}
+		}
+	}
+
 	var hubReporter *hubreporter.HubReporter
-	if cfg.HubURL != "" {
+	if hubURL != "" {
 		reporterCfg := hubreporter.ReporterConfig{
-			HubURL:         cfg.HubURL,
-			BridgeID:       cfg.BridgeID,
-			Username:       cfg.HubUsername,
-			Password:       cfg.HubPassword,
+			HubURL:         hubURL,
+			BridgeID:       hubBridgeID,
+			Username:       hubUsername,
+			Password:       hubPassword,
 			TLSCert:        cfg.HubTLSCert,
 			TLSKey:         cfg.HubTLSKey,
 			HealthInterval: time.Duration(cfg.HubHealthInterval) * time.Second,
@@ -814,11 +840,11 @@ func main() {
 			}
 			hostname, _ := os.Hostname()
 			if hostname == "" {
-				hostname = cfg.BridgeID
+				hostname = hubBridgeID
 			}
 			birth := hubreporter.BridgeBirth{
 				Protocol:     hubreporter.ProtocolVersion,
-				BridgeID:     cfg.BridgeID,
+				BridgeID:     hubBridgeID,
 				Version:      "0.20.0",
 				Hostname:     hostname,
 				Mode:         cfg.Mode,
@@ -826,7 +852,7 @@ func main() {
 				Interfaces:   ifaces,
 				Capabilities: caps,
 				CoTType:      hubreporter.CoTBridge,
-				CoTCallsign:  "MESHSAT-" + cfg.BridgeID,
+				CoTCallsign:  "MESHSAT-" + hubBridgeID,
 				Timestamp:    time.Now().UTC(),
 			}
 			if routingID != nil {
@@ -841,7 +867,7 @@ func main() {
 			sys := sysinfo.Collect(cfg.DBPath)
 			health := hubreporter.BridgeHealth{
 				Protocol:  hubreporter.ProtocolVersion,
-				BridgeID:  cfg.BridgeID,
+				BridgeID:  hubBridgeID,
 				UptimeSec: int64(time.Since(startTime).Seconds()),
 				CPUPct:    sys.CPUPct,
 				MemPct:    sys.MemPct,
@@ -889,7 +915,7 @@ func main() {
 		hubReporter.SetOutbox(outbox)
 
 		// Command handler — processes commands from the Hub (ping, send_mt, etc.)
-		cmdHandler := hubreporter.NewCommandHandler(hubReporter, cfg.BridgeID, healthFn)
+		cmdHandler := hubreporter.NewCommandHandler(hubReporter, hubBridgeID, healthFn)
 		cmdHandler.SetDeps(hubreporter.CommandDeps{
 			SendText: func(ifaceID, text string) (int64, string, error) {
 				return dispatcher.QueueDirectSend(ifaceID, text)
@@ -907,7 +933,7 @@ func main() {
 		if err := hubReporter.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("hub reporter start failed")
 		} else {
-			log.Info().Str("hub", cfg.HubURL).Str("bridge_id", cfg.BridgeID).Msg("hub reporter started")
+			log.Info().Str("hub", hubURL).Str("bridge_id", hubBridgeID).Msg("hub reporter started")
 		}
 	}
 
