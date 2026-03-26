@@ -193,7 +193,7 @@ deploy:
     - package
   parallel:
     matrix:
-      - DEPLOY_TARGET: [mule01, bananapi01]
+      - DEPLOY_TARGET: [mule01, rocket01]
   before_script:
     - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
