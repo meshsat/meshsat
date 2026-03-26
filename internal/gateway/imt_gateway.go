@@ -79,7 +79,10 @@ func (g *IMTGateway) Start(ctx context.Context) error {
 	// IMT: NO credit budgets — sendIMT() doesn't call budgetAllows()
 	// IMT: DLQ skips MOBufferEmpty — moBufferEmpty() returns error for non-SBD
 
-	// Start pass scheduler if configured (both SBD and IMT use Iridium NEXT LEO)
+	// Start pass scheduler if configured.
+	// Both SBD and IMT use the same Iridium NEXT LEO constellation — pass scheduling
+	// is valuable for both in canyon/restricted-sky environments.
+	// GSS success rate tracking uses per-modem source keys (imt_gss) and shared "gss".
 	if g.scheduler != nil {
 		g.scheduler.Start(ctx)
 	}
