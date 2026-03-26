@@ -188,3 +188,110 @@ func linkStateString(s routing.LinkState) string {
 		return "unknown"
 	}
 }
+
+// handleGetFloodable returns the floodable status of all Reticulum interfaces.
+// @Summary Get interface flood control status
+// @Tags routing
+// @Produce json
+// @Success 200 {array} floodableResponse
+// @Router /api/routing/floodable [get]
+func (s *Server) handleGetFloodable(w http.ResponseWriter, r *http.Request) {
+	if s.ifaceRegistry == nil {
+		writeError(w, http.StatusServiceUnavailable, "routing not initialized")
+		return
+	}
+	ifaces := s.ifaceRegistry.All()
+	result := make([]floodableResponse, 0, len(ifaces))
+	for _, iface := range ifaces {
+		result = append(result, floodableResponse{
+			ID:        iface.ID(),
+			Type:      string(iface.Type()),
+			Cost:      iface.Cost(),
+			MTU:       iface.MTU(),
+			Online:    iface.IsOnline(),
+			Floodable: iface.IsFloodable(),
+		})
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+type floodableResponse struct {
+	ID        string  `json:"id"`
+	Type      string  `json:"type"`
+	Cost      float64 `json:"cost"`
+	MTU       int     `json:"mtu"`
+	Online    bool    `json:"online"`
+	Floodable bool    `json:"floodable"`
+}
+
+// handleSetFloodable toggles the floodable flag on a Reticulum interface.
+// Persists the override to system_config so it survives restarts.
+// @Summary Toggle interface flood control
+// @Tags routing
+// @Accept json
+// @Produce json
+// @Param ifaceID path string true "Interface ID (e.g. iridium_0)"
+// @Param body body setFloodableRequest true "Floodable flag"
+// @Success 200 {object} floodableResponse
+// @Router /api/routing/floodable/{ifaceID} [put]
+func (s *Server) handleSetFloodable(w http.ResponseWriter, r *http.Request) {
+	if s.ifaceRegistry == nil {
+		writeError(w, http.StatusServiceUnavailable, "routing not initialized")
+		return
+	}
+
+	ifaceID := chi.URLParam(r, "ifaceID")
+	iface := s.ifaceRegistry.Get(ifaceID)
+	if iface == nil {
+		writeError(w, http.StatusNotFound, "interface not found: "+ifaceID)
+		return
+	}
+
+	var req setFloodableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	iface.SetFloodable(req.Floodable)
+
+	// Persist override to system_config
+	overrides := s.loadFloodableOverrides()
+	overrides[ifaceID] = req.Floodable
+	s.saveFloodableOverrides(overrides)
+
+	writeJSON(w, http.StatusOK, floodableResponse{
+		ID:        iface.ID(),
+		Type:      string(iface.Type()),
+		Cost:      iface.Cost(),
+		MTU:       iface.MTU(),
+		Online:    iface.IsOnline(),
+		Floodable: iface.IsFloodable(),
+	})
+}
+
+type setFloodableRequest struct {
+	Floodable bool `json:"floodable"`
+}
+
+const floodableConfigKey = "reticulum_floodable_overrides"
+
+func (s *Server) loadFloodableOverrides() map[string]bool {
+	raw, err := s.db.GetSystemConfig(floodableConfigKey)
+	if err != nil || raw == "" {
+		return make(map[string]bool)
+	}
+	var m map[string]bool
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return make(map[string]bool)
+	}
+	return m
+}
+
+func (s *Server) saveFloodableOverrides(m map[string]bool) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = s.db.SetSystemConfig(floodableConfigKey, string(data))
+}

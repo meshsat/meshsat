@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -50,9 +51,9 @@ func newTestPathFinder(t *testing.T) (*PathFinder, *testSendLog) {
 	router := reticulum.NewRouter(30 * time.Minute)
 	registry := NewInterfaceRegistry()
 
-	// Register two test interfaces
+	// Register two test interfaces (both free/floodable for path discovery tests)
 	registry.Register(NewReticulumInterface("mesh_0", "mesh", 230, nil))
-	registry.Register(NewReticulumInterface("iridium_0", "iridium", 340, nil))
+	registry.Register(NewReticulumInterface("tcp_0", "tcp", 65535, nil))
 
 	identity := generateTestIdentity(t)
 	sendLog := &testSendLog{}
@@ -85,14 +86,14 @@ func TestPathFinder_HandlePathRequest_Unknown(t *testing.T) {
 
 	pf.HandlePathRequest(data, "mesh_0")
 
-	// Should flood to all interfaces except the source
-	// Registry has mesh_0 and iridium_0, source is mesh_0, so should send to iridium_0
+	// Should flood to all floodable interfaces except the source
+	// Registry has mesh_0 and tcp_0, source is mesh_0, so should send to tcp_0
 	if sendLog.count() != 1 {
 		t.Fatalf("expected 1 flood packet, got %d", sendLog.count())
 	}
 	ifaceID, _ := sendLog.last()
-	if ifaceID != "iridium_0" {
-		t.Fatalf("flood target = %q, want %q", ifaceID, "iridium_0")
+	if ifaceID != "tcp_0" {
+		t.Fatalf("flood target = %q, want %q", ifaceID, "tcp_0")
 	}
 }
 
@@ -113,9 +114,83 @@ func TestPathFinder_HandlePathRequest_Dedup(t *testing.T) {
 	}
 
 	// Duplicate should be ignored
-	pf.HandlePathRequest(data, "iridium_0")
+	pf.HandlePathRequest(data, "tcp_0")
 	if sendLog.count() != 1 {
 		t.Fatalf("duplicate request: expected still 1 packet, got %d", sendLog.count())
+	}
+}
+
+func TestPathFinder_PaidInterfacesNotFlooded(t *testing.T) {
+	router := reticulum.NewRouter(30 * time.Minute)
+	registry := NewInterfaceRegistry()
+
+	// mesh_0 is free (floodable), iridium_0 is paid (not floodable)
+	registry.Register(NewReticulumInterface("mesh_0", "mesh", 230, nil))
+	registry.Register(NewReticulumInterface("iridium_0", "iridium", 340, nil))
+
+	identity := generateTestIdentity(t)
+	sendLog := &testSendLog{}
+	config := DefaultPathFinderConfig()
+	pf := NewPathFinder(config, router, registry, identity, sendLog.send)
+
+	var destHash [reticulum.TruncatedHashLen]byte
+	destHash[0] = 0xBE
+	var tag [reticulum.TruncatedHashLen]byte
+	tag[0] = 0x77
+
+	req := &reticulum.PathRequest{DestHash: destHash, Tag: tag}
+	data := reticulum.MarshalPathRequest(req)
+
+	// Source is iridium_0, only floodable target is mesh_0
+	pf.HandlePathRequest(data, "iridium_0")
+	if sendLog.count() != 1 {
+		t.Fatalf("expected 1 flood packet (mesh_0 only), got %d", sendLog.count())
+	}
+	ifaceID, _ := sendLog.last()
+	if ifaceID != "mesh_0" {
+		t.Fatalf("flood target = %q, want %q (iridium_0 should be excluded)", ifaceID, "mesh_0")
+	}
+}
+
+func TestPathFinder_FloodableOverride(t *testing.T) {
+	router := reticulum.NewRouter(30 * time.Minute)
+	registry := NewInterfaceRegistry()
+
+	meshIface := NewReticulumInterface("mesh_0", "mesh", 230, nil)
+	iridiumIface := NewReticulumInterface("iridium_0", "iridium", 340, nil)
+	registry.Register(meshIface)
+	registry.Register(iridiumIface)
+
+	// Verify default: iridium is not floodable
+	if iridiumIface.IsFloodable() {
+		t.Fatal("iridium should not be floodable by default")
+	}
+
+	// Override: user opted in
+	iridiumIface.SetFloodable(true)
+
+	identity := generateTestIdentity(t)
+	sendLog := &testSendLog{}
+	config := DefaultPathFinderConfig()
+	pf := NewPathFinder(config, router, registry, identity, sendLog.send)
+
+	var destHash [reticulum.TruncatedHashLen]byte
+	destHash[0] = 0xCC
+	var tag [reticulum.TruncatedHashLen]byte
+	tag[0] = 0x88
+
+	req := &reticulum.PathRequest{DestHash: destHash, Tag: tag}
+	data := reticulum.MarshalPathRequest(req)
+
+	// Source is mesh_0, both mesh_0 and iridium_0 are now floodable
+	// So only iridium_0 should receive (mesh_0 excluded as source)
+	pf.HandlePathRequest(data, "mesh_0")
+	if sendLog.count() != 1 {
+		t.Fatalf("expected 1 flood packet after override, got %d", sendLog.count())
+	}
+	ifaceID, _ := sendLog.last()
+	if ifaceID != "iridium_0" {
+		t.Fatalf("flood target = %q, want %q after floodable override", ifaceID, "iridium_0")
 	}
 }
 
@@ -266,6 +341,128 @@ func TestPathFinder_Prune(t *testing.T) {
 
 	if pf.SeenCount() != 0 {
 		t.Fatalf("expected 0 seen entries after prune, got %d", pf.SeenCount())
+	}
+}
+
+func TestPathFinder_RequestTimeout(t *testing.T) {
+	router := reticulum.NewRouter(30 * time.Minute)
+	registry := NewInterfaceRegistry()
+	registry.Register(NewReticulumInterface("mesh_0", "mesh", 230, nil))
+
+	identity := generateTestIdentity(t)
+
+	config := DefaultPathFinderConfig()
+	config.RequestTimeout = 200 * time.Millisecond // very short
+
+	pf := NewPathFinder(config, router, registry, identity, func(ifaceID string, packet []byte) error {
+		return nil // send into the void
+	})
+
+	var destHash [reticulum.TruncatedHashLen]byte
+	destHash[0] = 0xFF
+
+	ctx := context.Background()
+	resp := pf.RequestPath(ctx, destHash)
+	if resp != nil {
+		t.Fatal("expected nil response (timeout)")
+	}
+}
+
+func TestPathFinder_ConcurrentRequests(t *testing.T) {
+	pf, _ := newTestPathFinder(t)
+
+	const numRequests = 10
+	var wg sync.WaitGroup
+	wg.Add(numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			var destHash [reticulum.TruncatedHashLen]byte
+			destHash[0] = byte(idx)
+
+			var tag [reticulum.TruncatedHashLen]byte
+			tag[0] = byte(idx + 100)
+
+			req := &reticulum.PathRequest{DestHash: destHash, Tag: tag}
+			data := reticulum.MarshalPathRequest(req)
+			pf.HandlePathRequest(data, "mesh_0")
+		}(i)
+	}
+	wg.Wait()
+
+	// All should have been processed (dedup with unique tags)
+	if pf.SeenCount() != numRequests {
+		t.Errorf("seen count = %d, want %d", pf.SeenCount(), numRequests)
+	}
+}
+
+func TestPathFinder_EmptyRegistry(t *testing.T) {
+	router := reticulum.NewRouter(30 * time.Minute)
+	identity := generateTestIdentity(t)
+	sendLog := &testSendLog{}
+
+	config := DefaultPathFinderConfig()
+	// nil registry
+	pf := NewPathFinder(config, router, nil, identity, sendLog.send)
+
+	var destHash [reticulum.TruncatedHashLen]byte
+	destHash[0] = 0xAB
+	var tag [reticulum.TruncatedHashLen]byte
+	tag[0] = 0xCD
+
+	req := &reticulum.PathRequest{DestHash: destHash, Tag: tag}
+	data := reticulum.MarshalPathRequest(req)
+
+	// Should not panic with nil registry — falls back to sendFn("")
+	pf.HandlePathRequest(data, "mesh_0")
+
+	// With nil registry, flood goes to sendFn with empty ifaceID
+	if sendLog.count() != 1 {
+		t.Fatalf("expected 1 packet via fallback, got %d", sendLog.count())
+	}
+	ifaceID, _ := sendLog.last()
+	if ifaceID != "" {
+		t.Errorf("expected empty ifaceID, got %q", ifaceID)
+	}
+}
+
+func TestPathFinder_ContextCancellation(t *testing.T) {
+	router := reticulum.NewRouter(30 * time.Minute)
+	registry := NewInterfaceRegistry()
+	registry.Register(NewReticulumInterface("mesh_0", "mesh", 230, nil))
+	identity := generateTestIdentity(t)
+
+	config := DefaultPathFinderConfig()
+	config.RequestTimeout = 30 * time.Second // long timeout
+
+	pf := NewPathFinder(config, router, registry, identity, func(string, []byte) error {
+		return nil
+	})
+
+	var destHash [reticulum.TruncatedHashLen]byte
+	destHash[0] = 0xEE
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		resp := pf.RequestPath(ctx, destHash)
+		if resp != nil {
+			t.Error("expected nil response after cancel")
+		}
+		close(done)
+	}()
+
+	// Cancel quickly
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// Good — returned promptly
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestPath should return promptly after context cancel")
 	}
 }
 

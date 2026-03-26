@@ -286,15 +286,17 @@ func (pf *PathFinder) floodRequest(req *reticulum.PathRequest) {
 	pf.floodRequestExcept(req, "")
 }
 
-// floodRequestExcept sends a path request to all online interfaces except the source.
+// floodRequestExcept sends a path request to all floodable interfaces except the source.
+// Only free interfaces (mesh, TCP, MQTT) are flooded — paid transports (satellite, SMS)
+// are excluded to avoid burning credits on discovery traffic.
 func (pf *PathFinder) floodRequestExcept(req *reticulum.PathRequest, exceptIface string) {
 	// Build the packet: broadcast dest hash (all zeros = "anyone who knows")
 	var broadcastDest [reticulum.TruncatedHashLen]byte
 	packet := reticulum.BuildPathRequestPacket(broadcastDest, req)
 
 	if pf.registry != nil {
-		for _, iface := range pf.registry.All() {
-			if iface.ID() == exceptIface || !iface.IsOnline() {
+		for _, iface := range pf.registry.Floodable() {
+			if iface.ID() == exceptIface {
 				continue
 			}
 			if err := pf.sendFn(iface.ID(), packet); err != nil {
@@ -340,8 +342,8 @@ func (pf *PathFinder) sendKnownResponse(req *reticulum.PathRequest, route *retic
 func (pf *PathFinder) relayResponse(resp *reticulum.PathResponse, exceptIface string) {
 	packet := reticulum.BuildPathResponsePacket(resp.DestHash, resp)
 	if pf.registry != nil {
-		for _, iface := range pf.registry.All() {
-			if iface.ID() == exceptIface || !iface.IsOnline() {
+		for _, iface := range pf.registry.Floodable() {
+			if iface.ID() == exceptIface {
 				continue
 			}
 			if err := pf.sendFn(iface.ID(), packet); err != nil {

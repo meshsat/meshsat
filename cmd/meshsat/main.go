@@ -13,6 +13,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"encoding/base64"
+
 	"meshsat/internal/api"
 	"meshsat/internal/channel"
 	"meshsat/internal/compress"
@@ -414,6 +416,27 @@ func main() {
 		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized")
 	}
 
+	// Interface registry — wraps all transports as named Reticulum interfaces
+	// for the Transport Node to route packets between.
+	var ifaceReg *routing.InterfaceRegistry
+	if routingID != nil {
+		ifaceReg = routing.NewInterfaceRegistry()
+
+		// LoRa/Meshtastic — free, ~230 byte MTU (SF7), PRIVATE_APP portnum 256
+		ifaceReg.Register(routing.NewReticulumInterface("mesh_0", "mesh", 230, func(fwdCtx context.Context, packet []byte) error {
+			return mesh.SendRaw(fwdCtx, transport.RawRequest{
+				PortNum: 256, // PRIVATE_APP
+				Payload: base64.StdEncoding.EncodeToString(packet),
+			})
+		}))
+		proc.RegisterPacketSender("mesh_0", func(sendCtx context.Context, data []byte) error {
+			return mesh.SendRaw(sendCtx, transport.RawRequest{
+				PortNum: 256,
+				Payload: base64.StdEncoding.EncodeToString(data),
+			})
+		})
+	}
+
 	// TCP/HDLC — RNS-compatible Reticulum interface over TCP
 	var tcpIface *routing.TCPInterface
 	if cfg.TCPListenAddr != "" || cfg.TCPConnectAddr != "" {
@@ -431,9 +454,10 @@ func main() {
 			log.Error().Err(err).Msg("tcp interface start failed")
 			tcpIface = nil
 		} else {
-			// Register TCP as a packet sender so the processor can route
-			// link proofs and data packets back to TCP peers.
 			proc.RegisterPacketSender("tcp_0", tcpIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(routing.NewReticulumInterface("tcp_0", "tcp", 65535, tcpIface.Send))
+			}
 			log.Info().Str("listen", cfg.TCPListenAddr).Str("connect", cfg.TCPConnectAddr).Msg("tcp reticulum interface started")
 		}
 	}
@@ -453,6 +477,9 @@ func main() {
 			log.Error().Err(err).Msg("iridium reticulum interface start failed")
 		} else {
 			proc.RegisterPacketSender("iridium_0", sbdIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(routing.NewReticulumInterface("iridium_0", "iridium", 340, sbdIface.Send))
+			}
 			log.Info().Msg("iridium SBD reticulum interface started")
 		}
 	}
@@ -469,6 +496,9 @@ func main() {
 			log.Error().Err(err).Msg("IMT reticulum interface start failed")
 		} else {
 			proc.RegisterPacketSender("iridium_imt_0", imtIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(routing.NewReticulumInterface("iridium_imt_0", "iridium", 102400, imtIface.Send))
+			}
 			log.Info().Msg("iridium IMT reticulum interface started")
 		}
 	}
@@ -485,7 +515,47 @@ func main() {
 			log.Error().Err(err).Msg("astrocast reticulum interface start failed")
 		} else {
 			proc.RegisterPacketSender("astrocast_0", astroIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(routing.NewReticulumInterface("astrocast_0", "astrocast", 160, astroIface.Send))
+			}
 			log.Info().Msg("astrocast reticulum interface started")
+		}
+	}
+
+	// Transport Node — cross-interface packet forwarding via routing table.
+	// This is what makes the bridge a Reticulum relay: packets received on one
+	// interface (e.g. TCP) are forwarded to the best route (e.g. satellite).
+	var transportNode *routing.TransportNode
+	var pathFinder *routing.PathFinder
+	if routingID != nil && ifaceReg != nil {
+		transportNode = routing.NewTransportNode(routingID, 30*time.Minute, ifaceReg.Send)
+		transportNode.Enable()
+		transportNode.StartExpiry(ctx)
+		proc.SetTransportNode(transportNode)
+
+		pathFinder = routing.NewPathFinder(
+			routing.DefaultPathFinderConfig(),
+			transportNode.Router(),
+			ifaceReg,
+			routingID,
+			ifaceReg.Send,
+		)
+		pathFinder.StartPruner(ctx)
+		proc.SetPathFinder(pathFinder)
+
+		log.Info().Msg("transport node enabled — cross-interface forwarding active")
+
+		// Load persisted floodable overrides from system_config
+		if raw, dbErr := db.GetSystemConfig("reticulum_floodable_overrides"); dbErr == nil && raw != "" {
+			var overrides map[string]bool
+			if json.Unmarshal([]byte(raw), &overrides) == nil {
+				for id, f := range overrides {
+					if iface := ifaceReg.Get(id); iface != nil {
+						iface.SetFloodable(f)
+						log.Info().Str("iface", id).Bool("floodable", f).Msg("applied persisted floodable override")
+					}
+				}
+			}
 		}
 	}
 
@@ -593,6 +663,9 @@ func main() {
 	if resourceXfer != nil {
 		srv.SetResourceTransfer(resourceXfer)
 	}
+	if ifaceReg != nil {
+		srv.SetInterfaceRegistry(ifaceReg)
+	}
 
 	// Key store — cross-platform key exchange with QR bundles and envelope encryption
 	if routingID != nil {
@@ -635,7 +708,7 @@ func main() {
 	// Start retention worker
 	go engine.StartRetentionWorker(ctx, db, cfg.RetentionDays)
 
-	// Periodic announce broadcasting
+	// Periodic announce broadcasting — send on all online Reticulum interfaces
 	if routingID != nil && cfg.AnnounceIntervalSec > 0 {
 		go func() {
 			broadcastAnnounce := func() {
@@ -644,8 +717,20 @@ func main() {
 					return
 				}
 				data := announce.Marshal()
-				log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Msg("broadcasting routing announce")
-				if tcpIface != nil && tcpIface.IsOnline() {
+				if ifaceReg != nil {
+					floodable := ifaceReg.Floodable()
+					ids := make([]string, len(floodable))
+					for i, f := range floodable {
+						ids[i] = f.ID()
+					}
+					log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Strs("interfaces", ids).Msg("broadcasting routing announce")
+					for _, iface := range floodable {
+						if err := iface.Send(ctx, data); err != nil {
+							log.Warn().Err(err).Str("iface", iface.ID()).Msg("failed to broadcast announce")
+						}
+					}
+				} else if tcpIface != nil && tcpIface.IsOnline() {
+					log.Info().Str("dest_hash", routingID.DestHashHex()).Int("size", len(data)).Msg("broadcasting routing announce via tcp")
 					if err := tcpIface.Send(ctx, data); err != nil {
 						log.Warn().Err(err).Msg("failed to broadcast announce via tcp")
 					}

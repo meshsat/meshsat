@@ -1317,6 +1317,21 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Routing flood control
+  const routingInterfaces = ref([])
+  async function fetchRoutingInterfaces() {
+    try {
+      const data = await api.get('/routing/floodable')
+      routingInterfaces.value = Array.isArray(data) ? data : []
+    } catch (e) { error.value = e.message }
+  }
+  async function setFloodable(ifaceID, floodable) {
+    try {
+      await api.put(`/routing/floodable/${ifaceID}`, { floodable })
+      await fetchRoutingInterfaces()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
@@ -1370,6 +1385,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     geofences, fetchGeofences, createGeofence, deleteGeofence,
     sseConnected, connectSSE, closeSSE,
     credentials, expiringCredentials, fetchCredentials, fetchExpiringCredentials,
-    uploadCredential, deleteCredential, applyCredential
+    uploadCredential, deleteCredential, applyCredential,
+    routingInterfaces, fetchRoutingInterfaces, setFloodable
   }
 })

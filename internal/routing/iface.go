@@ -18,18 +18,23 @@ type ReticulumInterface struct {
 	mtu       int
 	sendFn    func(ctx context.Context, packet []byte) error
 	online    bool
+	floodable bool // false for paid transports (satellite, SMS) — excluded from path request flooding and announce broadcasts
 	mu        sync.RWMutex
 }
 
-// NewReticulumInterface creates an interface wrapper.
+// NewReticulumInterface creates an interface wrapper. Interfaces with cost > 0
+// (satellite, cellular) are marked non-floodable by default to prevent burning
+// credits on path discovery and announce broadcasts.
 func NewReticulumInterface(id string, ifaceType reticulum.InterfaceType, mtu int, sendFn func(ctx context.Context, packet []byte) error) *ReticulumInterface {
+	cost := reticulum.InterfaceCost(ifaceType)
 	return &ReticulumInterface{
 		id:        id,
 		ifaceType: ifaceType,
-		cost:      reticulum.InterfaceCost(ifaceType),
+		cost:      cost,
 		mtu:       mtu,
 		sendFn:    sendFn,
 		online:    true,
+		floodable: cost == 0,
 	}
 }
 
@@ -37,6 +42,10 @@ func (ri *ReticulumInterface) ID() string                    { return ri.id }
 func (ri *ReticulumInterface) Type() reticulum.InterfaceType { return ri.ifaceType }
 func (ri *ReticulumInterface) Cost() float64                 { return ri.cost }
 func (ri *ReticulumInterface) MTU() int                      { return ri.mtu }
+func (ri *ReticulumInterface) IsFloodable() bool             { return ri.floodable }
+
+// SetFloodable overrides the default floodable flag for this interface.
+func (ri *ReticulumInterface) SetFloodable(f bool) { ri.floodable = f }
 
 func (ri *ReticulumInterface) SetOnline(online bool) {
 	ri.mu.Lock()
@@ -125,6 +134,21 @@ func (r *InterfaceRegistry) All() []*ReticulumInterface {
 	result := make([]*ReticulumInterface, 0, len(r.ifaces))
 	for _, iface := range r.ifaces {
 		result = append(result, iface)
+	}
+	return result
+}
+
+// Floodable returns all online interfaces that are safe to flood
+// (path requests, announce broadcasts). Paid transports (satellite, SMS)
+// are excluded to avoid burning credits on discovery traffic.
+func (r *InterfaceRegistry) Floodable() []*ReticulumInterface {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]*ReticulumInterface, 0, len(r.ifaces))
+	for _, iface := range r.ifaces {
+		if iface.IsOnline() && iface.floodable {
+			result = append(result, iface)
+		}
 	}
 	return result
 }

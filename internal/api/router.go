@@ -47,6 +47,7 @@ type Server struct {
 	devSupervisor *transport.DeviceSupervisor
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
+	ifaceRegistry *routing.InterfaceRegistry
 }
 
 // NewServer creates a new API server.
@@ -157,6 +158,11 @@ func (s *Server) SetResourceTransfer(rt *routing.ResourceTransfer) {
 // SetKeyStore sets the key store for cross-platform key exchange.
 func (s *Server) SetKeyStore(ks *keystore.KeyStore) {
 	s.keyStore = ks
+}
+
+// SetInterfaceRegistry sets the Reticulum interface registry for flood control API.
+func (s *Server) SetInterfaceRegistry(reg *routing.InterfaceRegistry) {
+	s.ifaceRegistry = reg
 }
 
 // Router builds the chi router with all API routes.
@@ -424,6 +430,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/links/{id}", s.handleDeleteLink)
 		r.Get("/routing/destinations", s.handleGetRoutingDestinations)
 		r.Get("/routing/identity", s.handleGetRoutingIdentity)
+		r.Get("/routing/floodable", s.handleGetFloodable)
+		r.Put("/routing/floodable/{ifaceID}", s.handleSetFloodable)
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)

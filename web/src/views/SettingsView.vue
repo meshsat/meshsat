@@ -20,6 +20,7 @@ const tabs = [
   { id: 'range_test', label: 'Range Test' },
   { id: 'deadman', label: 'Dead Man' },
   { id: 'credentials', label: 'Credentials' },
+  { id: 'routing', label: 'Routing' },
   { id: 'config_mgmt', label: 'Export/Import' },
   { id: 'about', label: 'About' }
 ]
@@ -663,6 +664,20 @@ async function fetchZigBeeDevices() {
   } catch {}
 }
 
+// Routing flood control
+async function toggleFloodable(iface) {
+  const enabling = !iface.floodable
+  if (enabling && iface.cost > 0) {
+    const ok = confirm(
+      `Enable flooding on ${iface.id} ($${iface.cost}/msg)?\n\n` +
+      'Path discovery requests and announce broadcasts will be sent over this paid interface. ' +
+      'Every node in the network can trigger a message. This may incur significant costs.'
+    )
+    if (!ok) { await store.fetchRoutingInterfaces(); return }
+  }
+  await store.setFloodable(iface.id, enabling)
+}
+
 // Signal polling
 let signalTimer = null
 
@@ -677,6 +692,7 @@ onMounted(async () => {
   store.fetchSIMCards()
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt()
   store.fetchCredentials()
+  store.fetchRoutingInterfaces()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
 })
@@ -1728,6 +1744,44 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           </div>
         </div>
         <p v-else class="text-xs text-gray-500 text-center py-4">No credentials stored. Upload a certificate ZIP or PEM file above.</p>
+      </div>
+    </div>
+
+    <!-- Routing / Reticulum flood control -->
+    <div v-if="activeTab === 'routing'">
+      <div class="space-y-4">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-1">Reticulum Flood Control</h3>
+          <p class="text-xs text-gray-500 mb-4">Control which interfaces are used for path discovery flooding and announce broadcasts. Paid transports (satellite, cellular) are excluded by default to avoid burning credits on discovery traffic.</p>
+          <div v-if="store.routingInterfaces.length === 0" class="text-xs text-gray-500 text-center py-4">No Reticulum interfaces registered. Routing subsystem may not be initialized.</div>
+          <div v-else class="space-y-2">
+            <div v-for="iface in store.routingInterfaces" :key="iface.id"
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700">
+              <div class="flex items-center gap-3">
+                <span class="text-xs font-mono text-gray-200">{{ iface.id }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="iface.online ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
+                  {{ iface.online ? 'online' : 'offline' }}
+                </span>
+                <span v-if="iface.cost > 0" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400">
+                  ${{ iface.cost }}/msg
+                </span>
+                <span v-else class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">free</span>
+              </div>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <span class="text-[10px] text-gray-500">flood</span>
+                <input type="checkbox" :checked="iface.floodable"
+                  @change="toggleFloodable(iface)"
+                  class="rounded bg-gray-900 border-gray-700">
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+          <p class="text-[10px] text-gray-500 leading-relaxed">
+            <strong class="text-gray-400">Floodable</strong> interfaces receive path discovery requests, announce broadcasts, and path response relays. Enabling flood on paid transports means every path request from any node in the network will generate a message on that interface. <strong class="text-gray-400">Directed sends</strong> (known routes) always use the best interface regardless of this setting.
+          </p>
+        </div>
       </div>
     </div>
 
