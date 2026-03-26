@@ -17,32 +17,52 @@ type SignalProvider interface {
 	GetSignalFast(ctx context.Context) (*transport.SignalInfo, error)
 }
 
-// SignalRecorder polls the satellite transport for signal readings and persists
+// SignalRecorder polls satellite transports for signal readings and persists
 // them to the signal_history table. Uses GetSignalFast (non-blocking cached read)
 // so it works alongside the gateway's Subscribe without conflicting goroutines.
+// Supports multiple independent providers (e.g., SBD and IMT simultaneously).
 // Also runs a daily pruner to remove entries older than 90 days.
 type SignalRecorder struct {
-	db       *database.DB
-	provider SignalProvider
+	db        *database.DB
+	providers []namedProvider
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-// NewSignalRecorder creates a new signal recorder.
+// namedProvider pairs a signal provider with a fallback source name.
+type namedProvider struct {
+	provider     SignalProvider
+	fallbackName string // used if provider doesn't set Source on SignalInfo
+}
+
+// NewSignalRecorder creates a new signal recorder with a single provider (backward compat).
 func NewSignalRecorder(db *database.DB, provider SignalProvider) *SignalRecorder {
-	return &SignalRecorder{db: db, provider: provider}
+	return &SignalRecorder{
+		db: db,
+		providers: []namedProvider{
+			{provider: provider, fallbackName: "iridium"},
+		},
+	}
+}
+
+// AddProvider registers an additional signal provider for independent polling.
+func (sr *SignalRecorder) AddProvider(provider SignalProvider, fallbackName string) {
+	sr.providers = append(sr.providers, namedProvider{provider: provider, fallbackName: fallbackName})
 }
 
 // Start launches the signal polling loop and daily pruner.
 func (sr *SignalRecorder) Start(ctx context.Context) {
 	ctx, sr.cancel = context.WithCancel(ctx)
 
-	sr.wg.Add(2)
-	go sr.pollLoop(ctx)
+	// One poll goroutine per provider
+	sr.wg.Add(len(sr.providers) + 1)
+	for _, np := range sr.providers {
+		go sr.pollLoop(ctx, np)
+	}
 	go sr.dailyPruner(ctx)
 
-	log.Info().Msg("signal recorder started")
+	log.Info().Int("providers", len(sr.providers)).Msg("signal recorder started")
 }
 
 // Stop cancels the recorder and waits for goroutines to exit.
@@ -54,10 +74,10 @@ func (sr *SignalRecorder) Stop() {
 	log.Info().Msg("signal recorder stopped")
 }
 
-// pollLoop periodically reads the cached signal from the transport and records
+// pollLoop periodically reads the cached signal from a transport and records
 // it to the database. Uses GetSignalFast which returns the last polled value
 // without issuing serial commands — safe to call regardless of transport state.
-func (sr *SignalRecorder) pollLoop(ctx context.Context) {
+func (sr *SignalRecorder) pollLoop(ctx context.Context, np namedProvider) {
 	defer sr.wg.Done()
 
 	ticker := time.NewTicker(30 * time.Second)
@@ -70,7 +90,7 @@ func (sr *SignalRecorder) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sig, err := sr.provider.GetSignalFast(ctx)
+			sig, err := np.provider.GetSignalFast(ctx)
 			if err != nil || sig == nil {
 				continue // transport not connected yet
 			}
@@ -79,15 +99,15 @@ func (sr *SignalRecorder) pollLoop(ctx context.Context) {
 				continue
 			}
 			// Use the source key from the transport ("sbd" or "imt").
-			// HAL transport doesn't set source — fall back to "iridium" for backward compat.
+			// HAL transport doesn't set source — fall back to provider's fallback name.
 			source := sig.Source
 			if source == "" {
-				source = "iridium"
+				source = np.fallbackName
 			}
 			// Record every reading (even if same as last) for history chart continuity
 			ts := time.Now().Unix()
 			if err := sr.db.InsertSignalHistory(source, ts, float64(sig.Bars)); err != nil {
-				log.Warn().Err(err).Msg("signal recorder: insert failed")
+				log.Warn().Err(err).Str("source", source).Msg("signal recorder: insert failed")
 				continue
 			}
 			if sig.Bars != lastBars {

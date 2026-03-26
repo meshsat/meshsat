@@ -459,11 +459,17 @@ func main() {
 		}
 	})
 
-	// Signal recorder — persists Iridium signal bar readings to DB.
-	// Uses gwManager.GetIridiumSignalFast which auto-selects the active transport
-	// (9704 IMT if connected, otherwise 9603 SBD). This ensures the recorder works
-	// regardless of which modem is physically present.
-	sigRecorder := engine.NewSignalRecorder(db, gwMgr)
+	// Signal recorder — persists satellite signal bar readings to DB.
+	// Each transport is recorded independently with its own source key ("sbd" / "imt").
+	// If only one modem exists, only one poll loop runs.
+	var primaryProvider engine.SignalProvider = gwMgr // fallback: auto-select
+	if sat != nil {
+		primaryProvider = sat // direct SBD transport → writes source="sbd"
+	}
+	sigRecorder := engine.NewSignalRecorder(db, primaryProvider)
+	if imtTransport != nil {
+		sigRecorder.AddProvider(imtTransport, "imt")
+	}
 	sigRecorder.Start(ctx)
 
 	// Cellular signal recorder (optional)
