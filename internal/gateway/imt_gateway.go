@@ -74,8 +74,10 @@ func (g *IMTGateway) Start(ctx context.Context) error {
 		go g.dlqRetryWorker(ctx)
 	}
 
-	// IMT: NO ring alert listener (MT is push-based via transport events)
-	// IMT: NO poll worker (no SBDSX to poll)
+	// IMT: NO ring alert listener — MT is push-based via transport events
+	// IMT: NO poll worker — no SBDSX to poll
+	// IMT: NO credit budgets — sendIMT() doesn't call budgetAllows()
+	// IMT: DLQ skips MOBufferEmpty — moBufferEmpty() returns error for non-SBD
 
 	// Start pass scheduler if configured (both SBD and IMT use Iridium NEXT LEO)
 	if g.scheduler != nil {
