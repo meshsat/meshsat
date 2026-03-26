@@ -15,8 +15,9 @@ import (
 	"meshsat/internal/transport"
 )
 
-// IridiumGateway bridges Meshtastic mesh messages to/from an Iridium satellite modem.
-// Works with both SBD (9603, 340-byte limit) and IMT (9704, 100KB limit) transports.
+// IridiumGateway is the shared base for SBDGateway and IMTGateway.
+// Contains common fields and methods for Iridium satellite communication.
+// Do not instantiate directly — use NewSBDGateway or NewIMTGateway.
 type IridiumGateway struct {
 	config    IridiumConfig
 	sat       transport.SatTransport
@@ -34,42 +35,31 @@ type IridiumGateway struct {
 	errors          atomic.Int64
 	dlqPending      atomic.Int64
 	lastActive      atomic.Int64
-	passAttempts    atomic.Int64 // SBDIX attempts during current Active pass
-	passSuccesses   atomic.Int64 // successful SBDIX sessions during current Active pass
+	passAttempts    atomic.Int64 // satellite session attempts during current Active pass
+	passSuccesses   atomic.Int64 // successful sessions during current Active pass
 	startTime       time.Time
 
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	emitEvent EventEmitFunc
 
-	isIMT bool // true for 9704 IMT transport (100KB messages, no compact encoding needed)
+	gwLabel   string // "SBD" or "IMT" — for log messages
+	gwType    string // "iridium" or "iridium_imt" — gateway type ID
+	gssSource string // "sbd_gss" or "imt_gss" — GSS recording source key
+
+	// forwardFn is the concrete send function set by SBDGateway or IMTGateway.
+	// Used by the shared sendWorker.
+	forwardFn func(ctx context.Context, msg *transport.MeshMessage) error
 }
 
-// NewIridiumGateway creates a new Iridium SBD satellite gateway (RockBLOCK 9603).
-// If predictor is non-nil and cfg.SchedulerEnabled is true, a PassScheduler is created.
-func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *IridiumGateway {
-	gw := &IridiumGateway{
-		config: cfg,
-		sat:    sat,
-		db:     db,
-		inCh:   make(chan InboundMessage, 32),
-		outCh:  make(chan *transport.MeshMessage, 10),
-	}
-
-	if cfg.SchedulerEnabled && predictor != nil {
-		gw.scheduler = NewPassScheduler(predictor, db, cfg)
-		gw.scheduler.SetCounterSource(gw)
-	}
-
-	return gw
+// NewIridiumGateway creates a legacy SBD gateway. Use NewSBDGateway instead.
+func NewIridiumGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *SBDGateway {
+	return NewSBDGateway(cfg, sat, db, predictor)
 }
 
-// NewIridiumIMTGateway creates an Iridium IMT satellite gateway (RockBLOCK 9704).
-// IMT uses JSPR protocol with 100KB message capacity — no compact encoding needed.
-func NewIridiumIMTGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *IridiumGateway {
-	gw := NewIridiumGateway(cfg, sat, db, predictor)
-	gw.isIMT = true
-	return gw
+// NewIridiumIMTGateway creates a legacy IMT gateway. Use NewIMTGateway instead.
+func NewIridiumIMTGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.DB, predictor PassPredictor) *IMTGateway {
+	return NewIMTGateway(cfg, sat, db, predictor)
 }
 
 // SetEventEmitter sets the SSE event emitter callback.
@@ -89,65 +79,9 @@ func (g *IridiumGateway) PassSchedulerRef() *PassScheduler {
 	return g.scheduler
 }
 
-// Start subscribes to HAL Iridium SSE for ring alerts and starts the send worker.
+// Start is not implemented on the base — use SBDGateway.Start() or IMTGateway.Start().
 func (g *IridiumGateway) Start(ctx context.Context) error {
-	ctx, g.cancel = context.WithCancel(ctx)
-	g.startTime = time.Now()
-
-	// Check modem status
-	status, err := g.sat.GetStatus(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("iridium: could not get modem status")
-	} else {
-		g.connected.Store(status.Connected)
-	}
-
-	// Load pending DLQ count
-	if g.db != nil {
-		if count, err := g.db.CountPendingDeadLetters(); err == nil {
-			g.dlqPending.Store(int64(count))
-			if count > 0 {
-				log.Info().Int("pending", count).Msg("iridium: dead-letter queue has pending retries")
-			}
-		}
-	}
-
-	// Start outbound send worker
-	g.wg.Add(1)
-	go g.sendWorker(ctx)
-
-	// Start DLQ retry worker
-	if g.db != nil {
-		g.wg.Add(1)
-		go g.dlqRetryWorker(ctx)
-	}
-
-	// Start SSE listener for ring alerts
-	if g.config.AutoReceive {
-		g.wg.Add(1)
-		go g.ringAlertListener(ctx)
-	}
-
-	// Start pass scheduler if configured
-	if g.scheduler != nil {
-		g.scheduler.Start(ctx)
-	}
-
-	// Start poll worker for MT message retrieval.
-	// If poll_interval is 0 (legacy config), use 1800s as fallback.
-	// The SBDSX pre-check in MailboxCheck prevents credit waste on each poll.
-	if g.config.PollInterval <= 0 {
-		g.config.PollInterval = 1800
-	}
-	g.wg.Add(1)
-	go g.pollWorker(ctx)
-
-	schedulerMode := "disabled"
-	if g.scheduler != nil {
-		schedulerMode = "enabled"
-	}
-	log.Info().Bool("auto_receive", g.config.AutoReceive).Int("poll_interval", g.config.PollInterval).Str("scheduler", schedulerMode).Msg("iridium gateway started")
-	return nil
+	return fmt.Errorf("IridiumGateway.Start() called on base — use SBDGateway or IMTGateway")
 }
 
 // Stop shuts down the gateway.
@@ -164,10 +98,9 @@ func (g *IridiumGateway) Stop() error {
 	return nil
 }
 
-// Forward sends a message via satellite SBD synchronously.
-// Returns the actual send result so the delivery ledger reflects reality.
+// Forward is not implemented on the base — use SBDGateway.Forward() or IMTGateway.Forward().
 func (g *IridiumGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
-	return g.sendSBDSync(ctx, msg)
+	return fmt.Errorf("IridiumGateway.Forward() called on base — use SBDGateway or IMTGateway")
 }
 
 // Enqueue accepts a message for async send via the outbound queue.
@@ -181,96 +114,6 @@ func (g *IridiumGateway) Enqueue(msg *transport.MeshMessage) error {
 	}
 }
 
-// sendSBDSync sends a message via SBD/IMT and returns the actual result.
-// This is the synchronous path used by the delivery worker (via Forward).
-func (g *IridiumGateway) sendSBDSync(ctx context.Context, msg *transport.MeshMessage) error {
-	var data []byte
-	var cost int
-	var result *transport.SBDResult
-	var err error
-
-	if g.isIMT {
-		// IMT (9704): 100KB capacity — send as plaintext, no compact encoding needed
-		text := msg.DecodedText
-		if text == "" && len(msg.RawPayload) > 0 {
-			// Non-text message — send raw binary payload
-			data = msg.RawPayload
-			cost = creditCost(len(data))
-			if !g.budgetAllows(cost, 1) {
-				return fmt.Errorf("iridium_imt: budget exceeded (cost=%d)", cost)
-			}
-			result, err = g.sat.Send(ctx, data)
-		} else {
-			data = []byte(text)
-			cost = creditCost(len(data))
-			if !g.budgetAllows(cost, 1) {
-				return fmt.Errorf("iridium_imt: budget exceeded (cost=%d)", cost)
-			}
-			result, err = g.sat.SendText(ctx, text)
-		}
-	} else if canSendPlaintext(msg) {
-		// SBD (9603): short ASCII text — send as readable plaintext
-		text := msg.DecodedText
-		cost = creditCost(len(text))
-		if !g.budgetAllows(cost, 1) {
-			return fmt.Errorf("iridium: budget exceeded (cost=%d)", cost)
-		}
-		result, err = g.sat.SendText(ctx, text)
-		data = []byte(text)
-	} else {
-		// SBD (9603): non-text or long message — use compact binary encoding (340-byte limit)
-		data, err = EncodeCompact(msg, g.config.IncludePosition)
-		if err != nil {
-			g.errors.Add(1)
-			return fmt.Errorf("iridium: encode failed: %w", err)
-		}
-
-		cost = creditCost(len(data))
-		if !g.budgetAllows(cost, 1) {
-			return fmt.Errorf("iridium: budget exceeded (cost=%d)", cost)
-		}
-
-		result, err = g.sat.Send(ctx, data)
-	}
-
-	gwLabel := "SBD"
-	if g.isIMT {
-		gwLabel = "IMT"
-	}
-
-	if err != nil {
-		g.errors.Add(1)
-		g.recordGSSRegistration(false, 0)
-		return fmt.Errorf("iridium: %s send failed: %w", gwLabel, err)
-	}
-
-	g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
-
-	if !result.MOSuccess() {
-		g.errors.Add(1)
-		return fmt.Errorf("iridium: %s session failed (mo_status=%d)", gwLabel, result.MOStatus)
-	}
-
-	g.msgsOut.Add(1)
-	g.lastActive.Store(time.Now().Unix())
-	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Str("transport", gwLabel).Msg("iridium: message sent")
-	g.emit("forward", fmt.Sprintf("Iridium %s sent (mo_status=%d, packet=%d)", gwLabel, result.MOStatus, msg.ID))
-
-	if g.db != nil {
-		g.db.InsertCreditUsage(nil, cost, nil)
-		g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
-	}
-
-	// MT piggyback
-	if result.MTReceived || result.MTStatus == 1 || result.MTQueued > 0 {
-		log.Info().Bool("mt_received", result.MTReceived).Int("mt_status", result.MTStatus).
-			Int("mt_queued", result.MTQueued).Msg("iridium: MT available, piggybacking receive")
-		go g.handleRingAlert(ctx)
-	}
-
-	return nil
-}
-
 // Receive returns the inbound message channel.
 func (g *IridiumGateway) Receive() <-chan InboundMessage {
 	return g.inCh
@@ -279,7 +122,7 @@ func (g *IridiumGateway) Receive() <-chan InboundMessage {
 // Status returns the current gateway status.
 func (g *IridiumGateway) Status() GatewayStatus {
 	s := GatewayStatus{
-		Type:        "iridium",
+		Type:        g.gwType,
 		Connected:   g.connected.Load(),
 		MessagesIn:  g.msgsIn.Load(),
 		MessagesOut: g.msgsOut.Load(),
@@ -297,10 +140,7 @@ func (g *IridiumGateway) Status() GatewayStatus {
 
 // Type returns the gateway type identifier.
 func (g *IridiumGateway) Type() string {
-	if g.isIMT {
-		return "iridium_imt"
-	}
-	return "iridium"
+	return g.gwType
 }
 
 // sendWorker dequeues messages from outCh (legacy/non-dispatcher callers).
@@ -312,8 +152,10 @@ func (g *IridiumGateway) sendWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.outCh:
-			if err := g.sendSBDSync(ctx, msg); err != nil {
-				log.Error().Err(err).Uint32("packet_id", msg.ID).Msg("iridium: sendWorker failed")
+			if g.forwardFn != nil {
+				if err := g.forwardFn(ctx, msg); err != nil {
+					log.Error().Err(err).Uint32("packet_id", msg.ID).Str("gw", g.gwLabel).Msg("sendWorker failed")
+				}
 			}
 		}
 	}
@@ -1069,12 +911,7 @@ func (g *IridiumGateway) recordGSSRegistration(success bool, moStatus int) {
 		val = 1
 	}
 	ts := time.Now().Unix()
-	// Write modem-specific GSS source
-	gssSource := "sbd_gss"
-	if g.isIMT {
-		gssSource = "imt_gss"
-	}
-	if err := g.db.InsertSignalHistory(gssSource, ts, val); err != nil {
+	if err := g.db.InsertSignalHistory(g.gssSource, ts, val); err != nil {
 		log.Debug().Err(err).Msg("iridium: failed to record GSS registration")
 	}
 	// Also write combined "gss" for backward compat

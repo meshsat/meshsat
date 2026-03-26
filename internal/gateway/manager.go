@@ -188,7 +188,10 @@ func (m *Manager) GetPassScheduler() *PassScheduler {
 		if gw == nil {
 			continue
 		}
-		if igw, ok := gw.(*IridiumGateway); ok {
+		if sgw, ok := gw.(*SBDGateway); ok {
+			return sgw.PassSchedulerRef()
+		}
+		if igw, ok := gw.(*IMTGateway); ok {
 			return igw.PassSchedulerRef()
 		}
 	}
@@ -1078,7 +1081,7 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if err != nil {
 			return nil, err
 		}
-		gw := NewIridiumGateway(*cfg, sat, m.db, m.predictor)
+		gw := NewSBDGateway(*cfg, sat, m.db, m.predictor)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
 		}
@@ -1092,7 +1095,7 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if err != nil {
 			return nil, err
 		}
-		gw := NewIridiumIMTGateway(*cfg, sat, m.db, m.predictor)
+		gw := NewIMTGateway(*cfg, sat, m.db, m.predictor)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
 		}
@@ -1464,8 +1467,12 @@ func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
 		if gw == nil {
 			continue
 		}
-		if iGw, ok := gw.(*IridiumGateway); ok {
-			iGw.ManualMailboxCheck(ctx)
+		if sgw, ok := gw.(*SBDGateway); ok {
+			sgw.ManualMailboxCheck(ctx)
+			return nil
+		}
+		if igw, ok := gw.(*IMTGateway); ok {
+			igw.ManualMailboxCheck(ctx)
 			return nil
 		}
 	}
