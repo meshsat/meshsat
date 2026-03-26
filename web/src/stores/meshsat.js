@@ -1271,6 +1271,49 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Credentials (cert/credential management)
+  const credentials = ref([])
+  const expiringCredentials = ref([])
+
+  async function fetchCredentials() {
+    try {
+      const data = await api.get('/credentials')
+      credentials.value = data?.credentials || []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function fetchExpiringCredentials(days = 30) {
+    try {
+      const data = await api.get('/credentials/expiry', { days })
+      expiringCredentials.value = data?.credentials || []
+    } catch (e) { error.value = e.message }
+  }
+
+  async function uploadCredential(file, provider, name) {
+    error.value = null
+    try {
+      const result = await api.upload('/credentials/upload', file, { provider, name })
+      await fetchCredentials()
+      return result
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function deleteCredential(id) {
+    error.value = null
+    try {
+      await api.del(`/credentials/${id}`)
+      await fetchCredentials()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
+  async function applyCredential(id) {
+    error.value = null
+    try {
+      await api.post(`/credentials/${id}/apply`)
+      await fetchCredentials()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
@@ -1322,6 +1365,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     deadmanEnabled, deadmanTimeout, deadmanConfig, fetchDeadmanConfig, setDeadmanConfig,
     burstStatus, fetchBurstStatus, flushBurst,
     geofences, fetchGeofences, createGeofence, deleteGeofence,
-    sseConnected, connectSSE, closeSSE
+    sseConnected, connectSSE, closeSSE,
+    credentials, expiringCredentials, fetchCredentials, fetchExpiringCredentials,
+    uploadCredential, deleteCredential, applyCredential
   }
 })

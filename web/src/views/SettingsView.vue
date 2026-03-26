@@ -19,6 +19,7 @@ const tabs = [
   { id: 'store_forward', label: 'S&F' },
   { id: 'range_test', label: 'Range Test' },
   { id: 'deadman', label: 'Dead Man' },
+  { id: 'credentials', label: 'Credentials' },
   { id: 'config_mgmt', label: 'Export/Import' },
   { id: 'about', label: 'About' }
 ]
@@ -30,6 +31,55 @@ const radioEditing = ref(false)
 const radioJSON = ref('')
 
 const radioRefreshing = ref(false)
+
+// Credentials
+const credFile = ref(null)
+const credFileName = ref('')
+const credProvider = ref('')
+const credName = ref('')
+const credUploading = ref(false)
+const credUploadResult = ref('')
+
+function onCredFileSelected(e) {
+  const f = e.target.files[0]
+  if (f) {
+    credFile.value = f
+    credFileName.value = f.name
+    credUploadResult.value = ''
+  }
+}
+
+async function doUploadCred() {
+  if (!credFile.value || !credProvider.value) return
+  credUploading.value = true
+  credUploadResult.value = ''
+  try {
+    const result = await store.uploadCredential(credFile.value, credProvider.value, credName.value || credProvider.value)
+    credUploadResult.value = `Uploaded: ${result.cred_type} (${result.subject || result.fingerprint?.substring(0, 16) || 'ok'})`
+    credFile.value = null
+    credFileName.value = ''
+    credProvider.value = ''
+    credName.value = ''
+  } catch (e) {
+    credUploadResult.value = ''
+  }
+  credUploading.value = false
+}
+
+function credExpiryClass(c) {
+  if (!c.cert_not_after) return 'bg-gray-700 text-gray-400'
+  const days = Math.floor((new Date(c.cert_not_after) - Date.now()) / 86400000)
+  if (days <= 0) return 'bg-red-900 text-red-300'
+  if (days <= 30) return 'bg-amber-900 text-amber-300'
+  return 'bg-emerald-900 text-emerald-300'
+}
+
+function credExpiryLabel(c) {
+  if (!c.cert_not_after) return 'no expiry'
+  const days = Math.floor((new Date(c.cert_not_after) - Date.now()) / 86400000)
+  if (days <= 0) return 'EXPIRED'
+  return `${days}d left`
+}
 
 // Dead Man's Switch
 const deadmanSaving = ref(false)
@@ -554,6 +604,7 @@ onMounted(async () => {
   store.fetchSMSContacts()
   store.fetchSIMCards()
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman()
+  store.fetchCredentials()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
 })
@@ -1460,6 +1511,75 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
           {{ deadmanSaving ? 'Saving...' : 'Save' }}
         </button>
+      </div>
+    </div>
+
+    <!-- Credentials -->
+    <div v-if="activeTab === 'credentials'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-4">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-200 mb-1">TLS Certificates & Provider Credentials</h3>
+          <p class="text-xs text-gray-500">Upload ZIP or PEM files from providers (Cloudloop, Astrocast, etc.). Certificates are encrypted at rest.</p>
+        </div>
+
+        <!-- Upload -->
+        <div class="border border-dashed border-gray-600 rounded-lg p-4 text-center">
+          <input type="file" ref="credFileInput" accept=".zip,.pem,.crt,.key,.cer" @change="onCredFileSelected" class="hidden">
+          <button @click="$refs.credFileInput.click()" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">
+            Select ZIP or PEM File
+          </button>
+          <p v-if="credFileName" class="text-xs text-gray-400 mt-2">{{ credFileName }}</p>
+          <div v-if="credFile" class="mt-3 flex items-center gap-2 justify-center">
+            <select v-model="credProvider" class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option value="">Select provider...</option>
+              <option value="cloudloop_mqtt">Cloudloop MQTT</option>
+              <option value="cloudloop_api">Cloudloop API</option>
+              <option value="rockblock">RockBLOCK</option>
+              <option value="astrocast">Astrocast</option>
+              <option value="globalstar">Globalstar</option>
+              <option value="hub_mqtt">Hub MQTT</option>
+              <option value="tak">TAK</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input v-model="credName" placeholder="Label" class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 w-32">
+            <button @click="doUploadCred" :disabled="credUploading || !credProvider"
+              class="px-3 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500 disabled:opacity-40">
+              {{ credUploading ? 'Uploading...' : 'Upload' }}
+            </button>
+          </div>
+          <p v-if="credUploadResult" class="text-xs text-emerald-400 mt-2">{{ credUploadResult }}</p>
+        </div>
+
+        <!-- Credential list -->
+        <div v-if="store.credentials.length > 0">
+          <h4 class="text-xs font-medium text-gray-400 mb-2">Stored Credentials</h4>
+          <div class="space-y-2">
+            <div v-for="c in store.credentials" :key="c.id"
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-medium text-gray-200">{{ c.name }}</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">{{ c.provider }}</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded" :class="credExpiryClass(c)">{{ credExpiryLabel(c) }}</span>
+                  <span v-if="c.source === 'hub'" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-900 text-blue-300">Hub</span>
+                </div>
+                <div class="text-[10px] text-gray-500 mt-0.5">
+                  {{ c.cred_type }} | v{{ c.version }}
+                  <span v-if="c.cert_subject"> | {{ c.cert_subject }}</span>
+                  <span v-if="c.cert_fingerprint"> | {{ c.cert_fingerprint.substring(0, 16) }}...</span>
+                </div>
+              </div>
+              <div class="flex gap-1 ml-2">
+                <button v-if="!c.applied" @click="store.applyCredential(c.id)"
+                  class="px-2 py-1 rounded bg-teal-700 text-white text-[10px] hover:bg-teal-600">Apply</button>
+                <span v-else class="text-[10px] text-emerald-400 px-2 py-1">Active</span>
+                <button @click="store.deleteCredential(c.id)"
+                  class="px-2 py-1 rounded bg-red-900 text-red-300 text-[10px] hover:bg-red-800">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p v-else class="text-xs text-gray-500 text-center py-4">No credentials stored. Upload a certificate ZIP or PEM file above.</p>
       </div>
     </div>
 

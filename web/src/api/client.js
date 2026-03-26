@@ -43,6 +43,22 @@ export default {
   del: (path) => request('DELETE', path),
   patch: (path, body) => request('PATCH', path, body),
 
+  /** Upload a file via multipart/form-data. */
+  async upload(path, file, fields = {}) {
+    const form = new FormData()
+    form.append('file', file)
+    for (const [k, v] of Object.entries(fields)) {
+      form.append(k, v)
+    }
+    const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(text || `HTTP ${res.status}`)
+    }
+    const text = await res.text()
+    return text ? JSON.parse(text) : null
+  },
+
   /**
    * Open an SSE stream using native EventSource.
    * @param {string} path - API path (e.g., /events)
