@@ -58,6 +58,56 @@ func wakeDevice(port serial.Port) error {
 	return nil
 }
 
+// ProbeMeshtastic checks if a serial port speaks Meshtastic protocol.
+// Sends the wake sequence and looks for the 0x94 0xC3 framing header in the response.
+// Non-destructive — the device continues normal operation after probing.
+func ProbeMeshtastic(portName string) bool {
+	mode := &serial.Mode{
+		BaudRate: 115200,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+	}
+
+	p, err := serial.Open(portName, mode)
+	if err != nil {
+		return false
+	}
+	defer p.Close()
+
+	// Send Meshtastic wake sequence (32 bytes of 0xC3)
+	wake := make([]byte, meshWakeLen)
+	for i := range wake {
+		wake[i] = meshStart2
+	}
+	if _, err := p.Write(wake); err != nil {
+		return false
+	}
+
+	// Read response with timeout — Meshtastic devices respond with framed protobuf
+	// packets (config, nodeinfo) that start with 0x94 0xC3.
+	p.SetReadTimeout(500 * time.Millisecond)
+	buf := make([]byte, 256)
+	var accumulated []byte
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		n, _ := p.Read(buf)
+		if n > 0 {
+			accumulated = append(accumulated, buf[:n]...)
+			if findStartMarker(accumulated) >= 0 {
+				log.Debug().Str("port", portName).Int("bytes", len(accumulated)).Msg("meshtastic probe: framing header found")
+				return true
+			}
+		}
+		if n == 0 && len(accumulated) > 0 {
+			break // read timeout with data but no marker
+		}
+	}
+
+	return false
+}
+
 // sendFrame sends a Meshtastic framed packet: [0x94][0xC3][len_msb][len_lsb][payload].
 func sendFrame(port serial.Port, payload []byte) error {
 	if len(payload) > meshMaxPayload {
@@ -372,14 +422,19 @@ func autoDetectMeshtastic() string {
 		}
 	}
 
-	// Pass 3: ACM devices not recognized as GPS (ESP32-S3 native USB may lack sysfs VID)
+	// Pass 3: ACM devices not recognized as GPS (ESP32-S3 native USB may lack sysfs VID).
+	// Probe each candidate with a Meshtastic wake sequence to avoid false positives
+	// on laptops and machines with non-Meshtastic ACM devices (MESHSAT-331).
 	for _, port := range acmPorts {
 		vidpid := findUSBVIDPID(port)
 		if gpsVIDPIDs[vidpid] || knownCellularVIDPIDs[vidpid] {
 			continue
 		}
-		log.Info().Str("port", port).Msg("meshtastic auto-detected (ACM fallback)")
-		return port
+		if ProbeMeshtastic(port) {
+			log.Info().Str("port", port).Msg("meshtastic auto-detected (ACM fallback, probe confirmed)")
+			return port
+		}
+		log.Debug().Str("port", port).Msg("meshtastic: ACM port did not respond to probe, skipping")
 	}
 
 	return ""
