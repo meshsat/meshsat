@@ -536,6 +536,50 @@ func main() {
 		}
 	}
 
+	// AX.25/APRS Reticulum interface — bidirectional via Direwolf KISS TNC
+	if cfg.AX25KISSAddr != "" {
+		ax25Iface := routing.NewAX25Interface(routing.AX25InterfaceConfig{
+			Name:     "ax25_0",
+			KISSAddr: cfg.AX25KISSAddr,
+			Callsign: cfg.AX25Callsign,
+		}, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("ax25_0: received reticulum packet via KISS")
+			proc.InjectReticulumPacket(packet, "ax25_0")
+		})
+		if err := ax25Iface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("ax25 reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("ax25_0", ax25Iface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(routing.NewReticulumInterface("ax25_0", "aprs", 256, ax25Iface.Send))
+			}
+			log.Info().Str("kiss", cfg.AX25KISSAddr).Str("call", cfg.AX25Callsign).Msg("ax25 reticulum interface started")
+		}
+	}
+
+	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh
+	if cfg.MQTTReticulumBroker != "" {
+		mqttIface := routing.NewMQTTInterface(routing.MQTTInterfaceConfig{
+			Name:        "mqtt_rns_0",
+			BrokerURL:   cfg.MQTTReticulumBroker,
+			ClientID:    "meshsat-rns-" + cfg.BridgeID,
+			TopicPrefix: cfg.MQTTReticulumPrefix,
+			QoS:         1,
+		}, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("mqtt_rns_0: received reticulum packet")
+			proc.InjectReticulumPacket(packet, "mqtt_rns_0")
+		})
+		if err := mqttIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("mqtt reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("mqtt_rns_0", mqttIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(routing.NewReticulumInterface("mqtt_rns_0", "mqtt", 65535, mqttIface.Send))
+			}
+			log.Info().Str("broker", cfg.MQTTReticulumBroker).Msg("mqtt reticulum interface started")
+		}
+	}
+
 	// Transport Node — cross-interface packet forwarding via routing table.
 	// This is what makes the bridge a Reticulum relay: packets received on one
 	// interface (e.g. TCP) are forwarded to the best route (e.g. satellite).

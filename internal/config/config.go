@@ -48,6 +48,18 @@ type Config struct {
 	// Remote RNS node to connect to (e.g. "rns-node.example.com:4242"). Empty = disabled.
 	TCPConnectAddr string
 
+	// AX.25/APRS Reticulum interface — bidirectional via Direwolf KISS TNC
+	// Direwolf TCP KISS address (e.g. "localhost:8001"). Empty = disabled.
+	AX25KISSAddr string
+	// AX.25 source callsign (e.g. "MESHSAT-1"). Required if KISS addr is set.
+	AX25Callsign string
+
+	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh
+	// MQTT broker URL (e.g. "tcp://broker:1883"). Empty = disabled.
+	MQTTReticulumBroker string
+	// MQTT topic prefix (default "reticulum/meshsat")
+	MQTTReticulumPrefix string
+
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
 
@@ -87,6 +99,10 @@ func Load() *Config {
 		MSVQSCCodebook:      envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
 		TCPListenAddr:       envStr("MESHSAT_TCP_LISTEN", ""),
 		TCPConnectAddr:      envStr("MESHSAT_TCP_CONNECT", ""),
+		AX25KISSAddr:        envStr("MESHSAT_AX25_KISS_ADDR", ""),
+		AX25Callsign:        envStr("MESHSAT_AX25_CALLSIGN", ""),
+		MQTTReticulumBroker: envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
+		MQTTReticulumPrefix: envStr("MESHSAT_MQTT_RETICULUM_PREFIX", "reticulum/meshsat"),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
