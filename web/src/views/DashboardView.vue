@@ -120,10 +120,10 @@ const iridiumStatus = computed(() => {
   return { dot: 'bg-red-400', text: 'Disconnected' }
 })
 const dlqPending = computed(() => {
-  // Count pending from deliveries (unified) first, fall back to DLQ
-  const dels = store.deliveries || []
-  if (dels.length) return dels.filter(d => d.status === 'pending' || d.status === 'held').length
-  return (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length
+  // Count pending from both deliveries and DLQ (direct API queue items)
+  const delCount = (store.deliveries || []).filter(d => d.status === 'pending' || d.status === 'held').length
+  const dlqCount = (store.dlq || []).filter(d => d.status === 'pending' || !d.status).length
+  return delCount + dlqCount
 })
 const lastSatTx = computed(() => {
   const sent = (store.dlq || []).filter(d => d.status === 'sent' && d.direction === 'outbound')
@@ -520,7 +520,8 @@ function dlqStatusColor(status) {
 // ── Unified message queue (all sources, sorted by date newest first) ──
 // Channel label/color mapping for deliveries
 function deliveryLabel(channel) {
-  if (channel?.startsWith('iridium')) return { label: isIMT.value ? 'IMT' : 'SBD', color: 'text-tactical-iridium' }
+  if (channel?.includes('imt')) return { label: 'IMT', color: 'text-tactical-iridium' }
+  if (channel?.startsWith('iridium')) return { label: 'SBD', color: 'text-tactical-iridium' }
   if (channel?.startsWith('cellular')) return { label: 'SMS', color: 'text-sky-400' }
   if (channel?.startsWith('mqtt')) return { label: 'MQTT', color: 'text-purple-400' }
   if (channel?.startsWith('astrocast')) return { label: 'ASTR', color: 'text-orange-400' }
@@ -547,7 +548,7 @@ const unifiedQueue = computed(() => {
     const ch = deliveryLabel(d.channel)
     const isInbound = d.visited && !d.visited.includes(d.channel)
     items.push({
-      _type: d.channel?.startsWith('iridium') ? (isIMT.value ? 'imt' : 'sbd') : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
+      _type: d.channel?.includes('imt') ? 'imt' : d.channel?.startsWith('iridium') ? 'sbd' : d.channel?.startsWith('cellular') ? 'sms' : d.channel || 'unknown',
       _key: 'del-' + d.id,
       _time: d.updated_at || d.created_at,
       _dir: isInbound ? 'IN' : 'OUT',
@@ -566,13 +567,18 @@ const unifiedQueue = computed(() => {
   // Satellite queue items (DLQ: direct API sends, retries, received MT).
   // Always include — these records come from InsertSentRecord/InsertInboundReceiveRecord
   // which are NOT duplicated in the delivery ledger for direct API sends.
-  // When deliveries exist, skip DLQ items that overlap (pending retries with matching delivery).
-  const satLabel = isIMT.value ? 'IMT' : 'SBD'
+  // Deduplicate by matching text_preview + direction against existing delivery items.
+  const delTexts = new Set(dels.map(d => (d.text_preview || '') + ':' + (d.channel || '')))
   for (const d of (store.dlq || []).filter(d => d.status !== 'expired')) {
-    // Skip DLQ pending/dead items when deliveries already show them (dispatcher path)
-    if (dels.length && (d.status === 'pending' || d.status === 'dead')) continue
+    // Skip DLQ sent/received items that already appear as deliveries (avoid double-counting)
+    if (dels.length && (d.status === 'sent' || d.status === 'received')) {
+      const key = (d.text_preview || '') + ':' + (d.direction === 'inbound' ? '' : 'iridium')
+      if (delTexts.has(key)) continue
+    }
+    // Determine SBD vs IMT from the gateway type that handled this item
+    const satLabel = (d.gateway_type === 'iridium_imt' || d.gateway_type?.includes('imt')) ? 'IMT' : 'SBD'
     items.push({
-      _type: isIMT.value ? 'imt' : 'sbd',
+      _type: satLabel === 'IMT' ? 'imt' : 'sbd',
       _key: 'sat-' + d.id,
       _time: d.updated_at || d.created_at,
       _dir: d.direction === 'inbound' ? 'IN' : 'OUT',
