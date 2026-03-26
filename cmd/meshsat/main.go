@@ -456,6 +456,22 @@ func main() {
 		}
 	}
 
+	// Astrocast Reticulum interface — wire Astronode S as Reticulum transport
+	if astro != nil {
+		astroIface := routing.NewAstrocastInterface(routing.AstrocastInterfaceConfig{
+			Name: "astrocast_0",
+		}, astro, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("astrocast_0: received reticulum packet via downlink")
+			proc.InjectReticulumPacket(packet, "astrocast_0")
+		})
+		if err := astroIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("astrocast reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("astrocast_0", astroIface.Send)
+			log.Info().Msg("astrocast reticulum interface started")
+		}
+	}
+
 	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
