@@ -257,6 +257,33 @@ func TestMQTTConfigBuildTLSConfig(t *testing.T) {
 	}
 }
 
+func TestLastMOStatusFailed(t *testing.T) {
+	tests := []struct {
+		moStatus int
+		want     bool
+	}{
+		{-1, true},  // no SBDIX attempted — treat as failed
+		{0, false},  // success
+		{1, false},  // success
+		{2, false},  // success
+		{3, false},  // success
+		{4, false},  // success
+		{5, true},   // failure
+		{17, true},  // gateway not responding
+		{32, true},  // no network service
+		{35, true},  // ISU busy
+		{36, true},  // registration cooldown
+		{100, true}, // unknown failure
+	}
+
+	for _, tt := range tests {
+		got := lastMOStatusFailed(tt.moStatus)
+		if got != tt.want {
+			t.Errorf("lastMOStatusFailed(%d) = %v, want %v", tt.moStatus, got, tt.want)
+		}
+	}
+}
+
 func TestIridiumConfigParse(t *testing.T) {
 	input := `{"forward_all":true,"poll_interval":300}`
 	cfg, err := ParseIridiumConfig(input)

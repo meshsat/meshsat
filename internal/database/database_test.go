@@ -80,7 +80,7 @@ func TestDeadLetterLifecycle(t *testing.T) {
 
 	// Update retry
 	nextRetry2 := time.Now().Add(5 * time.Minute)
-	if err := db.UpdateDeadLetterRetry(dl.ID, nextRetry2, "still failing"); err != nil {
+	if err := db.UpdateDeadLetterRetry(dl.ID, nextRetry2, "still failing", 32); err != nil {
 		t.Fatalf("update retry: %v", err)
 	}
 
@@ -101,6 +101,55 @@ func TestDeadLetterLifecycle(t *testing.T) {
 	count, _ = db.CountPendingDeadLetters()
 	if count != 0 {
 		t.Errorf("count after mark sent: got %d, want 0", count)
+	}
+}
+
+func TestDeadLetterLastMOStatus(t *testing.T) {
+	db := testDB(t)
+
+	nextRetry := time.Now().Add(-time.Minute)
+	if err := db.InsertDeadLetter(50, []byte{0xAB}, 10, nextRetry, "initial", "test mo_status"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Verify default last_mo_status is -1
+	pending, err := db.GetPendingDeadLetters(10)
+	if err != nil {
+		t.Fatalf("get pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending: got %d, want 1", len(pending))
+	}
+	if pending[0].LastMOStatus != -1 {
+		t.Errorf("initial last_mo_status: got %d, want -1", pending[0].LastMOStatus)
+	}
+
+	// Update with failure mo_status=32
+	retry1 := time.Now().Add(-30 * time.Second)
+	if err := db.UpdateDeadLetterRetry(pending[0].ID, retry1, "mo_status=32", 32); err != nil {
+		t.Fatalf("update retry: %v", err)
+	}
+
+	pending, _ = db.GetPendingDeadLetters(10)
+	if len(pending) != 1 {
+		t.Fatalf("pending after retry: got %d, want 1", len(pending))
+	}
+	if pending[0].LastMOStatus != 32 {
+		t.Errorf("last_mo_status after failure: got %d, want 32", pending[0].LastMOStatus)
+	}
+
+	// Update with success mo_status=0
+	retry2 := time.Now().Add(-10 * time.Second)
+	if err := db.UpdateDeadLetterRetry(pending[0].ID, retry2, "mo_status=0", 0); err != nil {
+		t.Fatalf("update retry 2: %v", err)
+	}
+
+	pending, _ = db.GetPendingDeadLetters(10)
+	if len(pending) != 1 {
+		t.Fatalf("pending after retry 2: got %d, want 1", len(pending))
+	}
+	if pending[0].LastMOStatus != 0 {
+		t.Errorf("last_mo_status after success: got %d, want 0", pending[0].LastMOStatus)
 	}
 }
 

@@ -407,6 +407,15 @@ func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errM
 	g.emit("forward_error", fmt.Sprintf("Iridium send failed, queued for retry: %s", errMsg))
 }
 
+// lastMOStatusFailed returns true if the DLQ entry's last SBDIX mo_status was a
+// failure code (anything outside 0-4). When the MO buffer is empty after a failure,
+// it's because the bridge cleared it with AT+SBDD0 — NOT because the ISU
+// transmitted autonomously. -1 means no SBDIX was attempted yet (first send used
+// a different error path); treat as failed to be safe.
+func lastMOStatusFailed(moStatus int) bool {
+	return moStatus < 0 || moStatus > 4
+}
+
 // dlqBackoff computes the retry backoff for a failed DLQ send based on the
 // mo_status code from the ISU AT Command Reference (MAN0009 v2).
 //
@@ -540,20 +549,34 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		}
 
 		// Pre-check: if MO buffer is empty AND we previously loaded it (retries > 0),
-		// the ISU already transmitted this message autonomously (e.g. after mo_status=32
-		// the ISU retried on its own). SBDSX is free (no satellite session, no credits).
+		// the ISU MAY have transmitted this message autonomously. SBDSX is free
+		// (no satellite session, no credits).
 		// Skip this check on first attempt — the buffer is naturally empty before we load it.
+		//
+		// IMPORTANT: After a failed SBDIX (mo_status=32/35/36 etc), the bridge clears the
+		// MO buffer with AT+SBDD0. An empty buffer after failure does NOT mean the ISU
+		// transmitted — it means WE cleared it. Only trust "already transmitted" when the
+		// last error does NOT indicate a failed mo_status.
 		if dl.Retries > 0 {
 			if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
-				if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
-					log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+				if lastMOStatusFailed(dl.LastMOStatus) {
+					// Buffer is empty because we cleared it after failure — must re-send
+					log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+						Int("last_mo_status", dl.LastMOStatus).
+						Msg("iridium: MO buffer empty after failed send — re-sending (not marking sent)")
+				} else {
+					// Buffer is empty and last attempt wasn't a known failure code —
+					// ISU likely transmitted autonomously
+					if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+						log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+					}
+					g.dlqPending.Add(-1)
+					g.msgsOut.Add(1)
+					g.lastActive.Store(time.Now().Unix())
+					log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+						Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
+					continue
 				}
-				g.dlqPending.Add(-1)
-				g.msgsOut.Add(1)
-				g.lastActive.Store(time.Now().Unix())
-				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
-					Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
-				continue
 			}
 		}
 
@@ -568,7 +591,7 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 			g.recordGSSRegistration(false, moStatus)
 			backoff := dlqBackoff(retryBase, dl.Retries, moStatus, g.getTimingParams())
 			nextRetry := time.Now().Add(backoff)
-			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
+			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error(), moStatus); updErr != nil {
 				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
 			}
 			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).
@@ -744,20 +767,26 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 		}
 
 		// Pre-check: if MO buffer is empty AND we previously loaded it (retries > 0),
-		// the ISU already transmitted this message autonomously.
-		// Skip on first attempt — buffer is naturally empty before first load.
+		// the ISU MAY have transmitted autonomously. Only trust this when last SBDIX
+		// was a success (mo_status 0-4). [MESHSAT-341]
 		if dl.Retries > 0 {
 			if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
-				if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
-					log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+				if lastMOStatusFailed(dl.LastMOStatus) {
+					log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+						Int("last_mo_status", dl.LastMOStatus).
+						Msg("iridium: MO buffer empty after failed send — re-sending (not marking sent)")
+				} else {
+					if markErr := g.db.MarkDeadLetterSent(dl.ID); markErr != nil {
+						log.Error().Err(markErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to mark dead letter sent (MO empty)")
+					}
+					g.dlqPending.Add(-1)
+					g.msgsOut.Add(1)
+					g.lastActive.Store(time.Now().Unix())
+					log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+						Str("mode", g.getTimingParams().ModeName).
+						Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
+					continue
 				}
-				g.dlqPending.Add(-1)
-				g.msgsOut.Add(1)
-				g.lastActive.Store(time.Now().Unix())
-				log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
-					Str("mode", g.getTimingParams().ModeName).
-					Msg("iridium: MO buffer empty — ISU already transmitted, marking sent")
-				continue
 			}
 		}
 
@@ -772,7 +801,7 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 			g.recordGSSRegistration(false, moStatus)
 			backoff := dlqBackoff(retryBase, dl.Retries, moStatus, g.getTimingParams())
 			nextRetry := time.Now().Add(backoff)
-			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error()); updErr != nil {
+			if updErr := g.db.UpdateDeadLetterRetry(dl.ID, nextRetry, err.Error(), moStatus); updErr != nil {
 				log.Error().Err(updErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to update DLQ retry")
 			}
 			log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).Int("retry", dl.Retries+1).

@@ -434,19 +434,20 @@ func (db *DB) HasPacket(packetID uint32) (bool, error) {
 
 // DeadLetter represents a failed satellite send queued for retry.
 type DeadLetter struct {
-	ID          int64     `db:"id" json:"id"`
-	PacketID    uint32    `db:"packet_id" json:"packet_id"`
-	Payload     []byte    `db:"payload" json:"payload"`
-	Retries     int       `db:"retries" json:"retries"`
-	MaxRetries  int       `db:"max_retries" json:"max_retries"`
-	NextRetry   time.Time `db:"next_retry" json:"next_retry"`
-	Status      string    `db:"status" json:"status"`             // pending, sent, expired, cancelled, received
-	Priority    int       `db:"priority" json:"priority"`         // 0=critical, 1=normal, 2=low
-	Direction   string    `db:"direction" json:"direction"`       // outbound (mesh→sat) or inbound (sat→mesh)
-	TextPreview string    `db:"text_preview" json:"text_preview"` // plaintext for display (binary payload is not human-readable)
-	LastError   string    `db:"last_error" json:"last_error"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+	ID           int64     `db:"id" json:"id"`
+	PacketID     uint32    `db:"packet_id" json:"packet_id"`
+	Payload      []byte    `db:"payload" json:"payload"`
+	Retries      int       `db:"retries" json:"retries"`
+	MaxRetries   int       `db:"max_retries" json:"max_retries"`
+	NextRetry    time.Time `db:"next_retry" json:"next_retry"`
+	Status       string    `db:"status" json:"status"`             // pending, sent, expired, cancelled, received
+	Priority     int       `db:"priority" json:"priority"`         // 0=critical, 1=normal, 2=low
+	Direction    string    `db:"direction" json:"direction"`       // outbound (mesh→sat) or inbound (sat→mesh)
+	TextPreview  string    `db:"text_preview" json:"text_preview"` // plaintext for display (binary payload is not human-readable)
+	LastError    string    `db:"last_error" json:"last_error"`
+	LastMOStatus int       `db:"last_mo_status" json:"last_mo_status"` // last SBDIX mo_status (-1 = none)
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // sqliteTime formats a time for SQLite DATETIME comparison (matches CURRENT_TIMESTAMP format).
@@ -576,11 +577,12 @@ func (db *DB) MarkDeadLetterSent(id int64) error {
 }
 
 // UpdateDeadLetterRetry increments retry count and schedules next attempt.
-func (db *DB) UpdateDeadLetterRetry(id int64, nextRetry time.Time, lastError string) error {
+// moStatus is the SBDIX mo_status code (-1 if no SBDIX was attempted).
+func (db *DB) UpdateDeadLetterRetry(id int64, nextRetry time.Time, lastError string, moStatus int) error {
 	_, err := db.Exec(`UPDATE dead_letters
-		SET retries = retries + 1, next_retry = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+		SET retries = retries + 1, next_retry = ?, last_error = ?, last_mo_status = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
-		nextRetry.UTC().Format(sqliteTimeFormat), lastError, id)
+		nextRetry.UTC().Format(sqliteTimeFormat), lastError, moStatus, id)
 	return err
 }
 

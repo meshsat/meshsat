@@ -768,6 +768,12 @@ var migrations = []string{
 		SELECT id, type, type || '_0', enabled, config, updated_at FROM gateway_config;
 	DROP TABLE gateway_config;
 	ALTER TABLE gateway_config_new RENAME TO gateway_config;`,
+
+	// v34: Track last mo_status per DLQ entry [MESHSAT-341].
+	// Prevents false-positive "already transmitted" when MO buffer is empty
+	// after the bridge cleared it following a failed SBDIX (mo_status=32/36).
+	// -1 = no SBDIX attempted yet.
+	`ALTER TABLE dead_letters ADD COLUMN last_mo_status INTEGER NOT NULL DEFAULT -1;`,
 }
 
 func (db *DB) migrate() error {
