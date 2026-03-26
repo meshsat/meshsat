@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -117,15 +118,25 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 		ExportedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
+	// Redact encryption keys from transform chains unless explicitly requested.
+	// Keys in plaintext config exports are a security risk (MESHSAT-339 audit finding).
+	includeKeys := r.URL.Query().Get("include_keys") == "true"
+
 	for _, i := range ifaces {
+		ingress := i.IngressTransforms
+		egress := i.EgressTransforms
+		if !includeKeys {
+			ingress = redactTransformKeys(ingress)
+			egress = redactTransformKeys(egress)
+		}
 		export.Interfaces = append(export.Interfaces, InterfaceExport{
 			ID:                i.ID,
 			ChannelType:       i.ChannelType,
 			Label:             i.Label,
 			Enabled:           i.Enabled,
 			Config:            i.Config,
-			IngressTransforms: i.IngressTransforms,
-			EgressTransforms:  i.EgressTransforms,
+			IngressTransforms: ingress,
+			EgressTransforms:  egress,
 		})
 	}
 
@@ -457,4 +468,29 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Interface("counts", counts).Msg("config import complete")
 	writeJSON(w, http.StatusOK, counts)
+}
+
+// redactTransformKeys replaces encryption key values in transform JSON with [REDACTED].
+// Transform JSON format: [{"type":"encrypt","params":{"key":"a1b2c3..."}}]
+func redactTransformKeys(transforms string) string {
+	if transforms == "" || transforms == "[]" {
+		return transforms
+	}
+	// Simple regex-free approach: unmarshal, redact, remarshal
+	var chain []map[string]interface{}
+	if err := json.Unmarshal([]byte(transforms), &chain); err != nil {
+		return transforms // unparseable, return as-is
+	}
+	for _, t := range chain {
+		if params, ok := t["params"].(map[string]interface{}); ok {
+			if _, hasKey := params["key"]; hasKey {
+				params["key"] = "[REDACTED]"
+			}
+		}
+	}
+	out, err := json.Marshal(chain)
+	if err != nil {
+		return transforms
+	}
+	return string(out)
 }

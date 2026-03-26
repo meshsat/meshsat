@@ -1799,6 +1799,82 @@ func (db *DB) TouchSIMCardLastSeen(iccid string) error {
 	return err
 }
 
+// ---- Key Bundles (cross-platform key exchange) ----
+
+// KeyBundleRow represents a stored key bundle entry.
+type KeyBundleRow struct {
+	ID           int64  `db:"id"`
+	ChannelType  string `db:"channel_type"`
+	Address      string `db:"address"`
+	EncryptedKey []byte `db:"encrypted_key"`
+	KeyVersion   int    `db:"key_version"`
+	Status       string `db:"status"`
+	ExpiresAt    string `db:"expires_at"`
+	CreatedAt    string `db:"created_at"`
+}
+
+// InsertKeyBundle stores a wrapped key.
+func (db *DB) InsertKeyBundle(channelType, address string, encryptedKey []byte, version int) error {
+	_, err := db.Exec(
+		`INSERT INTO key_bundles (channel_type, address, encrypted_key, key_version) VALUES (?, ?, ?, ?)`,
+		channelType, address, encryptedKey, version)
+	return err
+}
+
+// GetActiveKeyBundle returns the active key for a channel+address.
+func (db *DB) GetActiveKeyBundle(channelType, address string) (*KeyBundleRow, error) {
+	var row KeyBundleRow
+	err := db.Get(&row,
+		`SELECT * FROM key_bundles WHERE channel_type = ? AND address = ? AND status = 'active'
+		 ORDER BY key_version DESC LIMIT 1`, channelType, address)
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// GetLatestKeyVersion returns the highest key version for a channel+address.
+func (db *DB) GetLatestKeyVersion(channelType, address string) (int, error) {
+	var version int
+	err := db.QueryRow(
+		`SELECT COALESCE(MAX(key_version), 0) FROM key_bundles WHERE channel_type = ? AND address = ?`,
+		channelType, address).Scan(&version)
+	return version, err
+}
+
+// RetireKeyBundle retires the active key for a channel+address with an expiry time.
+func (db *DB) RetireKeyBundle(channelType, address string, expiresAt time.Time) error {
+	_, err := db.Exec(
+		`UPDATE key_bundles SET status = 'retired', expires_at = ? WHERE channel_type = ? AND address = ? AND status = 'active'`,
+		expiresAt.Format("2006-01-02 15:04:05"), channelType, address)
+	return err
+}
+
+// RevokeKeyBundle revokes all keys for a channel+address.
+func (db *DB) RevokeKeyBundle(channelType, address string) error {
+	_, err := db.Exec(
+		`UPDATE key_bundles SET status = 'revoked' WHERE channel_type = ? AND address = ?`,
+		channelType, address)
+	return err
+}
+
+// ListKeyBundles returns all key bundles (for admin listing).
+func (db *DB) ListKeyBundles() ([]KeyBundleRow, error) {
+	var rows []KeyBundleRow
+	err := db.Select(&rows, `SELECT * FROM key_bundles ORDER BY channel_type, address, key_version DESC`)
+	return rows, err
+}
+
+// KeyBundleStats returns counts by status.
+func (db *DB) KeyBundleStats() (active, retired, revoked int, err error) {
+	err = db.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status='retired' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status='revoked' THEN 1 ELSE 0 END), 0)
+		FROM key_bundles`).Scan(&active, &retired, &revoked)
+	return
+}
+
 // ---- Received Resources (Reticulum resource transfer) ----
 
 // ReceivedResource represents a file received via Reticulum resource transfer.

@@ -21,6 +21,7 @@ import (
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
 	"meshsat/internal/hubreporter"
+	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -590,6 +591,17 @@ func main() {
 	}
 	if resourceXfer != nil {
 		srv.SetResourceTransfer(resourceXfer)
+	}
+
+	// Key store — cross-platform key exchange with QR bundles and envelope encryption
+	if routingID != nil {
+		ks, ksErr := keystore.NewKeyStore(db, routingID, os.Getenv("MESHSAT_KEY_PASSPHRASE"))
+		if ksErr != nil {
+			log.Error().Err(ksErr).Msg("key store init failed — key exchange disabled")
+		} else {
+			srv.SetKeyStore(ks)
+			log.Info().Msg("key store initialized")
+		}
 	}
 	srv.SetOnMOCallback(func(imei string) {
 		if err := db.TouchDeviceLastSeen(imei); err != nil {

@@ -787,6 +787,21 @@ var migrations = []string{
 		source_iface TEXT NOT NULL DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`,
+
+	// v36: Key bundles table for cross-platform key exchange.
+	// Stores AES-256 keys wrapped with master key envelope encryption.
+	`CREATE TABLE IF NOT EXISTS key_bundles (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		channel_type  TEXT NOT NULL,
+		address       TEXT NOT NULL,
+		encrypted_key BLOB NOT NULL,
+		key_version   INTEGER NOT NULL DEFAULT 1,
+		status        TEXT NOT NULL DEFAULT 'active',
+		expires_at    DATETIME,
+		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(channel_type, address, key_version)
+	);
+	CREATE INDEX IF NOT EXISTS idx_key_bundles_lookup ON key_bundles(channel_type, address, status);`,
 }
 
 func (db *DB) migrate() error {

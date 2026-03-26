@@ -11,6 +11,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -45,6 +46,7 @@ type Server struct {
 	onMOCallback  func(imei string)
 	devSupervisor *transport.DeviceSupervisor
 	resourceXfer  *routing.ResourceTransfer
+	keyStore      *keystore.KeyStore
 }
 
 // NewServer creates a new API server.
@@ -150,6 +152,11 @@ func (s *Server) SetDeviceSupervisor(ds *transport.DeviceSupervisor) {
 // SetResourceTransfer sets the resource transfer manager for file delivery API.
 func (s *Server) SetResourceTransfer(rt *routing.ResourceTransfer) {
 	s.resourceXfer = rt
+}
+
+// SetKeyStore sets the key store for cross-platform key exchange.
+func (s *Server) SetKeyStore(ks *keystore.KeyStore) {
+	s.keyStore = ks
 }
 
 // Router builds the chi router with all API routes.
@@ -437,6 +444,14 @@ func (s *Server) Router() http.Handler {
 		r.Get("/device-registry/{id}", s.handleGetRegisteredDevice)
 		r.Put("/device-registry/{id}", s.handleUpdateRegisteredDevice)
 		r.Delete("/device-registry/{id}", s.handleDeleteRegisteredDevice)
+
+		// Key exchange (cross-platform QR key sharing)
+		r.Post("/keys/bundle", s.handleGenerateKeyBundle)
+		r.Get("/keys/bundle/qr", s.handleGetKeyBundleQR)
+		r.Post("/keys/rotate", s.handleRotateKey)
+		r.Get("/keys", s.handleListKeys)
+		r.Get("/keys/stats", s.handleGetKeyStats)
+		r.Delete("/keys/{type}/{address}", s.handleRevokeKey)
 
 		// Resource transfer (Reticulum chunked file delivery)
 		r.Get("/resources", s.handleGetResources)
