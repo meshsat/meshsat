@@ -774,6 +774,19 @@ var migrations = []string{
 	// after the bridge cleared it following a failed SBDIX (mo_status=32/36).
 	// -1 = no SBDIX attempted yet.
 	`ALTER TABLE dead_letters ADD COLUMN last_mo_status INTEGER NOT NULL DEFAULT -1;`,
+
+	// v35: Received resources table for Reticulum resource transfer [MESHSAT-199].
+	// Stores files/firmware received via chunked Reticulum delivery.
+	`CREATE TABLE IF NOT EXISTS received_resources (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		hash TEXT NOT NULL UNIQUE,
+		filename TEXT NOT NULL DEFAULT '',
+		content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+		size INTEGER NOT NULL,
+		data BLOB NOT NULL,
+		source_iface TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`,
 }
 
 func (db *DB) migrate() error {

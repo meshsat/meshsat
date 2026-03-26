@@ -352,6 +352,7 @@ func main() {
 	}
 
 	// Routing identity — load or generate Ed25519 + X25519 keypair, persist via system_config
+	var resourceXfer *routing.ResourceTransfer
 	var routingID *routing.Identity
 	var linkMgr *routing.LinkManager
 	var destTable *routing.DestinationTable
@@ -395,8 +396,15 @@ func main() {
 		proc.SetRoutingIdentity(routingID)
 
 		// Resource transfer — chunked reliable delivery over Reticulum links
-		resourceXfer := routing.NewResourceTransfer(routing.DefaultResourceTransferConfig(), func(ifaceID string, packet []byte) error {
+		resourceXfer = routing.NewResourceTransfer(routing.DefaultResourceTransferConfig(), func(ifaceID string, packet []byte) error {
 			return proc.SendReticulumPacketTo(ifaceID, packet)
+		})
+		resourceXfer.SetOnReceive(func(hash string, data []byte, iface string) {
+			log.Info().Str("hash", hash[:16]).Int("size", len(data)).Str("iface", iface).
+				Msg("resource received, persisting to DB")
+			if _, err := db.InsertReceivedResource(hash, "", "application/octet-stream", iface, data); err != nil {
+				log.Error().Err(err).Str("hash", hash[:16]).Msg("failed to persist received resource")
+			}
 		})
 		resourceXfer.StartPruner(ctx)
 		proc.SetResourceTransfer(resourceXfer)
@@ -579,6 +587,9 @@ func main() {
 	}
 	if supervisor != nil {
 		srv.SetDeviceSupervisor(supervisor)
+	}
+	if resourceXfer != nil {
+		srv.SetResourceTransfer(resourceXfer)
 	}
 	srv.SetOnMOCallback(func(imei string) {
 		if err := db.TouchDeviceLastSeen(imei); err != nil {

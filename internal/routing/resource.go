@@ -59,10 +59,15 @@ type inboundTransfer struct {
 	iface     string      // interface the advertisement came from
 }
 
+// ResourceReceiveFunc is called when a resource transfer completes successfully.
+// hash is the hex-encoded SHA-256 hash, data is the complete resource, iface is the source.
+type ResourceReceiveFunc func(hash string, data []byte, iface string)
+
 // ResourceTransfer manages chunked reliable delivery of data over Reticulum links.
 type ResourceTransfer struct {
-	config ResourceTransferConfig
-	sendFn ResourceSendFunc
+	config    ResourceTransferConfig
+	sendFn    ResourceSendFunc
+	onReceive ResourceReceiveFunc // optional: called on successful receipt
 
 	mu       sync.Mutex
 	outbound map[[reticulum.FullHashLen]byte]*outboundTransfer
@@ -287,10 +292,16 @@ func (rt *ResourceTransfer) HandleSegment(data []byte, sourceIface string) {
 		return
 	}
 
+	hashHex := fmt.Sprintf("%x", it.hash)
 	log.Info().
-		Str("hash", fmt.Sprintf("%x", it.hash[:8])).
+		Str("hash", hashHex[:16]).
 		Int("size", len(result)).
 		Msg("resource: transfer complete")
+
+	// Notify receive callback if set
+	if rt.onReceive != nil {
+		rt.onReceive(hashHex, result, sourceIface)
+	}
 
 	// Send proof
 	prf := &reticulum.ResourceProof{ResourceHash: it.hash}
@@ -385,6 +396,11 @@ func (rt *ResourceTransfer) prune() {
 			delete(rt.inbound, hash)
 		}
 	}
+}
+
+// SetOnReceive sets the callback invoked when a resource is fully received.
+func (rt *ResourceTransfer) SetOnReceive(fn ResourceReceiveFunc) {
+	rt.onReceive = fn
 }
 
 // Stats returns transfer statistics.

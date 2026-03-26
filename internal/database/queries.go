@@ -1798,3 +1798,63 @@ func (db *DB) TouchSIMCardLastSeen(iccid string) error {
 	_, err := db.Exec("UPDATE sim_cards SET last_seen=CURRENT_TIMESTAMP WHERE iccid=?", iccid)
 	return err
 }
+
+// ---- Received Resources (Reticulum resource transfer) ----
+
+// ReceivedResource represents a file received via Reticulum resource transfer.
+type ReceivedResource struct {
+	ID          int64  `db:"id" json:"id"`
+	Hash        string `db:"hash" json:"hash"`
+	Filename    string `db:"filename" json:"filename"`
+	ContentType string `db:"content_type" json:"content_type"`
+	Size        int    `db:"size" json:"size"`
+	SourceIface string `db:"source_iface" json:"source_iface"`
+	CreatedAt   string `db:"created_at" json:"created_at"`
+}
+
+// InsertReceivedResource stores a resource received via Reticulum.
+func (db *DB) InsertReceivedResource(hash, filename, contentType, sourceIface string, data []byte) (int64, error) {
+	res, err := db.Exec(
+		`INSERT OR REPLACE INTO received_resources (hash, filename, content_type, size, data, source_iface)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		hash, filename, contentType, len(data), data, sourceIface)
+	if err != nil {
+		return 0, fmt.Errorf("insert received resource: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// GetReceivedResources lists all received resources (without data blobs).
+func (db *DB) GetReceivedResources(limit int) ([]ReceivedResource, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var resources []ReceivedResource
+	err := db.Select(&resources,
+		`SELECT id, hash, filename, content_type, size, source_iface, created_at
+		 FROM received_resources ORDER BY id DESC LIMIT ?`, limit)
+	return resources, err
+}
+
+// GetReceivedResourceData retrieves the binary data for a received resource.
+func (db *DB) GetReceivedResourceData(hash string) ([]byte, error) {
+	var data []byte
+	err := db.QueryRow("SELECT data FROM received_resources WHERE hash = ?", hash).Scan(&data)
+	if err != nil {
+		return nil, fmt.Errorf("resource not found: %w", err)
+	}
+	return data, nil
+}
+
+// DeleteReceivedResource removes a received resource.
+func (db *DB) DeleteReceivedResource(hash string) error {
+	res, err := db.Exec("DELETE FROM received_resources WHERE hash = ?", hash)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("resource not found")
+	}
+	return nil
+}

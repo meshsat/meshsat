@@ -44,6 +44,7 @@ type Server struct {
 	burstQueue    *engine.BurstQueue
 	onMOCallback  func(imei string)
 	devSupervisor *transport.DeviceSupervisor
+	resourceXfer  *routing.ResourceTransfer
 }
 
 // NewServer creates a new API server.
@@ -144,6 +145,11 @@ func (s *Server) SetBurstQueue(bq *engine.BurstQueue) {
 // SetDeviceSupervisor sets the device supervisor for USB device inventory.
 func (s *Server) SetDeviceSupervisor(ds *transport.DeviceSupervisor) {
 	s.devSupervisor = ds
+}
+
+// SetResourceTransfer sets the resource transfer manager for file delivery API.
+func (s *Server) SetResourceTransfer(rt *routing.ResourceTransfer) {
+	s.resourceXfer = rt
 }
 
 // Router builds the chi router with all API routes.
@@ -431,6 +437,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/device-registry/{id}", s.handleGetRegisteredDevice)
 		r.Put("/device-registry/{id}", s.handleUpdateRegisteredDevice)
 		r.Delete("/device-registry/{id}", s.handleDeleteRegisteredDevice)
+
+		// Resource transfer (Reticulum chunked file delivery)
+		r.Get("/resources", s.handleGetResources)
+		r.Get("/resources/stats", s.handleGetResourceStats)
+		r.Post("/resources/offer", s.handleOfferResource)
+		r.Get("/resources/{hash}/data", s.handleGetResourceData)
+		r.Delete("/resources/{hash}", s.handleDeleteResource)
 
 		// Device configuration versioning (MESHSAT-99)
 		r.Get("/device-registry/{id}/config", s.handleGetDeviceConfig)
