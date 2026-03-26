@@ -1,3 +1,5 @@
+buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go v1.36.11-20260322113505-561ff4e23fef.1 h1:/a43N47vdnbi96yNQKThgsXzoQwt3Zvqpy+koScjqy8=
+buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go v1.36.11-20260322113505-561ff4e23fef.1/go.mod h1:6tgg5XfmzHK0b9vjrpWtdcPjiKc4+C+dN+cGLG19WmE=
 filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
 filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
 github.com/akhenakh/sgp4 v0.0.0-20250910232432-ca28846088fc h1:MuvZBPt391TvmQGeyKbaFM8y13OqW+Lp1bGhx/izMbg=

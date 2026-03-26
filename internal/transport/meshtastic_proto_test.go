@@ -2,6 +2,9 @@ package transport
 
 import (
 	"testing"
+
+	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
 )
 
 // ============================================================================
@@ -97,7 +100,7 @@ func TestBuildTextMessage(t *testing.T) {
 	// Should contain "Hello" as a length-delimited field
 	hello := []byte("Hello")
 	found := false
-	for i := 0; i < len(msg)-len(hello); i++ {
+	for i := 0; i+len(hello) <= len(msg); i++ {
 		match := true
 		for j := 0; j < len(hello); j++ {
 			if msg[i+j] != hello[j] {
@@ -123,7 +126,7 @@ func TestBuildRawPacket(t *testing.T) {
 	}
 	// Should contain the payload bytes
 	found := false
-	for i := 0; i < len(pkt)-3; i++ {
+	for i := 0; i+3 <= len(pkt); i++ {
 		if pkt[i] == 0x01 && pkt[i+1] == 0x02 && pkt[i+2] == 0x03 {
 			found = true
 			break
@@ -589,6 +592,438 @@ func TestBuildEncryptedPacket_RoundTrip(t *testing.T) {
 			t.Errorf("EncryptedPayload[%d] = %02x, want %02x", i, b, byte(i))
 			break
 		}
+	}
+}
+
+// ============================================================================
+// New parser tests — MESHSAT-240 coverage expansion
+// ============================================================================
+
+func TestParseData_Bitfield_OkToMQTT(t *testing.T) {
+	// Build a Data message using official proto types
+	bf := uint32(1)
+	msg := &pb.Data{
+		Portnum:  pb.PortNum_TEXT_MESSAGE_APP,
+		Payload:  []byte("hi"),
+		Bitfield: &bf,
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	d, err := parseData(data)
+	if err != nil {
+		t.Fatalf("parseData error: %v", err)
+	}
+	if d.Bitfield != 1 {
+		t.Errorf("Bitfield = %d, want 1", d.Bitfield)
+	}
+	if !d.OkToMQTT() {
+		t.Error("OkToMQTT() = false, want true")
+	}
+
+	// Test with bitfield=0 (no mqtt permission)
+	bf0 := uint32(0)
+	msg2 := &pb.Data{
+		Portnum:  pb.PortNum_TEXT_MESSAGE_APP,
+		Payload:  []byte("hi"),
+		Bitfield: &bf0,
+	}
+	data2, _ := proto.Marshal(msg2)
+	d2, _ := parseData(data2)
+	if d2.OkToMQTT() {
+		t.Error("OkToMQTT() = true, want false when bitfield=0")
+	}
+}
+
+func TestParseMeshPacket_PKIFields(t *testing.T) {
+	// Build a MeshPacket with PKI fields
+	pkt := []byte{
+		0x0D, 0x01, 0x00, 0x00, 0x00, // field 1 (from) = 1 (fixed32)
+		0x15, 0x02, 0x00, 0x00, 0x00, // field 2 (to) = 2 (fixed32)
+	}
+	// field 16 (public_key) = 32 bytes
+	pkt = append(pkt, 0x82, 0x01) // tag: (16 << 3 | 2) = 130 = 0x82 0x01
+	pkt = append(pkt, 0x20)       // length = 32
+	pubKey := make([]byte, 32)
+	for i := range pubKey {
+		pubKey[i] = byte(i + 0xA0)
+	}
+	pkt = append(pkt, pubKey...)
+	// field 17 (pki_encrypted) = true
+	pkt = append(pkt, 0x88, 0x01, 0x01) // tag: (17 << 3 | 0) = 136 = 0x88 0x01, value 1
+
+	parsed, err := parseMeshPacket(pkt)
+	if err != nil {
+		t.Fatalf("parseMeshPacket error: %v", err)
+	}
+	if !parsed.PKIEncrypted {
+		t.Error("PKIEncrypted = false, want true")
+	}
+	if len(parsed.PublicKey) != 32 {
+		t.Fatalf("PublicKey len = %d, want 32", len(parsed.PublicKey))
+	}
+	if parsed.PublicKey[0] != 0xA0 {
+		t.Errorf("PublicKey[0] = %02x, want A0", parsed.PublicKey[0])
+	}
+}
+
+func TestParsePosition_ExtendedFields(t *testing.T) {
+	latI := int32(523456789)
+	lonI := int32(-12345678)
+	gs := uint32(15)
+	gt := uint32(18000000)
+	p := &pb.Position{
+		LatitudeI:     &latI,
+		LongitudeI:    &lonI,
+		GroundSpeed:   &gs,
+		GroundTrack:   &gt,
+		FixQuality:    1,
+		FixType:       3,
+		PDOP:          250,
+		HDOP:          120,
+		VDOP:          180,
+		SatsInView:    12,
+		PrecisionBits: 32,
+	}
+	pos, err := proto.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	parsed, err := parsePosition(pos)
+	if err != nil {
+		t.Fatalf("parsePosition error: %v", err)
+	}
+	if parsed.LatitudeI != 523456789 {
+		t.Errorf("LatitudeI = %d, want 523456789", parsed.LatitudeI)
+	}
+	if parsed.GroundSpeed != 15 {
+		t.Errorf("GroundSpeed = %d, want 15", parsed.GroundSpeed)
+	}
+	if parsed.GroundTrack != 18000000 {
+		t.Errorf("GroundTrack = %d, want 18000000", parsed.GroundTrack)
+	}
+	if parsed.FixQuality != 1 {
+		t.Errorf("FixQuality = %d, want 1", parsed.FixQuality)
+	}
+	if parsed.FixType != 3 {
+		t.Errorf("FixType = %d, want 3", parsed.FixType)
+	}
+	if parsed.PDOP != 250 {
+		t.Errorf("PDOP = %d, want 250", parsed.PDOP)
+	}
+	if parsed.HDOP != 120 {
+		t.Errorf("HDOP = %d, want 120", parsed.HDOP)
+	}
+	if parsed.VDOP != 180 {
+		t.Errorf("VDOP = %d, want 180", parsed.VDOP)
+	}
+	if parsed.SatsInView != 12 {
+		t.Errorf("SatsInView = %d, want 12", parsed.SatsInView)
+	}
+	if parsed.PrecisionBits != 32 {
+		t.Errorf("PrecisionBits = %d, want 32", parsed.PrecisionBits)
+	}
+}
+
+func TestParseUser_ExtendedFields(t *testing.T) {
+	pk := make([]byte, 32)
+	for i := range pk {
+		pk[i] = byte(i)
+	}
+	unmsg := true
+	u := &pb.User{
+		Id:             "!abcd1234",
+		LongName:       "Test Node",
+		ShortName:      "TST",
+		Macaddr:        []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02},
+		HwModel:        pb.HardwareModel_HELTEC_V3,
+		Role:           2, // ROUTER
+		PublicKey:      pk,
+		IsLicensed:     true,
+		IsUnmessagable: &unmsg,
+	}
+	data, err := proto.Marshal(u)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	parsed, err := parseUser(data)
+	if err != nil {
+		t.Fatalf("parseUser error: %v", err)
+	}
+	if parsed.ID != "!abcd1234" {
+		t.Errorf("ID = %q, want !abcd1234", parsed.ID)
+	}
+	if len(parsed.Macaddr) != 6 {
+		t.Fatalf("Macaddr len = %d, want 6", len(parsed.Macaddr))
+	}
+	if parsed.Role != 2 {
+		t.Errorf("Role = %d, want 2", parsed.Role)
+	}
+	if len(parsed.PublicKey) != 32 {
+		t.Fatalf("PublicKey len = %d, want 32", len(parsed.PublicKey))
+	}
+	if !parsed.IsLicensed {
+		t.Error("IsLicensed = false, want true")
+	}
+	if !parsed.IsUnmessagable {
+		t.Error("IsUnmessagable = false, want true")
+	}
+}
+
+func TestParseNodeInfo_ExtendedFields(t *testing.T) {
+	hops := uint32(3)
+	ni := &pb.NodeInfo{
+		Num:        12345,
+		HopsAway:   &hops,
+		ViaMqtt:    true,
+		IsFavorite: true,
+	}
+	data, err := proto.Marshal(ni)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	parsed, err := parseNodeInfo(data)
+	if err != nil {
+		t.Fatalf("parseNodeInfo error: %v", err)
+	}
+	if parsed.Num != 12345 {
+		t.Errorf("Num = %d, want 12345", parsed.Num)
+	}
+	if parsed.HopsAway != 3 {
+		t.Errorf("HopsAway = %d, want 3", parsed.HopsAway)
+	}
+	if !parsed.ViaMqtt {
+		t.Error("ViaMqtt = false, want true")
+	}
+	if !parsed.IsFavorite {
+		t.Error("IsFavorite = false, want true")
+	}
+	if parsed.IsIgnored {
+		t.Error("IsIgnored = true, want false")
+	}
+}
+
+func TestParseDeviceMetadata(t *testing.T) {
+	dm := make([]byte, 0, 32)
+	// field 1: firmware_version = "2.5.6.abc1234"
+	dm = appendLengthDelimited(dm, 1, []byte("2.5.6.abc1234"))
+	// field 2: device_state_version = 23
+	dm = appendVarintField(dm, 2, 23)
+	// field 3: canShutdown = true
+	dm = appendVarintField(dm, 3, 1)
+	// field 4: hasWifi = true
+	dm = appendVarintField(dm, 4, 1)
+	// field 9: hw_model = 43
+	dm = appendVarintField(dm, 9, 43)
+
+	parsed := parseDeviceMetadata(dm)
+	if parsed.FirmwareVersion != "2.5.6.abc1234" {
+		t.Errorf("FirmwareVersion = %q, want 2.5.6.abc1234", parsed.FirmwareVersion)
+	}
+	if parsed.DeviceStateVer != 23 {
+		t.Errorf("DeviceStateVer = %d, want 23", parsed.DeviceStateVer)
+	}
+	if !parsed.CanShutdown {
+		t.Error("CanShutdown = false, want true")
+	}
+	if !parsed.HasWifi {
+		t.Error("HasWifi = false, want true")
+	}
+	if parsed.HWModel != 43 {
+		t.Errorf("HWModel = %d, want 43", parsed.HWModel)
+	}
+}
+
+func TestParsePowerMetricsProto(t *testing.T) {
+	pm := make([]byte, 0, 32)
+	// field 1: ch1_voltage (float = fixed32)
+	pm = appendTag(pm, 1, wireFixed32)
+	pm = appendFixed32(pm, 0x41480000) // 12.5
+	// field 2: ch1_current (float = fixed32)
+	pm = appendTag(pm, 2, wireFixed32)
+	pm = appendFixed32(pm, 0x3F800000) // 1.0
+
+	parsed := parsePowerMetricsProto(pm)
+	if parsed.CH1Voltage < 12.4 || parsed.CH1Voltage > 12.6 {
+		t.Errorf("CH1Voltage = %f, want ~12.5", parsed.CH1Voltage)
+	}
+	if parsed.CH1Current < 0.9 || parsed.CH1Current > 1.1 {
+		t.Errorf("CH1Current = %f, want ~1.0", parsed.CH1Current)
+	}
+}
+
+func TestParseAirQualityMetricsProto(t *testing.T) {
+	aq := make([]byte, 0, 32)
+	// field 1: pm10_standard = 5
+	aq = appendVarintField(aq, 1, 5)
+	// field 2: pm25_standard = 12
+	aq = appendVarintField(aq, 2, 12)
+	// field 3: pm100_standard = 25
+	aq = appendVarintField(aq, 3, 25)
+
+	parsed := parseAirQualityMetricsProto(aq)
+	if parsed.PM10Standard != 5 {
+		t.Errorf("PM10Standard = %d, want 5", parsed.PM10Standard)
+	}
+	if parsed.PM25Standard != 12 {
+		t.Errorf("PM25Standard = %d, want 12", parsed.PM25Standard)
+	}
+	if parsed.PM100Standard != 25 {
+		t.Errorf("PM100Standard = %d, want 25", parsed.PM100Standard)
+	}
+}
+
+func TestBuildAdminBeginCommitEditSettings(t *testing.T) {
+	begin := buildAdminBeginEditSettings(0x12345678)
+	if len(begin) == 0 {
+		t.Fatal("buildAdminBeginEditSettings returned empty")
+	}
+
+	commit := buildAdminCommitEditSettings(0x12345678)
+	if len(commit) == 0 {
+		t.Fatal("buildAdminCommitEditSettings returned empty")
+	}
+
+	// Both should be different (different admin field numbers)
+	if len(begin) == len(commit) {
+		same := true
+		for i := range begin {
+			if begin[i] != commit[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			t.Error("begin and commit produced identical output")
+		}
+	}
+}
+
+func TestBuildAdminGetDeviceMetadata(t *testing.T) {
+	data := buildAdminGetDeviceMetadata(0x12345678, 0x87654321)
+	if len(data) == 0 {
+		t.Fatal("buildAdminGetDeviceMetadata returned empty")
+	}
+	// Should be a valid ToRadio packet (starts with tag for field 1, length-delimited)
+	if data[0] != 0x0A {
+		t.Errorf("expected ToRadio tag 0x0A, got 0x%02x", data[0])
+	}
+}
+
+func TestBuildAdminShutdown(t *testing.T) {
+	data := buildAdminShutdown(0x1111, 0x2222, 5)
+	if len(data) == 0 {
+		t.Fatal("buildAdminShutdown returned empty")
+	}
+}
+
+func TestBuildAdminFavoriteIgnored(t *testing.T) {
+	fav := buildAdminSetFavorite(0x1111, 0x2222)
+	if len(fav) == 0 {
+		t.Fatal("buildAdminSetFavorite returned empty")
+	}
+	unfav := buildAdminRemoveFavorite(0x1111, 0x2222)
+	if len(unfav) == 0 {
+		t.Fatal("buildAdminRemoveFavorite returned empty")
+	}
+	ign := buildAdminSetIgnored(0x1111, 0x3333)
+	if len(ign) == 0 {
+		t.Fatal("buildAdminSetIgnored returned empty")
+	}
+	unign := buildAdminRemoveIgnored(0x1111, 0x3333)
+	if len(unign) == 0 {
+		t.Fatal("buildAdminRemoveIgnored returned empty")
+	}
+}
+
+func TestConfigSectionToEnum_NewSections(t *testing.T) {
+	if v, ok := configSectionToEnum("sessionkey"); !ok || v != ConfigTypeSessionkey {
+		t.Errorf("configSectionToEnum(sessionkey) = %d, %v", v, ok)
+	}
+	if v, ok := configSectionToEnum("device_ui"); !ok || v != ConfigTypeDeviceUI {
+		t.Errorf("configSectionToEnum(device_ui) = %d, %v", v, ok)
+	}
+}
+
+func TestModuleConfigSectionToEnum_NewSections(t *testing.T) {
+	tests := []struct {
+		name string
+		want int
+	}{
+		{"ambient_lighting", ModuleConfigAmbientLighting},
+		{"detection_sensor", ModuleConfigDetectionSensor},
+		{"paxcounter", ModuleConfigPaxcounter},
+		{"status_message", ModuleConfigStatusMessage},
+		{"traffic_management", ModuleConfigTrafficManagement},
+		{"tak_config", ModuleConfigTAKConfig},
+	}
+	for _, tt := range tests {
+		v, ok := moduleConfigSectionToEnum(tt.name)
+		if !ok || v != tt.want {
+			t.Errorf("moduleConfigSectionToEnum(%q) = %d, %v, want %d", tt.name, v, ok, tt.want)
+		}
+	}
+}
+
+func TestPortNumName_NewPortnums(t *testing.T) {
+	tests := []struct {
+		portnum int
+		want    string
+	}{
+		{PortNumTextMessageCompressed, "TEXT_MESSAGE_COMPRESSED_APP"},
+		{PortNumDetectionSensor, "DETECTION_SENSOR_APP"},
+		{PortNumAlert, "ALERT_APP"},
+		{PortNumReply, "REPLY_APP"},
+		{PortNumMapReport, "MAP_REPORT_APP"},
+	}
+	for _, tt := range tests {
+		got := portNumName(tt.portnum)
+		if got != tt.want {
+			t.Errorf("portNumName(%d) = %q, want %q", tt.portnum, got, tt.want)
+		}
+	}
+}
+
+func TestBuildMeshPacketOpts_ViaMqtt(t *testing.T) {
+	data := []byte{0x08, 0x01} // minimal Data with portnum=1
+	pkt := buildMeshPacketOpts(data, 0xFFFFFFFF, 0, true)
+
+	parsed, err := parseMeshPacket(pkt)
+	if err != nil {
+		t.Fatalf("parseMeshPacket error: %v", err)
+	}
+	if !parsed.ViaMqtt {
+		t.Error("ViaMqtt = false, want true when viaMqtt=true")
+	}
+
+	// Without via_mqtt
+	pkt2 := buildMeshPacketOpts(data, 0xFFFFFFFF, 0, false)
+	parsed2, _ := parseMeshPacket(pkt2)
+	if parsed2.ViaMqtt {
+		t.Error("ViaMqtt = true, want false when viaMqtt=false")
+	}
+}
+
+func TestProtoPacketToMeshMessage_OkToMQTT_PKI(t *testing.T) {
+	pkt := &ProtoMeshPacket{
+		From: 1, To: 2,
+		PKIEncrypted: true,
+		Decoded: &ProtoData{
+			PortNum:  PortNumTextMessage,
+			Payload:  []byte("test"),
+			Bitfield: 1, // ok_to_mqtt
+		},
+	}
+	msg := protoPacketToMeshMessage(pkt)
+	if !msg.OkToMQTT {
+		t.Error("OkToMQTT = false, want true")
+	}
+	if !msg.PKIEncrypted {
+		t.Error("PKIEncrypted = false, want true")
 	}
 }
 

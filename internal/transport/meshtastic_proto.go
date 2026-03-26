@@ -1,17 +1,18 @@
 package transport
 
 // Meshtastic protocol engine — protobuf parsers and builders.
-// Ported from HAL meshtastic_driver.go (hand-rolled protobuf, no external lib).
+// Uses official generated Go bindings from buf.build/gen/go/meshtastic/protobufs.
+// Hand-rolled encoding replaced in MESHSAT-242 to eliminate field-number bugs.
 
 import (
 	"encoding/base64"
-	"encoding/binary"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
 )
 
 // ============================================================================
@@ -20,19 +21,24 @@ import (
 
 // Meshtastic PortNum values
 const (
-	PortNumTextMessage  = 1
-	PortNumPosition     = 3
-	PortNumNodeInfo     = 4
-	PortNumRouting      = 5
-	PortNumAdminApp     = 6
-	PortNumWaypoint     = 8
-	PortNumSerial       = 64
-	PortNumStoreForward = 65
-	PortNumRangeTest    = 66
-	PortNumTelemetry    = 67
-	PortNumTraceroute   = 70
-	PortNumNeighborInfo = 71
-	PortNumPrivate      = 256
+	PortNumTextMessage           = 1
+	PortNumPosition              = 3
+	PortNumNodeInfo              = 4
+	PortNumRouting               = 5
+	PortNumAdminApp              = 6
+	PortNumTextMessageCompressed = 7
+	PortNumWaypoint              = 8
+	PortNumDetectionSensor       = 10
+	PortNumAlert                 = 11
+	PortNumReply                 = 32
+	PortNumSerial                = 64
+	PortNumStoreForward          = 65
+	PortNumRangeTest             = 66
+	PortNumTelemetry             = 67
+	PortNumTraceroute            = 70
+	PortNumNeighborInfo          = 71
+	PortNumMapReport             = 73
+	PortNumPrivate               = 256
 )
 
 // Routing error reasons (from meshtastic/protobufs mesh.proto Routing.Error)
@@ -59,6 +65,10 @@ type RoutingInfo struct {
 
 // routingErrorName returns a human-readable name for a routing error.
 func routingErrorName(reason uint32) string {
+	name := pb.Routing_Error(reason).String()
+	if name != "" && !strings.HasPrefix(name, "Routing_Error(") {
+		return name
+	}
 	switch reason {
 	case RoutingErrorNone:
 		return "ACK"
@@ -89,69 +99,32 @@ func routingErrorName(reason uint32) string {
 	}
 }
 
-// parseRouting parses a ROUTING_APP payload (protobuf Routing message).
-// Field 1 (route_request): ignored (unused in current firmware)
-// Field 2 (route_reply): ignored
-// Field 3 (error_reason): varint — the routing error code
+// parseRouting parses a ROUTING_APP payload using official protobuf unmarshal.
 func parseRouting(data []byte) *RoutingInfo {
+	r := &pb.Routing{}
+	if err := proto.Unmarshal(data, r); err != nil {
+		return &RoutingInfo{ErrorName: "PARSE_ERROR"}
+	}
 	info := &RoutingInfo{}
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			break
-		}
-		pos = newPos
-
-		switch fieldNum {
-		case 3: // error_reason (varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				break
-			}
-			info.ErrorReason = uint32(val)
-			pos += n
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				break
-			}
-		}
+	if er, ok := r.GetVariant().(*pb.Routing_ErrorReason); ok {
+		info.ErrorReason = uint32(er.ErrorReason)
 	}
 	info.ErrorName = routingErrorName(info.ErrorReason)
 	return info
 }
 
-// Admin message field numbers
-const (
-	AdminFieldGetChannelRequest    = 1
-	AdminFieldGetConfigRequest     = 5
-	AdminFieldGetModuleConfigReq   = 7
-	AdminFieldGetCannedMsgReq      = 10
-	AdminFieldGetCannedMsgResponse = 11
-	AdminFieldSetChannel           = 33
-	AdminFieldSetConfig            = 34
-	AdminFieldSetModuleConfig      = 35
-	AdminFieldSetCannedMessages    = 36
-	AdminFieldSetFixedPosition     = 41
-	AdminFieldRemoveFixedPosition  = 42
-	AdminFieldFactoryReset         = 94
-	AdminFieldRemoveByNodenum      = 38
-	AdminFieldRebootSeconds        = 97
-	AdminFieldSetOwner             = 32
-	AdminFieldSetTimeUnixSec       = 99
-)
-
 // Config section enum values (for get_config_request)
 const (
-	ConfigTypeDevice    = 0
-	ConfigTypePosition  = 1
-	ConfigTypePower     = 2
-	ConfigTypeNetwork   = 3
-	ConfigTypeDisplay   = 4
-	ConfigTypeLora      = 5
-	ConfigTypeBluetooth = 6
-	ConfigTypeSecurity  = 7
+	ConfigTypeDevice     = 0
+	ConfigTypePosition   = 1
+	ConfigTypePower      = 2
+	ConfigTypeNetwork    = 3
+	ConfigTypeDisplay    = 4
+	ConfigTypeLora       = 5
+	ConfigTypeBluetooth  = 6
+	ConfigTypeSecurity   = 7
+	ConfigTypeSessionkey = 8
+	ConfigTypeDeviceUI   = 9
 )
 
 // ModuleConfig section enum values (for get_module_config_request)
@@ -166,6 +139,12 @@ const (
 	ModuleConfigAudio                = 7
 	ModuleConfigRemoteHardware       = 8
 	ModuleConfigNeighborInfo         = 9
+	ModuleConfigAmbientLighting      = 10
+	ModuleConfigDetectionSensor      = 11
+	ModuleConfigPaxcounter           = 12
+	ModuleConfigStatusMessage        = 13
+	ModuleConfigTrafficManagement    = 14
+	ModuleConfigTAKConfig            = 15
 )
 
 // StoreAndForward RequestResponse enum values
@@ -176,89 +155,26 @@ const (
 )
 
 func portNumName(pn int) string {
-	switch pn {
-	case PortNumTextMessage:
-		return "TEXT_MESSAGE_APP"
-	case PortNumPosition:
-		return "POSITION_APP"
-	case PortNumNodeInfo:
-		return "NODEINFO_APP"
-	case PortNumRouting:
-		return "ROUTING_APP"
-	case PortNumAdminApp:
-		return "ADMIN_APP"
-	case PortNumWaypoint:
-		return "WAYPOINT_APP"
-	case PortNumTelemetry:
-		return "TELEMETRY_APP"
-	case PortNumSerial:
-		return "SERIAL_APP"
-	case PortNumStoreForward:
-		return "STORE_FORWARD_APP"
-	case PortNumRangeTest:
-		return "RANGE_TEST_APP"
-	case PortNumTraceroute:
-		return "TRACEROUTE_APP"
-	case PortNumNeighborInfo:
-		return "NEIGHBORINFO_APP"
-	case PortNumPrivate:
-		return "PRIVATE_APP"
-	default:
-		return fmt.Sprintf("PORTNUM_%d", pn)
+	name := pb.PortNum(pn).String()
+	if name != "" && !strings.HasPrefix(name, "PortNum(") && !isDigits(name) {
+		return name
 	}
+	return fmt.Sprintf("PORTNUM_%d", pn)
+}
+
+// isDigits returns true if s is non-empty and contains only ASCII digits.
+func isDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 func hwModelName(model int) string {
-	names := map[int]string{
-		0: "UNSET", 1: "TLORA_V2", 2: "TLORA_V1", 3: "TLORA_V2_1_1P6",
-		4: "TBEAM", 5: "HELTEC_V2_0", 6: "TBEAM_V0P7", 7: "T_ECHO",
-		8: "TLORA_V1_1P3", 9: "RAK4631", 10: "HELTEC_V2_1",
-		11: "HELTEC_V1", 12: "TBEAM_S3_CORE", 13: "RAK11200",
-		14: "NANO_G1", 15: "TLORA_V2_1_1P8", 16: "TLORA_T3_S3",
-		17: "NANO_G1_EXPLORER", 18: "NANO_G2_ULTRA", 19: "LORA_TYPE",
-		20: "WIPHONE", 21: "WIO_WM1110", 22: "RAK2560",
-		23: "HELTEC_HRU_3601", 24: "HELTEC_WIRELESS_BRIDGE",
-		25: "STATION_G1", 26: "RAK11310", 27: "SENSELORA_RP2040",
-		28: "SENSELORA_S3", 29: "CANARYONE", 30: "RP2040_LORA",
-		31: "STATION_G2", 32: "LORA_RELAY_V1", 33: "T_ECHO_PLUS",
-		34: "PPR", 35: "GENIEBLOCKS", 36: "NRF52_UNKNOWN",
-		37: "PORTDUINO", 38: "ANDROID_SIM", 39: "DIY_V1",
-		40: "NRF52840_PCA10059", 41: "DR_DEV", 42: "M5STACK",
-		43: "HELTEC_V3", 44: "HELTEC_WSL_V3", 45: "BETAFPV_2400_TX",
-		46: "BETAFPV_900_NANO_TX", 47: "RPI_PICO",
-		48: "HELTEC_WIRELESS_TRACKER", 49: "HELTEC_WIRELESS_PAPER",
-		50: "T_DECK", 51: "T_WATCH_S3", 52: "PICOMPUTER_S3",
-		53: "HELTEC_HT62", 54: "EBYTE_ESP32_S3", 55: "ESP32_S3_PICO",
-		56: "CHATTER_2", 57: "HELTEC_WIRELESS_PAPER_V1_0",
-		58: "HELTEC_WIRELESS_TRACKER_V1_0", 59: "UNPHONE",
-		60: "TD_LORAC", 61: "CDEBYTE_EORA_S3", 62: "TWC_MESH_V4",
-		63: "NRF52_PROMICRO_DIY", 64: "RADIOMASTER_900_BANDIT_NANO",
-		65: "HELTEC_CAPSULE_SENSOR_V3", 66: "HELTEC_VISION_MASTER_T190",
-		67: "HELTEC_VISION_MASTER_E213", 68: "HELTEC_VISION_MASTER_E290",
-		69: "HELTEC_MESH_NODE_T114", 70: "SENSECAP_INDICATOR",
-		71: "TRACKER_T1000_E", 72: "RAK3172", 73: "WIO_E5",
-		74: "RADIOMASTER_900_BANDIT", 75: "ME25LS01_4Y10TD",
-		76: "RP2040_FEATHER_RFM95", 77: "M5STACK_COREBASIC",
-		78: "M5STACK_CORE2", 79: "RPI_PICO2", 80: "M5STACK_CORES3",
-		81: "SEEED_XIAO_S3", 82: "MS24SF1", 83: "TLORA_C6",
-		84: "WISMESH_TAP", 85: "ROUTASTIC", 86: "MESH_TAB",
-		87: "MESHLINK", 88: "XIAO_NRF52_KIT", 89: "THINKNODE_M1",
-		90: "THINKNODE_M2", 91: "T_ETH_ELITE", 92: "HELTEC_SENSOR_HUB",
-		93: "MUZI_BASE", 94: "HELTEC_MESH_POCKET", 95: "SEEED_SOLAR_NODE",
-		96: "NOMADSTAR_METEOR_PRO", 97: "CROWPANEL", 98: "LINK_32",
-		99: "SEEED_WIO_TRACKER_L1", 100: "SEEED_WIO_TRACKER_L1_EINK",
-		101: "MUZI_R1_NEO", 102: "T_DECK_PRO", 103: "T_LORA_PAGER",
-		105: "WISMESH_TAG", 106: "RAK3312", 107: "THINKNODE_M5",
-		108: "HELTEC_MESH_SOLAR", 109: "T_ECHO_LITE", 110: "HELTEC_V4",
-		111: "M5STACK_C6L", 112: "M5STACK_CARDPUTER_ADV",
-		113: "HELTEC_WIRELESS_TRACKER_V2", 114: "T_WATCH_ULTRA",
-		115: "THINKNODE_M3", 116: "WISMESH_TAP_V2", 117: "RAK3401",
-		118: "RAK6421", 119: "THINKNODE_M4", 120: "THINKNODE_M6",
-		121: "MESHSTICK_1262", 122: "TBEAM_1_WATT",
-		123: "T5_S3_EPAPER_PRO", 124: "TBEAM_BPF",
-		125: "MINI_EPAPER_S3", 255: "PRIVATE_HW",
-	}
-	if name, ok := names[model]; ok {
+	name := pb.HardwareModel(model).String()
+	if name != "" && !strings.HasPrefix(name, "HardwareModel(") && !isDigits(name) {
 		return name
 	}
 	return fmt.Sprintf("HW_MODEL_%d", model)
@@ -293,7 +209,7 @@ func computeSignalQuality(rssi, snr float64) (quality string, notes string) {
 }
 
 // ============================================================================
-// Proto Types — parsed protobuf structures
+// Proto Types — parsed protobuf structures (internal API, unchanged)
 // ============================================================================
 
 // ProtoFromRadio represents a parsed FromRadio message.
@@ -302,27 +218,29 @@ type ProtoFromRadio struct {
 	Packet           *ProtoMeshPacket
 	MyInfo           *ProtoMyNodeInfo
 	NodeInfo         *ProtoNodeInfo
-	ConfigRaw        []byte // Config message (raw protobuf)
-	ConfigCompleteID uint32 // Field 7 (NOT 6 — field 6 is log_record)
+	ConfigRaw        []byte // Config message (raw protobuf — kept for decodeProtoToMap passthrough)
+	ConfigCompleteID uint32
 	ModuleConfigRaw  []byte // ModuleConfig message (raw protobuf)
 	ChannelRaw       []byte // Channel message (raw protobuf)
 }
 
 // ProtoMeshPacket represents a parsed MeshPacket.
 type ProtoMeshPacket struct {
-	From      uint32
-	To        uint32
-	Channel   uint32
-	ID        uint32
-	Decoded   *ProtoData
-	Encrypted []byte
-	RxTime    uint32
-	RxSNR     float32
-	RxRSSI    int32
-	HopLimit  uint32
-	WantAck   bool
-	HopStart  uint32
-	ViaMqtt   bool // field 14 — set when packet was relayed via MQTT
+	From         uint32
+	To           uint32
+	Channel      uint32
+	ID           uint32
+	Decoded      *ProtoData
+	Encrypted    []byte
+	RxTime       uint32
+	RxSNR        float32
+	RxRSSI       int32
+	HopLimit     uint32
+	WantAck      bool
+	HopStart     uint32
+	ViaMqtt      bool   // field 14 — set when packet was relayed via MQTT
+	PublicKey    []byte // field 16 — sender's X25519 public key (PKI encryption, Meshtastic 2.5+)
+	PKIEncrypted bool   // field 17 — true if payload uses PKI (not channel) encryption
 }
 
 // ProtoData represents a decoded Data submessage.
@@ -330,8 +248,14 @@ type ProtoData struct {
 	PortNum      uint32
 	Payload      []byte
 	WantResponse bool
+	Bitfield     uint32 // field 4 — contains ok_to_mqtt flag (bit 0)
 	RequestID    uint32 // field 6 — correlates ACK/NAK to original request
 	ReplyID      uint32 // field 7 — correlates response to request
+}
+
+// OkToMQTT returns whether the sender has opted in to MQTT relay.
+func (d *ProtoData) OkToMQTT() bool {
+	return d.Bitfield&1 != 0
 }
 
 // ProtoMyNodeInfo represents my_info from config download.
@@ -347,22 +271,43 @@ type ProtoNodeInfo struct {
 	DeviceMetrics *ProtoDeviceMetrics
 	SNR           float32
 	LastHeard     uint32
+	Channel       uint32 // field 7 — channel index
+	HopsAway      uint32 // field 8
+	ViaMqtt       bool   // field 9
+	IsFavorite    bool   // field 10
+	IsIgnored     bool   // field 11
 }
 
 // ProtoUser represents a User submessage.
 type ProtoUser struct {
-	ID        string
-	LongName  string
-	ShortName string
-	HWModel   uint32
+	ID             string
+	LongName       string
+	ShortName      string
+	Macaddr        []byte // field 4 — MAC address
+	HWModel        uint32 // field 5
+	Role           uint32 // field 6 — device role enum
+	PublicKey      []byte // field 7 — X25519 public key
+	IsLicensed     bool   // field 8 — licensed HAM operator
+	IsUnmessagable bool   // field 9 — node does not accept messages
 }
 
 // ProtoPosition represents a Position submessage.
 type ProtoPosition struct {
-	LatitudeI  int32
-	LongitudeI int32
-	Altitude   int32
-	SatsInView uint32
+	LatitudeI     int32
+	LongitudeI    int32
+	Altitude      int32
+	Time          uint32 // field 4 — GPS fix time (fixed32)
+	GroundSpeed   uint32 // field 9 — m/s
+	GroundTrack   uint32 // field 10 — heading degrees * 1e5
+	FixQuality    uint32 // field 11 — 0=invalid, 1=GPS, 2=DGPS, ...
+	FixType       uint32 // field 12 — 0=none, 2=2D, 3=3D
+	PDOP          uint32 // field 16 — *100
+	HDOP          uint32 // field 17 — *100
+	VDOP          uint32 // field 18 — *100
+	SatsInView    uint32 // field 19
+	PrecisionBits uint32 // field 20 — position precision (32=full, lower=truncated)
+	Heading       uint32 // field 22 — compass heading degrees * 1e5 (independent of movement)
+	Speed         uint32 // field 23 — speed m/s (alias for devices that use this instead of ground_speed)
 }
 
 // ProtoDeviceMetrics represents a DeviceMetrics submessage.
@@ -375,951 +320,591 @@ type ProtoDeviceMetrics struct {
 }
 
 // ============================================================================
-// Parsers — FromRadio envelope → nested messages
+// Parsers — using official proto.Unmarshal
 // ============================================================================
 
 func parseFromRadio(data []byte) (*ProtoFromRadio, error) {
 	fr := &ProtoFromRadio{}
-	pos := 0
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return fr, nil // graceful degradation like original
+	}
 
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return fr, nil
+	fr.ID = msg.GetId()
+
+	switch v := msg.GetPayloadVariant().(type) {
+	case *pb.FromRadio_Packet:
+		if v.Packet != nil {
+			fr.Packet = convertMeshPacket(v.Packet)
 		}
-		pos = newPos
-
-		switch fieldNum {
-		case 1: // id (uint32)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return fr, nil
-			}
-			fr.ID = uint32(val)
-			pos += n
-		case 2: // packet (MeshPacket)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return fr, nil
-			}
-			fr.Packet, _ = parseMeshPacket(val)
-			pos = newPos
-		case 3: // my_info (MyNodeInfo)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return fr, nil
-			}
-			fr.MyInfo, _ = parseMyNodeInfo(val)
-			pos = newPos
-		case 4: // node_info (NodeInfo)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return fr, nil
-			}
-			fr.NodeInfo, _ = parseNodeInfo(val)
-			pos = newPos
-		case 5: // config (Config)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return fr, nil
-			}
-			fr.ConfigRaw = val
-			pos = newPos
-		case 6: // log_record — skip
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return fr, nil
-			}
-		case 7: // config_complete_id (uint32)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return fr, nil
-			}
-			fr.ConfigCompleteID = uint32(val)
-			pos += n
-		case 8: // rebooted — skip
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return fr, nil
-			}
-		case 9: // moduleConfig
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return fr, nil
-			}
-			fr.ModuleConfigRaw = val
-			pos = newPos
-		case 10: // channel
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return fr, nil
-			}
-			fr.ChannelRaw = val
-			pos = newPos
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return fr, nil
-			}
+	case *pb.FromRadio_MyInfo:
+		if v.MyInfo != nil {
+			fr.MyInfo = &ProtoMyNodeInfo{MyNodeNum: v.MyInfo.GetMyNodeNum()}
+		}
+	case *pb.FromRadio_NodeInfo:
+		if v.NodeInfo != nil {
+			fr.NodeInfo = convertNodeInfo(v.NodeInfo)
+		}
+	case *pb.FromRadio_Config:
+		if v.Config != nil {
+			// Keep raw bytes for decodeProtoToMap passthrough
+			fr.ConfigRaw, _ = proto.Marshal(v.Config)
+		}
+	case *pb.FromRadio_ConfigCompleteId:
+		fr.ConfigCompleteID = v.ConfigCompleteId
+	case *pb.FromRadio_ModuleConfig:
+		if v.ModuleConfig != nil {
+			fr.ModuleConfigRaw, _ = proto.Marshal(v.ModuleConfig)
+		}
+	case *pb.FromRadio_Channel:
+		if v.Channel != nil {
+			fr.ChannelRaw, _ = proto.Marshal(v.Channel)
 		}
 	}
 
 	return fr, nil
 }
 
-func parseMeshPacket(data []byte) (*ProtoMeshPacket, error) {
-	pkt := &ProtoMeshPacket{}
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return pkt, nil
-		}
-		pos = newPos
-
-		switch fieldNum {
-		case 1: // from (fixed32)
-			if pos+4 > len(data) {
-				return pkt, nil
-			}
-			pkt.From = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 2: // to (fixed32)
-			if pos+4 > len(data) {
-				return pkt, nil
-			}
-			pkt.To = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 3: // channel (varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return pkt, nil
-			}
-			pkt.Channel = uint32(val)
-			pos += n
-		case 4: // decoded (Data)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return pkt, nil
-			}
-			pkt.Decoded, _ = parseData(val)
-			pos = newPos
-		case 5: // encrypted (bytes)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return pkt, nil
-			}
-			pkt.Encrypted = val
-			pos = newPos
-		case 6: // id (fixed32)
-			if pos+4 > len(data) {
-				return pkt, nil
-			}
-			pkt.ID = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 7: // rx_time (fixed32)
-			if pos+4 > len(data) {
-				return pkt, nil
-			}
-			pkt.RxTime = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 8: // rx_snr (float = fixed32)
-			if pos+4 > len(data) {
-				return pkt, nil
-			}
-			pkt.RxSNR = math.Float32frombits(binary.LittleEndian.Uint32(data[pos : pos+4]))
-			pos += 4
-		case 9: // hop_limit (varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return pkt, nil
-			}
-			pkt.HopLimit = uint32(val)
-			pos += n
-		case 10: // want_ack (bool varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return pkt, nil
-			}
-			pkt.WantAck = val != 0
-			pos += n
-		case 12: // rx_rssi (int32 varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return pkt, nil
-			}
-			pkt.RxRSSI = int32(val)
-			pos += n
-		case 14: // via_mqtt (bool varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return pkt, nil
-			}
-			pkt.ViaMqtt = val != 0
-			pos += n
-		case 15: // hop_start (varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return pkt, nil
-			}
-			pkt.HopStart = uint32(val)
-			pos += n
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return pkt, nil
-			}
-		}
+func convertMeshPacket(p *pb.MeshPacket) *ProtoMeshPacket {
+	pkt := &ProtoMeshPacket{
+		From:         p.GetFrom(),
+		To:           p.GetTo(),
+		Channel:      p.GetChannel(),
+		ID:           p.GetId(),
+		RxTime:       p.GetRxTime(),
+		RxSNR:        p.GetRxSnr(),
+		RxRSSI:       p.GetRxRssi(),
+		HopLimit:     p.GetHopLimit(),
+		WantAck:      p.GetWantAck(),
+		HopStart:     p.GetHopStart(),
+		ViaMqtt:      p.GetViaMqtt(),
+		PublicKey:    p.GetPublicKey(),
+		PKIEncrypted: p.GetPkiEncrypted(),
 	}
-	return pkt, nil
+
+	switch v := p.GetPayloadVariant().(type) {
+	case *pb.MeshPacket_Decoded:
+		if v.Decoded != nil {
+			pkt.Decoded = &ProtoData{
+				PortNum:      uint32(v.Decoded.GetPortnum()),
+				Payload:      v.Decoded.GetPayload(),
+				WantResponse: v.Decoded.GetWantResponse(),
+				Bitfield:     v.Decoded.GetBitfield(),
+				RequestID:    v.Decoded.GetRequestId(),
+				ReplyID:      v.Decoded.GetReplyId(),
+			}
+		}
+	case *pb.MeshPacket_Encrypted:
+		pkt.Encrypted = v.Encrypted
+	}
+
+	return pkt
 }
 
-func parseData(data []byte) (*ProtoData, error) {
-	d := &ProtoData{}
-	pos := 0
+func convertNodeInfo(ni *pb.NodeInfo) *ProtoNodeInfo {
+	info := &ProtoNodeInfo{
+		Num:        ni.GetNum(),
+		SNR:        ni.GetSnr(),
+		LastHeard:  ni.GetLastHeard(),
+		Channel:    uint32(ni.GetChannel()),
+		HopsAway:   ni.GetHopsAway(),
+		ViaMqtt:    ni.GetViaMqtt(),
+		IsFavorite: ni.GetIsFavorite(),
+		IsIgnored:  ni.GetIsIgnored(),
+	}
 
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return d, nil
-		}
-		pos = newPos
-
-		switch fieldNum {
-		case 1: // portnum (varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return d, nil
-			}
-			d.PortNum = uint32(val)
-			pos += n
-		case 2: // payload (bytes)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return d, nil
-			}
-			d.Payload = val
-			pos = newPos
-		case 3: // want_response (bool)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return d, nil
-			}
-			d.WantResponse = val != 0
-			pos += n
-		case 6: // request_id (fixed32)
-			if pos+4 > len(data) {
-				return d, nil
-			}
-			d.RequestID = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 7: // reply_id (fixed32)
-			if pos+4 > len(data) {
-				return d, nil
-			}
-			d.ReplyID = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return d, nil
-			}
+	if u := ni.GetUser(); u != nil {
+		info.User = &ProtoUser{
+			ID:             u.GetId(),
+			LongName:       u.GetLongName(),
+			ShortName:      u.GetShortName(),
+			Macaddr:        u.GetMacaddr(),
+			HWModel:        uint32(u.GetHwModel()),
+			Role:           uint32(u.GetRole()),
+			PublicKey:      u.GetPublicKey(),
+			IsLicensed:     u.GetIsLicensed(),
+			IsUnmessagable: u.GetIsUnmessagable(),
 		}
 	}
-	return d, nil
+
+	if p := ni.GetPosition(); p != nil {
+		info.Position = convertPosition(p)
+	}
+
+	if dm := ni.GetDeviceMetrics(); dm != nil {
+		info.DeviceMetrics = convertDeviceMetrics(dm)
+	}
+
+	return info
 }
 
-func parseMyNodeInfo(data []byte) (*ProtoMyNodeInfo, error) {
-	info := &ProtoMyNodeInfo{}
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return info, nil
-		}
-		pos = newPos
-
-		switch fieldNum {
-		case 1: // my_node_num (uint32)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return info, nil
-			}
-			info.MyNodeNum = uint32(val)
-			pos += n
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return info, nil
-			}
-		}
+func convertPosition(p *pb.Position) *ProtoPosition {
+	return &ProtoPosition{
+		LatitudeI:     p.GetLatitudeI(),
+		LongitudeI:    p.GetLongitudeI(),
+		Altitude:      p.GetAltitude(),
+		Time:          p.GetTime(),
+		GroundSpeed:   p.GetGroundSpeed(),
+		GroundTrack:   p.GetGroundTrack(),
+		FixQuality:    p.GetFixQuality(),
+		FixType:       p.GetFixType(),
+		PDOP:          p.GetPDOP(),
+		HDOP:          p.GetHDOP(),
+		VDOP:          p.GetVDOP(),
+		SatsInView:    p.GetSatsInView(),
+		PrecisionBits: p.GetPrecisionBits(),
 	}
-	return info, nil
 }
 
-func parseNodeInfo(data []byte) (*ProtoNodeInfo, error) {
-	info := &ProtoNodeInfo{}
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return info, nil
-		}
-		pos = newPos
-
-		switch fieldNum {
-		case 1: // num (uint32)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return info, nil
-			}
-			info.Num = uint32(val)
-			pos += n
-		case 2: // user (User)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return info, nil
-			}
-			info.User, _ = parseUser(val)
-			pos = newPos
-		case 3: // position (Position)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return info, nil
-			}
-			info.Position, _ = parsePosition(val)
-			pos = newPos
-		case 4: // snr (float = fixed32)
-			if pos+4 > len(data) {
-				return info, nil
-			}
-			info.SNR = math.Float32frombits(binary.LittleEndian.Uint32(data[pos : pos+4]))
-			pos += 4
-		case 5: // last_heard (fixed32)
-			if pos+4 > len(data) {
-				return info, nil
-			}
-			info.LastHeard = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 6: // device_metrics (DeviceMetrics)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return info, nil
-			}
-			info.DeviceMetrics, _ = parseDeviceMetricsProto(val)
-			pos = newPos
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return info, nil
-			}
-		}
+func convertDeviceMetrics(dm *pb.DeviceMetrics) *ProtoDeviceMetrics {
+	return &ProtoDeviceMetrics{
+		BatteryLevel:  dm.GetBatteryLevel(),
+		Voltage:       dm.GetVoltage(),
+		ChannelUtil:   dm.GetChannelUtilization(),
+		AirUtilTx:     dm.GetAirUtilTx(),
+		UptimeSeconds: dm.GetUptimeSeconds(),
 	}
-	return info, nil
 }
 
 func parseUser(data []byte) (*ProtoUser, error) {
-	user := &ProtoUser{}
-	pos := 0
-
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return user, nil
-		}
-		pos = newPos
-
-		switch fieldNum {
-		case 1: // id (string)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return user, nil
-			}
-			user.ID = string(val)
-			pos = newPos
-		case 2: // long_name (string)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return user, nil
-			}
-			user.LongName = string(val)
-			pos = newPos
-		case 3: // short_name (string)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return user, nil
-			}
-			user.ShortName = string(val)
-			pos = newPos
-		case 5: // hw_model (enum = varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return user, nil
-			}
-			user.HWModel = uint32(val)
-			pos += n
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return user, nil
-			}
-		}
+	u := &pb.User{}
+	if err := proto.Unmarshal(data, u); err != nil {
+		return &ProtoUser{}, nil
 	}
-	return user, nil
+	return &ProtoUser{
+		ID:             u.GetId(),
+		LongName:       u.GetLongName(),
+		ShortName:      u.GetShortName(),
+		Macaddr:        u.GetMacaddr(),
+		HWModel:        uint32(u.GetHwModel()),
+		Role:           uint32(u.GetRole()),
+		PublicKey:      u.GetPublicKey(),
+		IsLicensed:     u.GetIsLicensed(),
+		IsUnmessagable: u.GetIsUnmessagable(),
+	}, nil
 }
 
 func parsePosition(data []byte) (*ProtoPosition, error) {
-	p := &ProtoPosition{}
-	offset := 0
-
-	for offset < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, offset)
-		if err != nil {
-			return p, nil
-		}
-		offset = newPos
-
-		switch fieldNum {
-		case 1: // latitude_i (sfixed32)
-			if offset+4 > len(data) {
-				return p, nil
-			}
-			p.LatitudeI = int32(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 2: // longitude_i (sfixed32)
-			if offset+4 > len(data) {
-				return p, nil
-			}
-			p.LongitudeI = int32(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 3: // altitude (int32 varint)
-			val, n := readVarint(data, offset)
-			if n <= 0 {
-				return p, nil
-			}
-			p.Altitude = int32(val)
-			offset += n
-		case 19: // sats_in_view (uint32)
-			val, n := readVarint(data, offset)
-			if n <= 0 {
-				return p, nil
-			}
-			p.SatsInView = uint32(val)
-			offset += n
-		default:
-			offset = skipField(data, offset, wireType)
-			if offset < 0 {
-				return p, nil
-			}
-		}
+	p := &pb.Position{}
+	if err := proto.Unmarshal(data, p); err != nil {
+		return &ProtoPosition{}, nil
 	}
-	return p, nil
+	return convertPosition(p), nil
+}
+
+func parseMyNodeInfo(data []byte) (*ProtoMyNodeInfo, error) {
+	m := &pb.MyNodeInfo{}
+	if err := proto.Unmarshal(data, m); err != nil {
+		return &ProtoMyNodeInfo{}, nil
+	}
+	return &ProtoMyNodeInfo{MyNodeNum: m.GetMyNodeNum()}, nil
+}
+
+func parseNodeInfo(data []byte) (*ProtoNodeInfo, error) {
+	ni := &pb.NodeInfo{}
+	if err := proto.Unmarshal(data, ni); err != nil {
+		return &ProtoNodeInfo{}, nil
+	}
+	return convertNodeInfo(ni), nil
 }
 
 // parseDeviceMetrics handles both Telemetry wrapper and raw DeviceMetrics.
 func parseDeviceMetrics(data []byte) (*ProtoDeviceMetrics, error) {
-	dm := &ProtoDeviceMetrics{}
-	offset := 0
-
-	for offset < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, offset)
-		if err != nil {
-			return dm, nil
-		}
-		offset = newPos
-
-		switch fieldNum {
-		case 1: // Telemetry.time (fixed32) — skip
-			if wireType == wireFixed32 {
-				offset += 4
-			} else {
-				offset = skipField(data, offset, wireType)
-				if offset < 0 {
-					return dm, nil
-				}
-			}
-		case 2: // Telemetry.device_metrics (length-delimited submessage)
-			if wireType == wireLengthDelimited {
-				val, newPos, err := readLengthDelimited(data, offset)
-				if err != nil {
-					return dm, nil
-				}
-				offset = newPos
-				return parseDeviceMetricsProto(val)
-			}
-			offset = skipField(data, offset, wireType)
-			if offset < 0 {
-				return dm, nil
-			}
-		default:
-			offset = skipField(data, offset, wireType)
-			if offset < 0 {
-				return dm, nil
-			}
+	// Try as Telemetry first (the common case from the wire)
+	t := &pb.Telemetry{}
+	if err := proto.Unmarshal(data, t); err == nil {
+		if dm, ok := t.GetVariant().(*pb.Telemetry_DeviceMetrics); ok && dm.DeviceMetrics != nil {
+			return convertDeviceMetrics(dm.DeviceMetrics), nil
 		}
 	}
-	return dm, nil
+	// Fallback: try as raw DeviceMetrics
+	dm := &pb.DeviceMetrics{}
+	if err := proto.Unmarshal(data, dm); err != nil {
+		return &ProtoDeviceMetrics{}, nil
+	}
+	return convertDeviceMetrics(dm), nil
 }
 
 func parseDeviceMetricsProto(data []byte) (*ProtoDeviceMetrics, error) {
-	dm := &ProtoDeviceMetrics{}
-	offset := 0
-
-	for offset < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, offset)
-		if err != nil {
-			return dm, nil
-		}
-		offset = newPos
-
-		switch fieldNum {
-		case 1: // battery_level
-			val, n := readVarint(data, offset)
-			if n <= 0 {
-				return dm, nil
-			}
-			dm.BatteryLevel = uint32(val)
-			offset += n
-		case 2: // voltage (float = fixed32)
-			if offset+4 > len(data) {
-				return dm, nil
-			}
-			dm.Voltage = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 3: // channel_utilization (float = fixed32)
-			if offset+4 > len(data) {
-				return dm, nil
-			}
-			dm.ChannelUtil = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 4: // air_util_tx (float = fixed32)
-			if offset+4 > len(data) {
-				return dm, nil
-			}
-			dm.AirUtilTx = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 5: // uptime_seconds
-			val, n := readVarint(data, offset)
-			if n <= 0 {
-				return dm, nil
-			}
-			dm.UptimeSeconds = uint32(val)
-			offset += n
-		default:
-			offset = skipField(data, offset, wireType)
-			if offset < 0 {
-				return dm, nil
-			}
-		}
+	dm := &pb.DeviceMetrics{}
+	if err := proto.Unmarshal(data, dm); err != nil {
+		return &ProtoDeviceMetrics{}, nil
 	}
-	return dm, nil
+	return convertDeviceMetrics(dm), nil
 }
 
-// ProtoEnvironmentMetrics represents environment sensor data (Telemetry field 2).
+// ProtoEnvironmentMetrics represents environment sensor data (Telemetry field 3).
 type ProtoEnvironmentMetrics struct {
-	Temperature float32
-	Humidity    float32
-	Pressure    float32
+	Temperature     float32 // field 1
+	Humidity        float32 // field 2
+	Pressure        float32 // field 3
+	GasResistance   float32 // field 4
+	Voltage         float32 // field 5 — sensor supply voltage
+	Current         float32 // field 6 — sensor current draw
+	IAQ             uint32  // field 7 — Indoor Air Quality index
+	Distance        float32 // field 8 — distance sensor (mm)
+	Lux             float32 // field 9 — ambient light (lux)
+	WhiteLight      float32 // field 10 — white lux value
+	IR              float32 // field 11 — infrared lux
+	UV              float32 // field 12 — UV index
+	WindDirection   uint32  // field 13 — degrees
+	WindSpeed       float32 // field 14 — m/s
+	WindGust        float32 // field 15 — m/s
+	WindLull        float32 // field 16 — m/s
+	Weight          float32 // field 17 — kg (e.g. beehive)
+	SoilTemperature float32 // field 18
+	SoilMoisture    float32 // field 19
+	Radiation       float32 // field 20 — μSv/h
 }
 
 // parseEnvironmentMetrics extracts environment metrics from a Telemetry message.
-// Telemetry field 3 = environment_metrics submessage.
-// Returns nil if no environment data is present.
 func parseEnvironmentMetrics(data []byte) *ProtoEnvironmentMetrics {
-	offset := 0
-	for offset < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, offset)
-		if err != nil {
-			return nil
-		}
-		offset = newPos
-
-		if fieldNum == 3 && wireType == wireLengthDelimited {
-			val, newPos, err := readLengthDelimited(data, offset)
-			if err != nil {
-				return nil
-			}
-			_ = newPos
-			return parseEnvironmentMetricsProto(val)
-		}
-		offset = skipField(data, offset, wireType)
-		if offset < 0 {
-			return nil
-		}
+	t := &pb.Telemetry{}
+	if err := proto.Unmarshal(data, t); err != nil {
+		return nil
 	}
-	return nil
-}
-
-func parseEnvironmentMetricsProto(data []byte) *ProtoEnvironmentMetrics {
-	em := &ProtoEnvironmentMetrics{}
-	offset := 0
-	for offset < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, offset)
-		if err != nil {
-			return em
-		}
-		offset = newPos
-
-		switch fieldNum {
-		case 1: // temperature (float = fixed32)
-			if offset+4 > len(data) {
-				return em
-			}
-			em.Temperature = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 2: // relative_humidity (float = fixed32)
-			if offset+4 > len(data) {
-				return em
-			}
-			em.Humidity = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		case 3: // barometric_pressure (float = fixed32)
-			if offset+4 > len(data) {
-				return em
-			}
-			em.Pressure = math.Float32frombits(binary.LittleEndian.Uint32(data[offset : offset+4]))
-			offset += 4
-		default:
-			offset = skipField(data, offset, wireType)
-			if offset < 0 {
-				return em
-			}
-		}
+	em, ok := t.GetVariant().(*pb.Telemetry_EnvironmentMetrics)
+	if !ok || em.EnvironmentMetrics == nil {
+		return nil
 	}
-	return em
+	e := em.EnvironmentMetrics
+	return &ProtoEnvironmentMetrics{
+		Temperature:     e.GetTemperature(),
+		Humidity:        e.GetRelativeHumidity(),
+		Pressure:        e.GetBarometricPressure(),
+		GasResistance:   e.GetGasResistance(),
+		Voltage:         e.GetVoltage(),
+		Current:         e.GetCurrent(),
+		IAQ:             uint32(e.GetIaq()),
+		Distance:        e.GetDistance(),
+		Lux:             e.GetLux(),
+		WhiteLight:      e.GetWhiteLux(),
+		IR:              e.GetIrLux(),
+		UV:              e.GetUvLux(),
+		WindDirection:   uint32(e.GetWindDirection()),
+		WindSpeed:       e.GetWindSpeed(),
+		WindGust:        e.GetWindGust(),
+		WindLull:        e.GetWindLull(),
+		Weight:          e.GetWeight(),
+		SoilTemperature: e.GetSoilTemperature(),
+		SoilMoisture:    float32(e.GetSoilMoisture()),
+		Radiation:       e.GetRadiation(),
+	}
 }
 
 // ============================================================================
-// Builders — construct ToRadio protobuf messages
+// Builders — construct ToRadio protobuf messages using official types
 // ============================================================================
 
 // buildWantConfigID builds a ToRadio protobuf with want_config_id set.
-// ToRadio field 3 (uint32) = want_config_id.
 func buildWantConfigID(configID uint32) []byte {
-	buf := make([]byte, 0, 8)
-	buf = append(buf, 0x18) // field 3, varint
-	buf = appendVarint(buf, uint64(configID))
-	return buf
+	msg := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_WantConfigId{WantConfigId: configID},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // buildToRadioPacket wraps a MeshPacket into a ToRadio message (field 1).
-func buildToRadioPacket(meshPacket []byte) []byte {
-	buf := make([]byte, 0, len(meshPacket)+8)
-	buf = append(buf, 0x0A) // field 1, length-delimited
-	buf = appendVarint(buf, uint64(len(meshPacket)))
-	buf = append(buf, meshPacket...)
-	return buf
+func buildToRadioPacket(meshPacketBytes []byte) []byte {
+	pkt := &pb.MeshPacket{}
+	if err := proto.Unmarshal(meshPacketBytes, pkt); err != nil {
+		// Fallback: wrap raw bytes using hand-rolled encoding
+		buf := make([]byte, 0, len(meshPacketBytes)+8)
+		buf = append(buf, 0x0A) // field 1, length-delimited
+		buf = appendVarint(buf, uint64(len(meshPacketBytes)))
+		buf = append(buf, meshPacketBytes...)
+		return buf
+	}
+	msg := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: pkt},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // buildTextMessage builds a MeshPacket with TEXT_MESSAGE_APP portnum.
 func buildTextMessage(text string, to uint32, channel uint32) []byte {
-	payload := []byte(text)
-	data := make([]byte, 0, len(payload)+8)
-	data = append(data, 0x08) // Data field 1: portnum (varint)
-	data = appendVarint(data, uint64(PortNumTextMessage))
-	data = append(data, 0x12) // Data field 2: payload (bytes)
-	data = appendVarint(data, uint64(len(payload)))
-	data = append(data, payload...)
-
-	return buildMeshPacket(data, to, channel)
+	return buildMeshPacketBytes([]byte(text), int(pb.PortNum_TEXT_MESSAGE_APP), to, channel, true, false)
 }
 
 // buildMeshPacket builds the outer MeshPacket wrapper.
-func buildMeshPacket(decodedData []byte, to uint32, channel uint32) []byte {
-	pkt := make([]byte, 0, len(decodedData)+32)
+func buildMeshPacket(decodedPayload []byte, to uint32, channel uint32) []byte {
+	// This function expects pre-encoded Data bytes — parse and re-encode
+	return buildMeshPacketFromData(decodedPayload, to, channel, false)
+}
 
+// buildMeshPacketOpts builds a MeshPacket with optional via_mqtt flag.
+func buildMeshPacketOpts(decodedPayload []byte, to uint32, channel uint32, viaMqtt bool) []byte {
+	return buildMeshPacketFromData(decodedPayload, to, channel, viaMqtt)
+}
+
+// buildMeshPacketFromData builds a MeshPacket from pre-encoded Data protobuf bytes.
+func buildMeshPacketFromData(dataBytes []byte, to uint32, channel uint32, viaMqtt bool) []byte {
 	if to == 0 {
 		to = 0xFFFFFFFF // Broadcast
 	}
-	pkt = append(pkt, 0x15) // field 2 (to), wire type 5 (fixed32)
-	pkt = appendFixed32(pkt, to)
-
-	if channel > 0 {
-		pkt = append(pkt, 0x18) // field 3 (channel), varint
-		pkt = appendVarint(pkt, uint64(channel))
+	d := &pb.Data{}
+	if err := proto.Unmarshal(dataBytes, d); err != nil {
+		return nil
 	}
-
-	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited
-	pkt = appendVarint(pkt, uint64(len(decodedData)))
-	pkt = append(pkt, decodedData...)
-
-	// field 7 (rx_time): current UTC timestamp so receiving nodes display correct time
-	pkt = append(pkt, 0x3D) // field 7, wire type 5 (fixed32)
-	pkt = appendFixed32(pkt, uint32(time.Now().Unix()))
-
-	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
-	pkt = appendVarint(pkt, 3)
-
-	pkt = append(pkt, 0x50, 0x01) // field 10 (want_ack), varint 1
-
-	return pkt
+	pkt := &pb.MeshPacket{
+		To:             to,
+		Channel:        channel,
+		RxTime:         uint32(time.Now().Unix()),
+		HopLimit:       3,
+		WantAck:        true,
+		PayloadVariant: &pb.MeshPacket_Decoded{Decoded: d},
+	}
+	if viaMqtt {
+		pkt.ViaMqtt = true
+	}
+	data, err := proto.Marshal(pkt)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // buildRawPacket builds a MeshPacket with arbitrary portnum and payload.
 func buildRawPacket(payload []byte, portnum int, to uint32, channel uint32, wantAck bool) []byte {
-	data := make([]byte, 0, len(payload)+16)
-	data = append(data, 0x08) // Data field 1: portnum
-	data = appendVarint(data, uint64(portnum))
-	data = append(data, 0x12) // Data field 2: payload
-	data = appendVarint(data, uint64(len(payload)))
-	data = append(data, payload...)
+	return buildMeshPacketBytes(payload, portnum, to, channel, wantAck, false)
+}
 
-	pkt := make([]byte, 0, len(data)+32)
+// buildMeshPacketBytes builds a complete MeshPacket with explicit portnum and payload.
+func buildMeshPacketBytes(payload []byte, portnum int, to uint32, channel uint32, wantAck bool, viaMqtt bool) []byte {
 	if to == 0 {
 		to = 0xFFFFFFFF
 	}
-	pkt = append(pkt, 0x15) // field 2 (to), fixed32
-	pkt = appendFixed32(pkt, to)
-	if channel > 0 {
-		pkt = append(pkt, 0x18) // field 3 (channel), varint
-		pkt = appendVarint(pkt, uint64(channel))
+	pkt := &pb.MeshPacket{
+		To:       to,
+		Channel:  channel,
+		RxTime:   uint32(time.Now().Unix()),
+		HopLimit: 3,
+		WantAck:  wantAck,
+		PayloadVariant: &pb.MeshPacket_Decoded{
+			Decoded: &pb.Data{
+				Portnum: pb.PortNum(portnum),
+				Payload: payload,
+			},
+		},
 	}
-	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited
-	pkt = appendVarint(pkt, uint64(len(data)))
-	pkt = append(pkt, data...)
-	// field 7 (rx_time): current UTC timestamp
-	pkt = append(pkt, 0x3D) // field 7, wire type 5 (fixed32)
-	pkt = appendFixed32(pkt, uint32(time.Now().Unix()))
-	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
-	pkt = appendVarint(pkt, 3)
-	if wantAck {
-		pkt = append(pkt, 0x50, 0x01) // field 10, varint 1
+	if viaMqtt {
+		pkt.ViaMqtt = true
 	}
-	return pkt
+	data, err := proto.Marshal(pkt)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // buildEncryptedPacket builds a MeshPacket with the encrypted field (field 5)
-// instead of decoded (field 4). Used for AES-256-CTR passthrough relay —
-// re-injecting encrypted Meshtastic payloads into the mesh without decryption.
+// instead of decoded (field 4). Used for AES-256-CTR passthrough relay.
 func buildEncryptedPacket(encryptedPayload []byte, to uint32, channel uint32, hopLimit uint32) []byte {
-	pkt := make([]byte, 0, len(encryptedPayload)+32)
-
 	if to == 0 {
-		to = 0xFFFFFFFF // Broadcast
+		to = 0xFFFFFFFF
 	}
-	pkt = append(pkt, 0x15) // field 2 (to), wire type 5 (fixed32)
-	pkt = appendFixed32(pkt, to)
-
-	if channel > 0 {
-		pkt = append(pkt, 0x18) // field 3 (channel), varint
-		pkt = appendVarint(pkt, uint64(channel))
-	}
-
-	// field 5 (encrypted), length-delimited — NOT field 4 (decoded)
-	pkt = append(pkt, 0x2A) // field 5, wire type 2 (length-delimited)
-	pkt = appendVarint(pkt, uint64(len(encryptedPayload)))
-	pkt = append(pkt, encryptedPayload...)
-
 	if hopLimit == 0 {
 		hopLimit = 3
 	}
-	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
-	pkt = appendVarint(pkt, uint64(hopLimit))
-
-	return pkt
+	pkt := &pb.MeshPacket{
+		To:             to,
+		Channel:        channel,
+		HopLimit:       hopLimit,
+		PayloadVariant: &pb.MeshPacket_Encrypted{Encrypted: encryptedPayload},
+	}
+	data, err := proto.Marshal(pkt)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // buildAdminToRadio wraps an admin message in Data → MeshPacket → ToRadio.
 func buildAdminToRadio(myNodeNum, destNode uint32, adminPayload []byte) []byte {
-	// Data: portnum=ADMIN_APP, payload=adminPayload, want_response=true
-	data := make([]byte, 0, len(adminPayload)+16)
-	data = append(data, 0x08) // Data field 1: portnum
-	data = appendVarint(data, uint64(PortNumAdminApp))
-	data = append(data, 0x12) // Data field 2: payload
-	data = appendVarint(data, uint64(len(adminPayload)))
-	data = append(data, adminPayload...)
-	data = append(data, 0x18, 0x01) // Data field 3: want_response
-
-	// MeshPacket
-	pkt := make([]byte, 0, len(data)+32)
-	pkt = append(pkt, 0x0D) // field 1 (from), fixed32
-	pkt = appendFixed32(pkt, myNodeNum)
-	pkt = append(pkt, 0x15) // field 2 (to), fixed32
-	pkt = appendFixed32(pkt, destNode)
-	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited
-	pkt = appendVarint(pkt, uint64(len(data)))
-	pkt = append(pkt, data...)
-	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
-	pkt = appendVarint(pkt, 3)
-	pkt = append(pkt, 0x50, 0x01) // field 10 (want_ack), varint 1
-
-	return buildToRadioPacket(pkt)
+	admin := &pb.AdminMessage{}
+	if err := proto.Unmarshal(adminPayload, admin); err != nil {
+		return nil
+	}
+	return buildAdminToRadioMsg(myNodeNum, destNode, admin)
 }
 
-// buildAdminReboot builds a ToRadio with AdminMessage field 97 (reboot_seconds).
+// buildAdminToRadioMsg wraps a typed AdminMessage in Data → MeshPacket → ToRadio.
+func buildAdminToRadioMsg(myNodeNum, destNode uint32, admin *pb.AdminMessage) []byte {
+	adminBytes, err := proto.Marshal(admin)
+	if err != nil {
+		return nil
+	}
+	pkt := &pb.MeshPacket{
+		From:     myNodeNum,
+		To:       destNode,
+		HopLimit: 3,
+		WantAck:  true,
+		PayloadVariant: &pb.MeshPacket_Decoded{
+			Decoded: &pb.Data{
+				Portnum:      pb.PortNum_ADMIN_APP,
+				Payload:      adminBytes,
+				WantResponse: true,
+			},
+		},
+	}
+	pktBytes, err := proto.Marshal(pkt)
+	if err != nil {
+		return nil
+	}
+	toRadio := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: pkt},
+	}
+	// Use the struct directly instead of re-marshaling pktBytes
+	_ = pktBytes
+	data, err := proto.Marshal(toRadio)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// buildAdminReboot builds a ToRadio with AdminMessage reboot_seconds.
 func buildAdminReboot(myNodeNum, destNode uint32, delaySecs int) []byte {
-	admin := make([]byte, 0, 16)
-	admin = appendVarint(admin, AdminFieldRebootSeconds<<3|0)
-	admin = appendVarint(admin, uint64(delaySecs))
-	return buildAdminToRadio(myNodeNum, destNode, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RebootSeconds{RebootSeconds: int32(delaySecs)},
+	}
+	return buildAdminToRadioMsg(myNodeNum, destNode, admin)
 }
 
-// buildAdminSetTime builds a ToRadio with AdminMessage field 99 (set_time_unixsec).
-// Sends the current UTC time as a fixed32 to the specified destination node.
+// buildAdminSetTime builds a ToRadio with AdminMessage set_time_only.
 func buildAdminSetTime(myNodeNum, destNode uint32, unixSec uint32) []byte {
-	admin := make([]byte, 0, 16)
-	// field 99, wire type 5 (fixed32) → (99 << 3) | 5 = 797
-	admin = appendVarint(admin, uint64(AdminFieldSetTimeUnixSec)<<3|5)
-	admin = appendFixed32(admin, unixSec)
-	return buildAdminToRadio(myNodeNum, destNode, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetTimeOnly{SetTimeOnly: unixSec},
+	}
+	return buildAdminToRadioMsg(myNodeNum, destNode, admin)
 }
 
-// buildAdminFactoryReset builds a ToRadio with AdminMessage field 94.
+// buildAdminFactoryReset builds a ToRadio with AdminMessage factory_reset_device.
 func buildAdminFactoryReset(myNodeNum, destNode uint32) []byte {
-	admin := make([]byte, 0, 16)
-	admin = appendVarint(admin, AdminFieldFactoryReset<<3|0)
-	admin = appendVarint(admin, 1)
-	return buildAdminToRadio(myNodeNum, destNode, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_FactoryResetDevice{FactoryResetDevice: 1},
+	}
+	return buildAdminToRadioMsg(myNodeNum, destNode, admin)
 }
 
-// buildAdminRemoveNode builds a ToRadio with AdminMessage field 38 (remove_by_nodenum).
+// buildAdminRemoveNode builds a ToRadio with AdminMessage remove_by_nodenum.
 func buildAdminRemoveNode(myNodeNum, nodeNum uint32) []byte {
-	admin := make([]byte, 0, 16)
-	admin = appendVarint(admin, AdminFieldRemoveByNodenum<<3|0)
-	admin = appendVarint(admin, uint64(nodeNum))
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RemoveByNodenum{RemoveByNodenum: nodeNum},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
-// buildAdminSetConfig builds a ToRadio with AdminMessage field 34 (set_config).
+// buildAdminSetConfig builds a ToRadio with AdminMessage set_config.
 func buildAdminSetConfig(myNodeNum uint32, configData []byte) []byte {
-	admin := make([]byte, 0, len(configData)+8)
-	admin = appendVarint(admin, AdminFieldSetConfig<<3|2) // field 34, length-delimited
-	admin = appendVarint(admin, uint64(len(configData)))
-	admin = append(admin, configData...)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	cfg := &pb.Config{}
+	if err := proto.Unmarshal(configData, cfg); err != nil {
+		return nil
+	}
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetConfig{SetConfig: cfg},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
-// buildAdminSetModuleConfig builds a ToRadio with AdminMessage field 35 (set_module_config).
+// buildAdminSetModuleConfig builds a ToRadio with AdminMessage set_module_config.
 func buildAdminSetModuleConfig(myNodeNum uint32, configData []byte) []byte {
-	admin := make([]byte, 0, len(configData)+8)
-	admin = appendVarint(admin, AdminFieldSetModuleConfig<<3|2) // field 35, length-delimited
-	admin = appendVarint(admin, uint64(len(configData)))
-	admin = append(admin, configData...)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	cfg := &pb.ModuleConfig{}
+	if err := proto.Unmarshal(configData, cfg); err != nil {
+		return nil
+	}
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetModuleConfig{SetModuleConfig: cfg},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildSetChannel builds a ToRadio for channel configuration.
 func buildSetChannel(myNodeNum uint32, index uint32, name string, psk []byte, role int, uplinkEnabled, downlinkEnabled bool) []byte {
-	// ChannelSettings (see meshtastic/channel.proto)
-	settings := make([]byte, 0, 64)
-	if len(psk) > 0 {
-		settings = append(settings, 0x12) // field 2 (psk), length-delimited
-		settings = appendVarint(settings, uint64(len(psk)))
-		settings = append(settings, psk...)
+	ch := &pb.Channel{
+		Index: int32(index),
+		Settings: &pb.ChannelSettings{
+			Psk:             psk,
+			Name:            name,
+			UplinkEnabled:   uplinkEnabled,
+			DownlinkEnabled: downlinkEnabled,
+		},
+		Role: pb.Channel_Role(role),
 	}
-	if name != "" {
-		settings = append(settings, 0x1A) // field 3 (name), length-delimited
-		settings = appendVarint(settings, uint64(len(name)))
-		settings = append(settings, []byte(name)...)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetChannel{SetChannel: ch},
 	}
-	if uplinkEnabled {
-		settings = append(settings, 0x28, 0x01) // field 5 (uplink_enabled)
-	}
-	if downlinkEnabled {
-		settings = append(settings, 0x30, 0x01) // field 6 (downlink_enabled)
-	}
-
-	// Channel message
-	channel := make([]byte, 0, len(settings)+16)
-	channel = append(channel, 0x08) // field 1 (index), varint
-	channel = appendVarint(channel, uint64(index))
-	if len(settings) > 0 {
-		channel = append(channel, 0x12) // field 2 (settings), length-delimited
-		channel = appendVarint(channel, uint64(len(settings)))
-		channel = append(channel, settings...)
-	}
-	if role > 0 {
-		channel = append(channel, 0x18) // field 3 (role), varint
-		channel = appendVarint(channel, uint64(role))
-	}
-
-	// AdminMessage field 33: set_channel
-	admin := make([]byte, 0, len(channel)+8)
-	admin = appendVarint(admin, uint64(AdminFieldSetChannel)<<3|2) // field 33, length-delimited
-	admin = appendVarint(admin, uint64(len(channel)))
-	admin = append(admin, channel...)
-
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildWaypointPacket builds a waypoint MeshPacket.
 func buildWaypointPacket(wp Waypoint, to uint32, channel uint32) []byte {
-	buf := make([]byte, 0, 128)
-
-	if wp.ID > 0 {
-		buf = append(buf, 0x08)
-		buf = appendVarint(buf, uint64(wp.ID))
-	}
-	// latitude_i (sfixed32 — field 2, wire type 5)
 	latI := int32(wp.Latitude * 1e7)
-	buf = append(buf, 0x15)
-	buf = appendFixed32(buf, uint32(latI))
-	// longitude_i (sfixed32 — field 3, wire type 5)
 	lonI := int32(wp.Longitude * 1e7)
-	buf = append(buf, 0x1D)
-	buf = appendFixed32(buf, uint32(lonI))
-	if wp.Expire > 0 {
-		buf = append(buf, 0x20)
-		buf = appendVarint(buf, uint64(wp.Expire))
+	w := &pb.Waypoint{
+		Id:          wp.ID,
+		LatitudeI:   &latI,
+		LongitudeI:  &lonI,
+		Expire:      uint32(wp.Expire),
+		Name:        wp.Name,
+		Description: wp.Description,
+		Icon:        uint32(wp.Icon),
 	}
-	if wp.Name != "" {
-		buf = append(buf, 0x32)
-		buf = appendVarint(buf, uint64(len(wp.Name)))
-		buf = append(buf, []byte(wp.Name)...)
+	payload, err := proto.Marshal(w)
+	if err != nil {
+		return nil
 	}
-	if wp.Description != "" {
-		buf = append(buf, 0x3A)
-		buf = appendVarint(buf, uint64(len(wp.Description)))
-		buf = append(buf, []byte(wp.Description)...)
-	}
-	if wp.Icon > 0 {
-		buf = append(buf, 0x45)
-		buf = appendFixed32(buf, uint32(wp.Icon))
-	}
-
-	return buildRawPacket(buf, PortNumWaypoint, to, channel, true)
+	return buildRawPacket(payload, PortNumWaypoint, to, channel, true)
 }
 
 // buildTraceroutePacket builds a traceroute MeshPacket.
 func buildTraceroutePacket(destNode uint32) []byte {
-	// RouteDiscovery message — empty payload, firmware populates route
 	return buildRawPacket([]byte{}, PortNumTraceroute, destNode, 0, true)
 }
 
 // buildRequestNodeInfo builds a MeshPacket requesting NodeInfo from a remote node.
-// Sends portnum=NODEINFO_APP (4) with want_response=true. The remote node
-// responds with its User (name, hardware) as a NODEINFO_APP packet.
 func buildRequestNodeInfo(myNodeNum, destNode uint32) []byte {
-	// Data: portnum=NODEINFO_APP, want_response=true (no payload needed for request)
-	data := make([]byte, 0, 8)
-	data = append(data, 0x08) // Data field 1: portnum
-	data = appendVarint(data, uint64(PortNumNodeInfo))
-	data = append(data, 0x18, 0x01) // Data field 3: want_response = true
-
-	pkt := make([]byte, 0, len(data)+32)
-	pkt = append(pkt, 0x0D) // field 1 (from), fixed32
-	pkt = appendFixed32(pkt, myNodeNum)
-	pkt = append(pkt, 0x15) // field 2 (to), fixed32
-	pkt = appendFixed32(pkt, destNode)
-	pkt = append(pkt, 0x22) // field 4 (decoded), length-delimited
-	pkt = appendVarint(pkt, uint64(len(data)))
-	pkt = append(pkt, data...)
-	pkt = append(pkt, 0x48) // field 9 (hop_limit), varint
-	pkt = appendVarint(pkt, 3)
-	pkt = append(pkt, 0x50, 0x01) // field 10 (want_ack), varint 1
-
-	return buildToRadioPacket(pkt)
+	pkt := &pb.MeshPacket{
+		From:     myNodeNum,
+		To:       destNode,
+		HopLimit: 3,
+		WantAck:  true,
+		PayloadVariant: &pb.MeshPacket_Decoded{
+			Decoded: &pb.Data{
+				Portnum:      pb.PortNum_NODEINFO_APP,
+				WantResponse: true,
+			},
+		},
+	}
+	pktBytes, err := proto.Marshal(pkt)
+	if err != nil {
+		return nil
+	}
+	toRadio := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: pkt},
+	}
+	_ = pktBytes
+	data, err := proto.Marshal(toRadio)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // ============================================================================
-// Generic protobuf-to-map decoder (for config sections)
+// Generic protobuf-to-map decoder (kept for config sections passthrough)
 // ============================================================================
 
 // decodeProtoToMap decodes arbitrary protobuf bytes into a map.
-// Keys are field numbers as strings.
+// Keys are field numbers as strings. Kept as fallback for raw config inspection.
 func decodeProtoToMap(data []byte) map[string]interface{} {
 	result := make(map[string]interface{})
 	pos := 0
@@ -1330,7 +915,7 @@ func decodeProtoToMap(data []byte) map[string]interface{} {
 			break
 		}
 		pos = newPos
-		key := strconv.FormatUint(uint64(fieldNum), 10)
+		key := fmt.Sprintf("%d", fieldNum)
 
 		var value interface{}
 		switch wireType {
@@ -1345,7 +930,8 @@ func decodeProtoToMap(data []byte) map[string]interface{} {
 			if pos+8 > len(data) {
 				return result
 			}
-			value = binary.LittleEndian.Uint64(data[pos : pos+8])
+			value = uint64(data[pos]) | uint64(data[pos+1])<<8 | uint64(data[pos+2])<<16 | uint64(data[pos+3])<<24 |
+				uint64(data[pos+4])<<32 | uint64(data[pos+5])<<40 | uint64(data[pos+6])<<48 | uint64(data[pos+7])<<56
 			pos += 8
 		case wireLengthDelimited:
 			val, newPos, err := readLengthDelimited(data, pos)
@@ -1369,7 +955,7 @@ func decodeProtoToMap(data []byte) map[string]interface{} {
 			if pos+4 > len(data) {
 				return result
 			}
-			value = binary.LittleEndian.Uint32(data[pos : pos+4])
+			value = uint32(data[pos]) | uint32(data[pos+1])<<8 | uint32(data[pos+2])<<16 | uint32(data[pos+3])<<24
 			pos += 4
 		default:
 			pos = skipField(data, pos, wireType)
@@ -1394,6 +980,34 @@ func decodeProtoToMap(data []byte) map[string]interface{} {
 }
 
 // ============================================================================
+// Compatibility parsers — parse individual proto messages from raw bytes
+// These are used by tests and by direct_mesh.go for sub-message parsing.
+// ============================================================================
+
+func parseMeshPacket(data []byte) (*ProtoMeshPacket, error) {
+	p := &pb.MeshPacket{}
+	if err := proto.Unmarshal(data, p); err != nil {
+		return &ProtoMeshPacket{}, nil
+	}
+	return convertMeshPacket(p), nil
+}
+
+func parseData(data []byte) (*ProtoData, error) {
+	d := &pb.Data{}
+	if err := proto.Unmarshal(data, d); err != nil {
+		return &ProtoData{}, nil
+	}
+	return &ProtoData{
+		PortNum:      uint32(d.GetPortnum()),
+		Payload:      d.GetPayload(),
+		WantResponse: d.GetWantResponse(),
+		Bitfield:     d.GetBitfield(),
+		RequestID:    d.GetRequestId(),
+		ReplyID:      d.GetReplyId(),
+	}, nil
+}
+
+// ============================================================================
 // Conversion helpers — proto types → transport types
 // ============================================================================
 
@@ -1413,7 +1027,12 @@ func protoNodeInfoToMeshNode(ni *ProtoNodeInfo) MeshNode {
 		node.ShortName = ni.User.ShortName
 		node.HWModel = int(ni.User.HWModel)
 		node.HWModelName = hwModelName(int(ni.User.HWModel))
+		node.Role = ni.User.Role
+		node.IsLicensed = ni.User.IsLicensed
 	}
+	node.HopsAway = ni.HopsAway
+	node.IsFavorite = ni.IsFavorite
+	node.IsIgnored = ni.IsIgnored
 	if ni.Position != nil {
 		node.Latitude = float64(ni.Position.LatitudeI) / 1e7
 		node.Longitude = float64(ni.Position.LongitudeI) / 1e7
@@ -1438,14 +1057,15 @@ func protoNodeInfoToMeshNode(ni *ProtoNodeInfo) MeshNode {
 // protoPacketToMeshMessage converts a ProtoMeshPacket into a MeshMessage.
 func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 	msg := MeshMessage{
-		From:     pkt.From,
-		To:       pkt.To,
-		Channel:  pkt.Channel,
-		ID:       pkt.ID,
-		RxSNR:    pkt.RxSNR,
-		HopLimit: int(pkt.HopLimit),
-		HopStart: int(pkt.HopStart),
-		ViaMqtt:  pkt.ViaMqtt,
+		From:         pkt.From,
+		To:           pkt.To,
+		Channel:      pkt.Channel,
+		ID:           pkt.ID,
+		RxSNR:        pkt.RxSNR,
+		HopLimit:     int(pkt.HopLimit),
+		HopStart:     int(pkt.HopStart),
+		ViaMqtt:      pkt.ViaMqtt,
+		PKIEncrypted: pkt.PKIEncrypted,
 	}
 	if pkt.RxTime > 0 {
 		msg.RxTime = int64(pkt.RxTime)
@@ -1459,11 +1079,11 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 		msg.PortNumName = portNumName(int(pkt.Decoded.PortNum))
 		msg.RequestID = pkt.Decoded.RequestID
 		msg.ReplyID = pkt.Decoded.ReplyID
+		msg.OkToMQTT = pkt.Decoded.OkToMQTT()
 
 		if pkt.Decoded.PortNum == PortNumTextMessage {
 			msg.DecodedText = string(pkt.Decoded.Payload)
 		}
-		// Parse ROUTING_APP for ACK/NAK/error information
 		if pkt.Decoded.PortNum == PortNumRouting && len(pkt.Decoded.Payload) > 0 {
 			msg.Routing = parseRouting(pkt.Decoded.Payload)
 		}
@@ -1472,7 +1092,6 @@ func protoPacketToMeshMessage(pkt *ProtoMeshPacket) MeshMessage {
 			copy(msg.RawPayload, pkt.Decoded.Payload)
 		}
 	} else if len(pkt.Encrypted) > 0 {
-		// AES-256-CTR passthrough: carry raw encrypted payload for relay
 		msg.PortNumName = "ENCRYPTED_RELAY"
 		msg.EncryptedPayload = make([]byte, len(pkt.Encrypted))
 		copy(msg.EncryptedPayload, pkt.Encrypted)
@@ -1501,98 +1120,24 @@ type ProtoNeighborInfo struct {
 }
 
 func parseNeighborInfo(data []byte) (*ProtoNeighborInfo, error) {
-	ni := &ProtoNeighborInfo{}
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return ni, nil
-		}
-		pos = newPos
-		switch fieldNum {
-		case 1: // node_id
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return ni, nil
-			}
-			ni.NodeID = uint32(val)
-			pos += n
-		case 2: // last_sent_by_id
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return ni, nil
-			}
-			ni.LastSentByID = uint32(val)
-			pos += n
-		case 3: // node_broadcast_interval_secs
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return ni, nil
-			}
-			ni.NodeBroadcastIntervalSec = uint32(val)
-			pos += n
-		case 4: // neighbors (repeated, length-delimited)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return ni, nil
-			}
-			pos = newPos
-			neighbor := parseNeighbor(val)
-			ni.Neighbors = append(ni.Neighbors, neighbor)
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return ni, nil
-			}
-		}
+	ni := &pb.NeighborInfo{}
+	if err := proto.Unmarshal(data, ni); err != nil {
+		return &ProtoNeighborInfo{}, nil
 	}
-	return ni, nil
-}
-
-func parseNeighbor(data []byte) ProtoNeighbor {
-	n := ProtoNeighbor{}
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return n
-		}
-		pos = newPos
-		switch fieldNum {
-		case 1: // node_id
-			val, nn := readVarint(data, pos)
-			if nn <= 0 {
-				return n
-			}
-			n.NodeID = uint32(val)
-			pos += nn
-		case 2: // snr (float = fixed32)
-			if pos+4 > len(data) {
-				return n
-			}
-			n.SNR = math.Float32frombits(binary.LittleEndian.Uint32(data[pos : pos+4]))
-			pos += 4
-		case 3: // last_rx_time (fixed32)
-			if pos+4 > len(data) {
-				return n
-			}
-			n.LastRxTime = binary.LittleEndian.Uint32(data[pos : pos+4])
-			pos += 4
-		case 4: // node_broadcast_interval_secs
-			val, nn := readVarint(data, pos)
-			if nn <= 0 {
-				return n
-			}
-			n.NodeBroadcastIntervalSec = uint32(val)
-			pos += nn
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return n
-			}
-		}
+	info := &ProtoNeighborInfo{
+		NodeID:                   ni.GetNodeId(),
+		LastSentByID:             ni.GetLastSentById(),
+		NodeBroadcastIntervalSec: ni.GetNodeBroadcastIntervalSecs(),
 	}
-	return n
+	for _, n := range ni.GetNeighbors() {
+		info.Neighbors = append(info.Neighbors, ProtoNeighbor{
+			NodeID:                   n.GetNodeId(),
+			SNR:                      n.GetSnr(),
+			LastRxTime:               n.GetLastRxTime(),
+			NodeBroadcastIntervalSec: n.GetNodeBroadcastIntervalSecs(),
+		})
+	}
+	return info, nil
 }
 
 // ============================================================================
@@ -1627,263 +1172,126 @@ type ProtoSFHistory struct {
 }
 
 func parseStoreForward(data []byte) *ProtoStoreForward {
-	sf := &ProtoStoreForward{}
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return sf
-		}
-		pos = newPos
-		switch fieldNum {
-		case 1: // rr (enum = varint)
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return sf
-			}
-			sf.RequestResponse = int(val)
-			pos += n
-		case 2: // stats (length-delimited)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return sf
-			}
-			pos = newPos
-			sf.Stats = parseSFStats(val)
-		case 3: // history (length-delimited)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return sf
-			}
-			pos = newPos
-			sf.History = parseSFHistory(val)
-		case 5: // text (bytes)
-			val, newPos, err := readLengthDelimited(data, pos)
-			if err != nil {
-				return sf
-			}
-			pos = newPos
-			sf.Text = val
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return sf
-			}
+	sf := &pb.StoreAndForward{}
+	if err := proto.Unmarshal(data, sf); err != nil {
+		return &ProtoStoreForward{}
+	}
+	result := &ProtoStoreForward{
+		RequestResponse: int(sf.GetRr()),
+	}
+	if s, ok := sf.GetVariant().(*pb.StoreAndForward_Stats); ok && s.Stats != nil {
+		result.Stats = &ProtoSFStats{
+			MessagesTotal: s.Stats.GetMessagesTotal(),
+			MessagesSaved: s.Stats.GetMessagesSaved(),
+			MessagesMax:   s.Stats.GetMessagesMax(),
+			UpTime:        s.Stats.GetUpTime(),
+			Requests:      s.Stats.GetRequests(),
+			Heartbeat:     s.Stats.GetHeartbeat(),
+			ReturnMax:     s.Stats.GetReturnMax(),
+			ReturnWindow:  s.Stats.GetReturnWindow(),
 		}
 	}
-	return sf
-}
-
-func parseSFStats(data []byte) *ProtoSFStats {
-	s := &ProtoSFStats{}
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return s
-		}
-		pos = newPos
-		switch fieldNum {
-		case 1:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.MessagesTotal = uint32(val)
-			pos += n
-		case 2:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.MessagesSaved = uint32(val)
-			pos += n
-		case 3:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.MessagesMax = uint32(val)
-			pos += n
-		case 4:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.UpTime = uint32(val)
-			pos += n
-		case 5:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.Requests = uint32(val)
-			pos += n
-		case 7:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.Heartbeat = val != 0
-			pos += n
-		case 8:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.ReturnMax = uint32(val)
-			pos += n
-		case 9:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return s
-			}
-			s.ReturnWindow = uint32(val)
-			pos += n
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return s
-			}
+	if h, ok := sf.GetVariant().(*pb.StoreAndForward_History_); ok && h.History != nil {
+		result.History = &ProtoSFHistory{
+			HistoryMessages: h.History.GetHistoryMessages(),
+			Window:          h.History.GetWindow(),
+			LastRequest:     h.History.GetLastRequest(),
 		}
 	}
-	return s
-}
-
-func parseSFHistory(data []byte) *ProtoSFHistory {
-	h := &ProtoSFHistory{}
-	pos := 0
-	for pos < len(data) {
-		fieldNum, wireType, newPos, err := readTag(data, pos)
-		if err != nil {
-			return h
-		}
-		pos = newPos
-		switch fieldNum {
-		case 1:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return h
-			}
-			h.HistoryMessages = uint32(val)
-			pos += n
-		case 2:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return h
-			}
-			h.Window = uint32(val)
-			pos += n
-		case 3:
-			val, n := readVarint(data, pos)
-			if n <= 0 {
-				return h
-			}
-			h.LastRequest = uint32(val)
-			pos += n
-		default:
-			pos = skipField(data, pos, wireType)
-			if pos < 0 {
-				return h
-			}
-		}
+	if t, ok := sf.GetVariant().(*pb.StoreAndForward_Text); ok {
+		result.Text = t.Text
 	}
-	return h
+	return result
 }
 
 // ============================================================================
-// New builders
+// Additional builders
 // ============================================================================
 
 // buildPositionPacket builds a Position protobuf and wraps it as a POSITION_APP MeshPacket.
 func buildPositionPacket(lat, lon float64, alt int32, timestamp uint32) []byte {
 	latI := int32(lat * 1e7)
 	lonI := int32(lon * 1e7)
-
-	pos := make([]byte, 0, 32)
-	// field 1: latitude_i (sfixed32)
-	pos = append(pos, 0x0D)
-	pos = appendFixed32(pos, uint32(latI))
-	// field 2: longitude_i (sfixed32)
-	pos = append(pos, 0x15)
-	pos = appendFixed32(pos, uint32(lonI))
-	// field 3: altitude (int32 varint)
-	if alt != 0 {
-		pos = append(pos, 0x18)
-		pos = appendVarint(pos, uint64(alt))
+	p := &pb.Position{
+		LatitudeI:  &latI,
+		LongitudeI: &lonI,
+		Altitude:   &alt,
+		Time:       timestamp,
 	}
-	// field 4: time (fixed32)
-	if timestamp > 0 {
-		pos = append(pos, 0x25)
-		pos = appendFixed32(pos, timestamp)
+	payload, err := proto.Marshal(p)
+	if err != nil {
+		return nil
 	}
-
-	return buildRawPacket(pos, PortNumPosition, 0, 0, true)
+	return buildRawPacket(payload, PortNumPosition, 0, 0, true)
 }
 
 // buildAdminGetConfig builds a get_config_request admin message.
-// configType is the ConfigType enum value (0=device, 1=position, ..., 7=security).
 func buildAdminGetConfig(myNodeNum uint32, configType int) []byte {
-	admin := make([]byte, 0, 8)
-	admin = appendVarint(admin, uint64(AdminFieldGetConfigRequest)<<3|0) // field 5, varint
-	admin = appendVarint(admin, uint64(configType))
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetConfigRequest{
+			GetConfigRequest: pb.AdminMessage_ConfigType(configType),
+		},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminGetModuleConfig builds a get_module_config_request admin message.
-// moduleType is the ModuleConfigType enum value.
 func buildAdminGetModuleConfig(myNodeNum uint32, moduleType int) []byte {
-	admin := make([]byte, 0, 8)
-	admin = appendVarint(admin, uint64(AdminFieldGetModuleConfigReq)<<3|0) // field 7, varint
-	admin = appendVarint(admin, uint64(moduleType))
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetModuleConfigRequest{
+			GetModuleConfigRequest: pb.AdminMessage_ModuleConfigType(moduleType),
+		},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminGetChannel builds a get_channel_request admin message.
 func buildAdminGetChannel(myNodeNum uint32, channelIndex int) []byte {
-	admin := make([]byte, 0, 8)
-	admin = appendVarint(admin, uint64(AdminFieldGetChannelRequest)<<3|0) // field 1, varint
-	admin = appendVarint(admin, uint64(channelIndex))
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetChannelRequest{
+			GetChannelRequest: uint32(channelIndex),
+		},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminSetCannedMessages builds an AdminMessage to set canned messages.
-// Admin field 36 (set_canned_message_module_messages) = string.
 func buildAdminSetCannedMessages(myNodeNum uint32, messages string) []byte {
-	admin := make([]byte, 0, len(messages)+8)
-	admin = appendVarint(admin, uint64(AdminFieldSetCannedMessages)<<3|2) // field 36, length-delimited
-	admin = appendVarint(admin, uint64(len(messages)))
-	admin = append(admin, []byte(messages)...)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetCannedMessageModuleMessages{
+			SetCannedMessageModuleMessages: messages,
+		},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminGetCannedMessages builds a get_canned_message_module_messages_request.
-// Admin field 10 = bool (true to request).
 func buildAdminGetCannedMessages(myNodeNum uint32) []byte {
-	admin := make([]byte, 0, 8)
-	admin = appendVarint(admin, uint64(AdminFieldGetCannedMsgReq)<<3|0) // field 10, varint
-	admin = appendVarint(admin, 1)                                      // true
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetCannedMessageModuleMessagesRequest{
+			GetCannedMessageModuleMessagesRequest: true,
+		},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildStoreForwardRequest builds a StoreAndForward CLIENT_HISTORY request.
-// Sends to a specific S&F server node. window = seconds of history to request.
 func buildStoreForwardRequest(destNode uint32, window uint32) []byte {
-	// StoreAndForward: field 1 = rr (varint, CLIENT_HISTORY=65), field 3 = history
-	sf := make([]byte, 0, 16)
-	sf = append(sf, 0x08) // field 1, varint
-	sf = appendVarint(sf, uint64(SFClientHistory))
-	// History submessage: field 2 = window
-	if window > 0 {
-		hist := make([]byte, 0, 8)
-		hist = append(hist, 0x10) // field 2, varint
-		hist = appendVarint(hist, uint64(window))
-		sf = append(sf, 0x1A) // field 3, length-delimited
-		sf = appendVarint(sf, uint64(len(hist)))
-		sf = append(sf, hist...)
+	sf := &pb.StoreAndForward{
+		Rr: pb.StoreAndForward_CLIENT_HISTORY,
 	}
-
-	return buildRawPacket(sf, PortNumStoreForward, destNode, 0, true)
+	if window > 0 {
+		sf.Variant = &pb.StoreAndForward_History_{
+			History: &pb.StoreAndForward_History{
+				Window: window,
+			},
+		}
+	}
+	payload, err := proto.Marshal(sf)
+	if err != nil {
+		return nil
+	}
+	return buildRawPacket(payload, PortNumStoreForward, destNode, 0, true)
 }
 
 // buildRangeTestPacket builds a range test packet (portnum 66).
@@ -1892,59 +1300,39 @@ func buildRangeTestPacket(text string, to uint32) []byte {
 }
 
 // buildAdminSetFixedPosition builds an AdminMessage to set a fixed GPS position.
-// Admin field 41 = Position message (length-delimited).
 func buildAdminSetFixedPosition(myNodeNum uint32, lat, lon float64, alt int32) []byte {
 	latI := int32(lat * 1e7)
 	lonI := int32(lon * 1e7)
-
-	pos := make([]byte, 0, 24)
-	pos = append(pos, 0x0D) // field 1: latitude_i (sfixed32)
-	pos = appendFixed32(pos, uint32(latI))
-	pos = append(pos, 0x15) // field 2: longitude_i (sfixed32)
-	pos = appendFixed32(pos, uint32(lonI))
-	if alt != 0 {
-		pos = append(pos, 0x18) // field 3: altitude (varint)
-		pos = appendVarint(pos, uint64(alt))
+	p := &pb.Position{
+		LatitudeI:  &latI,
+		LongitudeI: &lonI,
+		Altitude:   &alt,
+		Time:       uint32(time.Now().Unix()),
 	}
-	pos = append(pos, 0x25) // field 4: time (fixed32)
-	pos = appendFixed32(pos, uint32(time.Now().Unix()))
-
-	admin := make([]byte, 0, len(pos)+8)
-	admin = appendVarint(admin, uint64(AdminFieldSetFixedPosition)<<3|2) // field 41, length-delimited
-	admin = appendVarint(admin, uint64(len(pos)))
-	admin = append(admin, pos...)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetFixedPosition{SetFixedPosition: p},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminSetOwner builds an AdminMessage to set the device owner name.
-// Admin field 32 = User message (length-delimited).
 func buildAdminSetOwner(myNodeNum uint32, longName, shortName string) []byte {
-	user := make([]byte, 0, 64)
-	if longName != "" {
-		user = append(user, 0x12) // field 2: long_name (length-delimited)
-		user = appendVarint(user, uint64(len(longName)))
-		user = append(user, []byte(longName)...)
+	user := &pb.User{
+		LongName:  longName,
+		ShortName: shortName,
 	}
-	if shortName != "" {
-		user = append(user, 0x1A) // field 3: short_name (length-delimited)
-		user = appendVarint(user, uint64(len(shortName)))
-		user = append(user, []byte(shortName)...)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetOwner{SetOwner: user},
 	}
-
-	admin := make([]byte, 0, len(user)+8)
-	admin = appendVarint(admin, uint64(AdminFieldSetOwner)<<3|2) // field 32, length-delimited
-	admin = appendVarint(admin, uint64(len(user)))
-	admin = append(admin, user...)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // buildAdminRemoveFixedPosition builds an AdminMessage to remove fixed position.
-// Admin field 42 = bool (true).
 func buildAdminRemoveFixedPosition(myNodeNum uint32) []byte {
-	admin := make([]byte, 0, 8)
-	admin = appendVarint(admin, uint64(AdminFieldRemoveFixedPosition)<<3|0) // field 42, varint
-	admin = appendVarint(admin, 1)
-	return buildAdminToRadio(myNodeNum, myNodeNum, admin)
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RemoveFixedPosition{RemoveFixedPosition: true},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // configSectionToEnum maps section name strings to Config enum values.
@@ -1953,6 +1341,7 @@ func configSectionToEnum(section string) (int, bool) {
 		"device": ConfigTypeDevice, "position": ConfigTypePosition, "power": ConfigTypePower,
 		"network": ConfigTypeNetwork, "display": ConfigTypeDisplay, "lora": ConfigTypeLora,
 		"bluetooth": ConfigTypeBluetooth, "security": ConfigTypeSecurity,
+		"sessionkey": ConfigTypeSessionkey, "device_ui": ConfigTypeDeviceUI,
 	}
 	v, ok := m[section]
 	return v, ok
@@ -1966,10 +1355,247 @@ func moduleConfigSectionToEnum(section string) (int, bool) {
 		"store_forward":         ModuleConfigStoreForward, "range_test": ModuleConfigRangeTest,
 		"telemetry": ModuleConfigTelemetry, "canned_message": ModuleConfigCannedMessage,
 		"audio": ModuleConfigAudio, "remote_hardware": ModuleConfigRemoteHardware,
-		"neighbor_info": ModuleConfigNeighborInfo,
+		"neighbor_info":      ModuleConfigNeighborInfo,
+		"ambient_lighting":   ModuleConfigAmbientLighting,
+		"detection_sensor":   ModuleConfigDetectionSensor,
+		"paxcounter":         ModuleConfigPaxcounter,
+		"status_message":     ModuleConfigStatusMessage,
+		"traffic_management": ModuleConfigTrafficManagement,
+		"tak_config":         ModuleConfigTAKConfig,
 	}
 	v, ok := m[section]
 	return v, ok
+}
+
+// ============================================================================
+// Power metrics and air quality telemetry
+// ============================================================================
+
+// ProtoPowerMetrics represents power sensor data (Telemetry field 4).
+type ProtoPowerMetrics struct {
+	CH1Voltage float32 // field 1
+	CH1Current float32 // field 2
+	CH2Voltage float32 // field 3
+	CH2Current float32 // field 4
+	CH3Voltage float32 // field 5
+	CH3Current float32 // field 6
+}
+
+// parsePowerMetrics extracts power metrics from a Telemetry message (field 4).
+func parsePowerMetrics(data []byte) *ProtoPowerMetrics {
+	t := &pb.Telemetry{}
+	if err := proto.Unmarshal(data, t); err != nil {
+		return nil
+	}
+	pm, ok := t.GetVariant().(*pb.Telemetry_PowerMetrics)
+	if !ok || pm.PowerMetrics == nil {
+		return nil
+	}
+	p := pm.PowerMetrics
+	return &ProtoPowerMetrics{
+		CH1Voltage: p.GetCh1Voltage(),
+		CH1Current: p.GetCh1Current(),
+		CH2Voltage: p.GetCh2Voltage(),
+		CH2Current: p.GetCh2Current(),
+		CH3Voltage: p.GetCh3Voltage(),
+		CH3Current: p.GetCh3Current(),
+	}
+}
+
+// ProtoAirQualityMetrics represents air quality sensor data (Telemetry field 5).
+type ProtoAirQualityMetrics struct {
+	PM10Standard  uint32 // field 1 — PM1.0 standard (µg/m³)
+	PM25Standard  uint32 // field 2 — PM2.5 standard
+	PM100Standard uint32 // field 3 — PM10.0 standard
+	PM10Env       uint32 // field 4 — PM1.0 environmental
+	PM25Env       uint32 // field 5 — PM2.5 environmental
+	PM100Env      uint32 // field 6 — PM10.0 environmental
+	Count03um     uint32 // field 7 — particles > 0.3µm / 0.1L air
+	Count05um     uint32 // field 8
+	Count10um     uint32 // field 9
+	Count25um     uint32 // field 10
+	Count50um     uint32 // field 11
+	Count100um    uint32 // field 12
+}
+
+// parseAirQualityMetrics extracts air quality from a Telemetry message (field 5).
+func parseAirQualityMetrics(data []byte) *ProtoAirQualityMetrics {
+	t := &pb.Telemetry{}
+	if err := proto.Unmarshal(data, t); err != nil {
+		return nil
+	}
+	aq, ok := t.GetVariant().(*pb.Telemetry_AirQualityMetrics)
+	if !ok || aq.AirQualityMetrics == nil {
+		return nil
+	}
+	a := aq.AirQualityMetrics
+	return &ProtoAirQualityMetrics{
+		PM10Standard:  a.GetPm10Standard(),
+		PM25Standard:  a.GetPm25Standard(),
+		PM100Standard: a.GetPm100Standard(),
+		PM10Env:       a.GetPm10Environmental(),
+		PM25Env:       a.GetPm25Environmental(),
+		PM100Env:      a.GetPm100Environmental(),
+		Count03um:     a.GetParticles_03Um(),
+		Count05um:     a.GetParticles_05Um(),
+		Count10um:     a.GetParticles_10Um(),
+		Count25um:     a.GetParticles_25Um(),
+		Count50um:     a.GetParticles_50Um(),
+		Count100um:    a.GetParticles_100Um(),
+	}
+}
+
+// parsePowerMetricsProto parses raw PowerMetrics bytes (not wrapped in Telemetry).
+func parsePowerMetricsProto(data []byte) *ProtoPowerMetrics {
+	pm := &pb.PowerMetrics{}
+	if err := proto.Unmarshal(data, pm); err != nil {
+		return &ProtoPowerMetrics{}
+	}
+	return &ProtoPowerMetrics{
+		CH1Voltage: pm.GetCh1Voltage(),
+		CH1Current: pm.GetCh1Current(),
+		CH2Voltage: pm.GetCh2Voltage(),
+		CH2Current: pm.GetCh2Current(),
+		CH3Voltage: pm.GetCh3Voltage(),
+		CH3Current: pm.GetCh3Current(),
+	}
+}
+
+// parseAirQualityMetricsProto parses raw AirQualityMetrics bytes (not wrapped in Telemetry).
+func parseAirQualityMetricsProto(data []byte) *ProtoAirQualityMetrics {
+	aq := &pb.AirQualityMetrics{}
+	if err := proto.Unmarshal(data, aq); err != nil {
+		return &ProtoAirQualityMetrics{}
+	}
+	return &ProtoAirQualityMetrics{
+		PM10Standard:  aq.GetPm10Standard(),
+		PM25Standard:  aq.GetPm25Standard(),
+		PM100Standard: aq.GetPm100Standard(),
+		PM10Env:       aq.GetPm10Environmental(),
+		PM25Env:       aq.GetPm25Environmental(),
+		PM100Env:      aq.GetPm100Environmental(),
+		Count03um:     aq.GetParticles_03Um(),
+		Count05um:     aq.GetParticles_05Um(),
+		Count10um:     aq.GetParticles_10Um(),
+		Count25um:     aq.GetParticles_25Um(),
+		Count50um:     aq.GetParticles_50Um(),
+		Count100um:    aq.GetParticles_100Um(),
+	}
+}
+
+// ProtoDeviceMetadata represents a DeviceMetadata response (admin field 13).
+type ProtoDeviceMetadata struct {
+	FirmwareVersion string // field 1
+	DeviceStateVer  uint32 // field 2
+	CanShutdown     bool   // field 3
+	HasWifi         bool   // field 4
+	HasBluetooth    bool   // field 5
+	HasEthernet     bool   // field 6
+	Role            uint32 // field 7
+	PositionFlags   uint32 // field 8
+	HWModel         uint32 // field 9
+	HasRemoteHW     bool   // field 10
+}
+
+func parseDeviceMetadata(data []byte) *ProtoDeviceMetadata {
+	dm := &pb.DeviceMetadata{}
+	if err := proto.Unmarshal(data, dm); err != nil {
+		return &ProtoDeviceMetadata{}
+	}
+	return &ProtoDeviceMetadata{
+		FirmwareVersion: dm.GetFirmwareVersion(),
+		DeviceStateVer:  dm.GetDeviceStateVersion(),
+		CanShutdown:     dm.GetCanShutdown(),
+		HasWifi:         dm.GetHasWifi(),
+		HasBluetooth:    dm.GetHasBluetooth(),
+		HasEthernet:     dm.GetHasEthernet(),
+		Role:            uint32(dm.GetRole()),
+		PositionFlags:   dm.GetPositionFlags(),
+		HWModel:         uint32(dm.GetHwModel()),
+		HasRemoteHW:     dm.GetHasRemoteHardware(),
+	}
+}
+
+// ============================================================================
+// New admin builders
+// ============================================================================
+
+// buildAdminBeginEditSettings builds AdminMessage begin_edit_settings.
+func buildAdminBeginEditSettings(myNodeNum uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_BeginEditSettings{BeginEditSettings: true},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminCommitEditSettings builds AdminMessage commit_edit_settings.
+func buildAdminCommitEditSettings(myNodeNum uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_CommitEditSettings{CommitEditSettings: true},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminGetDeviceMetadata builds a get_device_metadata_request (admin field 12).
+func buildAdminGetDeviceMetadata(myNodeNum, destNode uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetDeviceMetadataRequest{GetDeviceMetadataRequest: true},
+	}
+	return buildAdminToRadioMsg(myNodeNum, destNode, admin)
+}
+
+// buildAdminShutdown builds AdminMessage shutdown_seconds.
+func buildAdminShutdown(myNodeNum, destNode uint32, delaySecs int) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_ShutdownSeconds{ShutdownSeconds: int32(delaySecs)},
+	}
+	return buildAdminToRadioMsg(myNodeNum, destNode, admin)
+}
+
+// buildAdminSetHamMode builds AdminMessage set_ham_mode.
+func buildAdminSetHamMode(myNodeNum uint32, callSign string, txPower int32, frequency float32, shortName string) []byte {
+	ham := &pb.HamParameters{
+		CallSign:  callSign,
+		TxPower:   txPower,
+		Frequency: frequency,
+		ShortName: shortName,
+	}
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetHamMode{SetHamMode: ham},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminSetFavorite builds AdminMessage set_favorite_node.
+func buildAdminSetFavorite(myNodeNum, nodeNum uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetFavoriteNode{SetFavoriteNode: nodeNum},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminRemoveFavorite builds AdminMessage remove_favorite_node.
+func buildAdminRemoveFavorite(myNodeNum, nodeNum uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RemoveFavoriteNode{RemoveFavoriteNode: nodeNum},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminSetIgnored builds AdminMessage set_ignored_node.
+func buildAdminSetIgnored(myNodeNum, nodeNum uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetIgnoredNode{SetIgnoredNode: nodeNum},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
+}
+
+// buildAdminRemoveIgnored builds AdminMessage remove_ignored_node.
+func buildAdminRemoveIgnored(myNodeNum, nodeNum uint32) []byte {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RemoveIgnoredNode{RemoveIgnoredNode: nodeNum},
+	}
+	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
 // Iridium signal descriptions (shared with DirectSatTransport)
