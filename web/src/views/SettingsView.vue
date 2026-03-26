@@ -32,6 +32,59 @@ const radioJSON = ref('')
 
 const radioRefreshing = ref(false)
 
+// Protobuf field name mappings for Meshtastic Config
+const configSectionMap = {
+  lora: 'config_6', device: 'config_1', position: 'config_2',
+  power: 'config_3', bluetooth: 'config_7',
+}
+const configFieldLabels = {
+  lora: {
+    '1': 'Use Preset', '2': 'Modem Preset', '3': 'Bandwidth (Hz)', '4': 'Spread Factor',
+    '5': 'Coding Rate', '6': 'Frequency Offset', '7': 'Region', '8': 'Hop Limit',
+    '9': 'TX Enabled', '10': 'TX Power (dBm)', '11': 'Channel Number', '12': 'Override Duty Cycle',
+    '13': 'SX126x RX Boosted Gain', '14': 'Override Frequency (MHz)', '15': 'PA Fan Disabled',
+    '17': 'Ignore MQTT', '18': 'Config OK to MQTT',
+  },
+  device: {
+    '1': 'Role', '2': 'Serial Enabled', '3': 'Debug Log Enabled',
+    '5': 'Button GPIO', '6': 'Buzzer GPIO', '7': 'Rebroadcast Mode',
+    '8': 'Node Info Broadcast (s)', '9': 'Double Tap as Button',
+    '10': 'Is Managed', '12': 'Disable Triple Click', '13': 'Timezone',
+    '14': 'LED Heartbeat Disabled',
+  },
+  position: {
+    '1': 'Broadcast Interval (s)', '2': 'Smart Broadcast', '3': 'Fixed Position',
+    '4': 'GPS Enabled', '5': 'GPS Update Interval (s)', '6': 'GPS Attempt Time (s)',
+    '7': 'Position Flags', '8': 'RX GPIO', '9': 'TX GPIO',
+    '10': 'Smart Min Distance (m)', '11': 'Smart Min Interval (s)',
+    '12': 'GPS Enable GPIO', '13': 'GPS Mode',
+  },
+  power: {
+    '1': 'Power Saving', '2': 'Shutdown After (s)', '3': 'ADC Multiplier',
+    '4': 'Wait Bluetooth (s)', '5': 'Super Deep Sleep (s)', '6': 'Light Sleep (s)',
+    '7': 'Min Wake (s)', '8': 'Battery INA Address',
+  },
+  bluetooth: {
+    '1': 'Enabled', '2': 'Mode', '3': 'Fixed PIN',
+  },
+}
+
+const currentSectionData = computed(() => {
+  if (!store.config) return []
+  const configKey = configSectionMap[radioSection.value]
+  const data = store.config[configKey]
+  if (!data || typeof data !== 'object') return []
+  const labels = configFieldLabels[radioSection.value] || {}
+  return Object.entries(data)
+    .sort(([a], [b]) => parseInt(a) - parseInt(b))
+    .map(([k, v]) => ({
+      key: k,
+      label: labels[k] || `Field ${k}`,
+      value: typeof v === 'object' ? JSON.stringify(v) : v,
+      isBool: v === true || v === false || v === 0 || v === 1,
+    }))
+})
+
 // Credentials
 const credFile = ref(null)
 const credFileName = ref('')
@@ -223,13 +276,32 @@ async function saveCannedMessages() {
 }
 
 // Device MQTT module
-const deviceMqttForm = ref({})
-const deviceMqttJSON = ref('')
+const deviceMqttForm = ref({ enabled: false, address: '', username: '', password: '', encryption_enabled: false, json_enabled: false, tls_enabled: false, root: '' })
 const deviceMqttEditing = ref(false)
 
+function loadDeviceMqtt() {
+  const raw = store.config?.['module_1']
+  if (raw && typeof raw === 'object') {
+    deviceMqttForm.value = {
+      enabled: !!raw['1'], address: raw['2'] || '', username: raw['3'] || '',
+      password: raw['4'] || '', encryption_enabled: !!raw['5'],
+      json_enabled: !!raw['6'], tls_enabled: !!raw['7'], root: raw['8'] || '',
+    }
+  }
+}
+
 async function saveDeviceMqtt() {
+  const f = deviceMqttForm.value
+  const data = {}
+  data['1'] = f.enabled
+  if (f.address) data['2'] = f.address
+  if (f.username) data['3'] = f.username
+  if (f.password) data['4'] = f.password
+  data['5'] = f.encryption_enabled
+  data['6'] = f.json_enabled
+  data['7'] = f.tls_enabled
+  if (f.root) data['8'] = f.root
   try {
-    const data = JSON.parse(deviceMqttJSON.value)
     await store.configModule({ section: 'mqtt', config: data })
     deviceMqttEditing.value = false
   } catch (e) {
@@ -240,7 +312,7 @@ async function saveDeviceMqtt() {
 async function refreshDeviceMqtt() {
   try {
     await store.fetchModuleConfigSection('mqtt')
-    setTimeout(() => store.fetchConfig(), 1500)
+    setTimeout(() => { store.fetchConfig(); loadDeviceMqtt() }, 1500)
   } catch {}
 }
 
@@ -603,7 +675,7 @@ onMounted(async () => {
   store.fetchCellularSignal()
   store.fetchSMSContacts()
   store.fetchSIMCards()
-  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman()
+  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt()
   store.fetchCredentials()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
@@ -648,7 +720,18 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <textarea v-model="radioJSON" rows="8" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="{ ... }"></textarea>
           <button @click="saveRadioConfig" class="mt-2 px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Apply</button>
         </div>
-        <pre v-else class="bg-gray-900 rounded-lg p-4 text-xs text-gray-400 overflow-x-auto">{{ JSON.stringify(store.config, null, 2) }}</pre>
+        <div v-else-if="currentSectionData.length > 0" class="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
+          <div v-for="(field, i) in currentSectionData" :key="field.key"
+            class="flex items-center px-4 py-2 text-sm" :class="i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50'">
+            <span class="w-1/2 text-gray-400 truncate">{{ field.label }}</span>
+            <span v-if="field.value === true || field.value === 1" class="text-emerald-400">enabled</span>
+            <span v-else-if="field.value === false || field.value === 0" class="text-gray-600">disabled</span>
+            <span v-else class="text-gray-200 font-mono text-xs truncate">{{ field.value }}</span>
+          </div>
+        </div>
+        <div v-else class="bg-gray-900 rounded-lg p-4 text-xs text-gray-500">
+          No data for this section. Try clicking Refresh to request it from the device.
+        </div>
       </div>
     </div>
 
@@ -1390,15 +1473,80 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         </div>
         <p class="text-xs text-gray-500">Configure the Meshtastic device's built-in MQTT module. This is separate from MeshSat's MQTT gateway.</p>
         <div v-if="!deviceMqttEditing">
-          <pre class="bg-gray-900 rounded-lg p-4 text-xs text-gray-400 overflow-x-auto">{{ JSON.stringify(store.config?.['module_1'] || {}, null, 2) }}</pre>
-          <button @click="deviceMqttEditing = true" class="mt-2 px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:text-teal-400">Edit JSON</button>
+          <div class="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
+            <div class="flex items-center px-4 py-2 bg-gray-900">
+              <span class="w-1/2 text-gray-400 text-sm">Enabled</span>
+              <span :class="deviceMqttForm.enabled ? 'text-emerald-400' : 'text-gray-600'" class="text-sm">{{ deviceMqttForm.enabled ? 'Yes' : 'No' }}</span>
+            </div>
+            <div class="flex items-center px-4 py-2 bg-gray-800/50">
+              <span class="w-1/2 text-gray-400 text-sm">Broker Address</span>
+              <span class="text-gray-200 text-sm font-mono">{{ deviceMqttForm.address || '—' }}</span>
+            </div>
+            <div class="flex items-center px-4 py-2 bg-gray-900">
+              <span class="w-1/2 text-gray-400 text-sm">Username</span>
+              <span class="text-gray-200 text-sm font-mono">{{ deviceMqttForm.username || '—' }}</span>
+            </div>
+            <div class="flex items-center px-4 py-2 bg-gray-800/50">
+              <span class="w-1/2 text-gray-400 text-sm">Root Topic</span>
+              <span class="text-gray-200 text-sm font-mono">{{ deviceMqttForm.root || '—' }}</span>
+            </div>
+            <div class="flex items-center px-4 py-2 bg-gray-900">
+              <span class="w-1/2 text-gray-400 text-sm">Encryption</span>
+              <span :class="deviceMqttForm.encryption_enabled ? 'text-emerald-400' : 'text-gray-600'" class="text-sm">{{ deviceMqttForm.encryption_enabled ? 'enabled' : 'disabled' }}</span>
+            </div>
+            <div class="flex items-center px-4 py-2 bg-gray-800/50">
+              <span class="w-1/2 text-gray-400 text-sm">JSON Output</span>
+              <span :class="deviceMqttForm.json_enabled ? 'text-emerald-400' : 'text-gray-600'" class="text-sm">{{ deviceMqttForm.json_enabled ? 'enabled' : 'disabled' }}</span>
+            </div>
+            <div class="flex items-center px-4 py-2 bg-gray-900">
+              <span class="w-1/2 text-gray-400 text-sm">TLS</span>
+              <span :class="deviceMqttForm.tls_enabled ? 'text-emerald-400' : 'text-gray-600'" class="text-sm">{{ deviceMqttForm.tls_enabled ? 'enabled' : 'disabled' }}</span>
+            </div>
+          </div>
+          <button @click="loadDeviceMqtt(); deviceMqttEditing = true" class="mt-3 px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:text-teal-400">Edit</button>
         </div>
-        <div v-else>
-          <textarea v-model="deviceMqttJSON" rows="8" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder='{"1": true, "4": "mqtt.meshtastic.org"}'></textarea>
-          <p class="text-[10px] text-gray-600 mt-1">ModuleConfig.MQTTConfig fields: 1=enabled, 2=address, 3=username, 4=password, 5=encryption_enabled, 6=json_enabled, 7=tls_enabled, 8=root</p>
-          <div class="flex gap-2 mt-2">
+        <div v-else class="space-y-3">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" v-model="deviceMqttForm.enabled" class="rounded bg-gray-900 border-gray-700">
+              Enabled
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" v-model="deviceMqttForm.tls_enabled" class="rounded bg-gray-900 border-gray-700">
+              TLS
+            </label>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Broker Address</label>
+            <input v-model="deviceMqttForm.address" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="mqtt.meshtastic.org">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Username</label>
+              <input v-model="deviceMqttForm.username" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Password</label>
+              <input v-model="deviceMqttForm.password" type="password" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Root Topic</label>
+            <input v-model="deviceMqttForm.root" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="msh/US">
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" v-model="deviceMqttForm.encryption_enabled" class="rounded bg-gray-900 border-gray-700">
+              Encryption Enabled
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" v-model="deviceMqttForm.json_enabled" class="rounded bg-gray-900 border-gray-700">
+              JSON Output
+            </label>
+          </div>
+          <div class="flex gap-2">
             <button @click="deviceMqttEditing = false" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs">Cancel</button>
-            <button @click="saveDeviceMqtt" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs">Apply</button>
+            <button @click="saveDeviceMqtt" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs">Apply to Device</button>
           </div>
         </div>
       </div>

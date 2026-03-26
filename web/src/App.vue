@@ -166,14 +166,14 @@ onUnmounted(() => {
         <div class="flex items-center gap-3 shrink-0">
 
           <!-- Iridium: label + signal bars + next pass -->
-          <div class="hidden md:flex items-center gap-1.5">
-            <span class="text-[9px] font-medium text-tactical-iridium/70">IRD</span>
+          <div class="flex items-center gap-1 md:gap-1.5">
+            <span class="hidden md:inline text-[9px] font-medium text-tactical-iridium/70">IRD</span>
             <div class="flex items-end gap-px h-3">
               <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
                 :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-tactical-iridium') : 'bg-gray-700/50'"
                 :style="{ height: `${3 + i * 2}px` }" />
             </div>
-            <span v-if="nextPassInfo" class="text-[9px] font-mono" :class="nextPassInfo.color">
+            <span v-if="nextPassInfo" class="hidden md:inline text-[9px] font-mono" :class="nextPassInfo.color">
               {{ nextPassInfo.label }}
             </span>
           </div>
@@ -182,39 +182,39 @@ onUnmounted(() => {
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
           <!-- Mesh: label + avg SNR + device ID + node count -->
-          <div class="hidden md:flex items-center gap-1.5">
-            <span class="text-[9px] font-medium text-tactical-lora/70">MESH</span>
+          <div class="flex items-center gap-1 md:gap-1.5">
+            <span class="hidden md:inline text-[9px] font-medium text-tactical-lora/70">MESH</span>
             <span class="w-1.5 h-1.5 rounded-full"
               :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'" />
-            <span v-if="meshAvgSNR !== null" class="text-[9px] font-mono"
+            <span v-if="meshAvgSNR !== null" class="hidden md:inline text-[9px] font-mono"
               :class="meshAvgSNR >= 0 ? 'text-emerald-400/70' : meshAvgSNR >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
               {{ meshAvgSNR.toFixed(0) }}dB
             </span>
-            <span class="text-[9px] font-mono text-gray-500">{{ deviceId }}</span>
-            <span class="text-[9px] font-mono text-gray-600">{{ nodeCount.active }}/{{ nodeCount.total }}</span>
+            <span class="hidden md:inline text-[9px] font-mono text-gray-500">{{ deviceId }}</span>
+            <span class="hidden lg:inline text-[9px] font-mono text-gray-600">{{ nodeCount.active }}/{{ nodeCount.total }}</span>
           </div>
 
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
           <!-- Cellular: label + signal bars + type -->
-          <div class="hidden md:flex items-center gap-1">
-            <span class="text-[9px] font-medium text-sky-400/70">CELL</span>
+          <div class="flex items-center gap-1">
+            <span class="hidden md:inline text-[9px] font-medium text-sky-400/70">CELL</span>
             <template v-if="cellBars >= 0">
               <div class="flex items-end gap-px h-3">
                 <span v-for="i in 5" :key="'cell'+i" class="w-[3px] rounded-[1px]"
                   :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
                   :style="{ height: `${3 + i * 2}px` }" />
               </div>
-              <span class="text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'LTE' }}</span>
+              <span class="hidden md:inline text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'LTE' }}</span>
             </template>
             <span v-else class="text-[9px] text-gray-600 font-mono">--</span>
           </div>
 
           <!-- GPS fix indicator -->
-          <div class="hidden md:flex items-center gap-1">
+          <div class="flex items-center gap-1">
             <span class="w-1.5 h-1.5 rounded-full" :class="gpsFix ? 'bg-tactical-gps' : 'bg-gray-600'" />
-            <span class="text-[9px]" :class="gpsFix ? 'text-tactical-gps/70' : 'text-gray-600'">GPS</span>
+            <span class="hidden md:inline text-[9px]" :class="gpsFix ? 'text-tactical-gps/70' : 'text-gray-600'">GPS</span>
           </div>
 
           <!-- Divider -->

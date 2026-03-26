@@ -29,7 +29,9 @@ async function request(method, path, body = null, params = null) {
   const res = await fetch(url, opts)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(text || `HTTP ${res.status}`)
+    let msg = text || `HTTP ${res.status}`
+    try { const j = JSON.parse(text); if (j.error) msg = j.error } catch {}
+    throw new Error(msg)
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return null
   const text = await res.text()
@@ -53,7 +55,9 @@ export default {
     const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new Error(text || `HTTP ${res.status}`)
+      let msg = text || `HTTP ${res.status}`
+      try { const j = JSON.parse(text); if (j.error) msg = j.error } catch {}
+      throw new Error(msg)
     }
     const text = await res.text()
     return text ? JSON.parse(text) : null
