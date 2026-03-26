@@ -1332,6 +1332,27 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Reticulum dashboard widget
+  const reticulumStatus = ref({ identity: null, destinations: 0, peers: [], links: 0, interfaces: [] })
+  async function fetchReticulumStatus() {
+    try {
+      const [identity, destinations, peers, links, ifaces] = await Promise.all([
+        api.get('/routing/identity').catch(() => null),
+        api.get('/routing/destinations').catch(() => []),
+        api.get('/routing/peers').catch(() => []),
+        api.get('/links').catch(() => []),
+        api.get('/routing/floodable').catch(() => [])
+      ])
+      reticulumStatus.value = {
+        identity,
+        destinations: Array.isArray(destinations) ? destinations.length : 0,
+        peers: Array.isArray(peers) ? peers : [],
+        links: Array.isArray(links) ? links.length : 0,
+        interfaces: Array.isArray(ifaces) ? ifaces : []
+      }
+    } catch (e) { error.value = e.message }
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus, astrocastPasses,
@@ -1386,6 +1407,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     sseConnected, connectSSE, closeSSE,
     credentials, expiringCredentials, fetchCredentials, fetchExpiringCredentials,
     uploadCredential, deleteCredential, applyCredential,
-    routingInterfaces, fetchRoutingInterfaces, setFloodable
+    routingInterfaces, fetchRoutingInterfaces, setFloodable,
+    reticulumStatus, fetchReticulumStatus
   }
 })

@@ -40,7 +40,7 @@ const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'sos', 'location', 'queue', 'burst', 'activity']
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'reticulum', 'sos', 'location', 'queue', 'burst', 'activity']
 function loadWidgetOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
@@ -1021,6 +1021,11 @@ function healthScoreClass(score) {
   return 'bg-red-400/20 text-red-400'
 }
 
+// ── Reticulum widget ──
+const reticulumConnectedPeers = computed(() =>
+  (store.reticulumStatus.peers || []).filter(p => p.connected).length
+)
+
 // ── Burst queue ──
 const burstFlushing = ref(false)
 async function doBurstFlush() {
@@ -1061,6 +1066,7 @@ async function fetchAll() {
     store.fetchInterfaces(),
     store.fetchHealthScores(),
     store.fetchBurstStatus(),
+    store.fetchReticulumStatus(),
     store.fetchWebhookLog(),
     store.fetchConfig()
   ])
@@ -1088,6 +1094,7 @@ onMounted(() => {
     store.fetchSchedulerStatus()
     store.fetchLocationSources()
     store.fetchCellularSignal().then(trackCellularSignal)
+    store.fetchReticulumStatus()
   }, 15000)
 })
 
@@ -1105,6 +1112,7 @@ const widgetComponents = {
   sos: 'sos',
   location: 'location',
   queue: 'queue',
+  reticulum: 'reticulum',
   burst: 'burst',
   activity: 'activity'
 }
@@ -1866,6 +1874,59 @@ function widgetGridClass(id) {
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item._time) }}</span>
           </div>
           <div v-if="!unifiedQueue.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
+        </div>
+      </div>
+
+      <!-- ═══ Reticulum Network ═══ -->
+      <div v-if="wid === 'reticulum'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="font-display font-semibold text-sm text-violet-400 tracking-wide">RETICULUM</span>
+          </div>
+          <span v-if="store.reticulumStatus.identity" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-violet-400/10 text-violet-400">
+            {{ store.reticulumStatus.identity.dest_hash?.slice(0, 8) }}...
+          </span>
+          <span v-else class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500">offline</span>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <div class="text-center">
+            <div class="font-mono text-lg font-bold" :class="reticulumConnectedPeers > 0 ? 'text-violet-400' : 'text-gray-600'">{{ reticulumConnectedPeers }}</div>
+            <div class="text-[10px] text-gray-500">peers</div>
+          </div>
+          <div class="text-center">
+            <div class="font-mono text-lg font-bold" :class="store.reticulumStatus.destinations > 0 ? 'text-violet-300' : 'text-gray-600'">{{ store.reticulumStatus.destinations }}</div>
+            <div class="text-[10px] text-gray-500">known nodes</div>
+          </div>
+          <div class="text-center">
+            <div class="font-mono text-lg font-bold" :class="store.reticulumStatus.links > 0 ? 'text-violet-300' : 'text-gray-600'">{{ store.reticulumStatus.links }}</div>
+            <div class="text-[10px] text-gray-500">links</div>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <div v-for="peer in store.reticulumStatus.peers" :key="peer.address"
+            class="flex items-center justify-between text-[11px]">
+            <span class="font-mono text-gray-300 truncate max-w-[60%]">{{ peer.address }}</span>
+            <div class="flex items-center gap-1.5">
+              <span class="text-[9px] text-gray-600">{{ peer.direction }}</span>
+              <span class="w-1.5 h-1.5 rounded-full" :class="peer.connected ? 'bg-green-400' : 'bg-gray-600'"></span>
+            </div>
+          </div>
+          <div v-if="!store.reticulumStatus.peers.length" class="text-[11px] text-gray-600 text-center py-1">
+            No TCP peers — add via Settings > Routing
+          </div>
+        </div>
+
+        <div class="mt-3 flex flex-wrap gap-1">
+          <span v-for="iface in store.reticulumStatus.interfaces" :key="iface.id"
+            class="text-[9px] font-mono px-1.5 py-0.5 rounded border"
+            :class="iface.online ? 'border-violet-800 text-violet-400 bg-violet-900/20' : 'border-gray-700 text-gray-600'">
+            {{ iface.id }}
+          </span>
         </div>
       </div>
 
