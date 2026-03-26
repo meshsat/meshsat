@@ -383,6 +383,15 @@ func (g *IridiumGateway) budgetAllows(cost int, priority int) bool {
 	return true
 }
 
+// moBufferEmpty checks if the MO buffer is empty (SBD only).
+// Returns false for IMT transports since they don't have an MO buffer.
+func (g *IridiumGateway) moBufferEmpty(ctx context.Context) (bool, error) {
+	if sbd, ok := g.sat.(transport.SBDTransport); ok {
+		return sbd.MOBufferEmpty(ctx)
+	}
+	return false, fmt.Errorf("MOBufferEmpty not supported on this transport")
+}
+
 // enqueueDeadLetter persists a failed send to the database for later retry.
 func (g *IridiumGateway) enqueueDeadLetter(packetID uint32, payload []byte, errMsg string, textPreview string) {
 	if g.db == nil {
@@ -558,7 +567,7 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		// transmitted — it means WE cleared it. Only trust "already transmitted" when the
 		// last error does NOT indicate a failed mo_status.
 		if dl.Retries > 0 {
-			if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
+			if empty, err := g.moBufferEmpty(ctx); err == nil && empty {
 				if lastMOStatusFailed(dl.LastMOStatus) {
 					// Buffer is empty because we cleared it after failure — must re-send
 					log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
@@ -770,7 +779,7 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 		// the ISU MAY have transmitted autonomously. Only trust this when last SBDIX
 		// was a success (mo_status 0-4). [MESHSAT-341]
 		if dl.Retries > 0 {
-			if empty, err := g.sat.MOBufferEmpty(ctx); err == nil && empty {
+			if empty, err := g.moBufferEmpty(ctx); err == nil && empty {
 				if lastMOStatusFailed(dl.LastMOStatus) {
 					log.Info().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
 						Int("last_mo_status", dl.LastMOStatus).

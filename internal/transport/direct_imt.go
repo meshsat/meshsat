@@ -273,9 +273,19 @@ func (t *DirectIMTTransport) getExcludePorts() []string {
 	return exclude
 }
 
+// IMT-native result codes (100+ range, distinct from SBD mo_status codes).
+// This prevents SBD-specific DLQ backoff logic from triggering on IMT results.
+const (
+	IMTStatusSuccess     = 0   // mo_ack_received — same as SBD success
+	IMTStatusExpired     = 100 // message_expired — satellite session timed out
+	IMTStatusNoNetwork   = 101 // network_error — no Certus connectivity
+	IMTStatusOverflow    = 102 // message_discarded_on_overflow — queue full
+	IMTStatusGenericFail = 103 // unknown/generic failure
+)
+
 // Send sends a binary message via IMT (Mobile Originated).
-// Maps JSPR result to SBDResult for compatibility with IridiumGateway.
-func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SBDResult, error) {
+// Returns native JSPR result codes (not synthetic SBD mapping).
+func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SatResult, error) {
 	t.mu.Lock()
 	if !t.connected {
 		t.mu.Unlock()
@@ -286,27 +296,27 @@ func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 
 	status, err := conn.jsprSendMO(jsprRawTopic, data)
 	if err != nil {
-		return &SBDResult{
-			MOStatus:   10, // generic failure
+		return &SatResult{
+			MOStatus:   IMTStatusGenericFail,
 			StatusText: err.Error(),
 		}, err
 	}
 
-	result := &SBDResult{
+	result := &SatResult{
 		StatusText: status,
 	}
 
 	switch status {
 	case "mo_ack_received":
-		result.MOStatus = 0 // success
+		result.MOStatus = IMTStatusSuccess
 	case "message_expired":
-		result.MOStatus = 17 // timeout
+		result.MOStatus = IMTStatusExpired
 	case "network_error":
-		result.MOStatus = 32 // no network
+		result.MOStatus = IMTStatusNoNetwork
 	case "message_discarded_on_overflow":
-		result.MOStatus = 35 // busy
+		result.MOStatus = IMTStatusOverflow
 	default:
-		result.MOStatus = 10 // generic failure
+		result.MOStatus = IMTStatusGenericFail
 	}
 
 	return result, nil
@@ -386,11 +396,11 @@ func (t *DirectIMTTransport) Receive(ctx context.Context) ([]byte, error) {
 
 // MailboxCheck on IMT doesn't initiate a satellite session like SBDIX.
 // Instead, it polls for any buffered MT messages and returns status.
-func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) {
+func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SatResult, error) {
 	t.mu.Lock()
 	if !t.connected || t.conn == nil {
 		t.mu.Unlock()
-		return &SBDResult{MOStatus: 32, StatusText: "not connected"}, nil
+		return &SatResult{MOStatus: IMTStatusNoNetwork, StatusText: "not connected"}, nil
 	}
 	t.mu.Unlock()
 
@@ -405,7 +415,7 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	}
 	t.mtMu.Unlock()
 
-	result := &SBDResult{
+	result := &SatResult{
 		MOStatus:   0,
 		MTQueued:   pending,
 		MTReceived: pending > 0,

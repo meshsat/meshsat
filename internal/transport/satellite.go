@@ -39,8 +39,10 @@ type SignalInfo struct {
 	Source     string `json:"source,omitempty"` // "sbd" (9603), "imt" (9704), or empty for HAL
 }
 
-// SBDResult represents the result of an SBD operation.
-type SBDResult struct {
+// SatResult represents the result of a satellite send/receive operation.
+// Used by both SBD (9603) and IMT (9704) transports. For IMT, the MOStatus
+// field contains native JSPR result codes (not synthetic SBD mapping).
+type SatResult struct {
 	MOStatus   int    `json:"mo_status"`
 	MOMSN      int    `json:"mo_msn"`
 	MTReceived bool   `json:"mt_received"` // from HAL (true when MT piggybacked)
@@ -51,10 +53,13 @@ type SBDResult struct {
 	StatusText string `json:"status_text"`
 }
 
+// SBDResult is an alias for SatResult for backward compatibility.
+type SBDResult = SatResult
+
 // MOSuccess returns true if the MO (Mobile Originated) transfer succeeded.
 // MO status 0-4 indicates successful transfer to the GSS; values >= 5 are failures
 // (e.g. 32 = no network service).
-func (r *SBDResult) MOSuccess() bool {
+func (r *SatResult) MOSuccess() bool {
 	return r.MOStatus >= 0 && r.MOStatus <= 4
 }
 
@@ -70,27 +75,34 @@ type GeolocationInfo struct {
 	Timestamp string  `json:"timestamp"`
 }
 
-// SatTransport abstracts how MeshSat talks to the satellite modem.
+// SatTransport abstracts how MeshSat talks to a satellite modem.
+// This is the base interface shared by all satellite transports (SBD, IMT).
 type SatTransport interface {
 	Subscribe(ctx context.Context) (<-chan SatEvent, error)
-	Send(ctx context.Context, data []byte) (*SBDResult, error)
-	SendText(ctx context.Context, text string) (*SBDResult, error)
+	Send(ctx context.Context, data []byte) (*SatResult, error)
+	SendText(ctx context.Context, text string) (*SatResult, error)
 	Receive(ctx context.Context) ([]byte, error)
-	MailboxCheck(ctx context.Context) (*SBDResult, error)
+	MailboxCheck(ctx context.Context) (*SatResult, error)
 	GetSignal(ctx context.Context) (*SignalInfo, error)
 	GetSignalFast(ctx context.Context) (*SignalInfo, error)
 	GetStatus(ctx context.Context) (*SatStatus, error)
+	GetFirmwareVersion(ctx context.Context) (string, error)
+	Close() error
+}
+
+// SBDTransport extends SatTransport with methods specific to the Iridium 9603 SBD modem.
+// Only DirectSatTransport and HALSatTransport implement this interface.
+type SBDTransport interface {
+	SatTransport
+	// GetGeolocation returns the satellite sub-point via AT-MSGEO (SBD only).
 	GetGeolocation(ctx context.Context) (*GeolocationInfo, error)
 	// MOBufferEmpty checks AT+SBDSX and returns true if the MO buffer is empty
 	// (meaning a previous SBDIX already transmitted and cleared it).
 	MOBufferEmpty(ctx context.Context) (bool, error)
 	// GetSystemTime returns the Iridium network time via AT-MSSTM.
 	GetSystemTime(ctx context.Context) (*IridiumTime, error)
-	// GetFirmwareVersion returns the modem firmware version string.
-	GetFirmwareVersion(ctx context.Context) (string, error)
 	// Sleep puts the modem into low-power sleep mode (if sleep pin is configured).
 	Sleep(ctx context.Context) error
 	// Wake brings the modem out of sleep mode (if sleep pin is configured).
 	Wake(ctx context.Context) error
-	Close() error
 }
