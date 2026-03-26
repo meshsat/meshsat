@@ -1091,7 +1091,7 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if sat == nil {
 			return nil, fmt.Errorf("IMT satellite transport not available for %s", instanceID)
 		}
-		cfg, err := ParseIridiumConfig(configJSON)
+		cfg, err := ParseIMTConfig(configJSON)
 		if err != nil {
 			return nil, err
 		}

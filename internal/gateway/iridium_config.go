@@ -24,47 +24,52 @@ func (e ExpiryPolicy) MaxRetriesForPriority(priority int) int {
 }
 
 // IridiumConfig holds the configuration for an Iridium satellite gateway.
+// Shared fields apply to both SBD and IMT. SBD-only fields are documented
+// and ignored when used with IMTGateway.
 type IridiumConfig struct {
+	// --- Shared (SBD + IMT) ---
 	ForwardPortnums    []int        `json:"forward_portnums,omitempty"`    // portnums to forward (empty = use ForwardAll)
 	ForwardAll         bool         `json:"forward_all"`                   // forward all message types
-	Compression        string       `json:"compression"`                   // "none" or "compact"
-	AutoReceive        bool         `json:"auto_receive"`                  // auto-receive on ring alerts
-	PollInterval       int          `json:"poll_interval"`                 // seconds, 0 = no polling
-	MaxTextLength      int          `json:"max_text_length"`               // max text bytes in SBD (default 320)
-	IncludePosition    bool         `json:"include_position"`              // include GPS coords in compact encoding
-	DLQMaxRetries      int          `json:"dlq_max_retries"`               // legacy global max retries, 0 = infinite (default 0); use ExpiryPolicy for per-priority control
-	DLQRetryBase       int          `json:"dlq_retry_base_secs"`           // base retry interval in seconds (default 120, exponential backoff)
-	DefaultDestination string       `json:"default_destination,omitempty"` // node ID or name to unicast inbound messages (empty = broadcast)
-	MinSignalBars      int          `json:"min_signal_bars"`               // minimum signal bars to trigger opportunistic DLQ drain (default 1)
-	DailyBudget        int          `json:"daily_budget"`                  // max credits per day, 0 = unlimited
-	MonthlyBudget      int          `json:"monthly_budget"`                // max credits per month, 0 = unlimited
-	CriticalReserve    int          `json:"critical_reserve"`              // % reserved for priority 0 (default 20)
-	MailboxMode        string       `json:"mailbox_mode"`                  // "ring_alert_only" (default), "scheduled", "off"
-	SchedulerEnabled   bool         `json:"scheduler_enabled"`             // enable pass-aware smart scheduling (default true)
-	PreWakeMinutes     int          `json:"pre_wake_minutes"`              // minutes before AOS to enter pre-wake mode (default 5)
-	PostPassGraceSec   int          `json:"post_pass_grace_sec"`           // seconds after LOS to stay in post-pass mode (default 120)
-	IdlePollSec        int          `json:"idle_poll_sec"`                 // MT poll interval in idle mode (default 900)
-	ActivePollSec      int          `json:"active_poll_sec"`               // MT poll interval in active mode (default 20)
-	MinElevDeg         int          `json:"min_elev_deg"`                  // minimum pass elevation for scheduler (default 5, higher for obstructed environments)
-	ExpiryPolicy       ExpiryPolicy `json:"expiry_policy"`                 // per-priority message expiration (0 = never expire)
-	PowerProfile       string       `json:"power_profile"`                 // "default" or "low_power" (sleep between operations)
+	DLQMaxRetries      int          `json:"dlq_max_retries"`               // legacy global max retries, 0 = infinite
+	DLQRetryBase       int          `json:"dlq_retry_base_secs"`           // base retry interval in seconds (default 120)
+	DefaultDestination string       `json:"default_destination,omitempty"` // node ID or name to unicast inbound messages
+	MinSignalBars      int          `json:"min_signal_bars"`               // minimum signal bars for opportunistic DLQ drain
+	SchedulerEnabled   bool         `json:"scheduler_enabled"`             // enable pass-aware smart scheduling
+	PreWakeMinutes     int          `json:"pre_wake_minutes"`              // minutes before AOS to enter pre-wake mode
+	PostPassGraceSec   int          `json:"post_pass_grace_sec"`           // seconds after LOS to stay in post-pass mode
+	MinElevDeg         int          `json:"min_elev_deg"`                  // minimum pass elevation for scheduler
+	ExpiryPolicy       ExpiryPolicy `json:"expiry_policy"`                 // per-priority message expiration
+
+	// --- SBD-only (9603) — ignored by IMTGateway ---
+	Compression     string `json:"compression"`      // "none" or "compact" (SBD only)
+	AutoReceive     bool   `json:"auto_receive"`     // auto-receive on ring alerts (SBD only)
+	PollInterval    int    `json:"poll_interval"`    // seconds, 0 = no polling (SBD only)
+	MaxTextLength   int    `json:"max_text_length"`  // max text bytes in SBD (SBD only, default 320)
+	IncludePosition bool   `json:"include_position"` // include GPS coords in compact encoding (SBD only)
+	DailyBudget     int    `json:"daily_budget"`     // max credits per day (SBD only, 0 = unlimited)
+	MonthlyBudget   int    `json:"monthly_budget"`   // max credits per month (SBD only, 0 = unlimited)
+	CriticalReserve int    `json:"critical_reserve"` // % reserved for priority 0 (SBD only, default 20)
+	MailboxMode     string `json:"mailbox_mode"`     // "ring_alert_only", "scheduled", "off" (SBD only)
+	IdlePollSec     int    `json:"idle_poll_sec"`    // MT poll interval in idle mode (SBD only)
+	ActivePollSec   int    `json:"active_poll_sec"`  // MT poll interval in active mode (SBD only)
+	PowerProfile    string `json:"power_profile"`    // "default" or "low_power" (SBD only, sleep GPIO)
 }
 
-// DefaultIridiumConfig returns sensible defaults.
+// DefaultIridiumConfig returns sensible defaults for SBD.
 func DefaultIridiumConfig() IridiumConfig {
 	return IridiumConfig{
 		ForwardAll:       false,
 		ForwardPortnums:  []int{1}, // TEXT_MESSAGE only by default
 		Compression:      "compact",
 		AutoReceive:      true,
-		PollInterval:     1800, // 30 minutes — safety net for missed ring alerts (SBDSX pre-check avoids credit waste)
+		PollInterval:     1800,
 		MaxTextLength:    320,
-		IncludePosition:  false, // GPS position not populated — omit to save 10 bytes per message
-		DLQMaxRetries:    10,    // legacy global max retries (default 10)
+		IncludePosition:  false,
+		DLQMaxRetries:    10,
 		DLQRetryBase:     120,
 		MinSignalBars:    1,
-		DailyBudget:      0, // unlimited
-		MonthlyBudget:    0, // unlimited
+		DailyBudget:      0,
+		MonthlyBudget:    0,
 		CriticalReserve:  20,
 		MailboxMode:      "ring_alert_only",
 		SchedulerEnabled: true,
@@ -75,14 +80,40 @@ func DefaultIridiumConfig() IridiumConfig {
 		MinElevDeg:       5,
 		PowerProfile:     "default",
 		ExpiryPolicy: ExpiryPolicy{
-			CriticalMaxRetries: 20, // critical messages get more attempts
-			NormalMaxRetries:   10, // standard limit
-			LowMaxRetries:      5,  // low-priority expires faster
+			CriticalMaxRetries: 20,
+			NormalMaxRetries:   10,
+			LowMaxRetries:      5,
 		},
 	}
 }
 
-// ParseIridiumConfig parses JSON config into IridiumConfig.
+// DefaultIMTConfig returns sensible defaults for IMT.
+// SBD-only fields are zeroed/disabled since IMTGateway doesn't use them.
+func DefaultIMTConfig() IridiumConfig {
+	return IridiumConfig{
+		ForwardAll:       false,
+		ForwardPortnums:  []int{1},
+		DLQMaxRetries:    10,
+		DLQRetryBase:     120,
+		MinSignalBars:    1,
+		SchedulerEnabled: true,
+		PreWakeMinutes:   5,
+		PostPassGraceSec: 120,
+		MinElevDeg:       5,
+		ExpiryPolicy: ExpiryPolicy{
+			CriticalMaxRetries: 20,
+			NormalMaxRetries:   10,
+			LowMaxRetries:      5,
+		},
+		// SBD-only fields — explicitly disabled for IMT
+		AutoReceive:  false,
+		PollInterval: 0,
+		MailboxMode:  "off",
+		PowerProfile: "default",
+	}
+}
+
+// ParseIridiumConfig parses JSON config into IridiumConfig for SBD gateways.
 func ParseIridiumConfig(data string) (*IridiumConfig, error) {
 	cfg := DefaultIridiumConfig()
 	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
@@ -103,5 +134,23 @@ func ParseIridiumConfig(data string) (*IridiumConfig, error) {
 	default:
 		cfg.PowerProfile = "default"
 	}
+	return &cfg, nil
+}
+
+// ParseIMTConfig parses JSON config into IridiumConfig for IMT gateways.
+// SBD-only fields are reset to safe defaults after parsing.
+func ParseIMTConfig(data string) (*IridiumConfig, error) {
+	cfg := DefaultIMTConfig()
+	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		return nil, err
+	}
+	// Force SBD-only fields to safe values regardless of input
+	cfg.AutoReceive = false
+	cfg.PollInterval = 0
+	cfg.MailboxMode = "off"
+	cfg.DailyBudget = 0
+	cfg.MonthlyBudget = 0
+	cfg.CriticalReserve = 0
+	cfg.PowerProfile = "default"
 	return &cfg, nil
 }
