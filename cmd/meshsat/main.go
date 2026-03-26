@@ -748,6 +748,7 @@ func main() {
 				return burstQueue.Pending()
 			},
 		})
+		cmdHandler.SetCredentialStore(&bridgeCredentialStore{db: db})
 		hubReporter.SetCommandHandler(cmdHandler)
 
 		if err := hubReporter.Start(ctx); err != nil {
@@ -825,4 +826,28 @@ func (a *credentialLoaderAdapter) LoadCredentialPEM(credentialID string) (caCert
 	}
 
 	return []byte(bundle.CACertPEM), []byte(bundle.ClientCertPEM), []byte(bundle.ClientKeyPEM), nil
+}
+
+// bridgeCredentialStore implements hubreporter.CredentialStore for Hub-pushed credentials.
+type bridgeCredentialStore struct {
+	db *database.DB
+}
+
+func (s *bridgeCredentialStore) StoreCredential(id, provider, name, credType string, encryptedData []byte, certNotAfter, certFingerprint string, version int) error {
+	row := &database.CredentialCacheRow{
+		ID:              id,
+		Provider:        provider,
+		Name:            name,
+		CredType:        credType,
+		EncryptedData:   encryptedData,
+		CertNotAfter:    certNotAfter,
+		CertFingerprint: certFingerprint,
+		Version:         version,
+		Source:          "hub",
+	}
+	return s.db.InsertCredentialCache(row)
+}
+
+func (s *bridgeCredentialStore) RemoveCredential(id string) error {
+	return s.db.DeleteCredentialCache(id)
 }

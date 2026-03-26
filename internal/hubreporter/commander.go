@@ -30,12 +30,19 @@ type CommandDeps struct {
 	BurstPending func() int
 }
 
+// CredentialStore is the interface for storing credentials received from Hub.
+type CredentialStore interface {
+	StoreCredential(id, provider, name, credType string, encryptedData []byte, certNotAfter, certFingerprint string, version int) error
+	RemoveCredential(id string) error
+}
+
 // CommandHandler processes commands received from the Hub via MQTT.
 type CommandHandler struct {
-	reporter *HubReporter
-	bridgeID string
-	handlers map[string]func(cmd Command) (json.RawMessage, error)
-	deps     CommandDeps
+	reporter  *HubReporter
+	bridgeID  string
+	handlers  map[string]func(cmd Command) (json.RawMessage, error)
+	deps      CommandDeps
+	credStore CredentialStore
 }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
@@ -71,7 +78,15 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 		return json.RawMessage(`{"message":"reboot acknowledged but not executed (requires explicit approval)"}`), nil
 	}
 
+	ch.handlers["credential_push"] = ch.handleCredentialPush
+	ch.handlers["credential_revoke"] = ch.handleCredentialRevoke
+
 	return ch
+}
+
+// SetCredentialStore sets the credential storage for credential push/revoke handlers.
+func (ch *CommandHandler) SetCredentialStore(cs CredentialStore) {
+	ch.credStore = cs
 }
 
 // SetDeps sets the subsystem dependencies for command execution.
@@ -276,4 +291,62 @@ func (ch *CommandHandler) publishResponse(resp CommandResponse) {
 			Str("status", resp.Status).
 			Msg("commander: response published")
 	}
+}
+
+// handleCredentialPush stores a credential received from the Hub.
+func (ch *CommandHandler) handleCredentialPush(cmd Command) (json.RawMessage, error) {
+	if ch.credStore == nil {
+		return nil, fmt.Errorf("credential store not configured")
+	}
+
+	var payload struct {
+		CredentialID    string `json:"credential_id"`
+		Provider        string `json:"provider"`
+		Name            string `json:"name"`
+		CredType        string `json:"cred_type"`
+		Version         int    `json:"version"`
+		Data            []byte `json:"data"` // base64-decoded by json.Unmarshal
+		CertNotAfter    string `json:"cert_not_after"`
+		CertFingerprint string `json:"cert_fingerprint"`
+	}
+	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("parse credential_push payload: %w", err)
+	}
+
+	if err := ch.credStore.StoreCredential(
+		payload.CredentialID, payload.Provider, payload.Name, payload.CredType,
+		payload.Data, payload.CertNotAfter, payload.CertFingerprint, payload.Version,
+	); err != nil {
+		return nil, fmt.Errorf("store credential: %w", err)
+	}
+
+	log.Info().Str("id", payload.CredentialID).Str("provider", payload.Provider).
+		Str("name", payload.Name).Int("version", payload.Version).
+		Msg("commander: credential received from Hub")
+
+	return json.RawMessage(`{"applied":true}`), nil
+}
+
+// handleCredentialRevoke removes a credential from the bridge.
+func (ch *CommandHandler) handleCredentialRevoke(cmd Command) (json.RawMessage, error) {
+	if ch.credStore == nil {
+		return nil, fmt.Errorf("credential store not configured")
+	}
+
+	var payload struct {
+		CredentialID string `json:"credential_id"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("parse credential_revoke payload: %w", err)
+	}
+
+	if err := ch.credStore.RemoveCredential(payload.CredentialID); err != nil {
+		log.Warn().Err(err).Str("id", payload.CredentialID).Msg("commander: credential revoke failed (may not exist)")
+	}
+
+	log.Info().Str("id", payload.CredentialID).Str("reason", payload.Reason).
+		Msg("commander: credential revoked by Hub")
+
+	return json.RawMessage(`{"revoked":true}`), nil
 }
