@@ -47,9 +47,10 @@ type AnnounceRelay struct {
 	table    *DestinationTable
 	callback RelayCallback
 
-	mu    sync.Mutex
-	seen  map[[32]byte]time.Time     // SHA-256(destHash+random) → first-seen time
-	local map[[DestHashLen]byte]bool // our own destination hashes (never relay)
+	mu           sync.Mutex
+	seen         map[[32]byte]time.Time     // SHA-256(destHash+random) → first-seen time
+	local        map[[DestHashLen]byte]bool // our own destination hashes (never relay)
+	relayedCount int64                      // total announces relayed (monotonic)
 }
 
 // NewAnnounceRelay creates a relay that forwards announces to the callback.
@@ -185,6 +186,9 @@ func (r *AnnounceRelay) scheduleRelay(ctx context.Context, announce *Announce) {
 
 		relayData := announce.Marshal()
 		r.callback(relayData, announce)
+		r.mu.Lock()
+		r.relayedCount++
+		r.mu.Unlock()
 		log.Debug().Str("dest_hash", hashHex(announce.DestHash)).
 			Int("hops", int(announce.HopCount)).
 			Dur("delay", delay).
@@ -206,6 +210,13 @@ func (r *AnnounceRelay) SeenCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.seen)
+}
+
+// RelayedCount returns the total number of announces relayed since startup.
+func (r *AnnounceRelay) RelayedCount() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.relayedCount
 }
 
 func hashHex(h [DestHashLen]byte) string {

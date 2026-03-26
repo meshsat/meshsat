@@ -27,8 +27,8 @@ import (
 	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
+	"meshsat/internal/sysinfo"
 	"meshsat/internal/transport"
-	"runtime"
 )
 
 func main() {
@@ -360,6 +360,7 @@ func main() {
 	var routingID *routing.Identity
 	var linkMgr *routing.LinkManager
 	var destTable *routing.DestinationTable
+	var announceRelay *routing.AnnounceRelay
 	routingID, err = routing.NewIdentity(db)
 	if err != nil {
 		log.Error().Err(err).Msg("routing identity init failed - routing disabled")
@@ -372,7 +373,7 @@ func main() {
 
 		// Announce relay — dedup + hop-count enforcement + delayed retransmit
 		relayConfig := routing.DefaultRelayConfig()
-		announceRelay := routing.NewAnnounceRelay(relayConfig, destTable, func(data []byte, announce *routing.Announce) {
+		announceRelay = routing.NewAnnounceRelay(relayConfig, destTable, func(data []byte, announce *routing.Announce) {
 			log.Debug().Str("dest_hash", routingID.DestHashHex()).Int("hops", int(announce.HopCount)).Msg("relaying announce")
 		})
 		announceRelay.RegisterLocal(routingID.DestHash())
@@ -811,11 +812,15 @@ func main() {
 			if routingID != nil {
 				caps = append(caps, "reticulum")
 			}
+			hostname, _ := os.Hostname()
+			if hostname == "" {
+				hostname = cfg.BridgeID
+			}
 			birth := hubreporter.BridgeBirth{
 				Protocol:     hubreporter.ProtocolVersion,
 				BridgeID:     cfg.BridgeID,
-				Version:      "0.18.0",
-				Hostname:     cfg.BridgeID,
+				Version:      "0.20.0",
+				Hostname:     hostname,
 				Mode:         cfg.Mode,
 				TenantID:     "default",
 				Interfaces:   ifaces,
@@ -833,15 +838,48 @@ func main() {
 			return birth
 		}
 		healthFn := func() hubreporter.BridgeHealth {
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
+			sys := sysinfo.Collect(cfg.DBPath)
 			health := hubreporter.BridgeHealth{
 				Protocol:  hubreporter.ProtocolVersion,
 				BridgeID:  cfg.BridgeID,
 				UptimeSec: int64(time.Since(startTime).Seconds()),
-				MemPct:    float64(m.Alloc) / float64(m.Sys) * 100,
+				CPUPct:    sys.CPUPct,
+				MemPct:    sys.MemPct,
+				DiskPct:   sys.DiskPct,
 				Timestamp: time.Now().UTC(),
 			}
+
+			// Interface health — status from gateway manager
+			for _, gs := range gwMgr.GetStatus() {
+				ih := hubreporter.InterfaceHealth{Name: gs.Type, Status: "offline"}
+				if gs.Connected {
+					ih.Status = "online"
+				}
+				health.Interfaces = append(health.Interfaces, ih)
+			}
+
+			// Burst queue
+			if burstQueue != nil {
+				health.BurstQueue = &hubreporter.BurstQueueInfo{
+					Pending: burstQueue.Pending(),
+				}
+			}
+
+			// Reticulum stats
+			if routingID != nil {
+				rs := &hubreporter.ReticulumStats{}
+				if transportNode != nil {
+					rs.Routes = transportNode.RouteCount()
+				}
+				if linkMgr != nil {
+					rs.Links = len(linkMgr.ActiveLinks())
+				}
+				if announceRelay != nil {
+					rs.AnnouncesRelayed = announceRelay.RelayedCount()
+				}
+				health.Reticulum = rs
+			}
+
 			return health
 		}
 		hubReporter = hubreporter.NewHubReporter(reporterCfg, birthFn, healthFn)
