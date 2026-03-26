@@ -45,6 +45,7 @@ type Processor struct {
 	transportNode   *routing.TransportNode
 	pathFinder      *routing.PathFinder
 	routingIdentity *routing.Identity
+	resourceXfer    *routing.ResourceTransfer
 
 	// Packet sender: sends a Reticulum packet to a specific interface.
 	// Set by main.go to route responses (link proofs, data) to TCP or mesh.
@@ -109,6 +110,11 @@ func (p *Processor) SetRoutingIdentity(id *routing.Identity) {
 	p.routingIdentity = id
 }
 
+// SetResourceTransfer sets the resource transfer manager for chunked file delivery.
+func (p *Processor) SetResourceTransfer(rt *routing.ResourceTransfer) {
+	p.resourceXfer = rt
+}
+
 // RegisterPacketSender registers a function that sends Reticulum packets to a
 // specific interface (e.g. "tcp_0", "mesh_0"). Used to route link proofs and
 // data packets back to the interface they were received on.
@@ -116,6 +122,13 @@ func (p *Processor) RegisterPacketSender(ifaceID string, fn func(ctx context.Con
 	p.packetSendersMu.Lock()
 	defer p.packetSendersMu.Unlock()
 	p.packetSenders[ifaceID] = fn
+}
+
+// SendReticulumPacketTo sends a Reticulum packet to the specified interface.
+// Exported for use by ResourceTransfer send callback.
+func (p *Processor) SendReticulumPacketTo(ifaceID string, data []byte) error {
+	p.sendReticulumPacket(data, ifaceID)
+	return nil
 }
 
 // sendReticulumPacket sends a Reticulum packet to the specified interface.
@@ -537,7 +550,7 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				return
 
 			case reticulum.PacketData:
-				// Check context for path discovery packets
+				// Check context for path discovery and resource transfer packets
 				switch hdr.Context {
 				case reticulum.ContextRequest:
 					if p.pathFinder != nil {
@@ -547,6 +560,26 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				case reticulum.ContextPathResponse:
 					if p.pathFinder != nil {
 						p.pathFinder.HandlePathResponse(hdr.Data, sourceIface)
+						return
+					}
+				case reticulum.ContextResourceAdv:
+					if p.resourceXfer != nil {
+						p.resourceXfer.HandleAdvertisement(hdr.Data, sourceIface)
+						return
+					}
+				case reticulum.ContextResourceReq:
+					if p.resourceXfer != nil {
+						p.resourceXfer.HandleRequest(hdr.Data, sourceIface)
+						return
+					}
+				case reticulum.ContextResource:
+					if p.resourceXfer != nil {
+						p.resourceXfer.HandleSegment(hdr.Data, sourceIface)
+						return
+					}
+				case reticulum.ContextResourcePRF:
+					if p.resourceXfer != nil {
+						p.resourceXfer.HandleProof(hdr.Data)
 						return
 					}
 				}

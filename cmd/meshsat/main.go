@@ -394,6 +394,13 @@ func main() {
 		proc.SetRouting(announceRelay, linkMgr, keepalive, destTable)
 		proc.SetRoutingIdentity(routingID)
 
+		// Resource transfer — chunked reliable delivery over Reticulum links
+		resourceXfer := routing.NewResourceTransfer(routing.DefaultResourceTransferConfig(), func(ifaceID string, packet []byte) error {
+			return proc.SendReticulumPacketTo(ifaceID, packet)
+		})
+		resourceXfer.StartPruner(ctx)
+		proc.SetResourceTransfer(resourceXfer)
+
 		log.Info().Str("dest_hash", routingID.DestHashHex()).Msg("routing subsystem initialized")
 	}
 
