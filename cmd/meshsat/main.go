@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -600,9 +601,16 @@ func main() {
 			log.Error().Err(ksErr).Msg("key store init failed — key exchange disabled")
 		} else {
 			srv.SetKeyStore(ks)
+			// Wire credential loader so MQTT gateways can load certs from DB
+			gateway.SetCredentialLoader(&credentialLoaderAdapter{db: db, ks: ks})
 			log.Info().Msg("key store initialized")
 		}
 	}
+
+	// Credential expiry monitor — periodic check + SSE events for dashboard
+	credMonitor := engine.NewCredentialMonitor(db)
+	credMonitor.SetEmitter(proc.Emit)
+	credMonitor.Start(ctx)
 	srv.SetOnMOCallback(func(imei string) {
 		if err := db.TouchDeviceLastSeen(imei); err != nil {
 			log.Warn().Err(err).Str("imei", imei).Msg("failed to update device last_seen")
@@ -786,4 +794,35 @@ func main() {
 	}
 
 	log.Info().Msg("MeshSat stopped")
+}
+
+// credentialLoaderAdapter implements gateway.CredentialLoader by reading from
+// the credential cache DB and decrypting with the keystore master key.
+type credentialLoaderAdapter struct {
+	db *database.DB
+	ks *keystore.KeyStore
+}
+
+func (a *credentialLoaderAdapter) LoadCredentialPEM(credentialID string) (caCertPEM, clientCertPEM, clientKeyPEM []byte, err error) {
+	row, err := a.db.GetCredentialCache(credentialID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("credential %s not found: %w", credentialID, err)
+	}
+
+	decrypted, err := a.ks.UnwrapData(row.EncryptedData)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decrypt credential %s: %w", credentialID, err)
+	}
+
+	// Parse JSON: {"ca_cert_pem":"...","client_cert_pem":"...","client_key_pem":"..."}
+	var bundle struct {
+		CACertPEM     string `json:"ca_cert_pem"`
+		ClientCertPEM string `json:"client_cert_pem"`
+		ClientKeyPEM  string `json:"client_key_pem"`
+	}
+	if err := json.Unmarshal(decrypted, &bundle); err != nil {
+		return nil, nil, nil, fmt.Errorf("parse credential JSON: %w", err)
+	}
+
+	return []byte(bundle.CACertPEM), []byte(bundle.ClientCertPEM), []byte(bundle.ClientKeyPEM), nil
 }

@@ -238,6 +238,20 @@ type BundleRequest struct {
 	Address     string `json:"address"`
 }
 
+// WrapData encrypts arbitrary data with the master key (for credential storage).
+func (ks *KeyStore) WrapData(data []byte) ([]byte, error) {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	return wrapKey(ks.masterKey, data)
+}
+
+// UnwrapData decrypts data that was encrypted with WrapData.
+func (ks *KeyStore) UnwrapData(wrapped []byte) ([]byte, error) {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	return unwrapKey(ks.masterKey, wrapped)
+}
+
 // Stats returns key inventory counts.
 func (ks *KeyStore) Stats() (active, retired, revoked int, err error) {
 	return ks.db.KeyBundleStats()

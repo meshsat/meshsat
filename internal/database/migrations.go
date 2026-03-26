@@ -802,6 +802,26 @@ var migrations = []string{
 		UNIQUE(channel_type, address, key_version)
 	);
 	CREATE INDEX IF NOT EXISTS idx_key_bundles_lookup ON key_bundles(channel_type, address, status);`,
+
+	// v37: Credential cache for centralized cert/credential management [MESHSAT-356].
+	// Stores TLS certificates and provider credentials encrypted with bridge master key.
+	// Mirrors hub credentials table; source tracks local upload vs hub-distributed.
+	`CREATE TABLE IF NOT EXISTS credential_cache (
+		id             TEXT PRIMARY KEY,
+		provider       TEXT NOT NULL,
+		name           TEXT NOT NULL,
+		cred_type      TEXT NOT NULL,
+		encrypted_data BLOB NOT NULL,
+		cert_not_after TEXT,
+		cert_subject   TEXT NOT NULL DEFAULT '',
+		cert_fingerprint TEXT NOT NULL DEFAULT '',
+		version        INTEGER NOT NULL DEFAULT 1,
+		source         TEXT NOT NULL DEFAULT 'local',
+		applied        INTEGER NOT NULL DEFAULT 0,
+		received_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_cred_cache_provider ON credential_cache(provider);`,
 }
 
 func (db *DB) migrate() error {

@@ -445,6 +445,14 @@ func (s *Server) Router() http.Handler {
 		r.Put("/device-registry/{id}", s.handleUpdateRegisteredDevice)
 		r.Delete("/device-registry/{id}", s.handleDeleteRegisteredDevice)
 
+		// Credential management (cert/credential upload, storage, expiry)
+		r.Post("/credentials/upload", s.handleUploadCredential)
+		r.Get("/credentials", s.handleListCredentials)
+		r.Get("/credentials/expiry", s.handleListExpiringCredentials)
+		r.Get("/credentials/{id}", s.handleGetCredential)
+		r.Delete("/credentials/{id}", s.handleDeleteCredential)
+		r.Post("/credentials/{id}/apply", s.handleApplyCredential)
+
 		// Key exchange (cross-platform QR key sharing)
 		r.Post("/keys/bundle", s.handleGenerateKeyBundle)
 		r.Get("/keys/bundle/qr", s.handleGetKeyBundleQR)

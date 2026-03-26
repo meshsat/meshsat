@@ -1934,3 +1934,97 @@ func (db *DB) DeleteReceivedResource(hash string) error {
 	}
 	return nil
 }
+
+// ---- Credential Cache (cert/credential management) ----
+
+// CredentialCacheRow represents a cached credential entry.
+type CredentialCacheRow struct {
+	ID              string `db:"id" json:"id"`
+	Provider        string `db:"provider" json:"provider"`
+	Name            string `db:"name" json:"name"`
+	CredType        string `db:"cred_type" json:"cred_type"`
+	EncryptedData   []byte `db:"encrypted_data" json:"-"`
+	CertNotAfter    string `db:"cert_not_after" json:"cert_not_after,omitempty"`
+	CertSubject     string `db:"cert_subject" json:"cert_subject,omitempty"`
+	CertFingerprint string `db:"cert_fingerprint" json:"cert_fingerprint,omitempty"`
+	Version         int    `db:"version" json:"version"`
+	Source          string `db:"source" json:"source"`
+	Applied         int    `db:"applied" json:"applied"`
+	ReceivedAt      string `db:"received_at" json:"received_at"`
+	UpdatedAt       string `db:"updated_at" json:"updated_at"`
+}
+
+// InsertCredentialCache stores or replaces a credential in the cache.
+func (db *DB) InsertCredentialCache(row *CredentialCacheRow) error {
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO credential_cache
+		 (id, provider, name, cred_type, encrypted_data, cert_not_after, cert_subject, cert_fingerprint, version, source, applied, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+		row.ID, row.Provider, row.Name, row.CredType, row.EncryptedData,
+		row.CertNotAfter, row.CertSubject, row.CertFingerprint,
+		row.Version, row.Source, row.Applied)
+	return err
+}
+
+// GetCredentialCache returns a credential by ID.
+func (db *DB) GetCredentialCache(id string) (*CredentialCacheRow, error) {
+	var row CredentialCacheRow
+	err := db.Get(&row, "SELECT * FROM credential_cache WHERE id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// ListCredentialCache returns all cached credentials (metadata only, no encrypted_data).
+func (db *DB) ListCredentialCache() ([]CredentialCacheRow, error) {
+	var rows []CredentialCacheRow
+	err := db.Select(&rows,
+		`SELECT id, provider, name, cred_type, cert_not_after, cert_subject, cert_fingerprint,
+		 version, source, applied, received_at, updated_at
+		 FROM credential_cache ORDER BY provider, name`)
+	return rows, err
+}
+
+// GetCredentialsByProvider returns credentials for a specific provider.
+func (db *DB) GetCredentialsByProvider(provider string) ([]CredentialCacheRow, error) {
+	var rows []CredentialCacheRow
+	err := db.Select(&rows, "SELECT * FROM credential_cache WHERE provider = ? ORDER BY version DESC", provider)
+	return rows, err
+}
+
+// DeleteCredentialCache removes a credential from the cache.
+func (db *DB) DeleteCredentialCache(id string) error {
+	res, err := db.Exec("DELETE FROM credential_cache WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("credential not found")
+	}
+	return nil
+}
+
+// SetCredentialApplied marks a credential as applied (in use by a gateway).
+func (db *DB) SetCredentialApplied(id string, applied bool) error {
+	v := 0
+	if applied {
+		v = 1
+	}
+	_, err := db.Exec("UPDATE credential_cache SET applied = ?, updated_at = datetime('now') WHERE id = ?", v, id)
+	return err
+}
+
+// ListExpiringCredentials returns credentials with cert_not_after within the given days.
+func (db *DB) ListExpiringCredentials(withinDays int) ([]CredentialCacheRow, error) {
+	var rows []CredentialCacheRow
+	cutoff := time.Now().AddDate(0, 0, withinDays).Format("2006-01-02 15:04:05")
+	err := db.Select(&rows,
+		`SELECT id, provider, name, cred_type, cert_not_after, cert_subject, cert_fingerprint,
+		 version, source, applied, received_at, updated_at
+		 FROM credential_cache
+		 WHERE cert_not_after != '' AND cert_not_after <= ?
+		 ORDER BY cert_not_after ASC`, cutoff)
+	return rows, err
+}
