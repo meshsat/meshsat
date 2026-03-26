@@ -421,6 +421,41 @@ func main() {
 		}
 	}
 
+	// Satellite Reticulum interfaces — wire SBD and IMT as Reticulum transports
+	// so routing packets can flow over satellite links.
+	if sat != nil {
+		sbdIface := routing.NewSatInterface(routing.SatInterfaceConfig{
+			Name: "iridium_0",
+			Type: "iridium",
+			MTU:  340,
+		}, sat, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("iridium_0: received reticulum packet via SBD MT")
+			proc.InjectReticulumPacket(packet, "iridium_0")
+		})
+		if err := sbdIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("iridium reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("iridium_0", sbdIface.Send)
+			log.Info().Msg("iridium SBD reticulum interface started")
+		}
+	}
+	if imtTransport != nil {
+		imtIface := routing.NewSatInterface(routing.SatInterfaceConfig{
+			Name: "iridium_imt_0",
+			Type: "iridium",
+			MTU:  102400, // 100KB
+		}, imtTransport, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("iridium_imt_0: received reticulum packet via IMT MT")
+			proc.InjectReticulumPacket(packet, "iridium_imt_0")
+		})
+		if err := imtIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("IMT reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("iridium_imt_0", imtIface.Send)
+			log.Info().Msg("iridium IMT reticulum interface started")
+		}
+	}
+
 	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
