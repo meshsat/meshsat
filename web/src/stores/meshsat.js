@@ -1174,7 +1174,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     try {
       const data = await api.get('/interfaces/health')
       healthScores.value = Array.isArray(data) ? data : []
-    } catch (e) { error.value = e.message }
+    } catch (e) {
+      console.warn('[health] Health monitoring unavailable:', e.message)
+      healthScores.value = []
+    }
   }
 
   // Dead Man's Switch
