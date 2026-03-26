@@ -35,7 +35,8 @@ type IridiumTime struct {
 type SignalInfo struct {
 	Bars       int    `json:"bars"` // 0-5
 	Timestamp  string `json:"timestamp"`
-	Assessment string `json:"assessment"` // "none", "poor", "fair", "good", "excellent"
+	Assessment string `json:"assessment"`       // "none", "poor", "fair", "good", "excellent"
+	Source     string `json:"source,omitempty"` // "sbd" (9603), "imt" (9704), or empty for HAL
 }
 
 // SBDResult represents the result of an SBD operation.

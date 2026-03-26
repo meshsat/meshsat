@@ -757,6 +757,7 @@ func (t *DirectSatTransport) getSignalInternal(_ context.Context, cmd string, ti
 		Bars:       bars,
 		Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		Assessment: signalAssessment(bars),
+		Source:     "sbd",
 	}, nil
 }
 

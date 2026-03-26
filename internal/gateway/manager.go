@@ -1370,6 +1370,14 @@ func (m *Manager) GetIMTModemInfo(ctx context.Context) (*transport.SatStatus, er
 	return m.imtSat.GetStatus(ctx)
 }
 
+// GetSBDModemInfo returns the SBD (9603) modem connection status.
+func (m *Manager) GetSBDModemInfo(ctx context.Context) (*transport.SatStatus, error) {
+	if m.sat == nil {
+		return nil, fmt.Errorf("SBD transport not available")
+	}
+	return m.sat.GetStatus(ctx)
+}
+
 // CheckIMTProvisioning queries the 9704 modem for its provisioned topics.
 // An empty list means the modem hasn't completed provisioning with the Iridium network.
 func (m *Manager) CheckIMTProvisioning() ([]transport.ProvisioningTopic, error) {

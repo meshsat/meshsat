@@ -27,12 +27,13 @@ func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 	sig, err := s.gwManager.GetIridiumSignalFast(ctx)
 	if err != nil {
-		// On timeout, fall back to latest DB reading
+		// On timeout, fall back to latest DB reading (check sbd, imt, and legacy "iridium")
 		if s.db != nil {
-			if latest, dbErr := s.db.GetLatestSignal("iridium"); dbErr == nil && latest != nil {
+			if latest, dbErr := s.db.GetLatestSignalMulti([]string{"sbd", "imt", "iridium"}); dbErr == nil && latest != nil {
 				writeJSON(w, http.StatusOK, map[string]interface{}{
 					"bars":       int(latest.Value),
 					"assessment": signalAssessment(int(latest.Value)),
+					"source":     latest.Source,
 					"cached":     true,
 				})
 				return
@@ -45,7 +46,7 @@ func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Reque
 	// When instantaneous reading is 0 (common between passes), fall back to
 	// the most recent non-zero signal recorded in the last 10 minutes.
 	if sig.Bars == 0 && s.db != nil {
-		if latest, err := s.db.GetLatestSignal("iridium"); err == nil && latest != nil {
+		if latest, err := s.db.GetLatestSignalMulti([]string{"sbd", "imt", "iridium"}); err == nil && latest != nil {
 			sig.Bars = int(latest.Value)
 			sig.Assessment = signalAssessment(sig.Bars)
 		}
@@ -88,6 +89,8 @@ func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleGetSatModemInfo returns the satellite modem type, IMEI, and connection status.
+// Query param: type=sbd|imt (optional). If omitted, returns both modems in an array.
+// If type is specified, returns a single modem object for backward compatibility.
 // @Summary Get satellite modem info
 // @Description Returns the modem model (RockBLOCK 9603/9704), IMEI, port, type ("sbd" or "imt"), and connection state
 // @Tags iridium
@@ -99,6 +102,30 @@ func (s *Server) handleGetSatModemInfo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
 		return
 	}
+
+	modemType := r.URL.Query().Get("type")
+
+	if modemType == "imt" {
+		info, err := s.gwManager.GetIMTModemInfo(r.Context())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
+		return
+	}
+
+	if modemType == "sbd" {
+		info, err := s.gwManager.GetSBDModemInfo(r.Context())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
+		return
+	}
+
+	// No type specified — return active modem (backward compat)
 	info, err := s.gwManager.GetSatModemInfo(r.Context())
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())

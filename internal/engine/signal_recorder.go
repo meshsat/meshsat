@@ -78,14 +78,20 @@ func (sr *SignalRecorder) pollLoop(ctx context.Context) {
 			if sig.Timestamp == "" {
 				continue
 			}
+			// Use the source key from the transport ("sbd" or "imt").
+			// HAL transport doesn't set source — fall back to "iridium" for backward compat.
+			source := sig.Source
+			if source == "" {
+				source = "iridium"
+			}
 			// Record every reading (even if same as last) for history chart continuity
 			ts := time.Now().Unix()
-			if err := sr.db.InsertSignalHistory("iridium", ts, float64(sig.Bars)); err != nil {
+			if err := sr.db.InsertSignalHistory(source, ts, float64(sig.Bars)); err != nil {
 				log.Warn().Err(err).Msg("signal recorder: insert failed")
 				continue
 			}
 			if sig.Bars != lastBars {
-				log.Debug().Int("bars", sig.Bars).Msg("signal recorder: recorded")
+				log.Debug().Int("bars", sig.Bars).Str("source", source).Msg("signal recorder: recorded")
 				lastBars = sig.Bars
 			}
 		}

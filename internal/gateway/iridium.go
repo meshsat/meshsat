@@ -1040,8 +1040,10 @@ func (g *IridiumGateway) ManualMailboxCheck(ctx context.Context) {
 	go g.handleRingAlert(ctx)
 }
 
-// recordGSSRegistration persists an SBDIX session outcome to signal_history (source="gss").
-// value=1 for successful GSS registration (mo_status 0-4), value=0 for failure.
+// recordGSSRegistration persists a satellite session outcome to signal_history.
+// Uses modem-specific source key: "sbd_gss" for 9603, "imt_gss" for 9704.
+// Also writes to "gss" for backward compatibility with combined views.
+// value=1 for successful registration (mo_status 0-4), value=0 for failure.
 // Also tracks per-pass attempt/success counters for pass quality logging.
 func (g *IridiumGateway) recordGSSRegistration(success bool, moStatus int) {
 	// Track per-pass MO attempt/success counters
@@ -1058,8 +1060,17 @@ func (g *IridiumGateway) recordGSSRegistration(success bool, moStatus int) {
 		val = 1
 	}
 	ts := time.Now().Unix()
-	if err := g.db.InsertSignalHistory("gss", ts, val); err != nil {
+	// Write modem-specific GSS source
+	gssSource := "sbd_gss"
+	if g.isIMT {
+		gssSource = "imt_gss"
+	}
+	if err := g.db.InsertSignalHistory(gssSource, ts, val); err != nil {
 		log.Debug().Err(err).Msg("iridium: failed to record GSS registration")
+	}
+	// Also write combined "gss" for backward compat
+	if err := g.db.InsertSignalHistory("gss", ts, val); err != nil {
+		log.Debug().Err(err).Msg("iridium: failed to record combined GSS registration")
 	}
 }
 

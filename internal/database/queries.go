@@ -846,6 +846,98 @@ func (db *DB) PruneSignalHistory(days int) (int64, error) {
 	return res.RowsAffected()
 }
 
+// GetSignalHistoryRawMulti returns raw signal history for multiple sources.
+// Used when no specific source is requested — returns sbd, imt, and legacy "iridium" entries.
+func (db *DB) GetSignalHistoryRawMulti(sources []string, from, to int64, limit int) ([]SignalHistoryPoint, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 500
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	// Build IN clause
+	args := make([]interface{}, 0, len(sources)+3)
+	placeholders := make([]string, len(sources))
+	for i, s := range sources {
+		placeholders[i] = "?"
+		args = append(args, s)
+	}
+	args = append(args, from, to, limit)
+	query := fmt.Sprintf(
+		`SELECT * FROM signal_history WHERE source IN (%s) AND timestamp >= ? AND timestamp <= ?
+		 ORDER BY timestamp DESC LIMIT ?`,
+		strings.Join(placeholders, ","))
+	var points []SignalHistoryPoint
+	err := db.Select(&points, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query signal history multi: %w", err)
+	}
+	return points, nil
+}
+
+// GetSignalHistoryAggregatedMulti returns aggregated signal history for multiple sources.
+func (db *DB) GetSignalHistoryAggregatedMulti(sources []string, from, to int64, intervalSec int) ([]SignalHistoryAggregated, error) {
+	if intervalSec <= 0 {
+		intervalSec = 300
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	args := make([]interface{}, 0, len(sources)+4)
+	placeholders := make([]string, len(sources))
+	args = append(args, intervalSec, intervalSec)
+	for i, s := range sources {
+		placeholders[i] = "?"
+		args = append(args, s)
+	}
+	args = append(args, from, to)
+	query := fmt.Sprintf(
+		`SELECT (timestamp / ?) * ? AS bucket,
+		        AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max, COUNT(*) AS count
+		 FROM signal_history WHERE source IN (%s) AND timestamp >= ? AND timestamp <= ?
+		 GROUP BY bucket ORDER BY bucket ASC`,
+		strings.Join(placeholders, ","))
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query aggregated signal multi: %w", err)
+	}
+	defer rows.Close()
+	var points []SignalHistoryAggregated
+	for rows.Next() {
+		var p SignalHistoryAggregated
+		if err := rows.Scan(&p.Bucket, &p.Avg, &p.Min, &p.Max, &p.Count); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	return points, nil
+}
+
+// GetLatestSignalMulti returns the most recent non-zero signal reading from any of the given sources.
+func (db *DB) GetLatestSignalMulti(sources []string) (*SignalHistoryPoint, error) {
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("no sources")
+	}
+	cutoff := time.Now().Unix() - 600
+	args := make([]interface{}, 0, len(sources)+1)
+	placeholders := make([]string, len(sources))
+	for i, s := range sources {
+		placeholders[i] = "?"
+		args = append(args, s)
+	}
+	args = append(args, cutoff)
+	query := fmt.Sprintf(
+		`SELECT * FROM signal_history WHERE source IN (%s) AND value > 0 AND timestamp >= ?
+		 ORDER BY timestamp DESC LIMIT 1`,
+		strings.Join(placeholders, ","))
+	var p SignalHistoryPoint
+	err := db.Get(&p, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 // ---- System Config ----
 
 // GetSystemConfig retrieves a system config value by key.

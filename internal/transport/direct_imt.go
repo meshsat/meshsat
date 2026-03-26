@@ -441,6 +441,7 @@ func (t *DirectIMTTransport) GetSignal(ctx context.Context) (*SignalInfo, error)
 		Bars:       sig.SignalBars,
 		Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		Assessment: assessSignal(sig.SignalBars),
+		Source:     "imt",
 	}
 
 	t.signalMu.Lock()
@@ -458,8 +459,9 @@ func (t *DirectIMTTransport) GetSignalFast(_ context.Context) (*SignalInfo, erro
 
 	if sig.Timestamp == "" {
 		// No cached value yet — return zero rather than blocking on serial
-		return &SignalInfo{Bars: 0, Assessment: "none"}, nil
+		return &SignalInfo{Bars: 0, Assessment: "none", Source: "imt"}, nil
 	}
+	sig.Source = "imt"
 	return &sig, nil
 }
 

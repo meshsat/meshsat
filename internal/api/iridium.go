@@ -15,12 +15,10 @@ import (
 )
 
 // handleGetSignalHistory returns raw or aggregated signal history.
-// Query params: source (default iridium), from, to (unix), interval (seconds).
+// Query params: source (sbd|imt|gss|iridium, empty=all satellite), from, to (unix), interval (seconds).
+// When source is empty, returns combined sbd + imt + legacy "iridium" entries.
 func (s *Server) handleGetSignalHistory(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
-	if source == "" {
-		source = "iridium"
-	}
 
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
@@ -49,10 +47,22 @@ func (s *Server) handleGetSignalHistory(w http.ResponseWriter, r *http.Request) 
 		to = from + 6*3600
 	}
 
+	// Determine which sources to query.
+	// Empty or "iridium" (legacy) → all satellite sources (sbd, imt, and legacy "iridium").
+	// Specific source → just that source.
+	useMulti := source == "" || source == "iridium"
+	multiSources := []string{"sbd", "imt", "iridium"}
+
 	if intervalStr != "" {
 		interval, _ := strconv.Atoi(intervalStr)
 		if interval > 0 {
-			data, err := s.db.GetSignalHistoryAggregated(source, from, to, interval)
+			var data []database.SignalHistoryAggregated
+			var err error
+			if useMulti {
+				data, err = s.db.GetSignalHistoryAggregatedMulti(multiSources, from, to, interval)
+			} else {
+				data, err = s.db.GetSignalHistoryAggregated(source, from, to, interval)
+			}
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -62,12 +72,21 @@ func (s *Server) handleGetSignalHistory(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	data, err := s.db.GetSignalHistoryRaw(source, from, to, 500)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	if useMulti {
+		data, err := s.db.GetSignalHistoryRawMulti(multiSources, from, to, 500)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, data)
+	} else {
+		data, err := s.db.GetSignalHistoryRaw(source, from, to, 500)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, data)
 	}
-	writeJSON(w, http.StatusOK, data)
 }
 
 // handleGetCredits returns aggregated credit usage and budget limits.
