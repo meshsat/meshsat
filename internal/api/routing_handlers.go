@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -294,4 +295,212 @@ func (s *Server) saveFloodableOverrides(m map[string]bool) {
 		return
 	}
 	_ = s.db.SetSystemConfig(floodableConfigKey, string(data))
+}
+
+// ============================================================================
+// Routing config — listen port, announce interval, peer management
+// ============================================================================
+
+const (
+	peersConfigKey   = "reticulum_peers"
+	routingConfigKey = "reticulum_config"
+)
+
+type routingConfig struct {
+	ListenPort       int    `json:"listen_port"`
+	AnnounceInterval int    `json:"announce_interval"`
+	ListenAddr       string `json:"listen_addr"`
+	Warning          string `json:"warning,omitempty"`
+}
+
+// handleGetRoutingConfig returns the current routing configuration.
+// @Summary Get Reticulum routing configuration
+// @Tags routing
+// @Produce json
+// @Success 200 {object} routingConfig
+// @Router /api/routing/config [get]
+func (s *Server) handleGetRoutingConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.loadRoutingConfig()
+	// Fill in live values if not yet persisted
+	if cfg.ListenPort == 0 {
+		cfg.ListenPort = 4242
+	}
+	if cfg.AnnounceInterval == 0 {
+		cfg.AnnounceInterval = 300
+	}
+	if s.tcpIface != nil {
+		cfg.ListenAddr = s.tcpIface.ListenAddr()
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleSetRoutingConfig updates routing configuration. Changes to listen_port
+// require a container restart and matching Docker port exposure.
+// @Summary Update Reticulum routing configuration
+// @Tags routing
+// @Accept json
+// @Produce json
+// @Param body body routingConfig true "Routing config"
+// @Success 200 {object} routingConfig
+// @Router /api/routing/config [put]
+func (s *Server) handleSetRoutingConfig(w http.ResponseWriter, r *http.Request) {
+	var req routingConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	prev := s.loadRoutingConfig()
+
+	if req.ListenPort > 0 {
+		prev.ListenPort = req.ListenPort
+	}
+	if req.AnnounceInterval > 0 {
+		prev.AnnounceInterval = req.AnnounceInterval
+	}
+
+	s.saveRoutingConfig(prev)
+
+	resp := prev
+	if s.tcpIface != nil {
+		resp.ListenAddr = s.tcpIface.ListenAddr()
+	}
+	// Warn if port changed — requires container restart + Docker config update
+	if req.ListenPort > 0 && s.tcpIface != nil {
+		currentAddr := s.tcpIface.ListenAddr()
+		if currentAddr != "" && currentAddr != fmt.Sprintf(":%d", req.ListenPort) && currentAddr != fmt.Sprintf("0.0.0.0:%d", req.ListenPort) {
+			resp.Warning = fmt.Sprintf(
+				"Listen port changed to %d. This requires: (1) update MESHSAT_TCP_LISTEN in defaults.env, "+
+					"(2) if not using host networking, update Docker port mapping, (3) restart the container. "+
+					"Remote peers must also update their connect address.",
+				req.ListenPort,
+			)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) loadRoutingConfig() routingConfig {
+	raw, err := s.db.GetSystemConfig(routingConfigKey)
+	if err != nil || raw == "" {
+		return routingConfig{}
+	}
+	var cfg routingConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return routingConfig{}
+	}
+	return cfg
+}
+
+func (s *Server) saveRoutingConfig(cfg routingConfig) {
+	data, _ := json.Marshal(cfg)
+	_ = s.db.SetSystemConfig(routingConfigKey, string(data))
+}
+
+// handleGetPeers returns the current TCP peer list (connected + configured).
+// @Summary List Reticulum TCP peers
+// @Tags routing
+// @Produce json
+// @Success 200 {array} routing.PeerInfo
+// @Router /api/routing/peers [get]
+func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
+	if s.tcpIface == nil {
+		writeJSON(w, http.StatusOK, []routing.PeerInfo{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.tcpIface.ListPeers())
+}
+
+// handleAddPeer adds a dynamic outbound peer connection.
+// @Summary Add Reticulum TCP peer
+// @Tags routing
+// @Accept json
+// @Produce json
+// @Param body body addPeerRequest true "Peer address (host:port)"
+// @Success 201 {object} map[string]string
+// @Router /api/routing/peers [post]
+func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
+	if s.tcpIface == nil {
+		writeError(w, http.StatusServiceUnavailable, "TCP interface not active — set MESHSAT_TCP_LISTEN first")
+		return
+	}
+
+	var req addPeerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Address == "" {
+		writeError(w, http.StatusBadRequest, "address is required (host:port)")
+		return
+	}
+
+	if err := s.tcpIface.AddPeer(r.Context(), req.Address); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	// Persist to system_config
+	peers := s.loadPeers()
+	// Deduplicate
+	for _, p := range peers {
+		if p == req.Address {
+			writeJSON(w, http.StatusCreated, map[string]string{"address": req.Address, "status": "already exists"})
+			return
+		}
+	}
+	peers = append(peers, req.Address)
+	s.savePeers(peers)
+
+	writeJSON(w, http.StatusCreated, map[string]string{"address": req.Address, "status": "connecting"})
+}
+
+type addPeerRequest struct {
+	Address string `json:"address"`
+}
+
+// handleRemovePeer removes a dynamic outbound peer.
+// @Summary Remove Reticulum TCP peer
+// @Tags routing
+// @Param addr path string true "Peer address (host:port)"
+// @Success 204
+// @Router /api/routing/peers/{addr} [delete]
+func (s *Server) handleRemovePeer(w http.ResponseWriter, r *http.Request) {
+	if s.tcpIface == nil {
+		writeError(w, http.StatusServiceUnavailable, "TCP interface not active")
+		return
+	}
+
+	addr := chi.URLParam(r, "addr")
+	s.tcpIface.RemovePeer(addr)
+
+	// Remove from persisted list
+	peers := s.loadPeers()
+	filtered := peers[:0]
+	for _, p := range peers {
+		if p != addr {
+			filtered = append(filtered, p)
+		}
+	}
+	s.savePeers(filtered)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) loadPeers() []string {
+	raw, err := s.db.GetSystemConfig(peersConfigKey)
+	if err != nil || raw == "" {
+		return nil
+	}
+	var peers []string
+	if err := json.Unmarshal([]byte(raw), &peers); err != nil {
+		return nil
+	}
+	return peers
+}
+
+func (s *Server) savePeers(peers []string) {
+	data, _ := json.Marshal(peers)
+	_ = s.db.SetSystemConfig(peersConfigKey, string(data))
 }

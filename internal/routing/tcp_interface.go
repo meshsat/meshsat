@@ -26,17 +26,27 @@ type TCPInterfaceConfig struct {
 	ReconnectInterval time.Duration
 }
 
+// outboundPeer tracks a dynamically added outbound connection with its own
+// reconnect loop and cancel channel.
+type outboundPeer struct {
+	addr   string
+	conn   net.Conn
+	cancel context.CancelFunc
+}
+
 // TCPInterface is a bidirectional Reticulum interface over TCP using HDLC framing.
 // It can operate as client (connects to a remote RNS node), server (accepts
-// connections from RNS nodes), or both.
+// connections from RNS nodes), or both. Supports dynamic peer management via
+// AddPeer/RemovePeer for UI-driven configuration.
 type TCPInterface struct {
 	config   TCPInterfaceConfig
 	callback func(packet []byte) // called when a packet is received
 
 	mu       sync.Mutex
-	conn     net.Conn
-	listener net.Listener
-	peers    map[string]net.Conn // server mode: addr → conn
+	conn     net.Conn                 // legacy single outbound (from ConnectAddr)
+	listener net.Listener             // server accept socket
+	peers    map[string]net.Conn      // inbound peers (server mode: remoteAddr → conn)
+	outbound map[string]*outboundPeer // dynamic outbound peers (configured addr → peer)
 	online   bool
 	stopCh   chan struct{}
 	stopped  bool
@@ -52,6 +62,7 @@ func NewTCPInterface(config TCPInterfaceConfig, callback func(packet []byte)) *T
 		config:   config,
 		callback: callback,
 		peers:    make(map[string]net.Conn),
+		outbound: make(map[string]*outboundPeer),
 		stopCh:   make(chan struct{}),
 	}
 }
@@ -88,13 +99,23 @@ func (t *TCPInterface) Send(ctx context.Context, packet []byte) error {
 		}
 	}
 
-	// Send to all server peers
+	// Send to all inbound server peers
 	for addr, conn := range t.peers {
 		if err := t.writeConn(conn, frame); err != nil {
 			log.Debug().Err(err).Str("peer", addr).Msg("tcp: peer write failed, removing")
 			conn.Close()
 			delete(t.peers, addr)
 			lastErr = err
+		}
+	}
+
+	// Send to all dynamic outbound peers
+	for addr, ob := range t.outbound {
+		if ob.conn != nil {
+			if err := t.writeConn(ob.conn, frame); err != nil {
+				log.Debug().Err(err).Str("peer", addr).Msg("tcp: outbound peer write failed")
+				lastErr = err
+			}
 		}
 	}
 
@@ -125,6 +146,13 @@ func (t *TCPInterface) Stop() {
 		conn.Close()
 		delete(t.peers, addr)
 	}
+	for addr, ob := range t.outbound {
+		ob.cancel()
+		if ob.conn != nil {
+			ob.conn.Close()
+		}
+		delete(t.outbound, addr)
+	}
 
 	log.Info().Str("name", t.config.Name).Msg("tcp interface stopped")
 }
@@ -133,10 +161,18 @@ func (t *TCPInterface) Stop() {
 func (t *TCPInterface) IsOnline() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.conn != nil || len(t.peers) > 0
+	if t.conn != nil || len(t.peers) > 0 {
+		return true
+	}
+	for _, ob := range t.outbound {
+		if ob.conn != nil {
+			return true
+		}
+	}
+	return false
 }
 
-// PeerCount returns the number of connected peers (server mode).
+// PeerCount returns the number of connected peers (inbound + outbound).
 func (t *TCPInterface) PeerCount() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -144,8 +180,146 @@ func (t *TCPInterface) PeerCount() int {
 	if t.conn != nil {
 		count++
 	}
+	for _, ob := range t.outbound {
+		if ob.conn != nil {
+			count++
+		}
+	}
 	return count
 }
+
+// AddPeer starts a persistent outbound connection to the given address with
+// automatic reconnection. Safe to call while the interface is running.
+func (t *TCPInterface) AddPeer(ctx context.Context, addr string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.stopped {
+		return fmt.Errorf("interface stopped")
+	}
+	if _, exists := t.outbound[addr]; exists {
+		return fmt.Errorf("peer already exists: %s", addr)
+	}
+
+	peerCtx, cancel := context.WithCancel(ctx)
+	ob := &outboundPeer{addr: addr, cancel: cancel}
+	t.outbound[addr] = ob
+
+	go t.outboundLoop(peerCtx, ob)
+
+	log.Info().Str("name", t.config.Name).Str("peer", addr).Msg("tcp: outbound peer added")
+	return nil
+}
+
+// RemovePeer stops and removes a dynamic outbound peer connection.
+func (t *TCPInterface) RemovePeer(addr string) {
+	t.mu.Lock()
+	ob, exists := t.outbound[addr]
+	if !exists {
+		t.mu.Unlock()
+		return
+	}
+	delete(t.outbound, addr)
+	t.mu.Unlock()
+
+	ob.cancel()
+	if ob.conn != nil {
+		ob.conn.Close()
+	}
+	log.Info().Str("name", t.config.Name).Str("peer", addr).Msg("tcp: outbound peer removed")
+}
+
+// ListPeers returns info about all connected peers (inbound + outbound).
+func (t *TCPInterface) ListPeers() []PeerInfo {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var result []PeerInfo
+	if t.conn != nil {
+		result = append(result, PeerInfo{
+			Address:   t.config.ConnectAddr,
+			Direction: "outbound",
+			Connected: true,
+			Dynamic:   false,
+		})
+	}
+	for _, ob := range t.outbound {
+		result = append(result, PeerInfo{
+			Address:   ob.addr,
+			Direction: "outbound",
+			Connected: ob.conn != nil,
+			Dynamic:   true,
+		})
+	}
+	for addr := range t.peers {
+		result = append(result, PeerInfo{
+			Address:   addr,
+			Direction: "inbound",
+			Connected: true,
+			Dynamic:   false,
+		})
+	}
+	return result
+}
+
+// PeerInfo describes a connected or configured peer.
+type PeerInfo struct {
+	Address   string `json:"address"`
+	Direction string `json:"direction"` // "inbound" or "outbound"
+	Connected bool   `json:"connected"`
+	Dynamic   bool   `json:"dynamic"` // true if added via AddPeer (UI-managed)
+}
+
+// outboundLoop maintains a persistent connection to a dynamic outbound peer.
+func (t *TCPInterface) outboundLoop(ctx context.Context, ob *outboundPeer) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.stopCh:
+			return
+		default:
+		}
+
+		conn, err := net.DialTimeout("tcp", ob.addr, 10*time.Second)
+		if err != nil {
+			log.Debug().Err(err).Str("peer", ob.addr).Msg("tcp: outbound peer connect failed")
+			select {
+			case <-time.After(t.config.ReconnectInterval):
+				continue
+			case <-ctx.Done():
+				return
+			case <-t.stopCh:
+				return
+			}
+		}
+
+		log.Info().Str("name", t.config.Name).Str("peer", ob.addr).Msg("tcp: outbound peer connected")
+
+		t.mu.Lock()
+		ob.conn = conn
+		t.mu.Unlock()
+
+		t.readLoop(conn)
+
+		t.mu.Lock()
+		ob.conn = nil
+		t.mu.Unlock()
+
+		log.Info().Str("name", t.config.Name).Str("peer", ob.addr).Msg("tcp: outbound peer disconnected")
+
+		select {
+		case <-time.After(t.config.ReconnectInterval):
+		case <-ctx.Done():
+			return
+		case <-t.stopCh:
+			return
+		}
+	}
+}
+
+// ListenAddr returns the configured listen address (may be empty).
+func (t *TCPInterface) ListenAddr() string { return t.config.ListenAddr }
 
 // ============================================================================
 // Client mode

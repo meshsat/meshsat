@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
+import api from '@/api/client'
 
 const store = useMeshsatStore()
 const activeTab = ref('radio')
@@ -664,7 +665,47 @@ async function fetchZigBeeDevices() {
   } catch {}
 }
 
-// Routing flood control
+// Routing config + peers + flood control
+const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '' })
+const routingWarning = ref('')
+const newPeerAddr = ref('')
+const routingPeers = ref([])
+
+async function loadRoutingConfig() {
+  try {
+    const data = await api.get('/routing/config')
+    if (data) Object.assign(routingForm.value, data)
+  } catch {}
+}
+async function saveRoutingConfig() {
+  routingWarning.value = ''
+  try {
+    const data = await api.put('/routing/config', routingForm.value)
+    if (data?.warning) routingWarning.value = data.warning
+    if (data) Object.assign(routingForm.value, data)
+  } catch (e) { routingWarning.value = e.message }
+}
+async function fetchPeers() {
+  try {
+    const data = await api.get('/routing/peers')
+    routingPeers.value = Array.isArray(data) ? data : []
+  } catch {}
+}
+async function addPeer() {
+  if (!newPeerAddr.value) return
+  try {
+    await api.post('/routing/peers', { address: newPeerAddr.value })
+    newPeerAddr.value = ''
+    await fetchPeers()
+  } catch (e) { routingWarning.value = e.message }
+}
+async function removePeer(addr) {
+  try {
+    await api.del(`/routing/peers/${encodeURIComponent(addr)}`)
+    await fetchPeers()
+  } catch (e) { routingWarning.value = e.message }
+}
+
 async function toggleFloodable(iface) {
   const enabling = !iface.floodable
   if (enabling && iface.cost > 0) {
@@ -693,6 +734,7 @@ onMounted(async () => {
   loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
+  loadRoutingConfig(); fetchPeers()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
 })
@@ -1747,39 +1789,90 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
       </div>
     </div>
 
-    <!-- Routing / Reticulum flood control -->
+    <!-- Routing / Reticulum -->
     <div v-if="activeTab === 'routing'">
       <div class="space-y-4">
+
+        <!-- TCP Interface Config -->
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <h3 class="text-sm font-medium text-gray-200 mb-1">Reticulum Flood Control</h3>
-          <p class="text-xs text-gray-500 mb-4">Control which interfaces are used for path discovery flooding and announce broadcasts. Paid transports (satellite, cellular) are excluded by default to avoid burning credits on discovery traffic.</p>
-          <div v-if="store.routingInterfaces.length === 0" class="text-xs text-gray-500 text-center py-4">No Reticulum interfaces registered. Routing subsystem may not be initialized.</div>
-          <div v-else class="space-y-2">
+          <h3 class="text-sm font-medium text-gray-200 mb-3">TCP Interface</h3>
+          <div class="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Listen Port</label>
+              <input type="number" v-model.number="routingForm.listen_port" min="1024" max="65535"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Announce Interval (sec)</label>
+              <input type="number" v-model.number="routingForm.announce_interval" min="30" max="3600"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="saveRoutingConfig" class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600">Save</button>
+            <span v-if="routingForm.listen_addr" class="text-[10px] text-gray-500">Currently listening on {{ routingForm.listen_addr }}</span>
+          </div>
+          <p v-if="routingWarning" class="mt-2 text-[10px] text-amber-400 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">{{ routingWarning }}</p>
+        </div>
+
+        <!-- TCP Peers -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-3">TCP Peers</h3>
+          <div class="flex gap-2 mb-3">
+            <input type="text" v-model="newPeerAddr" placeholder="host:port (e.g. 192.168.1.10:4242)"
+              @keyup.enter="addPeer"
+              class="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600">
+            <button @click="addPeer" :disabled="!newPeerAddr"
+              class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600 disabled:opacity-40">Add</button>
+          </div>
+          <div v-if="routingPeers.length === 0" class="text-xs text-gray-500 text-center py-2">No peers configured. Add a remote bridge address above.</div>
+          <div v-else class="space-y-1.5">
+            <div v-for="peer in routingPeers" :key="peer.address"
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono text-gray-200">{{ peer.address }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="peer.connected ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
+                  {{ peer.connected ? 'connected' : 'disconnected' }}
+                </span>
+                <span class="text-[10px] text-gray-600">{{ peer.direction }}</span>
+              </div>
+              <button v-if="peer.dynamic" @click="removePeer(peer.address)"
+                class="px-2 py-0.5 rounded bg-red-900 text-red-300 text-[10px] hover:bg-red-800">Remove</button>
+              <span v-else class="text-[10px] text-gray-600">env</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Flood Control -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-1">Flood Control</h3>
+          <p class="text-xs text-gray-500 mb-3">Paid transports excluded from path discovery by default.</p>
+          <div v-if="store.routingInterfaces.length === 0" class="text-xs text-gray-500 text-center py-2">No Reticulum interfaces registered.</div>
+          <div v-else class="space-y-1.5">
             <div v-for="iface in store.routingInterfaces" :key="iface.id"
-              class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700">
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
               <div class="flex items-center gap-3">
                 <span class="text-xs font-mono text-gray-200">{{ iface.id }}</span>
                 <span class="text-[10px] px-1.5 py-0.5 rounded"
                   :class="iface.online ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
                   {{ iface.online ? 'online' : 'offline' }}
                 </span>
-                <span v-if="iface.cost > 0" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400">
-                  ${{ iface.cost }}/msg
-                </span>
+                <span v-if="iface.cost > 0" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400">${{ iface.cost }}/msg</span>
                 <span v-else class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">free</span>
               </div>
               <label class="flex items-center gap-2 cursor-pointer">
                 <span class="text-[10px] text-gray-500">flood</span>
-                <input type="checkbox" :checked="iface.floodable"
-                  @change="toggleFloodable(iface)"
+                <input type="checkbox" :checked="iface.floodable" @change="toggleFloodable(iface)"
                   class="rounded bg-gray-900 border-gray-700">
               </label>
             </div>
           </div>
         </div>
+
         <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
           <p class="text-[10px] text-gray-500 leading-relaxed">
-            <strong class="text-gray-400">Floodable</strong> interfaces receive path discovery requests, announce broadcasts, and path response relays. Enabling flood on paid transports means every path request from any node in the network will generate a message on that interface. <strong class="text-gray-400">Directed sends</strong> (known routes) always use the best interface regardless of this setting.
+            <strong class="text-gray-400">Floodable</strong> interfaces receive path discovery requests and announce broadcasts. Enabling on paid transports means every path request generates a message on that interface. <strong class="text-gray-400">Directed sends</strong> (known routes) always use the best interface regardless of this setting.
           </p>
         </div>
       </div>

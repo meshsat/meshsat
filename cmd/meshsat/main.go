@@ -557,6 +557,20 @@ func main() {
 				}
 			}
 		}
+
+		// Load persisted routing peers from system_config and connect dynamically
+		if tcpIface != nil {
+			if raw, dbErr := db.GetSystemConfig("reticulum_peers"); dbErr == nil && raw != "" {
+				var peers []string
+				if json.Unmarshal([]byte(raw), &peers) == nil {
+					for _, addr := range peers {
+						if err := tcpIface.AddPeer(ctx, addr); err != nil {
+							log.Warn().Err(err).Str("peer", addr).Msg("failed to add persisted peer")
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
@@ -665,6 +679,9 @@ func main() {
 	}
 	if ifaceReg != nil {
 		srv.SetInterfaceRegistry(ifaceReg)
+	}
+	if tcpIface != nil {
+		srv.SetTCPInterface(tcpIface)
 	}
 
 	// Key store — cross-platform key exchange with QR bundles and envelope encryption

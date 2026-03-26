@@ -48,6 +48,7 @@ type Server struct {
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
 	ifaceRegistry *routing.InterfaceRegistry
+	tcpIface      *routing.TCPInterface
 }
 
 // NewServer creates a new API server.
@@ -163,6 +164,11 @@ func (s *Server) SetKeyStore(ks *keystore.KeyStore) {
 // SetInterfaceRegistry sets the Reticulum interface registry for flood control API.
 func (s *Server) SetInterfaceRegistry(reg *routing.InterfaceRegistry) {
 	s.ifaceRegistry = reg
+}
+
+// SetTCPInterface sets the TCP Reticulum interface for peer management API.
+func (s *Server) SetTCPInterface(iface *routing.TCPInterface) {
+	s.tcpIface = iface
 }
 
 // Router builds the chi router with all API routes.
@@ -432,6 +438,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/routing/identity", s.handleGetRoutingIdentity)
 		r.Get("/routing/floodable", s.handleGetFloodable)
 		r.Put("/routing/floodable/{ifaceID}", s.handleSetFloodable)
+		r.Get("/routing/config", s.handleGetRoutingConfig)
+		r.Put("/routing/config", s.handleSetRoutingConfig)
+		r.Get("/routing/peers", s.handleGetPeers)
+		r.Post("/routing/peers", s.handleAddPeer)
+		r.Delete("/routing/peers/{addr}", s.handleRemovePeer)
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)
