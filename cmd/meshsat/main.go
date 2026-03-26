@@ -437,13 +437,26 @@ func main() {
 		})
 	}
 
-	// TCP/HDLC — RNS-compatible Reticulum interface over TCP
+	// TCP/HDLC — RNS-compatible Reticulum interface over TCP.
+	// DB-persisted config (from Settings > Routing) overrides env vars after first save.
+	tcpListenAddr := cfg.TCPListenAddr
+	tcpConnectAddr := cfg.TCPConnectAddr
+	if raw, dbErr := db.GetSystemConfig("reticulum_config"); dbErr == nil && raw != "" {
+		var rc struct {
+			ListenPort int `json:"listen_port"`
+		}
+		if json.Unmarshal([]byte(raw), &rc) == nil && rc.ListenPort > 0 {
+			tcpListenAddr = fmt.Sprintf("0.0.0.0:%d", rc.ListenPort)
+			log.Info().Int("port", rc.ListenPort).Msg("tcp listen address from DB config (overrides env)")
+		}
+	}
+
 	var tcpIface *routing.TCPInterface
-	if cfg.TCPListenAddr != "" || cfg.TCPConnectAddr != "" {
+	if tcpListenAddr != "" || tcpConnectAddr != "" {
 		tcpIface = routing.NewTCPInterface(routing.TCPInterfaceConfig{
 			Name:              "tcp_0",
-			ListenAddr:        cfg.TCPListenAddr,
-			ConnectAddr:       cfg.TCPConnectAddr,
+			ListenAddr:        tcpListenAddr,
+			ConnectAddr:       tcpConnectAddr,
 			Reconnect:         true,
 			ReconnectInterval: 10 * time.Second,
 		}, func(packet []byte) {
