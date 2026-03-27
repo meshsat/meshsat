@@ -361,11 +361,18 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 		log.Info().Uint32("node_num", fr.MyInfo.MyNodeNum).Msg("meshtastic my_node_num")
 	}
 
-	// NodeInfo (from config download)
+	// NodeInfo (from config download).
+	// Merge into existing node rather than full-replace so that
+	// OTA-learned fields (UserID, LongName, etc.) survive reconnects
+	// when the radio's nodeDB lacks the User field for a remote node.
 	if fr.NodeInfo != nil {
-		node := protoNodeInfoToMeshNode(fr.NodeInfo)
+		incoming := protoNodeInfoToMeshNode(fr.NodeInfo)
 		t.nodesMu.Lock()
-		t.nodes[node.Num] = &node
+		if existing, ok := t.nodes[incoming.Num]; ok {
+			mergeNodeFromConfig(existing, &incoming)
+		} else {
+			t.nodes[incoming.Num] = &incoming
+		}
 		t.nodesMu.Unlock()
 	}
 
@@ -431,6 +438,70 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 	}
 }
 
+// mergeNodeFromConfig merges config-download data into an existing node.
+// Fields from the config download overwrite ONLY if they carry data.
+// This prevents the radio's nodeDB (which may lack User for remote nodes)
+// from wiping OTA-learned identity fields on every serial reconnect.
+func mergeNodeFromConfig(dst, src *MeshNode) {
+	// Identity fields: only overwrite if config actually has them
+	if src.UserID != "" {
+		dst.UserID = src.UserID
+	}
+	if src.LongName != "" {
+		dst.LongName = src.LongName
+	}
+	if src.ShortName != "" {
+		dst.ShortName = src.ShortName
+	}
+	if src.HWModel != 0 {
+		dst.HWModel = src.HWModel
+		dst.HWModelName = src.HWModelName
+	}
+	if src.Role != 0 {
+		dst.Role = src.Role
+	}
+	if src.IsLicensed {
+		dst.IsLicensed = src.IsLicensed
+	}
+
+	// Always update radio-level fields (the radio is authoritative for these)
+	if src.LastHeard > dst.LastHeard {
+		dst.LastHeard = src.LastHeard
+		dst.LastHeardStr = src.LastHeardStr
+	}
+	if src.SNR != 0 {
+		dst.SNR = src.SNR
+	}
+	dst.HopsAway = src.HopsAway
+	dst.IsFavorite = src.IsFavorite
+	dst.IsIgnored = src.IsIgnored
+
+	// Position: overwrite if config has it
+	if src.Latitude != 0 || src.Longitude != 0 {
+		dst.Latitude = src.Latitude
+		dst.Longitude = src.Longitude
+		dst.Altitude = src.Altitude
+		dst.Sats = src.Sats
+	}
+
+	// Device metrics: overwrite if config has them
+	if src.BatteryLevel > 0 {
+		dst.BatteryLevel = src.BatteryLevel
+	}
+	if src.Voltage > 0 {
+		dst.Voltage = src.Voltage
+	}
+	if src.ChannelUtil > 0 {
+		dst.ChannelUtil = src.ChannelUtil
+	}
+	if src.AirUtilTx > 0 {
+		dst.AirUtilTx = src.AirUtilTx
+	}
+	if src.UptimeSeconds > 0 {
+		dst.UptimeSeconds = src.UptimeSeconds
+	}
+}
+
 func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	// Encrypted passthrough: relay encrypted packets with envelope metadata
 	// instead of dropping them. The encrypted payload is preserved as-is
@@ -479,9 +550,11 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	t.nodesMu.Unlock()
 
 	// Auto-request NodeInfo from unknown nodes (no name yet).
-	// Only on first discovery or if still nameless, and not for NodeInfo packets
-	// (which will be handled below and fill in the name).
-	if needsNodeInfo && (isNewNode || pkt.Decoded == nil || pkt.Decoded.PortNum != PortNumNodeInfo) {
+	// Only suppress for NodeInfo packets that actually carry a payload (responses).
+	// NodeInfo packets with nil payload are requests/echoes that won't populate
+	// the node's name, so we must still auto-request.
+	hasNodeInfoResponse := pkt.Decoded != nil && pkt.Decoded.PortNum == PortNumNodeInfo && pkt.Decoded.Payload != nil
+	if needsNodeInfo && (isNewNode || !hasNodeInfoResponse) {
 		t.mu.RLock()
 		connected := t.connected && t.file != nil
 		t.mu.RUnlock()
