@@ -209,3 +209,131 @@ _Created: 2026-03-17_
 - MQTT retained messages ensure Hub gets latest state, but history is lost
 - If Android sent messages via local channels (SMS, BLE mesh) during offline, those are tracked in Android's local delivery ledger but not replicated to Hub
 - **PLANNED**: Full delivery ledger sync between Hub and Android/Bridge is a future feature
+
+---
+
+## Scenario 8: Full-Stack Validation — Hub + Bridge + Dual Satellite (MESHSAT-338)
+
+_Created: 2026-03-27_
+
+**Prerequisites:**
+- Bridge running on mule01 (or field kit) with both 9603 SBD and 9704 IMT connected
+- Hub running at hub.meshsat.net with bridge registered
+- Bridge MQTT connected to Hub (mTLS WSS)
+- Cloudloop account with webhook configured to Hub
+
+**Automated validation:**
+```bash
+# Quick operator check (shell script)
+BRIDGE_URL=http://mule01:6050 HUB_URL=https://hub.meshsat.net HUB_API_KEY=xxx \
+  ./scripts/e2e_validate.sh
+
+# Full Go-based validation
+go test -tags=e2e_live -v -timeout=300s ./test/e2e_live/... \
+  -bridge-url=http://mule01:6050 -hub-url=https://hub.meshsat.net
+```
+
+### 8a. Dual modem boot — both auto-detected, both online
+
+**Verification:**
+- `GET /api/gateways` returns both `type=iridium` (SBD) and `type=iridium_imt` (IMT)
+- Both show `connected=true`
+- DeviceSupervisor identified modems via VID:PID + JSPR/AT probe cascade
+
+### 8b. MO via 9603 SBD → Cloudloop → Hub webhook → Hub dashboard
+
+**Message flow:**
+1. Meshtastic node sends text → Bridge receives via mesh
+2. Dispatcher routes to SBD interface → `SBDGateway.Forward()` → AT+SBDIX
+3. Iridium constellation delivers to Ground Control
+4. Cloudloop POSTs LingoMO to Hub `/api/webhook/cloudloop`
+5. Hub decodes, publishes to `meshsat/{imei}/mo/decoded`
+6. Hub dashboard shows message
+
+**Verification:**
+- Bridge delivery ledger shows `status=sent` for SBD interface
+- Hub `/api/messages` shows new message with matching payload
+- Latency: typically 10-60s (satellite pass dependent)
+
+### 8c. MO via 9704 IMT → Cloudloop → Hub webhook → Hub dashboard
+
+**Message flow:**
+1. Same as 8b but via IMT: `IMTGateway.Forward()` → JSPR `messageOriginate`
+2. Iridium Certus network delivers to Cloudloop
+3. Cloudloop POSTs to Hub webhook
+
+**Verification:**
+- Same as 8b but delivery shows IMT interface
+- IMT supports up to 100KB payloads (vs 340 bytes SBD)
+
+### 8d. MT from Hub → Cloudloop → 9704 → Bridge → Mesh
+
+**Message flow:**
+1. Hub dashboard: operator sends MT message to device
+2. Hub publishes to `meshsat/{device_id}/mt/send`
+3. Hub MT sender POSTs to Cloudloop `DoSendImtMessage` API
+4. Cloudloop queues for Iridium Certus delivery
+5. 9704 receives unsolicited `299 messageTerminate` event
+6. Bridge `IMTGateway.mtEventListener()` processes MT
+7. Processor routes to Meshtastic mesh
+
+**Verification:**
+- Hub `/api/devices/{imei}/mt/status` shows `status=sent`
+- Bridge logs show MT received on IMT interface
+- Meshtastic node receives message
+
+### 8e. MT from Hub → Core → 9603 → Bridge → Mesh
+
+**Message flow:**
+1. Same as 8d but via SBD: Cloudloop queues SBD MT
+2. 9603 ring alert received during next MO exchange (piggyback)
+3. Bridge `SBDGateway.handleRingAlert()` reads MT buffer
+
+**Verification:**
+- Ring alert fires during SBDIX exchange
+- MT buffer read successfully (`AT+SBDRB`)
+
+### 8f. Failover — 9704 disconnected → traffic routes to 9603
+
+**Trigger:** Disconnect 9704 USB cable (or disable via API)
+
+**Expected behavior:**
+1. DeviceSupervisor detects port loss, emits `device_disconnected` event
+2. GatewayManager stops IMT gateway instance
+3. FailoverResolver resolves failover group to SBD (next priority member)
+4. Subsequent MO messages route through SBD automatically
+5. Dashboard shows IMT gateway disconnected, SBD still active
+
+**Verification:**
+- `GET /api/gateways` shows IMT `connected=false`, SBD `connected=true`
+- New delivery entries use SBD interface
+- SSE event stream shows `device_disconnected` for 9704
+
+### 8g. Bridge telemetry visible in Hub
+
+**Telemetry sources:**
+- Health (30s interval): CPU%, mem%, disk%, uptime, interface count
+- Signal (30s interval): bars 0-5, source (sbd/imt)
+- Position: lat/lon from GPS or fixed
+
+**Verification:**
+- Hub `GET /api/bridges/{id}` shows `online=true`, `health` JSON populated
+- `last_seen` timestamp within last 60s
+- Health fields non-zero (cpu_pct, mem_pct, uptime_sec)
+
+### 8h. End-to-end latency measurement
+
+| Path | Expected Latency | Measurement |
+|------|-----------------|-------------|
+| Bridge API round-trip | <100ms (LAN) | `GET /api/gateways` |
+| Hub API round-trip | <500ms (WAN) | `GET /api/bridges` |
+| Bridge→Hub health | <60s | `last_seen` age |
+| MO SBD (satellite) | 10-60s | Timestamp delta: bridge send → hub receive |
+| MO IMT (satellite) | 5-30s | Timestamp delta: bridge send → hub receive |
+| MT delivery | 30s-5min | Timestamp delta: hub send → bridge receive |
+
+**Known limitations:**
+- Satellite latency depends on pass schedule and signal quality
+- 9603 SBD: single exchange per SBDIX (11-62s blocking)
+- 9704 IMT: near-realtime when Certus link is active
+- MT delivery requires modem to be in active satellite session
