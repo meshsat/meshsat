@@ -70,6 +70,7 @@ type Config struct {
 	HubPassword       string // MQTT password
 	HubTLSCert        string // path to client TLS certificate
 	HubTLSKey         string // path to client TLS key
+	HubTLSCA          string // path to CA certificate for hub server verification
 	HubHealthInterval int    // health publish interval in seconds (default 30)
 }
 
@@ -111,6 +112,7 @@ func Load() *Config {
 		HubPassword:       envStr("MESHSAT_HUB_PASSWORD", ""),
 		HubTLSCert:        envStr("MESHSAT_HUB_TLS_CERT", ""),
 		HubTLSKey:         envStr("MESHSAT_HUB_TLS_KEY", ""),
+		HubTLSCA:          envStr("MESHSAT_HUB_TLS_CA", ""),
 		HubHealthInterval: envInt("MESHSAT_HUB_HEALTH_INTERVAL", 30),
 	}
 }

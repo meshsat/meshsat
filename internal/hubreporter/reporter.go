@@ -5,8 +5,11 @@ package hubreporter
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +25,8 @@ type ReporterConfig struct {
 	Password       string
 	TLSCert        string
 	TLSKey         string
+	TLSCA          string // path to CA certificate for server verification
+	TLSInsecure    bool   // skip server certificate verification (dev only)
 	HealthInterval time.Duration
 }
 
@@ -88,16 +93,9 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		opts.SetPassword(r.cfg.Password)
 	}
 
-	// TLS client certificate (mTLS)
-	if r.cfg.TLSCert != "" && r.cfg.TLSKey != "" {
-		cert, err := tls.LoadX509KeyPair(r.cfg.TLSCert, r.cfg.TLSKey)
-		if err != nil {
-			return fmt.Errorf("hubreporter TLS: %w", err)
-		}
-		opts.SetTLSConfig(&tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		})
+	// TLS configuration — needed for ssl://, wss://, or explicit mTLS
+	if tlsCfg := r.buildTLSConfig(); tlsCfg != nil {
+		opts.SetTLSConfig(tlsCfg)
 	}
 
 	// LWT: publish death with reason "lwt" on unexpected disconnect
@@ -166,6 +164,50 @@ func (r *HubReporter) Start(ctx context.Context) error {
 
 	log.Info().Str("hub", r.cfg.HubURL).Str("bridge_id", r.cfg.BridgeID).Msg("hubreporter started")
 	return nil
+}
+
+// buildTLSConfig returns a *tls.Config when TLS is needed (ssl://, wss://, mTLS,
+// custom CA, or insecure-skip). Returns nil when no TLS settings apply.
+func (r *HubReporter) buildTLSConfig() *tls.Config {
+	scheme := strings.SplitN(r.cfg.HubURL, "://", 2)[0]
+	needsTLS := scheme == "ssl" || scheme == "tls" || scheme == "wss"
+	hasCert := r.cfg.TLSCert != "" && r.cfg.TLSKey != ""
+	hasCA := r.cfg.TLSCA != ""
+
+	if !needsTLS && !hasCert && !hasCA && !r.cfg.TLSInsecure {
+		return nil
+	}
+
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if hasCert {
+		cert, err := tls.LoadX509KeyPair(r.cfg.TLSCert, r.cfg.TLSKey)
+		if err != nil {
+			log.Error().Err(err).Msg("hubreporter: failed to load TLS client certificate")
+		} else {
+			cfg.Certificates = []tls.Certificate{cert}
+		}
+	}
+
+	if hasCA {
+		caCert, err := os.ReadFile(r.cfg.TLSCA)
+		if err != nil {
+			log.Error().Err(err).Str("ca", r.cfg.TLSCA).Msg("hubreporter: failed to read CA certificate")
+		} else {
+			pool := x509.NewCertPool()
+			if pool.AppendCertsFromPEM(caCert) {
+				cfg.RootCAs = pool
+			} else {
+				log.Warn().Str("ca", r.cfg.TLSCA).Msg("hubreporter: CA file contains no valid certificates")
+			}
+		}
+	}
+
+	if r.cfg.TLSInsecure {
+		cfg.InsecureSkipVerify = true //nolint:gosec // user-configured for dev/testing
+	}
+
+	return cfg
 }
 
 // Stop publishes a graceful death message and disconnects from the broker.

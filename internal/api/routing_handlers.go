@@ -512,12 +512,14 @@ func (s *Server) savePeers(peers []string) {
 const hubConfigKey = "hub_connection"
 
 type hubConnectionConfig struct {
-	URL      string `json:"url"`
-	BridgeID string `json:"bridge_id"`
-	Username string `json:"username"`
-	Password string `json:"password,omitempty"`
-	HasPass  bool   `json:"has_password"`
-	Warning  string `json:"warning,omitempty"`
+	URL         string `json:"url"`
+	BridgeID    string `json:"bridge_id"`
+	Username    string `json:"username"`
+	Password    string `json:"password,omitempty"`
+	HasPass     bool   `json:"has_password"`
+	TLSCA       string `json:"tls_ca,omitempty"`
+	TLSInsecure bool   `json:"tls_insecure,omitempty"`
+	Warning     string `json:"warning,omitempty"`
 }
 
 // handleGetHubConfig returns the current Hub connection config (password redacted).
@@ -562,6 +564,8 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 		prev.Password = req.Password
 		prev.HasPass = true
 	}
+	prev.TLSCA = req.TLSCA
+	prev.TLSInsecure = req.TLSInsecure
 
 	s.saveHubConfig(prev)
 
