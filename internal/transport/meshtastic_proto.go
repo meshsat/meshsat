@@ -1015,6 +1015,7 @@ func parseData(data []byte) (*ProtoData, error) {
 func protoNodeInfoToMeshNode(ni *ProtoNodeInfo) MeshNode {
 	node := MeshNode{
 		Num:       ni.Num,
+		UserID:    fmt.Sprintf("!%08x", ni.Num),
 		LastHeard: int64(ni.LastHeard),
 		SNR:       ni.SNR,
 	}

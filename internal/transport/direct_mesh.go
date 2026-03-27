@@ -526,7 +526,10 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	node, ok := t.nodes[pkt.From]
 	isNewNode := !ok
 	if !ok {
-		node = &MeshNode{Num: pkt.From}
+		node = &MeshNode{
+			Num:    pkt.From,
+			UserID: fmt.Sprintf("!%08x", pkt.From),
+		}
 		t.nodes[pkt.From] = node
 	}
 	needsNodeInfo := node.LongName == "" && pkt.From != myNum
@@ -615,7 +618,7 @@ func (t *DirectMeshTransport) handlePositionPacket(pkt *ProtoMeshPacket) {
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
 	if !ok {
-		node = &MeshNode{Num: pkt.From}
+		node = &MeshNode{Num: pkt.From, UserID: fmt.Sprintf("!%08x", pkt.From)}
 		t.nodes[pkt.From] = node
 	}
 	node.Latitude = float64(pos.LatitudeI) / 1e7
@@ -645,7 +648,7 @@ func (t *DirectMeshTransport) handleNodeInfoPacket(pkt *ProtoMeshPacket) {
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
 	if !ok {
-		node = &MeshNode{Num: pkt.From}
+		node = &MeshNode{Num: pkt.From, UserID: fmt.Sprintf("!%08x", pkt.From)}
 		t.nodes[pkt.From] = node
 	}
 	node.UserID = user.ID
@@ -686,7 +689,7 @@ func (t *DirectMeshTransport) handleTelemetryPacket(pkt *ProtoMeshPacket) {
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
 	if !ok {
-		node = &MeshNode{Num: pkt.From}
+		node = &MeshNode{Num: pkt.From, UserID: fmt.Sprintf("!%08x", pkt.From)}
 		t.nodes[pkt.From] = node
 	}
 	if dm != nil {
