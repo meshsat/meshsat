@@ -23,9 +23,12 @@ type ReporterConfig struct {
 	BridgeID       string
 	Username       string
 	Password       string
-	TLSCert        string
-	TLSKey         string
-	TLSCA          string // path to CA certificate for server verification
+	TLSCert        string // file path (env var) — used if TLSCertPEM is empty
+	TLSKey         string // file path (env var) — used if TLSKeyPEM is empty
+	TLSCertPEM     []byte // inline PEM (from DB) — takes priority over file path
+	TLSKeyPEM      []byte // inline PEM (from DB) — takes priority over file path
+	TLSCA          string // file path to CA cert
+	TLSCAPEM       []byte // inline CA PEM (from DB) — takes priority over file path
 	TLSInsecure    bool   // skip server certificate verification (dev only)
 	HealthInterval time.Duration
 }
@@ -168,28 +171,48 @@ func (r *HubReporter) Start(ctx context.Context) error {
 
 // buildTLSConfig returns a *tls.Config when TLS is needed (ssl://, wss://, mTLS,
 // custom CA, or insecure-skip). Returns nil when no TLS settings apply.
+// Inline PEM (from DB/UI) takes priority over file paths (from env vars).
 func (r *HubReporter) buildTLSConfig() *tls.Config {
 	scheme := strings.SplitN(r.cfg.HubURL, "://", 2)[0]
 	needsTLS := scheme == "ssl" || scheme == "tls" || scheme == "wss"
-	hasCert := r.cfg.TLSCert != "" && r.cfg.TLSKey != ""
-	hasCA := r.cfg.TLSCA != ""
+	hasCertPEM := len(r.cfg.TLSCertPEM) > 0 && len(r.cfg.TLSKeyPEM) > 0
+	hasCertFile := r.cfg.TLSCert != "" && r.cfg.TLSKey != ""
+	hasCAPEM := len(r.cfg.TLSCAPEM) > 0
+	hasCAFile := r.cfg.TLSCA != ""
 
-	if !needsTLS && !hasCert && !hasCA && !r.cfg.TLSInsecure {
+	if !needsTLS && !hasCertPEM && !hasCertFile && !hasCAPEM && !hasCAFile && !r.cfg.TLSInsecure {
 		return nil
 	}
 
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 
-	if hasCert {
+	// Client certificate — inline PEM from DB takes priority over file path
+	if hasCertPEM {
+		cert, err := tls.X509KeyPair(r.cfg.TLSCertPEM, r.cfg.TLSKeyPEM)
+		if err != nil {
+			log.Error().Err(err).Msg("hubreporter: failed to parse inline TLS client certificate")
+		} else {
+			cfg.Certificates = []tls.Certificate{cert}
+			log.Info().Msg("hubreporter: mTLS client certificate loaded from DB")
+		}
+	} else if hasCertFile {
 		cert, err := tls.LoadX509KeyPair(r.cfg.TLSCert, r.cfg.TLSKey)
 		if err != nil {
-			log.Error().Err(err).Msg("hubreporter: failed to load TLS client certificate")
+			log.Error().Err(err).Msg("hubreporter: failed to load TLS client certificate from file")
 		} else {
 			cfg.Certificates = []tls.Certificate{cert}
 		}
 	}
 
-	if hasCA {
+	// CA certificate — inline PEM from DB takes priority over file path
+	if hasCAPEM {
+		pool := x509.NewCertPool()
+		if pool.AppendCertsFromPEM(r.cfg.TLSCAPEM) {
+			cfg.RootCAs = pool
+		} else {
+			log.Warn().Msg("hubreporter: inline CA PEM contains no valid certificates")
+		}
+	} else if hasCAFile {
 		caCert, err := os.ReadFile(r.cfg.TLSCA)
 		if err != nil {
 			log.Error().Err(err).Str("ca", r.cfg.TLSCA).Msg("hubreporter: failed to read CA certificate")

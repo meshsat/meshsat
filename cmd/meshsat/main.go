@@ -830,14 +830,17 @@ func main() {
 	// DB-persisted config (from Settings > Routing > Hub) overrides env vars.
 	hubURL, hubBridgeID := cfg.HubURL, cfg.BridgeID
 	hubUsername, hubPassword := cfg.HubUsername, cfg.HubPassword
-	hubTLSCA, hubTLSInsecure := "", false
+	var hubTLSCertPEM, hubTLSKeyPEM, hubTLSCAPEM []byte
+	hubTLSInsecure := false
 	if raw, dbErr := db.GetSystemConfig("hub_connection"); dbErr == nil && raw != "" {
 		var hc struct {
 			URL         string `json:"url"`
 			BridgeID    string `json:"bridge_id"`
 			Username    string `json:"username"`
 			Password    string `json:"password"`
-			TLSCA       string `json:"tls_ca"`
+			TLSCertPEM  string `json:"tls_cert_pem"`
+			TLSKeyPEM   string `json:"tls_key_pem"`
+			TLSCAPEM    string `json:"tls_ca_pem"`
 			TLSInsecure bool   `json:"tls_insecure"`
 		}
 		if json.Unmarshal([]byte(raw), &hc) == nil {
@@ -853,8 +856,14 @@ func main() {
 			if hc.Password != "" {
 				hubPassword = hc.Password
 			}
-			if hc.TLSCA != "" {
-				hubTLSCA = hc.TLSCA
+			if hc.TLSCertPEM != "" {
+				hubTLSCertPEM = []byte(hc.TLSCertPEM)
+			}
+			if hc.TLSKeyPEM != "" {
+				hubTLSKeyPEM = []byte(hc.TLSKeyPEM)
+			}
+			if hc.TLSCAPEM != "" {
+				hubTLSCAPEM = []byte(hc.TLSCAPEM)
 			}
 			hubTLSInsecure = hc.TLSInsecure
 		}
@@ -862,18 +871,17 @@ func main() {
 
 	var hubReporter *hubreporter.HubReporter
 	if hubURL != "" {
-		tlsCA := cfg.HubTLSCA
-		if hubTLSCA != "" {
-			tlsCA = hubTLSCA // DB config overrides env var
-		}
 		reporterCfg := hubreporter.ReporterConfig{
 			HubURL:         hubURL,
 			BridgeID:       hubBridgeID,
 			Username:       hubUsername,
 			Password:       hubPassword,
-			TLSCert:        cfg.HubTLSCert,
-			TLSKey:         cfg.HubTLSKey,
-			TLSCA:          tlsCA,
+			TLSCert:        cfg.HubTLSCert, // file path fallback (env var)
+			TLSKey:         cfg.HubTLSKey,  // file path fallback (env var)
+			TLSCertPEM:     hubTLSCertPEM,  // inline PEM from DB (priority)
+			TLSKeyPEM:      hubTLSKeyPEM,   // inline PEM from DB (priority)
+			TLSCA:          cfg.HubTLSCA,   // file path fallback (env var)
+			TLSCAPEM:       hubTLSCAPEM,    // inline PEM from DB (priority)
 			TLSInsecure:    hubTLSInsecure,
 			HealthInterval: time.Duration(cfg.HubHealthInterval) * time.Second,
 		}

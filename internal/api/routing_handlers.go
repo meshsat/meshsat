@@ -517,7 +517,10 @@ type hubConnectionConfig struct {
 	Username    string `json:"username"`
 	Password    string `json:"password,omitempty"`
 	HasPass     bool   `json:"has_password"`
-	TLSCA       string `json:"tls_ca,omitempty"`
+	TLSCertPEM  string `json:"tls_cert_pem,omitempty"`
+	TLSKeyPEM   string `json:"tls_key_pem,omitempty"`
+	TLSCAPEM    string `json:"tls_ca_pem,omitempty"`
+	HasCert     bool   `json:"has_cert"`
 	TLSInsecure bool   `json:"tls_insecure,omitempty"`
 	Warning     string `json:"warning,omitempty"`
 }
@@ -530,7 +533,10 @@ type hubConnectionConfig struct {
 // @Router /api/routing/hub [get]
 func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.loadHubConfig()
-	cfg.Password = "" // never expose password in GET
+	cfg.Password = ""   // never expose password in GET
+	cfg.TLSCertPEM = "" // never expose cert PEM in GET
+	cfg.TLSKeyPEM = ""  // never expose key PEM in GET
+	cfg.TLSCAPEM = ""   // never expose CA PEM in GET
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -564,7 +570,16 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 		prev.Password = req.Password
 		prev.HasPass = true
 	}
-	prev.TLSCA = req.TLSCA
+	if req.TLSCertPEM != "" {
+		prev.TLSCertPEM = req.TLSCertPEM
+	}
+	if req.TLSKeyPEM != "" {
+		prev.TLSKeyPEM = req.TLSKeyPEM
+	}
+	if req.TLSCAPEM != "" {
+		prev.TLSCAPEM = req.TLSCAPEM
+	}
+	prev.HasCert = prev.TLSCertPEM != "" && prev.TLSKeyPEM != ""
 	prev.TLSInsecure = req.TLSInsecure
 
 	s.saveHubConfig(prev)

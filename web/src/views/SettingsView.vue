@@ -707,7 +707,7 @@ async function removePeer(addr) {
 }
 
 // Hub connection
-const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false })
+const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false, tls_ca: '', tls_insecure: false })
 const hubWarning = ref('')
 const restarting = ref(false)
 
@@ -1875,12 +1875,13 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <!-- Hub Connection -->
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <h3 class="text-sm font-medium text-gray-200 mb-1">Hub Connection</h3>
-          <p class="text-xs text-gray-500 mb-3">Paste the MQTT credentials from the Hub Fleet page to connect this bridge.</p>
+          <p class="text-xs text-gray-500 mb-3">Paste the MQTT credentials from the Hub Fleet page to connect this bridge via WSS (port 443).</p>
           <div class="space-y-2 mb-3">
             <div>
               <label class="text-[10px] text-gray-500 block mb-1">MQTT URL</label>
-              <input type="text" v-model="hubForm.url" placeholder="mqtt://hub.meshsat.net:6071"
+              <input type="text" v-model="hubForm.url" placeholder="wss://hub.meshsat.net/mqtt"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+              <span class="text-[9px] text-gray-600 mt-0.5 block">Supports tcp://, ssl://, ws://, wss:// schemes</span>
             </div>
             <div class="grid grid-cols-2 gap-2">
               <div>
@@ -1899,6 +1900,22 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <input type="password" v-model="hubForm.password" placeholder="paste from Fleet page (shown only once)"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
             </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Client Certificate PEM <span class="text-gray-600">(from Fleet > Issue TLS Certificate)</span></label>
+              <textarea v-model="hubForm.tls_cert_pem" rows="3" placeholder="-----BEGIN CERTIFICATE-----"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Client Private Key PEM</label>
+              <textarea v-model="hubForm.tls_key_pem" rows="3" placeholder="-----BEGIN EC PRIVATE KEY-----"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">CA Certificate PEM <span class="text-gray-600">(from Fleet > Issue TLS Certificate)</span></label>
+              <textarea v-model="hubForm.tls_ca_pem" rows="3" placeholder="-----BEGIN CERTIFICATE-----"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
+            </div>
+            <span v-if="hubForm.has_cert" class="text-[10px] text-emerald-400">mTLS certificate configured</span>
           </div>
           <div class="flex items-center gap-2">
             <button @click="saveHubConfig" class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600">Save</button>
