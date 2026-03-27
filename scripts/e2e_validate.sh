@@ -250,10 +250,121 @@ print(','.join(stale) if stale else 'none')
     fi
 fi
 
-# --- 9. Latency ---
+# --- 9. MO send test (satellite required) ---
 
 echo ""
-echo "9. Latency measurement"
+echo "9. MO send via satellite"
+
+# Check if SBD modem can send (requires satellite pass).
+SBD_MODEM=$(bridge_get "/api/iridium/sbd/modem")
+SBD_CONNECTED=$(echo "$SBD_MODEM" | python3 -c "import sys,json; print(json.load(sys.stdin).get('connected',False))" 2>/dev/null || echo "False")
+SBD_IMEI=$(echo "$SBD_MODEM" | python3 -c "import sys,json; print(json.load(sys.stdin).get('imei',''))" 2>/dev/null || echo "")
+
+if [ "$SBD_CONNECTED" = "True" ]; then
+    check "SBD modem status" "pass" "IMEI $SBD_IMEI"
+else
+    check "SBD modem status" "skip" "not connected (no satellite test)"
+fi
+
+IMT_MODEM=$(bridge_get "/api/iridium/imt/modem")
+IMT_CONNECTED=$(echo "$IMT_MODEM" | python3 -c "import sys,json; print(json.load(sys.stdin).get('connected',False))" 2>/dev/null || echo "False")
+IMT_IMEI=$(echo "$IMT_MODEM" | python3 -c "import sys,json; print(json.load(sys.stdin).get('imei',''))" 2>/dev/null || echo "")
+
+if [ "$IMT_CONNECTED" = "True" ]; then
+    check "IMT modem status" "pass" "IMEI $IMT_IMEI"
+else
+    check "IMT modem status" "skip" "not connected (no satellite test)"
+fi
+
+# --- 10. Hub telemetry visibility ---
+
+echo ""
+echo "10. Hub telemetry visibility"
+
+if [ -z "$HUB_API_KEY" ]; then
+    check "Bridge telemetry in Hub" "skip" "HUB_API_KEY not set"
+    check "Device count in Hub" "skip" "HUB_API_KEY not set"
+else
+    # Check bridge telemetry (health data).
+    HUB_BRIDGE_DETAIL=""
+    if [ -n "$SBD_IMEI" ] || [ -n "$IMT_IMEI" ]; then
+        HUB_DEVICES=$(hub_get "/api/devices")
+        DEV_COUNT=$(echo "$HUB_DEVICES" | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+devices=data if isinstance(data,list) else data.get('devices',data.get('items',[]))
+print(len(devices))
+" 2>/dev/null || echo "0")
+        check "Devices in Hub" "pass" "$DEV_COUNT devices"
+
+        # Check if SBD/IMT IMEIs are visible.
+        IMEIS_FOUND=$(echo "$HUB_DEVICES" | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+devices=data if isinstance(data,list) else data.get('devices',data.get('items',[]))
+imeis=[d.get('imei','') for d in devices]
+found=[]
+sbd='${SBD_IMEI}'
+imt='${IMT_IMEI}'
+if sbd and sbd in imeis: found.append('SBD:'+sbd)
+if imt and imt in imeis: found.append('IMT:'+imt)
+print(','.join(found) if found else 'none')
+" 2>/dev/null || echo "error")
+
+        if [ "$IMEIS_FOUND" != "none" ] && [ "$IMEIS_FOUND" != "error" ]; then
+            check "Modem IMEIs in Hub" "pass" "$IMEIS_FOUND"
+        else
+            check "Modem IMEIs in Hub" "skip" "IMEIs not registered in Hub"
+        fi
+    else
+        check "Devices in Hub" "skip" "no modem IMEIs detected"
+    fi
+
+    # Check recent messages in Hub.
+    HUB_MSGS=$(hub_get "/api/messages?limit=5")
+    MSG_COUNT=$(echo "$HUB_MSGS" | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+msgs=data if isinstance(data,list) else data.get('messages',data.get('items',[]))
+print(len(msgs))
+" 2>/dev/null || echo "0")
+    check "Recent messages in Hub" "pass" "$MSG_COUNT (last 5)"
+fi
+
+# --- 11. Failover readiness ---
+
+echo ""
+echo "11. Failover readiness"
+
+# Check if both SBD and IMT are present (prerequisite for failover).
+if [ "$SBD_FOUND" = "connected" ] && [ "$IMT_FOUND" = "connected" ]; then
+    check "Dual modem failover ready" "pass" "both SBD+IMT online"
+elif [ "$SBD_FOUND" = "connected" ] || [ "$IMT_FOUND" = "connected" ]; then
+    ACTIVE_TYPE="SBD"
+    [ "$IMT_FOUND" = "connected" ] && ACTIVE_TYPE="IMT"
+    check "Dual modem failover ready" "skip" "only $ACTIVE_TYPE connected (single modem)"
+else
+    check "Dual modem failover ready" "fail" "no satellite modem connected"
+fi
+
+# Check failover groups configured.
+FG=$(bridge_get "/api/failover")
+FG_COUNT=$(echo "$FG" | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+groups=data if isinstance(data,list) else data.get('groups',data.get('items',[]))
+print(len(groups))
+" 2>/dev/null || echo "0")
+if [ "$FG_COUNT" != "0" ] && [ "$FG_COUNT" != "" ]; then
+    check "Failover groups" "pass" "$FG_COUNT configured"
+else
+    check "Failover groups" "skip" "none configured (manual failover only)"
+fi
+
+# --- 12. Latency ---
+
+echo ""
+echo "12. Latency measurement"
 
 BRIDGE_START=$(date +%s%N)
 bridge_get "/api/gateways" > /dev/null
