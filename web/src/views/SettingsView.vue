@@ -709,6 +709,14 @@ async function removePeer(addr) {
 // Hub connection
 const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false })
 const hubWarning = ref('')
+const restarting = ref(false)
+
+async function restartBridge() {
+  restarting.value = true
+  try {
+    await api.post('/system/restart')
+  } catch {}
+}
 
 async function loadHubConfig() {
   try {
@@ -1897,7 +1905,12 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             <span v-if="hubForm.has_password" class="text-[10px] text-emerald-400">credentials saved</span>
             <span v-else class="text-[10px] text-gray-500">not configured</span>
           </div>
-          <p v-if="hubWarning" class="mt-2 text-[10px] text-amber-400 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">{{ hubWarning }}</p>
+          <div v-if="hubWarning" class="mt-2 flex items-center gap-2 text-[10px] text-amber-400 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">
+            <span class="flex-1">{{ hubWarning }}</span>
+            <button v-if="!restarting" @click="restartBridge"
+              class="shrink-0 px-2 py-0.5 bg-amber-700 text-white rounded hover:bg-amber-600">Restart Now</button>
+            <span v-else class="shrink-0 text-amber-300">Restarting...</span>
+          </div>
         </div>
 
         <!-- Flood Control -->

@@ -49,6 +49,13 @@ type Server struct {
 	keyStore      *keystore.KeyStore
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
+	restartFn     func()
+}
+
+// SetRestartFunc sets the function called by POST /api/system/restart
+// to trigger a graceful process restart (typically sends SIGTERM to self).
+func (s *Server) SetRestartFunc(fn func()) {
+	s.restartFn = fn
 }
 
 // NewServer creates a new API server.
@@ -454,6 +461,9 @@ func (s *Server) Router() http.Handler {
 		// Dead man's switch
 		r.Get("/deadman", s.handleGetDeadmanConfig)
 		r.Post("/deadman", s.handleSetDeadmanConfig)
+
+		// System
+		r.Post("/system/restart", s.handleSystemRestart)
 
 		// Burst queue
 		r.Get("/burst/status", s.handleGetBurstStatus)

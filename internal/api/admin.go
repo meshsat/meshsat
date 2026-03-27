@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // handleAdminReboot sends a reboot command to a mesh node.
@@ -103,4 +104,24 @@ func (s *Server) handleTraceroute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "traceroute request sent"})
+}
+
+// handleSystemRestart triggers a graceful bridge restart.
+// Docker's restart policy brings the process back up.
+// @Summary Restart the bridge process
+// @Description Initiates a graceful shutdown. Docker restart policy restarts the container.
+// @Tags system
+// @Success 200 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/system/restart [post]
+func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
+	if s.restartFn == nil {
+		writeError(w, http.StatusServiceUnavailable, "restart not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarting"})
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		s.restartFn()
+	}()
 }

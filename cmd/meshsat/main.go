@@ -981,6 +981,14 @@ func main() {
 		}
 	}
 
+	// Wire restart function — sends SIGTERM to self, Docker restart policy brings us back.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	srv.SetRestartFunc(func() {
+		log.Info().Msg("restart requested via API")
+		sigCh <- syscall.SIGTERM
+	})
+
 	// Start HTTP server
 	go func() {
 		log.Info().Int("port", cfg.Port).Msg("HTTP server listening")
@@ -990,8 +998,6 @@ func main() {
 	}()
 
 	// Wait for shutdown signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
