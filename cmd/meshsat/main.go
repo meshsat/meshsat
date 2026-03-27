@@ -830,12 +830,15 @@ func main() {
 	// DB-persisted config (from Settings > Routing > Hub) overrides env vars.
 	hubURL, hubBridgeID := cfg.HubURL, cfg.BridgeID
 	hubUsername, hubPassword := cfg.HubUsername, cfg.HubPassword
+	hubTLSCA, hubTLSInsecure := "", false
 	if raw, dbErr := db.GetSystemConfig("hub_connection"); dbErr == nil && raw != "" {
 		var hc struct {
-			URL      string `json:"url"`
-			BridgeID string `json:"bridge_id"`
-			Username string `json:"username"`
-			Password string `json:"password"`
+			URL         string `json:"url"`
+			BridgeID    string `json:"bridge_id"`
+			Username    string `json:"username"`
+			Password    string `json:"password"`
+			TLSCA       string `json:"tls_ca"`
+			TLSInsecure bool   `json:"tls_insecure"`
 		}
 		if json.Unmarshal([]byte(raw), &hc) == nil {
 			if hc.URL != "" {
@@ -850,11 +853,19 @@ func main() {
 			if hc.Password != "" {
 				hubPassword = hc.Password
 			}
+			if hc.TLSCA != "" {
+				hubTLSCA = hc.TLSCA
+			}
+			hubTLSInsecure = hc.TLSInsecure
 		}
 	}
 
 	var hubReporter *hubreporter.HubReporter
 	if hubURL != "" {
+		tlsCA := cfg.HubTLSCA
+		if hubTLSCA != "" {
+			tlsCA = hubTLSCA // DB config overrides env var
+		}
 		reporterCfg := hubreporter.ReporterConfig{
 			HubURL:         hubURL,
 			BridgeID:       hubBridgeID,
@@ -862,13 +873,19 @@ func main() {
 			Password:       hubPassword,
 			TLSCert:        cfg.HubTLSCert,
 			TLSKey:         cfg.HubTLSKey,
+			TLSCA:          tlsCA,
+			TLSInsecure:    hubTLSInsecure,
 			HealthInterval: time.Duration(cfg.HubHealthInterval) * time.Second,
 		}
 		birthFn := func() hubreporter.BridgeBirth {
 			ifaces := []hubreporter.InterfaceInfo{}
 			caps := []string{}
 			if mesh != nil {
-				ifaces = append(ifaces, hubreporter.InterfaceInfo{Name: "mesh_0", Type: "meshtastic", Status: "online"})
+				meshStatus := "offline"
+				if ms, err := mesh.GetStatus(ctx); err == nil && ms.Connected {
+					meshStatus = "online"
+				}
+				ifaces = append(ifaces, hubreporter.InterfaceInfo{Name: "mesh_0", Type: "meshtastic", Status: meshStatus})
 				caps = append(caps, "meshtastic")
 			}
 			for _, gs := range gwMgr.GetStatus() {
@@ -917,6 +934,17 @@ func main() {
 				MemPct:    sys.MemPct,
 				DiskPct:   sys.DiskPct,
 				Timestamp: time.Now().UTC(),
+			}
+
+			// Meshtastic — base transport, not in gateway manager
+			if mesh != nil {
+				meshStatus := "offline"
+				if ms, err := mesh.GetStatus(ctx); err == nil && ms.Connected {
+					meshStatus = "online"
+				}
+				health.Interfaces = append(health.Interfaces, hubreporter.InterfaceHealth{
+					Name: "meshtastic", Status: meshStatus,
+				})
 			}
 
 			// Interface health — status from gateway manager
