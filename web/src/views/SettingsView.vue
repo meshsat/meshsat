@@ -1910,11 +1910,6 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <textarea v-model="hubForm.tls_key_pem" rows="3" placeholder="-----BEGIN EC PRIVATE KEY-----"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
             </div>
-            <div>
-              <label class="text-[10px] text-gray-500 block mb-1">CA Certificate PEM <span class="text-gray-600">(from Fleet > Issue TLS Certificate)</span></label>
-              <textarea v-model="hubForm.tls_ca_pem" rows="3" placeholder="-----BEGIN CERTIFICATE-----"
-                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
-            </div>
             <span v-if="hubForm.has_cert" class="text-[10px] text-emerald-400">mTLS certificate configured</span>
           </div>
           <div class="flex items-center gap-2">

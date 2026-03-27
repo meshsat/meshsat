@@ -576,9 +576,7 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 	if req.TLSKeyPEM != "" {
 		prev.TLSKeyPEM = req.TLSKeyPEM
 	}
-	if req.TLSCAPEM != "" {
-		prev.TLSCAPEM = req.TLSCAPEM
-	}
+	prev.TLSCAPEM = req.TLSCAPEM // allow clearing by sending empty string
 	prev.HasCert = prev.TLSCertPEM != "" && prev.TLSKeyPEM != ""
 	prev.TLSInsecure = req.TLSInsecure
 
