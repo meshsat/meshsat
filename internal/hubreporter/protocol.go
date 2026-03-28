@@ -156,6 +156,8 @@ type BridgeBirth struct {
 	CoTCallsign  string          `json:"cot_callsign"`
 	UptimeSec    int64           `json:"uptime_sec"`
 	Timestamp    time.Time       `json:"timestamp"`
+	Certificate  string          `json:"certificate,omitempty"` // base64 PEM of bridge TLS cert
+	Signature    string          `json:"signature,omitempty"`   // base64 ECDSA-P256-SHA256 signature
 }
 
 // BridgeDeath is published when the bridge disconnects (explicit or LWT).

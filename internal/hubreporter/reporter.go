@@ -4,9 +4,14 @@ package hubreporter
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"strings"
@@ -60,6 +65,8 @@ type HubReporter struct {
 	stopped    bool
 	cmdHandler *CommandHandler
 	outbox     *Outbox
+	signingKey *ecdsa.PrivateKey // loaded from TLS key for birth signing
+	certPEM    string            // base64 PEM for inclusion in birth
 }
 
 // NewHubReporter creates a new HubReporter. It does not connect until Start is called.
@@ -100,6 +107,9 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	if tlsCfg := r.buildTLSConfig(); tlsCfg != nil {
 		opts.SetTLSConfig(tlsCfg)
 	}
+
+	// Extract signing key and certificate PEM for birth message signing.
+	r.loadSigningCredentials()
 
 	// LWT: publish death with reason "lwt" on unexpected disconnect
 	lwtDeath := BridgeDeath{
@@ -233,6 +243,84 @@ func (r *HubReporter) buildTLSConfig() *tls.Config {
 	return cfg
 }
 
+// loadSigningCredentials extracts the ECDSA private key and certificate PEM
+// from the TLS config for signing birth messages. Inline PEM from DB takes
+// priority over file paths.
+func (r *HubReporter) loadSigningCredentials() {
+	var certPEMBytes, keyPEMBytes []byte
+
+	if len(r.cfg.TLSCertPEM) > 0 && len(r.cfg.TLSKeyPEM) > 0 {
+		certPEMBytes = r.cfg.TLSCertPEM
+		keyPEMBytes = r.cfg.TLSKeyPEM
+	} else if r.cfg.TLSCert != "" && r.cfg.TLSKey != "" {
+		var err error
+		certPEMBytes, err = os.ReadFile(r.cfg.TLSCert)
+		if err != nil {
+			log.Debug().Err(err).Msg("hubreporter: cannot read TLS cert for birth signing")
+			return
+		}
+		keyPEMBytes, err = os.ReadFile(r.cfg.TLSKey)
+		if err != nil {
+			log.Debug().Err(err).Msg("hubreporter: cannot read TLS key for birth signing")
+			return
+		}
+	} else {
+		return
+	}
+
+	// Parse the private key.
+	block, _ := pem.Decode(keyPEMBytes)
+	if block == nil {
+		log.Warn().Msg("hubreporter: failed to decode TLS key PEM for birth signing")
+		return
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		log.Warn().Err(err).Msg("hubreporter: TLS key is not ECDSA P-256, birth signing disabled")
+		return
+	}
+
+	r.signingKey = key
+	r.certPEM = base64.StdEncoding.EncodeToString(certPEMBytes)
+	log.Info().Msg("hubreporter: birth signing credentials loaded")
+}
+
+// signBirth computes an ECDSA-P256-SHA256 signature over the canonical JSON
+// of a BridgeBirth message (with the signature field excluded). Returns the
+// base64-encoded signature, or empty string if signing is not configured.
+func (r *HubReporter) signBirth(birth *BridgeBirth) string {
+	if r.signingKey == nil {
+		return ""
+	}
+
+	// Marshal birth to JSON, remove the signature field, re-marshal for
+	// canonical form. Go's json.Marshal sorts map keys alphabetically.
+	birthJSON, err := json.Marshal(birth)
+	if err != nil {
+		log.Warn().Err(err).Msg("hubreporter: failed to marshal birth for signing")
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(birthJSON, &m); err != nil {
+		log.Warn().Err(err).Msg("hubreporter: failed to unmarshal birth for signing")
+		return ""
+	}
+	delete(m, "signature")
+	canonical, err := json.Marshal(m)
+	if err != nil {
+		log.Warn().Err(err).Msg("hubreporter: failed to marshal canonical birth for signing")
+		return ""
+	}
+
+	hash := sha256.Sum256(canonical)
+	sig, err := ecdsa.SignASN1(rand.Reader, r.signingKey, hash[:])
+	if err != nil {
+		log.Warn().Err(err).Msg("hubreporter: ECDSA sign failed")
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(sig)
+}
+
 // Stop publishes a graceful death message and disconnects from the broker.
 func (r *HubReporter) Stop() {
 	r.mu.Lock()
@@ -309,16 +397,26 @@ func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 }
 
 // publishBirth collects and publishes the bridge birth certificate.
+// If signing credentials are available, the birth is signed with
+// ECDSA-P256-SHA256 using the bridge's TLS private key.
 func (r *HubReporter) publishBirth() {
 	birth := r.birthData()
 	birth.Protocol = ProtocolVersion
 	birth.BridgeID = r.cfg.BridgeID
 	birth.Timestamp = time.Now().UTC()
 
+	// Attach certificate and signature if signing credentials are loaded.
+	birth.Certificate = r.certPEM
+	birth.Signature = "" // ensure empty before signing
+	if sig := r.signBirth(&birth); sig != "" {
+		birth.Signature = sig
+	}
+
 	if err := r.publish(TopicBridgeBirth(r.cfg.BridgeID), 1, true, birth); err != nil {
 		log.Error().Err(err).Msg("hubreporter: failed to publish birth")
 	} else {
-		log.Info().Str("bridge_id", r.cfg.BridgeID).Msg("hubreporter: birth certificate published")
+		signed := birth.Signature != ""
+		log.Info().Str("bridge_id", r.cfg.BridgeID).Bool("signed", signed).Msg("hubreporter: birth certificate published")
 	}
 }
 
