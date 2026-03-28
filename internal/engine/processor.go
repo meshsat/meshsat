@@ -57,7 +57,9 @@ type Processor struct {
 	relayDedup   map[string]time.Time
 
 	// Protocol enhancements (MESHSAT-407)
-	timeSyncHandler func(data []byte, sourceIface string) // handles 0x14/0x15
+	timeSyncHandler   func(data []byte, sourceIface string) // handles 0x14/0x15
+	custodyHandler    func(data []byte, sourceIface string) // handles 0x16 (custody offer)
+	custodyACKHandler func(data []byte)                     // handles 0x17 (custody ACK)
 }
 
 // NewProcessor creates a new event processor.
@@ -121,6 +123,12 @@ func (p *Processor) SetResourceTransfer(rt *routing.ResourceTransfer) {
 // SetTimeSyncHandler registers the callback for time sync packets (0x14/0x15).
 func (p *Processor) SetTimeSyncHandler(fn func(data []byte, sourceIface string)) {
 	p.timeSyncHandler = fn
+}
+
+// SetCustodyHandlers registers callbacks for DTN custody packets (0x16/0x17).
+func (p *Processor) SetCustodyHandlers(offerFn func(data []byte, sourceIface string), ackFn func(data []byte)) {
+	p.custodyHandler = offerFn
+	p.custodyACKHandler = ackFn
 }
 
 // RegisterPacketSender registers a function that sends Reticulum packets to a
@@ -494,11 +502,19 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 			p.timeSyncHandler(payload, sourceIface)
 		}
 		return
-	case 0x16: // BridgeCustodyOffer
-		log.Info().Str("iface", sourceIface).Msg("routing: custody offer received")
+	case 0x16: // BridgeCustodyOffer — another node is offering us custody of a payload.
+		if p.custodyHandler != nil {
+			log.Info().Str("iface", sourceIface).Int("size", len(payload)).
+				Msg("routing: custody offer received")
+			p.custodyHandler(payload, sourceIface)
+		}
 		return
-	case 0x17: // BridgeCustodyACK
-		log.Info().Str("iface", sourceIface).Msg("routing: custody ack received")
+	case 0x17: // BridgeCustodyACK — a relay accepted our custody offer.
+		if p.custodyACKHandler != nil {
+			log.Info().Str("iface", sourceIface).Int("size", len(payload)).
+				Msg("routing: custody ack received")
+			p.custodyACKHandler(payload)
+		}
 		return
 	}
 

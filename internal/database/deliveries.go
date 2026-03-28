@@ -8,31 +8,33 @@ import (
 
 // MessageDelivery represents a single delivery attempt for a message to a channel.
 type MessageDelivery struct {
-	ID           int64      `json:"id"`
-	MsgRef       string     `json:"msg_ref"`
-	RuleID       *int64     `json:"rule_id,omitempty"`
-	Channel      string     `json:"channel"`
-	Status       string     `json:"status"` // queued, sending, sent, delivered, failed, retry, dead
-	Priority     int        `json:"priority"`
-	Payload      []byte     `json:"payload,omitempty"`
-	TextPreview  string     `json:"text_preview"`
-	Retries      int        `json:"retries"`
-	MaxRetries   int        `json:"max_retries"`
-	NextRetry    *time.Time `json:"next_retry,omitempty"`
-	LastError    string     `json:"last_error,omitempty"`
-	ChannelRef   string     `json:"channel_ref,omitempty"`
-	Cost         int        `json:"cost"`
-	Visited      string     `json:"visited"`              // JSON array of visited interface IDs (loop prevention)
-	TTLSeconds   int        `json:"ttl_seconds"`          // 0 means no expiry
-	ExpiresAt    *string    `json:"expires_at,omitempty"` // UTC timestamp when delivery expires
-	QoSLevel     int        `json:"qos_level"`            // QoS level from access rule (default 1)
-	SeqNum       int64      `json:"seq_num"`              // per-interface sequence number
-	AckStatus    *string    `json:"ack_status,omitempty"` // nil, "pending", "acked", "nacked", "timeout"
-	AckTimestamp *string    `json:"ack_timestamp,omitempty"`
-	Signature    []byte     `json:"signature,omitempty"` // Ed25519 signature (64 bytes)
-	SignerID     string     `json:"signer_id,omitempty"` // hex-encoded Ed25519 public key
-	CreatedAt    string     `json:"created_at"`
-	UpdatedAt    string     `json:"updated_at"`
+	ID            int64      `json:"id"`
+	MsgRef        string     `json:"msg_ref"`
+	RuleID        *int64     `json:"rule_id,omitempty"`
+	Channel       string     `json:"channel"`
+	Status        string     `json:"status"` // queued, sending, sent, delivered, failed, retry, dead
+	Priority      int        `json:"priority"`
+	Payload       []byte     `json:"payload,omitempty"`
+	TextPreview   string     `json:"text_preview"`
+	Retries       int        `json:"retries"`
+	MaxRetries    int        `json:"max_retries"`
+	NextRetry     *time.Time `json:"next_retry,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
+	ChannelRef    string     `json:"channel_ref,omitempty"`
+	Cost          int        `json:"cost"`
+	Visited       string     `json:"visited"`              // JSON array of visited interface IDs (loop prevention)
+	TTLSeconds    int        `json:"ttl_seconds"`          // 0 means no expiry
+	ExpiresAt     *string    `json:"expires_at,omitempty"` // UTC timestamp when delivery expires
+	QoSLevel      int        `json:"qos_level"`            // QoS level from access rule (default 1)
+	SeqNum        int64      `json:"seq_num"`              // per-interface sequence number
+	AckStatus     *string    `json:"ack_status,omitempty"` // nil, "pending", "acked", "nacked", "timeout"
+	AckTimestamp  *string    `json:"ack_timestamp,omitempty"`
+	Signature     []byte     `json:"signature,omitempty"`      // Ed25519 signature (64 bytes)
+	SignerID      string     `json:"signer_id,omitempty"`      // hex-encoded Ed25519 public key
+	CustodyID     string     `json:"custody_id,omitempty"`     // DTN custody chain UUID (hex, MESHSAT-408)
+	CustodianHash string     `json:"custodian_hash,omitempty"` // current custodian dest hash
+	CreatedAt     string     `json:"created_at"`
+	UpdatedAt     string     `json:"updated_at"`
 }
 
 // DeliveryFilter specifies query filters for listing deliveries.

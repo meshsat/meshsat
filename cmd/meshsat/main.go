@@ -699,7 +699,80 @@ func main() {
 		}
 	}()
 	dispatcher.SetFragmentManager(reassemblyBuf)
-	log.Info().Msg("DTN reassembly buffer started")
+
+	// DTN custody manager (MESHSAT-408)
+	custodyMgr := engine.NewCustodyManager(60 * time.Second)
+	dispatcher.SetCustodyManager(custodyMgr)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n := custodyMgr.Reap(); n > 0 {
+					log.Info().Int("expired", n).Msg("DTN: reaped expired custody offers")
+				}
+			}
+		}
+	}()
+
+	// Wire custody packet handlers into processor
+	proc.SetCustodyHandlers(
+		// Custody offer handler: another node offers us custody of a payload.
+		func(data []byte, sourceIface string) {
+			offer, err := engine.UnmarshalCustodyOffer(data)
+			if err != nil {
+				log.Warn().Err(err).Msg("DTN: invalid custody offer")
+				return
+			}
+			log.Info().
+				Str("custody_id", fmt.Sprintf("%x", offer.CustodyID[:8])).
+				Str("source", fmt.Sprintf("%x", offer.SourceHash[:8])).
+				Int("payload", len(offer.Payload)).
+				Msg("DTN: accepting custody of payload")
+			// Accept: create a local delivery for the payload
+			if dispatcher != nil {
+				_, _, qErr := dispatcher.QueueDirectSend("mesh", string(offer.Payload))
+				if qErr != nil {
+					log.Warn().Err(qErr).Msg("DTN: failed to queue custody payload")
+				}
+			}
+			// Send ACK back on the same interface (point-to-point)
+			if routingID != nil && signingService != nil {
+				ack := &engine.CustodyACK{
+					CustodyID:    offer.CustodyID,
+					AcceptorHash: routingID.DestHash(),
+				}
+				sigData := append(ack.CustodyID[:], ack.AcceptorHash[:]...)
+				sig := signingService.Sign(sigData)
+				copy(ack.Signature[:], sig)
+				ackData := engine.MarshalCustodyACK(ack)
+				if err := proc.SendReticulumPacketTo(sourceIface, ackData); err != nil {
+					log.Warn().Err(err).Msg("DTN: failed to send custody ACK")
+				} else {
+					log.Info().Str("custody_id", fmt.Sprintf("%x", offer.CustodyID[:8])).
+						Msg("DTN: custody ACK sent")
+				}
+			}
+		},
+		// Custody ACK handler: a relay accepted our custody offer.
+		func(data []byte) {
+			ack, err := engine.UnmarshalCustodyACK(data)
+			if err != nil {
+				log.Warn().Err(err).Msg("DTN: invalid custody ACK")
+				return
+			}
+			if custodyMgr.HandleACK(ack) {
+				log.Info().
+					Str("custody_id", fmt.Sprintf("%x", ack.CustodyID[:8])).
+					Str("acceptor", fmt.Sprintf("%x", ack.AcceptorHash[:8])).
+					Msg("DTN: custody transfer confirmed")
+			}
+		},
+	)
+	log.Info().Msg("DTN custody + fragment managers wired")
 
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -95,8 +96,9 @@ type Dispatcher struct {
 	// Routing identity for delivery confirmations
 	routingIdentity *routing.Identity
 
-	// DTN bundle fragmentation (MESHSAT-408)
+	// DTN (MESHSAT-408)
 	fragmentMgr *ReassemblyBuffer
+	custodyMgr  *CustodyManager
 
 	mu sync.RWMutex
 }
@@ -184,6 +186,22 @@ func (d *Dispatcher) SetRoutingIdentity(id *routing.Identity) {
 // SetFragmentManager registers the DTN reassembly buffer for bundle fragmentation.
 func (d *Dispatcher) SetFragmentManager(fm *ReassemblyBuffer) {
 	d.fragmentMgr = fm
+}
+
+// SetCustodyManager registers the DTN custody transfer manager.
+func (d *Dispatcher) SetCustodyManager(cm *CustodyManager) {
+	d.custodyMgr = cm
+}
+
+// parseCustodyID converts a hex-encoded custody ID string to a [16]byte array.
+func parseCustodyID(hexStr string) ([16]byte, error) {
+	var id [16]byte
+	b, err := hex.DecodeString(hexStr)
+	if err != nil || len(b) < 16 {
+		return id, fmt.Errorf("invalid custody ID: %s", hexStr)
+	}
+	copy(id[:], b[:16])
+	return id, nil
 }
 
 // satellitePassSched returns the pass scheduler for satellite channels, nil otherwise.
@@ -297,17 +315,19 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 
 		workerCtx, workerCancel := context.WithCancel(ctx)
 		w := &DeliveryWorker{
-			channelID:  iface.ID,
-			desc:       desc,
-			db:         d.db,
-			gwProv:     d.gwProv,
-			mesh:       d.mesh,
-			emit:       d.emit,
-			signing:    d.signing,
-			transforms: d.transforms,
-			access:     d.access,
-			passSched:  d.satellitePassSched(desc),
-			cancel:     workerCancel,
+			channelID:       iface.ID,
+			desc:            desc,
+			db:              d.db,
+			gwProv:          d.gwProv,
+			mesh:            d.mesh,
+			emit:            d.emit,
+			signing:         d.signing,
+			transforms:      d.transforms,
+			access:          d.access,
+			passSched:       d.satellitePassSched(desc),
+			routingIdentity: d.routingIdentity,
+			custodyMgr:      d.custodyMgr,
+			cancel:          workerCancel,
 		}
 		d.workers[iface.ID] = w
 		go w.Run(workerCtx)
@@ -351,6 +371,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		access:          d.access,
 		passSched:       d.satellitePassSched(desc),
 		routingIdentity: d.routingIdentity,
+		custodyMgr:      d.custodyMgr,
 		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -785,6 +806,7 @@ type DeliveryWorker struct {
 	access          *rules.AccessEvaluator // egress rule check before send
 	passSched       PassStateProvider      // satellite pass scheduler (nil for non-satellite)
 	routingIdentity *routing.Identity      // routing identity for delivery confirmations
+	custodyMgr      *CustodyManager        // DTN custody transfer (MESHSAT-408)
 	cancel          context.CancelFunc     // per-worker cancellation
 }
 
@@ -966,6 +988,48 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 				}
 			}
 		}
+	}
+
+	// DTN custody transfer (MESHSAT-408): if custody is enabled for this delivery,
+	// wrap the payload with a custody offer header. The receiving node extracts
+	// the payload, creates a local delivery, and sends back an ACK on the same
+	// interface. This is point-to-point — NOT broadcast.
+	if w.custodyMgr != nil && del.CustodyID != "" && w.routingIdentity != nil {
+		custodyID, _ := parseCustodyID(del.CustodyID)
+		offer := &CustodyOffer{
+			CustodyID:  custodyID,
+			SourceHash: w.routingIdentity.DestHash(),
+			DeliveryID: uint32(del.ID),
+			Payload:    del.Payload,
+		}
+		// Replace the payload with the custody-wrapped version.
+		del.Payload = MarshalCustodyOffer(offer)
+		del.TextPreview = fmt.Sprintf("[custody:%x] %s", custodyID[:4], del.TextPreview)
+
+		ackCh := w.custodyMgr.RegisterOffer(offer)
+		log.Info().
+			Str("custody_id", fmt.Sprintf("%x", custodyID[:8])).
+			Str("channel", w.channelID).
+			Int64("delivery_id", del.ID).
+			Msg("DTN: custody offer sent with delivery")
+
+		// After send completes, check for ACK asynchronously.
+		defer func() {
+			select {
+			case ack := <-ackCh:
+				if ack != nil {
+					log.Info().
+						Str("custody_id", fmt.Sprintf("%x", custodyID[:8])).
+						Str("acceptor", fmt.Sprintf("%x", ack.AcceptorHash[:8])).
+						Msg("DTN: custody accepted by relay")
+					_ = w.db.SetDeliveryStatus(del.ID, "custody_transferred",
+						fmt.Sprintf("custody accepted by %x", ack.AcceptorHash[:8]), "")
+				}
+			case <-time.After(60 * time.Second):
+				log.Debug().Str("custody_id", fmt.Sprintf("%x", custodyID[:8])).
+					Msg("DTN: custody ACK timeout — delivery continues as normal send")
+			}
+		}()
 	}
 
 	var deliveryErr error
