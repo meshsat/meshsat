@@ -95,6 +95,9 @@ type Dispatcher struct {
 	// Routing identity for delivery confirmations
 	routingIdentity *routing.Identity
 
+	// DTN bundle fragmentation (MESHSAT-408)
+	fragmentMgr *ReassemblyBuffer
+
 	mu sync.RWMutex
 }
 
@@ -176,6 +179,11 @@ func (d *Dispatcher) SetPassStateProvider(ps PassStateProvider) {
 // SetRoutingIdentity sets the routing identity for delivery confirmations.
 func (d *Dispatcher) SetRoutingIdentity(id *routing.Identity) {
 	d.routingIdentity = id
+}
+
+// SetFragmentManager registers the DTN reassembly buffer for bundle fragmentation.
+func (d *Dispatcher) SetFragmentManager(fm *ReassemblyBuffer) {
+	d.fragmentMgr = fm
 }
 
 // satellitePassSched returns the pass scheduler for satellite channels, nil otherwise.
@@ -592,6 +600,36 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		if d.signing != nil && len(payload) > 0 {
 			del.Signature = d.signing.Sign(payload)
 			del.SignerID = d.signing.SignerID()
+		}
+
+		// DTN bundle fragmentation (MESHSAT-408): if payload exceeds interface MTU,
+		// split into fragments and create one delivery per fragment.
+		if d.fragmentMgr != nil && desc.MaxPayload > 0 && len(payload) > desc.MaxPayload {
+			bundleID, fragments, fragErr := Fragment(payload, desc.MaxPayload)
+			if fragErr == nil && len(fragments) > 1 {
+				log.Info().
+					Int("fragments", len(fragments)).
+					Int("mtu", desc.MaxPayload).
+					Int("payload", len(payload)).
+					Str("bundle_id", fmt.Sprintf("%x", bundleID[:8])).
+					Str("dest", destInterface).
+					Msg("DTN: payload exceeds MTU, fragmenting")
+
+				for fi, frag := range fragments {
+					fragDel := del // copy base delivery
+					fragDel.Payload = frag
+					fragDel.TextPreview = fmt.Sprintf("[frag %d/%d] %s", fi+1, len(fragments), preview)
+					if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
+						fragDel.SeqNum = seq
+					}
+					if _, fragInsertErr := d.db.InsertDelivery(fragDel); fragInsertErr != nil {
+						log.Error().Err(fragInsertErr).Int("fragment", fi).Msg("DTN: failed to insert fragment delivery")
+					} else {
+						count++
+					}
+				}
+				continue // skip single-delivery insertion below
+			}
 		}
 
 		delID, err := d.db.InsertDelivery(del)

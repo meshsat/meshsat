@@ -401,8 +401,11 @@ func main() {
 		proc.SetRouting(announceRelay, linkMgr, keepalive, destTable)
 		proc.SetRoutingIdentity(routingID)
 
-		// Resource transfer — chunked reliable delivery over Reticulum links
-		resourceXfer = routing.NewResourceTransfer(routing.DefaultResourceTransferConfig(), func(ifaceID string, packet []byte) error {
+		// Resource transfer — chunked reliable delivery over Reticulum links (RLNC enabled).
+		rtConfig := routing.DefaultResourceTransferConfig()
+		rtConfig.RLNCEnabled = true
+		rtConfig.RLNCRedundancy = 1.2 // 20% coded redundancy for lossy links
+		resourceXfer = routing.NewResourceTransfer(rtConfig, func(ifaceID string, packet []byte) error {
 			return proc.SendReticulumPacketTo(ifaceID, packet)
 		})
 		resourceXfer.SetOnReceive(func(hash string, data []byte, iface string) {
@@ -679,6 +682,25 @@ func main() {
 		}
 	}
 	dispatcher.SetTransformPipeline(transforms)
+	// DTN reassembly buffer (MESHSAT-408)
+	reassemblyBuf := engine.NewReassemblyBuffer(5*time.Minute, 100)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n := reassemblyBuf.Reap(); n > 0 {
+					log.Info().Int("expired", n).Msg("DTN: reaped incomplete bundles")
+				}
+			}
+		}
+	}()
+	dispatcher.SetFragmentManager(reassemblyBuf)
+	log.Info().Msg("DTN reassembly buffer started")
+
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)
 	log.Info().Msg("dispatcher + delivery workers started")

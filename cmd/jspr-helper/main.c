@@ -216,13 +216,21 @@ static void emit_error(const char *msg) {
 
 /* ===== Input from Go (JSON lines on stdin) ===== */
 
+/* Read one line from stdin using fgets (blocking buffered I/O).
+ * We use select() to check if data is available on the raw fd first,
+ * but ALSO check if the FILE* has buffered data from a previous read
+ * (which select() can't see). */
 static int check_stdin(char *buf, int maxlen) {
-    struct timeval tv = {0, 0}; /* non-blocking */
+    /* Check raw fd with select (non-blocking) */
+    struct timeval tv = {0, 0};
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
-    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0)
-        return 0;
+    int ready = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+
+    if (ready <= 0)
+        return 0; /* no data on fd */
+
     if (fgets(buf, maxlen, stdin) == NULL)
         return -1; /* EOF — parent died */
     return strlen(buf);

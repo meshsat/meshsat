@@ -22,6 +22,8 @@ type ResourceTransferConfig struct {
 	TransferTimeout time.Duration // Max time for a complete transfer
 	RetryInterval   time.Duration // Interval between request retries
 	MaxRetries      int           // Max request retry count
+	RLNCEnabled     bool          // Enable RLNC coding for segment transfer (MESHSAT-411)
+	RLNCRedundancy  float64       // Redundancy factor (>1.0, default 1.2)
 }
 
 // DefaultResourceTransferConfig returns sensible defaults.
@@ -55,8 +57,9 @@ type inboundTransfer struct {
 	segments  map[uint16][]byte // index → data
 	bitmap    []byte            // tracks which segments we still need
 	created   time.Time
-	resultCh  chan []byte // delivers the complete resource
-	iface     string      // interface the advertisement came from
+	resultCh  chan []byte     // delivers the complete resource
+	iface     string          // interface the advertisement came from
+	rlncGen   *RLNCGeneration // RLNC decoder state (nil if uncoded, MESHSAT-411)
 }
 
 // ResourceReceiveFunc is called when a resource transfer completes successfully.
@@ -203,26 +206,63 @@ func (rt *ResourceTransfer) HandleRequest(data []byte, sourceIface string) {
 		return
 	}
 
-	log.Debug().
-		Str("hash", fmt.Sprintf("%x", req.ResourceHash[:8])).
-		Msg("resource: sending requested segments")
-
-	// Send requested segments
+	// Collect requested segments.
+	var requestedSegments [][]byte
+	var requestedIndices []int
 	for i := 0; i < ot.segCount; i++ {
 		if !reticulum.BitmapGet(req.Bitmap, i) {
 			continue
 		}
-
 		start := i * ot.segSize
 		end := start + ot.segSize
 		if end > len(ot.data) {
 			end = len(ot.data)
 		}
+		requestedSegments = append(requestedSegments, ot.data[start:end])
+		requestedIndices = append(requestedIndices, i)
+	}
 
+	// RLNC encoding (MESHSAT-411): if enabled, encode segments as coded packets.
+	if rt.config.RLNCEnabled && len(requestedSegments) > 1 {
+		redundancy := rt.config.RLNCRedundancy
+		if redundancy < 1.0 {
+			redundancy = 1.2
+		}
+		codedPackets := EncodeGeneration(0, ot.hash, requestedSegments, redundancy)
+		log.Info().
+			Str("hash", fmt.Sprintf("%x", ot.hash[:8])).
+			Int("segments", len(requestedSegments)).
+			Int("coded_packets", len(codedPackets)).
+			Float64("redundancy", redundancy).
+			Msg("resource: sending RLNC coded segments")
+
+		for _, pkt := range codedPackets {
+			hdr := reticulum.Header{
+				HeaderType: reticulum.HeaderType1,
+				PacketType: reticulum.PacketData,
+				DestType:   reticulum.DestPlain,
+				Context:    reticulum.ContextResourceRLNC,
+				Data:       MarshalRLNCPacket(pkt),
+			}
+			if err := rt.sendFn(sourceIface, hdr.Marshal()); err != nil {
+				log.Debug().Err(err).Msg("resource: RLNC coded packet send failed")
+				return
+			}
+		}
+		return
+	}
+
+	// Standard (uncoded) segment sending.
+	log.Debug().
+		Str("hash", fmt.Sprintf("%x", req.ResourceHash[:8])).
+		Int("segments", len(requestedSegments)).
+		Msg("resource: sending requested segments")
+
+	for i, segData := range requestedSegments {
 		seg := &reticulum.ResourceSegment{
 			ResourceHash: ot.hash,
-			SegmentIndex: uint16(i),
-			Data:         ot.data[start:end],
+			SegmentIndex: uint16(requestedIndices[i]),
+			Data:         segData,
 		}
 
 		hdr := reticulum.Header{
@@ -234,7 +274,7 @@ func (rt *ResourceTransfer) HandleRequest(data []byte, sourceIface string) {
 		}
 
 		if err := rt.sendFn(sourceIface, hdr.Marshal()); err != nil {
-			log.Debug().Err(err).Int("segment", i).Msg("resource: segment send failed")
+			log.Debug().Err(err).Int("segment", requestedIndices[i]).Msg("resource: segment send failed")
 			return
 		}
 	}
@@ -341,6 +381,76 @@ func (rt *ResourceTransfer) HandleProof(data []byte) {
 			Msg("resource: transfer confirmed by receiver")
 	}
 	rt.mu.Unlock()
+}
+
+// HandleCodedSegment processes an incoming RLNC coded segment (MESHSAT-411).
+// Coded segments use context 0x0F and contain linear combinations of original
+// segments. When enough independent coded packets are received (K), the
+// generation is decoded via Gaussian elimination and the original segments
+// are stored in the inbound transfer.
+func (rt *ResourceTransfer) HandleCodedSegment(data []byte, sourceIface string) {
+	pkt, err := UnmarshalRLNCPacket(data)
+	if err != nil {
+		log.Debug().Err(err).Msg("resource: failed to parse RLNC coded packet")
+		return
+	}
+
+	rt.mu.Lock()
+	it, exists := rt.inbound[pkt.ResourceHash]
+	if !exists {
+		rt.mu.Unlock()
+		log.Debug().Msg("resource: RLNC packet for unknown transfer")
+		return
+	}
+
+	// Lazy-init RLNC generation tracker.
+	if it.rlncGen == nil {
+		it.rlncGen = NewRLNCGeneration(pkt.GenerationID, int(pkt.K), len(pkt.Payload))
+	}
+	ready := it.rlncGen.AddPacket(pkt)
+	rt.mu.Unlock()
+
+	if !ready {
+		log.Debug().
+			Str("hash", fmt.Sprintf("%x", pkt.ResourceHash[:8])).
+			Int("received", len(it.rlncGen.Received)).
+			Int("need", it.rlncGen.K).
+			Msg("resource: RLNC coded packet received, waiting for more")
+		return
+	}
+
+	// Attempt decode.
+	decoded, decErr := it.rlncGen.TryDecode()
+	if decErr != nil {
+		log.Warn().Err(decErr).Msg("resource: RLNC decode failed (rank deficient?)")
+		return
+	}
+
+	log.Info().
+		Str("hash", fmt.Sprintf("%x", pkt.ResourceHash[:8])).
+		Int("decoded_segments", len(decoded)).
+		Msg("resource: RLNC generation decoded")
+
+	// Store decoded segments into the inbound transfer.
+	rt.mu.Lock()
+	for i, segData := range decoded {
+		if i < int(it.segCount) {
+			it.segments[uint16(i)] = segData
+			reticulum.BitmapClear(it.bitmap, i)
+		}
+	}
+	allReceived := reticulum.BitmapAllClear(it.bitmap)
+	rt.mu.Unlock()
+
+	if allReceived {
+		// Trigger reassembly via the normal HandleSegment path — send a dummy
+		// call that will find all segments present and reassemble.
+		rt.HandleSegment(reticulum.MarshalResourceSegment(&reticulum.ResourceSegment{
+			ResourceHash: pkt.ResourceHash,
+			SegmentIndex: 0,
+			Data:         decoded[0],
+		}), sourceIface)
+	}
 }
 
 // sendRequest sends a resource request for all missing segments.

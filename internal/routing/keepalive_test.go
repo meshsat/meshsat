@@ -144,6 +144,108 @@ func TestLinkKeepalive_Start(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+func TestLinkKeepalive_SimultaneousTimeouts(t *testing.T) {
+	alice := testIdentity(t)
+
+	aliceLM := NewLinkManager(alice)
+
+	// Establish 3 links with different identities
+	for i := 0; i < 3; i++ {
+		remote := testIdentity(t)
+		remoteLM := NewLinkManager(remote)
+		reqData, _, _ := aliceLM.InitiateLink(remote.DestHash())
+		proofData, _ := remoteLM.HandleLinkRequest(reqData)
+		aliceLM.HandleLinkProof(proofData, remote.SigningPublicKey())
+	}
+
+	if len(aliceLM.ActiveLinks()) != 3 {
+		t.Fatalf("should have 3 active links, got %d", len(aliceLM.ActiveLinks()))
+	}
+
+	// Force all links to be expired
+	for _, link := range aliceLM.ActiveLinks() {
+		link.LastActivity = time.Now().Add(-2 * time.Minute)
+	}
+
+	ka := &LinkKeepalive{
+		linkMgr:  aliceLM,
+		sendFn:   func(linkID [LinkIDLen]byte, data []byte) {},
+		interval: KeepaliveInterval,
+		timeout:  KeepaliveTimeout,
+	}
+
+	ka.tick()
+
+	if len(aliceLM.ActiveLinks()) != 0 {
+		t.Errorf("all timed-out links should be closed, got %d remaining", len(aliceLM.ActiveLinks()))
+	}
+}
+
+func TestLinkKeepalive_HandleKeepalive_UnknownLink(t *testing.T) {
+	alice := testIdentity(t)
+	lm := NewLinkManager(alice)
+	ka := NewLinkKeepalive(lm, nil)
+
+	// Keepalive for a link that doesn't exist
+	var unknownID [LinkIDLen]byte
+	unknownID[0] = 0xFF
+	kp := &KeepalivePacket{LinkID: unknownID, Random: 0x42}
+
+	err := ka.HandleKeepalive(kp.Marshal())
+	if err == nil {
+		t.Fatal("should fail for unknown link")
+	}
+}
+
+func TestLinkKeepalive_PartialTimeout(t *testing.T) {
+	alice := testIdentity(t)
+	aliceLM := NewLinkManager(alice)
+
+	// Establish 2 links
+	bob := testIdentity(t)
+	bobLM := NewLinkManager(bob)
+	reqData, _, _ := aliceLM.InitiateLink(bob.DestHash())
+	proofData, _ := bobLM.HandleLinkRequest(reqData)
+	aliceLM.HandleLinkProof(proofData, bob.SigningPublicKey())
+
+	charlie := testIdentity(t)
+	charlieLM := NewLinkManager(charlie)
+	reqData2, _, _ := aliceLM.InitiateLink(charlie.DestHash())
+	proofData2, _ := charlieLM.HandleLinkRequest(reqData2)
+	aliceLM.HandleLinkProof(proofData2, charlie.SigningPublicKey())
+
+	links := aliceLM.ActiveLinks()
+	if len(links) != 2 {
+		t.Fatalf("should have 2 active links, got %d", len(links))
+	}
+
+	// Expire only the first link
+	links[0].LastActivity = time.Now().Add(-2 * time.Minute)
+	// Keep second link fresh
+	links[1].LastActivity = time.Now()
+
+	var sent int
+	ka := &LinkKeepalive{
+		linkMgr: aliceLM,
+		sendFn: func(linkID [LinkIDLen]byte, data []byte) {
+			sent++
+		},
+		interval: KeepaliveInterval,
+		timeout:  KeepaliveTimeout,
+	}
+
+	ka.tick()
+
+	// One link closed, one kept (and received keepalive)
+	remaining := aliceLM.ActiveLinks()
+	if len(remaining) != 1 {
+		t.Errorf("should have 1 remaining link, got %d", len(remaining))
+	}
+	if sent != 1 {
+		t.Errorf("should have sent 1 keepalive (for active link), sent %d", sent)
+	}
+}
+
 func TestBandwidthPerLink(t *testing.T) {
 	bps := BandwidthPerLink()
 	if bps != 0.45 {

@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -84,6 +85,66 @@ func TestBandwidthLimiter_ZeroBandwidth(t *testing.T) {
 	// Should not register a bucket
 	if l.Available("test_0") != -1 {
 		t.Fatal("zero bandwidth should be unlimited")
+	}
+}
+
+func TestBandwidthLimiter_ConcurrentAllow(t *testing.T) {
+	l := NewAnnounceBandwidthLimiter()
+	// High bandwidth so we don't exhaust budget
+	l.SetBandwidth("mesh_0", 1000000, 100) // 1Mbps, 100%
+
+	const goroutines = 20
+	const allowsPerGoroutine = 50
+
+	var wg sync.WaitGroup
+	var allowed int64
+	var mu sync.Mutex
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < allowsPerGoroutine; j++ {
+				if l.Allow("mesh_0", 1) { // 1 byte = 8 bits
+					mu.Lock()
+					allowed++
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// With 1Mbps and 100% budget, all should succeed
+	mu.Lock()
+	if allowed != goroutines*allowsPerGoroutine {
+		t.Errorf("expected all %d to be allowed, got %d", goroutines*allowsPerGoroutine, allowed)
+	}
+	mu.Unlock()
+}
+
+func TestBandwidthLimiter_DynamicReconfig(t *testing.T) {
+	l := NewAnnounceBandwidthLimiter()
+
+	// Start with low bandwidth
+	l.SetBandwidth("mesh_0", 100, 100) // 100 bps, 100% budget = 12.5 bytes/sec
+
+	// A 20-byte packet should fail (160 bits > 100 bits capacity)
+	if l.Allow("mesh_0", 20) {
+		t.Fatal("20 bytes should exceed 100-bit budget")
+	}
+
+	// Reconfigure to high bandwidth
+	l.SetBandwidth("mesh_0", 1000000, 100) // 1Mbps
+
+	// Same packet should now succeed
+	if !l.Allow("mesh_0", 20) {
+		t.Fatal("20 bytes should fit in 1Mbps budget")
+	}
+
+	// Reconfigure to unlimited (0 bps)
+	l.SetBandwidth("mesh_0", 0, 100)
+	if l.Available("mesh_0") != -1 {
+		t.Fatal("0 bps should be unlimited")
 	}
 }
 

@@ -611,6 +611,13 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 						p.resourceXfer.HandleProof(hdr.Data)
 						return
 					}
+				case reticulum.ContextResourceRLNC:
+					if p.resourceXfer != nil {
+						log.Info().Int("size", len(hdr.Data)).Str("iface", sourceIface).
+							Msg("routing: RLNC coded resource segment received")
+						p.resourceXfer.HandleCodedSegment(hdr.Data, sourceIface)
+						return
+					}
 				}
 				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, sourceIface) {
 					log.Debug().Msg("routing: Reticulum data packet forwarded via transport")
