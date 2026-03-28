@@ -432,25 +432,90 @@ func (rt *ResourceTransfer) HandleCodedSegment(data []byte, sourceIface string) 
 		Msg("resource: RLNC generation decoded")
 
 	// Store decoded segments into the inbound transfer.
+	// RLNC decode produces padded segments (all same length as the longest).
+	// The last segment may be shorter — trim it using the known totalSize.
 	rt.mu.Lock()
 	for i, segData := range decoded {
-		if i < int(it.segCount) {
-			it.segments[uint16(i)] = segData
-			reticulum.BitmapClear(it.bitmap, i)
+		idx := uint16(i)
+		if idx >= it.segCount {
+			break
 		}
+		// Calculate expected segment size: last segment may be shorter.
+		expectedSize := int(it.segSize)
+		if idx == it.segCount-1 {
+			remainder := int(it.totalSize) % int(it.segSize)
+			if remainder > 0 {
+				expectedSize = remainder
+			}
+		}
+		// Trim RLNC-padded data to actual segment size.
+		if len(segData) > expectedSize {
+			segData = segData[:expectedSize]
+		}
+		it.segments[idx] = segData
+		reticulum.BitmapClear(it.bitmap, i)
 	}
 	allReceived := reticulum.BitmapAllClear(it.bitmap)
 	rt.mu.Unlock()
 
-	if allReceived {
-		// Trigger reassembly via the normal HandleSegment path — send a dummy
-		// call that will find all segments present and reassemble.
-		rt.HandleSegment(reticulum.MarshalResourceSegment(&reticulum.ResourceSegment{
-			ResourceHash: pkt.ResourceHash,
-			SegmentIndex: 0,
-			Data:         decoded[0],
-		}), sourceIface)
+	if !allReceived {
+		return
 	}
+
+	// All segments decoded — reassemble directly.
+	result := make([]byte, 0, it.totalSize)
+	for i := uint16(0); i < it.segCount; i++ {
+		segData, ok := it.segments[i]
+		if !ok {
+			log.Error().Uint16("segment", i).Msg("resource: RLNC missing segment during reassembly")
+			rt.mu.Lock()
+			delete(rt.inbound, pkt.ResourceHash)
+			rt.mu.Unlock()
+			return
+		}
+		result = append(result, segData...)
+	}
+
+	// Verify hash.
+	gotHash := sha256.Sum256(result)
+	if gotHash != it.hash {
+		log.Error().
+			Str("expected", fmt.Sprintf("%x", it.hash[:8])).
+			Str("got", fmt.Sprintf("%x", gotHash[:8])).
+			Int("size", len(result)).
+			Uint32("expected_size", it.totalSize).
+			Msg("resource: RLNC hash mismatch after reassembly")
+		rt.mu.Lock()
+		delete(rt.inbound, pkt.ResourceHash)
+		rt.mu.Unlock()
+		return
+	}
+
+	hashHex := fmt.Sprintf("%x", it.hash)
+	log.Info().
+		Str("hash", hashHex[:16]).
+		Int("size", len(result)).
+		Msg("resource: RLNC transfer complete")
+
+	if rt.onReceive != nil {
+		rt.onReceive(hashHex, result, sourceIface)
+	}
+
+	// Send proof.
+	prf := &reticulum.ResourceProof{ResourceHash: it.hash}
+	proofHdr := reticulum.Header{
+		HeaderType: reticulum.HeaderType1,
+		PacketType: reticulum.PacketData,
+		DestType:   reticulum.DestPlain,
+		Context:    reticulum.ContextResourcePRF,
+		Data:       reticulum.MarshalResourceProof(prf),
+	}
+	rt.sendFn(sourceIface, proofHdr.Marshal())
+
+	// Clean up.
+	rt.mu.Lock()
+	delete(rt.inbound, it.hash)
+	rt.mu.Unlock()
 }
 
 // sendRequest sends a resource request for all missing segments.
