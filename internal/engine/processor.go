@@ -703,6 +703,21 @@ func (p *Processor) InjectReticulumPacket(packet []byte, sourceIface string) {
 	p.handleRoutingPacket(transport.MeshEvent{}, packet, sourceIface)
 }
 
+// isPaidInterface returns true for satellite and cellular interfaces that cost
+// money per message. Protocol overhead (time sync, keepalive, announces) must
+// NEVER be sent over these interfaces automatically.
+func isPaidInterface(id string) bool {
+	switch {
+	case len(id) >= 7 && id[:7] == "iridium":
+		return true // iridium_0, iridium_imt_0
+	case len(id) >= 9 && id[:9] == "astrocast":
+		return true // astrocast_0
+	case len(id) >= 8 && id[:8] == "cellular":
+		return true // cellular_0
+	}
+	return false
+}
+
 // sendRoutingPacket transmits a routing protocol packet via mesh as a PRIVATE_APP raw payload.
 func (p *Processor) sendRoutingPacket(data []byte) {
 	if len(data) == 0 || p.mesh == nil {
@@ -719,15 +734,20 @@ func (p *Processor) sendRoutingPacket(data []byte) {
 	}
 }
 
-// BroadcastRoutingPacket sends a packet to all registered interfaces (mesh + TCP + satellite).
-// Used by time sync consensus to reach all peers.
+// BroadcastRoutingPacket sends a protocol packet to FREE interfaces only
+// (mesh, TCP, MQTT, AX.25). NEVER sends to paid satellite or cellular
+// interfaces — those cost real money per message.
 func (p *Processor) BroadcastRoutingPacket(data []byte) {
-	// Send to mesh
+	// Send to mesh (free, LoRa)
 	p.sendRoutingPacket(data)
-	// Send to all registered packet senders (TCP, etc.)
+	// Send to free registered packet senders (TCP, MQTT, AX.25) — skip paid interfaces.
 	p.packetSendersMu.RLock()
 	senders := make(map[string]func(ctx context.Context, data []byte) error, len(p.packetSenders))
 	for k, v := range p.packetSenders {
+		// Skip ALL paid satellite and cellular interfaces.
+		if isPaidInterface(k) {
+			continue
+		}
 		senders[k] = v
 	}
 	p.packetSendersMu.RUnlock()
