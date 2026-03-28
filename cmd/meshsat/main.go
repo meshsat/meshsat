@@ -28,6 +28,7 @@ import (
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/sysinfo"
+	"meshsat/internal/timesync"
 	"meshsat/internal/transport"
 )
 
@@ -602,6 +603,29 @@ func main() {
 		proc.SetPathFinder(pathFinder)
 
 		log.Info().Msg("transport node enabled — cross-interface forwarding active")
+
+		// Time Sync service (MESHSAT-410) — centralized clock correction.
+		timeService := timesync.NewTimeService(db)
+		timeService.SetEmitter(proc.Emit)
+		timeService.LoadPersistedState()
+		timeService.Start(ctx)
+
+		// Mesh time consensus — exchanges timestamps over Reticulum links.
+		tsConsensus := timesync.NewMeshTimeConsensus(timeService, routingID, func(data []byte) {
+			proc.BroadcastRoutingPacket(data)
+		})
+		tsConsensus.Start(ctx)
+
+		// Wire time sync dispatch into processor.
+		proc.SetTimeSyncHandler(func(data []byte, sourceIface string) {
+			if len(data) > 0 && data[0] == 0x14 {
+				tsConsensus.HandleTimeSyncRequest(data, sourceIface)
+			} else if len(data) > 0 && data[0] == 0x15 {
+				tsConsensus.HandleTimeSyncResponse(data)
+			}
+		})
+
+		log.Info().Msg("time sync service started with mesh consensus")
 
 		// Load persisted floodable overrides from system_config
 		if raw, dbErr := db.GetSystemConfig("reticulum_floodable_overrides"); dbErr == nil && raw != "" {

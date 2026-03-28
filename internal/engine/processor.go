@@ -55,6 +55,9 @@ type Processor struct {
 	// Gateway injection dedup (text hash → timestamp, 5min TTL)
 	relayDedupMu sync.Mutex
 	relayDedup   map[string]time.Time
+
+	// Protocol enhancements (MESHSAT-407)
+	timeSyncHandler func(data []byte, sourceIface string) // handles 0x14/0x15
 }
 
 // NewProcessor creates a new event processor.
@@ -113,6 +116,11 @@ func (p *Processor) SetRoutingIdentity(id *routing.Identity) {
 // SetResourceTransfer sets the resource transfer manager for chunked file delivery.
 func (p *Processor) SetResourceTransfer(rt *routing.ResourceTransfer) {
 	p.resourceXfer = rt
+}
+
+// SetTimeSyncHandler registers the callback for time sync packets (0x14/0x15).
+func (p *Processor) SetTimeSyncHandler(fn func(data []byte, sourceIface string)) {
+	p.timeSyncHandler = fn
 }
 
 // RegisterPacketSender registers a function that sends Reticulum packets to a
@@ -644,6 +652,17 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 			}
 		}
 
+	case 0x14, 0x15: // BridgeTimeSyncReq, BridgeTimeSyncResp
+		if p.timeSyncHandler != nil {
+			p.timeSyncHandler(payload, sourceIface)
+		}
+
+	case 0x16: // BridgeCustodyOffer
+		log.Debug().Str("iface", sourceIface).Msg("routing: custody offer received")
+
+	case 0x17: // BridgeCustodyACK
+		log.Debug().Str("iface", sourceIface).Msg("routing: custody ack received")
+
 	default:
 		log.Debug().Int("type", int(firstByte)).Msg("routing: unknown packet type")
 	}
@@ -681,6 +700,28 @@ func (p *Processor) sendRoutingPacket(data []byte) {
 	}
 	if err := p.mesh.SendRaw(ctx, req); err != nil {
 		log.Warn().Err(err).Int("size", len(data)).Msg("routing: failed to send packet")
+	}
+}
+
+// BroadcastRoutingPacket sends a packet to all registered interfaces (mesh + TCP + satellite).
+// Used by time sync consensus to reach all peers.
+func (p *Processor) BroadcastRoutingPacket(data []byte) {
+	// Send to mesh
+	p.sendRoutingPacket(data)
+	// Send to all registered packet senders (TCP, etc.)
+	p.packetSendersMu.RLock()
+	senders := make(map[string]func(ctx context.Context, data []byte) error, len(p.packetSenders))
+	for k, v := range p.packetSenders {
+		senders[k] = v
+	}
+	p.packetSendersMu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for id, sender := range senders {
+		if err := sender(ctx, data); err != nil {
+			log.Debug().Err(err).Str("iface", id).Msg("routing: broadcast packet send failed")
+		}
 	}
 }
 
