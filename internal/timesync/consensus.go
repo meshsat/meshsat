@@ -209,13 +209,13 @@ func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte) {
 	}
 	mc.mu.Unlock()
 
-	log.Debug().
+	log.Info().
 		Str("peer", hexHash(responderHash)).
 		Int("stratum", remoteStratum).
 		Float64("offset_ms", float64(offset)/1e6).
 		Float64("rtt_ms", float64(rtt.Nanoseconds())/1e6).
 		Int("samples", peer.sampleCount).
-		Msg("timesync: peer response")
+		Msg("timesync: peer response received")
 
 	mc.recalculateConsensus()
 }

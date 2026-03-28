@@ -481,6 +481,27 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 		return
 	}
 
+	// Bridge protocol extension type bytes (0x14-0x17) must be checked BEFORE
+	// Reticulum header parsing. These bytes are valid Reticulum flags values
+	// (e.g. 0x14 = PacketData+DestGroup+Transport), so UnmarshalHeader would
+	// succeed and misinterpret the packet as a data packet with a garbage dest hash.
+	firstByte := payload[0]
+	switch firstByte {
+	case 0x14, 0x15: // BridgeTimeSyncReq, BridgeTimeSyncResp
+		if p.timeSyncHandler != nil {
+			log.Info().Int("type", int(firstByte)).Str("iface", sourceIface).Int("size", len(payload)).
+				Msg("routing: time sync packet received")
+			p.timeSyncHandler(payload, sourceIface)
+		}
+		return
+	case 0x16: // BridgeCustodyOffer
+		log.Info().Str("iface", sourceIface).Msg("routing: custody offer received")
+		return
+	case 0x17: // BridgeCustodyACK
+		log.Info().Str("iface", sourceIface).Msg("routing: custody ack received")
+		return
+	}
+
 	// Try Reticulum header parsing first (requires at least HeaderMinSize bytes).
 	if len(payload) >= reticulum.HeaderMinSize {
 		hdr, err := reticulum.UnmarshalHeader(payload)
@@ -610,7 +631,6 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	}
 
 	// Fallback: Bridge-legacy packet type bytes (0x10-0x13).
-	firstByte := payload[0]
 	switch firstByte {
 	case routing.PacketLinkRequest:
 		if p.linkMgr != nil {
@@ -651,17 +671,6 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				log.Debug().Err(err).Msg("routing: keepalive handling failed")
 			}
 		}
-
-	case 0x14, 0x15: // BridgeTimeSyncReq, BridgeTimeSyncResp
-		if p.timeSyncHandler != nil {
-			p.timeSyncHandler(payload, sourceIface)
-		}
-
-	case 0x16: // BridgeCustodyOffer
-		log.Debug().Str("iface", sourceIface).Msg("routing: custody offer received")
-
-	case 0x17: // BridgeCustodyACK
-		log.Debug().Str("iface", sourceIface).Msg("routing: custody ack received")
 
 	default:
 		log.Debug().Int("type", int(firstByte)).Msg("routing: unknown packet type")
