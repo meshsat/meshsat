@@ -57,8 +57,8 @@ type Config struct {
 	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh
 	// MQTT broker URL (e.g. "tcp://broker:1883"). Empty = disabled.
 	MQTTReticulumBroker string
-	// MQTT topic prefix (default "reticulum/meshsat")
-	MQTTReticulumPrefix string
+	// MQTT topic for Reticulum packets (default "meshsat/reticulum/packet", matches Hub)
+	MQTTReticulumTopic string
 
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
@@ -103,13 +103,13 @@ func Load() *Config {
 		AX25KISSAddr:        envStr("MESHSAT_AX25_KISS_ADDR", ""),
 		AX25Callsign:        envStr("MESHSAT_AX25_CALLSIGN", ""),
 		MQTTReticulumBroker: envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
-		MQTTReticulumPrefix: envStr("MESHSAT_MQTT_RETICULUM_PREFIX", "reticulum/meshsat"),
+		MQTTReticulumTopic:  envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
 		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),
-		HubUsername:       envStr("MESHSAT_HUB_USERNAME", ""),
-		HubPassword:       envStr("MESHSAT_HUB_PASSWORD", ""),
+		HubUsername:       envStr("MESHSAT_HUB_USERNAME", "meshsat"), // default to shared NATS user
+		HubPassword:       envStrAlt("MESHSAT_HUB_PASSWORD", "MESHSAT_MQTT_PASSWORD", ""),
 		HubTLSCert:        envStr("MESHSAT_HUB_TLS_CERT", ""),
 		HubTLSKey:         envStr("MESHSAT_HUB_TLS_KEY", ""),
 		HubTLSCA:          envStr("MESHSAT_HUB_TLS_CA", ""),
@@ -127,6 +127,17 @@ func defaultHostname() string {
 
 func envStr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envStrAlt tries the primary key, then an alternate key, then falls back.
+func envStrAlt(primary, alt, fallback string) string {
+	if v := os.Getenv(primary); v != "" {
+		return v
+	}
+	if v := os.Getenv(alt); v != "" {
 		return v
 	}
 	return fallback
