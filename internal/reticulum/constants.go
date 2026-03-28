@@ -110,6 +110,7 @@ const (
 	ContextCommand       byte = 0x0C
 	ContextCommandStatus byte = 0x0D
 	ContextChannel       byte = 0x0E
+	ContextResourceRLNC  byte = 0x0F // RLNC coded resource segment (MESHSAT-411)
 	ContextKeepalive     byte = 0xFA
 	ContextLinkIdentify  byte = 0xFB
 	ContextLinkClose     byte = 0xFC
@@ -150,6 +151,14 @@ const (
 	BridgeLinkProof   byte = 0x11
 	BridgeLinkData    byte = 0x12
 	BridgeKeepalive   byte = 0x13
+
+	// Bridge time sync type bytes (MESHSAT-410).
+	BridgeTimeSyncReq  byte = 0x14
+	BridgeTimeSyncResp byte = 0x15
+
+	// Bridge DTN custody transfer type bytes (MESHSAT-408).
+	BridgeCustodyOffer byte = 0x16
+	BridgeCustodyACK   byte = 0x17
 
 	// HMACLen is the HMAC-SHA256 tag length.
 	HMACLen = 32

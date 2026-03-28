@@ -822,6 +822,53 @@ var migrations = []string{
 		updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_cred_cache_provider ON credential_cache(provider);`,
+
+	// v38: DTN concepts — custody transfer columns, bundle fragments, held packets [MESHSAT-408].
+	`ALTER TABLE message_deliveries ADD COLUMN custodian_hash TEXT DEFAULT '';
+	ALTER TABLE message_deliveries ADD COLUMN custody_id TEXT DEFAULT '';
+	ALTER TABLE message_deliveries ADD COLUMN custody_accepted_at TEXT;
+	ALTER TABLE message_deliveries ADD COLUMN custody_source_hash TEXT DEFAULT '';
+
+	CREATE TABLE IF NOT EXISTS bundle_fragments (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		bundle_id      TEXT NOT NULL,
+		fragment_index INTEGER NOT NULL,
+		fragment_total INTEGER NOT NULL,
+		total_size     INTEGER NOT NULL,
+		payload        BLOB NOT NULL,
+		source_iface   TEXT NOT NULL DEFAULT '',
+		delivery_id    INTEGER,
+		created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+		expires_at     TEXT,
+		UNIQUE(bundle_id, fragment_index)
+	);
+	CREATE INDEX IF NOT EXISTS idx_bundle_frag_bundle ON bundle_fragments(bundle_id);
+	CREATE INDEX IF NOT EXISTS idx_bundle_frag_expires ON bundle_fragments(expires_at);
+
+	CREATE TABLE IF NOT EXISTS held_packets (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		dest_hash    TEXT NOT NULL,
+		packet       BLOB NOT NULL,
+		source_iface TEXT NOT NULL DEFAULT '',
+		ttl_seconds  INTEGER NOT NULL DEFAULT 300,
+		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+		expires_at   TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_held_packets_dest ON held_packets(dest_hash);
+	CREATE INDEX IF NOT EXISTS idx_held_packets_expires ON held_packets(expires_at);`,
+
+	// v39: Time sync state for GPS-denied clock synchronization [MESHSAT-410].
+	`CREATE TABLE IF NOT EXISTS time_sync_state (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		source         TEXT NOT NULL,
+		stratum        INTEGER NOT NULL DEFAULT 5,
+		offset_ns      INTEGER NOT NULL DEFAULT 0,
+		uncertainty_ns INTEGER NOT NULL DEFAULT 0,
+		last_sync      TEXT NOT NULL DEFAULT (datetime('now')),
+		peer_hash      TEXT NOT NULL DEFAULT '',
+		UNIQUE(source, peer_hash)
+	);
+	CREATE INDEX IF NOT EXISTS idx_time_sync_source ON time_sync_state(source);`,
 }
 
 func (db *DB) migrate() error {

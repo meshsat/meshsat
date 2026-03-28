@@ -24,10 +24,14 @@ type TransformSpec struct {
 
 // TransformPipeline applies ordered transforms to payloads.
 type TransformPipeline struct {
-	llamazip *compress.LlamaZipClient
-	msvqsc   *compress.MSVQSCClient
-	codebook *compress.Codebook
+	llamazip   *compress.LlamaZipClient
+	msvqsc     *compress.MSVQSCClient
+	codebook   *compress.Codebook
+	fecMetrics FECMetrics
 }
+
+// FECStats returns the FEC encode/decode metrics.
+func (tp *TransformPipeline) FECStats() *FECMetrics { return &tp.fecMetrics }
 
 // NewTransformPipeline creates a new pipeline.
 func NewTransformPipeline() *TransformPipeline {
@@ -169,6 +173,30 @@ func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byt
 			Float32("fidelity", fidelity).
 			Msg("transform: msvqsc encoded (lossy)")
 		return encoded, nil
+	case "fec":
+		ds, ps, il, ild := resolveFECParams(t.Params)
+		if ds == 0 || ps == 0 {
+			log.Debug().Msg("transform: fec skipped (profile has no FEC)")
+			return data, nil
+		}
+		var opts []fecEncodeOpts
+		if il {
+			opts = append(opts, fecEncodeOpts{interleave: true, interleaveDepth: ild})
+		}
+		encoded, err := fecEncode(data, ds, ps, opts...)
+		if err != nil {
+			tp.fecMetrics.EncodeFail.Add(1)
+			return nil, err
+		}
+		tp.fecMetrics.EncodeOK.Add(1)
+		log.Debug().
+			Int("original", len(data)).
+			Int("encoded", len(encoded)).
+			Int("k", ds).
+			Int("m", ps).
+			Bool("interleave", il).
+			Msg("transform: fec encoded")
+		return encoded, nil
 	case "encrypt":
 		return encryptAESGCM(data, t.Params["key"])
 	default:
@@ -226,6 +254,18 @@ func (tp *TransformPipeline) reverseTransform(t TransformSpec, data []byte) ([]b
 			return decoded, nil
 		}
 		return nil, fmt.Errorf("msvqsc: neither codebook nor sidecar available for decode")
+	case "fec":
+		decoded, err := fecDecode(data)
+		if err != nil {
+			tp.fecMetrics.DecodeFail.Add(1)
+			return nil, err
+		}
+		tp.fecMetrics.DecodeOK.Add(1)
+		log.Debug().
+			Int("encoded", len(data)).
+			Int("decoded", len(decoded)).
+			Msg("transform: fec decoded")
+		return decoded, nil
 	case "encrypt":
 		return decryptAESGCM(data, t.Params["key"])
 	default:
@@ -257,6 +297,9 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			if t.Params["key"] == "" {
 				errors = append(errors, "encrypt transform requires a 'key' param")
 			}
+		case "fec":
+			hasBinaryOutput = true
+			endsWithBase64 = false
 		case "zstd", "smaz2", "llamazip", "msvqsc":
 			hasBinaryOutput = true
 			endsWithBase64 = false
@@ -280,6 +323,12 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			switch transforms[i].Type {
 			case "base64":
 				usable = usable * 3 / 4 // base64 decoding recovers 3/4
+			case "fec":
+				ds, ps, _, _ := resolveFECParams(transforms[i].Params)
+				if ds == 0 || ps == 0 {
+					break // no FEC for this profile
+				}
+				usable = usable*ds/(ds+ps) - fecHeaderLenV2 - fecOrigLenTrailer
 			case "encrypt":
 				usable -= 28 // 12 nonce + 16 GCM tag
 			}
