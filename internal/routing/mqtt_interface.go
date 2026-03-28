@@ -17,12 +17,13 @@ type MQTTInterfaceConfig struct {
 	Name      string // e.g. "mqtt_0"
 	BrokerURL string // e.g. "tcp://broker:1883"
 	ClientID  string // MQTT client ID (must be unique)
-	// TopicPrefix is the base topic for Reticulum packets.
-	// Publish: {prefix}/tx, Subscribe: {prefix}/rx
-	TopicPrefix string // e.g. "reticulum/meshsat"
-	Username    string
-	Password    string
-	QoS         byte // 0, 1, or 2
+	// Topic is the shared MQTT topic for Reticulum packets.
+	// Both publish and subscribe use the same topic (broadcast pattern).
+	// Must match the Hub's ReticulumMQTTTopic (default: "meshsat/reticulum/packet").
+	Topic    string // e.g. "meshsat/reticulum/packet"
+	Username string
+	Password string
+	QoS      byte // 0, 1, or 2
 }
 
 // MQTTInterface is a bidirectional Reticulum interface over MQTT.
@@ -44,8 +45,8 @@ func NewMQTTInterface(config MQTTInterfaceConfig, callback func(packet []byte)) 
 	if config.QoS > 2 {
 		config.QoS = 1
 	}
-	if config.TopicPrefix == "" {
-		config.TopicPrefix = "reticulum/meshsat"
+	if config.Topic == "" {
+		config.Topic = "meshsat/reticulum/packet"
 	}
 	return &MQTTInterface{
 		config:   config,
@@ -96,7 +97,7 @@ func (m *MQTTInterface) Start(ctx context.Context) error {
 	}
 
 	log.Info().Str("iface", m.config.Name).Str("broker", m.config.BrokerURL).
-		Str("topic_prefix", m.config.TopicPrefix).Msg("mqtt reticulum interface started")
+		Str("topic", m.config.Topic).Msg("mqtt reticulum interface started")
 	return nil
 }
 
@@ -110,7 +111,7 @@ func (m *MQTTInterface) Send(ctx context.Context, packet []byte) error {
 		return fmt.Errorf("mqtt interface %s is offline", m.config.Name)
 	}
 
-	topic := m.config.TopicPrefix + "/tx"
+	topic := m.config.Topic
 	token := m.client.Publish(topic, m.config.QoS, false, packet)
 	if !token.WaitTimeout(5 * time.Second) {
 		return fmt.Errorf("mqtt publish timeout")
@@ -150,7 +151,7 @@ func (m *MQTTInterface) IsOnline() bool {
 
 // subscribe to the receive topic for inbound Reticulum packets.
 func (m *MQTTInterface) subscribe() {
-	topic := m.config.TopicPrefix + "/rx"
+	topic := m.config.Topic
 	token := m.client.Subscribe(topic, m.config.QoS, func(_ mqtt.Client, msg mqtt.Message) {
 		data := msg.Payload()
 		if len(data) < 2 {

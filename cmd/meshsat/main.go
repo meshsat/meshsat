@@ -362,6 +362,7 @@ func main() {
 	var linkMgr *routing.LinkManager
 	var destTable *routing.DestinationTable
 	var announceRelay *routing.AnnounceRelay
+	var ifaceReg *routing.InterfaceRegistry
 	routingID, err = routing.NewIdentity(db)
 	if err != nil {
 		log.Error().Err(err).Msg("routing identity init failed - routing disabled")
@@ -374,8 +375,23 @@ func main() {
 
 		// Announce relay — dedup + hop-count enforcement + delayed retransmit
 		relayConfig := routing.DefaultRelayConfig()
-		announceRelay = routing.NewAnnounceRelay(relayConfig, destTable, func(data []byte, announce *routing.Announce) {
-			log.Debug().Str("dest_hash", routingID.DestHashHex()).Int("hops", int(announce.HopCount)).Msg("relaying announce")
+		announceRelay = routing.NewAnnounceRelay(relayConfig, destTable, func(data []byte, announce *routing.Announce, sourceIface string) {
+			if ifaceReg == nil {
+				return
+			}
+			floodable := ifaceReg.Floodable()
+			for _, iface := range floodable {
+				if iface.ID() == sourceIface {
+					continue // don't send back to source
+				}
+				if err := iface.Send(ctx, data); err != nil {
+					log.Warn().Err(err).Str("iface", iface.ID()).Msg("relay: failed to forward announce")
+				}
+			}
+			log.Debug().Str("dest_hash", fmt.Sprintf("%x", announce.DestHash)).
+				Int("hops", int(announce.HopCount)).
+				Str("source", sourceIface).
+				Msg("relayed announce to floodable interfaces")
 		})
 		announceRelay.RegisterLocal(routingID.DestHash())
 		announceRelay.StartPruner(ctx)
@@ -423,7 +439,6 @@ func main() {
 
 	// Interface registry — wraps all transports as named Reticulum interfaces
 	// for the Transport Node to route packets between.
-	var ifaceReg *routing.InterfaceRegistry
 	if routingID != nil {
 		ifaceReg = routing.NewInterfaceRegistry()
 
@@ -564,11 +579,11 @@ func main() {
 	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh
 	if cfg.MQTTReticulumBroker != "" {
 		mqttIface := routing.NewMQTTInterface(routing.MQTTInterfaceConfig{
-			Name:        "mqtt_rns_0",
-			BrokerURL:   cfg.MQTTReticulumBroker,
-			ClientID:    "meshsat-rns-" + cfg.BridgeID,
-			TopicPrefix: cfg.MQTTReticulumPrefix,
-			QoS:         1,
+			Name:      "mqtt_rns_0",
+			BrokerURL: cfg.MQTTReticulumBroker,
+			ClientID:  "meshsat-rns-" + cfg.BridgeID,
+			Topic:     cfg.MQTTReticulumTopic,
+			QoS:       1,
 		}, func(packet []byte) {
 			log.Debug().Int("size", len(packet)).Msg("mqtt_rns_0: received reticulum packet")
 			proc.InjectReticulumPacket(packet, "mqtt_rns_0")

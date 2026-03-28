@@ -11,7 +11,7 @@ func TestAnnounceRelay_Dedup(t *testing.T) {
 	table := NewDestinationTable(nil)
 	var relayed int
 	var mu sync.Mutex
-	relay := NewAnnounceRelay(DefaultRelayConfig(), table, func(data []byte, a *Announce) {
+	relay := NewAnnounceRelay(DefaultRelayConfig(), table, func(data []byte, a *Announce, sourceIface string) {
 		mu.Lock()
 		relayed++
 		mu.Unlock()
@@ -48,7 +48,7 @@ func TestAnnounceRelay_LocalNotRelayed(t *testing.T) {
 	table := NewDestinationTable(nil)
 	var relayed int
 	var mu sync.Mutex
-	relay := NewAnnounceRelay(DefaultRelayConfig(), table, func(data []byte, a *Announce) {
+	relay := NewAnnounceRelay(DefaultRelayConfig(), table, func(data []byte, a *Announce, sourceIface string) {
 		mu.Lock()
 		relayed++
 		mu.Unlock()
@@ -82,7 +82,7 @@ func TestAnnounceRelay_MaxHops(t *testing.T) {
 	table := NewDestinationTable(nil)
 	var relayed int
 	var mu sync.Mutex
-	relay := NewAnnounceRelay(config, table, func(data []byte, a *Announce) {
+	relay := NewAnnounceRelay(config, table, func(data []byte, a *Announce, sourceIface string) {
 		mu.Lock()
 		relayed++
 		mu.Unlock()
@@ -148,7 +148,7 @@ func TestAnnounceRelay_DelayVariance(t *testing.T) {
 	var mu sync.Mutex
 	var relayTimes []time.Time
 
-	relay := NewAnnounceRelay(config, table, func(data []byte, a *Announce) {
+	relay := NewAnnounceRelay(config, table, func(data []byte, a *Announce, sourceIface string) {
 		mu.Lock()
 		relayTimes = append(relayTimes, time.Now())
 		mu.Unlock()
@@ -196,7 +196,7 @@ func TestAnnounceRelay_SeenAgeBoundary(t *testing.T) {
 	table := NewDestinationTable(nil)
 	var relayed int
 	var mu sync.Mutex
-	relay := NewAnnounceRelay(config, table, func(data []byte, a *Announce) {
+	relay := NewAnnounceRelay(config, table, func(data []byte, a *Announce, sourceIface string) {
 		mu.Lock()
 		relayed++
 		mu.Unlock()

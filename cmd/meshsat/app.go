@@ -199,7 +199,7 @@ func (a *App) Setup(ctx context.Context) error {
 
 		// Announce relay — dedup + hop-count enforcement + delayed retransmit
 		relayConfig := routing.DefaultRelayConfig()
-		a.AnnounceRelay = routing.NewAnnounceRelay(relayConfig, a.DestTable, func(data []byte, announce *routing.Announce) {
+		a.AnnounceRelay = routing.NewAnnounceRelay(relayConfig, a.DestTable, func(data []byte, announce *routing.Announce, sourceIface string) {
 			log.Info().Str("dest_hash", routingID.DestHashHex()).Int("hops", int(announce.HopCount)).Int("size", len(data)).Msg("relaying announce via mesh")
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()

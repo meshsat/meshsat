@@ -36,9 +36,10 @@ func DefaultRelayConfig() RelayConfig {
 }
 
 // RelayCallback is called when an announce should be forwarded to interfaces.
-// The relay passes the marshaled packet (with incremented hop count) and the
-// parsed announce for metadata.
-type RelayCallback func(data []byte, announce *Announce)
+// The relay passes the marshaled packet (with incremented hop count), the
+// parsed announce for metadata, and the source interface ID so the callback
+// can exclude the originating interface from the broadcast.
+type RelayCallback func(data []byte, announce *Announce, sourceInterface string)
 
 // AnnounceRelay handles deduplication, hop count enforcement, and delayed
 // retransmission of announce packets across interfaces.
@@ -122,7 +123,7 @@ func (r *AnnounceRelay) HandleAnnounce(ctx context.Context, data []byte, sourceI
 
 	// Schedule relay with random delay
 	if r.callback != nil {
-		r.scheduleRelay(ctx, announce)
+		r.scheduleRelay(ctx, announce, sourceInterface)
 	}
 
 	return true
@@ -167,7 +168,7 @@ func (r *AnnounceRelay) prune() {
 	}
 }
 
-func (r *AnnounceRelay) scheduleRelay(ctx context.Context, announce *Announce) {
+func (r *AnnounceRelay) scheduleRelay(ctx context.Context, announce *Announce, sourceInterface string) {
 	// Random delay between MinRelayDelay and MaxRelayDelay
 	delayRange := r.config.MaxRelayDelay - r.config.MinRelayDelay
 	delay := r.config.MinRelayDelay + time.Duration(rand.Int64N(int64(delayRange)))
@@ -185,7 +186,7 @@ func (r *AnnounceRelay) scheduleRelay(ctx context.Context, announce *Announce) {
 		}
 
 		relayData := announce.Marshal()
-		r.callback(relayData, announce)
+		r.callback(relayData, announce, sourceInterface)
 		r.mu.Lock()
 		r.relayedCount++
 		r.mu.Unlock()
