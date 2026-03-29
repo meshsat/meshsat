@@ -38,7 +38,7 @@ const MESH_RADIUS = 300
 const PEER_RADIUS = 280
 
 const ifacePositions = computed(() => {
-  const nodes = store.interfaceNodes.value
+  const nodes = store.interfaceNodes.value || []
   const count = nodes.length || 1
   return nodes.map((n, i) => {
     const angle = (i / count) * Math.PI * 2 - Math.PI / 2
@@ -50,7 +50,7 @@ const meshPositions = computed(() => {
   // Place mesh nodes around mesh_0 interface
   const meshIface = ifacePositions.value.find(n => n.id === 'mesh_0')
   if (!meshIface) return []
-  const nodes = store.meshNodeList.value
+  const nodes = store.meshNodeList.value || []
   const count = nodes.length || 1
   const baseAngle = Math.atan2(meshIface.y, meshIface.x)
   return nodes.map((n, i) => {
