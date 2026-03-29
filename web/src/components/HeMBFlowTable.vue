@@ -42,7 +42,7 @@ function formatTime(ts) {
 }
 
 const filteredEvents = computed(() => {
-  let evts = store.events
+  let evts = store.events.value
   if (filterType.value) {
     evts = evts.filter(e => e.type === filterType.value)
   }
