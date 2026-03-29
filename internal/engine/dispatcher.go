@@ -482,8 +482,8 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				if len(bearers) > 0 {
 					bdr := hemb.NewBonder(hemb.Options{
 						Bearers:   bearers,
-						DeliverFn: nil, // send-only path
-						EventCh:   nil, // TODO: wire global HeMB event channel
+						DeliverFn: nil,                           // send-only path
+						EventCh:   hemb.GlobalEventBus.Channel(), // fan-out to SSE subscribers
 					})
 					if err := bdr.Send(context.Background(), payload); err != nil {
 						log.Error().Err(err).Str("bond_group", m.ForwardTo).

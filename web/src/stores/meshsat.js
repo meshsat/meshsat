@@ -1205,6 +1205,15 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // HeMB stats (for dashboard widget)
+  const hembStats = ref(null)
+
+  async function fetchHeMBStats() {
+    try {
+      hembStats.value = await api.get('/hemb/stats')
+    } catch { /* HeMB may not be active */ }
+  }
+
   // Burst Queue
   const burstStatus = ref({ pending: 0, max_size: 10, max_age_min: 30 })
 
@@ -1402,6 +1411,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     exportConfig, importConfig, validateTransforms,
     healthScores, fetchHealthScores,
     deadmanEnabled, deadmanTimeout, deadmanConfig, fetchDeadmanConfig, setDeadmanConfig,
+    hembStats, fetchHeMBStats,
     burstStatus, fetchBurstStatus, flushBurst,
     geofences, fetchGeofences, createGeofence, deleteGeofence,
     sseConnected, connectSSE, closeSSE,

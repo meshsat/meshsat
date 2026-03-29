@@ -1,6 +1,9 @@
 package hemb
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // BearerProfile describes a single physical transport channel for HeMB bonding.
 // Cost is a PRIMARY INPUT to the allocation function, not metadata.
@@ -25,9 +28,9 @@ func (b *BearerProfile) IsFree() bool { return b.CostPerMsg == 0 }
 
 // Options configures a Bonder instance.
 type Options struct {
-	Bearers   []BearerProfile    // available physical bearers
+	Bearers   []BearerProfile      // available physical bearers
 	DeliverFn func(payload []byte) // called when reassembly completes a generation
-	EventCh   chan<- Event        // SSE event channel, nil = disabled
+	EventCh   chan<- Event         // SSE event channel, nil = disabled
 }
 
 // Bonder is the exported interface for the HeMB bonding layer.
@@ -36,6 +39,9 @@ type Bonder interface {
 	Send(ctx context.Context, payload []byte) error
 	ReceiveSymbol(bearerIndex uint8, data []byte) ([]byte, error)
 	Stats() BondStats
+	StartStatsEmitter(ctx context.Context, interval time.Duration, ch chan<- Event)
+	ActiveStreams() []StreamInfo
+	StreamDetail(streamID uint8) ([]GenerationInfo, bool)
 }
 
 // BondConfig controls per-send bonding parameters.
@@ -47,7 +53,7 @@ type BondConfig struct {
 
 // BondStats reports aggregate bonding metrics.
 type BondStats struct {
-	ActiveStreams       int
+	ActiveStreams      int
 	SymbolsSent        int64
 	SymbolsReceived    int64
 	GenerationsDecoded int64

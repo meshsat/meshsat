@@ -8,6 +8,7 @@ const routes = [
   { path: '/interfaces', name: 'interfaces', component: () => import('@/views/InterfacesView.vue') },
   { path: '/passes', name: 'passes', component: () => import('@/views/PassesView.vue') },
   { path: '/topology', name: 'topology', component: () => import('@/views/TopologyView.vue') },
+  { path: '/hemb', name: 'hemb', component: () => import('@/views/HeMBView.vue') },
   { path: '/map', name: 'map', component: () => import('@/views/MapView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/radio', name: 'radio', component: () => import('@/views/RadioConfigView.vue') },

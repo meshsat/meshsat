@@ -16,6 +16,7 @@ const tabs = [
   { name: 'interfaces', label: 'Interfaces', path: '/interfaces' },
   { name: 'passes', label: 'Passes', path: '/passes' },
   { name: 'topology', label: 'Topology', path: '/topology' },
+  { name: 'hemb', label: 'HeMB', path: '/hemb' },
   { name: 'map', label: 'Map', path: '/map' },
   { name: 'settings', label: 'Settings', path: '/settings' },
   { name: 'radio', label: 'Meshtastic', path: '/radio' },

@@ -40,7 +40,7 @@ const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'reticulum', 'sos', 'location', 'queue', 'burst', 'activity']
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'reticulum', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
 function loadWidgetOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
@@ -1066,6 +1066,7 @@ async function fetchAll() {
     store.fetchInterfaces(),
     store.fetchHealthScores(),
     store.fetchBurstStatus(),
+    store.fetchHeMBStats(),
     store.fetchReticulumStatus(),
     store.fetchWebhookLog(),
     store.fetchConfig()
@@ -1970,6 +1971,29 @@ function widgetGridClass(id) {
         </button>
         <div v-else class="text-[11px] text-gray-600 text-center py-2">
           Queue empty — messages will be batched for next satellite pass
+        </div>
+      </div>
+
+      <!-- ═══ HeMB Bonding ═══ -->
+      <div v-if="wid === 'hemb'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-teal-400 tracking-wide">HeMB BONDING</h2>
+          </div>
+          <router-link to="/hemb" class="text-[10px] text-gray-500 hover:text-gray-300">View &rarr;</router-link>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="flex justify-between"><span class="text-gray-500">Bond Groups</span>
+            <span class="font-mono text-gray-300">{{ store.hembStats?.active_streams ?? 0 }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Decoded</span>
+            <span class="font-mono text-emerald-400">{{ store.hembStats?.generations_decoded ?? 0 }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Failed</span>
+            <span class="font-mono text-red-400">{{ store.hembStats?.generations_failed ?? 0 }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Cost</span>
+            <span class="font-mono text-gray-300">${{ (store.hembStats?.cost_incurred ?? 0).toFixed(3) }}</span></div>
         </div>
       </div>
 

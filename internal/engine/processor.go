@@ -140,6 +140,56 @@ func (p *Processor) SetHeMBBonder(b hemb.Bonder) {
 	p.hembBonder = b
 }
 
+// HeMBStats returns current HeMB bonding metrics, or zeros if no bonder is registered.
+func (p *Processor) HeMBStats() hemb.BondStats {
+	if p.hembBonder != nil {
+		return p.hembBonder.Stats()
+	}
+	return hemb.BondStats{}
+}
+
+// HeMBActiveStreams returns active reassembly stream info.
+func (p *Processor) HeMBActiveStreams() []hemb.StreamInfo {
+	if p.hembBonder != nil {
+		return p.hembBonder.ActiveStreams()
+	}
+	return nil
+}
+
+// HeMBStreamDetail returns per-generation info for a specific stream.
+func (p *Processor) HeMBStreamDetail(streamID uint8) ([]hemb.GenerationInfo, bool) {
+	if p.hembBonder != nil {
+		return p.hembBonder.StreamDetail(streamID)
+	}
+	return nil, false
+}
+
+// bearerIndexForIface maps a Reticulum interface name to its bearer index
+// within the active bond groups. Falls back to a deterministic hash if the
+// interface is not found in any bond group.
+func (p *Processor) bearerIndexForIface(ifaceName string) uint8 {
+	groups, err := p.db.GetAllBondGroups()
+	if err == nil {
+		for _, g := range groups {
+			members, merr := p.db.GetBondMembers(g.ID)
+			if merr != nil {
+				continue
+			}
+			for i, m := range members {
+				if m.InterfaceID == ifaceName {
+					return uint8(i)
+				}
+			}
+		}
+	}
+	// Fallback: deterministic index from interface name.
+	var h uint8
+	for _, c := range ifaceName {
+		h = h*31 + uint8(c)
+	}
+	return h
+}
+
 // RegisterPacketSender registers a function that sends Reticulum packets to a
 // specific interface (e.g. "tcp_0", "mesh_0"). Used to route link proofs and
 // data packets back to the interface they were received on.
@@ -212,6 +262,30 @@ func (p *Processor) Run(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				p.pruneRelayDedup()
+			}
+		}
+	}()
+
+	// Bridge HeMB bond_stats events to the main /api/events SSE stream.
+	// This dual-emits HEMB_BOND_STATS so dashboard clients on /api/events
+	// see bonding metrics without subscribing to the HeMB-specific bus.
+	bondStatsCh, bondStatsUnsub := hemb.GlobalEventBus.SubscribeFiltered(hemb.EventBondStats)
+	go func() {
+		defer bondStatsUnsub()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-bondStatsCh:
+				if !ok {
+					return
+				}
+				p.broadcast(transport.MeshEvent{
+					Type:    string(evt.Type),
+					Data:    evt.Payload,
+					Time:    evt.Timestamp.Format(time.RFC3339),
+					Message: "hemb bond stats",
+				})
 			}
 		}
 	}()
@@ -503,8 +577,7 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	// detected by CRC-8 validation. Both must be routed to the reassembly buffer.
 	if hemb.IsHeMBFrame(payload) {
 		if p.hembBonder != nil {
-			// Determine bearer index from source interface name.
-			bearerIdx := uint8(0) // default
+			bearerIdx := p.bearerIndexForIface(sourceIface)
 			if _, err := p.hembBonder.ReceiveSymbol(bearerIdx, payload); err != nil {
 				log.Debug().Err(err).Str("iface", sourceIface).Msg("hemb: receive symbol failed")
 			}

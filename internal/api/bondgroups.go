@@ -98,15 +98,15 @@ func (s *Server) handleDeleteBondGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetHeMBStats(w http.ResponseWriter, r *http.Request) {
-	// Return basic HeMB stats — will be enriched when bonder is wired.
+	st := s.processor.HeMBStats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"active_streams":     0,
-		"symbols_sent":       0,
-		"symbols_received":   0,
-		"generations_decoded": 0,
-		"generations_failed":  0,
-		"bytes_free":         0,
-		"bytes_paid":         0,
-		"cost_incurred":      0.0,
+		"active_streams":      st.ActiveStreams,
+		"symbols_sent":        st.SymbolsSent,
+		"symbols_received":    st.SymbolsReceived,
+		"generations_decoded": st.GenerationsDecoded,
+		"generations_failed":  st.GenerationsFailed,
+		"bytes_free":          st.BytesFree,
+		"bytes_paid":          st.BytesPaid,
+		"cost_incurred":       st.CostIncurred,
 	})
 }

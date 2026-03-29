@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // bonder implements the HeMB bonding layer.
@@ -57,8 +58,7 @@ func (b *bonder) Send(ctx context.Context, payload []byte) error {
 // sendN1 is the zero-overhead passthrough for single-bearer mode.
 func (b *bonder) sendN1(ctx context.Context, payload []byte, bearer *BearerProfile) error {
 	emit(b.opts.EventCh, EventSymbolSent, SymbolSentPayload{
-		BearerIndex:  bearer.Index,
-		BearerType:   bearer.ChannelType,
+		BearerRef:    BearerRef{BearerIndex: bearer.Index, BearerType: bearer.ChannelType},
 		PayloadBytes: len(payload),
 		CostEstimate: bearer.CostPerMsg,
 	})
@@ -74,10 +74,10 @@ func (b *bonder) sendN1(ctx context.Context, payload []byte, bearer *BearerProfi
 
 // bearerAlloc tracks how many symbols are allocated to a bearer.
 type bearerAlloc struct {
-	bearer   *BearerProfile
-	source   int // source symbols assigned
-	repair   int // repair symbols assigned
-	total    int // source + repair
+	bearer *BearerProfile
+	source int // source symbols assigned
+	repair int // repair symbols assigned
+	total  int // source + repair
 }
 
 // sendMulti implements the N>1 RLNC-coded multi-bearer send path.
@@ -199,11 +199,8 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 			frame := marshalSymbolFrame(alloc.bearer, streamID, sym, totalN)
 
 			emit(b.opts.EventCh, EventSymbolSent, SymbolSentPayload{
-				StreamID:     streamID,
-				GenerationID: 0,
-				SymbolIndex:  sym.SymbolIndex,
-				BearerIndex:  alloc.bearer.Index,
-				BearerType:   alloc.bearer.ChannelType,
+				SymbolRef:    SymbolRef{StreamID: streamID, GenerationID: 0, SymbolIndex: sym.SymbolIndex},
+				BearerRef:    BearerRef{BearerIndex: alloc.bearer.Index, BearerType: alloc.bearer.ChannelType},
 				PayloadBytes: len(frame),
 				IsRepair:     isRepair,
 				CostEstimate: alloc.bearer.CostPerMsg,
@@ -305,8 +302,7 @@ func (b *bonder) ReceiveSymbol(bearerIndex uint8, data []byte) ([]byte, error) {
 	if len(b.opts.Bearers) == 1 {
 		b.stats.symbolsReceived.Add(1)
 		emit(b.opts.EventCh, EventSymbolReceived, SymbolReceivedPayload{
-			BearerIndex:  bearerIndex,
-			BearerType:   b.opts.Bearers[0].ChannelType,
+			BearerRef:    BearerRef{BearerIndex: bearerIndex, BearerType: b.opts.Bearers[0].ChannelType},
 			PayloadBytes: len(data),
 			Received:     1,
 			Required:     1,
@@ -325,14 +321,39 @@ func (b *bonder) ReceiveSymbol(bearerIndex uint8, data []byte) ([]byte, error) {
 
 	b.stats.symbolsReceived.Add(1)
 	emit(b.opts.EventCh, EventSymbolReceived, SymbolReceivedPayload{
-		StreamID:     streamID,
-		GenerationID: sym.GenID,
-		SymbolIndex:  sym.SymbolIndex,
-		BearerIndex:  bearerIndex,
+		SymbolRef:    SymbolRef{StreamID: streamID, GenerationID: sym.GenID, SymbolIndex: sym.SymbolIndex},
+		BearerRef:    BearerRef{BearerIndex: bearerIndex},
 		PayloadBytes: len(data),
 	})
 
 	return b.reassembly.AddSymbol(streamID, bearerIndex, sym)
+}
+
+// StartStatsEmitter runs a background goroutine that emits EventBondStats
+// at the given interval. Stops when ctx is cancelled.
+func (b *bonder) StartStatsEmitter(ctx context.Context, interval time.Duration, ch chan<- Event) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				st := b.Stats()
+				emit(ch, EventBondStats, BondStatsPayload{
+					ActiveStreams:      st.ActiveStreams,
+					SymbolsSent:        st.SymbolsSent,
+					SymbolsReceived:    st.SymbolsReceived,
+					GenerationsDecoded: st.GenerationsDecoded,
+					GenerationsFailed:  st.GenerationsFailed,
+					BytesFree:          st.BytesFree,
+					BytesPaid:          st.BytesPaid,
+					CostTotal:          st.CostIncurred,
+				})
+			}
+		}
+	}()
 }
 
 // Stats returns current bonding metrics.
@@ -350,4 +371,20 @@ func (b *bonder) Stats() BondStats {
 		s.ActiveStreams = b.reassembly.PendingCount()
 	}
 	return s
+}
+
+// ActiveStreams returns info about active reassembly streams.
+func (b *bonder) ActiveStreams() []StreamInfo {
+	if b.reassembly == nil {
+		return nil
+	}
+	return b.reassembly.ActiveStreams()
+}
+
+// StreamDetail returns per-generation info for a specific stream.
+func (b *bonder) StreamDetail(streamID uint8) ([]GenerationInfo, bool) {
+	if b.reassembly == nil {
+		return nil, false
+	}
+	return b.reassembly.StreamDetail(streamID)
 }

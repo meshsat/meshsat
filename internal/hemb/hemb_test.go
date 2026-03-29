@@ -17,8 +17,8 @@ import (
 func TestEmitNilChannelNoPanic(t *testing.T) {
 	// emit() with nil channel must not panic.
 	emit(nil, EventSymbolSent, SymbolSentPayload{
-		StreamID:     1,
-		BearerIndex:  0,
+		SymbolRef:    SymbolRef{StreamID: 1},
+		BearerRef:    BearerRef{BearerIndex: 0},
 		PayloadBytes: 100,
 	})
 }
@@ -31,7 +31,7 @@ func TestEmitFullChannelNoBlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		emit(ch, EventSymbolSent, SymbolSentPayload{StreamID: 1})
+		emit(ch, EventSymbolSent, SymbolSentPayload{SymbolRef: SymbolRef{StreamID: 1}})
 		close(done)
 	}()
 
@@ -47,12 +47,12 @@ func TestEmitAllEventTypes(t *testing.T) {
 	// All 9 event types must compile and marshal to valid JSON.
 	ch := make(chan Event, 20)
 
-	emit(ch, EventSymbolSent, SymbolSentPayload{StreamID: 1, BearerIndex: 0, PayloadBytes: 100, CostEstimate: 0.05})
-	emit(ch, EventSymbolReceived, SymbolReceivedPayload{StreamID: 1, BearerIndex: 0, Received: 3, Required: 4})
+	emit(ch, EventSymbolSent, SymbolSentPayload{SymbolRef: SymbolRef{StreamID: 1}, BearerRef: BearerRef{BearerIndex: 0}, PayloadBytes: 100, CostEstimate: 0.05})
+	emit(ch, EventSymbolReceived, SymbolReceivedPayload{SymbolRef: SymbolRef{StreamID: 1}, BearerRef: BearerRef{BearerIndex: 0}, Received: 3, Required: 4})
 	emit(ch, EventGenerationDecoded, GenerationDecodedPayload{StreamID: 1, K: 4, N: 6, Received: 5})
 	emit(ch, EventGenerationFailed, GenerationFailedPayload{StreamID: 1, K: 4, Received: 2, Reason: "timeout"})
-	emit(ch, EventBearerDegraded, BearerDegradedPayload{BearerIndex: 0, HealthScore: 35, PrevScore: 72, Reason: "high_loss_rate"})
-	emit(ch, EventBearerRecovered, BearerRecoveredPayload{BearerIndex: 0, HealthScore: 78, PrevScore: 35, DowntimeMs: 5000})
+	emit(ch, EventBearerDegraded, BearerDegradedPayload{BearerRef: BearerRef{BearerIndex: 0}, HealthScore: 35, PrevScore: 72, Reason: "high_loss_rate"})
+	emit(ch, EventBearerRecovered, BearerRecoveredPayload{BearerRef: BearerRef{BearerIndex: 0}, HealthScore: 78, PrevScore: 35, DowntimeMs: 5000})
 	emit(ch, EventStreamOpened, StreamOpenedPayload{StreamID: 1, BearerCount: 2, K: 4, N: 6})
 	emit(ch, EventStreamClosed, StreamClosedPayload{StreamID: 1, Verdict: "decoded", GenerationsTotal: 1, GenerationsDecoded: 1})
 	emit(ch, EventBondStats, BondStatsPayload{ActiveStreams: 1, SymbolsSent: 42})

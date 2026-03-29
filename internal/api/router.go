@@ -458,11 +458,16 @@ func (s *Server) Router() http.Handler {
 		r.Post("/geofences", s.handleCreateGeofence)
 		r.Delete("/geofences/{id}", s.handleDeleteGeofence)
 
-		// HeMB bond groups
+		// HeMB bond groups + observability
 		r.Get("/bond-groups", s.handleGetBondGroups)
 		r.Post("/bond-groups", s.handleCreateBondGroup)
 		r.Delete("/bond-groups/{id}", s.handleDeleteBondGroup)
 		r.Get("/hemb/stats", s.handleGetHeMBStats)
+		r.Get("/hemb/events", s.handleHeMBSSE)
+		r.Get("/hemb/topology", s.handleGetHeMBTopology)
+		r.Get("/hemb/events/history", s.handleGetHeMBEventHistory)
+		r.Get("/hemb/streams", s.handleGetHeMBStreams)
+		r.Get("/hemb/streams/{id}", s.handleGetHeMBStreamDetail)
 
 		// Dead man's switch
 		r.Get("/deadman", s.handleGetDeadmanConfig)

@@ -118,7 +118,7 @@ func (rb *ReassemblyBuffer) tryDecode(streamID uint8, gen *generationState) ([]b
 	var contributions []BearerContribution
 	for bidx := range gen.bearerSeen {
 		contributions = append(contributions, BearerContribution{
-			BearerIndex: bidx,
+			BearerRef:   BearerRef{BearerIndex: bidx},
 			SymbolCount: 1, // at least 1 symbol from this bearer
 		})
 	}
@@ -161,6 +161,82 @@ func (rb *ReassemblyBuffer) PendingCount() int {
 		}
 	}
 	return count
+}
+
+// StreamInfo describes an active reassembly stream.
+type StreamInfo struct {
+	StreamID    uint8     `json:"stream_id"`
+	CreatedAt   time.Time `json:"created_at"`
+	Generations int       `json:"generations"`
+	Decoded     int       `json:"decoded"`
+	Pending     int       `json:"pending"`
+}
+
+// GenerationInfo describes a generation within a stream.
+type GenerationInfo struct {
+	GenID     uint16  `json:"gen_id"`
+	K         int     `json:"k"`
+	Received  int     `json:"received"`
+	Decoded   bool    `json:"decoded"`
+	Bearers   []uint8 `json:"bearers"`
+	FirstSeen string  `json:"first_seen"`
+	LatencyMs int64   `json:"latency_ms,omitempty"`
+}
+
+// ActiveStreams returns info about all active reassembly streams.
+func (rb *ReassemblyBuffer) ActiveStreams() []StreamInfo {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	out := make([]StreamInfo, 0, len(rb.streams))
+	for _, s := range rb.streams {
+		decoded, pending := 0, 0
+		for _, g := range s.generations {
+			if g.decoded {
+				decoded++
+			} else {
+				pending++
+			}
+		}
+		out = append(out, StreamInfo{
+			StreamID:    s.streamID,
+			CreatedAt:   s.createdAt,
+			Generations: len(s.generations),
+			Decoded:     decoded,
+			Pending:     pending,
+		})
+	}
+	return out
+}
+
+// StreamDetail returns per-generation info for a specific stream.
+func (rb *ReassemblyBuffer) StreamDetail(streamID uint8) ([]GenerationInfo, bool) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	s, ok := rb.streams[streamID]
+	if !ok {
+		return nil, false
+	}
+	now := time.Now()
+	out := make([]GenerationInfo, 0, len(s.generations))
+	for _, g := range s.generations {
+		bearers := make([]uint8, 0, len(g.bearerSeen))
+		for b := range g.bearerSeen {
+			bearers = append(bearers, b)
+		}
+		gi := GenerationInfo{
+			GenID:     g.genID,
+			K:         g.k,
+			Received:  len(g.symbols),
+			Decoded:   g.decoded,
+			Bearers:   bearers,
+			FirstSeen: g.firstSeen.Format(time.RFC3339),
+		}
+		if g.decoded {
+			gi.LatencyMs = now.Sub(g.firstSeen).Milliseconds()
+		}
+		out = append(out, gi)
+	}
+	return out, true
 }
 
 // Reap removes streams older than maxAge.
