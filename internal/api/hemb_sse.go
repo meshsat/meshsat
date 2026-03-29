@@ -194,6 +194,28 @@ func (s *Server) handleGetHeMBStreamDetail(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleGetHeMBGenerationInspect returns RLNC matrix details for debugging.
+func (s *Server) handleGetHeMBGenerationInspect(w http.ResponseWriter, r *http.Request) {
+	sidStr := chi.URLParam(r, "stream_id")
+	gidStr := chi.URLParam(r, "gen_id")
+	sid, err := strconv.Atoi(sidStr)
+	if err != nil || sid < 0 || sid > 255 {
+		writeError(w, http.StatusBadRequest, "invalid stream_id")
+		return
+	}
+	gid, err := strconv.Atoi(gidStr)
+	if err != nil || gid < 0 || gid > 65535 {
+		writeError(w, http.StatusBadRequest, "invalid gen_id")
+		return
+	}
+	inspection, ok := s.processor.HeMBInspectGeneration(uint8(sid), uint16(gid))
+	if !ok {
+		writeError(w, http.StatusNotFound, "generation not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, inspection)
+}
+
 // bridgeID returns the bridge identifier for topology.
 func (s *Server) bridgeID() string {
 	// Try to get from config or hostname.

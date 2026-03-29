@@ -160,6 +160,64 @@ func gaussianEliminate(coeffs *gfMatrix, payloads [][]byte) ([][]byte, error) {
 	return result, nil
 }
 
+// ComputeRank returns the rank of an N×K coefficient matrix over GF(256).
+// The input matrix is not mutated (a copy is used internally).
+func ComputeRank(rows [][]byte, k int) int {
+	n := len(rows)
+	if n == 0 || k == 0 {
+		return 0
+	}
+
+	// Deep copy into a flat matrix.
+	mat := newGFMatrix(n, k)
+	for i, row := range rows {
+		for j := 0; j < k && j < len(row); j++ {
+			mat.set(i, j, row[j])
+		}
+	}
+
+	// Forward elimination — count pivots found.
+	rank := 0
+	for col := 0; col < k; col++ {
+		pivotRow := -1
+		for row := rank; row < n; row++ {
+			if mat.get(row, col) != 0 {
+				pivotRow = row
+				break
+			}
+		}
+		if pivotRow < 0 {
+			continue // no pivot in this column
+		}
+
+		// Swap pivot into position.
+		if pivotRow != rank {
+			for c := 0; c < k; c++ {
+				mat.Data[rank*k+c], mat.Data[pivotRow*k+c] = mat.Data[pivotRow*k+c], mat.Data[rank*k+c]
+			}
+		}
+
+		// Scale pivot row.
+		inv := gfInv(mat.get(rank, col))
+		for c := 0; c < k; c++ {
+			mat.set(rank, c, gfMul(mat.get(rank, c), inv))
+		}
+
+		// Eliminate below.
+		for row := rank + 1; row < n; row++ {
+			factor := mat.get(row, col)
+			if factor == 0 {
+				continue
+			}
+			for c := 0; c < k; c++ {
+				mat.set(row, c, gfAdd(mat.get(row, c), gfMul(factor, mat.get(rank, c))))
+			}
+		}
+		rank++
+	}
+	return rank
+}
+
 // randBytes fills buf with cryptographically random bytes.
 func randBytes(buf []byte) {
 	if _, err := rand.Read(buf); err != nil {

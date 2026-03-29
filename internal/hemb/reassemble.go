@@ -239,6 +239,106 @@ func (rb *ReassemblyBuffer) StreamDetail(streamID uint8) ([]GenerationInfo, bool
 	return out, true
 }
 
+// GenerationInspection provides detailed RLNC matrix data for debugging.
+type GenerationInspection struct {
+	StreamID          uint8          `json:"stream_id"`
+	GenID             uint16         `json:"gen_id"`
+	K                 int            `json:"k"`
+	N                 int            `json:"n"`
+	Rank              int            `json:"rank"`
+	Decoded           bool           `json:"decoded"`
+	DecodeStatus      string         `json:"decode_status"` // "decoded", "pending", "rank_deficient"
+	CoefficientMatrix [][]byte       `json:"coefficient_matrix"`
+	Symbols           []SymbolDetail `json:"symbols"`
+}
+
+// SymbolDetail describes a single received symbol for inspection.
+type SymbolDetail struct {
+	Index         int    `json:"index"`
+	BearerIndex   uint8  `json:"bearer_idx"`
+	ReceivedAt    string `json:"received_at"`
+	IsIndependent bool   `json:"is_independent"`
+}
+
+// InspectGeneration returns detailed matrix and symbol data for debugging.
+func (rb *ReassemblyBuffer) InspectGeneration(streamID uint8, genID uint16) (*GenerationInspection, bool) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+
+	s, ok := rb.streams[streamID]
+	if !ok {
+		return nil, false
+	}
+	g, ok := s.generations[genID]
+	if !ok {
+		return nil, false
+	}
+
+	n := len(g.symbols)
+	k := g.k
+
+	// Build coefficient matrix from stored symbols.
+	matrix := make([][]byte, n)
+	for i, sym := range g.symbols {
+		row := make([]byte, k)
+		copy(row, sym.Coefficients)
+		matrix[i] = row
+	}
+
+	// Compute rank.
+	rank := ComputeRank(matrix, k)
+
+	// Determine which symbols are linearly independent by incremental rank check.
+	independent := make([]bool, n)
+	for i := 1; i <= n; i++ {
+		subRank := ComputeRank(matrix[:i], k)
+		prevRank := 0
+		if i > 1 {
+			prevRank = ComputeRank(matrix[:i-1], k)
+		}
+		independent[i-1] = subRank > prevRank
+	}
+	if n > 0 {
+		independent[0] = true // first symbol is always independent if non-zero
+	}
+
+	// Build symbol details.
+	symbols := make([]SymbolDetail, n)
+	for i, sym := range g.symbols {
+		bearerIdx := uint8(0)
+		for b := range g.bearerSeen {
+			if i == 0 || b == bearerIdx {
+				bearerIdx = b
+				break
+			}
+		}
+		symbols[i] = SymbolDetail{
+			Index:         sym.SymbolIndex,
+			BearerIndex:   bearerIdx,
+			IsIndependent: independent[i],
+		}
+	}
+
+	status := "pending"
+	if g.decoded {
+		status = "decoded"
+	} else if rank < k && n >= k {
+		status = "rank_deficient"
+	}
+
+	return &GenerationInspection{
+		StreamID:          streamID,
+		GenID:             genID,
+		K:                 k,
+		N:                 n,
+		Rank:              rank,
+		Decoded:           g.decoded,
+		DecodeStatus:      status,
+		CoefficientMatrix: matrix,
+		Symbols:           symbols,
+	}, true
+}
+
 // Reap removes streams older than maxAge.
 func (rb *ReassemblyBuffer) Reap() int {
 	rb.mu.Lock()

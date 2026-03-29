@@ -4,10 +4,12 @@ import { useHeMBStore } from '../composables/useHeMBStore'
 import { useHeMBSelection } from '../composables/useHeMBSelection'
 import HeMBBearerGraph from '../components/HeMBBearerGraph.vue'
 import HeMBFlowTable from '../components/HeMBFlowTable.vue'
+import HeMBMatrixInspector from '../components/HeMBMatrixInspector.vue'
 
 const store = useHeMBStore()
 const selection = useHeMBSelection()
 const graphHeight = ref(40) // percentage
+const showDebug = ref(false)
 
 let pollInterval = null
 
@@ -56,6 +58,11 @@ onUnmounted(() => {
         <div class="w-2 h-2 rounded-full" :class="store.connected ? 'bg-emerald-400' : 'bg-red-400'"></div>
         <span class="text-gray-500">{{ store.connected ? 'SSE Connected' : 'Disconnected' }}</span>
         <span class="text-gray-600">{{ store.events.length }} events</span>
+        <button @click="showDebug = !showDebug"
+          class="px-2 py-0.5 rounded text-[10px]"
+          :class="showDebug ? 'bg-purple-900/30 text-purple-400' : 'bg-gray-800 text-gray-500 hover:text-gray-300'">
+          Debug
+        </button>
       </div>
     </div>
 
@@ -68,5 +75,8 @@ onUnmounted(() => {
     <div class="flex-1 min-h-0 overflow-hidden">
       <HeMBFlowTable />
     </div>
+
+    <!-- Debug panel -->
+    <HeMBMatrixInspector v-if="showDebug" />
   </div>
 </template>

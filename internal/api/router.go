@@ -468,6 +468,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/hemb/events/history", s.handleGetHeMBEventHistory)
 		r.Get("/hemb/streams", s.handleGetHeMBStreams)
 		r.Get("/hemb/streams/{id}", s.handleGetHeMBStreamDetail)
+		r.Get("/hemb/generations/{stream_id}/{gen_id}", s.handleGetHeMBGenerationInspect)
 
 		// Dead man's switch
 		r.Get("/deadman", s.handleGetDeadmanConfig)

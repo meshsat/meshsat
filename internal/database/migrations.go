@@ -897,6 +897,22 @@ var migrations = []string{
 
 	ALTER TABLE message_deliveries ADD COLUMN hemb_stream_id TEXT DEFAULT '';
 	ALTER TABLE message_deliveries ADD COLUMN hemb_gen_id TEXT DEFAULT '';`,
+
+	// v41: HeMB event history for persistent observability [MESHSAT-440].
+	// Stores HeMB events (symbol sent/received, generation decoded/failed, etc.)
+	// for retrospective debugging and matrix inspection.
+	// Retention: configurable via MESHSAT_HEMB_EVENT_RETENTION_DAYS (default 7).
+	`CREATE TABLE IF NOT EXISTS hemb_events (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts            TEXT NOT NULL DEFAULT (datetime('now')),
+		event_type    TEXT NOT NULL,
+		stream_id     INTEGER,
+		generation_id INTEGER,
+		bearer_idx    INTEGER,
+		payload       TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_hemb_events_ts ON hemb_events(ts);
+	CREATE INDEX IF NOT EXISTS idx_hemb_events_stream_gen ON hemb_events(stream_id, generation_id);`,
 }
 
 func (db *DB) migrate() error {

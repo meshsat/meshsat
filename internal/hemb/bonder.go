@@ -388,3 +388,11 @@ func (b *bonder) StreamDetail(streamID uint8) ([]GenerationInfo, bool) {
 	}
 	return b.reassembly.StreamDetail(streamID)
 }
+
+// InspectGeneration returns detailed RLNC matrix data for a specific generation.
+func (b *bonder) InspectGeneration(streamID uint8, genID uint16) (*GenerationInspection, bool) {
+	if b.reassembly == nil {
+		return nil, false
+	}
+	return b.reassembly.InspectGeneration(streamID, genID)
+}

@@ -164,6 +164,14 @@ func (p *Processor) HeMBStreamDetail(streamID uint8) ([]hemb.GenerationInfo, boo
 	return nil, false
 }
 
+// HeMBInspectGeneration returns detailed RLNC matrix data for debugging.
+func (p *Processor) HeMBInspectGeneration(streamID uint8, genID uint16) (*hemb.GenerationInspection, bool) {
+	if p.hembBonder != nil {
+		return p.hembBonder.InspectGeneration(streamID, genID)
+	}
+	return nil, false
+}
+
 // bearerIndexForIface maps a Reticulum interface name to its bearer index
 // within the active bond groups. Falls back to a deterministic hash if the
 // interface is not found in any bond group.

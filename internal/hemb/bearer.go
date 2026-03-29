@@ -42,6 +42,7 @@ type Bonder interface {
 	StartStatsEmitter(ctx context.Context, interval time.Duration, ch chan<- Event)
 	ActiveStreams() []StreamInfo
 	StreamDetail(streamID uint8) ([]GenerationInfo, bool)
+	InspectGeneration(streamID uint8, genID uint16) (*GenerationInspection, bool)
 }
 
 // BondConfig controls per-send bonding parameters.
