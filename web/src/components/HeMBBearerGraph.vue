@@ -30,7 +30,7 @@ function bearerColor(type) {
   return bearerColors[type] || '#64748B'
 }
 
-const groups = computed(() => store.topology?.groups || [])
+const groups = computed(() => store.topology.value?.groups || [])
 
 const hasData = computed(() => groups.value.length > 0)
 
