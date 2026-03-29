@@ -235,31 +235,37 @@ const nOp = (id) => store.selectedNodeId.value ? (isSel(id) ? 1 : 0.15) : 1
         :stroke="e.color" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.35"
         marker-end="url(#arr)"/>
 
-      <!-- ═══ INTERFACE CARDS (Hubble-style: light bg, accent bar, port info) ═══ -->
+      <!-- ═══ INTERFACE CARDS (Hubble-style: lighter bg, accent bar, port rows) ═══ -->
       <g v-for="n in ifacePositions" :key="n.id"
         :transform="`translate(${n.x},${n.y})`"
         :opacity="nOp(n.id)" filter="url(#glow)"
         class="cursor-pointer" @click="store.selectNode(n.id)">
-        <!-- Card body — light semi-transparent background -->
+        <!-- Card body — lighter fill for contrast -->
         <rect :x="-CW/2" :y="-CH/2" :width="CW" :height="CH" :rx="CR"
-          fill="rgba(30,41,59,0.92)" stroke="rgba(148,163,184,0.25)" stroke-width="1"/>
-        <!-- Color accent bar (left edge, Hubble-style) -->
-        <rect :x="-CW/2" :y="-CH/2" width="4" :height="CH" :rx="CR"
+          fill="rgba(51,65,85,0.85)" stroke="rgba(148,163,184,0.3)" stroke-width="1"/>
+        <!-- Color accent bar (left, Hubble-style) -->
+        <rect :x="-CW/2" :y="-CH/2" width="4" :height="CH"
           :fill="typeColor(n.channelType)"/>
         <!-- State dot -->
         <circle :cx="CW/2 - 14" :cy="-CH/2 + 14" r="5" :fill="stateBg(n.state)" opacity="0.3"/>
         <circle :cx="CW/2 - 14" :cy="-CH/2 + 14" r="3.5" :fill="stateColor(n.state)"/>
-        <!-- Interface name (large, like Hubble service name) -->
-        <text :x="-CW/2 + 16" dy="-14" fill="#e2e8f0" font-size="13" font-weight="600">{{ n.id }}</text>
+        <!-- Interface name -->
+        <text :x="-CW/2 + 16" dy="-18" fill="#f1f5f9" font-size="13" font-weight="600">{{ n.id }}</text>
         <!-- Channel type -->
-        <text :x="-CW/2 + 16" dy="4" fill="#94a3b8" font-size="10">{{ n.channelType }}</text>
-        <!-- MTU + protocol info (like Hubble port rows) -->
-        <text :x="-CW/2 + 16" dy="20" fill="#64748b" font-size="9">
-          MTU {{ mtuLabel(n.channelType) }}{{ n.messagesIn > 0 || n.messagesOut > 0 ? ` · ↓${n.messagesIn} ↑${n.messagesOut}` : '' }}
+        <text :x="-CW/2 + 16" dy="-2" fill="#94a3b8" font-size="10">{{ n.channelType }}</text>
+        <!-- Port/protocol row (Hubble-style) -->
+        <line :x1="-CW/2 + 12" y1="8" :x2="CW/2 - 12" y2="8" stroke="rgba(148,163,184,0.15)" stroke-width="0.5"/>
+        <text :x="-CW/2 + 16" dy="22" fill="#cbd5e1" font-size="9">
+          → {{ mtuLabel(n.channelType) }}
         </text>
-        <!-- Accent bottom line -->
-        <line :x1="-CW/2 + 12" :y1="CH/2 - 1" :x2="CW/2 - 12" :y2="CH/2 - 1"
-          :stroke="typeColor(n.channelType)" stroke-width="1" opacity="0.15"/>
+        <text :x="CW/2 - 16" dy="22" fill="#64748b" font-size="9" text-anchor="end">
+          {{ n.channelType === 'mesh' ? 'LoRa' : n.channelType === 'iridium' ? 'SBD' : n.channelType === 'iridium_imt' ? 'IMT' : n.channelType === 'cellular' ? 'SMS' : 'TCP' }}
+        </text>
+        <!-- Traffic counters -->
+        <text v-if="n.messagesIn > 0 || n.messagesOut > 0"
+          :x="-CW/2 + 16" dy="34" fill="#475569" font-size="8">
+          ↓{{ n.messagesIn }} ↑{{ n.messagesOut }}
+        </text>
       </g>
 
       <!-- ═══ MESH NODES ═══ -->

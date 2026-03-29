@@ -28,34 +28,65 @@ onUnmounted(() => {
   if (pollSlow) clearInterval(pollSlow)
 })
 
-// Event type icons for flow table
 const eventStyles = {
-  forward: { icon: '→', color: 'text-emerald-400 bg-emerald-400/10', label: 'FWD' },
-  forward_error: { icon: '✕', color: 'text-red-400 bg-red-400/10', label: 'ERR' },
-  signal: { icon: '◆', color: 'text-purple-400 bg-purple-400/10', label: 'SIG' },
-  message: { icon: '◈', color: 'text-cyan-400 bg-cyan-400/10', label: 'MSG' },
-  inbound: { icon: '↓', color: 'text-teal-400 bg-teal-400/10', label: 'IN' },
-  relay: { icon: '⇌', color: 'text-amber-400 bg-amber-400/10', label: 'RLY' },
-  connected: { icon: '●', color: 'text-emerald-400 bg-emerald-400/10', label: 'ON' },
-  disconnected: { icon: '○', color: 'text-gray-400 bg-gray-400/10', label: 'OFF' },
-  scheduler: { icon: '◷', color: 'text-blue-400 bg-blue-400/10', label: 'SCH' },
-  dlq: { icon: '◫', color: 'text-orange-400 bg-orange-400/10', label: 'DLQ' },
-  HEMB_SYMBOL_SENT: { icon: '↑', color: 'text-cyan-400 bg-cyan-400/10', label: 'SENT' },
-  HEMB_SYMBOL_RECEIVED: { icon: '↓', color: 'text-teal-400 bg-teal-400/10', label: 'RECV' },
-  HEMB_GENERATION_DECODED: { icon: '✓', color: 'text-emerald-400 bg-emerald-400/10', label: 'DEC' },
-  HEMB_GENERATION_FAILED: { icon: '✕', color: 'text-red-400 bg-red-400/10', label: 'FAIL' },
+  forward: { icon: '→', color: 'text-emerald-400', label: 'forwarded' },
+  forward_error: { icon: '✕', color: 'text-red-400', label: 'dropped' },
+  signal: { icon: '◆', color: 'text-purple-400', label: 'signal' },
+  message: { icon: '◈', color: 'text-cyan-400', label: 'message' },
+  inbound: { icon: '↓', color: 'text-teal-400', label: 'inbound' },
+  relay: { icon: '⇌', color: 'text-amber-400', label: 'relay' },
+  connected: { icon: '●', color: 'text-emerald-400', label: 'connected' },
+  disconnected: { icon: '○', color: 'text-gray-500', label: 'disconnected' },
+  HEMB_SYMBOL_SENT: { icon: '↑', color: 'text-cyan-400', label: 'forwarded' },
+  HEMB_SYMBOL_RECEIVED: { icon: '↓', color: 'text-teal-400', label: 'forwarded' },
+  HEMB_GENERATION_DECODED: { icon: '✓', color: 'text-emerald-400', label: 'forwarded' },
+  HEMB_GENERATION_FAILED: { icon: '✕', color: 'text-red-400', label: 'dropped' },
 }
-function evStyle(type) { return eventStyles[type] || { icon: '·', color: 'text-gray-500 bg-gray-500/10', label: type?.substring(0, 6) || '?' } }
+function evStyle(type) { return eventStyles[type] || { icon: '·', color: 'text-gray-500', label: type?.substring(0, 12) || '?' } }
 
-function formatTime(ts) {
+function fmtTime(ts) {
   if (!ts) return ''
-  try { return new Date(ts).toLocaleTimeString('en-GB', { hour12: false, fractionalSecondDigits: 1 }) } catch { return '' }
+  try {
+    const d = new Date(ts)
+    if (isNaN(d.getTime())) return ''
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    const ss = String(d.getSeconds()).padStart(2, '0')
+    return `${hh}:${mm}:${ss}`
+  } catch { return '' }
 }
 
-function eventDetail(e) {
-  const p = e.payload
-  if (!p || typeof p !== 'object') return typeof p === 'string' ? p.substring(0, 60) : ''
-  return p.message || p.msg || p.text || p.error || ''
+function evSource(ev) {
+  const p = ev.payload
+  if (typeof p === 'object' && p) {
+    return p.bearer_type || p.interface_id || p.source_iface || ev.source || '—'
+  }
+  return ev.source || '—'
+}
+
+function evDest(ev) {
+  const p = ev.payload
+  if (typeof p === 'object' && p) {
+    return p.forward_to || p.dest_iface || p.target || '—'
+  }
+  return '—'
+}
+
+function evPort(ev) {
+  const p = ev.payload
+  if (typeof p === 'object' && p) {
+    return p.payload_bytes ? `${p.payload_bytes}B` : p.port || ''
+  }
+  return ''
+}
+
+function evVerdict(ev) {
+  return evStyle(ev.type).label
+}
+
+function evVerdictColor(ev) {
+  const s = evStyle(ev.type)
+  return s.color
 }
 
 const filteredEvents = computed(() => {
@@ -86,16 +117,9 @@ const filteredEvents = computed(() => {
         <span class="text-gray-500 uppercase tracking-wider">Rules</span>
         <span class="font-mono text-gray-200">{{ (store.ruleEdges.value || []).length }}</span>
       </div>
-      <div class="flex items-center gap-1.5">
-        <span class="text-gray-500 uppercase tracking-wider">HeMB</span>
-        <span class="font-mono text-emerald-400">{{ store.hembStats.value?.generations_decoded ?? 0 }}</span>
-        <span class="text-gray-600">/</span>
-        <span class="font-mono text-red-400">{{ store.hembStats.value?.generations_failed ?? 0 }}</span>
-      </div>
       <div class="ml-auto flex items-center gap-2">
         <div class="w-2 h-2 rounded-full" :class="store.connected.value ? 'bg-emerald-400' : 'bg-red-400'"></div>
-        <span class="text-gray-500">{{ store.connected.value ? 'SSE' : 'Offline' }}</span>
-        <span class="text-gray-600">{{ (store.events.value || []).length }} events</span>
+        <span class="text-gray-500 font-mono">{{ (store.events.value || []).length }} flows</span>
         <button v-if="store.selectedNodeId.value" @click="store.selectNode(null)"
           class="px-2 py-0.5 bg-teal-900/30 text-teal-400 text-[10px] rounded">Clear</button>
         <button @click="showDebug = !showDebug"
@@ -104,59 +128,51 @@ const filteredEvents = computed(() => {
       </div>
     </div>
 
-    <!-- Graph: 55% of remaining space via flex -->
+    <!-- Graph -->
     <div class="border-b border-gray-800 overflow-hidden" style="flex: 55 0 0%">
       <ObservabilityGraph />
     </div>
 
-    <!-- Flow table: 45% of remaining space -->
+    <!-- Flow table (Hubble-style) -->
     <div class="flex flex-col overflow-hidden" style="flex: 45 0 0%">
-      <!-- Table header bar -->
-      <div class="flex-none flex items-center gap-3 px-4 py-1.5 border-b border-gray-800 text-xs">
-        <span class="text-gray-500 uppercase tracking-wider text-[10px]">Columns</span>
+      <!-- Column header + filter -->
+      <div class="flex-none flex items-center border-b border-gray-800/60 px-4 py-1.5">
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider mr-3">Columns</span>
         <select v-model="filterType"
-          class="bg-gray-800 text-gray-300 border border-gray-700 rounded px-2 py-0.5 text-xs">
+          class="bg-gray-800/50 text-gray-400 border border-gray-700/50 rounded px-2 py-0.5 text-xs">
           <option value="">All</option>
-          <option value="forward">Forward</option>
-          <option value="signal">Signal</option>
-          <option value="message">Message</option>
-          <option value="inbound">Inbound</option>
           <option value="HEMB_SYMBOL_SENT">HeMB Sent</option>
           <option value="HEMB_GENERATION_DECODED">HeMB Decoded</option>
+          <option value="forward">Forward</option>
+          <option value="signal">Signal</option>
+          <option value="inbound">Inbound</option>
         </select>
-        <span class="text-gray-600 ml-auto">{{ filteredEvents.length }} flows</span>
+        <span class="ml-auto text-gray-600 text-xs font-mono">{{ filteredEvents.length }} flows</span>
       </div>
 
-      <!-- Column headers -->
-      <div class="flex-none grid grid-cols-[80px_70px_1fr_1fr_80px_1fr] gap-0 px-4 py-1 text-[10px] text-gray-500 uppercase tracking-wider border-b border-gray-800/50">
-        <span>Time</span>
-        <span>Event</span>
-        <span>Source</span>
-        <span>Destination</span>
+      <!-- Table header -->
+      <div class="flex-none grid grid-cols-[160px_160px_120px_60px_100px_1fr] px-4 py-1.5 text-[11px] text-gray-500 border-b border-gray-800/40">
+        <span>Source Identity</span>
+        <span>Destination Identity</span>
+        <span>Destination Port</span>
+        <span>L7 info</span>
         <span>Verdict</span>
-        <span>Detail</span>
+        <span>Timestamp</span>
       </div>
 
-      <!-- Flow rows (scrollable) -->
+      <!-- Rows (scrollable) -->
       <div class="flex-1 overflow-y-auto">
-        <div v-for="(ev, i) in filteredEvents.slice(0, 200)" :key="ev.ts + '-' + i"
-          class="grid grid-cols-[80px_70px_1fr_1fr_80px_1fr] gap-0 px-4 py-1 text-xs border-b border-gray-800/30 hover:bg-white/[0.02]">
-          <span class="font-mono text-gray-500 truncate">{{ formatTime(ev.ts) }}</span>
-          <span>
-            <span class="inline-flex items-center gap-0.5 px-1 py-px rounded text-[10px] font-mono"
-              :class="evStyle(ev.type).color">
-              {{ evStyle(ev.type).icon }} {{ evStyle(ev.type).label }}
-            </span>
-          </span>
-          <span class="font-mono text-gray-400 truncate">{{ ev.source || '—' }}</span>
-          <span class="font-mono text-gray-400 truncate">{{ ev.payload?.forward_to || ev.payload?.interface_id || '—' }}</span>
-          <span class="font-mono" :class="ev.type?.includes('error') || ev.type?.includes('FAIL') ? 'text-red-400' : 'text-emerald-400'">
-            {{ ev.type?.includes('error') || ev.type?.includes('FAIL') ? 'dropped' : 'forwarded' }}
-          </span>
-          <span class="text-gray-500 truncate">{{ eventDetail(ev) }}</span>
+        <div v-for="(ev, i) in filteredEvents.slice(0, 200)" :key="i"
+          class="grid grid-cols-[160px_160px_120px_60px_100px_1fr] px-4 py-1 text-xs border-b border-gray-800/20 hover:bg-white/[0.02] cursor-default">
+          <span class="text-gray-300 truncate">{{ evSource(ev) }} <span class="text-gray-600">{{ evSource(ev) }}</span></span>
+          <span class="text-gray-300 truncate">{{ evDest(ev) }} <span class="text-gray-600">{{ evDest(ev) }}</span></span>
+          <span class="text-gray-400 font-mono text-right pr-4">{{ evPort(ev) }}</span>
+          <span class="text-gray-600">—</span>
+          <span :class="evVerdictColor(ev)">{{ evVerdict(ev) }}</span>
+          <span class="text-gray-500 font-mono">{{ fmtTime(ev.ts) }}</span>
         </div>
-        <div v-if="filteredEvents.length === 0" class="px-4 py-6 text-center text-gray-600 text-sm">
-          Waiting for events...
+        <div v-if="filteredEvents.length === 0" class="px-4 py-8 text-center text-gray-600 text-sm">
+          Waiting for flows...
         </div>
       </div>
     </div>
