@@ -576,15 +576,38 @@ func main() {
 		}
 	}
 
-	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh
+	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh.
+	// When connecting to Hub's NATS broker (wss://), reuse mTLS certs from hub_connection.
 	if cfg.MQTTReticulumBroker != "" {
-		mqttIface := routing.NewMQTTInterface(routing.MQTTInterfaceConfig{
+		mqttRnsCfg := routing.MQTTInterfaceConfig{
 			Name:      "mqtt_rns_0",
 			BrokerURL: cfg.MQTTReticulumBroker,
 			ClientID:  "meshsat-rns-" + cfg.BridgeID,
 			Topic:     cfg.MQTTReticulumTopic,
 			QoS:       1,
-		}, func(packet []byte) {
+		}
+		// Load mTLS config from hub_connection DB config (same certs as HubReporter).
+		if raw, dbErr := db.GetSystemConfig("hub_connection"); dbErr == nil && raw != "" {
+			var hc struct {
+				TLSCertPEM  string `json:"tls_cert_pem"`
+				TLSKeyPEM   string `json:"tls_key_pem"`
+				TLSCAPEM    string `json:"tls_ca_pem"`
+				TLSInsecure bool   `json:"tls_insecure"`
+			}
+			if json.Unmarshal([]byte(raw), &hc) == nil {
+				if hc.TLSCertPEM != "" {
+					mqttRnsCfg.TLSCertPEM = []byte(hc.TLSCertPEM)
+				}
+				if hc.TLSKeyPEM != "" {
+					mqttRnsCfg.TLSKeyPEM = []byte(hc.TLSKeyPEM)
+				}
+				if hc.TLSCAPEM != "" {
+					mqttRnsCfg.TLSCAPEM = []byte(hc.TLSCAPEM)
+				}
+				mqttRnsCfg.TLSInsecure = hc.TLSInsecure
+			}
+		}
+		mqttIface := routing.NewMQTTInterface(mqttRnsCfg, func(packet []byte) {
 			log.Debug().Int("size", len(packet)).Msg("mqtt_rns_0: received reticulum packet")
 			proc.InjectReticulumPacket(packet, "mqtt_rns_0")
 		})

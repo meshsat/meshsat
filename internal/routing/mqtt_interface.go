@@ -2,7 +2,10 @@ package routing
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +18,7 @@ import (
 // MQTTInterfaceConfig configures an MQTT Reticulum interface.
 type MQTTInterfaceConfig struct {
 	Name      string // e.g. "mqtt_0"
-	BrokerURL string // e.g. "tcp://broker:1883"
+	BrokerURL string // e.g. "tcp://broker:1883" or "wss://mqtt-hub.meshsat.net/mqtt"
 	ClientID  string // MQTT client ID (must be unique)
 	// Topic is the shared MQTT topic for Reticulum packets.
 	// Both publish and subscribe use the same topic (broadcast pattern).
@@ -24,6 +27,13 @@ type MQTTInterfaceConfig struct {
 	Username string
 	Password string
 	QoS      byte // 0, 1, or 2
+
+	// TLS/mTLS fields — inline PEM from Hub connection config.
+	// Required when connecting to Hub's NATS broker via wss:// or ssl://.
+	TLSCertPEM  []byte // client certificate PEM (mTLS)
+	TLSKeyPEM   []byte // client private key PEM (mTLS)
+	TLSCAPEM    []byte // CA certificate PEM (server verification)
+	TLSInsecure bool   // skip server cert verification (dev only)
 }
 
 // MQTTInterface is a bidirectional Reticulum interface over MQTT.
@@ -55,6 +65,46 @@ func NewMQTTInterface(config MQTTInterfaceConfig, callback func(packet []byte)) 
 	}
 }
 
+// buildTLSConfig creates a *tls.Config from inline PEM fields.
+// Returns nil if no TLS is needed.
+func (m *MQTTInterface) buildTLSConfig() *tls.Config {
+	scheme := strings.SplitN(m.config.BrokerURL, "://", 2)[0]
+	needsTLS := scheme == "ssl" || scheme == "tls" || scheme == "wss"
+	hasCert := len(m.config.TLSCertPEM) > 0 && len(m.config.TLSKeyPEM) > 0
+	hasCA := len(m.config.TLSCAPEM) > 0
+
+	if !needsTLS && !hasCert && !hasCA && !m.config.TLSInsecure {
+		return nil
+	}
+
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if hasCert {
+		cert, err := tls.X509KeyPair(m.config.TLSCertPEM, m.config.TLSKeyPEM)
+		if err != nil {
+			log.Error().Err(err).Str("iface", m.config.Name).Msg("mqtt rns: failed to parse mTLS client certificate")
+		} else {
+			cfg.Certificates = []tls.Certificate{cert}
+			log.Info().Str("iface", m.config.Name).Msg("mqtt rns: mTLS client certificate loaded")
+		}
+	}
+
+	if hasCA {
+		pool := x509.NewCertPool()
+		if pool.AppendCertsFromPEM(m.config.TLSCAPEM) {
+			cfg.RootCAs = pool
+		} else {
+			log.Warn().Str("iface", m.config.Name).Msg("mqtt rns: CA PEM contains no valid certificates")
+		}
+	}
+
+	if m.config.TLSInsecure {
+		cfg.InsecureSkipVerify = true
+	}
+
+	return cfg
+}
+
 // Start connects to the MQTT broker and subscribes to the receive topic.
 func (m *MQTTInterface) Start(ctx context.Context) error {
 	opts := mqtt.NewClientOptions().
@@ -69,6 +119,10 @@ func (m *MQTTInterface) Start(ctx context.Context) error {
 	if m.config.Username != "" {
 		opts.SetUsername(m.config.Username)
 		opts.SetPassword(m.config.Password)
+	}
+
+	if tlsCfg := m.buildTLSConfig(); tlsCfg != nil {
+		opts.SetTLSConfig(tlsCfg)
 	}
 
 	opts.SetOnConnectHandler(func(_ mqtt.Client) {
