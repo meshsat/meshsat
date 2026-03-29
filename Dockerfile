@@ -13,7 +13,7 @@ ARG TARGETARCH
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends gcc libc6-dev && \
     if [ "$TARGETARCH" = "arm64" ]; then \
-      apt-get install -y -qq --no-install-recommends gcc-aarch64-linux-gnu; \
+      apt-get install -y -qq --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
     fi && \
     rm -rf /var/lib/apt/lists/*
 COPY cmd/jspr-helper/main.c /tmp/main.c
