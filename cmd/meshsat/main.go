@@ -23,6 +23,7 @@ import (
 	"meshsat/internal/dedup"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
@@ -1219,6 +1220,60 @@ func main() {
 			log.Error().Err(err).Msg("hub reporter start failed")
 		} else {
 			log.Info().Str("hub", hubURL).Str("bridge_id", hubBridgeID).Msg("hub reporter started")
+		}
+	}
+
+	// HeMB TUN adapter — creates a virtual network interface for IP-over-HeMB bonding.
+	// Enabled by MESHSAT_HEMB_TUN env var (e.g., MESHSAT_HEMB_TUN=hemb0).
+	// IP addressing must be configured externally (ip addr add ... dev hemb0).
+	if tunName := os.Getenv("MESHSAT_HEMB_TUN"); tunName != "" {
+		// Build bearer profiles from bond group config.
+		groups, gerr := db.GetAllBondGroups()
+		if gerr != nil || len(groups) == 0 {
+			log.Warn().Str("tun", tunName).Msg("hemb: TUN requested but no bond groups configured — skipping")
+		} else {
+			// Use first bond group for TUN bearer set.
+			members, merr := db.GetBondMembers(groups[0].ID)
+			if merr != nil || len(members) == 0 {
+				log.Warn().Str("group", groups[0].ID).Msg("hemb: bond group has no members — TUN skipped")
+			} else {
+				var bearers []hemb.BearerProfile
+				for i, m := range members {
+					ifaceID := m.InterfaceID
+					bearers = append(bearers, hemb.BearerProfile{
+						Index:       uint8(i),
+						InterfaceID: ifaceID,
+						ChannelType: ifaceID,
+						MTU:         237,
+						HeaderMode:  hemb.HeaderModeCompact,
+						SendFn: func(_ context.Context, data []byte) error {
+							// Route HeMB frames through the dispatcher's delivery pipeline.
+							return dispatcher.ForwardHeMBFrame(ifaceID, data)
+						},
+					})
+				}
+
+				tunMTU := hemb.ComputeTUNMTU(bearers)
+				tunDev, terr := hemb.OpenTUN(tunName, tunMTU)
+				if terr != nil {
+					log.Error().Err(terr).Str("tun", tunName).Msg("hemb: TUN device creation failed")
+				} else {
+					tunAdapter, tunBonder := hemb.NewTUNAdapter(tunDev, bearers, hemb.TUNConfig{
+						Name:    tunName,
+						MTU:     tunMTU,
+						EventCh: hemb.GlobalEventBus.Channel(),
+					})
+					proc.SetHeMBBonder(tunBonder)
+					go func() {
+						if err := tunAdapter.Start(ctx); err != nil {
+							log.Error().Err(err).Msg("hemb: TUN adapter stopped")
+						}
+					}()
+					defer tunAdapter.Close()
+					log.Info().Str("iface", tunDev.Name()).Int("mtu", tunMTU).Int("bearers", len(bearers)).
+						Msg("hemb: TUN adapter started")
+				}
+			}
 		}
 	}
 

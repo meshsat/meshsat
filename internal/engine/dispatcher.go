@@ -830,6 +830,18 @@ func (d *Dispatcher) reapAckTimeouts() {
 	}
 }
 
+// ForwardHeMBFrame sends a raw HeMB frame to a specific interface via its gateway.
+// Used by the TUN adapter to route coded symbols to physical transports.
+func (d *Dispatcher) ForwardHeMBFrame(ifaceID string, data []byte) error {
+	gw := d.gwProv.GatewayByInterfaceID(ifaceID)
+	if gw == nil {
+		return fmt.Errorf("no gateway for interface %q", ifaceID)
+	}
+	return gw.Forward(context.Background(), &transport.MeshMessage{
+		RawPayload: data,
+	})
+}
+
 // DeliveryWorker polls the delivery queue for a single channel and attempts delivery.
 type DeliveryWorker struct {
 	channelID       string

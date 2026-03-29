@@ -25,6 +25,9 @@ const (
 	EventStreamOpened      EventType = "HEMB_STREAM_OPENED"
 	EventStreamClosed      EventType = "HEMB_STREAM_CLOSED"
 	EventBondStats         EventType = "HEMB_BOND_STATS"
+	EventTUNPacketSent     EventType = "HEMB_TUN_PACKET_SENT"
+	EventTUNPacketRecv     EventType = "HEMB_TUN_PACKET_RECV"
+	EventTUNPacketDropped  EventType = "HEMB_TUN_PACKET_DROPPED"
 )
 
 // Event is a single HeMB observability event, ready for SSE dispatch.
@@ -195,4 +198,11 @@ type BearerHealthSnapshot struct {
 	SymbolsSent int64   `json:"symbols_sent"`
 	SymbolsRecv int64   `json:"symbols_recv"`
 	LossRate    float64 `json:"loss_rate"`
+}
+
+// TUNPacketPayload describes a TUN adapter packet event.
+type TUNPacketPayload struct {
+	Size      int    `json:"size"`
+	Direction string `json:"direction"` // "tx" or "rx"
+	Error     string `json:"error,omitempty"`
 }
