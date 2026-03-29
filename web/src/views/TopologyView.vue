@@ -104,13 +104,13 @@ const filteredEvents = computed(() => {
       </div>
     </div>
 
-    <!-- Graph: fixed 55% of remaining space -->
-    <div class="flex-none border-b border-gray-800" style="height: calc(55vh - 40px); min-height: 200px">
+    <!-- Graph: 55% of remaining space via flex -->
+    <div class="border-b border-gray-800 overflow-hidden" style="flex: 55 0 0%">
       <ObservabilityGraph />
     </div>
 
-    <!-- Flow table: fills remaining space -->
-    <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+    <!-- Flow table: 45% of remaining space -->
+    <div class="flex flex-col overflow-hidden" style="flex: 45 0 0%">
       <!-- Table header bar -->
       <div class="flex-none flex items-center gap-3 px-4 py-1.5 border-b border-gray-800 text-xs">
         <span class="text-gray-500 uppercase tracking-wider text-[10px]">Columns</span>
