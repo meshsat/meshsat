@@ -14,6 +14,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hemb"
 	"meshsat/internal/reticulum"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
@@ -60,6 +61,9 @@ type Processor struct {
 	timeSyncHandler   func(data []byte, sourceIface string) // handles 0x14/0x15
 	custodyHandler    func(data []byte, sourceIface string) // handles 0x16 (custody offer)
 	custodyACKHandler func(data []byte)                     // handles 0x17 (custody ACK)
+
+	// HeMB (MESHSAT-415)
+	hembBonder hemb.Bonder // nil = HeMB disabled
 }
 
 // NewProcessor creates a new event processor.
@@ -129,6 +133,11 @@ func (p *Processor) SetTimeSyncHandler(fn func(data []byte, sourceIface string))
 func (p *Processor) SetCustodyHandlers(offerFn func(data []byte, sourceIface string), ackFn func(data []byte)) {
 	p.custodyHandler = offerFn
 	p.custodyACKHandler = ackFn
+}
+
+// SetHeMBBonder registers the HeMB bonder for inbound symbol reassembly.
+func (p *Processor) SetHeMBBonder(b hemb.Bonder) {
+	p.hembBonder = b
 }
 
 // RegisterPacketSender registers a function that sends Reticulum packets to a
@@ -486,6 +495,20 @@ func (p *Processor) handleRangeTestEvent(event transport.MeshEvent) {
 // which interface the packet was received on (e.g. "mesh_0", "tcp_0").
 func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byte, sourceIface string) {
 	if len(payload) == 0 {
+		return
+	}
+
+	// HeMB frames: detect before any other protocol parsing.
+	// HeMB extended frames start with magic 0x48 0x4D; compact frames are
+	// detected by CRC-8 validation. Both must be routed to the reassembly buffer.
+	if hemb.IsHeMBFrame(payload) {
+		if p.hembBonder != nil {
+			// Determine bearer index from source interface name.
+			bearerIdx := uint8(0) // default
+			if _, err := p.hembBonder.ReceiveSymbol(bearerIdx, payload); err != nil {
+				log.Debug().Err(err).Str("iface", sourceIface).Msg("hemb: receive symbol failed")
+			}
+		}
 		return
 	}
 

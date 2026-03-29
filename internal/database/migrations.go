@@ -869,6 +869,34 @@ var migrations = []string{
 		UNIQUE(source, peer_hash)
 	);
 	CREATE INDEX IF NOT EXISTS idx_time_sync_source ON time_sync_state(source);`,
+
+	// v40: HeMB bond groups and members — interface bonding for multi-path delivery [MESHSAT-421].
+	// bond_groups: defines a bonding group with cost budget and minimum reliability constraints.
+	// bond_members: maps interfaces into bond groups with priority ordering.
+	// message_deliveries: hemb_stream_id and hemb_gen_id for HeMB stream tracking.
+	`CREATE TABLE IF NOT EXISTS bond_groups (
+		id              TEXT PRIMARY KEY,
+		label           TEXT NOT NULL DEFAULT '',
+		cost_budget     REAL NOT NULL DEFAULT 0,
+		min_reliability REAL NOT NULL DEFAULT 0,
+		created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS bond_members (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		group_id     TEXT NOT NULL,
+		interface_id TEXT NOT NULL,
+		priority     INTEGER NOT NULL DEFAULT 0,
+		created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (group_id) REFERENCES bond_groups(id) ON DELETE CASCADE,
+		FOREIGN KEY (interface_id) REFERENCES interfaces(id) ON DELETE CASCADE,
+		UNIQUE(group_id, interface_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_bond_members_group ON bond_members(group_id, priority);
+
+	ALTER TABLE message_deliveries ADD COLUMN hemb_stream_id TEXT DEFAULT '';
+	ALTER TABLE message_deliveries ADD COLUMN hemb_gen_id TEXT DEFAULT '';`,
 }
 
 func (db *DB) migrate() error {

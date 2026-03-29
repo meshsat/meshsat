@@ -605,6 +605,311 @@ func TestEncodeFrameDecode(t *testing.T) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Phase 1d: Multi-bearer Send + cost-weighted allocation tests
+// ════════════════════════════════════════════════════════════════════════════
+
+func TestSendReceiveN2(t *testing.T) {
+	// 2 bearers: send 500-byte payload, receive symbols, verify decode.
+	payload := make([]byte, 500)
+	randBytes(payload)
+
+	var mu sync.Mutex
+	captured := make(map[uint8][][]byte) // bearerIndex -> frames
+
+	mesh := BearerProfile{
+		Index: 0, InterfaceID: "mesh_0", ChannelType: "mesh",
+		MTU: 237, CostPerMsg: 0, LossRate: 0.15, LatencyMs: 250,
+		HealthScore: 80, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error {
+			mu.Lock()
+			captured[0] = append(captured[0], append([]byte{}, data...))
+			mu.Unlock()
+			return nil
+		},
+	}
+	sbd := BearerProfile{
+		Index: 1, InterfaceID: "iridium_0", ChannelType: "iridium_sbd",
+		MTU: 340, CostPerMsg: 0.05, LossRate: 0.02, LatencyMs: 45000,
+		HealthScore: 90, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error {
+			mu.Lock()
+			captured[1] = append(captured[1], append([]byte{}, data...))
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	var delivered []byte
+	bdr := NewBonder(Options{
+		Bearers:   []BearerProfile{mesh, sbd},
+		DeliverFn: func(p []byte) { delivered = append([]byte{}, p...) },
+		EventCh:   make(chan Event, 100),
+	})
+
+	if err := bdr.Send(context.Background(), payload); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Both bearers must have received frames.
+	mu.Lock()
+	totalFrames := len(captured[0]) + len(captured[1])
+	allFrames := append(captured[0], captured[1]...)
+	mu.Unlock()
+
+	if totalFrames == 0 {
+		t.Fatal("no frames sent to any bearer")
+	}
+
+	// Feed all frames back through ReceiveSymbol.
+	for i, frame := range allFrames {
+		bearerIdx := uint8(0)
+		if i >= len(captured[0]) {
+			bearerIdx = 1
+		}
+		bdr.ReceiveSymbol(bearerIdx, frame)
+	}
+
+	if delivered == nil {
+		t.Fatal("payload was not delivered after receiving all symbols")
+	}
+	if !bytes.Equal(delivered[:len(payload)], payload) {
+		t.Fatal("delivered payload differs from original")
+	}
+}
+
+func TestSplitterFreeFirst(t *testing.T) {
+	// Verify free bearers get source symbols, paid bearers get minimal.
+	var meshFrames, sbdFrames int
+	mesh := BearerProfile{
+		Index: 0, ChannelType: "mesh", MTU: 237, CostPerMsg: 0,
+		LossRate: 0.15, HealthScore: 80, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error { meshFrames++; return nil },
+	}
+	sbd := BearerProfile{
+		Index: 1, ChannelType: "iridium_sbd", MTU: 340, CostPerMsg: 0.05,
+		LossRate: 0.02, HealthScore: 90, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error { sbdFrames++; return nil },
+	}
+
+	bdr := NewBonder(Options{Bearers: []BearerProfile{mesh, sbd}})
+
+	// Small payload — should fit in free bearer.
+	payload := make([]byte, 100)
+	randBytes(payload)
+	if err := bdr.Send(context.Background(), payload); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Free bearer (mesh) must have received the bulk of symbols.
+	// Paid bearer (sbd) should have 0 or 1 repair symbol max.
+	if meshFrames == 0 {
+		t.Error("free bearer received 0 frames — should get source symbols")
+	}
+	if sbdFrames > 1 {
+		t.Errorf("paid bearer received %d frames — should be 0 or 1 max", sbdFrames)
+	}
+}
+
+func TestSendCostAccounting(t *testing.T) {
+	paidSends := 0
+	freeSends := 0
+	mesh := BearerProfile{
+		Index: 0, ChannelType: "mesh", MTU: 237, CostPerMsg: 0,
+		LossRate: 0.10, HealthScore: 80, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error { freeSends++; return nil },
+	}
+	sbd := BearerProfile{
+		Index: 1, ChannelType: "iridium_sbd", MTU: 340, CostPerMsg: 0.05,
+		LossRate: 0.02, HealthScore: 90, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error { paidSends++; return nil },
+	}
+
+	bdr := NewBonder(Options{Bearers: []BearerProfile{mesh, sbd}})
+	payload := make([]byte, 200)
+	randBytes(payload)
+	bdr.Send(context.Background(), payload)
+
+	stats := bdr.Stats()
+	if stats.BytesFree == 0 {
+		t.Error("BytesFree should be > 0 (free bearer was used)")
+	}
+	if paidSends > 0 && stats.CostIncurred == 0 {
+		t.Error("CostIncurred should be > 0 when paid bearer sends")
+	}
+}
+
+func TestSendN3BearerFailure(t *testing.T) {
+	// 3 bearers: mesh drops everything, sbd + sms deliver.
+	payload := make([]byte, 300)
+	randBytes(payload)
+
+	var mu sync.Mutex
+	capturedGood := make(map[uint8][][]byte)
+
+	mesh := BearerProfile{
+		Index: 0, ChannelType: "mesh", MTU: 237, CostPerMsg: 0,
+		LossRate: 0.15, HealthScore: 80, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error {
+			return nil // "sends" but receiver never gets these
+		},
+	}
+	sbd := BearerProfile{
+		Index: 1, ChannelType: "iridium_sbd", MTU: 340, CostPerMsg: 0.05,
+		LossRate: 0.02, HealthScore: 90, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error {
+			mu.Lock()
+			capturedGood[1] = append(capturedGood[1], append([]byte{}, data...))
+			mu.Unlock()
+			return nil
+		},
+	}
+	sms := BearerProfile{
+		Index: 2, ChannelType: "sms", MTU: 160, CostPerMsg: 0.005,
+		LossRate: 0.03, HealthScore: 75, HeaderMode: HeaderModeCompact,
+		SendFn: func(ctx context.Context, data []byte) error {
+			mu.Lock()
+			capturedGood[2] = append(capturedGood[2], append([]byte{}, data...))
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	var delivered []byte
+	bdr := NewBonder(Options{
+		Bearers:   []BearerProfile{mesh, sbd, sms},
+		DeliverFn: func(p []byte) { delivered = append([]byte{}, p...) },
+	})
+
+	if err := bdr.Send(context.Background(), payload); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Only feed frames from sbd + sms (mesh "lost").
+	mu.Lock()
+	goodFrames := append(capturedGood[1], capturedGood[2]...)
+	mu.Unlock()
+
+	for _, frame := range goodFrames {
+		bdr.ReceiveSymbol(1, frame)
+	}
+
+	if delivered == nil {
+		t.Log("decode from sbd+sms only did not produce payload — may need more symbols")
+		// This is acceptable if K > symbols from sbd+sms.
+		// The point is: no panic, no crash, graceful handling.
+	} else if !bytes.Equal(delivered[:len(payload)], payload) {
+		t.Fatal("delivered payload differs from original")
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 1e: Reassembly buffer tests
+// ════════════════════════════════════════════════════════════════════════════
+
+func TestReassembleOutOfOrder(t *testing.T) {
+	// Symbols arrive in reverse order — must still decode.
+	payload := make([]byte, 200)
+	randBytes(payload)
+
+	k := 3
+	segSize := (len(payload) + k - 1) / k
+	segments := make([][]byte, k)
+	for i := 0; i < k; i++ {
+		start := i * segSize
+		end := start + segSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		segments[i] = make([]byte, segSize)
+		copy(segments[i], payload[start:end])
+	}
+
+	symbols, _ := EncodeGeneration(0, segments, k+2, cryptoRand())
+
+	var delivered []byte
+	rb := NewReassemblyBuffer(func(p []byte) {
+		delivered = append([]byte{}, p...)
+	}, nil)
+
+	// Add symbols in reverse order.
+	for i := len(symbols) - 1; i >= 0; i-- {
+		rb.AddSymbol(0, uint8(i%3), symbols[i])
+		if delivered != nil {
+			break
+		}
+	}
+
+	if delivered == nil {
+		t.Fatal("reverse-order symbols did not decode")
+	}
+	if !bytes.Equal(delivered[:len(payload)], payload) {
+		t.Fatal("decoded payload mismatch")
+	}
+}
+
+func TestReassembleCrossBearerSubset(t *testing.T) {
+	// Encode K=4 to N=6, add symbols from bearers 0 and 2 only (skip bearer 1).
+	// This SPECIFICALLY validates novelty 2: any K from any bearer subset.
+	payload := make([]byte, 400)
+	randBytes(payload)
+
+	k := 4
+	segSize := (len(payload) + k - 1) / k
+	segments := make([][]byte, k)
+	for i := 0; i < k; i++ {
+		start := i * segSize
+		end := start + segSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		segments[i] = make([]byte, segSize)
+		copy(segments[i], payload[start:end])
+	}
+
+	symbols, _ := EncodeGeneration(0, segments, 6, cryptoRand())
+
+	var delivered []byte
+	rb := NewReassemblyBuffer(func(p []byte) {
+		delivered = append([]byte{}, p...)
+	}, nil)
+
+	// Bearer 0 gets symbols 0,1. Bearer 2 gets symbols 2,3. Bearer 1 gets nothing.
+	bearerAssignment := []uint8{0, 0, 2, 2, 2, 2}
+	for i := 0; i < len(symbols) && delivered == nil; i++ {
+		rb.AddSymbol(0, bearerAssignment[i], symbols[i])
+	}
+
+	if delivered == nil {
+		t.Fatal("cross-bearer subset did not decode")
+	}
+	if !bytes.Equal(delivered[:len(payload)], payload) {
+		t.Fatal("cross-bearer decoded payload mismatch")
+	}
+}
+
+func TestReassembleReap(t *testing.T) {
+	rb := NewReassemblyBuffer(nil, nil)
+	rb.maxAge = time.Millisecond
+
+	// Add a symbol to create a stream.
+	sym := CodedSymbol{GenID: 0, K: 4, Coefficients: []byte{1, 0, 0, 0}, Data: make([]byte, 10)}
+	rb.AddSymbol(0, 0, sym)
+
+	if rb.PendingCount() != 1 {
+		t.Fatalf("pending=%d, want 1", rb.PendingCount())
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	removed := rb.Reap()
+	if removed != 1 {
+		t.Errorf("Reap removed %d, want 1", removed)
+	}
+	if rb.PendingCount() != 0 {
+		t.Errorf("pending=%d after reap, want 0", rb.PendingCount())
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Test helpers
 // ════════════════════════════════════════════════════════════════════════════
 

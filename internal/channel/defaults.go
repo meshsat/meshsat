@@ -188,4 +188,22 @@ func RegisterDefaults(r *Registry) {
 			{Key: "topic", Label: "MQTT Topic", Type: "text", Default: ""},
 		},
 	})
+
+	r.Register(ChannelDescriptor{
+		ID:            "ipougrs",
+		Label:         "IPoUGRS (GSM Ring Signal)",
+		IsPaid:        false,
+		CanSend:       true,
+		CanReceive:    true,
+		BinaryCapable: true,
+		MaxPayload:    1,
+		DefaultTTL:    3600 * time.Second,
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 10 * time.Second,
+			MaxWait:     2 * time.Minute,
+			MaxRetries:  20,
+			BackoffFunc: "linear",
+		},
+	})
 }

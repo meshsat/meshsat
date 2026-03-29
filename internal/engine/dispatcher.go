@@ -19,6 +19,7 @@ import (
 	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hemb"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -463,6 +464,42 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 
 	count := 0
 	for _, m := range matches {
+		// Check if the forwarding target is a HeMB bond group.
+		if d.db.IsBondGroup(m.ForwardTo) {
+			if d.failover != nil {
+				sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
+					gw := d.gwProv.GatewayByInterfaceID(ifaceID)
+					if gw == nil {
+						return nil
+					}
+					return func(ctx context.Context, data []byte) error {
+						return gw.Forward(ctx, &transport.MeshMessage{
+							RawPayload: data,
+						})
+					}
+				}
+				bearers := d.failover.SelectBearers(m.ForwardTo, sendFnProvider)
+				if len(bearers) > 0 {
+					bdr := hemb.NewBonder(hemb.Options{
+						Bearers:   bearers,
+						DeliverFn: nil, // send-only path
+						EventCh:   nil, // TODO: wire global HeMB event channel
+					})
+					if err := bdr.Send(context.Background(), payload); err != nil {
+						log.Error().Err(err).Str("bond_group", m.ForwardTo).
+							Msg("hemb: bonded send failed")
+					} else {
+						count++
+						log.Info().Str("bond_group", m.ForwardTo).Int("bearers", len(bearers)).
+							Msg("hemb: payload sent via bond group")
+					}
+					continue
+				}
+			}
+			log.Warn().Str("bond_group", m.ForwardTo).Msg("hemb: no online bearers in bond group")
+			continue
+		}
+
 		// Resolve failover groups to concrete interface ID
 		destInterface := m.ForwardTo
 		if d.failover != nil {
