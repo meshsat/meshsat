@@ -67,7 +67,7 @@ const filteredEvents = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col overflow-hidden" style="height: calc(100vh - 48px)">
+  <div class="flex flex-col overflow-hidden" style="height: calc(100vh - 90px)">
     <!-- Stats bar -->
     <div class="flex-none flex items-center gap-6 px-4 py-2 border-b border-gray-800 text-xs">
       <div class="flex items-center gap-1.5">
