@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	encoding_base64 "encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -468,15 +469,25 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		if d.db.IsBondGroup(m.ForwardTo) {
 			if d.failover != nil {
 				sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
+					// Try gateway first (satellite, cellular, MQTT gateways).
 					gw := d.gwProv.GatewayByInterfaceID(ifaceID)
-					if gw == nil {
-						return nil
+					if gw != nil {
+						return func(ctx context.Context, data []byte) error {
+							return gw.Forward(ctx, &transport.MeshMessage{
+								RawPayload: data,
+							})
+						}
 					}
-					return func(ctx context.Context, data []byte) error {
-						return gw.Forward(ctx, &transport.MeshMessage{
-							RawPayload: data,
-						})
+					// Fallback: mesh_0 uses the primary mesh transport directly.
+					if ifaceID == "mesh_0" && d.mesh != nil {
+						return func(ctx context.Context, data []byte) error {
+							return d.mesh.SendRaw(ctx, transport.RawRequest{
+								PortNum: 256, // PRIVATE_APP
+								Payload: encoding_base64.StdEncoding.EncodeToString(data),
+							})
+						}
 					}
+					return nil
 				}
 				bearers := d.failover.SelectBearers(m.ForwardTo, sendFnProvider)
 				if len(bearers) > 0 {
