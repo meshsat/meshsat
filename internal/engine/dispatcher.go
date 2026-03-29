@@ -469,7 +469,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		if d.db.IsBondGroup(m.ForwardTo) {
 			if d.failover != nil {
 				sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
-					// Try gateway first (satellite, cellular, MQTT gateways).
+					// Try gateway first (satellite, cellular, MQTT, etc.).
 					gw := d.gwProv.GatewayByInterfaceID(ifaceID)
 					if gw != nil {
 						return func(ctx context.Context, data []byte) error {
@@ -478,8 +478,8 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 							})
 						}
 					}
-					// Fallback: mesh_0 uses the primary mesh transport directly.
-					if ifaceID == "mesh_0" && d.mesh != nil {
+					// Fallback: mesh transport (any mesh_N interface).
+					if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
 						return func(ctx context.Context, data []byte) error {
 							return d.mesh.SendRaw(ctx, transport.RawRequest{
 								PortNum: 256, // PRIVATE_APP

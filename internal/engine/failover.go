@@ -80,9 +80,16 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 
 	var bearers []hemb.BearerProfile
 	for i, m := range members {
-		status, err := fr.ifaceMgr.GetStatus(m.InterfaceID)
-		if err != nil || status.State != StateOnline {
-			continue
+		// Check InterfaceManager state if available, but don't skip if the
+		// interface isn't registered (mesh transport, Reticulum interfaces).
+		// The sendFnProvider is the authoritative check — if it returns a
+		// valid send function, the bearer is usable.
+		if fr.ifaceMgr != nil {
+			if status, err := fr.ifaceMgr.GetStatus(m.InterfaceID); err == nil {
+				if status.State == StateError {
+					continue // definitively broken or disabled — skip
+				}
+			}
 		}
 
 		channelType := m.InterfaceID
