@@ -66,15 +66,16 @@ const peerPositions = computed(() => {
   const tcpIface = ifacePositions.value.find(n => n.id?.startsWith('tcp'))
   const cx = tcpIface?.x || 150
   const cy = tcpIface?.y || -100
-  return store.peerNodes.value.map((n, i) => {
-    const offset = (i - (store.peerNodes.value.length - 1) / 2) * 50
+  const peers = store.peerNodes.value || []
+  return peers.map((n, i) => {
+    const offset = (i - (peers.length - 1) / 2) * 50
     return { ...n, x: cx + 120, y: cy + offset }
   })
 })
 
 // ── Edges ──
 const ifaceEdges = computed(() => {
-  return ifacePositions.value.map(n => ({
+  return (ifacePositions.value || []).map(n => ({
     id: `bridge-${n.id}`, x1: 0, y1: 0, x2: n.x, y2: n.y,
     color: typeColor(n.channelType), label: '', type: 'bridge_iface',
   }))
@@ -100,7 +101,7 @@ const peerEdges = computed(() => {
 
 // Access rule edges (interface → interface)
 const ruleEdgePositions = computed(() => {
-  return store.ruleEdges.value.map(r => {
+  return (store.ruleEdges.value || []).map(r => {
     const src = ifacePositions.value.find(n => n.id === r.source)
     const dst = ifacePositions.value.find(n => n.id === r.target)
     if (!src || !dst) return null
@@ -118,7 +119,7 @@ const ruleEdgePositions = computed(() => {
 
 // Bond group visual brackets
 const bondBrackets = computed(() => {
-  return store.bondGroups.value.map(g => {
+  return (store.bondGroups.value || []).map(g => {
     const members = (g.members || []).map(m => {
       const mid = typeof m === 'string' ? m : m.interface_id
       return ifacePositions.value.find(n => n.id === mid)
