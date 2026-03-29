@@ -276,13 +276,13 @@ const nodeOpacity = (id) => {
         <rect x="-50" y="-28" width="100" height="56" rx="8"
           fill="#0d9488" fill-opacity="0.1" stroke="#0d9488" stroke-width="2"/>
         <text dy="-8" text-anchor="middle" fill="#14b8a6" font-size="11" font-weight="700" font-family="monospace">
-          {{ bridgeStatus?.node_name || bridgeStatus?.node_id || 'bridge' }}
+          {{ store.bridgeStatus.value?.node_name || store.bridgeStatus.value?.node_id || 'bridge' }}
         </text>
         <text dy="6" text-anchor="middle" fill="#5eead4" font-size="8" font-family="monospace">
-          {{ bridgeStatus?.hw_model_name || '' }}
+          {{ store.bridgeStatus.value?.hw_model_name || '' }}
         </text>
         <text dy="18" text-anchor="middle" fill="#6b7280" font-size="7" font-family="monospace">
-          {{ meshNodes.length }} nodes
+          {{ store.meshNodeList.value?.length || 0 }} nodes
         </text>
       </g>
     </svg>
