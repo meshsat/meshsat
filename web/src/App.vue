@@ -15,7 +15,7 @@ const tabs = [
   { name: 'bridge', label: 'Bridge', path: '/bridge' },
   { name: 'interfaces', label: 'Interfaces', path: '/interfaces' },
   { name: 'passes', label: 'Passes', path: '/passes' },
-  { name: 'topology', label: 'Hubble', path: '/topology' },
+  { name: 'topology', label: 'Topology', path: '/topology' },
   { name: 'map', label: 'Map', path: '/map' },
   { name: 'settings', label: 'Settings', path: '/settings' },
   { name: 'radio', label: 'Meshtastic', path: '/radio' },
