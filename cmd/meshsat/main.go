@@ -576,6 +576,54 @@ func main() {
 		}
 	}
 
+	// SMS Reticulum interface — cellular SMS transport for Reticulum packets.
+	// Wraps existing CellTransport: outbound as base64 SMS with "RNS:" prefix, inbound decoded.
+	// DB config overrides env var after first save via Settings > Routing.
+	if cell != nil {
+		smsPeer := cfg.SMSReticulumPeer
+		if dbPeer, dbErr := db.GetSystemConfig("reticulum_sms_peer"); dbErr == nil && dbPeer != "" {
+			smsPeer = dbPeer
+		}
+		smsIface, smsRI := routing.RegisterSMSInterface(routing.SMSInterfaceConfig{
+			Name:       "sms_0",
+			PeerNumber: smsPeer,
+		}, cell, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("sms_0: received reticulum packet via SMS")
+			proc.InjectReticulumPacket(packet, "sms_0")
+		})
+		if err := smsIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("sms reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("sms_0", smsIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(smsRI)
+			}
+			log.Info().Str("peer", smsPeer).Msg("sms reticulum interface started")
+		}
+	}
+
+	// ZigBee Reticulum interface — bidirectional via CC2652P coordinator.
+	// Raw binary Reticulum packets over ZNP AF_DATA_REQUEST (100-byte MTU).
+	if zgw := gwMgr.GetZigBeeGateway(); zgw != nil {
+		if zt := zgw.GetTransport(); zt != nil {
+			zigbeeIface := routing.NewZigBeeInterface(routing.ZigBeeInterfaceConfig{
+				Name: "zigbee_0",
+			}, zt, func(packet []byte) {
+				log.Debug().Int("size", len(packet)).Msg("zigbee_0: received reticulum packet via ZigBee")
+				proc.InjectReticulumPacket(packet, "zigbee_0")
+			})
+			if err := zigbeeIface.Start(ctx); err != nil {
+				log.Error().Err(err).Msg("zigbee reticulum interface start failed")
+			} else {
+				proc.RegisterPacketSender("zigbee_0", zigbeeIface.Send)
+				if ifaceReg != nil {
+					ifaceReg.Register(routing.NewReticulumInterface("zigbee_0", "zigbee", 100, zigbeeIface.Send))
+				}
+				log.Info().Msg("zigbee reticulum interface started")
+			}
+		}
+	}
+
 	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh.
 	// When connecting to Hub's NATS broker (wss://), reuse mTLS certs from hub_connection.
 	if cfg.MQTTReticulumBroker != "" {

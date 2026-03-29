@@ -54,6 +54,10 @@ type Config struct {
 	// AX.25 source callsign (e.g. "MESHSAT-1"). Required if KISS addr is set.
 	AX25Callsign string
 
+	// SMS Reticulum interface — cellular SMS transport for routing
+	// Peer phone number for point-to-point SMS Reticulum link. Empty = disabled.
+	SMSReticulumPeer string
+
 	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh
 	// MQTT broker URL (e.g. "tcp://broker:1883"). Empty = disabled.
 	MQTTReticulumBroker string
@@ -102,6 +106,7 @@ func Load() *Config {
 		TCPConnectAddr:      envStr("MESHSAT_TCP_CONNECT", ""),
 		AX25KISSAddr:        envStr("MESHSAT_AX25_KISS_ADDR", ""),
 		AX25Callsign:        envStr("MESHSAT_AX25_CALLSIGN", ""),
+		SMSReticulumPeer:    envStr("MESHSAT_SMS_RETICULUM_PEER", ""),
 		MQTTReticulumBroker: envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
 		MQTTReticulumTopic:  envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
 		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
