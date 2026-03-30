@@ -360,6 +360,66 @@ func TestN1ZeroOverhead(t *testing.T) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Adaptive timeout tests (MESHSAT-441)
+// ════════════════════════════════════════════════════════════════════════════
+
+func TestMaxAgeFromBearersLoRaTCP(t *testing.T) {
+	// LoRa 250ms + TCP 200ms → 3×250 = 750ms → floored to 10s
+	d := MaxAgeFromBearers([]BearerProfile{
+		{LatencyMs: 250},
+		{LatencyMs: 200},
+	})
+	if d != 10*time.Second {
+		t.Fatalf("got %v, want 10s (floor)", d)
+	}
+}
+
+func TestMaxAgeFromBearersFloor(t *testing.T) {
+	// Both 100ms → 3×100 = 300ms → floored to 10s
+	d := MaxAgeFromBearers([]BearerProfile{
+		{LatencyMs: 100},
+		{LatencyMs: 100},
+	})
+	if d != 10*time.Second {
+		t.Fatalf("got %v, want 10s (floor)", d)
+	}
+}
+
+func TestMaxAgeFromBearersCeiling(t *testing.T) {
+	// Both 45000ms → 3×45000 = 135s (under 10min ceiling)
+	d := MaxAgeFromBearers([]BearerProfile{
+		{LatencyMs: 45000},
+		{LatencyMs: 45000},
+	})
+	if d != 135*time.Second {
+		t.Fatalf("got %v, want 135s", d)
+	}
+}
+
+func TestMaxAgeFromBearersSBD(t *testing.T) {
+	// Single SBD 30000ms → 3×30000 = 90s
+	d := MaxAgeFromBearers([]BearerProfile{
+		{LatencyMs: 30000},
+	})
+	if d != 90*time.Second {
+		t.Fatalf("got %v, want 90s", d)
+	}
+}
+
+func TestMaxAgeFromBearersFallback(t *testing.T) {
+	// Empty bearers → DefaultMaxAge (5 minutes)
+	d := MaxAgeFromBearers(nil)
+	if d != DefaultMaxAge {
+		t.Fatalf("got %v, want %v (DefaultMaxAge)", d, DefaultMaxAge)
+	}
+	// Zero-latency bearers → DefaultMaxAge
+	d2 := MaxAgeFromBearers([]BearerProfile{{LatencyMs: 0}})
+	if d2 != DefaultMaxAge {
+		t.Fatalf("zero-latency got %v, want %v", d2, DefaultMaxAge)
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Frame format tests (MESHSAT-416)
 // ════════════════════════════════════════════════════════════════════════════
 

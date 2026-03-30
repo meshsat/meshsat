@@ -62,4 +62,6 @@ type BondStats struct {
 	BytesFree          int64
 	BytesPaid          int64
 	CostIncurred       float64
+	DecodeLatencyP50   int64 `json:"decode_latency_p50_ms"`
+	DecodeLatencyP95   int64 `json:"decode_latency_p95_ms"`
 }

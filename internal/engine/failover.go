@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -15,11 +16,48 @@ import (
 type FailoverResolver struct {
 	db       *database.DB
 	ifaceMgr *InterfaceManager
+
+	faultMu    sync.RWMutex
+	faultedIDs map[string]bool // interface IDs with injected faults
 }
 
 // NewFailoverResolver creates a resolver.
 func NewFailoverResolver(db *database.DB, ifaceMgr *InterfaceManager) *FailoverResolver {
-	return &FailoverResolver{db: db, ifaceMgr: ifaceMgr}
+	return &FailoverResolver{db: db, ifaceMgr: ifaceMgr, faultedIDs: make(map[string]bool)}
+}
+
+// InjectFault marks an interface as faulted. SelectBearers will skip it.
+func (fr *FailoverResolver) InjectFault(ifaceID string) {
+	fr.faultMu.Lock()
+	defer fr.faultMu.Unlock()
+	fr.faultedIDs[ifaceID] = true
+	log.Warn().Str("interface", ifaceID).Msg("fault-inject: bearer faulted")
+}
+
+// ClearFault removes a fault injection from an interface.
+func (fr *FailoverResolver) ClearFault(ifaceID string) {
+	fr.faultMu.Lock()
+	defer fr.faultMu.Unlock()
+	delete(fr.faultedIDs, ifaceID)
+	log.Info().Str("interface", ifaceID).Msg("fault-inject: bearer restored")
+}
+
+// FaultedInterfaces returns the set of currently faulted interface IDs.
+func (fr *FailoverResolver) FaultedInterfaces() []string {
+	fr.faultMu.RLock()
+	defer fr.faultMu.RUnlock()
+	out := make([]string, 0, len(fr.faultedIDs))
+	for id := range fr.faultedIDs {
+		out = append(out, id)
+	}
+	return out
+}
+
+// isFaulted returns true if the given interface has an injected fault.
+func (fr *FailoverResolver) isFaulted(ifaceID string) bool {
+	fr.faultMu.RLock()
+	defer fr.faultMu.RUnlock()
+	return fr.faultedIDs[ifaceID]
 }
 
 // Resolve takes a target ID which may be an interface ID or failover group ID.
@@ -80,6 +118,10 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 
 	var bearers []hemb.BearerProfile
 	for i, m := range members {
+		// Skip bearers with injected faults (field testing).
+		if fr.isFaulted(m.InterfaceID) {
+			continue
+		}
 		// Check InterfaceManager state if available, but don't skip if the
 		// interface isn't registered (mesh transport, Reticulum interfaces).
 		// The sendFnProvider is the authoritative check — if it returns a

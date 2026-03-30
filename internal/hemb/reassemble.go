@@ -42,14 +42,52 @@ type generationState struct {
 	decoded    bool
 }
 
+// DefaultMaxAge is the reassembly timeout when no bearer latency info is available.
+const DefaultMaxAge = 5 * time.Minute
+
 // NewReassemblyBuffer creates a reassembly buffer.
 func NewReassemblyBuffer(deliverFn func([]byte), eventCh chan<- Event) *ReassemblyBuffer {
 	return &ReassemblyBuffer{
 		streams:   make(map[uint8]*streamState),
 		deliverFn: deliverFn,
 		eventCh:   eventCh,
-		maxAge:    5 * time.Minute,
+		maxAge:    DefaultMaxAge,
 	}
+}
+
+// SetMaxAge updates the reassembly timeout. Thread-safe.
+func (rb *ReassemblyBuffer) SetMaxAge(d time.Duration) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	rb.maxAge = d
+}
+
+// MaxAgeFromBearers computes an adaptive reassembly timeout from the bearer set.
+// Uses 3× the slowest bearer's latency, clamped to [10s, 10min].
+// For mixed bearer sets (e.g. LoRa 1s + SBD 30s), this yields 90s instead of
+// the fixed 5min default — tight enough to detect failures, loose enough for
+// satellite round-trips.
+func MaxAgeFromBearers(bearers []BearerProfile) time.Duration {
+	if len(bearers) == 0 {
+		return DefaultMaxAge
+	}
+	maxLatency := 0
+	for _, b := range bearers {
+		if b.LatencyMs > maxLatency {
+			maxLatency = b.LatencyMs
+		}
+	}
+	if maxLatency == 0 {
+		return DefaultMaxAge
+	}
+	d := time.Duration(maxLatency) * 3 * time.Millisecond
+	if d < 10*time.Second {
+		d = 10 * time.Second
+	}
+	if d > 10*time.Minute {
+		d = 10 * time.Minute
+	}
+	return d
 }
 
 // AddSymbol processes an inbound coded symbol. Returns the reassembled payload
@@ -131,6 +169,7 @@ func (rb *ReassemblyBuffer) tryDecode(streamID uint8, gen *generationState) ([]b
 	gen.decoded = true
 	latencyMs := time.Since(gen.firstSeen).Milliseconds()
 	Global.RecordGenerationDecoded()
+	Global.RecordDecodeLatency(latencyMs)
 
 	// Build bearer contribution list with actual per-bearer symbol counts.
 	contribMap := make(map[uint8]int)

@@ -36,6 +36,9 @@ func NewBonder(opts Options) Bonder {
 	if len(opts.Bearers) > 1 || (len(opts.Bearers) == 0 && opts.DeliverFn != nil) {
 		// N>1: full encode + decode. N=0 with DeliverFn: receive-only reassembly.
 		b.reassembly = NewReassemblyBuffer(opts.DeliverFn, opts.EventCh)
+		if d := MaxAgeFromBearers(opts.Bearers); d != DefaultMaxAge {
+			b.reassembly.SetMaxAge(d)
+		}
 	}
 	return b
 }
