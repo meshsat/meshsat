@@ -597,12 +597,14 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	if hemb.IsHeMBFrame(payload) {
 		if p.hembBonder != nil {
 			bearerIdx := p.bearerIndexForIface(sourceIface)
+			log.Debug().Str("iface", sourceIface).Uint8("bearer", bearerIdx).Int("len", len(payload)).Msg("hemb: calling ReceiveSymbol")
 			decoded, err := p.hembBonder.ReceiveSymbol(bearerIdx, payload)
 			if err != nil {
-				log.Debug().Err(err).Str("iface", sourceIface).Msg("hemb: receive symbol failed")
-			}
-			if decoded != nil {
+				log.Warn().Err(err).Str("iface", sourceIface).Int("len", len(payload)).Msg("hemb: ReceiveSymbol error")
+			} else if decoded != nil {
 				log.Info().Str("iface", sourceIface).Int("bytes", len(decoded)).Msg("hemb: cross-bearer reassembly complete")
+			} else {
+				log.Debug().Str("iface", sourceIface).Msg("hemb: symbol added, awaiting more")
 			}
 		} else {
 			log.Debug().Str("iface", sourceIface).Int("len", len(payload)).Msg("hemb: frame detected but no bonder registered")
