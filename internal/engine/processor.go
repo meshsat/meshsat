@@ -172,6 +172,14 @@ func (p *Processor) HeMBInspectGeneration(streamID uint8, genID uint16) (*hemb.G
 	return nil, false
 }
 
+// GetPacketSender returns the registered send function for a Reticulum interface.
+// Implements PacketSenderProvider for HeMB bearer resolution.
+func (p *Processor) GetPacketSender(ifaceID string) func(ctx context.Context, data []byte) error {
+	p.packetSendersMu.RLock()
+	defer p.packetSendersMu.RUnlock()
+	return p.packetSenders[ifaceID]
+}
+
 // bearerIndexForIface maps a Reticulum interface name to its bearer index
 // within the active bond groups. Falls back to a deterministic hash if the
 // interface is not found in any bond group.

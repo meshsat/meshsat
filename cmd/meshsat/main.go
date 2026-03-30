@@ -787,6 +787,9 @@ func main() {
 	}()
 	dispatcher.SetFragmentManager(reassemblyBuf)
 
+	// Wire Reticulum packet senders into dispatcher for HeMB bearer resolution.
+	dispatcher.SetPacketSenderProvider(proc)
+
 	// DTN custody manager (MESHSAT-408)
 	custodyMgr := engine.NewCustodyManager(60 * time.Second)
 	dispatcher.SetCustodyManager(custodyMgr)

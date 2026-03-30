@@ -71,6 +71,11 @@ func (m *LoopMetrics) Snapshot() map[string]int64 {
 }
 
 // Dispatcher evaluates access rules and fans out messages to per-channel delivery workers.
+// PacketSenderProvider returns a send function for a Reticulum interface ID.
+type PacketSenderProvider interface {
+	GetPacketSender(ifaceID string) func(ctx context.Context, data []byte) error
+}
+
 type Dispatcher struct {
 	db         *database.DB
 	access     *rules.AccessEvaluator // v0.3.0 access rule evaluation
@@ -80,6 +85,7 @@ type Dispatcher struct {
 	registry   *channel.Registry
 	gwProv     GatewayProvider
 	mesh       transport.MeshTransport
+	pktSender  PacketSenderProvider // Reticulum packet senders (tcp_0, etc.)
 	workers    map[string]*DeliveryWorker
 	emit       func(transport.MeshEvent) // SSE broadcast callback
 	passSched  PassStateProvider         // satellite pass scheduler (nil if no satellite interfaces)
@@ -193,6 +199,10 @@ func (d *Dispatcher) SetFragmentManager(fm *ReassemblyBuffer) {
 // SetCustodyManager registers the DTN custody transfer manager.
 func (d *Dispatcher) SetCustodyManager(cm *CustodyManager) {
 	d.custodyMgr = cm
+}
+
+func (d *Dispatcher) SetPacketSenderProvider(p PacketSenderProvider) {
+	d.pktSender = p
 }
 
 // parseCustodyID converts a hex-encoded custody ID string to a [16]byte array.
@@ -485,6 +495,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 								PortNum: 256, // PRIVATE_APP
 								Payload: encoding_base64.StdEncoding.EncodeToString(data),
 							})
+						}
+					}
+					// Fallback: Reticulum packet sender (tcp_0, ax25_0, etc.).
+					if d.pktSender != nil {
+						if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
+							return fn
 						}
 					}
 					return nil
