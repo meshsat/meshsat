@@ -594,11 +594,24 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	if hemb.IsHeMBFrame(payload) {
 		if p.hembBonder != nil {
 			bearerIdx := p.bearerIndexForIface(sourceIface)
-			if _, err := p.hembBonder.ReceiveSymbol(bearerIdx, payload); err != nil {
+			decoded, err := p.hembBonder.ReceiveSymbol(bearerIdx, payload)
+			if err != nil {
 				log.Debug().Err(err).Str("iface", sourceIface).Msg("hemb: receive symbol failed")
 			}
+			if decoded != nil {
+				log.Info().Str("iface", sourceIface).Int("bytes", len(decoded)).Msg("hemb: cross-bearer reassembly complete")
+			}
+		} else {
+			log.Debug().Str("iface", sourceIface).Int("len", len(payload)).Msg("hemb: frame detected but no bonder registered")
 		}
 		return
+	}
+	// Debug: log first 4 bytes of PRIVATE_APP payloads for HeMB frame analysis
+	if sourceIface == "mesh_0" && len(payload) >= 4 {
+		log.Debug().Str("iface", sourceIface).Int("len", len(payload)).
+			Hex("head", payload[:4]).
+			Bool("is_hemb", hemb.IsHeMBFrame(payload)).
+			Msg("hemb: mesh PRIVATE_APP payload inspection")
 	}
 
 	// Bridge protocol extension type bytes (0x14-0x17) must be checked BEFORE
