@@ -171,6 +171,11 @@ func (d *Dispatcher) SetFailoverResolver(fr *FailoverResolver) {
 	d.failover = fr
 }
 
+// FailoverResolver returns the failover resolver, or nil.
+func (d *Dispatcher) FailoverResolver() *FailoverResolver {
+	return d.failover
+}
+
 // SetSigningService sets the v0.3.0 signing service for non-repudiation.
 func (d *Dispatcher) SetSigningService(ss *SigningService) {
 	d.signing = ss
@@ -488,19 +493,21 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 							})
 						}
 					}
-					// Fallback: mesh transport (any mesh_N interface).
+					// Fallback: Reticulum packet sender for any interface (mesh_0, tcp_0, etc.).
+					// Uses the RNS transport node which relays PRIVATE_APP between bridges.
+					// Direct mesh.SendRaw(PortNum:256) doesn't cross Meshtastic nodes.
+					if d.pktSender != nil {
+						if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
+							return fn
+						}
+					}
+					// Last resort: raw mesh transport (local delivery only).
 					if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
 						return func(ctx context.Context, data []byte) error {
 							return d.mesh.SendRaw(ctx, transport.RawRequest{
 								PortNum: 256, // PRIVATE_APP
 								Payload: encoding_base64.StdEncoding.EncodeToString(data),
 							})
-						}
-					}
-					// Fallback: Reticulum packet sender (tcp_0, ax25_0, etc.).
-					if d.pktSender != nil {
-						if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
-							return fn
 						}
 					}
 					return nil
