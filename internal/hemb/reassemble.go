@@ -230,6 +230,15 @@ func (rb *ReassemblyBuffer) tryDecode(streamID uint8, gen *generationState) ([]b
 		rb.deliverFn(payload)
 	}
 
+	// Remove decoded generation to free the stream+gen ID for reuse.
+	// Without this, wrapped stream IDs (0-255) would hit "already decoded".
+	if stream, ok := rb.streams[streamID]; ok {
+		delete(stream.generations, gen.genID)
+		if len(stream.generations) == 0 {
+			delete(rb.streams, streamID)
+		}
+	}
+
 	return payload, nil
 }
 

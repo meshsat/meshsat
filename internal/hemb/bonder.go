@@ -107,7 +107,7 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 		return b.sendN1(ctx, payload, &online[0])
 	}
 
-	streamID := uint8(globalStreamSeq.Add(1) & 0x0F)
+	streamID := uint8(globalStreamSeq.Add(1) & 0xFF)
 
 	// Step 1: compute initial symbol size = min bearer capacity with K=1 estimate.
 	// Each bearer frame = header + K coefficient bytes + symbol data.
