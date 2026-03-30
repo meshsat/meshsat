@@ -33,6 +33,7 @@ optimizes transmission timing in obstructed environments*
 - **10 Reticulum interfaces:** LoRa mesh, TCP/HDLC (RNS interop), Iridium SBD, Iridium IMT, Astrocast, AX.25/APRS, MQTT, SMS (planned), ZigBee (planned), BLE (planned)
 - **TransportNode** with cost-aware cross-interface forwarding, PathFinder flooding-based route discovery, and 30-minute route TTL
 - **Dispatcher** with failover groups, delivery ledger, per-channel workers, and visited-set loop prevention
+- **HeMB (Heterogeneous Media Bonding):** RLNC-coded simultaneous multi-bearer bonding — splits payloads across N physical bearers (LoRa, Iridium SBD, SMS, APRS, IPoUGRS) with cost-weighted allocation and cross-bearer reassembly from any K of N coded symbols regardless of which bearers delivered them. Operates below IP, routing-protocol agnostic, TUN-wrappable as a standard Linux network interface.
 
 ### Compression & Transforms
 - **3 compression tiers:** SMAZ2 (lossless, <1ms), llama-zip (LLM-based lossless, ~200ms), MSVQ-SC (lossy semantic, rate-adaptive)
@@ -307,6 +308,9 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
                        |         Dispatcher                           |
                        |           (delivery workers per iface)       |
                        |              |                               |
+                       |         HeMB Bonder (bond groups)            |
+                       |           (RLNC coding, cost-weighted split) |
+                       |              |                               |
                        |      TransformPipeline                       |
                        |        (zstd, smaz2, aes-256-gcm, b64)       |
                        |              |                               |
@@ -352,7 +356,7 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
 - DTN concepts: custody transfer, bundle fragmentation, and late binding integrated into the delivery ledger (RFC 9171 inspired)
 - Forward error correction (FEC): Reed-Solomon codec in the transform pipeline for noisy channels (LoRa, satellite)
 - GPS-denied time synchronization: mesh clock consensus with stratum tracking, Iridium MSSTM and Hub NTP fallback
-- Random linear network coding (RLNC): coded segments for resource transfer with 20-40% throughput gain on lossy multi-hop links
+- **HeMB — Heterogeneous Media Bonding Protocol:** simultaneous multi-bearer bonding with RLNC coding across N heterogeneous physical bearers, cost-weighted splitter (free bearers exhausted before paid), adaptive reassembly buffer tolerating 1:900 bearer latency ratio, and per-bearer FEC profiles. RLNC encoding across bonded bearer groups confirmed running on production hardware (March 2026). Field validation with LoRa + Iridium SBD + SMS + IPoUGRS (GSM ring signals) pending hardware arrival April 2026. RFC submission planned January 2027 via IETF Independent Submission Stream (draft-papadopoulos-hemb-00).
 
 **Next -- New Reticulum interfaces:**
 - SMS interface: Reticulum packets over cellular SMS
