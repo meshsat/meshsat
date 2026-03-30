@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -96,6 +97,69 @@ func (s *Server) handleDeleteBondGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleHeMBSend sends a payload through a HeMB bond group.
+// @Summary Send payload via HeMB bond group
+// @Tags hemb
+// @Accept json
+// @Produce json
+// @Param body body object true "Send request" example({"bond_group":"bond1","payload_b64":"..."})
+// @Success 200 {object} map[string]any
+// @Router /api/hemb/send [post]
+func (s *Server) handleHeMBSend(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BondGroup  string `json:"bond_group"`
+		PayloadB64 string `json:"payload_b64"` // base64-encoded payload
+		Text       string `json:"text"`        // plaintext alternative
+		Size       int    `json:"size"`        // generate random payload of this size
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.BondGroup == "" {
+		writeError(w, http.StatusBadRequest, "bond_group required")
+		return
+	}
+	if s.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "dispatcher unavailable")
+		return
+	}
+
+	var payload []byte
+	switch {
+	case req.PayloadB64 != "":
+		var err error
+		payload, err = base64.StdEncoding.DecodeString(req.PayloadB64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid base64 payload")
+			return
+		}
+	case req.Text != "":
+		payload = []byte(req.Text)
+	case req.Size > 0:
+		payload = make([]byte, req.Size)
+		for i := range payload {
+			payload[i] = byte(i % 256)
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "payload_b64, text, or size required")
+		return
+	}
+
+	bearerCount, err := s.dispatcher.SendViaBondGroup(req.BondGroup, payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":       "sent",
+		"bond_group":   req.BondGroup,
+		"payload_size": len(payload),
+		"bearers_used": bearerCount,
+	})
 }
 
 func (s *Server) handleGetHeMBStats(w http.ResponseWriter, r *http.Request) {

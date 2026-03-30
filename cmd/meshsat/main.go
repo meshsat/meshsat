@@ -1226,6 +1226,23 @@ func main() {
 		}
 	}
 
+	// HeMB receive-side reassembly — always active when bond groups exist.
+	// Decoded payloads are re-injected into the processor as regular messages.
+	{
+		groups, gerr := db.GetAllBondGroups()
+		if gerr == nil && len(groups) > 0 {
+			receiveBonder := hemb.NewBonder(hemb.Options{
+				Bearers: nil, // receive-only — no send bearers needed
+				DeliverFn: func(payload []byte) {
+					log.Info().Int("bytes", len(payload)).Msg("hemb: reassembled payload delivered")
+				},
+				EventCh: hemb.GlobalEventBus.Channel(),
+			})
+			proc.SetHeMBBonder(receiveBonder)
+			log.Info().Int("groups", len(groups)).Msg("hemb: receive-side reassembly bonder registered")
+		}
+	}
+
 	// HeMB TUN adapter — creates a virtual network interface for IP-over-HeMB bonding.
 	// Enabled by MESHSAT_HEMB_TUN env var (e.g., MESHSAT_HEMB_TUN=hemb0).
 	// IP addressing must be configured externally (ip addr add ... dev hemb0).

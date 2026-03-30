@@ -33,7 +33,8 @@ type bondStatsCounters struct {
 // NewBonder creates a HeMB bonder with the given options.
 func NewBonder(opts Options) Bonder {
 	b := &bonder{opts: opts}
-	if len(opts.Bearers) > 1 {
+	if len(opts.Bearers) > 1 || (len(opts.Bearers) == 0 && opts.DeliverFn != nil) {
+		// N>1: full encode + decode. N=0 with DeliverFn: receive-only reassembly.
 		b.reassembly = NewReassemblyBuffer(opts.DeliverFn, opts.EventCh)
 	}
 	return b

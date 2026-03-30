@@ -857,6 +857,55 @@ func (d *Dispatcher) reapAckTimeouts() {
 	}
 }
 
+// SendViaBondGroup sends a payload through a HeMB bond group.
+// Returns the number of bearers used or an error.
+func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, error) {
+	if d.failover == nil {
+		return 0, fmt.Errorf("failover resolver not initialized")
+	}
+	if !d.db.IsBondGroup(groupID) {
+		return 0, fmt.Errorf("unknown bond group: %s", groupID)
+	}
+
+	sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
+		gw := d.gwProv.GatewayByInterfaceID(ifaceID)
+		if gw != nil {
+			return func(ctx context.Context, data []byte) error {
+				return gw.Forward(ctx, &transport.MeshMessage{RawPayload: data})
+			}
+		}
+		if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
+			return func(ctx context.Context, data []byte) error {
+				return d.mesh.SendRaw(ctx, transport.RawRequest{
+					PortNum: 256,
+					Payload: encoding_base64.StdEncoding.EncodeToString(data),
+				})
+			}
+		}
+		if d.pktSender != nil {
+			if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
+				return fn
+			}
+		}
+		return nil
+	}
+
+	bearers := d.failover.SelectBearers(groupID, sendFnProvider)
+	if len(bearers) == 0 {
+		return 0, fmt.Errorf("no online bearers in bond group %s", groupID)
+	}
+
+	bdr := hemb.NewBonder(hemb.Options{
+		Bearers:   bearers,
+		DeliverFn: nil,
+		EventCh:   hemb.GlobalEventBus.Channel(),
+	})
+	if err := bdr.Send(context.Background(), payload); err != nil {
+		return 0, fmt.Errorf("bonded send failed: %w", err)
+	}
+	return len(bearers), nil
+}
+
 // ForwardHeMBFrame sends a raw HeMB frame to a specific interface via its gateway.
 // Used by the TUN adapter to route coded symbols to physical transports.
 func (d *Dispatcher) ForwardHeMBFrame(ifaceID string, data []byte) error {
