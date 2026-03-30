@@ -310,6 +310,55 @@ func TestN1NoBearersError(t *testing.T) {
 	}
 }
 
+func TestN1GlobalStatsRecorded(t *testing.T) {
+	// Reset global stats.
+	Global = &GlobalStats{}
+
+	b := NewBonder(Options{
+		Bearers: []BearerProfile{{
+			Index: 0, InterfaceID: "mesh_0", ChannelType: "mesh",
+			MTU: 237, CostPerMsg: 0,
+			SendFn: func(_ context.Context, _ []byte) error { return nil },
+		}},
+	})
+	if err := b.Send(context.Background(), []byte("test")); err != nil {
+		t.Fatal(err)
+	}
+	snap := Global.Snapshot()
+	if snap.SymbolsSent != 1 {
+		t.Fatalf("N=1 SymbolsSent = %d, want 1", snap.SymbolsSent)
+	}
+	if snap.BytesFree != 4 { // "test" = 4 bytes
+		t.Fatalf("N=1 BytesFree = %d, want 4", snap.BytesFree)
+	}
+	if snap.CostIncurred != 0 {
+		t.Fatalf("N=1 CostIncurred = %f, want 0", snap.CostIncurred)
+	}
+}
+
+func TestN1ZeroOverhead(t *testing.T) {
+	original := []byte("this payload must arrive byte-for-byte identical")
+	var received []byte
+	b := NewBonder(Options{
+		Bearers: []BearerProfile{{
+			Index: 0, MTU: 237, CostPerMsg: 0,
+			SendFn: func(_ context.Context, data []byte) error {
+				received = append([]byte{}, data...)
+				return nil
+			},
+		}},
+	})
+	if err := b.Send(context.Background(), original); err != nil {
+		t.Fatal(err)
+	}
+	if len(received) != len(original) {
+		t.Fatalf("N=1 not zero overhead: original=%d received=%d", len(original), len(received))
+	}
+	if !bytes.Equal(received, original) {
+		t.Fatal("N=1 payload corrupted")
+	}
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Frame format tests (MESHSAT-416)
 // ════════════════════════════════════════════════════════════════════════════

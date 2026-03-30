@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // ReassemblyBuffer collects RLNC-coded symbols from multiple bearers and
@@ -23,11 +25,18 @@ type streamState struct {
 	createdAt   time.Time
 }
 
+type symbolArrival struct {
+	symbol     CodedSymbol
+	bearerIdx  uint8
+	receivedAt time.Time
+}
+
 type generationState struct {
 	genID      uint16
 	k          int
 	symSize    int
 	symbols    []CodedSymbol
+	arrivals   []symbolArrival
 	bearerSeen map[uint8]bool
 	firstSeen  time.Time
 	decoded    bool
@@ -77,9 +86,16 @@ func (rb *ReassemblyBuffer) AddSymbol(streamID uint8, bearerIndex uint8, sym Cod
 		return nil, nil // already decoded, ignore duplicate
 	}
 
-	// Add symbol.
+	// Add symbol with arrival metadata.
+	now := time.Now()
 	gen.symbols = append(gen.symbols, sym)
+	gen.arrivals = append(gen.arrivals, symbolArrival{
+		symbol:     sym,
+		bearerIdx:  bearerIndex,
+		receivedAt: now,
+	})
 	gen.bearerSeen[bearerIndex] = true
+	Global.RecordSymbolReceived()
 
 	// Attempt decode if we have enough symbols.
 	if len(gen.symbols) >= gen.k {
@@ -100,6 +116,7 @@ func (rb *ReassemblyBuffer) tryDecode(streamID uint8, gen *generationState) ([]b
 			return nil, nil
 		}
 		latencyMs := time.Since(gen.firstSeen).Milliseconds()
+		Global.RecordGenerationFailed()
 		emit(rb.eventCh, EventGenerationFailed, GenerationFailedPayload{
 			StreamID:     streamID,
 			GenerationID: gen.genID,
@@ -113,13 +130,24 @@ func (rb *ReassemblyBuffer) tryDecode(streamID uint8, gen *generationState) ([]b
 
 	gen.decoded = true
 	latencyMs := time.Since(gen.firstSeen).Milliseconds()
+	Global.RecordGenerationDecoded()
 
-	// Build bearer contribution list from bearerSeen.
+	// Build bearer contribution list with actual per-bearer symbol counts.
+	contribMap := make(map[uint8]int)
+	for _, arr := range gen.arrivals {
+		contribMap[arr.bearerIdx]++
+	}
+	// Fallback to bearerSeen if arrivals not tracked.
+	if len(contribMap) == 0 {
+		for bidx := range gen.bearerSeen {
+			contribMap[bidx] = 1
+		}
+	}
 	var contributions []BearerContribution
-	for bidx := range gen.bearerSeen {
+	for bidx, count := range contribMap {
 		contributions = append(contributions, BearerContribution{
 			BearerRef:   BearerRef{BearerIndex: bidx},
-			SymbolCount: 1, // at least 1 symbol from this bearer
+			SymbolCount: count,
 		})
 	}
 
@@ -128,6 +156,17 @@ func (rb *ReassemblyBuffer) tryDecode(streamID uint8, gen *generationState) ([]b
 	for _, seg := range decoded {
 		payload = append(payload, seg...)
 	}
+
+	log.Debug().
+		Uint8("stream", streamID).
+		Uint16("gen", gen.genID).
+		Int("K", gen.k).
+		Int("symbols_rcvd", len(gen.symbols)).
+		Int("bearers", len(contributions)).
+		Int64("decode_us", decodeUs).
+		Int64("latency_ms", latencyMs).
+		Int("bytes", len(payload)).
+		Msg("hemb: DECODED generation")
 
 	emit(rb.eventCh, EventGenerationDecoded, GenerationDecodedPayload{
 		StreamID:     streamID,
@@ -241,15 +280,18 @@ func (rb *ReassemblyBuffer) StreamDetail(streamID uint8) ([]GenerationInfo, bool
 
 // GenerationInspection provides detailed RLNC matrix data for debugging.
 type GenerationInspection struct {
-	StreamID          uint8          `json:"stream_id"`
-	GenID             uint16         `json:"gen_id"`
-	K                 int            `json:"k"`
-	N                 int            `json:"n"`
-	Rank              int            `json:"rank"`
-	Decoded           bool           `json:"decoded"`
-	DecodeStatus      string         `json:"decode_status"` // "decoded", "pending", "rank_deficient"
-	CoefficientMatrix [][]byte       `json:"coefficient_matrix"`
-	Symbols           []SymbolDetail `json:"symbols"`
+	StreamID          uint8                 `json:"stream_id"`
+	GenID             uint16                `json:"gen_id"`
+	K                 int                   `json:"k"`
+	N                 int                   `json:"n"`
+	Rank              int                   `json:"rank"`
+	Decoded           bool                  `json:"decoded"`
+	DecodeStatus      string                `json:"decode_status"` // "decoded", "pending", "rank_deficient"
+	CoefficientMatrix [][]byte              `json:"coefficient_matrix"`
+	Symbols           []SymbolDetail        `json:"symbols"`
+	BearerTimeline    []BearerTimelineEntry `json:"bearer_timeline"`
+	Cost              float64               `json:"cost"`
+	GaussSteps        []GaussStep           `json:"gauss_steps"`
 }
 
 // SymbolDetail describes a single received symbol for inspection.
@@ -258,6 +300,15 @@ type SymbolDetail struct {
 	BearerIndex   uint8  `json:"bearer_idx"`
 	ReceivedAt    string `json:"received_at"`
 	IsIndependent bool   `json:"is_independent"`
+	OffsetMs      int64  `json:"offset_ms"` // ms since first symbol in generation
+}
+
+// BearerTimelineEntry records a symbol arrival on a specific bearer.
+type BearerTimelineEntry struct {
+	SymbolIndex int    `json:"sym_idx"`
+	BearerIndex uint8  `json:"bearer_idx"`
+	ReceivedAt  string `json:"received_at"`
+	OffsetMs    int64  `json:"offset_ms"`
 }
 
 // InspectGeneration returns detailed matrix and symbol data for debugging.
@@ -302,12 +353,20 @@ func (rb *ReassemblyBuffer) InspectGeneration(streamID uint8, genID uint16) (*Ge
 		independent[0] = true // first symbol is always independent if non-zero
 	}
 
-	// Build symbol details.
+	// Build symbol details and bearer timeline from arrival metadata.
 	symbols := make([]SymbolDetail, n)
+	timeline := make([]BearerTimelineEntry, 0, n)
 	for i, sym := range g.symbols {
 		bearerIdx := uint8(0)
-		for b := range g.bearerSeen {
-			if i == 0 || b == bearerIdx {
+		receivedAt := ""
+		var offsetMs int64
+		if i < len(g.arrivals) {
+			bearerIdx = g.arrivals[i].bearerIdx
+			receivedAt = g.arrivals[i].receivedAt.Format(time.RFC3339Nano)
+			offsetMs = g.arrivals[i].receivedAt.Sub(g.firstSeen).Milliseconds()
+		} else {
+			// Fallback for symbols added before arrival tracking.
+			for b := range g.bearerSeen {
 				bearerIdx = b
 				break
 			}
@@ -316,8 +375,19 @@ func (rb *ReassemblyBuffer) InspectGeneration(streamID uint8, genID uint16) (*Ge
 			Index:         sym.SymbolIndex,
 			BearerIndex:   bearerIdx,
 			IsIndependent: independent[i],
+			ReceivedAt:    receivedAt,
+			OffsetMs:      offsetMs,
 		}
+		timeline = append(timeline, BearerTimelineEntry{
+			SymbolIndex: sym.SymbolIndex,
+			BearerIndex: bearerIdx,
+			ReceivedAt:  receivedAt,
+			OffsetMs:    offsetMs,
+		})
 	}
+
+	// Compute Gaussian elimination steps for animation.
+	gaussSteps, _ := GaussianEliminationSteps(matrix, k)
 
 	status := "pending"
 	if g.decoded {
@@ -336,6 +406,8 @@ func (rb *ReassemblyBuffer) InspectGeneration(streamID uint8, genID uint16) (*Ge
 		DecodeStatus:      status,
 		CoefficientMatrix: matrix,
 		Symbols:           symbols,
+		BearerTimeline:    timeline,
+		GaussSteps:        gaussSteps,
 	}, true
 }
 
@@ -350,6 +422,7 @@ func (rb *ReassemblyBuffer) Reap() int {
 			// Emit failure events for incomplete generations.
 			for _, g := range s.generations {
 				if !g.decoded {
+					Global.RecordGenerationFailed()
 					emit(rb.eventCh, EventGenerationFailed, GenerationFailedPayload{
 						StreamID:     id,
 						GenerationID: g.genID,

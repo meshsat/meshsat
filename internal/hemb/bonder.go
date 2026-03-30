@@ -69,6 +69,8 @@ func (b *bonder) sendN1(ctx context.Context, payload []byte, bearer *BearerProfi
 		b.stats.costIncurred.Add(int64(bearer.CostPerMsg * 1e6))
 	}
 	b.stats.symbolsSent.Add(1)
+	Global.RecordSymbolSent(len(payload), bearer.IsFree(), bearer.CostPerMsg)
+	Global.RecordPayloadSent()
 	return bearer.SendFn(ctx, payload)
 }
 
@@ -213,6 +215,7 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 				b.stats.costIncurred.Add(int64(alloc.bearer.CostPerMsg * 1e6))
 			}
 			b.stats.symbolsSent.Add(1)
+			Global.RecordSymbolSent(len(frame), alloc.bearer.IsFree(), alloc.bearer.CostPerMsg)
 
 			if err := alloc.bearer.SendFn(ctx, frame); err != nil {
 				sendErr = err // record but continue sending to other bearers
@@ -220,6 +223,7 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 		}
 	}
 
+	Global.RecordPayloadSent()
 	return sendErr
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"meshsat/internal/database"
+	"meshsat/internal/hemb"
 )
 
 func (s *Server) handleGetBondGroups(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +99,7 @@ func (s *Server) handleDeleteBondGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetHeMBStats(w http.ResponseWriter, r *http.Request) {
-	st := s.processor.HeMBStats()
+	st := hemb.Global.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"active_streams":      st.ActiveStreams,
 		"symbols_sent":        st.SymbolsSent,
