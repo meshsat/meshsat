@@ -589,8 +589,11 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 	}
 
 	// HeMB frames: detect before any other protocol parsing.
-	// HeMB extended frames start with magic 0x48 0x4D; compact frames are
-	// detected by CRC-8 validation. Both must be routed to the reassembly buffer.
+	if len(payload) >= 2 {
+		log.Debug().Str("iface", sourceIface).Int("len", len(payload)).
+			Hex("head2", payload[:2]).Bool("is_hemb", hemb.IsHeMBFrame(payload)).
+			Msg("hemb: handleRoutingPacket entry")
+	}
 	if hemb.IsHeMBFrame(payload) {
 		if p.hembBonder != nil {
 			bearerIdx := p.bearerIndexForIface(sourceIface)
