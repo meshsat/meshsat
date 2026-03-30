@@ -82,9 +82,11 @@ func (m *mockTUNBonder) ReceiveSymbol(_ uint8, _ []byte) ([]byte, error) { retur
 func (m *mockTUNBonder) Stats() BondStats                                { return BondStats{} }
 func (m *mockTUNBonder) StartStatsEmitter(_ context.Context, _ time.Duration, _ chan<- Event) {
 }
-func (m *mockTUNBonder) ActiveStreams() []StreamInfo                                        { return nil }
-func (m *mockTUNBonder) StreamDetail(_ uint8) ([]GenerationInfo, bool)                     { return nil, false }
-func (m *mockTUNBonder) InspectGeneration(_ uint8, _ uint16) (*GenerationInspection, bool) { return nil, false }
+func (m *mockTUNBonder) ActiveStreams() []StreamInfo                   { return nil }
+func (m *mockTUNBonder) StreamDetail(_ uint8) ([]GenerationInfo, bool) { return nil, false }
+func (m *mockTUNBonder) InspectGeneration(_ uint8, _ uint16) (*GenerationInspection, bool) {
+	return nil, false
+}
 
 func (m *mockTUNBonder) getSent() [][]byte {
 	m.mu.Lock()

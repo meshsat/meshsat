@@ -42,10 +42,11 @@ type TUNStats struct {
 // IP packets read from the TUN fd are sent via Bonder.Send().
 // Reassembled payloads are written back to the TUN fd via DeliverFn.
 type TUNAdapter struct {
-	dev     TUNDevice
-	bonder  Bonder
-	mtu     int
-	eventCh chan<- Event
+	dev      TUNDevice
+	bonder   Bonder
+	bonderMu sync.RWMutex
+	mtu      int
+	eventCh  chan<- Event
 
 	stats struct {
 		packetsSent    atomic.Int64
@@ -130,7 +131,11 @@ func (t *TUNAdapter) Start(ctx context.Context) error {
 			Direction: "tx",
 		})
 
-		if err := t.bonder.Send(ctx, packet); err != nil {
+		t.bonderMu.RLock()
+		bdr := t.bonder
+		t.bonderMu.RUnlock()
+
+		if err := bdr.Send(ctx, packet); err != nil {
 			t.stats.packetsDropped.Add(1)
 			emit(t.eventCh, EventTUNPacketDropped, TUNPacketPayload{
 				Size:      n,
@@ -182,9 +187,27 @@ func (t *TUNAdapter) Stats() TUNStats {
 	}
 }
 
-// Bonder returns the underlying HeMB bonder instance.
+// Bonder returns the current HeMB bonder instance. Thread-safe.
 func (t *TUNAdapter) Bonder() Bonder {
+	t.bonderMu.RLock()
+	defer t.bonderMu.RUnlock()
 	return t.bonder
+}
+
+// Rebind hot-swaps the bonder with a new bearer set. The TUN read loop
+// continues uninterrupted — in-flight Send() calls complete on the old bonder,
+// subsequent calls use the new one. DeliverFn stays wired to the same TUN fd.
+// Use this when a bearer goes offline (e.g. antenna removal) to transition
+// from N>1 RLNC-coded mode to N=1 passthrough without tearing down the TUN.
+func (t *TUNAdapter) Rebind(bearers []BearerProfile) {
+	newBonder := NewBonder(Options{
+		Bearers:   bearers,
+		DeliverFn: t.deliverToTUN,
+		EventCh:   t.eventCh,
+	})
+	t.bonderMu.Lock()
+	t.bonder = newBonder
+	t.bonderMu.Unlock()
 }
 
 // --- TUN device creation (requires CAP_NET_ADMIN) ---

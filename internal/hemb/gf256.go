@@ -218,6 +218,94 @@ func ComputeRank(rows [][]byte, k int) int {
 	return rank
 }
 
+// GaussStep describes one step of Gaussian elimination for animation.
+type GaussStep struct {
+	Op     string   `json:"op"`      // "swap", "scale", "eliminate"
+	Row    int      `json:"row"`     // target row
+	Col    int      `json:"col"`     // pivot column
+	SrcRow int      `json:"src_row"` // source row (for eliminate)
+	Factor byte     `json:"factor"`  // GF(256) factor used
+	Matrix [][]byte `json:"matrix"`  // snapshot of coefficient matrix after this step
+}
+
+// GaussianEliminationSteps performs Gaussian elimination and records
+// each intermediate step for animated playback. Returns the steps and
+// the final rank achieved.
+func GaussianEliminationSteps(rows [][]byte, k int) ([]GaussStep, int) {
+	n := len(rows)
+	if n == 0 || k == 0 {
+		return nil, 0
+	}
+
+	// Deep copy into working matrix.
+	mat := make([][]byte, n)
+	for i, row := range rows {
+		mat[i] = make([]byte, k)
+		copy(mat[i], row)
+	}
+
+	snapshot := func() [][]byte {
+		s := make([][]byte, n)
+		for i := range mat {
+			s[i] = make([]byte, k)
+			copy(s[i], mat[i])
+		}
+		return s
+	}
+
+	var steps []GaussStep
+	rank := 0
+
+	for col := 0; col < k; col++ {
+		pivotRow := -1
+		for row := rank; row < n; row++ {
+			if mat[row][col] != 0 {
+				pivotRow = row
+				break
+			}
+		}
+		if pivotRow < 0 {
+			continue
+		}
+
+		// Swap pivot into position.
+		if pivotRow != rank {
+			mat[rank], mat[pivotRow] = mat[pivotRow], mat[rank]
+			steps = append(steps, GaussStep{
+				Op: "swap", Row: rank, Col: col, SrcRow: pivotRow,
+				Matrix: snapshot(),
+			})
+		}
+
+		// Scale pivot row so diagonal = 1.
+		inv := gfInv(mat[rank][col])
+		for c := 0; c < k; c++ {
+			mat[rank][c] = gfMul(mat[rank][c], inv)
+		}
+		steps = append(steps, GaussStep{
+			Op: "scale", Row: rank, Col: col, Factor: inv,
+			Matrix: snapshot(),
+		})
+
+		// Eliminate all other rows in this column.
+		for row := 0; row < n; row++ {
+			if row == rank || mat[row][col] == 0 {
+				continue
+			}
+			factor := mat[row][col]
+			for c := 0; c < k; c++ {
+				mat[row][c] = gfAdd(mat[row][c], gfMul(factor, mat[rank][c]))
+			}
+			steps = append(steps, GaussStep{
+				Op: "eliminate", Row: row, Col: col, SrcRow: rank, Factor: factor,
+				Matrix: snapshot(),
+			})
+		}
+		rank++
+	}
+	return steps, rank
+}
+
 // randBytes fills buf with cryptographically random bytes.
 func randBytes(buf []byte) {
 	if _, err := rand.Read(buf); err != nil {
