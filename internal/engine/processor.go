@@ -760,6 +760,20 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 						return
 					}
 				}
+				// HeMB frame inside Reticulum data packet — route to reassembler.
+				if len(hdr.Data) > 0 && hemb.IsHeMBFrame(hdr.Data) {
+					if p.hembBonder != nil {
+						bearerIdx := p.bearerIndexForIface(sourceIface)
+						decoded, err := p.hembBonder.ReceiveSymbol(bearerIdx, hdr.Data)
+						if err != nil {
+							log.Debug().Err(err).Str("iface", sourceIface).Msg("hemb: receive symbol failed (Reticulum-wrapped)")
+						}
+						if decoded != nil {
+							log.Info().Str("iface", sourceIface).Int("bytes", len(decoded)).Msg("hemb: cross-bearer reassembly complete")
+						}
+					}
+					return
+				}
 				if p.transportNode != nil && p.transportNode.ForwardPacket(payload, sourceIface) {
 					log.Debug().Msg("routing: Reticulum data packet forwarded via transport")
 					return
@@ -768,8 +782,6 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 				if p.isAddressedToUs(hdr) && p.linkMgr != nil && len(hdr.Data) > 0 {
 					log.Info().Int("size", len(hdr.Data)).Str("iface", sourceIface).
 						Msg("routing: Reticulum data packet received for local identity")
-					// Data packets on established links contain encrypted payload.
-					// Decryption and application delivery will be wired in a follow-up.
 				} else {
 					log.Debug().Msg("routing: Reticulum data packet not for us, no transport route")
 				}
