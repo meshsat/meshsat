@@ -165,13 +165,98 @@ func (s *Server) handleHeMBSend(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetHeMBStats(w http.ResponseWriter, r *http.Request) {
 	st := hemb.Global.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"active_streams":      st.ActiveStreams,
-		"symbols_sent":        st.SymbolsSent,
-		"symbols_received":    st.SymbolsReceived,
-		"generations_decoded": st.GenerationsDecoded,
-		"generations_failed":  st.GenerationsFailed,
-		"bytes_free":          st.BytesFree,
-		"bytes_paid":          st.BytesPaid,
-		"cost_incurred":       st.CostIncurred,
+		"active_streams":        st.ActiveStreams,
+		"symbols_sent":          st.SymbolsSent,
+		"symbols_received":      st.SymbolsReceived,
+		"generations_decoded":   st.GenerationsDecoded,
+		"generations_failed":    st.GenerationsFailed,
+		"bytes_free":            st.BytesFree,
+		"bytes_paid":            st.BytesPaid,
+		"cost_incurred":         st.CostIncurred,
+		"decode_latency_p50_ms": st.DecodeLatencyP50,
+		"decode_latency_p95_ms": st.DecodeLatencyP95,
 	})
+}
+
+// handleHeMBFaultInject injects a fault on a bearer interface for field testing.
+// @Summary Inject bearer fault
+// @Tags hemb
+// @Accept json
+// @Produce json
+// @Param body body object true "Fault inject request" example({"interface_id":"tcp_0"})
+// @Success 200 {object} map[string]string
+// @Router /hemb/fault-inject [post]
+func (s *Server) handleHeMBFaultInject(w http.ResponseWriter, r *http.Request) {
+	if s.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "dispatcher not available")
+		return
+	}
+	fr := s.dispatcher.FailoverResolver()
+	if fr == nil {
+		writeError(w, http.StatusServiceUnavailable, "failover resolver not available")
+		return
+	}
+
+	var req struct {
+		InterfaceID string `json:"interface_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.InterfaceID == "" {
+		writeError(w, http.StatusBadRequest, "interface_id required")
+		return
+	}
+
+	fr.InjectFault(req.InterfaceID)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "faulted",
+		"interface_id": req.InterfaceID,
+	})
+}
+
+// handleHeMBFaultClear clears a fault injection on a bearer interface.
+// @Summary Clear bearer fault
+// @Tags hemb
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Success 200 {object} map[string]string
+// @Router /hemb/fault-inject/{id} [delete]
+func (s *Server) handleHeMBFaultClear(w http.ResponseWriter, r *http.Request) {
+	if s.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "dispatcher not available")
+		return
+	}
+	fr := s.dispatcher.FailoverResolver()
+	if fr == nil {
+		writeError(w, http.StatusServiceUnavailable, "failover resolver not available")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	fr.ClearFault(id)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":       "restored",
+		"interface_id": id,
+	})
+}
+
+// handleHeMBFaultList lists currently faulted bearer interfaces.
+// @Summary List faulted bearers
+// @Tags hemb
+// @Produce json
+// @Success 200 {array} string
+// @Router /hemb/fault-inject [get]
+func (s *Server) handleHeMBFaultList(w http.ResponseWriter, r *http.Request) {
+	if s.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "dispatcher not available")
+		return
+	}
+	fr := s.dispatcher.FailoverResolver()
+	if fr == nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+	faulted := fr.FaultedInterfaces()
+	if faulted == nil {
+		faulted = []string{}
+	}
+	writeJSON(w, http.StatusOK, faulted)
 }

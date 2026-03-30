@@ -470,6 +470,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/hemb/streams", s.handleGetHeMBStreams)
 		r.Get("/hemb/streams/{id}", s.handleGetHeMBStreamDetail)
 		r.Get("/hemb/generations/{stream_id}/{gen_id}", s.handleGetHeMBGenerationInspect)
+		r.Post("/hemb/fault-inject", s.handleHeMBFaultInject)
+		r.Get("/hemb/fault-inject", s.handleHeMBFaultList)
+		r.Delete("/hemb/fault-inject/{id}", s.handleHeMBFaultClear)
 
 		// Dead man's switch
 		r.Get("/deadman", s.handleGetDeadmanConfig)
