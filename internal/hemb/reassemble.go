@@ -121,7 +121,8 @@ func (rb *ReassemblyBuffer) AddSymbol(streamID uint8, bearerIndex uint8, sym Cod
 	}
 
 	if gen.decoded {
-		return nil, nil // already decoded, ignore duplicate
+		log.Debug().Uint8("stream", streamID).Uint16("gen", gen.genID).Msg("hemb: AddSymbol skip — generation already decoded")
+		return nil, nil
 	}
 
 	// Add symbol with arrival metadata.
