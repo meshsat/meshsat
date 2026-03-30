@@ -137,9 +137,15 @@ func (rb *ReassemblyBuffer) AddSymbol(streamID uint8, bearerIndex uint8, sym Cod
 
 	// Attempt decode if we have enough symbols.
 	if len(gen.symbols) >= gen.k {
+		log.Debug().Uint8("stream", streamID).Uint16("gen", gen.genID).
+			Int("symbols", len(gen.symbols)).Int("k", gen.k).
+			Msg("hemb: attempting decode")
 		return rb.tryDecode(streamID, gen)
 	}
 
+	log.Debug().Uint8("stream", streamID).Uint16("gen", gen.genID).
+		Int("symbols", len(gen.symbols)).Int("k", gen.k).
+		Msg("hemb: not enough symbols yet")
 	return nil, nil
 }
 
