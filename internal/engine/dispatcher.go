@@ -881,17 +881,19 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 				return gw.Forward(ctx, &transport.MeshMessage{RawPayload: data})
 			}
 		}
+		// Reticulum packet sender: crosses bridges via TCP/HDLC.
+		if d.pktSender != nil {
+			if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
+				return fn
+			}
+		}
+		// Last resort: raw mesh (local only — doesn't cross Meshtastic nodes).
 		if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
 			return func(ctx context.Context, data []byte) error {
 				return d.mesh.SendRaw(ctx, transport.RawRequest{
 					PortNum: 256,
 					Payload: encoding_base64.StdEncoding.EncodeToString(data),
 				})
-			}
-		}
-		if d.pktSender != nil {
-			if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
-				return fn
 			}
 		}
 		return nil
