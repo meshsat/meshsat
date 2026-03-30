@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
+// globalStreamSeq ensures unique stream IDs across all bonder instances,
+// including ephemeral bonders created per-delivery by the dispatcher.
+var globalStreamSeq atomic.Uint32
+
 // bonder implements the HeMB bonding layer.
 type bonder struct {
 	opts       Options
 	reassembly *ReassemblyBuffer
 	stats      bondStatsCounters
-	streamSeq  atomic.Uint32
 	mu         sync.Mutex
 }
 
@@ -104,7 +107,7 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 		return b.sendN1(ctx, payload, &online[0])
 	}
 
-	streamID := uint8(b.streamSeq.Add(1) & 0x0F)
+	streamID := uint8(globalStreamSeq.Add(1) & 0x0F)
 
 	// Step 1: compute initial symbol size = min bearer capacity with K=1 estimate.
 	// Each bearer frame = header + K coefficient bytes + symbol data.
