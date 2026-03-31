@@ -694,16 +694,56 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 	}
 }
 
-// isReticulumPacket checks if the payload starts with a valid Reticulum header.
-// Reticulum Type 1 (single-hop): first nibble 0x1, min 19 bytes.
-// Reticulum Type 2 (transport): first nibble 0x2, min 35 bytes.
+// isReticulumPacket checks if the payload is a valid Reticulum packet by
+// attempting header unmarshal. Simple bit-pattern checks are too permissive
+// (ASCII text starting with uppercase letters matches Reticulum Type 1).
 // Used at L4 to classify MT payloads before queuing. [MESHSAT-447]
 func isReticulumPacket(data []byte) bool {
 	if len(data) < 19 {
 		return false
 	}
-	headerType := (data[0] >> 6) & 0x03
-	return headerType == 0x00 || headerType == 0x01 // Type 1 or Type 2
+	// Reticulum Type 1: flags(1) + hops(1) + dest(16) + context(1) = 19 bytes min
+	// Reticulum Type 2: flags(1) + hops(1) + transport(16) + dest(16) + context(1) = 35 bytes min
+	flags := data[0]
+	headerType := (flags >> 6) & 0x01
+	packetType := flags & 0x03
+	destType := (flags >> 2) & 0x03
+
+	// PacketType must be 0-3, DestType must be 0-2
+	if packetType > 3 || destType > 2 {
+		return false
+	}
+
+	// Type 2 requires at least 35 bytes
+	if headerType == 1 && len(data) < 35 {
+		return false
+	}
+
+	// Hops byte (data[1]) should be 0-128 (7-bit hop count)
+	if data[1] > 128 {
+		return false
+	}
+
+	// Final heuristic: pure ASCII text (all bytes 0x20-0x7E) is NOT a Reticulum packet
+	allPrintable := true
+	for _, b := range data[:min(len(data), 19)] {
+		if b < 0x20 || b > 0x7E {
+			allPrintable = false
+			break
+		}
+	}
+	if allPrintable {
+		return false // plaintext message, not binary Reticulum
+	}
+
+	return true
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // signalPoller actively queries the modem for signal strength every 30 seconds,
