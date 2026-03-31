@@ -440,8 +440,8 @@ func (c *jsprConn) bufferUnsolicited(resp jsprResponse) {
 	c.unsolMu.Unlock()
 	c.unsolCond.Broadcast()
 	if resp.Target != "constellationState" {
-		log.Info().Str("target", resp.Target).Int("code", resp.Code).Int("depth", depth).
-			Msg("jspr: buffered non-signal unsolicited")
+		log.Info().Str("target", resp.Target).Int("depth", depth).
+			Msg("jspr: unsolicited buffered")
 	}
 }
 
