@@ -436,8 +436,13 @@ func (c *jsprConn) readOneLine(maxWait time.Duration) (*jsprResponse, error) {
 func (c *jsprConn) bufferUnsolicited(resp jsprResponse) {
 	c.unsolMu.Lock()
 	c.unsol = append(c.unsol, resp)
+	depth := len(c.unsol)
 	c.unsolMu.Unlock()
 	c.unsolCond.Broadcast()
+	if resp.Target != "constellationState" {
+		log.Info().Str("target", resp.Target).Int("code", resp.Code).Int("depth", depth).
+			Msg("jspr: buffered non-signal unsolicited")
+	}
 }
 
 // takeUnsolicited removes and returns all unsolicited messages matching a target.

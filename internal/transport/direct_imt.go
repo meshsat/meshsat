@@ -631,6 +631,9 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 	}
 
 	announcements := conn.takeUnsolicited("messageTerminate")
+	if len(announcements) > 0 {
+		log.Info().Int("count", len(announcements)).Msg("imt: processMTAnnouncements found MT messages")
+	}
 	for _, ann := range announcements {
 		var mt jsprMTAnnounce
 		if err := json.Unmarshal(ann.JSON, &mt); err != nil {
