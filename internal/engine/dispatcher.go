@@ -186,6 +186,11 @@ func (d *Dispatcher) SetTransformPipeline(tp *TransformPipeline) {
 	d.transforms = tp
 }
 
+// TransformPipeline returns the transform pipeline for external callers. [MESHSAT-447]
+func (d *Dispatcher) TransformPipeline() *TransformPipeline {
+	return d.transforms
+}
+
 // SetPassStateProvider sets the satellite pass scheduler for pass-aware delivery.
 func (d *Dispatcher) SetPassStateProvider(ps PassStateProvider) {
 	d.passSched = ps

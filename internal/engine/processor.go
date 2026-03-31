@@ -968,18 +968,34 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				})
 
 				// Dispatch through rules engine
+				sourceIface := msg.Source + "_0"
 				if p.dispatcher != nil {
 					routeMsg := rules.RouteMessage{
 						Text: msg.Text,
 						From: msg.Source,
 					}
-					sourceIface := msg.Source + "_0"
 					// Increment ingress sequence number for the source interface
 					if _, err := p.db.IncrementIngressSeq(sourceIface); err != nil {
 						log.Warn().Err(err).Str("interface", sourceIface).Msg("failed to increment ingress seq")
 					}
 					if n := p.dispatcher.DispatchAccess(sourceIface, routeMsg, []byte(msg.Text)); n > 0 {
 						log.Info().Int("deliveries", n).Str("interface", sourceIface).Msg("inbound dispatched via access rules")
+					}
+				}
+
+				// Apply ingress transforms before persisting (decrypt, decompress). [MESHSAT-447]
+				decodedText := msg.Text
+				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil {
+					if iface, err := p.db.GetInterface(sourceIface); err == nil &&
+						iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
+						if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress(
+							[]byte(msg.Text), iface.IngressTransforms); tErr == nil {
+							decodedText = string(decoded)
+							log.Info().Str("iface", sourceIface).Int("raw", len(msg.Text)).
+								Int("decoded", len(decodedText)).Msg("gateway inbound: ingress transforms applied")
+						} else {
+							log.Warn().Err(tErr).Str("iface", sourceIface).Msg("gateway inbound: ingress transform failed, storing raw")
+						}
 					}
 				}
 
@@ -990,7 +1006,7 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					Channel:     msg.Channel,
 					PortNum:     1,
 					PortNumName: "TEXT_MESSAGE_APP",
-					DecodedText: msg.Text,
+					DecodedText: decodedText,
 					Direction:   "rx",
 					Transport:   msg.Source,
 				}
