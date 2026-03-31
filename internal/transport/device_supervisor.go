@@ -54,6 +54,23 @@ type DeviceSupervisor struct {
 	portInstances   map[string]string // devPath → instanceID
 	portInstancesMu sync.RWMutex
 
+	// scanMu serializes scan and reconcile cycles — prevents concurrent
+	// registry modification from overlapping 30s scan and 15s reconcile tickers.
+	// [MESHSAT-444]
+	scanMu sync.Mutex
+
+	// Probe serialization: prevents concurrent probes on the same port and
+	// prevents re-probing ports that were already identified as wrong-interface
+	// (e.g., Huawei E220 interface 0). [MESHSAT-444]
+	probingMu sync.Mutex
+	probing   map[string]bool // ports currently being probed
+	skipPorts map[string]bool // ports to skip permanently (wrong interface, etc.)
+
+	// probeMu serializes all serial port probes globally — only one probe
+	// may open a serial port at a time to prevent USB bus contention and
+	// kernel driver confusion on shared hubs. [MESHSAT-444]
+	probeMu sync.Mutex
+
 	// Explicit port overrides (from env vars) — skip auto-detect for these roles
 	explicitPorts map[DeviceRole]string
 
@@ -72,6 +89,8 @@ func NewDeviceSupervisor() *DeviceSupervisor {
 		registry:      NewDeviceRegistry(),
 		callbacks:     make(map[DeviceRole][]*DriverCallbacks),
 		portInstances: make(map[string]string),
+		probing:       make(map[string]bool),
+		skipPorts:     make(map[string]bool),
 		explicitPorts: make(map[DeviceRole]string),
 		stopCh:        make(chan struct{}),
 		scanNowCh:     make(chan struct{}, 1),
@@ -156,10 +175,12 @@ func (s *DeviceSupervisor) run() {
 	// Register explicit ports first
 	s.registerExplicitPorts()
 
-	// Initial scan
+	// Initial scan — serialized under scanMu [MESHSAT-444]
+	s.scanMu.Lock()
 	s.recoverMissingTTY()
 	s.scanSerialPorts()
 	s.reconcileSerialDevices()
+	s.scanMu.Unlock()
 
 	portTicker := time.NewTicker(30 * time.Second)
 	serialTicker := time.NewTicker(15 * time.Second)
@@ -171,14 +192,20 @@ func (s *DeviceSupervisor) run() {
 		case <-s.stopCh:
 			return
 		case <-portTicker.C:
+			s.scanMu.Lock()
 			s.recoverMissingTTY()
 			s.scanSerialPorts()
+			s.scanMu.Unlock()
 		case <-serialTicker.C:
+			s.scanMu.Lock()
 			s.reconcileSerialDevices()
+			s.scanMu.Unlock()
 		case <-s.scanNowCh:
+			s.scanMu.Lock()
 			s.recoverMissingTTY()
 			s.scanSerialPorts()
 			s.reconcileSerialDevices()
+			s.scanMu.Unlock()
 		}
 	}
 }
@@ -257,7 +284,8 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 				s.registry.Remove(port)
 				// Fall through to register as new
 			} else {
-				// Same device, update LastSeen
+				// Same device — actually update LastSeen [MESHSAT-444]
+				s.registry.UpdateLastSeen(port, now)
 				continue
 			}
 		}
@@ -288,6 +316,12 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 			Type:   "device_removed",
 			Device: entry,
 		})
+
+		// Clean up skip list when device is unplugged — the same /dev path
+		// may be reassigned to a different device on re-plug. [MESHSAT-444]
+		s.probingMu.Lock()
+		delete(s.skipPorts, entry.DevPath)
+		s.probingMu.Unlock()
 
 		// Notify driver that port is gone
 		if entry.Role != RoleNone {
@@ -321,6 +355,10 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 				log.Info().Str("port", entry.DevPath).Str("role", string(entry.Role)).Msg("device-supervisor: serial port vanished")
 			}
 			s.registry.Remove(entry.DevPath)
+			// Clean up skip list — port may be reassigned on re-plug [MESHSAT-444]
+			s.probingMu.Lock()
+			delete(s.skipPorts, entry.DevPath)
+			s.probingMu.Unlock()
 			s.emitEvent(DeviceEvent{
 				Type:   "device_disconnected",
 				Device: entry,
@@ -336,53 +374,74 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 		s.identifyAndClaimPort(port)
 	}
 
-	// Reconnect: check for roles that lost their port but a matching port reappeared
-	s.reconnectDisconnected()
+	// Reconnect: check for roles that lost their port but a matching port reappeared.
+	// Pass activeSet to avoid duplicate glob scan. [MESHSAT-444]
+	s.reconnectDisconnected(activeSet)
 }
 
 // identifyAndClaimPort runs the identification cascade on an unclaimed port.
 // Order: VID:PID match → JSPR (9704) → AT (9603) → Cellular AT → Astronode → ZNP
+//
+// [MESHSAT-444] Probe serialization: acquires a per-port lock to prevent
+// concurrent probes on the same port. Skips ports that are permanently
+// marked (wrong interface on multi-port devices like Huawei E220).
 func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
+	// Skip ports permanently marked as wrong-interface or non-AT data ports.
+	s.probingMu.Lock()
+	if s.skipPorts[port] {
+		s.probingMu.Unlock()
+		return
+	}
+	// Serialize: if another goroutine is already probing this port, skip.
+	if s.probing[port] {
+		s.probingMu.Unlock()
+		return
+	}
+	// Double-check claim under probe lock to prevent race with parallel reconcile.
+	if role := s.registry.GetPortRole(port); role != RoleNone {
+		s.probingMu.Unlock()
+		return
+	}
+	s.probing[port] = true
+	s.probingMu.Unlock()
+
+	defer func() {
+		s.probingMu.Lock()
+		delete(s.probing, port)
+		s.probingMu.Unlock()
+	}()
+
 	vidpid := findUSBVIDPID(port)
 
 	// Step 1: VID:PID match (~1ms)
 	if vidpid != "" {
 		role := s.classifyByVIDPID(vidpid, port)
 		if role != RoleNone {
-			if s.registry.ClaimPort(port, role) {
-				s.registry.SetRole(port, role)
-				s.registry.SetState(port, StateReady)
-				log.Info().Str("port", port).Str("vidpid", vidpid).Str("role", string(role)).Msg("device-supervisor: identified by VID:PID")
-				s.notifyPortFound(role, port)
-				s.emitEvent(DeviceEvent{
-					Type:   "device_connected",
-					Device: s.registryEntry(port),
-				})
-			}
+			s.claimAndNotify(port, vidpid, role, "VID:PID")
 			return
 		}
 	}
 
+	// Mark port as identifying while probes run [MESHSAT-444]
+	s.registry.SetState(port, StateIdentifying)
+
 	// Step 2: JSPR probe for 9704 (~500ms)
 	// Skip on platform UARTs (ttyAMA*) — they have no FTDI chip and never respond to JSPR.
-	// Also skip on ports with known non-FTDI VID:PIDs.
+	// Skip on known cellular VID:PIDs — JSPR probe wastes 9s on Huawei modems. [MESHSAT-444]
 	// NOTE: probeJSPR uses O_NONBLOCK + select() which is unreliable on ARM64 FTDI;
 	// prefer VID:PID + USB product string identification (Step 1) when possible.
 	if strings.HasPrefix(filepath.Base(port), "ttyAMA") {
 		// Platform UART — skip JSPR probe entirely
-	} else if probeJSPR(port) {
-		role := RoleIridium9704
-		if s.registry.ClaimPort(port, role) {
-			s.registry.SetRole(port, role)
-			s.registry.SetState(port, StateReady)
-			log.Info().Str("port", port).Msg("device-supervisor: identified as 9704 by JSPR probe")
-			s.notifyPortFound(role, port)
-			s.emitEvent(DeviceEvent{
-				Type:   "device_connected",
-				Device: s.registryEntry(port),
-			})
+	} else if knownCellularVIDPIDs[vidpid] {
+		// Known cellular modem — skip JSPR probe (would hang for 9s) [MESHSAT-444]
+	} else {
+		s.probeMu.Lock()
+		jsprResult := probeJSPR(port)
+		s.probeMu.Unlock()
+		if jsprResult {
+			s.claimAndNotify(port, vidpid, RoleIridium9704, "JSPR probe")
+			return
 		}
-		return
 	}
 
 	// Step 3: AT probe for 9603 (~500ms)
@@ -390,18 +449,11 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	if vidpid == "" || (!knownMeshtasticVIDPIDs[vidpid] && !gpsVIDPIDs[vidpid] &&
 		!knownCellularVIDPIDs[vidpid] && !knownAstrocastVIDPIDs[vidpid] &&
 		!knownZigBeeOnlyVIDPIDs[vidpid]) {
-		if probeAT(port) {
-			role := RoleIridium9603
-			if s.registry.ClaimPort(port, role) {
-				s.registry.SetRole(port, role)
-				s.registry.SetState(port, StateReady)
-				log.Info().Str("port", port).Msg("device-supervisor: identified as 9603 by AT probe")
-				s.notifyPortFound(role, port)
-				s.emitEvent(DeviceEvent{
-					Type:   "device_connected",
-					Device: s.registryEntry(port),
-				})
-			}
+		s.probeMu.Lock()
+		atResult := probeAT(port)
+		s.probeMu.Unlock()
+		if atResult {
+			s.claimAndNotify(port, vidpid, RoleIridium9603, "AT probe")
 			return
 		}
 	}
@@ -409,24 +461,24 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	// Step 4: Cellular AT probe (~500ms)
 	// Only try on ports with known cellular VID:PIDs or truly unknown ports
 	if vidpid == "" || knownCellularVIDPIDs[vidpid] {
-		// Check multi-interface modem (Huawei E220: skip iface 0)
+		// Check multi-interface modem (Huawei E220: skip iface 0).
+		// Mark wrong-interface ports permanently so they are never re-probed. [MESHSAT-444]
 		if iface, ok := cellularATInterface[vidpid]; ok {
 			if findUSBInterfaceNum(port) != iface {
-				return // wrong interface for AT commands
+				s.probingMu.Lock()
+				s.skipPorts[port] = true
+				s.probingMu.Unlock()
+				log.Debug().Str("port", port).Str("vidpid", vidpid).
+					Str("got_iface", findUSBInterfaceNum(port)).Str("want_iface", iface).
+					Msg("device-supervisor: skipping wrong interface on multi-port modem")
+				return
 			}
 		}
-		if probeCellularAT(port) {
-			role := RoleCellular
-			if s.registry.ClaimPort(port, role) {
-				s.registry.SetRole(port, role)
-				s.registry.SetState(port, StateReady)
-				log.Info().Str("port", port).Msg("device-supervisor: identified as cellular by AT probe")
-				s.notifyPortFound(role, port)
-				s.emitEvent(DeviceEvent{
-					Type:   "device_connected",
-					Device: s.registryEntry(port),
-				})
-			}
+		s.probeMu.Lock()
+		cellResult := probeCellularAT(port)
+		s.probeMu.Unlock()
+		if cellResult {
+			s.claimAndNotify(port, vidpid, RoleCellular, "cellular AT probe")
 			return
 		}
 	}
@@ -434,42 +486,53 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	// Step 5: Astronode probe (~500ms)
 	// Only try on FTDI or CP210x ports that aren't already identified
 	if vidpid == "" || knownAstrocastVIDPIDs[vidpid] {
-		if probeAstronode(port) {
-			role := RoleAstrocast
-			if s.registry.ClaimPort(port, role) {
-				s.registry.SetRole(port, role)
-				s.registry.SetState(port, StateReady)
-				log.Info().Str("port", port).Msg("device-supervisor: identified as astronode by probe")
-				s.notifyPortFound(role, port)
-				s.emitEvent(DeviceEvent{
-					Type:   "device_connected",
-					Device: s.registryEntry(port),
-				})
-			}
+		s.probeMu.Lock()
+		astroResult := probeAstronode(port)
+		s.probeMu.Unlock()
+		if astroResult {
+			s.claimAndNotify(port, vidpid, RoleAstrocast, "astronode probe")
 			return
 		}
 	}
 
 	// Step 6: ZNP probe for ZigBee (~500ms)
-	// Only try on ambiguous VID:PIDs (CP210x, CH343) or ZigBee-only VID:PIDs
+	// Only try on ambiguous VID:PIDs (CP210x, CH343) or ZigBee-only VID:PIDs.
+	// Serialized under probeMu to prevent USB bus contention. [MESHSAT-444]
 	if knownZigBeeOnlyVIDPIDs[vidpid] || ambiguousZigBeeVIDPIDs[vidpid] {
-		if ProbeZNP(port) {
-			role := RoleZigBee
-			if s.registry.ClaimPort(port, role) {
-				s.registry.SetRole(port, role)
-				s.registry.SetState(port, StateReady)
-				log.Info().Str("port", port).Msg("device-supervisor: identified as zigbee by ZNP probe")
-				s.notifyPortFound(role, port)
-				s.emitEvent(DeviceEvent{
-					Type:   "device_connected",
-					Device: s.registryEntry(port),
-				})
-			}
+		s.probeMu.Lock()
+		znpResult := ProbeZNP(port)
+		s.probeMu.Unlock()
+		if znpResult {
+			s.claimAndNotify(port, vidpid, RoleZigBee, "ZNP probe")
+			return
+		}
+		// Ambiguous VID:PID + ZNP probe failed → default to Meshtastic [MESHSAT-444]
+		if ambiguousZigBeeVIDPIDs[vidpid] {
+			s.claimAndNotify(port, vidpid, RoleMeshtastic, "ambiguous VID:PID default")
 			return
 		}
 	}
 
 	// Unknown — will retry next cycle
+}
+
+// claimAndNotify claims a port for a role and fires callbacks.
+// Logs a warning if the claim fails (port was claimed by another goroutine). [MESHSAT-444]
+func (s *DeviceSupervisor) claimAndNotify(port, vidpid string, role DeviceRole, method string) {
+	if !s.registry.ClaimPort(port, role) {
+		log.Warn().Str("port", port).Str("role", string(role)).Str("method", method).
+			Msg("device-supervisor: probe succeeded but claim failed (port claimed by another goroutine)")
+		return
+	}
+	s.registry.SetRole(port, role)
+	s.registry.SetState(port, StateReady)
+	log.Info().Str("port", port).Str("vidpid", vidpid).Str("role", string(role)).
+		Msgf("device-supervisor: identified by %s", method)
+	s.notifyPortFound(role, port)
+	s.emitEvent(DeviceEvent{
+		Type:   "device_connected",
+		Device: s.registryEntry(port),
+	})
 }
 
 // classifyByVIDPID returns the role for a known VID:PID, or RoleNone for unknown/ambiguous.
@@ -491,22 +554,25 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 
 	// Cellular VID:PIDs — check before ambiguous handler since CH9102F is in both
 	if knownCellularVIDPIDs[vidpid] {
-		// For multi-interface modems, only claim the AT port
+		// For multi-interface modems, only claim the AT port.
+		// Mark wrong-interface ports permanently so they're never re-probed. [MESHSAT-444]
 		if iface, ok := cellularATInterface[vidpid]; ok {
 			if findUSBInterfaceNum(port) != iface {
+				s.probingMu.Lock()
+				s.skipPorts[port] = true
+				s.probingMu.Unlock()
 				return RoleNone // wrong interface
 			}
 		}
 		return RoleCellular
 	}
 
-	// Ambiguous Meshtastic/ZigBee — needs protocol probe, handled in cascade
+	// Ambiguous Meshtastic/ZigBee — return RoleNone to let the identification
+	// cascade (Step 6) handle it with proper probe serialization. [MESHSAT-444]
+	// ProbeZNP was previously called here (serial I/O in a "fast" VID:PID path)
+	// which ran unserialized and could interfere with other probes.
 	if ambiguousZigBeeVIDPIDs[vidpid] {
-		// Try ZNP first (ZigBee is rarer, so if it responds it's definitely ZigBee)
-		if ProbeZNP(port) {
-			return RoleZigBee
-		}
-		return RoleMeshtastic // default for ambiguous
+		return RoleNone
 	}
 
 	// Meshtastic-only (ESP32-S3 native USB, etc.)
@@ -539,26 +605,14 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 // IMPORTANT: Re-verifies VID:PID before reconnecting — a different device may have
 // been plugged into the same port. If VID:PID changed, the old entry is removed
 // and the port will be re-identified in the next reconcile cycle.
-func (s *DeviceSupervisor) reconnectDisconnected() {
+// [MESHSAT-444] Takes activeSet from caller to avoid duplicate glob scan.
+func (s *DeviceSupervisor) reconnectDisconnected(activeSet map[string]bool) {
 	for _, entry := range s.registry.ListAll() {
 		if entry.State != StateDisconnected {
 			continue
 		}
-		// Check if the port is back
-		found := false
-		for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttyAMA*"} {
-			matches, _ := filepath.Glob(pattern)
-			for _, m := range matches {
-				if m == entry.DevPath {
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-		if !found {
+		// Check if the port is back using the caller's active set
+		if !activeSet[entry.DevPath] {
 			continue
 		}
 

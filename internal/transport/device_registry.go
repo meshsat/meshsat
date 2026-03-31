@@ -197,6 +197,16 @@ func (r *DeviceRegistry) SetState(devPath string, state DeviceState) {
 	}
 }
 
+// UpdateLastSeen updates the LastSeen timestamp for a device. [MESHSAT-444]
+func (r *DeviceRegistry) UpdateLastSeen(devPath string, t time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if entry, exists := r.devices[devPath]; exists {
+		entry.LastSeen = t
+	}
+}
+
 // SetRole updates the role of a device.
 func (r *DeviceRegistry) SetRole(devPath string, role DeviceRole) {
 	r.mu.Lock()

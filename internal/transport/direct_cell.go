@@ -132,6 +132,7 @@ type DirectCellTransport struct {
 	simLabel    string             // user label from SIM card DB
 	simLookupFn SIMCardLookupFunc  // injected DB lookup
 	simTouchFn  func(iccid string) // update last_seen in DB
+	fallbackPIN string             // from MESHSAT_SIM_PIN env var [MESHSAT-445]
 }
 
 // NewDirectCellTransport creates a new direct serial cellular transport.
@@ -148,6 +149,12 @@ func NewDirectCellTransport(port string) *DirectCellTransport {
 func (t *DirectCellTransport) SetSIMCardLookup(fn SIMCardLookupFunc, touchFn func(string)) {
 	t.simLookupFn = fn
 	t.simTouchFn = touchFn
+}
+
+// SetFallbackPIN sets a PIN to use when the SIM's ICCID can't be read (locked SIM)
+// or when no PIN is stored in the database. Typically from MESHSAT_SIM_PIN env var. [MESHSAT-445]
+func (t *DirectCellTransport) SetFallbackPIN(pin string) {
+	t.fallbackPIN = pin
 }
 
 // SetExcludePorts tells auto-detection to skip these ports (e.g., Meshtastic and Iridium ports).
@@ -335,23 +342,66 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 			if t.simTouchFn != nil {
 				t.simTouchFn(iccid)
 			}
+		}
+	}
 
-			// Auto-unlock SIM PIN from saved settings
-			if simState == "PIN_REQUIRED" && info.PIN != "" {
-				log.Info().Str("iccid", iccid).Msg("cellular: auto-unlocking SIM PIN from saved settings")
-				pinCmd := fmt.Sprintf("AT+CPIN=\"%s\"", info.PIN)
-				resp, err = sendAT(sp, pinCmd, 30*time.Second)
-				if err == nil && !strings.Contains(resp, "ERROR") {
-					time.Sleep(2 * time.Second) // modem settles after PIN unlock
+	// Auto-unlock SIM PIN [MESHSAT-445]
+	// PIN sources (priority order): DB lookup by ICCID → MESHSAT_SIM_PIN env var
+	if simState == "PIN_REQUIRED" {
+		pin := ""
+		pinSource := ""
+
+		// Source 1: saved PIN from database (by ICCID)
+		if iccid != "" && t.simLookupFn != nil {
+			if info, err := t.simLookupFn(iccid); err == nil && info != nil && info.PIN != "" {
+				pin = info.PIN
+				pinSource = "database (ICCID " + iccid + ")"
+			}
+		}
+		// Source 2: fallback from MESHSAT_SIM_PIN env var
+		if pin == "" && t.fallbackPIN != "" {
+			pin = t.fallbackPIN
+			pinSource = "MESHSAT_SIM_PIN env var"
+			if iccid == "" {
+				log.Warn().Msg("cellular: ICCID unreadable on locked SIM — using fallback PIN from env var")
+			}
+		}
+
+		if pin != "" {
+			log.Info().Str("source", pinSource).Msg("cellular: attempting SIM PIN unlock")
+			pinCmd := fmt.Sprintf("AT+CPIN=\"%s\"", pin)
+			resp, err = sendAT(sp, pinCmd, 30*time.Second)
+			if err != nil || strings.Contains(resp, "ERROR") {
+				log.Warn().Err(err).Str("resp", resp).Msg("cellular: PIN unlock command failed")
+			} else {
+				// Huawei E220 on 2G needs 5s to stabilize after PIN entry.
+				// Industry standard (ModemManager) uses 3s; we use 5s for
+				// slow 2G modems like the E220. [MESHSAT-445]
+				time.Sleep(5 * time.Second)
+
+				// Verify PIN actually worked by re-querying AT+CPIN? [MESHSAT-445]
+				resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
+				verifiedState := parseCPIN(resp)
+				if verifiedState == "READY" {
 					simState = "READY"
-					log.Info().Msg("cellular: SIM PIN auto-unlocked successfully")
+					log.Info().Msg("cellular: SIM PIN verified unlocked")
 
-					// Re-query network state now that SIM is unlocked
+					// Force full functionality mode (required by some modems
+					// after PIN unlock to start network registration) [MESHSAT-445]
+					sendAT(sp, "AT+CFUN=1", 5*time.Second)
+					time.Sleep(1 * time.Second)
+
+					// Re-query network state now that SIM is unlocked.
+					// Use AT+COPS=0 to trigger auto-select BEFORE querying,
+					// otherwise AT+COPS? can hang on unregistered modem. [MESHSAT-445]
 					sendAT(sp, "AT+CREG=2", cellATTimeout)
+					sendAT(sp, "AT+COPS=0", 10*time.Second) // auto-select operator
+					time.Sleep(3 * time.Second)             // wait for registration
+
 					resp, _ = sendAT(sp, "AT+CREG?", cellATTimeout)
 					regStatus = parseCREG(resp)
 					netType = parseCREGNetType(resp)
-					resp, _ = sendAT(sp, "AT+COPS?", cellATTimeout)
+					resp, _ = sendAT(sp, "AT+COPS?", 10*time.Second)
 					operator = parseCOPS(resp)
 					if netType == "" {
 						netType = parseCOPSNetType(resp)
@@ -366,9 +416,13 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 					sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
 					sendAT(sp, "AT+CSCB=0", cellATTimeout)
 				} else {
-					log.Warn().Err(err).Msg("cellular: auto-PIN-unlock failed (wrong PIN or modem error)")
+					log.Warn().Str("state", verifiedState).
+						Msg("cellular: PIN unlock sent OK but SIM still not READY (wrong PIN or PUK required)")
 				}
 			}
+		} else {
+			log.Warn().Bool("iccid_available", iccid != "").
+				Msg("cellular: SIM requires PIN but no PIN source available (set MESHSAT_SIM_PIN or save PIN via API)")
 		}
 	}
 

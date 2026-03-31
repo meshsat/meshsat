@@ -125,6 +125,12 @@ func main() {
 			},
 			func(iccid string) { _ = db.TouchSIMCardLastSeen(iccid) },
 		)
+		// MESHSAT_SIM_PIN: fallback PIN when ICCID can't be read on a locked SIM
+		// (e.g., Huawei E220 firmware doesn't expose ICCID until PIN is entered).
+		// The DB lookup by ICCID takes priority when available. [MESHSAT-445]
+		if envPIN := os.Getenv("MESHSAT_SIM_PIN"); envPIN != "" {
+			directCell.SetFallbackPIN(envPIN)
+		}
 		cell = directCell
 
 		directAstro := transport.NewDirectAstrocastTransport(astroPort)
