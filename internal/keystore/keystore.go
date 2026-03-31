@@ -18,14 +18,14 @@ import (
 
 // KeyMeta is the metadata for a stored key (no raw key material).
 type KeyMeta struct {
-	ID          int64  `json:"id"`
-	ChannelType string `json:"channel_type"`
-	Address     string `json:"address"`
-	KeyVersion  int    `json:"key_version"`
-	Status      string `json:"status"` // active, retired, revoked
-	KeyPreview  string `json:"key_preview"`
-	ExpiresAt   string `json:"expires_at,omitempty"`
-	CreatedAt   string `json:"created_at"`
+	ID          int64   `json:"id"`
+	ChannelType string  `json:"channel_type"`
+	Address     string  `json:"address"`
+	KeyVersion  int     `json:"key_version"`
+	Status      string  `json:"status"` // active, retired, revoked
+	KeyPreview  string  `json:"key_preview"`
+	ExpiresAt   *string `json:"expires_at,omitempty"`
+	CreatedAt   string  `json:"created_at"`
 }
 
 // KeyStore manages envelope-encrypted channel keys with master key wrapping.

@@ -1803,14 +1803,14 @@ func (db *DB) TouchSIMCardLastSeen(iccid string) error {
 
 // KeyBundleRow represents a stored key bundle entry.
 type KeyBundleRow struct {
-	ID           int64  `db:"id"`
-	ChannelType  string `db:"channel_type"`
-	Address      string `db:"address"`
-	EncryptedKey []byte `db:"encrypted_key"`
-	KeyVersion   int    `db:"key_version"`
-	Status       string `db:"status"`
-	ExpiresAt    string `db:"expires_at"`
-	CreatedAt    string `db:"created_at"`
+	ID           int64   `db:"id"`
+	ChannelType  string  `db:"channel_type"`
+	Address      string  `db:"address"`
+	EncryptedKey []byte  `db:"encrypted_key"`
+	KeyVersion   int     `db:"key_version"`
+	Status       string  `db:"status"`
+	ExpiresAt    *string `db:"expires_at"`
+	CreatedAt    string  `db:"created_at"`
 }
 
 // InsertKeyBundle stores a wrapped key.
