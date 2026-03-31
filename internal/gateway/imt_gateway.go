@@ -210,9 +210,11 @@ func (g *IMTGateway) imtListenOnce(ctx context.Context) error {
 			}
 			switch event.Type {
 			case "mt_received":
-				// IMT MT is push-based — transport already received and buffered it.
-				// Read the payload from transport and persist to messages DB. [MESHSAT-447]
-				log.Info().Str("detail", event.Message).Msg("imt: MT push received")
+				// Reticulum MT — handled by sat_interface via Receive(). Nothing to do here.
+				log.Info().Str("detail", event.Message).Msg("imt: MT Reticulum packet (sat_interface handles)")
+			case "mt_message":
+				// App-level MT — read from ReceiveMessage() and persist to DB + dashboard. [MESHSAT-447]
+				log.Info().Str("detail", event.Message).Msg("imt: MT app message received")
 				go g.receivePendingMT(ctx)
 			case "signal":
 				// Opportunistic DLQ drain on good signal
@@ -233,19 +235,28 @@ func (g *IMTGateway) imtListenOnce(ctx context.Context) error {
 	}
 }
 
-// receivePendingMT reads all pending MT payloads from the transport and
-// persists them to the messages database + inbound channel. [MESHSAT-447]
-func (g *IMTGateway) receivePendingMT(ctx context.Context) {
+// receivePendingMT reads app-level MT payloads from the transport's message queue
+// and persists them to the messages database + inbound channel. [MESHSAT-447]
+// Uses ReceiveMessage() (not Receive()) to read from the app queue, not the Reticulum queue.
+func (g *IMTGateway) receivePendingMT(_ context.Context) {
+	type messageReceiver interface {
+		ReceiveMessage() ([]byte, error)
+	}
+	mr, ok := g.sat.(messageReceiver)
+	if !ok {
+		log.Warn().Msg("imt: transport does not support ReceiveMessage()")
+		return
+	}
+
 	for {
-		payload, err := g.sat.Receive(ctx)
+		payload, err := mr.ReceiveMessage()
 		if err != nil || payload == nil {
-			return // no more pending
+			return
 		}
 
 		text := string(payload)
-		log.Info().Int("size", len(payload)).Str("text", text).Msg("imt: MT payload received and persisting")
+		log.Info().Int("size", len(payload)).Str("text", text).Msg("imt: MT app message persisted to DB")
 
-		// Store in messages DB
 		g.db.InsertMessage(&database.Message{
 			FromNode:       "cloudloop",
 			DecodedText:    text,
@@ -255,7 +266,6 @@ func (g *IMTGateway) receivePendingMT(ctx context.Context) {
 			DeliveryStatus: "received",
 		})
 
-		// Forward to inbound channel (for processor/rules engine)
 		select {
 		case g.inCh <- InboundMessage{
 			Source: "iridium_imt",

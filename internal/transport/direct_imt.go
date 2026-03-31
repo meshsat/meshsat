@@ -37,9 +37,10 @@ type DirectIMTTransport struct {
 	signalMu   sync.RWMutex
 	lastSignal SignalInfo
 
-	// MT message buffer (populated by poll loop)
-	mtMu      sync.Mutex
-	mtPending [][]byte // complete MT payloads waiting for Receive()
+	// MT message buffers — classified at L4 receive boundary [MESHSAT-447]
+	mtMu               sync.Mutex
+	mtReticulumPending [][]byte // Reticulum packets → sat_interface.Receive()
+	mtMessagePending   [][]byte // app payloads → imt_gateway → messages DB → dashboard
 
 	// SSE subscribers
 	eventMu   sync.RWMutex
@@ -363,20 +364,20 @@ type ProvisioningTopic struct {
 }
 
 // Receive returns the next buffered MT message, or blocks briefly.
+// Receive returns the next pending Reticulum MT packet (for sat_interface L6). [MESHSAT-447]
 func (t *DirectIMTTransport) Receive(ctx context.Context) ([]byte, error) {
 	t.mtMu.Lock()
-	if len(t.mtPending) > 0 {
-		msg := t.mtPending[0]
-		t.mtPending = t.mtPending[1:]
+	if len(t.mtReticulumPending) > 0 {
+		msg := t.mtReticulumPending[0]
+		t.mtReticulumPending = t.mtReticulumPending[1:]
 		t.mtMu.Unlock()
 		return msg, nil
 	}
 	t.mtMu.Unlock()
 
-	// No pending MT — process any announcements and check again
+	// No pending — process any announcements and check again
 	t.processMTAnnouncements()
 
-	// Brief wait for reader goroutine to deliver new unsolicited messages
 	t.mu.Lock()
 	conn := t.conn
 	t.mu.Unlock()
@@ -386,12 +387,24 @@ func (t *DirectIMTTransport) Receive(ctx context.Context) ([]byte, error) {
 
 	t.mtMu.Lock()
 	defer t.mtMu.Unlock()
-	if len(t.mtPending) > 0 {
-		msg := t.mtPending[0]
-		t.mtPending = t.mtPending[1:]
+	if len(t.mtReticulumPending) > 0 {
+		msg := t.mtReticulumPending[0]
+		t.mtReticulumPending = t.mtReticulumPending[1:]
 		return msg, nil
 	}
 	return nil, fmt.Errorf("no MT messages available")
+}
+
+// ReceiveMessage returns the next pending app-level MT message (for gateway L5 → dashboard L7). [MESHSAT-447]
+func (t *DirectIMTTransport) ReceiveMessage() ([]byte, error) {
+	t.mtMu.Lock()
+	defer t.mtMu.Unlock()
+	if len(t.mtMessagePending) > 0 {
+		msg := t.mtMessagePending[0]
+		t.mtMessagePending = t.mtMessagePending[1:]
+		return msg, nil
+	}
+	return nil, nil
 }
 
 // MailboxCheck on IMT doesn't initiate a satellite session like SBDIX.
@@ -408,10 +421,12 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SatResult, erro
 	t.processMTAnnouncements()
 
 	t.mtMu.Lock()
-	pending := len(t.mtPending)
+	pending := len(t.mtReticulumPending) + len(t.mtMessagePending)
 	firstLen := 0
-	if pending > 0 {
-		firstLen = len(t.mtPending[0])
+	if len(t.mtReticulumPending) > 0 {
+		firstLen = len(t.mtReticulumPending[0])
+	} else if len(t.mtMessagePending) > 0 {
+		firstLen = len(t.mtMessagePending[0])
 	}
 	t.mtMu.Unlock()
 
@@ -643,7 +658,8 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 
 		log.Info().Int("message_id", mt.MessageID).Int("topic", mt.TopicID).Int("max_len", mt.MessageLengthMax).Msg("imt: MT message announced")
 
-		// Receive the full message in a goroutine so it doesn't block pollLoop
+		// Receive the full message in a goroutine so it doesn't block pollLoop.
+		// L4 classification: inspect header to route to the correct L5/L6 consumer. [MESHSAT-447]
 		go func(conn *jsprConn, mt jsprMTAnnounce) {
 			payload, topicID, err := conn.jsprReceiveMT(mt)
 			if err != nil {
@@ -653,17 +669,41 @@ func (t *DirectIMTTransport) processMTAnnouncements() {
 
 			log.Info().Int("topic", topicID).Int("size", len(payload)).Msg("imt: MT message received")
 
+			// Classify at L4 receive boundary — three possible L5/L6 consumers
 			t.mtMu.Lock()
-			t.mtPending = append(t.mtPending, payload)
-			t.mtMu.Unlock()
-
-			t.emitEvent(SatEvent{
-				Type:    "mt_received",
-				Message: fmt.Sprintf("MT message received (%d bytes, topic %d)", len(payload), topicID),
-				Time:    time.Now().UTC().Format(time.RFC3339),
-			})
+			if isReticulumPacket(payload) {
+				t.mtReticulumPending = append(t.mtReticulumPending, payload)
+				t.mtMu.Unlock()
+				log.Info().Int("size", len(payload)).Msg("imt: MT classified as Reticulum packet")
+				t.emitEvent(SatEvent{
+					Type:    "mt_received",
+					Message: fmt.Sprintf("MT Reticulum packet (%d bytes, topic %d)", len(payload), topicID),
+					Time:    time.Now().UTC().Format(time.RFC3339),
+				})
+			} else {
+				t.mtMessagePending = append(t.mtMessagePending, payload)
+				t.mtMu.Unlock()
+				log.Info().Int("size", len(payload)).Str("text", string(payload)).Msg("imt: MT classified as app message")
+				t.emitEvent(SatEvent{
+					Type:    "mt_message",
+					Message: fmt.Sprintf("MT message received (%d bytes, topic %d)", len(payload), topicID),
+					Time:    time.Now().UTC().Format(time.RFC3339),
+				})
+			}
 		}(conn, mt)
 	}
+}
+
+// isReticulumPacket checks if the payload starts with a valid Reticulum header.
+// Reticulum Type 1 (single-hop): first nibble 0x1, min 19 bytes.
+// Reticulum Type 2 (transport): first nibble 0x2, min 35 bytes.
+// Used at L4 to classify MT payloads before queuing. [MESHSAT-447]
+func isReticulumPacket(data []byte) bool {
+	if len(data) < 19 {
+		return false
+	}
+	headerType := (data[0] >> 6) & 0x03
+	return headerType == 0x00 || headerType == 0x01 // Type 1 or Type 2
 }
 
 // signalPoller actively queries the modem for signal strength every 30 seconds,
