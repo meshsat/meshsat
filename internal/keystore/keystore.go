@@ -179,12 +179,11 @@ func (ks *KeyStore) StoreKey(channelType, address string, rawKey []byte) (int, e
 		return 0, fmt.Errorf("wrap key: %w", err)
 	}
 
-	version := 1
+	// Retire any active key with grace period, then find max version to avoid conflicts.
 	if current, err := ks.db.GetActiveKeyBundle(channelType, address); err == nil && current != nil {
-		version = current.KeyVersion + 1
-		// Retire old key with 7-day grace period
 		_ = ks.db.RetireKeyBundle(channelType, address, time.Now().Add(7*24*time.Hour))
 	}
+	version := ks.db.MaxKeyVersion(channelType, address) + 1
 
 	if err := ks.db.InsertKeyBundle(channelType, address, wrapped, version); err != nil {
 		return 0, fmt.Errorf("store key: %w", err)

@@ -1850,6 +1850,14 @@ func (db *DB) RetireKeyBundle(channelType, address string, expiresAt time.Time) 
 	return err
 }
 
+// MaxKeyVersion returns the highest version number for a channel+address across all statuses. [MESHSAT-447]
+func (db *DB) MaxKeyVersion(channelType, address string) int {
+	var v int
+	_ = db.Get(&v, `SELECT COALESCE(MAX(key_version), 0) FROM key_bundles WHERE channel_type = ? AND address = ?`,
+		channelType, address)
+	return v
+}
+
 // RevokeKeyBundle revokes all keys for a channel+address.
 func (db *DB) RevokeKeyBundle(channelType, address string) error {
 	_, err := db.Exec(
