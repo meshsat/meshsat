@@ -22,12 +22,20 @@ type TransformSpec struct {
 	Params map[string]string `json:"params,omitempty"`
 }
 
+// KeyResolver resolves a key_ref (e.g. "sms:+31653618463") to a hex-encoded
+// AES-256 key. Used by the transform pipeline to avoid inline key material
+// in interface config. [MESHSAT-447]
+type KeyResolver interface {
+	ResolveKeyHex(keyRef string) (string, error)
+}
+
 // TransformPipeline applies ordered transforms to payloads.
 type TransformPipeline struct {
-	llamazip   *compress.LlamaZipClient
-	msvqsc     *compress.MSVQSCClient
-	codebook   *compress.Codebook
-	fecMetrics FECMetrics
+	llamazip    *compress.LlamaZipClient
+	msvqsc      *compress.MSVQSCClient
+	codebook    *compress.Codebook
+	keyResolver KeyResolver // resolves key_ref → hex key [MESHSAT-447]
+	fecMetrics  FECMetrics
 }
 
 // FECStats returns the FEC encode/decode metrics.
@@ -51,6 +59,11 @@ func (tp *TransformPipeline) SetMSVQSCClient(c *compress.MSVQSCClient) {
 // SetCodebook sets the MSVQ-SC codebook for pure-Go decode (no sidecar needed).
 func (tp *TransformPipeline) SetCodebook(cb *compress.Codebook) {
 	tp.codebook = cb
+}
+
+// SetKeyResolver sets the resolver for key_ref in encrypt transforms. [MESHSAT-447]
+func (tp *TransformPipeline) SetKeyResolver(kr KeyResolver) {
+	tp.keyResolver = kr
 }
 
 // ApplyEgress applies egress transforms in order (compress, encode, etc.)
@@ -198,7 +211,11 @@ func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byt
 			Msg("transform: fec encoded")
 		return encoded, nil
 	case "encrypt":
-		return encryptAESGCM(data, t.Params["key"])
+		hexKey, err := tp.resolveEncryptKey(t)
+		if err != nil {
+			return nil, err
+		}
+		return encryptAESGCM(data, hexKey)
 	default:
 		log.Warn().Str("type", t.Type).Msg("transform: unknown type, skipping")
 		return data, nil
@@ -267,7 +284,11 @@ func (tp *TransformPipeline) reverseTransform(t TransformSpec, data []byte) ([]b
 			Msg("transform: fec decoded")
 		return decoded, nil
 	case "encrypt":
-		return decryptAESGCM(data, t.Params["key"])
+		hexKey, err := tp.resolveEncryptKey(t)
+		if err != nil {
+			return nil, err
+		}
+		return decryptAESGCM(data, hexKey)
 	default:
 		log.Warn().Str("type", t.Type).Msg("transform: unknown reverse type, skipping")
 		return data, nil
@@ -294,8 +315,8 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 		case "encrypt":
 			hasBinaryOutput = true
 			endsWithBase64 = false
-			if t.Params["key"] == "" {
-				errors = append(errors, "encrypt transform requires a 'key' param")
+			if t.Params["key"] == "" && t.Params["key_ref"] == "" {
+				errors = append(errors, "encrypt transform requires 'key' or 'key_ref' param")
 			}
 		case "fec":
 			hasBinaryOutput = true
@@ -341,6 +362,25 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 	}
 
 	return warnings, errors
+}
+
+// resolveEncryptKey returns the hex-encoded AES key for an encrypt transform.
+// Supports two modes: inline key (legacy) and key_ref (keystore lookup). [MESHSAT-447]
+//   - {"type":"encrypt","params":{"key":"abcd..."}}       → returns inline key
+//   - {"type":"encrypt","params":{"key_ref":"sms:+31..."}} → resolves via KeyResolver
+func (tp *TransformPipeline) resolveEncryptKey(t TransformSpec) (string, error) {
+	// Inline key (legacy) — backwards compatible
+	if k := t.Params["key"]; k != "" {
+		return k, nil
+	}
+	// Key reference — resolve from keystore
+	if ref := t.Params["key_ref"]; ref != "" {
+		if tp.keyResolver == nil {
+			return "", fmt.Errorf("encrypt transform uses key_ref but no KeyResolver configured")
+		}
+		return tp.keyResolver.ResolveKeyHex(ref)
+	}
+	return "", fmt.Errorf("encrypt transform requires 'key' or 'key_ref' param")
 }
 
 // encryptAESGCM encrypts data using AES-256-GCM with the given hex-encoded key.

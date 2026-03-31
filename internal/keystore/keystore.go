@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,6 +162,52 @@ func (ks *KeyStore) RotateKey(channelType, address string, graceHours int) (rawK
 // RevokeKey marks a key as revoked (immediately invalid, no grace period).
 func (ks *KeyStore) RevokeKey(channelType, address string) error {
 	return ks.db.RevokeKeyBundle(channelType, address)
+}
+
+// StoreKey imports an externally-provided raw key (e.g. from Hub key_rotate command).
+// If a key already exists for this channel+address, a new version is created. [MESHSAT-447]
+func (ks *KeyStore) StoreKey(channelType, address string, rawKey []byte) (int, error) {
+	if len(rawKey) != aesKeyLen {
+		return 0, fmt.Errorf("key must be %d bytes, got %d", aesKeyLen, len(rawKey))
+	}
+
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+
+	wrapped, err := wrapKey(ks.masterKey, rawKey)
+	if err != nil {
+		return 0, fmt.Errorf("wrap key: %w", err)
+	}
+
+	version := 1
+	if current, err := ks.db.GetActiveKeyBundle(channelType, address); err == nil && current != nil {
+		version = current.KeyVersion + 1
+		// Retire old key with 7-day grace period
+		_ = ks.db.RetireKeyBundle(channelType, address, time.Now().Add(7*24*time.Hour))
+	}
+
+	if err := ks.db.InsertKeyBundle(channelType, address, wrapped, version); err != nil {
+		return 0, fmt.Errorf("store key: %w", err)
+	}
+
+	log.Info().Str("channel", channelType).Str("address", address).Int("version", version).
+		Msg("keystore: key imported from Hub")
+	return version, nil
+}
+
+// ResolveKeyHex resolves a key_ref string ("channel_type:address") to a hex-encoded
+// AES-256 key. Implements the engine.KeyResolver interface. [MESHSAT-447]
+// During grace period, returns the active key (not retired).
+func (ks *KeyStore) ResolveKeyHex(keyRef string) (string, error) {
+	parts := strings.SplitN(keyRef, ":", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid key_ref format %q (expected channel_type:address)", keyRef)
+	}
+	raw, _, err := ks.GetKey(parts[0], parts[1])
+	if err != nil {
+		return "", fmt.Errorf("resolve key_ref %q: %w", keyRef, err)
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 // ListKeys returns metadata for all keys (no raw key material).

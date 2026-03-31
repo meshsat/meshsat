@@ -775,6 +775,7 @@ func main() {
 		}
 	}
 	dispatcher.SetTransformPipeline(transforms)
+	// KeyResolver wired after keystore init below [MESHSAT-447]
 	// DTN reassembly buffer (MESHSAT-408)
 	reassemblyBuf := engine.NewReassemblyBuffer(5*time.Minute, 100)
 	go func() {
@@ -958,12 +959,15 @@ func main() {
 	}
 
 	// Key store — cross-platform key exchange with QR bundles and envelope encryption
+	var ks *keystore.KeyStore
 	if routingID != nil {
-		ks, ksErr := keystore.NewKeyStore(db, routingID, os.Getenv("MESHSAT_KEY_PASSPHRASE"))
+		var ksErr error
+		ks, ksErr = keystore.NewKeyStore(db, routingID, os.Getenv("MESHSAT_KEY_PASSPHRASE"))
 		if ksErr != nil {
 			log.Error().Err(ksErr).Msg("key store init failed — key exchange disabled")
 		} else {
 			srv.SetKeyStore(ks)
+			transforms.SetKeyResolver(ks) // [MESHSAT-447] key_ref → keystore lookup
 			// Wire credential loader so MQTT gateways can load certs from DB
 			gateway.SetCredentialLoader(&credentialLoaderAdapter{db: db, ks: ks})
 			log.Info().Msg("key store initialized")
@@ -1223,6 +1227,9 @@ func main() {
 			},
 		})
 		cmdHandler.SetCredentialStore(&bridgeCredentialStore{db: db})
+		if ks != nil {
+			cmdHandler.SetKeyStore(ks) // [MESHSAT-447] Hub-driven key rotation
+		}
 		hubReporter.SetCommandHandler(cmdHandler)
 
 		if err := hubReporter.Start(ctx); err != nil {

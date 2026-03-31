@@ -3,6 +3,7 @@ package hubreporter
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -43,6 +44,7 @@ type CommandHandler struct {
 	handlers  map[string]func(cmd Command) (json.RawMessage, error)
 	deps      CommandDeps
 	credStore CredentialStore
+	keyStore  KeyStoreImporter // [MESHSAT-447]
 }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
@@ -80,8 +82,19 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 
 	ch.handlers["credential_push"] = ch.handleCredentialPush
 	ch.handlers["credential_revoke"] = ch.handleCredentialRevoke
+	ch.handlers["key_rotate"] = ch.handleKeyRotate
 
 	return ch
+}
+
+// KeyStoreImporter is the interface for importing keys from Hub commands. [MESHSAT-447]
+type KeyStoreImporter interface {
+	StoreKey(channelType, address string, rawKey []byte) (int, error)
+}
+
+// SetKeyStore sets the key store for key_rotate commands. [MESHSAT-447]
+func (ch *CommandHandler) SetKeyStore(ks KeyStoreImporter) {
+	ch.keyStore = ks
 }
 
 // SetCredentialStore sets the credential storage for credential push/revoke handlers.
@@ -349,4 +362,49 @@ func (ch *CommandHandler) handleCredentialRevoke(cmd Command) (json.RawMessage, 
 		Msg("commander: credential revoked by Hub")
 
 	return json.RawMessage(`{"revoked":true}`), nil
+}
+
+// handleKeyRotate receives a new channel encryption key from the Hub.
+// Stores in keystore (old key retired with grace period). [MESHSAT-447]
+func (ch *CommandHandler) handleKeyRotate(cmd Command) (json.RawMessage, error) {
+	if ch.keyStore == nil {
+		return nil, fmt.Errorf("keystore not configured")
+	}
+
+	var payload struct {
+		ChannelType string `json:"channel_type"` // e.g. "sms"
+		Address     string `json:"address"`      // e.g. "+31653618463"
+		KeyHex      string `json:"key_hex"`      // hex-encoded AES-256 key
+		Version     int    `json:"version"`      // Hub's version number
+	}
+	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("parse key_rotate payload: %w", err)
+	}
+
+	if payload.ChannelType == "" || payload.Address == "" || payload.KeyHex == "" {
+		return nil, fmt.Errorf("key_rotate requires channel_type, address, and key_hex")
+	}
+
+	rawKey, err := hex.DecodeString(payload.KeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid key_hex: %w", err)
+	}
+
+	localVersion, err := ch.keyStore.StoreKey(payload.ChannelType, payload.Address, rawKey)
+	if err != nil {
+		return nil, fmt.Errorf("store key: %w", err)
+	}
+
+	log.Info().
+		Str("channel", payload.ChannelType).
+		Str("address", payload.Address).
+		Int("hub_version", payload.Version).
+		Int("local_version", localVersion).
+		Msg("commander: channel key rotated from Hub")
+
+	result, _ := json.Marshal(map[string]interface{}{
+		"applied":       true,
+		"local_version": localVersion,
+	})
+	return result, nil
 }
