@@ -47,6 +47,7 @@ type Server struct {
 	devSupervisor *transport.DeviceSupervisor
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
+	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
 	restartFn     func()
@@ -166,6 +167,11 @@ func (s *Server) SetResourceTransfer(rt *routing.ResourceTransfer) {
 // SetKeyStore sets the key store for cross-platform key exchange.
 func (s *Server) SetKeyStore(ks *keystore.KeyStore) {
 	s.keyStore = ks
+}
+
+// SetTransformPipeline sets the transform pipeline for applying egress transforms on SMS send. [MESHSAT-447]
+func (s *Server) SetTransformPipeline(tp *engine.TransformPipeline) {
+	s.transforms = tp
 }
 
 // SetInterfaceRegistry sets the Reticulum interface registry for flood control API.

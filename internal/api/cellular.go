@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
 	"meshsat/internal/gateway"
@@ -501,7 +502,22 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.cellTransport.SendSMS(r.Context(), req.To, req.Text); err != nil {
+	// Apply egress transforms (smaz2, encrypt, base64) if configured for cellular_0. [MESHSAT-447]
+	outText := req.Text
+	if s.transforms != nil {
+		if iface, err := s.db.GetInterface("cellular_0"); err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
+			transformed, err := s.transforms.ApplyEgress([]byte(req.Text), iface.EgressTransforms)
+			if err != nil {
+				log.Warn().Err(err).Msg("sms: egress transform failed, sending plaintext")
+			} else {
+				outText = string(transformed)
+				log.Info().Int("plain_len", len(req.Text)).Int("transformed_len", len(outText)).
+					Msg("sms: egress transforms applied")
+			}
+		}
+	}
+
+	if err := s.cellTransport.SendSMS(r.Context(), req.To, outText); err != nil {
 		s.db.InsertSMSMessage("tx", req.To, req.Text, "failed", time.Now().Unix())
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

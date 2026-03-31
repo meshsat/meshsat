@@ -967,7 +967,8 @@ func main() {
 			log.Error().Err(ksErr).Msg("key store init failed — key exchange disabled")
 		} else {
 			srv.SetKeyStore(ks)
-			transforms.SetKeyResolver(ks) // [MESHSAT-447] key_ref → keystore lookup
+			srv.SetTransformPipeline(transforms) // [MESHSAT-447] SMS egress transforms
+			transforms.SetKeyResolver(ks)        // [MESHSAT-447] key_ref → keystore lookup
 			// Wire credential loader so MQTT gateways can load certs from DB
 			gateway.SetCredentialLoader(&credentialLoaderAdapter{db: db, ks: ks})
 			log.Info().Msg("key store initialized")
