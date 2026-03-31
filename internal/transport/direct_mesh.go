@@ -66,18 +66,23 @@ type DirectMeshTransport struct {
 	// nodes, the reader loop forces a serial reconnect.
 	lastExternalPkt atomic.Int64 // unix timestamp of last non-self packet
 	watchdogMin     int          // 0 = disabled
+
+	// portReadyCh is signalled by SetPort to wake the processor's retry loop
+	// immediately instead of waiting for exponential backoff. [MESHSAT-444]
+	portReadyCh chan struct{}
 }
 
 // NewDirectMeshTransport creates a new direct serial Meshtastic transport.
 // Pass "auto" or "" for port to use auto-detection.
 func NewDirectMeshTransport(port string) *DirectMeshTransport {
 	return &DirectMeshTransport{
-		port:       port,
-		nodes:      make(map[uint32]*MeshNode),
-		messages:   make([]MeshMessage, 0, meshMsgBufSize),
-		configData: make(map[string]interface{}),
-		neighbors:  make(map[uint32]*NeighborInfo),
-		eventSubs:  make(map[uint64]chan MeshEvent),
+		port:        port,
+		nodes:       make(map[uint32]*MeshNode),
+		messages:    make([]MeshMessage, 0, meshMsgBufSize),
+		configData:  make(map[string]interface{}),
+		neighbors:   make(map[uint32]*NeighborInfo),
+		eventSubs:   make(map[uint64]chan MeshEvent),
+		portReadyCh: make(chan struct{}, 1),
 	}
 }
 
@@ -91,11 +96,26 @@ func (t *DirectMeshTransport) SetWatchdogMinutes(min int) {
 
 // SetPort sets the serial port path. Called by DeviceSupervisor when a device
 // is discovered. If already connected on a different port, the caller should
-// Close() first.
+// Close() first. Signals the portReady channel to wake any waiting Subscribe.
 func (t *DirectMeshTransport) SetPort(port string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.port = port
+	ch := t.portReadyCh
+	t.mu.Unlock()
+	// Wake the processor's retry loop so it connects immediately instead of
+	// waiting for backoff to expire. [MESHSAT-444]
+	if ch != nil {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// PortReadyCh returns a channel that is signalled when SetPort is called.
+// The processor's retry loop can select on this to wake immediately. [MESHSAT-444]
+func (t *DirectMeshTransport) PortReadyCh() <-chan struct{} {
+	return t.portReadyCh
 }
 
 // IsConnected returns true if the transport has an active serial connection.

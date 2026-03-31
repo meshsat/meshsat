@@ -308,6 +308,16 @@ func (p *Processor) Run(ctx context.Context) error {
 
 	backoff := time.Second
 
+	// If the mesh transport supports port-ready signalling, use it to wake
+	// immediately when SetPort is called instead of waiting for backoff. [MESHSAT-444]
+	type portReadyProvider interface {
+		PortReadyCh() <-chan struct{}
+	}
+	var portReadyCh <-chan struct{}
+	if prp, ok := p.mesh.(portReadyProvider); ok {
+		portReadyCh = prp.PortReadyCh()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -331,10 +341,21 @@ func (p *Processor) Run(ctx context.Context) error {
 			log.Warn().Err(err).Dur("backoff", backoff).Msg("mesh transport disconnected, reconnecting")
 		}
 
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(backoff):
+		// Wait for backoff OR port-ready signal (whichever comes first).
+		if portReadyCh != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-portReadyCh:
+				backoff = time.Second // reset backoff on port signal
+			case <-time.After(backoff):
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
 		}
 		backoff *= 2
 		if backoff > 2*time.Minute {
