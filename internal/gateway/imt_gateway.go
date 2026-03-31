@@ -210,9 +210,10 @@ func (g *IMTGateway) imtListenOnce(ctx context.Context) error {
 			}
 			switch event.Type {
 			case "mt_received":
-				// IMT MT is push-based — transport already received and buffered it
+				// IMT MT is push-based — transport already received and buffered it.
+				// Read the payload from transport and persist to messages DB. [MESHSAT-447]
 				log.Info().Str("detail", event.Message).Msg("imt: MT push received")
-				g.handleRingAlert(ctx)
+				go g.receivePendingMT(ctx)
 			case "signal":
 				// Opportunistic DLQ drain on good signal
 				minBars := g.config.MinSignalBars
@@ -228,6 +229,40 @@ func (g *IMTGateway) imtListenOnce(ctx context.Context) error {
 				g.connected.Store(false)
 				return fmt.Errorf("modem disconnected")
 			}
+		}
+	}
+}
+
+// receivePendingMT reads all pending MT payloads from the transport and
+// persists them to the messages database + inbound channel. [MESHSAT-447]
+func (g *IMTGateway) receivePendingMT(ctx context.Context) {
+	for {
+		payload, err := g.sat.Receive(ctx)
+		if err != nil || payload == nil {
+			return // no more pending
+		}
+
+		text := string(payload)
+		log.Info().Int("size", len(payload)).Str("text", text).Msg("imt: MT payload received and persisting")
+
+		// Store in messages DB
+		g.db.InsertMessage(&database.Message{
+			FromNode:       "cloudloop",
+			DecodedText:    text,
+			Direction:      "inbound",
+			Transport:      "iridium_imt",
+			PortNumName:    "MT_MESSAGE",
+			DeliveryStatus: "received",
+		})
+
+		// Forward to inbound channel (for processor/rules engine)
+		select {
+		case g.inCh <- InboundMessage{
+			Source: "iridium_imt",
+			Text:   text,
+		}:
+		default:
+			log.Warn().Msg("imt: inbound channel full, MT dropped")
 		}
 	}
 }
