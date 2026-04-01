@@ -757,8 +757,8 @@ func (t *DirectCellTransport) signalPollerLoop() {
 
 // pollSignalAndCellInfo queries signal strength and cell info from the modem.
 func (t *DirectCellTransport) pollSignalAndCellInfo() {
-	// AT+CSQ — signal strength
-	resp, err := t.execAT("AT+CSQ", 5*time.Second)
+	// AT+CSQ — signal strength (3s timeout: best-effort, must not block I/O loop) [MESHSAT-447]
+	resp, err := t.execAT("AT+CSQ", 3*time.Second)
 	if err != nil {
 		log.Warn().Err(err).Msg("cellular signal poll failed")
 		return
