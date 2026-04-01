@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // CellEvent represents a typed event from the cellular modem.
@@ -99,5 +100,6 @@ type CellTransport interface {
 	DisconnectData(ctx context.Context) error
 	UnlockPIN(ctx context.Context, pin string) error
 	GetCellInfo(ctx context.Context) (*CellInfo, error)
+	ExecAT(ctx context.Context, command string, timeout time.Duration) (string, error) // [MESHSAT-448] debug
 	Close() error
 }

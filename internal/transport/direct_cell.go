@@ -486,6 +486,11 @@ func (t *DirectCellTransport) startLoops() {
 
 // execAT sends an AT command via the I/O loop and waits for the result.
 // This is the only way to execute AT commands after init.
+// ExecAT sends a raw AT command — public wrapper for debug/API use. [MESHSAT-448]
+func (t *DirectCellTransport) ExecAT(_ context.Context, cmd string, timeout time.Duration) (string, error) {
+	return t.execAT(cmd, timeout)
+}
+
 func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string, error) {
 	if t.cmdCh == nil {
 		return "", fmt.Errorf("transport not ready (ioLoop not started)")

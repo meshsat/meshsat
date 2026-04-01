@@ -528,6 +528,36 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 
 // --- Webhook Log ---
 
+// handleCellularAT sends a raw AT command to the cellular modem. Debug only. [MESHSAT-448]
+func (s *Server) handleCellularAT(w http.ResponseWriter, r *http.Request) {
+	if s.cellTransport == nil {
+		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
+		return
+	}
+	var req struct {
+		Command string `json:"command"`
+		Timeout int    `json:"timeout"` // seconds, default 5
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Command == "" {
+		writeError(w, http.StatusBadRequest, "command is required")
+		return
+	}
+	timeout := 5 * time.Second
+	if req.Timeout > 0 {
+		timeout = time.Duration(req.Timeout) * time.Second
+	}
+	resp, err := s.cellTransport.ExecAT(r.Context(), req.Command, timeout)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"response": resp, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"response": resp})
+}
+
 func (s *Server) handleGetWebhookLog(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 100

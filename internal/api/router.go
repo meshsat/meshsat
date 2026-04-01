@@ -269,6 +269,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/cellular/signal/fast", s.handleGetCellularSignalFast)
 		r.Get("/cellular/signal/history", s.handleGetCellularSignalHistory)
 		r.Get("/cellular/status", s.handleGetCellularStatus)
+		r.Post("/cellular/at", s.handleCellularAT)
 		r.Post("/cellular/pin", s.handleSubmitCellularPIN)
 		r.Get("/cellular/info", s.handleGetCellInfo)
 		r.Get("/cellular/sms", s.handleGetSMSMessages)
