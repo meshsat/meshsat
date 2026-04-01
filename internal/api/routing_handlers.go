@@ -310,6 +310,7 @@ type routingConfig struct {
 	ListenPort       int    `json:"listen_port"`
 	AnnounceInterval int    `json:"announce_interval"`
 	ListenAddr       string `json:"listen_addr"`
+	SMSPeer          string `json:"sms_peer,omitempty"`
 	Warning          string `json:"warning,omitempty"`
 }
 
@@ -330,6 +331,10 @@ func (s *Server) handleGetRoutingConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	if s.tcpIface != nil {
 		cfg.ListenAddr = s.tcpIface.ListenAddr()
+	}
+	// SMS peer from dedicated key (not serialized into routing config blob)
+	if peer, err := s.db.GetSystemConfig("reticulum_sms_peer"); err == nil && peer != "" {
+		cfg.SMSPeer = peer
 	}
 	writeJSON(w, http.StatusOK, cfg)
 }
@@ -357,6 +362,11 @@ func (s *Server) handleSetRoutingConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.AnnounceInterval > 0 {
 		prev.AnnounceInterval = req.AnnounceInterval
+	}
+	// SMS peer number — stored in dedicated key, applied on next restart.
+	if req.SMSPeer != "" {
+		_ = s.db.SetSystemConfig("reticulum_sms_peer", req.SMSPeer)
+		prev.SMSPeer = req.SMSPeer
 	}
 
 	s.saveRoutingConfig(prev)

@@ -602,6 +602,9 @@ func main() {
 			log.Error().Err(err).Msg("sms reticulum interface start failed")
 		} else {
 			proc.RegisterPacketSender("sms_0", smsIface.Send)
+			// Also register as cellular_0 so HeMB bond groups can use cellular as a bearer.
+			// The sms_0 interface wraps CellTransport — cellular_0 is the same physical transport. [MESHSAT-448]
+			proc.RegisterPacketSender("cellular_0", smsIface.Send)
 			if ifaceReg != nil {
 				ifaceReg.Register(smsRI)
 			}

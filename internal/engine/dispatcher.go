@@ -882,6 +882,7 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 	sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
 		gw := d.gwProv.GatewayByInterfaceID(ifaceID)
 		if gw != nil {
+			log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via gateway")
 			return func(ctx context.Context, data []byte) error {
 				return gw.Forward(ctx, &transport.MeshMessage{RawPayload: data})
 			}
@@ -889,11 +890,13 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 		// Reticulum packet sender: crosses bridges via TCP/HDLC.
 		if d.pktSender != nil {
 			if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
+				log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via packet sender")
 				return fn
 			}
 		}
 		// Last resort: raw mesh (local only — doesn't cross Meshtastic nodes).
 		if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
+			log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via raw mesh")
 			return func(ctx context.Context, data []byte) error {
 				return d.mesh.SendRaw(ctx, transport.RawRequest{
 					PortNum: 256,
@@ -901,6 +904,7 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 				})
 			}
 		}
+		log.Warn().Str("iface", ifaceID).Msg("hemb: no sendFn for bearer — skipped")
 		return nil
 	}
 
