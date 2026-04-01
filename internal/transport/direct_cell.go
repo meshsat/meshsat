@@ -283,6 +283,9 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 		log.Warn().Msg("cellular: SMS text mode not supported, SMS will not work")
 	}
 	sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
+	// Use ME (mobile equipment) storage for SMS — SIM card storage (SM) hangs
+	// on some modems (A7670E with corrupted EF_SMS). ME is always reliable. [MESHSAT-448]
+	sendAT(sp, "AT+CPMS=\"ME\",\"ME\",\"ME\"", cellATTimeout)
 	log.Debug().Msg("cellular: init AT+CPIN?")
 	resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
 	simState := parseCPIN(resp)
@@ -755,8 +758,75 @@ func (t *DirectCellTransport) signalPollerLoop() {
 			return
 		case <-ticker.C:
 			t.pollSignalAndCellInfo()
+			t.pollSMS()
 			t.checkDataConnection()
 		}
+	}
+}
+
+// pollSMS polls AT+CMGL="ALL" for new SMS messages. This is a fallback for modems
+// (like the A7670E) where +CMTI URCs are unreliable due to SIM storage issues.
+// Messages are read, emitted as sms_received events, then deleted from ME storage. [MESHSAT-448]
+func (t *DirectCellTransport) pollSMS() {
+	// Quick AT probe first — skip polling if the modem is unresponsive (saves 15s timeout). [MESHSAT-448]
+	probe, probeErr := t.execAT("AT", 2*time.Second)
+	if probeErr != nil || !strings.Contains(probe, "OK") {
+		return
+	}
+	resp, err := t.execAT("AT+CMGL=\"ALL\"", 3*time.Second)
+	if err != nil {
+		return // silently skip — modem may be busy
+	}
+	if !strings.Contains(resp, "+CMGL:") {
+		return // no messages
+	}
+
+	lines := strings.Split(resp, "\n")
+	var deleteIndices []int
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "+CMGL:") {
+			continue
+		}
+		// +CMGL: <index>,<stat>,<sender>,<alpha>,<timestamp>
+		idx := parseCMGLIndex(line)
+		if idx < 0 {
+			continue
+		}
+		// Next line is the message body
+		if i+1 >= len(lines) {
+			continue
+		}
+		body := strings.TrimSpace(lines[i+1])
+		if body == "" || body == "OK" {
+			continue
+		}
+		i++ // skip body line
+
+		sender := parseCMGLSender(line)
+		sms := &SMSMessage{
+			Index:  idx,
+			Sender: sender,
+			Text:   body,
+			Time:   time.Now().UTC().Format(time.RFC3339),
+		}
+
+		log.Info().Str("sender", sms.Sender).Int("index", idx).
+			Str("text", sms.Text).Msg("cellular: SMS found by polling")
+
+		smsJSON, _ := json.Marshal(sms)
+		t.emitEvent(CellEvent{
+			Type:    "sms_received",
+			Message: sms.Text,
+			Data:    smsJSON,
+			Time:    time.Now().UTC().Format(time.RFC3339),
+		})
+		deleteIndices = append(deleteIndices, idx)
+	}
+
+	// Delete processed messages
+	for _, idx := range deleteIndices {
+		t.execAT(fmt.Sprintf("AT+CMGD=%d", idx), cellATTimeout)
 	}
 }
 
@@ -1653,6 +1723,35 @@ func parseCMTI(line string) int {
 		return -1
 	}
 	return n
+}
+
+// parseCMGLIndex extracts the message index from a +CMGL line.
+// +CMGL: 0,"REC UNREAD","+31612345678","","2026/03/31,12:00:00+04" → 0
+func parseCMGLIndex(line string) int {
+	idx := strings.Index(line, "+CMGL:")
+	if idx == -1 {
+		return -1
+	}
+	rest := strings.TrimSpace(line[idx+6:])
+	comma := strings.Index(rest, ",")
+	if comma == -1 {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(rest[:comma]))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// parseCMGLSender extracts the sender number from a +CMGL line.
+// +CMGL: 0,"REC UNREAD","+31612345678","","..." → "+31612345678"
+func parseCMGLSender(line string) string {
+	parts := strings.Split(line, "\"")
+	if len(parts) >= 4 {
+		return parts[3] // second quoted field: [0]=prefix, [1]=status, [2]=comma, [3]=number
+	}
+	return ""
 }
 
 // parseCMGR parses AT+CMGR response → SMSMessage.
