@@ -654,6 +654,16 @@ func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 
 	// Standard AT command
 	resp, err := sendAT(t.file, cmd.cmd, cmd.timeout)
+
+	// Extract URCs embedded in the AT response — +CMTI notifications
+	// can arrive during any AT command's read window. [MESHSAT-447]
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "+CMTI:") || strings.HasPrefix(line, "+CBM:") {
+			t.handleURC(line)
+		}
+	}
+
 	cmd.resp <- atResult{resp: resp, err: err}
 }
 
