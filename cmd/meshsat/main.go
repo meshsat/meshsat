@@ -1249,6 +1249,15 @@ func main() {
 				Bearers: nil, // receive-only — no send bearers needed
 				DeliverFn: func(payload []byte) {
 					log.Info().Int("bytes", len(payload)).Msg("hemb: reassembled payload delivered")
+					// Re-inject decoded HeMB payload into access rules [MESHSAT-447]
+					if dispatcher != nil {
+						if n := dispatcher.DispatchAccess("hemb_0",
+							rules.RouteMessage{Text: string(payload), From: "hemb"},
+							payload); n > 0 {
+							log.Info().Int("deliveries", n).
+								Msg("hemb: decoded payload dispatched via access rules")
+						}
+					}
 				},
 				EventCh: hemb.GlobalEventBus.Channel(),
 			})
