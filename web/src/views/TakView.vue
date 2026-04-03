@@ -380,7 +380,7 @@ Detail: {{ evt.detail || '(none)' }}
           </tbody>
         </table>
       </div>
-    </div>
+    </template>
 
     <!-- GEOCHAT -->
     <div v-if="activeTab==='chat'" class="space-y-4">
