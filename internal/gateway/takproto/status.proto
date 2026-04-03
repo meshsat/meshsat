@@ -1,0 +1,8 @@
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+option go_package = "meshsat/internal/gateway/takproto";
+package atakmap.commoncommo.protobuf.v1;
+
+message Status {
+     uint32 battery = 1;
+}

@@ -1,0 +1,24 @@
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+option go_package = "meshsat/internal/gateway/takproto";
+package atakmap.commoncommo.protobuf.v1;
+
+import "detail.proto";
+
+message CotEvent {
+  string type = 1;
+  string access = 2;
+  string qos = 3;
+  string opex = 4;
+  string uid = 5;
+  uint64 sendTime = 6;
+  uint64 startTime = 7;
+  uint64 staleTime = 8;
+  string how = 9;
+  double lat = 10;
+  double lon = 11;
+  double hae = 12;
+  double ce = 13;
+  double le = 14;
+  Detail detail = 15;
+}

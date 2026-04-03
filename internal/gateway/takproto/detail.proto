@@ -1,0 +1,21 @@
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+option go_package = "meshsat/internal/gateway/takproto";
+package atakmap.commoncommo.protobuf.v1;
+
+import "contact.proto";
+import "group.proto";
+import "precisionlocation.proto";
+import "status.proto";
+import "takv.proto";
+import "track.proto";
+
+message Detail {
+ string xmlDetail = 1;
+ Contact contact = 2;
+ Group group = 3;
+ PrecisionLocation precisionLocation = 4;
+ Status status = 5;
+ Takv takv = 6;
+ Track track = 7;
+}

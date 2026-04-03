@@ -166,7 +166,7 @@ const deadmanLastActivity = computed(() => {
 })
 
 // TAK gateway
-const takForm = ref({ tak_host: '', tak_port: 8087, tak_ssl: false, cert_file: '', key_file: '', ca_file: '', callsign_prefix: 'MESHSAT', cot_stale_seconds: 300, coalesce_seconds: 30 })
+const takForm = ref({ tak_host: '', tak_port: 8087, tak_ssl: false, protocol: 'xml', cert_file: '', key_file: '', ca_file: '', callsign_prefix: 'MESHSAT', cot_stale_seconds: 300, coalesce_seconds: 30 })
 const takEnabled = ref(false)
 const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
 
@@ -1787,9 +1787,18 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             <input v-model.number="takForm.tak_port" type="number" min="1" max="65535" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          <input type="checkbox" v-model="takForm.tak_ssl" id="tak_ssl" class="rounded bg-gray-900 border-gray-700">
-          <label for="tak_ssl" class="text-xs text-gray-400">Use TLS/SSL</label>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" v-model="takForm.tak_ssl" id="tak_ssl" class="rounded bg-gray-900 border-gray-700">
+            <label for="tak_ssl" class="text-xs text-gray-400">Use TLS/SSL</label>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Protocol</label>
+            <select v-model="takForm.protocol" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <option value="xml">XML (CoT v2.0)</option>
+              <option value="protobuf">Protobuf (TAK Protocol v1)</option>
+            </select>
+          </div>
         </div>
         <div v-if="takForm.tak_ssl" class="space-y-3">
           <div>

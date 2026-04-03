@@ -10,6 +10,7 @@ type TAKConfig struct {
 	Host            string `json:"tak_host"`
 	Port            int    `json:"tak_port"`
 	SSL             bool   `json:"tak_ssl"`
+	Protocol        string `json:"protocol"` // "xml" (default) or "protobuf"
 	CertFile        string `json:"cert_file,omitempty"`
 	KeyFile         string `json:"key_file,omitempty"`
 	CAFile          string `json:"ca_file,omitempty"`

@@ -1,0 +1,12 @@
+syntax = "proto3";
+option optimize_for = LITE_RUNTIME;
+option go_package = "meshsat/internal/gateway/takproto";
+package atakmap.commoncommo.protobuf.v1;
+
+import "cotevent.proto";
+import "takcontrol.proto";
+
+message TakMessage {
+  TakControl takControl = 1;
+  CotEvent cotEvent = 2;
+}

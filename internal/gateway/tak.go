@@ -326,11 +326,29 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 		}
 	}
 
-	xmlBytes, err := MarshalCotEvent(ev)
-	if err != nil {
-		log.Warn().Err(err).Msg("tak: marshal CoT event")
-		g.errors.Add(1)
-		return
+	var outBytes []byte
+	if g.config.Protocol == "protobuf" {
+		takMsg, err := CotEventToProto(ev)
+		if err != nil {
+			log.Warn().Err(err).Msg("tak: convert to protobuf")
+			g.errors.Add(1)
+			return
+		}
+		outBytes, err = MarshalTakProto(takMsg)
+		if err != nil {
+			log.Warn().Err(err).Msg("tak: marshal protobuf")
+			g.errors.Add(1)
+			return
+		}
+	} else {
+		var err error
+		outBytes, err = MarshalCotEvent(ev)
+		if err != nil {
+			log.Warn().Err(err).Msg("tak: marshal CoT XML")
+			g.errors.Add(1)
+			return
+		}
+		outBytes = append(outBytes, '\n') // XML uses newline delimiter
 	}
 
 	if !g.connected.Load() || g.conn == nil {
@@ -342,9 +360,7 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 		log.Warn().Err(err).Msg("tak: set write deadline")
 	}
 
-	// CoT over TCP uses newline-delimited XML
-	xmlBytes = append(xmlBytes, '\n')
-	if _, err := g.conn.Write(xmlBytes); err != nil {
+	if _, err := g.conn.Write(outBytes); err != nil {
 		log.Warn().Err(err).Msg("tak: write to server")
 		g.errors.Add(1)
 		g.connected.Store(false)
