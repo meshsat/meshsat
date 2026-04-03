@@ -59,6 +59,10 @@ func (s *mockTAKServer) handleConn(conn net.Conn) {
 		if err := xml.Unmarshal(line, &ev); err != nil {
 			continue
 		}
+		// Skip version negotiation and keepalive messages
+		if strings.HasPrefix(ev.Type, "t-x-takp") || ev.Type == "t-x-c-t" {
+			continue
+		}
 		s.mu.Lock()
 		s.received = append(s.received, ev)
 		s.mu.Unlock()

@@ -233,6 +233,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/tak/missions/{name}/subscribe", s.handleTAKSubscribeMission)
 		r.Get("/tak/events", s.handleTAKEventsSSE)
 		r.Get("/tak/events/recent", s.handleTAKRecentEvents)
+		r.Post("/tak/chat", s.handleTAKSendChat)
+		r.Post("/tak/nineline", s.handleTAKSendNineLine)
 
 		// Iridium modem info
 		r.Get("/iridium/modem", s.handleGetSatModemInfo)

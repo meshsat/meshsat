@@ -1,4 +1,37 @@
 <script setup>
+// ── GeoChat ──
+const chatMessages = computed(() => events.value.filter(e => e.type === "b-t-f"))
+const chatInput = ref("")
+async function sendChat() {
+  if (!chatInput.value.trim()) return
+  try {
+    await api.post("/api/tak/chat", { text: chatInput.value })
+    chatInput.value = ""
+  } catch (e) { alert(e.response?.data?.error || e.message) }
+}
+
+// ── 9-Line MEDEVAC ──
+const nineLineForm = ref({ location: "", freq: "", patients: "1", urgency: "Urgent", security: "No Enemy", marking: "Panels", nationality: "US", terrain: "Open", equipment: "None" })
+const nineLineSubmitting = ref(false)
+async function submitNineLine() {
+  nineLineSubmitting.value = true
+  const lines = [
+    "1. Location: " + nineLineForm.value.location,
+    "2. Frequency: " + nineLineForm.value.freq,
+    "3. Patients: " + nineLineForm.value.patients,
+    "4. Equipment: " + nineLineForm.value.equipment,
+    "5. Patients Type: Litter",
+    "6. Security: " + nineLineForm.value.security,
+    "7. Marking: " + nineLineForm.value.marking,
+    "8. Nationality: " + nineLineForm.value.nationality,
+    "9. Terrain: " + nineLineForm.value.terrain
+  ].join("\n")
+  try {
+    await api.post("/api/tak/nineline", { text: lines, urgency: nineLineForm.value.urgency })
+    alert("9-Line MEDEVAC submitted")
+  } catch (e) { alert(e.response?.data?.error || e.message) }
+  nineLineSubmitting.value = false
+}
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import api from '@/api/client'
@@ -241,6 +274,39 @@ onMounted(() => {
   loadCertificates()
 })
 
+// ── GeoChat ──
+const chatMessages = computed(() => events.value.filter(e => e.type === "b-t-f"))
+const chatInput = ref("")
+async function sendChat() {
+  if (!chatInput.value.trim()) return
+  try {
+    await api.post("/api/tak/chat", { text: chatInput.value })
+    chatInput.value = ""
+  } catch (e) { alert(e.response?.data?.error || e.message) }
+}
+
+// ── 9-Line MEDEVAC ──
+const nineLineForm = ref({ location: "", freq: "", patients: "1", urgency: "Urgent", security: "No Enemy", marking: "Panels", nationality: "US", terrain: "Open", equipment: "None" })
+const nineLineSubmitting = ref(false)
+async function submitNineLine() {
+  nineLineSubmitting.value = true
+  const lines = [
+    "1. Location: " + nineLineForm.value.location,
+    "2. Frequency: " + nineLineForm.value.freq,
+    "3. Patients: " + nineLineForm.value.patients,
+    "4. Equipment: " + nineLineForm.value.equipment,
+    "5. Patients Type: Litter",
+    "6. Security: " + nineLineForm.value.security,
+    "7. Marking: " + nineLineForm.value.marking,
+    "8. Nationality: " + nineLineForm.value.nationality,
+    "9. Terrain: " + nineLineForm.value.terrain
+  ].join("\n")
+  try {
+    await api.post("/api/tak/nineline", { text: lines, urgency: nineLineForm.value.urgency })
+    alert("9-Line MEDEVAC submitted")
+  } catch (e) { alert(e.response?.data?.error || e.message) }
+  nineLineSubmitting.value = false
+}
 onUnmounted(() => {
   if (sseConn) sseConn.close()
 })
@@ -344,6 +410,47 @@ Stale: {{ evt.stale }}
 Detail: {{ evt.detail || '(none)' }}
                 </td>
               </tr>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
             </template>
             <tr v-if="events.length === 0">
               <td colspan="6" class="px-3 py-8 text-center text-gray-500">No CoT events yet. Events will appear when the TAK gateway is active.</td>
@@ -351,6 +458,47 @@ Detail: {{ evt.detail || '(none)' }}
           </tbody>
         </table>
       </div>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
     </template>
 
     <!-- ═══ Certificates Tab ═══ -->
@@ -451,13 +599,136 @@ Detail: {{ evt.detail || '(none)' }}
           <div v-if="enrollResult" class="mt-3 p-3 rounded text-sm" :class="enrollResult.success ? 'bg-emerald-900/30 text-emerald-300' : 'bg-red-900/30 text-red-300'">
             <template v-if="enrollResult.success">
               Enrolled successfully. Subject: {{ enrollResult.subject }}, Expires: {{ enrollResult.expires }}
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
             </template>
             <template v-else>
               {{ enrollResult.error }}
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
             </template>
           </div>
         </div>
       </div>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
     </template>
 
     <!-- ═══ Missions Tab ═══ -->
@@ -499,6 +770,47 @@ Detail: {{ evt.detail || '(none)' }}
           </button>
         </div>
       </div>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
     </template>
 
     <!-- ═══ Data Packages Tab ═══ -->
@@ -534,6 +846,47 @@ Detail: {{ evt.detail || '(none)' }}
           </div>
         </div>
       </div>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
     </template>
 
     <!-- ═══ SA Snapshot Tab ═══ -->
@@ -558,6 +911,88 @@ Detail: {{ evt.detail || '(none)' }}
       <div v-if="saData" class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
         <pre class="p-4 text-xs text-gray-300 font-mono overflow-x-auto whitespace-pre-wrap max-h-[600px] overflow-y-auto">{{ saData }}</pre>
       </div>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
+  </div>
     </template>
+  </div>
+
+  <!-- GEOCHAT -->
+  <div v-if="activeTab==='chat'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-gray-300 mb-3">TAK GeoChat</h3>
+      <div class="space-y-2 max-h-80 overflow-y-auto mb-3">
+        <div v-for="(m, i) in chatMessages.slice(0, 50)" :key="i" class="flex gap-2">
+          <span class="text-xs text-cyan-400 font-mono whitespace-nowrap">{{ m.callsign || '?' }}</span>
+          <span class="text-xs text-gray-300">{{ m.detail || m.uid }}</span>
+          <span class="text-[10px] text-gray-600 ml-auto">{{ fmtTime(m.timestamp) }}</span>
+        </div>
+        <p v-if="!chatMessages.length" class="text-xs text-gray-500">No chat messages yet.</p>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="chatInput" @keyup.enter="sendChat" placeholder="Type a message..." class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <button @click="sendChat" class="px-4 py-2 rounded text-xs bg-cyan-600 text-white hover:bg-cyan-500">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9-LINE MEDEVAC -->
+  <div v-if="activeTab==='nineline'" class="space-y-4">
+    <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+      <h3 class="text-sm font-medium text-red-400 mb-3">9-Line MEDEVAC Request</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs text-gray-500 mb-1">1. Location (grid/coords)</label><input v-model="nineLineForm.location" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.3676N 4.9041E"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">2. Radio Frequency</label><input v-model="nineLineForm.freq" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="156.800 MHz"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">3. Number of Patients</label><input v-model="nineLineForm.patients" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">4. Special Equipment</label><select v-model="nineLineForm.equipment" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>None</option><option>Hoist</option><option>Extraction</option><option>Ventilator</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">6. Security at PZ</label><select v-model="nineLineForm.security" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>No Enemy</option><option>Possible Enemy</option><option>Enemy in Area</option><option>Armed Escort Required</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">7. Marking Method</label><select v-model="nineLineForm.marking" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Panels</option><option>Smoke</option><option>Pyrotechnic</option><option>None</option><option>Other</option></select></div>
+        <div><label class="block text-xs text-gray-500 mb-1">8. Patient Nationality</label><input v-model="nineLineForm.nationality" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="US"></div>
+        <div><label class="block text-xs text-gray-500 mb-1">9. Terrain Description</label><select v-model="nineLineForm.terrain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Open</option><option>Wooded</option><option>Rough</option><option>Urban</option></select></div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option><option>Convenience</option></select>
+        <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">Submits a MEDEVAC request as CoT SOS event with 9-line data in remarks. Received by ATAK users with emergency detail.</p>
+    </div>
   </div>
 </template>

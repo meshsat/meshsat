@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -15,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	pb "meshsat/internal/gateway/takproto"
 	"meshsat/internal/transport"
 )
 
@@ -25,13 +27,14 @@ type TAKGateway struct {
 	inCh   chan InboundMessage
 	outCh  chan *transport.MeshMessage
 
-	conn       net.Conn
-	connected  atomic.Bool
-	msgsIn     atomic.Int64
-	msgsOut    atomic.Int64
-	errors     atomic.Int64
-	lastActive atomic.Int64
-	startTime  time.Time
+	conn            net.Conn
+	connected       atomic.Bool
+	negotiatedProto atomic.Int32 // 0=XML, 1=protobuf (set by version negotiation)
+	msgsIn          atomic.Int64
+	msgsOut         atomic.Int64
+	errors          atomic.Int64
+	lastActive      atomic.Int64
+	startTime       time.Time
 
 	// Position coalescing: track last PLI send time per node
 	coalesceMu sync.Mutex
@@ -297,12 +300,82 @@ func (g *TAKGateway) loadTLSFromCredentialCache(tlsCfg *tls.Config) error {
 	return nil
 }
 
-// readWorker reads newline-delimited CoT XML from the TAK server.
+// sendVersionNegotiation sends a TAK Protocol version negotiation message on connect.
+// Always starts with XML (the only guaranteed common format), then upgrades to protobuf
+// if the server responds with maxProtoVersion >= 1.
+func (g *TAKGateway) sendVersionNegotiation() {
+	g.negotiatedProto.Store(0) // reset to XML until server confirms
+
+	now := time.Now().UTC()
+	verXML := fmt.Sprintf(
+		`<event version="2.0" uid="meshsat-takp" type="t-x-takp-v" how="m-g" time="%s" start="%s" stale="%s">`+
+			`<point lat="0" lon="0" hae="0" ce="999999" le="999999"/>`+
+			`<detail><TakControl minProtoVersion="0" maxProtoVersion="1"/></detail></event>`,
+		now.Format(cotTimeFormat), now.Format(cotTimeFormat),
+		now.Add(30*time.Second).Format(cotTimeFormat))
+
+	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err == nil {
+		g.conn.Write(append([]byte(verXML), '\n')) //nolint:errcheck
+	}
+	log.Info().Msg("tak: sent XML version negotiation (minProto=0, maxProto=1)")
+}
+
+// sendProtobufVersionNegotiation sends the version negotiation as a protobuf TakMessage.
+// Called after the server indicates protobuf support, to confirm the upgrade.
+func (g *TAKGateway) sendProtobufVersionNegotiation() {
+	msg := &pb.TakMessage{
+		TakControl: &pb.TakControl{
+			MinProtoVersion: 0,
+			MaxProtoVersion: 1,
+			ContactUid:      "meshsat-takp",
+		},
+	}
+	frame, err := MarshalTakProto(msg)
+	if err != nil {
+		log.Warn().Err(err).Msg("tak: marshal protobuf version negotiation")
+		return
+	}
+	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err == nil {
+		g.conn.Write(frame) //nolint:errcheck
+	}
+	log.Info().Msg("tak: sent protobuf version negotiation confirmation")
+}
+
+// handleVersionNegotiation processes a version negotiation response and upgrades
+// the connection to protobuf if the server supports it.
+func (g *TAKGateway) handleVersionNegotiation(maxProto int) {
+	if maxProto >= 1 {
+		g.negotiatedProto.Store(1)
+		g.sendProtobufVersionNegotiation()
+		log.Info().Int("version", maxProto).Msg("tak: negotiated protobuf mode")
+	} else {
+		g.negotiatedProto.Store(0)
+		log.Info().Msg("tak: server supports XML only")
+	}
+}
+
+// useProtobuf returns true if outbound messages should use protobuf framing.
+func (g *TAKGateway) useProtobuf() bool {
+	// Explicit config override takes precedence
+	if g.config.Protocol == "protobuf" {
+		return true
+	}
+	if g.config.Protocol == "xml" {
+		return false
+	}
+	// Default: use negotiated protocol
+	return g.negotiatedProto.Load() >= 1
+}
+
+// readWorker reads CoT events from the TAK server in mixed mode (XML + protobuf).
+// Detects protocol by first byte: 0xBF = TAK Protocol v1 (protobuf), otherwise XML.
 func (g *TAKGateway) readWorker(ctx context.Context) {
 	defer g.wg.Done()
 
-	scanner := bufio.NewScanner(g.conn)
-	scanner.Buffer(make([]byte, 64*1024), 256*1024) // up to 256KB per CoT event
+	// Send version negotiation on initial connect
+	g.sendVersionNegotiation()
+
+	reader := bufio.NewReaderSize(g.conn, 256*1024)
 
 	for {
 		select {
@@ -311,52 +384,104 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 		default:
 		}
 
-		// Set read deadline so we don't block forever
 		if err := g.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			log.Warn().Err(err).Msg("tak: set read deadline")
 			return
 		}
 
-		if !scanner.Scan() {
+		// Peek first byte to detect protocol
+		firstByte, err := reader.Peek(1)
+		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			err := scanner.Err()
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue // read timeout, try again
-				}
-				log.Warn().Err(err).Msg("tak: read error, reconnecting")
-			} else {
-				log.Warn().Msg("tak: connection closed by server")
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
 			}
+			log.Warn().Err(err).Msg("tak: read error, reconnecting")
 			g.connected.Store(false)
 			g.reconnect(ctx)
 			if ctx.Err() != nil {
 				return
 			}
-			scanner = bufio.NewScanner(g.conn)
-			scanner.Buffer(make([]byte, 64*1024), 256*1024)
+			reader = bufio.NewReaderSize(g.conn, 256*1024)
+			g.sendVersionNegotiation()
 			continue
 		}
 
-		line := scanner.Bytes()
-		if len(line) == 0 {
+		var ev *CotEvent
+
+		if firstByte[0] == 0xBF {
+			// TAK Protocol v1 (protobuf framed)
+			msg, err := ReadTakProtoMessage(reader)
+			if err != nil {
+				log.Debug().Err(err).Msg("tak: parse protobuf message")
+				continue
+			}
+
+			// Handle protobuf TakControl (version negotiation) separately
+			if tc := msg.GetTakControl(); tc != nil && msg.GetCotEvent() == nil {
+				log.Info().
+					Uint32("min", tc.GetMinProtoVersion()).
+					Uint32("max", tc.GetMaxProtoVersion()).
+					Str("contact", tc.GetContactUid()).
+					Msg("tak: protobuf version negotiation received")
+				g.handleVersionNegotiation(int(tc.GetMaxProtoVersion()))
+				continue
+			}
+
+			ev, err = ProtoToCotEvent(msg)
+			if err != nil {
+				log.Debug().Err(err).Msg("tak: convert protobuf to CoT")
+				continue
+			}
+		} else {
+			// XML CoT (newline-delimited)
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue
+				}
+				log.Warn().Err(err).Msg("tak: XML read error, reconnecting")
+				g.connected.Store(false)
+				g.reconnect(ctx)
+				if ctx.Err() != nil {
+					return
+				}
+				reader = bufio.NewReaderSize(g.conn, 256*1024)
+				g.sendVersionNegotiation()
+				continue
+			}
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			ev, err = ParseCotEvent(line)
+			if err != nil {
+				log.Debug().Err(err).Msg("tak: parse XML CoT event")
+				continue
+			}
+		}
+
+		// Handle XML version negotiation responses — extract negotiated protocol
+		if ev.Type == "t-x-takp-v" || ev.Type == "t-x-takp-r" {
+			maxProto := 0
+			if ev.Detail != nil && ev.Detail.TakControl != nil {
+				maxProto = ev.Detail.TakControl.MaxProtoVersion
+			}
+			log.Info().Str("type", ev.Type).Int("maxProto", maxProto).Msg("tak: XML version negotiation response")
+			g.handleVersionNegotiation(maxProto)
 			continue
 		}
 
-		ev, err := ParseCotEvent(line)
-		if err != nil {
-			log.Debug().Err(err).Msg("tak: parse inbound CoT event")
-			continue
-		}
-
-		// Skip server keepalive/ping events (type "t-x-c-t")
+		// Skip keepalives
 		if ev.Type == "t-x-c-t" || ev.Type == "t-x-c-t-r" {
 			continue
 		}
 
-		// Publish to CoT event stream for dashboard
 		GlobalTakEventBus.Publish(CotEventToRecord(ev, "inbound"))
 
 		msg := CotEventToInboundMessage(ev)
@@ -456,7 +581,7 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 	}
 
 	var outBytes []byte
-	if g.config.Protocol == "protobuf" {
+	if g.useProtobuf() {
 		takMsg, err := CotEventToProto(ev)
 		if err != nil {
 			log.Warn().Err(err).Msg("tak: convert to protobuf")

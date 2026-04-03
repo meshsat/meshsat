@@ -35,14 +35,21 @@ type CotPoint struct {
 
 // CotDetail holds optional detail sub-elements.
 type CotDetail struct {
-	Contact   *CotContact   `xml:"contact,omitempty"`
-	Group     *CotGroup     `xml:"__group,omitempty"`
-	Precision *CotPrecision `xml:"precisionlocation,omitempty"`
-	Track     *CotTrack     `xml:"track,omitempty"`
-	Status    *CotStatus    `xml:"status,omitempty"`
-	Takv      *CotTakv      `xml:"takv,omitempty"`
-	Emergency *CotEmergency `xml:"emergency,omitempty"`
-	Remarks   *CotRemarks   `xml:"remarks,omitempty"`
+	Contact    *CotContact    `xml:"contact,omitempty"`
+	Group      *CotGroup      `xml:"__group,omitempty"`
+	Precision  *CotPrecision  `xml:"precisionlocation,omitempty"`
+	Track      *CotTrack      `xml:"track,omitempty"`
+	Status     *CotStatus     `xml:"status,omitempty"`
+	Takv       *CotTakv       `xml:"takv,omitempty"`
+	Emergency  *CotEmergency  `xml:"emergency,omitempty"`
+	Remarks    *CotRemarks    `xml:"remarks,omitempty"`
+	TakControl *CotTakControl `xml:"TakControl,omitempty"`
+}
+
+// CotTakControl carries TAK Protocol version negotiation parameters.
+type CotTakControl struct {
+	MinProtoVersion int `xml:"minProtoVersion,attr"`
+	MaxProtoVersion int `xml:"maxProtoVersion,attr"`
 }
 
 // CotTakv identifies the TAK client software.
