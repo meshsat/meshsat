@@ -268,6 +268,18 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 		ev = BuildChatEvent(uid, callsign, msg.DecodedText, g.config.CotStaleSec)
 	case CotEventTypeSensor:
 		ev = BuildTelemetryEvent(uid, callsign, 0, 0, g.config.CotStaleSec, msg.DecodedText)
+	case CotEventTypeWaypoint:
+		// Parse waypoint from Meshtastic WAYPOINT_APP protobuf
+		if len(msg.RawPayload) > 0 {
+			wp, err := transport.ParseWaypointPayload(msg.RawPayload)
+			if err == nil && wp.Latitude != 0 {
+				ev = BuildWaypointEvent(uid, callsign, wp.Latitude, wp.Longitude, wp.Name, wp.Description, g.config.CotStaleSec)
+			} else {
+				return // can't build waypoint without coordinates
+			}
+		} else {
+			return
+		}
 	default:
 		// Position — parse from RawPayload if available (PortNum 3 = POSITION_APP)
 		if msg.PortNum == 3 && len(msg.RawPayload) > 0 {

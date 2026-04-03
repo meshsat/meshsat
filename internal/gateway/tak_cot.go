@@ -107,6 +107,15 @@ const CotEventTypeAlarm = "b-a"
 // CotEventTypeChat is the CoT type for GeoChat/freetext messages.
 const CotEventTypeChat = "b-t-f"
 
+// CotEventTypeWaypoint is the CoT type for map markers/waypoints.
+const CotEventTypeWaypoint = "b-m-p-s-p-loc"
+
+// CotEventTypeRoute is the CoT type for routes (linked waypoints).
+const CotEventTypeRoute = "b-m-r"
+
+// CotEventTypeCircle is the CoT type for circle drawings (geofences).
+const CotEventTypeCircle = "u-d-c-c"
+
 // BuildPositionEvent creates a CoT PLI event from a MeshSat position.
 func BuildPositionEvent(uid, callsign string, lat, lon, alt float64, staleSec int) CotEvent {
 	now := time.Now().UTC()
@@ -226,6 +235,86 @@ func BuildChatEvent(uid, callsign string, text string, staleSec int) CotEvent {
 			Remarks: &CotRemarks{
 				Source: callsign,
 				Text:   text,
+			},
+		},
+	}
+}
+
+// CotLink represents a link element (used in routes to chain waypoints).
+type CotLink struct {
+	UID      string `xml:"uid,attr"`
+	Type     string `xml:"type,attr"`
+	Relation string `xml:"relation,attr"`
+}
+
+// CotShape holds shape sub-elements for drawings.
+type CotShape struct {
+	Ellipse *CotEllipse `xml:"Ellipse,omitempty"`
+}
+
+// CotEllipse represents a circle/ellipse drawing.
+type CotEllipse struct {
+	Major float64 `xml:"major,attr"` // radius in meters
+	Minor float64 `xml:"minor,attr"`
+	Angle float64 `xml:"angle,attr"`
+}
+
+// CotUserIcon specifies a custom marker icon.
+type CotUserIcon struct {
+	IconsetPath string `xml:"iconsetpath,attr"`
+}
+
+// BuildWaypointEvent creates a CoT marker event from a Meshtastic waypoint.
+func BuildWaypointEvent(uid, callsign string, lat, lon float64, name, description string, staleSec int) CotEvent {
+	now := time.Now().UTC()
+	return CotEvent{
+		Version: "2.0",
+		UID:     uid + "-WP-" + strconv.FormatInt(now.UnixMilli(), 36),
+		Type:    CotEventTypeWaypoint,
+		How:     "h-e",
+		Time:    now.Format(cotTimeFormat),
+		Start:   now.Format(cotTimeFormat),
+		Stale:   now.Add(time.Duration(staleSec) * time.Second).Format(cotTimeFormat),
+		Point: CotPoint{
+			Lat: lat,
+			Lon: lon,
+			Hae: 0,
+			Ce:  10.0,
+			Le:  10.0,
+		},
+		Detail: &CotDetail{
+			Contact: &CotContact{Callsign: name},
+			Remarks: &CotRemarks{
+				Source: callsign,
+				Text:   description,
+			},
+		},
+	}
+}
+
+// BuildCircleEvent creates a CoT circle drawing (e.g., geofence).
+func BuildCircleEvent(uid, callsign string, lat, lon, radiusM float64, name string, staleSec int) CotEvent {
+	now := time.Now().UTC()
+	return CotEvent{
+		Version: "2.0",
+		UID:     uid + "-FENCE-" + name,
+		Type:    CotEventTypeCircle,
+		How:     "h-e",
+		Time:    now.Format(cotTimeFormat),
+		Start:   now.Format(cotTimeFormat),
+		Stale:   now.Add(time.Duration(staleSec) * time.Second).Format(cotTimeFormat),
+		Point: CotPoint{
+			Lat: lat,
+			Lon: lon,
+			Hae: 0,
+			Ce:  radiusM,
+			Le:  0,
+		},
+		Detail: &CotDetail{
+			Contact: &CotContact{Callsign: name},
+			Remarks: &CotRemarks{
+				Source: callsign,
+				Text:   fmt.Sprintf("Geofence: %s (%.0fm radius)", name, radiusM),
 			},
 		},
 	}
@@ -353,6 +442,10 @@ func MeshMessageToCotType(msg *transport.MeshMessage) string {
 		return CotEventTypePosition
 	case msg.PortNum == 1: // TEXT_MESSAGE_APP
 		return CotEventTypeChat
+	case msg.PortNum == 8: // WAYPOINT_APP
+		return CotEventTypeWaypoint
+	case msg.PortNum == 73: // MAP_REPORT_APP
+		return CotEventTypePosition // map reports contain position data
 	default:
 		return CotEventTypePosition
 	}

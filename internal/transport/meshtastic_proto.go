@@ -851,6 +851,24 @@ func buildSetChannel(myNodeNum uint32, index uint32, name string, psk []byte, ro
 	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
 
+// ParseWaypointPayload parses a WAYPOINT_APP protobuf payload into a Waypoint.
+// Exported for use by other packages (e.g., TAK gateway).
+func ParseWaypointPayload(data []byte) (*Waypoint, error) {
+	w := &pb.Waypoint{}
+	if err := proto.Unmarshal(data, w); err != nil {
+		return nil, err
+	}
+	return &Waypoint{
+		ID:          w.GetId(),
+		Name:        w.GetName(),
+		Description: w.GetDescription(),
+		Latitude:    float64(w.GetLatitudeI()) / 1e7,
+		Longitude:   float64(w.GetLongitudeI()) / 1e7,
+		Icon:        int(w.GetIcon()),
+		Expire:      int64(w.GetExpire()),
+	}, nil
+}
+
 // buildWaypointPacket builds a waypoint MeshPacket.
 func buildWaypointPacket(wp Waypoint, to uint32, channel uint32) []byte {
 	latI := int32(wp.Latitude * 1e7)
