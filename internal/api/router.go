@@ -222,9 +222,13 @@ func (s *Server) Router() http.Handler {
 		r.Post("/gateways/{type}/stop", s.handleStopGateway)
 		r.Post("/gateways/{type}/test", s.handleTestGateway)
 
-		// TAK certificate enrollment
+		// TAK integration
 		r.Post("/tak/enroll", s.handleTAKEnroll)
 		r.Get("/tak/enroll/status", s.handleTAKEnrollStatus)
+		r.Get("/tak/missions", s.handleTAKMissions)
+		r.Post("/tak/upload", s.handleTAKUpload)
+		r.Get("/tak/download", s.handleTAKDownload)
+		r.Get("/tak/sa", s.handleTAKSASnapshot)
 
 		// Iridium modem info
 		r.Get("/iridium/modem", s.handleGetSatModemInfo)
