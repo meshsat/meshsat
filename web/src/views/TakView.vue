@@ -45,6 +45,8 @@ const rateOut = computed(() => {
 })
 
 const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
+const hubRelay = ref(false)
+async function checkHubRelay() { try { const r = await api.get('/routing/hub'); hubRelay.value = !!r?.url } catch {} }
 
 function typeColor(t) {
   if (!t) return 'text-gray-400'
@@ -241,6 +243,7 @@ onMounted(() => {
   store.fetchGateways()
   connectSSE()
   loadCertificates()
+  checkHubRelay()
 })
 
 // ── GeoChat ──
@@ -315,10 +318,10 @@ onUnmounted(() => {
           <div class="text-xs text-gray-500">Active Clients</div>
         </div>
         <div class="bg-gray-800 rounded-lg border border-gray-700 p-3 text-center">
-          <div class="text-lg font-bold" :class="takGw?.connected ? 'text-emerald-400' : 'text-gray-500'">
-            {{ takGw?.connected ? 'Connected' : 'Offline' }}
+          <div class="text-lg font-bold" :class="takGw?.connected ? 'text-emerald-400' : hubRelay ? 'text-purple-400' : 'text-gray-500'">
+            {{ takGw?.connected ? 'Connected' : hubRelay ? 'Via Hub' : 'Offline' }}
           </div>
-          <div class="text-xs text-gray-500">TAK Gateway {{ takGw?.connection_uptime || '' }}</div>
+          <div class="text-xs text-gray-500">{{ takGw?.connected ? 'Direct TAK' : hubRelay ? 'Hub → OpenTAKServer' : 'TAK Gateway' }} {{ takGw?.connection_uptime || '' }}</div>
         </div>
       </div>
 

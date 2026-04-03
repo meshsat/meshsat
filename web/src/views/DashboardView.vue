@@ -1028,11 +1028,16 @@ const reticulumConnectedPeers = computed(() =>
 
 // ── TAK widget ──
 const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
+const hubConfig = ref(null)
+async function loadHubConfigForTak() { try { const r = await api.get('/routing/hub'); hubConfig.value = r } catch {} }
+
 const takStatus = computed(() => {
   const gw = takGw.value
-  if (!gw) return { dot: 'bg-gray-600', text: 'Not Configured' }
-  if (gw.connected) return { dot: 'bg-blue-400', text: 'Connected' }
-  return { dot: 'bg-red-400', text: 'Disconnected' }
+  if (gw?.connected) return { dot: 'bg-blue-400', text: 'Connected' }
+  if (gw && !gw.connected) return { dot: 'bg-red-400', text: 'Disconnected' }
+  // No direct TAK gateway — check if Hub relay is available
+  if (hubConfig.value?.url) return { dot: 'bg-purple-400', text: 'Via Hub' }
+  return { dot: 'bg-gray-600', text: 'Not Configured' }
 })
 const takMsgRate = computed(() => {
   const gw = takGw.value
@@ -1100,6 +1105,8 @@ async function fetchAll() {
 }
 
 onMounted(() => {
+  loadHubConfigForTak()
+
   // Restore activity log from localStorage
   try {
     const saved = localStorage.getItem('meshsat-activity-log')
@@ -2015,9 +2022,10 @@ function widgetGridClass(id) {
 
         <!-- Connection status banner -->
         <div class="flex items-center justify-between mb-3 px-2 py-1.5 rounded text-[11px]"
-          :class="takGw?.connected ? 'bg-blue-400/10' : 'bg-gray-700/30'">
-          <span class="font-mono" :class="takGw?.connected ? 'text-blue-400' : 'text-gray-500'">{{ takStatus.text }}</span>
+          :class="takGw?.connected ? 'bg-blue-400/10' : takStatus.text === 'Via Hub' ? 'bg-purple-400/10' : 'bg-gray-700/30'">
+          <span class="font-mono" :class="takGw?.connected ? 'text-blue-400' : takStatus.text === 'Via Hub' ? 'text-purple-400' : 'text-gray-500'">{{ takStatus.text }}</span>
           <span v-if="takGw?.connection_uptime" class="font-mono text-gray-400 text-[10px]">{{ takGw.connection_uptime }}</span>
+          <span v-else-if="takStatus.text === 'Via Hub'" class="font-mono text-purple-300 text-[10px]">CoT relayed through Hub → OTS</span>
         </div>
 
         <!-- Message counters -->
