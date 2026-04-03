@@ -128,6 +128,56 @@ function signalColor(q) {
   return '#ef4444'
 }
 
+// TAK/CoT marker icon system — MIL-STD-2525-inspired SVG icons
+function cotColor(cotType) {
+  if (!cotType) return '#4A90D9'
+  if (cotType.startsWith('a-h-')) return '#FF3030' // hostile
+  if (cotType.startsWith('a-n-')) return '#00A000' // neutral
+  if (cotType.startsWith('a-u-')) return '#FFFF00' // unknown
+  if (cotType === 'b-a') return '#FF0000'          // emergency
+  if (cotType.startsWith('b-m-p')) return '#FF8C00' // waypoint
+  if (cotType === 't-x-d-d') return '#9B59B6'      // sensor
+  if (cotType === 'b-t-f') return '#22D3EE'         // chat
+  return '#4A90D9' // friendly (default)
+}
+
+function cotShape(cotType) {
+  if (!cotType) return 'diamond'
+  if (cotType.includes('-U-C-I') || cotType.includes('-E-')) return 'square'
+  if (cotType.startsWith('b-m-p')) return 'pushpin'
+  if (cotType === 'b-a') return 'emergency'
+  if (cotType === 't-x-d-d') return 'circle'
+  return 'diamond'
+}
+
+function cotMarkerIcon(cotType, callsign, stale) {
+  const color = cotColor(cotType)
+  const shape = cotShape(cotType)
+  const opacity = stale ? 0.45 : 1.0
+  const label = callsign ? `<text x="16" y="39" text-anchor="middle" fill="#fff" font-size="9" font-family="sans-serif" style="text-shadow:0 0 3px #000">${callsign.length > 8 ? callsign.slice(-6) : callsign}</text>` : ''
+
+  let svg = ''
+  if (shape === 'diamond') {
+    svg = `<svg width="32" height="42" viewBox="0 0 32 42" opacity="${opacity}"><polygon points="16,2 30,16 16,30 2,16" fill="${color}" stroke="#fff" stroke-width="2"/>${label}</svg>`
+  } else if (shape === 'square') {
+    svg = `<svg width="32" height="42" viewBox="0 0 32 42" opacity="${opacity}"><rect x="3" y="3" width="26" height="26" fill="${color}" stroke="#fff" stroke-width="2" rx="2"/>${label}</svg>`
+  } else if (shape === 'pushpin') {
+    svg = `<svg width="24" height="38" viewBox="0 0 24 38" opacity="${opacity}"><circle cx="12" cy="10" r="8" fill="${color}" stroke="#fff" stroke-width="2"/><polygon points="12,36 6,18 18,18" fill="${color}"/><circle cx="12" cy="10" r="3" fill="#fff"/></svg>`
+  } else if (shape === 'emergency') {
+    svg = `<svg width="32" height="42" viewBox="0 0 32 42" opacity="${opacity}"><circle cx="16" cy="16" r="14" fill="${color}" stroke="#fff" stroke-width="2"/><line x1="8" y1="8" x2="24" y2="24" stroke="#fff" stroke-width="3"/><line x1="24" y1="8" x2="8" y2="24" stroke="#fff" stroke-width="3"/><text x="16" y="39" text-anchor="middle" fill="#FF0000" font-size="9" font-weight="bold">SOS</text></svg>`
+  } else {
+    svg = `<svg width="28" height="42" viewBox="0 0 28 42" opacity="${opacity}"><circle cx="14" cy="14" r="12" fill="${color}" stroke="#fff" stroke-width="2"/>${label}</svg>`
+  }
+
+  return L.divIcon({
+    html: svg,
+    className: '',
+    iconSize: [32, 42],
+    iconAnchor: [16, 30],
+    popupAnchor: [0, -30]
+  })
+}
+
 // Build a lookup: nodeId → {lat, lon, name, color}
 const nodePositionMap = computed(() => {
   const m = {}
@@ -204,15 +254,19 @@ function updateMap() {
 
   const visibleNodes = nodesWithPositions.value.filter(n => nodeVisibility[n._id] !== false)
 
-  // Node markers
+  // Node markers — TAK/CoT-compliant icons
   for (const node of visibleNodes) {
-    const color = signalColor(node.signal_quality)
-    const m = L.circleMarker([node.latitude, node.longitude], {
-      radius: 8, fillColor: color, fillOpacity: 0.8, color, weight: 2
-    })
+    const callsign = node.short_name || node.long_name || node._id
+    const cotType = node.cot_type || 'a-f-G-U-C' // default: friendly ground unit
+    const lastSeen = node.last_heard ? new Date(node.last_heard * 1000) : null
+    const stale = lastSeen ? (Date.now() - lastSeen.getTime() > 300000) : false
+    const icon = cotMarkerIcon(cotType, callsign, stale)
+    const m = L.marker([node.latitude, node.longitude], { icon })
     let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
+    html += `<br><span style="color:#888;font-size:11px">${cotType}</span>`
     if (node.battery != null) html += `<br>Battery: ${Math.round(node.battery)}%`
     if (node.snr != null) html += `<br>SNR: ${Number(node.snr).toFixed(1)} dB`
+    if (stale && lastSeen) html += `<br><span style="color:#f59e0b">Stale (${Math.floor((Date.now() - lastSeen.getTime()) / 60000)}m ago)</span>`
     m.bindPopup(html)
     markerLayer.addLayer(m)
   }
