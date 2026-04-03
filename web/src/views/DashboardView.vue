@@ -1026,6 +1026,32 @@ const reticulumConnectedPeers = computed(() =>
   (store.reticulumStatus.peers || []).filter(p => p.connected).length
 )
 
+// ── TAK widget ──
+const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
+const takStatus = computed(() => {
+  const gw = takGw.value
+  if (!gw) return { dot: 'bg-gray-600', text: 'Not Configured' }
+  if (gw.connected) return { dot: 'bg-blue-400', text: 'Connected' }
+  return { dot: 'bg-red-400', text: 'Disconnected' }
+})
+const takMsgRate = computed(() => {
+  const gw = takGw.value
+  if (!gw || !gw.connected || !gw.connection_uptime) return null
+  const total = (gw.messages_in || 0) + (gw.messages_out || 0)
+  if (total === 0) return '0/min'
+  // Parse uptime like "1h30m15s" or "45m10s" or "30s"
+  const parts = gw.connection_uptime.match(/(\d+)h|(\d+)m|(\d+)s/g) || []
+  let seconds = 0
+  for (const p of parts) {
+    if (p.endsWith('h')) seconds += parseInt(p) * 3600
+    else if (p.endsWith('m')) seconds += parseInt(p) * 60
+    else if (p.endsWith('s')) seconds += parseInt(p)
+  }
+  if (seconds < 60) return `${total}/min`
+  const rate = (total / (seconds / 60)).toFixed(1)
+  return `${rate}/min`
+})
+
 // ── Burst queue ──
 const burstFlushing = ref(false)
 async function doBurstFlush() {
@@ -1982,20 +2008,48 @@ function widgetGridClass(id) {
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
             <h2 class="font-display font-semibold text-sm text-blue-400 tracking-wide">TAK / CoT</h2>
+            <span class="w-2 h-2 rounded-full" :class="takStatus.dot"></span>
           </div>
           <router-link to="/tak" class="text-[10px] text-gray-500 hover:text-gray-300">Monitor &rarr;</router-link>
         </div>
-        <div class="grid grid-cols-2 gap-2 text-xs">
-          <div class="flex justify-between"><span class="text-gray-500">Status</span>
-            <span class="font-mono" :class="((store.gateways||[]).find(g=>g.type==='tak'))?.connected ? 'text-emerald-400' : 'text-gray-500'">
-              {{ ((store.gateways||[]).find(g=>g.type==='tak'))?.connected ? 'Connected' : 'Offline' }}
-            </span></div>
-          <div class="flex justify-between"><span class="text-gray-500">Msgs In</span>
-            <span class="font-mono text-emerald-400">{{ ((store.gateways||[]).find(g=>g.type==='tak'))?.messages_in ?? 0 }}</span></div>
-          <div class="flex justify-between"><span class="text-gray-500">Msgs Out</span>
-            <span class="font-mono text-amber-400">{{ ((store.gateways||[]).find(g=>g.type==='tak'))?.messages_out ?? 0 }}</span></div>
-          <div class="flex justify-between"><span class="text-gray-500">Errors</span>
-            <span class="font-mono text-red-400">{{ ((store.gateways||[]).find(g=>g.type==='tak'))?.errors ?? 0 }}</span></div>
+
+        <!-- Connection status banner -->
+        <div class="flex items-center justify-between mb-3 px-2 py-1.5 rounded text-[11px]"
+          :class="takGw?.connected ? 'bg-blue-400/10' : 'bg-gray-700/30'">
+          <span class="font-mono" :class="takGw?.connected ? 'text-blue-400' : 'text-gray-500'">{{ takStatus.text }}</span>
+          <span v-if="takGw?.connection_uptime" class="font-mono text-gray-400 text-[10px]">{{ takGw.connection_uptime }}</span>
+        </div>
+
+        <!-- Message counters -->
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <div class="text-center">
+            <div class="font-mono text-lg font-bold" :class="(takGw?.messages_in || 0) > 0 ? 'text-emerald-400' : 'text-gray-600'">{{ takGw?.messages_in ?? 0 }}</div>
+            <div class="text-[10px] text-gray-500">msgs in</div>
+          </div>
+          <div class="text-center">
+            <div class="font-mono text-lg font-bold" :class="(takGw?.messages_out || 0) > 0 ? 'text-amber-400' : 'text-gray-600'">{{ takGw?.messages_out ?? 0 }}</div>
+            <div class="text-[10px] text-gray-500">msgs out</div>
+          </div>
+          <div class="text-center">
+            <div class="font-mono text-lg font-bold" :class="(takGw?.errors || 0) > 0 ? 'text-red-400' : 'text-gray-600'">{{ takGw?.errors ?? 0 }}</div>
+            <div class="text-[10px] text-gray-500">errors</div>
+          </div>
+        </div>
+
+        <!-- Status rows -->
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Rate</span>
+            <span class="font-mono" :class="takMsgRate ? 'text-blue-300' : 'text-gray-600'">{{ takMsgRate || '—' }}</span>
+          </div>
+          <div v-if="takGw?.last_activity" class="flex justify-between">
+            <span class="text-gray-500">Last Activity</span>
+            <span class="font-mono text-gray-300">{{ formatRelativeTime(takGw.last_activity) }}</span>
+          </div>
+          <div v-if="takGw?.config" class="flex justify-between">
+            <span class="text-gray-500">Protocol</span>
+            <span class="font-mono text-gray-300">{{ takGw.config.protocol === 'protobuf' ? 'Protobuf' : 'XML' }}{{ takGw.config.tak_ssl ? ' (TLS)' : '' }}</span>
+          </div>
         </div>
       </div>
 
