@@ -17,6 +17,121 @@ let autoRefreshTimer = null
 const clickedCoords = ref(null)
 const coordsCopied = ref(false)
 
+// Bearing/distance measurement tool
+const measureMode = ref(false)
+const measurePointA = ref(null)
+const measurePointB = ref(null)
+const measureResult = ref(null)
+let measureMarkerA = null
+let measureMarkerB = null
+let measureLine = null
+
+function toRad(deg) { return deg * Math.PI / 180 }
+function toDeg(rad) { return rad * 180 / Math.PI }
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371 // km
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function bearing(lat1, lon1, lat2, lon2) {
+  const dLon = toRad(lon2 - lon1)
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2))
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon)
+  return (toDeg(Math.atan2(y, x)) + 360) % 360
+}
+
+function toggleMeasureMode() {
+  measureMode.value = !measureMode.value
+  if (!measureMode.value) clearMeasure()
+}
+
+function clearMeasure() {
+  measurePointA.value = null
+  measurePointB.value = null
+  measureResult.value = null
+  if (measureMarkerA) { map.removeLayer(measureMarkerA); measureMarkerA = null }
+  if (measureMarkerB) { map.removeLayer(measureMarkerB); measureMarkerB = null }
+  if (measureLine) { map.removeLayer(measureLine); measureLine = null }
+}
+
+function handleMeasureClick(e) {
+  if (!measureMode.value || !L || !map) return
+  const { lat, lng } = e.latlng
+
+  if (!measurePointA.value) {
+    measurePointA.value = { lat, lon: lng }
+    measurePointB.value = null
+    measureResult.value = null
+    if (measureMarkerB) { map.removeLayer(measureMarkerB); measureMarkerB = null }
+    if (measureLine) { map.removeLayer(measureLine); measureLine = null }
+    if (measureMarkerA) map.removeLayer(measureMarkerA)
+    measureMarkerA = L.circleMarker([lat, lng], {
+      radius: 6, fillColor: '#f43f5e', fillOpacity: 0.9, color: '#fff', weight: 2
+    }).addTo(map).bindPopup('Point A').openPopup()
+  } else {
+    measurePointB.value = { lat, lon: lng }
+    if (measureMarkerB) map.removeLayer(measureMarkerB)
+    measureMarkerB = L.circleMarker([lat, lng], {
+      radius: 6, fillColor: '#3b82f6', fillOpacity: 0.9, color: '#fff', weight: 2
+    }).addTo(map).bindPopup('Point B').openPopup()
+
+    if (measureLine) map.removeLayer(measureLine)
+    const a = measurePointA.value
+    measureLine = L.polyline([[a.lat, a.lon], [lat, lng]], {
+      color: '#f43f5e', weight: 2, dashArray: '6 4'
+    }).addTo(map)
+
+    const dist = haversineDistance(a.lat, a.lon, lat, lng)
+    const brg = bearing(a.lat, a.lon, lat, lng)
+    measureResult.value = {
+      distance_km: dist,
+      bearing_deg: brg,
+      distance_display: dist < 1 ? `${(dist * 1000).toFixed(0)} m` : `${dist.toFixed(2)} km`,
+      bearing_display: `${brg.toFixed(1)}°`
+    }
+    measureLine.bindPopup(
+      `<strong>${measureResult.value.distance_display}</strong> @ ${measureResult.value.bearing_display}`
+    ).openPopup()
+  }
+}
+
+// Team/group filter (TAK team colors)
+const takTeamColors = {
+  Cyan: '#00FFFF',
+  Green: '#00FF00',
+  Yellow: '#FFFF00',
+  White: '#FFFFFF',
+  Orange: '#FF8C00',
+  Magenta: '#FF00FF',
+  Maroon: '#800000',
+  Red: '#FF0000'
+}
+const selectedTeam = ref('all') // 'all' or team name
+
+// Derive team from cot_type: a-f = friendly (Cyan), a-h = hostile (Red), a-n = neutral (Green), a-u = unknown (Yellow)
+function nodeTeam(cotType) {
+  if (!cotType) return 'Cyan'
+  if (cotType.startsWith('a-h-')) return 'Red'
+  if (cotType.startsWith('a-n-')) return 'Green'
+  if (cotType.startsWith('a-u-')) return 'Yellow'
+  return 'Cyan' // friendly default
+}
+
+// Available teams based on current nodes
+const availableTeams = computed(() => {
+  const teams = new Set()
+  for (const node of nodesWithPositions.value) {
+    teams.add(nodeTeam(node.cot_type))
+  }
+  return [...teams].sort()
+})
+
 // Fullscreen
 const isFullscreen = ref(false)
 
@@ -252,7 +367,10 @@ function updateMap() {
   trackLayer.clearLayers()
   if (messageLayer) messageLayer.clearLayers()
 
-  const visibleNodes = nodesWithPositions.value.filter(n => nodeVisibility[n._id] !== false)
+  const visibleNodes = nodesWithPositions.value.filter(n =>
+    nodeVisibility[n._id] !== false &&
+    (selectedTeam.value === 'all' || nodeTeam(n.cot_type) === selectedTeam.value)
+  )
 
   // Node markers — TAK/CoT-compliant icons
   for (const node of visibleNodes) {
@@ -534,6 +652,10 @@ function toggleAutoRefresh() {
 
 // Click-to-copy coordinates on map click
 function onMapClick(e) {
+  if (measureMode.value) {
+    handleMeasureClick(e)
+    return
+  }
   const lat = e.latlng.lat.toFixed(6)
   const lon = e.latlng.lng.toFixed(6)
   clickedCoords.value = `${lat}, ${lon}`
@@ -619,6 +741,7 @@ watch(showGps, updateMap)
 watch(showCustom, updateMap)
 watch(showIridium, updateMap)
 watch(showCellular, updateMap)
+watch(selectedTeam, updateMap)
 watch(() => store.geofences, renderGeofences, { deep: true })
 
 onMounted(async () => {
@@ -655,6 +778,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  clearMeasure()
   if (map) { map.remove(); map = null }
   if (autoRefreshTimer) clearInterval(autoRefreshTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
@@ -682,6 +806,12 @@ onUnmounted(() => {
           :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'">
           {{ isFullscreen ? 'Exit FS' : 'Fullscreen' }}
         </button>
+        <button @click="toggleMeasureMode"
+          class="px-3 py-1.5 text-xs rounded transition-colors"
+          :class="measureMode ? 'bg-rose-600 text-white hover:bg-rose-500' : 'bg-gray-800 text-gray-300 hover:text-white'"
+          title="Bearing/distance measurement — click two points on map">
+          {{ measureMode ? 'Measure: ON' : 'Measure' }}
+        </button>
         <button
           @click="store.fetchNodes().then(() => store.fetchMessages({ limit: 200 })).then(updateMap)"
           class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 hover:text-white transition-colors"
@@ -707,6 +837,20 @@ onUnmounted(() => {
           {{ coordsCopied ? 'Copied' : 'Copy' }}
         </button>
         <button @click.stop="clickedCoords = null" class="text-[10px] text-gray-500 hover:text-gray-300">&times;</button>
+      </div>
+      <!-- Measurement result overlay -->
+      <div v-if="measureMode" class="absolute top-2 left-2 z-[1000] px-2.5 py-1.5 rounded bg-gray-900/90 border border-gray-700 backdrop-blur-sm">
+        <div v-if="measureResult" class="text-xs space-y-0.5">
+          <div class="text-gray-200 font-medium">
+            <span class="text-rose-400">{{ measureResult.distance_display }}</span>
+            <span class="text-gray-500 mx-1">@</span>
+            <span class="text-blue-400">{{ measureResult.bearing_display }}</span>
+          </div>
+          <button @click.stop="clearMeasure" class="text-[10px] text-gray-500 hover:text-gray-300">Reset</button>
+        </div>
+        <div v-else class="text-[11px] text-gray-500">
+          {{ measurePointA ? 'Click point B' : 'Click point A' }}
+        </div>
       </div>
     </div>
 
@@ -751,6 +895,20 @@ onUnmounted(() => {
           <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
           Tracks
         </label>
+
+        <span class="w-px h-4 bg-gray-700" />
+
+        <!-- Team/group filter -->
+        <div class="flex items-center gap-1.5">
+          <span class="text-gray-600 text-[10px]">Team:</span>
+          <select v-model="selectedTeam"
+            class="px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-300 focus:ring-0 focus:border-gray-600">
+            <option value="all">All</option>
+            <option v-for="team in availableTeams" :key="team" :value="team">{{ team }}</option>
+          </select>
+          <span v-if="selectedTeam !== 'all'" class="w-2.5 h-2.5 rounded-full border border-gray-600"
+            :style="{ backgroundColor: takTeamColors[selectedTeam] || '#888' }" />
+        </div>
 
         <span class="flex-1" />
 
