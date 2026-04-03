@@ -11,6 +11,7 @@ const routes = [
   { path: '/map', name: 'map', component: () => import('@/views/MapView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/radio', name: 'radio', component: () => import('@/views/RadioConfigView.vue') },
+  { path: '/tak', name: 'tak', component: () => import('@/views/TakView.vue') },
   { path: '/audit', name: 'audit', component: () => import('@/views/AuditView.vue') },
   { path: '/help', name: 'help', component: () => import('@/views/HelpView.vue') },
   { path: '/about', name: 'about', component: () => import('@/views/AboutView.vue') },

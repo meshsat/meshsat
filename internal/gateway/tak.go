@@ -356,6 +356,9 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 			continue
 		}
 
+		// Publish to CoT event stream for dashboard
+		GlobalTakEventBus.Publish(CotEventToRecord(ev, "inbound"))
+
 		msg := CotEventToInboundMessage(ev)
 		select {
 		case g.inCh <- msg:
@@ -496,6 +499,9 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 	g.msgsOut.Add(1)
 	g.lastActive.Store(time.Now().Unix())
 	log.Debug().Str("uid", ev.UID).Str("type", ev.Type).Msg("tak: sent CoT event")
+
+	// Publish to CoT event stream for dashboard
+	GlobalTakEventBus.Publish(CotEventToRecord(&ev, "outbound"))
 }
 
 // reconnect attempts to re-establish the TAK server connection with backoff.

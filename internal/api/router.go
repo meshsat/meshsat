@@ -229,6 +229,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/tak/upload", s.handleTAKUpload)
 		r.Get("/tak/download", s.handleTAKDownload)
 		r.Get("/tak/sa", s.handleTAKSASnapshot)
+		r.Get("/tak/events", s.handleTAKEventsSSE)
+		r.Get("/tak/events/recent", s.handleTAKRecentEvents)
 
 		// Iridium modem info
 		r.Get("/iridium/modem", s.handleGetSatModemInfo)

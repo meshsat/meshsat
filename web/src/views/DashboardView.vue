@@ -40,7 +40,7 @@ const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'reticulum', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
 function loadWidgetOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
@@ -1971,6 +1971,31 @@ function widgetGridClass(id) {
         </button>
         <div v-else class="text-[11px] text-gray-600 text-center py-2">
           Queue empty — messages will be batched for next satellite pass
+        </div>
+      </div>
+
+      <!-- ═══ TAK / CoT ═══ -->
+      <div v-if="wid === 'tak'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <h2 class="font-display font-semibold text-sm text-blue-400 tracking-wide">TAK / CoT</h2>
+          </div>
+          <router-link to="/tak" class="text-[10px] text-gray-500 hover:text-gray-300">Monitor &rarr;</router-link>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="flex justify-between"><span class="text-gray-500">Status</span>
+            <span class="font-mono" :class="((store.gateways||[]).find(g=>g.type==='tak'))?.connected ? 'text-emerald-400' : 'text-gray-500'">
+              {{ ((store.gateways||[]).find(g=>g.type==='tak'))?.connected ? 'Connected' : 'Offline' }}
+            </span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Msgs In</span>
+            <span class="font-mono text-emerald-400">{{ ((store.gateways||[]).find(g=>g.type==='tak'))?.messages_in ?? 0 }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Msgs Out</span>
+            <span class="font-mono text-amber-400">{{ ((store.gateways||[]).find(g=>g.type==='tak'))?.messages_out ?? 0 }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Errors</span>
+            <span class="font-mono text-red-400">{{ ((store.gateways||[]).find(g=>g.type==='tak'))?.errors ?? 0 }}</span></div>
         </div>
       </div>
 
