@@ -184,6 +184,36 @@ async function saveTAK() {
   await store.configureGateway('tak', takEnabled.value, takForm.value)
 }
 
+// TAK certificate enrollment
+const takEnrollUrl = ref('')
+const takEnrollUser = ref('')
+const takEnrollPass = ref('')
+const takEnrolling = ref(false)
+const takEnrollResult = ref(null)
+
+async function doTAKEnroll() {
+  takEnrolling.value = true
+  takEnrollResult.value = null
+  try {
+    const resp = await api.post('/api/tak/enroll', {
+      server_url: takEnrollUrl.value,
+      username: takEnrollUser.value,
+      password: takEnrollPass.value
+    })
+    takEnrollResult.value = resp.data
+  } catch (e) {
+    takEnrollResult.value = { success: false, error: e.response?.data?.error || e.message }
+  }
+  takEnrolling.value = false
+}
+
+async function loadTAKEnrollStatus() {
+  try {
+    const resp = await api.get('/api/tak/enroll/status')
+    if (resp.data?.success) takEnrollResult.value = resp.data
+  } catch {}
+}
+
 // Config export/import
 const exportedConfig = ref('')
 const importText = ref('')
@@ -779,7 +809,7 @@ onMounted(async () => {
   store.fetchCellularSignal()
   store.fetchSMSContacts()
   store.fetchSIMCards()
-  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK()
+  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK(); loadTAKEnrollStatus()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
@@ -1833,7 +1863,36 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <label for="tak_en" class="text-xs text-gray-400">Enable TAK gateway</label>
         </div>
         <button @click="saveTAK" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save TAK Config</button>
-        <p class="text-xs text-gray-500">Connects to an OpenTAK Server via TCP/TLS. Forwards mesh positions, SOS, telemetry and chat as CoT XML events. Callsign format: PREFIX-XXXX (last 4 hex of node ID).</p>
+
+        <!-- Certificate enrollment -->
+        <div class="border-t border-gray-700 pt-3 mt-3">
+          <span class="text-xs font-medium text-gray-400">Certificate Enrollment</span>
+          <p class="text-xs text-gray-500 mb-2">Auto-enroll with a TAK Server to get client certificates (port 8446).</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Enrollment URL</label>
+              <input v-model="takEnrollUrl" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="https://tak-server:8446">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Username</label>
+              <input v-model="takEnrollUser" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            </div>
+          </div>
+          <div class="mt-2">
+            <label class="block text-xs text-gray-500 mb-1">Password</label>
+            <input v-model="takEnrollPass" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div class="flex items-center gap-3 mt-2">
+            <button @click="doTAKEnroll" :disabled="takEnrolling" class="px-4 py-2 rounded bg-violet-600 text-white text-sm hover:bg-violet-500 disabled:opacity-40">
+              {{ takEnrolling ? 'Enrolling...' : 'Enroll' }}
+            </button>
+            <span v-if="takEnrollResult" class="text-xs" :class="takEnrollResult.success ? 'text-emerald-400' : 'text-red-400'">
+              {{ takEnrollResult.success ? `Enrolled: ${takEnrollResult.subject} (expires ${takEnrollResult.expires})` : takEnrollResult.error }}
+            </span>
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-500">Connects to an OpenTAK Server via TCP/TLS. Forwards mesh positions, SOS, telemetry, waypoints and chat as CoT events. Protocol: XML (legacy) or Protobuf (TAK v1, ~60% smaller). Callsign format: PREFIX-XXXX (last 4 hex of node ID).</p>
       </div>
     </div>
 
