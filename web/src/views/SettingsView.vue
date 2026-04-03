@@ -20,6 +20,7 @@ const tabs = [
   { id: 'store_forward', label: 'S&F' },
   { id: 'range_test', label: 'Range Test' },
   { id: 'deadman', label: 'Dead Man' },
+  { id: 'tak', label: 'TAK' },
   { id: 'credentials', label: 'Credentials' },
   { id: 'routing', label: 'Routing' },
   { id: 'config_mgmt', label: 'Export/Import' },
@@ -163,6 +164,25 @@ const deadmanLastActivity = computed(() => {
   if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
   return `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m ago`
 })
+
+// TAK gateway
+const takForm = ref({ tak_host: '', tak_port: 8087, tak_ssl: false, cert_file: '', key_file: '', ca_file: '', callsign_prefix: 'MESHSAT', cot_stale_seconds: 300, coalesce_seconds: 30 })
+const takEnabled = ref(false)
+const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
+
+function loadTAK() {
+  if (takGw.value?.config) {
+    try {
+      const c = typeof takGw.value.config === 'string' ? JSON.parse(takGw.value.config) : takGw.value.config
+      Object.assign(takForm.value, c)
+      takEnabled.value = takGw.value.enabled
+    } catch {}
+  }
+}
+
+async function saveTAK() {
+  await store.configureGateway('tak', takEnabled.value, takForm.value)
+}
 
 // Config export/import
 const exportedConfig = ref('')
@@ -759,7 +779,7 @@ onMounted(async () => {
   store.fetchCellularSignal()
   store.fetchSMSContacts()
   store.fetchSIMCards()
-  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt()
+  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
@@ -1745,6 +1765,66 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
           {{ deadmanSaving ? 'Saving...' : 'Save' }}
         </button>
+      </div>
+    </div>
+
+    <!-- TAK -->
+    <div v-if="activeTab === 'tak'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium text-gray-200">TAK Gateway (CoT over TCP)</span>
+          <span v-if="takGw" class="text-xs" :class="takGw.connected ? 'text-emerald-400' : 'text-gray-500'">
+            {{ takGw.connected ? 'Connected' : 'Disconnected' }}
+          </span>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="col-span-2">
+            <label class="block text-xs text-gray-500 mb-1">Host</label>
+            <input v-model="takForm.tak_host" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="tak-server.local">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Port</label>
+            <input v-model.number="takForm.tak_port" type="number" min="1" max="65535" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" v-model="takForm.tak_ssl" id="tak_ssl" class="rounded bg-gray-900 border-gray-700">
+          <label for="tak_ssl" class="text-xs text-gray-400">Use TLS/SSL</label>
+        </div>
+        <div v-if="takForm.tak_ssl" class="space-y-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Certificate File (PEM)</label>
+            <input v-model="takForm.cert_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/cert.pem">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Key File (PEM)</label>
+            <input v-model="takForm.key_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/key.pem">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">CA File (optional)</label>
+            <input v-model="takForm.ca_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/ca.pem">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Callsign Prefix</label>
+            <input v-model="takForm.callsign_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="MESHSAT">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Coalesce (s)</label>
+            <input v-model.number="takForm.coalesce_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">CoT Stale Seconds</label>
+          <input v-model.number="takForm.cot_stale_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" v-model="takEnabled" id="tak_en" class="rounded bg-gray-900 border-gray-700">
+          <label for="tak_en" class="text-xs text-gray-400">Enable TAK gateway</label>
+        </div>
+        <button @click="saveTAK" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save TAK Config</button>
+        <p class="text-xs text-gray-500">Connects to an OpenTAK Server via TCP/TLS. Forwards mesh positions, SOS, telemetry and chat as CoT XML events. Callsign format: PREFIX-XXXX (last 4 hex of node ID).</p>
       </div>
     </div>
 
