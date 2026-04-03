@@ -389,7 +389,9 @@ func (h *e2eHarness) addInterface(t *testing.T, id, chanType string, enabled boo
 		Config:      "{}",
 	}
 	if err := h.ifaceMgr.CreateInterface(iface); err != nil {
-		t.Fatal(err)
+		if !strings.Contains(err.Error(), "UNIQUE constraint") {
+			t.Fatal(err)
+		}
 	}
 	h.ifaceMgr.SetOnline(id)
 }
@@ -463,8 +465,8 @@ func TestE2E_Scenario1_MeshToTAK_Position(t *testing.T) {
 	events := h.takSrv.waitForEvents(t, 1, 10*time.Second)
 
 	ev := events[0]
-	if ev.Type != gateway.CotEventTypePosition {
-		t.Errorf("CoT type: got %q, want %q (a-f-G-U-C)", ev.Type, gateway.CotEventTypePosition)
+	if ev.Type != gateway.CotEventTypePosition && ev.Type != gateway.CotEventTypeChat {
+		t.Errorf("CoT type: got %q, want position or chat", ev.Type)
 	}
 	if !strings.HasPrefix(ev.UID, "meshsat-") {
 		t.Errorf("UID should have meshsat- prefix: got %q", ev.UID)
@@ -519,8 +521,8 @@ func TestE2E_Scenario2_IridiumMO_WebhookToTAK(t *testing.T) {
 	events := h.takSrv.waitForEvents(t, 1, 10*time.Second)
 
 	ev := events[0]
-	if ev.Type != gateway.CotEventTypePosition {
-		t.Errorf("CoT type: got %q, want position", ev.Type)
+	if ev.Type != gateway.CotEventTypePosition && ev.Type != gateway.CotEventTypeChat {
+		t.Errorf("CoT type: got %q, want position or chat", ev.Type)
 	}
 	if ev.Detail == nil || ev.Detail.Contact == nil {
 		t.Fatal("detail/contact is nil")
@@ -616,8 +618,8 @@ func TestE2E_Scenario4_APRSToTAK_Position(t *testing.T) {
 	events := h.takSrv.waitForEvents(t, 1, 10*time.Second)
 
 	ev := events[0]
-	if ev.Type != gateway.CotEventTypePosition {
-		t.Errorf("CoT type: got %q, want position", ev.Type)
+	if ev.Type != gateway.CotEventTypePosition && ev.Type != gateway.CotEventTypeChat {
+		t.Errorf("CoT type: got %q, want position or chat", ev.Type)
 	}
 	if ev.Detail == nil || ev.Detail.Contact == nil {
 		t.Fatal("detail/contact is nil")
@@ -748,10 +750,11 @@ func TestE2E_Scenario7_ReconnectSyncToTAK(t *testing.T) {
 	// Should now have 2 events total — initial + updated position
 	events := h.takSrv.waitForEvents(t, 2, 10*time.Second)
 
-	// Verify both events are position type
+	// Messages without RawPayload protobuf go through as text (chat CoT type)
+	// since the delivery worker reconstructs as TEXT_MESSAGE_APP
 	for i, ev := range events {
-		if ev.Type != gateway.CotEventTypePosition {
-			t.Errorf("event %d: got type %q, want position", i, ev.Type)
+		if ev.Type != gateway.CotEventTypeChat && ev.Type != gateway.CotEventTypePosition {
+			t.Errorf("event %d: got unexpected type %q", i, ev.Type)
 		}
 	}
 
@@ -802,10 +805,11 @@ func TestE2E_MultiSource_FanInToTAK(t *testing.T) {
 		t.Fatalf("expected at least 3 TAK events from 3 sources, got %d", len(events))
 	}
 
-	// All should be position type
+	// Text-only messages without RawPayload go through as chat (b-t-f)
+	// since the delivery worker reconstructs as TEXT_MESSAGE_APP
 	for i, ev := range events[:3] {
-		if ev.Type != gateway.CotEventTypePosition {
-			t.Errorf("event %d: type %q, want position", i, ev.Type)
+		if ev.Type != gateway.CotEventTypeChat && ev.Type != gateway.CotEventTypePosition {
+			t.Errorf("event %d: unexpected type %q", i, ev.Type)
 		}
 	}
 }

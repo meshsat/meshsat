@@ -165,7 +165,7 @@ func (o *Outbox) OldestTimestamp() (*time.Time, error) {
 
 // Cleanup removes messages that are older than maxAge or exceed maxSize (keeping newest).
 func (o *Outbox) Cleanup() error {
-	cutoff := time.Now().Add(-o.maxAge).Format("2006-01-02 15:04:05")
+	cutoff := time.Now().UTC().Add(-o.maxAge).Format("2006-01-02 15:04:05")
 	if _, err := o.db.Exec(`DELETE FROM hub_outbox WHERE created_at < ?`, cutoff); err != nil {
 		return fmt.Errorf("outbox cleanup by age: %w", err)
 	}

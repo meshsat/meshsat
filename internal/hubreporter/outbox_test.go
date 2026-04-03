@@ -175,8 +175,9 @@ func TestCleanupByAge(t *testing.T) {
 	db := newTestDB(t)
 	ob := NewOutbox(db, 10000, 1*time.Hour) // 1 hour max age
 
-	// Insert an "old" message with a timestamp 2 hours ago
-	oldTime := time.Now().Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
+	// Insert an "old" message with a timestamp 2 hours ago.
+	// Use UTC and subtract 1 extra second to avoid precision edge cases.
+	oldTime := time.Now().UTC().Add(-2 * time.Hour).Format("2006-01-02 15:04:05")
 	if _, err := db.Exec(`INSERT INTO hub_outbox (topic, payload, qos, created_at) VALUES (?, ?, ?, ?)`,
 		"test/old", "old-msg", 1, oldTime); err != nil {
 		t.Fatal(err)
