@@ -484,6 +484,12 @@ func parseUser(data []byte) (*ProtoUser, error) {
 	}, nil
 }
 
+// ParsePositionPayload parses a POSITION_APP protobuf payload into a ProtoPosition.
+// Exported for use by other packages (e.g., TAK gateway).
+func ParsePositionPayload(data []byte) (*ProtoPosition, error) {
+	return parsePosition(data)
+}
+
 func parsePosition(data []byte) (*ProtoPosition, error) {
 	p := &pb.Position{}
 	if err := proto.Unmarshal(data, p); err != nil {

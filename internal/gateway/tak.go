@@ -33,6 +33,10 @@ type TAKGateway struct {
 	lastActive atomic.Int64
 	startTime  time.Time
 
+	// Position coalescing: track last PLI send time per node
+	coalesceMu sync.Mutex
+	lastPLI    map[uint32]time.Time
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -40,10 +44,11 @@ type TAKGateway struct {
 // NewTAKGateway creates a new TAK/CoT gateway.
 func NewTAKGateway(cfg TAKConfig, db *database.DB) *TAKGateway {
 	return &TAKGateway{
-		config: cfg,
-		db:     db,
-		inCh:   make(chan InboundMessage, 32),
-		outCh:  make(chan *transport.MeshMessage, 10),
+		config:  cfg,
+		db:      db,
+		inCh:    make(chan InboundMessage, 32),
+		outCh:   make(chan *transport.MeshMessage, 10),
+		lastPLI: make(map[uint32]time.Time),
 	}
 }
 
@@ -264,8 +269,43 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 	case CotEventTypeSensor:
 		ev = BuildTelemetryEvent(uid, callsign, 0, 0, g.config.CotStaleSec, msg.DecodedText)
 	default:
-		// Position — use 0,0 if we don't have GPS (the mesh message may not contain position)
-		ev = BuildPositionEvent(uid, callsign, 0, 0, 0, g.config.CotStaleSec)
+		// Position — parse from RawPayload if available (PortNum 3 = POSITION_APP)
+		if msg.PortNum == 3 && len(msg.RawPayload) > 0 {
+			// Coalesce: skip if last PLI for this node was too recent
+			if g.config.CoalesceSeconds > 0 {
+				g.coalesceMu.Lock()
+				last, ok := g.lastPLI[msg.From]
+				if ok && time.Since(last) < time.Duration(g.config.CoalesceSeconds)*time.Second {
+					g.coalesceMu.Unlock()
+					return
+				}
+				g.lastPLI[msg.From] = time.Now()
+				g.coalesceMu.Unlock()
+			}
+
+			pos, err := transport.ParsePositionPayload(msg.RawPayload)
+			if err == nil && pos.LatitudeI != 0 {
+				enrich := PositionEnrichment{
+					Lat:        float64(pos.LatitudeI) / 1e7,
+					Lon:        float64(pos.LongitudeI) / 1e7,
+					Alt:        float64(pos.Altitude),
+					Speed:      float64(pos.GroundSpeed),
+					Course:     float64(pos.GroundTrack) / 1e5,
+					PDOP:       float64(pos.PDOP) / 100.0,
+					HDOP:       float64(pos.HDOP) / 100.0,
+					SatsInView: int(pos.SatsInView),
+					FixQuality: int(pos.FixQuality),
+					FixType:    int(pos.FixType),
+					Battery:    -1, // unknown unless we have telemetry
+				}
+				ev = BuildEnrichedPositionEvent(uid, callsign, enrich, g.config.CotStaleSec)
+			} else {
+				ev = BuildPositionEvent(uid, callsign, 0, 0, 0, g.config.CotStaleSec)
+			}
+		} else {
+			ev = BuildPositionEvent(uid, callsign, 0, 0, 0, g.config.CotStaleSec)
+		}
+
 		if msg.DecodedText != "" {
 			if ev.Detail == nil {
 				ev.Detail = &CotDetail{}

@@ -40,8 +40,17 @@ type CotDetail struct {
 	Precision *CotPrecision `xml:"precisionlocation,omitempty"`
 	Track     *CotTrack     `xml:"track,omitempty"`
 	Status    *CotStatus    `xml:"status,omitempty"`
+	Takv      *CotTakv      `xml:"takv,omitempty"`
 	Emergency *CotEmergency `xml:"emergency,omitempty"`
 	Remarks   *CotRemarks   `xml:"remarks,omitempty"`
+}
+
+// CotTakv identifies the TAK client software.
+type CotTakv struct {
+	Device   string `xml:"device,attr"`
+	Platform string `xml:"platform,attr"`
+	OS       string `xml:"os,attr"`
+	Version  string `xml:"version,attr"`
 }
 
 // CotContact identifies the event source callsign.
@@ -220,6 +229,76 @@ func BuildChatEvent(uid, callsign string, text string, staleSec int) CotEvent {
 			},
 		},
 	}
+}
+
+// PositionEnrichment carries GPS quality and velocity data for CoT enrichment.
+type PositionEnrichment struct {
+	Lat, Lon, Alt       float64
+	Speed, Course       float64 // m/s and degrees
+	PDOP, HDOP          float64 // dilution of precision (*100 from Meshtastic)
+	Battery             int     // 0-100 percentage, -1 = unknown
+	SatsInView          int
+	FixQuality, FixType int
+}
+
+// CeFromHDOP converts horizontal dilution of precision to CoT Circular Error (meters).
+// CE ≈ HDOP * 5 (typical GPS receiver, 1-sigma). PDOP fallback: PDOP * 3.
+func CeFromHDOP(hdop, pdop float64) float64 {
+	if hdop > 0 {
+		return hdop * 5.0
+	}
+	if pdop > 0 {
+		return pdop * 3.0
+	}
+	return 10.0 // default
+}
+
+// LeFromVDOP converts vertical dilution of precision to CoT Linear Error (meters).
+func LeFromVDOP(vdop, pdop float64) float64 {
+	if vdop > 0 {
+		return vdop * 5.0
+	}
+	if pdop > 0 {
+		return pdop * 4.0
+	}
+	return 10.0 // default
+}
+
+// BuildEnrichedPositionEvent creates a CoT PLI with real GPS quality and velocity data.
+func BuildEnrichedPositionEvent(uid, callsign string, e PositionEnrichment, staleSec int) CotEvent {
+	ev := BuildPositionEvent(uid, callsign, e.Lat, e.Lon, e.Alt, staleSec)
+
+	// GPS accuracy
+	ev.Point.Ce = CeFromHDOP(e.HDOP, e.PDOP)
+	ev.Point.Le = LeFromVDOP(0, e.PDOP)
+
+	// Precision source
+	src := "GPS"
+	if e.FixQuality >= 2 {
+		src = "DGPS"
+	}
+	if e.FixType == 0 || e.FixQuality == 0 {
+		src = "???"
+	}
+	ev.Detail.Precision = &CotPrecision{AltSrc: src, GeoPointSrc: src}
+
+	// Velocity
+	ev.Detail.Track = &CotTrack{Speed: e.Speed, Course: e.Course}
+
+	// Battery
+	if e.Battery >= 0 {
+		ev.Detail.Status = &CotStatus{Battery: strconv.Itoa(e.Battery)}
+	}
+
+	// TAK client identification
+	ev.Detail.Takv = &CotTakv{
+		Device:   "MeshSat Bridge",
+		Platform: "MeshSat",
+		OS:       "Linux",
+		Version:  "0.20.0",
+	}
+
+	return ev
 }
 
 // MarshalCotEvent serializes a CoT event to XML bytes.
