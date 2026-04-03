@@ -7,6 +7,7 @@ const store = useMeshsatStore()
 const activeTab = ref('events')
 const tabs = [
   { id: 'events', label: 'Events' },
+  { id: 'certificates', label: 'Certificates' },
   { id: 'missions', label: 'Missions' },
   { id: 'packages', label: 'Data Packages' },
   { id: 'sa', label: 'SA Snapshot' },
@@ -180,9 +181,64 @@ function formatDateTime(iso) {
   } catch { return iso }
 }
 
+// ═══ Certificates tab state ═══
+const certData = ref(null)
+const certLoading = ref(false)
+const enrolling = ref(false)
+const enrollForm = ref({ server_url: '', username: '', password: '' })
+const enrollResult = ref(null)
+
+async function loadCertificates() {
+  certLoading.value = true
+  try {
+    certData.value = await api.get('/tak/certificates')
+  } catch {
+    certData.value = { enrolled: false, certificates: [], alerts: [] }
+  } finally {
+    certLoading.value = false
+  }
+}
+
+async function enrollCert() {
+  if (!enrollForm.value.server_url || !enrollForm.value.username || !enrollForm.value.password) return
+  enrolling.value = true
+  enrollResult.value = null
+  try {
+    const res = await api.post('/tak/enroll', enrollForm.value)
+    enrollResult.value = res
+    if (res.success) {
+      enrollForm.value.password = ''
+      await loadCertificates()
+    }
+  } catch (e) {
+    enrollResult.value = { success: false, error: e.message || 'Enrollment failed' }
+  } finally {
+    enrolling.value = false
+  }
+}
+
+function statusBadgeClass(status) {
+  switch (status) {
+    case 'valid': return 'bg-emerald-900/50 text-emerald-400 border-emerald-700'
+    case 'expiring': return 'bg-amber-900/50 text-amber-400 border-amber-700'
+    case 'expired': return 'bg-red-900/50 text-red-400 border-red-700'
+    default: return 'bg-gray-900/50 text-gray-400 border-gray-700'
+  }
+}
+
+function daysLeftLabel(d) {
+  if (d < 0) return 'Expired'
+  if (d === 0) return 'Expires today'
+  if (d === 1) return '1 day left'
+  return d + ' days left'
+}
+
+const certAlertCount = computed(() => certData.value?.alerts?.length || 0)
+
 onMounted(() => {
   store.fetchGateways()
   connectSSE()
+  loadCertificates()
 })
 
 onUnmounted(() => {
@@ -196,12 +252,14 @@ onUnmounted(() => {
 
     <!-- Tab bar -->
     <div class="flex gap-1 border-b border-gray-700 pb-2">
-      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id; tab.id === 'missions' && fetchMissions(); tab.id === 'sa' && fetchSASnapshot()"
+      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id; tab.id === 'missions' && fetchMissions(); tab.id === 'sa' && fetchSASnapshot(); tab.id === 'certificates' && loadCertificates()"
         class="px-3 py-1.5 rounded text-xs font-medium transition-colors"
         :class="activeTab === tab.id ? 'bg-blue-600/10 text-blue-400' : 'text-gray-500 hover:text-gray-300'">
         {{ tab.label }}
         <span v-if="tab.id === 'missions' && missions.length > 0"
           class="ml-1 px-1 py-px rounded text-[9px] bg-blue-400/10 text-blue-400">{{ missions.length }}</span>
+        <span v-if="tab.id === 'certificates' && certAlertCount > 0"
+          class="ml-1 px-1 py-px rounded text-[9px] bg-amber-400/10 text-amber-400">{{ certAlertCount }}</span>
       </button>
     </div>
 
@@ -292,6 +350,113 @@ Detail: {{ evt.detail || '(none)' }}
             </tr>
           </tbody>
         </table>
+      </div>
+    </template>
+
+    <!-- ═══ Certificates Tab ═══ -->
+    <template v-if="activeTab === 'certificates'">
+      <div class="space-y-4">
+        <!-- Expiry Alerts -->
+        <div v-if="certData?.alerts?.length" class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-4">
+          <h3 class="text-sm font-medium text-amber-400 mb-2">Expiry Alerts</h3>
+          <ul class="space-y-1">
+            <li v-for="(alert, i) in certData.alerts" :key="i" class="text-sm text-amber-300 flex items-start gap-2">
+              <span class="mt-0.5 shrink-0">!</span>
+              <span>{{ alert }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Enrollment Status -->
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-gray-300">Enrollment Status</h3>
+            <span v-if="certData?.enrolled"
+              class="px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-400 border-emerald-700">
+              Enrolled
+            </span>
+            <span v-else class="px-2 py-0.5 text-xs rounded border bg-gray-900/50 text-gray-400 border-gray-700">
+              Not Enrolled
+            </span>
+          </div>
+          <p v-if="certLoading" class="text-sm text-gray-500">Loading...</p>
+          <p v-else-if="!certData?.certificates?.length" class="text-sm text-gray-500">
+            No TAK certificates found. Use the enrollment form below or upload certificates in Settings &gt; Credentials.
+          </p>
+        </div>
+
+        <!-- Certificate List -->
+        <div v-if="certData?.certificates?.length" class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-xs text-gray-500 border-b border-gray-700">
+                <th class="px-3 py-2 text-left">Subject</th>
+                <th class="px-3 py-2 text-left">Type</th>
+                <th class="px-3 py-2 text-left">Expires</th>
+                <th class="px-3 py-2 text-left">Status</th>
+                <th class="px-3 py-2 text-left">Source</th>
+                <th class="px-3 py-2 text-left">Fingerprint</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="cert in certData.certificates" :key="cert.id" class="border-b border-gray-700/50">
+                <td class="px-3 py-2 text-gray-200 font-mono text-xs">{{ cert.subject || cert.id }}</td>
+                <td class="px-3 py-2 text-gray-400 text-xs">{{ cert.cred_type }}</td>
+                <td class="px-3 py-2 text-gray-400 text-xs font-mono">
+                  {{ cert.expires || '—' }}
+                  <span v-if="cert.days_left >= 0" class="ml-1" :class="statusBadgeClass(cert.status).split(' ')[1]">
+                    ({{ daysLeftLabel(cert.days_left) }})
+                  </span>
+                  <span v-else-if="cert.status === 'expired'" class="ml-1 text-red-400">(Expired)</span>
+                </td>
+                <td class="px-3 py-2">
+                  <span class="px-1.5 py-0.5 text-xs rounded border" :class="statusBadgeClass(cert.status)">
+                    {{ cert.status }}
+                  </span>
+                  <span v-if="cert.applied" class="ml-1 px-1.5 py-0.5 text-xs rounded border bg-teal-900/50 text-teal-400 border-teal-700">
+                    active
+                  </span>
+                </td>
+                <td class="px-3 py-2 text-gray-500 text-xs">{{ cert.source }}</td>
+                <td class="px-3 py-2 text-gray-500 text-xs font-mono truncate max-w-[120px]">{{ cert.fingerprint?.slice(0, 16) || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Enrollment Form -->
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4">
+          <h3 class="text-sm font-medium text-gray-300 mb-3">Certificate Enrollment</h3>
+          <p class="text-xs text-gray-500 mb-3">Enroll with a TAK Server to obtain a signed client certificate via port 8446.</p>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <input v-model="enrollForm.server_url" type="text" placeholder="https://tak-server:8446"
+              class="px-3 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <input v-model="enrollForm.username" type="text" placeholder="Username"
+              class="px-3 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <input v-model="enrollForm.password" type="password" placeholder="Password"
+              class="px-3 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          </div>
+          <div class="flex items-center gap-3">
+            <button @click="enrollCert" :disabled="enrolling || !enrollForm.server_url || !enrollForm.username || !enrollForm.password"
+              class="px-4 py-1.5 rounded text-sm font-medium transition-colors"
+              :class="enrolling ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-500 text-white'">
+              {{ enrolling ? 'Enrolling...' : 'Enroll' }}
+            </button>
+            <button @click="loadCertificates" class="px-3 py-1.5 rounded text-sm text-gray-400 hover:text-gray-200 border border-gray-700 hover:border-gray-600 transition-colors">
+              Refresh
+            </button>
+          </div>
+
+          <!-- Enrollment result -->
+          <div v-if="enrollResult" class="mt-3 p-3 rounded text-sm" :class="enrollResult.success ? 'bg-emerald-900/30 text-emerald-300' : 'bg-red-900/30 text-red-300'">
+            <template v-if="enrollResult.success">
+              Enrolled successfully. Subject: {{ enrollResult.subject }}, Expires: {{ enrollResult.expires }}
+            </template>
+            <template v-else>
+              {{ enrollResult.error }}
+            </template>
+          </div>
+        </div>
       </div>
     </template>
 

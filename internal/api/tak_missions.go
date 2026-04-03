@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"meshsat/internal/gateway"
 )
 
@@ -125,6 +127,34 @@ func (s *Server) handleTAKSASnapshot(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.Write(data) //nolint:errcheck
+}
+
+// handleTAKSubscribeMission subscribes this bridge to a TAK Server mission.
+// @Summary Subscribe to TAK mission
+// @Tags tak
+// @Param name path string true "Mission name"
+// @Success 200 {object} map[string]string
+// @Router /api/tak/missions/{name}/subscribe [post]
+func (s *Server) handleTAKSubscribeMission(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mission name required"})
+		return
+	}
+
+	client, err := s.getMartiClient()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	uid := "meshsat-bridge"
+	if err := client.SubscribeMission(name, uid); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "subscribed", "mission": name})
 }
 
 // getMartiClient creates a MartiClient from the current TAK gateway config.

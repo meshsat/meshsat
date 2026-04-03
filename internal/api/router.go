@@ -225,10 +225,12 @@ func (s *Server) Router() http.Handler {
 		// TAK integration
 		r.Post("/tak/enroll", s.handleTAKEnroll)
 		r.Get("/tak/enroll/status", s.handleTAKEnrollStatus)
+		r.Get("/tak/certificates", s.handleTAKCertificates)
 		r.Get("/tak/missions", s.handleTAKMissions)
 		r.Post("/tak/upload", s.handleTAKUpload)
 		r.Get("/tak/download", s.handleTAKDownload)
 		r.Get("/tak/sa", s.handleTAKSASnapshot)
+		r.Post("/tak/missions/{name}/subscribe", s.handleTAKSubscribeMission)
 		r.Get("/tak/events", s.handleTAKEventsSSE)
 		r.Get("/tak/events/recent", s.handleTAKRecentEvents)
 
