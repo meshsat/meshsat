@@ -8,6 +8,8 @@ const tabs = [
   { id: 'missions', label: 'Missions' },
   { id: 'packages', label: 'Data Packages' },
   { id: 'sa', label: 'SA Snapshot' },
+  { id: 'chat', label: 'GeoChat' },
+  { id: 'nineline', label: '9-Line' },
 ]
 
 // ═══ Events tab state ═══
