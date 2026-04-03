@@ -275,6 +275,58 @@ func TestTAKConfigValidate(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
+
+	// SSL with credential_id (no file paths needed)
+	cfg2 := DefaultTAKConfig()
+	cfg2.Host = "tak.example.com"
+	cfg2.SSL = true
+	cfg2.CredentialID = "tak-enrolled-cert"
+	if err := cfg2.Validate(); err != nil {
+		t.Errorf("SSL with credential_id should be valid: %v", err)
+	}
+
+	// SSL with auto-enroll (no file paths or credential_id needed)
+	cfg3 := DefaultTAKConfig()
+	cfg3.Host = "tak.example.com"
+	cfg3.SSL = true
+	cfg3.AutoEnroll = true
+	cfg3.EnrollURL = "https://tak-server:8446"
+	cfg3.EnrollUsername = "meshsat"
+	cfg3.EnrollPassword = "secret"
+	if err := cfg3.Validate(); err != nil {
+		t.Errorf("SSL with auto_enroll should be valid: %v", err)
+	}
+
+	// SSL with incomplete auto-enroll should fail
+	cfg4 := DefaultTAKConfig()
+	cfg4.Host = "tak.example.com"
+	cfg4.SSL = true
+	cfg4.AutoEnroll = true
+	cfg4.EnrollURL = "https://tak-server:8446"
+	// missing username/password
+	if err := cfg4.Validate(); err == nil {
+		t.Error("SSL with incomplete auto_enroll should fail")
+	}
+}
+
+func TestTAKConfigHasEnrollmentConfig(t *testing.T) {
+	cfg := DefaultTAKConfig()
+	if cfg.HasEnrollmentConfig() {
+		t.Error("default config should not have enrollment config")
+	}
+
+	cfg.AutoEnroll = true
+	cfg.EnrollURL = "https://tak:8446"
+	cfg.EnrollUsername = "user"
+	cfg.EnrollPassword = "pass"
+	if !cfg.HasEnrollmentConfig() {
+		t.Error("config with all enrollment fields should have enrollment config")
+	}
+
+	cfg.EnrollPassword = ""
+	if cfg.HasEnrollmentConfig() {
+		t.Error("config with missing password should not have enrollment config")
+	}
 }
 
 func TestTAKConfigParse(t *testing.T) {
@@ -302,10 +354,11 @@ func TestTAKConfigParse(t *testing.T) {
 
 func TestTAKConfigRedacted(t *testing.T) {
 	cfg := TAKConfig{
-		Host:     "tak.local",
-		CertFile: "/secret/cert.pem",
-		KeyFile:  "/secret/key.pem",
-		CAFile:   "/secret/ca.pem",
+		Host:           "tak.local",
+		CertFile:       "/secret/cert.pem",
+		KeyFile:        "/secret/key.pem",
+		CAFile:         "/secret/ca.pem",
+		EnrollPassword: "supersecret",
 	}
 	redacted := cfg.Redacted()
 	if redacted.CertFile != "****" {
@@ -316,5 +369,28 @@ func TestTAKConfigRedacted(t *testing.T) {
 	}
 	if redacted.CAFile != "****" {
 		t.Errorf("ca_file not redacted: %q", redacted.CAFile)
+	}
+	if redacted.EnrollPassword != "****" {
+		t.Errorf("enroll_password not redacted: %q", redacted.EnrollPassword)
+	}
+}
+
+func TestTAKConfigParseWithEnrollment(t *testing.T) {
+	j := `{"tak_host":"tak.local","tak_port":8089,"tak_ssl":true,"auto_enroll":true,"enroll_url":"https://tak:8446","enroll_username":"meshsat","enroll_password":"secret","callsign_prefix":"ALPHA"}`
+	cfg, err := ParseTAKConfig(j)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.AutoEnroll {
+		t.Error("auto_enroll should be true")
+	}
+	if cfg.EnrollURL != "https://tak:8446" {
+		t.Errorf("enroll_url: got %q", cfg.EnrollURL)
+	}
+	if cfg.EnrollUsername != "meshsat" {
+		t.Errorf("enroll_username: got %q", cfg.EnrollUsername)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("should validate with auto_enroll: %v", err)
 	}
 }

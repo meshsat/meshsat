@@ -53,9 +53,15 @@ func NewTAKGateway(cfg TAKConfig, db *database.DB) *TAKGateway {
 }
 
 // Start connects to the TAK server and begins read/write workers.
+// If auto_enroll is enabled and no certificate exists, enrolls first.
 func (g *TAKGateway) Start(ctx context.Context) error {
 	ctx, g.cancel = context.WithCancel(ctx)
 	g.startTime = time.Now()
+
+	// Auto-enroll if configured and no certificate is available yet
+	if err := g.ensureCertificate(); err != nil {
+		return fmt.Errorf("tak: certificate setup: %w", err)
+	}
 
 	conn, err := g.dial()
 	if err != nil {
@@ -73,6 +79,64 @@ func (g *TAKGateway) Start(ctx context.Context) error {
 		Int("port", g.config.Port).
 		Bool("ssl", g.config.SSL).
 		Msg("tak gateway started")
+	return nil
+}
+
+// ensureCertificate checks if TLS certs are available, enrolling if needed.
+func (g *TAKGateway) ensureCertificate() error {
+	if !g.config.SSL {
+		return nil
+	}
+
+	// If file paths are set, trust them
+	if g.config.CertFile != "" && g.config.KeyFile != "" {
+		return nil
+	}
+
+	// If credential_id is set, check it exists in DB
+	if g.config.CredentialID != "" {
+		row, err := g.db.GetCredentialCache(g.config.CredentialID)
+		if err == nil && row != nil {
+			return nil
+		}
+		// Credential referenced but missing — fall through to enrollment
+		log.Warn().Str("credential_id", g.config.CredentialID).Msg("tak: referenced credential not found")
+	}
+
+	// Check if enrolled cert already exists in credential cache
+	row, _ := g.db.GetCredentialCache("tak-enrolled-cert")
+	if row != nil {
+		// Use enrolled cert — set credential_id so dial() picks it up
+		g.config.CredentialID = "tak-enrolled-cert"
+		log.Info().Str("subject", row.CertSubject).Msg("tak: using enrolled certificate from credential cache")
+		return nil
+	}
+
+	// No cert available — auto-enroll if configured
+	if !g.config.HasEnrollmentConfig() {
+		return fmt.Errorf("no certificate configured and auto_enroll not enabled")
+	}
+
+	log.Info().Str("url", g.config.EnrollURL).Msg("tak: auto-enrolling with TAK Server")
+
+	result, err := TAKEnroll(TAKEnrollConfig{
+		ServerURL: g.config.EnrollURL,
+		Username:  g.config.EnrollUsername,
+		Password:  g.config.EnrollPassword,
+	})
+	if err != nil {
+		return fmt.Errorf("auto-enroll failed: %w", err)
+	}
+
+	if err := StoreEnrolledCert(g.db, result); err != nil {
+		return fmt.Errorf("store enrolled cert: %w", err)
+	}
+
+	g.config.CredentialID = "tak-enrolled-cert"
+	log.Info().
+		Str("subject", result.Subject).
+		Time("expires", result.NotAfter).
+		Msg("tak: auto-enrollment successful")
 	return nil
 }
 
@@ -142,14 +206,40 @@ func (g *TAKGateway) dial() (net.Conn, error) {
 		return net.DialTimeout("tcp", addr, 10*time.Second)
 	}
 
-	cert, err := tls.LoadX509KeyPair(g.config.CertFile, g.config.KeyFile)
+	tlsCfg, err := g.buildTLSConfig()
 	if err != nil {
-		return nil, fmt.Errorf("load client cert: %w", err)
+		return nil, err
 	}
 
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: 10 * time.Second},
+		Config:    tlsCfg,
+	}
+	return dialer.DialContext(context.Background(), "tcp", addr)
+}
+
+// buildTLSConfig constructs TLS config from credential_cache or filesystem paths.
+func (g *TAKGateway) buildTLSConfig() (*tls.Config, error) {
 	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion: tls.VersionTLS12,
+	}
+
+	// Try credential_cache first (enrolled certs or manually uploaded)
+	if g.config.CredentialID != "" {
+		if err := g.loadTLSFromCredentialCache(tlsCfg); err != nil {
+			log.Warn().Err(err).Str("credential_id", g.config.CredentialID).Msg("tak: credential cache load failed, trying file paths")
+		} else {
+			return tlsCfg, nil
+		}
+	}
+
+	// Fallback: filesystem paths
+	if g.config.CertFile != "" && g.config.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(g.config.CertFile, g.config.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load client cert: %w", err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
 	if g.config.CAFile != "" {
@@ -164,11 +254,47 @@ func (g *TAKGateway) dial() (net.Conn, error) {
 		tlsCfg.RootCAs = pool
 	}
 
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 10 * time.Second},
-		Config:    tlsCfg,
+	return tlsCfg, nil
+}
+
+// loadTLSFromCredentialCache loads client cert, key, and CA from the credential_cache DB.
+func (g *TAKGateway) loadTLSFromCredentialCache(tlsCfg *tls.Config) error {
+	// Load client cert
+	certRow, err := g.db.GetCredentialCache(g.config.CredentialID)
+	if err != nil || certRow == nil {
+		return fmt.Errorf("credential %q not found", g.config.CredentialID)
 	}
-	return dialer.DialContext(context.Background(), "tcp", addr)
+
+	// Load key (convention: cert ID + replace "cert" with "key", or "-key" suffix)
+	keyID := g.config.CredentialID
+	if keyID == "tak-enrolled-cert" {
+		keyID = "tak-enrolled-key"
+	}
+	keyRow, err := g.db.GetCredentialCache(keyID)
+	if err != nil || keyRow == nil {
+		return fmt.Errorf("credential key %q not found", keyID)
+	}
+
+	cert, err := tls.X509KeyPair(certRow.EncryptedData, keyRow.EncryptedData)
+	if err != nil {
+		return fmt.Errorf("parse client certificate from credential cache: %w", err)
+	}
+	tlsCfg.Certificates = []tls.Certificate{cert}
+
+	// Load truststore/CA if available
+	tsID := g.config.CredentialID
+	if tsID == "tak-enrolled-cert" {
+		tsID = "tak-enrolled-truststore"
+	}
+	tsRow, _ := g.db.GetCredentialCache(tsID)
+	if tsRow != nil && len(tsRow.EncryptedData) > 0 {
+		pool := x509.NewCertPool()
+		if pool.AppendCertsFromPEM(tsRow.EncryptedData) {
+			tlsCfg.RootCAs = pool
+		}
+	}
+
+	return nil
 }
 
 // readWorker reads newline-delimited CoT XML from the TAK server.
