@@ -166,7 +166,7 @@ const deadmanLastActivity = computed(() => {
 })
 
 // TAK gateway
-const takForm = ref({ tak_host: '', tak_port: 8087, tak_ssl: false, protocol: 'xml', cert_file: '', key_file: '', ca_file: '', callsign_prefix: 'MESHSAT', cot_stale_seconds: 300, coalesce_seconds: 30 })
+const takForm = ref({ tak_host: '', tak_port: 8087, tak_ssl: false, protocol: 'xml', cert_file: '', key_file: '', ca_file: '', callsign_prefix: 'MESHSAT', cot_stale_seconds: 300, coalesce_seconds: 30, multicast: false, multicast_iface: '' })
 const takEnabled = ref(false)
 const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
 
@@ -1857,6 +1857,16 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div>
           <label class="block text-xs text-gray-500 mb-1">CoT Stale Seconds</label>
           <input v-model.number="takForm.cot_stale_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" v-model="takForm.multicast" id="tak_mc" class="rounded bg-gray-900 border-gray-700">
+            <label for="tak_mc" class="text-xs text-gray-400">Multicast SA (LAN)</label>
+          </div>
+          <div v-if="takForm.multicast">
+            <label class="block text-xs text-gray-500 mb-1">Interface (empty = all)</label>
+            <input v-model="takForm.multicast_iface" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="eth0">
+          </div>
         </div>
         <div class="flex items-center gap-2">
           <input type="checkbox" v-model="takEnabled" id="tak_en" class="rounded bg-gray-900 border-gray-700">

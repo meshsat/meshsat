@@ -14,9 +14,18 @@ type TAKConfig struct {
 	CertFile        string `json:"cert_file,omitempty"`
 	KeyFile         string `json:"key_file,omitempty"`
 	CAFile          string `json:"ca_file,omitempty"`
+	CredentialID    string `json:"credential_id,omitempty"` // DB credential ID (takes precedence over file paths)
 	CallsignPrefix  string `json:"callsign_prefix"`
 	CotStaleSec     int    `json:"cot_stale_seconds"`
 	CoalesceSeconds int    `json:"coalesce_seconds"` // min seconds between PLI per device
+
+	// Auto-enrollment: if set and no cert exists, enroll on startup via TAK Server port 8446
+	EnrollURL      string `json:"enroll_url,omitempty"` // e.g., https://tak-server:8446
+	EnrollUsername string `json:"enroll_username,omitempty"`
+	EnrollPassword string `json:"enroll_password,omitempty"`
+	AutoEnroll     bool   `json:"auto_enroll,omitempty"` // enable auto-enrollment on startup
+	Multicast      bool   `json:"multicast"`             // enable UDP multicast SA (239.2.3.1:6969)
+	MulticastIface string `json:"multicast_iface"`       // network interface for multicast (empty = all)
 }
 
 // DefaultTAKConfig returns sensible defaults.
@@ -47,8 +56,12 @@ func (c *TAKConfig) Validate() error {
 		c.Port = 8087
 	}
 	if c.SSL {
-		if c.CertFile == "" || c.KeyFile == "" {
-			return fmt.Errorf("cert_file and key_file required when tak_ssl is true")
+		// SSL requires one of: credential_id, cert files, or auto-enroll
+		hasCred := c.CredentialID != ""
+		hasFiles := c.CertFile != "" && c.KeyFile != ""
+		hasEnroll := c.AutoEnroll && c.EnrollURL != "" && c.EnrollUsername != "" && c.EnrollPassword != ""
+		if !hasCred && !hasFiles && !hasEnroll {
+			return fmt.Errorf("SSL requires cert_file+key_file, credential_id, or auto_enroll with enroll_url/username/password")
 		}
 	}
 	if c.CallsignPrefix == "" {
@@ -63,7 +76,12 @@ func (c *TAKConfig) Validate() error {
 	return nil
 }
 
-// Redacted returns a copy with file paths masked.
+// HasEnrollmentConfig returns true if auto-enrollment credentials are configured.
+func (c *TAKConfig) HasEnrollmentConfig() bool {
+	return c.AutoEnroll && c.EnrollURL != "" && c.EnrollUsername != "" && c.EnrollPassword != ""
+}
+
+// Redacted returns a copy with sensitive fields masked.
 func (c TAKConfig) Redacted() TAKConfig {
 	if c.CertFile != "" {
 		c.CertFile = "****"
@@ -73,6 +91,9 @@ func (c TAKConfig) Redacted() TAKConfig {
 	}
 	if c.CAFile != "" {
 		c.CAFile = "****"
+	}
+	if c.EnrollPassword != "" {
+		c.EnrollPassword = "****"
 	}
 	return c
 }
