@@ -1,4 +1,7 @@
 <script setup>
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useMeshsatStore } from '@/stores/meshsat'
+import api from '@/api/client'
 
 const store = useMeshsatStore()
 const activeTab = ref('events')
