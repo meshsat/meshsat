@@ -427,15 +427,12 @@ func TestTUNContextCancel(t *testing.T) {
 
 func tunAvailable(t *testing.T) {
 	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Skip("TUN tests require real TUN device — skip in CI")
+	}
 	if os.Getuid() != 0 {
 		t.Skip("requires root for TUN device creation")
 	}
-	// Also verify TUN device is accessible (may be busy or absent in CI containers)
-	f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
-	if err != nil {
-		t.Skipf("TUN device not available: %v", err)
-	}
-	f.Close()
 }
 
 // setupTUNPair creates two TUN adapters cross-connected through mock bearers.
