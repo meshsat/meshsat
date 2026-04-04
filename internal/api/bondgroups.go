@@ -12,6 +12,13 @@ import (
 	"meshsat/internal/hemb"
 )
 
+// @Summary List HeMB bond groups
+// @Description Returns all bond groups with their member interfaces
+// @Tags hemb
+// @Produce json
+// @Success 200 {array} object
+// @Failure 500 {object} map[string]string
+// @Router /api/bond-groups [get]
 func (s *Server) handleGetBondGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := s.db.GetAllBondGroups()
 	if err != nil {
@@ -39,6 +46,17 @@ func (s *Server) handleGetBondGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// @Summary Create HeMB bond group
+// @Description Creates a new bond group with at least 2 member interfaces for multi-bearer delivery
+// @Tags hemb
+// @Accept json
+// @Produce json
+// @Param body body object true "Bond group" example({"id":"bond1","label":"LoRa+SBD","members":["mesh_0","sbd_0"],"min_reliability":0.95})
+// @Success 201 {object} database.BondGroup
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/bond-groups [post]
 func (s *Server) handleCreateBondGroup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID             string   `json:"id"`
@@ -90,6 +108,13 @@ func (s *Server) handleCreateBondGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, g)
 }
 
+// @Summary Delete HeMB bond group
+// @Description Deletes a bond group and its members
+// @Tags hemb
+// @Param id path string true "Bond group ID"
+// @Success 204
+// @Failure 500 {object} map[string]string
+// @Router /api/bond-groups/{id} [delete]
 func (s *Server) handleDeleteBondGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.db.DeleteBondGroup(id); err != nil {
@@ -162,6 +187,12 @@ func (s *Server) handleHeMBSend(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// @Summary Get HeMB statistics
+// @Description Returns HeMB coding statistics (streams, symbols, latency, cost)
+// @Tags hemb
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /api/hemb/stats [get]
 func (s *Server) handleGetHeMBStats(w http.ResponseWriter, r *http.Request) {
 	st := hemb.Global.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{

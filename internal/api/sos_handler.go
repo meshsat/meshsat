@@ -22,6 +22,13 @@ type SOSState struct {
 	sends    int
 }
 
+// @Summary Activate SOS alert
+// @Description Triggers an SOS emergency alert that sends via mesh and satellite (3x at 30s intervals)
+// @Tags sos
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 409 {object} map[string]string "already active"
+// @Router /api/sos/activate [post]
 func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	if s.sos == nil {
 		s.sos = &SOSState{}
@@ -49,6 +56,12 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// @Summary Cancel SOS alert
+// @Description Cancels an active SOS emergency alert
+// @Tags sos
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /api/sos/cancel [post]
 func (s *Server) handleSOSCancel(w http.ResponseWriter, r *http.Request) {
 	if s.sos == nil {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "not_active"})
@@ -72,6 +85,12 @@ func (s *Server) handleSOSCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
+// @Summary Get SOS status
+// @Description Returns current SOS alert status and send count
+// @Tags sos
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/sos/status [get]
 func (s *Server) handleSOSStatus(w http.ResponseWriter, r *http.Request) {
 	if s.sos == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{

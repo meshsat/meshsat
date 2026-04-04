@@ -13,6 +13,12 @@ type burstStatusResponse struct {
 }
 
 // handleGetBurstStatus returns the current burst queue status.
+// @Summary Get burst queue status
+// @Description Returns the current burst queue pending count, max size, and max age
+// @Tags system
+// @Produce json
+// @Success 200 {object} burstStatusResponse
+// @Router /api/burst/status [get]
 func (s *Server) handleGetBurstStatus(w http.ResponseWriter, r *http.Request) {
 	if s.burstQueue == nil {
 		writeJSON(w, http.StatusOK, burstStatusResponse{
@@ -30,6 +36,14 @@ func (s *Server) handleGetBurstStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFlushBurst forces a flush of the burst queue.
+// @Summary Flush burst queue
+// @Description Forces an immediate flush of the burst queue, sending all pending messages
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/burst/flush [post]
 func (s *Server) handleFlushBurst(w http.ResponseWriter, r *http.Request) {
 	if s.burstQueue == nil {
 		writeError(w, http.StatusServiceUnavailable, "burst queue not available")

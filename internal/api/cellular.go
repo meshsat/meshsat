@@ -14,6 +14,12 @@ import (
 	"meshsat/internal/gateway"
 )
 
+// @Summary Get cellular signal strength
+// @Description Returns live or cached cellular signal reading with fallback to DB
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/cellular/signal [get]
 func (s *Server) handleGetCellularSignal(w http.ResponseWriter, r *http.Request) {
 	// Prefer cached signal from background poller — instant, no serial contention.
 	// Only fall through to live AT+CSQ if no cached data exists yet.
@@ -76,6 +82,15 @@ func (s *Server) handleGetCellularSignalFast(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// @Summary Get cellular signal history
+// @Description Returns historical cellular signal strength readings
+// @Tags cellular
+// @Produce json
+// @Param hours query integer false "History window in hours (default: 24, max: 720)"
+// @Param limit query integer false "Max number of readings (default: 500)"
+// @Success 200 {array} database.CellularSignalPoint
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/signal/history [get]
 func (s *Server) handleGetCellularSignalHistory(w http.ResponseWriter, r *http.Request) {
 	hoursStr := r.URL.Query().Get("hours")
 	hours := 24
@@ -107,6 +122,12 @@ func (s *Server) handleGetCellularSignalHistory(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, points)
 }
 
+// @Summary Get cellular modem status
+// @Description Returns cellular modem connection status, SIM state, operator, and network info
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/cellular/status [get]
 func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request) {
 	// Try live modem first
 	if s.cellTransport != nil {
@@ -152,6 +173,17 @@ func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
+// @Summary Connect cellular data
+// @Description Activates cellular data connection with the specified APN
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "APN config" example({"apn":"internet"})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/data/connect [post]
 func (s *Server) handleCellularDataConnect(w http.ResponseWriter, r *http.Request) {
 	if s.gwManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
@@ -177,6 +209,14 @@ func (s *Server) handleCellularDataConnect(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
 }
 
+// @Summary Disconnect cellular data
+// @Description Deactivates cellular data connection
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/data/disconnect [post]
 func (s *Server) handleCellularDataDisconnect(w http.ResponseWriter, r *http.Request) {
 	if s.gwManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
@@ -189,6 +229,14 @@ func (s *Server) handleCellularDataDisconnect(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
 }
 
+// @Summary Get cellular data status
+// @Description Returns current cellular data connection status (IP, APN, bytes transferred)
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/data/status [get]
 func (s *Server) handleCellularDataStatus(w http.ResponseWriter, r *http.Request) {
 	if s.gwManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
@@ -202,6 +250,13 @@ func (s *Server) handleCellularDataStatus(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, status)
 }
 
+// @Summary Get DynDNS status
+// @Description Returns the current DynDNS updater status including last update time and IP
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} gateway.DynDNSStatus
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/dyndns/status [get]
 func (s *Server) handleGetDynDNSStatus(w http.ResponseWriter, r *http.Request) {
 	if s.gwManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
@@ -215,6 +270,15 @@ func (s *Server) handleGetDynDNSStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updater.Status())
 }
 
+// @Summary Force DynDNS update
+// @Description Triggers an immediate DynDNS record update
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} gateway.DynDNSStatus
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/dyndns/update [post]
 func (s *Server) handleDynDNSForceUpdate(w http.ResponseWriter, r *http.Request) {
 	if s.gwManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
@@ -232,6 +296,18 @@ func (s *Server) handleDynDNSForceUpdate(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, updater.Status())
 }
 
+// @Summary Cellular inbound webhook
+// @Description Receives inbound messages via cellular webhook and forwards to mesh
+// @Tags webhooks
+// @Accept json
+// @Produce json
+// @Param body body object true "Inbound message" example({"text":"hello","to":"","channel":0})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/webhooks/cellular/inbound [post]
 func (s *Server) handleWebhookCellularInbound(w http.ResponseWriter, r *http.Request) {
 	if s.gwManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
@@ -283,6 +359,16 @@ func (s *Server) handleWebhookCellularInbound(w http.ResponseWriter, r *http.Req
 
 // --- SIM PIN Unlock ---
 
+// @Summary Submit SIM PIN
+// @Description Unlocks the SIM card by submitting the PIN code
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "PIN" example({"pin":"1234"})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/pin [post]
 func (s *Server) handleSubmitCellularPIN(w http.ResponseWriter, r *http.Request) {
 	if s.cellTransport == nil {
 		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
@@ -310,6 +396,12 @@ func (s *Server) handleSubmitCellularPIN(w http.ResponseWriter, r *http.Request)
 
 // --- Cell Info ---
 
+// @Summary Get cell tower info
+// @Description Returns live and persisted cell tower information (MCC, MNC, LAC, Cell ID)
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/cellular/info [get]
 func (s *Server) handleGetCellInfo(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{}
 
@@ -334,6 +426,15 @@ func (s *Server) handleGetCellInfo(w http.ResponseWriter, r *http.Request) {
 
 // --- Cell Broadcast Alerts ---
 
+// @Summary List cell broadcast alerts
+// @Description Returns cell broadcast emergency alerts (NL-Alert, EU-Alert)
+// @Tags cellular
+// @Produce json
+// @Param limit query integer false "Max results (default: 50, max: 200)"
+// @Param unacked_only query boolean false "Only unacknowledged alerts"
+// @Success 200 {array} database.CellBroadcast
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/broadcasts [get]
 func (s *Server) handleGetCellBroadcasts(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
@@ -355,6 +456,15 @@ func (s *Server) handleGetCellBroadcasts(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, alerts)
 }
 
+// @Summary Acknowledge cell broadcast
+// @Description Marks a cell broadcast alert as acknowledged
+// @Tags cellular
+// @Produce json
+// @Param id path integer true "Broadcast alert ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/broadcasts/{id}/ack [post]
 func (s *Server) handleAckCellBroadcast(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -371,6 +481,15 @@ func (s *Server) handleAckCellBroadcast(w http.ResponseWriter, r *http.Request) 
 
 // --- SMS History ---
 
+// @Summary List SMS messages
+// @Description Returns SMS message history with pagination
+// @Tags cellular
+// @Produce json
+// @Param limit query integer false "Max results (default: 50, max: 500)"
+// @Param offset query integer false "Pagination offset (default: 0)"
+// @Success 200 {array} database.SMSMessageRecord
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/sms [get]
 func (s *Server) handleGetSMSMessages(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
@@ -400,6 +519,13 @@ func (s *Server) handleGetSMSMessages(w http.ResponseWriter, r *http.Request) {
 
 // --- SMS Contacts ---
 
+// @Summary List SMS contacts
+// @Description Returns all SMS contacts
+// @Tags cellular
+// @Produce json
+// @Success 200 {array} database.SMSContact
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/contacts [get]
 func (s *Server) handleGetSMSContacts(w http.ResponseWriter, r *http.Request) {
 	contacts, err := s.db.GetSMSContacts()
 	if err != nil {
@@ -412,6 +538,16 @@ func (s *Server) handleGetSMSContacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, contacts)
 }
 
+// @Summary Create SMS contact
+// @Description Creates a new SMS contact with phone number and optional auto-forward setting
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "Contact" example({"name":"Alice","phone":"+31612345678","notes":"","auto_fwd":false})
+// @Success 201 {object} map[string]int64
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/contacts [post]
 func (s *Server) handleCreateSMSContact(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name    string `json:"name"`
@@ -436,6 +572,17 @@ func (s *Server) handleCreateSMSContact(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
+// @Summary Update SMS contact
+// @Description Updates an existing SMS contact
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Param body body object true "Contact"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/contacts/{id} [put]
 func (s *Server) handleUpdateSMSContact(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -466,6 +613,15 @@ func (s *Server) handleUpdateSMSContact(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// @Summary Delete SMS contact
+// @Description Deletes an SMS contact
+// @Tags cellular
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/contacts/{id} [delete]
 func (s *Server) handleDeleteSMSContact(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -483,6 +639,17 @@ func (s *Server) handleDeleteSMSContact(w http.ResponseWriter, r *http.Request) 
 
 // --- Send SMS ---
 
+// @Summary Send SMS message
+// @Description Sends an SMS message via the cellular modem with optional egress transforms
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "SMS" example({"to":"+31612345678","text":"Hello"})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/sms/send [post]
 func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 	if s.cellTransport == nil {
 		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
@@ -529,6 +696,16 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 // --- Webhook Log ---
 
 // handleCellularAT sends a raw AT command to the cellular modem. Debug only. [MESHSAT-448]
+// @Summary Send raw AT command
+// @Description Sends a raw AT command to the cellular modem for debugging
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "AT command" example({"command":"AT+CSQ","timeout":5})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/at [post]
 func (s *Server) handleCellularAT(w http.ResponseWriter, r *http.Request) {
 	if s.cellTransport == nil {
 		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
@@ -558,6 +735,14 @@ func (s *Server) handleCellularAT(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"response": resp})
 }
 
+// @Summary Get webhook log
+// @Description Returns recent webhook invocation log entries
+// @Tags webhooks
+// @Produce json
+// @Param limit query integer false "Max results (default: 100, max: 1000)"
+// @Success 200 {array} database.WebhookLogEntry
+// @Failure 500 {object} map[string]string
+// @Router /api/webhooks/log [get]
 func (s *Server) handleGetWebhookLog(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.URL.Query().Get("limit")
 	limit := 100
@@ -580,6 +765,13 @@ func (s *Server) handleGetWebhookLog(w http.ResponseWriter, r *http.Request) {
 
 // ─── SIM Card Management ─────────────────────────────────────────────────────
 
+// @Summary List SIM cards
+// @Description Returns all registered SIM cards
+// @Tags cellular
+// @Produce json
+// @Success 200 {array} database.SIMCard
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/sim-cards [get]
 func (s *Server) handleGetSIMCards(w http.ResponseWriter, r *http.Request) {
 	cards, err := s.db.GetSIMCards()
 	if err != nil {
@@ -592,6 +784,16 @@ func (s *Server) handleGetSIMCards(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cards)
 }
 
+// @Summary Create SIM card
+// @Description Registers a new SIM card with ICCID, label, phone, and PIN
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "SIM card" example({"iccid":"89310...","label":"KPN SIM","phone":"+31...","pin":"1234","notes":""})
+// @Success 201 {object} map[string]int64
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/sim-cards [post]
 func (s *Server) handleCreateSIMCard(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ICCID string `json:"iccid"`
@@ -619,6 +821,17 @@ func (s *Server) handleCreateSIMCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
+// @Summary Update SIM card
+// @Description Updates a registered SIM card
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param id path integer true "SIM card ID"
+// @Param body body object true "SIM card fields"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/sim-cards/{id} [put]
 func (s *Server) handleUpdateSIMCard(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -642,6 +855,15 @@ func (s *Server) handleUpdateSIMCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// @Summary Delete SIM card
+// @Description Removes a registered SIM card
+// @Tags cellular
+// @Produce json
+// @Param id path integer true "SIM card ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/cellular/sim-cards/{id} [delete]
 func (s *Server) handleDeleteSIMCard(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -655,6 +877,14 @@ func (s *Server) handleDeleteSIMCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// @Summary Get current SIM ICCID
+// @Description Returns the currently inserted SIM card's ICCID, SIM state, and IMEI
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/cellular/sim-cards/current [get]
 func (s *Server) handleGetCurrentSIMICCID(w http.ResponseWriter, r *http.Request) {
 	if s.cellTransport == nil {
 		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")

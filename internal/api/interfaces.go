@@ -14,6 +14,13 @@ import (
 
 // ---- Interfaces ----
 
+// @Summary List interfaces
+// @Description Returns all interface statuses including state, bound device, and health
+// @Tags interfaces
+// @Produce json
+// @Success 200 {array} engine.InterfaceStatus
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces [get]
 func (s *Server) handleGetInterfaces(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -23,6 +30,15 @@ func (s *Server) handleGetInterfaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, statuses)
 }
 
+// @Summary Get interface
+// @Description Returns status of a single interface by ID
+// @Tags interfaces
+// @Produce json
+// @Param id path string true "Interface ID (e.g. sbd_0, tcp_0)"
+// @Success 200 {object} engine.InterfaceStatus
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id} [get]
 func (s *Server) handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -37,6 +53,17 @@ func (s *Server) handleGetInterface(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// @Summary Create interface
+// @Description Creates a new transport interface
+// @Tags interfaces
+// @Accept json
+// @Produce json
+// @Param body body database.Interface true "Interface definition"
+// @Success 201 {object} database.Interface
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces [post]
 func (s *Server) handleCreateInterface(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -62,6 +89,18 @@ func (s *Server) handleCreateInterface(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, iface)
 }
 
+// @Summary Update interface
+// @Description Updates an existing interface configuration including transforms
+// @Tags interfaces
+// @Accept json
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Param body body database.Interface true "Interface definition"
+// @Success 200 {object} database.Interface
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id} [put]
 func (s *Server) handleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -94,6 +133,15 @@ func (s *Server) handleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleValidateTransforms checks transform chain compatibility with a channel type.
+// @Summary Validate transform chain
+// @Description Checks if a transform chain is compatible with a channel type's capabilities
+// @Tags crypto
+// @Accept json
+// @Produce json
+// @Param body body object true "Validation request" example({"channel_type":"sbd","transforms":"[\"smaz2\",\"encrypt\",\"base64\"]"})
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Router /api/crypto/validate-transforms [post]
 func (s *Server) handleValidateTransforms(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ChannelType string `json:"channel_type"`
@@ -150,6 +198,14 @@ func (s *Server) validateInterfaceTransforms(iface database.Interface) (warnings
 	return allWarns, allErrs
 }
 
+// @Summary Delete interface
+// @Description Deletes a transport interface
+// @Tags interfaces
+// @Param id path string true "Interface ID"
+// @Success 204
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id} [delete]
 func (s *Server) handleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -164,11 +220,31 @@ func (s *Server) handleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEnableInterface enables an interface.
+// @Summary Enable interface
+// @Description Enables a transport interface
+// @Tags interfaces
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Success 200 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id}/enable [post]
 func (s *Server) handleEnableInterface(w http.ResponseWriter, r *http.Request) {
 	s.setInterfaceEnabled(w, r, true)
 }
 
 // handleDisableInterface disables an interface.
+// @Summary Disable interface
+// @Description Disables a transport interface
+// @Tags interfaces
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Success 200 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id}/disable [post]
 func (s *Server) handleDisableInterface(w http.ResponseWriter, r *http.Request) {
 	s.setInterfaceEnabled(w, r, false)
 }
@@ -198,6 +274,18 @@ func (s *Server) setInterfaceEnabled(w http.ResponseWriter, r *http.Request, ena
 
 // ---- Device Binding ----
 
+// @Summary Bind device to interface
+// @Description Binds a USB serial device to a transport interface
+// @Tags interfaces
+// @Accept json
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Param body body object true "Device" example({"device_id":"/dev/ttyUSB0"})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id}/bind [post]
 func (s *Server) handleBindDevice(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -223,6 +311,15 @@ func (s *Server) handleBindDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "bound"})
 }
 
+// @Summary Unbind device from interface
+// @Description Unbinds the serial device from a transport interface
+// @Tags interfaces
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id}/unbind [post]
 func (s *Server) handleUnbindDevice(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -236,6 +333,13 @@ func (s *Server) handleUnbindDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unbound"})
 }
 
+// @Summary List detected devices
+// @Description Returns all detected serial devices from the interface manager
+// @Tags interfaces
+// @Produce json
+// @Success 200 {array} engine.DetectedDevice
+// @Failure 503 {object} map[string]string
+// @Router /api/devices [get]
 func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 	if s.ifaceMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
@@ -247,6 +351,13 @@ func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 
 // ---- Access Rules ----
 
+// @Summary List access rules
+// @Description Returns all access control rules ordered by priority
+// @Tags access-rules
+// @Produce json
+// @Success 200 {array} database.AccessRule
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules [get]
 func (s *Server) handleGetAccessRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := s.db.GetAllAccessRules()
 	if err != nil {
@@ -256,6 +367,16 @@ func (s *Server) handleGetAccessRules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rules)
 }
 
+// @Summary Create access rule
+// @Description Creates a new access control rule for an interface
+// @Tags access-rules
+// @Accept json
+// @Produce json
+// @Param body body database.AccessRule true "Access rule"
+// @Success 201 {object} database.AccessRule
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules [post]
 func (s *Server) handleCreateAccessRule(w http.ResponseWriter, r *http.Request) {
 	var rule database.AccessRule
 	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
@@ -285,6 +406,17 @@ func (s *Server) handleCreateAccessRule(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, rule)
 }
 
+// @Summary Update access rule
+// @Description Updates an existing access control rule
+// @Tags access-rules
+// @Accept json
+// @Produce json
+// @Param id path integer true "Rule ID"
+// @Param body body database.AccessRule true "Access rule"
+// @Success 200 {object} database.AccessRule
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules/{id} [put]
 func (s *Server) handleUpdateAccessRule(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -309,11 +441,29 @@ func (s *Server) handleUpdateAccessRule(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleEnableAccessRule enables an access rule.
+// @Summary Enable access rule
+// @Description Enables an access control rule
+// @Tags access-rules
+// @Produce json
+// @Param id path integer true "Rule ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules/{id}/enable [post]
 func (s *Server) handleEnableAccessRule(w http.ResponseWriter, r *http.Request) {
 	s.setAccessRuleEnabled(w, r, true)
 }
 
 // handleDisableAccessRule disables an access rule.
+// @Summary Disable access rule
+// @Description Disables an access control rule
+// @Tags access-rules
+// @Produce json
+// @Param id path integer true "Rule ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules/{id}/disable [post]
 func (s *Server) handleDisableAccessRule(w http.ResponseWriter, r *http.Request) {
 	s.setAccessRuleEnabled(w, r, false)
 }
@@ -338,6 +488,16 @@ func (s *Server) setAccessRuleEnabled(w http.ResponseWriter, r *http.Request, en
 }
 
 // handleReorderAccessRules reorders rules within an interface+direction.
+// @Summary Reorder access rules
+// @Description Reorders access rules by setting priority based on array position
+// @Tags access-rules
+// @Accept json
+// @Produce json
+// @Param body body object true "Reorder request" example({"interface_id":"sbd_0","direction":"egress","rule_ids":[3,1,2]})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules/reorder [post]
 func (s *Server) handleReorderAccessRules(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		InterfaceID string  `json:"interface_id"`
@@ -363,6 +523,15 @@ func (s *Server) handleReorderAccessRules(w http.ResponseWriter, r *http.Request
 }
 
 // handleGetAccessRuleStats returns match count and cost estimate for a rule.
+// @Summary Get access rule statistics
+// @Description Returns match count and cost estimate for a specific access rule
+// @Tags access-rules
+// @Produce json
+// @Param id path integer true "Rule ID"
+// @Success 200 {object} database.AccessRuleStats
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/access-rules/{id}/stats [get]
 func (s *Server) handleGetAccessRuleStats(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -378,6 +547,14 @@ func (s *Server) handleGetAccessRuleStats(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// @Summary Delete access rule
+// @Description Deletes an access control rule
+// @Tags access-rules
+// @Param id path integer true "Rule ID"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/access-rules/{id} [delete]
 func (s *Server) handleDeleteAccessRule(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -395,6 +572,13 @@ func (s *Server) handleDeleteAccessRule(w http.ResponseWriter, r *http.Request) 
 
 // ---- Object Groups ----
 
+// @Summary List object groups
+// @Description Returns all object groups (address/port groups for access rules)
+// @Tags access-rules
+// @Produce json
+// @Success 200 {array} database.ObjectGroup
+// @Failure 500 {object} map[string]string
+// @Router /api/object-groups [get]
 func (s *Server) handleGetObjectGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := s.db.GetAllObjectGroups()
 	if err != nil {
@@ -404,6 +588,16 @@ func (s *Server) handleGetObjectGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, groups)
 }
 
+// @Summary Create object group
+// @Description Creates a new object group for use in access rules
+// @Tags access-rules
+// @Accept json
+// @Produce json
+// @Param body body database.ObjectGroup true "Object group"
+// @Success 201 {object} database.ObjectGroup
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/object-groups [post]
 func (s *Server) handleCreateObjectGroup(w http.ResponseWriter, r *http.Request) {
 	var group database.ObjectGroup
 	if err := json.NewDecoder(r.Body).Decode(&group); err != nil {
@@ -425,6 +619,17 @@ func (s *Server) handleCreateObjectGroup(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, group)
 }
 
+// @Summary Update object group
+// @Description Updates an existing object group
+// @Tags access-rules
+// @Accept json
+// @Produce json
+// @Param id path string true "Object group ID"
+// @Param body body database.ObjectGroup true "Object group"
+// @Success 200 {object} database.ObjectGroup
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/object-groups/{id} [put]
 func (s *Server) handleUpdateObjectGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -442,6 +647,13 @@ func (s *Server) handleUpdateObjectGroup(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, group)
 }
 
+// @Summary Delete object group
+// @Description Deletes an object group
+// @Tags access-rules
+// @Param id path string true "Object group ID"
+// @Success 204
+// @Failure 500 {object} map[string]string
+// @Router /api/object-groups/{id} [delete]
 func (s *Server) handleDeleteObjectGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.db.DeleteObjectGroup(id); err != nil {
@@ -458,6 +670,13 @@ type failoverGroupWithMembers struct {
 	Members []database.FailoverMember `json:"members"`
 }
 
+// @Summary List failover groups
+// @Description Returns all failover groups with their member interfaces
+// @Tags failover
+// @Produce json
+// @Success 200 {array} failoverGroupWithMembers
+// @Failure 500 {object} map[string]string
+// @Router /api/failover-groups [get]
 func (s *Server) handleGetFailoverGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := s.db.GetAllFailoverGroups()
 	if err != nil {
@@ -479,6 +698,16 @@ func (s *Server) handleGetFailoverGroups(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
+// @Summary Create failover group
+// @Description Creates a new failover group with member interfaces and priority/round-robin mode
+// @Tags failover
+// @Accept json
+// @Produce json
+// @Param body body object true "Failover group with members"
+// @Success 201 {object} object
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/failover-groups [post]
 func (s *Server) handleCreateFailoverGroup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		database.FailoverGroup
@@ -509,6 +738,17 @@ func (s *Server) handleCreateFailoverGroup(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusCreated, req)
 }
 
+// @Summary Update failover group
+// @Description Updates a failover group and replaces its member list
+// @Tags failover
+// @Accept json
+// @Produce json
+// @Param id path string true "Failover group ID"
+// @Param body body object true "Failover group with members"
+// @Success 200 {object} object
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/failover-groups/{id} [put]
 func (s *Server) handleUpdateFailoverGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req struct {
@@ -539,6 +779,13 @@ func (s *Server) handleUpdateFailoverGroup(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, req)
 }
 
+// @Summary Delete failover group
+// @Description Deletes a failover group and its members
+// @Tags failover
+// @Param id path string true "Failover group ID"
+// @Success 204
+// @Failure 500 {object} map[string]string
+// @Router /api/failover-groups/{id} [delete]
 func (s *Server) handleDeleteFailoverGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.db.DeleteFailoverGroup(id); err != nil {
@@ -551,6 +798,13 @@ func (s *Server) handleDeleteFailoverGroup(w http.ResponseWriter, r *http.Reques
 // ---- Health Scores ----
 
 // handleGetHealthScores returns composite health scores for all interfaces.
+// @Summary Get interface health scores
+// @Description Returns composite health scores for all interfaces (signal, latency, error rate)
+// @Tags interfaces
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/health [get]
 func (s *Server) handleGetHealthScores(w http.ResponseWriter, r *http.Request) {
 	if s.healthScorer == nil {
 		writeError(w, http.StatusServiceUnavailable, "health scorer not available")

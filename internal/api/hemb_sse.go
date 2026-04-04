@@ -14,6 +14,16 @@ import (
 
 // handleHeMBSSE streams HeMB events via Server-Sent Events.
 // Query params: stream_id, bearer_id, event_type (comma-separated), limit.
+// @Summary HeMB event stream (SSE)
+// @Description Streams HeMB bond group events via Server-Sent Events with optional filtering
+// @Tags hemb
+// @Produce text/event-stream
+// @Param stream_id query string false "Filter by stream ID"
+// @Param bearer_id query string false "Filter by bearer interface ID"
+// @Param event_type query string false "Filter by event type"
+// @Param replay query integer false "Number of recent events to replay (default: 50)"
+// @Success 200 {string} string "SSE event stream"
+// @Router /api/hemb/events [get]
 func (s *Server) handleHeMBSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -91,6 +101,12 @@ func matchFilter(evt hemb.Event, streamID, bearerID, eventType string) bool {
 }
 
 // handleGetHeMBTopology returns the bearer-centric topology for the graph component.
+// @Summary Get HeMB topology
+// @Description Returns bearer-centric topology for the HeMB graph visualization
+// @Tags hemb
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/hemb/topology [get]
 func (s *Server) handleGetHeMBTopology(w http.ResponseWriter, r *http.Request) {
 	// Build topology from bond groups and interface status.
 	groups, _ := s.db.GetAllBondGroups()
@@ -137,6 +153,14 @@ func (s *Server) handleGetHeMBTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetHeMBEventHistory returns paginated historical events from the ring buffer.
+// @Summary Get HeMB event history
+// @Description Returns paginated historical HeMB events with optional type filter
+// @Tags hemb
+// @Produce json
+// @Param limit query integer false "Max events (default: 100, max: 500)"
+// @Param event_type query string false "Filter by event type"
+// @Success 200 {object} map[string]any
+// @Router /api/hemb/events/history [get]
 func (s *Server) handleGetHeMBEventHistory(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if lim := r.URL.Query().Get("limit"); lim != "" {
@@ -165,6 +189,12 @@ func (s *Server) handleGetHeMBEventHistory(w http.ResponseWriter, r *http.Reques
 }
 
 // handleGetHeMBStreams returns active reassembly streams.
+// @Summary List HeMB active streams
+// @Description Returns active RLNC reassembly streams
+// @Tags hemb
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /api/hemb/streams [get]
 func (s *Server) handleGetHeMBStreams(w http.ResponseWriter, r *http.Request) {
 	streams := s.processor.HeMBActiveStreams()
 	if streams == nil {
@@ -176,6 +206,15 @@ func (s *Server) handleGetHeMBStreams(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetHeMBStreamDetail returns per-generation detail for a specific stream.
+// @Summary Get HeMB stream detail
+// @Description Returns per-generation detail for a specific RLNC stream
+// @Tags hemb
+// @Produce json
+// @Param id path integer true "Stream ID (0-255)"
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/hemb/streams/{id} [get]
 func (s *Server) handleGetHeMBStreamDetail(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.Atoi(idStr)
@@ -195,6 +234,16 @@ func (s *Server) handleGetHeMBStreamDetail(w http.ResponseWriter, r *http.Reques
 }
 
 // handleGetHeMBGenerationInspect returns RLNC matrix details for debugging.
+// @Summary Inspect HeMB generation
+// @Description Returns RLNC coding matrix details for a specific generation (debug)
+// @Tags hemb
+// @Produce json
+// @Param stream_id path integer true "Stream ID (0-255)"
+// @Param gen_id path integer true "Generation ID (0-65535)"
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/hemb/generations/{stream_id}/{gen_id} [get]
 func (s *Server) handleGetHeMBGenerationInspect(w http.ResponseWriter, r *http.Request) {
 	sidStr := chi.URLParam(r, "stream_id")
 	gidStr := chi.URLParam(r, "gen_id")

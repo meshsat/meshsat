@@ -139,6 +139,15 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePurgeMessages deletes messages older than a given timestamp.
+// @Summary Purge old messages
+// @Description Deletes messages older than the specified RFC3339 timestamp
+// @Tags messages
+// @Produce json
+// @Param before query string true "RFC3339 timestamp cutoff"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/messages [delete]
 func (s *Server) handlePurgeMessages(w http.ResponseWriter, r *http.Request) {
 	before := r.URL.Query().Get("before")
 	if before == "" {

@@ -12,6 +12,13 @@ import (
 	"meshsat/internal/transport"
 )
 
+// @Summary List preset messages
+// @Description Returns all configured preset messages
+// @Tags presets
+// @Produce json
+// @Success 200 {array} database.PresetMessage
+// @Failure 500 {object} map[string]string
+// @Router /api/presets [get]
 func (s *Server) handleGetPresets(w http.ResponseWriter, r *http.Request) {
 	presets, err := s.db.GetPresetMessages()
 	if err != nil {
@@ -21,6 +28,16 @@ func (s *Server) handleGetPresets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, presets)
 }
 
+// @Summary Create preset message
+// @Description Creates a new preset message with name, text, and optional destination
+// @Tags presets
+// @Accept json
+// @Produce json
+// @Param body body database.PresetMessage true "Preset message"
+// @Success 201 {object} database.PresetMessage
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/presets [post]
 func (s *Server) handleCreatePreset(w http.ResponseWriter, r *http.Request) {
 	var preset database.PresetMessage
 	if err := json.NewDecoder(r.Body).Decode(&preset); err != nil {
@@ -46,6 +63,17 @@ func (s *Server) handleCreatePreset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, preset)
 }
 
+// @Summary Update preset message
+// @Description Updates an existing preset message
+// @Tags presets
+// @Accept json
+// @Produce json
+// @Param id path integer true "Preset ID"
+// @Param body body database.PresetMessage true "Preset message"
+// @Success 200 {object} database.PresetMessage
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/presets/{id} [put]
 func (s *Server) handleUpdatePreset(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
@@ -68,6 +96,14 @@ func (s *Server) handleUpdatePreset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, preset)
 }
 
+// @Summary Delete preset message
+// @Description Deletes a preset message
+// @Tags presets
+// @Param id path integer true "Preset ID"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/presets/{id} [delete]
 func (s *Server) handleDeletePreset(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
@@ -83,6 +119,16 @@ func (s *Server) handleDeletePreset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// @Summary Send preset message
+// @Description Sends a preset message via the mesh radio
+// @Tags presets
+// @Produce json
+// @Param id path integer true "Preset ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/presets/{id}/send [post]
 func (s *Server) handleSendPreset(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {

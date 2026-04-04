@@ -17,6 +17,17 @@ import (
 // handleGetSignalHistory returns raw or aggregated signal history.
 // Query params: source (sbd|imt|gss|iridium, empty=all satellite), from, to (unix), interval (seconds).
 // When source is empty, returns combined sbd + imt + legacy "iridium" entries.
+// @Summary Get satellite signal history
+// @Description Returns raw or time-aggregated signal strength readings for satellite modems
+// @Tags iridium
+// @Produce json
+// @Param source query string false "Signal source filter (sbd, imt, gss, iridium; empty=all satellite)"
+// @Param from query integer false "Start time (unix timestamp, default: 6h ago)"
+// @Param to query integer false "End time (unix timestamp, default: now)"
+// @Param interval query integer false "Aggregation interval in seconds (omit for raw data)"
+// @Success 200 {array} database.SignalHistoryAggregated
+// @Failure 500 {object} map[string]string
+// @Router /api/iridium/signal/history [get]
 func (s *Server) handleGetSignalHistory(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 
@@ -90,6 +101,13 @@ func (s *Server) handleGetSignalHistory(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleGetCredits returns aggregated credit usage and budget limits.
+// @Summary Get Iridium credit usage
+// @Description Returns aggregated credit usage summary and budget limits
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} database.CreditSummary
+// @Failure 500 {object} map[string]string
+// @Router /api/iridium/credits [get]
 func (s *Server) handleGetCredits(w http.ResponseWriter, r *http.Request) {
 	summary, err := s.db.GetCreditSummary()
 	if err != nil {
@@ -100,6 +118,16 @@ func (s *Server) handleGetCredits(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSetCreditBudget sets daily and/or monthly credit budget limits.
+// @Summary Set Iridium credit budget
+// @Description Sets daily and/or monthly credit budget limits for satellite usage
+// @Tags iridium
+// @Accept json
+// @Produce json
+// @Param body body object true "Budget limits" example({"daily_budget":10,"monthly_budget":100})
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/iridium/credits/budget [post]
 func (s *Server) handleSetCreditBudget(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DailyBudget   *int `json:"daily_budget"`
@@ -128,6 +156,21 @@ func (s *Server) handleSetCreditBudget(w http.ResponseWriter, r *http.Request) {
 
 // handleGetPasses returns satellite passes for a ground location.
 // Query params: lat, lon, alt_m, hours, min_elev, start (unix timestamp, default now).
+// @Summary Get Iridium satellite passes
+// @Description Predicts upcoming Iridium satellite passes for a ground station location using SGP4/TLE
+// @Tags iridium
+// @Produce json
+// @Param lat query number true "Ground station latitude"
+// @Param lon query number true "Ground station longitude"
+// @Param alt_m query number false "Ground station altitude in meters"
+// @Param hours query integer false "Prediction window in hours (default: 24)"
+// @Param min_elev query number false "Minimum elevation in degrees (default: 5.0)"
+// @Param start query integer false "Start time (unix timestamp, default: now)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/passes [get]
 func (s *Server) handleGetPasses(w http.ResponseWriter, r *http.Request) {
 	if s.tleMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "TLE manager not initialized")
@@ -166,6 +209,14 @@ func (s *Server) handleGetPasses(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRefreshTLEs triggers an immediate TLE refresh from Celestrak.
+// @Summary Refresh Iridium TLE data
+// @Description Triggers an immediate TLE (Two-Line Element) refresh from Celestrak
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/passes/refresh [post]
 func (s *Server) handleRefreshTLEs(w http.ResponseWriter, r *http.Request) {
 	if s.tleMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "TLE manager not initialized")
@@ -181,6 +232,13 @@ func (s *Server) handleRefreshTLEs(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetLocations returns all ground station locations.
+// @Summary List ground station locations
+// @Description Returns all configured ground station locations for pass prediction
+// @Tags iridium
+// @Produce json
+// @Success 200 {array} database.IridiumLocation
+// @Failure 500 {object} map[string]string
+// @Router /api/iridium/locations [get]
 func (s *Server) handleGetLocations(w http.ResponseWriter, r *http.Request) {
 	locs, err := s.db.GetIridiumLocations()
 	if err != nil {
@@ -191,6 +249,16 @@ func (s *Server) handleGetLocations(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateLocation adds a custom ground station location.
+// @Summary Create ground station location
+// @Description Adds a custom ground station location for pass prediction
+// @Tags iridium
+// @Accept json
+// @Produce json
+// @Param body body object true "Location" example({"name":"Home","lat":52.16,"lon":4.49,"alt_m":0})
+// @Success 201 {object} map[string]int64
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/iridium/locations [post]
 func (s *Server) handleCreateLocation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string  `json:"name"`
@@ -217,6 +285,15 @@ func (s *Server) handleCreateLocation(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteLocation removes a custom ground station location.
+// @Summary Delete ground station location
+// @Description Removes a custom ground station location
+// @Tags iridium
+// @Produce json
+// @Param id path integer true "Location ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/iridium/locations/{id} [delete]
 func (s *Server) handleDeleteLocation(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.Atoi(idStr)
@@ -234,6 +311,12 @@ func (s *Server) handleDeleteLocation(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetSchedulerStatus returns the current pass scheduler state.
+// @Summary Get pass scheduler status
+// @Description Returns the current pass scheduler state, timing parameters, and next pass info
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/iridium/scheduler [get]
 func (s *Server) handleGetSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 	if s.scheduler == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -299,6 +382,12 @@ func (s *Server) handleGetSchedulerStatus(w http.ResponseWriter, r *http.Request
 
 // handleGetGeolocationSources returns the latest geolocation from each source
 // (GPS, Iridium) plus the AUTO-resolved location.
+// @Summary Get all geolocation sources
+// @Description Returns latest geolocation from each source (GPS, Iridium, custom) plus the auto-resolved location
+// @Tags location
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/locations/resolved [get]
 func (s *Server) handleGetGeolocationSources(w http.ResponseWriter, r *http.Request) {
 	sources, err := s.db.GetAllGeolocationSources()
 	if err != nil {
@@ -403,6 +492,13 @@ func (s *Server) handleGetIridiumTime(w http.ResponseWriter, r *http.Request) {
 
 // handleGetIridiumGeolocation triggers an AT-MSGEO reading and stores the result.
 // The response contains the satellite sub-point, not the modem position.
+// @Summary Get Iridium geolocation
+// @Description Triggers an AT-MSGEO reading and returns the satellite sub-point coordinates
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} transport.IridiumGeolocation
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/geolocation [get]
 func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Request) {
 	geo, err := s.gwManager.GetIridiumGeolocation(r.Context())
 	if err != nil {
@@ -420,6 +516,14 @@ func (s *Server) handleGetIridiumGeolocation(w http.ResponseWriter, r *http.Requ
 }
 
 // handleGetIridiumGeoHistory returns recent AT-MSGEO readings for multi-pass visualization.
+// @Summary Get Iridium geolocation history
+// @Description Returns recent AT-MSGEO satellite sub-point readings with optional centroid calculation
+// @Tags iridium
+// @Produce json
+// @Param hours query integer false "History window in hours (default: 6, max: 168)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]string
+// @Router /api/iridium/geolocation/history [get]
 func (s *Server) handleGetIridiumGeoHistory(w http.ResponseWriter, r *http.Request) {
 	hoursStr := r.URL.Query().Get("hours")
 	hours := 6
@@ -473,6 +577,13 @@ type resolvedLocation struct {
 }
 
 // handleManualMailboxCheck triggers a one-shot mailbox check.
+// @Summary Trigger manual mailbox check
+// @Description Triggers a one-shot Iridium SBD mailbox check (SBDIX) to retrieve pending MT messages
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/mailbox/check [post]
 func (s *Server) handleManualMailboxCheck(w http.ResponseWriter, r *http.Request) {
 	if err := s.gwManager.ManualMailboxCheck(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())

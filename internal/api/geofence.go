@@ -10,6 +10,13 @@ import (
 )
 
 // handleGetGeofences returns all configured geofence zones.
+// @Summary List geofence zones
+// @Description Returns all configured geofence zones
+// @Tags geofences
+// @Produce json
+// @Success 200 {array} engine.GeofenceZone
+// @Failure 503 {object} map[string]string
+// @Router /api/geofences [get]
 func (s *Server) handleGetGeofences(w http.ResponseWriter, r *http.Request) {
 	if s.geofenceMon == nil {
 		writeError(w, http.StatusServiceUnavailable, "geofence monitor not available")
@@ -20,6 +27,16 @@ func (s *Server) handleGetGeofences(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateGeofence creates a new geofence zone.
+// @Summary Create geofence zone
+// @Description Creates a new geofence zone with polygon and alert configuration
+// @Tags geofences
+// @Accept json
+// @Produce json
+// @Param body body engine.GeofenceZone true "Geofence zone"
+// @Success 201 {object} engine.GeofenceZone
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/geofences [post]
 func (s *Server) handleCreateGeofence(w http.ResponseWriter, r *http.Request) {
 	if s.geofenceMon == nil {
 		writeError(w, http.StatusServiceUnavailable, "geofence monitor not available")
@@ -48,6 +65,13 @@ func (s *Server) handleCreateGeofence(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteGeofence removes a geofence zone by ID.
+// @Summary Delete geofence zone
+// @Description Removes a geofence zone by ID
+// @Tags geofences
+// @Param id path string true "Geofence zone ID"
+// @Success 204
+// @Failure 503 {object} map[string]string
+// @Router /api/geofences/{id} [delete]
 func (s *Server) handleDeleteGeofence(w http.ResponseWriter, r *http.Request) {
 	if s.geofenceMon == nil {
 		writeError(w, http.StatusServiceUnavailable, "geofence monitor not available")

@@ -13,6 +13,13 @@ import (
 
 // ── Unified Contacts CRUD ──
 
+// @Summary List contacts
+// @Description Returns all unified contacts
+// @Tags contacts
+// @Produce json
+// @Success 200 {array} database.Contact
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts [get]
 func (s *Server) handleGetContacts(w http.ResponseWriter, r *http.Request) {
 	contacts, err := s.db.GetContacts()
 	if err != nil {
@@ -25,6 +32,15 @@ func (s *Server) handleGetContacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, contacts)
 }
 
+// @Summary Get contact
+// @Description Returns a single contact by ID with addresses
+// @Tags contacts
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Success 200 {object} database.Contact
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/contacts/{id} [get]
 func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -39,6 +55,16 @@ func (s *Server) handleGetContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// @Summary Create contact
+// @Description Creates a new unified contact
+// @Tags contacts
+// @Accept json
+// @Produce json
+// @Param body body object true "Contact" example({"display_name":"Alice","notes":""})
+// @Success 201 {object} database.Contact
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts [post]
 func (s *Server) handleCreateContact(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DisplayName string `json:"display_name"`
@@ -61,6 +87,17 @@ func (s *Server) handleCreateContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// @Summary Update contact
+// @Description Updates an existing contact's display name and notes
+// @Tags contacts
+// @Accept json
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Param body body object true "Contact"
+// @Success 200 {object} database.Contact
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts/{id} [put]
 func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -87,6 +124,14 @@ func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// @Summary Delete contact
+// @Description Deletes a contact and all associated addresses
+// @Tags contacts
+// @Param id path integer true "Contact ID"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts/{id} [delete]
 func (s *Server) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -102,6 +147,17 @@ func (s *Server) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
 
 // ── Contact Addresses ──
 
+// @Summary Add contact address
+// @Description Adds an address (SMS, mesh, satellite, etc.) to a contact
+// @Tags contacts
+// @Accept json
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Param body body object true "Address" example({"type":"sms","address":"+31612345678","label":"Mobile","is_primary":true,"auto_fwd":false})
+// @Success 201 {object} map[string]int64
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /api/contacts/{id}/addresses [post]
 func (s *Server) handleAddContactAddress(w http.ResponseWriter, r *http.Request) {
 	contactID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -141,6 +197,18 @@ func (s *Server) handleAddContactAddress(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
+// @Summary Update contact address
+// @Description Updates an existing contact address
+// @Tags contacts
+// @Accept json
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Param aid path integer true "Address ID"
+// @Param body body object true "Address"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts/{id}/addresses/{aid} [put]
 func (s *Server) handleUpdateContactAddress(w http.ResponseWriter, r *http.Request) {
 	addrID, err := strconv.ParseInt(chi.URLParam(r, "aid"), 10, 64)
 	if err != nil {
@@ -166,6 +234,15 @@ func (s *Server) handleUpdateContactAddress(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// @Summary Delete contact address
+// @Description Removes an address from a contact
+// @Tags contacts
+// @Param id path integer true "Contact ID"
+// @Param aid path integer true "Address ID"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts/{id}/addresses/{aid} [delete]
 func (s *Server) handleDeleteContactAddress(w http.ResponseWriter, r *http.Request) {
 	addrID, err := strconv.ParseInt(chi.URLParam(r, "aid"), 10, 64)
 	if err != nil {
@@ -181,6 +258,16 @@ func (s *Server) handleDeleteContactAddress(w http.ResponseWriter, r *http.Reque
 
 // ── Unified Conversation ──
 
+// @Summary Get conversation
+// @Description Returns unified conversation history for a contact across all transports
+// @Tags contacts
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Param limit query integer false "Max messages (default: 100)"
+// @Success 200 {array} database.UnifiedMessage
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/contacts/{id}/conversation [get]
 func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 	contactID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -206,6 +293,16 @@ func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
 
 // ── Contact Lookup (resolve address → contact name) ──
 
+// @Summary Lookup contact by address
+// @Description Resolves an address (type + value) to a contact
+// @Tags contacts
+// @Produce json
+// @Param type query string true "Address type (sms, mesh, satellite)"
+// @Param address query string true "Address value"
+// @Success 200 {object} database.Contact
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/contacts/lookup [get]
 func (s *Server) handleLookupContact(w http.ResponseWriter, r *http.Request) {
 	addrType := r.URL.Query().Get("type")
 	address := r.URL.Query().Get("address")

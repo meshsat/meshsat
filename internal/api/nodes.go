@@ -59,6 +59,16 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRemoveNode removes a node from the radio's NodeDB.
+// @Summary Remove mesh node
+// @Description Removes a node from the Meshtastic radio's NodeDB
+// @Tags mesh
+// @Produce json
+// @Param num path integer true "Node number"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/nodes/{num} [delete]
 func (s *Server) handleRemoveNode(w http.ResponseWriter, r *http.Request) {
 	if s.mesh == nil {
 		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")

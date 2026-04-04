@@ -13,6 +13,21 @@ func (s *Server) SetAstrocastTLEManager(m *engine.AstrocastTLEManager) {
 }
 
 // handleGetAstrocastPasses returns Astrocast satellite passes for a ground location.
+// @Summary Get Astrocast satellite passes
+// @Description Predicts upcoming Astrocast satellite passes for a ground station location
+// @Tags astrocast
+// @Produce json
+// @Param lat query number true "Ground station latitude"
+// @Param lon query number true "Ground station longitude"
+// @Param alt_m query number false "Ground station altitude in meters"
+// @Param hours query integer false "Prediction window in hours (default: 24)"
+// @Param min_elev query number false "Minimum elevation in degrees (default: 5.0)"
+// @Param start query integer false "Start time (unix timestamp, default: now)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/astrocast/passes [get]
 func (s *Server) handleGetAstrocastPasses(w http.ResponseWriter, r *http.Request) {
 	if s.astroTleMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "Astrocast TLE manager not initialized")
@@ -51,6 +66,14 @@ func (s *Server) handleGetAstrocastPasses(w http.ResponseWriter, r *http.Request
 }
 
 // handleRefreshAstrocastTLEs triggers an immediate Astrocast TLE refresh.
+// @Summary Refresh Astrocast TLE data
+// @Description Triggers an immediate TLE refresh for Astrocast satellites
+// @Tags astrocast
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/astrocast/passes/refresh [post]
 func (s *Server) handleRefreshAstrocastTLEs(w http.ResponseWriter, r *http.Request) {
 	if s.astroTleMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "Astrocast TLE manager not initialized")

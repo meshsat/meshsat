@@ -10,6 +10,18 @@ import (
 )
 
 // GET /api/deliveries — list deliveries with optional filters
+// @Summary List message deliveries
+// @Description Returns message deliveries with optional channel, status, and message ref filters
+// @Tags deliveries
+// @Produce json
+// @Param channel query string false "Filter by channel type"
+// @Param status query string false "Filter by status (queued, sent, failed, dead)"
+// @Param msg_ref query string false "Filter by message reference"
+// @Param limit query integer false "Max results (default: 50, max: 500)"
+// @Param offset query integer false "Pagination offset"
+// @Success 200 {array} database.Delivery
+// @Failure 500 {object} map[string]string
+// @Router /api/deliveries [get]
 func (s *Server) handleGetDeliveries(w http.ResponseWriter, r *http.Request) {
 	filter := database.DeliveryFilter{
 		Channel: r.URL.Query().Get("channel"),
@@ -37,6 +49,13 @@ func (s *Server) handleGetDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/deliveries/stats — delivery counts by channel and status
+// @Summary Get delivery statistics
+// @Description Returns delivery counts grouped by channel and status
+// @Tags deliveries
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]string
+// @Router /api/deliveries/stats [get]
 func (s *Server) handleGetDeliveryStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.db.DeliveryStatsAll()
 	if err != nil {
@@ -47,6 +66,15 @@ func (s *Server) handleGetDeliveryStats(w http.ResponseWriter, r *http.Request) 
 }
 
 // GET /api/deliveries/{id} — single delivery detail
+// @Summary Get delivery detail
+// @Description Returns a single delivery record by ID
+// @Tags deliveries
+// @Produce json
+// @Param id path integer true "Delivery ID"
+// @Success 200 {object} database.Delivery
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/deliveries/{id} [get]
 func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -63,6 +91,15 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/deliveries/{id}/cancel — cancel a queued/retry delivery
+// @Summary Cancel delivery
+// @Description Cancels a queued or retrying delivery
+// @Tags deliveries
+// @Produce json
+// @Param id path integer true "Delivery ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/deliveries/{id}/cancel [post]
 func (s *Server) handleCancelDelivery(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -78,6 +115,15 @@ func (s *Server) handleCancelDelivery(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/deliveries/{id}/retry — retry a failed/dead delivery
+// @Summary Retry delivery
+// @Description Re-queues a failed or dead-lettered delivery for another attempt
+// @Tags deliveries
+// @Produce json
+// @Param id path integer true "Delivery ID"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/deliveries/{id}/retry [post]
 func (s *Server) handleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -93,6 +139,15 @@ func (s *Server) handleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/deliveries/message/{ref} — all deliveries for a message
+// @Summary Get deliveries for message
+// @Description Returns all delivery attempts for a specific message reference
+// @Tags deliveries
+// @Produce json
+// @Param ref path string true "Message reference ID"
+// @Success 200 {array} database.Delivery
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/deliveries/message/{ref} [get]
 func (s *Server) handleGetMessageDeliveries(w http.ResponseWriter, r *http.Request) {
 	ref := chi.URLParam(r, "ref")
 	if ref == "" {
