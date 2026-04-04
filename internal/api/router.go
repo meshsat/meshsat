@@ -196,6 +196,9 @@ func (s *Server) Router() http.Handler {
 	// Health check
 	r.Get("/health", s.handleHealth)
 
+	// Prometheus metrics
+	r.Handle("/metrics", newMetricsHandler(s.gwManager, s.dispatcher, s.transforms, s.db, "/"))
+
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/messages", s.handleGetMessages)
