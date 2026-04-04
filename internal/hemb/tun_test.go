@@ -271,6 +271,7 @@ func TestTUNRoundtrip(t *testing.T) {
 }
 
 func TestTUNBearerRemoval(t *testing.T) {
+	tunAvailable(t)
 	// Two free bearers: mesh and tcp. Send packets, then "remove" mesh
 	// by making its SendFn return error. Verify tcp continues carrying symbols.
 	meshFailed := atomic.Bool{}
@@ -429,6 +430,12 @@ func tunAvailable(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("requires root for TUN device creation")
 	}
+	// Also verify TUN device is accessible (may be busy or absent in CI containers)
+	f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("TUN device not available: %v", err)
+	}
+	f.Close()
 }
 
 // setupTUNPair creates two TUN adapters cross-connected through mock bearers.
