@@ -99,7 +99,7 @@ func Load() *Config {
 		AstrocastPort:       envStr("MESHSAT_ASTROCAST_PORT", "auto"),
 		ZigBeePort:          envStr("MESHSAT_ZIGBEE_PORT", "auto"),
 		PaidRateLimit:       envInt("MESHSAT_PAID_RATE_LIMIT", 60),
-		APIRateLimit:        envInt("MESHSAT_API_RATE_LIMIT", 300),
+		APIRateLimit:        envInt("MESHSAT_API_RATE_LIMIT", 600),
 		MeshWatchdogMin:     envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
 		LlamaZipAddr:        envStr("MESHSAT_LLAMAZIP_ADDR", ""),
 		LlamaZipTimeoutSec:  envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
