@@ -62,7 +62,9 @@ func (g *MQTTGateway) Start(ctx context.Context) error {
 		SetKeepAlive(time.Duration(g.config.KeepAlive) * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetCleanSession(false)
+		SetCleanSession(false).
+		SetResumeSubs(true).
+		SetOrderMatters(false)
 
 	if g.config.Username != "" {
 		opts.SetUsername(g.config.Username)

@@ -114,7 +114,9 @@ func (m *MQTTInterface) Start(ctx context.Context) error {
 		SetConnectRetry(true).
 		SetConnectRetryInterval(10 * time.Second).
 		SetKeepAlive(30 * time.Second).
-		SetCleanSession(false)
+		SetCleanSession(false).
+		SetResumeSubs(true).
+		SetOrderMatters(false)
 
 	if m.config.Username != "" {
 		opts.SetUsername(m.config.Username)

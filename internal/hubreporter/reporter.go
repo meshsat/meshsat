@@ -95,7 +95,9 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		SetKeepAlive(60 * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetCleanSession(false)
+		SetCleanSession(false).
+		SetResumeSubs(true).
+		SetOrderMatters(false)
 
 	if r.cfg.Username != "" {
 		opts.SetUsername(r.cfg.Username)
