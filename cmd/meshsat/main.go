@@ -1236,6 +1236,42 @@ func main() {
 		}
 		hubReporter.SetCommandHandler(cmdHandler)
 
+		// TAK CoT relay: when Hub broadcasts TAK positions from OTS,
+		// parse them and store in the bridge's position DB so they appear on the map.
+		hubReporter.SetTAKCoTHandler(func(cotXML []byte) {
+			ev, err := gateway.ParseCotEvent(cotXML)
+			if err != nil {
+				return
+			}
+			if ev.Point.Lat == 0 && ev.Point.Lon == 0 {
+				return
+			}
+			if ev.Type == "t-x-c-t" || ev.Type == "t-x-c-t-r" {
+				return
+			}
+
+			callsign := ev.UID
+			if ev.Detail != nil && ev.Detail.Contact != nil && ev.Detail.Contact.Callsign != "" {
+				callsign = ev.Detail.Contact.Callsign
+			}
+
+			// Store position in bridge DB
+			pos := &database.Position{
+				NodeID:    ev.UID,
+				Latitude:  ev.Point.Lat,
+				Longitude: ev.Point.Lon,
+				Altitude:  int(ev.Point.Hae),
+			}
+			db.InsertPosition(pos) //nolint:errcheck
+
+			// Publish to TAK event bus for the TakView event stream
+			gateway.GlobalTakEventBus.Publish(gateway.CotEventToRecord(ev, "inbound"))
+
+			log.Debug().Str("uid", ev.UID).Str("callsign", callsign).
+				Float64("lat", ev.Point.Lat).Float64("lon", ev.Point.Lon).
+				Msg("tak: CoT position stored from Hub relay")
+		})
+
 		if err := hubReporter.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("hub reporter start failed")
 		} else {

@@ -55,18 +55,19 @@ func (c ReporterConfig) Validate() error {
 // HubReporter manages the MQTT connection to the Hub and publishes
 // bridge lifecycle events, device births/deaths, and telemetry.
 type HubReporter struct {
-	cfg        ReporterConfig
-	client     mqtt.Client
-	birthData  func() BridgeBirth
-	healthData func() BridgeHealth
-	mu         sync.Mutex
-	connected  bool
-	stopCh     chan struct{}
-	stopped    bool
-	cmdHandler *CommandHandler
-	outbox     *Outbox
-	signingKey *ecdsa.PrivateKey // loaded from TLS key for birth signing
-	certPEM    string            // base64 PEM for inclusion in birth
+	cfg           ReporterConfig
+	client        mqtt.Client
+	birthData     func() BridgeBirth
+	healthData    func() BridgeHealth
+	mu            sync.Mutex
+	connected     bool
+	stopCh        chan struct{}
+	stopped       bool
+	cmdHandler    *CommandHandler
+	outbox        *Outbox
+	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
+	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
+	certPEM       string            // base64 PEM for inclusion in birth
 }
 
 // NewHubReporter creates a new HubReporter. It does not connect until Start is called.
@@ -133,6 +134,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 
 		// Subscribe to command topic
 		r.subscribeCmd()
+		r.subscribeTAKCoT()
 
 		// Replay queued outbox messages
 		if ob != nil {
@@ -433,6 +435,37 @@ func (r *HubReporter) subscribeCmd() {
 		return
 	}
 	log.Info().Str("topic", topic).Msg("hubreporter: subscribed to commands")
+}
+
+// subscribeTAKCoT subscribes to broadcast TAK CoT events from the Hub.
+// When the Hub receives CoT from OpenTAKServer, it publishes to this topic.
+// The bridge parses the CoT XML and stores positions in its local DB,
+// making them visible on the bridge map alongside mesh node positions.
+func (r *HubReporter) subscribeTAKCoT() {
+	topic := "meshsat/broadcast/tak/cot/in"
+	token := r.client.Subscribe(topic, 1, r.onTAKCoT)
+	if !token.WaitTimeout(10 * time.Second) {
+		log.Error().Str("topic", topic).Msg("hubreporter: TAK CoT subscribe timeout")
+		return
+	}
+	if token.Error() != nil {
+		log.Error().Err(token.Error()).Str("topic", topic).Msg("hubreporter: TAK CoT subscribe failed")
+		return
+	}
+	log.Info().Str("topic", topic).Msg("hubreporter: subscribed to TAK CoT broadcast")
+}
+
+// onTAKCoT handles inbound CoT XML events from the Hub TAK relay.
+func (r *HubReporter) onTAKCoT(_ mqtt.Client, msg mqtt.Message) {
+	if r.takCotHandler != nil {
+		r.takCotHandler(msg.Payload())
+	}
+}
+
+// SetTAKCoTHandler sets the callback for inbound TAK CoT events.
+// Called by main.go to wire CoT parsing + position storage.
+func (r *HubReporter) SetTAKCoTHandler(fn func([]byte)) {
+	r.takCotHandler = fn
 }
 
 // SetOutbox sets the offline message queue for store-and-forward.
