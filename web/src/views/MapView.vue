@@ -293,28 +293,53 @@ function cotMarkerIcon(cotType, callsign, stale) {
   })
 }
 
-// Build a lookup: nodeId → {lat, lon, name, color}
+// Build a lookup: nodeId → {lat, lon, name, color} — includes TAK positions
 const nodePositionMap = computed(() => {
   const m = {}
-  for (const node of store.nodes) {
-    if (node.latitude && node.longitude && node.latitude !== 0 && node.longitude !== 0) {
-      const nid = node.user_id || String(node.num)
-      m[nid] = {
-        lat: node.latitude,
-        lon: node.longitude,
-        name: node.long_name || node.short_name || nid,
-        signal_quality: node.signal_quality
-      }
+  for (const node of nodesWithPositions.value) {
+    const nid = node._id
+    m[nid] = {
+      lat: node.latitude,
+      lon: node.longitude,
+      name: node.long_name || node.short_name || nid,
+      signal_quality: node.signal_quality
     }
   }
   return m
 })
 
-// Unique nodes with positions (for checkboxes)
+// Unique nodes with positions (for checkboxes) — includes TAK-relayed positions
 const nodesWithPositions = computed(() => {
-  return store.nodes.filter(n =>
+  // Mesh nodes from /api/nodes
+  const meshNodes = store.nodes.filter(n =>
     n.latitude && n.longitude && n.latitude !== 0 && n.longitude !== 0
   ).map(n => ({ ...n, _id: n.user_id || String(n.num) }))
+
+  // TAK/CoT positions that don't have a matching mesh node (relayed via Hub)
+  const meshIds = new Set(meshNodes.map(n => n._id))
+  const latestByNode = {}
+  for (const p of store.positions) {
+    const nid = String(p.node_id ?? p.from)
+    if (!nid || meshIds.has(nid)) continue
+    if (!p.latitude || !p.longitude || (p.latitude === 0 && p.longitude === 0)) continue
+    if (!latestByNode[nid] || new Date(p.created_at) > new Date(latestByNode[nid].created_at)) {
+      latestByNode[nid] = p
+    }
+  }
+  const takNodes = Object.entries(latestByNode).map(([nid, p]) => ({
+    _id: nid,
+    user_id: nid,
+    long_name: nid.replace(/^meshsat-/, '').replace(/-/g, ' '),
+    short_name: nid.length > 8 ? nid.slice(-8) : nid,
+    latitude: p.latitude,
+    longitude: p.longitude,
+    altitude: p.altitude || 0,
+    cot_type: 'a-f-G-U-C',
+    last_heard: Math.floor(new Date(p.created_at).getTime() / 1000),
+    _source: 'tak'
+  }))
+
+  return [...meshNodes, ...takNodes]
 })
 
 // Messages that have a locatable sender
@@ -760,10 +785,9 @@ onMounted(async () => {
     store.fetchCellInfo(),
     store.fetchGeofences()
   ])
-  // Set visibility for any newly loaded nodes
-  for (const n of store.nodes) {
-    const nid = n.user_id || String(n.num)
-    if (nodeVisibility[nid] === undefined) nodeVisibility[nid] = true
+  // Set visibility for any newly loaded nodes (including TAK-relayed)
+  for (const n of nodesWithPositions.value) {
+    if (nodeVisibility[n._id] === undefined) nodeVisibility[n._id] = true
   }
   await initMap()
   renderGeofences()
