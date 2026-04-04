@@ -95,7 +95,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		SetKeepAlive(60 * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetCleanSession(true)
+		SetCleanSession(false)
 
 	if r.cfg.Username != "" {
 		opts.SetUsername(r.cfg.Username)
@@ -425,16 +425,31 @@ func (r *HubReporter) publishBirth() {
 // subscribeCmd subscribes to the command topic for this bridge.
 func (r *HubReporter) subscribeCmd() {
 	topic := TopicBridgeCmd(r.cfg.BridgeID)
-	token := r.client.Subscribe(topic, 1, r.onCommand)
-	if !token.WaitTimeout(10 * time.Second) {
-		log.Error().Str("topic", topic).Msg("hubreporter: cmd subscribe timeout")
+
+	const maxRetries = 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := r.client.Subscribe(topic, 1, r.onCommand)
+		if !token.WaitTimeout(10 * time.Second) {
+			log.Error().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: cmd subscribe timeout")
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Error().Str("topic", topic).Msg("hubreporter: cmd subscribe failed after all retries")
+			return
+		}
+		if token.Error() != nil {
+			log.Error().Err(token.Error()).Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: cmd subscribe failed")
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Error().Str("topic", topic).Msg("hubreporter: cmd subscribe failed after all retries")
+			return
+		}
+		log.Info().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: subscribed to commands")
 		return
 	}
-	if token.Error() != nil {
-		log.Error().Err(token.Error()).Str("topic", topic).Msg("hubreporter: cmd subscribe failed")
-		return
-	}
-	log.Info().Str("topic", topic).Msg("hubreporter: subscribed to commands")
 }
 
 // subscribeTAKCoT subscribes to broadcast TAK CoT events from the Hub.
@@ -443,16 +458,31 @@ func (r *HubReporter) subscribeCmd() {
 // making them visible on the bridge map alongside mesh node positions.
 func (r *HubReporter) subscribeTAKCoT() {
 	topic := "meshsat/broadcast/tak/cot/in"
-	token := r.client.Subscribe(topic, 1, r.onTAKCoT)
-	if !token.WaitTimeout(10 * time.Second) {
-		log.Error().Str("topic", topic).Msg("hubreporter: TAK CoT subscribe timeout")
+
+	const maxRetries = 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := r.client.Subscribe(topic, 1, r.onTAKCoT)
+		if !token.WaitTimeout(10 * time.Second) {
+			log.Error().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: TAK CoT subscribe timeout")
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Error().Str("topic", topic).Msg("hubreporter: TAK CoT subscribe failed after all retries")
+			return
+		}
+		if token.Error() != nil {
+			log.Error().Err(token.Error()).Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: TAK CoT subscribe failed")
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Error().Str("topic", topic).Msg("hubreporter: TAK CoT subscribe failed after all retries")
+			return
+		}
+		log.Info().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: subscribed to TAK CoT broadcast")
 		return
 	}
-	if token.Error() != nil {
-		log.Error().Err(token.Error()).Str("topic", topic).Msg("hubreporter: TAK CoT subscribe failed")
-		return
-	}
-	log.Info().Str("topic", topic).Msg("hubreporter: subscribed to TAK CoT broadcast")
 }
 
 // onTAKCoT handles inbound CoT XML events from the Hub TAK relay.

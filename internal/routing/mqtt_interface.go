@@ -114,7 +114,7 @@ func (m *MQTTInterface) Start(ctx context.Context) error {
 		SetConnectRetry(true).
 		SetConnectRetryInterval(10 * time.Second).
 		SetKeepAlive(30 * time.Second).
-		SetCleanSession(true)
+		SetCleanSession(false)
 
 	if m.config.Username != "" {
 		opts.SetUsername(m.config.Username)
@@ -206,7 +206,7 @@ func (m *MQTTInterface) IsOnline() bool {
 // subscribe to the receive topic for inbound Reticulum packets.
 func (m *MQTTInterface) subscribe() {
 	topic := m.config.Topic
-	token := m.client.Subscribe(topic, m.config.QoS, func(_ mqtt.Client, msg mqtt.Message) {
+	handler := func(_ mqtt.Client, msg mqtt.Message) {
 		data := msg.Payload()
 		if len(data) < 2 {
 			return // too short for Reticulum packet
@@ -214,12 +214,24 @@ func (m *MQTTInterface) subscribe() {
 		log.Debug().Str("iface", m.config.Name).Int("size", len(data)).
 			Str("topic", msg.Topic()).Msg("mqtt iface: received Reticulum packet")
 		m.callback(data)
-	})
-	if token.WaitTimeout(5*time.Second) && token.Error() == nil {
-		log.Info().Str("iface", m.config.Name).Str("topic", topic).Msg("mqtt iface: subscribed")
-	} else {
-		log.Warn().Str("iface", m.config.Name).Str("topic", topic).Msg("mqtt iface: subscribe failed")
 	}
+
+	const maxRetries = 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := m.client.Subscribe(topic, m.config.QoS, handler)
+		if token.WaitTimeout(5*time.Second) && token.Error() == nil {
+			log.Info().Str("iface", m.config.Name).Str("topic", topic).
+				Int("attempt", attempt).Msg("mqtt iface: subscribed")
+			return
+		}
+		log.Warn().Str("iface", m.config.Name).Str("topic", topic).
+			Int("attempt", attempt).Msg("mqtt iface: subscribe failed, retrying")
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	log.Error().Str("iface", m.config.Name).Str("topic", topic).
+		Msg("mqtt iface: subscribe failed after all retries — packets will be lost")
 }
 
 // Ensure MQTTInterface satisfies the needed usage pattern (not a formal interface,
