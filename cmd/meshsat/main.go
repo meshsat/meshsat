@@ -938,6 +938,7 @@ func main() {
 	}
 	srv.SetDispatcher(dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
+	srv.SetAPIRateLimit(cfg.APIRateLimit)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 	if linkMgr != nil {
 		srv.SetLinkManager(linkMgr)

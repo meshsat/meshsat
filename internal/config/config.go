@@ -27,6 +27,9 @@ type Config struct {
 	// Cost safety: global rate limit for paid transports (messages/hour)
 	PaidRateLimit int
 
+	// HTTP API rate limit: max requests per minute per source IP (0 = disabled)
+	APIRateLimit int
+
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
 
@@ -96,6 +99,7 @@ func Load() *Config {
 		AstrocastPort:       envStr("MESHSAT_ASTROCAST_PORT", "auto"),
 		ZigBeePort:          envStr("MESHSAT_ZIGBEE_PORT", "auto"),
 		PaidRateLimit:       envInt("MESHSAT_PAID_RATE_LIMIT", 60),
+		APIRateLimit:        envInt("MESHSAT_API_RATE_LIMIT", 300),
 		MeshWatchdogMin:     envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
 		LlamaZipAddr:        envStr("MESHSAT_LLAMAZIP_ADDR", ""),
 		LlamaZipTimeoutSec:  envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),

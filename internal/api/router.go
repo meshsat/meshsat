@@ -37,6 +37,7 @@ type Server struct {
 	destTable     *routing.DestinationTable
 	routingID     *routing.Identity
 	paidRateLimit int
+	apiRateLimit  int
 	sos           *SOSState
 	webHandler    http.Handler
 	healthScorer  *engine.HealthScorer
@@ -87,6 +88,12 @@ func (s *Server) SetGPSReader(r *transport.GPSReader) {
 // SetPaidRateLimit sets the global paid transport rate limit for cost analysis.
 func (s *Server) SetPaidRateLimit(limit int) {
 	s.paidRateLimit = limit
+}
+
+// SetAPIRateLimit sets the per-IP HTTP API rate limit (requests per minute).
+// 0 disables rate limiting.
+func (s *Server) SetAPIRateLimit(rpm int) {
+	s.apiRateLimit = rpm
 }
 
 // SetWebHandler sets the handler for serving the web UI.
@@ -192,6 +199,9 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
 	r.Use(corsMiddleware)
+	if s.apiRateLimit > 0 {
+		r.Use(apiRateLimiter(s.apiRateLimit))
+	}
 
 	// Health check
 	r.Get("/health", s.handleHealth)
