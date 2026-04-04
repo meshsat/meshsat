@@ -508,7 +508,7 @@ func (a *App) Setup(ctx context.Context) error {
 					birth.Interfaces = append(birth.Interfaces, hubreporter.InterfaceInfo{
 						Name:   iface.ID,
 						Type:   iface.ChannelType,
-						Status: string(iface.State),
+						Status: iface.State.String(),
 						Port:   iface.DevicePort,
 					})
 				}
@@ -551,7 +551,7 @@ func (a *App) Setup(ctx context.Context) error {
 				for _, iface := range a.InterfaceMgr.GetAllStatus() {
 					health.Interfaces = append(health.Interfaces, hubreporter.InterfaceHealth{
 						Name:   iface.ID,
-						Status: string(iface.State),
+						Status: iface.State.String(),
 					})
 				}
 			}

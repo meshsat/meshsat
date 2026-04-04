@@ -71,6 +71,10 @@ func (s *stubMeshTransport) SetFixedPosition(ctx context.Context, lat, lon float
 	return nil
 }
 func (s *stubMeshTransport) RemoveFixedPosition(ctx context.Context) error { return nil }
+func (s *stubMeshTransport) SetOwner(ctx context.Context, longName, shortName string) error {
+	return nil
+}
+func (s *stubMeshTransport) RequestNodeInfo(ctx context.Context, nodeNum uint32) error { return nil }
 func (s *stubMeshTransport) RequestStoreForward(ctx context.Context, nodeNum uint32, window uint32) error {
 	return nil
 }
@@ -117,7 +121,10 @@ func (s *stubSatTransport) GetGeolocation(ctx context.Context) (*transport.Geolo
 	return nil, nil
 }
 func (s *stubSatTransport) MOBufferEmpty(ctx context.Context) (bool, error) { return true, nil }
-func (s *stubSatTransport) Close() error                                    { return nil }
+func (s *stubSatTransport) GetFirmwareVersion(ctx context.Context) (string, error) {
+	return "", nil
+}
+func (s *stubSatTransport) Close() error { return nil }
 
 // --- Test helpers ---
 

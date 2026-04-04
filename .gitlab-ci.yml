@@ -123,6 +123,20 @@ lint:consistency:
   allow_failure: false
 
 # -----------------------------------------------------------------------------
+# TEST — Run Go test suite (gate: regressions block deploy)
+# -----------------------------------------------------------------------------
+test:
+  stage: validate
+  tags: [multiarch]
+  image: ${BUILDER_IMAGE}
+  script:
+    - cd ${CI_PROJECT_DIR}
+    - go mod download
+    - go test -count=1 -timeout 300s ./...
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------------------------------------
 # BUILD — Compile Go binary for ARM64 + AMD64
 # -----------------------------------------------------------------------------
 build:
