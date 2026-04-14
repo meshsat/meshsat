@@ -9,7 +9,6 @@ var defaultRedundancy = map[string]float64{
 	"mesh":        1.30, // LoRa: bursty fading, 10-40% loss
 	"iridium_sbd": 1.00, // SBD: reliable but expensive
 	"iridium_imt": 1.00, // IMT: reliable, large MTU
-	"astrocast":   1.40, // LEO uplink: high loss, constrained MTU
 	"cellular":    1.10, // SMS: moderate reliability
 	"sms":         1.10, // alias
 	"zigbee":      1.30, // short-range ISM: interference

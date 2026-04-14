@@ -102,7 +102,6 @@ mosquitto_pub -t 'meshsat/300234065012345/mt/send' \
 | Channel | Topics Used |
 |---------|-------------|
 | Iridium | `mo/raw`, `mo/decoded`, `mt/send`, `mt/status` |
-| Astrocast | `mo/raw`, `mo/decoded`, `mt/send`, `mt/status` |
 | Cellular | `mo/decoded`, `mt/send` (text only, no raw) |
 | Meshtastic | `mo/decoded`, `position`, `telemetry` (via bridge relay) |
 | ZigBee | `mo/decoded`, `telemetry` (sensor data) |
@@ -307,7 +306,6 @@ Satellite pass predictions use TLE data from Celestrak, refreshed daily. Force a
 
 ```bash
 curl -X POST https://hub.example.com/api/iridium/passes/refresh
-curl -X POST https://hub.example.com/api/astrocast/passes/refresh
 ```
 
 ### Audit Log

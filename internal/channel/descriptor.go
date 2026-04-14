@@ -12,7 +12,7 @@ type ChannelDescriptor struct {
 	BinaryCapable bool          `json:"binary_capable"` // false = text-only (SMS, MQTT, webhook), needs base64 after encrypt/compress
 	MaxPayload    int           `json:"max_payload"`    // 0 = unlimited
 	DefaultTTL    time.Duration `json:"default_ttl"`    // 0 = no default TTL; applied when rule has no ttl_seconds
-	IsSatellite   bool          `json:"is_satellite"`   // true for pass-scheduled channels (iridium, astrocast)
+	IsSatellite   bool          `json:"is_satellite"`   // true for pass-scheduled channels (iridium)
 	RetryConfig   RetryConfig   `json:"retry_config"`
 	Options       []OptionField `json:"options,omitempty"`
 }

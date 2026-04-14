@@ -214,7 +214,7 @@ func SuggestStages(channelType string) int {
 	switch channelType {
 	case "zigbee":
 		return 2
-	case "cellular", "astrocast":
+	case "cellular":
 		return 3
 	case "mesh":
 		return 4

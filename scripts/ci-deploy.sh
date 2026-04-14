@@ -169,7 +169,7 @@ if [ -f /cubeos/config/meshsat.env ]; then
 fi
 
 # Strip any previously-injected device port env vars from compose file
-for VAR in MESHSAT_IRIDIUM_PORT MESHSAT_IMT_PORT MESHSAT_CELLULAR_PORT MESHSAT_ZIGBEE_PORT MESHSAT_ASTROCAST_PORT MESHSAT_MESHTASTIC_PORT; do
+for VAR in MESHSAT_IRIDIUM_PORT MESHSAT_IMT_PORT MESHSAT_CELLULAR_PORT MESHSAT_ZIGBEE_PORT MESHSAT_MESHTASTIC_PORT; do
   sudo sed -i "/${VAR}/d" docker-compose.direct.yml 2>/dev/null
 done
 

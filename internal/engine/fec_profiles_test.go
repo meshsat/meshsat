@@ -11,7 +11,7 @@ func TestFECProfileLookup(t *testing.T) {
 	// All known channel types should have profiles.
 	knownTypes := []string{
 		"lora", "mesh", "sbd", "iridium", "imt", "iridium_imt",
-		"astrocast", "ax25", "tcp", "mqtt", "webhook",
+		"ax25", "tcp", "mqtt", "webhook",
 		"cellular", "sms", "zigbee",
 	}
 	for _, ct := range knownTypes {
@@ -52,13 +52,13 @@ func TestResolveFECParamsNamedProfile(t *testing.T) {
 }
 
 func TestResolveFECParamsAutoProfile(t *testing.T) {
-	params := map[string]string{"profile": "auto", "channel": "astrocast"}
+	params := map[string]string{"profile": "auto", "channel": "ax25"}
 	ds, ps, il, ild := resolveFECParams(params)
-	if ds != 3 || ps != 2 {
-		t.Fatalf("astrocast auto: expected k=3 m=2, got k=%d m=%d", ds, ps)
+	if ds != 4 || ps != 3 {
+		t.Fatalf("ax25 auto: expected k=4 m=3, got k=%d m=%d", ds, ps)
 	}
-	if !il || ild != 4 {
-		t.Fatalf("astrocast auto: expected interleave=true depth=4, got %v %d", il, ild)
+	if !il || ild != 16 {
+		t.Fatalf("ax25 auto: expected interleave=true depth=16, got %v %d", il, ild)
 	}
 }
 

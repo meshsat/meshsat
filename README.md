@@ -4,7 +4,7 @@
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 ![Docker: ghcr.io/cubeos-app/meshsat](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)
 
-MeshSat is a multi-transport mesh and satellite gateway that bridges Meshtastic LoRa networks to satellite, cellular, and tactical data channels. Eleven transport types -- Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704), Astrocast LEO, Cellular SMS, ZigBee, MQTT, Webhooks, APRS, TAK (CoT XML), and direct serial -- are all available as routing destinations. A Reticulum-compatible routing layer with 10 cross-connected interfaces forwards packets between any transport pair with cost-aware path selection. Access rules route messages with per-rule filtering, failover groups, and transform pipelines.
+MeshSat is a multi-transport mesh and satellite gateway that bridges Meshtastic LoRa networks to satellite, cellular, and tactical data channels. Ten transport types -- Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704), Cellular SMS, ZigBee, MQTT, Webhooks, APRS, TAK (CoT XML), and direct serial -- are all available as routing destinations. A Reticulum-compatible routing layer with 9 cross-connected interfaces forwards packets between any transport pair with cost-aware path selection. Access rules route messages with per-rule filtering, failover groups, and transform pipelines.
 
 MeshSat runs as a standalone Docker container on any Linux machine with USB-connected devices. No cloud dependencies, no subscriptions beyond your satellite or cellular plan.
 
@@ -23,14 +23,14 @@ optimizes transmission timing in obstructed environments*
 ## Features
 
 ### Transports
-- **11 transports:** Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704, 100 KB messages), Astrocast LEO, Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, APRS (Direwolf KISS), TAK (CoT XML), direct serial
+- **10 transports:** Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704, 100 KB messages), Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, APRS (Direwolf KISS), TAK (CoT XML), direct serial
 - **Multi-instance gateways:** multiple modems of the same type on one bridge (e.g. 2x cellular), each with independent config and delivery workers
 - **SBD/IMT decoupled:** separate SBDGateway and IMTGateway types with independent signal recording, pass scheduling, and delivery tracking
 - **Full Meshtastic protocol** (~80%+ coverage) using official `buf.build/gen/go/meshtastic/protobufs` generated Go types
 
 ### Routing
 - **Reticulum-compatible routing** with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking, and resource transfers with chunked reliable delivery
-- **10 Reticulum interfaces:** LoRa mesh, TCP/HDLC (RNS interop), Iridium SBD, Iridium IMT, Astrocast, AX.25/APRS, MQTT, SMS (planned), ZigBee (planned), BLE (planned)
+- **9 Reticulum interfaces:** LoRa mesh, TCP/HDLC (RNS interop), Iridium SBD, Iridium IMT, AX.25/APRS, MQTT, SMS, ZigBee, BLE (planned)
 - **TransportNode** with cost-aware cross-interface forwarding, PathFinder flooding-based route discovery, and 30-minute route TTL
 - **Dispatcher** with failover groups, delivery ledger, per-channel workers, and visited-set loop prevention
 - **HeMB (Heterogeneous Media Bonding):** RLNC-coded simultaneous multi-bearer bonding — splits payloads across N physical bearers (LoRa, Iridium SBD, SMS, APRS, IPoUGRS) with cost-weighted allocation and cross-bearer reassembly from any K of N coded symbols regardless of which bearers delivered them. Operates below IP, routing-protocol agnostic, TUN-wrappable as a standard Linux network interface.
@@ -101,7 +101,6 @@ All devices are auto-detected on startup.*
 | | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
 | **Satellite** | RockBLOCK 9603 (Iridium 9603N) | Tested | SBD protocol, 340-byte MO, 19200 baud, UART or RS-232 |
 | | RockBLOCK 9704 (Iridium IMT) | Tested | JSPR protocol, 100 KB messages, 230400 baud, FTDI USB |
-| | Astrocast Astronode S | Code complete | ASCII hex frame protocol, fragmentation, pass prediction |
 | **Cellular** | LILYGO T-Call A7670 (A7670E LTE) | Tested | 4G LTE / 2G GSM, AT commands, SMS + data |
 | | SIM7600G-H (4G LTE) | Tested | USB modem, AT commands, SMS + data |
 | | Huawei E220 (3G HSDPA) | Tested | USB modem, AT commands, SMS + data |
@@ -213,7 +212,6 @@ All configuration is via environment variables. MeshSat works fine with just a s
 | `MESHSAT_IRIDIUM_PORT` | `auto` | Iridium 9603N (SBD) serial port |
 | `MESHSAT_IMT_PORT` | `auto` | RockBLOCK 9704 (IMT/JSPR) serial port |
 | `MESHSAT_CELLULAR_PORT` | `auto` | Cellular modem serial port |
-| `MESHSAT_ASTROCAST_PORT` | `auto` | Astrocast Astronode serial port |
 | `MESHSAT_ZIGBEE_PORT` | `auto` | ZigBee coordinator serial port |
 
 **Iridium 9603N:**
@@ -282,11 +280,8 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
 /dev/ttyUSB1 -------->-|  DirectCellTransport (A7670E / SIM7600G)     |    (real-time)
   (Cellular)           |    AT commands, SMS, data                    |
                        |                                             |->  MeshSat Hub
-/dev/ttyUSB2 -------->-|  DirectAstrocastTransport (Astronode S)      |    (MQTT/WSS +
-  (Astrocast)          |    ASCII hex frames, CRC-16, fragmentation  |     mTLS certs)
-                       |                                             |
-/dev/ttyUSB3 -------->-|  DirectZigBeeTransport (CC2652P)             |
-  (ZigBee)             |    Z-Stack ZNP binary protocol              |
+/dev/ttyUSB2 -------->-|  DirectZigBeeTransport (CC2652P)             |    (MQTT/WSS +
+  (ZigBee)             |    Z-Stack ZNP binary protocol              |     mTLS certs)
                        |                                             |
                        |  DeviceSupervisor                            |
                        |    USB hotplug, VID:PID cascade, port claims |
@@ -294,10 +289,10 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
                        |  Compression Pipeline                        |
                        |    SMAZ2 | llama-zip | MSVQ-SC              |
                        |                                             |
-                       |  Reticulum Routing (10 interfaces)           |
+                       |  Reticulum Routing (9 interfaces)            |
                        |    Ed25519 identity, announce relay, links   |
                        |    TransportNode, PathFinder, cost-aware     |
-                       |    mesh|tcp|sbd|imt|astro|ax25|mqtt|...     |
+                       |    mesh|tcp|sbd|imt|ax25|mqtt|sms|...       |
                        |                                             |
                        |         InterfaceManager                     |
                        |           (state machine, bind/unbind)       |
@@ -318,8 +313,8 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
                        |  |SBD     |IMT     |Cell    |MQTT  |APRS  |  |
                        |  |Gateway |Gateway |Gateway |GW    |GW    |  |
                        |  +--------+--------+--------+------+------+  |
-                       |  |Astro   |ZigBee  |TAK     |Wbook |Fail- |  |
-                       |  |Gateway |Gateway |Gateway |GW    |over  |  |
+                       |  |ZigBee  |TAK     |Wbook   |Fail- |      |  |
+                       |  |Gateway |Gateway |GW      |over  |      |  |
                        |  +--------+--------+--------+------+------+  |
                        |                                             |
                        |  Field Intelligence                          |
@@ -348,7 +343,7 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
 
 **v0.1.x** -- Iridium SBD + Meshtastic bridge with configurable rules engine, MQTT gateway, pass-aware scheduler, dead letter queue with ISU-aware backoff, device management, SOS mode, and full dashboard.
 
-**v0.2.0** -- Any-to-any routing fabric. Channel registry, unified rules engine, structured dispatcher, Astrocast and cellular integration, SMAZ2 compression, ZigBee gateway, InterfaceManager with USB hotplug, object groups, failover groups, transform pipelines, Ed25519 audit log, config export/import.
+**v0.2.0** -- Any-to-any routing fabric. Channel registry, unified rules engine, structured dispatcher, cellular integration, SMAZ2 compression, ZigBee gateway, InterfaceManager with USB hotplug, object groups, failover groups, transform pipelines, Ed25519 audit log, config export/import.
 
 **v0.3.0 (current)** -- 3-tier compression (SMAZ2 lossless, llama-zip LLM lossless, MSVQ-SC lossy semantic with rate-adaptive codebook). Reticulum-compatible routing with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking, TCP/HDLC RNS interop, and 10 cross-connected interfaces. RockBLOCK 9704 IMT transport (100 KB messages, JSPR protocol). SBD/IMT decoupled into separate gateway types with independent signal recording. APRS and TAK gateways. DeviceSupervisor with USB hotplug and GatewayManager lifecycle wiring. Full Meshtastic protocol (~80%+ coverage, official protobuf bindings). Cross-platform key exchange (QR bundles, master key envelope encryption). Credential management with encrypted cert storage and Hub distribution. Hub MQTT connection (WSS + mTLS, command handlers, health telemetry). Multi-instance gateway support. Config diff preview endpoint. Field intelligence (dead man's switch, geofence, health scores, burst queue, topology). Android companion app.
 

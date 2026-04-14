@@ -38,7 +38,6 @@ MeshSat Bridge, MeshSat Android, and MeshSat Hub are **peers** in a communicatio
 |---------|:-----------:|:---------------:|:---------:|
 | Meshtastic LoRa | USB serial | BLE | No |
 | Iridium SBD | USB serial | Bluetooth SPP | Webhook RX only |
-| Astrocast | USB serial | No | No |
 | Cellular SMS | USB modem | Native Android SMS | No |
 | MQTT | TCP client | TCP client | Broker + client |
 | Webhook HTTP | Send + receive | Send only | Receive |

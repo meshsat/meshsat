@@ -12,12 +12,12 @@ const dragStart = ref({ x: 0, y: 0 })
 const typeColors = {
   mesh: '#06B6D4', iridium: '#A855F7', iridium_sbd: '#A855F7',
   iridium_imt: '#C084FC', cellular: '#F97316', sms: '#22C55E',
-  astrocast: '#EAB308', zigbee: '#34D399', aprs: '#06B6D4',
+  zigbee: '#34D399', aprs: '#06B6D4',
   tcp: '#64748B', mqtt: '#64748B', webhook: '#94A3B8',
 }
 const mtuByType = {
   mesh: 237, iridium: 340, iridium_sbd: 340, iridium_imt: 102400,
-  cellular: 160, sms: 160, astrocast: 160, zigbee: 100, aprs: 256,
+  cellular: 160, sms: 160, zigbee: 100, aprs: 256,
   tcp: 65535, mqtt: 65535, webhook: 65535,
 }
 function typeColor(t) { return typeColors[t] || '#64748B' }

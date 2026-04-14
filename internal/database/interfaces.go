@@ -4,7 +4,7 @@ import "fmt"
 
 // ---- v0.3.0 Interface Model Types ----
 
-// Interface represents a named communication channel (mesh, iridium, astrocast, cellular, webhook, mqtt).
+// Interface represents a named communication channel (mesh, iridium, cellular, webhook, mqtt).
 type Interface struct {
 	ID                string `db:"id" json:"id"`
 	ChannelType       string `db:"channel_type" json:"channel_type"`

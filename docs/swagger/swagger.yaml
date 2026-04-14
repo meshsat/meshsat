@@ -353,7 +353,7 @@ host: localhost:6050
 info:
   contact: {}
   description: Multi-channel communications gateway bridging Meshtastic, Iridium,
-    Astrocast, Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.
+    Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.
   title: MeshSat API
   version: "1.0"
 paths:

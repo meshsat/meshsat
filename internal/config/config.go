@@ -21,7 +21,6 @@ type Config struct {
 	IridiumSleepPin int    // GPIO pin for 9603N sleep/wake (0 = disabled)
 	IMTPort         string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
 	CellularPort    string
-	AstrocastPort   string
 	ZigBeePort      string
 
 	// Cost safety: global rate limit for paid transports (messages/hour)
@@ -96,7 +95,6 @@ func Load() *Config {
 		IridiumSleepPin:     envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
 		IMTPort:             envStr("MESHSAT_IMT_PORT", "auto"),
 		CellularPort:        envStr("MESHSAT_CELLULAR_PORT", "auto"),
-		AstrocastPort:       envStr("MESHSAT_ASTROCAST_PORT", "auto"),
 		ZigBeePort:          envStr("MESHSAT_ZIGBEE_PORT", "auto"),
 		PaidRateLimit:       envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 		APIRateLimit:        envInt("MESHSAT_API_RATE_LIMIT", 600),

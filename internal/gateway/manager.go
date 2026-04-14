@@ -23,37 +23,34 @@ type ReceiverStartFunc func(ctx context.Context, gw Gateway)
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
 	db              *database.DB
-	sat             transport.SatTransport       // optional, for iridium SBD gateway (9603)
-	imtSat          transport.SatTransport       // optional, for iridium IMT gateway (9704)
-	cell            transport.CellTransport      // optional, for cellular gateway
-	astro           transport.AstrocastTransport // optional, for astrocast gateway
-	predictor       PassPredictor                // optional, for pass scheduler
-	onReceiverStart ReceiverStartFunc            // called when a gateway starts
-	onEventEmit     EventEmitFunc                // SSE event emitter callback
-	nodeNameFn      func(uint32) string          // resolves mesh node ID to name
-	running         map[string]Gateway           // keyed by instance_id ("iridium_0", "iridium_1")
-	runningByIface  map[string]Gateway           // v0.3.0: keyed by interface ID ("iridium_0")
+	sat             transport.SatTransport  // optional, for iridium SBD gateway (9603)
+	imtSat          transport.SatTransport  // optional, for iridium IMT gateway (9704)
+	cell            transport.CellTransport // optional, for cellular gateway
+	predictor       PassPredictor           // optional, for pass scheduler
+	onReceiverStart ReceiverStartFunc       // called when a gateway starts
+	onEventEmit     EventEmitFunc           // SSE event emitter callback
+	nodeNameFn      func(uint32) string     // resolves mesh node ID to name
+	running         map[string]Gateway      // keyed by instance_id ("iridium_0", "iridium_1")
+	runningByIface  map[string]Gateway      // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
 	cancelFn        context.CancelFunc
 	supervisor      *transport.DeviceSupervisor // optional, for device event watching
 
 	// Multi-instance transport registry: maps instance_id → transport
-	satTransports   map[string]transport.SatTransport       // instance_id → SatTransport
-	cellTransports  map[string]transport.CellTransport      // instance_id → CellTransport
-	astroTransports map[string]transport.AstrocastTransport // instance_id → AstrocastTransport
-	transportsMu    sync.RWMutex
+	satTransports  map[string]transport.SatTransport  // instance_id → SatTransport
+	cellTransports map[string]transport.CellTransport // instance_id → CellTransport
+	transportsMu   sync.RWMutex
 }
 
 // NewManager creates a new gateway manager.
 func NewManager(db *database.DB, sat transport.SatTransport) *Manager {
 	m := &Manager{
-		db:              db,
-		sat:             sat,
-		running:         make(map[string]Gateway),
-		runningByIface:  make(map[string]Gateway),
-		satTransports:   make(map[string]transport.SatTransport),
-		cellTransports:  make(map[string]transport.CellTransport),
-		astroTransports: make(map[string]transport.AstrocastTransport),
+		db:             db,
+		sat:            sat,
+		running:        make(map[string]Gateway),
+		runningByIface: make(map[string]Gateway),
+		satTransports:  make(map[string]transport.SatTransport),
+		cellTransports: make(map[string]transport.CellTransport),
 	}
 	// Register primary SBD transport as default instance
 	if sat != nil {
@@ -78,14 +75,6 @@ func (m *Manager) SetIMTTransport(imtSat transport.SatTransport) {
 	m.transportsMu.Unlock()
 }
 
-// SetAstrocastTransport sets the Astrocast transport for the astrocast gateway.
-func (m *Manager) SetAstrocastTransport(astro transport.AstrocastTransport) {
-	m.astro = astro
-	m.transportsMu.Lock()
-	m.astroTransports["astrocast_0"] = astro
-	m.transportsMu.Unlock()
-}
-
 // RegisterSatTransport registers a satellite transport for a specific instance.
 func (m *Manager) RegisterSatTransport(instanceID string, sat transport.SatTransport) {
 	m.transportsMu.Lock()
@@ -100,20 +89,12 @@ func (m *Manager) RegisterCellTransport(instanceID string, cell transport.CellTr
 	m.cellTransports[instanceID] = cell
 }
 
-// RegisterAstrocastTransport registers an Astrocast transport for a specific instance.
-func (m *Manager) RegisterAstrocastTransport(instanceID string, astro transport.AstrocastTransport) {
-	m.transportsMu.Lock()
-	defer m.transportsMu.Unlock()
-	m.astroTransports[instanceID] = astro
-}
-
 // UnregisterTransport removes a transport instance.
 func (m *Manager) UnregisterTransport(instanceID string) {
 	m.transportsMu.Lock()
 	defer m.transportsMu.Unlock()
 	delete(m.satTransports, instanceID)
 	delete(m.cellTransports, instanceID)
-	delete(m.astroTransports, instanceID)
 }
 
 // getSatTransport returns the satellite transport for an instance, falling back to legacy.
@@ -146,16 +127,6 @@ func (m *Manager) getCellTransport(instanceID string) transport.CellTransport {
 		return cell
 	}
 	return m.cell
-}
-
-// getAstroTransport returns the Astrocast transport for an instance, falling back to legacy.
-func (m *Manager) getAstroTransport(instanceID string) transport.AstrocastTransport {
-	m.transportsMu.RLock()
-	defer m.transportsMu.RUnlock()
-	if astro, ok := m.astroTransports[instanceID]; ok {
-		return astro
-	}
-	return m.astro
 }
 
 // SetPassPredictor sets the pass predictor for pass-aware scheduling on Iridium gateways.
@@ -222,9 +193,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	for range m.cellTransports {
 		transportCount["cellular"]++
-	}
-	for range m.astroTransports {
-		transportCount["astrocast"]++
 	}
 	m.transportsMu.RUnlock()
 
@@ -443,8 +411,6 @@ func roleToGatewayType(role transport.DeviceRole) string {
 		return "iridium_imt"
 	case transport.RoleCellular:
 		return "cellular"
-	case transport.RoleAstrocast:
-		return "astrocast"
 	case transport.RoleZigBee:
 		return "zigbee"
 	default:
@@ -462,8 +428,6 @@ func gatewayTypeToRole(gwType string) transport.DeviceRole {
 		return transport.RoleIridium9704
 	case "cellular":
 		return transport.RoleCellular
-	case "astrocast":
-		return transport.RoleAstrocast
 	case "zigbee":
 		return transport.RoleZigBee
 	default:
@@ -783,23 +747,6 @@ func (m *Manager) TestGateway(gwType string) error {
 			return fmt.Errorf("webhook endpoint unreachable: %w", err)
 		}
 		resp.Body.Close()
-		return nil
-	case "astrocast":
-		instanceID := cfg.InstanceID
-		if instanceID == "" {
-			instanceID = "astrocast_0"
-		}
-		astro := m.getAstroTransport(instanceID)
-		if astro == nil {
-			return fmt.Errorf("astrocast transport not available")
-		}
-		status, err := astro.GetStatus(context.Background())
-		if err != nil {
-			return err
-		}
-		if !status.Connected {
-			return fmt.Errorf("astrocast module not connected")
-		}
 		return nil
 	case "zigbee":
 		zigbeeID := m.findRunningInstance("zigbee")
@@ -1129,19 +1076,6 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 			return nil, err
 		}
 		return NewWebhookGateway(*cfg, m.db), nil
-	case "astrocast":
-		astro := m.getAstroTransport(instanceID)
-		if astro == nil {
-			return nil, fmt.Errorf("astrocast transport not available for %s", instanceID)
-		}
-		cfg, err := ParseAstrocastConfig(configJSON)
-		if err != nil {
-			return nil, err
-		}
-		if err := cfg.Validate(); err != nil {
-			return nil, err
-		}
-		return NewAstrocastGateway(*cfg, astro, m.db), nil
 	case "zigbee":
 		cfg, err := ParseZigBeeConfig(configJSON)
 		if err != nil {

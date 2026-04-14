@@ -35,7 +35,6 @@ type App struct {
 	Processor      *engine.Processor
 	GatewayMgr     *gateway.Manager
 	TLEMgr         *engine.TLEManager
-	AstroTLEMgr    *engine.AstrocastTLEManager
 	Dispatcher     *engine.Dispatcher
 	Signing        *engine.SigningService
 	Transforms     *engine.TransformPipeline
@@ -68,7 +67,6 @@ type App struct {
 	Sat    transport.SatTransport
 	IMTSat transport.SatTransport // optional IMT (9704) transport for coexistence
 	Cell   transport.CellTransport
-	Astro  transport.AstrocastTransport
 
 	// Optional: GPS exclude port funcs (direct mode only)
 	GPSExcludePorts []func() string
@@ -82,7 +80,7 @@ type App struct {
 }
 
 // Setup initializes all components and wires them together.
-// Transports (Mesh, Sat, Cell, Astro) must be set on the App before calling.
+// Transports (Mesh, Sat, Cell) must be set on the App before calling.
 // Returns an error if critical initialization fails.
 func (a *App) Setup(ctx context.Context) error {
 	cfg := a.Config
@@ -120,16 +118,9 @@ func (a *App) Setup(ctx context.Context) error {
 	if a.Cell != nil {
 		a.GatewayMgr.SetCellTransport(a.Cell)
 	}
-	if a.Astro != nil {
-		a.GatewayMgr.SetAstrocastTransport(a.Astro)
-	}
-
 	// TLE managers
 	a.TLEMgr = engine.NewTLEManager(db)
 	a.TLEMgr.Start(ctx)
-
-	a.AstroTLEMgr = engine.NewAstrocastTLEManager(db)
-	a.AstroTLEMgr.Start(ctx)
 
 	// Wire TLE into gateway manager
 	a.GatewayMgr.SetPassPredictor(&tleAdapter{a.TLEMgr})
@@ -264,14 +255,6 @@ func (a *App) Setup(ctx context.Context) error {
 		if a.IMTSat != nil && a.IMTSat != a.Sat {
 			ifaceReg.Register(routing.NewReticulumInterface("iridium_imt_0", "iridium_imt", 100000, func(fwdCtx context.Context, packet []byte) error {
 				_, err := a.IMTSat.Send(fwdCtx, packet)
-				return err
-			}))
-		}
-
-		// Astrocast — $0.01/msg, ~200 byte uplink MTU, raw binary
-		if a.Astro != nil {
-			ifaceReg.Register(routing.NewReticulumInterface("astrocast_0", "astrocast", 200, func(fwdCtx context.Context, packet []byte) error {
-				_, err := a.Astro.Send(fwdCtx, packet)
 				return err
 			}))
 		}
@@ -426,7 +409,6 @@ func (a *App) Setup(ctx context.Context) error {
 	srv.SetAccessEvaluator(a.AccessEval)
 	srv.SetRegistry(a.Registry)
 	srv.SetTLEManager(a.TLEMgr)
-	srv.SetAstrocastTLEManager(a.AstroTLEMgr)
 	srv.SetPassScheduler(a.GatewayMgr.GetPassScheduler())
 	srv.SetCellTransport(a.Cell)
 	srv.SetGPSReader(a.GPSReader)
@@ -525,9 +507,6 @@ func (a *App) Setup(ctx context.Context) error {
 			}
 			if a.Cell != nil {
 				birth.Capabilities = append(birth.Capabilities, "cellular")
-			}
-			if a.Astro != nil {
-				birth.Capabilities = append(birth.Capabilities, "astrocast")
 			}
 			if a.RoutingIdentity != nil {
 				birth.Capabilities = append(birth.Capabilities, "reticulum")
@@ -721,7 +700,6 @@ func (a *App) Shutdown() {
 	}
 	a.InterfaceMgr.Stop()
 	a.TLEMgr.Stop()
-	a.AstroTLEMgr.Stop()
 	a.GatewayMgr.Stop()
 	if a.TCPIface != nil {
 		a.TCPIface.Stop()

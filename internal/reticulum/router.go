@@ -20,7 +20,6 @@ const (
 	IfaceWireGuard  InterfaceType = "wireguard"
 	IfaceIridium    InterfaceType = "iridium"
 	IfaceCellular   InterfaceType = "cellular"
-	IfaceAstrocast  InterfaceType = "astrocast"
 	IfaceGlobalstar InterfaceType = "globalstar"
 	IfaceZigBee     InterfaceType = "zigbee"
 	IfaceAPRS       InterfaceType = "aprs"
@@ -37,8 +36,6 @@ func InterfaceCost(iface InterfaceType) float64 {
 		return 0
 	case IfaceCellular:
 		return 0.005 // SMS cost
-	case IfaceAstrocast:
-		return 0.01
 	case IfaceGlobalstar:
 		return 0.02
 	case IfaceIridium:

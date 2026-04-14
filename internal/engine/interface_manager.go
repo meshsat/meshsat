@@ -68,7 +68,7 @@ type DetectedDevice struct {
 	Port       string `json:"port"`
 	VIDPID     string `json:"vid_pid"`
 	DeviceID   string `json:"device_id"`
-	DeviceType string `json:"device_type"` // meshtastic, iridium, cellular, astrocast, gps, unknown
+	DeviceType string `json:"device_type"` // meshtastic, iridium, cellular, gps, unknown
 	BoundTo    string `json:"bound_to"`    // interface ID if claimed, empty if unassigned
 }
 
@@ -107,7 +107,7 @@ func channelNeedsDevice(channelType string) bool {
 	case "mqtt", "webhook":
 		return false
 	default:
-		return true // mesh, iridium, cellular, astrocast, zigbee all need hardware
+		return true // mesh, iridium, cellular, zigbee all need hardware
 	}
 }
 

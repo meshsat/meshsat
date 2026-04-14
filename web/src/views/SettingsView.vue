@@ -14,7 +14,6 @@ const tabs = [
   { id: 'mqtt', label: 'MQTT' },
   { id: 'device_mqtt', label: 'Device MQTT' },
   { id: 'iridium', label: 'Iridium' },
-  { id: 'astrocast', label: 'Astrocast' },
   { id: 'cellular', label: 'Cellular' },
   { id: 'zigbee', label: 'ZigBee' },
   { id: 'store_forward', label: 'S&F' },
@@ -481,44 +480,6 @@ async function saveBudget() {
   await store.setCreditBudget(budgetForm.value.daily, budgetForm.value.monthly)
 }
 
-// Astrocast gateway
-const astrocastForm = ref({
-  max_uplink_bytes: 160, poll_interval_sec: 300, fragment_enabled: true,
-  geoloc_enabled: false, power_mode: 'balanced'
-})
-const astrocastEnabled = ref(false)
-
-const astrocastGw = computed(() => (store.gateways || []).find(g => g.type === 'astrocast'))
-
-function loadAstrocast() {
-  if (astrocastGw.value?.config) {
-    try {
-      const c = typeof astrocastGw.value.config === 'string' ? JSON.parse(astrocastGw.value.config) : astrocastGw.value.config
-      Object.assign(astrocastForm.value, c)
-      astrocastEnabled.value = astrocastGw.value.enabled
-    } catch {}
-  }
-}
-
-async function saveAstrocast() {
-  await store.configureGateway('astrocast', astrocastEnabled.value, astrocastForm.value)
-}
-
-const astrocastTesting = ref(false)
-const astrocastTestResult = ref('')
-
-async function doTestAstrocast() {
-  astrocastTesting.value = true
-  astrocastTestResult.value = ''
-  try {
-    await store.testGateway('astrocast')
-    astrocastTestResult.value = 'ok'
-  } catch (e) {
-    astrocastTestResult.value = e.message || 'failed'
-  }
-  astrocastTesting.value = false
-}
-
 // Cellular gateway
 const cellularForm = ref({
   sms_destinations: '', allowed_senders: '', sms_prefix: 'MESHSAT', max_segments: 3,
@@ -809,7 +770,7 @@ onMounted(async () => {
   store.fetchCellularSignal()
   store.fetchSMSContacts()
   store.fetchSIMCards()
-  loadMQTT(); loadIridium(); loadBudget(); loadAstrocast(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK(); loadTAKEnrollStatus()
+  loadMQTT(); loadIridium(); loadBudget(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK(); loadTAKEnrollStatus()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
@@ -1084,77 +1045,6 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           Used today: {{ store.creditSummary.today }} | This month: {{ store.creditSummary.month }} | All time: {{ store.creditSummary.all_time }}
         </div>
         <button @click="saveBudget" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Budget</button>
-      </div>
-    </div>
-
-    <!-- Astrocast -->
-    <div v-if="activeTab === 'astrocast'">
-      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-sm font-medium text-gray-200">Astrocast Astronode S</span>
-          <span class="text-xs" :class="astrocastGw?.connected ? 'text-emerald-400' : 'text-gray-500'">
-            {{ astrocastGw?.connected ? 'Connected' : 'Disconnected' }}
-          </span>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Max Uplink Bytes</label>
-            <input v-model.number="astrocastForm.max_uplink_bytes" type="number" min="1" max="160" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-            <p class="text-[10px] text-gray-600 mt-0.5">Astronode S max payload is 160 bytes</p>
-          </div>
-          <div>
-            <label class="block text-xs text-gray-500 mb-1">Poll Interval (sec)</label>
-            <input v-model.number="astrocastForm.poll_interval_sec" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-            <p class="text-[10px] text-gray-600 mt-0.5">How often to check for downlink messages</p>
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Power Mode</label>
-          <select v-model="astrocastForm.power_mode" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
-            <option value="low_power">Low Power (minimal polling, battery saving)</option>
-            <option value="balanced">Balanced (default)</option>
-            <option value="performance">Performance (aggressive polling)</option>
-          </select>
-        </div>
-
-        <div class="flex flex-wrap gap-4">
-          <label class="flex items-center gap-1 text-xs text-gray-400">
-            <input type="checkbox" v-model="astrocastForm.fragment_enabled" class="rounded bg-gray-900 border-gray-700">
-            Auto-fragment messages >160 bytes
-          </label>
-          <label class="flex items-center gap-1 text-xs text-gray-400">
-            <input type="checkbox" v-model="astrocastForm.geoloc_enabled" class="rounded bg-gray-900 border-gray-700">
-            Include geolocation in uplinks
-          </label>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <input type="checkbox" v-model="astrocastEnabled" id="astrocast_en" class="rounded bg-gray-900 border-gray-700">
-          <label for="astrocast_en" class="text-xs text-gray-400">Enable Astrocast gateway</label>
-        </div>
-        <button @click="saveAstrocast" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Astrocast Config</button>
-
-        <!-- Gateway controls -->
-        <div class="flex items-center gap-2 mt-3 pt-3 border-t border-gray-700">
-          <button @click="store.startGateway('astrocast')" :disabled="astrocastGw?.connected"
-            class="px-3 py-1.5 rounded bg-emerald-600/20 text-emerald-400 text-xs border border-emerald-600/30 hover:bg-emerald-600/30 disabled:opacity-40">
-            Start
-          </button>
-          <button @click="store.stopGateway('astrocast')" :disabled="!astrocastGw?.connected"
-            class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600 disabled:opacity-40">
-            Stop
-          </button>
-          <button @click="doTestAstrocast"
-            class="px-3 py-1.5 rounded bg-blue-600/20 text-blue-400 text-xs border border-blue-600/30 hover:bg-blue-600/30">
-            {{ astrocastTesting ? 'Testing...' : 'Test Connection' }}
-          </button>
-          <span v-if="astrocastTestResult" class="text-[10px] ml-1"
-            :class="astrocastTestResult === 'ok' ? 'text-emerald-400' : 'text-red-400'">
-            {{ astrocastTestResult === 'ok' ? 'Connected' : astrocastTestResult }}
-          </span>
-        </div>
       </div>
     </div>
 
@@ -1911,7 +1801,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-4">
         <div>
           <h3 class="text-sm font-semibold text-gray-200 mb-1">TLS Certificates & Provider Credentials</h3>
-          <p class="text-xs text-gray-500">Upload ZIP or PEM files from providers (Cloudloop, Astrocast, etc.). Certificates are encrypted at rest.</p>
+          <p class="text-xs text-gray-500">Upload ZIP or PEM files from providers (Cloudloop, etc.). Certificates are encrypted at rest.</p>
         </div>
 
         <!-- Upload -->
@@ -1927,7 +1817,6 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
               <option value="cloudloop_mqtt">Cloudloop MQTT</option>
               <option value="cloudloop_api">Cloudloop API</option>
               <option value="rockblock">RockBLOCK</option>
-              <option value="astrocast">Astrocast</option>
               <option value="globalstar">Globalstar</option>
               <option value="hub_mqtt">Hub MQTT</option>
               <option value="tak">TAK</option>

@@ -70,7 +70,7 @@ HUB_APRSIS_PASSCODE=12345                 # APRS-IS verification passcode
 ### How It Works
 
 1. Hub subscribes to `meshsat/+/position` and `meshsat/+/mo/decoded` MQTT topics
-2. When a position arrives from a satellite channel (Iridium SBD, Astrocast), Hub formats it as an APRS position packet
+2. When a position arrives from a satellite channel (Iridium SBD/IMT), Hub formats it as an APRS position packet
 3. Hub sends the APRS packet to APRS-IS via TCP (standard APRS-IS protocol)
 4. The position appears on aprs.fi, aprsdirect.com, and all APRS-IS clients worldwide
 

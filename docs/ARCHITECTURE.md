@@ -35,7 +35,6 @@ MeshSat Bridge, MeshSat Android, and MeshSat Hub are **peers** in a communicatio
 |---------|:-----------:|:---------------:|:---------:|
 | Meshtastic LoRa | USB serial | BLE | No |
 | Iridium SBD | USB serial (RockBLOCK) | Bluetooth SPP (HC-05) | Webhook RX only |
-| Astrocast | USB serial | No | No |
 | Cellular SMS | USB modem (AT commands) | Native Android SMS | No (future: VoIP) |
 | MQTT | TCP client | TCP client | Broker + client |
 | Webhook HTTP | Send + receive | Send only | Receive (RockBLOCK webhook) |
@@ -107,7 +106,7 @@ type Gateway interface {
 }
 ```
 
-Implementations: MQTTGateway, IridiumGateway, CellularGateway, WebhookGateway, AstrocastGateway, ZigBeeGateway, TAKGateway, APRSGateway.
+Implementations: MQTTGateway, IridiumGateway, CellularGateway, WebhookGateway, ZigBeeGateway, TAKGateway, APRSGateway.
 
 ### Android Equivalent (Kotlin)
 

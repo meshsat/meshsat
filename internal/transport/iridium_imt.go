@@ -63,7 +63,7 @@ func ProbeIMT(excludePorts []string) string {
 		}
 		vidpid := findUSBVIDPID(port)
 		if knownMeshtasticVIDPIDs[vidpid] || gpsVIDPIDs[vidpid] ||
-			knownCellularVIDPIDs[vidpid] || knownAstrocastVIDPIDs[vidpid] ||
+			knownCellularVIDPIDs[vidpid] ||
 			knownZigBeeOnlyVIDPIDs[vidpid] || knownIridiumVIDPIDs[vidpid] {
 			continue
 		}

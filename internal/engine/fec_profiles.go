@@ -53,12 +53,6 @@ var fecProfiles = map[string]FECProfile{
 		ParityShards: 2,
 		Interleave:   false,
 	},
-	"astrocast": {
-		DataShards:      3,
-		ParityShards:    2, // 40% redundancy — constrained uplink, maximize success
-		Interleave:      true,
-		InterleaveDepth: 4,
-	},
 	"ax25": {
 		DataShards:      4,
 		ParityShards:    3, // 43% redundancy — AX.25/HF is very lossy

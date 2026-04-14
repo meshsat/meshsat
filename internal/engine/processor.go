@@ -896,8 +896,6 @@ func isPaidInterface(id string) bool {
 	switch {
 	case len(id) >= 7 && id[:7] == "iridium":
 		return true // iridium_0, iridium_imt_0
-	case len(id) >= 9 && id[:9] == "astrocast":
-		return true // astrocast_0
 	case len(id) >= 8 && id[:8] == "cellular":
 		return true // cellular_0
 	}

@@ -44,7 +44,7 @@ var meshtasticWords = []string{
 	"success", "failed", "pending", "queued", "delivered", "expired", "forwarded", "dropped",
 	"retry", "noise", "interference", "coverage", "degrees", "meters", "kilometers", "knots",
 	"duration", "interval", "threshold", "maximum", "minimum", "average", "total", "count",
-	"report", "checksum", "baud", "cellular", "astrocast", "webhook", "mqtt", "iridium",
+	"report", "checksum", "baud", "cellular", "satellite", "webhook", "mqtt", "iridium",
 
 	// Common English (128-191) — high frequency in any text
 	"that", "this", "with", "from", "your", "have", "more", "will",

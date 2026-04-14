@@ -246,9 +246,6 @@ func TestInterfaceCost(t *testing.T) {
 	if InterfaceCost(IfaceIridium) != 0.05 {
 		t.Errorf("Iridium cost: got %f, want 0.05", InterfaceCost(IfaceIridium))
 	}
-	if InterfaceCost(IfaceAstrocast) != 0.01 {
-		t.Errorf("Astrocast cost: got %f, want 0.01", InterfaceCost(IfaceAstrocast))
-	}
 	if InterfaceCost(IfaceGlobalstar) != 0.02 {
 		t.Errorf("Globalstar cost: got %f, want 0.02", InterfaceCost(IfaceGlobalstar))
 	}

@@ -144,8 +144,6 @@ func channelCostScore(channelType string) int {
 		return 100
 	case "cellular", "sms":
 		return 60
-	case "astrocast":
-		return 50
 	case "iridium":
 		return 30
 	default:

@@ -18,7 +18,7 @@ type Contact struct {
 type ContactAddress struct {
 	ID            int64  `json:"id"`
 	ContactID     int64  `json:"contact_id"`
-	Type          string `json:"type"`    // mesh, sms, webhook, mqtt, iridium, astrocast, zigbee
+	Type          string `json:"type"`    // mesh, sms, webhook, mqtt, iridium, zigbee
 	Address       string `json:"address"` // phone number, node ID, URL, topic, etc.
 	Label         string `json:"label"`
 	EncryptionKey string `json:"encryption_key,omitempty"`

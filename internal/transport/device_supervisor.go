@@ -12,8 +12,7 @@ package transport
 //  2. JSPR probe for 9704 (~500ms)
 //  3. AT probe for 9603 (~500ms)
 //  4. Cellular AT probe (~500ms)
-//  5. Astronode probe (~500ms)
-//  6. ZNP probe for ZigBee (~500ms)
+//  5. ZNP probe for ZigBee (~500ms)
 //  7. GPS NMEA probe (~2s) — not implemented, GPS uses VID:PID only
 
 import (
@@ -380,7 +379,7 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 }
 
 // identifyAndClaimPort runs the identification cascade on an unclaimed port.
-// Order: VID:PID match → JSPR (9704) → AT (9603) → Cellular AT → Astronode → ZNP
+// Order: VID:PID match → JSPR (9704) → AT (9603) → Cellular AT → ZNP
 //
 // [MESHSAT-444] Probe serialization: acquires a per-port lock to prevent
 // concurrent probes on the same port. Skips ports that are permanently
@@ -447,7 +446,7 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	// Step 3: AT probe for 9603 (~500ms)
 	// Skip ports with known non-Iridium VID:PIDs
 	if vidpid == "" || (!knownMeshtasticVIDPIDs[vidpid] && !gpsVIDPIDs[vidpid] &&
-		!knownCellularVIDPIDs[vidpid] && !knownAstrocastVIDPIDs[vidpid] &&
+		!knownCellularVIDPIDs[vidpid] &&
 		!knownZigBeeOnlyVIDPIDs[vidpid]) {
 		s.probeMu.Lock()
 		atResult := probeAT(port)
@@ -483,19 +482,7 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 		}
 	}
 
-	// Step 5: Astronode probe (~500ms)
-	// Only try on FTDI or CP210x ports that aren't already identified
-	if vidpid == "" || knownAstrocastVIDPIDs[vidpid] {
-		s.probeMu.Lock()
-		astroResult := probeAstronode(port)
-		s.probeMu.Unlock()
-		if astroResult {
-			s.claimAndNotify(port, vidpid, RoleAstrocast, "astronode probe")
-			return
-		}
-	}
-
-	// Step 6: ZNP probe for ZigBee (~500ms)
+	// Step 5: ZNP probe for ZigBee (~500ms)
 	// Only try on ambiguous VID:PIDs (CP210x, CH343) or ZigBee-only VID:PIDs.
 	// Serialized under probeMu to prevent USB bus contention. [MESHSAT-444]
 	if knownZigBeeOnlyVIDPIDs[vidpid] || ambiguousZigBeeVIDPIDs[vidpid] {
@@ -594,7 +581,7 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 			return RoleIridium9704
 		}
 	}
-	if knownIridiumVIDPIDs[vidpid] || knownAstrocastVIDPIDs[vidpid] {
+	if knownIridiumVIDPIDs[vidpid] {
 		return RoleNone // fall through to protocol probes
 	}
 
@@ -793,8 +780,7 @@ func (s *DeviceSupervisor) recoverMissingTTY() {
 
 		// Only recover devices we care about
 		if !knownMeshtasticVIDPIDs[vidpid] && !knownIridiumVIDPIDs[vidpid] &&
-			!knownIMTVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] &&
-			!knownAstrocastVIDPIDs[vidpid] {
+			!knownIMTVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] {
 			continue
 		}
 

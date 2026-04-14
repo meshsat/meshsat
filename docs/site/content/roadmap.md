@@ -19,7 +19,6 @@ title: "Roadmap"
 - Delivery ledger with full lifecycle tracking
 - Unified access rules (Cisco ASA-style implicit deny)
 - Dispatcher with failover resolution
-- Astrocast gateway (code complete, awaiting hardware)
 - ZigBee 3.0 gateway
 - SMAZ2 compression
 - Reticulum-inspired routing (Ed25519, announce relay, link management)
@@ -41,5 +40,5 @@ title: "Roadmap"
 - LoRa WAN (Lacuna Space)
 - HF radio integration
 - Starlink direct
-- Multi-constellation satellite support (Iridium + Astrocast + others)
+- Multi-constellation satellite support
 - Web-based config editor with live diff

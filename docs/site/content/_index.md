@@ -14,7 +14,6 @@ MeshSat is an open-source multi-channel communications bridge that connects Mesh
 |---------|--------|-----------|------|-------------|
 | Meshtastic LoRa | Implemented | Bidirectional | No | 237 bytes |
 | Iridium SBD (9603N) | Implemented | Bidirectional | Yes | 340 bytes |
-| Astrocast | Implemented (awaiting hardware) | Bidirectional | Yes | 160 bytes |
 | Cellular SMS | Implemented | Bidirectional | Yes | 160 chars |
 | MQTT | Implemented | Bidirectional | No | Unlimited |
 | Webhook HTTP | Implemented | Bidirectional | No | Unlimited |
@@ -45,7 +44,7 @@ The web dashboard is at `http://<your-pi>:6050`.
 - **Access rules** — Cisco ASA-style implicit deny with per-interface ingress/egress rules
 - **Delivery ledger** — full lifecycle tracking for every message across all channels
 - **3-tier compression** — SMAZ2 (lossless, <1ms), llama-zip (LLM lossless), MSVQ-SC (lossy semantic)
-- **Satellite-aware scheduling** — SGP4 TLE pass prediction for Iridium and Astrocast
+- **Satellite-aware scheduling** — SGP4 TLE pass prediction for Iridium
 - **Dead man's switch** — configurable check-in timer with multi-channel alerting
 - **Geofence alerts** — polygon-based boundary crossing detection
 - **Reticulum routing** — Ed25519 identity, cryptographic announces, link management

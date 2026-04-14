@@ -24,7 +24,7 @@ import (
 // @Tags credentials
 // @Accept multipart/form-data
 // @Param file formance file true "ZIP or PEM file"
-// @Param provider formData string true "Provider identifier (cloudloop_mqtt, rockblock, astrocast, etc)"
+// @Param provider formData string true "Provider identifier (cloudloop_mqtt, rockblock, etc)"
 // @Param name formData string true "Human-readable label"
 // @Success 201 {object} map[string]interface{}
 // @Failure 400 {object} map[string]string

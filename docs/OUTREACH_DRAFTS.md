@@ -6,7 +6,7 @@
 
 Hey Thomas,
 
-Good to reconnect after Embedded World. We've completed the GPLv3 switch you asked about — MeshSat is fully GPLv3 now. Since then we've shipped the full any-to-any routing fabric, Astrocast support, and just landed a TAK/CoT adapter and APRS gateway. I'd love to schedule a 30-minute call to discuss multi-constellation satellite support and what an official Meshtastic ecosystem integration could look like — MeshSat is the only project bridging Meshtastic to Iridium SBD with full delivery tracking and access rules.
+Good to reconnect after Embedded World. We've completed the GPLv3 switch you asked about — MeshSat is fully GPLv3 now. Since then we've shipped the full any-to-any routing fabric, and just landed a TAK/CoT adapter and APRS gateway. I'd love to schedule a 30-minute call to discuss multi-constellation satellite support and what an official Meshtastic ecosystem integration could look like — MeshSat is the only project bridging Meshtastic to Iridium SBD with full delivery tracking and access rules.
 
 When works for you?
 

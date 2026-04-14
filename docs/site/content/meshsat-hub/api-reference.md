@@ -166,15 +166,6 @@ Cisco ASA-style access control with implicit deny. Rules are evaluated top-to-bo
 
 ---
 
-## Astrocast LEO
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/astrocast/passes` | Predicted Astrocast passes |
-| POST | `/api/astrocast/passes/refresh` | Force TLE refresh |
-
----
-
 ## Cellular / SMS
 
 | Method | Endpoint | Description |

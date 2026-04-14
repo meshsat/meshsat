@@ -27,7 +27,6 @@ type Server struct {
 	tleMgr        *engine.TLEManager
 	scheduler     *gateway.PassScheduler
 	registry      *channel.Registry
-	astroTleMgr   *engine.AstrocastTLEManager
 	cellTransport transport.CellTransport
 	gpsReader     *transport.GPSReader
 	ifaceMgr      *engine.InterfaceManager
@@ -286,10 +285,6 @@ func (s *Server) Router() http.Handler {
 
 		// Location resolution (GPS > Custom)
 		r.Get("/locations/resolved", s.handleGetGeolocationSources)
-
-		// Astrocast LEO satellite passes
-		r.Get("/astrocast/passes", s.handleGetAstrocastPasses)
-		r.Post("/astrocast/passes/refresh", s.handleRefreshAstrocastTLEs)
 
 		// Cellular modem
 		r.Get("/cellular/signal", s.handleGetCellularSignal)

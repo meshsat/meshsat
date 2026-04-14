@@ -61,7 +61,6 @@ func main() {
 	var mesh transport.MeshTransport
 	var sat transport.SatTransport
 	var cell transport.CellTransport
-	var astro transport.AstrocastTransport
 	var imtTransport transport.SatTransport    // IMT (9704) transport for coexistence
 	var gpsExcludePorts []func() string        // populated in direct mode for GPS reader
 	var supervisor *transport.DeviceSupervisor // populated in direct mode for USB discovery
@@ -96,10 +95,6 @@ func main() {
 		if cfg.CellularPort != "" && cfg.CellularPort != "auto" {
 			cellPort = cfg.CellularPort
 		}
-		astroPort := "supervisor"
-		if cfg.AstrocastPort != "" && cfg.AstrocastPort != "auto" {
-			astroPort = cfg.AstrocastPort
-		}
 
 		directMesh := transport.NewDirectMeshTransport(meshPort)
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
@@ -133,9 +128,6 @@ func main() {
 		}
 		cell = directCell
 
-		directAstro := transport.NewDirectAstrocastTransport(astroPort)
-		astro = directAstro
-
 		// DeviceSupervisor: replaces one-shot auto-detect with continuous
 		// two-tier polling (30s port scan + 15s reconciliation).
 		supervisor = transport.NewDeviceSupervisor()
@@ -145,7 +137,6 @@ func main() {
 		supervisor.SetExplicitPort(transport.RoleIridium9704, cfg.IMTPort)
 		supervisor.SetExplicitPort(transport.RoleIridium9603, cfg.IridiumPort)
 		supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
-		supervisor.SetExplicitPort(transport.RoleAstrocast, cfg.AstrocastPort)
 		supervisor.SetExplicitPort(transport.RoleZigBee, cfg.ZigBeePort)
 
 		// Wire driver callbacks: supervisor notifies transports when ports are
@@ -202,19 +193,6 @@ func main() {
 			HasPort: func() bool { return directCell.GetPort() != "" && directCell.GetPort() != "supervisor" },
 		})
 
-		supervisor.SetCallbacks(transport.RoleAstrocast, &transport.DriverCallbacks{
-			InstanceID: "astrocast_0",
-			OnPortFound: func(port string) {
-				directAstro.SetPort(port)
-				log.Info().Str("port", port).Msg("supervisor: astronode port assigned")
-			},
-			OnPortLost: func(port string) {
-				directAstro.Close()
-				log.Warn().Str("port", port).Msg("supervisor: astronode port lost")
-			},
-			HasPort: func() bool { return directAstro.GetPort() != "" && directAstro.GetPort() != "supervisor" },
-		})
-
 		supervisor.Start()
 		defer supervisor.Stop()
 
@@ -246,9 +224,6 @@ func main() {
 	}
 	if cell != nil {
 		defer cell.Close()
-	}
-	if astro != nil {
-		defer astro.Close()
 	}
 
 	// Graceful shutdown
@@ -289,18 +264,11 @@ func main() {
 	if cell != nil {
 		gwMgr.SetCellTransport(cell)
 	}
-	if astro != nil {
-		gwMgr.SetAstrocastTransport(astro)
-	}
 
 	// TLE manager — daily Celestrak TLE refresh + SGP4 pass prediction
 	// Created early so it's available to the gateway manager for pass scheduling
 	tleMgr := engine.NewTLEManager(db)
 	tleMgr.Start(ctx)
-
-	// Astrocast TLE manager — daily Celestrak refresh for Astrocast LEO constellation
-	astroTleMgr := engine.NewAstrocastTLEManager(db)
-	astroTleMgr.Start(ctx)
 
 	// Wire TLE manager into gateway manager for pass-aware scheduling
 	gwMgr.SetPassPredictor(&tleAdapter{tleMgr})
@@ -540,25 +508,6 @@ func main() {
 				ifaceReg.Register(routing.NewReticulumInterface("iridium_imt_0", "iridium", 102400, imtIface.Send))
 			}
 			log.Info().Msg("iridium IMT reticulum interface started")
-		}
-	}
-
-	// Astrocast Reticulum interface — wire Astronode S as Reticulum transport
-	if astro != nil {
-		astroIface := routing.NewAstrocastInterface(routing.AstrocastInterfaceConfig{
-			Name: "astrocast_0",
-		}, astro, func(packet []byte) {
-			log.Debug().Int("size", len(packet)).Msg("astrocast_0: received reticulum packet via downlink")
-			proc.InjectReticulumPacket(packet, "astrocast_0")
-		})
-		if err := astroIface.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("astrocast reticulum interface start failed")
-		} else {
-			proc.RegisterPacketSender("astrocast_0", astroIface.Send)
-			if ifaceReg != nil {
-				ifaceReg.Register(routing.NewReticulumInterface("astrocast_0", "astrocast", 160, astroIface.Send))
-			}
-			log.Info().Msg("astrocast reticulum interface started")
 		}
 	}
 
@@ -927,7 +876,6 @@ func main() {
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
-	srv.SetAstrocastTLEManager(astroTleMgr)
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)
 	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
@@ -1390,7 +1338,6 @@ func main() {
 	}
 	ifaceMgr.Stop()
 	tleMgr.Stop()
-	astroTleMgr.Stop()
 	gwMgr.Stop()
 	if tcpIface != nil {
 		tcpIface.Stop()

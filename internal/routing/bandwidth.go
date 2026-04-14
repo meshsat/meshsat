@@ -7,13 +7,12 @@ import (
 
 // Default channel bandwidths in bits per second.
 var DefaultBandwidths = map[string]int{
-	"mesh":      1200,   // LoRa SF12 BW125
-	"iridium":   2400,   // SBD uplink
-	"astrocast": 600,    // LEO uplink
-	"cellular":  9600,   // SMS GSM 2G
-	"zigbee":    250000, // IEEE 802.15.4
-	"webhook":   0,      // unlimited (no limiting)
-	"mqtt":      0,      // unlimited (no limiting)
+	"mesh":     1200,   // LoRa SF12 BW125
+	"iridium":  2400,   // SBD uplink
+	"cellular": 9600,   // SMS GSM 2G
+	"zigbee":   250000, // IEEE 802.15.4
+	"webhook":  0,      // unlimited (no limiting)
+	"mqtt":     0,      // unlimited (no limiting)
 }
 
 // DefaultAnnounceBudgetPct is the default percentage of interface bandwidth

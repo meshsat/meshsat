@@ -36,7 +36,7 @@ const tabs = [
 
 // Interface form
 const ifaceForm = ref({ id: '', channel_type: 'mesh', label: '', enabled: true })
-const channelTypes = ['mesh', 'iridium', 'astrocast', 'cellular', 'zigbee', 'webhook', 'mqtt']
+const channelTypes = ['mesh', 'iridium', 'cellular', 'zigbee', 'webhook', 'mqtt']
 
 function resetIfaceForm() {
   ifaceForm.value = { id: '', channel_type: 'mesh', label: '', enabled: true }
@@ -473,7 +473,6 @@ function devRoleClass(role) {
     iridium_9704: 'bg-orange-900 text-orange-300',
     iridium_9603: 'bg-orange-900 text-orange-300',
     cellular: 'bg-blue-900 text-blue-300',
-    astrocast: 'bg-cyan-900 text-cyan-300',
     gps: 'bg-green-900 text-green-300',
     zigbee: 'bg-yellow-900 text-yellow-300',
   }

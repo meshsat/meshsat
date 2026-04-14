@@ -5,7 +5,7 @@
     ],
     "swagger": "2.0",
     "info": {
-        "description": "Multi-channel communications gateway bridging Meshtastic, Iridium, Astrocast, Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.",
+        "description": "Multi-channel communications gateway bridging Meshtastic, Iridium, Cellular, APRS, TAK, MQTT, ZigBee, and Webhooks.",
         "title": "MeshSat API",
         "contact": {},
         "version": "1.0"

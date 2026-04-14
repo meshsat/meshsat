@@ -60,7 +60,6 @@ const cellularGw = computed(() => {
     config: { operator: cs.operator, network_type: cs.network_type, imei: cs.imei }
   }
 })
-const astrocastGw = computed(() => (store.gateways || []).find(g => g.type === 'astrocast'))
 const webhookGw = computed(() => (store.gateways || []).find(g => g.type === 'webhook'))
 
 // Group access rules by route direction for display
@@ -268,14 +267,6 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
-        @click="togglePane('astrocast')">
-        <div class="text-[10px] text-gray-500 mb-1">ASTROCAST</div>
-        <div class="flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full" :class="gwStatusColor(astrocastGw)" />
-          <span class="text-xs text-gray-300">{{ gwStatusLabel(astrocastGw) }}</span>
-        </div>
-      </div>
-      <div class="bg-tactical-surface rounded-lg p-3 border border-tactical-border cursor-pointer hover:border-gray-600 transition-colors"
         @click="togglePane('webhook')">
         <div class="text-[10px] text-gray-500 mb-1">WEBHOOK</div>
         <div class="flex items-center gap-2">
@@ -343,16 +334,6 @@ onUnmounted(() => {
           <div class="flex justify-between"><span class="text-gray-600">SMS Contacts</span><span>{{ (store.smsContacts || []).length }}</span></div>
         </template>
         <div v-else class="text-gray-600">No modem detected</div>
-      </div>
-
-      <!-- Astrocast debug -->
-      <div v-if="expandedPane === 'astrocast'" class="space-y-1">
-        <template v-if="astrocastGw">
-          <div v-for="[k, v] in gwDebugRows(astrocastGw)" :key="k" class="flex justify-between">
-            <span class="text-gray-600">{{ k }}</span><span>{{ v }}</span>
-          </div>
-        </template>
-        <div v-else class="text-gray-600">Not configured</div>
       </div>
 
       <!-- Webhook debug -->
@@ -491,7 +472,6 @@ onUnmounted(() => {
           <option value="">All channels</option>
           <option value="mesh">Mesh</option>
           <option value="iridium">Iridium</option>
-          <option value="astrocast">Astrocast</option>
           <option value="mqtt">MQTT</option>
           <option value="cellular">Cellular</option>
           <option value="webhook">Webhook</option>

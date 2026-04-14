@@ -2,7 +2,7 @@ package channel
 
 import "time"
 
-// RegisterDefaults registers the 9 built-in channels.
+// RegisterDefaults registers the 8 built-in channels.
 func RegisterDefaults(r *Registry) {
 	r.Register(ChannelDescriptor{
 		ID:            "mesh",
@@ -42,29 +42,6 @@ func RegisterDefaults(r *Registry) {
 		Options: []OptionField{
 			{Key: "priority", Label: "Priority", Type: "select", Default: "1", Options: []string{"0", "1", "2"}},
 			{Key: "include_gps", Label: "Include GPS", Type: "checkbox", Default: "false"},
-		},
-	})
-
-	r.Register(ChannelDescriptor{
-		ID:            "astrocast",
-		Label:         "Astrocast",
-		IsPaid:        true,
-		CanSend:       true,
-		CanReceive:    true,
-		BinaryCapable: true,
-		MaxPayload:    160,
-		DefaultTTL:    3600 * time.Second,
-		IsSatellite:   true,
-		RetryConfig: RetryConfig{
-			Enabled:     true,
-			InitialWait: 300 * time.Second,
-			MaxWait:     60 * time.Minute,
-			MaxRetries:  5,
-			BackoffFunc: "exponential",
-		},
-		Options: []OptionField{
-			{Key: "power_mode", Label: "Power Mode", Type: "select", Default: "balanced", Options: []string{"low_power", "balanced", "performance"}},
-			{Key: "fragment", Label: "Auto-Fragment", Type: "checkbox", Default: "true"},
 		},
 	})
 

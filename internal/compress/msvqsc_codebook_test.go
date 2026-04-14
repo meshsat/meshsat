@@ -242,7 +242,6 @@ func TestSuggestStages(t *testing.T) {
 	}{
 		{"zigbee", 2},
 		{"cellular", 3},
-		{"astrocast", 3},
 		{"mesh", 4},
 		{"iridium", 6},
 		{"webhook", 8},

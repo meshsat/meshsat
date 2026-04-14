@@ -18,7 +18,6 @@ const (
 	RoleCellular    DeviceRole = "cellular"
 	RoleGPS         DeviceRole = "gps"
 	RoleZigBee      DeviceRole = "zigbee"
-	RoleAstrocast   DeviceRole = "astrocast"
 	RoleNone        DeviceRole = ""
 )
 

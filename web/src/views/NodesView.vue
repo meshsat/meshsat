@@ -34,7 +34,6 @@ const transportBadgeClass = {
   iridium: 'bg-amber-900/40 text-amber-400',
   webhook: 'bg-purple-900/40 text-purple-400',
   mqtt: 'bg-indigo-900/40 text-indigo-400',
-  astrocast: 'bg-orange-900/40 text-orange-400',
   zigbee: 'bg-lime-900/40 text-lime-400',
 }
 
@@ -403,7 +402,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
             <div>
               <label class="text-[10px] text-gray-500 mb-0.5 block">Type</label>
               <select v-model="addressForm.type" class="w-full px-2 py-1 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200">
-                <option v-for="t in ['sms','mesh','iridium','webhook','mqtt','astrocast','zigbee']" :key="t" :value="t">{{ t }}</option>
+                <option v-for="t in ['sms','mesh','iridium','webhook','mqtt','zigbee']" :key="t" :value="t">{{ t }}</option>
               </select>
             </div>
             <div>
@@ -576,7 +575,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
                   <div>
                     <label class="text-[10px] text-gray-500 mb-0.5 block">Type</label>
                     <select v-model="addressForm.type" class="w-full px-2 py-1 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200">
-                      <option v-for="t in ['sms','mesh','iridium','webhook','mqtt','astrocast','zigbee']" :key="t" :value="t">{{ t }}</option>
+                      <option v-for="t in ['sms','mesh','iridium','webhook','mqtt','zigbee']" :key="t" :value="t">{{ t }}</option>
                     </select>
                   </div>
                   <div>

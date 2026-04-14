@@ -147,7 +147,7 @@ func TestDispatchAccess_MaxHopCount(t *testing.T) {
 		Text:    "too many hops",
 		From:    "!node",
 		PortNum: 1,
-		Visited: []string{"iridium_0", "cellular_0", "astrocast_0"},
+		Visited: []string{"iridium_0", "cellular_0", "zigbee_0"},
 	}
 	count := d.DispatchAccess("mesh_0", msg, []byte("too many hops"))
 	if count != 0 {

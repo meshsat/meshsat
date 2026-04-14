@@ -471,7 +471,7 @@ func autoDetectIridium(excludePort string) string {
 		}
 		vidpid := findUSBVIDPID(port)
 		if knownMeshtasticVIDPIDs[vidpid] || gpsVIDPIDs[vidpid] ||
-			knownCellularVIDPIDs[vidpid] || knownAstrocastVIDPIDs[vidpid] ||
+			knownCellularVIDPIDs[vidpid] ||
 			knownZigBeeOnlyVIDPIDs[vidpid] {
 			continue
 		}
@@ -567,7 +567,7 @@ func findUSBProduct(port string) string {
 }
 
 // ClassifyDevice returns the device type for a given VID:PID string.
-// Returns one of: "meshtastic", "iridium", "cellular", "astrocast", "zigbee", "gps", "unknown".
+// Returns one of: "meshtastic", "iridium", "cellular", "zigbee", "gps", "unknown".
 // Note: some VID:PIDs (CP210x, CH343) are shared by multiple device types.
 // For ambiguous matches, returns the most common type. Use protocol probing to disambiguate.
 func ClassifyDevice(vidpid string) string {
@@ -576,9 +576,6 @@ func ClassifyDevice(vidpid string) string {
 	}
 	if knownIridiumVIDPIDs[vidpid] {
 		return "iridium"
-	}
-	if knownAstrocastVIDPIDs[vidpid] {
-		return "astrocast"
 	}
 	if knownCellularVIDPIDs[vidpid] {
 		return "cellular"

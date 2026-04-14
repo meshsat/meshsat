@@ -189,7 +189,6 @@ func TestCoTTypeForDevice(t *testing.T) {
 		{DeviceMeshtastic, CoTMeshNode},
 		{DeviceIridiumSBD, CoTSatModem},
 		{DeviceIridiumIMT, CoTSatModem},
-		{DeviceAstrocast, CoTSatModem},
 		{DeviceCellular, CoTCellModem},
 		{DeviceZigBee, CoTMeshNode},
 		{DeviceAPRS, CoTMeshNode},

@@ -23,7 +23,6 @@ const bearerColors = {
   iridium_imt: '#f59e0b',
   cellular: '#8b5cf6',
   sms: '#a855f7',
-  astrocast: '#3b82f6',
   mqtt: '#10b981',
   tcp: '#6b7280',
   ax25: '#ef4444',

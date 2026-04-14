@@ -69,10 +69,6 @@ onMounted(() => {
             <span class="text-gray-400">Iridium SBD</span>
           </div>
           <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-teal-400"></span>
-            <span class="text-gray-400">Astrocast LEO</span>
-          </div>
-          <div class="flex items-center gap-2">
             <span class="w-2 h-2 rounded-full bg-sky-400"></span>
             <span class="text-gray-400">Cellular SMS</span>
           </div>

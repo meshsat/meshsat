@@ -182,7 +182,6 @@ func TestSetup_InitializesAllComponents(t *testing.T) {
 		{"Deduplicator", app.Deduplicator != nil},
 		{"SignalRecorder", app.SignalRecorder != nil},
 		{"TLEManager", app.TLEMgr != nil},
-		{"AstrocastTLEManager", app.AstroTLEMgr != nil},
 		{"APIServer", app.Server != nil},
 		{"HTTPServer", app.HTTPServer != nil},
 	}
@@ -193,12 +192,10 @@ func TestSetup_InitializesAllComponents(t *testing.T) {
 	}
 }
 
-// TestSetup_NoCellOrAstro verifies that Setup() handles nil Cell and Astro
-// transports gracefully.
-func TestSetup_NoCellOrAstro(t *testing.T) {
+// TestSetup_NoCell verifies that Setup() handles nil Cell transport gracefully.
+func TestSetup_NoCell(t *testing.T) {
 	app := testApp(t)
 	app.Cell = nil
-	app.Astro = nil
 	defer app.DB.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())

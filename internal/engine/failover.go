@@ -163,8 +163,6 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 			mtu = 340
 		case "iridium_imt":
 			mtu = 102400
-		case "astrocast":
-			mtu = 160
 		case "cellular", "sms":
 			mtu = 160
 		case "zigbee":
