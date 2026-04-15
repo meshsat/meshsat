@@ -14,6 +14,7 @@ import (
 	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
+	"meshsat/internal/spectrum"
 	"meshsat/internal/transport"
 )
 
@@ -50,6 +51,7 @@ type Server struct {
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
+	spectrumMon   *spectrum.SpectrumMonitor
 	restartFn     func()
 }
 
@@ -188,6 +190,11 @@ func (s *Server) SetInterfaceRegistry(reg *routing.InterfaceRegistry) {
 // SetTCPInterface sets the TCP Reticulum interface for peer management API.
 func (s *Server) SetTCPInterface(iface *routing.TCPInterface) {
 	s.tcpIface = iface
+}
+
+// SetSpectrumMonitor sets the RTL-SDR spectrum monitor for jamming detection.
+func (s *Server) SetSpectrumMonitor(sm *spectrum.SpectrumMonitor) {
+	s.spectrumMon = sm
 }
 
 // Router builds the chi router with all API routes.
@@ -513,6 +520,9 @@ func (s *Server) Router() http.Handler {
 		// Burst queue
 		r.Get("/burst/status", s.handleGetBurstStatus)
 		r.Post("/burst/flush", s.handleFlushBurst)
+
+		// Spectrum monitoring (RTL-SDR jamming detection)
+		r.Get("/spectrum/status", s.handleGetSpectrumStatus)
 
 		// Device registry (IMEI-keyed)
 		r.Get("/device-registry", s.handleGetRegisteredDevices)

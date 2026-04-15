@@ -19,9 +19,20 @@ type HealthScore struct {
 	Available   bool    `json:"available"`    // interface online?
 }
 
+// SpectrumChecker checks if an interface is currently jammed.
+type SpectrumChecker interface {
+	IsJammed(interfaceID string) bool
+}
+
 // HealthScorer computes composite health scores for transport interfaces.
 type HealthScorer struct {
-	db *database.DB
+	db       *database.DB
+	spectrum SpectrumChecker
+}
+
+// SetSpectrumChecker sets the spectrum monitor for jamming-aware health scoring.
+func (h *HealthScorer) SetSpectrumChecker(sc SpectrumChecker) {
+	h.spectrum = sc
 }
 
 // NewHealthScorer creates a new health scorer.
@@ -54,6 +65,13 @@ func (h *HealthScorer) Score(interfaceID string) HealthScore {
 
 	// Cost score based on channel type
 	hs.Cost = channelCostScore(iface.ChannelType)
+
+	// Spectrum: override to 0 if interface is jammed
+	if h.spectrum != nil && h.spectrum.IsJammed(interfaceID) {
+		hs.Signal = 0
+		hs.Score = 0
+		return hs
+	}
 
 	// Composite score
 	if !hs.Available {

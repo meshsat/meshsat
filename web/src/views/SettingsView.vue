@@ -762,12 +762,19 @@ async function toggleFloodable(iface) {
 let signalTimer = null
 
 const signingKeyFingerprint = ref('')
+const spectrumStatus = ref(null)
 
 async function loadSigningKey() {
   try {
     const res = await api.get('/api/keys/signing')
     if (res.fingerprint) signingKeyFingerprint.value = res.fingerprint
   } catch { /* key store may not be available */ }
+}
+
+async function loadSpectrumStatus() {
+  try {
+    spectrumStatus.value = await api.get('/api/spectrum/status')
+  } catch { /* spectrum monitor may not be available */ }
 }
 
 onMounted(async () => {
@@ -786,6 +793,7 @@ onMounted(async () => {
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
   loadSigningKey()
+  loadSpectrumStatus()
 })
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
@@ -2078,6 +2086,34 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div v-if="signingKeyFingerprint" class="flex items-center justify-between">
           <span class="text-xs text-gray-500">Bridge Signing Key</span>
           <span class="text-sm text-gray-300 font-mono">{{ signingKeyFingerprint }}</span>
+        </div>
+      </div>
+
+      <!-- Spectrum Monitor (RTL-SDR) -->
+      <div v-if="spectrumStatus" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mt-4">
+        <h4 class="text-sm font-medium text-gray-200 mb-3">Spectrum Monitor</h4>
+        <div v-if="!spectrumStatus.enabled" class="text-xs text-gray-500">RTL-SDR not detected. Plug in an RTL-SDR dongle and install rtl_power to enable jamming detection.</div>
+        <div v-else class="space-y-2">
+          <div v-for="band in spectrumStatus.bands" :key="band.band"
+            class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-medium text-gray-200">{{ band.label }}</span>
+              <span class="text-[10px] font-mono text-gray-500">{{ band.interface_id }}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span v-if="band.power_db" class="text-[10px] font-mono text-gray-500">{{ band.power_db.toFixed(1) }} dB</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                :class="{
+                  'bg-emerald-900/40 text-emerald-400': band.state === 'clear',
+                  'bg-red-900/40 text-red-400': band.state === 'jamming',
+                  'bg-amber-900/40 text-amber-400': band.state === 'interference',
+                  'bg-blue-900/40 text-blue-400': band.state === 'calibrating',
+                  'bg-gray-700 text-gray-400': band.state === 'disabled'
+                }">
+                {{ band.state }}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
