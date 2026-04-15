@@ -196,8 +196,12 @@ package:
 # Deploys to all configured devices in parallel using matrix strategy.
 # Each device has a primary and fallback address (e.g., wired vs wireless).
 # CI variables required per device:
-#   DEPLOY_ADDR_MULE01, DEPLOY_ADDR_ALT_MULE01
-#   DEPLOY_ADDR_BANANAPI01, DEPLOY_ADDR_ALT_BANANAPI01
+#   DEPLOY_ADDR_<TARGET>           — primary hostname/IP
+#   DEPLOY_ADDR_ALT_<TARGET>       — fallback hostname/IP (optional)
+#   DEPLOY_USER_<TARGET>           — SSH user (optional, defaults to "cubeos")
+# Field kits (parallax01, tesseract) use DEPLOY_USER=kyriakosp, path /srv/meshsat.
+# CubeOS devices use DEPLOY_USER=cubeos, path /cubeos/coreapps/meshsat/appconfig.
+# ci-deploy.sh auto-detects the layout based on which compose file exists.
 # -----------------------------------------------------------------------------
 deploy:
   stage: deploy
@@ -207,23 +211,24 @@ deploy:
     - package
   parallel:
     matrix:
-      - DEPLOY_TARGET: [mule01, rocket01]
+      - DEPLOY_TARGET: [parallax01]
   before_script:
     - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
     - echo "$CI_DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    # Resolve deploy addresses from per-device CI variables
+    # Resolve deploy addresses and SSH user from per-device CI variables
     - |
       UPPER_TARGET=$(echo "$DEPLOY_TARGET" | tr 'a-z' 'A-Z')
       eval "PRIMARY=\${DEPLOY_ADDR_${UPPER_TARGET}:-}"
       eval "ALT=\${DEPLOY_ADDR_ALT_${UPPER_TARGET}:-}"
+      eval "DEPLOY_USER=\${DEPLOY_USER_${UPPER_TARGET}:-cubeos}"
 
       _RESOLVED=""
       for ADDR in $PRIMARY $ALT; do
         [ -z "$ADDR" ] && continue
         ssh-keyscan -H "$ADDR" >> ~/.ssh/known_hosts 2>/dev/null || true
-        if ssh -o ConnectTimeout=5 -o BatchMode=yes "cubeos@${ADDR}" true 2>/dev/null; then
+        if ssh -o ConnectTimeout=5 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" true 2>/dev/null; then
           _RESOLVED="$ADDR"
           break
         fi
@@ -232,7 +237,7 @@ deploy:
         echo "ERROR: ${DEPLOY_TARGET} unreachable at ${PRIMARY} / ${ALT} — deploy FAILED"
         exit 1
       fi
-      export PI_DEPLOY_HOST="cubeos@${_RESOLVED}"
+      export PI_DEPLOY_HOST="${DEPLOY_USER}@${_RESOLVED}"
       echo "Deploy target: ${DEPLOY_TARGET} → ${PI_DEPLOY_HOST}"
   script:
     - |
