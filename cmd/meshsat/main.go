@@ -28,6 +28,7 @@ import (
 	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
+	"meshsat/internal/spectrum"
 	"meshsat/internal/sysinfo"
 	"meshsat/internal/timesync"
 	"meshsat/internal/transport"
@@ -583,6 +584,28 @@ func main() {
 		}
 	}
 
+	// BLE Reticulum interface — GATT peripheral via BlueZ D-Bus on Pi 5.
+	// Reticulum packets segmented into BLE chunks (SAR), reassembled on receive.
+	if cfg.BLEAdapter != "" {
+		bleIface, bleRI := routing.RegisterBLEInterface(routing.BLEInterfaceConfig{
+			Name:       "ble_0",
+			AdapterID:  cfg.BLEAdapter,
+			DeviceName: cfg.BLEDeviceName,
+		}, func(packet []byte) {
+			log.Debug().Int("size", len(packet)).Msg("ble_0: received reticulum packet via BLE")
+			proc.InjectReticulumPacket(packet, "ble_0")
+		})
+		if err := bleIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("ble reticulum interface start failed")
+		} else {
+			proc.RegisterPacketSender("ble_0", bleIface.Send)
+			if ifaceReg != nil {
+				ifaceReg.Register(bleRI)
+			}
+			log.Info().Str("adapter", cfg.BLEAdapter).Msg("ble reticulum interface started")
+		}
+	}
+
 	// MQTT Reticulum interface — raw binary pub/sub for multi-bridge mesh.
 	// When connecting to Hub's NATS broker (wss://), reuse mTLS certs from hub_connection.
 	if cfg.MQTTReticulumBroker != "" {
@@ -867,12 +890,35 @@ func main() {
 		log.Info().Msg("GPS reader started (auto-detect)")
 	}
 
+	// Spectrum monitor — RTL-SDR jamming detection (no CGO, uses rtl_power subprocess)
+	var spectrumMon *spectrum.SpectrumMonitor
+	rtlScanner := spectrum.NewRTLPowerScanner()
+	if rtlScanner != nil {
+		spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrum.DefaultBands)
+		if signingService != nil {
+			spectrumMon.SetSigningService(signingService)
+		}
+		spectrumMon.Start(ctx)
+		log.Info().Msg("spectrum monitor started (RTL-SDR detected)")
+	} else {
+		spectrumMon = spectrum.NewSpectrumMonitor(nil, spectrum.DefaultBands)
+		log.Info().Msg("spectrum monitor disabled (rtl_power not in PATH)")
+	}
+
 	// Burst queue — satellite message batching for pass-based sends
 	burstQueue := engine.NewBurstQueue(db, 10, 30*time.Minute)
 
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
 	srv.SetBurstQueue(burstQueue)
+	srv.SetSpectrumMonitor(spectrumMon)
+
+	// Health scorer — composite health scores for interfaces (with jamming awareness)
+	healthScorer := engine.NewHealthScorer(db)
+	if spectrumMon != nil {
+		healthScorer.SetSpectrumChecker(spectrumMon)
+	}
+	srv.SetHealthScorer(healthScorer)
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
