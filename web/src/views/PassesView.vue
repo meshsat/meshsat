@@ -502,8 +502,7 @@ onMounted(async () => {
     </div>
 
     <!-- Next pass highlight -->
-    <div v-if="nextPass" class="rounded-lg p-4 mb-4"
-      class="bg-tactical-iridium/5 border border-tactical-iridium/20"
+    <div v-if="nextPass" class="rounded-lg p-4 mb-4 bg-tactical-iridium/5 border border-tactical-iridium/20">
       <div class="flex items-center justify-between">
         <div>
           <span class="text-[10px] uppercase text-tactical-iridium/60">Next Pass</span>
@@ -696,11 +695,10 @@ onMounted(async () => {
           class="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors"
           :class="pass.is_active
             ? 'bg-tactical-iridium/10 border border-tactical-iridium/20'
-            : pass.isPast ? 'bg-gray-800/30 opacity-50' : 'bg-gray-800/50 hover:bg-gray-800'"
+            : pass.isPast ? 'bg-gray-800/30 opacity-50' : 'bg-gray-800/50 hover:bg-gray-800'">
 
           <!-- Active indicator -->
-          <span v-if="pass.is_active" class="w-2 h-2 rounded-full animate-pulse shrink-0"
-            class="bg-tactical-iridium" />
+          <span v-if="pass.is_active" class="w-2 h-2 rounded-full animate-pulse shrink-0 bg-tactical-iridium" />
           <span v-else class="w-2 h-2 rounded-full bg-gray-700 shrink-0" />
 
           <!-- Satellite name -->
