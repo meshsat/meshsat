@@ -98,15 +98,16 @@ type InterfaceInfo struct {
 
 // InterfaceHealth reports live metrics for a transport interface.
 type InterfaceHealth struct {
-	Name        string `json:"name"`
-	Status      string `json:"status"`
-	HealthScore int    `json:"health_score,omitempty"` // 0-100
-	SignalBars  int    `json:"signal_bars,omitempty"`  // 0-5 (satellite)
-	SignalDBm   int    `json:"signal_dbm,omitempty"`   // dBm (cellular)
-	Operator    string `json:"operator,omitempty"`     // cellular operator name
-	NodesSeen   int    `json:"nodes_seen,omitempty"`   // meshtastic peer count
-	MOCount     int64  `json:"mo_count,omitempty"`     // satellite MO messages sent
-	MTCount     int64  `json:"mt_count,omitempty"`     // satellite MT messages received
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	HealthScore   int    `json:"health_score,omitempty"`   // 0-100
+	SignalBars    int    `json:"signal_bars,omitempty"`    // 0-5 (satellite)
+	SignalDBm     int    `json:"signal_dbm,omitempty"`     // dBm (cellular)
+	Operator      string `json:"operator,omitempty"`       // cellular operator name
+	NodesSeen     int    `json:"nodes_seen,omitempty"`     // meshtastic peer count
+	MOCount       int64  `json:"mo_count,omitempty"`       // satellite MO messages sent
+	MTCount       int64  `json:"mt_count,omitempty"`       // satellite MT messages received
+	SpectrumState string `json:"spectrum_state,omitempty"` // clear/jamming/interference/disabled (RTL-SDR)
 }
 
 // ReticulumInfo describes the bridge's Reticulum identity.
@@ -168,20 +169,31 @@ type BridgeDeath struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// SpectrumBandHealth reports per-band RTL-SDR spectrum monitoring state.
+type SpectrumBandHealth struct {
+	Band        string  `json:"band"`         // e.g. "lora_868", "aprs_144"
+	InterfaceID string  `json:"interface_id"` // e.g. "mesh_0", "ax25_0"
+	State       string  `json:"state"`        // clear/jamming/interference/calibrating/disabled
+	PowerDB     float64 `json:"power_db"`
+	FreqLow     int     `json:"freq_low"`
+	FreqHigh    int     `json:"freq_high"`
+}
+
 // BridgeHealth is published periodically (default 30s).
 // Topic: meshsat/bridge/{bridge_id}/health (QoS 0)
 type BridgeHealth struct {
-	Protocol   string            `json:"protocol"`
-	BridgeID   string            `json:"bridge_id"`
-	UptimeSec  int64             `json:"uptime_sec"`
-	CPUPct     float64           `json:"cpu_pct"`
-	MemPct     float64           `json:"mem_pct"`
-	DiskPct    float64           `json:"disk_pct"`
-	Interfaces []InterfaceHealth `json:"interfaces"`
-	BurstQueue *BurstQueueInfo   `json:"burst_queue,omitempty"`
-	Reticulum  *ReticulumStats   `json:"reticulum,omitempty"`
-	Outbox     *OutboxInfo       `json:"outbox,omitempty"`
-	Timestamp  time.Time         `json:"timestamp"`
+	Protocol   string               `json:"protocol"`
+	BridgeID   string               `json:"bridge_id"`
+	UptimeSec  int64                `json:"uptime_sec"`
+	CPUPct     float64              `json:"cpu_pct"`
+	MemPct     float64              `json:"mem_pct"`
+	DiskPct    float64              `json:"disk_pct"`
+	Interfaces []InterfaceHealth    `json:"interfaces"`
+	Spectrum   []SpectrumBandHealth `json:"spectrum,omitempty"`
+	BurstQueue *BurstQueueInfo      `json:"burst_queue,omitempty"`
+	Reticulum  *ReticulumStats      `json:"reticulum,omitempty"`
+	Outbox     *OutboxInfo          `json:"outbox,omitempty"`
+	Timestamp  time.Time            `json:"timestamp"`
 }
 
 // --- Device lifecycle messages ---

@@ -1168,9 +1168,13 @@ func main() {
 				if ms, err := mesh.GetStatus(ctx); err == nil && ms.Connected {
 					meshStatus = "online"
 				}
-				health.Interfaces = append(health.Interfaces, hubreporter.InterfaceHealth{
+				ih := hubreporter.InterfaceHealth{
 					Name: "meshtastic", Status: meshStatus,
-				})
+				}
+				if spectrumMon != nil && spectrumMon.IsJammed("mesh_0") {
+					ih.SpectrumState = "jamming"
+				}
+				health.Interfaces = append(health.Interfaces, ih)
 			}
 
 			// Interface health — status from gateway manager
@@ -1179,7 +1183,24 @@ func main() {
 				if gs.Connected {
 					ih.Status = "online"
 				}
+				if spectrumMon != nil && spectrumMon.IsJammed(gs.InstanceID) {
+					ih.SpectrumState = "jamming"
+				}
 				health.Interfaces = append(health.Interfaces, ih)
+			}
+
+			// Spectrum monitoring (RTL-SDR)
+			if spectrumMon != nil && spectrumMon.Enabled() {
+				for _, bs := range spectrumMon.Status() {
+					health.Spectrum = append(health.Spectrum, hubreporter.SpectrumBandHealth{
+						Band:        bs.Band,
+						InterfaceID: bs.InterfaceID,
+						State:       string(bs.State),
+						PowerDB:     bs.PowerDB,
+						FreqLow:     bs.FreqLow,
+						FreqHigh:    bs.FreqHigh,
+					})
+				}
 			}
 
 			// Burst queue
