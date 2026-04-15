@@ -41,6 +41,7 @@ optimizes transmission timing in obstructed environments*
 
 ### Security
 - **AES-256-GCM encryption** per channel with cross-platform key exchange via QR bundles (`meshsat://key/` URI scheme)
+- **v2 key bundles** with embedded Ed25519 signing public key for TOFU (Trust On First Use) verification — Android pins the bridge's pubkey on first scan, subsequent scans are cryptographically verified
 - **Master key envelope encryption** (HKDF + AES-256-GCM key wrapping) with device-derived or passphrase-based master key
 - **Ed25519 signing service** with hash-chain audit log for tamper detection
 - **Credential management:** upload ZIP/PEM certificates, encrypted storage, expiry monitoring, Hub-to-bridge distribution via MQTT
@@ -250,6 +251,35 @@ All configuration is via environment variables. MeshSat works fine with just a s
 | `MESHSAT_AX25_CALLSIGN` | *(empty)* | AX.25 source callsign (e.g. `MESHSAT-1`) |
 | `MESHSAT_MQTT_RETICULUM_BROKER` | *(empty)* | MQTT broker for Reticulum packets (e.g. `tcp://broker:1883`) |
 | `MESHSAT_MQTT_RETICULUM_PREFIX` | `reticulum/meshsat` | MQTT topic prefix for RNS packets |
+
+**Key exchange:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MESHSAT_KEY_PASSPHRASE` | *(empty)* | Passphrase for master key derivation (empty = device-derived) |
+| `MESHSAT_BUNDLE_VERSION` | `v2` | Key bundle format: `v2` (with signing pubkey, TOFU) or `v1` (legacy) |
+
+### Key Bundles and TOFU Trust Model
+
+MeshSat uses QR-based key bundles (`meshsat://key/...`) to share AES-256 encryption keys between the bridge and the Android companion app. The bridge generates a signed binary bundle containing per-channel encryption keys, which the user scans as a QR code on the Android device.
+
+**v2 bundles** (default) embed the bridge's Ed25519 signing public key directly in the bundle. This enables Trust On First Use (TOFU) verification:
+
+1. **First scan:** Android pins the bridge's public key and marks the bundle as `NEW_TRUSTED`.
+2. **Subsequent scans:** Android verifies the Ed25519 signature against the pinned key. If valid: `EXISTING_TRUSTED`. If the key changed: `KeyMismatch` — the user must explicitly accept the new key.
+3. **Legacy v1 bundles** (from older bridges) are imported as `UNVERIFIED_V1` with a warning.
+
+**v2 binary format:**
+
+```
+Version(1)=0x02 | BridgeHash(16) | Timestamp(4) | EntryCount(1) | SigningPubkey(32) | Signature(64) | Entries...
+```
+
+The signature covers all bytes except the 64 signature bytes themselves (Version + BridgeHash + Timestamp + EntryCount + SigningPubkey + Entries), so the public key cannot be swapped without invalidating the signature.
+
+**Migration for existing users:** After upgrading the bridge, regenerate the QR code from Settings > Keys > Export. The first scan on Android will pin the new key.
+
+The bridge signing key fingerprint (first 16 hex chars of SHA-256 of the public key) is displayed in Settings > About for visual verification.
 
 ## Deployment Modes
 

@@ -203,6 +203,34 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
+// handleGetSigningKey returns the bridge's Ed25519 signing public key and fingerprint.
+// @Summary Get bridge signing key
+// @Description Returns the Ed25519 public key used to sign key bundles, plus a truncated SHA-256 fingerprint
+// @Tags keys
+// @Success 200 {object} map[string]string
+// @Router /api/keys/signing [get]
+func (s *Server) handleGetSigningKey(w http.ResponseWriter, r *http.Request) {
+	if s.keyStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "key store not available")
+		return
+	}
+
+	pub := s.keyStore.SigningPublicKey()
+	if pub == nil {
+		writeError(w, http.StatusServiceUnavailable, "signing key not available")
+		return
+	}
+
+	pubHex := hex.EncodeToString(pub)
+	fingerprint := keystore.SigningKeyFingerprint(pub)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"signing_pub": pubHex,
+		"fingerprint": fingerprint,
+		"algorithm":   "Ed25519",
+	})
+}
+
 // handleGetKeyStats returns key inventory statistics.
 // @Summary Key store statistics
 // @Description Returns counts of active, retired, and revoked keys

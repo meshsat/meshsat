@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -269,9 +270,15 @@ func (ks *KeyStore) CreateBundle(requests []BundleRequest) ([]byte, string, erro
 
 	bridgeHash := ks.identity.DestHash()
 
-	data, err := MarshalBundle(bridgeHash, entries, ks.identity)
-	if err != nil {
-		return nil, "", err
+	var data []byte
+	var marshalErr error
+	if os.Getenv("MESHSAT_BUNDLE_VERSION") == "v1" {
+		data, marshalErr = MarshalBundle(bridgeHash, entries, ks.identity)
+	} else {
+		data, marshalErr = MarshalBundleV2(bridgeHash, entries, ks.identity, ks.identity.SigningPublicKey())
+	}
+	if marshalErr != nil {
+		return nil, "", marshalErr
 	}
 
 	url := BundleToURL(data)

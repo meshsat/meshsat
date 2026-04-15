@@ -2,8 +2,10 @@ package keystore
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -277,6 +279,12 @@ func VerifyBundle(data []byte, signingPub ed25519.PublicKey) bool {
 	default:
 		return false
 	}
+}
+
+// SigningKeyFingerprint returns the first 16 hex chars of SHA-256(pubkey).
+func SigningKeyFingerprint(pub ed25519.PublicKey) string {
+	h := sha256.Sum256(pub)
+	return hex.EncodeToString(h[:8])
 }
 
 // BundleToURL encodes a bundle as a meshsat:// URL.

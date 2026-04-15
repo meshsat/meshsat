@@ -535,6 +535,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/keys/rotate", s.handleRotateKey)
 		r.Get("/keys", s.handleListKeys)
 		r.Get("/keys/stats", s.handleGetKeyStats)
+		r.Get("/keys/signing", s.handleGetSigningKey)
 		r.Delete("/keys/{type}/{address}", s.handleRevokeKey)
 
 		// Resource transfer (Reticulum chunked file delivery)

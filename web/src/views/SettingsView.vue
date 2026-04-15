@@ -761,6 +761,15 @@ async function toggleFloodable(iface) {
 // Signal polling
 let signalTimer = null
 
+const signingKeyFingerprint = ref('')
+
+async function loadSigningKey() {
+  try {
+    const res = await api.get('/api/keys/signing')
+    if (res.fingerprint) signingKeyFingerprint.value = res.fingerprint
+  } catch { /* key store may not be available */ }
+}
+
 onMounted(async () => {
   store.fetchConfig()
   await store.fetchGateways()
@@ -776,6 +785,7 @@ onMounted(async () => {
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
   fetchZigBeeStatus(); fetchZigBeeDevices()
   store.fetchRangeTests()
+  loadSigningKey()
 })
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
@@ -2064,6 +2074,10 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div class="flex items-center justify-between">
           <span class="text-xs text-gray-500">Nodes</span>
           <span class="text-sm text-gray-300">{{ store.status?.num_nodes || 0 }}</span>
+        </div>
+        <div v-if="signingKeyFingerprint" class="flex items-center justify-between">
+          <span class="text-xs text-gray-500">Bridge Signing Key</span>
+          <span class="text-sm text-gray-300 font-mono">{{ signingKeyFingerprint }}</span>
         </div>
       </div>
 
