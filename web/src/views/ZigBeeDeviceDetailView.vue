@@ -44,11 +44,11 @@ async function saveAlias() {
   } catch (e) { error.value = e.message }
 }
 
-async function sendCommand(cmd) {
+async function sendCommand(cmd, extra = {}) {
   try {
     commandSending.value = true
     commandResult.value = ''
-    await store.sendZigBeeDeviceCommand(props.addr, cmd)
+    await store.sendZigBeeDeviceCommand(props.addr, cmd, extra)
     commandResult.value = `Sent "${cmd}"`
     setTimeout(() => commandResult.value = '', 3000)
   } catch (e) {
@@ -57,6 +57,33 @@ async function sendCommand(cmd) {
     commandSending.value = false
   }
 }
+
+const levelInput = ref(128)
+const colorTempK = ref(3000)
+async function sendLevel() {
+  await sendCommand('level', { level: Math.max(0, Math.min(254, parseInt(levelInput.value, 10))) })
+}
+async function sendColorTemp() {
+  await sendCommand('color_temp', { kelvin: Math.max(1500, Math.min(7000, parseInt(colorTempK.value, 10))) })
+}
+
+// IAS Zone status helpers — decode the 16-bit bitmask the API returns into
+// human-readable badges. -1 means the device has never sent a zone-status
+// frame (most sensors), so the panel hides itself entirely.
+const zoneStatus = computed(() => {
+  if (!device.value || device.value.last_zone_status < 0) return null
+  const raw = device.value.last_zone_status
+  const flags = []
+  if (raw & 0x0001) flags.push({ key: 'alarm1', label: 'ALARM 1', tone: 'red' })
+  if (raw & 0x0002) flags.push({ key: 'alarm2', label: 'ALARM 2', tone: 'red' })
+  if (raw & 0x0004) flags.push({ key: 'tamper', label: 'TAMPER', tone: 'orange' })
+  if (raw & 0x0008) flags.push({ key: 'battery_low', label: 'LOW BATTERY', tone: 'amber' })
+  if (raw & 0x0040) flags.push({ key: 'trouble', label: 'TROUBLE', tone: 'orange' })
+  if (raw & 0x0080) flags.push({ key: 'ac_fault', label: 'AC FAULT', tone: 'orange' })
+  if (raw & 0x0100) flags.push({ key: 'test', label: 'TEST MODE', tone: 'gray' })
+  if (raw & 0x0200) flags.push({ key: 'battery_defect', label: 'BAT DEFECT', tone: 'red' })
+  return { raw, flags, triggered: (raw & 0x0007) !== 0 }
+})
 
 async function saveRouting() {
   try {
@@ -298,14 +325,42 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
         </button>
       </div>
 
+      <!-- IAS Zone alarm panel — only renders for devices that have ever
+           sent a zone-status frame (motion sensors, contacts, leak detectors,
+           tamper switches). [MESHSAT-509] -->
+      <div v-if="zoneStatus" class="bg-tactical-surface rounded-lg border p-5 mb-4"
+        :class="zoneStatus.triggered ? 'border-red-500/50' : 'border-tactical-border'">
+        <h2 class="text-sm font-semibold mb-3 flex items-center gap-2"
+          :class="zoneStatus.triggered ? 'text-red-400' : 'text-gray-300'">
+          <span :class="zoneStatus.triggered ? 'animate-pulse' : ''">●</span>
+          IAS Zone status
+          <span class="font-mono text-[10px] text-gray-600">0x{{ zoneStatus.raw.toString(16).padStart(4, '0') }}</span>
+        </h2>
+        <div v-if="zoneStatus.flags.length === 0" class="text-emerald-400 text-xs">All clear</div>
+        <div v-else class="flex flex-wrap gap-2">
+          <span v-for="f in zoneStatus.flags" :key="f.key"
+            class="px-2 py-1 rounded text-[11px] font-medium border"
+            :class="{
+              'bg-red-500/10 text-red-400 border-red-500/30 animate-pulse': f.tone === 'red',
+              'bg-orange-500/10 text-orange-400 border-orange-500/30': f.tone === 'orange',
+              'bg-amber-500/10 text-amber-400 border-amber-500/30': f.tone === 'amber',
+              'bg-gray-500/10 text-gray-400 border-gray-500/30': f.tone === 'gray',
+            }">
+            {{ f.label }}
+          </span>
+        </div>
+      </div>
+
       <!-- Command panel -->
       <div class="bg-tactical-surface rounded-lg border border-tactical-border p-5 mb-4">
-        <h2 class="text-sm font-semibold text-gray-300 mb-3">Send command (OnOff cluster)</h2>
+        <h2 class="text-sm font-semibold text-gray-300 mb-3">Send commands</h2>
         <div class="text-[10px] text-gray-500 mb-3">
-          Only effective on devices that implement ZCL cluster 0x0006 (switches, lights, smart plugs).
-          Sensor-only devices will silently ignore.
+          OnOff (cluster 0x0006), Level (0x0008), Color Temperature (0x0300 cmd 0x0a).
+          Sensor-only devices will silently ignore. Tested on Sengled / IKEA / Hue / Tuya bulbs.
         </div>
-        <div class="flex items-center gap-2 flex-wrap">
+
+        <!-- OnOff buttons -->
+        <div class="flex items-center gap-2 flex-wrap mb-4">
           <button @click="sendCommand('on')" :disabled="commandSending"
             class="px-4 py-1.5 rounded text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-40">
             Turn ON
@@ -318,10 +373,46 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
             class="px-4 py-1.5 rounded text-xs bg-violet-500/10 text-violet-400 border border-violet-500/30 hover:bg-violet-500/20 disabled:opacity-40">
             Toggle
           </button>
-          <span v-if="commandResult" class="text-[11px]"
-            :class="commandResult.startsWith('Error') ? 'text-red-400' : 'text-emerald-400'">
-            {{ commandResult }}
-          </span>
+        </div>
+
+        <!-- Level slider -->
+        <div class="border-t border-tactical-border pt-3 mb-4">
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-[11px] text-gray-400">Brightness (0-254)</label>
+            <span class="font-mono text-[11px] text-gray-300">{{ levelInput }} ({{ Math.round(levelInput / 254 * 100) }}%)</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <input type="range" v-model="levelInput" min="0" max="254" step="1"
+              class="flex-1 accent-yellow-400" />
+            <button @click="sendLevel" :disabled="commandSending"
+              class="px-3 py-1.5 rounded text-xs bg-yellow-400/10 text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/20 disabled:opacity-40">
+              Set level
+            </button>
+          </div>
+        </div>
+
+        <!-- Color temperature slider (tunable white) -->
+        <div class="border-t border-tactical-border pt-3">
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-[11px] text-gray-400">Color temperature (Kelvin)</label>
+            <span class="font-mono text-[11px] text-gray-300">{{ colorTempK }}K</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <input type="range" v-model="colorTempK" min="2000" max="6500" step="100"
+              class="flex-1"
+              :style="{
+                background: 'linear-gradient(to right, #ffaa55 0%, #ffd9a8 30%, #fff8e7 60%, #d1e3ff 100%)'
+              }" />
+            <button @click="sendColorTemp" :disabled="commandSending"
+              class="px-3 py-1.5 rounded text-xs bg-yellow-400/10 text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/20 disabled:opacity-40">
+              Set temp
+            </button>
+          </div>
+        </div>
+
+        <div v-if="commandResult" class="mt-3 text-[11px]"
+          :class="commandResult.startsWith('Error') ? 'text-red-400' : 'text-emerald-400'">
+          {{ commandResult }}
         </div>
       </div>
 

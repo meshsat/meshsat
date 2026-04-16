@@ -39,11 +39,12 @@ type ZigBeeDevice struct {
 	Humidity     *float64  `json:"humidity,omitempty"`    // percent (from cluster 0x0405) [MESHSAT-511]
 	BatteryPct   int       `json:"battery_pct"`           // 0-100, -1 = unknown (from cluster 0x0001 attr 0x0021) [MESHSAT-509]
 	OnOff        int       `json:"onoff"`                 // 0/1, -1 = unknown (from cluster 0x0006) [MESHSAT-509]
+	ZoneStatus   int       `json:"zone_status"`           // -1 unknown, otherwise 16-bit IAS Zone bitmask [MESHSAT-509]
 }
 
 // ZigBeeEvent is emitted when data arrives from a ZigBee device.
 type ZigBeeEvent struct {
-	Type        string       `json:"type"` // "data", "join", "leave", "temperature", "humidity", "onoff", "battery"
+	Type        string       `json:"type"` // "data", "join", "leave", "temperature", "humidity", "onoff", "battery", "ias_zone"
 	Device      ZigBeeDevice `json:"device"`
 	ClusterID   uint16       `json:"cluster_id"`
 	Data        []byte       `json:"data"`
@@ -52,17 +53,69 @@ type ZigBeeEvent struct {
 	Humidity    *float64     `json:"humidity,omitempty"`    // decoded percent [MESHSAT-511]
 	BatteryPct  *int         `json:"battery_pct,omitempty"` // decoded 0-100 [MESHSAT-509]
 	OnOff       *bool        `json:"onoff,omitempty"`       // decoded boolean [MESHSAT-509]
+	ZoneStatus  *ZoneStatus  `json:"zone_status,omitempty"` // IAS Zone status flags [MESHSAT-509]
+}
+
+// ZoneStatus is the decoded IAS Zone Status Change Notification (cluster
+// 0x0500, cmd 0x00). The Raw field holds the 16-bit bitmask straight off
+// the wire; the named booleans are convenience accessors. [MESHSAT-509]
+//
+// Bit map (ZCL 8.2.2.4.1):
+//
+//	0x0001 Alarm1          — primary alarm (motion / contact open / leak detected)
+//	0x0002 Alarm2          — secondary alarm
+//	0x0004 Tamper          — device housing has been opened
+//	0x0008 BatteryLow      — battery below threshold
+//	0x0010 SupervisionRpts — device supports supervision reporting
+//	0x0020 RestoreRpts     — device supports restore reporting
+//	0x0040 Trouble         — sensor not operating correctly
+//	0x0080 ACMainsFault    — sensor's AC mains supply has failed
+//	0x0100 TestMode        — sensor in test mode
+//	0x0200 BatteryDefect   — battery defect detected
+type ZoneStatus struct {
+	Raw           uint16 `json:"raw"`
+	Alarm1        bool   `json:"alarm1"` // motion / contact / leak
+	Alarm2        bool   `json:"alarm2"`
+	Tamper        bool   `json:"tamper"`
+	BatteryLow    bool   `json:"battery_low"`
+	Trouble       bool   `json:"trouble"`
+	ACMainsFault  bool   `json:"ac_mains_fault"`
+	TestMode      bool   `json:"test_mode"`
+	BatteryDefect bool   `json:"battery_defect"`
+	// Triggered is true if any user-visible alarm bit is set
+	// (Alarm1 or Alarm2 or Tamper). Used to drive the UI badge.
+	Triggered bool `json:"triggered"`
+}
+
+func decodeZoneStatus(raw uint16) ZoneStatus {
+	zs := ZoneStatus{
+		Raw:           raw,
+		Alarm1:        raw&0x0001 != 0,
+		Alarm2:        raw&0x0002 != 0,
+		Tamper:        raw&0x0004 != 0,
+		BatteryLow:    raw&0x0008 != 0,
+		Trouble:       raw&0x0040 != 0,
+		ACMainsFault:  raw&0x0080 != 0,
+		TestMode:      raw&0x0100 != 0,
+		BatteryDefect: raw&0x0200 != 0,
+	}
+	zs.Triggered = zs.Alarm1 || zs.Alarm2 || zs.Tamper
+	return zs
 }
 
 // ZCL cluster IDs we decode [MESHSAT-509, MESHSAT-511]
 const (
 	ZCLClusterPowerCfg    = 0x0001 // PowerConfiguration — battery percent
 	ZCLClusterOnOff       = 0x0006 // On/Off — switch/light state
+	ZCLClusterLevelCtrl   = 0x0008 // Level Control — dimmer brightness
+	ZCLClusterColorCtrl   = 0x0300 // Color Control — RGB / color temperature
+	ZCLClusterIASZone     = 0x0500 // IAS Zone — door/motion/leak sensors
 	ZCLClusterTemperature = 0x0402
 	ZCLClusterHumidity    = 0x0405
 	ZCLAttrBatteryPercent = 0x0021 // PowerConfiguration cluster
 	ZCLAttrOnOffState     = 0x0000 // OnOff cluster
 	ZCLAttrMeasuredValue  = 0x0000 // Temp/Humidity clusters
+	ZCLAttrZoneStatus     = 0x0002 // IAS Zone — current zone status (uint16)
 )
 
 // ZigBeeStore is the persistence interface implemented by *database.DB. The
@@ -172,6 +225,7 @@ func (z *DirectZigBeeTransport) hydrateFromStore() {
 			Humidity:     d.LastHumidity,
 			BatteryPct:   d.BatteryPct,
 			OnOff:        d.LastOnOff,
+			ZoneStatus:   d.LastZoneStatus,
 		}
 		if t, err := time.Parse("2006-01-02 15:04:05", d.LastSeen); err == nil {
 			dev.LastSeen = t
@@ -188,17 +242,18 @@ func (z *DirectZigBeeTransport) persistDevice(dev *ZigBeeDevice) {
 		return
 	}
 	rec := &database.ZigBeeDevice{
-		IEEEAddr:     dev.IEEEAddr,
-		ShortAddr:    int(dev.ShortAddr),
-		Alias:        dev.Alias,
-		Manufacturer: dev.Manufacturer,
-		Model:        dev.Model,
-		Endpoint:     int(dev.Endpoint),
-		LQI:          int(dev.LQI),
-		BatteryPct:   dev.BatteryPct,
-		LastTemp:     dev.Temperature,
-		LastHumidity: dev.Humidity,
-		LastOnOff:    dev.OnOff,
+		IEEEAddr:       dev.IEEEAddr,
+		ShortAddr:      int(dev.ShortAddr),
+		Alias:          dev.Alias,
+		Manufacturer:   dev.Manufacturer,
+		Model:          dev.Model,
+		Endpoint:       int(dev.Endpoint),
+		LQI:            int(dev.LQI),
+		BatteryPct:     dev.BatteryPct,
+		LastTemp:       dev.Temperature,
+		LastHumidity:   dev.Humidity,
+		LastOnOff:      dev.OnOff,
+		LastZoneStatus: dev.ZoneStatus,
 	}
 	if rec.IEEEAddr == "" {
 		// Some devices report sensor data before sending their announce frame
@@ -417,6 +472,7 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 
 	go z.readLoop(ctx)
 	go z.reinitLoop(ctx)
+	go z.periodicRefreshLoop(ctx) // [MESHSAT-509] keep sensor values fresh
 
 	// Hydrate the in-memory device cache from DB so the API and any
 	// dashboard widget see previously-paired devices immediately, even
@@ -501,6 +557,14 @@ func (z *DirectZigBeeTransport) SendReadAttributes(dstAddr uint16, dstEP byte, c
 // (so paired devices' values populate immediately rather than after the
 // device's next scheduled report) and from the device-detail "Refresh"
 // button. Endpoint defaults to 1 if the cached value is 0.
+//
+// **Reads are issued sequentially with 4s gaps**: Z-Stack's indirect message
+// buffer for sleepy children holds messages with a default ~7.68s TTL, and
+// a Tuya end-device polls roughly every 7s. Sending all three reads back-
+// to-back caused 2 of 3 to TTL-expire before the device polled again
+// (observed live on tesseract: only the temperature read got a response).
+// Spacing them 4s apart gives each read its own poll window. Total runtime
+// is ~12s which is fine — this runs in a goroutine.
 func (z *DirectZigBeeTransport) RefreshDeviceSensors(shortAddr uint16) {
 	z.mu.Lock()
 	dev, ok := z.devices[shortAddr]
@@ -513,12 +577,61 @@ func (z *DirectZigBeeTransport) RefreshDeviceSensors(shortAddr uint16) {
 		ep = 1
 	}
 	z.mu.Unlock()
-	// Best-effort — ignore errors here. The reads are sent indirect to a
-	// sleepy end-device; failures are common (queue full, device asleep
-	// past its mac age) and not worth surfacing.
-	_ = z.SendReadAttributes(shortAddr, ep, ZCLClusterTemperature, ZCLAttrMeasuredValue)
-	_ = z.SendReadAttributes(shortAddr, ep, ZCLClusterHumidity, ZCLAttrMeasuredValue)
-	_ = z.SendReadAttributes(shortAddr, ep, ZCLClusterPowerCfg, ZCLAttrBatteryPercent)
+
+	reads := []struct {
+		cluster uint16
+		attr    uint16
+		label   string
+	}{
+		{ZCLClusterTemperature, ZCLAttrMeasuredValue, "temperature"},
+		{ZCLClusterHumidity, ZCLAttrMeasuredValue, "humidity"},
+		{ZCLClusterPowerCfg, ZCLAttrBatteryPercent, "battery"},
+	}
+	for i, r := range reads {
+		if i > 0 {
+			time.Sleep(4 * time.Second)
+		}
+		if err := z.SendReadAttributes(shortAddr, ep, r.cluster, r.attr); err != nil {
+			log.Debug().Err(err).Str("kind", r.label).Uint16("addr", shortAddr).
+				Msg("zigbee: refresh read failed (sleepy device, will retry next cycle)")
+		}
+	}
+}
+
+// periodicRefreshLoop wakes every interval and runs RefreshDeviceSensors
+// for every paired device. Keeps the device-manager UI showing reasonably-
+// current values without the user having to mash the "Refresh now" button,
+// and bridges the gap before sleepy devices' natural 30-min report cycle.
+// Interval defaults to 5 minutes — short enough to feel live, long enough
+// to not exhaust battery (~12 mac polls per device per refresh).
+func (z *DirectZigBeeTransport) periodicRefreshLoop(ctx context.Context) {
+	const interval = 5 * time.Minute
+	// Initial delay so we don't pile reads on top of the announce-triggered
+	// refresh during the first ~30s after Start.
+	timer := time.NewTimer(2 * time.Minute)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		z.mu.Lock()
+		shorts := make([]uint16, 0, len(z.devices))
+		for s, d := range z.devices {
+			if d.IEEEAddr == "" {
+				continue // skip half-known devices; they'll show up properly after the next announce
+			}
+			shorts = append(shorts, s)
+		}
+		z.mu.Unlock()
+		for _, s := range shorts {
+			z.RefreshDeviceSensors(s)
+			// Small gap between devices so we don't flood the chip.
+			time.Sleep(2 * time.Second)
+		}
+		timer.Reset(interval)
+	}
 }
 
 // SendOnOffCommand sends a ZCL OnOff cluster (0x0006) command to a device.
@@ -546,15 +659,145 @@ func (z *DirectZigBeeTransport) SendOnOffCommand(dstAddr uint16, dstEP byte, cmd
 	return z.Send(dstAddr, dstEP, ZCLClusterOnOff, zcl)
 }
 
+// SendLevelCommand sends a ZCL Level Control (0x0008) Move-To-Level-With-OnOff
+// (cmd 0x04). Level is clamped to 0-254 (255 = "use previous value" in the
+// spec, which most devices treat as "do nothing"). transitionDeciseconds is
+// the fade duration (in 1/10s units) — 0 = instant, 0xFFFF = "use device
+// default". [MESHSAT-509]
+//
+// We use the *WithOnOff variant rather than plain Move-To-Level (0x00)
+// because users expect "set brightness 0" to also turn the light off, and
+// "set brightness 50% on a dark light" to also turn it on. The plain
+// variant changes the level register but doesn't toggle OnOff state, which
+// is rarely what anyone wants from a UI slider.
+func (z *DirectZigBeeTransport) SendLevelCommand(dstAddr uint16, dstEP byte, level byte, transitionDeciseconds uint16) error {
+	if level > 254 {
+		level = 254
+	}
+	z.mu.Lock()
+	z.transID++
+	tsn := z.transID
+	z.mu.Unlock()
+	// ZCL frame: [FCF=0x01] [TSN] [Cmd=0x04 MoveToLevelWithOnOff] [Level] [Transition LE]
+	zcl := []byte{
+		0x01, tsn, 0x04,
+		level,
+		byte(transitionDeciseconds), byte(transitionDeciseconds >> 8),
+	}
+	return z.Send(dstAddr, dstEP, ZCLClusterLevelCtrl, zcl)
+}
+
+// SendColorCommand sends a ZCL Color Control (0x0300) Move-To-Color
+// (cmd 0x07) using the CIE xy color space. x and y are uint16 values
+// scaled 0..65279 (= xy 0.0..1.0). [MESHSAT-509]
+//
+// Move-To-Color is the most-portable color command — Move-To-Hue and
+// Move-To-Saturation depend on the device implementing the optional Hue/Sat
+// attribute set, while every spec-compliant color light supports xy.
+// Callers that have hue/sat handy should convert to xy before sending.
+func (z *DirectZigBeeTransport) SendColorCommand(dstAddr uint16, dstEP byte, x, y uint16, transitionDeciseconds uint16) error {
+	z.mu.Lock()
+	z.transID++
+	tsn := z.transID
+	z.mu.Unlock()
+	zcl := []byte{
+		0x01, tsn, 0x07, // FCF, TSN, Cmd=0x07 Move-To-Color
+		byte(x), byte(x >> 8),
+		byte(y), byte(y >> 8),
+		byte(transitionDeciseconds), byte(transitionDeciseconds >> 8),
+	}
+	return z.Send(dstAddr, dstEP, ZCLClusterColorCtrl, zcl)
+}
+
+// SendColorTempCommand sends ZCL Color Control Move-To-Color-Temperature
+// (cmd 0x0a). `mireds` = 1e6 / Kelvin — typical range is 153 (6500K cool)
+// to 500 (2000K warm). Used for tunable-white bulbs.
+func (z *DirectZigBeeTransport) SendColorTempCommand(dstAddr uint16, dstEP byte, mireds uint16, transitionDeciseconds uint16) error {
+	z.mu.Lock()
+	z.transID++
+	tsn := z.transID
+	z.mu.Unlock()
+	zcl := []byte{
+		0x01, tsn, 0x0a, // FCF, TSN, Cmd=0x0a Move-To-Color-Temperature
+		byte(mireds), byte(mireds >> 8),
+		byte(transitionDeciseconds), byte(transitionDeciseconds >> 8),
+	}
+	return z.Send(dstAddr, dstEP, ZCLClusterColorCtrl, zcl)
+}
+
 // ForgetDevice removes a device from the in-memory cache. Used by the
-// "unpair" UI button after the DB row has been cleared. The device will
-// re-appear on its next announce — a true unpair would also send
-// ZDO_MGMT_LEAVE_REQ to evict it from the network, which is left for a
-// follow-up.
+// "unpair" UI button after the DB row has been cleared. Best-effort: we
+// also send ZDO_MGMT_LEAVE_REQ to evict the device from the Z-Stack
+// network so it doesn't silently rejoin. Failures (chip not ready, device
+// already gone, leave SRSP non-zero) are logged but don't block local
+// state cleanup — the user clicked "Forget", they want it gone from the
+// UI even if the radio command misfires. [MESHSAT-509]
 func (z *DirectZigBeeTransport) ForgetDevice(shortAddr uint16) {
 	z.mu.Lock()
-	defer z.mu.Unlock()
+	dev, ok := z.devices[shortAddr]
 	delete(z.devices, shortAddr)
+	z.mu.Unlock()
+	if !ok || dev.IEEEAddr == "" {
+		return
+	}
+	// Decode the cached IEEE hex back to 8 bytes for the leave frame.
+	// IEEEAddr is the big-endian human form (set by handleDeviceAnnounce);
+	// MgmtLeaveReq wants little-endian on the wire.
+	ieeeBE, err := hexDecodeIEEE(dev.IEEEAddr)
+	if err != nil {
+		log.Warn().Err(err).Str("ieee", dev.IEEEAddr).Msg("zigbee: forget — bad IEEE, skipping leave req")
+		return
+	}
+	var ieeeLE [8]byte
+	for i := 0; i < 8; i++ {
+		ieeeLE[i] = ieeeBE[7-i]
+	}
+	go func() {
+		// Run on its own goroutine so the API handler returns immediately.
+		// Take serialMu so we don't race the readLoop.
+		z.serialMu.Lock()
+		defer z.serialMu.Unlock()
+		if err := z.sendFrame(BuildMgmtLeaveReq(shortAddr, ieeeLE)); err != nil {
+			log.Warn().Err(err).Uint16("addr", shortAddr).Msg("zigbee: leave req send failed")
+			return
+		}
+		// Best-effort wait for the SRSP — don't care about the body, just
+		// that the chip accepted the frame.
+		if _, err := z.readCmdFrameTimeout(CmdZDOMgmtLeaveRsp, 2*time.Second); err != nil {
+			log.Debug().Err(err).Msg("zigbee: leave req SRSP timeout (proceeding)")
+		}
+		log.Info().Uint16("addr", shortAddr).Str("ieee", dev.IEEEAddr).
+			Msg("zigbee: ZDO_MGMT_LEAVE_REQ sent")
+	}()
+}
+
+// hexDecodeIEEE turns "38b15462626ff512" (16 hex chars, big-endian human
+// form) into an 8-byte big-endian array.
+func hexDecodeIEEE(s string) ([8]byte, error) {
+	var out [8]byte
+	if len(s) != 16 {
+		return out, fmt.Errorf("ieee hex: expected 16 chars, got %d", len(s))
+	}
+	for i := 0; i < 8; i++ {
+		var b byte
+		for j := 0; j < 2; j++ {
+			c := s[i*2+j]
+			var nib byte
+			switch {
+			case c >= '0' && c <= '9':
+				nib = c - '0'
+			case c >= 'a' && c <= 'f':
+				nib = c - 'a' + 10
+			case c >= 'A' && c <= 'F':
+				nib = c - 'A' + 10
+			default:
+				return out, fmt.Errorf("ieee hex: bad char %q at index %d", c, i*2+j)
+			}
+			b = (b << 4) | nib
+		}
+		out[i] = b
+	}
+	return out, nil
 }
 
 // Send sends data to a specific ZigBee device endpoint. Returns an error
@@ -1171,7 +1414,7 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 	z.mu.Lock()
 	dev, ok := z.devices[msg.SrcAddr]
 	if !ok {
-		dev = &ZigBeeDevice{ShortAddr: msg.SrcAddr, Endpoint: msg.SrcEP, BatteryPct: -1, OnOff: -1}
+		dev = &ZigBeeDevice{ShortAddr: msg.SrcAddr, Endpoint: msg.SrcEP, BatteryPct: -1, OnOff: -1, ZoneStatus: -1}
 		z.devices[msg.SrcAddr] = dev
 	}
 	if dev.Endpoint == 0 {
@@ -1182,15 +1425,16 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 
 	// Decode ZCL Report Attributes for known clusters [MESHSAT-509, MESHSAT-511]
 	var (
-		temperature *float64
-		humidity    *float64
-		battery     *int
-		onoff       *bool
-		evtType     = "data"
-		valueNum    *float64
-		valueText   string
-		unit        string
-		attrID      uint16
+		temperature   *float64
+		humidity      *float64
+		battery       *int
+		onoff         *bool
+		zoneStatusPtr *ZoneStatus
+		evtType       = "data"
+		valueNum      *float64
+		valueText     string
+		unit          string
+		attrID        uint16
 	)
 
 	switch msg.ClusterID {
@@ -1247,6 +1491,32 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 			attrID = attr
 			log.Info().Uint16("src", msg.SrcAddr).Bool("on", b).Msg("zigbee: onoff state")
 		}
+	case ZCLClusterIASZone:
+		// Zone Status Change Notification: cluster-specific (FCF=0x09),
+		// cmd=0x00, payload = ZoneStatus(2 LE) + ExtendedStatus(1) +
+		// ZoneID(1) + Delay(2 LE). We only care about ZoneStatus. Also
+		// handle the attribute-report path (attr 0x0002, ZoneStatus uint16)
+		// which some devices use for periodic status echoes.
+		if zs, attr, ok := decodeIASZoneStatus(msg.Data); ok {
+			zonePtr := zs
+			zoneStatusPtr = &zonePtr
+			dev.ZoneStatus = int(zs.Raw)
+			// Surface battery-low via the battery cluster path too so the
+			// shared "low battery" widget shows up even for devices that
+			// don't implement cluster 0x0001.
+			if zs.BatteryLow && dev.BatteryPct < 0 {
+				dev.BatteryPct = 1 // "warning" sentinel — 0 means fully drained
+			}
+			evtType = "ias_zone"
+			attrID = attr
+			fv := float64(zs.Raw)
+			valueNum = &fv
+			valueText = iasZoneText(&zs)
+			log.Info().Uint16("src", msg.SrcAddr).Uint16("raw", zs.Raw).
+				Bool("triggered", zs.Triggered).Bool("alarm1", zs.Alarm1).
+				Bool("tamper", zs.Tamper).Bool("battery_low", zs.BatteryLow).
+				Msg("zigbee: IAS zone status")
+		}
 	}
 	devSnapshot := *dev
 	z.mu.Unlock()
@@ -1275,7 +1545,73 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 		Humidity:    humidity,
 		BatteryPct:  battery,
 		OnOff:       onoff,
+		ZoneStatus:  zoneStatusPtr,
 	})
+}
+
+// decodeIASZoneStatus pulls the zone status off either:
+//
+//	cmd 0x00 (Zone Status Change Notification) — the device-pushed alarm.
+//	  Frame: FCF=0x09, TSN, Cmd=0x00, Status(2 LE), ExtStatus(1), ZoneID(1), Delay(2 LE)
+//
+//	or the attribute-report path on attr 0x0002 (ZoneStatus uint16):
+//	  Frame: FCF, TSN, [Cmd=0x0a optional], AttrID(2 LE)=0x0002, DT=0x21, Val(2 LE)
+//
+// Returns (zs, attrID, true) on success. attrID is 0xFFFF for the cmd 0x00
+// path so the persisted reading is distinguishable from an attr report.
+func decodeIASZoneStatus(data []byte) (ZoneStatus, uint16, bool) {
+	if len(data) < 5 {
+		return ZoneStatus{}, 0, false
+	}
+	cmd := data[2]
+	// Path 1: Zone Status Change Notification (cluster-specific cmd 0x00).
+	// FCF bit 0 must be 1 (cluster-specific) — typical FCF is 0x09 or 0x19.
+	if cmd == 0x00 && data[0]&0x01 != 0 && len(data) >= 5 {
+		raw := uint16(data[3]) | uint16(data[4])<<8
+		return decodeZoneStatus(raw), 0xFFFF, true
+	}
+	// Path 2: attribute report for attr 0x0002 ZoneStatus (uint16).
+	if attr, val, ok := decodeZCLUint16Report(data); ok && attr == ZCLAttrZoneStatus {
+		return decodeZoneStatus(val), attr, true
+	}
+	return ZoneStatus{}, 0, false
+}
+
+// iasZoneText turns a ZoneStatus into a short human-readable token used for
+// the value_text column + UI badge. Multiple flags are joined with "+".
+func iasZoneText(zs *ZoneStatus) string {
+	if zs == nil {
+		return ""
+	}
+	var parts []string
+	if zs.Alarm1 {
+		parts = append(parts, "alarm1")
+	}
+	if zs.Alarm2 {
+		parts = append(parts, "alarm2")
+	}
+	if zs.Tamper {
+		parts = append(parts, "tamper")
+	}
+	if zs.BatteryLow {
+		parts = append(parts, "battery_low")
+	}
+	if zs.Trouble {
+		parts = append(parts, "trouble")
+	}
+	if zs.ACMainsFault {
+		parts = append(parts, "ac_fault")
+	}
+	if zs.TestMode {
+		parts = append(parts, "test")
+	}
+	if zs.BatteryDefect {
+		parts = append(parts, "battery_defect")
+	}
+	if len(parts) == 0 {
+		return "clear"
+	}
+	return strings.Join(parts, "+")
 }
 
 // ZCL Report Attributes frame layout (cmd 0x0a):
@@ -1377,6 +1713,7 @@ func (z *DirectZigBeeTransport) handleDeviceAnnounce(f ZNPFrame) {
 		LastSeen:   time.Now(),
 		BatteryPct: -1,
 		OnOff:      -1,
+		ZoneStatus: -1,
 	}
 	if hadRow {
 		dev.Alias = existing.Alias
@@ -1390,6 +1727,9 @@ func (z *DirectZigBeeTransport) handleDeviceAnnounce(f ZNPFrame) {
 		}
 		if existing.OnOff >= 0 {
 			dev.OnOff = existing.OnOff
+		}
+		if existing.ZoneStatus >= 0 {
+			dev.ZoneStatus = existing.ZoneStatus
 		}
 	}
 	z.devices[srcAddr] = dev

@@ -123,8 +123,16 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
         <!-- Top row: name + online status -->
         <div class="flex items-start justify-between gap-2 mb-3">
           <div class="min-w-0 flex-1">
-            <div class="font-medium text-gray-100 truncate" :title="dev.display_name">
-              {{ dev.display_name || dev.alias || ('ZB-' + dev.short_addr) }}
+            <div class="flex items-center gap-2">
+              <div class="font-medium text-gray-100 truncate" :title="dev.display_name">
+                {{ dev.display_name || dev.alias || ('ZB-' + dev.short_addr) }}
+              </div>
+              <span v-if="(dev.last_zone_status & 0x0007) !== 0" class="px-1.5 py-0.5 text-[9px] font-medium rounded bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
+                ALARM
+              </span>
+              <span v-else-if="(dev.last_zone_status & 0x0008) !== 0" class="px-1.5 py-0.5 text-[9px] font-medium rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                LOW BAT
+              </span>
             </div>
             <div class="font-mono text-[10px] text-gray-500 truncate" :title="dev.ieee_addr">
               {{ dev.ieee_addr || ('short:' + dev.short_addr) }}

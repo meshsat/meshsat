@@ -68,6 +68,12 @@ var (
 	CmdZDOMgmtPermitJoinRsp = [2]byte{ZNPTypeSRSP | ZNPSubZDO, 0x36}
 	CmdZDOPermitJoinInd     = [2]byte{ZNPTypeAREQ | ZNPSubZDO, 0xCB}
 
+	// ZDO leave (used to evict a device from the network) [MESHSAT-509]
+	CmdZDOMgmtLeaveReq = [2]byte{ZNPTypeSREQ | ZNPSubZDO, 0x34}
+	CmdZDOMgmtLeaveRsp = [2]byte{ZNPTypeSRSP | ZNPSubZDO, 0x34}
+	CmdZDOMgmtLeaveCnf = [2]byte{ZNPTypeAREQ | ZNPSubZDO, 0xC9}
+	CmdZDOLeaveInd     = [2]byte{ZNPTypeAREQ | ZNPSubZDO, 0xC9}
+
 	// UTIL commands
 	CmdUtilGetDeviceInfo    = [2]byte{ZNPTypeSREQ | ZNPSubUtil, 0x00}
 	CmdUtilGetDeviceInfoRsp = [2]byte{ZNPTypeSRSP | ZNPSubUtil, 0x00}
@@ -485,6 +491,35 @@ func BuildMgmtPermitJoinReq(duration byte) ZNPFrame {
 		0x01,     // TC_Significance: yes
 	}
 	return ZNPFrame{Cmd: CmdZDOMgmtPermitJoinReq, Data: payload}
+}
+
+// BuildMgmtLeaveReq creates a ZDO_MGMT_LEAVE_REQ telling a remote device to
+// leave the network. Used to properly unpair a device — without this, an
+// "unpaired" device on our side stays joined in the Z-Stack NV table and
+// will keep talking to us, eventually rebuilding its row on the next
+// announce. [MESHSAT-509]
+//
+// Layout (ZNP MT spec):
+//
+//	bytes 0-1   DstAddr (LE)        — short address of the device to leave
+//	bytes 2-9   DeviceAddress (LE)  — IEEE 64-bit address of the device
+//	byte  10    RemoveChildren      — 0 = leave only this device, 1 = also evict its children
+//	byte  11    Rejoin              — 0 = device may NOT rejoin, 1 = device may rejoin
+//
+// We always set RemoveChildren=0 (most field-kit devices have no children
+// of their own) and Rejoin=0 (the user clicked "Forget" — they don't want
+// it back automatically).
+func BuildMgmtLeaveReq(dstAddr uint16, ieeeAddr [8]byte) ZNPFrame {
+	payload := make([]byte, 12)
+	payload[0] = byte(dstAddr)
+	payload[1] = byte(dstAddr >> 8)
+	// IEEE: little-endian on the wire (Z-Stack convention).
+	for i := 0; i < 8; i++ {
+		payload[2+i] = ieeeAddr[i]
+	}
+	payload[10] = 0x00 // RemoveChildren
+	payload[11] = 0x00 // Rejoin
+	return ZNPFrame{Cmd: CmdZDOMgmtLeaveReq, Data: payload}
 }
 
 // ---- ZNP response parsers ----

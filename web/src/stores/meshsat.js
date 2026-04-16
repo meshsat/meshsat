@@ -1402,8 +1402,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   async function putZigBeeDeviceRouting(addr, routing) {
     return await api.put(`/zigbee/devices/${encodeURIComponent(addr)}/routing`, routing)
   }
-  async function sendZigBeeDeviceCommand(addr, command, level) {
-    return await api.post(`/zigbee/devices/${encodeURIComponent(addr)}/command`, { command, level })
+  async function sendZigBeeDeviceCommand(addr, command, extra = {}) {
+    return await api.post(`/zigbee/devices/${encodeURIComponent(addr)}/command`, { command, ...extra })
   }
   async function refreshZigBeeDevice(addr) {
     return await api.post(`/zigbee/devices/${encodeURIComponent(addr)}/refresh`, {})

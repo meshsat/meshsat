@@ -11,21 +11,22 @@ import (
 // the device list endpoint can render current readings without joining the
 // time-series table; full history lives in zigbee_sensor_readings.
 type ZigBeeDevice struct {
-	IEEEAddr     string   `json:"ieee_addr"`
-	ShortAddr    int      `json:"short_addr"`
-	Alias        string   `json:"alias"`
-	Manufacturer string   `json:"manufacturer"`
-	Model        string   `json:"model"`
-	DeviceType   string   `json:"device_type"`
-	Endpoint     int      `json:"endpoint"`
-	FirstSeen    string   `json:"first_seen"`
-	LastSeen     string   `json:"last_seen"`
-	LQI          int      `json:"lqi"`
-	BatteryPct   int      `json:"battery_pct"`
-	LastTemp     *float64 `json:"last_temp,omitempty"`
-	LastHumidity *float64 `json:"last_humidity,omitempty"`
-	LastOnOff    int      `json:"last_onoff"`
-	MessageCount int      `json:"message_count"`
+	IEEEAddr       string   `json:"ieee_addr"`
+	ShortAddr      int      `json:"short_addr"`
+	Alias          string   `json:"alias"`
+	Manufacturer   string   `json:"manufacturer"`
+	Model          string   `json:"model"`
+	DeviceType     string   `json:"device_type"`
+	Endpoint       int      `json:"endpoint"`
+	FirstSeen      string   `json:"first_seen"`
+	LastSeen       string   `json:"last_seen"`
+	LQI            int      `json:"lqi"`
+	BatteryPct     int      `json:"battery_pct"`
+	LastTemp       *float64 `json:"last_temp,omitempty"`
+	LastHumidity   *float64 `json:"last_humidity,omitempty"`
+	LastOnOff      int      `json:"last_onoff"`
+	LastZoneStatus int      `json:"last_zone_status"` // -1 unknown, otherwise IAS Zone bitmask [MESHSAT-509]
+	MessageCount   int      `json:"message_count"`
 }
 
 // ZigBeeSensorReading is one row in the time-series sensor history.
@@ -66,25 +67,26 @@ func (db *DB) UpsertZigBeeDevice(d *ZigBeeDevice) error {
 		INSERT INTO zigbee_devices (
 			ieee_addr, short_addr, alias, manufacturer, model, device_type,
 			endpoint, first_seen, last_seen, lqi, battery_pct,
-			last_temp, last_humidity, last_onoff, message_count
-		) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)
+			last_temp, last_humidity, last_onoff, last_zone_status, message_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(ieee_addr) DO UPDATE SET
-			short_addr    = excluded.short_addr,
+			short_addr       = excluded.short_addr,
 			-- alias is intentionally NOT overwritten (user-set),
-			manufacturer  = CASE WHEN excluded.manufacturer != '' THEN excluded.manufacturer ELSE manufacturer END,
-			model         = CASE WHEN excluded.model != ''        THEN excluded.model        ELSE model        END,
-			device_type   = CASE WHEN excluded.device_type != ''  THEN excluded.device_type  ELSE device_type  END,
-			endpoint      = CASE WHEN excluded.endpoint > 0       THEN excluded.endpoint     ELSE endpoint     END,
-			last_seen     = excluded.last_seen,
-			lqi           = excluded.lqi,
-			battery_pct   = CASE WHEN excluded.battery_pct >= 0   THEN excluded.battery_pct  ELSE battery_pct  END,
-			last_temp     = COALESCE(excluded.last_temp,     last_temp),
-			last_humidity = COALESCE(excluded.last_humidity, last_humidity),
-			last_onoff    = CASE WHEN excluded.last_onoff >= 0    THEN excluded.last_onoff   ELSE last_onoff   END,
-			message_count = message_count + 1
+			manufacturer     = CASE WHEN excluded.manufacturer != '' THEN excluded.manufacturer ELSE manufacturer END,
+			model            = CASE WHEN excluded.model != ''        THEN excluded.model        ELSE model        END,
+			device_type      = CASE WHEN excluded.device_type != ''  THEN excluded.device_type  ELSE device_type  END,
+			endpoint         = CASE WHEN excluded.endpoint > 0       THEN excluded.endpoint     ELSE endpoint     END,
+			last_seen        = excluded.last_seen,
+			lqi              = excluded.lqi,
+			battery_pct      = CASE WHEN excluded.battery_pct >= 0   THEN excluded.battery_pct  ELSE battery_pct  END,
+			last_temp        = COALESCE(excluded.last_temp,     last_temp),
+			last_humidity    = COALESCE(excluded.last_humidity, last_humidity),
+			last_onoff       = CASE WHEN excluded.last_onoff >= 0    THEN excluded.last_onoff   ELSE last_onoff   END,
+			last_zone_status = CASE WHEN excluded.last_zone_status >= 0 THEN excluded.last_zone_status ELSE last_zone_status END,
+			message_count    = message_count + 1
 	`, d.IEEEAddr, d.ShortAddr, d.Alias, d.Manufacturer, d.Model, d.DeviceType,
 		d.Endpoint, d.LQI, d.BatteryPct,
-		d.LastTemp, d.LastHumidity, d.LastOnOff, 1)
+		d.LastTemp, d.LastHumidity, d.LastOnOff, d.LastZoneStatus, 1)
 	if err != nil {
 		return fmt.Errorf("upsert zigbee device %s: %w", d.IEEEAddr, err)
 	}
@@ -128,11 +130,11 @@ func (db *DB) GetZigBeeDevice(ieeeAddr string) (*ZigBeeDevice, error) {
 	err := db.QueryRow(`
 		SELECT ieee_addr, short_addr, alias, manufacturer, model, device_type,
 		       endpoint, first_seen, last_seen, lqi, battery_pct,
-		       last_temp, last_humidity, last_onoff, message_count
+		       last_temp, last_humidity, last_onoff, last_zone_status, message_count
 		FROM zigbee_devices WHERE ieee_addr = ?`, ieeeAddr).Scan(
 		&d.IEEEAddr, &d.ShortAddr, &d.Alias, &d.Manufacturer, &d.Model, &d.DeviceType,
 		&d.Endpoint, &d.FirstSeen, &d.LastSeen, &d.LQI, &d.BatteryPct,
-		&d.LastTemp, &d.LastHumidity, &d.LastOnOff, &d.MessageCount,
+		&d.LastTemp, &d.LastHumidity, &d.LastOnOff, &d.LastZoneStatus, &d.MessageCount,
 	)
 	if err != nil {
 		return nil, err
@@ -148,12 +150,12 @@ func (db *DB) GetZigBeeDeviceByShort(shortAddr int) (*ZigBeeDevice, error) {
 	err := db.QueryRow(`
 		SELECT ieee_addr, short_addr, alias, manufacturer, model, device_type,
 		       endpoint, first_seen, last_seen, lqi, battery_pct,
-		       last_temp, last_humidity, last_onoff, message_count
+		       last_temp, last_humidity, last_onoff, last_zone_status, message_count
 		FROM zigbee_devices WHERE short_addr = ?
 		ORDER BY last_seen DESC LIMIT 1`, shortAddr).Scan(
 		&d.IEEEAddr, &d.ShortAddr, &d.Alias, &d.Manufacturer, &d.Model, &d.DeviceType,
 		&d.Endpoint, &d.FirstSeen, &d.LastSeen, &d.LQI, &d.BatteryPct,
-		&d.LastTemp, &d.LastHumidity, &d.LastOnOff, &d.MessageCount,
+		&d.LastTemp, &d.LastHumidity, &d.LastOnOff, &d.LastZoneStatus, &d.MessageCount,
 	)
 	if err != nil {
 		return nil, err
@@ -166,7 +168,7 @@ func (db *DB) ListZigBeeDevices() ([]ZigBeeDevice, error) {
 	rows, err := db.Query(`
 		SELECT ieee_addr, short_addr, alias, manufacturer, model, device_type,
 		       endpoint, first_seen, last_seen, lqi, battery_pct,
-		       last_temp, last_humidity, last_onoff, message_count
+		       last_temp, last_humidity, last_onoff, last_zone_status, message_count
 		FROM zigbee_devices ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list zigbee devices: %w", err)
@@ -177,7 +179,7 @@ func (db *DB) ListZigBeeDevices() ([]ZigBeeDevice, error) {
 		var d ZigBeeDevice
 		if err := rows.Scan(&d.IEEEAddr, &d.ShortAddr, &d.Alias, &d.Manufacturer, &d.Model, &d.DeviceType,
 			&d.Endpoint, &d.FirstSeen, &d.LastSeen, &d.LQI, &d.BatteryPct,
-			&d.LastTemp, &d.LastHumidity, &d.LastOnOff, &d.MessageCount); err != nil {
+			&d.LastTemp, &d.LastHumidity, &d.LastOnOff, &d.LastZoneStatus, &d.MessageCount); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

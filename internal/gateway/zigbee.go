@@ -268,7 +268,7 @@ func (g *ZigBeeGateway) receiveWorker(ctx context.Context) {
 					log.Warn().Msg("zigbee: inbound channel full, dropping message")
 				}
 
-			case "temperature", "humidity", "battery", "onoff":
+			case "temperature", "humidity", "battery", "onoff", "ias_zone":
 				// Sensor reading — fan out per device routing config.
 				g.msgsIn.Add(1)
 				g.lastActive.Store(time.Now().Unix())

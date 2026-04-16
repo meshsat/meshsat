@@ -94,6 +94,67 @@ func TestDecodeZCLInt16Report_RejectsWrongDataType(t *testing.T) {
 	}
 }
 
+func TestDecodeIASZoneStatus_NotificationCmd(t *testing.T) {
+	// Zone Status Change Notification (cmd 0x00, cluster-specific FCF=0x09).
+	// Status=0x0021 (Alarm1 + RestoreReports). ExtendedStatus=0, ZoneID=1, Delay=0.
+	frame := []byte{0x09, 0x10, 0x00, 0x21, 0x00, 0x00, 0x01, 0x00, 0x00}
+	zs, attr, ok := decodeIASZoneStatus(frame)
+	if !ok {
+		t.Fatalf("expected decode ok")
+	}
+	if attr != 0xFFFF {
+		t.Errorf("expected sentinel attr 0xFFFF for cmd-0x00 path, got 0x%04x", attr)
+	}
+	if zs.Raw != 0x0021 {
+		t.Errorf("expected raw 0x0021, got 0x%04x", zs.Raw)
+	}
+	if !zs.Alarm1 {
+		t.Error("expected Alarm1 set")
+	}
+	if !zs.Triggered {
+		t.Error("expected Triggered=true (Alarm1 is set)")
+	}
+	if zs.Tamper {
+		t.Error("expected Tamper false")
+	}
+}
+
+func TestDecodeIASZoneStatus_AttributeReport(t *testing.T) {
+	// Some Xiaomi/Aqara devices echo zone status via attribute report on
+	// attr 0x0002. FCF=0x18, TSN, CMD=0x0a, AttrID=0x0002, DT=0x21, Val=0x0008
+	// (BatteryLow only — no alarm, not "Triggered").
+	frame := []byte{0x18, 0x21, 0x0a, 0x02, 0x00, 0x21, 0x08, 0x00}
+	zs, attr, ok := decodeIASZoneStatus(frame)
+	if !ok {
+		t.Fatalf("expected decode ok")
+	}
+	if attr != 0x0002 {
+		t.Errorf("expected attr 0x0002, got 0x%04x", attr)
+	}
+	if !zs.BatteryLow {
+		t.Error("expected BatteryLow set")
+	}
+	if zs.Triggered {
+		t.Error("expected Triggered false (only BatteryLow, not an alarm)")
+	}
+}
+
+func TestIASZoneText_AllClear(t *testing.T) {
+	zs := decodeZoneStatus(0x0000)
+	if got := iasZoneText(&zs); got != "clear" {
+		t.Errorf("expected 'clear', got %q", got)
+	}
+}
+
+func TestIASZoneText_MultipleFlags(t *testing.T) {
+	zs := decodeZoneStatus(0x0001 | 0x0004 | 0x0008) // alarm1 + tamper + battery_low
+	got := iasZoneText(&zs)
+	want := "alarm1+tamper+battery_low"
+	if got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
 func TestZCLReportHeader_FallbackToCompact(t *testing.T) {
 	// Compact layout (no cmd byte, observed on some Xiaomi sensors):
 	// FCF + TSN + AttrID(2) + DataType + Value

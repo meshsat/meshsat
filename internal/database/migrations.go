@@ -966,6 +966,12 @@ var migrations = []string{
 		min_interval  INTEGER NOT NULL DEFAULT 0,
 		updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
+
+	// v43: Track last IAS Zone status per device — surfaces alarm/tamper/
+	// battery-low state in the device manager without needing to query the
+	// time-series table for every list render. -1 = unknown (no IAS Zone
+	// frame ever received). [MESHSAT-509]
+	`ALTER TABLE zigbee_devices ADD COLUMN last_zone_status INTEGER NOT NULL DEFAULT -1;`,
 }
 
 func (db *DB) migrate() error {

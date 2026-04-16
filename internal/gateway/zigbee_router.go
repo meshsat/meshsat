@@ -103,6 +103,8 @@ func sensorValueUnit(evt transport.ZigBeeEvent) (float64, string) {
 			return 1, "on"
 		}
 		return 0, "off"
+	case evt.ZoneStatus != nil:
+		return float64(evt.ZoneStatus.Raw), "flags"
 	}
 	return 0, ""
 }
@@ -111,13 +113,17 @@ func sensorValueUnit(evt transport.ZigBeeEvent) (float64, string) {
 // uses the device alias as callsign, the bridge's GPS position (if any)
 // as the point, and a structured remarks string with all known sensor
 // values for the device. Type defaults to "b-m-p-s-p-i" (sensor info point)
-// unless the routing config specifies an override.
+// unless the routing config specifies an override. IAS Zone alarm events
+// promote the type to "b-a-o-tbl" (alarm) so ATAK clients render them
+// with the urgent red icon set rather than the gray sensor pin.
 func buildSensorCoT(evt transport.ZigBeeEvent, displayName string, r zigbeeSensorRouter, cotTypeOverride string) CotEvent {
 	now := time.Now().UTC()
 	cotType := cotTypeOverride
 	if cotType == "" {
-		// "b-m-p-s-p-i" = sensor point of interest (TAK standard)
-		cotType = "b-m-p-s-p-i"
+		cotType = "b-m-p-s-p-i" // sensor point of interest (TAK standard)
+		if evt.ZoneStatus != nil && evt.ZoneStatus.Triggered {
+			cotType = "b-a-o-tbl" // alarm — overridden by routing.cot_type if set
+		}
 	}
 	stale := now.Add(time.Duration(r.staleSec) * time.Second)
 	uid := fmt.Sprintf("meshsat-zb-%s", strings.ToLower(evt.Device.IEEEAddr))
@@ -151,6 +157,30 @@ func buildSensorCoT(evt transport.ZigBeeEvent, displayName string, r zigbeeSenso
 	}
 	if evt.Device.BatteryPct >= 0 {
 		fmt.Fprintf(&remarks, " | Bat=%d%%", evt.Device.BatteryPct)
+	}
+	if evt.ZoneStatus != nil {
+		zs := evt.ZoneStatus
+		var flags []string
+		if zs.Alarm1 {
+			flags = append(flags, "ALARM1")
+		}
+		if zs.Alarm2 {
+			flags = append(flags, "ALARM2")
+		}
+		if zs.Tamper {
+			flags = append(flags, "TAMPER")
+		}
+		if zs.BatteryLow {
+			flags = append(flags, "LOW_BAT")
+		}
+		if zs.Trouble {
+			flags = append(flags, "TROUBLE")
+		}
+		if len(flags) > 0 {
+			fmt.Fprintf(&remarks, " | %s", strings.Join(flags, " "))
+		} else {
+			remarks.WriteString(" | CLEAR")
+		}
 	}
 	fmt.Fprintf(&remarks, " | LQI=%d", evt.Device.LQI)
 

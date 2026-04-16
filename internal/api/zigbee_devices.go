@@ -20,23 +20,24 @@ import (
 // missing — a freshly-paired device has no DB row yet, and a device that
 // hasn't reported since startup has no live row.
 type zigbeeDeviceRow struct {
-	ShortAddr    int      `json:"short_addr"`
-	IEEEAddr     string   `json:"ieee_addr"`
-	Alias        string   `json:"alias"`
-	DisplayName  string   `json:"display_name"` // Alias if set, else "ZB <short>"
-	Manufacturer string   `json:"manufacturer,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	DeviceType   string   `json:"device_type,omitempty"`
-	Endpoint     int      `json:"endpoint"`
-	LQI          int      `json:"lqi"`
-	BatteryPct   int      `json:"battery_pct"`
-	LastTemp     *float64 `json:"last_temp,omitempty"`
-	LastHumidity *float64 `json:"last_humidity,omitempty"`
-	LastOnOff    int      `json:"last_onoff"`
-	FirstSeen    string   `json:"first_seen,omitempty"`
-	LastSeen     string   `json:"last_seen"`
-	MessageCount int      `json:"message_count"`
-	Online       bool     `json:"online"` // true if seen in the last 30 minutes
+	ShortAddr      int      `json:"short_addr"`
+	IEEEAddr       string   `json:"ieee_addr"`
+	Alias          string   `json:"alias"`
+	DisplayName    string   `json:"display_name"` // Alias if set, else "ZB <short>"
+	Manufacturer   string   `json:"manufacturer,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	DeviceType     string   `json:"device_type,omitempty"`
+	Endpoint       int      `json:"endpoint"`
+	LQI            int      `json:"lqi"`
+	BatteryPct     int      `json:"battery_pct"`
+	LastTemp       *float64 `json:"last_temp,omitempty"`
+	LastHumidity   *float64 `json:"last_humidity,omitempty"`
+	LastOnOff      int      `json:"last_onoff"`
+	LastZoneStatus int      `json:"last_zone_status"` // -1 unknown, else IAS Zone bitmask [MESHSAT-509]
+	FirstSeen      string   `json:"first_seen,omitempty"`
+	LastSeen       string   `json:"last_seen"`
+	MessageCount   int      `json:"message_count"`
+	Online         bool     `json:"online"` // true if seen in the last 30 minutes
 }
 
 // handleGetZigBeeDevicesEnriched is the new device list endpoint that joins
@@ -59,19 +60,20 @@ func (s *Server) collectZigBeeDeviceRows() []zigbeeDeviceRow {
 		if t := zgw.GetTransport(); t != nil {
 			for _, d := range t.GetDevices() {
 				liveDevices = append(liveDevices, ieeeIndexedDevice{
-					ShortAddr:    int(d.ShortAddr),
-					IEEEAddr:     d.IEEEAddr,
-					Alias:        d.Alias,
-					Manufacturer: d.Manufacturer,
-					Model:        d.Model,
-					Endpoint:     int(d.Endpoint),
-					LQI:          int(d.LQI),
-					BatteryPct:   d.BatteryPct,
-					LastTemp:     d.Temperature,
-					LastHumidity: d.Humidity,
-					LastOnOff:    d.OnOff,
-					LastSeen:     d.LastSeen.UTC().Format("2006-01-02T15:04:05Z"),
-					Online:       true, // by definition, in the live cache
+					ShortAddr:      int(d.ShortAddr),
+					IEEEAddr:       d.IEEEAddr,
+					Alias:          d.Alias,
+					Manufacturer:   d.Manufacturer,
+					Model:          d.Model,
+					Endpoint:       int(d.Endpoint),
+					LQI:            int(d.LQI),
+					BatteryPct:     d.BatteryPct,
+					LastTemp:       d.Temperature,
+					LastHumidity:   d.Humidity,
+					LastOnOff:      d.OnOff,
+					LastZoneStatus: d.ZoneStatus,
+					LastSeen:       d.LastSeen.UTC().Format("2006-01-02T15:04:05Z"),
+					Online:         true, // by definition, in the live cache
 				})
 			}
 		}
@@ -115,6 +117,9 @@ func (s *Server) collectZigBeeDeviceRows() []zigbeeDeviceRow {
 				if in.LastOnOff >= 0 {
 					cur.LastOnOff = in.LastOnOff
 				}
+				if in.LastZoneStatus >= 0 {
+					cur.LastZoneStatus = in.LastZoneStatus
+				}
 			} else {
 				if cur.Alias == "" && in.Alias != "" {
 					cur.Alias = in.Alias
@@ -139,39 +144,41 @@ func (s *Server) collectZigBeeDeviceRows() []zigbeeDeviceRow {
 	}
 	for _, d := range liveDevices {
 		add(zigbeeDeviceRow{
-			ShortAddr:    d.ShortAddr,
-			IEEEAddr:     d.IEEEAddr,
-			Alias:        d.Alias,
-			Manufacturer: d.Manufacturer,
-			Model:        d.Model,
-			Endpoint:     d.Endpoint,
-			LQI:          d.LQI,
-			BatteryPct:   d.BatteryPct,
-			LastTemp:     d.LastTemp,
-			LastHumidity: d.LastHumidity,
-			LastOnOff:    d.LastOnOff,
-			LastSeen:     d.LastSeen,
-			Online:       true,
+			ShortAddr:      d.ShortAddr,
+			IEEEAddr:       d.IEEEAddr,
+			Alias:          d.Alias,
+			Manufacturer:   d.Manufacturer,
+			Model:          d.Model,
+			Endpoint:       d.Endpoint,
+			LQI:            d.LQI,
+			BatteryPct:     d.BatteryPct,
+			LastTemp:       d.LastTemp,
+			LastHumidity:   d.LastHumidity,
+			LastOnOff:      d.LastOnOff,
+			LastZoneStatus: d.LastZoneStatus,
+			LastSeen:       d.LastSeen,
+			Online:         true,
 		})
 	}
 	for _, p := range persisted {
 		add(zigbeeDeviceRow{
-			ShortAddr:    p.ShortAddr,
-			IEEEAddr:     p.IEEEAddr,
-			Alias:        p.Alias,
-			Manufacturer: p.Manufacturer,
-			Model:        p.Model,
-			DeviceType:   p.DeviceType,
-			Endpoint:     p.Endpoint,
-			LQI:          p.LQI,
-			BatteryPct:   p.BatteryPct,
-			LastTemp:     p.LastTemp,
-			LastHumidity: p.LastHumidity,
-			LastOnOff:    p.LastOnOff,
-			FirstSeen:    p.FirstSeen,
-			LastSeen:     p.LastSeen,
-			MessageCount: p.MessageCount,
-			Online:       false,
+			ShortAddr:      p.ShortAddr,
+			IEEEAddr:       p.IEEEAddr,
+			Alias:          p.Alias,
+			Manufacturer:   p.Manufacturer,
+			Model:          p.Model,
+			DeviceType:     p.DeviceType,
+			Endpoint:       p.Endpoint,
+			LQI:            p.LQI,
+			BatteryPct:     p.BatteryPct,
+			LastTemp:       p.LastTemp,
+			LastHumidity:   p.LastHumidity,
+			LastOnOff:      p.LastOnOff,
+			LastZoneStatus: p.LastZoneStatus,
+			FirstSeen:      p.FirstSeen,
+			LastSeen:       p.LastSeen,
+			MessageCount:   p.MessageCount,
+			Online:         false,
 		})
 	}
 
@@ -189,19 +196,20 @@ func (s *Server) collectZigBeeDeviceRows() []zigbeeDeviceRow {
 // ieeeIndexedDevice is an internal helper for the merge — exists only so
 // we can build []zigbeeDeviceRow without circular conversions.
 type ieeeIndexedDevice struct {
-	ShortAddr    int
-	IEEEAddr     string
-	Alias        string
-	Manufacturer string
-	Model        string
-	Endpoint     int
-	LQI          int
-	BatteryPct   int
-	LastTemp     *float64
-	LastHumidity *float64
-	LastOnOff    int
-	LastSeen     string
-	Online       bool
+	ShortAddr      int
+	IEEEAddr       string
+	Alias          string
+	Manufacturer   string
+	Model          string
+	Endpoint       int
+	LQI            int
+	BatteryPct     int
+	LastTemp       *float64
+	LastHumidity   *float64
+	LastOnOff      int
+	LastZoneStatus int
+	LastSeen       string
+	Online         bool
 }
 
 // handleGetZigBeeDevice returns one device with full metadata + recent
@@ -431,8 +439,14 @@ func (s *Server) handlePostZigBeeDeviceCommand(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var req struct {
-		Command string `json:"command"`         // "on" | "off" | "toggle"
-		Level   *int   `json:"level,omitempty"` // 0-254 for "level"
+		Command string   `json:"command"`           // on/off/toggle/level/color/color_temp
+		Level   *int     `json:"level,omitempty"`   // 0-254 for "level"
+		ColorX  *float64 `json:"color_x,omitempty"` // 0.0-1.0 CIE x for "color"
+		ColorY  *float64 `json:"color_y,omitempty"` // 0.0-1.0 CIE y for "color"
+		Mireds  *int     `json:"mireds,omitempty"`  // 153-500 for "color_temp"
+		Kelvin  *int     `json:"kelvin,omitempty"`  // alt to mireds (auto-converted)
+		// Transition time in deciseconds (0 = instant). Default 5 (= 0.5s).
+		TransitionDS *int `json:"transition_ds,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -443,10 +457,65 @@ func (s *Server) handlePostZigBeeDeviceCommand(w http.ResponseWriter, r *http.Re
 	if ep == 0 {
 		ep = 1 // default endpoint for HA on/off
 	}
-	if err := t.SendOnOffCommand(uint16(row.ShortAddr), ep, cmd); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("send %s: %v", cmd, err))
+	transition := uint16(5)
+	if req.TransitionDS != nil && *req.TransitionDS >= 0 && *req.TransitionDS <= 0xFFFE {
+		transition = uint16(*req.TransitionDS)
+	}
+
+	switch cmd {
+	case "on", "off", "toggle":
+		if err := t.SendOnOffCommand(uint16(row.ShortAddr), ep, cmd); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("send %s: %v", cmd, err))
+			return
+		}
+	case "level":
+		if req.Level == nil {
+			writeError(w, http.StatusBadRequest, `"level" command requires "level" field (0-254)`)
+			return
+		}
+		lvl := *req.Level
+		if lvl < 0 {
+			lvl = 0
+		}
+		if lvl > 254 {
+			lvl = 254
+		}
+		if err := t.SendLevelCommand(uint16(row.ShortAddr), ep, byte(lvl), transition); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("send level: %v", err))
+			return
+		}
+	case "color":
+		if req.ColorX == nil || req.ColorY == nil {
+			writeError(w, http.StatusBadRequest, `"color" requires "color_x" and "color_y" (0.0..1.0)`)
+			return
+		}
+		// CIE xy → wire form: scale 0..1 → 0..65279 (65535 is reserved as "invalid").
+		x := uint16(*req.ColorX * 65279)
+		y := uint16(*req.ColorY * 65279)
+		if err := t.SendColorCommand(uint16(row.ShortAddr), ep, x, y, transition); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("send color: %v", err))
+			return
+		}
+	case "color_temp":
+		var mireds uint16
+		switch {
+		case req.Mireds != nil:
+			mireds = uint16(*req.Mireds)
+		case req.Kelvin != nil && *req.Kelvin > 0:
+			mireds = uint16(1_000_000 / *req.Kelvin)
+		default:
+			writeError(w, http.StatusBadRequest, `"color_temp" requires "mireds" or "kelvin"`)
+			return
+		}
+		if err := t.SendColorTempCommand(uint16(row.ShortAddr), ep, mireds, transition); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("send color_temp: %v", err))
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown command %q (want on/off/toggle/level/color/color_temp)", cmd))
 		return
 	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"sent":       cmd,
 		"short_addr": row.ShortAddr,
