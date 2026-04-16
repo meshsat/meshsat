@@ -73,6 +73,11 @@ type DeviceSupervisor struct {
 	// Explicit port overrides (from env vars) — skip auto-detect for these roles
 	explicitPorts map[DeviceRole]string
 
+	// initialScanDone is closed after the first scan+identify cycle completes.
+	// ReconcileWithHardware should wait for this before disabling gateways,
+	// otherwise it races with identification of ports that require probing. [MESHSAT-403]
+	initialScanDone chan struct{}
+
 	stopCh    chan struct{}
 	scanNowCh chan struct{}
 
@@ -85,15 +90,16 @@ type DeviceSupervisor struct {
 // NewDeviceSupervisor creates a new supervisor.
 func NewDeviceSupervisor() *DeviceSupervisor {
 	return &DeviceSupervisor{
-		registry:      NewDeviceRegistry(),
-		callbacks:     make(map[DeviceRole][]*DriverCallbacks),
-		portInstances: make(map[string]string),
-		probing:       make(map[string]bool),
-		skipPorts:     make(map[string]bool),
-		explicitPorts: make(map[DeviceRole]string),
-		stopCh:        make(chan struct{}),
-		scanNowCh:     make(chan struct{}, 1),
-		eventClients:  make(map[uint64]chan DeviceEvent),
+		registry:        NewDeviceRegistry(),
+		callbacks:       make(map[DeviceRole][]*DriverCallbacks),
+		portInstances:   make(map[string]string),
+		probing:         make(map[string]bool),
+		skipPorts:       make(map[string]bool),
+		explicitPorts:   make(map[DeviceRole]string),
+		initialScanDone: make(chan struct{}),
+		stopCh:          make(chan struct{}),
+		scanNowCh:       make(chan struct{}, 1),
+		eventClients:    make(map[uint64]chan DeviceEvent),
 	}
 }
 
@@ -170,6 +176,19 @@ func (s *DeviceSupervisor) TriggerScan() {
 	}
 }
 
+// WaitForInitialScan blocks until the supervisor's first scan+identify cycle
+// completes. Call this before ReconcileWithHardware to avoid a race where
+// gateways are disabled for "missing" hardware that hasn't been identified yet.
+// Returns immediately if the scan already completed. Times out after 30s
+// to prevent deadlock if the supervisor never starts. [MESHSAT-403]
+func (s *DeviceSupervisor) WaitForInitialScan() {
+	select {
+	case <-s.initialScanDone:
+	case <-time.After(30 * time.Second):
+		log.Warn().Msg("device-supervisor: WaitForInitialScan timed out after 30s")
+	}
+}
+
 func (s *DeviceSupervisor) run() {
 	// Register explicit ports first
 	s.registerExplicitPorts()
@@ -180,6 +199,10 @@ func (s *DeviceSupervisor) run() {
 	s.scanSerialPorts()
 	s.reconcileSerialDevices()
 	s.scanMu.Unlock()
+
+	// Signal that the initial scan+identify cycle is complete.
+	// ReconcileWithHardware waits for this before disabling gateways. [MESHSAT-403]
+	close(s.initialScanDone)
 
 	portTicker := time.NewTicker(30 * time.Second)
 	serialTicker := time.NewTicker(15 * time.Second)
@@ -440,13 +463,15 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	}
 
 	// Step 2: JSPR probe for 9704 (~500ms)
-	// The 9704 uses FTDI chips (0403:6015, 0403:6001) exclusively. Probing
-	// non-FTDI devices with JSPR at 230400 baud corrupts their serial state
-	// (e.g., ZigBee CC2652P at 115200 receives garbled data and stops responding
-	// to ZNP, Meshtastic radios get junk in their RX buffer). [MESHSAT-403]
-	// Skip on: platform UARTs, known cellular/Meshtastic/ZigBee VID:PIDs.
-	// Only probe ports with FTDI or truly unknown VID:PIDs.
-	if strings.HasPrefix(filepath.Base(port), "ttyAMA") {
+	// The 9704 uses FTDI chips (0403:6015, 0403:6001) exclusively, which create
+	// ttyUSB* devices. CDC-ACM devices (ttyACM*) are never FTDI — probing them
+	// with JSPR at 230400 baud wastes ~9s per device and corrupts their serial
+	// state (e.g., AIOC audio interfaces, GPS receivers). [MESHSAT-403]
+	// Skip on: ttyACM*, ttyAMA*, known cellular/Meshtastic/ZigBee VID:PIDs.
+	portBase := filepath.Base(port)
+	if strings.HasPrefix(portBase, "ttyACM") {
+		// CDC-ACM device — never FTDI, skip JSPR entirely [MESHSAT-403]
+	} else if strings.HasPrefix(portBase, "ttyAMA") {
 		// Platform UART — use Go serial library probe instead of raw fd+select
 		// which doesn't work on PL011/RP1 UARTs. This enables auto-detection
 		// of the 9704 on Pi 5 UART2 (/dev/ttyAMA2) without requiring
@@ -473,12 +498,13 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	}
 
 	// Step 3: AT probe for 9603 (~500ms)
-	// Skip ports with known non-Iridium VID:PIDs (including ambiguous ZigBee since
-	// CP210x/CH343 are never Iridium 9603 — it uses FTDI exclusively). [MESHSAT-403]
-	if vidpid == "" || (!knownMeshtasticVIDPIDs[vidpid] && !gpsVIDPIDs[vidpid] &&
-		!knownCellularVIDPIDs[vidpid] &&
-		!knownZigBeeOnlyVIDPIDs[vidpid] &&
-		!ambiguousZigBeeVIDPIDs[vidpid]) {
+	// Iridium 9603 uses FTDI (ttyUSB*), never CDC-ACM (ttyACM*). Also skip
+	// known non-Iridium VID:PIDs (Meshtastic, ZigBee, cellular, GPS). [MESHSAT-403]
+	if !strings.HasPrefix(portBase, "ttyACM") &&
+		(vidpid == "" || (!knownMeshtasticVIDPIDs[vidpid] && !gpsVIDPIDs[vidpid] &&
+			!knownCellularVIDPIDs[vidpid] &&
+			!knownZigBeeOnlyVIDPIDs[vidpid] &&
+			!ambiguousZigBeeVIDPIDs[vidpid])) {
 		s.probeMu.Lock()
 		atResult := probeAT(port)
 		s.probeMu.Unlock()

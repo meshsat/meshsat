@@ -315,6 +315,10 @@ func main() {
 	// when hardware is connected, disconnected, or hot-swapped.
 	if supervisor != nil {
 		gwMgr.WatchDeviceEvents(ctx, supervisor)
+		// Wait for the supervisor's initial scan to finish identifying all ports.
+		// Without this, ReconcileWithHardware races with port identification and
+		// disables gateways for hardware that hasn't been identified yet. [MESHSAT-403]
+		supervisor.WaitForInitialScan()
 		// Reconcile DB configs with actual hardware: stop gateways for missing
 		// devices, start gateways for detected devices with enabled configs.
 		gwMgr.ReconcileWithHardware(ctx)
