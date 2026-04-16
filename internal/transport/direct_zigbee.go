@@ -427,6 +427,24 @@ func ProbeZNP(portName string) bool {
 	}
 	defer p.Close()
 
+	// Clear DTR/RTS to prevent CC2652P auto-BSL reset circuit from triggering.
+	// Many ZigBee dongles (SONOFF ZBDongle-P/E) have DTR+RTS wired to the BSL
+	// circuit — asserting both enters bootloader mode and the coordinator won't
+	// respond to ZNP commands until power-cycled. [MESHSAT-403]
+	p.SetDTR(false)
+	p.SetRTS(false)
+
+	// Drain stale data and settle after potential DTR-triggered reset.
+	p.SetReadTimeout(200 * time.Millisecond)
+	drain := make([]byte, 256)
+	for {
+		n, _ := p.Read(drain)
+		if n == 0 {
+			break
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+
 	// Send SYS_PING
 	frame := BuildSysPing()
 	encoded, _ := EncodeZNP(frame)

@@ -550,9 +550,20 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 			s.claimAndNotify(port, vidpid, RoleZigBee, "ZNP probe")
 			return
 		}
-		// Ambiguous VID:PID + ZNP probe failed → default to Meshtastic [MESHSAT-444]
+		// Ambiguous VID:PID + ZNP probe failed — verify it's actually Meshtastic
+		// before claiming. DTR-triggered resets on ZigBee dongles cause transient
+		// ZNP failures; blindly defaulting to Meshtastic steals the port from ZigBee
+		// and leaves it undetected. Retry on the next reconcile cycle. [MESHSAT-403]
 		if ambiguousZigBeeVIDPIDs[vidpid] {
-			s.claimAndNotify(port, vidpid, RoleMeshtastic, "ambiguous VID:PID default")
+			s.probeMu.Lock()
+			meshResult := ProbeMeshtastic(port)
+			s.probeMu.Unlock()
+			if meshResult {
+				s.claimAndNotify(port, vidpid, RoleMeshtastic, "ambiguous VID:PID + Meshtastic probe")
+				return
+			}
+			log.Debug().Str("port", port).Str("vidpid", vidpid).
+				Msg("device-supervisor: ambiguous VID:PID — both ZNP and Meshtastic probes failed, will retry")
 			return
 		}
 	}

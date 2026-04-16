@@ -197,6 +197,12 @@ func main() {
 		supervisor.Start()
 		defer supervisor.Stop()
 
+		// Wait for the supervisor's initial scan+identify cycle to complete before
+		// starting the gateway manager. Without this, gwMgr.Start() loads saved
+		// gateway configs and calls Subscribe() on transports that still have
+		// port="supervisor" (not yet assigned by the supervisor). [MESHSAT-403]
+		supervisor.WaitForInitialScan()
+
 		// Always register both satellite transports. The supervisor assigns ports
 		// dynamically via callbacks — no need to choose one at startup.
 		// "iridium" (SBD) gateway always uses directSat (9603).
@@ -315,12 +321,9 @@ func main() {
 	// when hardware is connected, disconnected, or hot-swapped.
 	if supervisor != nil {
 		gwMgr.WatchDeviceEvents(ctx, supervisor)
-		// Wait for the supervisor's initial scan to finish identifying all ports.
-		// Without this, ReconcileWithHardware races with port identification and
-		// disables gateways for hardware that hasn't been identified yet. [MESHSAT-403]
-		supervisor.WaitForInitialScan()
 		// Reconcile DB configs with actual hardware: stop gateways for missing
 		// devices, start gateways for detected devices with enabled configs.
+		// Safe to call now — WaitForInitialScan() already completed above. [MESHSAT-403]
 		gwMgr.ReconcileWithHardware(ctx)
 	}
 
