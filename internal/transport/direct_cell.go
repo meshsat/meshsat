@@ -406,14 +406,19 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 			if err != nil || strings.Contains(resp, "ERROR") {
 				log.Warn().Err(err).Str("resp", resp).Msg("cellular: PIN unlock command failed")
 			} else {
-				// Huawei E220 on 2G needs 5s to stabilize after PIN entry.
-				// Industry standard (ModemManager) uses 3s; we use 5s for
-				// slow 2G modems like the E220. [MESHSAT-445]
-				time.Sleep(5 * time.Second)
-
-				// Verify PIN actually worked by re-querying AT+CPIN? [MESHSAT-445]
-				resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
-				verifiedState := parseCPIN(resp)
+				// A7670E needs up to 30s after AT+CPIN before the SIM subsystem
+				// initializes (SMS, PDP, phonebook). Retry AT+CPIN? for up to
+				// 30s instead of a fixed wait. [MESHSAT-403]
+				var verifiedState string
+				verifyDeadline := time.Now().Add(30 * time.Second)
+				for time.Now().Before(verifyDeadline) {
+					time.Sleep(3 * time.Second)
+					resp, _ = sendAT(sp, "AT+CPIN?", cellATTimeout)
+					verifiedState = parseCPIN(resp)
+					if verifiedState == "READY" {
+						break
+					}
+				}
 				if verifiedState == "READY" {
 					simState = "READY"
 					log.Info().Msg("cellular: SIM PIN verified unlocked")
