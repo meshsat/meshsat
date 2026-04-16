@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.bug.st/serial"
 	"golang.org/x/sys/unix"
 )
 
@@ -1220,6 +1221,81 @@ func probeJSPR(portPath string) bool {
 		if !gotResponse {
 			log.Debug().Str("port", portPath).Int("attempt", attempt+1).Msg("jspr probe: no response (timeout)")
 		}
+	}
+
+	return false
+}
+
+// probeJSPRSerial is a platform-UART-safe variant of probeJSPR that uses the
+// go.bug.st/serial library instead of raw fd + O_NONBLOCK + select(). The raw
+// approach doesn't work on PL011/RP1 platform UARTs (Pi 5 ttyAMA*) because
+// select() on platform UART fds doesn't behave like USB-serial fds on ARM64.
+// The Go serial library uses blocking reads with SetReadTimeout which works
+// correctly on all UART types. [MESHSAT-403]
+func probeJSPRSerial(portPath string) bool {
+	mode := &serial.Mode{
+		BaudRate: 230400,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+	}
+
+	p, err := serial.Open(portPath, mode)
+	if err != nil {
+		log.Debug().Err(err).Str("port", portPath).Msg("jspr serial probe: open failed")
+		return false
+	}
+	defer p.Close()
+
+	for attempt := 0; attempt < 3; attempt++ {
+		// Drain stale data
+		p.SetReadTimeout(100 * time.Millisecond)
+		drain := make([]byte, 256)
+		for {
+			n, _ := p.Read(drain)
+			if n == 0 {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+
+		// Send GET apiVersion
+		if _, err := p.Write([]byte("GET apiVersion {}\r")); err != nil {
+			log.Debug().Err(err).Str("port", portPath).Int("attempt", attempt+1).Msg("jspr serial probe: write failed")
+			return false
+		}
+
+		// Read response with 3s deadline
+		p.SetReadTimeout(500 * time.Millisecond)
+		deadline := time.Now().Add(3 * time.Second)
+		var line strings.Builder
+		buf := make([]byte, 1)
+
+		for time.Now().Before(deadline) {
+			n, _ := p.Read(buf)
+			if n == 0 {
+				continue
+			}
+			ch := buf[0]
+			if ch == '\r' {
+				if line.Len() >= 3 {
+					resp, err := parseJSPRLine(line.String())
+					if err == nil && resp.Code > 0 {
+						log.Info().Str("port", portPath).Int("code", resp.Code).
+							Msg("jspr serial probe: valid JSPR response — identified as 9704")
+						return true
+					}
+				}
+				line.Reset()
+				continue
+			}
+			if ch < 0x20 || ch > 0x7E {
+				continue
+			}
+			line.WriteByte(ch)
+		}
+
+		log.Debug().Str("port", portPath).Int("attempt", attempt+1).Msg("jspr serial probe: no response (timeout)")
 	}
 
 	return false

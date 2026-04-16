@@ -254,13 +254,19 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	}
 	log.Debug().Str("port", portPath).Msg("cellular: serial port opened")
 
+	// Immediately clear DTR to prevent ESP32 auto-reset on T-Call A7670E boards.
+	// The CH343 USB-serial chip passes DTR to ESP32's EN pin — asserting DTR
+	// resets the ESP32, which pulses PWRKEY, toggling the modem power state.
+	// Clearing DTR within the first few ms avoids the reset pulse. [MESHSAT-403]
+	sp.SetDTR(false)
+
 	t.port = portPath
 
-	// Wait for modem readiness — ESP32 passthrough boards (T-Call A7670E) reset
-	// on serial port open (DTR assertion triggers ESP32 auto-reset circuit).
-	// The factory sketch then pulses PWRKEY, cold-boots the modem (~15s), and
-	// runs autobaud before entering passthrough mode. Sending AT commands before
-	// passthrough is active gets zero response.
+	// Wait for modem readiness — ESP32 passthrough boards (T-Call A7670E) may
+	// still need time if DTR was briefly asserted during the open() syscall.
+	// The factory sketch pulses PWRKEY on reset, cold-boots the modem (~15s),
+	// and runs autobaud before entering passthrough mode. Sending AT commands
+	// before passthrough is active gets zero response.
 	// Retry AT for up to 30s to cover the full ESP32+modem cold boot sequence.
 	log.Debug().Msg("cellular: waiting for modem AT response (up to 30s)")
 	atDeadline := time.Now().Add(30 * time.Second)
@@ -2069,6 +2075,9 @@ func probeCellularAT(port string) bool {
 		return false
 	}
 	defer file.Close()
+
+	// Clear DTR immediately to prevent ESP32 reset on T-Call boards. [MESHSAT-403]
+	file.SetDTR(false)
 
 	// Disable echo
 	sendAT(file, "ATE0", 2*time.Second)

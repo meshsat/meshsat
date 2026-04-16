@@ -107,6 +107,21 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 		return fmt.Errorf("open zigbee serial %s: %w", portName, err)
 	}
 
+	// Drain stale data from serial buffer — ProbeZNP may have left residual
+	// bytes from the identification probe. Without this drain, initCoordinator's
+	// SYS_PING response may contain stale probe data mixed in. [MESHSAT-403]
+	p.SetReadTimeout(200 * time.Millisecond)
+	drain := make([]byte, 256)
+	for {
+		n, _ := p.Read(drain)
+		if n == 0 {
+			break
+		}
+	}
+	// Settle delay — give the CC2652P time to finish processing any residual
+	// probe data before we send the first real command. [MESHSAT-403]
+	time.Sleep(100 * time.Millisecond)
+
 	z.port = p
 	z.portName = portName
 

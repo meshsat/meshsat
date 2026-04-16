@@ -424,15 +424,44 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	// Mark port as identifying while probes run [MESHSAT-444]
 	s.registry.SetState(port, StateIdentifying)
 
+	// Step 1b: Meshtastic probe for unknown VID:PID ACM devices (~2s)
+	// ESP32-S3 native USB may not expose VID:PID in sysfs. Without this check,
+	// the cascade sends JSPR (230400), AT (19200), and Cellular AT (115200) to
+	// the Meshtastic radio — all at wrong baud rates — corrupting its serial
+	// buffer and leaving it in a state where it never responds. [MESHSAT-403]
+	if vidpid == "" && strings.HasPrefix(filepath.Base(port), "ttyACM") {
+		s.probeMu.Lock()
+		meshResult := ProbeMeshtastic(port)
+		s.probeMu.Unlock()
+		if meshResult {
+			s.claimAndNotify(port, vidpid, RoleMeshtastic, "Meshtastic probe (unknown VID:PID)")
+			return
+		}
+	}
+
 	// Step 2: JSPR probe for 9704 (~500ms)
-	// Skip on platform UARTs (ttyAMA*) — they have no FTDI chip and never respond to JSPR.
-	// Skip on known cellular VID:PIDs — JSPR probe wastes 9s on Huawei modems. [MESHSAT-444]
-	// NOTE: probeJSPR uses O_NONBLOCK + select() which is unreliable on ARM64 FTDI;
-	// prefer VID:PID + USB product string identification (Step 1) when possible.
+	// The 9704 uses FTDI chips (0403:6015, 0403:6001) exclusively. Probing
+	// non-FTDI devices with JSPR at 230400 baud corrupts their serial state
+	// (e.g., ZigBee CC2652P at 115200 receives garbled data and stops responding
+	// to ZNP, Meshtastic radios get junk in their RX buffer). [MESHSAT-403]
+	// Skip on: platform UARTs, known cellular/Meshtastic/ZigBee VID:PIDs.
+	// Only probe ports with FTDI or truly unknown VID:PIDs.
 	if strings.HasPrefix(filepath.Base(port), "ttyAMA") {
-		// Platform UART — skip JSPR probe entirely
+		// Platform UART — use Go serial library probe instead of raw fd+select
+		// which doesn't work on PL011/RP1 UARTs. This enables auto-detection
+		// of the 9704 on Pi 5 UART2 (/dev/ttyAMA2) without requiring
+		// MESHSAT_IMT_PORT to be set explicitly. [MESHSAT-403]
+		s.probeMu.Lock()
+		jsprResult := probeJSPRSerial(port)
+		s.probeMu.Unlock()
+		if jsprResult {
+			s.claimAndNotify(port, vidpid, RoleIridium9704, "JSPR probe (platform UART)")
+			return
+		}
 	} else if knownCellularVIDPIDs[vidpid] {
 		// Known cellular modem — skip JSPR probe (would hang for 9s) [MESHSAT-444]
+	} else if knownMeshtasticVIDPIDs[vidpid] || ambiguousZigBeeVIDPIDs[vidpid] || knownZigBeeOnlyVIDPIDs[vidpid] {
+		// Known Meshtastic/ZigBee VID:PID — JSPR at wrong baud rate corrupts device state [MESHSAT-403]
 	} else {
 		s.probeMu.Lock()
 		jsprResult := probeJSPR(port)
@@ -444,10 +473,12 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	}
 
 	// Step 3: AT probe for 9603 (~500ms)
-	// Skip ports with known non-Iridium VID:PIDs
+	// Skip ports with known non-Iridium VID:PIDs (including ambiguous ZigBee since
+	// CP210x/CH343 are never Iridium 9603 — it uses FTDI exclusively). [MESHSAT-403]
 	if vidpid == "" || (!knownMeshtasticVIDPIDs[vidpid] && !gpsVIDPIDs[vidpid] &&
 		!knownCellularVIDPIDs[vidpid] &&
-		!knownZigBeeOnlyVIDPIDs[vidpid]) {
+		!knownZigBeeOnlyVIDPIDs[vidpid] &&
+		!ambiguousZigBeeVIDPIDs[vidpid]) {
 		s.probeMu.Lock()
 		atResult := probeAT(port)
 		s.probeMu.Unlock()
