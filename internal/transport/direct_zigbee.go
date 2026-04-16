@@ -500,14 +500,7 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 	go z.readLoop(ctx)
 	go z.reinitLoop(ctx)
 	go z.periodicRefreshLoop(ctx) // [MESHSAT-509] keep sensor values fresh
-	// stuckReadWatchdog is intentionally NOT started — see the note on the
-	// function for context. The cp210x driver wedges on these specific
-	// SONOFF dongles every ~2-3 min regardless of traffic, and the
-	// USBDEVFS_RESET recovery races with the device-supervisor → gateway-
-	// manager rebind, leaving the gateway in a permanent down state. Until
-	// the rebind race is fixed, the watchdog does more harm than good —
-	// without it, the operator can pair / drive the gateway during the
-	// initial healthy window after each container restart. [MESHSAT-509]
+	go z.stuckReadWatchdog(ctx)   // [MESHSAT-509] USBDEVFS_RESET if readLoop wedges
 
 	// Hydrate the in-memory device cache from DB so the API and any
 	// dashboard widget see previously-paired devices immediately, even

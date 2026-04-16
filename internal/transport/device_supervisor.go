@@ -582,14 +582,46 @@ func (s *DeviceSupervisor) claimAndNotify(port, vidpid string, role DeviceRole, 
 			Msg("device-supervisor: probe succeeded but claim failed (port claimed by another goroutine)")
 		return
 	}
+	// Ensure the device entry exists in the devices map BEFORE we emit
+	// device_connected. Reason: identifyAndClaimPort runs faster than the
+	// periodic-scan Upsert when a port re-enumerates after USBDEVFS_RESET.
+	// If we emit with a nil Device, handleDeviceEvent's `if ev.Device ==
+	// nil { return }` guard silently drops it, the gateway-manager never
+	// rebinds, and the gateway is left permanently down. ClaimPort writes
+	// only to the claims map (separate from devices); we need an explicit
+	// Upsert here to populate the entry the consumer expects.
+	// [MESHSAT-509 — supervisor → gateway-manager rebind race]
+	now := time.Now()
+	s.registry.Upsert(port, SerialDeviceEntry{
+		DevPath:   port,
+		VIDPID:    vidpid,
+		State:     StateReady,
+		Role:      role,
+		FirstSeen: now,
+		LastSeen:  now,
+	})
 	s.registry.SetRole(port, role)
 	s.registry.SetState(port, StateReady)
 	log.Info().Str("port", port).Str("vidpid", vidpid).Str("role", string(role)).
 		Msgf("device-supervisor: identified by %s", method)
 	s.notifyPortFound(role, port)
+	entry := s.registryEntry(port)
+	if entry == nil {
+		// Defence-in-depth: if Upsert somehow didn't take, build the entry
+		// inline so the event isn't dropped by the nil-Device guard.
+		fallback := SerialDeviceEntry{
+			DevPath:   port,
+			VIDPID:    vidpid,
+			State:     StateReady,
+			Role:      role,
+			FirstSeen: now,
+			LastSeen:  now,
+		}
+		entry = &fallback
+	}
 	s.emitEvent(DeviceEvent{
 		Type:   "device_connected",
-		Device: s.registryEntry(port),
+		Device: entry,
 	})
 }
 
