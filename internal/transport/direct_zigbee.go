@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -178,7 +179,24 @@ type DirectZigBeeTransport struct {
 	// that exercise only the protocol layer), the transport keeps everything
 	// in memory and skips DB writes. Set via SetStore() before Start().
 	db ZigBeeStore
+
+	// lastReadActivityNanos tracks when readLoop last consumed bytes from
+	// the serial port, set with atomic store. The stuck-read watchdog
+	// goroutine compares against this — if no bytes have arrived in
+	// stuckReadThreshold, the cp210x driver is presumed wedged and we
+	// USBDEVFS_RESET the port to force readLoop's blocked Read to return
+	// EBADF, which releases serialMu so queued sends can proceed. This is
+	// the same kernel-driver bug we saw on SYS_RESET_IND, but triggered
+	// by heavy traffic patterns rather than a chip reset. [MESHSAT-509]
+	lastReadActivityNanos atomic.Int64
 }
+
+// stuckReadThreshold is how long readLoop can sit in read(2) without
+// receiving any bytes before the watchdog declares the cp210x driver
+// wedged and triggers USBDEVFS_RESET. Long enough that idle networks
+// (no traffic, no scheduled reports) don't trigger spurious resets, short
+// enough that real wedges unstick within a UI poll cycle.
+const stuckReadThreshold = 90 * time.Second
 
 // NewDirectZigBeeTransport creates a new ZigBee transport.
 func NewDirectZigBeeTransport() *DirectZigBeeTransport {
@@ -473,6 +491,7 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 	go z.readLoop(ctx)
 	go z.reinitLoop(ctx)
 	go z.periodicRefreshLoop(ctx) // [MESHSAT-509] keep sensor values fresh
+	go z.stuckReadWatchdog(ctx)   // [MESHSAT-509] USBDEVFS_RESET if readLoop wedges
 
 	// Hydrate the in-memory device cache from DB so the API and any
 	// dashboard widget see previously-paired devices immediately, even
@@ -594,6 +613,75 @@ func (z *DirectZigBeeTransport) RefreshDeviceSensors(shortAddr uint16) {
 		if err := z.SendReadAttributes(shortAddr, ep, r.cluster, r.attr); err != nil {
 			log.Debug().Err(err).Str("kind", r.label).Uint16("addr", shortAddr).
 				Msg("zigbee: refresh read failed (sleepy device, will retry next cycle)")
+		}
+	}
+}
+
+// stuckReadWatchdog detects the cp210x "Select-readable-but-read-blocks"
+// wedge condition and recovers it by USBDEVFS_RESET. Runs every 30 seconds.
+//
+// Detection: lastReadActivityNanos is updated by readLoop on every byte
+// received. If MORE than stuckReadThreshold has passed since the last
+// successful read AND there are pending sends queued (serialMu contended),
+// the readLoop is presumed stuck and we trigger a USB reset.
+//
+// We also gate on "is anyone actually waiting?" by checking serialMu
+// contention via TryLock — if no one's trying to send, an idle network is
+// fine and we shouldn't churn through resets. [MESHSAT-509]
+//
+// Cost of a false positive: one USB reset (~2s of dropped traffic) and the
+// device-supervisor reattaches the gateway to the renamed tty. Benign.
+func (z *DirectZigBeeTransport) stuckReadWatchdog(ctx context.Context) {
+	const checkInterval = 30 * time.Second
+	// Prime the activity timestamp at start so we don't fire spuriously
+	// before readLoop has had a chance to receive its first frame.
+	z.lastReadActivityNanos.Store(time.Now().UnixNano())
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		last := z.lastReadActivityNanos.Load()
+		if last == 0 {
+			continue
+		}
+		idle := time.Since(time.Unix(0, last))
+		if idle < stuckReadThreshold {
+			continue
+		}
+
+		// Check whether anyone is queued waiting for serialMu. If TryLock
+		// succeeds, no one's waiting and we're just on an idle network —
+		// release immediately and skip the reset. If it fails, readLoop
+		// (or someone) holds it AND someone else is queued.
+		if z.serialMu.TryLock() {
+			z.serialMu.Unlock()
+			continue
+		}
+
+		z.mu.Lock()
+		portName := z.portName
+		z.mu.Unlock()
+		if portName == "" {
+			continue
+		}
+
+		log.Warn().Dur("idle", idle).Str("port", portName).
+			Msg("zigbee: stuck-read watchdog firing — USBDEVFS_RESET to unwedge cp210x driver")
+		usbResetSerialDevice("zigbee-watchdog", portName)
+		// Reset our timer regardless of whether the reset call succeeded —
+		// avoids hammering the kernel with reset ioctls in tight loop if
+		// something is fundamentally wrong with the device.
+		z.lastReadActivityNanos.Store(time.Now().UnixNano())
+		// Give the kernel a beat to re-enumerate before the next check.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
 		}
 	}
 }
@@ -1213,6 +1301,7 @@ func (z *DirectZigBeeTransport) readLoop(ctx context.Context) {
 		port.SetReadTimeout(500 * time.Millisecond)
 		n, err := port.Read(buf)
 		if n > 0 {
+			z.lastReadActivityNanos.Store(time.Now().UnixNano())
 			accumulated = append(accumulated, buf[:n]...)
 			z.processAccumulated(&accumulated)
 		}
