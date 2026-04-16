@@ -25,21 +25,31 @@ var knownZigBeeVIDPIDs = map[string]bool{
 
 // ZigBeeDevice holds information about a paired ZigBee device.
 type ZigBeeDevice struct {
-	ShortAddr uint16    `json:"short_addr"`
-	IEEEAddr  string    `json:"ieee_addr"` // hex-encoded 8-byte IEEE address
-	Endpoint  byte      `json:"endpoint"`
-	LQI       byte      `json:"lqi"`
-	LastSeen  time.Time `json:"last_seen"`
+	ShortAddr   uint16    `json:"short_addr"`
+	IEEEAddr    string    `json:"ieee_addr"` // hex-encoded 8-byte IEEE address
+	Endpoint    byte      `json:"endpoint"`
+	LQI         byte      `json:"lqi"`
+	LastSeen    time.Time `json:"last_seen"`
+	Temperature *float64  `json:"temperature,omitempty"` // Celsius (from cluster 0x0402) [MESHSAT-511]
+	Humidity    *float64  `json:"humidity,omitempty"`    // percent (from cluster 0x0405) [MESHSAT-511]
 }
 
 // ZigBeeEvent is emitted when data arrives from a ZigBee device.
 type ZigBeeEvent struct {
-	Type      string       `json:"type"` // "data", "join", "leave"
-	Device    ZigBeeDevice `json:"device"`
-	ClusterID uint16       `json:"cluster_id"`
-	Data      []byte       `json:"data"`
-	Timestamp time.Time    `json:"timestamp"`
+	Type        string       `json:"type"` // "data", "join", "leave", "temperature", "humidity"
+	Device      ZigBeeDevice `json:"device"`
+	ClusterID   uint16       `json:"cluster_id"`
+	Data        []byte       `json:"data"`
+	Timestamp   time.Time    `json:"timestamp"`
+	Temperature *float64     `json:"temperature,omitempty"` // decoded Celsius [MESHSAT-511]
+	Humidity    *float64     `json:"humidity,omitempty"`    // decoded percent [MESHSAT-511]
 }
+
+// ZCL cluster IDs for sensor data [MESHSAT-511]
+const (
+	ZCLClusterTemperature = 0x0402
+	ZCLClusterHumidity    = 0x0405
+)
 
 // DirectZigBeeTransport manages a CC2652P Z-Stack coordinator over serial.
 type DirectZigBeeTransport struct {
@@ -53,6 +63,9 @@ type DirectZigBeeTransport struct {
 	transID     byte                     // incrementing transaction ID
 	subscribers []chan ZigBeeEvent
 	subMu       sync.RWMutex
+
+	// Permit-join state
+	permitJoinEnd time.Time // when permit-join expires (zero = not active)
 
 	// Firmware info (populated after init)
 	FirmwareVersion string
@@ -188,6 +201,56 @@ func (z *DirectZigBeeTransport) Send(dstAddr uint16, dstEP byte, clusterID uint1
 	z.transID++
 	frame := BuildAFDataReq(dstAddr, dstEP, 1, clusterID, z.transID, data)
 	return z.sendFrame(frame)
+}
+
+// PermitJoin sends ZDO_MGMT_PERMIT_JOIN_REQ to open the network for pairing.
+// duration is clamped to 1-254 seconds. Use 0 to close the network.
+func (z *DirectZigBeeTransport) PermitJoin(durationSec byte) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+
+	if !z.running {
+		return fmt.Errorf("zigbee transport not running")
+	}
+
+	frame := BuildMgmtPermitJoinReq(durationSec)
+	if err := z.sendFrame(frame); err != nil {
+		return fmt.Errorf("permit join send: %w", err)
+	}
+
+	resp, err := z.readFrameTimeout(2 * time.Second)
+	if err != nil {
+		return fmt.Errorf("permit join response: %w", err)
+	}
+	if resp.IsCmd(CmdZDOMgmtPermitJoinRsp) && len(resp.Data) > 0 && resp.Data[0] != 0 {
+		return fmt.Errorf("permit join failed: status=0x%02x", resp.Data[0])
+	}
+
+	if durationSec > 0 {
+		z.permitJoinEnd = time.Now().Add(time.Duration(durationSec) * time.Second)
+		log.Info().Uint8("duration_sec", durationSec).Msg("zigbee: permit join opened")
+	} else {
+		z.permitJoinEnd = time.Time{}
+		log.Info().Msg("zigbee: permit join closed")
+	}
+
+	return nil
+}
+
+// PermitJoinRemaining returns the seconds remaining on the permit-join window.
+// Returns 0 if permit-join is not active.
+func (z *DirectZigBeeTransport) PermitJoinRemaining() int {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if z.permitJoinEnd.IsZero() {
+		return 0
+	}
+	rem := time.Until(z.permitJoinEnd)
+	if rem <= 0 {
+		z.permitJoinEnd = time.Time{}
+		return 0
+	}
+	return int(rem.Seconds())
 }
 
 // ---- Internal ----
@@ -343,6 +406,16 @@ func (z *DirectZigBeeTransport) handleFrame(f ZNPFrame) {
 		}
 	case f.IsCmd(CmdZDOEndDeviceAnnceInd):
 		z.handleDeviceAnnounce(f)
+	case f.IsCmd(CmdZDOPermitJoinInd):
+		if len(f.Data) > 0 {
+			dur := f.Data[0]
+			log.Info().Uint8("duration", dur).Msg("zigbee: permit join indication")
+			z.mu.Lock()
+			if dur == 0 {
+				z.permitJoinEnd = time.Time{}
+			}
+			z.mu.Unlock()
+		}
 	default:
 		log.Debug().Str("frame", f.String()).Msg("zigbee: unhandled frame")
 	}
@@ -363,6 +436,30 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 	}
 	dev.LQI = msg.LQI
 	dev.LastSeen = time.Now()
+
+	// Decode ZCL Report Attributes for sensor clusters [MESHSAT-511]
+	var temperature *float64
+	var humidity *float64
+	evtType := "data"
+
+	switch msg.ClusterID {
+	case ZCLClusterTemperature:
+		if v, ok := decodeZCLInt16Attr(msg.Data); ok {
+			t := float64(v) / 100.0 // ZCL temp is in 0.01 C
+			temperature = &t
+			dev.Temperature = &t
+			evtType = "temperature"
+			log.Info().Uint16("src", msg.SrcAddr).Float64("celsius", t).Msg("zigbee: temperature reading")
+		}
+	case ZCLClusterHumidity:
+		if v, ok := decodeZCLUint16Attr(msg.Data); ok {
+			h := float64(v) / 100.0 // ZCL humidity is in 0.01 %
+			humidity = &h
+			dev.Humidity = &h
+			evtType = "humidity"
+			log.Info().Uint16("src", msg.SrcAddr).Float64("percent", h).Msg("zigbee: humidity reading")
+		}
+	}
 	z.mu.Unlock()
 
 	log.Debug().
@@ -373,12 +470,34 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 		Msg("zigbee: incoming data")
 
 	z.emit(ZigBeeEvent{
-		Type:      "data",
-		Device:    *dev,
-		ClusterID: msg.ClusterID,
-		Data:      msg.Data,
-		Timestamp: time.Now(),
+		Type:        evtType,
+		Device:      *dev,
+		ClusterID:   msg.ClusterID,
+		Data:        msg.Data,
+		Timestamp:   time.Now(),
+		Temperature: temperature,
+		Humidity:    humidity,
 	})
+}
+
+// decodeZCLInt16Attr decodes a ZCL Report Attributes frame for a signed 16-bit value.
+// Frame: frame_control(1) + seq(1) + attr_id(2) + data_type(1) + value(2)
+func decodeZCLInt16Attr(data []byte) (int16, bool) {
+	if len(data) < 7 {
+		return 0, false
+	}
+	// Skip frame control (1), sequence (1), attr ID (2), data type (1) = 5 bytes
+	val := int16(data[5]) | int16(data[6])<<8
+	return val, true
+}
+
+// decodeZCLUint16Attr decodes a ZCL Report Attributes frame for an unsigned 16-bit value.
+func decodeZCLUint16Attr(data []byte) (uint16, bool) {
+	if len(data) < 7 {
+		return 0, false
+	}
+	val := uint16(data[5]) | uint16(data[6])<<8
+	return val, true
 }
 
 func (z *DirectZigBeeTransport) handleDeviceAnnounce(f ZNPFrame) {

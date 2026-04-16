@@ -676,6 +676,61 @@ async function fetchZigBeeDevices() {
   } catch {}
 }
 
+// ZigBee permit-join [MESHSAT-510]
+const permitJoinActive = ref(false)
+const permitJoinRemaining = ref(0)
+const permitJoinDuration = ref(60)
+let permitJoinTimer = null
+
+async function fetchPermitJoinStatus() {
+  try {
+    const resp = await fetch('/api/zigbee/permit-join')
+    const data = await resp.json()
+    permitJoinActive.value = data.active
+    permitJoinRemaining.value = data.remaining_sec
+    if (data.active && !permitJoinTimer) startPermitJoinCountdown()
+    if (!data.active && permitJoinTimer) stopPermitJoinCountdown()
+  } catch {}
+}
+
+async function togglePermitJoin() {
+  const dur = permitJoinActive.value ? 0 : permitJoinDuration.value
+  try {
+    const resp = await fetch('/api/zigbee/permit-join', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ duration_sec: dur })
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      if (dur > 0) {
+        permitJoinActive.value = true
+        permitJoinRemaining.value = dur
+        startPermitJoinCountdown()
+      } else {
+        permitJoinActive.value = false
+        permitJoinRemaining.value = 0
+        stopPermitJoinCountdown()
+      }
+    }
+  } catch {}
+}
+
+function startPermitJoinCountdown() {
+  stopPermitJoinCountdown()
+  permitJoinTimer = setInterval(() => {
+    if (permitJoinRemaining.value > 0) {
+      permitJoinRemaining.value--
+    } else {
+      permitJoinActive.value = false
+      stopPermitJoinCountdown()
+    }
+  }, 1000)
+}
+
+function stopPermitJoinCountdown() {
+  if (permitJoinTimer) { clearInterval(permitJoinTimer); permitJoinTimer = null }
+}
+
 // Routing config + peers + flood control
 const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '' })
 const routingWarning = ref('')
@@ -790,7 +845,7 @@ onMounted(async () => {
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
-  fetchZigBeeStatus(); fetchZigBeeDevices()
+  fetchZigBeeStatus(); fetchZigBeeDevices(); fetchPermitJoinStatus()
   store.fetchRangeTests()
   loadSigningKey()
   loadSpectrumStatus()
@@ -1428,6 +1483,30 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <button @click="saveZigBee" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save ZigBee Config</button>
       </div>
 
+      <!-- Permit Join -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium text-gray-200">Permit Join</span>
+          <span v-if="permitJoinActive" class="text-xs text-amber-400 animate-pulse">
+            Open — {{ permitJoinRemaining }}s remaining
+          </span>
+          <span v-else class="text-xs text-gray-500">Closed</span>
+        </div>
+        <p class="text-[10px] text-gray-600">Open the network to allow new ZigBee devices to pair with the coordinator.</p>
+        <div class="flex items-center gap-3">
+          <div class="flex-1">
+            <label class="block text-xs text-gray-500 mb-1">Duration (seconds)</label>
+            <input v-model.number="permitJoinDuration" type="number" min="1" max="254" :disabled="permitJoinActive"
+              class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 disabled:opacity-50">
+          </div>
+          <button @click="togglePermitJoin" class="mt-4 px-4 py-2 rounded text-sm text-white"
+            :class="permitJoinActive ? 'bg-red-600 hover:bg-red-500' : 'bg-amber-600 hover:bg-amber-500'"
+            :disabled="!zigbeeStatus?.connected">
+            {{ permitJoinActive ? 'Close Network' : 'Open Network' }}
+          </button>
+        </div>
+      </div>
+
       <!-- Paired Devices -->
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
         <div class="flex items-center justify-between">
@@ -1435,7 +1514,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           <button @click="fetchZigBeeDevices" class="text-xs text-teal-400 hover:text-teal-300">Refresh</button>
         </div>
         <div v-if="zigbeeDevices.length === 0" class="text-xs text-gray-500 py-2">
-          No devices paired yet. Pair a ZigBee device by putting it in pairing mode.
+          No devices paired yet. Open the network above, then put your ZigBee device in pairing mode.
         </div>
         <div v-else class="divide-y divide-gray-700/50">
           <div v-for="dev in zigbeeDevices" :key="dev.short_addr" class="py-2 flex items-center justify-between text-xs">

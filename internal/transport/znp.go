@@ -63,6 +63,11 @@ var (
 	CmdZDONodeDescReq       = [2]byte{ZNPTypeSREQ | ZNPSubZDO, 0x02}
 	CmdZDOActiveEPReq       = [2]byte{ZNPTypeSREQ | ZNPSubZDO, 0x05}
 
+	// ZDO permit join
+	CmdZDOMgmtPermitJoinReq = [2]byte{ZNPTypeSREQ | ZNPSubZDO, 0x36}
+	CmdZDOMgmtPermitJoinRsp = [2]byte{ZNPTypeSRSP | ZNPSubZDO, 0x36}
+	CmdZDOPermitJoinInd     = [2]byte{ZNPTypeAREQ | ZNPSubZDO, 0xCB}
+
 	// UTIL commands
 	CmdUtilGetDeviceInfo    = [2]byte{ZNPTypeSREQ | ZNPSubUtil, 0x00}
 	CmdUtilGetDeviceInfoRsp = [2]byte{ZNPTypeSRSP | ZNPSubUtil, 0x00}
@@ -239,6 +244,22 @@ func BuildAFDataReq(dstAddr uint16, dstEP, srcEP byte, clusterID uint16, transID
 	payload = append(payload, byte(len(data)))
 	payload = append(payload, data...)
 	return ZNPFrame{Cmd: CmdAFDataReq, Data: payload}
+}
+
+// BuildMgmtPermitJoinReq creates a ZDO_MGMT_PERMIT_JOIN_REQ to open the
+// network for device pairing. [MESHSAT-510]
+// addrMode: 0x0F = broadcast to all routers, 0x02 = unicast
+// dstAddr: 0xFFFC = all routers+coordinator (broadcast)
+// duration: 0-254 seconds (0 = disable, 255 = until turned off)
+// tcSignificance: 1 = update trust center
+func BuildMgmtPermitJoinReq(duration byte) ZNPFrame {
+	payload := []byte{
+		0x0F,       // AddrMode: broadcast
+		0xFC, 0xFF, // DstAddr: 0xFFFC (all routers + coordinator)
+		duration, // Duration in seconds
+		0x01,     // TC_Significance: yes
+	}
+	return ZNPFrame{Cmd: CmdZDOMgmtPermitJoinReq, Data: payload}
 }
 
 // ---- ZNP response parsers ----

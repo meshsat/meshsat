@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 )
 
@@ -77,4 +78,83 @@ func (s *Server) handleGetZigBeeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handlePostZigBeePermitJoin opens the ZigBee network for device pairing.
+// @Summary Open ZigBee network for pairing
+// @Description Sends ZDO_MGMT_PERMIT_JOIN_REQ to the coordinator to allow new devices to join
+// @Tags zigbee
+// @Accept json
+// @Produce json
+// @Param body body object true "duration_sec (1-254, 0 to close)"
+// @Success 200 {object} map[string]interface{} "ok, duration_sec"
+// @Failure 400 {object} map[string]string "error"
+// @Failure 503 {object} map[string]string "error"
+// @Router /api/zigbee/permit-join [post]
+func (s *Server) handlePostZigBeePermitJoin(w http.ResponseWriter, r *http.Request) {
+	zgw := s.gwManager.GetZigBeeGateway()
+	if zgw == nil {
+		writeError(w, http.StatusServiceUnavailable, "zigbee gateway not running")
+		return
+	}
+	t := zgw.GetTransport()
+	if t == nil {
+		writeError(w, http.StatusServiceUnavailable, "zigbee transport not available")
+		return
+	}
+
+	var req struct {
+		DurationSec int `json:"duration_sec"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.DurationSec < 0 || req.DurationSec > 254 {
+		writeError(w, http.StatusBadRequest, "duration_sec must be 0-254")
+		return
+	}
+
+	if err := t.PermitJoin(byte(req.DurationSec)); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":           true,
+		"duration_sec": req.DurationSec,
+	})
+}
+
+// handleGetZigBeePermitJoin returns the current permit-join status.
+// @Summary Get ZigBee permit-join status
+// @Description Returns whether the network is open for pairing and the remaining duration
+// @Tags zigbee
+// @Produce json
+// @Success 200 {object} map[string]interface{} "active, remaining_sec"
+// @Router /api/zigbee/permit-join [get]
+func (s *Server) handleGetZigBeePermitJoin(w http.ResponseWriter, r *http.Request) {
+	zgw := s.gwManager.GetZigBeeGateway()
+	if zgw == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"active":        false,
+			"remaining_sec": 0,
+		})
+		return
+	}
+	t := zgw.GetTransport()
+	if t == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"active":        false,
+			"remaining_sec": 0,
+		})
+		return
+	}
+
+	rem := t.PermitJoinRemaining()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"active":        rem > 0,
+		"remaining_sec": rem,
+	})
 }

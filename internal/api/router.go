@@ -462,6 +462,8 @@ func (s *Server) Router() http.Handler {
 		// ZigBee coordinator (v0.3.0)
 		r.Get("/zigbee/devices", s.handleGetZigBeeDevices)
 		r.Get("/zigbee/status", s.handleGetZigBeeStatus)
+		r.Post("/zigbee/permit-join", s.handlePostZigBeePermitJoin)
+		r.Get("/zigbee/permit-join", s.handleGetZigBeePermitJoin)
 
 		// APRS dashboard (v0.4.0)
 		r.Get("/aprs/status", s.handleGetAPRSStatus)
