@@ -246,6 +246,7 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	}
 
 	g.msgsOut.Add(1)
+	g.tracker.RecordTX()
 	g.lastActive.Store(time.Now().Unix())
 	log.Debug().Str("callsign", FormatCallsign(src)).Msg("aprs: sent packet")
 }
