@@ -254,21 +254,39 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	}
 	log.Debug().Str("port", portPath).Msg("cellular: serial port opened")
 
-	t.file = sp
 	t.port = portPath
+
+	// Wait for modem readiness — ESP32 passthrough boards (T-Call A7670E) reset
+	// on serial port open (DTR assertion triggers ESP32 auto-reset circuit).
+	// The factory sketch then pulses PWRKEY, cold-boots the modem (~15s), and
+	// runs autobaud before entering passthrough mode. Sending AT commands before
+	// passthrough is active gets zero response.
+	// Retry AT for up to 30s to cover the full ESP32+modem cold boot sequence.
+	log.Debug().Msg("cellular: waiting for modem AT response (up to 30s)")
+	atDeadline := time.Now().Add(30 * time.Second)
+	atReady := false
+	for time.Now().Before(atDeadline) {
+		resp, err := sendAT(sp, "AT", 2*time.Second)
+		if err == nil && strings.Contains(resp, "OK") {
+			atReady = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !atReady {
+		sp.Close()
+		return fmt.Errorf("AT check failed after 30s")
+	}
+	log.Info().Str("port", portPath).Msg("cellular: modem responded to AT")
+
+	t.file = sp
 
 	// Initialize modem — each command has cellATTimeout (3s) as safety net.
 	// Init runs before the I/O loop starts, so direct serial access is safe.
-	log.Debug().Msg("cellular: init ATE0")
 	sendAT(sp, "ATE0", cellATTimeout)
 	sendAT(sp, "AT&K0", cellATTimeout)
-	resp, err := sendAT(sp, "AT", cellATTimeout)
-	if err != nil || !strings.Contains(resp, "OK") {
-		sp.Close()
-		return fmt.Errorf("AT check failed")
-	}
 	log.Debug().Msg("cellular: init AT+CGSN")
-	resp, err = sendAT(sp, "AT+CGSN", cellATTimeout)
+	resp, err := sendAT(sp, "AT+CGSN", cellATTimeout)
 	imei := ""
 	if err == nil {
 		imei = parseATValue(resp)
