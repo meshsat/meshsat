@@ -100,6 +100,51 @@ func NewDirectZigBeeTransport() *DirectZigBeeTransport {
 	}
 }
 
+// reopenPort (re)opens the serial port named by z.portName. Closes any
+// existing port first. Used by reinitLoop to escape the CP210x driver's
+// "stuck read" state after the CC2652P does an unsolicited hard reset —
+// without a close/reopen, read(2) on the surviving fd can block for
+// minutes despite SetReadTimeout. Caller must hold z.serialMu.
+func (z *DirectZigBeeTransport) reopenPort() error {
+	z.mu.Lock()
+	portName := z.portName
+	old := z.port
+	z.mu.Unlock()
+
+	if old != nil {
+		_ = old.Close()
+	}
+
+	mode := &serial.Mode{
+		BaudRate: 115200,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+	}
+	p, err := serial.Open(portName, mode)
+	if err != nil {
+		return fmt.Errorf("reopen %s: %w", portName, err)
+	}
+
+	// Drain any stale data from the kernel buffer and give the CC2652P
+	// a beat to finish its power-up sequence.
+	p.SetReadTimeout(200 * time.Millisecond)
+	drain := make([]byte, 256)
+	for {
+		n, _ := p.Read(drain)
+		if n == 0 {
+			break
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	z.mu.Lock()
+	z.port = p
+	z.mu.Unlock()
+	log.Debug().Str("port", portName).Msg("zigbee: serial port reopened")
+	return nil
+}
+
 // watchStateChange registers a listener that receives the next
 // ZDO_STATE_CHANGE_IND byte(s). The caller must call unsub when done.
 // Implementation note: this is the Go equivalent of zigbee-herdsman's
@@ -628,18 +673,30 @@ func (z *DirectZigBeeTransport) sendFrame(f ZNPFrame) error {
 	if err != nil {
 		return err
 	}
-	_, err = z.port.Write(encoded)
+	z.mu.Lock()
+	port := z.port
+	z.mu.Unlock()
+	if port == nil {
+		return fmt.Errorf("zigbee port closed")
+	}
+	_, err = port.Write(encoded)
 	return err
 }
 
 func (z *DirectZigBeeTransport) readFrameTimeout(timeout time.Duration) (ZNPFrame, error) {
-	z.port.SetReadTimeout(timeout)
+	z.mu.Lock()
+	port := z.port
+	z.mu.Unlock()
+	if port == nil {
+		return ZNPFrame{}, fmt.Errorf("zigbee port closed")
+	}
+	port.SetReadTimeout(timeout)
 	buf := make([]byte, 256)
 	var accumulated []byte
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		n, err := z.port.Read(buf)
+		n, err := port.Read(buf)
 		if n > 0 {
 			accumulated = append(accumulated, buf[:n]...)
 			frame, _, err := DecodeZNP(accumulated)
@@ -669,14 +726,35 @@ func (z *DirectZigBeeTransport) readLoop(ctx context.Context) {
 		// commands (PermitJoin, Send). Short lock duration — just the
 		// Read call + frame processing. [MESHSAT-510]
 		z.serialMu.Lock()
-		z.port.SetReadTimeout(500 * time.Millisecond)
-		n, err := z.port.Read(buf)
+		z.mu.Lock()
+		port := z.port
+		z.mu.Unlock()
+		if port == nil {
+			// reinitLoop briefly nils z.port between close and reopen to
+			// break a stuck read(2). Yield and retry.
+			z.serialMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		}
+		port.SetReadTimeout(500 * time.Millisecond)
+		n, err := port.Read(buf)
 		if n > 0 {
 			accumulated = append(accumulated, buf[:n]...)
 			z.processAccumulated(&accumulated)
 		}
 		z.serialMu.Unlock()
 		if err != nil {
+			// Port may have been closed by reinitLoop — back off briefly
+			// to avoid spinning. Next iteration will pick up the new port.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 			continue
 		}
 	}
@@ -784,8 +862,37 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 		case <-time.After(1500 * time.Millisecond):
 		}
 
-		z.serialMu.Lock()
 		log.Info().Msg("zigbee: re-initialising coordinator after reset")
+
+		// Close the existing serial fd BEFORE taking serialMu. After an
+		// unsolicited CC2652P hard reset, the CP210x kernel driver can
+		// leave readLoop's blocking read(2) syscall stuck indefinitely
+		// despite SetReadTimeout — that means readLoop keeps serialMu
+		// forever and we can never acquire it. Closing the fd forces
+		// readLoop's Read to return EBADF, it releases serialMu, and we
+		// can proceed. [MESHSAT-510]
+		z.mu.Lock()
+		old := z.port
+		z.port = nil
+		z.mu.Unlock()
+		if old != nil {
+			_ = old.Close()
+		}
+
+		z.serialMu.Lock()
+
+		// Now reopen the port and run init under the lock.
+		if err := z.reopenPort(); err != nil {
+			log.Error().Err(err).Msg("zigbee: reopen port before re-init failed")
+			z.serialMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
+			continue
+		}
+
 		err := z.initCoordinator(ctx)
 		z.serialMu.Unlock()
 
