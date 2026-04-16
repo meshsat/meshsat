@@ -304,6 +304,7 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 					Device: existing,
 				})
 				s.registry.Remove(port)
+				InvalidateProbeCache(port)
 				// Fall through to register as new
 			} else {
 				// Same device — actually update LastSeen [MESHSAT-444]
@@ -344,6 +345,7 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 		s.probingMu.Lock()
 		delete(s.skipPorts, entry.DevPath)
 		s.probingMu.Unlock()
+		InvalidateProbeCache(entry.DevPath)
 
 		// Notify driver that port is gone
 		if entry.Role != RoleNone {
@@ -377,6 +379,7 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 				log.Info().Str("port", entry.DevPath).Str("role", string(entry.Role)).Msg("device-supervisor: serial port vanished")
 			}
 			s.registry.Remove(entry.DevPath)
+			InvalidateProbeCache(entry.DevPath)
 			// Clean up skip list — port may be reassigned on re-plug [MESHSAT-444]
 			s.probingMu.Lock()
 			delete(s.skipPorts, entry.DevPath)

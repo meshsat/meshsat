@@ -2059,7 +2059,11 @@ function widgetGridClass(id) {
           </div>
           <div class="flex items-center gap-2">
             <span v-if="store.zigbeeStatus?.firmware" class="text-[10px] text-gray-500">{{ store.zigbeeStatus.firmware }}</span>
-            <span :class="store.zigbeeStatus?.connected ? 'bg-yellow-400' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+            <span v-if="store.zigbeeStatus?.connected && store.zigbeeStatus?.coord_state && !store.zigbeeStatus?.coord_ready"
+                  class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
+              {{ store.zigbeeStatus.coord_state }}
+            </span>
+            <span :class="store.zigbeeStatus?.coord_ready ? 'bg-yellow-400' : store.zigbeeStatus?.connected ? 'bg-amber-500 animate-pulse' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
           </div>
         </div>
 
@@ -2084,11 +2088,12 @@ function widgetGridClass(id) {
         </div>
 
         <!-- Permit Join button -->
-        <div class="flex items-center gap-2 mb-3">
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
           <button v-if="!store.zigbeePermitJoin?.active"
             @click="zbPermitJoinErr = ''; store.startZigBeePermitJoin(120).then(() => store.fetchZigBeePermitJoin()).catch(e => zbPermitJoinErr = e.message)"
-            class="px-3 py-1 rounded text-[10px] font-medium bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/20 transition-colors"
-            :disabled="!store.zigbeeStatus?.connected">
+            class="px-3 py-1 rounded text-[10px] font-medium bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="!store.zigbeeStatus?.connected || !store.zigbeeStatus?.coord_ready"
+            :title="store.zigbeeStatus?.coord_ready ? '' : 'Network still forming — wait for coordinator to reach DEV_ZB_COORD'">
             Permit Join (120s)
           </button>
           <button v-else
@@ -2096,6 +2101,10 @@ function widgetGridClass(id) {
             class="px-3 py-1 rounded text-[10px] font-medium bg-red-400/10 text-red-400 border border-red-400/20 hover:bg-red-400/20 transition-colors animate-pulse">
             Pairing Open ({{ store.zigbeePermitJoin?.remaining_sec ?? 0 }}s) — Stop
           </button>
+          <span v-if="store.zigbeeStatus?.connected && !store.zigbeeStatus?.coord_ready"
+                class="text-[9px] text-amber-400">
+            Network forming ({{ store.zigbeeStatus?.coord_state || 'unknown' }})…
+          </span>
           <span v-if="zbPermitJoinErr" class="text-[9px] text-red-400">{{ zbPermitJoinErr }}</span>
         </div>
 

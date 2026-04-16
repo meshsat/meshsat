@@ -136,6 +136,106 @@ func TestParseSysVersionRsp(t *testing.T) {
 	}
 }
 
+func TestZNPStatusString(t *testing.T) {
+	cases := map[byte]string{
+		ZStatusSuccess:           "success",
+		ZStatusNwkInvalidRequest: "network not ready (coordinator not in operational state)",
+		ZStatusNwkInvalidParam:   "network invalid parameter",
+		ZStatusApsDuplicateEntry: "APS duplicate entry",
+		0xAB:                     "status 0xab",
+	}
+	for code, want := range cases {
+		got := ZNPStatusString(code)
+		if got != want {
+			t.Errorf("status 0x%02x: got %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestZNPDevStateName(t *testing.T) {
+	cases := map[byte]string{
+		ZNPDevStateHold:          "hold",
+		ZNPDevStateInit:          "init",
+		ZNPDevStateCoordStarting: "coord-starting",
+		ZNPDevStateCoord:         "coord-ready",
+		0xAA:                     "0xaa",
+	}
+	for state, want := range cases {
+		if got := ZNPDevStateName(state); got != want {
+			t.Errorf("state 0x%02x: got %q, want %q", state, got, want)
+		}
+	}
+}
+
+func TestZNPResetReasonName(t *testing.T) {
+	cases := map[byte]string{
+		ZNPResetReasonPowerUp:  "power-up",
+		ZNPResetReasonWatchdog: "watchdog",
+		ZNPResetReasonHardFlt:  "hard-fault",
+		0x77:                   "0x77",
+	}
+	for r, want := range cases {
+		if got := ZNPResetReasonName(r); got != want {
+			t.Errorf("reason 0x%02x: got %q, want %q", r, got, want)
+		}
+	}
+}
+
+func TestParseSysResetInd(t *testing.T) {
+	data := []byte{
+		ZNPResetReasonWatchdog, // reason
+		0x02,                   // transport rev
+		0x01,                   // product
+		0x02,                   // major
+		0x07,                   // minor
+		0x01,                   // hwrev
+	}
+	info, err := ParseSysResetInd(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if info.Reason != ZNPResetReasonWatchdog || info.MinorRel != 7 {
+		t.Errorf("bad parse: %+v", info)
+	}
+	if _, err := ParseSysResetInd([]byte{0x00}); err == nil {
+		t.Error("expected error for short data")
+	}
+}
+
+func TestBuildSysResetReq(t *testing.T) {
+	f := BuildSysResetReq(ZNPResetTypeSoft)
+	if f.Cmd != CmdSysResetReq {
+		t.Errorf("wrong cmd: %v", f.Cmd)
+	}
+	if len(f.Data) != 1 || f.Data[0] != ZNPResetTypeSoft {
+		t.Errorf("wrong data: %v", f.Data)
+	}
+}
+
+func TestBuildZDOStartup_StartDelay(t *testing.T) {
+	// zigbee-herdsman sends startdelay=100ms as uint16 LE. This prevents
+	// stack-not-settled races on Z-Stack 3.0.x.
+	f := BuildZDOStartup()
+	if len(f.Data) != 2 || f.Data[0] != 0x64 || f.Data[1] != 0x00 {
+		t.Errorf("expected startdelay=100ms LE (0x64 0x00), got %v", f.Data)
+	}
+}
+
+func TestBuildMgmtPermitJoinReq_Format(t *testing.T) {
+	// Cross-check against zigbee-herdsman: addrMode=0x0F (ADDR_BROADCAST),
+	// dstAddr=0xFFFC (BroadcastAddress.DEFAULT), duration, tcSig=0x01.
+	f := BuildMgmtPermitJoinReq(120)
+	want := []byte{0x0F, 0xFC, 0xFF, 120, 0x01}
+	if len(f.Data) != len(want) {
+		t.Fatalf("len: got %d, want %d", len(f.Data), len(want))
+	}
+	for i, b := range want {
+		if f.Data[i] != b {
+			t.Errorf("byte %d: got 0x%02x, want 0x%02x", i, f.Data[i], b)
+		}
+	}
+}
+
 func TestParseAFIncomingMsg(t *testing.T) {
 	// Build a synthetic AF_INCOMING_MSG payload
 	data := make([]byte, 22)

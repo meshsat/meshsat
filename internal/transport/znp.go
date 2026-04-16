@@ -87,6 +87,153 @@ const (
 	ZNPDevStateCoord         byte = 0x09 // coordinator started — network formed
 )
 
+// ZNPDevStateName returns a human-readable name for a ZNP device state.
+func ZNPDevStateName(s byte) string {
+	switch s {
+	case ZNPDevStateHold:
+		return "hold"
+	case ZNPDevStateInit:
+		return "init"
+	case ZNPDevStateNwkDisc:
+		return "nwk-discovery"
+	case ZNPDevStateNwkJoining:
+		return "nwk-joining"
+	case ZNPDevStateNwkRejoin:
+		return "nwk-rejoin"
+	case ZNPDevStateEndDevUnauth:
+		return "end-device-unauth"
+	case ZNPDevStateEndDev:
+		return "end-device"
+	case ZNPDevStateRouter:
+		return "router"
+	case ZNPDevStateCoordStarting:
+		return "coord-starting"
+	case ZNPDevStateCoord:
+		return "coord-ready"
+	default:
+		return fmt.Sprintf("0x%02x", s)
+	}
+}
+
+// Z-Stack reset types (SYS_RESET_REQ argument).
+const (
+	ZNPResetTypeHard byte = 0x00 // full MCU reboot
+	ZNPResetTypeSoft byte = 0x01 // stack re-init, keep NV
+)
+
+// Z-Stack reset reasons (SYS_RESET_IND data[0]).
+const (
+	ZNPResetReasonPowerUp  byte = 0x00
+	ZNPResetReasonExternal byte = 0x01
+	ZNPResetReasonWatchdog byte = 0x02
+	ZNPResetReasonSoft     byte = 0x03
+	ZNPResetReasonHardFlt  byte = 0x04
+)
+
+// ZNPResetReasonName returns a human-readable reset reason.
+func ZNPResetReasonName(r byte) string {
+	switch r {
+	case ZNPResetReasonPowerUp:
+		return "power-up"
+	case ZNPResetReasonExternal:
+		return "external-reset"
+	case ZNPResetReasonWatchdog:
+		return "watchdog"
+	case ZNPResetReasonSoft:
+		return "soft-reset"
+	case ZNPResetReasonHardFlt:
+		return "hard-fault"
+	default:
+		return fmt.Sprintf("0x%02x", r)
+	}
+}
+
+// Common Z-Stack status codes returned in ZNP responses.
+// Reference: TI Z-Stack ZComDef.h
+const (
+	ZStatusSuccess          byte = 0x00
+	ZStatusFailure          byte = 0x01
+	ZStatusInvalidParameter byte = 0x02
+
+	ZStatusApsFail           byte = 0xB1
+	ZStatusApsDuplicateEntry byte = 0xB8
+	ZStatusNwkInvalidParam   byte = 0xC1
+	ZStatusNwkInvalidRequest byte = 0xC2 // operation not valid for current network state
+	ZStatusNwkNotPermitted   byte = 0xC3
+	ZStatusNwkStartupFailure byte = 0xC4
+	ZStatusNwkTableFull      byte = 0xC7
+	ZStatusNwkNoNetworks     byte = 0xCA
+	ZStatusNwkLeaveUnconfirm byte = 0xCB
+	ZStatusMacNoResource     byte = 0x1A
+	ZStatusMacNoBeacon       byte = 0xEA
+	ZStatusMacTransactionExp byte = 0xF0
+)
+
+// ZNPStatusString returns a human-readable description of a ZNP status byte.
+// Useful for translating the numeric codes returned by the coordinator into
+// error messages the operator can act on.
+func ZNPStatusString(s byte) string {
+	switch s {
+	case ZStatusSuccess:
+		return "success"
+	case ZStatusFailure:
+		return "failure"
+	case ZStatusInvalidParameter:
+		return "invalid parameter"
+	case ZStatusApsFail:
+		return "APS fail"
+	case ZStatusApsDuplicateEntry:
+		return "APS duplicate entry"
+	case ZStatusNwkInvalidParam:
+		return "network invalid parameter"
+	case ZStatusNwkInvalidRequest:
+		return "network not ready (coordinator not in operational state)"
+	case ZStatusNwkNotPermitted:
+		return "network operation not permitted"
+	case ZStatusNwkStartupFailure:
+		return "network startup failure"
+	case ZStatusNwkTableFull:
+		return "network table full"
+	case ZStatusNwkNoNetworks:
+		return "no networks available"
+	case ZStatusNwkLeaveUnconfirm:
+		return "leave unconfirmed"
+	case ZStatusMacNoResource:
+		return "MAC no resource"
+	case ZStatusMacNoBeacon:
+		return "MAC no beacon"
+	case ZStatusMacTransactionExp:
+		return "MAC transaction expired"
+	default:
+		return fmt.Sprintf("status 0x%02x", s)
+	}
+}
+
+// SysResetInd represents a parsed SYS_RESET_IND AREQ.
+type SysResetInd struct {
+	Reason       byte
+	TransportRev byte
+	Product      byte
+	MajorRel     byte
+	MinorRel     byte
+	HwRev        byte
+}
+
+// ParseSysResetInd parses a SYS_RESET_IND data payload (6 bytes).
+func ParseSysResetInd(data []byte) (*SysResetInd, error) {
+	if len(data) < 6 {
+		return nil, fmt.Errorf("SYS_RESET_IND too short: %d", len(data))
+	}
+	return &SysResetInd{
+		Reason:       data[0],
+		TransportRev: data[1],
+		Product:      data[2],
+		MajorRel:     data[3],
+		MinorRel:     data[4],
+		HwRev:        data[5],
+	}, nil
+}
+
 // ZNPFrame represents a parsed ZNP serial frame.
 type ZNPFrame struct {
 	Cmd  [2]byte // CMD0, CMD1
@@ -227,8 +374,28 @@ func BuildAFRegister(endpoint byte, profileID, deviceID uint16, inClusters, outC
 }
 
 // BuildZDOStartup creates a ZDO_STARTUP_FROM_APP request.
+//
+// The startDelay field is a uint16 little-endian giving the milliseconds the
+// coordinator should wait before starting. zigbee-herdsman uses 100 — small
+// but non-zero values give the stack time to settle, especially after a soft
+// reset. The original Z-Stack docs accept any value 0..65535.
 func BuildZDOStartup() ZNPFrame {
-	return ZNPFrame{Cmd: CmdZDOStartupFromApp, Data: []byte{0x00}} // startDelay=0
+	return ZNPFrame{Cmd: CmdZDOStartupFromApp, Data: []byte{0x64, 0x00}} // startDelay=100ms LE
+}
+
+// BuildSysResetReq creates a SYS_RESET_REQ.
+// resetType: 0 = hard reset (MCU reboot), 1 = soft reset (stack re-init only).
+// Note: Z-Stack replies with an unsolicited SYS_RESET_IND AREQ after the reset
+// completes — there is no SRSP for SYS_RESET_REQ.
+func BuildSysResetReq(resetType byte) ZNPFrame {
+	return ZNPFrame{Cmd: CmdSysResetReq, Data: []byte{resetType}}
+}
+
+// BuildUtilGetDeviceInfo creates a UTIL_GET_DEVICE_INFO request.
+// The response carries the coordinator's current device state — used by
+// initCoordinator to decide whether startup is needed.
+func BuildUtilGetDeviceInfo() ZNPFrame {
+	return ZNPFrame{Cmd: CmdUtilGetDeviceInfo}
 }
 
 // BuildAFDataReq creates an AF_DATA_REQUEST to send data to a ZigBee device.

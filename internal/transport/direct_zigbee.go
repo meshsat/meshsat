@@ -70,6 +70,21 @@ type DirectZigBeeTransport struct {
 	// Read call so it yields during synchronous commands. [MESHSAT-510]
 	serialMu sync.Mutex
 
+	// State-change waiters — pattern borrowed from zigbee-herdsman:
+	// register a waiter BEFORE sending a command that triggers an AREQ,
+	// then await the waiter with a timeout. Used by initCoordinator to
+	// wait for ZDO_STATE_CHANGE_IND state=0x09 (DEV_ZB_COORD) after
+	// ZDO_STARTUP_FROM_APP, which is what zigbee-herdsman does.
+	stateWaitersMu sync.Mutex
+	stateWaiters   []chan byte
+
+	// Reset-recovery: when the coordinator emits an unsolicited
+	// SYS_RESET_IND (watchdog, hard fault, external reset), the network
+	// is gone. reinitPending is set by handleFrame and consumed by the
+	// reinitLoop goroutine, which reruns initCoordinator under serialMu
+	// to bring the network back up without restarting the gateway.
+	reinitPending chan struct{}
+
 	// Permit-join state
 	permitJoinEnd time.Time // when permit-join expires (zero = not active)
 
@@ -80,8 +95,61 @@ type DirectZigBeeTransport struct {
 // NewDirectZigBeeTransport creates a new ZigBee transport.
 func NewDirectZigBeeTransport() *DirectZigBeeTransport {
 	return &DirectZigBeeTransport{
-		devices: make(map[uint16]*ZigBeeDevice),
+		devices:       make(map[uint16]*ZigBeeDevice),
+		reinitPending: make(chan struct{}, 1),
 	}
+}
+
+// watchStateChange registers a listener that receives the next
+// ZDO_STATE_CHANGE_IND byte(s). The caller must call unsub when done.
+// Implementation note: this is the Go equivalent of zigbee-herdsman's
+// znp.waitFor(AREQ, ZDO, "stateChangeInd", ..., 9, 60000) pattern — register
+// BEFORE sending the startup command, otherwise the state change can arrive
+// before the waiter is set up and the coordinator is stuck in an unknown
+// state from our perspective.
+func (z *DirectZigBeeTransport) watchStateChange() (<-chan byte, func()) {
+	ch := make(chan byte, 8)
+	z.stateWaitersMu.Lock()
+	z.stateWaiters = append(z.stateWaiters, ch)
+	z.stateWaitersMu.Unlock()
+	unsub := func() {
+		z.stateWaitersMu.Lock()
+		defer z.stateWaitersMu.Unlock()
+		for i, c := range z.stateWaiters {
+			if c == ch {
+				z.stateWaiters = append(z.stateWaiters[:i], z.stateWaiters[i+1:]...)
+				break
+			}
+		}
+	}
+	return ch, unsub
+}
+
+// notifyStateChange fans a new device-state byte out to all active waiters.
+func (z *DirectZigBeeTransport) notifyStateChange(state byte) {
+	z.stateWaitersMu.Lock()
+	defer z.stateWaitersMu.Unlock()
+	for _, ch := range z.stateWaiters {
+		select {
+		case ch <- state:
+		default:
+		}
+	}
+}
+
+// IsReady reports whether the coordinator is in DEV_ZB_COORD state —
+// the only state where ZDO requests like PERMIT_JOIN will succeed.
+func (z *DirectZigBeeTransport) IsReady() bool {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return z.running && z.coordState == ZNPDevStateCoord
+}
+
+// CoordState returns the current cached device state (0x00..0x09).
+func (z *DirectZigBeeTransport) CoordState() byte {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return z.coordState
 }
 
 // Subscribe returns a channel that receives ZigBee events.
@@ -154,8 +222,11 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 	z.running = true
 
 	go z.readLoop(ctx)
+	go z.reinitLoop(ctx)
 
-	log.Info().Str("port", portName).Str("firmware", z.FirmwareVersion).Msg("zigbee: coordinator started")
+	log.Info().Str("port", portName).Str("firmware", z.FirmwareVersion).
+		Str("coord_state", ZNPDevStateName(z.coordState)).
+		Msg("zigbee: coordinator started")
 	return nil
 }
 
@@ -195,36 +266,65 @@ func (z *DirectZigBeeTransport) GetDevices() []ZigBeeDevice {
 	return devs
 }
 
-// Send sends data to a specific ZigBee device endpoint.
+// Send sends data to a specific ZigBee device endpoint. Returns an error
+// if the coordinator isn't in DEV_ZB_COORD state — sending AF_DATA_REQUESTs
+// to a pre-coord network burns the serial bus and logs noise without any
+// chance of delivery.
 func (z *DirectZigBeeTransport) Send(dstAddr uint16, dstEP byte, clusterID uint16, data []byte) error {
 	z.mu.Lock()
 	if !z.running {
 		z.mu.Unlock()
 		return fmt.Errorf("zigbee transport not running")
 	}
+	if z.coordState != ZNPDevStateCoord {
+		state := z.coordState
+		z.mu.Unlock()
+		return fmt.Errorf("zigbee coordinator not ready (state=%s)", ZNPDevStateName(state))
+	}
 	z.transID++
+	tid := z.transID
 	z.mu.Unlock()
 
 	z.serialMu.Lock()
 	defer z.serialMu.Unlock()
-	frame := BuildAFDataReq(dstAddr, dstEP, 1, clusterID, z.transID, data)
+	frame := BuildAFDataReq(dstAddr, dstEP, 1, clusterID, tid, data)
 	return z.sendFrame(frame)
 }
 
 // PermitJoin sends ZDO_MGMT_PERMIT_JOIN_REQ to open the network for pairing.
 // duration is clamped to 1-254 seconds. Use 0 to close the network.
-// Uses serialMu to prevent readLoop from stealing the SRSP. [MESHSAT-510]
+//
+// The coordinator must be in DEV_ZB_COORD state (0x09) or the NWK layer
+// will reject the request with ZNwkInvalidRequest (0xC2). We check that
+// up front so the operator gets a friendly "network not ready" message
+// instead of a raw status code. [MESHSAT-510]
 func (z *DirectZigBeeTransport) PermitJoin(durationSec byte) error {
 	z.mu.Lock()
 	if !z.running {
 		z.mu.Unlock()
 		return fmt.Errorf("zigbee transport not running")
 	}
+	state := z.coordState
 	z.mu.Unlock()
+
+	if state != ZNPDevStateCoord {
+		return fmt.Errorf("coordinator not ready (state=%s) — network is still forming, try again in a few seconds",
+			ZNPDevStateName(state))
+	}
 
 	// Lock serial to prevent readLoop from stealing our response
 	z.serialMu.Lock()
 	defer z.serialMu.Unlock()
+
+	// Re-check state under the serial lock — a SYS_RESET_IND could have
+	// arrived between the Lock above and now.
+	z.mu.Lock()
+	state = z.coordState
+	z.mu.Unlock()
+	if state != ZNPDevStateCoord {
+		return fmt.Errorf("coordinator not ready (state=%s) — network reset, try again",
+			ZNPDevStateName(state))
+	}
 
 	frame := BuildMgmtPermitJoinReq(durationSec)
 	if err := z.sendFrame(frame); err != nil {
@@ -233,28 +333,16 @@ func (z *DirectZigBeeTransport) PermitJoin(durationSec byte) error {
 
 	// Read frames until we get the SRSP, skipping unsolicited AREQs
 	// (SYS_RESET_IND, ZDO_STATE_CHANGE_IND, etc.) that may arrive first.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := z.readFrameTimeout(2 * time.Second)
-		if err != nil {
-			return fmt.Errorf("permit join response: %w", err)
-		}
-		// Skip unsolicited AREQ frames — we want the SRSP
-		if resp.Cmd[0]&0xE0 == ZNPTypeAREQ {
-			log.Debug().Str("frame", resp.String()).Msg("zigbee: permit-join skipping unsolicited AREQ")
-			z.handleFrame(resp) // process it normally
-			continue
-		}
-		if !resp.IsCmd(CmdZDOMgmtPermitJoinRsp) {
-			log.Debug().Str("frame", resp.String()).Msg("zigbee: permit-join skipping unexpected frame")
-			continue
-		}
-		if len(resp.Data) > 0 && resp.Data[0] != 0 {
-			return fmt.Errorf("permit join failed: status=0x%02x", resp.Data[0])
-		}
-		break // success
+	resp, err := z.readCmdFrameTimeout(CmdZDOMgmtPermitJoinRsp, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("permit join response: %w", err)
+	}
+	if len(resp.Data) > 0 && resp.Data[0] != ZStatusSuccess {
+		return fmt.Errorf("permit join rejected: %s (0x%02x)",
+			ZNPStatusString(resp.Data[0]), resp.Data[0])
 	}
 
+	z.mu.Lock()
 	if durationSec > 0 {
 		z.permitJoinEnd = time.Now().Add(time.Duration(durationSec) * time.Second)
 		log.Info().Uint8("duration_sec", durationSec).Msg("zigbee: permit join opened")
@@ -262,6 +350,7 @@ func (z *DirectZigBeeTransport) PermitJoin(durationSec byte) error {
 		z.permitJoinEnd = time.Time{}
 		log.Info().Msg("zigbee: permit join closed")
 	}
+	z.mu.Unlock()
 
 	return nil
 }
@@ -284,73 +373,181 @@ func (z *DirectZigBeeTransport) PermitJoinRemaining() int {
 
 // ---- Internal ----
 
+// initCoordinator brings the Z-Stack coordinator to the operational
+// DEV_ZB_COORD state. The flow mirrors zigbee-herdsman's ZnpAdapterManager:
+//
+//  1. SYS_PING (verify ZNP is alive)
+//  2. SYS_VERSION (record firmware string)
+//  3. AF_REGISTER endpoint 1 (HA profile with temp/humidity clusters)
+//  4. UTIL_GET_DEVICE_INFO — check whether the coordinator is already up
+//  5. If not in DEV_ZB_COORD: register a state-change waiter, send
+//     ZDO_STARTUP_FROM_APP, then block until the waiter delivers state=0x09
+//     (or timeout). This is the key fix for MESHSAT-510: without it, the
+//     SRSP for startup arrives in a few ms but the NWK layer takes up to
+//     60 s to finish forming/rejoining, and ZDO requests (including
+//     MGMT_PERMIT_JOIN_REQ) return ZNwkInvalidRequest (0xC2) until then.
+//
+// Callers must hold z.serialMu or only run this before readLoop starts.
+// Re-entry via reinitLoop holds serialMu for the full duration.
 func (z *DirectZigBeeTransport) initCoordinator() error {
-	// 1. Ping to verify ZNP is alive
+	// 1. SYS_PING
 	if err := z.sendFrame(BuildSysPing()); err != nil {
 		return fmt.Errorf("ping: %w", err)
 	}
-	resp, err := z.readFrameTimeout(2 * time.Second)
+	resp, err := z.readCmdFrameTimeout(CmdSysPingRsp, 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("ping response: %w", err)
 	}
-	if !resp.IsCmd(CmdSysPingRsp) {
-		return fmt.Errorf("unexpected ping response: %s", resp)
-	}
+	_ = resp
 	log.Debug().Msg("zigbee: SYS_PING OK")
 
-	// 2. Get firmware version
+	// 2. SYS_VERSION
 	if err := z.sendFrame(BuildSysVersion()); err != nil {
 		return fmt.Errorf("version req: %w", err)
 	}
-	resp, err = z.readFrameTimeout(2 * time.Second)
+	resp, err = z.readCmdFrameTimeout(CmdSysVersionRsp, 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("version response: %w", err)
-	}
-	if resp.IsCmd(CmdSysVersionRsp) {
-		if info, err := ParseSysVersionRsp(resp.Data); err == nil {
-			z.FirmwareVersion = fmt.Sprintf("Z-Stack %d.%d.%d (product=%d)",
-				info.MajorRel, info.MinorRel, info.MaintRel, info.Product)
-		}
+		log.Warn().Err(err).Msg("zigbee: SYS_VERSION failed (continuing)")
+	} else if info, err := ParseSysVersionRsp(resp.Data); err == nil {
+		z.FirmwareVersion = fmt.Sprintf("Z-Stack %d.%d.%d (product=%d)",
+			info.MajorRel, info.MinorRel, info.MaintRel, info.Product)
 	}
 
-	// 3. Register AF endpoint 1 (Home Automation profile 0x0104)
-	afReg := BuildAFRegister(1, 0x0104, 0x0005, // HA profile, configuration tool device
+	// 3. AF_REGISTER endpoint 1 (HA profile 0x0104, config-tool device 0x0005).
+	// If endpoint 1 is already registered (status ZApsDuplicateEntry=0xB8 on
+	// restore), that's fine — we continue. This matches zigbee-herdsman's
+	// "check active endpoints, register only if missing" logic.
+	afReg := BuildAFRegister(1, 0x0104, 0x0005,
 		[]uint16{0x0000, 0x0003, 0x0006, 0x0008, 0x0402, 0x0405}, // Basic, Identify, OnOff, Level, Temp, Humidity
 		[]uint16{0x0000, 0x0003, 0x0006, 0x0008},
 	)
 	if err := z.sendFrame(afReg); err != nil {
 		return fmt.Errorf("AF register: %w", err)
 	}
-	resp, err = z.readFrameTimeout(2 * time.Second)
+	resp, err = z.readCmdFrameTimeout(CmdAFRegisterRsp, 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("AF register response: %w", err)
-	}
-	if resp.IsCmd(CmdAFRegisterRsp) && len(resp.Data) > 0 && resp.Data[0] != 0 {
-		log.Warn().Uint8("status", resp.Data[0]).Msg("zigbee: AF_REGISTER non-zero status (may be already registered)")
+		log.Warn().Err(err).Msg("zigbee: AF_REGISTER response missing (continuing)")
+	} else if len(resp.Data) > 0 && resp.Data[0] != ZStatusSuccess &&
+		resp.Data[0] != ZStatusApsDuplicateEntry {
+		log.Warn().Uint8("status", resp.Data[0]).
+			Str("meaning", ZNPStatusString(resp.Data[0])).
+			Msg("zigbee: AF_REGISTER returned non-success")
 	}
 
-	// 4. Start coordinator network
-	if err := z.sendFrame(BuildZDOStartup()); err != nil {
-		return fmt.Errorf("ZDO startup: %w", err)
-	}
-	resp, err = z.readFrameTimeout(5 * time.Second)
-	if err != nil {
-		return fmt.Errorf("ZDO startup response: %w", err)
-	}
-	if resp.IsCmd(CmdZDOStartupFromAppRsp) && len(resp.Data) > 0 {
-		status := resp.Data[0]
-		switch status {
-		case 0:
-			log.Info().Msg("zigbee: network restored from NV")
-		case 1:
-			log.Info().Msg("zigbee: new network started")
-		case 2:
-			log.Warn().Msg("zigbee: network startup failed")
-			return fmt.Errorf("ZDO_STARTUP failed (status=2)")
+	// 4. Check current device state via UTIL_GET_DEVICE_INFO. If the
+	// coordinator is already in DEV_ZB_COORD, we can skip ZDO_STARTUP and
+	// go straight to operational — avoids retransmitting startup on a
+	// re-init after soft reset.
+	currentState := byte(0xFF)
+	if err := z.sendFrame(BuildUtilGetDeviceInfo()); err == nil {
+		if resp, err := z.readCmdFrameTimeout(CmdUtilGetDeviceInfoRsp, 2*time.Second); err == nil {
+			if info, perr := ParseDeviceInfo(resp.Data); perr == nil {
+				currentState = info.DeviceState
+				z.mu.Lock()
+				z.coordState = info.DeviceState
+				z.mu.Unlock()
+				log.Debug().Str("state", ZNPDevStateName(info.DeviceState)).
+					Msg("zigbee: current device state")
+			}
 		}
 	}
 
-	return nil
+	if currentState == ZNPDevStateCoord {
+		log.Info().Msg("zigbee: coordinator already in DEV_ZB_COORD, skipping startup")
+		return nil
+	}
+
+	// 5. Register a state-change waiter BEFORE sending startup, then
+	// send ZDO_STARTUP_FROM_APP and await DEV_ZB_COORD (0x09). Anything
+	// other than 0x09 in the meantime (INIT → NWK_DISC → COORD_STARTING)
+	// is just progress reporting — we keep waiting.
+	waiter, unsub := z.watchStateChange()
+	defer unsub()
+
+	if err := z.sendFrame(BuildZDOStartup()); err != nil {
+		return fmt.Errorf("ZDO startup: %w", err)
+	}
+	resp, err = z.readCmdFrameTimeout(CmdZDOStartupFromAppRsp, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("ZDO startup response: %w", err)
+	}
+	if len(resp.Data) > 0 {
+		switch resp.Data[0] {
+		case 0:
+			log.Info().Msg("zigbee: ZDO_STARTUP status=0 (restored from NV)")
+		case 1:
+			log.Info().Msg("zigbee: ZDO_STARTUP status=1 (new network started)")
+		case 2:
+			// status=2 = NOT_INITIALIZED (no NV state and cannot commission).
+			// zigbee-herdsman treats FAILURE here as tolerable and waits for
+			// the state change anyway — the stack may still transition to
+			// coord. We do the same.
+			log.Warn().Msg("zigbee: ZDO_STARTUP status=2 (not initialized) — waiting for state change anyway")
+		}
+	}
+
+	// Some frames may have been emitted before we registered the waiter
+	// (race at startup). Sample readCmdFrameTimeout already fans
+	// state changes to waiters for us by calling handleFrame-style
+	// notification on every AREQ. So we can just drain and wait.
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining > 2*time.Second {
+			remaining = 2 * time.Second
+		}
+		select {
+		case st, ok := <-waiter:
+			if !ok {
+				return fmt.Errorf("state waiter closed unexpectedly")
+			}
+			log.Debug().Str("state", ZNPDevStateName(st)).Msg("zigbee: state transition during init")
+			if st == ZNPDevStateCoord {
+				return nil
+			}
+		case <-time.After(remaining):
+			// Keep the serial bus warm by draining frames that arrived
+			// while we were waiting — each decoded AREQ feeds the state
+			// waiter via handleFrame when applicable.
+			_, _ = z.drainFrame(100 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("timed out waiting for DEV_ZB_COORD (last state=%s)",
+		ZNPDevStateName(z.CoordState()))
+}
+
+// readCmdFrameTimeout reads frames until it sees the expected command or
+// times out. AREQs encountered in the meantime are fed through handleFrame
+// so side effects (state changes, device-announce, incoming messages) are
+// still processed during the synchronous init/permit-join flows.
+func (z *DirectZigBeeTransport) readCmdFrameTimeout(want [2]byte, timeout time.Duration) (ZNPFrame, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		frame, err := z.readFrameTimeout(time.Until(deadline))
+		if err != nil {
+			return ZNPFrame{}, err
+		}
+		if frame.IsCmd(want) {
+			return frame, nil
+		}
+		// Not the expected response — route it through the normal
+		// handler so state changes and incoming-message events aren't
+		// lost. handleFrame also feeds state-change waiters.
+		z.handleFrame(frame)
+	}
+	return ZNPFrame{}, fmt.Errorf("timeout waiting for cmd 0x%02x%02x", want[0], want[1])
+}
+
+// drainFrame tries to read one frame within the given timeout and feeds it
+// through handleFrame. Used by initCoordinator while blocked on the state
+// waiter so AREQs emitted during network formation are consumed.
+func (z *DirectZigBeeTransport) drainFrame(timeout time.Duration) (ZNPFrame, error) {
+	frame, err := z.readFrameTimeout(timeout)
+	if err != nil {
+		return ZNPFrame{}, err
+	}
+	z.handleFrame(frame)
+	return frame, nil
 }
 
 func (z *DirectZigBeeTransport) sendFrame(f ZNPFrame) error {
@@ -433,10 +630,13 @@ func (z *DirectZigBeeTransport) handleFrame(f ZNPFrame) {
 		z.handleIncomingMsg(f)
 	case f.IsCmd(CmdZDOStateChangeInd):
 		if len(f.Data) > 0 {
+			st := f.Data[0]
 			z.mu.Lock()
-			z.coordState = f.Data[0]
+			z.coordState = st
 			z.mu.Unlock()
-			log.Info().Uint8("state", f.Data[0]).Msg("zigbee: coordinator state changed")
+			log.Info().Str("state", ZNPDevStateName(st)).
+				Uint8("raw", st).Msg("zigbee: coordinator state changed")
+			z.notifyStateChange(st)
 		}
 	case f.IsCmd(CmdZDOEndDeviceAnnceInd):
 		z.handleDeviceAnnounce(f)
@@ -450,8 +650,75 @@ func (z *DirectZigBeeTransport) handleFrame(f ZNPFrame) {
 			}
 			z.mu.Unlock()
 		}
+	case f.IsCmd(CmdSysResetInd):
+		// The coordinator has rebooted on us — watchdog, external reset,
+		// or DTR/RTS glitch from another process opening our serial port.
+		// Mark the network as down and schedule an async re-init. The
+		// reinitLoop goroutine will grab serialMu and rerun
+		// initCoordinator to bring DEV_ZB_COORD back.
+		reason := byte(0xFF)
+		if info, err := ParseSysResetInd(f.Data); err == nil {
+			reason = info.Reason
+			log.Warn().Str("reason", ZNPResetReasonName(info.Reason)).
+				Uint8("major", info.MajorRel).Uint8("minor", info.MinorRel).
+				Uint8("maint", info.HwRev).Msg("zigbee: coordinator reset — scheduling re-init")
+		} else {
+			log.Warn().Str("frame", f.String()).Msg("zigbee: malformed SYS_RESET_IND — scheduling re-init")
+		}
+		z.mu.Lock()
+		z.coordState = ZNPDevStateHold
+		z.permitJoinEnd = time.Time{}
+		z.mu.Unlock()
+		z.notifyStateChange(ZNPDevStateHold)
+		select {
+		case z.reinitPending <- struct{}{}:
+		default:
+			// Re-init already pending — coalesce.
+		}
+		_ = reason
 	default:
 		log.Debug().Str("frame", f.String()).Msg("zigbee: unhandled frame")
+	}
+}
+
+// reinitLoop consumes reinitPending and reruns initCoordinator under
+// serialMu when the coordinator has reset itself. This keeps the gateway
+// process alive across firmware resets (watchdog, fault, or external DTR
+// glitches) without needing a restart of the meshsat container.
+func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-z.reinitPending:
+		}
+
+		// Brief settle delay — the CC2652P needs ~1 s after reset before
+		// it will accept SYS_PING reliably.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1500 * time.Millisecond):
+		}
+
+		z.serialMu.Lock()
+		log.Info().Msg("zigbee: re-initialising coordinator after reset")
+		err := z.initCoordinator()
+		z.serialMu.Unlock()
+
+		if err != nil {
+			log.Error().Err(err).Msg("zigbee: re-init failed, will retry on next reset")
+			// Back off a few seconds before allowing another re-init
+			// attempt — prevents busy-loop if something is wrong.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
+			continue
+		}
+		log.Info().Str("state", ZNPDevStateName(z.CoordState())).
+			Msg("zigbee: re-init completed")
 	}
 }
 

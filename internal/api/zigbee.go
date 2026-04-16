@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"meshsat/internal/transport"
 )
 
 // handleGetZigBeeDevices returns all paired ZigBee devices.
@@ -75,6 +77,10 @@ func (s *Server) handleGetZigBeeStatus(w http.ResponseWriter, r *http.Request) {
 	if t != nil {
 		resp["firmware"] = t.FirmwareVersion
 		resp["device_count"] = len(t.GetDevices())
+		state := t.CoordState()
+		resp["coord_state"] = transport.ZNPDevStateName(state)
+		resp["coord_state_raw"] = state
+		resp["coord_ready"] = t.IsReady()
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -117,7 +123,15 @@ func (s *Server) handlePostZigBeePermitJoin(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := t.PermitJoin(byte(req.DurationSec)); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// The transport's PermitJoin returns "coordinator not ready ..."
+		// when the NWK layer isn't in DEV_ZB_COORD yet. Surface that as
+		// 503 Service Unavailable so clients (dashboard widget) know the
+		// action is retryable.
+		status := http.StatusInternalServerError
+		if !t.IsReady() {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 

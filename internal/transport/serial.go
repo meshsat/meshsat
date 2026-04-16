@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -597,17 +598,85 @@ var ambiguousZigBeeVIDPIDs = map[string]bool{
 	"1a86:55d4": true, // CH343 — Meshtastic OR SONOFF ZBDongle-E (EFR32MG21)
 }
 
-// ClassifyDeviceWithProbe is like ClassifyDevice but does ZNP protocol probing
-// for VID:PIDs shared between Meshtastic and ZigBee. portPath is the serial
-// device path (e.g. "/dev/ttyUSB3") needed for the ZNP probe.
+// probeCacheMu and probeCache prevent repeated ProbeZNP calls against the
+// same port. [MESHSAT-510]
+//
+// The bridge's InterfaceManager runs scanDevices() every 5 seconds and
+// calls ClassifyDeviceWithProbe on every serial port, including ports
+// already claimed by a running gateway. Because the meshsat container runs
+// with CAP_SYS_ADMIN, the TIOCEXCL lock the gateway holds is bypassed —
+// the second open() succeeds, and on CP210x ZigBee dongles (SONOFF
+// ZBDongle-P) the open asserts DTR/RTS, triggering the auto-BSL circuit
+// and resetting the CC2652P Z-Stack firmware. On every reset the network
+// goes back to DEV_HOLD and ZDO_MGMT_PERMIT_JOIN_REQ returns 0xC2
+// (ZNwkInvalidRequest).
+//
+// The cache remembers the disambiguation result per port so we only pay
+// the probe cost (and DTR/RTS risk) once per device appearance. The cache
+// is invalidated by InvalidateProbeCache when a port vanishes, keyed by
+// devPath — hot-swaps re-enter the probe path.
+var (
+	probeCacheMu sync.RWMutex
+	probeCache   = map[string]probeCacheEntry{} // key: "vidpid|devPath"
+)
+
+type probeCacheEntry struct {
+	result string
+	at     time.Time
+}
+
+// probeCacheTTL caps how stale a cached classification can get in the
+// worst case (e.g. if InvalidateProbeCache wasn't called on a hot-swap).
+// 30 minutes is long enough that the periodic 5 s scanner never re-probes
+// a healthy port but short enough that operator actions (like unplug +
+// replug without triggering the supervisor) still converge.
+const probeCacheTTL = 30 * time.Minute
+
+// ClassifyDeviceWithProbe is like ClassifyDevice but does ZNP protocol
+// probing for VID:PIDs shared between Meshtastic and ZigBee. Results are
+// cached per port to avoid re-resetting ZigBee dongles (see probeCache).
+//
+// portPath is the serial device path (e.g. "/dev/ttyUSB3") needed for the
+// ZNP probe.
 func ClassifyDeviceWithProbe(vidpid, portPath string) string {
 	base := ClassifyDevice(vidpid)
-	if base == "meshtastic" && ambiguousZigBeeVIDPIDs[vidpid] && portPath != "" {
-		if ProbeZNP(portPath) {
-			return "zigbee"
+	if base != "meshtastic" || !ambiguousZigBeeVIDPIDs[vidpid] || portPath == "" {
+		return base
+	}
+
+	key := vidpid + "|" + portPath
+	probeCacheMu.RLock()
+	cached, ok := probeCache[key]
+	probeCacheMu.RUnlock()
+	if ok && time.Since(cached.at) < probeCacheTTL {
+		return cached.result
+	}
+
+	result := base
+	if ProbeZNP(portPath) {
+		result = "zigbee"
+	}
+
+	probeCacheMu.Lock()
+	probeCache[key] = probeCacheEntry{result: result, at: time.Now()}
+	probeCacheMu.Unlock()
+	return result
+}
+
+// InvalidateProbeCache drops cached classifications for a given port. Called
+// by DeviceSupervisor when a port disappears, so the same /dev path being
+// reassigned to a different device (hot-swap) will be re-classified.
+func InvalidateProbeCache(portPath string) {
+	if portPath == "" {
+		return
+	}
+	probeCacheMu.Lock()
+	defer probeCacheMu.Unlock()
+	for k := range probeCache {
+		if strings.HasSuffix(k, "|"+portPath) {
+			delete(probeCache, k)
 		}
 	}
-	return base
 }
 
 // ZigBee-only VID:PIDs (not shared with other device types).
