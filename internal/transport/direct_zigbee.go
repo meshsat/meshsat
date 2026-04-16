@@ -231,15 +231,28 @@ func (z *DirectZigBeeTransport) PermitJoin(durationSec byte) error {
 		return fmt.Errorf("permit join send: %w", err)
 	}
 
-	resp, err := z.readFrameTimeout(3 * time.Second)
-	if err != nil {
-		return fmt.Errorf("permit join response: %w", err)
-	}
-	if !resp.IsCmd(CmdZDOMgmtPermitJoinRsp) {
-		return fmt.Errorf("permit join: unexpected response %s", resp)
-	}
-	if len(resp.Data) > 0 && resp.Data[0] != 0 {
-		return fmt.Errorf("permit join failed: status=0x%02x", resp.Data[0])
+	// Read frames until we get the SRSP, skipping unsolicited AREQs
+	// (SYS_RESET_IND, ZDO_STATE_CHANGE_IND, etc.) that may arrive first.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := z.readFrameTimeout(2 * time.Second)
+		if err != nil {
+			return fmt.Errorf("permit join response: %w", err)
+		}
+		// Skip unsolicited AREQ frames — we want the SRSP
+		if resp.Cmd[0]&0xE0 == ZNPTypeAREQ {
+			log.Debug().Str("frame", resp.String()).Msg("zigbee: permit-join skipping unsolicited AREQ")
+			z.handleFrame(resp) // process it normally
+			continue
+		}
+		if !resp.IsCmd(CmdZDOMgmtPermitJoinRsp) {
+			log.Debug().Str("frame", resp.String()).Msg("zigbee: permit-join skipping unexpected frame")
+			continue
+		}
+		if len(resp.Data) > 0 && resp.Data[0] != 0 {
+			return fmt.Errorf("permit join failed: status=0x%02x", resp.Data[0])
+		}
+		break // success
 	}
 
 	if durationSec > 0 {
