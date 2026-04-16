@@ -23,8 +23,20 @@ type Band struct {
 	Label       string // human-readable label
 }
 
-// DefaultBands are the two primary bands monitored by the RTL-SDR.
-// Both are well within the RTL-SDR's 24MHz-1.7GHz range.
+// DefaultBands are the RF bands monitored by the RTL-SDR for jamming
+// detection. All windows are kept narrow (<= 3 MHz span) so each per-band
+// scan completes inside the 5s timeout in monitor.scanAllBands — rtl_power
+// retunes in ~2.4 MHz steps, so wider spans compound retune latency and
+// time out.
+//
+// LTE notes: we can only cover the low-band European allocations with the
+// R820T tuner (24 MHz - 1.766 GHz). Band 3 (1800) and Band 7 (2600) are
+// out of range. Band 20 (800) and Band 8 (900) are the most common EU
+// low-band allocations and catch wideband jammers aimed at cellular.
+// We monitor a 3 MHz slice at the centre of each DL allocation — enough
+// to detect broadband jamming, which is what matters for failover. A
+// narrowband jammer on a specific LTE carrier would be caught by the
+// modem's own RSSI/SNR reporting.
 var DefaultBands = []Band{
 	{
 		Name:        "lora_868",
@@ -41,6 +53,44 @@ var DefaultBands = []Band{
 		BinSize:     12500,
 		InterfaceID: "ax25_0",
 		Label:       "APRS 144.8 MHz",
+	},
+	{
+		// GPS L1 C/A: 1575.42 MHz ± ~1 MHz (±1.023 MHz chip rate).
+		// GPS jamming is a documented EW vector and the modem/GNSS module
+		// cannot tell us it is being jammed versus losing sky view — the
+		// SDR can. When jamming is detected timesync should derate GPS
+		// stratum and fall back to peer-consensus time.
+		Name:        "gps_l1",
+		FreqLow:     1574420000,
+		FreqHigh:    1576420000,
+		BinSize:     25000,
+		InterfaceID: "gps_0",
+		Label:       "GPS L1",
+	},
+	{
+		// LTE Band 20 DL: 791-821 MHz (EU 800). Monitor 3 MHz at centre
+		// ~806 MHz. Broadband jamming on this band kills 4G + SMS. On
+		// jamming, gateway-level logic can preemptively switch to Iridium
+		// SBD for ops messaging.
+		Name:        "lte_b20_dl",
+		FreqLow:     804500000,
+		FreqHigh:    807500000,
+		BinSize:     50000,
+		InterfaceID: "cellular_0",
+		Label:       "LTE Band 20 DL (800)",
+	},
+	{
+		// LTE Band 8 DL: 925-960 MHz (EU 900). Monitor 3 MHz at centre
+		// ~942.5 MHz. Dual-band coverage guards against the common
+		// scenario where one of the two bands is jammed but the other
+		// isn't — the modem can fall back to the clear band on its own,
+		// and we can surface that in the UI.
+		Name:        "lte_b8_dl",
+		FreqLow:     941000000,
+		FreqHigh:    944000000,
+		BinSize:     50000,
+		InterfaceID: "cellular_0",
+		Label:       "LTE Band 8 DL (900)",
 	},
 }
 

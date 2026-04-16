@@ -38,7 +38,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates wget coreutils python3 py3-pyserial
+RUN apk add --no-cache ca-certificates wget coreutils python3 py3-pyserial rtl-sdr
 
 COPY --from=builder /meshsat /usr/local/bin/meshsat
 COPY --from=c-builder /jspr-helper /usr/local/bin/jspr-helper
