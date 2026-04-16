@@ -398,6 +398,64 @@ func BuildUtilGetDeviceInfo() ZNPFrame {
 	return ZNPFrame{Cmd: CmdUtilGetDeviceInfo}
 }
 
+// APP_CNF (BDB) commands — Z-Stack 3.0.x base device behaviour layer.
+var (
+	CmdAppCnfBdbStartCommissioning    = [2]byte{ZNPTypeSREQ | ZNPSubAPPCfg, 0x05}
+	CmdAppCnfBdbStartCommissioningRsp = [2]byte{ZNPTypeSRSP | ZNPSubAPPCfg, 0x05}
+	CmdAppCnfBdbCommissioningNotif    = [2]byte{ZNPTypeAREQ | ZNPSubAPPCfg, 0x80}
+)
+
+// BDB commissioning modes (bit field).
+const (
+	BDBModeTouchlink        byte = 0x01
+	BDBModeNetworkSteering  byte = 0x02
+	BDBModeNetworkFormation byte = 0x04
+	BDBModeFindingBinding   byte = 0x08
+)
+
+// BuildBdbStartCommissioning creates an APP_CNF_BDB_START_COMMISSIONING
+// request. On Z-Stack 3.0.x this is the standard way to kick the
+// coordinator into forming (mode=0x04) or opening (mode=0x02) a network.
+// zigbee-herdsman uses mode=0x04 to form a new network after clearing NV.
+func BuildBdbStartCommissioning(mode byte) ZNPFrame {
+	return ZNPFrame{Cmd: CmdAppCnfBdbStartCommissioning, Data: []byte{mode}}
+}
+
+// BdbCommissioningStatus names the status byte returned in an
+// APP_CNF_BDB_COMMISSIONING_NOTIFICATION AREQ.
+func BdbCommissioningStatus(s byte) string {
+	switch s {
+	case 0x00:
+		return "success"
+	case 0x01:
+		return "in-progress"
+	case 0x02:
+		return "no-network"
+	case 0x03:
+		return "tclk-ex-failure"
+	case 0x04:
+		return "network-left"
+	case 0x05:
+		return "parent-lost"
+	case 0x06:
+		return "enrollment-successful"
+	case 0x07:
+		return "enrollment-failure"
+	case 0x08:
+		return "network-restored"
+	case 0x09:
+		return "formation-failure"
+	case 0x0A:
+		return "no-identify"
+	case 0x0B:
+		return "network-rejoin"
+	case 0x0C:
+		return "formation-success"
+	default:
+		return fmt.Sprintf("0x%02x", s)
+	}
+}
+
 // BuildAFDataReq creates an AF_DATA_REQUEST to send data to a ZigBee device.
 func BuildAFDataReq(dstAddr uint16, dstEP, srcEP byte, clusterID uint16, transID byte, data []byte) ZNPFrame {
 	payload := make([]byte, 0, 10+len(data))

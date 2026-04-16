@@ -520,8 +520,11 @@ func (z *DirectZigBeeTransport) initCoordinator(ctx context.Context) error {
 	// the SONOFF ZBDongle-P currently on parallax01 (ZDO_STARTUP returns
 	// status=0 "restored from NV" but no state-change AREQ ever arrives).
 	// The poll closes the gap without us having to write NV.
+	log.Debug().Msg("zigbee: waiting for DEV_ZB_COORD (via AREQ waiter + UTIL_GET_DEVICE_INFO poll)")
 	deadline := time.Now().Add(60 * time.Second)
 	nextPoll := time.Now().Add(1 * time.Second)
+	kickedBDB := false
+	bdbKickAt := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		remaining := time.Until(deadline)
 		if remaining > 2*time.Second {
@@ -560,6 +563,25 @@ func (z *DirectZigBeeTransport) initCoordinator(ctx context.Context) error {
 							Msg("zigbee: init poll — still forming")
 					}
 				}
+			}
+		}
+		// Fallback: if we're stuck in HOLD for 10+ seconds after ZDO_STARTUP,
+		// the BDB layer hasn't been kicked into forming the network. Issue
+		// an APP_CNF_BDB_START_COMMISSIONING with NETWORK_FORMATION mode —
+		// zigbee-herdsman does this explicitly for Z-Stack 3.0.x/3.x.0 new
+		// networks. On a dongle with a restored-but-inactive NIB, this
+		// restarts commissioning and should bring the state up.
+		if !kickedBDB && time.Now().After(bdbKickAt) && z.CoordState() != ZNPDevStateCoord {
+			log.Info().Msg("zigbee: state still HOLD after 10s — kicking BDB_START_COMMISSIONING (mode=formation)")
+			kickedBDB = true
+			if err := z.sendFrame(BuildBdbStartCommissioning(BDBModeNetworkFormation)); err != nil {
+				log.Warn().Err(err).Msg("zigbee: BDB commissioning kick send failed")
+			} else if rsp, rerr := z.readCmdFrameTimeout(CmdAppCnfBdbStartCommissioningRsp, 2*time.Second); rerr != nil {
+				log.Warn().Err(rerr).Msg("zigbee: BDB commissioning kick SRSP timeout")
+			} else if len(rsp.Data) > 0 && rsp.Data[0] != ZStatusSuccess {
+				log.Warn().Uint8("status", rsp.Data[0]).
+					Str("meaning", ZNPStatusString(rsp.Data[0])).
+					Msg("zigbee: BDB commissioning kick returned non-success")
 			}
 		}
 	}
@@ -700,6 +722,16 @@ func (z *DirectZigBeeTransport) handleFrame(f ZNPFrame) {
 				z.permitJoinEnd = time.Time{}
 			}
 			z.mu.Unlock()
+		}
+	case f.IsCmd(CmdAppCnfBdbCommissioningNotif):
+		// Data: status(1), commissioningMode(1), remainingMode(1)
+		if len(f.Data) >= 3 {
+			log.Info().
+				Str("status", BdbCommissioningStatus(f.Data[0])).
+				Uint8("status_raw", f.Data[0]).
+				Uint8("mode", f.Data[1]).
+				Uint8("remaining", f.Data[2]).
+				Msg("zigbee: BDB commissioning notification")
 		}
 	case f.IsCmd(CmdSysResetInd):
 		// The coordinator has rebooted on us — watchdog, external reset,
