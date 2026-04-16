@@ -9,16 +9,12 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'mule01',
-      use: { baseURL: 'http://nllei01mule01-wireless:6050' },
+      name: 'tesseract',
+      use: { baseURL: 'http://nllei01tesseract01:6050' },
     },
     {
-      name: 'pifour01',
-      use: { baseURL: 'http://nllei01pifour01-wireless:6050' },
-    },
-    {
-      name: 'bananapi01',
-      use: { baseURL: 'http://nllei01bananapi01-wireless:6050' },
+      name: 'parallax',
+      use: { baseURL: 'http://nllei01parallax01:6050' },
     },
   ],
 });

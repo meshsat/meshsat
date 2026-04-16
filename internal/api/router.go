@@ -461,6 +461,14 @@ func (s *Server) Router() http.Handler {
 
 		// ZigBee coordinator (v0.3.0)
 		r.Get("/zigbee/devices", s.handleGetZigBeeDevices)
+		r.Get("/zigbee/devices2", s.handleGetZigBeeDevicesEnriched) // device-manager UI [MESHSAT-509]
+		r.Get("/zigbee/devices/{addr}", s.handleGetZigBeeDevice)
+		r.Patch("/zigbee/devices/{addr}", s.handlePatchZigBeeDevice)
+		r.Delete("/zigbee/devices/{addr}", s.handleDeleteZigBeeDevice)
+		r.Get("/zigbee/devices/{addr}/history", s.handleGetZigBeeDeviceHistory)
+		r.Get("/zigbee/devices/{addr}/routing", s.handleGetZigBeeDeviceRouting)
+		r.Put("/zigbee/devices/{addr}/routing", s.handlePutZigBeeDeviceRouting)
+		r.Post("/zigbee/devices/{addr}/command", s.handlePostZigBeeDeviceCommand)
 		r.Get("/zigbee/status", s.handleGetZigBeeStatus)
 		r.Post("/zigbee/permit-join", s.handlePostZigBeePermitJoin)
 		r.Get("/zigbee/permit-join", s.handleGetZigBeePermitJoin)

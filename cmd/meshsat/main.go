@@ -601,6 +601,8 @@ func main() {
 		}
 	}
 
+	// (ZigBee sensor router is wired below, after gpsReader is created.)
+
 	// ZigBee Reticulum interface — bidirectional via CC2652P coordinator.
 	// Raw binary Reticulum packets over ZNP AF_DATA_REQUEST (100-byte MTU).
 	if zgw := gwMgr.GetZigBeeGateway(); zgw != nil {
@@ -965,6 +967,28 @@ func main() {
 	srv.SetCellTransport(cell)
 	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
 	srv.SetGPSReader(gpsReader)
+
+	// ZigBee sensor router — fan out temp/humidity/battery/onoff readings to
+	// TAK + hub + log per the device's routing config. Wired here (not at
+	// gateway start) because gpsReader and the TAK gateway are constructed
+	// later than the gateway manager. Devices without a routing row default
+	// to TAK on, hub on, log on, mesh off. [MESHSAT-509]
+	if zgw := gwMgr.GetZigBeeGateway(); zgw != nil {
+		var gpsFn func() (float64, float64, bool)
+		if gpsReader != nil {
+			gpsFn = func() (float64, float64, bool) {
+				st := gpsReader.GetStatus()
+				return st.Lat, st.Lon, st.Fix
+			}
+		}
+		zgw.SetSensorRouter(gateway.SensorRoutingDeps{
+			DB:             db,
+			TAK:            gwMgr.GetTAKGateway(),
+			GPS:            gpsFn,
+			CallsignPrefix: "MESHSAT",
+			CoTStaleSec:    600,
+		})
+	}
 	srv.SetInterfaceManager(ifaceMgr)
 	if signingService != nil {
 		srv.SetSigningService(signingService)

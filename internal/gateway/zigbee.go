@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
 
@@ -16,6 +17,7 @@ import (
 type ZigBeeGateway struct {
 	config    ZigBeeConfig
 	transport *transport.DirectZigBeeTransport
+	store     transport.ZigBeeStore // optional persistent backend, wired before Start
 	inCh      chan InboundMessage
 	outCh     chan *transport.MeshMessage
 
@@ -28,6 +30,97 @@ type ZigBeeGateway struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// Sensor fan-out — looked up per event. Nil-safe: when targets are
+	// unwired (e.g. TAK gateway disabled) the corresponding hop is skipped
+	// silently. [MESHSAT-509]
+	sensorRouter zigbeeSensorRouter
+}
+
+// zigbeeSensorRouter is the dependency-injected target set for sensor
+// events. main.go builds one with concrete handles to TAK, the hub reporter,
+// and a GPS provider; tests can build a no-op variant.
+type zigbeeSensorRouter struct {
+	// db is the routing-config lookup (per-device to_tak/to_mesh/...).
+	db zigbeeRoutingStore
+	// takSend forwards a fully-built CoT event to the TAK server. May be nil.
+	takSend func(ev CotEvent) error
+	// hubPublish publishes a sensor telemetry payload to the hub. May be nil.
+	hubPublish func(ieeeAddr string, kind string, value float64, unit string) error
+	// gps returns the bridge's current position (lat, lon, ok). May be nil.
+	gps func() (float64, float64, bool)
+	// callsignPrefix is prepended to the synthesized CoT callsign.
+	callsignPrefix string
+	// staleSec controls the CoT marker lifetime.
+	staleSec int
+	// minIntervalDefault is the per-device rate-limit fallback (seconds).
+	minIntervalDefault int
+}
+
+// zigbeeRoutingStore is the subset of *database.DB the router needs. Kept
+// as an interface so the gateway package doesn't take a hard import on
+// the database package (it already does for the transport store, but this
+// keeps the seam clean for future tests).
+type zigbeeRoutingStore interface {
+	GetZigBeeRouting(ieeeAddr string) (*databaseRouting, error)
+}
+
+type databaseRouting = databasePackageRouting // alias declared in zigbee_router_aliases.go
+
+// SetStore wires the persistence backend (typically *database.DB). Must be
+// called before Start() — the gateway forwards it to the transport just
+// after construction so device hydration runs at coordinator startup.
+func (g *ZigBeeGateway) SetStore(s transport.ZigBeeStore) {
+	g.store = s
+}
+
+// SensorRoutingDeps is the dependency bundle main.go provides so the zigbee
+// gateway can fan out sensor readings to TAK / hub / log according to the
+// per-device routing config. Any field may be nil — the corresponding hop
+// is skipped silently when its handle isn't wired.
+type SensorRoutingDeps struct {
+	DB                 *database.DB
+	TAK                *TAKGateway
+	HubPublish         func(ieeeAddr string, kind string, value float64, unit string) error
+	GPS                func() (float64, float64, bool)
+	CallsignPrefix     string
+	CoTStaleSec        int
+	MinIntervalDefault int
+}
+
+// SetSensorRouter wires the sensor fan-out targets. Safe to call before or
+// after Start() — the receiveWorker reads g.sensorRouter under no lock,
+// but the SensorRoutingDeps struct is small (only function pointers and a
+// couple of ints) and Go's atomicity for word-sized writes is sufficient
+// for our "best-effort delivery" semantics here.
+func (g *ZigBeeGateway) SetSensorRouter(deps SensorRoutingDeps) {
+	r := zigbeeSensorRouter{
+		callsignPrefix:     deps.CallsignPrefix,
+		staleSec:           deps.CoTStaleSec,
+		minIntervalDefault: deps.MinIntervalDefault,
+		gps:                deps.GPS,
+		hubPublish:         deps.HubPublish,
+	}
+	if deps.DB != nil {
+		r.db = deps.DB
+	}
+	if deps.TAK != nil {
+		r.takSend = deps.TAK.SendCotEvent
+	}
+	if r.staleSec <= 0 {
+		r.staleSec = 600 // 10 min default — sensors usually report every 1-5 min
+	}
+	if r.callsignPrefix == "" {
+		r.callsignPrefix = "MESHSAT"
+	}
+	g.sensorRouter = r
+}
+
+// Transport exposes the underlying transport for handlers that need to
+// drive ZNP-level operations (alias updates, OnOff commands, etc).
+// Returns nil before Start has succeeded.
+func (g *ZigBeeGateway) Transport() *transport.DirectZigBeeTransport {
+	return g.transport
 }
 
 // NewZigBeeGateway creates a new ZigBee gateway.
@@ -53,8 +146,12 @@ func (g *ZigBeeGateway) Start(ctx context.Context) error {
 		}
 	}
 
-	// Initialize transport
+	// Initialize transport — wire the store BEFORE Start so the device
+	// cache hydrates from DB during coordinator init [MESHSAT-509].
 	g.transport = transport.NewDirectZigBeeTransport()
+	if g.store != nil {
+		g.transport.SetStore(g.store)
+	}
 	if err := g.transport.Start(ctx, portName); err != nil {
 		return fmt.Errorf("zigbee transport: %w", err)
 	}
@@ -170,6 +267,12 @@ func (g *ZigBeeGateway) receiveWorker(ctx context.Context) {
 				default:
 					log.Warn().Msg("zigbee: inbound channel full, dropping message")
 				}
+
+			case "temperature", "humidity", "battery", "onoff":
+				// Sensor reading — fan out per device routing config.
+				g.msgsIn.Add(1)
+				g.lastActive.Store(time.Now().Unix())
+				g.routeSensorEvent(evt)
 
 			case "join":
 				log.Info().

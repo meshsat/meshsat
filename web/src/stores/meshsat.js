@@ -1380,6 +1380,31 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   async function stopZigBeePermitJoin() {
     try { return await api.post('/zigbee/permit-join', { duration_sec: 0 }) } catch (e) { error.value = e.message }
   }
+  // ZigBee device manager (MESHSAT-509)
+  async function fetchZigBeeDevicesEnriched() {
+    return await api.get('/zigbee/devices2')
+  }
+  async function fetchZigBeeDevice(addr) {
+    return await api.get(`/zigbee/devices/${encodeURIComponent(addr)}`)
+  }
+  async function patchZigBeeDevice(addr, patch) {
+    return await api.patch(`/zigbee/devices/${encodeURIComponent(addr)}`, patch)
+  }
+  async function deleteZigBeeDevice(addr) {
+    return await api.del(`/zigbee/devices/${encodeURIComponent(addr)}`)
+  }
+  async function fetchZigBeeDeviceHistory(addr, hours = 24) {
+    return await api.get(`/zigbee/devices/${encodeURIComponent(addr)}/history?hours=${hours}`)
+  }
+  async function fetchZigBeeDeviceRouting(addr) {
+    return await api.get(`/zigbee/devices/${encodeURIComponent(addr)}/routing`)
+  }
+  async function putZigBeeDeviceRouting(addr, routing) {
+    return await api.put(`/zigbee/devices/${encodeURIComponent(addr)}/routing`, routing)
+  }
+  async function sendZigBeeDeviceCommand(addr, command, level) {
+    return await api.post(`/zigbee/devices/${encodeURIComponent(addr)}/command`, { command, level })
+  }
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
@@ -1441,6 +1466,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity,
     zigbeeStatus, zigbeeDevices, zigbeePermitJoin,
     fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
-    startZigBeePermitJoin, stopZigBeePermitJoin
+    startZigBeePermitJoin, stopZigBeePermitJoin,
+    fetchZigBeeDevicesEnriched, fetchZigBeeDevice, patchZigBeeDevice, deleteZigBeeDevice,
+    fetchZigBeeDeviceHistory, fetchZigBeeDeviceRouting, putZigBeeDeviceRouting, sendZigBeeDeviceCommand
   }
 })

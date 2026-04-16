@@ -168,6 +168,52 @@ func (g *TAKGateway) Forward(ctx context.Context, msg *transport.MeshMessage) er
 	}
 }
 
+// SendCotEvent serializes and writes a fully-built CoT event directly to
+// the TAK server connection. Bypasses the MeshMessage→CoT translation in
+// sendMessage(), so callers like the zigbee bridge can publish synthesized
+// sensor markers with their own callsign + position. [MESHSAT-509]
+//
+// Returns nil if the gateway isn't connected — losing a sensor reading
+// during a TAK reconnect is a soft failure, not worth surfacing as an
+// error to the caller (zigbee gateway has no good fallback either).
+func (g *TAKGateway) SendCotEvent(ev CotEvent) error {
+	if !g.connected.Load() || g.conn == nil {
+		return nil
+	}
+	var outBytes []byte
+	if g.useProtobuf() {
+		takMsg, err := CotEventToProto(ev)
+		if err != nil {
+			g.errors.Add(1)
+			return fmt.Errorf("tak: convert CoT to protobuf: %w", err)
+		}
+		outBytes, err = MarshalTakProto(takMsg)
+		if err != nil {
+			g.errors.Add(1)
+			return fmt.Errorf("tak: marshal protobuf: %w", err)
+		}
+	} else {
+		b, err := MarshalCotEvent(ev)
+		if err != nil {
+			g.errors.Add(1)
+			return fmt.Errorf("tak: marshal CoT XML: %w", err)
+		}
+		outBytes = append(b, '\n')
+	}
+	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		log.Warn().Err(err).Msg("tak: set write deadline")
+	}
+	if _, err := g.conn.Write(outBytes); err != nil {
+		g.errors.Add(1)
+		g.connected.Store(false)
+		return fmt.Errorf("tak: write to server: %w", err)
+	}
+	g.msgsOut.Add(1)
+	g.lastActive.Store(time.Now().Unix())
+	GlobalTakEventBus.Publish(CotEventToRecord(&ev, "outbound"))
+	return nil
+}
+
 // Enqueue submits a message for outbound delivery via the gateway.
 func (g *TAKGateway) Enqueue(msg *transport.MeshMessage) error {
 	return g.Forward(context.Background(), msg)

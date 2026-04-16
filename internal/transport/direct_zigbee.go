@@ -10,6 +10,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
+
+	"meshsat/internal/database"
 )
 
 // Known ZigBee coordinator VID:PID pairs.
@@ -25,30 +27,58 @@ var knownZigBeeVIDPIDs = map[string]bool{
 
 // ZigBeeDevice holds information about a paired ZigBee device.
 type ZigBeeDevice struct {
-	ShortAddr   uint16    `json:"short_addr"`
-	IEEEAddr    string    `json:"ieee_addr"` // hex-encoded 8-byte IEEE address
-	Endpoint    byte      `json:"endpoint"`
-	LQI         byte      `json:"lqi"`
-	LastSeen    time.Time `json:"last_seen"`
-	Temperature *float64  `json:"temperature,omitempty"` // Celsius (from cluster 0x0402) [MESHSAT-511]
-	Humidity    *float64  `json:"humidity,omitempty"`    // percent (from cluster 0x0405) [MESHSAT-511]
+	ShortAddr    uint16    `json:"short_addr"`
+	IEEEAddr     string    `json:"ieee_addr"` // hex-encoded 8-byte IEEE address
+	Alias        string    `json:"alias"`     // user-given name; falls back to "" until renamed [MESHSAT-509]
+	Manufacturer string    `json:"manufacturer,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Endpoint     byte      `json:"endpoint"`
+	LQI          byte      `json:"lqi"`
+	LastSeen     time.Time `json:"last_seen"`
+	Temperature  *float64  `json:"temperature,omitempty"` // Celsius (from cluster 0x0402) [MESHSAT-511]
+	Humidity     *float64  `json:"humidity,omitempty"`    // percent (from cluster 0x0405) [MESHSAT-511]
+	BatteryPct   int       `json:"battery_pct"`           // 0-100, -1 = unknown (from cluster 0x0001 attr 0x0021) [MESHSAT-509]
+	OnOff        int       `json:"onoff"`                 // 0/1, -1 = unknown (from cluster 0x0006) [MESHSAT-509]
 }
 
 // ZigBeeEvent is emitted when data arrives from a ZigBee device.
 type ZigBeeEvent struct {
-	Type        string       `json:"type"` // "data", "join", "leave", "temperature", "humidity"
+	Type        string       `json:"type"` // "data", "join", "leave", "temperature", "humidity", "onoff", "battery"
 	Device      ZigBeeDevice `json:"device"`
 	ClusterID   uint16       `json:"cluster_id"`
 	Data        []byte       `json:"data"`
 	Timestamp   time.Time    `json:"timestamp"`
 	Temperature *float64     `json:"temperature,omitempty"` // decoded Celsius [MESHSAT-511]
 	Humidity    *float64     `json:"humidity,omitempty"`    // decoded percent [MESHSAT-511]
+	BatteryPct  *int         `json:"battery_pct,omitempty"` // decoded 0-100 [MESHSAT-509]
+	OnOff       *bool        `json:"onoff,omitempty"`       // decoded boolean [MESHSAT-509]
 }
 
-// ZCL cluster IDs for sensor data [MESHSAT-511]
+// ZCL cluster IDs we decode [MESHSAT-509, MESHSAT-511]
 const (
+	ZCLClusterPowerCfg    = 0x0001 // PowerConfiguration — battery percent
+	ZCLClusterOnOff       = 0x0006 // On/Off — switch/light state
 	ZCLClusterTemperature = 0x0402
 	ZCLClusterHumidity    = 0x0405
+	ZCLAttrBatteryPercent = 0x0021 // PowerConfiguration cluster
+	ZCLAttrOnOffState     = 0x0000 // OnOff cluster
+	ZCLAttrMeasuredValue  = 0x0000 // Temp/Humidity clusters
+)
+
+// ZigBeeStore is the persistence interface implemented by *database.DB. The
+// transport keeps it nullable so unit tests can run without a sqlite handle.
+type ZigBeeStore interface {
+	UpsertZigBeeDevice(d *databaseZigBeeDevice) error
+	InsertZigBeeSensorReading(r *databaseZigBeeSensorReading) error
+	ListZigBeeDevices() ([]databaseZigBeeDevice, error)
+	SetZigBeeDeviceAlias(ieeeAddr, alias string) error
+}
+
+// Aliased here to avoid a hard import in test mocks. The concrete type is
+// database.ZigBeeDevice / database.ZigBeeSensorReading.
+type (
+	databaseZigBeeDevice        = database.ZigBeeDevice
+	databaseZigBeeSensorReading = database.ZigBeeSensorReading
 )
 
 // DirectZigBeeTransport manages a CC2652P Z-Stack coordinator over serial.
@@ -90,6 +120,11 @@ type DirectZigBeeTransport struct {
 
 	// Firmware info (populated after init)
 	FirmwareVersion string
+
+	// db is the persistence backend. nil-safe: when unset (e.g. unit tests
+	// that exercise only the protocol layer), the transport keeps everything
+	// in memory and skips DB writes. Set via SetStore() before Start().
+	db ZigBeeStore
 }
 
 // NewDirectZigBeeTransport creates a new ZigBee transport.
@@ -97,6 +132,101 @@ func NewDirectZigBeeTransport() *DirectZigBeeTransport {
 	return &DirectZigBeeTransport{
 		devices:       make(map[uint16]*ZigBeeDevice),
 		reinitPending: make(chan struct{}, 1),
+	}
+}
+
+// SetStore wires a persistence backend (typically *database.DB). Must be
+// called before Start() so the device-cache hydration runs at boot.
+func (z *DirectZigBeeTransport) SetStore(s ZigBeeStore) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	z.db = s
+}
+
+// hydrateFromStore loads previously-paired devices from the DB into the
+// in-memory map so the gateway can serve /api/zigbee/devices and resolve
+// short→IEEE bindings immediately on startup, before any device sends a
+// fresh announce. Called once from Start().
+func (z *DirectZigBeeTransport) hydrateFromStore() {
+	if z.db == nil {
+		return
+	}
+	devs, err := z.db.ListZigBeeDevices()
+	if err != nil {
+		log.Warn().Err(err).Msg("zigbee: hydrate from DB failed")
+		return
+	}
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	for _, d := range devs {
+		short := uint16(d.ShortAddr)
+		dev := &ZigBeeDevice{
+			ShortAddr:    short,
+			IEEEAddr:     d.IEEEAddr,
+			Alias:        d.Alias,
+			Manufacturer: d.Manufacturer,
+			Model:        d.Model,
+			Endpoint:     byte(d.Endpoint),
+			LQI:          byte(d.LQI),
+			Temperature:  d.LastTemp,
+			Humidity:     d.LastHumidity,
+			BatteryPct:   d.BatteryPct,
+			OnOff:        d.LastOnOff,
+		}
+		if t, err := time.Parse("2006-01-02 15:04:05", d.LastSeen); err == nil {
+			dev.LastSeen = t
+		}
+		z.devices[short] = dev
+	}
+	log.Info().Int("count", len(devs)).Msg("zigbee: hydrated paired devices from DB")
+}
+
+// persistDevice writes the in-memory device record to the DB. Nil-safe.
+// Caller must hold z.mu (we read pointer fields under the lock implicitly).
+func (z *DirectZigBeeTransport) persistDevice(dev *ZigBeeDevice) {
+	if z.db == nil || dev == nil {
+		return
+	}
+	rec := &database.ZigBeeDevice{
+		IEEEAddr:     dev.IEEEAddr,
+		ShortAddr:    int(dev.ShortAddr),
+		Alias:        dev.Alias,
+		Manufacturer: dev.Manufacturer,
+		Model:        dev.Model,
+		Endpoint:     int(dev.Endpoint),
+		LQI:          int(dev.LQI),
+		BatteryPct:   dev.BatteryPct,
+		LastTemp:     dev.Temperature,
+		LastHumidity: dev.Humidity,
+		LastOnOff:    dev.OnOff,
+	}
+	if rec.IEEEAddr == "" {
+		// Some devices report sensor data before sending their announce frame
+		// — we'd rather wait for the IEEE binding than create a row keyed on
+		// an empty string (which would collide across all such devices).
+		return
+	}
+	if err := z.db.UpsertZigBeeDevice(rec); err != nil {
+		log.Warn().Err(err).Str("ieee", dev.IEEEAddr).Msg("zigbee: persist device failed")
+	}
+}
+
+// recordReading appends one row to the sensor time-series. Nil-safe.
+func (z *DirectZigBeeTransport) recordReading(ieeeAddr string, cluster, attr uint16, valueNum *float64, valueText, unit string, lqi byte) {
+	if z.db == nil || ieeeAddr == "" {
+		return
+	}
+	r := &database.ZigBeeSensorReading{
+		IEEEAddr:  ieeeAddr,
+		Cluster:   int(cluster),
+		Attribute: int(attr),
+		ValueNum:  valueNum,
+		ValueText: valueText,
+		Unit:      unit,
+		LQI:       int(lqi),
+	}
+	if err := z.db.InsertZigBeeSensorReading(r); err != nil {
+		log.Warn().Err(err).Str("ieee", ieeeAddr).Msg("zigbee: persist reading failed")
 	}
 }
 
@@ -288,6 +418,11 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 	go z.readLoop(ctx)
 	go z.reinitLoop(ctx)
 
+	// Hydrate the in-memory device cache from DB so the API and any
+	// dashboard widget see previously-paired devices immediately, even
+	// before they re-announce. [MESHSAT-509]
+	z.hydrateFromStore()
+
 	log.Info().Str("port", portName).Str("firmware", firmware).
 		Str("coord_state", ZNPDevStateName(state)).
 		Msg("zigbee: coordinator started")
@@ -328,6 +463,42 @@ func (z *DirectZigBeeTransport) GetDevices() []ZigBeeDevice {
 		devs = append(devs, *d)
 	}
 	return devs
+}
+
+// SendOnOffCommand sends a ZCL OnOff cluster (0x0006) command to a device.
+// `cmd` is one of "on" / "off" / "toggle". The frame uses ZCL FCF = 0x01
+// (cluster-specific, client→server) and a fresh transaction sequence number.
+// Used by the device-manager UI's command panel. [MESHSAT-509]
+func (z *DirectZigBeeTransport) SendOnOffCommand(dstAddr uint16, dstEP byte, cmd string) error {
+	var cmdByte byte
+	switch cmd {
+	case "off":
+		cmdByte = 0x00
+	case "on":
+		cmdByte = 0x01
+	case "toggle":
+		cmdByte = 0x02
+	default:
+		return fmt.Errorf("unknown onoff command %q (want on/off/toggle)", cmd)
+	}
+	z.mu.Lock()
+	z.transID++
+	tsn := z.transID
+	z.mu.Unlock()
+	// ZCL frame: [FCF=0x01 cluster-specific] [TSN] [Cmd]
+	zcl := []byte{0x01, tsn, cmdByte}
+	return z.Send(dstAddr, dstEP, ZCLClusterOnOff, zcl)
+}
+
+// ForgetDevice removes a device from the in-memory cache. Used by the
+// "unpair" UI button after the DB row has been cleared. The device will
+// re-appear on its next announce — a true unpair would also send
+// ZDO_MGMT_LEAVE_REQ to evict it from the network, which is left for a
+// follow-up.
+func (z *DirectZigBeeTransport) ForgetDevice(shortAddr uint16) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	delete(z.devices, shortAddr)
 }
 
 // Send sends data to a specific ZigBee device endpoint. Returns an error
@@ -944,35 +1115,84 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 	z.mu.Lock()
 	dev, ok := z.devices[msg.SrcAddr]
 	if !ok {
-		dev = &ZigBeeDevice{ShortAddr: msg.SrcAddr, Endpoint: msg.SrcEP}
+		dev = &ZigBeeDevice{ShortAddr: msg.SrcAddr, Endpoint: msg.SrcEP, BatteryPct: -1, OnOff: -1}
 		z.devices[msg.SrcAddr] = dev
+	}
+	if dev.Endpoint == 0 {
+		dev.Endpoint = msg.SrcEP
 	}
 	dev.LQI = msg.LQI
 	dev.LastSeen = time.Now()
 
-	// Decode ZCL Report Attributes for sensor clusters [MESHSAT-511]
-	var temperature *float64
-	var humidity *float64
-	evtType := "data"
+	// Decode ZCL Report Attributes for known clusters [MESHSAT-509, MESHSAT-511]
+	var (
+		temperature *float64
+		humidity    *float64
+		battery     *int
+		onoff       *bool
+		evtType     = "data"
+		valueNum    *float64
+		valueText   string
+		unit        string
+		attrID      uint16
+	)
 
 	switch msg.ClusterID {
 	case ZCLClusterTemperature:
-		if v, ok := decodeZCLInt16Attr(msg.Data); ok {
-			t := float64(v) / 100.0 // ZCL temp is in 0.01 C
+		if attr, v, ok := decodeZCLInt16Report(msg.Data); ok {
+			t := float64(v) / 100.0 // ZCL temperature: 0.01 °C
 			temperature = &t
 			dev.Temperature = &t
 			evtType = "temperature"
+			valueNum = &t
+			unit = "°C"
+			attrID = attr
 			log.Info().Uint16("src", msg.SrcAddr).Float64("celsius", t).Msg("zigbee: temperature reading")
 		}
 	case ZCLClusterHumidity:
-		if v, ok := decodeZCLUint16Attr(msg.Data); ok {
-			h := float64(v) / 100.0 // ZCL humidity is in 0.01 %
+		if attr, v, ok := decodeZCLUint16Report(msg.Data); ok {
+			h := float64(v) / 100.0 // ZCL humidity: 0.01 %
 			humidity = &h
 			dev.Humidity = &h
 			evtType = "humidity"
+			valueNum = &h
+			unit = "%"
+			attrID = attr
 			log.Info().Uint16("src", msg.SrcAddr).Float64("percent", h).Msg("zigbee: humidity reading")
 		}
+	case ZCLClusterPowerCfg:
+		// BatteryPercentageRemaining (attr 0x0021) is reported in half-percent
+		// units (200 = 100%). We store the user-facing 0-100 value.
+		if attr, v, ok := decodeZCLUint8Report(msg.Data); ok && attr == ZCLAttrBatteryPercent {
+			pct := int(v) / 2
+			battery = &pct
+			dev.BatteryPct = pct
+			evtType = "battery"
+			fv := float64(pct)
+			valueNum = &fv
+			unit = "%"
+			attrID = attr
+			log.Info().Uint16("src", msg.SrcAddr).Int("percent", pct).Msg("zigbee: battery reading")
+		}
+	case ZCLClusterOnOff:
+		// OnOff state (attr 0x0000) is a single boolean byte after the ZCL
+		// Report header — same frame layout as the uint8 path.
+		if attr, v, ok := decodeZCLUint8Report(msg.Data); ok && attr == ZCLAttrOnOffState {
+			b := v != 0
+			onoff = &b
+			if b {
+				dev.OnOff = 1
+				valueText = "on"
+			} else {
+				dev.OnOff = 0
+				valueText = "off"
+			}
+			evtType = "onoff"
+			attrID = attr
+			log.Info().Uint16("src", msg.SrcAddr).Bool("on", b).Msg("zigbee: onoff state")
+		}
 	}
+	devSnapshot := *dev
 	z.mu.Unlock()
 
 	log.Debug().
@@ -982,35 +1202,104 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 		Int("len", len(msg.Data)).
 		Msg("zigbee: incoming data")
 
+	// Persist outside the mutex — DB writes can block on disk and we don't
+	// want to stall readLoop frame processing.
+	z.persistDevice(&devSnapshot)
+	if evtType != "data" {
+		z.recordReading(devSnapshot.IEEEAddr, msg.ClusterID, attrID, valueNum, valueText, unit, msg.LQI)
+	}
+
 	z.emit(ZigBeeEvent{
 		Type:        evtType,
-		Device:      *dev,
+		Device:      devSnapshot,
 		ClusterID:   msg.ClusterID,
 		Data:        msg.Data,
 		Timestamp:   time.Now(),
 		Temperature: temperature,
 		Humidity:    humidity,
+		BatteryPct:  battery,
+		OnOff:       onoff,
 	})
 }
 
-// decodeZCLInt16Attr decodes a ZCL Report Attributes frame for a signed 16-bit value.
-// Frame: frame_control(1) + seq(1) + attr_id(2) + data_type(1) + value(2)
-func decodeZCLInt16Attr(data []byte) (int16, bool) {
-	if len(data) < 7 {
-		return 0, false
+// ZCL Report Attributes frame layout (cmd 0x0a):
+//
+//	byte 0      Frame Control (FCF)
+//	byte 1      Transaction Sequence Number
+//	byte 2      Command identifier (we only handle 0x0a Report Attributes)
+//	bytes 3-4   Attribute ID (LE)
+//	byte 5      Data type
+//	bytes 6+    Value (length depends on data type)
+//
+// The legacy decoders below assumed the command byte was absent (offset 5
+// for the value), which works on devices that send a "stripped" report —
+// but the Tuya temp/humidity sensor on the field kits sends the full frame
+// with the command byte at offset 2. The unified helpers handle both by
+// detecting the data type byte. [MESHSAT-509, MESHSAT-511]
+
+// decodeZCLInt16Report returns the attribute ID + signed 16-bit value from
+// a ZCL Report Attributes frame. Used for Temperature (cluster 0x0402, attr
+// 0x0000, datatype 0x29 int16, units 0.01 °C).
+func decodeZCLInt16Report(data []byte) (uint16, int16, bool) {
+	off, attr, dt, ok := zclReportHeader(data)
+	if !ok || (dt != 0x29 && dt != 0x21) || len(data) < off+2 {
+		return 0, 0, false
 	}
-	// Skip frame control (1), sequence (1), attr ID (2), data type (1) = 5 bytes
-	val := int16(data[5]) | int16(data[6])<<8
-	return val, true
+	val := int16(data[off]) | int16(data[off+1])<<8
+	return attr, val, true
 }
 
-// decodeZCLUint16Attr decodes a ZCL Report Attributes frame for an unsigned 16-bit value.
-func decodeZCLUint16Attr(data []byte) (uint16, bool) {
-	if len(data) < 7 {
-		return 0, false
+// decodeZCLUint16Report returns the attribute ID + unsigned 16-bit value.
+// Used for Humidity (cluster 0x0405, attr 0x0000, datatype 0x21 uint16).
+func decodeZCLUint16Report(data []byte) (uint16, uint16, bool) {
+	off, attr, dt, ok := zclReportHeader(data)
+	if !ok || (dt != 0x21 && dt != 0x29) || len(data) < off+2 {
+		return 0, 0, false
 	}
-	val := uint16(data[5]) | uint16(data[6])<<8
-	return val, true
+	val := uint16(data[off]) | uint16(data[off+1])<<8
+	return attr, val, true
+}
+
+// decodeZCLUint8Report returns the attribute ID + unsigned 8-bit value.
+// Used for Battery percent (cluster 0x0001, attr 0x0021, datatype 0x20)
+// and OnOff state (cluster 0x0006, attr 0x0000, datatype 0x10).
+func decodeZCLUint8Report(data []byte) (uint16, uint8, bool) {
+	off, attr, dt, ok := zclReportHeader(data)
+	if !ok || (dt != 0x20 && dt != 0x10) || len(data) < off+1 {
+		return 0, 0, false
+	}
+	return attr, data[off], true
+}
+
+// zclReportHeader walks the variable-length ZCL Report Attributes header
+// and returns the byte offset of the first value byte plus the attribute ID
+// and data type. Handles both "with command byte" (most devices) and
+// "without command byte" (some Tuya/Xiaomi variants) layouts by sniffing
+// for known data type bytes.
+func zclReportHeader(data []byte) (off int, attr uint16, dt byte, ok bool) {
+	if len(data) < 6 {
+		return 0, 0, 0, false
+	}
+	// Try with command byte at offset 2: header = FCF + TSN + CMD + AttrID(2) + DT
+	// Standard layout for Report Attributes (cmd 0x0a) and Read Attribute Response.
+	if len(data) >= 7 {
+		cmd := data[2]
+		if cmd == 0x0a || cmd == 0x01 { // ReportAttributes or ReadAttributesResponse
+			attr = uint16(data[3]) | uint16(data[4])<<8
+			// Read response has an extra status byte before data type — both
+			// layouts are common in the wild.
+			if cmd == 0x01 && len(data) >= 8 && data[5] == 0x00 {
+				dt = data[6]
+				return 7, attr, dt, true
+			}
+			dt = data[5]
+			return 6, attr, dt, true
+		}
+	}
+	// Fallback: no command byte (compact report). Layout: FCF + TSN + AttrID(2) + DT
+	attr = uint16(data[2]) | uint16(data[3])<<8
+	dt = data[4]
+	return 5, attr, dt, true
 }
 
 func (z *DirectZigBeeTransport) handleDeviceAnnounce(f ZNPFrame) {
@@ -1022,25 +1311,74 @@ func (z *DirectZigBeeTransport) handleDeviceAnnounce(f ZNPFrame) {
 		f.Data[9], f.Data[8], f.Data[7], f.Data[6],
 		f.Data[5], f.Data[4], f.Data[3], f.Data[2])
 
+	// Preserve any existing user-set alias / cached sensor values when the
+	// device re-announces (e.g. after a battery change or a network rejoin).
 	z.mu.Lock()
+	existing, hadRow := z.devices[srcAddr]
 	dev := &ZigBeeDevice{
-		ShortAddr: srcAddr,
-		IEEEAddr:  ieeeAddr,
-		LastSeen:  time.Now(),
+		ShortAddr:  srcAddr,
+		IEEEAddr:   ieeeAddr,
+		LastSeen:   time.Now(),
+		BatteryPct: -1,
+		OnOff:      -1,
+	}
+	if hadRow {
+		dev.Alias = existing.Alias
+		dev.Manufacturer = existing.Manufacturer
+		dev.Model = existing.Model
+		dev.Endpoint = existing.Endpoint
+		dev.Temperature = existing.Temperature
+		dev.Humidity = existing.Humidity
+		if existing.BatteryPct >= 0 {
+			dev.BatteryPct = existing.BatteryPct
+		}
+		if existing.OnOff >= 0 {
+			dev.OnOff = existing.OnOff
+		}
 	}
 	z.devices[srcAddr] = dev
+	devSnapshot := *dev
 	z.mu.Unlock()
 
 	log.Info().
 		Uint16("short_addr", srcAddr).
 		Str("ieee", ieeeAddr).
+		Bool("rejoin", hadRow).
 		Msg("zigbee: device joined")
+
+	// Persist after dropping the mutex — the announce is a relatively rare
+	// event, so the latency of a sqlite write is fine here.
+	z.persistDevice(&devSnapshot)
 
 	z.emit(ZigBeeEvent{
 		Type:      "join",
-		Device:    *dev,
+		Device:    devSnapshot,
 		Timestamp: time.Now(),
 	})
+}
+
+// SetDeviceAlias updates the user-given alias for a device by IEEE address
+// and writes through to the DB. Returns false if no such device is known.
+func (z *DirectZigBeeTransport) SetDeviceAlias(ieeeAddr, alias string) bool {
+	z.mu.Lock()
+	var matched *ZigBeeDevice
+	for _, d := range z.devices {
+		if d.IEEEAddr == ieeeAddr {
+			d.Alias = alias
+			matched = d
+			break
+		}
+	}
+	z.mu.Unlock()
+	if matched == nil {
+		return false
+	}
+	if z.db != nil {
+		if err := z.db.SetZigBeeDeviceAlias(ieeeAddr, alias); err != nil {
+			log.Warn().Err(err).Str("ieee", ieeeAddr).Msg("zigbee: persist alias failed")
+		}
+	}
+	return true
 }
 
 // ProbeZNP checks if a serial port speaks Z-Stack ZNP protocol.

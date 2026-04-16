@@ -2110,20 +2110,25 @@ function widgetGridClass(id) {
 
         <!-- Paired devices table -->
         <div v-if="(store.zigbeeDevices?.devices || []).length > 0">
-          <div class="text-[9px] text-gray-600 mb-1">Paired devices</div>
+          <div class="text-[9px] text-gray-600 mb-1 flex items-center justify-between">
+            <span>Paired devices</span>
+            <router-link to="/zigbee" class="text-yellow-400/70 hover:text-yellow-400">manage →</router-link>
+          </div>
           <div class="space-y-1">
-            <div v-for="dev in store.zigbeeDevices.devices" :key="dev.short_addr"
-              class="flex items-center justify-between px-2 py-1.5 rounded bg-gray-800/50 text-[10px]">
-              <div>
-                <span class="font-mono text-yellow-400/80">{{ dev.ieee_addr || ('0x' + dev.short_addr.toString(16).padStart(4, '0')) }}</span>
-                <span class="text-gray-600 ml-1">EP{{ dev.endpoint }}</span>
+            <router-link v-for="dev in store.zigbeeDevices.devices" :key="dev.short_addr"
+              :to="`/zigbee/${dev.ieee_addr || dev.short_addr}`"
+              class="flex items-center justify-between px-2 py-1.5 rounded bg-gray-800/50 hover:bg-gray-800 text-[10px] transition-colors">
+              <div class="min-w-0 flex-1 mr-2">
+                <div class="text-gray-200 truncate">{{ dev.alias || ('ZB-' + dev.short_addr) }}</div>
+                <div class="font-mono text-[9px] text-gray-600 truncate">{{ dev.ieee_addr || ('0x' + dev.short_addr.toString(16).padStart(4, '0')) }}</div>
               </div>
-              <div class="flex items-center gap-3 text-gray-400">
-                <span v-if="dev.temperature != null" class="font-mono text-emerald-400">{{ dev.temperature.toFixed(1) }}C</span>
+              <div class="flex items-center gap-2 text-gray-400 shrink-0">
+                <span v-if="dev.temperature != null" class="font-mono text-emerald-400">{{ dev.temperature.toFixed(1) }}°C</span>
                 <span v-if="dev.humidity != null" class="font-mono text-sky-400">{{ dev.humidity.toFixed(0) }}%</span>
-                <span class="text-[9px] text-gray-600">LQI {{ dev.lqi }}</span>
+                <span v-if="dev.battery_pct >= 0" class="font-mono text-amber-400 text-[9px]">{{ dev.battery_pct }}%</span>
+                <span class="text-[9px] text-gray-600">L{{ dev.lqi }}</span>
               </div>
-            </div>
+            </router-link>
           </div>
         </div>
         <div v-else-if="store.zigbeeStatus?.connected" class="text-[10px] text-gray-600 text-center py-3">

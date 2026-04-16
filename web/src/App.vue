@@ -19,6 +19,8 @@ const tabs = [
   { name: 'map', label: 'Map', path: '/map' },
   { name: 'settings', label: 'Settings', path: '/settings' },
   { name: 'radio', label: 'Meshtastic', path: '/radio' },
+  { name: 'zigbee', label: 'ZigBee', path: '/zigbee' },
+  { name: 'tak', label: 'TAK', path: '/tak' },
   { name: 'audit', label: 'Audit', path: '/audit' },
   { name: 'help', label: 'Help', path: '/help' },
   { name: 'about', label: 'About', path: '/about' }

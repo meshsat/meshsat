@@ -913,6 +913,59 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_hemb_events_ts ON hemb_events(ts);
 	CREATE INDEX IF NOT EXISTS idx_hemb_events_stream_gen ON hemb_events(stream_id, generation_id);`,
+
+	// v42: Zigbee device manager — persistent device metadata + sensor time-series
+	// + per-device routing config [MESHSAT-509].
+	// Replaces the in-memory-only DirectZigBeeTransport.devices map so paired
+	// devices, user-given aliases, and sensor history survive container restarts.
+	// zigbee_devices: one row per paired device (keyed by IEEE 64-bit address).
+	// zigbee_sensor_readings: append-only time series (cluster + attribute keyed).
+	// zigbee_device_routing: per-device routing rules — where sensor events fan out
+	// (tak/mesh/hub/log) and the CoT type override for TAK markers.
+	`CREATE TABLE IF NOT EXISTS zigbee_devices (
+		ieee_addr      TEXT PRIMARY KEY,
+		short_addr     INTEGER NOT NULL,
+		alias          TEXT NOT NULL DEFAULT '',
+		manufacturer   TEXT NOT NULL DEFAULT '',
+		model          TEXT NOT NULL DEFAULT '',
+		device_type    TEXT NOT NULL DEFAULT '',
+		endpoint       INTEGER NOT NULL DEFAULT 0,
+		first_seen     TEXT NOT NULL DEFAULT (datetime('now')),
+		last_seen      TEXT NOT NULL DEFAULT (datetime('now')),
+		lqi            INTEGER NOT NULL DEFAULT 0,
+		battery_pct    INTEGER NOT NULL DEFAULT -1,
+		last_temp      REAL,
+		last_humidity  REAL,
+		last_onoff     INTEGER NOT NULL DEFAULT -1,
+		message_count  INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_zigbee_devices_short ON zigbee_devices(short_addr);
+	CREATE INDEX IF NOT EXISTS idx_zigbee_devices_lastseen ON zigbee_devices(last_seen DESC);
+
+	CREATE TABLE IF NOT EXISTS zigbee_sensor_readings (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts          TEXT NOT NULL DEFAULT (datetime('now')),
+		ieee_addr   TEXT NOT NULL,
+		cluster     INTEGER NOT NULL,
+		attribute   INTEGER NOT NULL,
+		value_num   REAL,
+		value_text  TEXT,
+		unit        TEXT NOT NULL DEFAULT '',
+		lqi         INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_zigbee_readings_dev_ts ON zigbee_sensor_readings(ieee_addr, ts DESC);
+	CREATE INDEX IF NOT EXISTS idx_zigbee_readings_cluster ON zigbee_sensor_readings(ieee_addr, cluster, attribute, ts DESC);
+
+	CREATE TABLE IF NOT EXISTS zigbee_device_routing (
+		ieee_addr     TEXT PRIMARY KEY,
+		to_tak        INTEGER NOT NULL DEFAULT 1,
+		to_mesh       INTEGER NOT NULL DEFAULT 0,
+		to_hub        INTEGER NOT NULL DEFAULT 1,
+		to_log        INTEGER NOT NULL DEFAULT 1,
+		cot_type      TEXT NOT NULL DEFAULT '',
+		min_interval  INTEGER NOT NULL DEFAULT 0,
+		updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+	);`,
 }
 
 func (db *DB) migrate() error {

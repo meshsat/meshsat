@@ -1084,7 +1084,13 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewZigBeeGateway(*cfg), nil
+		zgw := NewZigBeeGateway(*cfg)
+		// Wire persistence so paired devices + sensor history survive
+		// restarts and the device-manager UI can render them. [MESHSAT-509]
+		if m.db != nil {
+			zgw.SetStore(m.db)
+		}
+		return zgw, nil
 	case "tak":
 		cfg, err := ParseTAKConfig(configJSON)
 		if err != nil {
@@ -1255,6 +1261,21 @@ func (m *Manager) GetZigBeeGateway() *ZigBeeGateway {
 		}
 		if zgw, ok := gw.(*ZigBeeGateway); ok {
 			return zgw
+		}
+	}
+	return nil
+}
+
+// GetTAKGateway returns the running TAK gateway, if any.
+func (m *Manager) GetTAKGateway() *TAKGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
+		if tgw, ok := gw.(*TAKGateway); ok {
+			return tgw
 		}
 	}
 	return nil
