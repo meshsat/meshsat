@@ -174,11 +174,16 @@ func (z *DirectZigBeeTransport) emit(evt ZigBeeEvent) {
 }
 
 // Start opens the serial port and initializes the Z-Stack coordinator.
+//
+// We intentionally release z.mu around initCoordinator — init may take 60s
+// waiting for DEV_ZB_COORD and it needs to update z.coordState via z.mu
+// while running. Holding z.mu across that call would deadlock. The
+// serialMu + the "first-caller" guard below are what actually guarantee
+// mutual exclusion on Start.
 func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) error {
 	z.mu.Lock()
-	defer z.mu.Unlock()
-
 	if z.running {
+		z.mu.Unlock()
 		return fmt.Errorf("zigbee transport already running")
 	}
 
@@ -191,6 +196,7 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 
 	p, err := serial.Open(portName, mode)
 	if err != nil {
+		z.mu.Unlock()
 		return fmt.Errorf("open zigbee serial %s: %w", portName, err)
 	}
 
@@ -212,20 +218,33 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 	z.port = p
 	z.portName = portName
 
-	// Initialize coordinator
-	if err := z.initCoordinator(); err != nil {
+	// Release z.mu before running initCoordinator — init may take up to
+	// 60s waiting for DEV_ZB_COORD and it takes z.mu internally to update
+	// z.coordState. Holding z.mu across that call would deadlock.
+	z.mu.Unlock()
+
+	// Initialize coordinator without z.mu held. We pass ctx so the 60s
+	// DEV_ZB_COORD wait can abort early if the caller cancels.
+	if err := z.initCoordinator(ctx); err != nil {
 		p.Close()
+		z.mu.Lock()
+		z.port = nil
+		z.mu.Unlock()
 		return fmt.Errorf("init coordinator: %w", err)
 	}
 
+	z.mu.Lock()
 	ctx, z.cancelFn = context.WithCancel(ctx)
 	z.running = true
+	firmware := z.FirmwareVersion
+	state := z.coordState
+	z.mu.Unlock()
 
 	go z.readLoop(ctx)
 	go z.reinitLoop(ctx)
 
-	log.Info().Str("port", portName).Str("firmware", z.FirmwareVersion).
-		Str("coord_state", ZNPDevStateName(z.coordState)).
+	log.Info().Str("port", portName).Str("firmware", firmware).
+		Str("coord_state", ZNPDevStateName(state)).
 		Msg("zigbee: coordinator started")
 	return nil
 }
@@ -389,7 +408,11 @@ func (z *DirectZigBeeTransport) PermitJoinRemaining() int {
 //
 // Callers must hold z.serialMu or only run this before readLoop starts.
 // Re-entry via reinitLoop holds serialMu for the full duration.
-func (z *DirectZigBeeTransport) initCoordinator() error {
+//
+// ctx lets a slow init (the 60s DEV_ZB_COORD wait) abort cleanly when the
+// caller cancels — Start() passes its own ctx here so Stop() aborts.
+// reinitLoop passes its own ctx for the same reason.
+func (z *DirectZigBeeTransport) initCoordinator(ctx context.Context) error {
 	// 1. SYS_PING
 	if err := z.sendFrame(BuildSysPing()); err != nil {
 		return fmt.Errorf("ping: %w", err)
@@ -497,6 +520,8 @@ func (z *DirectZigBeeTransport) initCoordinator() error {
 			remaining = 2 * time.Second
 		}
 		select {
+		case <-ctx.Done():
+			return fmt.Errorf("init cancelled: %w", ctx.Err())
 		case st, ok := <-waiter:
 			if !ok {
 				return fmt.Errorf("state waiter closed unexpectedly")
@@ -703,7 +728,7 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 
 		z.serialMu.Lock()
 		log.Info().Msg("zigbee: re-initialising coordinator after reset")
-		err := z.initCoordinator()
+		err := z.initCoordinator(ctx)
 		z.serialMu.Unlock()
 
 		if err != nil {
