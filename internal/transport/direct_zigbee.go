@@ -180,15 +180,24 @@ type DirectZigBeeTransport struct {
 	// in memory and skips DB writes. Set via SetStore() before Start().
 	db ZigBeeStore
 
-	// lastReadActivityNanos tracks when readLoop last consumed bytes from
-	// the serial port, set with atomic store. The stuck-read watchdog
-	// goroutine compares against this — if no bytes have arrived in
-	// stuckReadThreshold, the cp210x driver is presumed wedged and we
-	// USBDEVFS_RESET the port to force readLoop's blocked Read to return
-	// EBADF, which releases serialMu so queued sends can proceed. This is
-	// the same kernel-driver bug we saw on SYS_RESET_IND, but triggered
-	// by heavy traffic patterns rather than a chip reset. [MESHSAT-509]
-	lastReadActivityNanos atomic.Int64
+	// readLoopIterCount increments on every readLoop iteration regardless
+	// of whether bytes were received. The watchdog samples it twice across
+	// stuckReadThreshold; if it hasn't advanced, readLoop is stuck inside
+	// read(2) (the cp210x wedge bug — Select reports readable + read blocks
+	// on VMIN=1) and we USBDEVFS_RESET the port to force read(2) to return
+	// EBADF and release serialMu.
+	//
+	// An earlier version of this watchdog checked "last byte received time"
+	// instead of iteration count, and fell back to a TryLock contention
+	// check to gate the reset. That was wrong on two counts: (a) idle
+	// networks legitimately go minutes between bytes, and (b) readLoop
+	// holds serialMu nearly continuously (releases only briefly between
+	// iterations) so TryLock always reports contention. The combined effect
+	// was that the watchdog fired on every quiet network, which on parallax
+	// killed coordinator init in a loop. The iteration counter is the
+	// simpler and correct signal — readLoop ALWAYS advances when healthy,
+	// even when reading 0 bytes. [MESHSAT-509]
+	readLoopIterCount atomic.Uint64
 }
 
 // stuckReadThreshold is how long readLoop can sit in read(2) without
@@ -618,26 +627,39 @@ func (z *DirectZigBeeTransport) RefreshDeviceSensors(shortAddr uint16) {
 }
 
 // stuckReadWatchdog detects the cp210x "Select-readable-but-read-blocks"
-// wedge condition and recovers it by USBDEVFS_RESET. Runs every 30 seconds.
+// wedge condition and recovers it by USBDEVFS_RESET. Runs every
+// stuckReadThreshold/3 — three samples spans roughly the threshold, which
+// gives the operator a tight enough recovery window without churning
+// through resets on transient slow reads.
 //
-// Detection: lastReadActivityNanos is updated by readLoop on every byte
-// received. If MORE than stuckReadThreshold has passed since the last
-// successful read AND there are pending sends queued (serialMu contended),
-// the readLoop is presumed stuck and we trigger a USB reset.
+// Detection: readLoopIterCount advances on EVERY return from port.Read,
+// including 500ms-timeout-with-zero-bytes. So as long as readLoop is
+// healthy, the counter ticks ~2/sec on an idle network and faster when
+// data flows. If the counter has not advanced across two consecutive
+// samples (≥ stuckReadThreshold), readLoop is wedged inside the read(2)
+// syscall (driver bug — VMIN=1 with no data, no timeout honored) and we
+// USBDEVFS_RESET the port to force read(2) to return EBADF.
 //
-// We also gate on "is anyone actually waiting?" by checking serialMu
-// contention via TryLock — if no one's trying to send, an idle network is
-// fine and we shouldn't churn through resets. [MESHSAT-509]
-//
-// Cost of a false positive: one USB reset (~2s of dropped traffic) and the
-// device-supervisor reattaches the gateway to the renamed tty. Benign.
+// Cost of a false positive (extremely unlikely with iteration tracking):
+// one USB reset (~2s dropped traffic) + the device-supervisor reattaches
+// the gateway. [MESHSAT-509]
 func (z *DirectZigBeeTransport) stuckReadWatchdog(ctx context.Context) {
-	const checkInterval = 30 * time.Second
-	// Prime the activity timestamp at start so we don't fire spuriously
-	// before readLoop has had a chance to receive its first frame.
-	z.lastReadActivityNanos.Store(time.Now().UnixNano())
+	checkInterval := stuckReadThreshold / 3
+	if checkInterval < 10*time.Second {
+		checkInterval = 10 * time.Second
+	}
+	// Wait one threshold-worth before the first check so init has time to
+	// run and readLoop ticks at least once.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(stuckReadThreshold):
+	}
+
+	prev := z.readLoopIterCount.Load()
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
+	stuckSince := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -645,21 +667,20 @@ func (z *DirectZigBeeTransport) stuckReadWatchdog(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		last := z.lastReadActivityNanos.Load()
-		if last == 0 {
+		cur := z.readLoopIterCount.Load()
+		if cur != prev {
+			// Healthy: readLoop is iterating.
+			prev = cur
+			stuckSince = time.Time{}
 			continue
 		}
-		idle := time.Since(time.Unix(0, last))
-		if idle < stuckReadThreshold {
+		// Counter is stuck. Track when we first noticed; only fire if it
+		// stays stuck for the full threshold.
+		if stuckSince.IsZero() {
+			stuckSince = time.Now()
 			continue
 		}
-
-		// Check whether anyone is queued waiting for serialMu. If TryLock
-		// succeeds, no one's waiting and we're just on an idle network —
-		// release immediately and skip the reset. If it fails, readLoop
-		// (or someone) holds it AND someone else is queued.
-		if z.serialMu.TryLock() {
-			z.serialMu.Unlock()
+		if time.Since(stuckSince) < stuckReadThreshold {
 			continue
 		}
 
@@ -667,22 +688,23 @@ func (z *DirectZigBeeTransport) stuckReadWatchdog(ctx context.Context) {
 		portName := z.portName
 		z.mu.Unlock()
 		if portName == "" {
+			stuckSince = time.Time{}
 			continue
 		}
 
-		log.Warn().Dur("idle", idle).Str("port", portName).
-			Msg("zigbee: stuck-read watchdog firing — USBDEVFS_RESET to unwedge cp210x driver")
+		log.Warn().Dur("stuck", time.Since(stuckSince)).Uint64("iter", cur).Str("port", portName).
+			Msg("zigbee: readLoop stuck inside read(2) — USBDEVFS_RESET to unwedge cp210x driver")
 		usbResetSerialDevice("zigbee-watchdog", portName)
-		// Reset our timer regardless of whether the reset call succeeded —
-		// avoids hammering the kernel with reset ioctls in tight loop if
-		// something is fundamentally wrong with the device.
-		z.lastReadActivityNanos.Store(time.Now().UnixNano())
-		// Give the kernel a beat to re-enumerate before the next check.
+		stuckSince = time.Time{}
+		// Give the kernel a beat to re-enumerate before the next check;
+		// also resync prev so we don't fire again on the post-reset gap
+		// while the new tty appears.
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(3 * time.Second):
+		case <-time.After(5 * time.Second):
 		}
+		prev = z.readLoopIterCount.Load()
 	}
 }
 
@@ -1300,8 +1322,12 @@ func (z *DirectZigBeeTransport) readLoop(ctx context.Context) {
 		}
 		port.SetReadTimeout(500 * time.Millisecond)
 		n, err := port.Read(buf)
+		// Mark a healthy heartbeat on EVERY return from Read, not just on
+		// successful byte reads. A 0-byte timeout-return means the port is
+		// alive — bytes are absent but the syscall came back. Only a
+		// truly-stuck Read (cp210x wedge) keeps us in syscall.
+		z.readLoopIterCount.Add(1)
 		if n > 0 {
-			z.lastReadActivityNanos.Store(time.Now().UnixNano())
 			accumulated = append(accumulated, buf[:n]...)
 			z.processAccumulated(&accumulated)
 		}
