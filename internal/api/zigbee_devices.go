@@ -322,6 +322,11 @@ func (s *Server) handleGetZigBeeDeviceHistory(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("history: %v", err))
 		return
 	}
+	if readings == nil {
+		// JSON-marshal nil slice as empty array for cleaner client code
+		// (Vue + Playwright assertions expect Array.isArray to be true).
+		readings = []database.ZigBeeSensorReading{}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ieee_addr": row.IEEEAddr,
 		"alias":     row.Alias,

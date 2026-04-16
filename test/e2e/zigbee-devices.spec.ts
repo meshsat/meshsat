@@ -17,13 +17,13 @@ test.describe('ZigBee device manager', () => {
     const body = await status.json();
     expect(body).toHaveProperty('connected');
 
-    await page.goto('/#/zigbee');
+    await page.goto('/zigbee');
     await expect(page).toHaveTitle(/MeshSat/);
     await expect(page.getByRole('heading', { name: 'ZigBee Devices' })).toBeVisible({ timeout: 10000 });
 
     // Either we have devices, or we show the empty state. Both are valid.
     const hasEmpty = await page.getByText(/No paired ZigBee devices/i).isVisible().catch(() => false);
-    const hasDevices = await page.locator('a[href^="#/zigbee/"]').count() > 0;
+    const hasDevices = await page.locator('a[href^="/zigbee/"]').count() > 0;
     expect(hasEmpty || hasDevices).toBeTruthy();
   });
 
@@ -52,7 +52,7 @@ test.describe('ZigBee device manager', () => {
     const dev = list[0];
     const addr = dev.ieee_addr || String(dev.short_addr);
 
-    await page.goto(`/#/zigbee/${addr}`);
+    await page.goto(`/zigbee/${addr}`);
     await expect(page.getByText(/IEEE:/)).toBeVisible({ timeout: 10000 });
 
     // All four "live readings" tiles should render labels (values may be —).
@@ -62,7 +62,7 @@ test.describe('ZigBee device manager', () => {
     await expect(page.getByText('Signal LQI', { exact: true })).toBeVisible();
 
     // Sensor history section should render (with chart or empty state).
-    await expect(page.getByText('Sensor history')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Sensor history' })).toBeVisible();
 
     // Routing section.
     await expect(page.getByText(/Forward to TAK/)).toBeVisible();
