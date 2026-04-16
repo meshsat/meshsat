@@ -48,7 +48,7 @@ async function setMinElev(val) {
   localStorage.setItem('meshsat-min-elev', String(val))
   // Sync to backend gateway config so scheduler uses the same value
   try {
-    const gwType = constellation.value
+    const gwType = 'iridium'
     const gw = (store.gateways || []).find(g => g.type === gwType)
     if (gw) {
       const cfg = typeof gw.config === 'string' ? JSON.parse(gw.config) : { ...gw.config }
@@ -362,7 +362,7 @@ function clearHover() {
 }
 
 async function fetchSignalHistory() {
-  if (constellation.value !== 'iridium') return
+  // Iridium only (Astrocast removed)
   const now = Math.floor(Date.now() / 1000)
   const windowSec = windowHours.value * 3600
   const from = now - Math.floor(windowSec * 0.5)
@@ -375,7 +375,6 @@ async function fetchSignalHistory() {
 
 watch(windowHours, fetchSignalHistory)
 watch(locationMode, () => { store.fetchLocationSources().then(fetchPasses) })
-watch(constellation, () => { fetchPasses(); fetchSignalHistory() })
 
 onMounted(async () => {
   await Promise.all([
