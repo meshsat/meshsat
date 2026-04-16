@@ -435,6 +435,10 @@ func ProbeZNP(portName string) bool {
 	p.SetRTS(false)
 
 	// Drain stale data and settle after potential DTR-triggered reset.
+	// The CP210x kernel driver asserts DTR+RTS during open(), which triggers
+	// the auto-BSL circuit on SONOFF ZBDongle-P/E and similar CC2652P boards.
+	// After we clear DTR/RTS, the coordinator exits bootloader and starts the
+	// Z-Stack firmware, which takes ~1-2s to initialize. [MESHSAT-403]
 	p.SetReadTimeout(200 * time.Millisecond)
 	drain := make([]byte, 256)
 	for {
@@ -443,7 +447,7 @@ func ProbeZNP(portName string) bool {
 			break
 		}
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 
 	// Send SYS_PING
 	frame := BuildSysPing()
