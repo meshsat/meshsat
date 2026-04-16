@@ -82,9 +82,10 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 	}
 	g.connected.Store(true)
 
-	g.wg.Add(2)
+	g.wg.Add(3)
 	go g.readWorker(ctx)
 	go g.writeWorker(ctx)
+	go g.silenceWatchdog(ctx)
 
 	log.Info().
 		Str("kiss_addr", fmt.Sprintf("%s:%d", g.config.KISSHost, g.config.KISSPort)).
@@ -281,5 +282,55 @@ func (g *APRSGateway) reconnect(ctx context.Context) {
 		g.connected.Store(true)
 		log.Info().Msg("aprs: reconnected to Direwolf")
 		return
+	}
+}
+
+// silenceWatchdog monitors for extended periods without receiving any APRS
+// packets. If the gateway is connected but no packets arrive for 30 minutes,
+// it logs a warning (likely antenna/radio issue, not a Direwolf bug).
+// If no packets arrive for 60 minutes, it forces a reconnect cycle to
+// recover from potential KISS TCP desynchronization. [MESHSAT-403]
+func (g *APRSGateway) silenceWatchdog(ctx context.Context) {
+	defer g.wg.Done()
+
+	const warnAfter = 30 * time.Minute
+	const reconnectAfter = 60 * time.Minute
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	warned := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !g.connected.Load() {
+				warned = false
+				continue
+			}
+
+			lastRX := g.lastActive.Load()
+			if lastRX == 0 {
+				// Never received a packet — skip watchdog until first packet
+				continue
+			}
+
+			silence := time.Since(time.Unix(lastRX, 0))
+
+			if silence >= reconnectAfter {
+				log.Warn().Dur("silence", silence).
+					Msg("aprs: no packets for 60min — forcing KISS reconnect")
+				g.kiss.Close()
+				g.connected.Store(false)
+				g.reconnect(ctx)
+				warned = false
+			} else if silence >= warnAfter && !warned {
+				log.Warn().Dur("silence", silence).
+					Msg("aprs: no packets for 30min — check antenna/radio/frequency")
+				warned = true
+			}
+		}
 	}
 }
