@@ -91,6 +91,7 @@ function onDragEnd() {
 
 // ── Helpers from NodesView ──
 const nowSec = ref(Date.now() / 1000)
+const zbPermitJoinErr = ref('')
 
 function signalDot(node) {
   return nodeStatusDot(node, nowSec.value)
@@ -2085,7 +2086,7 @@ function widgetGridClass(id) {
         <!-- Permit Join button -->
         <div class="flex items-center gap-2 mb-3">
           <button v-if="!store.zigbeePermitJoin?.active"
-            @click="store.startZigBeePermitJoin(120).then(() => store.fetchZigBeePermitJoin())"
+            @click="zbPermitJoinErr = ''; store.startZigBeePermitJoin(120).then(() => store.fetchZigBeePermitJoin()).catch(e => zbPermitJoinErr = e.message)"
             class="px-3 py-1 rounded text-[10px] font-medium bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/20 transition-colors"
             :disabled="!store.zigbeeStatus?.connected">
             Permit Join (120s)
@@ -2095,6 +2096,7 @@ function widgetGridClass(id) {
             class="px-3 py-1 rounded text-[10px] font-medium bg-red-400/10 text-red-400 border border-red-400/20 hover:bg-red-400/20 transition-colors animate-pulse">
             Pairing Open ({{ store.zigbeePermitJoin?.remaining_sec ?? 0 }}s) — Stop
           </button>
+          <span v-if="zbPermitJoinErr" class="text-[9px] text-red-400">{{ zbPermitJoinErr }}</span>
         </div>
 
         <!-- Paired devices table -->

@@ -1375,7 +1375,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     try { zigbeePermitJoin.value = await api.get('/zigbee/permit-join') } catch {}
   }
   async function startZigBeePermitJoin(durationSec = 120) {
-    try { return await api.post('/zigbee/permit-join', { duration_sec: durationSec }) } catch (e) { error.value = e.message }
+    try { return await api.post('/zigbee/permit-join', { duration_sec: durationSec }) } catch (e) { error.value = e.message; throw e }
   }
   async function stopZigBeePermitJoin() {
     try { return await api.post('/zigbee/permit-join', { duration_sec: 0 }) } catch (e) { error.value = e.message }
