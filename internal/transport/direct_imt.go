@@ -238,7 +238,7 @@ func (t *DirectIMTTransport) connect() error {
 
 		// The modem gets into a hung state after repeated failed serial
 		// sessions. A USB device reset (unbind/bind) recovers it.
-		if !t.usbResetDone && usbResetIMTDevice(portPath) {
+		if !t.usbResetDone && usbResetSerialDevice("imt", portPath) {
 			t.usbResetDone = true // prevent infinite recursion
 			log.Info().Msg("imt: USB reset succeeded, retrying connect")
 			time.Sleep(2 * time.Second)
@@ -957,16 +957,25 @@ func (t *DirectIMTTransport) reconnect() error {
 	return nil
 }
 
-// usbResetIMTDevice resets the USB device behind the given serial port using
-// the USBDEVFS_RESET ioctl. The RockBLOCK 9704 (FTDI FT234XD) gets into a
-// hung state after repeated failed serial sessions — the firmware stops
-// responding to JSPR commands. A USB reset forces full re-enumeration.
+// usbResetSerialDevice resets the USB device behind the given serial port
+// using the USBDEVFS_RESET ioctl. Used to recover serial devices whose kernel
+// driver state has gone wedged — e.g. the RockBLOCK 9704 (FTDI FT234XD) after
+// repeated failed JSPR sessions, or the SONOFF ZBDongle-P (Silicon Labs CP210x)
+// after the CC2652P firmware does an unsolicited reset and the cp210x driver
+// enters a "poll reports readable but read(2) blocks" state that close+reopen
+// alone cannot escape.
 //
 // Uses the ioctl approach (works inside Docker containers) rather than sysfs
 // unbind/bind (which requires writable sysfs, blocked inside containers).
 //
+// Caller is responsible for sleeping ~1-2s after the reset to give the kernel
+// time to re-enumerate the device before reopening the tty.
+//
+// The `who` string is just a log tag (e.g. "imt", "zigbee") so the log lines
+// are attributable to the calling subsystem.
+//
 // Returns true if the reset was performed successfully.
-func usbResetIMTDevice(portPath string) bool {
+func usbResetSerialDevice(who, portPath string) bool {
 	// portPath is e.g. "/dev/ttyUSB0" — extract "ttyUSB0"
 	devName := portPath
 	for i := len(devName) - 1; i >= 0; i-- {
@@ -982,14 +991,14 @@ func usbResetIMTDevice(portPath string) bool {
 		`DEV=$(readlink -f /sys/class/tty/%s/device/../../) && `+
 			`cat "$DEV/busnum" && cat "$DEV/devnum"`, devName)).CombinedOutput()
 	if err != nil {
-		log.Debug().Err(err).Str("output", string(out)).Msg("imt: usb reset — can't resolve bus/dev numbers")
+		log.Debug().Str("subsys", who).Err(err).Str("output", string(out)).Msg("usb reset — can't resolve bus/dev numbers")
 		return false
 	}
 
 	// Parse busnum and devnum
 	var busNum, devNum int
 	if _, err := fmt.Sscanf(string(out), "%d\n%d", &busNum, &devNum); err != nil {
-		log.Debug().Err(err).Str("output", string(out)).Msg("imt: usb reset — can't parse bus/dev")
+		log.Debug().Str("subsys", who).Err(err).Str("output", string(out)).Msg("usb reset — can't parse bus/dev")
 		return false
 	}
 
@@ -997,7 +1006,7 @@ func usbResetIMTDevice(portPath string) bool {
 	usbDevPath := fmt.Sprintf("/dev/bus/usb/%03d/%03d", busNum, devNum)
 	fd, err := unix.Open(usbDevPath, unix.O_WRONLY, 0)
 	if err != nil {
-		log.Warn().Err(err).Str("path", usbDevPath).Msg("imt: USB reset — can't open USB device")
+		log.Warn().Str("subsys", who).Err(err).Str("path", usbDevPath).Msg("usb reset — can't open USB device")
 		return false
 	}
 	defer unix.Close(fd)
@@ -1005,11 +1014,11 @@ func usbResetIMTDevice(portPath string) bool {
 	// USBDEVFS_RESET = _IO('U', 20) = 0x5514
 	const usbdevfsReset = 0x5514
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), usbdevfsReset, 0); errno != 0 {
-		log.Warn().Int("errno", int(errno)).Str("path", usbDevPath).Msg("imt: USB reset ioctl failed")
+		log.Warn().Str("subsys", who).Int("errno", int(errno)).Str("path", usbDevPath).Msg("usb reset ioctl failed")
 		return false
 	}
 
-	log.Info().Str("port", portPath).Str("usb", usbDevPath).Msg("imt: USB device reset completed")
+	log.Info().Str("subsys", who).Str("port", portPath).Str("usb", usbDevPath).Msg("usb device reset completed")
 	return true
 }
 

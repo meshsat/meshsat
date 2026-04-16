@@ -874,9 +874,31 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 		z.mu.Lock()
 		old := z.port
 		z.port = nil
+		portName := z.portName
 		z.mu.Unlock()
 		if old != nil {
 			_ = old.Close()
+		}
+
+		// USBDEVFS_RESET on the underlying USB device. Closing+reopening the
+		// fd alone is not enough: a goroutine dump from tesseract01 showed
+		// read(2) on a freshly-opened fd blocking for 4+ minutes after the
+		// CC2652P unsolicited power-up reset. go.bug.st/serial.Read uses
+		// Select() for the timeout,
+		// then unix.Read with VMIN=1, VTIME=0 — so when the cp210x driver
+		// reports the fd readable but no data is actually available, read(2)
+		// blocks waiting for the first byte that never comes. A USB-level
+		// reset clears the driver state and forces re-enumeration. The IMT
+		// transport uses the same pattern to recover the FT234XD on the 9704.
+		if portName != "" {
+			usbResetSerialDevice("zigbee", portName)
+			// Give the kernel a beat to re-enumerate the device before we
+			// try to open it again. cp210x typically reappears within ~1s.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
 		}
 
 		z.serialMu.Lock()
