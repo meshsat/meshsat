@@ -323,6 +323,7 @@ func drainPort(port serial.Port) {
 // Known Meshtastic VID:PID pairs
 var knownMeshtasticVIDPIDs = map[string]bool{
 	"303a:1001": true, // ESP32-S3 (Heltec V3, T-Beam S3)
+	"2886:0059": true, // Seeed XIAO ESP32-S3 (CDC-ACM, native USB)
 	"1a86:55d4": true, // CH343 (T-Beam, Heltec V2)
 	"1a86:7523": true, // CH340 (generic ESP32)
 	"10c4:ea60": true, // CP2102/CP2104 (generic ESP32)
