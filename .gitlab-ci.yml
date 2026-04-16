@@ -211,7 +211,7 @@ deploy:
     - package
   parallel:
     matrix:
-      - DEPLOY_TARGET: [parallax01]
+      - DEPLOY_TARGET: [parallax01, tesseract01]
   before_script:
     - apk add --no-cache openssh-client curl
     - eval $(ssh-agent -s)
