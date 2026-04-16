@@ -463,6 +463,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/zigbee/devices", s.handleGetZigBeeDevices)
 		r.Get("/zigbee/status", s.handleGetZigBeeStatus)
 
+		// APRS dashboard (v0.4.0)
+		r.Get("/aprs/status", s.handleGetAPRSStatus)
+		r.Get("/aprs/heard", s.handleGetAPRSHeard)
+		r.Get("/aprs/activity", s.handleGetAPRSActivity)
+
 		// Crypto utilities (v0.3.0)
 		r.Post("/crypto/generate-key", s.handleGenerateEncryptionKey)
 		r.Post("/crypto/validate-transforms", s.handleValidateTransforms)

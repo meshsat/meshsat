@@ -1344,6 +1344,23 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message }
   }
 
+  // APRS dashboard widget (v0.4.0)
+  const aprsStatus = ref(null)
+  const aprsHeard = ref([])
+  const aprsActivity = ref({ buckets: [], recent_paths: [] })
+  async function fetchAPRSStatus() {
+    try { aprsStatus.value = await api.get('/aprs/status') } catch {}
+  }
+  async function fetchAPRSHeard() {
+    try {
+      const data = await api.get('/aprs/heard')
+      aprsHeard.value = Array.isArray(data) ? data : []
+    } catch {}
+  }
+  async function fetchAPRSActivity() {
+    try { aprsActivity.value = await api.get('/aprs/activity') } catch {}
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
@@ -1400,6 +1417,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     credentials, expiringCredentials, fetchCredentials, fetchExpiringCredentials,
     uploadCredential, deleteCredential, applyCredential,
     routingInterfaces, fetchRoutingInterfaces, setFloodable,
-    reticulumStatus, fetchReticulumStatus
+    reticulumStatus, fetchReticulumStatus,
+    aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity
   }
 })

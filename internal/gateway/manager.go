@@ -1260,6 +1260,21 @@ func (m *Manager) GetZigBeeGateway() *ZigBeeGateway {
 	return nil
 }
 
+// GetAPRSGateway returns the running APRS gateway, if any.
+func (m *Manager) GetAPRSGateway() *APRSGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
+		if agw, ok := gw.(*APRSGateway); ok {
+			return agw
+		}
+	}
+	return nil
+}
+
 // GetDynDNSUpdater returns the DynDNS updater from the running cellular gateway, if any.
 func (m *Manager) GetDynDNSUpdater() *DynDNSUpdater {
 	if cgw := m.GetCellularGateway(); cgw != nil {

@@ -28,6 +28,8 @@ type APRSGateway struct {
 	lastActive atomic.Int64
 	startTime  time.Time
 
+	tracker *APRSTracker
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -36,11 +38,37 @@ type APRSGateway struct {
 func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 	addr := fmt.Sprintf("%s:%d", cfg.KISSHost, cfg.KISSPort)
 	return &APRSGateway{
-		config: cfg,
-		db:     db,
-		kiss:   NewKISSConn(addr),
-		inCh:   make(chan InboundMessage, 32),
-		outCh:  make(chan *transport.MeshMessage, 10),
+		config:  cfg,
+		db:      db,
+		kiss:    NewKISSConn(addr),
+		inCh:    make(chan InboundMessage, 32),
+		outCh:   make(chan *transport.MeshMessage, 10),
+		tracker: NewAPRSTracker(),
+	}
+}
+
+// Tracker returns the APRS heard station and activity tracker.
+func (g *APRSGateway) Tracker() *APRSTracker {
+	return g.tracker
+}
+
+// GetAPRSStatus returns aggregated status for the dashboard.
+func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
+	uptime := ""
+	if g.connected.Load() {
+		uptime = time.Since(g.startTime).Round(time.Second).String()
+	}
+	return map[string]interface{}{
+		"connected":     g.connected.Load(),
+		"callsign":      FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
+		"frequency_mhz": g.config.FrequencyMHz,
+		"uptime":        uptime,
+		"rx":            g.msgsIn.Load(),
+		"tx":            g.msgsOut.Load(),
+		"errors":        g.errors.Load(),
+		"heard_count":   len(g.tracker.GetHeardStations()),
+		"packet_types":  g.tracker.GetPacketTypeBreakdown(),
+		"kiss_addr":     fmt.Sprintf("%s:%d", g.config.KISSHost, g.config.KISSPort),
 	}
 }
 
@@ -160,6 +188,9 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			log.Debug().Err(err).Msg("aprs: parse APRS")
 			continue
 		}
+
+		// Track heard station and activity [MESHSAT-403]
+		g.tracker.RecordRX(pkt)
 
 		text := g.formatInboundText(pkt)
 		msg := InboundMessage{

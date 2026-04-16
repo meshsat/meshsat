@@ -41,7 +41,7 @@ const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'aprs', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
 function loadWidgetOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
@@ -247,6 +247,15 @@ const schedulerNextTransition = computed(() => {
   if (!t) return ''
   return formatRelativeTime(t)
 })
+
+function formatRelTime(unixSec) {
+  if (!unixSec) return ''
+  const ago = Math.floor(Date.now() / 1000 - unixSec)
+  if (ago < 60) return `${ago}s ago`
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`
+  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`
+  return `${Math.floor(ago / 86400)}d ago`
+}
 
 function schedulerBadgeClass(mode) {
   if (mode === 'active') return 'bg-emerald-400/10 text-emerald-400'
@@ -1100,7 +1109,10 @@ async function fetchAll() {
     store.fetchHeMBStats(),
     store.fetchReticulumStatus(),
     store.fetchWebhookLog(),
-    store.fetchConfig()
+    store.fetchConfig(),
+    store.fetchAPRSStatus(),
+    store.fetchAPRSHeard(),
+    store.fetchAPRSActivity()
   ])
 }
 
@@ -1129,6 +1141,9 @@ onMounted(() => {
     store.fetchLocationSources()
     store.fetchCellularSignal().then(trackCellularSignal)
     store.fetchReticulumStatus()
+    store.fetchAPRSStatus()
+    store.fetchAPRSHeard()
+    store.fetchAPRSActivity()
   }, 15000)
 })
 
@@ -1908,6 +1923,120 @@ function widgetGridClass(id) {
             <span class="text-[9px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item._time) }}</span>
           </div>
           <div v-if="!unifiedQueue.length" class="text-[11px] text-gray-600 text-center py-3">Queue empty</div>
+        </div>
+      </div>
+
+      <!-- ═══ APRS ═══ -->
+      <div v-if="wid === 'aprs'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-amber-400/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="font-display font-semibold text-sm text-amber-400 tracking-wide">APRS</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span v-if="store.aprsStatus?.callsign" class="text-[10px] font-mono text-amber-400/70">{{ store.aprsStatus.callsign }}</span>
+            <span v-if="store.aprsStatus?.frequency_mhz" class="text-[10px] text-gray-500">{{ store.aprsStatus.frequency_mhz?.toFixed(3) }} MHz</span>
+            <span :class="store.aprsStatus?.connected ? 'bg-amber-400' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+          </div>
+        </div>
+
+        <!-- Counters + uptime -->
+        <div class="grid grid-cols-4 gap-2 mb-3">
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">RX</div>
+            <div class="text-sm font-mono text-gray-300">{{ store.aprsStatus?.rx ?? 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">TX</div>
+            <div class="text-sm font-mono text-gray-300">{{ store.aprsStatus?.tx ?? 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">Errors</div>
+            <div class="text-sm font-mono" :class="(store.aprsStatus?.errors ?? 0) > 0 ? 'text-red-400' : 'text-gray-500'">{{ store.aprsStatus?.errors ?? 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">Heard</div>
+            <div class="text-sm font-mono text-amber-400">{{ store.aprsStatus?.heard_count ?? 0 }}</div>
+          </div>
+        </div>
+
+        <!-- Activity sparkline (30 min) -->
+        <div v-if="(store.aprsActivity?.buckets || []).length > 1" class="mb-3">
+          <div class="text-[9px] text-gray-600 mb-1">Packet activity (30 min)</div>
+          <svg viewBox="0 0 200 32" class="w-full h-8">
+            <line v-for="(b, i) in store.aprsActivity.buckets" :key="i"
+              :x1="i * (200 / 30) + 3" :x2="i * (200 / 30) + 3"
+              :y1="32" :y2="32 - Math.min(30, (b.rx + b.tx) * 3)"
+              stroke="rgba(245,158,11,0.5)" stroke-width="4" stroke-linecap="round" />
+          </svg>
+        </div>
+
+        <!-- Packet type breakdown -->
+        <div v-if="(store.aprsStatus?.packet_types || []).length > 0" class="mb-3">
+          <div class="text-[9px] text-gray-600 mb-1">Packet types</div>
+          <div class="flex h-2 rounded-full overflow-hidden bg-gray-800">
+            <div v-for="pt in store.aprsStatus.packet_types" :key="pt.label"
+              :style="{ width: (pt.count / Math.max(store.aprsStatus?.rx ?? 1, 1) * 100) + '%' }"
+              :class="{
+                'bg-amber-400': pt.label === 'position',
+                'bg-blue-400': pt.label === 'message',
+                'bg-emerald-400': pt.label === 'weather',
+                'bg-purple-400': pt.label === 'telemetry',
+                'bg-gray-500': pt.label === 'other' || pt.label === 'status'
+              }"
+              :title="pt.label + ': ' + pt.count" />
+          </div>
+          <div class="flex gap-3 mt-1 text-[9px] text-gray-500">
+            <span v-for="pt in store.aprsStatus.packet_types" :key="'l'+pt.label" class="flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full inline-block"
+                :class="{
+                  'bg-amber-400': pt.label === 'position',
+                  'bg-blue-400': pt.label === 'message',
+                  'bg-emerald-400': pt.label === 'weather',
+                  'bg-purple-400': pt.label === 'telemetry',
+                  'bg-gray-500': pt.label === 'other' || pt.label === 'status'
+                }" />
+              {{ pt.label }} {{ pt.count }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Heard stations table -->
+        <div v-if="(store.aprsHeard || []).length > 0">
+          <div class="text-[9px] text-gray-600 mb-1">Heard stations</div>
+          <div class="space-y-0.5 max-h-48 overflow-y-auto">
+            <div v-for="st in store.aprsHeard.slice(0, 12)" :key="st.callsign"
+              class="flex items-center justify-between px-2 py-1 rounded bg-gray-800/50 text-[10px]">
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-amber-400/80 w-[72px]">{{ st.callsign }}</span>
+                <span class="text-gray-500">{{ st.packet_type }}</span>
+              </div>
+              <div class="flex items-center gap-3 text-gray-500">
+                <span v-if="st.distance_km > 0" class="font-mono">{{ st.distance_km.toFixed(1) }}km</span>
+                <span class="font-mono w-6 text-right">{{ st.packet_count }}</span>
+                <span class="w-16 text-right">{{ formatRelTime(st.last_heard) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="text-[10px] text-gray-600 text-center py-3">
+          {{ store.aprsStatus?.connected ? 'Listening...' : 'KISS TCP disconnected' }}
+        </div>
+
+        <!-- Recent digipeater paths -->
+        <div v-if="(store.aprsActivity?.recent_paths || []).length > 0" class="mt-2">
+          <div class="text-[9px] text-gray-600 mb-1">Recent paths</div>
+          <div v-for="(rp, i) in (store.aprsActivity.recent_paths || []).slice(-5)" :key="i"
+            class="text-[9px] font-mono text-gray-600 truncate">
+            {{ rp.callsign }} via {{ rp.path }}
+          </div>
+        </div>
+
+        <!-- Uptime footer -->
+        <div v-if="store.aprsStatus?.uptime" class="mt-2 text-[9px] text-gray-600 text-right">
+          uptime {{ store.aprsStatus.uptime }}
         </div>
       </div>
 
