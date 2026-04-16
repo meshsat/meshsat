@@ -509,11 +509,19 @@ func (z *DirectZigBeeTransport) initCoordinator(ctx context.Context) error {
 		}
 	}
 
-	// Some frames may have been emitted before we registered the waiter
-	// (race at startup). Sample readCmdFrameTimeout already fans
-	// state changes to waiters for us by calling handleFrame-style
-	// notification on every AREQ. So we can just drain and wait.
+	// Wait for DEV_ZB_COORD via two parallel signals:
+	//   (a) ZDO_STATE_CHANGE_IND AREQs pushed through the waiter by
+	//       handleFrame (zigbee-herdsman's primary path), and
+	//   (b) periodic UTIL_GET_DEVICE_INFO polls.
+	//
+	// (b) is necessary because some Z-Stack 2.7.1 SmartRF06 firmwares
+	// ship with ZCD_NV_ZDO_DIRECT_CB=0 by default, and without that NV
+	// bit the stack never emits ZDO_STATE_CHANGE_IND AREQs. Observed on
+	// the SONOFF ZBDongle-P currently on parallax01 (ZDO_STARTUP returns
+	// status=0 "restored from NV" but no state-change AREQ ever arrives).
+	// The poll closes the gap without us having to write NV.
 	deadline := time.Now().Add(60 * time.Second)
+	nextPoll := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		remaining := time.Until(deadline)
 		if remaining > 2*time.Second {
@@ -535,6 +543,24 @@ func (z *DirectZigBeeTransport) initCoordinator(ctx context.Context) error {
 			// while we were waiting — each decoded AREQ feeds the state
 			// waiter via handleFrame when applicable.
 			_, _ = z.drainFrame(100 * time.Millisecond)
+		}
+		if time.Now().After(nextPoll) {
+			nextPoll = time.Now().Add(2 * time.Second)
+			if err := z.sendFrame(BuildUtilGetDeviceInfo()); err == nil {
+				if resp, err := z.readCmdFrameTimeout(CmdUtilGetDeviceInfoRsp, 1*time.Second); err == nil {
+					if info, perr := ParseDeviceInfo(resp.Data); perr == nil {
+						z.mu.Lock()
+						z.coordState = info.DeviceState
+						z.mu.Unlock()
+						if info.DeviceState == ZNPDevStateCoord {
+							log.Info().Msg("zigbee: DEV_ZB_COORD reached (via poll)")
+							return nil
+						}
+						log.Debug().Str("state", ZNPDevStateName(info.DeviceState)).
+							Msg("zigbee: init poll — still forming")
+					}
+				}
+			}
 		}
 	}
 	return fmt.Errorf("timed out waiting for DEV_ZB_COORD (last state=%s)",
