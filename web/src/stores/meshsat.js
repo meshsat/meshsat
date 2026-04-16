@@ -1405,6 +1405,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   async function sendZigBeeDeviceCommand(addr, command, level) {
     return await api.post(`/zigbee/devices/${encodeURIComponent(addr)}/command`, { command, level })
   }
+  async function refreshZigBeeDevice(addr) {
+    return await api.post(`/zigbee/devices/${encodeURIComponent(addr)}/refresh`, {})
+  }
 
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
@@ -1468,6 +1471,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
     startZigBeePermitJoin, stopZigBeePermitJoin,
     fetchZigBeeDevicesEnriched, fetchZigBeeDevice, patchZigBeeDevice, deleteZigBeeDevice,
-    fetchZigBeeDeviceHistory, fetchZigBeeDeviceRouting, putZigBeeDeviceRouting, sendZigBeeDeviceCommand
+    fetchZigBeeDeviceHistory, fetchZigBeeDeviceRouting, putZigBeeDeviceRouting, sendZigBeeDeviceCommand,
+    refreshZigBeeDevice
   }
 })

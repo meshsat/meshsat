@@ -64,6 +64,17 @@ async function saveRouting() {
   } catch (e) { error.value = e.message }
 }
 
+async function refreshSensors() {
+  try {
+    error.value = ''
+    commandResult.value = 'Polling device…'
+    await store.refreshZigBeeDevice(props.addr)
+    // Give the device 5s to respond on its next mac poll, then re-pull.
+    setTimeout(async () => { await refresh(); commandResult.value = 'Done — values may take ~5s for sleepy devices' }, 1000)
+    setTimeout(() => commandResult.value = '', 8000)
+  } catch (e) { error.value = e.message }
+}
+
 async function unpair() {
   if (!confirm(`Forget device ${device.value?.display_name}? Sensor history will be deleted. The device may rejoin on its next announce.`)) return
   try {
@@ -158,6 +169,11 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
             </div>
             <div class="text-[10px] text-gray-500">First seen: {{ device.first_seen?.split(' ')[0] || '—' }}</div>
             <div class="text-[10px] text-gray-500">{{ device.message_count || 0 }} messages</div>
+            <button @click="refreshSensors"
+              class="mt-1 px-2 py-1 rounded text-[10px] bg-yellow-400/10 text-yellow-400 border border-yellow-400/30 hover:bg-yellow-400/20"
+              title="Send ZCL Read Attributes for temp/humidity/battery — sleepy devices may take ~5s to respond">
+              Refresh now
+            </button>
           </div>
         </div>
 

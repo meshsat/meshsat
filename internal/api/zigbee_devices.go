@@ -381,6 +381,35 @@ func (s *Server) handlePutZigBeeDeviceRouting(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, rt)
 }
 
+// handlePostZigBeeDeviceRefresh sends ZCL Read Attributes for the
+// temperature, humidity, and battery clusters on this device. Used by the
+// "Refresh now" button in the detail view so users don't have to wait
+// 30 min for sleepy Tuya sensors to report on their own cycle. The
+// response arrives async via AF_INCOMING_MSG. [MESHSAT-509]
+func (s *Server) handlePostZigBeeDeviceRefresh(w http.ResponseWriter, r *http.Request) {
+	zgw := s.gwManager.GetZigBeeGateway()
+	if zgw == nil {
+		writeError(w, http.StatusServiceUnavailable, "zigbee gateway not running")
+		return
+	}
+	t := zgw.GetTransport()
+	if t == nil {
+		writeError(w, http.StatusServiceUnavailable, "zigbee transport not available")
+		return
+	}
+	addr := chi.URLParam(r, "addr")
+	row := s.findZigBeeDeviceRow(addr)
+	if row == nil {
+		writeError(w, http.StatusNotFound, "no zigbee device with that address")
+		return
+	}
+	go t.RefreshDeviceSensors(uint16(row.ShortAddr))
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"refreshing": true,
+		"short_addr": row.ShortAddr,
+	})
+}
+
 // handlePostZigBeeDeviceCommand sends a command to a device. Currently
 // supports OnOff (cluster 0x0006) commands "on" / "off" / "toggle" via
 // AF_DATA_REQUEST. Future: level (0x0008), color (0x0300).

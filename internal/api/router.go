@@ -469,6 +469,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/zigbee/devices/{addr}/routing", s.handleGetZigBeeDeviceRouting)
 		r.Put("/zigbee/devices/{addr}/routing", s.handlePutZigBeeDeviceRouting)
 		r.Post("/zigbee/devices/{addr}/command", s.handlePostZigBeeDeviceCommand)
+		r.Post("/zigbee/devices/{addr}/refresh", s.handlePostZigBeeDeviceRefresh)
 		r.Get("/zigbee/status", s.handleGetZigBeeStatus)
 		r.Post("/zigbee/permit-join", s.handlePostZigBeePermitJoin)
 		r.Get("/zigbee/permit-join", s.handleGetZigBeePermitJoin)

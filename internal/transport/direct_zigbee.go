@@ -465,6 +465,62 @@ func (z *DirectZigBeeTransport) GetDevices() []ZigBeeDevice {
 	return devs
 }
 
+// SendReadAttributes sends a ZCL Read Attributes (cmd 0x00, profile-wide)
+// for one or more attribute IDs on a single cluster. Sleepy end-devices
+// like the Tuya temp/humidity sensor only push Report Attributes on their
+// internal cycle (every 30 min by default for Tuya), so we use Read
+// Attributes to force the device to respond with current values right now
+// — typically arrives within ~5s once the device polls the coordinator.
+//
+// The response comes back through the normal AF_INCOMING_MSG path as ZCL
+// cmd 0x01 (Read Attributes Response) and decodes through zclReportHeader,
+// which has special-case handling for the extra status byte cmd 0x01 puts
+// before the data type. [MESHSAT-509]
+func (z *DirectZigBeeTransport) SendReadAttributes(dstAddr uint16, dstEP byte, clusterID uint16, attrIDs ...uint16) error {
+	if len(attrIDs) == 0 {
+		return fmt.Errorf("no attribute ids supplied")
+	}
+	z.mu.Lock()
+	z.transID++
+	tsn := z.transID
+	z.mu.Unlock()
+	// ZCL frame: [FCF=0x00 profile-wide, server→client] [TSN] [Cmd=0x00 ReadAttr]
+	// [AttrID(LE)...]  — packed LE pairs.
+	zcl := make([]byte, 3, 3+2*len(attrIDs))
+	zcl[0] = 0x00
+	zcl[1] = tsn
+	zcl[2] = 0x00
+	for _, a := range attrIDs {
+		zcl = append(zcl, byte(a), byte(a>>8))
+	}
+	return z.Send(dstAddr, dstEP, clusterID, zcl)
+}
+
+// RefreshDeviceSensors triggers Read Attributes for the temperature,
+// humidity, and battery clusters on a device. Used after a join announce
+// (so paired devices' values populate immediately rather than after the
+// device's next scheduled report) and from the device-detail "Refresh"
+// button. Endpoint defaults to 1 if the cached value is 0.
+func (z *DirectZigBeeTransport) RefreshDeviceSensors(shortAddr uint16) {
+	z.mu.Lock()
+	dev, ok := z.devices[shortAddr]
+	if !ok {
+		z.mu.Unlock()
+		return
+	}
+	ep := dev.Endpoint
+	if ep == 0 {
+		ep = 1
+	}
+	z.mu.Unlock()
+	// Best-effort — ignore errors here. The reads are sent indirect to a
+	// sleepy end-device; failures are common (queue full, device asleep
+	// past its mac age) and not worth surfacing.
+	_ = z.SendReadAttributes(shortAddr, ep, ZCLClusterTemperature, ZCLAttrMeasuredValue)
+	_ = z.SendReadAttributes(shortAddr, ep, ZCLClusterHumidity, ZCLAttrMeasuredValue)
+	_ = z.SendReadAttributes(shortAddr, ep, ZCLClusterPowerCfg, ZCLAttrBatteryPercent)
+}
+
 // SendOnOffCommand sends a ZCL OnOff cluster (0x0006) command to a device.
 // `cmd` is one of "on" / "off" / "toggle". The frame uses ZCL FCF = 0x01
 // (cluster-specific, client→server) and a fresh transaction sequence number.
@@ -1349,6 +1405,17 @@ func (z *DirectZigBeeTransport) handleDeviceAnnounce(f ZNPFrame) {
 	// Persist after dropping the mutex — the announce is a relatively rare
 	// event, so the latency of a sqlite write is fine here.
 	z.persistDevice(&devSnapshot)
+
+	// Trigger an immediate Read Attributes for known sensor clusters so the
+	// device-manager UI populates with current values without waiting for
+	// the device's natural report cycle (Tuya stock firmware = 30 min).
+	// Run on its own goroutine — Send takes serialMu and the caller is on
+	// the read path which already holds it. [MESHSAT-509]
+	go func(addr uint16) {
+		// Small delay so the announce settles in the chip before we send.
+		time.Sleep(800 * time.Millisecond)
+		z.RefreshDeviceSensors(addr)
+	}(srcAddr)
 
 	z.emit(ZigBeeEvent{
 		Type:      "join",
