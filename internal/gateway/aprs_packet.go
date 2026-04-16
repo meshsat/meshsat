@@ -166,7 +166,29 @@ func FormatCallsign(addr AX25Address) string {
 }
 
 // ParseAPRSPacket decodes an APRS packet from the info field of an AX.25 frame.
+// Returns error for non-APRS frames (Reticulum, binary protocols) so the
+// gateway doesn't enqueue garbage as "messages" in the dashboard. [MESHSAT-403]
 func ParseAPRSPacket(frame *AX25Frame) (*APRSPacket, error) {
+	// Reject non-APRS frames by destination callsign.
+	// APRS uses "APxxxx" tocalls. Reticulum uses "RTICUL".
+	dstCall := strings.TrimRight(frame.Dst.Call, " ")
+	if dstCall == "RTICUL" || dstCall == "RNS" {
+		return nil, fmt.Errorf("not APRS: destination %s is Reticulum", dstCall)
+	}
+
+	// Reject frames with mostly non-printable info (binary protocols).
+	if len(frame.Info) > 0 {
+		nonPrintable := 0
+		for _, b := range frame.Info {
+			if b < 0x20 && b != '\r' && b != '\n' && b != '\t' {
+				nonPrintable++
+			}
+		}
+		if len(frame.Info) > 4 && nonPrintable > len(frame.Info)/4 {
+			return nil, fmt.Errorf("not APRS: info field is %d%% non-printable", nonPrintable*100/len(frame.Info))
+		}
+	}
+
 	pkt := &APRSPacket{
 		Source: FormatCallsign(frame.Src),
 		Dest:   FormatCallsign(frame.Dst),

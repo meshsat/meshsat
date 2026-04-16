@@ -535,6 +535,7 @@ function deliveryLabel(channel) {
   if (channel?.startsWith('cellular')) return { label: 'SMS', color: 'text-sky-400' }
   if (channel?.startsWith('mqtt')) return { label: 'MQTT', color: 'text-purple-400' }
   if (channel?.startsWith('webhook')) return { label: 'HOOK', color: 'text-pink-400' }
+  if (channel?.startsWith('aprs') || channel?.startsWith('ax25')) return { label: 'APRS', color: 'text-amber-400' }
   if (channel?.startsWith('mesh')) return { label: 'MESH', color: 'text-emerald-400' }
   if (channel?.startsWith('zigbee')) return { label: 'ZB', color: 'text-yellow-400' }
   return { label: channel || '?', color: 'text-gray-500' }
