@@ -418,6 +418,18 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 					simState = "READY"
 					log.Info().Msg("cellular: SIM PIN verified unlocked")
 
+					// Permanently disable SIM PIN lock so it won't be
+					// required on future boots. AT+CLCK="SC",0,"PIN" disables
+					// the CHV1 (PIN1) facility lock on the SIM card. [MESHSAT-403]
+					clckCmd := fmt.Sprintf("AT+CLCK=\"SC\",0,\"%s\"", pin)
+					clckResp, clckErr := sendAT(sp, clckCmd, 30*time.Second)
+					if clckErr == nil && strings.Contains(clckResp, "OK") {
+						log.Info().Msg("cellular: SIM PIN lock disabled permanently (AT+CLCK)")
+					} else {
+						log.Debug().Err(clckErr).Str("resp", clckResp).
+							Msg("cellular: AT+CLCK failed (non-fatal, PIN will be unlocked on each boot)")
+					}
+
 					// Force full functionality mode (required by some modems
 					// after PIN unlock to start network registration) [MESHSAT-445]
 					sendAT(sp, "AT+CFUN=1", 5*time.Second)
