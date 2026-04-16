@@ -267,9 +267,14 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	// The factory sketch pulses PWRKEY on reset, cold-boots the modem (~15s),
 	// and runs autobaud before entering passthrough mode. Sending AT commands
 	// before passthrough is active gets zero response.
-	// Retry AT for up to 30s to cover the full ESP32+modem cold boot sequence.
-	log.Debug().Msg("cellular: waiting for modem AT response (up to 30s)")
-	atDeadline := time.Now().Add(30 * time.Second)
+	// Retry AT for up to 60s. The CH343 kernel driver asserts DTR on open()
+	// before userspace can clear it, triggering the ESP32 auto-reset circuit.
+	// The ATdebug firmware pulses PWRKEY on boot, toggling the modem's power
+	// state. If the modem was ON, it toggles OFF and AT never responds during
+	// this attempt. The caller retries (another open → another toggle back ON),
+	// then the modem needs ~45s to boot and initialize. 60s covers this. [MESHSAT-403]
+	log.Debug().Msg("cellular: waiting for modem AT response (up to 60s)")
+	atDeadline := time.Now().Add(60 * time.Second)
 	atReady := false
 	for time.Now().Before(atDeadline) {
 		resp, err := sendAT(sp, "AT", 2*time.Second)

@@ -449,26 +449,41 @@ func ProbeZNP(portName string) bool {
 	}
 	time.Sleep(1500 * time.Millisecond)
 
-	// Send SYS_PING
+	// Try SYS_PING up to 3 times. The CC2652P may need additional time after
+	// a DTR-triggered reset — the first SYS_PING may arrive while Z-Stack is
+	// still initializing. Each retry drains and waits 500ms. [MESHSAT-403]
 	frame := BuildSysPing()
 	encoded, _ := EncodeZNP(frame)
-	if _, err := p.Write(encoded); err != nil {
-		return false
-	}
-
-	// Read response with short timeout
-	p.SetReadTimeout(1 * time.Second)
 	buf := make([]byte, 64)
-	var accumulated []byte
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		n, _ := p.Read(buf)
-		if n > 0 {
-			accumulated = append(accumulated, buf[:n]...)
-			resp, _, err := DecodeZNP(accumulated)
-			if err == nil && resp.IsCmd(CmdSysPingRsp) {
-				return true
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			// Drain between retries
+			p.SetReadTimeout(200 * time.Millisecond)
+			for {
+				n, _ := p.Read(buf)
+				if n == 0 {
+					break
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		if _, err := p.Write(encoded); err != nil {
+			return false
+		}
+
+		p.SetReadTimeout(1 * time.Second)
+		var accumulated []byte
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			n, _ := p.Read(buf)
+			if n > 0 {
+				accumulated = append(accumulated, buf[:n]...)
+				resp, _, err := DecodeZNP(accumulated)
+				if err == nil && resp.IsCmd(CmdSysPingRsp) {
+					return true
+				}
 			}
 		}
 	}
