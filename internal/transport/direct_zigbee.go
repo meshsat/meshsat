@@ -1540,14 +1540,33 @@ func (z *DirectZigBeeTransport) handleIncomingMsg(f ZNPFrame) {
 		}
 	case ZCLClusterHumidity:
 		if attr, v, ok := decodeZCLUint16Report(msg.Data); ok {
-			h := float64(v) / 100.0 // ZCL humidity: 0.01 %
+			// Spec (ZCL 4.7.2.1.1): MeasuredValue = 100 × %RH (units of
+			// 0.01%). A handful of Tuya firmwares (TS0201 variants, some
+			// _TZ3000_ / _TZB210_ models) ignore the spec and report in
+			// units of 0.1% instead — raw=475 becomes 4.75% with the
+			// spec scale, but is actually 47.5% (the Tuya scale).
+			//
+			// Heuristic: a true indoor humidity below 10% is extremely
+			// rare (heated-winter air settles around 15-25%, deserts go
+			// down to ~5% but those don't run indoor sensors). If the
+			// /100 decode gives < 10%, assume the device is on the Tuya
+			// /10 scale and apply that instead. Worst case for a genuinely
+			// arid environment: we report 10× too high; user can override
+			// with a per-device scale field once we add one. [MESHSAT-509]
+			h := float64(v) / 100.0
+			scaledRaw := false
+			if h < 10.0 {
+				h = float64(v) / 10.0
+				scaledRaw = true
+			}
 			humidity = &h
 			dev.Humidity = &h
 			evtType = "humidity"
 			valueNum = &h
 			unit = "%"
 			attrID = attr
-			log.Info().Uint16("src", msg.SrcAddr).Float64("percent", h).Msg("zigbee: humidity reading")
+			log.Info().Uint16("src", msg.SrcAddr).Uint16("raw", v).Float64("percent", h).
+				Bool("tuya_scale", scaledRaw).Msg("zigbee: humidity reading")
 		}
 	case ZCLClusterPowerCfg:
 		// BatteryPercentageRemaining (attr 0x0021) is reported in half-percent

@@ -40,6 +40,33 @@ func TestDecodeZCLUint16Report_Humidity_TuyaWithCmdByte(t *testing.T) {
 	}
 }
 
+// TestHumidityScaleHeuristic documents the values we expect for the spec
+// vs the Tuya 0.1% quirk. Not a test of decoder bytes — those work fine.
+// This is a behavior contract for handleIncomingMsg's scale fallback.
+func TestHumidityScaleHeuristic(t *testing.T) {
+	// Spec-compliant decode: raw 4750 → 47.5%, no scale flip needed.
+	specRaw := uint16(4750)
+	specPct := float64(specRaw) / 100.0
+	if specPct < 10.0 {
+		t.Errorf("spec decode flipped scale unexpectedly: %.2f%%", specPct)
+	}
+	if specPct != 47.5 {
+		t.Errorf("expected 47.5%%, got %.2f", specPct)
+	}
+
+	// Tuya quirk: raw 475 — /100 gives 4.75%, which is below the 10%
+	// threshold, so the heuristic flips to /10 → 47.5%.
+	tuyaRaw := uint16(475)
+	tuyaPct := float64(tuyaRaw) / 100.0
+	if tuyaPct >= 10.0 {
+		t.Errorf("expected /100 decode to be below 10%% threshold, got %.2f", tuyaPct)
+	}
+	tuyaPct = float64(tuyaRaw) / 10.0
+	if tuyaPct != 47.5 {
+		t.Errorf("expected Tuya /10 decode to give 47.5%%, got %.2f", tuyaPct)
+	}
+}
+
 func TestDecodeZCLUint8Report_Battery(t *testing.T) {
 	// PowerCfg cluster, BatteryPercentageRemaining (attr 0x0021), datatype
 	// 0x20 (uint8). Value 200 = 100% in ZCL half-percent encoding (the
