@@ -552,6 +552,15 @@ func main() {
 			log.Debug().Int("size", len(packet)).Msg("ax25_0: received reticulum packet via KISS")
 			proc.InjectReticulumPacket(packet, "ax25_0")
 		})
+		// Wire shared KISS TX: if the APRS gateway is running, route ax25
+		// TX through its KISSConn so all RX/TX is counted at one node. [MESHSAT-403]
+		if agw := gwMgr.GetAPRSGateway(); agw != nil {
+			ax25Iface.SetKISSTX(func(payload []byte) error {
+				return agw.KISSSendFrame(payload)
+			})
+			log.Info().Msg("ax25_0: TX routed through APRS gateway KISS connection")
+		}
+
 		if err := ax25Iface.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("ax25 reticulum interface start failed")
 		} else {

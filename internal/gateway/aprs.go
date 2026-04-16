@@ -47,6 +47,13 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 	}
 }
 
+// KISSSendFrame sends a raw AX.25 frame via the APRS gateway's KISS connection.
+// Used by the AX25 Reticulum interface to route TX through the same pipeline
+// node, so all TX is counted by the KISSConn's atomic counter. [MESHSAT-403]
+func (g *APRSGateway) KISSSendFrame(payload []byte) error {
+	return g.kiss.SendFrame(payload)
+}
+
 // Tracker returns the APRS heard station and activity tracker.
 func (g *APRSGateway) Tracker() *APRSTracker {
 	return g.tracker
@@ -63,8 +70,8 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"callsign":      FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
 		"frequency_mhz": g.config.FrequencyMHz,
 		"uptime":        uptime,
-		"rx":            g.msgsIn.Load(),
-		"tx":            g.msgsOut.Load(),
+		"rx":            g.kiss.RX.Load(),
+		"tx":            g.kiss.TX.Load(),
 		"errors":        g.errors.Load(),
 		"heard_count":   len(g.tracker.GetHeardStations()),
 		"packet_types":  g.tracker.GetPacketTypeBreakdown(),

@@ -32,9 +32,15 @@ type AX25InterfaceConfig struct {
 // AX25Interface is a bidirectional Reticulum interface over AX.25 via KISS TNC.
 // Reticulum packets are embedded in AX.25 UI (unnumbered information) frames.
 // MTU: 256 bytes (standard AX.25 info field limit).
+// KISSTXFunc is a function that sends a KISS-encoded frame via a shared connection.
+// When set, AX25Interface routes TX through this instead of its own TCP write,
+// so all TX is counted at one KISS pipeline node. [MESHSAT-403]
+type KISSTXFunc func(payload []byte) error
+
 type AX25Interface struct {
 	config   AX25InterfaceConfig
 	callback func(packet []byte)
+	kissTX   KISSTXFunc // shared TX path (counts at KISS level) [MESHSAT-403]
 
 	mu      sync.Mutex
 	conn    net.Conn
@@ -53,6 +59,11 @@ func NewAX25Interface(config AX25InterfaceConfig, callback func(packet []byte)) 
 		callback: callback,
 		stopCh:   make(chan struct{}),
 	}
+}
+
+// SetKISSTX routes TX through a shared KISS connection (for unified counting). [MESHSAT-403]
+func (a *AX25Interface) SetKISSTX(fn KISSTXFunc) {
+	a.kissTX = fn
 }
 
 // Start connects to the Direwolf KISS TNC and begins reading frames.
@@ -83,12 +94,18 @@ func (a *AX25Interface) Send(ctx context.Context, packet []byte) error {
 	// Build AX.25 UI frame: dest(7) + src(7) + control(1) + PID(1) + info
 	ax25Frame := buildAX25UIFrame(a.config.DestCall, a.config.Callsign, packet)
 
-	// KISS encode and send
-	kissFrame := kissEncode(ax25Frame)
-	if err := a.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return err
+	// Route TX through shared KISS connection if available (unified counting).
+	// Otherwise fall back to own TCP connection. [MESHSAT-403]
+	var err error
+	if a.kissTX != nil {
+		err = a.kissTX(ax25Frame)
+	} else {
+		kissFrame := kissEncode(ax25Frame)
+		if wdErr := a.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); wdErr != nil {
+			return wdErr
+		}
+		_, err = a.conn.Write(kissFrame)
 	}
-	_, err := a.conn.Write(kissFrame)
 	if err != nil {
 		return fmt.Errorf("ax25 send: %w", err)
 	}

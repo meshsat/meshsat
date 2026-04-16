@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,9 +19,13 @@ const (
 )
 
 // KISSConn manages a KISS TCP connection to a Direwolf TNC.
+// RX/TX counters track frames at the KISS port level — the single
+// source of truth for all traffic through this connection. [MESHSAT-403]
 type KISSConn struct {
 	addr string
 	conn net.Conn
+	RX   atomic.Int64 // frames read from Direwolf
+	TX   atomic.Int64 // frames sent to Direwolf
 }
 
 // NewKISSConn creates a new KISS TCP connection manager.
@@ -56,6 +61,9 @@ func (k *KISSConn) SendFrame(payload []byte) error {
 		return err
 	}
 	_, err := k.conn.Write(frame)
+	if err == nil {
+		k.TX.Add(1)
+	}
 	return err
 }
 
@@ -102,7 +110,11 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 		return nil, fmt.Errorf("kiss: empty frame")
 	}
 
-	return KISSDecode(frame.Bytes())
+	decoded, err := KISSDecode(frame.Bytes())
+	if err == nil {
+		k.RX.Add(1)
+	}
+	return decoded, err
 }
 
 // KISSEncode wraps an AX.25 payload in a KISS frame.
