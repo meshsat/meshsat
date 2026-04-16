@@ -102,6 +102,29 @@ func main() {
 		mesh = directMesh
 
 		directIMT := transport.NewDirectIMTTransport(imtPort)
+
+		// GPIO power control for 9704 on platform UART (Pi 5 UART2).
+		// Cycles I_EN LOW→HIGH on each connect to reset the JSPR state machine.
+		// Only needed for ttyAMA* — USB-connected 9704s reset via USB enumeration.
+		if gpioIEN := os.Getenv("MESHSAT_IMT_GPIO_I_EN"); gpioIEN != "" {
+			chip := os.Getenv("MESHSAT_IMT_GPIO_CHIP")
+			if chip == "" {
+				chip = "gpiochip4" // Pi 5 RP1 default
+			}
+			ien, _ := fmt.Sscanf(gpioIEN, "%d", new(int))
+			ibtd := 23 // default BCM 23
+			if v := os.Getenv("MESHSAT_IMT_GPIO_I_BTD"); v != "" {
+				fmt.Sscanf(v, "%d", &ibtd)
+			}
+			if ien > 0 {
+				ienVal := 0
+				fmt.Sscanf(gpioIEN, "%d", &ienVal)
+				directIMT.SetGPIO(chip, ienVal, ibtd)
+				log.Info().Str("chip", chip).Int("i_en", ienVal).Int("i_btd", ibtd).
+					Msg("9704 GPIO power control configured")
+			}
+		}
+
 		directSat := transport.NewDirectSatTransport(iridiumPort)
 		if cfg.IridiumSleepPin > 0 {
 			directSat.SetSleepPin(cfg.IridiumSleepPin)

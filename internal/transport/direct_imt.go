@@ -17,13 +17,19 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"go.bug.st/serial"
 	"golang.org/x/sys/unix"
 )
 
 // DirectIMTTransport implements SatTransport via JSPR for the RockBLOCK 9704.
 type DirectIMTTransport struct {
 	port string // "/dev/ttyUSB0" or "auto"
+
+	// GPIO pins for 9704 power control (platform UART only, 0 = disabled).
+	// Set via SetGPIO(). When configured, connect() cycles I_EN LOW→HIGH
+	// to reset the modem's JSPR state machine before starting the helper.
+	gpioChip string // e.g. "gpiochip4" (Pi 5 RP1)
+	gpioIEN  int    // BCM pin for I_EN (Iridium Enable, active-HIGH)
+	gpioIBTD int    // BCM pin for I_BTD (Iridium Booted, output, open-drain)
 
 	mu        sync.Mutex
 	connectMu sync.Mutex // separate from mu — protects connect() without blocking status reads
@@ -66,6 +72,17 @@ func NewDirectIMTTransport(port string) *DirectIMTTransport {
 		port:      port,
 		eventSubs: make(map[uint64]chan SatEvent),
 	}
+}
+
+// SetGPIO configures GPIO pins for 9704 power control on platform UARTs.
+// When set, connect() cycles I_EN LOW→HIGH to reset the modem's JSPR state
+// machine before starting the helper. This is required because an unclean
+// disconnect leaves the modem's JSPR parser in a stale session that responds
+// with binary garbage indefinitely until I_EN is cycled. [MESHSAT-403]
+func (t *DirectIMTTransport) SetGPIO(chip string, ienPin, ibtdPin int) {
+	t.gpioChip = chip
+	t.gpioIEN = ienPin
+	t.gpioIBTD = ibtdPin
 }
 
 // GetPort returns the resolved serial port path.
@@ -174,14 +191,14 @@ func (t *DirectIMTTransport) connect() error {
 		return fmt.Errorf("imt: jspr-helper binary not found (checked /usr/local/bin, /usr/bin, ./build)")
 	}
 
-	// Flush the modem's JSPR command buffer BEFORE starting the helper.
-	// If the previous session was terminated uncleanly (container kill, crash),
-	// the modem's JSPR parser may be mid-command and will respond with binary
-	// garbage until its internal session timeout (~60s). Sending bare CRs
-	// terminates any partial command and forces error responses, resetting the
-	// parser to idle. Must use direct serial access — the helper expects JSON
-	// on stdin, not raw bytes. [MESHSAT-403]
-	flushJSPRState(portPath)
+	// Cycle I_EN LOW→HIGH to reset the modem's JSPR state machine.
+	// An unclean disconnect (container kill) leaves the JSPR parser in a stale
+	// session that responds with binary garbage. Cycling I_EN resets the parser
+	// without a full power cycle (I_BTD stays HIGH). This matches the official
+	// C library's rbBeginGpio() which drives I_EN high on every begin. [MESHSAT-403]
+	if t.gpioIEN > 0 {
+		t.resetModemJSPR()
+	}
 
 	helper, err := startJSPRHelper(helperPath, portPath, jsprBaud)
 	if err != nil {
@@ -1029,48 +1046,52 @@ func findJSPRHelper() string {
 	return ""
 }
 
-// flushJSPRState opens the serial port directly and sends bare CR terminators
-// to reset the modem's JSPR parser from any stale mid-command state. This must
-// run BEFORE the jspr_helper starts, because the helper and this function cannot
-// share the serial port simultaneously.
+// resetModemJSPR cycles I_EN LOW→HIGH via gpioset to reset the 9704's JSPR
+// state machine. After an unclean disconnect, the modem's JSPR parser is stuck
+// in a stale session and responds with binary garbage. Cycling I_EN clears
+// this state without a full power cycle (I_BTD stays HIGH throughout).
 //
-// After an unclean disconnect (container kill), the modem's JSPR parser may be
-// waiting for more data from a partial command. Sending CRs terminates any
-// partial command, causing the modem to emit error responses and reset to idle.
-// A 3s drain period follows to consume those error responses. [MESHSAT-403]
-func flushJSPRState(portPath string) {
-	mode := &serial.Mode{
-		BaudRate: jsprBaud,
-		DataBits: 8,
-		StopBits: serial.OneStopBit,
-		Parity:   serial.NoParity,
-	}
+// Sequence: release any existing gpioset holder → I_EN LOW for 2s → I_EN HIGH
+// → wait for I_BTD HIGH (up to 30s). The I_EN LOW→HIGH transition resets the
+// JSPR parser even though the modem doesn't fully shut down. [MESHSAT-403]
+func (t *DirectIMTTransport) resetModemJSPR() {
+	chip := t.gpioChip
+	ienPin := fmt.Sprintf("%d", t.gpioIEN)
+	ibtdPin := fmt.Sprintf("%d", t.gpioIBTD)
 
-	p, err := serial.Open(portPath, mode)
-	if err != nil {
-		log.Debug().Err(err).Str("port", portPath).Msg("imt: JSPR flush: open failed (non-fatal)")
+	log.Info().Str("chip", chip).Str("i_en", ienPin).Str("i_btd", ibtdPin).
+		Msg("imt: cycling I_EN to reset JSPR state")
+
+	// Kill any existing gpioset holding I_EN
+	exec.Command("pkill", "-f", fmt.Sprintf("gpioset.*%s.*%s=", chip, ienPin)).Run()
+	time.Sleep(300 * time.Millisecond)
+
+	// I_EN LOW for 2s
+	cmd := exec.Command("gpioset", "--mode=time", "--usec=2000000", chip, ienPin+"=0")
+	cmd.Run()
+	time.Sleep(500 * time.Millisecond)
+
+	// I_EN HIGH (background — held until next cycle or container shutdown)
+	cmd = exec.Command("gpioset", "--mode=signal", chip, ienPin+"=1")
+	if err := cmd.Start(); err != nil {
+		log.Warn().Err(err).Msg("imt: failed to assert I_EN HIGH")
 		return
 	}
-	defer p.Close()
+	// Don't wait for this process — it runs in background holding the pin
 
-	// Send bare CRs to terminate any partial JSPR command
-	for i := 0; i < 10; i++ {
-		p.Write([]byte("\r"))
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Drain all responses (error frames from terminated partial commands)
-	p.SetReadTimeout(500 * time.Millisecond)
-	buf := make([]byte, 512)
-	drainDeadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(drainDeadline) {
-		n, _ := p.Read(buf)
-		if n == 0 {
-			break
+	// Wait for I_BTD HIGH (modem ready)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("gpioget", "--bias=pull-up", chip, ibtdPin).Output()
+		if err == nil && len(out) > 0 && out[0] == '1' {
+			log.Info().Msg("imt: I_BTD HIGH — modem JSPR state reset complete")
+			// Additional settle time for JSPR interface to be ready
+			time.Sleep(5 * time.Second)
+			return
 		}
+		time.Sleep(1 * time.Second)
 	}
-
-	log.Info().Str("port", portPath).Msg("imt: JSPR state flushed (pre-helper)")
+	log.Warn().Msg("imt: I_BTD did not go HIGH within 30s after I_EN cycle")
 }
 
 // assessSignal maps signal bars (0-5) to a human-readable assessment.
