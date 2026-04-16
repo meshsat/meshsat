@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
@@ -1046,52 +1047,141 @@ func findJSPRHelper() string {
 	return ""
 }
 
-// resetModemJSPR cycles I_EN LOW→HIGH via gpioset to reset the 9704's JSPR
-// state machine. After an unclean disconnect, the modem's JSPR parser is stuck
-// in a stale session and responds with binary garbage. Cycling I_EN clears
-// this state without a full power cycle (I_BTD stays HIGH throughout).
+// resetModemJSPR cycles I_EN LOW→HIGH via the Linux GPIO chardev ioctl to
+// reset the 9704's JSPR state machine. After an unclean disconnect, the
+// modem's JSPR parser is stuck in a stale session and responds with binary
+// garbage. Cycling I_EN clears this without a full power cycle.
 //
-// Sequence: release any existing gpioset holder → I_EN LOW for 2s → I_EN HIGH
-// → wait for I_BTD HIGH (up to 30s). The I_EN LOW→HIGH transition resets the
-// JSPR parser even though the modem doesn't fully shut down. [MESHSAT-403]
+// Uses /dev/gpiochipN directly (no gpioset/gpioget binaries needed — they
+// may not be installed inside the Docker container). [MESHSAT-403]
 func (t *DirectIMTTransport) resetModemJSPR() {
-	chip := t.gpioChip
-	ienPin := fmt.Sprintf("%d", t.gpioIEN)
-	ibtdPin := fmt.Sprintf("%d", t.gpioIBTD)
+	chipPath := "/dev/" + t.gpioChip
 
-	log.Info().Str("chip", chip).Str("i_en", ienPin).Str("i_btd", ibtdPin).
+	log.Info().Str("chip", chipPath).Int("i_en", t.gpioIEN).Int("i_btd", t.gpioIBTD).
 		Msg("imt: cycling I_EN to reset JSPR state")
 
-	// Kill any existing gpioset holding I_EN
-	exec.Command("pkill", "-f", fmt.Sprintf("gpioset.*%s.*%s=", chip, ienPin)).Run()
-	time.Sleep(300 * time.Millisecond)
-
 	// I_EN LOW for 2s
-	cmd := exec.Command("gpioset", "--mode=time", "--usec=2000000", chip, ienPin+"=0")
-	cmd.Run()
-	time.Sleep(500 * time.Millisecond)
-
-	// I_EN HIGH (background — held until next cycle or container shutdown)
-	cmd = exec.Command("gpioset", "--mode=signal", chip, ienPin+"=1")
-	if err := cmd.Start(); err != nil {
-		log.Warn().Err(err).Msg("imt: failed to assert I_EN HIGH")
+	if err := gpioSetValue(chipPath, t.gpioIEN, 0); err != nil {
+		log.Warn().Err(err).Msg("imt: failed to drive I_EN LOW")
 		return
 	}
-	// Don't wait for this process — it runs in background holding the pin
+	time.Sleep(2 * time.Second)
 
-	// Wait for I_BTD HIGH (modem ready)
+	// I_EN HIGH
+	if err := gpioSetValue(chipPath, t.gpioIEN, 1); err != nil {
+		log.Warn().Err(err).Msg("imt: failed to drive I_EN HIGH")
+		return
+	}
+
+	// Wait for I_BTD HIGH (modem ready), up to 30s
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.Command("gpioget", "--bias=pull-up", chip, ibtdPin).Output()
-		if err == nil && len(out) > 0 && out[0] == '1' {
+		val, err := gpioGetValue(chipPath, t.gpioIBTD)
+		if err == nil && val == 1 {
 			log.Info().Msg("imt: I_BTD HIGH — modem JSPR state reset complete")
-			// Additional settle time for JSPR interface to be ready
 			time.Sleep(5 * time.Second)
 			return
 		}
 		time.Sleep(1 * time.Second)
 	}
 	log.Warn().Msg("imt: I_BTD did not go HIGH within 30s after I_EN cycle")
+}
+
+// gpioSetValue drives a GPIO pin to the given value (0 or 1) using the
+// Linux GPIO chardev v2 ioctl interface (/dev/gpiochipN).
+func gpioSetValue(chipPath string, pin, value int) error {
+	fd, err := unix.Open(chipPath, unix.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", chipPath, err)
+	}
+	defer unix.Close(fd)
+
+	// GPIO_V2_GET_LINE_IOCTL = 0xC250B407
+	// We use the v1 ioctl (simpler): GPIOHANDLE_SET_LINE_VALUES_IOCTL
+	// Request a line handle for output
+	type gpioHandleRequest struct {
+		LineOffsets   [64]uint32
+		Flags         uint32
+		DefaultValues [64]uint8
+		ConsumerLabel [32]byte
+		Lines         uint32
+		Fd            int32
+	}
+
+	req := gpioHandleRequest{
+		Lines: 1,
+		Flags: 0x02, // GPIOHANDLE_REQUEST_OUTPUT
+	}
+	req.LineOffsets[0] = uint32(pin)
+	req.DefaultValues[0] = uint8(value)
+	copy(req.ConsumerLabel[:], "meshsat-imt")
+
+	// GPIOHANDLE_REQUEST_IOCTL = 0xC16CB403
+	const gpioHandleRequestIoctl = 0xC16CB403
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), gpioHandleRequestIoctl, uintptr(unsafe.Pointer(&req)))
+	if errno != 0 {
+		return fmt.Errorf("GPIO request ioctl pin %d: %v", pin, errno)
+	}
+
+	// The line handle fd keeps the pin driven. Close it to release.
+	// For I_EN HIGH we want to keep it held, but the host's meshsat-gpio
+	// service will re-assert it. Just hold briefly then release.
+	if req.Fd > 0 {
+		// Hold for 100ms to ensure the signal is stable
+		time.Sleep(100 * time.Millisecond)
+		unix.Close(int(req.Fd))
+	}
+
+	return nil
+}
+
+// gpioGetValue reads a GPIO pin value using the Linux GPIO chardev ioctl.
+func gpioGetValue(chipPath string, pin int) (int, error) {
+	fd, err := unix.Open(chipPath, unix.O_RDONLY, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open %s: %w", chipPath, err)
+	}
+	defer unix.Close(fd)
+
+	type gpioHandleRequest struct {
+		LineOffsets   [64]uint32
+		Flags         uint32
+		DefaultValues [64]uint8
+		ConsumerLabel [32]byte
+		Lines         uint32
+		Fd            int32
+	}
+
+	req := gpioHandleRequest{
+		Lines: 1,
+		Flags: 0x01, // GPIOHANDLE_REQUEST_INPUT
+	}
+	req.LineOffsets[0] = uint32(pin)
+	copy(req.ConsumerLabel[:], "meshsat-imt")
+
+	const gpioHandleRequestIoctl = 0xC16CB403
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), gpioHandleRequestIoctl, uintptr(unsafe.Pointer(&req)))
+	if errno != 0 {
+		return -1, fmt.Errorf("GPIO request ioctl pin %d: %v", pin, errno)
+	}
+
+	if req.Fd <= 0 {
+		return -1, fmt.Errorf("no line fd")
+	}
+
+	type gpioHandleData struct {
+		Values [64]uint8
+	}
+	var data gpioHandleData
+	// GPIOHANDLE_GET_LINE_VALUES_IOCTL = 0xC040B408
+	const gpioHandleGetValuesIoctl = 0xC040B408
+	_, _, errno = unix.Syscall(unix.SYS_IOCTL, uintptr(req.Fd), gpioHandleGetValuesIoctl, uintptr(unsafe.Pointer(&data)))
+	unix.Close(int(req.Fd))
+	if errno != 0 {
+		return -1, fmt.Errorf("GPIO get values pin %d: %v", pin, errno)
+	}
+
+	return int(data.Values[0]), nil
 }
 
 // assessSignal maps signal bars (0-5) to a human-readable assessment.
