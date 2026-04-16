@@ -222,10 +222,13 @@ func TestBuildZDOStartup_StartDelay(t *testing.T) {
 }
 
 func TestBuildMgmtPermitJoinReq_Format(t *testing.T) {
-	// Cross-check against zigbee-herdsman: addrMode=0x0F (ADDR_BROADCAST),
-	// dstAddr=0xFFFC (BroadcastAddress.DEFAULT), duration, tcSig=0x01.
+	// Self permit-join: addrMode=0x02 (unicast), dstAddr=0x0000 (coordinator),
+	// duration, tcSig=0x00 (local only). Broadcast variant (0x0F / 0xFFFC /
+	// tcSig=1) is rejected by Z-Stack 2.7.1 with ZNwkInvalidRequest (0xC2)
+	// on a freshly-restored network with no routers — see direct_zigbee.go
+	// PermitJoin and BuildMgmtPermitJoinReq doc comment. [MESHSAT-509]
 	f := BuildMgmtPermitJoinReq(120)
-	want := []byte{0x0F, 0xFC, 0xFF, 120, 0x01}
+	want := []byte{0x02, 0x00, 0x00, 120, 0x00}
 	if len(f.Data) != len(want) {
 		t.Fatalf("len: got %d, want %d", len(f.Data), len(want))
 	}

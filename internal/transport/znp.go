@@ -479,16 +479,27 @@ func BuildAFDataReq(dstAddr uint16, dstEP, srcEP byte, clusterID uint16, transID
 
 // BuildMgmtPermitJoinReq creates a ZDO_MGMT_PERMIT_JOIN_REQ to open the
 // network for device pairing. [MESHSAT-510]
-// addrMode: 0x0F = broadcast to all routers, 0x02 = unicast
-// dstAddr: 0xFFFC = all routers+coordinator (broadcast)
+//
+// We use unicast self-addressing (addrMode=0x02, dstAddr=0x0000, tcSig=0)
+// rather than broadcast (0x0F / 0xFFFC / tcSig=1). On a freshly-restored
+// network the NWK layer rejects broadcasts with ZNwkInvalidRequest (0xC2)
+// because there are no routers in the neighbour table to relay the
+// broadcast to and TC_Significance=1 implies a trust-centre APS round-trip
+// the empty NIB cannot service. Unicast to 0x0000 just enables permit-join
+// on the local coordinator — no NWK traffic, always works as long as the
+// dongle is in DEV_ZB_COORD. This matches zigbee-herdsman's "self permit
+// join" path used when no remote network address is supplied.
+//
+// addrMode: 0x02 = unicast to a 16-bit network address
+// dstAddr:  0x0000 = the coordinator itself (us)
 // duration: 0-254 seconds (0 = disable, 255 = until turned off)
-// tcSignificance: 1 = update trust center
+// tcSignificance: 0 = local change only, no trust-centre propagation
 func BuildMgmtPermitJoinReq(duration byte) ZNPFrame {
 	payload := []byte{
-		0x0F,       // AddrMode: broadcast
-		0xFC, 0xFF, // DstAddr: 0xFFFC (all routers + coordinator)
+		0x02,       // AddrMode: unicast
+		0x00, 0x00, // DstAddr: 0x0000 (coordinator / self)
 		duration, // Duration in seconds
-		0x01,     // TC_Significance: yes
+		0x00,     // TC_Significance: local only
 	}
 	return ZNPFrame{Cmd: CmdZDOMgmtPermitJoinReq, Data: payload}
 }
