@@ -28,6 +28,8 @@ type CellStatus struct {
 	PhoneNumber  string `json:"phone_number,omitempty"` // subscriber number from AT+CNUM or SIM card DB
 	ICCID        string `json:"iccid,omitempty"`        // SIM card ICCID from AT+CCID
 	SIMLabel     string `json:"sim_label,omitempty"`    // user-assigned SIM card label
+	SMSSent      int64  `json:"sms_sent"`               // total SMS sent since connect [MESHSAT-403]
+	SMSReceived  int64  `json:"sms_received"`           // total SMS received since connect [MESHSAT-403]
 }
 
 // SIMCardInfo holds saved SIM card settings for auto-apply during modem init.

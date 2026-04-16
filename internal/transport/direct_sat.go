@@ -1317,11 +1317,17 @@ func parseSBDRBResponse(raw []byte) ([]byte, error) {
 
 // parseATValue extracts a value from a typical AT response.
 // E.g., "AT+CGSN\r\n300234063904190\r\nOK" → "300234063904190"
+// Filters out URCs (unsolicited result codes like +CGEV, +CMTI, +CREG)
+// that may arrive between the command and the OK response. [MESHSAT-403]
 func parseATValue(resp string) string {
 	lines := strings.Split(resp, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "AT") || line == "OK" || line == "ERROR" {
+			continue
+		}
+		// Skip URCs — they start with "+" and contain a colon (e.g., "+CGEV: EPS PDN ACT 1")
+		if strings.HasPrefix(line, "+") && strings.Contains(line, ":") {
 			continue
 		}
 		return line

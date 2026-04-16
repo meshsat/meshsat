@@ -1652,11 +1652,11 @@ function widgetGridClass(id) {
           </div>
           <div class="flex justify-between">
             <span class="text-gray-500">SMS Sent</span>
-            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_out ?? smsTxCount }}</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus?.sms_sent ?? smsTxCount }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-gray-500">SMS Received</span>
-            <span class="text-gray-300 font-mono">{{ cellularGw?.messages_in ?? smsRxCount }}</span>
+            <span class="text-gray-300 font-mono">{{ store.cellularStatus?.sms_received ?? smsRxCount }}</span>
           </div>
           <div v-if="store.cellularDataStatus" class="flex justify-between">
             <span class="text-gray-500">Data</span>

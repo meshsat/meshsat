@@ -96,6 +96,8 @@ type DirectCellTransport struct {
 	regStatus   string
 	mcc         string // from AT+COPS? numeric format (e.g. "204" from PLMN "20408")
 	mnc         string // from AT+COPS? numeric format (e.g. "08" from PLMN "20408")
+	smsSent     int64  // SMS sent counter [MESHSAT-403]
+	smsReceived int64  // SMS received counter [MESHSAT-403]
 
 	// Data connection state
 	dataMu          sync.RWMutex
@@ -755,6 +757,9 @@ func (t *DirectCellTransport) readAndEmitSMS(index int) {
 	}
 
 	log.Info().Str("sender", sms.Sender).Str("text", sms.Text).Msg("cellular: SMS received")
+	t.stateMu.Lock()
+	t.smsReceived++
+	t.stateMu.Unlock()
 	smsJSON, _ := json.Marshal(sms)
 	t.emitEvent(CellEvent{
 		Type:    "sms_received",
@@ -860,6 +865,9 @@ func (t *DirectCellTransport) pollSMS() {
 		log.Info().Str("sender", sms.Sender).Int("index", idx).
 			Str("text", sms.Text).Msg("cellular: SMS found by polling")
 
+		t.stateMu.Lock()
+		t.smsReceived++
+		t.stateMu.Unlock()
 		smsJSON, _ := json.Marshal(sms)
 		t.emitEvent(CellEvent{
 			Type:    "sms_received",
@@ -1127,6 +1135,11 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 			log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
 		}
 
+		// Increment SMS sent counter [MESHSAT-403]
+		t.stateMu.Lock()
+		t.smsSent++
+		t.stateMu.Unlock()
+
 		// Post-send settle — give the modem time to finalize before accepting
 		// the next command. The Huawei E220 on 2G needs this between CMGS calls.
 		time.Sleep(2 * time.Second)
@@ -1206,6 +1219,8 @@ func (t *DirectCellTransport) GetStatus(_ context.Context) (*CellStatus, error) 
 		PhoneNumber:  t.phoneNumber,
 		ICCID:        t.iccid,
 		SIMLabel:     t.simLabel,
+		SMSSent:      t.smsSent,
+		SMSReceived:  t.smsReceived,
 	}, nil
 }
 
