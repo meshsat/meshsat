@@ -446,6 +446,15 @@ func TestGF256MulZero(t *testing.T) {
 
 func TestEncodeDecodeRoundtrip(t *testing.T) {
 	// K=4 segments of 152 bytes, encode to N=6, decode all C(6,4)=15 combinations.
+	//
+	// The network-coding coefficients are drawn from a random source in
+	// EncodeGeneration. With crypto/rand, ~1-2% of draws produce a 4x4
+	// submatrix that is rank-deficient over GF(256) — a legitimate outcome
+	// for random linear codes, but it flakes the test in CI (MESHSAT-513).
+	// We retry with fresh crypto/rand entropy until all 15 subset matrices
+	// are full-rank, bounded to a handful of attempts. This keeps the test
+	// exercising real random coefficients (not a deterministic stream) while
+	// remaining deterministically-passing in CI.
 	k := 4
 	segSize := 152
 	n := 6
@@ -455,17 +464,40 @@ func TestEncodeDecodeRoundtrip(t *testing.T) {
 		randBytes(segments[i])
 	}
 
-	symbols, err := EncodeGeneration(42, segments, n, cryptoRand())
-	if err != nil {
-		t.Fatalf("EncodeGeneration: %v", err)
+	const maxAttempts = 10
+	var symbols []CodedSymbol
+	var lastErr error
+attempts:
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var err error
+		symbols, err = EncodeGeneration(42, segments, n, cryptoRand())
+		if err != nil {
+			t.Fatalf("EncodeGeneration: %v", err)
+		}
+		if len(symbols) != n {
+			t.Fatalf("expected %d symbols, got %d", n, len(symbols))
+		}
+		// Pre-flight: verify every C(n,k) subset decodes. If any subset is
+		// rank-deficient, regenerate the encoding with fresh coefficients.
+		for _, combo := range combinations(n, k) {
+			subset := make([]CodedSymbol, k)
+			for j, idx := range combo {
+				subset[j] = symbols[idx]
+			}
+			if _, err := TryDecode(subset, k); err != nil {
+				lastErr = err
+				continue attempts
+			}
+		}
+		lastErr = nil
+		break
 	}
-	if len(symbols) != n {
-		t.Fatalf("expected %d symbols, got %d", n, len(symbols))
+	if lastErr != nil {
+		t.Fatalf("could not generate full-rank encoding after %d attempts: %v", maxAttempts, lastErr)
 	}
 
-	// Test all C(6,4) = 15 combinations of 4 symbols from 6.
-	combos := combinations(n, k)
-	for ci, combo := range combos {
+	// Now decode all 15 combinations and verify payload equality.
+	for ci, combo := range combinations(n, k) {
 		subset := make([]CodedSymbol, k)
 		for j, idx := range combo {
 			subset[j] = symbols[idx]
