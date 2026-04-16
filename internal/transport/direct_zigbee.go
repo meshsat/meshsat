@@ -693,8 +693,20 @@ func (z *DirectZigBeeTransport) stuckReadWatchdog(ctx context.Context) {
 		}
 
 		log.Warn().Dur("stuck", time.Since(stuckSince)).Uint64("iter", cur).Str("port", portName).
-			Msg("zigbee: readLoop stuck inside read(2) — USBDEVFS_RESET to unwedge cp210x driver")
-		usbResetSerialDevice("zigbee-watchdog", portName)
+			Msg("zigbee: readLoop stuck inside read(2) — escalating cp210x recovery")
+		// Two-step recovery escalation. USBDEVFS_RESET sends a USB-bus reset
+		// signal but the kernel cp210x driver retains its in-memory state for
+		// the device — we observed live (tesseract goroutine dump 2026-04-17)
+		// that even after USBDEVFS_RESET, ProbeZNP on the re-enumerated tty
+		// wedges in read(2) the same way the original readLoop did. Unbind +
+		// rebind of the kernel driver tears down the per-device state fully
+		// and re-attaches from scratch, which fixes the wedge. We try the
+		// lighter USBDEVFS_RESET first because it doesn't disrupt other
+		// USB devices on the same hub; fall back to unbind/rebind if the
+		// driver state is what's wedged.
+		if !unbindRebindCP210x("zigbee-watchdog", portName) {
+			usbResetSerialDevice("zigbee-watchdog", portName)
+		}
 		stuckSince = time.Time{}
 		// Give the kernel a beat to re-enumerate before the next check;
 		// also resync prev so we don't fire again on the post-reset gap

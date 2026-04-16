@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -955,6 +956,73 @@ func (t *DirectIMTTransport) reconnect() error {
 	}
 
 	return nil
+}
+
+// unbindRebindCP210x escalates beyond USBDEVFS_RESET: it unbinds the cp210x
+// kernel driver from the device's USB interface and re-binds it. This forces
+// the driver to fully tear down its per-device state (URB queue, termios,
+// the wedge-prone read state machine) and re-initialise from scratch.
+//
+// USBDEVFS_RESET sends a USB-bus reset signal but the kernel cp210x driver
+// keeps its in-memory state for the device, so a "wedged read" condition
+// can persist across the reset (observed live on tesseract/parallax: probe
+// of the re-enumerated tty wedges in read(2) the same way the original
+// readLoop did). Unbind+bind is the next escalation.
+//
+// Requires: container privileged + /sys mounted writable. CubeOS field-kit
+// containers have both. Returns true if BOTH unbind and bind succeed.
+//
+// The portPath maps to a USB interface like "2-1.4:1.0" via sysfs symlinks.
+// We resolve it, write the interface ID to .../driver/unbind, sleep briefly,
+// then write to .../drivers/cp210x/bind. [MESHSAT-509]
+func unbindRebindCP210x(who, portPath string) bool {
+	devName := portPath
+	for i := len(devName) - 1; i >= 0; i-- {
+		if devName[i] == '/' {
+			devName = devName[i+1:]
+			break
+		}
+	}
+	// Resolve the USB interface ID. The driver symlink for a serial tty
+	// points at /sys/bus/usb/drivers/cp210x/<INTERFACE>, e.g. .../2-1.4:1.0
+	out, err := exec.Command("sh", "-c", fmt.Sprintf(
+		`readlink -f /sys/class/tty/%s/device/driver | xargs basename && `+
+			`readlink -f /sys/class/tty/%s/device | xargs basename`, devName, devName)).CombinedOutput()
+	if err != nil {
+		log.Debug().Str("subsys", who).Err(err).Str("output", string(out)).
+			Msg("unbind/rebind: resolve interface failed")
+		return false
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(parts) < 2 {
+		log.Debug().Str("subsys", who).Str("output", string(out)).
+			Msg("unbind/rebind: unexpected sysfs output")
+		return false
+	}
+	driverName := parts[0] // e.g. "cp210x"
+	interfaceID := parts[1] // e.g. "2-1.4:1.0"
+
+	unbindPath := fmt.Sprintf("/sys/bus/usb/drivers/%s/unbind", driverName)
+	bindPath := fmt.Sprintf("/sys/bus/usb/drivers/%s/bind", driverName)
+
+	// Unbind
+	if err := os.WriteFile(unbindPath, []byte(interfaceID), 0644); err != nil {
+		log.Warn().Str("subsys", who).Err(err).Str("iface", interfaceID).
+			Msg("unbind/rebind: unbind failed")
+		return false
+	}
+	// Brief settle — the kernel needs a beat to fully tear down driver state
+	// before we can rebind. 200ms is plenty.
+	time.Sleep(200 * time.Millisecond)
+	// Rebind
+	if err := os.WriteFile(bindPath, []byte(interfaceID), 0644); err != nil {
+		log.Warn().Str("subsys", who).Err(err).Str("iface", interfaceID).
+			Msg("unbind/rebind: bind failed")
+		return false
+	}
+	log.Info().Str("subsys", who).Str("port", portPath).Str("iface", interfaceID).
+		Str("driver", driverName).Msg("unbind/rebind completed — kernel driver re-attached")
+	return true
 }
 
 // usbResetSerialDevice resets the USB device behind the given serial port
