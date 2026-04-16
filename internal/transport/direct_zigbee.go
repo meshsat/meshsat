@@ -64,6 +64,12 @@ type DirectZigBeeTransport struct {
 	subscribers []chan ZigBeeEvent
 	subMu       sync.RWMutex
 
+	// serialMu guards synchronous ZNP request/response exchanges.
+	// Both PermitJoin and Send lock this to prevent the readLoop from
+	// stealing their SRSP responses. The readLoop also locks it for each
+	// Read call so it yields during synchronous commands. [MESHSAT-510]
+	serialMu sync.Mutex
+
 	// Permit-join state
 	permitJoinEnd time.Time // when permit-join expires (zero = not active)
 
@@ -192,37 +198,47 @@ func (z *DirectZigBeeTransport) GetDevices() []ZigBeeDevice {
 // Send sends data to a specific ZigBee device endpoint.
 func (z *DirectZigBeeTransport) Send(dstAddr uint16, dstEP byte, clusterID uint16, data []byte) error {
 	z.mu.Lock()
-	defer z.mu.Unlock()
-
 	if !z.running {
+		z.mu.Unlock()
 		return fmt.Errorf("zigbee transport not running")
 	}
-
 	z.transID++
+	z.mu.Unlock()
+
+	z.serialMu.Lock()
+	defer z.serialMu.Unlock()
 	frame := BuildAFDataReq(dstAddr, dstEP, 1, clusterID, z.transID, data)
 	return z.sendFrame(frame)
 }
 
 // PermitJoin sends ZDO_MGMT_PERMIT_JOIN_REQ to open the network for pairing.
 // duration is clamped to 1-254 seconds. Use 0 to close the network.
+// Uses serialMu to prevent readLoop from stealing the SRSP. [MESHSAT-510]
 func (z *DirectZigBeeTransport) PermitJoin(durationSec byte) error {
 	z.mu.Lock()
-	defer z.mu.Unlock()
-
 	if !z.running {
+		z.mu.Unlock()
 		return fmt.Errorf("zigbee transport not running")
 	}
+	z.mu.Unlock()
+
+	// Lock serial to prevent readLoop from stealing our response
+	z.serialMu.Lock()
+	defer z.serialMu.Unlock()
 
 	frame := BuildMgmtPermitJoinReq(durationSec)
 	if err := z.sendFrame(frame); err != nil {
 		return fmt.Errorf("permit join send: %w", err)
 	}
 
-	resp, err := z.readFrameTimeout(2 * time.Second)
+	resp, err := z.readFrameTimeout(3 * time.Second)
 	if err != nil {
 		return fmt.Errorf("permit join response: %w", err)
 	}
-	if resp.IsCmd(CmdZDOMgmtPermitJoinRsp) && len(resp.Data) > 0 && resp.Data[0] != 0 {
+	if !resp.IsCmd(CmdZDOMgmtPermitJoinRsp) {
+		return fmt.Errorf("permit join: unexpected response %s", resp)
+	}
+	if len(resp.Data) > 0 && resp.Data[0] != 0 {
 		return fmt.Errorf("permit join failed: status=0x%02x", resp.Data[0])
 	}
 
@@ -366,12 +382,17 @@ func (z *DirectZigBeeTransport) readLoop(ctx context.Context) {
 		default:
 		}
 
+		// serialMu prevents this from running during synchronous ZNP
+		// commands (PermitJoin, Send). Short lock duration — just the
+		// Read call + frame processing. [MESHSAT-510]
+		z.serialMu.Lock()
 		z.port.SetReadTimeout(500 * time.Millisecond)
 		n, err := z.port.Read(buf)
 		if n > 0 {
 			accumulated = append(accumulated, buf[:n]...)
 			z.processAccumulated(&accumulated)
 		}
+		z.serialMu.Unlock()
 		if err != nil {
 			continue
 		}
