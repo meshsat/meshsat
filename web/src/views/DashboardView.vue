@@ -41,7 +41,7 @@ const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
 // ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'aprs', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
+const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'aprs', 'zigbee', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
 function loadWidgetOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
@@ -1113,7 +1113,10 @@ async function fetchAll() {
     store.fetchConfig(),
     store.fetchAPRSStatus(),
     store.fetchAPRSHeard(),
-    store.fetchAPRSActivity()
+    store.fetchAPRSActivity(),
+    store.fetchZigBeeStatus(),
+    store.fetchZigBeeDevices(),
+    store.fetchZigBeePermitJoin()
   ])
 }
 
@@ -1145,6 +1148,9 @@ onMounted(() => {
     store.fetchAPRSStatus()
     store.fetchAPRSHeard()
     store.fetchAPRSActivity()
+    store.fetchZigBeeStatus()
+    store.fetchZigBeeDevices()
+    store.fetchZigBeePermitJoin()
   }, 15000)
 })
 
@@ -2038,6 +2044,87 @@ function widgetGridClass(id) {
         <!-- Uptime footer -->
         <div v-if="store.aprsStatus?.uptime" class="mt-2 text-[9px] text-gray-600 text-right">
           uptime {{ store.aprsStatus.uptime }}
+        </div>
+      </div>
+
+      <!-- ═══ ZigBee ═══ -->
+      <div v-if="wid === 'zigbee'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-yellow-400/40' : '']"
+        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="font-display font-semibold text-sm text-yellow-400 tracking-wide">ZIGBEE</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span v-if="store.zigbeeStatus?.firmware" class="text-[10px] text-gray-500">{{ store.zigbeeStatus.firmware }}</span>
+            <span :class="store.zigbeeStatus?.connected ? 'bg-yellow-400' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+          </div>
+        </div>
+
+        <!-- Counters -->
+        <div class="grid grid-cols-4 gap-2 mb-3">
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">Devices</div>
+            <div class="text-sm font-mono text-yellow-400">{{ store.zigbeeStatus?.device_count ?? 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">RX</div>
+            <div class="text-sm font-mono text-gray-300">{{ store.zigbeeStatus?.messages_in ?? 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">TX</div>
+            <div class="text-sm font-mono text-gray-300">{{ store.zigbeeStatus?.messages_out ?? 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-500">Errors</div>
+            <div class="text-sm font-mono" :class="(store.zigbeeStatus?.errors ?? 0) > 0 ? 'text-red-400' : 'text-gray-500'">{{ store.zigbeeStatus?.errors ?? 0 }}</div>
+          </div>
+        </div>
+
+        <!-- Permit Join button -->
+        <div class="flex items-center gap-2 mb-3">
+          <button v-if="!store.zigbeePermitJoin?.active"
+            @click="store.startZigBeePermitJoin(120).then(() => store.fetchZigBeePermitJoin())"
+            class="px-3 py-1 rounded text-[10px] font-medium bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/20 transition-colors"
+            :disabled="!store.zigbeeStatus?.connected">
+            Permit Join (120s)
+          </button>
+          <button v-else
+            @click="store.stopZigBeePermitJoin().then(() => store.fetchZigBeePermitJoin())"
+            class="px-3 py-1 rounded text-[10px] font-medium bg-red-400/10 text-red-400 border border-red-400/20 hover:bg-red-400/20 transition-colors animate-pulse">
+            Pairing Open ({{ store.zigbeePermitJoin?.remaining_sec ?? 0 }}s) — Stop
+          </button>
+        </div>
+
+        <!-- Paired devices table -->
+        <div v-if="(store.zigbeeDevices?.devices || []).length > 0">
+          <div class="text-[9px] text-gray-600 mb-1">Paired devices</div>
+          <div class="space-y-1">
+            <div v-for="dev in store.zigbeeDevices.devices" :key="dev.short_addr"
+              class="flex items-center justify-between px-2 py-1.5 rounded bg-gray-800/50 text-[10px]">
+              <div>
+                <span class="font-mono text-yellow-400/80">{{ dev.ieee_addr || ('0x' + dev.short_addr.toString(16).padStart(4, '0')) }}</span>
+                <span class="text-gray-600 ml-1">EP{{ dev.endpoint }}</span>
+              </div>
+              <div class="flex items-center gap-3 text-gray-400">
+                <span v-if="dev.temperature != null" class="font-mono text-emerald-400">{{ dev.temperature.toFixed(1) }}C</span>
+                <span v-if="dev.humidity != null" class="font-mono text-sky-400">{{ dev.humidity.toFixed(0) }}%</span>
+                <span class="text-[9px] text-gray-600">LQI {{ dev.lqi }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="store.zigbeeStatus?.connected" class="text-[10px] text-gray-600 text-center py-3">
+          No paired devices — press Permit Join to pair
+        </div>
+        <div v-else class="text-[10px] text-gray-600 text-center py-3">
+          Coordinator not connected
+        </div>
+
+        <!-- Uptime footer -->
+        <div v-if="store.zigbeeStatus?.uptime" class="mt-2 text-[9px] text-gray-600 text-right">
+          uptime {{ store.zigbeeStatus.uptime }}
         </div>
       </div>
 

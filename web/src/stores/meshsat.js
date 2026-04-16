@@ -1361,6 +1361,26 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     try { aprsActivity.value = await api.get('/aprs/activity') } catch {}
   }
 
+  // ZigBee dashboard (MESHSAT-512)
+  const zigbeeStatus = ref(null)
+  const zigbeeDevices = ref({ devices: [], connected: false })
+  const zigbeePermitJoin = ref({ active: false, remaining_sec: 0 })
+  async function fetchZigBeeStatus() {
+    try { zigbeeStatus.value = await api.get('/zigbee/status') } catch {}
+  }
+  async function fetchZigBeeDevices() {
+    try { zigbeeDevices.value = await api.get('/zigbee/devices') } catch {}
+  }
+  async function fetchZigBeePermitJoin() {
+    try { zigbeePermitJoin.value = await api.get('/zigbee/permit-join') } catch {}
+  }
+  async function startZigBeePermitJoin(durationSec = 120) {
+    try { return await api.post('/zigbee/permit-join', { duration_sec: durationSec }) } catch (e) { error.value = e.message }
+  }
+  async function stopZigBeePermitJoin() {
+    try { return await api.post('/zigbee/permit-join', { duration_sec: 0 }) } catch (e) { error.value = e.message }
+  }
+
   return {
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
@@ -1418,6 +1438,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     uploadCredential, deleteCredential, applyCredential,
     routingInterfaces, fetchRoutingInterfaces, setFloodable,
     reticulumStatus, fetchReticulumStatus,
-    aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity
+    aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity,
+    zigbeeStatus, zigbeeDevices, zigbeePermitJoin,
+    fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
+    startZigBeePermitJoin, stopZigBeePermitJoin
   }
 })
