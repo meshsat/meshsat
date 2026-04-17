@@ -2,7 +2,16 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { useSpectrumStore } from '@/stores/spectrum'
 import { formatTimeHHMM } from '@/utils/format'
+import JammingAlertModal from '@/components/JammingAlertModal.vue'
+
+// Spectrum store is mounted at App level so the sticky jamming alert
+// modal surfaces on any route, and so the SSE connection persists
+// across route changes (rather than reconnecting every time the user
+// navigates to the dashboard). [MESHSAT-509]
+const spectrumStore = useSpectrumStore()
+spectrumStore.connect()
 
 const route = useRoute()
 const store = useMeshsatStore()
@@ -241,6 +250,9 @@ onUnmounted(() => {
         <router-view />
       </div>
     </main>
+
+    <!-- Global sticky RF jamming alert — teleported to body, visible on any route -->
+    <JammingAlertModal />
   </div>
 </template>
 
