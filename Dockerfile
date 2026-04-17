@@ -137,6 +137,15 @@ RUN apt-get update -qq && \
 # kits need the stable KISS/AFSK path, not experimental IL2P changes.
 RUN git clone --depth=1 --branch=1.8 https://github.com/wb2osz/direwolf /src/direwolf
 
+# Bind the KISS TCP server to loopback only. Upstream hardcodes
+# INADDR_ANY (kissnet.c), and KISSPORT has no IP-bind option in the conf
+# grammar. Our containers run with network_mode=host; without this patch
+# MeshSat would expose :8001 to the kit's LAN. One-line in-tree edit —
+# simpler than maintaining a patch file. [MESHSAT-517]
+RUN grep -q 'sin_addr.s_addr = INADDR_ANY' /src/direwolf/src/kissnet.c && \
+    sed -i 's|sin_addr.s_addr = INADDR_ANY|sin_addr.s_addr = htonl(INADDR_LOOPBACK)|' /src/direwolf/src/kissnet.c && \
+    grep -q 'htonl(INADDR_LOOPBACK)' /src/direwolf/src/kissnet.c
+
 RUN mkdir /src/direwolf/build && cd /src/direwolf/build && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \

@@ -25,6 +25,13 @@ type GatewayStatus struct {
 	DLQPending       int64     `json:"dlq_pending,omitempty"`
 	LastActivity     time.Time `json:"last_activity,omitempty"`
 	ConnectionUptime string    `json:"connection_uptime,omitempty"`
+
+	// APRS-only. Pointer types so false/0 survive omitempty — callers
+	// need to distinguish "supervisor reports not running" from "this is
+	// a non-APRS gateway that has no supervisor concept." [MESHSAT-516]
+	DirewolfBundled  *bool  `json:"direwolf_bundled,omitempty"`
+	DirewolfRunning  *bool  `json:"direwolf_running,omitempty"`
+	DirewolfRestarts *int64 `json:"direwolf_restarts,omitempty"`
 }
 
 // EventEmitFunc is a callback for gateways to emit events to the SSE stream.

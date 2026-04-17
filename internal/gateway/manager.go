@@ -1013,6 +1013,9 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 			resp.DLQPending = status.DLQPending
 			resp.LastActivity = status.LastActivity
 			resp.ConnectionUptime = status.ConnectionUptime
+			resp.DirewolfBundled = status.DirewolfBundled
+			resp.DirewolfRunning = status.DirewolfRunning
+			resp.DirewolfRestarts = status.DirewolfRestarts
 		}
 
 		resp.Config = m.redactConfig(cfg.Type, cfg.Config)
@@ -1054,6 +1057,9 @@ func (m *Manager) GetSingleStatus(gwType string) (*GatewayStatusResponse, error)
 		resp.DLQPending = status.DLQPending
 		resp.LastActivity = status.LastActivity
 		resp.ConnectionUptime = status.ConnectionUptime
+		resp.DirewolfBundled = status.DirewolfBundled
+		resp.DirewolfRunning = status.DirewolfRunning
+		resp.DirewolfRestarts = status.DirewolfRestarts
 	}
 
 	return resp, nil
@@ -1519,4 +1525,9 @@ type GatewayStatusResponse struct {
 	LastActivity     interface{}     `json:"last_activity,omitempty"`
 	ConnectionUptime string          `json:"connection_uptime,omitempty"`
 	Config           json.RawMessage `json:"config,omitempty"`
+
+	// APRS-only. See GatewayStatus for the contract. [MESHSAT-516]
+	DirewolfBundled  *bool  `json:"direwolf_bundled,omitempty"`
+	DirewolfRunning  *bool  `json:"direwolf_running,omitempty"`
+	DirewolfRestarts *int64 `json:"direwolf_restarts,omitempty"`
 }

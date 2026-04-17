@@ -25,7 +25,7 @@ func TestRenderDirewolfConf_Shape(t *testing.T) {
 		"MYCALL PA3XYZ-10",
 		"MODEM 1200",
 		"PTT /dev/ttyACM1 RTS",
-		"KISSPORT 127.0.0.1:8001",
+		"KISSPORT 8001",
 		"AGWPORT 0",
 	} {
 		if !strings.Contains(got, want) {

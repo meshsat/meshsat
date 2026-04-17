@@ -207,6 +207,14 @@ func (g *APRSGateway) Status() GatewayStatus {
 	if s.Connected && !g.startTime.IsZero() {
 		s.ConnectionUptime = time.Since(g.startTime).Truncate(time.Second).String()
 	}
+	bundled := g.supervisor != nil
+	s.DirewolfBundled = &bundled
+	if g.supervisor != nil {
+		running := g.supervisor.Running()
+		restarts := g.supervisor.RestartCount()
+		s.DirewolfRunning = &running
+		s.DirewolfRestarts = &restarts
+	}
 	return s
 }
 
