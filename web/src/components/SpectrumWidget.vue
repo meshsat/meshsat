@@ -62,6 +62,28 @@ const unackedCount = computed(() => store.alerts.filter(a => !a.acked).length)
 const heats = reactive({})
 const traces = reactive({})
 
+// Upsample width for the widget heatmap — same rationale as the full
+// page: sparse rtl_power bins (12-120) stretched via CSS look mushy;
+// interpolating to 256 cols gives the mini strip a crisp SDR look.
+const WIDGET_COLS = 256
+
+function widgetRange(row, b) {
+  if (b.baselineStd > 0) {
+    return { floor: b.baselineMean - 2 * b.baselineStd,
+             ceil:  b.baselineMean + 10 * b.baselineStd }
+  }
+  if (!row?.powers?.length) return { floor: -80, ceil: -10 }
+  let mn = Infinity, mx = -Infinity
+  for (const p of row.powers) {
+    if (!isFinite(p)) continue
+    if (p < mn) mn = p
+    if (p > mx) mx = p
+  }
+  if (!isFinite(mn) || mn === mx) return { floor: -80, ceil: -10 }
+  const pad = (mx - mn) * 0.3
+  return { floor: mn - pad, ceil: mx + pad }
+}
+
 function drawBand(name) {
   const b = store.bands[name]
   if (!b) return
@@ -70,27 +92,32 @@ function drawBand(name) {
   const top = b.rows?.[0]
   const nBins = top?.powers?.length || 1
 
-  // Waterfall. Intrinsic canvas size: nBins × ROWS_PER_BAND. The CSS
-  // scales it to the strip area; image-rendering: auto gives us a
-  // smooth bilinear interpolation.
   if (heat) {
-    if (heat.width !== nBins) heat.width = nBins
+    if (heat.width !== WIDGET_COLS) heat.width = WIDGET_COLS
     if (heat.height !== ROWS_PER_BAND) heat.height = ROWS_PER_BAND
     const ctx = heat.getContext('2d')
-    const img = ctx.createImageData(nBins, ROWS_PER_BAND)
-    const base = b.baselineMean, std = b.baselineStd || 1
+    const img = ctx.createImageData(WIDGET_COLS, ROWS_PER_BAND)
     for (let y = 0; y < ROWS_PER_BAND; y++) {
       const row = b.rows[y]
       if (!row?.powers?.length) {
-        for (let x = 0; x < nBins; x++) {
-          const off = (y * nBins + x) * 4
+        for (let x = 0; x < WIDGET_COLS; x++) {
+          const off = (y * WIDGET_COLS + x) * 4
           img.data[off] = 15; img.data[off + 1] = 15; img.data[off + 2] = 25; img.data[off + 3] = 255
         }
         continue
       }
-      for (let x = 0; x < nBins; x++) {
-        const [r, g, bl] = turbo(normPower(row.powers[x], base, std))
-        const off = (y * nBins + x) * 4
+      const { floor, ceil } = widgetRange(row, b)
+      const span = ceil - floor || 1
+      const rBins = row.powers.length
+      for (let x = 0; x < WIDGET_COLS; x++) {
+        const fBin = (x / (WIDGET_COLS - 1)) * (rBins - 1)
+        const i0 = Math.floor(fBin)
+        const i1 = Math.min(rBins - 1, i0 + 1)
+        const frac = fBin - i0
+        const p = row.powers[i0] * (1 - frac) + row.powers[i1] * frac
+        const t = Math.max(0, Math.min(1, (p - floor) / span))
+        const [r, g, bl] = turbo(t)
+        const off = (y * WIDGET_COLS + x) * 4
         img.data[off] = r; img.data[off + 1] = g; img.data[off + 2] = bl; img.data[off + 3] = 255
       }
     }
@@ -110,8 +137,14 @@ function drawBand(name) {
     const ctx = trace.getContext('2d')
     ctx.clearRect(0, 0, W, H)
 
-    const yTop = b.baselineMean + 10 * (b.baselineStd || 1)
-    const yBot = b.baselineMean - 3 * (b.baselineStd || 1)
+    let yTop, yBot
+    if (b.baselineStd > 0) {
+      yTop = b.baselineMean + 10 * b.baselineStd
+      yBot = b.baselineMean - 3 * b.baselineStd
+    } else {
+      const { floor, ceil } = widgetRange(top, b)
+      yTop = ceil; yBot = floor
+    }
     const yRange = yTop - yBot
     const yAt = (dB) => ((yTop - dB) / yRange) * H
 

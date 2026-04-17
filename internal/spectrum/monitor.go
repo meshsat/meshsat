@@ -232,7 +232,34 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 			continue
 		}
 
-		allPowers = append(allPowers, avgPower(powers))
+		avg := avgPower(powers)
+		maxPower := maxVal(powers)
+		allPowers = append(allPowers, avg)
+
+		// Publish a scan event during calibration too. Baseline mean
+		// and std are zero until calibration finishes, so the UI
+		// normalises against the raw sample range — the waterfall
+		// paints from second one instead of sitting blank for the full
+		// 2.5-minute cold-boot calibration window. [MESHSAT-509]
+		m.publish(SpectrumEvent{
+			Kind:                 EventScan,
+			Band:                 band.Name,
+			Label:                band.Label,
+			InterfaceID:          band.InterfaceID,
+			FreqLow:              band.FreqLow,
+			FreqHigh:             band.FreqHigh,
+			BinSize:              band.BinSize,
+			Timestamp:            time.Now(),
+			Powers:               powers,
+			AvgDB:                avg,
+			MaxDB:                maxPower,
+			State:                StateCalibrating,
+			BaselineMean:         0,
+			BaselineStd:          0,
+			ThreshJammingDB:      0,
+			ThreshInterferenceDB: 0,
+		})
+
 		time.Sleep(time.Second)
 	}
 

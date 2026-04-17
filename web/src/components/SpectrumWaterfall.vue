@@ -137,11 +137,28 @@ function drawSpectrum(bandName) {
   const plotT = 4 * dpr
   const plotH = H - plotT - 2 * dpr
 
-  // Y-axis range. Lock to baseline ± generous margins (same as the
-  // colormap normalisation) so the trace sits in the middle at rest
-  // and rides upward during jamming.
-  const yTop = band.baselineMean + 12 * (band.baselineStd || 1)
-  const yBot = band.baselineMean - 6 * (band.baselineStd || 1)
+  // Y-axis range. After calibration we lock to baseline ± σ margins
+  // so the trace sits centred at rest and rides upward during
+  // jamming. During calibration (std=0) we derive the range from
+  // the scan's own min/max + padding so the trace still renders
+  // meaningfully — otherwise yRange collapses to ~18 dB around an
+  // uninformed centre and the trace clips to top/bottom.
+  let yTop, yBot
+  if (band.baselineStd > 0) {
+    yTop = band.baselineMean + 12 * band.baselineStd
+    yBot = band.baselineMean - 6 * band.baselineStd
+  } else {
+    let mn = Infinity, mx = -Infinity
+    for (const p of top.powers) {
+      if (!isFinite(p)) continue
+      if (p < mn) mn = p
+      if (p > mx) mx = p
+    }
+    if (!isFinite(mn) || mn === mx) { mn = -80; mx = -10 }
+    const pad = (mx - mn) * 0.4
+    yTop = mx + pad
+    yBot = mn - pad
+  }
   const yRange = yTop - yBot
   const yAt = (dB) => plotT + ((yTop - dB) / yRange) * plotH
 
@@ -248,44 +265,79 @@ function drawSpectrum(bandName) {
   ctx.fill()
 }
 
+// WATERFALL_COLS is the render width (in canvas pixels) we upsample
+// the FFT rows into. rtl_power produces very few bins per band
+// (12-120), so drawing at native bin resolution + CSS scaling yields
+// a soft/mushy image. Upsampling to a fixed wide buffer + linear
+// interpolation between bins produces the crisp, evenly-shaded
+// spectrogram look of desktop SDR tools (SDR#, gqrx, CubicSDR).
+const WATERFALL_COLS = 512
+
+// During calibration baselineStd==0 so we can't normalise against σ.
+// Instead, derive the colormap range from the current scan's min/max
+// so the waterfall still shows *something* — operators see the power
+// profile immediately even before the baseline is ready.
+function rowPaletteRange(row, band) {
+  if (band.baselineStd > 0) {
+    return {
+      floor: band.baselineMean - 2 * band.baselineStd,
+      ceil:  band.baselineMean + 10 * band.baselineStd,
+    }
+  }
+  if (!row || !row.powers?.length) return { floor: -80, ceil: -10 }
+  let mn = Infinity, mx = -Infinity
+  for (const p of row.powers) {
+    if (!isFinite(p)) continue
+    if (p < mn) mn = p
+    if (p > mx) mx = p
+  }
+  if (!isFinite(mn) || !isFinite(mx) || mn === mx) return { floor: -80, ceil: -10 }
+  const pad = (mx - mn) * 0.3
+  return { floor: mn - pad, ceil: mx + pad }
+}
+
 function drawWaterfall(bandName) {
   const band = store.bands[bandName]
   const canvas = waterfallCanvases[bandName]
   if (!band || !canvas) return
   const rows = band.rows
   const nRows = store.WATERFALL_ROWS
-  const nBins = rows[0]?.powers?.length || 1
 
-  // Intrinsic canvas resolution: one canvas pixel per (bin, row)
-  // sample. The CSS layer stretches it to the plot area via
-  // image-rendering: auto so the browser bilinear-interpolates and
-  // the result reads as a smooth heatmap (not the blocky tiles the
-  // previous revision had).
-  if (canvas.width !== nBins) canvas.width = nBins
+  if (canvas.width !== WATERFALL_COLS) canvas.width = WATERFALL_COLS
   if (canvas.height !== nRows) canvas.height = nRows
 
   const ctx = canvas.getContext('2d')
-  const img = ctx.createImageData(nBins, nRows)
-
-  const base = band.baselineMean
-  const std = band.baselineStd || 1
+  const img = ctx.createImageData(WATERFALL_COLS, nRows)
 
   for (let y = 0; y < nRows; y++) {
     const row = rows[y]
     if (!row || !row.powers || row.powers.length === 0) {
-      for (let x = 0; x < nBins; x++) {
-        const off = (y * nBins + x) * 4
-        img.data[off] = 15
-        img.data[off + 1] = 15
-        img.data[off + 2] = 25
-        img.data[off + 3] = 255
+      // No data row — dark charcoal fill so the empty ring is visible
+      // but doesn't pretend to be a valid reading.
+      for (let x = 0; x < WATERFALL_COLS; x++) {
+        const off = (y * WATERFALL_COLS + x) * 4
+        img.data[off] = 15; img.data[off + 1] = 15; img.data[off + 2] = 25; img.data[off + 3] = 255
       }
       continue
     }
-    for (let x = 0; x < nBins; x++) {
-      const t = normPower(row.powers[x], base, std)
+
+    const powers = row.powers
+    const nBins = powers.length
+    const { floor, ceil } = rowPaletteRange(row, band)
+    const span = ceil - floor || 1
+
+    // Linear interpolation between adjacent bins. WATERFALL_COLS is
+    // typically ~5-30× the native bin count; evenly mapping x -> bin
+    // position and lerping avoids the blocky step look.
+    for (let x = 0; x < WATERFALL_COLS; x++) {
+      const fBin = (x / (WATERFALL_COLS - 1)) * (nBins - 1)
+      const i0 = Math.floor(fBin)
+      const i1 = Math.min(nBins - 1, i0 + 1)
+      const frac = fBin - i0
+      const p = powers[i0] * (1 - frac) + powers[i1] * frac
+      const t = Math.max(0, Math.min(1, (p - floor) / span))
       const [r, g, b] = turbo(t)
-      const off = (y * nBins + x) * 4
+      const off = (y * WATERFALL_COLS + x) * 4
       img.data[off] = r
       img.data[off + 1] = g
       img.data[off + 2] = b
