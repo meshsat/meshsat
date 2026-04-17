@@ -212,7 +212,15 @@ func (m *SpectrumMonitor) run(ctx context.Context) {
 		}
 	}
 
-	// Phase 2: Continuous monitoring
+	// Phase 2: Continuous monitoring. In parallel, kick a background
+	// goroutine that re-attempts calibration for any band that failed
+	// Phase 1 (state stayed "calibrating", no baseline). A wedged
+	// dongle recovers over time — polling every 60 s means a transient
+	// USB hang self-heals without a container restart, and the UI's
+	// progress indicator picks up naturally when each retry fires.
+	// [MESHSAT-509]
+	go m.recalibrateUnresolved(ctx)
+
 	ticker := time.NewTicker(ScanInterval)
 	defer ticker.Stop()
 
@@ -222,6 +230,59 @@ func (m *SpectrumMonitor) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.scanAllBands(ctx)
+		}
+	}
+}
+
+// recalibrateUnresolved loops forever, every 60 s, and retries
+// calibration for any band whose Phase 1 attempt didn't produce a
+// baseline. Matches the Phase 1 loop's per-band behaviour exactly so
+// the UI's progress bar / "queued" indicator work identically.
+func (m *SpectrumMonitor) recalibrateUnresolved(ctx context.Context) {
+	tick := time.NewTicker(60 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		for _, band := range m.bands {
+			if ctx.Err() != nil {
+				return
+			}
+			m.mu.RLock()
+			hasBaseline := m.baseline[band.Name] != nil
+			m.mu.RUnlock()
+			if hasBaseline {
+				continue
+			}
+			// Mark active + retry
+			m.mu.Lock()
+			m.status[band.Name].CalibrationStartedAt = time.Now()
+			m.status[band.Name].CalibrationDurationSec = int(CalibrationDuration / time.Second)
+			m.mu.Unlock()
+			bl := m.calibrate(ctx, band)
+			if bl != nil {
+				m.mu.Lock()
+				m.baseline[band.Name] = bl
+				m.status[band.Name].State = StateClear
+				m.status[band.Name].BaselineMean = bl.Mean
+				m.status[band.Name].BaselineStd = bl.Std
+				m.status[band.Name].Since = time.Now()
+				m.status[band.Name].CalibrationStartedAt = time.Time{}
+				m.status[band.Name].CalibrationDurationSec = 0
+				m.mu.Unlock()
+				log.Info().Str("band", band.Name).
+					Float64("mean", bl.Mean).Float64("std", bl.Std).
+					Int("samples", bl.Samples).
+					Msg("spectrum: baseline calibrated (retry)")
+			} else {
+				m.mu.Lock()
+				m.status[band.Name].CalibrationStartedAt = time.Time{}
+				m.status[band.Name].CalibrationDurationSec = 0
+				m.mu.Unlock()
+			}
 		}
 	}
 }
