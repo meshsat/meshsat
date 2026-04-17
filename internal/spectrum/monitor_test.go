@@ -150,16 +150,20 @@ func TestEvaluate_Jamming(t *testing.T) {
 	scanner := newMockScanner([]float64{-45.0})
 	m := NewSpectrumMonitor(scanner, DefaultBands)
 
+	// Baseline at -45 dB. Jamming candidate requires:
+	//   avg > PowerFloorLoRa (-50 dB) AND
+	//   occupancy >= 0.70 (most bins above baseline+6) AND
+	//   spectral flatness >= 0.60 (white-noise-ish shape).
 	bl := &Baseline{Mean: -45.0, Std: 1.0, Samples: 30}
 	m.baseline["lora_868"] = bl
 
-	// Set status to clear with enough consecutive samples
-	m.status["lora_868"].State = StateClear
-	m.status["lora_868"].Consecutive = JammingConsecutive
-	m.status["lora_868"].Since = time.Now().Add(-time.Minute)
-
-	// Power well above jamming threshold (mean + 3*sigma = -45 + 3 = -42)
-	state := m.evaluate("lora_868", -38.0, -38.0, bl)
+	// Synthetic barrage-jammer scan: every bin at -20 dB (well above
+	// -45 +6 = -39 threshold), uniform → occupancy 1.0, flatness 1.0.
+	powers := make([]float64, 24)
+	for i := range powers {
+		powers[i] = -20.0
+	}
+	state := m.evaluate("lora_868", powers, -20.0, -20.0, bl)
 	if state != StateJamming {
 		t.Fatalf("expected jamming, got %s", state)
 	}
@@ -172,70 +176,143 @@ func TestEvaluate_Clear(t *testing.T) {
 	bl := &Baseline{Mean: -45.0, Std: 1.0, Samples: 30}
 	m.baseline["lora_868"] = bl
 
-	m.status["lora_868"].State = StateClear
-	m.status["lora_868"].Consecutive = 0
-	m.status["lora_868"].Since = time.Now().Add(-time.Minute)
-
-	// Power at baseline level
-	state := m.evaluate("lora_868", -45.0, -45.0, bl)
+	// All bins at baseline → occupancy 0, flatness near 1 but power
+	// below absolute floor blocks escalation.
+	powers := make([]float64, 24)
+	for i := range powers {
+		powers[i] = -45.0
+	}
+	state := m.evaluate("lora_868", powers, -45.0, -45.0, bl)
 	if state != StateClear {
 		t.Fatalf("expected clear, got %s", state)
 	}
 }
 
-func TestEvaluate_Recovery(t *testing.T) {
-	scanner := newMockScanner([]float64{-45.0})
+func TestEvaluate_BelowPowerFloor_NeverJamming(t *testing.T) {
+	scanner := newMockScanner([]float64{-90.0})
 	m := NewSpectrumMonitor(scanner, DefaultBands)
 
-	bl := &Baseline{Mean: -45.0, Std: 1.0, Samples: 30}
+	// Very quiet band, all bins identical → 100% occupancy + flatness 1
+	// would naively say "jamming" but avgPower is way below PowerFloorLoRa.
+	bl := &Baseline{Mean: -90.0, Std: 0.5, Samples: 30}
 	m.baseline["lora_868"] = bl
-
-	// Currently jammed, enough consecutive recovery samples
-	m.status["lora_868"].State = StateJamming
-	m.status["lora_868"].Consecutive = RecoveryConsecutive
-	m.status["lora_868"].Since = time.Now().Add(-time.Minute)
-
-	// Power back at baseline
-	state := m.evaluate("lora_868", -45.0, -45.0, bl)
+	powers := make([]float64, 24)
+	for i := range powers {
+		powers[i] = -90.0
+	}
+	state := m.evaluate("lora_868", powers, -90.0, -90.0, bl)
 	if state != StateClear {
-		t.Fatalf("expected recovery to clear, got %s", state)
+		t.Fatalf("expected clear (below power floor), got %s", state)
 	}
 }
 
-func TestEvaluate_Interference(t *testing.T) {
+func TestEvaluate_NarrowbandBurst_NotJamming(t *testing.T) {
+	scanner := newMockScanner([]float64{-45.0})
+	m := NewSpectrumMonitor(scanner, DefaultBands)
+
+	// One bin hot (legit LoRa packet), rest at baseline.
+	// Occupancy ~= 1/24 = 0.04 — well below InterferenceOccupancy.
+	bl := &Baseline{Mean: -45.0, Std: 1.0, Samples: 30}
+	m.baseline["lora_868"] = bl
+	powers := make([]float64, 24)
+	for i := range powers {
+		powers[i] = -45.0
+	}
+	powers[10] = -20.0 // one bright spike
+	// avg dragged up slightly; max = -20
+	avg := -44.0
+	state := m.evaluate("lora_868", powers, avg, -20.0, bl)
+	if state == StateJamming {
+		t.Fatalf("narrowband burst must not classify as jamming, got %s", state)
+	}
+}
+
+func TestEvaluate_StructuredSignal_HighOccupancyLowFlatness(t *testing.T) {
 	scanner := newMockScanner([]float64{-45.0})
 	m := NewSpectrumMonitor(scanner, DefaultBands)
 
 	bl := &Baseline{Mean: -45.0, Std: 1.0, Samples: 30}
 	m.baseline["lora_868"] = bl
-
-	m.status["lora_868"].State = StateClear
-	m.status["lora_868"].Consecutive = JammingConsecutive
-	m.status["lora_868"].Since = time.Now().Add(-time.Minute)
-
-	// Average normal but peak spike exceeds 6*sigma (mean + 6 = -39)
-	state := m.evaluate("lora_868", -44.0, -35.0, bl)
-	if state != StateInterference {
-		t.Fatalf("expected interference, got %s", state)
+	// Simulate a structured transmission: a shaped spectrum — high
+	// in the middle, low on the edges. Linear-domain flatness will
+	// be well below 0.6, so this should NOT be jamming even if
+	// occupancy is above 0.3 (→ interference-candidate only).
+	powers := make([]float64, 24)
+	for i := range powers {
+		d := float64(i - 12)
+		powers[i] = -20.0 - d*d*0.5 // quadratic dip off-centre
+	}
+	state := m.evaluate("lora_868", powers, -30.0, -20.0, bl)
+	if state == StateJamming {
+		t.Fatalf("structured signal must not classify as jamming, got %s", state)
 	}
 }
 
-func TestEvaluate_Hysteresis(t *testing.T) {
-	scanner := newMockScanner([]float64{-45.0})
-	m := NewSpectrumMonitor(scanner, DefaultBands)
+func TestPromoteState_DwellTime(t *testing.T) {
+	// JAMMING candidate held for 30 s stays at current state (needs 60 s).
+	s := promoteState(StateJamming, StateClear, 30*time.Second)
+	if s != StateClear {
+		t.Fatalf("30 s jamming candidate: expected clear (not yet promoted), got %s", s)
+	}
+	// Held for 61 s: promotes.
+	s = promoteState(StateJamming, StateClear, 61*time.Second)
+	if s != StateJamming {
+		t.Fatalf("61 s jamming candidate: expected jamming, got %s", s)
+	}
+	// DEGRADED held for 5 s: keep current.
+	s = promoteState(StateDegraded, StateClear, 5*time.Second)
+	if s != StateClear {
+		t.Fatalf("5 s degraded candidate: expected clear, got %s", s)
+	}
+	// INTERFERENCE held for 11 s: promote.
+	s = promoteState(StateInterference, StateClear, 11*time.Second)
+	if s != StateInterference {
+		t.Fatalf("11 s interference candidate: expected interference, got %s", s)
+	}
+	// Recovery: CLEAR candidate held for 31 s while current is JAMMING → CLEAR.
+	s = promoteState(StateClear, StateJamming, 31*time.Second)
+	if s != StateClear {
+		t.Fatalf("31 s recovery: expected clear, got %s", s)
+	}
+	// Recovery held only 10 s: keep jamming.
+	s = promoteState(StateClear, StateJamming, 10*time.Second)
+	if s != StateJamming {
+		t.Fatalf("10 s recovery: expected to stay jamming, got %s", s)
+	}
+}
 
-	bl := &Baseline{Mean: -45.0, Std: 1.0, Samples: 30}
-	m.baseline["lora_868"] = bl
+func TestSpectralFlatness_WhiteNoise(t *testing.T) {
+	// All bins equal → flatness = 1.0
+	powers := make([]float64, 32)
+	for i := range powers {
+		powers[i] = -40.0
+	}
+	f := spectralFlatness(powers)
+	if f < 0.99 {
+		t.Fatalf("white-noise flatness should be ~1, got %f", f)
+	}
+}
 
-	// Recently transitioned to jamming (within cooldown)
-	m.status["lora_868"].State = StateJamming
-	m.status["lora_868"].Consecutive = 0
-	m.status["lora_868"].Since = time.Now() // just now
+func TestSpectralFlatness_SinglePeak(t *testing.T) {
+	// One strong bin, rest quiet → flatness near 0.
+	powers := make([]float64, 32)
+	for i := range powers {
+		powers[i] = -80.0
+	}
+	powers[15] = 0.0
+	f := spectralFlatness(powers)
+	if f > 0.2 {
+		t.Fatalf("single-peak flatness should be small, got %f", f)
+	}
+}
 
-	// Even though power is normal, hysteresis keeps it jammed
-	state := m.evaluate("lora_868", -45.0, -45.0, bl)
-	if state != StateJamming {
-		t.Fatalf("expected hysteresis to maintain jamming, got %s", state)
+func TestBandOccupancy(t *testing.T) {
+	powers := []float64{-50, -50, -50, -30, -30, -30, -30, -30}
+	// threshold -40: 5 of 8 bins above → 0.625
+	got := bandOccupancy(powers, -40)
+	want := 0.625
+	if got < want-0.001 || got > want+0.001 {
+		t.Fatalf("occupancy: got %f, want %f", got, want)
 	}
 }
 

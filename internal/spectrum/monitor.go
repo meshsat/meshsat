@@ -389,23 +389,32 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 
 		avg := avgPower(powers)
 		maxPower := maxVal(powers)
-		newState := m.evaluate(band.Name, avg, maxPower, bl)
+		candidate := m.evaluate(band.Name, powers, avg, maxPower, bl)
 
+		now := time.Now()
 		m.mu.Lock()
 		bs := m.status[band.Name]
 		bs.PowerDB = avg
 		oldState := bs.State
 
+		// Candidate tracking: if the tier changed, reset dwell timer.
+		if bs.CandidateState != candidate {
+			bs.CandidateState = candidate
+			bs.CandidateSince = now
+		}
+		heldFor := now.Sub(bs.CandidateSince)
+
+		newState := promoteState(candidate, oldState, heldFor)
+
 		if newState != oldState {
 			bs.State = newState
-			bs.Since = time.Now()
+			bs.Since = now
 			bs.Consecutive = 1
 		} else {
 			bs.Consecutive++
 		}
 		m.mu.Unlock()
 
-		now := time.Now()
 		m.publish(SpectrumEvent{
 			Kind:                 EventScan,
 			Band:                 band.Name,
@@ -421,8 +430,15 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			State:                newState,
 			BaselineMean:         bl.Mean,
 			BaselineStd:          bl.Std,
-			ThreshJammingDB:      bl.Mean + JammingSigma*bl.Std,
-			ThreshInterferenceDB: bl.Mean + InterferenceSigma*bl.Std,
+			// Post-redesign: thresholds are now derived from absolute
+			// power floor + occupancy/flatness features, not a single
+			// sigma multiplier. Keep the JSON keys for UI backward
+			// compat; expose the baseline+6 dB bin-activity cutoff
+			// (occupancy comparison line) as ThreshInterferenceDB and
+			// baseline+DegradedDeltaDB as ThreshJammingDB so the UI's
+			// reference lines still make visual sense.
+			ThreshJammingDB:      bl.Mean + DegradedDeltaDB,
+			ThreshInterferenceDB: bl.Mean + 6.0,
 		})
 
 		if newState != oldState {
@@ -442,61 +458,163 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 				OldState:             oldState,
 				BaselineMean:         bl.Mean,
 				BaselineStd:          bl.Std,
-				ThreshJammingDB:      bl.Mean + JammingSigma*bl.Std,
-				ThreshInterferenceDB: bl.Mean + InterferenceSigma*bl.Std,
+				ThreshJammingDB:      bl.Mean + DegradedDeltaDB,
+				ThreshInterferenceDB: bl.Mean + 6.0,
 			})
 		}
 	}
 }
 
-// evaluate applies the detection algorithm to determine spectrum state.
-func (m *SpectrumMonitor) evaluate(bandName string, avgPower, maxPower float64, bl *Baseline) SpectrumState {
-	m.mu.RLock()
-	bs := m.status[bandName]
-	consecutive := bs.Consecutive
-	currentState := bs.State
-	since := bs.Since
-	m.mu.RUnlock()
-
-	// Hysteresis: ignore transitions during cooldown
-	if time.Since(since) < time.Duration(CooldownSeconds)*time.Second && currentState != StateClear {
-		return currentState
+// evaluate applies the multi-feature detection algorithm.
+//
+// Input: a full scan's per-bin powers, plus aggregate avg/max and
+// the band's calibrated baseline. Output: the state this scan votes
+// for. State transitions apply persistence windows on top — see
+// scanAllBands.
+//
+// Features combined:
+//   - Absolute dBm floor (PowerFloorForBand) — below floor, never
+//     jamming regardless of sigma; a -80 dBm noise swell is not an
+//     EW event. Prevents runaway false positives on quiet bands.
+//   - Spectral occupancy — fraction of bins above (baseline + 6 dB).
+//     Barrage jammer ≥ 70 %; narrowband spike 30-70 %; legit burst
+//     < 20 %.
+//   - Spectral flatness — 0..1. White-noise jammers approach 1;
+//     structured signals (LoRa, LTE, APRS) stay < 0.4. Separates a
+//     "band is loud" event from "band is jammed".
+//   - Average power elevation above baseline — flags DEGRADED
+//     attention level for sustained moderate rise.
+//
+// Persistence (dwell time) is applied in scanAllBands by comparing
+// how long the candidate state has been stable. Single-sample spikes
+// (LoRa/APRS bursts, cellular fades) never promote beyond CLEAR.
+//
+// [MESHSAT-509 — research-grounded redesign after naive 3σ produced
+//  constant false positives on residential Leiden RF.]
+func (m *SpectrumMonitor) evaluate(bandName string, powers []float64, avgPower, maxPower float64, bl *Baseline) SpectrumState {
+	// Absolute floor short-circuit: if the average power across the
+	// whole band is below the band-specific floor, no spectral
+	// activity counts as jamming — it's physically implausible for
+	// a close-range jammer to produce less power than thermal noise.
+	floor := PowerFloorForBand(bandName)
+	if avgPower < floor {
+		return StateClear
 	}
 
-	// Check for broadband jamming: average power > baseline + 3*sigma
-	if avgPower > bl.Mean+JammingSigma*bl.Std {
-		if currentState == StateJamming {
-			return StateJamming // maintain
-		}
-		if currentState != StateJamming && consecutive >= JammingConsecutive-1 {
-			return StateJamming // confirm after consecutive threshold
-		}
-		return currentState // still counting up
-	}
+	// Features
+	thresholdDB := bl.Mean + 6.0 // same 6 dB cutoff the research recommends
+	occupancy := bandOccupancy(powers, thresholdDB)
+	flatness := spectralFlatness(powers)
+	elevation := avgPower - bl.Mean
 
-	// Check for narrowband interference: peak > baseline + 6*sigma
-	if maxPower > bl.Mean+InterferenceSigma*bl.Std {
-		if currentState == StateInterference {
+	// Tier decision — highest-severity wins, then persistence gates
+	// whether we actually adopt it (in the caller).
+	switch {
+	case occupancy >= JammingOccupancy && flatness >= JammingFlatness:
+		return StateJamming // candidate — needs 60 s sustain
+	case occupancy >= InterferenceOccupancy:
+		return StateInterference // candidate — needs 10 s sustain
+	case elevation >= DegradedDeltaDB:
+		return StateDegraded // candidate — needs 30 s sustain
+	default:
+		return StateClear
+	}
+}
+
+// bandOccupancy returns the fraction (0..1) of bins whose power is
+// above thresholdDB. Used to distinguish barrage jamming (≥70 %) from
+// legit narrowband activity (<20 %).
+func bandOccupancy(powers []float64, thresholdDB float64) float64 {
+	if len(powers) == 0 {
+		return 0
+	}
+	hits := 0
+	n := 0
+	for _, p := range powers {
+		if !isFinite(p) {
+			continue
+		}
+		if p >= thresholdDB {
+			hits++
+		}
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return float64(hits) / float64(n)
+}
+
+// spectralFlatness (Wiener entropy) = geomean / arithmean of LINEAR
+// power. Range [0..1]. 1.0 means white noise (every frequency equal
+// power — a barrage jammer). Structured signals have spectral shape
+// that suppresses flatness well below 1. LTE / LoRa / APRS all stay
+// below ~0.4 in practice. We convert each bin from dB to linear via
+// 10^(dB/10) before computing — flatness on dB values is meaningless.
+func spectralFlatness(powers []float64) float64 {
+	if len(powers) == 0 {
+		return 0
+	}
+	var sumLin float64
+	var sumLogLin float64
+	n := 0
+	for _, p := range powers {
+		if !isFinite(p) {
+			continue
+		}
+		// Clamp very negative values to avoid 10^(-200) underflow.
+		if p < -150 {
+			p = -150
+		}
+		lin := math.Pow(10, p/10)
+		if lin <= 0 {
+			continue
+		}
+		sumLin += lin
+		sumLogLin += math.Log(lin)
+		n++
+	}
+	if n == 0 || sumLin == 0 {
+		return 0
+	}
+	arithMean := sumLin / float64(n)
+	geoMean := math.Exp(sumLogLin / float64(n))
+	if arithMean == 0 {
+		return 0
+	}
+	return geoMean / arithMean
+}
+
+// promoteState applies the dwell-time / persistence check.
+// candidate is what the current scan voted for; current is the band's
+// latest confirmed state; heldFor is how long the candidate has been
+// stable (reset on any tier change). Returns the new state.
+//
+// Promotion requires the tier-specific dwell time. Demotion (to
+// CLEAR) requires RecoveryPersistenceSec of CLEAR-candidate.
+func promoteState(candidate, current SpectrumState, heldFor time.Duration) SpectrumState {
+	switch candidate {
+	case StateJamming:
+		if heldFor >= JammingPersistenceSec*time.Second {
+			return StateJamming
+		}
+	case StateInterference:
+		if heldFor >= InterferencePersistenceSec*time.Second {
 			return StateInterference
 		}
-		if consecutive >= JammingConsecutive-1 {
-			return StateInterference
+	case StateDegraded:
+		if heldFor >= DegradedPersistenceSec*time.Second {
+			return StateDegraded
 		}
-		return currentState
-	}
-
-	// Check for recovery: power within baseline +/- 1*sigma
-	if avgPower <= bl.Mean+RecoverySigma*bl.Std {
-		if currentState == StateClear {
+	case StateClear:
+		if current == StateClear {
 			return StateClear
 		}
-		if consecutive >= RecoveryConsecutive-1 {
-			return StateClear // confirmed recovery
+		if heldFor >= RecoveryPersistenceSec*time.Second {
+			return StateClear
 		}
-		return currentState // still counting
 	}
-
-	return currentState
+	return current // persistence not met yet; keep previous
 }
 
 func (m *SpectrumMonitor) onTransition(band Band, oldState, newState SpectrumState, avgPower, maxPower float64) {

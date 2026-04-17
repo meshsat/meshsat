@@ -7,8 +7,9 @@ type SpectrumState string
 
 const (
 	StateClear        SpectrumState = "clear"
-	StateJamming      SpectrumState = "jamming"
+	StateDegraded     SpectrumState = "degraded" // sustained elevation, not yet EW-plausible
 	StateInterference SpectrumState = "interference"
+	StateJamming      SpectrumState = "jamming"
 	StateCalibrating  SpectrumState = "calibrating"
 	StateDisabled     SpectrumState = "disabled"
 )
@@ -119,6 +120,15 @@ type BandStatus struct {
 	// doesn't hardcode it. 30 s currently; changing it backend-side
 	// flows through to the client without a client redeploy.
 	CalibrationDurationSec int `json:"calibration_duration_sec,omitempty"`
+
+	// Candidate tracking for dwell-time state promotion. These are
+	// internal bookkeeping exposed via JSON so the UI can render
+	// "jamming in 42 s" during a sustained-but-not-yet-promoted
+	// event. CandidateState is the tier the latest scan voted for;
+	// CandidateSince is when that tier was first observed continuously
+	// (reset when the tier changes). [MESHSAT-509]
+	CandidateState SpectrumState `json:"candidate_state,omitempty"`
+	CandidateSince time.Time     `json:"candidate_since,omitempty"`
 }
 
 // Baseline holds the calibrated noise floor statistics for a band.
@@ -171,19 +181,80 @@ type SpectrumEvent struct {
 	CalibrationDurationSec int       `json:"calibration_duration_sec,omitempty"`
 }
 
-// Detection thresholds (from issue spec).
+// Detection thresholds.
+//
+// Design brief: naive `> baseline + 3σ` falsely flags every legitimate
+// LoRa / APRS burst and every LTE carrier jitter as "jamming". Real
+// jammers are distinguished by a combination of (a) absolute dBm
+// power floor — below which a jammer is physically implausible,
+// (b) spectral occupancy — fraction of bins above the noise floor;
+// barrage jammers cover most of the band, legit bursts cover a few
+// bins, (c) spectral flatness / entropy — jammer noise is flat,
+// structured signals aren't, and (d) persistence — real jammers
+// sustain for seconds to minutes; LoRa bursts are <1 s, APRS
+// <900 ms. See docs/spectrum-detection.md / research inline comments
+// for citations. [MESHSAT-509]
 const (
-	JammingSigma      = 3.0 // power > mean + 3*sigma = jamming
-	InterferenceSigma = 6.0 // narrowband spike > mean + 6*sigma = interference
-	RecoverySigma     = 1.0 // power within mean +/- 1*sigma = clear
+	// Elevation above band baseline that triggers the DEGRADED watch.
+	// Still permissive; only promotes further with persistence.
+	DegradedDeltaDB = 6.0
 
-	JammingConsecutive  = 5  // consecutive samples to confirm jamming
-	RecoveryConsecutive = 10 // consecutive samples to confirm recovery
-	CooldownSeconds     = 30 // hysteresis cooldown after state change
+	// Spectral occupancy thresholds (fraction of FFT bins above
+	// (baseline_mean + 6 dB) in a single scan).
+	InterferenceOccupancy = 0.30 // narrowband spike or small cluster
+	JammingOccupancy      = 0.70 // barrage covers most of the band
 
-	CalibrationDuration = 30 * time.Second // baseline calibration period
-	ScanInterval        = 3 * time.Second  // spectrum scan interval
+	// Spectral flatness (geometric mean / arithmetic mean of linear
+	// power, 0..1). Barrage white-noise jammers approach 1.0; LoRa,
+	// LTE, APRS all have flatness < 0.4 typically. We require
+	// flatness >= 0.60 for a jamming verdict.
+	JammingFlatness = 0.60
+
+	// Persistence windows. A single-sample 3σ spike is just traffic.
+	// Real jammers persist for tens of seconds to minutes.
+	DegradedPersistenceSec     = 30  // moderate elevation sustained
+	InterferencePersistenceSec = 10  // narrowband spike sustained
+	JammingPersistenceSec      = 60  // broadband + flat + occupied
+
+	// Hysteresis — how long a band must be "clean" before demoting.
+	RecoveryPersistenceSec = 30
+
+	// Per-band absolute power floors (dBm-ish — RTL-SDR doesn't
+	// output calibrated dBm, so this is baseline-relative plus a
+	// band-specific offset). Below the floor, no amount of spectral
+	// activity counts as jamming — it's physically implausible.
+	// Units: absolute dB as reported by rtl_power_fftw.
+	// Calibrate empirically on a quiet site; these are conservative
+	// defaults based on residential Leiden observation.
+	PowerFloorLoRa  = -50.0 // LoRa 868 ISM
+	PowerFloorAPRS  = -60.0 // VHF 2 m
+	PowerFloorGPS   = -50.0 // L1 — normally below noise, jammer clearly above
+	PowerFloorLTE20 = -40.0 // DL carrier already ~-70 to -110; jammer >>baseline+20
+	PowerFloorLTE8  = -40.0
+
+	CalibrationDuration = 30 * time.Second
+	ScanInterval        = 3 * time.Second
 )
+
+// PowerFloorForBand returns the minimum absolute power (dB) below which
+// a band is considered clear regardless of sigma excursions. Defaults
+// to a conservative -45 dB for unknown bands.
+func PowerFloorForBand(band string) float64 {
+	switch band {
+	case "lora_868":
+		return PowerFloorLoRa
+	case "aprs_144":
+		return PowerFloorAPRS
+	case "gps_l1":
+		return PowerFloorGPS
+	case "lte_b20_dl":
+		return PowerFloorLTE20
+	case "lte_b8_dl":
+		return PowerFloorLTE8
+	default:
+		return -45.0
+	}
+}
 
 // RTL-SDR USB identifiers (Realtek RTL2832U).
 const (
