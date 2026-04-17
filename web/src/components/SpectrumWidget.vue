@@ -255,7 +255,22 @@ function shortLabel(name) {
 </script>
 
 <template>
-  <div v-if="store.enabled"
+  <!-- Disconnected card: explicit, never masquerades as calibration. -->
+  <div v-if="!store.enabled"
+       class="bg-tactical-surface rounded-lg border border-gray-700 p-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="font-display font-semibold text-sm tracking-wide text-gray-500">RF SPECTRUM</span>
+        <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-700/60 text-gray-400 inline-flex items-center gap-1">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+          disconnected
+        </span>
+      </div>
+      <span class="text-[10px] text-gray-500">no RTL-SDR dongle detected</span>
+    </div>
+  </div>
+
+  <div v-else
        :class="['bg-tactical-surface rounded-lg border p-3 cursor-pointer hover:bg-tactical-surface/80 transition-colors', borderClass]"
        role="button" tabindex="0"
        @click="go" @keyup.enter="go" @keyup.space="go">

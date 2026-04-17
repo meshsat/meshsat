@@ -42,21 +42,36 @@ type RTLPowerScanner struct {
 }
 
 // NewRTLPowerScanner creates a scanner using rtl_power_fftw, with a
-// final fallback to rtl_power if rtl_power_fftw is not installed (older
-// images from before the V4 build landed). Returns nil if neither is
-// on PATH.
+// final fallback to rtl_power if rtl_power_fftw is not installed. Returns
+// nil in two independent cases: (a) neither scanner binary is on PATH,
+// or (b) no RTL-SDR dongle is physically present. Both conditions mean
+// spectrum monitoring is genuinely unavailable — we must not fake a
+// "calibrating" state for a band we can't scan. [MESHSAT-509 — observed
+// on tesseract01 where rtl_power_fftw shipped in the image but no
+// dongle was plugged in, yet the UI showed "calibrating" forever.]
 func NewRTLPowerScanner() *RTLPowerScanner {
+	var binary string
 	if path, err := exec.LookPath("rtl_power_fftw"); err == nil {
-		return &RTLPowerScanner{binary: path}
+		binary = path
+	} else if path, err := exec.LookPath("rtl_power"); err == nil {
+		binary = path
+	} else {
+		return nil
 	}
-	if path, err := exec.LookPath("rtl_power"); err == nil {
-		return &RTLPowerScanner{binary: path}
+	if !DetectRTLSDR() {
+		return nil
 	}
-	return nil
+	return &RTLPowerScanner{binary: binary}
 }
 
+// Available re-checks the dongle at call time so an unplugged device
+// silently tips the monitor to "disabled" rather than stays stuck in
+// "calibrating". Cheap — one sysfs scan.
 func (s *RTLPowerScanner) Available() bool {
-	return s.binary != ""
+	if s == nil || s.binary == "" {
+		return false
+	}
+	return DetectRTLSDR()
 }
 
 // Scan runs a single-shot power sweep. Dispatches to the appropriate

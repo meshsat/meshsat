@@ -271,6 +271,14 @@ export const useSpectrumStore = defineStore('spectrum', () => {
       const data = await resp.json()
       if (data && typeof data.enabled === 'boolean') enabled.value = data.enabled
       if (!Array.isArray(data?.bands)) return
+      // When the backend reports enabled=false (no dongle), flush any
+      // stale band entries so the UI doesn't keep showing "calibrating"
+      // from a prior seed where the dongle WAS present. The widget's
+      // disconnected card takes over the render. [MESHSAT-509]
+      if (!enabled.value) {
+        bands.value = {}
+        return
+      }
       const next = { ...bands.value }
       for (const b of data.bands) {
         const existing = next[b.band] || { rows: [] }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -943,7 +944,18 @@ func main() {
 		log.Info().Msg("spectrum monitor started (RTL-SDR detected)")
 	} else {
 		spectrumMon = spectrum.NewSpectrumMonitor(nil, spectrum.DefaultBands)
-		log.Info().Msg("spectrum monitor disabled (rtl_power not in PATH)")
+		// Narrow the disabled-reason log — the scanner returns nil
+		// for either (a) no binary on PATH or (b) no dongle detected.
+		// Check which so the log actually helps. [MESHSAT-509]
+		if _, err := exec.LookPath("rtl_power_fftw"); err != nil {
+			if _, err := exec.LookPath("rtl_power"); err != nil {
+				log.Info().Msg("spectrum monitor disabled (no rtl_power/rtl_power_fftw binary)")
+			}
+		} else if !spectrum.DetectRTLSDR() {
+			log.Info().Msg("spectrum monitor disabled (no RTL-SDR dongle detected on USB)")
+		} else {
+			log.Info().Msg("spectrum monitor disabled (unknown reason)")
+		}
 	}
 
 	// Burst queue — satellite message batching for pass-based sends
