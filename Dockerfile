@@ -47,12 +47,14 @@ FROM alpine:3.21
 # parallax01 2026-04-17.
 #
 # Build in a virtual pkg so the toolchain doesn't bloat the runtime.
+# Serial compile (no -j) — QEMU GCC on Alpine segfaults under parallel
+# load on arm64, same pathology the jspr-helper c-builder works around.
 RUN apk add --no-cache ca-certificates wget coreutils python3 py3-pyserial libusb && \
     apk add --no-cache --virtual .sdr-build cmake make gcc g++ musl-dev libusb-dev git && \
     git clone --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git /tmp/rtl-sdr-blog && \
     cd /tmp/rtl-sdr-blog && mkdir build && cd build && \
     cmake ../ -DCMAKE_BUILD_TYPE=Release -DINSTALL_UDEV_RULES=OFF -DDETACH_KERNEL_DRIVER=ON && \
-    make -j"$(nproc)" && make install && \
+    make && make install && \
     cd / && rm -rf /tmp/rtl-sdr-blog && \
     apk del .sdr-build
 
