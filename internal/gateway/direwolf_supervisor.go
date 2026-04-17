@@ -161,10 +161,12 @@ func (s *DirewolfSupervisor) spawn(ctx context.Context) error {
 	// New process group so SIGTERM on ctx cancel reaches Direwolf cleanly
 	// rather than being swallowed by any shell wrapper.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Graceful shutdown on cancel: exec.CommandContext sends SIGKILL by
-	// default; we override with SIGTERM + delayed SIGKILL in Cancel.
+	// Graceful shutdown on cancel. Direwolf only registers a handler for
+	// SIGINT (direwolf.c:341 `signal(SIGINT, cleanup_linux)`) — SIGTERM
+	// is an immediate exit with no log flush. Send SIGINT so the
+	// shutdown path runs; WaitDelay then enforces SIGKILL if it drags.
 	cmd.Cancel = func() error {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Process.Signal(syscall.SIGINT)
 		return nil
 	}
 	cmd.WaitDelay = supervisorStopGrace

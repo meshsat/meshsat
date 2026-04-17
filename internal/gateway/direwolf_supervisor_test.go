@@ -131,7 +131,12 @@ func TestSupervisor_RestartsOnExit(t *testing.T) {
 	}
 
 	cancel()
-	time.Sleep(500 * time.Millisecond)
+	// SIGINT through /bin/sh and dash-vs-bash varies — give it 2s to
+	// propagate + let WaitDelay SIGKILL if the shell ignores the signal.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sup.Running() {
+		time.Sleep(50 * time.Millisecond)
+	}
 	if sup.Running() {
 		t.Errorf("supervisor still reports Running after cancel")
 	}

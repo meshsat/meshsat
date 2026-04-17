@@ -97,32 +97,45 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 
 // Start launches the Direwolf subprocess (when bundled), then connects to
 // its KISS server and starts the read/write workers.
+//
+// The supervisor gets a DETACHED context (not the caller's ctx). When
+// Start is invoked from handlePutGateway via ConfigureInstance, the
+// caller's ctx is the HTTP request ctx — cancelled the moment the PUT
+// response returns, which would SIGTERM Direwolf 1-2 s after spawn.
+// Gateway lifetime is controlled explicitly by Stop() instead.
+// [MESHSAT-514, diagnosed 2026-04-17]
 func (g *APRSGateway) Start(ctx context.Context) error {
-	ctx, g.cancel = context.WithCancel(ctx)
+	// Detached ctx owns the supervisor + workers. The caller's ctx is
+	// only used to time-bound the initial dial (if a request-level
+	// cancel comes in mid-dial, we abort dialing and Stop cleanly).
+	bgCtx, cancel := context.WithCancel(context.Background())
+	g.cancel = cancel
 	g.startTime = time.Now()
 
 	if g.supervisor != nil {
-		if err := g.supervisor.Start(ctx); err != nil {
+		if err := g.supervisor.Start(bgCtx); err != nil {
+			g.cancel()
 			return fmt.Errorf("aprs: direwolf supervisor: %w", err)
 		}
 	}
 
 	// Direwolf binds KISS a few hundred ms after start; in the external
-	// case the TNC is already up. Either way, retry up to 30s before
-	// giving up — reconnect() covers long-term outages once we're past
-	// the initial dial.
+	// case the TNC is already up. Honour the caller's ctx for the dial
+	// budget so a request-level cancel can abort the dial — but the
+	// supervisor keeps running on bgCtx regardless.
 	if err := g.dialWithRetry(ctx, 30*time.Second); err != nil {
 		if g.supervisor != nil {
 			g.supervisor.Stop()
 		}
+		g.cancel()
 		return fmt.Errorf("aprs: %w", err)
 	}
 	g.connected.Store(true)
 
 	g.wg.Add(3)
-	go g.readWorker(ctx)
-	go g.writeWorker(ctx)
-	go g.silenceWatchdog(ctx)
+	go g.readWorker(bgCtx)
+	go g.writeWorker(bgCtx)
+	go g.silenceWatchdog(bgCtx)
 
 	log.Info().
 		Str("kiss_addr", fmt.Sprintf("%s:%d", g.config.KISSHost, g.config.KISSPort)).
