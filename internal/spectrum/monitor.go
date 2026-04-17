@@ -217,7 +217,12 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 			return nil
 		}
 
-		scanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// 5s was too tight: rtl_power needs ~2 s startup + ~1.5 s per
+		// 2.4 MHz retune chunk + the 1 s integration window, so wider
+		// bands (GPS L1, LTE 3 MHz) were getting SIGKILLed mid-scan
+		// on the Pi 5 + USB 2.0 hub and never finishing calibration.
+		// 12 s covers the widest configured band with margin. [MESHSAT-509]
+		scanCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
 
@@ -252,7 +257,12 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			continue // not calibrated yet
 		}
 
-		scanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// 5s was too tight: rtl_power needs ~2 s startup + ~1.5 s per
+		// 2.4 MHz retune chunk + the 1 s integration window, so wider
+		// bands (GPS L1, LTE 3 MHz) were getting SIGKILLed mid-scan
+		// on the Pi 5 + USB 2.0 hub and never finishing calibration.
+		// 12 s covers the widest configured band with margin. [MESHSAT-509]
+		scanCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
 
