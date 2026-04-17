@@ -480,47 +480,81 @@ func DetectRTLSDR() bool {
 
 // Helper math functions
 
+// avgPower / maxVal / meanStd skip NaN and ±Inf so a bad scan (rtl_power
+// emits -Inf for all-zero FFT bins on the first post-tune read) doesn't
+// poison the baseline or produce a JSON-unserialisable status response.
+// Observed live: a single -Inf bin leaked through avgPower, made the
+// baseline mean -Inf, and encoding/json dropped /api/spectrum/status to
+// 0 bytes (NaN/Inf are not valid JSON per RFC 8259). [MESHSAT-509]
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 func avgPower(values []float64) float64 {
-	if len(values) == 0 {
+	var sum float64
+	var n int
+	for _, v := range values {
+		if !isFinite(v) {
+			continue
+		}
+		sum += v
+		n++
+	}
+	if n == 0 {
 		return -100
 	}
-	var sum float64
-	for _, v := range values {
-		sum += v
-	}
-	return sum / float64(len(values))
+	return sum / float64(n)
 }
 
 func maxVal(values []float64) float64 {
-	if len(values) == 0 {
-		return -100
-	}
-	m := values[0]
-	for _, v := range values[1:] {
+	m := math.Inf(-1)
+	for _, v := range values {
+		if !isFinite(v) {
+			continue
+		}
 		if v > m {
 			m = v
 		}
 	}
+	if math.IsInf(m, -1) {
+		return -100
+	}
 	return m
 }
 
-func meanStd(values []float64) (float64, float64) {
-	n := float64(len(values))
-	if n == 0 {
-		return 0, 0
-	}
+// minStdFloor prevents the sigma classifier from collapsing to
+// zero-width on LTE-style bands that are dominated by a locked
+// carrier (observed std of 0.01 dB). Without this floor, 1σ = 0.01
+// dB and any ordinary scan crosses the 3σ jamming line by 100× the
+// intended margin, producing constant false-positive alerts.
+const minStdFloor = 0.5
 
+func meanStd(values []float64) (float64, float64) {
 	var sum float64
+	var n int
 	for _, v := range values {
+		if !isFinite(v) {
+			continue
+		}
 		sum += v
+		n++
 	}
-	mean := sum / n
+	if n == 0 {
+		return 0, minStdFloor
+	}
+	mean := sum / float64(n)
 
 	var sumSq float64
 	for _, v := range values {
+		if !isFinite(v) {
+			continue
+		}
 		d := v - mean
 		sumSq += d * d
 	}
-	std := math.Sqrt(sumSq / n)
+	std := math.Sqrt(sumSq / float64(n))
+	if std < minStdFloor {
+		std = minStdFloor
+	}
 	return mean, std
 }
