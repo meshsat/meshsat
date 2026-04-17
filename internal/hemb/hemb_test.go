@@ -551,22 +551,43 @@ func TestSingleSegment(t *testing.T) {
 
 func TestGF256Consistency(t *testing.T) {
 	// Encode same segments twice with different random coefficients — both decode same.
+	// Retry on rank deficiency — three random rows in GF(2^8) can be linearly
+	// dependent by chance (~0.4% per encoding attempt), and the test takes
+	// TWO encodings so the flake rate compounds. Same pattern as
+	// TestEncodeDecodeRoundtrip's fix in commit 7d7d959 [MESHSAT-513].
 	segments := make([][]byte, 3)
 	for i := range segments {
 		segments[i] = make([]byte, 50)
 		randBytes(segments[i])
 	}
 
-	sym1, _ := EncodeGeneration(0, segments, 4, cryptoRand())
-	sym2, _ := EncodeGeneration(0, segments, 4, cryptoRand())
-
-	dec1, err := TryDecode(sym1[:3], 3)
-	if err != nil {
-		t.Fatalf("decode 1: %v", err)
+	const maxAttempts = 10
+	var dec1, dec2 [][]byte
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		sym1, err := EncodeGeneration(0, segments, 4, cryptoRand())
+		if err != nil {
+			t.Fatalf("EncodeGeneration 1: %v", err)
+		}
+		sym2, err := EncodeGeneration(0, segments, 4, cryptoRand())
+		if err != nil {
+			t.Fatalf("EncodeGeneration 2: %v", err)
+		}
+		dec1, err = TryDecode(sym1[:3], 3)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		dec2, err = TryDecode(sym2[:3], 3)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		lastErr = nil
+		break
 	}
-	dec2, err := TryDecode(sym2[:3], 3)
-	if err != nil {
-		t.Fatalf("decode 2: %v", err)
+	if lastErr != nil {
+		t.Fatalf("rank-deficient after %d attempts: %v", maxAttempts, lastErr)
 	}
 
 	for i := range dec1 {
