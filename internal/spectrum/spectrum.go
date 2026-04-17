@@ -116,6 +116,44 @@ type Baseline struct {
 	Samples int
 }
 
+// SpectrumEventKind distinguishes per-scan samples from state transitions.
+type SpectrumEventKind string
+
+const (
+	// EventScan carries the per-bin power array from one completed sweep.
+	// Consumed by the waterfall UI via SSE — high frequency, small payload.
+	EventScan SpectrumEventKind = "scan"
+	// EventTransition announces a state change (e.g. clear -> jamming).
+	// Consumed by TAK/CoT relay, hub reporter, and dashboard popup.
+	EventTransition SpectrumEventKind = "transition"
+)
+
+// SpectrumEvent is the unit of fan-out from the monitor to alert
+// consumers and the waterfall stream. Both kinds carry enough metadata
+// that a consumer does not need to re-query status separately.
+type SpectrumEvent struct {
+	Kind         SpectrumEventKind `json:"kind"`
+	Band         string            `json:"band"`
+	Label        string            `json:"label"`
+	InterfaceID  string            `json:"interface_id"`
+	FreqLow      int               `json:"freq_low"`
+	FreqHigh     int               `json:"freq_high"`
+	BinSize      int               `json:"bin_size"`
+	Timestamp    time.Time         `json:"timestamp"`
+	Powers       []float64         `json:"powers,omitempty"` // populated only for EventScan
+	AvgDB        float64           `json:"avg_db"`
+	MaxDB        float64           `json:"max_db"`
+	State        SpectrumState     `json:"state"`
+	OldState     SpectrumState     `json:"old_state,omitempty"` // populated only for EventTransition
+	BaselineMean float64           `json:"baseline_mean"`
+	BaselineStd  float64           `json:"baseline_std"`
+	// Derived thresholds included so the UI does not duplicate the
+	// sigma arithmetic and can draw the jamming/interference lines
+	// directly.
+	ThreshJammingDB      float64 `json:"thresh_jamming_db"`
+	ThreshInterferenceDB float64 `json:"thresh_interference_db"`
+}
+
 // Detection thresholds (from issue spec).
 const (
 	JammingSigma      = 3.0 // power > mean + 3*sigma = jamming

@@ -32,6 +32,14 @@ type SpectrumMonitor struct {
 	eventBus *hemb.EventBus
 	cancel   context.CancelFunc
 	enabled  bool
+
+	// subs fan-out SpectrumEvents to the SSE stream endpoint and to the
+	// main.go goroutine that relays transitions via CoT + hub reporter.
+	// Slow subscribers get dropped frames (select/default) rather than
+	// blocking the scan loop — losing a bin sample is harmless, but a
+	// wedged scan loop would stop jamming detection entirely.
+	subsMu sync.Mutex
+	subs   []chan SpectrumEvent
 }
 
 // NewSpectrumMonitor creates a new monitor. It does not start scanning
@@ -120,6 +128,46 @@ func (m *SpectrumMonitor) IsJammed(interfaceID string) bool {
 // Enabled reports whether RTL-SDR monitoring is active.
 func (m *SpectrumMonitor) Enabled() bool {
 	return m.enabled
+}
+
+// Subscribe registers a subscriber for scan + transition events. Returns a
+// read-only channel and an unsubscribe function. The channel is buffered;
+// if the consumer falls behind it silently drops frames — acceptable for
+// the waterfall (resyncs on next scan) and for transitions (those are
+// rare and also written to the audit log, so a dropped transition is
+// still recoverable via a status query).
+func (m *SpectrumMonitor) Subscribe() (<-chan SpectrumEvent, func()) {
+	ch := make(chan SpectrumEvent, 64)
+	m.subsMu.Lock()
+	m.subs = append(m.subs, ch)
+	m.subsMu.Unlock()
+
+	unsub := func() {
+		m.subsMu.Lock()
+		defer m.subsMu.Unlock()
+		for i, s := range m.subs {
+			if s == ch {
+				m.subs = append(m.subs[:i], m.subs[i+1:]...)
+				close(ch)
+				return
+			}
+		}
+	}
+	return ch, unsub
+}
+
+func (m *SpectrumMonitor) publish(evt SpectrumEvent) {
+	m.subsMu.Lock()
+	subs := make([]chan SpectrumEvent, len(m.subs))
+	copy(subs, m.subs)
+	m.subsMu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- evt:
+		default: // slow consumer — drop
+		}
+	}
 }
 
 func (m *SpectrumMonitor) run(ctx context.Context) {
@@ -231,8 +279,46 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		}
 		m.mu.Unlock()
 
+		now := time.Now()
+		m.publish(SpectrumEvent{
+			Kind:                 EventScan,
+			Band:                 band.Name,
+			Label:                band.Label,
+			InterfaceID:          band.InterfaceID,
+			FreqLow:              band.FreqLow,
+			FreqHigh:             band.FreqHigh,
+			BinSize:              band.BinSize,
+			Timestamp:            now,
+			Powers:               powers,
+			AvgDB:                avg,
+			MaxDB:                maxPower,
+			State:                newState,
+			BaselineMean:         bl.Mean,
+			BaselineStd:          bl.Std,
+			ThreshJammingDB:      bl.Mean + JammingSigma*bl.Std,
+			ThreshInterferenceDB: bl.Mean + InterferenceSigma*bl.Std,
+		})
+
 		if newState != oldState {
 			m.onTransition(band, oldState, newState, avg, maxPower)
+			m.publish(SpectrumEvent{
+				Kind:                 EventTransition,
+				Band:                 band.Name,
+				Label:                band.Label,
+				InterfaceID:          band.InterfaceID,
+				FreqLow:              band.FreqLow,
+				FreqHigh:             band.FreqHigh,
+				BinSize:              band.BinSize,
+				Timestamp:            now,
+				AvgDB:                avg,
+				MaxDB:                maxPower,
+				State:                newState,
+				OldState:             oldState,
+				BaselineMean:         bl.Mean,
+				BaselineStd:          bl.Std,
+				ThreshJammingDB:      bl.Mean + JammingSigma*bl.Std,
+				ThreshInterferenceDB: bl.Mean + InterferenceSigma*bl.Std,
+			})
 		}
 	}
 }

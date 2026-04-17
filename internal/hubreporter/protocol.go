@@ -31,6 +31,11 @@ const (
 	topicDeviceTelemetry = "meshsat/%s/telemetry"
 	topicDeviceSOS       = "meshsat/%s/sos"
 	topicDeviceMessage   = "meshsat/%s/mo/decoded"
+
+	// Spectrum alerts are per-bridge (the scan is a property of the kit's
+	// RTL-SDR, not a paired device), so the topic is scoped to the bridge
+	// ID and the band identifier is inside the payload.
+	topicBridgeSpectrum = "meshsat/bridge/%s/spectrum"
 )
 
 // CoT type constants (MIL-STD-2525 symbology).
@@ -75,6 +80,7 @@ func TopicDevicePosition(deviceID string) string  { return fmt.Sprintf(topicDevi
 func TopicDeviceTelemetry(deviceID string) string { return fmt.Sprintf(topicDeviceTelemetry, deviceID) }
 func TopicDeviceSOS(deviceID string) string       { return fmt.Sprintf(topicDeviceSOS, deviceID) }
 func TopicDeviceMessage(deviceID string) string   { return fmt.Sprintf(topicDeviceMessage, deviceID) }
+func TopicBridgeSpectrum(bridgeID string) string  { return fmt.Sprintf(topicBridgeSpectrum, bridgeID) }
 
 // --- Shared types ---
 
@@ -264,6 +270,29 @@ type DeviceSOS struct {
 	Lat       float64   `json:"lat,omitempty"`
 	Lon       float64   `json:"lon,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// SpectrumAlert is published to meshsat/bridge/{bridge_id}/spectrum when
+// the RTL-SDR jamming monitor transitions a band into or out of a non-clear
+// state. The hub uses these to correlate jamming events across bridges —
+// a coordinated jamming campaign will light up the same band on multiple
+// kits simultaneously.
+type SpectrumAlert struct {
+	BridgeID        string    `json:"bridge_id"`
+	Band            string    `json:"band"`             // e.g. "lte_b20_dl"
+	Label           string    `json:"label"`            // human-readable
+	InterfaceID     string    `json:"interface_id"`     // "mesh_0", "cellular_0", ...
+	FreqLow         int       `json:"freq_low_hz"`
+	FreqHigh        int       `json:"freq_high_hz"`
+	State           string    `json:"state"`            // "clear", "jamming", "interference"
+	OldState        string    `json:"old_state"`
+	PowerDB         float64   `json:"power_db"`         // average power in this scan
+	MaxPowerDB      float64   `json:"max_power_db"`     // peak bin
+	BaselineMeanDB  float64   `json:"baseline_mean_db"`
+	BaselineStdDB   float64   `json:"baseline_std_db"`
+	Lat             float64   `json:"lat,omitempty"`
+	Lon             float64   `json:"lon,omitempty"`
+	Timestamp       time.Time `json:"timestamp"`
 }
 
 // --- Command channel ---

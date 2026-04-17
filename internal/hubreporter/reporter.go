@@ -400,6 +400,18 @@ func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 	return r.publishOrQueue(TopicDeviceSOS(sos.DeviceID), 1, false, sos)
 }
 
+// PublishSpectrumAlert publishes an RTL-SDR jamming-detection alert to the
+// Hub. Sent on every state transition (clear <-> jamming <-> interference)
+// so the hub can aggregate and raise a cross-kit alarm when multiple
+// bridges see the same band jammed at the same time (coordinated EW).
+// QoS 1 + outbox-queued: alerts must not be lost even if the hub link is
+// down — the outbox replays them when connectivity returns, which is
+// exactly the scenario where jamming alerts matter most.
+func (r *HubReporter) PublishSpectrumAlert(alert SpectrumAlert) error {
+	alert.BridgeID = r.cfg.BridgeID
+	return r.publishOrQueue(TopicBridgeSpectrum(r.cfg.BridgeID), 1, false, alert)
+}
+
 // publishBirth collects and publishes the bridge birth certificate.
 // If signing credentials are available, the birth is signed with
 // ECDSA-P256-SHA256 using the bridge's TLS private key.

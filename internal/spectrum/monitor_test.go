@@ -221,3 +221,72 @@ func TestEvaluate_Hysteresis(t *testing.T) {
 		t.Fatalf("expected hysteresis to maintain jamming, got %s", state)
 	}
 }
+
+// TestSubscribeUnsubscribe exercises the subscriber lifecycle: subscribe
+// returns a channel + unsub fn; publish fans out to all subscribers;
+// unsubscribe removes the channel and closes it so consumers terminate
+// cleanly. The same pattern backs the /api/spectrum/stream SSE endpoint
+// and the CoT+hub alert relay goroutine.
+func TestSubscribeUnsubscribe(t *testing.T) {
+	m := NewSpectrumMonitor(newMockScanner([]float64{-60}), DefaultBands)
+
+	ch1, unsub1 := m.Subscribe()
+	ch2, unsub2 := m.Subscribe()
+
+	m.publish(SpectrumEvent{Kind: EventScan, Band: "lora_868", AvgDB: -50})
+
+	select {
+	case got := <-ch1:
+		if got.Band != "lora_868" || got.AvgDB != -50 {
+			t.Errorf("ch1: got %+v", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("ch1: timeout waiting for event")
+	}
+	select {
+	case got := <-ch2:
+		if got.Band != "lora_868" {
+			t.Errorf("ch2: got %+v", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("ch2: timeout waiting for event")
+	}
+
+	unsub1()
+	if _, open := <-ch1; open {
+		t.Error("ch1 should be closed after unsub1")
+	}
+	m.publish(SpectrumEvent{Kind: EventTransition, Band: "aprs_144"})
+	select {
+	case got := <-ch2:
+		if got.Kind != EventTransition {
+			t.Errorf("ch2 post-unsub: got %+v", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("ch2: timeout after ch1 unsubscribed")
+	}
+	unsub2()
+}
+
+// TestPublishDoesNotBlockOnSlowConsumer verifies the select/default drop
+// policy — a subscriber that never reads must not wedge the scan loop.
+// Losing bin samples is acceptable (the next scan re-publishes); wedging
+// the scan loop would take down jamming detection.
+func TestPublishDoesNotBlockOnSlowConsumer(t *testing.T) {
+	m := NewSpectrumMonitor(newMockScanner([]float64{-60}), DefaultBands)
+	_, unsub := m.Subscribe()
+	defer unsub()
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 256; i++ {
+			m.publish(SpectrumEvent{Kind: EventScan, Band: "lora_868"})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("publish wedged on slow consumer — drop policy broken")
+	}
+}

@@ -111,6 +111,12 @@ const CotEventTypeSensor = "t-x-d-d"
 // CotEventTypeAlarm is the CoT type for alarm events (dead man's switch).
 const CotEventTypeAlarm = "b-a"
 
+// CotEventTypeJamming is the CoT type for RF jamming / spectrum-denial
+// events. Uses the bits-m-point-way-jamming MIL-STD-2525 convention that
+// ATAK and the hub both understand as an EW point of interest. Operators
+// see it rendered as a red jamming icon at the emitter's location.
+const CotEventTypeJamming = "b-m-p-w-j"
+
 // CotEventTypeChat is the CoT type for GeoChat/freetext messages.
 const CotEventTypeChat = "b-t-f"
 
@@ -165,6 +171,59 @@ func BuildSOSEvent(uid, callsign string, lat, lon, alt float64, staleSec int, re
 		Text:   "Emergency: " + reason,
 	}
 	return ev
+}
+
+// BuildSpectrumJammingEvent creates a CoT event announcing that this
+// bridge's RTL-SDR has detected jamming (or interference, or recovery)
+// on a monitored band. The event carries the frequency range + observed
+// vs baseline power in Remarks so ATAK/WinTAK operators can triage the
+// source at a glance.
+//
+// A "clear" state (oldState jamming|interference -> clear) is relayed as
+// the same event type with a "RECOVERED" remark; consumers should treat
+// it as a recovery beacon rather than a new jamming event. This preserves
+// the "sticky until ack" UX on the dashboard while still letting remote
+// parties see that the band is back.
+//
+// uid is the bridge UID; the CoT UID appends "-SPECTRUM-<band>" so each
+// band has its own persistent CoT track, letting ATAK group updates.
+func BuildSpectrumJammingEvent(uid, callsign string, lat, lon float64,
+	band, label string, freqLowHz, freqHighHz int,
+	state, oldState string, powerDB, maxDB, baselineDB float64,
+	staleSec int) CotEvent {
+	now := time.Now().UTC()
+	centreMHz := float64(freqLowHz+freqHighHz) / 2e6
+	bandwidthMHz := float64(freqHighHz-freqLowHz) / 1e6
+
+	text := fmt.Sprintf(
+		"RF %s on %s (%s): centre %.3f MHz, BW %.2f MHz, power %.1f dB (peak %.1f dB, baseline %.1f dB, Δ%+.1f dB). Prev=%s.",
+		strings.ToUpper(state), label, band, centreMHz, bandwidthMHz,
+		powerDB, maxDB, baselineDB, powerDB-baselineDB, oldState,
+	)
+
+	return CotEvent{
+		Version: "2.0",
+		UID:     uid + "-SPECTRUM-" + band,
+		Type:    CotEventTypeJamming,
+		How:     "m-g", // machine-generated
+		Time:    now.Format(cotTimeFormat),
+		Start:   now.Format(cotTimeFormat),
+		Stale:   now.Add(time.Duration(staleSec) * time.Second).Format(cotTimeFormat),
+		Point: CotPoint{
+			Lat: lat,
+			Lon: lon,
+			Hae: 0,
+			Ce:  100.0,
+			Le:  100.0,
+		},
+		Detail: &CotDetail{
+			Contact: &CotContact{Callsign: callsign + "/" + band},
+			Remarks: &CotRemarks{
+				Source: "MeshSat",
+				Text:   text,
+			},
+		},
+	}
 }
 
 // BuildDeadmanEvent creates a CoT alarm event for a dead man's switch timeout.

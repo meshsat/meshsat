@@ -1358,6 +1358,97 @@ func main() {
 		}
 	}
 
+	// Spectrum jamming alert relay: subscribe to state-transition events
+	// from the RTL-SDR monitor and fan them out to (a) the TAK gateway so
+	// all connected ATAK/WinTAK parties and the TAK server see a CoT
+	// jamming track at this bridge's location, and (b) the hub reporter
+	// so the central hub can cross-correlate jamming across bridges
+	// (coordinated EW lights up the same band on multiple kits). The
+	// dashboard waterfall consumes the same events via the SSE stream on
+	// /api/spectrum/stream — it does not need a goroutine here.
+	//
+	// Scan events are not relayed (high volume, no alert value) — only
+	// transitions. [MESHSAT-509 spectrum alerts]
+	if spectrumMon != nil && spectrumMon.Enabled() {
+		spectrumEvents, unsubSpectrum := spectrumMon.Subscribe()
+		go func() {
+			defer unsubSpectrum()
+			callsign := "MESHSAT-" + hubBridgeID
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case evt, ok := <-spectrumEvents:
+					if !ok {
+						return
+					}
+					if evt.Kind != spectrum.EventTransition {
+						continue
+					}
+					// Resolve position lazily per-event so a GPS fix that
+					// arrives mid-run gets picked up without a restart.
+					var lat, lon float64
+					if gpsReader != nil {
+						if st := gpsReader.GetStatus(); st.Fix {
+							lat, lon = st.Lat, st.Lon
+						}
+					}
+					// TAK CoT: hits the TAK server (all remote parties) and
+					// also feeds the in-process TAK event bus used by the
+					// dashboard CoT viewer.
+					if takGw := gwMgr.GetTAKGateway(); takGw != nil {
+						cotEv := gateway.BuildSpectrumJammingEvent(
+							hubBridgeID, callsign, lat, lon,
+							evt.Band, evt.Label, evt.FreqLow, evt.FreqHigh,
+							string(evt.State), string(evt.OldState),
+							evt.AvgDB, evt.MaxDB, evt.BaselineMean,
+							600, // 10 min stale — covers the cooldown window
+						)
+						if err := takGw.SendCotEvent(cotEv); err != nil {
+							log.Warn().Err(err).Str("band", evt.Band).
+								Msg("spectrum-alert: TAK CoT send failed")
+						}
+						gateway.GlobalTakEventBus.Publish(
+							gateway.CotEventToRecord(&cotEv, "outbound"))
+					}
+					// Hub: QoS 1 + outbox-queued so the alert survives a
+					// link drop (which is exactly the state a jammed kit
+					// may find itself in).
+					if hubReporter != nil {
+						alert := hubreporter.SpectrumAlert{
+							Band:           evt.Band,
+							Label:          evt.Label,
+							InterfaceID:    evt.InterfaceID,
+							FreqLow:        evt.FreqLow,
+							FreqHigh:       evt.FreqHigh,
+							State:          string(evt.State),
+							OldState:       string(evt.OldState),
+							PowerDB:        evt.AvgDB,
+							MaxPowerDB:     evt.MaxDB,
+							BaselineMeanDB: evt.BaselineMean,
+							BaselineStdDB:  evt.BaselineStd,
+							Lat:            lat,
+							Lon:            lon,
+							Timestamp:      evt.Timestamp,
+						}
+						if err := hubReporter.PublishSpectrumAlert(alert); err != nil {
+							log.Warn().Err(err).Str("band", evt.Band).
+								Msg("spectrum-alert: hub publish failed")
+						}
+					}
+					log.Warn().
+						Str("band", evt.Band).
+						Str("old", string(evt.OldState)).
+						Str("new", string(evt.State)).
+						Float64("power_db", evt.AvgDB).
+						Float64("baseline_db", evt.BaselineMean).
+						Msg("spectrum-alert: relayed to TAK + hub")
+				}
+			}
+		}()
+		log.Info().Msg("spectrum-alert: CoT + hub relay active")
+	}
+
 	// HeMB receive-side reassembly — always active when bond groups exist.
 	// Decoded payloads are re-injected into the processor as regular messages.
 	{
