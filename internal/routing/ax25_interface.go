@@ -40,7 +40,15 @@ type KISSTXFunc func(payload []byte) error
 type AX25Interface struct {
 	config   AX25InterfaceConfig
 	callback func(packet []byte)
-	kissTX   KISSTXFunc // shared TX path (counts at KISS level) [MESHSAT-403]
+
+	// Either kissTX (legacy fixed pointer) or kissTXProvider (resolved
+	// per-send) supplies the shared KISS connection. The provider form
+	// survives APRSGateway recreation by ConfigureInstance — a fixed
+	// pointer captured by SetKISSTX would go stale and Send would
+	// silently fall back to the AX25Interface's own dead-after-restart
+	// conn. [MESHSAT-403, fixed 2026-04-17]
+	kissTX         KISSTXFunc
+	kissTXProvider func() KISSTXFunc
 
 	mu      sync.Mutex
 	conn    net.Conn
@@ -61,9 +69,26 @@ func NewAX25Interface(config AX25InterfaceConfig, callback func(packet []byte)) 
 	}
 }
 
-// SetKISSTX routes TX through a shared KISS connection (for unified counting). [MESHSAT-403]
+// SetKISSTX routes TX through a fixed shared KISS-send function.
+// Prefer SetKISSTXProvider when the underlying gateway can be recreated
+// (e.g. via Manager.ConfigureInstance) — a fixed pointer captured here
+// will outlive its target. [MESHSAT-403]
 func (a *AX25Interface) SetKISSTX(fn KISSTXFunc) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.kissTX = fn
+}
+
+// SetKISSTXProvider stores a function that resolves the current shared
+// KISS-send function on every Send. This pattern keeps the AX25Interface
+// loosely coupled to the APRSGateway's lifecycle: when the gateway is
+// recreated, the provider returns the new instance's KISSSendFrame and
+// no rewiring is needed. The provider may return nil (no gateway
+// running) in which case Send falls back to the interface's own conn.
+func (a *AX25Interface) SetKISSTXProvider(provider func() KISSTXFunc) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.kissTXProvider = provider
 }
 
 // Start connects to the Direwolf KISS TNC and begins reading frames.
@@ -94,11 +119,21 @@ func (a *AX25Interface) Send(ctx context.Context, packet []byte) error {
 	// Build AX.25 UI frame: dest(7) + src(7) + control(1) + PID(1) + info
 	ax25Frame := buildAX25UIFrame(a.config.DestCall, a.config.Callsign, packet)
 
-	// Route TX through shared KISS connection if available (unified counting).
-	// Otherwise fall back to own TCP connection. [MESHSAT-403]
+	// Resolve shared TX path: prefer the provider (always-current), fall
+	// back to a fixed pointer (legacy), final fallback is our own TCP
+	// conn. The provider can return nil if the APRSGateway is between
+	// recreations — that's a transient and we just write directly. [MESHSAT-403]
+	var sharedTX KISSTXFunc
+	if a.kissTXProvider != nil {
+		sharedTX = a.kissTXProvider()
+	}
+	if sharedTX == nil {
+		sharedTX = a.kissTX
+	}
+
 	var err error
-	if a.kissTX != nil {
-		err = a.kissTX(ax25Frame)
+	if sharedTX != nil {
+		err = sharedTX(ax25Frame)
 	} else {
 		kissFrame := kissEncode(ax25Frame)
 		if wdErr := a.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); wdErr != nil {

@@ -2036,7 +2036,10 @@ function widgetGridClass(id) {
           </div>
         </div>
         <div v-else class="text-[10px] text-gray-600 text-center py-3">
-          {{ store.aprsStatus?.connected ? 'Listening...' : 'KISS TCP disconnected' }}
+          <template v-if="store.aprsStatus?.connected">Listening...</template>
+          <template v-else-if="store.aprsStatus?.direwolf_bundled === true && store.aprsStatus?.direwolf_running === false">Direwolf offline</template>
+          <template v-else-if="store.aprsStatus?.direwolf_bundled !== false && store.aprsStatus?.kiss_up === false">KISS not connected</template>
+          <template v-else>APRS disconnected</template>
         </div>
 
         <!-- Recent digipeater paths -->

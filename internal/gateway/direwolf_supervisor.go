@@ -43,6 +43,15 @@ type DirewolfSupervisor struct {
 	restartCount atomic.Int64
 	lastExitCode atomic.Int32
 
+	// Radio-level counters parsed from direwolf's stdout. These reflect
+	// actual over-the-air frames regardless of which KISS client
+	// originated them — meshsat-level kiss.TX only counts frames the
+	// bridge itself injected, so a dashboard fed from kiss.TX shows 0
+	// when operators test with direct KISS injection. Source of truth
+	// for the widget is here. [MESHSAT-514, RF test 2026-04-17]
+	rxFrames atomic.Int64 // count of "[0.N] ..." decoder-hit lines
+	txFrames atomic.Int64 // count of "[0L] ..." local-TX lines
+
 	cmdMu sync.Mutex
 	cmd   *exec.Cmd
 
@@ -62,6 +71,17 @@ func (s *DirewolfSupervisor) Running() bool { return s.running.Load() }
 // RestartCount reports how many times the child has been respawned since
 // Start was called.
 func (s *DirewolfSupervisor) RestartCount() int64 { return s.restartCount.Load() }
+
+// RxFrames is the total number of over-the-air frames Direwolf decoded
+// since the supervisor started, parsed from its stdout. Counts each
+// decoder hit line — the multi-slicer normally logs the winning subchan
+// once per frame, so this tracks true RF RX count closely.
+func (s *DirewolfSupervisor) RxFrames() int64 { return s.rxFrames.Load() }
+
+// TxFrames is the total number of over-the-air frames Direwolf
+// transmitted since the supervisor started (including frames from any
+// KISS client, not just meshsat). Parsed from the `[0L] ...` log prefix.
+func (s *DirewolfSupervisor) TxFrames() int64 { return s.txFrames.Load() }
 
 // Start writes the rendered config, runs the preflight, and launches the
 // supervisor goroutine. Safe to call once per lifetime.
@@ -192,7 +212,9 @@ func (s *DirewolfSupervisor) spawn(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go pipeToLog(&wg, stdout, "direwolf")
+	// Only the stdout scanner counts frames — stderr carries init banners
+	// and error diagnostics, never `[0L]`/`[0.N]` frame traces.
+	go s.pipeAndCount(&wg, stdout, "direwolf")
 	go pipeToLog(&wg, stderr, "direwolf")
 
 	err = cmd.Wait()
@@ -209,6 +231,30 @@ func pipeToLog(wg *sync.WaitGroup, r io.Reader, src string) {
 	sc.Buffer(make([]byte, 0, 64*1024), 256*1024)
 	for sc.Scan() {
 		log.Info().Str("src", src).Msg(sc.Text())
+	}
+}
+
+// pipeAndCount streams direwolf stdout to zerolog AND increments the
+// radio-level TX/RX counters. Direwolf prints a line like
+// "[0L] SRC>DST:info" when it locally transmits a KISS frame, and
+// "[0.N] SRC>DST:info" when a decoder subchannel produces a decoded
+// frame. We key off those exact prefixes — the match is anchored at
+// byte 0 so other lines that happen to contain "[0L]" (none in
+// practice) cannot skew the counters.
+func (s *DirewolfSupervisor) pipeAndCount(wg *sync.WaitGroup, r io.Reader, src string) {
+	defer wg.Done()
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 256*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case len(line) >= 4 && line[0] == '[' && line[1] == '0' && line[2] == 'L' && line[3] == ']':
+			s.txFrames.Add(1)
+		case len(line) >= 5 && line[0] == '[' && line[1] == '0' && line[2] == '.' &&
+			line[3] >= '0' && line[3] <= '9' && line[4] == ']':
+			s.rxFrames.Add(1)
+		}
+		log.Info().Str("src", src).Msg(line)
 	}
 }
 

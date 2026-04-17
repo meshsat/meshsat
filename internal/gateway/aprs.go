@@ -68,18 +68,43 @@ func (g *APRSGateway) Tracker() *APRSTracker {
 }
 
 // GetAPRSStatus returns aggregated status for the dashboard.
+//
+// `connected` is the operator-facing health signal: for bundled-Direwolf
+// kits, both the supervisor and the KISS-TCP link must be up. For the
+// legacy external-daemon mode, only KISS-TCP is checked.
+//
+// `rx`/`tx` are over-the-air frame counts sourced from the Direwolf
+// supervisor's log parser when bundled (so direct KISS-injection tests
+// and Dispatcher-originated frames are both visible). When direwolf is
+// external, we fall back to the meshsat-level KISS counters — they miss
+// externally injected frames but are the best proxy available.
+// [MESHSAT-514]
 func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
+	kissUp := g.connected.Load()
+	connected := kissUp
+	if g.supervisor != nil {
+		connected = kissUp && g.supervisor.Running()
+	}
 	uptime := ""
-	if g.connected.Load() {
+	if connected {
 		uptime = time.Since(g.startTime).Round(time.Second).String()
 	}
+	var rx, tx int64
+	if g.supervisor != nil {
+		rx = g.supervisor.RxFrames()
+		tx = g.supervisor.TxFrames()
+	} else {
+		rx = g.kiss.RX.Load()
+		tx = g.kiss.TX.Load()
+	}
 	status := map[string]interface{}{
-		"connected":     g.connected.Load(),
+		"connected":     connected,
+		"kiss_up":       kissUp,
 		"callsign":      FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
 		"frequency_mhz": g.config.FrequencyMHz,
 		"uptime":        uptime,
-		"rx":            g.kiss.RX.Load(),
-		"tx":            g.kiss.TX.Load(),
+		"rx":            rx,
+		"tx":            tx,
 		"errors":        g.errors.Load(),
 		"heard_count":   len(g.tracker.GetHeardStations()),
 		"packet_types":  g.tracker.GetPacketTypeBreakdown(),
@@ -206,18 +231,37 @@ func (g *APRSGateway) Receive() <-chan InboundMessage {
 }
 
 // Status returns the current gateway status.
+//
+// Connected is AND of KISS-TCP and (when bundled) supervisor-running —
+// same definition as /api/aprs/status so the dashboard widget and the
+// shared gateway list agree. MessagesIn/MessagesOut are OTA frame
+// counters from the supervisor when bundled; otherwise the meshsat-
+// originated counters (best-effort fallback for external mode).
 func (g *APRSGateway) Status() GatewayStatus {
+	kissUp := g.connected.Load()
+	connected := kissUp
+	if g.supervisor != nil {
+		connected = kissUp && g.supervisor.Running()
+	}
+	var msgsIn, msgsOut int64
+	if g.supervisor != nil {
+		msgsIn = g.supervisor.RxFrames()
+		msgsOut = g.supervisor.TxFrames()
+	} else {
+		msgsIn = g.msgsIn.Load()
+		msgsOut = g.msgsOut.Load()
+	}
 	s := GatewayStatus{
 		Type:        "aprs",
-		Connected:   g.connected.Load(),
-		MessagesIn:  g.msgsIn.Load(),
-		MessagesOut: g.msgsOut.Load(),
+		Connected:   connected,
+		MessagesIn:  msgsIn,
+		MessagesOut: msgsOut,
 		Errors:      g.errors.Load(),
 	}
 	if ts := g.lastActive.Load(); ts > 0 {
 		s.LastActivity = time.Unix(ts, 0)
 	}
-	if s.Connected && !g.startTime.IsZero() {
+	if connected && !g.startTime.IsZero() {
 		s.ConnectionUptime = time.Since(g.startTime).Truncate(time.Second).String()
 	}
 	bundled := g.supervisor != nil
