@@ -430,6 +430,23 @@ func (h *e2eHarness) startTAKAndDispatcher(t *testing.T, ctx context.Context) {
 	}
 	t.Cleanup(func() { h.takGW.Stop() })
 	h.dispatch.Start(ctx)
+	// Drain dispatcher goroutines before the deferred db.Close fires.
+	// t.Cleanup runs LIFO, so this (registered here) runs BEFORE the
+	// db.Close registered in setupE2EWithTAK. Without the drain, worker
+	// goroutines race db.Close and emit "disk I/O error 5898" plus leave
+	// SQLite WAL/SHM files that break TempDir RemoveAll.
+	t.Cleanup(func() {
+		// Expect the test's ctx cancel to have already fired via defer.
+		// Wait bounds the drain at 5 s so a stuck worker fails the test
+		// loudly rather than hanging the CI runner forever.
+		done := make(chan struct{})
+		go func() { h.dispatch.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Log("dispatcher Wait() timed out after 5s — workers may still be in flight")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

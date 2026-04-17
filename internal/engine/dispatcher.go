@@ -108,7 +108,23 @@ type Dispatcher struct {
 	fragmentMgr *ReassemblyBuffer
 	custodyMgr  *CustodyManager
 
+	// wg tracks every goroutine spawned by Start / StartWorker so
+	// callers (tests, graceful shutdown) can Wait() for all workers to
+	// drain before closing the underlying database. Without this,
+	// cancel→db.Close() races the in-flight delivery write and emits
+	// "disk I/O error (5898)" from SQLite plus a non-empty TempDir at
+	// the end of test cleanup.
+	wg sync.WaitGroup
+
 	mu sync.RWMutex
+}
+
+// Wait blocks until every goroutine started by this dispatcher has
+// exited. Callers must cancel the context passed to Start first,
+// otherwise Wait blocks forever. Used by tests to drain before
+// db.Close; safe in production shutdown paths too.
+func (d *Dispatcher) Wait() {
+	d.wg.Wait()
 }
 
 // forwardOptions holds parsed forward_options JSON from access rules.
@@ -260,7 +276,9 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	d.startInterfaceWorkers(ctx)
 
 	// Prune delivery dedup cache every 2 minutes
+	d.wg.Add(1)
 	go func() {
+		defer d.wg.Done()
 		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -274,7 +292,9 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	}()
 
 	// Start ACK timeout reaper — marks timed-out pending ACKs every 60 seconds
+	d.wg.Add(1)
 	go func() {
+		defer d.wg.Done()
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -288,7 +308,9 @@ func (d *Dispatcher) Start(ctx context.Context) {
 	}()
 
 	// Start TTL reaper — expires deliveries past their TTL every 60 seconds
+	d.wg.Add(1)
 	go func() {
+		defer d.wg.Done()
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -352,7 +374,11 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			cancel:          workerCancel,
 		}
 		d.workers[iface.ID] = w
-		go w.Run(workerCtx)
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			w.Run(workerCtx)
+		}()
 		started++
 		log.Info().Str("interface", iface.ID).Str("type", iface.ChannelType).Msg("interface delivery worker started")
 	}
@@ -405,7 +431,11 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		log.Info().Str("interface", ifaceID).Int64("count", n).Msg("unheld deliveries on interface online")
 	}
 
-	go w.Run(workerCtx)
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		w.Run(workerCtx)
+	}()
 	log.Info().Str("interface", ifaceID).Str("type", channelType).Msg("delivery worker started (state change)")
 }
 
