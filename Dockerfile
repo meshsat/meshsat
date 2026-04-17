@@ -19,7 +19,7 @@ RUN apt-get update -qq && \
       apt-get install -y -qq --no-install-recommends \
         gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
         libusb-1.0-0-dev:arm64 \
-        libfftw3-dev:arm64 libtclap-dev; \
+        libfftw3-dev:arm64 libtclap-dev:arm64; \
     else \
       apt-get install -y -qq --no-install-recommends \
         libusb-1.0-0-dev libfftw3-dev libtclap-dev; \
