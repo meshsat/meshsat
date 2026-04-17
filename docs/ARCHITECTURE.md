@@ -39,7 +39,7 @@ MeshSat Bridge, MeshSat Android, and MeshSat Hub are **peers** in a communicatio
 | MQTT | TCP client | TCP client | Broker + client |
 | Webhook HTTP | Send + receive | Send only | Receive (RockBLOCK webhook) |
 | TAK/CoT | TCP/TLS to TAK server | **PLANNED**: via Hub relay | TCP/TLS to TAK server |
-| APRS (Direwolf) | KISS TCP to Direwolf | **PLANNED**: via APRSDroid or Hub | APRS-IS TCP client |
+| APRS | Bundled Direwolf, supervised in-container, loopback KISS | **PLANNED**: via APRSDroid | APRS-IS TCP client |
 | ZigBee 3.0 | USB dongle | No | No |
 | Reticulum routing | Ed25519 identity | Ed25519 identity | **PLANNED** |
 

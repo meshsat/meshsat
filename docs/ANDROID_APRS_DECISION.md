@@ -1,6 +1,7 @@
 # Android APRS Integration — Decision Document
 
 _Created: 2026-03-17_
+_Update 2026-04-17: Bridge now bundles Direwolf inside its own container image (MESHSAT-514). Option A (APRSDroid on Android) remains the recommendation — the Android situation is unchanged. The Bridge side just moves from "host daemon over KISS TCP" to "in-container subprocess over loopback KISS", keeping the pattern symmetric._
 
 ## Options Evaluated
 

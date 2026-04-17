@@ -124,11 +124,12 @@ func TestAPRSIntegration_ForwardMessage(t *testing.T) {
 
 	host, port := splitHostPort(t, tnc.addr())
 	cfg := APRSConfig{
-		KISSHost:     host,
-		KISSPort:     port,
-		Callsign:     "TEST",
-		SSID:         10,
-		FrequencyMHz: 144.800,
+		KISSHost:         host,
+		KISSPort:         port,
+		Callsign:         "TEST",
+		SSID:             10,
+		FrequencyMHz:     144.800,
+		ExternalDirewolf: true, // Tests drive mockKISSTNC directly — no supervisor.
 	}
 
 	gw := NewAPRSGateway(cfg, nil)
@@ -187,11 +188,12 @@ func TestAPRSIntegration_ReceivePosition(t *testing.T) {
 
 	host, port := splitHostPort(t, tnc.addr())
 	cfg := APRSConfig{
-		KISSHost:     host,
-		KISSPort:     port,
-		Callsign:     "TEST",
-		SSID:         10,
-		FrequencyMHz: 144.800,
+		KISSHost:         host,
+		KISSPort:         port,
+		Callsign:         "TEST",
+		SSID:             10,
+		FrequencyMHz:     144.800,
+		ExternalDirewolf: true, // Tests drive mockKISSTNC directly — no supervisor.
 	}
 
 	gw := NewAPRSGateway(cfg, nil)
@@ -237,11 +239,12 @@ func TestAPRSIntegration_ReceivePosition(t *testing.T) {
 
 func TestAPRSIntegration_ConnectionRefused(t *testing.T) {
 	cfg := APRSConfig{
-		KISSHost:     "127.0.0.1",
-		KISSPort:     19998,
-		Callsign:     "TEST",
-		SSID:         10,
-		FrequencyMHz: 144.800,
+		KISSHost:         "127.0.0.1",
+		KISSPort:         19998,
+		Callsign:         "TEST",
+		SSID:             10,
+		FrequencyMHz:     144.800,
+		ExternalDirewolf: true, // Tests drive mockKISSTNC directly — no supervisor.
 	}
 
 	gw := NewAPRSGateway(cfg, nil)

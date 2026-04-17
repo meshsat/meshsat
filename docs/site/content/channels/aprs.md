@@ -10,14 +10,20 @@ MeshSat bridges to APRS via Direwolf, a software TNC that runs on the Pi. An AIO
 ## Hardware Chain
 
 ```
-Baofeng/Quansheng Radio ←→ AIOC USB-C ←→ Raspberry Pi
-                                              ↓
-                                         Direwolf (software TNC)
-                                              ↓
-                                         KISS TCP :8001
-                                              ↓
-                                         MeshSat APRS Gateway
+Baofeng/Quansheng Radio <-> AIOC USB-C <-> Raspberry Pi
+                                              |
+                                      MeshSat container
+                                  (bundled Direwolf subprocess)
+                                              |
+                                     loopback KISS :8001
+                                              |
+                                      MeshSat APRS gateway
 ```
+
+As of MESHSAT-514 Direwolf is bundled inside the MeshSat container and
+supervised as a subprocess. The KISS port binds to `127.0.0.1` inside the
+container and is **not** published outside. No host-side `direwolf`
+package, `/etc/direwolf.conf`, systemd unit, or udev rule is needed.
 
 ## Prerequisites
 
@@ -25,29 +31,7 @@ Baofeng/Quansheng Radio ←→ AIOC USB-C ←→ Raspberry Pi
 
 The AIOC enumerates as a USB soundcard + serial port. Install the AIOC firmware from [AIOC GitHub](https://github.com/skuep/AIOC).
 
-### 2. Direwolf Installation
-
-```bash
-sudo apt install direwolf
-```
-
-Create `/etc/direwolf.conf`:
-
-```
-ADEVICE plughw:1,0   # AIOC soundcard — adjust device number
-CHANNEL 0
-MYCALL PA3XYZ-10     # Your callsign and SSID
-MODEM 1200           # Standard APRS
-KISSPORT 8001        # KISS TCP port for MeshSat
-```
-
-Start Direwolf:
-
-```bash
-direwolf -t 0 -c /etc/direwolf.conf
-```
-
-### 3. MeshSat APRS Configuration
+### 2. MeshSat APRS Configuration
 
 In the dashboard under Bridge > Interfaces, create an APRS interface:
 
@@ -55,12 +39,18 @@ In the dashboard under Bridge > Interfaces, create an APRS interface:
 {
   "callsign": "PA3XYZ",
   "ssid": 10,
-  "kiss_host": "localhost",
-  "kiss_port": 8001,
+  "audio_card": "AllInOneCable",
+  "ptt_device": "/dev/ttyACM1",
+  "ptt_line": "RTS",
+  "modem_baud": 1200,
   "frequency_mhz": 144.800,
   "aprs_is_enabled": false
 }
 ```
+
+MeshSat renders Direwolf's config from these fields on every APRS gateway
+start. To opt back into the legacy external daemon path, set
+`"external_direwolf": true` and run your own Direwolf on the host.
 
 ## EU APRS Frequency
 

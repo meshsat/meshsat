@@ -23,7 +23,7 @@ optimizes transmission timing in obstructed environments*
 ## Features
 
 ### Transports
-- **10 transports:** Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704, 100 KB messages), Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, APRS (Direwolf KISS), TAK (CoT XML), direct serial
+- **10 transports:** Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704, 100 KB messages), Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, APRS (bundled Direwolf supervised in-container, KISS on loopback), TAK (CoT XML), direct serial
 - **Multi-instance gateways:** multiple modems of the same type on one bridge (e.g. 2x cellular), each with independent config and delivery workers
 - **SBD/IMT decoupled:** separate SBDGateway and IMTGateway types with independent signal recording, pass scheduling, and delivery tracking
 - **Full Meshtastic protocol** (~80%+ coverage) using official `buf.build/gen/go/meshtastic/protobufs` generated Go types

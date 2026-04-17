@@ -112,6 +112,50 @@ RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
     fi && \
     make -j"$(nproc)" && make install
 
+# Build Direwolf 1.8.x bundled inside the image. Previously ran as a host-side
+# systemd unit with udev auto-start; bundling moves APRS TNC lifecycle under
+# MeshSat's own supervisor so the field-kit provisioning loses four manual
+# steps. ALSA is the only mandatory dependency (HIDAPI/GPSD/hamlib/libgpiod
+# are all optional in Direwolf's CMake and unused by our AIOC+RTS-PTT path).
+# [MESHSAT-515]
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS direwolf-builder
+ARG TARGETARCH
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+      gcc g++ libc6-dev git cmake make pkg-config ca-certificates && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      dpkg --add-architecture arm64 && apt-get update -qq && \
+      apt-get install -y -qq --no-install-recommends \
+        gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+        libasound2-dev:arm64; \
+    else \
+      apt-get install -y -qq --no-install-recommends libasound2-dev; \
+    fi && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pin to 1.8 branch. We track upstream but don't chase dev builds — field
+# kits need the stable KISS/AFSK path, not experimental IL2P changes.
+RUN git clone --depth=1 --branch=1.8 https://github.com/wb2osz/direwolf /src/direwolf
+
+RUN mkdir /src/direwolf/build && cd /src/direwolf/build && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
+      export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
+      cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+        -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+        -DFORCE_SSE=OFF; \
+    else \
+      cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local; \
+    fi && \
+    make -j"$(nproc)" && make install DESTDIR=/out
+
 FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
 ARG TARGETARCH
@@ -135,12 +179,19 @@ FROM debian:bookworm-slim
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       ca-certificates wget coreutils python3 python3-serial \
-      libusb-1.0-0 libfftw3-single3 && \
+      libusb-1.0-0 libfftw3-single3 \
+      libasound2 alsa-utils usbutils procps && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder   /meshsat                    /usr/local/bin/meshsat
 COPY --from=c-builder /jspr-helper                /usr/local/bin/jspr-helper
 COPY --chmod=755      cmd/jspr-helper/jspr_helper.py /usr/local/bin/jspr_helper.py
+
+# Bundled Direwolf + preflight. The script is PreStart'd by the Go supervisor
+# in internal/gateway/direwolf_supervisor.go, not by systemd. [MESHSAT-514]
+COPY --from=direwolf-builder /out/usr/local/bin/direwolf      /usr/local/bin/direwolf
+COPY --from=direwolf-builder /out/usr/local/share/direwolf    /usr/local/share/direwolf
+COPY --chmod=755 scripts/direwolf-preflight.sh                /usr/local/bin/direwolf-preflight.sh
 
 # Bring in the Blog V4-capable rtl_power + librtlsdr. DESTDIR=/out from
 # the c-builder stage gives us /out/usr/local/bin/rtl_* and

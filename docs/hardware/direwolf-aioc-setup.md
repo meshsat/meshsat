@@ -1,158 +1,81 @@
-# Direwolf + AIOC Setup for MeshSat APRS
+# AIOC Setup for MeshSat APRS
 
-## Hardware Chain
+As of **MESHSAT-514** the Bridge image bundles Direwolf and supervises it as
+a subprocess. Field-kit setup on the host is now just the AIOC firmware flash.
+
+## Hardware chain
 
 ```
 Baofeng UV-5R / Quansheng UV-K5
-         │
-    K1/K2 audio jack
-         │
-    AIOC (All-In-One Cable)
-         │
-    USB-C to Raspberry Pi
-         │
-    Direwolf (software TNC)
-         │
-    KISS TCP :8001
-         │
-    MeshSat APRS Gateway
+        |
+   K1/K2 audio jack
+        |
+   AIOC (All-In-One Cable)
+        |
+   USB-C to Raspberry Pi
+        |
+   MeshSat container (bundled Direwolf -> loopback KISS -> APRS gateway)
 ```
 
-## 1. AIOC Firmware
+## 1. AIOC firmware (only host-side step)
 
-The AIOC (All-In-One Cable) enumerates as a USB soundcard + virtual serial port.
+The AIOC enumerates as a USB soundcard + virtual serial port.
 
-1. Download firmware from https://github.com/skuep/AIOC/releases
-2. Flash with STM32 DFU: hold button → plug USB → `dfu-util -D aioc-firmware.bin`
-3. After flashing, unplug and replug. Device should appear as:
-   - ALSA soundcard: `hw:X,0` (check with `arecord -l`)
-   - Serial port: `/dev/ttyACMX` (for PTT control)
+1. Download firmware: https://github.com/skuep/AIOC/releases
+2. Flash via STM32 DFU: hold button, plug USB, `dfu-util -D aioc-firmware.bin`
+3. Unplug/replug. Verify on the host:
+   - `arecord -l` lists a card with `AllInOneCable` in the name
+   - `ls /dev/ttyACM*` shows the PTT serial port
 
-## 2. Direwolf Installation
+No `apt install direwolf`, no `/etc/direwolf.conf`, no systemd unit, no
+udev rule. MeshSat renders Direwolf's config from its own `APRSConfig` on
+every start and writes it to a tmpfs inside the container.
 
-```bash
-# Debian/Ubuntu/Raspberry Pi OS
-sudo apt update && sudo apt install -y direwolf
+## 2. Configure the APRS gateway
 
-# Verify
-direwolf --version
-```
+Dashboard: Bridge > Interfaces > APRS. Required fields:
 
-## 3. Direwolf Configuration
+| Field | Typical value |
+|-------|---------------|
+| Callsign | your licensed callsign |
+| SSID | 10 (convention for IGate) |
+| Audio card | `AllInOneCable` (default) |
+| PTT device | `/dev/ttyACM1` (default) |
+| PTT line | `RTS` (default) |
+| Modem baud | `1200` (AFSK) |
+| Frequency | 144.800 MHz (EU) / 144.390 MHz (US) |
 
-Create `/etc/direwolf.conf`:
+Env-var equivalents: `MESHSAT_APRS_CALLSIGN`, `MESHSAT_APRS_SSID`,
+`MESHSAT_APRS_AUDIO_CARD`, `MESHSAT_APRS_PTT_DEVICE`,
+`MESHSAT_APRS_PTT_LINE`, `MESHSAT_APRS_MODEM_BAUD`.
 
-```conf
-# AIOC audio device — adjust number to match your AIOC
-# Find with: arecord -l | grep AIOC
-ADEVICE plughw:1,0
+## 3. Verify
 
-# PTT via AIOC serial port — adjust device path
-PTT /dev/ttyACM1 RTS
+| Check | Expected |
+|-------|----------|
+| `curl http://<kit>:6050/api/status \| jq .gateways.aprs` | `connected: true`, `direwolf_bundled: true`, `direwolf_running: true` |
+| `docker exec meshsat pgrep -a direwolf` | one running process |
+| Tune UV-K5 to APRS frequency, key a nearby station | inbound frame appears in MeshSat logs within a few seconds |
 
-# Channel 0 configuration
-CHANNEL 0
-MYCALL PA3XYZ-10        # Your callsign, SSID 10 = IGate
-MODEM 1200              # Standard APRS (1200 baud AFSK)
+## External-Direwolf mode (legacy)
 
-# KISS TCP interface for MeshSat
-KISSPORT 8001
-
-# Optional: APRS digipeater (uncomment to enable)
-# DIGIPEAT 0 0 ^WIDE[3-7]-[1-7]$|^TEST$ ^WIDE[12]-[12]$ TRACE
-```
-
-**Important:**
-- `MYCALL` must be your actual amateur radio callsign
-- SSID 10 is conventional for IGates
-- `plughw:1,0` — the `1` may vary; find your AIOC with `arecord -l`
-
-## 4. Start Direwolf
-
-```bash
-# Foreground (for testing)
-direwolf -t 0 -c /etc/direwolf.conf
-
-# As a systemd service
-sudo tee /etc/systemd/system/direwolf.service << 'EOF'
-[Unit]
-Description=Direwolf TNC
-After=sound.target
-
-[Service]
-ExecStart=/usr/bin/direwolf -t 0 -c /etc/direwolf.conf
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl enable --now direwolf
-```
-
-## 5. Configure MeshSat APRS Gateway
-
-In the MeshSat web dashboard (Bridge > Interfaces), create an APRS interface:
-
-```json
-{
-  "callsign": "PA3XYZ",
-  "ssid": 10,
-  "kiss_host": "localhost",
-  "kiss_port": 8001,
-  "frequency_mhz": 144.800,
-  "aprs_is_enabled": false
-}
-```
-
-Or set environment variables:
-
-```bash
-# In docker-compose.yml or .env
-MESHSAT_APRS_CALLSIGN=PA3XYZ
-MESHSAT_APRS_SSID=10
-MESHSAT_APRS_KISS_HOST=localhost
-MESHSAT_APRS_KISS_PORT=8001
-```
-
-## 6. Verify
-
-1. Direwolf should show `Ready to prior frames on prior 0` in its log
-2. MeshSat dashboard should show APRS interface as "online"
-3. Any local APRS station transmitting on 144.800 MHz should appear as an inbound message in MeshSat
-
-## Dual AIOC Setup
-
-MeshSat supports two AIOC devices simultaneously (e.g., one for APRS, one for a different frequency):
-
-1. Each AIOC gets its own Direwolf instance on a different KISS port
-2. Configure two APRS interfaces in MeshSat with different `kiss_port` values
-3. Each interface has its own callsign + SSID
-
-```bash
-# Direwolf instance 1: APRS on 144.800
-direwolf -t 0 -c /etc/direwolf-aprs.conf     # KISSPORT 8001
-
-# Direwolf instance 2: alternate frequency
-direwolf -t 0 -c /etc/direwolf-alt.conf       # KISSPORT 8002
-```
+If for any reason you need the old host-side path (debugging, non-AIOC audio),
+set `APRSConfig.ExternalDirewolf = true` (or `MESHSAT_APRS_EXTERNAL_DIREWOLF=1`).
+MeshSat skips the supervisor and connects to whatever KISS server is
+listening on `KISSHost:KISSPort`. You are then responsible for running
+Direwolf yourself.
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| No audio device | Check `arecord -l` for AIOC. May need `pulseaudio --kill` first |
-| PTT not keying | Verify `/dev/ttyACMX` path matches AIOC serial port |
-| No packets decoded | Verify frequency matches local APRS (EU: 144.800, US: 144.390) |
-| KISS connection refused | Direwolf may not be running, or `KISSPORT` not set in config |
-| MeshSat APRS "offline" | Check `ss -tlnp | grep 8001` to verify Direwolf is listening |
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `direwolf_running: false`, `connected: false` | AIOC unplugged or wrong ALSA card | `arecord -l`; set correct `AudioCard` |
+| `direwolf_running: true`, `connected: false` | AIOC serial PTT device wrong | check `ls /dev/ttyACM*`; set `PTTDevice` |
+| Container log spammed with `direwolf-preflight: AIOC not found` | USB cable / power / firmware | re-seat AIOC, reflash firmware |
+| No packets RX | wrong frequency / antenna / squelch | verify radio tuning and volume |
 
-## EU vs US Frequencies
+## Dual-AIOC (two radios)
 
-| Region | APRS Frequency |
-|--------|---------------|
-| Europe | 144.800 MHz |
-| North America | 144.390 MHz |
-| Australia | 145.175 MHz |
-| Japan | 144.660 MHz |
+Not yet supported with bundled Direwolf (single TNC per container). Open
+an issue against MESHSAT if this matters — the fix is one Direwolf instance
+per AIOC with distinct `KISSPORT`s and two `APRSGateway` instances.

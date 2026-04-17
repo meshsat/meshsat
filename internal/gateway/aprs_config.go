@@ -15,16 +15,31 @@ type APRSConfig struct {
 	APRSISServer string  `json:"aprs_is_server"`
 	APRSISPass   string  `json:"aprs_is_passcode"`
 	FrequencyMHz float64 `json:"frequency_mhz"`
+
+	// Bundled-Direwolf supervisor settings. [MESHSAT-516/517]
+	// When ExternalDirewolf is true, MeshSat connects to a KISS server on
+	// KISSHost:KISSPort managed outside the container (legacy host-side
+	// systemd path). Default (false) starts direwolf inside the container
+	// with the settings below.
+	ExternalDirewolf bool   `json:"external_direwolf"`
+	AudioCard        string `json:"audio_card"` // ALSA card name, e.g. "AllInOneCable"
+	PTTDevice        string `json:"ptt_device"` // e.g. "/dev/ttyACM1"
+	PTTLine          string `json:"ptt_line"`   // "RTS" or "DTR"
+	ModemBaud        int    `json:"modem_baud"` // 1200 (AFSK) or 9600 (G3RUH)
 }
 
-// DefaultAPRSConfig returns sensible defaults for EU APRS.
+// DefaultAPRSConfig returns sensible defaults for EU APRS on an AIOC kit.
 func DefaultAPRSConfig() APRSConfig {
 	return APRSConfig{
-		KISSHost:     "localhost",
+		KISSHost:     "127.0.0.1",
 		KISSPort:     8001,
 		SSID:         10, // -10 is conventional for igate
 		APRSISServer: "euro.aprs2.net:14580",
 		FrequencyMHz: 144.800, // EU APRS frequency
+		AudioCard:    "AllInOneCable",
+		PTTDevice:    "/dev/ttyACM1",
+		PTTLine:      "RTS",
+		ModemBaud:    1200,
 	}
 }
 
@@ -46,10 +61,24 @@ func (c *APRSConfig) Validate() error {
 		return fmt.Errorf("ssid must be 0-15")
 	}
 	if c.KISSHost == "" {
-		c.KISSHost = "localhost"
+		c.KISSHost = "127.0.0.1"
 	}
 	if c.KISSPort <= 0 || c.KISSPort > 65535 {
 		c.KISSPort = 8001
+	}
+	if !c.ExternalDirewolf {
+		if c.AudioCard == "" {
+			c.AudioCard = "AllInOneCable"
+		}
+		if c.PTTDevice == "" {
+			c.PTTDevice = "/dev/ttyACM1"
+		}
+		if c.PTTLine == "" {
+			c.PTTLine = "RTS"
+		}
+		if c.ModemBaud == 0 {
+			c.ModemBaud = 1200
+		}
 	}
 	if c.APRSISEnable {
 		if c.APRSISServer == "" {

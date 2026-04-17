@@ -21,6 +21,10 @@ type APRSGateway struct {
 	inCh   chan InboundMessage
 	outCh  chan *transport.MeshMessage
 
+	// Nil when APRSConfig.ExternalDirewolf is true — caller is responsible
+	// for running Direwolf out-of-band. [MESHSAT-516]
+	supervisor *DirewolfSupervisor
+
 	connected  atomic.Bool
 	msgsIn     atomic.Int64
 	msgsOut    atomic.Int64
@@ -37,7 +41,7 @@ type APRSGateway struct {
 // NewAPRSGateway creates a new APRS gateway.
 func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 	addr := fmt.Sprintf("%s:%d", cfg.KISSHost, cfg.KISSPort)
-	return &APRSGateway{
+	g := &APRSGateway{
 		config:  cfg,
 		db:      db,
 		kiss:    NewKISSConn(addr),
@@ -45,6 +49,10 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 		outCh:   make(chan *transport.MeshMessage, 10),
 		tracker: NewAPRSTracker(),
 	}
+	if !cfg.ExternalDirewolf {
+		g.supervisor = NewDirewolfSupervisor(cfg)
+	}
+	return g
 }
 
 // KISSSendFrame sends a raw AX.25 frame via the APRS gateway's KISS connection.
@@ -65,7 +73,7 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 	if g.connected.Load() {
 		uptime = time.Since(g.startTime).Round(time.Second).String()
 	}
-	return map[string]interface{}{
+	status := map[string]interface{}{
 		"connected":     g.connected.Load(),
 		"callsign":      FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
 		"frequency_mhz": g.config.FrequencyMHz,
@@ -77,14 +85,36 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"packet_types":  g.tracker.GetPacketTypeBreakdown(),
 		"kiss_addr":     fmt.Sprintf("%s:%d", g.config.KISSHost, g.config.KISSPort),
 	}
+	if g.supervisor != nil {
+		status["direwolf_bundled"] = true
+		status["direwolf_running"] = g.supervisor.Running()
+		status["direwolf_restarts"] = g.supervisor.RestartCount()
+	} else {
+		status["direwolf_bundled"] = false
+	}
+	return status
 }
 
-// Start connects to Direwolf and begins read/write workers.
+// Start launches the Direwolf subprocess (when bundled), then connects to
+// its KISS server and starts the read/write workers.
 func (g *APRSGateway) Start(ctx context.Context) error {
 	ctx, g.cancel = context.WithCancel(ctx)
 	g.startTime = time.Now()
 
-	if err := g.kiss.Dial(); err != nil {
+	if g.supervisor != nil {
+		if err := g.supervisor.Start(ctx); err != nil {
+			return fmt.Errorf("aprs: direwolf supervisor: %w", err)
+		}
+	}
+
+	// Direwolf binds KISS a few hundred ms after start; in the external
+	// case the TNC is already up. Either way, retry up to 30s before
+	// giving up — reconnect() covers long-term outages once we're past
+	// the initial dial.
+	if err := g.dialWithRetry(ctx, 30*time.Second); err != nil {
+		if g.supervisor != nil {
+			g.supervisor.Stop()
+		}
 		return fmt.Errorf("aprs: %w", err)
 	}
 	g.connected.Store(true)
@@ -110,8 +140,35 @@ func (g *APRSGateway) Stop() error {
 	g.kiss.Close()
 	g.wg.Wait()
 	g.connected.Store(false)
+	if g.supervisor != nil {
+		g.supervisor.Stop()
+	}
 	log.Info().Msg("aprs gateway stopped")
 	return nil
+}
+
+// dialWithRetry attempts to connect to the KISS server, retrying every 1s
+// until budget is exhausted. Used only during Start — long-lived outages
+// are handled by reconnect().
+func (g *APRSGateway) dialWithRetry(ctx context.Context, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := g.kiss.Dial(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
+	}
+	return fmt.Errorf("kiss dial timed out after %s: %w", budget, lastErr)
 }
 
 // Forward enqueues a MeshSat message for APRS transmission.
