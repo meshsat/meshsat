@@ -89,7 +89,12 @@ RUN mkdir /src/rtl/build && cd /src/rtl/build && \
 # sees V4-aware init code when it links against librtlsdr.
 RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
     # PKG_CONFIG_PATH must include /out/usr/local/lib/pkgconfig so
-    # rpfftw's cmake finds the librtlsdr.pc we just installed there.
+    # rpfftw's cmake finds librtlsdr.pc. The .pc's prefix= says
+    # /usr/local (from the librtlsdr cmake install default), but the
+    # files are actually at /out/usr/local — so we pass explicit
+    # include + lib paths as CXX/LD flags, which win over the .pc's
+    # stale prefix hint.
+    FLAGS="-I/out/usr/local/include -L/out/usr/local/lib" && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       export PKG_CONFIG_PATH=/out/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig && \
       export PKG_CONFIG_LIBDIR=/out/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
@@ -99,12 +104,15 @@ RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-        -DCMAKE_PREFIX_PATH=/out/usr/local \
-        -DCMAKE_INCLUDE_PATH=/out/usr/local/include \
-        -DCMAKE_LIBRARY_PATH=/out/usr/local/lib; \
+        -DCMAKE_C_FLAGS="$FLAGS" \
+        -DCMAKE_CXX_FLAGS="$FLAGS" \
+        -DCMAKE_EXE_LINKER_FLAGS="$FLAGS"; \
     else \
       export PKG_CONFIG_PATH=/out/usr/local/lib/pkgconfig && \
-      cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/out/usr/local; \
+      cmake .. -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS="$FLAGS" \
+        -DCMAKE_CXX_FLAGS="$FLAGS" \
+        -DCMAKE_EXE_LINKER_FLAGS="$FLAGS"; \
     fi && \
     make -j"$(nproc)" && make install DESTDIR=/out
 
