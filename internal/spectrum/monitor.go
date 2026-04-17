@@ -217,12 +217,13 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 			return nil
 		}
 
-		// 5s was too tight: rtl_power needs ~2 s startup + ~1.5 s per
-		// 2.4 MHz retune chunk + the 1 s integration window, so wider
-		// bands (GPS L1, LTE 3 MHz) were getting SIGKILLed mid-scan
-		// on the Pi 5 + USB 2.0 hub and never finishing calibration.
-		// 12 s covers the widest configured band with margin. [MESHSAT-509]
-		scanCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		// rtl_power timeout. The rtl-sdr-blog fork (required for the
+		// RTL-SDR Blog V4's R828D tuner) adds noticeable cold-start
+		// overhead — dongle auto-detection + tuner init can run past
+		// 12 s on the Pi 5 + USB 2.0 hub. 30 s is generous but caps
+		// runaway scans. Scan time is still dominated by the 1 s
+		// integration window in practice. [MESHSAT-509]
+		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
 
@@ -284,12 +285,13 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			continue // not calibrated yet
 		}
 
-		// 5s was too tight: rtl_power needs ~2 s startup + ~1.5 s per
-		// 2.4 MHz retune chunk + the 1 s integration window, so wider
-		// bands (GPS L1, LTE 3 MHz) were getting SIGKILLed mid-scan
-		// on the Pi 5 + USB 2.0 hub and never finishing calibration.
-		// 12 s covers the widest configured band with margin. [MESHSAT-509]
-		scanCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		// rtl_power timeout. The rtl-sdr-blog fork (required for the
+		// RTL-SDR Blog V4's R828D tuner) adds noticeable cold-start
+		// overhead — dongle auto-detection + tuner init can run past
+		// 12 s on the Pi 5 + USB 2.0 hub. 30 s is generous but caps
+		// runaway scans. Scan time is still dominated by the 1 s
+		// integration window in practice. [MESHSAT-509]
+		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
 
