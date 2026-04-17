@@ -1,0 +1,47 @@
+Subject: rtl_power: reset USB endpoint before each sync read
+
+Without this patch, rtl_power from both upstream librtlsdr and the
+rtlsdrblog fork hangs indefinitely in libusb_bulk_transfer (do_poll
+syscall, forever because BULK_TIMEOUT is 0) on the RTL-SDR Blog V4.
+
+Root cause: librtlsdr's documented sync-read contract is that
+rtlsdr_reset_buffer() MUST be called before each read session to prime
+the USB bulk endpoint (writes 0x1002 then 0x0000 to USB_EPA_CTL). The
+authoritative rtl_test.c does this and comments the call as
+"mandatory". rtl_power omits the call inside retune() and also omits
+re-priming after rtlsdr_set_sample_rate() — which itself dirties the
+endpoint state. Older dongles (R820T / R820T2) tolerate the missing
+reset because their bulk endpoint auto-primes on first transfer; the
+V4's R828D does not, so the first sync read waits for URB completion
+that never arrives.
+
+rtl_test -s 2400000 confirms async streaming works fine on the same
+dongle — proving USB + kernel + libusb are healthy. The hang is
+specific to rtl_power's sync-read init sequence.
+
+Two lines added:
+  1. verbose_reset_buffer(dev) after rtlsdr_set_sample_rate() in main()
+  2. rtlsdr_reset_buffer(d) inside retune() before the dump read
+
+Report from parallax01 meshsat deploy 2026-04-17 — RTL-SDR Blog V4
+detected, rtl_power consistently hung at all frequencies. Post-patch:
+returns CSV output in ~2 s as expected. [MESHSAT-509]
+
+--- a/src/rtl_power.c
++++ b/src/rtl_power.c
+@@ -543,6 +543,7 @@ void retune(rtlsdr_dev_t *d, int freq)
+ 	rtlsdr_set_center_freq(d, (uint32_t)freq);
+ 	/* wait for settling and flush buffer */
+ 	usleep(5000);
++	rtlsdr_reset_buffer(d);
+ 	rtlsdr_read_sync(d, &dump, BUFFER_DUMP, &n_read);
+ 	if (n_read != BUFFER_DUMP) {
+ 		fprintf(stderr, "Error: bad retune.\n");}
+@@ -962,6 +963,7 @@ int main(int argc, char **argv)
+
+ 	/* actually do stuff */
+ 	rtlsdr_set_sample_rate(dev, (uint32_t)tunes[0].rate);
++	verbose_reset_buffer(dev);
+ 	sine_table(tunes[0].bin_e);
+ 	next_tick = time(NULL) + interval;
+ 	if (exit_time) {

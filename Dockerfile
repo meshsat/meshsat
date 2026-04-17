@@ -13,7 +13,7 @@ FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS c-builder
 ARG TARGETARCH
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
-      gcc libc6-dev git cmake make pkg-config ca-certificates && \
+      gcc libc6-dev git cmake make pkg-config ca-certificates patch && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       dpkg --add-architecture arm64 && apt-get update -qq && \
       apt-get install -y -qq --no-install-recommends \
@@ -38,6 +38,15 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 # (https://github.com/rtlsdrblog/rtl-sdr-blog) carries the V4 tuning
 # patches. [MESHSAT-509 — parallax01 RTL-SDR Blog V4 detected 2026-04-17]
 RUN git clone --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git /src/rtl
+# Patch rtl_power to call rtlsdr_reset_buffer before each sync read.
+# Without this, rtl_power hangs forever on the Blog V4's R828D tuner
+# because librtlsdr's BULK_TIMEOUT is 0 and the un-primed bulk endpoint
+# never delivers data. rtl_test (async) has always done this correctly
+# — rtl_power doesn't. [MESHSAT-509]
+COPY docker-patches/rtl_power-v4-reset-buffer.patch /tmp/rtl_power-v4.patch
+RUN cd /src/rtl && patch -p1 < /tmp/rtl_power-v4.patch && \
+    grep -c rtlsdr_reset_buffer src/rtl_power.c | \
+    awk '$1 >= 2 {exit 0} {print "patch did not apply both hunks"; exit 1}'
 RUN mkdir /src/rtl/build && cd /src/rtl/build && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       # Point pkg-config at the arm64 multiarch dir so CMakeLists.txt's
