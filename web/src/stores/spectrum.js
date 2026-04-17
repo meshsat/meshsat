@@ -232,8 +232,57 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     })
   }
 
+  // Seed the band list + current state from /api/spectrum/status so
+  // the UI shows the 5 configured bands (in whatever state they are
+  // in — typically "calibrating" right after a deploy restart) BEFORE
+  // the SSE stream starts emitting scan events. Without this, the
+  // waterfall sits on "No spectrum data" for the 2.5-min calibration
+  // window after every container restart, which looks broken.
+  async function seedFromStatus() {
+    try {
+      const resp = await fetch('/api/spectrum/status', { credentials: 'same-origin' })
+      if (!resp.ok) {
+        if (resp.status === 503) enabled.value = false
+        return
+      }
+      const data = await resp.json()
+      if (data && typeof data.enabled === 'boolean') enabled.value = data.enabled
+      if (!Array.isArray(data?.bands)) return
+      const next = { ...bands.value }
+      for (const b of data.bands) {
+        const existing = next[b.band] || { rows: [] }
+        next[b.band] = {
+          meta: existing.meta || {
+            band: b.band,
+            label: b.label,
+            interfaceID: b.interface_id,
+            freqLow: b.freq_low,
+            freqHigh: b.freq_high,
+            binSize: 0, // filled in by first scan event
+          },
+          rows: existing.rows || [],
+          state: b.state || 'calibrating',
+          baselineMean: b.baseline_mean || 0,
+          baselineStd: b.baseline_std || 0,
+          threshJamming: b.baseline_mean && b.baseline_std
+            ? b.baseline_mean + 3 * b.baseline_std
+            : 0,
+          threshInterference: b.baseline_mean && b.baseline_std
+            ? b.baseline_mean + 6 * b.baseline_std
+            : 0,
+        }
+      }
+      bands.value = next
+    } catch {
+      // network error — SSE reconnect loop will try again via schedule
+    }
+  }
+
   function connect() {
     if (es) return
+    // Fire-and-forget the status seed alongside opening the SSE — both
+    // are cheap and the fetch call resolves in <100ms on a local kit.
+    seedFromStatus()
     try {
       es = new EventSource('/api/spectrum/stream')
     } catch (e) {

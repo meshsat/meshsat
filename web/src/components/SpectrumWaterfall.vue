@@ -196,7 +196,12 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div v-if="orderedBands.length === 0" class="empty">
-      No spectrum data. Check that an RTL-SDR dongle is plugged in and that rtl_power is installed in the container.
+      <template v-if="!store.enabled">
+        RTL-SDR not detected in the container. Plug in the dongle + ensure rtl_power is installed.
+      </template>
+      <template v-else>
+        Loading spectrum status… {{ store.connected ? '(calibration may take ~2.5 min after restart)' : '' }}
+      </template>
     </div>
   </div>
 </template>
