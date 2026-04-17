@@ -11,66 +11,151 @@ import (
 
 // Scanner abstracts RTL-SDR spectrum scanning for testability.
 type Scanner interface {
-	// Scan performs a single-shot power sweep and returns average power in dB.
+	// Scan performs a single-shot power sweep and returns power-per-bin in dB.
 	Scan(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error)
 	// Available reports whether the scanning backend is ready.
 	Available() bool
 }
 
-// RTLPowerScanner runs rtl_power as a subprocess (no CGO).
+// RTLPowerScanner runs rtl_power_fftw as a subprocess (no CGO).
+//
+// We explicitly do NOT use upstream rtl_power — its single-URB sync-read
+// code path (`rtlsdr_read_sync` with BULK_TIMEOUT=0) hangs forever on the
+// RTL-SDR Blog V4 regardless of reset_buffer priming. rtl_power_fftw
+// uses multi-buffer async reads in a separate thread, which keeps the
+// V4's bulk endpoint streaming — confirmed on parallax 2026-04-17
+// (rtl_power hangs indefinitely, rtl_power_fftw returns in < 2 s).
+//
+// Output format we parse:
+//
+//	# Acquisition start: 2026-04-17 10:30:00 UTC
+//	# Acquisition end: 2026-04-17 10:30:01 UTC
+//	#
+//	# frequency [Hz] power spectral density [dB/Hz]
+//	868000000 -68.5
+//	868025000 -69.1
+//	...
+//
+// Non-comment lines are "<freq_hz> <power_dB>" pairs.
 type RTLPowerScanner struct {
-	binary string // path to rtl_power binary
+	binary string // path to rtl_power_fftw
 }
 
-// NewRTLPowerScanner creates a scanner using rtl_power.
-// Returns nil if rtl_power is not found in PATH.
+// NewRTLPowerScanner creates a scanner using rtl_power_fftw, with a
+// final fallback to rtl_power if rtl_power_fftw is not installed (older
+// images from before the V4 build landed). Returns nil if neither is
+// on PATH.
 func NewRTLPowerScanner() *RTLPowerScanner {
-	path, err := exec.LookPath("rtl_power")
-	if err != nil {
-		return nil
+	if path, err := exec.LookPath("rtl_power_fftw"); err == nil {
+		return &RTLPowerScanner{binary: path}
 	}
-	return &RTLPowerScanner{binary: path}
+	if path, err := exec.LookPath("rtl_power"); err == nil {
+		return &RTLPowerScanner{binary: path}
+	}
+	return nil
 }
 
 func (s *RTLPowerScanner) Available() bool {
 	return s.binary != ""
 }
 
-// Scan runs a single-shot rtl_power sweep and returns power values in dB per bin.
-// Command: rtl_power -f <low>:<high>:<bin> -i 1 -1
-// Output CSV: date, time, Hz_low, Hz_high, Hz_step, num_samples, dB, dB, ...
+// Scan runs a single-shot power sweep. Dispatches to the appropriate
+// CLI invocation based on which binary is in use so we don't regress
+// on older images.
 func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
+	if strings.HasSuffix(s.binary, "rtl_power_fftw") {
+		return s.scanFFTW(ctx, freqLow, freqHigh, binSize)
+	}
+	return s.scanLegacy(ctx, freqLow, freqHigh, binSize)
+}
+
+// scanFFTW invokes rtl_power_fftw. We map our (low, high, binSize) into
+// rpfftw's (-f low:high, -b bins). rpfftw requires an even bin count;
+// we round up to the nearest even number of bins. `-n 1` = single
+// spectrum averaged from one FFT — fast enough for our 3 s scan cadence.
+// `-q` keeps stderr quiet after the first run.
+func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
+	span := freqHigh - freqLow
+	if span <= 0 || binSize <= 0 {
+		return nil, fmt.Errorf("invalid band: low=%d high=%d bin=%d", freqLow, freqHigh, binSize)
+	}
+	bins := span / binSize
+	if bins < 2 {
+		bins = 2
+	}
+	if bins%2 != 0 {
+		bins++ // rpfftw requires even bins
+	}
+	freqArg := fmt.Sprintf("%d:%d", freqLow, freqHigh)
+	cmd := exec.CommandContext(ctx, s.binary,
+		"-f", freqArg,
+		"-b", strconv.Itoa(bins),
+		"-n", "1",
+		"-q",
+	)
+	cmd.Stderr = nil
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("rtl_power_fftw: %w", err)
+	}
+	return parseFFTWOutput(string(out))
+}
+
+// scanLegacy is the old rtl_power path, retained for fallback if only
+// rtl_power is present (e.g. during a partial rollback).
+func (s *RTLPowerScanner) scanLegacy(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
 	freqRange := fmt.Sprintf("%d:%d:%d", freqLow, freqHigh, binSize)
 	cmd := exec.CommandContext(ctx, s.binary, "-f", freqRange, "-i", "1", "-1")
-	cmd.Stderr = nil // suppress rtl_power stderr noise
-
+	cmd.Stderr = nil
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("rtl_power: %w", err)
 	}
-
 	return parseRTLPowerOutput(string(out))
 }
 
-// parseRTLPowerOutput parses rtl_power CSV output into power dB values.
+// parseFFTWOutput parses rtl_power_fftw CSV-ish stdout into power values.
+// Each non-comment line is "<freq_hz> <power_dB>". We discard the
+// frequency column — the caller supplies the band layout separately.
+func parseFFTWOutput(output string) ([]float64, error) {
+	var powers []float64
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		val, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		powers = append(powers, val)
+	}
+	if len(powers) == 0 {
+		return nil, fmt.Errorf("no power data in rtl_power_fftw output")
+	}
+	return powers, nil
+}
+
+// parseRTLPowerOutput parses legacy rtl_power CSV output into power values.
 // Each line: date, time, Hz_low, Hz_high, Hz_step, num_samples, dB, dB, ...
 // Multiple lines may be produced for wide scans; we concatenate all dB values.
 func parseRTLPowerOutput(output string) ([]float64, error) {
 	var powers []float64
 	scanner := bufio.NewScanner(strings.NewReader(output))
-
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-
 		fields := strings.Split(line, ", ")
 		if len(fields) < 7 {
-			continue // skip malformed lines
+			continue
 		}
-
-		// Fields 0-5 are metadata; fields 6+ are power values in dB
 		for _, f := range fields[6:] {
 			val, err := strconv.ParseFloat(strings.TrimSpace(f), 64)
 			if err != nil {
@@ -79,7 +164,6 @@ func parseRTLPowerOutput(output string) ([]float64, error) {
 			powers = append(powers, val)
 		}
 	}
-
 	if len(powers) == 0 {
 		return nil, fmt.Errorf("no power data in rtl_power output")
 	}

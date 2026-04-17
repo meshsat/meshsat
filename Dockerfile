@@ -13,14 +13,16 @@ FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS c-builder
 ARG TARGETARCH
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
-      gcc libc6-dev git cmake make pkg-config ca-certificates patch && \
+      gcc g++ libc6-dev git cmake make pkg-config ca-certificates patch && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       dpkg --add-architecture arm64 && apt-get update -qq && \
       apt-get install -y -qq --no-install-recommends \
-        gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
-        libusb-1.0-0-dev:arm64; \
+        gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+        libusb-1.0-0-dev:arm64 \
+        libfftw3-dev:arm64 libtclap-dev; \
     else \
-      apt-get install -y -qq --no-install-recommends libusb-1.0-0-dev; \
+      apt-get install -y -qq --no-install-recommends \
+        libusb-1.0-0-dev libfftw3-dev libtclap-dev; \
     fi && \
     rm -rf /var/lib/apt/lists/*
 
@@ -51,6 +53,14 @@ RUN cd /src/rtl && patch -p1 < /tmp/rtl_power-v4.patch && \
     # (1 original verbose_reset_buffer + 2 additions).
     count=$(grep -c reset_buffer src/rtl_power.c) && \
     [ "$count" -ge 3 ] || { echo "patch sanity failed: only $count reset_buffer lines"; exit 1; }
+# Build rtl_power_fftw — async-threaded variant of rtl_power that
+# actually works on the RTL-SDR Blog V4. rtl_power's single-URB sync
+# read hangs on the V4's R828D regardless of reset_buffer patches;
+# rtl_power_fftw uses a multi-buffer async read in a separate thread
+# which keeps the bulk endpoint streaming. Same stdout format as
+# a two-column freq+power CSV, parsed by the Go scanner. [MESHSAT-509]
+RUN git clone --depth=1 https://github.com/AD-Vega/rtl-power-fftw.git /src/rpfftw
+
 RUN mkdir /src/rtl/build && cd /src/rtl/build && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       # Point pkg-config at the arm64 multiarch dir so CMakeLists.txt's
@@ -71,6 +81,27 @@ RUN mkdir /src/rtl/build && cd /src/rtl/build && \
         -DCMAKE_BUILD_TYPE=Release \
         -DINSTALL_UDEV_RULES=OFF \
         -DDETACH_KERNEL_DRIVER=ON; \
+    fi && \
+    make -j"$(nproc)" && make install DESTDIR=/out
+
+# Build rpfftw against the librtlsdr-blog we just installed to /out.
+# The headers are also pulled from the Blog fork install so rpfftw
+# sees V4-aware init code when it links against librtlsdr.
+RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
+      export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
+      cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+        -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+        -DCMAKE_PREFIX_PATH=/out/usr/local \
+        -DCMAKE_INCLUDE_PATH=/out/usr/local/include \
+        -DCMAKE_LIBRARY_PATH=/out/usr/local/lib; \
+    else \
+      cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/out/usr/local; \
     fi && \
     make -j"$(nproc)" && make install DESTDIR=/out
 
@@ -97,7 +128,7 @@ FROM debian:bookworm-slim
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       ca-certificates wget coreutils python3 python3-serial \
-      libusb-1.0-0 && \
+      libusb-1.0-0 libfftw3-single3 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder   /meshsat                    /usr/local/bin/meshsat
@@ -108,9 +139,11 @@ COPY --chmod=755      cmd/jspr-helper/jspr_helper.py /usr/local/bin/jspr_helper.
 # the c-builder stage gives us /out/usr/local/bin/rtl_* and
 # /out/usr/local/lib/librtlsdr.so*. We copy the whole tree under
 # /usr/local so the SONAME symlinks and binary layout are preserved.
-COPY --from=c-builder /out/usr/local/bin/rtl_power /usr/local/bin/rtl_power
-COPY --from=c-builder /out/usr/local/bin/rtl_test  /usr/local/bin/rtl_test
-COPY --from=c-builder /out/usr/local/lib/         /usr/local/lib/
+COPY --from=c-builder /out/usr/local/bin/rtl_power       /usr/local/bin/rtl_power
+COPY --from=c-builder /out/usr/local/bin/rtl_test        /usr/local/bin/rtl_test
+COPY --from=c-builder /out/usr/local/bin/rtl_sdr         /usr/local/bin/rtl_sdr
+COPY --from=c-builder /out/usr/local/bin/rtl_power_fftw  /usr/local/bin/rtl_power_fftw
+COPY --from=c-builder /out/usr/local/lib/                /usr/local/lib/
 RUN ldconfig
 
 EXPOSE 6050
