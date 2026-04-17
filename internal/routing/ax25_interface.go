@@ -225,11 +225,56 @@ func (a *AX25Interface) readLoop(ctx context.Context) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
-			log.Warn().Err(err).Str("iface", a.config.Name).Msg("ax25 iface: read error")
+			log.Warn().Err(err).Str("iface", a.config.Name).Msg("ax25 iface: read error, will reconnect")
 			a.mu.Lock()
 			a.online = false
+			if a.conn != nil {
+				_ = a.conn.Close()
+				a.conn = nil
+			}
 			a.mu.Unlock()
-			return
+			if !a.reconnectWithBackoff(ctx) {
+				return
+			}
+			accumulated = nil // partial frame is unrecoverable across the gap
+			continue
+		}
+	}
+}
+
+// reconnectWithBackoff attempts to redial the KISS TNC with 1s..30s
+// exponential backoff. Returns true once reconnected, false on ctx
+// cancel or Stop. Required because the bundled-Direwolf supervisor
+// SIGINTs its child whenever the APRSGateway is recreated (e.g. via
+// PUT /api/gateways/aprs); without auto-reconnect the AX.25 Reticulum
+// interface stays offline until the meshsat container is restarted,
+// which silently kills Reticulum-over-APRS traffic. [MESHSAT-514]
+func (a *AX25Interface) reconnectWithBackoff(ctx context.Context) bool {
+	backoff := 1 * time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-a.stopCh:
+			return false
+		case <-time.After(backoff):
+		}
+		a.mu.Lock()
+		stopped := a.stopped
+		a.mu.Unlock()
+		if stopped {
+			return false
+		}
+		if err := a.connect(); err == nil {
+			log.Info().Str("iface", a.config.Name).Str("kiss", a.config.KISSAddr).
+				Msg("ax25 iface: reconnected")
+			return true
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
 		}
 	}
 }
