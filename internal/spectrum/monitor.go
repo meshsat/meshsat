@@ -391,10 +391,19 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		maxPower := maxVal(powers)
 		candidate := m.evaluate(band.Name, powers, avg, maxPower, bl)
 
+		// Compute MIJI-9 report metrics once per scan — cheap (O(n)
+		// over ~12-120 bins) and exposed to the UI so the operator
+		// doesn't have to eyeball the waterfall to judge barrage vs
+		// narrowband.
+		occupancy := bandOccupancy(powers, bl.Mean+6.0)
+		flatness := spectralFlatness(powers)
+
 		now := time.Now()
 		m.mu.Lock()
 		bs := m.status[band.Name]
 		bs.PowerDB = avg
+		bs.LastOccupancy = occupancy
+		bs.LastFlatness = flatness
 		oldState := bs.State
 
 		// Candidate tracking: if the tier changed, reset dwell timer.
@@ -439,6 +448,9 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			// reference lines still make visual sense.
 			ThreshJammingDB:      bl.Mean + DegradedDeltaDB,
 			ThreshInterferenceDB: bl.Mean + 6.0,
+			Occupancy:            occupancy,
+			Flatness:             flatness,
+			Since:                bs.Since,
 		})
 
 		if newState != oldState {
@@ -460,6 +472,9 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 				BaselineStd:          bl.Std,
 				ThreshJammingDB:      bl.Mean + DegradedDeltaDB,
 				ThreshInterferenceDB: bl.Mean + 6.0,
+				Occupancy:            occupancy,
+				Flatness:             flatness,
+				Since:                now,
 			})
 		}
 	}

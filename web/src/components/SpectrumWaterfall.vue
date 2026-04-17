@@ -431,10 +431,99 @@ function stateColour(state) {
   switch (state) {
     case 'jamming': return '#dc2626'
     case 'interference': return '#f59e0b'
+    case 'degraded': return '#eab308'
     case 'clear': return '#10b981'
     case 'calibrating': return '#6366f1'
     default: return '#6b7280'
   }
+}
+
+// ---- MIJI-9 report metrics (P7-P12) ----
+
+// Peak bin → (freq, power). Currently-displayed scan's max power bin.
+function peakInfo(name) {
+  const b = store.bands[name]
+  if (!b) return null
+  const row = b.rows?.[0]
+  if (!row?.powers?.length) return null
+  let idx = 0, mx = row.powers[0]
+  for (let i = 1; i < row.powers.length; i++) {
+    const p = row.powers[i]
+    if (typeof p === 'number' && isFinite(p) && p > mx) { mx = p; idx = i }
+  }
+  const span = b.meta.freqHigh - b.meta.freqLow
+  const freqHz = b.meta.freqLow + (idx + 0.5) * (span / row.powers.length)
+  return { freqHz, powerDB: mx }
+}
+
+// Dwell time = now - state.since (from backend). "jamming for 0:00:34".
+function dwellText(name) {
+  const b = store.bands[name]
+  if (!b || !b.since) return null
+  const s = Math.max(0, Math.floor((nowMs.value - b.since.getTime()) / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  if (m < 60) return `${m}m ${rs.toString().padStart(2, '0')}s`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return `${h}h ${rm.toString().padStart(2, '0')}m`
+}
+
+// ECCM guidance per FM 3-12 (anti-jam + fallback actions). Static text
+// keyed on (band, state) — operator-facing recommendation shown only
+// when a band is NOT clear. Generic fallback covers edge states.
+const ECCM_GUIDANCE = {
+  lora_868: {
+    interference: 'Narrowband interferer on EU868. Shift to alt LoRa sub-band (867.X) or ramp spreading factor.',
+    jamming: 'Barrage on EU868 (ISM). Switch mesh to Iridium SBD relay; report MIJI-9 (freq, time, duration) to hub.',
+    degraded: 'Sustained elevation — monitor; if >5 min, shift to alt sub-band.',
+  },
+  aprs_144: {
+    interference: 'Narrowband on 2 m. Check HT squelch + PL tone; move to packet BPQ digipeater peer.',
+    jamming: 'VHF 2 m barrage. Switch APRS to HF (30 m) or mesh relay; file MIJI-9 to net-control.',
+    degraded: 'VHF noise rising — monitor antenna VSWR and nearby RF sources.',
+  },
+  gps_l1: {
+    interference: 'L1 interferer (common: in-car jammers). Derate GNSS stratum; warn timesync subsystem.',
+    jamming: 'GPS L1 jamming — DO NOT trust GNSS fix. Fall back to peer-consensus time + dead-reckoning.',
+    degraded: 'L1 noise floor elevated — confirm antenna sky view before blaming jammer.',
+  },
+  lte_b20_dl: {
+    interference: 'B20 (800) interferer. Modem may auto-fallback to B8 (900); monitor RSRQ.',
+    jamming: 'B20 DL jamming → 4G + SMS on 800 unreliable. Pin modem to B8 carrier; enable Iridium SBD.',
+    degraded: 'B20 degraded — cell breathing or distant jammer. Watch for escalation.',
+  },
+  lte_b8_dl: {
+    interference: 'B8 (900) interferer. Modem may auto-fallback to B20 (800); monitor RSRQ.',
+    jamming: 'B8 DL jamming. Pin modem to B20; expect SMS degradation. Escalate if both bands hit.',
+    degraded: 'B8 degraded — monitor; check carrier aggregation.',
+  },
+}
+const GENERIC_ACTION = {
+  interference: 'Narrowband interferer. Consider alt channel / antenna repositioning.',
+  jamming: 'Broadband jammer likely. Fall back to alternate bearer; file MIJI-9 report.',
+  degraded: 'Sustained elevation above baseline — monitor; no action required yet.',
+  calibrating: 'Detector still establishing baseline.',
+  clear: '',
+}
+function eccmAction(name) {
+  const b = store.bands[name]
+  if (!b) return ''
+  const s = b.state
+  const perBand = ECCM_GUIDANCE[name] || {}
+  return perBand[s] || GENERIC_ACTION[s] || ''
+}
+
+// Occupancy/flatness formatting. Show "—" for bands still calibrating
+// (no baseline → comparison threshold is meaningless).
+function fmtPct(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—'
+  return (v * 100).toFixed(0) + '%'
+}
+function fmtNum2(v) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—'
+  return v.toFixed(2)
 }
 </script>
 
@@ -480,6 +569,44 @@ function stateColour(state) {
           </span>
         </div>
       </div>
+      <!-- MIJI-9 metrics strip (P7/P8/P9/P10): peak freq+dBm, dwell
+           time, ITU-R SM.1880 occupancy, Wiener-entropy flatness.
+           Hidden during calibration — values are meaningless without
+           a locked baseline. -->
+      <div v-if="store.bands[name]?.state !== 'calibrating' && store.bands[name]?.baselineStd > 0"
+           class="sa-metrics">
+        <span class="sa-metric">
+          <span class="k">peak</span>
+          <span class="v">
+            <template v-if="peakInfo(name)">
+              {{ peakInfo(name).powerDB.toFixed(1) }} dBm @ {{ (peakInfo(name).freqHz / 1e6).toFixed(3) }} MHz
+            </template>
+            <template v-else>—</template>
+          </span>
+        </span>
+        <span class="sa-metric">
+          <span class="k">{{ store.bands[name]?.state }} for</span>
+          <span class="v">{{ dwellText(name) || '—' }}</span>
+        </span>
+        <span class="sa-metric" title="Fraction of FFT bins ≥ baseline+6 dB (ITU-R SM.1880)">
+          <span class="k">occupancy</span>
+          <span class="v">{{ fmtPct(store.bands[name]?.occupancy) }}</span>
+        </span>
+        <span class="sa-metric" title="Wiener entropy of linear power (0=structured, 1=white noise / barrage)">
+          <span class="k">flatness</span>
+          <span class="v">{{ fmtNum2(store.bands[name]?.flatness) }}</span>
+        </span>
+      </div>
+
+      <!-- ECCM recommended-action panel (P12). Visible only when the
+           band is degraded/interference/jamming — silent when clear. -->
+      <div v-if="eccmAction(name) && ['degraded','interference','jamming'].includes(store.bands[name]?.state)"
+           class="sa-eccm"
+           :class="'sa-eccm-' + store.bands[name]?.state">
+        <span class="sa-eccm-tag">ECCM</span>
+        <span class="sa-eccm-text">{{ eccmAction(name) }}</span>
+      </div>
+
       <!-- Calibration strip: visible only during Phase 1. Shows a
            progress bar + countdown for the active band, or a "queued"
            indicator for pending ones. -->
@@ -725,6 +852,59 @@ function stateColour(state) {
   pointer-events: none;
   white-space: nowrap;
 }
+
+.sa-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 6px 10px;
+  background: #050b1a;
+  border-bottom: 1px solid #0f172a;
+  font-family: monospace;
+  font-size: 11px;
+}
+.sa-metric { display: inline-flex; gap: 6px; align-items: baseline; }
+.sa-metric .k {
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+}
+.sa-metric .v { color: #e2e8f0; font-weight: 600; }
+
+.sa-eccm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 7px 10px;
+  border-bottom: 1px solid #0f172a;
+  font-size: 11px;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid #f59e0b;
+}
+.sa-eccm.sa-eccm-jamming {
+  color: #fecaca;
+  background: rgba(220, 38, 38, 0.10);
+  border-left-color: #dc2626;
+}
+.sa-eccm.sa-eccm-degraded {
+  color: #fef08a;
+  background: rgba(234, 179, 8, 0.06);
+  border-left-color: #eab308;
+}
+.sa-eccm-tag {
+  font-family: monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  padding: 2px 6px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 3px;
+  font-weight: 700;
+  flex-shrink: 0;
+  color: inherit;
+}
+.sa-eccm-text { line-height: 1.4; }
 
 .sa-empty {
   padding: 16px;

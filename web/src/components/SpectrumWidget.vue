@@ -31,6 +31,36 @@ const orderedBands = computed(() => {
 // a rising attack, short enough to stay visually meaningful at 120 px.
 const SPARK_SAMPLES = 60
 
+// Freshness readout — newest scan timestamp across all bands. Ticks
+// against nowMs so the "N s ago" label stays honest even if SSE pauses
+// (MIL-STD-1472H §5.2: data freshness must always be visible on a
+// safety-critical display).
+const lastUpdateMs = computed(() => {
+  let newest = 0
+  for (const n of Object.keys(store.bands)) {
+    const ts = store.bands[n]?.rows?.[0]?.ts
+    if (!ts) continue
+    const ms = Date.parse(ts)
+    if (isFinite(ms) && ms > newest) newest = ms
+  }
+  return newest
+})
+const ageText = computed(() => {
+  const ms = lastUpdateMs.value
+  if (!ms) return '—'
+  const dt = Math.max(0, Math.floor((nowMs.value - ms) / 1000))
+  if (dt < 60) return `${dt}s ago`
+  if (dt < 3600) return `${Math.floor(dt / 60)}m ago`
+  return `${Math.floor(dt / 3600)}h ago`
+})
+// Stale threshold: scan cadence is ~3s, so >15s without a new row
+// means the stream is wedged. Turn the age readout amber.
+const ageStale = computed(() => {
+  const ms = lastUpdateMs.value
+  if (!ms) return true
+  return (nowMs.value - ms) > 15000
+})
+
 const worstState = computed(() => {
   let worst = 'clear'
   for (const n of orderedBands.value) {
@@ -328,6 +358,9 @@ function deltaClass(b) {
           {{ store.paused ? 'play' : 'pause' }}
         </button>
         <span :class="store.connected ? 'text-emerald-400' : 'text-amber-400'">{{ store.connected ? 'LIVE' : 'IDLE' }}</span>
+        <span :class="ageStale ? 'text-amber-400' : 'text-gray-400'" :title="'last scan ' + ageText">
+          {{ ageText }}
+        </span>
         <span class="text-gray-500">· click for detail</span>
       </div>
     </div>

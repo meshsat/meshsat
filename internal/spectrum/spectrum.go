@@ -129,6 +129,13 @@ type BandStatus struct {
 	// (reset when the tier changes). [MESHSAT-509]
 	CandidateState SpectrumState `json:"candidate_state,omitempty"`
 	CandidateSince time.Time     `json:"candidate_since,omitempty"`
+
+	// Latest-scan ITU-R SM.1880 occupancy (0..1) and Wiener-entropy
+	// spectral flatness (0..1). Exposed on the status endpoint so the
+	// UI seeds these metrics immediately on page load, before the
+	// first SSE scan event arrives.
+	LastOccupancy float64 `json:"occupancy"`
+	LastFlatness  float64 `json:"flatness"`
 }
 
 // Baseline holds the calibrated noise floor statistics for a band.
@@ -179,6 +186,23 @@ type SpectrumEvent struct {
 	// re-polling /api/spectrum/status. Zero-valued on Phase 2 events.
 	CalibrationStartedAt   time.Time `json:"calibration_started_at,omitempty"`
 	CalibrationDurationSec int       `json:"calibration_duration_sec,omitempty"`
+
+	// ITU-R SM.1880 occupancy — fraction (0..1) of FFT bins whose
+	// power is ≥ baseline + 6 dB in this scan. Barrage jammers ≥ 0.70;
+	// narrowband spikes 0.30-0.70; legitimate bursts < 0.20. Exposed
+	// in scan events so the page can render MIJI-9-grade detail.
+	Occupancy float64 `json:"occupancy"`
+
+	// Spectral flatness (Wiener entropy, 0..1) of this scan's power
+	// distribution in linear units. Near 1.0 = white-noise barrage;
+	// < 0.4 = structured signal. Pair with occupancy to discriminate
+	// barrage jamming from legit load.
+	Flatness float64 `json:"flatness"`
+
+	// Since is the timestamp of the last state transition for this
+	// band. UI computes "jamming for 0:00:34" dwell from now - since.
+	// Required for MIJI-9 reporting (FM 3-12: report duration).
+	Since time.Time `json:"since,omitempty"`
 }
 
 // Detection thresholds.

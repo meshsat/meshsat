@@ -147,6 +147,11 @@ export const useSpectrumStore = defineStore('spectrum', () => {
         threshInterference: evt.thresh_interference_db || 0,
         calibrationStartedAt: null,
         calibrationDurationSec: 30,
+        // MIJI-9 report fields (FM 3-12 + ITU-R SM.1880). Populated
+        // by handleScan / seedFromStatus; used by /spectrum detail UI.
+        occupancy: 0,
+        flatness: 0,
+        since: null,
       }
     }
     return bands.value[evt.band]
@@ -159,6 +164,9 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     b.baselineStd = evt.baseline_std
     b.threshJamming = evt.thresh_jamming_db
     b.threshInterference = evt.thresh_interference_db
+    if (typeof evt.occupancy === 'number') b.occupancy = evt.occupancy
+    if (typeof evt.flatness === 'number') b.flatness = evt.flatness
+    if (evt.since && evt.since !== '0001-01-01T00:00:00Z') b.since = new Date(evt.since)
     // calibration_started_at arrives on Phase 1 events only; clear on
     // Phase 2 (state != calibrating) so the UI stops showing the bar.
     if (evt.calibration_started_at) {
@@ -189,6 +197,10 @@ export const useSpectrumStore = defineStore('spectrum', () => {
   function handleTransition(evt) {
     const b = ensureBand(evt)
     b.state = evt.state
+    // State changed → dwell timer resets. Use the event timestamp so
+    // the UI agrees with the backend's "since" clock even when the
+    // page was slow to receive the event.
+    if (evt.timestamp) b.since = new Date(evt.timestamp)
 
     const nonClearStates = ['jamming', 'interference']
     const wasBad = nonClearStates.includes(evt.old_state)
@@ -306,8 +318,12 @@ export const useSpectrumStore = defineStore('spectrum', () => {
           // calibration_started_at arrives as an RFC3339 string or absent
           // (zero-valued, omitempty). We parse to a Date so the
           // countdown computation is cheap.
-          calibrationStartedAt: b.calibration_started_at ? new Date(b.calibration_started_at) : null,
+          calibrationStartedAt: b.calibration_started_at && b.calibration_started_at !== '0001-01-01T00:00:00Z' ? new Date(b.calibration_started_at) : null,
           calibrationDurationSec: b.calibration_duration_sec || 30,
+          // MIJI-9 fields from status endpoint
+          occupancy: typeof b.occupancy === 'number' ? b.occupancy : 0,
+          flatness: typeof b.flatness === 'number' ? b.flatness : 0,
+          since: b.since && b.since !== '0001-01-01T00:00:00Z' ? new Date(b.since) : null,
         }
       }
       bands.value = next
