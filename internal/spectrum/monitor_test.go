@@ -2,6 +2,7 @@ package spectrum
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -63,8 +64,24 @@ func TestMeanStd(t *testing.T) {
 	if mean != -45.0 {
 		t.Fatalf("mean: got %f, want -45.0", mean)
 	}
-	if std != 0 {
-		t.Fatalf("std: got %f, want 0", std)
+	// std is clamped to minStdFloor (0.5) to keep the sigma classifier
+	// from collapsing to zero-width on LTE-style bands with locked
+	// carriers where observed std is ~0.01 dB.
+	if std != minStdFloor {
+		t.Fatalf("std: got %f, want %f (floor)", std, minStdFloor)
+	}
+}
+
+func TestMeanStd_FiltersInfNaN(t *testing.T) {
+	// rtl_power emits -Inf for all-zero FFT bins on first post-tune read.
+	// Those must be filtered so baseline mean stays finite (JSON-safe).
+	values := []float64{-45.0, math.Inf(-1), -45.0, math.NaN(), -45.0}
+	mean, std := meanStd(values)
+	if mean != -45.0 {
+		t.Fatalf("mean: got %f, want -45.0 (finite values only)", mean)
+	}
+	if std != minStdFloor {
+		t.Fatalf("std: got %f, want %f", std, minStdFloor)
 	}
 }
 
