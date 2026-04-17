@@ -62,15 +62,17 @@ RUN cd /src/rtl && patch -p1 < /tmp/rtl_power-v4.patch && \
 RUN git clone --depth=1 https://github.com/AD-Vega/rtl-power-fftw.git /src/rpfftw
 
 RUN mkdir /src/rtl/build && cd /src/rtl/build && \
+    # Install into the c-builder's own /usr/local so librtlsdr.pc has
+    # prefix=/usr/local and rpfftw's pkg_check_modules finds a
+    # self-consistent install. The runtime image's /usr/local/lib will
+    # also be /usr/local/lib so the linker path baked into rpfftw stays
+    # valid post-COPY.
     if [ "$TARGETARCH" = "arm64" ]; then \
-      # Point pkg-config at the arm64 multiarch dir so CMakeLists.txt's
-      # pkg_check_modules(LIBUSB libusb-1.0) finds the cross-installed
-      # headers+libs. Without this, upstream CMake hits
-      # "Package 'libusb-1.0', required by 'virtual:world', not found".
       export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
       export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
       cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -79,42 +81,36 @@ RUN mkdir /src/rtl/build && cd /src/rtl/build && \
     else \
       cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DINSTALL_UDEV_RULES=OFF \
         -DDETACH_KERNEL_DRIVER=ON; \
     fi && \
-    make -j"$(nproc)" && make install DESTDIR=/out
+    make -j"$(nproc)" && make install && ldconfig 2>/dev/null || true
 
 # Build rpfftw against the librtlsdr-blog we just installed to /out.
 # The headers are also pulled from the Blog fork install so rpfftw
 # sees V4-aware init code when it links against librtlsdr.
 RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
-    # PKG_CONFIG_PATH must include /out/usr/local/lib/pkgconfig so
-    # rpfftw's cmake finds librtlsdr.pc. The .pc's prefix= says
-    # /usr/local (from the librtlsdr cmake install default), but the
-    # files are actually at /out/usr/local — so we pass explicit
-    # include + lib paths as CXX/LD flags, which win over the .pc's
-    # stale prefix hint.
-    FLAGS="-I/out/usr/local/include -L/out/usr/local/lib" && \
+    # librtlsdr is now at /usr/local of the c-builder. Its .pc file's
+    # prefix=/usr/local matches the actual install layout — pkg-config
+    # works normally and the cross-arch libusb is picked up from its
+    # multiarch location.
     if [ "$TARGETARCH" = "arm64" ]; then \
-      export PKG_CONFIG_PATH=/out/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig && \
-      export PKG_CONFIG_LIBDIR=/out/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
+      export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig && \
+      export PKG_CONFIG_LIBDIR=/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
       cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
         -DCMAKE_SYSTEM_NAME=Linux \
-        -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-        -DCMAKE_C_FLAGS="$FLAGS" \
-        -DCMAKE_CXX_FLAGS="$FLAGS" \
-        -DCMAKE_EXE_LINKER_FLAGS="$FLAGS"; \
+        -DCMAKE_SYSTEM_PROCESSOR=aarch64; \
     else \
-      export PKG_CONFIG_PATH=/out/usr/local/lib/pkgconfig && \
-      cmake .. -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_FLAGS="$FLAGS" \
-        -DCMAKE_CXX_FLAGS="$FLAGS" \
-        -DCMAKE_EXE_LINKER_FLAGS="$FLAGS"; \
+      cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local; \
     fi && \
-    make -j"$(nproc)" && make install DESTDIR=/out
+    make -j"$(nproc)" && make install
 
 FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 
@@ -150,11 +146,11 @@ COPY --chmod=755      cmd/jspr-helper/jspr_helper.py /usr/local/bin/jspr_helper.
 # the c-builder stage gives us /out/usr/local/bin/rtl_* and
 # /out/usr/local/lib/librtlsdr.so*. We copy the whole tree under
 # /usr/local so the SONAME symlinks and binary layout are preserved.
-COPY --from=c-builder /out/usr/local/bin/rtl_power       /usr/local/bin/rtl_power
-COPY --from=c-builder /out/usr/local/bin/rtl_test        /usr/local/bin/rtl_test
-COPY --from=c-builder /out/usr/local/bin/rtl_sdr         /usr/local/bin/rtl_sdr
-COPY --from=c-builder /out/usr/local/bin/rtl_power_fftw  /usr/local/bin/rtl_power_fftw
-COPY --from=c-builder /out/usr/local/lib/                /usr/local/lib/
+COPY --from=c-builder /usr/local/bin/rtl_power       /usr/local/bin/rtl_power
+COPY --from=c-builder /usr/local/bin/rtl_test        /usr/local/bin/rtl_test
+COPY --from=c-builder /usr/local/bin/rtl_sdr         /usr/local/bin/rtl_sdr
+COPY --from=c-builder /usr/local/bin/rtl_power_fftw  /usr/local/bin/rtl_power_fftw
+COPY --from=c-builder /usr/local/lib/                /usr/local/lib/
 RUN ldconfig
 
 EXPOSE 6050
