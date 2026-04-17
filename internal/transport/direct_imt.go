@@ -10,11 +10,13 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -1007,8 +1009,19 @@ func unbindRebindCP210x(who, portPath string) bool {
 
 	// Unbind
 	if err := os.WriteFile(unbindPath, []byte(interfaceID), 0644); err != nil {
-		log.Warn().Str("subsys", who).Err(err).Str("iface", interfaceID).
-			Msg("unbind/rebind: unbind failed")
+		// In a containerised deploy the sysfs driver dir is mounted
+		// read-only even under privileged: true (observed on parallax
+		// 2026-04-17) — unbind/rebind simply isn't available and the
+		// caller falls back to USBDEVFS_RESET. Log at debug rather
+		// than warn so the scary message doesn't spam the dashboard
+		// every time the watchdog fires in a container.
+		if errors.Is(err, syscall.EROFS) || strings.Contains(err.Error(), "read-only") {
+			log.Debug().Str("subsys", who).Str("iface", interfaceID).
+				Msg("unbind/rebind: sysfs RO (container) — falling back to USBDEVFS_RESET")
+		} else {
+			log.Warn().Str("subsys", who).Err(err).Str("iface", interfaceID).
+				Msg("unbind/rebind: unbind failed")
+		}
 		return false
 	}
 	// Brief settle — the kernel needs a beat to fully tear down driver state

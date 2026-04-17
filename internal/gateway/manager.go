@@ -363,11 +363,68 @@ func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEven
 			Msg("gwmgr: device connected, starting gateway")
 
 		capturedInstance := instanceID
-		time.AfterFunc(2*time.Second, func() {
-			if err := m.StartGatewayInstance(ctx, capturedInstance); err != nil {
-				log.Error().Err(err).Str("instance", capturedInstance).Msg("gwmgr: failed to restart gateway after device reconnect")
+		capturedType := gwType
+		capturedPort := ev.Device.DevPath
+		// Retry ladder with exponential backoff. Recovers from cases
+		// like a cp210x re-enumeration mid-coordinator-power-up, where
+		// the coordinator firmware is reset but not yet responding to
+		// SYS_PING by the 2s mark. Without retries, a single ping
+		// timeout here leaves the gateway permanently dead until the
+		// next physical replug or container restart — observed live
+		// on parallax 2026-04-17 07:34 UTC after a power-up reset.
+		// [MESHSAT-509]
+		//
+		// Schedule only one goroutine per instance; bail out early if
+		// a later device event already started the gateway.
+		go func() {
+			// 2s, 5s, 15s, 30s, 60s — covers typical post-reset
+			// coordinator init (<10s) plus slow USB re-enumeration
+			// edge cases without spamming forever.
+			backoffs := []time.Duration{
+				2 * time.Second, 5 * time.Second, 15 * time.Second,
+				30 * time.Second, 60 * time.Second,
 			}
-		})
+			for attempt, wait := range backoffs {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+				// If another path started the gateway in the meantime,
+				// stop trying.
+				m.mu.RLock()
+				_, running := m.running[capturedInstance]
+				m.mu.RUnlock()
+				if running {
+					return
+				}
+				err := m.StartGatewayInstance(ctx, capturedInstance)
+				if err == nil {
+					if attempt > 0 {
+						log.Info().
+							Str("instance", capturedInstance).
+							Str("type", capturedType).
+							Str("port", capturedPort).
+							Int("attempt", attempt+1).
+							Msg("gwmgr: gateway restarted after retry")
+					}
+					return
+				}
+				log.Warn().Err(err).
+					Str("instance", capturedInstance).
+					Str("type", capturedType).
+					Str("port", capturedPort).
+					Int("attempt", attempt+1).
+					Int("remaining", len(backoffs)-attempt-1).
+					Msg("gwmgr: gateway restart attempt failed")
+			}
+			log.Error().
+				Str("instance", capturedInstance).
+				Str("type", capturedType).
+				Str("port", capturedPort).
+				Int("attempts", len(backoffs)).
+				Msg("gwmgr: gave up restarting gateway after all retries exhausted")
+		}()
 	}
 }
 
