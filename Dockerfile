@@ -45,8 +45,12 @@ RUN git clone --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git /src/rtl
 # — rtl_power doesn't. [MESHSAT-509]
 COPY docker-patches/rtl_power-v4-reset-buffer.patch /tmp/rtl_power-v4.patch
 RUN cd /src/rtl && patch -p1 < /tmp/rtl_power-v4.patch && \
-    grep -c rtlsdr_reset_buffer src/rtl_power.c | \
-    awk '$1 >= 2 {exit 0} {print "patch did not apply both hunks"; exit 1}'
+    # Sanity check: one hunk adds rtlsdr_reset_buffer(d) in retune(),
+    # the other adds a second verbose_reset_buffer(dev) in main(). Both
+    # match the common "reset_buffer" substring; expect >=3 occurrences
+    # (1 original verbose_reset_buffer + 2 additions).
+    count=$(grep -c reset_buffer src/rtl_power.c) && \
+    [ "$count" -ge 3 ] || { echo "patch sanity failed: only $count reset_buffer lines"; exit 1; }
 RUN mkdir /src/rtl/build && cd /src/rtl/build && \
     if [ "$TARGETARCH" = "arm64" ]; then \
       # Point pkg-config at the arm64 multiarch dir so CMakeLists.txt's
