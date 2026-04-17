@@ -18,6 +18,17 @@ import { ref, computed } from 'vue'
 // and duration of a jamming event without eating browser memory.
 const WATERFALL_ROWS = 100
 
+// After a user ACKs an alert for a band, suppress the modal popup for
+// that band for this many milliseconds. Prevents the "flapping false
+// positive" scenario where a noisy band (e.g. LoRa EU868 with real
+// sensor traffic) flips clear->jamming->clear->jamming and each new
+// transition defeats the ACK. The waterfall + CoT/hub relays still
+// fire during the mute — only the modal is suppressed.
+const ACK_MUTE_MS = 15 * 60 * 1000
+
+const LS_POPUP_ENABLED = 'meshsat-spectrum-popup-enabled'
+const LS_MUTED_BANDS = 'meshsat-spectrum-muted-bands'
+
 export const useSpectrumStore = defineStore('spectrum', () => {
   // bands maps band name -> { meta, rows, state, baseline, thresholds }.
   // rows is a ring of {ts, powers, avg, max} — newest at index 0.
@@ -32,10 +43,79 @@ export const useSpectrumStore = defineStore('spectrum', () => {
   // stays visible until acked.
   const alerts = ref([])
 
-  // activeAlerts computed is what the modal renders — anything not acked.
-  const activeAlerts = computed(() =>
-    alerts.value.filter(a => !a.acked)
+  // popupEnabled is the master kill-switch for the sticky modal. When
+  // false, alerts are still collected (so the waterfall highlights
+  // jammed bands and CoT/hub relays still fire server-side) but the
+  // modal stays hidden. Persisted so the preference survives reload.
+  const popupEnabled = ref(loadPopupEnabled())
+
+  // mutedUntil maps band name -> ms-epoch before which the modal will
+  // not pop that band. Set on ACK to break the false-positive flap
+  // loop; persisted because the flap is driven by the physical RF
+  // environment and often persists across page reloads too.
+  const mutedUntil = ref(loadMutedBands())
+
+  function loadPopupEnabled() {
+    try {
+      const raw = localStorage.getItem(LS_POPUP_ENABLED)
+      if (raw === null) return true
+      return raw === 'true'
+    } catch { return true }
+  }
+  function persistPopupEnabled() {
+    try { localStorage.setItem(LS_POPUP_ENABLED, String(popupEnabled.value)) } catch {}
+  }
+  function loadMutedBands() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS_MUTED_BANDS) || '{}')
+      // drop stale entries whose mute already expired — no point holding them
+      const now = Date.now()
+      const cleaned = {}
+      for (const [b, until] of Object.entries(raw)) {
+        if (typeof until === 'number' && until > now) cleaned[b] = until
+      }
+      return cleaned
+    } catch { return {} }
+  }
+  function persistMutedBands() {
+    try { localStorage.setItem(LS_MUTED_BANDS, JSON.stringify(mutedUntil.value)) } catch {}
+  }
+  function bandMuted(band) {
+    const until = mutedUntil.value[band]
+    return typeof until === 'number' && until > Date.now()
+  }
+
+  // activeAlerts is what the modal renders — not acked, not muted,
+  // and the global popup toggle is on.
+  const activeAlerts = computed(() => {
+    if (!popupEnabled.value) return []
+    return alerts.value.filter(a => !a.acked && !bandMuted(a.band))
+  })
+
+  // Any non-acked alerts at all — for the widget's badge (we want the
+  // widget to show a red state even if the modal is silenced).
+  const anyActiveAlert = computed(() =>
+    alerts.value.some(a => !a.acked)
   )
+
+  function setPopupEnabled(v) {
+    popupEnabled.value = !!v
+    persistPopupEnabled()
+  }
+  function muteBand(band, ms = ACK_MUTE_MS) {
+    mutedUntil.value = { ...mutedUntil.value, [band]: Date.now() + ms }
+    persistMutedBands()
+  }
+  function unmuteBand(band) {
+    const copy = { ...mutedUntil.value }
+    delete copy[band]
+    mutedUntil.value = copy
+    persistMutedBands()
+  }
+  function unmuteAll() {
+    mutedUntil.value = {}
+    persistMutedBands()
+  }
 
   let es = null
   let reconnectTimer = null
@@ -135,6 +215,10 @@ export const useSpectrumStore = defineStore('spectrum', () => {
       a.acked = true
       a.ackedAt = new Date().toISOString()
     }
+    // Mute so the next transition doesn't immediately re-pop — this
+    // is the core fix for LoRa EU868 and similar bands where real
+    // traffic flaps the state classifier across the 3σ threshold.
+    muteBand(band)
   }
 
   function ackAll() {
@@ -143,6 +227,7 @@ export const useSpectrumStore = defineStore('spectrum', () => {
       if (!a.acked) {
         a.acked = true
         a.ackedAt = now
+        muteBand(a.band)
       }
     })
   }
@@ -209,10 +294,19 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     enabled,
     alerts,
     activeAlerts,
+    anyActiveAlert,
+    popupEnabled,
+    mutedUntil,
     connect,
     disconnect,
     ackAlert,
     ackAll,
+    setPopupEnabled,
+    muteBand,
+    unmuteBand,
+    unmuteAll,
+    bandMuted,
     WATERFALL_ROWS,
+    ACK_MUTE_MS,
   }
 })

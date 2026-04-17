@@ -4,7 +4,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import api from '@/api/client'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
 import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot } from '@/utils/format'
-import SpectrumWaterfall from '@/components/SpectrumWaterfall.vue'
+import SpectrumWidget from '@/components/SpectrumWidget.vue'
 
 const store = useMeshsatStore()
 
@@ -1208,6 +1208,11 @@ function widgetGridClass(id) {
 
 <template>
   <div class="max-w-[1400px] mx-auto" @click="closeDropdowns">
+    <!-- Spectrum at-a-glance strip: compact waterfall, all 5 bands in
+         one canvas. Click → /spectrum for the full detail view. Hides
+         entirely if the RTL-SDR isn't present. -->
+    <SpectrumWidget class="mb-3" />
+
     <!-- 7-Panel Grid (drag-and-drop reorderable) -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 
@@ -2600,14 +2605,5 @@ function widgetGridClass(id) {
         </div>
       </div>
     </Teleport>
-
-    <!-- RTL-SDR spectrum waterfall. Positioned at the bottom of the
-         dashboard so it doesn't crowd the primary comms widgets, but
-         visible without a scroll on a typical 1080p laptop. Jamming
-         surfaces here via the sticky modal (mounted in App.vue) — the
-         waterfall itself is the situational-awareness picture. -->
-    <div class="mt-4">
-      <SpectrumWaterfall />
-    </div>
   </div>
 </template>

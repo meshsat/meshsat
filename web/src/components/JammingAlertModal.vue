@@ -61,7 +61,25 @@ function durationSince(iso) {
           <div class="alert-header">
             <div class="alert-badge">RF ALERT</div>
             <h2>RTL-SDR jamming detected</h2>
-            <p class="alert-sub">Operator acknowledgement required. TAK/CoT and hub relays have been sent.</p>
+            <p class="alert-sub">
+              Operator acknowledgement required. TAK/CoT and hub relays have been sent.
+              ACK mutes this band for 15 min to block false-positive re-fires.
+            </p>
+            <div class="alert-toggle-row">
+              <label class="toggle">
+                <input type="checkbox"
+                  :checked="store.popupEnabled"
+                  @change="store.setPopupEnabled($event.target.checked)" />
+                <span class="slider"></span>
+                <span class="toggle-label">
+                  Popup alerts {{ store.popupEnabled ? 'ENABLED' : 'DISABLED' }}
+                </span>
+              </label>
+              <button type="button" class="link-btn" @click="store.setPopupEnabled(false)"
+                      title="Turn off the popup entirely. Waterfall still marks jammed bins and CoT/hub still fire.">
+                Silence all popups
+              </button>
+            </div>
           </div>
           <div class="alert-list">
             <div v-for="a in alerts" :key="a.band + a.startedAt"
@@ -150,6 +168,31 @@ function durationSince(iso) {
   font-size: 12px;
   color: #94a3b8;
 }
+.alert-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #1e293b;
+}
+.toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle .slider {
+  width: 32px; height: 18px; border-radius: 10px; background: #334155; position: relative; transition: background 120ms;
+}
+.toggle .slider::before {
+  content: ''; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  background: #e2e8f0; top: 2px; left: 2px; transition: transform 120ms;
+}
+.toggle input:checked + .slider { background: #059669; }
+.toggle input:checked + .slider::before { transform: translateX(14px); }
+.toggle-label { font-size: 11px; letter-spacing: 0.04em; color: #cbd5e1; font-weight: 600; }
+.link-btn {
+  background: none; border: none; font-size: 11px; color: #64748b; cursor: pointer; text-decoration: underline;
+}
+.link-btn:hover { color: #94a3b8; }
 .alert-list {
   max-height: 50vh;
   overflow-y: auto;
