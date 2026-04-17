@@ -1,14 +1,11 @@
 <!--
   SpectrumWidget.vue
   ------------------
-  Compact at-a-glance spectrum strip for the dashboard. Each of the
-  5 bands is rendered as a thin row: a mini FFT trace (sparkline
-  reading current scan) overlaid on a tiny Turbo-colormapped history
-  heatmap. Click anywhere → /spectrum for full detail.
-
-  Kept deliberately small (~170 px total) so it doesn't shove the
-  other dashboard widgets around, but the trace + heatmap together
-  look more like a real SDR analyzer than a blocky tile grid.
+  Compact live spectrum panel for the dashboard. 5 band rows, each
+  with a real mini waterfall (tall enough to show rolling history)
+  + a live FFT sparkline overlay. Play/pause button freezes the
+  display without disconnecting the SSE stream. Click anywhere
+  outside the controls → /spectrum for detail.
 -->
 <script setup>
 import { ref, computed, onMounted, watch, nextTick, reactive } from 'vue'
@@ -26,8 +23,8 @@ const orderedBands = computed(() => {
   )
 })
 
-// Turbo colormap (shared identically with SpectrumWaterfall.vue — duplicated
-// here to avoid coupling the widget to the waterfall component's scope).
+// Turbo colormap — same curve as the full page so the widget reads
+// identically to the detail panel.
 function turbo(t) {
   t = Math.max(0, Math.min(1, t))
   const r = 34.61 + t * (1172.33 - t * (10793.56 - t * (33300.12 - t * (38394.49 - t * 14825.05))))
@@ -37,12 +34,17 @@ function turbo(t) {
           Math.max(0, Math.min(255, g)) | 0,
           Math.max(0, Math.min(255, b)) | 0]
 }
-function normPower(power, baseMean, baseStd) {
-  const floor = baseMean - 2 * (baseStd || 1)
-  const ceil  = baseMean + 10 * (baseStd || 1)
-  if (!isFinite(power)) return 0
-  return (power - floor) / (ceil - floor)
+function normPower(p, base, std) {
+  const floor = base - 2 * (std || 1)
+  const ceil  = base + 10 * (std || 1)
+  if (!isFinite(p)) return 0
+  return (p - floor) / (ceil - floor)
 }
+
+// How many history rows the widget shows per band. Each row = one scan
+// tick (~3 s). 20 rows = ~60 s of history — enough to see an event
+// rolling through without making the widget enormous.
+const ROWS_PER_BAND = 20
 
 const worstState = computed(() => {
   let worst = 'clear'
@@ -54,57 +56,52 @@ const worstState = computed(() => {
   }
   return worst
 })
-
 const unackedCount = computed(() => store.alerts.filter(a => !a.acked).length)
 
-// Per-band thin canvas — one for the FFT trace, one for the waterfall
-// mini-strip. We use two canvases so we can interpolate the waterfall
-// with CSS scaling (smooth) while keeping the trace crisp.
-const traceCanvases = reactive({})
-const heatmapCanvases = reactive({})
-
-const STRIP_HEIGHT_CSS = 28
-const HISTORY_COLS = 90
+// Canvases keyed by band: heat (waterfall) + trace (FFT sparkline).
+const heats = reactive({})
+const traces = reactive({})
 
 function drawBand(name) {
   const b = store.bands[name]
-  const trace = traceCanvases[name]
-  const heat  = heatmapCanvases[name]
   if (!b) return
+  const heat = heats[name]
+  const trace = traces[name]
   const top = b.rows?.[0]
   const nBins = top?.powers?.length || 1
-  const dpr = Math.min(2, window.devicePixelRatio || 1)
 
-  // Heatmap: newest column on the right
+  // Waterfall. Intrinsic canvas size: nBins × ROWS_PER_BAND. The CSS
+  // scales it to the strip area; image-rendering: auto gives us a
+  // smooth bilinear interpolation.
   if (heat) {
-    if (heat.width !== HISTORY_COLS) heat.width = HISTORY_COLS
-    if (heat.height !== 1) heat.height = 1
+    if (heat.width !== nBins) heat.width = nBins
+    if (heat.height !== ROWS_PER_BAND) heat.height = ROWS_PER_BAND
     const ctx = heat.getContext('2d')
-    const img = ctx.createImageData(HISTORY_COLS, 1)
+    const img = ctx.createImageData(nBins, ROWS_PER_BAND)
     const base = b.baselineMean, std = b.baselineStd || 1
-    for (let col = 0; col < HISTORY_COLS; col++) {
-      const row = b.rows[col]
-      let power = null
-      if (row && row.powers && row.powers.length > 0) {
-        power = row.max != null ? row.max : Math.max(...row.powers)
+    for (let y = 0; y < ROWS_PER_BAND; y++) {
+      const row = b.rows[y]
+      if (!row?.powers?.length) {
+        for (let x = 0; x < nBins; x++) {
+          const off = (y * nBins + x) * 4
+          img.data[off] = 15; img.data[off + 1] = 15; img.data[off + 2] = 25; img.data[off + 3] = 255
+        }
+        continue
       }
-      const [r, g, bl] = power == null
-        ? [15, 15, 25]
-        : turbo(normPower(power, base, std))
-      const imgCol = HISTORY_COLS - 1 - col
-      const off = imgCol * 4
-      img.data[off] = r
-      img.data[off + 1] = g
-      img.data[off + 2] = bl
-      img.data[off + 3] = 255
+      for (let x = 0; x < nBins; x++) {
+        const [r, g, bl] = turbo(normPower(row.powers[x], base, std))
+        const off = (y * nBins + x) * 4
+        img.data[off] = r; img.data[off + 1] = g; img.data[off + 2] = bl; img.data[off + 3] = 255
+      }
     }
     ctx.putImageData(img, 0, 0)
   }
 
-  // Trace: crisp sparkline, scaled to DPR. Spans the strip width.
+  // Trace sparkline overlay — current scan, drawn crisply at DPR.
   if (trace && top?.powers?.length) {
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
     const cssW = trace.clientWidth || 300
-    const cssH = STRIP_HEIGHT_CSS
+    const cssH = trace.clientHeight || 36
     const W = Math.min(1200, Math.floor(cssW * dpr))
     const H = Math.floor(cssH * dpr)
     if (trace.width !== W) trace.width = W
@@ -118,21 +115,18 @@ function drawBand(name) {
     const yRange = yTop - yBot
     const yAt = (dB) => ((yTop - dB) / yRange) * H
 
-    // Threshold lines (thin, semi-transparent)
-    ctx.strokeStyle = 'rgba(220, 38, 38, 0.7)'
+    // Jamming threshold line
+    ctx.strokeStyle = 'rgba(220, 38, 38, 0.55)'
     ctx.setLineDash([3 * dpr, 3 * dpr])
     ctx.lineWidth = 1
-    ctx.beginPath()
     const yJam = yAt(b.threshJamming || (b.baselineMean + 3 * (b.baselineStd || 1)))
-    ctx.moveTo(0, yJam); ctx.lineTo(W, yJam)
-    ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(0, yJam); ctx.lineTo(W, yJam); ctx.stroke()
     ctx.setLineDash([])
 
-    // Trace
     const powers = top.powers
     const n = powers.length
     ctx.strokeStyle = '#7dd3fc'
-    ctx.lineWidth = 1.1 * dpr
+    ctx.lineWidth = 1.3 * dpr
     ctx.lineJoin = 'round'
     ctx.beginPath()
     for (let i = 0; i < n; i++) {
@@ -144,10 +138,7 @@ function drawBand(name) {
     ctx.stroke()
   }
 }
-
-function redrawAll() {
-  for (const n of orderedBands.value) drawBand(n)
-}
+function redrawAll() { for (const n of orderedBands.value) drawBand(n) }
 
 watch(
   () => orderedBands.value.map(n => ({
@@ -155,11 +146,11 @@ watch(
     len: store.bands[n]?.rows?.length || 0,
     ts: store.bands[n]?.rows?.[0]?.ts || '',
     st: store.bands[n]?.state || '',
+    pz: store.paused,  // redraw when pause toggles so the pause overlay updates
   })),
   async () => { await nextTick(); redrawAll() },
   { deep: true }
 )
-
 onMounted(() => {
   store.connect()
   nextTick(redrawAll)
@@ -168,6 +159,10 @@ onMounted(() => {
 function onResize() { nextTick(redrawAll) }
 
 function go() { router.push('/spectrum') }
+function onPauseClick(e) {
+  e.stopPropagation()
+  store.togglePause()
+}
 
 function stateColour(state) {
   switch (state) {
@@ -178,7 +173,6 @@ function stateColour(state) {
     default: return '#6b7280'
   }
 }
-
 const borderClass = computed(() => {
   switch (worstState.value) {
     case 'jamming': return 'border-red-500 shadow-[0_0_12px_rgba(220,38,38,0.5)]'
@@ -187,7 +181,6 @@ const borderClass = computed(() => {
     default: return 'border-tactical-border'
   }
 })
-
 function shortLabel(name) {
   const map = {
     lora_868: 'LoRa 868',
@@ -205,6 +198,7 @@ function shortLabel(name) {
        :class="['bg-tactical-surface rounded-lg border p-3 cursor-pointer hover:bg-tactical-surface/80 transition-colors', borderClass]"
        role="button" tabindex="0"
        @click="go" @keyup.enter="go" @keyup.space="go">
+
     <div class="flex items-center justify-between mb-2">
       <div class="flex items-center gap-2">
         <span class="font-display font-semibold text-sm tracking-wide"
@@ -225,10 +219,29 @@ function shortLabel(name) {
               class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-red-900/60 text-red-200">
           {{ unackedCount }} unacked
         </span>
+        <span v-if="store.paused"
+              class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-yellow-900/60 text-yellow-200">
+          paused
+        </span>
       </div>
-      <div class="flex items-center gap-2 text-[10px] text-gray-500">
+      <div class="flex items-center gap-2 text-[10px]">
+        <button type="button"
+                class="pause-btn"
+                :title="store.paused ? 'Resume waterfall' : 'Pause waterfall'"
+                @click="onPauseClick"
+                @keyup.enter.stop @keyup.space.stop>
+          <!-- Play / Pause icon -->
+          <svg v-if="!store.paused" viewBox="0 0 16 16" width="12" height="12" aria-label="Pause">
+            <rect x="3" y="2" width="3" height="12" fill="currentColor" />
+            <rect x="10" y="2" width="3" height="12" fill="currentColor" />
+          </svg>
+          <svg v-else viewBox="0 0 16 16" width="12" height="12" aria-label="Play">
+            <polygon points="3,2 14,8 3,14" fill="currentColor" />
+          </svg>
+          {{ store.paused ? 'play' : 'pause' }}
+        </button>
         <span :class="store.connected ? 'text-emerald-400' : 'text-amber-400'">{{ store.connected ? 'LIVE' : 'IDLE' }}</span>
-        <span>· click for detail</span>
+        <span class="text-gray-500">· click for detail</span>
       </div>
     </div>
 
@@ -239,9 +252,8 @@ function shortLabel(name) {
           <span>{{ shortLabel(name) }}</span>
         </div>
         <div class="strip-canvases">
-          <!-- Heatmap fills the row; trace overlays on top -->
-          <canvas :ref="el => { if (el) heatmapCanvases[name] = el }" class="strip-heat" />
-          <canvas :ref="el => { if (el) traceCanvases[name] = el }" class="strip-trace" />
+          <canvas :ref="el => { if (el) heats[name] = el }" class="strip-heat" />
+          <canvas :ref="el => { if (el) traces[name] = el }" class="strip-trace" />
         </div>
       </div>
     </div>
@@ -252,13 +264,13 @@ function shortLabel(name) {
 .widget-grid {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .widget-strip {
   display: grid;
   grid-template-columns: 64px 1fr;
   gap: 6px;
-  align-items: center;
+  align-items: stretch;
 }
 .strip-label {
   display: flex;
@@ -269,15 +281,10 @@ function shortLabel(name) {
   color: #94a3b8;
   letter-spacing: 0.04em;
 }
-.strip-label .dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
+.strip-label .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .strip-canvases {
   position: relative;
-  height: 28px;
+  height: 36px;
   width: 100%;
   background: #020617;
   border-radius: 2px;
@@ -297,4 +304,20 @@ function shortLabel(name) {
   height: 100%;
   pointer-events: none;
 }
+.pause-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1e293b;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.pause-btn:hover { background: #334155; color: white; }
 </style>

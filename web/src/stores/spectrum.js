@@ -55,6 +55,14 @@ export const useSpectrumStore = defineStore('spectrum', () => {
   // environment and often persists across page reloads too.
   const mutedUntil = ref(loadMutedBands())
 
+  // paused freezes the waterfall rolling buffer so the operator can
+  // inspect a moment in time without new scans scrolling it away.
+  // SSE stream still runs and transitions are still tracked (so alerts
+  // + CoT/hub relay continue to work); only the rows ring is frozen.
+  const paused = ref(false)
+  function togglePause() { paused.value = !paused.value }
+  function setPaused(v) { paused.value = !!v }
+
   function loadPopupEnabled() {
     try {
       const raw = localStorage.getItem(LS_POPUP_ENABLED)
@@ -149,6 +157,10 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     b.baselineStd = evt.baseline_std
     b.threshJamming = evt.thresh_jamming_db
     b.threshInterference = evt.thresh_interference_db
+    // Paused: keep state/baseline fresh (so the alert badge is
+    // accurate) but don't push the scan into the rows ring — freezes
+    // the waterfall visualisation for inspection.
+    if (paused.value) return
     // Prepend newest at index 0; drop the tail past the cap. Keeping the
     // ring bounded matters — without this, a browser tab left open for a
     // few days would leak hundreds of MB of power arrays.
@@ -346,6 +358,9 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     anyActiveAlert,
     popupEnabled,
     mutedUntil,
+    paused,
+    togglePause,
+    setPaused,
     connect,
     disconnect,
     ackAlert,

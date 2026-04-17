@@ -371,9 +371,24 @@ function stateColour(state) {
   <div class="sa-root">
     <div class="sa-head">
       <h3>RF SPECTRUM — 5 monitored bands</h3>
-      <div class="sa-conn" :class="{ ok: store.connected, bad: !store.connected }">
-        <span class="dot"></span>
-        {{ store.connected ? 'streaming' : (store.enabled ? 'reconnecting' : 'RTL-SDR not present') }}
+      <div class="sa-head-right">
+        <button type="button" class="sa-pause"
+                :class="{ paused: store.paused }"
+                :title="store.paused ? 'Resume waterfall' : 'Pause waterfall'"
+                @click="store.togglePause()">
+          <svg v-if="!store.paused" viewBox="0 0 16 16" width="11" height="11">
+            <rect x="3" y="2" width="3" height="12" fill="currentColor" />
+            <rect x="10" y="2" width="3" height="12" fill="currentColor" />
+          </svg>
+          <svg v-else viewBox="0 0 16 16" width="11" height="11">
+            <polygon points="3,2 14,8 3,14" fill="currentColor" />
+          </svg>
+          {{ store.paused ? 'PLAY' : 'PAUSE' }}
+        </button>
+        <div class="sa-conn" :class="{ ok: store.connected, bad: !store.connected }">
+          <span class="dot"></span>
+          {{ store.paused ? 'paused' : (store.connected ? 'streaming' : (store.enabled ? 'reconnecting' : 'RTL-SDR not present')) }}
+        </div>
       </div>
     </div>
 
@@ -468,6 +483,23 @@ function stateColour(state) {
   letter-spacing: 0.1em;
   color: #cbd5e1;
 }
+.sa-head-right { display: flex; align-items: center; gap: 12px; }
+.sa-pause {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #1e293b;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  padding: 3px 10px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  font-weight: 700;
+}
+.sa-pause:hover { background: #334155; color: white; }
+.sa-pause.paused { background: #facc15; color: #0b0b0b; border-color: #eab308; }
 .sa-conn { font-size: 11px; display: flex; align-items: center; gap: 4px; }
 .sa-conn .dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; display: inline-block; }
 .sa-conn.ok .dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
