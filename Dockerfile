@@ -40,17 +40,19 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 RUN git clone --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git /src/rtl
 RUN mkdir /src/rtl/build && cd /src/rtl/build && \
     if [ "$TARGETARCH" = "arm64" ]; then \
+      # Point pkg-config at the arm64 multiarch dir so CMakeLists.txt's
+      # pkg_check_modules(LIBUSB libusb-1.0) finds the cross-installed
+      # headers+libs. Without this, upstream CMake hits
+      # "Package 'libusb-1.0', required by 'virtual:world', not found".
+      export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
+      export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
       cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
         -DINSTALL_UDEV_RULES=OFF \
-        -DDETACH_KERNEL_DRIVER=ON \
-        -DLIBUSB_LIBRARIES=/usr/lib/aarch64-linux-gnu/libusb-1.0.so \
-        -DLIBUSB_INCLUDE_DIR=/usr/include/libusb-1.0; \
+        -DDETACH_KERNEL_DRIVER=ON; \
     else \
       cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
