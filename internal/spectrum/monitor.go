@@ -171,11 +171,19 @@ func (m *SpectrumMonitor) publish(evt SpectrumEvent) {
 }
 
 func (m *SpectrumMonitor) run(ctx context.Context) {
-	// Phase 1: Baseline calibration
+	// Phase 1: Baseline calibration — sequential per band.
 	for _, band := range m.bands {
 		if ctx.Err() != nil {
 			return
 		}
+		// Mark this band as the active calibration target so the UI
+		// can show a live countdown + progress bar. Queued bands keep
+		// their CalibrationStartedAt == zero and read as "queued".
+		m.mu.Lock()
+		m.status[band.Name].CalibrationStartedAt = time.Now()
+		m.status[band.Name].CalibrationDurationSec = int(CalibrationDuration / time.Second)
+		m.mu.Unlock()
+
 		bl := m.calibrate(ctx, band)
 		if bl != nil {
 			m.mu.Lock()
@@ -184,6 +192,8 @@ func (m *SpectrumMonitor) run(ctx context.Context) {
 			m.status[band.Name].BaselineMean = bl.Mean
 			m.status[band.Name].BaselineStd = bl.Std
 			m.status[band.Name].Since = time.Now()
+			m.status[band.Name].CalibrationStartedAt = time.Time{}
+			m.status[band.Name].CalibrationDurationSec = 0
 			m.mu.Unlock()
 			log.Info().
 				Str("band", band.Name).
@@ -191,6 +201,14 @@ func (m *SpectrumMonitor) run(ctx context.Context) {
 				Float64("std", bl.Std).
 				Int("samples", bl.Samples).
 				Msg("spectrum: baseline calibrated")
+		} else {
+			// Failed to calibrate (insufficient samples). Clear the
+			// progress indicator so the UI stops showing the bar for
+			// this band — it's stuck in StateCalibrating with no ETA.
+			m.mu.Lock()
+			m.status[band.Name].CalibrationStartedAt = time.Time{}
+			m.status[band.Name].CalibrationDurationSec = 0
+			m.mu.Unlock()
 		}
 	}
 
@@ -241,24 +259,32 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 		// and std are zero until calibration finishes, so the UI
 		// normalises against the raw sample range — the waterfall
 		// paints from second one instead of sitting blank for the full
-		// 2.5-minute cold-boot calibration window. [MESHSAT-509]
+		// 2.5-minute cold-boot calibration window. Calibration
+		// progress fields let the UI show a live countdown.
+		// [MESHSAT-509]
+		m.mu.RLock()
+		calStart := m.status[band.Name].CalibrationStartedAt
+		calDur := m.status[band.Name].CalibrationDurationSec
+		m.mu.RUnlock()
 		m.publish(SpectrumEvent{
-			Kind:                 EventScan,
-			Band:                 band.Name,
-			Label:                band.Label,
-			InterfaceID:          band.InterfaceID,
-			FreqLow:              band.FreqLow,
-			FreqHigh:             band.FreqHigh,
-			BinSize:              band.BinSize,
-			Timestamp:            time.Now(),
-			Powers:               powers,
-			AvgDB:                avg,
-			MaxDB:                maxPower,
-			State:                StateCalibrating,
-			BaselineMean:         0,
-			BaselineStd:          0,
-			ThreshJammingDB:      0,
-			ThreshInterferenceDB: 0,
+			Kind:                   EventScan,
+			Band:                   band.Name,
+			Label:                  band.Label,
+			InterfaceID:            band.InterfaceID,
+			FreqLow:                band.FreqLow,
+			FreqHigh:               band.FreqHigh,
+			BinSize:                band.BinSize,
+			Timestamp:              time.Now(),
+			Powers:                 powers,
+			AvgDB:                  avg,
+			MaxDB:                  maxPower,
+			State:                  StateCalibrating,
+			BaselineMean:           0,
+			BaselineStd:            0,
+			ThreshJammingDB:        0,
+			ThreshInterferenceDB:   0,
+			CalibrationStartedAt:   calStart,
+			CalibrationDurationSec: calDur,
 		})
 
 		time.Sleep(time.Second)

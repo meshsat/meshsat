@@ -24,6 +24,10 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive } from 'vue'
 import { useSpectrumStore } from '@/stores/spectrum'
 
+// 1 Hz re-render tick for the calibration countdown — same pattern as
+// the compact widget. Cleared on unmount.
+const nowMs = ref(Date.now())
+
 const store = useSpectrumStore()
 
 const BAND_ORDER = ['lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
@@ -367,15 +371,30 @@ watch(
   { deep: true }
 )
 
+let tickTimer = null
 onMounted(() => {
   store.connect()
   nextTick(redrawAll)
   window.addEventListener('resize', onResize)
+  tickTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
 })
 function onResize() { nextTick(redrawAll) }
+
+function calibrationInfo(name) {
+  const b = store.bands[name]
+  if (!b || b.state !== 'calibrating') return null
+  const started = b.calibrationStartedAt
+  const dur = b.calibrationDurationSec || 30
+  if (!started) return { active: false, pct: 0, remainingSec: null }
+  const elapsed = Math.max(0, (nowMs.value - started.getTime()) / 1000)
+  const pct = Math.min(100, (elapsed / dur) * 100)
+  const remaining = Math.max(0, Math.ceil(dur - elapsed))
+  return { active: true, pct, remainingSec: remaining }
+}
 
 // ---- Axes (SVG) computed per band ----
 
@@ -453,12 +472,29 @@ function stateColour(state) {
         </div>
         <div class="sa-panel-meta">
           <span>iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
-          <span>baseline: {{ store.bands[name]?.baselineMean?.toFixed?.(1) }} dB ± {{ store.bands[name]?.baselineStd?.toFixed?.(2) }}</span>
+          <span v-if="store.bands[name]?.state !== 'calibrating'">
+            baseline: {{ store.bands[name]?.baselineMean?.toFixed?.(1) }} dB ± {{ store.bands[name]?.baselineStd?.toFixed?.(2) }}
+          </span>
           <span class="sa-state" :style="{ background: stateColour(store.bands[name]?.state) }">
             {{ store.bands[name]?.state || 'calibrating' }}
           </span>
         </div>
       </div>
+      <!-- Calibration strip: visible only during Phase 1. Shows a
+           progress bar + countdown for the active band, or a "queued"
+           indicator for pending ones. -->
+      <template v-if="calibrationInfo(name)">
+        <div v-if="calibrationInfo(name).active" class="sa-cal-strip">
+          <div class="sa-cal-bar" :style="{ width: calibrationInfo(name).pct + '%' }" />
+          <div class="sa-cal-text">
+            calibrating baseline · {{ calibrationInfo(name).remainingSec }}s remaining
+            ({{ calibrationInfo(name).pct.toFixed(0) }}%)
+          </div>
+        </div>
+        <div v-else class="sa-cal-strip sa-cal-queued">
+          <div class="sa-cal-text">queued — waiting for earlier bands to finish calibrating</div>
+        </div>
+      </template>
 
       <div class="sa-plot"
            @mousemove="e => updateHover(name, e, $event.currentTarget)"
@@ -588,6 +624,37 @@ function stateColour(state) {
 }
 .sa-panel-title .sa-id { color: #64748b; font-family: monospace; font-size: 10px; margin-left: 6px; }
 .sa-panel-meta { display: flex; align-items: center; gap: 10px; font-size: 10px; color: #94a3b8; }
+
+.sa-cal-strip {
+  position: relative;
+  height: 22px;
+  background: #0b1220;
+  border-bottom: 1px solid #1e293b;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  overflow: hidden;
+}
+.sa-cal-bar {
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  background: linear-gradient(90deg,
+    rgba(99, 102, 241, 0.55) 0%,
+    rgba(99, 102, 241, 0.25) 100%);
+  transition: width 1s linear;
+}
+.sa-cal-text {
+  position: relative;
+  font-family: monospace;
+  font-size: 11px;
+  color: #c7d2fe;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+}
+.sa-cal-queued {
+  background: #0f172a;
+}
+.sa-cal-queued .sa-cal-text { color: #64748b; font-weight: 500; font-style: italic; }
 .sa-state {
   color: #0b0b0b;
   font-weight: 700;

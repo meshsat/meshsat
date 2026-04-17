@@ -107,6 +107,18 @@ type BandStatus struct {
 	Consecutive  int           `json:"consecutive_samples"`
 	FreqLow      int           `json:"freq_low"`
 	FreqHigh     int           `json:"freq_high"`
+
+	// CalibrationStartedAt is non-zero only for the band whose 30 s
+	// calibration window is currently running. The UI derives a
+	// countdown + progress bar from it. Bands still queued behind the
+	// active one have this field zero and state=calibrating — the UI
+	// shows them as "queued". [MESHSAT-509]
+	CalibrationStartedAt time.Time `json:"calibration_started_at,omitempty"`
+
+	// CalibrationDurationSec echoes the server's constant so the UI
+	// doesn't hardcode it. 30 s currently; changing it backend-side
+	// flows through to the client without a client redeploy.
+	CalibrationDurationSec int `json:"calibration_duration_sec,omitempty"`
 }
 
 // Baseline holds the calibrated noise floor statistics for a band.
@@ -152,6 +164,11 @@ type SpectrumEvent struct {
 	// directly.
 	ThreshJammingDB      float64 `json:"thresh_jamming_db"`
 	ThreshInterferenceDB float64 `json:"thresh_interference_db"`
+	// Calibration progress echoed on every scan event during Phase 1
+	// so the UI can render a live countdown + progress bar without
+	// re-polling /api/spectrum/status. Zero-valued on Phase 2 events.
+	CalibrationStartedAt   time.Time `json:"calibration_started_at,omitempty"`
+	CalibrationDurationSec int       `json:"calibration_duration_sec,omitempty"`
 }
 
 // Detection thresholds (from issue spec).

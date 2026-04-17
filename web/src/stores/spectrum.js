@@ -145,6 +145,8 @@ export const useSpectrumStore = defineStore('spectrum', () => {
         baselineStd: evt.baseline_std || 0,
         threshJamming: evt.thresh_jamming_db || 0,
         threshInterference: evt.thresh_interference_db || 0,
+        calibrationStartedAt: null,
+        calibrationDurationSec: 30,
       }
     }
     return bands.value[evt.band]
@@ -157,6 +159,15 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     b.baselineStd = evt.baseline_std
     b.threshJamming = evt.thresh_jamming_db
     b.threshInterference = evt.thresh_interference_db
+    // calibration_started_at arrives on Phase 1 events only; clear on
+    // Phase 2 (state != calibrating) so the UI stops showing the bar.
+    if (evt.calibration_started_at) {
+      b.calibrationStartedAt = new Date(evt.calibration_started_at)
+      b.calibrationDurationSec = evt.calibration_duration_sec || 30
+    } else if (evt.state !== 'calibrating') {
+      b.calibrationStartedAt = null
+      b.calibrationDurationSec = 0
+    }
     // Paused: keep state/baseline fresh (so the alert badge is
     // accurate) but don't push the scan into the rows ring — freezes
     // the waterfall visualisation for inspection.
@@ -282,6 +293,13 @@ export const useSpectrumStore = defineStore('spectrum', () => {
           threshInterference: b.baseline_mean && b.baseline_std
             ? b.baseline_mean + 6 * b.baseline_std
             : 0,
+          // Calibration progress fields come from the /api/spectrum/status
+          // poll only — scan-event payloads don't carry them.
+          // calibration_started_at arrives as an RFC3339 string or absent
+          // (zero-valued, omitempty). We parse to a Date so the
+          // countdown computation is cheap.
+          calibrationStartedAt: b.calibration_started_at ? new Date(b.calibration_started_at) : null,
+          calibrationDurationSec: b.calibration_duration_sec || 30,
         }
       }
       bands.value = next

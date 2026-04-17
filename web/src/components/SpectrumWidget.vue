@@ -8,9 +8,16 @@
   outside the controls → /spectrum for detail.
 -->
 <script setup>
-import { ref, computed, onMounted, watch, nextTick, reactive } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSpectrumStore } from '@/stores/spectrum'
+
+// nowTick drives the per-second countdown re-render. Ticking every 1s
+// is enough — the calibration window is 30 s so sub-second precision
+// would just burn CPU. Shared across all widget instances via module
+// scope? No — each mount sets its own interval; Vue tears it down on
+// unmount via onBeforeUnmount.
+const nowMs = ref(Date.now())
 
 const store = useSpectrumStore()
 const router = useRouter()
@@ -184,12 +191,33 @@ watch(
   async () => { await nextTick(); redrawAll() },
   { deep: true }
 )
+let tickTimer = null
 onMounted(() => {
   store.connect()
   nextTick(redrawAll)
   window.addEventListener('resize', onResize)
+  tickTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
+})
+onBeforeUnmount(() => {
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
+  window.removeEventListener('resize', onResize)
 })
 function onResize() { nextTick(redrawAll) }
+
+// calibrationInfo(bandName) → { active: bool, pct: 0..100, remainingSec: int }
+// active=true if this band is the band whose 30s window is live right now.
+// pct=0 / remainingSec=null for bands still queued in Phase 1.
+function calibrationInfo(name) {
+  const b = store.bands[name]
+  if (!b || b.state !== 'calibrating') return null
+  const started = b.calibrationStartedAt
+  const dur = b.calibrationDurationSec || 30
+  if (!started) return { active: false, pct: 0, remainingSec: null }
+  const elapsed = Math.max(0, (nowMs.value - started.getTime()) / 1000)
+  const pct = Math.min(100, (elapsed / dur) * 100)
+  const remaining = Math.max(0, Math.ceil(dur - elapsed))
+  return { active: true, pct, remainingSec: remaining }
+}
 
 function go() { router.push('/spectrum') }
 function onPauseClick(e) {
@@ -287,6 +315,20 @@ function shortLabel(name) {
         <div class="strip-canvases">
           <canvas :ref="el => { if (el) heats[name] = el }" class="strip-heat" />
           <canvas :ref="el => { if (el) traces[name] = el }" class="strip-trace" />
+          <!-- Calibration overlay: progress bar + countdown for the
+               band whose 30 s window is currently running, or "queued"
+               for bands still waiting their turn. -->
+          <template v-if="calibrationInfo(name)">
+            <div v-if="calibrationInfo(name).active" class="cal-overlay">
+              <div class="cal-bar" :style="{ width: calibrationInfo(name).pct + '%' }" />
+              <div class="cal-text">
+                calibrating · {{ calibrationInfo(name).remainingSec }}s
+              </div>
+            </div>
+            <div v-else class="cal-overlay cal-queued">
+              <div class="cal-text">queued</div>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -337,6 +379,39 @@ function shortLabel(name) {
   height: 100%;
   pointer-events: none;
 }
+.cal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+  pointer-events: none;
+  z-index: 3;
+  overflow: hidden;
+}
+.cal-bar {
+  position: absolute;
+  inset: 0;
+  right: auto;
+  background: linear-gradient(90deg,
+    rgba(99, 102, 241, 0.55) 0%,
+    rgba(99, 102, 241, 0.30) 100%);
+  transition: width 1s linear;
+}
+.cal-text {
+  position: relative;
+  font-family: monospace;
+  font-size: 10px;
+  color: #e0e7ff;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.cal-queued {
+  background: rgba(15, 23, 42, 0.45);
+}
+.cal-queued .cal-text { color: #94a3b8; font-weight: 500; }
 .pause-btn {
   display: inline-flex;
   align-items: center;
