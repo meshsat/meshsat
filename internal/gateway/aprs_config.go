@@ -29,6 +29,10 @@ type APRSConfig struct {
 }
 
 // DefaultAPRSConfig returns sensible defaults for EU APRS on an AIOC kit.
+// PTT defaults to CM108 HID (AIOC's actual PTT path) — the ACM serial
+// port on the AIOC is present but NOT wired to the radio's PTT line.
+// Setting PTTLine to "RTS" or "DTR" opts into serial PTT for non-AIOC
+// cables that do wire it that way.
 func DefaultAPRSConfig() APRSConfig {
 	return APRSConfig{
 		KISSHost:     "127.0.0.1",
@@ -37,8 +41,8 @@ func DefaultAPRSConfig() APRSConfig {
 		APRSISServer: "euro.aprs2.net:14580",
 		FrequencyMHz: 144.800, // EU APRS frequency
 		AudioCard:    "AllInOneCable",
-		PTTDevice:    "/dev/ttyACM1",
-		PTTLine:      "RTS",
+		PTTDevice:    "",
+		PTTLine:      "", // empty => PTT CM108 (auto HID discovery)
 		ModemBaud:    1200,
 	}
 }
@@ -70,12 +74,9 @@ func (c *APRSConfig) Validate() error {
 		if c.AudioCard == "" {
 			c.AudioCard = "AllInOneCable"
 		}
-		if c.PTTDevice == "" {
-			c.PTTDevice = "/dev/ttyACM1"
-		}
-		if c.PTTLine == "" {
-			c.PTTLine = "RTS"
-		}
+		// PTTDevice/PTTLine default to empty so the supervisor emits
+		// `PTT CM108` (HID GPIO, what AIOC actually uses). Setting
+		// PTTLine to RTS/DTR is an explicit opt-in for serial PTT.
 		if c.ModemBaud == 0 {
 			c.ModemBaud = 1200
 		}

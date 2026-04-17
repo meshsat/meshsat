@@ -120,6 +120,10 @@ RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
 # [MESHSAT-515]
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS direwolf-builder
 ARG TARGETARCH
+# libudev-dev + libhidapi-dev are needed for CM108 PTT — the AIOC keys
+# the radio's PTT via the CM108/CM109/CM119 HID GPIO chip, NOT via
+# serial DTR/RTS. Without these, Direwolf compiles but `PTT CM108` in
+# the conf is a silent no-op. [MESHSAT-514, debugged 2026-04-17]
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       gcc g++ libc6-dev git cmake make pkg-config ca-certificates && \
@@ -127,9 +131,10 @@ RUN apt-get update -qq && \
       dpkg --add-architecture arm64 && apt-get update -qq && \
       apt-get install -y -qq --no-install-recommends \
         gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
-        libasound2-dev:arm64; \
+        libasound2-dev:arm64 libudev-dev:arm64 libhidapi-dev:arm64; \
     else \
-      apt-get install -y -qq --no-install-recommends libasound2-dev; \
+      apt-get install -y -qq --no-install-recommends \
+        libasound2-dev libudev-dev libhidapi-dev; \
     fi && \
     rm -rf /var/lib/apt/lists/*
 
@@ -189,7 +194,8 @@ RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       ca-certificates wget coreutils python3 python3-serial \
       libusb-1.0-0 libfftw3-single3 \
-      libasound2 alsa-utils usbutils procps && \
+      libasound2 alsa-utils usbutils procps \
+      libudev1 libhidapi-hidraw0 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder   /meshsat                    /usr/local/bin/meshsat

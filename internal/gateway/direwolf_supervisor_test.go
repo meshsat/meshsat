@@ -9,28 +9,53 @@ import (
 	"time"
 )
 
-func TestRenderDirewolfConf_Shape(t *testing.T) {
+func TestRenderDirewolfConf_DefaultCM108(t *testing.T) {
 	cfg := APRSConfig{
 		KISSPort:  8001,
 		Callsign:  "PA3XYZ",
 		SSID:      10,
 		AudioCard: "AllInOneCable",
-		PTTDevice: "/dev/ttyACM1",
-		PTTLine:   "RTS",
 		ModemBaud: 1200,
+		// PTTDevice/PTTLine empty — default to CM108 HID path (AIOC)
 	}
 	got := renderDirewolfConf(cfg)
 	for _, want := range []string{
 		"ADEVICE  plughw:AllInOneCable,0",
+		"ARATE 48000",
 		"MYCALL PA3XYZ-10",
 		"MODEM 1200",
-		"PTT /dev/ttyACM1 RTS",
+		"PTT CM108",
+		"TXDELAY 30",
+		"TXTAIL 10",
 		"KISSPORT 8001",
 		"AGWPORT 0",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered conf missing %q\n---\n%s", want, got)
 		}
+	}
+	// Should NOT contain legacy serial PTT form when PTTLine is empty.
+	if strings.Contains(got, "PTT /dev/") {
+		t.Errorf("default conf should not use serial PTT:\n%s", got)
+	}
+}
+
+func TestRenderDirewolfConf_SerialOverride(t *testing.T) {
+	cfg := APRSConfig{
+		KISSPort:  8001,
+		Callsign:  "PA3XYZ",
+		SSID:      10,
+		AudioCard: "hw",
+		PTTDevice: "/dev/ttyUSB0",
+		PTTLine:   "RTS",
+		ModemBaud: 1200,
+	}
+	got := renderDirewolfConf(cfg)
+	if !strings.Contains(got, "PTT /dev/ttyUSB0 RTS") {
+		t.Errorf("serial PTT override missing: %s", got)
+	}
+	if strings.Contains(got, "PTT CM108") {
+		t.Errorf("serial override should replace CM108, not coexist:\n%s", got)
 	}
 }
 
