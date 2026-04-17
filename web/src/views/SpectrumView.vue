@@ -45,6 +45,23 @@ function fmtTs(iso) {
   if (!iso) return '—'
   try { return new Date(iso).toLocaleString() } catch { return iso }
 }
+
+// ECCM quick-reference table (FM 3-12 "Cyberspace and Electronic
+// Warfare Operations"). Always visible so operators internalise the
+// anti-jam procedures before an event — matches the doctrine that
+// crews must know MIJI reactions without consulting the display.
+const ECCM_TABLE = [
+  { band: 'LoRa EU868',  interference: 'Shift to alt 867.X sub-band or raise spreading factor',
+    jamming: 'Barrage ISM — switch mesh to Iridium SBD relay; file MIJI-9 report to hub' },
+  { band: 'APRS 144.8',  interference: 'Check HT squelch + PL tone; move to BPQ digipeater peer',
+    jamming: 'VHF 2 m barrage — fall back to HF (30 m) or mesh relay; MIJI-9 to net-control' },
+  { band: 'GPS L1',      interference: 'Derate GNSS stratum; warn timesync; verify sky view',
+    jamming: 'DO NOT trust GNSS — peer-consensus time + dead-reckoning' },
+  { band: 'LTE B20 (800)', interference: 'Auto-fallback to B8 (900); monitor RSRQ',
+    jamming: 'Pin modem to B8; enable Iridium SBD for ops messaging' },
+  { band: 'LTE B8 (900)',  interference: 'Auto-fallback to B20 (800); monitor RSRQ',
+    jamming: 'Pin modem to B20; expect SMS degradation; escalate if both hit' },
+]
 </script>
 
 <template>
@@ -158,6 +175,42 @@ function fmtTs(iso) {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- ECCM quick-reference (FM 3-12). Always visible — operators must
+         know MIJI reactions in advance, not be reading them for the
+         first time during an event. -->
+    <div class="bg-tactical-surface rounded-lg border border-tactical-border p-4">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-semibold tracking-wide">
+          ECCM Quick Reference
+          <span class="text-[10px] text-gray-500 ml-2 uppercase tracking-wider">FM 3-12 anti-jam recommended actions</span>
+        </div>
+      </div>
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="text-left text-gray-500 uppercase tracking-wider">
+            <th class="py-1.5 w-[140px]">Band</th>
+            <th>On interference</th>
+            <th>On jamming</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in ECCM_TABLE" :key="row.band"
+              class="border-t border-tactical-border">
+            <td class="py-1.5 font-mono text-gray-300">{{ row.band }}</td>
+            <td class="text-amber-300">{{ row.interference }}</td>
+            <td class="text-red-300">{{ row.jamming }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="text-[10px] text-gray-500 mt-3 leading-relaxed">
+        MIJI-9 report fields: (1) type M/I/J/I · (2) affected freq ·
+        (3) call signs · (4) equipment · (5) strength/modulation ·
+        (6) mission effect · (7) anti-jam actions taken ·
+        (8) time of occurrence · (9) location. TAK/CoT relay fires
+        automatically on state transitions (type <code>b-m-p-w-j</code>).
+      </div>
     </div>
   </div>
 </template>
