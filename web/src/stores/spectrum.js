@@ -55,6 +55,41 @@ export const useSpectrumStore = defineStore('spectrum', () => {
   // environment and often persists across page reloads too.
   const mutedUntil = ref(loadMutedBands())
 
+  // Hardware status polled from /api/spectrum/hardware every 10 s.
+  // Separate from `bands` because it's scanner-level, not band-level,
+  // and we want to show it even during calibration / no-data windows.
+  const hardware = ref({
+    available: false,
+    scanner: { binary_path: '', dongle_vid: '', dongle_pid: '', usb_path: '', product_name: '' },
+    last_scan_at: null,
+    last_scan_ms: 0,
+    scan_error_count: 0,
+    last_scan_error: '',
+    last_scan_error_at: null,
+    scan_interval_sec: 0,
+    calibration_duration_sec: 0,
+  })
+  let hardwareTimer = null
+  async function refreshHardware() {
+    try {
+      const resp = await fetch('/api/spectrum/hardware', { credentials: 'same-origin' })
+      if (!resp.ok) return
+      hardware.value = await resp.json()
+    } catch { /* transient network — next tick retries */ }
+  }
+
+  // Relay status (MIJI/CoT + hub). Map keyed by destination name;
+  // empty object pre-fetch. Polled alongside hardware on the same
+  // 10 s cadence so both panels stay in sync.
+  const relayStatus = ref({})
+  async function refreshRelayStatus() {
+    try {
+      const resp = await fetch('/api/spectrum/relay-status', { credentials: 'same-origin' })
+      if (!resp.ok) return
+      relayStatus.value = await resp.json()
+    } catch { /* transient */ }
+  }
+
   // paused freezes the waterfall rolling buffer so the operator can
   // inspect a moment in time without new scans scrolling it away.
   // SSE stream still runs and transitions are still tracked (so alerts
@@ -152,6 +187,11 @@ export const useSpectrumStore = defineStore('spectrum', () => {
         occupancy: 0,
         flatness: 0,
         since: null,
+        baselineMad: 0,
+        // Event-scoped peak (since last state transition). Reset on
+        // transition; ratcheted upward on subsequent scans.
+        eventPeakDB: null,
+        eventPeakFreqHz: 0,
       }
     }
     return bands.value[evt.band]
@@ -166,7 +206,10 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     b.threshInterference = evt.thresh_interference_db
     if (typeof evt.occupancy === 'number') b.occupancy = evt.occupancy
     if (typeof evt.flatness === 'number') b.flatness = evt.flatness
+    if (typeof evt.baseline_mad === 'number') b.baselineMad = evt.baseline_mad
     if (evt.since && evt.since !== '0001-01-01T00:00:00Z') b.since = new Date(evt.since)
+    if (typeof evt.event_peak_db === 'number') b.eventPeakDB = evt.event_peak_db
+    if (typeof evt.event_peak_freq_hz === 'number') b.eventPeakFreqHz = evt.event_peak_freq_hz
     // calibration_started_at arrives on Phase 1 events only; clear on
     // Phase 2 (state != calibrating) so the UI stops showing the bar.
     if (evt.calibration_started_at) {
@@ -323,7 +366,10 @@ export const useSpectrumStore = defineStore('spectrum', () => {
           // MIJI-9 fields from status endpoint
           occupancy: typeof b.occupancy === 'number' ? b.occupancy : 0,
           flatness: typeof b.flatness === 'number' ? b.flatness : 0,
+          baselineMad: typeof b.baseline_mad === 'number' ? b.baseline_mad : 0,
           since: b.since && b.since !== '0001-01-01T00:00:00Z' ? new Date(b.since) : null,
+          eventPeakDB: typeof b.event_peak_db === 'number' ? b.event_peak_db : null,
+          eventPeakFreqHz: typeof b.event_peak_freq_hz === 'number' ? b.event_peak_freq_hz : 0,
         }
       }
       bands.value = next
@@ -334,9 +380,18 @@ export const useSpectrumStore = defineStore('spectrum', () => {
 
   function connect() {
     if (es) return
-    // Fire-and-forget the status seed alongside opening the SSE — both
-    // are cheap and the fetch call resolves in <100ms on a local kit.
+    // Fire-and-forget the status + hardware seed alongside opening the
+    // SSE — both are cheap and the fetch calls resolve in <100 ms on a
+    // local kit. Hardware refreshes on a 10 s timer so the UI reflects
+    // a newly plugged dongle or a wedged scanner without a page reload.
     seedFromStatus()
+    refreshHardware()
+    refreshRelayStatus()
+    if (hardwareTimer) clearInterval(hardwareTimer)
+    hardwareTimer = setInterval(() => {
+      refreshHardware()
+      refreshRelayStatus()
+    }, 10_000)
     try {
       es = new EventSource('/api/spectrum/stream')
     } catch (e) {
@@ -388,6 +443,7 @@ export const useSpectrumStore = defineStore('spectrum', () => {
   function disconnect() {
     closeES()
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+    if (hardwareTimer) { clearInterval(hardwareTimer); hardwareTimer = null }
     connected.value = false
   }
 
@@ -401,6 +457,10 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     popupEnabled,
     mutedUntil,
     paused,
+    hardware,
+    relayStatus,
+    refreshHardware,
+    refreshRelayStatus,
     togglePause,
     setPaused,
     connect,

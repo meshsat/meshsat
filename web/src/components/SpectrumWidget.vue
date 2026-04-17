@@ -31,34 +31,50 @@ const orderedBands = computed(() => {
 // a rising attack, short enough to stay visually meaningful at 120 px.
 const SPARK_SAMPLES = 60
 
-// Freshness readout — newest scan timestamp across all bands. Ticks
-// against nowMs so the "N s ago" label stays honest even if SSE pauses
-// (MIL-STD-1472H §5.2: data freshness must always be visible on a
-// safety-critical display).
-const lastUpdateMs = computed(() => {
-  let newest = 0
+// Freshness readout — OLDEST scan timestamp across all bands. We use
+// min-across-bands, not max, so a single wedged band surfaces as
+// "5m ago" instead of being hidden by its still-healthy neighbours.
+// Safety semantic: the widget answers "am I OK?" — the worst band
+// decides. MIL-STD-1472H §5.2 requires data freshness on a
+// safety-critical display.
+//
+// Cold-boot nuance: if no band has produced a scan yet we return 0 and
+// ageText renders "initialising" (no amber). The moment at least one
+// band has data we switch to live freshness. This avoids the dashboard
+// flashing amber for the first ~12 s of every container restart.
+const bandFreshness = computed(() => {
+  const entries = []
   for (const n of Object.keys(store.bands)) {
     const ts = store.bands[n]?.rows?.[0]?.ts
     if (!ts) continue
     const ms = Date.parse(ts)
-    if (isFinite(ms) && ms > newest) newest = ms
+    if (isFinite(ms)) entries.push({ name: n, ms })
   }
-  return newest
+  return entries
 })
+const lastUpdateMs = computed(() => {
+  const entries = bandFreshness.value
+  if (entries.length === 0) return 0
+  let oldest = Infinity
+  for (const e of entries) if (e.ms < oldest) oldest = e.ms
+  return oldest
+})
+const hasAnyScanYet = computed(() => bandFreshness.value.length > 0)
 const ageText = computed(() => {
+  if (!hasAnyScanYet.value) return 'initialising'
   const ms = lastUpdateMs.value
-  if (!ms) return '—'
   const dt = Math.max(0, Math.floor((nowMs.value - ms) / 1000))
   if (dt < 60) return `${dt}s ago`
   if (dt < 3600) return `${Math.floor(dt / 60)}m ago`
   return `${Math.floor(dt / 3600)}h ago`
 })
-// Stale threshold: scan cadence is ~3s, so >15s without a new row
-// means the stream is wedged. Turn the age readout amber.
+// Stale threshold: scan cadence is 3 s (ScanInterval) so >15s without
+// a new scan on the OLDEST band means at least one band is wedged.
+// Don't flash amber pre-first-scan — that's "initialising", not a
+// fault.
 const ageStale = computed(() => {
-  const ms = lastUpdateMs.value
-  if (!ms) return true
-  return (nowMs.value - ms) > 15000
+  if (!hasAnyScanYet.value) return false
+  return (nowMs.value - lastUpdateMs.value) > 15000
 })
 
 const worstState = computed(() => {

@@ -23,6 +23,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive } from 'vue'
 import { useSpectrumStore } from '@/stores/spectrum'
+import { eccmAction as eccmActionFor } from '@/composables/useEccm'
 
 // 1 Hz re-render tick for the calibration countdown — same pattern as
 // the compact widget. Cleared on unmount.
@@ -77,8 +78,10 @@ const waterfallCanvases = reactive({})
 // but are scaled to fit via their CSS width rule).
 const PANEL_SPECTRUM_H = 110
 const PANEL_WATERFALL_H = 160
-const PANEL_AXIS_GUTTER_L = 46  // room for dBm labels
-const PANEL_AXIS_GUTTER_B = 18  // room for freq labels
+const PANEL_AXIS_GUTTER_L = 46  // room for dBm labels (left, FFT Y-axis)
+const PANEL_AXIS_GUTTER_R = 72  // room for dBm colour legend + time labels
+const PANEL_AXIS_GUTTER_B = 18  // room for freq labels (bottom)
+const PANEL_LEGEND_BAR_W  = 14  // width of the Turbo gradient stripe inside the right gutter
 
 // Hover state per panel — keyed by band name.
 const hover = reactive({}) // { [band]: { x, y, freqHz, power, inside } }
@@ -91,7 +94,7 @@ function updateHover(band, e, el) {
   const x = e.clientX - rect.left
   const y = e.clientY - rect.top
   const plotX = x - PANEL_AXIS_GUTTER_L
-  const plotW = rect.width - PANEL_AXIS_GUTTER_L
+  const plotW = rect.width - PANEL_AXIS_GUTTER_L - PANEL_AXIS_GUTTER_R
   if (plotX < 0 || plotX > plotW) { hover[band] = { inside: false }; return }
   const b = store.bands[band]
   if (!b || !b.rows?.[0]?.powers) { hover[band] = { inside: false }; return }
@@ -418,7 +421,45 @@ function axesFor(bandName) {
     const t = i / 4
     fLabels.push({ fHz, label: fmtFreq(fHz, span), t })
   }
-  return { dbLabels, fLabels, yTop, yBot }
+
+  // Colour-legend labels covering the SAME dBm range the waterfall
+  // Turbo colormap uses — baseline - 2σ (floor) → baseline + 10σ
+  // (ceiling), per rowPaletteRange. Without these labels the hue is
+  // unreadable; with them, operators can estimate the dBm of any
+  // colour they see. Shown on the right gutter next to a gradient bar.
+  // Scale uses RobustScaleDB-equivalent (max of std, 1.4826*MAD, 0.5)
+  // so the legend stays meaningful on locked-carrier bands where Std
+  // alone collapses. We replicate the arithmetic locally to avoid
+  // plumbing RobustScaleDB through the store.
+  const scale = Math.max(
+    b.baselineStd || 0,
+    1.4826 * (b.baselineMad || 0),
+    0.5,
+  )
+  const legendFloor = b.baselineMean - 2 * scale
+  const legendCeil  = b.baselineMean + 10 * scale
+  const legendStops = [0, 0.25, 0.5, 0.75, 1.0]
+  const legendLabels = legendStops.map(t => ({
+    t,
+    dB: legendFloor + (legendCeil - legendFloor) * (1 - t), // y=0 is top (hottest)
+    y: t * PANEL_WATERFALL_H,
+  }))
+
+  // Time-axis labels on the waterfall right gutter. Row 0 = now
+  // (top), rows age downward. Scan cadence is ScanInterval (3 s
+  // backend default) so rows cover ~3 s each. Mark 5 ticks at 0/1m/2m/3m/4m
+  // of elapsed time — precise enough without cluttering. If the
+  // latest row has a timestamp we anchor the tick labels to it,
+  // otherwise fall back to "-Nm" relative labels.
+  const ScanIntervalSec = 3 // matches backend ScanInterval — if it changes, update here
+  const tLabels = []
+  for (let mins = 0; mins <= 4; mins++) {
+    const rowIdx = Math.min(store.WATERFALL_ROWS - 1, Math.floor((mins * 60) / ScanIntervalSec))
+    const y = (rowIdx / (store.WATERFALL_ROWS - 1)) * PANEL_WATERFALL_H
+    tLabels.push({ y, label: mins === 0 ? 'now' : `-${mins}m` })
+  }
+
+  return { dbLabels, fLabels, yTop, yBot, legendFloor, legendCeil, legendLabels, tLabels }
 }
 
 function fmtFreq(hz, span) {
@@ -440,8 +481,9 @@ function stateColour(state) {
 
 // ---- MIJI-9 report metrics (P7-P12) ----
 
-// Peak bin → (freq, power). Currently-displayed scan's max power bin.
-function peakInfo(name) {
+// Scan-peak: the max bin of the most recent FFT sweep. This is what
+// the operator sees flicker around in the Spectrum trace.
+function scanPeakInfo(name) {
   const b = store.bands[name]
   if (!b) return null
   const row = b.rows?.[0]
@@ -454,6 +496,16 @@ function peakInfo(name) {
   const span = b.meta.freqHigh - b.meta.freqLow
   const freqHz = b.meta.freqLow + (idx + 0.5) * (span / row.powers.length)
   return { freqHz, powerDB: mx }
+}
+
+// Event-peak: the MAX observed since the last state transition.
+// MIJI-9 field 5 (signal strength / modulation) should reference this,
+// not the per-scan peak (which jitters with each sweep).
+function eventPeakInfo(name) {
+  const b = store.bands[name]
+  if (!b) return null
+  if (b.eventPeakDB == null || !isFinite(b.eventPeakDB)) return null
+  return { freqHz: b.eventPeakFreqHz, powerDB: b.eventPeakDB }
 }
 
 // Dwell time = now - state.since (from backend). "jamming for 0:00:34".
@@ -470,49 +522,15 @@ function dwellText(name) {
   return `${h}h ${rm.toString().padStart(2, '0')}m`
 }
 
-// ECCM guidance per FM 3-12 (anti-jam + fallback actions). Static text
-// keyed on (band, state) — operator-facing recommendation shown only
-// when a band is NOT clear. Generic fallback covers edge states.
-const ECCM_GUIDANCE = {
-  lora_868: {
-    interference: 'Narrowband interferer on EU868. Shift to alt LoRa sub-band (867.X) or ramp spreading factor.',
-    jamming: 'Barrage on EU868 (ISM). Switch mesh to Iridium SBD relay; report MIJI-9 (freq, time, duration) to hub.',
-    degraded: 'Sustained elevation — monitor; if >5 min, shift to alt sub-band.',
-  },
-  aprs_144: {
-    interference: 'Narrowband on 2 m. Check HT squelch + PL tone; move to packet BPQ digipeater peer.',
-    jamming: 'VHF 2 m barrage. Switch APRS to HF (30 m) or mesh relay; file MIJI-9 to net-control.',
-    degraded: 'VHF noise rising — monitor antenna VSWR and nearby RF sources.',
-  },
-  gps_l1: {
-    interference: 'L1 interferer (common: in-car jammers). Derate GNSS stratum; warn timesync subsystem.',
-    jamming: 'GPS L1 jamming — DO NOT trust GNSS fix. Fall back to peer-consensus time + dead-reckoning.',
-    degraded: 'L1 noise floor elevated — confirm antenna sky view before blaming jammer.',
-  },
-  lte_b20_dl: {
-    interference: 'B20 (800) interferer. Modem may auto-fallback to B8 (900); monitor RSRQ.',
-    jamming: 'B20 DL jamming → 4G + SMS on 800 unreliable. Pin modem to B8 carrier; enable Iridium SBD.',
-    degraded: 'B20 degraded — cell breathing or distant jammer. Watch for escalation.',
-  },
-  lte_b8_dl: {
-    interference: 'B8 (900) interferer. Modem may auto-fallback to B20 (800); monitor RSRQ.',
-    jamming: 'B8 DL jamming. Pin modem to B20; expect SMS degradation. Escalate if both bands hit.',
-    degraded: 'B8 degraded — monitor; check carrier aggregation.',
-  },
-}
-const GENERIC_ACTION = {
-  interference: 'Narrowband interferer. Consider alt channel / antenna repositioning.',
-  jamming: 'Broadband jammer likely. Fall back to alternate bearer; file MIJI-9 report.',
-  degraded: 'Sustained elevation above baseline — monitor; no action required yet.',
-  calibrating: 'Detector still establishing baseline.',
-  clear: '',
-}
+// ECCM guidance comes from the shared locale (src/composables/useEccm +
+// src/locales/en.json). Having a single source prevents drift between
+// the banner here and the quick-reference table in SpectrumView. When
+// i18n is wired, the composable swaps its import for vue-i18n t() and
+// everything downstream keeps working.
 function eccmAction(name) {
   const b = store.bands[name]
   if (!b) return ''
-  const s = b.state
-  const perBand = ECCM_GUIDANCE[name] || {}
-  return perBand[s] || GENERIC_ACTION[s] || ''
+  return eccmActionFor(name, b.state)
 }
 
 // Occupancy/flatness formatting. Show "—" for bands still calibrating
@@ -575,11 +593,20 @@ function fmtNum2(v) {
            a locked baseline. -->
       <div v-if="store.bands[name]?.state !== 'calibrating' && store.bands[name]?.baselineStd > 0"
            class="sa-metrics">
-        <span class="sa-metric">
-          <span class="k">peak</span>
+        <span class="sa-metric" title="Peak of the current FFT sweep">
+          <span class="k">peak (now)</span>
           <span class="v">
-            <template v-if="peakInfo(name)">
-              {{ peakInfo(name).powerDB.toFixed(1) }} dBm @ {{ (peakInfo(name).freqHz / 1e6).toFixed(3) }} MHz
+            <template v-if="scanPeakInfo(name)">
+              {{ scanPeakInfo(name).powerDB.toFixed(1) }} dBm @ {{ (scanPeakInfo(name).freqHz / 1e6).toFixed(3) }} MHz
+            </template>
+            <template v-else>—</template>
+          </span>
+        </span>
+        <span class="sa-metric" title="Max power observed since the last state transition — use this for MIJI-9 reports">
+          <span class="k">peak (event)</span>
+          <span class="v">
+            <template v-if="eventPeakInfo(name)">
+              {{ eventPeakInfo(name).powerDB.toFixed(1) }} dBm @ {{ (eventPeakInfo(name).freqHz / 1e6).toFixed(3) }} MHz
             </template>
             <template v-else>—</template>
           </span>
@@ -633,11 +660,28 @@ function fmtNum2(v) {
         <canvas :ref="el => { if (el) waterfallCanvases[name] = el }"
                 class="sa-waterfall-canvas" />
 
-        <!-- Axis overlay SVG. viewBox matches the plot pixel rect. -->
+        <!-- Axis overlay SVG. viewBox matches the plot pixel rect.
+             Three gutters: left (dBm FFT axis), right (dBm colour
+             legend + time axis), bottom (frequency). -->
         <svg class="sa-axes" v-if="axesFor(name)"
              :viewBox="`0 0 1000 ${PANEL_SPECTRUM_H + PANEL_WATERFALL_H + PANEL_AXIS_GUTTER_B}`"
              preserveAspectRatio="none">
-          <!-- dBm labels on left gutter -->
+          <!-- Turbo colormap gradient definition — same polynomial as
+               the Canvas turbo() function, sampled at 5 stops. Exact
+               per-bin fidelity doesn't matter; operators need to
+               roughly decode the waterfall hue, not reverse-engineer
+               the colourmap. -->
+          <defs>
+            <linearGradient :id="'legend-' + name" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="rgb(136, 3, 14)" />
+              <stop offset="25%"  stop-color="rgb(248, 184, 37)" />
+              <stop offset="50%"  stop-color="rgb(162, 252, 60)" />
+              <stop offset="75%"  stop-color="rgb(45, 195, 230)" />
+              <stop offset="100%" stop-color="rgb(34, 53, 158)" />
+            </linearGradient>
+          </defs>
+
+          <!-- dBm labels on left gutter (FFT trace Y-axis) -->
           <g v-for="(lb, i) in axesFor(name).dbLabels" :key="'db'+i"
              class="sa-axis-label">
             <text :x="PANEL_AXIS_GUTTER_L - 4" :y="lb.y + 3" text-anchor="end">
@@ -646,14 +690,42 @@ function fmtNum2(v) {
           </g>
           <!-- Freq labels along the bottom -->
           <g v-for="(lb, i) in axesFor(name).fLabels" :key="'f'+i" class="sa-axis-label">
-            <text :x="PANEL_AXIS_GUTTER_L + lb.t * (1000 - PANEL_AXIS_GUTTER_L)"
+            <text :x="PANEL_AXIS_GUTTER_L + lb.t * (1000 - PANEL_AXIS_GUTTER_L - PANEL_AXIS_GUTTER_R)"
                   :y="PANEL_SPECTRUM_H + PANEL_WATERFALL_H + 12"
                   text-anchor="middle">{{ lb.label }}</text>
           </g>
           <!-- Vertical divider between spectrum + waterfall -->
-          <line :x1="PANEL_AXIS_GUTTER_L" :x2="1000"
+          <line :x1="PANEL_AXIS_GUTTER_L" :x2="1000 - PANEL_AXIS_GUTTER_R"
                 :y1="PANEL_SPECTRUM_H" :y2="PANEL_SPECTRUM_H"
                 class="sa-divider" />
+
+          <!-- Right gutter: dBm colour legend next to the waterfall -->
+          <rect :x="1000 - PANEL_AXIS_GUTTER_R + 4"
+                :y="PANEL_SPECTRUM_H"
+                :width="PANEL_LEGEND_BAR_W"
+                :height="PANEL_WATERFALL_H"
+                :fill="'url(#legend-' + name + ')'"
+                stroke="#1e293b" stroke-width="0.5"
+                vector-effect="non-scaling-stroke" />
+          <g v-for="(lb, i) in axesFor(name).legendLabels" :key="'lg'+i" class="sa-axis-label">
+            <text :x="1000 - PANEL_AXIS_GUTTER_R + 4 + PANEL_LEGEND_BAR_W + 3"
+                  :y="PANEL_SPECTRUM_H + lb.y + 3" text-anchor="start">
+              {{ lb.dB.toFixed(0) }}
+            </text>
+          </g>
+          <text :x="1000 - PANEL_AXIS_GUTTER_R + 4"
+                :y="PANEL_SPECTRUM_H - 3"
+                class="sa-axis-label sa-axis-unit">dBm</text>
+
+          <!-- Right gutter: time axis on waterfall -->
+          <g v-for="(lb, i) in axesFor(name).tLabels" :key="'t'+i" class="sa-axis-label">
+            <text :x="1000 - 2"
+                  :y="PANEL_SPECTRUM_H + lb.y + 3"
+                  text-anchor="end">{{ lb.label }}</text>
+          </g>
+          <text :x="1000 - 2"
+                :y="PANEL_SPECTRUM_H - 3"
+                class="sa-axis-label sa-axis-unit" text-anchor="end">time</text>
         </svg>
 
         <!-- Hover readout -->
@@ -801,7 +873,7 @@ function fmtNum2(v) {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
+  width: calc(100% - 72px); /* leave room for right gutter (legend + time labels) */
   height: 110px;
   display: block;
   image-rendering: auto;
@@ -810,8 +882,8 @@ function fmtNum2(v) {
 .sa-waterfall-canvas {
   position: absolute;
   top: 110px;
-  left: 46px; /* start past the left gutter so the waterfall aligns with the trace */
-  width: calc(100% - 46px);
+  left: 46px; /* align past the left gutter with the spectrum plot area */
+  width: calc(100% - 46px - 72px); /* left + right gutter */
   height: 160px;
   display: block;
   image-rendering: auto; /* smooth interpolation — not blocky */
@@ -830,6 +902,12 @@ function fmtNum2(v) {
   font-size: 9px;
   font-family: 'Inter', system-ui, sans-serif;
   letter-spacing: 0.04em;
+}
+.sa-axis-unit {
+  fill: #94a3b8;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 .sa-divider {
   stroke: #1e293b;

@@ -539,6 +539,8 @@ func (s *Server) Router() http.Handler {
 
 		// Spectrum monitoring (RTL-SDR jamming detection)
 		r.Get("/spectrum/status", s.handleGetSpectrumStatus)
+		r.Get("/spectrum/hardware", s.handleGetSpectrumHardware)
+		r.Get("/spectrum/relay-status", s.handleGetSpectrumRelay)
 		r.Get("/spectrum/stream", s.handleSpectrumStream)
 
 		// Device registry (IMEI-keyed)

@@ -22,6 +22,10 @@ func newMockScanner(powers []float64) *mockScanner {
 
 func (s *mockScanner) Available() bool { return s.enabled }
 
+func (s *mockScanner) Info() ScannerInfo {
+	return ScannerInfo{BinaryPath: "mock", DongleVID: "0bda", DonglePID: "2838", USBPath: "mock"}
+}
+
 func (s *mockScanner) Scan(_ context.Context, _, _, _ int) ([]float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,41 +62,92 @@ func TestParseRTLPowerOutput_Empty(t *testing.T) {
 	}
 }
 
-func TestMeanStd(t *testing.T) {
+func TestBaselineStats_ConstantInput(t *testing.T) {
+	// Locked-carrier-like input: every sample identical. Classical std
+	// collapses to 0; MAD also 0. This is fine — the UI Y-axis falls
+	// back to MeasurementNoiseFloorDB via Baseline.RobustScaleDB().
 	values := []float64{-45.0, -45.0, -45.0, -45.0, -45.0}
-	mean, std := meanStd(values)
+	mean, std, mad := baselineStats(values)
 	if mean != -45.0 {
 		t.Fatalf("mean: got %f, want -45.0", mean)
 	}
-	// std is clamped to minStdFloor (0.5) to keep the sigma classifier
-	// from collapsing to zero-width on LTE-style bands with locked
-	// carriers where observed std is ~0.01 dB.
-	if std != minStdFloor {
-		t.Fatalf("std: got %f, want %f (floor)", std, minStdFloor)
+	if std != 0 {
+		t.Fatalf("std: got %f, want 0 (constant input, no clamp)", std)
+	}
+	if mad != 0 {
+		t.Fatalf("mad: got %f, want 0 (constant input)", mad)
 	}
 }
 
-func TestMeanStd_FiltersInfNaN(t *testing.T) {
+func TestBaselineStats_FiltersInfNaN(t *testing.T) {
 	// rtl_power emits -Inf for all-zero FFT bins on first post-tune read.
 	// Those must be filtered so baseline mean stays finite (JSON-safe).
 	values := []float64{-45.0, math.Inf(-1), -45.0, math.NaN(), -45.0}
-	mean, std := meanStd(values)
+	mean, std, mad := baselineStats(values)
 	if mean != -45.0 {
 		t.Fatalf("mean: got %f, want -45.0 (finite values only)", mean)
 	}
-	if std != minStdFloor {
-		t.Fatalf("std: got %f, want %f", std, minStdFloor)
+	if std != 0 {
+		t.Fatalf("std: got %f, want 0", std)
+	}
+	if mad != 0 {
+		t.Fatalf("mad: got %f, want 0", mad)
 	}
 }
 
-func TestMeanStd_WithVariance(t *testing.T) {
+func TestBaselineStats_WithVariance(t *testing.T) {
 	values := []float64{-44.0, -46.0, -44.0, -46.0}
-	mean, std := meanStd(values)
+	mean, std, mad := baselineStats(values)
 	if mean != -45.0 {
 		t.Fatalf("mean: got %f, want -45.0", mean)
 	}
 	if std != 1.0 {
 		t.Fatalf("std: got %f, want 1.0", std)
+	}
+	// |values - median(-45)| = {1, 1, 1, 1} → MAD = 1
+	if mad != 1.0 {
+		t.Fatalf("mad: got %f, want 1.0", mad)
+	}
+}
+
+func TestBaselineStats_BimodalRobustness(t *testing.T) {
+	// 95% of samples at -42, 5% at -50 — classical std dominated by the
+	// narrow cluster; MAD must still report the wide spread. This is
+	// the locked-carrier LTE DL case the old minStdFloor workaround
+	// papered over.
+	values := make([]float64, 0, 100)
+	for i := 0; i < 95; i++ {
+		values = append(values, -42.0)
+	}
+	for i := 0; i < 5; i++ {
+		values = append(values, -50.0)
+	}
+	_, std, mad := baselineStats(values)
+	// std will be pulled toward the small outlier cluster — small but
+	// non-zero. MAD is 0 because median=-42 and 95% of samples equal it.
+	// That's fine: RobustScaleDB falls back to the quantum floor when
+	// both estimators collapse.
+	if std <= 0 {
+		t.Fatalf("std: got %f, want > 0", std)
+	}
+	_ = mad
+}
+
+func TestRobustScaleDB(t *testing.T) {
+	// Pathological: both std and MAD ≈ 0 → fall back to quantum floor.
+	bl := &Baseline{Std: 0.01, Mad: 0.0}
+	if got := bl.RobustScaleDB(); got != MeasurementNoiseFloorDB {
+		t.Fatalf("quantum floor: got %f, want %f", got, MeasurementNoiseFloorDB)
+	}
+	// MAD captures real spread when std doesn't.
+	bl = &Baseline{Std: 0.01, Mad: 4.0} // 1.4826*4 ≈ 5.93
+	if got := bl.RobustScaleDB(); got < 5.9 || got > 6.0 {
+		t.Fatalf("MAD-dominant: got %f, want ~5.93", got)
+	}
+	// Classical wins when both are reasonable + std is larger.
+	bl = &Baseline{Std: 3.0, Mad: 1.0}
+	if got := bl.RobustScaleDB(); got != 3.0 {
+		t.Fatalf("std-dominant: got %f, want 3.0", got)
 	}
 }
 

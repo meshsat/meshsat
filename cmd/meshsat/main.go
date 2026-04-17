@@ -1405,6 +1405,8 @@ func main() {
 							lat, lon = st.Lat, st.Lon
 						}
 					}
+					relay := spectrumMon.RelayTracker()
+
 					// TAK CoT: hits the TAK server (all remote parties) and
 					// also feeds the in-process TAK event bus used by the
 					// dashboard CoT viewer.
@@ -1419,9 +1421,14 @@ func main() {
 						if err := takGw.SendCotEvent(cotEv); err != nil {
 							log.Warn().Err(err).Str("band", evt.Band).
 								Msg("spectrum-alert: TAK CoT send failed")
+							relay.RecordFailure("tak_cot", err)
+						} else {
+							relay.RecordSuccess("tak_cot")
 						}
 						gateway.GlobalTakEventBus.Publish(
 							gateway.CotEventToRecord(&cotEv, "outbound"))
+					} else {
+						relay.RecordFailure("tak_cot", fmt.Errorf("tak gateway not running"))
 					}
 					// Hub: QoS 1 + outbox-queued so the alert survives a
 					// link drop (which is exactly the state a jammed kit
@@ -1446,6 +1453,9 @@ func main() {
 						if err := hubReporter.PublishSpectrumAlert(alert); err != nil {
 							log.Warn().Err(err).Str("band", evt.Band).
 								Msg("spectrum-alert: hub publish failed")
+							relay.RecordFailure("hub", err)
+						} else {
+							relay.RecordSuccess("hub")
 						}
 					}
 					log.Warn().
@@ -1562,6 +1572,24 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
 	cancel() // Stop processor + retention + gateways
+
+	// Drain dispatcher goroutines (delivery workers + reapers). Workers
+	// read the cancelled ctx, finish any in-flight DB write, then exit.
+	// Without this wait, the deferred db.Close() on return races those
+	// writes and leaves SQLite WAL/SHM files behind (observed on
+	// integration-test teardown — same failure mode in prod would
+	// corrupt the next boot). 10 s ceiling prevents a stuck worker
+	// from blocking shutdown indefinitely; at that point forced close
+	// is preferable to hanging.
+	drained := make(chan struct{})
+	go func() { dispatcher.Wait(); close(drained) }()
+	select {
+	case <-drained:
+		log.Info().Msg("dispatcher workers drained")
+	case <-time.After(10 * time.Second):
+		log.Warn().Msg("dispatcher drain timed out after 10s — forcing shutdown")
+	}
+
 	if hubReporter != nil {
 		hubReporter.Stop()
 	}

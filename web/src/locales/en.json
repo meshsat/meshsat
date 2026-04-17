@@ -1,0 +1,45 @@
+{
+  "eccm": {
+    "_doc": "ECCM (Electronic Counter-Counter-Measures) recommended actions per band and state. Keyed by band name + state ('interference', 'jamming', 'degraded'). Source: FM 3-12 Cyberspace and Electronic Warfare Operations. Keep strings short — they render in a 1-line red banner and in a quick-reference table.",
+    "bands": {
+      "lora_868": {
+        "short": "LoRa EU868",
+        "interference": "Narrowband interferer on EU868. Shift to alt LoRa sub-band (867.X) or ramp spreading factor.",
+        "jamming": "Barrage on EU868 (ISM). Switch mesh to Iridium SBD relay; report MIJI-9 (freq, time, duration) to hub.",
+        "degraded": "Sustained elevation — monitor; if >5 min, shift to alt sub-band."
+      },
+      "aprs_144": {
+        "short": "APRS 144.8",
+        "interference": "Narrowband on 2 m. Check HT squelch + PL tone; move to packet BPQ digipeater peer.",
+        "jamming": "VHF 2 m barrage. Switch APRS to HF (30 m) or mesh relay; file MIJI-9 to net-control.",
+        "degraded": "VHF noise rising — monitor antenna VSWR and nearby RF sources."
+      },
+      "gps_l1": {
+        "short": "GPS L1",
+        "interference": "L1 interferer (common: in-car jammers). Derate GNSS stratum; warn timesync subsystem.",
+        "jamming": "GPS L1 jamming — DO NOT trust GNSS fix. Fall back to peer-consensus time + dead-reckoning.",
+        "degraded": "L1 noise floor elevated — confirm antenna sky view before blaming jammer."
+      },
+      "lte_b20_dl": {
+        "short": "LTE B20 (800)",
+        "interference": "B20 (800) interferer. Modem may auto-fallback to B8 (900); monitor RSRQ.",
+        "jamming": "B20 DL jamming → 4G + SMS on 800 unreliable. Pin modem to B8 carrier; enable Iridium SBD.",
+        "degraded": "B20 degraded — cell breathing or distant jammer. Watch for escalation."
+      },
+      "lte_b8_dl": {
+        "short": "LTE B8 (900)",
+        "interference": "B8 (900) interferer. Modem may auto-fallback to B20 (800); monitor RSRQ.",
+        "jamming": "B8 DL jamming. Pin modem to B20; expect SMS degradation. Escalate if both bands hit.",
+        "degraded": "B8 degraded — monitor; check carrier aggregation."
+      }
+    },
+    "generic": {
+      "interference": "Narrowband interferer. Consider alt channel / antenna repositioning.",
+      "jamming": "Broadband jammer likely. Fall back to alternate bearer; file MIJI-9 report.",
+      "degraded": "Sustained elevation above baseline — monitor; no action required yet.",
+      "calibrating": "Detector still establishing baseline.",
+      "clear": ""
+    },
+    "miji9": "MIJI-9 report fields: (1) type M/I/J/I · (2) affected freq · (3) call signs · (4) equipment · (5) strength/modulation · (6) mission effect · (7) anti-jam actions taken · (8) time of occurrence · (9) location. TAK/CoT relay fires automatically on state transitions (type b-m-p-w-j)."
+  }
+}

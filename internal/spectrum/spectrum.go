@@ -104,6 +104,7 @@ type BandStatus struct {
 	PowerDB      float64       `json:"power_db"`
 	BaselineMean float64       `json:"baseline_mean"`
 	BaselineStd  float64       `json:"baseline_std"`
+	BaselineMad  float64       `json:"baseline_mad"`
 	Since        time.Time     `json:"since"`
 	Consecutive  int           `json:"consecutive_samples"`
 	FreqLow      int           `json:"freq_low"`
@@ -136,13 +137,55 @@ type BandStatus struct {
 	// first SSE scan event arrives.
 	LastOccupancy float64 `json:"occupancy"`
 	LastFlatness  float64 `json:"flatness"`
+
+	// Peak-over-event tracking for MIJI-9 accuracy. "Peak" on a single
+	// scan jitters as signals come and go; MIJI reporting wants the
+	// highest power observed since the state transition. Reset on
+	// every state change (Since). EventPeakDB is the maximum single-bin
+	// power; EventPeakFreqHz is the centre frequency of that bin.
+	EventPeakDB     float64 `json:"event_peak_db"`
+	EventPeakFreqHz int     `json:"event_peak_freq_hz"`
 }
 
 // Baseline holds the calibrated noise floor statistics for a band.
+//
+// Mean/Std are the classical Gaussian estimators. Mad is the Median
+// Absolute Deviation, a robust scale estimator recommended by
+// ITU-R SM.1880 Annex 2 §5 for spectrum-occupancy work. On locked
+// carrier bands (e.g. LTE DL) the classical Std collapses toward
+// sample-quantisation noise (σ ≈ 0.01 dB) while MAD still captures
+// the true inter-sample spread. We store both and let consumers pick
+// the estimator that makes sense for their application:
+//
+//	detection threshold  → absolute dBm floor + occupancy + flatness
+//	                        (doesn't use Std or Mad; see monitor.evaluate)
+//	UI Y-axis range      → max(Std, 1.4826*Mad, measurementNoiseFloorDB)
+//	                        so pathological near-zero Std doesn't flatten
+//	                        the plot
 type Baseline struct {
 	Mean    float64
 	Std     float64
+	Mad     float64 // Median Absolute Deviation (raw, not σ-scaled)
 	Samples int
+}
+
+// RobustScaleDB returns the effective "typical fluctuation size" of
+// the baseline, used by the UI to set Y-axis span and by consumers
+// that need a physically meaningful scale. Picks the largest of
+// classical σ, 1.4826·MAD (the MAD-derived robust σ estimate for
+// Gaussian data), and a hard measurement-quantum floor.
+func (b *Baseline) RobustScaleDB() float64 {
+	if b == nil {
+		return MeasurementNoiseFloorDB
+	}
+	s := b.Std
+	if madScaled := 1.4826 * b.Mad; madScaled > s {
+		s = madScaled
+	}
+	if s < MeasurementNoiseFloorDB {
+		s = MeasurementNoiseFloorDB
+	}
+	return s
 }
 
 // SpectrumEventKind distinguishes per-scan samples from state transitions.
@@ -176,6 +219,7 @@ type SpectrumEvent struct {
 	OldState     SpectrumState     `json:"old_state,omitempty"` // populated only for EventTransition
 	BaselineMean float64           `json:"baseline_mean"`
 	BaselineStd  float64           `json:"baseline_std"`
+	BaselineMad  float64           `json:"baseline_mad"`
 	// Derived thresholds included so the UI does not duplicate the
 	// sigma arithmetic and can draw the jamming/interference lines
 	// directly.
@@ -203,6 +247,13 @@ type SpectrumEvent struct {
 	// band. UI computes "jamming for 0:00:34" dwell from now - since.
 	// Required for MIJI-9 reporting (FM 3-12: report duration).
 	Since time.Time `json:"since,omitempty"`
+
+	// Event-scoped peak readout — maximum power observed since the
+	// last state transition (Since), plus the centre frequency of the
+	// bin it came from. MIJI-9 reporting requires peak dBm + peak freq
+	// of the event, not of the current scan.
+	EventPeakDB     float64 `json:"event_peak_db"`
+	EventPeakFreqHz int     `json:"event_peak_freq_hz"`
 }
 
 // Detection thresholds.
@@ -258,6 +309,16 @@ const (
 
 	CalibrationDuration = 30 * time.Second
 	ScanInterval        = 3 * time.Second
+
+	// MeasurementNoiseFloorDB is the minimum physically meaningful
+	// fluctuation size — tied to the rtl_power / RTL-SDR 8-bit ADC
+	// quantisation (~0.5 dB per least-significant-bit at the detector).
+	// Any estimator that returns less than this is reporting the
+	// quantisation noise of the receiver, not a property of the signal,
+	// and collapses the UI Y-axis. Used as the ultimate floor in
+	// Baseline.RobustScaleDB(). Replaces the undocumented minStdFloor
+	// constant that was buried in monitor.go.
+	MeasurementNoiseFloorDB = 0.5
 )
 
 // PowerFloorForBand returns the minimum absolute power (dB) below which

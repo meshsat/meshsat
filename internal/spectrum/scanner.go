@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -15,6 +17,23 @@ type Scanner interface {
 	Scan(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error)
 	// Available reports whether the scanning backend is ready.
 	Available() bool
+	// Info returns static metadata about the scanner backend for the
+	// hardware-status UI (binary path, dongle identifiers, USB path).
+	Info() ScannerInfo
+}
+
+// ScannerInfo is the static descriptor the UI renders in the hardware
+// status panel — what binary we're using, what dongle is attached,
+// and where it lives on the bus.
+type ScannerInfo struct {
+	BinaryPath string `json:"binary_path"`
+	DongleVID  string `json:"dongle_vid"`
+	DonglePID  string `json:"dongle_pid"`
+	USBPath    string `json:"usb_path"`
+	// ProductName is the USB product-string (e.g. "RTL2838UHIDIR"), read
+	// from /sys/bus/usb/devices/<id>/product. Empty if sysfs doesn't
+	// expose it for this kernel config.
+	ProductName string `json:"product_name"`
 }
 
 // RTLPowerScanner runs rtl_power_fftw as a subprocess (no CGO).
@@ -72,6 +91,71 @@ func (s *RTLPowerScanner) Available() bool {
 		return false
 	}
 	return DetectRTLSDR()
+}
+
+// Info walks /sys/bus/usb/devices to locate the first Realtek RTL283X
+// entry and return its descriptor alongside the scanner binary path.
+// Returned fields are empty strings if a given bit of metadata isn't
+// readable — the UI treats empty as "n/a" rather than erroring.
+func (s *RTLPowerScanner) Info() ScannerInfo {
+	info := ScannerInfo{}
+	if s != nil {
+		info.BinaryPath = s.binary
+	}
+	if dev := findRTLSDRDevice(); dev != nil {
+		info.DongleVID = dev.VID
+		info.DonglePID = dev.PID
+		info.USBPath = dev.Path
+		info.ProductName = dev.Product
+	}
+	return info
+}
+
+// rtlsdrDevice is the internal detail findRTLSDRDevice returns. Not
+// exported because callers want ScannerInfo, which is stable.
+type rtlsdrDevice struct {
+	VID, PID, Path, Product string
+}
+
+// findRTLSDRDevice returns the first matching Realtek RTL283X USB
+// device, or nil if none. Shared between DetectRTLSDR (bool-only
+// presence check) and Info (metadata).
+func findRTLSDRDevice() *rtlsdrDevice {
+	entries, err := os.ReadDir("/sys/bus/usb/devices")
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		base := filepath.Join("/sys/bus/usb/devices", entry.Name())
+		vidBytes, err := os.ReadFile(filepath.Join(base, "idVendor"))
+		if err != nil {
+			continue
+		}
+		pidBytes, err := os.ReadFile(filepath.Join(base, "idProduct"))
+		if err != nil {
+			continue
+		}
+		vid := strings.TrimSpace(string(vidBytes))
+		pid := strings.TrimSpace(string(pidBytes))
+		if vid != RTLSDR_VID {
+			continue
+		}
+		if pid != RTLSDR_PID_2832 && pid != RTLSDR_PID_2838 {
+			continue
+		}
+		// product is optional
+		product := ""
+		if prodBytes, err := os.ReadFile(filepath.Join(base, "product")); err == nil {
+			product = strings.TrimSpace(string(prodBytes))
+		}
+		return &rtlsdrDevice{
+			VID:     vid,
+			PID:     pid,
+			Path:    entry.Name(),
+			Product: product,
+		}
+	}
+	return nil
 }
 
 // Scan runs a single-shot power sweep. Dispatches to the appropriate

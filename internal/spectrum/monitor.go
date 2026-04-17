@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +39,68 @@ type SpectrumMonitor struct {
 	// wedged scan loop would stop jamming detection entirely.
 	subsMu sync.Mutex
 	subs   []chan SpectrumEvent
+
+	// hardware stats for the /api/spectrum/hardware endpoint —
+	// protected by mu along with status/baseline.
+	lastScanAt        time.Time
+	lastScanDuration  time.Duration
+	scanErrorCount    int64
+	lastScanError     string
+	lastScanErrorAt   time.Time
+
+	// MIJI/CoT relay outcome tracker. Owned here so the HTTP layer
+	// has a single accessor (SpectrumMonitor.RelayTracker()); the
+	// main.go relay goroutine calls RecordSuccess/RecordFailure after
+	// each attempt.
+	relay *RelayTracker
+}
+
+// RelayTracker returns the live per-destination MIJI/CoT relay
+// tracker. Initialised lazily on first call so existing test helpers
+// that construct a raw &SpectrumMonitor{...} still work.
+func (m *SpectrumMonitor) RelayTracker() *RelayTracker {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.relay == nil {
+		m.relay = NewRelayTracker()
+	}
+	return m.relay
+}
+
+// HardwareStatus is the payload returned by /api/spectrum/hardware.
+// Combines the static scanner descriptor with runtime health signals
+// so operators can diagnose "is the dongle alive and scanning?".
+type HardwareStatus struct {
+	Available        bool        `json:"available"`
+	Scanner          ScannerInfo `json:"scanner"`
+	LastScanAt       time.Time   `json:"last_scan_at,omitempty"`
+	LastScanMs       int64       `json:"last_scan_ms"`
+	ScanErrorCount   int64       `json:"scan_error_count"`
+	LastScanError    string      `json:"last_scan_error,omitempty"`
+	LastScanErrorAt  time.Time   `json:"last_scan_error_at,omitempty"`
+	ScanIntervalSec  int         `json:"scan_interval_sec"`
+	CalibrationDurSec int        `json:"calibration_duration_sec"`
+}
+
+// Hardware returns the current hardware + scan-loop health snapshot.
+// Called by /api/spectrum/hardware; cheap read-lock.
+func (m *SpectrumMonitor) Hardware() HardwareStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	hs := HardwareStatus{
+		Available:         m.enabled,
+		LastScanAt:        m.lastScanAt,
+		LastScanMs:        m.lastScanDuration.Milliseconds(),
+		ScanErrorCount:    m.scanErrorCount,
+		LastScanError:     m.lastScanError,
+		LastScanErrorAt:   m.lastScanErrorAt,
+		ScanIntervalSec:   int(ScanInterval / time.Second),
+		CalibrationDurSec: int(CalibrationDuration / time.Second),
+	}
+	if m.scanner != nil {
+		hs.Scanner = m.scanner.Info()
+	}
+	return hs
 }
 
 // NewSpectrumMonitor creates a new monitor. It does not start scanning
@@ -191,6 +252,7 @@ func (m *SpectrumMonitor) run(ctx context.Context) {
 			m.status[band.Name].State = StateClear
 			m.status[band.Name].BaselineMean = bl.Mean
 			m.status[band.Name].BaselineStd = bl.Std
+			m.status[band.Name].BaselineMad = bl.Mad
 			m.status[band.Name].Since = time.Now()
 			m.status[band.Name].CalibrationStartedAt = time.Time{}
 			m.status[band.Name].CalibrationDurationSec = 0
@@ -199,6 +261,7 @@ func (m *SpectrumMonitor) run(ctx context.Context) {
 				Str("band", band.Name).
 				Float64("mean", bl.Mean).
 				Float64("std", bl.Std).
+				Float64("mad", bl.Mad).
 				Int("samples", bl.Samples).
 				Msg("spectrum: baseline calibrated")
 		} else {
@@ -269,12 +332,13 @@ func (m *SpectrumMonitor) recalibrateUnresolved(ctx context.Context) {
 				m.status[band.Name].State = StateClear
 				m.status[band.Name].BaselineMean = bl.Mean
 				m.status[band.Name].BaselineStd = bl.Std
+				m.status[band.Name].BaselineMad = bl.Mad
 				m.status[band.Name].Since = time.Now()
 				m.status[band.Name].CalibrationStartedAt = time.Time{}
 				m.status[band.Name].CalibrationDurationSec = 0
 				m.mu.Unlock()
 				log.Info().Str("band", band.Name).
-					Float64("mean", bl.Mean).Float64("std", bl.Std).
+					Float64("mean", bl.Mean).Float64("std", bl.Std).Float64("mad", bl.Mad).
 					Int("samples", bl.Samples).
 					Msg("spectrum: baseline calibrated (retry)")
 			} else {
@@ -357,8 +421,8 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 		return nil
 	}
 
-	mean, std := meanStd(allPowers)
-	return &Baseline{Mean: mean, Std: std, Samples: len(allPowers)}
+	mean, std, mad := baselineStats(allPowers)
+	return &Baseline{Mean: mean, Std: std, Mad: mad, Samples: len(allPowers)}
 }
 
 func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
@@ -378,9 +442,21 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		// 12 s on the Pi 5 + USB 2.0 hub. 30 s is generous but caps
 		// runaway scans. Scan time is still dominated by the 1 s
 		// integration window in practice. [MESHSAT-509]
+		scanStart := time.Now()
 		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
+		scanDur := time.Since(scanStart)
+
+		m.mu.Lock()
+		m.lastScanAt = time.Now()
+		m.lastScanDuration = scanDur
+		if err != nil {
+			m.scanErrorCount++
+			m.lastScanError = err.Error()
+			m.lastScanErrorAt = m.lastScanAt
+		}
+		m.mu.Unlock()
 
 		if err != nil {
 			log.Debug().Err(err).Str("band", band.Name).Msg("spectrum: scan failed")
@@ -397,6 +473,25 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		// narrowband.
 		occupancy := bandOccupancy(powers, bl.Mean+6.0)
 		flatness := spectralFlatness(powers)
+
+		// Locate peak bin for MIJI-9 peak-freq reporting. nBins=0 is
+		// impossible at this point (err already checked) but guard
+		// defensively. peakFreqHz = FreqLow + (idx + 0.5) * binWidth.
+		peakIdx := 0
+		if len(powers) > 0 {
+			pmax := powers[0]
+			for i, p := range powers {
+				if isFinite(p) && p > pmax {
+					pmax = p
+					peakIdx = i
+				}
+			}
+		}
+		peakFreqHz := band.FreqLow
+		if len(powers) > 0 {
+			binWidthHz := float64(band.FreqHigh-band.FreqLow) / float64(len(powers))
+			peakFreqHz = band.FreqLow + int((float64(peakIdx)+0.5)*binWidthHz)
+		}
 
 		now := time.Now()
 		m.mu.Lock()
@@ -419,9 +514,22 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			bs.State = newState
 			bs.Since = now
 			bs.Consecutive = 1
+			// Reset event-peak tracking — new state means new event;
+			// the old peak belonged to the previous state window.
+			bs.EventPeakDB = maxPower
+			bs.EventPeakFreqHz = peakFreqHz
 		} else {
 			bs.Consecutive++
+			// Only ratchet the event peak upward — MIJI-9 wants the
+			// highest observed power for the whole event, not the
+			// current scan's max (which falls back when a jammer pauses).
+			if maxPower > bs.EventPeakDB {
+				bs.EventPeakDB = maxPower
+				bs.EventPeakFreqHz = peakFreqHz
+			}
 		}
+		eventPeakDB := bs.EventPeakDB
+		eventPeakFreqHz := bs.EventPeakFreqHz
 		m.mu.Unlock()
 
 		m.publish(SpectrumEvent{
@@ -439,6 +547,7 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			State:                newState,
 			BaselineMean:         bl.Mean,
 			BaselineStd:          bl.Std,
+			BaselineMad:          bl.Mad,
 			// Post-redesign: thresholds are now derived from absolute
 			// power floor + occupancy/flatness features, not a single
 			// sigma multiplier. Keep the JSON keys for UI backward
@@ -451,6 +560,8 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			Occupancy:            occupancy,
 			Flatness:             flatness,
 			Since:                bs.Since,
+			EventPeakDB:          eventPeakDB,
+			EventPeakFreqHz:      eventPeakFreqHz,
 		})
 
 		if newState != oldState {
@@ -470,11 +581,14 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 				OldState:             oldState,
 				BaselineMean:         bl.Mean,
 				BaselineStd:          bl.Std,
+				BaselineMad:          bl.Mad,
 				ThreshJammingDB:      bl.Mean + DegradedDeltaDB,
 				ThreshInterferenceDB: bl.Mean + 6.0,
 				Occupancy:            occupancy,
 				Flatness:             flatness,
 				Since:                now,
+				EventPeakDB:          eventPeakDB,
+				EventPeakFreqHz:      eventPeakFreqHz,
 			})
 		}
 	}
@@ -669,33 +783,10 @@ func (m *SpectrumMonitor) onTransition(band Band, oldState, newState SpectrumSta
 }
 
 // DetectRTLSDR checks if an RTL-SDR dongle is connected via USB.
-// Scans /sys/bus/usb/devices/ for known Realtek RTL2832U VID:PIDs.
+// Shares scanner.go's findRTLSDRDevice walker so the presence check
+// and the detailed hardware readout never disagree.
 func DetectRTLSDR() bool {
-	entries, err := os.ReadDir("/sys/bus/usb/devices")
-	if err != nil {
-		return false
-	}
-
-	for _, entry := range entries {
-		base := filepath.Join("/sys/bus/usb/devices", entry.Name())
-
-		vidBytes, err := os.ReadFile(filepath.Join(base, "idVendor"))
-		if err != nil {
-			continue
-		}
-		pidBytes, err := os.ReadFile(filepath.Join(base, "idProduct"))
-		if err != nil {
-			continue
-		}
-
-		vid := strings.TrimSpace(string(vidBytes))
-		pid := strings.TrimSpace(string(pidBytes))
-
-		if vid == RTLSDR_VID && (pid == RTLSDR_PID_2832 || pid == RTLSDR_PID_2838) {
-			return true
-		}
-	}
-	return false
+	return findRTLSDRDevice() != nil
 }
 
 // Helper math functions
@@ -742,39 +833,69 @@ func maxVal(values []float64) float64 {
 	return m
 }
 
-// minStdFloor prevents the sigma classifier from collapsing to
-// zero-width on LTE-style bands that are dominated by a locked
-// carrier (observed std of 0.01 dB). Without this floor, 1σ = 0.01
-// dB and any ordinary scan crosses the 3σ jamming line by 100× the
-// intended margin, producing constant false-positive alerts.
-const minStdFloor = 0.5
-
-func meanStd(values []float64) (float64, float64) {
-	var sum float64
-	var n int
+// baselineStats returns (mean, std, mad) for a finite-value sample set.
+// Replaces the old meanStd() + minStdFloor workaround. std now reports
+// the classical estimator without clamping (MESHSAT-509 used to floor
+// it at 0.5 dB to stop the old sigma classifier from false-alarming
+// on locked-carrier LTE bands; the detector no longer uses std so the
+// clamp is unnecessary and hid a real signal property).
+//
+// Callers that need a "typical fluctuation size" (e.g. the UI Y-axis)
+// should call Baseline.RobustScaleDB() which combines std, MAD, and
+// the measurement-quantum floor. Raw std and MAD are stored separately
+// on Baseline so analysis downstream can reason about the shape of
+// the noise floor (locked-carrier bands have MAD ≫ std; Gaussian bands
+// have MAD·1.4826 ≈ std).
+func baselineStats(values []float64) (mean, std, mad float64) {
+	finite := make([]float64, 0, len(values))
 	for _, v := range values {
-		if !isFinite(v) {
-			continue
+		if isFinite(v) {
+			finite = append(finite, v)
 		}
+	}
+	if len(finite) == 0 {
+		return 0, 0, 0
+	}
+
+	var sum float64
+	for _, v := range finite {
 		sum += v
-		n++
 	}
-	if n == 0 {
-		return 0, minStdFloor
-	}
-	mean := sum / float64(n)
+	mean = sum / float64(len(finite))
 
 	var sumSq float64
-	for _, v := range values {
-		if !isFinite(v) {
-			continue
-		}
+	for _, v := range finite {
 		d := v - mean
 		sumSq += d * d
 	}
-	std := math.Sqrt(sumSq / float64(n))
-	if std < minStdFloor {
-		std = minStdFloor
+	std = math.Sqrt(sumSq / float64(len(finite)))
+
+	// MAD: median(|x_i - median(x)|). ITU-R SM.1880 Annex 2 §5
+	// recommends robust estimators for spectrum-occupancy baselines.
+	// For Gaussian data, 1.4826 · MAD ≈ σ; for locked-carrier or
+	// bimodal distributions (LTE DL, narrowband beacons), MAD is
+	// radically more honest about the spread.
+	sorted := make([]float64, len(finite))
+	copy(sorted, finite)
+	sort.Float64s(sorted)
+	med := median(sorted)
+	abs := make([]float64, len(finite))
+	for i, v := range finite {
+		abs[i] = math.Abs(v - med)
 	}
-	return mean, std
+	sort.Float64s(abs)
+	mad = median(abs)
+
+	return mean, std, mad
+}
+
+// median returns the middle element (or average of the two middle
+// elements for even-length inputs) of a pre-sorted slice. Panics on
+// empty input; callers must check.
+func median(sorted []float64) float64 {
+	n := len(sorted)
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return 0.5 * (sorted[n/2-1] + sorted[n/2])
 }
