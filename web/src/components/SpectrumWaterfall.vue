@@ -1,43 +1,32 @@
 <!--
   SpectrumWaterfall.vue
   ---------------------
-  Real-time RTL-SDR jamming visualisation. Renders one Canvas per
-  monitored band, stacked vertically. Each canvas is a scrolling
-  waterfall — newest scan on top, rows age downward — with colour
-  mapped to power relative to the band's calibrated baseline.
+  Per-band RF spectrum analyser panels, modelled after desktop SDR
+  tools (SDR#, gqrx, CubicSDR). Each panel has:
 
-  Rendering model:
-    * The store keeps a ring of power arrays per band; we draw that
-      ring on every scan event (one drawBand per band that got new
-      data). Full-image redraw is ~1-5 ms per band for the bin counts
-      we monitor (12-120 bins × 100 rows), cheap enough to do on
-      every update rather than implementing incremental scroll.
-    * Bin width auto-fits the canvas CSS width, so narrow (600 kHz
-      LoRa) and wide (3 MHz LTE) bands both fill the same row.
-    * Jammed bins — power > baseline + 3σ — are over-drawn in red
-      even within the normal waterfall, so the operator can see
-      the jamming footprint inside the waterfall itself (not only
-      on the band border).
+    * a live FFT trace (current scan as a filled line chart, dBm on Y,
+      frequency on X)
+    * three reference lines overlaying the trace:
+        - baseline mean (solid white, per band calibration)
+        - jamming threshold (dashed red, baseline + 3σ)
+        - interference threshold (dashed amber, baseline + 6σ)
+    * a scrolling waterfall below the trace, same X axis, time on Y,
+      rendered with the Turbo colormap and smooth (non-pixelated)
+      interpolation so it reads as a continuous heatmap rather than
+      blocky tiles
+    * SVG axes with dBm ticks (left) and frequency ticks (bottom)
+    * a hover cursor that reports frequency + instantaneous power
 
-  State banner:
-    * State is drawn as a coloured strip at the right edge of the
-      canvas so jamming stands out even in a glance.
-    * On jamming the band title also flashes (CSS animation).
+  Per-band panels are stacked. The jammed/interference states change
+  the panel border and add a ribbon along the right edge.
 -->
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive } from 'vue'
 import { useSpectrumStore } from '@/stores/spectrum'
 
 const store = useSpectrumStore()
 
-// Canvas refs keyed by band name — reactive because the list of bands
-// is discovered from the SSE stream rather than hardcoded client-side.
-const canvases = ref({})
-
-// Deterministic ordering so the five waterfalls don't reshuffle as
-// events arrive. Mirrors the server's DefaultBands order.
 const BAND_ORDER = ['lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
-
 const orderedBands = computed(() => {
   const keys = Object.keys(store.bands)
   return BAND_ORDER.filter(b => keys.includes(b)).concat(
@@ -45,35 +34,326 @@ const orderedBands = computed(() => {
   )
 })
 
-// Freq formatter: sub-GHz in MHz with 1 decimal, GHz with 3 decimals.
-function fmtFreq(hz) {
-  if (hz >= 1e9) return (hz / 1e9).toFixed(3) + ' GHz'
-  return (hz / 1e6).toFixed(1) + ' MHz'
+// Turbo colormap lookup (Mikhail Markov's polynomial fit — perceptually
+// uniform, far better than jet, standard in modern RF tools). Input is
+// a normalised 0..1 value; output is [r, g, b] each 0..255.
+function turbo(t) {
+  t = Math.max(0, Math.min(1, t))
+  const r = 34.61 + t * (1172.33 - t * (10793.56 - t * (33300.12 - t * (38394.49 - t * 14825.05))))
+  const g = 23.31 + t * (557.33 + t * (1225.33 - t * (3574.96 - t * (1073.77 + t * 707.56))))
+  const b = 27.2 + t * (3211.1 - t * (15327.97 - t * (27814 - t * (22569.18 - t * 6838.66))))
+  return [Math.max(0, Math.min(255, r)) | 0,
+          Math.max(0, Math.min(255, g)) | 0,
+          Math.max(0, Math.min(255, b)) | 0]
 }
 
-// Map a power value in dB to a waterfall RGB. Baseline-relative so
-// quiet and noisy bands look the same at rest. The palette walks from
-// dark navy (below baseline) through green and yellow up to red at
-// and above the jamming threshold.
-function colourFor(power, baselineMean, baselineStd, threshJam) {
-  if (!isFinite(power)) return [0, 0, 0]
-  const delta = power - baselineMean
-  if (delta < -baselineStd) return [8, 12, 40]
-  if (delta < baselineStd) {
-    // near baseline — cool blue/teal
-    const t = (delta + baselineStd) / (2 * baselineStd)
-    return [Math.round(8 + t * 30), Math.round(12 + t * 80), Math.round(40 + t * 120)]
+// Normalise a power sample to 0..1 for the colormap. Floor is baseline
+// - 2σ (below that is blue/dark), ceiling is baseline + 10σ (above is
+// clipped to deep red). Keeps the colormap locked to the band's own
+// noise floor rather than an absolute dBm range, so two physically
+// different bands render comparably.
+function normPower(power, baseMean, baseStd) {
+  const floor = baseMean - 2 * (baseStd || 1)
+  const ceil  = baseMean + 10 * (baseStd || 1)
+  if (!isFinite(power)) return 0
+  return (power - floor) / (ceil - floor)
+}
+
+// ---- Per-panel rendering ----
+
+// Each panel uses 3 canvases layered visually:
+//   1. spectrum (live FFT trace + fill + reference lines)
+//   2. waterfall (time/freq heatmap)
+// A single SVG overlay draws the axes and hover cursor so we don't
+// have to fight Canvas text rendering quality.
+const spectrumCanvases = reactive({})
+const waterfallCanvases = reactive({})
+
+// Layout constants (CSS px; canvases use these dimensions internally
+// but are scaled to fit via their CSS width rule).
+const PANEL_SPECTRUM_H = 110
+const PANEL_WATERFALL_H = 160
+const PANEL_AXIS_GUTTER_L = 46  // room for dBm labels
+const PANEL_AXIS_GUTTER_B = 18  // room for freq labels
+
+// Hover state per panel — keyed by band name.
+const hover = reactive({}) // { [band]: { x, y, freqHz, power, inside } }
+
+function setHoverOutside(band) {
+  hover[band] = { inside: false }
+}
+function updateHover(band, e, el) {
+  const rect = el.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+  const plotX = x - PANEL_AXIS_GUTTER_L
+  const plotW = rect.width - PANEL_AXIS_GUTTER_L
+  if (plotX < 0 || plotX > plotW) { hover[band] = { inside: false }; return }
+  const b = store.bands[band]
+  if (!b || !b.rows?.[0]?.powers) { hover[band] = { inside: false }; return }
+  const powers = b.rows[0].powers
+  const bin = Math.floor((plotX / plotW) * powers.length)
+  const safeBin = Math.max(0, Math.min(powers.length - 1, bin))
+  const freqSpan = (b.meta.freqHigh - b.meta.freqLow)
+  const freqHz = b.meta.freqLow + (safeBin + 0.5) * (freqSpan / powers.length)
+  hover[band] = {
+    inside: true,
+    x, y,
+    freqHz,
+    power: powers[safeBin],
   }
-  if (power < threshJam) {
-    // elevated but sub-jamming — green to yellow
-    const span = threshJam - (baselineMean + baselineStd)
-    const t = span > 0 ? (power - (baselineMean + baselineStd)) / span : 0
-    return [Math.round(t * 220), Math.round(180 + t * 60), Math.round(60 - t * 60)]
+}
+
+function drawSpectrum(bandName) {
+  const band = store.bands[bandName]
+  const canvas = spectrumCanvases[bandName]
+  if (!band || !canvas) return
+  const rows = band.rows
+  const top = rows[0]
+  if (!top || !top.powers?.length) {
+    // Clear the canvas so old data doesn't linger during calibration
+    const cw = canvas.width, ch = canvas.height
+    const ctx = canvas.getContext('2d')
+    if (ctx) ctx.clearRect(0, 0, cw, ch)
+    return
   }
-  // at or above the jamming threshold — bright red regardless of bin,
-  // so a jammed band reads red in the image and not just at the border
-  const over = Math.min(1, (power - threshJam) / 10)
-  return [220 + Math.round(over * 35), Math.round(40 - over * 30), Math.round(40 - over * 30)]
+
+  // CSS width × device pixel ratio for crispness, height fixed per
+  // layout. We size the canvas buffer to a reasonable max (1200px)
+  // so retina doesn't blow up the framebuffer on 4K displays.
+  const cssW = canvas.clientWidth || 600
+  const cssH = PANEL_SPECTRUM_H
+  const dpr = Math.min(2, window.devicePixelRatio || 1)
+  const W = Math.min(1200, Math.floor(cssW * dpr))
+  const H = Math.floor(cssH * dpr)
+  if (canvas.width !== W) canvas.width = W
+  if (canvas.height !== H) canvas.height = H
+
+  const ctx = canvas.getContext('2d')
+  ctx.clearRect(0, 0, W, H)
+
+  const plotL = PANEL_AXIS_GUTTER_L * dpr
+  const plotW = W - plotL
+  const plotT = 4 * dpr
+  const plotH = H - plotT - 2 * dpr
+
+  // Y-axis range. Lock to baseline ± generous margins (same as the
+  // colormap normalisation) so the trace sits in the middle at rest
+  // and rides upward during jamming.
+  const yTop = band.baselineMean + 12 * (band.baselineStd || 1)
+  const yBot = band.baselineMean - 6 * (band.baselineStd || 1)
+  const yRange = yTop - yBot
+  const yAt = (dB) => plotT + ((yTop - dB) / yRange) * plotH
+
+  // Gridlines + fill-zone background.
+  const bgGrad = ctx.createLinearGradient(0, plotT, 0, plotT + plotH)
+  bgGrad.addColorStop(0, '#0b1220')
+  bgGrad.addColorStop(1, '#020617')
+  ctx.fillStyle = bgGrad
+  ctx.fillRect(plotL, plotT, plotW, plotH)
+
+  // Horizontal gridlines every 5 dB
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)'
+  ctx.lineWidth = 1
+  const stepDB = 5
+  const firstTick = Math.ceil(yBot / stepDB) * stepDB
+  for (let dB = firstTick; dB <= yTop; dB += stepDB) {
+    const y = yAt(dB)
+    ctx.beginPath()
+    ctx.moveTo(plotL, y)
+    ctx.lineTo(plotL + plotW, y)
+    ctx.stroke()
+  }
+
+  // Baseline line (solid thin white)
+  ctx.strokeStyle = 'rgba(226, 232, 240, 0.55)'
+  ctx.lineWidth = 1 * dpr
+  ctx.setLineDash([])
+  {
+    const y = yAt(band.baselineMean)
+    ctx.beginPath()
+    ctx.moveTo(plotL, y)
+    ctx.lineTo(plotL + plotW, y)
+    ctx.stroke()
+  }
+
+  // Interference threshold (dashed amber) — baseline + 6σ
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)'
+  ctx.setLineDash([4 * dpr, 4 * dpr])
+  {
+    const y = yAt(band.threshInterference || (band.baselineMean + 6 * band.baselineStd))
+    ctx.beginPath()
+    ctx.moveTo(plotL, y)
+    ctx.lineTo(plotL + plotW, y)
+    ctx.stroke()
+  }
+
+  // Jamming threshold (dashed red) — baseline + 3σ
+  ctx.strokeStyle = 'rgba(220, 38, 38, 0.85)'
+  ctx.setLineDash([6 * dpr, 3 * dpr])
+  {
+    const y = yAt(band.threshJamming || (band.baselineMean + 3 * band.baselineStd))
+    ctx.beginPath()
+    ctx.moveTo(plotL, y)
+    ctx.lineTo(plotL + plotW, y)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+
+  // FFT trace fill. Use a soft gradient (green → yellow at the threshold)
+  const powers = top.powers
+  const n = powers.length
+  const xStep = plotW / n
+
+  // Fill under the trace
+  const fillGrad = ctx.createLinearGradient(0, plotT, 0, plotT + plotH)
+  fillGrad.addColorStop(0, 'rgba(239, 68, 68, 0.55)')
+  fillGrad.addColorStop(0.35, 'rgba(251, 191, 36, 0.40)')
+  fillGrad.addColorStop(0.75, 'rgba(16, 185, 129, 0.25)')
+  fillGrad.addColorStop(1, 'rgba(16, 185, 129, 0.02)')
+  ctx.fillStyle = fillGrad
+  ctx.beginPath()
+  ctx.moveTo(plotL, plotT + plotH)
+  for (let i = 0; i < n; i++) {
+    const x = plotL + i * xStep + xStep / 2
+    const y = yAt(powers[i])
+    if (i === 0) ctx.lineTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.lineTo(plotL + plotW, plotT + plotH)
+  ctx.closePath()
+  ctx.fill()
+
+  // Trace line
+  ctx.strokeStyle = '#60a5fa'
+  ctx.lineWidth = 1.4 * dpr
+  ctx.lineJoin = 'round'
+  ctx.beginPath()
+  for (let i = 0; i < n; i++) {
+    const x = plotL + i * xStep + xStep / 2
+    const y = yAt(powers[i])
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.stroke()
+
+  // Peak marker
+  let peakIdx = 0
+  for (let i = 1; i < n; i++) if (powers[i] > powers[peakIdx]) peakIdx = i
+  const peakX = plotL + peakIdx * xStep + xStep / 2
+  const peakY = yAt(powers[peakIdx])
+  ctx.fillStyle = '#facc15'
+  ctx.beginPath()
+  ctx.arc(peakX, peakY, 2.5 * dpr, 0, Math.PI * 2)
+  ctx.fill()
+}
+
+function drawWaterfall(bandName) {
+  const band = store.bands[bandName]
+  const canvas = waterfallCanvases[bandName]
+  if (!band || !canvas) return
+  const rows = band.rows
+  const nRows = store.WATERFALL_ROWS
+  const nBins = rows[0]?.powers?.length || 1
+
+  // Intrinsic canvas resolution: one canvas pixel per (bin, row)
+  // sample. The CSS layer stretches it to the plot area via
+  // image-rendering: auto so the browser bilinear-interpolates and
+  // the result reads as a smooth heatmap (not the blocky tiles the
+  // previous revision had).
+  if (canvas.width !== nBins) canvas.width = nBins
+  if (canvas.height !== nRows) canvas.height = nRows
+
+  const ctx = canvas.getContext('2d')
+  const img = ctx.createImageData(nBins, nRows)
+
+  const base = band.baselineMean
+  const std = band.baselineStd || 1
+
+  for (let y = 0; y < nRows; y++) {
+    const row = rows[y]
+    if (!row || !row.powers || row.powers.length === 0) {
+      for (let x = 0; x < nBins; x++) {
+        const off = (y * nBins + x) * 4
+        img.data[off] = 15
+        img.data[off + 1] = 15
+        img.data[off + 2] = 25
+        img.data[off + 3] = 255
+      }
+      continue
+    }
+    for (let x = 0; x < nBins; x++) {
+      const t = normPower(row.powers[x], base, std)
+      const [r, g, b] = turbo(t)
+      const off = (y * nBins + x) * 4
+      img.data[off] = r
+      img.data[off + 1] = g
+      img.data[off + 2] = b
+      img.data[off + 3] = 255
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
+function redraw(bandName) {
+  drawSpectrum(bandName)
+  drawWaterfall(bandName)
+}
+
+function redrawAll() {
+  for (const name of orderedBands.value) redraw(name)
+}
+
+watch(
+  () => orderedBands.value.map(n => ({
+    n,
+    len: store.bands[n]?.rows?.length || 0,
+    ts: store.bands[n]?.rows?.[0]?.ts || '',
+    st: store.bands[n]?.state || '',
+  })),
+  async () => { await nextTick(); redrawAll() },
+  { deep: true }
+)
+
+onMounted(() => {
+  store.connect()
+  nextTick(redrawAll)
+  window.addEventListener('resize', onResize)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onResize)
+})
+function onResize() { nextTick(redrawAll) }
+
+// ---- Axes (SVG) computed per band ----
+
+function axesFor(bandName) {
+  const b = store.bands[bandName]
+  if (!b) return null
+  const yTop = b.baselineMean + 12 * (b.baselineStd || 1)
+  const yBot = b.baselineMean - 6 * (b.baselineStd || 1)
+  // dBm labels every 5 dB, snapped to round numbers
+  const stepDB = 5
+  const first = Math.ceil(yBot / stepDB) * stepDB
+  const dbLabels = []
+  for (let dB = first; dB <= yTop; dB += stepDB) {
+    dbLabels.push({ dB, y: ((yTop - dB) / (yTop - yBot)) * PANEL_SPECTRUM_H })
+  }
+  // Frequency ticks: 4 equally spaced labels across the band
+  const fLabels = []
+  const span = b.meta.freqHigh - b.meta.freqLow
+  for (let i = 0; i <= 4; i++) {
+    const fHz = b.meta.freqLow + (span * i) / 4
+    const t = i / 4
+    fLabels.push({ fHz, label: fmtFreq(fHz, span), t })
+  }
+  return { dbLabels, fLabels, yTop, yBot }
+}
+
+function fmtFreq(hz, span) {
+  if (hz >= 1e9) return (hz / 1e9).toFixed(3) + ' GHz'
+  if (span < 1e6) return (hz / 1e6).toFixed(3) + ' MHz'
+  return (hz / 1e6).toFixed(2) + ' MHz'
 }
 
 function stateColour(state) {
@@ -85,216 +365,221 @@ function stateColour(state) {
     default: return '#6b7280'
   }
 }
-
-function drawBand(bandName) {
-  const band = store.bands[bandName]
-  const canvas = canvases.value[bandName]
-  if (!band || !canvas) return
-
-  // The canvas' internal resolution is fixed to the bin count on X and
-  // WATERFALL_ROWS on Y; the CSS layout scales it. This keeps one
-  // canvas pixel == one (bin, row) sample, so we don't pay any
-  // interpolation cost and the operator sees crisp per-bin blocks.
-  const rows = band.rows
-  const nRows = store.WATERFALL_ROWS
-  const nBins = rows[0]?.powers?.length || 1
-  if (canvas.width !== nBins) canvas.width = nBins
-  if (canvas.height !== nRows) canvas.height = nRows
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  const img = ctx.createImageData(nBins, nRows)
-
-  const base = band.baselineMean
-  const std = band.baselineStd || 1
-  const threshJam = band.threshJamming || (base + 3 * std)
-
-  for (let y = 0; y < nRows; y++) {
-    const row = rows[y]
-    if (!row || !row.powers || row.powers.length === 0) {
-      // unknown row — paint dark grey so it's obvious where history
-      // ends and not confused with below-baseline quiet bins
-      for (let x = 0; x < nBins; x++) {
-        const off = (y * nBins + x) * 4
-        img.data[off] = 20
-        img.data[off + 1] = 20
-        img.data[off + 2] = 20
-        img.data[off + 3] = 255
-      }
-      continue
-    }
-    for (let x = 0; x < nBins; x++) {
-      const p = row.powers[x]
-      const [r, g, b] = colourFor(p, base, std, threshJam)
-      const off = (y * nBins + x) * 4
-      img.data[off] = r
-      img.data[off + 1] = g
-      img.data[off + 2] = b
-      img.data[off + 3] = 255
-    }
-  }
-  ctx.putImageData(img, 0, 0)
-}
-
-function redrawAll() {
-  for (const name of orderedBands.value) drawBand(name)
-}
-
-// Re-draw a band whenever its ring changes length or top-of-ring
-// timestamp changes. Using a shallow watch on the band's rows length
-// plus ts is cheaper than deep-watching the whole powers array.
-watch(
-  () => orderedBands.value.map(n => ({
-    n,
-    len: store.bands[n]?.rows?.length || 0,
-    ts: store.bands[n]?.rows?.[0]?.ts || '',
-  })),
-  async () => {
-    await nextTick()
-    redrawAll()
-  },
-  { deep: true }
-)
-
-onMounted(() => {
-  store.connect()
-  // Initial draw so the panels render calibrating/empty state even
-  // before the first scan arrives.
-  nextTick(redrawAll)
-})
-onBeforeUnmount(() => {
-  // Do NOT disconnect — other components (notably the alert modal
-  // mounted in App.vue) share this store's SSE connection.
-})
 </script>
 
 <template>
-  <div class="spectrum-waterfall">
-    <div class="header">
-      <h3>RTL-SDR Spectrum Waterfall</h3>
-      <div class="conn" :class="{ ok: store.connected, bad: !store.connected }">
+  <div class="sa-root">
+    <div class="sa-head">
+      <h3>RF SPECTRUM — 5 monitored bands</h3>
+      <div class="sa-conn" :class="{ ok: store.connected, bad: !store.connected }">
         <span class="dot"></span>
-        {{ store.connected ? 'streaming' : (store.enabled ? 'reconnecting' : 'hardware not present') }}
+        {{ store.connected ? 'streaming' : (store.enabled ? 'reconnecting' : 'RTL-SDR not present') }}
       </div>
     </div>
-    <div v-for="name in orderedBands" :key="name" class="band-row"
-         :class="{ jamming: store.bands[name]?.state === 'jamming',
-                   interference: store.bands[name]?.state === 'interference' }">
-      <div class="band-meta">
-        <div class="band-title">{{ store.bands[name]?.meta?.label || name }}</div>
-        <div class="band-sub">
-          <span>{{ fmtFreq(store.bands[name]?.meta?.freqLow) }}-{{ fmtFreq(store.bands[name]?.meta?.freqHigh) }}</span>
-          <span class="iface">iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
+
+    <div v-for="name in orderedBands" :key="name"
+         class="sa-panel"
+         :class="['state-' + (store.bands[name]?.state || 'calibrating')]">
+      <div class="sa-panel-head">
+        <div class="sa-panel-title">{{ store.bands[name]?.meta?.label || name }}
+          <span class="sa-id">{{ name }}</span>
+        </div>
+        <div class="sa-panel-meta">
+          <span>iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
+          <span>baseline: {{ store.bands[name]?.baselineMean?.toFixed?.(1) }} dB ± {{ store.bands[name]?.baselineStd?.toFixed?.(2) }}</span>
+          <span class="sa-state" :style="{ background: stateColour(store.bands[name]?.state) }">
+            {{ store.bands[name]?.state || 'calibrating' }}
+          </span>
         </div>
       </div>
-      <canvas
-        :ref="el => { if (el) canvases[name] = el }"
-        class="waterfall-canvas"
-      />
-      <div class="band-state" :style="{ background: stateColour(store.bands[name]?.state) }">
-        {{ store.bands[name]?.state || 'calibrating' }}
+
+      <div class="sa-plot"
+           @mousemove="e => updateHover(name, e, $event.currentTarget)"
+           @mouseleave="setHoverOutside(name)">
+        <!-- Spectrum canvas -->
+        <canvas :ref="el => { if (el) spectrumCanvases[name] = el }"
+                class="sa-spectrum-canvas" />
+        <!-- Waterfall canvas -->
+        <canvas :ref="el => { if (el) waterfallCanvases[name] = el }"
+                class="sa-waterfall-canvas" />
+
+        <!-- Axis overlay SVG. viewBox matches the plot pixel rect. -->
+        <svg class="sa-axes" v-if="axesFor(name)"
+             :viewBox="`0 0 1000 ${PANEL_SPECTRUM_H + PANEL_WATERFALL_H + PANEL_AXIS_GUTTER_B}`"
+             preserveAspectRatio="none">
+          <!-- dBm labels on left gutter -->
+          <g v-for="(lb, i) in axesFor(name).dbLabels" :key="'db'+i"
+             class="sa-axis-label">
+            <text :x="PANEL_AXIS_GUTTER_L - 4" :y="lb.y + 3" text-anchor="end">
+              {{ lb.dB }}
+            </text>
+          </g>
+          <!-- Freq labels along the bottom -->
+          <g v-for="(lb, i) in axesFor(name).fLabels" :key="'f'+i" class="sa-axis-label">
+            <text :x="PANEL_AXIS_GUTTER_L + lb.t * (1000 - PANEL_AXIS_GUTTER_L)"
+                  :y="PANEL_SPECTRUM_H + PANEL_WATERFALL_H + 12"
+                  text-anchor="middle">{{ lb.label }}</text>
+          </g>
+          <!-- Vertical divider between spectrum + waterfall -->
+          <line :x1="PANEL_AXIS_GUTTER_L" :x2="1000"
+                :y1="PANEL_SPECTRUM_H" :y2="PANEL_SPECTRUM_H"
+                class="sa-divider" />
+        </svg>
+
+        <!-- Hover readout -->
+        <div v-if="hover[name]?.inside" class="sa-hover"
+             :style="{ left: hover[name].x + 'px', top: hover[name].y + 'px' }">
+          <span>{{ (hover[name].freqHz / 1e6).toFixed(3) }} MHz</span>
+          <span>{{ hover[name].power?.toFixed?.(1) }} dB</span>
+        </div>
       </div>
     </div>
-    <div v-if="orderedBands.length === 0" class="empty">
+
+    <div v-if="orderedBands.length === 0" class="sa-empty">
       <template v-if="!store.enabled">
         RTL-SDR not detected in the container. Plug in the dongle + ensure rtl_power is installed.
       </template>
       <template v-else>
-        Loading spectrum status… {{ store.connected ? '(calibration may take ~2.5 min after restart)' : '' }}
+        Loading spectrum status…{{ store.connected ? ' (calibration may take ~2.5 min after restart)' : '' }}
       </template>
     </div>
   </div>
 </template>
 
 <style scoped>
-.spectrum-waterfall {
-  background: #0f172a;
+.sa-root {
+  background: #020617;
   border: 1px solid #1e293b;
-  border-radius: 6px;
-  padding: 12px;
+  border-radius: 8px;
+  padding: 10px 12px;
   color: #e2e8f0;
+  font-family: Inter, system-ui, sans-serif;
 }
-.header {
+.sa-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
 }
-.header h3 {
+.sa-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #cbd5e1;
+}
+.sa-conn { font-size: 11px; display: flex; align-items: center; gap: 4px; }
+.sa-conn .dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; display: inline-block; }
+.sa-conn.ok .dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
+.sa-conn.bad .dot { background: #f97316; }
+
+.sa-panel {
+  margin-top: 10px;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  background: #030a1a;
+  overflow: hidden;
+  position: relative;
+}
+.sa-panel.state-jamming {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 1px #dc2626, 0 0 18px rgba(220,38,38,0.35) inset;
+}
+.sa-panel.state-interference { border-color: #f59e0b; }
+.sa-panel.state-calibrating { border-color: #6366f1; }
+
+.sa-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid #0f172a;
+  background: #030a1a;
+}
+.sa-panel-title {
+  font-size: 12px;
   font-weight: 600;
+  color: #e2e8f0;
   letter-spacing: 0.02em;
 }
-.conn { font-size: 11px; display: flex; align-items: center; gap: 4px; }
-.conn .dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #6b7280;
-}
-.conn.ok .dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
-.conn.bad .dot { background: #f97316; }
-
-.band-row {
-  display: grid;
-  grid-template-columns: 180px 1fr 100px;
-  gap: 8px;
-  align-items: stretch;
-  margin-top: 6px;
-  border: 1px solid #1e293b;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #020617;
-  min-height: 72px;
-}
-.band-row.jamming {
-  border-color: #dc2626;
-  box-shadow: 0 0 0 1px #dc2626, 0 0 12px rgba(220, 38, 38, 0.4) inset;
-  animation: jam-flash 1.2s infinite alternate;
-}
-.band-row.interference {
-  border-color: #f59e0b;
-}
-@keyframes jam-flash {
-  from { box-shadow: 0 0 0 1px #dc2626, 0 0 8px rgba(220, 38, 38, 0.25) inset; }
-  to   { box-shadow: 0 0 0 2px #dc2626, 0 0 18px rgba(220, 38, 38, 0.55) inset; }
-}
-.band-meta {
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  border-right: 1px solid #1e293b;
-  background: #0f172a;
-}
-.band-title { font-size: 12px; font-weight: 600; }
-.band-sub { font-size: 10px; color: #94a3b8; margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
-.band-sub .iface { font-family: monospace; }
-
-.waterfall-canvas {
-  width: 100%;
-  height: 100%;
-  min-height: 72px;
-  display: block;
-  image-rendering: pixelated;
-}
-.band-state {
+.sa-panel-title .sa-id { color: #64748b; font-family: monospace; font-size: 10px; margin-left: 6px; }
+.sa-panel-meta { display: flex; align-items: center; gap: 10px; font-size: 10px; color: #94a3b8; }
+.sa-state {
   color: #0b0b0b;
-  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 6px;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 3px;
 }
-.empty {
-  padding: 12px;
+
+.sa-plot {
+  position: relative;
+  width: 100%;
+  /* 110 + 160 + 18 == the SVG viewBox numeric — kept in sync */
+  height: 288px;
+}
+.sa-spectrum-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 110px;
+  display: block;
+  image-rendering: auto;
+  z-index: 1;
+}
+.sa-waterfall-canvas {
+  position: absolute;
+  top: 110px;
+  left: 46px; /* start past the left gutter so the waterfall aligns with the trace */
+  width: calc(100% - 46px);
+  height: 160px;
+  display: block;
+  image-rendering: auto; /* smooth interpolation — not blocky */
+  z-index: 1;
+}
+.sa-axes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.sa-axis-label {
+  fill: #64748b;
+  font-size: 9px;
+  font-family: 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.04em;
+}
+.sa-divider {
+  stroke: #1e293b;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.sa-hover {
+  position: absolute;
+  transform: translate(8px, 8px);
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid #334155;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-family: monospace;
+  color: #e2e8f0;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.sa-empty {
+  padding: 16px;
   font-size: 12px;
   color: #94a3b8;
   font-style: italic;
+  text-align: center;
 }
 </style>
