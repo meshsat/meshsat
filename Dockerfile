@@ -88,9 +88,11 @@ RUN mkdir /src/rtl/build && cd /src/rtl/build && \
 # The headers are also pulled from the Blog fork install so rpfftw
 # sees V4-aware init code when it links against librtlsdr.
 RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
+    # PKG_CONFIG_PATH must include /out/usr/local/lib/pkgconfig so
+    # rpfftw's cmake finds the librtlsdr.pc we just installed there.
     if [ "$TARGETARCH" = "arm64" ]; then \
-      export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
-      export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
+      export PKG_CONFIG_PATH=/out/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig && \
+      export PKG_CONFIG_LIBDIR=/out/usr/local/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig && \
       cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -101,6 +103,7 @@ RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
         -DCMAKE_INCLUDE_PATH=/out/usr/local/include \
         -DCMAKE_LIBRARY_PATH=/out/usr/local/lib; \
     else \
+      export PKG_CONFIG_PATH=/out/usr/local/lib/pkgconfig && \
       cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/out/usr/local; \
     fi && \
     make -j"$(nproc)" && make install DESTDIR=/out
