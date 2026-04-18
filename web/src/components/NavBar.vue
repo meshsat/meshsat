@@ -14,7 +14,7 @@ const store = useMeshsatStore()
 // Operator mode — 5 items in thumb reach. Compose and Inbox both
 // sit on /messages today; MESHSAT-551 adds the split Compose view.
 const primary = [
-  { name: 'compose',  label: 'Compose',  path: '/messages?tab=compose', match: '/messages', icon: 'compose' },
+  { name: 'compose',  label: 'Compose',  path: '/compose',              match: '/compose',  icon: 'compose' },
   { name: 'inbox',    label: 'Inbox',    path: '/messages',             match: '/messages', icon: 'inbox'   },
   { name: 'map',      label: 'Map',      path: '/map',                  match: '/map',      icon: 'map'     },
   { name: 'people',   label: 'People',   path: '/nodes',                match: '/nodes',    icon: 'people'  },

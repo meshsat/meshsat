@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   { path: '/', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
+  { path: '/compose', name: 'compose', component: () => import('@/views/ComposeView.vue') },
   { path: '/messages', name: 'messages', component: () => import('@/views/MessagesView.vue') },
   { path: '/nodes', name: 'nodes', component: () => import('@/views/NodesView.vue') },
   { path: '/bridge', name: 'bridge', component: () => import('@/views/BridgeView.vue') },

@@ -88,6 +88,19 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Contact-aware send — MESHSAT-545 / MESHSAT-551. Thin wrapper over
+  // POST /api/messages/send-to-contact. Returns the per-bearer
+  // breakdown so the caller can render delivery ticks.
+  async function sendToContact(payload) {
+    error.value = null
+    try {
+      return await api.post('/messages/send-to-contact', payload)
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   async function fetchTelemetry(params = {}) {
     try {
       const data = await api.get('/telemetry', params)
@@ -1453,7 +1466,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     smsMessages, cellBroadcasts, cellInfo,
     presets, sosStatus, dlq,
     loading, error,
-    fetchMessages, fetchMessageStats, sendMessage, purgeMessages,
+    fetchMessages, fetchMessageStats, sendMessage, sendToContact, purgeMessages,
     fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
