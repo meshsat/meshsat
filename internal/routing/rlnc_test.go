@@ -553,7 +553,14 @@ func TestRLNCEncodeGeneration_UnequalSegments(t *testing.T) {
 	}
 
 	hash := sha256.Sum256([]byte("unequal"))
-	packets := EncodeGeneration(0, hash, segments, 1.0)
+	// Use redundancy 2.0 so the encoder produces 2k=6 packets instead
+	// of exactly k=3. At redundancy=1.0 there is zero margin — a single
+	// linearly-dependent coefficient draw (column has no pivot) gives a
+	// spurious "rank deficient" decode failure. Observed flaky in CI
+	// pipeline #22397 (TestRLNCEncodeGeneration_UnequalSegments, column
+	// 2 has no pivot). With 2k packets the probability of not finding k
+	// independent rows over GF(256) is negligible. [MESHSAT-551]
+	packets := EncodeGeneration(0, hash, segments, 2.0)
 
 	// All payloads should have length 4 (max segment length).
 	for i, pkt := range packets {
