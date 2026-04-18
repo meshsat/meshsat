@@ -14,14 +14,28 @@ import (
 // ── Unified Contacts CRUD ──
 
 // @Summary List contacts
-// @Description Returns all unified contacts
+// @Description Returns all unified contacts. Optional `kind` query parameter
+// @Description filters to contacts that have at least one address of the given
+// @Description bearer kind (sms, mesh, iridium, iridium_imt, aprs, webhook,
+// @Description mqtt, zigbee, ble, …). The filter is case-sensitive against the
+// @Description stored legacy value (lower-case) — new clients should query
+// @Description with "sms", not "SMS". [MESHSAT-542]
 // @Tags contacts
 // @Produce json
+// @Param kind query string false "Filter by bearer kind (sms, mesh, iridium, aprs, …)"
 // @Success 200 {array} database.Contact
 // @Failure 500 {object} map[string]string
 // @Router /api/contacts [get]
 func (s *Server) handleGetContacts(w http.ResponseWriter, r *http.Request) {
-	contacts, err := s.db.GetContacts()
+	var (
+		contacts []database.Contact
+		err      error
+	)
+	if kind := r.URL.Query().Get("kind"); kind != "" {
+		contacts, err = s.db.GetContactsWithAddressType(kind)
+	} else {
+		contacts, err = s.db.GetContacts()
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list contacts")
 		return

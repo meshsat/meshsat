@@ -517,16 +517,35 @@ func (s *Server) handleGetSMSMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
-// --- SMS Contacts ---
+// --- SMS Contacts (DEPRECATED — see MESHSAT-542) ---
 
-// @Summary List SMS contacts
-// @Description Returns all SMS contacts
+// setSMSContactsDeprecationHeaders signals the upcoming retirement of
+// the legacy /api/cellular/contacts* endpoints. Clients should move
+// to /api/contacts (with ?kind=sms on the GET). Headers follow
+// RFC 8594 (Sunset) and the IETF Deprecation header draft; clients
+// that honour them surface a visible warning to operators. The
+// legacy endpoints continue to function until the v50 migration
+// drops the sms_contacts table. [MESHSAT-542]
+func setSMSContactsDeprecationHeaders(w http.ResponseWriter) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", "Wed, 01 Jul 2026 00:00:00 GMT")
+	w.Header().Set("Link", `</api/contacts?kind=sms>; rel="successor-version"`)
+	w.Header().Set("X-Meshsat-Deprecation", "Use /api/contacts?kind=sms (GET) and /api/contacts (POST/PUT/DELETE). Legacy /api/cellular/contacts* removed in v50 (MESHSAT-542).")
+}
+
+// @Summary List SMS contacts (deprecated)
+// @Description DEPRECATED — use /api/contacts?kind=sms. Kept for one
+// @Description release; removed in v50 (MESHSAT-542). Responses carry
+// @Description Deprecation + Sunset + Link rel="successor-version"
+// @Description headers.
 // @Tags cellular
 // @Produce json
 // @Success 200 {array} database.SMSContact
 // @Failure 500 {object} map[string]string
 // @Router /api/cellular/contacts [get]
+// @Deprecated
 func (s *Server) handleGetSMSContacts(w http.ResponseWriter, r *http.Request) {
+	setSMSContactsDeprecationHeaders(w)
 	contacts, err := s.db.GetSMSContacts()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -538,8 +557,8 @@ func (s *Server) handleGetSMSContacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, contacts)
 }
 
-// @Summary Create SMS contact
-// @Description Creates a new SMS contact with phone number and optional auto-forward setting
+// @Summary Create SMS contact (deprecated)
+// @Description DEPRECATED — use POST /api/contacts. See MESHSAT-542.
 // @Tags cellular
 // @Accept json
 // @Produce json
@@ -548,7 +567,9 @@ func (s *Server) handleGetSMSContacts(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /api/cellular/contacts [post]
+// @Deprecated
 func (s *Server) handleCreateSMSContact(w http.ResponseWriter, r *http.Request) {
+	setSMSContactsDeprecationHeaders(w)
 	var req struct {
 		Name    string `json:"name"`
 		Phone   string `json:"phone"`
@@ -572,8 +593,8 @@ func (s *Server) handleCreateSMSContact(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 }
 
-// @Summary Update SMS contact
-// @Description Updates an existing SMS contact
+// @Summary Update SMS contact (deprecated)
+// @Description DEPRECATED — use PUT /api/contacts/{id}. See MESHSAT-542.
 // @Tags cellular
 // @Accept json
 // @Produce json
@@ -583,7 +604,9 @@ func (s *Server) handleCreateSMSContact(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /api/cellular/contacts/{id} [put]
+// @Deprecated
 func (s *Server) handleUpdateSMSContact(w http.ResponseWriter, r *http.Request) {
+	setSMSContactsDeprecationHeaders(w)
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -613,8 +636,8 @@ func (s *Server) handleUpdateSMSContact(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-// @Summary Delete SMS contact
-// @Description Deletes an SMS contact
+// @Summary Delete SMS contact (deprecated)
+// @Description DEPRECATED — use DELETE /api/contacts/{id}. See MESHSAT-542.
 // @Tags cellular
 // @Produce json
 // @Param id path integer true "Contact ID"
@@ -622,7 +645,9 @@ func (s *Server) handleUpdateSMSContact(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /api/cellular/contacts/{id} [delete]
+// @Deprecated
 func (s *Server) handleDeleteSMSContact(w http.ResponseWriter, r *http.Request) {
+	setSMSContactsDeprecationHeaders(w)
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {

@@ -318,7 +318,11 @@ func (s *Server) Router() http.Handler {
 		// RockBLOCK webhook (Iridium SBD MO via HTTP)
 		r.Post("/webhook/rockblock", s.handleRockBLOCKWebhook)
 
-		// SMS contacts (legacy — backward compatible, reads from sms_contacts)
+		// SMS contacts — DEPRECATED [MESHSAT-542]. Retained during the
+		// v50 grace window; new clients: /api/contacts?kind=sms (GET)
+		// and /api/contacts (POST/PUT/DELETE). Responses carry
+		// Deprecation + Sunset + Link rel="successor-version" headers
+		// so honouring clients can migrate automatically.
 		r.Get("/cellular/contacts", s.handleGetSMSContacts)
 		r.Post("/cellular/contacts", s.handleCreateSMSContact)
 		r.Put("/cellular/contacts/{id}", s.handleUpdateSMSContact)
