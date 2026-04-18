@@ -2364,7 +2364,7 @@ function widgetGridClass(id) {
     <!-- ═══ Stats Modal (Widget Diagnostics) ═══ -->
     <Teleport to="body">
       <div v-if="statsModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="statsModal = false">
-        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto m-4">
           <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
             <h3 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">{{ statsTitle }} — DIAGNOSTICS</h3>
             <button @click="statsModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
@@ -2379,7 +2379,7 @@ function widgetGridClass(id) {
     <!-- ═══ Queue Item Detail Modal ═══ -->
     <Teleport to="body">
       <div v-if="queueDetailModal && queueDetailItem" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="queueDetailModal = false">
-        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto m-4">
           <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
             <h3 class="font-display font-semibold text-sm tracking-wide"
               :class="queueDetailItem._type === 'sms' ? 'text-sky-400' : 'text-tactical-iridium'">
@@ -2483,7 +2483,7 @@ function widgetGridClass(id) {
     <!-- ═══ Node Detail Modal ═══ -->
     <Teleport to="body">
       <div v-if="nodeDetailModal && nodeDetailData" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm" @click.self="nodeDetailModal = false">
-        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto m-4">
           <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
             <div class="flex items-center gap-3">
               <div class="w-9 h-9 rounded-full bg-gray-700/50 flex items-center justify-center text-xs font-bold text-gray-400">
