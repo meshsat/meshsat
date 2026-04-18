@@ -329,6 +329,13 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/cellular/contacts/{id}", s.handleDeleteSMSContact)
 		r.Post("/cellular/sms/send", s.handleSendSMS)
 
+		// Directory import / export — vCard 4.0 + CSV [MESHSAT-541].
+		// Writes land in the v44+ directory_* tables; legacy /api/contacts
+		// continues to serve the v23 path during the grace window.
+		r.Post("/directory/import/vcard", s.handleImportVCard)
+		r.Post("/directory/import/csv", s.handleImportCSV)
+		r.Get("/directory/export/vcard", s.handleExportVCard)
+
 		// Unified contacts (multi-transport address book)
 		r.Get("/contacts", s.handleGetContacts)
 		r.Post("/contacts", s.handleCreateContact)
