@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { useLabel } from '@/i18n'
 
 // IQ-70 five-item primary nav for Operator mode; full 16-item nav
 // for Engineer mode. Mobile viewports (<768 px) get a bottom-tab
@@ -10,52 +11,55 @@ import { useMeshsatStore } from '@/stores/meshsat'
 
 const route = useRoute()
 const store = useMeshsatStore()
+const { t, tooltip } = useLabel()
 
 // Operator mode — 5 items in thumb reach. Compose and Inbox both
 // sit on /messages today; MESHSAT-551 adds the split Compose view.
-const primary = [
-  { name: 'compose',  label: 'Compose',  path: '/compose',              match: '/compose',  icon: 'compose' },
-  { name: 'inbox',    label: 'Inbox',    path: '/inbox',                match: '/inbox',    icon: 'inbox'   },
-  { name: 'map',      label: 'Map',      path: '/map',                  match: '/map',      icon: 'map'     },
-  { name: 'people',   label: 'People',   path: '/people',               match: '/people',   icon: 'people'  },
-  { name: 'radios',   label: 'Radios',   path: '/radios',               match: '/radios',   icon: 'radios' }
-]
+// Labels come from the i18n composable so Operator/Engineer swap
+// terminology per MESHSAT-557.
+const primary = computed(() => [
+  { name: 'compose',  key: 'nav.compose', path: '/compose',   match: '/compose', icon: 'compose' },
+  { name: 'inbox',    key: 'nav.inbox',   path: '/inbox',     match: '/inbox',   icon: 'inbox'   },
+  { name: 'map',      key: 'nav.map',     path: '/map',       match: '/map',     icon: 'map'     },
+  { name: 'people',   key: 'nav.people',  path: '/people',    match: '/people',  icon: 'people'  },
+  { name: 'radios',   key: 'nav.radios',  path: '/radios',    match: '/radios',  icon: 'radios' }
+])
 
 // Everything else lives under the ⋮ More overflow menu in Operator
 // mode. Engineer mode keeps the full flat tab strip it had before.
-const overflow = [
-  { name: 'dashboard', label: 'Dashboard', path: '/' },
-  { name: 'bridge',    label: 'Bridge',    path: '/bridge' },
-  { name: 'passes',    label: 'Passes',    path: '/passes' },
-  { name: 'topology',  label: 'Topology',  path: '/topology' },
-  { name: 'radio',     label: 'Meshtastic', path: '/radio' },
-  { name: 'zigbee',    label: 'ZigBee',    path: '/zigbee' },
-  { name: 'tak',       label: 'TAK',       path: '/tak' },
-  { name: 'spectrum',  label: 'Spectrum',  path: '/spectrum' },
-  { name: 'audit',     label: 'Audit',     path: '/audit' },
-  { name: 'settings',  label: 'Settings',  path: '/settings' },
-  { name: 'help',      label: 'Help',      path: '/help' },
-  { name: 'about',     label: 'About',     path: '/about' }
-]
+const overflow = computed(() => [
+  { name: 'dashboard', key: 'nav.dashboard',  path: '/' },
+  { name: 'bridge',    key: 'nav.bridge',     path: '/bridge' },
+  { name: 'passes',    key: 'nav.passes',     path: '/passes' },
+  { name: 'topology',  key: 'nav.topology',   path: '/topology' },
+  { name: 'radio',     key: 'nav.meshtastic', path: '/radio' },
+  { name: 'zigbee',    key: 'nav.zigbee',     path: '/zigbee' },
+  { name: 'tak',       key: 'nav.tak',        path: '/tak' },
+  { name: 'spectrum',  key: 'nav.spectrum',   path: '/spectrum' },
+  { name: 'audit',     key: 'nav.audit',      path: '/audit' },
+  { name: 'settings',  key: 'nav.settings',   path: '/settings' },
+  { name: 'help',      key: 'nav.help',       path: '/help' },
+  { name: 'about',     key: 'nav.about',      path: '/about' }
+])
 
-const engineerTabs = [
-  { name: 'dashboard',  label: 'Dashboard',  path: '/' },
-  { name: 'comms',      label: 'Comms',      path: '/messages' },
-  { name: 'nodes',      label: 'Peers',      path: '/nodes' },
-  { name: 'bridge',     label: 'Bridge',     path: '/bridge' },
-  { name: 'interfaces', label: 'Interfaces', path: '/interfaces' },
-  { name: 'passes',     label: 'Passes',     path: '/passes' },
-  { name: 'topology',   label: 'Topology',   path: '/topology' },
-  { name: 'map',        label: 'Map',        path: '/map' },
-  { name: 'settings',   label: 'Settings',   path: '/settings' },
-  { name: 'radio',      label: 'Meshtastic', path: '/radio' },
-  { name: 'zigbee',     label: 'ZigBee',     path: '/zigbee' },
-  { name: 'tak',        label: 'TAK',        path: '/tak' },
-  { name: 'spectrum',   label: 'Spectrum',   path: '/spectrum' },
-  { name: 'audit',      label: 'Audit',      path: '/audit' },
-  { name: 'help',       label: 'Help',       path: '/help' },
-  { name: 'about',      label: 'About',      path: '/about' }
-]
+const engineerTabs = computed(() => [
+  { name: 'dashboard',  key: 'nav.dashboard',  path: '/' },
+  { name: 'comms',      key: 'nav.inbox',      path: '/messages' },
+  { name: 'nodes',      key: 'nav.people',     path: '/nodes' },
+  { name: 'bridge',     key: 'nav.bridge',     path: '/bridge' },
+  { name: 'interfaces', key: 'nav.radios',     path: '/interfaces' },
+  { name: 'passes',     key: 'nav.passes',     path: '/passes' },
+  { name: 'topology',   key: 'nav.topology',   path: '/topology' },
+  { name: 'map',        key: 'nav.map',        path: '/map' },
+  { name: 'settings',   key: 'nav.settings',   path: '/settings' },
+  { name: 'radio',      key: 'nav.meshtastic', path: '/radio' },
+  { name: 'zigbee',     key: 'nav.zigbee',     path: '/zigbee' },
+  { name: 'tak',        key: 'nav.tak',        path: '/tak' },
+  { name: 'spectrum',   key: 'nav.spectrum',   path: '/spectrum' },
+  { name: 'audit',      key: 'nav.audit',      path: '/audit' },
+  { name: 'help',       key: 'nav.help',       path: '/help' },
+  { name: 'about',      key: 'nav.about',      path: '/about' }
+])
 
 function isActive(tab) {
   const target = tab.match || tab.path
@@ -98,14 +102,15 @@ const compactLabels = computed(() => viewportWidth.value < 1024)
         :class="isActive(tab)
           ? 'bg-tactical-iridium/10 text-tactical-iridium'
           : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'"
-        :aria-label="tab.label" :title="tab.label">
+        :aria-label="t(tab.key)"
+        :title="tooltip(tab.key) ? t(tab.key) + ' — ' + tooltip(tab.key) : t(tab.key)">
         <!-- Minimal inline icons; no assets needed. -->
         <svg v-if="tab.icon === 'compose'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L20 8l-4-4L4 16v4z"/><path d="M14 6l4 4"/></svg>
         <svg v-else-if="tab.icon === 'inbox'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
         <svg v-else-if="tab.icon === 'map'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-7.5-7-12a7 7 0 0 1 14 0c0 4.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>
         <svg v-else-if="tab.icon === 'people'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3-6 7-6s7 2.5 7 6"/><circle cx="17" cy="7" r="2.5"/><path d="M17 12c3 0 5 2 5 5"/></svg>
         <svg v-else-if="tab.icon === 'radios'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10a9 9 0 0 1 16 0"/><path d="M7 13a5 5 0 0 1 10 0"/><circle cx="12" cy="16" r="1.5"/></svg>
-        <span :class="{ 'hidden lg:inline': compactLabels }">{{ tab.label }}</span>
+        <span :class="{ 'hidden lg:inline': compactLabels }">{{ t(tab.key) }}</span>
       </router-link>
 
       <!-- ⋮ More -->
@@ -119,24 +124,25 @@ const compactLabels = computed(() => viewportWidth.value < 1024)
         <div v-show="moreOpen"
           class="absolute right-0 mt-1 w-44 bg-tactical-surface border border-tactical-border rounded shadow-lg z-50 py-1">
           <router-link v-for="tab in overflow" :key="tab.name" :to="tab.path" @click="closeMore"
+            :title="tooltip(tab.key) ? t(tab.key) + ' — ' + tooltip(tab.key) : t(tab.key)"
             class="block px-3 py-1.5 text-xs"
             :class="isActive(tab)
               ? 'bg-tactical-iridium/10 text-tactical-iridium'
               : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'">
-            {{ tab.label }}
+            {{ t(tab.key) }}
           </router-link>
         </div>
       </div>
     </div>
 
-    <!-- Engineer mode — original flat tab strip, untouched. -->
+    <!-- Engineer mode — flat tab strip, labels from engineer dict. -->
     <div v-else class="flex items-center gap-0.5">
       <router-link v-for="tab in engineerTabs" :key="tab.name" :to="tab.path"
         class="px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors"
         :class="isActive(tab)
           ? 'bg-tactical-iridium/10 text-tactical-iridium'
           : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'">
-        {{ tab.label }}
+        {{ t(tab.key) }}
       </router-link>
     </div>
   </nav>
@@ -150,13 +156,13 @@ const compactLabels = computed(() => viewportWidth.value < 1024)
       :class="isActive(tab)
         ? 'text-tactical-iridium'
         : 'text-gray-500'"
-      :aria-label="tab.label">
+      :aria-label="t(tab.key)">
       <svg v-if="tab.icon === 'compose'" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4L20 8l-4-4L4 16v4z"/><path d="M14 6l4 4"/></svg>
       <svg v-else-if="tab.icon === 'inbox'" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
       <svg v-else-if="tab.icon === 'map'" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-7.5-7-12a7 7 0 0 1 14 0c0 4.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>
       <svg v-else-if="tab.icon === 'people'" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-3.5 3-6 7-6s7 2.5 7 6"/><circle cx="17" cy="7" r="2.5"/><path d="M17 12c3 0 5 2 5 5"/></svg>
       <svg v-else-if="tab.icon === 'radios'" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10a9 9 0 0 1 16 0"/><path d="M7 13a5 5 0 0 1 10 0"/><circle cx="12" cy="16" r="1.5"/></svg>
-      <span>{{ tab.label }}</span>
+      <span>{{ t(tab.key) }}</span>
     </router-link>
   </nav>
 </template>
