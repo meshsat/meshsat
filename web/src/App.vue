@@ -5,6 +5,7 @@ import { useSpectrumStore } from '@/stores/spectrum'
 import JammingAlertModal from '@/components/JammingAlertModal.vue'
 import NavBar from '@/components/NavBar.vue'
 import StatusStrip from '@/components/StatusStrip.vue'
+import { useShortcuts } from '@/composables/useShortcuts'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
 // modal surfaces on any route, and so the SSE connection persists
@@ -12,6 +13,10 @@ import StatusStrip from '@/components/StatusStrip.vue'
 // navigates to the dashboard). [MESHSAT-509]
 const spectrumStore = useSpectrumStore()
 spectrumStore.connect()
+
+// Engineer-only keyboard shortcuts (g c / g i / g m / g p / g r /
+// n / / / Esc). No-op in Operator mode. [MESHSAT-558]
+useShortcuts()
 
 const store = useMeshsatStore()
 const utcTime = ref('')
