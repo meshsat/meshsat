@@ -282,3 +282,55 @@ func TestTransformPipeline_LegacyKeyRefUnaffected(t *testing.T) {
 type stubKeyResolver struct{ hexKey string }
 
 func (s stubKeyResolver) ResolveKeyHex(keyRef string) (string, error) { return s.hexKey, nil }
+
+// --- MESHSAT-548 S2-05 dual-read grace period verification --------------
+
+// TestTransformPipeline_DualReadCoexistence proves the pipeline
+// routes per-channel and per-contact key_refs independently on the
+// same instance — the grace-period invariant behind S2-05. Emit one
+// message under a legacy sms: ref, another under a contact: ref,
+// assert BOTH decrypt cleanly.
+func TestTransformPipeline_DualReadCoexistence(t *testing.T) {
+	db := testDB(t)
+	ks := newTestKeystore(t, db, "s2-05-dual")
+	dir := newDirStore(t, db)
+	cks := NewContactKeyService(ks, dir)
+
+	// Provision a per-contact key.
+	cid := seedContact(t, dir, "Grace")
+	if _, err := cks.GenerateAndStoreAES(context.Background(), cid, directory.TrustAnchorLocal); err != nil {
+		t.Fatal(err)
+	}
+
+	tp := NewTransformPipeline()
+	tp.SetContactKeyResolver(cks)
+	tp.SetKeyResolver(stubKeyResolver{hexKey: strings.Repeat("cd", 32)})
+
+	// Legacy ref round-trip.
+	legacySpecs := `[{"type":"encrypt","params":{"key_ref":"sms:+31655555555"}}]`
+	encLegacy, err := tp.ApplyEgress([]byte("legacy"), legacySpecs)
+	if err != nil {
+		t.Fatalf("legacy egress: %v", err)
+	}
+	decLegacy, err := tp.ApplyIngress(encLegacy, legacySpecs)
+	if err != nil || string(decLegacy) != "legacy" {
+		t.Errorf("legacy round-trip failed: %q err=%v", decLegacy, err)
+	}
+
+	// Per-contact ref round-trip on the same pipeline instance.
+	contactSpecs := `[{"type":"encrypt","params":{"key_ref":"contact:` + cid + `"}}]`
+	encContact, err := tp.ApplyEgress([]byte("new-world"), contactSpecs)
+	if err != nil {
+		t.Fatalf("contact egress: %v", err)
+	}
+	decContact, err := tp.ApplyIngress(encContact, contactSpecs)
+	if err != nil || string(decContact) != "new-world" {
+		t.Errorf("contact round-trip failed: %q err=%v", decContact, err)
+	}
+
+	// Cross-protect: a contact-keyed ciphertext must not decrypt under
+	// the legacy resolver (different key material).
+	if _, err := tp.ApplyIngress(encContact, legacySpecs); err == nil {
+		t.Error("contact ciphertext unexpectedly decrypted under legacy key")
+	}
+}
