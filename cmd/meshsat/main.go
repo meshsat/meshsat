@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,8 +16,6 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-
-	"encoding/base64"
 
 	"meshsat/internal/api"
 	"meshsat/internal/channel"
@@ -851,9 +852,11 @@ func main() {
 				Str("source", fmt.Sprintf("%x", offer.SourceHash[:8])).
 				Int("payload", len(offer.Payload)).
 				Msg("DTN: accepting custody of payload")
-			// Accept: create a local delivery for the payload
+			// Accept: create a local delivery for the payload. Custody-
+			// transferred bundles carry no precedence on the wire today;
+			// pass "" so the schema default (Routine) wins.
 			if dispatcher != nil {
-				_, _, qErr := dispatcher.QueueDirectSend("mesh", string(offer.Payload))
+				_, _, qErr := dispatcher.QueueDirectSend("mesh", string(offer.Payload), "")
 				if qErr != nil {
 					log.Warn().Err(qErr).Msg("DTN: failed to queue custody payload")
 				}
@@ -1335,7 +1338,9 @@ func main() {
 		cmdHandler := hubreporter.NewCommandHandler(hubReporter, hubBridgeID, healthFn)
 		cmdHandler.SetDeps(hubreporter.CommandDeps{
 			SendText: func(ifaceID, text string) (int64, string, error) {
-				return dispatcher.QueueDirectSend(ifaceID, text)
+				// Hub commands carry no precedence yet; Phase 2
+				// (MESHSAT-546) extends the command envelope.
+				return dispatcher.QueueDirectSend(ifaceID, text, "")
 			},
 			FlushBurst: func(ctx context.Context) ([]byte, int, error) {
 				return burstQueue.Flush(ctx)
@@ -1348,6 +1353,12 @@ func main() {
 		if ks != nil {
 			cmdHandler.SetKeyStore(ks) // [MESHSAT-447] Hub-driven key rotation
 		}
+		// Hub-driven directory sync: Hub pushes signed Snapshot JSON
+		// via directory_push; we verify against the pinned anchor
+		// (stored in system_config) and replace the local directory
+		// tables via a thin applier. [MESHSAT-540]
+		cmdHandler.SetTrustAnchorStore(&bridgeDirectoryTrustStore{db: db})
+		cmdHandler.SetDirectoryApplier(&bridgeDirectoryApplier{dir: directory.NewSQLStore(db.DB)})
 		hubReporter.SetCommandHandler(cmdHandler)
 
 		// TAK CoT relay: when Hub broadcasts TAK positions from OTS,
@@ -1689,4 +1700,102 @@ func (s *bridgeCredentialStore) StoreCredential(id, provider, name, credType str
 
 func (s *bridgeCredentialStore) RemoveCredential(id string) error {
 	return s.db.DeleteCredentialCache(id)
+}
+
+// bridgeDirectoryTrustStore persists the Hub's directory-signing
+// public key (PKIX DER) in system_config under a well-known key.
+// Hex-encoded so existing system_config tooling (plain TEXT column)
+// round-trips cleanly. [MESHSAT-540]
+type bridgeDirectoryTrustStore struct {
+	db *database.DB
+}
+
+const hubDirectoryTrustAnchorKey = "hub_directory_signing_pubkey"
+
+func (s *bridgeDirectoryTrustStore) SetDirectoryTrustAnchor(pubkey []byte) error {
+	return s.db.SetSystemConfig(hubDirectoryTrustAnchorKey, hex.EncodeToString(pubkey))
+}
+
+func (s *bridgeDirectoryTrustStore) GetDirectoryTrustAnchor() ([]byte, error) {
+	v, err := s.db.GetSystemConfig(hubDirectoryTrustAnchorKey)
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return hex.DecodeString(v)
+}
+
+// bridgeDirectoryApplier turns a verified Hub snapshot into writes
+// against the bridge's internal/directory SQLStore. Contacts, groups,
+// and policies are upserted by ID; any rows not in the snapshot are
+// left in place (delta semantics — Hub must emit a follow-up revoke
+// command to clear a removed contact). [MESHSAT-540]
+type bridgeDirectoryApplier struct {
+	dir *directory.SQLStore
+}
+
+func (a *bridgeDirectoryApplier) ApplySnapshot(ctx context.Context, snap *hubreporter.DirectorySnapshot) error {
+	if snap == nil {
+		return fmt.Errorf("nil snapshot")
+	}
+	for i := range snap.Contacts {
+		src := &snap.Contacts[i]
+		c := &directory.Contact{
+			ID:              src.ID,
+			TenantID:        src.TenantID,
+			DisplayName:     src.DisplayName,
+			GivenName:       src.GivenName,
+			FamilyName:      src.FamilyName,
+			Org:             src.Org,
+			Role:            src.Role,
+			Team:            src.Team,
+			SIDC:            src.SIDC,
+			Notes:           src.Notes,
+			TrustLevel:      directory.TrustLevel(src.TrustLevel),
+			TrustVerifiedBy: "",
+			HubVersion:      src.HubVersion,
+			HubEtag:         src.HubEtag,
+			Origin:          directory.Origin(src.Origin),
+			CreatedAt:       src.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
+			UpdatedAt:       src.UpdatedAt.UTC().Format("2006-01-02 15:04:05"),
+		}
+		if src.TrustVerifiedAt != nil {
+			t := src.TrustVerifiedAt.UTC().Format("2006-01-02 15:04:05")
+			c.TrustVerifiedAt = &t
+		}
+		if err := a.dir.CreateContact(ctx, c); err != nil {
+			// On ErrConflict the contact already exists — update instead.
+			if errors.Is(err, directory.ErrConflict) {
+				if uerr := a.dir.UpdateContact(ctx, c); uerr != nil {
+					return fmt.Errorf("update contact %s: %w", c.ID, uerr)
+				}
+			} else {
+				return fmt.Errorf("create contact %s: %w", c.ID, err)
+			}
+		}
+		// Replace addresses atomically by deleting existing and
+		// inserting the snapshot set.
+		existing, _ := a.dir.ListAddresses(ctx, c.ID)
+		for _, old := range existing {
+			_ = a.dir.DeleteAddress(ctx, old.ID)
+		}
+		for j := range src.Addresses {
+			sa := &src.Addresses[j]
+			addr := &directory.Address{
+				ID:           sa.ID,
+				ContactID:    c.ID,
+				Kind:         directory.Kind(sa.Kind),
+				Value:        sa.Value,
+				Subvalue:     sa.Subvalue,
+				Label:        sa.Label,
+				PrimaryRank:  sa.PrimaryRank,
+				Verified:     sa.Verified,
+				BearerHint:   sa.BearerHint,
+				MaxCostCents: sa.MaxCostCents,
+			}
+			if err := a.dir.AddAddress(ctx, addr); err != nil && !errors.Is(err, directory.ErrConflict) {
+				return fmt.Errorf("add address %s: %w", addr.Value, err)
+			}
+		}
+	}
+	return nil
 }

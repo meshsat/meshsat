@@ -39,12 +39,14 @@ type CredentialStore interface {
 
 // CommandHandler processes commands received from the Hub via MQTT.
 type CommandHandler struct {
-	reporter  *HubReporter
-	bridgeID  string
-	handlers  map[string]func(cmd Command) (json.RawMessage, error)
-	deps      CommandDeps
-	credStore CredentialStore
-	keyStore  KeyStoreImporter // [MESHSAT-447]
+	reporter   *HubReporter
+	bridgeID   string
+	handlers   map[string]func(cmd Command) (json.RawMessage, error)
+	deps       CommandDeps
+	credStore  CredentialStore
+	keyStore   KeyStoreImporter // [MESHSAT-447]
+	dirApplier DirectoryApplier // [MESHSAT-540]
+	trustStore TrustAnchorStore // [MESHSAT-539/540]
 }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
@@ -83,6 +85,14 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 	ch.handlers["credential_push"] = ch.handleCredentialPush
 	ch.handlers["credential_revoke"] = ch.handleCredentialRevoke
 	ch.handlers["key_rotate"] = ch.handleKeyRotate
+
+	// Directory sync from Hub [MESHSAT-540]. Handlers fail-closed if
+	// their dependencies (DirectoryApplier, TrustAnchorStore) have
+	// not been wired — the bridge still boots, and the operator sees
+	// an explicit rejection message on the first push, rather than a
+	// silent no-op.
+	ch.handlers["directory_push"] = ch.handleDirectoryPush
+	ch.handlers["directory_trust_anchor_rotate"] = ch.handleDirectoryTrustAnchorRotate
 
 	return ch
 }
