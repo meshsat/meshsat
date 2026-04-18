@@ -559,6 +559,17 @@ func (s *Server) Router() http.Handler {
 		r.Post("/system/restart", s.handleSystemRestart)
 		r.Post("/system/backlight", s.handleBacklight)
 
+		// Pair mode — touch-display arm + remote-device claim
+		// [MESHSAT-596]. Mounted under /api/v2/pair/ so the old
+		// /api/* JWT-less rail remains stable during the Phase-8
+		// rollout; the mTLS middleware (MESHSAT-598) attaches
+		// here when it lands.
+		r.Post("/v2/pair/arm", s.handlePairArm)
+		r.Post("/v2/pair/claim", s.handlePairClaim)
+		r.Post("/v2/pair/refresh", s.handlePairRefresh)
+		r.Get("/v2/pair/list", s.handlePairList)
+		r.Post("/v2/pair/revoke/{id}", s.handlePairRevoke)
+
 		// Burst queue
 		r.Get("/burst/status", s.handleGetBurstStatus)
 		r.Post("/burst/flush", s.handleFlushBurst)

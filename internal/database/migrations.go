@@ -1159,6 +1159,40 @@ var migrations = []string{
 	// behaviour of every pre-v49 delivery.
 	`ALTER TABLE message_deliveries ADD COLUMN precedence TEXT NOT NULL DEFAULT 'Routine';
 	CREATE INDEX IF NOT EXISTS idx_deliveries_precedence ON message_deliveries(precedence, status);`,
+
+	// v50: Pair-mode tables — paired_clients stores every device
+	// that has claimed a pair (browser, Android, CLI) with its
+	// ECDH-derived identity + the JWT signing key it mints tokens
+	// from; pair_modes is a short-lived row armed from the touch-
+	// display UI (Settings → Devices → Arm pair mode) that holds
+	// the pairing secret until it's consumed or times out. 6-digit
+	// PIN + 90-second TTL is the field-kit grammar; revoke wipes
+	// both tables selectively. [MESHSAT-593]
+	`CREATE TABLE IF NOT EXISTS pair_modes (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		pin          TEXT NOT NULL,                       -- 6-digit, rotates on every Arm
+		pairing_key  TEXT NOT NULL,                       -- 32-byte hex, ephemeral ECDH server-side
+		armed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		expires_at   TEXT NOT NULL,                       -- armed_at + 90s (first build; tunable)
+		consumed_at  TEXT,                                -- set on successful claim
+		consumed_by  TEXT,                                -- client_id once paired
+		armed_by     TEXT NOT NULL DEFAULT ''             -- operator identifier
+	);
+	CREATE INDEX IF NOT EXISTS idx_pair_modes_expires ON pair_modes(expires_at);
+
+	CREATE TABLE IF NOT EXISTS paired_clients (
+		id             TEXT PRIMARY KEY,                   -- uuid
+		name           TEXT NOT NULL DEFAULT '',           -- operator-facing label
+		kind           TEXT NOT NULL DEFAULT 'browser',    -- browser / android / cli / hub
+		public_key     TEXT NOT NULL,                      -- Ed25519 hex, used to verify JWTs
+		cert_pem       TEXT NOT NULL DEFAULT '',           -- X.509 leaf (base64 PEM) for mTLS
+		cert_expires_at TEXT,                              -- 90d from issuance
+		claimed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		last_seen_at   TEXT,
+		revoked_at     TEXT,
+		revoke_reason  TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_paired_clients_revoked ON paired_clients(revoked_at);`,
 }
 
 func (db *DB) migrate() error {
