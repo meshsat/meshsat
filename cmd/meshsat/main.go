@@ -1071,6 +1071,11 @@ func main() {
 				transforms.SetContactKeyResolver(cks)
 				log.Info().Msg("contact key service initialized")
 			}
+			// SendToRecipient — contact-aware dispatch via the
+			// directory.Store's Resolve/GetPolicy methods.
+			// [MESHSAT-544 / S2-01]
+			dispatcher.SetRecipientResolver(dirStore)
+			log.Info().Msg("dispatcher: recipient resolver wired")
 		}
 	}
 

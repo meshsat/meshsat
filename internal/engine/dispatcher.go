@@ -108,6 +108,11 @@ type Dispatcher struct {
 	fragmentMgr *ReassemblyBuffer
 	custodyMgr  *CustodyManager
 
+	// Directory-backed recipient resolution (MESHSAT-544 / S2-01).
+	// Nil until [Dispatcher.SetRecipientResolver] is called; when nil,
+	// [Dispatcher.SendToRecipient] accepts only RawRecipient targets.
+	recipientResolver RecipientResolver
+
 	// wg tracks every goroutine spawned by Start / StartWorker so
 	// callers (tests, graceful shutdown) can Wait() for all workers to
 	// drain before closing the underlying database. Without this,

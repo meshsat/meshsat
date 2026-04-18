@@ -336,6 +336,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/directory/import/csv", s.handleImportCSV)
 		r.Get("/directory/export/vcard", s.handleExportVCard)
 
+		// Contact-aware send [MESHSAT-545 / S2-02]. Wraps
+		// Dispatcher.SendToRecipient — resolves the contact to its
+		// addresses, picks the dispatch strategy from policy, queues
+		// a delivery per selected bearer.
+		r.Post("/messages/send-to-contact", s.handleSendToContact)
+
 		// Unified contacts (multi-transport address book)
 		r.Get("/contacts", s.handleGetContacts)
 		r.Post("/contacts", s.handleCreateContact)
