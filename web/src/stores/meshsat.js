@@ -130,6 +130,28 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Pair-mode devices [MESHSAT-596 / MESHSAT-597].
+  const pairedClients = ref([])
+  const armedPair = ref(null)  // { pin, pairing_key, expires_at, ttl_seconds }
+  async function armPairMode() {
+    error.value = null
+    try {
+      armedPair.value = await api.post('/v2/pair/arm')
+      return armedPair.value
+    } catch (e) { error.value = e.message; throw e }
+  }
+  async function fetchPairedClients() {
+    try { pairedClients.value = await api.get('/v2/pair/list') }
+    catch (e) { error.value = e.message }
+  }
+  async function revokePairedClient(id, reason = '') {
+    error.value = null
+    try {
+      await api.post(`/v2/pair/revoke/${id}`, { reason })
+      await fetchPairedClients()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Contact verify + QR import [MESHSAT-560 / MESHSAT-561].
   async function verifyContact(id, level, verifiedBy = 'operator') {
     error.value = null
@@ -1521,7 +1543,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, sendToContact,
-    verifyContact, fetchContactQR, importContactQR, purgeMessages,
+    verifyContact, fetchContactQR, importContactQR,
+    pairedClients, armedPair, armPairMode, fetchPairedClients, revokePairedClient,
+    purgeMessages,
     fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,

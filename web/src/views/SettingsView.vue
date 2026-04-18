@@ -29,7 +29,8 @@ const allTabs = [
   { id: 'credentials',   label: 'Credentials',   tier: 'engineer' },
   { id: 'routing',       label: 'Routing',       tier: 'engineer' },
   { id: 'config_mgmt',   label: 'Export/Import', tier: 'engineer' },
-  { id: 'about',         label: 'About',         tier: 'engineer' }
+  { id: 'about',         label: 'About',         tier: 'engineer' },
+  { id: 'devices',       label: 'Devices',       tier: 'engineer' }
 ]
 const tabs = computed(() => store.isEngineer
   ? allTabs
@@ -866,7 +867,19 @@ onMounted(async () => {
   store.fetchRangeTests()
   loadSigningKey()
   loadSpectrumStatus()
+  store.fetchPairedClients()  // [MESHSAT-597]
 })
+
+// Pair-mode actions. [MESHSAT-597]
+const armBusy = ref(false)
+async function doArmPair() {
+  armBusy.value = true
+  try { await store.armPairMode() } finally { armBusy.value = false }
+}
+async function doRevoke(id) {
+  if (!confirm('Revoke this paired device?')) return
+  await store.revokePairedClient(id)
+}
 
 onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
 </script>
@@ -2168,6 +2181,67 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             {{ importResult.error || importResult.message || 'Config imported successfully' }}
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Devices (pair-mode panel) [MESHSAT-597] -->
+    <div v-if="activeTab === 'devices'" class="space-y-4">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h4 class="text-sm font-medium text-gray-200 mb-2">Arm pair mode</h4>
+        <p class="text-xs text-gray-500 mb-3">
+          Shows a 6-digit PIN + a 32-byte pairing key for 90 seconds. Enter both on
+          the remote device being paired (browser, Android, CLI). The remote device
+          derives a shared secret from the two values and claims an identity.
+        </p>
+        <button @click="doArmPair" :disabled="armBusy"
+          class="px-4 py-2 rounded bg-tactical-iridium text-tactical-bg text-xs font-semibold hover:opacity-90 disabled:opacity-40 min-h-[40px]">
+          {{ armBusy ? 'Arming...' : 'Arm pair mode' }}
+        </button>
+        <div v-if="store.armedPair" class="mt-3 space-y-2">
+          <div class="flex items-center justify-between bg-gray-900 rounded px-3 py-2 border border-gray-700">
+            <span class="text-xs text-gray-500">PIN</span>
+            <span class="text-2xl font-mono tracking-widest text-tactical-iridium">{{ store.armedPair.pin }}</span>
+          </div>
+          <div class="bg-gray-900 rounded px-3 py-2 border border-gray-700">
+            <div class="text-xs text-gray-500 mb-1">Pairing key (hex)</div>
+            <div class="text-[10px] font-mono break-all text-gray-200">{{ store.armedPair.pairing_key }}</div>
+          </div>
+          <div class="text-[10px] text-amber-400">
+            Valid for {{ store.armedPair.ttl_seconds }} s — expires at
+            <span class="font-mono">{{ store.armedPair.expires_at }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-sm font-medium text-gray-200">Paired devices</h4>
+          <button @click="store.fetchPairedClients" class="text-xs text-gray-400 px-2 py-1 rounded border border-gray-700 hover:bg-white/5 min-h-[32px]">
+            Refresh
+          </button>
+        </div>
+        <div v-if="!store.pairedClients.length" class="text-xs text-gray-500">
+          No paired devices yet.
+        </div>
+        <ul v-else class="space-y-1">
+          <li v-for="pc in store.pairedClients" :key="pc.id"
+            class="flex items-center justify-between gap-2 px-3 py-2 bg-gray-900 rounded border border-gray-700">
+            <div class="min-w-0 flex-1">
+              <div class="text-sm text-gray-200 truncate">
+                {{ pc.name || '(unnamed)' }}
+                <span class="text-[10px] text-gray-500 ml-1">{{ pc.kind }}</span>
+                <span v-if="pc.revoked_at" class="text-[10px] text-red-400 ml-1">revoked</span>
+              </div>
+              <div class="text-[10px] font-mono text-gray-500 truncate">
+                {{ pc.id.slice(0, 16) }}… · claimed {{ pc.claimed_at }}
+              </div>
+            </div>
+            <button v-if="!pc.revoked_at" @click="doRevoke(pc.id)"
+              class="px-2 py-1 rounded border border-red-500/40 text-red-400 text-[10px] min-h-[32px]">
+              Revoke
+            </button>
+          </li>
+        </ul>
       </div>
     </div>
 
