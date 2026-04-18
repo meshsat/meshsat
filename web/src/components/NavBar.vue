@@ -15,7 +15,7 @@ const store = useMeshsatStore()
 // sit on /messages today; MESHSAT-551 adds the split Compose view.
 const primary = [
   { name: 'compose',  label: 'Compose',  path: '/compose',              match: '/compose',  icon: 'compose' },
-  { name: 'inbox',    label: 'Inbox',    path: '/messages',             match: '/messages', icon: 'inbox'   },
+  { name: 'inbox',    label: 'Inbox',    path: '/inbox',                match: '/inbox',    icon: 'inbox'   },
   { name: 'map',      label: 'Map',      path: '/map',                  match: '/map',      icon: 'map'     },
   { name: 'people',   label: 'People',   path: '/nodes',                match: '/nodes',    icon: 'people'  },
   { name: 'radios',   label: 'Radios',   path: '/interfaces',           match: '/interfaces', icon: 'radios' }
