@@ -549,6 +549,7 @@ func (s *Server) Router() http.Handler {
 
 		// System
 		r.Post("/system/restart", s.handleSystemRestart)
+		r.Post("/system/backlight", s.handleBacklight)
 
 		// Burst queue
 		r.Get("/burst/status", s.handleGetBurstStatus)

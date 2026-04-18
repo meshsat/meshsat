@@ -51,6 +51,35 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     setShellMode(shellMode.value === 'operator' ? 'engineer' : 'operator')
   }
 
+  // NVIS night theme (MIL-STD-3009 Green A). Independent of shell
+  // mode — operators need it on night ops regardless of Operator /
+  // Engineer shell. [MESHSAT-556]
+  const nvisInitial = (typeof window !== 'undefined'
+    && window.localStorage?.getItem('meshsat.theme') === 'nvis')
+  const themeMode = ref(nvisInitial ? 'nvis' : 'default')
+  const isNVIS = computed(() => themeMode.value === 'nvis')
+  function setThemeMode(mode) {
+    if (mode !== 'default' && mode !== 'nvis') return
+    themeMode.value = mode
+    try { window.localStorage?.setItem('meshsat.theme', mode) } catch { /* private mode */ }
+  }
+  function toggleNVIS() {
+    setThemeMode(themeMode.value === 'nvis' ? 'default' : 'nvis')
+  }
+  async function setBacklight(value) {
+    // Bridge writes value to /sys/class/backlight/*/brightness; 0 =
+    // off, top value = full. Hardware-specific — the API normalises
+    // to a 0-255 scale.
+    const v = Math.max(0, Math.min(255, Math.round(Number(value) || 0)))
+    error.value = null
+    try {
+      return await api.post('/system/backlight', { value: v })
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   async function fetchMessages(params = {}) {
     try {
       const data = await api.get('/messages', params)
@@ -1459,6 +1488,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   return {
     shellMode, isOperator, isEngineer, setShellMode, toggleShellMode,
+    themeMode, isNVIS, setThemeMode, toggleNVIS, setBacklight,
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
     locationSources, iridiumGeoHistory,

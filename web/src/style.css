@@ -32,3 +32,78 @@ body {
 .animate-pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
+
+/* =====================================================================
+ * NVIS Green A theme — MIL-STD-3009 night / night-vision-compatible.
+ * Applied via body.theme-nvis. Palette:
+ *   #000000 background, #00FF41 primary, #FFB000 amber accent,
+ *   #FF0000 emergency only. All motion disabled so the operator's
+ *   peripheral vision isn't drawn by animations at low light.
+ * [MESHSAT-556]
+ * ================================================================== */
+body.theme-nvis {
+  background: #000 !important;
+  background-image: none !important;
+  color: #00FF41 !important;
+}
+body.theme-nvis .bg-tactical-bg,
+body.theme-nvis .bg-tactical-surface,
+body.theme-nvis .bg-tactical-surface\/95,
+body.theme-nvis .bg-gray-800,
+body.theme-nvis .bg-gray-900 {
+  background-color: #000 !important;
+}
+body.theme-nvis .text-gray-100,
+body.theme-nvis .text-gray-200,
+body.theme-nvis .text-gray-300,
+body.theme-nvis .text-gray-400,
+body.theme-nvis .text-gray-500,
+body.theme-nvis .text-tactical-iridium,
+body.theme-nvis .text-emerald-400,
+body.theme-nvis .text-sky-400,
+body.theme-nvis .text-blue-400,
+body.theme-nvis .text-violet-400,
+body.theme-nvis .text-teal-400,
+body.theme-nvis .text-tactical-lora\/70,
+body.theme-nvis .text-tactical-iridium\/70 {
+  color: #00FF41 !important;
+}
+body.theme-nvis .text-amber-400,
+body.theme-nvis .text-amber-500,
+body.theme-nvis .text-amber-400\/70,
+body.theme-nvis .text-amber-400\/80 {
+  color: #FFB000 !important;
+}
+body.theme-nvis .text-red-400,
+body.theme-nvis .text-red-500 {
+  color: #FF0000 !important;
+}
+body.theme-nvis .border-tactical-border,
+body.theme-nvis .border-gray-700,
+body.theme-nvis .border-gray-800 {
+  border-color: rgba(0, 255, 65, 0.35) !important;
+}
+body.theme-nvis .bg-emerald-400,
+body.theme-nvis .bg-tactical-iridium,
+body.theme-nvis .bg-tactical-lora,
+body.theme-nvis .bg-sky-400,
+body.theme-nvis .bg-blue-400,
+body.theme-nvis .bg-violet-400,
+body.theme-nvis .bg-teal-400 {
+  background-color: #00FF41 !important;
+}
+body.theme-nvis .bg-amber-400,
+body.theme-nvis .bg-amber-500 {
+  background-color: #FFB000 !important;
+}
+body.theme-nvis .bg-red-400,
+body.theme-nvis .bg-red-500 {
+  background-color: #FF0000 !important;
+}
+body.theme-nvis *,
+body.theme-nvis *::before,
+body.theme-nvis *::after {
+  animation-duration: 0.001ms !important;
+  animation-delay: 0ms !important;
+  transition-duration: 0.001ms !important;
+}
