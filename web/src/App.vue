@@ -5,6 +5,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import { useSpectrumStore } from '@/stores/spectrum'
 import { formatTimeHHMM } from '@/utils/format'
 import JammingAlertModal from '@/components/JammingAlertModal.vue'
+import NavBar from '@/components/NavBar.vue'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
 // modal surfaces on any route, and so the SSE connection persists
@@ -17,29 +18,8 @@ const route = useRoute()
 const store = useMeshsatStore()
 const utcTime = ref('')
 
-const tabs = [
-  { name: 'dashboard', label: 'Dashboard', path: '/' },
-  { name: 'comms', label: 'Comms', path: '/messages' },
-  { name: 'nodes', label: 'Peers', path: '/nodes' },
-  { name: 'bridge', label: 'Bridge', path: '/bridge' },
-  { name: 'interfaces', label: 'Interfaces', path: '/interfaces' },
-  { name: 'passes', label: 'Passes', path: '/passes' },
-  { name: 'topology', label: 'Topology', path: '/topology' },
-  { name: 'map', label: 'Map', path: '/map' },
-  { name: 'settings', label: 'Settings', path: '/settings' },
-  { name: 'radio', label: 'Meshtastic', path: '/radio' },
-  { name: 'zigbee', label: 'ZigBee', path: '/zigbee' },
-  { name: 'tak', label: 'TAK', path: '/tak' },
-  { name: 'spectrum', label: 'Spectrum', path: '/spectrum' },
-  { name: 'audit', label: 'Audit', path: '/audit' },
-  { name: 'help', label: 'Help', path: '/help' },
-  { name: 'about', label: 'About', path: '/about' }
-]
-
-function isActive(tab) {
-  if (tab.path === '/') return route.path === '/'
-  return route.path.startsWith(tab.path)
-}
+// Nav moved into NavBar component so it can branch on shellMode and
+// own the mobile bottom-tab bar cleanly. [MESHSAT-550]
 
 // SOS indicator (persistent across all views)
 const sosActive = computed(() => store.sosStatus?.active === true)
@@ -161,18 +141,8 @@ onUnmounted(() => {
           <span class="font-display font-semibold text-sm text-gray-200 tracking-wide">MeshSat</span>
         </router-link>
 
-        <!-- Center: Nav tabs (scrollable on mobile) -->
-        <nav class="flex-1 flex items-center overflow-x-auto no-scrollbar mx-2 lg:mx-6">
-          <div class="flex items-center gap-0.5">
-            <router-link v-for="tab in tabs" :key="tab.name" :to="tab.path"
-              class="px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors"
-              :class="isActive(tab)
-                ? 'bg-tactical-iridium/10 text-tactical-iridium'
-                : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'">
-              {{ tab.label }}
-            </router-link>
-          </div>
-        </nav>
+        <!-- Center: Nav — 5 items + More in Operator, full list in Engineer -->
+        <NavBar />
 
         <!-- Right: Status indicators -->
         <div class="flex items-center gap-3 shrink-0">
@@ -262,8 +232,10 @@ onUnmounted(() => {
       <span class="text-xs text-red-300/70">Emergency beacon transmitting on all channels</span>
     </div>
 
-    <!-- Main content -->
-    <main class="flex-1">
+    <!-- Main content. Extra bottom padding on phone viewports in
+         Operator mode so the fixed bottom-tab bar doesn't cover the
+         last row of whichever view is active. [MESHSAT-550] -->
+    <main class="flex-1" :class="{ 'pb-16 md:pb-0': store.isOperator }">
       <div class="p-3 sm:p-4 lg:p-5">
         <router-view />
       </div>
