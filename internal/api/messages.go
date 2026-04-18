@@ -7,6 +7,7 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
+	"meshsat/internal/types"
 )
 
 // handleGetMessages returns paginated message history.
@@ -95,6 +96,14 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalise precedence (STANAG 4406 Edition 2). Accepts full names and
+	// ACP-127 prosigns (Z/O/P/R/M); empty → Routine. [MESHSAT-543]
+	precedence, err := types.ParsePrecedence(req.Precedence)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// If a gateway is specified, queue via the delivery ledger.
 	// The DeliveryWorker picks it up within 2 seconds and sends via the gateway.
 	if req.Gateway != "" {
@@ -112,7 +121,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "unknown gateway: "+req.Gateway)
 			return
 		}
-		delID, msgRef, err := s.dispatcher.QueueDirectSend(ifaceID, req.Text)
+		delID, msgRef, err := s.dispatcher.QueueDirectSend(ifaceID, req.Text, string(precedence))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "queue failed: "+err.Error())
 			return
@@ -122,6 +131,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			"gateway":     req.Gateway,
 			"delivery_id": delID,
 			"msg_ref":     msgRef,
+			"precedence":  string(precedence),
 		})
 		return
 	}
