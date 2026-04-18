@@ -68,17 +68,49 @@ function isActive(tab) {
 }
 
 const moreOpen = ref(false)
-function toggleMore() { moreOpen.value = !moreOpen.value }
+const moreBtn = ref(null)
+const moreStyle = ref({})
+
+// Compute dropdown position relative to the anchor button. Using
+// `position: fixed` + viewport coords so the dropdown escapes the
+// parent <nav>'s `overflow-x-auto` clip context (setting overflow-x
+// forces overflow-y to "auto" in CSS, which was previously clipping
+// the absolute-positioned panel off-screen).
+function positionDropdown() {
+  const el = moreBtn.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  moreStyle.value = {
+    position: 'fixed',
+    top:   (r.bottom + 4) + 'px',
+    right: (window.innerWidth - r.right) + 'px'
+  }
+}
+function toggleMore() {
+  moreOpen.value = !moreOpen.value
+  if (moreOpen.value) positionDropdown()
+}
 function closeMore() { moreOpen.value = false }
 
 // Close More on any outside click.
 function onDocClick(ev) {
   if (!moreOpen.value) return
-  const el = document.getElementById('meshsat-nav-more')
-  if (el && !el.contains(ev.target)) closeMore()
+  const btn = moreBtn.value
+  const menu = document.getElementById('meshsat-nav-more-menu')
+  if (btn && btn.contains(ev.target)) return
+  if (menu && menu.contains(ev.target)) return
+  closeMore()
 }
-onMounted(() => document.addEventListener('click', onDocClick))
-onUnmounted(() => document.removeEventListener('click', onDocClick))
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+  window.addEventListener('resize', positionDropdown)
+  window.addEventListener('scroll', positionDropdown, true)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick)
+  window.removeEventListener('resize', positionDropdown)
+  window.removeEventListener('scroll', positionDropdown, true)
+})
 
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
 function onResize() { viewportWidth.value = window.innerWidth }
@@ -114,15 +146,19 @@ const compactLabels = computed(() => viewportWidth.value < 1024)
       </router-link>
 
       <!-- ⋮ More -->
-      <div id="meshsat-nav-more" class="relative">
-        <button type="button" @click.stop="toggleMore"
-          class="px-2 py-1.5 rounded text-xs font-medium text-gray-500 hover:text-gray-300 hover:bg-white/5"
-          :class="{ 'bg-white/5 text-gray-300': moreOpen }"
-          aria-label="More" :aria-expanded="moreOpen">
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
-        </button>
-        <div v-show="moreOpen"
-          class="absolute right-0 mt-1 w-44 bg-tactical-surface border border-tactical-border rounded shadow-lg z-50 py-1">
+      <button ref="moreBtn" type="button" @click.stop="toggleMore"
+        class="px-2 py-1.5 rounded text-xs font-medium text-gray-500 hover:text-gray-300 hover:bg-white/5"
+        :class="{ 'bg-white/5 text-gray-300': moreOpen }"
+        aria-label="More" :aria-expanded="moreOpen">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+      </button>
+
+      <!-- More dropdown — teleported to <body> so it escapes the
+           <nav>'s overflow-x-auto clip rect. [MESHSAT-550 fix] -->
+      <Teleport to="body">
+        <div v-show="moreOpen" id="meshsat-nav-more-menu"
+          :style="moreStyle"
+          class="w-44 bg-tactical-surface border border-tactical-border rounded shadow-lg z-[9999] py-1">
           <router-link v-for="tab in overflow" :key="tab.name" :to="tab.path" @click="closeMore"
             :title="tooltip(tab.key) ? t(tab.key) + ' — ' + tooltip(tab.key) : t(tab.key)"
             class="block px-3 py-1.5 text-xs"
@@ -132,7 +168,7 @@ const compactLabels = computed(() => viewportWidth.value < 1024)
             {{ t(tab.key) }}
           </router-link>
         </div>
-      </div>
+      </Teleport>
     </div>
 
     <!-- Engineer mode — flat tab strip, labels from engineer dict. -->
