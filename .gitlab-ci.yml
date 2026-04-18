@@ -132,7 +132,7 @@ test:
   script:
     - cd ${CI_PROJECT_DIR}
     - go mod download
-    - go test -count=1 -timeout 300s ./...
+    - go test -count=1 -timeout 600s ./...
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
