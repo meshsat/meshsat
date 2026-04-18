@@ -17,7 +17,7 @@ const primary = [
   { name: 'compose',  label: 'Compose',  path: '/compose',              match: '/compose',  icon: 'compose' },
   { name: 'inbox',    label: 'Inbox',    path: '/inbox',                match: '/inbox',    icon: 'inbox'   },
   { name: 'map',      label: 'Map',      path: '/map',                  match: '/map',      icon: 'map'     },
-  { name: 'people',   label: 'People',   path: '/nodes',                match: '/nodes',    icon: 'people'  },
+  { name: 'people',   label: 'People',   path: '/people',               match: '/people',   icon: 'people'  },
   { name: 'radios',   label: 'Radios',   path: '/interfaces',           match: '/interfaces', icon: 'radios' }
 ]
 
