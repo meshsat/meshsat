@@ -101,6 +101,12 @@ type SendRequest struct {
 	To      string `json:"to,omitempty"`
 	Channel int    `json:"channel,omitempty"`
 	Gateway string `json:"gateway,omitempty"` // target gateway type (e.g. "iridium_imt", "iridium")
+	// Precedence is the STANAG 4406 Edition 2 level for the message:
+	// Override / Flash / Immediate / Priority / Routine / Deferred.
+	// ACP-127 short forms (Z/O/P/R/M) are also accepted on the wire.
+	// Empty → Routine. Queue behaviour is unchanged in Phase 1
+	// (MESHSAT-543); queue-by-precedence is MESHSAT-546 / S2-03.
+	Precedence string `json:"precedence,omitempty"`
 }
 
 // RawRequest is a raw packet send request.
