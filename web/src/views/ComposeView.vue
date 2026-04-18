@@ -20,6 +20,18 @@ const sending = ref(false)
 const result = ref(null)
 const error = ref('')
 
+// Trust-level hard-block on high-precedence sends [MESHSAT-560].
+// Immediate / Flash / Override require trust_level >= 2 on the
+// recipient. Below that we surface a confirmation modal so the
+// operator either accepts the risk (degrading to Routine) or bails.
+const highPrecedence = ['Immediate', 'Flash', 'Override']
+const contactTrust = computed(() => Number(contact.value?.trust_level || 0))
+const trustBlocked = computed(() =>
+  contact.value &&
+  highPrecedence.includes(precedence.value) &&
+  contactTrust.value < 2)
+const trustConfirm = ref(false)
+
 // Bearer availability preview — enumerate kinds present on the picked
 // contact so the operator sees upfront which channels the send can
 // traverse. We colour-code by the same palette used elsewhere
@@ -56,6 +68,12 @@ const canSend = computed(() => {
 
 async function onSend() {
   if (!canSend.value) return
+  // Trust gate: block high-precedence sends on unverified contacts.
+  // [MESHSAT-560]
+  if (trustBlocked.value && !trustConfirm.value) {
+    trustConfirm.value = true
+    return
+  }
   sending.value = true
   error.value = ''
   result.value = null
@@ -155,6 +173,36 @@ async function onSend() {
         <span v-if="sending">Sending…</span>
         <span v-else>Send</span>
       </button>
+    </div>
+
+    <!-- Trust-level hard-block modal [MESHSAT-560] -->
+    <div v-if="trustConfirm" class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      role="dialog" aria-modal="true" aria-labelledby="trust-modal-title">
+      <div class="max-w-sm w-full bg-tactical-surface border border-amber-500/60 rounded p-4 space-y-3">
+        <h3 id="trust-modal-title" class="text-sm font-semibold text-amber-400">
+          Unverified contact
+        </h3>
+        <p class="text-xs text-gray-300">
+          <span class="font-semibold">{{ contact?.display_name }}</span> is at trust level
+          <span class="font-mono">{{ contactTrust }}/3</span>. High-priority precedence
+          (<span class="font-mono">{{ precedence }}</span>) should only be sent to
+          contacts verified in person or by a confirmed key exchange.
+        </p>
+        <p class="text-xs text-gray-400">
+          Verify the contact on the People page, or continue and this message will
+          drop to <span class="font-mono">Routine</span>.
+        </p>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" @click="trustConfirm = false"
+            class="px-3 py-2 rounded border border-tactical-border text-gray-400 text-xs min-h-[40px]">
+            Cancel
+          </button>
+          <button type="button" @click="trustConfirm = false; precedence = 'Routine'; onSend()"
+            class="px-3 py-2 rounded bg-amber-500 text-tactical-bg text-xs font-semibold min-h-[40px]">
+            Send as Routine
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Per-bearer delivery breakdown -->

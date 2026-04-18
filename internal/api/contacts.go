@@ -171,6 +171,46 @@ func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// @Summary Verify a contact's identity (trust level 0-3)
+// @Description Bumps the directory_contacts trust_level column and
+// @Description records trust_verified_at + trust_verified_by. Called
+// @Description by the People view's "Verify in person" QR-scan flow
+// @Description and by any flow that confirms an out-of-band identity
+// @Description check (code word, phone call, etc.). Level 3 is reserved
+// @Description for face-to-face QR verification. [MESHSAT-560]
+// @Tags contacts
+// @Accept json
+// @Produce json
+// @Param id path integer true "Contact ID"
+// @Param body body object true "Verify payload" example({"level":3,"verified_by":"operator"})
+// @Success 200 {object} database.Contact
+// @Failure 400 {object} map[string]string
+// @Router /api/contacts/{id}/verify [post]
+func (s *Server) handleVerifyContact(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid contact ID")
+		return
+	}
+	var req struct {
+		Level      int    `json:"level"`
+		VerifiedBy string `json:"verified_by"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.VerifiedBy == "" {
+		req.VerifiedBy = "operator"
+	}
+	if err := s.db.SetContactTrustLevel(id, req.Level, req.VerifiedBy); err != nil {
+		writeError(w, http.StatusInternalServerError, "set trust level: "+err.Error())
+		return
+	}
+	c, _ := s.db.GetContact(id)
+	writeJSON(w, http.StatusOK, c)
+}
+
 // @Summary Delete contact
 // @Description Deletes a contact and all associated addresses
 // @Tags contacts

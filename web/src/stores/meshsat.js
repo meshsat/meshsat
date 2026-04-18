@@ -130,6 +130,30 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Contact verify + QR import [MESHSAT-560 / MESHSAT-561].
+  async function verifyContact(id, level, verifiedBy = 'operator') {
+    error.value = null
+    try {
+      const r = await api.post(`/contacts/${id}/verify`, { level, verified_by: verifiedBy })
+      await fetchContacts()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+  async function fetchContactQR(id) {
+    error.value = null
+    try { return await api.get(`/contacts/${id}/qr`) }
+    catch (e) { error.value = e.message; throw e }
+  }
+  async function importContactQR(urlOrCard) {
+    error.value = null
+    try {
+      const body = urlOrCard.startsWith('meshsat://') ? { url: urlOrCard } : { card: urlOrCard }
+      const r = await api.post('/directory/contacts/import-qr', body)
+      await fetchContacts()
+      return r
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   async function fetchTelemetry(params = {}) {
     try {
       const data = await api.get('/telemetry', params)
@@ -1496,7 +1520,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     smsMessages, cellBroadcasts, cellInfo,
     presets, sosStatus, dlq,
     loading, error,
-    fetchMessages, fetchMessageStats, sendMessage, sendToContact, purgeMessages,
+    fetchMessages, fetchMessageStats, sendMessage, sendToContact,
+    verifyContact, fetchContactQR, importContactQR, purgeMessages,
     fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,

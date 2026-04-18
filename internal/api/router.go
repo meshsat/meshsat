@@ -349,10 +349,18 @@ func (s *Server) Router() http.Handler {
 		r.Get("/contacts/{id}", s.handleGetContact)
 		r.Put("/contacts/{id}", s.handleUpdateContact)
 		r.Delete("/contacts/{id}", s.handleDeleteContact)
+		r.Post("/contacts/{id}/verify", s.handleVerifyContact)
 		r.Post("/contacts/{id}/addresses", s.handleAddContactAddress)
 		r.Put("/contacts/{id}/addresses/{aid}", s.handleUpdateContactAddress)
 		r.Delete("/contacts/{id}/addresses/{aid}", s.handleDeleteContactAddress)
 		r.Get("/contacts/{id}/conversation", s.handleGetConversation)
+
+		// QR contact-card export — meshsat://contact/<base64url>
+		// [MESHSAT-561]. Signed by the bridge's Ed25519 identity so
+		// scanners can verify the card hasn't been forged.
+		r.Get("/directory/contacts/{id}/qr", s.handleDirectoryContactQR)
+		r.Get("/contacts/{id}/qr", s.handleDirectoryContactQR)
+		r.Post("/directory/contacts/import-qr", s.handleDirectoryContactImportQR)
 
 		// SIM card management
 		r.Get("/cellular/sim-cards", s.handleGetSIMCards)

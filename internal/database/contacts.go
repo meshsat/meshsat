@@ -118,6 +118,46 @@ func (db *DB) GetContact(id int64) (*Contact, error) {
 	return &c, nil
 }
 
+// SetContactTrustLevel bumps the trust_level + trust_verified_*
+// columns on the directory_contacts row joined by legacy_contact_id.
+// level is clamped to 0-3 per the Threema-style trust ladder. The
+// caller is an identifier (operator username, bridge signer ID, etc.)
+// stored verbatim — verification intent is a human decision, not a
+// machine one. [MESHSAT-560]
+func (db *DB) SetContactTrustLevel(legacyID int64, level int, verifiedBy string) error {
+	if level < 0 {
+		level = 0
+	}
+	if level > 3 {
+		level = 3
+	}
+	// Ensure a directory row exists so the UPDATE hits something.
+	var existing int
+	_ = db.QueryRow(
+		"SELECT COUNT(*) FROM directory_contacts WHERE legacy_contact_id = ?",
+		legacyID,
+	).Scan(&existing)
+	if existing == 0 {
+		name, notes := "", ""
+		_ = db.QueryRow("SELECT display_name, notes FROM contacts WHERE id = ?", legacyID).
+			Scan(&name, &notes)
+		if _, err := db.Exec(
+			`INSERT INTO directory_contacts
+			 (id, display_name, notes, legacy_contact_id)
+			 VALUES (lower(hex(randomblob(16))), ?, ?, ?)`,
+			name, notes, legacyID); err != nil {
+			return err
+		}
+	}
+	_, err := db.Exec(
+		`UPDATE directory_contacts
+		 SET trust_level = ?, trust_verified_at = datetime('now'),
+		     trust_verified_by = ?, updated_at = datetime('now')
+		 WHERE legacy_contact_id = ?`,
+		level, verifiedBy, legacyID)
+	return err
+}
+
 // SetContactDirectoryMeta upserts SIDC/team/role/org/trust_level onto
 // the directory_contacts row joined by legacy_contact_id. Creates
 // the directory row if the legacy contact hasn't been backfilled
