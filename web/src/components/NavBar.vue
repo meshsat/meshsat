@@ -18,7 +18,7 @@ const primary = [
   { name: 'inbox',    label: 'Inbox',    path: '/inbox',                match: '/inbox',    icon: 'inbox'   },
   { name: 'map',      label: 'Map',      path: '/map',                  match: '/map',      icon: 'map'     },
   { name: 'people',   label: 'People',   path: '/people',               match: '/people',   icon: 'people'  },
-  { name: 'radios',   label: 'Radios',   path: '/interfaces',           match: '/interfaces', icon: 'radios' }
+  { name: 'radios',   label: 'Radios',   path: '/radios',               match: '/radios',   icon: 'radios' }
 ]
 
 // Everything else lives under the ⋮ More overflow menu in Operator

@@ -1,11 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { useSpectrumStore } from '@/stores/spectrum'
-import { formatTimeHHMM } from '@/utils/format'
 import JammingAlertModal from '@/components/JammingAlertModal.vue'
 import NavBar from '@/components/NavBar.vue'
+import StatusStrip from '@/components/StatusStrip.vue'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
 // modal surfaces on any route, and so the SSE connection persists
@@ -14,68 +13,18 @@ import NavBar from '@/components/NavBar.vue'
 const spectrumStore = useSpectrumStore()
 spectrumStore.connect()
 
-const route = useRoute()
 const store = useMeshsatStore()
 const utcTime = ref('')
 
 // Nav moved into NavBar component so it can branch on shellMode and
 // own the mobile bottom-tab bar cleanly. [MESHSAT-550]
+//
+// Status indicators moved into StatusStrip component so every view
+// sees the same persistent mesh/sat/cell/Hub/GPS/sync strip.
+// [MESHSAT-554]
 
 // SOS indicator (persistent across all views)
 const sosActive = computed(() => store.sosStatus?.active === true)
-
-const deviceId = computed(() => {
-  const id = store.status?.node_id
-  if (!id) return '----'
-  const hex = id.toString(16).toUpperCase()
-  return '!' + hex.slice(-8)
-})
-
-// Mesh status
-const meshConnected = computed(() => store.status?.connected ?? false)
-const nodeCount = computed(() => {
-  const total = (store.nodes || []).length
-  const cutoff = Date.now() / 1000 - 7200
-  const active = (store.nodes || []).filter(n => n.last_heard > cutoff).length
-  return { active, total }
-})
-// Average mesh SNR from all active nodes
-const meshAvgSNR = computed(() => {
-  const cutoff = Date.now() / 1000 - 7200
-  const activeNodes = (store.nodes || []).filter(n => n.last_heard > cutoff && n.snr != null && Math.abs(n.snr) < 100)
-  if (!activeNodes.length) return null
-  const avg = activeNodes.reduce((sum, n) => sum + n.snr, 0) / activeNodes.length
-  return avg
-})
-
-// Iridium
-const satBars = computed(() => store.iridiumSignal?.bars ?? -1)
-
-// Next pass countdown
-const nextPassInfo = computed(() => {
-  const now = Date.now() / 1000
-  const passes = store.passes || []
-  // Find the first upcoming or active pass
-  const active = passes.find(p => p.is_active)
-  if (active) return { label: 'NOW', color: 'text-tactical-iridium' }
-  const next = passes.find(p => p.aos > now)
-  if (!next) return null
-  const diffSec = next.aos - now
-  if (diffSec < 60) return { label: `${Math.round(diffSec)}s`, color: 'text-tactical-iridium' }
-  if (diffSec < 3600) return { label: `${Math.round(diffSec / 60)}m`, color: 'text-gray-400' }
-  if (diffSec < 86400) return { label: `${Math.round(diffSec / 3600)}h`, color: 'text-gray-500' }
-  return { label: formatTimeHHMM(next.aos), color: 'text-gray-600' }
-})
-
-// Cellular
-const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
-
-// GPS fix
-const gpsFix = computed(() => {
-  const sources = store.locationSources?.sources || []
-  const gps = sources.find(s => s.source === 'gps')
-  return gps && gps.lat !== 0
-})
 
 function updateClock() {
   const now = new Date()
@@ -164,57 +113,8 @@ onUnmounted(() => {
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
-          <!-- Iridium: label + signal bars + next pass -->
-          <div class="flex items-center gap-1 md:gap-1.5">
-            <span class="hidden md:inline text-[9px] font-medium text-tactical-iridium/70">IRD</span>
-            <div class="flex items-end gap-px h-3">
-              <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
-                :class="satBars >= i ? (satBars <= 2 ? 'bg-amber-400' : 'bg-tactical-iridium') : 'bg-gray-700/50'"
-                :style="{ height: `${3 + i * 2}px` }" />
-            </div>
-            <span v-if="nextPassInfo" class="hidden md:inline text-[9px] font-mono" :class="nextPassInfo.color">
-              {{ nextPassInfo.label }}
-            </span>
-          </div>
-
-          <!-- Divider -->
-          <span class="hidden md:block w-px h-4 bg-gray-700/50" />
-
-          <!-- Mesh: label + avg SNR + device ID + node count -->
-          <div class="flex items-center gap-1 md:gap-1.5">
-            <span class="hidden md:inline text-[9px] font-medium text-tactical-lora/70">MESH</span>
-            <span class="w-1.5 h-1.5 rounded-full"
-              :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'" />
-            <span v-if="meshAvgSNR !== null" class="hidden md:inline text-[9px] font-mono"
-              :class="meshAvgSNR >= 0 ? 'text-emerald-400/70' : meshAvgSNR >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
-              {{ meshAvgSNR.toFixed(0) }}dB
-            </span>
-            <span class="hidden md:inline text-[9px] font-mono text-gray-500">{{ deviceId }}</span>
-            <span class="hidden lg:inline text-[9px] font-mono text-gray-600">{{ nodeCount.active }}/{{ nodeCount.total }}</span>
-          </div>
-
-          <!-- Divider -->
-          <span class="hidden md:block w-px h-4 bg-gray-700/50" />
-
-          <!-- Cellular: label + signal bars + type -->
-          <div class="flex items-center gap-1">
-            <span class="hidden md:inline text-[9px] font-medium text-sky-400/70">CELL</span>
-            <template v-if="cellBars >= 0">
-              <div class="flex items-end gap-px h-3">
-                <span v-for="i in 5" :key="'cell'+i" class="w-[3px] rounded-[1px]"
-                  :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
-                  :style="{ height: `${3 + i * 2}px` }" />
-              </div>
-              <span class="hidden md:inline text-[9px] text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'LTE' }}</span>
-            </template>
-            <span v-else class="text-[9px] text-gray-600 font-mono">--</span>
-          </div>
-
-          <!-- GPS fix indicator -->
-          <div class="flex items-center gap-1">
-            <span class="w-1.5 h-1.5 rounded-full" :class="gpsFix ? 'bg-tactical-gps' : 'bg-gray-600'" />
-            <span class="hidden md:inline text-[9px]" :class="gpsFix ? 'text-tactical-gps/70' : 'text-gray-600'">GPS</span>
-          </div>
+          <!-- Persistent status strip [MESHSAT-554] -->
+          <StatusStrip />
 
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
