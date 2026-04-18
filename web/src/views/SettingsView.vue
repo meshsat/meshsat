@@ -1,30 +1,47 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
 import api from '@/api/client'
 
 const store = useMeshsatStore()
 const activeTab = ref('radio')
-const tabs = [
-  { id: 'radio', label: 'Radio' },
-  { id: 'channels', label: 'Channels' },
-  { id: 'position', label: 'Position' },
-  { id: 'canned', label: 'Canned Msg' },
-  { id: 'mqtt', label: 'MQTT' },
-  { id: 'device_mqtt', label: 'Device MQTT' },
-  { id: 'iridium', label: 'Iridium' },
-  { id: 'cellular', label: 'Cellular' },
-  { id: 'zigbee', label: 'ZigBee' },
-  { id: 'store_forward', label: 'S&F' },
-  { id: 'range_test', label: 'Range Test' },
-  { id: 'deadman', label: 'Dead Man' },
-  { id: 'tak', label: 'TAK' },
-  { id: 'credentials', label: 'Credentials' },
-  { id: 'routing', label: 'Routing' },
-  { id: 'config_mgmt', label: 'Export/Import' },
-  { id: 'about', label: 'About' }
+
+// Tabs are labelled "operator" (5 primary in the new IQ-70 grouping)
+// or "engineer" (everything else). Operator Mode shows the 5; toggling
+// to Engineer Mode reveals the full drawer, re-using the same flat
+// tab strip but with 17 tabs visible. Satellite = iridium; the user-
+// facing label is "Satellite" now. [MESHSAT-555]
+const allTabs = [
+  { id: 'radio',         label: 'Radio',         tier: 'operator' },
+  { id: 'channels',      label: 'Channels',      tier: 'operator' },
+  { id: 'position',      label: 'Position',      tier: 'operator' },
+  { id: 'iridium',       label: 'Satellite',     tier: 'operator' },
+  { id: 'cellular',      label: 'Cellular',      tier: 'operator' },
+  { id: 'canned',        label: 'Canned Msg',    tier: 'engineer' },
+  { id: 'mqtt',          label: 'MQTT',          tier: 'engineer' },
+  { id: 'device_mqtt',   label: 'Device MQTT',   tier: 'engineer' },
+  { id: 'zigbee',        label: 'ZigBee',        tier: 'engineer' },
+  { id: 'store_forward', label: 'S&F',           tier: 'engineer' },
+  { id: 'range_test',    label: 'Range Test',    tier: 'engineer' },
+  { id: 'deadman',       label: 'Dead Man',      tier: 'engineer' },
+  { id: 'tak',           label: 'TAK',           tier: 'engineer' },
+  { id: 'credentials',   label: 'Credentials',   tier: 'engineer' },
+  { id: 'routing',       label: 'Routing',       tier: 'engineer' },
+  { id: 'config_mgmt',   label: 'Export/Import', tier: 'engineer' },
+  { id: 'about',         label: 'About',         tier: 'engineer' }
 ]
+const tabs = computed(() => store.isEngineer
+  ? allTabs
+  : allTabs.filter(t => t.tier === 'operator'))
+
+// If the user toggles back to Operator Mode while sitting on an
+// Engineer-only tab, bounce them to the first visible one.
+watch(() => store.shellMode, () => {
+  if (!tabs.value.some(t => t.id === activeTab.value)) {
+    activeTab.value = tabs.value[0]?.id || 'radio'
+  }
+})
 
 // Radio config
 const radioSection = ref('lora')
@@ -856,15 +873,26 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
 
 <template>
   <div class="max-w-3xl mx-auto">
-    <h2 class="text-lg font-semibold text-gray-200 mb-4">Settings</h2>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-gray-200">Settings</h2>
+      <span v-if="!store.isEngineer" class="text-[10px] text-gray-500 hidden sm:inline">
+        Engineer Mode reveals {{ allTabs.length - tabs.length }} more tabs
+      </span>
+    </div>
 
-    <!-- Tab bar -->
-    <div class="flex gap-1 mb-6 overflow-x-auto pb-1">
-      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
-        class="px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors"
-        :class="activeTab === tab.id ? 'bg-teal-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'">
-        {{ tab.label }}
-      </button>
+    <!-- Tab bar with right-fade scroll affordance [MESHSAT-555] -->
+    <div class="relative mb-6">
+      <div class="flex gap-1 overflow-x-auto no-scrollbar pb-1 pr-8">
+        <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
+          class="px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors min-h-[40px]"
+          :class="activeTab === tab.id ? 'bg-teal-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'">
+          {{ tab.label }}
+        </button>
+      </div>
+      <!-- Right-edge fade so horizontally-clipped tabs look scrollable
+           rather than truncated. Hidden once the viewport is wide
+           enough to show every visible tab inline. -->
+      <div class="pointer-events-none absolute top-0 right-0 h-full w-8 bg-gradient-to-l from-tactical-bg to-transparent md:hidden" />
     </div>
 
     <!-- Radio Config -->
@@ -2228,3 +2256,10 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Matches the NavBar helper; kept scoped so it doesn't leak to views
+   that want their normal scrollbar. [MESHSAT-555] */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+</style>
