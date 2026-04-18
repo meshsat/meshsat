@@ -106,6 +106,89 @@ export const templates = {
   }
 }
 
+// Extended USMTF library [MESHSAT-569]. Kept deliberately small —
+// one template = one common field-report type. The registry shape
+// lets operators add local templates without touching core code;
+// future work is a runtime-editable template editor (out of scope
+// for Phase 6).
+
+templates.oprep = {
+  id: 'oprep', name: 'OPREP-3 (operational report)', short: 'OPREP',
+  fields: [
+    { key: 'dtg',       label: 'DTG',       placeholder: '181530ZAPR26', required: true },
+    { key: 'origin',    label: 'Originator',  placeholder: 'callsign',   required: true },
+    { key: 'event',     label: 'Event type',  placeholder: 'significant event', required: true },
+    { key: 'summary',   label: 'Summary',     placeholder: 'brief',      required: true },
+    { key: 'impact',    label: 'Impact',      placeholder: 'GREEN/AMBER/RED', required: false },
+    { key: 'actions',   label: 'Actions',     placeholder: 'taken / planned', required: false }
+  ],
+  toWire(v)  { return slashJoin('OPREP', [v.dtg,v.origin,v.event,v.summary,v.impact,v.actions]) },
+  fromWire(s) {
+    const p = slashSplit(s); if (p[0] !== 'OPREP') throw new Error('not an OPREP message')
+    return { dtg:p[1], origin:p[2], event:p[3], summary:p[4], impact:p[5], actions:p[6] }
+  }
+}
+
+templates.casevac = {
+  id: 'casevac', name: 'CASEVAC request', short: 'CASEVAC',
+  fields: [
+    { key: 'location', label: 'Pickup location (MGRS)', placeholder: '31U...', required: true },
+    { key: 'freq',     label: 'Freq / Callsign',        placeholder: '152.5 / HAWK', required: true },
+    { key: 'patients', label: 'Patients',               placeholder: '1A 1B',  required: true },
+    { key: 'equip',    label: 'Equipment needed',       placeholder: 'none',   required: false },
+    { key: 'type',     label: 'Litter / Ambulatory',    placeholder: '2L 1A',  required: true },
+    { key: 'security', label: 'Security',               placeholder: 'NONE',   required: true },
+    { key: 'marking',  label: 'Marking method',         placeholder: 'SMOKE',  required: true }
+  ],
+  toWire(v)  { return slashJoin('CASEVAC', [v.location,v.freq,v.patients,v.equip,v.type,v.security,v.marking]) },
+  fromWire(s) {
+    const p = slashSplit(s); if (p[0] !== 'CASEVAC') throw new Error('not a CASEVAC message')
+    return { location:p[1], freq:p[2], patients:p[3], equip:p[4], type:p[5], security:p[6], marking:p[7] }
+  }
+}
+
+templates.logpac = {
+  id: 'logpac', name: 'LOGPAC request', short: 'LOGPAC',
+  fields: [
+    { key: 'dtg',      label: 'DTG',        placeholder: '181530ZAPR26', required: true },
+    { key: 'unit',     label: 'Unit',       placeholder: 'A/1-22',       required: true },
+    { key: 'location', label: 'Location',   placeholder: 'MGRS 31U...',  required: true },
+    { key: 'class',    label: 'Class(es)',  placeholder: 'I/III/V/IX',   required: true },
+    { key: 'qty',      label: 'Quantity',   placeholder: '3 pax x MRE x 5 days', required: true },
+    { key: 'urgency',  label: 'Urgency',    placeholder: 'R=routine U=urgent F=flash', required: true }
+  ],
+  toWire(v) { return slashJoin('LOGPAC', [v.dtg,v.unit,v.location,v.class,v.qty,v.urgency]) },
+  fromWire(s) { const p=slashSplit(s); if (p[0]!=='LOGPAC') throw new Error('not a LOGPAC message')
+    return { dtg:p[1],unit:p[2],location:p[3],class:p[4],qty:p[5],urgency:p[6] } }
+}
+
+templates.hazard = {
+  id: 'hazard', name: 'HAZARDREP', short: 'HAZARD',
+  fields: [
+    { key: 'dtg',      label: 'DTG',         placeholder: '181530ZAPR26', required: true },
+    { key: 'type',     label: 'Hazard type', placeholder: 'CBRN / UXO / fire / civilian', required: true },
+    { key: 'location', label: 'Location',    placeholder: 'MGRS 31U...',  required: true },
+    { key: 'desc',     label: 'Description', placeholder: 'details',      required: true },
+    { key: 'action',   label: 'Action',      placeholder: 'bypass / mark', required: false }
+  ],
+  toWire(v) { return slashJoin('HAZARD', [v.dtg,v.type,v.location,v.desc,v.action]) },
+  fromWire(s) { const p=slashSplit(s); if (p[0]!=='HAZARD') throw new Error('not a HAZARD message')
+    return { dtg:p[1],type:p[2],location:p[3],desc:p[4],action:p[5] } }
+}
+
+templates.eei = {
+  id: 'eei', name: 'EEI (essential elements of info)', short: 'EEI',
+  fields: [
+    { key: 'req_by',  label: 'Requested by',  placeholder: 'callsign',   required: true },
+    { key: 'topic',   label: 'Topic',         placeholder: 'enemy disposition', required: true },
+    { key: 'details', label: 'Details',       placeholder: 'specific questions', required: true },
+    { key: 'by',      label: 'Needed by DTG', placeholder: '181530ZAPR26', required: true }
+  ],
+  toWire(v) { return slashJoin('EEI', [v.req_by,v.topic,v.details,v.by]) },
+  fromWire(s) { const p=slashSplit(s); if (p[0]!=='EEI') throw new Error('not an EEI message')
+    return { req_by:p[1],topic:p[2],details:p[3],by:p[4] } }
+}
+
 export function templateList() {
   return Object.values(templates)
 }

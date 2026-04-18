@@ -2,6 +2,9 @@
 import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import 'leaflet/dist/leaflet.css'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import 'leaflet.markercluster'
 import ms from 'milsymbol'
 
 const store = useMeshsatStore()
@@ -408,7 +411,16 @@ async function initMap() {
       maxZoom: 19
     }).addTo(map)
 
-    markerLayer = L.layerGroup().addTo(map)
+    // Cluster group replaces the plain layerGroup so high-density
+    // maps (50+ contacts / mesh nodes) don't overwhelm the viewport.
+    // [MESHSAT-570]
+    markerLayer = (L.markerClusterGroup
+      ? L.markerClusterGroup({
+          showCoverageOnHover: false,
+          spiderfyOnMaxZoom: true,
+          maxClusterRadius: 40
+        })
+      : L.layerGroup()).addTo(map)
     trackLayer = L.layerGroup().addTo(map)
     messageLayer = L.layerGroup().addTo(map)
     locationLayer = L.layerGroup().addTo(map)

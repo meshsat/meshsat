@@ -4,6 +4,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import ContactPicker from '@/components/ContactPicker.vue'
 import PrecedenceChips from '@/components/PrecedenceChips.vue'
 import USMTFForm from '@/components/USMTFForm.vue'
+import FieldHelp from '@/components/FieldHelp.vue'
 
 // Compose view — the "money screen" per UX-AUDIT-AND-REDESIGN §9.2.
 // Contact first, precedence second, body third, Send. Engineer Mode
@@ -16,6 +17,17 @@ const precedence = ref('Routine')
 const strategy = ref('')  // empty → server picks (contact policy → precedence default → default)
 const bearerOverride = ref('')  // single kind when Engineer wants to force one bearer
 const text = ref('')
+
+// One-tap team broadcast [MESHSAT-568]. The endpoint already
+// accepts {group_id} instead of {contact_id}; Compose just surfaces
+// a toggle + a group picker driven by contact.team distinctness.
+const groupMode = ref(false)
+const groupTeam = ref('')
+const teams = computed(() => {
+  const set = new Set()
+  for (const c of (store.contacts || [])) if (c.team) set.add(c.team)
+  return Array.from(set).sort()
+})
 
 const sending = ref(false)
 const result = ref(null)
@@ -64,7 +76,10 @@ function bearerColour(kind) {
 }
 
 const canSend = computed(() => {
-  return !!contact.value && text.value.trim().length > 0 && !sending.value
+  if (sending.value) return false
+  if (!text.value.trim()) return false
+  if (groupMode.value) return !!groupTeam.value
+  return !!contact.value
 })
 
 async function onSend() {
@@ -80,9 +95,17 @@ async function onSend() {
   result.value = null
   try {
     const payload = {
-      contact_id: String(contact.value.id),
       text: text.value,
       precedence: precedence.value
+    }
+    if (groupMode.value) {
+      // Team broadcast — dispatcher fans out to every contact with
+      // this team value via the directory_groups join. The backend
+      // accepts group_id as the team label for this MVP.
+      // [MESHSAT-568]
+      payload.group_id = groupTeam.value
+    } else {
+      payload.contact_id = String(contact.value.id)
     }
     // Engineer-mode force single bearer via strategy=PRIMARY_ONLY and
     // a contact-scoped filter isn't supported yet — for now pass the
@@ -104,8 +127,30 @@ async function onSend() {
   <div class="max-w-2xl mx-auto space-y-4">
     <h1 class="text-lg font-display font-semibold text-gray-200 tracking-wide">Compose</h1>
 
-    <!-- 1. Contact picker -->
-    <ContactPicker v-model="contact" />
+    <!-- 1a. Single vs team toggle [MESHSAT-568] -->
+    <div v-if="teams.length" class="flex items-center gap-2 text-[10px]">
+      <button type="button" @click="groupMode = false"
+        class="px-3 py-1.5 rounded border"
+        :class="!groupMode ? 'border-tactical-iridium text-tactical-iridium bg-tactical-iridium/10' : 'border-tactical-border text-gray-500'">
+        One contact
+      </button>
+      <button type="button" @click="groupMode = true"
+        class="px-3 py-1.5 rounded border"
+        :class="groupMode ? 'border-tactical-iridium text-tactical-iridium bg-tactical-iridium/10' : 'border-tactical-border text-gray-500'">
+        Whole team
+      </button>
+    </div>
+
+    <!-- 1b. Contact picker OR team dropdown -->
+    <ContactPicker v-if="!groupMode" v-model="contact" />
+    <div v-else>
+      <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">Team</label>
+      <select v-model="groupTeam"
+        class="w-full px-3 py-2 rounded bg-tactical-surface border border-tactical-border text-sm min-h-[48px]">
+        <option value="">Select a team…</option>
+        <option v-for="t in teams" :key="t" :value="t">{{ t }}</option>
+      </select>
+    </div>
 
     <!-- 2. Bearer availability preview -->
     <div v-if="contact">
@@ -130,6 +175,7 @@ async function onSend() {
       <div>
         <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
           Strategy (override)
+          <FieldHelp text="PRIMARY_ONLY queues on the highest-ranked bearer only. ALL_BEARERS queues one delivery per bearer kind. HEMB_BONDED sends the same message across bonded bearers in parallel for redundancy. Empty = use the contact's stored policy." />
         </label>
         <select v-model="strategy" class="w-full px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs">
           <option value="">Auto (policy)</option>
