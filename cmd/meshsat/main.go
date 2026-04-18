@@ -1049,6 +1049,14 @@ func main() {
 			// Wire credential loader so MQTT gateways can load certs from DB
 			gateway.SetCredentialLoader(&credentialLoaderAdapter{db: db, ks: ks})
 			log.Info().Msg("key store initialized")
+
+			// Wrap the Ed25519 signing private key at rest (or unwrap it
+			// on a restart where the migration already ran). [MESHSAT-536]
+			if signingService != nil {
+				if err := signingService.LoadWithKeystore(ks); err != nil {
+					log.Error().Err(err).Msg("signing service: failed to load with keystore — signing degraded")
+				}
+			}
 		}
 	}
 
