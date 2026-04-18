@@ -549,7 +549,7 @@ func (a *App) Setup(ctx context.Context) error {
 		cmdHandler := hubreporter.NewCommandHandler(reporter, cfg.BridgeID, healthFn)
 		cmdHandler.SetDeps(hubreporter.CommandDeps{
 			SendText: func(ifaceID, text string) (int64, string, error) {
-				return a.Dispatcher.QueueDirectSend(ifaceID, text)
+				return a.Dispatcher.QueueDirectSend(ifaceID, text, "")
 			},
 			FlushBurst: func(ctx context.Context) ([]byte, int, error) {
 				if a.BurstQueue == nil {
