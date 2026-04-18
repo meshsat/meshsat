@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ContactPicker from '@/components/ContactPicker.vue'
 import PrecedenceChips from '@/components/PrecedenceChips.vue'
+import USMTFForm from '@/components/USMTFForm.vue'
 
 // Compose view — the "money screen" per UX-AUDIT-AND-REDESIGN §9.2.
 // Contact first, precedence second, body third, Send. Engineer Mode
@@ -149,6 +150,9 @@ async function onSend() {
         </select>
       </div>
     </div>
+
+    <!-- 4b. USMTF template (Engineer only — structured field forms). [MESHSAT-563] -->
+    <USMTFForm v-show="store.isEngineer" v-model="text" />
 
     <!-- 5. Body -->
     <div>

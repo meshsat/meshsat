@@ -379,9 +379,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   // SOS
   const sosStatus = ref({ active: false })
-  async function activateSOS() {
+  async function activateSOS(payload = {}) {
     error.value = null
-    try { sosStatus.value = await api.post('/sos/activate'); return sosStatus.value } catch (e) { error.value = e.message; throw e }
+    try { sosStatus.value = await api.post('/sos/activate', payload); return sosStatus.value } catch (e) { error.value = e.message; throw e }
   }
   async function cancelSOS() {
     error.value = null

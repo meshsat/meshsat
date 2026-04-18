@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"math"
 	"net/http"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"meshsat/internal/transport"
 )
+
 
 // SOSState tracks an active SOS alert.
 type SOSState struct {
@@ -34,6 +36,19 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 		s.sos = &SOSState{}
 	}
 
+	// Best-effort trigger capture so the signed audit-log entry can
+	// record whether the activation came from the 3-s hold, the
+	// double-tap, or an external caller (CLI, TAK, HeMB). Unknown =
+	// "manual". [MESHSAT-562]
+	var body struct {
+		Trigger string `json:"trigger,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	trigger := body.Trigger
+	if trigger == "" {
+		trigger = "manual"
+	}
+
 	s.sos.mu.Lock()
 	if s.sos.active {
 		s.sos.mu.Unlock()
@@ -47,12 +62,23 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	s.sos.cancelFn = cancel
 	s.sos.mu.Unlock()
 
+	// Immutable audit-log entry — proves the operator intentionally
+	// activated SOS at this moment. Hash-chained by SigningService.
+	if s.signing != nil {
+		detail, _ := json.Marshal(map[string]interface{}{
+			"trigger":    trigger,
+			"started_at": s.sos.startAt.UTC().Format(time.RFC3339),
+		})
+		s.signing.AuditEvent("sos_activated", nil, nil, nil, nil, string(detail))
+	}
+
 	go s.sosWorker(ctx)
 
-	log.Warn().Msg("SOS ACTIVATED")
+	log.Warn().Str("trigger", trigger).Msg("SOS ACTIVATED")
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":     "activated",
 		"started_at": s.sos.startAt.UTC().Format(time.RFC3339),
+		"trigger":    trigger,
 	})
 }
 

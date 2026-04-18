@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import { formatTimeHHMM } from '@/utils/format'
+import SOSButton from '@/components/SOSButton.vue'
 
 // Persistent status strip — mesh / sat / cell / Hub / GPS / UTC,
 // with battery and sync slots reserved for when the bridge REST
@@ -143,6 +144,9 @@ const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at |
       <span class="w-1.5 h-1.5 rounded-full bg-emerald-400" />
       <span class="text-emerald-400/70">SYNC</span>
     </div>
+
+    <!-- Persistent SOS button — ≤2 taps from any screen [MESHSAT-562] -->
+    <SOSButton compact />
 
     <!-- NVIS night theme toggle (MIL-STD-3009 Green A) [MESHSAT-556] -->
     <button type="button" @click="store.toggleNVIS()"
