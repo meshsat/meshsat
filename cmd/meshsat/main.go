@@ -22,6 +22,7 @@ import (
 	"meshsat/internal/config"
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
+	"meshsat/internal/directory"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
 	"meshsat/internal/hemb"
@@ -1056,6 +1057,16 @@ func main() {
 				if err := signingService.LoadWithKeystore(ks); err != nil {
 					log.Error().Err(err).Msg("signing service: failed to load with keystore — signing degraded")
 				}
+			}
+
+			// Per-contact AES traffic keys: unwrap-on-demand via the
+			// directory store. Transform specs may now use
+			// key_ref="contact:<uuid>" to encrypt to a contact without
+			// having to pick the bearer's channel address. [MESHSAT-537]
+			dirStore := directory.NewSQLStore(db.DB)
+			if cks := engine.NewContactKeyService(ks, dirStore); cks != nil {
+				transforms.SetContactKeyResolver(cks)
+				log.Info().Msg("contact key service initialized")
 			}
 		}
 	}

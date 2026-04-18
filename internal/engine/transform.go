@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/rs/zerolog/log"
@@ -31,11 +32,12 @@ type KeyResolver interface {
 
 // TransformPipeline applies ordered transforms to payloads.
 type TransformPipeline struct {
-	llamazip    *compress.LlamaZipClient
-	msvqsc      *compress.MSVQSCClient
-	codebook    *compress.Codebook
-	keyResolver KeyResolver // resolves key_ref → hex key [MESHSAT-447]
-	fecMetrics  FECMetrics
+	llamazip           *compress.LlamaZipClient
+	msvqsc             *compress.MSVQSCClient
+	codebook           *compress.Codebook
+	keyResolver        KeyResolver        // resolves "channel_type:address" key_ref → hex key [MESHSAT-447]
+	contactKeyResolver ContactKeyResolver // resolves "contact:<uuid>" key_ref → hex key [MESHSAT-537]
+	fecMetrics         FECMetrics
 }
 
 // FECStats returns the FEC encode/decode metrics.
@@ -61,9 +63,17 @@ func (tp *TransformPipeline) SetCodebook(cb *compress.Codebook) {
 	tp.codebook = cb
 }
 
-// SetKeyResolver sets the resolver for key_ref in encrypt transforms. [MESHSAT-447]
+// SetKeyResolver sets the resolver for "channel_type:address" key_ref in
+// encrypt transforms. [MESHSAT-447]
 func (tp *TransformPipeline) SetKeyResolver(kr KeyResolver) {
 	tp.keyResolver = kr
+}
+
+// SetContactKeyResolver sets the resolver for "contact:<uuid>" key_ref in
+// encrypt transforms. Coexists with the legacy KeyResolver during the
+// MESHSAT-548 / S2-05 dual-read grace period. [MESHSAT-537]
+func (tp *TransformPipeline) SetContactKeyResolver(cr ContactKeyResolver) {
+	tp.contactKeyResolver = cr
 }
 
 // ApplyEgress applies egress transforms in order (compress, encode, etc.)
@@ -364,23 +374,39 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 	return warnings, errors
 }
 
-// resolveEncryptKey returns the hex-encoded AES key for an encrypt transform.
-// Supports two modes: inline key (legacy) and key_ref (keystore lookup). [MESHSAT-447]
-//   - {"type":"encrypt","params":{"key":"abcd..."}}       → returns inline key
-//   - {"type":"encrypt","params":{"key_ref":"sms:+31..."}} → resolves via KeyResolver
+// resolveEncryptKey returns the hex-encoded AES key for an encrypt
+// transform. Supports three modes:
+//   - {"key":"abcd..."}                inline hex (legacy, backwards-compatible)
+//   - {"key_ref":"sms:+31..."}         per-channel keystore lookup [MESHSAT-447]
+//   - {"key_ref":"contact:<uuid>"}     per-contact directory lookup [MESHSAT-537]
+//
+// The per-channel and per-contact paths coexist during the 30-day
+// dual-read grace (MESHSAT-548 / S2-05): transform specs may use
+// either form; both resolve to the same AES-256 hex expected by
+// encryptAESGCM.
 func (tp *TransformPipeline) resolveEncryptKey(t TransformSpec) (string, error) {
-	// Inline key (legacy) — backwards compatible
+	// Inline key (legacy)
 	if k := t.Params["key"]; k != "" {
 		return k, nil
 	}
-	// Key reference — resolve from keystore
-	if ref := t.Params["key_ref"]; ref != "" {
-		if tp.keyResolver == nil {
-			return "", fmt.Errorf("encrypt transform uses key_ref but no KeyResolver configured")
-		}
-		return tp.keyResolver.ResolveKeyHex(ref)
+	ref := t.Params["key_ref"]
+	if ref == "" {
+		return "", fmt.Errorf("encrypt transform requires 'key' or 'key_ref' param")
 	}
-	return "", fmt.Errorf("encrypt transform requires 'key' or 'key_ref' param")
+
+	// Per-contact key — routes to the directory-backed resolver.
+	if strings.HasPrefix(ref, "contact:") {
+		if tp.contactKeyResolver == nil {
+			return "", fmt.Errorf("encrypt transform uses contact:<uuid> key_ref but no ContactKeyResolver configured")
+		}
+		return tp.contactKeyResolver.ResolveContactKey(strings.TrimPrefix(ref, "contact:"))
+	}
+
+	// Per-channel key (legacy).
+	if tp.keyResolver == nil {
+		return "", fmt.Errorf("encrypt transform uses key_ref but no KeyResolver configured")
+	}
+	return tp.keyResolver.ResolveKeyHex(ref)
 }
 
 // encryptAESGCM encrypts data using AES-256-GCM with the given hex-encoded key.
