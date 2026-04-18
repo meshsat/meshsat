@@ -33,6 +33,73 @@ body {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
+/* ---------------------------------------------------------------
+ * SPA fitness polish — accessibility + touch ergonomics.
+ * MESHSAT-584 / 585 / 589 / 592 shipped together because they all
+ * boil down to small cross-cutting rules rather than per-view
+ * surgery.
+ * ------------------------------------------------------------ */
+
+/* Keyboard-only focus outlines [MESHSAT-592]. Native UAs differ on
+   what gets :focus-visible, but we can force a consistent outline
+   so keyboard operators always see where they are without splashing
+   it on every mouse click. */
+:focus-visible {
+  outline: 2px solid #A855F7;   /* tactical-iridium */
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid #A855F7;
+  outline-offset: 2px;
+}
+
+/* Modal max-width clamp on tiny viewports [MESHSAT-585]. Our modals
+   default to max-w-md / max-w-sm, but on a 360 px kiosk width the
+   residual margins still clip badly. Override when the viewport is
+   narrower than 400 px. */
+@media (max-width: 399px) {
+  .fixed.inset-0 > .bg-tactical-surface,
+  .fixed.inset-0 > div > .bg-tactical-surface {
+    max-width: 95vw !important;
+  }
+}
+
+/* Single-column grids under 400 px [MESHSAT-589]. Tailwind's
+   default breakpoints (sm=640, md=768) leave the 360-400 px kiosk
+   band using the 2-col layout which overflows. Collapse hard. */
+@media (max-width: 399px) {
+  .grid-cols-2,
+  .grid-cols-3,
+  .grid-cols-4,
+  .grid-cols-5 {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Tab-strip fade-on-right indicator [MESHSAT-584]. Applied via the
+   .tab-scroll utility — pairs with overflow-x-auto + pr-8 on the
+   host element. The SettingsView tab bar already uses this pattern
+   inline; promoting it here so Radio + any future tab view picks
+   it up by adding the class. */
+.tab-scroll {
+  position: relative;
+  overflow-x: auto;
+  padding-right: 2rem;
+}
+.tab-scroll::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  height: 100%; width: 2rem;
+  background: linear-gradient(to left, #111827, transparent);
+  pointer-events: none;
+}
+@media (min-width: 768px) {
+  .tab-scroll::after { display: none; }
+}
+
 /* =====================================================================
  * NVIS Green A theme — MIL-STD-3009 night / night-vision-compatible.
  * Applied via body.theme-nvis. Palette:
