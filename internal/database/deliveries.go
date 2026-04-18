@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+// precedenceRankSQL is a CASE expression that maps STANAG 4406
+// precedence names to numeric rank (0 = most urgent). Used inside
+// ORDER BY clauses on queue operations so higher-precedence rows
+// sort before lower-precedence rows, and so eviction targets the
+// lowest-precedence queued message. Unknown / empty values fall back
+// to Routine (4). [MESHSAT-546 / S2-03]
+const precedenceRankSQL = `CASE precedence
+	WHEN 'Override'  THEN 0
+	WHEN 'Flash'     THEN 1
+	WHEN 'Immediate' THEN 2
+	WHEN 'Priority'  THEN 3
+	WHEN 'Routine'   THEN 4
+	WHEN 'Deferred'  THEN 5
+	ELSE 4
+END`
+
 // MessageDelivery represents a single delivery attempt for a message to a channel.
 type MessageDelivery struct {
 	ID            int64      `json:"id"`
@@ -160,7 +176,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 		WHERE channel = ? AND status IN ('queued', 'retry')
 		  AND (next_retry IS NULL OR next_retry <= datetime('now'))
 		  AND (priority = 0 OR expires_at IS NULL OR expires_at > datetime('now'))
-		ORDER BY priority ASC, created_at ASC
+		ORDER BY (`+precedenceRankSQL+`) ASC, priority ASC, created_at ASC
 		LIMIT ?`, channel, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get pending deliveries: %w", err)
@@ -289,17 +305,66 @@ func (db *DB) LowestActivePriority(channel string) (int, error) {
 	return priority, nil
 }
 
-// EvictLowestPriority removes the single lowest-priority (highest priority number)
-// active delivery from a channel's queue, marking it 'dead'. Returns the number
-// of rows affected. Only evicts non-P0 deliveries.
+// EvictCandidate is the snapshot of the weakest queued delivery an
+// incoming high-precedence or high-priority arrival can preempt.
+// PrecedenceRank follows precedenceRankSQL (0 = Override, 5 =
+// Deferred); Priority is the legacy int (0 = P0 critical, 1 = normal,
+// 2 = low). [MESHSAT-546]
+type EvictCandidate struct {
+	ID             int64
+	PrecedenceRank int
+	Priority       int
+	Precedence     string
+}
+
+// WeakestEvictable returns the most-evictable queued delivery on a
+// channel: lowest-urgency precedence first (Deferred > Routine > …),
+// then highest legacy priority number (2 > 1 > 0). P0 critical
+// deliveries (priority=0) are never evictable and are excluded. A
+// nil candidate means the queue has no evictable rows — the dispatcher
+// must reject the arrival. [MESHSAT-546]
+func (db *DB) WeakestEvictable(channel string) (*EvictCandidate, error) {
+	row := db.QueryRow(`SELECT id, (`+precedenceRankSQL+`), priority, precedence
+		FROM message_deliveries
+		WHERE channel = ? AND status IN ('queued', 'retry', 'held')
+		  AND priority > 0
+		ORDER BY (`+precedenceRankSQL+`) DESC, priority DESC, created_at DESC
+		LIMIT 1`, channel)
+	var c EvictCandidate
+	if err := row.Scan(&c.ID, &c.PrecedenceRank, &c.Priority, &c.Precedence); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// EvictDelivery marks a specific delivery as 'dead' with the given
+// reason, returning the number of rows affected. Used by the
+// precedence-aware preemption path to evict the row returned from
+// [WeakestEvictable]. [MESHSAT-546]
+func (db *DB) EvictDelivery(id int64, reason string) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead',
+		last_error = ?, updated_at = datetime('now')
+		WHERE id = ? AND status IN ('queued', 'retry', 'held')`, reason, id)
+	if err != nil {
+		return 0, fmt.Errorf("evict delivery %d: %w", id, err)
+	}
+	return res.RowsAffected()
+}
+
+// EvictLowestPriority removes the single weakest active delivery from
+// a channel's queue, marking it 'dead'. "Weakest" is now precedence-
+// first: a Deferred row is evicted before a Routine row regardless of
+// legacy priority, because the STANAG 4406 precedence layer supersedes
+// the pre-MESHSAT-543 priority int. Only non-P0 rows are eligible.
+// Returns the number of rows affected. [MESHSAT-546 / S2-03]
 func (db *DB) EvictLowestPriority(channel string) (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead',
-		last_error = 'evicted: queue full, lower priority', updated_at = datetime('now')
+		last_error = 'evicted: queue full, lower precedence', updated_at = datetime('now')
 		WHERE id = (
 			SELECT id FROM message_deliveries
 			WHERE channel = ? AND status IN ('queued', 'retry', 'held')
 			  AND priority > 0
-			ORDER BY priority DESC, created_at DESC
+			ORDER BY (`+precedenceRankSQL+`) DESC, priority DESC, created_at DESC
 			LIMIT 1
 		)`, channel)
 	if err != nil {

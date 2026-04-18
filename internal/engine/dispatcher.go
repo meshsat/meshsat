@@ -657,30 +657,50 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			continue
 		}
 
-		// Queue limit check: higher-priority messages evict lower-priority ones.
-		// P0 critical messages always get through (evict any non-P0).
+		// Queue limit check: higher-precedence / higher-priority arrivals
+		// evict weaker queued deliveries. STANAG 4406 precedence is the
+		// primary key (Flash > Routine regardless of priority int), with
+		// the legacy P0/P1/P2 priority used as tiebreaker within the
+		// same precedence rank. P0 critical deliveries are never
+		// evicted. Access-rule-driven dispatches don't yet carry
+		// precedence on the wire (that plumbing lands in MESHSAT-544);
+		// for now we default to Routine so operators still get the
+		// Deferred-evicted-by-Routine win from the DB-level ordering.
+		// [MESHSAT-546 / S2-03]
 		if d.maxQueueDepth > 0 {
 			depth, dErr := d.db.QueueDepth(destInterface)
 			if dErr == nil && depth >= d.maxQueueDepth {
-				// Check if we can evict: new message must be strictly higher priority
-				// (lower number) than the lowest-priority queued delivery.
-				lowestPri, lErr := d.db.LowestActivePriority(destInterface)
-				if lErr != nil || m.Rule.Priority >= lowestPri {
-					// Nothing evictable or new message is same/lower priority
-					log.Warn().Str("dest", destInterface).Int("depth", depth).Int("max", d.maxQueueDepth).
+				weakest, wErr := d.db.WeakestEvictable(destInterface)
+				newPrec := routineDefault("") // no precedence on RouteMessage yet
+				newPrecRank := precedenceRankFromName(newPrec)
+				if wErr != nil || weakest == nil || !isStrongerThanQueued(newPrecRank, m.Rule.Priority, weakest.PrecedenceRank, weakest.Priority) {
+					log.Warn().Str("dest", destInterface).
+						Int("depth", depth).Int("max", d.maxQueueDepth).
 						Int("new_priority", m.Rule.Priority).
+						Str("new_precedence", newPrec).
 						Msg("queue depth limit reached, rejecting delivery")
 					continue
 				}
-				// Evict lowest-priority delivery to make room
-				if n, eErr := d.db.EvictLowestPriority(destInterface); eErr != nil || n == 0 {
+				reason := fmt.Sprintf("evicted: queue full, preempted by %s/%d", newPrec, m.Rule.Priority)
+				if n, eErr := d.db.EvictDelivery(weakest.ID, reason); eErr != nil || n == 0 {
 					log.Warn().Str("dest", destInterface).Err(eErr).
 						Msg("queue depth limit: eviction failed, rejecting delivery")
 					continue
 				}
-				log.Info().Str("dest", destInterface).Int("evicted_priority", lowestPri).
+				log.Info().Str("dest", destInterface).
+					Int64("evicted_id", weakest.ID).
+					Str("evicted_precedence", weakest.Precedence).
+					Int("evicted_priority", weakest.Priority).
+					Str("new_precedence", newPrec).
 					Int("new_priority", m.Rule.Priority).
-					Msg("queue full: evicted lower-priority delivery to admit higher-priority")
+					Msg("queue full: evicted weaker delivery to admit higher-precedence arrival")
+				if d.signing != nil {
+					d.signing.AuditEvent("delivery_preempt",
+						&destInterface, nil, &weakest.ID, nil,
+						fmt.Sprintf("preempted %s/%d by %s/%d",
+							weakest.Precedence, weakest.Priority,
+							newPrec, m.Rule.Priority))
+				}
 			}
 		}
 		if d.maxQueueBytes > 0 {
@@ -789,7 +809,13 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 // QueueDirectSend inserts a delivery record for a direct API send (no access rule).
 // The DeliveryWorker for the target interface picks it up within 2 seconds.
 // Returns the delivery ID and msg_ref for status tracking.
-func (d *Dispatcher) QueueDirectSend(interfaceID string, text string) (int64, string, error) {
+//
+// precedence is the STANAG 4406 Edition 2 level carried on the delivery row
+// ([MESHSAT-543]). Pass the canonical value (e.g. "Flash") or empty for the
+// schema default ("Routine"). Callers that receive user input should
+// normalise via [types.ParsePrecedence] before calling. Queue behaviour is
+// unchanged in Phase 1; queue-by-precedence lands in MESHSAT-546 / S2-03.
+func (d *Dispatcher) QueueDirectSend(interfaceID, text, precedence string) (int64, string, error) {
 	msgRef := time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
 
 	payload := []byte(text)
@@ -807,6 +833,7 @@ func (d *Dispatcher) QueueDirectSend(interfaceID string, text string) (int64, st
 		TextPreview: preview,
 		MaxRetries:  3,
 		QoSLevel:    1,
+		Precedence:  precedence,
 	}
 
 	// Assign egress sequence number
