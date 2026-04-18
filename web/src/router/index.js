@@ -6,6 +6,7 @@ const routes = [
   { path: '/inbox', name: 'inbox', component: () => import('@/views/InboxView.vue') },
   { path: '/people', name: 'people', component: () => import('@/views/PeopleView.vue') },
   { path: '/radios', name: 'radios', component: () => import('@/views/RadiosView.vue') },
+  { path: '/pair/scan', name: 'pair-scan', component: () => import('@/views/PairScanView.vue') },
   { path: '/messages', name: 'messages', component: () => import('@/views/MessagesView.vue') },
   { path: '/nodes', name: 'nodes', component: () => import('@/views/NodesView.vue') },
   { path: '/bridge', name: 'bridge', component: () => import('@/views/BridgeView.vue') },

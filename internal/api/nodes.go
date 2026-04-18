@@ -55,7 +55,35 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to get status: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
+
+	// Wrap the mesh status in an envelope so the SPA's StatusStrip
+	// picks up hub + directory health from one /api/status response
+	// rather than fanning out into per-subsystem endpoints on every
+	// 10s tick. All original MeshStatus fields stay at the top
+	// level; new blocks are additive. [MESHSAT-614]
+	envelope := map[string]interface{}{
+		"connected":     status.Connected,
+		"transport":     status.Transport,
+		"address":       status.Address,
+		"node_id":       status.NodeID,
+		"node_name":     status.NodeName,
+		"hw_model":      status.HWModel,
+		"hw_model_name": status.HWModelName,
+		"num_nodes":     status.NumNodes,
+	}
+
+	if s.db != nil {
+		var hubVersion int64
+		var lastSync string
+		_ = s.db.QueryRow(`SELECT COALESCE(MAX(hub_version), 0) FROM directory_contacts`).Scan(&hubVersion)
+		_ = s.db.QueryRow(`SELECT COALESCE(MAX(updated_at), '') FROM directory_contacts`).Scan(&lastSync)
+		envelope["directory"] = map[string]interface{}{
+			"hub_version":  hubVersion,
+			"last_sync_at": lastSync,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, envelope)
 }
 
 // handleRemoveNode removes a node from the radio's NodeDB.
