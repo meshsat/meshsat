@@ -121,15 +121,6 @@ onUnmounted(() => {
             </span>
           </button>
 
-          <!-- NVIS night-mode toggle (MIL-STD-3009 Green A) [MESHSAT-556] -->
-          <button type="button" @click="store.toggleNVIS()"
-            class="flex items-center justify-center h-6 w-8 rounded border border-tactical-border bg-tactical-surface"
-            :class="store.isNVIS ? 'text-[#00FF41] border-[#00FF41]/50' : 'text-gray-500'"
-            :title="store.isNVIS ? 'Switch to day theme' : 'Switch to NVIS night theme'"
-            :aria-pressed="store.isNVIS" aria-label="Night theme">
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8a9 9 0 1 1-9.8-9.8A7 7 0 0 0 21 12.8z"/></svg>
-          </button>
-
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 

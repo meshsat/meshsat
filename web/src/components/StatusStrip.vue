@@ -143,5 +143,20 @@ const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at |
       <span class="w-1.5 h-1.5 rounded-full bg-emerald-400" />
       <span class="text-emerald-400/70">SYNC</span>
     </div>
+
+    <!-- NVIS night theme toggle (MIL-STD-3009 Green A) [MESHSAT-556] -->
+    <button type="button" @click="store.toggleNVIS()"
+      class="flex items-center gap-1 px-1.5 py-0.5 rounded border border-tactical-border"
+      :class="store.isNVIS
+        ? 'bg-[#00FF41]/10 text-[#00FF41] border-[#00FF41]/60'
+        : 'text-gray-500 hover:text-gray-300'"
+      :title="store.isNVIS ? 'Disable NVIS night theme' : 'Enable NVIS night theme (MIL-STD-3009)'"
+      aria-label="Toggle NVIS night theme">
+      <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+      </svg>
+      <span class="hidden md:inline font-medium tracking-wide">NVIS</span>
+    </button>
   </div>
 </template>
