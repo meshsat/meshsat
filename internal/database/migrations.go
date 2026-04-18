@@ -1149,6 +1149,16 @@ var migrations = []string{
 		(lower(hex(randomblob(16))), 'precedence', 'Priority',  'ORDERED_FALLBACK'),
 		(lower(hex(randomblob(16))), 'precedence', 'Routine',   'PRIMARY_ONLY'),
 		(lower(hex(randomblob(16))), 'precedence', 'Deferred',  'PRIMARY_ONLY');`,
+
+	// v49: STANAG 4406 Edition 2 precedence on every delivery row
+	// [MESHSAT-543 / S1-10]. The column is plumbed through
+	// MessageDelivery now; the queue-by-precedence + FLASH-preempts-
+	// ROUTINE semantics land in MESHSAT-546 / S2-03. Valid values are
+	// Override / Flash / Immediate / Priority / Routine / Deferred —
+	// see internal/types/precedence.go. Default Routine matches the
+	// behaviour of every pre-v49 delivery.
+	`ALTER TABLE message_deliveries ADD COLUMN precedence TEXT NOT NULL DEFAULT 'Routine';
+	CREATE INDEX IF NOT EXISTS idx_deliveries_precedence ON message_deliveries(precedence, status);`,
 }
 
 func (db *DB) migrate() error {

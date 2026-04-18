@@ -240,3 +240,55 @@ func TestSchemaVersionIdempotent(t *testing.T) {
 
 // Ensure we don't accidentally import os in production code
 var _ = os.DevNull
+
+// --- MESHSAT-543 (S1-10) — precedence field round-trip -----------------
+
+func TestDeliveryPrecedenceRoundTrip(t *testing.T) {
+	db := testDB(t)
+	for _, want := range []string{"Override", "Flash", "Immediate", "Priority", "Routine", "Deferred"} {
+		id, err := db.InsertDelivery(MessageDelivery{
+			MsgRef:     "msg-" + want,
+			Channel:    "mesh_0",
+			Status:     "queued",
+			Precedence: want,
+		})
+		if err != nil {
+			t.Fatalf("insert %s: %v", want, err)
+		}
+		got, err := db.GetDelivery(id)
+		if err != nil {
+			t.Fatalf("get %s: %v", want, err)
+		}
+		if got.Precedence != want {
+			t.Errorf("precedence %q round-trip: got %q", want, got.Precedence)
+		}
+	}
+}
+
+func TestDeliveryPrecedenceDefaultsToRoutine(t *testing.T) {
+	db := testDB(t)
+	// Leaving Precedence empty on insert must produce 'Routine' via the schema default.
+	id, err := db.InsertDelivery(MessageDelivery{
+		MsgRef:  "msg-default",
+		Channel: "mesh_0",
+		Status:  "queued",
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, _ := db.GetDelivery(id)
+	if got.Precedence != "Routine" {
+		t.Errorf("default precedence: got %q, want 'Routine'", got.Precedence)
+	}
+}
+
+func TestDeliveryPrecedenceIndexExists(t *testing.T) {
+	db := testDB(t)
+	var name string
+	err := db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_deliveries_precedence'`,
+	).Scan(&name)
+	if err != nil {
+		t.Errorf("idx_deliveries_precedence: %v", err)
+	}
+}
