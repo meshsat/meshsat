@@ -4,7 +4,11 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
-import 'leaflet.markercluster'
+// `leaflet.markercluster` is loaded dynamically in initMap() AFTER
+// leaflet itself resolves — importing the plugin statically here
+// runs before the `await import('leaflet')` dynamic import below,
+// and the plugin's `require('leaflet')` races with the app's own
+// copy, which breaks the map on cold load. [MESHSAT-570 fix]
 import ms from 'milsymbol'
 
 const store = useMeshsatStore()
@@ -403,6 +407,13 @@ async function initMap() {
     const leaflet = await import('leaflet')
     L = leaflet.default || leaflet
 
+    // Load the marker-cluster plugin AFTER leaflet has resolved —
+    // importing it at module top races the dynamic leaflet import
+    // above and leaves L.markerClusterGroup undefined on cold load.
+    // Wrapped in try/catch so a missing plugin simply degrades the
+    // map to an unclustered layerGroup. [MESHSAT-570 fix]
+    try { await import('leaflet.markercluster') } catch (e) { /* plugin optional */ }
+
     if (!mapEl.value) return
 
     map = L.map(mapEl.value).setView([52.16, 4.49], 6)
@@ -411,10 +422,7 @@ async function initMap() {
       maxZoom: 19
     }).addTo(map)
 
-    // Cluster group replaces the plain layerGroup so high-density
-    // maps (50+ contacts / mesh nodes) don't overwhelm the viewport.
-    // [MESHSAT-570]
-    markerLayer = (L.markerClusterGroup
+    markerLayer = (typeof L.markerClusterGroup === 'function'
       ? L.markerClusterGroup({
           showCoverageOnHover: false,
           spiderfyOnMaxZoom: true,
@@ -462,9 +470,11 @@ function updateMap() {
     const lastSeen = node.last_heard ? new Date(node.last_heard * 1000) : null
     const stale = lastSeen ? (Date.now() - lastSeen.getTime() > 300000) : false
     const sidc = sidcForNode(node)
-    const icon = sidc
-      ? milsymbolIcon(sidc, callsign, stale)
-      : cotMarkerIcon(cotType, callsign, stale)
+    // milsymbolIcon() returns null on malformed SIDC — fall through
+    // to the CoT-derived marker so Leaflet never sees a null icon.
+    let icon = null
+    if (sidc) icon = milsymbolIcon(sidc, callsign, stale)
+    if (!icon) icon = cotMarkerIcon(cotType, callsign, stale)
     const m = L.marker([node.latitude, node.longitude], { icon })
     let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
     html += `<br><span style="color:#888;font-size:11px">${cotType}</span>`
