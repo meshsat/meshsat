@@ -5,6 +5,12 @@ import (
 )
 
 // Contact represents a unified contact entity (person, hub, or device).
+//
+// SIDC, Team, Role, Org, and TrustLevel are populated by joining
+// against `directory_contacts` (v44, MESHSAT-534). They live on the
+// richer Phase 1 directory schema; the legacy `contacts` row is the
+// identity anchor (legacy_contact_id), the directory row carries the
+// metadata. [MESHSAT-559]
 type Contact struct {
 	ID          int64            `json:"id"`
 	DisplayName string           `json:"display_name"`
@@ -12,6 +18,14 @@ type Contact struct {
 	Addresses   []ContactAddress `json:"addresses,omitempty"`
 	CreatedAt   string           `json:"created_at"`
 	UpdatedAt   string           `json:"updated_at"`
+
+	// Directory-joined fields (nullable; zero values when no
+	// directory_contacts row exists yet).
+	SIDC       string `json:"sidc,omitempty"`
+	Team       string `json:"team,omitempty"`
+	Role       string `json:"role,omitempty"`
+	Org        string `json:"org,omitempty"`
+	TrustLevel int    `json:"trust_level,omitempty"`
 }
 
 // ContactAddress represents one transport address for a contact.
@@ -40,8 +54,30 @@ type UnifiedMessage struct {
 }
 
 // GetContacts returns all contacts with their addresses.
+// contactSelectSQL pulls the legacy contact row plus the joined
+// directory_contacts metadata (SIDC, team, role, org, trust). The
+// join uses `legacy_contact_id` so any legacy contact that hasn't yet
+// been backfilled into the directory (rare after v44) cleanly yields
+// zero values via COALESCE. [MESHSAT-559]
+const contactSelectSQL = `
+SELECT c.id, c.display_name, c.notes, c.created_at, c.updated_at,
+       COALESCE(dc.sidc, ''),
+       COALESCE(dc.team, ''),
+       COALESCE(dc.role, ''),
+       COALESCE(dc.org, ''),
+       COALESCE(dc.trust_level, 0)
+FROM contacts c
+LEFT JOIN directory_contacts dc ON dc.legacy_contact_id = c.id`
+
+func scanContact(scanner interface {
+	Scan(dest ...any) error
+}, c *Contact) error {
+	return scanner.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.CreatedAt, &c.UpdatedAt,
+		&c.SIDC, &c.Team, &c.Role, &c.Org, &c.TrustLevel)
+}
+
 func (db *DB) GetContacts() ([]Contact, error) {
-	rows, err := db.Query("SELECT id, display_name, notes, created_at, updated_at FROM contacts ORDER BY display_name")
+	rows, err := db.Query(contactSelectSQL + " ORDER BY c.display_name")
 	if err != nil {
 		return nil, fmt.Errorf("get contacts: %w", err)
 	}
@@ -50,7 +86,7 @@ func (db *DB) GetContacts() ([]Contact, error) {
 	var contacts []Contact
 	for rows.Next() {
 		var c Contact
-		if err := rows.Scan(&c.ID, &c.DisplayName, &c.Notes, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := scanContact(rows, &c); err != nil {
 			return nil, fmt.Errorf("scan contact: %w", err)
 		}
 		contacts = append(contacts, c)
@@ -70,9 +106,8 @@ func (db *DB) GetContacts() ([]Contact, error) {
 // GetContact returns a single contact with addresses.
 func (db *DB) GetContact(id int64) (*Contact, error) {
 	var c Contact
-	err := db.QueryRow("SELECT id, display_name, notes, created_at, updated_at FROM contacts WHERE id = ?", id).
-		Scan(&c.ID, &c.DisplayName, &c.Notes, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
+	row := db.QueryRow(contactSelectSQL+" WHERE c.id = ?", id)
+	if err := scanContact(row, &c); err != nil {
 		return nil, fmt.Errorf("get contact %d: %w", id, err)
 	}
 	addrs, err := db.GetContactAddresses(id)
@@ -81,6 +116,38 @@ func (db *DB) GetContact(id int64) (*Contact, error) {
 	}
 	c.Addresses = addrs
 	return &c, nil
+}
+
+// SetContactDirectoryMeta upserts SIDC/team/role/org/trust_level onto
+// the directory_contacts row joined by legacy_contact_id. Creates
+// the directory row if the legacy contact hasn't been backfilled
+// yet (shouldn't happen post-v44 but the path is cheap). [MESHSAT-559]
+func (db *DB) SetContactDirectoryMeta(legacyID int64, sidc, team, role, org string) error {
+	// Does a directory row exist?
+	var existingID string
+	err := db.QueryRow(
+		"SELECT id FROM directory_contacts WHERE legacy_contact_id = ?",
+		legacyID,
+	).Scan(&existingID)
+	if err == nil {
+		_, err = db.Exec(
+			`UPDATE directory_contacts
+			 SET sidc = ?, team = ?, role = ?, org = ?,
+			     updated_at = datetime('now')
+			 WHERE legacy_contact_id = ?`,
+			sidc, team, role, org, legacyID)
+		return err
+	}
+	// No directory row — materialise one from the legacy contact.
+	name, notes := "", ""
+	_ = db.QueryRow("SELECT display_name, notes FROM contacts WHERE id = ?", legacyID).
+		Scan(&name, &notes)
+	_, err = db.Exec(
+		`INSERT INTO directory_contacts
+		 (id, display_name, notes, sidc, team, role, org, legacy_contact_id)
+		 VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?)`,
+		name, notes, sidc, team, role, org, legacyID)
+	return err
 }
 
 // CreateContact creates a new contact and returns its ID.

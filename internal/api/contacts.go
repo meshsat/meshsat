@@ -118,9 +118,16 @@ func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid contact ID")
 		return
 	}
+	// SIDC / Team / Role / Org are directory_contacts metadata —
+	// optional in the body. If present, we update the directory row
+	// alongside the legacy contact. [MESHSAT-559]
 	var req struct {
-		DisplayName string `json:"display_name"`
-		Notes       string `json:"notes"`
+		DisplayName string  `json:"display_name"`
+		Notes       string  `json:"notes"`
+		SIDC        *string `json:"sidc,omitempty"`
+		Team        *string `json:"team,omitempty"`
+		Role        *string `json:"role,omitempty"`
+		Org         *string `json:"org,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -133,6 +140,32 @@ func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.UpdateContact(id, req.DisplayName, req.Notes); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update contact")
 		return
+	}
+	// If any directory fields came through, sync the join row. We
+	// carry forward the existing values for any field the caller
+	// didn't supply so PATCH-style partial updates work.
+	if req.SIDC != nil || req.Team != nil || req.Role != nil || req.Org != nil {
+		cur, _ := s.db.GetContact(id)
+		sidc, team, role, org := "", "", "", ""
+		if cur != nil {
+			sidc, team, role, org = cur.SIDC, cur.Team, cur.Role, cur.Org
+		}
+		if req.SIDC != nil {
+			sidc = *req.SIDC
+		}
+		if req.Team != nil {
+			team = *req.Team
+		}
+		if req.Role != nil {
+			role = *req.Role
+		}
+		if req.Org != nil {
+			org = *req.Org
+		}
+		if err := s.db.SetContactDirectoryMeta(id, sidc, team, role, org); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update directory metadata: "+err.Error())
+			return
+		}
 	}
 	c, _ := s.db.GetContact(id)
 	writeJSON(w, http.StatusOK, c)

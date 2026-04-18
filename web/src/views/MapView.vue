@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import 'leaflet/dist/leaflet.css'
+import ms from 'milsymbol'
 
 const store = useMeshsatStore()
 const mapEl = ref(null)
@@ -293,6 +294,49 @@ function cotMarkerIcon(cotType, callsign, stale) {
   })
 }
 
+// MIL-STD-2525D / APP-6D symbol icon rendered via milsymbol.
+// [MESHSAT-559]
+function milsymbolIcon(sidc, callsign, stale) {
+  try {
+    const symbol = new ms.Symbol(sidc, {
+      size: 32,
+      uniqueDesignation: callsign,
+      monoColor: stale ? '#888' : undefined
+    })
+    const size = symbol.getSize()
+    const anchor = symbol.getAnchor()
+    return L.divIcon({
+      html: symbol.asSVG(),
+      className: '',
+      iconSize:   [size.width, size.height],
+      iconAnchor: [anchor.x,   anchor.y],
+      popupAnchor: [0, -anchor.y]
+    })
+  } catch {
+    // Malformed SIDC — fall back to the caller's default.
+    return null
+  }
+}
+
+// Lookup SIDC for a node via its matching directory contact. The
+// store already loads /api/contacts; each contact's addresses are
+// walked to see whether its mesh/tak/etc address matches the node.
+function sidcForNode(node) {
+  const candidates = [node._id, node.user_id, node.short_name, node.long_name]
+  const contacts = store.contacts || []
+  for (const c of contacts) {
+    if (!c.sidc) continue
+    for (const a of (c.addresses || [])) {
+      const val = (a.address || a.value || '').toLowerCase()
+      if (!val) continue
+      for (const cand of candidates) {
+        if (cand && String(cand).toLowerCase() === val) return c.sidc
+      }
+    }
+  }
+  return ''
+}
+
 // Build a lookup: nodeId → {lat, lon, name, color} — includes TAK positions
 const nodePositionMap = computed(() => {
   const m = {}
@@ -397,13 +441,18 @@ function updateMap() {
     (selectedTeam.value === 'all' || nodeTeam(n.cot_type) === selectedTeam.value)
   )
 
-  // Node markers — TAK/CoT-compliant icons
+  // Node markers — prefer a MIL-STD-2525D symbol when the matching
+  // directory contact has a SIDC set (MESHSAT-559); fall back to
+  // the CoT-derived marker otherwise.
   for (const node of visibleNodes) {
     const callsign = node.short_name || node.long_name || node._id
     const cotType = node.cot_type || 'a-f-G-U-C' // default: friendly ground unit
     const lastSeen = node.last_heard ? new Date(node.last_heard * 1000) : null
     const stale = lastSeen ? (Date.now() - lastSeen.getTime() > 300000) : false
-    const icon = cotMarkerIcon(cotType, callsign, stale)
+    const sidc = sidcForNode(node)
+    const icon = sidc
+      ? milsymbolIcon(sidc, callsign, stale)
+      : cotMarkerIcon(cotType, callsign, stale)
     const m = L.marker([node.latitude, node.longitude], { icon })
     let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
     html += `<br><span style="color:#888;font-size:11px">${cotType}</span>`
@@ -783,7 +832,10 @@ onMounted(async () => {
     store.fetchLocations(),
     store.fetchLocationSources(),
     store.fetchCellInfo(),
-    store.fetchGeofences()
+    store.fetchGeofences(),
+    // Contacts feed sidcForNode() lookup for MIL-STD-2525D pins.
+    // [MESHSAT-559]
+    store.fetchContacts()
   ])
   // Set visibility for any newly loaded nodes (including TAK-relayed)
   for (const n of nodesWithPositions.value) {

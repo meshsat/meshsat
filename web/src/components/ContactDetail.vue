@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import TrustDots from '@/components/TrustDots.vue'
+import SIDCPicker from '@/components/SIDCPicker.vue'
 
 // Right-hand detail pane for the People view. Shows addresses,
 // groups, policy, and (Engineer only) per-address keys + a
@@ -33,6 +34,25 @@ function bearerColour(kind) {
   if (k === 'aprs' || k.startsWith('ax25'))                 return 'text-teal-400'
   if (k.startsWith('reticulum') || k.startsWith('rns'))     return 'text-violet-400'
   return 'text-gray-400'
+}
+
+// SIDC picker — edits the directory metadata on the contact via
+// PUT /api/contacts/{id}. Local draft so we can show a "Save" state
+// and only push on confirm.
+const sidcDraft = ref(props.contact?.sidc || '')
+const sidcDirty = computed(() => sidcDraft.value !== (props.contact?.sidc || ''))
+const sidcBusy = ref(false)
+async function saveSIDC() {
+  sidcBusy.value = true
+  try {
+    await store.updateContact(props.contact.id, {
+      display_name: props.contact.display_name,
+      notes: props.contact.notes || '',
+      sidc: sidcDraft.value
+    })
+  } finally {
+    sidcBusy.value = false
+  }
 }
 
 const busy = ref(false)
@@ -78,6 +98,17 @@ async function onDelete() {
             <span v-if="a.label" class="text-[10px] text-gray-500">{{ a.label }}</span>
           </li>
         </ul>
+      </section>
+
+      <!-- Symbol (MIL-STD-2525D SIDC) -->
+      <section>
+        <SIDCPicker v-model="sidcDraft" />
+        <div v-if="sidcDirty" class="mt-2 flex justify-end">
+          <button type="button" @click="saveSIDC" :disabled="sidcBusy"
+            class="px-3 py-1.5 rounded bg-tactical-iridium text-tactical-bg text-xs font-semibold min-h-[36px]">
+            <span v-if="sidcBusy">Saving…</span><span v-else>Save symbol</span>
+          </button>
+        </div>
       </section>
 
       <!-- Groups + policy placeholder until S1-05 surfaces them -->
