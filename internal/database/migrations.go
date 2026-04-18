@@ -972,6 +972,183 @@ var migrations = []string{
 	// time-series table for every list render. -1 = unknown (no IAS Zone
 	// frame ever received). [MESHSAT-509]
 	`ALTER TABLE zigbee_devices ADD COLUMN last_zone_status INTEGER NOT NULL DEFAULT -1;`,
+
+	// v44: Unified directory — Phase 1 foundation [MESHSAT-534].
+	// SCIM-shaped contact entity with string IDs (128-bit random hex) so
+	// the same identity round-trips Bridge ↔ Hub ↔ Android without collision.
+	// Old v23 contacts are backfilled; the legacy tables stay readable as
+	// a shim for one release then are dropped in v50 per MESHSAT-542.
+	`CREATE TABLE IF NOT EXISTS directory_contacts (
+		id                TEXT PRIMARY KEY,
+		tenant_id         TEXT NOT NULL DEFAULT '',
+		display_name      TEXT NOT NULL,
+		given_name        TEXT NOT NULL DEFAULT '',
+		family_name       TEXT NOT NULL DEFAULT '',
+		org               TEXT NOT NULL DEFAULT '',
+		role              TEXT NOT NULL DEFAULT '',
+		team              TEXT NOT NULL DEFAULT '',
+		sidc              TEXT NOT NULL DEFAULT '',
+		notes             TEXT NOT NULL DEFAULT '',
+		trust_level       INTEGER NOT NULL DEFAULT 0,
+		trust_verified_at TEXT,
+		trust_verified_by TEXT NOT NULL DEFAULT '',
+		hub_version       INTEGER NOT NULL DEFAULT 0,
+		hub_etag          TEXT NOT NULL DEFAULT '',
+		origin            TEXT NOT NULL DEFAULT 'local',
+		legacy_contact_id INTEGER,
+		created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_dir_contacts_tenant ON directory_contacts(tenant_id);
+	CREATE INDEX IF NOT EXISTS idx_dir_contacts_team ON directory_contacts(team);
+	CREATE INDEX IF NOT EXISTS idx_dir_contacts_name ON directory_contacts(display_name);
+	CREATE INDEX IF NOT EXISTS idx_dir_contacts_legacy ON directory_contacts(legacy_contact_id);
+
+	-- Backfill every v23 contacts row as a directory_contacts row.
+	INSERT INTO directory_contacts (id, display_name, notes, origin, legacy_contact_id, created_at, updated_at)
+	SELECT
+		lower(hex(randomblob(16))),
+		display_name,
+		notes,
+		'local',
+		id,
+		created_at,
+		updated_at
+	FROM contacts;`,
+
+	// v45: Multi-valued transport addresses (SCIM-style). One row per
+	// (contact, bearer-kind, value). Kind is UPPER_SNAKE canonical:
+	// SMS, MESHTASTIC, APRS, IRIDIUM_SBD, IRIDIUM_IMT, CELLULAR, TAK,
+	// RETICULUM, ZIGBEE, BLE, WEBHOOK, EMAIL, MQTT. Legacy
+	// contact_addresses are backfilled with kind normalisation
+	// (mesh → MESHTASTIC, iridium → IRIDIUM_SBD, others UPPER()). Legacy
+	// encryption_key values are intentionally NOT backfilled; keys are
+	// handled per-contact via directory_contact_keys (v46) and the
+	// dual-read transform (MESHSAT-548 / S2-05). [MESHSAT-534]
+	`CREATE TABLE IF NOT EXISTS directory_addresses (
+		id             TEXT PRIMARY KEY,
+		contact_id     TEXT NOT NULL REFERENCES directory_contacts(id) ON DELETE CASCADE,
+		kind           TEXT NOT NULL,
+		value          TEXT NOT NULL,
+		subvalue       TEXT NOT NULL DEFAULT '',
+		label          TEXT NOT NULL DEFAULT '',
+		primary_rank   INTEGER NOT NULL DEFAULT 0,
+		verified       INTEGER NOT NULL DEFAULT 0,
+		bearer_hint    INTEGER NOT NULL DEFAULT 50,
+		max_cost_cents INTEGER,
+		created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(kind, value)
+	);
+	CREATE INDEX IF NOT EXISTS idx_dir_addr_contact ON directory_addresses(contact_id);
+	CREATE INDEX IF NOT EXISTS idx_dir_addr_kind ON directory_addresses(kind, value);
+
+	-- Backfill legacy contact_addresses, uppercasing the kind. Rank 0 for
+	-- legacy is_primary=1, rank 1 for everything else.
+	INSERT INTO directory_addresses (id, contact_id, kind, value, label, primary_rank, created_at)
+	SELECT
+		lower(hex(randomblob(16))),
+		dc.id,
+		UPPER(ca.type),
+		ca.address,
+		ca.label,
+		CASE WHEN ca.is_primary = 1 THEN 0 ELSE 1 END,
+		ca.created_at
+	FROM contact_addresses ca
+	JOIN directory_contacts dc ON dc.legacy_contact_id = ca.contact_id;
+
+	-- Normalise legacy kind names.
+	UPDATE directory_addresses SET kind = 'MESHTASTIC' WHERE kind = 'MESH';
+	UPDATE directory_addresses SET kind = 'IRIDIUM_SBD' WHERE kind = 'IRIDIUM';`,
+
+	// v46: Per-contact key material. Supersedes the per-channel
+	// (channel_type, address) keys in key_bundles for new writes; existing
+	// key_bundles remain valid for the 30-day dual-read grace (S2-05).
+	// public_data holds asymmetric pubkey bytes; encrypted_priv holds the
+	// master-key-wrapped private bytes or the wrapped symmetric key. No
+	// backfill: legacy contact_addresses.encryption_key is plaintext hex
+	// and we refuse to rewrite it here without the master-key envelope.
+	// The Go package (MESHSAT-535) will migrate any outstanding legacy
+	// keys on first encrypted write. [MESHSAT-534]
+	`CREATE TABLE IF NOT EXISTS directory_contact_keys (
+		id             TEXT PRIMARY KEY,
+		contact_id     TEXT NOT NULL REFERENCES directory_contacts(id) ON DELETE CASCADE,
+		kind           TEXT NOT NULL,
+		version        INTEGER NOT NULL DEFAULT 1,
+		status         TEXT NOT NULL DEFAULT 'active',
+		public_data    BLOB,
+		encrypted_priv BLOB,
+		valid_from     TEXT NOT NULL DEFAULT (datetime('now')),
+		valid_until    TEXT,
+		rotated_at     TEXT,
+		trust_anchor   TEXT NOT NULL DEFAULT 'local',
+		created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(contact_id, kind, version)
+	);
+	CREATE INDEX IF NOT EXISTS idx_dir_keys_contact ON directory_contact_keys(contact_id);
+	CREATE INDEX IF NOT EXISTS idx_dir_keys_status ON directory_contact_keys(status);`,
+
+	// v47: Directory groups (teams, roles, distribution lists, MLS groups)
+	// + member join table. Tenant-scoped via directory_groups.tenant_id
+	// (empty for local-only). MLS groups carry mls_group_id when Phase 6
+	// ships RFC 9420 (MESHSAT-572). [MESHSAT-534]
+	`CREATE TABLE IF NOT EXISTS directory_groups (
+		id           TEXT PRIMARY KEY,
+		tenant_id    TEXT NOT NULL DEFAULT '',
+		display_name TEXT NOT NULL,
+		kind         TEXT NOT NULL,
+		sidc         TEXT NOT NULL DEFAULT '',
+		mls_group_id TEXT NOT NULL DEFAULT '',
+		hub_version  INTEGER NOT NULL DEFAULT 0,
+		hub_etag     TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_dir_groups_tenant ON directory_groups(tenant_id);
+	CREATE INDEX IF NOT EXISTS idx_dir_groups_kind ON directory_groups(kind);
+
+	CREATE TABLE IF NOT EXISTS directory_group_members (
+		group_id   TEXT NOT NULL REFERENCES directory_groups(id) ON DELETE CASCADE,
+		contact_id TEXT NOT NULL REFERENCES directory_contacts(id) ON DELETE CASCADE,
+		role       TEXT NOT NULL DEFAULT '',
+		added_at   TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (group_id, contact_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_dir_group_members_contact ON directory_group_members(contact_id);`,
+
+	// v48: Dispatch policy per scope (contact / group / precedence /
+	// default). Strategy drives Dispatcher.SendToRecipient (MESHSAT-544 /
+	// S2-01) which resolves caller opts → contact policy → group policy
+	// → precedence-default → global default. Seeds sane STANAG 4406
+	// defaults: Flash and Override bond every reachable bearer, Immediate
+	// races them, Priority falls through ordered primary/secondary,
+	// Routine and Deferred use the primary only. [MESHSAT-534]
+	`CREATE TABLE IF NOT EXISTS directory_dispatch_policy (
+		id                  TEXT PRIMARY KEY,
+		scope_type          TEXT NOT NULL,
+		scope_id            TEXT NOT NULL DEFAULT '',
+		strategy            TEXT NOT NULL,
+		max_cost_cents      INTEGER,
+		max_latency_ms      INTEGER,
+		allow_bearers       TEXT NOT NULL DEFAULT '[]',
+		deny_bearers        TEXT NOT NULL DEFAULT '[]',
+		precedence_override TEXT NOT NULL DEFAULT '{}',
+		created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(scope_type, scope_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_dir_policy_scope ON directory_dispatch_policy(scope_type, scope_id);
+
+	-- Seed STANAG 4406 precedence defaults. These are the out-of-box
+	-- choices used when no contact- or group-specific policy matches.
+	INSERT OR IGNORE INTO directory_dispatch_policy (id, scope_type, scope_id, strategy) VALUES
+		(lower(hex(randomblob(16))), 'default',    '',          'PRIMARY_ONLY'),
+		(lower(hex(randomblob(16))), 'precedence', 'Override',  'HEMB_BONDED'),
+		(lower(hex(randomblob(16))), 'precedence', 'Flash',     'HEMB_BONDED'),
+		(lower(hex(randomblob(16))), 'precedence', 'Immediate', 'ANY_REACHABLE'),
+		(lower(hex(randomblob(16))), 'precedence', 'Priority',  'ORDERED_FALLBACK'),
+		(lower(hex(randomblob(16))), 'precedence', 'Routine',   'PRIMARY_ONLY'),
+		(lower(hex(randomblob(16))), 'precedence', 'Deferred',  'PRIMARY_ONLY');`,
 }
 
 func (db *DB) migrate() error {
