@@ -5,7 +5,7 @@ import { useSpectrumStore } from '@/stores/spectrum'
 import JammingAlertModal from '@/components/JammingAlertModal.vue'
 import NavBar from '@/components/NavBar.vue'
 import StatusStrip from '@/components/StatusStrip.vue'
-import TouchKeyboard from '@/components/TouchKeyboard.vue'
+import MeshSatOSK from '@/components/MeshSatOSK.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
@@ -161,8 +161,8 @@ onUnmounted(() => {
     <!-- Global sticky RF jamming alert — teleported to body, visible on any route -->
     <JammingAlertModal />
 
-    <!-- On-screen touch keyboard [MESHSAT-582] -->
-    <TouchKeyboard />
+    <!-- In-SPA on-screen keyboard for kiosk Chromium [MESHSAT-582] -->
+    <MeshSatOSK />
   </div>
 </template>
 
