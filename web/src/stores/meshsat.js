@@ -1,6 +1,25 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import api from '@/api/client'
+
+// Resolve the initial shell mode on first load.
+// Priority: explicit localStorage value > ?shell URL param > kiosk UA >
+// viewport width heuristic. The kiosk/Android path defaults to Operator;
+// a desktop-width viewport defaults to Engineer so power users keep the
+// dense UI they had before the IQ-70 reshape. [MESHSAT-549]
+function detectShellMode() {
+  if (typeof window === 'undefined') return 'operator'
+  const stored = window.localStorage?.getItem('meshsat.shell')
+  if (stored === 'operator' || stored === 'engineer') return stored
+  const params = new URLSearchParams(window.location.search || '')
+  const urlShell = params.get('shell')
+  if (urlShell === 'kiosk' || urlShell === 'operator') return 'operator'
+  if (urlShell === 'engineer') return 'engineer'
+  const ua = window.navigator?.userAgent || ''
+  if (/CrKiosk|Chromium-Kiosk|\bKIOSK\b/i.test(ua)) return 'operator'
+  if ((window.innerWidth || 0) > 1200) return 'engineer'
+  return 'operator'
+}
 
 export const useMeshsatStore = defineStore('meshsat', () => {
   const messages = ref([])
@@ -15,6 +34,22 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   const sseConnected = ref(false)
 
   let sseHandle = null
+
+  // Shell mode — Operator vs Engineer. Operator is the simplified
+  // field-kit UI (5 items, large tap targets); Engineer is the existing
+  // dense admin shell. Persists to localStorage so toggling one survives
+  // a reload. [MESHSAT-549]
+  const shellMode = ref(detectShellMode())
+  const isOperator = computed(() => shellMode.value === 'operator')
+  const isEngineer = computed(() => shellMode.value === 'engineer')
+  function setShellMode(mode) {
+    if (mode !== 'operator' && mode !== 'engineer') return
+    shellMode.value = mode
+    try { window.localStorage?.setItem('meshsat.shell', mode) } catch { /* private mode */ }
+  }
+  function toggleShellMode() {
+    setShellMode(shellMode.value === 'operator' ? 'engineer' : 'operator')
+  }
 
   async function fetchMessages(params = {}) {
     try {
@@ -1410,6 +1445,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   }
 
   return {
+    shellMode, isOperator, isEngineer, setShellMode, toggleShellMode,
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
     locationSources, iridiumGeoHistory,

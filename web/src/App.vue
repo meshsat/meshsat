@@ -177,6 +177,23 @@ onUnmounted(() => {
         <!-- Right: Status indicators -->
         <div class="flex items-center gap-3 shrink-0">
 
+          <!-- Shell mode toggle: Operator (field kit) vs Engineer (admin) [MESHSAT-549] -->
+          <button type="button" @click="store.toggleShellMode()"
+            class="flex items-center h-6 rounded border border-tactical-border bg-tactical-surface overflow-hidden"
+            :title="store.isOperator ? 'Switch to Engineer Mode' : 'Switch to Operator Mode'">
+            <span class="px-2 py-0.5 text-[9px] font-medium tracking-wide transition-colors"
+              :class="store.isOperator ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'text-gray-500'">
+              OP
+            </span>
+            <span class="px-2 py-0.5 text-[9px] font-medium tracking-wide transition-colors"
+              :class="store.isEngineer ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'text-gray-500'">
+              ENG
+            </span>
+          </button>
+
+          <!-- Divider -->
+          <span class="hidden md:block w-px h-4 bg-gray-700/50" />
+
           <!-- Iridium: label + signal bars + next pass -->
           <div class="flex items-center gap-1 md:gap-1.5">
             <span class="hidden md:inline text-[9px] font-medium text-tactical-iridium/70">IRD</span>
