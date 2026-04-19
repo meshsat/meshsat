@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -315,6 +316,18 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 
 		pkt, err := ParseAPRSPacket(frame)
 		if err != nil {
+			// AX.25 decode succeeded but the payload isn't APRS-formatted
+			// (Reticulum, FlexNet, TNC beacons, custom protocols).
+			// Operators still want to see WHO is on the air — record the
+			// AX.25 source + path so the widget lists every station heard
+			// on 144.8 MHz regardless of payload type. [operator widget fix]
+			if frame != nil && frame.Src.Call != "" {
+				pathParts := make([]string, 0, len(frame.Path))
+				for _, p := range frame.Path {
+					pathParts = append(pathParts, FormatCallsign(p))
+				}
+				g.tracker.RecordAX25(FormatCallsign(frame.Src), strings.Join(pathParts, ","))
+			}
 			log.Debug().Err(err).Msg("aprs: parse APRS")
 			continue
 		}

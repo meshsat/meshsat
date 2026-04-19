@@ -99,17 +99,62 @@ func (t *APRSTracker) RecordRX(pkt *APRSPacket) {
 		st.Path = pkt.Path
 	}
 	st.PacketType = classifyAPRSType(pkt.DataType)
+	t.recordInternal(nowUnix, pkt.Source, st.PacketType, pkt.Path)
+	return
+}
 
-	// Distance from own position
-	if t.ownLat != 0 && t.ownLon != 0 && st.Lat != 0 && st.Lon != 0 {
+// RecordAX25 records a successfully-decoded AX.25 frame that wasn't
+// parseable as APRS (Reticulum payloads, FlexNet, unknown custom
+// protocols on 144.8 MHz). The widget lists every heard station on
+// the air — filtering to only APRS-formatted payloads used to hide
+// sibling bridges and Reticulum peers from the operator.
+// [operator-visibility fix for the APRS widget]
+func (t *APRSTracker) RecordAX25(source string, path string) {
+	if source == "" {
+		return
+	}
+	now := time.Now()
+	nowUnix := now.Unix()
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	st, ok := t.stations[source]
+	if !ok {
+		st = &HeardStation{Callsign: source, PacketType: "non-APRS"}
+		t.stations[source] = st
+	}
+	st.LastHeard = nowUnix
+	st.PacketCount++
+	if path != "" {
+		st.Path = path
+	}
+	if st.PacketType == "" {
+		st.PacketType = "non-APRS"
+	}
+	t.recordInternal(nowUnix, source, st.PacketType, path)
+}
+
+// recordInternal handles the per-tracker activity-bucket + recent-
+// path book-keeping shared by RecordRX and RecordAX25. Caller must
+// hold t.mu.
+func (t *APRSTracker) recordInternal(nowUnix int64, source, label, path string) {
+	st := t.stations[source]
+
+	// Distance from own position (only meaningful for stations whose
+	// position we learned from an APRS payload — non-APRS entries
+	// remain Lat=0/Lon=0 and distance stays at 0).
+	if t.ownLat != 0 && t.ownLon != 0 && st != nil && st.Lat != 0 && st.Lon != 0 {
 		st.DistanceKm = DistanceKm(t.ownLat, t.ownLon, st.Lat, st.Lon)
 	}
 
-	// Packet type counter
-	label := st.PacketType
+	// Packet type counter.
+	if label == "" {
+		label = "other"
+	}
 	t.typeCounts[label]++
 
-	// Activity bucket
+	// Activity bucket.
 	bucketIdx := int(nowUnix/60) % activityBuckets
 	bucketTS := (nowUnix / 60) * 60
 	b := &t.activity[bucketIdx]
@@ -120,11 +165,11 @@ func (t *APRSTracker) RecordRX(pkt *APRSPacket) {
 	}
 	b.RX++
 
-	// Recent packets for path display (keep last 10)
-	if pkt.Path != "" {
+	// Recent packets for path display (keep last 10).
+	if path != "" {
 		t.recentPkts = append(t.recentPkts, recentPacket{
-			Callsign: pkt.Source,
-			Path:     pkt.Path,
+			Callsign: source,
+			Path:     path,
 			Time:     nowUnix,
 		})
 		if len(t.recentPkts) > 10 {
