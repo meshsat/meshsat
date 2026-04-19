@@ -1351,41 +1351,41 @@ function widgetGridClass(id) {
          through to the dense 13-widget grid below. [MESHSAT-549] -->
     <template v-if="store.isOperator">
       <!-- Row 1: Mission State (half) + SOS action (half) -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
         <!-- Mission state banner — color reflects aggregate channel health -->
         <router-link to="/sos"
-          class="block rounded-lg border-2 p-4 text-center transition-colors"
+          class="block rounded-lg border-2 p-2 text-center transition-colors"
           :class="opStatus.ring"
           :aria-label="opStatus.text">
           <div class="text-[10px] uppercase tracking-widest text-gray-400">Mission State</div>
-          <div class="text-3xl font-display font-bold mt-1 tracking-wide" :class="opStatus.tint">
+          <div class="text-2xl font-display font-bold tracking-wide" :class="opStatus.tint">
             {{ opStatus.text }}
           </div>
-          <div class="text-xs text-gray-400 mt-1">{{ opStatus.detail }}</div>
+          <div class="text-xs text-gray-400">{{ opStatus.detail }}</div>
         </router-link>
 
         <!-- SOS arm/test pair -->
         <div class="flex flex-col gap-2">
           <button type="button" @click.prevent="toggleSOS" :disabled="sosArming"
-            class="flex-1 rounded-lg border-2 font-display font-bold tracking-widest text-2xl transition-colors"
+            class="flex-1 rounded-lg border-2 font-display font-bold tracking-widest text-xl transition-colors py-1"
             :class="sosActive
               ? 'border-red-500 bg-red-600 text-white hover:bg-red-500'
               : 'border-red-500/60 bg-red-950/30 text-red-300 hover:bg-red-900/40'">
             {{ sosActive ? 'CANCEL SOS' : 'ACTIVATE SOS' }}
           </button>
           <button type="button" @click.prevent="testSOS"
-            class="rounded-lg border border-tactical-border bg-tactical-surface text-sm font-medium text-gray-300 hover:bg-white/5 py-2">
+            class="rounded-lg border border-tactical-border bg-tactical-surface text-xs font-medium text-gray-300 hover:bg-white/5 py-1.5">
             Test SOS (single message)
           </button>
         </div>
       </div>
 
       <!-- Row 2: Next Pass · Active Comms · Peers -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
 
         <!-- Next satellite pass -->
         <router-link to="/passes"
-          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Next Pass</div>
           <div class="text-3xl font-mono font-bold mt-2 text-tactical-iridium tabular-nums">
             {{ opNextPass.countdown }}
@@ -1398,7 +1398,7 @@ function widgetGridClass(id) {
 
         <!-- Active primary comms -->
         <router-link to="/radios"
-          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Active Comms</div>
           <div class="text-2xl font-bold mt-2" :class="opPrimaryChannel.tint">
             {{ opPrimaryChannel.name }}
@@ -1415,7 +1415,7 @@ function widgetGridClass(id) {
 
         <!-- Peer count + latest contact -->
         <router-link to="/people"
-          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Peers</div>
           <div class="text-3xl font-mono font-bold mt-2 text-tactical-lora tabular-nums">
             {{ opPeerCount }}
@@ -1426,10 +1426,10 @@ function widgetGridClass(id) {
       </div>
 
       <!-- Row 3: GPS · Battery · Queued -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
         <!-- GPS fix status -->
         <router-link to="/map"
-          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">GPS</div>
           <div class="text-2xl font-bold mt-2" :class="opGPS.tint">{{ opGPS.label }}</div>
           <div class="text-sm text-gray-300 mt-1">{{ opGPS.sats }} sats</div>
@@ -1439,7 +1439,7 @@ function widgetGridClass(id) {
 
         <!-- Battery (X1202 UPS) -->
         <router-link to="/bridge"
-          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Battery</div>
           <div class="text-3xl font-mono font-bold mt-2 tabular-nums" :class="opBattery.tint">
             {{ opBattery.pct != null ? `${opBattery.pct}%` : '—' }}
@@ -1454,7 +1454,7 @@ function widgetGridClass(id) {
 
         <!-- Queued messages -->
         <router-link to="/inbox"
-          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Queued</div>
           <div class="text-3xl font-mono font-bold mt-2 tabular-nums" :class="opQueued.tint">
             {{ opQueued.count }}
