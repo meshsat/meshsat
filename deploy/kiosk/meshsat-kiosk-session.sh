@@ -38,6 +38,14 @@ fi
   resume 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":255}" >/dev/null 2>&1' \
   &) 2>/dev/null
 
+# Cursor theme — `blank` is the fully-transparent theme installed
+# by deploy/kiosk/install-blank-cursor.sh. Exported here (as well
+# as in ~/.config/environment.d/50-cursor.conf) so wlroots picks it
+# up during labwc init — environment.d is only read by systemd
+# user sessions, and the kiosk's tty1 launch isn't one.
+export XCURSOR_THEME=blank
+export XCURSOR_SIZE=1
+
 # labwc reads ~/.config/labwc/rc.xml + autostart; autostart launches
 # wlr-randr and chromium. If labwc crashes the shell returns and
 # agetty re-triggers autologin on tty1 (via `systemctl restart

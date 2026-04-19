@@ -138,6 +138,16 @@ if [ "$BRIDGE_URL" != "http://localhost:6050/?shell=kiosk" ]; then
   mv "$tmp" /etc/chromium/policies/managed/meshsat-kiosk.json
 fi
 
+echo "Installing blank cursor theme…"
+bash "$DEPLOY_DIR/install-blank-cursor.sh"
+
+# Let the kiosk user see the blank theme by default.
+install -D -m 0644 -o "$KIOSK_USER" -g "$KIOSK_USER" /dev/stdin \
+  "/home/$KIOSK_USER/.config/environment.d/50-cursor.conf" <<'EOF'
+XCURSOR_THEME=blank
+XCURSOR_SIZE=1
+EOF
+
 systemctl daemon-reload
 
 echo

@@ -14,10 +14,12 @@
     <cycleViewOutlines>no</cycleViewOutlines>
   </core>
   <theme>
-    <!-- cursorSize 1 gives a 1-pixel cursor — effectively invisible
-         on the Touch Display 2 at any viewing distance. Setting it
-         to 0 causes wlroots to fall back to the default 24 px
-         theme, so 1 is the smallest honored value. -->
+    <!-- `blank` is a custom xcursor theme installed by
+         install-blank-cursor.sh — every cursor variant symlinks to
+         a 1×1 transparent PNG, so labwc draws *zero* visible
+         pixels regardless of pointer activity. Beats cursorSize=1
+         which was still faintly visible at Touch Display 2 DPI. -->
+    <cursorTheme>blank</cursorTheme>
     <cursorSize>1</cursorSize>
   </theme>
 </labwc_config>
