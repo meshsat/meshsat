@@ -61,6 +61,7 @@ onMounted(() => {
   store.fetchIridiumSignalFast()
   store.fetchCellularSignal()
   store.fetchCellularStatus()
+  store.fetchAPRSStatus()
   store.fetchLocationSources()
   // Fetch passes for next-pass countdown (use resolved location)
   store.fetchLocations().then(() => {
@@ -82,6 +83,7 @@ onMounted(() => {
     store.fetchIridiumSignalFast()
     store.fetchCellularSignal()
     store.fetchCellularStatus()
+    store.fetchAPRSStatus()
     store.fetchLocationSources()
   }, 10000)
 })

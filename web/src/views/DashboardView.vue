@@ -703,8 +703,18 @@ const opMeshOK = computed(() => {
   const cutoff = Date.now()/1000 - 600
   return (store.nodes || []).some(n => (n.last_seen || 0) > cutoff)
 })
-const opChannelCount = computed(() =>
-  (opSatOK.value ? 1 : 0) + (opCellOK.value ? 1 : 0) + (opMeshOK.value ? 1 : 0))
+const opAprsOK = computed(() => store.aprsStatus?.connected === true && store.aprsStatus?.kiss_up === true)
+
+const opChannels = computed(() => [
+  { key: 'mesh', ok: opMeshOK.value,  label: 'Mesh' },
+  { key: 'aprs', ok: opAprsOK.value,  label: 'APRS' },
+  { key: 'sat',  ok: opSatOK.value,   label: 'Sat'  },
+  { key: 'cell', ok: opCellOK.value,  label: 'Cell' },
+])
+const opChannelCount = computed(() => opChannels.value.filter(c => c.ok).length)
+const opChannelTotal = computed(() => opChannels.value.length)
+const opChannelBreakdown = computed(() =>
+  opChannels.value.map(c => `${c.label} ${c.ok ? '✓' : '✗'}`).join(' · '))
 
 const opStatus = computed(() => {
   if (sosActive.value) {
@@ -712,11 +722,12 @@ const opStatus = computed(() => {
       ring: 'border-red-500 bg-red-950/40', tint: 'text-red-300' }
   }
   if (opChannelCount.value >= 2) {
-    return { text: 'OPERATIONAL', detail: `${opChannelCount.value} channels active`,
+    return { text: 'OPERATIONAL', detail: opChannelBreakdown.value,
       ring: 'border-emerald-500/70 bg-emerald-950/30', tint: 'text-emerald-300' }
   }
   if (opChannelCount.value === 1) {
-    return { text: 'DEGRADED', detail: 'Single channel — primary lost',
+    const only = opChannels.value.find(c => c.ok)
+    return { text: 'DEGRADED', detail: `Only ${only?.label || '?'} up — ${opChannelBreakdown.value}`,
       ring: 'border-amber-500/70 bg-amber-950/30', tint: 'text-amber-300' }
   }
   return { text: 'NO CONNECTIVITY', detail: 'No active comms channel',
@@ -737,6 +748,9 @@ const opNextPass = computed(() => {
 
 const opPrimaryChannel = computed(() => {
   if (opMeshOK.value) return { name: 'Mesh', bars: null, detail: 'LoRa 868 MHz', tint: 'text-tactical-lora' }
+  if (opAprsOK.value) return { name: 'APRS', bars: null,
+    detail: `${store.aprsStatus?.frequency_mhz || 144.8} MHz · ${store.aprsStatus?.callsign || ''}`,
+    tint: 'text-amber-400' }
   if (opSatOK.value)  return { name: 'Satellite', bars: store.iridiumSignal?.bars ?? 0, detail: 'Iridium', tint: 'text-tactical-iridium' }
   if (opCellOK.value) return { name: 'Cellular', bars: store.cellularSignal?.bars ?? 0, detail: store.cellularStatus?.operator || 'LTE', tint: 'text-sky-400' }
   return { name: 'None', bars: null, detail: 'All channels down', tint: 'text-red-400' }
@@ -1331,7 +1345,7 @@ function widgetGridClass(id) {
               :style="{ height: `${6 + i * 4}px` }" />
           </div>
           <div class="text-xs text-gray-500 mt-1">{{ opPrimaryChannel.detail }}</div>
-          <div class="text-[10px] text-gray-500 mt-1">{{ opChannelCount }} of 3 channels up</div>
+          <div class="text-[10px] text-gray-500 mt-1">{{ opChannelCount }} of {{ opChannelTotal }} channels up</div>
         </router-link>
 
         <!-- Peer count + latest contact -->
