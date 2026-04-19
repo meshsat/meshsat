@@ -32,7 +32,7 @@
 set -euo pipefail
 
 # ─── config ─────────────────────────────────────────────────────
-BRIDGE_URL="${BRIDGE_URL:-http://localhost:6050/?shell=kiosk}"
+BRIDGE_URL="${BRIDGE_URL:-http://localhost:6050/?kiosk=1&shell=operator}"
 KIOSK_USER="${KIOSK_USER:-kiosk}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DEPLOY_DIR="$REPO_DIR/deploy/kiosk"
@@ -130,7 +130,7 @@ echo "[7/7] Installing Chromium managed-policy file…"
 install -D -m 0644 \
   "$DEPLOY_DIR/meshsat-kiosk.json" \
   /etc/chromium/policies/managed/meshsat-kiosk.json
-if [ "$BRIDGE_URL" != "http://localhost:6050/?shell=kiosk" ]; then
+if [ "$BRIDGE_URL" != "http://localhost:6050/?kiosk=1&shell=operator" ]; then
   tmp=$(mktemp)
   jq --arg u "$BRIDGE_URL" \
     '.HomepageLocation=$u | .RestoreOnStartupURLs=[$u]' \

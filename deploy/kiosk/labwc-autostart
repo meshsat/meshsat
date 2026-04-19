@@ -31,6 +31,13 @@ done
 
 # 3. Chromium kiosk — policy lockdown in
 #    /etc/chromium/policies/managed/meshsat-kiosk.json.
+#    --force-device-scale-factor=1.5 scales CSS pixels to make the
+#    UI readable on the 7" DSI panel (1280×720 native → 853×480
+#    logical).  --enable-use-zoom-for-dsf=true is required alongside
+#    it so Chromium implements the scale via CSS zoom rather than
+#    direct viewport scaling — otherwise touch coordinates stay
+#    unscaled and every tap lands in the wrong spot. Verified live
+#    on tesseract 2026-04-19. [MESHSAT-549/578]
 chromium-browser \
   --kiosk \
   --noerrdialogs \
@@ -40,4 +47,6 @@ chromium-browser \
   --no-default-browser-check \
   --start-fullscreen \
   --touch-events=enabled \
+  --force-device-scale-factor=1.5 \
+  --enable-use-zoom-for-dsf=true \
   --app=__BRIDGE_URL__ &

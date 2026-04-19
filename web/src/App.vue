@@ -115,13 +115,13 @@ onUnmounted(() => {
 
           <!-- Shell mode toggle: Operator (field kit) vs Engineer (admin) [MESHSAT-549] -->
           <button type="button" @click="store.toggleShellMode()"
-            class="flex items-center h-6 rounded border border-tactical-border bg-tactical-surface overflow-hidden"
+            class="op-eng-toggle flex items-center h-8 rounded border border-tactical-border bg-tactical-surface overflow-hidden"
             :title="store.isOperator ? 'Switch to Engineer Mode' : 'Switch to Operator Mode'">
-            <span class="px-2 py-0.5 text-[9px] font-medium tracking-wide transition-colors"
+            <span class="px-3 py-1 text-xs font-medium tracking-wide transition-colors"
               :class="store.isOperator ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'text-gray-500'">
               OP
             </span>
-            <span class="px-2 py-0.5 text-[9px] font-medium tracking-wide transition-colors"
+            <span class="px-3 py-1 text-xs font-medium tracking-wide transition-colors"
               :class="store.isEngineer ? 'bg-tactical-iridium/20 text-tactical-iridium' : 'text-gray-500'">
               ENG
             </span>

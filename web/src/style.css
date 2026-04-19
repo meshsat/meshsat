@@ -57,6 +57,19 @@ html.shell-kiosk ::-webkit-scrollbar-corner {
   * { scrollbar-width: none !important; -ms-overflow-style: none !important; }
 }
 
+/* OP/ENG toggle — touchscreen-first sizing. Browser gets h-8 /
+   text-xs from the template; kiosk steps up to a 40px tap target
+   with larger glyphs so operators can hit it cleanly on the 7"
+   DSI panel under --force-device-scale-factor=1.5. [MESHSAT-549] */
+html.shell-kiosk .op-eng-toggle {
+  height: 2.5rem;
+}
+html.shell-kiosk .op-eng-toggle > span {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
 /* Custom scrollbar for activity log and panels */
 .tactical-scroll::-webkit-scrollbar {
   width: 4px;

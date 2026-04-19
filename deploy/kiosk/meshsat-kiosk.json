@@ -22,10 +22,10 @@
   "URLBlocklist": [
     "*"
   ],
-  "HomepageLocation": "http://localhost:6050/?shell=kiosk",
+  "HomepageLocation": "http://localhost:6050/?kiosk=1&shell=operator",
   "HomepageIsNewTabPage": false,
   "RestoreOnStartup": 4,
   "RestoreOnStartupURLs": [
-    "http://localhost:6050/?shell=kiosk"
+    "http://localhost:6050/?kiosk=1&shell=operator"
   ]
 }
