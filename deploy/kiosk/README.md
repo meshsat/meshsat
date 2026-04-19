@@ -1,160 +1,145 @@
-# MeshSat Kiosk — Pi 5 + touchscreen provisioning
+# MeshSat Kiosk — Pi 5 + Raspberry Pi Touch Display 2
 
 One-shot kiosk setup that boots a Pi 5 straight into the bridge UI
-fullscreen. Works with:
+fullscreen, in landscape, with touch input aligned to the rotation.
 
-- Any HDMI monitor / touchscreen (no extra config).
-- **Raspberry Pi Touch Display 2** (SC1635 — DSI, 720×1280 native
-  portrait, capacitive multitouch). One line in
-  `/boot/firmware/config.txt` to enable the DSI driver; the kiosk
-  launcher auto-rotates to landscape via a Wayland output transform.
-  See **Raspberry Pi Touch Display 2** below.
-- The original 7" Pi Touch Display (SC0175 — 800×480). No config
-  changes on current Ubuntu 24.04 images; `KIOSK_ROTATE=normal` to
-  keep native landscape.
+Tested against:
 
-## What it gives you
+- **Raspberry Pi Touch Display 2** (SC1635, 720×1280 DSI portrait —
+  rotated to 1280×720 landscape by the kiosk launcher). Goodix
+  capacitive multitouch.
+- Any HDMI monitor / touchscreen (no config changes beyond the
+  installer — skip the DSI overlay bits).
+
+## What gets installed
+
+All stock Ubuntu 24.04 (`noble`) packages — zero third-party repos.
 
 | Component | Package | Role |
 |---|---|---|
-| `cage` | Ubuntu main | Minimal Wayland compositor — one app, fullscreen, no desktop. |
-| `chromium-browser` | Ubuntu main | The kiosk shell. Launched in `--kiosk --app=…` mode. |
-| `swayidle` | Ubuntu main | Idle detector. Calls `/api/system/backlight` at 2 min (dim) / 5 min (off); full brightness on any input. |
-
-> **Physical wiring note for the bundled 2-wire power lead.** The
-> Touch Display 2 ships with a tiny GPIO cable that clips onto a
-> 5V + GND pair. On the field kits **pin 2 is already occupied by
-> the satellite modem V_IN+**, so clip the lead onto **pin 4 (5V)
-> + pin 14 (GND)** instead. Pin 4 is the same 5V rail internally
-> — no electrical change — just routing round the modem's
-> connector.
-| Autologin on tty1 | stock `getty@tty1` drop-in | Pi boots to the `kiosk` user with no password prompt. |
-| Chromium managed policy | `/etc/chromium/policies/managed/meshsat-kiosk.json` | URL allowlist locked to `localhost`; devtools, password manager, autofill, history, printing all off. Operator can't break out of the app. |
-
-Zero third-party repos. All stock Ubuntu 24.04 packages.
+| Wayland compositor | `labwc` (0.7+) | One fullscreen app, no desktop; implements `wlr_output_management_v1` so rotation works. |
+| Kiosk shell | `chromium-browser` | `--kiosk --app=<bridge URL>` mode. |
+| Output rotation | `wlr-randr` | Called from `~/.config/labwc/autostart` to rotate DSI-2 90° CW. |
+| Touch rotation | `/etc/udev/rules.d/99-touch-rotate.rules` | Sets `LIBINPUT_CALIBRATION_MATRIX` on the Goodix touchscreen so input coords track the display rotation. |
+| Idle backlight dim | `swayidle` | 2 min → 20%, 5 min → off, any input → full; posts to the bridge's `/api/system/backlight` REST endpoint. |
+| Autologin | stock `getty@tty1.service` drop-in | Pi boots straight into the `kiosk` user on the console. |
+| Chromium lockdown | `/etc/chromium/policies/managed/meshsat-kiosk.json` | URL allowlist = localhost only; devtools, password manager, history, autofill, printing all disabled. |
 
 ## Install
 
 ```bash
-cd /srv/meshsat   # wherever you've cloned the repo on the Pi
 sudo bash scripts/install-kiosk.sh
-sudo reboot
+sudo poweroff
+# pull + restore power
 ```
 
-After reboot the Pi auto-logs in as `kiosk` on tty1 and launches
-Chromium fullscreen at `http://localhost:6050/?shell=kiosk`. The
-`?shell=kiosk` query forces **Operator Mode** on first load
-(persisted to localStorage, so subsequent loads keep it).
+> **Do a cold boot, not `sudo reboot`.** Warm reboots can leave the
+> DSI bridge chip on the Touch Display 2 in a deferred-probe loop
+> where the panel driver never re-binds. A full power cycle resets
+> the bridge chip cleanly.
 
-SSH keeps working. Other TTYs (Ctrl+Alt+F2…F6) still give a normal
-login shell — only tty1 is the kiosk.
+On cold boot the Pi auto-logs in as `kiosk` on tty1 → labwc starts →
+`autostart` rotates DSI-2 to 90° and launches Chromium fullscreen at
+`http://localhost:6050/?shell=kiosk`. The `?shell=kiosk` query forces
+Operator Mode on first load.
+
+SSH + tty2…tty6 still give a normal login shell; only tty1 is the
+kiosk.
 
 ## Point at a different bridge
-
-Default is `http://localhost:6050/?shell=kiosk`. Override with
-`BRIDGE_URL`:
 
 ```bash
 sudo BRIDGE_URL=http://192.168.1.42:6050/?shell=kiosk \
   bash scripts/install-kiosk.sh
 ```
 
-Re-running the installer is safe (idempotent) — the autologin
-drop-in, launcher, and policy file all get rewritten.
+Re-running the installer is safe — the autologin drop-in, launcher,
+labwc config, udev rule, and Chromium policy all rewrite cleanly.
 
-## Raspberry Pi Touch Display 2 (720×1280, new DSI panel)
+## DSI panel enablement
 
-The Touch Display 2 (SC1635, product code KW-3379) is the 2024
-panel with **720×1280 native portrait** resolution — it's NOT the
-original 800×480 7" display.
-
-### 1. Enable the DSI panel at boot
-
-Append to `/boot/firmware/config.txt` under `[all]`:
+The Pi Touch Display 2 needs two lines in `/boot/firmware/config.txt`
+under `[all]` (both kits already have these):
 
 ```
 dtoverlay=vc4-kms-v3d
 dtoverlay=vc4-kms-dsi-generic
 ```
 
-On recent Ubuntu 24.04 raspi kernels (6.8+) the panel is often
-auto-detected and the second line may not be strictly necessary.
-If the screen stays dark, re-check:
+Also required: `display_auto_detect=1` (already default).
 
-```
-dmesg | grep -iE 'dsi|drm|panel'
-```
+The legacy `dtoverlay=vc4-kms-dsi-7inch` + `display_lcd_rotate=2`
+from the original 800×480 Touch Display do **not** belong here; the
+v4 GPIO revision removes them.
 
-A working boot emits a `[drm] Panel attached` line for DSI-1.
+## Touch calibration matrix
 
-### 2. Landscape rotation
+The udev rule in `99-touch-rotate.rules` sets
+`LIBINPUT_CALIBRATION_MATRIX=0 -1 1 1 0 0`. That's 90° CCW on the
+libinput side, which compensates for labwc's 90° CW output rotation
+so finger-to-pixel mapping is consistent.
 
-The panel's EDID reports portrait. The kiosk launcher exports
-`WLR_OUTPUT_TRANSFORM=90` by default so cage rotates 90° clockwise
-to landscape (1280 wide × 720 tall). If you want portrait instead
-(some dashboards prefer it), override before install:
+Swap to `0 1 0 -1 0 1` if you mount the panel the other way up (the
+matrix is mechanical, not logical). The four rotations:
 
-```
-sudo KIOSK_ROTATE=normal bash scripts/install-kiosk.sh
-```
+| Rotation | Matrix |
+|---|---|
+| Identity (no rotate) | `1 0 0 0 1 0` |
+| 90° CW | `0 1 0 -1 0 1` |
+| 180° | `-1 0 1 0 -1 1` |
+| 90° CCW | `0 -1 1 1 0 0` ← installed default |
 
-Valid values: `normal` · `90` · `180` · `270`.
+After editing the rule, reload with:
 
-### 3. Touch calibration
-
-Capacitive touch follows the rotation automatically under Wayland
-(libinput handles the transform from the compositor). No separate
-calibration step on Ubuntu 24.04 — that was only an X11 problem.
-
-### Original 7" Touch Display (SC0175, 800×480)
-
-No dtoverlay needed on Ubuntu 24.04. Install with
-`KIOSK_ROTATE=normal` so the already-landscape panel isn't rotated
-unnecessarily:
-
-```
-sudo KIOSK_ROTATE=normal bash scripts/install-kiosk.sh
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=input
+sudo pkill -9 -f labwc            # session respawns via getty@tty1
 ```
 
 ## Backlight control
 
-`swayidle` talks to `meshsat` via REST:
+`swayidle` calls the bridge's REST endpoint — no suid or sudoers
+entry on the kiosk user is needed:
 
 ```
 POST /api/system/backlight  { "value": 0–255 }
 ```
 
-See `internal/api/system.go` (MESHSAT-556). The endpoint walks
-`/sys/class/backlight/*`, picks the first device with a readable
-`max_brightness`, and maps `value` onto that device's range. No
-suid or sudoers entry needed — the bridge owns the sysfs write.
+The handler walks `/sys/class/backlight/*`, picks the first device
+with a readable `max_brightness`, and scales the 0–255 input onto
+that device's range. On Touch Display 2 the sysfs device is
+`11-0045` (Goodix controller, DSI channel 11) with
+`max_brightness=31`, so `value=255` → 31 (full), `value=0` → 0 (off).
 
 ## Uninstall
 
 ```bash
 sudo bash scripts/uninstall-kiosk.sh
-sudo reboot
+sudo poweroff
 ```
 
-Restores the stock getty, removes the Chromium policy, strips the
-kiosk user's `.bash_profile` hook. Packages stay installed (safer
-— removing Chromium breaks anything else that pulls it in).
+Reverts the autologin, Chromium policy, udev rule, labwc config,
+and the kiosk user's `.bash_profile` hook. Packages stay installed
+(safer — removing Chromium breaks anything else that pulls it in).
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
+| Symptom | Fix |
 |---|---|
-| Pi boots to a normal login, no Chromium | Autologin drop-in missing. Check `systemctl cat getty@tty1` — should show the `--autologin kiosk` override. |
-| Chromium starts but the page is blank | Bridge container isn't up. `docker ps` from tty2 / SSH. |
-| Screen never dims | `swayidle` not running. Check `pgrep -fa swayidle` from SSH; the launcher starts it in the background at login. |
-| Can't break out of the kiosk | That's the point. SSH in and run the uninstaller, or Ctrl+Alt+F2 for a shell. |
-| URL allowlist blocks a legitimate site | Intentional — the policy locks Chromium to `localhost`. Edit `/etc/chromium/policies/managed/meshsat-kiosk.json` to widen it. |
+| Screen stays dark after cold boot | Check `dmesg \| grep -i dsi` — should emit `rp1dsi_host_attach: Attach DSI device name=dsi-7inch channel=0 lanes=2` and `[drm] Panel attached`. If not, reseat the DSI FPC ribbon and cold-boot again. |
+| Display up but upside-down or sideways | Edit `wlr-randr --output DSI-2 --transform 90` in `~/.config/labwc/autostart` (try 0 / 90 / 180 / 270). |
+| Touch off by 90° | Swap the matrix in `/etc/udev/rules.d/99-touch-rotate.rules` per the table above; reload + restart tty1. |
+| Touch off diagonally / mirrored | Try `flipped-90` style matrices; bracket with the 4 mirrored variants: `0 1 0 1 0 0`, `0 -1 1 -1 0 1`, `-1 0 1 0 1 0`, `1 0 0 0 -1 1`. |
+| Chromium opens but shows "site can't be reached" | The bridge container wasn't ready when Chromium first loaded. `sudo pkill -9 -f chromium` — labwc respawns it; or wait ~30 s for the container healthcheck to flip green and reload. |
+| Chromium crashed with apport core | labwc respawns on exit; if persistent, check `/home/kiosk/snap/chromium/common/chromium/Crash Reports`. |
+| Touch stopped responding | Cold-boot. Warm reboots can wedge the Goodix controller along with the DSI bridge. |
 
-## Related YouTrack issues
+## Related YouTrack
 
-- MESHSAT-577 — Pi Touch Display 2 dtoverlay (see **DSI panel** above)
-- MESHSAT-578 — dedicated kiosk user + autologin + Wayland session (this installer)
+- MESHSAT-577 — DSI panel provisioning (this README's hardware notes)
+- MESHSAT-578 — kiosk user + autologin + Wayland session (this installer)
 - MESHSAT-579 — systemd unit + Chromium policy lockdown (this installer)
 - MESHSAT-580 — backlight dim via swayidle (this installer)
-- MESHSAT-556 — the `/api/system/backlight` REST endpoint this depends on (Done)
-- MESHSAT-549 — `?shell=kiosk` URL param → Operator Mode (Done)
+- MESHSAT-556 — `/api/system/backlight` REST endpoint (Done)
+- MESHSAT-549 — `?shell=kiosk` → Operator Mode (Done)

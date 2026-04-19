@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!--
+  labwc kiosk config. Minimal — just tells the compositor not to
+  render gaps or focus outlines around the single fullscreen
+  Chromium client. Touch rotation is handled by the udev rule
+  (see 99-touch-rotate.rules) rather than labwc's
+  <calibrationMatrix>, which didn't take effect on 0.7.1.
+  Output rotation is handled by the autostart wlr-randr call.
+-->
+<labwc_config>
+  <core>
+    <gap>0</gap>
+    <cycleViewOutlines>no</cycleViewOutlines>
+  </core>
+</labwc_config>

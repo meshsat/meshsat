@@ -1,0 +1,15 @@
+# Rotate the touchscreen 90° CCW so touch coordinates match the
+# display output rotated to landscape (Raspberry Pi Touch Display 2,
+# native 720×1280 portrait → 1280×720 landscape via labwc).
+# [MESHSAT-577 / kiosk touch alignment, verified on tesseract 2026-04-19]
+#
+# LIBINPUT_CALIBRATION_MATRIX applies at the libinput layer before any
+# compositor-level transform — more reliable than labwc's rc.xml
+# <calibrationMatrix> which didn't take effect on labwc 0.7.1.
+#
+# Matrix `0 -1 1 1 0 0` represents the 2×3 affine:
+#     [ 0 -1  1 ]     x' = -y + 1
+#     [ 1  0  0 ]     y' = x
+# i.e. 90° CCW in normalised coordinates. Swap to `0 1 0 -1 0 1`
+# if the panel is rotated the other direction.
+ACTION=="add|change", KERNEL=="event[0-9]*", ENV{ID_INPUT_TOUCHSCREEN}=="1", ENV{LIBINPUT_CALIBRATION_MATRIX}="0 -1 1 1 0 0"

@@ -1,0 +1,29 @@
+# labwc autostart — runs once labwc is ready.
+# [MESHSAT-578 / kiosk session]
+#
+# Output rotation via wlr-randr (labwc has no rc.xml rotate
+# element; wlr-randr applies the transform through the
+# wlr_output_management_v1 protocol labwc implements).
+#
+# Template variables substituted by scripts/install-kiosk.sh:
+#   __BRIDGE_URL__  → the kiosk URL
+
+# Rotate DSI-2 to landscape (90° CW).
+wlr-randr --output DSI-2 --transform 90 &
+
+# Give the compositor a beat to settle output config before the
+# browser opens — otherwise Chromium sometimes launches at the
+# old output geometry and renders a letterboxed window.
+sleep 1
+
+# Chromium kiosk — policy lockdown (URL allowlist, devtools off)
+# lives in /etc/chromium/policies/managed/meshsat-kiosk.json.
+chromium-browser \
+  --kiosk \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-translate \
+  --no-first-run \
+  --no-default-browser-check \
+  --start-fullscreen \
+  --app=__BRIDGE_URL__ &

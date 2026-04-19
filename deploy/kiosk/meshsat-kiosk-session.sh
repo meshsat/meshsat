@@ -1,77 +1,45 @@
 #!/usr/bin/env bash
 # meshsat-kiosk-session.sh — launched from the kiosk user's
-# .bash_profile on tty1 login. Wraps `cage` + `chromium-browser`
-# so the kiosk comes up, plus `swayidle` to dim the backlight
-# when the operator walks away. [MESHSAT-578 / MESHSAT-580]
+# .bash_profile on tty1 login. Starts swayidle for backlight-on-idle
+# and exec's labwc, which autostarts Chromium via
+# ~/.config/labwc/autostart. [MESHSAT-578 / MESHSAT-580]
 #
-# Variables the installer writes into this file at provision time:
-#   BRIDGE_URL  — the URL to open (default: http://localhost:6050/?shell=kiosk)
-# Everything else is hardcoded so an operator pulling up tty2 to
-# troubleshoot isn't fighting env-var drift.
+# Output rotation + touch rotation are handled elsewhere:
+#   • Output: wlr-randr invocation in ~/.config/labwc/autostart
+#   • Touch:  /etc/udev/rules.d/99-touch-rotate.rules (libinput layer)
+#
+# We use labwc (0.7+) rather than cage (0.1.5 in Noble) because
+# cage pre-dates the wlr_output_management_v1 protocol and can't
+# rotate outputs via wlr-randr. Labwc implements the protocol +
+# ships a config file so output + touch rotation are declarative.
 
 set -u
 
-BRIDGE_URL="${BRIDGE_URL:-http://localhost:6050/?shell=kiosk}"
-
-# Display orientation. The Raspberry Pi Touch Display 2 (SC1635,
-# 720×1280) boots in NATIVE PORTRAIT; the dashboard UI is designed
-# for landscape, so default to rotating 90° clockwise. Operators on
-# an HDMI monitor or the original 7" Pi Touch Display (800×480) don't
-# want the rotate, so this is overridable: set KIOSK_ROTATE=normal /
-# 90 / 180 / 270 in the environment (or edit the installed copy of
-# this file under /home/kiosk/.local/bin/). [MESHSAT-577]
-KIOSK_ROTATE="${KIOSK_ROTATE:-90}"
-case "$KIOSK_ROTATE" in
-  0|normal) WLR_TRANSFORM=normal ;;
-  90)       WLR_TRANSFORM=90     ;;
-  180)      WLR_TRANSFORM=180    ;;
-  270)      WLR_TRANSFORM=270    ;;
-  *)        WLR_TRANSFORM=90     ;;
-esac
-export WLR_OUTPUT_TRANSFORM="$WLR_TRANSFORM"
-
-# Only auto-start on tty1 — any other tty (SSH, serial console) gets
-# a normal shell so operators can still log in, debug, or recover.
+# Only auto-start on tty1. SSH + tty2/3/4 get a normal shell so
+# operators can debug or recover the kit in the field.
 if [ "$(tty)" != "/dev/tty1" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# Don't re-enter if we're already inside a Wayland session (handles
-# the case where the operator runs `exec bash` or similar).
+# Don't re-enter if we're already in a Wayland session (handles
+# `exec bash` and similar edge cases).
 if [ -n "${WAYLAND_DISPLAY:-}" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# Backlight dim on idle. Uses meshsat's own REST endpoint
-# (MESHSAT-556) so we don't need a suid on /sys/class/backlight.
-# Thresholds: 2 min → dim to 50 (≈20%), 5 min → off, any input →
-# full brightness.
-dim_url() { curl -s -X POST "http://localhost:6050/api/system/backlight" \
-  -H "Content-Type: application/json" -d "{\"value\":$1}" >/dev/null 2>&1; }
-
+# Backlight dim on idle via swayidle → /api/system/backlight
+# (MESHSAT-556). Thresholds: 2 min → ~20%, 5 min → off, any input
+# → full brightness. The sysfs writes live inside the meshsat
+# container; we POST through the REST endpoint so no suid / sudoers
+# bridge is needed on the kiosk user.
 (swayidle -w \
-  timeout 120 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":50}" >/dev/null 2>&1' \
-  timeout 300 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":0}"  >/dev/null 2>&1' \
+  timeout 120 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":50}"  >/dev/null 2>&1' \
+  timeout 300 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":0}"   >/dev/null 2>&1' \
   resume 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":255}" >/dev/null 2>&1' \
   &) 2>/dev/null
 
-# Cage is a one-shot Wayland compositor: launches a single app
-# fullscreen with no desktop / panel / taskbar. Chromium runs in
-# --kiosk mode — no address bar, no nav chrome, F11-fullscreen
-# forced. --app=<URL> keeps the window locked to that URL (no tab
-# handling either).
-#
-# -s keeps cage running if Chromium crashes (auto-relaunch via
-# systemd would be nicer but cage handles it inline for the MVP).
-# Chromium itself carries a --force-device-scale-factor flag that
-# may help on the 720×1280 Touch Display 2 — omitted by default so
-# the browser picks the DPI cage reports from the panel EDID.
-exec cage -s -- chromium-browser \
-  --kiosk \
-  --noerrdialogs \
-  --disable-infobars \
-  --disable-translate \
-  --no-first-run \
-  --no-default-browser-check \
-  --start-fullscreen \
-  --app="$BRIDGE_URL"
+# labwc reads ~/.config/labwc/rc.xml + autostart; autostart launches
+# wlr-randr and chromium. If labwc crashes the shell returns and
+# agetty re-triggers autologin on tty1 (via `systemctl restart
+# getty@tty1.service` from SSH if needed).
+exec labwc

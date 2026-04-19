@@ -20,6 +20,15 @@ rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null || true
 echo "Removing Chromium managed policy…"
 rm -f /etc/chromium/policies/managed/meshsat-kiosk.json
 
+echo "Removing touch-rotation udev rule…"
+rm -f /etc/udev/rules.d/99-touch-rotate.rules
+udevadm control --reload-rules 2>/dev/null || true
+
+echo "Removing labwc kiosk config…"
+if id "$KIOSK_USER" >/dev/null 2>&1; then
+  rm -rf "/home/$KIOSK_USER/.config/labwc"
+fi
+
 if id "$KIOSK_USER" >/dev/null 2>&1; then
   echo "Stripping .bash_profile hook for $KIOSK_USER…"
   PROFILE="/home/$KIOSK_USER/.bash_profile"
@@ -33,6 +42,6 @@ systemctl daemon-reload
 
 echo
 echo "Kiosk deprovisioned. Reboot to return the Pi to a normal login."
-echo "Packages (cage / chromium-browser / swayidle) were NOT removed;"
-echo "uninstall them manually if you're sure they're not needed:"
-echo "    sudo apt-get remove cage chromium-browser swayidle"
+echo "Packages (labwc / chromium-browser / wlr-randr / swayidle) were"
+echo "NOT removed; uninstall manually if you're sure they're not needed:"
+echo "    sudo apt-get remove labwc chromium-browser wlr-randr swayidle"
