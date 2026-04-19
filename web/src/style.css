@@ -10,23 +10,45 @@ body {
 }
 
 /* Hide the mouse cursor AND scrollbars on kiosk browsers. Driven
-   by the `shell-kiosk` class set on <html> by main.js when the
-   URL carries `?shell=kiosk` (or the UA looks like a kiosk shell).
+   by the `shell-kiosk` class set on <html> by main.js when the URL
+   carries `?shell=kiosk` (or the UA looks like a kiosk shell).
    We don't rely on `@media (pointer: coarse)` because Chromium on
    Linux + Wayland + DSI touchscreen still reports `pointer: fine`.
    Desktop operators without the kiosk URL keep cursor + scrollbars.
 */
-html.shell-kiosk, html.shell-kiosk body, html.shell-kiosk * {
+html.shell-kiosk,
+html.shell-kiosk body,
+html.shell-kiosk * {
   cursor: none !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
-html.shell-kiosk *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
-html.shell-kiosk * { scrollbar-width: none !important; -ms-overflow-style: none !important; }
+
+/* WebKit / Blink — hide every scrollbar track/thumb variant on
+   every scrollable element. Includes the root html / body
+   scrollbars that a `*` selector misses because pseudo-elements
+   don't cascade through the universal selector on older blink
+   builds. */
+html.shell-kiosk::-webkit-scrollbar,
+html.shell-kiosk body::-webkit-scrollbar,
+html.shell-kiosk *::-webkit-scrollbar,
+html.shell-kiosk ::-webkit-scrollbar,
+html.shell-kiosk ::-webkit-scrollbar-track,
+html.shell-kiosk ::-webkit-scrollbar-thumb,
+html.shell-kiosk ::-webkit-scrollbar-corner {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
 
 /* Touch-primary devices (phones, tablets on the wider web) also
-   benefit from scrollbar-hide — only the cursor stays visible if
-   the UA exposes one. */
+   benefit from scrollbar-hide. */
 @media (pointer: coarse) {
-  *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+  *::-webkit-scrollbar,
+  ::-webkit-scrollbar,
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-thumb { display: none !important; width: 0 !important; height: 0 !important; }
   * { scrollbar-width: none !important; -ms-overflow-style: none !important; }
 }
 

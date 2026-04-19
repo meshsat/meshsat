@@ -1,23 +1,36 @@
 # labwc autostart — runs once labwc is ready.
 # [MESHSAT-578 / kiosk session]
 #
-# Output rotation via wlr-randr (labwc has no rc.xml rotate
-# element; wlr-randr applies the transform through the
-# wlr_output_management_v1 protocol labwc implements).
-#
 # Template variables substituted by scripts/install-kiosk.sh:
 #   __BRIDGE_URL__  → the kiosk URL
+#
+# Output rotation via wlr-randr (labwc rc.xml 0.7 has no rotate
+# element; wlr-randr uses wlr_output_management_v1 which labwc
+# implements).
 
-# Rotate DSI-2 to landscape (90° CW).
+# 1. Output rotation — DSI-2 90° CW (native portrait → landscape).
 wlr-randr --output DSI-2 --transform 90 &
 
-# Give the compositor a beat to settle output config before the
-# browser opens — otherwise Chromium sometimes launches at the
-# old output geometry and renders a letterboxed window.
-sleep 1
+# 2. Wait for the bridge container to be healthy before launching
+#    Chromium. Otherwise the browser boots faster than docker and
+#    shows "site can't be reached" until the next manual reload.
+#    Poll the bridge's /health endpoint every second; bail out after
+#    5 minutes with a soft launch (Chromium will just retry) so the
+#    screen isn't black forever in a genuinely broken deploy.
+BRIDGE_HEALTH_URL="http://localhost:6050/health"
+BRIDGE_WAIT_MAX=300   # 5 minutes
 
-# Chromium kiosk — policy lockdown (URL allowlist, devtools off)
-# lives in /etc/chromium/policies/managed/meshsat-kiosk.json.
+i=0
+while [ "$i" -lt "$BRIDGE_WAIT_MAX" ]; do
+  if curl -fsS --max-time 2 "$BRIDGE_HEALTH_URL" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+
+# 3. Chromium kiosk — policy lockdown in
+#    /etc/chromium/policies/managed/meshsat-kiosk.json.
 chromium-browser \
   --kiosk \
   --noerrdialogs \
