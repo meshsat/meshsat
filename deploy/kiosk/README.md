@@ -4,10 +4,14 @@ One-shot kiosk setup that boots a Pi 5 straight into the bridge UI
 fullscreen. Works with:
 
 - Any HDMI monitor / touchscreen (no extra config).
-- Official Raspberry Pi Touch Display 2 (DSI, 1280×720). One extra
-  line in `/boot/firmware/config.txt`, see **DSI panel** below.
-- The original 7" Pi Touch Display (800×480). No config changes
-  needed on current Ubuntu 24.04 images.
+- **Raspberry Pi Touch Display 2** (SC1635 — DSI, 720×1280 native
+  portrait, capacitive multitouch). One line in
+  `/boot/firmware/config.txt` to enable the DSI driver; the kiosk
+  launcher auto-rotates to landscape via a Wayland output transform.
+  See **Raspberry Pi Touch Display 2** below.
+- The original 7" Pi Touch Display (SC0175 — 800×480). No config
+  changes on current Ubuntu 24.04 images; `KIOSK_ROTATE=normal` to
+  keep native landscape.
 
 ## What it gives you
 
@@ -50,16 +54,59 @@ sudo BRIDGE_URL=http://192.168.1.42:6050/?shell=kiosk \
 Re-running the installer is safe (idempotent) — the autologin
 drop-in, launcher, and policy file all get rewritten.
 
-## DSI panel (Pi Touch Display 2)
+## Raspberry Pi Touch Display 2 (720×1280, new DSI panel)
 
-Add this one line to `/boot/firmware/config.txt` under `[all]`:
+The Touch Display 2 (SC1635, product code KW-3379) is the 2024
+panel with **720×1280 native portrait** resolution — it's NOT the
+original 800×480 7" display.
+
+### 1. Enable the DSI panel at boot
+
+Append to `/boot/firmware/config.txt` under `[all]`:
 
 ```
-dtoverlay=vc4-kms-dsi-7inch
+dtoverlay=vc4-kms-v3d
+dtoverlay=vc4-kms-dsi-generic
 ```
 
-Then `sudo reboot`. The original 800×480 7" panel auto-detects and
-needs no overlay.
+On recent Ubuntu 24.04 raspi kernels (6.8+) the panel is often
+auto-detected and the second line may not be strictly necessary.
+If the screen stays dark, re-check:
+
+```
+dmesg | grep -iE 'dsi|drm|panel'
+```
+
+A working boot emits a `[drm] Panel attached` line for DSI-1.
+
+### 2. Landscape rotation
+
+The panel's EDID reports portrait. The kiosk launcher exports
+`WLR_OUTPUT_TRANSFORM=90` by default so cage rotates 90° clockwise
+to landscape (1280 wide × 720 tall). If you want portrait instead
+(some dashboards prefer it), override before install:
+
+```
+sudo KIOSK_ROTATE=normal bash scripts/install-kiosk.sh
+```
+
+Valid values: `normal` · `90` · `180` · `270`.
+
+### 3. Touch calibration
+
+Capacitive touch follows the rotation automatically under Wayland
+(libinput handles the transform from the compositor). No separate
+calibration step on Ubuntu 24.04 — that was only an X11 problem.
+
+### Original 7" Touch Display (SC0175, 800×480)
+
+No dtoverlay needed on Ubuntu 24.04. Install with
+`KIOSK_ROTATE=normal` so the already-landscape panel isn't rotated
+unnecessarily:
+
+```
+sudo KIOSK_ROTATE=normal bash scripts/install-kiosk.sh
+```
 
 ## Backlight control
 

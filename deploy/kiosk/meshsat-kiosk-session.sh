@@ -13,6 +13,23 @@ set -u
 
 BRIDGE_URL="${BRIDGE_URL:-http://localhost:6050/?shell=kiosk}"
 
+# Display orientation. The Raspberry Pi Touch Display 2 (SC1635,
+# 720×1280) boots in NATIVE PORTRAIT; the dashboard UI is designed
+# for landscape, so default to rotating 90° clockwise. Operators on
+# an HDMI monitor or the original 7" Pi Touch Display (800×480) don't
+# want the rotate, so this is overridable: set KIOSK_ROTATE=normal /
+# 90 / 180 / 270 in the environment (or edit the installed copy of
+# this file under /home/kiosk/.local/bin/). [MESHSAT-577]
+KIOSK_ROTATE="${KIOSK_ROTATE:-90}"
+case "$KIOSK_ROTATE" in
+  0|normal) WLR_TRANSFORM=normal ;;
+  90)       WLR_TRANSFORM=90     ;;
+  180)      WLR_TRANSFORM=180    ;;
+  270)      WLR_TRANSFORM=270    ;;
+  *)        WLR_TRANSFORM=90     ;;
+esac
+export WLR_OUTPUT_TRANSFORM="$WLR_TRANSFORM"
+
 # Only auto-start on tty1 — any other tty (SSH, serial console) gets
 # a normal shell so operators can still log in, debug, or recover.
 if [ "$(tty)" != "/dev/tty1" ]; then
@@ -46,6 +63,9 @@ dim_url() { curl -s -X POST "http://localhost:6050/api/system/backlight" \
 #
 # -s keeps cage running if Chromium crashes (auto-relaunch via
 # systemd would be nicer but cage handles it inline for the MVP).
+# Chromium itself carries a --force-device-scale-factor flag that
+# may help on the 720×1280 Touch Display 2 — omitted by default so
+# the browser picks the DPI cage reports from the panel EDID.
 exec cage -s -- chromium-browser \
   --kiosk \
   --noerrdialogs \

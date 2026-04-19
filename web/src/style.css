@@ -79,13 +79,20 @@ a:focus-visible {
 }
 
 /* ---------------------------------------------------------------
- * Pi Touch Display 2 (and similar 7" panels) compat.
- * Matches ~800×480 landscape: wider than Tailwind's md=768 breakpoint
- * but nowhere near desktop height. Without this rule the status
- * strip's `hidden md:inline` text labels all render and overflow.
- * [fix: Pi 7" compat]
+ * Small / short kiosk-class panels (HDMI 7" 800×480, Raspberry Pi
+ * Touch Display 2 at 1280×720 landscape + 720×1280 portrait, laptop
+ * browsers with devtools open, etc.).
+ *
+ * Fires when EITHER axis is small enough that the desktop treatment
+ * overflows — the status strip's `hidden md:inline` text labels
+ * render above the Tailwind md=768 breakpoint, which was eating all
+ * the horizontal room on a 1280-wide panel with a 720-tall viewport
+ * once the Chromium chrome + our header + the bottom-tab bar ate
+ * ~110 px of it. [fix: Pi Touch Display 2 compat]
  * ------------------------------------------------------------ */
-@media (max-width: 820px) and (max-height: 540px) {
+@media
+  (max-width: 820px),
+  (max-height: 780px) {
   /* Suppress md+ "verbose" affordances so the header fits one row. */
   .hidden.md\:inline,
   .hidden.md\:flex,
@@ -95,12 +102,30 @@ a:focus-visible {
   .hidden.lg\:block {
     display: none !important;
   }
-  /* Tight main-content padding — 480 px tall minus 48 px header +
-     56 px bottom bar leaves ~376 px for content; p-5 would halve
-     that. */
+  /* Tight main-content padding — gains back ~40 px of vertical
+     room for dashboard widgets on 720-tall viewports. */
   main > div { padding: 0.5rem !important; }
-  /* Status strip clock — drop to a compact HH:MM variant. */
+  /* Status-strip clock — compact font size so it doesn't force a
+     wrap on 800 px-wide. */
   header .tabular-nums { font-size: 9px; }
+}
+
+/* Pi Touch Display 2 in NATIVE PORTRAIT (720×1280) — the operator
+   should still see a usable layout if they haven't rotated the
+   display. Grids collapse to 1 column; the 5-item operator nav +
+   ⋮ overflow + bottom tab bar continue to work. */
+@media (orientation: portrait) and (max-width: 820px) {
+  .grid-cols-2,
+  .grid-cols-3,
+  .grid-cols-4,
+  .grid-cols-5 {
+    grid-template-columns: 1fr !important;
+  }
+  /* Any landscape-only two-column layout (list+detail panes in
+     People/Radios) stacks. */
+  .grid-cols-\[1fr_24rem\] {
+    grid-template-columns: 1fr !important;
+  }
 }
 
 /* Tab-strip fade-on-right indicator [MESHSAT-584]. Applied via the
