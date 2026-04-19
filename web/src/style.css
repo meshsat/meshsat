@@ -9,6 +9,14 @@ body {
   background-size: 24px 24px;
 }
 
+/* Hide the mouse cursor on touch-primary devices (kiosk tablets,
+   Raspberry Pi Touch Display 2). Desktop operators with a mouse
+   keep their cursor. `pointer: coarse` matches devices where the
+   primary pointing method is limited-precision — touch. */
+@media (pointer: coarse) {
+  html, body, * { cursor: none !important; }
+}
+
 /* Custom scrollbar for activity log and panels */
 .tactical-scroll::-webkit-scrollbar {
   width: 4px;
