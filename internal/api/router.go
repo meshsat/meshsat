@@ -558,6 +558,7 @@ func (s *Server) Router() http.Handler {
 		// System
 		r.Post("/system/restart", s.handleSystemRestart)
 		r.Post("/system/backlight", s.handleBacklight)
+		r.Get("/system/battery", s.handleGetBattery)
 
 		// Pair mode — touch-display arm + remote-device claim
 		// [MESHSAT-596]. Mounted under /api/v2/pair/ so the old

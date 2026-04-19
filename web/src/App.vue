@@ -62,6 +62,7 @@ onMounted(() => {
   store.fetchCellularSignal()
   store.fetchCellularStatus()
   store.fetchAPRSStatus()
+  store.fetchBattery()
   store.fetchLocationSources()
   // Fetch passes for next-pass countdown (use resolved location)
   store.fetchLocations().then(() => {
@@ -84,6 +85,7 @@ onMounted(() => {
     store.fetchCellularSignal()
     store.fetchCellularStatus()
     store.fetchAPRSStatus()
+    store.fetchBattery()
     store.fetchLocationSources()
   }, 10000)
 })

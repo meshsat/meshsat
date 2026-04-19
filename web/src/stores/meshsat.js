@@ -425,6 +425,15 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   const iridiumSignal = ref(null) // { bars: 0-5, assessment: string, timestamp: string }
   const satModem = ref(null) // { connected, port, imei, model, operator, firmware_ver }
+  const battery = ref(null) // { voltage, soc_percent, ac_present, last_update, stale } or null when no UPS
+  async function fetchBattery() {
+    try {
+      battery.value = await api.get('/system/battery')
+    } catch {
+      // 404 = no UPS connected (no /run/x1202.json mount) — keep null
+      battery.value = null
+    }
+  }
 
   async function fetchSatModem() {
     try {
@@ -1536,7 +1545,8 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     shellMode, isOperator, isEngineer, setShellMode, toggleShellMode,
     themeMode, isNVIS, setThemeMode, toggleNVIS, setBacklight,
     messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
-    iridiumSignal, satModem, signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
+    iridiumSignal, satModem, battery, fetchBattery,
+    signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
     locationSources, iridiumGeoHistory,
     cellularSignal, cellularStatus, cellularSignalHistory, cellularDataStatus, dyndnsStatus,
     smsMessages, cellBroadcasts, cellInfo,

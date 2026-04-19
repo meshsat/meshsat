@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Backlight control for the Pi Touch Display 2 (and any other
@@ -105,4 +106,50 @@ func firstBacklightDevice() (string, int, error) {
 func writeBrightness(device string, raw int) error {
 	path := filepath.Join("/sys/class/backlight", device, "brightness")
 	return os.WriteFile(path, []byte(strconv.Itoa(raw)), 0o644)
+}
+
+// ─── X1202 UPS battery status ─────────────────────────────────────
+//
+// The host-side x1202-monitor.py writes the latest voltage / SOC /
+// AC-present state to /run/x1202.json on each I²C poll (10s).  The
+// field kit compose file bind-mounts that file read-only into the
+// bridge container so this handler can serve it without any I²C
+// access from Go.  If the mount isn't present (non-field deploys,
+// no UPS) the handler returns 404 with a hint — the frontend tile
+// falls back to "UPS not connected". [MESHSAT-549]
+
+type batteryStatus struct {
+	Voltage    *float64 `json:"voltage"`
+	SOCPercent *float64 `json:"soc_percent"`
+	ACPresent  *bool    `json:"ac_present"`
+	LastUpdate float64  `json:"last_update"`
+	Stale      bool     `json:"stale"`
+}
+
+// @Summary Get X1202 UPS battery status
+// @Description Returns the latest voltage, state-of-charge, and AC-
+// @Description present flag written by the host-side x1202-monitor
+// @Description service (MAX17040 over I²C 0x36).  Field-kit only:
+// @Description requires /run/x1202.json to be bind-mounted into the
+// @Description container.
+// @Tags system
+// @Produce json
+// @Success 200 {object} batteryStatus
+// @Failure 404 {object} map[string]string
+// @Router /api/system/battery [get]
+func (s *Server) handleGetBattery(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile("/run/x1202.json")
+	if err != nil {
+		writeError(w, http.StatusNotFound, "UPS not connected (no /run/x1202.json)")
+		return
+	}
+	var bs batteryStatus
+	if err := json.Unmarshal(data, &bs); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse x1202.json: "+err.Error())
+		return
+	}
+	// Mark stale if last_update > 60s old (x1202-monitor polls every 10s).
+	now := float64(time.Now().Unix())
+	bs.Stale = bs.LastUpdate > 0 && (now-bs.LastUpdate) > 60
+	writeJSON(w, http.StatusOK, bs)
 }
