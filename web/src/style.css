@@ -70,6 +70,39 @@ html.shell-kiosk .op-eng-toggle > span {
   line-height: 1.25rem;
 }
 
+/* --- 7" touchscreen polish pass [MESHSAT-549] ---
+   Chrome labels set via Tailwind arbitrary values (text-[9px],
+   text-[10px], text-[11px]) become unreadable at 1.5× DSF on the
+   Pi Touch Display 2.  Kiosk mode bumps them to 12px.  Targets
+   the exact arbitrary-size class strings so we don't blunt-force
+   legitimate small text in dense widgets (chart legends, status
+   pills already sized via text-xs stay as-is). */
+html.shell-kiosk [class*="text-[9px]"],
+html.shell-kiosk [class*="text-[10px]"],
+html.shell-kiosk [class*="text-[11px]"] {
+  font-size: 0.75rem !important;   /* 12px */
+  line-height: 1rem !important;    /* 16px */
+}
+
+/* Engineer top-nav items (h≈28px from py-1.5 text-xs) need a
+   real 40px tap target on a 7" touchscreen.  Header-scoped so
+   we only bump nav links, not every anchor on the page. */
+html.shell-kiosk header nav a,
+html.shell-kiosk header nav button {
+  min-height: 2.5rem;   /* 40px */
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* OSK / inline micro-buttons inside widgets (26×18 etc).  Bump
+   any button that sits inside a list/card to a min 32×32 so it
+   can be tapped reliably. */
+html.shell-kiosk .bg-tactical-surface button,
+html.shell-kiosk [class*="rounded-lg"] button {
+  min-height: 2rem;     /* 32px */
+  min-width: 2rem;
+}
+
 /* Custom scrollbar for activity log and panels */
 .tactical-scroll::-webkit-scrollbar {
   width: 4px;
