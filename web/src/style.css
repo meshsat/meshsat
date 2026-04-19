@@ -78,6 +78,31 @@ a:focus-visible {
   }
 }
 
+/* ---------------------------------------------------------------
+ * Pi Touch Display 2 (and similar 7" panels) compat.
+ * Matches ~800×480 landscape: wider than Tailwind's md=768 breakpoint
+ * but nowhere near desktop height. Without this rule the status
+ * strip's `hidden md:inline` text labels all render and overflow.
+ * [fix: Pi 7" compat]
+ * ------------------------------------------------------------ */
+@media (max-width: 820px) and (max-height: 540px) {
+  /* Suppress md+ "verbose" affordances so the header fits one row. */
+  .hidden.md\:inline,
+  .hidden.md\:flex,
+  .hidden.md\:block,
+  .hidden.lg\:inline,
+  .hidden.lg\:flex,
+  .hidden.lg\:block {
+    display: none !important;
+  }
+  /* Tight main-content padding — 480 px tall minus 48 px header +
+     56 px bottom bar leaves ~376 px for content; p-5 would halve
+     that. */
+  main > div { padding: 0.5rem !important; }
+  /* Status strip clock — drop to a compact HH:MM variant. */
+  header .tabular-nums { font-size: 9px; }
+}
+
 /* Tab-strip fade-on-right indicator [MESHSAT-584]. Applied via the
    .tab-scroll utility — pairs with overflow-x-auto + pr-8 on the
    host element. The SettingsView tab bar already uses this pattern

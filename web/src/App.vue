@@ -149,10 +149,11 @@ onUnmounted(() => {
       <span class="text-xs text-red-300/70">Emergency beacon transmitting on all channels</span>
     </div>
 
-    <!-- Main content. Extra bottom padding on phone viewports in
-         Operator mode so the fixed bottom-tab bar doesn't cover the
-         last row of whichever view is active. [MESHSAT-550] -->
-    <main class="flex-1" :class="{ 'pb-16 md:pb-0': store.isOperator }">
+    <!-- Main content. Bottom-tab bar (NavBar.vue) shows when Operator
+         mode + viewport ≤820 px wide OR ≤520 px tall — catches the
+         Pi 7" touchscreen 800×480 that was falling through `md:` on
+         width alone. Padding mirrors that rule. [fix: Pi 7" compat] -->
+    <main class="flex-1" :class="{ 'pb-16': store.isOperator }">
       <div class="p-3 sm:p-4 lg:p-5">
         <router-view />
       </div>

@@ -42,15 +42,25 @@ const overflow = computed(() => [
   { name: 'about',     key: 'nav.about',      path: '/about' }
 ])
 
+// Engineer mode: the 5 Operator primary routes FIRST (so the
+// reshape is visible in both modes — Engineer is "reveal more", not
+// "go back to legacy"), then the deeper admin/diagnostic surfaces.
+// [fix: Engineer was pointing Comms/Peers/Interfaces at the legacy
+// /messages /nodes /interfaces routes which bypassed the MESHSAT-551
+// MESHSAT-552 MESHSAT-553 MESHSAT-554 reshape]
 const engineerTabs = computed(() => [
+  { name: 'compose',    key: 'nav.compose',    path: '/compose' },
+  { name: 'inbox',      key: 'nav.inbox',      path: '/inbox' },
+  { name: 'map',        key: 'nav.map',        path: '/map' },
+  { name: 'people',     key: 'nav.people',     path: '/people' },
+  { name: 'radios',     key: 'nav.radios',     path: '/radios' },
   { name: 'dashboard',  key: 'nav.dashboard',  path: '/' },
-  { name: 'comms',      key: 'nav.inbox',      path: '/messages' },
-  { name: 'nodes',      key: 'nav.people',     path: '/nodes' },
   { name: 'bridge',     key: 'nav.bridge',     path: '/bridge' },
-  { name: 'interfaces', key: 'nav.radios',     path: '/interfaces' },
+  { name: 'interfaces', key: 'nav.interfaces', path: '/interfaces' },
   { name: 'passes',     key: 'nav.passes',     path: '/passes' },
   { name: 'topology',   key: 'nav.topology',   path: '/topology' },
-  { name: 'map',        key: 'nav.map',        path: '/map' },
+  { name: 'comms',      key: 'nav.comms',      path: '/messages' },
+  { name: 'nodes',      key: 'nav.nodes',      path: '/nodes' },
   { name: 'settings',   key: 'nav.settings',   path: '/settings' },
   { name: 'radio',      key: 'nav.meshtastic', path: '/radio' },
   { name: 'zigbee',     key: 'nav.zigbee',     path: '/zigbee' },
@@ -112,16 +122,28 @@ onUnmounted(() => {
   window.removeEventListener('scroll', positionDropdown, true)
 })
 
-const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
-function onResize() { viewportWidth.value = window.innerWidth }
+const viewportWidth  = ref(typeof window !== 'undefined' ? window.innerWidth  : 1024)
+const viewportHeight = ref(typeof window !== 'undefined' ? window.innerHeight :  768)
+function onResize() {
+  viewportWidth.value  = window.innerWidth
+  viewportHeight.value = window.innerHeight
+}
 onMounted(() => window.addEventListener('resize', onResize))
 onUnmounted(() => window.removeEventListener('resize', onResize))
 
-// Bottom tab bar is only shown in Operator mode on phone viewports.
-const showBottomBar = computed(() => store.isOperator && viewportWidth.value < 768)
+// Bottom tab bar — shown in Operator mode on any viewport that's
+// narrower than ~iPad-portrait OR shorter than the Pi Touch Display
+// 2's 480 px landscape height. Catches the 7" Pi panel (800×480)
+// which would otherwise fall through the `md:` breakpoint.
+// [fix: Pi 7" compat]
+const showBottomBar = computed(() =>
+  store.isOperator &&
+  (viewportWidth.value <= 820 || viewportHeight.value <= 520))
 
-// At ≤lg we hide text labels and show icons only (header nav).
-const compactLabels = computed(() => viewportWidth.value < 1024)
+// At ≤lg OR short viewports we hide text labels and show icons only
+// (header nav) to keep the nav strip inside one row on 800 px wide.
+const compactLabels = computed(() =>
+  viewportWidth.value < 1024 || viewportHeight.value <= 520)
 </script>
 
 <template>
@@ -183,9 +205,11 @@ const compactLabels = computed(() => viewportWidth.value < 1024)
     </div>
   </nav>
 
-  <!-- Bottom tab bar, phone viewport, Operator only — thumb-reach primary actions. -->
+  <!-- Bottom tab bar, Operator only on narrow / short viewports.
+       (No `md:hidden` — the Pi 7" at 800×480 is above md=768 and
+       was missing this bar entirely.) [fix: Pi 7" compat] -->
   <nav v-show="showBottomBar"
-    class="fixed bottom-0 inset-x-0 z-40 bg-tactical-surface/95 backdrop-blur border-t border-tactical-border flex items-center justify-around h-14 md:hidden"
+    class="fixed bottom-0 inset-x-0 z-40 bg-tactical-surface/95 backdrop-blur border-t border-tactical-border flex items-center justify-around h-14"
     aria-label="Primary navigation">
     <router-link v-for="tab in primary" :key="'b-'+tab.name" :to="tab.path"
       class="flex flex-col items-center justify-center gap-0.5 flex-1 h-full text-[10px]"
