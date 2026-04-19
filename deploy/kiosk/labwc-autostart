@@ -49,4 +49,11 @@ chromium-browser \
   --touch-events=enabled \
   --force-device-scale-factor=1.5 \
   --enable-use-zoom-for-dsf=true \
-  --app=__BRIDGE_URL__ &
+  --app="__BRIDGE_URL__" &
+# NB: the URL MUST be quoted — it contains `&` (query-string
+# separator between kiosk=1 and shell=operator). Without quotes,
+# bash parses the unquoted `&` as job-control and drops everything
+# after it, so Chromium would load only `?kiosk=1` and silently
+# ignore the `shell=…` role param. Verified on tesseract
+# 2026-04-19: bug dropped the role selector, bringing up the
+# wrong nav surface. [MESHSAT-549]

@@ -207,7 +207,14 @@ const compactLabels = computed(() =>
 
   <!-- Bottom tab bar, Operator only on narrow / short viewports.
        (No `md:hidden` — the Pi 7" at 800×480 is above md=768 and
-       was missing this bar entirely.) [fix: Pi 7" compat] -->
+       was missing this bar entirely.) [fix: Pi 7" compat]
+       Teleported to <body> so `position: fixed; bottom: 0` resolves
+       to the viewport. If we leave it inside <header> (which has
+       `backdrop-blur` = backdrop-filter), that ancestor becomes the
+       containing block for fixed descendants and the bar renders at
+       y=-8 covering the header. Verified live on tesseract
+       2026-04-19. [MESHSAT-549] -->
+  <Teleport to="body">
   <nav v-show="showBottomBar"
     class="fixed bottom-0 inset-x-0 z-40 bg-tactical-surface/95 backdrop-blur border-t border-tactical-border flex items-center justify-around h-14"
     aria-label="Primary navigation">
@@ -225,6 +232,7 @@ const compactLabels = computed(() =>
       <span>{{ t(tab.key) }}</span>
     </router-link>
   </nav>
+  </Teleport>
 </template>
 
 <style scoped>
