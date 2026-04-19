@@ -1,17 +1,21 @@
-/* MeshSat service worker — offline shell + stale-while-revalidate
- * fetch strategy. [MESHSAT-581]
+/* MeshSat service worker. [MESHSAT-581]
  *
- * The bridge serves the SPA on the same origin as the REST API so
- * we keep the policy conservative: cache the SPA shell + static
- * assets for offline boot, but NEVER cache /api/* — every API call
- * must hit live state. Service worker version string is embedded
- * so a Vite rebuild invalidates old caches on first load.
+ * The bridge serves the SPA on the same origin as the REST API, so
+ * we keep the policy conservative:
+ *
+ *   /api/*               → always network (never cached)
+ *   /events, /api/spectrum/stream etc. → always network (SSE)
+ *   index.html, navigation requests    → network-first (fall back
+ *                                       to cached shell only when
+ *                                       offline; otherwise we would
+ *                                       pin an old bundle name
+ *                                       after a deploy)
+ *   every other GET      → stale-while-revalidate (hashed assets —
+ *                          safe because filenames change per build)
  */
 
-const CACHE = 'meshsat-shell-v2'
-const SHELL = [
-  '/',
-  '/index.html',
+const CACHE = 'meshsat-shell-v4'
+const ASSETS = [
   '/manifest.webmanifest',
   '/logo.png',
   '/logo-nav.png',
@@ -20,7 +24,7 @@ const SHELL = [
 
 self.addEventListener('install', (ev) => {
   ev.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => null)
+    caches.open(CACHE).then(c => c.addAll(ASSETS)).catch(() => null)
   )
   self.skipWaiting()
 })
@@ -36,14 +40,28 @@ self.addEventListener('activate', (ev) => {
 
 self.addEventListener('fetch', (ev) => {
   const url = new URL(ev.request.url)
-  // Never cache the API; bridge telemetry, deliveries, and live
-  // state must always be fresh.
-  if (url.pathname.startsWith('/api/')) return
-  // Never cache SSE / streaming endpoints.
-  if (url.pathname.startsWith('/events')) return
 
-  // Stale-while-revalidate for everything else (SPA shell + assets).
+  // Never touch the API, SSE streams, or any stream endpoint.
+  if (url.pathname.startsWith('/api/')) return
+  if (url.pathname.startsWith('/events')) return
+  if (url.pathname.endsWith('/stream')) return
+
   if (ev.request.method !== 'GET') return
+
+  // Navigation requests (SPA routing) + the bare index.html: always
+  // prefer the network so a deploy takes effect on the next load.
+  if (ev.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    ev.respondWith(
+      fetch(ev.request).catch(() =>
+        caches.match('/') || caches.match(ev.request)
+      )
+    )
+    return
+  }
+
+  // Everything else: stale-while-revalidate. Hashed asset names
+  // (index-XXXXXX.js) are immutable per build, so caching them
+  // aggressively is safe.
   ev.respondWith(
     caches.open(CACHE).then(cache =>
       cache.match(ev.request).then(cached => {
