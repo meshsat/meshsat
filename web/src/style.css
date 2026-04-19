@@ -9,12 +9,18 @@ body {
   background-size: 24px 24px;
 }
 
-/* Hide the mouse cursor on touch-primary devices (kiosk tablets,
-   Raspberry Pi Touch Display 2). Desktop operators with a mouse
-   keep their cursor. `pointer: coarse` matches devices where the
-   primary pointing method is limited-precision — touch. */
+/* Hide the mouse cursor AND scrollbars on touch-primary devices
+   (kiosk tablets, Raspberry Pi Touch Display 2). Desktop operators
+   with a mouse keep both. `pointer: coarse` matches devices where
+   the primary pointing method is limited-precision — touch. */
 @media (pointer: coarse) {
   html, body, * { cursor: none !important; }
+  /* WebKit / Blink */
+  *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+  /* Firefox */
+  * { scrollbar-width: none !important; }
+  /* IE / legacy Edge */
+  * { -ms-overflow-style: none !important; }
 }
 
 /* Custom scrollbar for activity log and panels */
