@@ -1352,30 +1352,32 @@ function widgetGridClass(id) {
     <template v-if="store.isOperator">
       <!-- Row 1: Mission State (half) + SOS action (half) -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
-        <!-- Mission state banner — color reflects aggregate channel health -->
+        <!-- Mission state banner — compact: 2-line. Color reflects
+             aggregate channel health; drills through to /sos. -->
         <router-link to="/sos"
-          class="block rounded-lg border-2 p-2 text-center transition-colors"
+          class="block rounded-lg border-2 p-1.5 text-center transition-colors flex flex-col justify-center"
           :class="opStatus.ring"
           :aria-label="opStatus.text">
-          <div class="text-[10px] uppercase tracking-widest text-gray-400">Mission State</div>
-          <div class="text-2xl font-display font-bold tracking-wide" :class="opStatus.tint">
+          <div class="text-[9px] uppercase tracking-widest text-gray-400">Mission State</div>
+          <div class="text-xl font-display font-bold tracking-wide leading-tight" :class="opStatus.tint">
             {{ opStatus.text }}
           </div>
-          <div class="text-xs text-gray-400">{{ opStatus.detail }}</div>
+          <div class="text-[10px] text-gray-400 leading-tight">{{ opStatus.detail }}</div>
         </router-link>
 
-        <!-- SOS arm/test pair -->
-        <div class="flex flex-col gap-2">
+        <!-- SOS: big ACTIVATE (red) + small orange TEST side-by-side. -->
+        <div class="flex items-stretch gap-2">
           <button type="button" @click.prevent="toggleSOS" :disabled="sosArming"
-            class="flex-1 rounded-lg border-2 font-display font-bold tracking-widest text-xl transition-colors py-1"
+            class="flex-1 rounded-lg border-2 font-display font-bold tracking-widest text-2xl transition-colors"
             :class="sosActive
               ? 'border-red-500 bg-red-600 text-white hover:bg-red-500'
               : 'border-red-500/60 bg-red-950/30 text-red-300 hover:bg-red-900/40'">
             {{ sosActive ? 'CANCEL SOS' : 'ACTIVATE SOS' }}
           </button>
           <button type="button" @click.prevent="testSOS"
-            class="rounded-lg border border-tactical-border bg-tactical-surface text-xs font-medium text-gray-300 hover:bg-white/5 py-1.5">
-            Test SOS (single message)
+            class="w-20 shrink-0 rounded-lg border-2 border-amber-500/70 bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 font-display font-semibold text-sm tracking-wider transition-colors"
+            title="Send a single test SOS message (no loop)">
+            TEST
           </button>
         </div>
       </div>
