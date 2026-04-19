@@ -30,9 +30,17 @@ def log(msg):
 
 
 def write_status(voltage, soc, ac):
-    """Atomic-write current state to /run/x1202.json for the bridge
-    API to read. Tolerate write errors silently — monitoring job
-    must not crash on disk issue."""
+    """Write current state to /run/x1202.json for the bridge API
+    to read.  MUST write in-place (open+truncate) rather than
+    atomic-rename: the bridge container bind-mounts this file as
+    a single-file mount (`/run/x1202.json:/run/x1202.json:ro`),
+    and a single-file mount pins the inode at container-start
+    time.  os.replace() swaps to a fresh inode, leaving the
+    container staring at the original stale one forever.
+
+    Payload is ~90 bytes so a partial-read race is vanishingly
+    unlikely; the bridge handler tolerates JSON-parse errors
+    anyway."""
     try:
         payload = {
             "voltage": round(voltage, 3) if voltage is not None else None,
@@ -40,11 +48,14 @@ def write_status(voltage, soc, ac):
             "ac_present": (ac == "1") if ac in ("0", "1") else None,
             "last_update": time.time(),
         }
-        fd, tmp = tempfile.mkstemp(dir="/run", prefix=".x1202.")
-        with os.fdopen(fd, "w") as f:
+        with open(STATUS_PATH, "w") as f:
             json.dump(payload, f)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, STATUS_PATH)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(STATUS_PATH, 0o644)
+        except OSError:
+            pass
     except Exception as e:
         log("status-write failed: %s" % e)
 
