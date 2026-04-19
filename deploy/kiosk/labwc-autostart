@@ -29,7 +29,17 @@ while [ "$i" -lt "$BRIDGE_WAIT_MAX" ]; do
   i=$((i + 1))
 done
 
-# 3. Chromium kiosk — policy lockdown in
+# 3. Idle backlight dim — swayidle hooks labwc's idle notifier and
+#    dims the panel to 32/255 after 10 min of no input, restores to
+#    200/255 on activity. The backlight write is delegated to a
+#    sudoers-scoped wrapper (/usr/local/bin/meshsat-backlight),
+#    installed with a one-command sudoers entry so the kiosk user
+#    can't reach anything else under /sys. [MESHSAT-580]
+swayidle -w \
+  timeout 600 'sudo -n /usr/local/bin/meshsat-backlight 32' \
+  resume 'sudo -n /usr/local/bin/meshsat-backlight 200' &
+
+# 4. Chromium kiosk — policy lockdown in
 #    /etc/chromium/policies/managed/meshsat-kiosk.json.
 #    --force-device-scale-factor=1.5 scales CSS pixels to make the
 #    UI readable on the 7" DSI panel (1280×720 native → 853×480

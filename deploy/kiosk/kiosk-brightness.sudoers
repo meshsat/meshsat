@@ -1,0 +1,12 @@
+# /etc/sudoers.d/kiosk-brightness
+#
+# Allow the kiosk user to call the MeshSat backlight wrapper without
+# a password. The wrapper (installed at /usr/local/bin/meshsat-backlight)
+# validates its single integer argument and writes to the first
+# /sys/class/backlight/*/brightness file.
+#
+# Scoped to that exact command — no wildcard path in sudoers, so
+# argument-crafting tricks cannot reach other root-owned files.
+# [MESHSAT-580]
+
+kiosk ALL=(root) NOPASSWD: /usr/local/bin/meshsat-backlight

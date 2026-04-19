@@ -1,0 +1,41 @@
+#!/bin/sh
+# meshsat-backlight <0-255>
+# Scales caller's 0-255 value onto the first backlight device's
+# max_brightness and writes to its brightness file.
+#
+# Invoked by swayidle (via sudo, scoped in
+# /etc/sudoers.d/kiosk-brightness) to dim/restore the Touch Display 2
+# panel on idle/resume. A thin wrapper is used instead of granting
+# the kiosk user sudo on `tee /sys/.../brightness` directly, because
+# sudoers wildcards are footguns (a malicious argument like
+# `/sys/../etc/passwd` can bypass a naive glob). This wrapper
+# validates the argument as a number in 0-255 before touching any
+# file. [MESHSAT-580]
+
+set -eu
+
+case "${1:-}" in
+  ''|*[!0-9]*)
+    echo "usage: $0 <0-255>" >&2
+    exit 2
+    ;;
+esac
+
+V="$1"
+if [ "$V" -gt 255 ]; then
+  echo "out of range (0-255)" >&2
+  exit 2
+fi
+
+for dir in /sys/class/backlight/*/; do
+  [ -d "$dir" ] || continue
+  [ -f "$dir/max_brightness" ] || continue
+  MAX=$(cat "$dir/max_brightness")
+  [ "$MAX" -gt 0 ] || continue
+  RAW=$(( V * MAX / 255 ))
+  printf '%s\n' "$RAW" > "$dir/brightness"
+  exit 0
+done
+
+echo "no backlight device under /sys/class/backlight" >&2
+exit 1
