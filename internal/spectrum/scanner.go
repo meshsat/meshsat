@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Scanner abstracts RTL-SDR spectrum scanning for testability.
@@ -57,8 +59,23 @@ type ScannerInfo struct {
 //
 // Non-comment lines are "<freq_hz> <power_dB>" pairs.
 type RTLPowerScanner struct {
-	binary string // path to rtl_power_fftw
+	binary string // active binary (rtl_power_fftw preferred; demotes to rtl_power on sustained failure)
+
+	// rtl_power_fftw hangs on certain RTL-SDR Blog V4 + driver + USB-hub
+	// combinations — observed on parallax01 2026-04-19, where every fftw
+	// scan sat on `usb_claim_interface` until the 30 s context timeout
+	// SIGKILLed it, so calibration never collected a sample. The legacy
+	// `rtl_power` binary on the same kit scans the same bands in <1 s.
+	// To avoid a static per-kit decision, the scanner probes fftw first;
+	// after `fftwFailThreshold` consecutive fftw failures we switch to
+	// legacy `rtl_power` for the rest of the session. `fallbackBinary`
+	// holds the legacy path discovered at init. [spectrum: fftw fallback]
+	fallbackBinary  string
+	fftwFailures    int
+	fftwDisabled    bool
 }
+
+const fftwFailThreshold = 3
 
 // NewRTLPowerScanner creates a scanner using rtl_power_fftw, with a
 // final fallback to rtl_power if rtl_power_fftw is not installed. Returns
@@ -69,18 +86,26 @@ type RTLPowerScanner struct {
 // on tesseract01 where rtl_power_fftw shipped in the image but no
 // dongle was plugged in, yet the UI showed "calibrating" forever.]
 func NewRTLPowerScanner() *RTLPowerScanner {
-	var binary string
-	if path, err := exec.LookPath("rtl_power_fftw"); err == nil {
-		binary = path
-	} else if path, err := exec.LookPath("rtl_power"); err == nil {
-		binary = path
-	} else {
+	// Discover both binaries up front. Prefer rtl_power_fftw but keep
+	// a pointer to legacy rtl_power so Scan() can promote it on
+	// sustained fftw failures.
+	fftwPath, _ := exec.LookPath("rtl_power_fftw")
+	legacyPath, _ := exec.LookPath("rtl_power")
+
+	switch {
+	case fftwPath != "":
+		if !DetectRTLSDR() {
+			return nil
+		}
+		return &RTLPowerScanner{binary: fftwPath, fallbackBinary: legacyPath}
+	case legacyPath != "":
+		if !DetectRTLSDR() {
+			return nil
+		}
+		return &RTLPowerScanner{binary: legacyPath}
+	default:
 		return nil
 	}
-	if !DetectRTLSDR() {
-		return nil
-	}
-	return &RTLPowerScanner{binary: binary}
 }
 
 // Available re-checks the dongle at call time so an unplugged device
@@ -160,10 +185,27 @@ func findRTLSDRDevice() *rtlsdrDevice {
 
 // Scan runs a single-shot power sweep. Dispatches to the appropriate
 // CLI invocation based on which binary is in use so we don't regress
-// on older images.
+// on older images. Auto-demotes from fftw to legacy rtl_power after
+// `fftwFailThreshold` consecutive fftw failures (see struct docs).
 func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
-	if strings.HasSuffix(s.binary, "rtl_power_fftw") {
-		return s.scanFFTW(ctx, freqLow, freqHigh, binSize)
+	if !s.fftwDisabled && strings.HasSuffix(s.binary, "rtl_power_fftw") {
+		powers, err := s.scanFFTW(ctx, freqLow, freqHigh, binSize)
+		if err == nil {
+			s.fftwFailures = 0
+			return powers, nil
+		}
+		s.fftwFailures++
+		if s.fftwFailures >= fftwFailThreshold && s.fallbackBinary != "" {
+			log.Warn().
+				Int("failures", s.fftwFailures).
+				Str("from", s.binary).
+				Str("to", s.fallbackBinary).
+				Msg("spectrum: demoting rtl_power_fftw → rtl_power after repeated failures")
+			s.binary = s.fallbackBinary
+			s.fftwDisabled = true
+			return s.scanLegacy(ctx, freqLow, freqHigh, binSize)
+		}
+		return nil, err
 	}
 	return s.scanLegacy(ctx, freqLow, freqHigh, binSize)
 }
