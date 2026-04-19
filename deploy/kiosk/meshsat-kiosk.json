@@ -1,0 +1,31 @@
+{
+  "_comment": "Chromium managed-policy file. Dropped into /etc/chromium/policies/managed/ by scripts/install-kiosk.sh. Locks the bridge kiosk to localhost, disables devtools / password manager / history / autofill so an operator can't break out of the app into the wider web. [MESHSAT-579]",
+
+  "DeveloperToolsAvailability": 2,
+  "BookmarkBarEnabled": false,
+  "SavingBrowserHistoryDisabled": true,
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "TranslateEnabled": false,
+  "MetricsReportingEnabled": false,
+  "SearchSuggestEnabled": false,
+  "DefaultBrowserSettingEnabled": false,
+  "PromptForDownloadLocation": false,
+  "DownloadRestrictions": 3,
+  "PrintingEnabled": false,
+  "URLAllowlist": [
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    "http://[::1]:*"
+  ],
+  "URLBlocklist": [
+    "*"
+  ],
+  "HomepageLocation": "http://localhost:6050/?shell=kiosk",
+  "HomepageIsNewTabPage": false,
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": [
+    "http://localhost:6050/?shell=kiosk"
+  ]
+}
