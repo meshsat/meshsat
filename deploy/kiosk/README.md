@@ -20,6 +20,14 @@ fullscreen. Works with:
 | `cage` | Ubuntu main | Minimal Wayland compositor — one app, fullscreen, no desktop. |
 | `chromium-browser` | Ubuntu main | The kiosk shell. Launched in `--kiosk --app=…` mode. |
 | `swayidle` | Ubuntu main | Idle detector. Calls `/api/system/backlight` at 2 min (dim) / 5 min (off); full brightness on any input. |
+
+> **Physical wiring note for the bundled 2-wire power lead.** The
+> Touch Display 2 ships with a tiny GPIO cable that clips onto a
+> 5V + GND pair. On the field kits **pin 2 is already occupied by
+> the satellite modem V_IN+**, so clip the lead onto **pin 4 (5V)
+> + pin 14 (GND)** instead. Pin 4 is the same 5V rail internally
+> — no electrical change — just routing round the modem's
+> connector.
 | Autologin on tty1 | stock `getty@tty1` drop-in | Pi boots to the `kiosk` user with no password prompt. |
 | Chromium managed policy | `/etc/chromium/policies/managed/meshsat-kiosk.json` | URL allowlist locked to `localhost`; devtools, password manager, autofill, history, printing all off. Operator can't break out of the app. |
 
