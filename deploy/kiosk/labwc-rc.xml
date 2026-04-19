@@ -1,15 +1,23 @@
 <?xml version="1.0"?>
 <!--
   labwc kiosk config. Minimal — just tells the compositor not to
-  render gaps or focus outlines around the single fullscreen
-  Chromium client. Touch rotation is handled by the udev rule
-  (see 99-touch-rotate.rules) rather than labwc's
-  <calibrationMatrix>, which didn't take effect on 0.7.1.
-  Output rotation is handled by the autostart wlr-randr call.
+  render gaps, focus outlines, or a cursor around the single
+  fullscreen Chromium client. Touch rotation handled by the udev
+  rule (see 99-touch-rotate.rules); output rotation handled by
+  the autostart wlr-randr call; cursor hidden at the compositor
+  level below (CSS `cursor: none` only hides Chromium's cursor —
+  the Wayland pointer rendered by labwc sits on top of that).
 -->
 <labwc_config>
   <core>
     <gap>0</gap>
     <cycleViewOutlines>no</cycleViewOutlines>
   </core>
+  <theme>
+    <!-- cursorSize 1 gives a 1-pixel cursor — effectively invisible
+         on the Touch Display 2 at any viewing distance. Setting it
+         to 0 causes wlroots to fall back to the default 24 px
+         theme, so 1 is the smallest honored value. -->
+    <cursorSize>1</cursorSize>
+  </theme>
 </labwc_config>
