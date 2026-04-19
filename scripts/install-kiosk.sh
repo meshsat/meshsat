@@ -110,9 +110,14 @@ install -D -m 0644 -o "$KIOSK_USER" -g "$KIOSK_USER" \
   "$DEPLOY_DIR/labwc-rc.xml" \
   "/home/$KIOSK_USER/.config/labwc/rc.xml"
 
-# Substitute BRIDGE_URL into autostart.
+# Substitute BRIDGE_URL into autostart.  Escape `&` and `\` in the
+# replacement so sed doesn't interpret `&` as the matched-pattern
+# back-reference — the URL itself contains `&` (kiosk=1&shell=...)
+# and that would otherwise get replaced with the literal
+# __BRIDGE_URL__ marker.  Field lesson from parallax install 2026-04-20.
+BRIDGE_URL_SED=$(printf '%s' "$BRIDGE_URL" | sed -e 's/[\\&|]/\\&/g')
 tmp=$(mktemp)
-sed "s|__BRIDGE_URL__|$BRIDGE_URL|g" "$DEPLOY_DIR/labwc-autostart" >"$tmp"
+sed "s|__BRIDGE_URL__|$BRIDGE_URL_SED|g" "$DEPLOY_DIR/labwc-autostart" >"$tmp"
 install -D -m 0755 -o "$KIOSK_USER" -g "$KIOSK_USER" \
   "$tmp" "/home/$KIOSK_USER/.config/labwc/autostart"
 rm -f "$tmp"
