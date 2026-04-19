@@ -673,6 +673,81 @@ const unifiedQueue = computed(() => {
 // ── Computed: SOS panel ──
 const sosActive = computed(() => store.sosStatus?.active === true)
 
+// ── Operator Dashboard (IQ-70, glanceable-at-distance) ──
+// A minimal 4-tile surface for field operators. Engineer sees the
+// dense 13-widget grid via `v-else` below. [MESHSAT-549]
+
+function fmtCountdown(secs) {
+  if (secs == null || !isFinite(secs) || secs < 0) return '—'
+  const s = Math.floor(secs)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const ss = s % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2,'0')}m`
+  if (m > 0) return `${m}m ${String(ss).padStart(2,'0')}s`
+  return `${ss}s`
+}
+
+function fmtAgo(sec) {
+  if (sec == null || !isFinite(sec)) return '—'
+  const d = Math.max(0, Math.floor(Date.now()/1000 - sec))
+  if (d < 60) return `${d}s ago`
+  if (d < 3600) return `${Math.floor(d/60)}m ago`
+  if (d < 86400) return `${Math.floor(d/3600)}h ago`
+  return `${Math.floor(d/86400)}d ago`
+}
+
+const opSatOK  = computed(() => (store.iridiumSignal?.bars ?? -1) >= 2)
+const opCellOK = computed(() => (store.cellularSignal?.bars ?? -1) >= 2)
+const opMeshOK = computed(() => {
+  const cutoff = Date.now()/1000 - 600
+  return (store.nodes || []).some(n => (n.last_seen || 0) > cutoff)
+})
+const opChannelCount = computed(() =>
+  (opSatOK.value ? 1 : 0) + (opCellOK.value ? 1 : 0) + (opMeshOK.value ? 1 : 0))
+
+const opStatus = computed(() => {
+  if (sosActive.value) {
+    return { text: 'SOS ACTIVE', detail: 'Emergency beacon transmitting',
+      ring: 'border-red-500 bg-red-950/40', tint: 'text-red-300' }
+  }
+  if (opChannelCount.value >= 2) {
+    return { text: 'OPERATIONAL', detail: `${opChannelCount.value} channels active`,
+      ring: 'border-emerald-500/70 bg-emerald-950/30', tint: 'text-emerald-300' }
+  }
+  if (opChannelCount.value === 1) {
+    return { text: 'DEGRADED', detail: 'Single channel — primary lost',
+      ring: 'border-amber-500/70 bg-amber-950/30', tint: 'text-amber-300' }
+  }
+  return { text: 'NO CONNECTIVITY', detail: 'No active comms channel',
+    ring: 'border-red-500/70 bg-red-950/30', tint: 'text-red-300' }
+})
+
+const opNextPass = computed(() => {
+  const now = Date.now()/1000
+  const p = (store.passes || []).find(pp => (pp.aos || 0) > now)
+  if (!p) return { countdown: '—', sat: 'No upcoming passes', elev: '', active: false }
+  return {
+    countdown: fmtCountdown(p.aos - now),
+    sat: p.satellite || 'Iridium',
+    elev: `${Math.round(p.peak_elev_deg || 0)}° peak`,
+    active: !!p.is_active,
+  }
+})
+
+const opPrimaryChannel = computed(() => {
+  if (opMeshOK.value) return { name: 'Mesh', bars: null, detail: 'LoRa 868 MHz', tint: 'text-tactical-lora' }
+  if (opSatOK.value)  return { name: 'Satellite', bars: store.iridiumSignal?.bars ?? 0, detail: 'Iridium', tint: 'text-tactical-iridium' }
+  if (opCellOK.value) return { name: 'Cellular', bars: store.cellularSignal?.bars ?? 0, detail: store.cellularStatus?.operator || 'LTE', tint: 'text-sky-400' }
+  return { name: 'None', bars: null, detail: 'All channels down', tint: 'text-red-400' }
+})
+
+const opPeerCount = computed(() => (store.nodes || []).length)
+const opPeerFresh = computed(() => {
+  const n = (store.nodes || []).slice().sort((a,b)=>(b.last_seen||0)-(a.last_seen||0))[0]
+  return n ? fmtAgo(n.last_seen) : '—'
+})
+
 async function toggleSOS() {
   sosArming.value = true
   try {
@@ -1208,6 +1283,72 @@ function widgetGridClass(id) {
 
 <template>
   <div class="max-w-[1400px] mx-auto" @click="closeDropdowns">
+
+    <!-- ═══ Operator Dashboard (IQ-70 glanceable) ═══
+         4-tile layout for field operators. No chart waveforms, no
+         SNR curves, no per-modem diagnostics.  Engineer mode falls
+         through to the dense 13-widget grid below. [MESHSAT-549] -->
+    <template v-if="store.isOperator">
+      <!-- Mission state banner — color reflects aggregate channel health -->
+      <router-link to="/sos"
+        class="block rounded-lg border-2 p-5 mb-4 text-center transition-colors"
+        :class="opStatus.ring"
+        :aria-label="opStatus.text">
+        <div class="text-[10px] uppercase tracking-widest text-gray-400">Mission State</div>
+        <div class="text-4xl font-display font-bold mt-1 tracking-wide" :class="opStatus.tint">
+          {{ opStatus.text }}
+        </div>
+        <div class="text-sm text-gray-400 mt-1">{{ opStatus.detail }}</div>
+      </router-link>
+
+      <!-- 3 big tiles: Next Pass · Active Comms · Peers -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+
+        <!-- Next satellite pass -->
+        <router-link to="/passes"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          <div class="text-[10px] uppercase tracking-widest text-gray-500">Next Pass</div>
+          <div class="text-3xl font-mono font-bold mt-2 text-tactical-iridium tabular-nums">
+            {{ opNextPass.countdown }}
+          </div>
+          <div class="text-sm text-gray-300 mt-2 truncate">{{ opNextPass.sat }}</div>
+          <div class="text-xs text-gray-500">
+            {{ opNextPass.elev }}<span v-if="opNextPass.active" class="ml-2 text-emerald-400">· ACTIVE</span>
+          </div>
+        </router-link>
+
+        <!-- Active primary comms -->
+        <router-link to="/radios"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          <div class="text-[10px] uppercase tracking-widest text-gray-500">Active Comms</div>
+          <div class="text-2xl font-bold mt-2" :class="opPrimaryChannel.tint">
+            {{ opPrimaryChannel.name }}
+          </div>
+          <div v-if="opPrimaryChannel.bars != null" class="flex items-end gap-1 h-6 mt-2">
+            <span v-for="i in 5" :key="i"
+              class="w-1.5 rounded-sm transition-colors"
+              :class="opPrimaryChannel.bars >= i ? opPrimaryChannel.tint.replace('text-','bg-') : 'bg-gray-700/40'"
+              :style="{ height: `${6 + i * 4}px` }" />
+          </div>
+          <div class="text-xs text-gray-500 mt-1">{{ opPrimaryChannel.detail }}</div>
+          <div class="text-[10px] text-gray-500 mt-1">{{ opChannelCount }} of 3 channels up</div>
+        </router-link>
+
+        <!-- Peer count + latest contact -->
+        <router-link to="/people"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          <div class="text-[10px] uppercase tracking-widest text-gray-500">Peers</div>
+          <div class="text-3xl font-mono font-bold mt-2 text-tactical-lora tabular-nums">
+            {{ opPeerCount }}
+          </div>
+          <div class="text-sm text-gray-300 mt-2">In range</div>
+          <div class="text-xs text-gray-500">Last: {{ opPeerFresh }}</div>
+        </router-link>
+      </div>
+    </template>
+
+    <!-- ═══ Engineer Dashboard (dense 13-widget grid) ═══ -->
+    <template v-else>
     <!-- Spectrum at-a-glance strip: compact waterfall, all 5 bands in
          one canvas. Click → /spectrum for the full detail view. Hides
          entirely if the RTL-SDR isn't present. -->
@@ -2608,5 +2749,6 @@ function widgetGridClass(id) {
         </div>
       </div>
     </Teleport>
+    </template><!-- /v-else engineer dashboard -->
   </div>
 </template>
