@@ -9,18 +9,25 @@ body {
   background-size: 24px 24px;
 }
 
-/* Hide the mouse cursor AND scrollbars on touch-primary devices
-   (kiosk tablets, Raspberry Pi Touch Display 2). Desktop operators
-   with a mouse keep both. `pointer: coarse` matches devices where
-   the primary pointing method is limited-precision — touch. */
+/* Hide the mouse cursor AND scrollbars on kiosk browsers. Driven
+   by the `shell-kiosk` class set on <html> by main.js when the
+   URL carries `?shell=kiosk` (or the UA looks like a kiosk shell).
+   We don't rely on `@media (pointer: coarse)` because Chromium on
+   Linux + Wayland + DSI touchscreen still reports `pointer: fine`.
+   Desktop operators without the kiosk URL keep cursor + scrollbars.
+*/
+html.shell-kiosk, html.shell-kiosk body, html.shell-kiosk * {
+  cursor: none !important;
+}
+html.shell-kiosk *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+html.shell-kiosk * { scrollbar-width: none !important; -ms-overflow-style: none !important; }
+
+/* Touch-primary devices (phones, tablets on the wider web) also
+   benefit from scrollbar-hide — only the cursor stays visible if
+   the UA exposes one. */
 @media (pointer: coarse) {
-  html, body, * { cursor: none !important; }
-  /* WebKit / Blink */
   *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
-  /* Firefox */
-  * { scrollbar-width: none !important; }
-  /* IE / legacy Edge */
-  * { -ms-overflow-style: none !important; }
+  * { scrollbar-width: none !important; -ms-overflow-style: none !important; }
 }
 
 /* Custom scrollbar for activity log and panels */
