@@ -42,9 +42,14 @@ html.shell-kiosk ::-webkit-scrollbar-corner {
   background: transparent !important;
 }
 
-/* Touch-primary devices (phones, tablets on the wider web) also
-   benefit from scrollbar-hide. */
+/* Touch-primary devices — also triggers Chromium to hint the
+   Wayland compositor that pointer-free treatment is OK. Keeping
+   cursor: none here alongside the class-based selector above
+   because on Wayland compositors (labwc) this media match is
+   what tells the server to NOT draw its own pointer on top of
+   Chromium's content. */
 @media (pointer: coarse) {
+  html, body, * { cursor: none !important; }
   *::-webkit-scrollbar,
   ::-webkit-scrollbar,
   ::-webkit-scrollbar-track,

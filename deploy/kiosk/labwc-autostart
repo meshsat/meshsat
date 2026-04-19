@@ -39,4 +39,5 @@ chromium-browser \
   --no-first-run \
   --no-default-browser-check \
   --start-fullscreen \
+  --touch-events=enabled \
   --app=__BRIDGE_URL__ &
