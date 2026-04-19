@@ -762,6 +762,53 @@ const opPeerFresh = computed(() => {
   return n ? fmtAgo(n.last_seen) : '—'
 })
 
+const opGPS = computed(() => {
+  const g  = store.locationSources?.gps
+  const rs = store.locationSources?.resolved
+  if (g?.fix) {
+    return { fix: true, label: 'FIX',
+      sats: g.sats || 0,
+      coord: rs ? `${rs.lat.toFixed(3)}, ${rs.lon.toFixed(3)}` : '',
+      source: 'GPS',
+      tint: 'text-emerald-300', sub: 'text-emerald-400/70' }
+  }
+  if (rs) {
+    const src = (rs.source || '').toUpperCase()
+    return { fix: false, label: 'NO FIX',
+      sats: g?.sats || 0,
+      coord: `${rs.lat.toFixed(3)}, ${rs.lon.toFixed(3)}`,
+      source: `${src} fallback`,
+      tint: 'text-amber-300', sub: 'text-amber-400/70' }
+  }
+  return { fix: false, label: 'NO FIX', sats: 0, coord: '', source: 'No location',
+    tint: 'text-red-300', sub: 'text-red-400/70' }
+})
+
+// X1202 UPS exposes /run/x1202.json from the host x1202-monitor
+// service.  Bridge endpoint lands as a follow-up — the tile
+// gracefully shows "—" until store.battery is populated.
+const opBattery = computed(() => {
+  const b = store.battery
+  if (b == null || b.soc_percent == null) return { pct: null, ac: null, tint: 'text-gray-500' }
+  const tint = b.soc_percent >= 50 ? 'text-emerald-300'
+            : b.soc_percent >= 20 ? 'text-amber-300' : 'text-red-300'
+  return { pct: b.soc_percent, ac: b.ac_present === true, tint }
+})
+
+const opQueued = computed(() => {
+  const list = store.deliveries || []
+  const pending = list.filter(d =>
+    d.status === 'pending' || d.status === 'queued' || d.status === 'held')
+  if (!pending.length) return { count: 0, oldest: null, tint: 'text-emerald-300' }
+  const oldestEpoch = pending.reduce((acc, d) => {
+    const t = d.created_at ? Date.parse(d.created_at)/1000 : 0
+    return (t > 0 && (!acc || t < acc)) ? t : acc
+  }, 0)
+  const tint = pending.length > 5 ? 'text-amber-300'
+            : pending.length > 0 ? 'text-tactical-iridium' : 'text-emerald-300'
+  return { count: pending.length, oldest: oldestEpoch ? fmtAgo(oldestEpoch) : null, tint }
+})
+
 async function toggleSOS() {
   sosArming.value = true
   try {
@@ -1303,20 +1350,38 @@ function widgetGridClass(id) {
          SNR curves, no per-modem diagnostics.  Engineer mode falls
          through to the dense 13-widget grid below. [MESHSAT-549] -->
     <template v-if="store.isOperator">
-      <!-- Mission state banner — color reflects aggregate channel health -->
-      <router-link to="/sos"
-        class="block rounded-lg border-2 p-5 mb-4 text-center transition-colors"
-        :class="opStatus.ring"
-        :aria-label="opStatus.text">
-        <div class="text-[10px] uppercase tracking-widest text-gray-400">Mission State</div>
-        <div class="text-4xl font-display font-bold mt-1 tracking-wide" :class="opStatus.tint">
-          {{ opStatus.text }}
-        </div>
-        <div class="text-sm text-gray-400 mt-1">{{ opStatus.detail }}</div>
-      </router-link>
+      <!-- Row 1: Mission State (half) + SOS action (half) -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <!-- Mission state banner — color reflects aggregate channel health -->
+        <router-link to="/sos"
+          class="block rounded-lg border-2 p-4 text-center transition-colors"
+          :class="opStatus.ring"
+          :aria-label="opStatus.text">
+          <div class="text-[10px] uppercase tracking-widest text-gray-400">Mission State</div>
+          <div class="text-3xl font-display font-bold mt-1 tracking-wide" :class="opStatus.tint">
+            {{ opStatus.text }}
+          </div>
+          <div class="text-xs text-gray-400 mt-1">{{ opStatus.detail }}</div>
+        </router-link>
 
-      <!-- 3 big tiles: Next Pass · Active Comms · Peers -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <!-- SOS arm/test pair -->
+        <div class="flex flex-col gap-2">
+          <button type="button" @click.prevent="toggleSOS" :disabled="sosArming"
+            class="flex-1 rounded-lg border-2 font-display font-bold tracking-widest text-2xl transition-colors"
+            :class="sosActive
+              ? 'border-red-500 bg-red-600 text-white hover:bg-red-500'
+              : 'border-red-500/60 bg-red-950/30 text-red-300 hover:bg-red-900/40'">
+            {{ sosActive ? 'CANCEL SOS' : 'ACTIVATE SOS' }}
+          </button>
+          <button type="button" @click.prevent="testSOS"
+            class="rounded-lg border border-tactical-border bg-tactical-surface text-sm font-medium text-gray-300 hover:bg-white/5 py-2">
+            Test SOS (single message)
+          </button>
+        </div>
+      </div>
+
+      <!-- Row 2: Next Pass · Active Comms · Peers -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
 
         <!-- Next satellite pass -->
         <router-link to="/passes"
@@ -1357,6 +1422,49 @@ function widgetGridClass(id) {
           </div>
           <div class="text-sm text-gray-300 mt-2">In range</div>
           <div class="text-xs text-gray-500">Last: {{ opPeerFresh }}</div>
+        </router-link>
+      </div>
+
+      <!-- Row 3: GPS · Battery · Queued -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <!-- GPS fix status -->
+        <router-link to="/map"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          <div class="text-[10px] uppercase tracking-widest text-gray-500">GPS</div>
+          <div class="text-2xl font-bold mt-2" :class="opGPS.tint">{{ opGPS.label }}</div>
+          <div class="text-sm text-gray-300 mt-1">{{ opGPS.sats }} sats</div>
+          <div class="text-xs font-mono" :class="opGPS.sub">{{ opGPS.coord }}</div>
+          <div class="text-[10px] text-gray-500">{{ opGPS.source }}</div>
+        </router-link>
+
+        <!-- Battery (X1202 UPS) -->
+        <router-link to="/bridge"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          <div class="text-[10px] uppercase tracking-widest text-gray-500">Battery</div>
+          <div class="text-3xl font-mono font-bold mt-2 tabular-nums" :class="opBattery.tint">
+            {{ opBattery.pct != null ? `${opBattery.pct}%` : '—' }}
+          </div>
+          <div class="text-sm text-gray-300 mt-1">
+            <span v-if="opBattery.ac === true" class="text-emerald-400">AC present</span>
+            <span v-else-if="opBattery.ac === false" class="text-amber-400">On battery</span>
+            <span v-else class="text-gray-500">UPS not connected</span>
+          </div>
+          <div class="text-[10px] text-gray-500">X1202 UPS</div>
+        </router-link>
+
+        <!-- Queued messages -->
+        <router-link to="/inbox"
+          class="bg-tactical-surface rounded-lg border border-tactical-border p-4 transition-colors hover:border-tactical-iridium/40">
+          <div class="text-[10px] uppercase tracking-widest text-gray-500">Queued</div>
+          <div class="text-3xl font-mono font-bold mt-2 tabular-nums" :class="opQueued.tint">
+            {{ opQueued.count }}
+          </div>
+          <div class="text-sm text-gray-300 mt-1">
+            {{ opQueued.count === 0 ? 'All clear' : `pending send` }}
+          </div>
+          <div class="text-[10px] text-gray-500" v-if="opQueued.oldest">
+            Oldest: {{ opQueued.oldest }}
+          </div>
         </router-link>
       </div>
     </template>
