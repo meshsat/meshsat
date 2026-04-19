@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
-# install-blank-cursor.sh — build + install a fully-transparent
-# X cursor theme named "blank". Called from install-kiosk.sh. Every
-# cursor variant the compositor might ask for (default / left_ptr /
-# arrow / pointer / xterm / hand2 / grab / move / resize / …) is a
-# symlink to the same 1×1 transparent pixel, so the Wayland cursor
-# literally renders nothing regardless of pointer activity.
+# install-blank-cursor.sh — install a fully-transparent xcursor theme
+# named "blank". Every cursor variant symlinks to a single 1×1
+# transparent xcursor file, so labwc / wlroots draws zero visible
+# pixels regardless of pointer activity.
 #
-# Why this is needed: CSS `cursor: none` only hides Chromium's own
-# cursor inside the browser window. labwc still draws a compositor
-# cursor on top whenever a pointer device is present (the AIOC HID
-# on the kits registers as one). `cursorSize=1` is a 1-pixel
-# fallback that's still faintly visible at Touch Display 2 DPI.
-# A blank theme draws 0 visible pixels, period.
+# The xcursor binary is emitted by a short Python snippet below so
+# we have zero external tool dependencies (xcursorgen was flaky;
+# the previous attempt produced a 0-byte file because the wrong
+# apt package was pulled in).
 
 set -euo pipefail
 
@@ -22,32 +18,44 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
   echo "Run as root" >&2; exit 1
 fi
 
-# Need xcursorgen to compile the transparent cursor from a PNG.
-if ! command -v xcursorgen >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq x11-apps >/dev/null
-fi
-
 echo "Building blank cursor theme at $THEME_DIR…"
 mkdir -p "$THEME_DIR/cursors"
 
-# 1×1 transparent PNG as base64 (smallest valid PNG of a single
-# fully-transparent pixel — 67 bytes).
-tmp=$(mktemp -d)
-base64 -d >"$tmp/t.png" <<'EOF'
-iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==
-EOF
+# Emit a 1×1 transparent xcursor file directly. The binary format:
+#   MAGIC "Xcur" | header_sz=16 | version=0x10000 | ntoc=1
+#   toc[0]:   type=0xfffd0002 (image) | subtype=32 | position=28
+#   image:    header_sz=36 | type=0xfffd0002 | subtype=32 | version=1
+#             width=1 | height=1 | xhot=0 | yhot=0 | delay=0
+#             pixels (4 bytes ARGB, 0x00000000 = transparent)
+# Total: 16 + 12 + 36 + 4 = 68 bytes.
+python3 - "$THEME_DIR/cursors/default" <<'PY'
+import struct, sys
+out = open(sys.argv[1], "wb")
+# Xcursor file header
+out.write(b"Xcur")
+out.write(struct.pack("<III", 16, 0x10000, 1))          # hdrsz, version, ntoc
+# TOC entry
+out.write(struct.pack("<III", 0xfffd0002, 32, 28))       # type, subtype, pos
+# Image chunk (starts at byte 28)
+out.write(struct.pack("<IIII", 36, 0xfffd0002, 32, 1))   # hdrsz, type, subtype, version
+out.write(struct.pack("<IIIII", 1, 1, 0, 0, 0))          # w, h, xhot, yhot, delay
+out.write(b"\x00\x00\x00\x00")                            # 1×1 ARGB transparent
+out.close()
+PY
 
-# xcursorgen config — one frame of the transparent PNG at nominal
-# size 32 with hotspot at 0,0.
-cat >"$tmp/c.in" <<EOF
-32 0 0 $tmp/t.png
-EOF
+# Verify the file is sane (68 bytes, not zero).
+sz=$(stat --printf='%s' "$THEME_DIR/cursors/default")
+if [ "$sz" -lt 60 ]; then
+  echo "ERROR: blank cursor file is only $sz bytes — generation failed" >&2
+  exit 1
+fi
+echo "  → /usr/share/icons/blank/cursors/default ($sz bytes)"
 
-xcursorgen "$tmp/c.in" "$THEME_DIR/cursors/default" 2>/dev/null
-
-# Symlink every cursor name the compositor might request to the
-# single transparent cursor file. List adapted from xcursor-themes
-# (Adwaita + common apps).
+# Symlink every cursor name wlroots/Gtk/Qt might request to the
+# single transparent cursor. Missing names fall back to "default"
+# automatically, but naming them explicitly avoids wlroots logging
+# 'failed to load cursor X' warnings which some compositors trigger
+# a fallback theme scan on.
 cd "$THEME_DIR/cursors"
 for name in left_ptr arrow top_left_arrow pointer hand1 hand2 \
             question_arrow context-menu help cell crosshair \
@@ -73,5 +81,4 @@ Comment=Fully transparent cursor theme for kiosk use
 Inherits=
 EOF
 
-rm -rf "$tmp"
-echo "Blank cursor theme installed."
+echo "Blank cursor theme installed ($(ls "$THEME_DIR/cursors" | wc -l) cursor names)."
