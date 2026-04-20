@@ -27,6 +27,7 @@ const allTabs = [
   { id: 'deadman',       label: 'Dead Man',      tier: 'engineer' },
   { id: 'tak',           label: 'TAK',           tier: 'engineer' },
   { id: 'credentials',   label: 'Credentials',   tier: 'engineer' },
+  { id: 'network',       label: 'Network',       tier: 'engineer' },
   { id: 'routing',       label: 'Routing',       tier: 'engineer' },
   { id: 'config_mgmt',   label: 'Export/Import', tier: 'engineer' },
   { id: 'about',         label: 'About',         tier: 'engineer' },
@@ -749,6 +750,138 @@ function stopPermitJoinCountdown() {
   if (permitJoinTimer) { clearInterval(permitJoinTimer); permitJoinTimer = null }
 }
 
+// Bluetooth peers — system-level pairing for BLE mesh links. [MESHSAT-623]
+const btScanBusy = ref(false)
+const btScanDurationSec = ref(10)
+const btScanRemaining = ref(0)
+let btScanTimer = null
+const btError = ref('')
+
+async function doBTScan() {
+  if (btScanBusy.value) return
+  btError.value = ''
+  btScanBusy.value = true
+  btScanRemaining.value = btScanDurationSec.value
+  if (btScanTimer) clearInterval(btScanTimer)
+  btScanTimer = setInterval(() => {
+    if (btScanRemaining.value > 0) btScanRemaining.value--
+  }, 1000)
+  try {
+    await store.bluetoothScan(btScanDurationSec.value)
+    await store.fetchBluetoothDevices()
+  } catch (e) {
+    btError.value = e?.message || 'Scan failed'
+  } finally {
+    btScanBusy.value = false
+    btScanRemaining.value = 0
+    if (btScanTimer) { clearInterval(btScanTimer); btScanTimer = null }
+  }
+}
+
+async function doBTPair(addr) {
+  btError.value = ''
+  try {
+    await store.bluetoothPair(addr)
+    await store.fetchBluetoothDevices()
+  } catch (e) { btError.value = e?.message || 'Pair failed' }
+}
+async function doBTConnect(addr) {
+  btError.value = ''
+  try {
+    await store.bluetoothConnect(addr)
+    await store.fetchBluetoothDevices()
+  } catch (e) { btError.value = e?.message || 'Connect failed' }
+}
+async function doBTDisconnect(addr) {
+  btError.value = ''
+  try {
+    await store.bluetoothDisconnect(addr)
+    await store.fetchBluetoothDevices()
+  } catch (e) { btError.value = e?.message || 'Disconnect failed' }
+}
+async function doBTRemove(addr) {
+  if (!confirm(`Forget Bluetooth device ${addr}?`)) return
+  btError.value = ''
+  try {
+    await store.bluetoothRemove(addr)
+    await store.fetchBluetoothDevices()
+  } catch (e) { btError.value = e?.message || 'Remove failed' }
+}
+async function doBTPower(on) {
+  btError.value = ''
+  try {
+    if (on) await store.bluetoothPowerOn(); else await store.bluetoothPowerOff()
+    await store.fetchBluetoothStatus()
+  } catch (e) { btError.value = e?.message || 'Power toggle failed' }
+}
+
+// WiFi — host-level network management. [MESHSAT-624]
+const wifiIface = ref('wlan0')
+const wifiScanBusy = ref(false)
+const wifiBusy = ref(false)
+const wifiError = ref('')
+const wifiShowPw = ref(false)
+const wifiConnectForm = ref({ ssid: '', password: '' })
+
+async function doWifiScan() {
+  if (wifiScanBusy.value) return
+  wifiError.value = ''
+  wifiScanBusy.value = true
+  try {
+    await store.wifiScanNow(wifiIface.value || undefined)
+  } catch (e) { wifiError.value = e?.message || 'Scan failed' }
+  finally { wifiScanBusy.value = false }
+}
+
+function selectWifiSSID(ssid) {
+  wifiConnectForm.value.ssid = ssid
+  wifiConnectForm.value.password = ''
+  wifiShowPw.value = true
+}
+
+async function doWifiConnect() {
+  const ssid = (wifiConnectForm.value.ssid || '').trim()
+  if (!ssid) return
+  // Safety prompt — committing a new WiFi may drop the SSH session if the
+  // operator is currently on WiFi.
+  if (!confirm(
+    `Connect to "${ssid}"?\n\n` +
+    'If this bridge is reachable over the current WiFi link, the connection ' +
+    'will drop momentarily while the interface re-associates.'
+  )) return
+  wifiError.value = ''
+  wifiBusy.value = true
+  try {
+    await store.wifiConnect(ssid, wifiConnectForm.value.password || '', wifiIface.value || undefined)
+    wifiConnectForm.value.password = ''
+    wifiShowPw.value = false
+    await store.fetchWifiStatus(wifiIface.value || undefined)
+    await store.fetchWifiSaved(wifiIface.value || undefined)
+  } catch (e) { wifiError.value = e?.message || 'Connect failed' }
+  finally { wifiBusy.value = false }
+}
+
+async function doWifiDisconnect() {
+  if (!confirm('Disconnect WiFi? This may drop your SSH session if you are connected over WiFi.')) return
+  wifiError.value = ''
+  wifiBusy.value = true
+  try {
+    await store.wifiDisconnect(wifiIface.value || undefined)
+    await store.fetchWifiStatus(wifiIface.value || undefined)
+  } catch (e) { wifiError.value = e?.message || 'Disconnect failed' }
+  finally { wifiBusy.value = false }
+}
+
+function wifiBars(signal) {
+  const s = Number(signal)
+  if (!Number.isFinite(s)) return 0
+  if (s >= -55) return 4
+  if (s >= -65) return 3
+  if (s >= -75) return 2
+  if (s >= -85) return 1
+  return 0
+}
+
 // Routing config + peers + flood control
 const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '' })
 const routingWarning = ref('')
@@ -868,6 +1001,9 @@ onMounted(async () => {
   loadSigningKey()
   loadSpectrumStatus()
   store.fetchPairedClients()  // [MESHSAT-597]
+  // BLE + WiFi system-mgmt [MESHSAT-623 + MESHSAT-624]
+  store.fetchBluetoothStatus(); store.fetchBluetoothDevices()
+  store.fetchWifiStatus(); store.fetchWifiSaved()
 })
 
 // Pair-mode actions. [MESHSAT-597]
@@ -881,7 +1017,11 @@ async function doRevoke(id) {
   await store.revokePairedClient(id)
 }
 
-onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
+onUnmounted(() => {
+  if (signalTimer) clearInterval(signalTimer)
+  if (btScanTimer) clearInterval(btScanTimer)
+  stopPermitJoinCountdown()
+})
 </script>
 
 <template>
@@ -2139,6 +2279,243 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
           <p class="text-[10px] text-gray-500 leading-relaxed">
             <strong class="text-gray-400">Floodable</strong> interfaces receive path discovery requests and announce broadcasts. Enabling on paid transports means every path request generates a message on that interface. <strong class="text-gray-400">Directed sends</strong> (known routes) always use the best interface regardless of this setting.
+          </p>
+        </div>
+
+        <!-- BLE Peers [MESHSAT-623] — system-level Bluetooth device management -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-gray-200">Bluetooth Peers</h3>
+            <div class="flex items-center gap-2">
+              <span v-if="store.bluetoothStatus" class="text-[10px] text-gray-500">
+                adapter: <span class="text-gray-300 font-mono">{{ store.bluetoothStatus.adapter || 'hci0' }}</span>
+              </span>
+              <span v-if="store.bluetoothStatus"
+                :class="store.bluetoothStatus.powered ? 'text-emerald-400' : 'text-gray-500'"
+                class="text-[10px] px-1.5 py-0.5 rounded"
+                :title="store.bluetoothStatus.powered ? 'Adapter powered on' : 'Adapter off'">
+                {{ store.bluetoothStatus.powered ? 'ON' : 'OFF' }}
+              </span>
+              <button @click="doBTPower(!(store.bluetoothStatus?.powered))"
+                class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
+                {{ store.bluetoothStatus?.powered ? 'Power Off' : 'Power On' }}
+              </button>
+            </div>
+          </div>
+          <p class="text-xs text-gray-500 mb-3">Pair and connect Bluetooth devices directly from the bridge — useful for BLE mesh links between field kits without SSH.</p>
+
+          <!-- Scan control -->
+          <div class="flex items-center gap-3 mb-3">
+            <div class="flex-1 flex items-center gap-2">
+              <label class="text-[10px] text-gray-500">Scan (s)</label>
+              <input v-model.number="btScanDurationSec" type="number" min="3" max="60" :disabled="btScanBusy"
+                class="w-16 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 disabled:opacity-40">
+              <span v-if="btScanBusy" class="text-[10px] text-amber-400 animate-pulse">
+                scanning — {{ btScanRemaining }}s
+              </span>
+            </div>
+            <button @click="doBTScan" :disabled="btScanBusy || !(store.bluetoothStatus?.powered)"
+              class="px-3 py-1 rounded text-xs text-white disabled:opacity-40"
+              :class="btScanBusy ? 'bg-gray-700' : 'bg-teal-700 hover:bg-teal-600'">
+              {{ btScanBusy ? 'Scanning…' : 'Scan' }}
+            </button>
+            <button @click="store.fetchBluetoothDevices" class="text-xs text-teal-400 hover:text-teal-300 px-2">Refresh</button>
+          </div>
+          <div v-if="btError" class="text-[10px] text-red-400 bg-red-900/20 rounded px-2 py-1.5 border border-red-800/40 mb-3">{{ btError }}</div>
+
+          <!-- Paired -->
+          <div class="mb-3">
+            <div class="text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+              Paired ({{ (store.bluetoothDevices?.paired || []).length }})
+            </div>
+            <div v-if="(store.bluetoothDevices?.paired || []).length === 0" class="text-xs text-gray-500 py-2">No paired devices yet.</div>
+            <div v-else class="space-y-1.5">
+              <div v-for="d in store.bluetoothDevices.paired" :key="d.address"
+                class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-xs text-gray-200 truncate" :title="d.name || d.address">{{ d.name || d.address }}</span>
+                  <span class="text-[10px] text-gray-600 font-mono truncate">{{ d.address }}</span>
+                  <span v-if="d.connected" class="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-400">connected</span>
+                  <span v-else-if="d.paired" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">paired</span>
+                  <span v-if="d.rssi" class="text-[10px] text-gray-500">{{ d.rssi }} dBm</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <button v-if="d.connected" @click="doBTDisconnect(d.address)"
+                    class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-200 hover:bg-gray-600">Disconnect</button>
+                  <button v-else @click="doBTConnect(d.address)"
+                    class="text-[10px] px-2 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-600">Connect</button>
+                  <button @click="doBTRemove(d.address)"
+                    class="text-[10px] px-2 py-0.5 rounded bg-red-900 text-red-300 hover:bg-red-800">Forget</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Discovered -->
+          <div>
+            <div class="text-[10px] text-gray-500 uppercase tracking-wide mb-1">
+              Discovered ({{ (store.bluetoothDevices?.available || []).length }})
+            </div>
+            <div v-if="(store.bluetoothDevices?.available || []).length === 0" class="text-xs text-gray-500 py-2">
+              No devices seen. Run a scan while the target is in pairing / advertising mode.
+            </div>
+            <div v-else class="space-y-1.5">
+              <div v-for="d in store.bluetoothDevices.available" :key="d.address"
+                class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-xs text-gray-200 truncate" :title="d.name || d.address">{{ d.name || '(unnamed)' }}</span>
+                  <span class="text-[10px] text-gray-600 font-mono truncate">{{ d.address }}</span>
+                  <span v-if="d.rssi" class="text-[10px] text-gray-500">{{ d.rssi }} dBm</span>
+                </div>
+                <button @click="doBTPair(d.address)"
+                  class="text-[10px] px-2 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-600">Pair</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Network (WiFi system-mgmt) [MESHSAT-624] -->
+    <div v-if="activeTab === 'network'">
+      <div class="space-y-4">
+        <!-- Status card -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-medium text-gray-200">WiFi Status</h3>
+            <div class="flex items-center gap-2">
+              <label class="text-[10px] text-gray-500">Interface</label>
+              <input v-model="wifiIface" placeholder="wlan0"
+                class="w-24 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
+              <button @click="store.fetchWifiStatus(wifiIface || undefined); store.fetchWifiSaved(wifiIface || undefined)"
+                class="text-xs text-teal-400 hover:text-teal-300 px-2">Refresh</button>
+            </div>
+          </div>
+          <div class="space-y-1 text-[11px]">
+            <div class="flex justify-between">
+              <span class="text-gray-500">State</span>
+              <span :class="store.wifiStatus?.connected ? 'text-emerald-400' : 'text-gray-400'">
+                {{ store.wifiStatus?.connected ? 'connected' : 'disconnected' }}
+              </span>
+            </div>
+            <div class="flex justify-between" v-if="store.wifiStatus?.ssid">
+              <span class="text-gray-500">SSID</span>
+              <span class="text-gray-200 font-mono">{{ store.wifiStatus.ssid }}</span>
+            </div>
+            <div class="flex justify-between" v-if="store.wifiStatus?.bssid">
+              <span class="text-gray-500">BSSID</span>
+              <span class="text-gray-300 font-mono text-[10px]">{{ store.wifiStatus.bssid }}</span>
+            </div>
+            <div class="flex justify-between" v-if="store.wifiStatus?.frequency">
+              <span class="text-gray-500">Freq</span>
+              <span class="text-gray-300">{{ store.wifiStatus.frequency }} MHz</span>
+            </div>
+            <div class="flex justify-between" v-if="store.wifiStatus?.signal !== undefined && store.wifiStatus?.signal !== null">
+              <span class="text-gray-500">Signal</span>
+              <span class="text-gray-300">{{ store.wifiStatus.signal }} dBm ({{ wifiBars(store.wifiStatus.signal) }}/4 bars)</span>
+            </div>
+            <div class="flex justify-between" v-if="store.wifiStatus?.ip_address">
+              <span class="text-gray-500">IP</span>
+              <span class="text-gray-200 font-mono">{{ store.wifiStatus.ip_address }}</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button v-if="store.wifiStatus?.connected" @click="doWifiDisconnect" :disabled="wifiBusy"
+              class="px-3 py-1 rounded bg-red-700 text-white text-xs hover:bg-red-600 disabled:opacity-40">
+              Disconnect
+            </button>
+            <span v-if="wifiError" class="text-[10px] text-red-400 bg-red-900/20 rounded px-2 py-1.5 border border-red-800/40 flex-1">{{ wifiError }}</span>
+          </div>
+        </div>
+
+        <!-- Connect dialog (appears after selecting an SSID) -->
+        <div v-if="wifiShowPw" class="bg-gray-800 rounded-lg p-4 border border-sky-700/40">
+          <h3 class="text-sm font-medium text-sky-300 mb-1">Connect to "{{ wifiConnectForm.ssid }}"</h3>
+          <p class="text-[10px] text-amber-300 mb-3">
+            ⚠ If you are currently connected via WiFi, the connection will drop while the interface re-associates.
+          </p>
+          <div class="space-y-2">
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">SSID</label>
+              <input v-model="wifiConnectForm.ssid"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Password <span class="text-gray-600">(leave empty for open networks)</span></label>
+              <input v-model="wifiConnectForm.password" type="password"
+                @keyup.enter="doWifiConnect"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
+            </div>
+          </div>
+          <div class="flex items-center gap-2 mt-3">
+            <button @click="doWifiConnect" :disabled="wifiBusy || !wifiConnectForm.ssid"
+              class="px-3 py-1 rounded bg-teal-700 text-white text-xs hover:bg-teal-600 disabled:opacity-40">
+              {{ wifiBusy ? 'Connecting…' : 'Connect' }}
+            </button>
+            <button @click="wifiShowPw = false; wifiConnectForm.password = ''"
+              class="px-3 py-1 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Scan + SSID list -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-gray-200">Available Networks</h3>
+            <button @click="doWifiScan" :disabled="wifiScanBusy"
+              class="px-3 py-1 rounded text-xs text-white disabled:opacity-40"
+              :class="wifiScanBusy ? 'bg-gray-700' : 'bg-teal-700 hover:bg-teal-600'">
+              {{ wifiScanBusy ? 'Scanning…' : 'Scan' }}
+            </button>
+          </div>
+          <div v-if="(store.wifiScan?.networks || []).length === 0" class="text-xs text-gray-500 py-2">
+            No networks in the latest scan. Hit Scan.
+          </div>
+          <div v-else class="space-y-1.5">
+            <button v-for="n in store.wifiScan.networks" :key="(n.bssid || '') + (n.ssid || '')"
+              @click="selectWifiSSID(n.ssid)"
+              class="w-full flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700 hover:border-teal-600 hover:bg-gray-900/80 text-left">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xs text-gray-200 truncate" :title="n.ssid">{{ n.ssid || '(hidden)' }}</span>
+                <span v-if="n.security" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">{{ n.security }}</span>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-[10px] text-gray-500 font-mono">{{ n.signal }} dBm</span>
+                <span class="text-[10px] text-emerald-400" :title="`${wifiBars(n.signal)}/4 bars`">
+                  {{ '▂▄▆█'.slice(0, wifiBars(n.signal)) || '·' }}
+                </span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- Saved networks -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-gray-200">Saved Networks</h3>
+            <span class="text-[10px] text-gray-500">stored in wpa_supplicant</span>
+          </div>
+          <div v-if="(store.wifiSaved?.networks || []).length === 0" class="text-xs text-gray-500 py-2">
+            No saved networks.
+          </div>
+          <div v-else class="space-y-1.5">
+            <div v-for="n in store.wifiSaved.networks" :key="n.ssid"
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xs text-gray-200 truncate">{{ n.ssid }}</span>
+                <span v-if="n.current" class="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-400">active</span>
+                <span v-if="n.disabled" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500">disabled</span>
+              </div>
+              <button @click="selectWifiSSID(n.ssid)"
+                class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
+                Reconnect
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+          <p class="text-[10px] text-gray-500 leading-relaxed">
+            <strong class="text-gray-400">Safety:</strong> switching to a different SSID will drop the current WiFi link. If you are SSHed in over WiFi, the session will hang until the new network associates.
           </p>
         </div>
       </div>

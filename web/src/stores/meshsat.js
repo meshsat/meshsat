@@ -1476,6 +1476,80 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message }
   }
 
+  // Bluetooth system-mgmt (MESHSAT-623). Wraps /api/system/bluetooth/*
+  // ported from HAL. Scan returns immediately after the bounded
+  // bluetoothctl scan completes (1-30s); refetch devices afterward.
+  const bluetoothStatus = ref(null)
+  const bluetoothDevices = ref({ paired: [], available: [] })
+  async function fetchBluetoothStatus() {
+    try { bluetoothStatus.value = await api.get('/system/bluetooth/status') }
+    catch { bluetoothStatus.value = null }
+  }
+  async function fetchBluetoothDevices() {
+    try {
+      const d = await api.get('/system/bluetooth/devices')
+      bluetoothDevices.value = {
+        paired: Array.isArray(d?.paired) ? d.paired : [],
+        available: Array.isArray(d?.available) ? d.available : [],
+      }
+    } catch { /* keep prior */ }
+  }
+  async function bluetoothScan(durationSec = 10) {
+    try { return await api.post(`/system/bluetooth/scan?duration=${durationSec}`, {}) }
+    catch (e) { error.value = e.message; throw e }
+  }
+  async function bluetoothPair(address) {
+    return await api.post('/system/bluetooth/pair', { address })
+  }
+  async function bluetoothConnect(address) {
+    return await api.post(`/system/bluetooth/connect/${encodeURIComponent(address)}`, {})
+  }
+  async function bluetoothDisconnect(address) {
+    return await api.post(`/system/bluetooth/disconnect/${encodeURIComponent(address)}`, {})
+  }
+  async function bluetoothRemove(address) {
+    return await api.del(`/system/bluetooth/remove/${encodeURIComponent(address)}`)
+  }
+  async function bluetoothPowerOn()  { return await api.post('/system/bluetooth/power/on', {}) }
+  async function bluetoothPowerOff() { return await api.post('/system/bluetooth/power/off', {}) }
+
+  // WiFi system-mgmt (MESHSAT-624). Wraps /api/system/wifi/* ported
+  // from HAL.  Scan runs `iw <iface> scan` which is slow (1-5s) but
+  // returns a full list; connect drives the wpa_supplicant state
+  // machine and the kit's admin SSH may briefly drop if the operator
+  // changes network on the SAME interface they're connected through.
+  const wifiStatus = ref(null)
+  const wifiScan = ref({ interface: '', networks: [] })
+  const wifiSaved = ref({ interface: '', networks: [] })
+  async function fetchWifiStatus(iface) {
+    const path = iface ? `/system/wifi/status/${encodeURIComponent(iface)}` : '/system/wifi/status'
+    try { wifiStatus.value = await api.get(path) }
+    catch { wifiStatus.value = null }
+  }
+  async function wifiScanNow(iface) {
+    const path = iface ? `/system/wifi/scan/${encodeURIComponent(iface)}` : '/system/wifi/scan'
+    try {
+      const d = await api.get(path)
+      const nets = Array.isArray(d?.networks) ? d.networks.slice() : []
+      // Strongest first, drop hidden+empty SSIDs at the tail.
+      nets.sort((a, b) => (Number(b.signal) || -999) - (Number(a.signal) || -999))
+      wifiScan.value = { interface: d?.interface || iface || '', networks: nets }
+      return wifiScan.value
+    } catch (e) { error.value = e.message; throw e }
+  }
+  async function fetchWifiSaved(iface) {
+    const path = iface ? `/system/wifi/saved/${encodeURIComponent(iface)}` : '/system/wifi/saved'
+    try { wifiSaved.value = await api.get(path) }
+    catch { wifiSaved.value = { interface: iface || '', networks: [] } }
+  }
+  async function wifiConnect(ssid, password, iface) {
+    return await api.post('/system/wifi/connect', { ssid, password, interface: iface || '' })
+  }
+  async function wifiDisconnect(iface) {
+    const path = iface ? `/system/wifi/disconnect/${encodeURIComponent(iface)}` : '/system/wifi/disconnect'
+    return await api.post(path, {})
+  }
+
   // HeMB bond groups — needed for the operator-dashboard Active Comms
   // tile to render "HeMB <label> · mesh_0 + ax25_0" style when a bond
   // is the actual outbound route, instead of naming a single member.
@@ -1617,6 +1691,14 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     reticulumStatus, fetchReticulumStatus,
     aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity,
     bondGroups, fetchBondGroups,
+    // BLE + WiFi system-mgmt [MESHSAT-623 + MESHSAT-624]
+    bluetoothStatus, bluetoothDevices,
+    fetchBluetoothStatus, fetchBluetoothDevices, bluetoothScan,
+    bluetoothPair, bluetoothConnect, bluetoothDisconnect, bluetoothRemove,
+    bluetoothPowerOn, bluetoothPowerOff,
+    wifiStatus, wifiScan, wifiSaved,
+    fetchWifiStatus, wifiScanNow, fetchWifiSaved,
+    wifiConnect, wifiDisconnect,
     zigbeeStatus, zigbeeDevices, zigbeePermitJoin,
     fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
     startZigBeePermitJoin, stopZigBeePermitJoin,
