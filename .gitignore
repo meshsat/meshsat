@@ -7,6 +7,30 @@ web/dist/
 cmd/meshsat/web/dist/*
 !cmd/meshsat/web/dist/index.html
 
+# Stray `go build` output at repo root — Makefile target is build/meshsat.
+/meshsat
+
+# Python bytecode caches — jspr-helper, msvqsc sidecar, any future helper.
+**/__pycache__/
+
+# MSVQ-SC ONNX model blobs — fetched out-of-band (~23 MB), not tracked.
+sidecar/msvqsc/models/
+
+# Playwright artifacts (per-run) + npm deps for test/e2e.
+test-results/
+test/e2e/test-results/
+test/e2e/node_modules/
+
 # Claude Code — local-only, NEVER commit
 CLAUDE.md
 .claude/
+.meshsat-issue-manifest.tsv
+
+# Claude plan docs (local-only per CLAUDE.md)
+EXECUTION-PLAN.md
+UX-AUDIT-AND-REDESIGN.md
+UX-MULTI-ACCESS-KIOSK-PAIRING.md
+HeMB-EXECUTION-PLAN.md
+HeMB-PROTOCOL-DESIGN.md
+HeMB-ROADMAP.md
+PLAN.md
