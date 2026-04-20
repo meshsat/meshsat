@@ -90,6 +90,63 @@ function onDragEnd() {
   dragOver.value = null
 }
 
+// ── Touch-drag parity [MESHSAT-583] ──
+// HTML5 draggable=true is mouse-only; field-kit operators use a
+// Touch Display 2 where only touch events fire. Mirror the mouse
+// DnD state machine by watching touchstart/move/end on the same
+// widget elements. A 10 px dead-zone keeps short taps from being
+// interpreted as drags.
+const touchDragStart = ref(null)     // {x, y, widget} set in touchstart
+const touchDragging = ref(false)     // flipped true when we cross dead-zone
+
+function onTouchStart(e, widgetId) {
+  const t = e.touches[0]
+  touchDragStart.value = { x: t.clientX, y: t.clientY, widget: widgetId }
+  touchDragging.value = false
+}
+
+function onTouchMove(e, widgetId) {
+  const s = touchDragStart.value
+  if (!s) return
+  const t = e.touches[0]
+  if (!touchDragging.value) {
+    const dx = t.clientX - s.x
+    const dy = t.clientY - s.y
+    if (Math.hypot(dx, dy) < 10) return   // still inside tap dead-zone
+    touchDragging.value = true
+    dragWidget.value = s.widget
+  }
+  e.preventDefault()   // suppress page scroll while dragging
+  const el = document.elementFromPoint(t.clientX, t.clientY)
+  if (!el) return
+  const card = el.closest('[data-widget-id]')
+  dragOver.value = card ? card.getAttribute('data-widget-id') : null
+}
+
+function onTouchEnd() {
+  const s = touchDragStart.value
+  touchDragStart.value = null
+  if (!touchDragging.value) {
+    dragWidget.value = null
+    dragOver.value = null
+    return
+  }
+  touchDragging.value = false
+  const sourceId = s?.widget
+  const targetId = dragOver.value
+  dragWidget.value = null
+  dragOver.value = null
+  if (!sourceId || !targetId || sourceId === targetId) return
+  const order = [...widgetOrder.value]
+  const srcIdx = order.indexOf(sourceId)
+  const tgtIdx = order.indexOf(targetId)
+  if (srcIdx === -1 || tgtIdx === -1) return
+  order.splice(srcIdx, 1)
+  order.splice(tgtIdx, 0, sourceId)
+  widgetOrder.value = order
+  localStorage.setItem('meshsat-widget-order', JSON.stringify(order))
+}
+
 // ── Helpers from NodesView ──
 const nowSec = ref(Date.now() / 1000)
 const zbPermitJoinErr = ref('')
@@ -1486,7 +1543,7 @@ function widgetGridClass(id) {
       <!-- ═══ Iridium (SBD 9603 / IMT 9704) ═══ -->
       <div v-if="wid === 'iridium'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -1658,7 +1715,7 @@ function widgetGridClass(id) {
       <!-- ═══ Meshtastic Mesh ═══ -->
       <div v-if="wid === 'mesh'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -1800,7 +1857,7 @@ function widgetGridClass(id) {
       <!-- ═══ Cellular 4G/LTE ═══ -->
       <div v-if="wid === 'cellular'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -1978,7 +2035,7 @@ function widgetGridClass(id) {
       <!-- ═══ Emergency SOS (compact) ═══ -->
       <div v-if="wid === 'sos'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2074,7 +2131,7 @@ function widgetGridClass(id) {
       <!-- ═══ Unified Location ═══ -->
       <div v-if="wid === 'location'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2174,7 +2231,7 @@ function widgetGridClass(id) {
       <!-- ═══ SBD Queue ═══ -->
       <div v-if="wid === 'queue'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4 flex flex-col min-h-[420px]', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2208,7 +2265,7 @@ function widgetGridClass(id) {
       <!-- ═══ APRS ═══ -->
       <div v-if="wid === 'aprs'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-amber-400/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2325,7 +2382,7 @@ function widgetGridClass(id) {
       <!-- ═══ ZigBee ═══ -->
       <div v-if="wid === 'zigbee'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-yellow-400/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2421,7 +2478,7 @@ function widgetGridClass(id) {
       <!-- ═══ Reticulum Network ═══ -->
       <div v-if="wid === 'reticulum'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2474,7 +2531,7 @@ function widgetGridClass(id) {
       <!-- ═══ Satellite Burst Queue ═══ -->
       <div v-if="wid === 'burst'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2517,7 +2574,7 @@ function widgetGridClass(id) {
       <!-- ═══ TAK / CoT ═══ -->
       <div v-if="wid === 'tak'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2571,7 +2628,7 @@ function widgetGridClass(id) {
       <!-- ═══ HeMB Bonding ═══ -->
       <div v-if="wid === 'hemb'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
@@ -2595,7 +2652,7 @@ function widgetGridClass(id) {
       <div v-if="wid === 'activity'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
         @mouseenter="logPaused = true" @mouseleave="logPaused = false"
-        draggable="true" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
