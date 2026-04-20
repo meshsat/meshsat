@@ -560,28 +560,6 @@ func (s *Server) Router() http.Handler {
 		r.Post("/system/backlight", s.handleBacklight)
 		r.Get("/system/battery", s.handleGetBattery)
 
-		// Bluetooth device management (ported from cubeos/hal). [MESHSAT-623]
-		r.Get("/system/bluetooth/status", s.handleBluetoothStatus)
-		r.Get("/system/bluetooth/devices", s.handleBluetoothDevices)
-		r.Post("/system/bluetooth/scan", s.handleBluetoothScan)
-		r.Post("/system/bluetooth/power/on", s.handleBluetoothPowerOn)
-		r.Post("/system/bluetooth/power/off", s.handleBluetoothPowerOff)
-		r.Post("/system/bluetooth/pair", s.handleBluetoothPair)
-		r.Post("/system/bluetooth/connect/{address}", s.handleBluetoothConnect)
-		r.Post("/system/bluetooth/disconnect/{address}", s.handleBluetoothDisconnect)
-		r.Delete("/system/bluetooth/remove/{address}", s.handleBluetoothRemove)
-		r.Post("/system/bluetooth/rfkill", s.handleBluetoothRFKill)
-
-		// WiFi network management (ported from cubeos/hal). [MESHSAT-624]
-		r.Get("/system/wifi/scan/{iface}", s.handleWiFiScan)
-		r.Get("/system/wifi/scan", s.handleWiFiScan)
-		r.Post("/system/wifi/connect", s.handleWiFiConnect)
-		r.Post("/system/wifi/disconnect/{iface}", s.handleWiFiDisconnect)
-		r.Get("/system/wifi/status/{iface}", s.handleWiFiStatus)
-		r.Get("/system/wifi/status", s.handleWiFiStatus)
-		r.Get("/system/wifi/saved/{iface}", s.handleWiFiSaved)
-		r.Get("/system/wifi/saved", s.handleWiFiSaved)
-
 		// Pair mode — touch-display arm + remote-device claim
 		// [MESHSAT-596]. Mounted under /api/v2/pair/ so the old
 		// /api/* JWT-less rail remains stable during the Phase-8
