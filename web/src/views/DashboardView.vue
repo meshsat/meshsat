@@ -756,10 +756,13 @@ function fmtAgo(sec) {
 
 const opSatOK  = computed(() => (store.iridiumSignal?.bars ?? -1) >= 2)
 const opCellOK = computed(() => (store.cellularSignal?.bars ?? -1) >= 2)
-const opMeshOK = computed(() => {
-  const cutoff = Date.now()/1000 - 600
-  return (store.nodes || []).some(n => (n.last_seen || 0) > cutoff)
-})
+// "Mesh is up" = the bridge has an open, handshaked serial session to the
+// Meshtastic radio (same signal StatusStrip uses via store.status.connected).
+// Previous version required a peer seen in the last 10 min, which is
+// activity, not availability — it reports ✗ on any freshly-provisioned
+// private channel where no other node has transmitted yet, and cascades
+// into Active Comms falling back to the next transport.
+const opMeshOK = computed(() => store.status?.connected === true)
 const opAprsOK = computed(() => store.aprsStatus?.connected === true && store.aprsStatus?.kiss_up === true)
 
 const opChannels = computed(() => [
