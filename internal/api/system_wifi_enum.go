@@ -105,26 +105,20 @@ func buildWiFiInterface(sysNet, name string) WiFiInterface {
 	iface.MAC = strings.TrimSpace(readFileOr(filepath.Join(sysNet, name, "address"), ""))
 	iface.State = strings.ToLower(strings.TrimSpace(readFileOr(filepath.Join(sysNet, name, "operstate"), "unknown")))
 
-	// Device symlink points at the controller — `/sys/class/net/wlan0/device`
-	// resolves to something like `/sys/devices/platform/axi/1000...` on
-	// the Pi 5 onboard, or `/sys/devices/platform/axi/.../usb1/...` for
-	// a USB dongle. Resolving the symlink + checking the target path is
-	// the most reliable cross-distro way to detect USB.
-	if target, err := os.Readlink(filepath.Join(sysNet, name, "device")); err == nil {
-		lower := strings.ToLower(target)
-		switch {
-		case strings.Contains(lower, "/usb"):
-			iface.Bus = "usb"
+	// Bus via the `device/subsystem` symlink — its basename is the
+	// bus name (usb, sdio, mmc, pci, platform). This is more reliable
+	// than scanning the `device` symlink's path, which is relative
+	// and uses bus-native naming (e.g. "4-2:1.0" for USB interfaces)
+	// that doesn't contain a literal "usb" string. Field-verified on
+	// tesseract + parallax 2026-04-20:
+	//   wlan0  -> ../../../../../../../../bus/sdio
+	//   wlx... -> ../../../../../../../../../bus/usb
+	if target, err := os.Readlink(filepath.Join(sysNet, name, "device", "subsystem")); err == nil {
+		iface.Bus = filepath.Base(target)
+		switch iface.Bus {
+		case "usb":
 			iface.Role = "usb"
-		case strings.Contains(lower, "/mmc") || strings.Contains(lower, "/sdio"):
-			iface.Bus = "sdio"
-			iface.Role = "onboard"
-		case strings.Contains(lower, "/pci"):
-			iface.Bus = "pci"
-			iface.Role = "onboard"
-		case strings.Contains(lower, "/platform"):
-			iface.Bus = "platform"
-			// Pi 5 wlan0 is platform-attached — treat as onboard.
+		case "sdio", "mmc", "pci", "platform":
 			iface.Role = "onboard"
 		}
 	}
