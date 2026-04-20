@@ -1550,6 +1550,26 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     return await api.post(path, {})
   }
 
+  // WiFi adapter list — onboard vs USB + mgmt detection. Populates
+  // the Network tab's adapter picker. [MESHSAT-642]
+  const wifiInterfaces = ref([])
+  async function fetchWifiInterfaces() {
+    try {
+      const data = await api.get('/system/wifi/interfaces')
+      wifiInterfaces.value = Array.isArray(data) ? data : []
+    } catch { wifiInterfaces.value = [] }
+  }
+
+  // Trusted peers — populated by the federation manifest exchange
+  // (MESHSAT-635/636). Driven from the dashboard widget. [MESHSAT-644]
+  const trustedPeers = ref([])
+  async function fetchTrustedPeers() {
+    try {
+      const data = await api.get('/federation/peers')
+      trustedPeers.value = Array.isArray(data) ? data : []
+    } catch { trustedPeers.value = [] }
+  }
+
   // WiFi peer-link — kit-to-kit IBSS (MESHSAT-630). Capabilities
   // probe + ibss join/leave. UI hides the toggles when the chipset
   // doesn't advertise the mode.
@@ -1719,6 +1739,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     // WiFi peer-link [MESHSAT-630]
     wifiCapabilities, fetchWifiCapabilities,
     wifiIBSSJoin, wifiIBSSLeave,
+    // WiFi adapter enum [MESHSAT-642]
+    wifiInterfaces, fetchWifiInterfaces,
+    // Federation dashboard feed [MESHSAT-644]
+    trustedPeers, fetchTrustedPeers,
     zigbeeStatus, zigbeeDevices, zigbeePermitJoin,
     fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
     startZigBeePermitJoin, stopZigBeePermitJoin,

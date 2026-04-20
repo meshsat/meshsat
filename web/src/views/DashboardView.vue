@@ -1365,6 +1365,14 @@ async function fetchAll() {
   ])
 }
 
+// Links-widget derived state (MESHSAT-644).
+const trustedPeerCount = computed(() => (store.trustedPeers || []).length)
+function linkChipClass(i) {
+  if (i.state !== 'up') return 'bg-gray-800 text-gray-500'
+  if (i.role === 'usb') return 'bg-sky-900/40 text-sky-300'
+  return 'bg-purple-900/30 text-purple-300'
+}
+
 onMounted(() => {
   loadHubConfigForTak()
 
@@ -1397,7 +1405,19 @@ onMounted(() => {
     store.fetchZigBeeStatus()
     store.fetchZigBeeDevices()
     store.fetchZigBeePermitJoin()
+    // Links widget [MESHSAT-644] — poll every cycle. Endpoints are
+    // cheap (sysfs reads + one sqlite SELECT).
+    store.fetchWifiInterfaces()
+    store.fetchBluetoothStatus()
+    store.fetchBluetoothDevices()
+    store.fetchTrustedPeers()
   }, 15000)
+
+  // Seed the Links widget on first render — poll only fires 15 s in.
+  store.fetchWifiInterfaces()
+  store.fetchBluetoothStatus()
+  store.fetchBluetoothDevices()
+  store.fetchTrustedPeers()
 })
 
 onUnmounted(() => {
@@ -1594,6 +1614,37 @@ function widgetGridClass(id) {
           </div>
         </router-link>
       </div>
+
+      <!-- Row 4: Links tile — WiFi adapters + BLE + trusted peers
+           (MESHSAT-644). Compact one-row summary glanceable at a
+           distance; tap → Settings > Routing. -->
+      <router-link to="/settings?shell=operator&tab=routing"
+        class="block rounded-lg border border-gray-800 bg-gray-950/60 p-2 mt-2">
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] uppercase tracking-widest text-gray-500">Links</span>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <!-- Per-iface WiFi chip -->
+            <span v-for="i in (store.wifiInterfaces || []).filter(w => w.role !== 'unknown' || w.state === 'up')"
+              :key="'op-wifi-'+i.name"
+              class="text-[9px] px-1.5 py-0.5 rounded font-mono"
+              :class="linkChipClass(i)">
+              {{ i.role === 'usb' ? 'USB' : 'WiFi' }} · {{ i.state }}
+              <span v-if="i.is_mgmt" class="ml-1 text-amber-300">mgmt</span>
+            </span>
+            <!-- BLE chip -->
+            <span class="text-[9px] px-1.5 py-0.5 rounded"
+              :class="store.bluetoothStatus?.powered ? 'bg-sky-900/40 text-sky-300' : 'bg-gray-800 text-gray-500'">
+              BLE · {{ store.bluetoothStatus?.powered ? 'on' : 'off' }}
+              <span v-if="(store.bluetoothDevices?.paired || []).length" class="ml-1">({{ (store.bluetoothDevices?.paired || []).length }})</span>
+            </span>
+            <!-- Trusted-peer count -->
+            <span class="text-[9px] px-1.5 py-0.5 rounded"
+              :class="trustedPeerCount > 0 ? 'bg-emerald-900/40 text-emerald-300' : 'bg-gray-800 text-gray-500'">
+              Federated · {{ trustedPeerCount }}
+            </span>
+          </div>
+        </div>
+      </router-link>
     </template>
 
     <!-- ═══ Engineer Dashboard (dense 13-widget grid) ═══ -->
@@ -1602,6 +1653,67 @@ function widgetGridClass(id) {
          one canvas. Click → /spectrum for the full detail view. Hides
          entirely if the RTL-SDR isn't present. -->
     <SpectrumWidget class="mb-3" />
+
+    <!-- Links card — per-adapter WiFi + BLE + federated peers. Engineer
+         view — more detail than the operator pill; tap any chip to
+         jump into the related Settings tab. [MESHSAT-644] -->
+    <div class="rounded-lg border border-gray-800 bg-gray-900/80 p-3 mb-3">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xs uppercase tracking-widest text-gray-400 font-display">Links</h3>
+        <router-link to="/settings?shell=engineer&tab=routing" class="text-[10px] text-teal-400 hover:text-teal-300">Manage →</router-link>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <!-- WiFi adapters -->
+        <div>
+          <div class="text-[10px] text-gray-500 mb-1">WiFi</div>
+          <div v-if="(store.wifiInterfaces || []).length === 0" class="text-[10px] text-gray-600">none enumerated</div>
+          <div v-else class="space-y-1">
+            <div v-for="i in store.wifiInterfaces" :key="'eng-wifi-'+i.name"
+              class="flex items-center justify-between bg-gray-800/60 rounded px-2 py-1">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-[10px] font-mono text-gray-200 truncate">{{ i.name }}</span>
+                <span class="text-[9px] px-1 py-0.5 rounded"
+                  :class="i.role === 'usb' ? 'bg-sky-900/40 text-sky-300' : 'bg-purple-900/30 text-purple-300'">{{ i.role }}</span>
+                <span v-if="i.is_mgmt" class="text-[9px] px-1 py-0.5 rounded bg-amber-900/40 text-amber-300">mgmt</span>
+              </div>
+              <span class="text-[9px] px-1.5 py-0.5 rounded"
+                :class="i.state === 'up' ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">{{ i.state }}</span>
+            </div>
+          </div>
+        </div>
+        <!-- BLE -->
+        <div>
+          <div class="text-[10px] text-gray-500 mb-1">Bluetooth</div>
+          <div class="flex items-center justify-between bg-gray-800/60 rounded px-2 py-1">
+            <span class="text-[10px] font-mono text-gray-200 truncate">
+              {{ store.bluetoothStatus?.alias || store.bluetoothStatus?.name || 'hci0' }}
+            </span>
+            <span class="text-[9px] px-1.5 py-0.5 rounded"
+              :class="store.bluetoothStatus?.powered ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
+              {{ store.bluetoothStatus?.powered ? 'on' : 'off' }}
+            </span>
+          </div>
+          <div class="text-[9px] text-gray-500 mt-1">
+            paired: {{ (store.bluetoothDevices?.paired || []).length }} ·
+            discovered: {{ (store.bluetoothDevices?.available || []).length }}
+          </div>
+        </div>
+        <!-- Federation -->
+        <div>
+          <div class="text-[10px] text-gray-500 mb-1">Federated Peers</div>
+          <div class="flex items-center justify-between bg-gray-800/60 rounded px-2 py-1">
+            <span class="text-[10px] text-gray-200">trusted_peers</span>
+            <span class="text-[9px] px-1.5 py-0.5 rounded"
+              :class="trustedPeerCount > 0 ? 'bg-emerald-900/40 text-emerald-300' : 'bg-gray-700 text-gray-500'">
+              {{ trustedPeerCount }}
+            </span>
+          </div>
+          <div class="text-[9px] text-gray-500 mt-1">
+            auto-federate arms on BLE pair.
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 7-Panel Grid (drag-and-drop reorderable) -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">

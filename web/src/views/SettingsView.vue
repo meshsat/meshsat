@@ -816,7 +816,31 @@ async function doBTPower(on) {
 }
 
 // WiFi — host-level network management. [MESHSAT-624]
+// The selected adapter. Defaults to wlan0 but the picker (populated
+// via store.wifiInterfaces) will replace this with a sensible pick
+// once the enum lands. [MESHSAT-642]
 const wifiIface = ref('wlan0')
+// The iface row currently selected — nil until the enum returns.
+const wifiActive = computed(() => (store.wifiInterfaces || []).find(i => i.name === wifiIface.value) || null)
+const wifiActiveIsMgmt = computed(() => !!wifiActive.value?.is_mgmt)
+function pickPreferredWifiIface() {
+  const list = store.wifiInterfaces || []
+  if (list.length === 0) return
+  // Prefer USB (field-intended), then the first non-mgmt, then the first.
+  const usb = list.find(i => i.role === 'usb')
+  if (usb) { wifiIface.value = usb.name; return }
+  const nonMgmt = list.find(i => !i.is_mgmt)
+  if (nonMgmt) { wifiIface.value = nonMgmt.name; return }
+  wifiIface.value = list[0].name
+}
+function confirmMgmtAction(verb) {
+  if (!wifiActiveIsMgmt.value) return true
+  return confirm(
+    `⚠ The selected adapter "${wifiIface.value}" currently owns your management link.\n\n` +
+    `${verb} will likely drop your SSH or kiosk connection.\n\n` +
+    `Continue anyway?`
+  )
+}
 const wifiScanBusy = ref(false)
 const wifiBusy = ref(false)
 const wifiError = ref('')
@@ -842,13 +866,11 @@ function selectWifiSSID(ssid) {
 async function doWifiConnect() {
   const ssid = (wifiConnectForm.value.ssid || '').trim()
   if (!ssid) return
-  // Safety prompt — committing a new WiFi may drop the SSH session if the
-  // operator is currently on WiFi.
-  if (!confirm(
-    `Connect to "${ssid}"?\n\n` +
-    'If this bridge is reachable over the current WiFi link, the connection ' +
-    'will drop momentarily while the interface re-associates.'
-  )) return
+  // Mgmt-aware safety prompt — MESHSAT-642/643. Only the picked iface
+  // matters here; if it's not the mgmt link the operator doesn't need
+  // a scary banner.
+  if (!confirmMgmtAction(`Connecting to a new SSID on "${wifiIface.value}"`)) return
+  if (!wifiActiveIsMgmt.value && !confirm(`Connect "${wifiIface.value}" to "${ssid}"?`)) return
   wifiError.value = ''
   wifiBusy.value = true
   try {
@@ -862,7 +884,8 @@ async function doWifiConnect() {
 }
 
 async function doWifiDisconnect() {
-  if (!confirm('Disconnect WiFi? This may drop your SSH session if you are connected over WiFi.')) return
+  if (!confirmMgmtAction(`Disconnecting "${wifiIface.value}"`)) return
+  if (!wifiActiveIsMgmt.value && !confirm(`Disconnect "${wifiIface.value}"?`)) return
   wifiError.value = ''
   wifiBusy.value = true
   try {
@@ -908,10 +931,9 @@ async function doProbeWifiCaps() {
 }
 async function doIBSSJoin() {
   if (!ibssForm.value.ssid) return
-  if (!confirm(
-    `Join IBSS "${ibssForm.value.ssid}" on ${ibssForm.value.freq} MHz?\n\n` +
-    'This will DISCONNECT the current WiFi client session — if you are SSHed in ' +
-    'over WiFi you will lose the session. Continue only over Ethernet or LTE.'
+  if (!confirmMgmtAction(`IBSS join on "${wifiIface.value}"`)) return
+  if (!wifiActiveIsMgmt.value && !confirm(
+    `Join IBSS "${ibssForm.value.ssid}" on ${ibssForm.value.freq} MHz via ${wifiIface.value}?`
   )) return
   ibssError.value = ''
   ibssBusy.value = true
@@ -922,7 +944,8 @@ async function doIBSSJoin() {
   finally { ibssBusy.value = false }
 }
 async function doIBSSLeave() {
-  if (!confirm('Leave IBSS and return to managed mode?')) return
+  if (!confirmMgmtAction(`IBSS leave on "${wifiIface.value}"`)) return
+  if (!wifiActiveIsMgmt.value && !confirm('Leave IBSS and return to managed mode?')) return
   ibssError.value = ''
   ibssBusy.value = true
   try {
@@ -1053,7 +1076,20 @@ onMounted(async () => {
   store.fetchPairedClients()  // [MESHSAT-597]
   // BLE + WiFi system-mgmt [MESHSAT-623 + MESHSAT-624]
   store.fetchBluetoothStatus(); store.fetchBluetoothDevices()
-  store.fetchWifiStatus(); store.fetchWifiSaved()
+  // [MESHSAT-642] enumerate adapters before picking a default; then
+  // seed status/saved for the picked iface.
+  await store.fetchWifiInterfaces()
+  pickPreferredWifiIface()
+  store.fetchWifiStatus(wifiIface.value || undefined)
+  store.fetchWifiSaved(wifiIface.value || undefined)
+})
+
+// Re-pull status/saved when the operator changes the selected adapter.
+watch(wifiIface, (n) => {
+  if (!n) return
+  store.fetchWifiStatus(n)
+  store.fetchWifiSaved(n)
+  store.wifiCapabilities = null  // force fresh probe
 })
 
 // Pair-mode actions. [MESHSAT-597]
@@ -2434,17 +2470,46 @@ onUnmounted(() => {
     <!-- Network (WiFi system-mgmt) [MESHSAT-624] -->
     <div v-if="activeTab === 'network'">
       <div class="space-y-4">
+        <!-- Adapter picker — MESHSAT-642/643 -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-medium text-gray-200">WiFi Adapter</h3>
+            <button @click="store.fetchWifiInterfaces()" class="text-xs text-teal-400 hover:text-teal-300 px-2">Refresh</button>
+          </div>
+          <div v-if="(store.wifiInterfaces || []).length === 0" class="text-xs text-gray-500 py-2">
+            No WiFi adapters detected. Hit Refresh after plugging a USB dongle.
+          </div>
+          <div v-else class="space-y-1.5">
+            <label v-for="i in store.wifiInterfaces" :key="i.name"
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border cursor-pointer"
+              :class="wifiIface === i.name ? 'border-teal-600' : 'border-gray-700 hover:border-gray-600'">
+              <div class="flex items-center gap-2 min-w-0">
+                <input type="radio" :value="i.name" v-model="wifiIface" class="accent-teal-500">
+                <span class="text-xs text-gray-200 font-mono">{{ i.name }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="i.role === 'usb' ? 'bg-sky-900/40 text-sky-300' : i.role === 'onboard' ? 'bg-purple-900/30 text-purple-300' : 'bg-gray-700 text-gray-400'">
+                  {{ i.role }}
+                </span>
+                <span v-if="i.is_mgmt" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300">mgmt</span>
+                <span v-if="i.driver" class="text-[10px] text-gray-600 font-mono">{{ i.driver }}</span>
+              </div>
+              <span class="text-[10px] px-1.5 py-0.5 rounded"
+                :class="i.state === 'up' ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
+                {{ i.state }}
+              </span>
+            </label>
+          </div>
+          <div v-if="wifiActiveIsMgmt" class="text-[10px] text-amber-300 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">
+            ⚠ "{{ wifiIface }}" is your management link. Destructive actions will confirm twice before firing — they can drop your SSH or kiosk.
+          </div>
+        </div>
+
         <!-- Status card -->
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
           <div class="flex items-center justify-between">
-            <h3 class="text-sm font-medium text-gray-200">WiFi Status</h3>
-            <div class="flex items-center gap-2">
-              <label class="text-[10px] text-gray-500">Interface</label>
-              <input v-model="wifiIface" placeholder="wlan0"
-                class="w-24 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
-              <button @click="store.fetchWifiStatus(wifiIface || undefined); store.fetchWifiSaved(wifiIface || undefined)"
-                class="text-xs text-teal-400 hover:text-teal-300 px-2">Refresh</button>
-            </div>
+            <h3 class="text-sm font-medium text-gray-200">WiFi Status <span class="text-[10px] text-gray-500 ml-1">— {{ wifiIface }}</span></h3>
+            <button @click="store.fetchWifiStatus(wifiIface || undefined); store.fetchWifiSaved(wifiIface || undefined)"
+              class="text-xs text-teal-400 hover:text-teal-300 px-2">Refresh</button>
           </div>
           <div class="space-y-1 text-[11px]">
             <div class="flex justify-between">

@@ -601,6 +601,10 @@ func (s *Server) Router() http.Handler {
 		r.Post("/system/wifi/ibss/leave/{iface}", s.handleWiFiIBSSLeave)
 		r.Post("/system/wifi/ibss/leave", s.handleWiFiIBSSLeave)
 
+		// WiFi adapter enumeration — onboard vs USB + mgmt detection.
+		// [MESHSAT-642]
+		r.Get("/system/wifi/interfaces", s.handleWiFiInterfaces)
+
 		// Auto-federation: trusted peers CRUD. [MESHSAT-636]
 		r.Get("/federation/peers", s.handleFederationPeersList)
 		r.Get("/federation/peers/{signer_id}", s.handleFederationPeerGet)
