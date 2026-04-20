@@ -1,0 +1,17 @@
+[Unit]
+Description=Nightly kiosk clean-slate restart to prevent long-session renderer degradation
+Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT-628
+
+[Timer]
+# 03:30 local, every day. Low-activity window — no operator watches
+# the screen then, and the kit's network/modem/radio subsystems are
+# unaffected (only the UI layer recycles). Persistent=true so a
+# missed window (kit was powered off) fires on next boot.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+# Small randomised delay so the two field kits don't restart at the
+# exact same second if they're ever correlated in some future check.
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

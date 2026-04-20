@@ -40,10 +40,16 @@ app.use(router)
 app.mount('#app')
 
 // Self-refreshing kiosk: poll / every 30 s; reload when the bundle hash
-// changes.  Override via ?bundleWatchMs=N (0 disables).  [MESHSAT-621]
+// changes. Independent 4 h freshness timer unconditionally reloads to
+// clear accumulated renderer state (V8 heap fragmentation + listener
+// leaks degrade main-thread scheduling over long uptimes). Override via
+// ?bundleWatchMs=N + ?bundleFreshMs=N (0 on either disables).
+// [MESHSAT-621 + MESHSAT-628]
 try {
   const params = new URLSearchParams(window.location.search || '')
-  const override = params.get('bundleWatchMs')
-  const ms = override !== null ? Number(override) : 30_000
-  if (Number.isFinite(ms)) startBundleWatcher(ms)
+  const watchOverride = params.get('bundleWatchMs')
+  const freshOverride = params.get('bundleFreshMs')
+  const watchMs = watchOverride !== null ? Number(watchOverride) : 30_000
+  const freshMs = freshOverride !== null ? Number(freshOverride) : 4 * 60 * 60 * 1000
+  if (Number.isFinite(watchMs)) startBundleWatcher(watchMs, Number.isFinite(freshMs) ? freshMs : 0)
 } catch {}

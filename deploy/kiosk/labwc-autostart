@@ -48,6 +48,14 @@ swayidle -w \
 #    direct viewport scaling — otherwise touch coordinates stay
 #    unscaled and every tap lands in the wrong spot. Verified live
 #    on tesseract 2026-04-19. [MESHSAT-549/578]
+# Long-running kiosk resilience flags [MESHSAT-628]:
+# Chromium's default backgrounding heuristics throttle setInterval
+# handlers + lazy-GC even in foreground kiosk mode after long
+# uptimes — observed on tesseract 2026-04-20 as "info out of date
+# + clicks don't register" after 10 h (scroll still worked because
+# it's GPU-composited, independent of the main JS thread). These
+# flags plus a bounded V8 heap make polling + click dispatch
+# latency deterministic over multi-day uptimes.
 chromium-browser \
   --kiosk \
   --noerrdialogs \
@@ -59,6 +67,11 @@ chromium-browser \
   --touch-events=enabled \
   --force-device-scale-factor=1.5 \
   --enable-use-zoom-for-dsf=true \
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  --disable-backgrounding-occluded-windows \
+  --disable-features=CalculateNativeWinOcclusion,BackForwardCache \
+  --js-flags="--max-old-space-size=256" \
   --app="__BRIDGE_URL__" &
 # NB: the URL MUST be quoted — it contains `&` (query-string
 # separator between kiosk=1 and shell=operator). Without quotes,

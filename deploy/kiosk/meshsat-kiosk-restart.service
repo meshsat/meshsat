@@ -1,0 +1,28 @@
+[Unit]
+Description=Restart kiosk session (Chromium + labwc) for a clean-slate daily
+# host-ops: allowed-in-standalone — runs from host systemd, not meshsat.
+After=getty@tty1.service
+Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT-628
+
+[Service]
+Type=oneshot
+# The getty@tty1 restart tears down the kiosk user's session scope (and
+# therefore labwc + Chromium); autologin spawns them fresh. See
+# scripts/install-kiosk.sh for the session chain. Run as the stricter
+# pkill-then-restart recipe (feedback_kiosk_two_autostart_footgun.md)
+# so we don't end up with two labwc processes fighting for DRM master.
+ExecStart=/bin/bash -c '\
+  set -e; \
+  /bin/systemctl stop getty@tty1; \
+  /usr/bin/pkill -KILL -u kiosk || true; \
+  /bin/sleep 3; \
+  for s in $(/usr/bin/loginctl list-sessions --no-legend | /usr/bin/awk "\\$3==\\"kiosk\\"{print \\$1}"); do \
+    /usr/bin/loginctl terminate-session "$s" || true; \
+    /bin/systemctl stop "session-$s.scope" || true; \
+  done; \
+  /bin/sleep 3; \
+  /bin/systemctl start getty@tty1; \
+'
+
+[Install]
+# Not directly Enabled — driven by the .timer companion.
