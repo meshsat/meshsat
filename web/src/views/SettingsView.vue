@@ -919,6 +919,38 @@ const wifiStatusView = computed(() => {
 function savedFlagActive(n)   { return typeof n.flags === 'string' && n.flags.includes('CURRENT') }
 function savedFlagDisabled(n) { return typeof n.flags === 'string' && n.flags.includes('DISABLED') }
 
+// Dedup the scan list by SSID. A single AP on multiple bands (2.4 +
+// 5 + 6 GHz) or a mesh / multi-AP deployment shows up as many BSS
+// rows with the same SSID — the raw list is unusable in the UI.
+// Pick the strongest-signal row per SSID; keep the count so the
+// operator sees "(3 APs)" and knows there's more than one.
+// Hidden / empty-SSID rows are grouped under a single "(hidden)"
+// bucket.
+const dedupedScanNetworks = computed(() => {
+  const src = (store.wifiScan?.networks) || []
+  const bySSID = new Map()
+  for (const n of src) {
+    const key = (n.ssid && n.ssid.length > 0) ? n.ssid : '(hidden)'
+    const prev = bySSID.get(key)
+    if (!prev || (Number(n.signal) || -999) > (Number(prev.signal) || -999)) {
+      bySSID.set(key, { ...n, ssid: key, _count: (prev?._count || 0) + 1 })
+    } else {
+      prev._count = (prev._count || 0) + 1
+    }
+  }
+  const out = Array.from(bySSID.values())
+  out.sort((a, b) => (Number(b.signal) || -999) - (Number(a.signal) || -999))
+  return out
+})
+
+// Two clearly-separated modes for the Network tab:
+//   "ap"   — join an existing access point (the common case: kit
+//            pulls DHCP from a Ziggo / LTE hotspot / field AP)
+//   "peer" — direct kit-to-kit IBSS link, no AP in the middle
+// Hides the inapplicable cards so an operator sees ONE obvious path,
+// not two overlapping ones.
+const networkMode = ref('ap')
+
 // WiFi peer-link (MESHSAT-630) — IBSS join/leave for kit-to-kit links
 // without an infrastructure AP.
 const ibssForm = ref({ ssid: 'meshsat-ibss', freq: 2412 })
@@ -2469,6 +2501,24 @@ onUnmounted(() => {
     <!-- Network (WiFi system-mgmt) [MESHSAT-624] -->
     <div v-if="activeTab === 'network'">
       <div class="space-y-4">
+        <!-- Mode selector — two clearly-separated flows. "Connect to
+             Network" is the common case; "Link to Kit" is the P2P
+             IBSS path. Only one mode's cards are shown below. -->
+        <div class="flex gap-2 p-1 bg-gray-900 rounded-lg border border-gray-700">
+          <button @click="networkMode = 'ap'"
+            class="flex-1 px-3 py-2 rounded text-xs font-medium transition-colors"
+            :class="networkMode === 'ap' ? 'bg-teal-600 text-white' : 'text-gray-400 hover:text-gray-200'">
+            <div class="font-semibold">Connect to Network</div>
+            <div class="text-[10px] opacity-80 mt-0.5">Join an existing WiFi AP (home / hotspot / field AP)</div>
+          </button>
+          <button @click="networkMode = 'peer'"
+            class="flex-1 px-3 py-2 rounded text-xs font-medium transition-colors"
+            :class="networkMode === 'peer' ? 'bg-teal-600 text-white' : 'text-gray-400 hover:text-gray-200'">
+            <div class="font-semibold">Link to another kit</div>
+            <div class="text-[10px] opacity-80 mt-0.5">Direct kit-to-kit IBSS — no AP needed</div>
+          </button>
+        </div>
+
         <!-- Adapter picker — MESHSAT-642/643 -->
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
           <div class="flex items-center justify-between">
@@ -2556,6 +2606,8 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- ═══ Connect-to-Network (AP client) cards ═══ -->
+        <template v-if="networkMode === 'ap'">
         <!-- Connect dialog (appears after selecting an SSID) -->
         <div v-if="wifiShowPw" class="bg-gray-800 rounded-lg p-4 border border-sky-700/40">
           <h3 class="text-sm font-medium text-sky-300 mb-1">Connect to "{{ wifiConnectForm.ssid }}"</h3>
@@ -2595,15 +2647,18 @@ onUnmounted(() => {
               {{ wifiScanBusy ? 'Scanning…' : 'Scan' }}
             </button>
           </div>
-          <div v-if="(store.wifiScan?.networks || []).length === 0" class="text-xs text-gray-500 py-2">
+          <div v-if="dedupedScanNetworks.length === 0" class="text-xs text-gray-500 py-2">
             No networks in the latest scan. Hit Scan.
           </div>
           <div v-else class="space-y-1.5">
-            <button v-for="n in store.wifiScan.networks" :key="(n.bssid || '') + (n.ssid || '')"
-              @click="selectWifiSSID(n.ssid)"
+            <button v-for="n in dedupedScanNetworks" :key="n.ssid"
+              @click="selectWifiSSID(n.ssid === '(hidden)' ? '' : n.ssid)"
               class="w-full flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700 hover:border-teal-600 hover:bg-gray-900/80 text-left">
               <div class="flex items-center gap-2 min-w-0">
-                <span class="text-xs text-gray-200 truncate" :title="n.ssid">{{ n.ssid || '(hidden)' }}</span>
+                <span class="text-xs text-gray-200 truncate" :title="n.ssid">{{ n.ssid }}</span>
+                <span v-if="n._count && n._count > 1" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-500" :title="`${n._count} access points broadcast this SSID`">
+                  ×{{ n._count }}
+                </span>
                 <span v-if="n.security" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">{{ n.security }}</span>
               </div>
               <div class="flex items-center gap-2 shrink-0">
@@ -2613,6 +2668,9 @@ onUnmounted(() => {
                 </span>
               </div>
             </button>
+            <p class="text-[10px] text-gray-600 pt-1">
+              Listing strongest signal per SSID — ×N chip shows how many access points broadcast the same SSID.
+            </p>
           </div>
         </div>
 
@@ -2639,6 +2697,16 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
+        </div>
+        </template><!-- /networkMode === 'ap' -->
+
+        <!-- ═══ Link-to-Kit (IBSS) card ═══ -->
+        <template v-if="networkMode === 'peer'">
+        <div class="bg-gray-800/40 rounded-lg p-3 border border-teal-900/40">
+          <div class="text-xs text-teal-300 font-medium mb-1">Direct kit-to-kit link</div>
+          <p class="text-[10px] text-gray-400 leading-relaxed">
+            Two MeshSat kits form an ad-hoc WiFi cell with no access point in between. Use this when no infrastructure is available — field ops, denied comms, convoy. Both kits must use the same cell name + frequency. Reticulum's <code class="text-gray-300">tcp_0</code> then rides the link-local IPs.
+          </p>
         </div>
 
         <!-- Peer Link (IBSS kit-to-kit) [MESHSAT-630] -->
@@ -2687,6 +2755,7 @@ onUnmounted(() => {
             <strong class="text-gray-400">Safety:</strong> switching to a different SSID will drop the current WiFi link. If you are SSHed in over WiFi, the session will hang until the new network associates. IBSS re-associates the whole interface, same caveat.
           </p>
         </div>
+        </template><!-- /networkMode === 'peer' -->
       </div>
     </div>
 

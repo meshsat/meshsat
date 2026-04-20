@@ -416,9 +416,19 @@ function transformBadge(type) {
   }
 }
 
-// Unassigned devices
+// Unassigned devices — surfaces ONLY the ones the operator can
+// meaningfully bind to a gateway. Ambiguous (multi-class VID:PID,
+// e.g. CH343 shared by Meshtastic + ZigBee + Cellular) and unknown
+// devices are hidden here: binding them to a Meshtastic slot can't
+// work until the protocol probe (MESHSAT-646) resolves them. They
+// still appear on the Devices tab with an amber chip so the operator
+// knows they exist and why they're held back.
+const HIDDEN_BIND_TYPES = new Set(['unknown', 'ambiguous'])
 const unassignedDevices = computed(() =>
-  (store.devices || []).filter(d => !d.bound_to)
+  (store.devices || []).filter(d => !d.bound_to && !HIDDEN_BIND_TYPES.has(d.device_type))
+)
+const hiddenUnassignedCount = computed(() =>
+  (store.devices || []).filter(d => !d.bound_to && HIDDEN_BIND_TYPES.has(d.device_type)).length
 )
 
 // Known mesh nodes for the node picker
@@ -600,6 +610,9 @@ onUnmounted(() => {
                 class="ml-1 px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-teal-700 hover:text-teal-300">
                 {{ d.device_type }} ({{ d.port }})
               </button>
+            </span>
+            <span v-else-if="hiddenUnassignedCount > 0" class="ml-2 text-amber-400">
+              &mdash; {{ hiddenUnassignedCount }} unresolved device(s) — see Devices tab.
             </span>
           </span>
         </div>
