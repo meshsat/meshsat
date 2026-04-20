@@ -49,12 +49,25 @@ lint:consistency:
       VIOLATIONS=()
       WARNINGS=()
 
-      # Rule 1: HAL boundary
-      if echo "$DIFF" | grep -qE '^\+.*\bnsenter\b'; then
-        VIOLATIONS+=("HAL boundary: nsenter found — all host ops must go through HAL")
+      # Standalone-mode pragma: field kits run meshsat as the sole
+      # trusted container on a dedicated Pi; there is no HAL container
+      # to go through, so the HAL-boundary rule is scoped off when the
+      # diff explicitly opts in. The pragma `// host-ops: allowed-in-standalone`
+      # must appear on any added line in the same commit.
+      SKIP_HAL_BOUNDARY=""
+      if echo "$DIFF" | grep -qE '^\+.*host-ops: allowed-in-standalone'; then
+        SKIP_HAL_BOUNDARY=1
+        echo "consistency-check: HAL-boundary rule skipped — standalone-mode pragma detected"
       fi
-      if echo "$DIFF" | grep -qE '^\+.*exec\.Command.*systemctl'; then
-        VIOLATIONS+=("HAL boundary: direct systemctl call — use HAL REST endpoint")
+
+      # Rule 1: HAL boundary (skippable via pragma above)
+      if [ -z "$SKIP_HAL_BOUNDARY" ]; then
+        if echo "$DIFF" | grep -qE '^\+.*\bnsenter\b'; then
+          VIOLATIONS+=("HAL boundary: nsenter found — all host ops must go through HAL")
+        fi
+        if echo "$DIFF" | grep -qE '^\+.*exec\.Command.*systemctl'; then
+          VIOLATIONS+=("HAL boundary: direct systemctl call — use HAL REST endpoint")
+        fi
       fi
 
       # Rule 2: CGO
