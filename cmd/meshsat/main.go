@@ -1039,6 +1039,16 @@ func main() {
 		srv.SetTCPInterface(tcpIface)
 	}
 
+	// BLE peer manager — auto-starts a Reticulum client-link over BLE
+	// when the operator pairs another MeshSat kit. [MESHSAT-633]
+	if proc != nil && ifaceReg != nil {
+		blePeerAdapter := cfg.BLEAdapter
+		if blePeerAdapter == "" {
+			blePeerAdapter = "hci0"
+		}
+		srv.SetBLEPeerManager(api.NewBLEPeerManager(blePeerAdapter, proc, ifaceReg))
+	}
+
 	// Key store — cross-platform key exchange with QR bundles and envelope encryption
 	var ks *keystore.KeyStore
 	if routingID != nil {

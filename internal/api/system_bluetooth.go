@@ -247,6 +247,17 @@ func (s *Server) handleBluetoothConnect(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, sanitizeExecError("connect", err))
 		return
 	}
+	// If this is another MeshSat kit, bring up the Reticulum BLE
+	// peer-link automatically. Best-effort: failure doesn't block the
+	// BT connect success — the operator can retry via a separate
+	// code path if we add one later. [MESHSAT-633]
+	if s.blePeerMgr != nil {
+		if info, infoErr := execWithTimeout(r.Context(), "bluetoothctl", "info", address); infoErr == nil && infoHasMeshSatUUID(info) {
+			if err := s.blePeerMgr.EnsurePeer(r.Context(), address); err != nil {
+				log.Warn().Err(err).Str("addr", address).Msg("ble-peer: auto-link failed, keeping BT connect success")
+			}
+		}
+	}
 	writeSuccess(w, fmt.Sprintf("connected to %s", address))
 }
 
@@ -260,6 +271,12 @@ func (s *Server) handleBluetoothDisconnect(w http.ResponseWriter, r *http.Reques
 	if err := validateMACAddress(address); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Tear down any active BLE-peer link before dropping the BT ACL.
+	// Order matters: Stop() needs the D-Bus device path to still be
+	// present. [MESHSAT-633]
+	if s.blePeerMgr != nil {
+		s.blePeerMgr.RemovePeer(address)
 	}
 	if _, err := execWithTimeout(r.Context(), "bluetoothctl", "disconnect", address); err != nil {
 		log.Error().Err(err).Str("addr", address).Msg("bluetooth disconnect failed")
@@ -279,6 +296,10 @@ func (s *Server) handleBluetoothRemove(w http.ResponseWriter, r *http.Request) {
 	if err := validateMACAddress(address); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Tear down any live BLE-peer link before unpairing. [MESHSAT-633]
+	if s.blePeerMgr != nil {
+		s.blePeerMgr.RemovePeer(address)
 	}
 	if _, err := execWithTimeout(r.Context(), "bluetoothctl", "remove", address); err != nil {
 		log.Error().Err(err).Str("addr", address).Msg("bluetooth remove failed")

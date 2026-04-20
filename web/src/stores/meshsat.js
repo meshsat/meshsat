@@ -1550,6 +1550,23 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     return await api.post(path, {})
   }
 
+  // WiFi peer-link — kit-to-kit IBSS (MESHSAT-630). Capabilities
+  // probe + ibss join/leave. UI hides the toggles when the chipset
+  // doesn't advertise the mode.
+  const wifiCapabilities = ref(null)
+  async function fetchWifiCapabilities(iface) {
+    const path = iface ? `/system/wifi/capabilities/${encodeURIComponent(iface)}` : '/system/wifi/capabilities'
+    try { wifiCapabilities.value = await api.get(path) }
+    catch { wifiCapabilities.value = null }
+  }
+  async function wifiIBSSJoin(ssid, freq, iface) {
+    return await api.post('/system/wifi/ibss/join', { ssid, freq, interface: iface || '' })
+  }
+  async function wifiIBSSLeave(iface) {
+    const path = iface ? `/system/wifi/ibss/leave/${encodeURIComponent(iface)}` : '/system/wifi/ibss/leave'
+    return await api.post(path, {})
+  }
+
   // HeMB bond groups — needed for the operator-dashboard Active Comms
   // tile to render "HeMB <label> · mesh_0 + ax25_0" style when a bond
   // is the actual outbound route, instead of naming a single member.
@@ -1699,6 +1716,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     wifiStatus, wifiScan, wifiSaved,
     fetchWifiStatus, wifiScanNow, fetchWifiSaved,
     wifiConnect, wifiDisconnect,
+    // WiFi peer-link [MESHSAT-630]
+    wifiCapabilities, fetchWifiCapabilities,
+    wifiIBSSJoin, wifiIBSSLeave,
     zigbeeStatus, zigbeeDevices, zigbeePermitJoin,
     fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
     startZigBeePermitJoin, stopZigBeePermitJoin,

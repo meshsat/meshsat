@@ -102,6 +102,21 @@ func (r *InterfaceRegistry) Get(id string) *ReticulumInterface {
 	return r.ifaces[id]
 }
 
+// Unregister removes an interface from the registry. Used for dynamic
+// transports whose lifecycle is driven by external events — e.g.
+// BLE-client peers that come and go as operators pair/unpair remote
+// MeshSat kits. [MESHSAT-633]
+func (r *InterfaceRegistry) Unregister(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.ifaces[id]; !ok {
+		return false
+	}
+	delete(r.ifaces, id)
+	log.Info().Str("id", id).Msg("reticulum interface unregistered")
+	return true
+}
+
 // Send transmits a packet on the named interface. This is the function
 // that TransportNode.sendFn should call.
 func (r *InterfaceRegistry) Send(ifaceID string, packet []byte) error {

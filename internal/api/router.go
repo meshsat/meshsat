@@ -53,6 +53,18 @@ type Server struct {
 	tcpIface      *routing.TCPInterface
 	spectrumMon   *spectrum.SpectrumMonitor
 	restartFn     func()
+	// blePeerMgr manages BLE-client Reticulum links to remote MeshSat
+	// kits paired via Settings > Routing > Bluetooth Peers. Nil until
+	// SetBLEPeerManager() has been called from wiring in main.go;
+	// handlers are safe to call without it (they just skip auto-peer).
+	// [MESHSAT-633]
+	blePeerMgr *BLEPeerManager
+}
+
+// SetBLEPeerManager wires the BLE peer manager for auto-RNS-peer on
+// paired MeshSat kits. [MESHSAT-633]
+func (s *Server) SetBLEPeerManager(m *BLEPeerManager) {
+	s.blePeerMgr = m
 }
 
 // SetRestartFunc sets the function called by POST /api/system/restart
@@ -581,6 +593,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/system/wifi/status", s.handleWiFiStatus)
 		r.Get("/system/wifi/saved/{iface}", s.handleWiFiSaved)
 		r.Get("/system/wifi/saved", s.handleWiFiSaved)
+
+		// WiFi peer-link (kit-to-kit without AP). [MESHSAT-630]
+		r.Get("/system/wifi/capabilities/{iface}", s.handleWiFiCapabilities)
+		r.Get("/system/wifi/capabilities", s.handleWiFiCapabilities)
+		r.Post("/system/wifi/ibss/join", s.handleWiFiIBSSJoin)
+		r.Post("/system/wifi/ibss/leave/{iface}", s.handleWiFiIBSSLeave)
+		r.Post("/system/wifi/ibss/leave", s.handleWiFiIBSSLeave)
 
 		// Pair mode — touch-display arm + remote-device claim
 		// [MESHSAT-596]. Mounted under /api/v2/pair/ so the old

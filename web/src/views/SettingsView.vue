@@ -896,6 +896,42 @@ const wifiStatusView = computed(() => {
 function savedFlagActive(n)   { return typeof n.flags === 'string' && n.flags.includes('CURRENT') }
 function savedFlagDisabled(n) { return typeof n.flags === 'string' && n.flags.includes('DISABLED') }
 
+// WiFi peer-link (MESHSAT-630) — IBSS join/leave for kit-to-kit links
+// without an infrastructure AP.
+const ibssForm = ref({ ssid: 'meshsat-ibss', freq: 2412 })
+const ibssBusy = ref(false)
+const ibssError = ref('')
+async function doProbeWifiCaps() {
+  ibssError.value = ''
+  try { await store.fetchWifiCapabilities(wifiIface.value || undefined) }
+  catch (e) { ibssError.value = e?.message || 'capability probe failed' }
+}
+async function doIBSSJoin() {
+  if (!ibssForm.value.ssid) return
+  if (!confirm(
+    `Join IBSS "${ibssForm.value.ssid}" on ${ibssForm.value.freq} MHz?\n\n` +
+    'This will DISCONNECT the current WiFi client session — if you are SSHed in ' +
+    'over WiFi you will lose the session. Continue only over Ethernet or LTE.'
+  )) return
+  ibssError.value = ''
+  ibssBusy.value = true
+  try {
+    await store.wifiIBSSJoin(ibssForm.value.ssid, Number(ibssForm.value.freq), wifiIface.value || undefined)
+    await store.fetchWifiStatus(wifiIface.value || undefined)
+  } catch (e) { ibssError.value = e?.message || 'IBSS join failed' }
+  finally { ibssBusy.value = false }
+}
+async function doIBSSLeave() {
+  if (!confirm('Leave IBSS and return to managed mode?')) return
+  ibssError.value = ''
+  ibssBusy.value = true
+  try {
+    await store.wifiIBSSLeave(wifiIface.value || undefined)
+    await store.fetchWifiStatus(wifiIface.value || undefined)
+  } catch (e) { ibssError.value = e?.message || 'IBSS leave failed' }
+  finally { ibssBusy.value = false }
+}
+
 // Routing config + peers + flood control
 const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '' })
 const routingWarning = ref('')
@@ -2541,9 +2577,50 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- Peer Link (IBSS kit-to-kit) [MESHSAT-630] -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-gray-200">Peer Link (IBSS)</h3>
+            <button @click="doProbeWifiCaps" class="text-xs text-teal-400 hover:text-teal-300 px-2">Probe</button>
+          </div>
+          <p class="text-xs text-gray-500 mb-3">Kit-to-kit WiFi without an access point. Both kits join the same SSID + frequency. Useful for denied-comms / off-grid pairs.</p>
+          <div class="mb-3 flex flex-wrap gap-1.5">
+            <span v-if="store.wifiCapabilities" v-for="m in (store.wifiCapabilities.modes || [])" :key="m"
+              class="text-[10px] px-1.5 py-0.5 rounded"
+              :class="(m === 'IBSS' || m === 'AP') ? 'bg-teal-900/40 text-teal-300' : 'bg-gray-700 text-gray-400'">{{ m }}</span>
+            <span v-if="!store.wifiCapabilities" class="text-[10px] text-gray-500">Hit Probe to read chipset capabilities.</span>
+          </div>
+          <div v-if="store.wifiCapabilities && !store.wifiCapabilities.ibss"
+            class="text-[10px] text-amber-300 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40 mb-3">
+            ⚠ This chipset reports no IBSS support. Join will fail.
+          </div>
+          <div class="grid grid-cols-2 gap-2 mb-2">
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Cell SSID</label>
+              <input v-model="ibssForm.ssid"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Freq (MHz)</label>
+              <input v-model.number="ibssForm.freq" type="number" min="2412" max="5825"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
+              <span class="text-[9px] text-gray-600">2412=ch1, 2437=ch6, 2462=ch11</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="doIBSSJoin" :disabled="ibssBusy || (store.wifiCapabilities && !store.wifiCapabilities.ibss)"
+              class="px-3 py-1 rounded bg-teal-700 text-white text-xs hover:bg-teal-600 disabled:opacity-40">
+              {{ ibssBusy ? 'Working…' : 'Join IBSS' }}
+            </button>
+            <button @click="doIBSSLeave" :disabled="ibssBusy"
+              class="px-3 py-1 rounded bg-gray-700 text-gray-200 text-xs hover:bg-gray-600 disabled:opacity-40">Leave</button>
+          </div>
+          <p v-if="ibssError" class="mt-2 text-[10px] text-red-400 bg-red-900/20 rounded px-2 py-1.5 border border-red-800/40">{{ ibssError }}</p>
+        </div>
+
         <div class="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
           <p class="text-[10px] text-gray-500 leading-relaxed">
-            <strong class="text-gray-400">Safety:</strong> switching to a different SSID will drop the current WiFi link. If you are SSHed in over WiFi, the session will hang until the new network associates.
+            <strong class="text-gray-400">Safety:</strong> switching to a different SSID will drop the current WiFi link. If you are SSHed in over WiFi, the session will hang until the new network associates. IBSS re-associates the whole interface, same caveat.
           </p>
         </div>
       </div>
