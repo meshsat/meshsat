@@ -806,7 +806,53 @@ const opNextPass = computed(() => {
   }
 })
 
+// Per-interface "up" predicate by interface_id prefix — used by the bond
+// renderer so each member of a HeMB group gets its own health dot.
+function ifaceOK(id) {
+  if (!id) return false
+  if (id.startsWith('mesh_'))     return opMeshOK.value
+  if (id.startsWith('ax25_'))     return opAprsOK.value
+  if (id.startsWith('sbd_') ||
+      id.startsWith('imt_') ||
+      id.startsWith('iridium_'))  return opSatOK.value
+  if (id.startsWith('cellular_') ||
+      id.startsWith('sms_'))      return opCellOK.value
+  // tcp_/ble_/zigbee_/unknown — no per-interface health predicate today
+  return false
+}
+
+// Active bond: first HeMB group with at least one member currently up.
+// We consider a bond "active" at presence + 1 member because the bond is
+// the routing target regardless of per-member health — HeMB's whole point
+// is to degrade gracefully when some bearers drop.  The widget then shows
+// a dot per member so the operator sees which bearers are actually carrying
+// the parallel transmission.
+const opActiveBond = computed(() => {
+  for (const g of (store.bondGroups || [])) {
+    const members = Array.isArray(g.members) ? g.members : []
+    if (members.length === 0) continue
+    if (members.some(m => ifaceOK(m.interface_id))) return g
+  }
+  return null
+})
+
+// Primary channel for outbound traffic.  Prefer an active HeMB bond (which
+// transmits over N bearers in parallel); fall back to the single-bearer
+// cascade only when no bond is configured or all bonds have all members
+// offline.
 const opPrimaryChannel = computed(() => {
+  const bond = opActiveBond.value
+  if (bond) {
+    const members = Array.isArray(bond.members) ? bond.members : []
+    const upCount = members.filter(m => ifaceOK(m.interface_id)).length
+    return {
+      name: `HeMB · ${bond.label || bond.id}`,
+      bars: null,
+      detail: `${upCount}/${members.length} bearers: ${members.map(m => m.interface_id).join(' + ')}`,
+      tint: 'text-teal-400',
+      bond,
+    }
+  }
   if (opMeshOK.value) return { name: 'Mesh', bars: null, detail: 'LoRa 868 MHz', tint: 'text-tactical-lora' }
   if (opAprsOK.value) return { name: 'APRS', bars: null,
     detail: `${store.aprsStatus?.frequency_mhz || 144.8} MHz · ${store.aprsStatus?.callsign || ''}`,
@@ -1312,6 +1358,7 @@ async function fetchAll() {
     store.fetchAPRSStatus(),
     store.fetchAPRSHeard(),
     store.fetchAPRSActivity(),
+    store.fetchBondGroups(),
     store.fetchZigBeeStatus(),
     store.fetchZigBeeDevices(),
     store.fetchZigBeePermitJoin()
@@ -1346,6 +1393,7 @@ onMounted(() => {
     store.fetchAPRSStatus()
     store.fetchAPRSHeard()
     store.fetchAPRSActivity()
+    store.fetchBondGroups()
     store.fetchZigBeeStatus()
     store.fetchZigBeeDevices()
     store.fetchZigBeePermitJoin()
@@ -1458,18 +1506,35 @@ function widgetGridClass(id) {
           </div>
         </router-link>
 
-        <!-- Active primary comms -->
-        <router-link to="/radios"
+        <!-- Active primary comms — honours HeMB bond groups: when a bond
+             is the outbound route we show the bond label + a dot per member
+             bearer (green=up, red=down). Otherwise we fall through to the
+             single-bearer cascade (Mesh → APRS → Sat → Cell). -->
+        <router-link :to="opPrimaryChannel.bond ? '/hemb' : '/radios'"
           class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Active Comms</div>
           <div class="text-2xl font-bold mt-2" :class="opPrimaryChannel.tint">
             {{ opPrimaryChannel.name }}
           </div>
+          <!-- signal bars, only when a single-bearer cellular/sat channel is active -->
           <div v-if="opPrimaryChannel.bars != null" class="flex items-end gap-1 h-6 mt-2">
             <span v-for="i in 5" :key="i"
               class="w-1.5 rounded-sm transition-colors"
               :class="opPrimaryChannel.bars >= i ? opPrimaryChannel.tint.replace('text-','bg-') : 'bg-gray-700/40'"
               :style="{ height: `${6 + i * 4}px` }" />
+          </div>
+          <!-- bond-member dots, only when a HeMB bond is active -->
+          <div v-if="opPrimaryChannel.bond" class="flex items-center gap-1.5 mt-2">
+            <span v-for="m in opPrimaryChannel.bond.members" :key="m.interface_id"
+              class="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
+              :class="ifaceOK(m.interface_id)
+                ? 'bg-emerald-400/10 text-emerald-300 border border-emerald-500/30'
+                : 'bg-red-500/10 text-red-300 border border-red-500/30'"
+              :title="m.interface_id + (ifaceOK(m.interface_id) ? ' · up' : ' · down')">
+              <span class="w-1.5 h-1.5 rounded-full"
+                :class="ifaceOK(m.interface_id) ? 'bg-emerald-400' : 'bg-red-500'" />
+              {{ m.interface_id }}
+            </span>
           </div>
           <div class="text-xs text-gray-500 mt-1">{{ opPrimaryChannel.detail }}</div>
           <div class="text-[10px] text-gray-500 mt-1">{{ opChannelCount }} of {{ opChannelTotal }} channels up</div>

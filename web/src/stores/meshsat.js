@@ -1476,6 +1476,17 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message }
   }
 
+  // HeMB bond groups — needed for the operator-dashboard Active Comms
+  // tile to render "HeMB <label> · mesh_0 + ax25_0" style when a bond
+  // is the actual outbound route, instead of naming a single member.
+  const bondGroups = ref([])
+  async function fetchBondGroups() {
+    try {
+      const data = await api.get('/bond-groups')
+      bondGroups.value = Array.isArray(data) ? data : []
+    } catch { bondGroups.value = [] }
+  }
+
   // APRS dashboard widget (v0.4.0)
   const aprsStatus = ref(null)
   const aprsHeard = ref([])
@@ -1605,6 +1616,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     routingInterfaces, fetchRoutingInterfaces, setFloodable,
     reticulumStatus, fetchReticulumStatus,
     aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity,
+    bondGroups, fetchBondGroups,
     zigbeeStatus, zigbeeDevices, zigbeePermitJoin,
     fetchZigBeeStatus, fetchZigBeeDevices, fetchZigBeePermitJoin,
     startZigBeePermitJoin, stopZigBeePermitJoin,
