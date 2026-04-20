@@ -222,6 +222,39 @@ a:focus-visible {
   }
 }
 
+/* ---------------------------------------------------------------
+ * 40/48 dp tap-target floor [MESHSAT-587].
+ *
+ * Applied as CSS selectors rather than per-view class rewrites, so
+ * (a) a single rule covers every button that opts into Tailwind's
+ * dense `px-1 py-0.5` / `px-2 py-1` sizes, and (b) any future CTA
+ * rendered with the tactical action colours is sized correctly
+ * without another commit. Uses `[class~=...]` (space-delimited word
+ * match) so `py-1` does not also match `py-1.5` / `py-10`.
+ *
+ * Rule 1: any button sized small gets 40 px (WCAG 2.5.5).
+ * Rule 2: primary CTAs (teal/amber/red/emerald/sky/blue 500+) get
+ *         48 px — that's the MIL-STD-1472H glove-operable floor.
+ * ------------------------------------------------------------ */
+button[class~="px-2"][class~="py-1"],
+button[class~="px-1"][class~="py-0.5"],
+button[class~="px-1.5"][class~="py-0.5"] {
+  min-height: 2.5rem;   /* 40 px */
+  min-width: 2.5rem;
+}
+button[class~="bg-teal-600"],
+button[class~="bg-teal-500"],
+button[class~="bg-amber-500"],
+button[class~="bg-amber-600"],
+button[class~="bg-red-500"],
+button[class~="bg-red-600"],
+button[class~="bg-emerald-500"],
+button[class~="bg-emerald-600"],
+button[class~="bg-sky-600"],
+button[class~="bg-blue-600"] {
+  min-height: 3rem;     /* 48 px */
+}
+
 /* Tab-strip fade-on-right indicator [MESHSAT-584]. Applied via the
    .tab-scroll utility — pairs with overflow-x-auto + pr-8 on the
    host element. The SettingsView tab bar already uses this pattern
