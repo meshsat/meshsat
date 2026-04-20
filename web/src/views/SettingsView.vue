@@ -882,6 +882,20 @@ function wifiBars(signal) {
   return 0
 }
 
+// wpa_cli returns a raw key=value map; normalise to the shape the
+// template expects (connected bool + frequency field).
+const wifiStatusView = computed(() => {
+  const raw = store.wifiStatus
+  if (!raw || typeof raw !== 'object') return null
+  return {
+    ...raw,
+    connected: raw.wpa_state === 'COMPLETED',
+    frequency: raw.frequency ?? raw.freq,
+  }
+})
+function savedFlagActive(n)   { return typeof n.flags === 'string' && n.flags.includes('CURRENT') }
+function savedFlagDisabled(n) { return typeof n.flags === 'string' && n.flags.includes('DISABLED') }
+
 // Routing config + peers + flood control
 const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '' })
 const routingWarning = ref('')
@@ -2288,8 +2302,9 @@ onUnmounted(() => {
             <h3 class="text-sm font-medium text-gray-200">Bluetooth Peers</h3>
             <div class="flex items-center gap-2">
               <span v-if="store.bluetoothStatus" class="text-[10px] text-gray-500">
-                adapter: <span class="text-gray-300 font-mono">{{ store.bluetoothStatus.adapter || 'hci0' }}</span>
+                adapter: <span class="text-gray-300 font-mono">{{ store.bluetoothStatus.alias || store.bluetoothStatus.name || 'hci0' }}</span>
               </span>
+              <span v-if="store.bluetoothStatus?.address" class="text-[10px] text-gray-600 font-mono">{{ store.bluetoothStatus.address }}</span>
               <span v-if="store.bluetoothStatus"
                 :class="store.bluetoothStatus.powered ? 'text-emerald-400' : 'text-gray-500'"
                 class="text-[10px] px-1.5 py-0.5 rounded"
@@ -2394,33 +2409,33 @@ onUnmounted(() => {
           <div class="space-y-1 text-[11px]">
             <div class="flex justify-between">
               <span class="text-gray-500">State</span>
-              <span :class="store.wifiStatus?.connected ? 'text-emerald-400' : 'text-gray-400'">
-                {{ store.wifiStatus?.connected ? 'connected' : 'disconnected' }}
+              <span :class="wifiStatusView?.connected ? 'text-emerald-400' : 'text-gray-400'">
+                {{ wifiStatusView?.connected ? 'connected' : (wifiStatusView?.wpa_state || 'disconnected') }}
               </span>
             </div>
-            <div class="flex justify-between" v-if="store.wifiStatus?.ssid">
+            <div class="flex justify-between" v-if="wifiStatusView?.ssid">
               <span class="text-gray-500">SSID</span>
-              <span class="text-gray-200 font-mono">{{ store.wifiStatus.ssid }}</span>
+              <span class="text-gray-200 font-mono">{{ wifiStatusView.ssid }}</span>
             </div>
-            <div class="flex justify-between" v-if="store.wifiStatus?.bssid">
+            <div class="flex justify-between" v-if="wifiStatusView?.bssid">
               <span class="text-gray-500">BSSID</span>
-              <span class="text-gray-300 font-mono text-[10px]">{{ store.wifiStatus.bssid }}</span>
+              <span class="text-gray-300 font-mono text-[10px]">{{ wifiStatusView.bssid }}</span>
             </div>
-            <div class="flex justify-between" v-if="store.wifiStatus?.frequency">
+            <div class="flex justify-between" v-if="wifiStatusView?.frequency">
               <span class="text-gray-500">Freq</span>
-              <span class="text-gray-300">{{ store.wifiStatus.frequency }} MHz</span>
+              <span class="text-gray-300">{{ wifiStatusView.frequency }} MHz</span>
             </div>
-            <div class="flex justify-between" v-if="store.wifiStatus?.signal !== undefined && store.wifiStatus?.signal !== null">
-              <span class="text-gray-500">Signal</span>
-              <span class="text-gray-300">{{ store.wifiStatus.signal }} dBm ({{ wifiBars(store.wifiStatus.signal) }}/4 bars)</span>
-            </div>
-            <div class="flex justify-between" v-if="store.wifiStatus?.ip_address">
+            <div class="flex justify-between" v-if="wifiStatusView?.ip_address">
               <span class="text-gray-500">IP</span>
-              <span class="text-gray-200 font-mono">{{ store.wifiStatus.ip_address }}</span>
+              <span class="text-gray-200 font-mono">{{ wifiStatusView.ip_address }}</span>
+            </div>
+            <div class="flex justify-between" v-if="wifiStatusView?.address">
+              <span class="text-gray-500">MAC</span>
+              <span class="text-gray-300 font-mono text-[10px]">{{ wifiStatusView.address }}</span>
             </div>
           </div>
           <div class="flex items-center gap-2">
-            <button v-if="store.wifiStatus?.connected" @click="doWifiDisconnect" :disabled="wifiBusy"
+            <button v-if="wifiStatusView?.connected" @click="doWifiDisconnect" :disabled="wifiBusy"
               class="px-3 py-1 rounded bg-red-700 text-white text-xs hover:bg-red-600 disabled:opacity-40">
               Disconnect
             </button>
@@ -2498,12 +2513,12 @@ onUnmounted(() => {
             No saved networks.
           </div>
           <div v-else class="space-y-1.5">
-            <div v-for="n in store.wifiSaved.networks" :key="n.ssid"
+            <div v-for="n in store.wifiSaved.networks" :key="n.id || n.ssid"
               class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
               <div class="flex items-center gap-2 min-w-0">
                 <span class="text-xs text-gray-200 truncate">{{ n.ssid }}</span>
-                <span v-if="n.current" class="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-400">active</span>
-                <span v-if="n.disabled" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500">disabled</span>
+                <span v-if="savedFlagActive(n)" class="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-400">active</span>
+                <span v-if="savedFlagDisabled(n)" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500">disabled</span>
               </div>
               <button @click="selectWifiSSID(n.ssid)"
                 class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
