@@ -330,6 +330,22 @@ func (s *Server) handleWiFiStatus(w http.ResponseWriter, r *http.Request) {
 			status[strings.TrimSpace(line[:i])] = strings.TrimSpace(line[i+1:])
 		}
 	}
+	// Merge in signal strength — wpa_cli status doesn't expose it, but
+	// `iw dev <iface> link` does. Best-effort; swallow errors so we
+	// don't fail the whole status call just because iw isn't happy.
+	// [MESHSAT-631]
+	if linkOut, linkErr := execWithTimeout(r.Context(), "iw", "dev", iface, "link"); linkErr == nil {
+		for _, line := range strings.Split(linkOut, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "signal:") {
+				sig := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "signal:"), " dBm"))
+				if v, perr := strconv.Atoi(sig); perr == nil {
+					status["signal"] = v
+				}
+				break
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, status)
 }
 

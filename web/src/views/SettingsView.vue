@@ -2425,6 +2425,15 @@ onUnmounted(() => {
               <span class="text-gray-500">Freq</span>
               <span class="text-gray-300">{{ wifiStatusView.frequency }} MHz</span>
             </div>
+            <div class="flex justify-between" v-if="wifiStatusView?.signal !== undefined && wifiStatusView?.signal !== null">
+              <span class="text-gray-500">Signal</span>
+              <span class="text-gray-300">
+                {{ wifiStatusView.signal }} dBm
+                <span class="text-emerald-400 ml-1" :title="`${wifiBars(wifiStatusView.signal)}/4 bars`">
+                  {{ '▂▄▆█'.slice(0, wifiBars(wifiStatusView.signal)) || '·' }}
+                </span>
+              </span>
+            </div>
             <div class="flex justify-between" v-if="wifiStatusView?.ip_address">
               <span class="text-gray-500">IP</span>
               <span class="text-gray-200 font-mono">{{ wifiStatusView.ip_address }}</span>
