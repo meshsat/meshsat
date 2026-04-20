@@ -73,6 +73,14 @@ func (s *Server) handleWiFiP2PFind(w http.ResponseWriter, r *http.Request) {
 			"ip", "link", "set", iface, "up")
 		time.Sleep(300 * time.Millisecond)
 	}
+	// Ensure wpa_supplicant is actually managing this iface before we
+	// ask wpa_cli to talk P2P to it — on USB dongles it usually isn't
+	// by default (only wlan0 is bound via netplan's wifis: section).
+	// Without this, wpa_cli -i <usb_iface> returns exit 255.
+	if err := ensureWpaSupplicant(r.Context(), iface); err != nil {
+		writeError(w, http.StatusServiceUnavailable, sanitizeExecError("ensureWpaSupplicant", err))
+		return
+	}
 	if _, err := execWpaCli(r.Context(), "-i", iface, "p2p_find", strconv.Itoa(timeout)); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeExecError("p2p_find", err))
 		return
@@ -110,6 +118,11 @@ func (s *Server) handleWiFiP2PPeers(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateInterfaceName(iface); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Ensure wpa_supplicant is managing this iface — see handleWiFiP2PFind.
+	if err := ensureWpaSupplicant(r.Context(), iface); err != nil {
+		writeError(w, http.StatusServiceUnavailable, sanitizeExecError("ensureWpaSupplicant", err))
 		return
 	}
 	// p2p_peers returns a newline-separated list of MACs.
@@ -195,6 +208,10 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Method != "pbc" && req.Method != "pin" {
 		writeError(w, http.StatusBadRequest, "method must be pbc or pin")
+		return
+	}
+	if err := ensureWpaSupplicant(r.Context(), req.Interface); err != nil {
+		writeError(w, http.StatusServiceUnavailable, sanitizeExecError("ensureWpaSupplicant", err))
 		return
 	}
 	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Method}
