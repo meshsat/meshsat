@@ -613,6 +613,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/system/wifi/p2p/connect", s.handleWiFiP2PConnect)
 		r.Post("/system/wifi/p2p/disconnect", s.handleWiFiP2PDisconnect)
 		r.Get("/system/wifi/p2p/status", s.handleWiFiP2PStatus)
+		r.Post("/system/wifi/p2p/gen-pin", s.handleWiFiP2PGenPin)
 
 		// Auto-federation: trusted peers CRUD. [MESHSAT-636]
 		r.Get("/federation/peers", s.handleFederationPeersList)

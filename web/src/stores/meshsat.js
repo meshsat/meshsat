@@ -1609,10 +1609,16 @@ export const useMeshsatStore = defineStore('meshsat', () => {
       wifiP2PPeers.value = Array.isArray(d?.peers) ? d.peers : []
     } catch { wifiP2PPeers.value = [] }
   }
-  async function wifiP2PConnect(iface, peerAddr, method = 'pbc', goIntent = 7) {
+  async function wifiP2PConnect(iface, peerAddr, pin, goIntent = 7) {
+    // PIN-only. Backend rejects requests without a 4/8-digit pin
+    // (unauthenticated pairing disabled). MESHSAT-647 + MESHSAT-648.
     return await api.post('/system/wifi/p2p/connect', {
-      interface: iface || '', peer_addr: peerAddr, method, go_intent: goIntent,
+      interface: iface || '', peer_addr: peerAddr, pin: pin || '', go_intent: goIntent,
     })
+  }
+  async function wifiP2PGenPin() {
+    const d = await api.post('/system/wifi/p2p/gen-pin', {})
+    return d?.pin || ''
   }
   async function wifiP2PDisconnect() {
     return await api.post('/system/wifi/p2p/disconnect', {})
@@ -1779,6 +1785,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     wifiP2PPeers, wifiP2PStatus,
     wifiP2PFind, wifiP2PStopFind, fetchWifiP2PPeers,
     wifiP2PConnect, wifiP2PDisconnect, fetchWifiP2PStatus,
+    wifiP2PGenPin,
     // WiFi adapter enum [MESHSAT-642]
     wifiInterfaces, fetchWifiInterfaces,
     // Federation dashboard feed [MESHSAT-644]

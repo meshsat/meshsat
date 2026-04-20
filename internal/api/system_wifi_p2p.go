@@ -16,6 +16,7 @@ package api
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -24,6 +25,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
+
+// cryptoRandRead is a tiny indirection so tests can stub RNG if ever needed.
+var cryptoRandRead = cryptorand.Read
 
 // WiFiP2PPeer is one discovered P2P-capable device.
 type WiFiP2PPeer struct {
@@ -180,13 +184,31 @@ func parseP2PPeerInfo(info string, p *WiFiP2PPeer) {
 	}
 }
 
-// wifiP2PConnectRequest matches the UI store's payload.
+// wifiP2PConnectRequest matches the UI store's payload.  WPS-PIN is
+// mandatory — PBC (push-button) is explicitly refused because it
+// accepts pairing from any nearby device during its 120 s window.
+// Operator supplies the PIN out-of-band (read off one kit's screen,
+// enter on the other). Both kits send the same PIN. [MESHSAT-647 +
+// MESHSAT-648]
 type wifiP2PConnectRequest struct {
 	Interface string `json:"interface"`
 	PeerAddr  string `json:"peer_addr"`
-	Method    string `json:"method"` // "pbc" (push-button, default) or "pin"
-	Pin       string `json:"pin,omitempty"`
+	Pin       string `json:"pin"`
 	GOIntent  int    `json:"go_intent,omitempty"` // 0-15, default 7
+}
+
+// isValidWPSPIN accepts 4 or 8 numeric digits (4 = short unchecked,
+// 8 = standard WPS with check digit).
+func isValidWPSPIN(s string) bool {
+	if len(s) != 4 && len(s) != 8 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // @Summary Connect to a P2P peer (WPS-PBC)
@@ -215,21 +237,20 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid peer MAC")
 		return
 	}
-	if req.Method == "" {
-		req.Method = "pbc"
-	}
-	if req.Method != "pbc" && req.Method != "pin" {
-		writeError(w, http.StatusBadRequest, "method must be pbc or pin")
+	// Authenticated pairing only — WPS-PIN mandatory, PBC refused.
+	// [MESHSAT-647 hardening]. The real trust-anchor gate (peer MUST
+	// have been pre-registered via BLE-pair trusted_peers) is
+	// tracked as MESHSAT-648; PIN closes the immediate drive-by
+	// window.
+	if !isValidWPSPIN(req.Pin) {
+		writeError(w, http.StatusBadRequest, "pin is required (4 or 8 digits). PBC is disabled — unauthenticated pairing is not permitted.")
 		return
 	}
 	if err := ensureWpaSupplicant(r.Context(), req.Interface); err != nil {
 		writeError(w, http.StatusServiceUnavailable, sanitizeExecError("ensureWpaSupplicant", err))
 		return
 	}
-	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Method}
-	if req.Method == "pin" && req.Pin != "" {
-		args[len(args)-1] = req.Pin // replace the literal "pin" with the actual pin
-	}
+	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Pin}
 	if req.GOIntent > 0 && req.GOIntent <= 15 {
 		args = append(args, "go_intent="+strconv.Itoa(req.GOIntent))
 	}
@@ -239,11 +260,56 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeExecError("p2p_connect", err))
 		return
 	}
-	log.Info().Str("iface", req.Interface).Str("peer", req.PeerAddr).Str("method", req.Method).Msg("wifi-p2p: connect initiated")
+	log.Info().Str("iface", req.Interface).Str("peer", req.PeerAddr).Msg("wifi-p2p: PIN-authenticated connect initiated")
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"interface": req.Interface, "peer": req.PeerAddr, "method": req.Method,
+		"interface": req.Interface, "peer": req.PeerAddr, "method": "pin",
 		"wpa_result": strings.TrimSpace(out),
 	})
+}
+
+// @Summary Generate a one-time 8-digit WPS PIN
+// @Description crypto/rand 8 digits with the standard WPS check-digit. Caller reads the PIN off the screen, enters it on the peer kit. [MESHSAT-647 hardening]
+// @Tags system
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /api/system/wifi/p2p/gen-pin [post]
+func (s *Server) handleWiFiP2PGenPin(w http.ResponseWriter, r *http.Request) {
+	pin, err := generateWPSPIN()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "pin gen failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"pin": pin})
+}
+
+// generateWPSPIN returns 8 random digits with the WPS check digit.
+// Uses crypto/rand for the first 7 digits.
+func generateWPSPIN() (string, error) {
+	var buf [7]byte
+	if _, err := cryptoRandRead(buf[:]); err != nil {
+		return "", err
+	}
+	digits := [8]byte{}
+	for i := 0; i < 7; i++ {
+		digits[i] = '0' + (buf[i] % 10)
+	}
+	digits[7] = '0' + byte(wpsCheckDigit(string(digits[:7])))
+	return string(digits[:]), nil
+}
+
+// wpsCheckDigit computes the 8th digit per WPS-PIN spec: weighted
+// sum mod 10 of the 7-digit base number, subtracted from 10.
+func wpsCheckDigit(base7 string) int {
+	if len(base7) != 7 {
+		return 0
+	}
+	acc := 0
+	weights := []int{3, 1, 3, 1, 3, 1, 3}
+	for i, c := range base7 {
+		acc += int(c-'0') * weights[i]
+	}
+	d := (10 - (acc % 10)) % 10
+	return d
 }
 
 // @Summary Tear down the active P2P group

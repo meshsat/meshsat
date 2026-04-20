@@ -1010,18 +1010,44 @@ async function doP2PStopFind() {
   p2pFindBusy.value = false; p2pFindCountdown.value = 0
   try { await store.wifiP2PStopFind(wifiIface.value || undefined) } catch {}
 }
-async function doP2PConnect(peer) {
+// PIN-only pairing — PBC is disabled server-side (MESHSAT-647 hardening).
+// Operator reads a PIN off one kit, types it on the other. Both kits
+// send the same PIN. 4 or 8 digits.
+const p2pPinDialog = ref({ open: false, peer: null, pin: '' })
+const p2pGeneratedPin = ref('')
+
+function openP2PPinDialog(peer) {
+  p2pPinDialog.value = { open: true, peer, pin: '' }
+  p2pGeneratedPin.value = ''
+  p2pError.value = ''
+}
+function closeP2PPinDialog() {
+  p2pPinDialog.value = { open: false, peer: null, pin: '' }
+  p2pGeneratedPin.value = ''
+}
+async function doP2PGenPin() {
+  p2pError.value = ''
+  try { p2pGeneratedPin.value = await store.wifiP2PGenPin() }
+  catch (e) { p2pError.value = e?.message || 'pin gen failed' }
+}
+async function doP2PConnectWithPin() {
+  const peer = p2pPinDialog.value.peer
+  const pin = (p2pPinDialog.value.pin || '').trim()
+  if (!peer || !/^\d{4}(\d{4})?$/.test(pin)) {
+    p2pError.value = 'Enter a 4 or 8-digit PIN'
+    return
+  }
   if (!confirmMgmtAction(`P2P connect on "${wifiIface.value}"`)) return
-  if (!wifiActiveIsMgmt.value && !confirm(`Push-button connect to ${peer.device_name || peer.address}?`)) return
+  if (!wifiActiveIsMgmt.value && !confirm(`PIN-authenticated connect to ${peer.device_name || peer.address}?`)) return
   p2pError.value = ''
   p2pConnectBusy.value = true
   try {
-    await store.wifiP2PConnect(wifiIface.value || undefined, peer.address, 'pbc', 7)
+    await store.wifiP2PConnect(wifiIface.value || undefined, peer.address, pin, 7)
     // Group-up is async — poll status for ~8s.
     for (let i = 0; i < 8; i++) {
       await new Promise(r => setTimeout(r, 1000))
       await store.fetchWifiP2PStatus(wifiIface.value || undefined)
-      if (store.wifiP2PStatus?.active) break
+      if (store.wifiP2PStatus?.active) { closeP2PPinDialog(); break }
     }
   } catch (e) { p2pError.value = e?.message || 'p2p_connect failed' }
   finally { p2pConnectBusy.value = false }
@@ -2827,13 +2853,41 @@ onUnmounted(() => {
                 <span class="text-xs text-gray-200 truncate">{{ p.device_name || '(unnamed)' }}</span>
                 <span class="text-[10px] text-gray-600 font-mono">{{ p.address }}</span>
               </div>
-              <button @click="doP2PConnect(p)" :disabled="p2pConnectBusy"
+              <button @click="openP2PPinDialog(p)" :disabled="p2pConnectBusy"
                 class="text-[10px] px-2 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-600 disabled:opacity-40">
-                {{ p2pConnectBusy ? 'Connecting…' : 'Connect (PBC)' }}
+                {{ p2pConnectBusy ? 'Connecting…' : 'Connect with PIN' }}
               </button>
             </div>
           </div>
           <p v-if="p2pError" class="mt-2 text-[10px] text-red-400 bg-red-900/20 rounded px-2 py-1.5 border border-red-800/40">{{ p2pError }}</p>
+
+          <!-- PIN dialog — PBC is server-side-disabled (MESHSAT-647 hardening) -->
+          <div v-if="p2pPinDialog.open" class="mt-3 bg-gray-900/80 rounded-lg p-3 border border-sky-700/40">
+            <div class="text-xs text-sky-300 font-medium mb-1">Authenticated pairing — PIN required</div>
+            <p class="text-[10px] text-gray-400 leading-relaxed mb-2">
+              Peer <span class="font-mono text-gray-200">{{ p2pPinDialog.peer?.device_name || p2pPinDialog.peer?.address }}</span>.
+              Enter the same 4 or 8-digit PIN on BOTH kits. Read off one screen, type on the other.
+              <strong class="text-amber-300">Push-button (PBC) pairing is disabled</strong> — unauthenticated peering is not permitted.
+            </p>
+            <div class="flex items-center gap-2 mb-2">
+              <input v-model="p2pPinDialog.pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8"
+                placeholder="8-digit PIN"
+                class="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 font-mono tracking-widest">
+              <button @click="doP2PGenPin" class="text-[10px] px-2 py-1 rounded bg-gray-800 text-gray-300 hover:bg-gray-700">Generate</button>
+            </div>
+            <div v-if="p2pGeneratedPin" class="mb-2 text-[11px] text-emerald-300 bg-emerald-900/20 rounded px-2 py-1.5 border border-emerald-800/40">
+              PIN to share with peer operator: <span class="font-mono text-base tracking-widest">{{ p2pGeneratedPin }}</span>
+              <p class="text-[9px] text-gray-400 mt-0.5">Type this on the other kit, then both tap Connect with this PIN.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="doP2PConnectWithPin" :disabled="p2pConnectBusy"
+                class="px-3 py-1 rounded bg-teal-700 text-white text-xs hover:bg-teal-600 disabled:opacity-40">
+                {{ p2pConnectBusy ? 'Connecting…' : 'Connect' }}
+              </button>
+              <button @click="closeP2PPinDialog"
+                class="px-3 py-1 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
+            </div>
+          </div>
         </div>
 
         <!-- Peer Link (IBSS kit-to-kit) [MESHSAT-630] -->
