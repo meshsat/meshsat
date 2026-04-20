@@ -70,9 +70,9 @@ type RTLPowerScanner struct {
 	// after `fftwFailThreshold` consecutive fftw failures we switch to
 	// legacy `rtl_power` for the rest of the session. `fallbackBinary`
 	// holds the legacy path discovered at init. [spectrum: fftw fallback]
-	fallbackBinary  string
-	fftwFailures    int
-	fftwDisabled    bool
+	fallbackBinary string
+	fftwFailures   int
+	fftwDisabled   bool
 }
 
 const fftwFailThreshold = 3

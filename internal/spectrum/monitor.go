@@ -42,11 +42,11 @@ type SpectrumMonitor struct {
 
 	// hardware stats for the /api/spectrum/hardware endpoint —
 	// protected by mu along with status/baseline.
-	lastScanAt        time.Time
-	lastScanDuration  time.Duration
-	scanErrorCount    int64
-	lastScanError     string
-	lastScanErrorAt   time.Time
+	lastScanAt       time.Time
+	lastScanDuration time.Duration
+	scanErrorCount   int64
+	lastScanError    string
+	lastScanErrorAt  time.Time
 
 	// MIJI/CoT relay outcome tracker. Owned here so the HTTP layer
 	// has a single accessor (SpectrumMonitor.RelayTracker()); the
@@ -71,15 +71,15 @@ func (m *SpectrumMonitor) RelayTracker() *RelayTracker {
 // Combines the static scanner descriptor with runtime health signals
 // so operators can diagnose "is the dongle alive and scanning?".
 type HardwareStatus struct {
-	Available        bool        `json:"available"`
-	Scanner          ScannerInfo `json:"scanner"`
-	LastScanAt       time.Time   `json:"last_scan_at,omitempty"`
-	LastScanMs       int64       `json:"last_scan_ms"`
-	ScanErrorCount   int64       `json:"scan_error_count"`
-	LastScanError    string      `json:"last_scan_error,omitempty"`
-	LastScanErrorAt  time.Time   `json:"last_scan_error_at,omitempty"`
-	ScanIntervalSec  int         `json:"scan_interval_sec"`
-	CalibrationDurSec int        `json:"calibration_duration_sec"`
+	Available         bool        `json:"available"`
+	Scanner           ScannerInfo `json:"scanner"`
+	LastScanAt        time.Time   `json:"last_scan_at,omitempty"`
+	LastScanMs        int64       `json:"last_scan_ms"`
+	ScanErrorCount    int64       `json:"scan_error_count"`
+	LastScanError     string      `json:"last_scan_error,omitempty"`
+	LastScanErrorAt   time.Time   `json:"last_scan_error_at,omitempty"`
+	ScanIntervalSec   int         `json:"scan_interval_sec"`
+	CalibrationDurSec int         `json:"calibration_duration_sec"`
 }
 
 // Hardware returns the current hardware + scan-loop health snapshot.
@@ -533,21 +533,21 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		m.mu.Unlock()
 
 		m.publish(SpectrumEvent{
-			Kind:                 EventScan,
-			Band:                 band.Name,
-			Label:                band.Label,
-			InterfaceID:          band.InterfaceID,
-			FreqLow:              band.FreqLow,
-			FreqHigh:             band.FreqHigh,
-			BinSize:              band.BinSize,
-			Timestamp:            now,
-			Powers:               powers,
-			AvgDB:                avg,
-			MaxDB:                maxPower,
-			State:                newState,
-			BaselineMean:         bl.Mean,
-			BaselineStd:          bl.Std,
-			BaselineMad:          bl.Mad,
+			Kind:         EventScan,
+			Band:         band.Name,
+			Label:        band.Label,
+			InterfaceID:  band.InterfaceID,
+			FreqLow:      band.FreqLow,
+			FreqHigh:     band.FreqHigh,
+			BinSize:      band.BinSize,
+			Timestamp:    now,
+			Powers:       powers,
+			AvgDB:        avg,
+			MaxDB:        maxPower,
+			State:        newState,
+			BaselineMean: bl.Mean,
+			BaselineStd:  bl.Std,
+			BaselineMad:  bl.Mad,
 			// Post-redesign: thresholds are now derived from absolute
 			// power floor + occupancy/flatness features, not a single
 			// sigma multiplier. Keep the JSON keys for UI backward
@@ -619,7 +619,8 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 // (LoRa/APRS bursts, cellular fades) never promote beyond CLEAR.
 //
 // [MESHSAT-509 — research-grounded redesign after naive 3σ produced
-//  constant false positives on residential Leiden RF.]
+//
+//	constant false positives on residential Leiden RF.]
 func (m *SpectrumMonitor) evaluate(bandName string, powers []float64, avgPower, maxPower float64, bl *Baseline) SpectrumState {
 	// Absolute floor short-circuit: if the average power across the
 	// whole band is below the band-specific floor, no spectral

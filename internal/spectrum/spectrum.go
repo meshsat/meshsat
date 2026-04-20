@@ -287,9 +287,9 @@ const (
 
 	// Persistence windows. A single-sample 3σ spike is just traffic.
 	// Real jammers persist for tens of seconds to minutes.
-	DegradedPersistenceSec     = 30  // moderate elevation sustained
-	InterferencePersistenceSec = 10  // narrowband spike sustained
-	JammingPersistenceSec      = 60  // broadband + flat + occupied
+	DegradedPersistenceSec     = 30 // moderate elevation sustained
+	InterferencePersistenceSec = 10 // narrowband spike sustained
+	JammingPersistenceSec      = 60 // broadband + flat + occupied
 
 	// Hysteresis — how long a band must be "clean" before demoting.
 	RecoveryPersistenceSec = 30

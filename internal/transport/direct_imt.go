@@ -1001,7 +1001,7 @@ func unbindRebindCP210x(who, portPath string) bool {
 			Msg("unbind/rebind: unexpected sysfs output")
 		return false
 	}
-	driverName := parts[0] // e.g. "cp210x"
+	driverName := parts[0]  // e.g. "cp210x"
 	interfaceID := parts[1] // e.g. "2-1.4:1.0"
 
 	unbindPath := fmt.Sprintf("/sys/bus/usb/drivers/%s/unbind", driverName)

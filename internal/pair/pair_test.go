@@ -2,8 +2,8 @@ package pair
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
@@ -12,13 +12,19 @@ import (
 
 func TestDeriveSharedSecret_Agrees(t *testing.T) {
 	pk, err := GeneratePairingKey()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	pin := "123456"
 
 	a, err := DeriveSharedSecret(pk, pin)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	b, err := DeriveSharedSecret(pk, pin)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !hmac.Equal(a, b) {
 		t.Fatalf("HKDF disagrees between runs: %x vs %x", a, b)
 	}
@@ -49,9 +55,13 @@ func TestJWT_RoundTrip(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	now := time.Now()
 	tok, err := MintJWT("client-123", priv, now)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	claims, err := VerifyJWT(tok, pub)
-	if err != nil { t.Fatalf("verify: %v", err) }
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
 	if claims["sub"] != "client-123" {
 		t.Errorf("sub: %v", claims["sub"])
 	}
@@ -72,9 +82,14 @@ func TestJWT_TamperRejected(t *testing.T) {
 	// verify actually checks bytes, not just reads them.
 	lastDot := -1
 	for i := len(tok) - 1; i >= 0; i-- {
-		if tok[i] == '.' { lastDot = i; break }
+		if tok[i] == '.' {
+			lastDot = i
+			break
+		}
 	}
-	if lastDot < 0 { t.Fatal("no '.' in token") }
+	if lastDot < 0 {
+		t.Fatal("no '.' in token")
+	}
 	tampered := tok[:lastDot+1] + "AAAAAAAA"
 	if _, err := VerifyJWT(tampered, pub); err == nil {
 		t.Fatal("tampered JWT accepted")
@@ -83,7 +98,9 @@ func TestJWT_TamperRejected(t *testing.T) {
 
 func TestGeneratePIN_Length(t *testing.T) {
 	pin, err := GeneratePIN()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(pin) != PinLength {
 		t.Fatalf("len %d want %d", len(pin), PinLength)
 	}

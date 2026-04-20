@@ -14,7 +14,6 @@ import (
 	"meshsat/internal/transport"
 )
 
-
 // SOSState tracks an active SOS alert.
 type SOSState struct {
 	mu       sync.Mutex

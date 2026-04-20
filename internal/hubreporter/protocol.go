@@ -278,21 +278,21 @@ type DeviceSOS struct {
 // a coordinated jamming campaign will light up the same band on multiple
 // kits simultaneously.
 type SpectrumAlert struct {
-	BridgeID        string    `json:"bridge_id"`
-	Band            string    `json:"band"`             // e.g. "lte_b20_dl"
-	Label           string    `json:"label"`            // human-readable
-	InterfaceID     string    `json:"interface_id"`     // "mesh_0", "cellular_0", ...
-	FreqLow         int       `json:"freq_low_hz"`
-	FreqHigh        int       `json:"freq_high_hz"`
-	State           string    `json:"state"`            // "clear", "jamming", "interference"
-	OldState        string    `json:"old_state"`
-	PowerDB         float64   `json:"power_db"`         // average power in this scan
-	MaxPowerDB      float64   `json:"max_power_db"`     // peak bin
-	BaselineMeanDB  float64   `json:"baseline_mean_db"`
-	BaselineStdDB   float64   `json:"baseline_std_db"`
-	Lat             float64   `json:"lat,omitempty"`
-	Lon             float64   `json:"lon,omitempty"`
-	Timestamp       time.Time `json:"timestamp"`
+	BridgeID       string    `json:"bridge_id"`
+	Band           string    `json:"band"`         // e.g. "lte_b20_dl"
+	Label          string    `json:"label"`        // human-readable
+	InterfaceID    string    `json:"interface_id"` // "mesh_0", "cellular_0", ...
+	FreqLow        int       `json:"freq_low_hz"`
+	FreqHigh       int       `json:"freq_high_hz"`
+	State          string    `json:"state"` // "clear", "jamming", "interference"
+	OldState       string    `json:"old_state"`
+	PowerDB        float64   `json:"power_db"`     // average power in this scan
+	MaxPowerDB     float64   `json:"max_power_db"` // peak bin
+	BaselineMeanDB float64   `json:"baseline_mean_db"`
+	BaselineStdDB  float64   `json:"baseline_std_db"`
+	Lat            float64   `json:"lat,omitempty"`
+	Lon            float64   `json:"lon,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
 }
 
 // --- Command channel ---

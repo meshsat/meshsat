@@ -85,19 +85,19 @@ func DeriveSharedSecret(pairingKeyHex, pin string) ([]byte, error) {
 
 // ClaimRequest is what the client POSTs to /api/v2/pair/claim.
 type ClaimRequest struct {
-	PIN           string `json:"pin"`
-	PublicKeyHex  string `json:"public_key"`          // Ed25519 pub, hex
-	Name          string `json:"name,omitempty"`      // operator-facing label
-	Kind          string `json:"kind,omitempty"`      // browser / android / cli
-	HMACHex       string `json:"hmac"`                // HMAC-SHA256(shared, public_key_bytes)
+	PIN          string `json:"pin"`
+	PublicKeyHex string `json:"public_key"`     // Ed25519 pub, hex
+	Name         string `json:"name,omitempty"` // operator-facing label
+	Kind         string `json:"kind,omitempty"` // browser / android / cli
+	HMACHex      string `json:"hmac"`           // HMAC-SHA256(shared, public_key_bytes)
 }
 
 // ClaimResponse is what the bridge returns on success.
 type ClaimResponse struct {
-	ClientID   string `json:"client_id"`
-	JWT        string `json:"jwt"`
-	CertPEM    string `json:"cert_pem,omitempty"` // empty when internal CA isn't configured
-	ExpiresAt  string `json:"expires_at"`
+	ClientID  string `json:"client_id"`
+	JWT       string `json:"jwt"`
+	CertPEM   string `json:"cert_pem,omitempty"` // empty when internal CA isn't configured
+	ExpiresAt string `json:"expires_at"`
 }
 
 // VerifyClaimHMAC confirms the client knew both the pairing key and

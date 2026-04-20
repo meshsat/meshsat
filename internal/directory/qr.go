@@ -40,11 +40,11 @@ type QRContact struct {
 }
 
 type QRCard struct {
-	V       int       `json:"v"`
-	Contact QRContact `json:"contact"`
-	Signer  string    `json:"signer"`   // hex-encoded Ed25519 pubkey
-	Sig     string    `json:"sig"`      // base64 std
-	IssuedAt string   `json:"issued_at,omitempty"`
+	V        int       `json:"v"`
+	Contact  QRContact `json:"contact"`
+	Signer   string    `json:"signer"` // hex-encoded Ed25519 pubkey
+	Sig      string    `json:"sig"`    // base64 std
+	IssuedAt string    `json:"issued_at,omitempty"`
 }
 
 // BuildQRCard serialises + signs the contact card. signer is a
