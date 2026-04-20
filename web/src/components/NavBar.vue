@@ -148,7 +148,7 @@ const compactLabels = computed(() =>
 
 <template>
   <!-- Top nav strip: Engineer gets the full list; Operator gets 5 + More. -->
-  <nav class="flex-1 flex items-center overflow-x-auto no-scrollbar mx-2 lg:mx-6">
+  <nav class="flex-1 flex items-center overflow-x-auto mx-2 lg:mx-6 nav-scroll">
     <!-- Operator mode — 5 items + More -->
     <div v-if="store.isOperator" class="flex items-center gap-0.5">
       <router-link v-for="tab in primary" :key="tab.name" :to="tab.path"
@@ -238,4 +238,12 @@ const compactLabels = computed(() =>
 <style scoped>
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Main-nav engineer strip: show a thin scrollbar so clipped tabs are
+   discoverable. The operator path uses a ⋮ More dropdown and doesn't
+   need this. */
+.nav-scroll { scrollbar-width: thin; scrollbar-color: rgba(100,116,139,.35) transparent; }
+.nav-scroll::-webkit-scrollbar { height: 4px; }
+.nav-scroll::-webkit-scrollbar-thumb { background: rgba(100,116,139,.35); border-radius: 2px; }
+.nav-scroll::-webkit-scrollbar-track { background: transparent; }
 </style>

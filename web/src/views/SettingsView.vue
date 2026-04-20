@@ -1119,19 +1119,18 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <!-- Tab bar with right-fade scroll affordance [MESHSAT-555] -->
-    <div class="relative mb-6">
-      <div class="flex gap-1 overflow-x-auto no-scrollbar pb-1 pr-8">
-        <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
-          class="px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors min-h-[40px]"
-          :class="activeTab === tab.id ? 'bg-teal-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'">
-          {{ tab.label }}
-        </button>
-      </div>
-      <!-- Right-edge fade so horizontally-clipped tabs look scrollable
-           rather than truncated. Hidden once the viewport is wide
-           enough to show every visible tab inline. -->
-      <div class="pointer-events-none absolute top-0 right-0 h-full w-8 bg-gradient-to-l from-tactical-bg to-transparent md:hidden" />
+    <!-- Tab bar — flex-wraps onto multiple rows so every tab is
+         discoverable without horizontal scroll. Previous version clipped
+         off-screen on both kiosk (853×480) + desktop (1280) because the
+         scroll hint was `md:hidden` and `no-scrollbar` killed the native
+         scrollbar too. At 18 engineer tabs wrapping to 2-3 rows is the
+         honest layout. [MESHSAT-555 revisit] -->
+    <div class="flex flex-wrap gap-1 mb-4">
+      <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
+        class="px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors min-h-[36px]"
+        :class="activeTab === tab.id ? 'bg-teal-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'">
+        {{ tab.label }}
+      </button>
     </div>
 
     <!-- Radio Config -->
