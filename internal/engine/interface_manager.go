@@ -378,6 +378,9 @@ func (m *InterfaceManager) scanDevices() {
 	if matches, _ := filepath.Glob("/dev/ttyUSB*"); matches != nil {
 		ports = append(ports, matches...)
 	}
+	// Share the supervisor's BT-UART / env-override skip list so both
+	// views agree on which ports are phantoms.
+	ports = transport.FilterSkippedSerialPorts(ports)
 
 	detected := make([]DetectedDevice, 0, len(ports))
 	for _, port := range ports {

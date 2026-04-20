@@ -277,6 +277,13 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 		matches, _ := filepath.Glob(pattern)
 		activePorts = append(activePorts, matches...)
 	}
+	// Skip phantom / kernel-owned UARTs. On Pi 5 /dev/ttyAMA10 is the
+	// on-SoC Bluetooth UART (107d001000.serial) attached to hci_uart —
+	// it shows up in /dev but isn't user-accessible as a serial line
+	// and produces noise in the Devices tab ("identifying" with no
+	// VID:PID). An extra set of names can be supplied via
+	// MESHSAT_SERIAL_SKIP_PORTS (comma-separated).
+	activePorts = filterSkippedSerialPorts(activePorts)
 
 	now := time.Now()
 	activeSet := make(map[string]bool, len(activePorts))
@@ -363,6 +370,7 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 		matches, _ := filepath.Glob(pattern)
 		activePorts = append(activePorts, matches...)
 	}
+	activePorts = filterSkippedSerialPorts(activePorts)
 
 	activeSet := make(map[string]bool, len(activePorts))
 	for _, p := range activePorts {
@@ -964,4 +972,44 @@ func readSysfsFile(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// defaultSkippedSerialPorts are serial devices that appear in /dev but
+// aren't useful — kernel-owned (Bluetooth UART on Pi 5) or hardware
+// that we never want to probe. Extendable via MESHSAT_SERIAL_SKIP_PORTS.
+var defaultSkippedSerialPorts = map[string]bool{
+	"/dev/ttyAMA10": true, // Pi 5 on-SoC BT UART (107d001000.serial)
+}
+
+// FilterSkippedSerialPorts removes ports in defaultSkippedSerialPorts
+// plus any path listed in the env-var override. Stable — preserves
+// the incoming order for the ports that do survive. Exported so
+// engine.InterfaceManager shares the same skip policy.
+func FilterSkippedSerialPorts(ports []string) []string {
+	return filterSkippedSerialPorts(ports)
+}
+
+func filterSkippedSerialPorts(ports []string) []string {
+	skip := map[string]bool{}
+	for k, v := range defaultSkippedSerialPorts {
+		skip[k] = v
+	}
+	if extra := os.Getenv("MESHSAT_SERIAL_SKIP_PORTS"); extra != "" {
+		for _, p := range strings.Split(extra, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				skip[p] = true
+			}
+		}
+	}
+	if len(skip) == 0 {
+		return ports
+	}
+	out := ports[:0]
+	for _, p := range ports {
+		if !skip[p] {
+			out = append(out, p)
+		}
+	}
+	return out
 }

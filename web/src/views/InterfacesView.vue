@@ -431,6 +431,39 @@ const hiddenUnassignedCount = computed(() =>
   (store.devices || []).filter(d => !d.bound_to && HIDDEN_BIND_TYPES.has(d.device_type)).length
 )
 
+// Merged device rows — one row per physical port. The bridge has two
+// views of the same underlying hardware: store.usbDevices (supervisor
+// claim+state) and store.devices (interface-manager binding+type).
+// Rendering them separately duplicates every device. We join on port
+// so the operator sees each TTY once with BOTH perspectives collapsed
+// into a single row.
+const mergedDeviceRows = computed(() => {
+  const byPort = new Map()
+  for (const u of (store.usbDevices || [])) {
+    if (!u.dev_path) continue
+    byPort.set(u.dev_path, {
+      port: u.dev_path,
+      vid_pid: u.vid_pid || '',
+      role: u.role || '',
+      state: u.state || '',
+      usb_serial: u.usb_serial || '',
+      error: u.error || '',
+      device_type: '',
+      device_id: '',
+      bound_to: '',
+    })
+  }
+  for (const d of (store.devices || [])) {
+    if (!d.port) continue
+    const row = byPort.get(d.port) || { port: d.port, vid_pid: d.vid_pid || '' }
+    row.device_type = d.device_type || ''
+    row.device_id = d.device_id || ''
+    row.bound_to = d.bound_to || ''
+    byPort.set(d.port, row)
+  }
+  return Array.from(byPort.values()).sort((a, b) => a.port.localeCompare(b.port))
+})
+
 // Known mesh nodes for the node picker
 const knownNodes = computed(() => {
   return (store.nodes || []).map(n => ({
@@ -897,56 +930,43 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- ═══ Devices Tab ═══ -->
+    <!-- ═══ Devices Tab ═══
+         Single merged list: supervisor's claim/state + interface-
+         manager's classification/binding, joined on port. One row per
+         physical TTY. -->
     <div v-if="activeTab === 'devices'">
-      <!-- Supervisor device inventory (claim-based, with state) -->
-      <div v-if="(store.usbDevices || []).length" class="mb-6">
-        <div class="mb-3 flex items-center justify-between">
-          <span class="text-sm text-gray-400">{{ store.usbDevices.length }} serial devices (supervisor)</span>
-          <button @click="store.fetchUSBDevices()" class="text-xs text-gray-500 hover:text-gray-300">Refresh</button>
-        </div>
-        <div v-for="dev in store.usbDevices" :key="dev.dev_path" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3">
-          <div class="flex items-center justify-between">
-            <div>
-              <span class="text-sm font-medium text-gray-200">{{ dev.dev_path }}</span>
-              <span class="text-xs text-gray-500 ml-2">{{ dev.vid_pid }}</span>
-              <span v-if="dev.role" class="ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
-                :class="devRoleClass(dev.role)">{{ dev.role }}</span>
-            </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+      <div class="mb-3 flex items-center justify-between">
+        <span class="text-sm text-gray-400">{{ mergedDeviceRows.length }} serial devices</span>
+        <button @click="store.fetchUSBDevices(); store.fetchDevices()"
+          class="text-xs text-gray-500 hover:text-gray-300">Refresh</button>
+      </div>
+      <div v-if="mergedDeviceRows.length === 0" class="text-sm text-gray-500 text-center py-8">
+        No USB serial devices detected.
+      </div>
+      <div v-for="dev in mergedDeviceRows" :key="dev.port"
+        class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm font-medium text-gray-200">{{ dev.port }}</span>
+            <span v-if="dev.vid_pid" class="text-xs text-gray-500">{{ dev.vid_pid }}</span>
+            <!-- Classification chip — prefer device_type, fall back to role. -->
+            <span v-if="dev.device_type" class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+              :class="dev.device_type === 'ambiguous' ? 'bg-amber-900/40 text-amber-300' : 'bg-gray-700 text-gray-400'">
+              {{ dev.device_type }}
+            </span>
+            <span v-else-if="dev.role" class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+              :class="devRoleClass(dev.role)">{{ dev.role }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span v-if="dev.bound_to" class="text-xs text-teal-400">→ {{ dev.bound_to }}</span>
+            <span v-else-if="dev.device_type" class="text-xs text-gray-600">Unassigned</span>
+            <span v-if="dev.state" class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
               :class="devStateClass(dev.state)">{{ dev.state }}</span>
           </div>
-          <div v-if="dev.usb_serial" class="text-xs text-gray-600 mt-1">Serial: {{ dev.usb_serial }}</div>
-          <div v-if="dev.error" class="text-xs text-red-400 mt-1">{{ dev.error }}</div>
         </div>
-      </div>
-
-      <!-- Interface manager device list (binding-aware) -->
-      <div class="mb-3 text-sm text-gray-400">
-        {{ (store.devices || []).length }} USB devices (interface bindings)
-      </div>
-      <div v-for="dev in store.devices" :key="dev.device_id" class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3">
-        <div class="flex items-center justify-between">
-          <div>
-            <span class="text-sm font-medium text-gray-200">{{ dev.port }}</span>
-            <span class="text-xs text-gray-500 ml-2">{{ dev.vid_pid }}</span>
-            <span class="ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
-              :class="dev.device_type === 'ambiguous'
-                ? 'bg-amber-900/40 text-amber-300'
-                : dev.device_type === 'unknown'
-                ? 'bg-gray-700 text-gray-400'
-                : 'bg-gray-700 text-gray-400'">{{ dev.device_type }}</span>
-          </div>
-          <div class="text-xs text-gray-500">
-            <span v-if="dev.bound_to" class="text-teal-400">Bound to {{ dev.bound_to }}</span>
-            <span v-else class="text-gray-600">Unassigned</span>
-          </div>
-        </div>
-        <div class="text-xs text-gray-600 mt-1">ID: {{ dev.device_id }}</div>
-        <div v-if="dev.usb_serial" class="text-xs text-gray-600">Serial: {{ dev.usb_serial }}</div>
-      </div>
-      <div v-if="!(store.devices || []).length && !(store.usbDevices || []).length" class="text-sm text-gray-500 text-center py-8">
-        No USB serial devices detected.
+        <div v-if="dev.usb_serial" class="text-xs text-gray-600 mt-1">Serial: {{ dev.usb_serial }}</div>
+        <div v-if="dev.device_id" class="text-xs text-gray-600">ID: {{ dev.device_id }}</div>
+        <div v-if="dev.error" class="text-xs text-red-400 mt-1">{{ dev.error }}</div>
       </div>
 
       <!-- WiFi adapters (non-serial, but devices in the same sense).
