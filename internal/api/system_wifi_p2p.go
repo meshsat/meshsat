@@ -194,7 +194,15 @@ type wifiP2PConnectRequest struct {
 	Interface string `json:"interface"`
 	PeerAddr  string `json:"peer_addr"`
 	Pin       string `json:"pin"`
-	GOIntent  int    `json:"go_intent,omitempty"` // 0-15, default 7
+	// Role is the WPS config method this kit takes in the PIN exchange:
+	//   "display" — this kit generated + showed the PIN; peer typed it
+	//   "keypad"  — this kit received + typed the PIN; peer displays
+	// When both kits advertise BOTH capabilities (common on mt7921u),
+	// wpa_supplicant needs the role explicitly or negotiation stalls
+	// and the virtual p2p-N iface comes up briefly then disappears
+	// (observed live 2026-04-21). Empty → default to "keypad".
+	Role     string `json:"role,omitempty"`
+	GOIntent int    `json:"go_intent,omitempty"` // 0-15, default 7
 }
 
 // isValidWPSPIN accepts 4 or 8 numeric digits (4 = short unchecked,
@@ -250,7 +258,17 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, sanitizeExecError("ensureWpaSupplicant", err))
 		return
 	}
-	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Pin}
+	role := req.Role
+	switch role {
+	case "display", "keypad":
+		// ok
+	case "":
+		role = "keypad" // safest default — peer typed a PIN into us
+	default:
+		writeError(w, http.StatusBadRequest, "role must be display or keypad")
+		return
+	}
+	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Pin, role}
 	if req.GOIntent > 0 && req.GOIntent <= 15 {
 		args = append(args, "go_intent="+strconv.Itoa(req.GOIntent))
 	}

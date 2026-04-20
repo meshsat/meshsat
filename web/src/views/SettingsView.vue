@@ -1017,18 +1017,24 @@ const p2pPinDialog = ref({ open: false, peer: null, pin: '' })
 const p2pGeneratedPin = ref('')
 
 function openP2PPinDialog(peer) {
-  p2pPinDialog.value = { open: true, peer, pin: '' }
+  // role: "keypad" by default — operator is typing a PIN from the
+  // other kit. Flips to "display" the moment they tap Generate.
+  p2pPinDialog.value = { open: true, peer, pin: '', role: 'keypad' }
   p2pGeneratedPin.value = ''
   p2pError.value = ''
 }
 function closeP2PPinDialog() {
-  p2pPinDialog.value = { open: false, peer: null, pin: '' }
+  p2pPinDialog.value = { open: false, peer: null, pin: '', role: 'keypad' }
   p2pGeneratedPin.value = ''
 }
 async function doP2PGenPin() {
   p2pError.value = ''
-  try { p2pGeneratedPin.value = await store.wifiP2PGenPin() }
-  catch (e) { p2pError.value = e?.message || 'pin gen failed' }
+  try {
+    p2pGeneratedPin.value = await store.wifiP2PGenPin()
+    // Local state: we're the kit DISPLAYING the PIN — peer types it.
+    p2pPinDialog.value.pin = p2pGeneratedPin.value
+    p2pPinDialog.value.role = 'display'
+  } catch (e) { p2pError.value = e?.message || 'pin gen failed' }
 }
 async function doP2PConnectWithPin() {
   const peer = p2pPinDialog.value.peer
@@ -1042,7 +1048,7 @@ async function doP2PConnectWithPin() {
   p2pError.value = ''
   p2pConnectBusy.value = true
   try {
-    await store.wifiP2PConnect(wifiIface.value || undefined, peer.address, pin, 7)
+    await store.wifiP2PConnect(wifiIface.value || undefined, peer.address, pin, p2pPinDialog.value.role || 'keypad', 7)
     // Group-up is async — poll status for ~8s.
     for (let i = 0; i < 8; i++) {
       await new Promise(r => setTimeout(r, 1000))
@@ -2866,8 +2872,9 @@ onUnmounted(() => {
             <div class="text-xs text-sky-300 font-medium mb-1">Authenticated pairing — PIN required</div>
             <p class="text-[10px] text-gray-400 leading-relaxed mb-2">
               Peer <span class="font-mono text-gray-200">{{ p2pPinDialog.peer?.device_name || p2pPinDialog.peer?.address }}</span>.
-              Enter the same 4 or 8-digit PIN on BOTH kits. Read off one screen, type on the other.
               <strong class="text-amber-300">Push-button (PBC) pairing is disabled</strong> — unauthenticated peering is not permitted.
+              One kit generates the PIN (Generate), the other types it. Then both tap Connect.
+              This kit's role: <span class="text-sky-300 font-mono">{{ p2pPinDialog.role }}</span> ({{ p2pPinDialog.role === 'display' ? 'showing the PIN' : 'typing peer\'s PIN' }}).
             </p>
             <div class="flex items-center gap-2 mb-2">
               <input v-model="p2pPinDialog.pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8"

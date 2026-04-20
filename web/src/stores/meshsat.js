@@ -1609,11 +1609,13 @@ export const useMeshsatStore = defineStore('meshsat', () => {
       wifiP2PPeers.value = Array.isArray(d?.peers) ? d.peers : []
     } catch { wifiP2PPeers.value = [] }
   }
-  async function wifiP2PConnect(iface, peerAddr, pin, goIntent = 7) {
+  async function wifiP2PConnect(iface, peerAddr, pin, role = 'keypad', goIntent = 7) {
     // PIN-only. Backend rejects requests without a 4/8-digit pin
-    // (unauthenticated pairing disabled). MESHSAT-647 + MESHSAT-648.
+    // (unauthenticated pairing disabled). role = "display" when this
+    // kit generated/showed the PIN; "keypad" when this kit typed the
+    // peer's PIN. Required for both-sides-PIN WPS exchange on mt7921u.
     return await api.post('/system/wifi/p2p/connect', {
-      interface: iface || '', peer_addr: peerAddr, pin: pin || '', go_intent: goIntent,
+      interface: iface || '', peer_addr: peerAddr, pin: pin || '', role, go_intent: goIntent,
     })
   }
   async function wifiP2PGenPin() {
