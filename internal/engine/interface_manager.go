@@ -460,10 +460,16 @@ func (m *InterfaceManager) scanDevices() {
 		if rt.iface.DeviceID != "" || !rt.iface.Enabled {
 			continue // already bound or disabled
 		}
-		// Find unassigned devices matching this channel type
+		// Find unassigned devices matching this channel type. The
+		// device classifier emits strings like "meshtastic" / "iridium"
+		// / "cellular" / "zigbee" / "gps" whereas interface rows use
+		// channel_type values like "mesh" / "iridium" / "iridium_imt" /
+		// "cellular" / "zigbee". A literal string compare misses the
+		// "meshtastic" ↔ "mesh" pairing (and any other alias), so the
+		// heuristic goes through canonicalizeDeviceType below.
 		var candidates []DetectedDevice
 		for _, d := range detected {
-			if d.DeviceType == rt.iface.ChannelType && !boundDeviceIDs[d.DeviceID] {
+			if deviceTypeMatchesChannelType(d.DeviceType, rt.iface.ChannelType) && !boundDeviceIDs[d.DeviceID] {
 				candidates = append(candidates, d)
 			}
 		}
@@ -502,6 +508,40 @@ func (m *InterfaceManager) scanDevices() {
 	for _, c := range changes {
 		m.notifyStateChange(c.ifaceID, c.channelType, c.newState)
 	}
+}
+
+// deviceTypeMatchesChannelType pairs a classifier-emitted device type
+// ("meshtastic", "iridium", "cellular", "zigbee", "gps") with the
+// channel_type of an interface row ("mesh", "iridium", "iridium_imt",
+// "cellular", "zigbee"). Exact-string was the original heuristic but
+// the Meshtastic case always failed ("meshtastic" != "mesh") so auto-
+// bind never fired for the mesh radio. The two vocabularies are now
+// bridged here.
+//
+// Notes:
+//   - "iridium" device class covers both 9603 (SBD) and 9704 (IMT).
+//     The ClassifyDevice / ClassifyDeviceWithProbe disambiguation
+//     happens per-port; until MESHSAT-646 lands we conservatively
+//     only auto-bind into channel_type="iridium" (9603), leaving
+//     "iridium_imt" to an explicit operator bind so we don't route
+//     100 kB IMT traffic through an SBD gateway.
+//   - "gps" is not a routed channel; no interface has channel_type
+//     "gps" so the gps branch never matches — the GPSReader claims
+//     the port via its own supervisor callback.
+func deviceTypeMatchesChannelType(deviceType, channelType string) bool {
+	if deviceType == "" || channelType == "" {
+		return false
+	}
+	if deviceType == channelType {
+		return true
+	}
+	aliases := map[string]string{
+		"meshtastic": "mesh",
+		// "iridium" matches "iridium" literally above; do NOT alias
+		// to "iridium_imt" — that needs a protocol probe, not a
+		// VID:PID heuristic.
+	}
+	return aliases[deviceType] == channelType
 }
 
 func (m *InterfaceManager) statusFromRuntime(rt *interfaceRuntime) *InterfaceStatus {
