@@ -546,7 +546,7 @@ onUnmounted(() => {
             <option v-for="t in channelTypes" :key="t" :value="t">{{ t }}</option>
           </select>
           <input v-model="ifaceForm.label" placeholder="Label" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
-          <label class="flex items-center gap-2 text-sm text-gray-400">
+          <label class="flex items-center gap-2 h-10 px-2 text-sm text-gray-400 cursor-pointer">
             <input type="checkbox" v-model="ifaceForm.enabled" class="rounded" /> Enabled
           </label>
         </div>
@@ -826,7 +826,7 @@ onUnmounted(() => {
               <option :value="3">3 - Critical</option>
             </select>
           </div>
-          <label class="flex items-center gap-2 text-xs text-gray-400 mt-4">
+          <label class="flex items-center gap-2 h-10 px-2 mt-4 text-xs text-gray-400 cursor-pointer">
             <input type="checkbox" v-model="ruleForm.enabled" class="rounded" /> Enabled
           </label>
         </div>
@@ -981,13 +981,13 @@ onUnmounted(() => {
             No SMS contacts. Add contacts in Settings &gt; Cellular first.
           </div>
           <div v-else class="space-y-1 max-h-40 overflow-y-auto bg-gray-900 rounded border border-gray-700 p-2">
-            <label class="flex items-center gap-2 text-xs text-gray-300 py-0.5 cursor-pointer hover:text-gray-100">
+            <label class="flex items-center gap-2 h-10 px-2 text-xs text-gray-300 cursor-pointer hover:text-gray-100">
               <input type="checkbox" :checked="contactGroupHasAutoFwd" @change="toggleContactAutoFwd"
                 class="rounded bg-gray-800 border-gray-600"> All auto-forward contacts
             </label>
             <div class="border-t border-gray-700 my-1"></div>
             <label v-for="c in store.smsContacts" :key="c.id"
-              class="flex items-center gap-2 text-xs text-gray-300 py-0.5 cursor-pointer hover:text-gray-100">
+              class="flex items-center gap-2 h-10 px-2 text-xs text-gray-300 cursor-pointer hover:text-gray-100">
               <input type="checkbox" :checked="contactGroupHas(c.id)" @change="toggleContact(c.id)"
                 class="rounded bg-gray-800 border-gray-600">
               {{ c.name }} <span class="text-gray-500 font-mono">{{ c.phone }}</span>
