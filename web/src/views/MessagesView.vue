@@ -550,9 +550,9 @@ onUnmounted(() => {
         <div class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-3 mb-3">
           <div class="text-[11px] text-gray-500 mb-2">Quick Send SMS</div>
           <div class="flex gap-2">
-            <input v-model="smsTo" type="text" placeholder="+31612345678"
+            <input v-model="smsTo" type="tel" inputmode="tel" placeholder="+31612345678"
               class="w-40 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600" />
-            <input v-model="smsMsgText" type="text" placeholder="Message text..."
+            <input v-model="smsMsgText" type="text" enterkeyhint="send" placeholder="Message text..."
               class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600"
               @keydown.enter="doSendSMS" />
             <button @click="doSendSMS" :disabled="!smsTo || !smsMsgText"
@@ -665,7 +665,7 @@ onUnmounted(() => {
 
         <!-- Compose bar -->
         <div class="flex gap-2 pt-2 border-t border-gray-700/50 shrink-0">
-          <input v-model="smsMsgText" type="text" placeholder="Type a message..."
+          <input v-model="smsMsgText" type="text" enterkeyhint="send" placeholder="Type a message..."
             class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-sky-600"
             @keydown.enter="doSendSMS" />
           <button @click="doSendSMS" :disabled="!smsMsgText"

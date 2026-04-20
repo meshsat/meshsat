@@ -205,7 +205,7 @@ async function onSend() {
       <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
         Message
       </label>
-      <textarea v-model="text" rows="4"
+      <textarea v-model="text" rows="4" enterkeyhint="send"
         class="w-full px-3 py-2 rounded bg-tactical-surface border border-tactical-border text-sm focus:outline-none focus:border-tactical-iridium resize-y"
         placeholder="Type your message…"></textarea>
     </div>

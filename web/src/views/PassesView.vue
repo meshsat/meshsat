@@ -478,11 +478,11 @@ onMounted(async () => {
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">Latitude</label>
-          <input v-model="newLoc.lat" type="number" step="any" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.16">
+          <input v-model="newLoc.lat" type="number" step="any" inputmode="decimal" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="52.16">
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">Longitude</label>
-          <input v-model="newLoc.lon" type="number" step="any" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="4.49">
+          <input v-model="newLoc.lon" type="number" step="any" inputmode="decimal" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="4.49">
         </div>
         <div class="flex items-end">
           <button @click="addLocation" class="px-4 py-1.5 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 w-full">Add</button>

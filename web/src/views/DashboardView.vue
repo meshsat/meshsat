@@ -1963,7 +1963,7 @@ function widgetGridClass(id) {
         <!-- SIM PIN Unlock (when PIN is required) -->
         <div v-if="store.cellularStatus?.sim_state === 'PIN_REQUIRED'" class="mt-3 pt-2 border-t border-tactical-border">
           <div class="flex items-center gap-2">
-            <input type="password" v-model="pinInput" maxlength="8" placeholder="SIM PIN"
+            <input type="password" v-model="pinInput" maxlength="8" inputmode="numeric" pattern="[0-9]*" placeholder="SIM PIN"
               class="flex-1 bg-tactical-bg border border-tactical-border rounded px-2 py-1 text-[11px] text-gray-200 font-mono" />
             <button @click="unlockPIN" :disabled="pinUnlocking"
               class="text-[10px] px-2 py-1 rounded bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-50">

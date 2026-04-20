@@ -626,7 +626,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
           </div>
           <div>
             <label class="text-[11px] text-gray-500 mb-1 block">Phone</label>
-            <input v-model="contactForm.phone" type="text" placeholder="+31612345678"
+            <input v-model="contactForm.phone" type="tel" inputmode="tel" placeholder="+31612345678"
               class="w-full px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-sm text-gray-200 focus:outline-none focus:border-teal-600" />
           </div>
           <div class="col-span-2">

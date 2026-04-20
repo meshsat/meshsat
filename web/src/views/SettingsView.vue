@@ -1216,7 +1216,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <h4 class="text-sm font-medium text-amber-400">SIM PIN Required</h4>
         <p class="text-xs text-gray-400">The SIM card requires a PIN to unlock. Enter the 4-8 digit PIN below.</p>
         <div class="flex items-center gap-2">
-          <input type="password" v-model="settingsPinInput" maxlength="8" placeholder="SIM PIN"
+          <input type="password" v-model="settingsPinInput" maxlength="8" inputmode="numeric" pattern="[0-9]*" placeholder="SIM PIN"
             class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" />
           <button @click="unlockSettingsPIN" :disabled="settingsPinUnlocking"
             class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
@@ -1373,13 +1373,13 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             </div>
             <div>
               <label class="block text-[10px] text-gray-500 mb-1">Phone Number</label>
-              <input v-model="simForm.phone" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+31612345678">
+              <input v-model="simForm.phone" type="tel" inputmode="tel" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+31612345678">
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="block text-[10px] text-gray-500 mb-1">PIN Code</label>
-              <input v-model="simForm.pin" type="password" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="1234">
+              <input v-model="simForm.pin" type="password" inputmode="numeric" pattern="[0-9]*" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="1234">
             </div>
             <div>
               <label class="block text-[10px] text-gray-500 mb-1">Notes</label>
@@ -1430,7 +1430,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
             </div>
             <div>
               <label class="block text-[10px] text-gray-500 mb-1">Phone</label>
-              <input v-model="contactForm.phone" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+1234567890">
+              <input v-model="contactForm.phone" type="tel" inputmode="tel" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+1234567890">
             </div>
           </div>
           <div>
