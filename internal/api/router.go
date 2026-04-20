@@ -601,6 +601,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/system/wifi/ibss/leave/{iface}", s.handleWiFiIBSSLeave)
 		r.Post("/system/wifi/ibss/leave", s.handleWiFiIBSSLeave)
 
+		// Auto-federation: trusted peers CRUD. [MESHSAT-636]
+		r.Get("/federation/peers", s.handleFederationPeersList)
+		r.Get("/federation/peers/{signer_id}", s.handleFederationPeerGet)
+		r.Delete("/federation/peers/{signer_id}", s.handleFederationPeerDelete)
+		r.Put("/federation/peers/{signer_id}/auto-federate", s.handleFederationPeerAutoFederate)
+
 		// Pair mode — touch-display arm + remote-device claim
 		// [MESHSAT-596]. Mounted under /api/v2/pair/ so the old
 		// /api/* JWT-less rail remains stable during the Phase-8

@@ -1193,6 +1193,24 @@ var migrations = []string{
 		revoke_reason  TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS idx_paired_clients_revoked ON paired_clients(revoked_at);`,
+
+	// v51: trusted_peers — the durable cross-bearer identity + address
+	// book that drives auto-federation (MESHSAT-634 epic / MESHSAT-636).
+	// One row per paired MeshSat kit we've exchanged a signed capability
+	// manifest with.  Per-bearer addresses live in existing subsystem
+	// tables (sms_contacts, contacts, ...); this row is the cross-bearer
+	// index that ties them together via signer_id.
+	`CREATE TABLE IF NOT EXISTS trusted_peers (
+		signer_id           TEXT PRIMARY KEY,            -- Ed25519 pub hex
+		routing_identity    TEXT NOT NULL DEFAULT '',    -- destination hash
+		alias               TEXT NOT NULL DEFAULT '',    -- operator-facing name
+		manifest_json       TEXT NOT NULL DEFAULT '',    -- latest full manifest
+		manifest_verified_at TEXT,                       -- last successful verify
+		auto_federate       INTEGER NOT NULL DEFAULT 1,  -- 1=on, 0=off
+		created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_trusted_peers_updated ON trusted_peers(updated_at DESC);`,
 }
 
 func (db *DB) migrate() error {

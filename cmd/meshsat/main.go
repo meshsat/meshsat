@@ -25,6 +25,7 @@ import (
 	"meshsat/internal/dedup"
 	"meshsat/internal/directory"
 	"meshsat/internal/engine"
+	"meshsat/internal/federation"
 	"meshsat/internal/gateway"
 	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
@@ -1041,12 +1042,14 @@ func main() {
 
 	// BLE peer manager — auto-starts a Reticulum client-link over BLE
 	// when the operator pairs another MeshSat kit. [MESHSAT-633]
+	var blePeerMgr *api.BLEPeerManager
 	if proc != nil && ifaceReg != nil {
 		blePeerAdapter := cfg.BLEAdapter
 		if blePeerAdapter == "" {
 			blePeerAdapter = "hci0"
 		}
-		srv.SetBLEPeerManager(api.NewBLEPeerManager(blePeerAdapter, proc, ifaceReg))
+		blePeerMgr = api.NewBLEPeerManager(blePeerAdapter, proc, ifaceReg)
+		srv.SetBLEPeerManager(blePeerMgr)
 	}
 
 	// Key store — cross-platform key exchange with QR bundles and envelope encryption
@@ -1087,6 +1090,31 @@ func main() {
 			dispatcher.SetRecipientResolver(dirStore)
 			log.Info().Msg("dispatcher: recipient resolver wired")
 		}
+	}
+
+	// Auto-federation: arm the BLE peer manager with the signer +
+	// bearer-snapshot callback so that each new BLE peer link
+	// exchanges a signed CapabilityManifest. [MESHSAT-635 Phase 3]
+	if blePeerMgr != nil && signingService != nil && ifaceReg != nil {
+		routingIdentityHex := ""
+		aliasFromEnv := os.Getenv("MESHSAT_BRIDGE_NAME")
+		if routingID != nil {
+			routingIdentityHex = routingID.DestHashHex()
+		}
+		bearerSnapshot := func() []federation.Bearer {
+			out := make([]federation.Bearer, 0, 16)
+			for _, ri := range ifaceReg.All() {
+				out = append(out, federation.Bearer{
+					Type:        string(ri.Type()),
+					InterfaceID: ri.ID(),
+					Cost:        ri.Cost(),
+					MTU:         ri.MTU(),
+				})
+			}
+			return out
+		}
+		blePeerMgr.EnableAutoFederation(db, signingService.SignerID(), signingService.Sign, aliasFromEnv, routingIdentityHex, bearerSnapshot)
+		log.Info().Msg("ble-peer: auto-federation armed (manifest exchange on new links)")
 	}
 
 	// Credential expiry monitor — periodic check + SSE events for dashboard
