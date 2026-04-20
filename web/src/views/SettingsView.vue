@@ -1174,14 +1174,24 @@ onMounted(async () => {
   pickPreferredWifiIface()
   store.fetchWifiStatus(wifiIface.value || undefined)
   store.fetchWifiSaved(wifiIface.value || undefined)
+  // Auto-probe capabilities so the Peer-Link cards (IBSS / P2P) light
+  // up their action buttons without a manual Probe click. [MESHSAT-647]
+  if (wifiIface.value) {
+    try { await store.fetchWifiCapabilities(wifiIface.value) } catch {}
+  }
 })
 
 // Re-pull status/saved when the operator changes the selected adapter.
-watch(wifiIface, (n) => {
+// Also auto-probe capabilities so the Peer-Link cards know if the
+// chipset supports IBSS / P2P — otherwise the Find-peers button stays
+// disabled until the operator manually taps Probe, which is a UX
+// dead end that made the P2P flow look broken on first use.
+watch(wifiIface, async (n) => {
   if (!n) return
   store.fetchWifiStatus(n)
   store.fetchWifiSaved(n)
-  store.wifiCapabilities = null  // force fresh probe
+  store.wifiCapabilities = null
+  try { await store.fetchWifiCapabilities(n) } catch {}
 })
 
 // Pair-mode actions. [MESHSAT-597]
