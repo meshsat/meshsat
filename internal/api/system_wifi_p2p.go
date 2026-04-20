@@ -125,8 +125,20 @@ func (s *Server) handleWiFiP2PPeers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, sanitizeExecError("ensureWpaSupplicant", err))
 		return
 	}
-	// p2p_peers returns a newline-separated list of MACs.
-	out, err := execWpaCli(r.Context(), "-i", iface, "p2p_peers")
+	// p2p_peers returns a newline-separated list of MACs. Retry the
+	// call for a couple of seconds — on a fresh wpa_supplicant the
+	// control socket briefly exists before the daemon is actually
+	// listening on P2P, and the first call fails with exit 255 even
+	// though everything is fine by the next tick.
+	var out string
+	var err error
+	for i := 0; i < 4; i++ {
+		out, err = execWpaCli(r.Context(), "-i", iface, "p2p_peers")
+		if err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeExecError("p2p_peers", err))
 		return
