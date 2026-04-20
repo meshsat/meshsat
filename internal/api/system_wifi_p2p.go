@@ -276,6 +276,19 @@ func readP2PStatus(ctx context.Context, hintIface string) (WiFiP2PStatus, error)
 		if !strings.HasPrefix(line, "p2p-") {
 			continue
 		}
+		// Skip wpa_supplicant's P2P device-management interface —
+		// it's always present when P2P is enabled and isn't an
+		// active group. Real groups look like p2p-<parent>-<N>
+		// where <N> is a numeric index.
+		if strings.HasPrefix(line, "p2p-dev-") {
+			continue
+		}
+		// Require a trailing -<numeric> to be confident we have an
+		// actual group (the parentIfaceFromP2PGroup rule).
+		if parentIfaceFromP2PGroup(line) == "" ||
+			!isTrailingNumericIndex(line) {
+			continue
+		}
 		st.Active = true
 		st.GroupIface = line
 		// Detail via group-iface status.
@@ -320,6 +333,19 @@ func parentIfaceFromP2PGroup(group string) string {
 		}
 	}
 	return body
+}
+
+// isTrailingNumericIndex reports whether a group name ends in
+// "-<digits>" — `wpa_cli interface` includes both "p2p-dev-wlan0"
+// (device-mgmt, not a group) and "p2p-wlan0-0" (real group). Only
+// the numeric-index form is an active group.
+func isTrailingNumericIndex(name string) bool {
+	idx := strings.LastIndexByte(name, '-')
+	if idx < 0 || idx == len(name)-1 {
+		return false
+	}
+	_, err := strconv.Atoi(name[idx+1:])
+	return err == nil
 }
 
 // isValidMAC accepts standard 6-octet colon-delimited MAC.

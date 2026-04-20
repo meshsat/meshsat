@@ -49,6 +49,27 @@ func TestParentIfaceFromP2PGroup(t *testing.T) {
 	}
 }
 
+func TestIsTrailingNumericIndex(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"p2p-wlan0-0", true},
+		{"p2p-wlx90de80f3a70b-0", true},
+		{"p2p-wlan0-12", true},
+		{"p2p-dev-wlan0", false},       // mgmt iface, non-numeric suffix
+		{"p2p-wlx90de80f3a70b", false}, // no trailing index
+		{"wlan0", false},
+		{"", false},
+		{"p2p-", false},
+	}
+	for _, c := range cases {
+		if got := isTrailingNumericIndex(c.in); got != c.want {
+			t.Errorf("isTrailingNumericIndex(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestIsValidMAC(t *testing.T) {
 	cases := []struct {
 		in   string
