@@ -27,6 +27,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// isIfaceDown returns true if the kernel's operstate for `iface` is
+// anything other than "up". Safe to call for bogus names (returns
+// false when sysfs says nothing, so we don't try to bring up
+// something that isn't there).
+func isIfaceDown(iface string) bool {
+	b, err := os.ReadFile("/sys/class/net/" + iface + "/operstate")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(strings.ToLower(string(b))) != "up"
+}
+
 func defaultWiFiInterface() string {
 	if iface := os.Getenv("MESHSAT_WIFI_INTERFACE"); iface != "" {
 		return iface
@@ -58,6 +70,17 @@ func (s *Server) handleWiFiScan(w http.ResponseWriter, r *http.Request) {
 	if err := validateInterfaceName(iface); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// `iw scan` requires the iface to be UP. USB dongles often appear
+	// DOWN until we explicitly bring them up — otherwise the operator
+	// gets a cryptic exit-code-156 error on the first scan. Best-effort
+	// bring-up; if it fails we still attempt the scan so the real error
+	// surfaces. host-ops: allowed-in-standalone
+	if isIfaceDown(iface) {
+		_, _ = execWithTimeout(r.Context(), "nsenter", "-t", "1", "-m", "-n", "--",
+			"ip", "link", "set", iface, "up")
+		// Allow cfg80211 a beat to come up before scanning.
+		time.Sleep(500 * time.Millisecond)
 	}
 	output, err := execWithTimeout(r.Context(), "iw", iface, "scan")
 	if err != nil {

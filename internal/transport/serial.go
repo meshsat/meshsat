@@ -569,23 +569,43 @@ func findUSBProduct(port string) string {
 }
 
 // ClassifyDevice returns the device type for a given VID:PID string.
-// Returns one of: "meshtastic", "iridium", "cellular", "zigbee", "gps", "unknown".
-// Note: some VID:PIDs (CP210x, CH343) are shared by multiple device types.
-// For ambiguous matches, returns the most common type. Use protocol probing to disambiguate.
+// Returns one of: "meshtastic", "iridium", "cellular", "zigbee", "gps",
+// "ambiguous", or "unknown".
+//
+// Some VID:PIDs (CP210x, CH343) are shared across multiple device classes.
+// Previously this function silently returned the first class checked
+// (meshtastic) which made the Bind dropdown mis-label cellular modems
+// (T-Call A7670E on CH343 1a86:55d4) as meshtastic. Now we count how
+// many classes claim the VID:PID and return "ambiguous" when more
+// than one does — the Bind dropdown renders that in amber so the
+// operator knows a probe is pending or a manual bind is needed.
 func ClassifyDevice(vidpid string) string {
-	if knownMeshtasticVIDPIDs[vidpid] {
+	inM := knownMeshtasticVIDPIDs[vidpid]
+	inI := knownIridiumVIDPIDs[vidpid] || knownIMTVIDPIDs[vidpid]
+	inC := knownCellularVIDPIDs[vidpid]
+	inZ := knownZigBeeOnlyVIDPIDs[vidpid] || ambiguousZigBeeVIDPIDs[vidpid]
+	inG := gpsVIDPIDs[vidpid]
+
+	n := 0
+	for _, b := range []bool{inM, inI, inC, inZ, inG} {
+		if b {
+			n++
+		}
+	}
+	switch {
+	case n == 0:
+		return "unknown"
+	case n > 1:
+		return "ambiguous"
+	case inM:
 		return "meshtastic"
-	}
-	if knownIridiumVIDPIDs[vidpid] {
+	case inI:
 		return "iridium"
-	}
-	if knownCellularVIDPIDs[vidpid] {
+	case inC:
 		return "cellular"
-	}
-	if knownZigBeeOnlyVIDPIDs[vidpid] {
+	case inZ:
 		return "zigbee"
-	}
-	if gpsVIDPIDs[vidpid] {
+	case inG:
 		return "gps"
 	}
 	return "unknown"
@@ -640,7 +660,12 @@ const probeCacheTTL = 30 * time.Minute
 // ZNP probe.
 func ClassifyDeviceWithProbe(vidpid, portPath string) string {
 	base := ClassifyDevice(vidpid)
-	if base != "meshtastic" || !ambiguousZigBeeVIDPIDs[vidpid] || portPath == "" {
+	// We only probe when the VID:PID is in the ambiguous ZigBee map
+	// (shared with Meshtastic / Cellular). With the new ambiguity-
+	// aware ClassifyDevice, `base` is now "ambiguous" for those
+	// entries — previously it was "meshtastic". Accept either so an
+	// already-cached result still short-circuits the probe.
+	if (base != "meshtastic" && base != "ambiguous") || !ambiguousZigBeeVIDPIDs[vidpid] || portPath == "" {
 		return base
 	}
 

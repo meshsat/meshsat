@@ -486,6 +486,7 @@ onMounted(() => {
   store.fetchInterfaces()
   store.fetchDevices()
   store.fetchUSBDevices()
+  store.fetchWifiInterfaces()
   store.fetchAccessRules()
   store.fetchObjectGroups()
   store.fetchFailoverGroups()
@@ -497,6 +498,7 @@ onMounted(() => {
     store.fetchInterfaces()
     store.fetchDevices()
     store.fetchUSBDevices()
+    store.fetchWifiInterfaces()
     store.fetchAccessRules()
     store.fetchObjectGroups()
     store.fetchFailoverGroups()
@@ -915,7 +917,12 @@ onUnmounted(() => {
           <div>
             <span class="text-sm font-medium text-gray-200">{{ dev.port }}</span>
             <span class="text-xs text-gray-500 ml-2">{{ dev.vid_pid }}</span>
-            <span class="ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-gray-700 text-gray-400">{{ dev.device_type }}</span>
+            <span class="ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+              :class="dev.device_type === 'ambiguous'
+                ? 'bg-amber-900/40 text-amber-300'
+                : dev.device_type === 'unknown'
+                ? 'bg-gray-700 text-gray-400'
+                : 'bg-gray-700 text-gray-400'">{{ dev.device_type }}</span>
           </div>
           <div class="text-xs text-gray-500">
             <span v-if="dev.bound_to" class="text-teal-400">Bound to {{ dev.bound_to }}</span>
@@ -927,6 +934,41 @@ onUnmounted(() => {
       </div>
       <div v-if="!(store.devices || []).length && !(store.usbDevices || []).length" class="text-sm text-gray-500 text-center py-8">
         No USB serial devices detected.
+      </div>
+
+      <!-- WiFi adapters (non-serial, but devices in the same sense).
+           Listed here so the Devices tab is the one place an operator
+           sees every piece of hardware a bridge knows about — not just
+           the TTY-attached ones. Tap → Settings > Network. [MESHSAT-643] -->
+      <div class="mt-8">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-sm text-gray-400">{{ (store.wifiInterfaces || []).length }} WiFi adapters</span>
+          <button @click="store.fetchWifiInterfaces()" class="text-xs text-gray-500 hover:text-gray-300">Refresh</button>
+        </div>
+        <div v-if="(store.wifiInterfaces || []).length === 0" class="text-sm text-gray-500 py-4">
+          No WiFi adapters detected. Plug in a USB WiFi dongle and tap Refresh.
+        </div>
+        <div v-else>
+          <router-link v-for="w in store.wifiInterfaces" :key="w.name" to="/settings?shell=engineer&tab=network"
+            class="block bg-gray-800 rounded-lg p-4 border border-gray-700 mb-3 hover:border-teal-600 transition-colors">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-sm font-mono text-gray-200">{{ w.name }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="w.role === 'usb' ? 'bg-sky-900/40 text-sky-300' : w.role === 'onboard' ? 'bg-purple-900/30 text-purple-300' : 'bg-gray-700 text-gray-400'">
+                  {{ w.role }}
+                </span>
+                <span v-if="w.is_mgmt" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300">mgmt</span>
+                <span v-if="w.driver" class="text-[10px] text-gray-500 font-mono">{{ w.driver }}</span>
+              </div>
+              <span class="text-[10px] px-1.5 py-0.5 rounded"
+                :class="w.state === 'up' ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
+                {{ w.state }}
+              </span>
+            </div>
+            <div class="text-xs text-gray-600 mt-1">MAC: {{ w.mac }}</div>
+          </router-link>
+        </div>
       </div>
     </div>
 
