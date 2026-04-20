@@ -12,6 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/database"
 )
 
 // @Summary List trusted peers
@@ -27,8 +29,10 @@ func (s *Server) handleFederationPeersList(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "list peers")
 		return
 	}
+	// Empty slice renders as [] — avoids the UI having to handle
+	// the JSON null case separately from a real empty set.
 	if peers == nil {
-		peers = nil
+		peers = []database.TrustedPeer{}
 	}
 	writeJSON(w, http.StatusOK, peers)
 }
