@@ -11,6 +11,7 @@ import '@fontsource/oxanium/500.css'
 import '@fontsource/oxanium/600.css'
 import '@fontsource/oxanium/700.css'
 import './style.css'
+import { startBundleWatcher } from './bundleWatcher'
 
 // Tag <html> with `shell-kiosk` when we're running on a dedicated
 // kiosk device (hides cursor + scrollbars, bumps tap targets).
@@ -37,3 +38,12 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 app.mount('#app')
+
+// Self-refreshing kiosk: poll / every 30 s; reload when the bundle hash
+// changes.  Override via ?bundleWatchMs=N (0 disables).  [MESHSAT-621]
+try {
+  const params = new URLSearchParams(window.location.search || '')
+  const override = params.get('bundleWatchMs')
+  const ms = override !== null ? Number(override) : 30_000
+  if (Number.isFinite(ms)) startBundleWatcher(ms)
+} catch {}
