@@ -27,16 +27,14 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# Backlight dim on idle via swayidle → /api/system/backlight
-# (MESHSAT-556). Thresholds: 2 min → ~20%, 5 min → off, any input
-# → full brightness. The sysfs writes live inside the meshsat
-# container; we POST through the REST endpoint so no suid / sudoers
-# bridge is needed on the kiosk user.
-(swayidle -w \
-  timeout 120 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":50}"  >/dev/null 2>&1' \
-  timeout 300 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":0}"   >/dev/null 2>&1' \
-  resume 'curl -s -X POST http://localhost:6050/api/system/backlight -H "Content-Type: application/json" -d "{\"value\":255}" >/dev/null 2>&1' \
-  &) 2>/dev/null
+# Idle-backlight control lives in ~/.config/labwc/autostart (the
+# swayidle invocation that shells out to the sudoers-scoped
+# /usr/local/bin/meshsat-backlight wrapper — see MESHSAT-580 +
+# /etc/sudoers.d/kiosk-brightness). There was previously a second
+# swayidle block here that POSTed to /api/system/backlight
+# [MESHSAT-556]; it raced the autostart one and, because its
+# timeouts were shorter, always won — leaving the wrapper path
+# as dead code. Keeping one definition avoids that conflict.
 
 # Cursor theme — `blank` is the fully-transparent theme installed
 # by deploy/kiosk/install-blank-cursor.sh. Exported here (as well
