@@ -195,7 +195,13 @@ RUN apt-get update -qq && \
       ca-certificates wget coreutils python3 python3-serial \
       libusb-1.0-0 libfftw3-single3 \
       libasound2 alsa-utils usbutils procps \
-      libudev1 libhidapi-hidraw0 && \
+      libudev1 libhidapi-hidraw0 \
+      # BT + WiFi host-ops tooling [MESHSAT-623 / MESHSAT-624].
+      # bluez -> bluetoothctl; wpasupplicant -> wpa_cli; iw -> WiFi scan;
+      # rfkill -> radio block/unblock; iproute2 -> ip/ss used by helpers;
+      # util-linux supplies nsenter for the PID-1 namespace crossings
+      # the HAL-ported handlers do (gated by the standalone-mode pragma).
+      bluez wpasupplicant iw rfkill iproute2 util-linux && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder   /meshsat                    /usr/local/bin/meshsat
