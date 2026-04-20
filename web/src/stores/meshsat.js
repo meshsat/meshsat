@@ -1587,6 +1587,42 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     return await api.post(path, {})
   }
 
+  // WiFi-Direct P2P [MESHSAT-647] — kit-to-kit link for chipsets that
+  // support P2P but not IBSS (our USB MT7921U dongles).
+  const wifiP2PPeers = ref([])
+  const wifiP2PStatus = ref(null)
+  async function wifiP2PFind(iface, timeoutSec = 30) {
+    const qs = new URLSearchParams()
+    if (iface) qs.set('interface', iface)
+    qs.set('iface', iface || '')
+    qs.set('timeout', String(timeoutSec))
+    return await api.post(`/system/wifi/p2p/find?${qs.toString()}`, {})
+  }
+  async function wifiP2PStopFind(iface) {
+    const qs = iface ? `?iface=${encodeURIComponent(iface)}` : ''
+    return await api.post(`/system/wifi/p2p/stop-find${qs}`, {})
+  }
+  async function fetchWifiP2PPeers(iface) {
+    const qs = iface ? `?iface=${encodeURIComponent(iface)}` : ''
+    try {
+      const d = await api.get(`/system/wifi/p2p/peers${qs}`)
+      wifiP2PPeers.value = Array.isArray(d?.peers) ? d.peers : []
+    } catch { wifiP2PPeers.value = [] }
+  }
+  async function wifiP2PConnect(iface, peerAddr, method = 'pbc', goIntent = 7) {
+    return await api.post('/system/wifi/p2p/connect', {
+      interface: iface || '', peer_addr: peerAddr, method, go_intent: goIntent,
+    })
+  }
+  async function wifiP2PDisconnect() {
+    return await api.post('/system/wifi/p2p/disconnect', {})
+  }
+  async function fetchWifiP2PStatus(iface) {
+    const qs = iface ? `?iface=${encodeURIComponent(iface)}` : ''
+    try { wifiP2PStatus.value = await api.get(`/system/wifi/p2p/status${qs}`) }
+    catch { wifiP2PStatus.value = null }
+  }
+
   // HeMB bond groups — needed for the operator-dashboard Active Comms
   // tile to render "HeMB <label> · mesh_0 + ax25_0" style when a bond
   // is the actual outbound route, instead of naming a single member.
@@ -1739,6 +1775,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     // WiFi peer-link [MESHSAT-630]
     wifiCapabilities, fetchWifiCapabilities,
     wifiIBSSJoin, wifiIBSSLeave,
+    // WiFi-Direct P2P [MESHSAT-647]
+    wifiP2PPeers, wifiP2PStatus,
+    wifiP2PFind, wifiP2PStopFind, fetchWifiP2PPeers,
+    wifiP2PConnect, wifiP2PDisconnect, fetchWifiP2PStatus,
     // WiFi adapter enum [MESHSAT-642]
     wifiInterfaces, fetchWifiInterfaces,
     // Federation dashboard feed [MESHSAT-644]

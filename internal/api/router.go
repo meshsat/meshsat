@@ -605,6 +605,15 @@ func (s *Server) Router() http.Handler {
 		// [MESHSAT-642]
 		r.Get("/system/wifi/interfaces", s.handleWiFiInterfaces)
 
+		// WiFi-Direct (P2P) — kit-to-kit for chipsets that support
+		// P2P but not IBSS. [MESHSAT-647]
+		r.Post("/system/wifi/p2p/find", s.handleWiFiP2PFind)
+		r.Post("/system/wifi/p2p/stop-find", s.handleWiFiP2PStopFind)
+		r.Get("/system/wifi/p2p/peers", s.handleWiFiP2PPeers)
+		r.Post("/system/wifi/p2p/connect", s.handleWiFiP2PConnect)
+		r.Post("/system/wifi/p2p/disconnect", s.handleWiFiP2PDisconnect)
+		r.Get("/system/wifi/p2p/status", s.handleWiFiP2PStatus)
+
 		// Auto-federation: trusted peers CRUD. [MESHSAT-636]
 		r.Get("/federation/peers", s.handleFederationPeersList)
 		r.Get("/federation/peers/{signer_id}", s.handleFederationPeerGet)

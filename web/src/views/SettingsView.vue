@@ -975,6 +975,66 @@ async function doIBSSJoin() {
   } catch (e) { ibssError.value = e?.message || 'IBSS join failed' }
   finally { ibssBusy.value = false }
 }
+// WiFi-Direct P2P state (MESHSAT-647)
+const p2pFindBusy = ref(false)
+const p2pFindCountdown = ref(0)
+let p2pFindTimer = null
+const p2pConnectBusy = ref(false)
+const p2pError = ref('')
+const p2pCaps = computed(() => !!store.wifiCapabilities?.p2p)
+async function doP2PFind() {
+  if (p2pFindBusy.value) return
+  p2pError.value = ''
+  p2pFindBusy.value = true
+  p2pFindCountdown.value = 30
+  if (p2pFindTimer) clearInterval(p2pFindTimer)
+  p2pFindTimer = setInterval(async () => {
+    if (p2pFindCountdown.value > 0) p2pFindCountdown.value--
+    else {
+      clearInterval(p2pFindTimer); p2pFindTimer = null
+      p2pFindBusy.value = false
+    }
+    // Poll peers every tick.
+    try { await store.fetchWifiP2PPeers(wifiIface.value || undefined) } catch {}
+  }, 1000)
+  try {
+    await store.wifiP2PFind(wifiIface.value || undefined, 30)
+  } catch (e) {
+    p2pError.value = e?.message || 'p2p_find failed'
+    p2pFindBusy.value = false; p2pFindCountdown.value = 0
+    if (p2pFindTimer) { clearInterval(p2pFindTimer); p2pFindTimer = null }
+  }
+}
+async function doP2PStopFind() {
+  if (p2pFindTimer) { clearInterval(p2pFindTimer); p2pFindTimer = null }
+  p2pFindBusy.value = false; p2pFindCountdown.value = 0
+  try { await store.wifiP2PStopFind(wifiIface.value || undefined) } catch {}
+}
+async function doP2PConnect(peer) {
+  if (!confirmMgmtAction(`P2P connect on "${wifiIface.value}"`)) return
+  if (!wifiActiveIsMgmt.value && !confirm(`Push-button connect to ${peer.device_name || peer.address}?`)) return
+  p2pError.value = ''
+  p2pConnectBusy.value = true
+  try {
+    await store.wifiP2PConnect(wifiIface.value || undefined, peer.address, 'pbc', 7)
+    // Group-up is async — poll status for ~8s.
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      await store.fetchWifiP2PStatus(wifiIface.value || undefined)
+      if (store.wifiP2PStatus?.active) break
+    }
+  } catch (e) { p2pError.value = e?.message || 'p2p_connect failed' }
+  finally { p2pConnectBusy.value = false }
+}
+async function doP2PDisconnect() {
+  if (!confirm('Tear down the active WiFi-Direct link?')) return
+  p2pError.value = ''
+  try {
+    await store.wifiP2PDisconnect()
+    await store.fetchWifiP2PStatus(wifiIface.value || undefined)
+  } catch (e) { p2pError.value = e?.message || 'disconnect failed' }
+}
+
 async function doIBSSLeave() {
   if (!confirmMgmtAction(`IBSS leave on "${wifiIface.value}"`)) return
   if (!wifiActiveIsMgmt.value && !confirm('Leave IBSS and return to managed mode?')) return
@@ -1138,6 +1198,7 @@ async function doRevoke(id) {
 onUnmounted(() => {
   if (signalTimer) clearInterval(signalTimer)
   if (btScanTimer) clearInterval(btScanTimer)
+  if (p2pFindTimer) clearInterval(p2pFindTimer)
   stopPermitJoinCountdown()
 })
 </script>
@@ -2700,13 +2761,69 @@ onUnmounted(() => {
         </div>
         </template><!-- /networkMode === 'ap' -->
 
-        <!-- ═══ Link-to-Kit (IBSS) card ═══ -->
+        <!-- ═══ Link-to-Kit card ═══ -->
         <template v-if="networkMode === 'peer'">
         <div class="bg-gray-800/40 rounded-lg p-3 border border-teal-900/40">
           <div class="text-xs text-teal-300 font-medium mb-1">Direct kit-to-kit link</div>
           <p class="text-[10px] text-gray-400 leading-relaxed">
-            Two MeshSat kits form an ad-hoc WiFi cell with no access point in between. Use this when no infrastructure is available — field ops, denied comms, convoy. Both kits must use the same cell name + frequency. Reticulum's <code class="text-gray-300">tcp_0</code> then rides the link-local IPs.
+            Two MeshSat kits form a direct link with no access point in between. Use when no infrastructure is available — field ops, denied comms, convoy. Reticulum's <code class="text-gray-300">tcp_0</code> rides the resulting IPs. Pick the mode your chipset supports — <strong>WiFi-Direct</strong> on USB dongles (mt7921u), <strong>IBSS</strong> on onboard brcmfmac.
           </p>
+        </div>
+
+        <!-- WiFi-Direct (P2P) — preferred for chipsets with P2P-GO/client. [MESHSAT-647] -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium text-gray-200">WiFi-Direct (P2P)</h3>
+            <div class="flex items-center gap-2">
+              <span v-if="!p2pCaps" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300">chipset: no P2P</span>
+              <button @click="store.fetchWifiP2PStatus(wifiIface || undefined)" class="text-xs text-teal-400 hover:text-teal-300 px-2">Status</button>
+            </div>
+          </div>
+          <p class="text-xs text-gray-500 mb-3">Both kits advertise + negotiate automatically. Push-button (WPS-PBC) — no PIN needed since both kits are under your control.</p>
+
+          <!-- Active group status -->
+          <div v-if="store.wifiP2PStatus?.active" class="mb-3 bg-gray-900 rounded px-3 py-2 border border-teal-700/40">
+            <div class="text-[10px] text-teal-300 uppercase tracking-wide mb-1">Active WiFi-Direct link</div>
+            <div class="grid grid-cols-2 gap-2 text-[11px]">
+              <div><span class="text-gray-500">Role: </span><span class="text-gray-200">{{ store.wifiP2PStatus.role || '—' }}</span></div>
+              <div><span class="text-gray-500">Group iface: </span><span class="text-gray-200 font-mono">{{ store.wifiP2PStatus.group_iface || '—' }}</span></div>
+              <div v-if="store.wifiP2PStatus.ssid"><span class="text-gray-500">SSID: </span><span class="text-gray-200 font-mono">{{ store.wifiP2PStatus.ssid }}</span></div>
+              <div v-if="store.wifiP2PStatus.ip_address"><span class="text-gray-500">IP: </span><span class="text-gray-200 font-mono">{{ store.wifiP2PStatus.ip_address }}</span></div>
+            </div>
+            <button @click="doP2PDisconnect" class="mt-2 px-3 py-1 rounded bg-red-700 text-white text-xs hover:bg-red-600">Disconnect</button>
+          </div>
+
+          <!-- Discovery -->
+          <div class="flex items-center gap-2 mb-3">
+            <button v-if="!p2pFindBusy" @click="doP2PFind" :disabled="!p2pCaps"
+              class="px-3 py-1 rounded bg-teal-700 text-white text-xs hover:bg-teal-600 disabled:opacity-40">
+              Find peers
+            </button>
+            <template v-else>
+              <span class="text-xs text-amber-400 animate-pulse">Discovering — {{ p2pFindCountdown }}s</span>
+              <button @click="doP2PStopFind" class="text-xs text-gray-400 hover:text-gray-200 px-2">Stop</button>
+            </template>
+            <button @click="store.fetchWifiP2PPeers(wifiIface || undefined)" class="text-xs text-teal-400 hover:text-teal-300 px-2">Refresh</button>
+          </div>
+
+          <!-- Peers -->
+          <div v-if="(store.wifiP2PPeers || []).length === 0" class="text-xs text-gray-500 py-2">
+            No peers yet. Tap Find peers on BOTH kits — they'll discover each other within a few seconds.
+          </div>
+          <div v-else class="space-y-1.5">
+            <div v-for="p in store.wifiP2PPeers" :key="p.address"
+              class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xs text-gray-200 truncate">{{ p.device_name || '(unnamed)' }}</span>
+                <span class="text-[10px] text-gray-600 font-mono">{{ p.address }}</span>
+              </div>
+              <button @click="doP2PConnect(p)" :disabled="p2pConnectBusy"
+                class="text-[10px] px-2 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-600 disabled:opacity-40">
+                {{ p2pConnectBusy ? 'Connecting…' : 'Connect (PBC)' }}
+              </button>
+            </div>
+          </div>
+          <p v-if="p2pError" class="mt-2 text-[10px] text-red-400 bg-red-900/20 rounded px-2 py-1.5 border border-red-800/40">{{ p2pError }}</p>
         </div>
 
         <!-- Peer Link (IBSS kit-to-kit) [MESHSAT-630] -->
