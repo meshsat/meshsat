@@ -2346,9 +2346,11 @@ onUnmounted(() => {
             <div v-if="(store.bluetoothDevices?.paired || []).length === 0" class="text-xs text-gray-500 py-2">No paired devices yet.</div>
             <div v-else class="space-y-1.5">
               <div v-for="d in store.bluetoothDevices.paired" :key="d.address"
-                class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+                class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700"
+                :class="d.is_meshsat ? 'border-teal-600/60' : ''">
                 <div class="flex items-center gap-2 min-w-0">
                   <span class="text-xs text-gray-200 truncate" :title="d.name || d.address">{{ d.name || d.address }}</span>
+                  <span v-if="d.is_meshsat" class="text-[10px] px-1.5 py-0.5 rounded bg-teal-900/40 text-teal-300" title="Advertises the MeshSat Reticulum GATT service — another MeshSat kit">MeshSat kit</span>
                   <span class="text-[10px] text-gray-600 font-mono truncate">{{ d.address }}</span>
                   <span v-if="d.connected" class="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-400">connected</span>
                   <span v-else-if="d.paired" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">paired</span>
@@ -2376,9 +2378,11 @@ onUnmounted(() => {
             </div>
             <div v-else class="space-y-1.5">
               <div v-for="d in store.bluetoothDevices.available" :key="d.address"
-                class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700">
+                class="flex items-center justify-between bg-gray-900 rounded px-3 py-1.5 border border-gray-700"
+                :class="d.is_meshsat ? 'border-teal-600/60' : ''">
                 <div class="flex items-center gap-2 min-w-0">
                   <span class="text-xs text-gray-200 truncate" :title="d.name || d.address">{{ d.name || '(unnamed)' }}</span>
+                  <span v-if="d.is_meshsat" class="text-[10px] px-1.5 py-0.5 rounded bg-teal-900/40 text-teal-300" title="Advertises the MeshSat Reticulum GATT service — another MeshSat kit">MeshSat kit</span>
                   <span class="text-[10px] text-gray-600 font-mono truncate">{{ d.address }}</span>
                   <span v-if="d.rssi" class="text-[10px] text-gray-500">{{ d.rssi }} dBm</span>
                 </div>

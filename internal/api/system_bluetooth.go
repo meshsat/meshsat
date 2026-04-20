@@ -38,6 +38,24 @@ type BluetoothDevice struct {
 	Trusted   bool   `json:"trusted"`
 	Class     string `json:"class,omitempty"`
 	RSSI      int    `json:"rssi,omitempty"`
+	// IsMeshSat is true when the remote device advertises the MeshSat
+	// Reticulum BLE GATT service UUID — i.e. it's another MeshSat kit
+	// and can carry Reticulum traffic. [MESHSAT-629]
+	IsMeshSat bool `json:"is_meshsat,omitempty"`
+}
+
+// meshSatBLEServiceUUID mirrors the `bleServiceUUID` constant in
+// internal/routing/ble_interface.go. Intentional duplication — this
+// package must not import routing to avoid an import cycle and any
+// drift would be caught by the ble interop test on first use.
+const meshSatBLEServiceUUID = "7e57c0de-0001-4000-8000-000000000001"
+
+// infoHasMeshSatUUID reports whether `bluetoothctl info <addr>` output
+// lists the MeshSat Reticulum GATT service UUID among advertised
+// services. Case-insensitive compare — BlueZ sometimes lowercases the
+// trailing hex block. [MESHSAT-629]
+func infoHasMeshSatUUID(info string) bool {
+	return strings.Contains(strings.ToLower(info), meshSatBLEServiceUUID)
 }
 
 type BluetoothDevicesResponse struct {
@@ -335,6 +353,7 @@ func getPairedBluetoothDevices(ctx context.Context) []BluetoothDevice {
 		if info, err := execWithTimeout(ctx, "bluetoothctl", "info", d.Address); err == nil {
 			d.Connected = strings.Contains(info, "Connected: yes")
 			d.Trusted = strings.Contains(info, "Trusted: yes")
+			d.IsMeshSat = infoHasMeshSatUUID(info)
 		}
 		devices = append(devices, d)
 	}
@@ -367,6 +386,7 @@ func getDiscoveredBluetoothDevices(ctx context.Context, paired map[string]bool) 
 			d.Name = parts[1]
 		}
 		if info, err := execWithTimeout(ctx, "bluetoothctl", "info", addr); err == nil {
+			d.IsMeshSat = infoHasMeshSatUUID(info)
 			for _, il := range strings.Split(info, "\n") {
 				il = strings.TrimSpace(il)
 				if strings.HasPrefix(il, "RSSI:") {
