@@ -928,7 +928,7 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
           </button>
         </div>
         <div v-if="radioEditing">
-          <textarea v-model="radioJSON" rows="8" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="{ ... }"></textarea>
+          <textarea v-model="radioJSON" rows="2" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono resize-y sm:resize-none sm:min-h-[12em]" placeholder="{ ... }"></textarea>
           <button @click="saveRadioConfig" class="mt-2 px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Apply</button>
         </div>
         <div v-else-if="currentSectionData.length > 0" class="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
@@ -2170,8 +2170,8 @@ onUnmounted(() => { if (signalTimer) clearInterval(signalTimer) })
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <h3 class="text-sm font-medium text-gray-200 mb-3">Import Config</h3>
           <p class="text-xs text-gray-500 mb-3">Paste a YAML config to import. This will merge/overwrite current interface and rule configuration.</p>
-          <textarea v-model="importText" rows="8" placeholder="Paste YAML config here..."
-            class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono mb-3"></textarea>
+          <textarea v-model="importText" rows="2" placeholder="Paste YAML config here..."
+            class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono mb-3 resize-y sm:resize-none sm:min-h-[12em]"></textarea>
           <button @click="doImportConfig" :disabled="importing || !importText.trim()"
             class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
             {{ importing ? 'Importing...' : 'Import Config' }}
