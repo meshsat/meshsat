@@ -851,15 +851,39 @@ const opActiveBond = computed(() => {
 // transmits over N bearers in parallel); fall back to the single-bearer
 // cascade only when no bond is configured or all bonds have all members
 // offline.
+// Map an interface_id to a human-readable short label for the
+// HeMB tile subtitle. Dynamic so newly-enrolled bearers (tcp_0 from
+// the WiFi-Direct auto-wire, ble_peer_N from future BLE mesh peers,
+// etc.) don't need a DB update to show up as "WiFi" / "BLE".
+function bearerShortLabel(id) {
+  if (!id) return ''
+  if (id.startsWith('mesh_'))       return 'Mesh'
+  if (id.startsWith('ax25_'))       return 'APRS'
+  if (id.startsWith('iridium_imt')) return 'IMT'
+  if (id.startsWith('iridium_'))    return 'Sat'
+  if (id.startsWith('sms_'))        return 'SMS'
+  if (id.startsWith('cellular_'))   return 'Cell'
+  if (id.startsWith('tcp_'))        return 'WiFi'
+  if (id.startsWith('ble_'))        return 'BLE'
+  if (id.startsWith('zigbee_'))     return 'ZB'
+  if (id.startsWith('mqtt_rns_'))   return 'MQTT'
+  return id
+}
+
 const opPrimaryChannel = computed(() => {
   const bond = opActiveBond.value
   if (bond) {
     const members = Array.isArray(bond.members) ? bond.members : []
     const upCount = members.filter(m => ifaceOK(m.interface_id)).length
+    // Build the subtitle from actual members — don't trust the DB
+    // label, which freezes at bond-creation time even after
+    // MESHSAT-647 auto-enrols tcp_0 / ble_peer_N etc.
+    const subtitle = members.map(m => bearerShortLabel(m.interface_id)).join('+')
     return {
-      name: `HeMB · ${bond.label || bond.id}`,
+      name: 'HeMB',
+      subtitle,
       bars: null,
-      detail: `${upCount}/${members.length} bearers: ${members.map(m => m.interface_id).join(' + ')}`,
+      detail: `${upCount}/${members.length} bearers up`,
       tint: 'text-teal-400',
       bond,
     }
@@ -1548,8 +1572,22 @@ function widgetGridClass(id) {
         <router-link :to="opPrimaryChannel.bond ? '/hemb' : '/radios'"
           class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Active Comms</div>
+          <!-- Primary label — "HeMB" stays at 2xl regardless of bearer
+               count. For single-bearer fallbacks (Mesh, APRS, Sat,
+               Cell, None) the same 2xl styling applies. -->
           <div class="text-2xl font-bold mt-2" :class="opPrimaryChannel.tint">
             {{ opPrimaryChannel.name }}
+          </div>
+          <!-- Bond subtitle — "Mesh+APRS+WiFi+..." computed from live
+               members.  Font shrinks as more bearers join so 5+
+               bearers still fit without breaking the row layout. -->
+          <div v-if="opPrimaryChannel.subtitle" class="font-semibold mt-0.5 leading-tight" :class="[
+              opPrimaryChannel.tint,
+              (opPrimaryChannel.bond?.members?.length || 0) <= 3 ? 'text-lg' :
+              (opPrimaryChannel.bond?.members?.length || 0) === 4 ? 'text-sm' :
+              'text-xs'
+            ]">
+            {{ opPrimaryChannel.subtitle }}
           </div>
           <!-- signal bars, only when a single-bearer cellular/sat channel is active -->
           <div v-if="opPrimaryChannel.bars != null" class="flex items-end gap-1 h-6 mt-2">
@@ -1558,21 +1596,30 @@ function widgetGridClass(id) {
               :class="opPrimaryChannel.bars >= i ? opPrimaryChannel.tint.replace('text-','bg-') : 'bg-gray-700/40'"
               :style="{ height: `${6 + i * 4}px` }" />
           </div>
-          <!-- bond-member dots, only when a HeMB bond is active -->
-          <div v-if="opPrimaryChannel.bond" class="flex items-center gap-1.5 mt-2">
+          <!-- bond-member chips — sizes scale down as bearer count
+               grows so 5+ fit. Pills wrap onto a second row if the
+               flex line overflows; -mx-0.5 compensates for the gap. -->
+          <div v-if="opPrimaryChannel.bond" class="flex flex-wrap items-center gap-1 mt-2">
             <span v-for="m in opPrimaryChannel.bond.members" :key="m.interface_id"
-              class="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded"
-              :class="ifaceOK(m.interface_id)
-                ? 'bg-emerald-400/10 text-emerald-300 border border-emerald-500/30'
-                : 'bg-red-500/10 text-red-300 border border-red-500/30'"
+              class="inline-flex items-center gap-1 font-mono rounded whitespace-nowrap"
+              :class="[
+                ifaceOK(m.interface_id)
+                  ? 'bg-emerald-400/10 text-emerald-300 border border-emerald-500/30'
+                  : 'bg-red-500/10 text-red-300 border border-red-500/30',
+                (opPrimaryChannel.bond.members.length) <= 3 ? 'text-[10px] px-1.5 py-0.5' :
+                (opPrimaryChannel.bond.members.length) === 4 ? 'text-[9px] px-1 py-0.5'   :
+                'text-[9px] px-1 py-0'
+              ]"
               :title="m.interface_id + (ifaceOK(m.interface_id) ? ' · up' : ' · down')">
-              <span class="w-1.5 h-1.5 rounded-full"
+              <span class="w-1.5 h-1.5 rounded-full shrink-0"
                 :class="ifaceOK(m.interface_id) ? 'bg-emerald-400' : 'bg-red-500'" />
               {{ m.interface_id }}
             </span>
           </div>
-          <div class="text-xs text-gray-500 mt-1">{{ opPrimaryChannel.detail }}</div>
-          <div class="text-[10px] text-gray-500 mt-1">{{ opChannelCount }} of {{ opChannelTotal }} channels up</div>
+          <div class="text-xs text-gray-500 mt-1" :class="(opPrimaryChannel.bond?.members?.length || 0) >= 5 ? 'text-[10px]' : 'text-xs'">
+            {{ opPrimaryChannel.detail }}
+          </div>
+          <div class="text-[10px] text-gray-500 mt-0.5">{{ opChannelCount }} of {{ opChannelTotal }} channels up</div>
         </router-link>
 
         <!-- Peer count + latest contact -->
