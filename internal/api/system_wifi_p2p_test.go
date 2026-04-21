@@ -70,6 +70,27 @@ func TestIsTrailingNumericIndex(t *testing.T) {
 	}
 }
 
+func TestDerivePeerLinkLocalTCP(t *testing.T) {
+	// Empirical truth from tesseract+parallax 2026-04-21: MAC
+	// 90:de:80:f3:a7:1e → link-local fe80::90de:80ff:fef3:a71e
+	// (no U/L bit flip on mt7921u cfg80211 p2p-N ifaces).
+	cases := []struct {
+		mac, iface string
+		port       int
+		want       string
+	}{
+		{"90:de:80:f3:a7:1e", "p2p-0", 4242, "[fe80::90de:80ff:fef3:a71e%p2p-0]:4242"},
+		{"90:de:80:f3:a7:0b", "p2p-0", 4242, "[fe80::90de:80ff:fef3:a70b%p2p-0]:4242"},
+		{"AA:BB:CC:DD:EE:FF", "p2p-7", 4242, "[fe80::aabb:ccff:fedd:eeff%p2p-7]:4242"},
+		{"not-a-mac", "p2p-0", 4242, ""},
+	}
+	for _, c := range cases {
+		if got := derivePeerLinkLocalTCP(c.mac, c.iface, c.port); got != c.want {
+			t.Errorf("derivePeerLinkLocalTCP(%q,%q,%d) = %q want %q", c.mac, c.iface, c.port, got, c.want)
+		}
+	}
+}
+
 func TestIsValidMAC(t *testing.T) {
 	cases := []struct {
 		in   string

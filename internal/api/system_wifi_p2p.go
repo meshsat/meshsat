@@ -18,12 +18,15 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/database"
 )
 
 // cryptoRandRead is a tiny indirection so tests can stub RNG if ever needed.
@@ -279,10 +282,136 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Info().Str("iface", req.Interface).Str("peer", req.PeerAddr).Msg("wifi-p2p: PIN-authenticated connect initiated")
+
+	// Close the gap: once the group comes up (async, ~2-8s), auto-add
+	// the peer to our Reticulum TCP peer list and enrol tcp_0 in the
+	// default HeMB bond. The operator shouldn't have to copy IPs
+	// around. Runs in a goroutine so the HTTP response returns
+	// immediately — the poll-and-wire happens out-of-band. [MESHSAT-647]
+	go s.autoWireP2PPeer(req.PeerAddr)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"interface": req.Interface, "peer": req.PeerAddr, "method": "pin",
 		"wpa_result": strings.TrimSpace(out),
 	})
+}
+
+// autoWireP2PPeer polls the group status until active, derives the
+// peer's IPv6 link-local from its MAC, and adds it as a Reticulum TCP
+// peer + a member of the default HeMB bond group. Best-effort — every
+// failure logs and moves on so a busted write doesn't leak to the
+// primary connect flow.
+func (s *Server) autoWireP2PPeer(peerMAC string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	var groupIface string
+	for i := 0; i < 24; i++ {
+		st, _ := readP2PStatus(ctx, "")
+		if st.Active && st.GroupIface != "" {
+			groupIface = st.GroupIface
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if groupIface == "" {
+		log.Warn().Str("peer", peerMAC).Msg("wifi-p2p: auto-wire gave up — group did not come up in 24 s")
+		return
+	}
+	addr := derivePeerLinkLocalTCP(peerMAC, groupIface, 4242)
+	if addr == "" {
+		log.Warn().Str("peer", peerMAC).Msg("wifi-p2p: could not derive peer link-local")
+		return
+	}
+	// Reticulum TCP peer
+	if s.tcpIface != nil {
+		if err := s.tcpIface.AddPeer(ctx, addr); err != nil {
+			log.Warn().Err(err).Str("addr", addr).Msg("wifi-p2p: add TCP peer failed (maybe already present)")
+		} else {
+			log.Info().Str("addr", addr).Str("peer", peerMAC).Msg("wifi-p2p: added peer to Reticulum TCP interface")
+			peers := s.loadPeers()
+			seen := false
+			for _, p := range peers {
+				if p == addr {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				s.savePeers(append(peers, addr))
+			}
+		}
+	}
+	// HeMB bond membership — add tcp_0 to any existing bond group if
+	// not already there. Leave alone if operator already enrolled it.
+	// [MESHSAT-647 + MESHSAT-421]
+	if s.db != nil {
+		groups, err := s.db.GetAllBondGroups()
+		if err == nil {
+			for _, g := range groups {
+				members, _ := s.db.GetBondMembers(g.ID)
+				hasTCP := false
+				for _, m := range members {
+					if m.InterfaceID == "tcp_0" {
+						hasTCP = true
+						break
+					}
+				}
+				if !hasTCP {
+					_ = s.db.InsertBondMember(&database.BondMember{
+						GroupID:     g.ID,
+						InterfaceID: "tcp_0",
+						Priority:    len(members),
+					})
+					log.Info().Str("bond", g.ID).Msg("wifi-p2p: enrolled tcp_0 in existing bond group")
+				}
+			}
+		}
+	}
+}
+
+// derivePeerLinkLocalTCP returns a Reticulum-consumable peer address
+// string "[fe80::...%iface]:port" computed from the peer's P2P MAC
+// using the non-EUI-64 form observed on mt7921u (no U/L bit flip).
+// Confirmed 2026-04-21: parallax MAC 90:de:80:f3:a7:1e →
+// fe80::90de:80ff:fef3:a71e%p2p-0 on tesseract.
+func derivePeerLinkLocalTCP(mac, iface string, port int) string {
+	b := parseMACBytes(mac)
+	if b == nil {
+		return ""
+	}
+	return fmt.Sprintf("[fe80::%02x%02x:%02xff:fe%02x:%02x%02x%%%s]:%d",
+		b[0], b[1], b[2], b[3], b[4], b[5], iface, port)
+}
+
+// parseMACBytes returns the 6 octets of a colon-delim MAC, or nil.
+func parseMACBytes(mac string) []byte {
+	if !isValidMAC(mac) {
+		return nil
+	}
+	out := make([]byte, 6)
+	// strconv.ParseUint would work; doing it inline avoids another
+	// import and is faster.
+	hex := func(c byte) int {
+		switch {
+		case c >= '0' && c <= '9':
+			return int(c - '0')
+		case c >= 'a' && c <= 'f':
+			return int(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			return int(c-'A') + 10
+		}
+		return -1
+	}
+	for i := 0; i < 6; i++ {
+		hi := hex(mac[i*3])
+		lo := hex(mac[i*3+1])
+		if hi < 0 || lo < 0 {
+			return nil
+		}
+		out[i] = byte((hi << 4) | lo)
+	}
+	return out
 }
 
 // @Summary Generate a one-time 8-digit WPS PIN
@@ -345,12 +474,42 @@ func (s *Server) handleWiFiP2PDisconnect(w http.ResponseWriter, r *http.Request)
 	if parent == "" {
 		parent = defaultWiFiInterface()
 	}
+	// Remove any persisted TCP peers whose address string points at
+	// this group iface — the link-local is only valid while the
+	// group is up, so leaving stale entries just wastes reconnect
+	// attempts.
+	s.removeP2PTCPPeersForGroup(st.GroupIface)
+
 	if _, err := execWpaCli(r.Context(), "-i", parent, "p2p_group_remove", st.GroupIface); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeExecError("p2p_group_remove", err))
 		return
 	}
 	log.Info().Str("group_iface", st.GroupIface).Msg("wifi-p2p: group removed")
 	writeSuccess(w, "p2p group removed")
+}
+
+// removeP2PTCPPeersForGroup purges any peer persisted in the
+// reticulum_peers config whose address string mentions the given
+// group iface (zone-id suffix e.g. "%p2p-0"). Matching the zone is a
+// cheap proxy for "this peer reached us via the P2P link we're about
+// to tear down". [MESHSAT-647]
+func (s *Server) removeP2PTCPPeersForGroup(groupIface string) {
+	if s.tcpIface == nil || groupIface == "" {
+		return
+	}
+	peers := s.loadPeers()
+	kept := peers[:0]
+	for _, p := range peers {
+		if strings.Contains(p, "%"+groupIface+"]") {
+			s.tcpIface.RemovePeer(p)
+			log.Info().Str("addr", p).Msg("wifi-p2p: removed TCP peer on group teardown")
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if len(kept) != len(peers) {
+		s.savePeers(kept)
+	}
 }
 
 // @Summary Current WiFi-Direct group state
