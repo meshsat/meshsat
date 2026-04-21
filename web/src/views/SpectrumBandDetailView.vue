@@ -33,11 +33,19 @@
 -->
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { useSpectrumStore } from '@/stores/spectrum'
 
-const props = defineProps({ band: { type: String, required: true } })
-const route = useRoute()
+// `modal: true` = embedded in SpectrumBandDetailModal. We drop the Back
+// button (modal has its own close button), change the root sizing from
+// min-height:100vh to fill the modal panel, and skip the router push.
+// When standalone (default), the view keeps its route-style chrome for
+// deep-link access.
+const props = defineProps({
+  band: { type: String, required: true },
+  modal: { type: Boolean, default: false },
+})
+const emit = defineEmits(['request-close'])
 const router = useRouter()
 const store = useSpectrumStore()
 
@@ -82,14 +90,17 @@ const transitions = ref([])    // newest-first, from LoadTransitionsRange
 const loading = ref(false)
 const loadError = ref('')
 
-// Canvas refs + fixed render dimensions. Detail view is taller than
-// the main-page panel (640 px) because we're replacing the 5-min
-// scrolling view with up to 24 h of history.
+// Canvas refs. Waterfall height is dynamic — the canvas fills its
+// flex container, which is the viewport-minus-chrome when standalone
+// and ~70vh when embedded in the modal. Spectrum overlay stays a
+// fixed 140 px (detail on a trace more than 140 px tall isn't useful
+// — we'd just be stretching 25 dB of y-axis vertically).
 const WATERFALL_COLS = 1024
-const DETAIL_H = 640
 const SPECTRUM_H = 140
+const waterfallH = ref(640) // set from the element's live clientHeight
 const waterfallCanvas = ref(null)
 const spectrumCanvas = ref(null)
+let resizeObs = null
 const hover = reactive({ inside: false, x: 0, y: 0, freqHz: 0, power: 0, ts: null })
 
 // ---- Turbo colormap (copied from SpectrumWaterfall.vue so detail
@@ -127,11 +138,12 @@ function rowPaletteRange(powers) {
 function drawWaterfall() {
   const canvas = waterfallCanvas.value
   if (!canvas) return
+  const H = Math.max(60, Math.floor(waterfallH.value))
   canvas.width = WATERFALL_COLS
-  canvas.height = DETAIL_H
+  canvas.height = H
 
   const ctx = canvas.getContext('2d')
-  const img = ctx.createImageData(WATERFALL_COLS, DETAIL_H)
+  const img = ctx.createImageData(WATERFALL_COLS, H)
   const rows = scanRows.value
   if (rows.length === 0) {
     for (let i = 0; i < img.data.length; i += 4) {
@@ -141,39 +153,73 @@ function drawWaterfall() {
     return
   }
 
-  // Map canvas row y → source row index. Newest at y=0.
-  const rowStride = rows.length / DETAIL_H
+  // Time-proportional row placement. Canvas y=0 is the newest edge of
+  // the visible window (≈ now); y=H is the oldest edge (fromMs). Each
+  // row sits at its true timestamp so a fresh-deploy kit with only a
+  // handful of rows in a 6-hour window correctly shows a thin band of
+  // colour at the very top + dark below — a lie would be stretching
+  // 8 rows to fill 640 px and suggesting we have 6 hours of data.
+  const { from, to } = resolveWindow()
+  const windowSpan = to - from || 1
+  const newestTs = +new Date(rows[0].ts || rows[0].TS)
 
-  for (let y = 0; y < DETAIL_H; y++) {
-    const srcIdx = Math.min(rows.length - 1, Math.floor(y * rowStride))
-    const row = rows[srcIdx]
+  // Prefill the whole canvas as "no data" so any y uncovered by a row
+  // stays dark charcoal.
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i] = 10; img.data[i+1] = 14; img.data[i+2] = 26; img.data[i+3] = 255
+  }
+
+  // Paint each row as a horizontal band from its own time down to the
+  // NEXT (older) row's time. Clamped so a single isolated row still
+  // gets a visible 2 px-ish band and a pileup of rows doesn't draw a
+  // 1 px-tall band.
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r]
     const powers = row?.powers || row?.Powers || []
-    const nBins = powers.length
-    if (nBins === 0) {
-      for (let x = 0; x < WATERFALL_COLS; x++) {
-        const o = (y * WATERFALL_COLS + x) * 4
-        img.data[o] = 15; img.data[o+1] = 15; img.data[o+2] = 25; img.data[o+3] = 255
-      }
-      continue
-    }
+    if (powers.length === 0) continue
+    const ts = +new Date(row.ts || row.TS)
+    const tsNext = r + 1 < rows.length
+      ? +new Date(rows[r + 1].ts || rows[r + 1].TS)
+      : ts - 1000 // 1 s slice for the very last row
+
+    // Map timestamps → canvas Y. to - ts is "how old"; scale by span.
+    let yTop = Math.floor(((to - ts) / windowSpan) * H)
+    let yBot = Math.floor(((to - tsNext) / windowSpan) * H)
+    if (yBot <= yTop) yBot = yTop + 1
+    // Keep thickness sensible: minimum 2 px (thin-but-visible), max
+    // 10 % of canvas (prevents one old row from dominating the view
+    // after a long gap).
+    if (yBot - yTop < 2) yBot = yTop + 2
+    const maxThick = Math.max(4, Math.floor(H / 10))
+    if (yBot - yTop > maxThick) yBot = yTop + maxThick
+    if (yTop < 0) yTop = 0
+    if (yBot > H) yBot = H
+    if (yTop >= H) continue
+
     const { floor, ceil } = rowPaletteRange(powers)
     const span = ceil - floor || 1
-    for (let x = 0; x < WATERFALL_COLS; x++) {
-      const fBin = (x / (WATERFALL_COLS - 1)) * (nBins - 1)
-      const i0 = Math.floor(fBin)
-      const i1 = Math.min(nBins - 1, i0 + 1)
-      const frac = fBin - i0
-      const p = powers[i0] * (1 - frac) + powers[i1] * frac
-      const t = Math.max(0, Math.min(1, (p - floor) / span))
-      const [r, g, b] = turbo(t)
-      const off = (y * WATERFALL_COLS + x) * 4
-      img.data[off] = r
-      img.data[off + 1] = g
-      img.data[off + 2] = b
-      img.data[off + 3] = 255
+    const nBins = powers.length
+    for (let y = yTop; y < yBot; y++) {
+      for (let x = 0; x < WATERFALL_COLS; x++) {
+        const fBin = (x / (WATERFALL_COLS - 1)) * (nBins - 1)
+        const i0 = Math.floor(fBin)
+        const i1 = Math.min(nBins - 1, i0 + 1)
+        const frac = fBin - i0
+        const p = powers[i0] * (1 - frac) + powers[i1] * frac
+        const t = Math.max(0, Math.min(1, (p - floor) / span))
+        const [r2, g2, b2] = turbo(t)
+        const off = (y * WATERFALL_COLS + x) * 4
+        img.data[off] = r2
+        img.data[off + 1] = g2
+        img.data[off + 2] = b2
+        img.data[off + 3] = 255
+      }
     }
   }
   ctx.putImageData(img, 0, 0)
+  // Silence the otherwise-unused newestTs — it's handy when debugging
+  // the oldest-row placement; keep the reference so lint doesn't drop it.
+  void newestTs
 }
 
 // drawSpectrumOverlay renders the most-recent scan's trace above the
@@ -372,21 +418,41 @@ onMounted(() => {
   // without visiting /spectrum first, bands[] may be empty and we
   // need hardware + status pulled before the header reads right.
   store.connect()
-  reload()
+  // Track the waterfall container's height so the canvas always fills
+  // its flex slot, in both the standalone route and the 95 vh modal.
+  nextTick(() => {
+    const wrap = waterfallCanvas.value?.parentElement
+    if (!wrap) { reload(); return }
+    const apply = () => {
+      const h = wrap.clientHeight
+      if (h > 0 && Math.abs(h - waterfallH.value) > 1) {
+        waterfallH.value = h
+        drawWaterfall()
+      }
+    }
+    resizeObs = new ResizeObserver(apply)
+    resizeObs.observe(wrap)
+    apply()
+    reload()
+  })
 })
-onBeforeUnmount(() => { /* SSE owned by main view; nothing to tear down here */ })
+onBeforeUnmount(() => {
+  if (resizeObs) { resizeObs.disconnect(); resizeObs = null }
+  /* SSE owned by main view; nothing else to tear down here */
+})
 watch(() => preset.value, () => { if (preset.value !== 'custom') reload() })
 watch(() => props.band, () => reload())
 
 function goBack() {
-  router.push({ name: 'spectrum' })
+  if (props.modal) emit('request-close')
+  else router.push({ name: 'spectrum' })
 }
 </script>
 
 <template>
-  <div class="sd-root">
+  <div class="sd-root" :class="{ 'sd-modal': props.modal }">
     <div class="sd-head">
-      <button class="sd-back" @click="goBack" aria-label="Back to spectrum overview">
+      <button v-if="!props.modal" class="sd-back" @click="goBack" aria-label="Back to spectrum overview">
         ← Back
       </button>
       <div class="sd-title">
@@ -505,11 +571,23 @@ function goBack() {
 
 <style scoped>
 .sd-root {
-  padding: 16px 20px 32px;
+  padding: 16px 20px 24px;
   background: #020617;
   color: #e2e8f0;
   font-family: Inter, system-ui, sans-serif;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* Modal-embedded variant — fills the modal panel rather than the
+   viewport. Close button is provided by SpectrumBandDetailModal so
+   we drop our own back button + give the modal chrome the bg it
+   expects from the root. */
+.sd-root.sd-modal {
+  min-height: 0;
+  height: 100%;
+  padding: 48px 24px 20px; /* top-pad makes room for modal close button */
 }
 .sd-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .sd-back {
@@ -573,6 +651,12 @@ function goBack() {
   border: 1px solid #1e293b; border-radius: 6px; margin-bottom: 14px;
   background: #030a1a;
 }
+/* The last panel (waterfall) should absorb leftover vertical space
+   so the view fills the container whether we're standalone-page or
+   inside the 95vh modal. Controls + spectrum + header stay at their
+   natural size; waterfall grows. */
+.sd-root .sd-panel:last-child { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 320px; }
+.sd-root .sd-panel:last-child .sd-waterfall-wrap { flex: 1 1 auto; height: auto; min-height: 280px; }
 .sd-panel-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 6px 10px; border-bottom: 1px solid #0f172a;

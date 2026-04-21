@@ -24,6 +24,13 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive } from 'vue'
 import { useSpectrumStore } from '@/stores/spectrum'
 import { eccmAction as eccmActionFor } from '@/composables/useEccm'
+import SpectrumBandDetailModal from '@/components/SpectrumBandDetailModal.vue'
+
+// modalBand is the band name currently open in the full-screen detail
+// modal, or null when closed. [MESHSAT-650]
+const modalBand = ref(null)
+function openBandModal(name) { modalBand.value = name }
+function closeBandModal() { modalBand.value = null }
 
 // 1 Hz re-render tick for the calibration countdown — same pattern as
 // the compact widget. Cleared on unmount.
@@ -584,20 +591,26 @@ function fmtNum2(v) {
       </div>
     </div>
 
+    <!-- The whole panel is clickable and opens the full-screen detail
+         modal for that band (MESHSAT-650). Using a div-with-role
+         rather than a button so the inner markup (which has its own
+         headings / metric spans / canvases) is legal HTML. Enter /
+         Space support keyboard access. -->
     <div v-for="name in orderedBands" :key="name"
-         class="sa-panel"
-         :class="['state-' + (store.bands[name]?.state || 'calibrating')]">
+         class="sa-panel sa-panel-clickable"
+         :class="['state-' + (store.bands[name]?.state || 'calibrating')]"
+         role="button"
+         tabindex="0"
+         :aria-label="`Open ${store.bands[name]?.meta?.label || name} history`"
+         @click="openBandModal(name)"
+         @keydown.enter.prevent="openBandModal(name)"
+         @keydown.space.prevent="openBandModal(name)">
       <div class="sa-panel-head">
-        <!-- Title is a link to the per-band detail view (6 h history,
-             zoom, alert markers). router-link keeps the SPA shell so
-             the SSE connection survives navigation. [MESHSAT-650] -->
-        <router-link :to="{ name: 'spectrum-band', params: { band: name } }"
-                     class="sa-panel-title sa-panel-title-link"
-                     :title="`Open ${store.bands[name]?.meta?.label || name} history`">
+        <div class="sa-panel-title">
           {{ store.bands[name]?.meta?.label || name }}
           <span class="sa-id">{{ name }}</span>
-          <span class="sa-open-detail" aria-hidden="true">↗</span>
-        </router-link>
+          <span class="sa-expand-hint" aria-hidden="true">⤢ expand</span>
+        </div>
         <div class="sa-panel-meta">
           <span>iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
           <span v-if="store.bands[name]?.state !== 'calibrating'">
@@ -758,6 +771,12 @@ function fmtNum2(v) {
       </div>
     </div>
 
+    <!-- Full-screen detail modal — mounts when a panel is clicked.
+         Teleported to <body> by the component itself. [MESHSAT-650] -->
+    <SpectrumBandDetailModal v-if="modalBand"
+                             :band="modalBand"
+                             @close="closeBandModal" />
+
     <div v-if="orderedBands.length === 0" class="sa-empty">
       <template v-if="!store.enabled">
         RTL-SDR not detected in the container. Plug in the dongle + ensure rtl_power is installed.
@@ -841,21 +860,30 @@ function fmtNum2(v) {
   font-weight: 600;
   color: #e2e8f0;
   letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
 }
 .sa-panel-title .sa-id { color: #64748b; font-family: monospace; font-size: 10px; margin-left: 6px; }
-.sa-panel-title-link {
-  text-decoration: none;
-  display: inline-flex; align-items: center;
-  padding: 2px 0;
-  color: #e2e8f0;
-}
-.sa-panel-title-link:hover { color: #60a5fa; }
-.sa-panel-title-link:hover .sa-id { color: #93c5fd; }
-.sa-open-detail {
-  margin-left: 6px; color: #64748b; font-size: 10px;
+/* Affordance: small "⤢ expand" hint on every panel title. Goes from
+   muted grey to blue on panel hover so operators notice the whole
+   panel is clickable. [MESHSAT-650] */
+.sa-expand-hint {
+  margin-left: 10px;
+  font-size: 10px; font-weight: 500;
+  color: #475569;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   transition: color 0.15s ease;
 }
-.sa-panel-title-link:hover .sa-open-detail { color: #60a5fa; }
+.sa-panel-clickable { cursor: zoom-in; }
+.sa-panel-clickable:hover .sa-expand-hint { color: #60a5fa; }
+.sa-panel-clickable:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+/* Hover feedback on the whole panel — subtle border lift so the
+   click target is obvious without shifting the layout. */
+.sa-panel-clickable:hover { border-color: #334155; }
 .sa-panel-meta { display: flex; align-items: center; gap: 10px; font-size: 10px; color: #94a3b8; }
 
 .sa-cal-strip {
