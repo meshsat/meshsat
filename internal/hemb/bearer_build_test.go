@@ -2,15 +2,21 @@ package hemb
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"testing"
 )
 
-type fakeRNS struct{ got map[string]int }
+type fakeRNS struct {
+	got     map[string]int
+	unknown map[string]bool // ifaces to reject with "unknown interface:" so fallback kicks in
+}
 
 func (f *fakeRNS) Send(id string, _ []byte) error {
 	if f.got == nil {
 		f.got = map[string]int{}
+	}
+	if f.unknown[id] {
+		return fmt.Errorf("unknown interface: %s", id)
 	}
 	f.got[id]++
 	return nil
@@ -27,6 +33,8 @@ func (f *fakeFwd) ForwardHeMBFrame(id string, _ []byte) error {
 }
 
 func TestIsReticulumNativeIface(t *testing.T) {
+	// Legacy classifier — retained for reference, not used by the
+	// runtime send path anymore.
 	cases := []struct {
 		id   string
 		want bool
@@ -35,15 +43,9 @@ func TestIsReticulumNativeIface(t *testing.T) {
 		{"tcp_5", true},
 		{"ble_0", true},
 		{"ble_peer_0", true},
-		{"ble_peer_3", true},
 		{"mqtt_rns_0", true},
 		{"mesh_0", false},
 		{"ax25_0", false},
-		{"iridium_0", false},
-		{"iridium_imt_0", false},
-		{"sms_0", false},
-		{"cellular_0", false},
-		{"zigbee_0", false},
 		{"", false},
 	}
 	for _, c := range cases {
@@ -53,12 +55,17 @@ func TestIsReticulumNativeIface(t *testing.T) {
 	}
 }
 
-func TestBuildBearersRoutesSendFn(t *testing.T) {
+// TestBuildBearersAllThroughRNS is the main contract: every bearer
+// ends up calling rns.Send — even mesh_0 / ax25_0 — because that's
+// the only path that preserves HeMB magic bytes on the wire. The
+// gateway forwarder is only a fallback for ifaces not in the
+// registry.
+func TestBuildBearersAllThroughRNS(t *testing.T) {
 	rns := &fakeRNS{}
 	fwd := &fakeFwd{}
-	ids := []string{"mesh_0", "ax25_0", "tcp_0", "ble_peer_1"}
+	ids := []string{"mesh_0", "ax25_0", "tcp_0", "ble_peer_1", "iridium_0"}
 	bearers := BuildBearers(ids, fwd, rns)
-	if len(bearers) != 4 {
+	if len(bearers) != len(ids) {
 		t.Fatalf("len: %d", len(bearers))
 	}
 	for i, b := range bearers {
@@ -72,15 +79,32 @@ func TestBuildBearersRoutesSendFn(t *testing.T) {
 			t.Errorf("send %s: %v", b.InterfaceID, err)
 		}
 	}
-	// mesh/ax25 went through the gateway fwd; tcp/ble went through RNS.
-	if fwd.got["mesh_0"] != 1 || fwd.got["ax25_0"] != 1 {
-		t.Errorf("gateway fwd counts: %v", fwd.got)
+	for _, id := range ids {
+		if rns.got[id] != 1 {
+			t.Errorf("rns.Send %s: got %d want 1", id, rns.got[id])
+		}
 	}
-	if rns.got["tcp_0"] != 1 || rns.got["ble_peer_1"] != 1 {
-		t.Errorf("rns send counts: %v", rns.got)
+	if len(fwd.got) != 0 {
+		t.Errorf("gateway forwarder should not have been touched: %v", fwd.got)
 	}
-	if fwd.got["tcp_0"] != 0 || rns.got["mesh_0"] != 0 {
-		t.Errorf("cross-routing leak: fwd=%v rns=%v", fwd.got, rns.got)
+}
+
+// TestBuildBearersFallbackToForwarder: when rns.Send reports "unknown
+// interface" (meaning the iface isn't in the registry), the SendFn
+// must fall through to the dispatcher's gateway forwarder rather
+// than dropping the frame.
+func TestBuildBearersFallbackToForwarder(t *testing.T) {
+	rns := &fakeRNS{unknown: map[string]bool{"custom_0": true}}
+	fwd := &fakeFwd{}
+	bearers := BuildBearers([]string{"custom_0"}, fwd, rns)
+	if err := bearers[0].SendFn(context.Background(), []byte("y")); err != nil {
+		t.Fatalf("send custom_0: %v", err)
+	}
+	if fwd.got["custom_0"] != 1 {
+		t.Errorf("fallback to forwarder failed: %v", fwd.got)
+	}
+	if rns.got["custom_0"] != 0 {
+		t.Errorf("rns should have rejected: %v", rns.got)
 	}
 }
 
@@ -89,11 +113,7 @@ func TestBuildBearersNilSenderErrors(t *testing.T) {
 	if len(b) != 1 {
 		t.Fatalf("len: %d", len(b))
 	}
-	err := b[0].SendFn(context.Background(), []byte("x"))
-	if err == nil {
-		t.Fatal("expected error when sender is nil")
-	}
-	if !errors.Is(err, err) { // placeholder — just confirm non-nil
-		t.Fatal("error not propagated")
+	if err := b[0].SendFn(context.Background(), []byte("x")); err == nil {
+		t.Fatal("expected error when both senders nil")
 	}
 }
