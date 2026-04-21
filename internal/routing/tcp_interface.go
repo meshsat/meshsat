@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -281,7 +282,7 @@ func (t *TCPInterface) outboundLoop(ctx context.Context, ob *outboundPeer) {
 		default:
 		}
 
-		conn, err := net.DialTimeout("tcp", ob.addr, 10*time.Second)
+		conn, err := dialPeerTCP(ob.addr, 10*time.Second)
 		if err != nil {
 			log.Debug().Err(err).Str("peer", ob.addr).Msg("tcp: outbound peer connect failed")
 			select {
@@ -491,4 +492,58 @@ func (t *TCPInterface) writeConn(conn net.Conn, data []byte) error {
 	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	_, err := conn.Write(data)
 	return err
+}
+
+// dialPeerTCP wraps net.DialTimeout with link-local-zone awareness.
+// Plain IPv4/IPv6 addresses go through unchanged. For link-local IPv6
+// with a zone ID (`[fe80::...%p2p-0]:4242` — the form WiFi-Direct
+// peers use after MESHSAT-647 auto-wire) Go's default dialer fails
+// with "cannot assign requested address" because it doesn't pick a
+// source on the scoped interface. We find our own fe80:: address on
+// that iface and pin the outbound socket to it, which lets the
+// kernel's routing table resolve the link-local peer unambiguously.
+func dialPeerTCP(addr string, timeout time.Duration) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	// Strip the bracket wrapping so SplitHostPort left us with the raw host.
+	zoneIdx := strings.Index(host, "%")
+	if zoneIdx < 0 || !strings.HasPrefix(host, "fe80:") {
+		return net.DialTimeout("tcp", addr, timeout) // not link-local
+	}
+	zone := host[zoneIdx+1:]
+	localIP, err := linkLocalOnIface(zone)
+	if err != nil {
+		return nil, fmt.Errorf("link-local dial: %w", err)
+	}
+	d := &net.Dialer{
+		Timeout:   timeout,
+		LocalAddr: &net.TCPAddr{IP: localIP, Zone: zone},
+	}
+	return d.Dial("tcp", addr)
+}
+
+// linkLocalOnIface returns the first IPv6 link-local address on the
+// given interface, for use as a source binding when dialing a scoped
+// link-local peer.
+func linkLocalOnIface(ifaceName string) (net.IP, error) {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return nil, fmt.Errorf("iface %s: %w", ifaceName, err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, fmt.Errorf("iface %s addrs: %w", ifaceName, err)
+	}
+	for _, a := range addrs {
+		ip, _, err := net.ParseCIDR(a.String())
+		if err != nil {
+			continue
+		}
+		if ip.To4() == nil && ip.IsLinkLocalUnicast() {
+			return ip, nil
+		}
+	}
+	return nil, fmt.Errorf("iface %s has no IPv6 link-local address", ifaceName)
 }
