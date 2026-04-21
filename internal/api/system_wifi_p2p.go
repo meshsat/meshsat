@@ -305,52 +305,37 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// autoWireP2PPeer polls the group status until active, derives the
-// peer's IPv6 link-local from its MAC, and adds it as a Reticulum TCP
-// peer + a member of the default HeMB bond group. Best-effort — every
-// failure logs and moves on so a busted write doesn't leak to the
-// primary connect flow.
+// autoWireP2PPeer waits for the group to form, then enrols tcp_0 in
+// any existing HeMB bond group and kicks the overlay reconciler to
+// immediately apply the role-keyed IPv4 overlay + register the TCP
+// peer. The reconciler (running continuously) handles re-anchoring
+// on iface rename/teardown, so this function's only job is to speed
+// up the first-time setup — the next 2-second reconcile tick would
+// do the same thing.
+//
+// Historical note (kept for the curious): earlier versions derived
+// the peer's IPv6 link-local from its MAC and dialed
+// [fe80::...%p2p-0]:4242. That broke as soon as the group-iface
+// index changed (observed live 2026-04-21 on parallax — wpa_supplicant
+// renumbered the group iface during formation, leaving TCP sockets
+// zoned to ifindex 451 which no longer existed). The overlay IP
+// approach in P2PReconciler is zone-free and survives the rename
+// race. [MESHSAT-647]
 func (s *Server) autoWireP2PPeer(peerMAC string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	var groupIface string
+	// Wait for the group to come up before touching the bond — we
+	// want to tell the reconciler to run only after wpa_supplicant
+	// has a real group-iface to bind the overlay to.
 	for i := 0; i < 24; i++ {
 		st, _ := readP2PStatus(ctx, "")
-		if st.Active && st.GroupIface != "" {
-			groupIface = st.GroupIface
+		if st.Active && st.GroupIface != "" && st.Role != "" {
 			break
 		}
 		time.Sleep(1 * time.Second)
 	}
-	if groupIface == "" {
-		log.Warn().Str("peer", peerMAC).Msg("wifi-p2p: auto-wire gave up — group did not come up in 24 s")
-		return
-	}
-	addr := derivePeerLinkLocalTCP(peerMAC, groupIface, 4242)
-	if addr == "" {
-		log.Warn().Str("peer", peerMAC).Msg("wifi-p2p: could not derive peer link-local")
-		return
-	}
-	// Reticulum TCP peer
-	if s.tcpIface != nil {
-		if err := s.tcpIface.AddPeer(ctx, addr); err != nil {
-			log.Warn().Err(err).Str("addr", addr).Msg("wifi-p2p: add TCP peer failed (maybe already present)")
-		} else {
-			log.Info().Str("addr", addr).Str("peer", peerMAC).Msg("wifi-p2p: added peer to Reticulum TCP interface")
-			peers := s.loadPeers()
-			seen := false
-			for _, p := range peers {
-				if p == addr {
-					seen = true
-					break
-				}
-			}
-			if !seen {
-				s.savePeers(append(peers, addr))
-			}
-		}
-	}
+
 	// HeMB bond membership — add tcp_0 to any existing bond group if
 	// not already there. Leave alone if operator already enrolled it.
 	// [MESHSAT-647 + MESHSAT-421]
@@ -385,6 +370,12 @@ func (s *Server) autoWireP2PPeer(peerMAC string) {
 	// until a bridge restart. [MESHSAT-647]
 	if bondMutated {
 		s.rebuildHeMBBearers()
+	}
+
+	// Kick the reconciler so the overlay IP + TCP peer are set up
+	// immediately instead of waiting for the next 2 s tick.
+	if s.p2pReconciler != nil {
+		s.p2pReconciler.TriggerReconcile(ctx)
 	}
 }
 

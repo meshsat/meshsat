@@ -1640,6 +1640,15 @@ func main() {
 		}
 	}
 
+	// Start the WiFi-Direct overlay reconciler. Runs for the life
+	// of the process; keeps 10.42.43.1/.2 pinned to whatever group
+	// iface wpa_supplicant currently reports, so the Reticulum TCP
+	// peer address stays zone-free and survives iface rename/rebind
+	// races. Safe on kits with no WiFi-Direct at all — if no P2P
+	// group ever forms, the reconcile loop just polls and does
+	// nothing on every tick. [MESHSAT-647]
+	srv.StartP2PReconciler(ctx)
+
 	// Wire restart function — sends SIGTERM to self, Docker restart policy brings us back.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

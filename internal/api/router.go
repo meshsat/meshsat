@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -67,6 +68,11 @@ type Server struct {
 	// HeMB-coded frames without a bridge restart.
 	hembTUN     *hemb.TUNAdapter
 	hembTUNBond string // bond group ID the TUN bonder is bound to
+	// p2pReconciler keeps the WiFi-Direct overlay IPv4 pinned to
+	// whatever group iface is current, so the TCP peer address stays
+	// zone-free and bulletproof to iface rename/teardown. Nil until
+	// StartP2PReconciler is called from main.go wiring. [MESHSAT-647]
+	p2pReconciler *P2PReconciler
 }
 
 // SetBLEPeerManager wires the BLE peer manager for auto-RNS-peer on
@@ -81,6 +87,19 @@ func (s *Server) SetBLEPeerManager(m *BLEPeerManager) {
 func (s *Server) SetHeMBTUNAdapter(a *hemb.TUNAdapter, bondID string) {
 	s.hembTUN = a
 	s.hembTUNBond = bondID
+}
+
+// StartP2PReconciler spawns the WiFi-Direct overlay-IP reconciler.
+// Must be called after tcpIface is set so the TCP peer wiring works
+// on the first reconcile cycle. Idempotent via the reconciler's
+// internal state; calling again is harmless but usually unnecessary.
+// [MESHSAT-647]
+func (s *Server) StartP2PReconciler(ctx context.Context) {
+	if s.p2pReconciler != nil {
+		return
+	}
+	s.p2pReconciler = NewP2PReconciler(s)
+	s.p2pReconciler.Start(ctx)
 }
 
 // rebuildHeMBBearers rebuilds the TUN bonder's bearer list from the
