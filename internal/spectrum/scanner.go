@@ -212,8 +212,17 @@ func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize i
 
 // scanFFTW invokes rtl_power_fftw. We map our (low, high, binSize) into
 // rpfftw's (-f low:high, -b bins). rpfftw requires an even bin count;
-// we round up to the nearest even number of bins. `-n 1` = single
-// spectrum averaged from one FFT — fast enough for our 3 s scan cadence.
+// we round up to the nearest even number of bins.
+//
+// `-n 1000` = average 1000 FFTs per bin. A single un-averaged FFT of
+// thermal noise has 5-15 dB per-bin variance, which dominates the
+// waterfall and renders as rainbow speckle regardless of the actual
+// spectrum structure (see MESHSAT-649). 1000 repeats collapses per-bin
+// RMS by sqrt(1000)≈32x to sub-dB, matching what desktop SDR tools
+// (SigDigger, gqrx, CubicSDR) produce. At 2.4 Msps with FFT size 1024
+// this adds ~0.43 s of capture time per band — the per-band scan is
+// still dominated by the RTL-SDR Blog V4 tuner init (~5 s cold) so the
+// end-to-end cost bump is marginal and well inside the 30 s timeout.
 // `-q` keeps stderr quiet after the first run.
 func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
 	span := freqHigh - freqLow
@@ -231,7 +240,7 @@ func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSi
 	cmd := exec.CommandContext(ctx, s.binary,
 		"-f", freqArg,
 		"-b", strconv.Itoa(bins),
-		"-n", "1",
+		"-n", "1000",
 		"-q",
 	)
 	cmd.Stderr = nil

@@ -280,27 +280,41 @@ function drawSpectrum(bandName) {
 // spectrogram look of desktop SDR tools (SDR#, gqrx, CubicSDR).
 const WATERFALL_COLS = 512
 
-// During calibration baselineStd==0 so we can't normalise against σ.
-// Instead, derive the colormap range from the current scan's min/max
-// so the waterfall still shows *something* — operators see the power
-// profile immediately even before the baseline is ready.
+// Palette range is sized from a robust statistic of the row itself
+// (median + MAD), not from the band-level baselineStd. baselineStd
+// measures scan-to-scan variance of the *scalar* average power — it
+// systematically underestimates within-scan per-bin spread and
+// saturates the Turbo colormap on natural noise (see MESHSAT-649).
+// Per-row MAD is robust to narrowband jammers (they don't pull the
+// median), so the noise floor stays cool and spikes still ride up to
+// the hot end of the palette. A 0.5 dB minimum scale prevents the
+// flat-row degenerate case where the whole row collapses to one
+// colour — same floor the legend's RobustScaleDB uses.
 function rowPaletteRange(row, band) {
-  if (band.baselineStd > 0) {
-    return {
-      floor: band.baselineMean - 2 * band.baselineStd,
-      ceil:  band.baselineMean + 10 * band.baselineStd,
+  if (!row || !row.powers?.length) {
+    // No row data — fall back to baseline if present, else a sane default
+    if (band.baselineStd > 0) {
+      return {
+        floor: band.baselineMean - 2 * band.baselineStd,
+        ceil:  band.baselineMean + 10 * band.baselineStd,
+      }
     }
+    return { floor: -80, ceil: -10 }
   }
-  if (!row || !row.powers?.length) return { floor: -80, ceil: -10 }
-  let mn = Infinity, mx = -Infinity
-  for (const p of row.powers) {
-    if (!isFinite(p)) continue
-    if (p < mn) mn = p
-    if (p > mx) mx = p
+  const finite = []
+  for (const p of row.powers) if (isFinite(p)) finite.push(p)
+  if (finite.length === 0) return { floor: -80, ceil: -10 }
+
+  const sorted = finite.slice().sort((a, b) => a - b)
+  const median = sorted[Math.floor(sorted.length / 2)]
+  const absDev = sorted.map(p => Math.abs(p - median)).sort((a, b) => a - b)
+  const mad = absDev[Math.floor(absDev.length / 2)]
+  const scale = Math.max(1.4826 * mad, 0.5)
+
+  return {
+    floor: median - 2 * scale,
+    ceil:  median + 10 * scale,
   }
-  if (!isFinite(mn) || !isFinite(mx) || mn === mx) return { floor: -80, ceil: -10 }
-  const pad = (mx - mn) * 0.3
-  return { floor: mn - pad, ceil: mx + pad }
 }
 
 function drawWaterfall(bandName) {
