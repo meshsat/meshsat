@@ -480,6 +480,16 @@ func main() {
 			log.Info().Int("port", rc.ListenPort).Msg("tcp listen address from DB config (overrides env)")
 		}
 	}
+	// Standalone mode default: always listen on :4242 if no explicit
+	// config was set. Field kits need tcp_0 ready so WiFi-Direct
+	// auto-wire (MESHSAT-647) + operator-added peers have a live
+	// endpoint to connect to. Setting MESHSAT_TCP_LISTEN=none
+	// explicitly disables this fallback for locked-down deployments.
+	if tcpListenAddr == "" && tcpConnectAddr == "" && cfg.Mode == "direct" &&
+		os.Getenv("MESHSAT_TCP_LISTEN") != "none" {
+		tcpListenAddr = "0.0.0.0:4242"
+		log.Info().Msg("tcp reticulum interface: standalone-mode default :4242 (set MESHSAT_TCP_LISTEN=none to disable)")
+	}
 
 	var tcpIface *routing.TCPInterface
 	if tcpListenAddr != "" || tcpConnectAddr != "" {
