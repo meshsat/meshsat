@@ -696,6 +696,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/spectrum/hardware", s.handleGetSpectrumHardware)
 		r.Get("/spectrum/relay-status", s.handleGetSpectrumRelay)
 		r.Get("/spectrum/stream", s.handleSpectrumStream)
+		r.Get("/spectrum/history", s.handleGetSpectrumHistory)
+		r.Get("/spectrum/transitions", s.handleGetSpectrumTransitions)
 
 		// Device registry (IMEI-keyed)
 		r.Get("/device-registry", s.handleGetRegisteredDevices)

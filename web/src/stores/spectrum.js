@@ -197,6 +197,68 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     return bands.value[evt.band]
   }
 
+  // seedHistory replays the last `minutes` of persisted scans into the
+  // rows ring so the waterfall paints immediately on page load instead
+  // of sitting black for 30+ seconds waiting for fresh SSE scans
+  // (MESHSAT-650). Rows returned newest-first; we dedupe against any
+  // rows the SSE stream may have delivered first (if the store has
+  // raced through a scan tick before the history fetch resolves).
+  async function seedHistory(bandName, minutes = 5) {
+    try {
+      const url = `/api/spectrum/history?band=${encodeURIComponent(bandName)}&minutes=${minutes}`
+      const resp = await fetch(url, { credentials: 'same-origin' })
+      if (!resp.ok) return
+      const data = await resp.json()
+      const rows = Array.isArray(data?.rows) ? data.rows : []
+      const b = bands.value[bandName]
+      if (!b) return
+      // Dedupe by timestamp against anything already in the ring —
+      // keeps the order newest-first and prevents a doubled row if a
+      // live SSE scan arrived between status+history fetches.
+      const existingTs = new Set(b.rows.map(r => String(r.ts)))
+      const seeded = []
+      for (const r of rows) {
+        const ts = r.ts || r.TS || null
+        const key = ts ? (typeof ts === 'string' ? ts : new Date(ts).toISOString()) : ''
+        if (key && existingTs.has(key)) continue
+        seeded.push({
+          ts: key,
+          powers: r.powers || r.Powers || [],
+          avg: typeof r.avg_db === 'number' ? r.avg_db : (r.AvgDB ?? 0),
+          max: typeof r.max_db === 'number' ? r.max_db : (r.MaxDB ?? 0),
+        })
+      }
+      // Splice seeded rows after any that live-SSE already deposited;
+      // both are sorted newest-first so concat keeps the order.
+      b.rows = b.rows.concat(seeded).slice(0, WATERFALL_ROWS)
+    } catch { /* network transient — SSE will take over in <3 s */ }
+  }
+
+  // loadRange fetches an explicit time window, used by the per-band
+  // detail view. Returns the raw array rather than touching the ring,
+  // because the detail view paints its own independent waterfall.
+  async function loadRange(bandName, fromMs, toMs, maxRows = 2000) {
+    const url = `/api/spectrum/history?band=${encodeURIComponent(bandName)}` +
+                `&from=${fromMs}&to=${toMs}&max_rows=${maxRows}`
+    const resp = await fetch(url, { credentials: 'same-origin' })
+    if (!resp.ok) return { rows: [], transitions: [] }
+    const data = await resp.json()
+    const scanRows = Array.isArray(data?.rows) ? data.rows : []
+    // Fetch transitions for the same window in parallel would be nice
+    // but the detail view calls loadTransitions itself — keep the two
+    // endpoints orthogonal so a range can be fetched without markers.
+    return { rows: scanRows, transitions: [] }
+  }
+
+  async function loadTransitions(bandName, fromMs, toMs) {
+    const url = `/api/spectrum/transitions?band=${encodeURIComponent(bandName)}` +
+                `&from=${fromMs}&to=${toMs}`
+    const resp = await fetch(url, { credentials: 'same-origin' })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data?.rows) ? data.rows : []
+  }
+
   function handleScan(evt) {
     const b = ensureBand(evt)
     b.state = evt.state
@@ -384,7 +446,16 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     // SSE — both are cheap and the fetch calls resolve in <100 ms on a
     // local kit. Hardware refreshes on a 10 s timer so the UI reflects
     // a newly plugged dongle or a wedged scanner without a page reload.
-    seedFromStatus()
+    //
+    // seedFromStatus resolves the band list; once it does, fire one
+    // seedHistory per band so the waterfall panels show the last 5 min
+    // immediately rather than sitting black until SSE delivers a few
+    // scans. [MESHSAT-650]
+    seedFromStatus().then(() => {
+      for (const name of Object.keys(bands.value)) {
+        seedHistory(name, 5)
+      }
+    })
     refreshHardware()
     refreshRelayStatus()
     if (hardwareTimer) clearInterval(hardwareTimer)
@@ -465,6 +536,9 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     setPaused,
     connect,
     disconnect,
+    seedHistory,
+    loadRange,
+    loadTransitions,
     ackAlert,
     ackAll,
     setPopupEnabled,

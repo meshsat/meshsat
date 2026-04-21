@@ -32,6 +32,15 @@ type SpectrumMonitor struct {
 	cancel   context.CancelFunc
 	enabled  bool
 
+	// History persistence. Optional — if nil, monitor runs as before
+	// and the detail/prefill features degrade gracefully. Assigned via
+	// SetHistoryStore in main.go after the DB is open. [MESHSAT-650]
+	store           HistoryStore
+	retentionHours  int
+	persistInFlight sync.WaitGroup // drained on Stop so tests don't leak goroutines
+	persistMu       sync.Mutex
+	persistDisabled bool // flipped true on first DB write error so we stop spamming logs
+
 	// subs fan-out SpectrumEvents to the SSE stream endpoint and to the
 	// main.go goroutine that relays transitions via CoT + hub reporter.
 	// Slow subscribers get dropped frames (select/default) rather than
@@ -139,6 +148,27 @@ func (m *SpectrumMonitor) SetSigningService(ss SigningService) {
 	m.signing = ss
 }
 
+// SetHistoryStore wires the persistence backend. Safe to call before
+// Start; calling after Start is allowed (writes just begin flowing on
+// the next scan) but uncommon. A nil store is allowed and treated as
+// "persistence disabled" — the monitor stays fully functional for
+// live scanning and jamming detection, only the prefill/detail-view
+// features go dormant. [MESHSAT-650]
+func (m *SpectrumMonitor) SetHistoryStore(s HistoryStore) {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+	m.store = s
+	m.persistDisabled = false // new store — re-enable even if a prior one failed
+}
+
+// SetRetentionHours overrides the retention window used by the trim
+// goroutine. Value is clamped to [1, MaxRetentionHours]; zero or
+// negative inputs fall back to DefaultRetentionHours. Called once at
+// startup from main.go after reading MESHSAT_SPECTRUM_RETENTION_HOURS.
+func (m *SpectrumMonitor) SetRetentionHours(hours int) {
+	m.retentionHours = ClampRetention(hours)
+}
+
 // Start begins spectrum monitoring in a background goroutine.
 // If the scanner is not available, this is a no-op.
 func (m *SpectrumMonitor) Start(ctx context.Context) {
@@ -151,6 +181,11 @@ func (m *SpectrumMonitor) Start(ctx context.Context) {
 	log.Info().Int("bands", len(m.bands)).Msg("spectrum: starting RTL-SDR monitoring")
 
 	go m.run(ctx)
+	// Retention loop only when we have a store — otherwise there's
+	// nothing to trim. Runs forever until ctx cancels.
+	if m.store != nil {
+		go m.retentionLoop(ctx)
+	}
 }
 
 // Stop halts spectrum monitoring.
@@ -228,6 +263,134 @@ func (m *SpectrumMonitor) publish(evt SpectrumEvent) {
 		case ch <- evt:
 		default: // slow consumer — drop
 		}
+	}
+
+	m.persist(evt)
+}
+
+// persist hands an event off to the history store in a background
+// goroutine so a slow DB write never delays the next scan. Scan
+// events turn into one ScanRow; transitions generate both a Scan row
+// (implicit — already stored on the last scan) AND a TransitionRow
+// used for alert markers. Errors are logged once and then suppressed
+// so we don't flood the log on a long outage. [MESHSAT-650]
+func (m *SpectrumMonitor) persist(evt SpectrumEvent) {
+	m.persistMu.Lock()
+	store := m.store
+	disabled := m.persistDisabled
+	m.persistMu.Unlock()
+	if store == nil || disabled {
+		return
+	}
+
+	m.persistInFlight.Add(1)
+	go func() {
+		defer m.persistInFlight.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		switch evt.Kind {
+		case EventScan:
+			// Only persist scans with actual bin data — transition-time
+			// re-publishes carry powers==nil (they reuse the scan just
+			// written) so storing an empty-powers row would waste space.
+			if len(evt.Powers) == 0 {
+				return
+			}
+			row := ScanRow{
+				TS:           evt.Timestamp,
+				Band:         evt.Band,
+				State:        string(evt.State),
+				AvgDB:        evt.AvgDB,
+				MaxDB:        evt.MaxDB,
+				BaselineMean: evt.BaselineMean,
+				BaselineStd:  evt.BaselineStd,
+				Powers:       evt.Powers,
+			}
+			if err := store.SaveScan(ctx, row); err != nil {
+				m.markPersistFailed("save scan", err)
+			}
+		case EventTransition:
+			row := TransitionRow{
+				TS:           evt.Timestamp,
+				Band:         evt.Band,
+				OldState:     string(evt.OldState),
+				NewState:     string(evt.State),
+				PeakDB:       evt.MaxDB,
+				PeakFreqHz:   int64(evt.EventPeakFreqHz),
+				BaselineMean: evt.BaselineMean,
+				BaselineStd:  evt.BaselineStd,
+			}
+			if err := store.SaveTransition(ctx, row); err != nil {
+				m.markPersistFailed("save transition", err)
+			}
+		}
+	}()
+}
+
+// markPersistFailed logs once and disables further writes. Operator
+// can re-enable by fixing the DB and calling SetHistoryStore again
+// (which clears the flag). Prevents log flooding on long outages —
+// one line at boot is enough to surface the issue.
+func (m *SpectrumMonitor) markPersistFailed(op string, err error) {
+	m.persistMu.Lock()
+	already := m.persistDisabled
+	m.persistDisabled = true
+	m.persistMu.Unlock()
+	if !already {
+		log.Warn().Err(err).Str("op", op).
+			Msg("spectrum: history persistence failed, further writes suppressed until SetHistoryStore is called again")
+	}
+}
+
+// retentionLoop trims old rows on a regular cadence. Runs hourly —
+// bounds DB growth with negligible write amplification. The first
+// trim fires ~30 s after start so a restart triggers cleanup without
+// waiting an hour.
+func (m *SpectrumMonitor) retentionLoop(ctx context.Context) {
+	initial := time.NewTimer(30 * time.Second)
+	defer initial.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-initial.C:
+	}
+	m.runTrim(ctx)
+
+	tick := time.NewTicker(1 * time.Hour)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			m.runTrim(ctx)
+		}
+	}
+}
+
+func (m *SpectrumMonitor) runTrim(ctx context.Context) {
+	m.persistMu.Lock()
+	store := m.store
+	hours := m.retentionHours
+	m.persistMu.Unlock()
+	if store == nil {
+		return
+	}
+	if hours <= 0 {
+		hours = DefaultRetentionHours
+	}
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	n, err := store.TrimSpectrumHistory(tctx, cutoff)
+	if err != nil {
+		log.Warn().Err(err).Int("retention_hours", hours).Msg("spectrum: retention trim failed")
+		return
+	}
+	if n > 0 {
+		log.Info().Int64("rows", n).Int("retention_hours", hours).
+			Msg("spectrum: trimmed history rows older than retention window")
 	}
 }
 

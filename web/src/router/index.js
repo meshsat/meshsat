@@ -18,6 +18,7 @@ const routes = [
   { path: '/radio', name: 'radio', component: () => import('@/views/RadioConfigView.vue') },
   { path: '/tak', name: 'tak', component: () => import('@/views/TakView.vue') },
   { path: '/spectrum', name: 'spectrum', component: () => import('@/views/SpectrumView.vue') },
+  { path: '/spectrum/:band', name: 'spectrum-band', component: () => import('@/views/SpectrumBandDetailView.vue'), props: true },
   { path: '/zigbee', name: 'zigbee', component: () => import('@/views/ZigBeeDevicesView.vue') },
   { path: '/zigbee/:addr', name: 'zigbee-device', component: () => import('@/views/ZigBeeDeviceDetailView.vue'), props: true },
   { path: '/audit', name: 'audit', component: () => import('@/views/AuditView.vue') },

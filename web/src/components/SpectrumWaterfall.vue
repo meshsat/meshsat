@@ -588,9 +588,16 @@ function fmtNum2(v) {
          class="sa-panel"
          :class="['state-' + (store.bands[name]?.state || 'calibrating')]">
       <div class="sa-panel-head">
-        <div class="sa-panel-title">{{ store.bands[name]?.meta?.label || name }}
+        <!-- Title is a link to the per-band detail view (6 h history,
+             zoom, alert markers). router-link keeps the SPA shell so
+             the SSE connection survives navigation. [MESHSAT-650] -->
+        <router-link :to="{ name: 'spectrum-band', params: { band: name } }"
+                     class="sa-panel-title sa-panel-title-link"
+                     :title="`Open ${store.bands[name]?.meta?.label || name} history`">
+          {{ store.bands[name]?.meta?.label || name }}
           <span class="sa-id">{{ name }}</span>
-        </div>
+          <span class="sa-open-detail" aria-hidden="true">↗</span>
+        </router-link>
         <div class="sa-panel-meta">
           <span>iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
           <span v-if="store.bands[name]?.state !== 'calibrating'">
@@ -836,6 +843,19 @@ function fmtNum2(v) {
   letter-spacing: 0.02em;
 }
 .sa-panel-title .sa-id { color: #64748b; font-family: monospace; font-size: 10px; margin-left: 6px; }
+.sa-panel-title-link {
+  text-decoration: none;
+  display: inline-flex; align-items: center;
+  padding: 2px 0;
+  color: #e2e8f0;
+}
+.sa-panel-title-link:hover { color: #60a5fa; }
+.sa-panel-title-link:hover .sa-id { color: #93c5fd; }
+.sa-open-detail {
+  margin-left: 6px; color: #64748b; font-size: 10px;
+  transition: color 0.15s ease;
+}
+.sa-panel-title-link:hover .sa-open-detail { color: #60a5fa; }
 .sa-panel-meta { display: flex; align-items: center; gap: 10px; font-size: 10px; color: #94a3b8; }
 
 .sa-cal-strip {

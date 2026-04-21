@@ -1211,6 +1211,52 @@ var migrations = []string{
 		updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_trusted_peers_updated ON trusted_peers(updated_at DESC);`,
+
+	// v52: spectrum scan + transition history for the RF monitor
+	// [MESHSAT-650]. On deploy/restart the in-memory 100-row ring was
+	// lost and every waterfall panel started black for ~2.5 min. These
+	// two tables give us a durable log the UI can (a) prefill from on
+	// page load so panels show the last 5 min instantly and (b) use to
+	// render a per-band detail view covering 6-24 h with zoom + alert
+	// markers. Retention is bounded by the retention goroutine in
+	// internal/spectrum (MESHSAT_SPECTRUM_RETENTION_HOURS, default 24,
+	// hard cap 168). At 5 bands × 1 row/~30 s × ~45 bins × 8 B, 7 days
+	// of storage is well under 40 MB; the index on (band, ts DESC)
+	// keeps range queries cheap.
+	//
+	// `powers` is the raw per-bin dB trace stored as a JSON array (as
+	// opposed to a separate per-bin row table) because every read is
+	// "give me the whole row" and the blob compresses naturally in
+	// SQLite's page cache. `baseline_mean` / `baseline_std` are copied
+	// on each write so a historical row can be palette-normalised
+	// without a join to the live baseline (which has moved on).
+	`CREATE TABLE IF NOT EXISTS spectrum_scans (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		band          TEXT    NOT NULL,
+		ts_ms         INTEGER NOT NULL,
+		state         TEXT    NOT NULL,
+		avg_db        REAL    NOT NULL,
+		max_db        REAL    NOT NULL,
+		baseline_mean REAL    NOT NULL,
+		baseline_std  REAL    NOT NULL,
+		powers        TEXT    NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_spectrum_scans_band_ts ON spectrum_scans(band, ts_ms DESC);
+	CREATE INDEX IF NOT EXISTS idx_spectrum_scans_ts ON spectrum_scans(ts_ms);
+
+	CREATE TABLE IF NOT EXISTS spectrum_transitions (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		band          TEXT    NOT NULL,
+		ts_ms         INTEGER NOT NULL,
+		old_state     TEXT    NOT NULL,
+		new_state     TEXT    NOT NULL,
+		peak_db       REAL    NOT NULL DEFAULT 0,
+		peak_freq_hz  INTEGER NOT NULL DEFAULT 0,
+		baseline_mean REAL    NOT NULL DEFAULT 0,
+		baseline_std  REAL    NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_spectrum_transitions_band_ts ON spectrum_transitions(band, ts_ms DESC);
+	CREATE INDEX IF NOT EXISTS idx_spectrum_transitions_ts ON spectrum_transitions(ts_ms);`,
 }
 
 func (db *DB) migrate() error {

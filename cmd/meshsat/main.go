@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -958,6 +959,22 @@ func main() {
 		spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrum.DefaultBands)
 		if signingService != nil {
 			spectrumMon.SetSigningService(signingService)
+		}
+		// MESHSAT-650: wire persistence before Start so the retention
+		// goroutine fires alongside the scan loop. Retention window is
+		// operator-tunable; ClampRetention guards us against zero/huge
+		// values.
+		if db != nil {
+			spectrumMon.SetHistoryStore(db)
+			retention := spectrum.DefaultRetentionHours
+			if v := os.Getenv("MESHSAT_SPECTRUM_RETENTION_HOURS"); v != "" {
+				if h, err := strconv.Atoi(v); err == nil {
+					retention = h
+				}
+			}
+			spectrumMon.SetRetentionHours(retention)
+			log.Info().Int("retention_hours", spectrum.ClampRetention(retention)).
+				Msg("spectrum: history persistence enabled")
 		}
 		spectrumMon.Start(ctx)
 		log.Info().Msg("spectrum monitor started (RTL-SDR detected)")
