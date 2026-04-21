@@ -148,22 +148,61 @@ func (t *TUNAdapter) Start(ctx context.Context) error {
 
 // deliverToTUN writes a reassembled payload from the bonder to the TUN device.
 // Called from the reassembly goroutine via Options.DeliverFn.
+//
+// RLNC encoding pads every segment to symSize so the decoded payload is
+// k*symSize bytes — almost always larger than the original IP packet.
+// Linux's tun(4) driver treats each write(2) as one L3 packet; if the
+// buffer size doesn't equal IP total-length the kernel drops it on IP
+// input. So we parse the IP header and truncate to tot_len before
+// writing. Non-IP payloads fall through unchanged (future: IPv6, ARP).
 func (t *TUNAdapter) deliverToTUN(payload []byte) {
+	packet := trimToIPPacket(payload)
 	t.stats.packetsRecv.Add(1)
-	t.stats.bytesRecv.Add(int64(len(payload)))
+	t.stats.bytesRecv.Add(int64(len(packet)))
 	emit(t.eventCh, EventTUNPacketRecv, TUNPacketPayload{
-		Size:      len(payload),
+		Size:      len(packet),
 		Direction: "rx",
 	})
 
-	if _, err := t.dev.Write(payload); err != nil {
+	if _, err := t.dev.Write(packet); err != nil {
 		t.stats.packetsDropped.Add(1)
 		emit(t.eventCh, EventTUNPacketDropped, TUNPacketPayload{
-			Size:      len(payload),
+			Size:      len(packet),
 			Direction: "rx",
 			Error:     err.Error(),
 		})
 	}
+}
+
+// trimToIPPacket inspects an IP header and returns payload[:tot_len]
+// for IPv4 or payload[:40+payload_len] for IPv6. Returns the input
+// unchanged if the header doesn't look like IP — the kernel will
+// drop it either way, but we don't want to crash on malformed data.
+func trimToIPPacket(payload []byte) []byte {
+	if len(payload) < 20 {
+		return payload
+	}
+	version := payload[0] >> 4
+	switch version {
+	case 4:
+		totLen := int(payload[2])<<8 | int(payload[3])
+		if totLen < 20 || totLen > len(payload) {
+			return payload
+		}
+		return payload[:totLen]
+	case 6:
+		if len(payload) < 40 {
+			return payload
+		}
+		// IPv6: fixed 40-byte header + payload length field at [4:6]
+		payloadLen := int(payload[4])<<8 | int(payload[5])
+		total := 40 + payloadLen
+		if total > len(payload) {
+			return payload
+		}
+		return payload[:total]
+	}
+	return payload
 }
 
 // Close shuts down the read loop and closes the TUN device.

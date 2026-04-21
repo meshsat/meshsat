@@ -789,3 +789,57 @@ func TestComputeTUNMTU(t *testing.T) {
 		})
 	}
 }
+
+// TestTrimToIPPacket: RLNC zero-pads every segment to symSize so a
+// decoded 84-byte ping comes out as 221+ bytes. Linux's tun(4)
+// silently drops any write where IP tot_len disagrees with the
+// buffer size, so deliverToTUN must truncate based on the IP
+// header before Write(). This was the final blocker that kept
+// tesseract→parallax ping at 100% loss even after mesh_0 and
+// ax25_0 started transmitting correctly.
+func TestTrimToIPPacket(t *testing.T) {
+	// IPv4 ping (84 bytes: 20 IP + 8 ICMP + 56 data) zero-padded to 221.
+	pkt := make([]byte, 221)
+	pkt[0] = 0x45               // v4, IHL=5
+	pkt[2], pkt[3] = 0x00, 0x54 // tot_len = 84
+	pkt[9] = 1                  // proto ICMP
+	pkt[12], pkt[13] = 10, 42   // src 10.42.x.x
+	pkt[14], pkt[15] = 42, 1    // .42.1
+	pkt[16], pkt[17] = 10, 42   // dst
+	pkt[18], pkt[19] = 42, 2    // .42.2
+	out := trimToIPPacket(pkt)
+	if len(out) != 84 {
+		t.Errorf("ipv4 ping: got %d bytes, want 84", len(out))
+	}
+
+	// IPv6: 40-byte header, payload_len=8.
+	v6 := make([]byte, 100)
+	v6[0] = 0x60              // v6
+	v6[4], v6[5] = 0x00, 0x08 // payload_len = 8
+	v6[6] = 58                // proto ICMPv6
+	got := trimToIPPacket(v6)
+	if len(got) != 48 {
+		t.Errorf("ipv6: got %d bytes, want 48", len(got))
+	}
+
+	// Non-IP garbage: return unchanged.
+	garbage := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+	if len(trimToIPPacket(garbage)) != len(garbage) {
+		t.Errorf("non-IP: should return unchanged")
+	}
+
+	// IPv4 with bogus tot_len > buffer: don't corrupt by truncating past end.
+	bad := make([]byte, 30)
+	bad[0] = 0x45
+	bad[2], bad[3] = 0xFF, 0xFF // tot_len=65535 but buffer only 30
+	if len(trimToIPPacket(bad)) != 30 {
+		t.Errorf("invalid tot_len should be preserved, not crash")
+	}
+
+	// Too short to be IP: return unchanged.
+	tiny := []byte{0x45, 0x00}
+	if len(trimToIPPacket(tiny)) != 2 {
+		t.Errorf("tiny packet should be preserved")
+	}
+}
