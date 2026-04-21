@@ -271,10 +271,19 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "role must be display or keypad")
 		return
 	}
-	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Pin, role}
-	if req.GOIntent > 0 && req.GOIntent <= 15 {
-		args = append(args, "go_intent="+strconv.Itoa(req.GOIntent))
+	// Tie the GO-intent to the role. If both kits fire with the same
+	// intent (observed live 2026-04-21: both ran go_intent=7, tie-
+	// breaker made parallax the GO but tesseract never fell back to
+	// client, negotiation timed out after ~6 s) neither side can
+	// complete the WPS exchange. Binding role → intent removes the
+	// ambiguity: the kit DISPLAYING the PIN is always the Group
+	// Owner; the kit TYPING the PIN is always the client. This
+	// matches the usual WiFi-Direct idiom for kit-to-kit.
+	goIntent := 15 // display → forced GO
+	if role == "keypad" {
+		goIntent = 0 // forced client
 	}
+	args := []string{"-i", req.Interface, "p2p_connect", req.PeerAddr, req.Pin, role, "go_intent=" + strconv.Itoa(goIntent)}
 	out, err := execWpaCli(r.Context(), args...)
 	if err != nil {
 		log.Error().Err(err).Str("peer", req.PeerAddr).Msg("wifi-p2p: connect failed")
