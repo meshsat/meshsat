@@ -85,10 +85,48 @@ func BuildBearers(memberIfaceIDs []string, forwarder HeMBFrameForwarder, rns Ret
 			// otherwise"; a future wiring of HealthScorer should
 			// drive real telemetry-backed updates via Rebind().
 			HealthScore: 100,
-			SendFn:      sendFn,
+			// LossRate per bearer drives RepairSymbols which in
+			// turn decides whether allocateSymbols gives a free
+			// bearer with source=0 any repair diversity. With
+			// LossRate=0 the repair count rounds to zero and
+			// the bearer gets EXCLUDED from the send set, so
+			// what looks like 3-way bonding silently collapses
+			// to 1-way (whichever bearer owns the K=1 source
+			// symbol — typically the highest-MTU one). Using
+			// realistic per-bearer floors ensures every free
+			// bearer in the bond transmits at least one coded
+			// symbol per generation.
+			LossRate: defaultLossRate(ifaceID),
+			SendFn:   sendFn,
 		})
 	}
 	return bearers
+}
+
+// defaultLossRate returns a conservative loss estimate per iface
+// family, used only until a health-telemetry driver starts pushing
+// real measurements via Rebind(). Numbers err high enough to force
+// RepairSymbols to return ≥1 for every free bearer on K=1 payloads.
+func defaultLossRate(ifaceID string) float64 {
+	switch {
+	case len(ifaceID) >= 5 && ifaceID[:5] == "mesh_":
+		return 0.15 // LoRa @ SF7 in real terrain
+	case len(ifaceID) >= 5 && ifaceID[:5] == "ax25_":
+		return 0.20 // APRS 144.8 with CSMA contention
+	case len(ifaceID) >= 4 && ifaceID[:4] == "tcp_":
+		return 0.02 // WiFi-Direct / wired — nearly perfect
+	case len(ifaceID) >= 4 && ifaceID[:4] == "ble_":
+		return 0.05 // GATT SAR — short-range, low loss
+	case len(ifaceID) >= 8 && ifaceID[:8] == "iridium_":
+		return 0.10 // satellite MO — variable but paid, minimal repair
+	case len(ifaceID) >= 4 && ifaceID[:4] == "sms_":
+		return 0.05
+	case len(ifaceID) >= 7 && ifaceID[:7] == "zigbee_":
+		return 0.05
+	case len(ifaceID) >= 9 && ifaceID[:9] == "mqtt_rns_":
+		return 0.03
+	}
+	return 0.10
 }
 
 // chooseBearerSendFn prefers the Reticulum InterfaceRegistry for every
