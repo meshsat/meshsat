@@ -354,6 +354,7 @@ func (s *Server) autoWireP2PPeer(peerMAC string) {
 	// HeMB bond membership — add tcp_0 to any existing bond group if
 	// not already there. Leave alone if operator already enrolled it.
 	// [MESHSAT-647 + MESHSAT-421]
+	bondMutated := false
 	if s.db != nil {
 		groups, err := s.db.GetAllBondGroups()
 		if err == nil {
@@ -372,10 +373,18 @@ func (s *Server) autoWireP2PPeer(peerMAC string) {
 						InterfaceID: "tcp_0",
 						Priority:    len(members),
 					})
+					bondMutated = true
 					log.Info().Str("bond", g.ID).Msg("wifi-p2p: enrolled tcp_0 in existing bond group")
 				}
 			}
 		}
+	}
+	// Hot-reload the TUN bonder's bearer list so tcp_0 actually carries
+	// HeMB-coded frames on the next Send() — without this the bonder
+	// keeps the stale boot-time bearer slice and tcp_0 gets skipped
+	// until a bridge restart. [MESHSAT-647]
+	if bondMutated {
+		s.rebuildHeMBBearers()
 	}
 }
 

@@ -1585,9 +1585,17 @@ func main() {
 	}
 
 	// HeMB TUN adapter — creates a virtual network interface for IP-over-HeMB bonding.
-	// Enabled by MESHSAT_HEMB_TUN env var (e.g., MESHSAT_HEMB_TUN=hemb0).
-	// IP addressing must be configured externally (ip addr add ... dev hemb0).
-	if tunName := os.Getenv("MESHSAT_HEMB_TUN"); tunName != "" {
+	// Enabled by MESHSAT_HEMB_TUN env var. In standalone mode we
+	// default to "hemb0" so HeMB multi-bearer send is actually wired
+	// without operator config; set MESHSAT_HEMB_TUN=none to opt out
+	// (locked-down deployments, or systems without CAP_NET_ADMIN).
+	tunName := os.Getenv("MESHSAT_HEMB_TUN")
+	if tunName == "" && cfg.Mode == "direct" {
+		tunName = "hemb0"
+	} else if tunName == "none" {
+		tunName = ""
+	}
+	if tunName != "" {
 		// Build bearer profiles from bond group config.
 		groups, gerr := db.GetAllBondGroups()
 		if gerr != nil || len(groups) == 0 {
@@ -1598,21 +1606,11 @@ func main() {
 			if merr != nil || len(members) == 0 {
 				log.Warn().Str("group", groups[0].ID).Msg("hemb: bond group has no members — TUN skipped")
 			} else {
-				var bearers []hemb.BearerProfile
-				for i, m := range members {
-					ifaceID := m.InterfaceID
-					bearers = append(bearers, hemb.BearerProfile{
-						Index:       uint8(i),
-						InterfaceID: ifaceID,
-						ChannelType: ifaceID,
-						MTU:         237,
-						HeaderMode:  hemb.HeaderModeCompact,
-						SendFn: func(_ context.Context, data []byte) error {
-							// Route HeMB frames through the dispatcher's delivery pipeline.
-							return dispatcher.ForwardHeMBFrame(ifaceID, data)
-						},
-					})
+				ifaceIDs := make([]string, 0, len(members))
+				for _, m := range members {
+					ifaceIDs = append(ifaceIDs, m.InterfaceID)
 				}
+				bearers := hemb.BuildBearers(ifaceIDs, dispatcher, ifaceReg)
 
 				tunMTU := hemb.ComputeTUNMTU(bearers)
 				tunDev, terr := hemb.OpenTUN(tunName, tunMTU)
@@ -1625,6 +1623,10 @@ func main() {
 						EventCh: hemb.GlobalEventBus.Channel(),
 					})
 					proc.SetHeMBBonder(tunBonder)
+					// Give the API server a handle so autoWireP2PPeer
+					// (MESHSAT-647) can hot-reload bearers when
+					// bond_members changes without a bridge restart.
+					srv.SetHeMBTUNAdapter(tunAdapter, groups[0].ID)
 					go func() {
 						if err := tunAdapter.Start(ctx); err != nil {
 							log.Error().Err(err).Msg("hemb: TUN adapter stopped")

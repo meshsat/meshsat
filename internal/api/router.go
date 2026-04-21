@@ -11,6 +11,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hemb"
 	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
@@ -59,12 +60,47 @@ type Server struct {
 	// handlers are safe to call without it (they just skip auto-peer).
 	// [MESHSAT-633]
 	blePeerMgr *BLEPeerManager
+	// hembTUN + hembTUNBond are set by SetHeMBTUNAdapter when the
+	// TUN HeMB bonder is live. Used by autoWireP2PPeer (MESHSAT-647)
+	// to hot-reload the bonder's bearer list after tcp_0 is added
+	// to a bond group, so the new bearer actually starts carrying
+	// HeMB-coded frames without a bridge restart.
+	hembTUN     *hemb.TUNAdapter
+	hembTUNBond string // bond group ID the TUN bonder is bound to
 }
 
 // SetBLEPeerManager wires the BLE peer manager for auto-RNS-peer on
 // paired MeshSat kits. [MESHSAT-633]
 func (s *Server) SetBLEPeerManager(m *BLEPeerManager) {
 	s.blePeerMgr = m
+}
+
+// SetHeMBTUNAdapter wires the TUN adapter so runtime bond-member
+// changes can call tunAdapter.Rebind() + rebuild bearer list.
+// [MESHSAT-647 HeMB hot-reload]
+func (s *Server) SetHeMBTUNAdapter(a *hemb.TUNAdapter, bondID string) {
+	s.hembTUN = a
+	s.hembTUNBond = bondID
+}
+
+// rebuildHeMBBearers rebuilds the TUN bonder's bearer list from the
+// current bond_members row for the TUN-bound bond group. Called by
+// autoWireP2PPeer after updating bond_members. Safe no-op when TUN
+// isn't configured (MESHSAT_HEMB_TUN unset).
+func (s *Server) rebuildHeMBBearers() {
+	if s.hembTUN == nil || s.hembTUNBond == "" || s.db == nil || s.ifaceRegistry == nil {
+		return
+	}
+	members, err := s.db.GetBondMembers(s.hembTUNBond)
+	if err != nil {
+		return
+	}
+	ifaceIDs := make([]string, 0, len(members))
+	for _, m := range members {
+		ifaceIDs = append(ifaceIDs, m.InterfaceID)
+	}
+	bearers := hemb.BuildBearers(ifaceIDs, s.dispatcher, s.ifaceRegistry)
+	s.hembTUN.Rebind(bearers)
 }
 
 // SetRestartFunc sets the function called by POST /api/system/restart
