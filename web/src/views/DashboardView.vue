@@ -860,7 +860,7 @@ function bearerShortLabel(id) {
   if (id.startsWith('mesh_'))       return 'Mesh'
   if (id.startsWith('ax25_'))       return 'APRS'
   if (id.startsWith('iridium_imt')) return 'IMT'
-  if (id.startsWith('iridium_'))    return 'Sat'
+  if (id.startsWith('iridium_'))    return 'SBD'
   if (id.startsWith('sms_'))        return 'SMS'
   if (id.startsWith('cellular_'))   return 'Cell'
   if (id.startsWith('tcp_'))        return 'WiFi'
