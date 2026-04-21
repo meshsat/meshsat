@@ -817,7 +817,18 @@ function ifaceOK(id) {
       id.startsWith('iridium_'))  return opSatOK.value
   if (id.startsWith('cellular_') ||
       id.startsWith('sms_'))      return opCellOK.value
-  // tcp_/ble_/zigbee_/unknown — no per-interface health predicate today
+  // tcp_/ble_/zigbee_/mqtt_rns_ — check the Reticulum routing
+  // registry's online bit. The registry is the authoritative source
+  // for these Reticulum-native interfaces — anything else here would
+  // be guessing. If the registry hasn't loaded yet, treat as down
+  // rather than silently green.
+  if (id.startsWith('tcp_') ||
+      id.startsWith('ble_') ||
+      id.startsWith('zigbee_') ||
+      id.startsWith('mqtt_rns_')) {
+    const iface = (store.routingInterfaces || []).find(i => i.id === id)
+    return !!(iface && iface.online)
+  }
   return false
 }
 
@@ -1353,6 +1364,9 @@ async function fetchAll() {
     store.fetchBurstStatus(),
     store.fetchHeMBStats(),
     store.fetchReticulumStatus(),
+    // Reticulum routing registry — ifaceOK() uses this to render
+    // per-bearer health dots for tcp_/ble_/mqtt_rns_ members.
+    store.fetchRoutingInterfaces(),
     store.fetchWebhookLog(),
     store.fetchConfig(),
     store.fetchAPRSStatus(),
@@ -1398,6 +1412,7 @@ onMounted(() => {
     store.fetchLocationSources()
     store.fetchCellularSignal().then(trackCellularSignal)
     store.fetchReticulumStatus()
+    store.fetchRoutingInterfaces()
     store.fetchAPRSStatus()
     store.fetchAPRSHeard()
     store.fetchAPRSActivity()
