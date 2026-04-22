@@ -3,10 +3,13 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/warthog618/go-gpiocdev"
 )
 
 // fakeGPIOLine is an in-memory GPIOLine used to verify that the sleep/wake
@@ -18,10 +21,12 @@ type fakeGPIOLine struct {
 	closed   int32 // 1 once Close has been called
 	failNext bool  // make the next SetValue return an error
 
-	// Ordered write log. Used by HardPowerCycle tests to assert the
-	// OFF→ON pulse sequence; ignored by other tests.
+	// Ordered event log — each entry is either "set=N" (SetValue) or
+	// "rcfg=mode" (Reconfigure). Used by HardPowerCycle tests to
+	// assert the input→output-LOW→input sequence.
 	hmu     sync.Mutex
-	history []int
+	events  []string
+	history []int // legacy: SetValue-only history, kept for existing tests
 }
 
 func (f *fakeGPIOLine) Value() (int, error) {
@@ -43,8 +48,18 @@ func (f *fakeGPIOLine) SetValue(v int) error {
 	atomic.AddInt32(&f.writes, 1)
 	f.hmu.Lock()
 	f.history = append(f.history, v)
+	f.events = append(f.events, fmt.Sprintf("set=%d", v))
 	f.hmu.Unlock()
 	return nil
+}
+
+// Events returns a copy of the ordered SetValue/Reconfigure log.
+func (f *fakeGPIOLine) Events() []string {
+	f.hmu.Lock()
+	defer f.hmu.Unlock()
+	out := make([]string, len(f.events))
+	copy(out, f.events)
+	return out
 }
 
 // History returns a copy of the ordered SetValue log.
@@ -58,6 +73,28 @@ func (f *fakeGPIOLine) History() []int {
 
 func (f *fakeGPIOLine) Close() error {
 	atomic.StoreInt32(&f.closed, 1)
+	return nil
+}
+
+// Reconfigure records the direction/bias change for tests to inspect.
+// Distinguishes "input" (HardPowerCycle's release-to-ON) from
+// "output" (the OFF pulse) by peeking at the first option's type.
+func (f *fakeGPIOLine) Reconfigure(opts ...gpiocdev.LineConfigOption) error {
+	if atomic.LoadInt32(&f.closed) == 1 {
+		return errors.New("closed")
+	}
+	mode := "other"
+	if len(opts) > 0 {
+		switch opts[0].(type) {
+		case gpiocdev.OutputOption:
+			mode = "output"
+		case gpiocdev.InputOption:
+			mode = "input"
+		}
+	}
+	f.hmu.Lock()
+	f.events = append(f.events, "rcfg="+mode)
+	f.hmu.Unlock()
 	return nil
 }
 
@@ -142,20 +179,18 @@ func TestWakeWithoutPinIsNoop(t *testing.T) {
 	}
 }
 
-// TestHardPowerCycleDrivesOffThenOn verifies that HardPowerCycle drives
-// the OnOff line OFF (level 1 for the default MOSFET polarity), pauses,
-// then drives it ON (level 0). The 5 s post-cycle boot wait is aborted
-// by a short test context so connectLocked() is never reached — we are
-// only asserting the GPIO edge ordering here, not reconnect. MESHSAT-668.
-func TestHardPowerCycleDrivesOffThenOn(t *testing.T) {
+// TestHardPowerCyclePulsesViaReconfigure verifies that HardPowerCycle
+// implements open-drain emulation: Reconfigure(output) for the OFF
+// pulse, then Reconfigure(input) to release the line so the modem's
+// 1 MΩ pull-up takes OnOff back to the ON level. The 5 s post-cycle
+// boot wait is aborted by a short test context so connectLocked() is
+// never reached. MESHSAT-668 / MESHSAT-669.
+func TestHardPowerCyclePulsesViaReconfigure(t *testing.T) {
 	fake := &fakeGPIOLine{}
 	tr := NewDirectSatTransport("auto")
-	tr.SetOnOffPin(24) // default polarity: MOSFET-buffered active low
+	tr.SetOnOffPin(24)
 	tr.onOffLine = fake
 
-	// 700 ms is long enough to clear the 500 ms OFF pulse + ON write,
-	// but short enough to abort the 5 s boot wait before connectLocked
-	// tries to open a real serial port.
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 
@@ -167,38 +202,12 @@ func TestHardPowerCycleDrivesOffThenOn(t *testing.T) {
 		t.Fatalf("HardPowerCycle: err = %v, want DeadlineExceeded", err)
 	}
 
-	history := fake.History()
-	if len(history) != 2 {
-		t.Fatalf("HardPowerCycle: %d writes, want 2 (off, on); history=%v", len(history), history)
-	}
-	// MOSFET default polarity: off=1 drives MOSFET gate HIGH (grounds
-	// OnOff pin to 0 V → modem off); on=0 releases the gate, letting
-	// the 1 MΩ pull-up take OnOff to 5 V → modem on.
-	if history[0] != 1 {
-		t.Errorf("first edge = %d, want 1 (off level, default MOSFET polarity)", history[0])
-	}
-	if history[1] != 0 {
-		t.Errorf("second edge = %d, want 0 (on level, default MOSFET polarity)", history[1])
-	}
-}
-
-// TestHardPowerCycleActiveHighPolarity verifies direct-wire polarity
-// inverts both edges: OFF=0 (LOW) and ON=1 (HIGH).
-func TestHardPowerCycleActiveHighPolarity(t *testing.T) {
-	fake := &fakeGPIOLine{}
-	tr := NewDirectSatTransport("auto")
-	tr.SetOnOffPin(24)
-	tr.SetOnOffActiveHigh(true)
-	tr.onOffLine = fake
-
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
-	defer cancel()
-
-	_ = tr.HardPowerCycle(ctx) // ctx cancel aborts before reconnect
-
-	history := fake.History()
-	if len(history) != 2 || history[0] != 0 || history[1] != 1 {
-		t.Errorf("active-high polarity: history = %v, want [0,1]", history)
+	events := fake.Events()
+	// Expect: rcfg=output (OFF pulse), rcfg=input (release to ON).
+	// We don't care about the 500 ms SetValue in-between (go-gpiocdev
+	// applies the initial output value from AsOutput(0) directly).
+	if len(events) != 2 || events[0] != "rcfg=output" || events[1] != "rcfg=input" {
+		t.Errorf("HardPowerCycle: events = %v, want [rcfg=output rcfg=input]", events)
 	}
 }
 

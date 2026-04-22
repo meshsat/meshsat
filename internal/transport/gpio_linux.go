@@ -27,12 +27,19 @@ func gpioChipName() string {
 	return defaultGPIOChip
 }
 
-// GPIOLine is the minimal handle needed by callers (output write, input
-// read, release). Kept as an interface so tests can substitute fakes for
-// the kernel-backed line without standing up a real /dev/gpiochip device.
+// GPIOLine is the minimal handle needed by callers (read, write, switch
+// direction, release). Kept as an interface so tests can substitute
+// fakes for the kernel-backed line without standing up a real
+// /dev/gpiochip device.
 type GPIOLine interface {
 	Value() (int, error)
 	SetValue(v int) error
+	// Reconfigure changes direction / bias in place. Used for
+	// open-drain emulation on pins like the 9603 OnOff, where the
+	// line lives as a high-Z input most of the time and only flips
+	// to output-LOW for a brief pulse. Passing gpiocdev.AsInput +
+	// gpiocdev.WithBiasDisabled returns the line to tri-state.
+	Reconfigure(options ...gpiocdev.LineConfigOption) error
 	Close() error
 }
 
@@ -53,6 +60,13 @@ func (g *cdevLine) SetValue(v int) error {
 		return fmt.Errorf("gpio line not open")
 	}
 	return g.line.SetValue(v)
+}
+
+func (g *cdevLine) Reconfigure(options ...gpiocdev.LineConfigOption) error {
+	if g == nil || g.line == nil {
+		return fmt.Errorf("gpio line not open")
+	}
+	return g.line.Reconfigure(options...)
 }
 
 func (g *cdevLine) Close() error {

@@ -258,19 +258,22 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		}
 	}
 
-	// Configure OnOff GPIO output (if set) and drive to the ON level.
-	// We claim the line once and hold it for the lifetime of the
-	// connection; HardPowerCycle pulses it and returns to the ON level.
+	// Configure OnOff GPIO (if set). The RockBLOCK 9603 Rev F OnOff
+	// pin uses supply-voltage logic (≥Vsupply−0.5V for ON) with a
+	// 1 MΩ internal pull-up to Vsupply. A Pi 3.3 V output would clamp
+	// the line below the ON threshold, so we instead hold the pad as
+	// input with bias disabled — tri-state — and let the modem's
+	// pull-up take OnOff to 5 V. HardPowerCycle reconfigures briefly
+	// to output-LOW for the OFF pulse, then back to input for ON.
+	// This is open-drain emulation via chardev Reconfigure.
 	if t.onOffPin > 0 && t.onOffLine == nil {
-		_, onLevel := t.onOffLevels()
-		line, err := OpenOutput(t.onOffPin, onLevel, "meshsat-iridium-onoff")
+		line, err := OpenInput(t.onOffPin, gpiocdev.WithBiasDisabled, "meshsat-iridium-onoff")
 		if err != nil {
 			log.Warn().Err(err).Int("pin", t.onOffPin).Msg("iridium: OnOff pin setup failed, continuing without")
 			t.onOffPin = 0
 		} else {
 			t.onOffLine = line
-			log.Info().Int("pin", t.onOffPin).Bool("active_high", t.onOffActiveHigh).
-				Int("on_level", onLevel).Msg("iridium: OnOff pin configured")
+			log.Info().Int("pin", t.onOffPin).Msg("iridium: OnOff pin configured (tri-state, modem pull-up holds ON)")
 		}
 	}
 
@@ -1070,11 +1073,15 @@ func (t *DirectSatTransport) onOffLevels() (off, on int) {
 	return 1, 0
 }
 
-// HardPowerCycle pulses the OnOff line OFF for 500 ms, drives it back
-// to ON, gives the modem 5 s to boot, then re-runs the AT
-// initialisation. Acquires the serial mutex for the duration so no
-// other caller can collide. Returns an error if the OnOff pin is not
-// configured. See MESHSAT-668.
+// HardPowerCycle pulses the OnOff line OFF for 500 ms, returns it to
+// tri-state (modem's 1 MΩ pull-up takes over for ON), gives the modem
+// 5 s to boot, then re-runs the AT initialisation. Acquires the serial
+// mutex for the duration so no other caller can collide. Returns an
+// error if the OnOff pin is not configured. See MESHSAT-668.
+//
+// Open-drain semantics: OFF = reconfigure to output-LOW (Pi sinks the
+// 1 MΩ pull-up to ground). ON = reconfigure to input-with-bias-disabled
+// (Pi pad tri-state, modem pull-up wins).
 func (t *DirectSatTransport) HardPowerCycle(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1083,13 +1090,7 @@ func (t *DirectSatTransport) HardPowerCycle(ctx context.Context) error {
 		return fmt.Errorf("OnOff pin not configured (set MESHSAT_IRIDIUM_ONOFF_PIN)")
 	}
 
-	offLevel, onLevel := t.onOffLevels()
-	log.Info().
-		Int("pin", t.onOffPin).
-		Bool("active_high", t.onOffActiveHigh).
-		Int("off_level", offLevel).
-		Int("on_level", onLevel).
-		Msg("iridium: hard power cycle")
+	log.Info().Int("pin", t.onOffPin).Msg("iridium: hard power cycle")
 
 	// Stop monitors + signal poller so they don't try to read the
 	// dying UART while the modem is power-cycling. stopMonitor is
@@ -1105,14 +1106,18 @@ func (t *DirectSatTransport) HardPowerCycle(ctx context.Context) error {
 	t.connected = false
 	t.awake = false
 
-	// 500 ms OFF pulse — well above the 100 ms+ required to register a
-	// state change on the 9603's OnOff input.
-	if err := t.onOffLine.SetValue(offLevel); err != nil {
-		return fmt.Errorf("onoff off: %w", err)
+	// 500 ms OFF pulse: reconfigure the pad from input to output-LOW.
+	// The 3.3 V LOW level is sufficient to cross the OFF threshold
+	// (≤ Vsupply−1.5V, i.e. ≤ 3.5V at 5 V supply).
+	if err := t.onOffLine.Reconfigure(gpiocdev.AsOutput(0)); err != nil {
+		return fmt.Errorf("onoff pulse LOW: %w", err)
 	}
 	time.Sleep(500 * time.Millisecond)
-	if err := t.onOffLine.SetValue(onLevel); err != nil {
-		return fmt.Errorf("onoff on: %w", err)
+
+	// Return to tri-state. Modem's 1 MΩ pull-up to Vsupply takes
+	// OnOff to 5 V, crossing the ON threshold (≥ Vsupply−0.5V).
+	if err := t.onOffLine.Reconfigure(gpiocdev.AsInput, gpiocdev.WithBiasDisabled); err != nil {
+		return fmt.Errorf("onoff release to ON: %w", err)
 	}
 
 	// 5 s boot window — RockBLOCK 9603 typically needs 2-3 s to
