@@ -205,10 +205,11 @@ function drawSpectrum(bandName) {
   ctx.fillStyle = bgGrad
   ctx.fillRect(plotL, plotT, plotW, plotH)
 
-  // Horizontal gridlines every 5 dB
+  // Horizontal gridlines — cadence matches axesFor() so canvas lines
+  // and SVG labels stay aligned at small spans. [MESHSAT-651]
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)'
   ctx.lineWidth = 1
-  const stepDB = 5
+  const stepDB = yRange <= 10 ? 1 : 5
   const firstTick = Math.ceil(yBot / stepDB) * stepDB
   for (let dB = firstTick; dB <= yTop; dB += stepDB) {
     const y = yAt(dB)
@@ -309,27 +310,40 @@ function drawSpectrum(bandName) {
 // spectrogram look of desktop SDR tools (SDR#, gqrx, CubicSDR).
 const WATERFALL_COLS = 512
 
-// Palette range is sized from a robust statistic of the row itself
-// (median + MAD), not from the band-level baselineStd. baselineStd
-// measures scan-to-scan variance of the *scalar* average power — it
-// systematically underestimates within-scan per-bin spread and
-// saturates the Turbo colormap on natural noise (see MESHSAT-649).
-// Per-row MAD is robust to narrowband jammers (they don't pull the
-// median), so the noise floor stays cool and spikes still ride up to
-// the hot end of the palette. A 0.5 dB minimum scale prevents the
-// flat-row degenerate case where the whole row collapses to one
-// colour — same floor the legend's RobustScaleDB uses.
+// Palette range is band-level, NOT per-row. Per-row scaling
+// (previous design, MESHSAT-649) made burst rows compress their own
+// noise floor to the palette bottom while adjacent clean rows held
+// a wider-span palette, visible as dark horizontal stripes every
+// time an APRS/LoRa transmitter keyed up. Band-level scaling keeps
+// the noise-floor color consistent across rows; bursts saturate to
+// the hot end but remain clearly visible as hot spots. [MESHSAT-657]
+//
+// Prefer band.baselineMad (scan-to-scan MAD, robust to transient
+// bursts during calibration) over band.baselineStd (pumped up to
+// several dB on kits that calibrated while real transmitters were
+// active — observed on parallax aprs_144 = 4.69 dB std vs 0.05 dB
+// mad). A 0.5 dB minimum scale prevents a palette collapse on
+// truly-quiet bands post MESHSAT-649. 15 dB ceiling headroom lets
+// a burst clip to red without stretching the noise floor palette.
 function rowPaletteRange(row, band) {
-  if (!row || !row.powers?.length) {
-    // No row data — fall back to baseline if present, else a sane default
-    if (band.baselineStd > 0) {
-      return {
-        floor: band.baselineMean - 2 * band.baselineStd,
-        ceil:  band.baselineMean + 10 * band.baselineStd,
-      }
+  const mad = band.baselineMad || 0
+  const std = band.baselineStd || 0
+  const mean = band.baselineMean
+  const hasBaseline = Number.isFinite(mean) && mean !== 0
+
+  if (hasBaseline) {
+    const robust = mad > 0 ? 1.4826 * mad : std
+    const scale = Math.max(robust, 0.5)
+    return {
+      floor: mean - 2 * scale,
+      ceil:  mean + 15 * scale,
     }
-    return { floor: -80, ceil: -10 }
   }
+
+  // No band baseline yet (still calibrating, first rows). Derive from
+  // the row itself so the panel has something to render. Per-row here
+  // is acceptable because this path only runs before baseline lands.
+  if (!row || !row.powers?.length) return { floor: -80, ceil: -10 }
   const finite = []
   for (const p of row.powers) if (isFinite(p)) finite.push(p)
   if (finite.length === 0) return { floor: -80, ceil: -10 }
@@ -337,12 +351,12 @@ function rowPaletteRange(row, band) {
   const sorted = finite.slice().sort((a, b) => a - b)
   const median = sorted[Math.floor(sorted.length / 2)]
   const absDev = sorted.map(p => Math.abs(p - median)).sort((a, b) => a - b)
-  const mad = absDev[Math.floor(absDev.length / 2)]
-  const scale = Math.max(1.4826 * mad, 0.5)
+  const mad2 = absDev[Math.floor(absDev.length / 2)]
+  const scale = Math.max(1.4826 * mad2, 0.5)
 
   return {
     floor: median - 2 * scale,
-    ceil:  median + 10 * scale,
+    ceil:  median + 15 * scale,
   }
 }
 
