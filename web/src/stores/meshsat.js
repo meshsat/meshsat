@@ -3,22 +3,39 @@ import { ref, computed } from 'vue'
 import api from '@/api/client'
 
 // Resolve the initial shell mode on first load.
-// Priority: explicit localStorage value > ?shell URL param > kiosk UA >
-// viewport width heuristic. The kiosk/Android path defaults to Operator;
-// a desktop-width viewport defaults to Engineer so power users keep the
-// dense UI they had before the IQ-70 reshape. [MESHSAT-549]
+// In KIOSK mode (?kiosk=1) the URL's ?shell= is authoritative — a stray
+// tap on the OP/ENG toggle on a shared field kit must not lock the
+// next operator into engineer view across a reload. Outside kiosk
+// mode, localStorage > URL > UA > viewport (developer / normal web
+// users keep their last choice). [MESHSAT-549, kiosk lock MESHSAT-659]
 function detectShellMode() {
   if (typeof window === 'undefined') return 'operator'
+  const params = new URLSearchParams(window.location.search || '')
+  const isKiosk = params.get('kiosk') === '1'
+  const urlShell = params.get('shell')
+
+  if (isKiosk) {
+    if (urlShell === 'engineer') return 'engineer'
+    return 'operator' // ?shell=kiosk / operator / null all map here
+  }
+
   const stored = window.localStorage?.getItem('meshsat.shell')
   if (stored === 'operator' || stored === 'engineer') return stored
-  const params = new URLSearchParams(window.location.search || '')
-  const urlShell = params.get('shell')
   if (urlShell === 'kiosk' || urlShell === 'operator') return 'operator'
   if (urlShell === 'engineer') return 'engineer'
   const ua = window.navigator?.userAgent || ''
   if (/CrKiosk|Chromium-Kiosk|\bKIOSK\b/i.test(ua)) return 'operator'
   if ((window.innerWidth || 0) > 1200) return 'engineer'
   return 'operator'
+}
+
+// True only when the page was loaded with ?kiosk=1 — used to skip
+// localStorage persistence of the shell toggle so the next reload
+// reverts to the URL's shell value.
+function isKioskSession() {
+  if (typeof window === 'undefined') return false
+  const params = new URLSearchParams(window.location.search || '')
+  return params.get('kiosk') === '1'
 }
 
 export const useMeshsatStore = defineStore('meshsat', () => {
@@ -45,6 +62,10 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   function setShellMode(mode) {
     if (mode !== 'operator' && mode !== 'engineer') return
     shellMode.value = mode
+    // In kiosk mode we do NOT persist: field-kit reboots and nightly
+    // restarts must come back to the URL's shell value regardless of
+    // in-session taps. [MESHSAT-659]
+    if (isKioskSession()) return
     try { window.localStorage?.setItem('meshsat.shell', mode) } catch { /* private mode */ }
   }
   function toggleShellMode() {
