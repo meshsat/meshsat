@@ -134,6 +134,10 @@ func main() {
 		if cfg.IridiumSleepPin > 0 {
 			directSat.SetSleepPin(cfg.IridiumSleepPin)
 		}
+		if cfg.IridiumNetAvPin > 0 {
+			directSat.SetNetAvPin(cfg.IridiumNetAvPin)
+			log.Info().Int("pin", cfg.IridiumNetAvPin).Msg("iridium: NetAv GPIO configured (MESHSAT_IRIDIUM_NETAV_PIN)")
+		}
 
 		directCell := transport.NewDirectCellTransport(cellPort)
 		directCell.SetSIMCardLookup(

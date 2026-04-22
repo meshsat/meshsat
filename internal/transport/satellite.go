@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // SatEvent represents a typed event from the satellite modem.
@@ -15,13 +16,20 @@ type SatEvent struct {
 }
 
 // SatStatus represents the connection status of the satellite modem.
+// NetworkAvailable / NetworkAvailableSince are populated only for SBD
+// transports with the MESHSAT_IRIDIUM_NETAV_PIN wired (MESHSAT-666);
+// omitempty hides them on 9704/IMT deployments. Zero-value bool is the
+// same as "unwired", so consumers that want to distinguish must check
+// the transport type.
 type SatStatus struct {
-	Connected bool   `json:"connected"`
-	Port      string `json:"port"`
-	IMEI      string `json:"imei"`
-	Model     string `json:"model"`
-	Type      string `json:"type"` // "sbd" (9603) or "imt" (9704)
-	Firmware  string `json:"firmware,omitempty"`
+	Connected             bool      `json:"connected"`
+	Port                  string    `json:"port"`
+	IMEI                  string    `json:"imei"`
+	Model                 string    `json:"model"`
+	Type                  string    `json:"type"` // "sbd" (9603) or "imt" (9704)
+	Firmware              string    `json:"firmware,omitempty"`
+	NetworkAvailable      bool      `json:"network_available,omitempty"`
+	NetworkAvailableSince time.Time `json:"network_available_since,omitempty"`
 }
 
 // IridiumTime represents the Iridium network system time from AT-MSSTM.

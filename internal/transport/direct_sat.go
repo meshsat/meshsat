@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/warthog618/go-gpiocdev"
 	"go.bug.st/serial"
 )
 
@@ -48,6 +50,16 @@ type DirectSatTransport struct {
 	sleepLine    GPIOLine
 	awake        bool
 	lastWakeTime time.Time
+
+	// 9603 NetAv GPIO input (BCM, 0 = disabled). HIGH when an Iridium
+	// satellite is visible. Used as a cheap SBDIX veto and exposed on
+	// SatStatus for the dashboard. See MESHSAT-666.
+	netAvPin    int
+	netAvLine   GPIOLine
+	netAvState  atomic.Bool
+	netAvSince  atomic.Pointer[time.Time] // set when state transitions to HIGH
+	stopNetAvCh chan struct{}
+	netAvDone   chan struct{}
 
 	// SBDIX rate limiting
 	lastSBDIX   time.Time
@@ -196,6 +208,19 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		}
 	}
 
+	// Configure NetAv GPIO input (if set). No bias — the modem drives
+	// it as a CMOS output; adding a Pi-side pull would fight the driver.
+	if t.netAvPin > 0 && t.netAvLine == nil {
+		line, err := OpenInput(t.netAvPin, gpiocdev.WithBiasDisabled, "meshsat-iridium-netav")
+		if err != nil {
+			log.Warn().Err(err).Int("pin", t.netAvPin).Msg("iridium: NetAv pin setup failed, continuing without")
+			t.netAvPin = 0
+		} else {
+			t.netAvLine = line
+			log.Info().Int("pin", t.netAvPin).Msg("iridium: NetAv pin configured")
+		}
+	}
+
 	sp, err := openSerial(portPath, iridiumBaud)
 	if err != nil {
 		return err
@@ -284,6 +309,12 @@ func (t *DirectSatTransport) startMonitor() {
 	t.stopSignalCh = make(chan struct{})
 	t.signalDone = make(chan struct{})
 	go t.signalPollerLoop()
+
+	if t.netAvLine != nil {
+		t.stopNetAvCh = make(chan struct{})
+		t.netAvDone = make(chan struct{})
+		go t.netAvMonitorLoop()
+	}
 }
 
 // stopMonitor stops the ring monitor and signal poller.
@@ -329,6 +360,90 @@ func (t *DirectSatTransport) stopMonitor() {
 			log.Warn().Msg("iridium: ring monitor did not exit in time")
 		}
 		t.mu.Lock()
+	}
+
+	// Stop NetAv poller (if running)
+	if t.stopNetAvCh != nil {
+		select {
+		case <-t.netAvDone:
+			// already exited
+		default:
+			close(t.stopNetAvCh)
+			done := t.netAvDone
+			t.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				log.Warn().Msg("iridium: NetAv poller did not exit in time")
+			}
+			t.mu.Lock()
+		}
+		t.stopNetAvCh = nil
+		t.netAvDone = nil
+	}
+}
+
+// netAvMonitorLoop polls the 9603 NetAv GPIO at 1 Hz. Updates
+// t.netAvState + t.netAvSince atomics and emits a rate-limited
+// netav_change SSE event on transitions. Only emits when t.awake is
+// true (modem outputs are LOW when sleeping, which would otherwise
+// spam the event stream).
+func (t *DirectSatTransport) netAvMonitorLoop() {
+	defer close(t.netAvDone)
+	tick := time.NewTicker(1 * time.Second)
+	defer tick.Stop()
+
+	var lastEmit time.Time
+	const emitGap = 5 * time.Second
+
+	for {
+		select {
+		case <-t.stopNetAvCh:
+			return
+		case <-tick.C:
+		}
+
+		if t.netAvLine == nil {
+			return
+		}
+		v, err := t.netAvLine.Value()
+		if err != nil {
+			log.Debug().Err(err).Int("pin", t.netAvPin).Msg("iridium: NetAv read error")
+			continue
+		}
+		newState := v == 1
+		oldState := t.netAvState.Swap(newState)
+		if newState == oldState {
+			continue
+		}
+
+		now := time.Now()
+		if newState {
+			stamp := now
+			t.netAvSince.Store(&stamp)
+		} else {
+			t.netAvSince.Store(nil)
+		}
+
+		// Emit only while modem is awake; otherwise suppress the flap
+		// that happens when the modem powers down its outputs.
+		t.mu.Lock()
+		awake := t.awake
+		t.mu.Unlock()
+
+		if awake && time.Since(lastEmit) >= emitGap {
+			lastEmit = now
+			msg := "NetAv=0 (no Iridium satellite visible)"
+			if newState {
+				msg = "NetAv=1 (Iridium satellite visible)"
+			}
+			t.emitEvent(SatEvent{
+				Type:    "netav_change",
+				Message: msg,
+				Time:    now.UTC().Format(time.RFC3339),
+			})
+			log.Info().Bool("state", newState).Msg("iridium: NetAv change")
+		}
 	}
 }
 
@@ -681,12 +796,25 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
 	}
 
-	// Determine if SBDIX is warranted (each costs 1 credit with empty MO)
+	// Determine if SBDIX is warranted (each costs 1 credit with empty MO).
+	// NetAv veto: if the NetAv GPIO is wired, skip RA- and sync-driven
+	// SBDIX attempts when no satellite is currently visible. MOFlag and
+	// MTWaiting always pass (caller has committed to a session anyway).
 	gssSyncOverdue := time.Since(t.lastGSSSync) > 15*time.Minute
-	hasReason := status.MOFlag || status.RAFlag || status.MTWaiting > 0 || gssSyncOverdue
+	netAvWired := t.netAvLine != nil
+	netAvOk := !netAvWired || t.netAvState.Load()
+	hasReason := status.MOFlag ||
+		(status.RAFlag && netAvOk) ||
+		status.MTWaiting > 0 ||
+		(gssSyncOverdue && netAvOk)
 
 	if !hasReason {
-		log.Debug().Msg("iridium: no reason for SBDIX, skipping")
+		if netAvWired && !netAvOk && (status.RAFlag || gssSyncOverdue) {
+			log.Debug().Bool("ra", status.RAFlag).Bool("gss_overdue", gssSyncOverdue).
+				Msg("iridium: SBDIX vetoed by NetAv=LOW (no sat visible)")
+		} else {
+			log.Debug().Msg("iridium: no reason for SBDIX, skipping")
+		}
 		return &SBDResult{}, nil
 	}
 
@@ -772,14 +900,21 @@ func (t *DirectSatTransport) getSignalInternal(_ context.Context, cmd string, ti
 func (t *DirectSatTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return &SatStatus{
+	s := &SatStatus{
 		Connected: t.connected,
 		Port:      t.port,
 		IMEI:      t.imei,
 		Model:     t.model,
 		Type:      "sbd",
 		Firmware:  t.firmware,
-	}, nil
+	}
+	if t.netAvLine != nil {
+		s.NetworkAvailable = t.netAvState.Load()
+		if ts := t.netAvSince.Load(); ts != nil {
+			s.NetworkAvailableSince = *ts
+		}
+	}
+	return s, nil
 }
 
 // GetGeolocation returns Iridium-derived geolocation (AT-MSGEO).
@@ -830,6 +965,13 @@ func (t *DirectSatTransport) GetFirmwareVersion(_ context.Context) (string, erro
 // Pin 0 means disabled (default). Must be called before Connect().
 func (t *DirectSatTransport) SetSleepPin(pin int) {
 	t.sleepPin = pin
+}
+
+// SetNetAvPin configures the GPIO pin that reads the 9603 NetAv
+// output (HIGH = Iridium satellite visible). Pin 0 = disabled.
+// Must be called before Connect(). See MESHSAT-666.
+func (t *DirectSatTransport) SetNetAvPin(pin int) {
+	t.netAvPin = pin
 }
 
 // Sleep puts the modem into low-power sleep mode via GPIO.
@@ -901,6 +1043,12 @@ func (t *DirectSatTransport) Close() error {
 		}
 		_ = t.sleepLine.Close()
 		t.sleepLine = nil
+	}
+
+	// Release NetAv input (monitor loop already stopped by stopMonitor above).
+	if t.netAvLine != nil {
+		_ = t.netAvLine.Close()
+		t.netAvLine = nil
 	}
 
 	t.connected = false
