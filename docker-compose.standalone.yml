@@ -10,6 +10,13 @@ services:
       - MESHSAT_MODE=direct
       - MESHSAT_PORT=6050
       - MESHSAT_DB_PATH=/data/meshsat.db
+      # 9603 GPIO pins (MESHSAT-666/667/668). Default 0 = disabled.
+      # On tesseract set MESHSAT_IRIDIUM_NETAV_PIN=22, _RI_PIN=23.
+      # OnOff stays 0 until the MESHSAT-669 MOSFET buffer is installed.
+      - MESHSAT_IRIDIUM_NETAV_PIN=${MESHSAT_IRIDIUM_NETAV_PIN:-0}
+      - MESHSAT_IRIDIUM_RI_PIN=${MESHSAT_IRIDIUM_RI_PIN:-0}
+      - MESHSAT_IRIDIUM_ONOFF_PIN=${MESHSAT_IRIDIUM_ONOFF_PIN:-0}
+      - MESHSAT_IRIDIUM_ONOFF_ACTIVE_HIGH=${MESHSAT_IRIDIUM_ONOFF_ACTIVE_HIGH:-false}
     volumes:
       - meshsat-data:/data
       - /dev:/dev
