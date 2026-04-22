@@ -16,6 +16,7 @@ require (
 	github.com/prometheus/client_golang v1.22.0
 	github.com/rs/zerolog v1.34.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	github.com/warthog618/go-gpiocdev v0.9.1
 	go.bug.st/serial v1.6.4
 	golang.org/x/crypto v0.35.0
 	golang.org/x/sys v0.30.0
@@ -41,7 +42,6 @@ require (
 	github.com/prometheus/common v0.63.0 // indirect
 	github.com/prometheus/procfs v0.16.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
 	golang.org/x/net v0.36.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect

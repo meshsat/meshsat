@@ -41,8 +41,11 @@ type DirectSatTransport struct {
 	// MSSTM workaround: older firmware TA16005 hangs on SBDIX without prior MSSTM
 	needsMSSTMWorkaround bool
 
-	// Sleep/wake power management (GPIO pin, 0 = disabled)
+	// Sleep/wake power management (GPIO pin, 0 = disabled).
+	// sleepPin is the configured BCM number; sleepLine is the chardev
+	// reservation held while the transport is connected.
 	sleepPin     int
+	sleepLine    GPIOLine
 	awake        bool
 	lastWakeTime time.Time
 
@@ -177,12 +180,16 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		}
 	}
 
-	// Configure sleep pin GPIO (if set) and ensure modem is awake
-	if t.sleepPin > 0 {
-		if err := gpioSetup(t.sleepPin, 0); err != nil { // 0 = awake
+	// Configure sleep pin GPIO (if set) and ensure modem is awake.
+	// Uses chardev (/dev/gpiochip4 on Pi 5) rather than sysfs — the
+	// standalone compose mounts /sys read-only so sysfs writes fail.
+	if t.sleepPin > 0 && t.sleepLine == nil {
+		line, err := OpenOutput(t.sleepPin, 0, "meshsat-iridium-sleep") // 0 = awake
+		if err != nil {
 			log.Warn().Err(err).Int("pin", t.sleepPin).Msg("iridium: sleep pin setup failed, continuing without")
 			t.sleepPin = 0
 		} else {
+			t.sleepLine = line
 			t.awake = true
 			t.lastWakeTime = time.Now()
 			log.Info().Int("pin", t.sleepPin).Msg("iridium: sleep pin configured")
@@ -834,7 +841,7 @@ func (t *DirectSatTransport) Sleep(_ context.Context) error {
 }
 
 func (t *DirectSatTransport) sleepLocked() error {
-	if t.sleepPin <= 0 {
+	if t.sleepLine == nil {
 		return fmt.Errorf("sleep pin not configured")
 	}
 	if !t.awake {
@@ -844,7 +851,7 @@ func (t *DirectSatTransport) sleepLocked() error {
 	if elapsed := time.Since(t.lastWakeTime); elapsed < 2*time.Second {
 		time.Sleep(2*time.Second - elapsed)
 	}
-	if err := gpioWrite(t.sleepPin, 1); err != nil {
+	if err := t.sleepLine.SetValue(1); err != nil {
 		return fmt.Errorf("sleep pin write: %w", err)
 	}
 	t.awake = false
@@ -861,13 +868,13 @@ func (t *DirectSatTransport) Wake(_ context.Context) error {
 }
 
 func (t *DirectSatTransport) wakeLocked() error {
-	if t.sleepPin <= 0 {
+	if t.sleepLine == nil {
 		return nil // no sleep pin, always awake
 	}
 	if t.awake {
 		return nil // already awake
 	}
-	if err := gpioWrite(t.sleepPin, 0); err != nil {
+	if err := t.sleepLine.SetValue(0); err != nil {
 		return fmt.Errorf("wake pin write: %w", err)
 	}
 	// Give modem time to boot before AT commands
@@ -886,10 +893,14 @@ func (t *DirectSatTransport) Close() error {
 	// Use stopMonitor for clean goroutine shutdown (waits with 2s timeout)
 	t.stopMonitor()
 
-	// Put modem to sleep before closing (saves power)
-	if t.sleepPin > 0 && t.awake {
-		_ = t.sleepLocked()
-		gpioUnexport(t.sleepPin)
+	// Put modem to sleep before closing (saves power), then release
+	// the chardev line back to the kernel.
+	if t.sleepLine != nil {
+		if t.awake {
+			_ = t.sleepLocked()
+		}
+		_ = t.sleepLine.Close()
+		t.sleepLine = nil
 	}
 
 	t.connected = false
