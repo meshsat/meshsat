@@ -1577,18 +1577,76 @@ func main() {
 
 	// HeMB receive-side reassembly — always active when bond groups exist.
 	// Decoded payloads are re-injected into the processor as regular messages.
+	//
+	// Bond-level ingress decryption (MESHSAT-664, encrypt-then-code
+	// peer side): after HeMB reassembles the ciphertext, apply the
+	// bond's ingress transforms once to recover plaintext before
+	// dispatching into the rules engine.
+	//
+	// The current HeMB frame header doesn't carry a bond-group tag, so
+	// we can't look up per-bond transforms from the payload alone. In
+	// practice every kit we've seen runs with a single bond group
+	// (bond1 on tesseract + parallax, 2026-04-22), so we resolve the
+	// transform chain at startup: enumerate bond_groups, require all
+	// enabled ones to agree on ingress_transforms, and use that chain
+	// in the callback. A mismatch logs an error and falls back to
+	// plaintext (status-quo behaviour). A future HeMB frame header
+	// revision should embed the bond-group ID so per-bond transforms
+	// become unambiguous; tracked as a follow-up in MESHSAT-664.
 	{
 		groups, gerr := db.GetAllBondGroups()
 		if gerr == nil && len(groups) > 0 {
+			bondIngressTransforms := ""
+			mismatch := false
+			for _, g := range groups {
+				t := g.IngressTransforms
+				if t == "" {
+					t = "[]"
+				}
+				if t == "[]" {
+					continue
+				}
+				if bondIngressTransforms == "" {
+					bondIngressTransforms = t
+				} else if bondIngressTransforms != t {
+					mismatch = true
+					break
+				}
+			}
+			if mismatch {
+				log.Error().Msg("hemb: bond groups disagree on ingress_transforms — HeMB receives will NOT decrypt until they match (bond-group tag in frame header is a follow-up)")
+				bondIngressTransforms = ""
+			}
+
 			receiveBonder := hemb.NewBonder(hemb.Options{
 				Bearers: nil, // receive-only — no send bearers needed
 				DeliverFn: func(payload []byte) {
 					log.Info().Int("bytes", len(payload)).Msg("hemb: reassembled payload delivered")
+
+					// Bond-level ingress: decrypt BEFORE dispatch.
+					decoded := payload
+					if bondIngressTransforms != "" && dispatcher != nil && dispatcher.TransformPipeline() != nil {
+						if tErr := (func() error {
+							res, err := dispatcher.TransformPipeline().ApplyIngress(payload, bondIngressTransforms)
+							if err != nil {
+								return err
+							}
+							decoded = res
+							return nil
+						})(); tErr != nil {
+							log.Warn().Err(tErr).Int("bytes", len(payload)).
+								Msg("hemb: bond ingress transforms failed — dropping")
+							return
+						}
+						log.Debug().Int("raw", len(payload)).Int("decoded", len(decoded)).
+							Msg("hemb: bond ingress transforms applied")
+					}
+
 					// Re-inject decoded HeMB payload into access rules [MESHSAT-447]
 					if dispatcher != nil {
 						if n := dispatcher.DispatchAccess("hemb_0",
-							rules.RouteMessage{Text: string(payload), From: "hemb"},
-							payload); n > 0 {
+							rules.RouteMessage{Text: string(decoded), From: "hemb"},
+							decoded); n > 0 {
 							log.Info().Int("deliveries", n).
 								Msg("hemb: decoded payload dispatched via access rules")
 						}
@@ -1597,7 +1655,13 @@ func main() {
 				EventCh: hemb.GlobalEventBus.Channel(),
 			})
 			proc.SetHeMBBonder(receiveBonder)
-			log.Info().Int("groups", len(groups)).Msg("hemb: receive-side reassembly bonder registered")
+			if bondIngressTransforms != "" {
+				log.Info().Int("groups", len(groups)).
+					Msg("hemb: receive-side reassembly bonder registered (bond-level ingress transforms enabled)")
+			} else {
+				log.Info().Int("groups", len(groups)).
+					Msg("hemb: receive-side reassembly bonder registered")
+			}
 		}
 	}
 

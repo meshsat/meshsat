@@ -266,3 +266,50 @@ func TestGenerateCrossPlatformTestdata(t *testing.T) {
 
 	t.Logf("wrote testdata to %s (bundle=%d bytes, pubkey=%d bytes)", dir, len(data), len(pub))
 }
+
+// TestChannelBond_BundleRoundTrip verifies that the ChannelBond enum
+// value (0x07, MESHSAT-664) survives a v2 bundle Marshal/Unmarshal
+// and the string <-> byte mapping is symmetric. This is the on-wire
+// compatibility gate for syncing a `bond:<group_id>` shared key
+// across kits via POST /api/keys/import.
+func TestChannelBond_BundleRoundTrip(t *testing.T) {
+	if ChannelBond != 0x07 {
+		t.Fatalf("ChannelBond wire byte must be 0x07, got 0x%02x", ChannelBond)
+	}
+	if ChannelTypeToByte("bond") != ChannelBond {
+		t.Errorf("ChannelTypeToByte(bond)=0x%02x, want 0x%02x", ChannelTypeToByte("bond"), ChannelBond)
+	}
+	if got := ByteToChannelType(ChannelBond); got != "bond" {
+		t.Errorf("ByteToChannelType(0x07)=%q, want bond", got)
+	}
+
+	var key [aesKeyLen]byte
+	rand.Read(key[:])
+	entries := []BundleEntry{
+		{ChannelType: ChannelBond, Address: "bond1", Key: key},
+	}
+	signer, pub := newTestSigner(t)
+	data, err := MarshalBundleV2(testBridgeHash(), entries, signer, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyBundle(data, nil) {
+		t.Fatal("bond bundle signature failed")
+	}
+	b, err := UnmarshalBundle(data)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(b.Entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(b.Entries))
+	}
+	if b.Entries[0].ChannelType != ChannelBond {
+		t.Errorf("channel_type=0x%02x, want 0x%02x", b.Entries[0].ChannelType, ChannelBond)
+	}
+	if b.Entries[0].Address != "bond1" {
+		t.Errorf("address=%q, want bond1", b.Entries[0].Address)
+	}
+	if b.Entries[0].Key != key {
+		t.Error("key material mismatch across round-trip")
+	}
+}

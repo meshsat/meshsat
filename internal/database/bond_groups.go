@@ -3,13 +3,24 @@ package database
 import "fmt"
 
 // BondGroup defines a bonding group for multi-path delivery across interfaces.
+//
+// EgressTransforms and IngressTransforms carry the **bond-level**
+// transform chain (JSON, same shape as interfaces.{egress,ingress}_transforms).
+// When set, the dispatcher runs `ApplyEgress` on the payload BEFORE
+// feeding it to the HeMB bonder, so HeMB codes the resulting ciphertext
+// across all bearers. The receiver applies `ApplyIngress` to the
+// reconstructed payload once HeMB has gathered a K-of-N quorum.
+// This is the encrypt-then-code ordering required for AES-GCM to
+// compose with GF(256) erasure coding. [MESHSAT-664]
 type BondGroup struct {
-	ID             string  `db:"id" json:"id"`
-	Label          string  `db:"label" json:"label"`
-	CostBudget     float64 `db:"cost_budget" json:"cost_budget"`
-	MinReliability float64 `db:"min_reliability" json:"min_reliability"`
-	CreatedAt      string  `db:"created_at" json:"created_at"`
-	UpdatedAt      string  `db:"updated_at" json:"updated_at"`
+	ID                string  `db:"id" json:"id"`
+	Label             string  `db:"label" json:"label"`
+	CostBudget        float64 `db:"cost_budget" json:"cost_budget"`
+	MinReliability    float64 `db:"min_reliability" json:"min_reliability"`
+	EgressTransforms  string  `db:"egress_transforms" json:"egress_transforms"`
+	IngressTransforms string  `db:"ingress_transforms" json:"ingress_transforms"`
+	CreatedAt         string  `db:"created_at" json:"created_at"`
+	UpdatedAt         string  `db:"updated_at" json:"updated_at"`
 }
 
 // BondMember maps an interface into a bond group with priority ordering.
@@ -49,10 +60,24 @@ func (db *DB) InsertBondGroup(g *BondGroup) error {
 	return nil
 }
 
-// UpdateBondGroup updates a bond group's label, cost budget, and min reliability.
+// UpdateBondGroup updates a bond group's label, cost budget, min
+// reliability, and transform chains. Passing an empty-string for a
+// transforms field resets it to the `[]` default.
 func (db *DB) UpdateBondGroup(g *BondGroup) error {
-	_, err := db.Exec(`UPDATE bond_groups SET label = ?, cost_budget = ?, min_reliability = ?, updated_at = datetime('now') WHERE id = ?`,
-		g.Label, g.CostBudget, g.MinReliability, g.ID)
+	eg := g.EgressTransforms
+	if eg == "" {
+		eg = "[]"
+	}
+	ig := g.IngressTransforms
+	if ig == "" {
+		ig = "[]"
+	}
+	_, err := db.Exec(`UPDATE bond_groups
+		SET label = ?, cost_budget = ?, min_reliability = ?,
+		    egress_transforms = ?, ingress_transforms = ?,
+		    updated_at = datetime('now')
+		WHERE id = ?`,
+		g.Label, g.CostBudget, g.MinReliability, eg, ig, g.ID)
 	if err != nil {
 		return fmt.Errorf("update bond group: %w", err)
 	}

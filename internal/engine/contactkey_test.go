@@ -334,3 +334,70 @@ func TestTransformPipeline_DualReadCoexistence(t *testing.T) {
 		t.Error("contact ciphertext unexpectedly decrypted under legacy key")
 	}
 }
+
+// TestTransformPipeline_BondKeyRef_RoundTrip proves that `bond:<id>`
+// key_refs resolve through the existing KeyResolver without changes
+// (the resolver is generic over "<type>:<address>" pairs) and that a
+// full smaz2 → AES-256-GCM → base64 chain round-trips correctly for
+// a realistic bond-payload size. This is the transform layer the
+// dispatcher calls BEFORE handing the payload to the HeMB bonder
+// (MESHSAT-664 encrypt-then-code ordering). The HeMB layer downstream
+// treats the ciphertext as opaque bytes and its coding/reconstruction
+// is covered by the existing HeMB tests — here we're only verifying
+// that the transform wrapper composes.
+func TestTransformPipeline_BondKeyRef_RoundTrip(t *testing.T) {
+	tp := NewTransformPipeline()
+	tp.SetKeyResolver(stubKeyResolver{hexKey: strings.Repeat("cd", 32)})
+
+	specs := `[
+		{"type":"smaz2"},
+		{"type":"encrypt","params":{"key_ref":"bond:bond1"}},
+		{"type":"base64"}
+	]`
+	plain := []byte("bonded payload carrying mesh+aprs+tcp symbols in a single envelope")
+
+	enc, err := tp.ApplyEgress(plain, specs)
+	if err != nil {
+		t.Fatalf("bond egress: %v", err)
+	}
+	if len(enc) == 0 {
+		t.Fatal("bond egress produced empty output")
+	}
+	// Ciphertext must not contain the plaintext verbatim — proves we
+	// actually encrypted rather than passed through on some default.
+	if strings.Contains(string(enc), "bonded payload") {
+		t.Fatal("ciphertext contains plaintext substring — encryption did not run")
+	}
+
+	dec, err := tp.ApplyIngress(enc, specs)
+	if err != nil {
+		t.Fatalf("bond ingress: %v", err)
+	}
+	if string(dec) != string(plain) {
+		t.Fatalf("round-trip mismatch:\n got:  %q\n want: %q", dec, plain)
+	}
+}
+
+// TestTransformPipeline_BondKeyRef_WrongKeyFails verifies that
+// ciphertext encrypted under one bond key fails AES-GCM authentication
+// when fed through a pipeline configured with a different bond key.
+// This is the field scenario where two kits have independent
+// `bond:<id>` keys (no import has happened yet) and must not silently
+// accept each other's traffic as plaintext.
+func TestTransformPipeline_BondKeyRef_WrongKeyFails(t *testing.T) {
+	specs := `[{"type":"encrypt","params":{"key_ref":"bond:ops"}}]`
+	payload := []byte("top-secret coded bond symbol")
+
+	tx := NewTransformPipeline()
+	tx.SetKeyResolver(stubKeyResolver{hexKey: strings.Repeat("aa", 32)})
+	enc, err := tx.ApplyEgress(payload, specs)
+	if err != nil {
+		t.Fatalf("tx egress: %v", err)
+	}
+
+	rx := NewTransformPipeline()
+	rx.SetKeyResolver(stubKeyResolver{hexKey: strings.Repeat("bb", 32)})
+	if _, err := rx.ApplyIngress(enc, specs); err == nil {
+		t.Fatal("ingress unexpectedly succeeded under wrong bond key")
+	}
+}

@@ -605,6 +605,7 @@ func (s *Server) Router() http.Handler {
 		// HeMB bond groups + observability
 		r.Get("/bond-groups", s.handleGetBondGroups)
 		r.Post("/bond-groups", s.handleCreateBondGroup)
+		r.Put("/bond-groups/{id}", s.handleUpdateBondGroup)
 		r.Delete("/bond-groups/{id}", s.handleDeleteBondGroup)
 		r.Post("/hemb/send", s.handleHeMBSend)
 		r.Get("/hemb/stats", s.handleGetHeMBStats)

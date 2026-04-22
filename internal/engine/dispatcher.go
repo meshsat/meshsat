@@ -554,17 +554,36 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				}
 				bearers := d.failover.SelectBearers(m.ForwardTo, sendFnProvider)
 				if len(bearers) > 0 {
+					// Encrypt-then-code: run the bond's own egress
+					// transforms on the payload BEFORE it enters the
+					// bonder. HeMB then codes the ciphertext across
+					// bearers; per-bearer re-encryption would break
+					// erasure reconstruction (nonce-distinct AES-GCM
+					// blobs don't compose). Transforms default to [].
+					// [MESHSAT-664]
+					bondPayload := payload
+					if bg, gErr := d.db.GetBondGroup(m.ForwardTo); gErr == nil && bg != nil &&
+						d.transforms != nil && bg.EgressTransforms != "" && bg.EgressTransforms != "[]" {
+						transformed, tErr := d.transforms.ApplyEgress(bondPayload, bg.EgressTransforms)
+						if tErr != nil {
+							log.Error().Err(tErr).Str("bond_group", m.ForwardTo).
+								Msg("hemb: bond egress transforms failed — dropping send")
+							continue
+						}
+						bondPayload = transformed
+					}
 					bdr := hemb.NewBonder(hemb.Options{
 						Bearers:   bearers,
 						DeliverFn: nil,                           // send-only path
 						EventCh:   hemb.GlobalEventBus.Channel(), // fan-out to SSE subscribers
 					})
-					if err := bdr.Send(context.Background(), payload); err != nil {
+					if err := bdr.Send(context.Background(), bondPayload); err != nil {
 						log.Error().Err(err).Str("bond_group", m.ForwardTo).
 							Msg("hemb: bonded send failed")
 					} else {
 						count++
 						log.Info().Str("bond_group", m.ForwardTo).Int("bearers", len(bearers)).
+							Int("payload_in", len(payload)).Int("payload_wire", len(bondPayload)).
 							Msg("hemb: payload sent via bond group")
 					}
 					continue
@@ -975,12 +994,26 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 		return 0, fmt.Errorf("no online bearers in bond group %s", groupID)
 	}
 
+	// Encrypt-then-code (MESHSAT-664): if the bond has egress
+	// transforms configured, run them once on the payload so HeMB
+	// codes the resulting ciphertext across all bearers. See the
+	// matching block in DispatchAccess for the rationale.
+	bondPayload := payload
+	if bg, gErr := d.db.GetBondGroup(groupID); gErr == nil && bg != nil &&
+		d.transforms != nil && bg.EgressTransforms != "" && bg.EgressTransforms != "[]" {
+		transformed, tErr := d.transforms.ApplyEgress(bondPayload, bg.EgressTransforms)
+		if tErr != nil {
+			return 0, fmt.Errorf("bond %s egress transforms: %w", groupID, tErr)
+		}
+		bondPayload = transformed
+	}
+
 	bdr := hemb.NewBonder(hemb.Options{
 		Bearers:   bearers,
 		DeliverFn: nil,
 		EventCh:   hemb.GlobalEventBus.Channel(),
 	})
-	if err := bdr.Send(context.Background(), payload); err != nil {
+	if err := bdr.Send(context.Background(), bondPayload); err != nil {
 		return 0, fmt.Errorf("bonded send failed: %w", err)
 	}
 	return len(bearers), nil

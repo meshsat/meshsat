@@ -1257,6 +1257,20 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_spectrum_transitions_band_ts ON spectrum_transitions(band, ts_ms DESC);
 	CREATE INDEX IF NOT EXISTS idx_spectrum_transitions_ts ON spectrum_transitions(ts_ms);`,
+
+	// v53: bond-group transform pipelines for HeMB encrypt-then-code
+	// [MESHSAT-664]. Bonds fan a single payload out as GF(256)-coded
+	// symbols across N heterogeneous bearers; per-bearer encryption
+	// breaks erasure reconstruction because nonce-distinct AES-GCM
+	// blobs don't compose. The correct ordering is encrypt-then-code:
+	// encrypt the payload ONCE before bonder.Send, HeMB codes the
+	// ciphertext, receiver reconstructs ciphertext from any K-of-N
+	// symbols, then decrypts once. These columns hold the transform
+	// chain keyed to the bond-group identity (`bond:<group_id>` in
+	// the keystore). Same JSON shape as interfaces.{egress,ingress}_transforms
+	// so the existing TransformPipeline + validator reuse as-is.
+	`ALTER TABLE bond_groups ADD COLUMN egress_transforms  TEXT NOT NULL DEFAULT '[]';
+	ALTER TABLE bond_groups ADD COLUMN ingress_transforms TEXT NOT NULL DEFAULT '[]';`,
 }
 
 func (db *DB) migrate() error {

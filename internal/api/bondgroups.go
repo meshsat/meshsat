@@ -124,6 +124,96 @@ func (s *Server) handleDeleteBondGroup(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleUpdateBondGroup updates a bond group's metadata and transform
+// chains. Used to toggle bond-level encryption (MESHSAT-664) by
+// setting egress_transforms / ingress_transforms — same JSON shape as
+// on interfaces. Membership edits go through the existing
+// POST/DELETE bond-member endpoints; this handler leaves members
+// untouched.
+//
+// @Summary Update HeMB bond group
+// @Description Updates label, cost budget, min reliability, and egress/ingress transform chains
+// @Tags hemb
+// @Accept json
+// @Produce json
+// @Param id path string true "Bond group ID"
+// @Param body body object true "Fields to update"
+// @Success 200 {object} database.BondGroup
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/bond-groups/{id} [put]
+func (s *Server) handleUpdateBondGroup(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := s.db.GetBondGroup(id)
+	if err != nil || existing == nil {
+		writeError(w, http.StatusNotFound, "bond group not found")
+		return
+	}
+
+	var req struct {
+		Label             *string  `json:"label,omitempty"`
+		CostBudget        *float64 `json:"cost_budget,omitempty"`
+		MinReliability    *float64 `json:"min_reliability,omitempty"`
+		EgressTransforms  *string  `json:"egress_transforms,omitempty"`
+		IngressTransforms *string  `json:"ingress_transforms,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	if req.Label != nil {
+		existing.Label = *req.Label
+	}
+	if req.CostBudget != nil {
+		existing.CostBudget = *req.CostBudget
+	}
+	if req.MinReliability != nil {
+		existing.MinReliability = *req.MinReliability
+	}
+	if req.EgressTransforms != nil {
+		existing.EgressTransforms = *req.EgressTransforms
+	}
+	if req.IngressTransforms != nil {
+		existing.IngressTransforms = *req.IngressTransforms
+	}
+
+	// Re-use the interfaces-side validator: same JSON shape + same set
+	// of legal transform types, so any error here means the operator
+	// tried to configure a transform the pipeline can't execute.
+	validate := func(kind, raw string) error {
+		if raw == "" || raw == "[]" {
+			return nil
+		}
+		iface := database.Interface{
+			ID:                existing.ID,
+			ChannelType:       "bond",
+			EgressTransforms:  raw,
+			IngressTransforms: raw,
+		}
+		_, errs := s.validateInterfaceTransforms(iface)
+		if len(errs) > 0 {
+			return fmt.Errorf("%s transforms: %v", kind, errs)
+		}
+		return nil
+	}
+	if err := validate("egress", existing.EgressTransforms); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validate("ingress", existing.IngressTransforms); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.db.UpdateBondGroup(existing); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, existing)
+}
+
 // handleHeMBSend sends a payload through a HeMB bond group.
 // @Summary Send payload via HeMB bond group
 // @Tags hemb

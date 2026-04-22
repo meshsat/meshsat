@@ -27,6 +27,7 @@ const allTabs = [
   { id: 'deadman',       label: 'Dead Man',      tier: 'engineer' },
   { id: 'tak',           label: 'TAK',           tier: 'engineer' },
   { id: 'aprs',          label: 'APRS',          tier: 'engineer' },
+  { id: 'hemb',          label: 'HeMB Bond',     tier: 'engineer' },
   { id: 'credentials',   label: 'Credentials',   tier: 'engineer' },
   { id: 'network',       label: 'Network',       tier: 'engineer' },
   { id: 'routing',       label: 'Routing',       tier: 'engineer' },
@@ -332,6 +333,119 @@ async function aprsShareLink() {
     aprsShareUrl.value = bundle?.url || ''
   } catch (e) {
     alert('APRS share link: ' + (e.message || 'failed'))
+  }
+}
+
+// --- HeMB bond-level E2E encryption (MESHSAT-664) ---
+// Encrypt-then-code: run one ApplyEgress on the payload BEFORE the
+// HeMB bonder, so coded symbols carry ciphertext across all bearers
+// (mesh_0, ax25_0, tcp_0, SMS, Iridium, …). Same transform chain
+// shape as per-interface encryption, keyed to `bond:<group_id>`.
+const bondGroups = computed(() => store.bondGroups || [])
+const selectedBondId = ref('')
+const bondSaving = ref(false)
+const bondKeyFingerprint = ref('')
+const bondShareUrl = ref('')
+
+const selectedBond = computed(() =>
+  bondGroups.value.find(g => g.id === selectedBondId.value) || null)
+
+const bondEncryptEnabled = computed(() => {
+  const t = selectedBond.value?.egress_transforms || '[]'
+  return t.includes('"encrypt"')
+})
+
+async function refreshBondKey() {
+  if (!selectedBondId.value) { bondKeyFingerprint.value = ''; return }
+  try {
+    const data = await api.get('/keys')
+    const k = (data?.keys || []).find(x => x.channel_type === 'bond' && x.address === selectedBondId.value)
+    bondKeyFingerprint.value = k?.key_preview || ''
+  } catch { bondKeyFingerprint.value = '' }
+}
+
+watch(selectedBondId, () => { bondShareUrl.value = ''; refreshBondKey() })
+
+async function loadBondGroups() {
+  await store.fetchBondGroups()
+  if (!selectedBondId.value && bondGroups.value.length > 0) {
+    selectedBondId.value = bondGroups.value[0].id
+    refreshBondKey()
+  }
+}
+
+async function bondEnableEncryption() {
+  if (!selectedBondId.value) return
+  bondSaving.value = true
+  try {
+    // Generate/retrieve the bond key first so the UI shows a fingerprint
+    // immediately and the import URL is ready to share with peers.
+    const bundle = await api.post('/keys/bundle', {
+      entries: [{ channel_type: 'bond', address: selectedBondId.value }],
+    })
+    bondShareUrl.value = bundle?.url || ''
+    const transforms = JSON.stringify([
+      { type: 'smaz2' },
+      { type: 'encrypt', params: { key_ref: `bond:${selectedBondId.value}` } },
+      { type: 'base64' },
+    ])
+    await api.put(`/bond-groups/${selectedBondId.value}`, {
+      egress_transforms: transforms,
+      ingress_transforms: transforms,
+    })
+    await store.fetchBondGroups()
+    await refreshBondKey()
+  } catch (e) {
+    alert('HeMB encryption: ' + (e.message || 'save failed'))
+  } finally {
+    bondSaving.value = false
+  }
+}
+
+async function bondDisableEncryption() {
+  if (!selectedBondId.value) return
+  bondSaving.value = true
+  try {
+    await api.put(`/bond-groups/${selectedBondId.value}`, {
+      egress_transforms: '[]',
+      ingress_transforms: '[]',
+    })
+    await store.fetchBondGroups()
+    bondShareUrl.value = ''
+  } catch (e) {
+    alert('HeMB encryption: ' + (e.message || 'save failed'))
+  } finally {
+    bondSaving.value = false
+  }
+}
+
+async function bondRotateKey() {
+  if (!selectedBondId.value) return
+  if (!confirm('Rotate the bond shared key? Peers must re-import the new key to keep decrypting.')) return
+  bondSaving.value = true
+  try {
+    await api.post('/keys/rotate', {
+      channel_type: 'bond',
+      address: selectedBondId.value,
+      grace_period_hours: 24,
+    })
+    await refreshBondKey()
+  } catch (e) {
+    alert('HeMB rotate: ' + (e.message || 'failed'))
+  } finally {
+    bondSaving.value = false
+  }
+}
+
+async function bondShareLink() {
+  if (!selectedBondId.value) return
+  try {
+    const bundle = await api.post('/keys/bundle', {
+      entries: [{ channel_type: 'bond', address: selectedBondId.value }],
+    })
+    bondShareUrl.value = bundle?.url || ''
+  } catch (e) {
+    alert('HeMB share link: ' + (e.message || 'failed'))
   }
 }
 
@@ -1297,6 +1411,7 @@ onMounted(async () => {
   store.fetchRoutingInterfaces()
   store.fetchInterfaces()
   refreshAPRSKey()
+  loadBondGroups()
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
   fetchZigBeeStatus(); fetchZigBeeDevices(); fetchPermitJoinStatus()
   store.fetchRangeTests()
@@ -2491,6 +2606,112 @@ onUnmounted(() => {
           Ingress is mixed-mode regardless: plaintext APRS frames from nearby stations keep decoding and appear in the Nodes view as usual.
           Advanced per-rule transforms can still be configured on <span class="font-mono">/interfaces</span>.
         </p>
+      </div>
+    </div>
+
+    <!-- HeMB bond-level encryption -->
+    <div v-if="activeTab === 'hemb'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-4">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-200 mb-1">HeMB bond-level encryption</h3>
+          <p class="text-xs text-gray-500">
+            Encrypt the payload <span class="italic">once</span> before HeMB codes it across bearers
+            (mesh, AX.25, TCP, SMS, Iridium, …). Every coded symbol on every bearer carries
+            ciphertext of the same payload, so erasure reconstruction on the peer works unchanged —
+            decrypt happens once after the bonder finishes reassembling.
+          </p>
+        </div>
+
+        <div v-if="bondGroups.length === 0" class="rounded border border-gray-700 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+          No bond groups configured yet. Create one via <span class="font-mono">POST /api/bond-groups</span>, or the Bridge page, before enabling encryption.
+        </div>
+
+        <template v-else>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500">Bond group</label>
+            <select v-model="selectedBondId"
+                    class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <option v-for="g in bondGroups" :key="g.id" :value="g.id">
+                {{ g.id }} — {{ g.label || '(unlabelled)' }}
+              </option>
+            </select>
+          </div>
+
+          <div :class="[
+                'rounded border px-3 py-2 text-xs space-y-1',
+                bondEncryptEnabled
+                  ? 'border-red-600/70 bg-red-900/20 text-red-200'
+                  : 'border-amber-600/50 bg-amber-900/15 text-amber-200',
+               ]">
+            <div class="font-semibold">
+              Regulatory notice{{ bondEncryptEnabled ? ' — encryption ACTIVE' : '' }}
+            </div>
+            <div>
+              Bond bearers may include amateur-band transports (APRS/AX.25). Encrypted content is commonly
+              <span class="font-bold">prohibited on amateur-radio bands</span>. Choose bearers whose
+              allocations permit encryption (ISM / PMR / SRD / commercial) before enabling this.
+            </div>
+            <div>
+              All peers that need to decrypt must import the same <span class="font-mono">bond:{{ selectedBondId }}</span> key.
+              Use "Share link" below and <span class="font-mono">POST /api/keys/import</span> on each peer.
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between rounded bg-gray-900 border border-gray-700 px-3 py-2">
+            <div>
+              <div class="text-sm font-medium text-gray-200">Bond encryption</div>
+              <div class="text-xs text-gray-500">
+                Status:
+                <span v-if="bondEncryptEnabled" class="text-emerald-400 font-semibold">enabled</span>
+                <span v-else class="text-gray-500">disabled (plaintext symbols on the air)</span>
+              </div>
+            </div>
+            <button v-if="!bondEncryptEnabled"
+                    @click="bondEnableEncryption"
+                    :disabled="bondSaving || !selectedBondId"
+                    class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-40">
+              {{ bondSaving ? 'Enabling…' : 'Enable encryption' }}
+            </button>
+            <button v-else
+                    @click="bondDisableEncryption"
+                    :disabled="bondSaving"
+                    class="px-4 py-2 rounded bg-gray-700 text-gray-200 text-sm hover:bg-gray-600 disabled:opacity-40">
+              {{ bondSaving ? 'Saving…' : 'Disable' }}
+            </button>
+          </div>
+
+          <div v-if="bondEncryptEnabled" class="space-y-2 rounded bg-gray-900 border border-gray-700 px-3 py-2">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-xs text-gray-500">Shared key fingerprint (<span class="font-mono">bond:{{ selectedBondId }}</span>)</div>
+                <div class="text-sm font-mono text-gray-200">
+                  {{ bondKeyFingerprint || '(loading…)' }}
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <button @click="bondShareLink" :disabled="bondSaving"
+                        class="px-3 py-1.5 rounded bg-gray-700 text-gray-200 text-xs hover:bg-gray-600 disabled:opacity-40">
+                  Share link
+                </button>
+                <button @click="bondRotateKey" :disabled="bondSaving"
+                        class="px-3 py-1.5 rounded bg-gray-700 text-gray-200 text-xs hover:bg-gray-600 disabled:opacity-40">
+                  Rotate key
+                </button>
+              </div>
+            </div>
+            <div v-if="bondShareUrl" class="pt-2 border-t border-gray-700">
+              <div class="text-xs text-gray-500 mb-1">Share with peer kits — paste into their <span class="font-mono">POST /api/keys/import {url}</span>:</div>
+              <input :value="bondShareUrl" readonly
+                     class="w-full px-2 py-1.5 rounded bg-gray-950 border border-gray-700 text-xs text-gray-300 font-mono" />
+            </div>
+          </div>
+
+          <p class="text-xs text-gray-500">
+            Transforms apply ONCE at the bond layer (encrypt-then-code). Per-bearer <span class="font-mono">egress_transforms</span>
+            on member interfaces are not consulted for bond traffic. A restart picks up changes on the
+            receive side — the HeMB reassembly bonder reads the bond's ingress transforms at startup.
+          </p>
+        </template>
       </div>
     </div>
 

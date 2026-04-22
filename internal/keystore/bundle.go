@@ -23,10 +23,11 @@ const (
 )
 
 // Channel type enum — matches Android ConversationKey types.
-// 0x03 is APRS (AX.25); it was a reserved gap in the original 0x00-0x06
-// enumeration and keeps new bundles wire-compatible with older readers
-// that don't recognise the value (they surface it as "unknown" and
-// skip the entry rather than failing the whole bundle).
+// 0x03 is APRS (AX.25), 0x07 is HeMB bond-group — both fill reserved
+// gaps in the original 0x00-0x06 enumeration and keep new bundles
+// wire-compatible with older readers that don't recognise the values
+// (they surface as "unknown" and skip the entry rather than failing
+// the whole bundle).
 const (
 	ChannelSMS     byte = 0x00
 	ChannelMesh    byte = 0x01
@@ -35,6 +36,7 @@ const (
 	ChannelZigBee  byte = 0x04
 	ChannelMQTT    byte = 0x05
 	ChannelWebhook byte = 0x06
+	ChannelBond    byte = 0x07
 )
 
 // ChannelTypeToByte maps string channel types to bundle enum values.
@@ -54,6 +56,8 @@ func ChannelTypeToByte(ct string) byte {
 		return ChannelMQTT
 	case "webhook":
 		return ChannelWebhook
+	case "bond":
+		return ChannelBond
 	default:
 		return 0xFF
 	}
@@ -76,6 +80,8 @@ func ByteToChannelType(b byte) string {
 		return "mqtt"
 	case ChannelWebhook:
 		return "webhook"
+	case ChannelBond:
+		return "bond"
 	default:
 		return "unknown"
 	}
