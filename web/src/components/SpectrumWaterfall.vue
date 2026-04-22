@@ -310,33 +310,30 @@ function drawSpectrum(bandName) {
 // spectrogram look of desktop SDR tools (SDR#, gqrx, CubicSDR).
 const WATERFALL_COLS = 512
 
-// Palette range is band-level, NOT per-row. Per-row scaling
-// (previous design, MESHSAT-649) made burst rows compress their own
-// noise floor to the palette bottom while adjacent clean rows held
-// a wider-span palette, visible as dark horizontal stripes every
-// time an APRS/LoRa transmitter keyed up. Band-level scaling keeps
-// the noise-floor color consistent across rows; bursts saturate to
-// the hot end but remain clearly visible as hot spots. [MESHSAT-657]
+// Palette range is band-level, NOT per-row. Per-row scaling made
+// burst rows compress their own noise floor to the palette bottom
+// while clean rows held a wider palette, visible as dark horizontal
+// stripes every time an APRS/LoRa transmitter keyed up. Band-level
+// scaling keeps the noise-floor color consistent across rows; bursts
+// and narrowband carriers show as hot spots at consistent colors.
+// [MESHSAT-657]
 //
-// Prefer band.baselineMad (scan-to-scan MAD, robust to transient
-// bursts during calibration) over band.baselineStd (pumped up to
-// several dB on kits that calibrated while real transmitters were
-// active — observed on parallax aprs_144 = 4.69 dB std vs 0.05 dB
-// mad). A 0.5 dB minimum scale prevents a palette collapse on
-// truly-quiet bands post MESHSAT-649. 15 dB ceiling headroom lets
-// a burst clip to red without stretching the noise floor palette.
+// Use FIXED dB offsets from baselineMean — not MAD-scaled. Post
+// MESHSAT-649 the scan-to-scan MAD is sub-0.1 dB on quiet bands,
+// collapsing a MAD-driven palette to a ~8 dB window that real LoRa
+// / APRS emissions (+10 to +20 dB above noise) saturate through.
+// Measured on parallax 2026-04-22: lora_868 bursts reach +14 dB
+// above median; APRS transmitters often +20 dB. 25 dB of ceiling
+// headroom covers those while keeping the noise floor in the cool
+// end of the palette.
 function rowPaletteRange(row, band) {
-  const mad = band.baselineMad || 0
-  const std = band.baselineStd || 0
   const mean = band.baselineMean
   const hasBaseline = Number.isFinite(mean) && mean !== 0
 
   if (hasBaseline) {
-    const robust = mad > 0 ? 1.4826 * mad : std
-    const scale = Math.max(robust, 0.5)
     return {
-      floor: mean - 2 * scale,
-      ceil:  mean + 15 * scale,
+      floor: mean - 3,   // just below scan-to-scan noise variation
+      ceil:  mean + 25,  // covers LoRa / APRS / LTE pilot signals
     }
   }
 
@@ -350,13 +347,9 @@ function rowPaletteRange(row, band) {
 
   const sorted = finite.slice().sort((a, b) => a - b)
   const median = sorted[Math.floor(sorted.length / 2)]
-  const absDev = sorted.map(p => Math.abs(p - median)).sort((a, b) => a - b)
-  const mad2 = absDev[Math.floor(absDev.length / 2)]
-  const scale = Math.max(1.4826 * mad2, 0.5)
-
   return {
-    floor: median - 2 * scale,
-    ceil:  median + 15 * scale,
+    floor: median - 3,
+    ceil:  median + 25,
   }
 }
 
