@@ -469,6 +469,10 @@ func (s *flakyStore) LoadScansByMinutes(_ context.Context, _ string, _ int) ([]S
 	return nil, nil
 }
 
+func (s *flakyStore) LoadLatestScans(_ context.Context, _ string, _ int) ([]ScanRow, error) {
+	return nil, nil
+}
+
 func (s *flakyStore) LoadScansRange(_ context.Context, _ string, _, _ time.Time, _ int) ([]ScanRow, error) {
 	return nil, nil
 }

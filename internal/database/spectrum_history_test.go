@@ -81,6 +81,68 @@ func TestLoadScansByMinutesFiltersAge(t *testing.T) {
 	}
 }
 
+// TestLoadLatestScansIgnoresAge is the regression for MESHSAT-654:
+// the waterfall seed path asks for the freshest N rows regardless of
+// age, so a kit that was off for an hour still paints data on return.
+func TestLoadLatestScansIgnoresAge(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	// Two rows well outside any reasonable time window — LoadLatestScans
+	// must still return them. If we used LoadScansByMinutes(5) we'd get 0.
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(db.SaveScan(ctx, spectrum.ScanRow{TS: now.Add(-90 * time.Minute), Band: "x", State: "clear", Powers: []float64{-50}}))
+	must(db.SaveScan(ctx, spectrum.ScanRow{TS: now.Add(-95 * time.Minute), Band: "x", State: "clear", Powers: []float64{-51}}))
+
+	// Sanity: time-windowed loader returns nothing for this gap.
+	stale, err := db.LoadScansByMinutes(ctx, "x", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("precondition: LoadScansByMinutes(5) should return 0, got %d", len(stale))
+	}
+
+	rows, err := db.LoadLatestScans(ctx, "x", 100)
+	if err != nil {
+		t.Fatalf("load latest: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows (age-agnostic), got %d", len(rows))
+	}
+	// Newest-first — -90m row should come before -95m row.
+	if rows[0].TS.Before(rows[1].TS) {
+		t.Fatalf("ordering wrong: %v before %v", rows[0].TS, rows[1].TS)
+	}
+}
+
+func TestLoadLatestScansHonorsLimit(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		if err := db.SaveScan(ctx, spectrum.ScanRow{
+			TS: now.Add(time.Duration(-i) * time.Second), Band: "b", State: "clear", Powers: []float64{-50},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.LoadLatestScans(ctx, "b", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("want 4 rows (limit), got %d", len(rows))
+	}
+}
+
 func TestLoadScansRangeCapsMaxRows(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

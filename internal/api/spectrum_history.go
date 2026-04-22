@@ -17,9 +17,14 @@ import (
 
 // handleGetSpectrumHistory returns stored scan samples for one band.
 //
-// Two forms:
-//   - `?band=<name>&minutes=<n>` — last N minutes, used by the main
-//     page to seed its 5-minute waterfall ring on load.
+// Three forms:
+//   - `?band=<name>&limit=<n>` — the N most recent rows regardless of
+//     age. Used by the waterfall seed path so a kit that's been off
+//     for an hour still paints the last persisted data (MESHSAT-654).
+//   - `?band=<name>&minutes=<n>` — last N minutes. Retained for any
+//     caller that wants a strict time window; new code should prefer
+//     limit= so a gap longer than the window doesn't silently return
+//     zero rows.
 //   - `?band=<name>&from=<ts_ms>&to=<ts_ms>&max_rows=<n>` — explicit
 //     time range, used by the detail view. Server caps rows at 5000
 //     (and defaults to 2000) so an operator asking for a 7-day window
@@ -30,10 +35,11 @@ import (
 // @Description Replay persisted scan rows — seeds the waterfall on page load and powers the detail view
 // @Tags spectrum
 // @Param band query string true "Band name (lora_868, aprs_144, gps_l1, lte_b20_dl, lte_b8_dl)"
-// @Param minutes query int false "Last N minutes (mutually exclusive with from/to)"
+// @Param limit query int false "Most recent N rows regardless of age (preferred seed form; max 5000)"
+// @Param minutes query int false "Last N minutes (mutually exclusive with limit/from/to)"
 // @Param from query int false "Range start, unix milliseconds"
 // @Param to query int false "Range end, unix milliseconds"
-// @Param max_rows query int false "Row cap (default 2000, max 5000)"
+// @Param max_rows query int false "Row cap for from/to range (default 2000, max 5000)"
 // @Success 200 {object} map[string]interface{}
 // @Router /api/spectrum/history [get]
 func (s *Server) handleGetSpectrumHistory(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +56,33 @@ func (s *Server) handleGetSpectrumHistory(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 	q := r.URL.Query()
 
-	// minutes= form — fast path for the page-load prefill
+	// limit= form — age-agnostic "give me the freshest N rows". Preferred
+	// for the page-load seed because it survives any gap (restart,
+	// reboot, kit powered off overnight) without returning an empty
+	// slice that looks identical to "no hardware". [MESHSAT-654]
+	if limStr := q.Get("limit"); limStr != "" {
+		lim, err := strconv.Atoi(limStr)
+		if err != nil || lim <= 0 {
+			http.Error(w, "invalid limit value", http.StatusBadRequest)
+			return
+		}
+		if lim > 5000 {
+			lim = 5000
+		}
+		rows, err := s.db.LoadLatestScans(ctx, band, lim)
+		if err != nil {
+			http.Error(w, "load history: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"band": band,
+			"rows": rows,
+		})
+		return
+	}
+
+	// minutes= form — strict time window. Kept for detail-view callers
+	// and any external consumers that rely on it.
 	if minStr := q.Get("minutes"); minStr != "" {
 		mins, err := strconv.Atoi(minStr)
 		if err != nil || mins <= 0 {
@@ -78,7 +110,7 @@ func (s *Server) handleGetSpectrumHistory(w http.ResponseWriter, r *http.Request
 	// from/to range form — detail view
 	from, to, ok := parseRangeMs(q.Get("from"), q.Get("to"))
 	if !ok {
-		http.Error(w, "minutes= OR from= and to= query params required (unix ms)", http.StatusBadRequest)
+		http.Error(w, "limit= OR minutes= OR from= and to= query params required (unix ms)", http.StatusBadRequest)
 		return
 	}
 	maxRows := 2000

@@ -82,6 +82,25 @@ func (db *DB) LoadScansByMinutes(ctx context.Context, band string, minutes int) 
 	`, band, cutoff)
 }
 
+// LoadLatestScans returns the N most recent rows for a band regardless
+// of age. Used by the waterfall seed path so a kit that's been off for
+// an hour still paints the last persisted data instead of an empty
+// panel — operators see the gap honestly rather than an empty UI that
+// looks like "no hardware". Index-seek on (band, ts_ms DESC) makes
+// this O(limit) even when the table holds millions of rows. [MESHSAT-654]
+func (db *DB) LoadLatestScans(ctx context.Context, band string, limit int) ([]spectrum.ScanRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	return db.queryScans(ctx, `
+		SELECT band, ts_ms, state, avg_db, max_db, baseline_mean, baseline_std, powers
+		FROM spectrum_scans
+		WHERE band = ?
+		ORDER BY ts_ms DESC
+		LIMIT ?
+	`, band, limit)
+}
+
 // LoadScansRange covers the detail view. maxRows caps the result; if
 // the real row count exceeds the cap, the caller is expected to
 // downsample the response or tighten the range. Cheap to discover

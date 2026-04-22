@@ -197,15 +197,18 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     return bands.value[evt.band]
   }
 
-  // seedHistory replays the last `minutes` of persisted scans into the
-  // rows ring so the waterfall paints immediately on page load instead
-  // of sitting black for 30+ seconds waiting for fresh SSE scans
-  // (MESHSAT-650). Rows returned newest-first; we dedupe against any
+  // seedHistory replays the most recent persisted scans into the rows
+  // ring so the waterfall paints immediately on page load instead of
+  // sitting black for 30+ seconds waiting for fresh SSE scans
+  // (MESHSAT-650). Uses ?limit= not ?minutes= so a kit that was off
+  // for an hour still paints the last recorded data — an honest gap
+  // is better than an empty panel that looks like "no hardware"
+  // (MESHSAT-654). Rows returned newest-first; we dedupe against any
   // rows the SSE stream may have delivered first (if the store has
   // raced through a scan tick before the history fetch resolves).
-  async function seedHistory(bandName, minutes = 5) {
+  async function seedHistory(bandName, limit = WATERFALL_ROWS) {
     try {
-      const url = `/api/spectrum/history?band=${encodeURIComponent(bandName)}&minutes=${minutes}`
+      const url = `/api/spectrum/history?band=${encodeURIComponent(bandName)}&limit=${limit}`
       const resp = await fetch(url, { credentials: 'same-origin' })
       if (!resp.ok) return
       const data = await resp.json()
@@ -448,12 +451,12 @@ export const useSpectrumStore = defineStore('spectrum', () => {
     // a newly plugged dongle or a wedged scanner without a page reload.
     //
     // seedFromStatus resolves the band list; once it does, fire one
-    // seedHistory per band so the waterfall panels show the last 5 min
-    // immediately rather than sitting black until SSE delivers a few
-    // scans. [MESHSAT-650]
+    // seedHistory per band so the waterfall panels fill immediately
+    // with the freshest persisted rows rather than sitting black until
+    // SSE delivers a few scans. [MESHSAT-650/654]
     seedFromStatus().then(() => {
       for (const name of Object.keys(bands.value)) {
-        seedHistory(name, 5)
+        seedHistory(name)
       }
     })
     refreshHardware()

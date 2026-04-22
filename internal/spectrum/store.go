@@ -44,6 +44,7 @@ type HistoryStore interface {
 	SaveScan(ctx context.Context, row ScanRow) error
 	SaveTransition(ctx context.Context, row TransitionRow) error
 	LoadScansByMinutes(ctx context.Context, band string, minutes int) ([]ScanRow, error)
+	LoadLatestScans(ctx context.Context, band string, limit int) ([]ScanRow, error)
 	LoadScansRange(ctx context.Context, band string, from, to time.Time, maxRows int) ([]ScanRow, error)
 	LoadTransitionsRange(ctx context.Context, band string, from, to time.Time) ([]TransitionRow, error)
 	TrimSpectrumHistory(ctx context.Context, cutoff time.Time) (int64, error)
