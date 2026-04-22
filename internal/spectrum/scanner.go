@@ -224,6 +224,21 @@ func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize i
 // still dominated by the RTL-SDR Blog V4 tuner init (~5 s cold) so the
 // end-to-end cost bump is marginal and well inside the 30 s timeout.
 // `-q` keeps stderr quiet after the first run.
+//
+// Edge repair (MESHSAT-652): rtl_power_fftw applies a Hann FFT window
+// that rolls off sensitivity by 2-3 dB at the first + last ~2 output
+// bins of every scan. Before MESHSAT-649 this was hidden by the ~10 dB
+// per-bin noise of -n 1; after -n 1000 drove per-bin RMS sub-dB, the
+// rolloff is 10× the noise floor and dominates the waterfall palette
+// on narrow bands (LoRa 24 bins, APRS 16 bins, GPS 80 bins) as dark-
+// burgundy stripes at both edges — the edge bins clip below turbo(0).
+// Widen the request by `cropPad` bins on each side, then drop them
+// from the returned slice. The caller sees exactly the band + bin
+// width it asked for, but only from the flat interior of the tuner
+// response. Bands that already do frequency hopping (LTE B20/B8, 3
+// MHz > 2.4 MHz RTL-SDR bandwidth) don't show the artifact because
+// the hops stitch over their own edges, but this path is hit for
+// every band so they all benefit consistently.
 func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
 	span := freqHigh - freqLow
 	if span <= 0 || binSize <= 0 {
@@ -233,13 +248,22 @@ func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSi
 	if bins < 2 {
 		bins = 2
 	}
-	if bins%2 != 0 {
-		bins++ // rpfftw requires even bins
+
+	const cropPad = 2
+	widenedLow := freqLow - cropPad*binSize
+	widenedHigh := freqHigh + cropPad*binSize
+	effBins := (widenedHigh - widenedLow) / binSize
+	if effBins%2 != 0 {
+		// rpfftw requires even bins — bump the upper edge so we keep
+		// the extra bin in the discarded right-side gutter.
+		effBins++
+		widenedHigh = widenedLow + effBins*binSize
 	}
-	freqArg := fmt.Sprintf("%d:%d", freqLow, freqHigh)
+
+	freqArg := fmt.Sprintf("%d:%d", widenedLow, widenedHigh)
 	cmd := exec.CommandContext(ctx, s.binary,
 		"-f", freqArg,
-		"-b", strconv.Itoa(bins),
+		"-b", strconv.Itoa(effBins),
 		"-n", "1000",
 		"-q",
 	)
@@ -248,7 +272,21 @@ func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSi
 	if err != nil {
 		return nil, fmt.Errorf("rtl_power_fftw: %w", err)
 	}
-	return parseFFTWOutput(string(out))
+	powers, err := parseFFTWOutput(string(out))
+	if err != nil {
+		return nil, err
+	}
+	// Return exactly the requested interior band. Guard against short
+	// reads (rare — rpfftw almost always returns effBins samples — but
+	// we'd rather give the caller what's available than a panic).
+	end := cropPad + bins
+	if end > len(powers) {
+		end = len(powers)
+	}
+	if cropPad < len(powers) {
+		powers = powers[cropPad:end]
+	}
+	return powers, nil
 }
 
 // scanLegacy is the old rtl_power path, retained for fallback if only

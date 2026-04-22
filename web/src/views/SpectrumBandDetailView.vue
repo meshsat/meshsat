@@ -243,11 +243,20 @@ function drawSpectrumOverlay() {
   const powers = top?.powers || top?.Powers
   if (!powers?.length) return
 
-  const mn = Math.min(...powers)
-  const mx = Math.max(...powers)
-  const pad = (mx - mn) * 0.25 + 1
-  const yTop = mx + pad
-  const yBot = mn - pad
+  // Per-row min/max with a minimum 4 dB visible span — prevents the
+  // trace from looking like a flat dead line when the band is locked-
+  // carrier quiet (powers vary by <1 dB). Matches the main-page panel
+  // logic in SpectrumWaterfall.vue::spectrumYRange. [MESHSAT-651]
+  const mnRaw = Math.min(...powers)
+  const mxRaw = Math.max(...powers)
+  const dataSpan = mxRaw - mnRaw
+  const MIN_SPAN_DB = 4
+  const span = Math.max(dataSpan, MIN_SPAN_DB)
+  const pad = Math.max(span * 0.3, 1.5)
+  const midPoint = (mnRaw + mxRaw) / 2
+  const halfSpan = span / 2
+  const yTop = midPoint + halfSpan + pad
+  const yBot = midPoint - halfSpan - pad
   const yRange = yTop - yBot
   const yAt = (p) => ((yTop - p) / yRange) * H
 

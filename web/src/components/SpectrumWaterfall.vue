@@ -71,6 +71,47 @@ function normPower(power, baseMean, baseStd) {
   return (power - floor) / (ceil - floor)
 }
 
+// Y-axis range for the spectrum trace plot (MESHSAT-651). Post-649 the
+// scan-averaged baselineStd can drop below 0.02 dB on locked-carrier
+// bands (GPS L1, LTE B20/B8); `baseline ± σ*multiplier` then collapses
+// the plot to a sub-decibel window and real peaks +1–2 dB above
+// baseline get drawn off-canvas — only the gradient fill reaches the
+// visible area, so the trace saturates to solid orange-red. Using the
+// row's own min/max + padding with a minimum visible span of 4 dB
+// keeps the trace in view at all signal levels while still zooming
+// in when the band is genuinely quiet.
+//
+// Returns { yTop, yBot } in dBm. Callers compute pixel positions
+// themselves — this is purely the range math.
+function spectrumYRange(powers) {
+  let mn = Infinity, mx = -Infinity
+  if (powers?.length) {
+    for (const p of powers) {
+      if (!isFinite(p)) continue
+      if (p < mn) mn = p
+      if (p > mx) mx = p
+    }
+  }
+  if (!isFinite(mn) || !isFinite(mx) || mn === mx) {
+    // No data yet or flat line — sensible defaults so the axes render
+    // something instead of a NaN range.
+    mn = -70; mx = -50
+  }
+  const dataSpan = mx - mn
+  const MIN_SPAN_DB = 4 // always keep at least 4 dB vertical headroom
+  const span = Math.max(dataSpan, MIN_SPAN_DB)
+  // Padding: 30 % of the visible span, so peaks don't touch the top
+  // and the noise floor doesn't hug the bottom.
+  const pad = Math.max(span * 0.3, 1.5)
+  // Re-centre on the midpoint if we had to inflate the span to the
+  // minimum, so a flat quiet band sits symmetrically in the plot.
+  const midPoint = (mn + mx) / 2
+  const halfSpan = span / 2
+  const yTop = midPoint + halfSpan + pad
+  const yBot = midPoint - halfSpan - pad
+  return { yTop, yBot }
+}
+
 // ---- Per-panel rendering ----
 
 // Each panel uses 3 canvases layered visually:
@@ -151,28 +192,9 @@ function drawSpectrum(bandName) {
   const plotT = 4 * dpr
   const plotH = H - plotT - 2 * dpr
 
-  // Y-axis range. After calibration we lock to baseline ± σ margins
-  // so the trace sits centred at rest and rides upward during
-  // jamming. During calibration (std=0) we derive the range from
-  // the scan's own min/max + padding so the trace still renders
-  // meaningfully — otherwise yRange collapses to ~18 dB around an
-  // uninformed centre and the trace clips to top/bottom.
-  let yTop, yBot
-  if (band.baselineStd > 0) {
-    yTop = band.baselineMean + 12 * band.baselineStd
-    yBot = band.baselineMean - 6 * band.baselineStd
-  } else {
-    let mn = Infinity, mx = -Infinity
-    for (const p of top.powers) {
-      if (!isFinite(p)) continue
-      if (p < mn) mn = p
-      if (p > mx) mx = p
-    }
-    if (!isFinite(mn) || mn === mx) { mn = -80; mx = -10 }
-    const pad = (mx - mn) * 0.4
-    yTop = mx + pad
-    yBot = mn - pad
-  }
+  // Y-axis range from the current row's own dB statistics — see
+  // spectrumYRange() for why we dropped the baselineStd-derived range.
+  const { yTop, yBot } = spectrumYRange(top.powers)
   const yRange = yTop - yBot
   const yAt = (dB) => plotT + ((yTop - dB) / yRange) * plotH
 
@@ -425,10 +447,17 @@ function calibrationInfo(name) {
 function axesFor(bandName) {
   const b = store.bands[bandName]
   if (!b) return null
-  const yTop = b.baselineMean + 12 * (b.baselineStd || 1)
-  const yBot = b.baselineMean - 6 * (b.baselineStd || 1)
-  // dBm labels every 5 dB, snapped to round numbers
-  const stepDB = 5
+  // Mirror drawSpectrum's Y-axis: row min/max + padding + 4 dB floor
+  // (MESHSAT-651). Keeps the SVG tick labels aligned with what the
+  // canvas trace actually draws — the two used to drift apart on
+  // locked-carrier bands where baselineStd collapsed the range.
+  const topRow = b.rows?.[0]
+  const { yTop, yBot } = spectrumYRange(topRow?.powers)
+  // dBm labels every 5 dB, snapped to round numbers. If the effective
+  // span is small (flat quiet band), widen the tick cadence to 1 dB
+  // so we still get at least 3 labels — a 4 dB plot at 5 dB/tick would
+  // show zero or one label.
+  const stepDB = (yTop - yBot) <= 10 ? 1 : 5
   const first = Math.ceil(yBot / stepDB) * stepDB
   const dbLabels = []
   for (let dB = first; dB <= yTop; dB += stepDB) {
