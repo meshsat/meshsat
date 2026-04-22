@@ -572,6 +572,26 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 						}
 						bondPayload = transformed
 					}
+					// HeMB's RLNC segmenter zero-pads the payload up to
+					// K×symSize, and the reassembler returns that full
+					// padded buffer — not the original length. Without
+					// a length hint the receiver can't distinguish
+					// meaningful bytes from trailing zero padding, and
+					// ApplyIngress's base64 stage (or any byte-precise
+					// transform) rejects the garbage tail. Prepend a
+					// 2-byte big-endian length header so the peer can
+					// trim to exactly what we sent. [MESHSAT-672]
+					if len(bondPayload) > 0xFFFF {
+						log.Error().Int("bytes", len(bondPayload)).Str("bond_group", m.ForwardTo).
+							Msg("hemb: bond payload exceeds 65535 bytes — dropping")
+						continue
+					}
+					framed := make([]byte, 2+len(bondPayload))
+					framed[0] = byte(len(bondPayload) >> 8)
+					framed[1] = byte(len(bondPayload) & 0xFF)
+					copy(framed[2:], bondPayload)
+					bondPayload = framed
+
 					bdr := hemb.NewBonder(hemb.Options{
 						Bearers:   bearers,
 						DeliverFn: nil,                           // send-only path
@@ -1025,6 +1045,16 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 		}
 		bondPayload = transformed
 	}
+	// 2-byte BE length prefix so the peer can strip HeMB's
+	// zero-pad after reassembly. [MESHSAT-672]
+	if len(bondPayload) > 0xFFFF {
+		return 0, fmt.Errorf("bond %s payload exceeds 65535 bytes", groupID)
+	}
+	framed := make([]byte, 2+len(bondPayload))
+	framed[0] = byte(len(bondPayload) >> 8)
+	framed[1] = byte(len(bondPayload) & 0xFF)
+	copy(framed[2:], bondPayload)
+	bondPayload = framed
 
 	bdr := hemb.NewBonder(hemb.Options{
 		Bearers:   bearers,

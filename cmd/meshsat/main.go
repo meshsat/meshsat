@@ -1637,22 +1637,39 @@ func main() {
 				DeliverFn: func(payload []byte) {
 					log.Info().Int("bytes", len(payload)).Msg("hemb: reassembled payload delivered")
 
+					// Strip the 2-byte BE length prefix the sender
+					// prepended so we can trim off HeMB's zero-pad
+					// (RLNC segmenter pads to K×symSize and the
+					// reassembler returns the full padded buffer).
+					// [MESHSAT-672]
+					trimmed := payload
+					if len(payload) >= 2 {
+						declaredLen := int(payload[0])<<8 | int(payload[1])
+						if declaredLen <= len(payload)-2 {
+							trimmed = payload[2 : 2+declaredLen]
+						} else {
+							log.Warn().Int("declared", declaredLen).Int("bytes", len(payload)).
+								Msg("hemb: reassembled length prefix exceeds buffer — dropping")
+							return
+						}
+					}
+
 					// Bond-level ingress: decrypt BEFORE dispatch.
-					decoded := payload
+					decoded := trimmed
 					if bondIngressTransforms != "" && dispatcher != nil && dispatcher.TransformPipeline() != nil {
 						if tErr := (func() error {
-							res, err := dispatcher.TransformPipeline().ApplyIngress(payload, bondIngressTransforms)
+							res, err := dispatcher.TransformPipeline().ApplyIngress(trimmed, bondIngressTransforms)
 							if err != nil {
 								return err
 							}
 							decoded = res
 							return nil
 						})(); tErr != nil {
-							log.Warn().Err(tErr).Int("bytes", len(payload)).
+							log.Warn().Err(tErr).Int("bytes", len(trimmed)).
 								Msg("hemb: bond ingress transforms failed — dropping")
 							return
 						}
-						log.Debug().Int("raw", len(payload)).Int("decoded", len(decoded)).
+						log.Debug().Int("raw", len(trimmed)).Int("decoded", len(decoded)).
 							Msg("hemb: bond ingress transforms applied")
 					}
 
