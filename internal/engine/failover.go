@@ -167,10 +167,10 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 		// `internal/hemb/bearer_build.go::defaultBearerMTU` and
 		// leaves headroom for the hidden per-packet bytes Meshtastic
 		// adds. [MESHSAT-672]
-		mtu := 230 // mesh default — stay under LoRa SF7 air limit
+		mtu := 100 // TEMP DIAG — confirm size is the blocker
 		switch channelType {
 		case "mesh":
-			mtu = 230
+			mtu = 100
 		case "iridium":
 			mtu = 340
 		case "iridium_imt":
