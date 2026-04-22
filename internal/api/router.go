@@ -717,6 +717,7 @@ func (s *Server) Router() http.Handler {
 		// Key exchange (cross-platform QR key sharing)
 		r.Post("/keys/bundle", s.handleGenerateKeyBundle)
 		r.Get("/keys/bundle/qr", s.handleGetKeyBundleQR)
+		r.Post("/keys/import", s.handleImportKeyBundle)
 		r.Post("/keys/rotate", s.handleRotateKey)
 		r.Get("/keys", s.handleListKeys)
 		r.Get("/keys/stats", s.handleGetKeyStats)

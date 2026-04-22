@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"meshsat/internal/keystore"
@@ -228,6 +231,140 @@ func (s *Server) handleGetSigningKey(w http.ResponseWriter, r *http.Request) {
 		"signing_pub": pubHex,
 		"fingerprint": fingerprint,
 		"algorithm":   "Ed25519",
+	})
+}
+
+// handleImportKeyBundle ingests a `meshsat://key/...` URL (or raw
+// base64url-encoded bundle) emitted by another MeshSat bridge or
+// Android client. Each entry in the bundle is re-wrapped under the
+// local master key and stored in key_bundles, making it available to
+// the transform pipeline via its `<type>:<address>` key_ref. Required
+// to sync a shared AES-256 key (e.g. `aprs:shared`) across two field
+// kits for cross-bridge decryption. [MESHSAT-663]
+//
+// @Summary Import a signed key bundle
+// @Description Imports a meshsat:// key bundle. Bundle signature is
+// @Description Ed25519-verified using the v2-embedded public key;
+// @Description v1 bundles need an explicit `signing_pub` hex param.
+// @Description Each channel key inside is wrapped under the local
+// @Description master key and stored. TOFU-style: returns the signing
+// @Description fingerprint so the operator can confirm.
+// @Tags keys
+// @Accept json
+// @Produce json
+// @Param body body object true "{url?: string, bundle?: base64url, signing_pub?: hex}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/keys/import [post]
+func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
+	if s.keyStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "key store not available")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8192))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	var req struct {
+		URL        string `json:"url"`
+		Bundle     string `json:"bundle"`      // base64url of raw bundle bytes (alt to url)
+		SigningPub string `json:"signing_pub"` // hex-encoded, required only for v1 bundles
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "parse body: "+err.Error())
+		return
+	}
+
+	// Resolve bundle bytes: either from a meshsat://key/<b64> URL or
+	// from an explicit base64url payload (useful for callers that
+	// already stripped the scheme prefix, e.g. config-import flows).
+	var bundleBytes []byte
+	switch {
+	case req.URL != "":
+		bundleBytes, err = keystore.URLToBundle(req.URL)
+	case req.Bundle != "":
+		bundleBytes, err = base64.RawURLEncoding.DecodeString(strings.TrimSpace(req.Bundle))
+	default:
+		writeError(w, http.StatusBadRequest, "either 'url' or 'bundle' is required")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "decode bundle: "+err.Error())
+		return
+	}
+
+	// Verify. v2 bundles carry the signing pub inline — VerifyBundle
+	// ignores the passed signingPub in that case. v1 requires the
+	// caller to pass signing_pub explicitly; refuse without it rather
+	// than accept an unverified bundle.
+	var signingPub ed25519.PublicKey
+	if len(bundleBytes) >= 1 && bundleBytes[0] == 0x01 { // v1
+		if req.SigningPub == "" {
+			writeError(w, http.StatusBadRequest, "v1 bundles require signing_pub (hex)")
+			return
+		}
+		raw, decErr := hex.DecodeString(req.SigningPub)
+		if decErr != nil || len(raw) != ed25519.PublicKeySize {
+			writeError(w, http.StatusBadRequest, "invalid signing_pub")
+			return
+		}
+		signingPub = ed25519.PublicKey(raw)
+	}
+	if !keystore.VerifyBundle(bundleBytes, signingPub) {
+		writeError(w, http.StatusBadRequest, "bundle signature verification failed")
+		return
+	}
+	parsed, err := keystore.UnmarshalBundle(bundleBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "unmarshal bundle: "+err.Error())
+		return
+	}
+
+	// Re-wrap each entry under the local master key via the existing
+	// StoreKey helper — that's the same path the Hub `key_rotate`
+	// command uses, so rotation/versioning semantics stay consistent.
+	imported := make([]map[string]interface{}, 0, len(parsed.Entries))
+	for _, e := range parsed.Entries {
+		ct := keystore.ByteToChannelType(e.ChannelType)
+		if ct == "unknown" {
+			log.Warn().Uint8("type", e.ChannelType).Str("addr", e.Address).
+				Msg("keys/import: skipping entry with unknown channel type")
+			continue
+		}
+		ver, serr := s.keyStore.StoreKey(ct, e.Address, e.Key[:])
+		if serr != nil {
+			writeError(w, http.StatusInternalServerError, "store "+ct+":"+e.Address+": "+serr.Error())
+			return
+		}
+		imported = append(imported, map[string]interface{}{
+			"channel_type": ct,
+			"address":      e.Address,
+			"version":      ver,
+		})
+	}
+
+	// Fingerprint of the SIGNER of this bundle — operator TOFU-confirms
+	// this matches the other bridge's /api/keys/signing output.
+	var signerPubHex, signerFp string
+	if len(parsed.SigningPub) == ed25519.PublicKeySize {
+		signerPubHex = hex.EncodeToString(parsed.SigningPub)
+		signerFp = keystore.SigningKeyFingerprint(parsed.SigningPub)
+	} else if signingPub != nil {
+		signerPubHex = hex.EncodeToString(signingPub)
+		signerFp = keystore.SigningKeyFingerprint(signingPub)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"imported":           imported,
+		"imported_count":     len(imported),
+		"skipped_count":      len(parsed.Entries) - len(imported),
+		"bundle_version":     parsed.Version,
+		"bundle_timestamp":   parsed.Timestamp,
+		"signer_pub":         signerPubHex,
+		"signer_fingerprint": signerFp,
 	})
 }
 
