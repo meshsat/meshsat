@@ -155,10 +155,22 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 		}
 
 		// Default MTU from channel type.
-		mtu := 237 // mesh default
+		//
+		// The mesh value must stay under Meshtastic's SF7 @ 125 kHz
+		// LoRa air limit (~233 B usable PRIVATE_APP payload). We
+		// previously used 237 B here, which matched the nominal
+		// Data.payload ceiling but not the practical air limit once
+		// the firmware's per-packet overhead is subtracted. Larger
+		// symbols were silently dropped by the radio on TX, so
+		// HeMB bond sends over mesh_0 never reached the peer.
+		// 230 B is the conservative floor shared with
+		// `internal/hemb/bearer_build.go::defaultBearerMTU` and
+		// leaves headroom for the hidden per-packet bytes Meshtastic
+		// adds. [MESHSAT-672]
+		mtu := 230 // mesh default — stay under LoRa SF7 air limit
 		switch channelType {
 		case "mesh":
-			mtu = 237
+			mtu = 230
 		case "iridium":
 			mtu = 340
 		case "iridium_imt":
