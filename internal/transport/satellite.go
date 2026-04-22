@@ -30,6 +30,8 @@ type SatStatus struct {
 	Firmware              string    `json:"firmware,omitempty"`
 	NetworkAvailable      bool      `json:"network_available,omitempty"`
 	NetworkAvailableSince time.Time `json:"network_available_since,omitempty"`
+	LastRingAlert         time.Time `json:"last_ring_alert,omitempty"`
+	RIPulseCount          int64     `json:"ri_pulse_count,omitempty"`
 }
 
 // IridiumTime represents the Iridium network system time from AT-MSSTM.

@@ -20,6 +20,7 @@ type Config struct {
 	IridiumPort     string
 	IridiumSleepPin int    // GPIO BCM pin for 9603N sleep/wake (0 = disabled)
 	IridiumNetAvPin int    // GPIO BCM pin for 9603 NetAv input (0 = disabled, MESHSAT-666)
+	IridiumRIPin    int    // GPIO BCM pin for 9603 RI input (0 = disabled, MESHSAT-667)
 	IMTPort         string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
 	CellularPort    string
 	ZigBeePort      string
@@ -101,6 +102,7 @@ func Load() *Config {
 		IridiumPort:         envStr("MESHSAT_IRIDIUM_PORT", "auto"),
 		IridiumSleepPin:     envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
 		IridiumNetAvPin:     envInt("MESHSAT_IRIDIUM_NETAV_PIN", 0),
+		IridiumRIPin:        envInt("MESHSAT_IRIDIUM_RI_PIN", 0),
 		IMTPort:             envStr("MESHSAT_IMT_PORT", "auto"),
 		CellularPort:        envStr("MESHSAT_CELLULAR_PORT", "auto"),
 		ZigBeePort:          envStr("MESHSAT_ZIGBEE_PORT", "auto"),

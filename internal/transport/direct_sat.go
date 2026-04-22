@@ -61,6 +61,18 @@ type DirectSatTransport struct {
 	stopNetAvCh chan struct{}
 	netAvDone   chan struct{}
 
+	// 9603 RI GPIO input (BCM, 0 = disabled). Active-LOW with a 5 s
+	// pulse + 5 s pulse 20 s later on each MT arrival. Kernel delivers
+	// edges via go-gpiocdev's event handler goroutine — no polling.
+	// Parallels the existing UART SBDRING path (monitorLoop below);
+	// handleRingAlert in the gateway dedupes when both fire. See
+	// MESHSAT-667.
+	riPin         int
+	riLine        GPIOLine
+	lastRIEdge    atomic.Pointer[time.Time] // 15 s dedupe window
+	riPulseCount  atomic.Int64              // total edges since boot (before dedupe)
+	lastRingAlert atomic.Pointer[time.Time] // either source (UART or GPIO)
+
 	// SBDIX rate limiting
 	lastSBDIX   time.Time
 	lastGSSSync time.Time // last successful SBDIX that reached the GSS (for MT discovery)
@@ -218,6 +230,20 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		} else {
 			t.netAvLine = line
 			log.Info().Int("pin", t.netAvPin).Msg("iridium: NetAv pin configured")
+		}
+	}
+
+	// Configure RI GPIO input with a kernel-driven falling-edge watcher
+	// (internal pull-up keeps a disconnected/unwired line reading HIGH
+	// so we don't spawn spurious ring alerts).
+	if t.riPin > 0 && t.riLine == nil {
+		line, err := WatchFallingEdge(t.riPin, "meshsat-iridium-ri", t.riEventHandler)
+		if err != nil {
+			log.Warn().Err(err).Int("pin", t.riPin).Msg("iridium: RI pin setup failed, continuing without")
+			t.riPin = 0
+		} else {
+			t.riLine = line
+			log.Info().Int("pin", t.riPin).Msg("iridium: RI pin configured (hardware ring-alert)")
 		}
 	}
 
@@ -914,6 +940,12 @@ func (t *DirectSatTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 			s.NetworkAvailableSince = *ts
 		}
 	}
+	if t.riLine != nil {
+		s.RIPulseCount = t.riPulseCount.Load()
+		if ts := t.lastRingAlert.Load(); ts != nil {
+			s.LastRingAlert = *ts
+		}
+	}
 	return s, nil
 }
 
@@ -972,6 +1004,52 @@ func (t *DirectSatTransport) SetSleepPin(pin int) {
 // Must be called before Connect(). See MESHSAT-666.
 func (t *DirectSatTransport) SetNetAvPin(pin int) {
 	t.netAvPin = pin
+}
+
+// SetRIPin configures the GPIO pin that reads the 9603 RI (ring
+// indicator) output — an active-LOW pulse signalling that an MT
+// message is waiting at the GSS. Pin 0 = disabled. Must be called
+// before Connect(). See MESHSAT-667.
+func (t *DirectSatTransport) SetRIPin(pin int) {
+	t.riPin = pin
+}
+
+// riEventHandler is invoked by go-gpiocdev's event dispatcher
+// goroutine on every falling edge of the RI line. Duplicates against
+// the UART SBDRING path are dedup'd by the gateway's handleRingAlert
+// CompareAndSwap; we dedupe the 20 s double-pulse locally with a 15 s
+// window so we only emit one ring_alert per MT.
+func (t *DirectSatTransport) riEventHandler(evt gpiocdev.LineEvent) {
+	now := time.Now()
+	count := t.riPulseCount.Add(1)
+	log.Debug().
+		Int("pin", t.riPin).
+		Int64("count", count).
+		Str("edge", "falling").
+		Time("ts", now).
+		Uint32("kernel_seq", evt.Seqno).
+		Msg("iridium: RI edge")
+
+	if last := t.lastRIEdge.Load(); last != nil && now.Sub(*last) < 15*time.Second {
+		return // second pulse of the 20 s pair, or spurious
+	}
+	ts := now
+	t.lastRIEdge.Store(&ts)
+	t.lastRingAlert.Store(&ts)
+
+	log.Info().Int("pin", t.riPin).Msg("iridium: ring alert from RI pin")
+	t.emitEvent(SatEvent{
+		Type:    "ring_alert",
+		Message: "MT message waiting (RI pin)",
+		Time:    now.UTC().Format(time.RFC3339),
+	})
+
+	// Non-blocking send — mirrors the UART SBDRING path. The gateway's
+	// ringAlertActive CAS dedupes if UART fired first.
+	select {
+	case t.ringCh <- struct{}{}:
+	default:
+	}
 }
 
 // Sleep puts the modem into low-power sleep mode via GPIO.
@@ -1049,6 +1127,13 @@ func (t *DirectSatTransport) Close() error {
 	if t.netAvLine != nil {
 		_ = t.netAvLine.Close()
 		t.netAvLine = nil
+	}
+
+	// Release RI watcher. Closing the line stops the kernel from
+	// dispatching further edge events to our handler.
+	if t.riLine != nil {
+		_ = t.riLine.Close()
+		t.riLine = nil
 	}
 
 	t.connected = false

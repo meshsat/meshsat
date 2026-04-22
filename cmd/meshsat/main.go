@@ -138,6 +138,10 @@ func main() {
 			directSat.SetNetAvPin(cfg.IridiumNetAvPin)
 			log.Info().Int("pin", cfg.IridiumNetAvPin).Msg("iridium: NetAv GPIO configured (MESHSAT_IRIDIUM_NETAV_PIN)")
 		}
+		if cfg.IridiumRIPin > 0 {
+			directSat.SetRIPin(cfg.IridiumRIPin)
+			log.Info().Int("pin", cfg.IridiumRIPin).Msg("iridium: RI GPIO configured (MESHSAT_IRIDIUM_RI_PIN)")
+		}
 
 		directCell := transport.NewDirectCellTransport(cellPort)
 		directCell.SetSIMCardLookup(
