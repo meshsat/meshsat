@@ -964,13 +964,13 @@ func (t *DirectSatTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 	if t.netAvLine != nil {
 		s.NetworkAvailable = t.netAvState.Load()
 		if ts := t.netAvSince.Load(); ts != nil {
-			s.NetworkAvailableSince = *ts
+			s.NetworkAvailableSince = ts
 		}
 	}
 	if t.riLine != nil {
 		s.RIPulseCount = t.riPulseCount.Load()
 		if ts := t.lastRingAlert.Load(); ts != nil {
-			s.LastRingAlert = *ts
+			s.LastRingAlert = ts
 		}
 	}
 	return s, nil

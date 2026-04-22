@@ -16,22 +16,24 @@ type SatEvent struct {
 }
 
 // SatStatus represents the connection status of the satellite modem.
-// NetworkAvailable / NetworkAvailableSince are populated only for SBD
-// transports with the MESHSAT_IRIDIUM_NETAV_PIN wired (MESHSAT-666);
-// omitempty hides them on 9704/IMT deployments. Zero-value bool is the
-// same as "unwired", so consumers that want to distinguish must check
-// the transport type.
+// NetworkAvailable / NetworkAvailableSince / LastRingAlert /
+// RIPulseCount are populated only for SBD transports with the
+// corresponding pin wired (MESHSAT-666/667); omitempty hides them on
+// 9704/IMT deployments. The two time fields are `*time.Time` rather
+// than `time.Time` because Go's encoding/json does not treat a
+// zero-value struct as "empty" — a bare time.Time would serialise as
+// "0001-01-01T00:00:00Z" instead of being omitted.
 type SatStatus struct {
-	Connected             bool      `json:"connected"`
-	Port                  string    `json:"port"`
-	IMEI                  string    `json:"imei"`
-	Model                 string    `json:"model"`
-	Type                  string    `json:"type"` // "sbd" (9603) or "imt" (9704)
-	Firmware              string    `json:"firmware,omitempty"`
-	NetworkAvailable      bool      `json:"network_available,omitempty"`
-	NetworkAvailableSince time.Time `json:"network_available_since,omitempty"`
-	LastRingAlert         time.Time `json:"last_ring_alert,omitempty"`
-	RIPulseCount          int64     `json:"ri_pulse_count,omitempty"`
+	Connected             bool       `json:"connected"`
+	Port                  string     `json:"port"`
+	IMEI                  string     `json:"imei"`
+	Model                 string     `json:"model"`
+	Type                  string     `json:"type"` // "sbd" (9603) or "imt" (9704)
+	Firmware              string     `json:"firmware,omitempty"`
+	NetworkAvailable      bool       `json:"network_available,omitempty"`
+	NetworkAvailableSince *time.Time `json:"network_available_since,omitempty"`
+	LastRingAlert         *time.Time `json:"last_ring_alert,omitempty"`
+	RIPulseCount          int64      `json:"ri_pulse_count,omitempty"`
 }
 
 // IridiumTime represents the Iridium network system time from AT-MSSTM.
