@@ -35,11 +35,19 @@ type SpectrumMonitor struct {
 	// History persistence. Optional — if nil, monitor runs as before
 	// and the detail/prefill features degrade gracefully. Assigned via
 	// SetHistoryStore in main.go after the DB is open. [MESHSAT-650]
-	store           HistoryStore
-	retentionHours  int
-	persistInFlight sync.WaitGroup // drained on Stop so tests don't leak goroutines
-	persistMu       sync.Mutex
-	persistDisabled bool // flipped true on first DB write error so we stop spamming logs
+	//
+	// Writes retry forever. A 5 s context timeout is a transient symptom
+	// (DB busy during boot-time contention with migrations / keystore /
+	// HeMB init), not a permanent failure — so we never latch "disabled".
+	// Errors are rate-limited to one warning per minute to avoid log
+	// flooding, and a recovery line fires when writes resume after an
+	// error window. [MESHSAT-653]
+	store            HistoryStore
+	retentionHours   int
+	persistInFlight  sync.WaitGroup // drained on Stop so tests don't leak goroutines
+	persistMu        sync.Mutex
+	persistErrCount  int       // errors observed in the current error window; 0 when healthy
+	persistLastErrAt time.Time // last time we logged a persistence warning (for rate limiting)
 
 	// subs fan-out SpectrumEvents to the SSE stream endpoint and to the
 	// main.go goroutine that relays transitions via CoT + hub reporter.
@@ -158,7 +166,8 @@ func (m *SpectrumMonitor) SetHistoryStore(s HistoryStore) {
 	m.persistMu.Lock()
 	defer m.persistMu.Unlock()
 	m.store = s
-	m.persistDisabled = false // new store — re-enable even if a prior one failed
+	m.persistErrCount = 0
+	m.persistLastErrAt = time.Time{}
 }
 
 // SetRetentionHours overrides the retention window used by the trim
@@ -277,16 +286,19 @@ func (m *SpectrumMonitor) publish(evt SpectrumEvent) {
 func (m *SpectrumMonitor) persist(evt SpectrumEvent) {
 	m.persistMu.Lock()
 	store := m.store
-	disabled := m.persistDisabled
 	m.persistMu.Unlock()
-	if store == nil || disabled {
+	if store == nil {
 		return
 	}
 
 	m.persistInFlight.Add(1)
 	go func() {
 		defer m.persistInFlight.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// 15 s is enough headroom for early-boot SQLite contention while
+		// still keeping a single stuck write from piling up goroutines.
+		// Healthy saves finish in <10 ms; the long tail we care about is
+		// migrations / keystore / HeMB init fighting for the writer lock.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
 		switch evt.Kind {
@@ -308,8 +320,10 @@ func (m *SpectrumMonitor) persist(evt SpectrumEvent) {
 				Powers:       evt.Powers,
 			}
 			if err := store.SaveScan(ctx, row); err != nil {
-				m.markPersistFailed("save scan", err)
+				m.notePersistError("save scan", err)
+				return
 			}
+			m.notePersistSuccess()
 		case EventTransition:
 			row := TransitionRow{
 				TS:           evt.Timestamp,
@@ -322,25 +336,55 @@ func (m *SpectrumMonitor) persist(evt SpectrumEvent) {
 				BaselineStd:  evt.BaselineStd,
 			}
 			if err := store.SaveTransition(ctx, row); err != nil {
-				m.markPersistFailed("save transition", err)
+				m.notePersistError("save transition", err)
+				return
 			}
+			m.notePersistSuccess()
 		}
 	}()
 }
 
-// markPersistFailed logs once and disables further writes. Operator
-// can re-enable by fixing the DB and calling SetHistoryStore again
-// (which clears the flag). Prevents log flooding on long outages —
-// one line at boot is enough to surface the issue.
-func (m *SpectrumMonitor) markPersistFailed(op string, err error) {
+// persistLogThrottle gates warning emissions so a sustained DB outage
+// doesn't flood logs. One line per window is enough to surface the
+// problem without drowning the signal. Exposed as a var so tests can
+// shorten the window; do not mutate in production code. [MESHSAT-653]
+var persistLogThrottle = 1 * time.Minute
+
+// notePersistError bumps the error counter and emits a rate-limited
+// warning. Writes are NOT disabled — the monitor keeps retrying on
+// every scan because a context timeout is a transient symptom, not a
+// permanent failure. [MESHSAT-653]
+func (m *SpectrumMonitor) notePersistError(op string, err error) {
 	m.persistMu.Lock()
-	already := m.persistDisabled
-	m.persistDisabled = true
-	m.persistMu.Unlock()
-	if !already {
-		log.Warn().Err(err).Str("op", op).
-			Msg("spectrum: history persistence failed, further writes suppressed until SetHistoryStore is called again")
+	m.persistErrCount++
+	shouldLog := m.persistLastErrAt.IsZero() ||
+		time.Since(m.persistLastErrAt) >= persistLogThrottle
+	count := m.persistErrCount
+	if shouldLog {
+		m.persistLastErrAt = time.Now()
 	}
+	m.persistMu.Unlock()
+	if shouldLog {
+		log.Warn().Err(err).Str("op", op).Int("errors_in_window", count).
+			Msg("spectrum: history persistence write failed — will keep retrying")
+	}
+}
+
+// notePersistSuccess clears the error window and, if the window was
+// non-empty, logs a recovery line so the operator sees the resolution.
+// Cheap no-op on the healthy path (single lock + counter read).
+func (m *SpectrumMonitor) notePersistSuccess() {
+	m.persistMu.Lock()
+	count := m.persistErrCount
+	if count == 0 {
+		m.persistMu.Unlock()
+		return
+	}
+	m.persistErrCount = 0
+	m.persistLastErrAt = time.Time{}
+	m.persistMu.Unlock()
+	log.Info().Int("suppressed_errors", count).
+		Msg("spectrum: history persistence recovered")
 }
 
 // retentionLoop trims old rows on a regular cadence. Runs hourly —

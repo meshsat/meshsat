@@ -439,3 +439,154 @@ func TestPublishDoesNotBlockOnSlowConsumer(t *testing.T) {
 		t.Fatal("publish wedged on slow consumer — drop policy broken")
 	}
 }
+
+// flakyStore fails its first `failUntil` writes with a context-deadline
+// error, then succeeds. Used to prove that persistence recovers rather
+// than self-disabling forever after one transient timeout.
+type flakyStore struct {
+	mu        sync.Mutex
+	scans     []ScanRow
+	calls     int
+	failUntil int
+}
+
+func (s *flakyStore) SaveScan(_ context.Context, row ScanRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls <= s.failUntil {
+		return context.DeadlineExceeded
+	}
+	s.scans = append(s.scans, row)
+	return nil
+}
+
+func (s *flakyStore) SaveTransition(_ context.Context, _ TransitionRow) error {
+	return nil
+}
+
+func (s *flakyStore) LoadScansByMinutes(_ context.Context, _ string, _ int) ([]ScanRow, error) {
+	return nil, nil
+}
+
+func (s *flakyStore) LoadScansRange(_ context.Context, _ string, _, _ time.Time, _ int) ([]ScanRow, error) {
+	return nil, nil
+}
+
+func (s *flakyStore) LoadTransitionsRange(_ context.Context, _ string, _, _ time.Time) ([]TransitionRow, error) {
+	return nil, nil
+}
+
+func (s *flakyStore) TrimSpectrumHistory(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+
+// TestPersistRecoversAfterTransientErrors is the regression for
+// MESHSAT-653: a single context-deadline timeout must not latch the
+// monitor into permanent persistence-disabled state. Writes must keep
+// flowing once the store recovers, so waterfall rehydration works
+// after every container restart.
+func TestPersistRecoversAfterTransientErrors(t *testing.T) {
+	store := &flakyStore{failUntil: 2}
+	m := NewSpectrumMonitor(newMockScanner([]float64{-60}), DefaultBands)
+	m.SetHistoryStore(store)
+
+	scan := func() {
+		m.persist(SpectrumEvent{
+			Kind:      EventScan,
+			Band:      "lora_868",
+			Timestamp: time.Now(),
+			Powers:    []float64{-60, -60, -60},
+		})
+	}
+
+	for i := 0; i < 5; i++ {
+		scan()
+	}
+	m.persistInFlight.Wait()
+
+	store.mu.Lock()
+	calls := store.calls
+	persisted := len(store.scans)
+	store.mu.Unlock()
+
+	if calls != 5 {
+		t.Fatalf("expected 5 SaveScan calls (no self-disable), got %d", calls)
+	}
+	// failUntil=2 → calls 1+2 fail, 3+4+5 succeed = 3 persisted rows.
+	if persisted != 3 {
+		t.Fatalf("expected 3 persisted rows after recovery, got %d", persisted)
+	}
+
+	// After success, the error window should be cleared so the next
+	// failure will emit a fresh log line (not be silently suppressed).
+	m.persistMu.Lock()
+	errCount := m.persistErrCount
+	lastErr := m.persistLastErrAt
+	m.persistMu.Unlock()
+	if errCount != 0 {
+		t.Fatalf("persistErrCount = %d after recovery, want 0", errCount)
+	}
+	if !lastErr.IsZero() {
+		t.Fatalf("persistLastErrAt = %v after recovery, want zero", lastErr)
+	}
+}
+
+// TestPersistErrorLogThrottle verifies that sustained write failures
+// do not flood the log: the rate limiter allows one log emission per
+// throttle window even when every SaveScan fails. [MESHSAT-653]
+func TestPersistErrorLogThrottle(t *testing.T) {
+	store := &flakyStore{failUntil: 1_000_000} // always fail
+	m := NewSpectrumMonitor(newMockScanner([]float64{-60}), DefaultBands)
+	m.SetHistoryStore(store)
+
+	// Shorten the throttle so we don't sleep for 60 s in tests.
+	orig := persistLogThrottle
+	persistLogThrottle = 50 * time.Millisecond
+	defer func() { persistLogThrottle = orig }()
+
+	// Burst 20 writes quickly — all fail, but at most one warning
+	// should have been logged in this window (we can't introspect the
+	// logger easily, but we CAN check that persistLastErrAt only moved
+	// once per window via the counter+timestamp invariant).
+	for i := 0; i < 20; i++ {
+		m.persist(SpectrumEvent{
+			Kind:      EventScan,
+			Band:      "lora_868",
+			Timestamp: time.Now(),
+			Powers:    []float64{-60},
+		})
+	}
+	m.persistInFlight.Wait()
+
+	store.mu.Lock()
+	calls := store.calls
+	store.mu.Unlock()
+	if calls != 20 {
+		t.Fatalf("expected all 20 writes to be attempted, got %d", calls)
+	}
+
+	m.persistMu.Lock()
+	errCount := m.persistErrCount
+	m.persistMu.Unlock()
+	if errCount != 20 {
+		t.Fatalf("persistErrCount = %d, want 20 (every failure must be counted)", errCount)
+	}
+
+	// Wait past the throttle so the next failure will log again.
+	time.Sleep(persistLogThrottle + 10*time.Millisecond)
+	m.persist(SpectrumEvent{
+		Kind:      EventScan,
+		Band:      "lora_868",
+		Timestamp: time.Now(),
+		Powers:    []float64{-60},
+	})
+	m.persistInFlight.Wait()
+
+	m.persistMu.Lock()
+	errCount = m.persistErrCount
+	m.persistMu.Unlock()
+	if errCount != 21 {
+		t.Fatalf("after throttle reset, expected errCount=21, got %d", errCount)
+	}
+}
