@@ -2512,11 +2512,49 @@ function widgetGridClass(id) {
           <div class="flex items-center gap-2">
             <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
             <span class="font-display font-semibold text-sm text-amber-400 tracking-wide">APRS</span>
+            <!-- Encryption badge. Red lock = {E1} / AES-256-GCM active;
+                 grey = plaintext. Tooltip gives the transform summary
+                 and the key fingerprint so operators can eyeball peer
+                 parity without opening /settings. [MESHSAT-661] -->
+            <span v-if="store.aprsStatus?.encryption?.enabled"
+                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/15 border border-red-500/40 text-red-300 text-[9px] font-semibold"
+                  :title="`${store.aprsStatus.encryption.summary || 'encrypted'}
+key_ref: ${store.aprsStatus.encryption.key_ref || '?'}
+fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
+              <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M6 10V7a6 6 0 1112 0v3h1a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2v-9a2 2 0 012-2h1zm2 0h8V7a4 4 0 00-8 0v3z"/></svg>
+              E2E
+            </span>
+            <span v-else-if="store.aprsStatus?.connected"
+                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-700/50 border border-gray-600 text-gray-400 text-[9px]"
+                  title="APRS egress is plaintext. Enable encryption in Settings → APRS (regulatory notice applies).">
+              <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M17 8V7a5 5 0 00-10 0h2a3 3 0 016 0v1H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2v-9a2 2 0 00-2-2h-2z"/></svg>
+              plain
+            </span>
           </div>
           <div class="flex items-center gap-2">
             <span v-if="store.aprsStatus?.callsign" class="text-[10px] font-mono text-amber-400/70">{{ store.aprsStatus.callsign }}</span>
             <span v-if="store.aprsStatus?.frequency_mhz" class="text-[10px] text-gray-500">{{ store.aprsStatus.frequency_mhz?.toFixed(3) }} MHz</span>
             <span :class="store.aprsStatus?.connected ? 'bg-amber-400' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+          </div>
+        </div>
+
+        <!-- Encryption detail strip. Only visible when E2E is on.
+             Compact 2-line readout showing the transform chain and the
+             shared-key fingerprint — same value the Settings → APRS tab
+             shows, so operators on two kits can eyeball that their
+             fingerprints match without going into Settings. -->
+        <div v-if="store.aprsStatus?.encryption?.enabled"
+             class="mb-3 rounded border border-red-500/30 bg-red-900/10 px-2.5 py-1.5 space-y-0.5">
+          <div class="flex items-center justify-between text-[9.5px]">
+            <span class="text-red-300/80 uppercase tracking-wider">Encryption</span>
+            <span class="text-red-200/80 font-mono">{{ store.aprsStatus.encryption.summary || 'aes-256-gcm' }}</span>
+          </div>
+          <div class="flex items-center justify-between text-[9.5px]">
+            <span class="text-red-300/60 font-mono">{{ store.aprsStatus.encryption.key_ref || '—' }}</span>
+            <span class="text-red-200/80 font-mono">
+              <template v-if="store.aprsStatus.encryption.key_fingerprint">fp {{ store.aprsStatus.encryption.key_fingerprint }}</template>
+              <template v-else>no-key</template>
+            </span>
           </div>
         </div>
 
