@@ -23,10 +23,15 @@ const (
 )
 
 // Channel type enum — matches Android ConversationKey types.
+// 0x03 is APRS (AX.25); it was a reserved gap in the original 0x00-0x06
+// enumeration and keeps new bundles wire-compatible with older readers
+// that don't recognise the value (they surface it as "unknown" and
+// skip the entry rather than failing the whole bundle).
 const (
 	ChannelSMS     byte = 0x00
 	ChannelMesh    byte = 0x01
 	ChannelIridium byte = 0x02
+	ChannelAPRS    byte = 0x03
 	ChannelZigBee  byte = 0x04
 	ChannelMQTT    byte = 0x05
 	ChannelWebhook byte = 0x06
@@ -41,6 +46,8 @@ func ChannelTypeToByte(ct string) byte {
 		return ChannelMesh
 	case "iridium":
 		return ChannelIridium
+	case "aprs":
+		return ChannelAPRS
 	case "zigbee":
 		return ChannelZigBee
 	case "mqtt":
@@ -61,6 +68,8 @@ func ByteToChannelType(b byte) string {
 		return "mesh"
 	case ChannelIridium:
 		return "iridium"
+	case ChannelAPRS:
+		return "aprs"
 	case ChannelZigBee:
 		return "zigbee"
 	case ChannelMQTT:

@@ -12,7 +12,15 @@ type InboundMessage struct {
 	Text    string `json:"text"`
 	To      string `json:"to,omitempty"`
 	Channel int    `json:"channel,omitempty"`
-	Source  string `json:"source"` // "mqtt", "iridium"
+	Source  string `json:"source"` // channel type, e.g. "mqtt", "iridium", "aprs"
+
+	// FromAddr is the peer-level source address inside the channel —
+	// callsign-SSID for APRS, phone number for SMS, IMEI for Iridium, etc.
+	// Separate from Source (which is the channel type) so downstream
+	// consumers (whitelists, audit, UI attribution) don't have to
+	// scrape it out of Text. May be empty when the underlying gateway
+	// can't derive one.
+	FromAddr string `json:"from_addr,omitempty"`
 }
 
 // GatewayStatus reports the current state of a gateway.

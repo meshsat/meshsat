@@ -26,6 +26,7 @@ const allTabs = [
   { id: 'range_test',    label: 'Range Test',    tier: 'engineer' },
   { id: 'deadman',       label: 'Dead Man',      tier: 'engineer' },
   { id: 'tak',           label: 'TAK',           tier: 'engineer' },
+  { id: 'aprs',          label: 'APRS',          tier: 'engineer' },
   { id: 'credentials',   label: 'Credentials',   tier: 'engineer' },
   { id: 'network',       label: 'Network',       tier: 'engineer' },
   { id: 'routing',       label: 'Routing',       tier: 'engineer' },
@@ -230,6 +231,108 @@ async function loadTAKEnrollStatus() {
     const resp = await api.get('/api/tak/enroll/status')
     if (resp.data?.success) takEnrollResult.value = resp.data
   } catch {}
+}
+
+// --- APRS E2E encryption (MESHSAT-661) ---
+// Single all-or-nothing toggle. When ON, the DeliveryWorker's existing
+// smaz2→AES-256-GCM→base64 transform chain runs for every outbound
+// APRS frame; the gateway wraps ciphertext with "{E1}" prefix and
+// drops the WIDE1/WIDE2 digipeater path. When OFF, plaintext APRS as
+// today. Ingress is mixed-mode either way — `{E1}` frames decrypt,
+// anything else parses as normal APRS.
+const aprsInterface = computed(() => (store.interfaces || []).find(i => i.id === 'aprs_0'))
+const aprsEncryptEnabled = computed(() => {
+  const t = aprsInterface.value?.egress_transforms || '[]'
+  return t.includes('"encrypt"')
+})
+const aprsKeyFingerprint = ref('')
+const aprsBanner = ref(false)
+const aprsSaving = ref(false)
+const aprsShareUrl = ref('')
+
+async function refreshAPRSKey() {
+  try {
+    const data = await api.get('/keys')
+    const keys = data?.keys || []
+    const k = keys.find(x => x.channel_type === 'aprs' && x.address === 'shared')
+    aprsKeyFingerprint.value = k?.key_preview || ''
+  } catch { aprsKeyFingerprint.value = '' }
+}
+
+async function aprsEnableEncryption() {
+  // Generates (or reuses) an aprs:shared key via the existing bundle
+  // endpoint and writes the egress/ingress transform JSON to aprs_0
+  // in one go. Using key_ref keeps rotations and share-links working
+  // without re-editing every interface.
+  aprsSaving.value = true
+  try {
+    const bundle = await api.post('/keys/bundle', {
+      entries: [{ channel_type: 'aprs', address: 'shared' }],
+    })
+    aprsShareUrl.value = bundle?.url || ''
+    const transforms = JSON.stringify([
+      { type: 'smaz2' },
+      { type: 'encrypt', params: { key_ref: 'aprs:shared' } },
+      { type: 'base64' },
+    ])
+    const iface = aprsInterface.value || { id: 'aprs_0', channel_type: 'aprs' }
+    await store.updateInterface('aprs_0', {
+      ...iface,
+      egress_transforms: transforms,
+      ingress_transforms: transforms,
+    })
+    await refreshAPRSKey()
+  } catch (e) {
+    alert('APRS encryption: ' + (e.message || 'save failed'))
+  } finally {
+    aprsSaving.value = false
+  }
+}
+
+async function aprsDisableEncryption() {
+  aprsSaving.value = true
+  try {
+    const iface = aprsInterface.value
+    if (!iface) return
+    await store.updateInterface('aprs_0', {
+      ...iface,
+      egress_transforms: '[]',
+      ingress_transforms: '[]',
+    })
+    aprsShareUrl.value = ''
+  } catch (e) {
+    alert('APRS encryption: ' + (e.message || 'save failed'))
+  } finally {
+    aprsSaving.value = false
+  }
+}
+
+async function aprsRotateKey() {
+  if (!confirm('Rotate the APRS shared key? Peers must re-import the new key before they can decrypt new frames.')) return
+  aprsSaving.value = true
+  try {
+    await api.post('/keys/rotate', {
+      channel_type: 'aprs',
+      address: 'shared',
+      grace_period_hours: 24,
+    })
+    await refreshAPRSKey()
+  } catch (e) {
+    alert('APRS key rotate: ' + (e.message || 'failed'))
+  } finally {
+    aprsSaving.value = false
+  }
+}
+
+async function aprsShareLink() {
+  try {
+    const bundle = await api.post('/keys/bundle', {
+      entries: [{ channel_type: 'aprs', address: 'shared' }],
+    })
+    aprsShareUrl.value = bundle?.url || ''
+  } catch (e) {
+    alert('APRS share link: ' + (e.message || 'failed'))
+  }
 }
 
 // Config export/import
@@ -1192,6 +1295,8 @@ onMounted(async () => {
   loadMQTT(); loadIridium(); loadBudget(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK(); loadTAKEnrollStatus()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
+  store.fetchInterfaces()
+  refreshAPRSKey()
   loadRoutingConfig(); fetchPeers(); loadHubConfig()
   fetchZigBeeStatus(); fetchZigBeeDevices(); fetchPermitJoinStatus()
   store.fetchRangeTests()
@@ -2291,6 +2396,92 @@ onUnmounted(() => {
         </div>
 
         <p class="text-xs text-gray-500">Connects to an OpenTAK Server via TCP/TLS. Forwards mesh positions, SOS, telemetry, waypoints and chat as CoT events. Protocol: XML (legacy) or Protobuf (TAK v1, ~60% smaller). Callsign format: PREFIX-XXXX (last 4 hex of node ID).</p>
+      </div>
+    </div>
+
+    <!-- APRS end-to-end encryption -->
+    <div v-if="activeTab === 'aprs'">
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-4">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-200 mb-1">APRS end-to-end encryption</h3>
+          <p class="text-xs text-gray-500">
+            Wraps every outbound AX.25 UI frame with the same
+            <span class="font-mono">smaz2 → AES-256-GCM → base64</span>
+            chain used on SMS and Iridium, prefixed with the APRS
+            user-defined data type <span class="font-mono">{E1}</span>.
+            Peers with the shared key decrypt automatically; anyone else
+            sees an opaque APRS user-defined blob.
+          </p>
+        </div>
+
+        <!-- Hard red regulatory banner. Stays visible the whole time
+             encryption is enabled — no dismiss button. -->
+        <div v-if="aprsEncryptEnabled" class="rounded border border-red-600/70 bg-red-900/20 px-3 py-2 text-xs text-red-200 space-y-1">
+          <div class="font-semibold">Regulatory notice</div>
+          <div>
+            Encrypted content is typically <span class="font-bold">prohibited on amateur-radio bands</span> (2&nbsp;m, 70&nbsp;cm, 6&nbsp;m, HF).
+            Only enable this on a frequency your licence authorises you to encrypt on (ISM / PMR / SRD / commercial).
+          </div>
+          <div>
+            Digipeater path <span class="font-mono">WIDE1-1,WIDE2-1</span> is dropped in encrypted mode, and positions/beacons will no longer
+            appear on aprs.fi or any igate that doesn't hold your key.
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between rounded bg-gray-900 border border-gray-700 px-3 py-2">
+          <div>
+            <div class="text-sm font-medium text-gray-200">End-to-end encryption</div>
+            <div class="text-xs text-gray-500">
+              Status:
+              <span v-if="aprsEncryptEnabled" class="text-emerald-400 font-semibold">enabled</span>
+              <span v-else class="text-gray-500">disabled (plaintext APRS)</span>
+            </div>
+          </div>
+          <button v-if="!aprsEncryptEnabled"
+                  @click="aprsEnableEncryption"
+                  :disabled="aprsSaving"
+                  class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-40">
+            {{ aprsSaving ? 'Enabling…' : 'Enable encryption' }}
+          </button>
+          <button v-else
+                  @click="aprsDisableEncryption"
+                  :disabled="aprsSaving"
+                  class="px-4 py-2 rounded bg-gray-700 text-gray-200 text-sm hover:bg-gray-600 disabled:opacity-40">
+            {{ aprsSaving ? 'Saving…' : 'Disable' }}
+          </button>
+        </div>
+
+        <div v-if="aprsEncryptEnabled" class="space-y-2 rounded bg-gray-900 border border-gray-700 px-3 py-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs text-gray-500">Shared key fingerprint</div>
+              <div class="text-sm font-mono text-gray-200">
+                {{ aprsKeyFingerprint || '(loading…)' }}
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="aprsShareLink" :disabled="aprsSaving"
+                      class="px-3 py-1.5 rounded bg-gray-700 text-gray-200 text-xs hover:bg-gray-600 disabled:opacity-40">
+                Share link
+              </button>
+              <button @click="aprsRotateKey" :disabled="aprsSaving"
+                      class="px-3 py-1.5 rounded bg-gray-700 text-gray-200 text-xs hover:bg-gray-600 disabled:opacity-40">
+                Rotate key
+              </button>
+            </div>
+          </div>
+          <div v-if="aprsShareUrl" class="pt-2 border-t border-gray-700">
+            <div class="text-xs text-gray-500 mb-1">Share this URL with peer kits (or render as QR from <span class="font-mono">/api/keys/bundle/qr?channels=aprs:shared</span>):</div>
+            <input :value="aprsShareUrl" readonly
+                   class="w-full px-2 py-1.5 rounded bg-gray-950 border border-gray-700 text-xs text-gray-300 font-mono" />
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-500">
+          Payload budget after framing is ~130–150&nbsp;bytes of plaintext per frame; short APRS messages fit, long beacons may not.
+          Ingress is mixed-mode regardless: plaintext APRS frames from nearby stations keep decoding and appear in the Nodes view as usual.
+          Advanced per-rule transforms can still be configured on <span class="font-mono">/interfaces</span>.
+        </p>
       </div>
     </div>
 

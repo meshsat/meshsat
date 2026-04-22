@@ -958,11 +958,20 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				if !ok {
 					return
 				}
-				log.Info().Str("source", msg.Source).Str("text", msg.Text).Msg("gateway inbound message")
+				// fromAddr is the peer-level address (callsign for APRS,
+				// phone for SMS, etc.) — falls back to channel type if
+				// the gateway didn't fill it in. Used for the DB
+				// FromNode column and rule matching so downstream code
+				// doesn't have to guess by scraping Text.
+				fromAddr := msg.FromAddr
+				if fromAddr == "" {
+					fromAddr = msg.Source
+				}
+				log.Info().Str("source", msg.Source).Str("from", fromAddr).Str("text", msg.Text).Msg("gateway inbound message")
 
 				p.Emit(transport.MeshEvent{
 					Type:    "inbound",
-					Message: fmt.Sprintf("Received from %s: %s", msg.Source, truncateText(msg.Text, 80)),
+					Message: fmt.Sprintf("Received from %s: %s", fromAddr, truncateText(msg.Text, 80)),
 				})
 
 				// Dispatch through rules engine
@@ -970,7 +979,7 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				if p.dispatcher != nil {
 					routeMsg := rules.RouteMessage{
 						Text: msg.Text,
-						From: msg.Source,
+						From: fromAddr,
 					}
 					// Increment ingress sequence number for the source interface
 					if _, err := p.db.IncrementIngressSeq(sourceIface); err != nil {
@@ -999,7 +1008,7 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 
 				// Persist inbound message
 				dbMsg := &database.Message{
-					FromNode:    msg.Source,
+					FromNode:    fromAddr,
 					ToNode:      msg.To,
 					Channel:     msg.Channel,
 					PortNum:     1,
@@ -1012,8 +1021,14 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					log.Error().Err(err).Msg("failed to persist gateway inbound message")
 				}
 
-				// Mark for loop prevention
-				p.markGatewayInjection(msg.Text)
+				// Mark for loop prevention — use the DECODED text so an
+				// encrypted ingress path (whose raw text is base64
+				// ciphertext with a fresh nonce on every frame) still
+				// dedupes against the mesh echo of the same plaintext.
+				// Without this, the loop check silently becomes a no-op
+				// on encrypted interfaces because each ciphertext hashes
+				// differently.
+				p.markGatewayInjection(decodedText)
 			}
 		}
 	}()

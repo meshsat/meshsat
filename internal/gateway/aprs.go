@@ -10,9 +10,19 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
+
+// aprsEncryptedPrefix is the APRS-spec-compliant User-Defined Data
+// Type used to wrap encrypted AX.25 payloads. `{` = APRS 1.0.1
+// user-defined; `E1` = "Encrypted, format v1" (reserved for future
+// rekey / envelope format changes). An unrelated igate sees an
+// opaque user-defined blob and ignores it instead of choking on
+// binary. Peers that recognise the prefix route the payload into
+// the ingress transform chain for decryption.
+const aprsEncryptedPrefix = "{E1}"
 
 // APRSGateway bridges MeshSat messages to/from APRS via Direwolf KISS TCP.
 type APRSGateway struct {
@@ -168,6 +178,21 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 		Str("callsign", FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID})).
 		Float64("freq_mhz", g.config.FrequencyMHz).
 		Msg("aprs gateway started")
+
+	// Soft regulatory warning: encryption on an amateur-radio frequency
+	// is commonly prohibited. One log line on startup is enough — not
+	// per-frame. Checks egress_transforms on aprs_0 for the "encrypt"
+	// transform name (matches the dispatcher's own detection heuristic
+	// at dispatcher.go ~L1154).
+	if g.db != nil {
+		if iface, err := g.db.GetInterface("aprs_0"); err == nil && iface != nil &&
+			strings.Contains(iface.EgressTransforms, "encrypt") &&
+			IsLikelyAmateurBand(g.config.FrequencyMHz) {
+			log.Warn().
+				Float64("freq_mhz", g.config.FrequencyMHz).
+				Msg("aprs: encryption enabled on a frequency inside an amateur-radio allocation — verify your licence permits this content before transmitting")
+		}
+	}
 	return nil
 }
 
@@ -314,6 +339,41 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			continue
 		}
 
+		srcAddr := ""
+		if frame != nil {
+			srcAddr = FormatCallsign(frame.Src)
+		}
+
+		// Encrypted-APRS ingress branch: bypass the APRS parser entirely
+		// when the info field is wrapped with our `{E1}` user-defined-
+		// data-type prefix. The parser's job is to decode APRS
+		// semantics (position, message, telemetry); for ciphertext
+		// there are no semantics to parse. Emit the raw base64 payload
+		// as InboundMessage.Text and let StartGatewayReceiver apply the
+		// interface's ingress_transforms (base64→decrypt→decompress).
+		// Keeping the parser pure also avoids its printable-char
+		// heuristic accidentally throwing away a frame whose base64
+		// happens to look like padding.
+		if frame != nil && len(frame.Info) >= len(aprsEncryptedPrefix) &&
+			string(frame.Info[:len(aprsEncryptedPrefix)]) == aprsEncryptedPrefix {
+			if srcAddr != "" {
+				g.tracker.RecordAX25(srcAddr, "")
+			}
+			msg := InboundMessage{
+				Text:     string(frame.Info[len(aprsEncryptedPrefix):]),
+				Source:   "aprs",
+				FromAddr: srcAddr,
+			}
+			select {
+			case g.inCh <- msg:
+				g.msgsIn.Add(1)
+				g.lastActive.Store(time.Now().Unix())
+			default:
+				log.Warn().Msg("aprs: inbound channel full (encrypted frame dropped)")
+			}
+			continue
+		}
+
 		pkt, err := ParseAPRSPacket(frame)
 		if err != nil {
 			// AX.25 decode succeeded but the payload isn't APRS-formatted
@@ -326,7 +386,7 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 				for _, p := range frame.Path {
 					pathParts = append(pathParts, FormatCallsign(p))
 				}
-				g.tracker.RecordAX25(FormatCallsign(frame.Src), strings.Join(pathParts, ","))
+				g.tracker.RecordAX25(srcAddr, strings.Join(pathParts, ","))
 			}
 			log.Debug().Err(err).Msg("aprs: parse APRS")
 			continue
@@ -337,8 +397,9 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 
 		text := g.formatInboundText(pkt)
 		msg := InboundMessage{
-			Text:   text,
-			Source: "aprs",
+			Text:     text,
+			Source:   "aprs",
+			FromAddr: srcAddr,
 		}
 
 		select {
@@ -368,12 +429,30 @@ func (g *APRSGateway) writeWorker(ctx context.Context) {
 func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	src := AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}
 	dst := AX25Address{Call: "APMSHT", SSID: 0} // APMSxx = MeshSat tocall
+
+	var info []byte
+	// Digipeater path defaults to WIDE1-1,WIDE2-1 for local-repeat
+	// propagation. Dropped when the payload is encrypted — ciphertext
+	// has no business being relayed onto APRS-IS / aprs.fi, and cutting
+	// the two path-slot addresses (14 bytes) recovers precious space
+	// for the base64-expanded encrypted info.
 	path := []AX25Address{{Call: "WIDE1", SSID: 1}, {Call: "WIDE2", SSID: 1}}
 
-	// Default: send as position-less message via the APRS bulletin/message system
-	var info []byte
-	if msg.DecodedText != "" {
-		// Send as third-party traffic with attribution
+	if msg.Encrypted {
+		// DeliveryWorker's egress pipeline produced the ciphertext and
+		// prepended the binary protocol version byte (codec.ProtoVersion1
+		// = 0x01). APRS uses `{E1}` as its own in-protocol version marker
+		// so strip the raw byte here — leaving it in would double-version
+		// and also push a non-printable byte into an ASCII-only APRS info
+		// field, which many igates/parsers reject.
+		cipherText := []byte(msg.DecodedText)
+		if _, stripped := codec.StripVersionByte(cipherText); stripped != nil {
+			cipherText = stripped
+		}
+		info = append([]byte(aprsEncryptedPrefix), cipherText...)
+		path = nil
+	} else if msg.DecodedText != "" {
+		// Plaintext: send as third-party traffic with attribution.
 		comment := fmt.Sprintf("[MeshSat !%08x] %s", msg.From, msg.DecodedText)
 		info = EncodeAPRSPosition(0, 0, '/', '-', comment) // 0,0 = no position
 	} else {
@@ -390,7 +469,8 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	g.msgsOut.Add(1)
 	g.tracker.RecordTX()
 	g.lastActive.Store(time.Now().Unix())
-	log.Debug().Str("callsign", FormatCallsign(src)).Msg("aprs: sent packet")
+	log.Debug().Str("callsign", FormatCallsign(src)).Bool("encrypted", msg.Encrypted).
+		Int("info_len", len(info)).Msg("aprs: sent packet")
 }
 
 func (g *APRSGateway) formatInboundText(pkt *APRSPacket) string {
