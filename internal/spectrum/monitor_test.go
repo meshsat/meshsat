@@ -26,7 +26,7 @@ func (s *mockScanner) Info() ScannerInfo {
 	return ScannerInfo{BinaryPath: "mock", DongleVID: "0bda", DonglePID: "2838", USBPath: "mock"}
 }
 
-func (s *mockScanner) Scan(_ context.Context, _, _, _ int) ([]float64, error) {
+func (s *mockScanner) Scan(_ context.Context, _, _, _, _ int) ([]float64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++

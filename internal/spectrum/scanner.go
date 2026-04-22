@@ -2,6 +2,7 @@ package spectrum
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -13,8 +14,12 @@ import (
 
 // Scanner abstracts RTL-SDR spectrum scanning for testability.
 type Scanner interface {
-	// Scan performs a single-shot power sweep and returns power-per-bin in dB.
-	Scan(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error)
+	// Scan performs a single-shot power sweep and returns power-per-bin
+	// in dB. cropPad widens the underlying scan by that many bins on
+	// each side and drops them from the returned slice so tuner-edge
+	// rolloff doesn't leak into the output. Pass 0 for the scanner's
+	// default (2).
+	Scan(ctx context.Context, freqLow, freqHigh, binSize, cropPad int) ([]float64, error)
 	// Available reports whether the scanning backend is ready.
 	Available() bool
 	// Info returns static metadata about the scanner backend for the
@@ -175,9 +180,12 @@ func findRTLSDRDevice() *rtlsdrDevice {
 
 // Scan runs a single-shot power sweep. Dispatches on the binary chosen
 // at init — never switched at runtime (see struct docs + MESHSAT-655).
-func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
+func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize, cropPad int) ([]float64, error) {
+	if cropPad <= 0 {
+		cropPad = 2
+	}
 	if strings.HasSuffix(s.binary, "rtl_power_fftw") {
-		return s.scanFFTW(ctx, freqLow, freqHigh, binSize)
+		return s.scanFFTW(ctx, freqLow, freqHigh, binSize, cropPad)
 	}
 	return s.scanLegacy(ctx, freqLow, freqHigh, binSize)
 }
@@ -211,7 +219,7 @@ func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize i
 // MHz > 2.4 MHz RTL-SDR bandwidth) don't show the artifact because
 // the hops stitch over their own edges, but this path is hit for
 // every band so they all benefit consistently.
-func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSize int) ([]float64, error) {
+func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSize, cropPad int) ([]float64, error) {
 	span := freqHigh - freqLow
 	if span <= 0 || binSize <= 0 {
 		return nil, fmt.Errorf("invalid band: low=%d high=%d bin=%d", freqLow, freqHigh, binSize)
@@ -220,8 +228,10 @@ func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSi
 	if bins < 2 {
 		bins = 2
 	}
+	if cropPad < 0 {
+		cropPad = 0
+	}
 
-	const cropPad = 2
 	widenedLow := freqLow - cropPad*binSize
 	widenedHigh := freqHigh + cropPad*binSize
 	effBins := (widenedHigh - widenedLow) / binSize
@@ -233,16 +243,41 @@ func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSi
 	}
 
 	freqArg := fmt.Sprintf("%d:%d", widenedLow, widenedHigh)
+	// -g 200 = 20.0 dB gain. Default (auto) picks the R828D's highest
+	// available gain (37.2 dB on Blog V4). At 37 dB a nearby HAM TX
+	// at 144.8 MHz saturates the tuner front-end → intermodulation
+	// raises every bin in the aprs_144 band 6-20 dB above noise,
+	// painting a full-band horizontal stripe in the waterfall even
+	// though the real signal is narrowband. 20 dB still sees weak
+	// distant signals but gives the front-end 17 dB of headroom
+	// before a strong local TX saturates it. [MESHSAT-658]
 	cmd := exec.CommandContext(ctx, s.binary,
 		"-f", freqArg,
 		"-b", strconv.Itoa(effBins),
 		"-n", "1000",
+		"-g", "200",
 		"-q",
 	)
-	cmd.Stderr = nil
+	// Capture stderr so libusb/tuner errors ("usb_claim_interface -6",
+	// "Kernel driver is active", "PLL not locked") surface in the scan
+	// error instead of being silently dropped. Keeps the hot path cheap
+	// — a stdio pipe + a few-KB bytes.Buffer per scan. [MESHSAT-656]
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("rtl_power_fftw: %w", err)
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			return nil, fmt.Errorf("rtl_power_fftw: %w", err)
+		}
+		// First stderr line is usually the most actionable (fftw prints
+		// its error, then usage-style garbage). Keep it short so it
+		// doesn't blow out log lines.
+		firstLine := detail
+		if idx := strings.IndexByte(detail, '\n'); idx > 0 {
+			firstLine = detail[:idx]
+		}
+		return nil, fmt.Errorf("rtl_power_fftw: %w (stderr: %s)", err, firstLine)
 	}
 	powers, err := parseFFTWOutput(string(out))
 	if err != nil {

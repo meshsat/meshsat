@@ -16,7 +16,7 @@ func TestRTLPowerScanner_NoDemotionOnRepeatedFFTWFailures(t *testing.T) {
 	s := &RTLPowerScanner{binary: "/nonexistent/path/rtl_power_fftw"}
 
 	for i := 0; i < 5; i++ {
-		_, err := s.Scan(context.Background(), 868_000_000, 868_600_000, 25_000)
+		_, err := s.Scan(context.Background(), 868_000_000, 868_600_000, 25_000, 2)
 		if err == nil {
 			t.Fatalf("iteration %d: expected error from nonexistent binary, got nil", i)
 		}
@@ -39,7 +39,7 @@ func TestRTLPowerScanner_NoDemotionOnRepeatedFFTWFailures(t *testing.T) {
 func TestRTLPowerScanner_LegacyOnlyWhenBinaryIsLegacy(t *testing.T) {
 	s := &RTLPowerScanner{binary: "/nonexistent/path/rtl_power"}
 
-	_, err := s.Scan(context.Background(), 868_000_000, 868_600_000, 25_000)
+	_, err := s.Scan(context.Background(), 868_000_000, 868_600_000, 25_000, 2)
 	if err == nil {
 		t.Fatal("expected error from nonexistent binary, got nil")
 	}

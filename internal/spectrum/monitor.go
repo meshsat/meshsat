@@ -576,7 +576,7 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 		// Warm scans still complete in <10 s so the cap is invisible
 		// in steady state. [MESHSAT-509, MESHSAT-656]
 		scanCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
+		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize, band.EffectiveCropPad())
 		cancel()
 
 		if err != nil {
@@ -652,7 +652,7 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		// is invisible in steady state. [MESHSAT-509, MESHSAT-656]
 		scanStart := time.Now()
 		scanCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
+		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize, band.EffectiveCropPad())
 		cancel()
 		scanDur := time.Since(scanStart)
 

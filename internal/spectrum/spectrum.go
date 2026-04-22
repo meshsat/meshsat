@@ -22,6 +22,27 @@ type Band struct {
 	BinSize     int    // Hz per FFT bin
 	InterfaceID string // e.g. "mesh_0", "ax25_0"
 	Label       string // human-readable label
+
+	// CropPad widens the requested scan by N bins on each side and
+	// drops those bins from the returned slice so the operator only
+	// sees the flat interior of the tuner response. The R828D's IF
+	// filter rolls off ~3 dB at the first few bins when the scan
+	// span approaches its 2.4 MHz bandwidth (GPS L1, LTE B20/B8).
+	// Narrow bands (LoRa 0.6 MHz, APRS 0.2 MHz) tune near-centre so
+	// 2 bins is enough; wide bands need 5-6 (measured on parallax
+	// 2026-04-22: GPS L1 bin 0 = -2.78 dB vs median, bin 5 = -1.35).
+	// Zero means scanner's default (2). [MESHSAT-652, widened per band]
+	CropPad int
+}
+
+// EffectiveCropPad returns the crop pad the scanner should use,
+// applying the default (2) when the band leaves it at zero. Central
+// so scanFFTW and the test harness agree on the fallback.
+func (b Band) EffectiveCropPad() int {
+	if b.CropPad <= 0 {
+		return 2
+	}
+	return b.CropPad
 }
 
 // DefaultBands are the RF bands monitored by the RTL-SDR for jamming
@@ -67,6 +88,7 @@ var DefaultBands = []Band{
 		BinSize:     25000,
 		InterfaceID: "gps_0",
 		Label:       "GPS L1",
+		CropPad:     6,
 	},
 	{
 		// LTE Band 20 DL: 791-821 MHz (EU 800). Monitor 3 MHz at centre
@@ -79,6 +101,7 @@ var DefaultBands = []Band{
 		BinSize:     50000,
 		InterfaceID: "cellular_0",
 		Label:       "LTE Band 20 DL (800)",
+		CropPad:     6,
 	},
 	{
 		// LTE Band 8 DL: 925-960 MHz (EU 900). Monitor 3 MHz at centre
@@ -92,6 +115,7 @@ var DefaultBands = []Band{
 		BinSize:     50000,
 		InterfaceID: "cellular_0",
 		Label:       "LTE Band 8 DL (900)",
+		CropPad:     6,
 	},
 }
 
