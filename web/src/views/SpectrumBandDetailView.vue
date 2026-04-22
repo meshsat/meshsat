@@ -103,17 +103,29 @@ const spectrumCanvas = ref(null)
 let resizeObs = null
 const hover = reactive({ inside: false, x: 0, y: 0, freqHz: 0, power: 0, ts: null })
 
-// ---- Turbo colormap (copied from SpectrumWaterfall.vue so detail
-//      page is self-contained; colormap rarely changes and keeping
-//      them in lock-step is easier as a copy). ----
+// ---- Classic SDR waterfall colormap (copied from
+//      SpectrumWaterfall.vue so detail page is self-contained;
+//      matches RF Explorer / gqrx / SDR# look: dark navy → blue →
+//      cyan → green → yellow → red). ----
 function turbo(t) {
   t = Math.max(0, Math.min(1, t))
-  const r = 34.61 + t * (1172.33 - t * (10793.56 - t * (33300.12 - t * (38394.49 - t * 14825.05))))
-  const g = 23.31 + t * (557.33 + t * (1225.33 - t * (3574.96 - t * (1073.77 + t * 707.56))))
-  const b = 27.2 + t * (3211.1 - t * (15327.97 - t * (27814 - t * (22569.18 - t * 6838.66))))
-  return [Math.max(0, Math.min(255, r)) | 0,
-          Math.max(0, Math.min(255, g)) | 0,
-          Math.max(0, Math.min(255, b)) | 0]
+  const STOPS = [
+    [0.00,   0,   0,  30],
+    [0.20,  30,  30, 180],
+    [0.40,  10, 160, 190],
+    [0.60,  40, 200,  60],
+    [0.80, 240, 200,   0],
+    [1.00, 220,  20,   0],
+  ]
+  let i = 0
+  while (i < STOPS.length - 1 && t > STOPS[i+1][0]) i++
+  const a = STOPS[i], b = STOPS[i+1]
+  const f = (t - a[0]) / (b[0] - a[0])
+  return [
+    (a[1] + (b[1] - a[1]) * f) | 0,
+    (a[2] + (b[2] - a[2]) * f) | 0,
+    (a[3] + (b[3] - a[3]) * f) | 0,
+  ]
 }
 
 function rowPaletteRange(powers) {

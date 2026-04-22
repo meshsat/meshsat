@@ -46,29 +46,33 @@ const orderedBands = computed(() => {
   )
 })
 
-// Turbo colormap lookup (Mikhail Markov's polynomial fit — perceptually
-// uniform, far better than jet, standard in modern RF tools). Input is
-// a normalised 0..1 value; output is [r, g, b] each 0..255.
+// Classic SDR waterfall colormap — matches the look of RF Explorer,
+// gqrx, SDR#, CubicSDR: dark-blue noise floor → bright blue → cyan →
+// green → yellow → red. Turbo (earlier implementation) has a dark
+// PURPLE low-end which gives the waterfall background a warm red
+// tint that doesn't match any pro SDR tool. This is a piecewise
+// linear interpolation between 6 anchor colours sampled directly from
+// SDR-reference screenshots.
 function turbo(t) {
   t = Math.max(0, Math.min(1, t))
-  const r = 34.61 + t * (1172.33 - t * (10793.56 - t * (33300.12 - t * (38394.49 - t * 14825.05))))
-  const g = 23.31 + t * (557.33 + t * (1225.33 - t * (3574.96 - t * (1073.77 + t * 707.56))))
-  const b = 27.2 + t * (3211.1 - t * (15327.97 - t * (27814 - t * (22569.18 - t * 6838.66))))
-  return [Math.max(0, Math.min(255, r)) | 0,
-          Math.max(0, Math.min(255, g)) | 0,
-          Math.max(0, Math.min(255, b)) | 0]
-}
-
-// Normalise a power sample to 0..1 for the colormap. Floor is baseline
-// - 2σ (below that is blue/dark), ceiling is baseline + 10σ (above is
-// clipped to deep red). Keeps the colormap locked to the band's own
-// noise floor rather than an absolute dBm range, so two physically
-// different bands render comparably.
-function normPower(power, baseMean, baseStd) {
-  const floor = baseMean - 2 * (baseStd || 1)
-  const ceil  = baseMean + 10 * (baseStd || 1)
-  if (!isFinite(power)) return 0
-  return (power - floor) / (ceil - floor)
+  //          t ,  r,   g,   b
+  const STOPS = [
+    [0.00,   0,   0,  30],    // near-black dark navy (deep noise floor)
+    [0.20,  30,  30, 180],    // dark blue (noise floor)
+    [0.40,  10, 160, 190],    // cyan
+    [0.60,  40, 200,  60],    // green
+    [0.80, 240, 200,   0],    // yellow
+    [1.00, 220,  20,   0],    // saturated red (strong signal)
+  ]
+  let i = 0
+  while (i < STOPS.length - 1 && t > STOPS[i+1][0]) i++
+  const a = STOPS[i], b = STOPS[i+1]
+  const f = (t - a[0]) / (b[0] - a[0])
+  return [
+    (a[1] + (b[1] - a[1]) * f) | 0,
+    (a[2] + (b[2] - a[2]) * f) | 0,
+    (a[3] + (b[3] - a[3]) * f) | 0,
+  ]
 }
 
 // Y-axis range for the spectrum trace plot (MESHSAT-651). Post-649 the
@@ -131,6 +135,32 @@ const PANEL_AXIS_GUTTER_R = 72  // room for dBm colour legend + time labels
 const PANEL_AXIS_GUTTER_B = 18  // room for freq labels (bottom)
 const PANEL_LEGEND_BAR_W  = 14  // width of the Turbo gradient stripe inside the right gutter
 
+// Container pixel width of a plot wrapper. Drives the SVG viewBox so
+// gutters stay at exact CSS-pixel sizes (46L / 72R) instead of scaling
+// proportionally with a fixed 1000-unit viewBox. Without this, freq
+// labels on the bottom axis don't land under the data columns they
+// describe — the waterfall start/end and the label positions drift
+// apart as container width changes. [MESHSAT-660]
+const plotRefs = reactive({})                    // name -> HTMLElement
+const panelPxW = ref(1000)                       // updated by ResizeObserver
+const PANEL_TOTAL_H = PANEL_SPECTRUM_H + PANEL_WATERFALL_H + PANEL_AXIS_GUTTER_B
+let plotResizeObs = null
+function setPlotRef(name, el) {
+  if (!el) return
+  plotRefs[name] = el
+  if (!plotResizeObs) {
+    plotResizeObs = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const w = e.contentRect?.width
+        if (w && Math.abs(w - panelPxW.value) >= 1) panelPxW.value = w
+      }
+    })
+  }
+  plotResizeObs.observe(el)
+  const w = el.getBoundingClientRect().width
+  if (w) panelPxW.value = w
+}
+
 // Hover state per panel — keyed by band name.
 const hover = reactive({}) // { [band]: { x, y, freqHz, power, inside } }
 
@@ -173,13 +203,15 @@ function drawSpectrum(bandName) {
     return
   }
 
-  // CSS width × device pixel ratio for crispness, height fixed per
-  // layout. We size the canvas buffer to a reasonable max (1200px)
-  // so retina doesn't blow up the framebuffer on 4K displays.
   const cssW = canvas.clientWidth || 600
   const cssH = PANEL_SPECTRUM_H
   const dpr = Math.min(2, window.devicePixelRatio || 1)
-  const W = Math.min(1200, Math.floor(cssW * dpr))
+  // Internal width must match display × dpr so the left gutter
+  // (PANEL_AXIS_GUTTER_L × dpr) renders at exactly 46 display px,
+  // aligning with the waterfall canvas below (CSS-shifted 46 px right).
+  // An earlier 1200 px clamp stretched the gutter on wide containers,
+  // offsetting trace data ~70 px right of waterfall data. [MESHSAT-660]
+  const W = Math.max(1, Math.floor(cssW * dpr))
   const H = Math.floor(cssH * dpr)
   if (canvas.width !== W) canvas.width = W
   if (canvas.height !== H) canvas.height = H
@@ -254,12 +286,16 @@ function drawSpectrum(bandName) {
   }
   ctx.setLineDash([])
 
-  // FFT trace fill. Use a soft gradient (green → yellow at the threshold)
+  // FFT trace fill. Map bin index to x using the SAME convention the
+  // waterfall uses (bin 0 at the left edge, bin n-1 at the right edge,
+  // linear interpolation between) so peaks in the trace land directly
+  // above the corresponding hot columns in the waterfall. The old
+  // code centered bins in cells (plotL + (i+0.5)*xStep), offsetting
+  // narrow-bin bands (APRS n=16) by a visible 39 px. [MESHSAT-660]
   const powers = top.powers
   const n = powers.length
-  const xStep = plotW / n
+  const binX = (i) => n <= 1 ? plotL + plotW / 2 : plotL + (i / (n - 1)) * plotW
 
-  // Fill under the trace
   const fillGrad = ctx.createLinearGradient(0, plotT, 0, plotT + plotH)
   fillGrad.addColorStop(0, 'rgba(239, 68, 68, 0.55)')
   fillGrad.addColorStop(0.35, 'rgba(251, 191, 36, 0.40)')
@@ -269,10 +305,7 @@ function drawSpectrum(bandName) {
   ctx.beginPath()
   ctx.moveTo(plotL, plotT + plotH)
   for (let i = 0; i < n; i++) {
-    const x = plotL + i * xStep + xStep / 2
-    const y = yAt(powers[i])
-    if (i === 0) ctx.lineTo(x, y)
-    else ctx.lineTo(x, y)
+    ctx.lineTo(binX(i), yAt(powers[i]))
   }
   ctx.lineTo(plotL + plotW, plotT + plotH)
   ctx.closePath()
@@ -284,17 +317,18 @@ function drawSpectrum(bandName) {
   ctx.lineJoin = 'round'
   ctx.beginPath()
   for (let i = 0; i < n; i++) {
-    const x = plotL + i * xStep + xStep / 2
+    const x = binX(i)
     const y = yAt(powers[i])
     if (i === 0) ctx.moveTo(x, y)
     else ctx.lineTo(x, y)
   }
   ctx.stroke()
 
-  // Peak marker
+  // Peak marker — align X the same way so the yellow dot sits above
+  // the waterfall's hot column, not next to it.
   let peakIdx = 0
   for (let i = 1; i < n; i++) if (powers[i] > powers[peakIdx]) peakIdx = i
-  const peakX = plotL + peakIdx * xStep + xStep / 2
+  const peakX = binX(peakIdx)
   const peakY = yAt(powers[peakIdx])
   ctx.fillStyle = '#facc15'
   ctx.beginPath()
@@ -310,46 +344,57 @@ function drawSpectrum(bandName) {
 // spectrogram look of desktop SDR tools (SDR#, gqrx, CubicSDR).
 const WATERFALL_COLS = 512
 
-// Palette range is band-level, NOT per-row. Per-row scaling made
-// burst rows compress their own noise floor to the palette bottom
-// while clean rows held a wider palette, visible as dark horizontal
-// stripes every time an APRS/LoRa transmitter keyed up. Band-level
-// scaling keeps the noise-floor color consistent across rows; bursts
-// and narrowband carriers show as hot spots at consistent colors.
-// [MESHSAT-657]
+// Single source of truth for the palette dBm range.
 //
-// Use FIXED dB offsets from baselineMean — not MAD-scaled. Post
-// MESHSAT-649 the scan-to-scan MAD is sub-0.1 dB on quiet bands,
-// collapsing a MAD-driven palette to a ~8 dB window that real LoRa
-// / APRS emissions (+10 to +20 dB above noise) saturate through.
-// Measured on parallax 2026-04-22: lora_868 bursts reach +14 dB
-// above median; APRS transmitters often +20 dB. 25 dB of ceiling
-// headroom covers those while keeping the noise floor in the cool
-// end of the palette.
-function rowPaletteRange(row, band) {
+// Used by both drawWaterfall() and axesFor() for the dBm legend, so
+// the dBm number next to a colour on the legend matches the power of
+// that colour on the waterfall. They previously used different
+// formulas (palette = mean+1..+25 fixed, legend = mean-2σ..+10σ
+// robust-scaled) and could diverge by 8-11 dB at the extremes.
+// [MESHSAT-657 / legend-palette alignment]
+function bandPaletteRange(band) {
+  if (!band) return null
   const mean = band.baselineMean
-  const hasBaseline = Number.isFinite(mean) && mean !== 0
-
-  if (hasBaseline) {
-    return {
-      floor: mean - 3,   // just below scan-to-scan noise variation
-      ceil:  mean + 25,  // covers LoRa / APRS / LTE pilot signals
-    }
+  if (!Number.isFinite(mean) || mean === 0) return null
+  // Floor sits AT the baseline, not below it. Pixel-sampling of the
+  // RF Explorer reference shows its noise-floor areas are near-black
+  // (RGB ~0,0,0), not a visible dark blue — weak signals ≤ baseline
+  // must clamp to the palette's dark end, otherwise the whole
+  // waterfall has a tinted haze.
+  //
+  // 30 dB range. A narrowband APRS/LoRa burst is typically +15-20 dB
+  // above baseline and a jammer is +25-35 dB; mapping 0→30 dB above
+  // baseline across the full palette keeps real signals prominent
+  // (burst → green/yellow, jammer → red) and FFT edge-leakage at
+  // +3-4 dB above baseline clamps to the near-black end of the
+  // palette so it stops painting full-band stripes.
+  //
+  // Note: there's no headroom *below* baseline — anything at or
+  // below the noise floor renders as near-black navy, matching the
+  // look of RF Explorer / CubicSDR.
+  return {
+    floor: mean,
+    ceil:  mean + 30,
   }
+}
+
+function rowPaletteRange(row, band) {
+  const range = bandPaletteRange(band)
+  if (range) return range
 
   // No band baseline yet (still calibrating, first rows). Derive from
   // the row itself so the panel has something to render. Per-row here
   // is acceptable because this path only runs before baseline lands.
-  if (!row || !row.powers?.length) return { floor: -80, ceil: -10 }
+  if (!row || !row.powers?.length) return { floor: -80, ceil: -50 }
   const finite = []
   for (const p of row.powers) if (isFinite(p)) finite.push(p)
-  if (finite.length === 0) return { floor: -80, ceil: -10 }
+  if (finite.length === 0) return { floor: -80, ceil: -50 }
 
   const sorted = finite.slice().sort((a, b) => a - b)
   const median = sorted[Math.floor(sorted.length / 2)]
   return {
-    floor: median - 3,
-    ceil:  median + 25,
+    floor: median,
+    ceil:  median + 30,
   }
 }
 
@@ -434,6 +479,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
+  if (plotResizeObs) { plotResizeObs.disconnect(); plotResizeObs = null }
 })
 function onResize() { nextTick(redrawAll) }
 
@@ -480,21 +526,13 @@ function axesFor(bandName) {
   }
 
   // Colour-legend labels covering the SAME dBm range the waterfall
-  // Turbo colormap uses — baseline - 2σ (floor) → baseline + 10σ
-  // (ceiling), per rowPaletteRange. Without these labels the hue is
-  // unreadable; with them, operators can estimate the dBm of any
-  // colour they see. Shown on the right gutter next to a gradient bar.
-  // Scale uses RobustScaleDB-equivalent (max of std, 1.4826*MAD, 0.5)
-  // so the legend stays meaningful on locked-carrier bands where Std
-  // alone collapses. We replicate the arithmetic locally to avoid
-  // plumbing RobustScaleDB through the store.
-  const scale = Math.max(
-    b.baselineStd || 0,
-    1.4826 * (b.baselineMad || 0),
-    0.5,
-  )
-  const legendFloor = b.baselineMean - 2 * scale
-  const legendCeil  = b.baselineMean + 10 * scale
+  // Turbo colormap uses. Both come from bandPaletteRange() so the
+  // number next to a colour on the legend matches the actual power of
+  // that colour in the waterfall canvas. Fallback (uncalibrated band)
+  // keeps the legend readable with a placeholder range.
+  const palRange = bandPaletteRange(b) || { floor: -80, ceil: -50 }
+  const legendFloor = palRange.floor
+  const legendCeil  = palRange.ceil
   const legendStops = [0, 0.25, 0.5, 0.75, 1.0]
   const legendLabels = legendStops.map(t => ({
     t,
@@ -721,6 +759,7 @@ function fmtNum2(v) {
       </template>
 
       <div class="sa-plot"
+           :ref="el => setPlotRef(name, el)"
            @mousemove="e => updateHover(name, e, $event.currentTarget)"
            @mouseleave="setHoverOutside(name)">
         <!-- Spectrum canvas -->
@@ -730,24 +769,25 @@ function fmtNum2(v) {
         <canvas :ref="el => { if (el) waterfallCanvases[name] = el }"
                 class="sa-waterfall-canvas" />
 
-        <!-- Axis overlay SVG. viewBox matches the plot pixel rect.
-             Three gutters: left (dBm FFT axis), right (dBm colour
-             legend + time axis), bottom (frequency). -->
+        <!-- Axis overlay SVG. viewBox tracks the panel's live pixel
+             width so left (46) / right (72) gutters stay at exact CSS
+             pixels and freq labels drop under their data columns. -->
         <svg class="sa-axes" v-if="axesFor(name)"
-             :viewBox="`0 0 1000 ${PANEL_SPECTRUM_H + PANEL_WATERFALL_H + PANEL_AXIS_GUTTER_B}`"
+             :viewBox="`0 0 ${panelPxW} ${PANEL_TOTAL_H}`"
              preserveAspectRatio="none">
-          <!-- Turbo colormap gradient definition — same polynomial as
-               the Canvas turbo() function, sampled at 5 stops. Exact
-               per-bin fidelity doesn't matter; operators need to
-               roughly decode the waterfall hue, not reverse-engineer
-               the colourmap. -->
           <defs>
+            <!-- Gradient stops mirror turbo() in reverse (top = hot, bottom
+                 = cold). Must stay 1:1 with the STOPS array in turbo()
+                 above, otherwise the colour the operator sees on the
+                 waterfall won't match the dBm label next to the same
+                 colour on the legend. -->
             <linearGradient :id="'legend-' + name" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stop-color="rgb(136, 3, 14)" />
-              <stop offset="25%"  stop-color="rgb(248, 184, 37)" />
-              <stop offset="50%"  stop-color="rgb(162, 252, 60)" />
-              <stop offset="75%"  stop-color="rgb(45, 195, 230)" />
-              <stop offset="100%" stop-color="rgb(34, 53, 158)" />
+              <stop offset="0%"   stop-color="rgb(220,  20,   0)" />
+              <stop offset="20%"  stop-color="rgb(240, 200,   0)" />
+              <stop offset="40%"  stop-color="rgb( 40, 200,  60)" />
+              <stop offset="60%"  stop-color="rgb( 10, 160, 190)" />
+              <stop offset="80%"  stop-color="rgb( 30,  30, 180)" />
+              <stop offset="100%" stop-color="rgb(  0,   0,  30)" />
             </linearGradient>
           </defs>
 
@@ -758,19 +798,20 @@ function fmtNum2(v) {
               {{ lb.dB }}
             </text>
           </g>
-          <!-- Freq labels along the bottom -->
+          <!-- Freq labels along the bottom — lb.t is 0..1 across the plot area,
+               which is container px [L, panelPxW - R]. -->
           <g v-for="(lb, i) in axesFor(name).fLabels" :key="'f'+i" class="sa-axis-label">
-            <text :x="PANEL_AXIS_GUTTER_L + lb.t * (1000 - PANEL_AXIS_GUTTER_L - PANEL_AXIS_GUTTER_R)"
+            <text :x="PANEL_AXIS_GUTTER_L + lb.t * (panelPxW - PANEL_AXIS_GUTTER_L - PANEL_AXIS_GUTTER_R)"
                   :y="PANEL_SPECTRUM_H + PANEL_WATERFALL_H + 12"
                   text-anchor="middle">{{ lb.label }}</text>
           </g>
           <!-- Vertical divider between spectrum + waterfall -->
-          <line :x1="PANEL_AXIS_GUTTER_L" :x2="1000 - PANEL_AXIS_GUTTER_R"
+          <line :x1="PANEL_AXIS_GUTTER_L" :x2="panelPxW - PANEL_AXIS_GUTTER_R"
                 :y1="PANEL_SPECTRUM_H" :y2="PANEL_SPECTRUM_H"
                 class="sa-divider" />
 
           <!-- Right gutter: dBm colour legend next to the waterfall -->
-          <rect :x="1000 - PANEL_AXIS_GUTTER_R + 4"
+          <rect :x="panelPxW - PANEL_AXIS_GUTTER_R + 4"
                 :y="PANEL_SPECTRUM_H"
                 :width="PANEL_LEGEND_BAR_W"
                 :height="PANEL_WATERFALL_H"
@@ -778,22 +819,22 @@ function fmtNum2(v) {
                 stroke="#1e293b" stroke-width="0.5"
                 vector-effect="non-scaling-stroke" />
           <g v-for="(lb, i) in axesFor(name).legendLabels" :key="'lg'+i" class="sa-axis-label">
-            <text :x="1000 - PANEL_AXIS_GUTTER_R + 4 + PANEL_LEGEND_BAR_W + 3"
+            <text :x="panelPxW - PANEL_AXIS_GUTTER_R + 4 + PANEL_LEGEND_BAR_W + 3"
                   :y="PANEL_SPECTRUM_H + lb.y + 3" text-anchor="start">
               {{ lb.dB.toFixed(0) }}
             </text>
           </g>
-          <text :x="1000 - PANEL_AXIS_GUTTER_R + 4"
+          <text :x="panelPxW - PANEL_AXIS_GUTTER_R + 4"
                 :y="PANEL_SPECTRUM_H - 3"
                 class="sa-axis-label sa-axis-unit">dBm</text>
 
           <!-- Right gutter: time axis on waterfall -->
           <g v-for="(lb, i) in axesFor(name).tLabels" :key="'t'+i" class="sa-axis-label">
-            <text :x="1000 - 2"
+            <text :x="panelPxW - 2"
                   :y="PANEL_SPECTRUM_H + lb.y + 3"
                   text-anchor="end">{{ lb.label }}</text>
           </g>
-          <text :x="1000 - 2"
+          <text :x="panelPxW - 2"
                 :y="PANEL_SPECTRUM_H - 3"
                 class="sa-axis-label sa-axis-unit" text-anchor="end">time</text>
         </svg>
