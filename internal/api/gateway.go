@@ -134,6 +134,26 @@ func (s *Server) handleGetSatModemInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleHardPowerCycle pulses the 9603's OnOff GPIO and reconnects.
+// @Summary Hard-power-cycle the 9603 modem
+// @Description Drives the MESHSAT_IRIDIUM_ONOFF_PIN GPIO through a 500 ms OFF pulse, waits for the modem to re-boot, then re-initialises the AT session. Requires OnOff pin to be configured (MESHSAT_IRIDIUM_ONOFF_PIN) and a hardware MOSFET buffer for Rev F RockBLOCK 9603 (MESHSAT-669).
+// @Tags iridium
+// @Success 200 {object} map[string]string "{\"status\": \"ok\"}"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/iridium/power-cycle [post]
+func (s *Server) handleHardPowerCycle(w http.ResponseWriter, r *http.Request) {
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
+		return
+	}
+	if err := s.gwManager.HardPowerCycleSBD(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // handleCheckProvisioning returns the 9704 modem's provisioned topics.
 // @Summary Check IMT provisioning
 // @Description Returns provisioned topics from the RockBLOCK 9704. Empty list means not provisioned.

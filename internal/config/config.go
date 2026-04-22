@@ -16,14 +16,16 @@ type Config struct {
 	WebDir        string // "" = embedded, path = serve from disk
 
 	// Direct mode device ports ("auto" or "" = auto-detect)
-	MeshtasticPort  string
-	IridiumPort     string
-	IridiumSleepPin int    // GPIO BCM pin for 9603N sleep/wake (0 = disabled)
-	IridiumNetAvPin int    // GPIO BCM pin for 9603 NetAv input (0 = disabled, MESHSAT-666)
-	IridiumRIPin    int    // GPIO BCM pin for 9603 RI input (0 = disabled, MESHSAT-667)
-	IMTPort         string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
-	CellularPort    string
-	ZigBeePort      string
+	MeshtasticPort         string
+	IridiumPort            string
+	IridiumSleepPin        int    // GPIO BCM pin for 9603N sleep/wake (0 = disabled)
+	IridiumNetAvPin        int    // GPIO BCM pin for 9603 NetAv input (0 = disabled, MESHSAT-666)
+	IridiumRIPin           int    // GPIO BCM pin for 9603 RI input (0 = disabled, MESHSAT-667)
+	IridiumOnOffPin        int    // GPIO BCM pin for 9603 OnOff output (0 = disabled, MESHSAT-668)
+	IridiumOnOffActiveHigh bool   // OnOff polarity: true = direct wire (HIGH=on); false = MOSFET buffer (LOW=on, default)
+	IMTPort                string // RockBLOCK 9704 (JSPR/IMT) — "auto", "", or /dev/ttyUSBx
+	CellularPort           string
+	ZigBeePort             string
 
 	// Cost safety: global rate limit for paid transports (messages/hour)
 	PaidRateLimit int
@@ -91,39 +93,41 @@ type Config struct {
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
-		Port:                envInt("MESHSAT_PORT", 6050),
-		DBPath:              envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
-		HALURL:              envStr("HAL_URL", "http://cubeos-hal:6005"),
-		HALAPIKey:           envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
-		Mode:                envStr("MESHSAT_MODE", "cubeos"),
-		RetentionDays:       envInt("MESHSAT_RETENTION_DAYS", 30),
-		WebDir:              envStr("MESHSAT_WEB_DIR", ""),
-		MeshtasticPort:      envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
-		IridiumPort:         envStr("MESHSAT_IRIDIUM_PORT", "auto"),
-		IridiumSleepPin:     envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
-		IridiumNetAvPin:     envInt("MESHSAT_IRIDIUM_NETAV_PIN", 0),
-		IridiumRIPin:        envInt("MESHSAT_IRIDIUM_RI_PIN", 0),
-		IMTPort:             envStr("MESHSAT_IMT_PORT", "auto"),
-		CellularPort:        envStr("MESHSAT_CELLULAR_PORT", "auto"),
-		ZigBeePort:          envStr("MESHSAT_ZIGBEE_PORT", "auto"),
-		PaidRateLimit:       envInt("MESHSAT_PAID_RATE_LIMIT", 60),
-		APIRateLimit:        envInt("MESHSAT_API_RATE_LIMIT", 600),
-		MeshWatchdogMin:     envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
-		LlamaZipAddr:        envStr("MESHSAT_LLAMAZIP_ADDR", ""),
-		LlamaZipTimeoutSec:  envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
-		MSVQSCAddr:          envStr("MESHSAT_MSVQSC_ADDR", ""),
-		MSVQSCTimeoutSec:    envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
-		MSVQSCCodebook:      envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
-		TCPListenAddr:       envStr("MESHSAT_TCP_LISTEN", ""),
-		TCPConnectAddr:      envStr("MESHSAT_TCP_CONNECT", ""),
-		AX25KISSAddr:        envStr("MESHSAT_AX25_KISS_ADDR", ""),
-		AX25Callsign:        envStr("MESHSAT_AX25_CALLSIGN", ""),
-		SMSReticulumPeer:    envStr("MESHSAT_SMS_RETICULUM_PEER", ""),
-		BLEAdapter:          envStr("MESHSAT_BLE_ADAPTER", ""),
-		BLEDeviceName:       envStr("MESHSAT_BLE_DEVICE_NAME", "MeshSat-RNS"),
-		MQTTReticulumBroker: envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
-		MQTTReticulumTopic:  envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
-		AnnounceIntervalSec: envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
+		Port:                   envInt("MESHSAT_PORT", 6050),
+		DBPath:                 envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
+		HALURL:                 envStr("HAL_URL", "http://cubeos-hal:6005"),
+		HALAPIKey:              envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
+		Mode:                   envStr("MESHSAT_MODE", "cubeos"),
+		RetentionDays:          envInt("MESHSAT_RETENTION_DAYS", 30),
+		WebDir:                 envStr("MESHSAT_WEB_DIR", ""),
+		MeshtasticPort:         envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
+		IridiumPort:            envStr("MESHSAT_IRIDIUM_PORT", "auto"),
+		IridiumSleepPin:        envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
+		IridiumNetAvPin:        envInt("MESHSAT_IRIDIUM_NETAV_PIN", 0),
+		IridiumRIPin:           envInt("MESHSAT_IRIDIUM_RI_PIN", 0),
+		IridiumOnOffPin:        envInt("MESHSAT_IRIDIUM_ONOFF_PIN", 0),
+		IridiumOnOffActiveHigh: envBool("MESHSAT_IRIDIUM_ONOFF_ACTIVE_HIGH", false),
+		IMTPort:                envStr("MESHSAT_IMT_PORT", "auto"),
+		CellularPort:           envStr("MESHSAT_CELLULAR_PORT", "auto"),
+		ZigBeePort:             envStr("MESHSAT_ZIGBEE_PORT", "auto"),
+		PaidRateLimit:          envInt("MESHSAT_PAID_RATE_LIMIT", 60),
+		APIRateLimit:           envInt("MESHSAT_API_RATE_LIMIT", 600),
+		MeshWatchdogMin:        envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		LlamaZipAddr:           envStr("MESHSAT_LLAMAZIP_ADDR", ""),
+		LlamaZipTimeoutSec:     envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
+		MSVQSCAddr:             envStr("MESHSAT_MSVQSC_ADDR", ""),
+		MSVQSCTimeoutSec:       envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
+		MSVQSCCodebook:         envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
+		TCPListenAddr:          envStr("MESHSAT_TCP_LISTEN", ""),
+		TCPConnectAddr:         envStr("MESHSAT_TCP_CONNECT", ""),
+		AX25KISSAddr:           envStr("MESHSAT_AX25_KISS_ADDR", ""),
+		AX25Callsign:           envStr("MESHSAT_AX25_CALLSIGN", ""),
+		SMSReticulumPeer:       envStr("MESHSAT_SMS_RETICULUM_PEER", ""),
+		BLEAdapter:             envStr("MESHSAT_BLE_ADAPTER", ""),
+		BLEDeviceName:          envStr("MESHSAT_BLE_DEVICE_NAME", "MeshSat-RNS"),
+		MQTTReticulumBroker:    envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
+		MQTTReticulumTopic:     envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
+		AnnounceIntervalSec:    envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
 		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),
@@ -169,4 +173,18 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// envBool reads a boolean env var. Accepts "1", "true", "yes", "on"
+// (case-insensitive) as true; anything else as false. Unset → fallback.
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "YES", "Yes", "on", "ON", "On":
+		return true
+	}
+	return false
 }

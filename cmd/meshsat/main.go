@@ -142,6 +142,12 @@ func main() {
 			directSat.SetRIPin(cfg.IridiumRIPin)
 			log.Info().Int("pin", cfg.IridiumRIPin).Msg("iridium: RI GPIO configured (MESHSAT_IRIDIUM_RI_PIN)")
 		}
+		if cfg.IridiumOnOffPin > 0 {
+			directSat.SetOnOffPin(cfg.IridiumOnOffPin)
+			directSat.SetOnOffActiveHigh(cfg.IridiumOnOffActiveHigh)
+			log.Info().Int("pin", cfg.IridiumOnOffPin).Bool("active_high", cfg.IridiumOnOffActiveHigh).
+				Msg("iridium: OnOff GPIO configured (MESHSAT_IRIDIUM_ONOFF_PIN)")
+		}
 
 		directCell := transport.NewDirectCellTransport(cellPort)
 		directCell.SetSIMCardLookup(

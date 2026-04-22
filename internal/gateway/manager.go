@@ -1414,6 +1414,20 @@ func (m *Manager) GetSBDModemInfo(ctx context.Context) (*transport.SatStatus, er
 	return m.sat.GetStatus(ctx)
 }
 
+// HardPowerCycleSBD pulses the 9603's OnOff GPIO and reconnects.
+// Returns an error if no SBD transport is registered or the transport
+// doesn't implement the SBDTransport interface. See MESHSAT-668.
+func (m *Manager) HardPowerCycleSBD(ctx context.Context) error {
+	if m.sat == nil {
+		return fmt.Errorf("SBD transport not available")
+	}
+	sbd, ok := m.sat.(transport.SBDTransport)
+	if !ok {
+		return fmt.Errorf("SBD transport does not support HardPowerCycle")
+	}
+	return sbd.HardPowerCycle(ctx)
+}
+
 // CheckIMTProvisioning queries the 9704 modem for its provisioned topics.
 // An empty list means the modem hasn't completed provisioning with the Iridium network.
 func (m *Manager) CheckIMTProvisioning() ([]transport.ProvisioningTopic, error) {

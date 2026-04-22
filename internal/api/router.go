@@ -325,6 +325,7 @@ func (s *Server) Router() http.Handler {
 		// Iridium modem info
 		r.Get("/iridium/modem", s.handleGetSatModemInfo)
 		r.Get("/iridium/provisioning", s.handleCheckProvisioning)
+		r.Post("/iridium/power-cycle", s.handleHardPowerCycle)
 
 		// Iridium signal
 		r.Get("/iridium/signal", s.handleGetIridiumSignal)

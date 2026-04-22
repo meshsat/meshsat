@@ -115,4 +115,8 @@ type SBDTransport interface {
 	Sleep(ctx context.Context) error
 	// Wake brings the modem out of sleep mode (if sleep pin is configured).
 	Wake(ctx context.Context) error
+	// HardPowerCycle drives the OnOff pin through a 500 ms OFF pulse,
+	// waits for the modem to boot, then re-initialises the AT session.
+	// Returns an error if the OnOff pin is not configured (MESHSAT-668).
+	HardPowerCycle(ctx context.Context) error
 }

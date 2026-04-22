@@ -73,6 +73,17 @@ type DirectSatTransport struct {
 	riPulseCount  atomic.Int64              // total edges since boot (before dedupe)
 	lastRingAlert atomic.Pointer[time.Time] // either source (UART or GPIO)
 
+	// 9603 OnOff GPIO output (BCM, 0 = disabled). Rev F requires
+	// supply-voltage logic (~5 V for ON), so the recommended hardware
+	// is an N-MOSFET buffer between Pi GPIO and PicoBlade pin 7 —
+	// Pi HIGH opens the MOSFET gate, grounding OnOff (modem OFF);
+	// Pi LOW lets a 10 kΩ pull-up take OnOff to 5 V (modem ON). The
+	// onOffActiveHigh flag inverts this for direct-wire cases (5 V-
+	// tolerant MCU). See MESHSAT-668 / MESHSAT-669.
+	onOffPin        int
+	onOffLine       GPIOLine
+	onOffActiveHigh bool
+
 	// SBDIX rate limiting
 	lastSBDIX   time.Time
 	lastGSSSync time.Time // last successful SBDIX that reached the GSS (for MT discovery)
@@ -244,6 +255,22 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 		} else {
 			t.riLine = line
 			log.Info().Int("pin", t.riPin).Msg("iridium: RI pin configured (hardware ring-alert)")
+		}
+	}
+
+	// Configure OnOff GPIO output (if set) and drive to the ON level.
+	// We claim the line once and hold it for the lifetime of the
+	// connection; HardPowerCycle pulses it and returns to the ON level.
+	if t.onOffPin > 0 && t.onOffLine == nil {
+		_, onLevel := t.onOffLevels()
+		line, err := OpenOutput(t.onOffPin, onLevel, "meshsat-iridium-onoff")
+		if err != nil {
+			log.Warn().Err(err).Int("pin", t.onOffPin).Msg("iridium: OnOff pin setup failed, continuing without")
+			t.onOffPin = 0
+		} else {
+			t.onOffLine = line
+			log.Info().Int("pin", t.onOffPin).Bool("active_high", t.onOffActiveHigh).
+				Int("on_level", onLevel).Msg("iridium: OnOff pin configured")
 		}
 	}
 
@@ -1014,6 +1041,96 @@ func (t *DirectSatTransport) SetRIPin(pin int) {
 	t.riPin = pin
 }
 
+// SetOnOffPin configures the GPIO pin that drives the 9603 OnOff
+// control. On Rev F of the RockBLOCK 9603 this must be buffered by
+// an N-MOSFET open-drain driver + 10 kΩ pull-up to 5 V; direct-wiring
+// a 3.3 V Pi GPIO to OnOff will not cross the 4.5 V ON threshold.
+// Pin 0 = disabled. Must be called before Connect(). See MESHSAT-668
+// (software) and MESHSAT-669 (hardware).
+func (t *DirectSatTransport) SetOnOffPin(pin int) {
+	t.onOffPin = pin
+}
+
+// SetOnOffActiveHigh selects the polarity of the OnOff line.
+// Default (active-high=false) assumes an inverting MOSFET buffer:
+// driving the Pi GPIO LOW keeps the MOSFET off, letting a pull-up
+// take OnOff to the modem's ON level. Set to true when directly
+// wired to a 5 V-tolerant controller where HIGH = ON.
+func (t *DirectSatTransport) SetOnOffActiveHigh(b bool) {
+	t.onOffActiveHigh = b
+}
+
+// onOffLevels returns (offLevel, onLevel) for the configured polarity.
+// Default MOSFET case: HIGH on the Pi GPIO turns the modem OFF;
+// active-high direct-wire flips both.
+func (t *DirectSatTransport) onOffLevels() (off, on int) {
+	if t.onOffActiveHigh {
+		return 0, 1
+	}
+	return 1, 0
+}
+
+// HardPowerCycle pulses the OnOff line OFF for 500 ms, drives it back
+// to ON, gives the modem 5 s to boot, then re-runs the AT
+// initialisation. Acquires the serial mutex for the duration so no
+// other caller can collide. Returns an error if the OnOff pin is not
+// configured. See MESHSAT-668.
+func (t *DirectSatTransport) HardPowerCycle(ctx context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.onOffLine == nil {
+		return fmt.Errorf("OnOff pin not configured (set MESHSAT_IRIDIUM_ONOFF_PIN)")
+	}
+
+	offLevel, onLevel := t.onOffLevels()
+	log.Info().
+		Int("pin", t.onOffPin).
+		Bool("active_high", t.onOffActiveHigh).
+		Int("off_level", offLevel).
+		Int("on_level", onLevel).
+		Msg("iridium: hard power cycle")
+
+	// Stop monitors + signal poller so they don't try to read the
+	// dying UART while the modem is power-cycling. stopMonitor is
+	// safe to call while holding mu (it releases + re-acquires it
+	// internally to let the goroutines exit).
+	t.stopMonitor()
+
+	// Close serial — port handle is worthless while the modem is off.
+	if t.file != nil {
+		_ = t.file.Close()
+		t.file = nil
+	}
+	t.connected = false
+	t.awake = false
+
+	// 500 ms OFF pulse — well above the 100 ms+ required to register a
+	// state change on the 9603's OnOff input.
+	if err := t.onOffLine.SetValue(offLevel); err != nil {
+		return fmt.Errorf("onoff off: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if err := t.onOffLine.SetValue(onLevel); err != nil {
+		return fmt.Errorf("onoff on: %w", err)
+	}
+
+	// 5 s boot window — RockBLOCK 9603 typically needs 2-3 s to
+	// respond to the first AT; we give it a generous margin before
+	// the next init sequence.
+	select {
+	case <-time.After(5 * time.Second):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Re-init AT and restart monitors via the normal connect path.
+	if err := t.connectLocked(ctx); err != nil {
+		return fmt.Errorf("post-cycle reconnect: %w", err)
+	}
+	return nil
+}
+
 // riEventHandler is invoked by go-gpiocdev's event dispatcher
 // goroutine on every falling edge of the RI line. Duplicates against
 // the UART SBDRING path are dedup'd by the gateway's handleRingAlert
@@ -1134,6 +1251,14 @@ func (t *DirectSatTransport) Close() error {
 	if t.riLine != nil {
 		_ = t.riLine.Close()
 		t.riLine = nil
+	}
+
+	// Release OnOff line. We intentionally don't drive an OFF pulse on
+	// shutdown — a bridge restart should leave the modem running so
+	// the next Subscribe re-attaches cleanly.
+	if t.onOffLine != nil {
+		_ = t.onOffLine.Close()
+		t.onOffLine = nil
 	}
 
 	t.connected = false
