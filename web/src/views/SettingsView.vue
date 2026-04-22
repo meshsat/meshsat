@@ -2414,10 +2414,19 @@ onUnmounted(() => {
           </p>
         </div>
 
-        <!-- Hard red regulatory banner. Stays visible the whole time
-             encryption is enabled — no dismiss button. -->
-        <div v-if="aprsEncryptEnabled" class="rounded border border-red-600/70 bg-red-900/20 px-3 py-2 text-xs text-red-200 space-y-1">
-          <div class="font-semibold">Regulatory notice</div>
+        <!-- Regulatory notice. Always visible on the tab so the operator
+             reads it BEFORE enabling, not just after. Goes red when the
+             toggle is actually on so it stays loud whenever ciphertext
+             is being transmitted. -->
+        <div :class="[
+              'rounded border px-3 py-2 text-xs space-y-1',
+              aprsEncryptEnabled
+                ? 'border-red-600/70 bg-red-900/20 text-red-200'
+                : 'border-amber-600/50 bg-amber-900/15 text-amber-200',
+             ]">
+          <div class="font-semibold">
+            Regulatory notice{{ aprsEncryptEnabled ? ' — encryption ACTIVE' : '' }}
+          </div>
           <div>
             Encrypted content is typically <span class="font-bold">prohibited on amateur-radio bands</span> (2&nbsp;m, 70&nbsp;cm, 6&nbsp;m, HF).
             Only enable this on a frequency your licence authorises you to encrypt on (ISM / PMR / SRD / commercial).
