@@ -961,29 +961,47 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 	}
 
 	sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
+		// MESHSAT-672 diagnostic: log every bearer symbol going out so
+		// the hex head can be compared against the peer's
+		// `handleRoutingPacket entry` log to localise where the HeMB
+		// frame shape is lost. Wrapped inline so it's one line per
+		// SendFn invocation, not per SendViaBondGroup.
+		wrap := func(kind string, inner func(ctx context.Context, data []byte) error) func(ctx context.Context, data []byte) error {
+			return func(ctx context.Context, data []byte) error {
+				head := data
+				if len(head) > 16 {
+					head = head[:16]
+				}
+				log.Debug().Str("iface", ifaceID).Str("kind", kind).
+					Int("len", len(data)).Hex("head", head).
+					Msg("hemb: bearer TX symbol (MESHSAT-672 diag)")
+				return inner(ctx, data)
+			}
+		}
+
 		gw := d.gwProv.GatewayByInterfaceID(ifaceID)
 		if gw != nil {
 			log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via gateway")
-			return func(ctx context.Context, data []byte) error {
+			return wrap("gateway", func(ctx context.Context, data []byte) error {
 				return gw.Forward(ctx, &transport.MeshMessage{RawPayload: data})
-			}
+			})
 		}
 		// Reticulum packet sender: crosses bridges via TCP/HDLC.
 		if d.pktSender != nil {
 			if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
 				log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via packet sender")
-				return fn
+				return wrap("pktsender", fn)
 			}
 		}
 		// Last resort: raw mesh (local only — doesn't cross Meshtastic nodes).
 		if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
 			log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via raw mesh")
-			return func(ctx context.Context, data []byte) error {
+			return wrap("rawmesh", func(ctx context.Context, data []byte) error {
 				return d.mesh.SendRaw(ctx, transport.RawRequest{
 					PortNum: 256,
 					Payload: encoding_base64.StdEncoding.EncodeToString(data),
 				})
-			}
+			})
 		}
 		log.Warn().Str("iface", ifaceID).Msg("hemb: no sendFn for bearer — skipped")
 		return nil
