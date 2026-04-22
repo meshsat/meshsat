@@ -186,7 +186,7 @@ build:
 package:
   stage: package
   tags: [multiarch]
-  image: docker:24
+  image: docker:27
   needs:
     - job: build
       artifacts: true
