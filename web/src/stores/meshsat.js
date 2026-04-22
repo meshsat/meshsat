@@ -513,6 +513,17 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Hard power-cycle the 9603 SBD modem via its OnOff GPIO. Only
+  // works when MESHSAT_IRIDIUM_ONOFF_PIN is configured on the bridge
+  // AND the hardware MOSFET buffer (MESHSAT-669) is installed.
+  async function powerCycleIridium() {
+    error.value = null
+    try {
+      await api.post('/iridium/power-cycle')
+      await fetchSatModem()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   async function fetchPasses(params = {}) {
     try {
       const data = await api.get('/iridium/passes', params)
@@ -1751,7 +1762,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchNeighborInfo, sendRangeTest, fetchRangeTests,
     sendPosition, setFixedPosition, removeFixedPosition,
     requestStoreForward, getCannedMessages, setCannedMessages,
-    fetchSatModem, fetchIridiumSignalFast, fetchIridiumSignal,
+    fetchSatModem, fetchIridiumSignalFast, fetchIridiumSignal, powerCycleIridium,
     fetchSignalHistory, fetchGSSHistory, fetchCredits, setCreditBudget, fetchSchedulerStatus,
     fetchPasses, refreshTLEs, fetchLocations, createLocation, deleteLocation, manualMailboxCheck,
     fetchLocationSources, fetchIridiumGeoHistory,

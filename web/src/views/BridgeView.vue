@@ -9,6 +9,30 @@ const activeTab = ref('outbound')
 const expandedItem = ref(null) // queue item ID for debug panel
 const expandedPane = ref(null) // 'mesh' | 'mqtt' | 'iridium' | 'cellular'
 
+// 9603 hard power-cycle state (MESHSAT-668 / MESHSAT-670)
+const powerCyclingIridium = ref(false)
+const powerCycleMsg = ref('')
+const powerCycleErr = ref(false)
+
+async function handlePowerCycleIridium() {
+  if (!confirm('Hard power-cycle the 9603 modem? This will drop the current AT session for ~8 s.')) return
+  powerCyclingIridium.value = true
+  powerCycleMsg.value = ''
+  powerCycleErr.value = false
+  try {
+    await store.powerCycleIridium()
+    powerCycleMsg.value = 'Modem rebooted.'
+  } catch (e) {
+    powerCycleMsg.value = e.message || 'Power-cycle failed.'
+    powerCycleErr.value = true
+  } finally {
+    powerCyclingIridium.value = false
+  }
+}
+
+// Shorter alias for template use — formatRelativeTime is already imported.
+const formatRelative = formatRelativeTime
+
 const subTabs = [
   { id: 'outbound', label: 'Outbound' },
   { id: 'inbound', label: 'Inbound' },
@@ -313,6 +337,37 @@ onUnmounted(() => {
           </div>
           <div class="flex justify-between"><span class="text-gray-600">Signal Bars</span><span>{{ store.iridiumSignal?.bars ?? 'N/A' }}</span></div>
           <div class="flex justify-between"><span class="text-gray-600">Assessment</span><span>{{ store.iridiumSignal?.assessment || 'N/A' }}</span></div>
+          <!-- 9603 GPIO status (MESHSAT-666/667): fields are omitempty on the API so
+               they simply don't appear for kits without NetAv/RI wired. -->
+          <div v-if="'network_available' in (store.satModem || {})" class="flex justify-between">
+            <span class="text-gray-600">NetAv (sat visible)</span>
+            <span :class="store.satModem.network_available ? 'text-green-400' : 'text-gray-500'">
+              {{ store.satModem.network_available ? 'YES' : 'no' }}
+            </span>
+          </div>
+          <div v-if="store.satModem?.last_ring_alert" class="flex justify-between">
+            <span class="text-gray-600">Last Ring Alert</span>
+            <span>{{ formatRelative(store.satModem.last_ring_alert) }}</span>
+          </div>
+          <div v-if="store.satModem?.ri_pulse_count" class="flex justify-between">
+            <span class="text-gray-600">RI pulses</span>
+            <span>{{ store.satModem.ri_pulse_count }}</span>
+          </div>
+          <!-- Hard power-cycle button (MESHSAT-668): only shown for SBD transports -->
+          <div v-if="!bridgeIsIMT" class="pt-2 border-t border-tactical-border/50 mt-2">
+            <button
+              @click="handlePowerCycleIridium"
+              :disabled="powerCyclingIridium"
+              class="w-full px-3 py-1.5 rounded bg-red-400/10 text-red-400 text-xs font-medium hover:bg-red-400/20 border border-red-400/20 disabled:opacity-50 disabled:cursor-wait">
+              {{ powerCyclingIridium ? 'Pulsing OnOff…' : 'Hard power-cycle 9603' }}
+            </button>
+            <p v-if="powerCycleMsg" class="mt-1 text-[10px]" :class="powerCycleErr ? 'text-red-400' : 'text-green-400'">
+              {{ powerCycleMsg }}
+            </p>
+            <p class="mt-1 text-[10px] text-gray-600">
+              Needs MESHSAT_IRIDIUM_ONOFF_PIN + MOSFET buffer (MESHSAT-668/669).
+            </p>
+          </div>
         </template>
         <div v-else class="text-gray-600">Not configured</div>
       </div>
