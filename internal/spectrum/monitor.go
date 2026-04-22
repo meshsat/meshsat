@@ -567,13 +567,15 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 			return nil
 		}
 
-		// rtl_power timeout. The rtl-sdr-blog fork (required for the
-		// RTL-SDR Blog V4's R828D tuner) adds noticeable cold-start
-		// overhead — dongle auto-detection + tuner init can run past
-		// 12 s on the Pi 5 + USB 2.0 hub. 30 s is generous but caps
-		// runaway scans. Scan time is still dominated by the 1 s
-		// integration window in practice. [MESHSAT-509]
-		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		// rtl_power_fftw timeout. Measured on parallax 2026-04-22: a
+		// Blog V4 tuner cold-start in a fresh container takes ~2 min
+		// between process exec and first `Acquisition started` log
+		// (async buffer setup + R828D auto-detect + gain calibration
+		// in librtlsdr). 90 s covers cold-start comfortably without
+		// letting a genuinely stuck scan hold the dongle for minutes.
+		// Warm scans still complete in <10 s so the cap is invisible
+		// in steady state. [MESHSAT-509, MESHSAT-656]
+		scanCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
 
@@ -645,12 +647,11 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 
 		// rtl_power timeout. The rtl-sdr-blog fork (required for the
 		// RTL-SDR Blog V4's R828D tuner) adds noticeable cold-start
-		// overhead — dongle auto-detection + tuner init can run past
-		// 12 s on the Pi 5 + USB 2.0 hub. 30 s is generous but caps
-		// runaway scans. Scan time is still dominated by the 1 s
-		// integration window in practice. [MESHSAT-509]
+		// See calibrate() for the timeout rationale. 90 s covers
+		// Blog V4 cold-start; warm scans return in <10 s so this cap
+		// is invisible in steady state. [MESHSAT-509, MESHSAT-656]
 		scanStart := time.Now()
-		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		scanCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize)
 		cancel()
 		scanDur := time.Since(scanStart)
