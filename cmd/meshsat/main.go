@@ -1717,7 +1717,36 @@ func main() {
 						MTU:     tunMTU,
 						EventCh: hemb.GlobalEventBus.Channel(),
 					})
-					proc.SetHeMBBonder(tunBonder)
+					// Decide which bonder owns the Processor's inbound
+					// symbol demux:
+					//   * bond-encryption mode (any group has
+					//     ingress_transforms): keep the bond-decrypt
+					//     receiveBonder wired earlier — the TUN adapter
+					//     still starts for TX-side IP-over-HeMB flow
+					//     but IP RX over this bond is mutually
+					//     exclusive with message-RX + decrypt (single
+					//     HeMB header carries no stream-type tag).
+					//   * plaintext mode (no ingress transforms on any
+					//     group): fall back to the TUN adapter's
+					//     bonder, which writes reassembled IP frames
+					//     to the TUN fd — the historical behaviour.
+					// Follow-up in MESHSAT-664 / MESHSAT-672 adds a
+					// frame-level stream-type tag so both paths can
+					// coexist. [MESHSAT-672]
+					bondCryptoActive := false
+					if bgList, err := db.GetAllBondGroups(); err == nil {
+						for _, bg := range bgList {
+							if bg.IngressTransforms != "" && bg.IngressTransforms != "[]" {
+								bondCryptoActive = true
+								break
+							}
+						}
+					}
+					if bondCryptoActive {
+						log.Info().Msg("hemb: TUN adapter started in TX-only mode — bond ingress transforms present, inbound symbols handled by the bond-decrypt receiveBonder")
+					} else {
+						proc.SetHeMBBonder(tunBonder)
+					}
 					// Give the API server a handle so autoWireP2PPeer
 					// (MESHSAT-647) can hot-reload bearers when
 					// bond_members changes without a bridge restart.
