@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"os"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -11,6 +13,24 @@ import (
 	"meshsat/internal/hemb"
 	"meshsat/internal/reticulum"
 )
+
+// meshBearerMTU returns the mesh-bearer MTU for HeMB bond symbols.
+// Defaults to 100 B — the empirically-verified SF7-LongFast ceiling
+// below which Meshtastic reliably delivers PRIVATE_APP frames on
+// the tesseract + parallax field kits. Operators on different
+// LoRa presets (SHORT_FAST, MEDIUM_*, LONG_SLOW) or different
+// antennas can override with `MESHSAT_MESH_MTU` in the range
+// [1, 237]. Values outside the range fall back to 100. [MESHSAT-672]
+func meshBearerMTU() int {
+	if v := os.Getenv("MESHSAT_MESH_MTU"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 237 {
+			return n
+		}
+		log.Warn().Str("MESHSAT_MESH_MTU", v).
+			Msg("hemb: invalid MESHSAT_MESH_MTU — expected integer in 1..237, using default 100")
+	}
+	return 100
+}
 
 // FailoverResolver resolves failover group IDs to the best available interface.
 type FailoverResolver struct {
@@ -156,21 +176,19 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 
 		// Default MTU from channel type.
 		//
-		// The mesh value must stay under Meshtastic's SF7 @ 125 kHz
-		// LoRa air limit (~233 B usable PRIVATE_APP payload). We
-		// previously used 237 B here, which matched the nominal
-		// Data.payload ceiling but not the practical air limit once
-		// the firmware's per-packet overhead is subtracted. Larger
-		// symbols were silently dropped by the radio on TX, so
-		// HeMB bond sends over mesh_0 never reached the peer.
-		// 230 B is the conservative floor shared with
-		// `internal/hemb/bearer_build.go::defaultBearerMTU` and
-		// leaves headroom for the hidden per-packet bytes Meshtastic
-		// adds. [MESHSAT-672]
-		mtu := 100 // empirically the largest SF7-LongFast payload that reliably survives OTA on our field kits; 230 (nominal ceiling) silently drops — see MESHSAT-672
+		// The mesh value must stay under Meshtastic's effective on-air
+		// payload limit. SF7 LongFast nominally allows ~230–237 B of
+		// Data.payload, but the radio firmware silently drops larger
+		// packets depending on the preset, region, and antenna setup
+		// — we've measured a 100 B practical ceiling on the field
+		// kits. Operators with different radio configurations can
+		// tune via `MESHSAT_MESH_MTU` env var (1-237); the default
+		// stays conservative so out-of-the-box bonded sends work.
+		// [MESHSAT-672]
+		mtu := 100
 		switch channelType {
 		case "mesh":
-			mtu = 100
+			mtu = meshBearerMTU()
 		case "iridium":
 			mtu = 340
 		case "iridium_imt":
