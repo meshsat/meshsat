@@ -93,7 +93,10 @@ func (m *BLEPeerManager) EnableAutoFederation(
 
 // EnsurePeer starts a BLEClientInterface for `address` if none is live.
 // Called from handleBluetoothConnect after we've verified the device
-// advertises the MeshSat Reticulum GATT service UUID.
+// advertises the MeshSat Reticulum GATT service UUID, and from the
+// direct POST /api/system/bluetooth/ble-peer/{address} handler.
+// Idempotent + thread-safe: concurrent callers for the same address
+// don't race, duplicate a client, or leak one. [MESHSAT-675]
 func (m *BLEPeerManager) EnsurePeer(ctx context.Context, address string) error {
 	if m == nil || m.proc == nil || m.reg == nil {
 		return nil // dormant
@@ -101,15 +104,23 @@ func (m *BLEPeerManager) EnsurePeer(ctx context.Context, address string) error {
 	key := normalizeMAC(address)
 	m.mu.Lock()
 	if existing, ok := m.peers[key]; ok {
-		m.mu.Unlock()
-		if existing.client.IsOnline() {
+		// client == nil means another goroutine is currently inside
+		// Start() for this address; treat as idempotent success —
+		// caller can poll Names()/status to observe the eventual
+		// outcome. A live online client is also a success no-op.
+		if existing.client == nil || existing.client.IsOnline() {
+			m.mu.Unlock()
 			return nil
 		}
-		// Stale entry — drop and rebuild.
+		// Stale entry — drop and rebuild. removePeerLocked requires
+		// m.mu held; must stay inside this critical section.
 		m.removePeerLocked(key)
-		m.mu.Lock()
 	}
 	name := m.allocNameLocked()
+	// Claim the slot with a client-less placeholder so a concurrent
+	// EnsurePeer call for the same address hits the idempotent branch
+	// above instead of starting a second client.
+	m.peers[key] = &bleManagedPeer{name: name}
 	// Snapshot auto-federation state while we still hold the lock so
 	// the callback goroutine doesn't race with EnableAutoFederation.
 	db := m.db
@@ -139,6 +150,15 @@ func (m *BLEPeerManager) EnsurePeer(ctx context.Context, address string) error {
 		PeerAddress: address,
 	}, callback)
 	if err := client.Start(ctx); err != nil {
+		// Drop our placeholder so the next EnsurePeer call can retry
+		// with a clean slot. Only remove if the slot still holds our
+		// placeholder (name matches, client still nil) — if another
+		// goroutine has already replaced it we leave it alone.
+		m.mu.Lock()
+		if p, ok := m.peers[key]; ok && p.client == nil && p.name == name {
+			delete(m.peers, key)
+		}
+		m.mu.Unlock()
 		return err
 	}
 	m.proc.RegisterPacketSender(name, client.Send)

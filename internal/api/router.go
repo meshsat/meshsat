@@ -640,6 +640,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/system/bluetooth/disconnect/{address}", s.handleBluetoothDisconnect)
 		r.Delete("/system/bluetooth/remove/{address}", s.handleBluetoothRemove)
 		r.Post("/system/bluetooth/rfkill", s.handleBluetoothRFKill)
+		r.Post("/system/bluetooth/ble-peer/{address}", s.handleBluetoothBLEPeer)
 
 		// WiFi network management (ported from cubeos/hal). [MESHSAT-624]
 		r.Get("/system/wifi/scan/{iface}", s.handleWiFiScan)

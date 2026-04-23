@@ -12,6 +12,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -90,20 +91,22 @@ func (c *BLEClientInterface) Start(ctx context.Context) error {
 	c.devicePath = deviceObjectPath(c.config.AdapterID, c.config.PeerAddress)
 	device := conn.Object("org.bluez", c.devicePath)
 
-	// Ensure the remote device is connected. bluetoothctl connect would
-	// also do this but we're safe calling it again — BlueZ no-ops when
-	// already connected.
-	var connected dbus.Variant
-	if err := device.Call("org.freedesktop.DBus.Properties.Get", 0,
-		"org.bluez.Device1", "Connected").Store(&connected); err != nil {
+	// Ensure the remote device is connected. Use ConnectProfile(MeshSat
+	// UUID) rather than Connect() — on Pi 5 brcmfmac BT, the generic
+	// Connect() tries BR/EDR first and can time out with NoReply when
+	// the peer is an LE-only GATT peripheral. ConnectProfile with the
+	// specific UUID forces BlueZ straight to LE-GATT transport.
+	// [MESHSAT-675]
+	//
+	// Watchdog: if ConnectProfile stalls or Connected stays false for
+	// longer than connectTimeout, cycle hci0 via btmgmt (power off/on)
+	// and retry. brcmfmac BT firmware accumulates bad state across many
+	// pair/connect cycles; a power cycle of the adapter clears it
+	// without requiring a full OS reboot. Same recovery shape as the
+	// USBDEVFS_RESET we do for stuck serial ports.
+	if err := c.ensureConnected(ctx, device); err != nil {
 		conn.Close()
-		return fmt.Errorf("ble-client: device %s not found (pair first): %w", c.config.PeerAddress, err)
-	}
-	if p, ok := connected.Value().(bool); !ok || !p {
-		if err := device.Call("org.bluez.Device1.Connect", 0).Err; err != nil {
-			conn.Close()
-			return fmt.Errorf("ble-client: Connect failed: %w", err)
-		}
+		return fmt.Errorf("ble-client: %w", err)
 	}
 
 	// Poll ServicesResolved — GATT discovery is async after Connect.
@@ -148,6 +151,116 @@ func (c *BLEClientInterface) Start(ctx context.Context) error {
 	log.Info().Str("iface", c.config.Name).Str("peer", c.config.PeerAddress).
 		Msg("ble-client: connected + subscribed to MeshSat peer")
 	return nil
+}
+
+// connectTimeout caps one ConnectProfile attempt. If D-Bus reply
+// doesn't arrive in this window, we assume the brcmfmac BT firmware
+// is stuck, cycle hci0, and retry. Under a clean BT stack LE
+// connections complete in under 2 s; 8 s gives slower paths headroom
+// without being long enough for the operator to notice the stall.
+const connectTimeout = 8 * time.Second
+
+// connectMaxAttempts caps the total number of ConnectProfile tries
+// across hci0 power cycles. Three is the proven-empirical recovery
+// threshold: 1st try on a stuck adapter times out, power cycle, 2nd
+// try usually succeeds, 3rd is a final fallback.
+const connectMaxAttempts = 3
+
+// ensureConnected drives the device to the Connected=true state,
+// using ConnectProfile(MeshSat UUID) with a bounded D-Bus wait and
+// an hci-power-cycle retry on timeout. Idempotent: if Connected is
+// already true, returns immediately.
+func (c *BLEClientInterface) ensureConnected(ctx context.Context, device dbus.BusObject) error {
+	// Fast path: already connected.
+	if c.readConnected(device) {
+		return nil
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= connectMaxAttempts; attempt++ {
+		// Kick off ConnectProfile in a goroutine so we can bound the
+		// wait. ConnectProfile blocks until the LE handshake finishes
+		// or BlueZ gives up. godbus's Call is synchronous and will
+		// hang for the default 25 s if BlueZ never replies; the
+		// goroutine + select wraps that with our own 8 s cap.
+		done := make(chan error, 1)
+		go func() {
+			done <- device.Call("org.bluez.Device1.ConnectProfile", 0, bleServiceUUID).Err
+		}()
+
+		select {
+		case err := <-done:
+			if err == nil {
+				return nil
+			}
+			// NotAvailable ("br-connection-profile-unavailable") is
+			// the expected no-op when BlueZ previously indexed a
+			// BR/EDR class bit for this device; the LE side still
+			// completes in parallel. Check Connected before giving up.
+			if c.readConnected(device) {
+				log.Info().Str("peer", c.config.PeerAddress).Int("attempt", attempt).
+					Msg("ble-client: ConnectProfile returned non-fatal; Connected=true")
+				return nil
+			}
+			lastErr = err
+		case <-time.After(connectTimeout):
+			lastErr = fmt.Errorf("ConnectProfile timed out after %s", connectTimeout)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		// If we got here the attempt failed. Double-check Connected —
+		// BlueZ sometimes races the reply after the LE link is up.
+		if c.readConnected(device) {
+			return nil
+		}
+
+		if attempt < connectMaxAttempts {
+			log.Warn().Str("peer", c.config.PeerAddress).Int("attempt", attempt).
+				Err(lastErr).Msg("ble-client: cycling hci0 to unstick brcmfmac BT firmware")
+			c.cycleAdapter(ctx)
+		}
+	}
+	return fmt.Errorf("Connect failed after %d attempts: %w", connectMaxAttempts, lastErr)
+}
+
+// readConnected fetches the current Device1.Connected property. Any
+// error falls through as "not connected" so the caller retries.
+func (c *BLEClientInterface) readConnected(device dbus.BusObject) bool {
+	var v dbus.Variant
+	if err := device.Call("org.freedesktop.DBus.Properties.Get", 0,
+		"org.bluez.Device1", "Connected").Store(&v); err != nil {
+		return false
+	}
+	b, ok := v.Value().(bool)
+	return ok && b
+}
+
+// cycleAdapter resets the local HCI adapter via btmgmt. BlueZ keeps
+// its state (pair records, trust list) but the controller firmware
+// restarts. Non-fatal — if btmgmt isn't available or the cycle fails,
+// we fall through to the next attempt without the reset and log it.
+func (c *BLEClientInterface) cycleAdapter(ctx context.Context) {
+	adapter := c.config.AdapterID
+	if adapter == "" {
+		adapter = "hci0"
+	}
+	for _, cmd := range [][]string{{"power", "off"}, {"power", "on"}} {
+		args := append([]string{"-i", adapter}, cmd...)
+		if out, err := exec.CommandContext(ctx, "btmgmt", args...).CombinedOutput(); err != nil {
+			log.Warn().Str("adapter", adapter).Str("cmd", strings.Join(cmd, " ")).
+				Err(err).Str("output", strings.TrimSpace(string(out))).
+				Msg("ble-client: btmgmt cycle failed (continuing)")
+			return
+		}
+		// BlueZ needs a moment between off and on for the firmware to
+		// quiesce; 1 s is the typical settle time observed on Pi 5.
+		select {
+		case <-time.After(1 * time.Second):
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // waitServicesResolved polls the Device1.ServicesResolved property

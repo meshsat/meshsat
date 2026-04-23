@@ -272,6 +272,43 @@ func (s *Server) handleBluetoothConnect(w http.ResponseWriter, r *http.Request) 
 	writeSuccess(w, fmt.Sprintf("connected to %s", address))
 }
 
+// @Summary Force-start the Reticulum BLE peer link for a paired device
+// @Description Calls BLEPeerManager.EnsurePeer directly, independent of `bluetoothctl connect` exit codes. Use when BlueZ already has a live LE link (Connected=yes in `bluetoothctl info`) but the auto-link never fired — e.g. because pairing was done manually, or because Device1.Connect returned a non-fatal error after the LE handshake succeeded. Idempotent. [MESHSAT-675]
+// @Tags system
+// @Param address path string true "Device MAC address (must already be paired with the MeshSat UUID visible in `bluetoothctl info`)"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/system/bluetooth/ble-peer/{address} [post]
+func (s *Server) handleBluetoothBLEPeer(w http.ResponseWriter, r *http.Request) {
+	address := chi.URLParam(r, "address")
+	if err := validateMACAddress(address); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.blePeerMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "ble peer manager not initialised")
+		return
+	}
+	// Verify the device actually advertises the MeshSat UUID before we
+	// try to EnsurePeer — otherwise the BLEClientInterface will fail
+	// its characteristic search and leak a goroutine.
+	info, infoErr := execWithTimeout(r.Context(), "bluetoothctl", "info", address)
+	if infoErr != nil {
+		writeError(w, http.StatusBadRequest, sanitizeExecError("bluetoothctl info", infoErr))
+		return
+	}
+	if !infoHasMeshSatUUID(info) {
+		writeError(w, http.StatusBadRequest, "device does not advertise the MeshSat GATT UUID — not a meshsat bridge")
+		return
+	}
+	if err := s.blePeerMgr.EnsurePeer(r.Context(), address); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("ble-peer link: %v", err))
+		return
+	}
+	writeSuccess(w, fmt.Sprintf("ble-peer link ensured for %s", address))
+}
+
 // deviceConnected parses `bluetoothctl info <addr>` output and reports
 // whether the device shows `Connected: yes`. BlueZ exposes a single
 // Connected flag across BR/EDR + LE transports, so this is enough to
