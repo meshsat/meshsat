@@ -167,7 +167,7 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 		// `internal/hemb/bearer_build.go::defaultBearerMTU` and
 		// leaves headroom for the hidden per-packet bytes Meshtastic
 		// adds. [MESHSAT-672]
-		mtu := 100 // TEMP DIAG — confirm size is the blocker
+		mtu := 100 // empirically the largest SF7-LongFast payload that reliably survives OTA on our field kits; 230 (nominal ceiling) silently drops — see MESHSAT-672
 		switch channelType {
 		case "mesh":
 			mtu = 100
