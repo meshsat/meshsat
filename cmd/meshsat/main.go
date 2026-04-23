@@ -1682,6 +1682,30 @@ func main() {
 								Msg("hemb: decoded payload dispatched via access rules")
 						}
 					}
+
+					// Also persist as an inbound message so the decoded
+					// plaintext shows up in /api/messages and the
+					// Messages view without needing an access rule. This
+					// mirrors StartGatewayReceiver's persistence path
+					// for SMS / Iridium / APRS ingress — bond delivery
+					// should look the same from the UI's perspective.
+					// [MESHSAT-672]
+					if db != nil {
+						text := string(decoded)
+						if len(text) > 0 {
+							if err := db.InsertMessage(&database.Message{
+								FromNode:    "hemb",
+								Channel:     0,
+								PortNum:     1,
+								PortNumName: "TEXT_MESSAGE_APP",
+								DecodedText: text,
+								Direction:   "rx",
+								Transport:   "hemb",
+							}); err != nil {
+								log.Warn().Err(err).Msg("hemb: failed to persist decoded bond payload")
+							}
+						}
+					}
 				},
 				EventCh: hemb.GlobalEventBus.Channel(),
 			})
