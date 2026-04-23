@@ -149,9 +149,19 @@ func (g *CellularGateway) Receive() <-chan InboundMessage {
 
 // Status returns the current gateway status.
 func (g *CellularGateway) Status() GatewayStatus {
+	// Read live connection state from the transport. The atomic g.connected
+	// was only written once at Start(), before the modem had finished probing,
+	// so it stayed false forever — the dashboard reported "disconnected" while
+	// the modem was actually registered + polling signal. GetStatus is O(1)
+	// (returns a stateMu-protected snapshot, no AT I/O). [MESHSAT-646]
+	connected := g.connected.Load()
+	if status, err := g.cell.GetStatus(context.Background()); err == nil && status != nil {
+		connected = status.Connected
+		g.connected.Store(connected)
+	}
 	s := GatewayStatus{
 		Type:        "cellular",
-		Connected:   g.connected.Load(),
+		Connected:   connected,
 		MessagesIn:  g.msgsIn.Load(),
 		MessagesOut: g.msgsOut.Load(),
 		Errors:      g.errors.Load(),
