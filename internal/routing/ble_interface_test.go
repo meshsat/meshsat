@@ -2,8 +2,80 @@ package routing
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
+
+// TestDeriveStaticRandomMAC_Deterministic locks in the hostname → MAC
+// contract: same hostname always maps to the same MAC, top 2 bits are
+// `11` (static random per BLE spec), and the MAC is not the all-zeros
+// reserved value. Bridges rely on this stability so a peer kit's
+// paired-device record survives every reboot. [MESHSAT-677]
+func TestDeriveStaticRandomMAC_Deterministic(t *testing.T) {
+	const host = "nllei01tesseract01"
+	first := deriveStaticRandomMAC(host)
+	second := deriveStaticRandomMAC(host)
+	if first != second {
+		t.Fatalf("derivation not deterministic: %q vs %q", first, second)
+	}
+	if len(first) != 17 || strings.Count(first, ":") != 5 {
+		t.Fatalf("malformed MAC: %q", first)
+	}
+	if first != strings.ToUpper(first) {
+		t.Fatalf("MAC must be uppercase, got %q", first)
+	}
+	msb := first[:2]
+	// BLE spec: top 2 bits of the MSB must be 11 for static random. The
+	// MSB hex character will be in the range [C..F] (0xC0..0xFF).
+	if msb < "C0" || msb > "FF" {
+		t.Fatalf("static-random MSB must be in [C0..FF], got %q", msb)
+	}
+	// Unicast LSB (bit 0 of byte 0 must be 0 — odd MSBs are excluded).
+	msbByte, err := parseHexByte(msb)
+	if err != nil || msbByte&0x01 != 0 {
+		t.Fatalf("MAC byte0 must be unicast (LSB=0), got %q", msb)
+	}
+	if first == "00:00:00:00:00:00" || first == "FF:FF:FF:FF:FF:FF" {
+		t.Fatalf("reserved MAC chosen: %q", first)
+	}
+}
+
+// TestDeriveStaticRandomMAC_DistinctHostnames — tesseract and parallax
+// must end up with different MACs or the peer-pair table collides.
+func TestDeriveStaticRandomMAC_DistinctHostnames(t *testing.T) {
+	a := deriveStaticRandomMAC("nllei01tesseract01")
+	b := deriveStaticRandomMAC("nllei01parallax01")
+	if a == b {
+		t.Fatalf("distinct hostnames collided to MAC %q", a)
+	}
+}
+
+func parseHexByte(s string) (byte, error) {
+	if len(s) != 2 {
+		return 0, fmtHexErr(s)
+	}
+	var out byte
+	for _, c := range s {
+		out <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			out |= byte(c - '0')
+		case c >= 'A' && c <= 'F':
+			out |= byte(c-'A') + 10
+		case c >= 'a' && c <= 'f':
+			out |= byte(c-'a') + 10
+		default:
+			return 0, fmtHexErr(s)
+		}
+	}
+	return out, nil
+}
+
+func fmtHexErr(s string) error { return &hexErr{s} }
+
+type hexErr struct{ s string }
+
+func (e *hexErr) Error() string { return "invalid hex byte: " + e.s }
 
 func TestSARSegment_SingleFrame(t *testing.T) {
 	data := make([]byte, 100)
