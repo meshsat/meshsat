@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // globalStreamSeq ensures unique stream IDs across all bonder instances,
@@ -225,7 +227,21 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 			Global.RecordSymbolSent(len(frame), alloc.bearer.IsFree(), alloc.bearer.CostPerMsg)
 
 			if err := alloc.bearer.SendFn(ctx, frame); err != nil {
-				sendErr = err // record but continue sending to other bearers
+				// Log every bearer drop independently — the aggregate
+				// return value only surfaces the last error, which
+				// silently hides "tcp_0 has no peers / mesh_0 radio
+				// offline / sms_0 modem unplugged" when the bond spans
+				// several bearers at once. Operators need a per-bearer
+				// signal to spot a single failing leg. [MESHSAT-672]
+				log.Warn().Err(err).
+					Str("iface", alloc.bearer.InterfaceID).
+					Uint8("bearer", alloc.bearer.Index).
+					Uint8("stream", streamID).
+					Uint16("gen", sym.GenID).
+					Int("frame_len", len(frame)).
+					Bool("repair", isRepair).
+					Msg("hemb: bearer TX symbol failed — continuing on remaining bearers")
+				sendErr = err
 			}
 		}
 	}

@@ -219,5 +219,22 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 		return bearers[i].CostPerMsg < bearers[j].CostPerMsg // cheaper paid first
 	})
 
+	// Log the resolved bearer set so the HeMB allocator's input is
+	// visible when operators are diagnosing "why didn't X bearer
+	// carry any symbol?" questions. [MESHSAT-672]
+	if len(bearers) > 0 {
+		ids := make([]string, 0, len(bearers))
+		mtus := make([]int, 0, len(bearers))
+		for _, br := range bearers {
+			ids = append(ids, br.InterfaceID)
+			mtus = append(mtus, br.MTU)
+		}
+		log.Debug().Str("group", groupID).
+			Strs("bearers", ids).
+			Ints("mtus", mtus).
+			Int("count", len(bearers)).
+			Msg("hemb: SelectBearers resolved bearer set")
+	}
+
 	return bearers
 }
