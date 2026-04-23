@@ -1,72 +1,110 @@
 #!/usr/bin/env bash
-# meshsat-ble-addr-pin.sh — pin the BLE advertising identity to the
-# dual-mode controller's **public** BD_ADDR (stable across reboots)
-# rather than letting BlueZ pick a rotating Non-Resolvable Private
-# Address (NRPA). Runs once at boot, BEFORE bluetooth.service, via
-# meshsat-ble-addr-pin.service. [MESHSAT-678]
+# meshsat-ble-addr-pin.sh — pin the BT adapter to
+# connectable + pairable + discoverable + LE + advertising on so the
+# bridge's Reticulum GATT peripheral advertises with the **public**
+# (stable) BD_ADDR rather than a rotating NRPA. [MESHSAT-678]
 #
-# Why this runs on the host, not in the meshsat container:
-#   - btmgmt's HCI_CHANNEL_CONTROL socket returns an empty controller
-#     list when opened from inside the `network_mode: host` +
-#     `privileged: true` meshsat container on Pi 5 brcmfmac (field-
-#     verified 2026-04-23 on both tesseract + parallax). The in-
-#     container `ensureStableAdvAddress` helper emitted the
-#     `btmgmt info hci0: no addr line in output` warning and then
-#     no-op'd. MESHSAT-677's approach was wrong — hence this rewrite.
-#   - Even if the mgmt socket worked from the container, the Pi 5
-#     brcmfmac is dual-mode with a valid public address: per
-#     mgmt-api.txt, "if the controller is dual-mode and has a public
-#     address, using a static address is not required ... the Static
-#     Address command will be persisted but will not replace the
-#     public address for advertising." So the fix is not to set a
-#     static-random MAC at all — it is to force BlueZ to USE the
-#     public (identity) address for advertising, which is what
-#     Connectable+Discoverable together accomplish.
+# Ordering: runs After=bluetooth.service. Earlier we tried pre-bluetoothd
+# (Before=bluetooth.service) but `btmgmt power off` blocks indefinitely
+# on Pi 5 brcmfmac during cold boot — the /sys/class/bluetooth/hci0
+# node appears before the kernel mgmt socket is answering controller
+# queries, and btmgmt has no internal timeout. Field-verified stuck on
+# both kits 2026-04-24. Running After=bluetooth.service lets bluetoothd
+# bring the controller up via its own initialisation path; we then
+# flip the flags on a known-healthy adapter. BlueZ persists the flag
+# state, so bluetoothd already re-flipped it during its init but this
+# script ensures the full MeshSat-required set is on regardless of
+# pre-existing state.
+#
+# Every btmgmt call is wrapped in `timeout 8` — if the mgmt socket
+# ever stalls, the step fails soft and the unit finishes so
+# docker.service can still start the bridge. Non-zero exits are
+# logged but never fatal; pre-MESHSAT-678 behaviour (BlueZ default
+# address selection) is the fallback floor.
 #
 # Why bluetoothctl is not used:
-#   - bluetoothctl talks to bluetoothd over D-Bus. We run Before=
-#     bluetooth.service so bluetoothd is not yet up. btmgmt talks
-#     directly to the kernel mgmt socket (AF_BLUETOOTH,
-#     HCI_CHANNEL_CONTROL) and works pre-bluetoothd. BlueZ 5.55+
-#     preserves mgmt state across (re)starts of bluetoothd, so
-#     setting connectable+discov here is durable.
+#   - bluetoothctl's `agent` / `default-agent` model requires keeping
+#     a TTY-ish process alive; we want fire-and-forget.
+#   - btmgmt talks directly to the kernel mgmt socket
+#     (AF_BLUETOOTH HCI_CHANNEL_CONTROL) — no D-Bus dance.
 
-set -euo pipefail
+set -uo pipefail  # NOT -e: every step is best-effort
 
 ADAPTER="${ADAPTER:-hci0}"
 SYS_PATH="/sys/class/bluetooth/${ADAPTER}"
 
-# Wait up to 10 s for the adapter to appear. On cold boot the brcmfmac
-# + BT firmware loader can take 3-6 s before hci0 is registered; on
-# warm reboot it is already present.
+log() { printf '[meshsat-ble-addr-pin] %s\n' "$*" >&2; }
+
+# Belt-and-braces: kill any orphan btmgmt processes from a prior run.
+# btmgmt has no internal timeout — if a previous invocation got stuck on
+# the kernel mgmt socket, subsequent btmgmt calls in this script will
+# also block (kernel serialises mgmt commands). Reaping them here is
+# always safe; a properly-completed btmgmt run leaves no process behind.
+# Without this, a single stuck cold-boot run wedges every subsequent
+# unit start until manual cleanup. [field-verified 2026-04-24]
+/usr/bin/pkill -9 -x btmgmt 2>/dev/null || true
+
+# Wait up to 10 s for the adapter sysfs node to appear.
 for _ in $(seq 1 20); do
-  if [ -e "$SYS_PATH" ]; then
+  [ -e "$SYS_PATH" ] && break
+  sleep 0.5
+done
+if [ ! -e "$SYS_PATH" ]; then
+  log "$SYS_PATH not found after 10s — no BT hardware, skipping"
+  exit 0
+fi
+
+# btmgmt requires a CONTROLLING TERMINAL — every subcommand (info,
+# power, connectable, etc.) hangs forever when stdin is /dev/null
+# (the systemd default). Field-verified 2026-04-24: under systemd
+# `btmgmt power on < /dev/null` returns exit 124 (timeout); under a
+# pty (`script -qec`) it returns instantly with the expected output.
+# So we wrap every btmgmt invocation in `script` to allocate a pty.
+# `script` is in `bsdutils`, preinstalled on Ubuntu base.
+btmgmt_pty() {
+  # `script -qec CMD /dev/null < /dev/null` runs CMD inside a fresh
+  # pty; the outer `< /dev/null` keeps `script` itself happy when
+  # we ourselves have stdin closed (systemd). The `timeout 8` cap
+  # protects against a wedged mgmt socket.
+  timeout 8 /usr/bin/script -qec "/usr/bin/btmgmt -i $ADAPTER $*" /dev/null < /dev/null
+}
+
+# Wait up to 15 s for the kernel mgmt socket to answer with a
+# non-empty controller list. btmgmt info under a pty prints the
+# `addr` line once the mgmt subsystem has finished init.
+for i in $(seq 1 30); do
+  info=$(btmgmt_pty info 2>/dev/null || true)
+  if printf '%s' "$info" | grep -qE '^\s+addr '; then
     break
   fi
   sleep 0.5
 done
 
-if [ ! -e "$SYS_PATH" ]; then
-  echo "meshsat-ble-addr-pin: $SYS_PATH not found after 10s — skipping" >&2
-  # Exit 0: missing BT hardware is not an error for kits without a
-  # BLE radio (e.g. mule01 post-decomm). The unit is RemainAfterExit=
-  # yes so bluetooth.service still proceeds.
-  exit 0
+# Fire each flag through the same pty wrapper. timeout 8 per step;
+# a single stuck step doesn't cascade.
+bt() {
+  if ! btmgmt_pty "$@" >/dev/null 2>&1; then
+    log "btmgmt $* failed or timed out (continuing)"
+    return 1
+  fi
+  return 0
+}
+
+bt power on
+bt le on
+bt connectable on
+bt pairable yes
+bt bondable yes
+bt discov yes 0    # 0 = no timeout
+bt advertising on
+
+# Final settings report for the journal.
+if final=$(btmgmt_pty info 2>/dev/null); then
+  settings=$(printf '%s' "$final" | grep 'current settings' | head -1 | tr -d '\r')
+  addr=$(printf '%s' "$final" | grep -E '^\s+addr ' | head -1 | awk '{print $2}')
+  log "pinned: addr=$addr $settings"
+else
+  log "pinned (unable to read final state)"
 fi
 
-# Clean power-cycle via mgmt socket. `power off` releases any stale
-# advertising slot; `power on` re-binds cleanly before bluetoothd
-# starts claiming things.
-/usr/bin/btmgmt -i "$ADAPTER" power off || true
-sleep 0.2
-/usr/bin/btmgmt -i "$ADAPTER" power on
-
-# Force the adapter to use its identity (public) address for
-# advertising. On dual-mode Pi 5 brcmfmac this selects the BD_ADDR
-# burned into the controller (e.g. tesseract D8:3A:DD:DF:D3:E9 /
-# parallax 88:A2:9E:64:99:4D). Without this, BlueZ picks an NRPA
-# that rotates on every bluetoothd restart and orphans peer bonds.
-/usr/bin/btmgmt -i "$ADAPTER" connectable on
-/usr/bin/btmgmt -i "$ADAPTER" discov on
-
-echo "meshsat-ble-addr-pin: $ADAPTER pinned (connectable+discoverable on)"
+exit 0
