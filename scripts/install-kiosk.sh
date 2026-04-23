@@ -42,7 +42,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
   echo "This script must run as root: sudo bash $0" >&2
   exit 1
 fi
-for f in meshsat-kiosk-session.sh meshsat-kiosk.json labwc-rc.xml labwc-autostart 99-touch-rotate.rules meshsat-backlight kiosk-brightness.sudoers meshsat-kiosk-restart.service meshsat-kiosk-restart.timer; do
+for f in meshsat-kiosk-session.sh meshsat-kiosk.json labwc-rc.xml labwc-autostart 99-touch-rotate.rules meshsat-backlight kiosk-brightness.sudoers meshsat-kiosk-restart.service meshsat-kiosk-restart.timer meshsat-ble-addr-pin.sh meshsat-ble-addr-pin.service; do
   if [ ! -f "$DEPLOY_DIR/$f" ]; then
     echo "Deploy file missing: $DEPLOY_DIR/$f" >&2
     exit 1
@@ -169,6 +169,31 @@ install -D -m 0644 -o root -g root \
   /etc/systemd/system/meshsat-kiosk-restart.timer
 systemctl daemon-reload
 systemctl enable --now meshsat-kiosk-restart.timer
+
+# ─── BLE address-pin (MESHSAT-678) ───────────────────────────────
+# Force the Pi 5 brcmfmac BT adapter to advertise with its public
+# (identity) BD_ADDR rather than a rotating NRPA, so bridge-to-bridge
+# Reticulum BLE peer bonds survive reboot. Runs from host systemd
+# BEFORE bluetooth.service because the container's HCI mgmt socket
+# is sandboxed (empty controller list) even with privileged:true +
+# network_mode:host on Pi 5 brcmfmac. Idempotent; safe to re-run.
+echo "[+] Installing BLE address-pin unit (MESHSAT-678)…"
+install -D -m 0755 -o root -g root \
+  "$DEPLOY_DIR/meshsat-ble-addr-pin.sh" \
+  /usr/local/bin/meshsat-ble-addr-pin
+install -D -m 0644 -o root -g root \
+  "$DEPLOY_DIR/meshsat-ble-addr-pin.service" \
+  /etc/systemd/system/meshsat-ble-addr-pin.service
+systemctl daemon-reload
+systemctl enable meshsat-ble-addr-pin.service
+# Start on first install too. On re-run `start` is a no-op for an
+# already-running oneshot+RemainAfterExit=yes unit. Failure here is
+# non-fatal — bluetooth.service will still come up on BlueZ defaults
+# (same as pre-MESHSAT-678 behaviour); log and continue.
+systemctl start meshsat-ble-addr-pin.service || {
+  echo "  WARN: meshsat-ble-addr-pin first-run failed — check 'journalctl -u meshsat-ble-addr-pin.service'"
+  echo "  Cold-power-cycle the Pi to clear brcmfmac firmware state if the adapter never appears."
+}
 
 echo "Installing blank cursor theme…"
 bash "$DEPLOY_DIR/install-blank-cursor.sh"

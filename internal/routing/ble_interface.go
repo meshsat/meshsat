@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -95,16 +93,14 @@ func NewBLEInterface(config BLEInterfaceConfig, callback func(packet []byte)) *B
 
 // Start connects to BlueZ via D-Bus, registers the GATT service, and begins advertising.
 func (b *BLEInterface) Start(ctx context.Context) error {
-	// Pin the adapter's advertising identity to a deterministic LE Static
-	// Random address BEFORE BlueZ registers our advertisement. On Pi 5
-	// brcmfmac, BlueZ otherwise falls back to a Non-Resolvable Private
-	// Address that changes on every bluetoothd restart, which orphans any
-	// bond a peer bridge has with us. Derivation is hostname-based, so the
-	// same kit always advertises the same MAC. Non-fatal: if the btmgmt
-	// cycle fails the advertisement still comes up on whatever address
-	// BlueZ picks (the pre-MESHSAT-677 behaviour). [MESHSAT-677]
-	ensureStableAdvAddress(ctx, b.config.AdapterID)
-
+	// Advertising identity is pinned by the host systemd unit
+	// meshsat-ble-addr-pin.service (deploy/kiosk/) which runs
+	// BEFORE bluetoothd and sets connectable+discov on the adapter
+	// so BlueZ advertises with the controller's public BD_ADDR
+	// rather than a rotating NRPA. The in-container btmgmt approach
+	// attempted in MESHSAT-677 didn't work — the mgmt socket returns
+	// an empty controller list from inside network_mode:host +
+	// privileged containers on Pi 5 brcmfmac. See MESHSAT-678.
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return fmt.Errorf("ble: D-Bus system bus: %w", err)
@@ -387,86 +383,6 @@ func deriveStaticRandomMAC(hostname string) string {
 	b0 := (sum[0] | 0xC0) &^ 0x01 // top 2 bits = 11 (static random); LSB = 0 (unicast)
 	return strings.ToUpper(fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X",
 		b0, sum[1], sum[2], sum[3], sum[4], sum[5]))
-}
-
-// ensureStableAdvAddress reads the adapter's current BD_ADDR via btmgmt
-// and, if it doesn't match the hostname-derived static random target,
-// power-cycles the adapter through btmgmt to install the new identity.
-// Best-effort: any shell-out failure logs + returns so the bridge still
-// boots on whatever address BlueZ selects by default. [MESHSAT-677]
-func ensureStableAdvAddress(ctx context.Context, adapterID string) {
-	if adapterID == "" {
-		adapterID = "hci0"
-	}
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "" {
-		log.Warn().Err(err).Msg("ble: cannot read hostname — skipping stable-address pin")
-		return
-	}
-	target := deriveStaticRandomMAC(hostname)
-
-	current, err := btmgmtCurrentAddr(ctx, adapterID)
-	if err != nil {
-		log.Warn().Err(err).Str("adapter", adapterID).
-			Msg("ble: btmgmt info failed — skipping stable-address pin")
-		return
-	}
-	if strings.EqualFold(current, target) {
-		log.Info().Str("adapter", adapterID).Str("addr", target).
-			Msg("ble: stable advertising address already pinned")
-		return
-	}
-
-	// btmgmt static-addr requires the controller to be powered off; BlueZ
-	// then latches the new identity on power-on. Any step failing is
-	// non-fatal; we log and move on — falling through to BlueZ defaults
-	// is strictly no worse than the pre-fix behaviour.
-	for _, cmd := range [][]string{
-		{"power", "off"},
-		{"static-addr", target},
-		{"power", "on"},
-	} {
-		args := append([]string{"-i", adapterID}, cmd...)
-		out, err := exec.CommandContext(ctx, "btmgmt", args...).CombinedOutput()
-		if err != nil {
-			log.Warn().Str("adapter", adapterID).Str("cmd", strings.Join(cmd, " ")).
-				Err(err).Str("output", strings.TrimSpace(string(out))).
-				Msg("ble: btmgmt pin-address step failed — falling back to BlueZ default")
-			return
-		}
-		// 500 ms is enough for the controller to settle between off/on
-		// on Pi 5 brcmfmac; the cycleAdapter helper in ble_client.go uses
-		// 1 s but that path runs mid-session when other subsystems are
-		// holding timing-sensitive state — we're in iface bring-up here.
-		select {
-		case <-time.After(500 * time.Millisecond):
-		case <-ctx.Done():
-			return
-		}
-	}
-	log.Info().Str("adapter", adapterID).Str("was", current).Str("now", target).
-		Msg("ble: pinned advertising address to static random derived from hostname")
-}
-
-// btmgmtCurrentAddr returns the BD_ADDR that `btmgmt -i <adapter> info`
-// reports for the local controller. Matches the `addr XX:XX:XX:XX:XX:XX`
-// line in the first index entry.
-func btmgmtCurrentAddr(ctx context.Context, adapterID string) (string, error) {
-	out, err := exec.CommandContext(ctx, "btmgmt", "-i", adapterID, "info").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("btmgmt info %s: %w (%s)", adapterID, err,
-			strings.TrimSpace(string(out)))
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(trimmed, "addr "); ok {
-			parts := strings.Fields(rest)
-			if len(parts) > 0 {
-				return strings.ToUpper(parts[0]), nil
-			}
-		}
-	}
-	return "", fmt.Errorf("btmgmt info %s: no addr line in output", adapterID)
 }
 
 func (b *BLEInterface) exportAdvertisement() error {

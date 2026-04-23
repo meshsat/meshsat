@@ -1,0 +1,27 @@
+[Unit]
+Description=Pin Pi 5 brcmfmac BLE advertising identity to the public BD_ADDR (pre-bluetoothd)
+# host-ops: allowed-in-standalone — runs from host systemd, not meshsat.
+#
+# Ordered Before=bluetooth.service so the adapter is power-cycled and
+# connectable/discov flags are set BEFORE bluetoothd latches the
+# advertising identity. The in-container btmgmt approach from
+# MESHSAT-677 was unreliable (mgmt socket returned an empty controller
+# list from inside network_mode:host + privileged meshsat container on
+# Pi 5 brcmfmac — field-verified 2026-04-23). BlueZ 5.55+ preserves
+# mgmt state across bluetoothd (re)starts, so our pre-bluetoothd
+# settings stick.
+Before=bluetooth.service
+Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT-678
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# btmgmt talks directly to the kernel mgmt socket (AF_BLUETOOTH,
+# HCI_CHANNEL_CONTROL) and does NOT need bluetoothd running — so the
+# Before= ordering is safe. The script waits up to 10 s for
+# /sys/class/bluetooth/hci0, then power-cycles the adapter and sets
+# connectable+discov on. Idempotent; no regression on a rerun.
+ExecStart=/usr/local/bin/meshsat-ble-addr-pin
+
+[Install]
+WantedBy=multi-user.target
