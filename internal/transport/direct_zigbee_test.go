@@ -189,6 +189,47 @@ func TestClassifyDeviceWithProbe_CachesResult(t *testing.T) {
 	}
 }
 
+// TestClassifyDeviceWithProbe_CachesCellular confirms that a "cellular"
+// probe result (ProbeAT hit after ZNP/Meshtastic missed) is persisted
+// in the same cache and short-circuits subsequent calls — so the T-Call
+// A7670E only sees the DTR-guarded AT probe once per port enumeration.
+// [MESHSAT-646]
+func TestClassifyDeviceWithProbe_CachesCellular(t *testing.T) {
+	const vidpid = "1a86:55d4"
+	const port = "/dev/ttyUSB-test-cellular"
+	const key = vidpid + "|" + port
+
+	probeCacheMu.Lock()
+	probeCache[key] = probeCacheEntry{result: "cellular", at: time.Now()}
+	probeCacheMu.Unlock()
+	defer InvalidateProbeCache(port)
+
+	got := ClassifyDeviceWithProbe(vidpid, port)
+	if got != "cellular" {
+		t.Errorf("cached cellular result not returned: got %q", got)
+	}
+}
+
+// TestClassifyDeviceWithProbe_CachesAmbiguousFallback pins down the
+// all-three-probes-miss path: the base "ambiguous" verdict must be
+// cached as-is so /api/devices keeps rendering amber (operator attention)
+// instead of silently mis-labelling the port on each scan. [MESHSAT-646]
+func TestClassifyDeviceWithProbe_CachesAmbiguousFallback(t *testing.T) {
+	const vidpid = "1a86:55d4"
+	const port = "/dev/ttyUSB-test-ambiguous"
+	const key = vidpid + "|" + port
+
+	probeCacheMu.Lock()
+	probeCache[key] = probeCacheEntry{result: "ambiguous", at: time.Now()}
+	probeCacheMu.Unlock()
+	defer InvalidateProbeCache(port)
+
+	got := ClassifyDeviceWithProbe(vidpid, port)
+	if got != "ambiguous" {
+		t.Errorf("cached ambiguous fallback not returned: got %q", got)
+	}
+}
+
 func TestInvalidateProbeCache_RemovesEntry(t *testing.T) {
 	const vidpid = "10c4:ea60"
 	const port = "/dev/ttyUSB-invalidate"

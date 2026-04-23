@@ -62,12 +62,23 @@ func wakeDevice(port serial.Port) error {
 // ProbeMeshtastic checks if a serial port speaks Meshtastic protocol.
 // Sends the wake sequence and looks for the 0x94 0xC3 framing header in the response.
 // Non-destructive — the device continues normal operation after probing.
+//
+// DTR guard: the port is opened with InitialStatusBits DTR=false and RTS=false
+// (plus post-open defence in depth) so the probe does not pulse PWRKEY on a
+// T-Call A7670E sharing the CH343 1a86:55d4 VID:PID. Without this guard the
+// cascade could toggle the modem off during ProbeMeshtastic and the downstream
+// ProbeAT would then time out against a mid-cold-boot modem, caching an
+// "ambiguous" verdict for 30 min. [MESHSAT-646]
 func ProbeMeshtastic(portName string) bool {
 	mode := &serial.Mode{
 		BaudRate: 115200,
 		DataBits: 8,
 		StopBits: serial.OneStopBit,
 		Parity:   serial.NoParity,
+		InitialStatusBits: &serial.ModemOutputBits{
+			DTR: false,
+			RTS: false,
+		},
 	}
 
 	p, err := serial.Open(portName, mode)
@@ -75,6 +86,11 @@ func ProbeMeshtastic(portName string) bool {
 		return false
 	}
 	defer p.Close()
+
+	// Defence in depth — re-assert the clear in case a driver rewrote
+	// the bits between open() and InitialStatusBits application.
+	_ = p.SetDTR(false)
+	_ = p.SetRTS(false)
 
 	// Send Meshtastic wake sequence (32 bytes of 0xC3)
 	wake := make([]byte, meshWakeLen)
@@ -652,19 +668,28 @@ type probeCacheEntry struct {
 // replug without triggering the supervisor) still converge.
 const probeCacheTTL = 30 * time.Minute
 
-// ClassifyDeviceWithProbe is like ClassifyDevice but does ZNP protocol
-// probing for VID:PIDs shared between Meshtastic and ZigBee. Results are
-// cached per port to avoid re-resetting ZigBee dongles (see probeCache).
+// ClassifyDeviceWithProbe is like ClassifyDevice but runs a 3-way protocol
+// probe (ZNP → Meshtastic → AT) for VID:PIDs shared between Meshtastic,
+// ZigBee, and cellular. Results are cached per port under the same TTL to
+// avoid repeated DTR-triggered resets on ZigBee dongles and T-Call boards.
+// [MESHSAT-646]
 //
 // portPath is the serial device path (e.g. "/dev/ttyUSB3") needed for the
-// ZNP probe.
+// probe. Order matters: ZNP first (cheap and safe for non-ZigBee), then
+// Meshtastic (a 32-byte 0xC3 wake at 115200 is benign to the ZigBee stack
+// we just ruled out), then AT last because on T-Call boards the open()
+// syscall briefly asserts DTR regardless — we minimise that window via
+// InitialStatusBits in ProbeAT.
+//
+// If all three probes miss, the base "ambiguous" verdict is cached and
+// returned so /api/devices keeps rendering amber for operator attention.
 func ClassifyDeviceWithProbe(vidpid, portPath string) string {
 	base := ClassifyDevice(vidpid)
-	// We only probe when the VID:PID is in the ambiguous ZigBee map
-	// (shared with Meshtastic / Cellular). With the new ambiguity-
-	// aware ClassifyDevice, `base` is now "ambiguous" for those
-	// entries — previously it was "meshtastic". Accept either so an
-	// already-cached result still short-circuits the probe.
+	// We only probe when the VID:PID is in the ambiguous-probe map
+	// (shared with Meshtastic / ZigBee / Cellular). With the ambiguity-
+	// aware ClassifyDevice, `base` is "ambiguous" for those entries —
+	// accept "meshtastic" too so an already-cached result still
+	// short-circuits the probe on legacy callers.
 	if (base != "meshtastic" && base != "ambiguous") || !ambiguousZigBeeVIDPIDs[vidpid] || portPath == "" {
 		return base
 	}
@@ -678,14 +703,60 @@ func ClassifyDeviceWithProbe(vidpid, portPath string) string {
 	}
 
 	result := base
-	if ProbeZNP(portPath) {
+	switch {
+	case ProbeZNP(portPath):
 		result = "zigbee"
+	case ProbeMeshtastic(portPath):
+		result = "meshtastic"
+	case ProbeAT(portPath):
+		result = "cellular"
 	}
 
 	probeCacheMu.Lock()
 	probeCache[key] = probeCacheEntry{result: result, at: time.Now()}
 	probeCacheMu.Unlock()
 	return result
+}
+
+// ProbeAT checks if a serial port speaks AT command protocol at 115200
+// baud (cellular default). Used by ClassifyDeviceWithProbe to resolve
+// VID:PIDs shared with cellular modems (e.g. T-Call A7670E on CH343
+// 1a86:55d4) after ZNP and Meshtastic probes have been ruled out.
+// [MESHSAT-646]
+//
+// DTR guard: the port is opened with InitialStatusBits DTR=false and
+// RTS=false so the serial library scrubs both lines immediately after
+// open() and before any further I/O. On CH343 the kernel driver itself
+// briefly asserts DTR during open() — which we can't prevent from
+// userspace — but we keep the assertion window as small as the library
+// allows. DTR must not stay asserted for the duration of the probe, as
+// that would keep the ESP32 passthrough chip held in reset (T-Call) or
+// pulse PWRKEY on every probe cycle.
+func ProbeAT(portName string) bool {
+	mode := &serial.Mode{
+		BaudRate: 115200,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+		InitialStatusBits: &serial.ModemOutputBits{
+			DTR: false,
+			RTS: false,
+		},
+	}
+
+	p, err := serial.Open(portName, mode)
+	if err != nil {
+		return false
+	}
+	defer p.Close()
+
+	// Defence in depth — re-assert the clear in case a driver rewrote
+	// the bits between open() and InitialStatusBits application.
+	_ = p.SetDTR(false)
+	_ = p.SetRTS(false)
+
+	resp, err := sendAT(p, "AT", 2*time.Second)
+	return err == nil && strings.Contains(resp, "OK")
 }
 
 // InvalidateProbeCache drops cached classifications for a given port. Called
