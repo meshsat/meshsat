@@ -314,6 +314,20 @@ func (b *bonder) allocateSymbols(bearers []BearerProfile, k int) []bearerAlloc {
 			a.repair = RepairSymbols(a.bearer, a.source)
 		}
 		a.total = a.source + a.repair
+		// Diagnostic: surface per-bearer allocation decisions so
+		// "bearer X is in the set but got no symbol" is immediately
+		// visible, with the reason (0 source + 0 repair = dropped).
+		// [MESHSAT-672]
+		log.Debug().
+			Str("iface", a.bearer.InterfaceID).
+			Uint8("index", a.bearer.Index).
+			Int("source", a.source).
+			Int("repair", a.repair).
+			Int("total", a.total).
+			Float64("loss_rate", a.bearer.LossRate).
+			Int("mtu", a.bearer.MTU).
+			Bool("is_free", a.bearer.IsFree()).
+			Msg("hemb: allocateSymbols per-bearer")
 		if a.total > 0 {
 			result = append(result, *a)
 		}
