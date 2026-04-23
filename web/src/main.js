@@ -25,12 +25,29 @@ import { startBundleWatcher } from './bundleWatcher'
 //                              field kits keep working until their
 //                              autostart files are regenerated)
 //   • User-agent contains CrKiosk / Chromium-Kiosk / KIOSK
+//   • localStorage meshsat.kiosk == '1'  (sticky flag — see below)
+//
+// Sticky localStorage flag: once a kit has been recognised as a kiosk
+// via URL or UA, we stamp `meshsat.kiosk=1` in localStorage. On
+// subsequent loads (including bundleWatcher reloads that happen after
+// a touch-driven Vue-router navigation stripped the query string —
+// e.g. operator taps /compose → URL loses ?kiosk=1 → 4h freshness
+// reload loads /compose unadorned → without the sticky flag the
+// kit would start rendering cursor + scrollbars). Laptops browsing
+// to the bridge from another origin have their own localStorage, so
+// this cannot bleed across devices. Clear via
+// `localStorage.removeItem('meshsat.kiosk')` in an engineer session.
 try {
   const params = new URLSearchParams(window.location.search || '')
   const ua = navigator.userAgent || ''
-  const isKiosk = params.get('kiosk') === '1' ||
-                  params.get('shell') === 'kiosk' ||
-                  /CrKiosk|Chromium-Kiosk|\bKIOSK\b/i.test(ua)
+  let isKiosk = params.get('kiosk') === '1' ||
+                params.get('shell') === 'kiosk' ||
+                /CrKiosk|Chromium-Kiosk|\bKIOSK\b/i.test(ua)
+  if (!isKiosk) {
+    try { isKiosk = localStorage.getItem('meshsat.kiosk') === '1' } catch {}
+  } else {
+    try { localStorage.setItem('meshsat.kiosk', '1') } catch {}
+  }
   if (isKiosk) document.documentElement.classList.add('shell-kiosk')
 } catch {}
 

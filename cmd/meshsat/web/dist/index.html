@@ -2,12 +2,23 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#111827" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/logo.png" />
   <title>MeshSat</title>
-  <script type="module" crossorigin src="/assets/index-nHwvCd-q.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-HSHv60dN.css">
+  <script type="module" crossorigin src="/assets/index-B067DPv3.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-BKTTqKV4.css">
 </head>
 <body class="bg-tactical-bg text-gray-100">
   <div id="app"></div>
+  <script>
+    // PWA service worker registration. [MESHSAT-581]
+    if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/service-worker.js').catch(() => {})
+      })
+    }
+  </script>
 </body>
 </html>
