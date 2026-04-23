@@ -19,10 +19,15 @@ import (
 )
 
 const (
-	meshBaud            = 115200
-	meshConfigTimeout   = 15 * time.Second
-	meshHeartbeatPeriod = 300 * time.Second
-	meshMsgBufSize      = 200
+	meshBaud = 115200
+	// defaultMeshConfigTimeout is the fallback wait for the radio's
+	// `want_config_id` stream to complete. 60s is comfortable for kits with
+	// a large NodeDB (~50 nodes on SF7-LongFast takes ~30-45s to drain).
+	// Overridable per-instance via SetConfigTimeout and from main.go via
+	// MESHSAT_MESH_CONFIG_TIMEOUT_SEC. [MESHSAT-619]
+	defaultMeshConfigTimeout = 60 * time.Second
+	meshHeartbeatPeriod      = 300 * time.Second
+	meshMsgBufSize           = 200
 )
 
 // DirectMeshTransport implements MeshTransport via direct serial port access.
@@ -67,6 +72,11 @@ type DirectMeshTransport struct {
 	lastExternalPkt atomic.Int64 // unix timestamp of last non-self packet
 	watchdogMin     int          // 0 = disabled
 
+	// configTimeout caps how long Subscribe waits for the want_config_id
+	// stream. Defaults to defaultMeshConfigTimeout; override via
+	// SetConfigTimeout. [MESHSAT-619]
+	configTimeout time.Duration
+
 	// portReadyCh is signalled by SetPort to wake the processor's retry loop
 	// immediately instead of waiting for exponential backoff. [MESHSAT-444]
 	portReadyCh chan struct{}
@@ -76,14 +86,27 @@ type DirectMeshTransport struct {
 // Pass "auto" or "" for port to use auto-detection.
 func NewDirectMeshTransport(port string) *DirectMeshTransport {
 	return &DirectMeshTransport{
-		port:        port,
-		nodes:       make(map[uint32]*MeshNode),
-		messages:    make([]MeshMessage, 0, meshMsgBufSize),
-		configData:  make(map[string]interface{}),
-		neighbors:   make(map[uint32]*NeighborInfo),
-		eventSubs:   make(map[uint64]chan MeshEvent),
-		portReadyCh: make(chan struct{}, 1),
+		port:          port,
+		nodes:         make(map[uint32]*MeshNode),
+		messages:      make([]MeshMessage, 0, meshMsgBufSize),
+		configData:    make(map[string]interface{}),
+		neighbors:     make(map[uint32]*NeighborInfo),
+		eventSubs:     make(map[uint64]chan MeshEvent),
+		portReadyCh:   make(chan struct{}, 1),
+		configTimeout: defaultMeshConfigTimeout,
 	}
+}
+
+// SetConfigTimeout overrides the want_config_id handshake deadline.
+// Values <= 0 fall back to defaultMeshConfigTimeout. Called from main.go
+// when MESHSAT_MESH_CONFIG_TIMEOUT_SEC is set. [MESHSAT-619]
+func (t *DirectMeshTransport) SetConfigTimeout(d time.Duration) {
+	if d <= 0 {
+		d = defaultMeshConfigTimeout
+	}
+	t.mu.Lock()
+	t.configTimeout = d
+	t.mu.Unlock()
 }
 
 // SetWatchdogMinutes configures the serial health watchdog timeout.
@@ -223,7 +246,11 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	go t.readerLoop(readerCtx)
 
 	// Wait for config completion (or timeout)
-	deadline := time.After(meshConfigTimeout)
+	configTimeout := t.configTimeout
+	if configTimeout <= 0 {
+		configTimeout = defaultMeshConfigTimeout
+	}
+	deadline := time.After(configTimeout)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 

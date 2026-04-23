@@ -36,6 +36,12 @@ type Config struct {
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
 
+	// Meshtastic want_config_id handshake timeout in seconds.
+	// 60s default comfortably covers kits with ~50 NodeDB entries on
+	// SF7-LongFast (drain ~30-45s). 15s caused partial handshakes with
+	// unconfigured my_node_num / region on parallax. [MESHSAT-619]
+	MeshConfigTimeoutSec int
+
 	// llama-zip gRPC sidecar address (empty = disabled)
 	LlamaZipAddr string
 	// llama-zip RPC timeout in seconds
@@ -113,6 +119,7 @@ func Load() *Config {
 		PaidRateLimit:          envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 		APIRateLimit:           envInt("MESHSAT_API_RATE_LIMIT", 600),
 		MeshWatchdogMin:        envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		MeshConfigTimeoutSec:   envInt("MESHSAT_MESH_CONFIG_TIMEOUT_SEC", 60),
 		LlamaZipAddr:           envStr("MESHSAT_LLAMAZIP_ADDR", ""),
 		LlamaZipTimeoutSec:     envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
 		MSVQSCAddr:             envStr("MESHSAT_MSVQSC_ADDR", ""),

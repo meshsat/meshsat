@@ -104,6 +104,7 @@ func main() {
 
 		directMesh := transport.NewDirectMeshTransport(meshPort)
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
+		directMesh.SetConfigTimeout(time.Duration(cfg.MeshConfigTimeoutSec) * time.Second)
 		mesh = directMesh
 
 		directIMT := transport.NewDirectIMTTransport(imtPort)
