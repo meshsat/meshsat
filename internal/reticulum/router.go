@@ -23,6 +23,7 @@ const (
 	IfaceGlobalstar InterfaceType = "globalstar"
 	IfaceZigBee     InterfaceType = "zigbee"
 	IfaceAPRS       InterfaceType = "aprs"
+	IfaceAX25       InterfaceType = "ax25"
 	IfaceBLE        InterfaceType = "ble"
 	IfaceTCP        InterfaceType = "tcp"
 	IfaceWebhook    InterfaceType = "webhook"
@@ -31,9 +32,16 @@ const (
 
 // InterfaceCost returns the per-message cost for a given interface.
 // Free interfaces return 0; satellite interfaces return their typical cost.
+//
+// `ax25` is explicitly listed alongside `aprs` — the two share Direwolf
+// but `ax25_0` is the Reticulum-over-AX.25 routing interface (dst=RTICUL)
+// and `aprs_0` is the APRS gateway (dst=APMSHT). Both are free.
+// Previously `ax25` fell through to the default `return 1.0` path,
+// which made the HeMB allocator classify it as a paid bearer and
+// exclude it from bond allocation. [MESHSAT-672]
 func InterfaceCost(iface InterfaceType) float64 {
 	switch iface {
-	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceWebhook, IfaceLocal:
+	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceAX25, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceWebhook, IfaceLocal:
 		return 0
 	case IfaceCellular:
 		return 0.005 // SMS cost
