@@ -85,6 +85,11 @@ func (t *TCPInterface) Start(ctx context.Context) error {
 }
 
 // Send transmits a Reticulum packet to all connected peers (HDLC framed).
+// Returns an error when there are no peers to send to — previously this
+// was a silent success, which hid bond-bearer failures where tcp_0 was
+// configured with zero peers. A real error here lets the HeMB bonder's
+// per-bearer error log fire so operators see the "no peers" gap.
+// [MESHSAT-672]
 func (t *TCPInterface) Send(ctx context.Context, packet []byte) error {
 	frame := reticulum.HDLCFrame(packet)
 
@@ -92,11 +97,14 @@ func (t *TCPInterface) Send(ctx context.Context, packet []byte) error {
 	defer t.mu.Unlock()
 
 	var lastErr error
+	delivered := 0
 
 	// Send to client connection (if connected)
 	if t.conn != nil {
 		if err := t.writeConn(t.conn, frame); err != nil {
 			lastErr = err
+		} else {
+			delivered++
 		}
 	}
 
@@ -107,6 +115,8 @@ func (t *TCPInterface) Send(ctx context.Context, packet []byte) error {
 			conn.Close()
 			delete(t.peers, addr)
 			lastErr = err
+		} else {
+			delivered++
 		}
 	}
 
@@ -116,10 +126,15 @@ func (t *TCPInterface) Send(ctx context.Context, packet []byte) error {
 			if err := t.writeConn(ob.conn, frame); err != nil {
 				log.Debug().Err(err).Str("peer", addr).Msg("tcp: outbound peer write failed")
 				lastErr = err
+			} else {
+				delivered++
 			}
 		}
 	}
 
+	if delivered == 0 && lastErr == nil {
+		return fmt.Errorf("tcp %s: no connected peers — packet dropped", t.config.Name)
+	}
 	return lastErr
 }
 
