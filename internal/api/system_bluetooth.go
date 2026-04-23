@@ -242,23 +242,50 @@ func (s *Server) handleBluetoothConnect(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := execWithTimeout(r.Context(), "bluetoothctl", "connect", address); err != nil {
-		log.Error().Err(err).Str("addr", address).Msg("bluetooth connect failed")
-		writeError(w, http.StatusInternalServerError, sanitizeExecError("connect", err))
+	// LE-only peripherals (including other MeshSat bridges) have no BR/EDR
+	// service record, so `bluetoothctl connect` returns exit 1 with
+	// "br-connection-profile-unavailable" even when BlueZ has successfully
+	// opened the LE link. Before treating that exit code as failure, inspect
+	// `bluetoothctl info` — if the device reports `Connected: yes`, BlueZ is
+	// talking to it on LE regardless of what bluetoothctl's exit code said.
+	// [MESHSAT-633 follow-up — previously blocked bridge↔bridge auto-link]
+	_, connectErr := execWithTimeout(r.Context(), "bluetoothctl", "connect", address)
+	info, infoErr := execWithTimeout(r.Context(), "bluetoothctl", "info", address)
+	connected := infoErr == nil && deviceConnected(info)
+	if connectErr != nil && !connected {
+		log.Error().Err(connectErr).Str("addr", address).Msg("bluetooth connect failed")
+		writeError(w, http.StatusInternalServerError, sanitizeExecError("connect", connectErr))
 		return
+	}
+	if connectErr != nil {
+		log.Info().Str("addr", address).Msg("bluetooth: BR/EDR unavailable but LE link is up")
 	}
 	// If this is another MeshSat kit, bring up the Reticulum BLE
 	// peer-link automatically. Best-effort: failure doesn't block the
 	// BT connect success — the operator can retry via a separate
 	// code path if we add one later. [MESHSAT-633]
-	if s.blePeerMgr != nil {
-		if info, infoErr := execWithTimeout(r.Context(), "bluetoothctl", "info", address); infoErr == nil && infoHasMeshSatUUID(info) {
-			if err := s.blePeerMgr.EnsurePeer(r.Context(), address); err != nil {
-				log.Warn().Err(err).Str("addr", address).Msg("ble-peer: auto-link failed, keeping BT connect success")
-			}
+	if s.blePeerMgr != nil && infoErr == nil && infoHasMeshSatUUID(info) {
+		if err := s.blePeerMgr.EnsurePeer(r.Context(), address); err != nil {
+			log.Warn().Err(err).Str("addr", address).Msg("ble-peer: auto-link failed, keeping BT connect success")
 		}
 	}
 	writeSuccess(w, fmt.Sprintf("connected to %s", address))
+}
+
+// deviceConnected parses `bluetoothctl info <addr>` output and reports
+// whether the device shows `Connected: yes`. BlueZ exposes a single
+// Connected flag across BR/EDR + LE transports, so this is enough to
+// distinguish "actually talking to the device over LE" from the
+// bluetoothctl-exit-1 false negative on LE-only peripherals.
+// [MESHSAT-633 follow-up]
+func deviceConnected(info string) bool {
+	for _, line := range strings.Split(info, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Connected:") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "Connected:")) == "yes"
+		}
+	}
+	return false
 }
 
 // @Summary Disconnect from a connected Bluetooth device
