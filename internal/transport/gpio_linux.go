@@ -137,3 +137,26 @@ var WatchFallingEdge = func(offset int, consumer string, handler func(gpiocdev.L
 	}
 	return &cdevLine{line: l}, nil
 }
+
+// WatchBothEdges reserves a line as an input and invokes handler from
+// a kernel-driven goroutine on every rising AND falling transition.
+// `bias` is optional (pass nil for kernel default); the DCF77 SP6007
+// is an active CMOS driver so the production call passes nil.
+// Event.Timestamp is based on CLOCK_MONOTONIC (kernel ≥ 5.7) so
+// pulse-width measurement is robust against wall-clock steps.
+var WatchBothEdges = func(offset int, bias gpiocdev.LineReqOption, consumer string, handler func(gpiocdev.LineEvent)) (GPIOLine, error) {
+	opts := []gpiocdev.LineReqOption{
+		gpiocdev.AsInput,
+		gpiocdev.WithBothEdges,
+		gpiocdev.WithEventHandler(handler),
+		gpiocdev.WithConsumer(consumer),
+	}
+	if bias != nil {
+		opts = append(opts, bias)
+	}
+	l, err := gpiocdev.RequestLine(gpioChipName(), offset, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("watch gpio both edges %s/%d (%s): %w", gpioChipName(), offset, consumer, err)
+	}
+	return &cdevLine{line: l}, nil
+}

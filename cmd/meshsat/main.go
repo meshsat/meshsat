@@ -753,6 +753,25 @@ func main() {
 		timeService := timesync.NewTimeService(db)
 		timeService.SetEmitter(proc.Emit)
 		timeService.LoadPersistedState()
+
+		// DCF77 longwave source (MESHSAT-673) — opt-in via env.
+		// Wired before Start(ctx) so it appears in the source list.
+		if dcf77Enabled() {
+			dcf77Cfg := timesync.DCF77Config{
+				DataPin:      envIntDefault("MESHSAT_DCF77_DATA_PIN", 19),
+				PONPin:       envIntDefault("MESHSAT_DCF77_PON_PIN", 21),
+				PONActiveLow: envBoolDefault("MESHSAT_DCF77_PON_ACTIVE_LOW", true),
+				PONManaged:   os.Getenv("MESHSAT_DCF77_PON_MANAGED"),
+			}
+			timeService.AddSource(timesync.NewDCF77Source(dcf77Cfg))
+			log.Info().
+				Int("data_bcm", dcf77Cfg.DataPin).
+				Int("pon_bcm", dcf77Cfg.PONPin).
+				Bool("pon_active_low", dcf77Cfg.PONActiveLow).
+				Str("pon_managed", dcf77Cfg.PONManaged).
+				Msg("timesync: dcf77 source registered")
+		}
+
 		timeService.Start(ctx)
 
 		// Mesh time consensus — exchanges timestamps over Reticulum links.
@@ -2027,4 +2046,29 @@ func (a *bridgeDirectoryApplier) ApplySnapshot(ctx context.Context, snap *hubrep
 		}
 	}
 	return nil
+}
+
+func dcf77Enabled() bool {
+	return envBoolDefault("MESHSAT_DCF77_ENABLED", false)
+}
+
+func envIntDefault(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envBoolDefault(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "YES", "Yes", "on", "ON", "On":
+		return true
+	}
+	return false
 }
