@@ -303,32 +303,47 @@ func (s *Server) demoIridium(ctx context.Context, run *demoRun) {
 		run.setResult("iridium", "skipped", "gateway manager not wired", t)
 		return
 	}
-	// Dispatch via the auto-detected active sat gateway (9603 or 9704).
-	// SBDIX with no sky-visible satellite will fail fast; IMT is push-based.
-	sub, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Iridium gateways' Forward() is synchronous and (observed on IMT)
+	// does not always honour ctx cancellation — the underlying JSPR
+	// helper can block >60 s on a no-sky retry cycle. Run Forward in a
+	// child goroutine and race it against a hard demo deadline so the
+	// demo always reports iridium status within ~28 s even if the
+	// gateway leaks its send goroutine. [MESHSAT-686]
+	sub, cancel := context.WithTimeout(ctx, 28*time.Second)
 	defer cancel()
-	// Use a typed MeshMessage so we go through the regular delivery path.
 	msg := &transport.MeshMessage{DecodedText: fmt.Sprintf("MS-DEMO-%s", run.ID)}
-	var err error
-	if sbd := s.gwManager.GetSBDGateway(); sbd != nil {
-		err = sbd.Forward(sub, msg)
-		if err == nil {
-			run.setResult("iridium", "success", "SBDIX queued", t)
+
+	type dispatchResult struct {
+		flavor string // "SBD" | "IMT"
+		err    error
+	}
+	resultCh := make(chan dispatchResult, 1)
+
+	go func() {
+		if sbd := s.gwManager.GetSBDGateway(); sbd != nil {
+			resultCh <- dispatchResult{flavor: "SBD", err: sbd.Forward(sub, msg)}
 			return
 		}
-	}
-	if imt := s.gwManager.GetIMTGateway(); imt != nil {
-		err = imt.Forward(sub, msg)
-		if err == nil {
-			run.setResult("iridium", "success", "IMT MO queued", t)
+		if imt := s.gwManager.GetIMTGateway(); imt != nil {
+			resultCh <- dispatchResult{flavor: "IMT", err: imt.Forward(sub, msg)}
 			return
 		}
+		resultCh <- dispatchResult{err: fmt.Errorf("no iridium gateway running")}
+	}()
+
+	select {
+	case r := <-resultCh:
+		if r.err != nil {
+			run.setResult("iridium", "failed", r.err.Error(), t)
+			return
+		}
+		run.setResult("iridium", "success", r.flavor+" MO queued", t)
+	case <-sub.Done():
+		// Deadline hit before Forward returned — mark failed and move
+		// on. The orphan goroutine finishes (or not) on its own; that
+		// only affects the demo's accounting, not the transport.
+		run.setResult("iridium", "failed", "timeout — no satellite visible?", t)
 	}
-	if err != nil {
-		run.setResult("iridium", "failed", err.Error(), t)
-		return
-	}
-	run.setResult("iridium", "skipped", "no iridium gateway running", t)
 }
 
 func (s *Server) demoHub(ctx context.Context, run *demoRun) {
