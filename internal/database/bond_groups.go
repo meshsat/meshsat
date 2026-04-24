@@ -39,14 +39,22 @@ func BearerShortLabel(id string) string {
 }
 
 // recomputeBondLabel rewrites the bond_groups.label column from the
-// current members list, so the label never drifts from reality after
-// members are added or removed. [MESHSAT-687] Silent no-op when the
-// group has already been deleted. Called from Insert/Delete bond
-// member paths inside this file so every membership change
-// self-heals the label without the caller having to remember.
+// current members list IF the existing label looks auto-generated (or
+// is empty). Human-authored labels — anything with a space or that
+// doesn't match the "Part+Part+Part" pattern — are preserved so
+// renaming "bond1" to "Mission Charlie" isn't clobbered by the next
+// membership change. [MESHSAT-687] Silent no-op when the group has
+// already been deleted.
 func (db *DB) recomputeBondLabel(groupID string) {
 	if groupID == "" {
 		return
+	}
+	var existing string
+	if err := db.QueryRow("SELECT label FROM bond_groups WHERE id = ?", groupID).Scan(&existing); err != nil {
+		return
+	}
+	if existing != "" && !looksAutoBondLabel(existing) {
+		return // preserve human-authored label
 	}
 	members, err := db.GetBondMembers(groupID)
 	if err != nil {
@@ -63,10 +71,48 @@ func (db *DB) recomputeBondLabel(groupID string) {
 	if label == "" {
 		label = "(empty)"
 	}
+	if label == existing {
+		return
+	}
 	_, _ = db.Exec(
 		`UPDATE bond_groups SET label = ?, updated_at = datetime('now') WHERE id = ?`,
 		label, groupID,
 	)
+}
+
+// looksAutoBondLabel returns true when a label matches the auto-
+// generated shape — `BearerShort[+BearerShort...]` with no spaces,
+// no punctuation beyond `+`, and each part starting with an uppercase
+// letter. Anything that doesn't match is assumed to be operator-
+// written and must not be overwritten by recomputeBondLabel. Also
+// treats "(empty)" (our auto-generated placeholder for a bond with
+// no members) as auto so adding a first member re-labels cleanly.
+// [MESHSAT-687]
+func looksAutoBondLabel(s string) bool {
+	if s == "" || s == "(empty)" {
+		return true
+	}
+	if strings.ContainsAny(s, " \t,./:;") {
+		return false
+	}
+	for _, part := range strings.Split(s, "+") {
+		if part == "" {
+			return false
+		}
+		first := part[0]
+		if first < 'A' || first > 'Z' {
+			return false
+		}
+		for i := 1; i < len(part); i++ {
+			c := part[i]
+			isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+			isDigit := c >= '0' && c <= '9'
+			if !isLetter && !isDigit {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // BondGroup defines a bonding group for multi-path delivery across interfaces.
