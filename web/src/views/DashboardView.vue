@@ -385,6 +385,33 @@ const topNodes = computed(() => {
 })
 const neighborCount = computed(() => (store.neighborInfo || []).length)
 
+// ── Mesh widget state label ──
+// The serial link being up ("connected") does not mean the radio has
+// finished its FromRadio config handshake. If the NodeDB hasn't populated
+// (no node_name, no nodes), call it out as "Awaiting NodeDB" in amber so
+// the operator knows the widget is waiting for the radio, not broken.
+// See MESHSAT-684 — previously we showed green "Connected" in this state
+// which made the empty nodes + channels lists look like a bug. [MESHSAT-685
+// tracks the deeper fix to the handshake itself.]
+const meshHandshakeComplete = computed(() =>
+  radioConnected.value && (!!store.status?.node_name || totalNodes.value > 0)
+)
+const meshStateLabel = computed(() => {
+  if (!radioConnected.value) return 'Disconnected'
+  if (!meshHandshakeComplete.value) return 'Awaiting NodeDB'
+  return 'Connected'
+})
+const meshStateClass = computed(() => {
+  if (!radioConnected.value) return 'text-red-400'
+  if (!meshHandshakeComplete.value) return 'text-amber-400'
+  return 'text-emerald-400'
+})
+const meshStateDot = computed(() => {
+  if (!radioConnected.value) return 'bg-red-400'
+  if (!meshHandshakeComplete.value) return 'bg-amber-400'
+  return 'bg-emerald-400'
+})
+
 // Active Meshtastic channels parsed from config
 const activeChannels = computed(() => {
   const cfg = store.config
@@ -2002,13 +2029,11 @@ function widgetGridClass(id) {
               </div>
             </div>
           </div>
-          <span class="w-2 h-2 rounded-full" :class="radioConnected ? 'bg-emerald-400' : 'bg-red-400'" />
+          <span class="w-2 h-2 rounded-full" :class="meshStateDot" />
         </div>
 
         <div class="flex items-center gap-2 mb-3">
-          <span class="text-xs" :class="radioConnected ? 'text-emerald-400' : 'text-red-400'">
-            {{ radioConnected ? 'Connected' : 'Disconnected' }}
-          </span>
+          <span class="text-xs" :class="meshStateClass">{{ meshStateLabel }}</span>
           <span class="text-[10px] text-gray-500 font-mono">{{ nodeName }}</span>
         </div>
 
@@ -2064,21 +2089,8 @@ function widgetGridClass(id) {
             </span>
             <span class="text-[9px] text-gray-600 shrink-0">{{ formatLastHeard(node.last_heard) }}</span>
           </div>
-          <div v-if="!topNodes.length" class="text-[11px] text-gray-600 text-center py-2">No nodes discovered</div>
-        </div>
-
-        <!-- Channel Health Scores -->
-        <div v-if="store.healthScores.length" class="mt-2 pt-2 border-t border-tactical-border">
-          <span class="text-[9px] text-gray-500 uppercase tracking-wider">Channel Health</span>
-          <div class="flex flex-wrap gap-1.5 mt-1.5">
-            <div v-for="hs in store.healthScores" :key="hs.interface_id"
-              class="flex items-center gap-1.5">
-              <span class="text-[10px] text-gray-400 truncate max-w-[80px]">{{ hs.interface_id }}</span>
-              <span class="px-2 py-0.5 rounded-full text-xs font-medium"
-                :class="healthScoreClass(hs.score)">
-                {{ hs.score }}/100
-              </span>
-            </div>
+          <div v-if="!topNodes.length" class="text-[11px] text-gray-600 text-center py-2">
+            {{ meshHandshakeComplete ? 'No nodes discovered yet' : 'Waiting for radio NodeDB…' }}
           </div>
         </div>
 
