@@ -1009,7 +1009,7 @@ const opActiveBond = computed(() => {
 // Map an interface_id to a human-readable short label for the
 // HeMB tile subtitle. Dynamic so newly-enrolled bearers (tcp_0 from
 // the WiFi-Direct auto-wire, ble_peer_N from future BLE mesh peers,
-// etc.) don't need a DB update to show up as "WiFi" / "BLE".
+// etc.) don't need a DB update to show up as "TCP" / "BLE".
 function bearerShortLabel(id) {
   if (!id) return ''
   if (id.startsWith('mesh_'))       return 'Mesh'
