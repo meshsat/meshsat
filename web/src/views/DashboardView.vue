@@ -782,15 +782,23 @@ function fmtAgo(sec) {
   return `${Math.floor(d/86400)}d ago`
 }
 
-const opSatOK  = computed(() => (store.iridiumSignal?.bars ?? -1) >= 2)
+// [MESHSAT-687] Iridium reports bars=1 during marginal-but-registered
+// satellite windows; threshold of 2 used to hide those entirely from
+// Active Comms, cascading straight to "None" even when the modem
+// could still transact. Lower to ≥1 so the widget stays honest.
+const opSatOK  = computed(() => (store.iridiumSignal?.bars ?? -1) >= 1)
 const opCellOK = computed(() => (store.cellularSignal?.bars ?? -1) >= 2)
-// "Mesh is up" = the bridge has an open, handshaked serial session to the
-// Meshtastic radio (same signal StatusStrip uses via store.status.connected).
-// Previous version required a peer seen in the last 10 min, which is
-// activity, not availability — it reports ✗ on any freshly-provisioned
-// private channel where no other node has transmitted yet, and cascades
-// into Active Comms falling back to the next transport.
-const opMeshOK = computed(() => store.status?.connected === true)
+// [MESHSAT-687] "Mesh up" requires BOTH the serial link AND a completed
+// FromRadio handshake (node_name populated OR a NodeDB entry present).
+// Previously `status.connected === true` alone was enough, which
+// false-positived on XIAO radios stuck in the "Awaiting NodeDB" state
+// where serial is up but outbound packets can't go anywhere — widget
+// would report Mesh ✓ while the mesh widget correctly amber-labelled
+// it. Matches the mesh widget's meshHandshakeComplete predicate.
+const opMeshOK = computed(() =>
+  store.status?.connected === true &&
+  (!!store.status?.node_name || (store.nodes || []).length > 0)
+)
 const opAprsOK = computed(() => store.aprsStatus?.connected === true && store.aprsStatus?.kiss_up === true)
 
 const opChannels = computed(() => [
@@ -1010,7 +1018,7 @@ function bearerShortLabel(id) {
   if (id.startsWith('iridium_'))    return 'SBD'
   if (id.startsWith('sms_'))        return 'SMS'
   if (id.startsWith('cellular_'))   return 'Cell'
-  if (id.startsWith('tcp_'))        return 'WiFi'
+  if (id.startsWith('tcp_'))        return 'TCP'
   if (id.startsWith('ble_'))        return 'BLE'
   if (id.startsWith('zigbee_'))     return 'ZB'
   if (id.startsWith('mqtt_rns_'))   return 'MQTT'
@@ -1810,7 +1818,10 @@ function widgetGridClass(id) {
           <div class="text-xs text-gray-500 mt-1" :class="(opPrimaryChannel.bond?.members?.length || 0) >= 5 ? 'text-[10px]' : 'text-xs'">
             {{ opPrimaryChannel.detail }}
           </div>
-          <div class="text-[10px] text-gray-500 mt-0.5">{{ opChannelCount }} of {{ opChannelTotal }} channels up</div>
+          <!-- [MESHSAT-687] footer "X of 4 channels up" removed — duplicated
+               the 9-chip channel matrix at the top of the operator layout
+               and the two totals disagreed (matrix counts 9, this counted
+               4). The matrix is authoritative. -->
         </router-link>
 
         <!-- Peer count + latest contact -->

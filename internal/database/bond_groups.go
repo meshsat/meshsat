@@ -1,6 +1,73 @@
 package database
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// BearerShortLabel maps a Reticulum interface_id to the short,
+// human-facing bearer name used in bond-group auto-labels and in the
+// operator dashboard's Active Comms tile. Kept in sync with the same
+// mapping in web/src/views/DashboardView.vue :: bearerShortLabel —
+// if you add a new bearer type there, mirror it here. [MESHSAT-687]
+func BearerShortLabel(id string) string {
+	switch {
+	case id == "":
+		return ""
+	case strings.HasPrefix(id, "mesh_"):
+		return "Mesh"
+	case strings.HasPrefix(id, "ax25_"):
+		return "APRS"
+	case strings.HasPrefix(id, "iridium_imt"):
+		return "IMT"
+	case strings.HasPrefix(id, "iridium_"):
+		return "SBD"
+	case strings.HasPrefix(id, "sms_"):
+		return "SMS"
+	case strings.HasPrefix(id, "cellular_"):
+		return "Cell"
+	case strings.HasPrefix(id, "tcp_"):
+		return "TCP"
+	case strings.HasPrefix(id, "ble_"):
+		return "BLE"
+	case strings.HasPrefix(id, "zigbee_"):
+		return "ZB"
+	case strings.HasPrefix(id, "mqtt_rns_"):
+		return "MQTT"
+	}
+	return id
+}
+
+// recomputeBondLabel rewrites the bond_groups.label column from the
+// current members list, so the label never drifts from reality after
+// members are added or removed. [MESHSAT-687] Silent no-op when the
+// group has already been deleted. Called from Insert/Delete bond
+// member paths inside this file so every membership change
+// self-heals the label without the caller having to remember.
+func (db *DB) recomputeBondLabel(groupID string) {
+	if groupID == "" {
+		return
+	}
+	members, err := db.GetBondMembers(groupID)
+	if err != nil {
+		return
+	}
+	parts := make([]string, 0, len(members))
+	for _, m := range members {
+		s := BearerShortLabel(m.InterfaceID)
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	label := strings.Join(parts, "+")
+	if label == "" {
+		label = "(empty)"
+	}
+	_, _ = db.Exec(
+		`UPDATE bond_groups SET label = ?, updated_at = datetime('now') WHERE id = ?`,
+		label, groupID,
+	)
+}
 
 // BondGroup defines a bonding group for multi-path delivery across interfaces.
 //
@@ -100,25 +167,42 @@ func (db *DB) GetBondMembers(groupID string) ([]BondMember, error) {
 	return members, nil
 }
 
-// InsertBondMember adds an interface to a bond group.
+// InsertBondMember adds an interface to a bond group, then auto-syncs
+// the bond's label from the live members so it doesn't drift from
+// reality (e.g. "Mesh+APRS" becoming "Mesh+APRS+TCP" after the
+// WiFi-P2P reconciler enrols tcp_0). [MESHSAT-687]
 func (db *DB) InsertBondMember(m *BondMember) error {
 	_, err := db.Exec(`INSERT INTO bond_members (group_id, interface_id, priority) VALUES (?, ?, ?)`,
 		m.GroupID, m.InterfaceID, m.Priority)
 	if err != nil {
 		return fmt.Errorf("insert bond member: %w", err)
 	}
+	db.recomputeBondLabel(m.GroupID)
 	return nil
 }
 
-// DeleteBondMember removes a bond member by ID.
+// DeleteBondMember removes a bond member by ID. We have to look up the
+// group_id BEFORE the delete because after it the row is gone; then
+// recompute the label on that group so it reflects the remaining
+// members. [MESHSAT-687]
 func (db *DB) DeleteBondMember(id int64) error {
+	var groupID string
+	_ = db.QueryRow("SELECT group_id FROM bond_members WHERE id = ?", id).Scan(&groupID)
 	_, err := db.Exec("DELETE FROM bond_members WHERE id = ?", id)
+	if err == nil && groupID != "" {
+		db.recomputeBondLabel(groupID)
+	}
 	return err
 }
 
-// DeleteBondMembers removes all members from a bond group.
+// DeleteBondMembers removes all members from a bond group. Recomputed
+// label after the wipe will be "(empty)" so the widget doesn't show a
+// stale bearer list. [MESHSAT-687]
 func (db *DB) DeleteBondMembers(groupID string) error {
 	_, err := db.Exec("DELETE FROM bond_members WHERE group_id = ?", groupID)
+	if err == nil {
+		db.recomputeBondLabel(groupID)
+	}
 	return err
 }
 
