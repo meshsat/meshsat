@@ -203,11 +203,12 @@ func (s *Server) handleGetGateways(w http.ResponseWriter, r *http.Request) {
 		if !hasTAK {
 			st := s.hubReporter.TAKRelayStats()
 			syn := gateway.GatewayStatusResponse{
-				Type:       "tak_hub_relay",
-				InstanceID: "tak_hub_relay",
-				Enabled:    true,
-				Connected:  s.hubReporter.IsConnected() && st.Subscribed,
-				MessagesIn: st.MessagesIn,
+				Type:        "tak_hub_relay",
+				InstanceID:  "tak_hub_relay",
+				Enabled:     true,
+				Connected:   s.hubReporter.IsConnected() && st.Subscribed,
+				MessagesIn:  st.MessagesIn,
+				MessagesOut: st.MessagesOut,
 			}
 			if st.LastActivityTS > 0 {
 				syn.LastActivity = time.Unix(st.LastActivityTS, 0)

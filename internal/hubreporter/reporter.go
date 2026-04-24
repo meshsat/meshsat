@@ -75,8 +75,15 @@ type HubReporter struct {
 	// gateway entry (type "tak_hub_relay"). The widget reports 0 without
 	// this because the bridge has no local TAK gateway — all CoT flows
 	// through Hub MQTT broadcast. [MESHSAT-682]
+	//
+	// MessagesOut counts publishes on topics that the Hub's TAK subscriber
+	// (`meshsat-hub/internal/tak/subscriber.go`) converts to CoT XML and
+	// relays to OpenTAKServer: position / SOS / telemetry / device-birth /
+	// bridge-birth / bridge-health. Spectrum alerts and device-death are
+	// explicitly excluded — the Hub has no CoT mapping for them.
 	takSubscribed   atomic.Bool
 	takMsgsIn       atomic.Int64
+	takMsgsOut      atomic.Int64
 	takLastActivity atomic.Int64 // unix seconds
 }
 
@@ -383,6 +390,7 @@ func (r *HubReporter) IsConnected() bool {
 func (r *HubReporter) PublishDeviceBirth(device DeviceBirth) error {
 	device.Protocol = ProtocolVersion
 	device.BridgeID = r.cfg.BridgeID
+	r.takMsgsOut.Add(1)
 	return r.publishOrQueue(TopicDeviceBirth(r.cfg.BridgeID, device.DeviceID), 1, false, device)
 }
 
@@ -396,18 +404,21 @@ func (r *HubReporter) PublishDeviceDeath(device DeviceDeath) error {
 // PublishDevicePosition publishes a device position update to the Hub.
 func (r *HubReporter) PublishDevicePosition(deviceID string, pos DevicePosition) error {
 	pos.BridgeID = r.cfg.BridgeID
+	r.takMsgsOut.Add(1)
 	return r.publishOrQueue(TopicDevicePosition(deviceID), 0, false, pos)
 }
 
 // PublishDeviceTelemetry publishes device telemetry to the Hub.
 func (r *HubReporter) PublishDeviceTelemetry(deviceID string, tel DeviceTelemetry) error {
 	tel.BridgeID = r.cfg.BridgeID
+	r.takMsgsOut.Add(1)
 	return r.publishOrQueue(TopicDeviceTelemetry(deviceID), 0, false, tel)
 }
 
 // PublishDeviceSOS publishes a device SOS event to the Hub.
 func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 	sos.BridgeID = r.cfg.BridgeID
+	r.takMsgsOut.Add(1)
 	return r.publishOrQueue(TopicDeviceSOS(sos.DeviceID), 1, false, sos)
 }
 
@@ -442,6 +453,7 @@ func (r *HubReporter) publishBirth() {
 	if err := r.publish(TopicBridgeBirth(r.cfg.BridgeID), 1, true, birth); err != nil {
 		log.Error().Err(err).Msg("hubreporter: failed to publish birth")
 	} else {
+		r.takMsgsOut.Add(1)
 		signed := birth.Signature != ""
 		log.Info().Str("bridge_id", r.cfg.BridgeID).Bool("signed", signed).Msg("hubreporter: birth certificate published")
 	}
@@ -527,6 +539,7 @@ func (r *HubReporter) onTAKCoT(_ mqtt.Client, msg mqtt.Message) {
 type TAKRelayStats struct {
 	Subscribed     bool
 	MessagesIn     int64
+	MessagesOut    int64
 	LastActivityTS int64 // unix seconds, 0 if never
 }
 
@@ -535,6 +548,7 @@ func (r *HubReporter) TAKRelayStats() TAKRelayStats {
 	return TAKRelayStats{
 		Subscribed:     r.takSubscribed.Load(),
 		MessagesIn:     r.takMsgsIn.Load(),
+		MessagesOut:    r.takMsgsOut.Load(),
 		LastActivityTS: r.takLastActivity.Load(),
 	}
 }
@@ -625,6 +639,8 @@ func (r *HubReporter) healthLoop(ctx context.Context) {
 
 			if err := r.publish(TopicBridgeHealth(r.cfg.BridgeID), 0, false, health); err != nil {
 				log.Debug().Err(err).Msg("hubreporter: health publish failed (will retry)")
+			} else {
+				r.takMsgsOut.Add(1)
 			}
 		}
 	}
