@@ -270,9 +270,40 @@ export const useMeshsatStore = defineStore('meshsat', () => {
       const data = await api.get('/gateways')
       const list = Array.isArray(data) ? data : (data.gateways || data.items || [])
       gateways.value = list
+      // [MESHSAT-686] Feed per-gateway counter samples into the rate
+      // history ring buffer so the widgets' sparklines update live.
+      pushGatewayRateSamples(list)
     } catch (e) {
       error.value = e.message
     }
+  }
+
+  // gatewayRateHistory: { [instance_id]: [{ts, inCount, outCount}, ...] }
+  // Sliding window of last 16 samples per gateway (≈60s at the 4s poll
+  // cadence). Consumed by GatewayRateSparkline. [MESHSAT-686]
+  const gatewayRateHistory = ref({})
+  const RATE_HISTORY_WINDOW = 16
+
+  function pushGatewayRateSamples(list) {
+    const now = Date.now()
+    const out = { ...gatewayRateHistory.value }
+    for (const g of list) {
+      const key = g.instance_id || g.type
+      if (!key) continue
+      const prev = out[key] || []
+      const next = [...prev, {
+        ts: now,
+        inCount: g.messages_in || 0,
+        outCount: g.messages_out || 0,
+      }]
+      if (next.length > RATE_HISTORY_WINDOW) next.splice(0, next.length - RATE_HISTORY_WINDOW)
+      out[key] = next
+    }
+    gatewayRateHistory.value = out
+  }
+
+  function gatewayRateSamples(instanceID) {
+    return gatewayRateHistory.value[instanceID] || []
   }
 
   async function configureGateway(gwType, enabled, config) {
@@ -1755,6 +1786,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     pairedClients, armedPair, armPairMode, fetchPairedClients, revokePairedClient,
     purgeMessages,
     fetchTelemetry, fetchPositions, fetchNodes, removeNode, fetchStatus, fetchGateways,
+    gatewayRateHistory, gatewayRateSamples, // [MESHSAT-686]
     configureGateway, deleteGateway, startGateway, stopGateway, testGateway,
     adminReboot, adminFactoryReset, adminTraceroute,
     configRadio, configModule, sendWaypoint,

@@ -1359,6 +1359,40 @@ func (m *Manager) GetAPRSGateway() *APRSGateway {
 	return nil
 }
 
+// GetSBDGateway returns the running SBD (9603) gateway, if any. Returns
+// nil when the bridge is running IMT (9704) instead or when neither
+// satellite gateway is up. [MESHSAT-686]
+func (m *Manager) GetSBDGateway() *SBDGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
+		if sgw, ok := gw.(*SBDGateway); ok {
+			return sgw
+		}
+	}
+	return nil
+}
+
+// GetIMTGateway returns the running IMT (9704) gateway, if any. Returns
+// nil when the bridge is running SBD (9603) instead or when neither
+// satellite gateway is up. [MESHSAT-686]
+func (m *Manager) GetIMTGateway() *IMTGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if gw == nil {
+			continue
+		}
+		if igw, ok := gw.(*IMTGateway); ok {
+			return igw
+		}
+	}
+	return nil
+}
+
 // GetDynDNSUpdater returns the DynDNS updater from the running cellular gateway, if any.
 func (m *Manager) GetDynDNSUpdater() *DynDNSUpdater {
 	if cgw := m.GetCellularGateway(); cgw != nil {

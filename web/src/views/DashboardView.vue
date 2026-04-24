@@ -5,6 +5,7 @@ import api from '@/api/client'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
 import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot } from '@/utils/format'
 import SpectrumWidget from '@/components/SpectrumWidget.vue'
+import GatewayRateSparkline from '@/components/GatewayRateSparkline.vue'
 
 const store = useMeshsatStore()
 
@@ -821,6 +822,125 @@ const opStatus = computed(() => {
     ring: 'border-red-500/70 bg-red-950/30', tint: 'text-red-300' }
 })
 
+// ── Sparkline samples helper [MESHSAT-686] ──
+// Returns the sliding-window history for the first gateway of the
+// given type (or any of the types list, useful for "iridium" which
+// can be either iridium_0 or iridium_imt_0).
+function sparkSamples(types) {
+  const wanted = Array.isArray(types) ? types : [types]
+  const gw = (store.gateways || []).find(g => wanted.includes(g.type))
+  if (!gw) return []
+  return store.gatewayRateSamples(gw.instance_id || gw.type)
+}
+
+// ── Channel matrix (9-chip operator header strip) [MESHSAT-686] ──
+// One chip per comms channel. Green = healthy, amber = configured but
+// not ready (e.g. mesh awaiting NodeDB, hub reconnecting), gray = not
+// configured / not provisioned, red = error.
+const opHubOK = computed(() => {
+  const g = (store.gateways || []).find(x => x.type === 'tak_hub_relay' || x.type === 'tak')
+  return !!(g && g.connected)
+})
+const opBLEOK = computed(() => !!store.bluetoothStatus?.powered)
+const opWifiP2POK = computed(() => {
+  // WiFi-P2P manifests as a tcp_* Reticulum interface when the group
+  // is formed; otherwise treat as gray (not yet up).
+  const ifs = store.routingInterfaces || []
+  return ifs.some(i => (i.id || '').startsWith('tcp_') && i.online)
+})
+const opZigbeeOK = computed(() => {
+  const g = (store.gateways || []).find(x => x.type === 'zigbee')
+  return !!(g && g.connected)
+})
+const opTAKOK = opHubOK // bridge-side TAK visibility depends on the Hub relay
+
+const channelMatrix = computed(() => [
+  { key: 'mesh',    label: 'MESH',  ok: opMeshOK.value, hint: 'Meshtastic LoRa' },
+  { key: 'aprs',    label: 'APRS',  ok: opAprsOK.value, hint: 'AX.25 / Direwolf' },
+  { key: 'sms',     label: 'SMS',   ok: opCellOK.value, hint: 'Cellular SMS' },
+  { key: 'sat',     label: 'SAT',   ok: opSatOK.value,  hint: 'Iridium' },
+  { key: 'ble',     label: 'BLE',   ok: opBLEOK.value,  hint: 'Bridge-to-bridge BLE peer' },
+  { key: 'wifip2p', label: 'P2P',   ok: opWifiP2POK.value, hint: 'WiFi-Direct overlay' },
+  { key: 'zigbee',  label: 'ZIG',   ok: opZigbeeOK.value,  hint: 'ZigBee sensors' },
+  { key: 'tak',     label: 'TAK',   ok: opTAKOK.value,  hint: 'TAK / CoT via Hub' },
+  { key: 'hub',     label: 'HUB',   ok: opHubOK.value,  hint: 'Hub MQTT WSS+mTLS' },
+])
+
+// ── Run Full Demo orchestrator [MESHSAT-686] ──
+// POST /api/demo/run fires all channels in parallel server-side; we
+// poll /api/demo/{id} every 500 ms and surface the per-channel
+// progress in the demoModal overlay.
+const demoRun = ref(null)          // { demo_id, status, channels:[...] } | null
+const demoStarting = ref(false)
+let demoPollHandle = null
+
+async function startFullDemo() {
+  if (demoStarting.value) return
+  if (demoRun.value && demoRun.value.status === 'running') return
+  demoStarting.value = true
+  try {
+    const r = await api.post('/demo/run', {})
+    const id = r?.demo_id
+    if (!id) throw new Error('demo_id missing from response')
+    demoRun.value = {
+      demo_id: id, status: 'running', started: new Date().toISOString(),
+      channels: [
+        { name: 'mesh', status: 'pending' },
+        { name: 'aprs', status: 'pending' },
+        { name: 'cellular', status: 'pending' },
+        { name: 'iridium', status: 'pending' },
+        { name: 'hub', status: 'pending' },
+        { name: 'reticulum', status: 'pending' },
+      ],
+    }
+    pollDemoUntilComplete(id)
+  } catch (e) {
+    demoRun.value = {
+      status: 'complete', channels: [],
+      error: 'Failed to start demo: ' + (e?.message || e),
+    }
+  } finally {
+    demoStarting.value = false
+  }
+}
+
+function pollDemoUntilComplete(id) {
+  if (demoPollHandle) clearInterval(demoPollHandle)
+  demoPollHandle = setInterval(async () => {
+    try {
+      const r = await api.get('/demo/' + id)
+      if (r && r.channels) demoRun.value = r
+      if (r && r.status === 'complete') {
+        clearInterval(demoPollHandle); demoPollHandle = null
+      }
+    } catch { /* transient — next tick */ }
+  }, 500)
+}
+
+function closeDemoModal() {
+  demoRun.value = null
+  if (demoPollHandle) { clearInterval(demoPollHandle); demoPollHandle = null }
+}
+
+function demoDotClass(status) {
+  switch (status) {
+    case 'success': return 'bg-emerald-400'
+    case 'failed':  return 'bg-red-400'
+    case 'skipped': return 'bg-gray-500'
+    case 'pending':
+    default:        return 'bg-amber-400 animate-pulse'
+  }
+}
+function demoTintClass(status) {
+  switch (status) {
+    case 'success': return 'text-emerald-300'
+    case 'failed':  return 'text-red-300'
+    case 'skipped': return 'text-gray-400'
+    case 'pending':
+    default:        return 'text-amber-300'
+  }
+}
+
 const opNextPass = computed(() => {
   const now = Date.now()/1000
   const p = (store.passes || []).find(pp => (pp.aos || 0) > now)
@@ -1559,6 +1679,35 @@ function widgetGridClass(id) {
          SNR curves, no per-modem diagnostics.  Engineer mode falls
          through to the dense 13-widget grid below. [MESHSAT-549] -->
     <template v-if="store.isOperator">
+      <!-- Row 0 (MESHSAT-686): channel-matrix header strip +
+           Run Full Demo button. 9 chips summarise every comms
+           channel's live state at a glance; the demo button
+           fires a canned message through each one with
+           server-side orchestration and a modal progress HUD. -->
+      <div class="flex items-stretch gap-2 mb-2">
+        <div class="flex-1 bg-tactical-surface rounded-lg border border-tactical-border px-2 py-1.5
+                    flex items-center gap-1 overflow-x-auto">
+          <span class="text-[9px] uppercase tracking-widest text-gray-500 mr-1 shrink-0">Channels</span>
+          <span v-for="c in channelMatrix" :key="c.key"
+            class="flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-mono tracking-wider shrink-0"
+            :class="c.ok
+              ? 'border-emerald-500/40 bg-emerald-400/10 text-emerald-300'
+              : 'border-gray-600/40 bg-gray-800/40 text-gray-500'"
+            :title="c.hint + (c.ok ? ' — UP' : ' — down')">
+            <span class="w-1 h-1 rounded-full"
+              :class="c.ok ? 'bg-emerald-400' : 'bg-gray-600'" />
+            {{ c.label }}
+          </span>
+        </div>
+        <button type="button" @click.prevent="startFullDemo"
+          :disabled="demoStarting || (demoRun && demoRun.status === 'running')"
+          class="w-40 shrink-0 rounded-lg border-2 border-blue-500/70 bg-blue-950/30 text-blue-300
+                 hover:bg-blue-900/40 disabled:opacity-50 disabled:cursor-not-allowed
+                 font-display font-semibold text-sm tracking-wider transition-colors">
+          {{ demoStarting ? 'STARTING…' : (demoRun && demoRun.status === 'running' ? 'RUNNING…' : 'RUN FULL DEMO') }}
+        </button>
+      </div>
+
       <!-- Row 1: Mission State (half) + SOS action (half) -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
         <!-- Mission state banner — compact: 2-line. Color reflects
@@ -1857,7 +2006,10 @@ function widgetGridClass(id) {
               </div>
             </div>
           </div>
-          <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
+          <div class="flex items-center gap-2">
+            <GatewayRateSparkline :samples="sparkSamples(['iridium','iridium_imt'])" variant="iridium" />
+            <span class="w-2 h-2 rounded-full" :class="iridiumStatus.dot" />
+          </div>
         </div>
 
         <!-- Signal bars + sparkline -->
@@ -2156,7 +2308,10 @@ function widgetGridClass(id) {
               </div>
             </div>
           </div>
-          <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
+          <div class="flex items-center gap-2">
+            <GatewayRateSparkline :samples="sparkSamples('cellular')" variant="cellular" />
+            <span class="w-2 h-2 rounded-full" :class="cellStatus.dot" />
+          </div>
         </div>
 
         <div class="flex items-center gap-3 mb-3">
@@ -2561,7 +2716,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
           <div class="flex items-center gap-2">
             <span v-if="store.aprsStatus?.callsign" class="text-[10px] font-mono text-amber-400/70">{{ store.aprsStatus.callsign }}</span>
             <span v-if="store.aprsStatus?.frequency_mhz" class="text-[10px] text-gray-500">{{ store.aprsStatus.frequency_mhz?.toFixed(3) }} MHz</span>
-            <span :class="store.aprsStatus?.connected ? 'bg-amber-400' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+            <div class="flex items-center gap-2">
+              <GatewayRateSparkline :samples="sparkSamples('aprs')" variant="aprs" />
+              <span :class="store.aprsStatus?.connected ? 'bg-amber-400' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+            </div>
           </div>
         </div>
 
@@ -2701,7 +2859,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
                   class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400">
               {{ store.zigbeeStatus.coord_state }}
             </span>
-            <span :class="store.zigbeeStatus?.coord_ready ? 'bg-yellow-400' : store.zigbeeStatus?.connected ? 'bg-amber-500 animate-pulse' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+            <div class="flex items-center gap-2">
+              <GatewayRateSparkline :samples="sparkSamples('zigbee')" variant="zigbee" />
+              <span :class="store.zigbeeStatus?.coord_ready ? 'bg-yellow-400' : store.zigbeeStatus?.connected ? 'bg-amber-500 animate-pulse' : 'bg-gray-600'" class="w-2 h-2 rounded-full" />
+            </div>
           </div>
         </div>
 
@@ -2886,7 +3047,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
           <div class="flex items-center gap-2">
             <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-blue-400 tracking-wide">TAK / CoT</h2>
-            <span class="w-2 h-2 rounded-full" :class="takStatus.dot"></span>
+            <div class="flex items-center gap-2">
+              <GatewayRateSparkline :samples="sparkSamples(['tak','tak_hub_relay'])" variant="tak" />
+              <span class="w-2 h-2 rounded-full" :class="takStatus.dot"></span>
+            </div>
           </div>
           <router-link to="/tak" class="text-[10px] text-gray-500 hover:text-gray-300">Monitor &rarr;</router-link>
         </div>
@@ -3238,5 +3402,67 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       </div>
     </Teleport>
     </template><!-- /v-else engineer dashboard -->
+
+    <!-- Engineer-mode floating Run-Full-Demo button [MESHSAT-686].
+         Operator has it inline in row 0; engineer gets a pill
+         pinned to the top-right so the 13-widget grid below isn't
+         disturbed. Stays clear of the global nav. -->
+    <button
+      v-if="!store.isOperator"
+      type="button"
+      @click.prevent="startFullDemo"
+      :disabled="demoStarting || (demoRun && demoRun.status === 'running')"
+      class="fixed top-16 right-4 z-40 px-3 py-1.5 rounded-full border border-blue-500/60
+             bg-blue-950/60 backdrop-blur text-blue-300 hover:bg-blue-900/60
+             disabled:opacity-50 disabled:cursor-not-allowed
+             font-mono text-[11px] tracking-wider transition-colors shadow-lg"
+      title="Fire one canned message through every available comms channel">
+      ▶ {{ demoStarting ? 'starting' : (demoRun && demoRun.status === 'running' ? 'running' : 'run full demo') }}
+    </button>
+
+    <!-- Run-Full-Demo progress modal [MESHSAT-686].
+         Shown while a run is in flight or after completion until
+         the operator dismisses it. Renders the 6-channel checklist
+         with live per-channel state + latency. -->
+    <Teleport to="body">
+      <div v-if="demoRun"
+        class="fixed inset-0 bg-black/75 z-[10000] flex items-center justify-center p-4"
+        @click.self="demoRun.status === 'complete' ? closeDemoModal() : null">
+        <div class="bg-tactical-surface border border-tactical-border rounded-lg p-5 max-w-md w-full">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="font-display font-semibold text-sm text-blue-400 tracking-wider">
+              {{ demoRun.status === 'running' ? 'DEMO RUNNING…' : 'DEMO COMPLETE' }}
+            </h2>
+            <span v-if="demoRun.demo_id" class="font-mono text-[10px] text-gray-500">
+              id={{ demoRun.demo_id }}
+            </span>
+          </div>
+          <div v-if="demoRun.error" class="text-[11px] text-red-400 mb-2">{{ demoRun.error }}</div>
+          <div class="space-y-1.5">
+            <div v-for="ch in (demoRun.channels || [])" :key="ch.name"
+              class="flex items-center gap-2 py-1 px-2 rounded bg-tactical-bg">
+              <span class="w-2 h-2 rounded-full shrink-0" :class="demoDotClass(ch.status)" />
+              <span class="text-xs font-mono text-gray-200 w-20 shrink-0 uppercase">{{ ch.name }}</span>
+              <span class="text-[11px] flex-1 truncate" :class="demoTintClass(ch.status)">
+                {{ ch.detail || ch.status }}
+              </span>
+              <span v-if="ch.latency_ms" class="text-[10px] font-mono text-gray-500 shrink-0">
+                {{ ch.latency_ms }}ms
+              </span>
+            </div>
+            <div v-if="(demoRun.channels || []).length === 0 && !demoRun.error"
+              class="text-[11px] text-gray-500 text-center py-2">Warming up…</div>
+          </div>
+          <div class="flex items-center justify-end mt-4 gap-2">
+            <button type="button" @click="closeDemoModal"
+              :disabled="demoRun.status === 'running' && !demoRun.error"
+              class="px-3 py-1 rounded border border-tactical-border text-xs text-gray-300
+                     hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {{ demoRun.status === 'running' ? 'Working…' : 'Close' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

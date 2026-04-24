@@ -273,7 +273,7 @@ function cotShape(cotType) {
   return 'diamond'
 }
 
-function cotMarkerIcon(cotType, callsign, stale) {
+function cotMarkerIcon(cotType, callsign, stale, fresh) {
   const color = cotColor(cotType)
   const shape = cotShape(cotType)
   const opacity = stale ? 0.45 : 1.0
@@ -293,7 +293,7 @@ function cotMarkerIcon(cotType, callsign, stale) {
   }
 
   return L.divIcon({
-    html: svg,
+    html: freshWrap(svg, fresh),
     className: '',
     iconSize: [32, 42],
     iconAnchor: [16, 30],
@@ -301,9 +301,19 @@ function cotMarkerIcon(cotType, callsign, stale) {
   })
 }
 
+// [MESHSAT-686] wrap an SVG marker body in a pulse-ring container
+// when the underlying position is "fresh" (arrived in the last 5 s).
+// CSS keyframes in the non-scoped <style> block below do the actual
+// ring animation; this helper just tags the output so Leaflet picks
+// up the right class. When not fresh, returns the SVG unchanged.
+function freshWrap(innerSvg, fresh) {
+  if (!fresh) return innerSvg
+  return '<div class="meshsat-fresh-pulse">' + innerSvg + '</div>'
+}
+
 // MIL-STD-2525D / APP-6D symbol icon rendered via milsymbol.
 // [MESHSAT-559]
-function milsymbolIcon(sidc, callsign, stale) {
+function milsymbolIcon(sidc, callsign, stale, fresh) {
   try {
     const symbol = new ms.Symbol(sidc, {
       size: 32,
@@ -313,7 +323,7 @@ function milsymbolIcon(sidc, callsign, stale) {
     const size = symbol.getSize()
     const anchor = symbol.getAnchor()
     return L.divIcon({
-      html: symbol.asSVG(),
+      html: freshWrap(symbol.asSVG(), fresh),
       className: '',
       iconSize:   [size.width, size.height],
       iconAnchor: [anchor.x,   anchor.y],
@@ -469,12 +479,14 @@ function updateMap() {
     const cotType = node.cot_type || 'a-f-G-U-C' // default: friendly ground unit
     const lastSeen = node.last_heard ? new Date(node.last_heard * 1000) : null
     const stale = lastSeen ? (Date.now() - lastSeen.getTime() > 300000) : false
+    // [MESHSAT-686] fresh = heard in the last 5 s → pulse ring around marker
+    const fresh = lastSeen ? (Date.now() - lastSeen.getTime() < 5000) : false
     const sidc = sidcForNode(node)
     // milsymbolIcon() returns null on malformed SIDC — fall through
     // to the CoT-derived marker so Leaflet never sees a null icon.
     let icon = null
-    if (sidc) icon = milsymbolIcon(sidc, callsign, stale)
-    if (!icon) icon = cotMarkerIcon(cotType, callsign, stale)
+    if (sidc) icon = milsymbolIcon(sidc, callsign, stale, fresh)
+    if (!icon) icon = cotMarkerIcon(cotType, callsign, stale, fresh)
     const m = L.marker([node.latitude, node.longitude], { icon })
     let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
     html += `<br><span style="color:#888;font-size:11px">${cotType}</span>`
@@ -1122,3 +1134,42 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<!--
+  [MESHSAT-686] pulse-ring animation for fresh CoT markers.
+  Non-scoped <style> — Leaflet injects marker HTML into the DOM
+  outside our component tree and scoped hashes wouldn't apply.
+  The keyframe fires for 5 s after a marker appears, then the
+  next nextTick() render replaces the .meshsat-fresh-pulse wrapper
+  with a plain SVG (see freshWrap() in the script above).
+-->
+<style>
+.meshsat-fresh-pulse {
+  position: relative;
+  display: inline-block;
+  filter: drop-shadow(0 0 4px rgba(96, 165, 250, 0.6));
+}
+.meshsat-fresh-pulse::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  margin-left: -12px;
+  margin-top: -12px;
+  border: 2px solid rgba(96, 165, 250, 0.85);
+  border-radius: 50%;
+  pointer-events: none;
+  /* 5 iterations × 1.1 s ≈ 5.5 s — matches the 5 s "fresh" window
+     in the script so the ring naturally fades out even if no Vue
+     re-render triggers during that time (keeps the shot visible
+     long enough to be perceptible on camera). */
+  animation: meshsat-fresh-pulse-keyframes 1.1s cubic-bezier(0.25, 0.46, 0.45, 0.94) 5;
+}
+@keyframes meshsat-fresh-pulse-keyframes {
+  0%   { transform: scale(0.35); opacity: 0.95; }
+  80%  { transform: scale(2.1);  opacity: 0;    }
+  100% { transform: scale(2.1);  opacity: 0;    }
+}
+</style>

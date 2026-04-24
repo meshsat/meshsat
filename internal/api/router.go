@@ -740,6 +740,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/keys/signing", s.handleGetSigningKey)
 		r.Delete("/keys/{type}/{address}", s.handleRevokeKey)
 
+		// One-tap all-channels demo sweep (MESHSAT-686)
+		r.Post("/demo/run", s.handleDemoRun)
+		r.Get("/demo/{demo_id}", s.handleDemoStatus)
+
 		// Resource transfer (Reticulum chunked file delivery)
 		r.Get("/resources", s.handleGetResources)
 		r.Get("/resources/stats", s.handleGetResourceStats)
