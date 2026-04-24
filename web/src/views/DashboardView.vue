@@ -1316,15 +1316,30 @@ const reticulumConnectedPeers = computed(() =>
 )
 
 // ── TAK widget ──
-const takGw = computed(() => (store.gateways || []).find(g => g.type === 'tak'))
+// Prefer a local TAK gateway (direct TCP to a TAK server); fall back to the
+// synthetic "tak_hub_relay" entry that surfaces Hub-MQTT-relayed CoT stats
+// so the widget reports real counters instead of 0 on bridges that ride
+// the Hub's OTS poller path. [MESHSAT-682]
+const takGw = computed(() => {
+  const gws = store.gateways || []
+  return gws.find(g => g.type === 'tak') || gws.find(g => g.type === 'tak_hub_relay')
+})
+const takViaHub = computed(() => takGw.value?.type === 'tak_hub_relay')
 const hubConfig = ref(null)
 async function loadHubConfigForTak() { try { const r = await api.get('/routing/hub'); hubConfig.value = r } catch {} }
 
 const takStatus = computed(() => {
   const gw = takGw.value
+  // Hub relay entry — purple "Via Hub" regardless of whether it's
+  // currently subscribed (red dot only if the relay is explicitly down).
+  if (gw && takViaHub.value) {
+    return gw.connected
+      ? { dot: 'bg-purple-400', text: 'Via Hub' }
+      : { dot: 'bg-red-400', text: 'Hub Offline' }
+  }
   if (gw?.connected) return { dot: 'bg-blue-400', text: 'Connected' }
   if (gw && !gw.connected) return { dot: 'bg-red-400', text: 'Disconnected' }
-  // No direct TAK gateway — check if Hub relay is available
+  // Neither a TAK gateway nor a Hub relay is present.
   if (hubConfig.value?.url) return { dot: 'bg-purple-400', text: 'Via Hub' }
   return { dot: 'bg-gray-600', text: 'Not Configured' }
 })
@@ -2866,10 +2881,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
 
         <!-- Connection status banner -->
         <div class="flex items-center justify-between mb-3 px-2 py-1.5 rounded text-[11px]"
-          :class="takGw?.connected ? 'bg-blue-400/10' : takStatus.text === 'Via Hub' ? 'bg-purple-400/10' : 'bg-gray-700/30'">
-          <span class="font-mono" :class="takGw?.connected ? 'text-blue-400' : takStatus.text === 'Via Hub' ? 'text-purple-400' : 'text-gray-500'">{{ takStatus.text }}</span>
+          :class="takViaHub ? 'bg-purple-400/10' : takGw?.connected ? 'bg-blue-400/10' : 'bg-gray-700/30'">
+          <span class="font-mono" :class="takViaHub ? 'text-purple-400' : takGw?.connected ? 'text-blue-400' : 'text-gray-500'">{{ takStatus.text }}</span>
           <span v-if="takGw?.connection_uptime" class="font-mono text-gray-400 text-[10px]">{{ takGw.connection_uptime }}</span>
-          <span v-else-if="takStatus.text === 'Via Hub'" class="font-mono text-purple-300 text-[10px]">CoT relayed through Hub → OTS</span>
+          <span v-else-if="takViaHub" class="font-mono text-purple-300 text-[10px]">CoT relayed through Hub → OTS</span>
         </div>
 
         <!-- Message counters -->

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"meshsat/internal/gateway"
 )
 
 // handleGetIridiumSignalFast returns a cached Iridium signal reading (AT+CSQF, ~100ms).
@@ -183,13 +185,37 @@ func (s *Server) handleCheckProvisioning(w http.ResponseWriter, r *http.Request)
 // @Success 200 {object} map[string]interface{} "gateways"
 // @Router /api/gateways [get]
 func (s *Server) handleGetGateways(w http.ResponseWriter, r *http.Request) {
-	if s.gwManager == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"gateways": []interface{}{}})
-		return
+	var gws []gateway.GatewayStatusResponse
+	if s.gwManager != nil {
+		gws = s.gwManager.GetStatus()
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"gateways": s.gwManager.GetStatus(),
-	})
+	// If there is no local TAK gateway but Hub TAK relay is wired, synthesise
+	// a "tak_hub_relay" entry so the dashboard TAK widget can show real
+	// Hub-relayed CoT counts instead of 0. [MESHSAT-682]
+	if s.hubReporter != nil {
+		hasTAK := false
+		for _, g := range gws {
+			if g.Type == "tak" || g.Type == "tak_hub_relay" {
+				hasTAK = true
+				break
+			}
+		}
+		if !hasTAK {
+			st := s.hubReporter.TAKRelayStats()
+			syn := gateway.GatewayStatusResponse{
+				Type:       "tak_hub_relay",
+				InstanceID: "tak_hub_relay",
+				Enabled:    true,
+				Connected:  s.hubReporter.IsConnected() && st.Subscribed,
+				MessagesIn: st.MessagesIn,
+			}
+			if st.LastActivityTS > 0 {
+				syn.LastActivity = time.Unix(st.LastActivityTS, 0)
+			}
+			gws = append(gws, syn)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"gateways": gws})
 }
 
 // handleGetGateway returns the status of a specific gateway.

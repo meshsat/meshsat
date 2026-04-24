@@ -13,6 +13,7 @@ import (
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
 	"meshsat/internal/hemb"
+	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
@@ -73,6 +74,18 @@ type Server struct {
 	// zone-free and bulletproof to iface rename/teardown. Nil until
 	// StartP2PReconciler is called from main.go wiring. [MESHSAT-647]
 	p2pReconciler *P2PReconciler
+	// hubReporter is used only to surface Hub TAK-relay counters
+	// (Subscribed / MessagesIn / LastActivity) to the dashboard
+	// TAK widget via a synthetic gateway entry in /api/gateways.
+	// The bridge never runs a local TAK gateway, so without this
+	// the widget reports 0 even though CoT is flowing. [MESHSAT-682]
+	hubReporter *hubreporter.HubReporter
+}
+
+// SetHubReporter wires the Hub MQTT reporter so the TAK dashboard widget
+// can read Hub-relayed CoT counters via /api/gateways (MESHSAT-682).
+func (s *Server) SetHubReporter(r *hubreporter.HubReporter) {
+	s.hubReporter = r
 }
 
 // SetBLEPeerManager wires the BLE peer manager for auto-RNS-peer on

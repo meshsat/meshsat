@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog/log"
 )
@@ -68,6 +70,14 @@ type HubReporter struct {
 	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
+
+	// TAK relay stats surfaced to the dashboard widget via a synthetic
+	// gateway entry (type "tak_hub_relay"). The widget reports 0 without
+	// this because the bridge has no local TAK gateway — all CoT flows
+	// through Hub MQTT broadcast. [MESHSAT-682]
+	takSubscribed   atomic.Bool
+	takMsgsIn       atomic.Int64
+	takLastActivity atomic.Int64 // unix seconds
 }
 
 // NewHubReporter creates a new HubReporter. It does not connect until Start is called.
@@ -164,6 +174,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		r.mu.Lock()
 		r.connected = false
 		r.mu.Unlock()
+		r.takSubscribed.Store(false)
 		log.Warn().Err(err).Msg("hubreporter connection lost")
 	})
 
@@ -495,14 +506,36 @@ func (r *HubReporter) subscribeTAKCoT() {
 			return
 		}
 		log.Info().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: subscribed to TAK CoT broadcast")
+		r.takSubscribed.Store(true)
 		return
 	}
 }
 
 // onTAKCoT handles inbound CoT XML events from the Hub TAK relay.
 func (r *HubReporter) onTAKCoT(_ mqtt.Client, msg mqtt.Message) {
+	r.takMsgsIn.Add(1)
+	r.takLastActivity.Store(time.Now().Unix())
 	if r.takCotHandler != nil {
 		r.takCotHandler(msg.Payload())
+	}
+}
+
+// TAKRelayStats returns a snapshot of the Hub TAK relay counters for the
+// dashboard widget. A bridge has no local TAK gateway (the TAK server lives
+// on the DMZ Hub side), so the widget reads these counts via a synthetic
+// gateway entry of type "tak_hub_relay". [MESHSAT-682]
+type TAKRelayStats struct {
+	Subscribed     bool
+	MessagesIn     int64
+	LastActivityTS int64 // unix seconds, 0 if never
+}
+
+// TAKRelayStats returns the current TAK relay counters.
+func (r *HubReporter) TAKRelayStats() TAKRelayStats {
+	return TAKRelayStats{
+		Subscribed:     r.takSubscribed.Load(),
+		MessagesIn:     r.takMsgsIn.Load(),
+		LastActivityTS: r.takLastActivity.Load(),
 	}
 }
 

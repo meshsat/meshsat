@@ -1506,6 +1506,9 @@ func main() {
 		} else {
 			log.Info().Str("hub", hubURL).Str("bridge_id", hubBridgeID).Msg("hub reporter started")
 		}
+		// Surface Hub TAK-relay counters to the dashboard TAK widget via
+		// a synthetic gateway entry in /api/gateways. [MESHSAT-682]
+		srv.SetHubReporter(hubReporter)
 	}
 
 	// Spectrum jamming alert relay: subscribe to state-transition events
