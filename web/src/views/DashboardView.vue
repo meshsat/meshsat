@@ -1800,10 +1800,10 @@ function widgetGridClass(id) {
       <!-- ═══ Iridium (SBD 9603 / IMT 9704) ═══ -->
       <div v-if="wid === 'iridium'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <div class="relative">
               <button class="font-display font-semibold text-sm text-red-400 tracking-wide flex items-center gap-1.5 hover:text-red-300 transition-colors"
                 @click.stop="toggleDropdown('iridium')">
@@ -1972,10 +1972,10 @@ function widgetGridClass(id) {
       <!-- ═══ Meshtastic Mesh ═══ -->
       <div v-if="wid === 'mesh'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <div class="relative">
               <button class="font-display font-semibold text-sm text-tactical-lora tracking-wide flex items-center gap-1.5 hover:text-emerald-300 transition-colors"
                 @click.stop="toggleDropdown('mesh')">
@@ -2114,10 +2114,10 @@ function widgetGridClass(id) {
       <!-- ═══ Cellular 4G/LTE ═══ -->
       <div v-if="wid === 'cellular'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <div class="relative">
               <button class="font-display font-semibold text-sm text-sky-400 tracking-wide flex items-center gap-1.5 hover:text-sky-300 transition-colors"
                 @click.stop="toggleDropdown('cellular')">
@@ -2292,10 +2292,10 @@ function widgetGridClass(id) {
       <!-- ═══ Emergency SOS (compact) ═══ -->
       <div v-if="wid === 'sos'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-tactical-sos tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('sos')">EMERGENCY SOS</h2>
           </div>
           <span class="text-[10px] font-mono"
@@ -2388,10 +2388,10 @@ function widgetGridClass(id) {
       <!-- ═══ Unified Location ═══ -->
       <div v-if="wid === 'location'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-tactical-gps tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('location')">LOCATION</h2>
           </div>
           <span v-if="locationResolved"
@@ -2488,10 +2488,10 @@ function widgetGridClass(id) {
       <!-- ═══ SBD Queue ═══ -->
       <div v-if="wid === 'queue'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4 flex flex-col min-h-[420px]', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('queue')">MESSAGE QUEUE</h2>
           </div>
           <span v-if="dlqPending > 0"
@@ -2522,10 +2522,10 @@ function widgetGridClass(id) {
       <!-- ═══ APRS ═══ -->
       <div v-if="wid === 'aprs'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-amber-400/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <span class="font-display font-semibold text-sm text-amber-400 tracking-wide">APRS</span>
             <!-- Encryption badge. Red lock = {E1} / AES-256-GCM active;
                  grey = plaintext. Tooltip gives the transform summary
@@ -2677,10 +2677,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       <!-- ═══ ZigBee ═══ -->
       <div v-if="wid === 'zigbee'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-yellow-400/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <span class="font-display font-semibold text-sm text-yellow-400 tracking-wide">ZIGBEE</span>
           </div>
           <div class="flex items-center gap-2">
@@ -2773,10 +2773,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       <!-- ═══ Reticulum Network ═══ -->
       <div v-if="wid === 'reticulum'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <span class="font-display font-semibold text-sm text-violet-400 tracking-wide">RETICULUM</span>
           </div>
           <span v-if="store.reticulumStatus.identity" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-violet-400/10 text-violet-400">
@@ -2826,10 +2826,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       <!-- ═══ Satellite Burst Queue ═══ -->
       <div v-if="wid === 'burst'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <span class="font-display font-semibold text-sm text-amber-400 tracking-wide">BURST QUEUE</span>
           </div>
           <span class="text-[9px] font-mono px-1.5 py-0.5 rounded"
@@ -2869,10 +2869,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       <!-- ═══ TAK / CoT ═══ -->
       <div v-if="wid === 'tak'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-blue-400 tracking-wide">TAK / CoT</h2>
             <span class="w-2 h-2 rounded-full" :class="takStatus.dot"></span>
           </div>
@@ -2923,10 +2923,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       <!-- ═══ HeMB Bonding ═══ -->
       <div v-if="wid === 'hemb'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-teal-400 tracking-wide">HeMB BONDING</h2>
           </div>
           <router-link to="/hemb" class="text-[10px] text-gray-500 hover:text-gray-300">View &rarr;</router-link>
@@ -2947,10 +2947,10 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
       <div v-if="wid === 'activity'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
         @mouseenter="logPaused = true" @mouseleave="logPaused = false"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchstart.passive="onTouchStart($event, wid)" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-gray-600 cursor-grab active:cursor-grabbing" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
             <h2 class="font-display font-semibold text-sm text-gray-400 tracking-wide cursor-pointer hover:underline" @click="openWidgetStats('activity')">ACTIVITY LOG</h2>
           </div>
           <div class="flex items-center gap-2">
