@@ -272,6 +272,53 @@ func TestGenerateCrossPlatformTestdata(t *testing.T) {
 // and the string <-> byte mapping is symmetric. This is the on-wire
 // compatibility gate for syncing a `bond:<group_id>` shared key
 // across kits via POST /api/keys/import.
+func TestCanonicalChannelType(t *testing.T) {
+	// [MESHSAT-681] The 8 canonical types round-trip; "cellular" aliases
+	// to "sms"; unknowns return ("", false) so callers can reject.
+	cases := []struct {
+		in      string
+		want    string
+		wantOK  bool
+		comment string
+	}{
+		{"sms", "sms", true, "canonical"},
+		{"mesh", "mesh", true, "canonical"},
+		{"iridium", "iridium", true, "canonical"},
+		{"aprs", "aprs", true, "canonical"},
+		{"zigbee", "zigbee", true, "canonical"},
+		{"mqtt", "mqtt", true, "canonical"},
+		{"webhook", "webhook", true, "canonical"},
+		{"bond", "bond", true, "canonical"},
+		{"cellular", "sms", true, "cellular → sms alias (T-Call A7670E carries SMS)"},
+		{"", "", false, "empty → unknown"},
+		{"fake", "", false, "unrecognised → unknown"},
+		{"SMS", "", false, "case-sensitive — uppercase should not be accepted"},
+	}
+	for _, c := range cases {
+		got, ok := CanonicalChannelType(c.in)
+		if ok != c.wantOK || got != c.want {
+			t.Errorf("CanonicalChannelType(%q)=(%q,%v), want (%q,%v) — %s",
+				c.in, got, ok, c.want, c.wantOK, c.comment)
+		}
+	}
+}
+
+func TestChannelTypeToByte_UnknownReturnsSentinel(t *testing.T) {
+	// [MESHSAT-681] ChannelTypeToByte still returns 0xFF for unknowns —
+	// but callers are now expected to check CanonicalChannelType first
+	// rather than feed the 0xFF into a bundle. This test guards against
+	// someone silently removing the 0xFF sentinel; without it, bundle
+	// import would need a new guard, and regression tests here would
+	// fail loudly.
+	if b := ChannelTypeToByte("fake"); b != 0xFF {
+		t.Errorf("ChannelTypeToByte(fake)=0x%02x, want 0xFF", b)
+	}
+	// The alias must flow through — "cellular" → 0x00 (ChannelSMS).
+	if b := ChannelTypeToByte("cellular"); b != ChannelSMS {
+		t.Errorf("ChannelTypeToByte(cellular)=0x%02x, want ChannelSMS 0x%02x", b, ChannelSMS)
+	}
+}
+
 func TestChannelBond_BundleRoundTrip(t *testing.T) {
 	if ChannelBond != 0x07 {
 		t.Fatalf("ChannelBond wire byte must be 0x07, got 0x%02x", ChannelBond)

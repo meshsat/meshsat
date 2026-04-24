@@ -227,8 +227,13 @@ func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byt
 		}
 		return encryptAESGCM(data, hexKey)
 	default:
-		log.Warn().Str("type", t.Type).Msg("transform: unknown type, skipping")
-		return data, nil
+		// [MESHSAT-680] Fail loud on unknown types. Previously we logged
+		// and returned data unchanged, which silently shipped plaintext
+		// for any typo like "aes-gcm" / "compress" / "b64". Write-time
+		// validation in ValidateTransforms catches most cases, but this
+		// is the last-line defense for anything that slipped through
+		// (direct DB writes, older rows from before validation, etc.).
+		return nil, fmt.Errorf("unknown egress transform type %q", t.Type)
 	}
 }
 
@@ -293,15 +298,22 @@ func (tp *TransformPipeline) reverseTransform(t TransformSpec, data []byte) ([]b
 			Int("decoded", len(decoded)).
 			Msg("transform: fec decoded")
 		return decoded, nil
-	case "encrypt":
+	case "encrypt", "decrypt":
+		// "decrypt" is an operator-ergonomic alias for "encrypt" on the
+		// reverse path — lots of ingress chains read more naturally as
+		// "base64 -> decrypt -> smaz2" than "base64 -> encrypt -> smaz2".
+		// Both resolve the same key and run decryptAESGCM. [MESHSAT-680]
 		hexKey, err := tp.resolveEncryptKey(t)
 		if err != nil {
 			return nil, err
 		}
 		return decryptAESGCM(data, hexKey)
 	default:
-		log.Warn().Str("type", t.Type).Msg("transform: unknown reverse type, skipping")
-		return data, nil
+		// [MESHSAT-680] Fail loud on unknown types. See matching note on
+		// applyTransform. Silently returning ciphertext-as-plaintext
+		// corrupts inbound decrypts in a way that is almost impossible
+		// to diagnose from the operator side.
+		return nil, fmt.Errorf("unknown ingress transform type %q", t.Type)
 	}
 }
 
@@ -322,11 +334,11 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 
 	for _, t := range transforms {
 		switch t.Type {
-		case "encrypt":
+		case "encrypt", "decrypt":
 			hasBinaryOutput = true
 			endsWithBase64 = false
 			if t.Params["key"] == "" && t.Params["key_ref"] == "" {
-				errors = append(errors, "encrypt transform requires 'key' or 'key_ref' param")
+				errors = append(errors, fmt.Sprintf("%s transform requires 'key' or 'key_ref' param", t.Type))
 			}
 		case "fec":
 			hasBinaryOutput = true
@@ -338,6 +350,13 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			hasBinaryOutput = false // base64 output is text-safe
 			endsWithBase64 = true
 			hasBase64 = true
+		default:
+			// [MESHSAT-680] Unknown types used to be silently skipped at
+			// runtime (applyTransform/reverseTransform default→warn+pass).
+			// Now they're hard errors at runtime; catch them at write time
+			// too so misconfigs fail on the Settings save, not at first
+			// message dispatch.
+			errors = append(errors, fmt.Sprintf("unknown transform type %q — supported: encrypt, decrypt, base64, zstd, smaz2, llamazip, msvqsc, fec", t.Type))
 		}
 	}
 

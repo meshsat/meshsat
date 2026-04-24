@@ -39,9 +39,40 @@ const (
 	ChannelBond    byte = 0x07
 )
 
-// ChannelTypeToByte maps string channel types to bundle enum values.
-func ChannelTypeToByte(ct string) byte {
+// CanonicalChannelType normalises operator-facing strings to the 8 canonical
+// keystore channel types. Returns ("", false) for anything unknown — callers
+// must reject rather than silently coerce. The one alias is "cellular" → "sms"
+// because the cellular modem carries SMS traffic at the protocol level, and
+// cellular_0's transform chain already references sms:shared by convention.
+// [MESHSAT-681]
+func CanonicalChannelType(ct string) (string, bool) {
 	switch ct {
+	case "sms", "mesh", "iridium", "aprs", "zigbee", "mqtt", "webhook", "bond":
+		return ct, true
+	case "cellular":
+		// Alias: cellular_0 sends SMS over 4G, same key space as sms_0.
+		return "sms", true
+	}
+	return "", false
+}
+
+// SupportedChannelTypes returns the canonical set for error messages.
+// [MESHSAT-681]
+func SupportedChannelTypes() []string {
+	return []string{"sms", "mesh", "iridium", "aprs", "zigbee", "mqtt", "webhook", "bond"}
+}
+
+// ChannelTypeToByte maps string channel types to bundle enum values.
+// Returns 0xFF for unknown types — callers must check with
+// CanonicalChannelType first and reject at request time rather than feed
+// the 0xFF through the marshaller, where it would land in the bundle and
+// be silently dropped on the receiving end. [MESHSAT-681]
+func ChannelTypeToByte(ct string) byte {
+	canonical, ok := CanonicalChannelType(ct)
+	if !ok {
+		return 0xFF
+	}
+	switch canonical {
 	case "sms":
 		return ChannelSMS
 	case "mesh":
@@ -58,9 +89,8 @@ func ChannelTypeToByte(ct string) byte {
 		return ChannelWebhook
 	case "bond":
 		return ChannelBond
-	default:
-		return 0xFF
 	}
+	return 0xFF
 }
 
 // ByteToChannelType maps bundle enum values to string channel types.

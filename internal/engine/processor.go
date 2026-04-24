@@ -889,15 +889,22 @@ func (p *Processor) InjectReticulumPacket(packet []byte, sourceIface string) {
 	p.handleRoutingPacket(transport.MeshEvent{}, packet, sourceIface)
 }
 
-// isPaidInterface returns true for satellite and cellular interfaces that cost
-// money per message. Protocol overhead (time sync, keepalive, announces) must
-// NEVER be sent over these interfaces automatically.
+// isPaidInterface returns true for interfaces where broadcasting protocol
+// overhead (time sync, keepalive, announces) would either cost real money
+// per message (iridium, cellular SMS) or blow up because the interface is
+// point-to-point and has no peer address wired up (sms). NEVER flood these
+// automatically — they must only carry addressed, rate-limited traffic.
+// [MESHSAT-679: sms_0 excluded so announce broadcast stops spamming "no
+// peer number configured" every ~10s on every bridge that has cellular
+// SMS enabled.]
 func isPaidInterface(id string) bool {
 	switch {
 	case len(id) >= 7 && id[:7] == "iridium":
 		return true // iridium_0, iridium_imt_0
 	case len(id) >= 8 && id[:8] == "cellular":
 		return true // cellular_0
+	case len(id) >= 3 && id[:3] == "sms":
+		return true // sms_0 — point-to-point, paid per carrier SMS
 	}
 	return false
 }

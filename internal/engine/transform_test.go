@@ -116,23 +116,56 @@ func TestTransformPipeline_EmptyConfig(t *testing.T) {
 }
 
 func TestTransformPipeline_UnknownType(t *testing.T) {
+	// [MESHSAT-680] Unknown transform types MUST fail loud in both
+	// directions. Old behaviour silently returned data unchanged, which
+	// shipped plaintext for any typo and corrupted inbound decrypts.
 	tp := NewTransformPipeline()
 	original := []byte("unknown transform type test")
 
-	out, err := tp.ApplyEgress(original, `[{"type":"rot13"}]`)
-	if err != nil {
-		t.Fatalf("egress unknown: %v", err)
-	}
-	if !bytes.Equal(out, original) {
-		t.Errorf("unknown type should passthrough, got %q", out)
+	if _, err := tp.ApplyEgress(original, `[{"type":"rot13"}]`); err == nil {
+		t.Fatal("ApplyEgress accepted unknown type 'rot13'; expected error")
 	}
 
-	out, err = tp.ApplyIngress(original, `[{"type":"rot13"}]`)
-	if err != nil {
-		t.Fatalf("ingress unknown: %v", err)
+	if _, err := tp.ApplyIngress(original, `[{"type":"rot13"}]`); err == nil {
+		t.Fatal("ApplyIngress accepted unknown type 'rot13'; expected error")
 	}
-	if !bytes.Equal(out, original) {
-		t.Errorf("unknown reverse type should passthrough, got %q", out)
+}
+
+func TestTransformPipeline_DecryptAlias(t *testing.T) {
+	// [MESHSAT-680] "decrypt" on the ingress side is an operator-facing
+	// alias for "encrypt" — same key resolver, runs decryptAESGCM. The
+	// canonical form is still "encrypt" (ingress chain is walked in
+	// reverse and reverseTransform(encrypt, ...) decrypts), but an
+	// operator who writes {"type":"decrypt","params":{"key_ref":"x"}}
+	// in an ingress chain should get the same result, not a silent fail.
+	tp := NewTransformPipeline()
+	key, err := GenerateEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp.SetKeyResolver(stubKeyResolver{hexKey: key})
+
+	plain := []byte("decrypt-alias check")
+	enc, err := tp.ApplyEgress(plain, `[{"type":"encrypt","params":{"key_ref":"x"}}]`)
+	if err != nil {
+		t.Fatalf("egress encrypt: %v", err)
+	}
+	// Ingress chain using the "decrypt" alias should recover plaintext.
+	out, err := tp.ApplyIngress(enc, `[{"type":"decrypt","params":{"key_ref":"x"}}]`)
+	if err != nil {
+		t.Fatalf("ingress decrypt alias: %v", err)
+	}
+	if !bytes.Equal(out, plain) {
+		t.Fatalf("decrypt alias mismatch: got %q want %q", out, plain)
+	}
+}
+
+func TestValidateTransforms_UnknownTypeIsError(t *testing.T) {
+	// [MESHSAT-680] Write-time gate: unknown types must appear in the
+	// errors slice so POST/PUT /api/interfaces rejects the payload.
+	_, errs := ValidateTransforms(`[{"type":"aes-gcm"}]`, true, 500)
+	if len(errs) == 0 {
+		t.Fatal("ValidateTransforms accepted unknown type 'aes-gcm'; expected error")
 	}
 }
 

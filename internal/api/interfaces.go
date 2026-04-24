@@ -82,6 +82,18 @@ func (s *Server) handleCreateInterface(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "channel_type is required")
 		return
 	}
+	// [MESHSAT-680] Validate transforms at write time so typos like
+	// {"type":"decrypt"} or {"type":"aes-gcm"} fail the Settings save
+	// instead of silently dispatching plaintext at first message.
+	// Mirrors the same gate on PUT /api/interfaces/{id}.
+	if warns, errs := s.validateInterfaceTransforms(iface); len(errs) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error":    "transform validation failed",
+			"errors":   errs,
+			"warnings": warns,
+		})
+		return
+	}
 	if err := s.ifaceMgr.CreateInterface(iface); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

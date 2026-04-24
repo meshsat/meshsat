@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -48,7 +49,25 @@ func (s *Server) handleGenerateKeyBundle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_, url, err := s.keyStore.CreateBundle(req.Entries)
+	// [MESHSAT-681] Validate + canonicalise channel_type before the
+	// keystore call. Previously the bundle marshaller accepted 0xFF for
+	// any unknown type and the import on the other side silently dropped
+	// the entry, so /api/keys/import returned `imported:1` for a key
+	// that was never stored. Reject here with a clear error instead.
+	normalised := make([]keystore.BundleRequest, 0, len(req.Entries))
+	for i, e := range req.Entries {
+		canonical, ok := keystore.CanonicalChannelType(e.ChannelType)
+		if !ok {
+			writeError(w, http.StatusBadRequest,
+				"entry "+strconv.Itoa(i)+": unknown channel_type \""+e.ChannelType+
+					"\" — supported: "+strings.Join(keystore.SupportedChannelTypes(), ", "))
+			return
+		}
+		e.ChannelType = canonical
+		normalised = append(normalised, e)
+	}
+
+	_, url, err := s.keyStore.CreateBundle(normalised)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -88,8 +107,15 @@ func (s *Server) handleGetKeyBundleQR(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid channel format: "+pair+" (expected type:address)")
 			return
 		}
+		canonical, ok := keystore.CanonicalChannelType(parts[0])
+		if !ok {
+			writeError(w, http.StatusBadRequest,
+				"unknown channel_type \""+parts[0]+"\" — supported: "+
+					strings.Join(keystore.SupportedChannelTypes(), ", "))
+			return
+		}
 		requests = append(requests, keystore.BundleRequest{
-			ChannelType: parts[0],
+			ChannelType: canonical,
 			Address:     parts[1],
 		})
 	}
@@ -326,12 +352,25 @@ func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
 	// Re-wrap each entry under the local master key via the existing
 	// StoreKey helper — that's the same path the Hub `key_rotate`
 	// command uses, so rotation/versioning semantics stay consistent.
+	//
+	// [MESHSAT-681] Unknown channel-type bytes used to be skipped with
+	// only a warn log, and the response reported imported:N with no
+	// indication of the drop. Now we collect skipped entries into an
+	// explicit response array so the caller sees exactly what didn't
+	// land. If ALL entries skipped, return 400 — the bundle was junk
+	// from this bridge's perspective.
 	imported := make([]map[string]interface{}, 0, len(parsed.Entries))
+	skipped := make([]map[string]interface{}, 0)
 	for _, e := range parsed.Entries {
 		ct := keystore.ByteToChannelType(e.ChannelType)
 		if ct == "unknown" {
 			log.Warn().Uint8("type", e.ChannelType).Str("addr", e.Address).
 				Msg("keys/import: skipping entry with unknown channel type")
+			skipped = append(skipped, map[string]interface{}{
+				"channel_type_byte": e.ChannelType,
+				"address":           e.Address,
+				"reason":            "unknown channel_type byte — bundle may be from a newer bridge version",
+			})
 			continue
 		}
 		ver, serr := s.keyStore.StoreKey(ct, e.Address, e.Key[:])
@@ -344,6 +383,13 @@ func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
 			"address":      e.Address,
 			"version":      ver,
 		})
+	}
+	if len(imported) == 0 && len(skipped) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error":   "bundle contained no recognised channel types",
+			"skipped": skipped,
+		})
+		return
 	}
 
 	// Fingerprint of the SIGNER of this bundle — operator TOFU-confirms
@@ -360,7 +406,8 @@ func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"imported":           imported,
 		"imported_count":     len(imported),
-		"skipped_count":      len(parsed.Entries) - len(imported),
+		"skipped":            skipped, // [MESHSAT-681] per-entry skip reasons
+		"skipped_count":      len(skipped),
 		"bundle_version":     parsed.Version,
 		"bundle_timestamp":   parsed.Timestamp,
 		"signer_pub":         signerPubHex,
