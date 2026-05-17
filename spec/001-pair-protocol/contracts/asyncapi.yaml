@@ -1,0 +1,74 @@
+asyncapi: 3.0.0
+info:
+  title: MeshSat Bridge Pair Protocol events
+  version: 1.0.0
+  description: |
+    Async events emitted by the pair-protocol subsystem to the Hub uplink.
+    REQ-014 + REQ-015: events queue via message_deliveries (Constitution Article VI
+    DeliveryWorker pattern) if Hub is unreachable.
+
+servers:
+  hub_mqtt:
+    host: hub.meshsat.example.net
+    protocol: mqtts
+    description: Hub uplink via mTLS WebSocket per CLAUDE.md L138
+
+channels:
+  pair_completed:
+    address: 'meshsat/{bridge_id}/pair/completed'
+    parameters:
+      bridge_id:
+        description: Bridge UUID (per existing meshsat-uplink/v1 topic scheme)
+    messages:
+      PairCompleted:
+        $ref: '#/components/messages/PairCompleted'
+
+  pair_failed:
+    address: 'meshsat/{bridge_id}/pair/failed'
+    parameters:
+      bridge_id:
+        description: Bridge UUID
+    messages:
+      PairFailed:
+        $ref: '#/components/messages/PairFailed'
+
+operations:
+  publishPairCompleted:
+    action: send
+    channel:
+      $ref: '#/channels/pair_completed'
+    summary: Emitted when a pair-claim completes successfully (REQ-014)
+
+  publishPairFailed:
+    action: send
+    channel:
+      $ref: '#/channels/pair_failed'
+    summary: Emitted when a pair-claim is rejected (REQ-006/007/008)
+
+components:
+  messages:
+    PairCompleted:
+      name: PairCompleted
+      payload:
+        $ref: 'schemas/pair-event.json'
+      examples:
+        - name: alice-phone-paired
+          payload:
+            event_type: pair.completed
+            event_at: 1747486800
+            client_id: 8e3b2a1f-4d5c-4e6f-9a0b-1c2d3e4f5a6b
+            client_label: 'Alice phone'
+            cert_fingerprint: '8d:e0:6c:4f:...'
+            bridge_id: 'parallax01'
+
+    PairFailed:
+      name: PairFailed
+      payload:
+        $ref: 'schemas/pair-event.json'
+      examples:
+        - name: csr-invalid
+          payload:
+            event_type: pair.claim.csr-invalid
+            event_at: 1747486820
+            reason: 'CSR signature verify failed'
+            bridge_id: 'parallax01'

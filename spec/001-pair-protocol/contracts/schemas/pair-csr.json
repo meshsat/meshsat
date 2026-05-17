@@ -1,0 +1,40 @@
+{
+  "title": "PairCsrRequest",
+  "description": "Request body for POST /api/pair/claim — CSR + ECDH pub + HMAC + nonce + client label",
+  "type": "object",
+  "required": ["csr", "ecdh_pub", "hmac", "nonce", "client_label"],
+  "properties": {
+    "csr": {
+      "type": "string",
+      "description": "PEM-encoded Certificate Signing Request per RFC 2986. ECDSA P-256 key.",
+      "minLength": 200,
+      "maxLength": 4096
+    },
+    "ecdh_pub": {
+      "type": "string",
+      "description": "Base64-encoded compressed X25519 public key (32 bytes raw = 44 chars b64)",
+      "minLength": 43,
+      "maxLength": 44
+    },
+    "hmac": {
+      "type": "string",
+      "description": "Base64-encoded HMAC-SHA256 over csr || ecdh_pub || nonce. Shared secret derived from operator's pre-shared armed-mode passcode (out-of-band) OR ECDH-derived from a discoverable bridge identity (default).",
+      "minLength": 44,
+      "maxLength": 44
+    },
+    "nonce": {
+      "type": "string",
+      "description": "Base64-encoded 16-byte random nonce (anti-replay). Bridge tracks nonces seen during current arm window.",
+      "minLength": 24,
+      "maxLength": 24
+    },
+    "client_label": {
+      "type": "string",
+      "description": "Operator-visible name for this client (rendered in touch UI confirmation per REQ-016)",
+      "minLength": 3,
+      "maxLength": 50,
+      "pattern": "^[A-Za-z0-9 _.-]+$"
+    }
+  },
+  "additionalProperties": false
+}

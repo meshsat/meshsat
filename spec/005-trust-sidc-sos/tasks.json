@@ -1,0 +1,116 @@
+{
+  "feature_id": "005-trust-sidc-sos",
+  "parent_epic": "MESHSAT-527",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 5 — meshsat Phase 4)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "SIDC field on directory_contacts + milsymbol rendering on MapView (S4-01)",
+      "prompt": "FIRST: read spec/005-trust-sidc-sos/{requirements.md, design.md, acceptance/trust-sidc-sos.feature}. SECOND: (REQ-400) confirm directory_contacts.sidc column exists (added in spec/002); if not, add via append-only migration. Backend: extend internal/api/directory.go to accept + persist sidc on POST/PUT. Frontend: (REQ-401) add milsymbol npm dep + update web/src/views/MapView.vue to render pins from sidc. (REQ-402) PeopleView contact detail gains Symbol picker exposing STANAG 4677 reduced set. (REQ-403) sidc=null pin uses a-f-G-U-C default. Tests cover render + picker.",
+      "files_owned": [
+        "internal/api/directory_sidc.go",
+        "internal/api/directory_sidc_test.go",
+        "web/src/views/MapView.vue",
+        "web/src/components/SymbolPicker.vue",
+        "web/e2e/sidc.spec.js"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestDirectorySIDC && ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep sidc'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-400", "REQ-401", "REQ-402", "REQ-403"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 600
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "Trust levels + QR verify flow + hard-block on precedence ≥ Immediate (S4-02)",
+      "prompt": "FIRST: read spec/005-trust-sidc-sos/{requirements.md, design.md, acceptance/trust-sidc-sos.feature}. SECOND: (REQ-404/405) directory_contacts.trust_level + trust_verified_at + trust_verified_by columns (added in spec/002). (REQ-406) ComposeView modal hard-block when (selected_precedence ≥ Immediate AND contact.trust_level < 2); modal has Cancel + 'Send anyway' (latter writes audit trust.gap_overridden). (REQ-407) PeopleView 'Verify in person' opens camera + QR scanner. (REQ-408) on successful scan with matching pubkey → bump trust_level=3 + record verified_at/verified_by. (REQ-409/410) KeyMismatch warning + trust reset on operator-accepted key rotation.",
+      "files_owned": [
+        "web/src/components/TrustGapModal.vue",
+        "web/src/components/ContactQRScanner.vue",
+        "web/src/stores/trust.js",
+        "internal/api/directory_trust.go",
+        "internal/api/directory_trust_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestDirectoryTrust && ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep trust'",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-404", "REQ-405", "REQ-406", "REQ-407", "REQ-408", "REQ-409", "REQ-410"],
+      "complexity": 5,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 700
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "Contact QR card endpoint + CBOR codec + Ed25519 signature (S4-03)",
+      "prompt": "FIRST: read spec/005-trust-sidc-sos/{requirements.md, design.md}. SECOND: (REQ-411) implement GET /api/directory/contacts/{id}/qr returning CBOR-encoded contact card with Ed25519 signature. (REQ-412) payload shape per design.md (v, contact_id, display_name, addresses, signing_pubkey, signature). Use github.com/fxamacker/cbor v2. (REQ-413) TTL-less. Tests cover round-trip + signature verify + invalid contact 404.",
+      "files_owned": [
+        "internal/api/contact_qr.go",
+        "internal/api/contact_qr_test.go",
+        "internal/directory/qr_codec.go",
+        "internal/directory/qr_codec_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... ./internal/directory/... -run 'TestContactQR|TestQRCodec'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-411", "REQ-412", "REQ-413"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 45,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-004",
+      "status": "pending",
+      "title": "Full-width SOS button + 3s-hold/2-tap confirmation + Flash HEMB fan-out + audit + counter (S4-04)",
+      "prompt": "FIRST: read spec/005-trust-sidc-sos/{requirements.md, design.md, acceptance/trust-sidc-sos.feature}. SECOND: (REQ-414) extend the status strip from spec/004 with a full-width SOS button at the bottom edge — visible on every view. (REQ-415) confirmation gesture: 3-second-hold OR double-tap within 2 seconds; single tap does NOT fire. Haptic pulse via navigator.vibrate() on Android. (REQ-416) fire path: precedence=Flash, body=location + last-48h contact briefing, strategy=HEMB_BONDED via POST /api/messages/send-to-contact. (REQ-417) audit_log entry sos.fired — must be append-only chain entry. (REQ-418) increment meshsat_sos_fired_total{operator_session_id}.",
+      "files_owned": [
+        "web/src/components/SOSButton.vue",
+        "web/src/composables/useSOSConfirm.ts",
+        "web/e2e/sos.spec.js",
+        "internal/api/sos_fire.go",
+        "internal/api/sos_fire_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestSOSFire && ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep sos'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-414", "REQ-415", "REQ-416", "REQ-417", "REQ-418"],
+      "complexity": 5,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 700
+    },
+    {
+      "id": "T-005",
+      "status": "pending",
+      "title": "USMTF templates skeleton: SALUTE + MEDEVAC 9-line + SITREP + TAK XML option (S4-05)",
+      "prompt": "FIRST: read spec/005-trust-sidc-sos/{requirements.md, design.md, acceptance/trust-sidc-sos.feature}. SECOND: (REQ-419) add Templates dropdown to ComposeView. (REQ-420/421/422) implement 3 templates as Vue components rendering the structured fields + a pack() helper producing the slash-delimited body. (REQ-423) when destination=TAK and operator picks Format=XML, also generate MIL-STD-6040 XML alongside the slash form. Tests cover field render + slash pack + XML emit.",
+      "files_owned": [
+        "web/src/components/templates/SaluteTemplate.vue",
+        "web/src/components/templates/Medevac9LineTemplate.vue",
+        "web/src/components/templates/SitrepTemplate.vue",
+        "web/src/lib/usmtfPack.js",
+        "web/src/lib/usmtfPack.test.js"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npm test -- --grep usmtf && npx playwright test --grep templates'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-419", "REQ-420", "REQ-421", "REQ-422", "REQ-423"],
+      "complexity": 3,
+      "risk_score": 0.2,
+      "max_wall_clock_minutes": 40,
+      "max_loc_delta": 600
+    }
+  ]
+}

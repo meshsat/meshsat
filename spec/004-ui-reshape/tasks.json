@@ -1,0 +1,137 @@
+{
+  "feature_id": "004-ui-reshape",
+  "parent_epic": "MESHSAT-526",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 5 — meshsat Phase 3)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Pinia store operatorMode + viewport defaults + ModeToggle + i18n bundles (S3-01, S3-09)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md, acceptance/ui-reshape.feature}. SECOND: (REQ-300/301/302) extend web/src/stores/meshsat.js to add operatorMode ref backed by localStorage; default from viewport + URL/UA. Add web/src/components/ModeToggle.vue (header button). (REQ-322/323) create web/src/i18n/operator.en.json + engineer.en.json applying the IQ-70 translation table from UX-AUDIT-AND-REDESIGN.md §1.4. Engineer-mode hover tooltip surfaces engineer term. 100% of user-facing strings come from i18n.",
+      "files_owned": [
+        "web/src/stores/meshsat.js",
+        "web/src/components/ModeToggle.vue",
+        "web/src/i18n/operator.en.json",
+        "web/src/i18n/engineer.en.json",
+        "web/src/composables/useI18n.ts"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep mode-toggle'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-300", "REQ-301", "REQ-302", "REQ-307", "REQ-322", "REQ-323"],
+      "complexity": 3,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 40,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "PrimaryNav + responsive nav + ⋮ More overflow + StatusStrip (S3-02)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md, acceptance/ui-reshape.feature}. SECOND: replace the current nav with web/src/components/PrimaryNav.vue. (REQ-303/304) exactly 5 items + ⋮ More menu listing the 13 Engineer-only routes. (REQ-305) <768px bottom-tab bar. (REQ-306) 768-lg icons-only. Add web/src/components/StatusStrip.vue with persistent header indicators per REQ-316. Update web/src/App.vue to mount both. Router unchanged.",
+      "files_owned": [
+        "web/src/components/PrimaryNav.vue",
+        "web/src/components/StatusStrip.vue",
+        "web/src/App.vue"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep primary-nav'",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-303", "REQ-304", "REQ-305", "REQ-306", "REQ-316"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 700
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "ComposeView + ContactPicker + per-bearer override (S3-03)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md, acceptance/ui-reshape.feature}. SECOND: create web/src/views/ComposeView.vue + web/src/components/ContactPicker.vue. (REQ-308) typeahead against /api/directory/contacts?q=; precedence chips for 6 STANAG 4406 levels; bearer-availability preview; Send → POST /api/messages/send-to-contact (spec/003). (REQ-309) Engineer mode reveals per-bearer override row with bearer-picker + strategy_override input. Playwright e2e covers happy path + Engineer override.",
+      "files_owned": [
+        "web/src/views/ComposeView.vue",
+        "web/src/components/ContactPicker.vue",
+        "web/src/components/PrecedenceChips.vue",
+        "web/src/components/BearerAvailability.vue",
+        "web/e2e/compose.spec.js"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep compose'",
+      "dependencies": ["T-001"],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-308", "REQ-309"],
+      "complexity": 5,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 900
+    },
+    {
+      "id": "T-004",
+      "status": "pending",
+      "title": "InboxView with bearer-coloured bubbles + per-bearer ticks + breakdown popover (S3-04)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md}. SECOND: create web/src/views/InboxView.vue replacing MessagesView. (REQ-310) bubble colour mapping: mesh=blue, sms=green, iridium=amber, aprs=teal, reticulum=violet. (REQ-311) tick grammar: ·→✓→✓✓→✓✓-blue. (REQ-312) click tick → per-bearer breakdown popover. Component reuses existing message-list data layer. Playwright e2e covers tick states + popover.",
+      "files_owned": [
+        "web/src/views/InboxView.vue",
+        "web/src/components/MessageBubble.vue",
+        "web/src/components/DeliveryTicks.vue",
+        "web/src/components/PerBearerPopover.vue",
+        "web/e2e/inbox.spec.js"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep inbox'",
+      "dependencies": ["T-001"],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-310", "REQ-311", "REQ-312"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 700
+    },
+    {
+      "id": "T-005",
+      "status": "pending",
+      "title": "PeopleView + RadiosView + Settings recategorization (S3-05, S3-06, S3-07)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md}. SECOND: (REQ-313/314) create PeopleView.vue listing /api/directory/contacts with trust dots leading + detail pane (addresses/groups/policy + Engineer-only keys). (REQ-315) create RadiosView.vue consolidating Interfaces into per-bearer status rows. (REQ-317/318) recategorize SettingsView.vue: Operator tabs (Radio/Channels/Position/Satellite/Cellular) + Engineer drawer (12 remaining). Tab overflow scrolls at ≤720px with fade indicator. Playwright e2e per view.",
+      "files_owned": [
+        "web/src/views/PeopleView.vue",
+        "web/src/views/RadiosView.vue",
+        "web/src/views/SettingsView.vue",
+        "web/e2e/people.spec.js",
+        "web/e2e/radios.spec.js",
+        "web/e2e/settings.spec.js"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep \"people|radios|settings\"'",
+      "dependencies": ["T-001"],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-313", "REQ-314", "REQ-315", "REQ-317", "REQ-318"],
+      "complexity": 5,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 1000
+    },
+    {
+      "id": "T-006",
+      "status": "pending",
+      "title": "Night/NVIS theme + backlight wire + Engineer keyboard shortcuts (S3-08, S3-10)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md}. SECOND: (REQ-319/320/321) implement NvisThemeToggle.vue with Green A palette + POST /api/system/backlight {value:32} on activate + disable motion globally via CSS class. Add backend endpoint internal/api/system_backlight.go if missing — writes to /sys/class/backlight/*/brightness via configured path. (REQ-324/325) implement web/src/composables/useShortcuts.ts handling Engineer-mode g-prefixed shortcuts + /=search + Esc=cancel; NO firing in Operator mode.",
+      "files_owned": [
+        "web/src/components/NvisThemeToggle.vue",
+        "web/src/composables/useShortcuts.ts",
+        "internal/api/system_backlight.go",
+        "internal/api/system_backlight_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestBacklight && ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep \"nvis|shortcuts\"'",
+      "dependencies": ["T-001"],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-319", "REQ-320", "REQ-321", "REQ-324", "REQ-325"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 600
+    }
+  ]
+}

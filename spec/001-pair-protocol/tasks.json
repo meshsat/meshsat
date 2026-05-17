@@ -1,0 +1,125 @@
+{
+  "feature_id": "001-pair-protocol",
+  "parent_epic": "MESHSAT-532",
+  "subtasks_in_youtrack": [
+    "MESHSAT-595",
+    "MESHSAT-606",
+    "MESHSAT-607"
+  ],
+  "spec_revision": "2 (iterated 2026-05-17 \u2014 HMAC provenance via pair code, expired-root path, TOCTOU capacity, metrics, remote arm)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Internal CA + HMAC-derive + capacity + regenerate-root + metrics (MESHSAT-595)",
+      "files_owned": [
+        "internal/pair/ca.go",
+        "internal/pair/ca_test.go",
+        "internal/pair/ca_rotation.go",
+        "internal/pair/ca_rotation_test.go",
+        "internal/pair/hmac_derive.go",
+        "internal/pair/hmac_derive_test.go",
+        "internal/pair/capacity.go",
+        "internal/pair/capacity_test.go",
+        "internal/api/pair_regenerate_root.go",
+        "internal/api/pair_regenerate_root_test.go",
+        "internal/api/pair_metrics.go",
+        "internal/database/migrations.go"
+      ],
+      "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, data-model.md, contracts/openapi.yaml, contracts/schemas/pair-csr.json, contracts/schemas/pair-cert-bundle.json, contracts/schemas/pair-event.json} AND the relevant ADRs (adr/0002 CGO=0, adr/0005 bridge-issued certs, adr/0006 HMAC pair-code provenance). ALSO read internal/pair/state.go (MESHSAT-594, existing 316-line state machine) \u2014 your CA work integrates with it via Acquire/Release transitions; do NOT bypass. SECOND: verify the existing /api/pair/{arm,claim,status} endpoint skeleton (MESHSAT-596/598) honours REQ-002 (armed-state filter), REQ-003 (60s timeout transition), REQ-004 (re-arm refresh) \u2014 add tests if absent, fix wiring if broken; new logic goes in the existing handlers, not new files. THIRD: implement per the spec, covering REQ-009 through REQ-013 + REQ-020 + REQ-022 (HKDF derivation half \u2014 touch UI rendering half is T-002) + REQ-024 + REQ-025. New ca_root table via append-only migration v50. crypto/ecdsa + crypto/elliptic.P256() + golang.org/x/crypto/hkdf from stdlib (CGO_ENABLED=0 per Constitution Article II). Wrap CA private key via existing internal/keystore/ master-key facility (AES-256-GCM); explicit Zeroize on unwrapped key after each sign. HKDF derivation per ADR-0006: shared_secret = HKDF-SHA256(salt=bridge_id, ikm=pair_code, info='meshsat-pair-v1', length=32). Daily leaf-expiry check goroutine emits pair.ca.leaf-near-expiry audit events when within 7 days (REQ-012). First-boot generation of root is idempotent (skip if row exists, REQ-013). Expired-root path: refuse all claims with 503 ca-expired UNTIL operator POSTs /api/pair/regenerate-root with explicit confirm string (REQ-024). Capacity check: atomic SELECT COUNT + INSERT within single SQLite transaction to prevent TOCTOU (REQ-020). Prometheus counters per REQ-025 \u2014 wire into existing internal/api/ /metrics handler. Tests cover all REQ scenarios from spec/001-pair-protocol/acceptance/pair-protocol.feature that map to T-001's REQ-NNNs.",
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/pair/... ./internal/api/... -run 'TestCA|TestCARotation|TestHmacDerive|TestCapacity|TestPairRegenerateRoot|TestPairMetrics'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "pair",
+      "requirement_ids": [
+        "REQ-002",
+        "REQ-003",
+        "REQ-004",
+        "REQ-009",
+        "REQ-010",
+        "REQ-011",
+        "REQ-012",
+        "REQ-013",
+        "REQ-020",
+        "REQ-022",
+        "REQ-024",
+        "REQ-025"
+      ],
+      "complexity": 7,
+      "risk_score": 0.7,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 750
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "Touch-arm UI \u2014 Vue component + countdown + pair-code display + confirmation + rejection + remote-arm (MESHSAT-606)",
+      "files_owned": [
+        "web/src/views/PairArmingView.vue",
+        "web/src/components/PairCountdown.vue",
+        "web/src/components/PairCodeDisplay.vue",
+        "web/src/components/PairConfirmation.vue",
+        "web/src/components/PairRejection.vue",
+        "web/src/components/PairRemoteArmButton.vue",
+        "web/src/api/pairProtocol.js",
+        "web/e2e/pair-arming.spec.js"
+      ],
+      "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, contracts/openapi.yaml} AND steering/coding-standards.md (Vue 3 Composition API + Tailwind only) + steering/repo-conventions.md (kiosk-mode constraints: touch-only, no hover states, large tap targets \u226544px). Cover REQ-001, REQ-016, REQ-017, REQ-018, REQ-022 (display the 6-char pair code prominently in monospace large font \u2014 operator must read aloud or type it), REQ-023 (remote-arm button in SPA \u2014 calls /api/pair/arm with operator-session-id). New Vue 3 Composition-API components in web/src/views/ + web/src/components/. PairArmingView is the parent (one new route entry in web/src/router.js \u2014 the ONLY line you may add there). Sub-components: PairCountdown (60\u21920 ring, 1s tick), PairCodeDisplay (renders pair_code from GET /api/pair/status in large monospace, NEVER copy-to-clipboard since that's a leak vector), PairConfirmation (5s post-success banner with client_label), PairRejection (3s rejection-reason indicator), PairRemoteArmButton (operator-only button; checks session auth before POST). API client in web/src/api/pairProtocol.js \u2014 extracted for unit-testability. Poll GET /api/pair/status every 1s while armed. Playwright e2e spec covers all 6 transitions (arm \u2192 code-display \u2192 countdown \u2192 confirmation OR rejection, plus remote-arm path). Use existing tactical design tokens; dark theme primary.",
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat && cd web && npm install && npx playwright test --grep \"Pair\"' || (cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep 'Pair')",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-016",
+        "REQ-017",
+        "REQ-018",
+        "REQ-022",
+        "REQ-023"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 700
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "End-to-end integration test \u2014 full pair handshake + boundary + capacity + metrics (MESHSAT-607)",
+      "files_owned": [
+        "test/integration/pair_e2e_test.go",
+        "test/integration/pair_capacity_test.go",
+        "test/integration/pair_boundary_test.go",
+        "test/integration/pair_metrics_test.go",
+        "test/integration/pair_perf_test.go",
+        "test/integration/testdata/pair-csr-fixture.json",
+        "test/integration/testdata/pair-csr-invalid-sig.json",
+        "test/integration/testdata/pair-csr-bad-hmac.json"
+      ],
+      "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, acceptance/pair-protocol.feature} AND the existing harness shape in test/integration/fullstack_e2e_test.go (use the same setup/teardown helpers). Cover REQ-005, REQ-006, REQ-007, REQ-008, REQ-014, REQ-015, REQ-019, REQ-020, REQ-021, REQ-025. Five test files, each focused: (1) pair_e2e_test.go \u2014 happy path: arm, valid claim, cert+JWT mint, paired_client row, audit_log entry, Hub event queued; re-call protected endpoint with new cert+JWT, assert 200 (REQ-005, 014, 015). (2) pair_capacity_test.go \u2014 10 paired_client rows pre-seeded + 11th claim \u2192 429 + no new audit_log/paired_client (REQ-020). (3) pair_boundary_test.go \u2014 claim at second 59.5 with 500ms processing \u2192 completes successfully (REQ-021). (4) pair_metrics_test.go \u2014 invoke arm + completed-claim + failed-claim + verify /metrics counters incremented (REQ-025). (5) pair_perf_test.go \u2014 100 sequential claims, assert p99 < 800ms (REQ-019). Three fixture files: valid CSR + invalid-sig variant + bad-hmac variant. Use the same test-mode flag the existing harness uses (in-memory SQLite, no Hub uplink). Tests should pass against fresh `go test -count=1 -timeout 300s -tags=integration ./test/integration/...`.",
+      "acceptance_test": "go test -count=1 -timeout 300s -tags=integration ./test/integration/ -run 'TestPair'",
+      "dependencies": [
+        "T-001",
+        "T-002"
+      ],
+      "parallelizable": false,
+      "bounded_context": "pair",
+      "requirement_ids": [
+        "REQ-005",
+        "REQ-006",
+        "REQ-007",
+        "REQ-008",
+        "REQ-014",
+        "REQ-015",
+        "REQ-019",
+        "REQ-020",
+        "REQ-021",
+        "REQ-025"
+      ],
+      "complexity": 5,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 45,
+      "max_loc_delta": 500
+    }
+  ]
+}

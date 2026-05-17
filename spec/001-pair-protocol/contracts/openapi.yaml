@@ -1,0 +1,181 @@
+openapi: 3.1.0
+info:
+  title: MeshSat Bridge Pair Protocol (Phase 8)
+  version: 1.0.0
+  description: |
+    Pair-protocol API endpoints. Used by Android (MESHSAT-601-604) + browser
+    (MESHSAT-605) to claim a client cert + JWT from the bridge during a
+    60-second operator-armed window.
+
+    All endpoints respect Constitution Article III (zero-trust input validation)
+    and Article VI (DeliveryWorker for outbound events).
+
+servers:
+  - url: https://{bridge_host}:{port}/api/pair
+    description: Bridge pair-protocol endpoint
+    variables:
+      bridge_host:
+        default: bridge.local
+      port:
+        default: '8443'
+
+paths:
+  /arm:
+    post:
+      summary: Arm pair-mode for 60 seconds
+      operationId: armPairMode
+      description: |
+        Operator-only. Triggered from the touch display (MESHSAT-606) OR via
+        an authenticated operator session through the SPA. Sets the bridge to
+        armed-pair state for 60 seconds. Refresh re-arms (REQ-004).
+      security:
+        - operatorSession: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                armed_by:
+                  type: string
+                  description: 'touch | operator-session-id'
+                  example: touch
+      responses:
+        '200':
+          description: Armed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [armed_at, expires_at]
+                properties:
+                  armed_at: {type: integer, description: unix epoch}
+                  expires_at: {type: integer, description: unix epoch (armed_at + 60)}
+                  refreshed: {type: boolean, description: 'true if already armed (REQ-004)'}
+        '401':
+          description: Operator not authenticated
+
+  /claim:
+    post:
+      summary: Submit a pair-claim with CSR + HMAC
+      operationId: claimPair
+      description: |
+        Client-side endpoint. Submits a CSR + ECDH pub + HMAC during the
+        60-second armed window. On success, returns a minted client cert +
+        CA bundle + JWT. On failure (CSR-invalid / HMAC-invalid / not-armed),
+        bridge stays armed for retry (REQ-006/007).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: 'schemas/pair-csr.json'
+      responses:
+        '200':
+          description: Pair completed; cert + JWT issued
+          content:
+            application/json:
+              schema:
+                $ref: 'schemas/pair-cert-bundle.json'
+        '409':
+          description: Bridge not in armed-pair state (REQ-008)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: {type: string, enum: [not-armed]}
+        '422':
+          description: CSR or HMAC verification failed (REQ-006/007)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: {type: string, enum: [csr-invalid, hmac-invalid]}
+                  detail: {type: string}
+        '429':
+          description: Capacity exceeded (REQ-020, ≥10 concurrent paired clients)
+
+  /regenerate-root:
+    post:
+      summary: Operator-approved CA root regeneration (REQ-024)
+      operationId: regeneratePairCAroot
+      description: |
+        Used only when the bridge starts and discovers an expired CA root cert.
+        Auto-regeneration is FORBIDDEN per ADR-0005 — operator must explicitly
+        approve because regeneration invalidates all paired clients.
+      security:
+        - operatorSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: string
+                  description: 'Must be the literal string "regenerate-and-invalidate-all-paired-clients"'
+                  enum: ['regenerate-and-invalidate-all-paired-clients']
+      responses:
+        '200':
+          description: New CA root generated; all previous paired clients invalidated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [new_root_fingerprint, paired_clients_invalidated, valid_until]
+                properties:
+                  new_root_fingerprint: {type: string}
+                  paired_clients_invalidated: {type: integer}
+                  valid_until: {type: integer, description: unix epoch, root NotAfter}
+        '401':
+          description: Operator not authenticated
+        '409':
+          description: CA root is not expired; no action needed
+
+  /status:
+    get:
+      summary: Get current pair-mode state + countdown
+      operationId: getPairStatus
+      description: Polled by the touch UI (REQ-017) every 1s during armed window.
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, paired_count, max_clients]
+                properties:
+                  state:
+                    type: string
+                    enum: [idle, armed, verifying, issuing, confirmed, failed]
+                  countdown_seconds:
+                    type: integer
+                    description: Seconds remaining in armed window (0-60, only present if state=armed)
+                  last_client_label:
+                    type: string
+                    description: For state=confirmed, the label of just-paired client
+                  paired_count:
+                    type: integer
+                    description: Current count of non-revoked paired clients
+                  max_clients:
+                    type: integer
+                    description: Capacity per REQ-020 (currently 10)
+                  pair_code:
+                    type: string
+                    description: 'Present only when state=armed. 6-char alphanumeric per REQ-022 + ADR-0006. NEVER logged. Operator types into client app.'
+                    pattern: '^[A-HJ-NP-Z2-9]{6}$'
+
+components:
+  securitySchemes:
+    operatorSession:
+      type: apiKey
+      in: cookie
+      name: operator_session

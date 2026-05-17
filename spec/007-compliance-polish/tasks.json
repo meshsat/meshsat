@@ -1,0 +1,98 @@
+{
+  "feature_id": "007-compliance-polish",
+  "parent_epic": "MESHSAT-529",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 6 — meshsat Phase 6)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "CI accessibility stage (axe-core + pa11y) + Prometheus counter + VPAT generation (S6-01, S6-08, S6-10)",
+      "prompt": "FIRST: read spec/007-compliance-polish/{requirements.md, design.md, acceptance/compliance-polish.feature}. SECOND: extend .gitlab-ci.yml with an `accessibility` stage that builds the SPA + runs axe-core + pa11y against every primary view; fail on WCAG AAA violation; publish HTML artifact. (REQ-617) emit hub_accessibility_violations_total{view, severity} Prometheus counter via a small Go scrape job. (REQ-611/612) implement `make vpat` target that consumes axe-core JSON + generates docs/compliance/vpat.md mapping every view against EN 301 549 + Section 508.",
+      "files_owned": [
+        ".gitlab-ci.yml",
+        "scripts/accessibility-counters.go",
+        "scripts/vpat-generator.go",
+        "Makefile",
+        "docs/compliance/vpat.md"
+      ],
+      "acceptance_test": "make vpat && test -f docs/compliance/vpat.md",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "deploy",
+      "requirement_ids": ["REQ-600", "REQ-601", "REQ-611", "REQ-612", "REQ-617"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 600
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "Compose team broadcast + USMTF library 20+ templates + map clustering + contextual help (S6-02, S6-03, S6-04, S6-05)",
+      "prompt": "FIRST: read spec/007-compliance-polish/{requirements.md, design.md, acceptance/compliance-polish.feature}. SECOND: (REQ-602/603/618) add Team-broadcast option to ComposeView calling POST /api/messages/send-to-group; empty group → inline error. (REQ-604) implement 20 new USMTF templates as Vue components under web/src/components/templates/ — see requirements.md REQ-604 list. Each template uses the existing usmtfPack helper from spec/005. (REQ-605) MapView gains leaflet-markercluster cluster rendering. (REQ-606) every Engineer-mode Settings field gets a v-tooltip.",
+      "files_owned": [
+        "web/src/views/ComposeView.vue",
+        "web/src/views/MapView.vue",
+        "web/src/views/SettingsView.vue",
+        "web/src/components/templates/Nbc1Template.vue",
+        "web/src/components/templates/SpotrepTemplate.vue",
+        "web/src/components/templates/IntsumTemplate.vue",
+        "web/src/components/templates/usmtf-extra/index.js"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep \"team-broadcast|usmtf|map-cluster|settings-help\"'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-602", "REQ-603", "REQ-604", "REQ-605", "REQ-606", "REQ-618"],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 90,
+      "max_loc_delta": 1500
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "MLS RFC 9420 opt-in encryption + FIPS-140-3 build target (S6-06, S6-07)",
+      "prompt": "FIRST: read spec/007-compliance-polish/{requirements.md, design.md}. SECOND: (REQ-607/608) implement internal/crypto/mls/ wrapping a Go MLS library (e.g. cisco-open/go-mls if available, else equivalent). Per-tenant feature flag `mls_enabled` from directory_dispatch_policy. Dispatcher checks flag + rejects unencrypted group sends when enabled. (REQ-609/610) Makefile `build-fips` target requires MESHSAT_FIPS=1 env var; links BoringSSL via cgo; prints opt-in notice; binary embeds build flag.",
+      "files_owned": [
+        "internal/keystore/mls/wrapper.go",
+        "internal/keystore/mls/wrapper_test.go",
+        "build/fips/Dockerfile.fips",
+        "build/fips/build-fips.mk"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/keystore/mls/... && MESHSAT_FIPS=1 make build-fips",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "keystore",
+      "requirement_ids": ["REQ-607", "REQ-608", "REQ-609", "REQ-610"],
+      "complexity": 7,
+      "risk_score": 0.6,
+      "max_wall_clock_minutes": 120,
+      "max_loc_delta": 1500
+    },
+    {
+      "id": "T-004",
+      "status": "pending",
+      "title": "Android-to-Android contact handoff via QR + Playwright operator-contract suite (S6-09, S6-10)",
+      "prompt": "FIRST: read spec/007-compliance-polish/{requirements.md, design.md}. SECOND: (REQ-613/614) implement direct Android-to-Android handoff QR — Android-side feature actually lives in meshsat-android/spec/002-directory-sync/, but bridge side adds POST /api/directory/contacts/{id}/android-share returning a TTL=300s CBOR card with source bridge pubkey. Bridge side reuses spec/006 handoff codec. (REQ-615/616) extend Playwright operator-contract suite to cover Compose/Inbox/People/Map/Radios; CI publishes video artifacts on failure.",
+      "files_owned": [
+        "internal/api/contact_android_share.go",
+        "internal/api/contact_android_share_test.go",
+        "web/e2e/operator-contract/compose.spec.js",
+        "web/e2e/operator-contract/inbox.spec.js",
+        "web/e2e/operator-contract/people.spec.js",
+        "web/e2e/operator-contract/map.spec.js",
+        "web/e2e/operator-contract/radios.spec.js"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestAndroidShare && ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --config=operator-contract'",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-613", "REQ-614", "REQ-615", "REQ-616"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 55,
+      "max_loc_delta": 700
+    }
+  ]
+}

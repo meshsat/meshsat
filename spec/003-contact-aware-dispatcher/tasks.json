@@ -1,0 +1,87 @@
+{
+  "feature_id": "003-contact-aware-dispatcher",
+  "parent_epic": "MESHSAT-525",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 4 — meshsat Phase 2)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Dispatcher.SendToRecipient + 5 strategies + strategy resolver (S2-01)",
+      "prompt": "FIRST: read spec/003-contact-aware-dispatcher/{requirements.md, design.md, acceptance/contact-dispatcher.feature} AND spec/002-unified-directory/design.md for the dispatch_policy schema. SECOND: extend internal/engine/dispatcher.go with SendToRecipient(ref RecipientRef, opts SendOptions) SendResult. (REQ-200..207) implement 5 strategies. (REQ-202) strategy resolver: caller→contact→group→precedence-default→global default. (REQ-218) SendResult includes delivery_ids/bearers_attempted/strategy_used/precedence_used. Integration test covering all 5 strategies + failover paths.",
+      "files_owned": [
+        "internal/engine/send_to_recipient.go",
+        "internal/engine/send_to_recipient_test.go",
+        "internal/engine/strategy_resolver.go",
+        "internal/engine/strategy_resolver_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/engine/... -run TestSendToRecipient",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "engine",
+      "requirement_ids": ["REQ-200", "REQ-201", "REQ-202", "REQ-203", "REQ-204", "REQ-205", "REQ-206", "REQ-207", "REQ-218"],
+      "complexity": 6,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 75,
+      "max_loc_delta": 800
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "POST /api/messages/send-to-contact endpoint + per-bearer status response (S2-02)",
+      "prompt": "FIRST: read spec/003-contact-aware-dispatcher/{requirements.md, acceptance/contact-dispatcher.feature}. SECOND: implement internal/api/messages_send_to_contact.go. (REQ-208) accept {contact_id, body, precedence?, strategy_override?} via readJSON; resolve contact via directory.Store; call Dispatcher.SendToRecipient; return SendResult. (REQ-209) on 0-reachable-bearers, return 503 with per_bearer_status[] breakdown. (REQ-210) leave POST /api/messages/send unchanged. Add @Summary/@Tags/@Router. Tests cover happy + unreachable + invalid contact + strategy_override.",
+      "files_owned": [
+        "internal/api/messages_send_to_contact.go",
+        "internal/api/messages_send_to_contact_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestSendToContact",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-208", "REQ-209", "REQ-210"],
+      "complexity": 3,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 30,
+      "max_loc_delta": 300
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "Precedence-aware queue + FLASH preemption + audit + Prometheus counter (S2-03)",
+      "prompt": "FIRST: read spec/003-contact-aware-dispatcher/{requirements.md, design.md, acceptance/contact-dispatcher.feature}. SECOND: modify internal/engine/delivery_worker.go processBatch SELECT to ORDER BY precedence DESC, queued_at ASC (REQ-211). (REQ-212) on saturated interface AND Flash/Override arrival, evict the lowest-precedence queued item to queue tail + write audit event delivery.preempted with evicted ID. (REQ-213) increment meshsat_delivery_preempted_total{evicted_precedence}. Deterministic test on the ordering + preemption logic.",
+      "files_owned": [
+        "internal/engine/precedence_queue.go",
+        "internal/engine/precedence_queue_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/engine/... -run TestPrecedence",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "engine",
+      "requirement_ids": ["REQ-211", "REQ-212", "REQ-213"],
+      "complexity": 4,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 45,
+      "max_loc_delta": 450
+    },
+    {
+      "id": "T-004",
+      "status": "pending",
+      "title": "First-boot seed of 6 precedence-default policies + Hub-tenant overrides + 30-day key grace (S2-04, S2-05)",
+      "prompt": "FIRST: read spec/003-contact-aware-dispatcher/{requirements.md, design.md}. SECOND: (REQ-214) on first boot after this phase, INSERT 6 rows into directory_dispatch_policy with scope_type=\"default\" mapping each precedence to its strategy per the table in design.md. Idempotent: skip if already present. (REQ-215) hubreporter directory_push handler from spec/002 T-003 applies tenant-scoped dispatch_policy overrides on top. (REQ-216/217) transform pipeline dual-read: contact-key preferred over sms-key; WARN log on sms fallback after 30 days (env MESHSAT_CONTACT_KEY_GRACE_DAYS); error after 60 days. Tests cover seeding + override + dual-read behavior.",
+      "files_owned": [
+        "internal/directory/seed_default_policies.go",
+        "internal/directory/seed_default_policies_test.go",
+        "internal/keystore/grace_window.go",
+        "internal/keystore/grace_window_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/directory/... ./internal/keystore/... -run 'TestSeedDefault|TestGraceWindow'",
+      "dependencies": ["T-001"],
+      "parallelizable": true,
+      "bounded_context": "directory",
+      "requirement_ids": ["REQ-214", "REQ-215", "REQ-216", "REQ-217"],
+      "complexity": 3,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 35,
+      "max_loc_delta": 350
+    }
+  ]
+}

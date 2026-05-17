@@ -1,0 +1,89 @@
+{
+  "feature_id": "002-unified-directory",
+  "parent_epic": "MESHSAT-524",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 4 — meshsat Phase 1)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Migrations v44-v48 + legacy backfill (S1-01, S1-09)",
+      "prompt": "FIRST: read spec/002-unified-directory/{requirements.md, design.md} AND existing internal/database/migrations.go for migration pattern. SECOND: (REQ-100/101/102) append v44-v48 migrations creating directory_contacts/addresses/contact_keys/groups/group_members/dispatch_policy + indexes. NEVER edit migrations ≤ v43. (REQ-103/104) v44 also runs a backfill SELECT...INSERT INTO from legacy contacts/contact_addresses/sms_contacts. (REQ-119) sms_contacts becomes read-only marker — no DROP yet, that lands in v50 outside this spec. Existing migration tests stay passing.",
+      "files_owned": [
+        "internal/database/migrations.go",
+        "internal/database/migrations_v44_v48_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/database/... -run TestMigrations_V44",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "database",
+      "requirement_ids": ["REQ-100", "REQ-101", "REQ-102", "REQ-103", "REQ-104", "REQ-119"],
+      "complexity": 4,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "internal/directory/ package — types, Store CRUD, AES derivation + transform pipeline integration (S1-02, S1-03, S1-04)",
+      "prompt": "FIRST: read spec/002-unified-directory/{requirements.md, design.md}. SECOND: create internal/directory/{store.go, types.go, store_test.go}. (REQ-105) define Contact, Address, ContactKey, Group, DispatchPolicy structs. (REQ-106) Address.kind enum exactly as specified. (REQ-107) Store interface with Resolve(contactID) + FindByAddress(kind, value). (REQ-108) per-contact AES derivation via X25519+HKDF in internal/keystore/ — cache in sync.Map. (REQ-109) one-shot wrapper for system_config.signing_private_key — idempotent; runs on first boot after v44. (REQ-110) transform pipeline encrypt stage accepts params.key_ref=\"contact:<uuid>\". (REQ-111) dual-read precedence: contact ref preferred for 30 days. 100% unit coverage on resolver. Tests: store CRUD + resolver + AES derivation.",
+      "files_owned": [
+        "internal/directory/store.go",
+        "internal/directory/types.go",
+        "internal/directory/store_test.go",
+        "internal/keystore/contact_key.go",
+        "internal/keystore/contact_key_test.go",
+        "internal/keystore/wrap_signing.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/directory/... ./internal/keystore/...",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "directory",
+      "requirement_ids": ["REQ-105", "REQ-106", "REQ-107", "REQ-108", "REQ-109", "REQ-110", "REQ-111"],
+      "complexity": 6,
+      "risk_score": 0.6,
+      "max_wall_clock_minutes": 75,
+      "max_loc_delta": 800
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "Hub-distributed directory MQTT commander + signature verify + audit (S1-06, S1-07)",
+      "prompt": "FIRST: read spec/002-unified-directory/{requirements.md, design.md, acceptance/unified-directory.feature}. SECOND: extend internal/hubreporter/commander.go to handle meshsat/bridge/{id}/cmd/directory_push payloads. (REQ-112) verify ECDSA-P256 signature against the directory trust anchor stored in the provisioning bundle. (REQ-113) on signature failure: drop, write audit_log entry directory.signature-invalid, emit settings-UI alert. (REQ-122) on success: stamp hub_version + hub_etag columns. (REQ-123) update bridge health payload to include directory_version. Tests cover both happy + failure paths.",
+      "files_owned": [
+        "internal/hubreporter/directory_push.go",
+        "internal/hubreporter/directory_push_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/hubreporter/... -run TestDirectoryPush",
+      "dependencies": ["T-002"],
+      "parallelizable": false,
+      "bounded_context": "hubreporter",
+      "requirement_ids": ["REQ-112", "REQ-113", "REQ-122", "REQ-123"],
+      "complexity": 5,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-004",
+      "status": "pending",
+      "title": "vCard 4.0 + CSV import/export + legacy SMS endpoint redirect + precedence plumbing + REST API (S1-08, S1-09, S1-10)",
+      "prompt": "FIRST: read spec/002-unified-directory/{requirements.md, design.md, acceptance/unified-directory.feature}. SECOND: implement REST endpoints under internal/api/directory.go. (REQ-114) POST /api/directory/import/vcard accepting RFC 6350 vCard 4.0 — must complete 100 contacts under 2 seconds on Pi 5; use github.com/emersion/go-vcard. (REQ-115) POST /api/directory/import/csv (encoding/csv). (REQ-116/117) GET /api/directory/export/vcard paginated with X-MESHSAT-* extension fields. (REQ-118) GET /api/sms/contacts returns 301 with Location=/api/directory/contacts?kind=SMS for one release. (REQ-124) DELETE /api/directory/contacts/{id} cascades addresses, keys, group memberships in one transaction. (REQ-120/121) add Precedence{Override,Flash,Immediate,Priority,Routine,Deferred} enum to internal/types; message_deliveries gains precedence column via migration v44 hook; API accepts short-form (Z/O/P/R/M) AND full-form, persists full-form. Use readJSON for POST bodies. Tests cover vCard round-trip + redirect + cascade + precedence parsing.",
+      "files_owned": [
+        "internal/api/directory.go",
+        "internal/api/directory_test.go",
+        "internal/types/precedence.go",
+        "internal/types/precedence_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestDirectory",
+      "dependencies": ["T-002"],
+      "parallelizable": true,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-114", "REQ-115", "REQ-116", "REQ-117", "REQ-118", "REQ-120", "REQ-121", "REQ-124"],
+      "complexity": 6,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 70,
+      "max_loc_delta": 800
+    }
+  ]
+}

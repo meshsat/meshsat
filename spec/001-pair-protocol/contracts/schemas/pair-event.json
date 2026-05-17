@@ -1,0 +1,72 @@
+{
+  "title": "PairEvent",
+  "description": "Audit-log entry + Hub uplink event for all pair-protocol state transitions. Sole payload of meshsat/{bridge_id}/pair/completed AND .../pair/failed MQTT topics.",
+  "type": "object",
+  "required": ["event_type", "event_at", "bridge_id"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "pair.arm.start",
+        "pair.arm.refresh",
+        "pair.arm.timeout",
+        "pair.claim.received",
+        "pair.claim.csr-invalid",
+        "pair.claim.hmac-invalid",
+        "pair.claim.rejected",
+        "pair.completed",
+        "pair.ca.leaf-near-expiry",
+        "pair.ca.expired",
+        "pair.ca.regenerated"
+      ]
+    },
+    "event_at": {
+      "type": "integer",
+      "description": "Unix epoch of the event",
+      "minimum": 1700000000
+    },
+    "bridge_id": {
+      "type": "string",
+      "description": "UUID or operator-chosen ID of the emitting bridge",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[a-z0-9-]+$"
+    },
+    "client_id": {
+      "type": "string",
+      "description": "UUID of the client (present for pair.completed + pair.claim.* events)",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "client_label": {
+      "type": "string",
+      "description": "Operator-visible name (present for pair.completed)",
+      "maxLength": 50
+    },
+    "cert_fingerprint": {
+      "type": "string",
+      "description": "SHA-256 hex of issued cert DER (present for pair.completed)",
+      "pattern": "^[a-f0-9]{2}(:[a-f0-9]{2}){31}$"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Failure reason (present for pair.claim.csr-invalid, pair.claim.hmac-invalid, pair.claim.rejected)",
+      "maxLength": 200
+    },
+    "leaf_id": {
+      "type": "integer",
+      "description": "ca_root.id of the leaf approaching expiry (present for pair.ca.leaf-near-expiry)"
+    },
+    "expires_in_days": {
+      "type": "integer",
+      "description": "Days until leaf expiry (present for pair.ca.leaf-near-expiry, ≤7 per REQ-012)",
+      "maximum": 7
+    },
+    "armed_by_session": {
+      "type": "string",
+      "description": "Operator session ID (present for pair.arm.start when arm came via /api/pair/arm with operator-session-id per REQ-023)"
+    },
+    "paired_clients_invalidated": {
+      "type": "integer",
+      "description": "Count of paired_client rows invalidated by CA root regeneration (present for pair.ca.regenerated)"
+    }
+  },
+  "additionalProperties": false
+}

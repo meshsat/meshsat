@@ -1,0 +1,118 @@
+{
+  "feature_id": "008-kiosk-pwa-spa-hardening",
+  "parent_epic": "MESHSAT-530",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 6 — meshsat Phase 7)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Pi Touch Display 2 provisioning + dedicated kiosk user + greetd autologin (S7-01, S7-02)",
+      "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md, acceptance/kiosk-pwa-hardening.feature}. SECOND: add Ansible role under deploy/ansible/roles/kiosk/ that (REQ-700) appends dtoverlay lines to /boot/firmware/config.txt + restarts; (REQ-702) creates kiosk user + loginctl enable-linger; (REQ-703) writes /etc/greetd/config.toml; (REQ-729) verifies PSU_MAX_CURRENT=5000 + cmdline.txt sanity per Constitution Article X — abort with descriptive error if not satisfied.",
+      "files_owned": [
+        "deploy/ansible/roles/kiosk/tasks/main.yml",
+        "deploy/ansible/roles/kiosk/templates/greetd.toml.j2",
+        "deploy/ansible/playbooks/field-kit.yml"
+      ],
+      "acceptance_test": "ansible-lint deploy/ansible/roles/kiosk/",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "deploy",
+      "requirement_ids": ["REQ-700", "REQ-701", "REQ-702", "REQ-703", "REQ-729"],
+      "complexity": 4,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "systemd-user kiosk service + Chromium policy lockdown + nightly restart (S7-03, S7-04)",
+      "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md}. SECOND: (REQ-704/705/706) systemd user unit at /home/kiosk/.config/systemd/user/meshsat-kiosk.service with Restart=always RestartSec=5 + ExecStartPre polling /healthz. (REQ-707) /etc/chromium/policies/managed/meshsat-lockdown.json + /etc/chromium-browser/... mirror. (REQ-708/709) swayidle config + sudoers.d/kiosk-brightness scoped to backlight path only. (REQ-730) systemd-timer at 03:00 local time restarting the kiosk service.",
+      "files_owned": [
+        "deploy/ansible/roles/kiosk/templates/meshsat-kiosk.service.j2",
+        "deploy/ansible/roles/kiosk/templates/meshsat-lockdown.json.j2",
+        "deploy/ansible/roles/kiosk/templates/swayidle.conf.j2",
+        "deploy/ansible/roles/kiosk/templates/kiosk-brightness.sudoers.j2",
+        "deploy/ansible/roles/kiosk/templates/meshsat-kiosk-restart.timer.j2"
+      ],
+      "acceptance_test": "ansible-lint deploy/ansible/roles/kiosk/",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "deploy",
+      "requirement_ids": ["REQ-704", "REQ-705", "REQ-706", "REQ-707", "REQ-708", "REQ-709", "REQ-730"],
+      "complexity": 4,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "PWA manifest + service worker + icons + in-SPA OSK (S7-05, S7-06)",
+      "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md, acceptance/kiosk-pwa-hardening.feature}. SECOND: (REQ-710) write web/public/manifest.json with name, icons, display=fullscreen, orientation=landscape, theme colors. (REQ-711) web/public/sw.js providing offline-first shell + network-first API. (REQ-712) /sw/reset unregister endpoint. (REQ-713) icon-192/512/maskable.png. (REQ-714) Hub backend serves files with no-cache on SW. (REQ-715/716) add simple-keyboard npm + web/src/components/MeshSatOSK.vue auto-showing on pointer:coarse + no hw kb + respecting inputmode. Update web/src/main.js to register SW + mount OSK.",
+      "files_owned": [
+        "web/public/manifest.json",
+        "web/public/sw.js",
+        "web/public/icon-192.png",
+        "web/public/icon-512.png",
+        "web/public/icon-maskable.png",
+        "web/src/components/MeshSatOSK.vue",
+        "web/src/main.js",
+        "internal/api/pwa_assets.go"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep pwa'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-710", "REQ-711", "REQ-712", "REQ-713", "REQ-714", "REQ-715", "REQ-716"],
+      "complexity": 5,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 70,
+      "max_loc_delta": 1000
+    },
+    {
+      "id": "T-004",
+      "status": "pending",
+      "title": "SPA fitness — drag-touch widget reorder + tab overflow + modal sizing + virtual keyboard inset (S7-07 to S7-10)",
+      "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md}. SECOND: apply 4 SPA fixes per requirements REQ-717..721 to the listed files. Touch handlers mirror the HTML5 drag logic. Tests via Playwright.",
+      "files_owned": [
+        "web/src/views/DashboardView.vue",
+        "web/src/views/SettingsView.vue",
+        "web/src/views/RadioConfigView.vue",
+        "web/src/App.vue",
+        "web/src/components/JammingAlertModal.vue"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep spa-fitness-touch'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-717", "REQ-718", "REQ-719", "REQ-720", "REQ-721"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 50,
+      "max_loc_delta": 600
+    },
+    {
+      "id": "T-005",
+      "status": "pending",
+      "title": "SPA fitness — tap-target floor + checkbox rows + responsive grid + input semantics + textarea + focus + pull-to-refresh (S7-11 to S7-16)",
+      "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md}. SECOND: apply 6 SPA fixes per REQ-722..728. (REQ-722) h-12 floor on every primary control via a global Tailwind utility. (REQ-723) InterfacesView checkbox row-as-target. (REQ-724) DashboardView grid breakpoint fix. (REQ-725) inputmode + enterkeyhint on every input. (REQ-726) textarea defaults rows=2 + resize-y sm:resize-none. (REQ-727) :focus-visible in style.css. (REQ-728) pull-to-refresh on Inbox + Dashboard.",
+      "files_owned": [
+        "web/src/views/InboxView.vue",
+        "web/src/views/InterfacesView.vue",
+        "web/src/style.css",
+        "web/src/composables/useTapTargets.ts",
+        "web/src/composables/usePullToRefresh.ts"
+      ],
+      "acceptance_test": "ssh ansible@nllei01androidsdk01 'cd /home/claude-runner/gitlab/products/cubeos/meshsat/web && npm install && npx playwright test --grep spa-fitness-controls'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": ["REQ-722", "REQ-723", "REQ-724", "REQ-725", "REQ-726", "REQ-727", "REQ-728"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 700
+    }
+  ]
+}

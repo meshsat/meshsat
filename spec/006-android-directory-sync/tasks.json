@@ -1,0 +1,66 @@
+{
+  "feature_id": "006-android-directory-sync",
+  "parent_epic": "MESHSAT-528",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 6 — meshsat Phase 5)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "GET /api/directory/snapshot endpoint with delta + Ed25519 signature + 304/403 semantics (S5-01 bridge side)",
+      "prompt": "FIRST: read spec/006-android-directory-sync/{requirements.md, design.md, acceptance/android-directory-sync.feature}. SECOND: implement internal/api/directory_snapshot.go. (REQ-500/501) GET /api/directory/snapshot?since=N returns contacts where updated_at > N (full when N=0/missing). (REQ-502/503) response is signed JSON via internal/keystore signing key. (REQ-505) revoked pairing → 403. (REQ-506/507) Last-Modified header + If-Modified-Since → 304. Add @Summary/@Tags/@Router. Tests cover full/delta + signing + 304/403.",
+      "files_owned": [
+        "internal/api/directory_snapshot.go",
+        "internal/api/directory_snapshot_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestDirectorySnapshot",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-500", "REQ-501", "REQ-502", "REQ-503", "REQ-504", "REQ-505", "REQ-506", "REQ-507"],
+      "complexity": 4,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 45,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "MQTT directory/changed + directory/revoked publication on contact mutation (S5-01 bridge side)",
+      "prompt": "FIRST: read spec/006-android-directory-sync/{requirements.md, design.md}. SECOND: hook into the existing directory mutation paths (internal/api/directory.go from spec/002 T-004). (REQ-508) on every POST/PUT/DELETE /api/directory/contacts, publish a new-version integer to meshsat/bridge/{bridge_id}/directory/changed. (REQ-514) on signing-pubkey revocation, publish revoked contact_id list to meshsat/bridge/{bridge_id}/directory/revoked. Use the existing bus.MessageBus. Tests cover publication-on-mutation.",
+      "files_owned": [
+        "internal/api/directory_mqtt_notifier.go",
+        "internal/api/directory_mqtt_notifier_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestDirectoryNotifier",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-508", "REQ-514"],
+      "complexity": 3,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 30,
+      "max_loc_delta": 300
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "Cross-bridge handoff: export + import + TTL + replay protection + audit (S5-03)",
+      "prompt": "FIRST: read spec/006-android-directory-sync/{requirements.md, design.md, acceptance/android-directory-sync.feature}. SECOND: implement internal/api/contact_handoff.go. (REQ-509) POST /api/directory/contacts/{id}/qr/handoff returns CBOR card with TTL=600s + Ed25519 signature. (REQ-510) POST /api/directory/contacts/import-handoff validates signature against source bridge's known pubkey + adds contact with trust_level=1 (operator must verify per spec/005 for higher). (REQ-511) in-memory dedup set on card_id for 600s window. (REQ-512) reject expired cards with 400. (REQ-513) audit handoff_exported/imported/replay_rejected.",
+      "files_owned": [
+        "internal/api/contact_handoff.go",
+        "internal/api/contact_handoff_test.go",
+        "internal/directory/handoff_codec.go",
+        "internal/directory/handoff_codec_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... ./internal/directory/... -run 'TestHandoff'",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "directory",
+      "requirement_ids": ["REQ-509", "REQ-510", "REQ-511", "REQ-512", "REQ-513"],
+      "complexity": 5,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 55,
+      "max_loc_delta": 600
+    }
+  ]
+}

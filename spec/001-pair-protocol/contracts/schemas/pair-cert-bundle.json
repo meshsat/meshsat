@@ -1,0 +1,43 @@
+{
+  "title": "PairCertBundle",
+  "description": "Response body for POST /api/pair/claim — issued client cert + CA chain + JWT",
+  "type": "object",
+  "required": ["client_id", "cert", "ca_bundle", "jwt", "expires_at", "bridge_id"],
+  "properties": {
+    "client_id": {
+      "type": "string",
+      "description": "UUID of the newly paired client (sub claim in JWT)",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "cert": {
+      "type": "string",
+      "description": "PEM-encoded client leaf certificate (ECDSA P-256, 90-day validity per REQ-010)",
+      "minLength": 600,
+      "maxLength": 4096
+    },
+    "ca_bundle": {
+      "type": "string",
+      "description": "PEM-encoded CA root certificate (so client can verify bridge mTLS handshakes). 5-year validity per REQ-009.",
+      "minLength": 500,
+      "maxLength": 4096
+    },
+    "jwt": {
+      "type": "string",
+      "description": "JWT signed with bridge's HMAC key. Claims: sub=client_id, iss=bridge_id, exp=now+90d, iat=now.",
+      "minLength": 100,
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    },
+    "expires_at": {
+      "type": "integer",
+      "description": "Unix epoch — cert NotAfter (90 days from issue per REQ-010). Client should re-pair before this date.",
+      "minimum": 1700000000
+    },
+    "bridge_id": {
+      "type": "string",
+      "description": "UUID of the issuing bridge (iss claim in JWT). Client should verify subsequent mTLS handshakes match.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[a-z0-9-]+$"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,68 @@
+{
+  "slug": "meshsat",
+  "title": "MeshSat Bridge \u2014 standalone Meshtastic + satellite gateway (Pi5)",
+  "youtrack_prefix": "MESHSAT",
+  "youtrack_disambiguator": "no tag:hub AND no tag:android \u2014 see ROUTING.md",
+  "matrix_room": "!miZJJDwFQZDkuMcBqL:matrix.nuclearlighters.net",
+  "primary_language": "go",
+  "test_command": "go test -count=1 -timeout 900s ./...",
+  "lint_command": "go vet ./... && golangci-lint run ./...",
+  "build_command": "make build-with-web",
+  "ci_pipeline": ".gitlab-ci.yml",
+  "bounded_contexts": [
+    "api",
+    "certpin",
+    "channel",
+    "codec",
+    "compress",
+    "config",
+    "database",
+    "dedup",
+    "device",
+    "directory",
+    "engine",
+    "federation",
+    "gateway",
+    "hemb",
+    "hubreporter",
+    "keystore",
+    "pair",
+    "ratelimit",
+    "reticulum",
+    "routing",
+    "rules",
+    "spectrum",
+    "sysinfo",
+    "timesync",
+    "transport",
+    "types",
+    "web",
+    "cmd",
+    "proto",
+    "sidecar",
+    "deploy"
+  ],
+  "max_parallel_workers": 3,
+  "max_loc_per_worker": 500,
+  "owners": [
+    "ufwtqkgz@meshsat.net"
+  ],
+  "risk_profile": "high",
+  "gitlab_project_id": 27,
+  "deployment_targets": [
+    "parallax01 (RockBLOCK 9704 IMT)",
+    "tesseract01 (RockBLOCK 9603 SBD)"
+  ],
+  "release_workflow": "push-to-main-deploys-automatically",
+  "parallel_dev_exception": {
+    "allowed": true,
+    "workflow": "merge/<feature_id> short-lived branch + 1 MR per feature + auto-delete branch on merge",
+    "rationale": "Repo's default 'push to main' rule conflicts with parallel-dev. This is the exception that re-enables it for spec-driven waves."
+  },
+  "surfaces": {
+    "http_api": true,
+    "events": true,
+    "persistent_data": true
+  },
+  "_bounded_contexts_note": "1:1 mapping with actual top-level directories. internal/* = 26 packages; non-internal = web/ + cmd/ + proto/ + sidecar/ + deploy/."
+}

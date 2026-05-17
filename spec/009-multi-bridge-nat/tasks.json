@@ -1,0 +1,67 @@
+{
+  "feature_id": "009-multi-bridge-nat",
+  "parent_epic": "MESHSAT-531",
+  "spec_revision": "1 (2026-05-17 — Path A Batch 6 — meshsat Phase 9)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Bridge-side: subscribe to meshsat/relay/{bridge_id}/+ + forward to localhost HTTP + directory_version in health (S9-06, S9-07)",
+      "prompt": "FIRST: read spec/009-multi-bridge-nat/{requirements.md, design.md, acceptance/multi-bridge-nat.feature}. SECOND: (REQ-813) extend internal/hubreporter/ to subscribe to meshsat/relay/{bridge_id}/+ on the Hub MQTT connection. On inbound frames, forward the inner HTTP request to localhost:6050 as if from LAN — frames are mTLS-encrypted; the bridge's local NATS terminates. (REQ-814) bridge health payload from existing internal/sysinfo/ adds directory_version + last_sync. (REQ-820) ensure pair-protocol response includes rns_dest + hub_relay_url so paired_bridges rows populate on initial pairing.",
+      "files_owned": [
+        "internal/hubreporter/relay_subscriber.go",
+        "internal/hubreporter/relay_subscriber_test.go",
+        "internal/sysinfo/directory_sync_metadata.go",
+        "internal/api/pair_response_with_transports.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/hubreporter/... -run 'TestRelaySubscriber'",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "hubreporter",
+      "requirement_ids": ["REQ-813", "REQ-814", "REQ-820"],
+      "complexity": 5,
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 55,
+      "max_loc_delta": 550
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "Browser-as-remote-control /pair/scan view + diagnostic ring buffer endpoint (S9-08 partial)",
+      "prompt": "FIRST: read spec/009-multi-bridge-nat/{requirements.md, design.md}. SECOND: add web/src/views/PairScanView.vue exposing the webcam-driven QR scan per UX-MULTI-ACCESS-KIOSK-PAIRING.md §6 — JWT in sessionStorage; client private key in IndexedDB as non-extractable CryptoKey. (REQ-815/REQ-816) implement bridge-side endpoint GET /api/transport/diagnostics returning the 100-event ring buffer (for operator-visible Settings → Diagnostics on Android side; bridge holds the canonical log per session).",
+      "files_owned": [
+        "web/src/views/PairScanView.vue",
+        "web/src/router.js",
+        "internal/api/transport_diagnostics.go",
+        "internal/api/transport_diagnostics_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 60s ./internal/api/... -run TestTransportDiagnostics",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "api",
+      "requirement_ids": ["REQ-815", "REQ-816"],
+      "complexity": 4,
+      "risk_score": 0.3,
+      "max_wall_clock_minutes": 40,
+      "max_loc_delta": 500
+    },
+    {
+      "id": "T-003",
+      "status": "pending",
+      "title": "End-to-end integration test: Android cellular-only → Hub-relay → CG-NAT bridge (S9-09)",
+      "prompt": "FIRST: read spec/009-multi-bridge-nat/{requirements.md, design.md, acceptance/multi-bridge-nat.feature}. SECOND: add test/integration/multi_bridge_nat_test.go simulating: an Android client without LAN+RNS reachability to a CG-NAT-bridge; bridge subscribes to its relay topic via Hub; Android dispatches Compose → Hub relay → bridge → outbound MQTT. Use the meshsat-hub Hub-relay mock (this test is bridge-side; complete e2e crosses repos but this side verifies the bridge's contract). (REQ-817) confirms full round-trip.",
+      "files_owned": [
+        "test/integration/multi_bridge_nat_test.go"
+      ],
+      "acceptance_test": "go test -count=1 -timeout 300s -tags=integration ./test/integration/ -run TestMultiBridgeNAT",
+      "dependencies": ["T-001"],
+      "parallelizable": false,
+      "bounded_context": "deploy",
+      "requirement_ids": ["REQ-817"],
+      "complexity": 4,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 60,
+      "max_loc_delta": 500
+    }
+  ]
+}
