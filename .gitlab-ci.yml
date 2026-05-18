@@ -296,3 +296,45 @@ pages:
     - if: $CI_COMMIT_BRANCH == "main"
       changes:
         - docs/site/**/*
+
+# =============================================================================
+# SDD CI gate (Tier 4B) — appended 2026-05-18
+# Validates spec/, STRIDE, observability, dispatch, outcomes against the
+# canonical validator at claude-gateway:scripts/validate-project-spec.py.
+# See claude-gateway:scripts/sdd-ci-snippet.yml for the canonical version.
+# =============================================================================
+sdd_validate_spec:
+  stage: validate
+  image: python:3.12-slim
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y --no-install-recommends git curl
+    - pip install --quiet pyyaml
+    - mkdir -p /opt/sdd/scripts
+    - |
+      for f in validate-project-spec.py cgc-drift-check.py; do
+        curl -fsSL "https://gitlab.nuclearlighters.net/api/v4/projects/30/repository/files/scripts%2F${f}/raw?ref=feat%2Fsdd-tier1-validator-hardening" -o "/opt/sdd/scripts/${f}"
+        chmod +x "/opt/sdd/scripts/${f}"
+      done
+    - |
+      PARENT_SPEC_HOME=$(python3 -c "import json; pj=json.load(open(\"PROJECT.json\",encoding=\"utf-8\")); print(pj.get(\"parent_project\",{}).get(\"spec_home\",\"\") or \"\")" 2>/dev/null || echo "")
+      if [ -n "$PARENT_SPEC_HOME" ] && [ ! -d "$PARENT_SPEC_HOME" ]; then
+        echo "Cloning parent docs/ to $PARENT_SPEC_HOME for cross-parent checks..."
+        mkdir -p "$(dirname "$PARENT_SPEC_HOME")"
+        git clone --depth 1 https://gitlab.nuclearlighters.net/products/cubeos/docs.git "$PARENT_SPEC_HOME" 2>&1 | tail -3 || true
+      fi
+  script:
+    - python3 /opt/sdd/scripts/validate-project-spec.py "$CI_PROJECT_DIR"
+    - python3 /opt/sdd/scripts/cgc-drift-check.py "$CI_PROJECT_DIR" --max-age-days 90 || echo "CGC drift warnings (non-blocking)"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - PROJECT.json
+        - constitution.md
+        - spec/**/*
+        - steering/**/*
+        - adr/**/*
+        - dispatch/**/*
+        - outcomes/**/*
+  allow_failure: false
+
