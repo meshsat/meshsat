@@ -1,0 +1,308 @@
+{
+  "_schema_version": "1.0.0",
+  "_generated_at": "2026-05-18T02:08:42.153338+00:00",
+  "repo": {
+    "slug": "meshsat",
+    "youtrack_prefix": "MESHSAT",
+    "matrix_room": "!miZJJDwFQZDkuMcBqL:matrix.nuclearlighters.net",
+    "primary_language": "go",
+    "test_command": "make test",
+    "lint_command": "make lint",
+    "security_posture": "edge-deployed (Pi 5); mTLS to paired Android + Hub; certpin for outbound; Reticulum identity for mesh",
+    "parent_project": {
+      "slug": "cubeos",
+      "project_id": 16,
+      "spec_home": "/home/claude-runner/gitlab/products/cubeos/docs",
+      "note": "Track B of CubeOS \u2014 MeshSat Bridge. Standalone Pi gateway; peers with meshsat-android and meshsat-hub."
+    }
+  },
+  "spec": {
+    "feature_id": "008-kiosk-pwa-spa-hardening",
+    "parent_epic": "MESHSAT-PHASE-7",
+    "spec_revision": "1 (2026-05-18)",
+    "cgc_verified_at": "2026-05-18",
+    "spec_slug": "008-kiosk-pwa-spa-hardening"
+  },
+  "task": {
+    "id": "T-001",
+    "status": "pending",
+    "title": "Kiosk + PWA + SPA hardening",
+    "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md, acceptance/kiosk-pwa-spa-hardening.feature} AND meshsat/EXECUTION-PLAN.md \u00a77. SECOND: implement per the phase plan. Primary package: internal/web/. Tests colocated.",
+    "files_owned": [
+      "internal/web/kiosk_pwa_spa_hardening.go",
+      "internal/web/kiosk_pwa_spa_hardening_test.go"
+    ],
+    "acceptance_test": "cd meshsat && make test",
+    "dependencies": [],
+    "parallelizable": true,
+    "bounded_context": "web",
+    "requirement_ids": [
+      "REQ-700",
+      "REQ-701",
+      "REQ-702",
+      "REQ-703",
+      "REQ-704",
+      "REQ-705",
+      "REQ-706",
+      "REQ-707",
+      "REQ-708",
+      "REQ-709"
+    ],
+    "complexity": 6,
+    "risk_score": 0.4,
+    "max_wall_clock_minutes": 100,
+    "max_loc_delta": 1200,
+    "observability": {
+      "prometheus_metrics": [
+        "meshsat_kiosk_pwa_spa_hardening_requests_total",
+        "meshsat_kiosk_pwa_spa_hardening_request_duration_seconds",
+        "meshsat_kiosk_pwa_spa_hardening_errors_total"
+      ],
+      "slo_targets": {
+        "p95_latency_ms": 200,
+        "p99_latency_ms": 500,
+        "error_rate_max": 0.001,
+        "_notes": "placeholder \u2014 refine during task execution based on profiling"
+      },
+      "_notes": "Placeholder block for T-001. Replace with concrete metric names as code lands. If this task does NOT need metrics (e.g. CI/build task), replace this block with `no_observability_required: \"<reason>\"` instead."
+    }
+  },
+  "requirements": [
+    {
+      "id": "REQ-700",
+      "body": "The system shall provide capability 1 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-701",
+      "body": "The system shall provide capability 2 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-702",
+      "body": "The system shall provide capability 3 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-703",
+      "body": "The system shall provide capability 4 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-704",
+      "body": "The system shall provide capability 5 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-705",
+      "body": "The system shall provide capability 6 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-706",
+      "body": "The system shall provide capability 7 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-707",
+      "body": "The system shall provide capability 8 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-708",
+      "body": "The system shall provide capability 9 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    },
+    {
+      "id": "REQ-709",
+      "body": "The system shall provide capability 10 of kiosk + pwa + spa hardening per `meshsat/EXECUTION-PLAN.md` \u00a77."
+    }
+  ],
+  "acceptance": [
+    {
+      "feature_file": "spec/008-kiosk-pwa-spa-hardening/acceptance/kiosk-pwa-spa-hardening.feature",
+      "scenario": "Kiosk + PWA + SPA hardening capability 1",
+      "covers_reqs": [
+        "REQ-700",
+        "REQ-701",
+        "REQ-702",
+        "REQ-703",
+        "REQ-704",
+        "REQ-705",
+        "REQ-706",
+        "REQ-707",
+        "REQ-708",
+        "REQ-709"
+      ],
+      "status": "pending",
+      "test_file": null,
+      "test_function": null
+    },
+    {
+      "feature_file": "spec/008-kiosk-pwa-spa-hardening/acceptance/kiosk-pwa-spa-hardening.feature",
+      "scenario": "Kiosk + PWA + SPA hardening capability 2",
+      "covers_reqs": [
+        "REQ-700",
+        "REQ-701",
+        "REQ-702",
+        "REQ-703",
+        "REQ-704",
+        "REQ-705",
+        "REQ-706",
+        "REQ-707",
+        "REQ-708",
+        "REQ-709"
+      ],
+      "status": "pending",
+      "test_file": null,
+      "test_function": null
+    },
+    {
+      "feature_file": "spec/008-kiosk-pwa-spa-hardening/acceptance/kiosk-pwa-spa-hardening.feature",
+      "scenario": "Kiosk + PWA + SPA hardening capability 3",
+      "covers_reqs": [
+        "REQ-700",
+        "REQ-701",
+        "REQ-702",
+        "REQ-703",
+        "REQ-704",
+        "REQ-705",
+        "REQ-706",
+        "REQ-707",
+        "REQ-708",
+        "REQ-709"
+      ],
+      "status": "pending",
+      "test_file": null,
+      "test_function": null
+    },
+    {
+      "feature_file": "spec/008-kiosk-pwa-spa-hardening/acceptance/kiosk-pwa-spa-hardening.feature",
+      "scenario": "Kiosk + PWA + SPA hardening capability 4",
+      "covers_reqs": [
+        "REQ-700",
+        "REQ-701",
+        "REQ-702",
+        "REQ-703",
+        "REQ-704",
+        "REQ-705",
+        "REQ-706",
+        "REQ-707",
+        "REQ-708",
+        "REQ-709"
+      ],
+      "status": "pending",
+      "test_file": null,
+      "test_function": null
+    },
+    {
+      "feature_file": "spec/008-kiosk-pwa-spa-hardening/acceptance/kiosk-pwa-spa-hardening.feature",
+      "scenario": "Kiosk + PWA + SPA hardening capability 5",
+      "covers_reqs": [
+        "REQ-700",
+        "REQ-701",
+        "REQ-702",
+        "REQ-703",
+        "REQ-704",
+        "REQ-705",
+        "REQ-706",
+        "REQ-707",
+        "REQ-708",
+        "REQ-709"
+      ],
+      "status": "pending",
+      "test_file": null,
+      "test_function": null
+    }
+  ],
+  "stride": null,
+  "family_invariants_relevant_to_this_repo": [
+    {
+      "id": "hal-owns-the-host",
+      "short": "API containers NEVER touch host services directly \u2014 all via HAL REST",
+      "parent_article": "I",
+      "my_article_ref": "n/a",
+      "source": "docs/constitution.md \u00a7Article I"
+    },
+    {
+      "id": "port-discipline-6xxx",
+      "short": "All CubeOS-managed service ports inside 6000-6999",
+      "parent_article": "V",
+      "my_article_ref": "n/a",
+      "source": "docs/constitution.md \u00a7Article V"
+    },
+    {
+      "id": "hardware-detection-drives-capabilities",
+      "short": "Features enable/disable based on detected hardware, not install method",
+      "parent_article": "VII",
+      "my_article_ref": "C-VI",
+      "source": "docs/constitution.md \u00a7Article VII"
+    },
+    {
+      "id": "serial-port-ownership",
+      "short": "Only one HAL subsystem may claim each /dev/tty* port",
+      "parent_article": "IX",
+      "my_article_ref": "n/a",
+      "source": "docs/constitution.md \u00a7Article IX"
+    },
+    {
+      "id": "cgo-disabled-pure-go",
+      "short": "CGO_ENABLED=0 everywhere; modernc.org/sqlite for SQLite",
+      "parent_article": "XI",
+      "my_article_ref": "C-I",
+      "source": "docs/constitution.md \u00a7Article XI"
+    },
+    {
+      "id": "append-only-migrations",
+      "short": "Schema migrations file is append-only; never edit existing entries",
+      "parent_article": "XIII",
+      "my_article_ref": "n/a",
+      "source": "docs/constitution.md \u00a7Article XIII"
+    },
+    {
+      "id": "claude-code-files-gitignored",
+      "short": "CLAUDE.md and .claude/ NEVER committed; spec-kit artefacts ARE committed",
+      "parent_article": "XVII",
+      "my_article_ref": "n/a",
+      "source": "docs/constitution.md \u00a7Article XVII"
+    },
+    {
+      "id": "parallel-dev-mr-gate",
+      "short": "Parallel-dev waves use merge/<feature_id> branches + 1 MR per feature",
+      "parent_article": "XVIII",
+      "my_article_ref": "C-XIV",
+      "source": "docs/constitution.md \u00a7Article XVIII"
+    },
+    {
+      "id": "operator-identity-on-commits",
+      "short": "All commits use Kyriakos Papadopoulos / ncpjfuzl@mxmx.email via -c flags",
+      "parent_article": "XIX",
+      "my_article_ref": "n/a",
+      "source": "docs/constitution.md \u00a7Article XIX"
+    },
+    {
+      "id": "meshsat-uplink-v1-protocol-parity",
+      "short": "meshsat/internal/hubreporter/protocol.go MUST stay byte-identical to meshsat-hub/internal/protocol/protocol.go via ProtocolVersion field",
+      "parent_article": "n/a (MeshSat-family scope only)",
+      "my_article_ref": "C-V",
+      "source": "meshsat-hub/constitution.md \u00a7Article XVII + meshsat/constitution.md \u00a7C-V"
+    },
+    {
+      "id": "smaz2-dictionary-byte-for-byte-parity",
+      "short": "SMAZ2 dictionary in meshsat-hub/internal/compress/ must be byte-identical to meshsat/internal/compress/dict_meshtastic.go",
+      "parent_article": "n/a (MeshSat-family scope only)",
+      "my_article_ref": "C-III",
+      "source": "meshsat-hub/constitution.md \u00a7Article VI + meshsat/constitution.md \u00a7C-III"
+    }
+  ],
+  "constitution_articles_relevant_to_files_owned": [],
+  "branch_convention": "merge/T-001",
+  "mr_template": {
+    "title_format": "feat(008-kiosk-pwa-spa-hardening): {short_summary} (T-001)",
+    "body_must_cite": [
+      "REQ-700",
+      "REQ-701",
+      "REQ-702",
+      "REQ-703",
+      "REQ-704",
+      "REQ-705",
+      "REQ-706",
+      "REQ-707",
+      "REQ-708",
+      "REQ-709"
+    ],
+    "commit_identity_required": "Kyriakos Papadopoulos <ncpjfuzl@mxmx.email>",
+    "commit_flag_pattern": "git -c user.name=\"Kyriakos Papadopoulos\" -c user.email=\"ncpjfuzl@mxmx.email\" commit ..."
+  }
+}
