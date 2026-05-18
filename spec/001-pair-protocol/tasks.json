@@ -2,13 +2,13 @@
   "feature_id": "001-pair-protocol",
   "_cgc_verified_at": "2026-05-18",
   "parent_epic": "MESHSAT-PHASE-8",
-  "spec_revision": "2 (2026-05-18 — concrete CGC-grounded REQs replacing templated v1)",
+  "spec_revision": "2 (2026-05-18 \u2014 concrete CGC-grounded REQs replacing templated v1)",
   "tasks": [
     {
       "id": "T-001",
       "status": "completed",
-      "title": "Bridge-side pair-mode implementation (pair.go) — PIN + pairing key + HKDF + HMAC + cert/JWT",
-      "prompt": "(RETROSPECTIVE — shipped.) internal/pair/pair.go implements the bridge side of pair-mode v1 per MESHSAT-594/598. PinLength=6, DefaultArmTTL=90s, JWTTTL=1h. HKDF-SHA256 for shared secret, HMAC-SHA256 for claim verification, Ed25519 for client identity, JSON wire format (NOT CBOR).",
+      "title": "Bridge-side pair-mode implementation (pair.go) \u2014 PIN + pairing key + HKDF + HMAC + cert/JWT",
+      "prompt": "(RETROSPECTIVE \u2014 shipped.) internal/pair/pair.go implements the bridge side of pair-mode v1 per MESHSAT-594/598. PinLength=6, DefaultArmTTL=90s, JWTTTL=1h. HKDF-SHA256 for shared secret, HMAC-SHA256 for claim verification, Ed25519 for client identity, JSON wire format (NOT CBOR).",
       "files_owned": [
         "internal/pair/pair.go",
         "internal/pair/pair_test.go"
@@ -18,17 +18,51 @@
       "dependencies": [],
       "parallelizable": true,
       "bounded_context": "pair",
-      "requirement_ids": ["REQ-001", "REQ-002", "REQ-003", "REQ-005", "REQ-006", "REQ-007", "REQ-008", "REQ-009", "REQ-010", "REQ-011", "REQ-013", "REQ-015", "REQ-019", "REQ-020", "REQ-021", "REQ-022", "REQ-023", "REQ-024", "REQ-025"],
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-002",
+        "REQ-003",
+        "REQ-005",
+        "REQ-006",
+        "REQ-007",
+        "REQ-008",
+        "REQ-009",
+        "REQ-010",
+        "REQ-011",
+        "REQ-013",
+        "REQ-015",
+        "REQ-019",
+        "REQ-020",
+        "REQ-021",
+        "REQ-022",
+        "REQ-023",
+        "REQ-024",
+        "REQ-025"
+      ],
       "complexity": 7,
       "risk_score": 0.0,
       "max_wall_clock_minutes": 120,
       "max_loc_delta": 1200,
-      "completed_at": "2026-03"
+      "completed_at": "2026-03",
+      "observability": {
+        "prometheus_metrics": [
+          "meshsat_pair_protocol_requests_total",
+          "meshsat_pair_protocol_request_duration_seconds",
+          "meshsat_pair_protocol_errors_total"
+        ],
+        "slo_targets": {
+          "p95_latency_ms": 200,
+          "p99_latency_ms": 500,
+          "error_rate_max": 0.001,
+          "_notes": "placeholder \u2014 refine during task execution based on profiling"
+        },
+        "_notes": "Placeholder block for T-001. Replace with concrete metric names as code lands. If this task does NOT need metrics (e.g. CI/build task), replace this block with `no_observability_required: \"<reason>\"` instead."
+      }
     },
     {
       "id": "T-002",
       "status": "pending",
-      "title": "Claim handler wiring (internal/api/ → pair.HandleClaim) + paired_clients schema + JWT middleware",
+      "title": "Claim handler wiring (internal/api/ \u2192 pair.HandleClaim) + paired_clients schema + JWT middleware",
       "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, acceptance/pair-protocol.feature} AND internal/pair/pair.go for the constructor signatures. SECOND: add the HTTP route /api/v2/pair/claim in internal/api/ that calls pair.HandleClaim. Add the paired_clients schema migration in internal/database/. Add the JWT-verification middleware. Add /api/v2/pair/refresh for JWT refresh per REQ-018. Tests colocated.",
       "files_owned": [
         "internal/api/pair_handler.go",
@@ -40,11 +74,32 @@
       "dependencies": [],
       "parallelizable": false,
       "bounded_context": "pair",
-      "requirement_ids": ["REQ-004", "REQ-012", "REQ-014", "REQ-016", "REQ-017", "REQ-018"],
+      "requirement_ids": [
+        "REQ-004",
+        "REQ-012",
+        "REQ-014",
+        "REQ-016",
+        "REQ-017",
+        "REQ-018"
+      ],
       "complexity": 6,
       "risk_score": 0.5,
       "max_wall_clock_minutes": 90,
-      "max_loc_delta": 800
+      "max_loc_delta": 800,
+      "observability": {
+        "prometheus_metrics": [
+          "meshsat_pair_protocol_requests_total",
+          "meshsat_pair_protocol_request_duration_seconds",
+          "meshsat_pair_protocol_errors_total"
+        ],
+        "slo_targets": {
+          "p95_latency_ms": 200,
+          "p99_latency_ms": 500,
+          "error_rate_max": 0.001,
+          "_notes": "placeholder \u2014 refine during task execution based on profiling"
+        },
+        "_notes": "Placeholder block for T-002. Replace with concrete metric names as code lands. If this task does NOT need metrics (e.g. CI/build task), replace this block with `no_observability_required: \"<reason>\"` instead."
+      }
     }
   ]
 }

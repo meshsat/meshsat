@@ -32,7 +32,21 @@
       "complexity": 6,
       "risk_score": 0.4,
       "max_wall_clock_minutes": 100,
-      "max_loc_delta": 1200
+      "max_loc_delta": 1200,
+      "observability": {
+        "prometheus_metrics": [
+          "meshsat_multi_bridge_nat_requests_total",
+          "meshsat_multi_bridge_nat_request_duration_seconds",
+          "meshsat_multi_bridge_nat_errors_total"
+        ],
+        "slo_targets": {
+          "p95_latency_ms": 200,
+          "p99_latency_ms": 500,
+          "error_rate_max": 0.001,
+          "_notes": "placeholder \u2014 refine during task execution based on profiling"
+        },
+        "_notes": "Placeholder block for T-001. Replace with concrete metric names as code lands. If this task does NOT need metrics (e.g. CI/build task), replace this block with `no_observability_required: \"<reason>\"` instead."
+      }
     }
   ]
 }
