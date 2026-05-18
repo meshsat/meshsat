@@ -1,0 +1,37 @@
+{
+  "feature_id": "008-kiosk-pwa-spa-hardening",
+  "parent_epic": "MESHSAT-PHASE-7",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Kiosk + PWA + SPA hardening",
+      "prompt": "FIRST: read spec/008-kiosk-pwa-spa-hardening/{requirements.md, design.md, acceptance/kiosk-pwa-spa-hardening.feature} AND meshsat/EXECUTION-PLAN.md \u00a77. SECOND: implement per the phase plan. Primary package: internal/web/. Tests colocated.",
+      "files_owned": [
+        "internal/web/kiosk_pwa_spa_hardening.go",
+        "internal/web/kiosk_pwa_spa_hardening_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": [
+        "REQ-700",
+        "REQ-701",
+        "REQ-702",
+        "REQ-703",
+        "REQ-704",
+        "REQ-705",
+        "REQ-706",
+        "REQ-707",
+        "REQ-708",
+        "REQ-709"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

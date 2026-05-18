@@ -1,0 +1,37 @@
+openapi: 3.0.3
+info:
+  title: meshsat Bridge — pair protocol API (subset)
+  version: 0.20.0
+servers:
+  - url: https://bridge.local/api/v2
+paths:
+  /pair/claim:
+    post:
+      summary: Bridge accepts pair-claim from Android
+      operationId: pairClaim
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [csr, client_x25519_pub, hmac]
+              properties:
+                csr: {type: string}
+                client_x25519_pub: {type: string}
+                hmac: {type: string}
+      responses:
+        '200':
+          description: Pair claim succeeded; client cert + JWT issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [client_cert, client_jwt, ca_chain]
+                properties:
+                  client_cert: {type: string}
+                  client_jwt: {type: string}
+                  ca_chain: {type: string}
+                  rns_announce: {type: string, nullable: true}
+                  hub_url: {type: string, nullable: true}
+        '401': {description: HMAC verification failed}
+        '422': {description: CSR rejected}

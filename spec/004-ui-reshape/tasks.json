@@ -1,0 +1,37 @@
+{
+  "feature_id": "004-ui-reshape",
+  "parent_epic": "MESHSAT-PHASE-3",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "UI reshape (Operator/Engineer + 5-item nav)",
+      "prompt": "FIRST: read spec/004-ui-reshape/{requirements.md, design.md, acceptance/ui-reshape.feature} AND meshsat/EXECUTION-PLAN.md \u00a73. SECOND: implement per the phase plan. Primary package: internal/web/. Tests colocated.",
+      "files_owned": [
+        "internal/web/ui_reshape.go",
+        "internal/web/ui_reshape_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": [
+        "REQ-300",
+        "REQ-301",
+        "REQ-302",
+        "REQ-303",
+        "REQ-304",
+        "REQ-305",
+        "REQ-306",
+        "REQ-307",
+        "REQ-308",
+        "REQ-309"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

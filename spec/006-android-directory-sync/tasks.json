@@ -1,0 +1,37 @@
+{
+  "feature_id": "006-android-directory-sync",
+  "parent_epic": "MESHSAT-PHASE-5",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Android directory sync (bridge side)",
+      "prompt": "FIRST: read spec/006-android-directory-sync/{requirements.md, design.md, acceptance/android-directory-sync.feature} AND meshsat/EXECUTION-PLAN.md \u00a75. SECOND: implement per the phase plan. Primary package: internal/directory/. Tests colocated.",
+      "files_owned": [
+        "internal/directory/android_directory_sync.go",
+        "internal/directory/android_directory_sync_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "directory",
+      "requirement_ids": [
+        "REQ-500",
+        "REQ-501",
+        "REQ-502",
+        "REQ-503",
+        "REQ-504",
+        "REQ-505",
+        "REQ-506",
+        "REQ-507",
+        "REQ-508",
+        "REQ-509"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

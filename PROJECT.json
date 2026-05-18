@@ -1,0 +1,72 @@
+{
+  "slug": "meshsat",
+  "title": "MeshSat Bridge \u2014 multi-transport mesh + satellite + tactical gateway",
+  "youtrack_prefix": "MESHSAT",
+  "youtrack_disambiguator": "tag:bridge OR summary contains 'bridge' / 'reticulum' / 'meshtastic' / 'pair'",
+  "matrix_room": "!miZJJDwFQZDkuMcBqL:matrix.nuclearlighters.net",
+  "primary_language": "go",
+  "test_command": "make test",
+  "lint_command": "make lint",
+  "build_command": "make build",
+  "ci_pipeline": ".gitlab-ci.yml",
+  "parent_project": {
+    "slug": "cubeos",
+    "project_id": 16,
+    "spec_home": "/home/claude-runner/gitlab/products/cubeos/docs",
+    "note": "Track B of CubeOS \u2014 MeshSat Bridge. Standalone Pi gateway; peers with meshsat-android and meshsat-hub."
+  },
+  "bounded_contexts": [
+    "api",
+    "certpin",
+    "channel",
+    "codec",
+    "compress",
+    "config",
+    "database",
+    "dedup",
+    "device",
+    "directory",
+    "engine",
+    "federation",
+    "gateway",
+    "hemb",
+    "hubreporter",
+    "keystore",
+    "pair",
+    "ratelimit",
+    "reticulum",
+    "routing",
+    "rules",
+    "spectrum",
+    "sysinfo",
+    "timesync",
+    "transport",
+    "types",
+    "cmd",
+    "web"
+  ],
+  "_bounded_contexts_note": "1:1 with real top-level internal/ packages (CGC-verified 2026-05-18: 27 packages).",
+  "max_parallel_workers": 3,
+  "max_loc_per_worker": 500,
+  "owners": [
+    "ufwtqkgz@meshsat.net"
+  ],
+  "risk_profile": "high",
+  "gitlab_project_id": 27,
+  "release_workflow": "push-to-main-deploys-automatically (CI auto-deploys to Pi-deployed bridges)",
+  "parallel_dev_exception": {
+    "allowed": true,
+    "workflow": "merge/<feature_id> short-lived branch + 1 MR per feature + auto-delete branch on merge",
+    "rationale": "Per CubeOS project-level ADR-0008."
+  },
+  "security_posture": "edge-deployed (Pi 5); mTLS to paired Android + Hub; certpin for outbound; Reticulum identity for mesh",
+  "current_version": "0.20.0",
+  "go_version": "1.24",
+  "cgo_required": false,
+  "test_count": 129,
+  "surfaces": {
+    "http_api": true,
+    "events": true,
+    "persistent_data": true
+  }
+}

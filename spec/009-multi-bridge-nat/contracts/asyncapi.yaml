@@ -1,0 +1,23 @@
+asyncapi: 2.6.0
+info:
+  title: meshsat Bridge — federation events
+  version: 1.0.0
+channels:
+  meshsat/bridge/{bridge_id}/federation/announce:
+    publish:
+      operationId: publishFederationAnnounce
+      message:
+        contentType: application/json
+        payload:
+          type: object
+          required: [protocol, timestamp, bridge_id, reticulum_identity]
+          properties:
+            protocol: {type: string, enum: ["meshsat-uplink/v1"]}
+            timestamp:
+              type: string
+              pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.*$"
+            bridge_id: {type: string}
+            reticulum_identity: {type: string, pattern: "^[0-9a-f]{64}$"}
+            transports_offered:
+              type: array
+              items: {type: string}

@@ -1,0 +1,37 @@
+{
+  "feature_id": "007-compliance-polish",
+  "parent_epic": "MESHSAT-PHASE-6",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Compliance + polish (WCAG AAA, MLS, USMTF, FIPS)",
+      "prompt": "FIRST: read spec/007-compliance-polish/{requirements.md, design.md, acceptance/compliance-polish.feature} AND meshsat/EXECUTION-PLAN.md \u00a76. SECOND: implement per the phase plan. Primary package: internal/web/. Tests colocated.",
+      "files_owned": [
+        "internal/web/compliance_polish.go",
+        "internal/web/compliance_polish_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": [
+        "REQ-600",
+        "REQ-601",
+        "REQ-602",
+        "REQ-603",
+        "REQ-604",
+        "REQ-605",
+        "REQ-606",
+        "REQ-607",
+        "REQ-608",
+        "REQ-609"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

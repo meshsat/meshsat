@@ -1,0 +1,37 @@
+{
+  "feature_id": "003-contact-aware-dispatcher",
+  "parent_epic": "MESHSAT-PHASE-2",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Contact-aware dispatcher + STANAG 4406 precedence",
+      "prompt": "FIRST: read spec/003-contact-aware-dispatcher/{requirements.md, design.md, acceptance/contact-aware-dispatcher.feature} AND meshsat/EXECUTION-PLAN.md \u00a72. SECOND: implement per the phase plan. Primary package: internal/engine/. Tests colocated.",
+      "files_owned": [
+        "internal/engine/contact_aware_dispatcher.go",
+        "internal/engine/contact_aware_dispatcher_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "engine",
+      "requirement_ids": [
+        "REQ-200",
+        "REQ-201",
+        "REQ-202",
+        "REQ-203",
+        "REQ-204",
+        "REQ-205",
+        "REQ-206",
+        "REQ-207",
+        "REQ-208",
+        "REQ-209"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

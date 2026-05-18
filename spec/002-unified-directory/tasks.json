@@ -1,0 +1,37 @@
+{
+  "feature_id": "002-unified-directory",
+  "parent_epic": "MESHSAT-PHASE-1",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Unified directory",
+      "prompt": "FIRST: read spec/002-unified-directory/{requirements.md, design.md, acceptance/unified-directory.feature} AND meshsat/EXECUTION-PLAN.md \u00a71. SECOND: implement per the phase plan. Primary package: internal/directory/. Tests colocated.",
+      "files_owned": [
+        "internal/directory/unified_directory.go",
+        "internal/directory/unified_directory_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "directory",
+      "requirement_ids": [
+        "REQ-100",
+        "REQ-101",
+        "REQ-102",
+        "REQ-103",
+        "REQ-104",
+        "REQ-105",
+        "REQ-106",
+        "REQ-107",
+        "REQ-108",
+        "REQ-109"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

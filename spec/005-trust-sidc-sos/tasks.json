@@ -1,0 +1,37 @@
+{
+  "feature_id": "005-trust-sidc-sos",
+  "parent_epic": "MESHSAT-PHASE-4",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Trust levels + SIDC/2525D + SOS button",
+      "prompt": "FIRST: read spec/005-trust-sidc-sos/{requirements.md, design.md, acceptance/trust-sidc-sos.feature} AND meshsat/EXECUTION-PLAN.md \u00a74. SECOND: implement per the phase plan. Primary package: internal/web/. Tests colocated.",
+      "files_owned": [
+        "internal/web/trust_sidc_sos.go",
+        "internal/web/trust_sidc_sos_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "web",
+      "requirement_ids": [
+        "REQ-400",
+        "REQ-401",
+        "REQ-402",
+        "REQ-403",
+        "REQ-404",
+        "REQ-405",
+        "REQ-406",
+        "REQ-407",
+        "REQ-408",
+        "REQ-409"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

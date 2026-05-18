@@ -1,0 +1,37 @@
+{
+  "feature_id": "001-pair-protocol",
+  "parent_epic": "MESHSAT-PHASE-8",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Pair protocol v1",
+      "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, acceptance/pair-protocol.feature} AND meshsat/EXECUTION-PLAN.md \u00a78. SECOND: implement per the phase plan. Primary package: internal/pair/. Tests colocated.",
+      "files_owned": [
+        "internal/pair/pair_protocol.go",
+        "internal/pair/pair_protocol_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "pair",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-002",
+        "REQ-003",
+        "REQ-004",
+        "REQ-005",
+        "REQ-006",
+        "REQ-007",
+        "REQ-008",
+        "REQ-009",
+        "REQ-010"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}

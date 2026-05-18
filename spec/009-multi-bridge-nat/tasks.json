@@ -1,0 +1,37 @@
+{
+  "feature_id": "009-multi-bridge-nat",
+  "parent_epic": "MESHSAT-PHASE-9",
+  "spec_revision": "1 (2026-05-18)",
+  "tasks": [
+    {
+      "id": "T-001",
+      "status": "pending",
+      "title": "Multi-bridge + NAT + Hub relay",
+      "prompt": "FIRST: read spec/009-multi-bridge-nat/{requirements.md, design.md, acceptance/multi-bridge-nat.feature} AND meshsat/EXECUTION-PLAN.md \u00a79. SECOND: implement per the phase plan. Primary package: internal/federation/. Tests colocated.",
+      "files_owned": [
+        "internal/federation/multi_bridge_nat.go",
+        "internal/federation/multi_bridge_nat_test.go"
+      ],
+      "acceptance_test": "cd meshsat && make test",
+      "dependencies": [],
+      "parallelizable": true,
+      "bounded_context": "federation",
+      "requirement_ids": [
+        "REQ-800",
+        "REQ-801",
+        "REQ-802",
+        "REQ-803",
+        "REQ-804",
+        "REQ-805",
+        "REQ-806",
+        "REQ-807",
+        "REQ-808",
+        "REQ-809"
+      ],
+      "complexity": 6,
+      "risk_score": 0.4,
+      "max_wall_clock_minutes": 100,
+      "max_loc_delta": 1200
+    }
+  ]
+}
