@@ -2,37 +2,49 @@
   "feature_id": "001-pair-protocol",
   "_cgc_verified_at": "2026-05-18",
   "parent_epic": "MESHSAT-PHASE-8",
-  "spec_revision": "1 (2026-05-18)",
+  "spec_revision": "2 (2026-05-18 — concrete CGC-grounded REQs replacing templated v1)",
   "tasks": [
     {
       "id": "T-001",
-      "status": "pending",
-      "title": "Pair protocol v1",
-      "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, acceptance/pair-protocol.feature} AND meshsat/EXECUTION-PLAN.md \u00a78. SECOND: implement per the phase plan. Primary package: internal/pair/. Tests colocated.",
+      "status": "completed",
+      "title": "Bridge-side pair-mode implementation (pair.go) — PIN + pairing key + HKDF + HMAC + cert/JWT",
+      "prompt": "(RETROSPECTIVE — shipped.) internal/pair/pair.go implements the bridge side of pair-mode v1 per MESHSAT-594/598. PinLength=6, DefaultArmTTL=90s, JWTTTL=1h. HKDF-SHA256 for shared secret, HMAC-SHA256 for claim verification, Ed25519 for client identity, JSON wire format (NOT CBOR).",
       "files_owned": [
-        "internal/pair/pair_protocol.go",
-        "internal/pair/pair_protocol_test.go"
+        "internal/pair/pair.go",
+        "internal/pair/pair_test.go"
       ],
-      "acceptance_test": "cd meshsat && make test",
+      "_files_owned_note": "CGC-verified 2026-05-18: internal/pair/ contains exactly pair.go + pair_test.go. Constants PinLength, DefaultArmTTL, JWTTTL exported. JSON wire format per package docstring (NOT CBOR).",
+      "acceptance_test": "cd meshsat && go test -v ./internal/pair/",
       "dependencies": [],
       "parallelizable": true,
       "bounded_context": "pair",
-      "requirement_ids": [
-        "REQ-001",
-        "REQ-002",
-        "REQ-003",
-        "REQ-004",
-        "REQ-005",
-        "REQ-006",
-        "REQ-007",
-        "REQ-008",
-        "REQ-009",
-        "REQ-010"
+      "requirement_ids": ["REQ-001", "REQ-002", "REQ-003", "REQ-005", "REQ-006", "REQ-007", "REQ-008", "REQ-009", "REQ-010", "REQ-011", "REQ-013", "REQ-015", "REQ-019", "REQ-020", "REQ-021", "REQ-022", "REQ-023", "REQ-024", "REQ-025"],
+      "complexity": 7,
+      "risk_score": 0.0,
+      "max_wall_clock_minutes": 120,
+      "max_loc_delta": 1200,
+      "completed_at": "2026-03"
+    },
+    {
+      "id": "T-002",
+      "status": "pending",
+      "title": "Claim handler wiring (internal/api/ → pair.HandleClaim) + paired_clients schema + JWT middleware",
+      "prompt": "FIRST: read spec/001-pair-protocol/{requirements.md, design.md, acceptance/pair-protocol.feature} AND internal/pair/pair.go for the constructor signatures. SECOND: add the HTTP route /api/v2/pair/claim in internal/api/ that calls pair.HandleClaim. Add the paired_clients schema migration in internal/database/. Add the JWT-verification middleware. Add /api/v2/pair/refresh for JWT refresh per REQ-018. Tests colocated.",
+      "files_owned": [
+        "internal/api/pair_handler.go",
+        "internal/api/pair_handler_test.go",
+        "internal/database/paired_clients.go",
+        "internal/api/jwt_middleware.go"
       ],
+      "acceptance_test": "cd meshsat && go test -v ./internal/api/ -run TestPair",
+      "dependencies": [],
+      "parallelizable": false,
+      "bounded_context": "pair",
+      "requirement_ids": ["REQ-004", "REQ-012", "REQ-014", "REQ-016", "REQ-017", "REQ-018"],
       "complexity": 6,
-      "risk_score": 0.4,
-      "max_wall_clock_minutes": 100,
-      "max_loc_delta": 1200
+      "risk_score": 0.5,
+      "max_wall_clock_minutes": 90,
+      "max_loc_delta": 800
     }
   ]
 }
