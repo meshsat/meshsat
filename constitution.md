@@ -4,7 +4,7 @@ Inherits CubeOS project-level constitution + meshsat-family conventions. Compone
 
 ## Article C-I — `CGO_ENABLED=0` everywhere
 
-The system shall NEVER `import "C"` (CGO_ENABLED=0 mandatory). CGC-verified: grep returns 0 hits across the repo. SQLite via `modernc.org/sqlite`.
+The system shall NEVER import the cgo pseudo-package `C` (CGO_ENABLED=0 mandatory). Verified: zero hits across the repo. SQLite via `modernc.org/sqlite`.
 
 ## Article C-II — Reticulum identity is the mesh root of trust
 

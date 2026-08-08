@@ -9,4 +9,4 @@ Accepted
 Cross-compile Pi ARM64 + x86_64 from one build host; pure-Go SQLite via modernc.org/sqlite.
 
 ## Decision
-Never `import "C"`. CGC-verified.
+Never import the cgo pseudo-package `C`. Verified: zero hits across the repo.
