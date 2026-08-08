@@ -237,17 +237,17 @@ func TestInterfaceCost(t *testing.T) {
 	if InterfaceCost(IfaceMQTT) != 0 {
 		t.Error("MQTT should be free")
 	}
-	if InterfaceCost(IfaceTor) != 0 {
-		t.Error("Tor should be free")
+	if InterfaceCost(IfaceAX25) != 0 {
+		t.Error("AX.25 should be free — a non-zero cost excludes ax25_0 from HeMB bond allocation [MESHSAT-672]")
 	}
-	if InterfaceCost(IfaceWireGuard) != 0 {
-		t.Error("WireGuard should be free")
+	if InterfaceCost(IfaceBLE) != 0 {
+		t.Error("BLE should be free")
 	}
 	if InterfaceCost(IfaceIridium) != 0.05 {
 		t.Errorf("Iridium cost: got %f, want 0.05", InterfaceCost(IfaceIridium))
 	}
-	if InterfaceCost(IfaceGlobalstar) != 0.02 {
-		t.Errorf("Globalstar cost: got %f, want 0.02", InterfaceCost(IfaceGlobalstar))
+	if InterfaceCost(IfaceCellular) != 0.005 {
+		t.Errorf("Cellular cost: got %f, want 0.005", InterfaceCost(IfaceCellular))
 	}
 }
 

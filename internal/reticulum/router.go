@@ -14,20 +14,16 @@ const DefaultRouteTTL = 30 * time.Minute
 type InterfaceType string
 
 const (
-	IfaceMesh       InterfaceType = "mesh"
-	IfaceMQTT       InterfaceType = "mqtt"
-	IfaceTor        InterfaceType = "tor"
-	IfaceWireGuard  InterfaceType = "wireguard"
-	IfaceIridium    InterfaceType = "iridium"
-	IfaceCellular   InterfaceType = "cellular"
-	IfaceGlobalstar InterfaceType = "globalstar"
-	IfaceZigBee     InterfaceType = "zigbee"
-	IfaceAPRS       InterfaceType = "aprs"
-	IfaceAX25       InterfaceType = "ax25"
-	IfaceBLE        InterfaceType = "ble"
-	IfaceTCP        InterfaceType = "tcp"
-	IfaceWebhook    InterfaceType = "webhook"
-	IfaceLocal      InterfaceType = "local"
+	IfaceMesh     InterfaceType = "mesh"
+	IfaceMQTT     InterfaceType = "mqtt"
+	IfaceIridium  InterfaceType = "iridium"
+	IfaceCellular InterfaceType = "cellular"
+	IfaceZigBee   InterfaceType = "zigbee"
+	IfaceAPRS     InterfaceType = "aprs"
+	IfaceAX25     InterfaceType = "ax25"
+	IfaceBLE      InterfaceType = "ble"
+	IfaceTCP      InterfaceType = "tcp"
+	IfaceWebhook  InterfaceType = "webhook"
 )
 
 // InterfaceCost returns the per-message cost for a given interface.
@@ -41,12 +37,10 @@ const (
 // exclude it from bond allocation. [MESHSAT-672]
 func InterfaceCost(iface InterfaceType) float64 {
 	switch iface {
-	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceAX25, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceTor, IfaceWireGuard, IfaceWebhook, IfaceLocal:
+	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceAX25, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceWebhook:
 		return 0
 	case IfaceCellular:
 		return 0.005 // SMS cost
-	case IfaceGlobalstar:
-		return 0.02
 	case IfaceIridium:
 		return 0.05
 	default:

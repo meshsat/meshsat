@@ -166,9 +166,18 @@ func RegisterDefaults(r *Registry) {
 		},
 	})
 
+	// IPoUGRS is RESERVED AND NOT IMPLEMENTED. It originates from an
+	// April-1st RFC-tradition draft and has no transmit or receive driver
+	// anywhere in the tree — only this descriptor, a HeMB bearer profile
+	// (internal/hemb/profiles.go) and failover branches
+	// (internal/engine/failover.go) reference it.
+	//
+	// Do NOT include it in any public or funder-facing channel or transport
+	// count. The supported figure is 8 transport bearers across 9 wired
+	// Reticulum interfaces; see cmd/meshsat/main.go for the registrations.
 	r.Register(ChannelDescriptor{
 		ID:            "ipougrs",
-		Label:         "IPoUGRS (GSM Ring Signal)",
+		Label:         "IPoUGRS (GSM Ring Signal) — reserved, not implemented",
 		IsPaid:        false,
 		CanSend:       true,
 		CanReceive:    true,

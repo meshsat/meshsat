@@ -44,7 +44,15 @@ The MeshSat ecosystem is a **remarkably ambitious and well-executed** project sp
 **Key Strengths:**
 - Highest test density in the ecosystem (3.4 tests per file)
 - 9 Reticulum transport interfaces operational
-- HeMB protocol verified in field test (3-bearer, 0 failures)
+- HeMB protocol validated in a 3-bearer full-duplex field test (2026-04-01): 111 generations
+  decoded across both directions, 0 decode failures, P50 0–3 ms. Bonds were
+  `mesh_0 + tcp_0 + cellular_0` one way and `mesh_0 + tcp_0 + iridium_imt_0` the other; the
+  IMT satellite leg did not acquire (2 bars). Raw data: `~/gitlab/rfc/hemb/field-data/
+  full-duplex-mega-test-2026-04-01.md`.
+  Measured separately, a 1,000-message bench stress over 2 bonded free bearers (2026-03-30)
+  sent 830 and lost 170 to total bearer loss, at `cost_incurred: 0` — all traffic rode free
+  bearers. The two runs measure different things and neither figure should be quoted for the
+  other.
 - DeviceSupervisor USB hot-plug with auto-identification cascade
 
 **Critical Gaps:**
