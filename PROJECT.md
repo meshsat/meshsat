@@ -4,17 +4,33 @@
 
 ## Role in the MeshSat family
 
-`meshsat` (GitLab project 27) is the **Bridge** — the standalone Pi gateway that brokers messages between 10 transport types: Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704), Cellular SMS, ZigBee, MQTT, Webhooks, APRS, TAK/CoT XML, direct serial. Peers with `meshsat-android` + `meshsat-hub` over MQTT (meshsat-uplink/v1) + Reticulum + BLE.
+`meshsat` (GitLab project 27) is the **Bridge** — the standalone Pi gateway that brokers messages
+across **eight transport bearers, wired as nine Reticulum interfaces** in `cmd/meshsat/main.go`:
+Meshtastic LoRa (`mesh_0`), Iridium (`iridium_0` SBD on the 9603N and `iridium_imt_0` IMT on the
+9704 — one bearer, two modems and two protocols), APRS/AX.25 (`ax25_0`), Cellular SMS (`sms_0`),
+ZigBee (`zigbee_0`), BLE GATT (`ble_0`), TCP (`tcp_0`) and MQTT (`mqtt_rns_0`). TAK/CoT and
+webhooks are supported as **integrations**, not bearers. Peers with `meshsat-android` +
+`meshsat-hub` over MQTT (meshsat-uplink/v1) + Reticulum + BLE.
 
-## CGC-verified scope (2026-05-18)
+## Measured scope (recounted from the tree 2026-08-08)
 
-- **529 files / 37672 functions / 1900 classes / 104 modules** — biggest of the MeshSat family
-- 27 real internal/ packages
+Superseding the CGC-derived block dated 2026-05-18, which was wrong by roughly 8× on functions
+and counted "classes" in a language that has none. Every figure below is reproducible with the
+command beside it.
+
+- **404 Go files** — 275 non-test (`find . -name '*.go' -not -name '*_test.go'`) + 129 test
+- **4.713 Go function declarations** — 3.067 non-test, 1.646 in test files
+  (`grep -hE '^func '`). The previous "37672 functions" was out by a factor of eight.
+- **Go has no classes.** The previous "1900 classes" described nothing.
+- **26 packages under `internal/`** (`find internal -maxdepth 1 -mindepth 1 -type d`), not 27
+- **126.747 total Go lines**, of which 85.995 are non-test
+- **1.342 test functions** across 129 test files, gated in CI on main
+- **23 Vue views** under `web/src/views/`
 - Entry points: `cmd/meshsat/main.go` + `cmd/jspr-helper/main.go`
-- Version 0.20.0
-- 129 test files
-- No CGO (CGC-verified — `grep -r "import \"C\""` returns 0)
-- Reticulum-compatible routing layer with 9 cross-connected interfaces (per README)
+- No CGO — the tree contains no C imports and builds with `CGO_ENABLED=0`
+
+Recount before quoting any of these externally — the audit found stale counts in every
+repository's README, CLAUDE.md and PROJECT.md. Do not copy a number forward without rechecking.
 
 ## What this repo owns (CGC-verified packages)
 

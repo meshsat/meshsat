@@ -310,9 +310,25 @@ sdd_validate_spec:
     - apt-get update -qq && apt-get install -qq -y --no-install-recommends git curl
     - pip install --quiet pyyaml
     - mkdir -p /opt/sdd/scripts
+    # Pinned to an immutable commit rather than a moving feature-branch ref.
+    # The branch this used to track (feat/sdd-tier1-validator-hardening on
+    # project 30) can be renamed, deleted or force-pushed by unrelated work,
+    # and this job blocks the validate stage — so a change in another
+    # repository could stop deploys to the field kits. Pin, and fail open if
+    # the validator cannot be fetched: a fetch failure means we could not
+    # validate, not that validation failed. Genuine validation errors still
+    # block, in `script:` below.
     - |
+      SDD_VALIDATOR_REF=df93a44304e8a1657b4ea19c02980b9a9d74b96e
       for f in validate-project-spec.py cgc-drift-check.py; do
-        curl -fsSL "https://gitlab.nuclearlighters.net/api/v4/projects/30/repository/files/scripts%2F${f}/raw?ref=feat%2Fsdd-tier1-validator-hardening" -o "/opt/sdd/scripts/${f}"
+        if ! curl -fsSL \
+            --retry 3 --retry-delay 2 --max-time 30 \
+            "https://gitlab.nuclearlighters.net/api/v4/projects/30/repository/files/scripts%2F${f}/raw?ref=${SDD_VALIDATOR_REF}" \
+            -o "/opt/sdd/scripts/${f}"; then
+          echo "WARNING: could not fetch ${f} at ${SDD_VALIDATOR_REF} — skipping SDD validation."
+          echo "SDD_SKIP=1" >> sdd.env
+          exit 0
+        fi
         chmod +x "/opt/sdd/scripts/${f}"
       done
     - |
@@ -323,6 +339,14 @@ sdd_validate_spec:
         git clone --depth 1 https://gitlab.nuclearlighters.net/products/cubeos/docs.git "$PARENT_SPEC_HOME" 2>&1 | tail -3 || true
       fi
   script:
+    # Explicit guard as well as the before_script exit: if the validator was
+    # not fetched there is nothing to validate against, and that must not be
+    # reported as a spec failure.
+    - |
+      if [ ! -x /opt/sdd/scripts/validate-project-spec.py ]; then
+        echo "SDD validator unavailable — skipping (see fetch warning above)."
+        exit 0
+      fi
     - python3 /opt/sdd/scripts/validate-project-spec.py "$CI_PROJECT_DIR"
     - python3 /opt/sdd/scripts/cgc-drift-check.py "$CI_PROJECT_DIR" --max-age-days 90 || echo "CGC drift warnings (non-blocking)"
   rules:

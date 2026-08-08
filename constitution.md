@@ -22,9 +22,16 @@ The system shall store all crypto private keys in `internal/keystore/`. Raw key 
 
 The system shall keep `internal/hubreporter/protocol.go` in lockstep with `meshsat-hub/internal/protocol/protocol.go` via the `ProtocolVersion` constant. Breaking changes require a new `meshsat-uplink/v2` namespace.
 
-## Article C-VI — 10 transport adapters, each in its own package under `internal/transport/`
+## Article C-VI — one adapter per transport, each in its own package under `internal/transport/`
 
-The system shall isolate each transport adapter (Meshtastic, Iridium SBD/IMT, Cellular SMS, ZigBee, MQTT, Webhooks, APRS, TAK, direct serial) in its own subpackage. Cross-adapter coupling must go via the routing engine (`internal/routing/`).
+The system shall isolate each transport adapter (Meshtastic, Iridium SBD/IMT, Cellular SMS,
+ZigBee, MQTT, Webhooks, APRS, TAK, direct serial) in its own subpackage. Cross-adapter coupling
+must go via the routing engine (`internal/routing/`).
+
+The supported external figure is **eight transport bearers across nine wired Reticulum
+interfaces** — Iridium counted once although it runs on two modems and two protocols (9603N/SBD,
+9704/IMT), with TAK/CoT and webhooks described as integrations rather than bearers. This article
+governs code layout, not the public count; do not quote an adapter tally externally.
 
 ## Article C-VII — Reticulum 9-interface routing core
 
