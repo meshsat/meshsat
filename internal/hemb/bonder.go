@@ -263,7 +263,9 @@ func (b *bonder) allocateSymbols(bearers []BearerProfile, k int) []bearerAlloc {
 		}
 	}
 
-	// Sort free by bandwidth DESC (give more to faster bearers).
+	// Sort free by MTU DESC. NOTE: this is configured MTU, not measured
+	// bandwidth/latency — there is no throughput model yet. The full
+	// capacity-aware allocation semantics are specification work [MESHSAT-706].
 	sort.Slice(free, func(i, j int) bool {
 		return free[i].MTU > free[j].MTU
 	})
@@ -277,13 +279,16 @@ func (b *bonder) allocateSymbols(bearers []BearerProfile, k int) []bearerAlloc {
 		allocMap[bearers[i].Index] = &bearerAlloc{bearer: &bearers[i]}
 	}
 
-	// Phase 1: fill free bearers with source symbols.
+	// Phase 1: source symbols to free bearers. CURRENT BEHAVIOUR: the first
+	// free bearer (largest MTU) receives ALL remaining source symbols — there
+	// is no per-bearer capacity bound, so with any free bearer online the
+	// paid phase below never allocates source. [MESHSAT-706]
 	remaining := k
 	for _, fb := range free {
 		if remaining == 0 {
 			break
 		}
-		give := remaining // give as much as possible to each free bearer
+		give := remaining // all remaining to this bearer (no capacity model)
 		allocMap[fb.Index].source = give
 		remaining -= give
 		if remaining <= 0 {
@@ -292,7 +297,10 @@ func (b *bonder) allocateSymbols(bearers []BearerProfile, k int) []bearerAlloc {
 		}
 	}
 
-	// Phase 2: waterfall to paid if free capacity insufficient.
+	// Phase 2: paid bearers — only reached when NO free bearer exists
+	// (remaining is always zero after phase 1 if the free list is non-empty).
+	// A paid bearer with zero source also gets zero repair (RepairSymbols
+	// returns 0 for sourceCount 0), so mixed free/paid sets hold paid at zero.
 	for _, pb := range paid {
 		if remaining == 0 {
 			break
