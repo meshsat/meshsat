@@ -33,7 +33,7 @@ optimizes transmission timing in obstructed environments*
 - **9 Reticulum interfaces:** LoRa mesh, TCP/HDLC (RNS interop), Iridium SBD, Iridium IMT, AX.25/APRS, MQTT, SMS, ZigBee, BLE (planned)
 - **TransportNode** with cost-aware cross-interface forwarding, PathFinder flooding-based route discovery, and 30-minute route TTL
 - **Dispatcher** with failover groups, delivery ledger, per-channel workers, and visited-set loop prevention
-- **HeMB (Heterogeneous Media Bonding):** RLNC-coded simultaneous multi-bearer bonding — splits payloads across N physical bearers (LoRa, Iridium SBD, SMS, APRS) with cost-weighted allocation and cross-bearer reassembly from any K of N coded symbols regardless of which bearers delivered them. Operates below IP, routing-protocol agnostic, TUN-wrappable as a standard Linux network interface.
+- **HeMB (Heterogeneous Media Bonding):** RLNC-coded bonding over heterogeneous bearer adapters (LoRa, Iridium SBD, SMS, APRS) with cross-bearer reassembly from any K of N coded symbols regardless of which bearers delivered them. The current allocator is free-first: while any free bearer is healthy, source symbols go to the largest-MTU free bearer and paid bearers receive none; capacity-aware paid activation is specification work (MESHSAT-706). Bearers need not share a common IP stack; routing-protocol agnostic, TUN-wrappable as a standard Linux network interface.
 
 ### Compression & Transforms
 - **3 compression tiers:** SMAZ2 (lossless, <1ms), llama-zip (LLM-based lossless, ~200ms), MSVQ-SC (lossy semantic, rate-adaptive)
@@ -334,7 +334,7 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
                        |           (delivery workers per iface)       |
                        |              |                               |
                        |         HeMB Bonder (bond groups)            |
-                       |           (RLNC coding, cost-weighted split) |
+                       |        (RLNC coding, free-first allocation)  |
                        |              |                               |
                        |      TransformPipeline                       |
                        |        (zstd, smaz2, aes-256-gcm, b64)       |
@@ -381,7 +381,7 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
 - DTN concepts: custody transfer, bundle fragmentation, and late binding integrated into the delivery ledger (RFC 9171 inspired)
 - Forward error correction (FEC): Reed-Solomon codec in the transform pipeline for noisy channels (LoRa, satellite)
 - GPS-denied time synchronization: mesh clock consensus with stratum tracking, Iridium MSSTM and Hub NTP fallback
-- **HeMB — Heterogeneous Media Bonding Protocol:** simultaneous multi-bearer bonding with RLNC coding across N heterogeneous physical bearers, cost-weighted splitter (free bearers exhausted before paid), adaptive reassembly buffer tolerating 1:900 bearer latency ratio, and per-bearer FEC profiles. RLNC encoding across bonded bearer groups confirmed on hardware (March 2026). Three-bearer field validation over LoRa, TCP and SMS completed April 2026; validation over a paid satellite bearer is still outstanding. RFC submission planned January 2027 via IETF Independent Submission Stream (draft-papadopoulos-hemb-00).
+- **HeMB — Heterogeneous Media Bonding Protocol:** multi-bearer bonding with RLNC coding across heterogeneous bearer adapters and per-bearer FEC profiles. Current allocation is free-first (paid bearers held at zero while a free bearer is healthy); formalising capacity-aware monetary-cost semantics, paid activation and validation at larger latency ratios (design envelope 1:900) is planned specification work. RLNC encoding across bonded bearer groups confirmed on hardware (March 2026). Three-bearer field validation over LoRa, TCP and SMS completed April 2026; validation over a paid satellite bearer is still outstanding. RFC submission planned January 2027 via the RFC Series' Independent Submission Stream (draft-papadopoulos-hemb-00).
 
 **Next -- New Reticulum interfaces:**
 - SMS interface: Reticulum packets over cellular SMS

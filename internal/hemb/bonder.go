@@ -48,9 +48,10 @@ func NewBonder(opts Options) Bonder {
 	return b
 }
 
-// Send splits payload, encodes with RLNC, and distributes across all bearers.
+// Send encodes the payload and dispatches per the current allocator; not
+// every configured bearer necessarily receives symbols (see allocateSymbols).
 // N=1: direct passthrough with zero overhead (no header, no RLNC coding).
-// N>1: RLNC-coded symbols distributed cost-weighted across bearers.
+// N>1: RLNC-coded symbols dispatched via the current free-first allocator.
 func (b *bonder) Send(ctx context.Context, payload []byte) error {
 	bearers := b.opts.Bearers
 	if len(bearers) == 0 {
@@ -251,7 +252,8 @@ func (b *bonder) sendMulti(ctx context.Context, payload []byte) error {
 }
 
 // allocateSymbols distributes K source symbols across bearers using
-// cost-weighted free-first allocation. Paid bearers get minimal repair.
+// the current free-first policy. With any free bearer online, paid bearers
+// receive zero source and zero repair (see phase comments below).
 func (b *bonder) allocateSymbols(bearers []BearerProfile, k int) []bearerAlloc {
 	// Separate free and paid bearers.
 	var free, paid []BearerProfile
