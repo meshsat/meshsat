@@ -1,138 +1,34 @@
 # MeshSat
 
-![Go 1.24+](https://img.shields.io/badge/go-1.24+-blue)
+[![Stars](https://img.shields.io/github/stars/cubeos-app/meshsat?style=flat&logo=github&color=blue)](https://github.com/cubeos-app/meshsat)
+[![Release](https://img.shields.io/github/v/release/cubeos-app/meshsat?color=blue)](https://github.com/cubeos-app/meshsat/releases)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
-![Docker: ghcr.io/cubeos-app/meshsat](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)
+![Go 1.24+](https://img.shields.io/badge/go-1.24+-blue)
+![Tests](https://img.shields.io/badge/tests-1333-green)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)](https://github.com/orgs/cubeos-app/packages/container/package/meshsat)
 
-MeshSat is a multi-transport mesh and satellite gateway that bridges Meshtastic LoRa networks to satellite, cellular, and tactical data channels. Ten transport types -- Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704), Cellular SMS, ZigBee, MQTT, Webhooks, APRS, TAK (CoT XML), and direct serial -- are all available as routing destinations. A Reticulum-compatible routing layer with 9 cross-connected interfaces forwards packets between any transport pair with cost-aware path selection. Access rules route messages with per-rule filtering, failover groups, and transform pipelines.
+### Keep a message moving when the network is gone.
 
-MeshSat runs as a standalone Docker container on any Linux machine with USB-connected devices. No cloud dependencies, no subscriptions beyond your satellite or cellular plan.
+MeshSat is an open source gateway that gives an off-grid mesh a way out. It takes a message off a
+Meshtastic LoRa network and finds a route to the outside world over whatever bearer is still alive:
+Iridium satellite, cellular SMS, amateur packet radio, ZigBee, Bluetooth or a plain TCP link. A
+Reticulum routing layer sits underneath and picks the path by cost, so traffic stays on the free
+bearers and only reaches for the metered ones when nothing free is up.
 
-For multi-tenant fleet management, see [MeshSat Hub](https://hub.meshsat.net). For the mobile companion app, see [MeshSat Android](https://github.com/cubeos-app/meshsat-android).
+It runs as a single Docker container on a Raspberry Pi. No cloud service, no account, no subscription
+beyond whatever you already pay your satellite or cellular carrier.
 
-## Dashboard
+<!-- DEMO GIF SLOT: a 15 second silent loop showing a message entering the mesh on one kit and
+     arriving on the far side, goes here, directly under the intro and above Quick Start. -->
 
-![MeshSat Dashboard](docs/images/meshsat_dashboard.png)
-*Built-in web dashboard showing satellite modem status, mesh nodes, delivery queue,
-GPS/satellite positioning, and channel health scores*
+> **Status: pre-release.** This is a working prototype under active development, not a finished
+> product. It has never been deployed to a real user and has never been used in an actual emergency.
+> See [What is proven, and what is not](#what-is-proven-and-what-is-not) for an honest breakdown
+> before you rely on it for anything.
 
-![MeshSat Pass Predictor](docs/images/meshsat_passes.png)
-*Satellite pass predictor with signal correlation --
-optimizes transmission timing in obstructed environments*
+## Quick start
 
-## Features
-
-### Transports
-- **10 transports:** Meshtastic LoRa, Iridium SBD (9603N), Iridium IMT (9704, 100 KB messages), Cellular SMS, ZigBee (Z-Stack ZNP), MQTT, Webhooks, APRS (bundled Direwolf supervised in-container, KISS on loopback), TAK (CoT XML), direct serial
-- **Multi-instance gateways:** multiple modems of the same type on one bridge (e.g. 2x cellular), each with independent config and delivery workers
-- **SBD/IMT decoupled:** separate SBDGateway and IMTGateway types with independent signal recording, pass scheduling, and delivery tracking
-- **Full Meshtastic protocol** (~80%+ coverage) using official `buf.build/gen/go/meshtastic/protobufs` generated Go types
-
-### Routing
-- **Reticulum-compatible routing** with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking, and resource transfers with chunked reliable delivery
-- **9 Reticulum interfaces:** LoRa mesh, TCP/HDLC (RNS interop), Iridium SBD, Iridium IMT, AX.25/APRS, MQTT, SMS, ZigBee, BLE (planned)
-- **TransportNode** with cost-aware cross-interface forwarding, PathFinder flooding-based route discovery, and 30-minute route TTL
-- **Dispatcher** with failover groups, delivery ledger, per-channel workers, and visited-set loop prevention
-- **HeMB (Heterogeneous Media Bonding):** RLNC-coded bonding over heterogeneous bearer adapters (LoRa, Iridium SBD, SMS, APRS) with cross-bearer reassembly from any K of N coded symbols regardless of which bearers delivered them. The current allocator is free-first: while any free bearer is healthy, source symbols go to the largest-MTU free bearer and paid bearers receive none; capacity-aware paid activation is specification work (MESHSAT-706). Bearers need not share a common IP stack; routing-protocol agnostic, TUN-wrappable as a standard Linux network interface.
-
-### Compression & Transforms
-- **3 compression tiers:** SMAZ2 (lossless, <1ms), llama-zip (LLM-based lossless, ~200ms), MSVQ-SC (lossy semantic, rate-adaptive)
-- **Transform pipelines** per interface: compress (zstd, SMAZ2) + encrypt (AES-256-GCM) + encode (base64)
-
-### Security
-- **AES-256-GCM encryption** per channel with cross-platform key exchange via QR bundles (`meshsat://key/` URI scheme)
-- **v2 key bundles** with embedded Ed25519 signing public key for TOFU (Trust On First Use) verification — Android pins the bridge's pubkey on first scan, subsequent scans are cryptographically verified
-- **Master key envelope encryption** (HKDF + AES-256-GCM key wrapping) with device-derived or passphrase-based master key
-- **Ed25519 signing service** with hash-chain audit log for tamper detection
-- **Credential management:** upload ZIP/PEM certificates, encrypted storage, expiry monitoring, Hub-to-bridge distribution via MQTT
-
-### Intelligence & Engine
-- **Field intelligence:** Dead Man's Switch, geofence alerts, channel health scores, satellite burst queue, mesh topology visualization
-- **Channel registry** with self-describing adapters and MTU awareness
-- **Access rules engine** with object groups (node, portnum, sender, contact), rate limiting, and implicit deny
-- **DeviceSupervisor** with USB hotplug detection, VID:PID identification cascade, and claim-based port management
-- **Satellite pass prediction** using SGP4/TLE propagation with signal correlation
-- **Config export/import** in YAML format (Cisco `show running-config` style), with config diff preview
-
-### Dashboard & API
-- **Web dashboard** (Vue.js SPA, 13 views) for monitoring, sending messages, Meshtastic radio configuration, mesh topology, and device management
-- **REST API** with 280+ endpoints for integration
-- **SSE events** for real-time dashboard updates
-- **Auto-detects** USB devices on startup via VID:PID tables and protocol probing
-
-### Ecosystem
-- **Hub MQTT connection** with WSS + mTLS client certificates for fleet management, command handlers (ping, send_text, send_mt, flush_burst), and health telemetry reporting
-- **Android companion app** ([meshsat-android](https://github.com/cubeos-app/meshsat-android)) with BLE mesh, SPP Iridium, SMS, MSVQ-SC, and AES-GCM
-- **Multi-tenant fleet management** via [MeshSat Hub](https://hub.meshsat.net) (separate product)
-- Runs on ARM64 (Raspberry Pi 5/4) and x86_64
-
-## Hardware
-
-![MeshSat Field Kit](docs/images/meshsat_field_kit.jpg)
-*MeshSat field kit -- a self-contained, portable multi-transport gateway in a waterproof hard case.
-Meshtastic and cellular are USB-connected; the RockBLOCK 9603 is UART-wired to the Pi 5 GPIO.
-All devices are auto-detected on startup.*
-
-| # | Component | Description |
-|---|-----------|-------------|
-| 1 | **Heltec LoRa V4** (ESP32-S3 + SX1262 + GPS) | Meshtastic mesh radio -- 868/915 MHz LoRa, OLED display, 2 MB PSRAM, 16 MB flash |
-| 2 | **RockBLOCK 9603** (Iridium 9603N, SMA) | Iridium satellite modem -- SBD protocol, 340-byte MO buffer, UART via Pi 5 GPIO |
-| 3 | **LILYGO T-Call A7670** (ESP32 + A7670E) | 4G LTE / 2G GSM cellular modem -- AT commands, SMS + data |
-| 4 | **INIU 25000mAh** (100W USB-C PD) | Portable power bank -- powers all components via USB |
-| 5 | **Raspberry Pi 5** (8 GB RAM) | MeshSat Bridge host -- standalone mode, Debian Bookworm |
-
-![MeshSat Compact Kit](docs/images/meshsat_compact_kit.jpg)
-*MeshSat compact kit -- minimal two-transport gateway (mesh + satellite) in a pocket-sized waterproof case.*
-
-| # | Component | Description |
-|---|-----------|-------------|
-| 1 | **XIAO ESP32-S3 + SX1262 LoRa Module** | Meshtastic mesh radio -- 868/915 MHz, WiFi + BLE, ultra-compact form factor |
-| 2 | **RockBLOCK 9704** (Iridium IMT, SMA) | Iridium satellite modem -- JSPR protocol, 100 KB messages, FTDI USB |
-| 3 | **Anker Prime 20,000mAh** (200W, 2x USB-C + USB-A) | Portable power bank -- powers all components via USB-C |
-| 4 | **Raspberry Pi 5** (8 GB RAM) | MeshSat Bridge host -- standalone mode, Ubuntu Server |
-
-### Supported Devices
-
-| Category | Device | Status | Notes |
-|----------|--------|--------|-------|
-| **Meshtastic** | Heltec LoRa V4 (ESP32-S3 + SX1262 + GPS) | Tested | 868/915 MHz, OLED, 2 MB PSRAM, 16 MB flash |
-| | XIAO ESP32-S3 + SX1262 LoRa Module | Tested | 868/915 MHz, ultra-compact, WiFi + BLE |
-| | Lilygo T-Echo (nRF52840) | Tested | 915 MHz, USB-C, e-ink display |
-| | Lilygo T-Deck | Tested | ESP32-S3, keyboard, screen |
-| | Espressif / CH340 / CP2102 / Nordic devices | Should work | Auto-detected via USB VID:PID |
-| **Satellite** | RockBLOCK 9603 (Iridium 9603N) | Tested | SBD protocol, 340-byte MO, 19200 baud, UART or RS-232 |
-| | RockBLOCK 9704 (Iridium IMT) | Tested | JSPR protocol, 100 KB messages, 230400 baud, FTDI USB |
-| **Cellular** | LILYGO T-Call A7670 (A7670E LTE) | Tested | 4G LTE / 2G GSM, AT commands, SMS + data |
-| | SIM7600G-H (4G LTE) | Tested | USB modem, AT commands, SMS + data |
-| | Huawei E220 (3G HSDPA) | Tested | USB modem, AT commands, SMS + data |
-| **ZigBee** | SONOFF ZigBee 3.0 USB Dongle Plus (CC2652P) | Code complete | Z-Stack ZNP protocol, VID:PID auto-detect with ZNP probe |
-| **Host** | Raspberry Pi 5 (8 GB) | Tested | ARM64, Debian Bookworm |
-| | Raspberry Pi 4 (4 GB) | Tested | ARM64, Debian Bookworm |
-| | BananaPi BPI-M4 Zero (4 GB + 32 GB eMMC) | Deprecated | Allwinner H618 USB unreliable -- not recommended |
-| | Any x86_64 / ARM64 Linux | Should work | Docker + USB serial required |
-
-## Quick Start
-
-### Option A: One-liner with Docker
-
-```bash
-docker run -d \
-  --name meshsat \
-  --privileged \
-  --network host \
-  -e MESHSAT_MODE=direct \
-  -e MESHSAT_PORT=6050 \
-  -e MESHSAT_DB_PATH=/data/meshsat.db \
-  -v meshsat-data:/data \
-  -v /dev:/dev \
-  -v /sys:/sys:ro \
-  --restart unless-stopped \
-  ghcr.io/cubeos-app/meshsat:latest
-```
-
-Open `http://<your-ip>:6050` in a browser to access the dashboard.
-
-### Option B: Docker Compose
+Save this as `docker-compose.yml`:
 
 ```yaml
 services:
@@ -159,138 +55,302 @@ volumes:
 docker compose up -d
 ```
 
-### Option C: Build from Source
+Plug in a Meshtastic radio, a satellite modem, a cellular modem, or all three. MeshSat scans USB on
+startup, identifies each device by VID:PID and protocol probe, and brings up whatever it finds.
+Open `http://<your-ip>:6050` for the dashboard. A single device is enough to start; missing hardware
+is logged as a warning, not an error.
+
+The image is published to GHCR and is pullable anonymously. To
+[build from source](#other-ways-to-install) instead, see below.
+
+![MeshSat Dashboard](docs/images/meshsat_dashboard.png)
+*The built-in dashboard: satellite modem status, mesh nodes, delivery queue, positioning and
+per-channel health scores.*
+
+If MeshSat is useful to you, a star helps other people find it.
+
+## Why this exists
+
+When a storm, an outage or a disaster takes the network down, the radios people already own mostly
+cannot help. A Meshtastic mesh keeps a village talking to itself, but it has no way out of the
+valley. A satellite modem can reach the far side of the planet, but it costs real money per message
+and nobody carries one. A phone is useless without a tower.
+
+MeshSat is the piece in between. It treats every radio you have as one possible route, and moves the
+message along whichever one is up. The reason the routing layer exists at all is cost: satellite
+bytes are expensive, so the design goal is to spend them only when there is nothing free left.
+
+## What it bridges
+
+Eight transport bearers, reachable across nine wired Reticulum interfaces.
+
+| Bearer | Hardware | Notes |
+|---|---|---|
+| **Meshtastic LoRa** | ESP32 / nRF52 radios | Full protocol via the official `buf.build` protobuf bindings |
+| **Iridium SBD** | RockBLOCK 9603N | 340 byte messages, AT commands, pass-aware scheduling |
+| **Iridium IMT** | RockBLOCK 9704 | 100 KB messages, JSPR protocol |
+| **Cellular SMS** | A7670E, SIM7600G-H, and similar | AT commands, SMS and data |
+| **APRS / AX.25** | Any KISS TNC, Direwolf bundled | Direwolf runs supervised in-container on loopback |
+| **ZigBee** | CC2652P | Z-Stack ZNP binary protocol |
+| **BLE** | Host Bluetooth | GATT peripheral via BlueZ, with segmentation |
+| **TCP** | Any IP link | Interoperates with upstream Python RNS |
+
+Plus **TAK** (CoT XML), **MQTT** and **webhooks** as routing destinations, and multi-instance
+gateways so two modems of the same type can run side by side with independent config and workers.
+
+## What is proven, and what is not
+
+Most projects skip this section. If you are deciding whether to trust this with anything that
+matters, it is probably the most useful thing on the page.
+
+| | State |
+|---|---|
+| Meshtastic serial, full protocol | Working on hardware, both kits |
+| Iridium 9704 IMT, mobile-originated and mobile-terminated | Verified over a real satellite link, March 2026 |
+| Iridium 9603 SBD | Working on hardware |
+| Cellular SMS both directions | Working on hardware |
+| APRS / AX.25 via bundled Direwolf | Working on hardware |
+| Reticulum interoperability | Passes against upstream Python RNS 1.1.4 |
+| HeMB bonding across LoRa, TCP and SMS | Three-bearer field test, April 2026, zero failures |
+| HeMB over a paid satellite bearer | **Not validated.** Outstanding work |
+| HeMB mixed free and paid allocation | **Undefined.** See the allocator note below |
+| RTL-SDR jamming detection | Implemented and tested against ambient noise only, **never against a real jammer** |
+| ZigBee gateway | Code complete, light field exposure |
+| Deployment to a real end user | **Never.** No emergency service has used this |
+| Use in an actual disaster | **Never** |
+
+The test suite is 1,333 test functions across 129 files, and it gates every deploy. That says the
+code does what the authors expect. It does not say the radio link will hold at 3am in the rain.
+
+**On HeMB specifically:** the current symbol allocator is free-first. While any free bearer is
+healthy, all source symbols go to the largest-MTU free bearer and paid bearers receive none. There
+is no capacity model yet. Capacity-aware paid activation is specification work, not a shipped
+feature, and the 1:900 latency ratio quoted in the design is a target, not a measured result.
+
+## Hardware
+
+![MeshSat Field Kit](docs/images/meshsat_field_kit.jpg)
+*Field kit: a self-contained multi-transport gateway in a waterproof case. Meshtastic and cellular
+over USB, the RockBLOCK 9603 wired to the Pi 5 GPIO UART. Everything is auto-detected on startup.*
+
+| # | Component | Role |
+|---|---|---|
+| 1 | **Heltec LoRa V4** (ESP32-S3 + SX1262 + GPS) | Meshtastic mesh radio, 868/915 MHz |
+| 2 | **RockBLOCK 9603** (Iridium 9603N) | Satellite, SBD, 340 byte messages, UART |
+| 3 | **LILYGO T-Call A7670** (ESP32 + A7670E) | 4G LTE / 2G, AT commands, SMS and data |
+| 4 | **INIU 25000mAh** (100W USB-C PD) | Power for the whole kit |
+| 5 | **Raspberry Pi 5** (8 GB) | Host, standalone mode |
+
+![MeshSat Compact Kit](docs/images/meshsat_compact_kit.jpg)
+*Compact kit: mesh plus satellite only, in a pocket-sized waterproof case.*
+
+| # | Component | Role |
+|---|---|---|
+| 1 | **XIAO ESP32-S3 + SX1262** | Meshtastic mesh radio, very small |
+| 2 | **RockBLOCK 9704** (Iridium IMT) | Satellite, JSPR, 100 KB messages, USB |
+| 3 | **Anker Prime 20,000mAh** (200W) | Power |
+| 4 | **Raspberry Pi 5** (8 GB) | Host, standalone mode |
+
+### Supported devices
+
+| Category | Device | Status | Notes |
+|---|---|---|---|
+| **Meshtastic** | Heltec LoRa V4 (ESP32-S3 + SX1262 + GPS) | Tested | 868/915 MHz, OLED, 2 MB PSRAM |
+| | XIAO ESP32-S3 + SX1262 | Tested | 868/915 MHz, WiFi + BLE, very compact |
+| | Lilygo T-Echo (nRF52840) | Tested | 915 MHz, USB-C, e-ink |
+| | Lilygo T-Deck | Tested | ESP32-S3, keyboard, screen |
+| | Espressif / CH340 / CP2102 / Nordic | Should work | Auto-detected by USB VID:PID |
+| **Satellite** | RockBLOCK 9603 (Iridium 9603N) | Tested | SBD, 340 byte MO, 19200 baud, UART or RS-232 |
+| | RockBLOCK 9704 (Iridium IMT) | Tested | JSPR, 100 KB messages, 230400 baud, USB |
+| **Cellular** | LILYGO T-Call A7670 (A7670E) | Tested | 4G LTE / 2G, SMS and data |
+| | SIM7600G-H | Tested | USB modem, AT commands |
+| | Huawei E220 (3G) | Tested | USB modem, AT commands |
+| **ZigBee** | SONOFF ZigBee 3.0 Dongle Plus (CC2652P) | Code complete | Z-Stack ZNP, VID:PID plus ZNP probe |
+| **Host** | Raspberry Pi 5 (8 GB) | Tested | ARM64 |
+| | Raspberry Pi 4 (4 GB) | Tested | ARM64 |
+| | BananaPi BPI-M4 Zero | Not recommended | Allwinner H618 USB proved unreliable |
+| | Any x86_64 / ARM64 Linux | Should work | Docker plus USB serial |
+
+## Features
+
+### Routing
+
+- **Reticulum-compatible routing** with Ed25519 identity, announce relay, link manager, keepalive,
+  bandwidth tracking and chunked reliable resource transfer
+- **Nine wired Reticulum interfaces:** LoRa mesh, TCP/HDLC (RNS interop), Iridium SBD, Iridium IMT,
+  AX.25/APRS, MQTT, SMS, ZigBee, BLE
+- **TransportNode** with cost-aware cross-interface forwarding, PathFinder route discovery and a
+  30 minute route TTL
+- **Dispatcher** with failover groups, a delivery ledger, per-channel workers and visited-set loop
+  prevention
+- **HeMB (Heterogeneous Media Bonding):** RLNC-coded bonding across heterogeneous bearer adapters,
+  reassembling from any K of N coded symbols regardless of which bearer delivered them. Bearers do
+  not need a shared IP stack. See the allocator caveat above.
+
+### Compression and transforms
+
+- **Three compression tiers:** SMAZ2 (lossless, sub-millisecond), llama-zip (LLM-based lossless,
+  around 200 ms), MSVQ-SC (lossy semantic, rate-adaptive)
+- **Per-interface transform pipelines:** compress (zstd, SMAZ2), encrypt (AES-256-GCM), encode
+  (base64)
+
+### Security
+
+- **AES-256-GCM per channel**, with key exchange by QR bundle (`meshsat://key/` URI scheme)
+- **v2 key bundles** carrying an Ed25519 signing public key for Trust On First Use. Android pins the
+  bridge key on first scan; later scans are verified cryptographically
+- **Master key envelope encryption** (HKDF plus AES-256-GCM wrapping), device-derived or passphrase
+- **Ed25519 signing service** with a hash-chain audit log for tamper detection
+- **Credential management:** ZIP/PEM upload, encrypted storage, expiry monitoring
+
+### Field intelligence
+
+- Dead Man's Switch, geofence alerts, per-channel health scores, satellite burst queue, mesh
+  topology visualisation
+- **Access rules engine** with object groups (node, portnum, sender, contact), rate limiting and
+  implicit deny
+- **DeviceSupervisor** with USB hotplug, a VID:PID identification cascade and claim-based port
+  management
+- **Satellite pass prediction** by SGP4/TLE propagation with signal correlation
+- **RTL-SDR spectrum monitoring** across five bands with a multi-feature jamming classifier, feeding
+  automatic transport failover
+- **Config export and import** in YAML, in the style of `show running-config`, with diff preview
+
+### Dashboard and API
+
+- **Vue 3 dashboard**, 13 views, embedded in the binary
+- **REST API**, over 300 endpoints, fully annotated for Swagger
+- **Server-sent events** for live updates
+- **Prometheus metrics** at `/metrics`
+
+## Other ways to install
+
+### From source
 
 ```bash
 git clone https://github.com/cubeos-app/meshsat.git
 cd meshsat
-make build-with-web    # Builds Vue SPA + Go binary
-# Or with Docker:
-docker compose -f docker-compose.direct.yml up --build
+make build-with-web    # Vue SPA plus Go binary
 ```
 
-## Setup Guide
+## Setup guide
 
-### Step 1: Plug in your devices
+**1. Plug in your devices.** Meshtastic radio, satellite modem, cellular modem, in any combination.
+Detection is automatic at startup by USB VID:PID table and protocol probe, using pure Go serial
+(`go.bug.st/serial`), so there is no CGO anywhere in the build.
 
-Connect your Meshtastic radio and/or satellite modem and/or cellular modem via USB. MeshSat will detect them automatically on startup using USB VID:PID tables and protocol probing (pure Go serial via `go.bug.st/serial`).
+**2. Start the container.** MeshSat scans USB, probes each device (Meshtastic protobuf, Iridium AT,
+ZNP for ZigBee), and starts the dashboard on port 6050.
 
-### Step 2: Start the container
+**3. Open the dashboard** at `http://<your-ip>:6050`.
 
-Use one of the methods above. MeshSat will scan USB devices, connect to each one it finds via protocol-specific probing (Meshtastic protobuf, Iridium AT, ZNP for ZigBee), and start the web dashboard on port 6050.
+**4. Set up access rules** in the Interfaces tab to route between transports. Rules filter on source
+and destination interface, direction, node, portnum, keyword and object group, and support SMS
+contact selection, failover groups, transform overrides and rate limiting.
 
-### Step 3: Open the dashboard
-
-Navigate to `http://<your-ip>:6050`. The dashboard provides 13 views: Dashboard, Messages (Comms), Nodes (Peers), Map, Passes, Bridge, Interfaces, Meshtastic (radio config), Topology, Settings, Audit, Help, and About.
-
-### Step 4: Set up access rules
-
-Create access rules in the Interfaces tab to route messages between transports. Rules support source/destination interface filtering, direction (ingress/egress/both), node/portnum/keyword/object group matching, SMS contact selection, failover groups, transform overrides, and rate limiting.
-
-### Step 5: Verify end-to-end
-
-Send a test message from your Meshtastic device. If access rules are configured, it should be delivered to the destination interface (e.g., appear in the RockBLOCK portal for Iridium, or arrive as an SMS for cellular).
+**5. Verify end to end.** Send a test message from your Meshtastic device. With rules configured it
+should land on the destination interface, for example appearing in the RockBLOCK portal or arriving
+as an SMS.
 
 ## Configuration
 
-All configuration is via environment variables. MeshSat works fine with just a single device connected -- missing devices are logged as warnings.
+Everything is set by environment variable. Environment values are first-boot defaults; the dashboard
+can override them afterwards.
 
-**Core:**
+**Core**
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+|---|---|---|
 | `MESHSAT_MODE` | `cubeos` | Set to `direct` for standalone USB access |
 | `MESHSAT_PORT` | `6050` | HTTP port for dashboard and API |
-| `MESHSAT_DB_PATH` | `/data/meshsat.db` | SQLite database file path |
-| `MESHSAT_RETENTION_DAYS` | `30` | Days to keep historical data |
-| `MESHSAT_WEB_DIR` | *(empty)* | Override embedded SPA path (development only) |
+| `MESHSAT_DB_PATH` | `/data/meshsat.db` | SQLite database path |
+| `MESHSAT_RETENTION_DAYS` | `30` | Days of history to keep |
+| `MESHSAT_WEB_DIR` | *(empty)* | Override the embedded SPA path (development only) |
 
-**Serial ports** (`auto` = scan USB via VID:PID + protocol probing):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MESHSAT_MESHTASTIC_PORT` | `auto` | Meshtastic radio serial port |
-| `MESHSAT_IRIDIUM_PORT` | `auto` | Iridium 9603N (SBD) serial port |
-| `MESHSAT_IMT_PORT` | `auto` | RockBLOCK 9704 (IMT/JSPR) serial port |
-| `MESHSAT_CELLULAR_PORT` | `auto` | Cellular modem serial port |
-| `MESHSAT_ZIGBEE_PORT` | `auto` | ZigBee coordinator serial port |
-
-**Iridium 9603N:**
+**Serial ports** (`auto` scans USB by VID:PID and protocol probe)
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `MESHSAT_IRIDIUM_SLEEP_PIN` | `0` | GPIO pin for 9603N sleep/wake (0 = disabled) |
-| `IRIDIUM_SBDIX_TIMEOUT` | `90` | SBDIX AT command timeout in seconds |
+|---|---|---|
+| `MESHSAT_MESHTASTIC_PORT` | `auto` | Meshtastic radio |
+| `MESHSAT_IRIDIUM_PORT` | `auto` | Iridium 9603N (SBD) |
+| `MESHSAT_IMT_PORT` | `auto` | RockBLOCK 9704 (IMT/JSPR) |
+| `MESHSAT_CELLULAR_PORT` | `auto` | Cellular modem |
+| `MESHSAT_ZIGBEE_PORT` | `auto` | ZigBee coordinator |
 
-**Rate limiting & routing:**
+**Iridium 9603N**
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+|---|---|---|
+| `MESHSAT_GPIO_CHIP` | `gpiochip4` | libgpiod chardev (Pi 5 is 4, Pi 4 is 0) |
+| `MESHSAT_IRIDIUM_SLEEP_PIN` | `0` | Sleep/wake GPIO, BCM numbering, 0 disables |
+| `MESHSAT_IRIDIUM_NETAV_PIN` | `0` | NetAv input, high means satellite visible |
+| `MESHSAT_IRIDIUM_RI_PIN` | `0` | Ring indicator input, active low |
+| `IRIDIUM_SBDIX_TIMEOUT` | `90` | SBDIX timeout in seconds |
+
+**Rate limiting and routing**
+
+| Variable | Default | Description |
+|---|---|---|
 | `MESHSAT_PAID_RATE_LIMIT` | `60` | Minimum seconds between paid satellite sends |
 | `MESHSAT_MAX_HOPS` | `8` | Maximum interfaces a message may traverse |
-| `MESHSAT_MESH_WATCHDOG_MIN` | `10` | Minutes of silence before Meshtastic serial reconnect (0 = disabled) |
+| `MESHSAT_MESH_WATCHDOG_MIN` | `10` | Minutes of silence before a Meshtastic reconnect |
+| `MESHSAT_MESH_MTU` | `100` | HeMB mesh bearer MTU in bytes, range 1 to 237 |
 
-**Compression sidecars:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MESHSAT_LLAMAZIP_ADDR` | *(empty)* | llama-zip gRPC sidecar address (empty = disabled) |
-| `MESHSAT_LLAMAZIP_TIMEOUT` | `30` | llama-zip RPC timeout in seconds |
-| `MESHSAT_MSVQSC_ADDR` | *(empty)* | MSVQ-SC gRPC sidecar address (empty = disabled) |
-| `MESHSAT_MSVQSC_TIMEOUT` | `30` | MSVQ-SC RPC timeout in seconds |
-| `MESHSAT_MSVQSC_CODEBOOK` | *(empty)* | Path to MSVQ-SC codebook file (enables pure-Go decode) |
-
-**Reticulum interfaces** (all first-boot defaults, UI overrides via Settings > Routing):
+**Compression sidecars**
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `MESHSAT_TCP_LISTEN` | *(empty)* | TCP listen address for RNS interop (e.g. `:4242`) |
-| `MESHSAT_TCP_CONNECT` | *(empty)* | TCP remote RNS node address (legacy, prefer UI peers) |
-| `MESHSAT_ANNOUNCE_INTERVAL` | `300` | Routing announce broadcast interval in seconds |
-| `MESHSAT_AX25_KISS_ADDR` | *(empty)* | Direwolf KISS TNC address (e.g. `localhost:8001`) |
-| `MESHSAT_AX25_CALLSIGN` | *(empty)* | AX.25 source callsign (e.g. `MESHSAT-1`) |
-| `MESHSAT_MQTT_RETICULUM_BROKER` | *(empty)* | MQTT broker for Reticulum packets (e.g. `tcp://broker:1883`) |
-| `MESHSAT_MQTT_RETICULUM_PREFIX` | `reticulum/meshsat` | MQTT topic prefix for RNS packets |
+|---|---|---|
+| `MESHSAT_LLAMAZIP_ADDR` | *(empty)* | llama-zip gRPC sidecar address |
+| `MESHSAT_LLAMAZIP_TIMEOUT` | `30` | RPC timeout in seconds |
+| `MESHSAT_MSVQSC_ADDR` | *(empty)* | MSVQ-SC gRPC sidecar address |
+| `MESHSAT_MSVQSC_TIMEOUT` | `30` | RPC timeout in seconds |
+| `MESHSAT_MSVQSC_CODEBOOK` | *(empty)* | Codebook path, enables pure-Go decode |
 
-**Key exchange:**
+**Reticulum interfaces**
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `MESHSAT_KEY_PASSPHRASE` | *(empty)* | Passphrase for master key derivation (empty = device-derived) |
-| `MESHSAT_BUNDLE_VERSION` | `v2` | Key bundle format: `v2` (with signing pubkey, TOFU) or `v1` (legacy) |
+|---|---|---|
+| `MESHSAT_TCP_LISTEN` | *(empty)* | TCP listen address for RNS interop, e.g. `:4242` |
+| `MESHSAT_ANNOUNCE_INTERVAL` | `300` | Announce broadcast interval in seconds |
+| `MESHSAT_AX25_KISS_ADDR` | *(empty)* | KISS TNC address. Bundled Direwolf binds `localhost:8001` |
+| `MESHSAT_AX25_CALLSIGN` | *(empty)* | AX.25 source callsign, e.g. `MESHSAT-1` |
+| `MESHSAT_MQTT_RETICULUM_BROKER` | *(empty)* | MQTT broker for Reticulum packets |
+| `MESHSAT_MQTT_RETICULUM_PREFIX` | `reticulum/meshsat` | MQTT topic prefix |
 
-### Key Bundles and TOFU Trust Model
+**Key exchange**
 
-MeshSat uses QR-based key bundles (`meshsat://key/...`) to share AES-256 encryption keys between the bridge and the Android companion app. The bridge generates a signed binary bundle containing per-channel encryption keys, which the user scans as a QR code on the Android device.
+| Variable | Default | Description |
+|---|---|---|
+| `MESHSAT_KEY_PASSPHRASE` | *(empty)* | Master key passphrase, empty means device-derived |
+| `MESHSAT_BUNDLE_VERSION` | `v2` | Key bundle format, `v2` with signing pubkey or `v1` legacy |
 
-**v2 bundles** (default) embed the bridge's Ed25519 signing public key directly in the bundle. This enables Trust On First Use (TOFU) verification:
+### Key bundles and the TOFU trust model
 
-1. **First scan:** Android pins the bridge's public key and marks the bundle as `NEW_TRUSTED`.
-2. **Subsequent scans:** Android verifies the Ed25519 signature against the pinned key. If valid: `EXISTING_TRUSTED`. If the key changed: `KeyMismatch` — the user must explicitly accept the new key.
-3. **Legacy v1 bundles** (from older bridges) are imported as `UNVERIFIED_V1` with a warning.
+QR-based key bundles (`meshsat://key/...`) carry AES-256 channel keys between the bridge and the
+Android app. The bridge emits a signed binary bundle, which the user scans on the phone.
 
-**v2 binary format:**
+**v2 bundles** embed the bridge Ed25519 signing public key, which enables Trust On First Use:
+
+1. **First scan:** Android pins the key and marks the bundle `NEW_TRUSTED`.
+2. **Later scans:** the signature is verified against the pinned key. Valid gives
+   `EXISTING_TRUSTED`; a changed key gives `KeyMismatch` and the user must accept it explicitly.
+3. **v1 bundles** from older bridges import as `UNVERIFIED_V1` with a warning.
 
 ```
 Version(1)=0x02 | BridgeHash(16) | Timestamp(4) | EntryCount(1) | SigningPubkey(32) | Signature(64) | Entries...
 ```
 
-The signature covers all bytes except the 64 signature bytes themselves (Version + BridgeHash + Timestamp + EntryCount + SigningPubkey + Entries), so the public key cannot be swapped without invalidating the signature.
+The signature covers every byte except the signature itself, so the public key cannot be swapped
+without invalidating it. The key fingerprint is shown in Settings > About for visual comparison.
 
-**Migration for existing users:** After upgrading the bridge, regenerate the QR code from Settings > Keys > Export. The first scan on Android will pin the new key.
+## Deployment modes
 
-The bridge signing key fingerprint (first 16 hex chars of SHA-256 of the public key) is displayed in Settings > About for visual verification.
-
-## Deployment Modes
-
-| | Standalone mode | CubeOS mode |
+| | Standalone | CubeOS |
 |---|---|---|
-| Set via | `MESHSAT_MODE=direct` | `MESHSAT_MODE=cubeos` (default) |
-| Serial access | Direct to /dev/ttyACM0, /dev/ttyUSB0 | Via HAL REST API |
-| Deploy with | `docker-compose.direct.yml` | CubeOS orchestrator |
-| Who it's for | Any Linux machine | CubeOS installations |
-
-For CubeOS mode, see [CubeOS docs](https://cubeos.app).
+| Set by | `MESHSAT_MODE=direct` | `MESHSAT_MODE=cubeos` (default) |
+| Serial access | Direct to `/dev/ttyACM0`, `/dev/ttyUSB0` | Through the HAL REST API |
+| Deploy with | `docker-compose.standalone.yml` | CubeOS orchestrator |
+| Who it is for | Any Linux machine | CubeOS installations |
 
 ## Architecture
 
@@ -304,25 +364,25 @@ USB / UART / TCP       MeshSat Container                              Clients
 /dev/ttyUSB0 -------->-|  DirectSatTransport (Iridium 9603N)          |     13 views)
   (Iridium SBD)        |    AT commands, SBDIX/SBDSX, sleep/wake GPIO |
                        |                                             |->  REST API
-Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+ endpoints)
-  (Iridium IMT)        |    JSPR protocol, 230400 baud, 100 KB msgs  |
+Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (300+ endpoints)
+  (Iridium IMT)        |    JSPR protocol, 230400 baud, 100 KB msgs   |
                        |                                             |->  SSE Events
 /dev/ttyUSB1 -------->-|  DirectCellTransport (A7670E / SIM7600G)     |    (real-time)
   (Cellular)           |    AT commands, SMS, data                    |
-                       |                                             |->  MeshSat Hub
-/dev/ttyUSB2 -------->-|  DirectZigBeeTransport (CC2652P)             |    (MQTT/WSS +
-  (ZigBee)             |    Z-Stack ZNP binary protocol              |     mTLS certs)
+                       |                                             |->  Prometheus
+/dev/ttyUSB2 -------->-|  DirectZigBeeTransport (CC2652P)             |    (/metrics)
+  (ZigBee)             |    Z-Stack ZNP binary protocol               |
                        |                                             |
                        |  DeviceSupervisor                            |
                        |    USB hotplug, VID:PID cascade, port claims |
                        |                                             |
                        |  Compression Pipeline                        |
-                       |    SMAZ2 | llama-zip | MSVQ-SC              |
+                       |    SMAZ2 | llama-zip | MSVQ-SC               |
                        |                                             |
                        |  Reticulum Routing (9 interfaces)            |
                        |    Ed25519 identity, announce relay, links   |
                        |    TransportNode, PathFinder, cost-aware     |
-                       |    mesh|tcp|sbd|imt|ax25|mqtt|sms|...       |
+                       |    mesh|tcp|sbd|imt|ax25|mqtt|sms|zigbee|ble |
                        |                                             |
                        |         InterfaceManager                     |
                        |           (state machine, bind/unbind)       |
@@ -351,61 +411,94 @@ Pi UART GPIO -------->-|  DirectIMTTransport (RockBLOCK 9704)         |    (280+
                        |    Dead Man's Switch, Geofence Alerts,       |
                        |    Health Scores, Burst Queue, Topology      |
                        |                                             |
+                       |  SpectrumMonitor (RTL-SDR jamming detection) |
                        |  KeyStore (QR bundles, master key envelope)  |
                        |  SigningService (Ed25519 hash chain)         |
                        |  CredentialManager (certs, expiry, mTLS)     |
                        |  Delivery Ledger (SQLite tracking)           |
-                       |  SQLite DB (/data/meshsat.db, v37)           |
+                       |  SQLite DB (/data/meshsat.db, schema v53)    |
                        -----------------------------------------------
 ```
 
 ## Troubleshooting
 
-**No devices detected on startup** -- Check that USB devices are visible (`ls /dev/ttyACM* /dev/ttyUSB*`). Try a different cable or port.
+**No devices detected on startup.** Check the devices are visible with
+`ls /dev/ttyACM* /dev/ttyUSB*`. Try a different cable or port; USB cables are the usual culprit.
 
-**Meshtastic connects but shows 0 nodes** -- Config handshake takes 5-10 seconds. Wait for "config complete" log line.
+**Meshtastic connects but shows 0 nodes.** The config handshake takes 5 to 10 seconds. Wait for the
+`config complete` line in the log.
 
-**Iridium signal shows 0 bars** -- Check antenna connections. Requires clear sky view.
+**Iridium shows 0 bars.** Check the antenna connection. It needs a genuinely clear view of the sky,
+not a window.
 
-**ZigBee dongle detected as Meshtastic** -- SONOFF ZigBee dongle shares VID:PID with some Meshtastic devices. Pin the port with `MESHSAT_ZIGBEE_PORT`.
+**ZigBee dongle detected as Meshtastic.** The SONOFF dongle shares a VID:PID with some Meshtastic
+boards. Pin it explicitly with `MESHSAT_ZIGBEE_PORT`.
+
+**A serial device goes silent and a reboot does not fix it.** On some hosts USB VBUS stays powered
+across a warm reboot, so the device firmware never resets. Cut power properly.
 
 ## Roadmap
 
-**v0.1.x** -- Iridium SBD + Meshtastic bridge with configurable rules engine, MQTT gateway, pass-aware scheduler, dead letter queue with ISU-aware backoff, device management, SOS mode, and full dashboard.
+**v0.1.x** Iridium SBD plus Meshtastic bridging, rules engine, MQTT gateway, pass-aware scheduler,
+dead letter queue with ISU-aware backoff, device management, SOS mode, dashboard.
 
-**v0.2.0** -- Any-to-any routing fabric. Channel registry, unified rules engine, structured dispatcher, cellular integration, SMAZ2 compression, ZigBee gateway, InterfaceManager with USB hotplug, object groups, failover groups, transform pipelines, Ed25519 audit log, config export/import.
+**v0.2.0** Any-to-any routing fabric. Channel registry, unified rules engine, structured dispatcher,
+cellular integration, SMAZ2 compression, ZigBee gateway, InterfaceManager with USB hotplug, object
+groups, failover groups, transform pipelines, Ed25519 audit log, config export and import.
 
-**v0.3.0** -- 3-tier compression (SMAZ2 lossless, llama-zip LLM lossless, MSVQ-SC lossy semantic with rate-adaptive codebook). Reticulum-compatible routing with Ed25519 identity, announce relay, link manager, keepalive, bandwidth tracking, TCP/HDLC RNS interop, and 10 cross-connected interfaces. RockBLOCK 9704 IMT transport (100 KB messages, JSPR protocol). SBD/IMT decoupled into separate gateway types with independent signal recording. APRS and TAK gateways. DeviceSupervisor with USB hotplug and GatewayManager lifecycle wiring. Full Meshtastic protocol (~80%+ coverage, official protobuf bindings). Cross-platform key exchange (QR bundles, master key envelope encryption). Credential management with encrypted cert storage and Hub distribution. Hub MQTT connection (WSS + mTLS, command handlers, health telemetry). Multi-instance gateway support. Config diff preview endpoint. Field intelligence (dead man's switch, geofence, health scores, burst queue, topology). Android companion app.
+**v0.3.0** Three-tier compression. Reticulum-compatible routing with Ed25519 identity, announce
+relay, link manager, keepalive, bandwidth tracking and TCP/HDLC RNS interop across nine wired
+interfaces. RockBLOCK 9704 IMT transport. SBD and IMT decoupled into separate gateway types. APRS
+and TAK gateways. DeviceSupervisor with USB hotplug and gateway lifecycle wiring. Full Meshtastic
+protocol via the official protobuf bindings. Cross-platform key exchange. Credential management.
+Multi-instance gateways. Field intelligence. Android companion app.
 
-**Next -- Protocol enhancements:**
-- DTN concepts: custody transfer, bundle fragmentation, and late binding integrated into the delivery ledger (RFC 9171 inspired)
-- Forward error correction (FEC): Reed-Solomon codec in the transform pipeline for noisy channels (LoRa, satellite)
-- GPS-denied time synchronization: mesh clock consensus with stratum tracking, Iridium MSSTM and Hub NTP fallback
-- **HeMB — Heterogeneous Media Bonding Protocol:** multi-bearer bonding with RLNC coding across heterogeneous bearer adapters and per-bearer FEC profiles. Current allocation is free-first (paid bearers held at zero while a free bearer is healthy); formalising capacity-aware monetary-cost semantics, paid activation and validation at larger latency ratios (design envelope 1:900) is planned specification work. RLNC encoding across bonded bearer groups confirmed on hardware (March 2026). Three-bearer field validation over LoRa, TCP and SMS completed April 2026; validation over a paid satellite bearer is still outstanding. An RFC submission via the RFC Series' Independent Submission Stream (draft-papadopoulos-hemb-00) is planned to follow the specification work and the outstanding satellite-bearer measurement.
+**Next, protocol work**
 
-**Next -- New Reticulum interfaces:**
-- SMS interface: Reticulum packets over cellular SMS
-- ZigBee interface: Reticulum packets over ZigBee mesh
-- BLE interface: Reticulum packets over Bluetooth Low Energy
+- DTN concepts: custody transfer, bundle fragmentation and late binding in the delivery ledger,
+  taking cues from RFC 9171
+- Forward error correction: a Reed-Solomon codec in the transform pipeline for noisy channels
+- GPS-denied time synchronisation: mesh clock consensus with stratum tracking, Iridium MSSTM and an
+  NTP fallback
+- **HeMB:** formalising capacity-aware cost semantics and paid activation, then validating at larger
+  latency ratios. RLNC encoding across bonded groups was confirmed on hardware in March 2026, and a
+  three-bearer field test over LoRa, TCP and SMS completed in April 2026. Validation over a paid
+  satellite bearer is still outstanding. An RFC submission through the Independent Submission Stream
+  (`draft-papadopoulos-hemb-00`) is planned to follow that specification work and measurement.
 
-**Next -- Spectrum awareness:**
-- RTL-SDR jamming detection: wideband spectrum monitoring with baseline calibration, automatic transport failover on detected jamming
+**Next, spectrum**
 
-**Future** -- Federated mesh-of-meshes (multi-network auto-discovery), HF radio transport (NVIS/ALE for 300-600 km no-infrastructure range), DMR digital radio transport, cognitive radio with dynamic spectrum access, edge AI inference for message triage, hardware security module (HSM) integration.
+- Offline characterisation of captured IQ, raw-signal evidence capture with SigMF sidecars, and
+  panoramic survey sweeps. The classifier has not yet been validated against a real jammer.
 
-## Related Projects
+**Future** Federated mesh-of-meshes, HF radio transport (NVIS/ALE), DMR, cognitive radio with
+dynamic spectrum access, edge inference for message triage, HSM integration.
 
-- **MeshSat Hub** -- Multi-tenant fleet management platform: [hub.meshsat.net](https://hub.meshsat.net)
-- **MeshSat Android** -- Standalone mobile gateway app: [github.com/cubeos-app/meshsat-android](https://github.com/cubeos-app/meshsat-android)
-- **CubeOS** -- Self-hosted OS for SBCs and edge devices: [cubeos.app](https://cubeos.app)
+## Related projects
 
-## Community
+- **MeshSat Android**, a standalone mobile gateway with BLE mesh, SPP Iridium and SMS:
+  [github.com/cubeos-app/meshsat-android](https://github.com/cubeos-app/meshsat-android)
+- **MeshSat Hub**, multi-tenant fleet management. Currently a private beta on our own infrastructure
+  with no public sign-up; access for demos and testing is arranged on request at
+  `beta-access-hub@meshsat.net`
+- **CubeOS**, a self-hosted OS for single-board computers: [cubeos.app](https://cubeos.app)
 
-- GitHub: [github.com/cubeos-app/meshsat](https://github.com/cubeos-app/meshsat)
-- Issues: Use GitHub Issues for bugs and feature requests
+## Contributing
 
-PRs welcome. See open issues for where help is needed.
+Issues and pull requests are welcome. Good places to start:
+
+- Try it with hardware we have not tested and tell us what broke. The supported-devices table above
+  is short because it only lists what we have physically run.
+- The ZigBee and BLE paths have had far less field exposure than the rest.
+- Documentation, especially anything you had to work out the hard way during setup.
+
+Open an issue before a large change so we can agree the shape of it first.
+
+## Funding
+
+This project is supported by [SIDN fonds](https://www.sidnfonds.nl/projecten/meshsat-keeping-people-connected-when-the-network-is-not).
 
 ## License
 
-Copyright 2026 - Elli & Kyriakos. Licensed under the [GNU General Public License v3.0](LICENSE).
+Copyright 2026 Elli and Kyriakos. Licensed under the
+[GNU General Public License v3.0](LICENSE).
