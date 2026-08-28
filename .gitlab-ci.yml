@@ -13,7 +13,7 @@ stages:
   - pages
 
 variables:
-  MESHSAT_IMAGE: "ghcr.io/cubeos-app/meshsat"
+  MESHSAT_IMAGE: "ghcr.io/meshsat/meshsat"
   BUILDER_IMAGE: "ghcr.io/cubeos-app/api-builder:latest"
 
 # -----------------------------------------------------------------------------

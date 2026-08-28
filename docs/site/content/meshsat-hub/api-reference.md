@@ -7,7 +7,7 @@ weight: 3
 
 MeshSat exposes a REST API on port `6050` (configurable via `MESHSAT_PORT`). All endpoints return JSON. No authentication is required by default — secure access at the reverse proxy layer (see [Deployment Guide](/meshsat-hub/deployment/)).
 
-The full OpenAPI 3.0 specification is available at [`/docs/swagger/swagger.json`](https://github.com/cubeos-app/meshsat/blob/main/docs/swagger/swagger.json) in the repository.
+The full OpenAPI 3.0 specification is available at [`/docs/swagger/swagger.json`](https://github.com/meshsat/meshsat/blob/main/docs/swagger/swagger.json) in the repository.
 
 ---
 

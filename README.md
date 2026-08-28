@@ -1,11 +1,11 @@
 # MeshSat
 
-[![Stars](https://img.shields.io/github/stars/cubeos-app/meshsat?style=flat&logo=github&color=blue)](https://github.com/cubeos-app/meshsat)
-[![Release](https://img.shields.io/github/v/release/cubeos-app/meshsat?color=blue)](https://github.com/cubeos-app/meshsat/releases)
+[![Stars](https://img.shields.io/github/stars/meshsat/meshsat?style=flat&logo=github&color=blue)](https://github.com/meshsat/meshsat)
+[![Release](https://img.shields.io/github/v/release/meshsat/meshsat?color=blue)](https://github.com/meshsat/meshsat/releases)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-green)](LICENSE)
 ![Go 1.24+](https://img.shields.io/badge/go-1.24+-blue)
 ![Tests](https://img.shields.io/badge/tests-1333-green)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fcubeos--app%2Fmeshsat-blue)](https://github.com/orgs/cubeos-app/packages/container/package/meshsat)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fmeshsat%2Fmeshsat-blue)](https://github.com/orgs/meshsat/packages/container/package/meshsat)
 
 ### Keep a message moving when the network is gone.
 
@@ -33,7 +33,7 @@ Save this as `docker-compose.yml`:
 ```yaml
 services:
   meshsat:
-    image: ghcr.io/cubeos-app/meshsat:latest
+    image: ghcr.io/meshsat/meshsat:latest
     container_name: meshsat
     restart: unless-stopped
     privileged: true
@@ -228,7 +228,7 @@ over USB, the RockBLOCK 9603 wired to the Pi 5 GPIO UART. Everything is auto-det
 ### From source
 
 ```bash
-git clone https://github.com/cubeos-app/meshsat.git
+git clone https://github.com/meshsat/meshsat.git
 cd meshsat
 make build-with-web    # Vue SPA plus Go binary
 ```
@@ -477,7 +477,7 @@ dynamic spectrum access, edge inference for message triage, HSM integration.
 ## Related projects
 
 - **MeshSat Android**, a standalone mobile gateway with BLE mesh, SPP Iridium and SMS:
-  [github.com/cubeos-app/meshsat-android](https://github.com/cubeos-app/meshsat-android)
+  [github.com/meshsat/meshsat-android](https://github.com/meshsat/meshsat-android)
 - **MeshSat Hub**, multi-tenant fleet management. Currently a private beta on our own infrastructure
   with no public sign-up; access for demos and testing is arranged on request at
   `beta-access-hub@meshsat.net`

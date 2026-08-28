@@ -262,4 +262,4 @@ If the issue persists:
    docker compose -f docker-compose.prod.yml logs --since 1h > meshsat-logs.txt 2>&1
    ```
 
-2. Open an issue on [GitHub](https://github.com/cubeos-app/meshsat/issues) with the collected diagnostics.
+2. Open an issue on [GitHub](https://github.com/meshsat/meshsat/issues) with the collected diagnostics.

@@ -10,7 +10,7 @@ MeshSat runs as a single Docker container. No complex orchestration required.
 ## Docker Compose (Recommended)
 
 ```bash
-git clone https://github.com/cubeos-app/meshsat.git
+git clone https://github.com/meshsat/meshsat.git
 cd meshsat
 cp docker-compose.standalone.yml docker-compose.yml
 ```
@@ -20,7 +20,7 @@ Edit `docker-compose.yml` to match your hardware:
 ```yaml
 services:
   meshsat:
-    image: ghcr.io/cubeos-app/meshsat:latest
+    image: ghcr.io/meshsat/meshsat:latest
     restart: unless-stopped
     privileged: true
     ports:
