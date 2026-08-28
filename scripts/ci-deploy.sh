@@ -14,7 +14,7 @@
 # =============================================================================
 set -euo pipefail
 
-GHCR_IMAGE="ghcr.io/cubeos-app/meshsat"
+GHCR_IMAGE="ghcr.io/meshsat/meshsat"
 CONTAINER_NAME="meshsat"
 HOST_PORT="6050"
 HEALTH_TIMEOUT="90"

@@ -25,7 +25,7 @@ MeshSat is an open-source multi-channel communications bridge that connects Mesh
 
 ```bash
 # 1. Clone
-git clone https://github.com/cubeos-app/meshsat.git
+git clone https://github.com/meshsat/meshsat.git
 cd meshsat
 
 # 2. Configure
@@ -52,5 +52,5 @@ The web dashboard is at `http://<your-pi>:6050`.
 
 ## Links
 
-- [GitHub](https://github.com/cubeos-app/meshsat) — source code (GPLv3)
+- [GitHub](https://github.com/meshsat/meshsat) — source code (GPLv3)
 - [YouTrack](https://youtrack.nuclearlighters.net/projects/MESHSAT) — issue tracker

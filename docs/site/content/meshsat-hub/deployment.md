@@ -24,7 +24,7 @@ Internet
 
 | Component | Image | Port | Purpose |
 |-----------|-------|------|---------|
-| MeshSat Hub | `ghcr.io/cubeos-app/meshsat` | 6050 (internal) | REST API + Vue dashboard |
+| MeshSat Hub | `ghcr.io/meshsat/meshsat` | 6050 (internal) | REST API + Vue dashboard |
 | Caddy | `caddy:2-alpine` | 80, 443 | Reverse proxy, auto TLS |
 | Mosquitto | `eclipse-mosquitto:2` | 1883, 8883 | MQTT broker for field devices |
 

@@ -19,7 +19,7 @@ theme = "PaperMod"
 
   [[params.socialIcons]]
     name = "github"
-    url = "https://github.com/cubeos-app/meshsat"
+    url = "https://github.com/meshsat/meshsat"
 
 [menu]
   [[menu.main]]

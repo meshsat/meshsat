@@ -8,14 +8,14 @@ MeshSat is GPLv3 open source. Contributions are welcome.
 
 ## Repository
 
-- **Source**: [github.com/cubeos-app/meshsat](https://github.com/cubeos-app/meshsat)
+- **Source**: [github.com/meshsat/meshsat](https://github.com/meshsat/meshsat)
 - **Issues**: [YouTrack MESHSAT project](https://youtrack.nuclearlighters.net/projects/MESHSAT)
 - **License**: GPL-3.0
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/cubeos-app/meshsat.git
+git clone https://github.com/meshsat/meshsat.git
 cd meshsat
 
 # Backend
