@@ -116,6 +116,7 @@ matters, it is probably the most useful thing on the page.
 | HeMB mixed free and paid allocation | **Undefined.** See the allocator note below |
 | RTL-SDR jamming detection | Implemented and tested against ambient noise only, **never against a real jammer** |
 | ZigBee gateway | Code complete, light field exposure |
+| OOB management frames (remote commands over SMS, APRS, mesh, Iridium) | Built with unit and integration tests, **not yet exercised on a kit** |
 | Deployment to a real end user | **Never.** No emergency service has used this |
 | Use in an actual disaster | **Never** |
 
@@ -214,6 +215,10 @@ over USB, the RockBLOCK 9603 wired to the Pi 5 GPIO UART. Everything is auto-det
 - **Satellite pass prediction** by SGP4/TLE propagation with signal correlation
 - **RTL-SDR spectrum monitoring** across five bands with a multi-feature jamming classifier, feeding
   automatic transport failover
+- **OOB management frames:** authenticated, optionally encrypted single-message commands (PING,
+  REBOOT, RESTART, RESET per interface and level, BEARER, LOG, STATUS-NET) that ride any bearer,
+  replay-protected, with host actions behind an allowlisted agent. A kit that has lost its WiFi can
+  still be reached over SMS or APRS. Spec: `docs/OOB_MANAGEMENT_PROTOCOL.md`
 - **Config export and import** in YAML, in the style of `show running-config`, with diff preview
 
 ### Dashboard and API
@@ -295,6 +300,9 @@ can override them afterwards.
 | `MESHSAT_MAX_HOPS` | `8` | Maximum interfaces a message may traverse |
 | `MESHSAT_MESH_WATCHDOG_MIN` | `10` | Minutes of silence before a Meshtastic reconnect |
 | `MESHSAT_MESH_MTU` | `100` | HeMB mesh bearer MTU in bytes, range 1 to 237 |
+| `MESHSAT_OOB_ENABLED` | `false` | OOB management frames: accept authenticated commands over any bearer (first-boot default, UI-managed afterwards) |
+| `MESHSAT_OOB_REPLY_BUDGET` | `12` | OOB replies per peer per hour |
+| `MESHSAT_OOB_HOST_SOCKET` | `/run/meshsat-oob/agent.sock` | OOB host agent socket (see `scripts/install-oob-agent.sh`) |
 
 **Compression sidecars**
 
