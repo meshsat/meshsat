@@ -51,6 +51,14 @@ echo "Pulling latest MeshSat image from GHCR..."
 timeout 120 docker pull "${GHCR_IMAGE}:latest" 2>&1 || {
   echo "Pull failed, using cached..."
 }
+# Never take the running bridge down for an image we do not have. On
+# 2026-09-02 a pull timed out on a flapping WiFi link, the container was
+# stopped and removed, and compose then failed with "No such image",
+# leaving the kit without a bridge. [MESHSAT-756]
+if ! docker image inspect "${GHCR_IMAGE}:latest" >/dev/null 2>&1; then
+  echo "ERROR: ${GHCR_IMAGE}:latest is not available locally after the pull; leaving the running container untouched"
+  exit 1
+fi
 
 # --- Local registry (CubeOS only — field kits don't have one) ---
 if [ "$DEPLOY_LAYOUT" = "cubeos" ]; then

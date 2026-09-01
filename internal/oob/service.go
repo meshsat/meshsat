@@ -600,7 +600,7 @@ type TargetInfo struct {
 	Name    string `json:"name"`
 	Kind    string `json:"kind"`
 	IfaceID string `json:"iface_id,omitempty"`
-	Levels  []byte `json:"levels"`
+	Levels  []int  `json:"levels"` // ints, not bytes: a []byte would marshal as base64
 	Bearer  bool   `json:"bearer"` // usable with BEARER
 }
 
@@ -609,23 +609,23 @@ func (s *Service) TargetsInfo() []TargetInfo {
 	agent := s.d.Host != nil && s.d.Host.Available()
 	out := make([]TargetInfo, 0, len(Targets))
 	for _, t := range Targets {
-		info := TargetInfo{Code: t.Code, Name: t.Name, Kind: t.Kind.String(), IfaceID: t.IfaceID, Bearer: t.IfaceID != "" && s.d.Gateways != nil}
+		info := TargetInfo{Code: t.Code, Name: t.Name, Kind: t.Kind.String(), IfaceID: t.IfaceID, Bearer: t.IfaceID != "" && s.d.Gateways != nil, Levels: []int{}}
 		for level := byte(MinLevel); level <= MaxLevel; level++ {
 			switch {
 			case t.Code == TargetBridge:
 				if level == LevelSoft && s.restart != nil {
-					info.Levels = append(info.Levels, level)
+					info.Levels = append(info.Levels, int(level))
 				}
 			case t.Code == TargetHost:
 				if level == LevelHard && agent {
-					info.Levels = append(info.Levels, level)
+					info.Levels = append(info.Levels, int(level))
 				}
 			case s.action(t.Name, level) != nil:
-				info.Levels = append(info.Levels, level)
+				info.Levels = append(info.Levels, int(level))
 			case t.Kind == KindInterface && level == LevelSoft && t.IfaceID != "" && s.d.Gateways != nil:
-				info.Levels = append(info.Levels, level)
+				info.Levels = append(info.Levels, int(level))
 			case t.HostActions[level] != "" && agent:
-				info.Levels = append(info.Levels, level)
+				info.Levels = append(info.Levels, int(level))
 			}
 		}
 		out = append(out, info)
