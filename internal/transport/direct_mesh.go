@@ -1006,6 +1006,15 @@ func (t *DirectMeshTransport) GetConfig(_ context.Context) (map[string]interface
 	return result, nil
 }
 
+// MyNodeNum returns the connected radio's own node number (0 before the
+// config handshake completes). Used to address admin messages to the local
+// radio, for example the OOB RESET mesh device level. [MESHSAT-756]
+func (t *DirectMeshTransport) MyNodeNum() uint32 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.myNodeNum
+}
+
 func (t *DirectMeshTransport) AdminReboot(_ context.Context, nodeNum uint32, delay int) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

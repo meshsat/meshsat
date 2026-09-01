@@ -1502,6 +1502,29 @@ func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 // forceReconnect closes the serial port to unblock a stuck ioLoop.
 // The ioLoop detects the closed fd, emits "disconnected", and returns.
 // The interface manager will re-bind the device on its next scan cycle.
+// Reconnect closes the serial port so the I/O loop reopens it; the device
+// supervisor re-binds the modem on its next cycle. Soft level of the OOB
+// RESET command. [MESHSAT-756]
+func (t *DirectCellTransport) Reconnect(_ context.Context) error {
+	t.forceReconnect()
+	return nil
+}
+
+// DeviceReset asks the modem for a full functionality reset (AT+CFUN=1,1),
+// which restarts the radio stack without touching PWRKEY (a PWRKEY pulse
+// toggles the T-Call off). Device level of the OOB RESET command.
+// [MESHSAT-756]
+func (t *DirectCellTransport) DeviceReset(_ context.Context) error {
+	resp, err := t.execAT("AT+CFUN=1,1", 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("cellular: AT+CFUN=1,1: %w", err)
+	}
+	if strings.Contains(resp, "ERROR") {
+		return fmt.Errorf("cellular: AT+CFUN=1,1 rejected: %s", strings.TrimSpace(resp))
+	}
+	return nil
+}
+
 func (t *DirectCellTransport) forceReconnect() {
 	t.mu.Lock()
 	defer t.mu.Unlock()

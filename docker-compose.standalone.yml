@@ -28,6 +28,9 @@ services:
       - meshsat-data:/data
       - /dev:/dev
       - /sys:/sys:ro
+      # OOB management host agent socket directory (scripts/install-oob-agent.sh).
+      # Mount the DIRECTORY, never the socket file. [MESHSAT-756]
+      - /run/meshsat-oob:/run/meshsat-oob
     restart: unless-stopped
 
 volumes:

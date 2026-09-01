@@ -1144,6 +1144,23 @@ func findJSPRHelper() string {
 //
 // Uses /dev/gpiochipN directly (no gpioset/gpioget binaries needed — they
 // may not be installed inside the Docker container). [MESHSAT-403]
+// Reconnect re-runs the JSPR connect sequence. Soft level of the OOB RESET
+// command. [MESHSAT-756]
+func (t *DirectIMTTransport) Reconnect(_ context.Context) error {
+	return t.connect()
+}
+
+// DeviceReset cycles the modem's I_EN line (power enable) when the GPIO is
+// configured, then reconnects. Device level of the OOB RESET command.
+// [MESHSAT-756]
+func (t *DirectIMTTransport) DeviceReset(_ context.Context) error {
+	if t.gpioIEN <= 0 {
+		return fmt.Errorf("imt: I_EN GPIO not configured")
+	}
+	t.resetModemJSPR()
+	return t.connect()
+}
+
 func (t *DirectIMTTransport) resetModemJSPR() {
 	chipPath := "/dev/" + t.gpioChip
 

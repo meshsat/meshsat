@@ -15,6 +15,7 @@ import (
 	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
+	"meshsat/internal/oob"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/spectrum"
@@ -51,6 +52,7 @@ type Server struct {
 	devSupervisor *transport.DeviceSupervisor
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
+	oob           *oob.Service // OOB management frames [MESHSAT-756]
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
@@ -255,6 +257,11 @@ func (s *Server) SetResourceTransfer(rt *routing.ResourceTransfer) {
 // SetKeyStore sets the key store for cross-platform key exchange.
 func (s *Server) SetKeyStore(ks *keystore.KeyStore) {
 	s.keyStore = ks
+}
+
+// SetOOBService wires the OOB management-frame service. [MESHSAT-756]
+func (s *Server) SetOOBService(svc *oob.Service) {
+	s.oob = svc
 }
 
 // SetTransformPipeline sets the transform pipeline for applying egress transforms on SMS send. [MESHSAT-447]
