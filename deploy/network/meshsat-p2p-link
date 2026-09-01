@@ -9,6 +9,15 @@
 # they never merge.
 #
 # Runs on the dongle only. wlan0 (the management path) is never touched.
+#
+# ⚠ REQUIRES ANTENNAS ON THE DONGLES. Measured 2026-09-01: with no antenna
+# fitted the dongle transmits into a badly mismatched load at full power and
+# retransmits constantly (5,5 Mbit/s, 66% loss). A few centimetres from the Pi
+# that desenses the onboard CYW43455 - a combo chip sharing a 2,4 GHz front end
+# even when the management link is on 5 GHz. Effect on parallax: 0 disconnects
+# per half hour while idle, then ~6 PER MINUTE the moment Reticulum passed
+# traffic over the link. Stopping this service returned it to 0 within 90 s.
+# Idle IBSS is harmless; it is traffic that does the damage.
 [ -r /etc/default/meshsat-network ] && . /etc/default/meshsat-network
 SSID=${MESHSAT_P2P_SSID:-meshsat-link}
 FREQ=${MESHSAT_P2P_FREQ:-2412}
