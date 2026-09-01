@@ -1,0 +1,10 @@
+[Unit]
+Description=MeshSat management keepalive every 30s
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

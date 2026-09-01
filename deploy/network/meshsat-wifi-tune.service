@@ -1,0 +1,11 @@
+[Unit]
+Description=MeshSat WiFi tuning (disable power save on all wireless interfaces)
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/meshsat-wifi-tune
+
+[Install]
+WantedBy=multi-user.target

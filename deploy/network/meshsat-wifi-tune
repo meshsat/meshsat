@@ -1,0 +1,7 @@
+#!/bin/sh
+# WiFi power save adds latency and makes a marginal link drop outright. Applied
+# to the onboard radio and to the USB dongle when it is in use.
+for i in $(ls /sys/class/net | grep -E '^(wlan|wlx)'); do
+  iw dev "$i" set power_save off 2>/dev/null || true
+done
+exit 0

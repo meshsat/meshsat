@@ -1,0 +1,13 @@
+#!/bin/sh
+# The kit can always reach the management host, but inbound ARP resolution for
+# the kit intermittently fails on a busy wireless network, leaving it
+# unreachable from the management host while it is perfectly online. A periodic
+# outbound ping keeps that neighbour entry fresh. Outbound ICMP only: this
+# cannot affect the kit's own connectivity.
+#
+# MESHSAT_MGMT_HOSTS may be overridden in /etc/default/meshsat-network.
+[ -r /etc/default/meshsat-network ] && . /etc/default/meshsat-network
+for host in ${MESHSAT_MGMT_HOSTS:-192.168.181.111}; do
+  ping -c 1 -W 2 "$host" >/dev/null 2>&1 || true
+done
+exit 0
