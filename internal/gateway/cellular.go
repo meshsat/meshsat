@@ -201,10 +201,12 @@ func (g *CellularGateway) ForwardWebhookInbound(msg InboundMessage) {
 func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMessage) error {
 	var text string
 
-	if msg.Encrypted {
+	if msg.Encrypted || msg.RawText {
 		// Encrypted: send raw base64 ciphertext only — no prefix, no metadata.
 		// The MeshSat Android app expects pure base64 for decryption.
 		// GSM safety was already validated by the dispatcher (re-encrypt loop).
+		// RawText: an OOB management frame, already GSM-safe base32, sent
+		// verbatim so the peer's classifier finds the sentinel. [MESHSAT-756]
 		text = msg.DecodedText
 	} else {
 		// Plain text: human-readable format with sender name
@@ -317,10 +319,11 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 				}
 
 				inbound := InboundMessage{
-					Text:    event.Message,
-					To:      g.config.InboundDestNode,
-					Channel: g.config.InboundChannel,
-					Source:  "cellular",
+					Text:     event.Message,
+					To:       g.config.InboundDestNode,
+					Channel:  g.config.InboundChannel,
+					Source:   "cellular",
+					FromAddr: sender, // reply address and attribution; never used for authentication [MESHSAT-756]
 				}
 
 				g.msgsIn.Add(1)

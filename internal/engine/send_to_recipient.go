@@ -40,6 +40,10 @@ type SendOptions struct {
 	Precedence   types.Precedence
 	Strategy     directory.Strategy // zero value triggers policy resolution
 	MaxCostCents *int
+	// Class and MaxRetries apply to the Raw escape hatch only (OOB
+	// management replies use them). [MESHSAT-756]
+	Class      string
+	MaxRetries int
 }
 
 // SendResult reports what the dispatcher actually did on behalf of a
@@ -123,7 +127,14 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		if rcpt.Raw.InterfaceID == "" {
 			return res, fmt.Errorf("RawRecipient requires InterfaceID")
 		}
-		id, _, err := d.QueueDirectSend(rcpt.Raw.InterfaceID, string(body), string(res.Precedence))
+		// The raw address reaches the delivery row as its destination
+		// (reply-to-sender) instead of being dropped. [MESHSAT-756]
+		id, _, err := d.QueueDirectSendTo(rcpt.Raw.InterfaceID, string(body), DirectSendOptions{
+			Precedence:  string(res.Precedence),
+			Destination: rcpt.Raw.Address,
+			Class:       opts.Class,
+			MaxRetries:  opts.MaxRetries,
+		})
 		if err != nil {
 			return res, err
 		}
