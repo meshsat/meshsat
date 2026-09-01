@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""meshsat-oob-agent: allowlisted host actions for the MeshSat bridge.
+
+The bridge container talks to this agent over a Unix socket
+(/run/meshsat-oob/agent.sock, directory bind-mounted into the container):
+one JSON line request, one JSON line reply, one connection per call.
+
+  -> {"action": "journal_tail", "args": {"unit": "docker", "lines": 10}}
+  <- {"ok": true, "result": {"lines": ["..."]}, "version": "1"}
+  <- {"ok": false, "error": "unknown action"}
+
+Every action is a fixed argv built from table lookups and clamped
+integers. Nothing from a request is ever interpolated into a shell string
+and no netplan action exists. The bridge already runs privileged, so this
+allowlist is defence in depth and a declarative record of what a kit will
+do on a remote command, not the security boundary. [MESHSAT-756]
+
+Runs under systemd socket activation (meshsat-oob-agent.socket); started by
+hand it binds the socket itself.
+"""
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+VERSION = "1"
+SOCKET_PATH = os.environ.get("MESHSAT_OOB_SOCKET", "/run/meshsat-oob/agent.sock")
+READ_TIMEOUT = 5.0
+MAX_LINE = 4096
+
+# Journal units LOG may read. Mirrors internal/oob/commands.go LogUnits.
+UNITS = {
+    "meshsat-oob-agent": "meshsat-oob-agent.service",
+    "docker": "docker.service",
+    "netplan-wpa-wlan0": "netplan-wpa-wlan0.service",
+    "systemd-networkd": "systemd-networkd.service",
+    "x1202-monitor": "x1202-monitor.service",
+    "meshsat-mgmt-keepalive": "meshsat-mgmt-keepalive.service",
+    "meshsat-p2p-link": "meshsat-p2p-link.service",
+    "bluetooth": "bluetooth.service",
+}
+
+# Units service_restart may restart. Deliberately short: restarting docker
+# would take the bridge itself down mid-command.
+RESTARTABLE = {
+    "bluetooth": "bluetooth.service",
+    "meshsat-p2p-link": "meshsat-p2p-link.service",
+    "meshsat-mgmt-keepalive": "meshsat-mgmt-keepalive.timer",
+    "x1202-monitor": "x1202-monitor.service",
+}
+
+# Wireless interfaces the wifi actions may touch.
+IFACES = {"wlan0": "wlan0"}
+
+# USB devices usb_rebind may re-enumerate through sysfs unbind/bind, by
+# vendor:product. Devices whose chips are shared with other boards (CP210x,
+# CH34x) are not listed: the bridge resets those by port from inside the
+# container instead.
+USB_REBIND = {
+    "usb_wifi": ["0e8d:7612"],
+    "aioc": ["1209:7388"],
+    "rtl_sdr": ["0bda:2838", "0bda:2832"],
+}
+
+MAX_DELAY = 3600
+MAX_LINES = 50
+
+
+def log(msg):
+    print("oob-agent: %s" % msg, flush=True)
+
+
+def clamp(value, lo, hi, default):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+class Refused(Exception):
+    """The request did not match the allowlist."""
+
+
+def plan(action, args):
+    """Turn a request into (argv, timeout, postprocess) without executing.
+
+    argv is a list (never a string); postprocess maps the completed process
+    to the result dict. Raises Refused for anything outside the allowlist.
+    Pure, so it is unit-testable without root.
+    """
+    args = args or {}
+    if action == "ping":
+        return None, 1, lambda _p: {"version": VERSION}
+
+    if action == "reboot":
+        delay = clamp(args.get("delay", 10), 0, MAX_DELAY, 10)
+        unit = "meshsat-oob-reboot-%d" % int(time.time())
+        argv = ["systemd-run", "--collect", "--unit=" + unit,
+                "--on-active=%ds" % max(delay, 1), "systemctl", "reboot"]
+        return argv, 10, lambda _p: {"delay": delay}
+
+    if action == "journal_tail":
+        unit = UNITS.get(str(args.get("unit", "")))
+        if unit is None:
+            raise Refused("unit not allowed")
+        lines = clamp(args.get("lines", 10), 1, MAX_LINES, 10)
+        argv = ["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short-iso"]
+        return argv, 15, lambda p: {"lines": p.stdout.splitlines()}
+
+    if action == "net_status":
+        return None, 15, lambda _p: net_status()
+
+    if action == "wifi_reassociate":
+        iface = IFACES.get(str(args.get("iface", "wlan0")))
+        if iface is None:
+            raise Refused("interface not allowed")
+        return ["wpa_cli", "-i", iface, "reassociate"], 10, lambda p: {"output": p.stdout.strip()}
+
+    if action == "wifi_restart":
+        iface = IFACES.get(str(args.get("iface", "wlan0")))
+        if iface is None:
+            raise Refused("interface not allowed")
+        argv = ["systemctl", "restart", "netplan-wpa-%s.service" % iface, "systemd-networkd.service"]
+        return argv, 60, lambda _p: {"restarted": iface}
+
+    if action == "p2p_restart":
+        return ["systemctl", "restart", "meshsat-p2p-link.service"], 60, lambda _p: {"restarted": "meshsat-p2p-link"}
+
+    if action == "service_restart":
+        unit = RESTARTABLE.get(str(args.get("unit", "")))
+        if unit is None:
+            raise Refused("unit not allowed")
+        return ["systemctl", "restart", unit], 60, lambda _p: {"restarted": unit}
+
+    if action == "usb_rebind":
+        ids = USB_REBIND.get(str(args.get("device", "")))
+        if ids is None:
+            raise Refused("device not allowed")
+        return None, 20, lambda _p: usb_rebind(ids)
+
+    raise Refused("unknown action")
+
+
+def run_argv(argv, timeout):
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def net_status():
+    """Best-effort network summary; every field is optional."""
+    out = {}
+    try:
+        p = run_argv(["ip", "-j", "-4", "addr", "show", "wlan0"], 5)
+        for iface in json.loads(p.stdout or "[]"):
+            for a in iface.get("addr_info", []):
+                if a.get("scope") == "global":
+                    out["ip"] = a.get("local")
+                    break
+    except Exception as e:  # noqa: BLE001
+        out["ip_err"] = str(e)[:40]
+    try:
+        p = run_argv(["ip", "-j", "route", "show", "default"], 5)
+        out["gw"] = "Y" if json.loads(p.stdout or "[]") else "N"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        p = run_argv(["wpa_cli", "-i", "wlan0", "status"], 5)
+        for line in p.stdout.splitlines():
+            if line.startswith("wpa_state="):
+                out["wpa"] = line.split("=", 1)[1]
+            elif line.startswith("bssid="):
+                out["bssid"] = line.split("=", 1)[1]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        p = run_argv(["iw", "dev", "wlan0", "link"], 5)
+        for line in p.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("signal:"):
+                out["rssi"] = line.split(":", 1)[1].strip().split(" ")[0]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        for name in os.listdir("/sys/class/net"):
+            if name.startswith("wlx"):
+                with open("/sys/class/net/%s/operstate" % name) as f:
+                    out["usb"] = f.read().strip()
+                break
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def find_usb_devices(ids):
+    """Return sysfs device names whose idVendor:idProduct is in ids."""
+    found = []
+    base = "/sys/bus/usb/devices"
+    for name in sorted(os.listdir(base)):
+        try:
+            with open(os.path.join(base, name, "idVendor")) as f:
+                vid = f.read().strip()
+            with open(os.path.join(base, name, "idProduct")) as f:
+                pid = f.read().strip()
+        except OSError:
+            continue
+        if "%s:%s" % (vid, pid) in ids:
+            found.append(name)
+    return found
+
+
+def usb_rebind(ids):
+    names = find_usb_devices(ids)
+    if not names:
+        raise Refused("device not present")
+    done = []
+    for name in names:
+        with open("/sys/bus/usb/drivers/usb/unbind", "w") as f:
+            f.write(name)
+        time.sleep(1.0)
+        with open("/sys/bus/usb/drivers/usb/bind", "w") as f:
+            f.write(name)
+        done.append(name)
+    return {"rebound": done}
+
+
+def dispatch(request):
+    action = str(request.get("action", ""))
+    args = request.get("args") or {}
+    if not isinstance(args, dict):
+        return {"ok": False, "error": "args must be an object"}
+    started = time.time()
+    try:
+        argv, timeout, post = plan(action, args)
+        proc = None
+        if argv is not None:
+            proc = run_argv(argv, timeout)
+            if proc.returncode != 0:
+                err = (proc.stderr or proc.stdout or "").strip()[:120]
+                log("%s args=%s rc=%d %.2fs err=%s" % (action, json.dumps(args), proc.returncode, time.time() - started, err))
+                return {"ok": False, "error": "rc=%d %s" % (proc.returncode, err), "version": VERSION}
+        result = post(proc)
+        log("%s args=%s rc=0 %.2fs" % (action, json.dumps(args), time.time() - started))
+        return {"ok": True, "result": result, "version": VERSION}
+    except Refused as e:
+        log("%s args=%s refused: %s" % (action, json.dumps(args), e))
+        return {"ok": False, "error": str(e), "version": VERSION}
+    except subprocess.TimeoutExpired:
+        log("%s timed out" % action)
+        return {"ok": False, "error": "timeout", "version": VERSION}
+    except Exception as e:  # noqa: BLE001
+        log("%s failed: %s" % (action, e))
+        return {"ok": False, "error": str(e)[:120], "version": VERSION}
+
+
+def handle(conn):
+    conn.settimeout(READ_TIMEOUT)
+    try:
+        data = b""
+        while b"\n" not in data and len(data) < MAX_LINE:
+            chunk = conn.recv(1024)
+            if not chunk:
+                break
+            data += chunk
+        line = data.split(b"\n", 1)[0].strip()
+        if not line:
+            return
+        try:
+            request = json.loads(line.decode("utf-8"))
+        except ValueError:
+            reply = {"ok": False, "error": "invalid json", "version": VERSION}
+        else:
+            reply = dispatch(request if isinstance(request, dict) else {})
+        conn.sendall((json.dumps(reply) + "\n").encode("utf-8"))
+    except socket.timeout:
+        pass
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def listen_socket():
+    """Socket activation (fd 3) when started by systemd, else bind ourselves."""
+    if os.environ.get("LISTEN_FDS") == "1":
+        return socket.socket(fileno=3, family=socket.AF_UNIX, type=socket.SOCK_STREAM)
+    d = os.path.dirname(SOCKET_PATH)
+    os.makedirs(d, mode=0o750, exist_ok=True)
+    try:
+        os.unlink(SOCKET_PATH)
+    except FileNotFoundError:
+        pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(SOCKET_PATH)
+    os.chmod(SOCKET_PATH, 0o660)
+    s.listen(4)
+    return s
+
+
+def main():
+    s = listen_socket()
+    log("listening on %s (version %s)" % (SOCKET_PATH, VERSION))
+    while True:
+        try:
+            conn, _ = s.accept()
+        except OSError as e:
+            log("accept: %s" % e)
+            time.sleep(0.5)
+            continue
+        handle(conn)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
