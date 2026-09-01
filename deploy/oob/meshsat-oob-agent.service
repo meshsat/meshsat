@@ -1,0 +1,17 @@
+[Unit]
+Description=MeshSat OOB host agent (allowlisted host actions for the bridge container)
+Documentation=https://github.com/meshsat/meshsat/blob/main/docs/OOB_MANAGEMENT_PROTOCOL.md
+Requires=meshsat-oob-agent.socket
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/meshsat-oob-agent
+Restart=always
+RestartSec=2
+# No RuntimeDirectory= on purpose: systemd would delete and recreate
+# /run/meshsat-oob on restart and leave the container's bind mount on a
+# dead inode. The directory comes from tmpfiles.d instead.
+
+[Install]
+WantedBy=multi-user.target

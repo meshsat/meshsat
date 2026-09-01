@@ -1,0 +1,15 @@
+[Unit]
+Description=MeshSat OOB host agent socket (/run/meshsat-oob/agent.sock)
+Documentation=https://github.com/meshsat/meshsat/blob/main/docs/OOB_MANAGEMENT_PROTOCOL.md
+
+[Socket]
+ListenStream=/run/meshsat-oob/agent.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=root
+# The bridge container bind-mounts the DIRECTORY; the socket file must
+# survive a service restart or the container keeps a dead inode.
+RemoveOnStop=no
+
+[Install]
+WantedBy=sockets.target
