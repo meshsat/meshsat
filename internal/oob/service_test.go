@@ -453,9 +453,9 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-func contains3(list []byte, b byte) bool {
+func contains3(list []int, b byte) bool {
 	for _, v := range list {
-		if v == b {
+		if v == int(b) {
 			return true
 		}
 	}
