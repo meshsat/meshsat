@@ -64,6 +64,12 @@ type Processor struct {
 
 	// HeMB (MESHSAT-415)
 	hembBonder hemb.Bonder // nil = HeMB disabled
+
+	// OOB management frame classifier (MESHSAT-756). Runs before the rules
+	// engine on gateway and mesh text; a true return means the text was a
+	// frame and must not enter messages, rules or forwarding.
+	oobMu      sync.RWMutex
+	oobInbound func(ctx context.Context, ifaceID, fromAddr, text string) bool
 }
 
 // NewProcessor creates a new event processor.
@@ -84,6 +90,41 @@ func (p *Processor) SetDeduplicator(d *dedup.Deduplicator) {
 // SetDispatcher sets the v0.2.0 dispatcher for structured delivery fan-out.
 func (p *Processor) SetDispatcher(d *Dispatcher) {
 	p.dispatcher = d
+}
+
+// SetOOBInbound installs the OOB management-frame classifier. It runs
+// before DispatchAccess and before persistence; a true return means the
+// text was a frame and is consumed. Safe to call after gateways have
+// started. [MESHSAT-756]
+func (p *Processor) SetOOBInbound(fn func(ctx context.Context, ifaceID, fromAddr, text string) bool) {
+	p.oobMu.Lock()
+	p.oobInbound = fn
+	p.oobMu.Unlock()
+}
+
+func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, text string) bool {
+	p.oobMu.RLock()
+	defer p.oobMu.RUnlock()
+	return p.oobInbound
+}
+
+// oobCandidate returns the text the OOB classifier should scan: the
+// ingress-transformed copy when the interface has ingress transforms that
+// apply (SMS and APRS may carry channel encryption), else the raw wire
+// text (a clear frame on an encrypted interface fails the decrypt step and
+// must still be recognised). Never mutates the message. [MESHSAT-756]
+func (p *Processor) oobCandidate(sourceIface, raw string) string {
+	if p.dispatcher == nil || p.dispatcher.TransformPipeline() == nil || p.db == nil {
+		return raw
+	}
+	iface, err := p.db.GetInterface(sourceIface)
+	if err != nil || iface.IngressTransforms == "" || iface.IngressTransforms == "[]" {
+		return raw
+	}
+	if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress([]byte(raw), iface.IngressTransforms); tErr == nil {
+		return string(decoded)
+	}
+	return raw
 }
 
 // SetGatewayProvider sets a dynamic gateway source (e.g. the Manager).
@@ -430,6 +471,17 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 		if exists {
 			log.Debug().Uint32("packet_id", msg.ID).Msg("duplicate packet (db), skipping")
 			return
+		}
+	}
+
+	// OOB management frames typed on a phone or sent by a peer kit over
+	// LoRa are consumed here, before persistence and the rules engine.
+	// [MESHSAT-756]
+	if msg.PortNum == int(transport.PortNumTextMessage) && msg.DecodedText != "" {
+		if oob := p.oobHandler(); oob != nil {
+			if oob(context.Background(), "mesh_0", fmt.Sprintf("!%08x", msg.From), msg.DecodedText) {
+				return
+			}
 		}
 	}
 
@@ -974,6 +1026,18 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				if fromAddr == "" {
 					fromAddr = msg.Source
 				}
+				// OOB management frames are classified before anything else
+				// sees the text: decode a copy through the interface's
+				// ingress transforms, look for the sentinel, consume on
+				// match. Not a frame: everything below runs unchanged.
+				// [MESHSAT-756]
+				if oob := p.oobHandler(); oob != nil {
+					oobIface := msg.Source + "_0"
+					if oob(ctx, oobIface, msg.FromAddr, p.oobCandidate(oobIface, msg.Text)) {
+						continue
+					}
+				}
+
 				log.Info().Str("source", msg.Source).Str("from", fromAddr).Str("text", msg.Text).Msg("gateway inbound message")
 
 				p.Emit(transport.MeshEvent{

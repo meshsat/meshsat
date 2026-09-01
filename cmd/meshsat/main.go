@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,12 +33,14 @@ import (
 	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
+	"meshsat/internal/oob"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/spectrum"
 	"meshsat/internal/sysinfo"
 	"meshsat/internal/timesync"
 	"meshsat/internal/transport"
+	"meshsat/internal/types"
 )
 
 func main() {
@@ -70,6 +74,25 @@ func main() {
 	var imtTransport transport.SatTransport    // IMT (9704) transport for coexistence
 	var gpsExcludePorts []func() string        // populated in direct mode for GPS reader
 	var supervisor *transport.DeviceSupervisor // populated in direct mode for USB discovery
+
+	// OOB management RESET actions per target and level, registered here
+	// where the concrete transports are in scope. [MESHSAT-756]
+	oobActions := map[string]map[byte]oob.Action{}
+	usbResetByRole := func(role transport.DeviceRole) oob.Action {
+		return func(ctx context.Context) error {
+			if supervisor == nil {
+				return errors.New("device supervisor not running")
+			}
+			port := supervisor.Registry().PortByRole(role)
+			if port == "" {
+				return fmt.Errorf("no %s port claimed", role)
+			}
+			if !transport.USBResetSerialDevice(string(role), port) {
+				return fmt.Errorf("usb reset of %s failed", port)
+			}
+			return nil
+		}
+	}
 	switch cfg.Mode {
 	case "cubeos", "standalone":
 		mesh = transport.NewHALMeshTransport(cfg.HALURL, cfg.HALAPIKey)
@@ -171,6 +194,38 @@ func main() {
 			directCell.SetFallbackPIN(envPIN)
 		}
 		cell = directCell
+
+		// OOB RESET actions for the direct transports (levels: 1 soft, 2
+		// device, 3 hard). Level 3 re-enumerates USB; the device supervisor
+		// and gateway manager then recover the transport as for a hot-swap.
+		// [MESHSAT-756]
+		oobActions["mesh"] = map[byte]oob.Action{
+			oob.LevelSoft: directMesh.Reconnect,
+			oob.LevelDevice: func(ctx context.Context) error {
+				return directMesh.AdminReboot(ctx, directMesh.MyNodeNum(), 5)
+			},
+			oob.LevelHard: usbResetByRole(transport.RoleMeshtastic),
+		}
+		oobActions["cellular"] = map[byte]oob.Action{
+			oob.LevelSoft:   directCell.Reconnect,
+			oob.LevelDevice: directCell.DeviceReset,
+			oob.LevelHard:   usbResetByRole(transport.RoleCellular),
+		}
+		oobActions["iridium"] = map[byte]oob.Action{
+			oob.LevelSoft: directSat.Reconnect,
+			oob.LevelHard: directSat.HardPowerCycle,
+		}
+		oobActions["imt"] = map[byte]oob.Action{
+			oob.LevelSoft:   directIMT.Reconnect,
+			oob.LevelDevice: directIMT.DeviceReset,
+			oob.LevelHard:   usbResetByRole(transport.RoleIridium9704),
+		}
+		oobActions["zigbee"] = map[byte]oob.Action{
+			oob.LevelHard: usbResetByRole(transport.RoleZigBee),
+		}
+		oobActions["gps"] = map[byte]oob.Action{
+			oob.LevelHard: usbResetByRole(transport.RoleGPS),
+		}
 
 		// DeviceSupervisor: replaces one-shot auto-detect with continuous
 		// two-tier polling (30s port scan + 15s reconciliation).
@@ -1153,6 +1208,174 @@ func main() {
 		}
 	}
 
+	// OOB management frames [MESHSAT-756]: authenticated single-message
+	// commands over any bearer, executed from a fixed allowlist. Needs the
+	// keystore for the per-peer mgmt keys; without it the feature is off.
+	var oobSvc *oob.Service
+	if ks != nil {
+		if spectrumMon != nil {
+			oobActions["rtl_sdr"] = map[byte]oob.Action{
+				oob.LevelHard: func(ctx context.Context) error {
+					id := spectrumMon.Hardware().Scanner.USBPath
+					if id == "" {
+						return errors.New("rtl-sdr not detected")
+					}
+					if !transport.USBResetSysfsID("rtl_sdr", id) {
+						return errors.New("usb reset failed")
+					}
+					return nil
+				},
+			}
+		}
+		localAlias := cfg.BridgeID
+		if localAlias == "" {
+			localAlias, _ = os.Hostname()
+		}
+		oobSvc = oob.New(oob.Config{
+			Enabled:         cfg.OOBEnabled,
+			ReplyBudgetHour: cfg.OOBReplyBudget,
+			HostSocket:      cfg.OOBHostSocket,
+		}, oob.Deps{
+			DB:       db,
+			Keys:     ks,
+			Gateways: gwMgr,
+			Host:     oob.NewHostClient(cfg.OOBHostSocket),
+			BearersUp: func() map[string]bool {
+				up := map[string]bool{}
+				for _, gs := range gwMgr.GetStatus() {
+					id := gs.InstanceID
+					if id == "" {
+						id = gs.Type + "_0"
+					}
+					up[id] = gs.Connected
+				}
+				sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if ms, err := mesh.GetStatus(sctx); err == nil && ms != nil {
+					up["mesh_0"] = ms.Connected
+				}
+				return up
+			},
+			Send: func(ctx context.Context, ifaceID, address, text string) (int64, error) {
+				res, err := dispatcher.SendToRecipient(ctx,
+					engine.RecipientRef{Raw: &engine.RawRecipient{InterfaceID: ifaceID, Address: address}},
+					[]byte(text),
+					engine.SendOptions{Precedence: types.PrecedencePriority, Class: database.DeliveryClassOOB, MaxRetries: 5})
+				if err != nil {
+					return 0, err
+				}
+				ids := res.DeliveryIDs[directory.Kind("")]
+				if len(ids) == 0 {
+					return 0, errors.New("no delivery queued")
+				}
+				return ids[0], nil
+			},
+			Audit: func(eventType string, ifaceID, direction *string, deliveryID *int64, detail string) {
+				if signingService != nil {
+					signingService.AuditEvent(eventType, ifaceID, direction, deliveryID, nil, detail)
+				}
+			},
+			Emit: func(eventType string, data any) {
+				b, _ := json.Marshal(data)
+				proc.Emit(transport.MeshEvent{Type: eventType, Data: b, Time: time.Now().UTC().Format(time.RFC3339)})
+			},
+			ECDH: func(signerID string) (oob.ECDHMaterial, error) {
+				if routingID == nil || destTable == nil {
+					return oob.ECDHMaterial{}, errors.New("routing identity not available")
+				}
+				tp, err := db.GetTrustedPeer(signerID)
+				if err != nil {
+					return oob.ECDHMaterial{}, fmt.Errorf("trusted peer: %w", err)
+				}
+				hb, err := hex.DecodeString(tp.RoutingIdentity)
+				if err != nil || len(hb) != routing.DestHashLen {
+					return oob.ECDHMaterial{}, errors.New("peer routing identity invalid")
+				}
+				var h [routing.DestHashLen]byte
+				copy(h[:], hb)
+				dest := destTable.Lookup(h)
+				if dest == nil || dest.EncryptionPub == nil {
+					return oob.ECDHMaterial{}, errors.New("peer announce not seen yet")
+				}
+				priv, err := ecdh.X25519().NewPrivateKey(routingID.ReticulumIdentity().EncryptionPrivateBytes())
+				if err != nil {
+					return oob.ECDHMaterial{}, err
+				}
+				my := routingID.DestHash()
+				return oob.ECDHMaterial{MyPriv: priv, PeerPub: dest.EncryptionPub, MyHash: my[:], PeerHash: h[:]}, nil
+			},
+			Actions: oobActions,
+			TriggerScan: func() {
+				if supervisor != nil {
+					supervisor.TriggerScan()
+				}
+			},
+			Status: oob.StatusSources{
+				Uptime: func() time.Duration {
+					b, err := os.ReadFile("/proc/uptime")
+					if err != nil {
+						return 0
+					}
+					var secs float64
+					fmt.Sscanf(string(b), "%f", &secs)
+					return time.Duration(secs * float64(time.Second))
+				},
+				Battery: func() (float64, bool, bool) {
+					b, err := os.ReadFile("/run/x1202.json")
+					if err != nil {
+						return 0, false, false
+					}
+					var st struct {
+						SOC *float64 `json:"soc_percent"`
+						AC  *bool    `json:"ac_present"`
+					}
+					if json.Unmarshal(b, &st) != nil || st.SOC == nil {
+						return 0, false, false
+					}
+					return *st.SOC, st.AC != nil && *st.AC, true
+				},
+				Queued: func() int {
+					total := 0
+					seen := map[string]bool{"mesh_0": true}
+					if n, err := db.QueueDepth("mesh_0"); err == nil {
+						total += n
+					}
+					for _, gs := range gwMgr.GetStatus() {
+						id := gs.InstanceID
+						if id == "" {
+							id = gs.Type + "_0"
+						}
+						if seen[id] {
+							continue
+						}
+						seen[id] = true
+						if n, err := db.QueueDepth(id); err == nil {
+							total += n
+						}
+					}
+					return total
+				},
+				WLAN: func() (string, bool) {
+					b, err := os.ReadFile("/sys/class/net/wlan0/operstate")
+					if err != nil {
+						return "", false
+					}
+					return strings.TrimSpace(string(b)), true
+				},
+			},
+			LocalAlias: localAlias,
+		})
+		if err := oobSvc.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("oob: service start failed")
+			oobSvc = nil
+		} else {
+			proc.SetOOBInbound(oobSvc.HandleInbound)
+			srv.SetOOBService(oobSvc)
+		}
+	} else {
+		log.Info().Msg("oob: keystore unavailable, management frames disabled")
+	}
+
 	// Auto-federation: arm the BLE peer manager with the signer +
 	// bearer-snapshot callback so that each new BLE peer link
 	// exchanges a signed CapabilityManifest. [MESHSAT-635 Phase 3]
@@ -1844,6 +2067,12 @@ func main() {
 		log.Info().Msg("restart requested via API")
 		sigCh <- syscall.SIGTERM
 	})
+	if oobSvc != nil {
+		oobSvc.SetRestartFunc(func() {
+			log.Info().Msg("restart requested via OOB management frame")
+			sigCh <- syscall.SIGTERM
+		})
+	}
 
 	// Start HTTP server
 	go func() {

@@ -36,6 +36,12 @@ type Config struct {
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
 
+	// OOB management frames [MESHSAT-756]. First-boot defaults only; the
+	// persisted system_config values are UI-managed afterwards.
+	OOBEnabled     bool
+	OOBReplyBudget int
+	OOBHostSocket  string
+
 	// Meshtastic want_config_id handshake timeout in seconds.
 	// 60s default comfortably covers kits with ~50 NodeDB entries on
 	// SF7-LongFast (drain ~30-45s). 15s caused partial handshakes with
@@ -119,6 +125,9 @@ func Load() *Config {
 		PaidRateLimit:          envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 		APIRateLimit:           envInt("MESHSAT_API_RATE_LIMIT", 600),
 		MeshWatchdogMin:        envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		OOBEnabled:             envBool("MESHSAT_OOB_ENABLED", false),
+		OOBReplyBudget:         envInt("MESHSAT_OOB_REPLY_BUDGET", 12),
+		OOBHostSocket:          envStr("MESHSAT_OOB_HOST_SOCKET", "/run/meshsat-oob/agent.sock"),
 		MeshConfigTimeoutSec:   envInt("MESHSAT_MESH_CONFIG_TIMEOUT_SEC", 60),
 		LlamaZipAddr:           envStr("MESHSAT_LLAMAZIP_ADDR", ""),
 		LlamaZipTimeoutSec:     envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
