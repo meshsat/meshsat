@@ -1,0 +1,34 @@
+#!/bin/sh
+# Kit-to-kit P2P bearer on the MT7612U dongle.
+#
+# IBSS rather than WiFi Direct: Direct needs a WPS PIN negotiation that stalls
+# when one peer advertises no config methods (observed live 2026-09-01), and a
+# fixed link between two known kits does not need pairing at all. IBSS with an
+# explicit BSSID is deterministic - both kits join the same cell every time.
+# Without the fixed BSSID each kit forms its own cell under the same SSID and
+# they never merge.
+#
+# Runs on the dongle only. wlan0 (the management path) is never touched.
+[ -r /etc/default/meshsat-network ] && . /etc/default/meshsat-network
+SSID=${MESHSAT_P2P_SSID:-meshsat-link}
+FREQ=${MESHSAT_P2P_FREQ:-2412}
+BSSID=${MESHSAT_P2P_BSSID:-02:12:34:56:78:9a}
+ADDR=${MESHSAT_P2P_ADDR:-}
+
+[ -z "$ADDR" ] && { echo "MESHSAT_P2P_ADDR unset - nothing to do"; exit 0; }
+IF=$(ls /sys/class/net | grep '^wlx' | head -1)
+[ -z "$IF" ] && { echo "no USB wifi interface present"; exit 0; }
+
+# wpa_supplicant claims the interface and fights IBSS mode for it.
+pkill -f "wpa_supplicant.*$IF" 2>/dev/null
+sleep 1
+ip link set "$IF" down 2>/dev/null
+iw dev "$IF" set type ibss 2>/dev/null
+ip link set "$IF" up 2>/dev/null
+sleep 2
+iw dev "$IF" ibss join "$SSID" "$FREQ" fixed-freq "$BSSID" 2>/dev/null
+sleep 2
+ip addr flush dev "$IF" 2>/dev/null
+ip addr add "$ADDR" dev "$IF" 2>/dev/null
+iw dev "$IF" set power_save off 2>/dev/null
+exit 0

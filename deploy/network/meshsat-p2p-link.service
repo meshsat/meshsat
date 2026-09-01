@@ -1,0 +1,11 @@
+[Unit]
+Description=MeshSat kit-to-kit P2P bearer (IBSS on the USB WiFi dongle)
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/meshsat-p2p-link
+
+[Install]
+WantedBy=multi-user.target
