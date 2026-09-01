@@ -50,6 +50,8 @@ type MessageDelivery struct {
 	CustodyID     string     `json:"custody_id,omitempty"`     // DTN custody chain UUID (hex, MESHSAT-408)
 	CustodianHash string     `json:"custodian_hash,omitempty"` // current custodian dest hash
 	Precedence    string     `json:"precedence,omitempty"`     // STANAG 4406 Edition 2 level (MESHSAT-543)
+	Destination   string     `json:"destination,omitempty"`    // bearer address for reply-to-sender sends; empty = interface default (MESHSAT-756)
+	Class         string     `json:"class"`                    // DeliveryClassMessage (default) or DeliveryClassOOB (MESHSAT-756)
 	CreatedAt     string     `json:"created_at"`
 	UpdatedAt     string     `json:"updated_at"`
 }
@@ -83,11 +85,15 @@ func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
 	if precedence == "" {
 		precedence = "Routine"
 	}
+	class := d.Class
+	if class == "" {
+		class = DeliveryClassMessage
+	}
 	res, err := db.Exec(`INSERT INTO message_deliveries
-		(msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, seq_num, signature, signer_id, precedence)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, seq_num, signature, signer_id, precedence, destination, delivery_class)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.Retries, d.MaxRetries, d.NextRetry, visited,
-		d.TTLSeconds, d.ExpiresAt, d.QoSLevel, d.SeqNum, d.Signature, d.SignerID, precedence)
+		d.TTLSeconds, d.ExpiresAt, d.QoSLevel, d.SeqNum, d.Signature, d.SignerID, precedence, d.Destination, class)
 	if err != nil {
 		return 0, fmt.Errorf("insert delivery: %w", err)
 	}
@@ -99,14 +105,14 @@ func (db *DB) GetDelivery(id int64) (*MessageDelivery, error) {
 	row := db.QueryRow(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
 		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
 		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
-		signature, signer_id, precedence, created_at, updated_at
+		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at
 		FROM message_deliveries WHERE id = ?`, id)
 
 	var d MessageDelivery
 	err := row.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 		&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
 		&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-		&d.Signature, &d.SignerID, &d.Precedence, &d.CreatedAt, &d.UpdatedAt)
+		&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get delivery %d: %w", id, err)
 	}
@@ -131,7 +137,7 @@ func (db *DB) GetDeliveries(f DeliveryFilter) ([]MessageDelivery, error) {
 		args = append(args, f.MsgRef)
 	}
 
-	query := "SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, last_error, channel_ref, cost, visited, ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp, signature, signer_id, precedence, created_at, updated_at FROM message_deliveries"
+	query := "SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, last_error, channel_ref, cost, visited, ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp, signature, signer_id, precedence, destination, delivery_class, created_at, updated_at FROM message_deliveries"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -155,7 +161,7 @@ func (db *DB) GetDeliveries(f DeliveryFilter) ([]MessageDelivery, error) {
 		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
 			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-			&d.Signature, &d.SignerID, &d.Precedence, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan delivery: %w", err)
 		}
 		result = append(result, d)
@@ -171,7 +177,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 	rows, err := db.Query(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
 		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
 		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
-		signature, signer_id, precedence, created_at, updated_at
+		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at
 		FROM message_deliveries
 		WHERE channel = ? AND status IN ('queued', 'retry')
 		  AND (next_retry IS NULL OR next_retry <= datetime('now'))
@@ -189,7 +195,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
 			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-			&d.Signature, &d.SignerID, &d.Precedence, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan pending delivery: %w", err)
 		}
 		result = append(result, d)
@@ -482,7 +488,7 @@ func (db *DB) GetPendingAcks(channel string, timeoutSecs int) ([]MessageDelivery
 	rows, err := db.Query(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
 		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
 		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
-		signature, signer_id, precedence, created_at, updated_at
+		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at
 		FROM message_deliveries
 		WHERE channel = ? AND ack_status = 'pending'
 		  AND ack_timestamp IS NOT NULL
@@ -499,7 +505,7 @@ func (db *DB) GetPendingAcks(channel string, timeoutSecs int) ([]MessageDelivery
 		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
 			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
 			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-			&d.Signature, &d.SignerID, &d.Precedence, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan pending ack: %w", err)
 		}
 		result = append(result, d)
