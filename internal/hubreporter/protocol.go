@@ -307,6 +307,27 @@ type Command struct {
 	Timestamp    time.Time       `json:"timestamp"`
 }
 
+// MgmtRequest is the payload of the mgmt_* commands and of reboot: an OOB
+// management command by name, executed locally through the same executor
+// and audit path as a frame received over a bearer. [MESHSAT-756]
+type MgmtRequest struct {
+	Cmd     string `json:"cmd,omitempty"`     // PING, REBOOT, RESTART, RESET, BEARER, LOG, STATUS-NET
+	Target  string `json:"target,omitempty"`  // RESET, BEARER target name
+	Level   int    `json:"level,omitempty"`   // RESET level 1..3
+	State   string `json:"state,omitempty"`   // BEARER on|off
+	Unit    string `json:"unit,omitempty"`    // LOG unit name
+	Lines   int    `json:"lines,omitempty"`   // LOG line count
+	Delay   int    `json:"delay,omitempty"`   // REBOOT seconds
+	Confirm bool   `json:"confirm,omitempty"` // required for reboot
+}
+
+// MgmtResult is the response payload of the mgmt_* commands.
+type MgmtResult struct {
+	Code   int    `json:"code"`
+	Result string `json:"result"`
+	Body   string `json:"body,omitempty"`
+}
+
 // CommandResponse is published by the bridge to meshsat/bridge/{bridge_id}/cmd/response.
 type CommandResponse struct {
 	Protocol  string          `json:"protocol"`

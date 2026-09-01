@@ -378,6 +378,15 @@ func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "store "+ct+":"+e.Address+": "+serr.Error())
 			return
 		}
+		// A mgmt entry pairs this kit as the importer of an OOB management
+		// key: register the issuer as a readonly peer. [MESHSAT-756]
+		if ct == "mgmt" && s.oob != nil {
+			if p, perr := s.oob.RegisterImportedPeer(e.Address, e.Key[:]); perr != nil {
+				log.Warn().Err(perr).Str("issuer", e.Address).Msg("keys/import: mgmt entry stored but peer not registered")
+			} else {
+				log.Info().Str("issuer", e.Address).Uint16("peer_id", p.PeerID).Msg("keys/import: OOB management peer registered")
+			}
+		}
 		imported = append(imported, map[string]interface{}{
 			"channel_type": ct,
 			"address":      e.Address,

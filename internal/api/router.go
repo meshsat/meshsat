@@ -747,6 +747,20 @@ func (s *Server) Router() http.Handler {
 		r.Get("/keys/signing", s.handleGetSigningKey)
 		r.Delete("/keys/{type}/{address}", s.handleRevokeKey)
 
+		// OOB management frames [MESHSAT-756]
+		r.Get("/oob/config", s.handleGetOOBConfig)
+		r.Put("/oob/config", s.handleSetOOBConfig)
+		r.Get("/oob/peers", s.handleListOOBPeers)
+		r.Post("/oob/peers", s.handleCreateOOBPeer)
+		r.Put("/oob/peers/{id}", s.handleUpdateOOBPeer)
+		r.Delete("/oob/peers/{id}", s.handleDeleteOOBPeer)
+		r.Post("/oob/peers/{id}/bundle", s.handleOOBPeerBundle)
+		r.Get("/oob/peers/{id}/bundle/qr", s.handleOOBPeerBundleQR)
+		r.Post("/oob/send", s.handleOOBSend)
+		r.Get("/oob/log", s.handleGetOOBLog)
+		r.Get("/oob/targets", s.handleGetOOBTargets)
+		r.Get("/oob/agent", s.handleGetOOBAgent)
+
 		// One-tap all-channels demo sweep (MESHSAT-686)
 		r.Post("/demo/run", s.handleDemoRun)
 		r.Get("/demo/{demo_id}", s.handleDemoStatus)
