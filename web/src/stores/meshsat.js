@@ -976,6 +976,119 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // OOB management frames [MESHSAT-756]
+  const oobPeers = ref([])
+  const oobLog = ref([])
+  const oobConfig = ref({ enabled: false, reply_budget: 12, host_socket: '' })
+  const oobTargets = ref({ commands: [], targets: [], units: [], reverts: [] })
+  const oobAgent = ref({ available: false, version: '', socket: '' })
+
+  async function fetchOOBConfig() {
+    try {
+      oobConfig.value = await api.get('/oob/config')
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function setOOBConfig(payload) {
+    error.value = null
+    try {
+      oobConfig.value = await api.put('/oob/config', payload)
+      return oobConfig.value
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function fetchOOBPeers() {
+    try {
+      oobPeers.value = (await api.get('/oob/peers')) || []
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function createOOBPeer(payload) {
+    error.value = null
+    try {
+      const res = await api.post('/oob/peers', payload)
+      await fetchOOBPeers()
+      return res
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function updateOOBPeer(id, payload) {
+    error.value = null
+    try {
+      const res = await api.put(`/oob/peers/${id}`, payload)
+      await fetchOOBPeers()
+      return res
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function deleteOOBPeer(id) {
+    error.value = null
+    try {
+      await api.del(`/oob/peers/${id}`)
+      await fetchOOBPeers()
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function issueOOBBundle(id, issuerAlias) {
+    error.value = null
+    try {
+      return await api.post(`/oob/peers/${id}/bundle`, issuerAlias ? { issuer_alias: issuerAlias } : {})
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function sendOOB(payload) {
+    error.value = null
+    try {
+      return await api.post('/oob/send', payload)
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
+  async function fetchOOBLog(params) {
+    try {
+      oobLog.value = (await api.get('/oob/log', params)) || []
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function fetchOOBTargets() {
+    try {
+      oobTargets.value = await api.get('/oob/targets')
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
+  async function fetchOOBAgent() {
+    try {
+      oobAgent.value = await api.get('/oob/agent')
+    } catch (e) {
+      error.value = e.message
+    }
+  }
+
   async function sendSMS(to, text) {
     error.value = null
     try {
@@ -1809,6 +1922,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchDLQ,
     simCards, fetchSIMCards, createSIMCard, updateSIMCard, deleteSIMCard, readCurrentICCID,
     smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
+    oobPeers, oobLog, oobConfig, oobTargets, oobAgent,
+    fetchOOBConfig, setOOBConfig, fetchOOBPeers, createOOBPeer, updateOOBPeer, deleteOOBPeer,
+    issueOOBBundle, sendOOB, fetchOOBLog, fetchOOBTargets, fetchOOBAgent,
     contacts, activeConversation, fetchContacts, createContact, updateContact, deleteContact,
     addContactAddress, updateContactAddress, deleteContactAddress, fetchConversation,
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,

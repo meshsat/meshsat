@@ -29,6 +29,7 @@ const allTabs = [
   { id: 'aprs',          label: 'APRS',          tier: 'engineer' },
   { id: 'hemb',          label: 'HeMB Bond',     tier: 'engineer' },
   { id: 'credentials',   label: 'Credentials',   tier: 'engineer' },
+  { id: 'remote_mgmt',   label: 'Remote Mgmt',   tier: 'engineer' },
   { id: 'network',       label: 'Network',       tier: 'engineer' },
   { id: 'routing',       label: 'Routing',       tier: 'engineer' },
   { id: 'config_mgmt',   label: 'Export/Import', tier: 'engineer' },
@@ -759,6 +760,158 @@ async function deleteContact(id) {
   try { await store.deleteSMSContact(id) } catch { /* store error */ }
 }
 
+// OOB management frames [MESHSAT-756]
+const oobBearers = ['cellular_0', 'aprs_0', 'mesh_0']
+const emptyOOBPeerForm = () => ({
+  alias: '', role: 'readonly', source: 'random', signer_id: '',
+  addresses: { cellular_0: '', aprs_0: '', mesh_0: '' },
+  enc_policy: { cellular_0: true, aprs_0: true, mesh_0: true }
+})
+const showOOBPeerForm = ref(false)
+const editingOOBPeer = ref(null)
+const oobPeerForm = ref(emptyOOBPeerForm())
+const oobConfigDraft = ref({ enabled: false, reply_budget: 12, host_socket: '' })
+const oobSaving = ref(false)
+const oobBundle = ref(null)
+const oobSend = ref({
+  peer_id: '', via: 'cellular_0', cmd: 'PING', noreply: false,
+  args: { delay: 10, target: 'mesh', level: 1, state: 'off', unit: 'docker', lines: 10 }
+})
+const oobSendResult = ref(null)
+let oobTimer = null
+
+const oobCmdNeeds = computed(() => {
+  const c = oobSend.value.cmd
+  return {
+    delay: c === 'REBOOT',
+    target: c === 'RESET' || c === 'BEARER',
+    level: c === 'RESET',
+    state: c === 'BEARER',
+    unit: c === 'LOG',
+    lines: c === 'LOG'
+  }
+})
+const oobTargetsForCmd = computed(() => {
+  const all = store.oobTargets?.targets || []
+  return oobSend.value.cmd === 'BEARER' ? all.filter(t => t.bearer) : all.filter(t => (t.levels || []).length > 0)
+})
+const oobLevelsForTarget = computed(() => {
+  const t = (store.oobTargets?.targets || []).find(x => x.name === oobSend.value.args.target)
+  return t && t.levels && t.levels.length ? t.levels : [1]
+})
+const oobPeerVia = computed(() => {
+  const p = (store.oobPeers || []).find(x => x.peer_id === Number(oobSend.value.peer_id))
+  const keys = p ? Object.keys(p.addresses || {}) : []
+  return [...new Set([...keys, 'iridium_0', 'iridium_imt_0', 'mqtt_0'])]
+})
+
+async function loadOOB() {
+  await Promise.all([
+    store.fetchOOBConfig(), store.fetchOOBPeers(), store.fetchOOBTargets(),
+    store.fetchOOBAgent(), store.fetchOOBLog({ limit: 50 })
+  ])
+  oobConfigDraft.value = { ...store.oobConfig }
+}
+
+async function refreshOOB() {
+  await Promise.all([store.fetchOOBPeers(), store.fetchOOBAgent(), store.fetchOOBLog({ limit: 50 })])
+}
+
+async function saveOOBConfig() {
+  oobSaving.value = true
+  try {
+    await store.setOOBConfig({
+      enabled: !!oobConfigDraft.value.enabled,
+      reply_budget: Number(oobConfigDraft.value.reply_budget) || 12,
+      host_socket: oobConfigDraft.value.host_socket
+    })
+    oobConfigDraft.value = { ...store.oobConfig }
+  } catch { /* store error */ } finally { oobSaving.value = false }
+}
+
+function editOOBPeer(p) {
+  editingOOBPeer.value = p.peer_id
+  const base = emptyOOBPeerForm()
+  oobPeerForm.value = {
+    alias: p.alias, role: p.role, source: p.key_source, signer_id: p.signer_id || '',
+    addresses: { ...base.addresses, ...(p.addresses || {}) },
+    enc_policy: { ...base.enc_policy, ...(p.enc_policy || {}) }
+  }
+  showOOBPeerForm.value = true
+}
+
+function cancelOOBPeer() {
+  showOOBPeerForm.value = false
+  editingOOBPeer.value = null
+  oobPeerForm.value = emptyOOBPeerForm()
+}
+
+async function saveOOBPeer() {
+  const f = oobPeerForm.value
+  if (!f.alias) return
+  const addresses = Object.fromEntries(Object.entries(f.addresses).filter(([, v]) => v && v.trim()))
+  const payload = { alias: f.alias, role: f.role, source: f.source, signer_id: f.signer_id, addresses, enc_policy: f.enc_policy }
+  try {
+    if (editingOOBPeer.value) {
+      await store.updateOOBPeer(editingOOBPeer.value, payload)
+    } else {
+      await store.createOOBPeer(payload)
+    }
+    cancelOOBPeer()
+  } catch { /* store error */ }
+}
+
+async function toggleOOBPeer(p) {
+  try { await store.updateOOBPeer(p.peer_id, { enabled: !p.enabled }) } catch { /* store error */ }
+}
+
+async function deleteOOBPeer(p) {
+  if (!confirm(`Delete peer ${p.alias}? Its management key is revoked.`)) return
+  try { await store.deleteOOBPeer(p.peer_id) } catch { /* store error */ }
+}
+
+async function showOOBBundle(p) {
+  try {
+    const res = await store.issueOOBBundle(p.peer_id)
+    oobBundle.value = { peer_id: p.peer_id, alias: p.alias, url: res.url, qr: `/api/oob/peers/${p.peer_id}/bundle/qr?t=${Date.now()}` }
+  } catch { /* store error */ }
+}
+
+async function doOOBSend() {
+  oobSendResult.value = null
+  const s = oobSend.value
+  if (!s.peer_id) return
+  try {
+    oobSendResult.value = await store.sendOOB({
+      peer_id: Number(s.peer_id), via: s.via, cmd: s.cmd, noreply: s.noreply,
+      args: {
+        delay: Number(s.args.delay) || 0, target: s.args.target, level: Number(s.args.level) || 0,
+        state: s.args.state, unit: s.args.unit, lines: Number(s.args.lines) || 0
+      }
+    })
+    store.fetchOOBLog({ limit: 50 })
+  } catch { /* store error */ }
+}
+
+function oobCmdName(code) {
+  const c = (store.oobTargets?.commands || []).find(x => x.code === code)
+  return c ? c.name : `0x${Number(code).toString(16)}`
+}
+
+function oobPeerAlias(id) {
+  if (!id) return 'hub/local'
+  const p = (store.oobPeers || []).find(x => x.peer_id === id)
+  return p ? p.alias : `#${id}`
+}
+
+function oobResultClass(r) {
+  if (r === 'ok' || r === 'queued') return 'text-emerald-300'
+  if (!r) return 'text-gray-400'
+  return 'text-amber-300'
+}
+
+watch(activeTab, (v) => { if (v === 'remote_mgmt') loadOOB() })
+
 // SIM Card management
 const showSimForm = ref(false)
 const editingSim = ref(null)
@@ -1406,6 +1559,8 @@ onMounted(async () => {
   store.fetchCellularSignal()
   store.fetchSMSContacts()
   store.fetchSIMCards()
+  if (activeTab.value === 'remote_mgmt') loadOOB()
+  oobTimer = setInterval(() => { if (activeTab.value === 'remote_mgmt') refreshOOB() }, 10000)
   loadMQTT(); loadIridium(); loadBudget(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK(); loadTAKEnrollStatus()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
@@ -1459,6 +1614,7 @@ async function doRevoke(id) {
 
 onUnmounted(() => {
   if (signalTimer) clearInterval(signalTimer)
+  if (oobTimer) clearInterval(oobTimer)
   if (btScanTimer) clearInterval(btScanTimer)
   if (p2pFindTimer) clearInterval(p2pFindTimer)
   stopPermitJoinCountdown()
@@ -2784,6 +2940,227 @@ onUnmounted(() => {
     </div>
 
     <!-- Routing / Reticulum -->
+    <!-- OOB management frames [MESHSAT-756] -->
+    <div v-if="activeTab === 'remote_mgmt'" class="space-y-4">
+      <div v-if="store.error" class="p-3 rounded-lg bg-red-900/30 border border-red-700 text-sm text-red-300">{{ store.error }}</div>
+
+      <!-- Config -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>
+            <h4 class="text-sm font-medium text-gray-200">OOB management frames</h4>
+          </div>
+          <span :class="store.oobAgent.available ? 'bg-emerald-900 text-emerald-300' : 'bg-gray-700 text-gray-400'" class="px-1.5 py-0.5 rounded text-[9px]">
+            host agent {{ store.oobAgent.available ? 'v' + store.oobAgent.version : 'absent' }}
+          </span>
+        </div>
+        <p class="text-[11px] text-gray-500">
+          Authenticated single-message commands (PING, REBOOT, RESTART, RESET, BEARER, LOG, STATUS-NET) over any bearer.
+          Frames from unknown peers, replays and bad tags are dropped silently. Encryption is a per-peer, per-bearer toggle on every bearer;
+          whether to use it on a given band under your licence is your call.
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="flex items-center justify-between md:col-span-1">
+            <label for="oob_enabled" class="text-xs text-gray-400">Enable</label>
+            <input id="oob_enabled" type="checkbox" v-model="oobConfigDraft.enabled" class="rounded bg-gray-900 border-gray-700">
+          </div>
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">Reply budget (per peer, per hour)</label>
+            <input v-model="oobConfigDraft.reply_budget" type="number" min="1" max="120" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+          </div>
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">Host agent socket</label>
+            <input v-model="oobConfigDraft.host_socket" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="/run/meshsat-oob/agent.sock">
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button @click="saveOOBConfig" :disabled="oobSaving" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500 disabled:opacity-50">{{ oobSaving ? 'Saving...' : 'Save OOB Config' }}</button>
+          <span v-if="(store.oobTargets.reverts || []).length" class="text-[10px] text-amber-300">revert armed: {{ store.oobTargets.reverts.join(', ') }}</span>
+        </div>
+      </div>
+
+      <!-- Peers -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <div class="flex items-center justify-between">
+          <h4 class="text-sm font-medium text-gray-200">Peers</h4>
+          <button @click="showOOBPeerForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">+ Add</button>
+        </div>
+
+        <div v-if="showOOBPeerForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Alias</label>
+              <input v-model="oobPeerForm.alias" :disabled="!!editingOOBPeer" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 disabled:opacity-60" placeholder="parallax">
+            </div>
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Role</label>
+              <select v-model="oobPeerForm.role" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200">
+                <option value="readonly">readonly (PING, STATUS-NET, LOG)</option>
+                <option value="control">control (everything)</option>
+              </select>
+            </div>
+          </div>
+          <div v-if="!editingOOBPeer" class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] text-gray-500 mb-1">Key source</label>
+              <select v-model="oobPeerForm.source" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200">
+                <option value="random">random key, issued as a QR bundle</option>
+                <option value="ecdh">derived from the peer's announce (kits only)</option>
+              </select>
+            </div>
+            <div v-if="oobPeerForm.source === 'ecdh'">
+              <label class="block text-[10px] text-gray-500 mb-1">Trusted peer signer id</label>
+              <input v-model="oobPeerForm.signer_id" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="Ed25519 hex from Devices">
+            </div>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div v-for="b in oobBearers" :key="b">
+              <label class="block text-[10px] text-gray-500 mb-1">{{ b }} address</label>
+              <input v-model="oobPeerForm.addresses[b]" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono"
+                     :placeholder="b === 'cellular_0' ? '+31612345678' : (b === 'aprs_0' ? 'PD0XYZ-7' : '!aabbccdd')">
+              <label class="flex items-center gap-1 text-[10px] text-gray-400 mt-1">
+                <input type="checkbox" v-model="oobPeerForm.enc_policy[b]" class="rounded bg-gray-800 border-gray-600"> encrypt requests on {{ b }}
+              </label>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button @click="saveOOBPeer" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">{{ editingOOBPeer ? 'Update' : 'Add' }}</button>
+            <button @click="cancelOOBPeer" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
+          </div>
+        </div>
+
+        <div v-if="(store.oobPeers || []).length === 0 && !showOOBPeerForm" class="text-xs text-gray-500 py-2">No peers yet. Add one, then hand its QR bundle to the other side.</div>
+        <div v-for="p in store.oobPeers" :key="p.peer_id" class="flex flex-wrap items-center justify-between gap-2 py-1.5 border-b border-gray-700 last:border-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm text-gray-200">{{ p.alias }}</span>
+            <span class="text-[10px] text-gray-500 font-mono">0x{{ p.peer_id_hex }}</span>
+            <span class="px-1.5 py-0.5 rounded text-[9px]" :class="p.role === 'control' ? 'bg-amber-900 text-amber-300' : 'bg-gray-700 text-gray-300'">{{ p.role }}</span>
+            <span class="px-1.5 py-0.5 rounded text-[9px] bg-gray-700 text-gray-400">{{ p.key_source }} / {{ p.local_role }}</span>
+            <span v-if="!p.enabled" class="px-1.5 py-0.5 rounded text-[9px] bg-red-900 text-red-300">disabled</span>
+            <span v-for="(addr, b) in p.addresses" :key="b" class="text-[10px] text-gray-500 font-mono">{{ b }}={{ addr }}</span>
+            <span v-if="p.last_seen_at" class="text-[10px] text-gray-600">seen {{ p.last_seen_at }}</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <button @click="showOOBBundle(p)" :disabled="p.key_source !== 'bundle'" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600 disabled:opacity-40">Bundle QR</button>
+            <button @click="toggleOOBPeer(p)" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">{{ p.enabled ? 'Disable' : 'Enable' }}</button>
+            <button @click="editOOBPeer(p)" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Edit</button>
+            <button @click="deleteOOBPeer(p)" class="px-2 py-1 rounded bg-gray-700 text-red-400 text-[10px] hover:bg-gray-600">Del</button>
+          </div>
+        </div>
+
+        <div v-if="oobBundle" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-300">Key bundle for <span class="font-mono">{{ oobBundle.alias }}</span>: scan or import on the other side (Credentials, import key bundle)</span>
+            <button @click="oobBundle = null" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Close</button>
+          </div>
+          <img :src="oobBundle.qr" alt="OOB key bundle QR" class="w-48 h-48 bg-white rounded">
+          <div class="text-[10px] text-gray-500 font-mono break-all">{{ oobBundle.url }}</div>
+        </div>
+      </div>
+
+      <!-- Send -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">Send command</h4>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">Peer</label>
+            <select v-model="oobSend.peer_id" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option value="">select</option>
+              <option v-for="p in store.oobPeers" :key="p.peer_id" :value="p.peer_id">{{ p.alias }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">Bearer</label>
+            <select v-model="oobSend.via" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option v-for="b in oobPeerVia" :key="b" :value="b">{{ b }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] text-gray-500 mb-1">Command</label>
+            <select v-model="oobSend.cmd" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option v-for="c in (store.oobTargets.commands || [])" :key="c.code" :value="c.name">{{ c.name }}</option>
+            </select>
+          </div>
+          <div class="flex items-end pb-1">
+            <label class="flex items-center gap-1 text-[10px] text-gray-400">
+              <input type="checkbox" v-model="oobSend.noreply" class="rounded bg-gray-900 border-gray-600"> no reply
+            </label>
+          </div>
+          <div v-if="oobCmdNeeds.delay">
+            <label class="block text-[10px] text-gray-500 mb-1">Delay (s)</label>
+            <input v-model="oobSend.args.delay" type="number" min="0" max="3600" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+          </div>
+          <div v-if="oobCmdNeeds.target">
+            <label class="block text-[10px] text-gray-500 mb-1">Target</label>
+            <select v-model="oobSend.args.target" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option v-for="t in oobTargetsForCmd" :key="t.code" :value="t.name">{{ t.name }}</option>
+            </select>
+          </div>
+          <div v-if="oobCmdNeeds.level">
+            <label class="block text-[10px] text-gray-500 mb-1">Level (1 soft, 2 device, 3 hard)</label>
+            <select v-model="oobSend.args.level" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option v-for="l in oobLevelsForTarget" :key="l" :value="l">{{ l }}</option>
+            </select>
+          </div>
+          <div v-if="oobCmdNeeds.state">
+            <label class="block text-[10px] text-gray-500 mb-1">State</label>
+            <select v-model="oobSend.args.state" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option value="off">off</option>
+              <option value="on">on</option>
+            </select>
+          </div>
+          <div v-if="oobCmdNeeds.unit">
+            <label class="block text-[10px] text-gray-500 mb-1">Unit</label>
+            <select v-model="oobSend.args.unit" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+              <option v-for="u in (store.oobTargets.units || [])" :key="u" :value="u">{{ u }}</option>
+            </select>
+          </div>
+          <div v-if="oobCmdNeeds.lines">
+            <label class="block text-[10px] text-gray-500 mb-1">Lines (1 to 20)</label>
+            <input v-model="oobSend.args.lines" type="number" min="1" max="20" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <button @click="doOOBSend" :disabled="!oobSend.peer_id || !store.oobConfig.enabled" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500 disabled:opacity-50 flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            Send
+          </button>
+          <span v-if="!store.oobConfig.enabled" class="text-[10px] text-amber-300">enable OOB first</span>
+          <span v-if="oobSendResult" class="text-[10px] text-gray-400 font-mono">queued delivery #{{ oobSendResult.delivery_id }} ctr {{ oobSendResult.counter }} ({{ (oobSendResult.text || '').length }} chars)</span>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2">
+        <div class="flex items-center justify-between">
+          <h4 class="text-sm font-medium text-gray-200">Log</h4>
+          <button @click="refreshOOB" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Refresh</button>
+        </div>
+        <div v-if="(store.oobLog || []).length === 0" class="text-xs text-gray-500 py-2">No frames yet.</div>
+        <div class="overflow-x-auto">
+          <table v-if="(store.oobLog || []).length" class="w-full text-[11px]">
+            <thead class="text-gray-500 text-left">
+              <tr><th class="py-1 pr-2">time</th><th class="pr-2">dir</th><th class="pr-2">kind</th><th class="pr-2">peer</th><th class="pr-2">bearer</th><th class="pr-2">cmd</th><th class="pr-2">ctr</th><th class="pr-2">result</th><th>detail</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in store.oobLog" :key="e.id" class="border-t border-gray-700/60 text-gray-300 align-top">
+                <td class="py-1 pr-2 font-mono text-gray-500 whitespace-nowrap">{{ e.ts }}</td>
+                <td class="pr-2">{{ e.direction === 'in' ? '←' : '→' }}</td>
+                <td class="pr-2">{{ e.kind }}</td>
+                <td class="pr-2">{{ oobPeerAlias(e.peer_id) }}</td>
+                <td class="pr-2 font-mono">{{ e.bearer }}</td>
+                <td class="pr-2">{{ oobCmdName(e.cmd) }}</td>
+                <td class="pr-2 font-mono">{{ e.counter }}</td>
+                <td class="pr-2" :class="oobResultClass(e.result)">{{ e.result || (e.delivery_id ? '#' + e.delivery_id : '') }}</td>
+                <td class="font-mono text-gray-500 break-all">{{ e.detail }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div v-if="activeTab === 'routing'">
       <div class="space-y-4">
 
