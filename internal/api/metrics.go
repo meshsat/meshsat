@@ -250,5 +250,6 @@ func (c *bridgeCollector) collectMessages(ch chan<- prometheus.Metric) {
 func newMetricsHandler(gwMgr *gateway.Manager, disp *engine.Dispatcher, tp *engine.TransformPipeline, db *database.DB, dbPath string) http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(newBridgeCollector(gwMgr, disp, tp, db, dbPath))
+	reg.MustRegister(newOOBCollector()) // [MESHSAT-756]
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }

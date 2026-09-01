@@ -230,6 +230,70 @@ func ParseReplyArgs(args []byte) (ReplyArgs, error) {
 	}, nil
 }
 
+// ArgSpec is the operator-facing (API, Hub) form of command arguments.
+// Names, never bytes, cross those surfaces; BuildArgs turns them into the
+// wire form.
+type ArgSpec struct {
+	Delay  int    `json:"delay,omitempty"`  // REBOOT seconds
+	Target string `json:"target,omitempty"` // RESET, BEARER target name
+	Level  int    `json:"level,omitempty"`  // RESET level 1..3
+	State  string `json:"state,omitempty"`  // BEARER on|off
+	Unit   string `json:"unit,omitempty"`   // LOG unit name
+	Lines  int    `json:"lines,omitempty"`  // LOG line count
+}
+
+// BuildArgs encodes an ArgSpec for a command.
+func BuildArgs(cmd byte, a ArgSpec) ([]byte, error) {
+	switch cmd {
+	case CmdPing, CmdRestart, CmdStatusNet:
+		return nil, nil
+	case CmdReboot:
+		d := a.Delay
+		if d <= 0 {
+			d = DefaultRebootDelay
+		}
+		d = min(d, MaxRebootDelay)
+		return EncodeRebootArgs(uint16(d)), nil
+	case CmdReset:
+		t, ok := TargetByName(a.Target)
+		if !ok {
+			return nil, fmt.Errorf("oob: unknown target %q", a.Target)
+		}
+		level := a.Level
+		if level == 0 {
+			level = int(LevelSoft)
+		}
+		if level < MinLevel || level > MaxLevel {
+			return nil, fmt.Errorf("oob: level must be %d..%d", MinLevel, MaxLevel)
+		}
+		return EncodeResetArgs(t.Code, byte(level)), nil
+	case CmdBearer:
+		t, ok := TargetByName(a.Target)
+		if !ok || t.IfaceID == "" {
+			return nil, fmt.Errorf("oob: %q is not a bearer target", a.Target)
+		}
+		switch strings.ToLower(strings.TrimSpace(a.State)) {
+		case "on", "1", "true", "up":
+			return EncodeBearerArgs(t.Code, 1), nil
+		case "off", "0", "false", "down":
+			return EncodeBearerArgs(t.Code, 0), nil
+		}
+		return nil, fmt.Errorf("oob: state must be on or off")
+	case CmdLog:
+		idx, ok := LogUnitIndex(strings.TrimSpace(a.Unit))
+		if !ok {
+			return nil, fmt.Errorf("oob: unknown log unit %q", a.Unit)
+		}
+		lines := a.Lines
+		if lines <= 0 {
+			lines = DefaultLogLines
+		}
+		lines = min(lines, MaxLogLines)
+		return EncodeLogArgs(idx, byte(lines)), nil
+	}
+	return nil, errors.New("oob: unknown command")
+}
+
 // LogUnits is the fixed table of journal units LOG may read, indexed by the
 // unit byte. It mirrors the host agent's allowlist; the agent is the second
 // gate.

@@ -1675,6 +1675,26 @@ func main() {
 			BurstPending: func() int {
 				return burstQueue.Pending()
 			},
+			// Hub-originated OOB management commands share the executor,
+			// log and audit path of frames received over a bearer.
+			// [MESHSAT-756]
+			Mgmt: func(ctx context.Context, req hubreporter.MgmtRequest) (hubreporter.MgmtResult, error) {
+				if oobSvc == nil {
+					return hubreporter.MgmtResult{}, errors.New("oob service not available")
+				}
+				c, ok := oob.CommandByName(req.Cmd)
+				if !ok {
+					return hubreporter.MgmtResult{}, fmt.Errorf("unknown management command %q", req.Cmd)
+				}
+				args, err := oob.BuildArgs(c.Code, oob.ArgSpec{
+					Delay: req.Delay, Target: req.Target, Level: req.Level, State: req.State, Unit: req.Unit, Lines: req.Lines,
+				})
+				if err != nil {
+					return hubreporter.MgmtResult{}, err
+				}
+				res := oobSvc.ExecuteLocal(ctx, oob.Origin{Alias: "hub", Role: oob.RoleControl, Bearer: oob.OriginHub}, c.Code, args)
+				return hubreporter.MgmtResult{Code: int(res.Code), Result: res.Code.String(), Body: res.Body}, nil
+			},
 		})
 		cmdHandler.SetCredentialStore(&bridgeCredentialStore{db: db})
 		if ks != nil {

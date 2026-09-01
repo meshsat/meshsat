@@ -29,6 +29,10 @@ type CommandDeps struct {
 
 	// BurstPending returns the number of pending burst messages.
 	BurstPending func() int
+	// Mgmt executes an OOB management command locally (Hub-originated),
+	// sharing the executor and audit path of frames received over a
+	// bearer. Nil = the OOB service is not wired. [MESHSAT-756]
+	Mgmt func(ctx context.Context, req MgmtRequest) (MgmtResult, error)
 }
 
 // CredentialStore is the interface for storing credentials received from Hub.
@@ -77,9 +81,38 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 		return json.RawMessage(`{"message":"config_update not yet implemented"}`), nil
 	}
 
+	// Host reboot through the OOB executor: executes only with an explicit
+	// confirm flag in the payload, refused otherwise. [MESHSAT-756]
 	ch.handlers["reboot"] = func(cmd Command) (json.RawMessage, error) {
-		log.Warn().Str("request_id", cmd.RequestID).Msg("commander: reboot requested — NOT executing (requires explicit approval)")
-		return json.RawMessage(`{"message":"reboot acknowledged but not executed (requires explicit approval)"}`), nil
+		req, err := ch.mgmtRequest(cmd, "REBOOT")
+		if err != nil {
+			return nil, err
+		}
+		if !req.Confirm {
+			log.Warn().Str("request_id", cmd.RequestID).Msg("commander: reboot requested without confirm, not executing")
+			return json.RawMessage(`{"message":"reboot acknowledged but not executed (payload needs \"confirm\": true)"}`), nil
+		}
+		return ch.execMgmt(cmd, req)
+	}
+
+	// OOB management commands by name (PING, STATUS-NET, LOG, RESET,
+	// BEARER, RESTART). [MESHSAT-756]
+	for name, fixed := range map[string]string{
+		"mgmt_ping":    "PING",
+		"mgmt_status":  "STATUS-NET",
+		"mgmt_log":     "LOG",
+		"mgmt_reset":   "RESET",
+		"mgmt_bearer":  "BEARER",
+		"mgmt_restart": "RESTART",
+	} {
+		fixedCmd := fixed
+		ch.handlers[name] = func(cmd Command) (json.RawMessage, error) {
+			req, err := ch.mgmtRequest(cmd, fixedCmd)
+			if err != nil {
+				return nil, err
+			}
+			return ch.execMgmt(cmd, req)
+		}
 	}
 
 	ch.handlers["credential_push"] = ch.handleCredentialPush
@@ -98,6 +131,33 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 	ch.registerSysMgmtHandlers()
 
 	return ch
+}
+
+// mgmtRequest decodes a management payload and pins the command name.
+func (ch *CommandHandler) mgmtRequest(cmd Command, fixedCmd string) (MgmtRequest, error) {
+	var req MgmtRequest
+	if len(cmd.Payload) > 0 {
+		if err := json.Unmarshal(cmd.Payload, &req); err != nil {
+			return req, fmt.Errorf("invalid payload: %w", err)
+		}
+	}
+	req.Cmd = fixedCmd
+	return req, nil
+}
+
+// execMgmt runs a management command through the wired executor.
+func (ch *CommandHandler) execMgmt(cmd Command, req MgmtRequest) (json.RawMessage, error) {
+	if ch.deps.Mgmt == nil {
+		return nil, fmt.Errorf("management commands not available on this bridge")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := ch.deps.Mgmt(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	log.Info().Str("request_id", cmd.RequestID).Str("cmd", req.Cmd).Str("result", res.Result).Msg("commander: management command executed")
+	return json.Marshal(res)
 }
 
 // KeyStoreImporter is the interface for importing keys from Hub commands. [MESHSAT-447]
