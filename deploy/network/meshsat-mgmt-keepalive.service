@@ -1,0 +1,6 @@
+[Unit]
+Description=MeshSat: keep management host neighbour entry fresh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/meshsat-mgmt-keepalive
