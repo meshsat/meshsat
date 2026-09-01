@@ -268,6 +268,26 @@ func (ks *KeyStore) CreateBundle(requests []BundleRequest) ([]byte, string, erro
 		})
 	}
 
+	return ks.marshalSigned(entries)
+}
+
+// CreateBundleFromEntries signs a bundle from caller-supplied entries
+// without looking keys up by address. OOB management keys are stored under
+// the peer alias but travel under the issuer's alias, so the
+// lookup-by-address path cannot produce them. [MESHSAT-756]
+func (ks *KeyStore) CreateBundleFromEntries(entries []BundleEntry) ([]byte, string, error) {
+	if ks.identity == nil {
+		return nil, "", fmt.Errorf("routing identity not available")
+	}
+	if len(entries) == 0 {
+		return nil, "", fmt.Errorf("bundle needs at least one entry")
+	}
+	return ks.marshalSigned(entries)
+}
+
+// marshalSigned signs entries with the routing identity in the configured
+// bundle version and returns the bytes plus the meshsat://key/ URL.
+func (ks *KeyStore) marshalSigned(entries []BundleEntry) ([]byte, string, error) {
 	bridgeHash := ks.identity.DestHash()
 
 	var data []byte
