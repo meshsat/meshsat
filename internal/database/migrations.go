@@ -1271,6 +1271,52 @@ var migrations = []string{
 	// so the existing TransformPipeline + validator reuse as-is.
 	`ALTER TABLE bond_groups ADD COLUMN egress_transforms  TEXT NOT NULL DEFAULT '[]';
 	ALTER TABLE bond_groups ADD COLUMN ingress_transforms TEXT NOT NULL DEFAULT '[]';`,
+
+	// v54: OOB management frames [MESHSAT-756]. oob_peers holds one row per
+	// management peer (a kit, a phone, the Hub) with its wire id (derived
+	// from the key, never 0), role, per-bearer reply addresses and
+	// encryption policy, the persisted transmit counter and the 64-bit
+	// anti-replay window. oob_log records every frame in, out or rejected.
+	// message_deliveries gains a per-row destination (bearer address for a
+	// reply-to-sender send, empty = interface default) and a delivery class
+	// ('message' or 'oob'); class oob bypasses egress rules and interface
+	// transforms because the frame carries its own AEAD.
+	`CREATE TABLE IF NOT EXISTS oob_peers (
+		peer_id      INTEGER PRIMARY KEY,
+		alias        TEXT    NOT NULL UNIQUE,
+		signer_id    TEXT    NOT NULL DEFAULT '',
+		key_ref      TEXT    NOT NULL,
+		key_source   TEXT    NOT NULL DEFAULT 'bundle',
+		local_role   INTEGER NOT NULL DEFAULT 0,
+		role         TEXT    NOT NULL DEFAULT 'readonly',
+		enabled      INTEGER NOT NULL DEFAULT 1,
+		addresses    TEXT    NOT NULL DEFAULT '{}',
+		enc_policy   TEXT    NOT NULL DEFAULT '{}',
+		tx_counter   INTEGER NOT NULL DEFAULT 0,
+		rx_high      INTEGER NOT NULL DEFAULT 0,
+		rx_window    INTEGER NOT NULL DEFAULT 0,
+		last_seen_at TEXT,
+		created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+		updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE TABLE IF NOT EXISTS oob_log (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts          TEXT    NOT NULL DEFAULT (datetime('now')),
+		peer_id     INTEGER NOT NULL DEFAULT 0,
+		direction   TEXT    NOT NULL,
+		kind        TEXT    NOT NULL,
+		bearer      TEXT    NOT NULL DEFAULT '',
+		from_addr   TEXT    NOT NULL DEFAULT '',
+		cmd         INTEGER NOT NULL DEFAULT 0,
+		counter     INTEGER NOT NULL DEFAULT 0,
+		result      TEXT    NOT NULL DEFAULT '',
+		detail      TEXT    NOT NULL DEFAULT '',
+		delivery_id INTEGER
+	);
+	CREATE INDEX IF NOT EXISTS idx_oob_log_ts   ON oob_log(ts DESC);
+	CREATE INDEX IF NOT EXISTS idx_oob_log_peer ON oob_log(peer_id, ts DESC);
+	ALTER TABLE message_deliveries ADD COLUMN destination    TEXT NOT NULL DEFAULT '';
+	ALTER TABLE message_deliveries ADD COLUMN delivery_class TEXT NOT NULL DEFAULT 'message';`,
 }
 
 func (db *DB) migrate() error {
