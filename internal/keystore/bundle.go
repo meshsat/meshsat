@@ -37,6 +37,10 @@ const (
 	ChannelMQTT    byte = 0x05
 	ChannelWebhook byte = 0x06
 	ChannelBond    byte = 0x07
+	// ChannelMgmt carries an OOB management key; the entry address is the
+	// alias of the kit that issued it. Older readers surface it as
+	// "unknown" and skip the entry. [MESHSAT-756]
+	ChannelMgmt byte = 0x08
 )
 
 // CanonicalChannelType normalises operator-facing strings to the 8 canonical
@@ -47,7 +51,7 @@ const (
 // [MESHSAT-681]
 func CanonicalChannelType(ct string) (string, bool) {
 	switch ct {
-	case "sms", "mesh", "iridium", "aprs", "zigbee", "mqtt", "webhook", "bond":
+	case "sms", "mesh", "iridium", "aprs", "zigbee", "mqtt", "webhook", "bond", "mgmt":
 		return ct, true
 	case "cellular":
 		// Alias: cellular_0 sends SMS over 4G, same key space as sms_0.
@@ -59,7 +63,7 @@ func CanonicalChannelType(ct string) (string, bool) {
 // SupportedChannelTypes returns the canonical set for error messages.
 // [MESHSAT-681]
 func SupportedChannelTypes() []string {
-	return []string{"sms", "mesh", "iridium", "aprs", "zigbee", "mqtt", "webhook", "bond"}
+	return []string{"sms", "mesh", "iridium", "aprs", "zigbee", "mqtt", "webhook", "bond", "mgmt"}
 }
 
 // ChannelTypeToByte maps string channel types to bundle enum values.
@@ -89,6 +93,8 @@ func ChannelTypeToByte(ct string) byte {
 		return ChannelWebhook
 	case "bond":
 		return ChannelBond
+	case "mgmt":
+		return ChannelMgmt
 	}
 	return 0xFF
 }
@@ -112,6 +118,8 @@ func ByteToChannelType(b byte) string {
 		return "webhook"
 	case ChannelBond:
 		return "bond"
+	case ChannelMgmt:
+		return "mgmt"
 	default:
 		return "unknown"
 	}
