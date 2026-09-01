@@ -81,6 +81,11 @@ type MeshMessage struct {
 	// Per-rule routing metadata (set by dispatcher, used by gateways)
 	SMSDestinations []string `json:"-"` // override phone numbers for cellular SMS
 	Encrypted       bool     `json:"-"` // payload was encrypted by transform pipeline
+
+	// Per-delivery addressing (set by the delivery worker from the
+	// message_deliveries row). [MESHSAT-756]
+	Destination string `json:"-"` // bearer address: phone, callsign-SSID, !nodeid; empty = interface default
+	RawText     bool   `json:"-"` // send DecodedText verbatim: no prefix, no attribution, no sanitising
 }
 
 // MeshStatus represents the connection status of the Meshtastic device.

@@ -860,6 +860,31 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 // normalise via [types.ParsePrecedence] before calling. Queue behaviour is
 // unchanged in Phase 1; queue-by-precedence lands in MESHSAT-546 / S2-03.
 func (d *Dispatcher) QueueDirectSend(interfaceID, text, precedence string) (int64, string, error) {
+	return d.QueueDirectSendTo(interfaceID, text, DirectSendOptions{Precedence: precedence})
+}
+
+// DirectSendOptions extends QueueDirectSend with a per-row bearer address
+// and a delivery class. [MESHSAT-756]
+type DirectSendOptions struct {
+	Precedence  string
+	Destination string // phone number, callsign-SSID or !nodeid; empty = interface default
+	Class       string // database.DeliveryClassMessage (default) or DeliveryClassOOB
+	MaxRetries  int    // 0 = default (3)
+}
+
+// QueueDirectSendTo is QueueDirectSend with DirectSendOptions. A delivery of
+// class oob bypasses egress rules and interface transforms in the worker
+// because the OOB frame carries its own authentication and encryption.
+func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSendOptions) (int64, string, error) {
+	precedence := opts.Precedence
+	class := opts.Class
+	if class == "" {
+		class = database.DeliveryClassMessage
+	}
+	maxRetries := opts.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
 	msgRef := time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
 
 	payload := []byte(text)
@@ -875,9 +900,11 @@ func (d *Dispatcher) QueueDirectSend(interfaceID, text, precedence string) (int6
 		Priority:    1,
 		Payload:     payload,
 		TextPreview: preview,
-		MaxRetries:  3,
+		MaxRetries:  maxRetries,
 		QoSLevel:    1,
 		Precedence:  precedence,
+		Destination: opts.Destination,
+		Class:       class,
 	}
 
 	// Assign egress sequence number
@@ -1172,7 +1199,9 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// Egress rule check: evaluate egress rules on the destination interface before sending.
 	// Only applies when egress rules are configured for this interface (no rules = implicit allow).
 	// If egress denies, mark the delivery as 'denied' and skip sending.
-	if w.access != nil && w.access.HasEgressRules(w.channelID) {
+	// OOB management replies are exempt: the frame is already authenticated
+	// and the per-peer reply budget bounds them. [MESHSAT-756]
+	if del.Class != database.DeliveryClassOOB && w.access != nil && w.access.HasEgressRules(w.channelID) {
 		egressMsg := rules.RouteMessage{
 			Text: del.TextPreview,
 		}
@@ -1229,7 +1258,10 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// as defense-in-depth for cellular we validate and retry (new nonce) if
 	// any non-GSM character appears.
 	encrypted := false
-	if w.transforms != nil {
+	// OOB frames skip interface transforms: they carry their own AEAD and
+	// interface-level encryption would hide the sentinel from a peer that
+	// has the management key but not the interface key. [MESHSAT-756]
+	if w.transforms != nil && del.Class != database.DeliveryClassOOB {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
 			encrypted = strings.Contains(iface.EgressTransforms, "encrypt")
@@ -1322,8 +1354,11 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 
 	if w.channelID == "mesh" || w.channelID == "mesh_0" {
 		// Mesh delivery: inject into mesh transport
+		// An empty To keeps today's broadcast; a per-row destination
+		// (!nodeid) addresses one node. [MESHSAT-756]
 		deliveryErr = w.mesh.SendMessage(ctx, transport.SendRequest{
 			Text: del.TextPreview,
+			To:   del.Destination,
 		})
 	} else {
 		// Gateway delivery: find the gateway and forward
@@ -1359,6 +1394,14 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		}
 	}
 	msg.Encrypted = encrypted
+
+	// Per-row destination and class. A destination wins over rule and
+	// gateway defaults; class oob sends the text verbatim. [MESHSAT-756]
+	msg.Destination = del.Destination
+	msg.RawText = del.Class == database.DeliveryClassOOB
+	if del.Destination != "" && strings.HasPrefix(w.channelID, "cellular") {
+		msg.SMSDestinations = []string{del.Destination}
+	}
 
 	// Resolve per-rule SMS destinations from forward_options
 	if del.RuleID != nil && w.db != nil {

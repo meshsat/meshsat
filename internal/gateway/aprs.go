@@ -451,6 +451,11 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 		}
 		info = append([]byte(aprsEncryptedPrefix), cipherText...)
 		path = nil
+	} else if msg.Destination != "" {
+		// Directed APRS message to a station (`:ADDRESSEE:text`), used by
+		// OOB replies and any delivery row carrying a destination. No
+		// message id is attached, so no ack handling is needed. [MESHSAT-756]
+		info = EncodeAPRSMessage(msg.Destination, msg.DecodedText, "")
 	} else if msg.DecodedText != "" {
 		// Plaintext: send as third-party traffic with attribution.
 		comment := fmt.Sprintf("[MeshSat !%08x] %s", msg.From, msg.DecodedText)
