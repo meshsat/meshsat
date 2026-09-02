@@ -116,7 +116,7 @@ matters, it is probably the most useful thing on the page.
 | HeMB mixed free and paid allocation | **Undefined.** See the allocator note below |
 | RTL-SDR jamming detection | Implemented and tested against ambient noise only, **never against a real jammer** |
 | ZigBee gateway | Code complete, light field exposure |
-| OOB management frames (remote commands over SMS, APRS, mesh, Iridium) | Built with unit and integration tests, **not yet exercised on a kit** |
+| OOB management frames (remote commands over SMS, APRS, mesh, Iridium, Hub) | Request leg proven kit to kit over SMS and through the Hub, September 2026. **Reply leg over SMS and APRS not yet observed** (carrier and radio receive issues on the test kits, not the protocol) |
 | Deployment to a real end user | **Never.** No emergency service has used this |
 | Use in an actual disaster | **Never** |
 
