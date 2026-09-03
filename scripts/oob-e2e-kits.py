@@ -185,6 +185,10 @@ def main():
     roundtrip("SMS BEARER aprs off on parallax", T, P, pid, "cellular_0", "BEARER", {"target": "aprs", "state": "off"})
     roundtrip("SMS BEARER aprs on on parallax", T, P, pid, "cellular_0", "BEARER", {"target": "aprs", "state": "on"})
     roundtrip("SMS PING reverse (P->T, importer sends)", P, T, ppid, "cellular_0", "PING")
+    # Only with a per-port switchable hub on parallax (StarTech HB30A4AIB,
+    # MESHSAT-786): cuts the XIAO's port power and lets the supervisor reclaim it.
+    if "--power-cycle" in sys.argv:
+        roundtrip("SMS RESET mesh level 3 (port power cycle) on parallax", T, P, pid, "cellular_0", "RESET", {"target": "mesh", "level": 3}, timeout=150)
 
     # 4. metrics and audit
     for name, base in KITS.items():

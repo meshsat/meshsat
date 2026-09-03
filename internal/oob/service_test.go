@@ -154,6 +154,15 @@ func (a *fakeAgent) serve(conn net.Conn) {
 		reply = agentReply{OK: true, Result: map[string]any{"ip": "192.168.181.211", "gw": "Y", "wpa": "COMPLETED", "usb": "down"}}
 	case "reboot", "wifi_reassociate", "wifi_restart", "service_restart", "usb_rebind", "p2p_restart":
 		reply = agentReply{OK: true, Result: map[string]any{}}
+	case "usb_power_cycle":
+		reply = agentReply{OK: true, Result: map[string]any{"scheduled": true, "method": "power_cycle", "hub": "2-1", "port": 3}}
+	case "usb_switchable":
+		// mesh and aioc on a switchable hub, cellular on a Pi root port.
+		reply = agentReply{OK: true, Result: map[string]any{
+			"mesh":     map[string]any{"switchable": true, "name": "2-1.3", "hub": "2-1", "twin": "3-1", "port": 3},
+			"aioc":     map[string]any{"switchable": true, "name": "2-1.1", "hub": "2-1", "twin": "3-1", "port": 1},
+			"cellular": map[string]any{"switchable": false, "reason": "device is on a root port, not switchable"},
+		}}
 	default:
 		reply = agentReply{OK: false, Error: "unknown action"}
 	}
@@ -440,6 +449,53 @@ func TestExecute_WithAgent(t *testing.T) {
 		}
 		if ti.Name == "wifi" && (!contains3(ti.Levels, LevelSoft) || contains3(ti.Levels, LevelHard)) {
 			t.Fatalf("wifi levels %v", ti.Levels)
+		}
+	}
+}
+
+// TestTargetsInfo_PowerCycle: with an agent that reports mesh and aioc on a
+// per-port switchable hub, the API view flags those targets and carries the
+// device's hub position; a device on a root port stays plain. [MESHSAT-786]
+func TestTargetsInfo_PowerCycle(t *testing.T) {
+	h := newHarness(t, "control", true)
+	info := h.svc.TargetsInfo()
+	got := map[string]TargetInfo{}
+	for _, ti := range info {
+		got[ti.Name] = ti
+	}
+	if !got["mesh"].PowerCycle || got["mesh"].HubPort != "2-1.3" {
+		t.Fatalf("mesh: %+v", got["mesh"])
+	}
+	if !got["aprs"].PowerCycle || got["aprs"].HubPort != "2-1.1" {
+		t.Fatalf("aprs (aioc): %+v", got["aprs"])
+	}
+	if got["cellular"].PowerCycle || got["cellular"].HubPort != "" {
+		t.Fatalf("cellular on a root port must not be flagged: %+v", got["cellular"])
+	}
+	if got["host"].PowerCycle || got["bridge"].PowerCycle {
+		t.Fatalf("non-USB targets flagged: host=%+v bridge=%+v", got["host"], got["bridge"])
+	}
+	// The probe is cached: a second call must not hit the agent again.
+	before := len(h.agent.called())
+	_ = h.svc.TargetsInfo()
+	if after := len(h.agent.called()); after != before {
+		t.Fatalf("usb_switchable probe not cached: %d -> %d agent calls", before, after)
+	}
+	if !contains(h.agent.called(), "usb_switchable") {
+		t.Fatalf("agent calls %v", h.agent.called())
+	}
+	if USBDeviceForTarget("aprs") != "aioc" || USBDeviceForTarget("imt") != "" || USBDeviceForTarget("mesh") != "mesh" {
+		t.Fatal("USBDeviceForTarget mapping")
+	}
+}
+
+// TestTargetsInfo_NoAgent: without a host agent nothing is flagged and no
+// probe is attempted.
+func TestTargetsInfo_NoAgent(t *testing.T) {
+	h := newHarness(t, "control", false)
+	for _, ti := range h.svc.TargetsInfo() {
+		if ti.PowerCycle || ti.HubPort != "" {
+			t.Fatalf("flagged without agent: %+v", ti)
 		}
 	}
 }

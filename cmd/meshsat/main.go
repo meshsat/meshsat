@@ -78,7 +78,33 @@ func main() {
 	// OOB management RESET actions per target and level, registered here
 	// where the concrete transports are in scope. [MESHSAT-756]
 	oobActions := map[string]map[byte]oob.Action{}
-	usbResetByRole := func(role transport.DeviceRole) oob.Action {
+	// Host agent client, shared by the level-3 actions below and the OOB
+	// service. Created early so the closures can prefer a real VBUS cut.
+	oobHost := oob.NewHostClient(cfg.OOBHostSocket)
+	// usbPowerCycle asks the host agent to cut and restore the device's hub
+	// port power (uhubctl, per-port switchable hub). A USBDEVFS_RESET does
+	// not clear a wedged ESP32-S3; a VBUS cut does. Returns false when the
+	// agent is absent or the device is not on a switchable port, in which
+	// case the caller falls back to the in-container reset. [MESHSAT-786]
+	usbPowerCycle := func(ctx context.Context, dev, tty string) bool {
+		if dev == "" || !oobHost.Available() {
+			return false
+		}
+		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		args := map[string]any{"device": dev, "fallback": false}
+		if tty != "" {
+			args["tty"] = tty
+		}
+		res, err := oobHost.Call(hctx, "usb_power_cycle", args)
+		if err != nil {
+			log.Debug().Err(err).Str("device", dev).Msg("oob: host power cycle unavailable, falling back to USB reset")
+			return false
+		}
+		log.Info().Str("device", dev).Interface("result", res).Msg("oob: USB port power cycle scheduled via host agent")
+		return true
+	}
+	usbResetByRole := func(role transport.DeviceRole, dev string) oob.Action {
 		return func(ctx context.Context) error {
 			if supervisor == nil {
 				return errors.New("device supervisor not running")
@@ -86,6 +112,9 @@ func main() {
 			port := supervisor.Registry().PortByRole(role)
 			if port == "" {
 				return fmt.Errorf("no %s port claimed", role)
+			}
+			if usbPowerCycle(ctx, dev, port) {
+				return nil
 			}
 			if !transport.USBResetSerialDevice(string(role), port) {
 				return fmt.Errorf("usb reset of %s failed", port)
@@ -204,12 +233,12 @@ func main() {
 			oob.LevelDevice: func(ctx context.Context) error {
 				return directMesh.AdminReboot(ctx, directMesh.MyNodeNum(), 5)
 			},
-			oob.LevelHard: usbResetByRole(transport.RoleMeshtastic),
+			oob.LevelHard: usbResetByRole(transport.RoleMeshtastic, "mesh"),
 		}
 		oobActions["cellular"] = map[byte]oob.Action{
 			oob.LevelSoft:   directCell.Reconnect,
 			oob.LevelDevice: directCell.DeviceReset,
-			oob.LevelHard:   usbResetByRole(transport.RoleCellular),
+			oob.LevelHard:   usbResetByRole(transport.RoleCellular, "cellular"),
 		}
 		oobActions["iridium"] = map[byte]oob.Action{
 			oob.LevelSoft: directSat.Reconnect,
@@ -218,13 +247,13 @@ func main() {
 		oobActions["imt"] = map[byte]oob.Action{
 			oob.LevelSoft:   directIMT.Reconnect,
 			oob.LevelDevice: directIMT.DeviceReset,
-			oob.LevelHard:   usbResetByRole(transport.RoleIridium9704),
+			oob.LevelHard:   usbResetByRole(transport.RoleIridium9704, ""), // 9704 on UART or a shared CP210x: no agent role
 		}
 		oobActions["zigbee"] = map[byte]oob.Action{
-			oob.LevelHard: usbResetByRole(transport.RoleZigBee),
+			oob.LevelHard: usbResetByRole(transport.RoleZigBee, "zigbee"),
 		}
 		oobActions["gps"] = map[byte]oob.Action{
-			oob.LevelHard: usbResetByRole(transport.RoleGPS),
+			oob.LevelHard: usbResetByRole(transport.RoleGPS, "gps"),
 		}
 
 		// DeviceSupervisor: replaces one-shot auto-detect with continuous
@@ -1220,6 +1249,9 @@ func main() {
 					if id == "" {
 						return errors.New("rtl-sdr not detected")
 					}
+					if usbPowerCycle(ctx, "rtl_sdr", "") {
+						return nil
+					}
 					if !transport.USBResetSysfsID("rtl_sdr", id) {
 						return errors.New("usb reset failed")
 					}
@@ -1239,7 +1271,7 @@ func main() {
 			DB:       db,
 			Keys:     ks,
 			Gateways: gwMgr,
-			Host:     oob.NewHostClient(cfg.OOBHostSocket),
+			Host:     oobHost,
 			BearersUp: func() map[string]bool {
 				up := map[string]bool{}
 				for _, gs := range gwMgr.GetStatus() {

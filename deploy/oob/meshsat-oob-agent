@@ -6,8 +6,10 @@ The bridge container talks to this agent over a Unix socket
 one JSON line request, one JSON line reply, one connection per call.
 
   -> {"action": "journal_tail", "args": {"unit": "docker", "lines": 10}}
-  <- {"ok": true, "result": {"lines": ["..."]}, "version": "1"}
+  <- {"ok": true, "result": {"lines": ["..."]}, "version": "2"}
   <- {"ok": false, "error": "unknown action"}
+  -> {"action": "usb_power_cycle", "args": {"device": "mesh", "tty": "/dev/ttyACM1"}}
+  <- {"ok": true, "result": {"scheduled": true, "hub": "2-1", "twin": "3-1", "port": 3, ...}}
 
 Every action is a fixed argv built from table lookups and clamped
 integers. Nothing from a request is ever interpolated into a shell string
@@ -21,12 +23,13 @@ hand it binds the socket itself.
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
 
-VERSION = "1"
+VERSION = "2"
 SOCKET_PATH = os.environ.get("MESHSAT_OOB_SOCKET", "/run/meshsat-oob/agent.sock")
 READ_TIMEOUT = 5.0
 MAX_LINE = 4096
@@ -64,6 +67,34 @@ USB_REBIND = {
     "aioc": ["1209:7388"],
     "rtl_sdr": ["0bda:2838", "0bda:2832"],
 }
+
+# USB devices usb_power_cycle may cut VBUS to, by role -> vendor:product.
+# The hub port is resolved from sysfs at call time, never from a static
+# port map: the bridge identifies devices by VID:PID, not by position, and
+# a device replugged into another port stays valid. Shared-chip devices
+# (CP210x, CH34x) are resolved from the tty the bridge claimed for the
+# role, which the request carries as "tty"; the VID:PID is then only a
+# sanity check. Power switching needs a hub with per-port power control
+# (StarTech HB30A4AIB on the V1 kits); the Pi 5's own ports are one ganged
+# VBUS group even though uhubctl labels them ppps, so root ports are
+# refused. [MESHSAT-786]
+USB_DEVICES = {
+    "mesh": ["2886:0059"],
+    "cellular": ["1a86:55d4"],
+    "zigbee": ["10c4:ea60"],
+    "gps": ["1546:01a7"],
+    "usb_wifi": ["0e8d:7612"],
+    "aioc": ["1209:7388"],
+    "rtl_sdr": ["0bda:2838", "0bda:2832"],
+}
+USB_NAME_RE = re.compile(r"^\d+-\d+(\.\d+)*$")
+USB_SYSFS = "/sys/bus/usb/devices"
+DEFAULT_OFF_MS = 3000
+MIN_OFF_MS = 500
+MAX_OFF_MS = 10000
+# The installed agent re-executes itself under systemd-run for the
+# off/sleep/on sequence so the single-threaded socket loop never blocks.
+AGENT_EXE = os.path.abspath(globals().get("__file__") or "/usr/local/bin/meshsat-oob-agent")
 
 MAX_DELAY = 3600
 MAX_LINES = 50
@@ -141,6 +172,30 @@ def plan(action, args):
         if ids is None:
             raise Refused("device not allowed")
         return None, 20, lambda _p: usb_rebind(ids)
+
+    if action == "usb_switchable":
+        role = args.get("device")
+        roles = [str(role)] if role else sorted(USB_DEVICES)
+        tty = args.get("tty") if role else None
+        return None, 30, lambda _p: usb_switchable(roles, tty)
+
+    if action == "usb_power_cycle":
+        role = str(args.get("device", ""))
+        off_ms = clamp(args.get("off_ms", DEFAULT_OFF_MS), MIN_OFF_MS, MAX_OFF_MS, DEFAULT_OFF_MS)
+        fallback = args.get("fallback", True) is not False
+        dev = resolve_usb_port(role, args.get("tty"))
+        if not hub_switchable(dev["hub"], dev["port"]):
+            if fallback and role in USB_REBIND:
+                ids = USB_REBIND[role]
+                return None, 20, lambda _p: dict(usb_rebind(ids), method="rebind", name=dev["name"])
+            raise Refused("hub %s has no per-port power switching" % dev["hub"])
+        unit = "meshsat-usb-cycle-%s-%d" % (role, int(time.time()))
+        hubs = [dev["hub"]] + ([dev["twin"]] if dev["twin"] else [])
+        argv = ["systemd-run", "--collect", "--unit=" + unit,
+                AGENT_EXE, "--usb-cycle", str(dev["port"]), str(off_ms)] + hubs
+        result = {"scheduled": True, "method": "power_cycle", "name": dev["name"], "hub": dev["hub"],
+                  "twin": dev["twin"], "port": dev["port"], "off_ms": off_ms, "unit": unit}
+        return argv, 10, lambda _p: result
 
     raise Refused("unknown action")
 
@@ -224,6 +279,152 @@ def usb_rebind(ids):
             f.write(name)
         done.append(name)
     return {"rebound": done}
+
+
+def parse_usb_name(name):
+    """'2-1.3' -> ('2-1', 3). A root-port device such as '2-2' is refused:
+    on the Pi 5 the four root ports share one VBUS group, so cutting one
+    would drop every device."""
+    name = str(name or "")
+    if not USB_NAME_RE.match(name):
+        raise Refused("bad usb device name")
+    if "." not in name:
+        raise Refused("device is on a root port, not switchable")
+    hub, port = name.rsplit(".", 1)
+    return hub, int(port)
+
+
+def read_vidpid(name):
+    try:
+        with open(os.path.join(USB_SYSFS, name, "idVendor")) as f:
+            vid = f.read().strip()
+        with open(os.path.join(USB_SYSFS, name, "idProduct")) as f:
+            pid = f.read().strip()
+    except OSError:
+        return None
+    return "%s:%s" % (vid, pid)
+
+
+def twin_hub(hub):
+    """The other-speed twin of a hub path ('2-1' -> '3-1'): same port path
+    under the root hub that shares the same host controller. A USB 3 hub
+    enumerates as two virtual hubs and uhubctl must switch both. None when
+    the hub has no twin."""
+    bus, _sep, rest = str(hub).partition("-")
+    try:
+        parent = os.path.realpath(os.path.join(USB_SYSFS, "usb" + bus, ".."))
+        names = os.listdir(USB_SYSFS)
+    except OSError:
+        return None
+    for name in sorted(names):
+        other = name[3:] if name.startswith("usb") else ""
+        if not other.isdigit() or other == bus:
+            continue
+        if os.path.realpath(os.path.join(USB_SYSFS, name, "..")) != parent:
+            continue
+        cand = "%s-%s" % (other, rest)
+        if os.path.isdir(os.path.join(USB_SYSFS, cand)):
+            return cand
+    return None
+
+
+def usb_name_for_tty(tty):
+    """'/dev/ttyACM1' -> the sysfs USB device name it hangs off ('2-1.3')."""
+    n = os.path.basename(str(tty or ""))
+    if not re.match(r"^tty[A-Za-z]+\d+$", n):
+        raise Refused("bad tty")
+    path = os.path.realpath("/sys/class/tty/%s/device" % n)
+    for part in reversed(path.split("/")):
+        if USB_NAME_RE.match(part) and os.path.exists(os.path.join(USB_SYSFS, part, "idVendor")):
+            return part
+    raise Refused("tty is not a usb device")
+
+
+def resolve_usb_port(role, tty=None):
+    """Locate a role's device on the bus and return its hub, twin hub and
+    port. Raises Refused for an unknown role, an absent or ambiguous device,
+    a tty that is not that device, or a root port."""
+    ids = USB_DEVICES.get(str(role or ""))
+    if ids is None:
+        raise Refused("device not allowed")
+    if tty:
+        name = usb_name_for_tty(tty)
+        vidpid = read_vidpid(name)
+        if vidpid not in ids:
+            raise Refused("tty is not a %s device" % role)
+    else:
+        names = find_usb_devices(ids)
+        if not names:
+            raise Refused("device not present")
+        if len(names) > 1:
+            raise Refused("ambiguous, pass tty")
+        name = names[0]
+        vidpid = read_vidpid(name)
+    hub, port = parse_usb_name(name)
+    return {"name": name, "vidpid": vidpid, "hub": hub, "twin": twin_hub(hub), "port": port}
+
+
+def hub_switchable(hub, port):
+    """True when uhubctl accepts the hub as one with per-port power switching.
+    A ganged hub answers 'No compatible devices detected'."""
+    try:
+        p = run_argv(["uhubctl", "-l", str(hub), "-p", str(port)], 10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    out = (p.stdout or "") + (p.stderr or "")
+    return p.returncode == 0 and "Current status for hub" in out and "No compatible devices" not in out
+
+
+def usb_switchable(roles, tty=None):
+    """Per role: where the device sits and whether its port can be power-cycled."""
+    out = {}
+    for role in roles:
+        try:
+            dev = resolve_usb_port(role, tty)
+            dev["switchable"] = hub_switchable(dev["hub"], dev["port"])
+            out[role] = dev
+        except Refused as e:
+            out[role] = {"switchable": False, "reason": str(e)}
+    return out
+
+
+def usb_cycle_main(argv):
+    """Detached helper: `--usb-cycle <port> <off_ms> <hub> [<twin>]`.
+    Runs under a transient systemd unit started by the agent."""
+    if len(argv) < 3:
+        log("usb-cycle: usage: --usb-cycle <port> <off_ms> <hub> [<twin>]")
+        return 2
+    try:
+        port = int(argv[0])
+    except ValueError:
+        port = 0
+    off_ms = clamp(argv[1], MIN_OFF_MS, MAX_OFF_MS, DEFAULT_OFF_MS)
+    hubs = [h for h in argv[2:] if USB_NAME_RE.match(h) or h.isdigit()]
+    if not 1 <= port <= 64 or not hubs or len(hubs) != len(argv[2:]):
+        log("usb-cycle: bad arguments %r" % (argv,))
+        return 2
+
+    def switch(hub, state):
+        try:
+            p = run_argv(["uhubctl", "-l", hub, "-p", str(port), "-a", state], 15)
+            code = p.returncode
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log("usb-cycle: uhubctl %s: %s" % (state, e))
+            code = 1
+        log("usb-cycle: %s port %d %s rc=%d" % (hub, port, state, code))
+        return code
+
+    rc = 0
+    for h in hubs:
+        rc |= switch(h, "off")
+    time.sleep(off_ms / 1000.0)
+    for h in hubs:
+        code = switch(h, "on")
+        if code != 0:
+            time.sleep(1.0)
+            code = switch(h, "on")
+        rc |= code
+    return 1 if rc else 0
 
 
 def dispatch(request):
@@ -314,4 +515,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--usb-cycle":
+        sys.exit(usb_cycle_main(sys.argv[2:]))
     sys.exit(main())

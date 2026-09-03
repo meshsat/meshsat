@@ -223,7 +223,8 @@ the case CAD, the Rev A release files). Rev A is designed and prepared for fabri
 - **OOB management frames:** authenticated, optionally encrypted single-message commands (PING,
   REBOOT, RESTART, RESET per interface and level, BEARER, LOG, STATUS-NET) that ride any bearer,
   replay-protected, with host actions behind an allowlisted agent. A kit that has lost its WiFi can
-  still be reached over SMS or APRS. Spec: `docs/OOB_MANAGEMENT_PROTOCOL.md`
+  still be reached over SMS or APRS, and a RESET at level 3 cuts a wedged device's USB port power
+  when the kit has a per-port switchable hub. Spec: `docs/OOB_MANAGEMENT_PROTOCOL.md`
 - **Config export and import** in YAML, in the style of `show running-config`, with diff preview
 
 ### Dashboard and API

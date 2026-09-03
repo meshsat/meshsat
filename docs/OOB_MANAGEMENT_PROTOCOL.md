@@ -95,18 +95,32 @@ Levels: 1 soft (in-process reconnect of the transport or gateway), 2 device (a r
 | Code | Target | Level 1 | Level 2 | Level 3 |
 |---|---|---|---|---|
 | 0x01 | wifi | wpa_supplicant reassociate (agent) | restart wpa_supplicant and networkd (agent) | none in v1 |
-| 0x02 | usb_wifi | restart the P2P link unit when enabled (agent) | same | USB rebind (agent) |
-| 0x03 | cellular | transport reconnect | AT+CFUN=1,1 | USB reset |
-| 0x04 | mesh | transport reconnect | Meshtastic admin reboot | USB reset |
+| 0x02 | usb_wifi | restart the P2P link unit when enabled (agent) | same | port power cycle, else USB rebind (agent) |
+| 0x03 | cellular | transport reconnect | AT+CFUN=1,1 | port power cycle, else USB reset |
+| 0x04 | mesh | transport reconnect | Meshtastic admin reboot | port power cycle, else USB reset |
 | 0x05 | iridium (9603) | transport reconnect | none | OnOff power cycle (needs the OnOff pin) |
 | 0x06 | imt (9704) | transport reconnect | I_EN cycle | USB reset |
-| 0x07 | zigbee | coordinator reinit | ZNP SYS_RESET_REQ | USB reset |
+| 0x07 | zigbee | coordinator reinit | ZNP SYS_RESET_REQ | port power cycle, else USB reset |
 | 0x08 | ble | interface stop and start | adapter cycle | bluetooth service restart (agent) |
-| 0x09 | aprs | gateway stop and start (respawns Direwolf, resets the AIOC) | same | AIOC USB rebind (agent) |
-| 0x0A | gps | reader reopen | none | USB reset |
-| 0x0B | rtl_sdr | spectrum recalibrate | none | USB reset by sysfs id |
+| 0x09 | aprs | gateway stop and start (respawns Direwolf, resets the AIOC) | same | AIOC port power cycle, else USB rebind (agent) |
+| 0x0A | gps | reader reopen | none | port power cycle, else USB reset |
+| 0x0B | rtl_sdr | spectrum recalibrate | none | port power cycle, else USB reset by sysfs id |
 | 0x7E | bridge | RESTART | | |
 | 0x7F | host | | | REBOOT |
+
+**Port power cycle (level 3, MESHSAT-786).** A USB reset does not clear a wedged ESP32-S3 (the
+XIAO mesh radio, 2 and 3 Sep 2026); only a VBUS cut does. When the device sits on a hub with
+per-port power switching (the V1 kits get a StarTech HB30A4AIB in place of the ganged Sabrent),
+level 3 first asks the host agent for `usb_power_cycle`: the agent locates the device from its
+VID:PID, or from the tty the bridge claimed for the role for shared-chip devices, in sysfs at
+call time (no static port map, so replugging stays safe), refuses root ports (the Pi 5's four
+ports are one ganged VBUS group even though uhubctl labels them ppps), checks the hub with
+`uhubctl`, and runs the off, 3 s, on sequence on both virtual hubs of a USB 3 hub in a detached
+transient unit so the agent socket never blocks. Without a switchable hub the agent falls back
+to its sysfs rebind for AIOC, USB WiFi and RTL-SDR, and the bridge falls back to the USB reset
+ioctl for the serial devices, so a kit without the hub behaves exactly as before.
+`GET /api/oob/targets` reports `power_cycle` and `hub_port` per target; the Settings tab shows
+them.
 
 After any level 3 action the bridge triggers an immediate USB scan so the existing hot-swap recovery (device supervisor, gateway manager retry ladder) restarts the gateway within seconds. `/sys` is read-only inside the container, so in-process hard resets use the USB reset ioctl on `/dev/bus/usb`; sysfs unbind and rebind live in the host agent only. Reset targets whose follow-up flag is set send one unsolicited STATUS-NET style reply 30 seconds later on the same bearer.
 

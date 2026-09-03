@@ -54,6 +54,9 @@ const (
 // ResetTarget is one row of the shared RESET / BEARER table. Bridge-side
 // actions per level are registered at wiring time (Deps.Actions); host
 // agent actions per level are static data here. Index HostActions by level.
+// "usb_power_cycle:<dev>" cuts the device's hub port power when it sits on
+// a per-port switchable hub and otherwise falls back to the agent's sysfs
+// rebind, so a kit without such a hub behaves as before. [MESHSAT-786]
 type ResetTarget struct {
 	Code        byte                 `json:"code"`
 	Name        string               `json:"name"`
@@ -69,7 +72,7 @@ var Targets = []ResetTarget{
 	{Code: TargetWiFi, Name: "wifi", Kind: KindHost, FollowUp: true,
 		HostActions: [MaxLevel + 1]string{"", "wifi_reassociate", "wifi_restart", ""}},
 	{Code: TargetUSBWiFi, Name: "usb_wifi", Kind: KindDevice, FollowUp: true,
-		HostActions: [MaxLevel + 1]string{"", "p2p_restart", "p2p_restart", "usb_rebind:usb_wifi"}},
+		HostActions: [MaxLevel + 1]string{"", "p2p_restart", "p2p_restart", "usb_power_cycle:usb_wifi"}},
 	{Code: TargetCellular, Name: "cellular", Kind: KindInterface, IfaceID: "cellular_0"},
 	{Code: TargetMesh, Name: "mesh", Kind: KindInterface, IfaceID: "mesh_0"},
 	{Code: TargetIridium, Name: "iridium", Kind: KindInterface, IfaceID: "iridium_0"},
@@ -78,7 +81,7 @@ var Targets = []ResetTarget{
 	{Code: TargetBLE, Name: "ble", Kind: KindInterface, IfaceID: "ble_0",
 		HostActions: [MaxLevel + 1]string{"", "", "", "service_restart:bluetooth"}},
 	{Code: TargetAPRS, Name: "aprs", Kind: KindInterface, IfaceID: "aprs_0",
-		HostActions: [MaxLevel + 1]string{"", "", "", "usb_rebind:aioc"}},
+		HostActions: [MaxLevel + 1]string{"", "", "", "usb_power_cycle:aioc"}},
 	{Code: TargetGPS, Name: "gps", Kind: KindDevice},
 	{Code: TargetRTLSDR, Name: "rtl_sdr", Kind: KindDevice},
 	{Code: TargetBridge, Name: "bridge", Kind: KindProcess},
