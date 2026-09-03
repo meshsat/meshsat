@@ -799,6 +799,10 @@ const oobLevelsForTarget = computed(() => {
   const t = (store.oobTargets?.targets || []).find(x => x.name === oobSend.value.args.target)
   return t && t.levels && t.levels.length ? t.levels : [1]
 })
+// Targets whose level 3 is a real USB port power cycle (device on a per-port
+// switchable hub, reported by the host agent). [MESHSAT-786]
+const oobSelectedTarget = computed(() => (store.oobTargets?.targets || []).find(x => x.name === oobSend.value.args.target) || null)
+const oobSwitchable = computed(() => (store.oobTargets?.targets || []).filter(t => t.power_cycle))
 const oobPeerVia = computed(() => {
   const p = (store.oobPeers || []).find(x => x.peer_id === Number(oobSend.value.peer_id))
   const keys = p ? Object.keys(p.addresses || {}) : []
@@ -2955,6 +2959,10 @@ onUnmounted(() => {
             host agent {{ store.oobAgent.available ? 'v' + store.oobAgent.version : 'absent' }}
           </span>
         </div>
+        <p v-if="oobSwitchable.length" class="text-[10px] text-gray-400" data-testid="oob-usb-power">
+          USB port power (RESET level 3):
+          <span v-for="t in oobSwitchable" :key="t.name" class="ml-1 font-mono text-emerald-300">{{ t.name }} {{ t.hub_port }}</span>
+        </p>
         <p class="text-[11px] text-gray-500">
           Authenticated single-message commands (PING, REBOOT, RESTART, RESET, BEARER, LOG, STATUS-NET) over any bearer.
           Frames from unknown peers, replays and bad tags are dropped silently. Encryption is a per-peer, per-bearer toggle on every bearer;
@@ -3100,8 +3108,9 @@ onUnmounted(() => {
           <div v-if="oobCmdNeeds.level">
             <label class="block text-[10px] text-gray-500 mb-1">Level (1 soft, 2 device, 3 hard)</label>
             <select v-model="oobSend.args.level" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
-              <option v-for="l in oobLevelsForTarget" :key="l" :value="l">{{ l }}</option>
+              <option v-for="l in oobLevelsForTarget" :key="l" :value="l">{{ l }}{{ l === 3 && oobSelectedTarget?.power_cycle ? ' (port power cycle)' : '' }}</option>
             </select>
+            <p v-if="oobSelectedTarget?.power_cycle" class="mt-1 text-[10px] text-emerald-300" data-testid="oob-power-cycle-hint">level 3 cuts USB power on port {{ oobSelectedTarget.hub_port }}</p>
           </div>
           <div v-if="oobCmdNeeds.state">
             <label class="block text-[10px] text-gray-500 mb-1">State</label>

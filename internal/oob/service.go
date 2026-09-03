@@ -90,6 +90,62 @@ type Service struct {
 	reverts  map[string]*time.Timer
 	restart  func()
 	agentVer string
+
+	// usb_switchable probe cache: the agent runs uhubctl once per device
+	// role, so the answer is kept for usbProbeTTL. [MESHSAT-786]
+	usbMu    sync.Mutex
+	usbAt    time.Time
+	usbProbe map[string]map[string]any
+}
+
+const usbProbeTTL = 60 * time.Second
+
+// USBDeviceForTarget maps a reset target to the host agent's USB device
+// role (deploy/oob/meshsat-oob-agent USB_DEVICES), or "" when the target is
+// not a USB device the agent can power-cycle.
+func USBDeviceForTarget(name string) string {
+	switch name {
+	case "mesh", "cellular", "zigbee", "gps", "rtl_sdr", "usb_wifi":
+		return name
+	case "aprs":
+		return "aioc"
+	}
+	return ""
+}
+
+// USBSwitchable asks the host agent where each USB device sits and whether
+// its hub port can be power-cycled with uhubctl (a per-port switchable hub,
+// StarTech HB30A4AIB on the V1 kits). Cached for a minute; nil without an
+// agent or when the probe failed. [MESHSAT-786]
+func (s *Service) USBSwitchable(ctx context.Context) map[string]map[string]any {
+	if s.d.Host == nil || !s.d.Host.Available() {
+		return nil
+	}
+	s.usbMu.Lock()
+	defer s.usbMu.Unlock()
+	if s.usbProbe != nil && time.Since(s.usbAt) < usbProbeTTL {
+		return s.usbProbe
+	}
+	if s.usbProbe == nil && !s.usbAt.IsZero() && time.Since(s.usbAt) < 15*time.Second {
+		return nil // failed recently; do not hammer the agent
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	res, err := s.d.Host.Call(cctx, "usb_switchable", nil)
+	s.usbAt = time.Now()
+	if err != nil {
+		s.usbProbe = nil
+		log.Debug().Err(err).Msg("oob: usb_switchable probe failed")
+		return nil
+	}
+	out := make(map[string]map[string]any, len(res))
+	for role, v := range res {
+		if m, ok := v.(map[string]any); ok {
+			out[role] = m
+		}
+	}
+	s.usbProbe = out
+	return out
 }
 
 // New creates the service. Call Start before use.
@@ -602,14 +658,31 @@ type TargetInfo struct {
 	IfaceID string `json:"iface_id,omitempty"`
 	Levels  []int  `json:"levels"` // ints, not bytes: a []byte would marshal as base64
 	Bearer  bool   `json:"bearer"` // usable with BEARER
+	// PowerCycle is true when level 3 cuts the device's USB port power
+	// through the host agent (device on a per-port switchable hub);
+	// HubPort is the device's sysfs name there, e.g. "2-1.3". [MESHSAT-786]
+	PowerCycle bool   `json:"power_cycle"`
+	HubPort    string `json:"hub_port,omitempty"`
 }
 
 // TargetsInfo lists the targets and the levels this kit can act on.
 func (s *Service) TargetsInfo() []TargetInfo {
 	agent := s.d.Host != nil && s.d.Host.Available()
+	var probe map[string]map[string]any
+	if agent {
+		probe = s.USBSwitchable(context.Background())
+	}
 	out := make([]TargetInfo, 0, len(Targets))
 	for _, t := range Targets {
 		info := TargetInfo{Code: t.Code, Name: t.Name, Kind: t.Kind.String(), IfaceID: t.IfaceID, Bearer: t.IfaceID != "" && s.d.Gateways != nil, Levels: []int{}}
+		if dev := USBDeviceForTarget(t.Name); dev != "" && probe != nil {
+			if m := probe[dev]; m != nil {
+				if sw, _ := m["switchable"].(bool); sw {
+					info.PowerCycle = true
+					info.HubPort, _ = m["name"].(string)
+				}
+			}
+		}
 		for level := byte(MinLevel); level <= MaxLevel; level++ {
 			switch {
 			case t.Code == TargetBridge:

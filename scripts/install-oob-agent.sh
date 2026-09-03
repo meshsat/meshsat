@@ -57,6 +57,13 @@ echo "  socket  : $SOCKET_PATH"
 echo "[1/5] Installing agent"
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
 install -m 0755 "$DEPLOY_DIR/meshsat-oob-agent" /usr/local/bin/meshsat-oob-agent
+# uhubctl drives per-port USB power switching for usb_power_cycle (stock
+# Ubuntu universe package, no third-party repo). [MESHSAT-786]
+if ! command -v uhubctl >/dev/null 2>&1; then
+  echo "  installing uhubctl"
+  apt-get update -q
+  apt-get install -y -q --no-install-recommends uhubctl
+fi
 
 # ─── 2. socket directory via tmpfiles.d ───
 echo "[2/5] Socket directory"

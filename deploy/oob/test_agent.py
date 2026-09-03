@@ -103,6 +103,113 @@ class PlanTests(unittest.TestCase):
             agent.plan("usb_rebind", {"device": "mesh"})
 
 
+FAKE_DEV = {"name": "2-1.3", "vidpid": "2886:0059", "hub": "2-1", "twin": "3-1", "port": 3}
+
+
+class USBPowerCycleTests(unittest.TestCase):
+    """usb_power_cycle / usb_switchable with the sysfs and uhubctl lookups
+    replaced, so nothing on the test host is read or switched. [MESHSAT-786]"""
+
+    def setUp(self):
+        self._resolve = agent.resolve_usb_port
+        self._switchable = agent.hub_switchable
+        self._rebind = agent.usb_rebind
+        agent.resolve_usb_port = lambda role, tty=None: dict(FAKE_DEV)
+        agent.hub_switchable = lambda hub, port: True
+        agent.usb_rebind = lambda ids: {"rebound": ["2-1.3"]}
+
+    def tearDown(self):
+        agent.resolve_usb_port = self._resolve
+        agent.hub_switchable = self._switchable
+        agent.usb_rebind = self._rebind
+
+    def test_parse_usb_name(self):
+        self.assertEqual(agent.parse_usb_name("2-1.3"), ("2-1", 3))
+        self.assertEqual(agent.parse_usb_name("2-1.3.2"), ("2-1.3", 2))
+        with self.assertRaises(agent.Refused):
+            agent.parse_usb_name("2-2")  # root port: ganged on the Pi 5
+        with self.assertRaises(agent.Refused):
+            agent.parse_usb_name("../drivers")
+        with self.assertRaises(agent.Refused):
+            agent.parse_usb_name("")
+
+    def test_power_cycle_argv_is_detached_and_covers_both_hubs(self):
+        argv, timeout, post = agent.plan("usb_power_cycle", {"device": "mesh", "tty": "/dev/ttyACM1"})
+        self.assertIsInstance(argv, list)
+        self.assertEqual(argv[0], "systemd-run")
+        self.assertIn("--collect", argv)
+        self.assertTrue(any(a.startswith("--unit=meshsat-usb-cycle-mesh-") for a in argv))
+        i = argv.index("--usb-cycle")
+        self.assertEqual(argv[i + 1:], ["3", str(agent.DEFAULT_OFF_MS), "2-1", "3-1"])
+        for a in argv:
+            self.assertIsInstance(a, str)
+            self.assertNotIn(";", a)
+            self.assertNotIn("|", a)
+        result = post(None)
+        self.assertTrue(result["scheduled"])
+        self.assertEqual(result["method"], "power_cycle")
+        self.assertEqual((result["hub"], result["twin"], result["port"]), ("2-1", "3-1", 3))
+
+    def test_off_ms_clamped(self):
+        argv, _t, post = agent.plan("usb_power_cycle", {"device": "mesh", "off_ms": 99999})
+        self.assertIn(str(agent.MAX_OFF_MS), argv)
+        self.assertEqual(post(None)["off_ms"], agent.MAX_OFF_MS)
+        argv, _t, _p = agent.plan("usb_power_cycle", {"device": "mesh", "off_ms": 1})
+        self.assertIn(str(agent.MIN_OFF_MS), argv)
+        argv, _t, _p = agent.plan("usb_power_cycle", {"device": "mesh", "off_ms": "nope"})
+        self.assertIn(str(agent.DEFAULT_OFF_MS), argv)
+
+    def test_single_hub_when_no_twin(self):
+        agent.resolve_usb_port = lambda role, tty=None: dict(FAKE_DEV, twin=None)
+        argv, _t, _p = agent.plan("usb_power_cycle", {"device": "zigbee"})
+        self.assertEqual(argv[argv.index("--usb-cycle") + 1:], ["3", str(agent.DEFAULT_OFF_MS), "2-1"])
+
+    def test_unknown_role_and_root_port_refused(self):
+        agent.resolve_usb_port = self._resolve  # the real resolver rejects unknown roles first
+        with self.assertRaises(agent.Refused):
+            agent.plan("usb_power_cycle", {"device": "../../etc"})
+        with self.assertRaises(agent.Refused):
+            agent.plan("usb_power_cycle", {"device": "imt"})
+
+        def root(role, tty=None):
+            raise agent.Refused("device is on a root port, not switchable")
+        agent.resolve_usb_port = root
+        with self.assertRaises(agent.Refused):
+            agent.plan("usb_power_cycle", {"device": "mesh", "tty": "/dev/ttyACM1"})
+
+    def test_ganged_hub_falls_back_to_rebind_only_for_rebindable_roles(self):
+        agent.hub_switchable = lambda hub, port: False
+        # aioc has a sysfs rebind path: fallback (the default) keeps today's behaviour.
+        argv, _t, post = agent.plan("usb_power_cycle", {"device": "aioc"})
+        self.assertIsNone(argv)
+        self.assertEqual(post(None)["method"], "rebind")
+        # mesh has no rebind path (shared-chip rule): refused, the bridge does its own reset.
+        with self.assertRaises(agent.Refused):
+            agent.plan("usb_power_cycle", {"device": "mesh", "tty": "/dev/ttyACM1"})
+        # explicit fallback=false never rebinds.
+        with self.assertRaises(agent.Refused):
+            agent.plan("usb_power_cycle", {"device": "aioc", "fallback": False})
+
+    def test_usb_switchable_reports_every_role(self):
+        argv, _t, post = agent.plan("usb_switchable", {})
+        self.assertIsNone(argv)
+        out = post(None)
+        self.assertEqual(sorted(out), sorted(agent.USB_DEVICES))
+        self.assertTrue(out["mesh"]["switchable"])
+        self.assertEqual(out["mesh"]["name"], "2-1.3")
+
+        def absent(role, tty=None):
+            raise agent.Refused("device not present")
+        agent.resolve_usb_port = absent
+        out = agent.plan("usb_switchable", {"device": "gps"})[2](None)
+        self.assertEqual(out, {"gps": {"switchable": False, "reason": "device not present"}})
+
+    def test_usb_cycle_helper_rejects_bad_args(self):
+        self.assertEqual(agent.usb_cycle_main([]), 2)
+        self.assertEqual(agent.usb_cycle_main(["0", "3000", "2-1"]), 2)
+        self.assertEqual(agent.usb_cycle_main(["3", "3000", "../x"]), 2)
+
+
 class DispatchTests(unittest.TestCase):
     def test_dispatch_unknown_is_ok_false(self):
         reply = agent.dispatch({"action": "nope"})
