@@ -898,6 +898,15 @@ func (t *DirectCellTransport) pollSignalAndCellInfo() {
 		return
 	}
 
+	// Registration state was only read during init, about 25 s after the
+	// port opened, before a slow-registering modem (A7670E after CPIN) has
+	// attached; the status endpoint then showed not_registered for as long
+	// as the container lived. Refresh it every poll. [MESHSAT-787]
+	cregResp, cregErr := t.execAT("AT+CREG?", cellATTimeout)
+	if cregErr == nil {
+		t.applyRegistration(parseCREG(cregResp))
+	}
+
 	// Query cell info: AT+QENG (Quectel) → AT+CPSI? (SIMCom) → AT+CREG? (3GPP) → AT+COPS? (AcT)
 	var ci *CellInfo
 	cellResp, cellErr := t.execAT("AT+QENG=\"servingcell\"", 5*time.Second)
@@ -910,11 +919,8 @@ func (t *DirectCellTransport) pollSignalAndCellInfo() {
 			ci = parseCPSI(cpsiResp)
 		}
 	}
-	if ci == nil {
-		cregResp, cregErr := t.execAT("AT+CREG?", cellATTimeout)
-		if cregErr == nil {
-			ci = parseCREGExtended(cregResp)
-		}
+	if ci == nil && cregErr == nil {
+		ci = parseCREGExtended(cregResp)
 	}
 	// AT+COPS? gives AcT (network type) on all 3GPP modems.
 	// Critical for Huawei E220 and similar modems that omit AcT from CREG.
@@ -1201,6 +1207,31 @@ func (t *DirectCellTransport) GetSignalFast(_ context.Context) (*CellSignalInfo,
 	}
 	info := t.lastSignal
 	return &info, nil
+}
+
+// applyRegistration records a freshly read registration state (parseCREG
+// output). Unknown or unchanged values are ignored; a change is logged and
+// emitted as a "registration" event so the dashboard follows the modem
+// instead of the init-time snapshot. Safe without a serial port, which is
+// what makes it unit-testable. [MESHSAT-787]
+func (t *DirectCellTransport) applyRegistration(status string) {
+	if status == "" || status == "unknown" {
+		return
+	}
+	t.stateMu.Lock()
+	prev := t.regStatus
+	if prev == status {
+		t.stateMu.Unlock()
+		return
+	}
+	t.regStatus = status
+	t.stateMu.Unlock()
+	log.Info().Str("from", prev).Str("to", status).Msg("cellular: registration state changed")
+	t.emitEvent(CellEvent{
+		Type:    "registration",
+		Message: fmt.Sprintf("Registration: %s", status),
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // GetStatus returns modem connection status.

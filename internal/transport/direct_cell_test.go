@@ -1,6 +1,99 @@
 package transport
 
-import "testing"
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+// TestApplyRegistration_LateRegistration: the init sequence reads CREG
+// before a slow modem has attached (A7670E after CPIN), so the cached state
+// says not_registered; the minute poll must move it to registered_home from
+// a real AT+CREG? reply and emit one registration event. [MESHSAT-787]
+func TestApplyRegistration_LateRegistration(t *testing.T) {
+	tr := NewDirectCellTransport("auto")
+	ctx := context.Background()
+	// Subscribe() would open the serial port; attach an event channel the
+	// way it does, minus the modem.
+	events := make(chan CellEvent, 8)
+	tr.eventMu.Lock()
+	tr.eventSubs[tr.nextSubID] = events
+	tr.nextSubID++
+	tr.eventMu.Unlock()
+
+	// Init-time snapshot on a modem still attaching.
+	tr.applyRegistration(parseCREG("\r\n+CREG: 2,0\r\n\r\nOK"))
+	st, _ := tr.GetStatus(ctx)
+	if st.Registration != "not_registered" {
+		t.Fatalf("init: %q", st.Registration)
+	}
+	drain(events)
+
+	// One minute later the poll reads the extended reply the A7670E gives
+	// once attached (tesseract, 4 Sep 2026).
+	tr.applyRegistration(parseCREG("\r\n+CREG: 2,1,791A,00EC730B\r\n\r\nOK"))
+	st, _ = tr.GetStatus(ctx)
+	if st.Registration != "registered_home" {
+		t.Fatalf("after poll: %q", st.Registration)
+	}
+	select {
+	case ev := <-events:
+		if ev.Type != "registration" || ev.Message != "Registration: registered_home" {
+			t.Fatalf("event %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no registration event")
+	}
+
+	// Unchanged and unknown replies leave the state alone and stay silent.
+	tr.applyRegistration(parseCREG("\r\n+CREG: 2,1,791A,00EC730B\r\n\r\nOK"))
+	tr.applyRegistration(parseCREG("\r\nERROR"))
+	tr.applyRegistration("")
+	st, _ = tr.GetStatus(ctx)
+	if st.Registration != "registered_home" {
+		t.Fatalf("stable: %q", st.Registration)
+	}
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected event %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Losing the network is reported too.
+	tr.applyRegistration(parseCREG("\r\n+CREG: 2,2\r\n\r\nOK"))
+	st, _ = tr.GetStatus(ctx)
+	if st.Registration != "searching" {
+		t.Fatalf("searching: %q", st.Registration)
+	}
+}
+
+func drain(ch <-chan CellEvent) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func TestParseCREG_StatusForms(t *testing.T) {
+	cases := map[string]string{
+		"+CREG: 0,1":                       "registered_home",
+		"+CREG: 2,1,\"791A\",\"00EC730B\"": "registered_home",
+		"+CREG: 2,1,791A,00EC730B,7":       "registered_home",
+		"+CREG: 0,0":                       "not_registered",
+		"+CREG: 0,2":                       "searching",
+		"+CREG: 0,3":                       "denied",
+		"+CREG: 0,5":                       "registered_roaming",
+		"OK":                               "unknown",
+	}
+	for in, want := range cases {
+		if got := parseCREG(in); got != want {
+			t.Errorf("parseCREG(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
 
 func TestActToNetworkType(t *testing.T) {
 	tests := []struct {
