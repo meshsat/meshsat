@@ -142,6 +142,11 @@ over USB, the RockBLOCK 9603 wired to the Pi 5 GPIO UART. Everything is auto-det
 | 4 | **INIU 25000mAh** (100W USB-C PD) | Power for the whole kit |
 | 5 | **Raspberry Pi 5** (8 GB) | Host, standalone mode |
 
+The hardware has its own repository, [meshsat-fieldkit](https://github.com/meshsat/meshsat-fieldkit):
+the two kits built so far (tesseract and parallax) with their parts lists, wiring tables and a build guide,
+and the V2 carrier PCB set for a Peli 1520 case (KiCad sources, the scripts that generate the boards,
+the case CAD, the Rev A release files). Rev A is designed and prepared for fabrication, not built yet.
+
 ![MeshSat Compact Kit](docs/images/meshsat_compact_kit.jpg)
 *Compact kit: mesh plus satellite only, in a pocket-sized waterproof case.*
 
@@ -486,6 +491,8 @@ dynamic spectrum access, edge inference for message triage, HSM integration.
 
 - **MeshSat Android**, a standalone mobile gateway with BLE mesh, SPP Iridium and SMS:
   [github.com/meshsat/meshsat-android](https://github.com/meshsat/meshsat-android)
+- **MeshSat Field Kit**, the hardware: the built kits, the V2 carrier boards and the build guides:
+  [github.com/meshsat/meshsat-fieldkit](https://github.com/meshsat/meshsat-fieldkit)
 - **MeshSat Hub**, multi-tenant fleet management. Currently a private beta on our own infrastructure
   with no public sign-up; access for demos and testing is arranged on request at
   `beta-access-hub@meshsat.net`
