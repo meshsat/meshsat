@@ -11,6 +11,7 @@ both frame logs and the delivery ledger, and prints a PASS/FAIL table. Restores 
 production reply budget at the end. Costs a handful of SMS. Kit names, numbers and
 callsigns are the field kit values (MESHSAT-403). [MESHSAT-756]
 """
+import http.client
 import json
 import sys
 import time
@@ -32,9 +33,18 @@ def stamp():
     return "+%4.0fs" % (time.time() - T0)
 
 
+class Unconfirmed(RuntimeError):
+    """A mutating request reached the bridge but its response was lost.
+    The caller must reconcile instead of resending. [MESHSAT-786]"""
+
+
 def req(base, method, path, body=None, timeout=20, retry_for=240):
-    """HTTP JSON call; retries connection-level failures (parallax's WiFi
-    flaps) for up to retry_for seconds. HTTP errors are not retried."""
+    """HTTP JSON call. Connection-phase failures (parallax's WiFi flaps:
+    refused, no route, connect timeout) are retried for up to retry_for
+    seconds. A failure in the response phase means the request was sent and
+    may have been accepted: GETs are retried, anything mutating raises
+    Unconfirmed so it is never sent twice (3 Sep 2026: a RESET went out
+    twice this way). HTTP errors are not retried."""
     data = json.dumps(body).encode() if body is not None else None
     deadline = time.time() + retry_for
     attempt = 0
@@ -48,12 +58,55 @@ def req(base, method, path, body=None, timeout=20, retry_for=240):
         except urllib.error.HTTPError as e:
             raw = e.read().decode(errors="replace")
             raise RuntimeError("%s %s -> %d %s" % (method, path, e.code, raw[:200]))
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            if time.time() > deadline:
-                raise RuntimeError("%s %s%s unreachable after %d attempts: %s" % (method, base, path, attempt, e))
-            if attempt == 1 or attempt % 10 == 0:
-                print("%s   (%s%s not reachable, retrying: %s)" % (stamp(), base, path, str(e)[:60]), flush=True)
-            time.sleep(3)
+        except urllib.error.URLError as e:
+            # urllib wraps connect and send errors in URLError: the request
+            # never reached the bridge, so a retry cannot duplicate it.
+            phase = "connect"
+            err = e
+        except (TimeoutError, http.client.RemoteDisconnected, ConnectionResetError, OSError) as e:
+            # Raised while reading the response: the request was sent.
+            if method != "GET":
+                raise Unconfirmed("%s %s%s: response lost after the request was sent (attempt %d): %s"
+                                  % (method, base, path, attempt, str(e)[:60]))
+            phase = "read"
+            err = e
+        if time.time() > deadline:
+            raise RuntimeError("%s %s%s unreachable after %d attempts (%s): %s" % (method, base, path, attempt, phase, err))
+        if attempt == 1 or attempt % 10 == 0:
+            print("%s   (%s%s not reachable, retrying (%s): %s)" % (stamp(), base, path, phase, str(err)[:60]), flush=True)
+        time.sleep(3)
+
+
+def latest_out_counter(base, peer_id, via):
+    """Highest counter of an outgoing request to peer_id on via in the
+    source's frame log, or -1. Used to reconcile a send whose HTTP response
+    was lost."""
+    best = -1
+    try:
+        for e in log(base):
+            if e.get("direction") == "out" and e.get("kind") == "request" and e.get("peer_id") == peer_id and e.get("bearer") == via:
+                best = max(best, int(e.get("counter", -1)))
+    except Exception as e:  # noqa: BLE001
+        print("%s   (log read for reconciliation failed: %s)" % (stamp(), str(e)[:60]), flush=True)
+    return best
+
+
+def reconcile_send(base, peer_id, via, before, timeout=60):
+    """After an Unconfirmed POST /api/oob/send: find the request the bridge
+    queued anyway (counter above `before`) and return it in the shape the
+    send endpoint would have returned, or None."""
+    def newest():
+        found = None
+        for e in log(base):
+            if e.get("direction") == "out" and e.get("kind") == "request" and e.get("peer_id") == peer_id \
+                    and e.get("bearer") == via and int(e.get("counter", -1)) > before:
+                if found is None or int(e["counter"]) > int(found["counter"]):
+                    found = e
+        return found
+    e = wait_value(newest, timeout)
+    if not e:
+        return None
+    return {"counter": int(e["counter"]), "delivery_id": e.get("delivery_id"), "text": "", "reconciled": True}
 
 
 def record(name, ok, note):
@@ -84,8 +137,18 @@ def roundtrip(name, src, dst, peer_id, via, cmd, args=None, encrypt=None, timeou
     body = {"peer_id": peer_id, "via": via, "cmd": cmd, "args": args or {}}
     if encrypt is not None:
         body["encrypt"] = encrypt
+    before = latest_out_counter(src, peer_id, via)
     try:
         sent = req(src, "POST", "/api/oob/send", body)
+    except Unconfirmed as e:
+        # Never resend: the bridge may already have queued the frame. Read
+        # what it queued from its own log and carry on with that counter.
+        print("%s   %s" % (stamp(), e), flush=True)
+        sent = reconcile_send(src, peer_id, via, before)
+        if sent is None:
+            record(name, False, "send response lost and no queued request found in the log; not resent")
+            return None
+        print("%s   reconciled from the log: ctr=%d delivery=#%s" % (stamp(), sent["counter"], sent["delivery_id"]), flush=True)
     except Exception as e:  # noqa: BLE001
         record(name, False, "send failed: %s" % e)
         return None
