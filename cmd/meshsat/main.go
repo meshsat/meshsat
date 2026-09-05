@@ -2246,7 +2246,7 @@ func main() {
 			HardGap:    time.Duration(cfg.DeviceHealthHardGapSec) * time.Second,
 			Seed:       seedDeviceHealth(db),
 		}, deviceHealthActions(db, proc, signingService))
-		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, gwMgr, rxWatchdog)
+		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, imtTransport, sat, gwMgr, spectrumMon, gpsReader, rxWatchdog)
 		checkers := engine.ReceiveCheckers{devHealth}
 		if rxWatchdog != nil {
 			checkers = append(checkers, rxWatchdog)

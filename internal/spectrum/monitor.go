@@ -65,6 +65,16 @@ type SpectrumMonitor struct {
 	lastScanError    string
 	lastScanErrorAt  time.Time
 
+	// Device health inputs [MESHSAT-817]. scanMu serialises every
+	// scanner exec: the calibration retry loop and the 3 s scan loop
+	// used to run rtl_power_fftw concurrently and fought for the one
+	// dongle (tesseract, 5 Sep 2026: usb_claim_interface -6 once a
+	// second). curCancel kills the running child on RestartScan.
+	scanMu           sync.Mutex
+	curCancel        context.CancelFunc
+	consecutiveFails int
+	lastGoodScan     time.Time
+
 	// MIJI/CoT relay outcome tracker. Owned here so the HTTP layer
 	// has a single accessor (SpectrumMonitor.RelayTracker()); the
 	// main.go relay goroutine calls RecordSuccess/RecordFailure after
@@ -97,6 +107,8 @@ type HardwareStatus struct {
 	LastScanErrorAt   time.Time   `json:"last_scan_error_at,omitempty"`
 	ScanIntervalSec   int         `json:"scan_interval_sec"`
 	CalibrationDurSec int         `json:"calibration_duration_sec"`
+	ConsecutiveErrors int         `json:"consecutive_errors"`
+	LastGoodScanAt    time.Time   `json:"last_good_scan_at,omitempty"`
 }
 
 // Hardware returns the current hardware + scan-loop health snapshot.
@@ -113,11 +125,64 @@ func (m *SpectrumMonitor) Hardware() HardwareStatus {
 		LastScanErrorAt:   m.lastScanErrorAt,
 		ScanIntervalSec:   int(ScanInterval / time.Second),
 		CalibrationDurSec: int(CalibrationDuration / time.Second),
+		ConsecutiveErrors: m.consecutiveFails,
+		LastGoodScanAt:    m.lastGoodScan,
 	}
 	if m.scanner != nil {
 		hs.Scanner = m.scanner.Info()
 	}
 	return hs
+}
+
+// scanOnce runs one scanner exec under scanMu so the calibration and
+// scan loops never overlap on the dongle, and keeps the health counters.
+// [MESHSAT-817]
+func (m *SpectrumMonitor) scanOnce(ctx context.Context, band Band, timeout time.Duration) ([]float64, error) {
+	m.scanMu.Lock()
+	defer m.scanMu.Unlock()
+	scanCtx, cancel := context.WithTimeout(ctx, timeout)
+	m.mu.Lock()
+	m.curCancel = cancel
+	m.mu.Unlock()
+	powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize, band.EffectiveCropPad())
+	cancel()
+	m.mu.Lock()
+	m.curCancel = nil
+	if err != nil {
+		m.consecutiveFails++
+	} else {
+		m.consecutiveFails = 0
+		m.lastGoodScan = time.Now()
+	}
+	m.mu.Unlock()
+	return powers, err
+}
+
+// LastGoodScan is when a scan last returned samples, and how many scans
+// have failed in a row since. [MESHSAT-817]
+func (m *SpectrumMonitor) LastGoodScan() (time.Time, int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastGoodScan, m.consecutiveFails
+}
+
+// RestartScan kills the scanner child currently running (a hung
+// rtl_power_fftw holds the dongle for the whole 90 s timeout) and resets
+// the failure counter; the loops carry on with a fresh exec. Level 1 of
+// the device health ladder for the RTL-SDR. [MESHSAT-817]
+func (m *SpectrumMonitor) RestartScan(_ context.Context) error {
+	if !m.enabled {
+		return fmt.Errorf("spectrum monitor disabled")
+	}
+	m.mu.Lock()
+	cancel := m.curCancel
+	m.consecutiveFails = 0
+	m.mu.Unlock()
+	if cancel != nil {
+		log.Warn().Msg("spectrum: cancelling the running scan")
+		cancel()
+	}
+	return nil
 }
 
 // NewSpectrumMonitor creates a new monitor. It does not start scanning
@@ -575,9 +640,7 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 		// letting a genuinely stuck scan hold the dongle for minutes.
 		// Warm scans still complete in <10 s so the cap is invisible
 		// in steady state. [MESHSAT-509, MESHSAT-656]
-		scanCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize, band.EffectiveCropPad())
-		cancel()
+		powers, err := m.scanOnce(ctx, band, 90*time.Second)
 
 		if err != nil {
 			log.Debug().Err(err).Str("band", band.Name).Msg("spectrum: calibration scan failed")
@@ -651,9 +714,7 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		// Blog V4 cold-start; warm scans return in <10 s so this cap
 		// is invisible in steady state. [MESHSAT-509, MESHSAT-656]
 		scanStart := time.Now()
-		scanCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		powers, err := m.scanner.Scan(scanCtx, band.FreqLow, band.FreqHigh, band.BinSize, band.EffectiveCropPad())
-		cancel()
+		powers, err := m.scanOnce(ctx, band, 90*time.Second)
 		scanDur := time.Since(scanStart)
 
 		m.mu.Lock()

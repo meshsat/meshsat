@@ -862,6 +862,26 @@ const opZigbeeOK = computed(() => {
 })
 const opTAKOK = opHubOK // bridge-side TAK visibility depends on the Hub relay
 
+// Device health watchdog (MESHSAT-817): a chip whose device is being
+// healed (degraded, healing, failed) shows amber with the ladder's detail
+// in the tooltip, whatever the gateway's connected flag says.
+function healingState(target) {
+  const t = store.deviceHealthFor(target)
+  if (!t) return null
+  if (t.state === 'degraded' || t.state === 'healing' || t.state === 'failed') {
+    const step = t.step_name ? ` (step ${t.step}: ${t.step_name})` : ''
+    return { state: t.state, detail: `${t.state}${step}${t.detail ? ': ' + t.detail : ''}` }
+  }
+  return null
+}
+const chipHealth = computed(() => ({
+  mesh: healingState('mesh'),
+  aprs: healingState('aprs'),
+  sms: healingState('cellular'),
+  sat: healingState('imt') || healingState('iridium'),
+  zigbee: healingState('zigbee'),
+}))
+
 const channelMatrix = computed(() => [
   { key: 'mesh',    label: 'MESH',  ok: opMeshOK.value, hint: 'Meshtastic LoRa' },
   { key: 'aprs',    label: 'APRS',  ok: opAprsOK.value, hint: 'AX.25 / Direwolf' },
@@ -872,7 +892,10 @@ const channelMatrix = computed(() => [
   { key: 'zigbee',  label: 'ZIG',   ok: opZigbeeOK.value,  hint: 'ZigBee sensors' },
   { key: 'tak',     label: 'TAK',   ok: opTAKOK.value,  hint: 'TAK / CoT via Hub' },
   { key: 'hub',     label: 'HUB',   ok: opHubOK.value,  hint: 'Hub MQTT WSS+mTLS' },
-])
+].map(c => {
+  const h = chipHealth.value[c.key]
+  return h ? { ...c, healing: true, hint: `${c.hint} — ${h.detail}` } : { ...c, healing: false }
+}))
 
 // ── Run Full Demo orchestrator [MESHSAT-686] ──
 // POST /api/demo/run fires all channels in parallel server-side; we
@@ -1234,6 +1257,12 @@ function eventDescription(event) {
   if (type === 'relay') return msg || 'Cross-gateway relay'
   if (type === 'inbound') return msg || 'Inbound satellite message received'
   if (type === 'cellular') return msg || 'Cellular modem event'
+  // Device health watchdog (MESHSAT-817) and APRS receive watchdog (MESHSAT-814)
+  if (type === 'device_unhealthy') return `device unhealthy: ${msg}`
+  if (type === 'device_heal_step') return `heal step: ${msg}`
+  if (type === 'device_recovered') return `device recovered: ${msg}`
+  if (type === 'device_heal_failed') return `heal failed: ${msg}`
+  if (type === 'aprs_rx_deaf' || type === 'aprs_rx_watchdog' || type === 'aprs_rx_recovered') return msg || 'APRS receive watchdog'
   if (type === 'mailbox') return msg || 'Mailbox check completed'
   if (type === 'scheduler') return msg || 'Pass scheduler state change'
   if (type === 'dlq') return msg || 'Queue state changed'
@@ -1610,6 +1639,7 @@ onMounted(() => {
     store.fetchAPRSStatus()
     store.fetchAPRSHeard()
     store.fetchAPRSActivity()
+    store.fetchDeviceHealth()
     store.fetchBondGroups()
     store.fetchZigBeeStatus()
     store.fetchZigBeeDevices()
@@ -1698,12 +1728,15 @@ function widgetGridClass(id) {
           <span class="text-[9px] uppercase tracking-widest text-gray-500 mr-1 shrink-0">Channels</span>
           <span v-for="c in channelMatrix" :key="c.key"
             class="flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-mono tracking-wider shrink-0"
-            :class="c.ok
-              ? 'border-emerald-500/40 bg-emerald-400/10 text-emerald-300'
-              : 'border-gray-600/40 bg-gray-800/40 text-gray-500'"
-            :title="c.hint + (c.ok ? ' — UP' : ' — down')">
+            :class="c.healing
+              ? 'border-amber-500/40 bg-amber-400/10 text-amber-300'
+              : (c.ok
+                ? 'border-emerald-500/40 bg-emerald-400/10 text-emerald-300'
+                : 'border-gray-600/40 bg-gray-800/40 text-gray-500')"
+            :data-health="c.healing ? 'healing' : (c.ok ? 'up' : 'down')"
+            :title="c.hint + (c.healing ? '' : (c.ok ? ' — UP' : ' — down'))">
             <span class="w-1 h-1 rounded-full"
-              :class="c.ok ? 'bg-emerald-400' : 'bg-gray-600'" />
+              :class="c.healing ? 'bg-amber-400 animate-pulse' : (c.ok ? 'bg-emerald-400' : 'bg-gray-600')" />
             {{ c.label }}
           </span>
         </div>

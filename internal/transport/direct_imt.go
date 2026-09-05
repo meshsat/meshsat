@@ -929,6 +929,25 @@ func (t *DirectIMTTransport) serialWatchdog(ctx context.Context) {
 	}
 }
 
+// ForceReconnect drops the current session and opens a fresh one even
+// while the transport thinks it is connected (Reconnect returns early in
+// that case). Level 1 of the device health ladder. [MESHSAT-817]
+func (t *DirectIMTTransport) ForceReconnect(_ context.Context) error {
+	return t.reconnect()
+}
+
+// LastActivity is when the modem last sent anything over the serial link
+// (zero when unknown). [MESHSAT-817]
+func (t *DirectIMTTransport) LastActivity() time.Time {
+	t.mu.Lock()
+	file := t.file
+	t.mu.Unlock()
+	if lr, ok := file.(interface{ LastRead() time.Time }); ok && file != nil {
+		return lr.LastRead()
+	}
+	return time.Time{}
+}
+
 // reconnect closes the current serial connection and opens a fresh one.
 // This forces the kernel to cancel dead URBs and submit new ones.
 func (t *DirectIMTTransport) reconnect() error {

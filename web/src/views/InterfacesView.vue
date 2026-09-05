@@ -464,6 +464,29 @@ const mergedDeviceRows = computed(() => {
   return Array.from(byPort.values()).sort((a, b) => a.port.localeCompare(b.port))
 })
 
+// Device health watchdog (MESHSAT-817): map a supervisor role to its
+// health target so the row shows the probe state and the last rung.
+const roleToHealthTarget = {
+  meshtastic: 'mesh', cellular: 'cellular', zigbee: 'zigbee', gps: 'gps',
+  iridium_9704: 'imt', iridium_9603: 'iridium',
+}
+function deviceHealthText(row) {
+  const target = roleToHealthTarget[row.role]
+  if (!target) return ''
+  const t = store.deviceHealthFor(target)
+  if (!t || t.state === 'ok' || t.state === 'unknown') return ''
+  const step = t.step_name ? `, step ${t.step}: ${t.step_name}` : ''
+  return `health ${t.state}${step}${t.detail ? ' (' + t.detail + ')' : ''}`
+}
+function deviceHealthClass(row) {
+  const target = roleToHealthTarget[row.role]
+  const t = target ? store.deviceHealthFor(target) : null
+  if (!t) return ''
+  if (t.state === 'failed') return 'text-red-400'
+  if (t.state === 'degraded' || t.state === 'healing') return 'text-amber-400'
+  return 'text-gray-500'
+}
+
 // Known mesh nodes for the node picker
 const knownNodes = computed(() => {
   return (store.nodes || []).map(n => ({
@@ -541,6 +564,7 @@ onMounted(() => {
     store.fetchInterfaces()
     store.fetchDevices()
     store.fetchUSBDevices()
+    store.fetchDeviceHealth()
     store.fetchWifiInterfaces()
     store.fetchAccessRules()
     store.fetchObjectGroups()
@@ -967,6 +991,8 @@ onUnmounted(() => {
         <div v-if="dev.usb_serial" class="text-xs text-gray-600 mt-1">Serial: {{ dev.usb_serial }}</div>
         <div v-if="dev.device_id" class="text-xs text-gray-600">ID: {{ dev.device_id }}</div>
         <div v-if="dev.error" class="text-xs text-red-400 mt-1">{{ dev.error }}</div>
+        <div v-if="deviceHealthText(dev)" class="text-xs mt-1" :class="deviceHealthClass(dev)"
+          data-testid="device-health">{{ deviceHealthText(dev) }}</div>
       </div>
 
       <!-- WiFi adapters (non-serial, but devices in the same sense).

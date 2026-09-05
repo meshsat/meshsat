@@ -14,6 +14,7 @@ import (
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
 	"meshsat/internal/oob"
+	"meshsat/internal/spectrum"
 	"meshsat/internal/transport"
 )
 
@@ -78,7 +79,8 @@ func probeMiss(detail string) gateway.ProbeResult { return gateway.ProbeResult{D
 // rungs reuse the oobActions closures so an operator's RESET and the
 // ladder run the very same code.
 func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, oobActions map[string]map[byte]oob.Action,
-	mesh transport.MeshTransport, cell transport.CellTransport, gwMgr *gateway.Manager, rxWatchdog *gateway.RxWatchdog) {
+	mesh transport.MeshTransport, cell transport.CellTransport, imt, sat transport.SatTransport,
+	gwMgr *gateway.Manager, spectrumMon *spectrum.SpectrumMonitor, gpsReader *transport.GPSReader, rxWatchdog *gateway.RxWatchdog) {
 
 	if dm, ok := mesh.(*transport.DirectMeshTransport); ok && dm != nil {
 		dh.Register(meshHealthTarget(cfg, dm, oobActions["mesh"]))
@@ -88,6 +90,18 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 	}
 	if gwMgr != nil {
 		dh.Register(zigbeeHealthTarget(gwMgr, oobActions["zigbee"]))
+	}
+	if spectrumMon != nil && spectrumMon.Enabled() {
+		dh.Register(rtlSDRHealthTarget(spectrumMon, oobActions["rtl_sdr"]))
+	}
+	if gpsReader != nil {
+		dh.Register(gpsHealthTarget(gpsReader, oobActions["gps"]))
+	}
+	if di, ok := imt.(*transport.DirectIMTTransport); ok && di != nil {
+		dh.Register(imtHealthTarget(di))
+	}
+	if ds, ok := sat.(*transport.DirectSatTransport); ok && ds != nil {
+		dh.Register(iridiumHealthTarget(ds))
 	}
 
 	if rxWatchdog != nil {
@@ -278,6 +292,158 @@ func zigbeeHealthTarget(gwMgr *gateway.Manager, actions map[byte]oob.Action) gat
 					return nil
 				},
 			},
+		},
+	}
+}
+
+// rtlSDRHealthTarget: a scan that returns samples is liveness; two failed
+// scans in a row (each a 90 s hang) or five minutes without a good scan
+// is a wedge. Rungs: cancel the running child (level 1), then the root
+// port USBDEVFS_RESET through the OOB action (no VBUS switching on the
+// Pi's own ports).
+func rtlSDRHealthTarget(mon *spectrum.SpectrumMonitor, actions map[byte]oob.Action) gateway.HealthTarget {
+	hard := actions[oob.LevelHard]
+	return gateway.HealthTarget{
+		Name:       "rtl_sdr",
+		IfaceIDs:   []string{},
+		HardBudget: 2,
+		Probe: func(ctx context.Context) gateway.ProbeResult {
+			if !mon.Enabled() {
+				return gateway.ProbeResult{Unknown: true, Detail: "spectrum monitor disabled"}
+			}
+			last, fails := mon.LastGoodScan()
+			switch {
+			case fails >= 2:
+				return probeMiss(fmt.Sprintf("%d scans failed in a row: %s", fails, mon.Hardware().LastScanError))
+			case last.IsZero():
+				return probeOK("no scan completed yet")
+			case time.Since(last) > 5*time.Minute:
+				return probeMiss(fmt.Sprintf("no good scan for %s", time.Since(last).Truncate(time.Second)))
+			default:
+				return probeOK(fmt.Sprintf("good scan %s ago", time.Since(last).Truncate(time.Second)))
+			}
+		},
+		Steps: []gateway.HealStep{
+			{Level: gateway.HealLevelSoft, Name: "cancel scan and restart", Grace: 180 * time.Second, Run: mon.RestartScan},
+			{
+				Level: gateway.HealLevelHard, Name: "USB reset", Grace: 180 * time.Second,
+				Skip: func() bool { return hard == nil },
+				Run: func(ctx context.Context) error {
+					if hard == nil {
+						return errors.New("no hard reset action registered")
+					}
+					if err := hard(ctx); err != nil {
+						return err
+					}
+					time.AfterFunc(10*time.Second, func() { _ = mon.RestartScan(context.Background()) })
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// gpsHealthTarget: a u-blox streams NMEA about once a second whether or
+// not it has a fix, so 90 s without a parsed sentence is a wedge. Soft rung
+// only before TTC; the root-port USB reset needs confirm.
+func gpsHealthTarget(g *transport.GPSReader, actions map[byte]oob.Action) gateway.HealthTarget {
+	hard := actions[oob.LevelHard]
+	return gateway.HealthTarget{
+		Name:     "gps",
+		IfaceIDs: []string{},
+		MaxLevel: gateway.HealLevelSoft,
+		Probe: func(ctx context.Context) gateway.ProbeResult {
+			if g.CurrentPort() == "" {
+				return gateway.ProbeResult{Unknown: true, Detail: "no GPS port open"}
+			}
+			last := g.LastSentenceAt()
+			if last.IsZero() {
+				return probeMiss("port open, no NMEA sentence yet")
+			}
+			if since := time.Since(last); since > 90*time.Second {
+				return probeMiss(fmt.Sprintf("no NMEA sentence for %s", since.Truncate(time.Second)))
+			}
+			return probeOK(fmt.Sprintf("NMEA %s ago", time.Since(last).Truncate(time.Second)))
+		},
+		Steps: []gateway.HealStep{
+			{Level: gateway.HealLevelSoft, Name: "reopen port", Grace: 30 * time.Second, Run: g.Restart},
+			{
+				Level: gateway.HealLevelHard, Name: "USB reset", Grace: 40 * time.Second,
+				Skip: func() bool { return hard == nil },
+				Run: func(ctx context.Context) error {
+					if hard == nil {
+						return errors.New("no hard reset action registered")
+					}
+					return hard(ctx)
+				},
+			},
+		},
+	}
+}
+
+// imtHealthTarget: the 9704's 30 s constellationState poll is the active
+// probe; the transport's own serial watchdog reconnects at 2 min stale, so
+// the ladder waits four misses before it steps in. The I_EN power cycle
+// (level 2) needs confirm before TTC; there is no USB rung on a UART.
+func imtHealthTarget(t *transport.DirectIMTTransport) gateway.HealthTarget {
+	return gateway.HealthTarget{
+		Name:     "imt",
+		IfaceIDs: []string{"iridium_imt_0"},
+		Misses:   4,
+		MaxLevel: gateway.HealLevelSoft,
+		Probe: func(ctx context.Context) gateway.ProbeResult {
+			port := t.GetPort()
+			if port == "" || port == "auto" || port == "supervisor" {
+				return gateway.ProbeResult{Unknown: true, Detail: "no serial port assigned"}
+			}
+			if !t.IsConnected() {
+				return probeMiss("not connected")
+			}
+			last := t.LastActivity()
+			if last.IsZero() {
+				return probeOK("connected, no activity stamp yet")
+			}
+			if since := time.Since(last); since > 120*time.Second {
+				return probeMiss(fmt.Sprintf("no JSPR traffic for %s", since.Truncate(time.Second)))
+			}
+			return probeOK(fmt.Sprintf("JSPR traffic %s ago", time.Since(last).Truncate(time.Second)))
+		},
+		Steps: []gateway.HealStep{
+			{Level: gateway.HealLevelSoft, Name: "serial reconnect", Grace: 60 * time.Second, Run: t.ForceReconnect},
+			{Level: gateway.HealLevelDevice, Name: "I_EN power cycle", Grace: 90 * time.Second, Run: t.DeviceReset},
+		},
+	}
+}
+
+// iridiumHealthTarget: the 9603's AT polls (signal every 30 s, SBDSX on
+// mailbox checks) are the liveness input; SBDIX holds the modem for up to
+// a minute, so the window is generous. Soft rung only: the OnOff line is
+// not wired on tesseract.
+func iridiumHealthTarget(t *transport.DirectSatTransport) gateway.HealthTarget {
+	return gateway.HealthTarget{
+		Name:     "iridium",
+		IfaceIDs: []string{"iridium_0"},
+		Misses:   4,
+		MaxLevel: gateway.HealLevelSoft,
+		Probe: func(ctx context.Context) gateway.ProbeResult {
+			port := t.GetPort()
+			if port == "" || port == "auto" || port == "supervisor" {
+				return gateway.ProbeResult{Unknown: true, Detail: "no serial port assigned"}
+			}
+			if !t.IsConnected() {
+				return probeMiss("not connected")
+			}
+			last := t.LastReplyAt()
+			if last.IsZero() {
+				return probeOK("connected, no reply stamp yet")
+			}
+			if since := time.Since(last); since > 10*time.Minute {
+				return probeMiss(fmt.Sprintf("no AT reply for %s", since.Truncate(time.Second)))
+			}
+			return probeOK(fmt.Sprintf("AT reply %s ago", time.Since(last).Truncate(time.Second)))
+		},
+		Steps: []gateway.HealStep{
+			{Level: gateway.HealLevelSoft, Name: "serial reconnect", Grace: 120 * time.Second, Run: t.Reconnect},
 		},
 	}
 }

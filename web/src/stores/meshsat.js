@@ -1331,6 +1331,19 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { /* supervisor may not be available in HAL mode */ }
   }
 
+  // Device health watchdog (MESHSAT-817): per-device probe state and the
+  // heal ladder's last rung. { enabled, targets: [{ name, state, ... }] }
+  const deviceHealth = ref({ enabled: false, targets: [] })
+  async function fetchDeviceHealth() {
+    try {
+      const data = await api.get('/devices/health')
+      deviceHealth.value = data && Array.isArray(data.targets) ? data : { enabled: false, targets: [] }
+    } catch (e) { /* older bridge without the endpoint */ }
+  }
+  function deviceHealthFor(name) {
+    return (deviceHealth.value.targets || []).find(t => t.name === name) || null
+  }
+
   // Access Rules (v0.3.0)
   async function fetchAccessRules() {
     try {
@@ -1935,6 +1948,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     iridiumGeolocation, triggerIridiumGeolocation,
     interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice, generateEncryptionKey,
     devices, fetchDevices, usbDevices, fetchUSBDevices,
+    deviceHealth, fetchDeviceHealth, deviceHealthFor,
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
     objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,
     failoverGroups, fetchFailoverGroups, createFailoverGroup, deleteFailoverGroup,
