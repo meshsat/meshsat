@@ -429,6 +429,8 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 
 ## 14. DMR858M bring-up for TTC (owner decision 5 Sep: the module replaces the UV-K5 for the show, USB-powered; modules arrive Mon 7 Sep)
 
+**Read-and-do for the bench day: `docs/MESHSAT-748-dmr858m-bench-checklist.md`** (pads, AIOC K1 wiring, configuration commands, gain re-tune, test order, soak, rollback). This section holds the reasoning; the checklist holds the steps.
+
 Facts from NiceRF's V1.2 datasheet (fieldkit repo `v2/vendor/dmr858/dmr858m-v1.2.pdf`, pin table in the geometry appendix item 10): VCC 3.7 to 8.5 V on pin 1; output power follows the supply, 5.0 V gives 33.5 dBm (about 2 W) at 675 mA in the digital table, 8.0 V gives 37.3 dBm (5 W) at 910 mA; analogue transmit draws more (1700 mA at 8 V / 5 W, 1000 mA at 8 V / 2 W); RX under 165 mA. PTT pin 5, active low. LINE_OUT pin 6 (audio out for the AIOC). MIC+ pin 14 carries its own bias, MIC- pin 13. SPKEN pin 16 goes high on received signal. UART TXD 18 / RXD 19 at 57600, binary frames (head 0x68 ... tail 0x10) with commands 0x0D frequency per channel, 0x12 squelch, 0x13/0x14 CTCSS, 0x17 high/low power, 0x01 channel; channels CH8 to CHF are analogue. NiceRF's free PC tool talks the same protocol through a USB level adapter, which is what the USB-C on the V1.0 board is for.
 
 **Power for the show:** 5 V at up to 1.5 A on transmit gives about 2 W, enough for a stand and for the field at short range. Feed pin 1 / GND from a 5 V source that can give 2 A: the X1202's USB-A output (the spare hub aux cable in the pouch) if its rating allows, else a USB brick at the stand. Never from a Pi USB port (1.6 A total budget). 5 W needs 8 V and is the PCB-D boost's job, not the show's.
