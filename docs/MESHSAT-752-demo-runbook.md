@@ -12,7 +12,7 @@ nothing below has been applied yet.
 | XIAO mesh node | ttyACM1, node 2715247548 "Meshtastic 63bc" | ttyACM4, node 1808552882 "Meshtastic 9d70" | Both enumerated and connected, EU_868 |
 | `mesh_0` | online, transforms `[]` both ways | online, transforms `[]` both ways | Plaintext on the mesh leg, correct for the demo |
 | `cellular_0` transforms | smaz2, encrypt(sms:shared), base64 | identical | Symmetric, decrypts itself |
-| `cellular_0` gateway | connected, dest `+31653207829` | connected, dest `+31653618463` | Cross-peer wiring correct |
+| `cellular_0` gateway | connected, dest `<parallax SIM>` | connected, dest `<tesseract SIM>` | Cross-peer wiring correct |
 | `max_sms_segments` | 1 | 1 | 160 char hard ceiling, see section 3 |
 | `allowed_senders` | unset | unset | Must be set, see section 4 step 3 |
 | `/api/access-rules` | `null` | `null` | Nothing forwards yet, as expected |
