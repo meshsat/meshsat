@@ -67,6 +67,23 @@ if ! lsusb | grep -qi "${AIOC_VID}:${AIOC_PID}"; then
 fi
 
 # Kill stale holders
+# Capture gain. The AIOC powers up at 100 % (0 dB) and a UV-K5 at a normal
+# volume then clips its ADC: parallax decoded tesseract at Direwolf level 192
+# with "Audio input level is too high" on 5 Sep 2026 while tesseract, by luck
+# of its volume knob, sat at 60 to 100 (Direwolf wants about 50). The mixer
+# scale is far from linear (50 % is -48 dB, 94 % about -6 dB), so the value
+# is a percentage of that scale, not of the signal. Applied at every Direwolf
+# start, so it survives an AIOC power cycle. Override per kit with
+# MESHSAT_AIOC_CAPTURE. [MESHSAT-814]
+AIOC_CAPTURE="${MESHSAT_AIOC_CAPTURE:-94%}"
+if command -v amixer >/dev/null 2>&1; then
+    if amixer -q -c "$AIOC_CARD" sset "AIOC Audio In" "$AIOC_CAPTURE" 2>/dev/null; then
+        log "AIOC capture gain set to $AIOC_CAPTURE"
+    else
+        log "could not set AIOC capture gain (mixer control missing?)"
+    fi
+fi
+
 kill_stale_holders
 
 # Test + retry loop
