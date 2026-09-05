@@ -45,8 +45,34 @@ type APRSGateway struct {
 
 	tracker *APRSTracker
 
+	// receiveState is set by the RxWatchdog (ok, quiet, deaf); empty
+	// until the watchdog has judged. [MESHSAT-814]
+	receiveState atomic.Value
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// ReceiveHealth exposes the bundled supervisor's receive-side signals. The
+// second value is false for an external Direwolf, where nothing is known.
+func (g *APRSGateway) ReceiveHealth() (ReceiveHealth, bool) {
+	if g.supervisor == nil {
+		return ReceiveHealth{}, false
+	}
+	return g.supervisor.ReceiveHealth(), true
+}
+
+// SetReceiveState records the watchdog's verdict for the status endpoints.
+func (g *APRSGateway) SetReceiveState(state string) { g.receiveState.Store(state) }
+
+func (g *APRSGateway) currentReceiveState() string {
+	if v, ok := g.receiveState.Load().(string); ok && v != "" {
+		return v
+	}
+	if g.supervisor == nil {
+		return ReceiveStateUnknown
+	}
+	return ""
 }
 
 // NewAPRSGateway creates a new APRS gateway.
@@ -125,8 +151,20 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		status["direwolf_bundled"] = true
 		status["direwolf_running"] = g.supervisor.Running()
 		status["direwolf_restarts"] = g.supervisor.RestartCount()
+		h := g.supervisor.ReceiveHealth()
+		status["receive_level"] = h.Level
+		if !h.LevelAt.IsZero() {
+			status["receive_level_at"] = h.LevelAt.UTC().Format(time.RFC3339)
+		}
+		if !h.LastDecodeAt.IsZero() {
+			status["last_decode_at"] = h.LastDecodeAt.UTC().Format(time.RFC3339)
+		}
+		status["audio_errors"] = h.AudioErrors
 	} else {
 		status["direwolf_bundled"] = false
+	}
+	if st := g.currentReceiveState(); st != "" {
+		status["receive_state"] = st
 	}
 	return status
 }
@@ -297,6 +335,20 @@ func (g *APRSGateway) Status() GatewayStatus {
 		restarts := g.supervisor.RestartCount()
 		s.DirewolfRunning = &running
 		s.DirewolfRestarts = &restarts
+		h := g.supervisor.ReceiveHealth()
+		level := h.Level
+		s.ReceiveLevel = &level
+		if !h.LevelAt.IsZero() {
+			at := h.LevelAt.UTC()
+			s.ReceiveLevelAt = &at
+		}
+		if !h.LastDecodeAt.IsZero() {
+			at := h.LastDecodeAt.UTC()
+			s.LastDecodeAt = &at
+		}
+	}
+	if st := g.currentReceiveState(); st != "" {
+		s.ReceiveState = &st
 	}
 	return s
 }

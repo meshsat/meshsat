@@ -40,6 +40,13 @@ type GatewayStatus struct {
 	DirewolfBundled  *bool  `json:"direwolf_bundled,omitempty"`
 	DirewolfRunning  *bool  `json:"direwolf_running,omitempty"`
 	DirewolfRestarts *int64 `json:"direwolf_restarts,omitempty"`
+	// Receive-health of the bundled Direwolf [MESHSAT-814]: the audio level
+	// it reports every few seconds (-1 until the first report), when a frame
+	// was last decoded, and the watchdog's verdict (ok, quiet, deaf, unknown).
+	ReceiveLevel   *int       `json:"receive_level,omitempty"`
+	ReceiveLevelAt *time.Time `json:"receive_level_at,omitempty"`
+	LastDecodeAt   *time.Time `json:"last_decode_at,omitempty"`
+	ReceiveState   *string    `json:"receive_state,omitempty"`
 }
 
 // EventEmitFunc is a callback for gateways to emit events to the SSE stream.

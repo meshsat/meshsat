@@ -36,6 +36,11 @@ type Config struct {
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
 
+	// APRS receive watchdog [MESHSAT-814]: minutes without a decoded frame,
+	// after the channel was heard within two hours, before the recovery
+	// ladder runs (gateway restart, AIOC power cycle, bridge restart). 0 = off.
+	APRSRxWatchdogMin int
+
 	// OOB management frames [MESHSAT-756]. First-boot defaults only; the
 	// persisted system_config values are UI-managed afterwards.
 	OOBEnabled     bool
@@ -125,6 +130,7 @@ func Load() *Config {
 		PaidRateLimit:          envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 		APIRateLimit:           envInt("MESHSAT_API_RATE_LIMIT", 600),
 		MeshWatchdogMin:        envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		APRSRxWatchdogMin:      envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
 		OOBEnabled:             envBool("MESHSAT_OOB_ENABLED", false),
 		OOBReplyBudget:         envInt("MESHSAT_OOB_REPLY_BUDGET", 12),
 		OOBHostSocket:          envStr("MESHSAT_OOB_HOST_SOCKET", "/run/meshsat-oob/agent.sock"),
