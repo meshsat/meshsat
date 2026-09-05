@@ -366,9 +366,13 @@ def resolve_usb_port(role, tty=None):
 
 def hub_switchable(hub, port):
     """True when uhubctl accepts the hub as one with per-port power switching.
-    A ganged hub answers 'No compatible devices detected'."""
+    A ganged hub answers 'No compatible devices detected'. The location is
+    matched exactly (-e): with the default prefix match uhubctl 2.5 refuses
+    the USB 3 half of a dual hub (VIA VL817: '-l 3-1' answers 'No compatible
+    devices', '-l 3-1 -e' works), so without -e the twin was never switched
+    and a real VBUS cut on that hub needs both halves off. [MESHSAT-786]"""
     try:
-        p = run_argv(["uhubctl", "-l", str(hub), "-p", str(port)], 10)
+        p = run_argv(["uhubctl", "-l", str(hub), "-e", "-p", str(port)], 10)
     except (OSError, subprocess.TimeoutExpired):
         return False
     out = (p.stdout or "") + (p.stderr or "")
@@ -406,7 +410,7 @@ def usb_cycle_main(argv):
 
     def switch(hub, state):
         try:
-            p = run_argv(["uhubctl", "-l", hub, "-p", str(port), "-a", state], 15)
+            p = run_argv(["uhubctl", "-l", hub, "-e", "-p", str(port), "-a", state], 15)
             code = p.returncode
         except (OSError, subprocess.TimeoutExpired) as e:
             log("usb-cycle: uhubctl %s: %s" % (state, e))
