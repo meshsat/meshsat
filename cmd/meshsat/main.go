@@ -2126,6 +2126,51 @@ func main() {
 		})
 	}
 
+	// APRS receive watchdog [MESHSAT-814]: notices a receiver that decodes
+	// nothing while the channel was known alive and walks the recovery
+	// ladder through the same paths the OOB executor uses; a deaf receiver
+	// scores 0 in the health scorer so failover groups route around it.
+	if cfg.APRSRxWatchdogMin > 0 {
+		rxWatchdog := gateway.NewRxWatchdog(gateway.RxWatchdogConfig{
+			Silence: time.Duration(cfg.APRSRxWatchdogMin) * time.Minute,
+		}, gateway.RxWatchdogActions{
+			Probe: func() (gateway.ReceiveHealth, bool) {
+				if ag := gwMgr.APRSGateway(); ag != nil {
+					return ag.ReceiveHealth()
+				}
+				return gateway.ReceiveHealth{}, false
+			},
+			RestartGateway: func(ctx context.Context) error { return gwMgr.RestartGatewayInstance(ctx, "aprs_0") },
+			PowerCycle: func(ctx context.Context) error {
+				if usbPowerCycle(ctx, "aioc", "") {
+					return nil
+				}
+				return errors.New("AIOC not on a switchable hub port")
+			},
+			RestartBridge: func() {
+				log.Warn().Msg("aprs receive watchdog: restarting the bridge")
+				sigCh <- syscall.SIGTERM
+			},
+			SetState: func(state string) {
+				if ag := gwMgr.APRSGateway(); ag != nil {
+					ag.SetReceiveState(state)
+				}
+			},
+			Emit: func(eventType, message string) {
+				proc.Emit(transport.MeshEvent{Type: eventType, Message: message, Time: time.Now().UTC().Format(time.RFC3339)})
+			},
+			Audit: func(detail string) {
+				if signingService != nil {
+					iface := "aprs_0"
+					signingService.AuditEvent("aprs_rx_watchdog", &iface, nil, nil, nil, detail)
+				}
+			},
+		})
+		healthScorer.SetReceiveChecker(rxWatchdog)
+		go rxWatchdog.Run(ctx)
+		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
+	}
+
 	// Start HTTP server
 	go func() {
 		log.Info().Int("port", cfg.Port).Msg("HTTP server listening")

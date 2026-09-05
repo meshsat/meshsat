@@ -329,6 +329,7 @@ can override them afterwards.
 | `MESHSAT_AX25_KISS_ADDR` | *(empty)* | KISS TNC address. Bundled Direwolf binds `localhost:8001` |
 | `MESHSAT_AX25_CALLSIGN` | *(empty)* | AX.25 source callsign, e.g. `MESHSAT-1` |
 | `MESHSAT_AIOC_CAPTURE` | `94%` | AIOC capture gain applied at every Direwolf start (mixer scale: 94 % = -5.8 dB, 90 % = -9.6 dB); lower it if Direwolf reports the audio input level as too high |
+| `MESHSAT_APRS_RX_WATCHDOG_MIN` | `5` | APRS receive watchdog: minutes without a decoded frame, after the channel was heard within two hours, before the recovery ladder runs (Direwolf restart, AIOC port power cycle, bridge restart); a deaf receiver scores 0 for failover. `0` disables |
 | `MESHSAT_MQTT_RETICULUM_BROKER` | *(empty)* | MQTT broker for Reticulum packets |
 | `MESHSAT_MQTT_RETICULUM_PREFIX` | `reticulum/meshsat` | MQTT topic prefix |
 

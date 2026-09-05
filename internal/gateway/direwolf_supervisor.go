@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -27,6 +30,7 @@ var (
 
 const (
 	supervisorStopGrace  = 5 * time.Second
+	direwolfStatsSeconds = 10 // -a interval [MESHSAT-814]
 	supervisorHealthy    = 60 * time.Second
 	supervisorBackoffMin = 5 * time.Second
 	supervisorBackoffMax = 5 * time.Minute
@@ -52,6 +56,17 @@ type DirewolfSupervisor struct {
 	rxFrames atomic.Int64 // count of "[0.N] ..." decoder-hit lines
 	txFrames atomic.Int64 // count of "[0L] ..." local-TX lines
 
+	// Receive-health signals parsed from stdout [MESHSAT-814]: Direwolf is
+	// started with "-a N" so it prints "ADEVICE0: Sample rate approx. 48.0 k,
+	// 0 errors, receive audio level CH0 62" every N seconds whether or not
+	// anything decodes. A decoded frame also prints "<CALL> audio level =
+	// 108(52/40) ...". rxLevel is -1 until the first report.
+	rxLevel         atomic.Int64
+	rxLevelAt       atomic.Int64 // unix seconds
+	lastDecodeAt    atomic.Int64 // unix seconds
+	lastDecodeLevel atomic.Int64
+	audioErrors     atomic.Int64
+
 	cmdMu sync.Mutex
 	cmd   *exec.Cmd
 
@@ -62,7 +77,28 @@ type DirewolfSupervisor struct {
 // NewDirewolfSupervisor returns a supervisor that will write its config to
 // /run/meshsat/direwolf.conf and exec the bundled binary.
 func NewDirewolfSupervisor(cfg APRSConfig) *DirewolfSupervisor {
-	return &DirewolfSupervisor{cfg: cfg, done: make(chan struct{})}
+	s := &DirewolfSupervisor{cfg: cfg, done: make(chan struct{})}
+	s.rxLevel.Store(-1)
+	return s
+}
+
+// ReceiveHealth reports the receive-side signals parsed from Direwolf's
+// stdout. See ReceiveHealth. [MESHSAT-814]
+func (s *DirewolfSupervisor) ReceiveHealth() ReceiveHealth {
+	h := ReceiveHealth{
+		Running:         s.running.Load(),
+		Level:           int(s.rxLevel.Load()),
+		LastDecodeLevel: int(s.lastDecodeLevel.Load()),
+		AudioErrors:     s.audioErrors.Load(),
+		RxFrames:        s.rxFrames.Load(),
+	}
+	if ts := s.rxLevelAt.Load(); ts > 0 {
+		h.LevelAt = time.Unix(ts, 0)
+	}
+	if ts := s.lastDecodeAt.Load(); ts > 0 {
+		h.LastDecodeAt = time.Unix(ts, 0)
+	}
+	return h
 }
 
 // Running reports whether the child process is currently alive.
@@ -177,7 +213,9 @@ func (s *DirewolfSupervisor) runPreflight(ctx context.Context) {
 }
 
 func (s *DirewolfSupervisor) spawn(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, direwolfBinary, "-t", "0", "-c", direwolfConfPath)
+	// -a N: audio device statistics every N seconds, the receive-health
+	// signal the watchdog reads even when nothing decodes. [MESHSAT-814]
+	cmd := exec.CommandContext(ctx, direwolfBinary, "-t", "0", "-a", strconv.Itoa(direwolfStatsSeconds), "-c", direwolfConfPath)
 	// New process group so SIGTERM on ctx cancel reaches Direwolf cleanly
 	// rather than being swallowed by any shell wrapper.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -247,16 +285,47 @@ func (s *DirewolfSupervisor) pipeAndCount(wg *sync.WaitGroup, r io.Reader, src s
 	sc.Buffer(make([]byte, 0, 64*1024), 256*1024)
 	for sc.Scan() {
 		line := sc.Text()
-		switch {
-		case len(line) >= 4 && line[0] == '[' && line[1] == '0' && line[2] == 'L' && line[3] == ']':
-			s.txFrames.Add(1)
-		case len(line) >= 5 && line[0] == '[' && line[1] == '0' && line[2] == '.' &&
-			line[3] >= '0' && line[3] <= '9' && line[4] == ']':
-			s.rxFrames.Add(1)
-		}
+		s.ingestLine(line)
 		log.Info().Str("src", src).Msg(line)
 	}
 }
+
+// ingestLine updates the counters and receive-health signals from one line
+// of Direwolf stdout. Kept separate from the pipe so tests can feed lines.
+func (s *DirewolfSupervisor) ingestLine(line string) {
+	switch {
+	case len(line) >= 4 && line[0] == '[' && line[1] == '0' && line[2] == 'L' && line[3] == ']':
+		s.txFrames.Add(1)
+	case len(line) >= 5 && line[0] == '[' && line[1] == '0' && line[2] == '.' &&
+		line[3] >= '0' && line[3] <= '9' && line[4] == ']':
+		s.rxFrames.Add(1)
+		s.lastDecodeAt.Store(time.Now().Unix())
+	case strings.HasPrefix(line, "ADEVICE") && strings.Contains(line, "receive audio level"):
+		// "ADEVICE0: Sample rate approx. 48.0 k, 0 errors, receive audio level CH0 62"
+		if m := reDirewolfStats.FindStringSubmatch(line); m != nil {
+			if v, err := strconv.Atoi(m[1]); err == nil {
+				s.audioErrors.Store(int64(v))
+			}
+			if v, err := strconv.Atoi(m[2]); err == nil {
+				s.rxLevel.Store(int64(v))
+				s.rxLevelAt.Store(time.Now().Unix())
+			}
+		}
+	case strings.Contains(line, " audio level = "):
+		// "MSTSRT audio level = 108(52/40)    _||||||__"
+		if m := reDirewolfDecodeLevel.FindStringSubmatch(line); m != nil {
+			if v, err := strconv.Atoi(m[1]); err == nil {
+				s.lastDecodeLevel.Store(int64(v))
+				s.lastDecodeAt.Store(time.Now().Unix())
+			}
+		}
+	}
+}
+
+var (
+	reDirewolfStats       = regexp.MustCompile(`(\d+) errors?, receive audio levels? CH0 (\d+)`)
+	reDirewolfDecodeLevel = regexp.MustCompile(`audio level = (\d+)`)
+)
 
 func splitLines(b []byte) []string {
 	var out []string

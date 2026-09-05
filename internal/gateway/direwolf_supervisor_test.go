@@ -153,3 +153,28 @@ func setSupervisorPaths(bin, conf string) {
 	// binary so Stat fails cleanly and we skip preflight in tests.
 	direwolfPreflight = bin + ".preflight.does.not.exist"
 }
+
+// ingestLine feeds the receive-health signals from Direwolf's stdout:
+// the -a statistics line, the per-frame level line, and the decoder hit
+// lines. [MESHSAT-814]
+func TestIngestLine_ReceiveHealth(t *testing.T) {
+	sup := NewDirewolfSupervisor(DefaultAPRSConfig())
+	if h := sup.ReceiveHealth(); h.Level != -1 || !h.LevelAt.IsZero() || !h.LastDecodeAt.IsZero() {
+		t.Fatalf("fresh supervisor: %+v", h)
+	}
+	sup.ingestLine("ADEVICE0: Sample rate approx. 48.0 k, 2 errors, receive audio level CH0 62")
+	h := sup.ReceiveHealth()
+	if h.Level != 62 || h.AudioErrors != 2 || h.LevelAt.IsZero() || !h.LastDecodeAt.IsZero() {
+		t.Fatalf("after stats line: %+v", h)
+	}
+	sup.ingestLine("MSTSRT audio level = 108(52/40)    _||||||__")
+	sup.ingestLine("[0.3] MSTSRT-10>MSPRLX-10:MS:9W8JB7R0")
+	h = sup.ReceiveHealth()
+	if h.LastDecodeLevel != 108 || h.LastDecodeAt.IsZero() || h.RxFrames != 1 || h.Level != 62 {
+		t.Fatalf("after decode: %+v", h)
+	}
+	sup.ingestLine("[0L] MSPRLX-10>MSTSRT-10:MS:reply")
+	if sup.TxFrames() != 1 || sup.RxFrames() != 1 {
+		t.Fatalf("frame counters tx=%d rx=%d", sup.TxFrames(), sup.RxFrames())
+	}
+}

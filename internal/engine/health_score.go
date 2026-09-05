@@ -24,15 +24,28 @@ type SpectrumChecker interface {
 	IsJammed(interfaceID string) bool
 }
 
+// ReceiveChecker reports an interface whose receiver is known to be deaf
+// (the APRS receive watchdog, MESHSAT-814). A deaf receiver scores 0 so the
+// dispatcher's failover groups route around it.
+type ReceiveChecker interface {
+	ReceiveDeaf(interfaceID string) bool
+}
+
 // HealthScorer computes composite health scores for transport interfaces.
 type HealthScorer struct {
 	db       *database.DB
 	spectrum SpectrumChecker
+	receive  ReceiveChecker
 }
 
 // SetSpectrumChecker sets the spectrum monitor for jamming-aware health scoring.
 func (h *HealthScorer) SetSpectrumChecker(sc SpectrumChecker) {
 	h.spectrum = sc
+}
+
+// SetReceiveChecker sets the receive watchdog for deaf-aware health scoring.
+func (h *HealthScorer) SetReceiveChecker(rc ReceiveChecker) {
+	h.receive = rc
 }
 
 // NewHealthScorer creates a new health scorer.
@@ -68,6 +81,12 @@ func (h *HealthScorer) Score(interfaceID string) HealthScore {
 
 	// Spectrum: override to 0 if interface is jammed
 	if h.spectrum != nil && h.spectrum.IsJammed(interfaceID) {
+		hs.Signal = 0
+		hs.Score = 0
+		return hs
+	}
+	// Receive watchdog: a deaf receiver is as useless as a jammed one
+	if h.receive != nil && h.receive.ReceiveDeaf(interfaceID) {
 		hs.Signal = 0
 		hs.Score = 0
 		return hs

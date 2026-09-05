@@ -799,7 +799,7 @@ const opMeshOK = computed(() =>
   store.status?.connected === true &&
   (!!store.status?.node_name || (store.nodes || []).length > 0)
 )
-const opAprsOK = computed(() => store.aprsStatus?.connected === true && store.aprsStatus?.kiss_up === true)
+const opAprsOK = computed(() => store.aprsStatus?.connected === true && store.aprsStatus?.kiss_up === true && store.aprsStatus?.receive_state !== 'deaf')
 
 const opChannels = computed(() => [
   { key: 'mesh', ok: opMeshOK.value,  label: 'Mesh' },

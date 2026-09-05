@@ -700,6 +700,29 @@ func (m *Manager) StartGatewayInstance(ctx context.Context, instanceID string) e
 	return nil
 }
 
+// APRSGateway returns the running bundled APRS gateway, or nil.
+func (m *Manager) APRSGateway() *APRSGateway {
+	id := m.findRunningInstance("aprs")
+	if id == "" {
+		return nil
+	}
+	m.mu.RLock()
+	gw := m.running[id]
+	m.mu.RUnlock()
+	ag, _ := gw.(*APRSGateway)
+	return ag
+}
+
+// RestartGatewayInstance stops an instance if it runs and starts it again.
+// Used by the APRS receive watchdog; a stop error (not running, starting)
+// is logged and the start proceeds. [MESHSAT-814]
+func (m *Manager) RestartGatewayInstance(ctx context.Context, instanceID string) error {
+	if err := m.StopGatewayInstance(instanceID); err != nil {
+		log.Debug().Err(err).Str("instance", instanceID).Msg("gwmgr: stop before restart")
+	}
+	return m.StartGatewayInstance(ctx, instanceID)
+}
+
 // StopGateway stops the first running instance of a gateway type.
 func (m *Manager) StopGateway(gwType string) error {
 	instanceID := m.findRunningInstance(gwType)
