@@ -1,0 +1,13 @@
+[Unit]
+Description=Rebind Goodix-TS (Pi Touch Display 2) after attiny is ready
+After=systemd-udev-settle.service multi-user.target
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 10
+ExecStart=/bin/sh -c "grep -q ^UU /sys/class/i2c-dev/i2c-11/device/11-0045/driver/bind 2>/dev/null || true; if [ ! -e /sys/bus/i2c/drivers/Goodix-TS/11-005d ]; then echo 11-005d > /sys/bus/i2c/drivers/Goodix-TS/bind; fi"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
