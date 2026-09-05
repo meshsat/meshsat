@@ -73,6 +73,13 @@ type DeviceSupervisor struct {
 	// Explicit port overrides (from env vars) — skip auto-detect for these roles
 	explicitPorts map[DeviceRole]string
 
+	// holds keeps a role's driver from being handed its port until the
+	// time given: after a VBUS cut of the T-Call nothing may open the
+	// modem's port for a minute (MESHSAT-812). The port is still claimed
+	// so nothing else takes it; only the notification waits. [MESHSAT-817]
+	holdMu sync.Mutex
+	holds  map[DeviceRole]time.Time
+
 	// initialScanDone is closed after the first scan+identify cycle completes.
 	// ReconcileWithHardware should wait for this before disabling gateways,
 	// otherwise it races with identification of ports that require probing. [MESHSAT-403]
@@ -96,6 +103,7 @@ func NewDeviceSupervisor() *DeviceSupervisor {
 		probing:         make(map[string]bool),
 		skipPorts:       make(map[string]bool),
 		explicitPorts:   make(map[DeviceRole]string),
+		holds:           make(map[DeviceRole]time.Time),
 		initialScanDone: make(chan struct{}),
 		stopCh:          make(chan struct{}),
 		scanNowCh:       make(chan struct{}, 1),
@@ -106,6 +114,49 @@ func NewDeviceSupervisor() *DeviceSupervisor {
 // Registry returns the underlying device registry.
 func (s *DeviceSupervisor) Registry() *DeviceRegistry {
 	return s.registry
+}
+
+// HoldRole delays the OnPortFound notification for a role until d has
+// passed; a port found or re-found inside the window is claimed at once
+// and handed to its driver when the window closes. [MESHSAT-817]
+func (s *DeviceSupervisor) HoldRole(role DeviceRole, d time.Duration) {
+	s.holdMu.Lock()
+	s.holds[role] = time.Now().Add(d)
+	s.holdMu.Unlock()
+	log.Warn().Str("role", string(role)).Dur("hold", d).Msg("device-supervisor: role held, driver notification deferred")
+}
+
+// holdRemaining reports how long a role's hold still runs (0 when none).
+func (s *DeviceSupervisor) holdRemaining(role DeviceRole) time.Duration {
+	s.holdMu.Lock()
+	until, ok := s.holds[role]
+	s.holdMu.Unlock()
+	if !ok {
+		return 0
+	}
+	rem := time.Until(until)
+	if rem <= 0 {
+		return 0
+	}
+	return rem
+}
+
+// notifyPortFoundHeld calls notifyPortFound now, or when the role's hold
+// expires (the port must still be claimed by that role by then).
+func (s *DeviceSupervisor) notifyPortFoundHeld(role DeviceRole, port string) {
+	rem := s.holdRemaining(role)
+	if rem <= 0 {
+		s.notifyPortFound(role, port)
+		return
+	}
+	log.Info().Str("role", string(role)).Str("port", port).Dur("in", rem.Truncate(time.Second)).
+		Msg("device-supervisor: port claimed, driver notification deferred by hold")
+	time.AfterFunc(rem, func() {
+		if s.registry.GetPortRole(port) != role {
+			return // gone or re-identified meanwhile
+		}
+		s.notifyPortFound(role, port)
+	})
 }
 
 // SetCallbacks registers driver callbacks for a role (legacy — single instance).
@@ -612,7 +663,7 @@ func (s *DeviceSupervisor) claimAndNotify(port, vidpid string, role DeviceRole, 
 	s.registry.SetState(port, StateReady)
 	log.Info().Str("port", port).Str("vidpid", vidpid).Str("role", string(role)).
 		Msgf("device-supervisor: identified by %s", method)
-	s.notifyPortFound(role, port)
+	s.notifyPortFoundHeld(role, port)
 	entry := s.registryEntry(port)
 	if entry == nil {
 		// Defence-in-depth: if Upsert somehow didn't take, build the entry
@@ -731,7 +782,7 @@ func (s *DeviceSupervisor) reconnectDisconnected(activeSet map[string]bool) {
 		if entry.Role != RoleNone {
 			s.registry.SetState(entry.DevPath, StateReady)
 			log.Info().Str("port", entry.DevPath).Str("role", string(entry.Role)).Msg("device-supervisor: port reappeared, reconnecting")
-			s.notifyPortFound(entry.Role, entry.DevPath)
+			s.notifyPortFoundHeld(entry.Role, entry.DevPath)
 			s.emitEvent(DeviceEvent{
 				Type:   "device_connected",
 				Device: entry,

@@ -78,10 +78,16 @@ func probeMiss(detail string) gateway.ProbeResult { return gateway.ProbeResult{D
 // rungs reuse the oobActions closures so an operator's RESET and the
 // ladder run the very same code.
 func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, oobActions map[string]map[byte]oob.Action,
-	mesh transport.MeshTransport, rxWatchdog *gateway.RxWatchdog) {
+	mesh transport.MeshTransport, cell transport.CellTransport, gwMgr *gateway.Manager, rxWatchdog *gateway.RxWatchdog) {
 
 	if dm, ok := mesh.(*transport.DirectMeshTransport); ok && dm != nil {
 		dh.Register(meshHealthTarget(cfg, dm, oobActions["mesh"]))
+	}
+	if dc, ok := cell.(*transport.DirectCellTransport); ok && dc != nil {
+		dh.Register(cellularHealthTarget(cfg, dc, gwMgr, oobActions["cellular"]))
+	}
+	if gwMgr != nil {
+		dh.Register(zigbeeHealthTarget(gwMgr, oobActions["zigbee"]))
 	}
 
 	if rxWatchdog != nil {
@@ -95,6 +101,184 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 				return gateway.HealthStateUnknown, "receive " + s
 			}
 		})
+	}
+}
+
+// cellularQuietWindow is how long nothing may open the T-Call's port after
+// a VBUS cut: the ESP32 boots and pulses PWRKEY once (modem ON); any DTR
+// reset from an open inside the window pulses it again (modem OFF). The
+// recipe that worked on 5 Sep 2026 was container stopped, cut, 60 s quiet,
+// start. [MESHSAT-812]
+const cellularQuietWindow = 60 * time.Second
+
+// cellularQuietCut is the cellular hard reset shared by the OOB executor
+// (RESET cellular level 3) and the device health ladder: hold the transport
+// and the supervisor off the port, close the transport, cut the hub port.
+// The gateway restart follows the window (the executor delays it 75 s, the
+// ladder schedules its own). [MESHSAT-812, MESHSAT-817]
+func cellularQuietCut(dc *transport.DirectCellTransport, sup func() *transport.DeviceSupervisor,
+	powerCycle func(ctx context.Context, dev, tty string) bool) oob.Action {
+	return func(ctx context.Context) error {
+		s := sup()
+		if s == nil {
+			return errors.New("device supervisor not running")
+		}
+		port := s.Registry().PortByRole(transport.RoleCellular)
+		if port == "" {
+			return errors.New("no cellular port claimed")
+		}
+		dc.Hold(cellularQuietWindow)
+		s.HoldRole(transport.RoleCellular, cellularQuietWindow)
+		_ = dc.Close()
+		if powerCycle(ctx, "cellular", port) {
+			return nil
+		}
+		// No switchable port: a USBDEVFS_RESET re-enumerates the CH9102
+		// but does not toggle the modem's power. Still the best we have.
+		if !transport.USBResetSerialDevice("cellular", port) {
+			return fmt.Errorf("usb reset of %s failed", port)
+		}
+		return nil
+	}
+}
+
+// cellularHealthTarget: AT probe, rungs reconnect, AT+CFUN=1,1, and the
+// quiet-window VBUS cut (level 3 only up to cfg.DeviceHealthCellularMaxLevel;
+// a cut is a modem power toggle and stays confirm-only until the bench
+// proves the window, MESHSAT-812).
+func cellularHealthTarget(cfg *config.Config, dc *transport.DirectCellTransport, gwMgr *gateway.Manager, actions map[byte]oob.Action) gateway.HealthTarget {
+	hard := actions[oob.LevelHard]
+	maxLevel := byte(cfg.DeviceHealthCellularMaxLevel)
+	if maxLevel < gateway.HealLevelSoft || maxLevel > gateway.HealLevelHard {
+		maxLevel = gateway.HealLevelDevice
+	}
+	return gateway.HealthTarget{
+		Name:         "cellular",
+		IfaceIDs:     []string{"cellular_0", "sms_0"},
+		ProbeTimeout: 15 * time.Second,
+		HardBudget:   2,
+		MaxLevel:     maxLevel,
+		Probe: func(ctx context.Context) gateway.ProbeResult {
+			port := dc.GetPort()
+			if port == "" || port == "auto" || port == "supervisor" {
+				return gateway.ProbeResult{Unknown: true, Detail: "no serial port assigned"}
+			}
+			err := dc.Probe(ctx)
+			switch {
+			case err == nil:
+				return probeOK(fmt.Sprintf("modem answered, last rx %s ago", time.Since(dc.LastRxAt()).Truncate(time.Second)))
+			case errors.Is(err, transport.ErrCellProbeBusy):
+				return probeOK("modem busy with a long command, bytes flowing")
+			case errors.Is(err, transport.ErrCellHeld):
+				return probeOK(err.Error()) // inside the quiet window by design
+			default:
+				return probeMiss(err.Error())
+			}
+		},
+		Steps: []gateway.HealStep{
+			{Level: gateway.HealLevelSoft, Name: "serial reconnect", Grace: 100 * time.Second, Run: dc.Reconnect},
+			{
+				Level: gateway.HealLevelDevice, Name: "AT+CFUN=1,1", Grace: 75 * time.Second,
+				Skip: func() bool { return !dc.IsConnected() },
+				Run:  dc.DeviceReset,
+			},
+			{
+				Level: gateway.HealLevelHard, Name: "hub port power cycle with quiet window", Grace: cellularQuietWindow + 60*time.Second,
+				Skip: func() bool { return hard == nil },
+				Run: func(ctx context.Context) error {
+					if hard == nil {
+						return errors.New("no hard reset action registered")
+					}
+					if err := hard(ctx); err != nil {
+						return err
+					}
+					time.AfterFunc(cellularQuietWindow+15*time.Second, func() {
+						rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+						defer cancel()
+						if err := gwMgr.RestartGatewayInstance(rctx, "cellular_0"); err != nil {
+							log.Warn().Err(err).Msg("device health: cellular gateway restart after power cycle failed")
+						}
+					})
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// zigbeeHealthTarget: SYS_PING probe through the gateway's current
+// transport, rungs reopen+init on the same tty, Z-Stack soft reset, hub
+// port power cycle followed by a gateway restart.
+func zigbeeHealthTarget(gwMgr *gateway.Manager, actions map[byte]oob.Action) gateway.HealthTarget {
+	hard := actions[oob.LevelHard]
+	zt := func() *transport.DirectZigBeeTransport {
+		if zgw := gwMgr.GetZigBeeGateway(); zgw != nil {
+			return zgw.GetTransport()
+		}
+		return nil
+	}
+	return gateway.HealthTarget{
+		Name:         "zigbee",
+		IfaceIDs:     []string{"zigbee_0"},
+		ProbeTimeout: 10 * time.Second,
+		Probe: func(ctx context.Context) gateway.ProbeResult {
+			t := zt()
+			if t == nil {
+				return gateway.ProbeResult{Unknown: true, Detail: "no zigbee gateway running"}
+			}
+			if !t.IsReady() {
+				return probeMiss("coordinator not ready (" + transport.ZNPDevStateName(t.CoordState()) + ")")
+			}
+			if since := time.Since(t.LastFrameAt()); since < 120*time.Second {
+				return probeOK(fmt.Sprintf("frame %s ago", since.Truncate(time.Second)))
+			}
+			if err := t.Ping(ctx); err != nil {
+				return probeMiss("SYS_PING: " + err.Error())
+			}
+			return probeOK("SYS_PING answered")
+		},
+		Steps: []gateway.HealStep{
+			{
+				Level: gateway.HealLevelSoft, Name: "reopen and re-init", Grace: 65 * time.Second,
+				Run: func(ctx context.Context) error {
+					t := zt()
+					if t == nil {
+						return errors.New("no zigbee transport")
+					}
+					return t.SoftReinit(ctx)
+				},
+			},
+			{
+				Level: gateway.HealLevelDevice, Name: "SYS_RESET_REQ", Grace: 45 * time.Second,
+				Run: func(ctx context.Context) error {
+					t := zt()
+					if t == nil {
+						return errors.New("no zigbee transport")
+					}
+					return t.SysReset(ctx)
+				},
+			},
+			{
+				Level: gateway.HealLevelHard, Name: "hub port power cycle", Grace: 60 * time.Second,
+				Skip: func() bool { return hard == nil },
+				Run: func(ctx context.Context) error {
+					if hard == nil {
+						return errors.New("no hard reset action registered")
+					}
+					if err := hard(ctx); err != nil {
+						return err
+					}
+					time.AfterFunc(10*time.Second, func() {
+						rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+						defer cancel()
+						if err := gwMgr.RestartGatewayInstance(rctx, "zigbee_0"); err != nil {
+							log.Warn().Err(err).Msg("device health: zigbee gateway restart after power cycle failed")
+						}
+					})
+					return nil
+				},
+			},
+		},
 	}
 }
 

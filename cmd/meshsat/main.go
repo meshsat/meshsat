@@ -240,7 +240,9 @@ func main() {
 		oobActions["cellular"] = map[byte]oob.Action{
 			oob.LevelSoft:   directCell.Reconnect,
 			oob.LevelDevice: directCell.DeviceReset,
-			oob.LevelHard:   usbResetByRole(transport.RoleCellular, "cellular"),
+			// A VBUS cut of the T-Call is a modem power toggle that only
+			// sticks when nothing opens the port for a minute. [MESHSAT-812]
+			oob.LevelHard: cellularQuietCut(directCell, func() *transport.DeviceSupervisor { return supervisor }, usbPowerCycle),
 		}
 		oobActions["iridium"] = map[byte]oob.Action{
 			oob.LevelSoft: directSat.Reconnect,
@@ -321,6 +323,22 @@ func main() {
 				log.Warn().Str("port", port).Msg("supervisor: cellular port lost")
 			},
 			HasPort: func() bool { return directCell.GetPort() != "" && directCell.GetPort() != "supervisor" },
+		})
+
+		// ZigBee has no long-lived transport (the gateway allocates one per
+		// start), so the gateway manager does the stop/start on device
+		// events; these callbacks only give the supervisor an instance to
+		// record for the port, which makes the manager's event handling
+		// deterministic across the tty rename a USB reset causes. [MESHSAT-817]
+		supervisor.SetCallbacks(transport.RoleZigBee, &transport.DriverCallbacks{
+			InstanceID: "zigbee_0",
+			OnPortFound: func(port string) {
+				log.Info().Str("port", port).Msg("supervisor: zigbee coordinator port assigned")
+			},
+			OnPortLost: func(port string) {
+				log.Warn().Str("port", port).Msg("supervisor: zigbee coordinator port lost")
+			},
+			HasPort: func() bool { return false },
 		})
 
 		supervisor.Start()
@@ -732,6 +750,15 @@ func main() {
 			}, zt, func(packet []byte) {
 				log.Debug().Int("size", len(packet)).Msg("zigbee_0: received reticulum packet via ZigBee")
 				proc.InjectReticulumPacket(packet, "zigbee_0")
+			})
+			// The gateway allocates a new transport on every start (a
+			// coordinator reset renames the tty and the manager restarts
+			// it); resolve the live one per call. [MESHSAT-815]
+			zigbeeIface.SetTransportProvider(func() *transport.DirectZigBeeTransport {
+				if g := gwMgr.GetZigBeeGateway(); g != nil {
+					return g.GetTransport()
+				}
+				return nil
 			})
 			if err := zigbeeIface.Start(ctx); err != nil {
 				log.Error().Err(err).Msg("zigbee reticulum interface start failed")
@@ -2219,7 +2246,7 @@ func main() {
 			HardGap:    time.Duration(cfg.DeviceHealthHardGapSec) * time.Second,
 			Seed:       seedDeviceHealth(db),
 		}, deviceHealthActions(db, proc, signingService))
-		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, rxWatchdog)
+		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, gwMgr, rxWatchdog)
 		checkers := engine.ReceiveCheckers{devHealth}
 		if rxWatchdog != nil {
 			checkers = append(checkers, rxWatchdog)

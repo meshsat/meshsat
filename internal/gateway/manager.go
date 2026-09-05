@@ -323,10 +323,14 @@ func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEven
 			log.Info().Str("instance", instanceID).Str("port", ev.Device.DevPath).
 				Str("event", ev.Type).Msg("gwmgr: device lost, stopping gateway")
 			m.mu.Lock()
-			if gw, ok := m.running[instanceID]; ok {
+			if gw, ok := m.running[instanceID]; ok && gw != nil {
 				gw.Stop()
 				delete(m.running, instanceID)
 				m.unsyncIfaceMap(gw)
+			} else if ok {
+				// Nil start sentinel: a start is in flight, leave it to
+				// finish; stopping here dereferenced nil. [MESHSAT-817]
+				log.Info().Str("instance", instanceID).Msg("gwmgr: device lost while a start is in flight, leaving it")
 			}
 			m.mu.Unlock()
 		}
