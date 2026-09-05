@@ -50,6 +50,7 @@ type Server struct {
 	burstQueue    *engine.BurstQueue
 	onMOCallback  func(imei string)
 	devSupervisor *transport.DeviceSupervisor
+	deviceHealth  *gateway.DeviceHealth // device health watchdog [MESHSAT-817]
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
 	oob           *oob.Service // OOB management frames [MESHSAT-756]
@@ -247,6 +248,11 @@ func (s *Server) SetBurstQueue(bq *engine.BurstQueue) {
 // SetDeviceSupervisor sets the device supervisor for USB device inventory.
 func (s *Server) SetDeviceSupervisor(ds *transport.DeviceSupervisor) {
 	s.devSupervisor = ds
+}
+
+// SetDeviceHealth wires the device health watchdog. [MESHSAT-817]
+func (s *Server) SetDeviceHealth(dh *gateway.DeviceHealth) {
+	s.deviceHealth = dh
 }
 
 // SetResourceTransfer sets the resource transfer manager for file delivery API.
@@ -545,6 +551,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/devices/usb", s.handleGetUSBDevices)
 		r.Get("/devices/usb/events", s.handleUSBDeviceEvents)
 		r.Post("/devices/usb/scan", s.handleTriggerUSBScan)
+		r.Get("/devices/health", s.handleGetDeviceHealth)
+		r.Post("/devices/health/{target}/pause", s.handlePauseDeviceHealth)
+		r.Post("/devices/health/{target}/resume", s.handleResumeDeviceHealth)
+		r.Post("/devices/health/{target}/heal", s.handleHealDevice)
 		r.Get("/access-rules", s.handleGetAccessRules)
 		r.Post("/access-rules", s.handleCreateAccessRule)
 		r.Put("/access-rules/{id}", s.handleUpdateAccessRule)

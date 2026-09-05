@@ -213,6 +213,9 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 		return Result{Code: RCUnavailable, Body: name}
 	}
 	body := name + " ok"
+	if s.d.OnReset != nil {
+		s.d.OnReset(t.Name, level)
+	}
 	if level == LevelHard && t.Kind == KindInterface && t.IfaceID != "" && s.d.Gateways != nil {
 		iface := t.IfaceID
 		s.after(hardResetRestartDelay, func() {

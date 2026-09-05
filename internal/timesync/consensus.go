@@ -3,11 +3,28 @@ package timesync
 import (
 	"context"
 	"encoding/binary"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+// requestInterval is the period of the time sync request broadcast.
+const requestInterval = 30 * time.Second
+
+// seenRequestTTL bounds the request dedup window: the same request can
+// arrive over two links to the same peer (both TCP connections between the
+// kits) and used to be answered twice on every bearer. [MESHSAT-778]
+const seenRequestTTL = 60 * time.Second
+
+// ReplyFunc sends a raw packet to one interface (the one a request came in on).
+type ReplyFunc func(ifaceID string, data []byte)
+
+type seenRequest struct {
+	sender    [DestHashLen]byte
+	timestamp int64
+}
 
 // Mesh time consensus packet types (Bridge-specific, 0x14-0x15).
 const (
@@ -55,17 +72,41 @@ type MeshTimeConsensus struct {
 	// Pending requests: echo_timestamp -> send_time (for RTT).
 	pendingMu sync.Mutex
 	pending   map[int64]time.Time // requestTimestampNanos -> localSendTime
+
+	// replyFn answers a request on the interface it arrived on; nil falls
+	// back to the broadcast sendFn. [MESHSAT-778]
+	replyFn ReplyFunc
+
+	// seen deduplicates requests that reach us over several links.
+	seenMu sync.Mutex
+	seen   map[seenRequest]time.Time
+
+	// startOffset delays the first request so two bridges restarted a
+	// multiple of the period apart do not key their radios in the same
+	// second forever (5 Sep 2026: both kits deaf on APRS after a deploy
+	// 120 s apart). Randomised in NewMeshTimeConsensus; tests may zero it.
+	startOffset time.Duration
 }
 
 // NewMeshTimeConsensus creates a new mesh time consensus instance.
 func NewMeshTimeConsensus(ts *TimeService, identity IdentityProvider, sendFn SendFunc) *MeshTimeConsensus {
 	return &MeshTimeConsensus{
-		ts:       ts,
-		identity: identity,
-		sendFn:   sendFn,
-		peers:    make(map[[DestHashLen]byte]*peerClock),
-		pending:  make(map[int64]time.Time),
+		ts:          ts,
+		identity:    identity,
+		sendFn:      sendFn,
+		peers:       make(map[[DestHashLen]byte]*peerClock),
+		pending:     make(map[int64]time.Time),
+		seen:        make(map[seenRequest]time.Time),
+		startOffset: rand.N(requestInterval),
 	}
+}
+
+// SetReplyFunc routes time sync responses to the interface the request
+// came in on instead of broadcasting them on every free bearer.
+func (mc *MeshTimeConsensus) SetReplyFunc(fn ReplyFunc) {
+	mc.mu.Lock()
+	mc.replyFn = fn
+	mc.mu.Unlock()
 }
 
 // Start launches the periodic time sync request sender.
@@ -75,7 +116,15 @@ func (mc *MeshTimeConsensus) Start(ctx context.Context) {
 }
 
 func (mc *MeshTimeConsensus) requestLoop(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	if mc.startOffset > 0 {
+		log.Debug().Dur("offset", mc.startOffset).Msg("timesync: first request delayed by start offset")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(mc.startOffset):
+		}
+	}
+	ticker := time.NewTicker(requestInterval)
 	defer ticker.Stop()
 
 	for {
@@ -84,6 +133,30 @@ func (mc *MeshTimeConsensus) requestLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			mc.sendRequest()
+		}
+	}
+}
+
+// seenBefore records a request and reports whether it was already seen
+// within seenRequestTTL.
+func (mc *MeshTimeConsensus) seenBefore(sender [DestHashLen]byte, ts int64, now time.Time) bool {
+	key := seenRequest{sender: sender, timestamp: ts}
+	mc.seenMu.Lock()
+	defer mc.seenMu.Unlock()
+	if at, ok := mc.seen[key]; ok && now.Sub(at) < seenRequestTTL {
+		return true
+	}
+	mc.seen[key] = now
+	return false
+}
+
+func (mc *MeshTimeConsensus) pruneSeen() {
+	mc.seenMu.Lock()
+	defer mc.seenMu.Unlock()
+	cutoff := time.Now().Add(-seenRequestTTL)
+	for k, at := range mc.seen {
+		if at.Before(cutoff) {
+			delete(mc.seen, k)
 		}
 	}
 }
@@ -99,6 +172,7 @@ func (mc *MeshTimeConsensus) pruneLoop(ctx context.Context) {
 		case <-ticker.C:
 			mc.pruneStalePeers()
 			mc.pruneStaleRequests()
+			mc.pruneSeen()
 		}
 	}
 }
@@ -140,7 +214,15 @@ func (mc *MeshTimeConsensus) HandleTimeSyncRequest(data []byte, sourceIface stri
 
 	// Build response: our timestamp + echo of their request timestamp.
 	localHash := mc.identity.DestHash()
+	if senderHash == localHash {
+		return // our own request echoed back
+	}
 	now := time.Now()
+	if mc.seenBefore(senderHash, requestTimestamp, now) {
+		log.Debug().Str("peer", hexHash(senderHash)).Str("iface", sourceIface).
+			Msg("timesync: duplicate request, already answered")
+		return
+	}
 	stratum := mc.ts.Stratum()
 
 	resp := make([]byte, timeSyncRespLen)
@@ -150,6 +232,13 @@ func (mc *MeshTimeConsensus) HandleTimeSyncRequest(data []byte, sourceIface stri
 	resp[25] = byte(stratum)
 	binary.LittleEndian.PutUint64(resp[26:34], uint64(requestTimestamp))
 
+	mc.mu.RLock()
+	reply := mc.replyFn
+	mc.mu.RUnlock()
+	if reply != nil && sourceIface != "" {
+		reply(sourceIface, resp)
+		return
+	}
 	mc.sendFn(resp)
 }
 

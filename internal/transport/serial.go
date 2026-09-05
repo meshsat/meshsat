@@ -47,6 +47,40 @@ func openSerial(path string, baud int) (serial.Port, error) {
 	return port, nil
 }
 
+// pulseSerialLines opens the port with DTR and RTS cleared, asserts both,
+// clears them again and closes, with short dwell times between the edges.
+// On the XIAO ESP32-S3 (native USB CDC) a DTR/RTS transition reboots the
+// chip: on 5 Sep 2026 a close-and-reopen by the serial watchdog cleared a
+// stale-session wedge on both kits (ROM identity 303a:1001 visible for ~3 s),
+// while a plain reopen with another holder on the tty did nothing, because
+// the line state only changes on the last close. Driving the lines
+// explicitly works regardless of other holders. [MESHSAT-817]
+func pulseSerialLines(path string, baud int) error {
+	mode := &serial.Mode{
+		BaudRate:          baud,
+		DataBits:          8,
+		StopBits:          serial.OneStopBit,
+		Parity:            serial.NoParity,
+		InitialStatusBits: &serial.ModemOutputBits{DTR: false, RTS: false},
+	}
+	p, err := serial.Open(path, mode)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer p.Close()
+	cloexecSerial(path)
+	_ = p.SetDTR(false)
+	_ = p.SetRTS(false)
+	time.Sleep(150 * time.Millisecond)
+	_ = p.SetDTR(true)
+	_ = p.SetRTS(true)
+	time.Sleep(150 * time.Millisecond)
+	_ = p.SetDTR(false)
+	_ = p.SetRTS(false)
+	time.Sleep(150 * time.Millisecond)
+	return nil
+}
+
 // wakeDevice sends the Meshtastic wake sequence (32 bytes of 0xC3).
 func wakeDevice(port serial.Port) error {
 	wake := make([]byte, meshWakeLen)

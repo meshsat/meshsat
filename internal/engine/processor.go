@@ -412,10 +412,29 @@ func (p *Processor) processEvents(ctx context.Context) error {
 		return fmt.Errorf("subscribe to mesh: %w", err)
 	}
 
+	// A transport that signals disconnects out of band lets us react even
+	// when the buffered event channel is full of packets waiting on slow
+	// database writes (parallax, 5 Sep 2026: the "disconnected" event sat
+	// behind the backlog for 4 min 43 s). Drain a stale token from before
+	// this session first. [MESHSAT-811]
+	type disconnectProvider interface {
+		DisconnectedCh() <-chan struct{}
+	}
+	var disconnectedCh <-chan struct{}
+	if dp, ok := p.mesh.(disconnectProvider); ok {
+		disconnectedCh = dp.DisconnectedCh()
+		select {
+		case <-disconnectedCh:
+		default:
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-disconnectedCh:
+			return fmt.Errorf("mesh transport disconnected")
 		case event, ok := <-events:
 			if !ok {
 				return fmt.Errorf("event channel closed")

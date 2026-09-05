@@ -74,6 +74,7 @@ func main() {
 	var imtTransport transport.SatTransport    // IMT (9704) transport for coexistence
 	var gpsExcludePorts []func() string        // populated in direct mode for GPS reader
 	var supervisor *transport.DeviceSupervisor // populated in direct mode for USB discovery
+	var devHealth *gateway.DeviceHealth        // device health watchdog, built after the gateways [MESHSAT-817]
 
 	// OOB management RESET actions per target and level, registered here
 	// where the concrete transports are in scope. [MESHSAT-756]
@@ -157,6 +158,7 @@ func main() {
 		directMesh := transport.NewDirectMeshTransport(meshPort)
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		directMesh.SetConfigTimeout(time.Duration(cfg.MeshConfigTimeoutSec) * time.Second)
+		directMesh.SetTimeSyncRemote(cfg.MeshTimeSyncRemote) // [MESHSAT-783]
 		mesh = directMesh
 
 		directIMT := transport.NewDirectIMTTransport(imtPort)
@@ -863,6 +865,11 @@ func main() {
 		tsConsensus := timesync.NewMeshTimeConsensus(timeService, routingID, func(data []byte) {
 			proc.BroadcastRoutingPacket(data)
 		})
+		// Responses go back on the interface the request arrived on, not
+		// on every free bearer. [MESHSAT-778]
+		tsConsensus.SetReplyFunc(func(ifaceID string, data []byte) {
+			_ = proc.SendReticulumPacketTo(ifaceID, data)
+		})
 		tsConsensus.Start(ctx)
 
 		// Wire time sync dispatch into processor.
@@ -1340,6 +1347,11 @@ func main() {
 			TriggerScan: func() {
 				if supervisor != nil {
 					supervisor.TriggerScan()
+				}
+			},
+			OnReset: func(target string, level byte) {
+				if devHealth != nil {
+					devHealth.NoteExternalReset(target, level)
 				}
 			},
 			Status: oob.StatusSources{
@@ -2130,6 +2142,7 @@ func main() {
 	// nothing while the channel was known alive and walks the recovery
 	// ladder through the same paths the OOB executor uses; a deaf receiver
 	// scores 0 in the health scorer so failover groups route around it.
+	var rxWatchdog *gateway.RxWatchdog
 	if cfg.APRSRxWatchdogMin > 0 {
 		// The expectation and the bridge-restart cooldown survive a restart
 		// through system_config, otherwise every deploy leaves a deaf
@@ -2142,7 +2155,7 @@ func main() {
 			}
 			return time.Time{}
 		}
-		rxWatchdog := gateway.NewRxWatchdog(gateway.RxWatchdogConfig{
+		rxWatchdog = gateway.NewRxWatchdog(gateway.RxWatchdogConfig{
 			Silence:           time.Duration(cfg.APRSRxWatchdogMin) * time.Minute,
 			LastHeard:         seedTime("aprs_rx_last_heard"),
 			LastBridgeRestart: seedTime("aprs_rx_bridge_restart_at"),
@@ -2192,6 +2205,30 @@ func main() {
 		healthScorer.SetReceiveChecker(rxWatchdog)
 		go rxWatchdog.Run(ctx)
 		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
+	}
+
+	// Device health watchdog [MESHSAT-817]: protocol-level liveness probes
+	// for every USB device and a heal ladder through the same reset levels
+	// the OOB executor exposes, ending in a hub-port VBUS cut. A degraded
+	// device scores 0 in the health scorer so failover routes around it.
+	if cfg.DeviceHealth && cfg.Mode == "direct" {
+		devHealth = gateway.NewDeviceHealth(gateway.DeviceHealthConfig{
+			Tick:       time.Duration(cfg.DeviceHealthTickSec) * time.Second,
+			Misses:     cfg.DeviceHealthMisses,
+			HardBudget: cfg.DeviceHealthHardBudget,
+			HardGap:    time.Duration(cfg.DeviceHealthHardGapSec) * time.Second,
+			Seed:       seedDeviceHealth(db),
+		}, deviceHealthActions(db, proc, signingService))
+		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, rxWatchdog)
+		checkers := engine.ReceiveCheckers{devHealth}
+		if rxWatchdog != nil {
+			checkers = append(checkers, rxWatchdog)
+		}
+		healthScorer.SetReceiveChecker(checkers)
+		srv.SetDeviceHealth(devHealth)
+		go devHealth.Run(ctx)
+		log.Info().Int("tick_sec", cfg.DeviceHealthTickSec).Int("misses", cfg.DeviceHealthMisses).
+			Int("hard_budget", cfg.DeviceHealthHardBudget).Msg("device health watchdog enabled")
 	}
 
 	// Start HTTP server
