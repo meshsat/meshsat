@@ -39,6 +39,7 @@ func openSerial(path string, baud int) (serial.Port, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
+	cloexecSerial(path)
 
 	// Default read timeout — callers override as needed
 	port.SetReadTimeout(100 * time.Millisecond)
@@ -86,6 +87,7 @@ func ProbeMeshtastic(portName string) bool {
 		return false
 	}
 	defer p.Close()
+	cloexecSerial(portName)
 
 	// Defence in depth — re-assert the clear in case a driver rewrote
 	// the bits between open() and InitialStatusBits application.
@@ -749,6 +751,7 @@ func ProbeAT(portName string) bool {
 		return false
 	}
 	defer p.Close()
+	cloexecSerial(portName)
 
 	// Defence in depth — re-assert the clear in case a driver rewrote
 	// the bits between open() and InitialStatusBits application.

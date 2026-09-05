@@ -337,6 +337,7 @@ func (z *DirectZigBeeTransport) reopenPort() error {
 	if err != nil {
 		return fmt.Errorf("reopen %s: %w", portName, err)
 	}
+	cloexecSerial(portName)
 
 	// Drain any stale data from the kernel buffer and give the CC2652P
 	// a beat to finish its power-up sequence.
@@ -456,6 +457,7 @@ func (z *DirectZigBeeTransport) Start(ctx context.Context, portName string) erro
 		z.mu.Unlock()
 		return fmt.Errorf("open zigbee serial %s: %w", portName, err)
 	}
+	cloexecSerial(portName)
 
 	// Drain stale data from serial buffer — ProbeZNP may have left residual
 	// bytes from the identification probe. Without this drain, initCoordinator's
@@ -1949,6 +1951,7 @@ func ProbeZNP(portName string) bool {
 		return false
 	}
 	defer p.Close()
+	cloexecSerial(portName)
 
 	// Clear DTR/RTS to prevent CC2652P auto-BSL reset circuit from triggering.
 	// Many ZigBee dongles (SONOFF ZBDongle-P/E) have DTR+RTS wired to the BSL

@@ -32,7 +32,7 @@ func openRawSerial(path string, baud int) (*rawSerialPort, error) {
 	}
 
 	// Match C library: O_RDWR | O_NOCTTY | O_SYNC | O_NONBLOCK
-	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_SYNC|unix.O_NONBLOCK, 0)
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_SYNC|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

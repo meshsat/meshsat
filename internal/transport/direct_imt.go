@@ -1085,7 +1085,7 @@ func usbResetSerialDevice(who, portPath string) bool {
 
 	// Open /dev/bus/usb/BBB/DDD and issue USBDEVFS_RESET ioctl
 	usbDevPath := fmt.Sprintf("/dev/bus/usb/%03d/%03d", busNum, devNum)
-	fd, err := unix.Open(usbDevPath, unix.O_WRONLY, 0)
+	fd, err := unix.Open(usbDevPath, unix.O_WRONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		log.Warn().Str("subsys", who).Err(err).Str("path", usbDevPath).Msg("usb reset — can't open USB device")
 		return false
@@ -1197,7 +1197,7 @@ func (t *DirectIMTTransport) resetModemJSPR() {
 // gpioSetValue drives a GPIO pin to the given value (0 or 1) using the
 // Linux GPIO chardev v2 ioctl interface (/dev/gpiochipN).
 func gpioSetValue(chipPath string, pin, value int) error {
-	fd, err := unix.Open(chipPath, unix.O_RDWR, 0)
+	fd, err := unix.Open(chipPath, unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", chipPath, err)
 	}
@@ -1244,7 +1244,7 @@ func gpioSetValue(chipPath string, pin, value int) error {
 
 // gpioGetValue reads a GPIO pin value using the Linux GPIO chardev ioctl.
 func gpioGetValue(chipPath string, pin int) (int, error) {
-	fd, err := unix.Open(chipPath, unix.O_RDONLY, 0)
+	fd, err := unix.Open(chipPath, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, fmt.Errorf("open %s: %w", chipPath, err)
 	}
