@@ -1131,7 +1131,7 @@ func probeJSPR(portPath string) bool {
 	// O_NONBLOCK + select() for the probe (short-lived, needs timeouts).
 	// The long-lived connection uses VMIN=1 VTIME=0 (blocking), but the
 	// probe can't block forever — it needs to timeout and move on.
-	fd, err := unix.Open(portPath, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
+	fd, err := unix.Open(portPath, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		log.Debug().Err(err).Str("port", portPath).Msg("jspr probe: open failed")
 		return false
@@ -1246,6 +1246,7 @@ func probeJSPRSerial(portPath string) bool {
 		return false
 	}
 	defer p.Close()
+	cloexecSerial(portPath)
 
 	for attempt := 0; attempt < 3; attempt++ {
 		// Drain stale data

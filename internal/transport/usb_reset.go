@@ -40,7 +40,7 @@ func USBResetSysfsID(who, sysfsID string) bool {
 		return false
 	}
 	usbDevPath := fmt.Sprintf("/dev/bus/usb/%03d/%03d", busNum, devNum)
-	fd, err := unix.Open(usbDevPath, unix.O_WRONLY, 0)
+	fd, err := unix.Open(usbDevPath, unix.O_WRONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		log.Warn().Str("subsys", who).Err(err).Str("path", usbDevPath).Msg("usb reset: can't open USB device")
 		return false
