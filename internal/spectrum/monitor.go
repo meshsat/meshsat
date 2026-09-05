@@ -74,6 +74,7 @@ type SpectrumMonitor struct {
 	curCancel        context.CancelFunc
 	consecutiveFails int
 	lastGoodScan     time.Time
+	startedAt        time.Time
 
 	// MIJI/CoT relay outcome tracker. Owned here so the HTTP layer
 	// has a single accessor (SpectrumMonitor.RelayTracker()); the
@@ -150,12 +151,24 @@ func (m *SpectrumMonitor) scanOnce(ctx context.Context, band Band, timeout time.
 	m.curCancel = nil
 	if err != nil {
 		m.consecutiveFails++
+		m.lastScanError = err.Error()
+		m.lastScanErrorAt = time.Now()
 	} else {
 		m.consecutiveFails = 0
 		m.lastGoodScan = time.Now()
 	}
 	m.mu.Unlock()
 	return powers, err
+}
+
+// Uptime is how long the monitor has been running (zero before Start).
+func (m *SpectrumMonitor) Uptime() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(m.startedAt)
 }
 
 // LastGoodScan is when a scan last returned samples, and how many scans
@@ -167,16 +180,16 @@ func (m *SpectrumMonitor) LastGoodScan() (time.Time, int) {
 }
 
 // RestartScan kills the scanner child currently running (a hung
-// rtl_power_fftw holds the dongle for the whole 90 s timeout) and resets
-// the failure counter; the loops carry on with a fresh exec. Level 1 of
-// the device health ladder for the RTL-SDR. [MESHSAT-817]
+// rtl_power_fftw holds the dongle for the whole 90 s timeout); the loops
+// carry on with a fresh exec. The failure counter is left alone so only a
+// scan that really returns samples counts as recovery. Level 1 of the
+// device health ladder for the RTL-SDR. [MESHSAT-817]
 func (m *SpectrumMonitor) RestartScan(_ context.Context) error {
 	if !m.enabled {
 		return fmt.Errorf("spectrum monitor disabled")
 	}
 	m.mu.Lock()
 	cancel := m.curCancel
-	m.consecutiveFails = 0
 	m.mu.Unlock()
 	if cancel != nil {
 		log.Warn().Msg("spectrum: cancelling the running scan")
@@ -252,6 +265,9 @@ func (m *SpectrumMonitor) Start(ctx context.Context) {
 	}
 
 	ctx, m.cancel = context.WithCancel(ctx)
+	m.mu.Lock()
+	m.startedAt = time.Now()
+	m.mu.Unlock()
 	log.Info().Int("bands", len(m.bands)).Msg("spectrum: starting RTL-SDR monitoring")
 
 	go m.run(ctx)
