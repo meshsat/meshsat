@@ -235,8 +235,13 @@ func (g *GPSReader) readLoop(ctx context.Context, portPath string) {
 		}
 
 		line := scanner.Text()
-		if pos, ok := parseNMEA(line); ok {
+		// Any NMEA sentence is liveness (a receiver indoors streams GSV
+		// and fix-less GGA about once a second); parseNMEA only accepts
+		// position sentences. [MESHSAT-817]
+		if strings.HasPrefix(line, "$") && len(line) > 6 {
 			g.lastSentence.Store(time.Now().UnixNano())
+		}
+		if pos, ok := parseNMEA(line); ok {
 			lastFix = pos
 			hasFix = true
 			g.mu.Lock()

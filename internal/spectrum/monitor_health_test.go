@@ -18,8 +18,8 @@ type blockingScanner struct {
 	fail     bool
 }
 
-func (s *blockingScanner) Available() bool     { return true }
-func (s *blockingScanner) Info() ScannerInfo   { return ScannerInfo{BinaryPath: "block"} }
+func (s *blockingScanner) Available() bool   { return true }
+func (s *blockingScanner) Info() ScannerInfo { return ScannerInfo{BinaryPath: "block"} }
 func (s *blockingScanner) Scan(ctx context.Context, _, _, _, _ int) ([]float64, error) {
 	s.mu.Lock()
 	s.active++

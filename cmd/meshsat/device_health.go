@@ -312,13 +312,19 @@ func rtlSDRHealthTarget(mon *spectrum.SpectrumMonitor, actions map[byte]oob.Acti
 				return gateway.ProbeResult{Unknown: true, Detail: "spectrum monitor disabled"}
 			}
 			last, fails := mon.LastGoodScan()
+			// A Blog V4 cold start takes about two minutes per band before
+			// the first samples, so early failures are expected: only a
+			// long run of failures, or a long gap after samples once
+			// flowed, is a wedge.
 			switch {
-			case fails >= 2:
+			case fails >= 4:
 				return probeMiss(fmt.Sprintf("%d scans failed in a row: %s", fails, mon.Hardware().LastScanError))
+			case last.IsZero() && mon.Uptime() > 8*time.Minute:
+				return probeMiss(fmt.Sprintf("no scan has returned samples in %s: %s", mon.Uptime().Truncate(time.Second), mon.Hardware().LastScanError))
 			case last.IsZero():
-				return probeOK("no scan completed yet")
+				return probeOK("warming up, no scan completed yet")
 			case time.Since(last) > 5*time.Minute:
-				return probeMiss(fmt.Sprintf("no good scan for %s", time.Since(last).Truncate(time.Second)))
+				return probeMiss(fmt.Sprintf("no good scan for %s: %s", time.Since(last).Truncate(time.Second), mon.Hardware().LastScanError))
 			default:
 				return probeOK(fmt.Sprintf("good scan %s ago", time.Since(last).Truncate(time.Second)))
 			}
