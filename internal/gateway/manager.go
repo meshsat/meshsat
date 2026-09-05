@@ -1048,6 +1048,10 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 			resp.DirewolfBundled = status.DirewolfBundled
 			resp.DirewolfRunning = status.DirewolfRunning
 			resp.DirewolfRestarts = status.DirewolfRestarts
+			resp.ReceiveLevel = status.ReceiveLevel
+			resp.ReceiveLevelAt = status.ReceiveLevelAt
+			resp.LastDecodeAt = status.LastDecodeAt
+			resp.ReceiveState = status.ReceiveState
 		}
 
 		resp.Config = m.redactConfig(cfg.Type, cfg.Config)
@@ -1092,6 +1096,10 @@ func (m *Manager) GetSingleStatus(gwType string) (*GatewayStatusResponse, error)
 		resp.DirewolfBundled = status.DirewolfBundled
 		resp.DirewolfRunning = status.DirewolfRunning
 		resp.DirewolfRestarts = status.DirewolfRestarts
+		resp.ReceiveLevel = status.ReceiveLevel
+		resp.ReceiveLevelAt = status.ReceiveLevelAt
+		resp.LastDecodeAt = status.LastDecodeAt
+		resp.ReceiveState = status.ReceiveState
 	}
 
 	return resp, nil
@@ -1610,4 +1618,10 @@ type GatewayStatusResponse struct {
 	DirewolfBundled  *bool  `json:"direwolf_bundled,omitempty"`
 	DirewolfRunning  *bool  `json:"direwolf_running,omitempty"`
 	DirewolfRestarts *int64 `json:"direwolf_restarts,omitempty"`
+	// APRS receive health from the Direwolf supervisor and the receive
+	// watchdog. [MESHSAT-814]
+	ReceiveLevel   *int       `json:"receive_level,omitempty"`
+	ReceiveLevelAt *time.Time `json:"receive_level_at,omitempty"`
+	LastDecodeAt   *time.Time `json:"last_decode_at,omitempty"`
+	ReceiveState   *string    `json:"receive_state,omitempty"`
 }
