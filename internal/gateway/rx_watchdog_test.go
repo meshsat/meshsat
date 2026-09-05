@@ -178,3 +178,81 @@ func TestRxWatchdog_NoProbe(t *testing.T) {
 		t.Fatalf("state: %s", h.wd.State())
 	}
 }
+
+// A watchdog seeded with the previous process's last-heard time treats
+// silence after a restart as deaf from the first tick: the failover and
+// the ladder do not wait for a frame a deaf receiver never delivers. The
+// seeded bridge-restart time keeps the cooldown across restarts.
+func TestRxWatchdog_SeededExpectationSurvivesRestart(t *testing.T) {
+	h := newWDHarness()
+	ctx := context.Background()
+	var persisted []time.Time
+	var pmu sync.Mutex
+	h.wd = NewRxWatchdog(RxWatchdogConfig{
+		Silence: 5 * time.Minute, HeardWithin: 2 * time.Hour, StatsStale: 90 * time.Second, BridgeCooldown: time.Hour,
+		LastHeard: h.now.Add(-6 * time.Minute), LastBridgeRestart: h.now.Add(-20 * time.Minute),
+	}, RxWatchdogActions{
+		Probe:          h.wd.act.Probe,
+		RestartGateway: h.wd.act.RestartGateway,
+		PowerCycle:     h.wd.act.PowerCycle,
+		RestartBridge:  h.wd.act.RestartBridge,
+		Persist: func(lastHeard, bridgeRestartAt time.Time) {
+			pmu.Lock()
+			persisted = append(persisted, lastHeard, bridgeRestartAt)
+			pmu.Unlock()
+		},
+	})
+	h.wd.now = func() time.Time { return h.now }
+	// First tick after the restart: already deaf, step 1 runs.
+	h.wd.tick(ctx)
+	waitFor(t, func() bool { r, _, _ := h.counts(); return r == 1 })
+	if !h.wd.ReceiveDeaf("aprs_0") || h.wd.State() != ReceiveStateDeaf {
+		t.Fatalf("seeded silence not deaf: deaf=%v state=%s", h.wd.ReceiveDeaf("aprs_0"), h.wd.State())
+	}
+	// Step 2, then step 3 is held by the seeded cooldown (20 min < 1 h).
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx)
+	waitFor(t, func() bool { _, c, _ := h.counts(); return c == 1 })
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx)
+	if _, _, b := h.counts(); b != 0 {
+		t.Fatalf("bridge restarted inside the seeded cooldown: %d", b)
+	}
+	// Once the cooldown has passed the bridge restart runs and persists first.
+	h.advance(50 * time.Minute)
+	h.wd.tick(ctx)
+	if _, _, b := h.counts(); b != 1 {
+		t.Fatalf("bridge restarts after the cooldown: %d", b)
+	}
+	pmu.Lock()
+	n := len(persisted)
+	pmu.Unlock()
+	if n != 2 || !persisted[1].Equal(h.now) {
+		t.Fatalf("persist before the bridge restart: %v", persisted)
+	}
+	// A frame after recovery persists the new last-heard time (rate limited).
+	h.frame()
+	h.wd.tick(ctx)
+	waitFor(t, func() bool { pmu.Lock(); defer pmu.Unlock(); return len(persisted) == 4 })
+	h.frame()
+	h.wd.tick(ctx)
+	pmu.Lock()
+	n = len(persisted)
+	pmu.Unlock()
+	if n != 4 {
+		t.Fatalf("persist not rate limited: %d entries", n)
+	}
+}
+
+// An old seed (older than HeardWithin) is a quiet channel, not a deaf one:
+// a kit switched on alone after a night off does not walk the ladder.
+func TestRxWatchdog_StaleSeedIsQuiet(t *testing.T) {
+	h := newWDHarness()
+	h.wd = NewRxWatchdog(RxWatchdogConfig{Silence: 5 * time.Minute, HeardWithin: 2 * time.Hour, LastHeard: h.now.Add(-3 * time.Hour)}, h.wd.act)
+	h.wd.now = func() time.Time { return h.now }
+	h.wd.tick(context.Background())
+	r, c, b := h.counts()
+	if r+c+b != 0 || h.wd.State() != ReceiveStateQuiet {
+		t.Fatalf("stale seed escalated: %d %d %d state=%s", r, c, b, h.wd.State())
+	}
+}

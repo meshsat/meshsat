@@ -47,6 +47,17 @@ type RxWatchdogConfig struct {
 	Tick time.Duration
 	// BridgeCooldown is the minimum spacing between bridge restarts.
 	BridgeCooldown time.Duration
+	// LastHeard seeds the expectation across a bridge restart: a receiver
+	// that heard the peer before a deploy, or before the ladder's own
+	// bridge restart, is still expected to hear it afterwards, so the
+	// failover and the ladder work from the first tick instead of waiting
+	// for a frame that a deaf receiver never delivers. Parallax stayed
+	// deaf for 28 minutes after the 5 Sep 2026 19:38Z deploy in state
+	// "quiet" because the new process had never heard anything.
+	LastHeard time.Time
+	// LastBridgeRestart seeds the bridge-restart cooldown the same way, so
+	// the last step of the ladder cannot loop through restarts.
+	LastBridgeRestart time.Time
 }
 
 // RxWatchdogActions are the recovery steps, wired by main.go to the same
@@ -61,6 +72,11 @@ type RxWatchdogActions struct {
 	SetState       func(state string)
 	Emit           EventEmitFunc
 	Audit          func(detail string)
+	// Persist stores the last-heard and last-bridge-restart times for the
+	// next process to seed LastHeard and LastBridgeRestart from. Called at
+	// most once a minute while frames arrive, and once, synchronously,
+	// before a bridge restart.
+	Persist func(lastHeard, bridgeRestartAt time.Time)
 }
 
 // RxWatchdog notices when the APRS receiver goes silent while the channel
@@ -81,6 +97,7 @@ type RxWatchdog struct {
 	step            int
 	stepAt          time.Time
 	bridgeRestartAt time.Time
+	persistedAt     time.Time
 }
 
 // NewRxWatchdog applies defaults to zero fields.
@@ -100,7 +117,10 @@ func NewRxWatchdog(cfg RxWatchdogConfig, act RxWatchdogActions) *RxWatchdog {
 	if cfg.BridgeCooldown <= 0 {
 		cfg.BridgeCooldown = time.Hour
 	}
-	return &RxWatchdog{cfg: cfg, act: act, now: time.Now, state: ReceiveStateUnknown}
+	return &RxWatchdog{
+		cfg: cfg, act: act, now: time.Now, state: ReceiveStateUnknown,
+		lastHeardAt: cfg.LastHeard, bridgeRestartAt: cfg.LastBridgeRestart,
+	}
 }
 
 // Run evaluates on every tick until ctx ends.
@@ -173,6 +193,10 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 		w.step = 0
 		w.stepAt = time.Time{}
 		w.setState(ReceiveStateOK)
+		if w.act.Persist != nil && now.Sub(w.persistedAt) >= time.Minute {
+			w.persistedAt = now
+			go w.act.Persist(w.lastHeardAt, w.bridgeRestartAt)
+		}
 		return
 	}
 
@@ -239,6 +263,9 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 		w.notify("aprs_rx_watchdog", "APRS receive still silent after gateway restart and AIOC power cycle: restarting the bridge")
 		w.step = 3
 		w.stepAt = now
+		if w.act.Persist != nil {
+			w.act.Persist(w.lastHeardAt, w.bridgeRestartAt)
+		}
 		if w.act.RestartBridge != nil {
 			w.act.RestartBridge()
 		}

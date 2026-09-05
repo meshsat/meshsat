@@ -2131,9 +2131,32 @@ func main() {
 	// ladder through the same paths the OOB executor uses; a deaf receiver
 	// scores 0 in the health scorer so failover groups route around it.
 	if cfg.APRSRxWatchdogMin > 0 {
+		// The expectation and the bridge-restart cooldown survive a restart
+		// through system_config, otherwise every deploy leaves a deaf
+		// receiver in state "quiet" with no failover and no recovery.
+		seedTime := func(key string) time.Time {
+			if raw, dbErr := db.GetSystemConfig(key); dbErr == nil && raw != "" {
+				if t, perr := time.Parse(time.RFC3339, raw); perr == nil {
+					return t
+				}
+			}
+			return time.Time{}
+		}
 		rxWatchdog := gateway.NewRxWatchdog(gateway.RxWatchdogConfig{
-			Silence: time.Duration(cfg.APRSRxWatchdogMin) * time.Minute,
+			Silence:           time.Duration(cfg.APRSRxWatchdogMin) * time.Minute,
+			LastHeard:         seedTime("aprs_rx_last_heard"),
+			LastBridgeRestart: seedTime("aprs_rx_bridge_restart_at"),
 		}, gateway.RxWatchdogActions{
+			Persist: func(lastHeard, bridgeRestartAt time.Time) {
+				for key, t := range map[string]time.Time{"aprs_rx_last_heard": lastHeard, "aprs_rx_bridge_restart_at": bridgeRestartAt} {
+					if t.IsZero() {
+						continue
+					}
+					if dbErr := db.SetSystemConfig(key, t.UTC().Format(time.RFC3339)); dbErr != nil {
+						log.Warn().Err(dbErr).Str("key", key).Msg("aprs receive watchdog: persist failed")
+					}
+				}
+			},
 			Probe: func() (gateway.ReceiveHealth, bool) {
 				if ag := gwMgr.APRSGateway(); ag != nil {
 					return ag.ReceiveHealth()
