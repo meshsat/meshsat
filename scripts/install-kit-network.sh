@@ -23,6 +23,10 @@
 #   6. meshsat-p2p-link.service — the kit-to-kit P2P bearer on the MT7612U
 #      dongle (IBSS, fixed BSSID). Only enabled when MESHSAT_P2P_ADDR is set,
 #      since each kit needs its own overlay address.
+#   7. /etc/modprobe.d/blacklist-rtlsdr.conf — keeps the kernel DVB driver off
+#      the RTL-SDR dongle so the spectrum monitor's rtl_power_fftw scans never
+#      race it (tesseract lacked it until 5 Sep 2026, MESHSAT-808). Unloads the
+#      driver if it is bound and refreshes the initramfs.
 #
 # What this deliberately does NOT do: touch /etc/netplan. Kit credentials and
 # addressing stay exactly as provisioned. Changing the netplan of a kit whose
@@ -53,7 +57,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
   echo "This script must run as root: sudo bash $0" >&2
   exit 1
 fi
-for f in brcmfmac.conf mt76_usb.conf meshsat-wifi-tune meshsat-wifi-tune.service \
+for f in brcmfmac.conf mt76_usb.conf blacklist-rtlsdr.conf meshsat-wifi-tune meshsat-wifi-tune.service \
          meshsat-mgmt-keepalive meshsat-mgmt-keepalive.service meshsat-mgmt-keepalive.timer \
          meshsat-p2p-link meshsat-p2p-link.service; do
   if [ ! -f "$DEPLOY_DIR/$f" ]; then
@@ -67,7 +71,7 @@ echo "Management hosts : $MGMT_HOSTS"
 echo
 
 # ─── 1. packages ────────────────────────────────────────────────
-echo "[1/6] Installing packages…"
+echo "[1/7] Installing packages…"
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v iw >/dev/null 2>&1; then
   apt-get update -q
@@ -77,15 +81,15 @@ else
 fi
 
 # ─── 2. firmware roaming offload off ────────────────────────────
-echo "[2/6] Disabling firmware roaming offload (brcmfmac)…"
+echo "[2/7] Disabling firmware roaming offload (brcmfmac)…"
 install -m 0644 "$DEPLOY_DIR/brcmfmac.conf" /etc/modprobe.d/brcmfmac.conf
 
 # ─── 3. USB dongle prophylactic ─────────────────────────────────
-echo "[3/6] Installing mt76_usb options…"
+echo "[3/7] Installing mt76_usb options…"
 install -m 0644 "$DEPLOY_DIR/mt76_usb.conf" /etc/modprobe.d/mt76_usb.conf
 
 # ─── 4. power save off at every boot ────────────────────────────
-echo "[4/6] Installing WiFi tuning unit…"
+echo "[4/7] Installing WiFi tuning unit…"
 install -m 0755 "$DEPLOY_DIR/meshsat-wifi-tune" /usr/local/bin/meshsat-wifi-tune
 install -m 0644 "$DEPLOY_DIR/meshsat-wifi-tune.service" \
   /etc/systemd/system/meshsat-wifi-tune.service
@@ -97,7 +101,7 @@ if [ -f /etc/systemd/system/wlan0-nopowersave.service ]; then
 fi
 
 # ─── 5. management keepalive ────────────────────────────────────
-echo "[5/6] Installing management keepalive…"
+echo "[5/7] Installing management keepalive…"
 install -m 0755 "$DEPLOY_DIR/meshsat-mgmt-keepalive" /usr/local/bin/meshsat-mgmt-keepalive
 install -m 0644 "$DEPLOY_DIR/meshsat-mgmt-keepalive.service" \
   /etc/systemd/system/meshsat-mgmt-keepalive.service
@@ -113,10 +117,21 @@ install -m 0644 "$DEPLOY_DIR/meshsat-mgmt-keepalive.timer" \
 chmod 0644 /etc/default/meshsat-network
 
 # ─── 6. kit-to-kit P2P bearer ───────────────────────────────────
-echo "[6/6] Installing P2P bearer…"
+echo "[6/7] Installing P2P bearer…"
 install -m 0755 "$DEPLOY_DIR/meshsat-p2p-link" /usr/local/bin/meshsat-p2p-link
 install -m 0644 "$DEPLOY_DIR/meshsat-p2p-link.service" \
   /etc/systemd/system/meshsat-p2p-link.service
+
+# ─── 7. RTL-SDR: keep the kernel DVB driver off the dongle ──────
+echo "[7/7] Installing RTL-SDR kernel-driver blacklist…"
+install -m 0644 "$DEPLOY_DIR/blacklist-rtlsdr.conf" /etc/modprobe.d/blacklist-rtlsdr.conf
+for m in rtl2832_sdr dvb_usb_rtl28xxu rtl2832 rtl2830; do
+  if lsmod | grep -q "^$m "; then
+    modprobe -r "$m" 2>/dev/null || echo "      WARN: could not unload $m (in use?); it stays off after the next boot"
+  fi
+done
+update-initramfs -u >/dev/null 2>&1 \
+  || echo "      WARN: update-initramfs failed; the blacklist still applies once the root filesystem is up"
 
 systemctl daemon-reload
 systemctl enable --now meshsat-wifi-tune >/dev/null 2>&1
@@ -133,6 +148,7 @@ echo "  wifi-tune  : $(systemctl is-active meshsat-wifi-tune)"
 echo "  keepalive  : $(systemctl is-active meshsat-mgmt-keepalive.timer)"
 echo "  p2p bearer : $(systemctl is-active meshsat-p2p-link 2>&1)${P2P_ADDR:+ at $P2P_ADDR}"
 echo "  roamoff now: $(cat /sys/module/brcmfmac/parameters/roamoff 2>/dev/null || echo '?')"
+echo "  rtl-sdr    : $(lsmod | grep -q '^dvb_usb_rtl28xxu ' && echo 'kernel DVB driver STILL LOADED' || echo 'kernel DVB driver off')"
 echo
 echo "  REBOOT REQUIRED for roamoff to take effect."
 echo "  After reboot verify:  cat /sys/module/brcmfmac/parameters/roamoff   -> 1"

@@ -22,6 +22,11 @@
 #   7. Installs the Chromium managed-policy file to lock the
 #      kiosk to localhost (devtools + password manager + autofill
 #      + history + printing all off).
+#   +  Installs goodix-touch-rebind.service: on kernel 6.8.0-1051 the
+#      Touch Display 2's Goodix controller races the attiny reset line at
+#      boot and the driver gives up (-121 EREMOTEIO); the unit rebinds
+#      it 10 s after boot when it is not already bound. Hand-installed on
+#      tesseract only until 5 Sep 2026 (MESHSAT-808).
 #
 # Idempotent — safe to re-run.
 #
@@ -42,7 +47,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
   echo "This script must run as root: sudo bash $0" >&2
   exit 1
 fi
-for f in meshsat-kiosk-session.sh meshsat-kiosk.json labwc-rc.xml labwc-autostart 99-touch-rotate.rules meshsat-backlight kiosk-brightness.sudoers meshsat-kiosk-restart.service meshsat-kiosk-restart.timer meshsat-ble-addr-pin.sh meshsat-ble-addr-pin.service; do
+for f in meshsat-kiosk-session.sh meshsat-kiosk.json labwc-rc.xml labwc-autostart 99-touch-rotate.rules meshsat-backlight kiosk-brightness.sudoers meshsat-kiosk-restart.service meshsat-kiosk-restart.timer meshsat-ble-addr-pin.sh meshsat-ble-addr-pin.service goodix-touch-rebind.service; do
   if [ ! -f "$DEPLOY_DIR/$f" ]; then
     echo "Deploy file missing: $DEPLOY_DIR/$f" >&2
     exit 1
@@ -194,6 +199,16 @@ systemctl start meshsat-ble-addr-pin.service || {
   echo "  WARN: meshsat-ble-addr-pin first-run failed — check 'journalctl -u meshsat-ble-addr-pin.service'"
   echo "  Cold-power-cycle the Pi to clear brcmfmac firmware state if the adapter never appears."
 }
+
+# ─── Goodix touch rebind (MESHSAT-808) ───────────────────────────
+# Idempotent: the unit only binds 11-005d when it is not already bound,
+# so on a kit whose touch probe won the race it is a 10 s no-op.
+echo "[+] Installing Goodix touch-rebind unit (MESHSAT-808)…"
+install -D -m 0644 -o root -g root \
+  "$DEPLOY_DIR/goodix-touch-rebind.service" \
+  /etc/systemd/system/goodix-touch-rebind.service
+systemctl daemon-reload
+systemctl enable goodix-touch-rebind.service
 
 echo "Installing blank cursor theme…"
 bash "$DEPLOY_DIR/install-blank-cursor.sh"
