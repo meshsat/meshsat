@@ -31,6 +31,21 @@ type ReceiveChecker interface {
 	ReceiveDeaf(interfaceID string) bool
 }
 
+// ReceiveCheckers composes several checkers: an interface is deaf when any
+// of them says so (the APRS receive watchdog and the device health
+// watchdog share the single HealthScorer hook). [MESHSAT-817]
+type ReceiveCheckers []ReceiveChecker
+
+// ReceiveDeaf implements ReceiveChecker.
+func (c ReceiveCheckers) ReceiveDeaf(interfaceID string) bool {
+	for _, rc := range c {
+		if rc != nil && rc.ReceiveDeaf(interfaceID) {
+			return true
+		}
+	}
+	return false
+}
+
 // HealthScorer computes composite health scores for transport interfaces.
 type HealthScorer struct {
 	db       *database.DB

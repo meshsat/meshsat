@@ -47,6 +47,25 @@ type Config struct {
 	OOBReplyBudget int
 	OOBHostSocket  string
 
+	// Device health watchdog [MESHSAT-817]: protocol-level liveness probes
+	// for every USB device and the heal ladder (soft, device, hub-port VBUS
+	// cut). DeviceHealth=false disables it entirely. Misses is consecutive
+	// probe misses before the ladder starts; HardBudget caps level-3 resets
+	// per target per hour; HardGapSec spaces any two level-3 resets;
+	// CellularMaxLevel caps the cellular ladder (a VBUS cut on the T-Call is
+	// a modem power toggle, MESHSAT-812) until the quiet window is proven.
+	DeviceHealth                 bool
+	DeviceHealthTickSec          int
+	DeviceHealthMisses           int
+	DeviceHealthHardBudget       int
+	DeviceHealthHardGapSec       int
+	DeviceHealthCellularMaxLevel int
+
+	// MeshTimeSyncRemote re-enables the admin set-time to every remote
+	// NodeDB entry after a handshake (off: 42 LoRa transmissions on
+	// parallax per reconnect, the suspected XIAO wedge trigger). [MESHSAT-783]
+	MeshTimeSyncRemote bool
+
 	// Meshtastic want_config_id handshake timeout in seconds.
 	// 60s default comfortably covers kits with ~50 NodeDB entries on
 	// SF7-LongFast (drain ~30-45s). 15s caused partial handshakes with
@@ -110,46 +129,53 @@ type Config struct {
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
-		Port:                   envInt("MESHSAT_PORT", 6050),
-		DBPath:                 envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
-		HALURL:                 envStr("HAL_URL", "http://cubeos-hal:6005"),
-		HALAPIKey:              envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
-		Mode:                   envStr("MESHSAT_MODE", "cubeos"),
-		RetentionDays:          envInt("MESHSAT_RETENTION_DAYS", 30),
-		WebDir:                 envStr("MESHSAT_WEB_DIR", ""),
-		MeshtasticPort:         envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
-		IridiumPort:            envStr("MESHSAT_IRIDIUM_PORT", "auto"),
-		IridiumSleepPin:        envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
-		IridiumNetAvPin:        envInt("MESHSAT_IRIDIUM_NETAV_PIN", 0),
-		IridiumRIPin:           envInt("MESHSAT_IRIDIUM_RI_PIN", 0),
-		IridiumOnOffPin:        envInt("MESHSAT_IRIDIUM_ONOFF_PIN", 0),
-		IridiumOnOffActiveHigh: envBool("MESHSAT_IRIDIUM_ONOFF_ACTIVE_HIGH", false),
-		IMTPort:                envStr("MESHSAT_IMT_PORT", "auto"),
-		CellularPort:           envStr("MESHSAT_CELLULAR_PORT", "auto"),
-		ZigBeePort:             envStr("MESHSAT_ZIGBEE_PORT", "auto"),
-		PaidRateLimit:          envInt("MESHSAT_PAID_RATE_LIMIT", 60),
-		APIRateLimit:           envInt("MESHSAT_API_RATE_LIMIT", 600),
-		MeshWatchdogMin:        envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
-		APRSRxWatchdogMin:      envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
-		OOBEnabled:             envBool("MESHSAT_OOB_ENABLED", false),
-		OOBReplyBudget:         envInt("MESHSAT_OOB_REPLY_BUDGET", 12),
-		OOBHostSocket:          envStr("MESHSAT_OOB_HOST_SOCKET", "/run/meshsat-oob/agent.sock"),
-		MeshConfigTimeoutSec:   envInt("MESHSAT_MESH_CONFIG_TIMEOUT_SEC", 60),
-		LlamaZipAddr:           envStr("MESHSAT_LLAMAZIP_ADDR", ""),
-		LlamaZipTimeoutSec:     envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
-		MSVQSCAddr:             envStr("MESHSAT_MSVQSC_ADDR", ""),
-		MSVQSCTimeoutSec:       envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
-		MSVQSCCodebook:         envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
-		TCPListenAddr:          envStr("MESHSAT_TCP_LISTEN", ""),
-		TCPConnectAddr:         envStr("MESHSAT_TCP_CONNECT", ""),
-		AX25KISSAddr:           envStr("MESHSAT_AX25_KISS_ADDR", ""),
-		AX25Callsign:           envStr("MESHSAT_AX25_CALLSIGN", ""),
-		SMSReticulumPeer:       envStr("MESHSAT_SMS_RETICULUM_PEER", ""),
-		BLEAdapter:             envStr("MESHSAT_BLE_ADAPTER", ""),
-		BLEDeviceName:          envStr("MESHSAT_BLE_DEVICE_NAME", "MeshSat-RNS"),
-		MQTTReticulumBroker:    envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
-		MQTTReticulumTopic:     envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
-		AnnounceIntervalSec:    envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
+		Port:                         envInt("MESHSAT_PORT", 6050),
+		DBPath:                       envStr("MESHSAT_DB_PATH", "/cubeos/data/meshsat.db"),
+		HALURL:                       envStr("HAL_URL", "http://cubeos-hal:6005"),
+		HALAPIKey:                    envStr("HAL_CORE_KEY", envStr("HAL_API_KEY", "")),
+		Mode:                         envStr("MESHSAT_MODE", "cubeos"),
+		RetentionDays:                envInt("MESHSAT_RETENTION_DAYS", 30),
+		WebDir:                       envStr("MESHSAT_WEB_DIR", ""),
+		MeshtasticPort:               envStr("MESHSAT_MESHTASTIC_PORT", "auto"),
+		IridiumPort:                  envStr("MESHSAT_IRIDIUM_PORT", "auto"),
+		IridiumSleepPin:              envInt("MESHSAT_IRIDIUM_SLEEP_PIN", 0),
+		IridiumNetAvPin:              envInt("MESHSAT_IRIDIUM_NETAV_PIN", 0),
+		IridiumRIPin:                 envInt("MESHSAT_IRIDIUM_RI_PIN", 0),
+		IridiumOnOffPin:              envInt("MESHSAT_IRIDIUM_ONOFF_PIN", 0),
+		IridiumOnOffActiveHigh:       envBool("MESHSAT_IRIDIUM_ONOFF_ACTIVE_HIGH", false),
+		IMTPort:                      envStr("MESHSAT_IMT_PORT", "auto"),
+		CellularPort:                 envStr("MESHSAT_CELLULAR_PORT", "auto"),
+		ZigBeePort:                   envStr("MESHSAT_ZIGBEE_PORT", "auto"),
+		PaidRateLimit:                envInt("MESHSAT_PAID_RATE_LIMIT", 60),
+		APIRateLimit:                 envInt("MESHSAT_API_RATE_LIMIT", 600),
+		MeshWatchdogMin:              envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		APRSRxWatchdogMin:            envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
+		OOBEnabled:                   envBool("MESHSAT_OOB_ENABLED", false),
+		OOBReplyBudget:               envInt("MESHSAT_OOB_REPLY_BUDGET", 12),
+		OOBHostSocket:                envStr("MESHSAT_OOB_HOST_SOCKET", "/run/meshsat-oob/agent.sock"),
+		DeviceHealth:                 envBool("MESHSAT_DEVICE_HEALTH", true),
+		DeviceHealthTickSec:          envInt("MESHSAT_DEVICE_HEALTH_TICK_SEC", 30),
+		DeviceHealthMisses:           envInt("MESHSAT_DEVICE_HEALTH_MISSES", 3),
+		DeviceHealthHardBudget:       envInt("MESHSAT_DEVICE_HEALTH_HARD_BUDGET", 3),
+		DeviceHealthHardGapSec:       envInt("MESHSAT_DEVICE_HEALTH_HARD_GAP_SEC", 45),
+		DeviceHealthCellularMaxLevel: envInt("MESHSAT_DEVICE_HEALTH_CELLULAR_MAX_LEVEL", 2),
+		MeshTimeSyncRemote:           envBool("MESHSAT_MESH_TIMESYNC_REMOTE", false),
+		MeshConfigTimeoutSec:         envInt("MESHSAT_MESH_CONFIG_TIMEOUT_SEC", 60),
+		LlamaZipAddr:                 envStr("MESHSAT_LLAMAZIP_ADDR", ""),
+		LlamaZipTimeoutSec:           envInt("MESHSAT_LLAMAZIP_TIMEOUT", 30),
+		MSVQSCAddr:                   envStr("MESHSAT_MSVQSC_ADDR", ""),
+		MSVQSCTimeoutSec:             envInt("MESHSAT_MSVQSC_TIMEOUT", 30),
+		MSVQSCCodebook:               envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
+		TCPListenAddr:                envStr("MESHSAT_TCP_LISTEN", ""),
+		TCPConnectAddr:               envStr("MESHSAT_TCP_CONNECT", ""),
+		AX25KISSAddr:                 envStr("MESHSAT_AX25_KISS_ADDR", ""),
+		AX25Callsign:                 envStr("MESHSAT_AX25_CALLSIGN", ""),
+		SMSReticulumPeer:             envStr("MESHSAT_SMS_RETICULUM_PEER", ""),
+		BLEAdapter:                   envStr("MESHSAT_BLE_ADAPTER", ""),
+		BLEDeviceName:                envStr("MESHSAT_BLE_DEVICE_NAME", "MeshSat-RNS"),
+		MQTTReticulumBroker:          envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
+		MQTTReticulumTopic:           envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
+		AnnounceIntervalSec:          envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
 		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),

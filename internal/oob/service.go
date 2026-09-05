@@ -74,9 +74,13 @@ type Deps struct {
 	Actions map[string]map[byte]Action
 	// TriggerScan asks the device supervisor for an immediate USB scan.
 	TriggerScan func()
-	Status      StatusSources
-	LocalAlias  string // default issuer alias for bundles
-	Now         func() time.Time
+	// OnReset is told about every RESET that ran on a device target, so the
+	// device health watchdog gives the device its grace instead of counting
+	// the outage as misses and books a level 3 against its budget. [MESHSAT-817]
+	OnReset    func(target string, level byte)
+	Status     StatusSources
+	LocalAlias string // default issuer alias for bundles
+	Now        func() time.Time
 }
 
 // Service is the OOB management frame service.

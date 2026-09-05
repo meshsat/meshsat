@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -80,20 +81,194 @@ type DirectMeshTransport struct {
 	// portReadyCh is signalled by SetPort to wake the processor's retry loop
 	// immediately instead of waiting for exponential backoff. [MESHSAT-444]
 	portReadyCh chan struct{}
+
+	// Device health inputs [MESHSAT-817]. configReal is true only after the
+	// radio itself sent config_complete; a handshake that timed out with a
+	// partial NodeDB leaves it false. handshakeFails counts consecutive
+	// handshakes with no reply at all, connectFails consecutive failed
+	// opens. lastFrameAt is the last frame of any kind read from the
+	// radio, lastLocalReply the last admin reply addressed from the local
+	// node (the probe's get_device_metadata response).
+	configReal     bool
+	handshakeFails int
+	connectedAt    time.Time
+	connectFails   atomic.Int32
+	lastConnectErr string
+	lastFrameAt    atomic.Int64 // unix nanos
+	lastLocalReply atomic.Int64 // unix nanos
+	// disconnectedCh carries a disconnect signal out of band of the event
+	// channel, which can be full of packets behind slow DB writes. [MESHSAT-811]
+	disconnectedCh chan struct{}
+	// timeSyncRemote re-enables the admin set-time to every remote node
+	// after a handshake (42 LoRa transmissions on a 43-node NodeDB, the
+	// suspected XIAO wedge trigger); off by default. [MESHSAT-783]
+	timeSyncRemote bool
 }
+
+// ErrMeshHandshakeSilent is returned by a connect whose radio never answered
+// the want_config_id handshake: the tty exists and opened, the radio is
+// silent. Before this the transport reported such a radio as connected
+// with an empty NodeDB indefinitely (parallax, MESHSAT-781). [MESHSAT-817]
+var ErrMeshHandshakeSilent = errors.New("meshtastic: radio silent during config handshake")
 
 // NewDirectMeshTransport creates a new direct serial Meshtastic transport.
 // Pass "auto" or "" for port to use auto-detection.
 func NewDirectMeshTransport(port string) *DirectMeshTransport {
 	return &DirectMeshTransport{
-		port:          port,
-		nodes:         make(map[uint32]*MeshNode),
-		messages:      make([]MeshMessage, 0, meshMsgBufSize),
-		configData:    make(map[string]interface{}),
-		neighbors:     make(map[uint32]*NeighborInfo),
-		eventSubs:     make(map[uint64]chan MeshEvent),
-		portReadyCh:   make(chan struct{}, 1),
-		configTimeout: defaultMeshConfigTimeout,
+		port:           port,
+		nodes:          make(map[uint32]*MeshNode),
+		messages:       make([]MeshMessage, 0, meshMsgBufSize),
+		configData:     make(map[string]interface{}),
+		neighbors:      make(map[uint32]*NeighborInfo),
+		eventSubs:      make(map[uint64]chan MeshEvent),
+		portReadyCh:    make(chan struct{}, 1),
+		disconnectedCh: make(chan struct{}, 1),
+		configTimeout:  defaultMeshConfigTimeout,
+	}
+}
+
+// SetTimeSyncRemote enables the post-handshake admin set-time to every
+// remote node (default off, MESHSAT_MESH_TIMESYNC_REMOTE). [MESHSAT-783]
+func (t *DirectMeshTransport) SetTimeSyncRemote(on bool) {
+	t.mu.Lock()
+	t.timeSyncRemote = on
+	t.mu.Unlock()
+}
+
+// DisconnectedCh is signalled whenever the transport loses its serial
+// session, independently of the buffered event channel. [MESHSAT-811]
+func (t *DirectMeshTransport) DisconnectedCh() <-chan struct{} {
+	return t.disconnectedCh
+}
+
+func (t *DirectMeshTransport) signalDisconnected() {
+	select {
+	case t.disconnectedCh <- struct{}{}:
+	default:
+	}
+}
+
+// ConfigReal reports whether the radio itself completed the config
+// handshake of the current session (false after a partial-NodeDB timeout).
+func (t *DirectMeshTransport) ConfigReal() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.configReal
+}
+
+// HandshakeFails is the number of consecutive handshakes with no reply.
+func (t *DirectMeshTransport) HandshakeFails() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.handshakeFails
+}
+
+// ConnectFails is the number of consecutive failed serial opens, with the
+// last error text.
+func (t *DirectMeshTransport) ConnectFails() (int, string) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return int(t.connectFails.Load()), t.lastConnectErr
+}
+
+// ConnectedAt is when the current serial session opened.
+func (t *DirectMeshTransport) ConnectedAt() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.connectedAt
+}
+
+// LastFrameAt is when the last frame of any kind was read from the radio.
+func (t *DirectMeshTransport) LastFrameAt() time.Time {
+	n := t.lastFrameAt.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// LastLocalReply is when the local radio last answered an admin request.
+func (t *DirectMeshTransport) LastLocalReply() time.Time {
+	n := t.lastLocalReply.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// ProbeLocal asks the local radio for its device metadata and waits up to
+// timeout for the reply. The request is addressed to the radio's own node
+// number, so the firmware answers over the serial link without a LoRa
+// transmission; a radio with no neighbours still answers. [MESHSAT-817]
+func (t *DirectMeshTransport) ProbeLocal(ctx context.Context, timeout time.Duration) error {
+	t.mu.RLock()
+	connected := t.connected && t.file != nil
+	my := t.myNodeNum
+	t.mu.RUnlock()
+	if !connected {
+		return errors.New("not connected")
+	}
+	if my == 0 {
+		return errors.New("handshake incomplete: no node number")
+	}
+	before := t.lastLocalReply.Load()
+	frame := buildAdminGetDeviceMetadata(my, my)
+	t.mu.Lock()
+	if t.file == nil {
+		t.mu.Unlock()
+		return errors.New("not connected")
+	}
+	err := sendFrame(t.file, frame)
+	t.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("send probe: %w", err)
+	}
+	deadline := time.After(timeout)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("no reply from the radio within %s", timeout)
+		case <-tick.C:
+			if t.lastLocalReply.Load() > before {
+				return nil
+			}
+		}
+	}
+}
+
+// RebootViaLines drives the CDC DTR/RTS lines through a full cycle, which
+// reboots an ESP32-S3 radio whose firmware stopped talking to the serial
+// API, then reconnects with bounded retries while the device re-enumerates.
+// It is the device health ladder's second soft rung. [MESHSAT-817]
+func (t *DirectMeshTransport) RebootViaLines(ctx context.Context) error {
+	t.Close()
+	t.mu.RLock()
+	port := t.port
+	t.mu.RUnlock()
+	if port == "" || port == "auto" || port == "supervisor" {
+		return errors.New("no serial port assigned")
+	}
+	log.Warn().Str("port", port).Msg("meshtastic: pulsing DTR/RTS to reboot the radio")
+	if err := pulseSerialLines(port, meshBaud); err != nil {
+		return fmt.Errorf("line pulse: %w", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		t.mu.Lock()
+		err := t.connectLocked(ctx)
+		t.mu.Unlock()
+		if err == nil || errors.Is(err, ErrMeshHandshakeSilent) || ctx.Err() != nil || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 }
 
@@ -210,8 +385,12 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 
 	sp, err := openSerial(portPath, meshBaud)
 	if err != nil {
+		t.connectFails.Add(1)
+		t.lastConnectErr = err.Error()
 		return err
 	}
+	t.connectFails.Store(0)
+	t.lastConnectErr = ""
 
 	// Set read timeout for frame reader loop
 	sp.SetReadTimeout(meshReadTimeout)
@@ -219,6 +398,8 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	t.file = sp
 	t.reader = &meshFrameReader{port: sp}
 	t.port = portPath
+	t.connectedAt = time.Now()
+	t.configReal = false
 	log.Info().Str("port", portPath).Msg("meshtastic serial opened")
 
 	// Wake device
@@ -260,8 +441,38 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	for {
 		select {
 		case <-deadline:
-			log.Warn().Msg("meshtastic config handshake timed out, continuing with partial NodeDB")
 			t.mu.Lock()
+			if t.myNodeNum == 0 {
+				// The radio never even sent MyNodeInfo: enumerated but
+				// silent (the parallax XIAO wedge, MESHSAT-781). Reporting
+				// this as connected hid it for days; fail the connect so the
+				// processor retries and the device health ladder escalates.
+				t.handshakeFails++
+				fails := t.handshakeFails
+				cancel := t.cancelFunc
+				done := t.readerDone
+				t.connected = false
+				t.configDone = false
+				t.mu.Unlock()
+				if cancel != nil {
+					cancel()
+				}
+				if done != nil {
+					select {
+					case <-done:
+					case <-time.After(2 * time.Second):
+					}
+				}
+				t.mu.Lock()
+				if t.file != nil {
+					t.file.Close()
+					t.file = nil
+				}
+				t.mu.Unlock()
+				log.Warn().Int("consecutive", fails).Msg("meshtastic config handshake got no reply from the radio")
+				return ErrMeshHandshakeSilent
+			}
+			log.Warn().Msg("meshtastic config handshake timed out, continuing with partial NodeDB")
 			t.configDone = true
 			t.mu.Unlock()
 			return nil
@@ -338,9 +549,11 @@ func (t *DirectMeshTransport) readerLoop(ctx context.Context) {
 				Message: "Serial connection lost",
 				Time:    time.Now().UTC().Format(time.RFC3339),
 			})
+			t.signalDisconnected()
 			return
 		}
 
+		t.lastFrameAt.Store(time.Now().UnixNano())
 		t.handleFromRadio(payload)
 	}
 }
@@ -390,6 +603,7 @@ func (t *DirectMeshTransport) watchdogTriggered() bool {
 		Message: fmt.Sprintf("Serial watchdog: no external packets for %d min, reconnecting", t.watchdogMin),
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
+	t.signalDisconnected()
 	return true
 }
 
@@ -456,6 +670,8 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 		t.mu.Lock()
 		if fr.ConfigCompleteID == t.configID {
 			t.configDone = true
+			t.configReal = true
+			t.handshakeFails = 0
 			t.nodesMu.RLock()
 			n := len(t.nodes)
 			t.nodesMu.RUnlock()
@@ -568,6 +784,15 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 		t.lastExternalPkt.Store(time.Now().Unix())
 	}
 
+	// Admin replies from the local radio (the device health probe's
+	// get_device_metadata response) are liveness, not traffic: stamp and
+	// stop before they reach the NodeDB, the ring buffer and the message
+	// event that the processor would persist. [MESHSAT-817]
+	if myNum != 0 && pkt.From == myNum && pkt.Decoded != nil && pkt.Decoded.PortNum == PortNumAdminApp {
+		t.handleLocalAdmin(pkt)
+		return
+	}
+
 	// Update node DB from any packet — create node if unknown
 	t.nodesMu.Lock()
 	node, ok := t.nodes[pkt.From]
@@ -651,6 +876,21 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 		Data:    dataJSON,
 		Time:    msg.Timestamp,
 	})
+}
+
+// handleLocalAdmin records an admin reply from the local radio. [MESHSAT-817]
+func (t *DirectMeshTransport) handleLocalAdmin(pkt *ProtoMeshPacket) {
+	t.lastLocalReply.Store(time.Now().UnixNano())
+	if meta := parseAdminDeviceMetadata(pkt.Decoded.Payload); meta != nil {
+		if meta.FirmwareVersion != "" {
+			t.mu.Lock()
+			t.firmwareVer = meta.FirmwareVersion
+			t.mu.Unlock()
+		}
+		log.Debug().Str("firmware", meta.FirmwareVersion).Msg("meshtastic: local device metadata reply")
+		return
+	}
+	log.Debug().Msg("meshtastic: local admin reply")
 }
 
 func (t *DirectMeshTransport) handlePositionPacket(pkt *ProtoMeshPacket) {
@@ -803,6 +1043,18 @@ func (t *DirectMeshTransport) sendTimeSync() {
 		return
 	}
 	log.Info().Uint32("unix_sec", now).Msg("meshtastic time synced to local radio")
+
+	// Remote nodes take their time from the mesh (and reject remote admin
+	// without our key on firmware 2.5+ anyway). Pushing set-time to every
+	// NodeDB entry meant 42 LoRa transmissions in 21 s on parallax right
+	// after each handshake, the suspected trigger of the XIAO wedge, so it
+	// is off unless explicitly enabled. [MESHSAT-783]
+	t.mu.RLock()
+	remote := t.timeSyncRemote
+	t.mu.RUnlock()
+	if !remote {
+		return
+	}
 
 	// Sync all known remote nodes (via LoRa relay)
 	t.nodesMu.RLock()

@@ -1527,6 +1527,26 @@ func parseDeviceMetadata(data []byte) *ProtoDeviceMetadata {
 	if err := proto.Unmarshal(data, dm); err != nil {
 		return &ProtoDeviceMetadata{}
 	}
+	return convertDeviceMetadata(dm)
+}
+
+// parseAdminDeviceMetadata returns the metadata carried by an AdminMessage
+// get_device_metadata_response, or nil for anything else. The device health
+// probe sends the request to the local node and waits for this reply.
+// [MESHSAT-817]
+func parseAdminDeviceMetadata(payload []byte) *ProtoDeviceMetadata {
+	admin := &pb.AdminMessage{}
+	if err := proto.Unmarshal(payload, admin); err != nil {
+		return nil
+	}
+	dm := admin.GetGetDeviceMetadataResponse()
+	if dm == nil {
+		return nil
+	}
+	return convertDeviceMetadata(dm)
+}
+
+func convertDeviceMetadata(dm *pb.DeviceMetadata) *ProtoDeviceMetadata {
 	return &ProtoDeviceMetadata{
 		FirmwareVersion: dm.GetFirmwareVersion(),
 		DeviceStateVer:  dm.GetDeviceStateVersion(),
