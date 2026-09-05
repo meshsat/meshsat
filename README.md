@@ -328,6 +328,7 @@ can override them afterwards.
 | `MESHSAT_ANNOUNCE_INTERVAL` | `300` | Announce broadcast interval in seconds |
 | `MESHSAT_AX25_KISS_ADDR` | *(empty)* | KISS TNC address. Bundled Direwolf binds `localhost:8001` |
 | `MESHSAT_AX25_CALLSIGN` | *(empty)* | AX.25 source callsign, e.g. `MESHSAT-1` |
+| `MESHSAT_AIOC_CAPTURE` | `94%` | AIOC capture gain applied at every Direwolf start (mixer scale: 94 % = -5.8 dB, 90 % = -9.6 dB); lower it if Direwolf reports the audio input level as too high |
 | `MESHSAT_MQTT_RETICULUM_BROKER` | *(empty)* | MQTT broker for Reticulum packets |
 | `MESHSAT_MQTT_RETICULUM_PREFIX` | `reticulum/meshsat` | MQTT topic prefix |
 
