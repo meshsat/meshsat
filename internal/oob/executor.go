@@ -212,11 +212,33 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 	} else {
 		return Result{Code: RCUnavailable, Body: name}
 	}
+	body := name + " ok"
+	if level == LevelHard && t.Kind == KindInterface && t.IfaceID != "" && s.d.Gateways != nil {
+		iface := t.IfaceID
+		s.after(hardResetRestartDelay, func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			if err := s.restartGateway(rctx, iface); err != nil {
+				s.logf("oob: restart of %s after hard reset failed: %v", iface, err)
+			}
+		})
+		body += fmt.Sprintf(" rs%ds", int(hardResetRestartDelay/time.Second))
+	}
 	if level == LevelHard && s.d.TriggerScan != nil {
 		s.d.TriggerScan()
 	}
-	return Result{Code: RCOK, Body: name + " ok", FollowUp: t.FollowUp}
+	return Result{Code: RCOK, Body: body, FollowUp: t.FollowUp}
 }
+
+// hardResetRestartDelay is how long after a level-3 reset of an interface the
+// executor restarts that interface's gateway itself. A USB power cycle holds
+// VBUS off for 3 s and the device needs a few more to enumerate; when it comes
+// back under the same tty name the device supervisor sees no change, and the
+// transport's own "disconnected" event can sit behind a backlog of queued
+// packets (parallax, 5 Sep 2026: the reopen came 4 min 43 s after the cut), so
+// the restart is scheduled here rather than hoped for. Tests shorten it.
+// [MESHSAT-786]
+var hardResetRestartDelay = 10 * time.Second
 
 func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result {
 	code, state, err := ParseBearerArgs(args)

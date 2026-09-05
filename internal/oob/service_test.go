@@ -337,6 +337,32 @@ func TestExecute_ResetAndBearer(t *testing.T) {
 			t.Fatalf("%s %q called=%v", res.Code, res.Body, called)
 		}
 	})
+	t.Run("reset_hard_interface_restarts_gateway_after_delay", func(t *testing.T) {
+		saved := hardResetRestartDelay
+		hardResetRestartDelay = 20 * time.Millisecond
+		defer func() { hardResetRestartDelay = saved }()
+		h.gws.mu.Lock()
+		h.gws.started, h.gws.stopped = nil, nil
+		h.gws.mu.Unlock()
+		h.svc.d.Actions["mesh"] = map[byte]Action{LevelHard: func(ctx context.Context) error { return nil }}
+		res := h.svc.Execute(ctx, origin, CmdReset, EncodeResetArgs(TargetMesh, LevelHard))
+		if res.Code != RCOK || !strings.Contains(res.Body, " rs0s") {
+			t.Fatalf("%s %q", res.Code, res.Body)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			h.gws.mu.Lock()
+			done := len(h.gws.started) == 1 && h.gws.started[0] == "mesh_0" && len(h.gws.stopped) == 1 && h.gws.stopped[0] == "mesh_0"
+			h.gws.mu.Unlock()
+			if done {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("gateway not restarted after hard reset: stopped=%v started=%v", h.gws.stopped, h.gws.started)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
 	t.Run("reset_unsupported_level", func(t *testing.T) {
 		res := h.svc.Execute(ctx, origin, CmdReset, EncodeResetArgs(TargetGPS, LevelDevice))
 		if res.Code != RCUnavailable {
