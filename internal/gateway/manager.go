@@ -717,6 +717,15 @@ func (m *Manager) StopGatewayInstance(instanceID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("gateway %s is not running", instanceID)
 	}
+	if gw == nil {
+		// StartGatewayInstance parks a nil sentinel here while the instance
+		// is being created and started; a concurrent stop must leave that
+		// start alone. 5 Sep 2026: the restart scheduled after a USB power
+		// cycle raced the supervisor's own restart of zigbee_0 and
+		// dereferenced the sentinel, taking the bridge down. [MESHSAT-786]
+		m.mu.Unlock()
+		return fmt.Errorf("gateway %s is starting", instanceID)
+	}
 	delete(m.running, instanceID)
 	m.unsyncIfaceMap(gw)
 	m.mu.Unlock()

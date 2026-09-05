@@ -218,7 +218,7 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 		s.after(hardResetRestartDelay, func() {
 			rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
-			if err := s.restartGateway(rctx, iface); err != nil {
+			if err := s.restartGateway(rctx, iface); err != nil && !restartAlreadyUnderway(err) {
 				s.logf("oob: restart of %s after hard reset failed: %v", iface, err)
 			}
 		})
@@ -239,6 +239,15 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 // the restart is scheduled here rather than hoped for. Tests shorten it.
 // [MESHSAT-786]
 var hardResetRestartDelay = 10 * time.Second
+
+// restartAlreadyUnderway recognises the gateway manager telling us the
+// instance is being started or already runs again: after a USB power cycle
+// the device supervisor restarts an instance itself when the device returns
+// under a new tty name, and our scheduled restart must then stand down.
+func restartAlreadyUnderway(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "is starting") || strings.Contains(msg, "already running")
+}
 
 func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result {
 	code, state, err := ParseBearerArgs(args)
