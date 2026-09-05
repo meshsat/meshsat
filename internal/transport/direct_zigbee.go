@@ -198,6 +198,18 @@ type DirectZigBeeTransport struct {
 	// simpler and correct signal — readLoop ALWAYS advances when healthy,
 	// even when reading 0 bytes. [MESHSAT-509]
 	readLoopIterCount atomic.Uint64
+
+	// lastFrameRx is when readLoop last received bytes from the
+	// coordinator; the device health probe treats a recent frame as
+	// liveness and only pings when the link has been quiet. [MESHSAT-817]
+	lastFrameRx atomic.Int64
+
+	// reinitWithUSB makes the next re-init attempt USB-reset the dongle
+	// first. A plain close-reopen-init is tried first because the USB
+	// reset renames the tty (ttyUSB0 to ttyUSB1) and drags the device
+	// supervisor and gateway manager through a stop/start cycle that the
+	// Reticulum interface did not survive (MESHSAT-815). [MESHSAT-817]
+	reinitWithUSB bool
 }
 
 // stuckReadThreshold is how long readLoop can sit in read(2) without
@@ -529,8 +541,127 @@ func (z *DirectZigBeeTransport) Stop() {
 	}
 	if z.port != nil {
 		z.port.Close()
+		z.port = nil
 	}
 	log.Info().Msg("zigbee: transport stopped")
+}
+
+// escalateReinit arms the USB reset for the next re-init attempt and
+// re-queues the attempt. Returns false when the USB reset was already
+// tried, so the caller backs off instead of looping.
+func (z *DirectZigBeeTransport) escalateReinit() bool {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if z.reinitWithUSB {
+		return false
+	}
+	z.reinitWithUSB = true
+	select {
+	case z.reinitPending <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// LastFrameAt is when the coordinator last sent bytes. [MESHSAT-817]
+func (z *DirectZigBeeTransport) LastFrameAt() time.Time {
+	n := z.lastFrameRx.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// lockSerial takes serialMu with a bound: readLoop holds it while blocked
+// in read(2), and a wedged cp210x never returns, so a plain Lock could
+// hang the caller for good. On timeout the pending lock is released by a
+// helper goroutine once it is finally granted.
+func (z *DirectZigBeeTransport) lockSerial(ctx context.Context, max time.Duration) error {
+	got := make(chan struct{})
+	go func() {
+		z.serialMu.Lock()
+		close(got)
+	}()
+	select {
+	case <-got:
+		return nil
+	case <-ctx.Done():
+		go func() { <-got; z.serialMu.Unlock() }()
+		return ctx.Err()
+	case <-time.After(max):
+		go func() { <-got; z.serialMu.Unlock() }()
+		return fmt.Errorf("serial lock busy for %s (read loop stuck?)", max)
+	}
+}
+
+// Ping sends SYS_PING and waits 2 s for the reply; the device health
+// probe's active check when the link has been quiet. A dongle sitting in
+// its bootloader is enumerated but never answers. [MESHSAT-817]
+func (z *DirectZigBeeTransport) Ping(ctx context.Context) error {
+	if !z.IsRunning() {
+		return fmt.Errorf("zigbee transport not running")
+	}
+	if err := z.lockSerial(ctx, 3*time.Second); err != nil {
+		return err
+	}
+	defer z.serialMu.Unlock()
+	if err := z.sendFrame(BuildSysPing()); err != nil {
+		return fmt.Errorf("ping send: %w", err)
+	}
+	if _, err := z.readCmdFrameTimeout(CmdSysPingRsp, 2*time.Second); err != nil {
+		return fmt.Errorf("ping response: %w", err)
+	}
+	z.lastFrameRx.Store(time.Now().UnixNano())
+	return nil
+}
+
+// SoftReinit closes and reopens the same tty and reruns the coordinator
+// init without a USB reset, so the tty keeps its name and nothing above
+// the transport has to restart. Level 1 of the device health ladder.
+// [MESHSAT-817]
+func (z *DirectZigBeeTransport) SoftReinit(ctx context.Context) error {
+	if !z.IsRunning() {
+		return fmt.Errorf("zigbee transport not running")
+	}
+	// Close the fd before taking serialMu: a readLoop stuck in read(2)
+	// holds the lock until the close makes read return.
+	z.mu.Lock()
+	old := z.port
+	z.port = nil
+	z.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	if err := z.lockSerial(ctx, 5*time.Second); err != nil {
+		return err
+	}
+	defer z.serialMu.Unlock()
+	if err := z.reopenPort(); err != nil {
+		return fmt.Errorf("reopen: %w", err)
+	}
+	if err := z.initCoordinator(ctx); err != nil {
+		return fmt.Errorf("init: %w", err)
+	}
+	log.Info().Str("state", ZNPDevStateName(z.CoordState())).Msg("zigbee: soft re-init completed")
+	return nil
+}
+
+// SysReset asks the coordinator for a Z-Stack soft reset (SYS_RESET_REQ);
+// the SYS_RESET_IND it answers with drives reinitLoop. Level 2 of the
+// device health ladder (MESHSAT-764 wanted this rung). [MESHSAT-817]
+func (z *DirectZigBeeTransport) SysReset(ctx context.Context) error {
+	if !z.IsRunning() {
+		return fmt.Errorf("zigbee transport not running")
+	}
+	if err := z.lockSerial(ctx, 3*time.Second); err != nil {
+		return err
+	}
+	defer z.serialMu.Unlock()
+	if err := z.sendFrame(BuildSysResetReq(ZNPResetTypeSoft)); err != nil {
+		return fmt.Errorf("sys reset send: %w", err)
+	}
+	log.Warn().Msg("zigbee: SYS_RESET_REQ sent, coordinator will re-init")
+	return nil
 }
 
 // IsRunning returns true if the transport is active.
@@ -1342,6 +1473,7 @@ func (z *DirectZigBeeTransport) readLoop(ctx context.Context) {
 		// truly-stuck Read (cp210x wedge) keeps us in syscall.
 		z.readLoopIterCount.Add(1)
 		if n > 0 {
+			z.lastFrameRx.Store(time.Now().UnixNano())
 			accumulated = append(accumulated, buf[:n]...)
 			z.processAccumulated(&accumulated)
 		}
@@ -1489,7 +1621,14 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 		// blocks waiting for the first byte that never comes. A USB-level
 		// reset clears the driver state and forces re-enumeration. The IMT
 		// transport uses the same pattern to recover the FT234XD on the 9704.
-		if portName != "" {
+		// Tried only on the second attempt: the reset renames the tty and
+		// costs a gateway stop/start; a plain reopen usually suffices after
+		// a firmware reset. [MESHSAT-817]
+		z.mu.Lock()
+		withUSB := z.reinitWithUSB
+		z.mu.Unlock()
+		if portName != "" && withUSB {
+			log.Warn().Str("port", portName).Msg("zigbee: re-init with USB reset")
 			usbResetSerialDevice("zigbee", portName)
 			// Give the kernel a beat to re-enumerate the device before we
 			// try to open it again. cp210x typically reappears within ~1s.
@@ -1506,6 +1645,9 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 		if err := z.reopenPort(); err != nil {
 			log.Error().Err(err).Msg("zigbee: reopen port before re-init failed")
 			z.serialMu.Unlock()
+			if z.escalateReinit() {
+				continue // retry at once with a USB reset
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -1518,6 +1660,10 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 		z.serialMu.Unlock()
 
 		if err != nil {
+			if z.escalateReinit() {
+				log.Warn().Err(err).Msg("zigbee: re-init failed, retrying with a USB reset")
+				continue
+			}
 			log.Error().Err(err).Msg("zigbee: re-init failed, will retry on next reset")
 			// Back off a few seconds before allowing another re-init
 			// attempt — prevents busy-loop if something is wrong.
@@ -1528,6 +1674,9 @@ func (z *DirectZigBeeTransport) reinitLoop(ctx context.Context) {
 			}
 			continue
 		}
+		z.mu.Lock()
+		z.reinitWithUSB = false
+		z.mu.Unlock()
 		log.Info().Str("state", ZNPDevStateName(z.CoordState())).
 			Msg("zigbee: re-init completed")
 	}

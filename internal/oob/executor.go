@@ -218,14 +218,20 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 	}
 	if level == LevelHard && t.Kind == KindInterface && t.IfaceID != "" && s.d.Gateways != nil {
 		iface := t.IfaceID
-		s.after(hardResetRestartDelay, func() {
+		delay := hardResetRestartDelay
+		if t.Name == "cellular" {
+			// The T-Call needs its port left alone for a minute after the
+			// cut or the modem ends up OFF (MESHSAT-812). [MESHSAT-817]
+			delay = cellularHardResetRestartDelay
+		}
+		s.after(delay, func() {
 			rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			if err := s.restartGateway(rctx, iface); err != nil && !restartAlreadyUnderway(err) {
 				s.logf("oob: restart of %s after hard reset failed: %v", iface, err)
 			}
 		})
-		body += fmt.Sprintf(" rs%ds", int(hardResetRestartDelay/time.Second))
+		body += fmt.Sprintf(" rs%ds", int(delay/time.Second))
 	}
 	if level == LevelHard && s.d.TriggerScan != nil {
 		s.d.TriggerScan()
@@ -242,6 +248,11 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 // the restart is scheduled here rather than hoped for. Tests shorten it.
 // [MESHSAT-786]
 var hardResetRestartDelay = 10 * time.Second
+
+// cellularHardResetRestartDelay is the post-cut restart delay for the
+// cellular target: longer than the 60 s quiet window the T-Call needs
+// after a VBUS cut (MESHSAT-812). [MESHSAT-817]
+var cellularHardResetRestartDelay = 75 * time.Second
 
 // restartAlreadyUnderway recognises the gateway manager telling us the
 // instance is being started or already runs again: after a USB power cycle

@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -120,6 +122,13 @@ type DirectCellTransport struct {
 	sigDone chan struct{} // closed when signal poller exits
 	running bool
 
+	// Device health inputs [MESHSAT-817]: lastRx is when the modem last
+	// sent bytes; holdUntil keeps every open off the port after a VBUS
+	// cut (the T-Call's ESP32 pulses PWRKEY on boot and again on any DTR
+	// reset from an open, which turns the modem back OFF, MESHSAT-812).
+	lastRx    atomic.Int64
+	holdUntil atomic.Int64
+
 	// SSE subscribers
 	eventMu   sync.RWMutex
 	eventSubs map[uint64]chan CellEvent
@@ -214,6 +223,9 @@ func (t *DirectCellTransport) Subscribe(ctx context.Context) (<-chan CellEvent, 
 }
 
 func (t *DirectCellTransport) connectLocked(_ context.Context) error {
+	if rem := t.HeldFor(); rem > 0 {
+		return fmt.Errorf("%w (%s left)", ErrCellHeld, rem.Truncate(time.Second))
+	}
 	portPath := t.port
 	if portPath == "supervisor" {
 		return fmt.Errorf("waiting for device supervisor to assign port")
@@ -646,6 +658,9 @@ func (t *DirectCellTransport) ioLoop() {
 		}
 		t.file.SetReadTimeout(200 * time.Millisecond)
 		n, err := t.file.Read(buf)
+		if n > 0 {
+			t.lastRx.Store(time.Now().UnixNano())
+		}
 
 		if n == 0 && err == nil {
 			continue // read timeout, no data
@@ -710,6 +725,9 @@ func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 
 	// Standard AT command
 	resp, err := sendAT(t.file, cmd.cmd, cmd.timeout)
+	if resp != "" {
+		t.lastRx.Store(time.Now().UnixNano())
+	}
 
 	// Extract URCs embedded in the AT response — +CMTI notifications
 	// can arrive during any AT command's read window. [MESHSAT-447]
@@ -1539,6 +1557,73 @@ func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 func (t *DirectCellTransport) Reconnect(_ context.Context) error {
 	t.forceReconnect()
 	return nil
+}
+
+// ErrCellHeld is returned by a connect attempted inside the quiet window
+// after a VBUS cut. [MESHSAT-812]
+var ErrCellHeld = errors.New("cellular: port held quiet after a power cycle")
+
+// ErrCellProbeBusy means the probe could not get a turn on the command
+// channel while bytes were still flowing (an SMS send holds the I/O loop
+// for up to two minutes); not a miss.
+var ErrCellProbeBusy = errors.New("cellular: modem busy, probe deferred")
+
+// Hold refuses every serial open for d. The T-Call's ESP32 boots after a
+// VBUS cut and pulses PWRKEY once, turning the modem on; any CDC open in
+// the following minute resets the ESP32 through DTR and the second pulse
+// turns the modem off again (5 Sep 2026: five cuts, only the quiet recipe
+// brought the modem back). [MESHSAT-812]
+func (t *DirectCellTransport) Hold(d time.Duration) {
+	t.holdUntil.Store(time.Now().Add(d).UnixNano())
+	log.Warn().Dur("hold", d).Msg("cellular: port held quiet")
+}
+
+// HeldFor reports how much of the quiet window is left (0 when none).
+func (t *DirectCellTransport) HeldFor() time.Duration {
+	until := t.holdUntil.Load()
+	if until == 0 {
+		return 0
+	}
+	rem := time.Until(time.Unix(0, until))
+	if rem < 0 {
+		return 0
+	}
+	return rem
+}
+
+// LastRxAt is when the modem last sent bytes. [MESHSAT-817]
+func (t *DirectCellTransport) LastRxAt() time.Time {
+	n := t.lastRx.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// Probe checks that the modem answers: a recent byte from it counts, else
+// a plain AT must return OK. ErrCellProbeBusy means a long command holds
+// the I/O loop while bytes still flow. [MESHSAT-817]
+func (t *DirectCellTransport) Probe(_ context.Context) error {
+	if !t.IsConnected() {
+		if rem := t.HeldFor(); rem > 0 {
+			return fmt.Errorf("%w (%s left)", ErrCellHeld, rem.Truncate(time.Second))
+		}
+		return errors.New("not connected")
+	}
+	if time.Since(t.LastRxAt()) < 30*time.Second {
+		return nil
+	}
+	resp, err := t.execAT("AT", 2*time.Second)
+	if err == nil && strings.Contains(resp, "OK") {
+		return nil
+	}
+	if time.Since(t.LastRxAt()) < 150*time.Second {
+		return ErrCellProbeBusy
+	}
+	if err != nil {
+		return fmt.Errorf("AT: %w", err)
+	}
+	return fmt.Errorf("AT answered %q", strings.TrimSpace(resp))
 }
 
 // DeviceReset asks the modem for a full functionality reset (AT+CFUN=1,1),
