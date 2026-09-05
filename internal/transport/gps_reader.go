@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -57,6 +58,44 @@ type GPSReader struct {
 
 	mu     sync.RWMutex
 	status GPSStatus
+
+	// Device health inputs [MESHSAT-817]: the port in use, when the last
+	// NMEA sentence parsed (fix or not; u-blox streams about 1 Hz), and
+	// the cancel of the current read loop for Restart.
+	currentPort  string
+	lastSentence atomic.Int64
+	loopCancel   context.CancelFunc
+}
+
+// LastSentenceAt is when the receiver last produced a parseable NMEA
+// sentence (with or without a fix).
+func (g *GPSReader) LastSentenceAt() time.Time {
+	n := g.lastSentence.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// CurrentPort is the serial port the reader has open ("" when none).
+func (g *GPSReader) CurrentPort() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.currentPort
+}
+
+// Restart closes the current read loop; Start reopens the port after its
+// usual delay. Level 1 of the device health ladder. [MESHSAT-817]
+func (g *GPSReader) Restart(_ context.Context) error {
+	g.mu.Lock()
+	cancel := g.loopCancel
+	g.mu.Unlock()
+	if cancel == nil {
+		return fmt.Errorf("gps: no read loop running")
+	}
+	log.Warn().Msg("gps: restarting the read loop")
+	cancel()
+	return nil
 }
 
 // NewGPSReader creates a GPS reader. Pass "auto" for port to use VID:PID detection.
@@ -95,7 +134,17 @@ func (g *GPSReader) Start(ctx context.Context) {
 		}
 
 		log.Info().Str("port", port).Msg("gps: opening serial port")
-		g.readLoop(ctx, port)
+		lctx, cancel := context.WithCancel(ctx)
+		g.mu.Lock()
+		g.loopCancel = cancel
+		g.currentPort = port
+		g.mu.Unlock()
+		g.readLoop(lctx, port)
+		cancel()
+		g.mu.Lock()
+		g.loopCancel = nil
+		g.currentPort = ""
+		g.mu.Unlock()
 
 		// If readLoop returned, the port was lost — retry after delay
 		select {
@@ -187,6 +236,7 @@ func (g *GPSReader) readLoop(ctx context.Context, portPath string) {
 
 		line := scanner.Text()
 		if pos, ok := parseNMEA(line); ok {
+			g.lastSentence.Store(time.Now().UnixNano())
 			lastFix = pos
 			hasFix = true
 			g.mu.Lock()

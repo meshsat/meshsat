@@ -96,7 +96,7 @@ Levels: 1 soft (in-process reconnect of the transport or gateway), 2 device (a r
 |---|---|---|---|---|
 | 0x01 | wifi | wpa_supplicant reassociate (agent) | restart wpa_supplicant and networkd (agent) | none in v1 |
 | 0x02 | usb_wifi | restart the P2P link unit when enabled (agent) | same | port power cycle, else USB rebind (agent) |
-| 0x03 | cellular | transport reconnect | AT+CFUN=1,1 | port power cycle, else USB reset |
+| 0x03 | cellular | transport reconnect | AT+CFUN=1,1 | hold the port quiet, close, port power cycle, else USB reset; gateway restart after 75 s |
 | 0x04 | mesh | transport reconnect | Meshtastic admin reboot | port power cycle, else USB reset |
 | 0x05 | iridium (9603) | transport reconnect | none | OnOff power cycle (needs the OnOff pin) |
 | 0x06 | imt (9704) | transport reconnect | I_EN cycle | USB reset |
@@ -121,6 +121,15 @@ to its sysfs rebind for AIOC, USB WiFi and RTL-SDR, and the bridge falls back to
 ioctl for the serial devices, so a kit without the hub behaves exactly as before.
 `GET /api/oob/targets` reports `power_cycle` and `hub_port` per target; the Settings tab shows
 them.
+
+**Cellular level 3 is a modem power toggle with a one-minute blackout (MESHSAT-812, MESHSAT-817).**
+The T-Call's ESP32 boots after the VBUS cut and its firmware pulses PWRKEY once, which turns the
+A7670E on; any open of the CDC port in the following minute resets the ESP32 through DTR and the
+second pulse turns the modem off again (5 Sep 2026: four of five cuts left the modem dead). So the
+cellular hard reset holds the transport and the device supervisor off the port for 60 s
+(`Hold`, `HoldRole`), closes the transport before the cut, and the executor restarts the cellular
+gateway 75 s after the cut instead of 10 s. The device health watchdog (`GET /api/devices/health`)
+runs the same rung, automatically only once `MESHSAT_DEVICE_HEALTH_CELLULAR_MAX_LEVEL=3`.
 
 After any level 3 action the bridge triggers an immediate USB scan so the existing hot-swap recovery (device supervisor, gateway manager retry ladder) restarts the gateway within seconds. `/sys` is read-only inside the container, so in-process hard resets use the USB reset ioctl on `/dev/bus/usb`; sysfs unbind and rebind live in the host agent only. Reset targets whose follow-up flag is set send one unsolicited STATUS-NET style reply 30 seconds later on the same bearer.
 

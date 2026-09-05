@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Scanner abstracts RTL-SDR spectrum scanning for testability.
@@ -264,6 +265,9 @@ func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSi
 	// — a stdio pipe + a few-KB bytes.Buffer per scan. [MESHSAT-656]
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	// A child stuck in a USB ioctl ignores the kill for a while; do not
+	// let Output() pin the scan loop past the context. [MESHSAT-817]
+	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())

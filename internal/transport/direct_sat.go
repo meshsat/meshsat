@@ -33,6 +33,10 @@ const (
 type DirectSatTransport struct {
 	port string // "/dev/ttyUSB1" or "auto"
 
+	// lastReply is when the modem last answered an AT poll (signal poll,
+	// SBDSX); the device health probe's liveness input. [MESHSAT-817]
+	lastReply atomic.Int64
+
 	mu        sync.Mutex
 	file      serial.Port
 	connected bool
@@ -155,6 +159,15 @@ func (t *DirectSatTransport) IsConnected() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.connected
+}
+
+// LastReplyAt is when the modem last answered an AT poll. [MESHSAT-817]
+func (t *DirectSatTransport) LastReplyAt() time.Time {
+	n := t.lastReply.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 // Reconnect closes any existing connection and reconnects on the current port.
@@ -599,6 +612,7 @@ func (t *DirectSatTransport) signalPollerLoop() {
 				log.Warn().Err(err).Msg("iridium signal poll failed")
 				continue
 			}
+			t.lastReply.Store(time.Now().UnixNano())
 			t.signalMu.Lock()
 			t.lastSignal = *info
 			t.signalMu.Unlock()
@@ -841,6 +855,7 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		log.Warn().Err(err).Msg("iridium: SBDSX parse failed, skipping SBDIX (will retry next poll)")
 		return nil, fmt.Errorf("SBDSX parse failed: %w", err)
 	}
+	t.lastReply.Store(time.Now().UnixNano())
 
 	log.Info().Bool("mo", status.MOFlag).Bool("mt", status.MTFlag).
 		Bool("ra", status.RAFlag).Int("waiting", status.MTWaiting).
