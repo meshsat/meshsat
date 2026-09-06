@@ -1,5 +1,7 @@
 # DMR858M bench checklist for the V1 kits (MESHSAT-748)
 
+> **Superseded 6 Sep 2026.** The two DMR858M modules were returned unopened (owner ruling: no soldering, no capacitors) and the V1 kits go to TTC with PicoAPRS V4 units on a serial KISS TNC path (runbook section 14, MESHSAT-821). This checklist is kept as the reference for a future DMR858M bring-up on the V2 carrier (PCB-D), where the pads have a socket. Nothing in it was executed on hardware.
+
 Read-and-do for the day the two NiceRF DMR858M modules land. It replaces the UV-K5 in the APRS chain of tesseract and parallax for TTC; the AIOC v1.2 stays as sound card and PTT, Direwolf and `aprs_0` do not change. Facts come from NiceRF's V1.2 datasheet (fieldkit repo `v2/vendor/dmr858/dmr858m-v1.2.pdf`, pin table in the geometry appendix item 10), the runbook section 14, and the 5 Sep 2026 bench work on the AIOC (MESHSAT-814). One kit at a time, tesseract first.
 
 ## 0. Before touching the module
