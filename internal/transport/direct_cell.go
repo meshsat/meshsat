@@ -253,7 +253,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	}
 	openCh := make(chan openResult, 1)
 	go func() {
-		p, e := openSerial(portPath, cellBaud)
+		p, e := openSerialLinesLow(portPath, cellBaud)
 		openCh <- openResult{p, e}
 	}()
 	var sp serial.Port
@@ -268,25 +268,19 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 	}
 	log.Debug().Str("port", portPath).Msg("cellular: serial port opened")
 
-	// Immediately clear DTR to prevent ESP32 auto-reset on T-Call A7670E boards.
-	// The CH343 USB-serial chip passes DTR to ESP32's EN pin — asserting DTR
-	// resets the ESP32, which pulses PWRKEY, toggling the modem power state.
-	// Clearing DTR within the first few ms avoids the reset pulse. [MESHSAT-403]
-	sp.SetDTR(false)
-
+	// The port is opened with DTR and RTS both low and they stay equal
+	// (openSerialLinesLow). The old "clear DTR only" here left DTR low with
+	// RTS high, which on the T-Call's CH9102 auto-reset pair holds the ESP32
+	// in reset: the passthrough never came up and every first connect ended
+	// in "AT check failed", to be rescued by a later retry whose close
+	// happened to release the lines. Measured on tesseract 6 Sep 2026 10:13Z.
+	// [MESHSAT-812, MESHSAT-817]
 	t.port = portPath
 
-	// Wait for modem readiness — ESP32 passthrough boards (T-Call A7670E) may
-	// still need time if DTR was briefly asserted during the open() syscall.
-	// The factory sketch pulses PWRKEY on reset, cold-boots the modem (~15s),
-	// and runs autobaud before entering passthrough mode. Sending AT commands
-	// before passthrough is active gets zero response.
-	// Retry AT for up to 60s. The CH343 kernel driver asserts DTR on open()
-	// before userspace can clear it, triggering the ESP32 auto-reset circuit.
-	// The ATdebug firmware pulses PWRKEY on boot, toggling the modem's power
-	// state. If the modem was ON, it toggles OFF and AT never responds during
-	// this attempt. The caller retries (another open → another toggle back ON),
-	// then the modem needs ~45s to boot and initialize. 60s covers this. [MESHSAT-403]
+	// Wait for modem readiness. The open itself reboots the ESP32 (any
+	// line change does); the ATdebug sketch then resets the modem via its
+	// RESET pin, pulses PWRKEY and enters passthrough, and the modem answers
+	// AT about 20 s after the open, deterministically. 60 s is generous.
 	log.Debug().Msg("cellular: waiting for modem AT response (up to 60s)")
 	atDeadline := time.Now().Add(60 * time.Second)
 	atReady := false
@@ -2246,14 +2240,13 @@ func autoDetectCellular(excludePorts []string) string {
 // probeCellularAT probes a port with AT+CPIN? to check if it's a cellular modem.
 // Cellular modems respond with "+CPIN: READY", Iridium modems give ERROR.
 func probeCellularAT(port string) bool {
-	file, err := openSerial(port, cellBaud)
+	// Lines low and equal: DTR low with RTS high holds a T-Call's ESP32 in
+	// reset (see openSerialLinesLow). [MESHSAT-812]
+	file, err := openSerialLinesLow(port, cellBaud)
 	if err != nil {
 		return false
 	}
 	defer file.Close()
-
-	// Clear DTR immediately to prevent ESP32 reset on T-Call boards. [MESHSAT-403]
-	file.SetDTR(false)
 
 	// Disable echo
 	sendAT(file, "ATE0", 2*time.Second)
