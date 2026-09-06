@@ -47,6 +47,33 @@ func openSerial(path string, baud int) (serial.Port, error) {
 	return port, nil
 }
 
+// openSerialLinesLow opens a port with DTR and RTS both cleared and keeps
+// them equal. On the LilyGO T-Call the CH9102's DTR and RTS drive the
+// ESP32's EN and IO0 through the classic auto-reset pair: DTR low with RTS
+// high holds the ESP32 in reset, so the bridge's old "open, then clear DTR
+// only" left the passthrough dead and every first connect ended in "AT
+// check failed" (measured on tesseract 6 Sep 2026 10:13Z: DTR low with RTS
+// high never answers; both low answers AT 20 s after the reboot the open
+// itself causes, every time). [MESHSAT-812, MESHSAT-817]
+func openSerialLinesLow(path string, baud int) (serial.Port, error) {
+	mode := &serial.Mode{
+		BaudRate:          baud,
+		DataBits:          8,
+		StopBits:          serial.OneStopBit,
+		Parity:            serial.NoParity,
+		InitialStatusBits: &serial.ModemOutputBits{DTR: false, RTS: false},
+	}
+	port, err := serial.Open(path, mode)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	cloexecSerial(path)
+	_ = port.SetDTR(false)
+	_ = port.SetRTS(false)
+	port.SetReadTimeout(100 * time.Millisecond)
+	return port, nil
+}
+
 // pulseSerialLines opens the port with DTR and RTS cleared, asserts both,
 // clears them again and closes, with short dwell times between the edges.
 // On the XIAO ESP32-S3 (native USB CDC) a DTR/RTS transition reboots the

@@ -250,9 +250,9 @@ func (s *Service) execReset(ctx context.Context, o Origin, args []byte) Result {
 var hardResetRestartDelay = 10 * time.Second
 
 // cellularHardResetRestartDelay is the post-cut restart delay for the
-// cellular target: longer than the 60 s quiet window the T-Call needs
+// cellular target: longer than the 20 s quiet window the T-Call gets
 // after a VBUS cut (MESHSAT-812). [MESHSAT-817]
-var cellularHardResetRestartDelay = 75 * time.Second
+var cellularHardResetRestartDelay = 30 * time.Second
 
 // restartAlreadyUnderway recognises the gateway manager telling us the
 // instance is being started or already runs again: after a USB power cycle

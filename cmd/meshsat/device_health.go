@@ -121,11 +121,11 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 }
 
 // cellularQuietWindow is how long nothing may open the T-Call's port after
-// a VBUS cut: the ESP32 boots and pulses PWRKEY once (modem ON); any DTR
-// reset from an open inside the window pulses it again (modem OFF). The
-// recipe that worked on 5 Sep 2026 was container stopped, cut, 60 s quiet,
-// start. [MESHSAT-812]
-const cellularQuietWindow = 60 * time.Second
+// a VBUS cut, so the device has re-enumerated and the ESP32's own boot
+// sequence (modem reset, PWRKEY, passthrough) is not interrupted by an
+// open that reboots it again. With the port opened lines-low the modem
+// restart is deterministic, so a short window is enough. [MESHSAT-812]
+const cellularQuietWindow = 20 * time.Second
 
 // cellularQuietCut is the cellular hard reset shared by the OOB executor
 // (RESET cellular level 3) and the device health ladder: hold the transport
@@ -186,7 +186,10 @@ func cellularHealthTarget(cfg *config.Config, dc *transport.DirectCellTransport,
 			case errors.Is(err, transport.ErrCellProbeBusy):
 				return probeOK("modem busy with a long command, bytes flowing")
 			case errors.Is(err, transport.ErrCellHeld):
-				return probeOK(err.Error()) // inside the quiet window by design
+				// Inside the quiet window nothing may touch the port; neither
+				// a hit nor a miss (an OK here read as "recovered" one second
+				// after the cut and reset the ladder, tesseract 6 Sep 09:59Z).
+				return gateway.ProbeResult{Unknown: true, Detail: err.Error()}
 			default:
 				return probeMiss(err.Error())
 			}
@@ -208,7 +211,7 @@ func cellularHealthTarget(cfg *config.Config, dc *transport.DirectCellTransport,
 					if err := hard(ctx); err != nil {
 						return err
 					}
-					time.AfterFunc(cellularQuietWindow+15*time.Second, func() {
+					time.AfterFunc(cellularQuietWindow+10*time.Second, func() {
 						rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 						defer cancel()
 						if err := gwMgr.RestartGatewayInstance(rctx, "cellular_0"); err != nil {
