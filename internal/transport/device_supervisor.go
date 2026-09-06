@@ -73,6 +73,13 @@ type DeviceSupervisor struct {
 	// Explicit port overrides (from env vars) — skip auto-detect for these roles
 	explicitPorts map[DeviceRole]string
 
+	// excluded are serial ports the supervisor must never scan, probe or
+	// claim: the APRS gateway's hardware KISS TNC (PicoAPRS, a CP2102 with
+	// the same VID:PID as the ZigBee dongle, whose modem lines reach the
+	// ESP32 reset). Resolved real paths. [MESHSAT-821]
+	excludedMu sync.Mutex
+	excluded   map[string]bool
+
 	// holds keeps a role's driver from being handed its port until the
 	// time given: after a VBUS cut of the T-Call nothing may open the
 	// modem's port for a minute (MESHSAT-812). The port is still claimed
@@ -103,6 +110,7 @@ func NewDeviceSupervisor() *DeviceSupervisor {
 		probing:         make(map[string]bool),
 		skipPorts:       make(map[string]bool),
 		explicitPorts:   make(map[DeviceRole]string),
+		excluded:        make(map[string]bool),
 		holds:           make(map[DeviceRole]time.Time),
 		initialScanDone: make(chan struct{}),
 		stopCh:          make(chan struct{}),
@@ -201,6 +209,59 @@ func (s *DeviceSupervisor) GetPortInstance(port string) string {
 
 // SetExplicitPort sets an explicit port for a role (from env var).
 // When set, the supervisor claims this port immediately without probing.
+// ExcludePort keeps a serial port out of every scan and probe. Symlinks
+// (/dev/serial/by-id/...) are resolved so the exclusion matches the
+// /dev/ttyUSB* name the scan sees; an unresolvable path is recorded as
+// given and re-resolved on every filter, so a device plugged in later is
+// still excluded. [MESHSAT-821]
+func (s *DeviceSupervisor) ExcludePort(path string) {
+	if path == "" {
+		return
+	}
+	s.excludedMu.Lock()
+	defer s.excludedMu.Unlock()
+	s.excluded[path] = true
+	log.Info().Str("port", path).Msg("device-supervisor: port excluded from scanning and probing")
+}
+
+// IsExcluded reports whether a scanned port is one of the excluded devices.
+func (s *DeviceSupervisor) IsExcluded(port string) bool {
+	s.excludedMu.Lock()
+	defer s.excludedMu.Unlock()
+	if len(s.excluded) == 0 {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(port)
+	if err != nil {
+		real = port
+	}
+	for ex := range s.excluded {
+		if ex == port || ex == real {
+			return true
+		}
+		if r, err := filepath.EvalSymlinks(ex); err == nil && (r == port || r == real) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *DeviceSupervisor) filterExcluded(ports []string) []string {
+	s.excludedMu.Lock()
+	n := len(s.excluded)
+	s.excludedMu.Unlock()
+	if n == 0 {
+		return ports
+	}
+	out := ports[:0]
+	for _, p := range ports {
+		if !s.IsExcluded(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (s *DeviceSupervisor) SetExplicitPort(role DeviceRole, port string) {
 	if port != "" && port != "auto" {
 		s.explicitPorts[role] = port
@@ -334,7 +395,7 @@ func (s *DeviceSupervisor) scanSerialPorts() {
 	// and produces noise in the Devices tab ("identifying" with no
 	// VID:PID). An extra set of names can be supplied via
 	// MESHSAT_SERIAL_SKIP_PORTS (comma-separated).
-	activePorts = filterSkippedSerialPorts(activePorts)
+	activePorts = s.filterExcluded(filterSkippedSerialPorts(activePorts))
 
 	now := time.Now()
 	activeSet := make(map[string]bool, len(activePorts))
@@ -421,7 +482,7 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 		matches, _ := filepath.Glob(pattern)
 		activePorts = append(activePorts, matches...)
 	}
-	activePorts = filterSkippedSerialPorts(activePorts)
+	activePorts = s.filterExcluded(filterSkippedSerialPorts(activePorts))
 
 	activeSet := make(map[string]bool, len(activePorts))
 	for _, p := range activePorts {
@@ -470,6 +531,9 @@ func (s *DeviceSupervisor) reconcileSerialDevices() {
 // concurrent probes on the same port. Skips ports that are permanently
 // marked (wrong interface on multi-port devices like Huawei E220).
 func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
+	if s.IsExcluded(port) {
+		return
+	}
 	// Skip ports permanently marked as wrong-interface or non-AT data ports.
 	s.probingMu.Lock()
 	if s.skipPorts[port] {

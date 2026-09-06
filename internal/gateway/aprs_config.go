@@ -3,6 +3,8 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 )
 
 // APRSConfig holds the configuration for the APRS gateway.
@@ -26,7 +28,18 @@ type APRSConfig struct {
 	PTTDevice        string `json:"ptt_device"` // e.g. "/dev/ttyACM1"
 	PTTLine          string `json:"ptt_line"`   // "RTS" or "DTR"
 	ModemBaud        int    `json:"modem_baud"` // 1200 (AFSK) or 9600 (G3RUH)
+
+	// Hardware KISS TNC over a serial port (PicoAPRS V4 on USB-C). When
+	// KISSDevice is set the gateway opens it instead of dialling
+	// KISSHost:KISSPort, no Direwolf is spawned and no sound card is
+	// needed. Use the /dev/serial/by-id path so a re-enumeration keeps
+	// the name. [MESHSAT-821]
+	KISSDevice string `json:"kiss_device"`
+	KISSBaud   int    `json:"kiss_baud"` // 0 = 115200
 }
+
+// SerialTNC reports whether the gateway talks to a hardware TNC over serial.
+func (c APRSConfig) SerialTNC() bool { return c.KISSDevice != "" }
 
 // DefaultAPRSConfig returns sensible defaults for EU APRS on an AIOC kit.
 // PTT defaults to CM108 HID (AIOC's actual PTT path) — the ACM serial
@@ -34,7 +47,13 @@ type APRSConfig struct {
 // Setting PTTLine to "RTS" or "DTR" opts into serial PTT for non-AIOC
 // cables that do wire it that way.
 func DefaultAPRSConfig() APRSConfig {
+	// First-boot defaults for the serial TNC come from the environment so
+	// a kit can be switched to a PicoAPRS from its compose file; the stored
+	// gateway config wins once it carries the keys. [MESHSAT-821]
+	kissBaud, _ := strconv.Atoi(os.Getenv("MESHSAT_APRS_KISS_BAUD"))
 	return APRSConfig{
+		KISSDevice:   os.Getenv("MESHSAT_APRS_KISS_DEVICE"),
+		KISSBaud:     kissBaud,
 		KISSHost:     "127.0.0.1",
 		KISSPort:     8001,
 		SSID:         10, // -10 is conventional for igate
@@ -69,6 +88,13 @@ func (c *APRSConfig) Validate() error {
 	}
 	if c.KISSPort <= 0 || c.KISSPort > 65535 {
 		c.KISSPort = 8001
+	}
+	if c.KISSDevice != "" {
+		// A hardware TNC replaces Direwolf entirely.
+		c.ExternalDirewolf = true
+		if c.KISSBaud <= 0 {
+			c.KISSBaud = 115200
+		}
 	}
 	if !c.ExternalDirewolf {
 		if c.AudioCard == "" {

@@ -49,17 +49,101 @@ type APRSGateway struct {
 	// until the watchdog has judged. [MESHSAT-814]
 	receiveState atomic.Value
 
+	// Serial-TNC receive signals (no Direwolf to report an audio level):
+	// every decoded frame stamps lastFrameAt. [MESHSAT-821]
+	lastFrameAt atomic.Int64
+
+	// Frame fan-out: a hardware TNC is one file handle, so the Reticulum
+	// ax25_0 interface receives raw AX.25 payloads from this gateway's
+	// reader instead of opening its own KISS connection. [MESHSAT-821]
+	subMu sync.Mutex
+	subs  map[uint64]chan []byte
+	subID uint64
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// SubscribeFrames hands out a channel that receives every AX.25 payload the
+// gateway reads from its TNC. The channel is closed when the gateway stops,
+// which tells the subscriber to re-subscribe to the next gateway instance.
+// Slow subscribers drop frames rather than stall the reader. [MESHSAT-821]
+func (g *APRSGateway) SubscribeFrames() (<-chan []byte, func()) {
+	ch := make(chan []byte, 32)
+	g.subMu.Lock()
+	if g.subs == nil {
+		g.subs = make(map[uint64]chan []byte)
+	}
+	g.subID++
+	id := g.subID
+	g.subs[id] = ch
+	g.subMu.Unlock()
+	return ch, func() {
+		g.subMu.Lock()
+		if c, ok := g.subs[id]; ok {
+			delete(g.subs, id)
+			close(c)
+		}
+		g.subMu.Unlock()
+	}
+}
+
+func (g *APRSGateway) fanOut(payload []byte) {
+	g.subMu.Lock()
+	defer g.subMu.Unlock()
+	for _, ch := range g.subs {
+		cp := make([]byte, len(payload))
+		copy(cp, payload)
+		select {
+		case ch <- cp:
+		default:
+		}
+	}
+}
+
+func (g *APRSGateway) closeSubscribers() {
+	g.subMu.Lock()
+	defer g.subMu.Unlock()
+	for id, ch := range g.subs {
+		delete(g.subs, id)
+		close(ch)
+	}
+}
+
+// SerialTNC reports whether this gateway drives a hardware TNC over serial.
+func (g *APRSGateway) SerialTNC() bool { return g.kiss.Serial() }
+
+// ReopenTNC closes and reopens the TNC link (serial or TCP). The receive
+// watchdog's second rung and OOB RESET aprs level 3 for hardware-TNC kits,
+// where a hub-port VBUS cut would not even reboot a PicoAPRS running on its
+// own battery. [MESHSAT-821]
+func (g *APRSGateway) ReopenTNC(ctx context.Context) error {
+	_ = g.kiss.Close()
+	g.connected.Store(false)
+	if err := g.dialWithRetry(ctx, 20*time.Second); err != nil {
+		return fmt.Errorf("aprs: reopen %s: %w", g.kiss.Target(), err)
+	}
+	g.connected.Store(true)
+	log.Info().Str("kiss", g.kiss.Target()).Msg("aprs: TNC link reopened")
+	return nil
 }
 
 // ReceiveHealth exposes the bundled supervisor's receive-side signals. The
 // second value is false for an external Direwolf, where nothing is known.
 func (g *APRSGateway) ReceiveHealth() (ReceiveHealth, bool) {
-	if g.supervisor == nil {
+	if g.supervisor != nil {
+		return g.supervisor.ReceiveHealth(), true
+	}
+	if !g.kiss.Serial() {
 		return ReceiveHealth{}, false
 	}
-	return g.supervisor.ReceiveHealth(), true
+	// Hardware TNC: no audio level exists, only frames. Level -1 and a
+	// zero LevelAt keep the watchdog's "hung Direwolf" branch off.
+	h := ReceiveHealth{Running: g.connected.Load(), Level: -1, RxFrames: g.kiss.RX.Load()}
+	if ts := g.lastFrameAt.Load(); ts > 0 {
+		h.LastDecodeAt = time.Unix(0, ts)
+	}
+	return h, true
 }
 
 // SetReceiveState records the watchdog's verdict for the status endpoints.
@@ -69,7 +153,7 @@ func (g *APRSGateway) currentReceiveState() string {
 	if v, ok := g.receiveState.Load().(string); ok && v != "" {
 		return v
 	}
-	if g.supervisor == nil {
+	if g.supervisor == nil && !g.kiss.Serial() {
 		return ReceiveStateUnknown
 	}
 	return ""
@@ -77,11 +161,17 @@ func (g *APRSGateway) currentReceiveState() string {
 
 // NewAPRSGateway creates a new APRS gateway.
 func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
-	addr := fmt.Sprintf("%s:%d", cfg.KISSHost, cfg.KISSPort)
+	var kiss *KISSConn
+	if cfg.SerialTNC() {
+		kiss = NewKISSSerialConn(cfg.KISSDevice, cfg.KISSBaud)
+		cfg.ExternalDirewolf = true
+	} else {
+		kiss = NewKISSConn(fmt.Sprintf("%s:%d", cfg.KISSHost, cfg.KISSPort))
+	}
 	g := &APRSGateway{
 		config:  cfg,
 		db:      db,
-		kiss:    NewKISSConn(addr),
+		kiss:    kiss,
 		inCh:    make(chan InboundMessage, 32),
 		outCh:   make(chan *transport.MeshMessage, 10),
 		tracker: NewAPRSTracker(),
@@ -145,7 +235,13 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"errors":        g.errors.Load(),
 		"heard_count":   len(g.tracker.GetHeardStations()),
 		"packet_types":  g.tracker.GetPacketTypeBreakdown(),
-		"kiss_addr":     fmt.Sprintf("%s:%d", g.config.KISSHost, g.config.KISSPort),
+		"kiss_addr":     g.kiss.Target(),
+		"tnc_serial":    g.kiss.Serial(),
+	}
+	if g.kiss.Serial() {
+		if ts := g.lastFrameAt.Load(); ts > 0 {
+			status["last_decode_at"] = time.Unix(0, ts).UTC().Format(time.RFC3339)
+		}
 	}
 	if g.supervisor != nil {
 		status["direwolf_bundled"] = true
@@ -212,7 +308,8 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 	go g.silenceWatchdog(bgCtx)
 
 	log.Info().
-		Str("kiss_addr", fmt.Sprintf("%s:%d", g.config.KISSHost, g.config.KISSPort)).
+		Str("kiss_addr", g.kiss.Target()).
+		Bool("tnc_serial", g.kiss.Serial()).
 		Str("callsign", FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID})).
 		Float64("freq_mhz", g.config.FrequencyMHz).
 		Msg("aprs gateway started")
@@ -242,6 +339,7 @@ func (g *APRSGateway) Stop() error {
 	g.kiss.Close()
 	g.wg.Wait()
 	g.connected.Store(false)
+	g.closeSubscribers()
 	if g.supervisor != nil {
 		g.supervisor.Stop()
 	}
@@ -347,6 +445,12 @@ func (g *APRSGateway) Status() GatewayStatus {
 			s.LastDecodeAt = &at
 		}
 	}
+	if g.kiss.Serial() {
+		if ts := g.lastFrameAt.Load(); ts > 0 {
+			at := time.Unix(0, ts).UTC()
+			s.LastDecodeAt = &at
+		}
+	}
 	if st := g.currentReceiveState(); st != "" {
 		s.ReceiveState = &st
 	}
@@ -384,6 +488,9 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			g.reconnect(ctx)
 			continue
 		}
+
+		g.lastFrameAt.Store(time.Now().UnixNano())
+		g.fanOut(payload)
 
 		frame, err := DecodeAX25Frame(payload)
 		if err != nil {
@@ -560,7 +667,7 @@ func (g *APRSGateway) reconnect(ctx context.Context) {
 		}
 
 		g.connected.Store(true)
-		log.Info().Msg("aprs: reconnected to Direwolf")
+		log.Info().Str("kiss", g.kiss.Target()).Msg("aprs: reconnected to the TNC")
 		return
 	}
 }

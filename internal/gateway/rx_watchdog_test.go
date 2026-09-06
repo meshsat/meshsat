@@ -256,3 +256,51 @@ func TestRxWatchdog_StaleSeedIsQuiet(t *testing.T) {
 		t.Fatalf("stale seed escalated: %d %d %d state=%s", r, c, b, h.wd.State())
 	}
 }
+
+// A hardware-TNC kit has no AIOC to power-cycle: step 2 reopens the TNC's
+// serial port instead, and the hung-Direwolf branch stays off because no
+// audio level ever arrives. [MESHSAT-821]
+func TestRxWatchdog_SerialTNCReopenStep(t *testing.T) {
+	h := newWDHarness()
+	var reopens int
+	h.wd.act.Reopen = func(ctx context.Context) error { h.mu.Lock(); reopens++; h.mu.Unlock(); return nil }
+	// No audio level for a serial TNC.
+	h.mu.Lock()
+	h.health.Level = -1
+	h.mu.Unlock()
+	h.wd.act.Probe = func() (ReceiveHealth, bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		hh := h.health
+		hh.LevelAt = time.Time{}
+		return hh, h.ok
+	}
+	ctx := context.Background()
+
+	h.frame()
+	h.wd.tick(ctx)
+	if h.wd.State() != ReceiveStateOK {
+		t.Fatalf("state %s, want ok", h.wd.State())
+	}
+	// Silence past the window: step 1 (gateway restart).
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx)
+	waitFor(t, func() bool { r, _, _ := h.counts(); return r == 1 })
+	// Another window: step 2 must be the reopen, never the power cycle.
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx)
+	waitFor(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return reopens == 1 })
+	_, cycles, _ := h.counts()
+	if cycles != 0 {
+		t.Fatalf("power cycle ran %d times on a serial-TNC kit", cycles)
+	}
+	if h.wd.State() != ReceiveStateDeaf {
+		t.Fatalf("state %s, want deaf", h.wd.State())
+	}
+	// A frame ends the episode.
+	h.frame()
+	h.wd.tick(ctx)
+	if h.wd.State() != ReceiveStateOK {
+		t.Fatalf("state %s after recovery, want ok", h.wd.State())
+	}
+}
