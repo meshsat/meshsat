@@ -15,13 +15,21 @@ body {
    We don't rely on `@media (pointer: coarse)` because Chromium on
    Linux + Wayland + DSI touchscreen still reports `pointer: fine`.
    Desktop operators without the kiosk URL keep cursor + scrollbars.
+   `shell-kiosk-pointer` (set for `?pointer=1`, MESHSAT-825) keeps the
+   scrollbar hiding and the tap-target rules but leaves the cursor
+   visible, so the panel view can be tested with a mouse from a laptop.
 */
 html.shell-kiosk,
 html.shell-kiosk body,
 html.shell-kiosk * {
-  cursor: none !important;
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
+}
+
+html.shell-kiosk:not(.shell-kiosk-pointer),
+html.shell-kiosk:not(.shell-kiosk-pointer) body,
+html.shell-kiosk:not(.shell-kiosk-pointer) * {
+  cursor: none !important;
 }
 
 /* WebKit / Blink — hide every scrollbar track/thumb variant on

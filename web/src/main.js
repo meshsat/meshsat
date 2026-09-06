@@ -49,6 +49,26 @@ try {
     try { localStorage.setItem('meshsat.kiosk', '1') } catch {}
   }
   if (isKiosk) document.documentElement.classList.add('shell-kiosk')
+
+  // Pointer opt-out for testing a kiosk page from a laptop: `?pointer=1`
+  // keeps the whole kiosk profile (hidden scrollbars, bumped tap targets)
+  // but leaves the mouse cursor visible, so the exact panel view can be
+  // driven with a mouse. Sticky in localStorage like the kiosk flag, for
+  // the same reason (router navigation strips the query, the freshness
+  // reload would otherwise hide the cursor again); `?pointer=0` clears
+  // it. Field kits never pass it, and their compositor draws a blank
+  // cursor theme anyway. [MESHSAT-825]
+  let showPointer = false
+  const pointer = params.get('pointer')
+  if (pointer === '1') {
+    showPointer = true
+    try { localStorage.setItem('meshsat.kiosk.pointer', '1') } catch {}
+  } else if (pointer === '0') {
+    try { localStorage.removeItem('meshsat.kiosk.pointer') } catch {}
+  } else {
+    try { showPointer = localStorage.getItem('meshsat.kiosk.pointer') === '1' } catch {}
+  }
+  if (isKiosk && showPointer) document.documentElement.classList.add('shell-kiosk-pointer')
 } catch {}
 
 const app = createApp(App)
