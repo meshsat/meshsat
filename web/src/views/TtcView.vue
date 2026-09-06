@@ -565,7 +565,6 @@ onUnmounted(() => {
         <span class="font-mono text-sm text-gray-500">{{ me.callsign }}</span>
       </div>
       <div class="ml-auto flex items-center gap-2">
-        <PowerWidget :kit="me.name" compact />
         <span v-for="c in chips" :key="c.key"
           class="chip font-mono text-[11px] px-2 py-1 rounded border"
           :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : c.state === 'healing' ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
@@ -574,6 +573,7 @@ onUnmounted(() => {
             :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'" />{{ c.label }}
         </span>
         <span class="font-mono text-lg text-gray-200 tabular-nums ml-3">{{ clock }}</span>
+        <PowerWidget :kit="me.name" compact />
       </div>
     </header>
 
