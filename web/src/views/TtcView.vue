@@ -426,8 +426,8 @@ onUnmounted(() => {
 
           <!-- lanes -->
           <g class="lanes">
-            <line :x1="G.tdeck.x + 66" :y1="G.tdeck.y" :x2="G.parallax.x - 80" :y2="G.parallax.y" class="lane lora" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-            <line :x1="G.tesseract.x + 80" :y1="G.tesseract.y" :x2="G.techo.x - 36" :y2="G.techo.y" class="lane lora" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+            <line :x1="G.tdeck.x + 84" :y1="G.tdeck.y" :x2="G.parallax.x - 84" :y2="G.parallax.y" class="lane lora" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+            <line :x1="G.tesseract.x + 84" :y1="G.tesseract.y" :x2="G.techo.x - 44" :y2="G.techo.y" class="lane lora" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
             <!-- APRS air link -->
             <g class="air" :class="{ silent: aprsSilent }">
               <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
@@ -450,47 +450,66 @@ onUnmounted(() => {
 
           <!-- stations -->
           <g :transform="`translate(${G.tdeck.x},${G.tdeck.y})`" class="station" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <g class="device" transform="scale(1.3)">
-              <rect x="-50" y="-30" width="100" height="62" rx="8" />
-              <rect x="-42" y="-22" width="84" height="26" rx="2" class="screen" />
-              <g class="keys"><rect v-for="k in 12" :key="k" :x="-42 + ((k-1)%6)*14" :y="10 + Math.floor((k-1)/6)*8" width="11" height="6" rx="1" /></g>
-              <line x1="50" y1="-30" x2="58" y2="-56" class="ant" />
+            <!-- LilyGO T-Deck Plus, front: 2.8 inch screen over a 35-key
+                 keyboard, trackball at the lower left, SMA stub top left -->
+            <g class="device" transform="scale(1.35)">
+              <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
+              <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
+              <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
+              <g class="ui">
+                <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
+                <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
+                <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
+              </g>
+              <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
+              <g class="keys">
+                <rect v-for="k in 10" :key="'r1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
+                <rect v-for="k in 10" :key="'r2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
+                <rect v-for="k in 10" :key="'r3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
+                <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
+              </g>
+              <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
+              <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
             </g>
-            <text y="66" text-anchor="middle" class="st-name">T-Deck Plus</text>
-            <text y="84" text-anchor="middle" class="st-sub">{{ nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, keyboard' }}</text>
+            <text y="72" text-anchor="middle" class="st-name">T-Deck Plus</text>
+            <text y="90" text-anchor="middle" class="st-sub">{{ nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, keyboard' }}</text>
           </g>
 
           <g :transform="`translate(${G.parallax.x},${G.parallax.y})`" class="station kit" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <g class="device" transform="scale(1.3)">
-              <rect x="-62" y="-40" width="124" height="80" rx="10" />
-              <rect x="-50" y="-28" width="76" height="44" rx="3" class="screen" />
-              <rect x="34" y="-28" width="16" height="44" rx="2" class="latch" />
-              <line x1="-30" y1="-40" x2="-30" y2="-64" class="ant" /><line x1="0" y1="-40" x2="0" y2="-70" class="ant" /><line x1="30" y1="-40" x2="30" y2="-60" class="ant" />
-            </g>
-            <text y="76" text-anchor="middle" class="st-name">parallax</text>
-            <text y="94" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.parallax.callsign }}, {{ KITS.parallax.modem }}</text>
+            <!-- MeshSat field kit V1: the CAD hero render from the
+                 meshsat-fieldkit repo, recoloured onto the brand palette -->
+            <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
+            <text y="108" text-anchor="middle" class="st-name">parallax</text>
+            <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.parallax.callsign }}, {{ KITS.parallax.modem }}</text>
           </g>
 
           <g :transform="`translate(${G.tesseract.x},${G.tesseract.y})`" class="station kit" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <g class="device" transform="scale(1.3)">
-              <rect x="-62" y="-40" width="124" height="80" rx="10" />
-              <rect x="-50" y="-28" width="76" height="44" rx="3" class="screen" />
-              <rect x="34" y="-28" width="16" height="44" rx="2" class="latch" />
-              <line x1="-30" y1="-40" x2="-30" y2="-64" class="ant" /><line x1="0" y1="-40" x2="0" y2="-70" class="ant" /><line x1="30" y1="-40" x2="30" y2="-60" class="ant" />
-            </g>
-            <text y="76" text-anchor="middle" class="st-name">tesseract</text>
-            <text y="94" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.tesseract.callsign }}, {{ KITS.tesseract.modem }}</text>
+            <!-- MeshSat field kit V1: the CAD hero render from the
+                 meshsat-fieldkit repo, recoloured onto the brand palette -->
+            <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
+            <text y="108" text-anchor="middle" class="st-name">tesseract</text>
+            <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.tesseract.callsign }}, {{ KITS.tesseract.modem }}</text>
           </g>
 
           <g :transform="`translate(${G.techo.x},${G.techo.y})`" class="station" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <g class="device paper" transform="scale(1.3)">
-              <rect x="-26" y="-40" width="52" height="80" rx="7" />
-              <rect x="-20" y="-32" width="40" height="44" rx="2" class="screen" />
-              <circle cx="0" cy="26" r="4" class="btn" />
-              <line x1="26" y1="-40" x2="34" y2="-62" class="ant" />
+            <!-- LilyGO T-Echo, front: 1.54 inch e-paper, one front button,
+                 side buttons, SMA stub top right -->
+            <g class="device paper" transform="scale(1.35)">
+              <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
+              <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
+              <rect x="-22" y="-38" width="44" height="44" class="epaper" />
+              <g class="ink">
+                <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
+                <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
+                <rect x="-18" y="-4" width="20" height="3" rx="1" />
+              </g>
+              <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
+              <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
+              <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
+              <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
             </g>
-            <text y="76" text-anchor="middle" class="st-name">T-Echo</text>
-            <text y="94" text-anchor="middle" class="st-sub">{{ !nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, e-paper' }}</text>
+            <text y="86" text-anchor="middle" class="st-name">T-Echo</text>
+            <text y="104" text-anchor="middle" class="st-sub">{{ !nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, e-paper' }}</text>
           </g>
 
           <!-- far-side proof line -->
@@ -663,14 +682,23 @@ onUnmounted(() => {
 .air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; fill: #FCD34D; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
 .sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; fill: #AE9C7A; }
-.station .device rect { fill: #0B0B0F; stroke: #C8B89A; stroke-width: 1.5; }
-.station .device .screen { fill: #15151B; stroke: #8E7C5C; stroke-width: 1; }
-.station .device.paper .screen { fill: #E4DAC6; stroke: none; }
-.station .device .keys rect { fill: #3A3A44; stroke: none; }
-.station .device .latch { fill: #24242C; stroke: #8E7C5C; }
-.station .device .btn { fill: #8E7C5C; }
-.station .device .ant { stroke: #C8B89A; stroke-width: 2; stroke-linecap: round; }
-.station.kit .device > rect:first-child { stroke: #F7F7F4; }
+.station .device .body { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
+.station .device .bezel { fill: #08080B; stroke: #7A6B50; stroke-width: 0.8; }
+.station .device .screen { fill: #101018; stroke: none; }
+.station .device .ui .bubble { fill: #C8B89A; opacity: 0.55; }
+.station .device .ui .bubble.far { fill: #F96118; opacity: 0.7; }
+.station .device .trackball { fill: #1B1B22; stroke: #C8B89A; stroke-width: 1; }
+.station .device .trackball-in { fill: #C8B89A; }
+.station .device .keys rect { fill: #1B1B22; stroke: #7A6B50; stroke-width: 0.6; }
+.station .device .sma { fill: #24242C; stroke: #C8B89A; stroke-width: 1; }
+.station .device .ant { stroke: #C8B89A; stroke-width: 2.2; stroke-linecap: round; }
+.station .device .epaper { fill: #E4DAC6; }
+.station .device .ink rect { fill: #24242C; }
+.station .device .btn { fill: #15151B; stroke: #C8B89A; stroke-width: 1; }
+.station .device .btn-in { fill: #C8B89A; }
+.station .device .sidebtn { fill: #24242C; stroke: #7A6B50; stroke-width: 0.6; }
+.station .kit-img { filter: drop-shadow(0 0 8px rgba(200, 184, 154, 0.10)); }
+.station.near .kit-img { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); }
 .station.far { opacity: 0.35; }
 .station.far-alive { opacity: 0.85; }
 .st-name { font-family: 'IBM Plex Mono', monospace; font-size: 15px; fill: #F7F7F4; }
