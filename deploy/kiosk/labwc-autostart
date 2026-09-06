@@ -35,8 +35,10 @@ done
 #    sudoers-scoped wrapper (/usr/local/bin/meshsat-backlight),
 #    installed with a one-command sudoers entry so the kiosk user
 #    can't reach anything else under /sys. [MESHSAT-580]
+#    `--idle` makes the dim conditional: on mains power (X1202
+#    ac_present) the panel never dims. [MESHSAT-827]
 swayidle -w \
-  timeout 600 'sudo -n /usr/local/bin/meshsat-backlight 32' \
+  timeout 600 'sudo -n /usr/local/bin/meshsat-backlight --idle 32' \
   resume 'sudo -n /usr/local/bin/meshsat-backlight 200' &
 
 # 4. Chromium kiosk — policy lockdown in

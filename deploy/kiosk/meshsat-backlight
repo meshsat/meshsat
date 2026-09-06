@@ -11,17 +11,44 @@
 # `/sys/../etc/passwd` can bypass a naive glob). This wrapper
 # validates the argument as a number in 0-255 before touching any
 # file. [MESHSAT-580]
+#
+# meshsat-backlight --idle <0-255>
+# The idle-dim form: applies the value only when the kit is NOT on
+# mains power. On AC the panel never dims (owner ruling 6 Sep 2026,
+# MESHSAT-827): a booth screen or a bench kit on the charger stays
+# lit. AC state comes from the X1202 monitor's /run/x1202.json
+# (ac_present, refreshed every 10 s); a missing or stale file counts
+# as "on battery" so a dead monitor still protects the pack.
 
 set -eu
 
+IDLE=0
+if [ "${1:-}" = "--idle" ]; then
+  IDLE=1
+  shift
+fi
+
 case "${1:-}" in
   ''|*[!0-9]*)
-    echo "usage: $0 <0-255>" >&2
+    echo "usage: $0 [--idle] <0-255>" >&2
     exit 2
     ;;
 esac
 
 V="$1"
+
+if [ "$IDLE" = 1 ]; then
+  STATE="${MESHSAT_X1202_STATE:-/run/x1202.json}"
+  if [ -r "$STATE" ]; then
+    NOW=$(date +%s)
+    LAST=$(sed -n 's/.*"last_update": *\([0-9]*\).*/\1/p' "$STATE" | head -1)
+    if [ -n "$LAST" ] && [ $(( NOW - LAST )) -le 90 ] \
+       && grep -q '"ac_present": *true' "$STATE"; then
+      # On mains: leave the panel as it is.
+      exit 0
+    fi
+  fi
+fi
 if [ "$V" -gt 255 ]; then
   echo "out of range (0-255)" >&2
   exit 2
