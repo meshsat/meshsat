@@ -145,6 +145,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "Failed to send: "+err.Error())
 		return
 	}
+	s.recordMeshTX(req)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 

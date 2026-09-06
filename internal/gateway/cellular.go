@@ -38,11 +38,51 @@ type CellularGateway struct {
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	emitEvent EventEmitFunc
+
+	// Live packet feed for outbound SMS; inbound SMS is recorded by the
+	// engine's CellSignalRecorder, which sees every modem event whether
+	// or not a gateway is configured. [MESHSAT-826]
+	packetMu    sync.RWMutex
+	packetSink  PacketSink
+	packetIface string
 }
 
 // SetEventEmitter sets the SSE event emitter callback.
 func (g *CellularGateway) SetEventEmitter(fn EventEmitFunc) {
 	g.emitEvent = fn
+}
+
+// SetPacketSink installs the live packet feed sink and the interface id
+// (cellular_0) its records carry. [MESHSAT-826]
+func (g *CellularGateway) SetPacketSink(sink PacketSink, iface string) {
+	g.packetMu.Lock()
+	g.packetSink = sink
+	g.packetIface = iface
+	g.packetMu.Unlock()
+}
+
+// recordSMS hands one sent SMS to the packet feed. Text is the on-air
+// text for plaintext and OOB frames; ciphertext stays out of the feed.
+func (g *CellularGateway) recordSMS(number, text string, msg *transport.MeshMessage) {
+	g.packetMu.RLock()
+	sink, iface := g.packetSink, g.packetIface
+	g.packetMu.RUnlock()
+	if sink == nil {
+		return
+	}
+	rec := PacketRecord{
+		Time:   time.Now(),
+		Bearer: BearerSMS,
+		Dir:    DirTX,
+		Iface:  iface,
+		To:     number,
+		Bytes:  len(text),
+		MsgRef: msg.MsgRef,
+	}
+	if !msg.Encrypted {
+		rec.Text = CapPacketText(text)
+	}
+	sink(rec)
 }
 
 // SetNodeNameResolver sets a function that resolves mesh node IDs to human-readable names.
@@ -254,6 +294,7 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 		if g.db != nil {
 			g.db.InsertSMSMessage("tx", number, text, "sent", time.Now().Unix())
 		}
+		g.recordSMS(number, text, msg)
 	}
 
 	g.msgsOut.Add(1)

@@ -88,6 +88,7 @@ type Dispatcher struct {
 	pktSender  PacketSenderProvider // Reticulum packet senders (tcp_0, etc.)
 	workers    map[string]*DeliveryWorker
 	emit       func(transport.MeshEvent) // SSE broadcast callback
+	packets    *PacketRing               // live packet feed for mesh sends (nil = off) [MESHSAT-826]
 	passSched  PassStateProvider         // satellite pass scheduler (nil if no satellite interfaces)
 
 	// Loop prevention
@@ -180,6 +181,17 @@ func (d *Dispatcher) LoopMetrics() *LoopMetrics {
 // SetEmitter sets the SSE broadcast callback.
 func (d *Dispatcher) SetEmitter(fn func(transport.MeshEvent)) {
 	d.emit = fn
+}
+
+// SetPacketRing wires the live packet feed so mesh sends by the delivery
+// workers are recorded. Workers started later inherit it. [MESHSAT-826]
+func (d *Dispatcher) SetPacketRing(r *PacketRing) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.packets = r
+	for _, w := range d.workers {
+		w.packets = r
+	}
 }
 
 // SetAccessEvaluator sets the v0.3.0 access rule evaluator.
@@ -370,6 +382,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			gwProv:          d.gwProv,
 			mesh:            d.mesh,
 			emit:            d.emit,
+			packets:         d.packets,
 			signing:         d.signing,
 			transforms:      d.transforms,
 			access:          d.access,
@@ -419,6 +432,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		gwProv:          d.gwProv,
 		mesh:            d.mesh,
 		emit:            d.emit,
+		packets:         d.packets,
 		signing:         d.signing,
 		transforms:      d.transforms,
 		access:          d.access,
@@ -828,6 +842,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Msg("failed to create access delivery")
 			continue
 		}
+		del.ID = delID
 
 		// Audit the dispatch event
 		if d.signing != nil {
@@ -843,6 +858,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			d.emit(transport.MeshEvent{
 				Type:    "delivery_queued",
 				Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", m.Rule.Name, sourceInterface, destInterface),
+				Data: deliveryEventData(del, "queued", map[string]interface{}{
+					"source":    sourceInterface,
+					"rule_id":   m.Rule.ID,
+					"rule_name": m.Rule.Name,
+				}),
+				Time: time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -926,9 +947,12 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 	log.Info().Int64("id", delID).Str("channel", interfaceID).Str("msg_ref", msgRef).Msg("direct send queued via delivery ledger")
 
 	if d.emit != nil {
+		del.ID = delID
 		d.emit(transport.MeshEvent{
 			Type:    "delivery_queued",
 			Message: fmt.Sprintf("Direct send queued: %s → %s", preview, interfaceID),
+			Data:    deliveryEventData(del, "queued", nil),
+			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -991,6 +1015,8 @@ func (d *Dispatcher) reapAckTimeouts() {
 				d.emit(transport.MeshEvent{
 					Type:    "delivery_ack_timeout",
 					Message: fmt.Sprintf("ACK timeout for delivery %d on %s", del.ID, ch),
+					Data:    deliveryEventData(del, del.Status, map[string]interface{}{"ack_status": "timeout"}),
+					Time:    time.Now().UTC().Format(time.RFC3339),
 				})
 			}
 		}
@@ -1114,6 +1140,7 @@ type DeliveryWorker struct {
 	gwProv          GatewayProvider
 	mesh            transport.MeshTransport
 	emit            func(transport.MeshEvent)
+	packets         *PacketRing // live packet feed (nil = off) [MESHSAT-826]
 	signing         *SigningService
 	transforms      *TransformPipeline
 	access          *rules.AccessEvaluator // egress rule check before send
@@ -1193,6 +1220,9 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		if fresh.Status == "sent" || fresh.Status == "dead" || fresh.Status == "cancelled" {
 			log.Debug().Int64("id", del.ID).Str("status", fresh.Status).Msg("delivery already terminal, skipping")
 			return
+		}
+		if del.CreatedAt == "" {
+			del.CreatedAt = fresh.CreatedAt // for the event's latency_ms only [MESHSAT-826]
 		}
 	}
 
@@ -1360,6 +1390,12 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 			Text: del.TextPreview,
 			To:   del.Destination,
 		})
+		if deliveryErr == nil {
+			w.packets.Add(MeshTXRecord(w.mesh, w.channelID, transport.SendRequest{
+				Text: del.TextPreview,
+				To:   del.Destination,
+			}, del.MsgRef))
+		}
 	} else {
 		// Gateway delivery: find the gateway and forward
 		deliveryErr = w.forwardToGateway(ctx, del, encrypted)
@@ -1399,6 +1435,7 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	// gateway defaults; class oob sends the text verbatim. [MESHSAT-756]
 	msg.Destination = del.Destination
 	msg.RawText = del.Class == database.DeliveryClassOOB
+	msg.MsgRef = del.MsgRef // feed correlation only, never serialised [MESHSAT-826]
 	if del.Destination != "" && strings.HasPrefix(w.channelID, "cellular") {
 		msg.SMSDestinations = []string{del.Destination}
 	}
@@ -1476,15 +1513,75 @@ func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {
 	}
 
 	if w.emit != nil {
+		// Row state after this function: QoS 0 rows stay "sent"; QoS 1+
+		// rows are "delivered" with ack_status "acked" (SetDeliveryAck).
 		evtType := "delivery_sent"
+		status := "sent"
+		ackStatus := ""
 		if del.QoSLevel >= 1 {
 			evtType = "delivery_acked"
+			status = "delivered"
+			ackStatus = "acked"
+		}
+		extra := map[string]interface{}{"ack_status": ackStatus}
+		if created, ok := parseDeliveryTime(del.CreatedAt); ok {
+			extra["latency_ms"] = time.Since(created).Milliseconds()
 		}
 		w.emit(transport.MeshEvent{
 			Type:    evtType,
 			Message: fmt.Sprintf("Delivered to %s", w.channelID),
+			Data:    deliveryEventData(del, status, extra),
+			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
 	}
+}
+
+// deliveryEventData is the Data payload of every delivery_* event: the
+// delivery id, its interface (channel), msg_ref, status and destination,
+// plus whatever the emitting site adds (latency_ms on success, error and
+// retry on failure, rule on access dispatch). One shape for the SPA's
+// bearer-crossing animation. [MESHSAT-826]
+func deliveryEventData(del database.MessageDelivery, status string, extra map[string]interface{}) json.RawMessage {
+	preview := del.TextPreview
+	if len(preview) > 120 {
+		preview = preview[:120]
+	}
+	data := map[string]interface{}{
+		"id":           del.ID,
+		"channel":      del.Channel,
+		"msg_ref":      del.MsgRef,
+		"status":       status,
+		"destination":  del.Destination,
+		"class":        del.Class,
+		"priority":     del.Priority,
+		"qos":          del.QoSLevel,
+		"retries":      del.Retries,
+		"seq_num":      del.SeqNum,
+		"text_preview": preview,
+	}
+	for k, v := range extra {
+		data[k] = v
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// parseDeliveryTime reads a message_deliveries timestamp. modernc hands
+// DATETIME columns back as RFC3339 through a string scan; the explicit
+// writes in this package use SQLite's own "2006-01-02 15:04:05".
+func parseDeliveryTime(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr error) {
@@ -1500,6 +1597,8 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 			w.emit(transport.MeshEvent{
 				Type:    "delivery_dead",
 				Message: fmt.Sprintf("QoS 0 delivery to %s failed (best-effort, no retry): %s", w.channelID, errMsg),
+				Data:    deliveryEventData(del, "dead", map[string]interface{}{"error": errMsg}),
+				Time:    time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 		return
@@ -1528,6 +1627,8 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 			w.emit(transport.MeshEvent{
 				Type:    "delivery_dead",
 				Message: fmt.Sprintf("Delivery to %s failed after %d retries: %s", w.channelID, newRetries, errMsg),
+				Data:    deliveryEventData(del, "dead", map[string]interface{}{"error": errMsg, "retries": newRetries}),
+				Time:    time.Now().UTC().Format(time.RFC3339),
 			})
 		}
 		return
@@ -1546,6 +1647,12 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 		w.emit(transport.MeshEvent{
 			Type:    "delivery_retry",
 			Message: fmt.Sprintf("Delivery to %s failed, retry %d scheduled", w.channelID, newRetries),
+			Data: deliveryEventData(del, "retry", map[string]interface{}{
+				"error":      errMsg,
+				"retries":    newRetries,
+				"next_retry": nextRetry.UTC().Format(time.RFC3339),
+			}),
+			Time: time.Now().UTC().Format(time.RFC3339),
 		})
 	}
 }

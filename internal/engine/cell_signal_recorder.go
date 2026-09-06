@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
 )
 
@@ -208,6 +209,18 @@ func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
 		log.Warn().Err(err).Msg("cellular event recorder: SMS insert failed")
 	}
 	log.Info().Str("sender", sender).Bool("decoded", text != ev.Message).Msg("cellular: inbound SMS persisted")
+
+	// Live packet feed: bytes are the on-air text, text the decoded copy.
+	// [MESHSAT-826]
+	r.proc.Packets().Add(PacketRecord{
+		Time:   time.Now(),
+		Bearer: gateway.BearerSMS,
+		Dir:    gateway.DirRX,
+		Iface:  smsHistoryIface,
+		From:   sender,
+		Bytes:  len(ev.Message),
+		Text:   text,
+	})
 	r.emitSSE("cellular", fmt.Sprintf("SMS received from %s: %s", sender, truncateStr(text, 60)), ev.Data)
 }
 

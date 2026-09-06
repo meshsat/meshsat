@@ -30,6 +30,7 @@ type Manager struct {
 	onReceiverStart ReceiverStartFunc       // called when a gateway starts
 	onEventEmit     EventEmitFunc           // SSE event emitter callback
 	nodeNameFn      func(uint32) string     // resolves mesh node ID to name
+	packetSink      PacketSink              // live packet feed sink for APRS + cellular gateways [MESHSAT-826]
 	running         map[string]Gateway      // keyed by instance_id ("iridium_0", "iridium_1")
 	runningByIface  map[string]Gateway      // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
@@ -148,6 +149,23 @@ func (m *Manager) SetEventEmitFunc(fn EventEmitFunc) {
 // SetNodeNameResolver sets the function used to resolve mesh node IDs to names for SMS.
 func (m *Manager) SetNodeNameResolver(fn func(uint32) string) {
 	m.nodeNameFn = fn
+}
+
+// SetPacketSink sets the live packet feed sink handed to every APRS and
+// cellular gateway the manager creates, tagged with the gateway's interface
+// id. Gateways already running are updated in place. [MESHSAT-826]
+func (m *Manager) SetPacketSink(sink PacketSink) {
+	m.packetSink = sink
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for ifaceID, gw := range m.runningByIface {
+		switch g := gw.(type) {
+		case *APRSGateway:
+			g.SetPacketSink(sink, ifaceID)
+		case *CellularGateway:
+			g.SetPacketSink(sink, ifaceID)
+		}
+	}
 }
 
 // GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
@@ -1173,6 +1191,9 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if m.nodeNameFn != nil {
 			gw.SetNodeNameResolver(m.nodeNameFn)
 		}
+		if m.packetSink != nil {
+			gw.SetPacketSink(m.packetSink, instanceID)
+		}
 		return gw, nil
 	case "webhook":
 		cfg, err := ParseWebhookConfig(configJSON)
@@ -1215,7 +1236,11 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewAPRSGateway(*cfg, m.db), nil
+		agw := NewAPRSGateway(*cfg, m.db)
+		if m.packetSink != nil {
+			agw.SetPacketSink(m.packetSink, instanceID)
+		}
+		return agw, nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
 	}

@@ -86,6 +86,22 @@ type MeshMessage struct {
 	// message_deliveries row). [MESHSAT-756]
 	Destination string `json:"-"` // bearer address: phone, callsign-SSID, !nodeid; empty = interface default
 	RawText     bool   `json:"-"` // send DecodedText verbatim: no prefix, no attribution, no sanitising
+	MsgRef      string `json:"-"` // delivery msg_ref, for the live packet feed only; never on the wire [MESHSAT-826]
+}
+
+// NodeRSSIProvider is implemented by mesh transports that keep the last
+// RSSI heard per node. MeshMessage carries only SNR on the wire (adding RSSI
+// to its JSON would grow the relay envelope every access rule forwards), so
+// the packet feed asks the transport instead. [MESHSAT-826]
+type NodeRSSIProvider interface {
+	NodeRSSI(num uint32) (int32, bool)
+}
+
+// LocalNodeProvider is implemented by mesh transports that know the local
+// radio's node id without I/O; the packet feed stamps it as From on sends.
+// [MESHSAT-826]
+type LocalNodeProvider interface {
+	LocalNodeID() string
 }
 
 // MeshStatus represents the connection status of the Meshtastic device.

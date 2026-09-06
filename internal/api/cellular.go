@@ -715,6 +715,7 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.db.InsertSMSMessage("tx", req.To, req.Text, "sent", time.Now().Unix())
+	s.recordSMSTX(req.To, outText, req.Text)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 

@@ -458,6 +458,10 @@ func main() {
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
 	})
+	// Live packet feed (TTC mode): APRS and cellular gateways hand every
+	// frame to the processor's ring, which also emits "packet" SSE events.
+	// [MESHSAT-826]
+	gwMgr.SetPacketSink(proc.Packets().Sink())
 
 	// Wire node name resolver so SMS shows human-readable sender names
 	gwMgr.SetNodeNameResolver(func(nodeID uint32) string {
@@ -971,6 +975,7 @@ func main() {
 	// Dispatcher — structured delivery fan-out (v0.3.0 access rules)
 	dispatcher := engine.NewDispatcher(db, registry, gwMgr, mesh)
 	dispatcher.SetEmitter(proc.Emit)
+	dispatcher.SetPacketRing(proc.Packets()) // mesh sends by the delivery workers [MESHSAT-826]
 	dispatcher.SetAccessEvaluator(accessEval)
 	failoverResolver := engine.NewFailoverResolver(db, ifaceMgr)
 	dispatcher.SetFailoverResolver(failoverResolver)

@@ -60,8 +60,36 @@ type APRSGateway struct {
 	subs  map[uint64]chan []byte
 	subID uint64
 
+	// Live packet feed: every frame through the KISS link, both directions,
+	// goes to the sink as a PacketRecord tagged with this gateway's
+	// interface id. Nil sink = feed off. [MESHSAT-826]
+	packetMu    sync.RWMutex
+	packetSink  PacketSink
+	packetIface string
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// SetPacketSink installs the live packet feed sink and the interface id
+// (aprs_0) its records carry. Safe to call while the gateway runs. [MESHSAT-826]
+func (g *APRSGateway) SetPacketSink(sink PacketSink, iface string) {
+	g.packetMu.Lock()
+	g.packetSink = sink
+	g.packetIface = iface
+	g.packetMu.Unlock()
+}
+
+// recordFrame hands one AX.25 frame to the packet feed. Never blocks the
+// reader or writer beyond the sink's own ring insert.
+func (g *APRSGateway) recordFrame(dir string, payload []byte, msgRef string) {
+	g.packetMu.RLock()
+	sink, iface := g.packetSink, g.packetIface
+	g.packetMu.RUnlock()
+	if sink == nil {
+		return
+	}
+	sink(aprsPacketRecord(dir, iface, payload, msgRef))
 }
 
 // SubscribeFrames hands out a channel that receives every AX.25 payload the
@@ -186,7 +214,11 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 // Used by the AX25 Reticulum interface to route TX through the same pipeline
 // node, so all TX is counted by the KISSConn's atomic counter. [MESHSAT-403]
 func (g *APRSGateway) KISSSendFrame(payload []byte) error {
-	return g.kiss.SendFrame(payload)
+	if err := g.kiss.SendFrame(payload); err != nil {
+		return err
+	}
+	g.recordFrame(DirTX, payload, "")
+	return nil
 }
 
 // Tracker returns the APRS heard station and activity tracker.
@@ -491,6 +523,7 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 
 		g.lastFrameAt.Store(time.Now().UnixNano())
 		g.fanOut(payload)
+		g.recordFrame(DirRX, payload, "")
 
 		frame, err := DecodeAX25Frame(payload)
 		if err != nil {
@@ -633,6 +666,7 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	g.msgsOut.Add(1)
 	g.tracker.RecordTX()
 	g.lastActive.Store(time.Now().Unix())
+	g.recordFrame(DirTX, frame, msg.MsgRef)
 	log.Debug().Str("callsign", FormatCallsign(src)).Bool("encrypted", msg.Encrypted).
 		Int("info_len", len(info)).Msg("aprs: sent packet")
 }

@@ -325,6 +325,10 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/events", s.handleSSE)
 
+		// Live packet feed (TTC mode) [MESHSAT-826]
+		r.Get("/packets", s.handleGetPackets)
+		r.Get("/packets/rates", s.handleGetPacketRates)
+
 		// Gateway management (Phase 4)
 		r.Get("/gateways", s.handleGetGateways)
 		r.Get("/gateways/{type}", s.handleGetGateway)
