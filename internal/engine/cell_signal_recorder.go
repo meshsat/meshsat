@@ -33,6 +33,12 @@ type CellSignalRecorder struct {
 	wg     sync.WaitGroup
 }
 
+// smsHistoryIface is the interface whose ingress transforms decode inbound
+// SMS for the history table. The recorder follows the single cellular
+// transport, which the gateway layer exposes as cellular_0 (the same id the
+// SMS send handler uses for its egress transforms).
+const smsHistoryIface = "cellular_0"
+
 // NewCellSignalRecorder creates a new cellular signal recorder.
 func NewCellSignalRecorder(db *database.DB, cell transport.CellTransport) *CellSignalRecorder {
 	return &CellSignalRecorder{db: db, cell: cell, lastTech: "LTE"}
@@ -181,18 +187,28 @@ func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
 		}
 	}
 
+	// History shows what the operator sent, not what went over the air:
+	// decode a copy through the interface's ingress transforms (smaz2,
+	// AES-GCM, base64 on an encrypted peer link). A clear SMS on an
+	// encrypted interface, or a modem with no processor wired, keeps the
+	// raw text. Processing is untouched: the gateway path applies the
+	// same transforms on its own copy. [MESHSAT-822]
+	text := r.proc.DecodeIngress(smsHistoryIface, ev.Message)
+
 	// Dedup: skip if identical SMS (same sender+text) was inserted in the last 60 seconds.
 	// Modems can re-send +CMTI if AT+CMGD fails or the URC is retransmitted.
-	if dup, _ := r.db.IsDuplicateSMS(sender, ev.Message, 60); dup {
+	// Compared on the stored (decoded) text: a retransmitted URC carries the
+	// same ciphertext and so the same plaintext.
+	if dup, _ := r.db.IsDuplicateSMS(sender, text, 60); dup {
 		log.Info().Str("sender", sender).Msg("cellular: duplicate SMS suppressed")
 		return
 	}
 
-	if _, err := r.db.InsertSMSMessage("rx", sender, ev.Message, "delivered", time.Now().Unix()); err != nil {
+	if _, err := r.db.InsertSMSMessage("rx", sender, text, "delivered", time.Now().Unix()); err != nil {
 		log.Warn().Err(err).Msg("cellular event recorder: SMS insert failed")
 	}
-	log.Info().Str("sender", sender).Msg("cellular: inbound SMS persisted")
-	r.emitSSE("cellular", fmt.Sprintf("SMS received from %s: %s", sender, truncateStr(ev.Message, 60)), ev.Data)
+	log.Info().Str("sender", sender).Bool("decoded", text != ev.Message).Msg("cellular: inbound SMS persisted")
+	r.emitSSE("cellular", fmt.Sprintf("SMS received from %s: %s", sender, truncateStr(text, 60)), ev.Data)
 }
 
 func (r *CellSignalRecorder) handleCBSReceived(ev transport.CellEvent) {

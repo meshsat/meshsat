@@ -108,13 +108,15 @@ func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, te
 	return p.oobInbound
 }
 
-// oobCandidate returns the text the OOB classifier should scan: the
+// DecodeIngress returns a decoded copy of raw wire text: the
 // ingress-transformed copy when the interface has ingress transforms that
 // apply (SMS and APRS may carry channel encryption), else the raw wire
 // text (a clear frame on an encrypted interface fails the decrypt step and
-// must still be recognised). Never mutates the message. [MESHSAT-756]
-func (p *Processor) oobCandidate(sourceIface, raw string) string {
-	if p.dispatcher == nil || p.dispatcher.TransformPipeline() == nil || p.db == nil {
+// must still be recognised). Never mutates the message. Used by the OOB
+// classifier [MESHSAT-756] and by the cellular event recorder so the SMS
+// history shows the plaintext of encrypted peer traffic. [MESHSAT-822]
+func (p *Processor) DecodeIngress(sourceIface, raw string) string {
+	if p == nil || p.dispatcher == nil || p.dispatcher.TransformPipeline() == nil || p.db == nil {
 		return raw
 	}
 	iface, err := p.db.GetInterface(sourceIface)
@@ -1052,7 +1054,7 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				// [MESHSAT-756]
 				if oob := p.oobHandler(); oob != nil {
 					oobIface := msg.Source + "_0"
-					if oob(ctx, oobIface, msg.FromAddr, p.oobCandidate(oobIface, msg.Text)) {
+					if oob(ctx, oobIface, msg.FromAddr, p.DecodeIngress(oobIface, msg.Text)) {
 						continue
 					}
 				}
