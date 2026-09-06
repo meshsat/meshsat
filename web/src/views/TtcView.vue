@@ -23,6 +23,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import SpectrumWaterfall from '@/components/SpectrumWaterfall.vue'
 import TtcDeviceTDeck from '@/components/TtcDeviceTDeck.vue'
 import TtcDeviceTEcho from '@/components/TtcDeviceTEcho.vue'
+import PowerWidget from '@/components/PowerWidget.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -558,13 +559,13 @@ onUnmounted(() => {
         <img src="/meshsat-mark.png" alt="" class="h-7 w-auto" draggable="false" />
         <span class="font-display font-semibold text-base tracking-wide">MeshSat</span>
       </div>
-      <p class="font-sans text-sm text-gray-300 ml-2 hidden xl:block">Keeping people connected when the network is not.</p>
       <!-- which box is this: centred, the one word a visitor and the crew both use -->
       <div class="absolute left-1/2 -translate-x-1/2 flex items-baseline gap-2 pointer-events-none">
         <span class="font-display text-2xl text-gray-50 tracking-wide">{{ me.name }}</span>
         <span class="font-mono text-sm text-gray-500">{{ me.callsign }}</span>
       </div>
       <div class="ml-auto flex items-center gap-2">
+        <PowerWidget :kit="me.name" compact />
         <span v-for="c in chips" :key="c.key"
           class="chip font-mono text-[11px] px-2 py-1 rounded border"
           :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : c.state === 'healing' ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
