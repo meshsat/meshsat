@@ -21,6 +21,8 @@ import { useRouter, useRoute } from 'vue-router'
 import api from '@/api/client'
 import { useMeshsatStore } from '@/stores/meshsat'
 import SpectrumWaterfall from '@/components/SpectrumWaterfall.vue'
+import TtcDeviceTDeck from '@/components/TtcDeviceTDeck.vue'
+import TtcDeviceTEcho from '@/components/TtcDeviceTEcho.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,15 +30,26 @@ const store = useMeshsatStore()
 
 // ── identity ─────────────────────────────────────────────────────────
 // Which kit is this panel? From the APRS callsign, overridable with ?kit=.
+// Booth placement (owner, 6 Sep 2026): tesseract on the LEFT of parallax.
+// The keyboard T-Deck sits with parallax, the e-paper T-Echo with
+// tesseract, so the story runs right to left across the table and the
+// screens follow the table. `side` is where the box stands, `device` is
+// what is paired with it, `mesh` the island letter.
 const KITS = {
-  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'left', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'right', modem: 'RockBLOCK 9603', peer: 'parallax' },
+  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeck', mesh: 'A', modem: 'RockBLOCK 9704', peer: 'tesseract' },
+  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'techo', mesh: 'B', modem: 'RockBLOCK 9603', peer: 'parallax' },
 }
+const LEFT_KIT = 'tesseract'
+const DEVICE_NAME = { tdeck: 'T-Deck', techo: 'T-Echo' }
 const kitName = ref(route.query.kit === 'tesseract' ? 'tesseract' : route.query.kit === 'parallax' ? 'parallax' : '')
 const me = computed(() => KITS[kitName.value] || KITS.parallax)
 const peer = computed(() => KITS[me.value.peer])
-// On parallax the near device is the T-Deck (left); on tesseract the T-Echo (right).
+// Geometry follows placement; the drawing follows the paired device.
 const nearIsLeft = computed(() => me.value.side === 'left')
+const nearDev = computed(() => me.value.device)
+const nearDevName = computed(() => DEVICE_NAME[nearDev.value])
+const leftKit = computed(() => KITS[LEFT_KIT])
+const rightKit = computed(() => KITS[KITS[LEFT_KIT].peer])
 
 // ── layout: a diptych by default ─────────────────────────────────────
 // `half` (default): this panel shows its own half of the route at large
@@ -95,8 +108,8 @@ let raf = 0
 // Geometry (SVG viewBox 1280 x 470).
 // Full route, left to right: T-Deck, parallax, air, tesseract, T-Echo.
 const G = {
-  tdeck: { x: 140, y: 225 }, parallax: { x: 405, y: 225 }, airL: { x: 490, y: 225 },
-  airR: { x: 790, y: 225 }, tesseract: { x: 875, y: 225 }, techo: { x: 1140, y: 225 },
+  devL: { x: 140, y: 225 }, kitL: { x: 405, y: 225 }, airL: { x: 490, y: 225 },
+  airR: { x: 790, y: 225 }, kitR: { x: 875, y: 225 }, devR: { x: 1140, y: 225 },
   smsY: 335,
 }
 // Half route: the near device and kit large, the air leaving over an edge.
@@ -105,8 +118,8 @@ const HALF_RIGHT = { dev: { x: 1040, y: 240 }, kit: { x: 640, y: 240 }, airNear:
 const P = computed(() => {
   if (layout.value === 'full') {
     return nearIsLeft.value
-      ? { dev: G.tdeck, kit: G.parallax, airNear: G.airL, airFar: G.airR, smsY: G.smsY }
-      : { dev: G.techo, kit: G.tesseract, airNear: G.airR, airFar: G.airL, smsY: G.smsY }
+      ? { dev: G.devL, kit: G.kitL, airNear: G.airL, airFar: G.airR, smsY: G.smsY }
+      : { dev: G.devR, kit: G.kitR, airNear: G.airR, airFar: G.airL, smsY: G.smsY }
   }
   return nearIsLeft.value ? HALF_LEFT : HALF_RIGHT
 })
@@ -275,7 +288,7 @@ const statusLine = computed(() => {
   const t = current.value; if (!t) return ''
   const last = t.stages[t.stages.length - 1]
   const name = last ? last.name : ''
-  const nearDev = nearIsLeft.value ? 'T-Deck' : 'T-Echo'
+  const nearDev = nearDevName.value
   if (t.failed) return 'did not get out, the ledger has the reason'
   if (t.dir === 'out') {
     if (name === 'sent' || name === 'aprs_tx') {
@@ -343,7 +356,7 @@ const cards = computed(() => ({
       ['Brain', 'ESP32-S3, Meshtastic firmware'],
       ['Screen', '2.8 inch touch, 35-key keyboard, trackball'],
       ['Also', 'GPS, its own battery, no phone or internet needed'],
-      ['On this mesh', nearDeviceNode.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'nothing heard from it yet'],
+      ['On this mesh', nearDev.value === 'tdeck' ? (nearDeviceNode.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'nothing heard from it yet') : 'on the other kit\'s mesh'],
     ],
   },
   techo: {
@@ -354,7 +367,7 @@ const cards = computed(() => ({
       ['Brain', 'nRF52840, Meshtastic firmware'],
       ['Screen', '1.54 inch e-paper, readable with the power off'],
       ['Also', 'GPS, temperature and pressure sensor, canned replies'],
-      ['On this mesh', nearDeviceNode.value && !nearIsLeft.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'on the other kit\'s mesh'],
+      ['On this mesh', nearDev.value === 'techo' ? (nearDeviceNode.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'nothing heard from it yet') : 'on the other kit\'s mesh'],
     ],
   },
   kit: {
@@ -577,7 +590,9 @@ onUnmounted(() => {
           <!-- the one sentence a visitor needs -->
           <text x="640" y="40" text-anchor="middle" class="visitor-line">
             <template v-if="layout === 'half'">
-              {{ nearIsLeft ? 'Pick up the T-Deck and send a message. It leaves this box over the radio and lands on the kit next to it, with no internet and no phone network in between.' : 'Messages from the kit next to this one arrive over the radio and land on the T-Echo. Press its button to send one back.' }}
+              {{ nearDev === 'tdeck'
+                ? `Pick up the T-Deck and send a message. It leaves this box over the radio and lands on ${peer.name}, the kit on the ${nearIsLeft ? 'right' : 'left'}, with no internet and no phone network in between.`
+                : `Messages from ${peer.name}, the kit on the ${nearIsLeft ? 'right' : 'left'}, arrive over the radio and land on the T-Echo. Press its button to send one back.` }}
             </template>
             <template v-else>A message typed on the T-Deck leaves over the radio and lands on the other mesh. No internet, no phone network in between.</template>
           </text>
@@ -586,11 +601,12 @@ onUnmounted(() => {
           <template v-if="layout === 'half'">
             <g class="island near">
               <rect :x="P.isl.x" y="66" :width="P.isl.w" height="350" rx="30" />
-              <text :x="P.isl.x + P.isl.w / 2" y="98" text-anchor="middle" class="island-label">{{ nearIsLeft ? 'mesh A, 868 MHz' : 'mesh B, 868 MHz' }}</text>
+              <text :x="P.isl.x + P.isl.w / 2" y="98" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, 868 MHz</text>
               <text :x="P.isl.x + P.isl.w / 2" y="118" text-anchor="middle" class="island-sub">{{ lastHeardLine }}</text>
             </g>
             <g class="lanes">
-              <line :x1="nearIsLeft ? P.dev.x + 86 : P.kit.x + 86" :y1="P.dev.y" :x2="nearIsLeft ? P.kit.x - 86 : P.dev.x - 46" :y2="P.dev.y" class="lane lora near" />
+              <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 100 : 54) : P.kit.x + 100" :y1="P.dev.y"
+                    :x2="nearIsLeft ? P.kit.x - 100 : P.dev.x - (nearDev === 'tdeck' ? 100 : 54)" :y2="P.dev.y" class="lane lora near" />
               <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
                 <rect :x="Math.min(P.airNear.x, P.edge) - 10" :y="P.dev.y - 120" :width="Math.abs(P.edge - P.airNear.x) + 20" height="260" class="hit" />
                 <line :x1="P.airNear.x" :y1="P.dev.y" :x2="P.edge" :y2="P.dev.y" class="lane air-line" />
@@ -606,7 +622,7 @@ onUnmounted(() => {
                 </g>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 54" class="air-sub" text-anchor="middle">{{ nearIsLeft ? 'to tesseract, on the right' : 'from parallax, on the left' }}</text>
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 54" class="air-sub" text-anchor="middle">{{ nearDev === 'tdeck' ? `to ${peer.name}, on the ${nearIsLeft ? 'right' : 'left'}` : `from ${peer.name}, on the ${nearIsLeft ? 'right' : 'left'}` }}</text>
                 <text v-if="aprsSilent" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
                 <text v-else-if="aprsQuiet" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-sub" text-anchor="middle">nothing heard on the radio for a few minutes</text>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 26" class="air-tap" text-anchor="middle">tap any drawing for details</text>
@@ -618,43 +634,12 @@ onUnmounted(() => {
             </g>
 
             <!-- near device -->
-            <g :transform="`translate(${P.dev.x},${P.dev.y})`" class="station near tap" :class="{ flash }" @click="openCard(nearIsLeft ? 'tdeck' : 'techo')">
+            <g :transform="`translate(${P.dev.x},${P.dev.y})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
               <rect x="-110" y="-110" width="220" height="250" class="hit" rx="16" />
-              <g v-if="nearIsLeft" class="device" transform="scale(1.6)">
-                <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
-                <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
-                <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
-                <g class="ui">
-                  <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
-                  <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
-                  <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
-                </g>
-                <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
-                <g class="keys">
-                  <rect v-for="k in 10" :key="'h1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
-                  <rect v-for="k in 10" :key="'h2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
-                  <rect v-for="k in 10" :key="'h3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
-                  <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
-                </g>
-                <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
-                <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
-              </g>
-              <g v-else class="device paper" transform="scale(1.6)">
-                <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
-                <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
-                <rect x="-22" y="-38" width="44" height="44" class="epaper" />
-                <g class="ink">
-                  <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
-                  <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
-                  <rect x="-18" y="-4" width="20" height="3" rx="1" />
-                </g>
-                <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
-                <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
-                <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
-                <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
-              </g>
-              <text :y="nearIsLeft ? 88 : 100" text-anchor="middle" class="st-name">{{ nearIsLeft ? 'T-Deck Plus' : 'T-Echo' }}</text>
-              <text :y="nearIsLeft ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearIsLeft ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
+              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.6" />
+              <TtcDeviceTEcho v-else :scale="1.6" />
+              <text :y="nearDev === 'tdeck' ? 88 : 100" text-anchor="middle" class="st-name">{{ nearDev === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
+              <text :y="nearDev === 'tdeck' ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearDev === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
 
             <!-- near kit -->
@@ -666,21 +651,21 @@ onUnmounted(() => {
             </g>
           </template>
 
-          <!-- ═══ FULL LAYOUT: the whole route on one panel ═══ -->
+          <!-- ═══ FULL LAYOUT: the whole route on one panel, in table order ═══ -->
           <template v-else>
-            <g :class="['island', nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')]">
+            <g :class="['island', leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')]">
               <rect x="36" y="64" width="464" height="330" rx="28" />
-              <text x="62" y="98" class="island-label">mesh A</text>
+              <text x="62" y="98" class="island-label">mesh {{ leftKit.mesh }}</text>
               <text x="62" y="117" class="island-sub">LoRa 868 MHz, its own channel key</text>
             </g>
-            <g :class="['island', !nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')]">
+            <g :class="['island', rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')]">
               <rect x="780" y="64" width="464" height="330" rx="28" />
-              <text x="806" y="98" class="island-label">mesh B</text>
+              <text x="806" y="98" class="island-label">mesh {{ rightKit.mesh }}</text>
               <text x="806" y="117" class="island-sub">LoRa 868 MHz, a different channel key</text>
             </g>
             <g class="lanes">
-              <line :x1="G.tdeck.x + 84" :y1="G.tdeck.y" :x2="G.parallax.x - 84" :y2="G.parallax.y" class="lane lora" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-              <line :x1="G.tesseract.x + 84" :y1="G.tesseract.y" :x2="G.techo.x - 44" :y2="G.techo.y" class="lane lora" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.devL.x + (leftKit.device === 'tdeck' ? 84 : 44)" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - (rightKit.device === 'tdeck' ? 84 : 44)" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
               <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
                 <rect :x="G.airL.x" :y="G.airL.y - 110" :width="G.airR.x - G.airL.x" height="220" class="hit" />
                 <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
@@ -700,63 +685,34 @@ onUnmounted(() => {
               </g>
             </g>
 
-            <g :transform="`translate(${G.tdeck.x},${G.tdeck.y})`" class="station tap" :class="[nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && nearIsLeft }]" @click="openCard('tdeck')">
+            <!-- left slot: device + kit -->
+            <g :transform="`translate(${G.devL.x},${G.devL.y})`" class="station tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="openCard(leftKit.device)">
               <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
-              <g class="device" transform="scale(1.35)">
-                <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
-                <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
-                <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
-                <g class="ui">
-                  <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
-                  <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
-                  <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
-                </g>
-                <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
-                <g class="keys">
-                  <rect v-for="k in 10" :key="'r1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
-                  <rect v-for="k in 10" :key="'r2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
-                  <rect v-for="k in 10" :key="'r3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
-                  <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
-                </g>
-                <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
-                <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
-              </g>
-              <text y="72" text-anchor="middle" class="st-name">T-Deck Plus</text>
-              <text y="90" text-anchor="middle" class="st-sub">{{ nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, keyboard' }}</text>
+              <TtcDeviceTDeck v-if="leftKit.device === 'tdeck'" />
+              <TtcDeviceTEcho v-else />
+              <text :y="leftKit.device === 'tdeck' ? 72 : 86" text-anchor="middle" class="st-name">{{ leftKit.device === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
+              <text :y="leftKit.device === 'tdeck' ? 90 : 104" text-anchor="middle" class="st-sub">{{ leftKit.device === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
-
-            <g :transform="`translate(${G.parallax.x},${G.parallax.y})`" class="station kit tap" :class="[nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && nearIsLeft }]" @click="openCard('kit')">
+            <g :transform="`translate(${G.kitL.x},${G.kitL.y})`" class="station kit tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="openCard('kit')">
               <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
               <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
-              <text y="108" text-anchor="middle" class="st-name">parallax</text>
-              <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.parallax.callsign }}, {{ KITS.parallax.modem }}</text>
+              <text y="108" text-anchor="middle" class="st-name">{{ leftKit.name }}</text>
+              <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ leftKit.callsign }}</text>
             </g>
 
-            <g :transform="`translate(${G.tesseract.x},${G.tesseract.y})`" class="station kit tap" :class="[!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && !nearIsLeft }]" @click="openCard('kit')">
+            <!-- right slot: kit + device -->
+            <g :transform="`translate(${G.kitR.x},${G.kitR.y})`" class="station kit tap" :class="[rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && rightKit.name === me.name }]" @click="openCard('kit')">
               <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
               <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
-              <text y="108" text-anchor="middle" class="st-name">tesseract</text>
-              <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.tesseract.callsign }}, {{ KITS.tesseract.modem }}</text>
+              <text y="108" text-anchor="middle" class="st-name">{{ rightKit.name }}</text>
+              <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ rightKit.callsign }}</text>
             </g>
-
-            <g :transform="`translate(${G.techo.x},${G.techo.y})`" class="station tap" :class="[!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && !nearIsLeft }]" @click="openCard('techo')">
-              <rect x="-70" y="-90" width="140" height="200" class="hit" rx="14" />
-              <g class="device paper" transform="scale(1.35)">
-                <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
-                <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
-                <rect x="-22" y="-38" width="44" height="44" class="epaper" />
-                <g class="ink">
-                  <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
-                  <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
-                  <rect x="-18" y="-4" width="20" height="3" rx="1" />
-                </g>
-                <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
-                <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
-                <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
-                <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
-              </g>
-              <text y="86" text-anchor="middle" class="st-name">T-Echo</text>
-              <text y="104" text-anchor="middle" class="st-sub">{{ !nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, e-paper' }}</text>
+            <g :transform="`translate(${G.devR.x},${G.devR.y})`" class="station tap" :class="[rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && rightKit.name === me.name }]" @click="openCard(rightKit.device)">
+              <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
+              <TtcDeviceTDeck v-if="rightKit.device === 'tdeck'" />
+              <TtcDeviceTEcho v-else />
+              <text :y="rightKit.device === 'tdeck' ? 72 : 86" text-anchor="middle" class="st-name">{{ rightKit.device === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
+              <text :y="rightKit.device === 'tdeck' ? 90 : 104" text-anchor="middle" class="st-sub">{{ rightKit.device === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
 
             <text :x="nearIsLeft ? 1012 : 268" y="424" text-anchor="middle" class="far-note">
@@ -783,7 +739,7 @@ onUnmounted(() => {
         </div>
         <div class="col-span-6 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 min-h-[104px] flex flex-col justify-center">
           <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words" :class="current ? msgSize : 'text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
-            {{ current ? displayText(current) : (nearIsLeft ? 'Your message will appear here the moment this kit hears it.' : 'The next message from the other kit will appear here the moment it lands.') }}
+            {{ current ? displayText(current) : (nearDev === 'tdeck' ? 'Your message will appear here the moment this kit hears it.' : 'The next message from the other kit will appear here the moment it lands.') }}
           </button>
           <div v-if="current" class="font-sans text-sm text-gray-300 mt-1">
             {{ statusLine }}
@@ -945,21 +901,21 @@ onUnmounted(() => {
 .replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
 .sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; fill: #AE9C7A; }
-.station .device .body { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
-.station .device .bezel { fill: #08080B; stroke: #7A6B50; stroke-width: 0.8; }
-.station .device .screen { fill: #101018; stroke: none; }
-.station .device .ui .bubble { fill: #C8B89A; opacity: 0.55; }
-.station .device .ui .bubble.far { fill: #F96118; opacity: 0.7; }
-.station .device .trackball { fill: #1B1B22; stroke: #C8B89A; stroke-width: 1; }
-.station .device .trackball-in { fill: #C8B89A; }
-.station .device .keys rect { fill: #1B1B22; stroke: #7A6B50; stroke-width: 0.6; }
-.station .device .sma { fill: #24242C; stroke: #C8B89A; stroke-width: 1; }
-.station .device .ant { stroke: #C8B89A; stroke-width: 2.2; stroke-linecap: round; }
-.station .device .epaper { fill: #E4DAC6; }
-.station .device .ink rect { fill: #24242C; }
-.station .device .btn { fill: #15151B; stroke: #C8B89A; stroke-width: 1; }
-.station .device .btn-in { fill: #C8B89A; }
-.station .device .sidebtn { fill: #24242C; stroke: #7A6B50; stroke-width: 0.6; }
+.station :deep(.device .body) { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
+.station :deep(.device .bezel) { fill: #08080B; stroke: #7A6B50; stroke-width: 0.8; }
+.station :deep(.device .screen) { fill: #101018; stroke: none; }
+.station :deep(.device .ui .bubble) { fill: #C8B89A; opacity: 0.55; }
+.station :deep(.device .ui .bubble.far) { fill: #F96118; opacity: 0.7; }
+.station :deep(.device .trackball) { fill: #1B1B22; stroke: #C8B89A; stroke-width: 1; }
+.station :deep(.device .trackball-in) { fill: #C8B89A; }
+.station :deep(.device .keys rect) { fill: #1B1B22; stroke: #7A6B50; stroke-width: 0.6; }
+.station :deep(.device .sma) { fill: #24242C; stroke: #C8B89A; stroke-width: 1; }
+.station :deep(.device .ant) { stroke: #C8B89A; stroke-width: 2.2; stroke-linecap: round; }
+.station :deep(.device .epaper) { fill: #E4DAC6; }
+.station :deep(.device .ink rect) { fill: #24242C; }
+.station :deep(.device .btn) { fill: #15151B; stroke: #C8B89A; stroke-width: 1; }
+.station :deep(.device .btn-in) { fill: #C8B89A; }
+.station :deep(.device .sidebtn) { fill: #24242C; stroke: #7A6B50; stroke-width: 0.6; }
 .station .kit-img { filter: drop-shadow(0 0 8px rgba(200, 184, 154, 0.10)); }
 .station.near .kit-img { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); }
 .station.far { opacity: 0.35; }
@@ -971,7 +927,7 @@ onUnmounted(() => {
    on the laptop, and a one-second flash when the kit hears a message. */
 .tap { cursor: pointer; }
 .tap .hit { fill: transparent; stroke: none; }
-.station.flash .device .body, .station.flash .device .bezel { stroke: #F96118; animation: flashstroke 1.2s ease-out forwards; }
+.station.flash :deep(.device .body), .station.flash :deep(.device .bezel) { stroke: #F96118; animation: flashstroke 1.2s ease-out forwards; }
 .station.flash .kit-img { filter: drop-shadow(0 0 18px rgba(249, 97, 24, 0.55)); animation: flashglow 1.2s ease-out forwards; }
 @keyframes flashstroke { 0% { stroke: #F96118; } 100% { stroke: #C8B89A; } }
 @keyframes flashglow { 0% { filter: drop-shadow(0 0 18px rgba(249, 97, 24, 0.55)); } 100% { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); } }
@@ -986,6 +942,6 @@ onUnmounted(() => {
 .route-wrap { padding: 0 12px; }
 @media (prefers-reduced-motion: reduce) {
   .wave path { animation: none; opacity: 0.25; }
-  .station.flash .device .body, .station.flash .device .bezel, .station.flash .kit-img { animation: none; }
+  .station.flash :deep(.device .body), .station.flash :deep(.device .bezel), .station.flash .kit-img { animation: none; }
 }
 </style>
