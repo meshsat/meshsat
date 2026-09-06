@@ -53,7 +53,8 @@ type Server struct {
 	deviceHealth  *gateway.DeviceHealth // device health watchdog [MESHSAT-817]
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
-	oob           *oob.Service // OOB management frames [MESHSAT-756]
+	oob           *oob.Service    // OOB management frames [MESHSAT-756]
+	host          *oob.HostClient // host agent for reboot / poweroff [MESHSAT-831]
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
@@ -268,6 +269,12 @@ func (s *Server) SetKeyStore(ks *keystore.KeyStore) {
 // SetOOBService wires the OOB management-frame service. [MESHSAT-756]
 func (s *Server) SetOOBService(svc *oob.Service) {
 	s.oob = svc
+}
+
+// SetHostClient wires the OOB host agent client, the only path from the
+// container to a host reboot or halt. [MESHSAT-831]
+func (s *Server) SetHostClient(h *oob.HostClient) {
+	s.host = h
 }
 
 // SetTransformPipeline sets the transform pipeline for applying egress transforms on SMS send. [MESHSAT-447]
@@ -660,6 +667,7 @@ func (s *Server) Router() http.Handler {
 
 		// System
 		r.Post("/system/restart", s.handleSystemRestart)
+		r.Post("/system/power", s.handleSystemPower)
 		r.Post("/system/backlight", s.handleBacklight)
 		r.Get("/system/battery", s.handleGetBattery)
 

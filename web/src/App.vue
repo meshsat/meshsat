@@ -6,6 +6,7 @@ import JammingAlertModal from '@/components/JammingAlertModal.vue'
 import NavBar from '@/components/NavBar.vue'
 import StatusStrip from '@/components/StatusStrip.vue'
 import MeshSatOSK from '@/components/MeshSatOSK.vue'
+import PowerWidget from '@/components/PowerWidget.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
@@ -118,6 +119,9 @@ onUnmounted(() => {
 
         <!-- Right: Status indicators -->
         <div class="flex items-center gap-3 shrink-0">
+
+          <!-- Power: pack state and the restart / power off menu [MESHSAT-831] -->
+          <PowerWidget compact />
 
           <!-- Shell mode toggle: Operator (field kit) vs Engineer (admin) [MESHSAT-549] -->
           <button type="button" @click="store.toggleShellMode()"

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Backlight control for the Pi Touch Display 2 (and any other
@@ -152,4 +155,66 @@ func (s *Server) handleGetBattery(w http.ResponseWriter, r *http.Request) {
 	now := float64(time.Now().Unix())
 	bs.Stale = bs.LastUpdate > 0 && (now-bs.LastUpdate) > 60
 	writeJSON(w, http.StatusOK, bs)
+}
+
+// systemPowerRequest is the body of POST /api/system/power. [MESHSAT-831]
+type systemPowerRequest struct {
+	Action    string `json:"action"`               // "reboot" or "poweroff"
+	DelaySecs int    `json:"delay_secs,omitempty"` // 1..300, default 5
+	Confirm   bool   `json:"confirm"`              // must be true
+}
+
+// @Summary Reboot or power off the host
+// @Description Asks the OOB host agent to reboot or halt the kit after a
+// @Description short delay. Requires confirm=true. Field kits: after a halt
+// @Description the X1202 UPS keeps its 5 V output up, so the box stays
+// @Description powered until its button is long-pressed; the response
+// @Description says so in `note`.
+// @Tags system
+// @Accept json
+// @Produce json
+// @Param body body systemPowerRequest true "Power action"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/system/power [post]
+func (s *Server) handleSystemPower(w http.ResponseWriter, r *http.Request) {
+	var req systemPowerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Action != "reboot" && req.Action != "poweroff" {
+		writeError(w, http.StatusBadRequest, "action must be reboot or poweroff")
+		return
+	}
+	if !req.Confirm {
+		writeError(w, http.StatusBadRequest, "confirm must be true")
+		return
+	}
+	if req.DelaySecs <= 0 {
+		req.DelaySecs = 5
+	}
+	if req.DelaySecs > 300 {
+		req.DelaySecs = 300
+	}
+	if s.host == nil || !s.host.Available() {
+		writeError(w, http.StatusServiceUnavailable, "host agent not available on this kit")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	res, err := s.host.Call(ctx, req.Action, map[string]any{"delay": req.DelaySecs})
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "host agent: "+err.Error())
+		return
+	}
+	note := "the kit reboots; the panel may need a UPS button cycle if it comes back black"
+	if req.Action == "poweroff" {
+		note = "the kit halts; the UPS keeps it powered until its button is long-pressed"
+	}
+	log.Warn().Str("action", req.Action).Int("delay_secs", req.DelaySecs).Str("remote", r.RemoteAddr).Msg("system power action requested from the API")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "scheduled", "action": req.Action, "delay_secs": req.DelaySecs, "note": note, "agent": res,
+	})
 }

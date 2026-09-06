@@ -1186,6 +1186,7 @@ func main() {
 
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
+	srv.SetHostClient(oobHost) // host reboot / poweroff from the panel, independent of the OOB service [MESHSAT-831]
 	srv.SetBurstQueue(burstQueue)
 	srv.SetSpectrumMonitor(spectrumMon)
 

@@ -38,6 +38,16 @@ class PlanTests(unittest.TestCase):
         self.assertIsNone(argv)
         self.assertEqual(post(None), {"version": agent.VERSION})
 
+    def test_poweroff_is_a_delayed_systemctl_poweroff(self):
+        argv, _t, post = agent.plan("poweroff", {"delay": 7})
+        self.assertIsInstance(argv, list)
+        self.assertEqual(argv[0], "systemd-run")
+        self.assertIn("--on-active=7s", argv)
+        self.assertEqual(argv[-2:], ["systemctl", "poweroff"])
+        self.assertEqual(post(None), {"delay": 7})
+        argv, _t, _p = agent.plan("poweroff", {"delay": 0})
+        self.assertIn("--on-active=1s", argv)
+
     def test_reboot_delay_clamped_and_argv_list(self):
         argv, _t, post = agent.plan("reboot", {"delay": 99999})
         self.assertIsInstance(argv, list)

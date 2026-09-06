@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "2"
+VERSION = "3"
 SOCKET_PATH = os.environ.get("MESHSAT_OOB_SOCKET", "/run/meshsat-oob/agent.sock")
 READ_TIMEOUT = 5.0
 MAX_LINE = 4096
@@ -132,6 +132,17 @@ def plan(action, args):
         unit = "meshsat-oob-reboot-%d" % int(time.time())
         argv = ["systemd-run", "--collect", "--unit=" + unit,
                 "--on-active=%ds" % max(delay, 1), "systemctl", "reboot"]
+        return argv, 10, lambda _p: {"delay": delay}
+
+    if action == "poweroff":
+        # Clean halt of the host. On the field kits the X1202 keeps its
+        # 5 V output up after the halt, so the box stays powered until
+        # the UPS button is long-pressed (MESHSAT-824); the caller says so
+        # to the operator. [MESHSAT-831]
+        delay = clamp(args.get("delay", 10), 0, MAX_DELAY, 10)
+        unit = "meshsat-oob-poweroff-%d" % int(time.time())
+        argv = ["systemd-run", "--collect", "--unit=" + unit,
+                "--on-active=%ds" % max(delay, 1), "systemctl", "poweroff"]
         return argv, 10, lambda _p: {"delay": delay}
 
     if action == "journal_tail":
