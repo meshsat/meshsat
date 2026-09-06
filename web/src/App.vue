@@ -120,9 +120,6 @@ onUnmounted(() => {
         <!-- Right: Status indicators -->
         <div class="flex items-center gap-3 shrink-0">
 
-          <!-- Power: pack state and the restart / power off menu [MESHSAT-831] -->
-          <PowerWidget compact />
-
           <!-- Shell mode toggle: Operator (field kit) vs Engineer (admin) [MESHSAT-549] -->
           <button type="button" @click="store.toggleShellMode()"
             class="op-eng-toggle flex items-center h-8 rounded border border-tactical-border bg-tactical-surface overflow-hidden"
@@ -148,6 +145,9 @@ onUnmounted(() => {
 
           <!-- UTC Clock -->
           <span class="text-[10px] font-mono text-gray-500 tabular-nums">{{ utcTime }}</span>
+
+          <!-- Power: pack state and the restart / power off menu [MESHSAT-831] -->
+          <PowerWidget compact />
         </div>
       </div>
     </header>
