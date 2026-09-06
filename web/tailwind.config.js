@@ -1,4 +1,13 @@
 /** @type {import('tailwindcss').Config} */
+const ORANGE = {
+  50: '#FFF3EC', 100: '#FFE2D1', 200: '#FFC4A6', 300: '#FF9F6E', 400: '#FF7C3B',
+  500: '#F96118', 600: '#BF450B', 700: '#9C3808', 800: '#7A2C07', 900: '#6E2A0D', 950: '#3D1405'
+}
+const SAND = {
+  50: '#FAF8F3', 100: '#F1ECE1', 200: '#E4DAC6', 300: '#D6C7A9', 400: '#C8B89A',
+  500: '#AE9C7A', 600: '#7A6B50', 700: '#5C5040', 800: '#433A2C', 900: '#332C21', 950: '#1B1711'
+}
+
 export default {
   content: [
     './index.html',
@@ -6,46 +15,69 @@ export default {
   ],
   theme: {
     extend: {
+      // Brand type (MeshSat brand guide, MESHSAT-826): IBM Plex Mono for
+      // display sizes and traces, IBM Plex Sans for body. Display is
+      // monospace on purpose: the product's native artifact is a message
+      // trace, and meshsat.net commits to the same pair.
       fontFamily: {
-        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
-        display: ['Oxanium', 'system-ui', 'sans-serif']
+        sans: ['IBM Plex Sans', 'system-ui', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        display: ['IBM Plex Mono', 'ui-monospace', 'monospace']
       },
       colors: {
-        // MeshSat brand palette (matches meshsat-android Color.kt + meshsat-hub)
+        // MeshSat brand palette (brand guide, approved 2026-08-28; MESHSAT-826).
+        // Space Black #040406, Signal Orange #F96118, Off White #F7F7F4,
+        // Sand #C8B89A (from the field-kit photo). The stock grey, teal, mesh,
+        // cyan, sky, blue, indigo, violet and purple scales are REDEFINED here
+        // so the ~4,000 existing utility classes repaint without edits:
+        //   grey  -> warm near-black scale between Space Black and Off White
+        //   teal / mesh -> Signal Orange scale (the accent everywhere)
+        //   cyan / sky / blue / indigo / violet / purple -> Sand scale (one
+        //   quiet secondary hue for bearers, links and the far side)
+        // emerald / green (delivered, up), amber (healing, warning) and red
+        // (failed) keep their stock values: state colours are functional only.
         brand: {
-          primary: '#0D9488',   // teal-600
-          accent: '#14B8A6',    // teal-500
-          dark: '#111827',      // gray-900
-          surface: '#1F2937',   // gray-800
-          text: '#E5E7EB',      // gray-200
+          primary: '#F96118',
+          accent: '#FF7C3B',
+          dark: '#040406',
+          surface: '#15151B',
+          text: '#F7F7F4',
+          sand: '#C8B89A',
         },
-        // Transport badge colors (consistent across Bridge, Hub, Android)
         transport: {
-          mesh: '#06B6D4',      // cyan-500
-          iridium: '#A855F7',   // purple-500
-          cellular: '#F97316',  // orange-500
-          sms: '#22C55E',       // green-500
+          mesh: '#C8B89A',
+          iridium: '#E0B458',
+          cellular: '#F96118',
+          sms: '#22C55E',
         },
-        mesh: {
-          50: '#f0fdfa',
-          100: '#ccfbf1',
-          200: '#99f6e4',
-          300: '#5eead4',
-          400: '#2dd4bf',
-          500: '#14b8a6',
-          600: '#0d9488',
-          700: '#0f766e',
-          800: '#115e59',
-          900: '#134e4a',
-          950: '#042f2e'
+        gray: {
+          50: '#F7F7F4',
+          100: '#EBEBEE',
+          200: '#D6D6DC',
+          300: '#B4B4BD',
+          400: '#8A8A96',
+          500: '#5C5C68',
+          600: '#3A3A44',
+          700: '#24242C',
+          800: '#15151B',
+          900: '#0B0B0F',
+          950: '#040406',
         },
+        teal: ORANGE,
+        mesh: ORANGE,
+        cyan: SAND,
+        sky: SAND,
+        blue: SAND,
+        indigo: SAND,
+        violet: SAND,
+        purple: SAND,
         tactical: {
-          bg: '#111827',
-          surface: '#1F2937',
-          border: '#374151',
-          iridium: '#A855F7',
-          lora: '#06B6D4',
-          gps: '#818cf8',
+          bg: '#040406',
+          surface: '#15151B',
+          border: '#24242C',
+          iridium: '#E0B458',
+          lora: '#C8B89A',
+          gps: '#C8B89A',
           sos: '#ef4444',
           power: '#10b981'
         }

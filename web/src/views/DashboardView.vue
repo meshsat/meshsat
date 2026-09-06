@@ -897,80 +897,9 @@ const channelMatrix = computed(() => [
   return h ? { ...c, healing: true, hint: `${c.hint} — ${h.detail}` } : { ...c, healing: false }
 }))
 
-// ── Run Full Demo orchestrator [MESHSAT-686] ──
-// POST /api/demo/run fires all channels in parallel server-side; we
-// poll /api/demo/{id} every 500 ms and surface the per-channel
-// progress in the demoModal overlay.
-const demoRun = ref(null)          // { demo_id, status, channels:[...] } | null
-const demoStarting = ref(false)
-let demoPollHandle = null
-
-async function startFullDemo() {
-  if (demoStarting.value) return
-  if (demoRun.value && demoRun.value.status === 'running') return
-  demoStarting.value = true
-  try {
-    const r = await api.post('/demo/run', {})
-    const id = r?.demo_id
-    if (!id) throw new Error('demo_id missing from response')
-    demoRun.value = {
-      demo_id: id, status: 'running', started: new Date().toISOString(),
-      channels: [
-        { name: 'mesh', status: 'pending' },
-        { name: 'aprs', status: 'pending' },
-        { name: 'cellular', status: 'pending' },
-        { name: 'iridium', status: 'pending' },
-        { name: 'hub', status: 'pending' },
-        { name: 'reticulum', status: 'pending' },
-      ],
-    }
-    pollDemoUntilComplete(id)
-  } catch (e) {
-    demoRun.value = {
-      status: 'complete', channels: [],
-      error: 'Failed to start demo: ' + (e?.message || e),
-    }
-  } finally {
-    demoStarting.value = false
-  }
-}
-
-function pollDemoUntilComplete(id) {
-  if (demoPollHandle) clearInterval(demoPollHandle)
-  demoPollHandle = setInterval(async () => {
-    try {
-      const r = await api.get('/demo/' + id)
-      if (r && r.channels) demoRun.value = r
-      if (r && r.status === 'complete') {
-        clearInterval(demoPollHandle); demoPollHandle = null
-      }
-    } catch { /* transient — next tick */ }
-  }, 500)
-}
-
-function closeDemoModal() {
-  demoRun.value = null
-  if (demoPollHandle) { clearInterval(demoPollHandle); demoPollHandle = null }
-}
-
-function demoDotClass(status) {
-  switch (status) {
-    case 'success': return 'bg-emerald-400'
-    case 'failed':  return 'bg-red-400'
-    case 'skipped': return 'bg-gray-500'
-    case 'pending':
-    default:        return 'bg-amber-400 animate-pulse'
-  }
-}
-function demoTintClass(status) {
-  switch (status) {
-    case 'success': return 'text-emerald-300'
-    case 'failed':  return 'text-red-300'
-    case 'skipped': return 'text-gray-400'
-    case 'pending':
-    default:        return 'text-amber-300'
-  }
-}
+// The Run Full Demo orchestrator (MESHSAT-686) was retired for the TTC
+// mode screen (/ttc, MESHSAT-826), which drives the same paths through
+// the delivery ledger and shows the real events instead of a canned run.
 
 const opNextPass = computed(() => {
   const now = Date.now()/1000
@@ -1717,11 +1646,9 @@ function widgetGridClass(id) {
          SNR curves, no per-modem diagnostics.  Engineer mode falls
          through to the dense 13-widget grid below. [MESHSAT-549] -->
     <template v-if="store.isOperator">
-      <!-- Row 0 (MESHSAT-686): channel-matrix header strip +
-           Run Full Demo button. 9 chips summarise every comms
-           channel's live state at a glance; the demo button
-           fires a canned message through each one with
-           server-side orchestration and a modal progress HUD. -->
+      <!-- Row 0 (MESHSAT-686): channel-matrix header strip + the
+           TTC mode entry (MESHSAT-826). 9 chips summarise every comms
+           channel's live state at a glance. -->
       <div class="flex items-stretch gap-2 mb-2">
         <div class="flex-1 bg-tactical-surface rounded-lg border border-tactical-border px-2 py-1.5
                     flex items-center gap-1 overflow-x-auto">
@@ -1740,13 +1667,13 @@ function widgetGridClass(id) {
             {{ c.label }}
           </span>
         </div>
-        <button type="button" @click.prevent="startFullDemo"
-          :disabled="demoStarting || (demoRun && demoRun.status === 'running')"
-          class="w-40 shrink-0 rounded-lg border-2 border-blue-500/70 bg-blue-950/30 text-blue-300
-                 hover:bg-blue-900/40 disabled:opacity-50 disabled:cursor-not-allowed
-                 font-display font-semibold text-sm tracking-wider transition-colors">
-          {{ demoStarting ? 'STARTING…' : (demoRun && demoRun.status === 'running' ? 'RUNNING…' : 'RUN FULL DEMO') }}
-        </button>
+        <router-link to="/ttc"
+          class="w-40 shrink-0 rounded-lg border-2 border-teal-500/70 bg-teal-950/30 text-teal-300
+                 hover:bg-teal-900/40 flex items-center justify-center
+                 font-display font-semibold text-sm tracking-wider transition-colors"
+          title="Open the booth demo screen (TTC mode)">
+          TTC MODE
+        </router-link>
       </div>
 
       <!-- Row 1: Mission State (half) + SOS action (half) -->
@@ -3447,66 +3374,16 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
     </Teleport>
     </template><!-- /v-else engineer dashboard -->
 
-    <!-- Engineer-mode floating Run-Full-Demo button [MESHSAT-686].
-         Operator has it inline in row 0; engineer gets a pill
-         pinned to the top-right so the 13-widget grid below isn't
-         disturbed. Stays clear of the global nav. -->
-    <button
+    <!-- TTC mode entry (engineer view): the booth demo screen, MESHSAT-826. -->
+    <router-link
       v-if="!store.isOperator"
-      type="button"
-      @click.prevent="startFullDemo"
-      :disabled="demoStarting || (demoRun && demoRun.status === 'running')"
-      class="fixed top-16 right-4 z-40 px-3 py-1.5 rounded-full border border-blue-500/60
-             bg-blue-950/60 backdrop-blur text-blue-300 hover:bg-blue-900/60
-             disabled:opacity-50 disabled:cursor-not-allowed
+      to="/ttc"
+      class="fixed top-16 right-4 z-40 px-3 py-1.5 rounded-full border border-teal-500/60
+             bg-teal-950/60 backdrop-blur text-teal-300 hover:bg-teal-900/60
              font-mono text-[11px] tracking-wider transition-colors shadow-lg"
-      title="Fire one canned message through every available comms channel">
-      ▶ {{ demoStarting ? 'starting' : (demoRun && demoRun.status === 'running' ? 'running' : 'run full demo') }}
-    </button>
+      title="Open the booth demo screen (TTC mode)">
+      TTC mode
+    </router-link>
 
-    <!-- Run-Full-Demo progress modal [MESHSAT-686].
-         Shown while a run is in flight or after completion until
-         the operator dismisses it. Renders the 6-channel checklist
-         with live per-channel state + latency. -->
-    <Teleport to="body">
-      <div v-if="demoRun"
-        class="fixed inset-0 bg-black/75 z-[10000] flex items-center justify-center p-4"
-        @click.self="demoRun.status === 'complete' ? closeDemoModal() : null">
-        <div class="bg-tactical-surface border border-tactical-border rounded-lg p-5 max-w-md w-full">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="font-display font-semibold text-sm text-blue-400 tracking-wider">
-              {{ demoRun.status === 'running' ? 'DEMO RUNNING…' : 'DEMO COMPLETE' }}
-            </h2>
-            <span v-if="demoRun.demo_id" class="font-mono text-[10px] text-gray-500">
-              id={{ demoRun.demo_id }}
-            </span>
-          </div>
-          <div v-if="demoRun.error" class="text-[11px] text-red-400 mb-2">{{ demoRun.error }}</div>
-          <div class="space-y-1.5">
-            <div v-for="ch in (demoRun.channels || [])" :key="ch.name"
-              class="flex items-center gap-2 py-1 px-2 rounded bg-tactical-bg">
-              <span class="w-2 h-2 rounded-full shrink-0" :class="demoDotClass(ch.status)" />
-              <span class="text-xs font-mono text-gray-200 w-20 shrink-0 uppercase">{{ ch.name }}</span>
-              <span class="text-[11px] flex-1 truncate" :class="demoTintClass(ch.status)">
-                {{ ch.detail || ch.status }}
-              </span>
-              <span v-if="ch.latency_ms" class="text-[10px] font-mono text-gray-500 shrink-0">
-                {{ ch.latency_ms }}ms
-              </span>
-            </div>
-            <div v-if="(demoRun.channels || []).length === 0 && !demoRun.error"
-              class="text-[11px] text-gray-500 text-center py-2">Warming up…</div>
-          </div>
-          <div class="flex items-center justify-end mt-4 gap-2">
-            <button type="button" @click="closeDemoModal"
-              :disabled="demoRun.status === 'running' && !demoRun.error"
-              class="px-3 py-1 rounded border border-tactical-border text-xs text-gray-300
-                     hover:bg-white/[0.04] disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              {{ demoRun.status === 'running' ? 'Working…' : 'Close' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
