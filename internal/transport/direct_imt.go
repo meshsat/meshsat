@@ -588,9 +588,11 @@ func (t *DirectIMTTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Stop the reader goroutine before closing the serial port
+	// Stop the reader goroutine before closing the serial port, and drop
+	// the connection like reconnect() does so nothing stops it twice.
 	if t.conn != nil {
 		t.conn.stopReader()
+		t.conn = nil
 	}
 
 	if t.file != nil {
