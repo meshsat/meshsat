@@ -87,19 +87,32 @@ func main() {
 	// not clear a wedged ESP32-S3; a VBUS cut does. Returns false when the
 	// agent is absent or the device is not on a switchable port, in which
 	// case the caller falls back to the in-container reset. [MESHSAT-786]
+	var oobSvc *oob.Service // built after the gateways; the closure below reads it at call time
 	usbPowerCycle := func(ctx context.Context, dev, tty string) bool {
 		if dev == "" || !oobHost.Available() {
 			return false
 		}
-		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
+		call := func(args map[string]any) (map[string]any, error) {
+			hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			return oobHost.Call(hctx, "usb_power_cycle", args)
+		}
 		args := map[string]any{"device": dev, "fallback": false}
 		if tty != "" {
 			args["tty"] = tty
 		}
-		res, err := oobHost.Call(hctx, "usb_power_cycle", args)
+		res, err := call(args)
+		if err != nil && strings.Contains(err.Error(), "device not present") && oobSvc != nil {
+			// The device fell off the bus (tesseract's ZigBee dongle, 6 Sep
+			// 2026, twice for over an hour): cut the port it was last seen
+			// on. [MESHSAT-817]
+			if loc := oobSvc.LastUSBLocation(dev); loc != "" {
+				log.Warn().Str("device", dev).Str("location", loc).Msg("oob: device off the bus, power-cycling its last known hub port")
+				res, err = call(map[string]any{"device": dev, "fallback": false, "location": loc})
+			}
+		}
 		if err != nil {
-			log.Debug().Err(err).Str("device", dev).Msg("oob: host power cycle unavailable, falling back to USB reset")
+			log.Warn().Err(err).Str("device", dev).Msg("oob: host power cycle unavailable, falling back to USB reset")
 			return false
 		}
 		log.Info().Str("device", dev).Interface("result", res).Msg("oob: USB port power cycle scheduled via host agent")
@@ -1274,7 +1287,6 @@ func main() {
 	// OOB management frames [MESHSAT-756]: authenticated single-message
 	// commands over any bearer, executed from a fixed allowlist. Needs the
 	// keystore for the per-peer mgmt keys; without it the feature is off.
-	var oobSvc *oob.Service
 	if ks != nil {
 		if spectrumMon != nil {
 			oobActions["rtl_sdr"] = map[byte]oob.Action{
@@ -1440,6 +1452,17 @@ func main() {
 			log.Error().Err(err).Msg("oob: service start failed")
 			oobSvc = nil
 		} else {
+			// Learn every device's hub port once the agent is up, so a
+			// device that later drops off the bus can still have its port
+			// power-cycled by location. [MESHSAT-817]
+			go func(s *oob.Service) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(20 * time.Second):
+				}
+				s.USBSwitchable(ctx)
+			}(oobSvc)
 			proc.SetOOBInbound(oobSvc.HandleInbound)
 			srv.SetOOBService(oobSvc)
 		}
@@ -2246,7 +2269,7 @@ func main() {
 			HardGap:    time.Duration(cfg.DeviceHealthHardGapSec) * time.Second,
 			Seed:       seedDeviceHealth(db),
 		}, deviceHealthActions(db, proc, signingService))
-		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, imtTransport, sat, gwMgr, spectrumMon, gpsReader, rxWatchdog)
+		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, imtTransport, sat, gwMgr, spectrumMon, gpsReader, rxWatchdog, supervisor, usbPowerCycle)
 		checkers := engine.ReceiveCheckers{devHealth}
 		if rxWatchdog != nil {
 			checkers = append(checkers, rxWatchdog)

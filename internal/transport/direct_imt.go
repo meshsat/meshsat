@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1085,20 +1087,41 @@ func usbResetSerialDevice(who, portPath string) bool {
 		}
 	}
 
-	// Find the USB bus/device numbers from sysfs.
-	// /sys/class/tty/ttyUSB0/device/../../ → USB device dir with busnum/devnum
-	out, err := exec.Command("sh", "-c", fmt.Sprintf(
-		`DEV=$(readlink -f /sys/class/tty/%s/device/../../) && `+
-			`cat "$DEV/busnum" && cat "$DEV/devnum"`, devName)).CombinedOutput()
+	// Find the USB device directory in sysfs by walking up from the tty's
+	// device link until a directory carrying busnum/devnum. The old fixed
+	// "device/../.." was right for usb-serial ttys (ttyUSB: the link points
+	// at the port device below the interface) but two levels above a
+	// CDC-ACM tty (ttyACM: the link points at the interface itself) is the
+	// parent HUB, so a reset of the T-Call, the XIAO, the GPS or the AIOC
+	// reset the whole StarTech hub instead (tesseract, 6 Sep 2026 09:33Z:
+	// all five hub ports re-enumerated on a cellular reset). [MESHSAT-817]
+	devDir, err := filepath.EvalSymlinks("/sys/class/tty/" + devName + "/device")
 	if err != nil {
-		log.Debug().Str("subsys", who).Err(err).Str("output", string(out)).Msg("usb reset — can't resolve bus/dev numbers")
+		log.Debug().Str("subsys", who).Err(err).Msg("usb reset — can't resolve the tty's sysfs device")
 		return false
 	}
-
-	// Parse busnum and devnum
-	var busNum, devNum int
-	if _, err := fmt.Sscanf(string(out), "%d\n%d", &busNum, &devNum); err != nil {
-		log.Debug().Str("subsys", who).Err(err).Str("output", string(out)).Msg("usb reset — can't parse bus/dev")
+	found := false
+	for range 6 {
+		if _, statErr := os.Stat(filepath.Join(devDir, "busnum")); statErr == nil {
+			found = true
+			break
+		}
+		devDir = filepath.Dir(devDir)
+	}
+	if !found {
+		log.Debug().Str("subsys", who).Str("tty", devName).Msg("usb reset — no USB device directory above the tty")
+		return false
+	}
+	busRaw, err1 := os.ReadFile(filepath.Join(devDir, "busnum"))
+	devRaw, err2 := os.ReadFile(filepath.Join(devDir, "devnum"))
+	if err1 != nil || err2 != nil {
+		log.Debug().Str("subsys", who).Str("dir", devDir).Msg("usb reset — can't read bus/dev numbers")
+		return false
+	}
+	busNum, err1 := strconv.Atoi(strings.TrimSpace(string(busRaw)))
+	devNum, err2 := strconv.Atoi(strings.TrimSpace(string(devRaw)))
+	if err1 != nil || err2 != nil {
+		log.Debug().Str("subsys", who).Str("dir", devDir).Msg("usb reset — can't parse bus/dev numbers")
 		return false
 	}
 
@@ -1118,7 +1141,7 @@ func usbResetSerialDevice(who, portPath string) bool {
 		return false
 	}
 
-	log.Info().Str("subsys", who).Str("port", portPath).Str("usb", usbDevPath).Msg("usb device reset completed")
+	log.Info().Str("subsys", who).Str("port", portPath).Str("usb", usbDevPath).Str("sysfs", filepath.Base(devDir)).Msg("usb device reset completed")
 	return true
 }
 

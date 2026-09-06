@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -80,7 +81,8 @@ func probeMiss(detail string) gateway.ProbeResult { return gateway.ProbeResult{D
 // ladder run the very same code.
 func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, oobActions map[string]map[byte]oob.Action,
 	mesh transport.MeshTransport, cell transport.CellTransport, imt, sat transport.SatTransport,
-	gwMgr *gateway.Manager, spectrumMon *spectrum.SpectrumMonitor, gpsReader *transport.GPSReader, rxWatchdog *gateway.RxWatchdog) {
+	gwMgr *gateway.Manager, spectrumMon *spectrum.SpectrumMonitor, gpsReader *transport.GPSReader, rxWatchdog *gateway.RxWatchdog,
+	supervisor *transport.DeviceSupervisor, powerCycle func(ctx context.Context, dev, tty string) bool) {
 
 	if dm, ok := mesh.(*transport.DirectMeshTransport); ok && dm != nil {
 		dh.Register(meshHealthTarget(cfg, dm, oobActions["mesh"]))
@@ -89,7 +91,7 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 		dh.Register(cellularHealthTarget(cfg, dc, gwMgr, oobActions["cellular"]))
 	}
 	if gwMgr != nil {
-		dh.Register(zigbeeHealthTarget(gwMgr, oobActions["zigbee"]))
+		dh.Register(zigbeeHealthTarget(gwMgr, supervisor, oobActions["zigbee"], powerCycle))
 	}
 	if spectrumMon != nil && spectrumMon.Enabled() {
 		dh.Register(rtlSDRHealthTarget(spectrumMon, oobActions["rtl_sdr"]))
@@ -221,9 +223,17 @@ func cellularHealthTarget(cfg *config.Config, dc *transport.DirectCellTransport,
 }
 
 // zigbeeHealthTarget: SYS_PING probe through the gateway's current
-// transport, rungs reopen+init on the same tty, Z-Stack soft reset, hub
-// port power cycle followed by a gateway restart.
-func zigbeeHealthTarget(gwMgr *gateway.Manager, actions map[byte]oob.Action) gateway.HealthTarget {
+// transport. Three failure shapes seen on the kits on 6 Sep 2026: the
+// coordinator answers nothing (bootloader, wedge), the supervisor holds
+// the port but no gateway runs (a restart race after a power cycle left
+// parallax without a gateway for seven hours), and the dongle drops off
+// the bus entirely (tesseract, twice for over an hour). Rungs: start the
+// gateway or reopen+init on the same tty, Z-Stack soft reset, hub port
+// power cycle (by last known port when the dongle is absent); the gateway
+// restart after the cut is left to the device supervisor, with a late
+// safety start if nothing came back.
+func zigbeeHealthTarget(gwMgr *gateway.Manager, sup *transport.DeviceSupervisor, actions map[byte]oob.Action,
+	powerCycle func(ctx context.Context, dev, tty string) bool) gateway.HealthTarget {
 	hard := actions[oob.LevelHard]
 	zt := func() *transport.DirectZigBeeTransport {
 		if zgw := gwMgr.GetZigBeeGateway(); zgw != nil {
@@ -231,14 +241,36 @@ func zigbeeHealthTarget(gwMgr *gateway.Manager, actions map[byte]oob.Action) gat
 		}
 		return nil
 	}
+	port := func() string {
+		if sup == nil {
+			return ""
+		}
+		return sup.Registry().PortByRole(transport.RoleZigBee)
+	}
+	startGateway := func(ctx context.Context) error {
+		err := gwMgr.StartGatewayInstance(ctx, "zigbee_0")
+		if err != nil && (strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "is starting")) {
+			return nil
+		}
+		return err
+	}
+	var lastSeen time.Time // probes run one at a time
 	return gateway.HealthTarget{
 		Name:         "zigbee",
 		IfaceIDs:     []string{"zigbee_0"},
 		ProbeTimeout: 10 * time.Second,
 		Probe: func(ctx context.Context) gateway.ProbeResult {
+			p := port()
+			if p == "" {
+				if !lastSeen.IsZero() && time.Since(lastSeen) > 3*time.Minute {
+					return probeMiss(fmt.Sprintf("coordinator off the bus for %s", time.Since(lastSeen).Truncate(time.Second)))
+				}
+				return gateway.ProbeResult{Unknown: true, Detail: "no zigbee coordinator on the bus"}
+			}
+			lastSeen = time.Now()
 			t := zt()
 			if t == nil {
-				return gateway.ProbeResult{Unknown: true, Detail: "no zigbee gateway running"}
+				return probeMiss("port " + p + " claimed but no zigbee gateway running")
 			}
 			if !t.IsReady() {
 				return probeMiss("coordinator not ready (" + transport.ZNPDevStateName(t.CoordState()) + ")")
@@ -253,17 +285,18 @@ func zigbeeHealthTarget(gwMgr *gateway.Manager, actions map[byte]oob.Action) gat
 		},
 		Steps: []gateway.HealStep{
 			{
-				Level: gateway.HealLevelSoft, Name: "reopen and re-init", Grace: 65 * time.Second,
+				Level: gateway.HealLevelSoft, Name: "start gateway or reopen and re-init", Grace: 65 * time.Second,
+				Skip: func() bool { return port() == "" },
 				Run: func(ctx context.Context) error {
-					t := zt()
-					if t == nil {
-						return errors.New("no zigbee transport")
+					if zt() == nil {
+						return startGateway(ctx)
 					}
-					return t.SoftReinit(ctx)
+					return zt().SoftReinit(ctx)
 				},
 			},
 			{
 				Level: gateway.HealLevelDevice, Name: "SYS_RESET_REQ", Grace: 45 * time.Second,
+				Skip: func() bool { return zt() == nil },
 				Run: func(ctx context.Context) error {
 					t := zt()
 					if t == nil {
@@ -273,20 +306,26 @@ func zigbeeHealthTarget(gwMgr *gateway.Manager, actions map[byte]oob.Action) gat
 				},
 			},
 			{
-				Level: gateway.HealLevelHard, Name: "hub port power cycle", Grace: 60 * time.Second,
-				Skip: func() bool { return hard == nil },
+				Level: gateway.HealLevelHard, Name: "hub port power cycle", Grace: 90 * time.Second,
 				Run: func(ctx context.Context) error {
-					if hard == nil {
-						return errors.New("no hard reset action registered")
+					if port() != "" && hard != nil {
+						if err := hard(ctx); err != nil {
+							return err
+						}
+					} else if !powerCycle(ctx, "zigbee", "") {
+						return errors.New("coordinator off the bus and no remembered hub port to cycle")
 					}
-					if err := hard(ctx); err != nil {
-						return err
-					}
-					time.AfterFunc(10*time.Second, func() {
+					// The supervisor re-identifies the dongle and the gateway
+					// manager restarts the gateway; only if nothing came back
+					// after a generous wait start it ourselves.
+					time.AfterFunc(45*time.Second, func() {
+						if zt() != nil {
+							return
+						}
 						rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 						defer cancel()
-						if err := gwMgr.RestartGatewayInstance(rctx, "zigbee_0"); err != nil {
-							log.Warn().Err(err).Msg("device health: zigbee gateway restart after power cycle failed")
+						if err := startGateway(rctx); err != nil {
+							log.Warn().Err(err).Msg("device health: zigbee gateway start after power cycle failed")
 						}
 					})
 					return nil

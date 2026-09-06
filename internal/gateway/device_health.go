@@ -186,6 +186,18 @@ type DeviceHealth struct {
 	mu         sync.Mutex
 	targets    map[string]*healthTargetState
 	lastHardAt time.Time
+	// runCtx is the engine's lifetime context; manual rungs run under it,
+	// never under the HTTP request that asked for them (a request context
+	// dies as soon as the 202 goes out and cancelled the agent dial of the
+	// first manual cellular cut, tesseract 6 Sep 2026 09:33Z).
+	runCtx context.Context
+}
+
+func (d *DeviceHealth) stepContext() context.Context {
+	if d.runCtx != nil {
+		return d.runCtx
+	}
+	return context.Background()
 }
 
 // NewDeviceHealth applies defaults to zero fields.
@@ -260,6 +272,9 @@ func (d *DeviceHealth) RegisterExternal(name string, ifaceIDs []string, status f
 
 // Run probes every target on each tick until ctx ends.
 func (d *DeviceHealth) Run(ctx context.Context) {
+	d.mu.Lock()
+	d.runCtx = ctx
+	d.mu.Unlock()
 	t := time.NewTicker(d.cfg.Tick)
 	defer t.Stop()
 	d.tick(ctx)
@@ -449,7 +464,8 @@ func (d *DeviceHealth) Heal(ctx context.Context, name string, level byte, confir
 		go d.persist(name, p)
 	}
 	ts.state = HealthStateHealing
-	d.startStepLocked(ctx, ts, idx, now, "manual")
+	_ = ctx // the caller's (HTTP) context must not own the rung
+	d.startStepLocked(d.stepContext(), ts, idx, now, "manual")
 	d.mu.Unlock()
 	return nil
 }

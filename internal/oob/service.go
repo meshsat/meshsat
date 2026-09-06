@@ -100,6 +100,17 @@ type Service struct {
 	usbMu    sync.Mutex
 	usbAt    time.Time
 	usbProbe map[string]map[string]any
+	// usbLast remembers the hub port each device was last seen on, so a
+	// device that dropped off the bus can still have its port power-cycled.
+	usbLast map[string]string
+}
+
+// LastUSBLocation is the hub port (e.g. "2-1.1") a device role was last
+// seen on by a usb_switchable probe, or "" when never seen. [MESHSAT-817]
+func (s *Service) LastUSBLocation(role string) string {
+	s.usbMu.Lock()
+	defer s.usbMu.Unlock()
+	return s.usbLast[role]
 }
 
 const usbProbeTTL = 60 * time.Second
@@ -146,6 +157,12 @@ func (s *Service) USBSwitchable(ctx context.Context) map[string]map[string]any {
 	for role, v := range res {
 		if m, ok := v.(map[string]any); ok {
 			out[role] = m
+			if name, _ := m["name"].(string); name != "" {
+				if s.usbLast == nil {
+					s.usbLast = map[string]string{}
+				}
+				s.usbLast[role] = name
+			}
 		}
 	}
 	s.usbProbe = out

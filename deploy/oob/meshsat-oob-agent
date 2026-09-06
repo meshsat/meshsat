@@ -183,7 +183,20 @@ def plan(action, args):
         role = str(args.get("device", ""))
         off_ms = clamp(args.get("off_ms", DEFAULT_OFF_MS), MIN_OFF_MS, MAX_OFF_MS, DEFAULT_OFF_MS)
         fallback = args.get("fallback", True) is not False
-        dev = resolve_usb_port(role, args.get("tty"))
+        try:
+            dev = resolve_usb_port(role, args.get("tty"))
+        except Refused as e:
+            # A device that dropped off the bus cannot be found by VID:PID;
+            # the bridge may pass the hub port it last saw the device on
+            # (from an earlier usb_switchable probe) so the port can still
+            # be power-cycled. Root ports are refused by parse_usb_name.
+            loc = str(args.get("location", "") or "")
+            if "not present" in str(e) and loc and USB_NAME_RE.match(loc) and role in USB_DEVICES:
+                hub, port = parse_usb_name(loc)
+                dev = {"name": loc, "vidpid": "", "hub": hub, "twin": twin_hub(hub), "port": port}
+                log("usb_power_cycle: %s absent, cycling its last known port %s" % (role, loc))
+            else:
+                raise
         if not hub_switchable(dev["hub"], dev["port"]):
             if fallback and role in USB_REBIND:
                 ids = USB_REBIND[role]
