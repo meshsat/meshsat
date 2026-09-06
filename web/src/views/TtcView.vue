@@ -37,8 +37,8 @@ const store = useMeshsatStore()
 // screens follow the table. `side` is where the box stands, `device` is
 // what is paired with it, `mesh` the island letter.
 const KITS = {
-  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeck', mesh: 'A', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'techo', mesh: 'B', modem: 'RockBLOCK 9603', peer: 'parallax' },
+  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeck', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
+  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'techo', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9603', peer: 'parallax' },
 }
 const LEFT_KIT = 'tesseract'
 const DEVICE_NAME = { tdeck: 'T-Deck', techo: 'T-Echo' }
@@ -306,10 +306,10 @@ const statusLine = computed(() => {
 })
 const lastHeardLine = computed(() => {
   const p = packets.value.find(x => x.bearer === 'lora' && x.dir === 'rx')
-  if (!p) return 'nothing heard on this mesh yet'
+  if (!p) return 'LoRa 868 MHz, nothing heard on this mesh yet'
   const age = Math.max(0, Math.round((now.value - new Date(p.time).getTime()) / 1000))
   const who = nodeName(p.from) || p.from
-  return `last heard ${who}, ${age < 60 ? age + ' s' : Math.round(age / 60) + ' min'} ago`
+  return `LoRa 868 MHz, last heard ${who} ${age < 60 ? age + ' s' : Math.round(age / 60) + ' min'} ago`
 })
 const insideMs = computed(() => {
   const t = current.value; if (!t || t.stages.length < 2) return null
@@ -602,7 +602,7 @@ onUnmounted(() => {
           <template v-if="layout === 'half'">
             <g class="island near">
               <rect :x="P.isl.x" y="66" :width="P.isl.w" height="350" rx="30" />
-              <text :x="P.isl.x + P.isl.w / 2" y="98" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, 868 MHz</text>
+              <text :x="P.isl.x + P.isl.w / 2" y="98" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, {{ me.channel }}</text>
               <text :x="P.isl.x + P.isl.w / 2" y="118" text-anchor="middle" class="island-sub">{{ lastHeardLine }}</text>
             </g>
             <g class="lanes">
@@ -656,12 +656,12 @@ onUnmounted(() => {
           <template v-else>
             <g :class="['island', leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')]">
               <rect x="36" y="64" width="464" height="330" rx="28" />
-              <text x="62" y="98" class="island-label">mesh {{ leftKit.mesh }}</text>
+              <text x="62" y="98" class="island-label">mesh {{ leftKit.mesh }}, {{ leftKit.channel }}</text>
               <text x="62" y="117" class="island-sub">LoRa 868 MHz, its own channel key</text>
             </g>
             <g :class="['island', rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')]">
               <rect x="780" y="64" width="464" height="330" rx="28" />
-              <text x="806" y="98" class="island-label">mesh {{ rightKit.mesh }}</text>
+              <text x="806" y="98" class="island-label">mesh {{ rightKit.mesh }}, {{ rightKit.channel }}</text>
               <text x="806" y="117" class="island-sub">LoRa 868 MHz, a different channel key</text>
             </g>
             <g class="lanes">
