@@ -572,8 +572,8 @@ onUnmounted(() => {
           <span class="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle"
             :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'" />{{ c.label }}
         </span>
-        <span class="font-mono text-lg text-gray-200 tabular-nums ml-3">{{ clock }}</span>
         <PowerWidget :kit="me.name" compact />
+        <span class="font-mono text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
       </div>
     </header>
 

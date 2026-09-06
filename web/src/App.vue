@@ -143,11 +143,11 @@ onUnmounted(() => {
           <!-- Divider -->
           <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
-          <!-- UTC Clock -->
-          <span class="text-[10px] font-mono text-gray-500 tabular-nums">{{ utcTime }}</span>
-
           <!-- Power: pack state and the restart / power off menu [MESHSAT-831] -->
           <PowerWidget compact />
+
+          <!-- UTC Clock -->
+          <span class="text-[10px] font-mono text-gray-500 tabular-nums">{{ utcTime }}</span>
         </div>
       </div>
     </header>
