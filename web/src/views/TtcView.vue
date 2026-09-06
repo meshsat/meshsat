@@ -304,12 +304,20 @@ const statusLine = computed(() => {
   if (name === 'queued') return 'inside the kit, going out on LoRa'
   return `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
 })
+// Only packets this kit could decrypt count as "heard on this mesh".
+// Frames from other meshes on the same frequency arrive as ENCRYPTED_RELAY
+// with portnum 0; they are counted separately, because a visitor should
+// see that the kit hears the other mesh and cannot read it.
 const lastHeardLine = computed(() => {
-  const p = packets.value.find(x => x.bearer === 'lora' && x.dir === 'rx')
-  if (!p) return 'LoRa 868 MHz, nothing heard on this mesh yet'
+  const rx = packets.value.filter(x => x.bearer === 'lora' && x.dir === 'rx')
+  const p = rx.find(x => x.portnum > 0)
+  const cut = now.value - 300000
+  const foreign = rx.filter(x => !(x.portnum > 0) && new Date(x.time).getTime() >= cut).length
+  const tail = foreign ? `, ${foreign} unreadable from other meshes in 5 min` : ''
+  if (!p) return `LoRa 868 MHz, nothing readable heard yet${tail}`
   const age = Math.max(0, Math.round((now.value - new Date(p.time).getTime()) / 1000))
   const who = nodeName(p.from) || p.from
-  return `LoRa 868 MHz, last heard ${who} ${age < 60 ? age + ' s' : Math.round(age / 60) + ' min'} ago`
+  return `LoRa 868 MHz, last heard ${who} ${age < 60 ? age + ' s' : Math.round(age / 60) + ' min'} ago${tail}`
 })
 const insideMs = computed(() => {
   const t = current.value; if (!t || t.stages.length < 2) return null
