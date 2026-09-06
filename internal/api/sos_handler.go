@@ -156,6 +156,7 @@ func (s *Server) sosWorker(ctx context.Context) {
 			log.Error().Err(err).Int("attempt", i+1).Msg("SOS mesh send failed")
 		} else {
 			log.Warn().Int("attempt", i+1).Msg("SOS sent via mesh")
+			s.recordMeshTX(req)
 		}
 
 		// Send via satellite if available

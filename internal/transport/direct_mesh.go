@@ -1197,6 +1197,30 @@ func (t *DirectMeshTransport) GetNodes(_ context.Context) ([]MeshNode, error) {
 	return nodes, nil
 }
 
+// NodeRSSI returns the last RSSI heard from a node, as updated by every
+// packet in handlePacket. Implements NodeRSSIProvider for the packet feed.
+// [MESHSAT-826]
+func (t *DirectMeshTransport) NodeRSSI(num uint32) (int32, bool) {
+	t.nodesMu.RLock()
+	defer t.nodesMu.RUnlock()
+	node, ok := t.nodes[num]
+	if !ok {
+		return 0, false
+	}
+	return node.RSSI, true
+}
+
+// LocalNodeID returns the local radio's node id as "!%08x", or "" before
+// the config download named it. Implements LocalNodeProvider. [MESHSAT-826]
+func (t *DirectMeshTransport) LocalNodeID() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.myNodeNum == 0 {
+		return ""
+	}
+	return fmt.Sprintf("!%08x", t.myNodeNum)
+}
+
 func (t *DirectMeshTransport) GetStatus(_ context.Context) (*MeshStatus, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

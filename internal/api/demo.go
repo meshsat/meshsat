@@ -229,15 +229,17 @@ func (s *Server) demoMesh(ctx context.Context, run *demoRun) {
 	}
 	sub, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	err := s.mesh.SendMessage(sub, transport.SendRequest{
+	req := transport.SendRequest{
 		To:      "",
 		Channel: 0,
 		Text:    fmt.Sprintf("MESHSAT demo %s", run.ID),
-	})
+	}
+	err := s.mesh.SendMessage(sub, req)
 	if err != nil {
 		run.setResult("mesh", "failed", err.Error(), t)
 		return
 	}
+	s.recordMeshTX(req)
 	run.setResult("mesh", "success", "broadcast text sent on primary channel", t)
 }
 

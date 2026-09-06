@@ -70,16 +70,33 @@ type Processor struct {
 	// frame and must not enter messages, rules or forwarding.
 	oobMu      sync.RWMutex
 	oobInbound func(ctx context.Context, ifaceID, fromAddr, text string) bool
+
+	// Live packet feed (TTC mode): every LoRa, APRS and SMS frame, both
+	// directions, in a 500-record ring that also emits "packet" events.
+	// [MESHSAT-826]
+	packets *PacketRing
 }
 
 // NewProcessor creates a new event processor.
 func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
-	return &Processor{
+	p := &Processor{
 		db:            db,
 		mesh:          mesh,
 		relayDedup:    make(map[string]time.Time),
 		packetSenders: make(map[string]func(ctx context.Context, data []byte) error),
 	}
+	p.packets = NewPacketRing(PacketRingSize, p.Emit)
+	return p
+}
+
+// Packets returns the live packet feed ring. Nil-safe: a nil Processor
+// yields a nil ring whose methods are no-ops, so API handlers and hooks
+// need no guard. [MESHSAT-826]
+func (p *Processor) Packets() *PacketRing {
+	if p == nil {
+		return nil
+	}
+	return p.packets
 }
 
 // SetDeduplicator sets the in-memory deduplicator.
@@ -494,6 +511,11 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 			return
 		}
 	}
+
+	// Live packet feed: every distinct inbound packet, all portnums, before
+	// the OOB classifier so management frames on the air show up too.
+	// [MESHSAT-826]
+	p.packets.Add(meshRXRecord(p.mesh, &msg))
 
 	// OOB management frames typed on a phone or sent by a peer kit over
 	// LoRa are consumed here, before persistence and the rules engine.

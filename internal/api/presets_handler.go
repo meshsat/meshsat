@@ -168,6 +168,7 @@ func (s *Server) handleSendPreset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to send: "+err.Error())
 		return
 	}
+	s.recordMeshTX(req)
 
 	// Persist as sent message
 	dbMsg := &database.Message{
