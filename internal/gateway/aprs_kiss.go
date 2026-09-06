@@ -2,11 +2,15 @@ package gateway
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"meshsat/internal/transport"
 )
 
 // KISS protocol constants (TNC-2 spec).
@@ -18,72 +22,156 @@ const (
 	kissData  = 0x00 // Data frame command byte
 )
 
-// KISSConn manages a KISS TCP connection to a Direwolf TNC.
-// RX/TX counters track frames at the KISS port level — the single
-// source of truth for all traffic through this connection. [MESHSAT-403]
-type KISSConn struct {
-	addr string
-	conn net.Conn
-	RX   atomic.Int64 // frames read from Direwolf
-	TX   atomic.Int64 // frames sent to Direwolf
+// kissDeadliner is what a TCP connection offers and a serial port does not:
+// per-call deadlines. The serial opener enforces its timeout in the port.
+type kissDeadliner interface {
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
 }
 
-// NewKISSConn creates a new KISS TCP connection manager.
+// kissTimeoutError is what a serial read returns when the port's read
+// timeout passes with no byte; the read worker treats it like a TCP read
+// deadline and simply reads again. [MESHSAT-821]
+type kissTimeoutError struct{}
+
+func (kissTimeoutError) Error() string   { return "kiss: read timeout" }
+func (kissTimeoutError) Timeout() bool   { return true }
+func (kissTimeoutError) Temporary() bool { return true }
+
+// KISSConn manages one KISS link to a TNC: Direwolf over TCP (the bundled
+// sound-card modem) or a hardware TNC over a serial port (PicoAPRS V4 over
+// USB-C, 115200 baud). RX/TX counters track frames at the KISS level, the
+// single source of truth for all traffic through this link. [MESHSAT-403,
+// MESHSAT-821]
+type KISSConn struct {
+	addr   string // TCP host:port, when device is empty
+	device string // serial device path, e.g. /dev/serial/by-id/usb-Silicon_Labs_...
+	baud   int
+
+	mu sync.Mutex
+	rw io.ReadWriteCloser
+
+	RX atomic.Int64 // frames read from the TNC
+	TX atomic.Int64 // frames sent to the TNC
+}
+
+// NewKISSConn creates a KISS TCP connection manager.
 func NewKISSConn(addr string) *KISSConn {
 	return &KISSConn{addr: addr}
 }
 
-// Dial connects to the Direwolf KISS TCP port.
-func (k *KISSConn) Dial() error {
-	conn, err := net.DialTimeout("tcp", k.addr, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("kiss: dial %s: %w", k.addr, err)
+// NewKISSSerialConn creates a KISS serial connection manager for a hardware
+// TNC. baud 0 means 115200.
+func NewKISSSerialConn(device string, baud int) *KISSConn {
+	if baud <= 0 {
+		baud = 115200
 	}
-	k.conn = conn
+	return &KISSConn{device: device, baud: baud}
+}
+
+// newKISSConnRW wraps an already-open stream (tests).
+func newKISSConnRW(rw io.ReadWriteCloser) *KISSConn {
+	return &KISSConn{rw: rw}
+}
+
+// Serial reports whether this link is a serial TNC rather than TCP.
+func (k *KISSConn) Serial() bool { return k.device != "" }
+
+// Target is the human-readable address of the link for logs and status.
+func (k *KISSConn) Target() string {
+	if k.device != "" {
+		return fmt.Sprintf("%s@%d", k.device, k.baud)
+	}
+	return k.addr
+}
+
+// Dial opens the link: a TCP connect to Direwolf, or the serial port of a
+// hardware TNC. The serial port is opened with DTR and RTS low and never
+// toggled: on the PicoAPRS the CP2102's modem lines reach the ESP32, and a
+// pulse there is a reboot. [MESHSAT-821]
+func (k *KISSConn) Dial() error {
+	var rw io.ReadWriteCloser
+	if k.device != "" {
+		port, err := transport.OpenKISSSerial(k.device, k.baud)
+		if err != nil {
+			return fmt.Errorf("kiss: open %s: %w", k.device, err)
+		}
+		rw = port
+	} else {
+		conn, err := net.DialTimeout("tcp", k.addr, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("kiss: dial %s: %w", k.addr, err)
+		}
+		rw = conn
+	}
+	k.mu.Lock()
+	old := k.rw
+	k.rw = rw
+	k.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 	return nil
 }
 
-// Close closes the connection.
+// Close closes the link.
 func (k *KISSConn) Close() error {
-	if k.conn != nil {
-		return k.conn.Close()
+	k.mu.Lock()
+	rw := k.rw
+	k.rw = nil
+	k.mu.Unlock()
+	if rw != nil {
+		return rw.Close()
 	}
 	return nil
+}
+
+func (k *KISSConn) stream() io.ReadWriteCloser {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.rw
 }
 
 // SendFrame encodes and sends a KISS frame containing an AX.25 payload.
 func (k *KISSConn) SendFrame(payload []byte) error {
 	frame := KISSEncode(payload)
-	if k.conn == nil {
+	rw := k.stream()
+	if rw == nil {
 		return fmt.Errorf("kiss: not connected")
 	}
-	if err := k.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return err
+	if d, ok := rw.(kissDeadliner); ok {
+		if err := d.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
 	}
-	_, err := k.conn.Write(frame)
+	_, err := rw.Write(frame)
 	if err == nil {
 		k.TX.Add(1)
 	}
 	return err
 }
 
-// ReadFrame reads and decodes a single KISS frame from the connection.
-// Returns the decoded AX.25 payload.
+// ReadFrame reads and decodes a single KISS frame from the link and returns
+// the decoded AX.25 payload. A timeout with no byte is returned as an error
+// whose Timeout() is true; the caller reads again.
 func (k *KISSConn) ReadFrame() ([]byte, error) {
-	if k.conn == nil {
+	rw := k.stream()
+	if rw == nil {
 		return nil, fmt.Errorf("kiss: not connected")
 	}
+	d, hasDeadline := rw.(kissDeadliner)
 
 	buf := make([]byte, 1)
 	var frame bytes.Buffer
 
 	// Wait for start FEND
 	for {
-		if err := k.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-			return nil, err
+		if hasDeadline {
+			if err := d.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+				return nil, err
+			}
 		}
-		_, err := io.ReadFull(k.conn, buf)
-		if err != nil {
+		if err := readByte(rw, buf); err != nil {
 			return nil, err
 		}
 		if buf[0] == kissFEND {
@@ -93,21 +181,22 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 
 	// Read until end FEND
 	for {
-		if err := k.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			return nil, err
+		if hasDeadline {
+			if err := d.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return nil, err
+			}
 		}
-		_, err := io.ReadFull(k.conn, buf)
-		if err != nil {
+		if err := readByte(rw, buf); err != nil {
 			return nil, err
 		}
 		if buf[0] == kissFEND {
+			if frame.Len() == 0 {
+				// Back-to-back FENDs between frames (TNC idle fill): keep waiting.
+				continue
+			}
 			break
 		}
 		frame.WriteByte(buf[0])
-	}
-
-	if frame.Len() == 0 {
-		return nil, fmt.Errorf("kiss: empty frame")
 	}
 
 	decoded, err := KISSDecode(frame.Bytes())
@@ -115,6 +204,25 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 		k.RX.Add(1)
 	}
 	return decoded, err
+}
+
+// readByte reads exactly one byte. A serial port with a read timeout returns
+// (0, nil) when nothing arrived; that becomes kissTimeoutError so the worker
+// can distinguish silence from a dead link.
+func readByte(r io.Reader, buf []byte) error {
+	for {
+		n, err := r.Read(buf[:1])
+		if n == 1 {
+			return nil
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return io.EOF
+			}
+			return err
+		}
+		return kissTimeoutError{}
+	}
 }
 
 // KISSEncode wraps an AX.25 payload in a KISS frame.

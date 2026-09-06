@@ -90,8 +90,16 @@ type Config struct {
 	// Remote RNS node to connect to (e.g. "rns-node.example.com:4242"). Empty = disabled.
 	TCPConnectAddr string
 
-	// AX.25/APRS Reticulum interface — bidirectional via Direwolf KISS TNC
-	// Direwolf TCP KISS address (e.g. "localhost:8001"). Empty = disabled.
+	// APRS hardware KISS TNC over serial (PicoAPRS V4 on USB-C). First-boot
+	// defaults for the aprs gateway config; the device is also kept out of
+	// the device supervisor's scans. Empty = Direwolf. [MESHSAT-821]
+	APRSKISSDevice string
+	APRSKISSBaud   int
+
+	// AX.25/APRS Reticulum interface — bidirectional via a KISS TNC.
+	// Direwolf TCP KISS address (e.g. "localhost:8001"), or "gateway" to
+	// receive frames through the APRS gateway's own TNC link (required for
+	// a serial TNC, which has one file handle). Empty = disabled.
 	AX25KISSAddr string
 	// AX.25 source callsign (e.g. "MESHSAT-1"). Required if KISS addr is set.
 	AX25Callsign string
@@ -168,6 +176,8 @@ func Load() *Config {
 		MSVQSCCodebook:               envStr("MESHSAT_MSVQSC_CODEBOOK", ""),
 		TCPListenAddr:                envStr("MESHSAT_TCP_LISTEN", ""),
 		TCPConnectAddr:               envStr("MESHSAT_TCP_CONNECT", ""),
+		APRSKISSDevice:               envStr("MESHSAT_APRS_KISS_DEVICE", ""),
+		APRSKISSBaud:                 envInt("MESHSAT_APRS_KISS_BAUD", 115200),
 		AX25KISSAddr:                 envStr("MESHSAT_AX25_KISS_ADDR", ""),
 		AX25Callsign:                 envStr("MESHSAT_AX25_CALLSIGN", ""),
 		SMSReticulumPeer:             envStr("MESHSAT_SMS_RETICULUM_PEER", ""),

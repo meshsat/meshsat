@@ -102,7 +102,7 @@ Levels: 1 soft (in-process reconnect of the transport or gateway), 2 device (a r
 | 0x06 | imt (9704) | transport reconnect | I_EN cycle | USB reset |
 | 0x07 | zigbee | coordinator reinit | ZNP SYS_RESET_REQ | port power cycle, else USB reset |
 | 0x08 | ble | interface stop and start | adapter cycle | bluetooth service restart (agent) |
-| 0x09 | aprs | gateway stop and start (respawns Direwolf, resets the AIOC) | same | AIOC port power cycle, else USB rebind (agent) |
+| 0x09 | aprs | gateway stop and start (respawns Direwolf, or reopens a serial TNC) | same | sound-card kit: AIOC port power cycle, else USB rebind (agent); serial-TNC kit (PicoAPRS, MESHSAT-821): TNC port reopen plus gateway restart, since a VBUS cut does not reboot a TNC on its own battery |
 | 0x0A | gps | reader reopen | none | port power cycle, else USB reset |
 | 0x0B | rtl_sdr | spectrum recalibrate | none | port power cycle, else USB reset by sysfs id |
 | 0x7E | bridge | RESTART | | |

@@ -117,8 +117,10 @@ func RegisterDefaults(r *Registry) {
 		Options: []OptionField{
 			{Key: "callsign", Label: "Callsign", Type: "text", Default: ""},
 			{Key: "ssid", Label: "SSID", Type: "number", Default: "10"},
-			{Key: "kiss_host", Label: "Direwolf KISS Host", Type: "text", Default: "localhost"},
-			{Key: "kiss_port", Label: "Direwolf KISS Port", Type: "number", Default: "8001"},
+			{Key: "kiss_host", Label: "KISS TCP Host (Direwolf)", Type: "text", Default: "localhost"},
+			{Key: "kiss_port", Label: "KISS TCP Port", Type: "number", Default: "8001"},
+			{Key: "kiss_device", Label: "KISS Serial TNC Device (PicoAPRS, replaces Direwolf)", Type: "text", Default: ""},
+			{Key: "kiss_baud", Label: "KISS Serial Baud", Type: "number", Default: "115200"},
 			{Key: "frequency_mhz", Label: "Frequency (MHz)", Type: "text", Default: "144.800"},
 		},
 	})

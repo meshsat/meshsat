@@ -6,6 +6,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,20 @@ func openSerial(path string, baud int) (serial.Port, error) {
 	// Default read timeout — callers override as needed
 	port.SetReadTimeout(100 * time.Millisecond)
 
+	return port, nil
+}
+
+// OpenKISSSerial opens the serial port of a hardware KISS TNC (PicoAPRS V4
+// over its CP2102, 115200 8N1) with DTR and RTS low and never toggled, and
+// a one second read timeout: Read returns (0, nil) when nothing arrived, so
+// the KISS reader can tell silence from a dead port. Exported for the APRS
+// gateway. [MESHSAT-821]
+func OpenKISSSerial(path string, baud int) (io.ReadWriteCloser, error) {
+	port, err := openSerialLinesLow(path, baud)
+	if err != nil {
+		return nil, err
+	}
+	port.SetReadTimeout(time.Second)
 	return port, nil
 }
 

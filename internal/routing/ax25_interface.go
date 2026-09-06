@@ -24,10 +24,20 @@ const (
 // AX25InterfaceConfig configures an AX.25/APRS Reticulum interface.
 type AX25InterfaceConfig struct {
 	Name     string // e.g. "ax25_0"
-	KISSAddr string // Direwolf KISS TCP address (e.g. "localhost:8001")
+	KISSAddr string // Direwolf KISS TCP address (e.g. "localhost:8001"), or KISSAddrGateway
 	Callsign string // AX.25 source callsign (e.g. "MESHSAT-1")
 	DestCall string // AX.25 destination callsign (default "RTICUL-0")
 }
+
+// KISSAddrGateway makes the interface receive frames from the APRS
+// gateway's own TNC link (SetKISSRXProvider) instead of dialling a KISS TCP
+// server. Required for a hardware TNC on a serial port, which has one file
+// handle. [MESHSAT-821]
+const KISSAddrGateway = "gateway"
+
+// KISSRXProvider returns a subscription to the gateway's decoded AX.25
+// payloads and a cancel function, or nil when no gateway is running.
+type KISSRXProvider func() (<-chan []byte, func())
 
 // AX25Interface is a bidirectional Reticulum interface over AX.25 via KISS TNC.
 // Reticulum packets are embedded in AX.25 UI (unnumbered information) frames.
@@ -49,13 +59,26 @@ type AX25Interface struct {
 	// conn. [MESHSAT-403, fixed 2026-04-17]
 	kissTX         KISSTXFunc
 	kissTXProvider func() KISSTXFunc
+	kissRXProvider KISSRXProvider
 
 	mu      sync.Mutex
 	conn    net.Conn
+	frames  <-chan []byte // gateway mode: subscription to the gateway's reader
+	unsub   func()
 	online  bool
 	stopCh  chan struct{}
 	stopped bool
 }
+
+// SetKISSRXProvider wires the receive side to the APRS gateway's frame
+// fan-out. Used when KISSAddr is KISSAddrGateway. [MESHSAT-821]
+func (a *AX25Interface) SetKISSRXProvider(p KISSRXProvider) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.kissRXProvider = p
+}
+
+func (a *AX25Interface) gatewayMode() bool { return a.config.KISSAddr == KISSAddrGateway }
 
 // NewAX25Interface creates a new AX.25 Reticulum interface.
 func NewAX25Interface(config AX25InterfaceConfig, callback func(packet []byte)) *AX25Interface {
@@ -109,7 +132,7 @@ func (a *AX25Interface) Send(ctx context.Context, packet []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if !a.online || a.conn == nil {
+	if !a.online || (a.conn == nil && !a.gatewayMode()) {
 		return fmt.Errorf("ax25 interface %s is offline", a.config.Name)
 	}
 	if len(packet) > 256 {
@@ -134,6 +157,8 @@ func (a *AX25Interface) Send(ctx context.Context, packet []byte) error {
 	var err error
 	if sharedTX != nil {
 		err = sharedTX(ax25Frame)
+	} else if a.conn == nil {
+		return fmt.Errorf("ax25 interface %s: no APRS gateway to transmit through", a.config.Name)
 	} else {
 		kissFrame := kissEncode(ax25Frame)
 		if wdErr := a.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); wdErr != nil {
@@ -163,6 +188,10 @@ func (a *AX25Interface) Stop() {
 	if a.conn != nil {
 		a.conn.Close()
 	}
+	if a.unsub != nil {
+		a.unsub()
+		a.unsub = nil
+	}
 	close(a.stopCh)
 	log.Info().Str("iface", a.config.Name).Msg("ax25 reticulum interface stopped")
 }
@@ -175,6 +204,24 @@ func (a *AX25Interface) IsOnline() bool {
 }
 
 func (a *AX25Interface) connect() error {
+	if a.gatewayMode() {
+		a.mu.Lock()
+		p := a.kissRXProvider
+		a.mu.Unlock()
+		if p == nil {
+			return fmt.Errorf("ax25: %s: no KISS RX provider", a.config.Name)
+		}
+		ch, cancel := p()
+		if ch == nil {
+			return fmt.Errorf("ax25: %s: APRS gateway not running", a.config.Name)
+		}
+		a.mu.Lock()
+		a.frames = ch
+		a.unsub = cancel
+		a.online = true
+		a.mu.Unlock()
+		return nil
+	}
 	conn, err := net.DialTimeout("tcp", a.config.KISSAddr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("ax25: dial %s: %w", a.config.KISSAddr, err)
@@ -188,6 +235,10 @@ func (a *AX25Interface) connect() error {
 
 // readLoop reads KISS frames from the TNC and extracts Reticulum packets.
 func (a *AX25Interface) readLoop(ctx context.Context) {
+	if a.gatewayMode() {
+		a.gatewayReadLoop(ctx)
+		return
+	}
 	buf := make([]byte, 1024)
 	var accumulated []byte
 
@@ -238,6 +289,41 @@ func (a *AX25Interface) readLoop(ctx context.Context) {
 			}
 			accumulated = nil // partial frame is unrecoverable across the gap
 			continue
+		}
+	}
+}
+
+// gatewayReadLoop consumes the APRS gateway's frame fan-out. The gateway
+// closes the channel when it stops (a restart, a config change), which is
+// the cue to subscribe to the next instance with the usual backoff.
+// [MESHSAT-821]
+func (a *AX25Interface) gatewayReadLoop(ctx context.Context) {
+	for {
+		a.mu.Lock()
+		ch := a.frames
+		a.mu.Unlock()
+		if ch == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.stopCh:
+			return
+		case payload, ok := <-ch:
+			if !ok {
+				log.Warn().Str("iface", a.config.Name).Msg("ax25 iface: gateway feed closed, will re-subscribe")
+				a.mu.Lock()
+				a.online = false
+				a.frames = nil
+				a.unsub = nil
+				a.mu.Unlock()
+				if !a.reconnectWithBackoff(ctx) {
+					return
+				}
+				continue
+			}
+			a.handleFrame(payload)
 		}
 	}
 }

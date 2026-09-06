@@ -284,6 +284,14 @@ func main() {
 		supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
 		supervisor.SetExplicitPort(transport.RoleZigBee, cfg.ZigBeePort)
 
+		// A hardware APRS TNC on a serial port (PicoAPRS V4, a CP2102 with
+		// the ZigBee dongle's VID:PID) is the APRS gateway's alone: the
+		// probe cascade would open it and pulse the modem lines into the
+		// ESP32's reset. [MESHSAT-821]
+		if dev := aprsKISSDevice(cfg, db); dev != "" {
+			supervisor.ExcludePort(dev)
+		}
+
 		// Wire driver callbacks: supervisor notifies transports when ports are
 		// discovered or lost, replacing the old exclude-port daisy chain.
 		supervisor.SetCallbacks(transport.RoleMeshtastic, &transport.DriverCallbacks{
@@ -711,6 +719,15 @@ func main() {
 			return func(payload []byte) error { return agw.KISSSendFrame(payload) }
 		})
 		log.Info().Msg("ax25_0: TX routed through APRS gateway KISS connection (provider)")
+		// With MESHSAT_AX25_KISS_ADDR=gateway the receive side rides the
+		// gateway's reader too: a serial TNC has one file handle. [MESHSAT-821]
+		ax25Iface.SetKISSRXProvider(func() (<-chan []byte, func()) {
+			agw := gwMgr.GetAPRSGateway()
+			if agw == nil {
+				return nil, nil
+			}
+			return agw.SubscribeFrames()
+		})
 
 		if err := ax25Iface.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("ax25 reticulum interface start failed")
@@ -2233,6 +2250,7 @@ func main() {
 				}
 				return errors.New("AIOC not on a switchable hub port")
 			},
+			Reopen: aprsTNCReopen(gwMgr),
 			RestartBridge: func() {
 				log.Warn().Msg("aprs receive watchdog: restarting the bridge")
 				sigCh <- syscall.SIGTERM
@@ -2255,6 +2273,21 @@ func main() {
 		healthScorer.SetReceiveChecker(rxWatchdog)
 		go rxWatchdog.Run(ctx)
 		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
+	}
+
+	// OOB RESET aprs level 3 on a hardware-TNC kit: reopen the TNC's serial
+	// link, then restart the gateway. A hub-port cut is left to the host
+	// agent for sound-card kits (the AIOC), where it is still the right
+	// hard reset. [MESHSAT-821]
+	if reopen := aprsTNCReopen(gwMgr); reopen != nil {
+		oobActions["aprs"] = map[byte]oob.Action{
+			oob.LevelHard: func(ctx context.Context) error {
+				if err := reopen(ctx); err != nil {
+					return err
+				}
+				return gwMgr.RestartGatewayInstance(ctx, "aprs_0")
+			},
+		}
 	}
 
 	// Device health watchdog [MESHSAT-817]: protocol-level liveness probes

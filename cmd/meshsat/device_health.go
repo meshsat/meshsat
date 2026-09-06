@@ -582,3 +582,38 @@ func meshHealthTarget(cfg *config.Config, dm *transport.DirectMeshTransport, act
 		},
 	}
 }
+
+// aprsKISSDevice is the serial TNC path the APRS gateway will open: the
+// stored aprs_0 gateway config wins, the environment is the first-boot
+// default. Empty when the kit runs Direwolf. [MESHSAT-821]
+func aprsKISSDevice(cfg *config.Config, db *database.DB) string {
+	if db != nil {
+		if gc, err := db.GetGatewayConfigByInstance("aprs_0"); err == nil && gc != nil {
+			if ac, perr := gateway.ParseAPRSConfig(gc.Config); perr == nil && ac.KISSDevice != "" {
+				return ac.KISSDevice
+			}
+		}
+	}
+	return cfg.APRSKISSDevice
+}
+
+// aprsTNCReopen returns the receive watchdog's step 2 and the OOB level 3
+// for a hardware-TNC kit, or nil when the running gateway drives Direwolf
+// (then the AIOC hub-port cut applies). Resolved per call so a gateway
+// recreated by a config change is always the one acted on. [MESHSAT-821]
+func aprsTNCReopen(gwMgr *gateway.Manager) func(ctx context.Context) error {
+	if gwMgr == nil {
+		return nil
+	}
+	ag := gwMgr.APRSGateway()
+	if ag == nil || !ag.SerialTNC() {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		cur := gwMgr.APRSGateway()
+		if cur == nil {
+			return errors.New("aprs gateway not running")
+		}
+		return cur.ReopenTNC(ctx)
+	}
+}

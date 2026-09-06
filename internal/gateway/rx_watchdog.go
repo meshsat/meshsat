@@ -61,13 +61,16 @@ type RxWatchdogConfig struct {
 }
 
 // RxWatchdogActions are the recovery steps, wired by main.go to the same
-// paths the OOB executor uses: level 1 restarts the APRS gateway (Direwolf
-// respawn), level 3 cuts the AIOC's hub port through the host agent, and
-// the last resort restarts the bridge.
+// paths the OOB executor uses: step 1 restarts the APRS gateway (Direwolf
+// respawn, or a fresh open of a serial TNC), step 2 either reopens the
+// TNC's serial port (Reopen, hardware TNC kits) or cuts the AIOC's hub port
+// through the host agent (PowerCycle, sound-card kits), and the last resort
+// restarts the bridge. [MESHSAT-814, MESHSAT-821]
 type RxWatchdogActions struct {
 	Probe          func() (ReceiveHealth, bool)
 	RestartGateway func(ctx context.Context) error
 	PowerCycle     func(ctx context.Context) error
+	Reopen         func(ctx context.Context) error
 	RestartBridge  func()
 	SetState       func(state string)
 	Emit           EventEmitFunc
@@ -237,6 +240,10 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 	case 0:
 		w.runStep(ctx, 1, "restart APRS gateway (Direwolf respawn)", w.act.RestartGateway)
 	case 1:
+		if w.act.Reopen != nil {
+			w.runStep(ctx, 2, "reopen the TNC serial port", w.act.Reopen)
+			return
+		}
 		w.runStep(ctx, 2, "AIOC USB port power cycle then gateway restart", func(ctx context.Context) error {
 			if w.act.PowerCycle == nil {
 				return fmt.Errorf("no power cycle action")
@@ -260,7 +267,7 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 			return
 		}
 		w.bridgeRestartAt = now
-		w.notify("aprs_rx_watchdog", "APRS receive still silent after gateway restart and AIOC power cycle: restarting the bridge")
+		w.notify("aprs_rx_watchdog", "APRS receive still silent after the gateway restart and step 2: restarting the bridge")
 		w.step = 3
 		w.stepAt = now
 		if w.act.Persist != nil {
