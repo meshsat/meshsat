@@ -38,6 +38,14 @@ const peer = computed(() => KITS[me.value.peer])
 // On parallax the near device is the T-Deck (left); on tesseract the T-Echo (right).
 const nearIsLeft = computed(() => me.value.side === 'left')
 
+// ── layout: a diptych by default ─────────────────────────────────────
+// `half` (default): this panel shows its own half of the route at large
+// scale and the air link runs off the screen edge toward the other kit.
+// Two kits side by side, parallax on the left, tesseract on the right,
+// form one picture with the real air gap between the screens. `full`
+// (?layout=full): the whole route on one panel, for a lone kit.
+const layout = ref(route.query.layout === 'full' ? 'full' : 'half')
+
 // ── live state ───────────────────────────────────────────────────────
 const aprs = ref({})            // /api/aprs/status
 const health = ref([])          // /api/devices/health targets
@@ -83,16 +91,29 @@ const dot = reactive({ x: 0, y: 0, visible: false, lane: 'aprs', dir: 'out' })
 let tween = null
 let raf = 0
 
-// Geometry (SVG viewBox 1280 x 400). Left to right: T-Deck, parallax, air, tesseract, T-Echo.
+// Geometry (SVG viewBox 1280 x 470).
+// Full route, left to right: T-Deck, parallax, air, tesseract, T-Echo.
 const G = {
   tdeck: { x: 140, y: 225 }, parallax: { x: 405, y: 225 }, airL: { x: 490, y: 225 },
   airR: { x: 790, y: 225 }, tesseract: { x: 875, y: 225 }, techo: { x: 1140, y: 225 },
   smsY: 335,
 }
-const kitPos = computed(() => nearIsLeft.value ? G.parallax : G.tesseract)
-const devPos = computed(() => nearIsLeft.value ? G.tdeck : G.techo)
-const airNear = computed(() => nearIsLeft.value ? G.airL : G.airR)
-const airFar = computed(() => nearIsLeft.value ? G.airR : G.airL)
+// Half route: the near device and kit large, the air leaving over an edge.
+const HALF_LEFT = { dev: { x: 240, y: 240 }, kit: { x: 640, y: 240 }, airNear: { x: 790, y: 240 }, airFar: { x: 1340, y: 240 }, edge: 1280, smsY: 350, isl: { x: 56, w: 720 } }
+const HALF_RIGHT = { dev: { x: 1040, y: 240 }, kit: { x: 640, y: 240 }, airNear: { x: 490, y: 240 }, airFar: { x: -60, y: 240 }, edge: 0, smsY: 350, isl: { x: 504, w: 720 } }
+const P = computed(() => {
+  if (layout.value === 'full') {
+    return nearIsLeft.value
+      ? { dev: G.tdeck, kit: G.parallax, airNear: G.airL, airFar: G.airR, smsY: G.smsY }
+      : { dev: G.techo, kit: G.tesseract, airNear: G.airR, airFar: G.airL, smsY: G.smsY }
+  }
+  return nearIsLeft.value ? HALF_LEFT : HALF_RIGHT
+})
+const kitPos = computed(() => P.value.kit)
+const devPos = computed(() => P.value.dev)
+const airNear = computed(() => P.value.airNear)
+const airFar = computed(() => P.value.airFar)
+const smsY = computed(() => P.value.smsY)
 
 function ease(t) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t }
 function moveTo(x, y, ms) {
@@ -119,7 +140,9 @@ function newTrip(dir, seed) {
   }
   trips.value.unshift(t); trips.value.splice(12)
   current.value = t
+  replaying.value = false
   dot.dir = dir; dot.lane = 'aprs'; dot.visible = true
+  flashNear()
   return t
 }
 function stage(t, name, extra) {
@@ -174,7 +197,7 @@ function onPacket(p) {
     if (!current.value || current.value.done || current.value.dir !== 'in') {
       const t = newTrip('in', p); t.lane = 'sms'; dot.lane = 'sms'
       stage(t, 'sms_rx')
-      jump(airFar.value.x, G.smsY); moveTo(airNear.value.x, G.smsY, 1400)
+      jump(airFar.value.x, smsY.value); moveTo(airNear.value.x, smsY.value, 1400)
     }
   } else if (p.bearer === 'lora' && p.dir === 'tx') {
     const t = current.value
@@ -191,7 +214,7 @@ function onDelivery(ev) {
     if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular'))) {
       t.lane = ch.startsWith('cellular') ? 'sms' : 'aprs'; dot.lane = t.lane
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
-      moveTo(kitPos.value.x, t.lane === 'sms' ? G.smsY : kitPos.value.y, 450)
+      moveTo(kitPos.value.x, t.lane === 'sms' ? smsY.value : kitPos.value.y, 450)
     } else if (t.dir === 'in' && ch.startsWith('mesh')) {
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
       moveTo(kitPos.value.x, kitPos.value.y, 500)
@@ -199,7 +222,7 @@ function onDelivery(ev) {
   } else if (status === 'delivered' || status === 'sent') {
     if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular'))) {
       stage(t, 'sent', { channel: ch, latency: d.latency_ms })
-      const y = t.lane === 'sms' ? G.smsY : airFar.value.y
+      const y = t.lane === 'sms' ? smsY.value : airFar.value.y
       moveTo(airFar.value.x, y, 1600)
       finish(t, false, 1800)
     } else if (t.dir === 'in' && ch.startsWith('mesh')) {
@@ -235,6 +258,117 @@ function onEvent(ev) {
     } catch {}
   }
 }
+
+// ── the moment a message is heard: one flash on the near device ──────
+const flash = ref(false)
+let flashTimer = 0
+function flashNear() {
+  flash.value = false
+  clearTimeout(flashTimer)
+  requestAnimationFrame(() => { flash.value = true; flashTimer = setTimeout(() => { flash.value = false }, 1300) })
+}
+
+// ── plain-language status of the current trip ────────────────────────
+const hhmmss = (ms) => new Date(ms).toISOString().slice(11, 19) + 'Z'
+const statusLine = computed(() => {
+  const t = current.value; if (!t) return ''
+  const last = t.stages[t.stages.length - 1]
+  const name = last ? last.name : ''
+  const nearDev = nearIsLeft.value ? 'T-Deck' : 'T-Echo'
+  if (t.failed) return 'did not get out, the ledger has the reason'
+  if (t.dir === 'out') {
+    if (name === 'sent' || name === 'aprs_tx') {
+      const via = t.lane === 'sms' ? 'as one SMS' : 'over the radio'
+      return layout.value === 'half' ? `left this kit ${via} at ${hhmmss(last.at)}, the other screen shows it arriving` : `on its way ${via} to ${peer.value.name}`
+    }
+    if (name === 'queued') return 'inside the kit, picking a way out'
+    if (name === 'test') return 'a test frame from this kit'
+    return `heard on the mesh from the ${nearDev}`
+  }
+  if (name === 'sent' || name === 'lora_tx') return `on this mesh now, look at the ${nearDev}`
+  if (name === 'queued') return 'inside the kit, going out on LoRa'
+  return `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
+})
+const msgSize = computed(() => {
+  const n = (current.value && current.value.text ? current.value.text : '').length
+  return n > 100 ? 'text-2xl' : n > 48 ? 'text-3xl' : 'text-4xl'
+})
+
+// ── replay of the last real message while idle ───────────────────────
+// Honest attract motion: the last trip's path, replayed and labelled.
+const replaying = ref(false)
+let lastReplayAt = 0
+function replayLast() {
+  const t = trips.value.find(x => x.done && !x.failed)
+  if (!t || replaying.value) return
+  replaying.value = true
+  dot.lane = t.lane; dot.visible = true
+  const y = t.lane === 'sms' ? smsY.value : kitPos.value.y
+  const pts = t.dir === 'out'
+    ? [[devPos.value.x, devPos.value.y], [kitPos.value.x, kitPos.value.y], [airFar.value.x, y]]
+    : [[airFar.value.x, y], [kitPos.value.x, kitPos.value.y], [devPos.value.x, devPos.value.y]]
+  if (t.stages.some(st => st.name === 'test')) pts.shift()
+  jump(pts[0][0], pts[0][1])
+  let d = 60
+  for (let i = 1; i < pts.length; i++) { const [x, yy] = pts[i]; setTimeout(() => moveTo(x, yy, i === 1 ? 900 : 1500), d); d += i === 1 ? 950 : 1550 }
+  setTimeout(() => { if (replaying.value) { dot.visible = false; replaying.value = false } }, d + 900)
+}
+const replayAge = computed(() => {
+  const t = trips.value.find(x => x.done && !x.failed)
+  return t ? Math.max(1, Math.round((now.value - t.startedAt) / 60000)) : 0
+})
+
+// ── what is this? tap cards for the drawings ─────────────────────────
+const card = ref(null)
+const cards = computed(() => ({
+  tdeck: {
+    title: 'LilyGO T-Deck Plus',
+    lead: 'The keyboard device on the table. Type here and the message goes out on the local LoRa mesh.',
+    facts: [
+      ['Radio', 'Semtech SX1262, LoRa at 868 MHz'],
+      ['Brain', 'ESP32-S3, Meshtastic firmware'],
+      ['Screen', '2.8 inch touch, 35-key keyboard, trackball'],
+      ['Also', 'GPS, its own battery, no phone or internet needed'],
+      ['On this mesh', nearDeviceNode.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'nothing heard from it yet'],
+    ],
+  },
+  techo: {
+    title: 'LilyGO T-Echo',
+    lead: 'The e-paper device on the far side. Messages land here; its button sends a reply.',
+    facts: [
+      ['Radio', 'Semtech SX1262, LoRa at 868 MHz'],
+      ['Brain', 'nRF52840, Meshtastic firmware'],
+      ['Screen', '1.54 inch e-paper, readable with the power off'],
+      ['Also', 'GPS, temperature and pressure sensor, canned replies'],
+      ['On this mesh', nearDeviceNode.value && !nearIsLeft.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'on the other kit\'s mesh'],
+    ],
+  },
+  kit: {
+    title: `MeshSat field kit ${me.value.name}`,
+    lead: 'A hand-built prototype. It listens on the mesh and finds a way out for every message: radio, SMS, satellite.',
+    facts: [
+      ['Computer', 'Raspberry Pi 5, 8 GB, in an IP67 case with this touch panel'],
+      ['Power', '50 Wh UPS on four 18650 cells, mains or 12 V'],
+      ['Satellite', `${me.value.modem}, Iridium`],
+      ['Radio', '2 m transceiver with a software modem for APRS'],
+      ['Also', 'LTE modem for SMS, RTL-SDR watching the bands, ZigBee, GPS, Meshtastic radio'],
+      ['Right now', `${chips.value.filter(c => c.state === 'ok').length} of 3 demo channels up, ${rateOf('lora', 'rx') + rateOf('aprs', 'rx')} packets heard in the last minute`],
+    ],
+  },
+  air: {
+    title: 'The air link',
+    lead: 'How a message gets from this kit to the other one with no network in between.',
+    facts: [
+      ['Radio', 'APRS on 144.800 MHz, amateur radio packets at 1200 baud'],
+      ['Format', 'AX.25 frames from a software modem in the kit'],
+      ['Privacy', 'compressed, then AES-256-GCM, then base64; both kits share the key'],
+      ['Size', 'a 26-byte text becomes 76 bytes on the air'],
+      ['Fallback', 'when the radio is silent the same message goes as one SMS over LTE'],
+      ['Right now', aprsSilent.value ? 'the receiver on this kit is silent, SMS carries replies' : `receiver ok, ${rateOf('aprs', 'rx')} in and ${rateOf('aprs', 'tx')} out in the last minute`],
+    ],
+  },
+}))
+function openCard(k) { card.value = k; touch() }
 
 // ── polling ──────────────────────────────────────────────────────────
 let sse = null
@@ -308,7 +442,7 @@ const pipeline = computed(() => {
 
 // ── attract cycle, exit, text toggle ─────────────────────────────────
 const IDLE_MS = 180000
-const CYCLE = [{ v: 'route', ms: 60000 }, { v: 'spectrum', ms: 30000 }, { v: 'nerds', ms: 30000 }]
+const CYCLE = [{ v: 'route', ms: 90000 }, { v: 'spectrum', ms: 25000 }, { v: 'nerds', ms: 20000 }]
 const view = ref('route')       // route | spectrum | nerds (attract)
 let lastTouch = Date.now()
 let cycleIdx = 0
@@ -317,8 +451,14 @@ function touch() {
   lastTouch = Date.now()
   if (view.value !== 'route') { view.value = 'route'; cycleIdx = 0 }
 }
+function closeCard() { card.value = null }
 function tickAttract() {
   const idle = Date.now() - lastTouch
+  // Replay the last real message every 45 s once the screen has been
+  // untouched for 90 s and nothing live is moving.
+  if (view.value === 'route' && idle > 90000 && (!current.value || current.value.done) && Date.now() - lastReplayAt > 45000 && trips.value.length) {
+    lastReplayAt = Date.now(); replayLast()
+  }
   if (idle < IDLE_MS) return
   if (!cycleAt || Date.now() - cycleAt >= CYCLE[cycleIdx].ms) {
     cycleIdx = (cycleIdx + 1) % CYCLE.length
@@ -412,162 +552,261 @@ onUnmounted(() => {
             <radialGradient id="dotg"><stop offset="0" stop-color="#FFE2D1" /><stop offset="0.45" stop-color="#F96118" /><stop offset="1" stop-color="#F96118" stop-opacity="0" /></radialGradient>
           </defs>
 
-          <!-- islands: mesh A (left) and mesh B (right) -->
-          <g :class="['island', nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')]">
-            <rect x="36" y="64" width="464" height="330" rx="28" />
-            <text x="62" y="98" class="island-label">mesh A</text>
-            <text x="62" y="117" class="island-sub">LoRa 868 MHz, its own channel key</text>
-          </g>
-          <g :class="['island', !nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')]">
-            <rect x="780" y="64" width="464" height="330" rx="28" />
-            <text x="806" y="98" class="island-label">mesh B</text>
-            <text x="806" y="117" class="island-sub">LoRa 868 MHz, a different channel key</text>
-          </g>
-
-          <!-- lanes -->
-          <g class="lanes">
-            <line :x1="G.tdeck.x + 84" :y1="G.tdeck.y" :x2="G.parallax.x - 84" :y2="G.parallax.y" class="lane lora" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-            <line :x1="G.tesseract.x + 84" :y1="G.tesseract.y" :x2="G.techo.x - 44" :y2="G.techo.y" class="lane lora" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-            <!-- APRS air link -->
-            <g class="air" :class="{ silent: aprsSilent }">
-              <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
-              <g v-for="i in 3" :key="'wl'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
-                <path :d="`M ${G.airL.x + 6 + i*14} ${G.airL.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 1 ${G.airL.x + 6 + i*14} ${G.airL.y + 12 + i*8}`" />
-              </g>
-              <g v-for="i in 3" :key="'wr'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
-                <path :d="`M ${G.airR.x - 6 - i*14} ${G.airR.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${G.airR.y + 12 + i*8}`" />
-              </g>
-              <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 92" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
-              <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 72" class="air-sub" text-anchor="middle">AX.25, 1200 baud, encrypted</text>
-              <text v-if="aprsSilent" :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y + 44" class="air-warn" text-anchor="middle">receiver silent on this kit, SMS carries the reply</text>
-            </g>
-            <!-- SMS fallback lane -->
-            <g class="sms">
-              <line :x1="G.airL.x" :y1="G.smsY" :x2="G.airR.x" :y2="G.smsY" class="lane sms-line" />
-              <text :x="(G.airL.x + G.airR.x)/2" :y="G.smsY + 24" class="sms-label" text-anchor="middle">SMS over KPN when the air link is silent</text>
-            </g>
-          </g>
-
-          <!-- stations -->
-          <g :transform="`translate(${G.tdeck.x},${G.tdeck.y})`" class="station" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <!-- LilyGO T-Deck Plus, front: 2.8 inch screen over a 35-key
-                 keyboard, trackball at the lower left, SMA stub top left -->
-            <g class="device" transform="scale(1.35)">
-              <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
-              <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
-              <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
-              <g class="ui">
-                <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
-                <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
-                <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
-              </g>
-              <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
-              <g class="keys">
-                <rect v-for="k in 10" :key="'r1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
-                <rect v-for="k in 10" :key="'r2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
-                <rect v-for="k in 10" :key="'r3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
-                <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
-              </g>
-              <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
-              <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
-            </g>
-            <text y="72" text-anchor="middle" class="st-name">T-Deck Plus</text>
-            <text y="90" text-anchor="middle" class="st-sub">{{ nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, keyboard' }}</text>
-          </g>
-
-          <g :transform="`translate(${G.parallax.x},${G.parallax.y})`" class="station kit" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <!-- MeshSat field kit V1: the CAD hero render from the
-                 meshsat-fieldkit repo, recoloured onto the brand palette -->
-            <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
-            <text y="108" text-anchor="middle" class="st-name">parallax</text>
-            <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.parallax.callsign }}, {{ KITS.parallax.modem }}</text>
-          </g>
-
-          <g :transform="`translate(${G.tesseract.x},${G.tesseract.y})`" class="station kit" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <!-- MeshSat field kit V1: the CAD hero render from the
-                 meshsat-fieldkit repo, recoloured onto the brand palette -->
-            <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
-            <text y="108" text-anchor="middle" class="st-name">tesseract</text>
-            <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.tesseract.callsign }}, {{ KITS.tesseract.modem }}</text>
-          </g>
-
-          <g :transform="`translate(${G.techo.x},${G.techo.y})`" class="station" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')">
-            <!-- LilyGO T-Echo, front: 1.54 inch e-paper, one front button,
-                 side buttons, SMA stub top right -->
-            <g class="device paper" transform="scale(1.35)">
-              <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
-              <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
-              <rect x="-22" y="-38" width="44" height="44" class="epaper" />
-              <g class="ink">
-                <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
-                <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
-                <rect x="-18" y="-4" width="20" height="3" rx="1" />
-              </g>
-              <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
-              <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
-              <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
-              <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
-            </g>
-            <text y="86" text-anchor="middle" class="st-name">T-Echo</text>
-            <text y="104" text-anchor="middle" class="st-sub">{{ !nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, e-paper' }}</text>
-          </g>
-
-          <!-- far-side proof line -->
-          <text :x="nearIsLeft ? 1012 : 268" y="424" text-anchor="middle" class="far-note">
-            {{ farAlive ? `${peer.name} heard over the air ${farAgeS} s ago` : `${peer.name} not heard yet on this kit` }}
+          <!-- the one sentence a visitor needs -->
+          <text x="640" y="40" text-anchor="middle" class="visitor-line">
+            <template v-if="layout === 'half'">
+              {{ nearIsLeft ? 'Pick up the T-Deck and send a message. It leaves this box over the radio and lands on the kit next to it, with no internet and no phone network in between.' : 'Messages from the kit next to this one arrive over the radio and land on the T-Echo. Press its button to send one back.' }}
+            </template>
+            <template v-else>A message typed on the T-Deck leaves over the radio and lands on the other mesh. No internet, no phone network in between.</template>
           </text>
 
+          <!-- ═══ HALF LAYOUT: this kit's half, the air leaving over the edge ═══ -->
+          <template v-if="layout === 'half'">
+            <g class="island near">
+              <rect :x="P.isl.x" y="66" :width="P.isl.w" height="350" rx="30" />
+              <text :x="nearIsLeft ? P.isl.x + 28 : P.isl.x + P.isl.w - 28" :text-anchor="nearIsLeft ? 'start' : 'end'" y="378" class="island-label">{{ nearIsLeft ? 'mesh A' : 'mesh B' }}</text>
+              <text :x="nearIsLeft ? P.isl.x + 28 : P.isl.x + P.isl.w - 28" :text-anchor="nearIsLeft ? 'start' : 'end'" y="398" class="island-sub">LoRa at 868 MHz, this kit's own channel key</text>
+            </g>
+            <g class="lanes">
+              <line :x1="nearIsLeft ? P.dev.x + 86 : P.kit.x + 86" :y1="P.dev.y" :x2="nearIsLeft ? P.kit.x - 86 : P.dev.x - 46" :y2="P.dev.y" class="lane lora near" />
+              <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
+                <rect :x="Math.min(P.airNear.x, P.edge) - 10" :y="P.dev.y - 120" :width="Math.abs(P.edge - P.airNear.x) + 20" height="260" class="hit" />
+                <line :x1="P.airNear.x" :y1="P.dev.y" :x2="P.edge" :y2="P.dev.y" class="lane air-line" />
+                <g v-for="i in 3" :key="'wn'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
+                  <path :d="nearIsLeft
+                    ? `M ${P.airNear.x + 6 + i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.airNear.x + 6 + i*16} ${P.dev.y + 14 + i*10}`
+                    : `M ${P.airNear.x - 6 - i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.airNear.x - 6 - i*16} ${P.dev.y + 14 + i*10}`" />
+                </g>
+                <g v-for="i in 3" :key="'we'+i" class="wave" :style="{ animationDelay: (i * 0.5 + 0.25) + 's' }">
+                  <path :d="nearIsLeft
+                    ? `M ${P.edge - 40 - i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.edge - 40 - i*16} ${P.dev.y + 14 + i*10}`
+                    : `M ${P.edge + 40 + i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.edge + 40 + i*16} ${P.dev.y + 14 + i*10}`" />
+                </g>
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 54" class="air-sub" text-anchor="middle">{{ nearIsLeft ? 'to tesseract, on the right' : 'from parallax, on the left' }}</text>
+                <text v-if="aprsSilent" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 26" class="air-tap" text-anchor="middle">tap any drawing for details</text>
+              </g>
+              <g class="sms">
+                <line :x1="P.airNear.x" :y1="P.smsY" :x2="P.edge" :y2="P.smsY" class="lane sms-line" />
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.smsY + 26" class="sms-label" text-anchor="middle">SMS over LTE when the radio is silent</text>
+              </g>
+            </g>
+
+            <!-- near device -->
+            <g :transform="`translate(${P.dev.x},${P.dev.y})`" class="station near tap" :class="{ flash }" @click="openCard(nearIsLeft ? 'tdeck' : 'techo')">
+              <rect x="-110" y="-110" width="220" height="250" class="hit" rx="16" />
+              <g v-if="nearIsLeft" class="device" transform="scale(1.6)">
+                <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
+                <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
+                <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
+                <g class="ui">
+                  <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
+                  <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
+                  <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
+                </g>
+                <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
+                <g class="keys">
+                  <rect v-for="k in 10" :key="'h1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
+                  <rect v-for="k in 10" :key="'h2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
+                  <rect v-for="k in 10" :key="'h3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
+                  <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
+                </g>
+                <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
+                <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
+              </g>
+              <g v-else class="device paper" transform="scale(1.6)">
+                <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
+                <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
+                <rect x="-22" y="-38" width="44" height="44" class="epaper" />
+                <g class="ink">
+                  <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
+                  <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
+                  <rect x="-18" y="-4" width="20" height="3" rx="1" />
+                </g>
+                <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
+                <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
+                <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
+                <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
+              </g>
+              <text :y="nearIsLeft ? 88 : 100" text-anchor="middle" class="st-name">{{ nearIsLeft ? 'T-Deck Plus' : 'T-Echo' }}</text>
+              <text :y="nearIsLeft ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearDeviceNode ? `on the mesh as ${nodeName(nearDeviceNode)}` : (nearIsLeft ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper') }}</text>
+            </g>
+
+            <!-- near kit -->
+            <g :transform="`translate(${P.kit.x},${P.kit.y})`" class="station kit near tap" :class="{ flash }" @click="openCard('kit')">
+              <rect x="-110" y="-130" width="220" height="290" class="hit" rx="16" />
+              <image href="/kit-v1.png" x="-97" y="-128" width="194" height="230" class="kit-img" />
+              <text y="128" text-anchor="middle" class="st-name">{{ me.name }}</text>
+              <text y="150" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}, {{ me.modem }}</text>
+            </g>
+          </template>
+
+          <!-- ═══ FULL LAYOUT: the whole route on one panel ═══ -->
+          <template v-else>
+            <g :class="['island', nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')]">
+              <rect x="36" y="64" width="464" height="330" rx="28" />
+              <text x="62" y="98" class="island-label">mesh A</text>
+              <text x="62" y="117" class="island-sub">LoRa 868 MHz, its own channel key</text>
+            </g>
+            <g :class="['island', !nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')]">
+              <rect x="780" y="64" width="464" height="330" rx="28" />
+              <text x="806" y="98" class="island-label">mesh B</text>
+              <text x="806" y="117" class="island-sub">LoRa 868 MHz, a different channel key</text>
+            </g>
+            <g class="lanes">
+              <line :x1="G.tdeck.x + 84" :y1="G.tdeck.y" :x2="G.parallax.x - 84" :y2="G.parallax.y" class="lane lora" :class="nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.tesseract.x + 84" :y1="G.tesseract.y" :x2="G.techo.x - 44" :y2="G.techo.y" class="lane lora" :class="!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
+                <rect :x="G.airL.x" :y="G.airL.y - 110" :width="G.airR.x - G.airL.x" height="220" class="hit" />
+                <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
+                <g v-for="i in 3" :key="'wl'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
+                  <path :d="`M ${G.airL.x + 6 + i*14} ${G.airL.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 1 ${G.airL.x + 6 + i*14} ${G.airL.y + 12 + i*8}`" />
+                </g>
+                <g v-for="i in 3" :key="'wr'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
+                  <path :d="`M ${G.airR.x - 6 - i*14} ${G.airR.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${G.airR.y + 12 + i*8}`" />
+                </g>
+                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 92" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
+                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 72" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
+                <text v-if="aprsSilent" :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y + 44" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
+              </g>
+              <g class="sms">
+                <line :x1="G.airL.x" :y1="G.smsY" :x2="G.airR.x" :y2="G.smsY" class="lane sms-line" />
+                <text :x="(G.airL.x + G.airR.x)/2" :y="G.smsY + 24" class="sms-label" text-anchor="middle">SMS over LTE when the radio is silent</text>
+              </g>
+            </g>
+
+            <g :transform="`translate(${G.tdeck.x},${G.tdeck.y})`" class="station tap" :class="[nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && nearIsLeft }]" @click="openCard('tdeck')">
+              <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
+              <g class="device" transform="scale(1.35)">
+                <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
+                <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
+                <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
+                <g class="ui">
+                  <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
+                  <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
+                  <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
+                </g>
+                <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
+                <g class="keys">
+                  <rect v-for="k in 10" :key="'r1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
+                  <rect v-for="k in 10" :key="'r2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
+                  <rect v-for="k in 10" :key="'r3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
+                  <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
+                </g>
+                <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
+                <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
+              </g>
+              <text y="72" text-anchor="middle" class="st-name">T-Deck Plus</text>
+              <text y="90" text-anchor="middle" class="st-sub">{{ nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, keyboard' }}</text>
+            </g>
+
+            <g :transform="`translate(${G.parallax.x},${G.parallax.y})`" class="station kit tap" :class="[nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && nearIsLeft }]" @click="openCard('kit')">
+              <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
+              <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
+              <text y="108" text-anchor="middle" class="st-name">parallax</text>
+              <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.parallax.callsign }}, {{ KITS.parallax.modem }}</text>
+            </g>
+
+            <g :transform="`translate(${G.tesseract.x},${G.tesseract.y})`" class="station kit tap" :class="[!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && !nearIsLeft }]" @click="openCard('kit')">
+              <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
+              <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
+              <text y="108" text-anchor="middle" class="st-name">tesseract</text>
+              <text y="126" text-anchor="middle" class="st-sub">MeshSat kit, {{ KITS.tesseract.callsign }}, {{ KITS.tesseract.modem }}</text>
+            </g>
+
+            <g :transform="`translate(${G.techo.x},${G.techo.y})`" class="station tap" :class="[!nearIsLeft ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && !nearIsLeft }]" @click="openCard('techo')">
+              <rect x="-70" y="-90" width="140" height="200" class="hit" rx="14" />
+              <g class="device paper" transform="scale(1.35)">
+                <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
+                <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
+                <rect x="-22" y="-38" width="44" height="44" class="epaper" />
+                <g class="ink">
+                  <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
+                  <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
+                  <rect x="-18" y="-4" width="20" height="3" rx="1" />
+                </g>
+                <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
+                <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
+                <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
+                <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
+              </g>
+              <text y="86" text-anchor="middle" class="st-name">T-Echo</text>
+              <text y="104" text-anchor="middle" class="st-sub">{{ !nearIsLeft && nearDeviceNode ? nodeName(nearDeviceNode) : 'Meshtastic, e-paper' }}</text>
+            </g>
+
+            <text :x="nearIsLeft ? 1012 : 268" y="424" text-anchor="middle" class="far-note">
+              {{ farAlive ? `${peer.name} heard over the air ${farAgeS} s ago` : `${peer.name} not heard yet on this kit` }}
+            </text>
+          </template>
+
+          <!-- replay label -->
+          <text v-if="replaying" x="640" y="452" text-anchor="middle" class="replay-note">replaying the last real message, {{ replayAge }} min ago</text>
+
           <!-- the message -->
-          <g v-if="dot.visible" class="msg" :class="[dot.lane, current && current.failed ? 'failed' : '']" :transform="`translate(${dot.x},${dot.y})`">
-            <circle r="22" fill="url(#dotg)" opacity="0.55" />
-            <circle r="7" class="core" filter="url(#glow)" />
+          <g v-if="dot.visible" class="msg" :class="[dot.lane, current && current.failed ? 'failed' : '', replaying ? 'replay' : '']" :transform="`translate(${dot.x},${dot.y})`">
+            <circle r="26" fill="url(#dotg)" opacity="0.55" />
+            <circle r="8" class="core" filter="url(#glow)" />
           </g>
         </svg>
       </div>
 
-      <!-- strip under the route: last message, legs, rates -->
+      <!-- strip: the message, its status, the QR, the numbers -->
       <section class="grid grid-cols-12 gap-3 px-5 pb-4 shrink-0">
-        <div class="col-span-5 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 min-h-[92px]">
-          <div class="font-sans text-xs text-gray-400 mb-1">
-            {{ current ? (current.dir === 'out' ? `Last message out, from ${nodeName(current.from) || current.from || 'the mesh'}` : `Last message in, from ${current.from || peer.callsign}`) : 'Waiting for the first message' }}
-          </div>
-          <button type="button" class="text-left w-full font-display text-2xl leading-tight text-gray-50 break-words" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
-            {{ current ? displayText(current) : `Type on the ${nearIsLeft ? 'T-Deck' : 'T-Echo'}. The message crosses this screen as it really travels.` }}
-          </button>
-          <div v-if="current" class="font-mono text-[11px] text-gray-400 mt-1">
-            {{ current.bytes || (current.text || '').length }} bytes on the wire
-            <span v-if="current.rssi"> · RSSI {{ current.rssi }} dBm</span><span v-if="current.snr"> · SNR {{ current.snr }} dB</span>
-            <span v-if="current.hops"> · {{ current.hops }} hop{{ current.hops > 1 ? 's' : '' }}</span>
-            <span v-if="current.failed" class="text-red-300"> · failed</span>
-          </div>
+        <div class="col-span-2 flex items-center gap-3">
+          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[92px] h-[92px] shrink-0" draggable="false" />
+          <div class="font-sans text-sm leading-snug text-gray-300">meshsat.net<br /><span class="text-gray-500">open source, GPLv3</span></div>
         </div>
-        <div class="col-span-3 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3">
-          <div class="font-sans text-xs text-gray-400 mb-1">Legs, measured</div>
-          <div v-if="legLabel.length" class="space-y-1">
-            <div v-for="l in legLabel" :key="l.k" class="flex items-baseline justify-between gap-2">
-              <span class="font-sans text-xs text-gray-300">{{ l.k }}</span>
-              <span class="font-mono text-base tabular-nums text-teal-300">{{ l.v }} ms</span>
-            </div>
+        <div class="col-span-6 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 min-h-[104px] flex flex-col justify-center">
+          <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words" :class="current ? msgSize : 'text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
+            {{ current ? displayText(current) : (nearIsLeft ? 'Your message will appear here the moment this kit hears it.' : 'The next message from the other kit will appear here the moment it lands.') }}
+          </button>
+          <div v-if="current" class="font-sans text-sm text-gray-300 mt-1">
+            {{ statusLine }}
+            <span class="text-gray-500"> · {{ current.bytes || (current.text || '').length }} bytes</span>
+            <span v-if="current.rssi" class="text-gray-500"> · {{ current.rssi }} dBm</span>
+            <span v-if="current.snr" class="text-gray-500"> · SNR {{ current.snr }} dB</span>
           </div>
-          <div v-else class="font-mono text-sm text-gray-500">no trip yet</div>
         </div>
         <div class="col-span-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3">
-          <div class="font-sans text-xs text-gray-400 mb-1">Last minute on this kit</div>
           <div class="grid grid-cols-2 gap-x-3 font-mono text-sm tabular-nums">
+            <span class="text-gray-400">last minute</span><span></span>
             <span class="text-gray-300">LoRa</span><span class="text-gray-50">{{ rateOf('lora','rx') }} in · {{ rateOf('lora','tx') }} out</span>
             <span class="text-gray-300">APRS</span><span class="text-gray-50">{{ rateOf('aprs','rx') }} in · {{ rateOf('aprs','tx') }} out</span>
             <span class="text-gray-300">SMS</span><span class="text-gray-50">{{ rateOf('sms','rx') }} in · {{ rateOf('sms','tx') }} out</span>
           </div>
+          <div v-if="legLabel.length" class="font-mono text-xs text-gray-400 mt-1">
+            <span v-for="l in legLabel" :key="l.k" class="mr-3">{{ l.k }} <span class="text-teal-300">{{ l.v }} ms</span></span>
+          </div>
           <div class="mt-2 flex items-center gap-2">
-            <button type="button" @click="drawer = !drawer" class="font-mono text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
-            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-[11px] px-2 py-1 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
+            <button type="button" @click="drawer = !drawer" class="font-mono text-xs px-2.5 py-1.5 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
+            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-xs px-2.5 py-1.5 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
               {{ testArmed ? 'tap again to send' : 'test frame' }}
             </button>
-            <span v-if="testNote" class="font-mono text-[11px] text-gray-400">{{ testNote }}</span>
+            <span v-if="testNote" class="font-mono text-xs text-gray-400">{{ testNote }}</span>
           </div>
         </div>
       </section>
     </main>
+
+    <!-- WHAT IS THIS: tap card -->
+    <div v-if="card" class="absolute inset-0 z-10" @click.self="closeCard">
+      <section class="absolute left-0 right-0 bottom-0 bg-gray-900 border-t border-gray-700 px-6 pt-5 pb-6 card-sheet" role="dialog" :aria-label="cards[card].title">
+        <div class="flex items-start gap-6">
+          <div class="flex-1 min-w-0">
+            <h2 class="font-display text-2xl text-gray-50">{{ cards[card].title }}</h2>
+            <p class="font-sans text-base text-gray-300 mt-1 max-w-[70ch]">{{ cards[card].lead }}</p>
+            <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 mt-4 font-sans text-base">
+              <template v-for="f in cards[card].facts" :key="f[0]">
+                <dt class="text-gray-400">{{ f[0] }}</dt><dd class="text-gray-100">{{ f[1] }}</dd>
+              </template>
+            </dl>
+          </div>
+          <button type="button" @click="closeCard" class="font-mono text-sm px-4 py-2 rounded border border-gray-600 text-gray-200 hover:border-teal-500 hover:text-teal-300 shrink-0">close</button>
+        </div>
+      </section>
+    </div>
 
     <!-- SPECTRUM (attract) -->
     <main v-show="view === 'spectrum'" class="flex-1 min-h-0 overflow-hidden px-5 py-3">
@@ -665,8 +904,8 @@ onUnmounted(() => {
    for the message and what is alive right now. The far half is quiet
    until the far kit is heard over the air. */
 .island rect { fill: rgba(200, 184, 154, 0.04); stroke: #C8B89A; stroke-width: 1.5; stroke-dasharray: 6 8; }
-.island .island-label { font-family: 'IBM Plex Mono', monospace; font-size: 15px; fill: #E4DAC6; letter-spacing: 0.04em; }
-.island .island-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; fill: #AE9C7A; }
+.island .island-label { font-family: 'IBM Plex Mono', monospace; font-size: 18px; fill: #E4DAC6; letter-spacing: 0.04em; }
+.island .island-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #AE9C7A; }
 .island.far { opacity: 0.35; }
 .island.far-alive { opacity: 0.85; }
 .lane { stroke: #8E7C5C; stroke-width: 2; }
@@ -677,11 +916,14 @@ onUnmounted(() => {
 .wave path { fill: none; stroke: #F7F7F4; stroke-width: 1.5; opacity: 0; animation: wave 3s ease-out infinite; }
 .air.silent .wave path { animation: none; opacity: 0.12; }
 @keyframes wave { 0% { opacity: 0; } 20% { opacity: 0.7; } 100% { opacity: 0; } }
-.air-label { font-family: 'IBM Plex Mono', monospace; font-size: 16px; fill: #F7F7F4; letter-spacing: 0.02em; }
-.air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; fill: #B4B4BD; }
-.air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; fill: #FCD34D; }
+.air-label { font-family: 'IBM Plex Mono', monospace; font-size: 22px; fill: #F7F7F4; letter-spacing: 0.02em; }
+.air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #B4B4BD; }
+.air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #FCD34D; }
+.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; fill: #5C5C68; }
+.visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 17px; fill: #D6D6DC; }
+.replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
-.sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; fill: #AE9C7A; }
+.sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; fill: #AE9C7A; }
 .station .device .body { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
 .station .device .bezel { fill: #08080B; stroke: #7A6B50; stroke-width: 0.8; }
 .station .device .screen { fill: #101018; stroke: none; }
@@ -701,9 +943,21 @@ onUnmounted(() => {
 .station.near .kit-img { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); }
 .station.far { opacity: 0.35; }
 .station.far-alive { opacity: 0.85; }
-.st-name { font-family: 'IBM Plex Mono', monospace; font-size: 15px; fill: #F7F7F4; }
-.st-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 11px; fill: #8A8A96; }
-.far-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; fill: #8A8A96; }
+.st-name { font-family: 'IBM Plex Mono', monospace; font-size: 20px; fill: #F7F7F4; }
+.st-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
+.far-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
+/* Tap targets: an invisible hit area over each drawing, a pointer cursor
+   on the laptop, and a one-second flash when the kit hears a message. */
+.tap { cursor: pointer; }
+.tap .hit { fill: transparent; stroke: none; }
+.station.flash .device .body, .station.flash .device .bezel { stroke: #F96118; animation: flashstroke 1.2s ease-out forwards; }
+.station.flash .kit-img { filter: drop-shadow(0 0 18px rgba(249, 97, 24, 0.55)); animation: flashglow 1.2s ease-out forwards; }
+@keyframes flashstroke { 0% { stroke: #F96118; } 100% { stroke: #C8B89A; } }
+@keyframes flashglow { 0% { filter: drop-shadow(0 0 18px rgba(249, 97, 24, 0.55)); } 100% { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); } }
+.msg.replay .core { fill: #C8B89A; }
+.msg.replay circle:first-child { opacity: 0.25; }
+.qr { image-rendering: pixelated; }
+.card-sheet { box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.6); }
 .msg .core { fill: #F96118; }
 .msg.sms .core { fill: #E0B458; }
 .msg.failed .core { fill: #F0655A; }
@@ -711,5 +965,6 @@ onUnmounted(() => {
 .route-wrap { padding: 0 12px; }
 @media (prefers-reduced-motion: reduce) {
   .wave path { animation: none; opacity: 0.25; }
+  .station.flash .device .body, .station.flash .device .bezel, .station.flash .kit-img { animation: none; }
 }
 </style>
