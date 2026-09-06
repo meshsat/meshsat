@@ -69,7 +69,8 @@ const chips = computed(() => ([
   { key: 'aprs', label: 'APRS 144.800', ...chip('aprs') },
   { key: 'cellular', label: 'SMS', ...chip('cellular') },
 ]))
-const aprsSilent = computed(() => aprs.value.receive_state === 'deaf' || aprs.value.receive_state === 'quiet')
+const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
+const aprsQuiet = computed(() => aprs.value.receive_state === 'quiet')
 const farAgeS = computed(() => farHeardAt.value ? Math.round((now.value - farHeardAt.value) / 1000) : null)
 const farAlive = computed(() => farAgeS.value !== null && farAgeS.value < 600)
 const now = ref(Date.now())
@@ -289,6 +290,19 @@ const statusLine = computed(() => {
   if (name === 'queued') return 'inside the kit, going out on LoRa'
   return `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
 })
+const lastHeardLine = computed(() => {
+  const p = packets.value.find(x => x.bearer === 'lora' && x.dir === 'rx')
+  if (!p) return 'nothing heard on this mesh yet'
+  const age = Math.max(0, Math.round((now.value - new Date(p.time).getTime()) / 1000))
+  const who = nodeName(p.from) || p.from
+  return `last heard ${who}, ${age < 60 ? age + ' s' : Math.round(age / 60) + ' min'} ago`
+})
+const insideMs = computed(() => {
+  const t = current.value; if (!t || t.stages.length < 2) return null
+  const first = t.stages[0].at, sent = t.stages.find(st => st.name === 'sent')
+  if (!sent) return null
+  return Math.max(1, sent.at - first)
+})
 const msgSize = computed(() => {
   const n = (current.value && current.value.text ? current.value.text : '').length
   return n > 100 ? 'text-2xl' : n > 48 ? 'text-3xl' : 'text-4xl'
@@ -489,9 +503,12 @@ async function sendTest() {
     const t = newTrip('out', { text, from: me.value.callsign, bytes: text.length })
     stage(t, 'test')
     jump(kitPos.value.x, kitPos.value.y)
-    testNote.value = 'queued on the ledger'
+    testNote.value = 'sent'
+    setTimeout(() => { testNote.value = '' }, 4000)
   } catch (e) {
-    testNote.value = (e && e.message) || 'send failed'
+    const m = (e && e.message) || ''
+    testNote.value = /fetch|network/i.test(m) ? 'the kit did not answer, try again' : (m || 'could not send')
+    setTimeout(() => { testNote.value = '' }, 6000)
   } finally { testBusy.value = false }
 }
 
@@ -521,14 +538,19 @@ onUnmounted(() => {
 <template>
   <div class="ttc fixed inset-0 z-[60] bg-gray-950 text-gray-50 flex flex-col select-none overflow-hidden">
     <!-- header: mark (long-press exits), tagline, chips, clock -->
-    <header class="flex items-center gap-4 px-5 h-14 shrink-0 border-b border-gray-800">
+    <header class="relative flex items-center gap-4 px-5 h-14 shrink-0 border-b border-gray-800">
       <div class="flex items-center gap-2 shrink-0"
            @pointerdown="pressStart" @pointerup="pressEnd" @pointercancel="pressEnd" @pointerleave="pressEnd"
            title="Hold to leave TTC mode">
         <img src="/meshsat-mark.png" alt="" class="h-7 w-auto" draggable="false" />
         <span class="font-display font-semibold text-base tracking-wide">MeshSat</span>
       </div>
-      <p class="font-sans text-sm text-gray-300 ml-2">Keeping people connected when the network is not.</p>
+      <p class="font-sans text-sm text-gray-300 ml-2 hidden xl:block">Keeping people connected when the network is not.</p>
+      <!-- which box is this: centred, the one word a visitor and the crew both use -->
+      <div class="absolute left-1/2 -translate-x-1/2 flex items-baseline gap-2 pointer-events-none">
+        <span class="font-display text-2xl text-gray-50 tracking-wide">{{ me.name }}</span>
+        <span class="font-mono text-sm text-gray-500">{{ me.callsign }}</span>
+      </div>
       <div class="ml-auto flex items-center gap-2">
         <span v-for="c in chips" :key="c.key"
           class="chip font-mono text-[11px] px-2 py-1 rounded border"
@@ -564,8 +586,8 @@ onUnmounted(() => {
           <template v-if="layout === 'half'">
             <g class="island near">
               <rect :x="P.isl.x" y="66" :width="P.isl.w" height="350" rx="30" />
-              <text :x="nearIsLeft ? P.isl.x + 28 : P.isl.x + P.isl.w - 28" :text-anchor="nearIsLeft ? 'start' : 'end'" y="378" class="island-label">{{ nearIsLeft ? 'mesh A' : 'mesh B' }}</text>
-              <text :x="nearIsLeft ? P.isl.x + 28 : P.isl.x + P.isl.w - 28" :text-anchor="nearIsLeft ? 'start' : 'end'" y="398" class="island-sub">LoRa at 868 MHz, this kit's own channel key</text>
+              <text :x="P.isl.x + P.isl.w / 2" y="98" text-anchor="middle" class="island-label">{{ nearIsLeft ? 'mesh A, 868 MHz' : 'mesh B, 868 MHz' }}</text>
+              <text :x="P.isl.x + P.isl.w / 2" y="118" text-anchor="middle" class="island-sub">{{ lastHeardLine }}</text>
             </g>
             <g class="lanes">
               <line :x1="nearIsLeft ? P.dev.x + 86 : P.kit.x + 86" :y1="P.dev.y" :x2="nearIsLeft ? P.kit.x - 86 : P.dev.x - 46" :y2="P.dev.y" class="lane lora near" />
@@ -586,6 +608,7 @@ onUnmounted(() => {
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 54" class="air-sub" text-anchor="middle">{{ nearIsLeft ? 'to tesseract, on the right' : 'from parallax, on the left' }}</text>
                 <text v-if="aprsSilent" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
+                <text v-else-if="aprsQuiet" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-sub" text-anchor="middle">nothing heard on the radio for a few minutes</text>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 26" class="air-tap" text-anchor="middle">tap any drawing for details</text>
               </g>
               <g class="sms">
@@ -631,7 +654,7 @@ onUnmounted(() => {
                 <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
               </g>
               <text :y="nearIsLeft ? 88 : 100" text-anchor="middle" class="st-name">{{ nearIsLeft ? 'T-Deck Plus' : 'T-Echo' }}</text>
-              <text :y="nearIsLeft ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearDeviceNode ? `on the mesh as ${nodeName(nearDeviceNode)}` : (nearIsLeft ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper') }}</text>
+              <text :y="nearIsLeft ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearIsLeft ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
 
             <!-- near kit -->
@@ -639,7 +662,7 @@ onUnmounted(() => {
               <rect x="-110" y="-130" width="220" height="290" class="hit" rx="16" />
               <image href="/kit-v1.png" x="-97" y="-128" width="194" height="230" class="kit-img" />
               <text y="128" text-anchor="middle" class="st-name">{{ me.name }}</text>
-              <text y="150" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}, {{ me.modem }}</text>
+              <text y="150" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}</text>
             </g>
           </template>
 
@@ -776,9 +799,7 @@ onUnmounted(() => {
             <span class="text-gray-300">APRS</span><span class="text-gray-50">{{ rateOf('aprs','rx') }} in · {{ rateOf('aprs','tx') }} out</span>
             <span class="text-gray-300">SMS</span><span class="text-gray-50">{{ rateOf('sms','rx') }} in · {{ rateOf('sms','tx') }} out</span>
           </div>
-          <div v-if="legLabel.length" class="font-mono text-xs text-gray-400 mt-1">
-            <span v-for="l in legLabel" :key="l.k" class="mr-3">{{ l.k }} <span class="text-teal-300">{{ l.v }} ms</span></span>
-          </div>
+          <div v-if="insideMs !== null" class="font-mono text-xs text-gray-400 mt-1">in and out of this kit in <span class="text-teal-300">{{ insideMs }} ms</span></div>
           <div class="mt-2 flex items-center gap-2">
             <button type="button" @click="drawer = !drawer" class="font-mono text-xs px-2.5 py-1.5 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
             <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-xs px-2.5 py-1.5 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
