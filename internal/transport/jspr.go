@@ -107,9 +107,14 @@ type jsprConn struct {
 	pendingMu sync.Mutex
 	pending   map[string]*pendingRequest
 
-	// Reader goroutine lifecycle
+	// Reader goroutine lifecycle. stopOnce guards the close of readerStop:
+	// Close() and reconnect() on the transport both stop the reader, and a
+	// second stop on the same connection used to close the channel twice
+	// and take the whole bridge down with "close of closed channel"
+	// (parallax, 6 Sep 2026, MESHSAT-829).
 	readerDone chan struct{}
 	readerStop chan struct{}
+	stopOnce   sync.Once
 
 	// Unsolicited message buffer
 	unsolMu   sync.Mutex
@@ -142,13 +147,16 @@ func newJSPRConn(port jsprPort) *jsprConn {
 func (c *jsprConn) startReader() {
 	c.readerStop = make(chan struct{})
 	c.readerDone = make(chan struct{})
+	c.stopOnce = sync.Once{}
 	go c.readerLoop()
 }
 
 // stopReader signals the reader goroutine to stop and waits for it to exit.
+// Idempotent: a second call on the same connection waits for the reader
+// (already gone) and returns, instead of closing readerStop again.
 func (c *jsprConn) stopReader() {
 	if c.readerStop != nil {
-		close(c.readerStop)
+		c.stopOnce.Do(func() { close(c.readerStop) })
 	}
 	if c.readerDone != nil {
 		<-c.readerDone
