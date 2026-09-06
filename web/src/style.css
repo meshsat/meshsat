@@ -2,11 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Tactical grid background pattern */
+/* Brand ground: Space Black with a faint dot grid. Body type is IBM
+   Plex Sans, display and traces IBM Plex Mono (tailwind.config.js). */
 body {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  background-color: #040406;
   background-image:
-    radial-gradient(circle, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    radial-gradient(circle, rgba(247, 247, 244, 0.035) 1px, transparent 1px);
   background-size: 24px 24px;
+}
+
+/* Ink on Signal Orange is near-black, never white: white on #F96118 is
+   2.9:1 and fails AA, the same rule meshsat.net applies to its primary
+   buttons. The 600/700 steps are dark enough for white ink and keep it.
+   [MESHSAT-826] */
+.bg-teal-500.text-white,
+.bg-teal-400.text-white,
+.bg-mesh-500.text-white,
+.bg-mesh-400.text-white {
+  color: #040406;
 }
 
 /* Hide the mouse cursor AND scrollbars on kiosk browsers. Driven

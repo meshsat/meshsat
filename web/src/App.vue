@@ -100,15 +100,17 @@ onUnmounted(() => {
   <div class="min-h-screen bg-tactical-bg text-gray-100 flex flex-col relative">
     <!-- Fullscreen background logo -->
     <div class="fixed inset-0 z-0 flex items-center justify-center pointer-events-none">
-      <img src="/logo-bg.png" alt="" class="w-[150vmin] h-[150vmin] object-contain opacity-[0.04]" />
+      <img src="/logo-bg.png" alt="" class="w-[110vmin] max-w-[1400px] object-contain opacity-[0.025]" />
     </div>
 
     <!-- Sticky horizontal header -->
     <header class="sticky top-0 z-50 bg-tactical-surface/95 backdrop-blur border-b border-tactical-border">
       <div class="flex items-center h-12 px-3 lg:px-5 gap-3">
         <!-- Left: Brand text -->
-        <router-link to="/" class="flex items-center shrink-0">
-          <span class="font-display font-semibold text-sm text-gray-200 tracking-wide">MeshSat</span>
+        <router-link to="/" class="flex items-center gap-2 shrink-0" aria-label="MeshSat home">
+          <!-- Brand mark: extracted from the approved package, never redrawn (MESHSAT-826) -->
+          <img src="/meshsat-mark.png" alt="" class="h-6 w-auto" draggable="false" />
+          <span class="font-display font-semibold text-sm text-gray-50 tracking-wide">MeshSat</span>
         </router-link>
 
         <!-- Center: Nav — 5 items + More in Operator, full list in Engineer -->
