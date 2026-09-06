@@ -144,6 +144,30 @@ func (t *DirectIMTTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 		return nil, fmt.Errorf("subscribe: %w", err)
 	}
 
+	// A previous Subscribe may have left its loops running (the routing
+	// sat interface re-subscribes on every timeout). Stop them first and
+	// wait, outside the mutex the loops themselves take, so exactly one
+	// set of loops exists. Each loop closes the done channel it was
+	// started with, never the struct field, so an overlap can no longer
+	// close one channel twice ("close of closed channel", parallax,
+	// 6 Sep 2026, MESHSAT-829).
+	t.mu.Lock()
+	prevCancel, prevDone := t.cancelFunc, []chan struct{}{t.pollDone, t.sigDone, t.watchdogDone}
+	t.mu.Unlock()
+	if prevCancel != nil {
+		prevCancel()
+		for _, d := range prevDone {
+			if d == nil {
+				continue
+			}
+			select {
+			case <-d:
+			case <-time.After(15 * time.Second):
+				log.Warn().Msg("imt: previous background loop did not stop in time")
+			}
+		}
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -157,16 +181,19 @@ func (t *DirectIMTTransport) Subscribe(ctx context.Context) (<-chan SatEvent, er
 	t.eventMu.Unlock()
 
 	// Start background poll loop (handles MT messages and signal updates)
-	t.pollDone = make(chan struct{})
-	go t.pollLoop(ctx)
+	pollDone := make(chan struct{})
+	t.pollDone = pollDone
+	go t.pollLoop(ctx, pollDone)
 
 	// Start signal poller
-	t.sigDone = make(chan struct{})
-	go t.signalPoller(ctx)
+	sigDone := make(chan struct{})
+	t.sigDone = sigDone
+	go t.signalPoller(ctx, sigDone)
 
 	// Start watchdog — monitors serial reads and cycles port when URBs die
-	t.watchdogDone = make(chan struct{})
-	go t.serialWatchdog(ctx)
+	watchdogDone := make(chan struct{})
+	t.watchdogDone = watchdogDone
+	go t.serialWatchdog(ctx, watchdogDone)
 
 	return ch, nil
 }
@@ -621,8 +648,8 @@ func (t *DirectIMTTransport) Close() error {
 // pollLoop processes unsolicited messages buffered by the reader goroutine.
 // The reader goroutine handles all serial reads at full speed; this loop
 // only consumes the unsolicited buffer for signal updates and MT announcements.
-func (t *DirectIMTTransport) pollLoop(ctx context.Context) {
-	defer close(t.pollDone)
+func (t *DirectIMTTransport) pollLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
 
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -791,8 +818,8 @@ func min(a, b int) int {
 //
 // Signal is also updated by unsolicited 299 constellationState messages
 // processed by pollLoop — both sources feed lastSignal.
-func (t *DirectIMTTransport) signalPoller(ctx context.Context) {
-	defer close(t.sigDone)
+func (t *DirectIMTTransport) signalPoller(ctx context.Context, done chan struct{}) {
+	defer close(done)
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -873,8 +900,8 @@ func (t *DirectIMTTransport) emitEvent(ev SatEvent) {
 //
 // The watchdog checks the rawSerialPort's lastRead timestamp every 60 seconds.
 // If no data has been read for 2 minutes, it cycles the port.
-func (t *DirectIMTTransport) serialWatchdog(ctx context.Context) {
-	defer close(t.watchdogDone)
+func (t *DirectIMTTransport) serialWatchdog(ctx context.Context, done chan struct{}) {
+	defer close(done)
 
 	const (
 		checkInterval = 60 * time.Second
