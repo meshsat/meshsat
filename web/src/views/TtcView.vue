@@ -782,8 +782,8 @@ onUnmounted(() => {
           </div>
           <div v-if="insideMs !== null" class="font-mono text-xs text-gray-400 mt-1">in and out of this kit in <span class="text-teal-300">{{ insideMs }} ms</span></div>
           <div class="mt-2 flex items-center gap-2">
-            <button type="button" @click="drawer = !drawer" class="font-mono text-xs px-2.5 py-1.5 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
-            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-xs px-2.5 py-1.5 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
+            <button type="button" @click="drawer = !drawer" class="font-mono text-sm px-3 py-2 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
+            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-sm px-3 py-2 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
               {{ testArmed ? 'tap again to send' : 'test frame' }}
             </button>
             <span v-if="testNote" class="font-mono text-xs text-gray-400">{{ testNote }}</span>
@@ -921,11 +921,11 @@ onUnmounted(() => {
 .air-label { font-family: 'IBM Plex Mono', monospace; font-size: 22px; fill: #F7F7F4; letter-spacing: 0.02em; }
 .air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #B4B4BD; }
 .air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #FCD34D; }
-.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; fill: #5C5C68; }
+.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #6A6A78; }
 .visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 17px; fill: #D6D6DC; }
 .replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
-.sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; fill: #AE9C7A; }
+.sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #AE9C7A; }
 .station :deep(.device .body) { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
 .station :deep(.device.photo .body) { fill: none; stroke: none; }
 .station :deep(.device.photo .photo-img) { filter: drop-shadow(0 0 3px rgba(200, 184, 154, 0.35)); }
