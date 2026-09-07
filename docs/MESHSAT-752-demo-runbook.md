@@ -427,7 +427,7 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 - **Empty-pack loop:** the X1202 auto-starts the Pi on any input and the Pi runs from a boost on the cell node; below ~3.4 V it boot-collapses in a loop that neither the button nor unplugging the input stops. Recovery: cells out, USB load off, cells in, charger straight onto the X1202 board, re-attach above 50 %.
 - **APRS:** the afternoon's "parallax cannot decode" was two radios keying at once (section 12); after 15:43 the real cause was power (tesseract's AIOC dropped off the bus at 15:39, parallax's pack went flat). Both radios decoded fine at 15:42 to 15:43 when fired one at a time.
 
-## 14. PicoAPRS V4 replaces the UV-K5 and the AIOC for TTC (owner decision 6 Sep 2026; supersedes the DMR858M plan of 5 Sep)
+## 14. PicoAPRS V4 replaces the UV-K5 and the AIOC for TTC (owner decision 6 Sep 2026; supersedes the DMR858M plan of 5 Sep) — SUPERSEDED 7 Sep 2026: the UV-K5 + AIOC chain IS the TTC hardware, see section 16
 
 **Decision.** The DMR858M needs six soldered wires to castellated pads and a bulk capacitor, and the owner rules out electronics work, so the modules go to the V2 carrier (PCB-D has their socket). The community-graduated replacement is the **PicoAPRS V4 VHF** (DB1NTO, WiMo SKU PICOAPRS.VHF, EUR 299 incl. VAT, in stock 6 Sep): a complete 2 m APRS transceiver with its own AFSK TNC, 0.8 W, 7-pole harmonic filter, KISS over its USB-C virtual COM port at 115200 baud, at most 500 mA from USB, runs while charging, 850 mAh cell that must stay inserted. Two ordered, one per kit. The NA-771 bulkhead leads screw onto its SMA socket (light loads only, no strain on the socket). The UV-K5 and its AIOC cable stay in the pouch until closed-case kit-to-kit pings pass on both kits. Research record: MESHSAT-748 comments of 6 Sep and the `DMR858M for MeshSat APRS` artifact.
 
@@ -460,3 +460,36 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 
 **Hardware side (owner):** UV-K5 menu for data use: BatSav OFF, VOX OFF, STE OFF, RP STE OFF, RxMode MAIN ONLY, TOT 60 s. The DMR858M (section 14) replaces the K5's speaker amplifier with a line output and removes the amplifier shutdown, battery and volume variables; the AIOC stays. Ferrites on both ends of the AIOC USB lead (RF on that lead is the documented cause of latched PTT and USB drops). AIOC firmware 1.4.1 lets the serial DTR/RTS PTT source be switched off and adds RX gain; update one kit first, tesseract, from a running device: `dfu-util -d 1209:7388 -a 0 -s 0x08000000:leave -D aioc-fw-1.4.1.bin`.
 
+
+
+## 16. APRS between the kits on the UV-K5 + AIOC chain: what was wrong, what was fixed, the booth pre-flight (7 Sep 2026, MESHSAT-857/858/859)
+
+**Owner rulings 7 Sep evening:** the UV-K5 + AIOC chain is the chain going to TTC (build and test on it as final hardware); Reticulum over AX.25 (`ax25_0`) is off for the booth; the MESHSAT-792 text payload lands; the booth relay is APRS first with SMS as the fallback, both directions, and the panels animate the bearer each message really took.
+
+**What was actually losing messages, in order of damage:**
+1. **Receiver dead after a watchdog restart (MESHSAT-858).** The receive watchdog restarts `aprs_0` under a 90 s step context and the gateway manager started the new receiver with it, so 90 s later Direwolf kept decoding into a channel nobody read: `messages_in` climbed, no `gateway inbound message` line, nothing relayed. Fixed in 56e2f9b (receivers live as long as the manager). Symptom to recognise: decoded `[0.N] MSxxx-10>APMSHT:{E1}...` lines with no `gateway inbound message` after them.
+2. **Physical link losing one frame in four even on a quiet channel.** 20 direct frames one way (`scratchpad/aprs-linktest.sh`): 16/20 and 15/20 at Direwolf's default `TXDELAY 30`. The UV-K5 squelch opens late for a 300 ms preamble. `tx_delay 50` gave 20/20 (see the numbers below). The value lives in the `aprs_0` gateway config (`tx_delay`, `tx_tail`, `persist`, `slot_time`, Direwolf units) and is applied with `PUT /api/gateways/aprs {"enabled":true,"config":{...}}`.
+3. **Collisions with our own housekeeping.** The mesh time-sync request went out every 30 s from each kit over `ax25_0` (26 B `MSxxx>RTICUL`), ~240 frames per kit in two hours, and each one could sit on top of a relay frame (half-duplex). `POST /api/interfaces/ax25_0/disable` does nothing; the switch is `MESHSAT_AX25_KISS_ADDR=` (empty) in `/srv/meshsat/.env` on each kit and `docker compose up -d` (backup `.env.bak-2026-09-07-ax25`). Follow-up for a real per-interface toggle: MESHSAT-859.
+4. **The watchdog escalating on a quiet peer.** Five minutes without a decoded frame counted as "our receiver is deaf" and walked to the AIOC port cut and a bridge restart; at a quiet booth that is normal silence. Since 41f3ee9 rungs 2 and 3 only run when Direwolf's own audio stats are stale (`hung`); rung 1 (Direwolf respawn) still runs on silence and is harmless. Env: `MESHSAT_APRS_RX_WATCHDOG_MIN` (5), `MESHSAT_APRS_RX_HEARD_WITHIN_MIN` (120), `MESHSAT_APRS_RX_STATS_STALE_SEC` (90).
+5. **No liveness signal on the channel.** Each kit now transmits a plain APRS status beacon every 90 s (`beacon_secs` in the aprs config, text `>MeshSat <call> ok <n>`, no digipeater path). It keeps the peer's watchdog satisfied, shows the kits to any APRS receiver at the show, costs ~0.4 s of airtime, and is never a message (the gateway stops at the heard list for status frames; the panels pulse the air link only).
+7. **No acknowledgement on APRS.** After the timing fix the link still lost about one frame in twenty, and a lost frame is a lost message. `tx_repeat 2` in the aprs config sends every message twice, 1.5 s apart (`tx_repeat_gap_ms`); the far bridge's payload dedup and the mesh text dedup drop the copy; beacons are not repeated.
+6. **388 bytes on the air for a two-character text (MESHSAT-792).** The relay carried the whole JSON envelope; since 41f3ee9 a mesh text bound for a text bearer (APRS, SMS, mesh) travels as the text: one short frame, one SMS, no `[frag n/2]` on the far handheld.
+
+**Booth pre-flight (both kits, in this order):**
+1. `docker logs --since 10m meshsat 2>&1 | grep -a "audio level = "`: lines with the peer's callsign every 90 s (its beacon). Zero lines in ten minutes = deaf; the `ADEVICE ... CH0` stats lines do not count.
+2. `GET /api/aprs/status`: `connected true`, `receive_state ok`.
+3. `GET /api/gateways/aprs`: `tx_delay 50`, `beacon_secs 90`, `tx_repeat 2`.
+4. No `MSxxx>RTICUL` in either Direwolf log (ax25_0 off).
+5. Rules: `GET /api/access-rules` shows rule 1 `mesh_0 -> peer_link` on, the inbound `aprs_0 -> mesh_0` and `cellular_0 -> mesh_0` rules on, no direct `mesh_0 -> aprs_0`; `GET /api/failover-groups` lists `peer_link` (aprs_0 priority 1, cellular_0 priority 2).
+6. One text from each handheld: one line on the far handheld, APRS lane on both panels. If a receiver is deaf (Direwolf stopped, radio off), the same text goes over SMS and the panel shows the SMS lane.
+7. UV-K5 menu on both radios: BatSav OFF, STE OFF, VOX OFF, RxMode MAIN ONLY, squelch at the lowest level that stays closed on the empty channel; packs charged.
+
+**Measured numbers (7 Sep 2026, quiet channel, 20 frames one way, 6 s apart):**
+| Setting | parallax -> tesseract | tesseract -> parallax | receive level |
+|---|---|---|---|
+| TXDELAY 30 (default), no beacon | 16/20 decoded, 16/16 processed | 15/20, 15/15 | 64 to 67 (17/14) / 37 to 38 (10/8) |
+| TXDELAY 50, beacon 90 s | 20/20, 20/20 | 20/20, 20/20 | 64 to 65 (17/13) / 35 to 36 (10/7) |
+| TXDELAY 70, beacon 90 s | 19/20 | 18/20 | same |
+| TXDELAY 50, confirmation run, beacons excluded | 18/20 | 20/20 | same |
+
+Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_repeat 2`, a loss needs both copies to fail. The link test reports unique decoded frames, so with the repeat on it still counts one per message.
