@@ -48,6 +48,15 @@ const peer = computed(() => KITS[me.value.peer])
 // Geometry follows placement; the drawing follows the paired device.
 const nearIsLeft = computed(() => me.value.side === 'left')
 const nearDev = computed(() => me.value.device)
+// The one thing a visitor needs, as two lines that fit the 1280-unit
+// drawing at 22 units (the panel shows that as 14 CSS px).
+const visitorLines = computed(() => {
+  const side = nearIsLeft.value ? 'right' : 'left'
+  if (layout.value !== 'half') return ['A message typed on the T-Deck leaves over the radio and lands on the other mesh.', 'No internet, no phone network in between.']
+  return nearDev.value === 'tdeck'
+    ? ['Pick up the T-Deck and send a message.', `It leaves over the radio and lands on ${peer.value.name}, the kit on the ${side}. No internet, no phone network.`]
+    : [`Messages from ${peer.value.name}, the kit on the ${side}, arrive over the radio and land on the T-Echo.`, 'Press its button to send one back.']
+})
 const nearDevName = computed(() => DEVICE_NAME[nearDev.value])
 const leftKit = computed(() => KITS[LEFT_KIT])
 const rightKit = computed(() => KITS[KITS[LEFT_KIT].peer])
@@ -79,9 +88,9 @@ const chip = (name) => {
   return { state: t.state, detail: t.detail || '' }
 }
 const chips = computed(() => ([
-  { key: 'mesh', label: 'LoRa mesh', ...chip('mesh') },
-  { key: 'aprs', label: 'APRS 144.800', ...chip('aprs') },
-  { key: 'cellular', label: 'SMS', ...chip('cellular') },
+  { key: 'mesh', label: 'LoRa mesh', short: 'LoRa', ...chip('mesh') },
+  { key: 'aprs', label: 'APRS 144.800', short: 'APRS', ...chip('aprs') },
+  { key: 'cellular', label: 'SMS', short: 'SMS', ...chip('cellular') },
 ]))
 const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
 const aprsQuiet = computed(() => aprs.value.receive_state === 'quiet')
@@ -90,6 +99,18 @@ const farAlive = computed(() => farAgeS.value !== null && farAgeS.value < 600)
 const now = ref(Date.now())
 
 // Node names for the end devices, from this kit's own node table.
+// The island subtitle wraps onto a second line past 44 characters (the
+// panel shows 21 SVG units as 14 CSS px, a 720-unit island holds ~44).
+const lastHeardLines = computed(() => {
+  const parts = String(lastHeardLine.value || '').split(', ')
+  const lines = []
+  for (const part of parts) {
+    const cur = lines[lines.length - 1]
+    if (cur !== undefined && (cur + ', ' + part).length <= 44) lines[lines.length - 1] = cur + ', ' + part
+    else lines.push(part)
+  }
+  return lines.slice(0, 2)
+})
 const nodeName = (id) => {
   if (!id) return ''
   const n = (nodes.value || []).find(x => x.user_id === id || `!${(x.num >>> 0).toString(16).padStart(8, '0')}` === id)
@@ -109,13 +130,13 @@ let raf = 0
 // Geometry (SVG viewBox 1280 x 470).
 // Full route, left to right: T-Deck, parallax, air, tesseract, T-Echo.
 const G = {
-  devL: { x: 140, y: 225 }, kitL: { x: 405, y: 225 }, airL: { x: 490, y: 225 },
-  airR: { x: 790, y: 225 }, kitR: { x: 875, y: 225 }, devR: { x: 1140, y: 225 },
-  smsY: 335,
+  devL: { x: 150, y: 240 }, kitL: { x: 392, y: 240 }, airL: { x: 490, y: 240 },
+  airR: { x: 790, y: 240 }, kitR: { x: 888, y: 240 }, devR: { x: 1130, y: 240 },
+  smsY: 386,
 }
 // Half route: the near device and kit large, the air leaving over an edge.
-const HALF_LEFT = { dev: { x: 240, y: 240 }, kit: { x: 640, y: 240 }, airNear: { x: 790, y: 240 }, airFar: { x: 1340, y: 240 }, edge: 1280, smsY: 350, isl: { x: 56, w: 720 } }
-const HALF_RIGHT = { dev: { x: 1040, y: 240 }, kit: { x: 640, y: 240 }, airNear: { x: 490, y: 240 }, airFar: { x: -60, y: 240 }, edge: 0, smsY: 350, isl: { x: 504, w: 720 } }
+const HALF_LEFT = { dev: { x: 240, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 790, y: 262 }, airFar: { x: 1340, y: 262 }, edge: 1280, smsY: 372, isl: { x: 56, w: 720 } }
+const HALF_RIGHT = { dev: { x: 1040, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 490, y: 262 }, airFar: { x: -60, y: 262 }, edge: 0, smsY: 372, isl: { x: 504, w: 720 } }
 const P = computed(() => {
   if (layout.value === 'full') {
     return nearIsLeft.value
@@ -522,6 +543,7 @@ function tickAttract() {
 // three taps on the mark in the top left within 2.5 s, then one tap on
 // the QR code in the bottom right within 4 s. Escape still works for a
 // keyboard. (Owner request 7 Sep 2026; replaces the long-press.)
+let hadNvis = false
 const EGG_MARK_TAPS = 3, EGG_MARK_WINDOW_MS = 2500, EGG_QR_WINDOW_MS = 4000
 let eggTaps = []          // timestamps of recent mark taps
 let eggArmedAt = 0        // when the third mark tap landed
@@ -571,6 +593,11 @@ onMounted(async () => {
   document.documentElement.classList.add('ttc-mode')
   window.addEventListener('keydown', onKey)
   window.addEventListener('pointerdown', touch, { passive: true })
+  // The operator's NVIS night theme (body.theme-nvis) repaints every grey
+  // as phosphor green; the booth screen shows the brand, so lift it while
+  // TTC mode is up and put it back on exit.
+  hadNvis = document.body.classList.contains('theme-nvis')
+  document.body.classList.remove('theme-nvis')
   await poll()
   await loadPackets()
   sse = api.sse('/events', onEvent, () => { sseUp.value = false })
@@ -582,6 +609,7 @@ onUnmounted(() => {
   document.documentElement.classList.remove('ttc-mode')
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointerdown', touch)
+  if (hadNvis) document.body.classList.add('theme-nvis')
   if (sse) sse.close()
   timers.forEach(clearInterval)
   if (raf) cancelAnimationFrame(raf)
@@ -591,33 +619,33 @@ onUnmounted(() => {
 <template>
   <div class="ttc fixed inset-0 z-[60] bg-gray-950 text-gray-50 flex flex-col select-none overflow-hidden">
     <!-- header: mark (first half of the exit egg), hostname, chips, clock -->
-    <header class="relative flex items-center gap-4 px-5 h-14 shrink-0 border-b border-gray-800">
+    <header class="relative flex items-center gap-3 px-4 h-14 shrink-0 border-b border-gray-800">
       <div class="flex items-center gap-2 shrink-0 select-none" @click="markTap">
         <img src="/meshsat-mark.png" alt="" class="h-7 w-auto" draggable="false" />
         <span class="font-display font-semibold text-base tracking-wide">MeshSat</span>
       </div>
       <!-- which box is this: centred, the one word a visitor and the crew both use -->
       <div class="absolute left-1/2 -translate-x-1/2 flex items-baseline gap-2 pointer-events-none">
-        <span class="font-display text-2xl text-gray-50 tracking-wide">{{ me.name }}</span>
-        <span class="font-mono text-sm text-gray-500">{{ me.callsign }}</span>
+        <span class="font-display text-xl lg:text-2xl text-gray-50 tracking-wide">{{ me.name }}</span>
+        <span class="hidden lg:inline font-mono text-sm text-gray-500">{{ me.callsign }}</span>
       </div>
       <div class="ml-auto flex items-center gap-2">
         <span v-for="c in chips" :key="c.key"
-          class="chip font-mono text-[11px] px-2 py-1 rounded border"
+          class="chip font-mono text-xs px-2 py-1 rounded border"
           :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : c.state === 'healing' ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
           :title="c.detail">
           <span class="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle"
-            :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'" />{{ c.label }}
+            :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'" /><span class="lg:hidden">{{ c.short }}</span><span class="hidden lg:inline">{{ c.label }}</span>
         </span>
         <PowerWidget :kit="me.name" compact />
-        <span class="font-mono text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
+        <span class="font-mono text-base lg:text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
       </div>
     </header>
 
     <!-- ROUTE VIEW -->
     <main v-show="view === 'route'" class="flex-1 flex flex-col min-h-0">
       <div class="route-wrap flex-1 min-h-0 flex items-center">
-        <svg class="w-full h-full" viewBox="0 0 1280 470" preserveAspectRatio="xMidYMid meet" aria-label="Message route">
+        <svg class="w-full h-full" :class="layout" :viewBox="layout === 'half' ? '0 0 1280 430' : '0 0 1280 462'" :preserveAspectRatio="layout === 'half' ? (nearIsLeft ? 'xMaxYMid meet' : 'xMinYMid meet') : 'xMidYMid meet'" aria-label="Message route">
           <defs>
             <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
               <feGaussianBlur stdDeviation="6" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
@@ -626,21 +654,14 @@ onUnmounted(() => {
           </defs>
 
           <!-- the one sentence a visitor needs -->
-          <text x="640" y="40" text-anchor="middle" class="visitor-line">
-            <template v-if="layout === 'half'">
-              {{ nearDev === 'tdeck'
-                ? `Pick up the T-Deck and send a message. It leaves this box over the radio and lands on ${peer.name}, the kit on the ${nearIsLeft ? 'right' : 'left'}, with no internet and no phone network in between.`
-                : `Messages from ${peer.name}, the kit on the ${nearIsLeft ? 'right' : 'left'}, arrive over the radio and land on the T-Echo. Press its button to send one back.` }}
-            </template>
-            <template v-else>A message typed on the T-Deck leaves over the radio and lands on the other mesh. No internet, no phone network in between.</template>
-          </text>
+          <text v-for="(l, i) in visitorLines" :key="i" x="640" :y="30 + i * 26" text-anchor="middle" class="visitor-line">{{ l }}</text>
 
           <!-- ═══ HALF LAYOUT: this kit's half, the air leaving over the edge ═══ -->
           <template v-if="layout === 'half'">
             <g class="island near">
               <rect :x="P.isl.x" y="66" :width="P.isl.w" height="350" rx="30" />
-              <text :x="P.isl.x + P.isl.w / 2" y="98" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, {{ me.channel }}</text>
-              <text :x="P.isl.x + P.isl.w / 2" y="118" text-anchor="middle" class="island-sub">{{ lastHeardLine }}</text>
+              <text :x="P.isl.x + P.isl.w / 2" y="100" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, {{ me.channel }}</text>
+              <text v-for="(l, i) in lastHeardLines" :key="i" :x="P.isl.x + P.isl.w / 2" :y="128 + i * 24" text-anchor="middle" class="island-sub">{{ l }}</text>
             </g>
             <g class="lanes">
               <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 60 : 44) : P.kit.x + 100" :y1="P.dev.y"
@@ -661,9 +682,9 @@ onUnmounted(() => {
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
                 <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 54" class="air-sub" text-anchor="middle">{{ nearDev === 'tdeck' ? `to ${peer.name}, on the ${nearIsLeft ? 'right' : 'left'}` : `from ${peer.name}, on the ${nearIsLeft ? 'right' : 'left'}` }}</text>
-                <text v-if="aprsSilent" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
-                <text v-else-if="aprsQuiet" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 46" class="air-sub" text-anchor="middle">nothing heard on the radio for a few minutes</text>
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 26" class="air-tap" text-anchor="middle">tap any drawing for details</text>
+                <text v-if="aprsSilent" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 60" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
+                <text v-else-if="aprsQuiet" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 60" class="air-sub" text-anchor="middle">nothing heard on the radio for a few minutes</text>
+                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 32" class="air-tap" text-anchor="middle">tap any drawing for details</text>
               </g>
               <g class="sms">
                 <line :x1="P.airNear.x" :y1="P.smsY" :x2="P.edge" :y2="P.smsY" class="lane sms-line" />
@@ -672,10 +693,10 @@ onUnmounted(() => {
             </g>
 
             <!-- near device -->
-            <g :transform="`translate(${P.dev.x},${P.dev.y + 14})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
+            <g :transform="`translate(${P.dev.x},${P.dev.y + 24})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
               <rect x="-110" y="-110" width="220" height="250" class="hit" rx="16" />
-              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.5" />
-              <TtcDeviceTEcho v-else :scale="1.5" />
+              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.4" />
+              <TtcDeviceTEcho v-else :scale="1.4" />
               <text :y="nearDev === 'tdeck' ? 88 : 100" text-anchor="middle" class="st-name">{{ nearDev === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
               <text :y="nearDev === 'tdeck' ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearDev === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
@@ -683,9 +704,9 @@ onUnmounted(() => {
             <!-- near kit -->
             <g :transform="`translate(${P.kit.x},${P.kit.y})`" class="station kit near tap" :class="{ flash }" @click="openCard('kit')">
               <rect x="-110" y="-130" width="220" height="290" class="hit" rx="16" />
-              <image href="/kit-v1.png" x="-97" y="-128" width="194" height="230" class="kit-img" />
-              <text y="128" text-anchor="middle" class="st-name">{{ me.name }}</text>
-              <text y="150" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}</text>
+              <image href="/kit-v1.png" x="-84" y="-104" width="168" height="199" class="kit-img" />
+              <text y="112" text-anchor="middle" class="st-name">{{ me.name }}</text>
+              <text y="134" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}</text>
             </g>
           </template>
 
@@ -713,13 +734,13 @@ onUnmounted(() => {
                 <g v-for="i in 3" :key="'wr'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
                   <path :d="`M ${G.airR.x - 6 - i*14} ${G.airR.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${G.airR.y + 12 + i*8}`" />
                 </g>
-                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 92" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
-                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 72" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
+                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
+                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
                 <text v-if="aprsSilent" :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y + 44" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
               </g>
               <g class="sms">
                 <line :x1="G.airL.x" :y1="G.smsY" :x2="G.airR.x" :y2="G.smsY" class="lane sms-line" />
-                <text :x="(G.airL.x + G.airR.x)/2" :y="G.smsY + 24" class="sms-label" text-anchor="middle">SMS over LTE when the radio is silent</text>
+                <text :x="(G.airL.x + G.airR.x)/2" :y="G.smsY + 22" class="sms-label" text-anchor="middle">SMS over LTE when the radio is silent</text>
               </g>
             </g>
 
@@ -753,7 +774,7 @@ onUnmounted(() => {
               <text :y="rightKit.device === 'tdeck' ? 90 : 104" text-anchor="middle" class="st-sub">{{ rightKit.device === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
 
-            <text :x="nearIsLeft ? 1012 : 268" y="424" text-anchor="middle" class="far-note">
+            <text :x="nearIsLeft ? 1012 : 268" y="446" text-anchor="middle" class="far-note">
               {{ farAlive ? `${peer.name} heard over the air ${farAgeS} s ago` : `${peer.name} not heard yet on this kit` }}
             </text>
           </template>
@@ -770,13 +791,13 @@ onUnmounted(() => {
       </div>
 
       <!-- strip: the message, its status, the QR, the numbers -->
-      <section class="grid grid-cols-12 gap-3 px-5 pb-4 shrink-0">
-        <div class="col-span-2 flex items-center gap-3">
-          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[92px] h-[92px] shrink-0" draggable="false" @click="qrTap" />
-          <div class="font-sans text-sm leading-snug text-gray-300">meshsat.net<br /><span class="text-gray-500">open source, GPLv3</span></div>
+      <section class="grid grid-cols-[132px_1fr_290px] lg:grid-cols-[176px_1fr_380px] gap-3 px-4 pb-3 shrink-0">
+        <div class="flex flex-col items-start gap-1 lg:flex-row lg:items-center lg:gap-3">
+          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[76px] h-[76px] lg:w-[92px] lg:h-[92px] shrink-0" draggable="false" @click="qrTap" />
+          <div class="font-sans text-[13px] lg:text-sm leading-tight text-gray-300">meshsat.net<br /><span class="text-gray-500">open source, GPLv3</span></div>
         </div>
-        <div class="col-span-6 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 min-h-[104px] flex flex-col justify-center">
-          <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words" :class="current ? msgSize : 'text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
+        <div class="rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2 min-h-[88px] flex flex-col justify-center">
+          <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words" :class="current ? msgSize : 'text-xl lg:text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
             {{ current ? displayText(current) : (nearDev === 'tdeck' ? 'Your message will appear here the moment this kit hears it.' : 'The next message from the other kit will appear here the moment it lands.') }}
           </button>
           <div v-if="current" class="font-sans text-sm text-gray-300 mt-1">
@@ -786,8 +807,8 @@ onUnmounted(() => {
             <span v-if="current.snr" class="text-gray-500"> · SNR {{ current.snr }} dB</span>
           </div>
         </div>
-        <div class="col-span-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3">
-          <div class="grid grid-cols-2 gap-x-3 font-mono text-sm tabular-nums">
+        <div class="rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2">
+          <div class="grid grid-cols-2 gap-x-3 font-mono text-sm leading-6 tabular-nums">
             <span class="text-gray-400">last minute</span><span></span>
             <span class="text-gray-300">LoRa</span><span class="text-gray-50">{{ rateOf('lora','rx') }} in · {{ rateOf('lora','tx') }} out</span>
             <span class="text-gray-300">APRS</span><span class="text-gray-50">{{ rateOf('aprs','rx') }} in · {{ rateOf('aprs','tx') }} out</span>
@@ -795,8 +816,8 @@ onUnmounted(() => {
           </div>
           <div v-if="insideMs !== null" class="font-mono text-xs text-gray-400 mt-1">in and out of this kit in <span class="text-teal-300">{{ insideMs }} ms</span></div>
           <div class="mt-2 flex items-center gap-2">
-            <button type="button" @click="drawer = !drawer" class="font-mono text-sm px-3 py-2 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
-            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-sm px-3 py-2 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
+            <button type="button" @click="drawer = !drawer" class="font-mono text-sm px-3 py-1.5 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
+            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-sm px-3 py-1.5 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
               {{ testArmed ? 'tap again to send' : 'test frame' }}
             </button>
             <span v-if="testNote" class="font-mono text-xs text-gray-400">{{ testNote }}</span>
@@ -919,8 +940,8 @@ onUnmounted(() => {
    for the message and what is alive right now. The far half is quiet
    until the far kit is heard over the air. */
 .island rect { fill: rgba(200, 184, 154, 0.04); stroke: #C8B89A; stroke-width: 1.5; stroke-dasharray: 6 8; }
-.island .island-label { font-family: 'IBM Plex Mono', monospace; font-size: 18px; fill: #E4DAC6; letter-spacing: 0.04em; }
-.island .island-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #AE9C7A; }
+.island .island-label { font-family: 'IBM Plex Mono', monospace; font-size: 24px; fill: #E4DAC6; letter-spacing: 0.04em; }
+.island .island-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #AE9C7A; }
 .island.far { opacity: 0.35; }
 .island.far-alive { opacity: 0.85; }
 .lane { stroke: #8E7C5C; stroke-width: 2; }
@@ -931,14 +952,14 @@ onUnmounted(() => {
 .wave path { fill: none; stroke: #F7F7F4; stroke-width: 1.5; opacity: 0; animation: wave 3s ease-out infinite; }
 .air.silent .wave path { animation: none; opacity: 0.12; }
 @keyframes wave { 0% { opacity: 0; } 20% { opacity: 0.7; } 100% { opacity: 0; } }
-.air-label { font-family: 'IBM Plex Mono', monospace; font-size: 22px; fill: #F7F7F4; letter-spacing: 0.02em; }
-.air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #B4B4BD; }
-.air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #FCD34D; }
-.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #6A6A78; }
-.visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 17px; fill: #D6D6DC; }
+.air-label { font-family: 'IBM Plex Mono', monospace; font-size: 28px; fill: #F7F7F4; letter-spacing: 0.02em; }
+.air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #B4B4BD; }
+.air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #FCD34D; }
+.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #6A6A78; }
+.visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 22px; fill: #D6D6DC; }
 .replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
-.sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #AE9C7A; }
+.sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #AE9C7A; }
 .station :deep(.device .body) { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
 .station :deep(.device.photo .body) { fill: none; stroke: none; }
 .station :deep(.device.photo .photo-img) { filter: drop-shadow(0 0 3px rgba(200, 184, 154, 0.35)); }
@@ -961,9 +982,13 @@ onUnmounted(() => {
 .station.near .kit-img { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); }
 .station.far { opacity: 0.35; }
 .station.far-alive { opacity: 0.85; }
-.st-name { font-family: 'IBM Plex Mono', monospace; font-size: 20px; fill: #F7F7F4; }
-.st-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
-.far-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
+.st-name { font-family: 'IBM Plex Mono', monospace; font-size: 24px; fill: #F7F7F4; }
+.st-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 20px; fill: #8A8A96; }
+.far-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #8A8A96; }
+svg.full .air-label { font-size: 24px; }
+svg.full .air-sub, svg.full .air-warn, svg.full .sms-label { font-size: 18px; }
+svg.full .st-name { font-size: 22px; }
+svg.full .st-sub { font-size: 16px; }
 /* Tap targets: an invisible hit area over each drawing, a pointer cursor
    on the laptop, and a one-second flash when the kit hears a message. */
 .tap { cursor: pointer; }
