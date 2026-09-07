@@ -500,3 +500,20 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 | TXDELAY 50, confirmation run, beacons excluded | 18/20 | 20/20 | same |
 
 Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_repeat 2`, a loss needs both copies to fail. The link test reports unique decoded frames, so with the repeat on it still counts one per message.
+
+
+## 17. TTC readiness board (7 Sep 2026, end of the APRS session; about 70 %)
+
+| Area | State | Closes when |
+|---|---|---|
+| Kit-to-kit relay, APRS first, SMS fallback, both directions | proven through the rules on the UV-K5 + AIOC chain (section 16 numbers) | re-measured on the PicoAPRS chain, then a 24 h soak with beacons only |
+| Booth screen (TTC mode) | 16/16 checks on both panels at the real viewport | a full-day run on both panels |
+| Radios | Meshtastic 2.6.10 on both kits, mesh split (msat-ttc-01 / 02), Bluetooth off | Bluetooth read-back at the next serial window |
+| Power | 5 V inlet unchanged (both kits died on 4 Sep) | 12 V refit (parts 9 Sep) and 24 h zero-AC-loss on both kits |
+| APRS hardware | tuned K5 chain being replaced by the PicoAPRS V4 this week | section 14 device setup, then section 16 pre-flight on the new chain |
+| Handhelds | T-Echo (mesh A), T-Deck Plus (mesh B), T-Deck Pro ordered, power packs 8 Sep | Pro joined to an island, charging plan for two days |
+| Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived | installed on both kits |
+| Software follow-ups | MESHSAT-861 (resolver honours a disabled interface, receive_state after a restart), MESHSAT-859 (time-sync config) | landed and verified |
+| Logistics | hotel and taxis arranged, prints and stickers 9 to 11 Sep | booth slot and Hub allowlist from Thomas, transport and setup plan |
+
+Twenty task "TTC booth readiness follow-ups" carries the same list with a 15 Sep due date.
