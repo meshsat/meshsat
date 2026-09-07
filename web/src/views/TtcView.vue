@@ -630,8 +630,8 @@ onUnmounted(() => {
               <text :x="P.isl.x + P.isl.w / 2" y="118" text-anchor="middle" class="island-sub">{{ lastHeardLine }}</text>
             </g>
             <g class="lanes">
-              <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 100 : 54) : P.kit.x + 100" :y1="P.dev.y"
-                    :x2="nearIsLeft ? P.kit.x - 100 : P.dev.x - (nearDev === 'tdeck' ? 100 : 54)" :y2="P.dev.y" class="lane lora near" />
+              <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 60 : 44) : P.kit.x + 100" :y1="P.dev.y"
+                    :x2="nearIsLeft ? P.kit.x - 100 : P.dev.x - (nearDev === 'tdeck' ? 60 : 44)" :y2="P.dev.y" class="lane lora near" />
               <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
                 <rect :x="Math.min(P.airNear.x, P.edge) - 10" :y="P.dev.y - 120" :width="Math.abs(P.edge - P.airNear.x) + 20" height="260" class="hit" />
                 <line :x1="P.airNear.x" :y1="P.dev.y" :x2="P.edge" :y2="P.dev.y" class="lane air-line" />
@@ -659,10 +659,10 @@ onUnmounted(() => {
             </g>
 
             <!-- near device -->
-            <g :transform="`translate(${P.dev.x},${P.dev.y})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
+            <g :transform="`translate(${P.dev.x},${P.dev.y + 14})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
               <rect x="-110" y="-110" width="220" height="250" class="hit" rx="16" />
-              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.6" />
-              <TtcDeviceTEcho v-else :scale="1.6" />
+              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.5" />
+              <TtcDeviceTEcho v-else :scale="1.5" />
               <text :y="nearDev === 'tdeck' ? 88 : 100" text-anchor="middle" class="st-name">{{ nearDev === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
               <text :y="nearDev === 'tdeck' ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearDev === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
@@ -689,8 +689,8 @@ onUnmounted(() => {
               <text x="806" y="117" class="island-sub">LoRa 868 MHz, a different channel key</text>
             </g>
             <g class="lanes">
-              <line :x1="G.devL.x + (leftKit.device === 'tdeck' ? 84 : 44)" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-              <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - (rightKit.device === 'tdeck' ? 84 : 44)" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.devL.x + (leftKit.device === 'tdeck' ? 50 : 36)" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - (rightKit.device === 'tdeck' ? 50 : 36)" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
               <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
                 <rect :x="G.airL.x" :y="G.airL.y - 110" :width="G.airR.x - G.airL.x" height="220" class="hit" />
                 <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
@@ -927,6 +927,9 @@ onUnmounted(() => {
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
 .sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; fill: #AE9C7A; }
 .station :deep(.device .body) { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
+.station :deep(.device.photo .body) { fill: none; stroke: none; }
+.station :deep(.device.photo .photo-img) { filter: drop-shadow(0 0 3px rgba(200, 184, 154, 0.35)); }
+.station :deep(.device.photo .epaper) { fill: #DCD6C8; }
 .station :deep(.device .bezel) { fill: #08080B; stroke: #7A6B50; stroke-width: 0.8; }
 .station :deep(.device .screen) { fill: #101018; stroke: none; }
 .station :deep(.device .ui .bubble) { fill: #C8B89A; opacity: 0.55; }
@@ -953,6 +956,8 @@ onUnmounted(() => {
 .tap { cursor: pointer; }
 .tap .hit { fill: transparent; stroke: none; }
 .station.flash :deep(.device .body), .station.flash :deep(.device .bezel) { stroke: #F96118; animation: flashstroke 1.2s ease-out forwards; }
+.station.flash :deep(.device.photo .body) { stroke: none; animation: none; }
+.station.flash :deep(.device.photo .photo-img) { animation: flashglow 1.2s ease-out forwards; }
 .station.flash .kit-img { filter: drop-shadow(0 0 18px rgba(249, 97, 24, 0.55)); animation: flashglow 1.2s ease-out forwards; }
 @keyframes flashstroke { 0% { stroke: #F96118; } 100% { stroke: #C8B89A; } }
 @keyframes flashglow { 0% { filter: drop-shadow(0 0 18px rgba(249, 97, 24, 0.55)); } 100% { filter: drop-shadow(0 0 10px rgba(200, 184, 154, 0.18)); } }
@@ -967,6 +972,6 @@ onUnmounted(() => {
 .route-wrap { padding: 0 12px; }
 @media (prefers-reduced-motion: reduce) {
   .wave path { animation: none; opacity: 0.25; }
-  .station.flash :deep(.device .body), .station.flash :deep(.device .bezel), .station.flash .kit-img { animation: none; }
+  .station.flash :deep(.device .body), .station.flash :deep(.device .bezel), .station.flash :deep(.device.photo .photo-img), .station.flash .kit-img { animation: none; }
 }
 </style>
