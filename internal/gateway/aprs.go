@@ -653,10 +653,29 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 	n := 0
 	for {
 		n++
-		select {
-		case g.rawOut <- g.beaconFrame(n):
-		default:
-			log.Debug().Msg("aprs: beacon skipped, transmit queue busy")
+		frame := g.beaconFrame(n)
+		// The beacon is the peer's liveness signal, and a single short
+		// frame drops in 20 to 30 percent of cases on the kit chain even at
+		// a good level (measured 7 Sep 2026), so it gets the same repeat as
+		// a message: copies are the cheapest insurance against a false
+		// "deaf" verdict on the far kit. [MESHSAT-857]
+		copies := g.config.TXRepeat
+		if copies < 1 {
+			copies = 1
+		}
+		for i := 0; i < copies; i++ {
+			if i > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(g.repeatGap()):
+				}
+			}
+			select {
+			case g.rawOut <- frame:
+			default:
+				log.Debug().Msg("aprs: beacon skipped, transmit queue busy")
+			}
 		}
 		select {
 		case <-ctx.Done():

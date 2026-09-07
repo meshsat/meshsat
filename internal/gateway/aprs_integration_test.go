@@ -598,3 +598,30 @@ func TestAPRSIntegration_RepeatCopies(t *testing.T) {
 		t.Fatalf("messages_out %d, want 1 (one message, two copies)", gw.Status().MessagesOut)
 	}
 }
+
+// Beacons carry the same repeat as messages. [MESHSAT-857]
+func TestAPRSIntegration_BeaconRepeat(t *testing.T) {
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	host, port := splitHostPort(t, tnc.addr())
+	gw := NewAPRSGateway(APRSConfig{KISSHost: host, KISSPort: port, Callsign: "TEST", SSID: 10, FrequencyMHz: 144.800, ExternalDirewolf: true,
+		BeaconSecs: 60, TXRepeat: 2, TXRepeatGapMs: 100}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+	// The first beacon goes out 5 s after start, then its copy 100 ms later.
+	time.Sleep(6 * time.Second)
+	frames := tnc.frames()
+	beacons := 0
+	for _, f := range frames {
+		if ax, err := DecodeAX25Frame(f); err == nil && len(ax.Info) > 0 && ax.Info[0] == '>' {
+			beacons++
+		}
+	}
+	if beacons != 2 {
+		t.Fatalf("beacon frames sent: %d, want 2 (one beacon, two copies)", beacons)
+	}
+}
