@@ -146,3 +146,43 @@ func TestFailoverResolver_EmptyGroup(t *testing.T) {
 		t.Errorf("expected empty string (no members), got %s", got)
 	}
 }
+
+// deafChecker marks a fixed set of interfaces deaf (stand-in for the APRS
+// receive watchdog and the device health ladder). [MESHSAT-857]
+type deafChecker map[string]bool
+
+func (d deafChecker) ReceiveDeaf(ifaceID string) bool { return d[ifaceID] }
+
+func TestFailoverResolver_DeafPrimarySkipped(t *testing.T) {
+	fr, ifaceMgr, db := setupFailoverTest(t)
+	db.InsertFailoverGroup(&database.FailoverGroup{ID: "peer_link", Label: "APRS first, SMS fallback", Mode: "priority"})
+	db.InsertFailoverMember(&database.FailoverMember{GroupID: "peer_link", InterfaceID: "iridium_0", Priority: 1})
+	db.InsertFailoverMember(&database.FailoverMember{GroupID: "peer_link", InterfaceID: "iridium_1", Priority: 2})
+	ifaceMgr.mu.Lock()
+	ifaceMgr.states["iridium_0"].state = StateOnline
+	ifaceMgr.states["iridium_1"].state = StateOnline
+	ifaceMgr.mu.Unlock()
+
+	// Without a checker the online primary wins.
+	if got := fr.Resolve("peer_link"); got != "iridium_0" {
+		t.Fatalf("no checker: expected iridium_0, got %s", got)
+	}
+
+	// A deaf primary is skipped although its interface state is online.
+	fr.SetReceiveChecker(deafChecker{"iridium_0": true})
+	if got := fr.Resolve("peer_link"); got != "iridium_1" {
+		t.Errorf("deaf primary: expected iridium_1, got %s", got)
+	}
+
+	// Both deaf: nothing online is usable, the first enabled member holds the deliveries.
+	fr.SetReceiveChecker(deafChecker{"iridium_0": true, "iridium_1": true})
+	if got := fr.Resolve("peer_link"); got != "iridium_0" {
+		t.Errorf("all deaf: expected iridium_0 (first enabled fallback), got %s", got)
+	}
+
+	// Recovery: the primary hears again and takes over.
+	fr.SetReceiveChecker(deafChecker{})
+	if got := fr.Resolve("peer_link"); got != "iridium_0" {
+		t.Errorf("recovered: expected iridium_0, got %s", got)
+	}
+}
