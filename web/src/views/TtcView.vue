@@ -366,7 +366,7 @@ const insideMs = computed(() => {
 })
 const msgSize = computed(() => {
   const n = (current.value && current.value.text ? current.value.text : '').length
-  return n > 100 ? 'text-2xl' : n > 48 ? 'text-3xl' : 'text-4xl'
+  return n > 60 ? 'text-xl lg:text-2xl' : n > 24 ? 'text-2xl lg:text-3xl' : 'text-3xl lg:text-4xl'
 })
 
 // ── replay of the last real message while idle ───────────────────────
@@ -885,8 +885,8 @@ onUnmounted(() => {
           <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[76px] h-[76px] lg:w-[92px] lg:h-[92px] shrink-0" draggable="false" @click="qrTap" />
           <div class="font-sans text-[13px] lg:text-sm leading-tight text-gray-300">meshsat.net<br /><span class="text-gray-500">open source, GPLv3</span></div>
         </div>
-        <div class="rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2 min-h-[88px] flex flex-col justify-center">
-          <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words" :class="current ? msgSize : 'text-xl lg:text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
+        <div class="rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2 min-h-[88px] max-h-[150px] lg:max-h-none overflow-hidden flex flex-col justify-center">
+          <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words line-clamp-3" :class="current ? msgSize : 'text-xl lg:text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
             {{ current ? displayText(current) : (nearDev === 'tdeck' ? 'Your message will appear here the moment this kit hears it.' : 'The next message from the other kit will appear here the moment it lands.') }}
           </button>
           <div v-if="current" class="font-sans text-sm text-gray-300 mt-1">
