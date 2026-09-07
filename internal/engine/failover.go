@@ -41,6 +41,28 @@ type FailoverResolver struct {
 	faultedIDs map[string]bool // interface IDs with injected faults
 
 	receive ReceiveChecker // deaf receivers are skipped by Resolve (nil = ignore)
+
+	// gwOnline reports a member whose gateway is connected even though the
+	// interface manager never binds it to a device. The APRS gateway (and
+	// the other gateway-backed channels) show "unbound" there for their
+	// whole life, which made a group [aprs_0, cellular_0] resolve to SMS
+	// while APRS was perfectly healthy (found live 7 Sep 2026). [MESHSAT-857]
+	gwOnline func(ifaceID string) bool
+}
+
+// SetGatewayOnline installs the gateway-connected check used beside the
+// interface manager's state. [MESHSAT-857]
+func (fr *FailoverResolver) SetGatewayOnline(fn func(ifaceID string) bool) {
+	fr.gwOnline = fn
+}
+
+// online reports whether a member can carry traffic now: bound and online
+// in the interface manager, or served by a connected gateway.
+func (fr *FailoverResolver) online(ifaceID string, state InterfaceState) bool {
+	if state == StateOnline {
+		return true
+	}
+	return fr.gwOnline != nil && fr.gwOnline(ifaceID)
 }
 
 // NewFailoverResolver creates a resolver.
@@ -122,7 +144,7 @@ func (fr *FailoverResolver) Resolve(targetID string) string {
 		if err != nil {
 			continue
 		}
-		if status.State == StateOnline {
+		if fr.online(m.InterfaceID, status.State) {
 			if fr.deaf(m.InterfaceID) {
 				log.Warn().Str("group", group.ID).Str("member", m.InterfaceID).
 					Int("priority", m.Priority).Msg("failover: member online but its receiver is deaf, skipping")

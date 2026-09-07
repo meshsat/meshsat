@@ -1052,6 +1052,19 @@ func (m *Manager) unsyncIfaceMap(gw Gateway) {
 	}
 }
 
+// InterfaceConnected reports whether a running gateway serves the interface
+// and is connected. Gateway-backed channels (APRS, cellular, ...) never bind
+// a device in the interface manager, so failover groups ask here. [MESHSAT-857]
+func (m *Manager) InterfaceConnected(ifaceID string) bool {
+	m.mu.Lock()
+	gw := m.runningByIface[ifaceID]
+	m.mu.Unlock()
+	if gw == nil {
+		return false
+	}
+	return gw.Status().Connected
+}
+
 // GetStatus returns status info for all known gateway instances (configured or running).
 func (m *Manager) GetStatus() []GatewayStatusResponse {
 	m.mu.RLock()
