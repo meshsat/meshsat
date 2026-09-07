@@ -31,6 +31,7 @@ type APRSGateway struct {
 	kiss   *KISSConn
 	inCh   chan InboundMessage
 	outCh  chan *transport.MeshMessage
+	rawOut chan []byte // ready AX.25 frames (status beacon) sent by the write worker [MESHSAT-857]
 
 	// Nil when APRSConfig.ExternalDirewolf is true — caller is responsible
 	// for running Direwolf out-of-band. [MESHSAT-516]
@@ -202,6 +203,7 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 		kiss:    kiss,
 		inCh:    make(chan InboundMessage, 32),
 		outCh:   make(chan *transport.MeshMessage, 10),
+		rawOut:  make(chan []byte, 4),
 		tracker: NewAPRSTracker(),
 	}
 	if !cfg.ExternalDirewolf {
@@ -338,6 +340,10 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 	go g.readWorker(bgCtx)
 	go g.writeWorker(bgCtx)
 	go g.silenceWatchdog(bgCtx)
+	if g.config.BeaconSecs > 0 {
+		g.wg.Add(1)
+		go g.beaconWorker(bgCtx)
+	}
 
 	log.Info().
 		Str("kiss_addr", g.kiss.Target()).
@@ -614,8 +620,65 @@ func (g *APRSGateway) writeWorker(ctx context.Context) {
 			return
 		case msg := <-g.outCh:
 			g.sendMessage(msg)
+		case frame := <-g.rawOut:
+			g.sendRaw(frame)
 		}
 	}
+}
+
+// beaconWorker transmits the status beacon every BeaconSecs. The frame is
+// plain APRS (status data type '>'), no digipeater path: it is meant for
+// the peer kit a few metres away and for anyone listening on 144.800, and
+// it is the liveness signal the peer's receive watchdog expects on a
+// two-kit network, so an idle booth never reads as a deaf receiver. The
+// first beacon goes out a few seconds after start. [MESHSAT-857]
+func (g *APRSGateway) beaconWorker(ctx context.Context) {
+	defer g.wg.Done()
+	interval := time.Duration(g.config.BeaconSecs) * time.Second
+	first := time.NewTimer(5 * time.Second)
+	defer first.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-first.C:
+	}
+	n := 0
+	for {
+		n++
+		select {
+		case g.rawOut <- g.beaconFrame(n):
+		default:
+			log.Debug().Msg("aprs: beacon skipped, transmit queue busy")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+
+// beaconFrame builds beacon number n as an AX.25 UI frame.
+func (g *APRSGateway) beaconFrame(n int) []byte {
+	src := AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}
+	dst := AX25Address{Call: "APMSHT", SSID: 0}
+	text := g.config.BeaconText
+	if text == "" {
+		text = fmt.Sprintf("MeshSat %s ok", g.config.Callsign)
+	}
+	return EncodeAX25Frame(dst, src, nil, []byte(fmt.Sprintf(">%s %d", text, n)))
+}
+
+// sendRaw transmits a ready AX.25 frame on the write worker's turn.
+func (g *APRSGateway) sendRaw(frame []byte) {
+	if err := g.kiss.SendFrame(frame); err != nil {
+		log.Warn().Err(err).Msg("aprs: send beacon")
+		g.errors.Add(1)
+		return
+	}
+	g.tracker.RecordTX()
+	g.lastActive.Store(time.Now().Unix())
+	g.recordFrame(DirTX, frame, "")
 }
 
 func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {

@@ -2230,6 +2230,8 @@ func main() {
 		}
 		rxWatchdog = gateway.NewRxWatchdog(gateway.RxWatchdogConfig{
 			Silence:           time.Duration(cfg.APRSRxWatchdogMin) * time.Minute,
+			HeardWithin:       time.Duration(cfg.APRSRxHeardWithinMin) * time.Minute,
+			StatsStale:        time.Duration(cfg.APRSRxStatsStaleSec) * time.Second,
 			LastHeard:         seedTime("aprs_rx_last_heard"),
 			LastBridgeRestart: seedTime("aprs_rx_bridge_restart_at"),
 		}, gateway.RxWatchdogActions{

@@ -486,6 +486,16 @@ func (d *Dispatcher) StopWorker(ifaceID string) {
 
 // DispatchAccess evaluates v0.3.0 access rules for a message arriving on an interface.
 // Returns the number of deliveries created. Uses interface IDs for routing.
+// isTextBearer reports whether a channel type carries human text on the
+// wire (SMS, APRS message, mesh text) rather than opaque bytes. [MESHSAT-792]
+func isTextBearer(channelType string) bool {
+	switch channelType {
+	case "cellular", "aprs", "mesh":
+		return true
+	}
+	return false
+}
+
 func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessage, payload []byte) int {
 	if d.access == nil {
 		return 0
@@ -671,6 +681,15 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		if ok && desc.RetryConfig.Enabled {
 			maxRetries = desc.RetryConfig.MaxRetries
 		}
+		// A mesh text bound for a text bearer travels as the text, not as
+		// the JSON envelope: the envelope made a two-character text a 388
+		// byte APRS frame and two SMS, and the far kit relayed each
+		// fragment as a message of its own. Byte bearers keep the envelope
+		// and the DTN fragmenter. [MESHSAT-792]
+		wire := payload
+		if isTextBearer(channelType) && msg.PortNum == 1 && msg.Text != "" {
+			wire = []byte(msg.Text)
+		}
 
 		preview := msg.Text
 		if len(preview) > 200 {
@@ -709,7 +728,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 
 		// Content-hash dedup: suppress duplicate payload→interface deliveries within TTL window
-		if d.isDeliveryDuplicate(destInterface, payload) {
+		if d.isDeliveryDuplicate(destInterface, wire) {
 			d.loopMetrics.DeliveryDedups.Add(1)
 			log.Debug().Str("dest", destInterface).Msg("delivery dedup: same payload recently delivered to this interface, skipping")
 			continue
@@ -763,7 +782,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 		if d.maxQueueBytes > 0 {
 			qBytes, bErr := d.db.QueueBytes(destInterface)
-			if bErr == nil && qBytes+int64(len(payload)) > d.maxQueueBytes {
+			if bErr == nil && qBytes+int64(len(wire)) > d.maxQueueBytes {
 				log.Warn().Str("dest", destInterface).Int64("bytes", qBytes).Int64("max", d.maxQueueBytes).
 					Msg("queue bytes limit reached, rejecting delivery")
 				continue
@@ -782,7 +801,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			Channel:     destInterface, // resolved interface ID as delivery target
 			Status:      "queued",
 			Priority:    m.Rule.Priority,
-			Payload:     payload,
+			Payload:     wire,
 			TextPreview: preview,
 			MaxRetries:  maxRetries,
 			Visited:     visited,
@@ -802,20 +821,20 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 
 		// Sign the payload for non-repudiation
-		if d.signing != nil && len(payload) > 0 {
-			del.Signature = d.signing.Sign(payload)
+		if d.signing != nil && len(wire) > 0 {
+			del.Signature = d.signing.Sign(wire)
 			del.SignerID = d.signing.SignerID()
 		}
 
 		// DTN bundle fragmentation (MESHSAT-408): if payload exceeds interface MTU,
 		// split into fragments and create one delivery per fragment.
-		if d.fragmentMgr != nil && desc.MaxPayload > 0 && len(payload) > desc.MaxPayload {
-			bundleID, fragments, fragErr := Fragment(payload, desc.MaxPayload)
+		if d.fragmentMgr != nil && desc.MaxPayload > 0 && len(wire) > desc.MaxPayload {
+			bundleID, fragments, fragErr := Fragment(wire, desc.MaxPayload)
 			if fragErr == nil && len(fragments) > 1 {
 				log.Info().
 					Int("fragments", len(fragments)).
 					Int("mtu", desc.MaxPayload).
-					Int("payload", len(payload)).
+					Int("payload", len(wire)).
 					Str("bundle_id", fmt.Sprintf("%x", bundleID[:8])).
 					Str("dest", destInterface).
 					Msg("DTN: payload exceeds MTU, fragmenting")

@@ -240,6 +240,16 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 	case 0:
 		w.runStep(ctx, 1, "restart APRS gateway (Direwolf respawn)", w.act.RestartGateway)
 	case 1:
+		// Rungs 2 and 3 touch hardware (USB port cut, TNC reopen) and the
+		// whole bridge. On a two-kit network a silent peer looks exactly
+		// like a deaf receiver, and at a quiet booth silence is normal, so
+		// those rungs only run when Direwolf's own audio stats have stopped
+		// (hung): then the fault is on this kit. [MESHSAT-857]
+		// A serial TNC reports no audio stats (LevelAt zero): its rung 2 is
+		// only a port reopen, cheap enough to keep on silence.
+		if !hung && !h.LevelAt.IsZero() {
+			return
+		}
 		if w.act.Reopen != nil {
 			w.runStep(ctx, 2, "reopen the TNC serial port", w.act.Reopen)
 			return
@@ -263,7 +273,7 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 			return nil
 		})
 	case 2:
-		if now.Sub(w.bridgeRestartAt) < w.cfg.BridgeCooldown {
+		if !hung || now.Sub(w.bridgeRestartAt) < w.cfg.BridgeCooldown {
 			return
 		}
 		w.bridgeRestartAt = now
