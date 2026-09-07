@@ -373,3 +373,20 @@ body.theme-nvis *::after {
   animation-delay: 0ms !important;
   transition-duration: 0.001ms !important;
 }
+
+/* --- Operator dashboard on the 7" panel [MESHSAT-826, 7 Sep 2026] ---
+   The kiosk viewport is 853x480 CSS px (Chromium at DSF 1.5). The four
+   glanceable rows measured 490 px against 375 px between the header and
+   the bottom nav, so the third row (GPS, battery, queued) sat under the
+   nav. Tighter cards and numbers on the panel only; desktop unchanged. */
+@media (max-height: 560px) {
+  html.shell-kiosk .op-glance .p-3 { padding: 0.5rem 0.75rem; }
+  html.shell-kiosk .op-glance .p-1\.5 { padding: 0.25rem 0.5rem; }
+  html.shell-kiosk .op-glance .mt-2 { margin-top: 0.25rem; }
+  html.shell-kiosk .op-glance .mt-1 { margin-top: 0.125rem; }
+  html.shell-kiosk .op-glance.mb-2 { margin-bottom: 0.25rem; }
+  html.shell-kiosk .op-glance .text-3xl { font-size: 1.5rem; line-height: 1.75rem; }
+  html.shell-kiosk .op-glance .text-2xl { font-size: 1.25rem; line-height: 1.5rem; }
+  html.shell-kiosk .op-glance .text-sm { font-size: 0.8125rem; line-height: 1.125rem; }
+  html.shell-kiosk .op-glance .h-6 { height: 1.125rem; }
+}
