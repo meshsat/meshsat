@@ -290,6 +290,13 @@ func (m *Manager) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for instanceID, gw := range m.running {
+		if gw == nil {
+			// StartGatewayInstance parks a nil sentinel while an instance is
+			// being created; a shutdown that lands in that window must not
+			// dereference it (parallax crashed on `docker compose stop`,
+			// 7 Sep 2026). [MESHSAT-857]
+			continue
+		}
 		if err := gw.Stop(); err != nil {
 			log.Error().Err(err).Str("instance", instanceID).Msg("failed to stop gateway")
 		}
