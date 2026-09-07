@@ -203,6 +203,14 @@ const legLabel = computed(() => {
 
 // Event wiring. `out` = leaves the near device, crosses the air.
 // `in` = arrives from the air, ends at the near device.
+const isHousekeeping = (p) => !(p.text || '').trim() || (p.to || '').toUpperCase() === 'RTICUL' || /^MS:/.test(p.text || '')
+const airPulse = ref(false)
+let airPulseTimer = null
+function pulseAir() {
+  airPulse.value = true
+  if (airPulseTimer) clearTimeout(airPulseTimer)
+  airPulseTimer = setTimeout(() => { airPulse.value = false }, 1400)
+}
 function onPacket(p) {
   packets.value.unshift(p); packets.value.splice(400)
   if (p.bearer === 'lora' && p.dir === 'rx') {
@@ -218,8 +226,12 @@ function onPacket(p) {
     if (p.from && peer.value.callsign && p.from.toUpperCase().startsWith(peer.value.callsign.split('-')[0])) {
       farHeardAt.value = Date.now()
     }
-    // A frame from the far kit starts an inbound trip (text may be
-    // empty: encrypted frames decode inside the bridge).
+    // Routing and management frames between the kits (Reticulum to
+    // RTICUL, OOB "MS:" frames, anything without text) are not messages:
+    // they pulse the air link so the visitor sees the link is alive, and
+    // never touch the message box or start a trip.
+    if (isHousekeeping(p)) { pulseAir(); return }
+    // A text frame from the far kit starts an inbound trip.
     if (!current.value || current.value.done || current.value.dir !== 'in') {
       const t = newTrip('in', p)
       stage(t, 'aprs_rx')
@@ -230,6 +242,7 @@ function onPacket(p) {
     const t = current.value
     if (t && t.dir === 'out' && !t.done) { stage(t, 'aprs_tx', { bytes: p.bytes, raw: p.raw }); t.bytes = p.bytes || t.bytes }
   } else if (p.bearer === 'sms' && p.dir === 'rx') {
+    if (isHousekeeping(p)) { pulseAir(); return }
     if (!current.value || current.value.done || current.value.dir !== 'in') {
       const t = newTrip('in', p); t.lane = 'sms'; dot.lane = 'sms'
       stage(t, 'sms_rx')
@@ -243,7 +256,14 @@ function onPacket(p) {
 function onDelivery(ev) {
   const d = ev.data || {}
   const ch = d.channel || ''
-  const t = current.value
+  let t = current.value
+  // A delivery that names a trip we started (composer sends carry the
+  // ledger's msg_ref) wins over whatever is current, so a routing frame in
+  // between cannot swallow the journey.
+  if (d.msg_ref) {
+    const own = trips.value.find(x => x.msgRef === d.msg_ref && !x.done)
+    if (own && own !== t) { t = own; current.value = own; dot.dir = own.dir; dot.lane = own.lane; dot.visible = true }
+  }
   if (!t || t.done) return
   const status = (d.status || ev.type.replace('delivery_', '')).toLowerCase()
   if (status === 'queued') {
@@ -327,7 +347,8 @@ const statusLine = computed(() => {
   const last = t.stages[t.stages.length - 1]
   const name = last ? last.name : ''
   const nearDev = nearDevName.value
-  if (t.failed) return 'did not get out, the ledger has the reason'
+  if (replaying.value) return `replaying the last real message, ${replayAge.value} min ago`
+  if (t.failed) return 'did not get out this time'
   if (t.dir === 'out') {
     if (name === 'sent' || name === 'aprs_tx') {
       const via = t.lane === 'sms' ? 'as one SMS' : 'over the radio'
@@ -518,6 +539,7 @@ const pipeline = computed(() => {
 // ── attract cycle, exit, text toggle ─────────────────────────────────
 const IDLE_MS = 180000
 const CYCLE = [{ v: 'route', ms: 90000 }, { v: 'spectrum', ms: 25000 }, { v: 'nerds', ms: 20000 }]
+const sdrOk = computed(() => { const t = (health.value || []).find(x => x.name === 'rtl_sdr'); return !!t && t.state === 'ok' })
 const view = ref('route')       // route | spectrum | nerds (attract)
 let lastTouch = Date.now()
 let cycleIdx = 0
@@ -537,6 +559,8 @@ function tickAttract() {
   if (idle < IDLE_MS) return
   if (!cycleAt || Date.now() - cycleAt >= CYCLE[cycleIdx].ms) {
     cycleIdx = (cycleIdx + 1) % CYCLE.length
+    // No spectrum page without a working SDR (a dead widget is worse than none).
+    if (CYCLE[cycleIdx].v === 'spectrum' && !sdrOk.value) cycleIdx = (cycleIdx + 1) % CYCLE.length
     view.value = CYCLE[cycleIdx].v
     cycleAt = Date.now()
   }
@@ -592,30 +616,34 @@ async function sendComposed() {
   const c = composer.value
   const text = c.text.trim()
   if (!text || c.busy) return
+  const to = c.to
   c.busy = true; c.note = ''
+  // The sheet covers the drawing, so it goes first: the journey is the
+  // confirmation. The message box carries the text and its status line.
+  closeComposer()
   try {
-    if (c.to === 'local') {
+    if (to === 'local') {
       await api.post('/messages/send', { text })
       const t = newTrip('in', { text, from: me.value.callsign, bytes: text.length })
       stage(t, 'typed_local')
       jump(kitPos.value.x, kitPos.value.y)
-      moveTo(devPos.value.x, devPos.value.y, 900)
-      finish(t, false, 1100)
-      c.note = `sent to the ${nearDevName.value}`
+      moveTo(devPos.value.x, devPos.value.y, 1400)
+      finish(t, false, 1700)
     } else {
-      await api.post('/messages/send', { text, gateway: 'cellular', precedence: 'Routine' })
-      // The ledger's delivery events move the dot from here on (SMS lane).
+      const r = await api.post('/messages/send', { text, gateway: 'cellular', precedence: 'Routine' })
+      // The ledger's delivery events move the dot from here on (SMS lane);
+      // they find this trip by reference even if other frames arrive first.
       const t = newTrip('out', { text, from: me.value.callsign, bytes: text.length })
+      t.msgRef = (r && r.msg_ref) || ''
       stage(t, 'typed_remote')
       jump(kitPos.value.x, kitPos.value.y)
-      c.note = `on its way to ${peer.value.name}`
     }
-    c.text = ''
-    setTimeout(() => { if (composer.value.open) closeComposer() }, 1400)
   } catch (e) {
     const m = (e && e.message) || ''
-    c.note = /fetch|network/i.test(m) ? 'the kit did not answer, try again' : (m || 'could not send')
-  } finally { c.busy = false }
+    composer.value = { open: true, to, text, shift: false, busy: false, note: /fetch|network/i.test(m) ? 'the kit did not answer, try again' : (m || 'could not send') }
+    return
+  }
+  composer.value.busy = false
 }
 
 // Leaving TTC mode is an easter egg, not a control a visitor can find:
@@ -676,7 +704,7 @@ async function sendTest() {
   } finally { testBusy.value = false }
 }
 
-const displayText = (t) => !t ? '' : (showText.value ? (t.text || (t.dir === 'in' ? 'encrypted frame, decoded inside the bridge' : '')) : 'text hidden')
+const displayText = (t) => !t ? '' : (showText.value ? (t.text || (t.dir === 'in' ? 'a frame between the kits, not a message' : '')) : 'text hidden')
 
 onMounted(async () => {
   document.documentElement.classList.add('ttc-mode')
@@ -758,12 +786,12 @@ onUnmounted(() => {
               <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
                 <rect :x="Math.min(P.airNear.x, P.edge) - 10" :y="P.dev.y - 120" :width="Math.abs(P.edge - P.airNear.x) + 20" height="260" class="hit" />
                 <line :x1="P.airNear.x" :y1="P.dev.y" :x2="P.edge" :y2="P.dev.y" class="lane air-line" />
-                <g v-for="i in 3" :key="'wn'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
+                <g v-for="i in 3" :key="'wn'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
                   <path :d="nearIsLeft
                     ? `M ${P.airNear.x + 6 + i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.airNear.x + 6 + i*16} ${P.dev.y + 14 + i*10}`
                     : `M ${P.airNear.x - 6 - i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.airNear.x - 6 - i*16} ${P.dev.y + 14 + i*10}`" />
                 </g>
-                <g v-for="i in 3" :key="'we'+i" class="wave" :style="{ animationDelay: (i * 0.5 + 0.25) + 's' }">
+                <g v-for="i in 3" :key="'we'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5 + 0.25) + 's' }">
                   <path :d="nearIsLeft
                     ? `M ${P.edge - 40 - i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.edge - 40 - i*16} ${P.dev.y + 14 + i*10}`
                     : `M ${P.edge + 40 + i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.edge + 40 + i*16} ${P.dev.y + 14 + i*10}`" />
@@ -817,10 +845,10 @@ onUnmounted(() => {
               <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
                 <rect :x="G.airL.x" :y="G.airL.y - 110" :width="G.airR.x - G.airL.x" height="220" class="hit" />
                 <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
-                <g v-for="i in 3" :key="'wl'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
+                <g v-for="i in 3" :key="'wl'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
                   <path :d="`M ${G.airL.x + 6 + i*14} ${G.airL.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 1 ${G.airL.x + 6 + i*14} ${G.airL.y + 12 + i*8}`" />
                 </g>
-                <g v-for="i in 3" :key="'wr'+i" class="wave" :style="{ animationDelay: (i * 0.5) + 's' }">
+                <g v-for="i in 3" :key="'wr'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
                   <path :d="`M ${G.airR.x - 6 - i*14} ${G.airR.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${G.airR.y + 12 + i*8}`" />
                 </g>
                 <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
@@ -869,7 +897,6 @@ onUnmounted(() => {
           </template>
 
           <!-- replay label -->
-          <text v-if="replaying" x="640" y="452" text-anchor="middle" class="replay-note">replaying the last real message, {{ replayAge }} min ago</text>
 
           <!-- the message -->
           <g v-if="dot.visible" class="msg" :class="[dot.lane, current && current.failed ? 'failed' : '', replaying ? 'replay' : '']" :transform="`translate(${dot.x},${dot.y})`">
@@ -1074,7 +1101,8 @@ onUnmounted(() => {
 .lane.lora.far-alive { opacity: 0.85; }
 .air-line { stroke: #F7F7F4; stroke-opacity: 0.55; stroke-width: 2; }
 .air.silent .air-line { stroke-dasharray: 3 9; stroke-opacity: 0.3; }
-.wave path { fill: none; stroke: #F7F7F4; stroke-width: 1.5; opacity: 0; animation: wave 3s ease-out infinite; }
+.wave path { fill: none; stroke: #F7F7F4; stroke-width: 1.5; opacity: 0; animation: wave 3s ease-out infinite; transition: stroke 0.3s; }
+.wave.pulse path { stroke: #F96118; animation-duration: 1.2s; }
 .air.silent .wave path { animation: none; opacity: 0.12; }
 @keyframes wave { 0% { opacity: 0; } 20% { opacity: 0.7; } 100% { opacity: 0; } }
 .air-label { font-family: 'IBM Plex Mono', monospace; font-size: 28px; fill: #F7F7F4; letter-spacing: 0.02em; }
