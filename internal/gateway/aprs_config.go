@@ -53,6 +53,15 @@ type APRSConfig struct {
 	// kit. BeaconText defaults to "MeshSat <callsign> ok". [MESHSAT-857]
 	BeaconSecs int    `json:"beacon_secs"`
 	BeaconText string `json:"beacon_text"`
+
+	// Transmit every outbound message TXRepeat times, TXRepeatGapMs apart
+	// (0 or 1 = once, gap default 1500 ms). APRS UI frames carry no
+	// acknowledgement, so a frame lost to a collision or a late squelch is
+	// a lost message; a second copy turns a 5 percent loss into a quarter
+	// of a percent and the far kit's payload dedup drops the duplicate.
+	// Beacons are never repeated. [MESHSAT-857]
+	TXRepeat      int `json:"tx_repeat"`
+	TXRepeatGapMs int `json:"tx_repeat_gap_ms"`
 }
 
 // Direwolf timing defaults (Direwolf's own), used when a field is zero.

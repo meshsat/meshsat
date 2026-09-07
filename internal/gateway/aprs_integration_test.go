@@ -568,3 +568,33 @@ func TestAPRSIntegration_StatusBeaconIsLivenessOnly(t *testing.T) {
 }
 
 func (s *mockKISSTNC) sendRaw(frame []byte) { s.sendCh <- frame }
+
+// With tx_repeat 2 every message goes out twice, identical frames, so a
+// copy lost on the air is covered; beacons are not repeated. [MESHSAT-857]
+func TestAPRSIntegration_RepeatCopies(t *testing.T) {
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	host, port := splitHostPort(t, tnc.addr())
+	gw := NewAPRSGateway(APRSConfig{KISSHost: host, KISSPort: port, Callsign: "TEST", SSID: 10, FrequencyMHz: 144.800, ExternalDirewolf: true,
+		TXRepeat: 2, TXRepeatGapMs: 100}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+	if err := gw.Forward(ctx, &transport.MeshMessage{From: 0xAABBCCDD, PortNum: 1, DecodedText: "twice please", MsgRef: "r1"}); err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	time.Sleep(600 * time.Millisecond)
+	frames := tnc.frames()
+	if len(frames) != 2 {
+		t.Fatalf("frames sent: %d, want 2", len(frames))
+	}
+	if string(frames[0]) != string(frames[1]) {
+		t.Fatal("repeat copy differs from the first frame")
+	}
+	if gw.Status().MessagesOut != 1 {
+		t.Fatalf("messages_out %d, want 1 (one message, two copies)", gw.Status().MessagesOut)
+	}
+}
