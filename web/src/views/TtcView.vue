@@ -518,9 +518,24 @@ function tickAttract() {
     cycleAt = Date.now()
   }
 }
-let pressTimer = null
-function pressStart() { pressTimer = setTimeout(() => router.push('/'), 1500) }
-function pressEnd() { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null } }
+// Leaving TTC mode is an easter egg, not a control a visitor can find:
+// three taps on the mark in the top left within 2.5 s, then one tap on
+// the QR code in the bottom right within 4 s. Escape still works for a
+// keyboard. (Owner request 7 Sep 2026; replaces the long-press.)
+const EGG_MARK_TAPS = 3, EGG_MARK_WINDOW_MS = 2500, EGG_QR_WINDOW_MS = 4000
+let eggTaps = []          // timestamps of recent mark taps
+let eggArmedAt = 0        // when the third mark tap landed
+function markTap() {
+  const now = performance.now()
+  eggTaps = eggTaps.filter(t => now - t < EGG_MARK_WINDOW_MS)
+  eggTaps.push(now)
+  if (eggTaps.length >= EGG_MARK_TAPS) { eggArmedAt = now; eggTaps = [] }
+}
+function qrTap() {
+  const now = performance.now()
+  if (eggArmedAt && now - eggArmedAt < EGG_QR_WINDOW_MS) { eggArmedAt = 0; router.push('/') }
+  else eggArmedAt = 0
+}
 function onKey(e) { if (e.key === 'Escape') router.push('/') }
 function toggleText() {
   showText.value = !showText.value
@@ -575,11 +590,9 @@ onUnmounted(() => {
 
 <template>
   <div class="ttc fixed inset-0 z-[60] bg-gray-950 text-gray-50 flex flex-col select-none overflow-hidden">
-    <!-- header: mark (long-press exits), tagline, chips, clock -->
+    <!-- header: mark (first half of the exit egg), hostname, chips, clock -->
     <header class="relative flex items-center gap-4 px-5 h-14 shrink-0 border-b border-gray-800">
-      <div class="flex items-center gap-2 shrink-0"
-           @pointerdown="pressStart" @pointerup="pressEnd" @pointercancel="pressEnd" @pointerleave="pressEnd"
-           title="Hold to leave TTC mode">
+      <div class="flex items-center gap-2 shrink-0 select-none" @click="markTap">
         <img src="/meshsat-mark.png" alt="" class="h-7 w-auto" draggable="false" />
         <span class="font-display font-semibold text-base tracking-wide">MeshSat</span>
       </div>
@@ -759,7 +772,7 @@ onUnmounted(() => {
       <!-- strip: the message, its status, the QR, the numbers -->
       <section class="grid grid-cols-12 gap-3 px-5 pb-4 shrink-0">
         <div class="col-span-2 flex items-center gap-3">
-          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[92px] h-[92px] shrink-0" draggable="false" />
+          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[92px] h-[92px] shrink-0" draggable="false" @click="qrTap" />
           <div class="font-sans text-sm leading-snug text-gray-300">meshsat.net<br /><span class="text-gray-500">open source, GPLv3</span></div>
         </div>
         <div class="col-span-6 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 min-h-[104px] flex flex-col justify-center">
