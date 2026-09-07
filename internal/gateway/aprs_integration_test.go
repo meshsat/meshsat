@@ -612,8 +612,14 @@ func TestAPRSIntegration_BeaconRepeat(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	defer gw.Stop()
-	// The first beacon goes out 5 s after start, then its copy 100 ms later.
-	time.Sleep(6 * time.Second)
+	// The mock TNC's reader stops after 5 s of silence and the first beacon
+	// goes out at 5 s: a message at 2 s keeps the reader alive, then the
+	// beacon and its copy 100 ms later land before the 7 s wait ends.
+	time.Sleep(2 * time.Second)
+	if err := gw.Forward(ctx, &transport.MeshMessage{From: 0xAABBCCDD, PortNum: 1, DecodedText: "keepalive", MsgRef: "k1"}); err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	time.Sleep(5 * time.Second)
 	frames := tnc.frames()
 	beacons := 0
 	for _, f := range frames {
