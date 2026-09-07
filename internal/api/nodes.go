@@ -3,15 +3,52 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"meshsat/internal/engine"
 	"meshsat/internal/transport"
 )
 
+// nodeView is a NodeDB entry plus what this bridge could make of the node's
+// frames. Since the two-mesh split (MESHSAT-826) each kit hears the other
+// mesh's radios on the same frequency but cannot decrypt them: the radio
+// still lists them (stale names, fresh last_heard from the packet header).
+// The newest LoRa frame received from the node decides: portnum 0 means the
+// frame was undecryptable, so the node lives on another mesh.
+type nodeView struct {
+	transport.MeshNode
+	OtherMesh      bool   `json:"other_mesh"`                 // newest frame from this node was undecryptable
+	LastReadableAt string `json:"last_readable_at,omitempty"` // newest decoded frame from this node, RFC3339
+}
+
+func annotateNodes(nodes []transport.MeshNode, ring []engine.PacketRecord) []nodeView {
+	views := make([]nodeView, 0, len(nodes))
+	for _, n := range nodes {
+		v := nodeView{MeshNode: n}
+		newest := true
+		for _, p := range ring {
+			if p.From != n.UserID {
+				continue
+			}
+			if newest {
+				v.OtherMesh = p.PortNum == 0
+				newest = false
+			}
+			if p.PortNum > 0 {
+				v.LastReadableAt = p.Time.UTC().Format(time.RFC3339)
+				break
+			}
+		}
+		views = append(views, v)
+	}
+	return views
+}
+
 // handleGetNodes returns all known mesh nodes from the radio.
 // @Summary Get mesh nodes
-// @Description Returns all known nodes from the Meshtastic radio's NodeDB
+// @Description Returns all known nodes from the Meshtastic radio's NodeDB. Each node carries other_mesh (true when the newest LoRa frame received from it could not be decrypted, i.e. it sits on another channel key) and last_readable_at (newest decoded frame from it), both derived from the in-memory packet ring.
 // @Tags nodes
 // @Success 200 {object} map[string]interface{} "count, nodes"
 // @Failure 503 {object} map[string]string "mesh transport unavailable"
@@ -30,10 +67,15 @@ func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
 	if nodes == nil {
 		nodes = []transport.MeshNode{}
 	}
+	var ring []engine.PacketRecord
+	if s.processor != nil && s.processor.Packets() != nil {
+		ring = s.processor.Packets().Newest(engine.PacketRingSize, "lora", "rx")
+	}
+	views := annotateNodes(nodes, ring)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"count": len(nodes),
-		"nodes": nodes,
+		"count": len(views),
+		"nodes": views,
 	})
 }
 
