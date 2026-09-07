@@ -483,7 +483,7 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 **Booth pre-flight (both kits, in this order):**
 1. `docker logs --since 10m meshsat 2>&1 | grep -a "audio level = "`: lines with the peer's callsign every 90 s (its beacon). Zero lines in ten minutes = deaf; the `ADEVICE ... CH0` stats lines do not count.
 2. `GET /api/aprs/status`: `connected true`, `receive_state ok`.
-3. `GET /api/gateways/aprs`: `tx_delay 50`, `beacon_secs 45`, `tx_repeat 2`.
+3. `GET /api/gateways/aprs`: `tx_delay 50`, `beacon_secs 30`, `tx_repeat 2` (messages and beacons both go out twice).
 4. No `MSxxx>RTICUL` in either Direwolf log (ax25_0 off).
 5. Rules: `GET /api/access-rules` shows rule 1 `mesh_0 -> peer_link` on, the inbound `aprs_0 -> mesh_0` and `cellular_0 -> mesh_0` rules on, no direct `mesh_0 -> aprs_0`; `GET /api/failover-groups` lists `peer_link` (aprs_0 priority 1, cellular_0 priority 2).
 6. One text from each handheld: one line on the far handheld, APRS lane on both panels. If a receiver is deaf (Direwolf stopped, radio off), the same text goes over SMS and the panel shows the SMS lane.
