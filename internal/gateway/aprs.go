@@ -740,6 +740,27 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	g.recordFrame(DirTX, frame, msg.MsgRef)
 	log.Debug().Str("callsign", FormatCallsign(src)).Bool("encrypted", msg.Encrypted).
 		Int("info_len", len(info)).Msg("aprs: sent packet")
+	// Repeat copies: the same frame again after the gap, so a copy lost on
+	// the air is covered by the other; the far kit dedups. [MESHSAT-857]
+	for i := 1; i < g.config.TXRepeat; i++ {
+		time.Sleep(g.repeatGap())
+		if err := g.kiss.SendFrame(frame); err != nil {
+			log.Warn().Err(err).Int("copy", i+1).Msg("aprs: send repeat")
+			g.errors.Add(1)
+			return
+		}
+		g.tracker.RecordTX()
+		g.recordFrame(DirTX, frame, msg.MsgRef)
+		log.Debug().Int("copy", i+1).Str("msg_ref", msg.MsgRef).Msg("aprs: sent repeat copy")
+	}
+}
+
+// repeatGap is the pause between repeat copies of one message.
+func (g *APRSGateway) repeatGap() time.Duration {
+	if g.config.TXRepeatGapMs > 0 {
+		return time.Duration(g.config.TXRepeatGapMs) * time.Millisecond
+	}
+	return 1500 * time.Millisecond
 }
 
 func (g *APRSGateway) formatInboundText(pkt *APRSPacket) string {
