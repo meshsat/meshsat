@@ -1649,7 +1649,7 @@ function widgetGridClass(id) {
       <!-- Row 0 (MESHSAT-686): channel-matrix header strip + the
            TTC mode entry (MESHSAT-826). 9 chips summarise every comms
            channel's live state at a glance. -->
-      <div class="flex items-stretch gap-2 mb-2">
+      <div class="op-glance flex items-stretch gap-2 mb-2">
         <div class="flex-1 bg-tactical-surface rounded-lg border border-tactical-border px-2 py-1.5
                     flex items-center gap-1 overflow-x-auto">
           <span class="text-[9px] uppercase tracking-widest text-gray-500 mr-1 shrink-0">Channels</span>
@@ -1677,7 +1677,7 @@ function widgetGridClass(id) {
       </div>
 
       <!-- Row 1: Mission State (half) + SOS action (half) -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
+      <div class="op-glance grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
         <!-- Mission state banner — compact: 2-line. Color reflects
              aggregate channel health; drills through to /sos. -->
         <router-link to="/sos"
@@ -1709,7 +1709,7 @@ function widgetGridClass(id) {
       </div>
 
       <!-- Row 2: Next Pass · Active Comms · Peers -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
+      <div class="op-glance grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
 
         <!-- Next satellite pass -->
         <router-link to="/passes"
@@ -1797,7 +1797,7 @@ function widgetGridClass(id) {
       </div>
 
       <!-- Row 3: GPS · Battery · Queued -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+      <div class="op-glance grid grid-cols-1 md:grid-cols-3 gap-2">
         <!-- GPS fix status -->
         <router-link to="/map"
           class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
