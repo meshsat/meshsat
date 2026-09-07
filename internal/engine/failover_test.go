@@ -186,3 +186,35 @@ func TestFailoverResolver_DeafPrimarySkipped(t *testing.T) {
 		t.Errorf("recovered: expected iridium_0, got %s", got)
 	}
 }
+
+// A member served by a connected gateway counts as online even though the
+// interface manager never binds it (APRS, cellular): the booth group
+// [aprs_0, cellular_0] must resolve to APRS while its gateway is up. [MESHSAT-857]
+func TestFailoverResolver_GatewayOnlineMember(t *testing.T) {
+	fr, ifaceMgr, db := setupFailoverTest(t)
+	db.InsertFailoverGroup(&database.FailoverGroup{ID: "peer_link", Label: "APRS first", Mode: "priority"})
+	db.InsertFailoverMember(&database.FailoverMember{GroupID: "peer_link", InterfaceID: "iridium_0", Priority: 1})
+	db.InsertFailoverMember(&database.FailoverMember{GroupID: "peer_link", InterfaceID: "iridium_1", Priority: 2})
+	ifaceMgr.mu.Lock()
+	ifaceMgr.states["iridium_0"].state = StateUnbound
+	ifaceMgr.states["iridium_1"].state = StateOnline
+	ifaceMgr.mu.Unlock()
+	if got := fr.Resolve("peer_link"); got != "iridium_1" {
+		t.Fatalf("without a gateway check the unbound primary must be skipped, got %s", got)
+	}
+	connected := map[string]bool{"iridium_0": true}
+	fr.SetGatewayOnline(func(id string) bool { return connected[id] })
+	if got := fr.Resolve("peer_link"); got != "iridium_0" {
+		t.Errorf("gateway-backed primary: expected iridium_0, got %s", got)
+	}
+	// Deaf still loses, and a disconnected gateway falls back.
+	fr.SetReceiveChecker(deafChecker{"iridium_0": true})
+	if got := fr.Resolve("peer_link"); got != "iridium_1" {
+		t.Errorf("deaf gateway-backed primary: expected iridium_1, got %s", got)
+	}
+	fr.SetReceiveChecker(deafChecker{})
+	connected["iridium_0"] = false
+	if got := fr.Resolve("peer_link"); got != "iridium_1" {
+		t.Errorf("disconnected gateway: expected iridium_1, got %s", got)
+	}
+}

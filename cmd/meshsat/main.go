@@ -978,6 +978,7 @@ func main() {
 	dispatcher.SetPacketRing(proc.Packets()) // mesh sends by the delivery workers [MESHSAT-826]
 	dispatcher.SetAccessEvaluator(accessEval)
 	failoverResolver := engine.NewFailoverResolver(db, ifaceMgr)
+	failoverResolver.SetGatewayOnline(gwMgr.InterfaceConnected)
 	dispatcher.SetFailoverResolver(failoverResolver)
 	if signingService != nil {
 		dispatcher.SetSigningService(signingService)
