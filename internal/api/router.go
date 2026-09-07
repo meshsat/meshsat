@@ -320,6 +320,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/messages", s.handleGetMessages)
 		r.Get("/messages/stats", s.handleGetMessageStats)
 		r.Post("/messages/send", s.handleSendMessage)
+		r.Post("/messages/simulate-mesh-rx", s.handleSimulateMeshRx)
 		r.Delete("/messages", s.handlePurgeMessages)
 
 		r.Get("/telemetry", s.handleGetTelemetry)
