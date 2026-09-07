@@ -513,6 +513,7 @@ Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_
 | APRS hardware | tuned K5 chain being replaced by the PicoAPRS V4 this week | section 14 device setup, then section 16 pre-flight on the new chain |
 | Handhelds | T-Echo (mesh A), T-Deck Plus (mesh B), T-Deck Pro ordered, power packs 8 Sep | Pro joined to an island, charging plan for two days |
 | Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived | installed on both kits |
+| Plate stack | middle plate sags under the X1202, cells and Pi 5; two extra M3 rods at mid-span of the long edges (MESHSAT-863) | fitted on both kits, plate pulled flat, fieldkit BUILD.md + CAD updated |
 | Software follow-ups | MESHSAT-861 (resolver honours a disabled interface, receive_state after a restart), MESHSAT-859 (time-sync config) | landed and verified |
 | Logistics | hotel and taxis arranged, prints and stickers 9 to 11 Sep | booth slot and Hub allowlist from Thomas, transport and setup plan |
 
