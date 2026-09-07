@@ -335,10 +335,12 @@ const statusLine = computed(() => {
     }
     if (name === 'queued') return 'inside the kit, picking a way out'
     if (name === 'test') return 'a test frame from this kit'
+    if (name === 'typed_remote') return `typed on this kit, on its way to ${peer.value.name}`
     return `heard on the mesh from the ${nearDev}`
   }
   if (name === 'sent' || name === 'lora_tx') return `on this mesh now, look at the ${nearDev}`
   if (name === 'queued') return 'inside the kit, going out on LoRa'
+  if (name === 'typed_local') return `typed on this kit, sent to the ${nearDev} over LoRa`
   return `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
 })
 // Only packets this kit could decrypt count as "heard on this mesh".
@@ -539,6 +541,83 @@ function tickAttract() {
     cycleAt = Date.now()
   }
 }
+const peerDevName = computed(() => peer.value.device === 'tdeck' ? 'T-Deck' : 'T-Echo')
+
+// ── composer: double-tap the kit, type on the panel, send to either mesh ──
+// The panel has no keyboard, so the composer draws one. Local mesh is a
+// broadcast on this kit's own channel (the handheld on this table hears
+// it); Remote mesh queues an SMS to the peer kit, whose relay rule puts it
+// on the other mesh, the same path a relayed handheld text takes. A single
+// tap on the kit still opens its card, after a 400 ms wait for a second tap.
+const COMPOSER_MAX = 120
+const KEY_ROWS = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+  ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '?'],
+  ['shift', 'z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ',', 'back'],
+]
+const composer = ref({ open: false, to: 'local', text: '', shift: false, busy: false, note: '' })
+let kitTapAt = 0, kitTapTimer = null
+function kitTap() {
+  const now = performance.now()
+  if (now - kitTapAt < 400) {
+    kitTapAt = 0
+    if (kitTapTimer) { clearTimeout(kitTapTimer); kitTapTimer = null }
+    openComposer(); return
+  }
+  kitTapAt = now
+  kitTapTimer = setTimeout(() => { kitTapTimer = null; openCard('kit') }, 400)
+}
+function openComposer() {
+  card.value = null; drawer.value = false
+  composer.value = { open: true, to: 'local', text: '', shift: false, busy: false, note: '' }
+}
+function closeComposer() { composer.value.open = false }
+const deviceImg = (d) => d === 'tdeck' ? '/tdeck-plus.png' : '/techo.png'
+const composerOptions = computed(() => ([
+  { key: 'local', title: 'Local mesh', sub: `to the ${nearDevName.value} on this table`, img: deviceImg(nearDev.value) },
+  { key: 'remote', title: 'Remote mesh', sub: `to the ${peerDevName.value} at ${peer.value.name}, over the air`, img: deviceImg(peer.value.device) },
+]))
+const composerTarget = computed(() => composerOptions.value.find(o => o.key === composer.value.to) || composerOptions.value[0])
+function keyTap(k) {
+  const c = composer.value
+  if (k === 'shift') { c.shift = !c.shift; return }
+  if (k === 'back') { c.text = c.text.slice(0, -1); return }
+  if (c.text.length >= COMPOSER_MAX) return
+  if (k === 'space') { c.text += ' '; return }
+  c.text += c.shift ? k.toUpperCase() : k
+  c.shift = false
+}
+async function sendComposed() {
+  const c = composer.value
+  const text = c.text.trim()
+  if (!text || c.busy) return
+  c.busy = true; c.note = ''
+  try {
+    if (c.to === 'local') {
+      await api.post('/messages/send', { text })
+      const t = newTrip('in', { text, from: me.value.callsign, bytes: text.length })
+      stage(t, 'typed_local')
+      jump(kitPos.value.x, kitPos.value.y)
+      moveTo(devPos.value.x, devPos.value.y, 900)
+      finish(t, false, 1100)
+      c.note = `sent to the ${nearDevName.value}`
+    } else {
+      await api.post('/messages/send', { text, gateway: 'cellular', precedence: 'Routine' })
+      // The ledger's delivery events move the dot from here on (SMS lane).
+      const t = newTrip('out', { text, from: me.value.callsign, bytes: text.length })
+      stage(t, 'typed_remote')
+      jump(kitPos.value.x, kitPos.value.y)
+      c.note = `on its way to ${peer.value.name}`
+    }
+    c.text = ''
+    setTimeout(() => { if (composer.value.open) closeComposer() }, 1400)
+  } catch (e) {
+    const m = (e && e.message) || ''
+    c.note = /fetch|network/i.test(m) ? 'the kit did not answer, try again' : (m || 'could not send')
+  } finally { c.busy = false }
+}
+
 // Leaving TTC mode is an easter egg, not a control a visitor can find:
 // three taps on the mark in the top left within 2.5 s, then one tap on
 // the QR code in the bottom right within 4 s. Escape still works for a
@@ -558,7 +637,17 @@ function qrTap() {
   if (eggArmedAt && now - eggArmedAt < EGG_QR_WINDOW_MS) { eggArmedAt = 0; router.push('/') }
   else eggArmedAt = 0
 }
-function onKey(e) { if (e.key === 'Escape') router.push('/') }
+function onKey(e) {
+  if (composer.value.open) {
+    if (e.key === 'Escape') { closeComposer(); return }
+    if (e.key === 'Enter') { sendComposed(); return }
+    if (e.key === 'Backspace') { keyTap('back'); return }
+    if (e.key === ' ') { e.preventDefault(); keyTap('space'); return }
+    if (e.key.length === 1 && composer.value.text.length < COMPOSER_MAX) { composer.value.text += e.key; return }
+    return
+  }
+  if (e.key === 'Escape') router.push('/')
+}
 function toggleText() {
   showText.value = !showText.value
   try { localStorage.setItem('meshsat.ttc.hidetext', showText.value ? '0' : '1') } catch {}
@@ -702,7 +791,7 @@ onUnmounted(() => {
             </g>
 
             <!-- near kit -->
-            <g :transform="`translate(${P.kit.x},${P.kit.y})`" class="station kit near tap" :class="{ flash }" @click="openCard('kit')">
+            <g :transform="`translate(${P.kit.x},${P.kit.y})`" class="station kit near tap" :class="{ flash }" @click="kitTap">
               <rect x="-110" y="-130" width="220" height="290" class="hit" rx="16" />
               <image href="/kit-v1.png" x="-84" y="-104" width="168" height="199" class="kit-img" />
               <text y="112" text-anchor="middle" class="st-name">{{ me.name }}</text>
@@ -752,7 +841,7 @@ onUnmounted(() => {
               <text :y="leftKit.device === 'tdeck' ? 72 : 86" text-anchor="middle" class="st-name">{{ leftKit.device === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
               <text :y="leftKit.device === 'tdeck' ? 90 : 104" text-anchor="middle" class="st-sub">{{ leftKit.device === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
-            <g :transform="`translate(${G.kitL.x},${G.kitL.y})`" class="station kit tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="openCard('kit')">
+            <g :transform="`translate(${G.kitL.x},${G.kitL.y})`" class="station kit tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="kitTap">
               <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
               <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
               <text y="108" text-anchor="middle" class="st-name">{{ leftKit.name }}</text>
@@ -760,7 +849,7 @@ onUnmounted(() => {
             </g>
 
             <!-- right slot: kit + device -->
-            <g :transform="`translate(${G.kitR.x},${G.kitR.y})`" class="station kit tap" :class="[rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && rightKit.name === me.name }]" @click="openCard('kit')">
+            <g :transform="`translate(${G.kitR.x},${G.kitR.y})`" class="station kit tap" :class="[rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && rightKit.name === me.name }]" @click="kitTap">
               <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
               <image href="/kit-v1.png" x="-82" y="-108" width="164" height="194" class="kit-img" />
               <text y="108" text-anchor="middle" class="st-name">{{ rightKit.name }}</text>
@@ -849,6 +938,42 @@ onUnmounted(() => {
       <div class="font-sans text-sm text-gray-300 mb-2">What the kit's software-defined radio hears right now, 868 MHz and 144.8 MHz among them. Touch to return.</div>
       <div class="h-full overflow-hidden"><SpectrumWaterfall v-if="view === 'spectrum'" /></div>
     </main>
+
+    <!-- COMPOSER: double-tap the kit, type on the panel, send to either mesh -->
+    <div v-if="composer.open" class="absolute inset-0 z-20" @click.self="closeComposer">
+      <section class="absolute left-0 right-0 bottom-0 bg-gray-900 border-t border-gray-700 px-4 pt-3 pb-3 card-sheet composer" role="dialog" aria-label="Type a message">
+        <div class="flex items-center gap-3">
+          <h2 class="font-display text-xl text-gray-50 shrink-0">Type a message</h2>
+          <div class="flex items-stretch gap-2 ml-1" role="radiogroup" aria-label="Recipient">
+            <button v-for="opt in composerOptions" :key="opt.key" type="button" role="radio" :aria-checked="composer.to === opt.key" @click="composer.to = opt.key"
+              class="recipient flex items-center gap-2 rounded-lg border px-3 py-1 text-left" :class="composer.to === opt.key ? 'border-teal-500 bg-teal-500/10' : 'border-gray-700'">
+              <img :src="opt.img" alt="" class="h-9 w-auto" draggable="false" />
+              <span>
+                <span class="block font-display text-base leading-tight" :class="composer.to === opt.key ? 'text-teal-300' : 'text-gray-100'">{{ opt.title }}</span>
+                <span class="block font-sans text-xs text-gray-400 leading-tight">{{ opt.sub }}</span>
+              </span>
+            </button>
+          </div>
+          <button type="button" @click="closeComposer" class="ml-auto font-mono text-sm text-gray-400 hover:text-gray-100 px-3 py-2">close</button>
+        </div>
+        <div class="mt-2 rounded-lg border border-gray-700 bg-gray-950 px-4 py-2 min-h-[52px] flex items-center" aria-live="polite">
+          <span class="font-mono text-2xl text-gray-50 break-all leading-tight">{{ composer.text }}<span class="caret" aria-hidden="true">|</span></span>
+          <span class="ml-auto pl-3 font-mono text-xs text-gray-500 tabular-nums shrink-0">{{ composer.text.length }}/{{ COMPOSER_MAX }}</span>
+        </div>
+        <div class="keyboard mt-2 flex flex-col gap-1.5" aria-label="On-screen keyboard">
+          <div v-for="(row, ri) in KEY_ROWS" :key="ri" class="flex gap-1.5 justify-center">
+            <button v-for="k in row" :key="k" type="button" class="key font-mono text-lg rounded-md border border-gray-700 text-gray-100 h-10 select-none"
+              :class="[k === 'shift' || k === 'back' ? 'w-[76px] text-sm' : 'w-[62px]', k === 'shift' && composer.shift ? 'border-teal-500 text-teal-300' : '']"
+              @click="keyTap(k)">{{ k === 'shift' ? 'shift' : k === 'back' ? 'delete' : (composer.shift ? k.toUpperCase() : k) }}</button>
+          </div>
+          <div class="flex gap-1.5 justify-center">
+            <button type="button" class="key font-mono text-lg rounded-md border border-gray-700 text-gray-100 h-10 w-[430px] select-none" @click="keyTap('space')">space</button>
+            <button type="button" class="key send font-display text-base rounded-md h-10 w-[230px] select-none bg-teal-500 text-gray-950 disabled:opacity-40" :disabled="!composer.text.trim() || composer.busy" @click="sendComposed">{{ composer.busy ? 'sending' : `Send to ${composerTarget.title.toLowerCase()}` }}</button>
+          </div>
+        </div>
+        <p class="mt-2 font-sans text-sm min-h-[20px]" :class="composer.note ? 'text-gray-200' : 'text-gray-600'">{{ composer.note || (composer.to === 'local' ? 'Broadcast on this kit\'s own channel.' : `Leaves this kit over SMS, ${peer.name} puts it on its mesh.`) }}</p>
+      </section>
+    </div>
 
     <!-- NERDS (drawer, also the attract page) -->
     <section v-show="drawer || view === 'nerds'"
@@ -1003,6 +1128,11 @@ svg.full .st-sub { font-size: 16px; }
 .msg.replay circle:first-child { opacity: 0.25; }
 .qr { image-rendering: pixelated; }
 .card-sheet { box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.6); }
+.composer .key { touch-action: manipulation; transition: background-color 80ms, color 80ms; }
+.composer .key:active { background: #F96118; color: #040406; border-color: #F96118; }
+.composer .recipient { touch-action: manipulation; }
+.composer .caret { color: #F96118; margin-left: 1px; animation: caret 1s steps(2, start) infinite; }
+@keyframes caret { to { visibility: hidden; } }
 .msg .core { fill: #F96118; }
 .msg.sms .core { fill: #E0B458; }
 .msg.failed .core { fill: #F0655A; }
@@ -1010,6 +1140,7 @@ svg.full .st-sub { font-size: 16px; }
 .route-wrap { padding: 0 12px; }
 @media (prefers-reduced-motion: reduce) {
   .wave path { animation: none; opacity: 0.25; }
+  .composer .caret { animation: none; }
   .station.flash :deep(.device .body), .station.flash :deep(.device .bezel), .station.flash :deep(.device.photo .photo-img), .station.flash .kit-img { animation: none; }
 }
 </style>
