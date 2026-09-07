@@ -1,28 +1,23 @@
 <script setup>
-// LilyGO T-Deck Plus, front view: 2.8 inch screen over a 35-key keyboard,
-// trackball at the lower left, SMA stub top left. Drawn in the TTC mode
-// line language (Sand strokes on near-black). [MESHSAT-826]
+// LilyGO T-Deck Plus, front view: the product photo (LilyGO store, white
+// background removed) with the demo firmware's screen covered by a live
+// conversation drawn in the TTC line language. Geometry in device units:
+// the photo is 524 x 878 px scaled to 72 x 120.6, screen at photo
+// (52..478, 176..494). The invisible .body rect carries the flash
+// outline. [MESHSAT-826]
 defineProps({ scale: { type: Number, default: 1.35 } })
 </script>
 
 <template>
-  <g class="device" :transform="`scale(${scale})`">
-    <rect x="-60" y="-38" width="120" height="76" rx="9" class="body" />
-    <rect x="-54" y="-32" width="108" height="42" rx="2" class="bezel" />
-    <rect x="-50" y="-29" width="100" height="36" rx="1" class="screen" />
+  <g class="device photo tdeck" :transform="`scale(${scale})`">
+    <image href="/tdeck-plus.png" x="-36" y="-79" width="72" height="120.6" class="photo-img" preserveAspectRatio="xMidYMid meet" />
+    <rect x="-36.6" y="-71.4" width="73.2" height="113.6" rx="8" class="body" />
+    <rect x="-28.9" y="-54.8" width="58.5" height="43.7" rx="0.6" class="screen" />
     <g class="ui">
-      <rect x="-46" y="-25" width="44" height="7" rx="3" class="bubble" />
-      <rect x="-2" y="-15" width="48" height="7" rx="3" class="bubble far" />
-      <rect x="-46" y="-5" width="30" height="7" rx="3" class="bubble" />
+      <rect x="-25.5" y="-50.5" width="27" height="5.6" rx="2.8" class="bubble" />
+      <rect x="-1.5" y="-41.5" width="29" height="5.6" rx="2.8" class="bubble far" />
+      <rect x="-25.5" y="-32.5" width="21" height="5.6" rx="2.8" class="bubble" />
+      <rect x="2" y="-23.5" width="24" height="5.6" rx="2.8" class="bubble far" />
     </g>
-    <circle cx="-49" cy="18" r="5.5" class="trackball" /><circle cx="-49" cy="18" r="2.4" class="trackball-in" />
-    <g class="keys">
-      <rect v-for="k in 10" :key="'r1'+k" :x="-39 + (k-1)*9" y="13" width="7.6" height="4.6" rx="1" />
-      <rect v-for="k in 10" :key="'r2'+k" :x="-39 + (k-1)*9" y="19" width="7.6" height="4.6" rx="1" />
-      <rect v-for="k in 10" :key="'r3'+k" :x="-39 + (k-1)*9" y="25" width="7.6" height="4.6" rx="1" />
-      <rect x="-39" y="31" width="16.6" height="4.6" rx="1" /><rect x="-21" y="31" width="43.6" height="4.6" rx="1" /><rect x="24" y="31" width="25.6" height="4.6" rx="1" />
-    </g>
-    <rect x="-58" y="-48" width="7" height="10" rx="1.5" class="sma" />
-    <line x1="-54.5" y1="-48" x2="-60" y2="-72" class="ant" />
   </g>
 </template>

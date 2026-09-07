@@ -1,22 +1,22 @@
 <script setup>
-// LilyGO T-Echo, front view: 1.54 inch e-paper, one front button, two
-// side buttons, SMA stub top right. TTC mode line language. [MESHSAT-826]
+// LilyGO T-Echo, front view: the product photo (LilyGO GitHub, Meshtastic
+// edition, annotations and white background removed) with the e-paper
+// covered by a live message list in the TTC line language. Geometry in
+// device units: the photo is 450 x 1052 px scaled to 50 x 116.9, e-paper
+// at photo (122..352, 730..962). The invisible .body rect carries the
+// flash outline. [MESHSAT-826]
 defineProps({ scale: { type: Number, default: 1.35 } })
 </script>
 
 <template>
-  <g class="device paper" :transform="`scale(${scale})`">
-    <rect x="-30" y="-46" width="60" height="92" rx="10" class="body" />
-    <rect x="-25" y="-41" width="50" height="50" rx="2" class="bezel" />
-    <rect x="-22" y="-38" width="44" height="44" class="epaper" />
+  <g class="device photo paper techo" :transform="`scale(${scale})`">
+    <image href="/techo.png" x="-25" y="-70" width="50" height="116.9" class="photo-img" preserveAspectRatio="xMidYMid meet" />
+    <rect x="-25.6" y="1.6" width="51.2" height="45.9" rx="5" class="body" />
+    <rect x="-11.4" y="11.1" width="25.6" height="25.8" class="epaper" />
     <g class="ink">
-      <rect x="-18" y="-33" width="24" height="3" rx="1" /><rect x="-18" y="-27" width="34" height="3" rx="1" />
-      <rect x="-18" y="-21" width="28" height="3" rx="1" /><rect x="-18" y="-15" width="36" height="3" rx="1" />
-      <rect x="-18" y="-4" width="20" height="3" rx="1" />
+      <rect x="-9.4" y="13.6" width="14" height="1.9" rx="0.6" /><rect x="-9.4" y="17.1" width="20" height="1.9" rx="0.6" />
+      <rect x="-9.4" y="20.6" width="16" height="1.9" rx="0.6" /><rect x="-9.4" y="24.1" width="21" height="1.9" rx="0.6" />
+      <rect x="-9.4" y="30.6" width="12" height="1.9" rx="0.6" />
     </g>
-    <circle cx="0" cy="26" r="6" class="btn" /><circle cx="0" cy="26" r="2.5" class="btn-in" />
-    <rect x="29" y="-20" width="3" height="10" rx="1" class="sidebtn" /><rect x="29" y="-6" width="3" height="10" rx="1" class="sidebtn" />
-    <rect x="20" y="-56" width="7" height="10" rx="1.5" class="sma" />
-    <line x1="23.5" y1="-56" x2="30" y2="-80" class="ant" />
   </g>
 </template>
