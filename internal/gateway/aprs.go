@@ -593,6 +593,14 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 		// Track heard station and activity [MESHSAT-403]
 		g.tracker.RecordRX(pkt)
 
+		// Status frames ('>', the peer kit's beacon and any station's status
+		// report) are liveness, not messages: they update the heard list and
+		// the receive health and stop here, so an aprs -> mesh relay rule
+		// never forwards a beacon to the handhelds. [MESHSAT-857]
+		if pkt.DataType == '>' {
+			continue
+		}
+
 		text := g.formatInboundText(pkt)
 		msg := InboundMessage{
 			Text:     text,

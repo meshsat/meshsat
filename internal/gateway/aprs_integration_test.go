@@ -530,3 +530,41 @@ func TestIsLikelyAmateurBand(t *testing.T) {
 		}
 	}
 }
+
+// A status frame from the peer kit (its beacon) is heard but never delivered
+// as a message, so an aprs -> mesh relay rule cannot forward it. [MESHSAT-857]
+func TestAPRSIntegration_StatusBeaconIsLivenessOnly(t *testing.T) {
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	host, port := splitHostPort(t, tnc.addr())
+	gw := NewAPRSGateway(APRSConfig{KISSHost: host, KISSPort: port, Callsign: "TEST", SSID: 10, FrequencyMHz: 144.800, ExternalDirewolf: true}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+	time.Sleep(100 * time.Millisecond)
+	peer := &APRSGateway{config: APRSConfig{Callsign: "MSPRLX", SSID: 10, BeaconSecs: 90}}
+	tnc.sendRaw(peer.beaconFrame(3))
+	select {
+	case msg := <-gw.Receive():
+		t.Fatalf("beacon delivered as a message: %q", msg.Text)
+	case <-time.After(700 * time.Millisecond):
+	}
+	if gw.Status().MessagesIn != 0 {
+		t.Fatalf("messages_in %d, want 0", gw.Status().MessagesIn)
+	}
+	// It still counts as a heard station and a received frame.
+	tnc.sendAPRSPosition(AX25Address{Call: "PA3XYZ", SSID: 7}, 52.3676, 4.9041, "after the beacon")
+	select {
+	case msg := <-gw.Receive():
+		if !strings.Contains(msg.Text, "PA3XYZ") {
+			t.Fatalf("unexpected message %q", msg.Text)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("position after the beacon was not delivered")
+	}
+}
+
+func (s *mockKISSTNC) sendRaw(frame []byte) { s.sendCh <- frame }

@@ -203,7 +203,13 @@ const legLabel = computed(() => {
 
 // Event wiring. `out` = leaves the near device, crosses the air.
 // `in` = arrives from the air, ends at the near device.
-const isHousekeeping = (p) => !(p.text || '').trim() || (p.to || '').toUpperCase() === 'RTICUL' || /^MS:/.test(p.text || '')
+// Housekeeping between the kits: routing frames to RTICUL, OOB "MS:" frames,
+// anything without text, and the kits' own status beacons (APRS status
+// frames start with '>'): they pulse the air link and are never a message.
+const isHousekeeping = (p) => {
+  const text = (p.text || '').trim()
+  return !text || (p.to || '').toUpperCase() === 'RTICUL' || /^MS:/.test(text) || text.startsWith('>')
+}
 const airPulse = ref(false)
 let airPulseTimer = null
 function pulseAir() {
