@@ -226,7 +226,7 @@ function onDelivery(ev) {
   if (!t || t.done) return
   const status = (d.status || ev.type.replace('delivery_', '')).toLowerCase()
   if (status === 'queued') {
-    if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular'))) {
+    if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular')) && !t.laneCommitted) {
       t.lane = ch.startsWith('cellular') ? 'sms' : 'aprs'; dot.lane = t.lane
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
       moveTo(kitPos.value.x, t.lane === 'sms' ? smsY.value : kitPos.value.y, 450)
@@ -236,11 +236,27 @@ function onDelivery(ev) {
     }
   } else if (status === 'delivered' || status === 'sent') {
     if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular'))) {
+      // The channel is the authority for the lane, not the earlier
+      // `queued` event: a relayed mesh text fragments against the SMS
+      // size and the dispatcher skips `queued` for fragmented sends,
+      // so the SMS lane was never lit. A relayed message also produces
+      // several fragment deliveries; only the first commits the lane
+      // and drives the dot. [MESHSAT-826]
+      if (t.laneCommitted) return
+      t.laneCommitted = true
+      t.lane = ch.startsWith('cellular') ? 'sms' : 'aprs'; dot.lane = t.lane
       stage(t, 'sent', { channel: ch, latency: d.latency_ms })
-      const y = t.lane === 'sms' ? smsY.value : airFar.value.y
-      moveTo(airFar.value.x, y, 1600)
-      finish(t, false, 1800)
+      if (t.lane === 'sms') {
+        moveTo(kitPos.value.x, smsY.value, 350)
+        setTimeout(() => moveTo(airFar.value.x, smsY.value, 1500), 380)
+        finish(t, false, 2000)
+      } else {
+        moveTo(airFar.value.x, airFar.value.y, 1600)
+        finish(t, false, 1800)
+      }
     } else if (t.dir === 'in' && ch.startsWith('mesh')) {
+      if (t.outCommitted) return
+      t.outCommitted = true
       stage(t, 'sent', { channel: ch, latency: d.latency_ms })
       moveTo(devPos.value.x, devPos.value.y, 900)
       finish(t, false, 1100)
