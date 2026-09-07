@@ -380,8 +380,11 @@ const activeNodes = computed(() => (store.nodes || []).filter(n => isNodeActive(
 const totalNodes = computed(() => (store.nodes || []).length)
 const staleNodes = computed(() => (store.nodes || []).filter(n => !isNodeActive(n, nowSec.value)))
 const staleCount = computed(() => staleNodes.value.length)
+// Nodes on this mesh first; radios heard on the same frequency but on
+// another channel key (other_mesh from the API, MESHSAT-826) come last,
+// dimmed and labelled, so the list reads as "who is on my mesh".
 const topNodes = computed(() => {
-  const sorted = [...(store.nodes || [])].sort((a, b) => (b.last_heard || 0) - (a.last_heard || 0))
+  const sorted = [...(store.nodes || [])].sort((a, b) => ((a.other_mesh ? 1 : 0) - (b.other_mesh ? 1 : 0)) || ((b.last_heard || 0) - (a.last_heard || 0)))
   return sorted.slice(0, 6)
 })
 const neighborCount = computed(() => (store.neighborInfo || []).length)
@@ -1004,7 +1007,7 @@ const opPrimaryChannel = computed(() => {
   return { name: 'None', bars: null, detail: 'All channels down', tint: 'text-red-400' }
 })
 
-const opPeerCount = computed(() => (store.nodes || []).length)
+const opPeerCount = computed(() => (store.nodes || []).filter(n => !n.other_mesh).length)
 const opPeerFresh = computed(() => {
   const n = (store.nodes || []).slice().sort((a,b)=>(b.last_seen||0)-(a.last_seen||0))[0]
   return n ? fmtAgo(n.last_seen) : '—'
@@ -2202,11 +2205,13 @@ function widgetGridClass(id) {
         <div class="space-y-1">
           <div v-for="node in topNodes" :key="node.num"
             class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.04] transition-colors cursor-pointer"
+            :class="node.other_mesh ? 'opacity-50' : ''"
             @click="openNodeDetail(node)">
-            <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="signalDot(node)" />
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="node.other_mesh ? 'bg-gray-600' : signalDot(node)" />
             <span class="text-[11px] text-gray-300 truncate flex-1">{{ node.long_name || 'Unknown' }}</span>
             <span class="text-[9px] font-mono text-gray-600 shrink-0">{{ shortId(node.user_id) }}</span>
-            <span v-if="node.snr != null && Math.abs(node.snr) < 100" class="text-[9px] font-mono shrink-0"
+            <span v-if="node.other_mesh" class="text-[9px] text-gray-500 shrink-0" title="Heard on the same frequency, but on another channel key: this bridge cannot read its frames">other mesh</span>
+            <span v-else-if="node.snr != null && Math.abs(node.snr) < 100" class="text-[9px] font-mono shrink-0"
               :class="node.snr >= 0 ? 'text-emerald-400/60' : node.snr >= -10 ? 'text-amber-400/60' : 'text-red-400/60'">
               {{ Number(node.snr).toFixed(0) }}dB
             </span>
