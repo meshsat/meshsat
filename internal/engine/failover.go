@@ -39,11 +39,26 @@ type FailoverResolver struct {
 
 	faultMu    sync.RWMutex
 	faultedIDs map[string]bool // interface IDs with injected faults
+
+	receive ReceiveChecker // deaf receivers are skipped by Resolve (nil = ignore)
 }
 
 // NewFailoverResolver creates a resolver.
 func NewFailoverResolver(db *database.DB, ifaceMgr *InterfaceManager) *FailoverResolver {
 	return &FailoverResolver{db: db, ifaceMgr: ifaceMgr, faultedIDs: make(map[string]bool)}
+}
+
+// SetReceiveChecker makes Resolve skip a group member whose receiver is
+// known to be deaf (the APRS receive watchdog, the device health ladder),
+// so a booth relay configured "APRS first, SMS when APRS is down" really
+// moves to SMS while the APRS interface still reads online. [MESHSAT-857]
+func (fr *FailoverResolver) SetReceiveChecker(rc ReceiveChecker) {
+	fr.receive = rc
+}
+
+// deaf reports whether the receive checker marks the interface deaf.
+func (fr *FailoverResolver) deaf(ifaceID string) bool {
+	return fr.receive != nil && fr.receive.ReceiveDeaf(ifaceID)
 }
 
 // InjectFault marks an interface as faulted. SelectBearers will skip it.
@@ -98,13 +113,21 @@ func (fr *FailoverResolver) Resolve(targetID string) string {
 		return ""
 	}
 
-	// Members are ordered by priority ASC (lowest = highest priority)
+	// Members are ordered by priority ASC (lowest = highest priority).
+	// A member whose receiver is deaf counts as unavailable even while its
+	// interface state is online: an APRS chain that transmits but cannot
+	// hear the peer would swallow every relay in silence. [MESHSAT-857]
 	for _, m := range members {
 		status, err := fr.ifaceMgr.GetStatus(m.InterfaceID)
 		if err != nil {
 			continue
 		}
 		if status.State == StateOnline {
+			if fr.deaf(m.InterfaceID) {
+				log.Warn().Str("group", group.ID).Str("member", m.InterfaceID).
+					Int("priority", m.Priority).Msg("failover: member online but its receiver is deaf, skipping")
+				continue
+			}
 			log.Debug().Str("group", group.ID).Str("resolved", m.InterfaceID).
 				Int("priority", m.Priority).Msg("failover: resolved to online member")
 			return m.InterfaceID

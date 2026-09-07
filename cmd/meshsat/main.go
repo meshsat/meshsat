@@ -2277,6 +2277,7 @@ func main() {
 			},
 		})
 		healthScorer.SetReceiveChecker(rxWatchdog)
+		failoverResolver.SetReceiveChecker(rxWatchdog)
 		go rxWatchdog.Run(ctx)
 		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
 	}
@@ -2314,6 +2315,7 @@ func main() {
 			checkers = append(checkers, rxWatchdog)
 		}
 		healthScorer.SetReceiveChecker(checkers)
+		failoverResolver.SetReceiveChecker(checkers)
 		srv.SetDeviceHealth(devHealth)
 		go devHealth.Run(ctx)
 		log.Info().Int("tick_sec", cfg.DeviceHealthTickSec).Int("misses", cfg.DeviceHealthMisses).
