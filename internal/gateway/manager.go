@@ -28,6 +28,7 @@ type Manager struct {
 	cell            transport.CellTransport // optional, for cellular gateway
 	predictor       PassPredictor           // optional, for pass scheduler
 	onReceiverStart ReceiverStartFunc       // called when a gateway starts
+	receiverCtx     context.Context         // lifetime of inbound receivers: the manager's, never a caller's [MESHSAT-858]
 	onEventEmit     EventEmitFunc           // SSE event emitter callback
 	nodeNameFn      func(uint32) string     // resolves mesh node ID to name
 	packetSink      PacketSink              // live packet feed sink for APRS + cellular gateways [MESHSAT-826]
@@ -141,6 +142,21 @@ func (m *Manager) SetReceiverStartFunc(fn ReceiverStartFunc) {
 	m.onReceiverStart = fn
 }
 
+// receiverContext is the context inbound receivers run under. A gateway
+// started by the APRS receive watchdog, the OOB executor or an API call
+// arrives with that caller's short-lived context; a receiver bound to it
+// dies with the step (90 s for the watchdog) while the gateway keeps
+// decoding into a channel nobody reads, and every inbound APRS message is
+// lost until the next bridge restart (found 7 Sep 2026, tesseract deaf to
+// the relay after two watchdog restarts). Receivers live as long as the
+// manager. [MESHSAT-858]
+func (m *Manager) receiverContext() context.Context {
+	if m.receiverCtx != nil {
+		return m.receiverCtx
+	}
+	return context.Background()
+}
+
 // SetEventEmitFunc sets the callback for gateways to emit events to the SSE stream.
 func (m *Manager) SetEventEmitFunc(fn EventEmitFunc) {
 	m.onEventEmit = fn
@@ -190,6 +206,7 @@ func (m *Manager) GetPassScheduler() *PassScheduler {
 // Start loads enabled configs from DB and starts their gateways.
 func (m *Manager) Start(ctx context.Context) error {
 	ctx, m.cancelFn = context.WithCancel(ctx)
+	m.receiverCtx = ctx
 
 	configs, err := m.db.GetAllGatewayConfigs()
 	if err != nil {
@@ -714,7 +731,7 @@ func (m *Manager) StartGatewayInstance(ctx context.Context, instanceID string) e
 	m.mu.Unlock()
 
 	if m.onReceiverStart != nil {
-		m.onReceiverStart(ctx, gw)
+		m.onReceiverStart(m.receiverContext(), gw)
 	}
 
 	m.db.SaveGatewayConfigInstance(cfg.Type, instanceID, true, cfg.Config)
@@ -944,7 +961,7 @@ func (m *Manager) StartInterfaceGateway(ctx context.Context, ifaceID, channelTyp
 	m.mu.Unlock()
 
 	if m.onReceiverStart != nil {
-		m.onReceiverStart(ctx, gw)
+		m.onReceiverStart(m.receiverContext(), gw)
 	}
 
 	log.Info().Str("interface", ifaceID).Str("type", channelType).Msg("interface gateway started")
