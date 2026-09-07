@@ -24,3 +24,16 @@ func TestStopGatewayInstance_StartingSentinel(t *testing.T) {
 		t.Fatalf("want a 'not running' error, got %v", err)
 	}
 }
+
+// A shutdown that lands while an instance is still being created must skip
+// the nil sentinel instead of dereferencing it. [MESHSAT-857]
+func TestManagerStop_SkipsStartingSentinel(t *testing.T) {
+	m := &Manager{
+		running:        map[string]Gateway{"aprs_0": nil},
+		runningByIface: map[string]Gateway{},
+	}
+	m.Stop() // must not panic
+	if len(m.running) != 0 {
+		t.Fatalf("running map not cleared: %d", len(m.running))
+	}
+}
