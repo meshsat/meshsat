@@ -105,11 +105,25 @@ func TestRxWatchdog_EscalatesAndRecovers(t *testing.T) {
 	if r, c, _ := h.counts(); r != 1 || c != 0 {
 		t.Fatalf("stepped early: restarts=%d cycles=%d", r, c)
 	}
-	// Next window: step 2, the power cycle.
+	// Next window with the audio stats still alive: peer silence, no
+	// hardware rung. [MESHSAT-857]
 	h.advance(4 * time.Minute)
 	h.wd.tick(ctx)
+	if _, c, _ := h.counts(); c != 0 {
+		t.Fatalf("power cycle on peer silence: cycles=%d", c)
+	}
+	// Direwolf's own stats go stale (hung): step 2, the power cycle.
+	h.wd.act.Probe = func() (ReceiveHealth, bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		hh := h.health
+		hh.LevelAt = h.now.Add(-3 * time.Minute)
+		return hh, h.ok
+	}
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx)
 	waitFor(t, func() bool { _, c, _ := h.counts(); return c == 1 })
-	// Next window: step 3, the bridge restart.
+	// Next window, still hung: step 3, the bridge restart.
 	h.advance(6 * time.Minute)
 	h.wd.tick(ctx)
 	if _, _, b := h.counts(); b != 1 {
@@ -209,7 +223,15 @@ func TestRxWatchdog_SeededExpectationSurvivesRestart(t *testing.T) {
 	if !h.wd.ReceiveDeaf("aprs_0") || h.wd.State() != ReceiveStateDeaf {
 		t.Fatalf("seeded silence not deaf: deaf=%v state=%s", h.wd.ReceiveDeaf("aprs_0"), h.wd.State())
 	}
-	// Step 2, then step 3 is held by the seeded cooldown (20 min < 1 h).
+	// Direwolf's stats go stale (hung): step 2, then step 3 is held by the
+	// seeded cooldown (20 min < 1 h). [MESHSAT-857: hardware rungs need hung]
+	h.wd.act.Probe = func() (ReceiveHealth, bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		hh := h.health
+		hh.LevelAt = h.now.Add(-3 * time.Minute)
+		return hh, h.ok
+	}
 	h.advance(6 * time.Minute)
 	h.wd.tick(ctx)
 	waitFor(t, func() bool { _, c, _ := h.counts(); return c == 1 })
@@ -302,5 +324,32 @@ func TestRxWatchdog_SerialTNCReopenStep(t *testing.T) {
 	h.wd.tick(ctx)
 	if h.wd.State() != ReceiveStateOK {
 		t.Fatalf("state %s after recovery, want ok", h.wd.State())
+	}
+}
+
+// Peer silence with Direwolf's own stats alive stops at rung 1; the
+// hardware and bridge rungs need a hung Direwolf. [MESHSAT-857]
+func TestRxWatchdog_PeerSilenceStopsAtGatewayRestart(t *testing.T) {
+	h := newWDHarness()
+	ctx := context.Background()
+	h.frame()
+	h.wd.tick(ctx)
+	// 6, 12, 18 and 24 minutes of peer silence while the audio stats keep coming.
+	for i := 0; i < 4; i++ {
+		h.advance(6 * time.Minute)
+		h.wd.tick(ctx)
+	}
+	waitFor(t, func() bool { r, _, _ := h.counts(); return r == 1 })
+	if r, c, b := h.counts(); r != 1 || c != 0 || b != 0 {
+		t.Fatalf("peer silence escalated past the gateway restart: restarts=%d cycles=%d bridge=%d", r, c, b)
+	}
+	if h.wd.State() != ReceiveStateDeaf {
+		t.Fatalf("state %s", h.wd.State())
+	}
+	// A frame recovers.
+	h.frame()
+	h.wd.tick(ctx)
+	if h.wd.State() != ReceiveStateOK {
+		t.Fatalf("not recovered: %s", h.wd.State())
 	}
 }

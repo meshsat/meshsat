@@ -178,3 +178,21 @@ func TestIngestLine_ReceiveHealth(t *testing.T) {
 		t.Fatalf("frame counters tx=%d rx=%d", sup.TxFrames(), sup.RxFrames())
 	}
 }
+
+// Channel timing is rendered from the config, Direwolf's defaults when zero. [MESHSAT-857]
+func TestRenderDirewolfConf_Timing(t *testing.T) {
+	cfg := APRSConfig{KISSPort: 8001, Callsign: "MSTSRT", SSID: 10, AudioCard: "AllInOneCable", ModemBaud: 1200,
+		TXDelay: 60, TXTail: 15, Persist: 100, SlotTime: 20}
+	got := renderDirewolfConf(cfg)
+	for _, want := range []string{"TXDELAY 60", "TXTAIL 15", "PERSIST 100", "SLOTTIME 20"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	def := renderDirewolfConf(APRSConfig{KISSPort: 8001, Callsign: "MSTSRT", SSID: 10, AudioCard: "x", ModemBaud: 1200})
+	for _, want := range []string{"TXDELAY 30", "TXTAIL 10", "PERSIST 63", "SLOTTIME 10"} {
+		if !strings.Contains(def, want) {
+			t.Errorf("default missing %q in\n%s", want, def)
+		}
+	}
+}

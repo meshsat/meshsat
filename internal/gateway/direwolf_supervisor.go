@@ -412,8 +412,10 @@ CHANNEL 0
 MYCALL %s-%d
 MODEM %d
 %s
-TXDELAY 30
-TXTAIL 10
+TXDELAY %d
+TXTAIL %d
+PERSIST %d
+SLOTTIME %d
 KISSPORT %d
 AGWPORT 0
 `,
@@ -421,6 +423,10 @@ AGWPORT 0
 		cfg.Callsign, cfg.SSID,
 		cfg.ModemBaud,
 		pttLine,
+		orDefault(cfg.TXDelay, direwolfDefaultTXDelay),
+		orDefault(cfg.TXTail, direwolfDefaultTXTail),
+		orDefault(cfg.Persist, direwolfDefaultPersist),
+		orDefault(cfg.SlotTime, direwolfDefaultSlotTime),
 		cfg.KISSPort,
 	)
 }

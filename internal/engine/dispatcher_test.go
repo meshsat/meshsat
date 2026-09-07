@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -345,4 +346,52 @@ func TestCalculateNextRetry_Exponential(t *testing.T) {
 	if !r3.After(r1) {
 		t.Error("retry 3 should be later than retry 1")
 	}
+}
+
+// A mesh text bound for a text bearer (SMS, APRS, mesh) is queued as the
+// text; a byte bearer keeps the envelope. [MESHSAT-792]
+func TestDispatchAccess_TextPayloadForTextBearers(t *testing.T) {
+	d, db := setupTestDispatcher(t)
+	db.InsertInterface(&database.Interface{ID: "mesh_0", ChannelType: "mesh", Enabled: true})
+	db.InsertInterface(&database.Interface{ID: "cellular_0", ChannelType: "cellular", Enabled: true})
+	db.InsertInterface(&database.Interface{ID: "aprs_0", ChannelType: "aprs", Enabled: true})
+	db.InsertInterface(&database.Interface{ID: "mqtt_0", ChannelType: "mqtt", Enabled: true})
+	for i, dest := range []string{"cellular_0", "aprs_0", "mqtt_0"} {
+		db.InsertAccessRule(&database.AccessRule{InterfaceID: "mesh_0", Direction: "ingress", Name: dest, Enabled: true,
+			Priority: i + 1, Action: "forward", ForwardTo: dest, Filters: "{}"})
+	}
+	ae := rules.NewAccessEvaluator(db)
+	if err := ae.ReloadFromDB(); err != nil {
+		t.Fatal(err)
+	}
+	d.SetAccessEvaluator(ae)
+	envelope := []byte(`{"from":667586332,"to":4294967295,"id":186110315,"text":"Hi","port":1,"padding":"` + strings.Repeat("x", 220) + `"}`)
+	msg := rules.RouteMessage{Text: "Hi", From: "!27ca8f1c", PortNum: 1}
+	if n := d.DispatchAccess("mesh_0", msg, envelope); n != 3 {
+		t.Fatalf("expected 3 deliveries, got %d", n)
+	}
+	for _, dest := range []string{"cellular_0", "aprs_0"} {
+		dl, _ := db.GetPendingDeliveries(dest, 10)
+		if len(dl) != 1 || string(dl[0].Payload) != "Hi" {
+			t.Errorf("%s: want one delivery carrying the text, got %d with payload %q", dest, len(dl), payloadOf(dl))
+		}
+	}
+	dl, _ := db.GetPendingDeliveries("mqtt_0", 10)
+	if len(dl) != 1 || string(dl[0].Payload) != string(envelope) {
+		t.Errorf("mqtt_0: want the envelope, got %d deliveries with payload %q", len(dl), payloadOf(dl))
+	}
+	// A non-text mesh packet (telemetry) keeps the envelope even for a text bearer.
+	tele := rules.RouteMessage{Text: "", From: "!27ca8f1c", PortNum: 67}
+	d.DispatchAccess("mesh_0", tele, envelope)
+	dl, _ = db.GetPendingDeliveries("aprs_0", 10)
+	if len(dl) != 2 || string(dl[1].Payload) != string(envelope) {
+		t.Errorf("aprs_0 telemetry: want the envelope, got %d deliveries", len(dl))
+	}
+}
+
+func payloadOf(dl []database.MessageDelivery) string {
+	if len(dl) == 0 {
+		return ""
+	}
+	return string(dl[0].Payload)
 }

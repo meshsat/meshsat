@@ -40,6 +40,10 @@ type Config struct {
 	// after the channel was heard within two hours, before the recovery
 	// ladder runs (gateway restart, AIOC power cycle, bridge restart). 0 = off.
 	APRSRxWatchdogMin int
+	// APRS receive watchdog expectation window (minutes) and the Direwolf
+	// stats-stale threshold (seconds) that gates its hardware rungs. [MESHSAT-857]
+	APRSRxHeardWithinMin int
+	APRSRxStatsStaleSec  int
 
 	// OOB management frames [MESHSAT-756]. First-boot defaults only; the
 	// persisted system_config values are UI-managed afterwards.
@@ -158,6 +162,8 @@ func Load() *Config {
 		APIRateLimit:                 envInt("MESHSAT_API_RATE_LIMIT", 600),
 		MeshWatchdogMin:              envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
 		APRSRxWatchdogMin:            envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
+		APRSRxHeardWithinMin:         envInt("MESHSAT_APRS_RX_HEARD_WITHIN_MIN", 120),
+		APRSRxStatsStaleSec:          envInt("MESHSAT_APRS_RX_STATS_STALE_SEC", 90),
 		OOBEnabled:                   envBool("MESHSAT_OOB_ENABLED", false),
 		OOBReplyBudget:               envInt("MESHSAT_OOB_REPLY_BUDGET", 12),
 		OOBHostSocket:                envStr("MESHSAT_OOB_HOST_SOCKET", "/run/meshsat-oob/agent.sock"),

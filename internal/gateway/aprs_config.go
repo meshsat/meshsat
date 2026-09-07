@@ -36,6 +36,38 @@ type APRSConfig struct {
 	// the name. [MESHSAT-821]
 	KISSDevice string `json:"kiss_device"`
 	KISSBaud   int    `json:"kiss_baud"` // 0 = 115200
+
+	// Direwolf channel timing, in Direwolf's own units (10 ms for the
+	// delays, 0..255 for persist). Zero means Direwolf's default. The kit
+	// handhelds need a longer preamble than the 300 ms default before
+	// their squelch opens: the value is measured per chain with the link
+	// test, not guessed. [MESHSAT-857]
+	TXDelay  int `json:"tx_delay"`  // TXDELAY, default 30 (300 ms)
+	TXTail   int `json:"tx_tail"`   // TXTAIL, default 10 (100 ms)
+	Persist  int `json:"persist"`   // PERSIST p-persistence, default 63
+	SlotTime int `json:"slot_time"` // SLOTTIME, default 10 (100 ms)
+
+	// Status beacon: a plain, readable APRS status frame every BeaconSecs
+	// (0 = off). It is the liveness signal the peer kit's receive watchdog
+	// expects on a two-kit network and it lets any APRS receiver see the
+	// kit. BeaconText defaults to "MeshSat <callsign> ok". [MESHSAT-857]
+	BeaconSecs int    `json:"beacon_secs"`
+	BeaconText string `json:"beacon_text"`
+}
+
+// Direwolf timing defaults (Direwolf's own), used when a field is zero.
+const (
+	direwolfDefaultTXDelay  = 30
+	direwolfDefaultTXTail   = 10
+	direwolfDefaultPersist  = 63
+	direwolfDefaultSlotTime = 10
+)
+
+func orDefault(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // SerialTNC reports whether the gateway talks to a hardware TNC over serial.
