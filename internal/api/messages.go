@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
@@ -74,6 +76,56 @@ func (s *Server) handleGetMessageStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// simulateMeshRxRequest is the body of POST /api/messages/simulate-mesh-rx.
+type simulateMeshRxRequest struct {
+	Text string `json:"text"`
+	From string `json:"from"` // mesh node id, "!27ca8f1c" or decimal; default = a fixed test node
+}
+
+// handleSimulateMeshRx injects a text as if a handheld on this kit's mesh had sent it.
+// @Summary Simulate an inbound mesh text
+// @Description Feeds a text into the same path a radio-received packet takes (dedup, persistence,
+// @Description the access rules, the delivery ledger), so the kit-to-kit relay can be pre-flighted
+// @Description without a handheld. Operator tool for the booth checklist. [MESHSAT-857]
+// @Tags messages
+// @Param body body simulateMeshRxRequest true "Text and optional source node"
+// @Success 200 {object} map[string]string "accepted"
+// @Failure 400 {object} map[string]string "error"
+// @Failure 503 {object} map[string]string "processor unavailable"
+// @Router /api/messages/simulate-mesh-rx [post]
+func (s *Server) handleSimulateMeshRx(w http.ResponseWriter, r *http.Request) {
+	var req simulateMeshRxRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		writeError(w, http.StatusBadRequest, "text is required")
+		return
+	}
+	if s.processor == nil {
+		writeError(w, http.StatusServiceUnavailable, "processor unavailable")
+		return
+	}
+	from := uint32(0x00c0ffee) // "!00c0ffee": a node that exists on no mesh
+	if req.From != "" {
+		if v, err := strconv.ParseUint(strings.TrimPrefix(req.From, "!"), 16, 32); err == nil && strings.HasPrefix(req.From, "!") {
+			from = uint32(v)
+		} else if v, err := strconv.ParseUint(req.From, 10, 32); err == nil {
+			from = uint32(v)
+		} else {
+			writeError(w, http.StatusBadRequest, "from must be !hex or decimal")
+			return
+		}
+	}
+	msg := transport.MeshMessage{From: from, To: 0xffffffff, PortNum: 1, PortNumName: "TEXT_MESSAGE_APP", DecodedText: req.Text}
+	if err := s.processor.SimulateInbound(msg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted", "from": fmt.Sprintf("!%08x", from), "text": req.Text})
 }
 
 // handleSendMessage sends a text message via the mesh transport or a satellite gateway.

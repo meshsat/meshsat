@@ -1192,6 +1192,36 @@ func (p *Processor) Emit(event transport.MeshEvent) {
 	p.broadcast(event)
 }
 
+// SimulateInbound feeds a mesh text into the same path a radio-received
+// packet takes (dedup, persistence, the rules engine, the delivery ledger),
+// so the kit-to-kit relay can be exercised and pre-flighted without a
+// handheld on the mesh. The packet is marked as simulated in its text
+// preview only through the caller's text; it is a real message to every
+// downstream consumer. [MESHSAT-857]
+func (p *Processor) SimulateInbound(msg transport.MeshMessage) error {
+	if msg.ID == 0 {
+		msg.ID = uint32(time.Now().UnixNano())
+	}
+	if msg.PortNum == 0 {
+		msg.PortNum = 1
+		msg.PortNumName = "TEXT_MESSAGE_APP"
+	}
+	if msg.RxTime == 0 {
+		msg.RxTime = time.Now().Unix()
+	}
+	if msg.Timestamp == "" {
+		msg.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	ev := transport.MeshEvent{Type: "message", Data: data, Time: msg.Timestamp}
+	p.handleEvent(context.Background(), ev)
+	p.broadcast(ev)
+	return nil
+}
+
 func truncateText(s string, max int) string {
 	if len(s) <= max {
 		return s
