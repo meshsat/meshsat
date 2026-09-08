@@ -8,8 +8,16 @@
 # element; wlr-randr uses wlr_output_management_v1 which labwc
 # implements).
 
-# 1. Output rotation — DSI-2 90° CW (native portrait → landscape).
-wlr-randr --output DSI-2 --transform 90 &
+# 1. Output rotation — DSI-2 270° (native portrait → landscape).
+#    Both V1 kits carry the panel flipped 180° relative to the
+#    original 2026-04 build (cable side flipped, tesseract 2026-04-24,
+#    parallax later), and both boot with `display_lcd_rotate=2` in
+#    config.txt. 270 here and the matching `0 1 0 -1 0 1` matrix in
+#    99-touch-rotate.rules are what both kits actually run — verified
+#    live on tesseract and parallax 2026-09-08. The 90 / `0 -1 1 1 0 0`
+#    pair this file shipped until then would have flipped both panels
+#    upside down on the next installer run. [MESHSAT-987]
+wlr-randr --output DSI-2 --transform 270 &
 
 # 2. Wait for the bridge container to be healthy before launching
 #    Chromium. Otherwise the browser boots faster than docker and
@@ -58,7 +66,20 @@ swayidle -w \
 # it's GPU-composited, independent of the main JS thread). These
 # flags plus a bounded V8 heap make polling + click dispatch
 # latency deterministic over multi-day uptimes.
+# --ozone-platform=wayland names the backend explicitly instead of
+# letting Chromium auto-detect it; --user-data-dir keeps the kiosk
+# profile in one known place rather than the snap's default, so a
+# wedged profile can be cleared without touching the snap. The log
+# keeps one previous generation, so the session that wedged is still
+# readable after the nightly restart timer has relaunched Chromium.
+# [MESHSAT-987]
+KIOSK_LOG="/home/kiosk/.cache/chromium-kiosk.log"
+mkdir -p "$(dirname "$KIOSK_LOG")"
+[ -f "$KIOSK_LOG" ] && mv -f "$KIOSK_LOG" "$KIOSK_LOG.1"
+
 chromium-browser \
+  --ozone-platform=wayland \
+  --user-data-dir=/home/kiosk/kiosk-profile \
   --kiosk \
   --noerrdialogs \
   --disable-infobars \
@@ -74,7 +95,7 @@ chromium-browser \
   --disable-backgrounding-occluded-windows \
   --disable-features=CalculateNativeWinOcclusion,BackForwardCache \
   --js-flags="--max-old-space-size=256" \
-  --app="__BRIDGE_URL__" &
+  --app="__BRIDGE_URL__" >"$KIOSK_LOG" 2>&1 &
 # NB: the URL MUST be quoted — it contains `&` (query-string
 # separator between kiosk=1 and shell=operator). Without quotes,
 # bash parses the unquoted `&` as job-control and drops everything
