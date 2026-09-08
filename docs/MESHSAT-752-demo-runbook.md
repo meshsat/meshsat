@@ -502,12 +502,14 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_repeat 2`, a loss needs both copies to fail. The link test reports unique decoded frames, so with the repeat on it still counts one per message.
 
 
-## 17. TTC readiness board (7 Sep 2026, end of the APRS session; about 70 %)
+## 17. TTC readiness board (updated 8 Sep 2026, end of the booth-selector session; about 75 %)
+
+Moved on 8 September: the booth flow selector is live on both kits with four paths offered and the kit-to-kit SMS path proven, the booth screen was rebalanced so the island is the hero, the fourth path over Iridium IMT landed, and the Hub can now pair as a management peer from the bridge side. Nothing moved on the hardware chain, so the PicoAPRS swap, the 12 V refit and both soaks are still the gap between here and ready.
 
 | Area | State | Closes when |
 |---|---|---|
 | Kit-to-kit relay, APRS first, SMS fallback, both directions | proven through the rules on the UV-K5 + AIOC chain (section 16 numbers) | re-measured on the PicoAPRS chain, then a 24 h soak with beacons only |
-| Booth screen (TTC mode) | 16/16 checks on both panels at the real viewport | a full-day run on both panels |
+| Booth screen (TTC mode) | 16/16 checks on both panels at the real viewport; rebalanced 8 Sep so the island with the kit and the handheld is the hero and the message strip is one row (d127869, f04fa41), live on both panels | a full-day run on both panels |
 | Radios | Meshtastic 2.6.10 on both kits, mesh split (msat-ttc-01 / 02), Bluetooth off | Bluetooth read-back at the next serial window |
 | Power | 5 V inlet unchanged (both kits died on 4 Sep) | 12 V refit (parts 9 Sep) and 24 h zero-AC-loss on both kits |
 | APRS hardware | tuned K5 chain being replaced by the PicoAPRS V4 this week | section 14 device setup, then section 16 pre-flight on the new chain |
