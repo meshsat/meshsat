@@ -21,6 +21,7 @@ type RouteMessage struct {
 	PortNum int      // portnum (1=text, 67=telemetry, etc.)
 	RawData []byte   // original payload
 	Visited []string // visited interface IDs for loop prevention
+	Plain   bool     // text already in the clear: skip the source interface's ingress transforms [MESHSAT-962]
 }
 
 // AccessFilters is the parsed representation of an access rule's filters JSON.

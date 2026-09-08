@@ -21,6 +21,11 @@ type InboundMessage struct {
 	// scrape it out of Text. May be empty when the underlying gateway
 	// can't derive one.
 	FromAddr string `json:"from_addr,omitempty"`
+
+	// Plain marks text that is already in the clear (a plaintext peer on
+	// SMS): the processor and DispatchAccess skip the interface's ingress
+	// transforms instead of failing them and falling back. [MESHSAT-962]
+	Plain bool `json:"plain,omitempty"`
 }
 
 // GatewayStatus reports the current state of a gateway.

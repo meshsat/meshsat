@@ -536,7 +536,7 @@ const cards = computed(() => ({
     facts: [
       ['Path', `this kit's SIM to the Hub at ${flow.value.hub_number || 'its number'}, then the Hub to ${peer.value.name}'s SIM`],
       ['Why', 'the Hub also talks to kits over satellite; indoors there is no sky, so SMS is the fallback'],
-      ['Privacy', 'compressed, then AES-256-GCM, then base64; the Hub holds the key'],
+      ['Privacy', 'in the clear between kit and Hub for this demo; kit to kit SMS stays encrypted'],
       ['Size', 'one text message each hop, up to 160 characters'],
       ['Right now', flow.value.path === 'hub_sms' ? 'chosen for the next message from this kit' : 'tap the lane to choose it'],
     ],

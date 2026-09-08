@@ -555,6 +555,16 @@ the modem answers again after about 20 s, so run setup before the doors open, ne
 The panel composer's "Remote mesh" follows the chosen path too (`gateway` aprs or cellular, and `to`
 = the Hub number for the Hub path; `/api/messages/send` honours `to` for gateway sends since this change).
 
+How the Hub leg works on the wire (found while building this, 8 Sep): the Hub's routing engine
+relays a matched SMS as plain text with an `[origin] ` prefix (`formatRoutedSMS`), it cannot decrypt
+the kits' shared SMS key, and it has no sender filter, so both routes fire on every inbound SMS and the
+Hub also texts the copy back to the kit that sent it. The bridge handles all three: the Hub's number is
+a `plaintext_peer` on cellular_0 (setup adds it): SMS to it leave as bare text without the interface
+transforms, SMS from it skip the ingress transforms, the `[origin] text` prefix is parsed off, and a
+copy whose origin is not an allowed sender (this kit itself, or a stranger texting the Hub) is dropped
+with a log line `Hub echo of this kit's own SMS, ignoring`. Kit-to-kit SMS stays encrypted as before.
+The Hub-side sender filter is a follow-up on the Hub after its migration (MESHSAT-964 family).
+
 Bench order when the kits are back:
 1. Both kits: `POST /api/ttc/flow/setup` with the peer's and the Hub's numbers; read `GET /api/ttc/flow`
    until `ready` is true and `issues` is empty.

@@ -1092,8 +1092,9 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				sourceIface := msg.Source + "_0"
 				if p.dispatcher != nil {
 					routeMsg := rules.RouteMessage{
-						Text: msg.Text,
-						From: fromAddr,
+						Text:  msg.Text,
+						From:  fromAddr,
+						Plain: msg.Plain,
 					}
 					// Increment ingress sequence number for the source interface
 					if _, err := p.db.IncrementIngressSeq(sourceIface); err != nil {
@@ -1106,7 +1107,7 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 
 				// Apply ingress transforms before persisting (decrypt, decompress). [MESHSAT-447]
 				decodedText := msg.Text
-				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil {
+				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain {
 					if iface, err := p.db.GetInterface(sourceIface); err == nil &&
 						iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
 						if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress(

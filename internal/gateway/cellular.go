@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -241,7 +243,29 @@ func (g *CellularGateway) ForwardWebhookInbound(msg InboundMessage) {
 func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMessage) error {
 	var text string
 
-	if msg.Encrypted || msg.RawText {
+	// Use per-rule SMS destinations if set, otherwise fall back to gateway config
+	destinations := msg.SMSDestinations
+	if len(destinations) == 0 {
+		destinations = g.config.DestinationNumbers
+	}
+
+	if len(destinations) == 0 {
+		return fmt.Errorf("no SMS destinations configured")
+	}
+
+	// A plaintext peer (the Hub) gets the bare text: its routing engine
+	// prefixes "[origin] " itself and the far kit parses that. [MESHSAT-962]
+	plainPeers := true
+	for _, n := range destinations {
+		if !g.config.IsPlaintextPeer(n) {
+			plainPeers = false
+			break
+		}
+	}
+
+	if plainPeers && !msg.Encrypted && !msg.RawText {
+		text = SanitizeSMSText(msg.DecodedText)
+	} else if msg.Encrypted || msg.RawText {
 		// Encrypted: send raw base64 ciphertext only — no prefix, no metadata.
 		// The MeshSat Android app expects pure base64 for decryption.
 		// GSM safety was already validated by the dispatcher (re-encrypt loop).
@@ -266,16 +290,6 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 	maxLen := 160 * g.config.MaxSMSSegments
 	if len(text) > maxLen {
 		text = text[:maxLen]
-	}
-
-	// Use per-rule SMS destinations if set, otherwise fall back to gateway config
-	destinations := msg.SMSDestinations
-	if len(destinations) == 0 {
-		destinations = g.config.DestinationNumbers
-	}
-
-	if len(destinations) == 0 {
-		return fmt.Errorf("no SMS destinations configured")
 	}
 
 	var firstErr error
@@ -359,17 +373,35 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 					continue
 				}
 
+				text := event.Message
+				plain := g.config.IsPlaintextPeer(sender)
+				if plain {
+					// The Hub relays SMS between kits as "[origin] text". Keep
+					// the text, and drop the copy the Hub sends back to the
+					// kit that originated it (its routing engine has no
+					// sender filter): an origin that is not an allowed sender
+					// is this kit itself. [MESHSAT-962]
+					if origin, body, ok := ParseHubRoutedSMS(text); ok {
+						if len(g.config.AllowedSenders) > 0 && !isAllowedSender(origin, g.config.AllowedSenders) {
+							log.Info().Str("sender", sender).Str("origin", origin).Msg("cellular: Hub echo of this kit's own SMS, ignoring")
+							continue
+						}
+						text = body
+					}
+				}
+
 				inbound := InboundMessage{
-					Text:     event.Message,
+					Text:     text,
 					To:       g.config.InboundDestNode,
 					Channel:  g.config.InboundChannel,
 					Source:   "cellular",
 					FromAddr: sender, // reply address and attribution; never used for authentication [MESHSAT-756]
+					Plain:    plain,
 				}
 
 				g.msgsIn.Add(1)
 				g.lastActive.Store(time.Now().Unix())
-				log.Info().Str("sender", sender).Str("text", event.Message).Msg("cellular: SMS received, forwarding to mesh")
+				log.Info().Str("sender", sender).Str("text", text).Bool("plain", plain).Msg("cellular: SMS received, forwarding to mesh")
 				g.emit("cellular", fmt.Sprintf("SMS received from %s, forwarding to mesh", sender))
 
 				select {
@@ -410,4 +442,18 @@ func isAllowedSender(sender string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// hubRoutedSMS matches the MeshSat Hub's routed-SMS format "[origin] text",
+// where origin is the sending kit's number (or a device id). [MESHSAT-962]
+var hubRoutedSMS = regexp.MustCompile(`^\[([^\]\s]+)\]\s?(.*)$`)
+
+// ParseHubRoutedSMS splits "[origin] text" into its parts. ok is false when
+// the text is not in that format.
+func ParseHubRoutedSMS(text string) (origin, body string, ok bool) {
+	m := hubRoutedSMS.FindStringSubmatch(strings.TrimSpace(text))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
 }
