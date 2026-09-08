@@ -158,15 +158,27 @@ const aprsY = computed(() => P.value.aprsY)
 const satY = computed(() => P.value.satY)
 const laneY = (lane) => lane === 'sms' ? smsY.value : lane === 'hub' ? hubY.value : lane === 'sat' ? satY.value : aprsY.value
 // The satellite glyph sits where the Hub cloud sits on its own lane.
-const satX = computed(() => layout.value === 'full' ? 524 : airNear.value.x + (nearIsLeft.value ? 44 : -44))
+const satX = computed(() => layout.value === 'full' ? 524 : rowIconX.value)
 // The Hub cloud sits on the far side of the Hub lane so the lane label
 // stays readable in the middle.
-const cloudX = computed(() => layout.value === 'full' ? 756 : airNear.value.x + (nearIsLeft.value ? 44 : -44))
+const cloudX = computed(() => layout.value === 'full' ? 756 : rowIconX.value)
 // Lane text is centred a little away from the near end, where the cloud
 // and the radio waves live.
 const laneTextX = computed(() => (airNear.value.x + P.value.edge) / 2 + (nearIsLeft.value ? 44 : -44))
 // The lanes leave from the kit's edge, not from a point floating beside it.
 const laneStartX = computed(() => kitPos.value.x + (nearIsLeft.value ? 124 : -124))
+// Route rows (MESHSAT-987): the icon sits on the line at the inner end, the
+// name and its fact ride just above it, the state word is pinned to the outer
+// end, and the detail sits under the chosen row. `rowDir` is +1 when this
+// kit's lanes leave to the right and -1 when they leave to the left, so the
+// whole row mirrors with the diptych and both kits keep one alignment edge.
+const rowDir = computed(() => (nearIsLeft.value ? 1 : -1))
+const rowIconX = computed(() => laneStartX.value + rowDir.value * 66)
+const rowTextX = computed(() => rowIconX.value + rowDir.value * 34)
+const rowStateX = computed(() => P.value.edge - rowDir.value * 16)
+const rowAnchor = computed(() => (nearIsLeft.value ? 'start' : 'end'))
+const rowStateAnchor = computed(() => (nearIsLeft.value ? 'end' : 'start'))
+const rowCaptionX = computed(() => (laneStartX.value + P.value.edge) / 2)
 
 // ── Booth flow selector (MESHSAT-962) ──
 // The three paths are drawn together; the chosen one is lit, the other two
@@ -179,17 +191,25 @@ const flowBusy = ref(false)
 // The satellite leg exists on the panel before the modem is fitted: the
 // lane reads "modem not answering" until the 9704 gateway is up.
 const satNoModem = computed(() => !(flow.value.imt && flow.value.imt.connected))
+// One row per route, riding its own lane line: an icon, the name, the fact
+// that identifies the bearer, and a state word only when that bearer is
+// degraded. The sentence belongs to the chosen route alone — four captions
+// at once read as a wall of text on a 7-inch panel. [MESHSAT-987]
 const lanes = computed(() => ([
-  { key: 'imt', lane: 'sat', card: 'sat', label: 'Satellite, Iridium',
-    sub: satNoModem.value ? 'satellite modem not answering' : 'by satellite and the Hub to the other kit',
-    chosen: satNoModem.value ? 'chosen, modem not answering: texts wait' : 'chosen: through space, a minute or two' },
-  { key: 'aprs', lane: 'aprs', card: 'air', label: 'APRS radio, 144.800 MHz',
-    sub: aprsSilent.value ? 'receiver silent, replies fall back to SMS' : 'radio packets straight to the other kit',
-    chosen: aprsSilent.value ? 'chosen, receiver silent: SMS carries replies' : 'chosen: radio, straight to the other kit' },
-  { key: 'hub_sms', lane: 'hub', card: 'hub', label: 'SMS via the Hub',
-    sub: 'the Hub relays it by SMS to the other kit', chosen: 'chosen: the Hub relays it by SMS' },
-  { key: 'b2b_sms', lane: 'sms', card: 'sms', label: 'SMS kit to kit',
-    sub: 'one text straight to the other kit\'s SIM', chosen: 'chosen: one SMS straight to the other kit' },
+  { key: 'imt', lane: 'sat', card: 'sat', name: 'Satellite', fact: 'Iridium',
+    state: satNoModem.value ? 'no modem' : '',
+    detail: satNoModem.value
+      ? 'Chosen, but the modem is not answering. Texts wait for it.'
+      : 'Up to the satellite, down to the Hub, on to the other kit.' },
+  { key: 'aprs', lane: 'aprs', card: 'air', name: 'APRS radio', fact: '144.800 MHz',
+    state: aprsSilent.value ? 'receiver silent' : '',
+    detail: aprsSilent.value
+      ? 'Chosen, but this kit hears nothing. SMS carries the replies.'
+      : 'Radio packets straight to the other kit. No network of any kind.' },
+  { key: 'hub_sms', lane: 'hub', card: 'hub', name: 'SMS via the Hub', fact: '',
+    state: '', detail: 'One text to the Hub, which passes it on to the other kit.' },
+  { key: 'b2b_sms', lane: 'sms', card: 'sms', name: 'SMS kit to kit', fact: '',
+    state: '', detail: 'One text on the phone network, straight to the other kit\'s SIM.' },
 ]))
 const laneCard = (lane) => (lanes.value.find(l => l.lane === lane) || {}).card || 'air'
 async function selectPath(key) {
@@ -507,7 +527,7 @@ const lastHeardLine = computed(() => {
   const p = rx.find(x => x.portnum > 0)
   const cut = now.value - 300000
   const foreign = rx.filter(x => !(x.portnum > 0) && new Date(x.time).getTime() >= cut).length
-  const tail = foreign ? `, ${foreign} unreadable from other meshes in 5 min` : ''
+  const tail = foreign ? `, ${foreign} packets from other meshes in 5 min, not ours` : ''
   if (!p) return `LoRa 868 MHz, nothing readable heard yet${tail}`
   const age = Math.max(0, Math.round((now.value - new Date(p.time).getTime()) / 1000))
   const who = nodeName(p.from) || p.from
@@ -962,28 +982,41 @@ onUnmounted(() => {
                 <rect :x="Math.min(laneStartX, P.edge)" :y="laneY(ln.lane) - 40" :width="Math.abs(P.edge - laneStartX)" height="80" class="hit" />
                 <line :x1="laneStartX" :y1="laneY(ln.lane)" :x2="P.edge" :y2="laneY(ln.lane)" class="lane path-line" />
                 <circle :cx="laneStartX" :cy="laneY(ln.lane)" r="7" class="path-start" />
-                <template v-if="ln.lane === 'aprs'">
-                  <g v-for="i in 3" :key="'wn'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
-                    <path :d="nearIsLeft
-                      ? `M ${P.airNear.x + 6 + i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.airNear.x + 6 + i*16} ${laneY('aprs') + 14 + i*10}`
-                      : `M ${P.airNear.x - 6 - i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.airNear.x - 6 - i*16} ${laneY('aprs') + 14 + i*10}`" />
-                  </g>
-                </template>
-                <g v-if="ln.lane === 'hub'" class="cloud" :transform="`translate(${cloudX},${laneY('hub')})`">
-                  <path d="M -44 12 a 16 16 0 0 1 6 -30 a 22 22 0 0 1 42 -8 a 18 18 0 0 1 36 12 a 15 15 0 0 1 -6 26 z" class="cloud-body" />
-                  <text y="5" text-anchor="middle" class="cloud-label">HUB</text>
+                <!-- one icon family, one size, one place on every lane -->
+                <g class="ic" :class="[ln.lane, { pulse: airPulse && ln.lane === 'aprs',
+                     beaming: ln.lane === 'sat' && dot.visible && dot.lane === 'sat' }]"
+                   :transform="`translate(${rowIconX},${laneY(ln.lane)}) scale(1.25)`">
+                  <template v-if="ln.lane === 'aprs'">
+                    <line x1="0" y1="-13" x2="0" y2="9" />
+                    <circle cx="0" cy="12" r="2.4" class="solid" />
+                    <path class="arc" d="M -7 -11 A 12 12 0 0 0 -7 7" />
+                    <path class="arc" d="M 7 -11 A 12 12 0 0 1 7 7" />
+                    <path class="arc wide" d="M -13 -16 A 19 19 0 0 0 -13 12" />
+                    <path class="arc wide" d="M 13 -16 A 19 19 0 0 1 13 12" />
+                  </template>
+                  <template v-else-if="ln.lane === 'sat'">
+                    <rect class="fillable" x="-7" y="-6" width="14" height="12" rx="2" />
+                    <rect class="fillable" x="-21" y="-3.5" width="11" height="7" rx="1" />
+                    <rect class="fillable" x="10" y="-3.5" width="11" height="7" rx="1" />
+                    <path d="M -3 -6 q 3 -8 6 0" />
+                    <line class="beam" x1="-3" y1="7" x2="-7" y2="16" />
+                    <line class="beam" x1="3" y1="7" x2="7" y2="16" />
+                  </template>
+                  <template v-else-if="ln.lane === 'hub'">
+                    <path class="fillable" transform="translate(-6.5,0) scale(0.62)"
+                          d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" />
+                  </template>
+                  <template v-else>
+                    <path class="fillable" d="M -17 -10 h 30 a 4 4 0 0 1 4 4 v 11 a 4 4 0 0 1 -4 4 h -16 l -9 7 v -7 h -5 a 4 4 0 0 1 -4 -4 v -11 a 4 4 0 0 1 4 -4 z" />
+                  </template>
                 </g>
-                <g v-if="ln.lane === 'sat'" class="satellite" :class="{ beaming: dot.visible && dot.lane === 'sat' }" :transform="`translate(${satX},${laneY('sat')}) scale(1.5)`">
-                  <rect x="-9" y="-6" width="18" height="12" rx="2" class="sat-body" />
-                  <rect x="-36" y="-4" width="22" height="8" rx="1" class="sat-panel" />
-                  <rect x="14" y="-4" width="22" height="8" rx="1" class="sat-panel" />
-                  <path d="M -3 -6 q 3 -9 6 0" class="sat-dish" />
-                  <line x1="-4" y1="8" x2="-9" y2="22" class="beam" /><line x1="4" y1="8" x2="9" y2="22" class="beam" />
-                </g>
-                <text :x="laneTextX" :y="laneY(ln.lane) - 15" class="path-label" text-anchor="middle">{{ ln.label }}</text>
-                <text :x="laneTextX" :y="laneY(ln.lane) + 25" class="path-sub" text-anchor="middle">{{ flow.path === ln.key ? ln.chosen : ln.sub }}</text>
+                <text :x="rowTextX" :y="laneY(ln.lane) - 14" :text-anchor="rowAnchor" class="row-name">{{ ln.name }}<tspan
+                  v-if="ln.fact" class="row-fact" dx="14">{{ ln.fact }}</tspan></text>
+                <text v-if="ln.state" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state warn">{{ ln.state }}</text>
+                <text v-else-if="flow.path === ln.key" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state on">chosen</text>
+                <text v-if="flow.path === ln.key" :x="rowTextX" :y="laneY(ln.lane) + 28" :text-anchor="rowAnchor" class="row-detail">{{ ln.detail }}</text>
               </g>
-              <text :x="(P.airNear.x + P.edge) / 2" :y="laneY('sms') + 60" class="air-tap" text-anchor="middle">tap a path to choose it, again for details</text>
+              <text :x="rowCaptionX" :y="satY - 48" text-anchor="middle" class="lane-caption">Tap a route to choose it. Tap again for details.</text>
             </g>
 
             <!-- near device -->
@@ -1022,26 +1055,31 @@ onUnmounted(() => {
               <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
                 <rect :x="G.airL.x" :y="laneY(ln.lane) - 36" :width="G.airR.x - G.airL.x" height="72" class="hit" />
                 <line :x1="G.airL.x" :y1="laneY(ln.lane)" :x2="G.airR.x" :y2="laneY(ln.lane)" class="lane path-line" />
-                <template v-if="ln.lane === 'aprs'">
-                  <g v-for="i in 3" :key="'wl'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
-                    <path :d="`M ${G.airL.x + 6 + i*14} ${laneY('aprs') - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 1 ${G.airL.x + 6 + i*14} ${laneY('aprs') + 12 + i*8}`" />
-                  </g>
-                  <g v-for="i in 3" :key="'wr'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
-                    <path :d="`M ${G.airR.x - 6 - i*14} ${laneY('aprs') - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${laneY('aprs') + 12 + i*8}`" />
-                  </g>
-                </template>
-                <g v-if="ln.lane === 'hub'" class="cloud" :transform="`translate(${cloudX},${laneY('hub')})`">
-                  <path d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" class="cloud-body" />
-                  <text y="4" text-anchor="middle" class="cloud-label small">HUB</text>
+                <g class="ic" :class="[ln.lane, { pulse: airPulse && ln.lane === 'aprs' }]"
+                   :transform="`translate(${G.airL.x + 30},${laneY(ln.lane)}) scale(0.82)`">
+                  <template v-if="ln.lane === 'aprs'">
+                    <line x1="0" y1="-13" x2="0" y2="9" />
+                    <circle cx="0" cy="12" r="2.4" class="solid" />
+                    <path class="arc" d="M -7 -11 A 12 12 0 0 0 -7 7" />
+                    <path class="arc" d="M 7 -11 A 12 12 0 0 1 7 7" />
+                  </template>
+                  <template v-else-if="ln.lane === 'sat'">
+                    <rect class="fillable" x="-7" y="-6" width="14" height="12" rx="2" />
+                    <rect class="fillable" x="-21" y="-3.5" width="11" height="7" rx="1" />
+                    <rect class="fillable" x="10" y="-3.5" width="11" height="7" rx="1" />
+                    <path d="M -3 -6 q 3 -8 6 0" />
+                  </template>
+                  <template v-else-if="ln.lane === 'hub'">
+                    <path class="fillable" transform="translate(-6.5,0) scale(0.62)"
+                          d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" />
+                  </template>
+                  <template v-else>
+                    <path class="fillable" d="M -17 -10 h 30 a 4 4 0 0 1 4 4 v 11 a 4 4 0 0 1 -4 4 h -16 l -9 7 v -7 h -5 a 4 4 0 0 1 -4 -4 v -11 a 4 4 0 0 1 4 -4 z" />
+                  </template>
                 </g>
-                <g v-if="ln.lane === 'sat'" class="satellite" :transform="`translate(${satX},${laneY('sat')}) scale(0.7)`">
-                  <rect x="-9" y="-6" width="18" height="12" rx="2" class="sat-body" />
-                  <rect x="-36" y="-4" width="22" height="8" rx="1" class="sat-panel" />
-                  <rect x="14" y="-4" width="22" height="8" rx="1" class="sat-panel" />
-                  <path d="M -3 -6 q 3 -9 6 0" class="sat-dish" />
-                </g>
-                <text :x="(G.airL.x + G.airR.x)/2 - 20" :y="laneY(ln.lane) - 14" class="path-label" text-anchor="middle">{{ ln.label }}</text>
-                <text v-if="flow.path === ln.key" :x="(G.airL.x + G.airR.x)/2 - 20" :y="laneY(ln.lane) + 22" class="path-sub" text-anchor="middle">chosen</text>
+                <text :x="G.airL.x + 56" :y="laneY(ln.lane) - 12" text-anchor="start" class="row-name">{{ ln.name }}</text>
+                <text v-if="ln.state" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state warn">{{ ln.state }}</text>
+                <text v-else-if="flow.path === ln.key" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state on">chosen</text>
               </g>
             </g>
 
@@ -1110,17 +1148,18 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="shrink-0 flex flex-col items-end gap-1">
-          <div v-show="!current" class="font-mono text-[12px] leading-4 text-gray-500 tabular-nums whitespace-nowrap">
-            last minute <span class="text-gray-300">LoRa</span> {{ rateOf('lora','rx') }}·{{ rateOf('lora','tx') }}
-            <span class="text-gray-300 ml-2">APRS</span> {{ rateOf('aprs','rx') }}·{{ rateOf('aprs','tx') }}
-            <span class="text-gray-300 ml-2">SMS</span> {{ rateOf('sms','rx') }}·{{ rateOf('sms','tx') }}
-            <span class="text-gray-300 ml-2">SAT</span> {{ rateOf('sat','rx') }}·{{ rateOf('sat','tx') }}
+          <div v-show="!current" class="font-mono text-[12px] leading-4 text-gray-400 tabular-nums whitespace-nowrap">
+            <span class="text-gray-500">packets in/out, last minute</span>
+            <span class="text-gray-300 ml-2">LoRa</span> {{ rateOf('lora','rx') }}/{{ rateOf('lora','tx') }}
+            <span class="text-gray-300 ml-2">APRS</span> {{ rateOf('aprs','rx') }}/{{ rateOf('aprs','tx') }}
+            <span class="text-gray-300 ml-2">SMS</span> {{ rateOf('sms','rx') }}/{{ rateOf('sms','tx') }}
+            <span class="text-gray-300 ml-2">SAT</span> {{ rateOf('sat','rx') }}/{{ rateOf('sat','tx') }}
           </div>
           <div class="flex items-center gap-2">
             <span v-if="testNote" class="font-mono text-[11px] text-gray-500">{{ testNote }}</span>
-            <button type="button" @click="drawer = !drawer" class="font-mono text-[12px] px-2.5 py-1 rounded border border-gray-800 text-gray-500 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
-            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-[12px] px-2.5 py-1 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-800 text-gray-500 hover:text-gray-200'">
-              {{ testArmed ? 'tap again to send' : 'test frame' }}
+            <button type="button" @click="drawer = !drawer" class="font-mono text-[12px] px-3 py-2 rounded border border-gray-700 text-gray-400 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">Stats for nerds</button>
+            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-[12px] px-3 py-2 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-100'">
+              {{ testArmed ? 'Tap again to send it' : 'Send a test frame' }}
             </button>
           </div>
         </div>
@@ -1286,14 +1325,10 @@ onUnmounted(() => {
 .lane.lora.far-alive { opacity: 0.85; }
 .air-line { stroke: #F7F7F4; stroke-opacity: 0.55; stroke-width: 2; }
 .air.silent .air-line { stroke-dasharray: 3 9; stroke-opacity: 0.3; }
-.wave path { fill: none; stroke: #F7F7F4; stroke-width: 1.5; opacity: 0; animation: wave 3s ease-out infinite; transition: stroke 0.3s; }
-.wave.pulse path { stroke: #F96118; animation-duration: 1.2s; }
-.air.silent .wave path { animation: none; opacity: 0.12; }
 @keyframes wave { 0% { opacity: 0; } 20% { opacity: 0.7; } 100% { opacity: 0; } }
 .air-label { font-family: 'IBM Plex Mono', monospace; font-size: 28px; fill: #F7F7F4; letter-spacing: 0.02em; }
 .air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #B4B4BD; }
 .air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #FCD34D; }
-.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #6A6A78; }
 .visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 22px; fill: #D6D6DC; }
 .replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
@@ -1309,35 +1344,52 @@ onUnmounted(() => {
 .path.hub .path-start { fill: #8FB8DE; }
 .path.selected .path-start { opacity: 1; }
 .path.silent .path-line { stroke-dasharray: 3 9; stroke-opacity: 0.3; }
-.path.silent .wave path { animation: none; opacity: 0.12; }
-.path .path-label { font-family: 'IBM Plex Mono', monospace; font-size: 22px; fill: #F7F7F4; letter-spacing: 0.02em; transition: fill 0.3s; }
-.path .path-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #B4B4BD; transition: fill 0.3s; }
-.path.selected .path-sub { fill: #F7F7F4; }
-.path.dim .path-label { fill: #7A7A86; }
-.path.dim .path-sub { fill: #5E5E6A; }
-.path.silent .path-sub { fill: #FCD34D; }
-.path .cloud-body { fill: rgba(143, 184, 222, 0.08); stroke: #8FB8DE; stroke-width: 1.6; transition: stroke-opacity 0.3s; }
-.path.dim .cloud-body { stroke-opacity: 0.35; }
-.path .cloud-label { font-family: 'IBM Plex Mono', monospace; font-size: 18px; fill: #8FB8DE; letter-spacing: 0.08em; }
-.path .cloud-label.small { font-size: 14px; }
-.path.dim .cloud-label { fill: #5E6E7E; }
-svg.full .path .path-label { font-size: 18px; }
-svg.full .path .path-sub { font-size: 15px; }
-svg.full .path .cloud-label.small { font-size: 12px; }
+/* Route rows (MESHSAT-987): one line of text per lane, riding the line —
+   name and fact above it, state pinned to the outer end, and the detail
+   sentence under the chosen route only. Four captions at once were a wall
+   of text; one is a sentence a visitor actually reads. */
+.path .row-name { font-family: 'IBM Plex Mono', monospace; font-size: 23px; fill: #F7F7F4; letter-spacing: 0.02em; transition: fill 0.3s; }
+.path .row-fact { font-family: 'IBM Plex Mono', monospace; font-size: 18px; fill: #9E9EAC; }
+.path .row-state { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #9E9EAC; }
+.path .row-state.warn { fill: #FCD34D; }
+.path .row-detail { font-family: 'IBM Plex Sans', sans-serif; font-size: 19px; fill: #C4C4CE; }
+.path.dim .row-name { fill: #8A8A96; }
+.path.dim .row-fact, .path.dim .row-state { fill: #6E6E7E; }
+.lane-caption { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #82828F; }
+/* One icon family: same box, same stroke weight, one per lane, drawn in
+   that bearer's colour. Filled only on the chosen route, so which way this
+   kit sends reads from across the aisle without reading a word. */
+.path .ic { fill: none; stroke: #F7F7F4; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; transition: opacity 0.3s, stroke-width 0.3s; }
+.path .ic .solid { fill: #F7F7F4; stroke: none; }
+.path.sat .ic { stroke: #B9A7E6; }
+.path.hub .ic { stroke: #8FB8DE; }
+.path.sms .ic { stroke: #E0B458; }
+.path.sat .ic .solid { fill: #B9A7E6; }
+.path.hub .ic .solid { fill: #8FB8DE; }
+.path.sms .ic .solid { fill: #E0B458; }
+.path.selected .ic { stroke-width: 2.2; }
+.path.selected .ic .fillable { fill: rgba(247, 247, 244, 0.16); }
+.path.selected.sat .ic .fillable { fill: rgba(185, 167, 230, 0.18); }
+.path.selected.hub .ic .fillable { fill: rgba(143, 184, 222, 0.18); }
+.path.selected.sms .ic .fillable { fill: rgba(224, 180, 88, 0.18); }
+.path.dim .ic { opacity: 0.5; }
+.path .ic .arc { opacity: 0.75; }
+.path .ic .arc.wide { opacity: 0.4; }
+.path .ic.pulse .arc { stroke: #F96118; animation: wave 1.2s ease-out infinite; }
+.path.silent .ic .arc { opacity: 0.12; animation: none; }
+.path .ic .beam { opacity: 0.3; }
+.path .ic.beaming .beam { animation: beam 1.2s ease-in-out infinite; }
+.path.nosky .ic { opacity: 0.5; }
+svg.full .path .row-name { font-size: 19px; }
+svg.full .path .row-state { font-size: 15px; }
 .msg.hub .core { fill: #8FB8DE; }
 /* Satellite lane (MESHSAT-962): lavender so it reads apart from the white
    radio, the blue Hub and the gold SMS; a small satellite glyph instead of
    the radio waves; nosky when the modem is silent. */
 .path.sat .path-line, .path.sat .path-start { stroke: #B9A7E6; fill: #B9A7E6; }
 .path.sat .path-line { fill: none; }
-.path .sat-body, .path .sat-panel { fill: rgba(185, 167, 230, 0.10); stroke: #B9A7E6; stroke-width: 1.5; }
-.path .sat-dish { fill: none; stroke: #B9A7E6; stroke-width: 1.4; }
-.path .beam { stroke: #B9A7E6; stroke-width: 1.2; opacity: 0.25; }
-.path .satellite.beaming .beam { animation: beam 1.2s ease-in-out infinite; }
 @keyframes beam { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.9; } }
-.path.dim .sat-body, .path.dim .sat-panel, .path.dim .sat-dish { stroke-opacity: 0.35; }
 .path.nosky .path-line { stroke-dasharray: 3 9; stroke-opacity: 0.3; }
-.path.nosky .path-sub { fill: #FCD34D; }
 .msg.sat .core { fill: #B9A7E6; }
 .msg.waiting .core { animation: satwait 1.6s ease-in-out infinite; }
 @keyframes satwait { 0%, 100% { r: 8; } 50% { r: 12; } }
@@ -1398,8 +1450,8 @@ svg.full .st-sub { font-size: 16px; }
 .strip { min-height: 60px; }
 .strip.live { min-height: 84px; max-height: 124px; }
 @media (prefers-reduced-motion: reduce) {
-  .wave path { animation: none; opacity: 0.25; }
-  .path .satellite.beaming .beam, .msg.waiting .core { animation: none; }
+  .path .ic.pulse .arc { animation: none; }
+  .path .ic.beaming .beam, .msg.waiting .core { animation: none; }
   .composer .caret { animation: none; }
   .station.flash :deep(.device .body), .station.flash :deep(.device .bezel), .station.flash :deep(.device.photo .photo-img), .station.flash .kit-img { animation: none; }
 }
