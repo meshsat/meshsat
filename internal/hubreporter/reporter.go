@@ -67,6 +67,8 @@ type HubReporter struct {
 	stopped       bool
 	cmdHandler    *CommandHandler
 	outbox        *Outbox
+	onConnect     func()            // MQTT session up [MESHSAT-963]
+	onLost        func()            // MQTT session lost
 	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
@@ -145,8 +147,12 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		r.mu.Lock()
 		r.connected = true
 		ob := r.outbox
+		onUp := r.onConnect
 		r.mu.Unlock()
 		log.Info().Str("hub", r.cfg.HubURL).Str("bridge_id", r.cfg.BridgeID).Msg("hubreporter connected to hub")
+		if onUp != nil {
+			onUp()
+		}
 
 		// Publish birth certificate on every (re)connect (never queued)
 		r.publishBirth()
@@ -180,9 +186,13 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		r.mu.Lock()
 		r.connected = false
+		onDown := r.onLost
 		r.mu.Unlock()
 		r.takSubscribed.Store(false)
 		log.Warn().Err(err).Msg("hubreporter connection lost")
+		if onDown != nil {
+			onDown()
+		}
 	})
 
 	r.client = mqtt.NewClient(opts)
@@ -562,6 +572,15 @@ func (r *HubReporter) SetTAKCoTHandler(fn func([]byte)) {
 // SetOutbox sets the offline message queue for store-and-forward.
 // When set, hub-bound messages are queued locally if the broker is unreachable
 // and replayed in FIFO order on reconnect.
+// SetConnectionHooks registers callbacks for the MQTT session coming up and
+// going down; the satellite fallback monitor uses them. [MESHSAT-963]
+func (r *HubReporter) SetConnectionHooks(onConnect, onLost func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onConnect = onConnect
+	r.onLost = onLost
+}
+
 func (r *HubReporter) SetOutbox(outbox *Outbox) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

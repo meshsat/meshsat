@@ -512,7 +512,7 @@ Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_
 | Power | 5 V inlet unchanged (both kits died on 4 Sep) | 12 V refit (parts 9 Sep) and 24 h zero-AC-loss on both kits |
 | APRS hardware | tuned K5 chain being replaced by the PicoAPRS V4 this week | section 14 device setup, then section 16 pre-flight on the new chain |
 | Handhelds | T-Echo (mesh A), T-Deck Plus (mesh B), T-Deck Pro ordered, power packs 8 Sep | Pro joined to an island, charging plan for two days |
-| Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived | installed on both kits |
+| Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived; screen protectors FDHYFGDY 2-pack for the Touch Display 2 ordered 8 Sep (Amazon 407-8701954-9922741, EUR 9.99, Sat 12 Sep; one sheet per kit, no spare) | installed on both kits; protector checked against the 155.5 x 88 mm window before peeling, fitted with the top plate off |
 | Plate stack | middle plate sags under the X1202, cells and Pi 5; two extra M3 rods at mid-span of the long edges (MESHSAT-863) | fitted on both kits, plate pulled flat, fieldkit BUILD.md + CAD updated |
 | Software follow-ups | MESHSAT-861 (resolver honours a disabled interface, receive_state after a restart), MESHSAT-859 (time-sync config) | landed and verified |
 | Booth paths on the panel | three lanes drawn, tap to choose (MESHSAT-962, dad90ac + 0597731); Hub routes created on the NL Hub | 5/5 texts each way on each path on both kits, section 18 numbers |
@@ -587,3 +587,27 @@ Bench order when the kits are back:
 3. Per path, 5 texts each way from the handhelds, `scratchpad/relay-test.sh` style, and the latency
    per path noted here. Each text must arrive exactly once.
 4. Both SIM balances and the Twilio balance sized for two days at up to two SMS per text.
+
+## 19. Hub without internet on the kit: the satellite fallback uplink (MESHSAT-963, 8 Sep 2026)
+
+`internal/hubreporter/satfallback.go` existed since April and was never wired (no caller in main.go).
+Since this change the bridge arms it whenever a Hub URL is configured: when the MQTT session to the
+Hub is down for `MESHSAT_HUB_FALLBACK_AFTER_MIN` (5), the kit sends compact binary frames (magic
+`MS`, under 340 bytes) to the Hub: position every `MESHSAT_HUB_FALLBACK_POSITION_MIN` (15), health every
+`MESHSAT_HUB_FALLBACK_HEALTH_MIN` (60), and an SOS at once when SOS is activated on the panel. The
+frames ride the delivery ledger as class `hub_uplink` (bypasses egress rules and interface transforms,
+visible in the queue widget): raw bytes over `iridium_0` (SBD or IMT; the SBD gateway got a raw path),
+or base64 text over `cellular_0` to the Hub's number (`MESHSAT_HUB_SMS_NUMBER`, or the `ttc_hub_number`
+stored by the TTC setup, which wins). The Hub already decodes them from its SMS, RockBLOCK and
+Cloudloop webhooks and marks the bridge online with its position.
+
+Bearer policy `MESHSAT_HUB_FALLBACK_BEARER`: `auto` (default) takes the satellite gateway only when it
+is connected AND has moved traffic in the last 30 min, otherwise SMS (indoors the modem is present but
+a queued satellite frame would never leave); `satellite` and `sms` force one leg. Kill switch
+`MESHSAT_HUB_SAT_FALLBACK=0`. A failed initial Hub connect counts as a disconnect.
+
+Bench: kit WiFi off (or the Hub MQTT port blocked), wait 5 min, then `docker logs` shows
+`satfallback: activating satellite fallback mode` and a `hub uplink frame` delivery on cellular_0;
+the Hub fleet page shows the kit online with the position within a minute of the SMS; with sky on
+parallax the same frame leaves over IMT. Owed: that bench run on both kits, and a look at where the
+Hub UI shows an SMS-borne health frame (fleet page shows online + position; health may be log-only).

@@ -13,6 +13,11 @@ const (
 	// DeliveryClassOOB is an OOB management frame: it bypasses egress rules
 	// and interface transforms because the frame carries its own AEAD.
 	DeliveryClassOOB = "oob"
+	// DeliveryClassHubUplink is a compact binary frame for the Hub (position,
+	// health, SOS) sent when the MQTT link is down: raw bytes over the
+	// satellite transport, base64 text over SMS to the Hub's number. Like
+	// oob it bypasses egress rules and interface transforms. [MESHSAT-963]
+	DeliveryClassHubUplink = "hub_uplink"
 )
 
 // ErrOOBPeerNotFound is returned when no peer matches.
@@ -271,4 +276,11 @@ func (db *DB) PruneOOBLog(keep int) error {
 		return fmt.Errorf("prune oob log: %w", err)
 	}
 	return nil
+}
+
+// DeliveryClassBypassesPolicy reports whether a delivery class skips the
+// egress rules and the interface transforms of its channel (management
+// and Hub-uplink frames carry their own framing). [MESHSAT-963]
+func DeliveryClassBypassesPolicy(class string) bool {
+	return class == DeliveryClassOOB || class == DeliveryClassHubUplink
 }

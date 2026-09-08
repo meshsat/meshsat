@@ -178,6 +178,21 @@ func (s *Server) sosWorker(ctx context.Context) {
 			_ = sosPayload // payload used for direct SBD if needed
 		}
 
+		// Hub uplink frame when the MQTT link is down: satellite first,
+		// SMS to the Hub's number otherwise. The Hub decodes it from any of
+		// its webhooks and raises the SOS. [MESHSAT-963]
+		if s.satFallback != nil && i == 0 {
+			var lat, lon float64
+			if s.gpsReader != nil {
+				if st := s.gpsReader.GetStatus(); st.Fix {
+					lat, lon = st.Lat, st.Lon
+				}
+			}
+			if err := s.satFallback.PublishSOS("bridge", lat, lon, sosText); err != nil {
+				log.Error().Err(err).Msg("SOS hub uplink frame failed")
+			}
+		}
+
 		s.sos.mu.Lock()
 		s.sos.sends++
 		s.sos.mu.Unlock()
