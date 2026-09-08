@@ -132,16 +132,16 @@ let raf = 0
 const G = {
   devL: { x: 150, y: 240 }, kitL: { x: 392, y: 240 }, airL: { x: 490, y: 240 },
   airR: { x: 790, y: 240 }, kitR: { x: 888, y: 240 }, devR: { x: 1130, y: 240 },
-  smsY: 386,
+  aprsY: 240, hubY: 314, smsY: 386,
 }
 // Half route: the near device and kit large, the air leaving over an edge.
-const HALF_LEFT = { dev: { x: 240, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 790, y: 262 }, airFar: { x: 1340, y: 262 }, edge: 1280, smsY: 372, isl: { x: 56, w: 720 } }
-const HALF_RIGHT = { dev: { x: 1040, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 490, y: 262 }, airFar: { x: -60, y: 262 }, edge: 0, smsY: 372, isl: { x: 504, w: 720 } }
+const HALF_LEFT = { dev: { x: 240, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 790, y: 262 }, airFar: { x: 1340, y: 262 }, edge: 1280, aprsY: 214, hubY: 296, smsY: 378, isl: { x: 56, w: 720 } }
+const HALF_RIGHT = { dev: { x: 1040, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 490, y: 262 }, airFar: { x: -60, y: 262 }, edge: 0, aprsY: 214, hubY: 296, smsY: 378, isl: { x: 504, w: 720 } }
 const P = computed(() => {
   if (layout.value === 'full') {
     return nearIsLeft.value
-      ? { dev: G.devL, kit: G.kitL, airNear: G.airL, airFar: G.airR, smsY: G.smsY }
-      : { dev: G.devR, kit: G.kitR, airNear: G.airR, airFar: G.airL, smsY: G.smsY }
+      ? { dev: G.devL, kit: G.kitL, airNear: G.airL, airFar: G.airR, aprsY: G.aprsY, hubY: G.hubY, smsY: G.smsY, edge: G.airR.x }
+      : { dev: G.devR, kit: G.kitR, airNear: G.airR, airFar: G.airL, aprsY: G.aprsY, hubY: G.hubY, smsY: G.smsY, edge: G.airL.x }
   }
   return nearIsLeft.value ? HALF_LEFT : HALF_RIGHT
 })
@@ -150,6 +150,66 @@ const devPos = computed(() => P.value.dev)
 const airNear = computed(() => P.value.airNear)
 const airFar = computed(() => P.value.airFar)
 const smsY = computed(() => P.value.smsY)
+const hubY = computed(() => P.value.hubY)
+const aprsY = computed(() => P.value.aprsY)
+// Lane y by lane name; the message dot and the inbound/outbound animations
+// use it so a message always rides the lane it actually took.
+const laneY = (lane) => lane === 'sms' ? smsY.value : lane === 'hub' ? hubY.value : aprsY.value
+// The Hub cloud sits on the far side of the Hub lane so the lane label
+// stays readable in the middle.
+const cloudX = computed(() => layout.value === 'full' ? 756 : airNear.value.x + (nearIsLeft.value ? 44 : -44))
+// Lane text is centred a little away from the near end, where the cloud
+// and the radio waves live.
+const laneTextX = computed(() => (airNear.value.x + P.value.edge) / 2 + (nearIsLeft.value ? 44 : -44))
+// The lanes leave from the kit's edge, not from a point floating beside it.
+const laneStartX = computed(() => kitPos.value.x + (nearIsLeft.value ? 104 : -104))
+
+// ── Booth flow selector (MESHSAT-962) ──
+// The three paths are drawn together; the chosen one is lit, the other two
+// are dimmed, and tapping a lane selects it for THIS kit's outbound
+// messages (inbound is always open on both kits). A second tap on the
+// chosen lane opens its card. Inbound and outbound messages animate on the
+// lane they actually took, whatever is selected.
+const flow = ref({ path: '', rules: {}, hub_number: '', peer_number: '', ready: false, issues: [] })
+const flowBusy = ref(false)
+const lanes = computed(() => ([
+  { key: 'aprs', lane: 'aprs', card: 'air', label: 'APRS radio, 144.800 MHz',
+    sub: aprsSilent.value ? 'receiver silent, replies fall back to SMS' : 'radio packets straight to the other kit',
+    chosen: aprsSilent.value ? 'chosen, receiver silent: SMS carries replies' : 'chosen: radio, straight to the other kit' },
+  { key: 'hub_sms', lane: 'hub', card: 'hub', label: 'SMS via the Hub',
+    sub: 'the Hub relays it by SMS to the other kit', chosen: 'chosen: the Hub relays it by SMS' },
+  { key: 'b2b_sms', lane: 'sms', card: 'sms', label: 'SMS kit to kit',
+    sub: 'one text straight to the other kit\'s SIM', chosen: 'chosen: one SMS straight to the other kit' },
+]))
+const laneCard = (lane) => (lanes.value.find(l => l.lane === lane) || {}).card || 'air'
+async function selectPath(key) {
+  touch()
+  const ln = lanes.value.find(l => l.key === key)
+  if (!ln) return
+  if (flow.value.path === key) { openCard(ln.card); return }
+  if (flowBusy.value) return
+  const before = flow.value.path
+  flow.value.path = key
+  flowBusy.value = true
+  try {
+    const r = await api.put('/ttc/flow', { path: key })
+    if (r && r.path) flow.value = r
+  } catch (e) {
+    flow.value.path = before
+  } finally {
+    flowBusy.value = false
+  }
+}
+// Phone numbers as the modem reports them may carry or drop the country
+// code; compare the last nine digits.
+const numEq = (a, b) => {
+  const x = String(a || '').replace(/\D/g, ''), y = String(b || '').replace(/\D/g, '')
+  return x.length >= 6 && y.length >= 6 && x.slice(-9) === y.slice(-9)
+}
+const isHubNumber = (n) => numEq(n, flow.value.hub_number)
+// Which lane an SMS rides: the Hub's number means the Hub path, anything
+// else is kit to kit.
+const smsLane = (number) => isHubNumber(number) ? 'hub' : 'sms'
 
 function ease(t) { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t }
 function moveTo(x, y, ms) {
@@ -193,7 +253,7 @@ const legLabel = computed(() => {
   const l = t.legs
   if (t.dir === 'out') {
     if (l.queued !== undefined) out.push({ k: 'LoRa in to relay rule', v: l.queued })
-    if (l.sent !== undefined) out.push({ k: t.lane === 'sms' ? 'SMS accepted by KPN' : 'On the air (APRS)', v: l.sent })
+    if (l.sent !== undefined) out.push({ k: t.lane === 'aprs' ? 'On the air (APRS)' : t.lane === 'hub' ? 'SMS to the Hub accepted by KPN' : 'SMS accepted by KPN', v: l.sent })
   } else {
     if (l.queued !== undefined) out.push({ k: 'Air in to relay rule', v: l.queued })
     if (l.sent !== undefined) out.push({ k: 'Handed to LoRa', v: l.sent })
@@ -241,8 +301,8 @@ function onPacket(p) {
     if (!current.value || current.value.done || current.value.dir !== 'in') {
       const t = newTrip('in', p)
       stage(t, 'aprs_rx')
-      jump(airFar.value.x, airFar.value.y)
-      moveTo(airNear.value.x, airNear.value.y, 1400)
+      jump(airFar.value.x, aprsY.value)
+      moveTo(airNear.value.x, aprsY.value, 1400)
     }
   } else if (p.bearer === 'aprs' && p.dir === 'tx') {
     const t = current.value
@@ -250,9 +310,16 @@ function onPacket(p) {
   } else if (p.bearer === 'sms' && p.dir === 'rx') {
     if (isHousekeeping(p)) { pulseAir(); return }
     if (!current.value || current.value.done || current.value.dir !== 'in') {
-      const t = newTrip('in', p); t.lane = 'sms'; dot.lane = 'sms'
+      const lane = smsLane(p.from)
+      const t = newTrip('in', p); t.lane = lane; dot.lane = lane
       stage(t, 'sms_rx')
-      jump(airFar.value.x, smsY.value); moveTo(airNear.value.x, smsY.value, 1400)
+      jump(airFar.value.x, laneY(lane))
+      if (lane === 'hub') {
+        moveTo(cloudX.value, hubY.value, 700)
+        setTimeout(() => moveTo(airNear.value.x, hubY.value, 700), 750)
+      } else {
+        moveTo(airNear.value.x, laneY(lane), 1400)
+      }
     }
   } else if (p.bearer === 'lora' && p.dir === 'tx') {
     const t = current.value
@@ -274,9 +341,9 @@ function onDelivery(ev) {
   const status = (d.status || ev.type.replace('delivery_', '')).toLowerCase()
   if (status === 'queued') {
     if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular')) && !t.laneCommitted) {
-      t.lane = ch.startsWith('cellular') ? 'sms' : 'aprs'; dot.lane = t.lane
+      t.lane = ch.startsWith('cellular') ? smsLane(d.destination) : 'aprs'; dot.lane = t.lane
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
-      moveTo(kitPos.value.x, t.lane === 'sms' ? smsY.value : kitPos.value.y, 450)
+      moveTo(kitPos.value.x, laneY(t.lane), 450)
     } else if (t.dir === 'in' && ch.startsWith('mesh')) {
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
       moveTo(kitPos.value.x, kitPos.value.y, 500)
@@ -291,15 +358,21 @@ function onDelivery(ev) {
       // and drives the dot. [MESHSAT-826]
       if (t.laneCommitted) return
       t.laneCommitted = true
-      t.lane = ch.startsWith('cellular') ? 'sms' : 'aprs'; dot.lane = t.lane
+      t.lane = ch.startsWith('cellular') ? smsLane(d.destination) : 'aprs'; dot.lane = t.lane
       stage(t, 'sent', { channel: ch, latency: d.latency_ms })
-      if (t.lane === 'sms') {
+      if (t.lane === 'hub') {
+        moveTo(kitPos.value.x, hubY.value, 350)
+        setTimeout(() => moveTo(cloudX.value, hubY.value, 900), 380)
+        setTimeout(() => moveTo(airFar.value.x, hubY.value, 900), 1330)
+        finish(t, false, 2400)
+      } else if (t.lane === 'sms') {
         moveTo(kitPos.value.x, smsY.value, 350)
         setTimeout(() => moveTo(airFar.value.x, smsY.value, 1500), 380)
         finish(t, false, 2000)
       } else {
-        moveTo(airFar.value.x, airFar.value.y, 1600)
-        finish(t, false, 1800)
+        moveTo(kitPos.value.x, aprsY.value, 350)
+        setTimeout(() => moveTo(airFar.value.x, aprsY.value, 1400), 380)
+        finish(t, false, 1900)
       }
     } else if (t.dir === 'in' && ch.startsWith('mesh')) {
       if (t.outCommitted) return
@@ -357,7 +430,7 @@ const statusLine = computed(() => {
   if (t.failed) return 'did not get out this time'
   if (t.dir === 'out') {
     if (name === 'sent' || name === 'aprs_tx') {
-      const via = t.lane === 'sms' ? 'as one SMS' : 'over the radio'
+      const via = t.lane === 'sms' ? 'as one SMS' : t.lane === 'hub' ? 'as one SMS to the Hub' : 'over the radio'
       return layout.value === 'half' ? `left this kit ${via} at ${hhmmss(last.at)}, the other screen shows it arriving` : `on its way ${via} to ${peer.value.name}`
     }
     if (name === 'queued') return 'inside the kit, picking a way out'
@@ -368,7 +441,7 @@ const statusLine = computed(() => {
   if (name === 'sent' || name === 'lora_tx') return `on this mesh now, look at the ${nearDev}`
   if (name === 'queued') return 'inside the kit, going out on LoRa'
   if (name === 'typed_local') return `typed on this kit, sent to the ${nearDev} over LoRa`
-  return `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
+  return t.lane === 'hub' ? `came in as an SMS from the Hub, sent by ${peer.value.name}` : `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
 })
 // Only packets this kit could decrypt count as "heard on this mesh".
 // Frames from other meshes on the same frequency arrive as ENCRYPTED_RELAY
@@ -405,7 +478,7 @@ function replayLast() {
   if (!t || replaying.value) return
   replaying.value = true
   dot.lane = t.lane; dot.visible = true
-  const y = t.lane === 'sms' ? smsY.value : kitPos.value.y
+  const y = laneY(t.lane)
   const pts = t.dir === 'out'
     ? [[devPos.value.x, devPos.value.y], [kitPos.value.x, kitPos.value.y], [airFar.value.x, y]]
     : [[airFar.value.x, y], [kitPos.value.x, kitPos.value.y], [devPos.value.x, devPos.value.y]]
@@ -457,15 +530,37 @@ const cards = computed(() => ({
       ['Right now', `${chips.value.filter(c => c.state === 'ok').length} of 3 demo channels up, ${rateOf('lora', 'rx') + rateOf('aprs', 'rx')} packets heard in the last minute`],
     ],
   },
+  hub: {
+    title: 'SMS via the Hub',
+    lead: 'The kit texts the MeshSat Hub; the Hub texts the other kit. No internet on either kit: two SMS carry the message.',
+    facts: [
+      ['Path', `this kit's SIM to the Hub at ${flow.value.hub_number || 'its number'}, then the Hub to ${peer.value.name}'s SIM`],
+      ['Why', 'the Hub also talks to kits over satellite; indoors there is no sky, so SMS is the fallback'],
+      ['Privacy', 'compressed, then AES-256-GCM, then base64; the Hub holds the key'],
+      ['Size', 'one text message each hop, up to 160 characters'],
+      ['Right now', flow.value.path === 'hub_sms' ? 'chosen for the next message from this kit' : 'tap the lane to choose it'],
+    ],
+  },
+  sms: {
+    title: 'SMS kit to kit',
+    lead: 'One text message from this kit\'s SIM straight to the other kit\'s SIM over LTE.',
+    facts: [
+      ['Path', `this kit's SIM to ${peer.value.name}'s SIM at ${flow.value.peer_number || 'its number'}`],
+      ['Network', 'the public mobile network, nothing else in between'],
+      ['Privacy', 'compressed, then AES-256-GCM, then base64; both kits share the key'],
+      ['Size', 'one text message, up to 160 characters'],
+      ['Right now', flow.value.path === 'b2b_sms' ? 'chosen for the next message from this kit' : 'tap the lane to choose it'],
+    ],
+  },
   air: {
-    title: 'The air link',
+    title: 'APRS radio, kit to kit',
     lead: 'How a message gets from this kit to the other one with no network in between.',
     facts: [
       ['Radio', 'APRS on 144.800 MHz, amateur radio packets at 1200 baud'],
       ['Format', 'AX.25 frames from a software modem in the kit'],
       ['Privacy', 'compressed, then AES-256-GCM, then base64; both kits share the key'],
       ['Size', 'a 26-byte text becomes 76 bytes on the air'],
-      ['Fallback', 'when the radio is silent the same message goes as one SMS over LTE'],
+      ['Fallback', 'when the other kit\'s receiver is silent the same message goes as one SMS over LTE'],
       ['Right now', aprsSilent.value ? 'the receiver on this kit is silent, SMS carries replies' : `receiver ok, ${rateOf('aprs', 'rx')} in and ${rateOf('aprs', 'tx')} out in the last minute`],
     ],
   },
@@ -476,9 +571,9 @@ function openCard(k) { card.value = k; touch() }
 let sse = null
 let timers = []
 async function poll() {
-  const [a, h, r, n, d] = await Promise.allSettled([
+  const [a, h, r, n, d, f] = await Promise.allSettled([
     api.get('/aprs/status'), api.get('/devices/health'), api.get('/packets/rates'),
-    api.get('/nodes'), api.get('/deliveries?limit=20'),
+    api.get('/nodes'), api.get('/deliveries?limit=20'), api.get('/ttc/flow'),
   ])
   if (a.status === 'fulfilled' && a.value) {
     aprs.value = a.value
@@ -491,6 +586,7 @@ async function poll() {
   if (r.status === 'fulfilled' && r.value) rates.value = r.value
   if (n.status === 'fulfilled' && n.value) nodes.value = Array.isArray(n.value) ? n.value : (n.value.nodes || [])
   if (d.status === 'fulfilled' && d.value) deliveries.value = Array.isArray(d.value) ? d.value : (d.value.deliveries || [])
+  if (f.status === 'fulfilled' && f.value && !flowBusy.value) flow.value = f.value
 }
 async function loadPackets() {
   try {
@@ -636,7 +732,12 @@ async function sendComposed() {
       moveTo(devPos.value.x, devPos.value.y, 1400)
       finish(t, false, 1700)
     } else {
-      const r = await api.post('/messages/send', { text, gateway: 'cellular', precedence: 'Routine' })
+      // Follow the chosen path: radio, SMS to the Hub, or SMS to the peer.
+      const path = flow.value.path
+      const req = path === 'aprs' ? { text, gateway: 'aprs', precedence: 'Routine' }
+        : path === 'hub_sms' && flow.value.hub_number ? { text, gateway: 'cellular', to: flow.value.hub_number, precedence: 'Routine' }
+        : { text, gateway: 'cellular', precedence: 'Routine' }
+      const r = await api.post('/messages/send', req)
       // The ledger's delivery events move the dot from here on (SMS lane);
       // they find this trip by reference even if other frames arrive first.
       const t = newTrip('out', { text, from: me.value.callsign, bytes: text.length })
@@ -789,30 +890,30 @@ onUnmounted(() => {
             <g class="lanes">
               <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 60 : 44) : P.kit.x + 100" :y1="P.dev.y"
                     :x2="nearIsLeft ? P.kit.x - 100 : P.dev.x - (nearDev === 'tdeck' ? 60 : 44)" :y2="P.dev.y" class="lane lora near" />
-              <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
-                <rect :x="Math.min(P.airNear.x, P.edge) - 10" :y="P.dev.y - 120" :width="Math.abs(P.edge - P.airNear.x) + 20" height="260" class="hit" />
-                <line :x1="P.airNear.x" :y1="P.dev.y" :x2="P.edge" :y2="P.dev.y" class="lane air-line" />
-                <g v-for="i in 3" :key="'wn'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
-                  <path :d="nearIsLeft
-                    ? `M ${P.airNear.x + 6 + i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.airNear.x + 6 + i*16} ${P.dev.y + 14 + i*10}`
-                    : `M ${P.airNear.x - 6 - i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.airNear.x - 6 - i*16} ${P.dev.y + 14 + i*10}`" />
+              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
+                <rect :x="Math.min(laneStartX, P.edge)" :y="laneY(ln.lane) - 40" :width="Math.abs(P.edge - laneStartX)" height="80" class="hit" />
+                <line :x1="laneStartX" :y1="laneY(ln.lane)" :x2="P.edge" :y2="laneY(ln.lane)" class="lane path-line" />
+                <circle :cx="laneStartX" :cy="laneY(ln.lane)" r="7" class="path-start" />
+                <template v-if="ln.lane === 'aprs'">
+                  <g v-for="i in 3" :key="'wn'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
+                    <path :d="nearIsLeft
+                      ? `M ${P.airNear.x + 6 + i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.airNear.x + 6 + i*16} ${laneY('aprs') + 14 + i*10}`
+                      : `M ${P.airNear.x - 6 - i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.airNear.x - 6 - i*16} ${laneY('aprs') + 14 + i*10}`" />
+                  </g>
+                  <g v-for="i in 3" :key="'we'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5 + 0.25) + 's' }">
+                    <path :d="nearIsLeft
+                      ? `M ${P.edge - 40 - i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.edge - 40 - i*16} ${laneY('aprs') + 14 + i*10}`
+                      : `M ${P.edge + 40 + i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.edge + 40 + i*16} ${laneY('aprs') + 14 + i*10}`" />
+                  </g>
+                </template>
+                <g v-if="ln.lane === 'hub'" class="cloud" :transform="`translate(${cloudX},${laneY('hub')})`">
+                  <path d="M -44 12 a 16 16 0 0 1 6 -30 a 22 22 0 0 1 42 -8 a 18 18 0 0 1 36 12 a 15 15 0 0 1 -6 26 z" class="cloud-body" />
+                  <text y="5" text-anchor="middle" class="cloud-label">HUB</text>
                 </g>
-                <g v-for="i in 3" :key="'we'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5 + 0.25) + 's' }">
-                  <path :d="nearIsLeft
-                    ? `M ${P.edge - 40 - i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.edge - 40 - i*16} ${P.dev.y + 14 + i*10}`
-                    : `M ${P.edge + 40 + i*16} ${P.dev.y - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.edge + 40 + i*16} ${P.dev.y + 14 + i*10}`" />
-                </g>
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y - 54" class="air-sub" text-anchor="middle">{{ nearDev === 'tdeck' ? `to ${peer.name}, on the ${nearIsLeft ? 'right' : 'left'}` : `from ${peer.name}, on the ${nearIsLeft ? 'right' : 'left'}` }}</text>
-                <text v-if="aprsSilent" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 60" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
-                <text v-else-if="aprsQuiet" :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 60" class="air-sub" text-anchor="middle">nothing heard on the radio for a few minutes</text>
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.dev.y + 32" class="air-tap" text-anchor="middle">tap any drawing for details</text>
+                <text :x="laneTextX" :y="laneY(ln.lane) - 15" class="path-label" text-anchor="middle">{{ ln.label }}</text>
+                <text :x="laneTextX" :y="laneY(ln.lane) + 25" class="path-sub" text-anchor="middle">{{ flow.path === ln.key ? ln.chosen : ln.sub }}</text>
               </g>
-              <g class="sms">
-                <line :x1="P.airNear.x" :y1="P.smsY" :x2="P.edge" :y2="P.smsY" class="lane sms-line" />
-                <text :x="(P.airNear.x + P.edge) / 2" :y="P.smsY + 26" class="sms-label" text-anchor="middle">SMS over LTE when the radio is silent</text>
-              </g>
+              <text :x="(P.airNear.x + P.edge) / 2" :y="laneY('sms') + 47" class="air-tap" text-anchor="middle">tap a path to choose it, again for details</text>
             </g>
 
             <!-- near device -->
@@ -848,22 +949,23 @@ onUnmounted(() => {
             <g class="lanes">
               <line :x1="G.devL.x + (leftKit.device === 'tdeck' ? 50 : 36)" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
               <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - (rightKit.device === 'tdeck' ? 50 : 36)" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-              <g class="air tap" :class="{ silent: aprsSilent }" @click="openCard('air')">
-                <rect :x="G.airL.x" :y="G.airL.y - 110" :width="G.airR.x - G.airL.x" height="220" class="hit" />
-                <line :x1="G.airL.x" :y1="G.airL.y" :x2="G.airR.x" :y2="G.airR.y" class="lane air-line" />
-                <g v-for="i in 3" :key="'wl'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
-                  <path :d="`M ${G.airL.x + 6 + i*14} ${G.airL.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 1 ${G.airL.x + 6 + i*14} ${G.airL.y + 12 + i*8}`" />
+              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
+                <rect :x="G.airL.x" :y="laneY(ln.lane) - 36" :width="G.airR.x - G.airL.x" height="72" class="hit" />
+                <line :x1="G.airL.x" :y1="laneY(ln.lane)" :x2="G.airR.x" :y2="laneY(ln.lane)" class="lane path-line" />
+                <template v-if="ln.lane === 'aprs'">
+                  <g v-for="i in 3" :key="'wl'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
+                    <path :d="`M ${G.airL.x + 6 + i*14} ${laneY('aprs') - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 1 ${G.airL.x + 6 + i*14} ${laneY('aprs') + 12 + i*8}`" />
+                  </g>
+                  <g v-for="i in 3" :key="'wr'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
+                    <path :d="`M ${G.airR.x - 6 - i*14} ${laneY('aprs') - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${laneY('aprs') + 12 + i*8}`" />
+                  </g>
+                </template>
+                <g v-if="ln.lane === 'hub'" class="cloud" :transform="`translate(${cloudX},${laneY('hub')})`">
+                  <path d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" class="cloud-body" />
+                  <text y="4" text-anchor="middle" class="cloud-label small">HUB</text>
                 </g>
-                <g v-for="i in 3" :key="'wr'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5) + 's' }">
-                  <path :d="`M ${G.airR.x - 6 - i*14} ${G.airR.y - 12 - i*8} A ${14 + i*8} ${14 + i*8} 0 0 0 ${G.airR.x - 6 - i*14} ${G.airR.y + 12 + i*8}`" />
-                </g>
-                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 96" class="air-label" text-anchor="middle">APRS on 144.800 MHz</text>
-                <text :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y - 74" class="air-sub" text-anchor="middle">amateur radio packets, encrypted</text>
-                <text v-if="aprsSilent" :x="(G.airL.x + G.airR.x)/2" :y="G.airL.y + 44" class="air-warn" text-anchor="middle">this kit's receiver is silent, SMS carries replies</text>
-              </g>
-              <g class="sms">
-                <line :x1="G.airL.x" :y1="G.smsY" :x2="G.airR.x" :y2="G.smsY" class="lane sms-line" />
-                <text :x="(G.airL.x + G.airR.x)/2" :y="G.smsY + 22" class="sms-label" text-anchor="middle">SMS over LTE when the radio is silent</text>
+                <text :x="(G.airL.x + G.airR.x)/2 - 20" :y="laneY(ln.lane) - 14" class="path-label" text-anchor="middle">{{ ln.label }}</text>
+                <text v-if="flow.path === ln.key" :x="(G.airL.x + G.airR.x)/2 - 20" :y="laneY(ln.lane) + 22" class="path-sub" text-anchor="middle">chosen</text>
               </g>
             </g>
 
@@ -1118,6 +1220,34 @@ onUnmounted(() => {
 .visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 22px; fill: #D6D6DC; }
 .replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
+/* The three booth paths (MESHSAT-962): the chosen lane is solid and lit,
+   the other two are dashed and dim; every label follows its lane. */
+.path .path-line { stroke: #F7F7F4; stroke-opacity: 0.6; stroke-width: 2; transition: stroke-opacity 0.3s, stroke-width 0.3s; }
+.path.sms .path-line { stroke: #E0B458; }
+.path.hub .path-line { stroke: #8FB8DE; }
+.path.selected .path-line { stroke-opacity: 1; stroke-width: 3.5; }
+.path.dim .path-line { stroke-dasharray: 4 12; stroke-opacity: 0.3; }
+.path .path-start { fill: #F7F7F4; opacity: 0; transition: opacity 0.3s; }
+.path.sms .path-start { fill: #E0B458; }
+.path.hub .path-start { fill: #8FB8DE; }
+.path.selected .path-start { opacity: 1; }
+.path.silent .path-line { stroke-dasharray: 3 9; stroke-opacity: 0.3; }
+.path.silent .wave path { animation: none; opacity: 0.12; }
+.path .path-label { font-family: 'IBM Plex Mono', monospace; font-size: 22px; fill: #F7F7F4; letter-spacing: 0.02em; transition: fill 0.3s; }
+.path .path-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #B4B4BD; transition: fill 0.3s; }
+.path.selected .path-sub { fill: #F7F7F4; }
+.path.dim .path-label { fill: #7A7A86; }
+.path.dim .path-sub { fill: #5E5E6A; }
+.path.silent .path-sub { fill: #FCD34D; }
+.path .cloud-body { fill: rgba(143, 184, 222, 0.08); stroke: #8FB8DE; stroke-width: 1.6; transition: stroke-opacity 0.3s; }
+.path.dim .cloud-body { stroke-opacity: 0.35; }
+.path .cloud-label { font-family: 'IBM Plex Mono', monospace; font-size: 18px; fill: #8FB8DE; letter-spacing: 0.08em; }
+.path .cloud-label.small { font-size: 14px; }
+.path.dim .cloud-label { fill: #5E6E7E; }
+svg.full .path .path-label { font-size: 18px; }
+svg.full .path .path-sub { font-size: 15px; }
+svg.full .path .cloud-label.small { font-size: 12px; }
+.msg.hub .core { fill: #8FB8DE; }
 .sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #AE9C7A; }
 .station :deep(.device .body) { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
 .station :deep(.device.photo .body) { fill: none; stroke: none; }

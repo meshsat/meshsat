@@ -788,6 +788,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/demo/run", s.handleDemoRun)
 		r.Get("/demo/{demo_id}", s.handleDemoStatus)
 
+		// Booth flow selector: which path the next message leaves by (MESHSAT-962)
+		r.Get("/ttc/flow", s.handleGetTTCFlow)
+		r.Put("/ttc/flow", s.handlePutTTCFlow)
+		r.Post("/ttc/flow/setup", s.handleTTCFlowSetup)
+
 		// Resource transfer (Reticulum chunked file delivery)
 		r.Get("/resources", s.handleGetResources)
 		r.Get("/resources/stats", s.handleGetResourceStats)

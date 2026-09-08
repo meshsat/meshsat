@@ -518,3 +518,51 @@ Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_
 | Logistics | hotel and taxis arranged, prints and stickers 9 to 11 Sep | booth slot and Hub allowlist from Thomas, transport and setup plan |
 
 Twenty task "TTC booth readiness follow-ups" carries the same list with a 15 Sep due date.
+
+## 18. Booth flow selector: three paths on the panel, one lit (MESHSAT-962, 8 Sep 2026)
+
+Owner rulings 8 Sep: the Hub is never reached over the internet from the kits at the booth; it talks to
+the bridges over satellite (no sky indoors) with SMS as the fallback. Visitors pick the path on the
+panel itself: the three lanes are drawn together, the chosen one is lit, the other two dimmed, and a
+tap on a lane selects it for THIS kit's outbound messages. A second tap on the lit lane opens its card.
+
+| Path | What happens | Rule on the kit |
+|---|---|---|
+| APRS radio | mesh text goes out on aprs_0 through the `peer_link` group (SMS to the peer when its receiver is deaf), the 7 Sep relay | `ttc:aprs` = the old rule 1, renamed |
+| SMS via the Hub | one SMS from this kit's SIM to the Hub's Twilio number; the Hub's route texts the other kit's SIM; that kit's cellular->mesh rule delivers | `ttc:hub_sms` (forward_options.sms_contacts = the Hub contact) |
+| SMS kit to kit | one SMS straight to the peer kit's SIM | `ttc:b2b_sms` (sms_contacts = the peer contact) |
+
+Selection is per kit and egress only. Inbound stays open on both kits for all three sources
+(aprs_0->mesh_0 and cellular_0->mesh_0 enabled, `allowed_senders` on cellular_0 = the peer SIM AND the
+Hub number). The reply follows whatever the OTHER panel has selected. The far screen tells the SMS
+lanes apart by the sender: the peer's SIM is "SMS kit to kit", the Hub's number is "SMS via the Hub".
+Messages animate on the lane they actually took, whatever is selected.
+
+API (all on the kit, port 6050):
+
+```
+POST /api/ttc/flow/setup  {"peer_number":"+316...","hub_number":"+3197010258258"}   once per kit
+GET  /api/ttc/flow                                                               path, rules, ready, issues
+PUT  /api/ttc/flow        {"path":"aprs"|"hub_sms"|"b2b_sms"}                    what the lane tap does
+```
+
+Setup is idempotent: it stores the numbers in `system_config` (`ttc_peer_number`, `ttc_hub_number`;
+the peer falls back to cellular_0's first destination number, the Hub to `MESHSAT_HUB_SMS_NUMBER`),
+creates the two SMS contacts, adopts rule 1 as `ttc:aprs`, creates the two SMS rules disabled, enables
+the two inbound rules, and extends `allowed_senders` (that last step restarts the cellular gateway,
+the modem answers again after about 20 s, so run setup before the doors open, never during a demo).
+`PUT` flips exactly one `ttc:*` rule on and reloads the evaluator; the choice survives a restart.
+The panel composer's "Remote mesh" follows the chosen path too (`gateway` aprs or cellular, and `to`
+= the Hub number for the Hub path; `/api/messages/send` honours `to` for gateway sends since this change).
+
+Bench order when the kits are back:
+1. Both kits: `POST /api/ttc/flow/setup` with the peer's and the Hub's numbers; read `GET /api/ttc/flow`
+   until `ready` is true and `issues` is empty.
+2. Hub (hub.meshsat.net, current DMZ stack; routes migrate with the data): two routes, SMS from
+   tesseract's SIM -> SMS to parallax's SIM, and the reverse. Until MESHSAT-910 lands the routing
+   engine runs on both DMZ nodes and a matched route can dispatch twice (MESHSAT-711); count the SMS on
+   the far kit and Twilio's log before the show, the bridge's 5-min text dedup hides the second copy
+   on the mesh but Twilio bills it.
+3. Per path, 5 texts each way from the handhelds, `scratchpad/relay-test.sh` style, and the latency
+   per path noted here. Each text must arrive exactly once.
+4. Both SIM balances and the Twilio balance sized for two days at up to two SMS per text.
