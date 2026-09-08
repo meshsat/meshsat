@@ -1055,6 +1055,18 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     }
   }
 
+  // Raw management key for pairing a counterpart that takes a key rather
+  // than a bundle URL (the MeshSat Hub). [MESHSAT-964]
+  async function exportOOBPeerKey(id) {
+    error.value = null
+    try {
+      return await api.get(`/oob/peers/${id}/key`)
+    } catch (e) {
+      error.value = e.message
+      throw e
+    }
+  }
+
   async function sendOOB(payload) {
     error.value = null
     try {
@@ -1937,7 +1949,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
     oobPeers, oobLog, oobConfig, oobTargets, oobAgent,
     fetchOOBConfig, setOOBConfig, fetchOOBPeers, createOOBPeer, updateOOBPeer, deleteOOBPeer,
-    issueOOBBundle, sendOOB, fetchOOBLog, fetchOOBTargets, fetchOOBAgent,
+    issueOOBBundle, exportOOBPeerKey, sendOOB, fetchOOBLog, fetchOOBTargets, fetchOOBAgent,
     contacts, activeConversation, fetchContacts, createContact, updateContact, deleteContact,
     addContactAddress, updateContactAddress, deleteContactAddress, fetchConversation,
     deliveries, deliveryStats, fetchDeliveries, fetchDeliveryStats, cancelDelivery, retryDelivery, fetchMessageDeliveries,

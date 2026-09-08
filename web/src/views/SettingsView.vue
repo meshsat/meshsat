@@ -773,6 +773,7 @@ const oobPeerForm = ref(emptyOOBPeerForm())
 const oobConfigDraft = ref({ enabled: false, reply_budget: 12, host_socket: '' })
 const oobSaving = ref(false)
 const oobBundle = ref(null)
+const oobKey = ref(null)
 const oobSend = ref({
   peer_id: '', via: 'cellular_0', cmd: 'PING', noreply: false,
   args: { delay: 10, target: 'mesh', level: 1, state: 'off', unit: 'docker', lines: 10 }
@@ -872,6 +873,14 @@ async function toggleOOBPeer(p) {
 async function deleteOOBPeer(p) {
   if (!confirm(`Delete peer ${p.alias}? Its management key is revoked.`)) return
   try { await store.deleteOOBPeer(p.peer_id) } catch { /* store error */ }
+}
+
+async function showOOBKey(p) {
+  if (!confirm(`Show the management key for ${p.alias} in clear text? Anyone who reads it can command this kit over any bearer. The export is written to the audit log.`)) return
+  try {
+    const res = await store.exportOOBPeerKey(p.peer_id)
+    oobKey.value = { peer_id: p.peer_id, alias: res.alias, key_hex: res.key_hex }
+  } catch { /* store error */ }
 }
 
 async function showOOBBundle(p) {
@@ -3050,11 +3059,21 @@ onUnmounted(() => {
             <span v-if="p.last_seen_at" class="text-[10px] text-gray-600">seen {{ p.last_seen_at }}</span>
           </div>
           <div class="flex items-center gap-1">
+            <button @click="showOOBKey(p)" :disabled="p.key_source !== 'bundle'" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600 disabled:opacity-40" title="Raw key for a counterpart that pairs with a key, such as the MeshSat Hub">Key</button>
             <button @click="showOOBBundle(p)" :disabled="p.key_source !== 'bundle'" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600 disabled:opacity-40">Bundle QR</button>
             <button @click="toggleOOBPeer(p)" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">{{ p.enabled ? 'Disable' : 'Enable' }}</button>
             <button @click="editOOBPeer(p)" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Edit</button>
             <button @click="deleteOOBPeer(p)" class="px-2 py-1 rounded bg-gray-700 text-red-400 text-[10px] hover:bg-gray-600">Del</button>
           </div>
+        </div>
+
+        <div v-if="oobKey" class="bg-gray-900 rounded p-3 border border-amber-700 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-300">Management key for <span class="font-mono">{{ oobKey.alias }}</span>: paste into the Hub as key_hex when pairing this bridge</span>
+            <button @click="oobKey = null" class="px-2 py-1 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600">Close</button>
+          </div>
+          <div class="text-[11px] text-amber-200 font-mono break-all select-all">{{ oobKey.key_hex }}</div>
+          <div class="text-[10px] text-gray-500">Anyone holding this key can command this kit over any bearer. The export is in the audit log.</div>
         </div>
 
         <div v-if="oobBundle" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">

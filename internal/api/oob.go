@@ -270,6 +270,37 @@ func (s *Server) handleOOBPeerBundle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
+// handleOOBPeerKey exports the peer's management key as hex.
+// @Summary Export OOB peer key
+// @Description Returns the raw management key of a peer as hex, for pairing a counterpart that takes a key rather than a bundle URL (the MeshSat Hub's POST /api/bridges/{id}/oob). Derived (ecdh) keys are never exported. The export is written to the audit log. [MESHSAT-964]
+// @Tags oob
+// @Produce json
+// @Param id path int true "Peer id"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/oob/peers/{id}/key [get]
+func (s *Server) handleOOBPeerKey(w http.ResponseWriter, r *http.Request) {
+	if !s.oobReady(w) {
+		return
+	}
+	id, err := oobPeerID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	alias, keyHex, err := s.oob.ExportKey(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.signing != nil {
+		detail, _ := json.Marshal(map[string]any{"peer_id": id, "alias": alias})
+		s.signing.AuditEvent("oob_key_exported", nil, nil, nil, nil, string(detail))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"alias": alias, "key_hex": keyHex})
+}
+
 // handleOOBPeerBundleQR renders the peer's key bundle as a QR code.
 // @Summary OOB key bundle QR
 // @Tags oob

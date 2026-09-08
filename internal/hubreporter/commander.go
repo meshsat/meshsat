@@ -51,6 +51,9 @@ type CommandHandler struct {
 	keyStore   KeyStoreImporter // [MESHSAT-447]
 	dirApplier DirectoryApplier // [MESHSAT-540]
 	trustStore TrustAnchorStore // [MESHSAT-539/540]
+	// mgmtPeer registers the OOB peer for a Hub-provisioned management
+	// key (key_rotate with channel_type "mgmt"). [MESHSAT-964]
+	mgmtPeer func(alias string, rawKey []byte) (uint16, error)
 }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
@@ -168,6 +171,14 @@ type KeyStoreImporter interface {
 // SetKeyStore sets the key store for key_rotate commands. [MESHSAT-447]
 func (ch *CommandHandler) SetKeyStore(ks KeyStoreImporter) {
 	ch.keyStore = ks
+}
+
+// SetMgmtPeerRegistrar wires the OOB service so a key_rotate carrying
+// channel_type "mgmt" also registers the peer that key belongs to. Without
+// it the key is stored and unusable: an inbound frame is rejected as
+// unknown_peer and no reply can be sealed. [MESHSAT-964]
+func (ch *CommandHandler) SetMgmtPeerRegistrar(fn func(alias string, rawKey []byte) (uint16, error)) {
+	ch.mgmtPeer = fn
 }
 
 // SetCredentialStore sets the credential storage for credential push/revoke handlers.
@@ -468,6 +479,22 @@ func (ch *CommandHandler) handleKeyRotate(cmd Command) (json.RawMessage, error) 
 		return nil, fmt.Errorf("store key: %w", err)
 	}
 
+	// A management key needs a peer to belong to: the address is the peer's
+	// alias ("hub"), the key store holds it as mgmt:<alias>, and the OOB
+	// service seals and opens frames against that pair. [MESHSAT-964]
+	var peerID uint16
+	if payload.ChannelType == "mgmt" {
+		if ch.mgmtPeer == nil {
+			return nil, fmt.Errorf("key_rotate: mgmt keys need the OOB service, which is not enabled on this bridge")
+		}
+		peerID, err = ch.mgmtPeer(payload.Address, rawKey)
+		if err != nil {
+			return nil, fmt.Errorf("register mgmt peer %q: %w", payload.Address, err)
+		}
+		log.Info().Str("alias", payload.Address).Uint16("peer_id", peerID).
+			Msg("commander: management peer registered from Hub key_rotate")
+	}
+
 	log.Info().
 		Str("channel", payload.ChannelType).
 		Str("address", payload.Address).
@@ -475,9 +502,13 @@ func (ch *CommandHandler) handleKeyRotate(cmd Command) (json.RawMessage, error) 
 		Int("local_version", localVersion).
 		Msg("commander: channel key rotated from Hub")
 
-	result, _ := json.Marshal(map[string]interface{}{
+	res := map[string]interface{}{
 		"applied":       true,
 		"local_version": localVersion,
-	})
+	}
+	if payload.ChannelType == "mgmt" {
+		res["peer_id"] = peerID
+	}
+	result, _ := json.Marshal(res)
 	return result, nil
 }
