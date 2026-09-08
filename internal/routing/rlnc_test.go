@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"testing"
 )
 
@@ -379,20 +380,36 @@ func TestRLNCDecodeGeneration_ExactK(t *testing.T) {
 	}
 
 	hash := sha256.Sum256([]byte("test"))
-	// Use redundancy 1.0 to get exactly K packets.
-	packets := EncodeGeneration(0, hash, segments, 1.0)
-	if len(packets) != k {
-		t.Fatalf("expected %d packets, got %d", k, len(packets))
-	}
 
-	gen := NewRLNCGeneration(0, k, segSize)
-	for _, pkt := range packets {
-		gen.AddPacket(pkt)
-	}
+	// Exactly K packets carry K random GF(256) coefficient vectors, which
+	// are linearly independent with probability about 1 - 1/256. A rank
+	// deficient draw is a property of random coding, not a decoder bug, so
+	// take another generation rather than fail on the roughly 1 in 256 one:
+	// eight deficient draws in a row cannot happen. [MESHSAT-964]
+	var decoded [][]byte
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		// Use redundancy 1.0 to get exactly K packets.
+		packets := EncodeGeneration(0, hash, segments, 1.0)
+		if len(packets) != k {
+			t.Fatalf("expected %d packets, got %d", k, len(packets))
+		}
 
-	decoded, err := gen.TryDecode()
-	if err != nil {
-		t.Fatalf("decode error: %v", err)
+		gen := NewRLNCGeneration(0, k, segSize)
+		for _, pkt := range packets {
+			gen.AddPacket(pkt)
+		}
+
+		decoded, lastErr = gen.TryDecode()
+		if lastErr == nil {
+			break
+		}
+		if !errors.Is(lastErr, ErrRLNCNotDecodable) {
+			t.Fatalf("decode error: %v", lastErr)
+		}
+	}
+	if lastErr != nil {
+		t.Fatalf("eight generations in a row were rank deficient, which points at the coefficient draw: %v", lastErr)
 	}
 	if len(decoded) != k {
 		t.Fatalf("got %d decoded segments, want %d", len(decoded), k)
@@ -514,7 +531,11 @@ func TestRLNCDecodeGeneration_AlreadyDecoded(t *testing.T) {
 	}
 
 	hash := sha256.Sum256([]byte("idempotent"))
-	packets := EncodeGeneration(0, hash, segments, 1.0)
+	// Idempotency is what this test is about, so give the decode enough
+	// packets that a rank deficient draw cannot decide the outcome: with
+	// exactly K the coefficients are dependent about once in 256 runs.
+	// [MESHSAT-964]
+	packets := EncodeGeneration(0, hash, segments, 2.0)
 
 	gen := NewRLNCGeneration(0, k, segSize)
 	for _, pkt := range packets {
