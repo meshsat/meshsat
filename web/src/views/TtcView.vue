@@ -175,7 +175,7 @@ const laneStartX = computed(() => kitPos.value.x + (nearIsLeft.value ? 124 : -12
 const rowDir = computed(() => (nearIsLeft.value ? 1 : -1))
 const rowIconX = computed(() => laneStartX.value + rowDir.value * 66)
 const rowTextX = computed(() => rowIconX.value + rowDir.value * 34)
-const rowStateX = computed(() => P.value.edge - rowDir.value * 16)
+const rowStateX = computed(() => P.value.edge - rowDir.value * 26)
 const rowAnchor = computed(() => (nearIsLeft.value ? 'start' : 'end'))
 const rowStateAnchor = computed(() => (nearIsLeft.value ? 'end' : 'start'))
 const rowCaptionX = computed(() => (laneStartX.value + P.value.edge) / 2)
@@ -199,17 +199,17 @@ const lanes = computed(() => ([
   { key: 'imt', lane: 'sat', card: 'sat', name: 'Satellite', fact: 'Iridium',
     state: satNoModem.value ? 'no modem' : '',
     detail: satNoModem.value
-      ? 'Chosen, but the modem is not answering. Texts wait for it.'
-      : 'Up to the satellite, down to the Hub, on to the other kit.' },
+      ? 'The modem is not answering yet.'
+      : 'Up to space, then down to the other kit.' },
   { key: 'aprs', lane: 'aprs', card: 'air', name: 'APRS radio', fact: '144.800 MHz',
-    state: aprsSilent.value ? 'receiver silent' : '',
+    state: aprsSilent.value ? 'silent' : '',
     detail: aprsSilent.value
-      ? 'Chosen, but this kit hears nothing. SMS carries the replies.'
-      : 'Radio packets straight to the other kit. No network of any kind.' },
+      ? 'This kit hears nothing right now.'
+      : 'Radio, straight to the other kit.' },
   { key: 'hub_sms', lane: 'hub', card: 'hub', name: 'SMS via the Hub', fact: '',
-    state: '', detail: 'One text to the Hub, which passes it on to the other kit.' },
+    state: '', detail: 'The Hub passes it on by SMS.' },
   { key: 'b2b_sms', lane: 'sms', card: 'sms', name: 'SMS kit to kit', fact: '',
-    state: '', detail: 'One text on the phone network, straight to the other kit\'s SIM.' },
+    state: '', detail: 'One text to the other kit\'s SIM.' },
 ]))
 const laneCard = (lane) => (lanes.value.find(l => l.lane === lane) || {}).card || 'air'
 async function selectPath(key) {
@@ -527,7 +527,7 @@ const lastHeardLine = computed(() => {
   const p = rx.find(x => x.portnum > 0)
   const cut = now.value - 300000
   const foreign = rx.filter(x => !(x.portnum > 0) && new Date(x.time).getTime() >= cut).length
-  const tail = foreign ? `, ${foreign} packets from other meshes in 5 min, not ours` : ''
+  const tail = foreign ? `, ${foreign} packet${foreign === 1 ? '' : 's'} from other meshes in 5 min, not ours` : ''
   if (!p) return `LoRa 868 MHz, nothing readable heard yet${tail}`
   const age = Math.max(0, Math.round((now.value - new Date(p.time).getTime()) / 1000))
   const who = nodeName(p.from) || p.from
@@ -1003,11 +1003,12 @@ onUnmounted(() => {
                     <line class="beam" x1="3" y1="7" x2="7" y2="16" />
                   </template>
                   <template v-else-if="ln.lane === 'hub'">
-                    <path class="fillable" transform="translate(-6.5,0) scale(0.62)"
+                    <path class="fillable" transform="translate(-6.5,3.4) scale(0.62)"
                           d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" />
                   </template>
                   <template v-else>
-                    <path class="fillable" d="M -17 -10 h 30 a 4 4 0 0 1 4 4 v 11 a 4 4 0 0 1 -4 4 h -16 l -9 7 v -7 h -5 a 4 4 0 0 1 -4 -4 v -11 a 4 4 0 0 1 4 -4 z" />
+                    <path class="fillable" transform="translate(0,-3)"
+                          d="M -17 -10 h 30 a 4 4 0 0 1 4 4 v 11 a 4 4 0 0 1 -4 4 h -16 l -9 7 v -7 h -5 a 4 4 0 0 1 -4 -4 v -11 a 4 4 0 0 1 4 -4 z" />
                   </template>
                 </g>
                 <text :x="rowTextX" :y="laneY(ln.lane) - 14" :text-anchor="rowAnchor" class="row-name">{{ ln.name }}<tspan
@@ -1070,11 +1071,11 @@ onUnmounted(() => {
                     <path d="M -3 -6 q 3 -8 6 0" />
                   </template>
                   <template v-else-if="ln.lane === 'hub'">
-                    <path class="fillable" transform="translate(-6.5,0) scale(0.62)"
+                    <path class="fillable" transform="translate(-6.5,3.4) scale(0.62)"
                           d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" />
                   </template>
                   <template v-else>
-                    <path class="fillable" d="M -17 -10 h 30 a 4 4 0 0 1 4 4 v 11 a 4 4 0 0 1 -4 4 h -16 l -9 7 v -7 h -5 a 4 4 0 0 1 -4 -4 v -11 a 4 4 0 0 1 4 -4 z" />
+                    <path class="fillable" transform="translate(0,-3)" d="M -17 -10 h 30 a 4 4 0 0 1 4 4 v 11 a 4 4 0 0 1 -4 4 h -16 l -9 7 v -7 h -5 a 4 4 0 0 1 -4 -4 v -11 a 4 4 0 0 1 4 -4 z" />
                   </template>
                 </g>
                 <text :x="G.airL.x + 56" :y="laneY(ln.lane) - 12" text-anchor="start" class="row-name">{{ ln.name }}</text>
