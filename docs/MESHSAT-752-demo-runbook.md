@@ -530,7 +530,7 @@ tap on a lane selects it for THIS kit's outbound messages. A second tap on the l
 
 | Path | What happens | Rule on the kit |
 |---|---|---|
-| APRS radio | mesh text goes out on aprs_0 through the `peer_link` group (SMS to the peer when its receiver is deaf), the 7 Sep relay | `ttc:aprs` = the old rule 1, renamed |
+| APRS radio | mesh text goes out on aprs_0 through the `peer_link` group (SMS to the peer when its receiver is deaf), the 7 Sep relay | `ttc:aprs` = the old rule 1, renamed (all three are INGRESS rules on mesh_0, the relay convention; the first deploy created egress rules by mistake, which the relay path never evaluates, deleted from both kits 8 Sep 10:05) |
 | SMS via the Hub | one SMS from this kit's SIM to the Hub's Twilio number; the Hub's route texts the other kit's SIM; that kit's cellular->mesh rule delivers | `ttc:hub_sms` (forward_options.sms_contacts = the Hub contact) |
 | SMS kit to kit | one SMS straight to the peer kit's SIM | `ttc:b2b_sms` (sms_contacts = the peer contact) |
 
@@ -550,7 +550,7 @@ PUT  /api/ttc/flow        {"path":"aprs"|"hub_sms"|"b2b_sms"}                   
 
 Setup is idempotent: it stores the numbers in `system_config` (`ttc_peer_number`, `ttc_hub_number`;
 the peer falls back to cellular_0's first destination number, the Hub to `MESHSAT_HUB_SMS_NUMBER`),
-creates the two SMS contacts, adopts rule 1 as `ttc:aprs`, creates the two SMS rules disabled, enables
+creates the two SMS contacts, adopts rule 1 as `ttc:aprs`, creates the two SMS relay rules disabled (ingress on mesh_0), enables
 the two inbound rules, and extends `allowed_senders` (that last step restarts the cellular gateway,
 the modem answers again after about 20 s, so run setup before the doors open, never during a demo).
 `PUT` flips exactly one `ttc:*` rule on and reloads the evaluator; the choice survives a restart.
