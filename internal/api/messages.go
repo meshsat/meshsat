@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"meshsat/internal/database"
+	"meshsat/internal/engine"
 	"meshsat/internal/transport"
 	"meshsat/internal/types"
 )
@@ -173,7 +174,10 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "unknown gateway: "+req.Gateway)
 			return
 		}
-		delID, msgRef, err := s.dispatcher.QueueDirectSend(ifaceID, req.Text, string(precedence))
+		// `to` names a gateway-side address (phone number for cellular,
+		// CALL-SSID for APRS); empty keeps the interface default. The TTC
+		// composer uses it to text the Hub instead of the peer kit. [MESHSAT-962]
+		delID, msgRef, err := s.dispatcher.QueueDirectSendTo(ifaceID, req.Text, engine.DirectSendOptions{Precedence: string(precedence), Destination: strings.TrimSpace(req.To)})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "queue failed: "+err.Error())
 			return
