@@ -310,6 +310,21 @@ can override them afterwards.
 | `MESHSAT_OOB_REPLY_BUDGET` | `12` | OOB replies per peer per hour |
 | `MESHSAT_OOB_HOST_SOCKET` | `/run/meshsat-oob/agent.sock` | OOB host agent socket (see `scripts/install-oob-agent.sh`) |
 
+**Hub uplink when the broker is unreachable**
+
+When the MQTT link to the Hub goes down, the bridge can keep reporting over a satellite or SMS
+bearer instead, sending compact position, health and SOS frames rather than the full telemetry
+stream.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MESHSAT_HUB_SAT_FALLBACK` | `true` | Enable the fallback uplink |
+| `MESHSAT_HUB_SMS_NUMBER` | *(empty)* | Hub inbound number for the SMS leg, empty disables it |
+| `MESHSAT_HUB_FALLBACK_AFTER_MIN` | `5` | Minutes of broker loss before the first frame |
+| `MESHSAT_HUB_FALLBACK_POSITION_MIN` | `15` | Minutes between position frames while down |
+| `MESHSAT_HUB_FALLBACK_HEALTH_MIN` | `60` | Minutes between health frames while down |
+| `MESHSAT_HUB_FALLBACK_BEARER` | `auto` | `auto`, `satellite` or `sms`; `auto` prefers satellite only when that gateway is connected and recently active |
+
 **Compression sidecars**
 
 | Variable | Default | Description |
