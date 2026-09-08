@@ -504,6 +504,8 @@ Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_
 
 ## 17. TTC readiness board (updated 8 Sep 2026, end of the booth-selector session; about 75 %)
 
+**Amended late on 8 Sep (section 21).** Still about 75 %: everything that moved that evening was software, and the gap to ready is unchanged. Both kits are **powered off** and need a physical X1202 long-press before anything remote works. Two risks were added to the board rather than removed from it: a wedged cellular AT channel can kill both booth SMS lanes for as long as nobody restarts the bridge, while the panel still shows cellular connected (MESHSAT-986); and APRS can still go deaf for up to an hour on the K5 chain (fourth instance that evening, 62 minutes). The PicoAPRS swap is the single highest-value item of the hardware week.
+
 Moved on 8 September: the booth flow selector is live on both kits with four paths offered and the kit-to-kit SMS path proven, the booth screen was rebalanced so the island is the hero, the fourth path over Iridium IMT landed, and the Hub can now pair as a management peer from the bridge side. Nothing moved on the hardware chain, so the PicoAPRS swap, the 12 V refit and both soaks are still the gap between here and ready.
 
 | Area | State | Closes when |
@@ -663,3 +665,33 @@ Test order under sky, after the Hub route exists: both panels on the Satellite l
 T-Deck; watch queued, climb, `sent` with mo_status 0, the Cloudloop MO, the Hub MT to tesseract's IMEI,
 `sat rx` on tesseract, the text on the T-Echo; time both hops; the reverse; two texts within a minute; the
 antenna covered; five each way arriving exactly once. Record on MESHSAT-962.
+
+## 21. Evening of 8 Sep 2026: booth screen redesign, kiosk drift, and two faults found on the kits
+
+Written at the end of the session that powered both kits down for the night. Both kits ran build `6ad829d` when they were halted.
+
+### 21.1 The kits are OFF and need a hand to come back
+
+Both were stopped at 20:00 UTC: docker first (`systemctl stop docker.service docker.socket`, so the SQLite WAL closes cleanly), then `poweroff`. **A remote poweroff is one-way.** It halts the Pi but does not cut the X1202's output, so the boards keep drawing from the packs, and the X1202 only auto-powers-on when input *appears* — on a kit sitting on mains, the input never went away. Nothing remote reaches them until someone long-presses each X1202 button. Do not push to main expecting a deploy while they are down: the deploy jobs will simply fail, and the kits will boot on whatever image they already hold.
+
+### 21.2 Booth route selector, redesigned (MESHSAT-962, commits 6a3d684 + 6ad829d)
+
+The four routes were four labels floating above four captions, and the sub of one route sat closer to the next route's label than to its own; the "tap a path to choose it" hint read as a fifth option; and two of the four routes had no icon at all. Each route is now **one line of text riding its own lane line**: icon at the inner end, name plus the fact that identifies the bearer above the line, state word pinned to the outer end, and the explaining sentence under the **chosen route only**. All four carry an icon of one family at one size in the bearer's colour, filled when chosen.
+
+Constraints for anyone editing `web/src/views/TtcView.vue` later (also in `.claude/rules/web-spa.md`): the detail sentence has about **42 characters** of room; a state word beyond about **8 characters** collides with the fact on one mirror and the name on the other; no boxes, because the lane must keep running off the screen edge; Signal Orange stays reserved for live traffic, never selection; each glyph needs its own vertical nudge to sit on the wire.
+
+Same screen also got: footer counters labelled `packets in/out, last minute` with a slash instead of the middle dot that read as a decimal, finger-sized footer buttons that say what they do, and plain words for the foreign-mesh packet line.
+
+**How it was verified, and how to verify the panel in future:** Playwright against each kit's live SPA (never a dev server on the runner), viewport 853x480 with `device_scale_factor=1.5` and `has_touch=True`, `wait_until="load"` — `networkidle` never fires because the SPA holds SSE and polling open. History-mode URL: `http://<kit>:6050/ttc?kiosk=1&shell=operator`. Shoot **both** kits: the mirrored layout failed differently from the near one, twice.
+
+### 21.3 Kiosk config drift, and a landmine in this repo (MESHSAT-987)
+
+The two kits' `~kiosk/.config/labwc/autostart` had diverged (parallax had `--ozone-platform=wayland`, a named `--user-data-dir` and a log redirect; tesseract had none). Worse, `deploy/kiosk/labwc-autostart` and `deploy/kiosk/99-touch-rotate.rules` in this repo still carried April's `--transform 90` and the CCW touch matrix, while **both** kits run `270` with `0 1 0 -1 0 1`: an `install-kiosk.sh` run would have turned that kit's panel upside down with mis-mapped touch. Both files now carry what the kits run, and the kits are hash-identical across `autostart`, `rc.xml`, `99-touch-rotate.rules`, `meshsat-kiosk.json` and `meshsat-backlight`.
+
+**Chromium is pinned:** both kits on 152.0.7977.64 (rev 3524) with auto-refresh **held until 2026-10-09**. snapd defers a refresh while the kiosk holds the snap open and then forces it when its inhibition window expires — that would have landed inside the TTC window. Unhold after 23 Sep. To align or refresh a kit, tear the session down first with the recipe in `deploy/kiosk/meshsat-kiosk-restart.service`; `systemctl stop getty@tty1` alone does not kill Chromium.
+
+### 21.4 Two faults found, one filed as a booth risk
+
+**MESHSAT-986 (Open), cellular:** a wedged AT channel parks the device-health probe forever, because `DirectCellTransport.Probe` ignores its context and `execAT` enqueues on `cmdCh` with a blocking send that has no timeout. `DeviceHealth.tick` then skips the target for good, so the ladder freezes at step 1 and neither `AT+CFUN=1,1` nor the VBUS cut can run. parallax sat like that for about 20 minutes with **both booth SMS lanes dead while `/api/gateways` and `/api/cellular/status` still reported connected and registered_home**. Only a container restart clears it. Same shape in `execRawFn`; the IMT and SBD command channels want the same audit.
+
+**APRS, fourth deaf window (MESHSAT-748):** tesseract 18:43:19 to 19:44:51 UTC, 62 minutes, `0 errors` with `receive audio level CH0 0` throughout, surviving two Direwolf respawns and a container recreate, transmit unaffected. The 5 Sep "began seconds after a VBUS cut on a neighbouring hub port" correlation does **not** hold here. The K5 speaker amplifier remains the standing explanation and the PicoAPRS swap remains the fix. Note for forensics: `docker logs` only holds the current container, so a recreate destroys the evidence — `GET /api/audit?limit=300` keeps the watchdog's "APRS receive silent" rows with the exact silence start.
