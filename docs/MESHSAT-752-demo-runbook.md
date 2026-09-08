@@ -515,6 +515,8 @@ Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_
 | Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived | installed on both kits |
 | Plate stack | middle plate sags under the X1202, cells and Pi 5; two extra M3 rods at mid-span of the long edges (MESHSAT-863) | fitted on both kits, plate pulled flat, fieldkit BUILD.md + CAD updated |
 | Software follow-ups | MESHSAT-861 (resolver honours a disabled interface, receive_state after a restart), MESHSAT-859 (time-sync config) | landed and verified |
+| Booth paths on the panel | three lanes drawn, tap to choose (MESHSAT-962, dad90ac + 0597731); Hub routes created on the NL Hub | 5/5 texts each way on each path on both kits, section 18 numbers |
+| Hub over SMS/IMT without internet on the kit | satellite fallback uplink wired (MESHSAT-963, code only); Hub commands over SMS/IMT (MESHSAT-964, after the Hub migration) | 963: Hub fleet page shows the kit alive with WiFi off; 964: PING over SMS with WiFi off |
 | Logistics | hotel and taxis arranged, prints and stickers 9 to 11 Sep | booth slot and Hub allowlist from Thomas, transport and setup plan |
 
 Twenty task "TTC booth readiness follow-ups" carries the same list with a 15 Sep due date.
@@ -568,11 +570,20 @@ The Hub-side sender filter is a follow-up on the Hub after its migration (MESHSA
 Bench order when the kits are back:
 1. Both kits: `POST /api/ttc/flow/setup` with the peer's and the Hub's numbers; read `GET /api/ttc/flow`
    until `ready` is true and `issues` is empty.
-2. Hub (hub.meshsat.net, current DMZ stack; routes migrate with the data): two routes, SMS from
-   tesseract's SIM -> SMS to parallax's SIM, and the reverse. Until MESHSAT-910 lands the routing
-   engine runs on both DMZ nodes and a matched route can dispatch twice (MESHSAT-711); count the SMS on
-   the far kit and Twilio's log before the show, the bridge's 5-min text dedup hides the second copy
-   on the mesh but Twilio bills it.
+2. Hub routes: DONE 8 Sep 2026 on the NL DMZ Hub (they migrate with the data): `TTC: kit A tesseract
+   -> kit B parallax over SMS` (route-1788829643834124971, source sms, filter +31653207829) and
+   `TTC: kit B parallax -> kit A tesseract over SMS` (route-1788829643942342000, filter +31653618463).
+   The Hub's routing engine has no sender filter, so BOTH fire on every inbound SMS: the copy that goes
+   back to the origin kit is dropped by the bridge's echo guard, the other one is the relay. The April
+   test route `Relay MO -> SMS mule01` (any source -> tesseract's SIM) is disabled so tesseract does not
+   get every message twice. Two April routes still stand and are the owner's call: `Relay MO -> SMS
+   Android` and `Relay -> SMS Android` send every inbound SMS (so every booth message on the Hub path)
+   to the owner's phone as well, one or two extra Twilio SMS per text. Until MESHSAT-910 lands the
+   routing engine runs on both DMZ nodes and a matched route can dispatch twice (MESHSAT-711); count
+   the SMS on the far kit and Twilio's log before the show, the bridge's relay dedup hides the second
+   copy on the mesh but Twilio bills it. API from the DMZ host: `docker exec meshsat-hub-nginx wget -qO-
+   --header="Authorization: Bearer $HUB_AUTH_TOKEN" http://meshsat-hub:6070/api/routes` (the 8451 proxy
+   speaks PROXY protocol to HAProxy and cannot be curled locally; the edge answers 401/403 elsewhere).
 3. Per path, 5 texts each way from the handhelds, `scratchpad/relay-test.sh` style, and the latency
    per path noted here. Each text must arrive exactly once.
 4. Both SIM balances and the Twilio balance sized for two days at up to two SMS per text.
