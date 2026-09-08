@@ -283,9 +283,11 @@ func (s *Server) ttcEnsureInbound() error {
 }
 
 // ttcEnsureAllowedSenders adds the peer and Hub numbers to the cellular
-// gateway's allowed_senders. Reconfiguring restarts the gateway (the modem
-// answers again about 20 s later), so it only happens when a number is
-// actually missing. Returns true when the gateway was reconfigured.
+// gateway's allowed_senders and the Hub number to plaintext_peers (the
+// Hub relays SMS between kits in the clear and cannot decrypt the kits'
+// shared key). Reconfiguring restarts the gateway (the modem answers again
+// about 20 s later), so it only happens when a number is actually missing.
+// Returns true when the gateway was reconfigured.
 func (s *Server) ttcEnsureAllowedSenders(ctx context.Context, peer, hub string) (bool, error) {
 	gc, err := s.db.GetGatewayConfig("cellular")
 	if err != nil || gc == nil {
@@ -303,31 +305,54 @@ func (s *Server) ttcEnsureAllowedSenders(ctx context.Context, peer, hub string) 
 			}
 		}
 	}
-	if len(have) == 0 {
-		// Empty means "anyone"; leave that alone.
-		return false, nil
-	}
 	changed := false
-	for _, n := range []string{peer, hub} {
-		if n == "" {
-			continue
+	if len(have) > 0 {
+		// Empty means "anyone" and is left alone.
+		for _, n := range []string{peer, hub} {
+			if n == "" {
+				continue
+			}
+			present := false
+			for _, h := range have {
+				if h == n {
+					present = true
+					break
+				}
+			}
+			if !present {
+				have = append(have, n)
+				changed = true
+			}
 		}
+	}
+	var plain []string
+	if raw, ok := cfg["plaintext_peers"].([]any); ok {
+		for _, v := range raw {
+			if str, ok := v.(string); ok {
+				plain = append(plain, str)
+			}
+		}
+	}
+	if hub != "" {
 		present := false
-		for _, h := range have {
-			if h == n {
+		for _, p := range plain {
+			if p == hub {
 				present = true
 				break
 			}
 		}
 		if !present {
-			have = append(have, n)
+			plain = append(plain, hub)
 			changed = true
 		}
 	}
 	if !changed {
 		return false, nil
 	}
-	cfg["allowed_senders"] = have
+	if len(have) > 0 {
+		cfg["allowed_senders"] = have
+	}
+	cfg["plaintext_peers"] = plain
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return false, err
@@ -338,7 +363,7 @@ func (s *Server) ttcEnsureAllowedSenders(ctx context.Context, peer, hub string) 
 	if err := s.gwManager.ConfigureInstance(ctx, "cellular", gc.InstanceID, gc.Enabled, string(b)); err != nil {
 		return false, err
 	}
-	log.Info().Strs("allowed_senders", have).Msg("ttc flow: cellular allowed_senders extended, gateway restarted")
+	log.Info().Strs("allowed_senders", have).Strs("plaintext_peers", plain).Msg("ttc flow: cellular peers extended, gateway restarted")
 	return true, nil
 }
 

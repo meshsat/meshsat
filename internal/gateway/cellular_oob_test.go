@@ -124,3 +124,65 @@ func TestCellular_InboundCarriesSenderAddress(t *testing.T) {
 		t.Fatal("no inbound message within 3 s")
 	}
 }
+
+// A plaintext peer (the Hub) relays "[origin] text": the text is kept, the
+// message is flagged Plain, and the Hub's echo of this kit's own SMS (an
+// origin that is not an allowed sender) is dropped. [MESHSAT-962]
+func TestCellular_PlaintextPeerHubFormatAndEchoGuard(t *testing.T) {
+	cell := newFakeCellTransport()
+	gw := NewCellularGateway(CellularConfig{SMSPrefix: "[MeshSat]", MaxSMSSegments: 1,
+		AllowedSenders: []string{"+31653207829", "+3197010258258"}, PlaintextPeers: []string{"+3197010258258"}}, cell, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+
+	send := func(sender, text string) {
+		data, _ := json.Marshal(transport.SMSMessage{Sender: sender, Text: text})
+		cell.events <- transport.CellEvent{Type: "sms_received", Message: text, Data: data}
+	}
+	// 1. echo: origin is this kit (+31653618463), not an allowed sender -> dropped
+	send("+3197010258258", "[+31653618463] hello from myself")
+	// 2. relayed from the peer kit -> body kept, Plain set
+	send("+3197010258258", "[+31653207829] hello via hub")
+	select {
+	case in := <-gw.Receive():
+		if in.Text != "hello via hub" || !in.Plain || in.FromAddr != "+3197010258258" {
+			t.Fatalf("inbound: %+v", in)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no inbound message within 3 s")
+	}
+	// 3. direct from the peer (encrypted path): untouched, not Plain
+	send("+31653207829", "QUJD")
+	select {
+	case in := <-gw.Receive():
+		if in.Text != "QUJD" || in.Plain {
+			t.Fatalf("direct inbound: %+v", in)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no direct inbound within 3 s")
+	}
+}
+
+func TestParseHubRoutedSMS(t *testing.T) {
+	cases := []struct {
+		in, origin, body string
+		ok               bool
+	}{
+		{"[+31653207829] hello via hub", "+31653207829", "hello via hub", true},
+		{"[300234063904190] pos", "300234063904190", "pos", true},
+		{"[+316] ", "+316", "", true},
+		{"hello", "", "", false},
+		{"[] x", "", "", false},
+		{"MS:frame", "", "", false},
+	}
+	for _, c := range cases {
+		o, b, ok := ParseHubRoutedSMS(c.in)
+		if ok != c.ok || o != c.origin || b != c.body {
+			t.Errorf("%q: got (%q,%q,%v) want (%q,%q,%v)", c.in, o, b, ok, c.origin, c.body, c.ok)
+		}
+	}
+}

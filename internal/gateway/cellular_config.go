@@ -9,6 +9,7 @@ import (
 type CellularConfig struct {
 	DestinationNumbers []string          `json:"destination_numbers"`         // phone numbers to send SMS to
 	AllowedSenders     []string          `json:"allowed_senders,omitempty"`   // phone numbers allowed to send inbound (empty = all)
+	PlaintextPeers     []string          `json:"plaintext_peers,omitempty"`   // numbers exchanged in the clear: no interface transforms either way, bare text out, Hub "[origin] text" parsed in [MESHSAT-962]
 	SMSPrefix          string            `json:"sms_prefix"`                  // prefix for outbound SMS (default "MeshSat")
 	MaxSMSSegments     int               `json:"max_sms_segments"`            // max SMS segments per message (default 1 = 160 chars)
 	ForwardPortnums    []int             `json:"forward_portnums,omitempty"`  // portnums to forward (empty = use ForwardAll)
@@ -99,4 +100,18 @@ func (c CellularConfig) Redacted() CellularConfig {
 		c.DynDNS.Password = "****"
 	}
 	return c
+}
+
+// IsPlaintextPeer reports whether SMS to and from this number bypass the
+// interface's egress and ingress transforms. The MeshSat Hub is the case
+// that needs it: its routing engine relays SMS between kits as plain text
+// with an "[origin] " prefix, and it cannot decrypt the kits' shared SMS
+// key. Exact match, like allowed_senders. [MESHSAT-962]
+func (c CellularConfig) IsPlaintextPeer(number string) bool {
+	for _, p := range c.PlaintextPeers {
+		if p != "" && p == number {
+			return true
+		}
+	}
+	return false
 }

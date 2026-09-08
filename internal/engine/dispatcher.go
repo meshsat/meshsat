@@ -517,8 +517,10 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		payload = stripped
 	}
 
-	// Apply ingress transforms to decrypt/decompress incoming payload
-	if d.transforms != nil && len(payload) > 0 {
+	// Apply ingress transforms to decrypt/decompress incoming payload.
+	// A message flagged Plain (SMS from a plaintext peer) is already in the
+	// clear and skips them. [MESHSAT-962]
+	if d.transforms != nil && len(payload) > 0 && !msg.Plain {
 		iface, err := d.db.GetInterface(sourceInterface)
 		if err == nil && iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
 			decoded, err := d.transforms.ApplyIngress(payload, iface.IngressTransforms)
@@ -1310,7 +1312,10 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// OOB frames skip interface transforms: they carry their own AEAD and
 	// interface-level encryption would hide the sentinel from a peer that
 	// has the management key but not the interface key. [MESHSAT-756]
-	if w.transforms != nil && del.Class != database.DeliveryClassOOB {
+	// SMS to a plaintext peer (the Hub) goes out in the clear as well:
+	// the Hub cannot decrypt the kits' shared key and relays plain text.
+	// [MESHSAT-962]
+	if w.transforms != nil && del.Class != database.DeliveryClassOOB && !w.plaintextSMSDelivery(del) {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
 			encrypted = strings.Contains(iface.EgressTransforms, "encrypt")
@@ -1460,28 +1465,10 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	}
 
 	// Resolve per-rule SMS destinations from forward_options
-	if del.RuleID != nil && w.db != nil {
-		if rule, err := w.db.GetAccessRule(*del.RuleID); err == nil && rule != nil {
-			if rule.ForwardOptions != "" && rule.ForwardOptions != "{}" {
-				var opts forwardOptions
-				if err := json.Unmarshal([]byte(rule.ForwardOptions), &opts); err == nil && len(opts.SMSContacts) > 0 {
-					contacts, _ := w.db.GetSMSContacts()
-					contactMap := make(map[int64]string)
-					for _, c := range contacts {
-						contactMap[c.ID] = c.Phone
-					}
-					for _, cid := range opts.SMSContacts {
-						if phone, ok := contactMap[cid]; ok {
-							msg.SMSDestinations = append(msg.SMSDestinations, phone)
-						}
-					}
-					if len(msg.SMSDestinations) > 0 {
-						log.Debug().Strs("sms_to", msg.SMSDestinations).Int64("rule_id", *del.RuleID).
-							Msg("resolved per-rule SMS destinations from contacts")
-					}
-				}
-			}
-		}
+	if phones := w.ruleSMSDestinations(del); len(phones) > 0 {
+		msg.SMSDestinations = append(msg.SMSDestinations, phones...)
+		log.Debug().Strs("sms_to", msg.SMSDestinations).Int64("rule_id", *del.RuleID).
+			Msg("resolved per-rule SMS destinations from contacts")
 	}
 
 	// v0.3.0: try interface ID-based lookup first (e.g. "iridium_0", "mqtt_0")
@@ -1708,4 +1695,69 @@ func (w *DeliveryWorker) calculateNextRetry(retries int) time.Time {
 	}
 
 	return time.Now().Add(wait)
+}
+
+// ruleSMSDestinations resolves forward_options.sms_contacts of the rule
+// behind a delivery to phone numbers. Empty when the delivery has no rule
+// or the rule names no contacts.
+func (w *DeliveryWorker) ruleSMSDestinations(del database.MessageDelivery) []string {
+	if del.RuleID == nil || w.db == nil {
+		return nil
+	}
+	rule, err := w.db.GetAccessRule(*del.RuleID)
+	if err != nil || rule == nil || rule.ForwardOptions == "" || rule.ForwardOptions == "{}" {
+		return nil
+	}
+	var opts forwardOptions
+	if err := json.Unmarshal([]byte(rule.ForwardOptions), &opts); err != nil || len(opts.SMSContacts) == 0 {
+		return nil
+	}
+	contacts, _ := w.db.GetSMSContacts()
+	contactMap := make(map[int64]string, len(contacts))
+	for _, c := range contacts {
+		contactMap[c.ID] = c.Phone
+	}
+	var out []string
+	for _, cid := range opts.SMSContacts {
+		if phone, ok := contactMap[cid]; ok {
+			out = append(out, phone)
+		}
+	}
+	return out
+}
+
+// plaintextSMSDelivery reports whether every SMS destination of a cellular
+// delivery is a plaintext peer of the gateway, in which case the egress
+// transforms are skipped. Destinations resolve the same way the send does:
+// the delivery's own address first, then the rule's contacts, then the
+// gateway's destination numbers. [MESHSAT-962]
+func (w *DeliveryWorker) plaintextSMSDelivery(del database.MessageDelivery) bool {
+	if !strings.HasPrefix(w.channelID, "cellular") || w.gwProv == nil {
+		return false
+	}
+	cg, ok := w.gwProv.GatewayByInterfaceID(w.channelID).(*gateway.CellularGateway)
+	if !ok || cg == nil {
+		return false
+	}
+	cfg := cg.Config()
+	if len(cfg.PlaintextPeers) == 0 {
+		return false
+	}
+	var dests []string
+	if del.Destination != "" {
+		dests = []string{del.Destination}
+	} else if phones := w.ruleSMSDestinations(del); len(phones) > 0 {
+		dests = phones
+	} else {
+		dests = cfg.DestinationNumbers
+	}
+	if len(dests) == 0 {
+		return false
+	}
+	for _, n := range dests {
+		if !cfg.IsPlaintextPeer(n) {
+			return false
+		}
+	}
+	return true
 }
