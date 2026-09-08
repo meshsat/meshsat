@@ -45,6 +45,28 @@ func RegisterDefaults(r *Registry) {
 		},
 	})
 
+	// Iridium IMT (RockBLOCK 9704): paid, big payloads, push MT. Not flagged
+	// IsSatellite so the delivery worker never waits for the pass scheduler:
+	// the booth relay must try now and retry on its own clock. [MESHSAT-962]
+	r.Register(ChannelDescriptor{
+		ID:            "iridium_imt",
+		Label:         "Iridium IMT",
+		IsPaid:        true,
+		CanSend:       true,
+		CanReceive:    true,
+		BinaryCapable: true,
+		MaxPayload:    102400,
+		DefaultTTL:    3600 * time.Second,
+		IsSatellite:   false,
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 30 * time.Second,
+			MaxWait:     5 * time.Minute,
+			MaxRetries:  3,
+			BackoffFunc: "exponential",
+		},
+	})
+
 	r.Register(ChannelDescriptor{
 		ID:         "cellular",
 		Label:      "Cellular SMS",

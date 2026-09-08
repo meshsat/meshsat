@@ -50,6 +50,95 @@ type IridiumGateway struct {
 	// forwardFn is the concrete send function set by SBDGateway or IMTGateway.
 	// Used by the shared sendWorker.
 	forwardFn func(ctx context.Context, msg *transport.MeshMessage) error
+
+	// Live packet feed for the booth screen and the nerds table: one record
+	// per successful MO and per MT received. [MESHSAT-962]
+	packetMu     sync.RWMutex
+	packetSink   PacketSink
+	packetIface  string
+	imei         atomic.Value // string
+	lastMOAt     atomic.Int64 // unix seconds of the last successful MO
+	lastMOStatus atomic.Int64
+	lastMTAt     atomic.Int64 // unix seconds of the last MT received
+}
+
+// SetPacketSink installs the live packet feed sink and the interface id
+// (iridium_0 or iridium_imt_0) its records carry. [MESHSAT-962]
+func (g *IridiumGateway) SetPacketSink(sink PacketSink, iface string) {
+	g.packetMu.Lock()
+	g.packetSink = sink
+	g.packetIface = iface
+	g.packetMu.Unlock()
+}
+
+// recordSat hands one satellite session to the packet feed: dir tx after
+// a successful MO (path carries mo_status), dir rx for an MT received.
+func (g *IridiumGateway) recordSat(dir, from, to string, size int, text, msgRef, path string) {
+	g.packetMu.RLock()
+	sink, iface := g.packetSink, g.packetIface
+	g.packetMu.RUnlock()
+	if sink == nil {
+		return
+	}
+	sink(PacketRecord{
+		Time:   time.Now(),
+		Bearer: BearerSat,
+		Dir:    dir,
+		Iface:  iface,
+		From:   from,
+		To:     to,
+		Bytes:  size,
+		Text:   CapPacketText(text),
+		Path:   path,
+		MsgRef: msgRef,
+	})
+}
+
+// rememberIMEI stores the modem's IMEI from a status read so records and
+// the booth status can name it without another modem round trip.
+func (g *IridiumGateway) rememberIMEI(status *transport.SatStatus) {
+	if status != nil && status.IMEI != "" {
+		g.imei.Store(status.IMEI)
+	}
+}
+
+// IMEI returns the modem IMEI seen at start, or "" before the first status.
+func (g *IridiumGateway) IMEI() string {
+	if v, ok := g.imei.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// LastMO returns when the last MO session succeeded and its mo_status.
+func (g *IridiumGateway) LastMO() (time.Time, int) {
+	ts := g.lastMOAt.Load()
+	if ts == 0 {
+		return time.Time{}, int(g.lastMOStatus.Load())
+	}
+	return time.Unix(ts, 0), int(g.lastMOStatus.Load())
+}
+
+// LastMT returns when the last MT message was received.
+func (g *IridiumGateway) LastMT() time.Time {
+	ts := g.lastMTAt.Load()
+	if ts == 0 {
+		return time.Time{}
+	}
+	return time.Unix(ts, 0)
+}
+
+// noteMOSuccess records a successful MO session for LastMO and the feed.
+func (g *IridiumGateway) noteMOSuccess(moStatus int, size int, text, msgRef, to string) {
+	g.lastMOAt.Store(time.Now().Unix())
+	g.lastMOStatus.Store(int64(moStatus))
+	g.recordSat(DirTX, g.IMEI(), to, size, text, msgRef, fmt.Sprintf("mo_status=%d", moStatus))
+}
+
+// noteMTReceived records an MT for LastMT and the feed.
+func (g *IridiumGateway) noteMTReceived(from string, size int, text string) {
+	g.lastMTAt.Store(time.Now().Unix())
+	g.recordSat(DirRX, from, g.IMEI(), size, text, "", "")
 }
 
 // NewIridiumGateway creates a legacy SBD gateway. Use NewSBDGateway instead.
@@ -781,6 +870,10 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 	g.lastActive.Store(time.Now().Unix())
 	log.Info().Str("to", inbound.To).Str("text", inbound.Text).Msg("iridium: received MT message")
 	g.emit("inbound", fmt.Sprintf("Iridium MT received: %s", inbound.Text))
+	if inbound.FromAddr == "" {
+		inbound.FromAddr = "rock7"
+	}
+	g.noteMTReceived(inbound.FromAddr, len(data), inbound.Text)
 
 	// Record inbound receive for queue visibility
 	if g.db != nil {

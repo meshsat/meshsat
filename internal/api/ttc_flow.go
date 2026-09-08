@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -23,6 +24,8 @@ import (
 //	b2b_sms  mesh_0 -> cellular_0, SMS straight to the peer kit's SIM
 //	hub_sms  mesh_0 -> cellular_0, SMS to the Hub's number; the Hub's own
 //	         route forwards it to the peer kit's SIM
+//	imt      mesh_0 -> iridium_imt_0, an MO over the RockBLOCK 9704 to
+//	         Cloudloop; the Hub relays it as an MT to the peer kit's 9704
 //
 // The selection is per kit and governs EGRESS only (owner ruling 8 Sep
 // 2026). Inbound stays open on both kits for all three sources, so the
@@ -56,9 +59,11 @@ const (
 	ttcPeerGroupID    = "peer_link"
 	ttcTextOnlyFilter = `{"portnums":"[1]"}`
 	ttcRateLimit      = 6
+	ttcIMTIface       = "iridium_imt_0"
+	ttcRecentMO       = 10 * time.Minute
 )
 
-var ttcPaths = []string{"aprs", "b2b_sms", "hub_sms"}
+var ttcPaths = []string{"aprs", "b2b_sms", "hub_sms", "imt"}
 
 func ttcPathValid(p string) bool {
 	for _, x := range ttcPaths {
@@ -84,8 +89,57 @@ type ttcFlowStatus struct {
 	Rules      map[string]ttcFlowRule `json:"rules"`
 	PeerNumber string                 `json:"peer_number,omitempty"`
 	HubNumber  string                 `json:"hub_number,omitempty"`
+	IMT        *ttcIMTStatus          `json:"imt,omitempty"`
 	Ready      bool                   `json:"ready"`
 	Issues     []string               `json:"issues,omitempty"`
+}
+
+// ttcIMTStatus is what the screen needs to know about the satellite leg:
+// whether a 9704 gateway is up, whether it has moved traffic lately, and
+// what is waiting for it. [MESHSAT-962]
+type ttcIMTStatus struct {
+	Interface    string     `json:"interface"`
+	Running      bool       `json:"running"`
+	Connected    bool       `json:"connected"`
+	IMEI         string     `json:"imei,omitempty"`
+	LastMOAt     *time.Time `json:"last_mo_at,omitempty"`
+	LastMOStatus int        `json:"last_mo_status"`
+	RecentMO     bool       `json:"recent_mo"`
+	LastMTAt     *time.Time `json:"last_mt_at,omitempty"`
+	Queued       int        `json:"queued"`
+	DLQPending   int64      `json:"dlq_pending"`
+}
+
+// ttcIMTStatus reads the running IMT gateway; nil-safe when the manager or
+// the gateway is absent (a kit without its 9704 yet).
+func (s *Server) ttcIMTStatus() *ttcIMTStatus {
+	st := &ttcIMTStatus{Interface: ttcIMTIface}
+	if s.db != nil {
+		if n, err := s.db.QueueDepth(ttcIMTIface); err == nil {
+			st.Queued = n
+		}
+	}
+	if s.gwManager == nil {
+		return st
+	}
+	gw := s.gwManager.GetIMTGateway()
+	if gw == nil {
+		return st
+	}
+	st.Running = true
+	gs := gw.Status()
+	st.Connected = gs.Connected
+	st.DLQPending = gs.DLQPending
+	st.IMEI = gw.IMEI()
+	if at, mo := gw.LastMO(); !at.IsZero() {
+		st.LastMOAt = &at
+		st.LastMOStatus = mo
+		st.RecentMO = time.Since(at) < ttcRecentMO
+	}
+	if at := gw.LastMT(); !at.IsZero() {
+		st.LastMTAt = &at
+	}
+	return st
 }
 
 // ttcNumbers returns the peer and Hub numbers: system_config first, then
@@ -219,6 +273,27 @@ func (s *Server) ttcEnsureRules(peer, hub string) (map[string]*database.AccessRu
 		r.ID = id
 		rules["aprs"] = r
 	}
+	// The satellite path needs no number: the Hub knows both IMEIs. The rule
+	// exists on a kit before its 9704 is fitted, so only the gateway has to
+	// come up on the day.
+	if r := rules["imt"]; r != nil {
+		if r.ForwardTo != ttcIMTIface {
+			r.ForwardTo = ttcIMTIface
+			if err := s.db.UpdateAccessRule(r); err != nil {
+				return nil, nil, err
+			}
+		}
+	} else {
+		r := &database.AccessRule{InterfaceID: "mesh_0", Direction: "ingress", Priority: 1, Name: ttcRulePrefix + "imt",
+			Enabled: false, Action: "forward", ForwardTo: ttcIMTIface, Filters: filters, ForwardOptions: "{}",
+			RateLimitPerMin: ttcRateLimit, RateLimitWindow: 60}
+		id, err := s.db.InsertAccessRule(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		r.ID = id
+		rules["imt"] = r
+	}
 	for _, sp := range []struct{ path, label, number string }{{"b2b_sms", "peer kit", peer}, {"hub_sms", "MeshSat Hub", hub}} {
 		if sp.number == "" {
 			issues = append(issues, fmt.Sprintf("%s: no number known (setup with %s_number, or set the cellular destination)", sp.path, map[string]string{"b2b_sms": "peer", "hub_sms": "hub"}[sp.path]))
@@ -261,7 +336,7 @@ func (s *Server) ttcEnsureInbound() error {
 	if err != nil {
 		return err
 	}
-	for _, src := range []string{"aprs_0", "cellular_0"} {
+	for _, src := range []string{"aprs_0", "cellular_0", ttcIMTIface} {
 		found := false
 		for i := range all {
 			r := &all[i]
@@ -391,7 +466,7 @@ func (s *Server) ttcStatus(extraIssues []string) ttcFlowStatus {
 			continue
 		}
 		fr := ttcFlowRule{ID: r.ID, Enabled: r.Enabled, ForwardTo: r.ForwardTo}
-		if p != "aprs" {
+		if p == "b2b_sms" || p == "hub_sms" {
 			fr.Contact = s.ttcContactPhone(r)
 		}
 		st.Rules[p] = fr
@@ -404,6 +479,10 @@ func (s *Server) ttcStatus(extraIssues []string) ttcFlowStatus {
 	}
 	if enabled > 1 {
 		st.Issues = append(st.Issues, "more than one ttc rule is enabled; a text would leave twice")
+	}
+	st.IMT = s.ttcIMTStatus()
+	if st.Path == "imt" && !st.IMT.Running {
+		st.Issues = append(st.Issues, "imt: the 9704 gateway is not running, texts will queue")
 	}
 	st.Ready = len(st.Issues) == 0 && len(st.Rules) == len(ttcPaths) && st.Path != ""
 	return st
@@ -422,7 +501,7 @@ func (s *Server) handleGetTTCFlow(w http.ResponseWriter, r *http.Request) {
 
 // handlePutTTCFlow selects the booth path.
 // @Summary Booth flow: select the path
-// @Description Enables exactly one of the three "ttc:<path>" relay rules (ingress rules on mesh_0) and disables the other two, persists the choice in system_config and reloads the rules engine. Creates missing rules first when the numbers are known. [MESHSAT-962]
+// @Description Enables exactly one of the four "ttc:<path>" relay rules (ingress rules on mesh_0: aprs, b2b_sms, hub_sms, imt) and disables the others, persists the choice in system_config and reloads the rules engine. Creates missing rules first when the numbers are known. [MESHSAT-962]
 // @Tags ttc
 // @Accept json
 // @Produce json
@@ -440,7 +519,7 @@ func (s *Server) handlePutTTCFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ttcPathValid(req.Path) {
-		writeError(w, http.StatusBadRequest, "path must be one of aprs, b2b_sms, hub_sms")
+		writeError(w, http.StatusBadRequest, "path must be one of aprs, b2b_sms, hub_sms, imt")
 		return
 	}
 	peer, hub := s.ttcNumbers()
@@ -474,7 +553,7 @@ func (s *Server) handlePutTTCFlow(w http.ResponseWriter, r *http.Request) {
 
 // handleTTCFlowSetup prepares a kit for the booth flow selector.
 // @Summary Booth flow: one-time setup
-// @Description Stores the peer kit's and the Hub's SMS numbers, creates the SMS contacts and the three "ttc:<path>" relay rules (ingress rules on mesh_0) (adopting an existing mesh_0 -> peer_link rule as ttc:aprs), enables the aprs_0 and cellular_0 -> mesh_0 inbound rules, and adds both numbers to cellular_0 allowed_senders (restarts the cellular gateway only when a number was missing). Idempotent. [MESHSAT-962]
+// @Description Stores the peer kit's and the Hub's SMS numbers, creates the SMS contacts and the four "ttc:<path>" relay rules (ingress rules on mesh_0; imt needs no number) (adopting an existing mesh_0 -> peer_link rule as ttc:aprs), enables the aprs_0 and cellular_0 -> mesh_0 inbound rules, and adds both numbers to cellular_0 allowed_senders (restarts the cellular gateway only when a number was missing). Idempotent. [MESHSAT-962]
 // @Tags ttc
 // @Accept json
 // @Produce json
