@@ -1634,6 +1634,7 @@ func main() {
 	}
 
 	var hubReporter *hubreporter.HubReporter
+	var satFallback *hubreporter.SatFallback // [MESHSAT-963]
 	if hubURL != "" {
 		reporterCfg := hubreporter.ReporterConfig{
 			HubURL:         hubURL,
@@ -1779,6 +1780,71 @@ func main() {
 		outbox := hubreporter.NewOutbox(db.DB.DB, 10000, 7*24*time.Hour)
 		hubReporter.SetOutbox(outbox)
 
+		// Satellite fallback uplink: when the MQTT session is down for
+		// HubFallbackAfterMin, compact position/health frames (and an SOS
+		// at once) go to the Hub through the delivery ledger, raw over the
+		// satellite transport or base64 over SMS to the Hub's number. Was
+		// written for MESHSAT-447 and never wired. [MESHSAT-963]
+		if cfg.HubSatFallback {
+			hubSMS := cfg.HubSMSNumber
+			if v, err := db.GetSystemConfig("ttc_hub_number"); err == nil && strings.TrimSpace(v) != "" {
+				hubSMS = strings.TrimSpace(v)
+			}
+			bearerPolicy := strings.ToLower(cfg.HubFallbackBearer)
+			satFallback = hubreporter.NewSatFallback(hubreporter.SatFallbackConfig{
+				BridgeID:         hubBridgeID,
+				ActivateAfter:    time.Duration(cfg.HubFallbackAfterMin) * time.Minute,
+				PositionInterval: time.Duration(cfg.HubFallbackPositionMin) * time.Minute,
+				HealthInterval:   time.Duration(cfg.HubFallbackHealthMin) * time.Minute,
+				HealthFn:         healthFn,
+				PositionFn: func() *hubreporter.Location {
+					if gpsReader == nil {
+						return nil
+					}
+					st := gpsReader.GetStatus()
+					if !st.Fix {
+						return nil
+					}
+					return &hubreporter.Location{Lat: st.Lat, Lon: st.Lon, Alt: st.AltM, Source: "gps"}
+				},
+				SendFn: func(frame []byte) error {
+					// Bearer choice: "satellite" and "sms" force one leg;
+					// "auto" takes the satellite gateway when it is connected
+					// and has moved traffic in the last 30 min (indoors it has
+					// not, and a queued satellite frame would never leave),
+					// else SMS to the Hub's number.
+					satOK := false
+					if gw := gwMgr.GatewayByInterfaceID("iridium_0"); gw != nil {
+						st := gw.Status()
+						satOK = st.Connected && !st.LastActivity.IsZero() && time.Since(st.LastActivity) < 30*time.Minute
+					}
+					useSat := satOK
+					switch bearerPolicy {
+					case "satellite":
+						useSat = true
+					case "sms":
+						useSat = false
+					}
+					label := fmt.Sprintf("hub uplink frame, %d B", len(frame))
+					if useSat {
+						_, _, err := dispatcher.QueueDirectSendTo("iridium_0", label,
+							engine.DirectSendOptions{Precedence: string(types.PrecedencePriority), Class: database.DeliveryClassHubUplink, Payload: frame})
+						return err
+					}
+					if hubSMS == "" {
+						return fmt.Errorf("hub uplink: no satellite in reach and no Hub SMS number configured")
+					}
+					_, _, err := dispatcher.QueueDirectSendTo("cellular_0", base64.StdEncoding.EncodeToString(frame),
+						engine.DirectSendOptions{Precedence: string(types.PrecedencePriority), Class: database.DeliveryClassHubUplink, Destination: hubSMS})
+					return err
+				},
+			})
+			hubReporter.SetConnectionHooks(satFallback.OnMQTTReconnect, satFallback.OnMQTTDisconnect)
+			go satFallback.Run(ctx)
+			log.Info().Str("bearer", bearerPolicy).Str("hub_sms", hubSMS).Int("after_min", cfg.HubFallbackAfterMin).
+				Msg("hub satellite fallback armed")
+		}
+
 		// Command handler — processes commands from the Hub (ping, send_mt, etc.)
 		cmdHandler := hubreporter.NewCommandHandler(hubReporter, hubBridgeID, healthFn)
 		cmdHandler.SetDeps(hubreporter.CommandDeps{
@@ -1864,12 +1930,18 @@ func main() {
 
 		if err := hubReporter.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("hub reporter start failed")
+			if satFallback != nil {
+				satFallback.OnMQTTDisconnect()
+			}
 		} else {
 			log.Info().Str("hub", hubURL).Str("bridge_id", hubBridgeID).Msg("hub reporter started")
 		}
 		// Surface Hub TAK-relay counters to the dashboard TAK widget via
 		// a synthetic gateway entry in /api/gateways. [MESHSAT-682]
 		srv.SetHubReporter(hubReporter)
+		if satFallback != nil {
+			srv.SetSatFallback(satFallback)
+		}
 	}
 
 	// Spectrum jamming alert relay: subscribe to state-transition events
@@ -2356,6 +2428,9 @@ func main() {
 		log.Warn().Msg("dispatcher drain timed out after 10s — forcing shutdown")
 	}
 
+	if satFallback != nil {
+		satFallback.Stop()
+	}
 	if hubReporter != nil {
 		hubReporter.Stop()
 	}

@@ -84,12 +84,19 @@ type Server struct {
 	// The bridge never runs a local TAK gateway, so without this
 	// the widget reports 0 even though CoT is flowing. [MESHSAT-682]
 	hubReporter *hubreporter.HubReporter
+	satFallback *hubreporter.SatFallback // [MESHSAT-963]
 }
 
 // SetHubReporter wires the Hub MQTT reporter so the TAK dashboard widget
 // can read Hub-relayed CoT counters via /api/gateways (MESHSAT-682).
 func (s *Server) SetHubReporter(r *hubreporter.HubReporter) {
 	s.hubReporter = r
+}
+
+// SetSatFallback wires the Hub satellite fallback monitor so an SOS also
+// leaves as a compact frame over satellite or SMS when MQTT is down. [MESHSAT-963]
+func (s *Server) SetSatFallback(sf *hubreporter.SatFallback) {
+	s.satFallback = sf
 }
 
 // SetBLEPeerManager wires the BLE peer manager for auto-RNS-peer on

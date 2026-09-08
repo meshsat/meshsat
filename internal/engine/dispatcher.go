@@ -910,8 +910,9 @@ func (d *Dispatcher) QueueDirectSend(interfaceID, text, precedence string) (int6
 type DirectSendOptions struct {
 	Precedence  string
 	Destination string // phone number, callsign-SSID or !nodeid; empty = interface default
-	Class       string // database.DeliveryClassMessage (default) or DeliveryClassOOB
+	Class       string // database.DeliveryClassMessage (default), DeliveryClassOOB or DeliveryClassHubUplink
 	MaxRetries  int    // 0 = default (3)
+	Payload     []byte // binary payload; text is then only the preview [MESHSAT-963]
 }
 
 // QueueDirectSendTo is QueueDirectSend with DirectSendOptions. A delivery of
@@ -930,6 +931,9 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 	msgRef := time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
 
 	payload := []byte(text)
+	if len(opts.Payload) > 0 {
+		payload = opts.Payload
+	}
 	preview := text
 	if len(preview) > 200 {
 		preview = preview[:200]
@@ -1252,7 +1256,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// If egress denies, mark the delivery as 'denied' and skip sending.
 	// OOB management replies are exempt: the frame is already authenticated
 	// and the per-peer reply budget bounds them. [MESHSAT-756]
-	if del.Class != database.DeliveryClassOOB && w.access != nil && w.access.HasEgressRules(w.channelID) {
+	if !database.DeliveryClassBypassesPolicy(del.Class) && w.access != nil && w.access.HasEgressRules(w.channelID) {
 		egressMsg := rules.RouteMessage{
 			Text: del.TextPreview,
 		}
@@ -1315,7 +1319,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// SMS to a plaintext peer (the Hub) goes out in the clear as well:
 	// the Hub cannot decrypt the kits' shared key and relays plain text.
 	// [MESHSAT-962]
-	if w.transforms != nil && del.Class != database.DeliveryClassOOB && !w.plaintextSMSDelivery(del) {
+	if w.transforms != nil && !database.DeliveryClassBypassesPolicy(del.Class) && !w.plaintextSMSDelivery(del) {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
 			encrypted = strings.Contains(iface.EgressTransforms, "encrypt")
@@ -1458,7 +1462,15 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	// Per-row destination and class. A destination wins over rule and
 	// gateway defaults; class oob sends the text verbatim. [MESHSAT-756]
 	msg.Destination = del.Destination
-	msg.RawText = del.Class == database.DeliveryClassOOB
+	msg.RawText = database.DeliveryClassBypassesPolicy(del.Class)
+	if del.Class == database.DeliveryClassHubUplink && !strings.HasPrefix(w.channelID, "cellular") {
+		// Satellite: the frame goes as raw bytes; the preview is a label.
+		// Over SMS the text IS the frame (base64) and RawText sends it bare.
+		// [MESHSAT-963]
+		msg.RawPayload = del.Payload
+		msg.DecodedText = ""
+		msg.PortNum = 256 // PRIVATE_APP
+	}
 	msg.MsgRef = del.MsgRef // feed correlation only, never serialised [MESHSAT-826]
 	if del.Destination != "" && strings.HasPrefix(w.channelID, "cellular") {
 		msg.SMSDestinations = []string{del.Destination}

@@ -117,7 +117,16 @@ func (g *SBDGateway) sendSBD(ctx context.Context, msg *transport.MeshMessage) er
 	var result *transport.SatResult
 	var err error
 
-	if canSendPlaintext(msg) {
+	if msg.DecodedText == "" && len(msg.RawPayload) > 0 {
+		// Raw binary (Hub uplink frame): sent as-is, no compact envelope,
+		// so the Hub's RockBLOCK handler sees the frame's own magic. [MESHSAT-963]
+		data = msg.RawPayload
+		cost = creditCost(len(data))
+		if !g.budgetAllows(cost, 1) {
+			return fmt.Errorf("sbd: budget exceeded (cost=%d)", cost)
+		}
+		result, err = g.sat.Send(ctx, data)
+	} else if canSendPlaintext(msg) {
 		// Short ASCII text — send as readable plaintext
 		text := msg.DecodedText
 		cost = creditCost(len(text))

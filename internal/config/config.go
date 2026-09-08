@@ -136,6 +136,14 @@ type Config struct {
 	HubTLSKey         string // path to client TLS key
 	HubTLSCA          string // path to CA certificate for hub server verification
 	HubHealthInterval int    // health publish interval in seconds (default 30)
+
+	// Satellite fallback uplink to the Hub when MQTT is down [MESHSAT-963]
+	HubSatFallback         bool   // enable the fallback monitor (default true; needs a Hub URL)
+	HubSMSNumber           string // the Hub's SMS number (Twilio); empty = no SMS leg
+	HubFallbackAfterMin    int    // minutes of MQTT loss before activating (default 5)
+	HubFallbackPositionMin int    // position frame interval in minutes (default 15)
+	HubFallbackHealthMin   int    // health frame interval in minutes (default 60)
+	HubFallbackBearer      string // auto | satellite | sms (default auto)
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -201,6 +209,13 @@ func Load() *Config {
 		HubTLSKey:         envStr("MESHSAT_HUB_TLS_KEY", ""),
 		HubTLSCA:          envStr("MESHSAT_HUB_TLS_CA", ""),
 		HubHealthInterval: envInt("MESHSAT_HUB_HEALTH_INTERVAL", 30),
+
+		HubSatFallback:         envBool("MESHSAT_HUB_SAT_FALLBACK", true),
+		HubSMSNumber:           envStr("MESHSAT_HUB_SMS_NUMBER", ""),
+		HubFallbackAfterMin:    envInt("MESHSAT_HUB_FALLBACK_AFTER_MIN", 5),
+		HubFallbackPositionMin: envInt("MESHSAT_HUB_FALLBACK_POSITION_MIN", 15),
+		HubFallbackHealthMin:   envInt("MESHSAT_HUB_FALLBACK_HEALTH_MIN", 60),
+		HubFallbackBearer:      envStr("MESHSAT_HUB_FALLBACK_BEARER", "auto"),
 	}
 }
 
