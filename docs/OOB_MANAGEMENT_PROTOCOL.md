@@ -226,3 +226,42 @@ Key (hex): `0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20`. P
 | Reply OK to counter 3, body `rv10s`, encrypted, counter 1 | importer | `4f1394cb0000000102d93a58b0698eef7c985c5067be26dcd4e381e72884a0a43b79ad` | `MS:9W9S9JR0000020PS79CB0TCEXXY9GQ2GCYZ2DQ6MWE0YEA44M2J3PYDD` |
 
 Replay case: presenting the first vector a second time to a receiver that has accepted counter 1 must be dropped silently (window bit set). Reflection case: the first vector with the REPLY flag set (byte 1 becomes 0x12) must fail authentication.
+
+## 16. Pairing the MeshSat Hub as a peer (MESHSAT-964, 8 Sep 2026)
+
+The Hub speaks this protocol byte for byte and reaches a bridge over SMS (Twilio to the kit's SIM),
+IMT MT (Cloudloop, 9704) and SBD MT (Rock7, 9603). It needs one management key per bridge, and the
+bridge needs a peer row for that key or every frame is rejected as `unknown_peer`. Two directions,
+both supported:
+
+**Hub issues the key (provisioning).** The Hub calls its own `POST /api/bridges/{id}/oob/provision`
+and pushes `key_rotate` over MQTT with `{"channel_type":"mgmt","address":"hub","key_hex":...,
+"version":1}`. The bridge stores it as `mgmt:hub` **and registers the peer**: alias `hub`, role
+`control`, local role importer, enabled, peer id derived from the key
+(`CommandHandler.SetMgmtPeerRegistrar` to `Service.RegisterHubPeer`). The reply carries
+`{"applied":true,"local_version":N,"peer_id":P}`. Control role is deliberate: the Hub already issues
+`mgmt_*` commands over its authenticated MQTT session, so the peer it provisions for itself carries
+the same authority on the other bearers, no more. A later rotation keeps the alias, derives a new id
+and drops the old row. Before this change the key was stored and unusable.
+
+**Kit issues the key (bundle path).** Create a peer with alias `hub` (Settings > OOB, or
+`POST /api/oob/peers`), then either scan the bundle (`POST /api/oob/peers/{id}/bundle`) or read the
+raw key with **`GET /api/oob/peers/{id}/key`** (button "Key" beside "Bundle" in Settings) and paste
+`key_hex` into the Hub's `POST /api/bridges/{id}/oob`. The export refuses derived (ecdh) keys and
+writes an `oob_key_exported` audit entry. Set the peer's role to `control` for anything beyond
+PING and STATUS-NET.
+
+**Replies.** A reply always goes back on the bearer and to the address the request arrived from
+(`Service.reply` is called with the inbound `ifaceID` and `fromAddr`), sealed with the same peer key
+and correlated by `req_counter_lo`. The wire form is the same on every bearer: bare `MS:` +
+Crockford base32 text, never base64, and for SMS it leaves as the delivery class `oob`, which sends
+the text verbatim with no prefix. So the Hub expects: SMS back to its Twilio number, and for IMT and
+SBD the bare `MS:...` text as the MO payload. (The unrelated `hub_uplink` position/health/SOS frames
+of MESHSAT-963 are the ones that are base64 over SMS and raw bytes over satellite.)
+
+**Body budget per bearer** (`BearerBudget`, minus `ReplyHeaderLen` 5): APRS 15, SBD `iridium_0` 48,
+cellular and SMS 72, IMT `iridium_imt_0` 73 (`MaxArgs`). The SBD number matters: the 9603 gateway
+only sends an MO as text when it is printable ASCII and at most 120 characters, otherwise it wraps
+the frame in the compact binary envelope and the Hub cannot read it. A full-size SBD reply encodes to
+under that limit; `TestSBDReplyStaysBareText` pins it, so raising `BearerBudget("iridium_0")` without
+raising the gateway's limit breaks the SBD reply path.

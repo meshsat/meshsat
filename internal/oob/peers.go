@@ -2,6 +2,7 @@ package oob
 
 import (
 	"crypto/ecdh"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -303,4 +304,74 @@ func (s *Service) peerKey(p *database.OOBPeer) ([]byte, error) {
 		return nil, ErrBadKey
 	}
 	return raw, nil
+}
+
+// RegisterHubPeer registers or refreshes the peer for a management key the
+// Hub pushed over its authenticated MQTT session (key_rotate with
+// channel_type "mgmt"). The Hub already issues mgmt_* commands to this
+// bridge over that session, so the peer it provisions for itself carries
+// the same authority on the other bearers: role control, and this side is
+// the importer (the Hub generated the key). The peer id is derived from
+// the key, so a rotation replaces the row that carries the same alias.
+// [MESHSAT-964]
+func (s *Service) RegisterHubPeer(alias string, rawKey []byte) (*database.OOBPeer, error) {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return nil, errors.New("oob: a hub-provisioned key needs an alias")
+	}
+	if len(rawKey) != KeyLen {
+		return nil, ErrBadKey
+	}
+	id := PeerIDFromKey(rawKey)
+	if old, err := s.d.DB.GetOOBPeerByAlias(alias); err == nil && old.PeerID != id {
+		// Rotation: the id follows the key, so the old row would linger with
+		// a key that no longer exists in the store.
+		if err := s.d.DB.DeleteOOBPeer(old.PeerID); err != nil {
+			return nil, err
+		}
+	}
+	if existing, err := s.d.DB.GetOOBPeer(id); err == nil {
+		existing.Alias = alias
+		existing.Role = RoleControl
+		existing.Enabled = true
+		if err := s.d.DB.UpdateOOBPeer(existing); err != nil {
+			return nil, err
+		}
+		return s.d.DB.GetOOBPeer(id)
+	}
+	p := &database.OOBPeer{
+		PeerID:    id,
+		Alias:     alias,
+		KeyRef:    "mgmt:" + alias,
+		KeySource: KeySourceBundle,
+		LocalRole: int(RoleImporter),
+		Role:      RoleControl,
+		Enabled:   true,
+	}
+	if err := s.d.DB.InsertOOBPeer(p); err != nil {
+		return nil, err
+	}
+	return s.d.DB.GetOOBPeer(id)
+}
+
+// ExportKey returns the raw management key of a peer as hex, for pairing a
+// counterpart that takes a key rather than a bundle URL (the Hub's
+// POST /api/bridges/{id}/oob). Derived keys are never exported, the same
+// rule IssueBundle applies. [MESHSAT-964]
+func (s *Service) ExportKey(id uint16) (alias, keyHex string, err error) {
+	p, err := s.d.DB.GetOOBPeer(id)
+	if err != nil {
+		return "", "", err
+	}
+	if p.KeySource != KeySourceBundle {
+		return "", "", errors.New("oob: an ecdh key is derived on both sides and is never exported")
+	}
+	raw, err := s.peerKey(p)
+	if err != nil {
+		return "", "", err
+	}
+	if len(raw) != KeyLen {
+		return "", "", errors.New("oob: stored key has the wrong length")
+	}
+	return p.Alias, hex.EncodeToString(raw), nil
 }

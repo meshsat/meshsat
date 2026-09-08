@@ -1883,6 +1883,18 @@ func main() {
 		cmdHandler.SetCredentialStore(&bridgeCredentialStore{db: db})
 		if ks != nil {
 			cmdHandler.SetKeyStore(ks) // [MESHSAT-447] Hub-driven key rotation
+			// A key_rotate for channel_type "mgmt" also has to register the
+			// peer, or the Hub's own key is stored and unusable. [MESHSAT-964]
+			cmdHandler.SetMgmtPeerRegistrar(func(alias string, rawKey []byte) (uint16, error) {
+				if oobSvc == nil {
+					return 0, errors.New("oob service not enabled")
+				}
+				p, err := oobSvc.RegisterHubPeer(alias, rawKey)
+				if err != nil {
+					return 0, err
+				}
+				return p.PeerID, nil
+			})
 		}
 		// Hub-driven directory sync: Hub pushes signed Snapshot JSON
 		// via directory_push; we verify against the pinned anchor

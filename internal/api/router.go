@@ -785,6 +785,7 @@ func (s *Server) Router() http.Handler {
 		r.Put("/oob/peers/{id}", s.handleUpdateOOBPeer)
 		r.Delete("/oob/peers/{id}", s.handleDeleteOOBPeer)
 		r.Post("/oob/peers/{id}/bundle", s.handleOOBPeerBundle)
+		r.Get("/oob/peers/{id}/key", s.handleOOBPeerKey)
 		r.Get("/oob/peers/{id}/bundle/qr", s.handleOOBPeerBundleQR)
 		r.Post("/oob/send", s.handleOOBSend)
 		r.Get("/oob/log", s.handleGetOOBLog)
