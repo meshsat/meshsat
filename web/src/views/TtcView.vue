@@ -181,7 +181,7 @@ const flowBusy = ref(false)
 const satNoModem = computed(() => !(flow.value.imt && flow.value.imt.connected))
 const lanes = computed(() => ([
   { key: 'imt', lane: 'sat', card: 'sat', label: 'Satellite, Iridium',
-    sub: satNoModem.value ? 'satellite modem not answering' : 'via an Iridium satellite and the Hub to the other kit',
+    sub: satNoModem.value ? 'satellite modem not answering' : 'by satellite and the Hub to the other kit',
     chosen: satNoModem.value ? 'chosen, modem not answering: texts wait' : 'chosen: through space, a minute or two' },
   { key: 'aprs', lane: 'aprs', card: 'air', label: 'APRS radio, 144.800 MHz',
     sub: aprsSilent.value ? 'receiver silent, replies fall back to SMS' : 'radio packets straight to the other kit',
