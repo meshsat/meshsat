@@ -31,7 +31,7 @@ type PacketRates struct {
 
 // packetBearers is the fixed set of bearers the rates endpoint reports,
 // zero-filled so the SPA never has to test for a missing key.
-var packetBearers = []string{gateway.BearerLoRa, gateway.BearerAPRS, gateway.BearerSMS}
+var packetBearers = []string{gateway.BearerLoRa, gateway.BearerAPRS, gateway.BearerSMS, gateway.BearerSat}
 
 // PacketRing is a fixed-size, thread-safe, newest-wins ring of packet
 // records. It is purely in memory: no table, no migration. Every Add also

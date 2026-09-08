@@ -12,10 +12,10 @@ import (
 // are fixed, every field is always present in the JSON. [MESHSAT-826]
 type PacketRecord struct {
 	Time        time.Time `json:"time"`         // RFC3339Nano
-	Bearer      string    `json:"bearer"`       // lora | aprs | sms
+	Bearer      string    `json:"bearer"`       // lora | aprs | sms | sat
 	Dir         string    `json:"dir"`          // rx | tx
-	Iface       string    `json:"iface"`        // mesh_0, aprs_0, cellular_0
-	From        string    `json:"from"`         // !nodeid, CALL-SSID, phone number
+	Iface       string    `json:"iface"`        // mesh_0, aprs_0, cellular_0, iridium_imt_0, iridium_0
+	From        string    `json:"from"`         // !nodeid, CALL-SSID, phone number, IMEI or "cloudloop"
 	To          string    `json:"to"`           // !nodeid or "broadcast", tocall, phone number
 	Bytes       int       `json:"bytes"`        // on-air frame or payload size
 	RSSI        int       `json:"rssi"`         // dBm, 0 when unknown
@@ -26,7 +26,7 @@ type PacketRecord struct {
 	PortNumName string    `json:"portnum_name"` // Meshtastic portnum name (LoRa)
 	Text        string    `json:"text"`         // decoded text for text frames only, capped
 	Raw         string    `json:"raw"`          // hex of the AX.25 frame (APRS only), capped
-	Path        string    `json:"path"`         // APRS digipeater path, comma separated
+	Path        string    `json:"path"`         // APRS digipeater path, comma separated; sat: "mo_status=<n>" on tx
 	MsgRef      string    `json:"msg_ref"`      // delivery msg_ref when known
 }
 
@@ -41,6 +41,7 @@ const (
 	BearerLoRa = "lora"
 	BearerAPRS = "aprs"
 	BearerSMS  = "sms"
+	BearerSat  = "sat" // Iridium MO/MT, SBD or IMT [MESHSAT-962]
 
 	DirRX = "rx"
 	DirTX = "tx"

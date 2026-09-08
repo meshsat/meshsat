@@ -38,7 +38,7 @@ const store = useMeshsatStore()
 // what is paired with it, `mesh` the island letter.
 const KITS = {
   parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeck', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'techo', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9603', peer: 'parallax' },
+  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'techo', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
 }
 const LEFT_KIT = 'tesseract'
 const DEVICE_NAME = { tdeck: 'T-Deck', techo: 'T-Echo' }
@@ -91,6 +91,7 @@ const chips = computed(() => ([
   { key: 'mesh', label: 'LoRa mesh', short: 'LoRa', ...chip('mesh') },
   { key: 'aprs', label: 'APRS 144.800', short: 'APRS', ...chip('aprs') },
   { key: 'cellular', label: 'SMS', short: 'SMS', ...chip('cellular') },
+  { key: 'sat', label: 'Satellite', short: 'SAT', state: flow.value.imt && flow.value.imt.connected ? 'ok' : flow.value.imt && flow.value.imt.running ? 'healing' : 'unknown', detail: 'Iridium IMT' },
 ]))
 const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
 const aprsQuiet = computed(() => aprs.value.receive_state === 'quiet')
@@ -123,7 +124,7 @@ const nearDeviceNode = ref('')  // last LoRa sender seen on this kit
 // when a real event arrives; the dot tweens between anchor points.
 const trips = ref([])           // newest first, last 12
 const current = ref(null)       // the trip being animated
-const dot = reactive({ x: 0, y: 0, visible: false, lane: 'aprs', dir: 'out' })
+const dot = reactive({ x: 0, y: 0, visible: false, lane: 'aprs', dir: 'out', waiting: false })
 let tween = null
 let raf = 0
 
@@ -132,16 +133,16 @@ let raf = 0
 const G = {
   devL: { x: 150, y: 240 }, kitL: { x: 392, y: 240 }, airL: { x: 490, y: 240 },
   airR: { x: 790, y: 240 }, kitR: { x: 888, y: 240 }, devR: { x: 1130, y: 240 },
-  aprsY: 240, hubY: 314, smsY: 386,
+  satY: 166, aprsY: 240, hubY: 314, smsY: 386,
 }
 // Half route: the near device and kit large, the air leaving over an edge.
-const HALF_LEFT = { dev: { x: 236, y: 300 }, kit: { x: 640, y: 300 }, airNear: { x: 790, y: 300 }, airFar: { x: 1340, y: 300 }, edge: 1280, aprsY: 226, hubY: 320, smsY: 414, isl: { x: 44, w: 736 } }
-const HALF_RIGHT = { dev: { x: 1044, y: 300 }, kit: { x: 640, y: 300 }, airNear: { x: 490, y: 300 }, airFar: { x: -60, y: 300 }, edge: 0, aprsY: 226, hubY: 320, smsY: 414, isl: { x: 500, w: 736 } }
+const HALF_LEFT = { dev: { x: 236, y: 300 }, kit: { x: 640, y: 300 }, airNear: { x: 790, y: 300 }, airFar: { x: 1340, y: 300 }, edge: 1280, satY: 132, aprsY: 226, hubY: 320, smsY: 414, isl: { x: 44, w: 736 } }
+const HALF_RIGHT = { dev: { x: 1044, y: 300 }, kit: { x: 640, y: 300 }, airNear: { x: 490, y: 300 }, airFar: { x: -60, y: 300 }, edge: 0, satY: 132, aprsY: 226, hubY: 320, smsY: 414, isl: { x: 500, w: 736 } }
 const P = computed(() => {
   if (layout.value === 'full') {
     return nearIsLeft.value
-      ? { dev: G.devL, kit: G.kitL, airNear: G.airL, airFar: G.airR, aprsY: G.aprsY, hubY: G.hubY, smsY: G.smsY, edge: G.airR.x }
-      : { dev: G.devR, kit: G.kitR, airNear: G.airR, airFar: G.airL, aprsY: G.aprsY, hubY: G.hubY, smsY: G.smsY, edge: G.airL.x }
+      ? { dev: G.devL, kit: G.kitL, airNear: G.airL, airFar: G.airR, satY: G.satY, aprsY: G.aprsY, hubY: G.hubY, smsY: G.smsY, edge: G.airR.x }
+      : { dev: G.devR, kit: G.kitR, airNear: G.airR, airFar: G.airL, satY: G.satY, aprsY: G.aprsY, hubY: G.hubY, smsY: G.smsY, edge: G.airL.x }
   }
   return nearIsLeft.value ? HALF_LEFT : HALF_RIGHT
 })
@@ -154,7 +155,10 @@ const hubY = computed(() => P.value.hubY)
 const aprsY = computed(() => P.value.aprsY)
 // Lane y by lane name; the message dot and the inbound/outbound animations
 // use it so a message always rides the lane it actually took.
-const laneY = (lane) => lane === 'sms' ? smsY.value : lane === 'hub' ? hubY.value : aprsY.value
+const satY = computed(() => P.value.satY)
+const laneY = (lane) => lane === 'sms' ? smsY.value : lane === 'hub' ? hubY.value : lane === 'sat' ? satY.value : aprsY.value
+// The satellite glyph sits where the Hub cloud sits on its own lane.
+const satX = computed(() => layout.value === 'full' ? 524 : airNear.value.x + (nearIsLeft.value ? 44 : -44))
 // The Hub cloud sits on the far side of the Hub lane so the lane label
 // stays readable in the middle.
 const cloudX = computed(() => layout.value === 'full' ? 756 : airNear.value.x + (nearIsLeft.value ? 44 : -44))
@@ -172,7 +176,13 @@ const laneStartX = computed(() => kitPos.value.x + (nearIsLeft.value ? 124 : -12
 // lane they actually took, whatever is selected.
 const flow = ref({ path: '', rules: {}, hub_number: '', peer_number: '', ready: false, issues: [] })
 const flowBusy = ref(false)
+// The satellite leg exists on the panel before the modem is fitted: the
+// lane reads "modem not answering" until the 9704 gateway is up.
+const satNoModem = computed(() => !(flow.value.imt && flow.value.imt.connected))
 const lanes = computed(() => ([
+  { key: 'imt', lane: 'sat', card: 'sat', label: 'Satellite, Iridium',
+    sub: satNoModem.value ? 'satellite modem not answering' : 'via an Iridium satellite and the Hub to the other kit',
+    chosen: satNoModem.value ? 'chosen, modem not answering: texts wait' : 'chosen: through space, a minute or two' },
   { key: 'aprs', lane: 'aprs', card: 'air', label: 'APRS radio, 144.800 MHz',
     sub: aprsSilent.value ? 'receiver silent, replies fall back to SMS' : 'radio packets straight to the other kit',
     chosen: aprsSilent.value ? 'chosen, receiver silent: SMS carries replies' : 'chosen: radio, straight to the other kit' },
@@ -253,9 +263,9 @@ const legLabel = computed(() => {
   const l = t.legs
   if (t.dir === 'out') {
     if (l.queued !== undefined) out.push({ k: 'LoRa in to relay rule', v: l.queued })
-    if (l.sent !== undefined) out.push({ k: t.lane === 'aprs' ? 'On the air (APRS)' : t.lane === 'hub' ? 'SMS to the Hub accepted by KPN' : 'SMS accepted by KPN', v: l.sent })
+    if (l.sent !== undefined) out.push({ k: t.lane === 'aprs' ? 'On the air (APRS)' : t.lane === 'hub' ? 'SMS to the Hub accepted by KPN' : t.lane === 'sat' ? 'Accepted by the satellite (MO)' : 'SMS accepted by KPN', v: l.sent })
   } else {
-    if (l.queued !== undefined) out.push({ k: 'Air in to relay rule', v: l.queued })
+    if (l.queued !== undefined) out.push({ k: t.lane === 'sat' ? 'Satellite in to relay rule' : 'Air in to relay rule', v: l.queued })
     if (l.sent !== undefined) out.push({ k: 'Handed to LoRa', v: l.sent })
   }
   return out
@@ -307,6 +317,18 @@ function onPacket(p) {
   } else if (p.bearer === 'aprs' && p.dir === 'tx') {
     const t = current.value
     if (t && t.dir === 'out' && !t.done) { stage(t, 'aprs_tx', { bytes: p.bytes, raw: p.raw }); t.bytes = p.bytes || t.bytes }
+  } else if (p.bearer === 'sat' && p.dir === 'rx') {
+    if (isHousekeeping(p)) return
+    if (!current.value || current.value.done || current.value.dir !== 'in') {
+      const t = newTrip('in', p); t.lane = 'sat'; dot.lane = 'sat'
+      stage(t, 'sat_rx')
+      jump(airFar.value.x, satY.value)
+      moveTo(satX.value, satY.value, 900)
+      setTimeout(() => moveTo(airNear.value.x, satY.value, 700), 950)
+    }
+  } else if (p.bearer === 'sat' && p.dir === 'tx') {
+    const t = current.value
+    if (t && t.dir === 'out' && !t.done) { stage(t, 'sat_tx', { bytes: p.bytes, mo: p.path }); t.bytes = p.bytes || t.bytes }
   } else if (p.bearer === 'sms' && p.dir === 'rx') {
     if (isHousekeeping(p)) { pulseAir(); return }
     if (!current.value || current.value.done || current.value.dir !== 'in') {
@@ -339,8 +361,23 @@ function onDelivery(ev) {
   }
   if (!t || t.done) return
   const status = (d.status || ev.type.replace('delivery_', '')).toLowerCase()
+  const satCh = ch.startsWith('iridium')
   if (status === 'queued') {
-    if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular')) && !t.laneCommitted) {
+    if (t.dir === 'out' && satCh && !t.laneCommitted) {
+      // Satellite: the send blocks in the modem for a while; the dot climbs
+      // to the satellite and waits there. A second text behind a first one
+      // parks at the kit: the worker sends one at a time. [MESHSAT-962]
+      t.lane = 'sat'; dot.lane = 'sat'; t.msgRef = d.msg_ref
+      const busy = trips.value.some(x => x !== t && !x.done && x.dir === 'out' && x.lane === 'sat' && !x.laneCommitted && x.stages.some(st => st.name === 'queued'))
+      if (busy) {
+        stage(t, 'waiting', { channel: ch }); dot.waiting = true
+        moveTo(kitPos.value.x, satY.value, 450)
+      } else {
+        stage(t, 'queued', { channel: ch }); dot.waiting = true
+        moveTo(kitPos.value.x, satY.value, 450)
+        setTimeout(() => { if (current.value === t) moveTo(satX.value, satY.value, 1600) }, 480)
+      }
+    } else if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular')) && !t.laneCommitted) {
       t.lane = ch.startsWith('cellular') ? smsLane(d.destination) : 'aprs'; dot.lane = t.lane
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
       moveTo(kitPos.value.x, laneY(t.lane), 450)
@@ -348,8 +385,18 @@ function onDelivery(ev) {
       stage(t, 'queued', { channel: ch }); t.msgRef = d.msg_ref
       moveTo(kitPos.value.x, kitPos.value.y, 500)
     }
+  } else if (status === 'retry' && satCh && t.dir === 'out') {
+    stage(t, 'retry', { channel: ch, error: d.error, next: d.next_retry })
+    dot.waiting = true
   } else if (status === 'delivered' || status === 'sent') {
-    if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular'))) {
+    if (t.dir === 'out' && satCh) {
+      if (t.laneCommitted) return
+      t.laneCommitted = true; t.lane = 'sat'; dot.lane = 'sat'; dot.waiting = false
+      stage(t, 'sent', { channel: ch, latency: d.latency_ms })
+      moveTo(satX.value, satY.value, 300)
+      setTimeout(() => moveTo(airFar.value.x, satY.value, 1200), 330)
+      finish(t, false, 1700)
+    } else if (t.dir === 'out' && (ch.startsWith('aprs') || ch.startsWith('cellular'))) {
       // The channel is the authority for the lane, not the earlier
       // `queued` event: a relayed mesh text fragments against the SMS
       // size and the dispatcher skips `queued` for fragmented sends,
@@ -382,7 +429,8 @@ function onDelivery(ev) {
       finish(t, false, 1100)
     }
   } else if (status === 'dead' || status === 'failed') {
-    if (ch.startsWith('aprs') || ch.startsWith('cellular') || ch.startsWith('mesh')) {
+    if (ch.startsWith('aprs') || ch.startsWith('cellular') || ch.startsWith('mesh') || satCh) {
+      dot.waiting = false
       stage(t, 'failed', { channel: ch, error: d.error })
       finish(t, true, 200)
     }
@@ -427,8 +475,14 @@ const statusLine = computed(() => {
   const name = last ? last.name : ''
   const nearDev = nearDevName.value
   if (replaying.value) return `replaying the last real message, ${replayAge.value} min ago`
-  if (t.failed) return 'did not get out this time'
+  if (t.failed) return t.lane === 'sat' ? 'no satellite in view, it did not get out' : 'did not get out this time'
   if (t.dir === 'out') {
+    if (t.lane === 'sat') {
+      if (name === 'sent' || name === 'sat_tx') return `accepted by the satellite at ${hhmmss(last.at)}, the other screen shows it arriving`
+      if (name === 'waiting') return 'waiting for the satellite slot, one message at a time'
+      if (name === 'retry') return satNoModem.value ? 'satellite modem not answering, trying again' : `no satellite in view yet, trying again${last.next ? ' at ' + hhmmss(Date.parse(last.next)) : ''}`
+      if (name === 'queued') return 'on its way up to the satellite, this can take a minute or two'
+    }
     if (name === 'sent' || name === 'aprs_tx') {
       const via = t.lane === 'sms' ? 'as one SMS' : t.lane === 'hub' ? 'as one SMS to the Hub' : 'over the radio'
       return layout.value === 'half' ? `left this kit ${via} at ${hhmmss(last.at)}, the other screen shows it arriving` : `on its way ${via} to ${peer.value.name}`
@@ -441,6 +495,7 @@ const statusLine = computed(() => {
   if (name === 'sent' || name === 'lora_tx') return `on this mesh now, look at the ${nearDev}`
   if (name === 'queued') return 'inside the kit, going out on LoRa'
   if (name === 'typed_local') return `typed on this kit, sent to the ${nearDev} over LoRa`
+  if (t.lane === 'sat') return `came in from space, sent by ${peer.value.name}`
   return t.lane === 'hub' ? `came in as an SMS from the Hub, sent by ${peer.value.name}` : `came in ${t.lane === 'sms' ? 'as an SMS' : 'over the radio'} from ${peer.value.name}`
 })
 // Only packets this kit could decrypt count as "heard on this mesh".
@@ -528,6 +583,18 @@ const cards = computed(() => ({
       ['Radio', '2 m transceiver with a software modem for APRS'],
       ['Also', 'LTE modem for SMS, RTL-SDR watching the bands, ZigBee, GPS, Meshtastic radio'],
       ['Right now', `${chips.value.filter(c => c.state === 'ok').length} of 3 demo channels up, ${rateOf('lora', 'rx') + rateOf('aprs', 'rx')} packets heard in the last minute`],
+    ],
+  },
+  sat: {
+    title: 'Satellite, Iridium',
+    lead: 'The kit sends the text up to an Iridium satellite. The MeshSat Hub gets it from the ground station and sends it back up to the other kit.',
+    facts: [
+      ['Path', `this kit's 9704 to Cloudloop, the Hub, Cloudloop to ${peer.value.name}'s 9704`],
+      ['Modem', 'RockBLOCK 9704, Iridium Messaging Transport'],
+      ['Sky', 'needs a view of the sky: outside, or the antenna at a window'],
+      ['Time', 'tens of seconds to a few minutes per hop'],
+      ['Cost', 'paid per message, so one at a time'],
+      ['Right now', !flow.value.imt || !flow.value.imt.running ? 'no satellite gateway on this kit' : !flow.value.imt.connected ? 'modem not answering' : `modem connected${flow.value.imt.last_mo_at ? ', last uplink ' + Math.max(0, Math.round((Date.now() - Date.parse(flow.value.imt.last_mo_at)) / 60000)) + ' min ago' : ''}${flow.value.imt.queued ? ', ' + flow.value.imt.queued + ' waiting' : ''}`],
     ],
   },
   hub: {
@@ -735,6 +802,7 @@ async function sendComposed() {
       // Follow the chosen path: radio, SMS to the Hub, or SMS to the peer.
       const path = flow.value.path
       const req = path === 'aprs' ? { text, gateway: 'aprs', precedence: 'Routine' }
+        : path === 'imt' ? { text, gateway: 'iridium_imt', precedence: 'Routine' }
         : path === 'hub_sms' && flow.value.hub_number ? { text, gateway: 'cellular', to: flow.value.hub_number, precedence: 'Routine' }
         : { text, gateway: 'cellular', precedence: 'Routine' }
       const r = await api.post('/messages/send', req)
@@ -853,16 +921,16 @@ onUnmounted(() => {
         <span class="font-display text-xl lg:text-2xl text-gray-50 tracking-wide">{{ me.name }}</span>
         <span class="hidden lg:inline font-mono text-sm text-gray-500">{{ me.callsign }}</span>
       </div>
-      <div class="ml-auto flex items-center gap-2">
+      <div class="ml-auto flex items-center gap-1.5">
         <span v-for="c in chips" :key="c.key"
-          class="chip font-mono text-xs px-2 py-1 rounded border"
+          class="chip font-mono text-[11px] px-1.5 py-0.5 rounded border"
           :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : c.state === 'healing' ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
           :title="c.detail">
           <span class="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle"
             :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'" /><span class="lg:hidden">{{ c.short }}</span><span class="hidden lg:inline">{{ c.label }}</span>
         </span>
         <PowerWidget :kit="me.name" compact />
-        <span class="font-mono text-base lg:text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
+        <span class="font-mono text-sm lg:text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
       </div>
     </header>
 
@@ -890,7 +958,7 @@ onUnmounted(() => {
             <g class="lanes">
               <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 78 : 56) : P.kit.x + 124" :y1="P.dev.y"
                     :x2="nearIsLeft ? P.kit.x - 124 : P.dev.x - (nearDev === 'tdeck' ? 78 : 56)" :y2="P.dev.y" class="lane lora near" />
-              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
+              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent, nosky: ln.lane === 'sat' && satNoModem }]" @click="selectPath(ln.key)">
                 <rect :x="Math.min(laneStartX, P.edge)" :y="laneY(ln.lane) - 40" :width="Math.abs(P.edge - laneStartX)" height="80" class="hit" />
                 <line :x1="laneStartX" :y1="laneY(ln.lane)" :x2="P.edge" :y2="laneY(ln.lane)" class="lane path-line" />
                 <circle :cx="laneStartX" :cy="laneY(ln.lane)" r="7" class="path-start" />
@@ -905,10 +973,17 @@ onUnmounted(() => {
                   <path d="M -44 12 a 16 16 0 0 1 6 -30 a 22 22 0 0 1 42 -8 a 18 18 0 0 1 36 12 a 15 15 0 0 1 -6 26 z" class="cloud-body" />
                   <text y="5" text-anchor="middle" class="cloud-label">HUB</text>
                 </g>
+                <g v-if="ln.lane === 'sat'" class="satellite" :class="{ beaming: dot.visible && dot.lane === 'sat' }" :transform="`translate(${satX},${laneY('sat')}) scale(1.5)`">
+                  <rect x="-9" y="-6" width="18" height="12" rx="2" class="sat-body" />
+                  <rect x="-36" y="-4" width="22" height="8" rx="1" class="sat-panel" />
+                  <rect x="14" y="-4" width="22" height="8" rx="1" class="sat-panel" />
+                  <path d="M -3 -6 q 3 -9 6 0" class="sat-dish" />
+                  <line x1="-4" y1="8" x2="-9" y2="22" class="beam" /><line x1="4" y1="8" x2="9" y2="22" class="beam" />
+                </g>
                 <text :x="laneTextX" :y="laneY(ln.lane) - 15" class="path-label" text-anchor="middle">{{ ln.label }}</text>
                 <text :x="laneTextX" :y="laneY(ln.lane) + 25" class="path-sub" text-anchor="middle">{{ flow.path === ln.key ? ln.chosen : ln.sub }}</text>
               </g>
-              <text :x="(P.airNear.x + P.edge) / 2" :y="laneY('sms') + 52" class="air-tap" text-anchor="middle">tap a path to choose it, again for details</text>
+              <text :x="(P.airNear.x + P.edge) / 2" :y="laneY('sms') + 60" class="air-tap" text-anchor="middle">tap a path to choose it, again for details</text>
             </g>
 
             <!-- near device -->
@@ -959,6 +1034,12 @@ onUnmounted(() => {
                   <path d="M -26 8 a 10 10 0 0 1 4 -19 a 13 13 0 0 1 25 -4 a 11 11 0 0 1 22 7 a 9 9 0 0 1 -4 16 z" class="cloud-body" />
                   <text y="4" text-anchor="middle" class="cloud-label small">HUB</text>
                 </g>
+                <g v-if="ln.lane === 'sat'" class="satellite" :transform="`translate(${satX},${laneY('sat')}) scale(0.7)`">
+                  <rect x="-9" y="-6" width="18" height="12" rx="2" class="sat-body" />
+                  <rect x="-36" y="-4" width="22" height="8" rx="1" class="sat-panel" />
+                  <rect x="14" y="-4" width="22" height="8" rx="1" class="sat-panel" />
+                  <path d="M -3 -6 q 3 -9 6 0" class="sat-dish" />
+                </g>
                 <text :x="(G.airL.x + G.airR.x)/2 - 20" :y="laneY(ln.lane) - 14" class="path-label" text-anchor="middle">{{ ln.label }}</text>
                 <text v-if="flow.path === ln.key" :x="(G.airL.x + G.airR.x)/2 - 20" :y="laneY(ln.lane) + 22" class="path-sub" text-anchor="middle">chosen</text>
               </g>
@@ -1002,7 +1083,7 @@ onUnmounted(() => {
           <!-- replay label -->
 
           <!-- the message -->
-          <g v-if="dot.visible" class="msg" :class="[dot.lane, current && current.failed ? 'failed' : '', replaying ? 'replay' : '']" :transform="`translate(${dot.x},${dot.y})`">
+          <g v-if="dot.visible" class="msg" :class="[dot.lane, current && current.failed ? 'failed' : '', replaying ? 'replay' : '', dot.waiting ? 'waiting' : '']" :transform="`translate(${dot.x},${dot.y})`">
             <circle r="26" fill="url(#dotg)" opacity="0.55" />
             <circle r="8" class="core" filter="url(#glow)" />
           </g>
@@ -1033,6 +1114,7 @@ onUnmounted(() => {
             last minute <span class="text-gray-300">LoRa</span> {{ rateOf('lora','rx') }}·{{ rateOf('lora','tx') }}
             <span class="text-gray-300 ml-2">APRS</span> {{ rateOf('aprs','rx') }}·{{ rateOf('aprs','tx') }}
             <span class="text-gray-300 ml-2">SMS</span> {{ rateOf('sms','rx') }}·{{ rateOf('sms','tx') }}
+            <span class="text-gray-300 ml-2">SAT</span> {{ rateOf('sat','rx') }}·{{ rateOf('sat','tx') }}
           </div>
           <div class="flex items-center gap-2">
             <span v-if="testNote" class="font-mono text-[11px] text-gray-500">{{ testNote }}</span>
@@ -1144,7 +1226,7 @@ onUnmounted(() => {
         </table>
         <!-- rates -->
         <div v-else-if="tab === 'rates'" class="grid grid-cols-3 gap-4">
-          <div v-for="b in ['lora','aprs','sms']" :key="b" class="rounded border border-gray-800 p-3">
+          <div v-for="b in ['lora','aprs','sms','sat']" :key="b" class="rounded border border-gray-800 p-3">
             <div class="font-mono text-xs text-gray-400 mb-1">{{ b }} · last 5 minutes, 10 s buckets</div>
             <div v-for="d in ['rx','tx']" :key="d" class="mb-2">
               <div class="flex justify-between font-mono text-[11px]"><span class="text-gray-400">{{ d }}</span><span class="text-gray-200">{{ rateOf(b, d) }} / min</span></div>
@@ -1243,6 +1325,22 @@ svg.full .path .path-label { font-size: 18px; }
 svg.full .path .path-sub { font-size: 15px; }
 svg.full .path .cloud-label.small { font-size: 12px; }
 .msg.hub .core { fill: #8FB8DE; }
+/* Satellite lane (MESHSAT-962): lavender so it reads apart from the white
+   radio, the blue Hub and the gold SMS; a small satellite glyph instead of
+   the radio waves; nosky when the modem is silent. */
+.path.sat .path-line, .path.sat .path-start { stroke: #B9A7E6; fill: #B9A7E6; }
+.path.sat .path-line { fill: none; }
+.path .sat-body, .path .sat-panel { fill: rgba(185, 167, 230, 0.10); stroke: #B9A7E6; stroke-width: 1.5; }
+.path .sat-dish { fill: none; stroke: #B9A7E6; stroke-width: 1.4; }
+.path .beam { stroke: #B9A7E6; stroke-width: 1.2; opacity: 0.25; }
+.path .satellite.beaming .beam { animation: beam 1.2s ease-in-out infinite; }
+@keyframes beam { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.9; } }
+.path.dim .sat-body, .path.dim .sat-panel, .path.dim .sat-dish { stroke-opacity: 0.35; }
+.path.nosky .path-line { stroke-dasharray: 3 9; stroke-opacity: 0.3; }
+.path.nosky .path-sub { fill: #FCD34D; }
+.msg.sat .core { fill: #B9A7E6; }
+.msg.waiting .core { animation: satwait 1.6s ease-in-out infinite; }
+@keyframes satwait { 0%, 100% { r: 8; } 50% { r: 12; } }
 .sms-label { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #AE9C7A; }
 .station :deep(.device .body) { fill: #0E0E14; stroke: #C8B89A; stroke-width: 1.4; }
 .station :deep(.device.photo .body) { fill: none; stroke: none; }
@@ -1301,6 +1399,7 @@ svg.full .st-sub { font-size: 16px; }
 .strip.live { min-height: 84px; max-height: 124px; }
 @media (prefers-reduced-motion: reduce) {
   .wave path { animation: none; opacity: 0.25; }
+  .path .satellite.beaming .beam, .msg.waiting .core { animation: none; }
   .composer .caret { animation: none; }
   .station.flash :deep(.device .body), .station.flash :deep(.device .bezel), .station.flash :deep(.device.photo .photo-img), .station.flash .kit-img { animation: none; }
 }

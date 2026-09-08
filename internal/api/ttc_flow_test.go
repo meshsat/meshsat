@@ -49,8 +49,14 @@ func TestTTCFlow_SetupThenSelect(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("setup: %d %s", code, body)
 	}
-	if len(st.Rules) != 3 {
-		t.Fatalf("expected 3 rules after setup, got %d: %s", len(st.Rules), body)
+	if len(st.Rules) != 4 {
+		t.Fatalf("expected 4 rules after setup, got %d: %s", len(st.Rules), body)
+	}
+	if st.Rules["imt"].ForwardTo != ttcIMTIface || st.Rules["imt"].Contact != "" {
+		t.Errorf("imt rule: %+v", st.Rules["imt"])
+	}
+	if st.IMT == nil || st.IMT.Running || st.IMT.Interface != ttcIMTIface {
+		t.Errorf("imt status without a gateway manager: %+v", st.IMT)
 	}
 	if st.Rules["aprs"].ForwardTo != ttcPeerGroupID {
 		t.Errorf("aprs rule should forward to %s, got %s", ttcPeerGroupID, st.Rules["aprs"].ForwardTo)
@@ -64,24 +70,31 @@ func TestTTCFlow_SetupThenSelect(t *testing.T) {
 	all, _ := s.db.GetAllAccessRules()
 	inbound := 0
 	for _, r := range all {
-		if r.Direction == "ingress" && r.ForwardTo == "mesh_0" && r.Enabled && (r.InterfaceID == "aprs_0" || r.InterfaceID == "cellular_0") {
+		if r.Direction == "ingress" && r.ForwardTo == "mesh_0" && r.Enabled && (r.InterfaceID == "aprs_0" || r.InterfaceID == "cellular_0" || r.InterfaceID == ttcIMTIface) {
 			inbound++
 		}
 		if strings.HasPrefix(r.Name, "ttc:") && r.InterfaceID == "mesh_0" && r.Direction != "ingress" {
 			t.Errorf("relay rule %s must be an ingress rule on mesh_0, got %s", r.Name, r.Direction)
 		}
 	}
-	if inbound != 2 {
-		t.Errorf("expected two enabled inbound rules, got %d", inbound)
+	if inbound != 3 {
+		t.Errorf("expected three enabled inbound rules, got %d", inbound)
 	}
 
-	for _, p := range []string{"hub_sms", "aprs", "b2b_sms"} {
+	for _, p := range []string{"hub_sms", "aprs", "imt", "b2b_sms"} {
 		code, st, body = ttcCall(t, s, "PUT", "/api/ttc/flow", `{"path":"`+p+`"}`)
 		if code != http.StatusOK {
 			t.Fatalf("select %s: %d %s", p, code, body)
 		}
 		if got := ttcEnabledPaths(st); len(got) != 1 || got[0] != p {
 			t.Errorf("select %s: enabled %v", p, got)
+		}
+		if p == "imt" {
+			// No gateway manager in the test: the one issue is the modem note.
+			if st.Path != p || len(st.Issues) != 1 || !strings.Contains(st.Issues[0], "9704") {
+				t.Errorf("select imt: path=%s issues=%v", st.Path, st.Issues)
+			}
+			continue
 		}
 		if st.Path != p || !st.Ready {
 			t.Errorf("select %s: path=%s ready=%v issues=%v", p, st.Path, st.Ready, st.Issues)
@@ -149,5 +162,22 @@ func TestTTCFlow_RejectsUnknownPath(t *testing.T) {
 	}
 	if code, _, _ := ttcCall(t, s, "POST", "/api/ttc/flow/setup", `{"peer_number":"0653207829"}`); code != http.StatusBadRequest {
 		t.Errorf("expected 400 for a number without +, got %d", code)
+	}
+}
+
+// An old ttc:imt rule that points elsewhere is repointed at the IMT interface.
+func TestTTCFlow_IMTRuleRepointed(t *testing.T) {
+	s := newTestServerWithDB(t)
+	id, err := s.db.InsertAccessRule(&database.AccessRule{InterfaceID: "mesh_0", Direction: "ingress", Priority: 1,
+		Name: "ttc:imt", Enabled: false, Action: "forward", ForwardTo: "iridium_0", Filters: "{}", ForwardOptions: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, st, body := ttcCall(t, s, "POST", "/api/ttc/flow/setup", `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("%d %s", code, body)
+	}
+	if st.Rules["imt"].ID != id || st.Rules["imt"].ForwardTo != ttcIMTIface {
+		t.Errorf("imt rule not repointed: %+v", st.Rules["imt"])
 	}
 }

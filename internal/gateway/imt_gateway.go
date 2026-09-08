@@ -52,6 +52,7 @@ func (g *IMTGateway) Start(ctx context.Context) error {
 		log.Warn().Err(err).Msg("imt: could not get modem status")
 	} else {
 		g.connected.Store(status.Connected)
+		g.rememberIMEI(status)
 	}
 
 	// Load pending DLQ count
@@ -141,6 +142,7 @@ func (g *IMTGateway) sendIMT(ctx context.Context, msg *transport.MeshMessage) er
 	g.lastActive.Store(time.Now().Unix())
 	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("imt: message sent")
 	g.emit("forward", fmt.Sprintf("IMT sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
+	g.noteMOSuccess(result.MOStatus, len(data), msg.DecodedText, msg.MsgRef, "cloudloop")
 
 	if g.db != nil {
 		g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
@@ -196,6 +198,7 @@ func (g *IMTGateway) imtListenOnce(ctx context.Context) error {
 
 	if status, err := g.sat.GetStatus(ctx); err == nil && status.Connected {
 		g.connected.Store(true)
+		g.rememberIMEI(status)
 		log.Info().Msg("imt: modem connected (post-subscribe check)")
 		g.emit("iridium", "IMT modem connected")
 	}
@@ -266,10 +269,13 @@ func (g *IMTGateway) receivePendingMT(_ context.Context) {
 			DeliveryStatus: "received",
 		})
 
+		g.noteMTReceived("cloudloop", len(payload), text)
+
 		select {
 		case g.inCh <- InboundMessage{
-			Source: "iridium_imt",
-			Text:   text,
+			Source:   "iridium_imt",
+			Text:     text,
+			FromAddr: "cloudloop",
 		}:
 		default:
 			log.Warn().Msg("imt: inbound channel full, MT dropped")

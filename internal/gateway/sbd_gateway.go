@@ -51,6 +51,7 @@ func (g *SBDGateway) Start(ctx context.Context) error {
 		log.Warn().Err(err).Msg("sbd: could not get modem status")
 	} else {
 		g.connected.Store(status.Connected)
+		g.rememberIMEI(status)
 	}
 
 	// Load pending DLQ count
@@ -166,6 +167,7 @@ func (g *SBDGateway) sendSBD(ctx context.Context, msg *transport.MeshMessage) er
 	g.lastActive.Store(time.Now().Unix())
 	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("sbd: message sent")
 	g.emit("forward", fmt.Sprintf("SBD sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
+	g.noteMOSuccess(result.MOStatus, len(data), msg.DecodedText, msg.MsgRef, "rock7")
 
 	if g.db != nil {
 		g.db.InsertCreditUsage(nil, cost, nil)

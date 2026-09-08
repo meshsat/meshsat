@@ -515,7 +515,7 @@ Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_
 | Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived; screen protectors FDHYFGDY 2-pack for the Touch Display 2 ordered 8 Sep (Amazon 407-8701954-9922741, EUR 9.99, Sat 12 Sep; one sheet per kit, no spare) | installed on both kits; protector checked against the 155.5 x 88 mm window before peeling, fitted with the top plate off |
 | Plate stack | middle plate sags under the X1202, cells and Pi 5; two extra M3 rods at mid-span of the long edges (MESHSAT-863) | fitted on both kits, plate pulled flat, fieldkit BUILD.md + CAD updated |
 | Software follow-ups | MESHSAT-861 (resolver honours a disabled interface, receive_state after a restart), MESHSAT-859 (time-sync config) | landed and verified |
-| Booth paths on the panel | three lanes drawn, tap to choose (MESHSAT-962, dad90ac + 0597731); Hub routes created on the NL Hub | 5/5 texts each way on each path on both kits, section 18 numbers |
+| Booth paths on the panel | four lanes drawn, tap to choose (MESHSAT-962; kit-to-kit SMS proven 8 Sep 10:27Z, APRS unchanged, Hub SMS leg open on the Hub side, satellite lane waits for tesseract's 9704 and the Hub route) | 5/5 texts each way on each path on both kits, sections 18 and 20 |
 | Hub over SMS/IMT without internet on the kit | satellite fallback uplink wired (MESHSAT-963, code only); Hub commands over SMS/IMT (MESHSAT-964, after the Hub migration) | 963: Hub fleet page shows the kit alive with WiFi off; 964: PING over SMS with WiFi off |
 | Logistics | hotel and taxis arranged, prints and stickers 9 to 11 Sep | booth slot and Hub allowlist from Thomas, transport and setup plan |
 
@@ -611,3 +611,53 @@ Bench: kit WiFi off (or the Hub MQTT port blocked), wait 5 min, then `docker log
 the Hub fleet page shows the kit online with the position within a minute of the SMS; with sky on
 parallax the same frame leaves over IMT. Owed: that bench run on both kits, and a look at where the
 Hub UI shows an SMS-borne health frame (fleet page shows online + position; health may be log-only).
+
+## 20. Fourth booth path: kit to kit over Iridium IMT (MESHSAT-962 follow-up, 8 Sep 2026)
+
+Scenario: the free RockBLOCK 9704 from Ground Control lands and goes into tesseract, so both kits carry an
+IMT modem and the demo can run a satellite leg under sky (outside the hall, or the antenna at a window).
+The panel draws a fourth lane above the radio, "Satellite, Iridium" (lavender, a small satellite glyph),
+selectable like the other three; it reads "modem not answering" in amber until the 9704 gateway is up.
+
+On the wire: a mesh text on kit A leaves over `iridium_imt_0` as an MO to Cloudloop; the Hub relays it as
+an MT to kit B's 9704 (Hub route, MESHSAT-964 deliverable D, an external dependency); kit B's IMT gateway
+receives the MT and the inbound rule `iridium_imt_0 -> mesh_0` puts it on mesh B. There is no
+device-to-device Iridium.
+
+Rules (both kits, created by `POST /api/ttc/flow/setup`): `ttc:imt` = `mesh_0` ingress, forward_to
+`iridium_imt_0`, disabled until chosen; inbound `ttc:in iridium_imt_0 -> mesh_0`, enabled. `GET
+/api/ttc/flow` carries an `imt` block: running, connected, imei, last_mo_at, last_mo_status, recent_mo
+(10 min), last_mt_at, queued, dlq_pending. Choosing imt on a kit without its modem is allowed; the one
+issue says the texts will queue.
+
+What to expect on the screen: the dot climbs from the kit to the satellite and waits there ("on its way
+up to the satellite, this can take a minute or two"); a second text within the first one's session parks at
+the kit ("waiting for the satellite slot, one message at a time": the delivery worker sends one at a time
+and a JSPR MO can block up to 180 s); on a failed session the status reads "no satellite in view yet,
+trying again at hh:mm:ssZ" (retries 30 s, 60 s, 120 s, then dead: "no satellite in view, it did not get
+out"); on success "accepted by the satellite at hh:mm:ssZ, the other screen shows it arriving" and a `sat
+tx` packet with `mo_status=0` in the nerds table; the far kit shows `sat rx` from cloudloop and the text
+on its mesh. Nothing in the dispatcher enforces `MESHSAT_PAID_RATE_LIMIT`; the serialisation is the worker.
+
+Tesseract 9704 install (owner, hardware and host):
+1. Pull the 9603 off UART0; free BCM 22 and 23. Wire the 9704 like parallax: 5 V pin 2, GND, BCM 4 (pin 7)
+   UART2 TX to 9704 RXD, BCM 5 (pin 29) UART2 RX to 9704 TXD, BCM 23 I_BTD (input, pull-up), BCM 26 I_EN,
+   BCM 24 P_EN low. Never USB and the 16-pin header together.
+2. `/boot/firmware/config.txt`: `dtoverlay=uart0-pi5` out, `dtoverlay=uart2-pi5` in, `enable_uart=0`
+   stays; reboot; `/dev/ttyAMA2` appears.
+3. Install and enable `meshsat-gpio.service` from parallax.
+4. `/srv/meshsat/.env`: `MESHSAT_IMT_PORT=/dev/ttyAMA2`, `MESHSAT_IMT_GPIO_I_EN=26`,
+   `MESHSAT_IMT_GPIO_I_BTD=23`, `MESHSAT_IMT_GPIO_CHIP=gpiochip4`; remove the five `MESHSAT_IRIDIUM_*`
+   lines; restart the container.
+5. Bridge: disable the `iridium` gateway, enable `iridium_imt`; `GET /api/gateways` shows it connected
+   with the new IMEI.
+6. Cloudloop: register the IMEI as a Thing on an IMT plan (airtime is not part of the free unit), webhook
+   to the Hub. Hub device registry: replace tesseract's 9603 IMEI. The Hub route A to B and back needs
+   both IMEIs.
+7. `POST /api/ttc/flow/setup` on both kits, then `GET /api/ttc/flow` until `imt.connected` is true.
+8. The 9704 firmware is unreliable below 10 C; evening outdoor tests need that in mind.
+
+Test order under sky, after the Hub route exists: both panels on the Satellite lane; one text from the
+T-Deck; watch queued, climb, `sent` with mo_status 0, the Cloudloop MO, the Hub MT to tesseract's IMEI,
+`sat rx` on tesseract, the text on the T-Echo; time both hops; the reverse; two texts within a minute; the
+antenna covered; five each way arriving exactly once. Record on MESHSAT-962.

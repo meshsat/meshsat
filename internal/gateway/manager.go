@@ -175,13 +175,16 @@ func (m *Manager) SetPacketSink(sink PacketSink) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for ifaceID, gw := range m.runningByIface {
-		switch g := gw.(type) {
-		case *APRSGateway:
-			g.SetPacketSink(sink, ifaceID)
-		case *CellularGateway:
+		if g, ok := gw.(packetSinkSetter); ok {
 			g.SetPacketSink(sink, ifaceID)
 		}
 	}
+}
+
+// packetSinkSetter is implemented by every gateway that feeds the live
+// packet ring (APRS, cellular, the two satellite gateways). [MESHSAT-962]
+type packetSinkSetter interface {
+	SetPacketSink(sink PacketSink, iface string)
 }
 
 // GetPassScheduler returns the pass scheduler from the running Iridium gateway, if any.
@@ -1194,6 +1197,9 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
 		}
+		if m.packetSink != nil {
+			gw.SetPacketSink(m.packetSink, instanceID)
+		}
 		return gw, nil
 	case "iridium_imt":
 		sat := m.getSatTransport(instanceID)
@@ -1207,6 +1213,9 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		gw := NewIMTGateway(*cfg, sat, m.db, m.predictor)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
+		}
+		if m.packetSink != nil {
+			gw.SetPacketSink(m.packetSink, instanceID)
 		}
 		return gw, nil
 	case "cellular":

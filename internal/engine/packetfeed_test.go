@@ -176,8 +176,8 @@ func TestPacketRing_RatesWindows(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := r.Rates(now, tc.window)
-			if len(got) != 3 {
-				t.Fatalf("rates must list exactly the three bearers, got %v", got)
+			if len(got) != 4 {
+				t.Fatalf("rates must list exactly the four bearers, got %v", got)
 			}
 			for b, want := range tc.want {
 				if got[b] != want {
@@ -250,7 +250,7 @@ func TestPacketRing_NilSafe(t *testing.T) {
 		t.Errorf("nil ring Len = %d", r.Len())
 	}
 	rates := r.Rates(time.Now(), time.Minute)
-	if len(rates) != 3 {
+	if len(rates) != 4 {
 		t.Errorf("nil ring Rates must still list the bearers: %v", rates)
 	}
 	var p *Processor
@@ -368,5 +368,14 @@ func TestMeshTXRecord(t *testing.T) {
 				t.Errorf("unexpected record %+v", got)
 			}
 		})
+	}
+}
+
+// The rates endpoint zero-fills the satellite bearer like the others. [MESHSAT-962]
+func TestPacketRing_RatesIncludeSat(t *testing.T) {
+	r := NewPacketRing(8, nil)
+	out := r.Rates(time.Now(), time.Minute)
+	if _, ok := out[gateway.BearerSat]; !ok {
+		t.Fatalf("sat missing from rates: %v", out)
 	}
 }
