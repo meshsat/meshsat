@@ -67,6 +67,9 @@ func TestTTCFlow_SetupThenSelect(t *testing.T) {
 		if r.Direction == "ingress" && r.ForwardTo == "mesh_0" && r.Enabled && (r.InterfaceID == "aprs_0" || r.InterfaceID == "cellular_0") {
 			inbound++
 		}
+		if strings.HasPrefix(r.Name, "ttc:") && r.InterfaceID == "mesh_0" && r.Direction != "ingress" {
+			t.Errorf("relay rule %s must be an ingress rule on mesh_0, got %s", r.Name, r.Direction)
+		}
 	}
 	if inbound != 2 {
 		t.Errorf("expected two enabled inbound rules, got %d", inbound)
@@ -113,7 +116,7 @@ func TestTTCFlow_SetupThenSelect(t *testing.T) {
 func TestTTCFlow_AdoptsExistingPeerLinkRule(t *testing.T) {
 	s := newTestServerWithDB(t)
 	_ = s.db.InsertFailoverGroup(&database.FailoverGroup{ID: ttcPeerGroupID, Label: "peer", Mode: "priority"})
-	id, err := s.db.InsertAccessRule(&database.AccessRule{InterfaceID: "mesh_0", Direction: "egress", Priority: 1,
+	id, err := s.db.InsertAccessRule(&database.AccessRule{InterfaceID: "mesh_0", Direction: "ingress", Priority: 1,
 		Name: "booth mesh to peer (APRS first, SMS fallback)", Enabled: true, Action: "forward", ForwardTo: ttcPeerGroupID,
 		Filters: `{"portnums":"[1]"}`, ForwardOptions: "{}", RateLimitPerMin: 6, RateLimitWindow: 60})
 	if err != nil {

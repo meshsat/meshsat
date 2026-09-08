@@ -31,9 +31,13 @@ import (
 // the booth). The far screen tells the lanes apart by the SMS sender: the
 // peer's SIM means b2b_sms, the Hub's number means hub_sms.
 //
-// The three egress rules are ordinary access rules named "ttc:<path>", so
-// they show up in Settings > Rules like any other and nothing here bypasses
-// the rules engine or the delivery ledger. Per-rule SMS destinations ride
+// The three rules are ordinary access rules named "ttc:<path>", so they
+// show up in Settings > Rules like any other and nothing here bypasses the
+// rules engine or the delivery ledger. They are INGRESS rules on mesh_0:
+// the relay convention on the kits is "ingress rule on the source
+// interface, forward_to the destination" (DispatchAccess evaluates the
+// source interface's ingress rules), which is how rule 1 of MESHSAT-857
+// and the inbound aprs_0/cellular_0 -> mesh_0 rules are built. Per-rule SMS destinations ride
 // on forward_options.sms_contacts (resolved by the DeliveryWorker, they
 // REPLACE the gateway's destination_numbers), so the two SMS paths only
 // differ by the contact they point at.
@@ -147,7 +151,7 @@ func (s *Server) ttcContactPhone(r *database.AccessRule) string {
 	return ""
 }
 
-// ttcRules returns the "ttc:<path>" egress rules keyed by path.
+// ttcRules returns the "ttc:<path>" mesh_0 ingress rules keyed by path.
 func (s *Server) ttcRules() (map[string]*database.AccessRule, []database.AccessRule, error) {
 	all, err := s.db.GetAllAccessRules()
 	if err != nil {
@@ -156,7 +160,7 @@ func (s *Server) ttcRules() (map[string]*database.AccessRule, []database.AccessR
 	out := map[string]*database.AccessRule{}
 	for i := range all {
 		r := &all[i]
-		if r.InterfaceID != "mesh_0" || r.Direction != "egress" {
+		if r.InterfaceID != "mesh_0" || r.Direction != "ingress" {
 			continue
 		}
 		if strings.HasPrefix(r.Name, ttcRulePrefix) {
@@ -169,7 +173,7 @@ func (s *Server) ttcRules() (map[string]*database.AccessRule, []database.AccessR
 	return out, all, nil
 }
 
-// ttcEnsureRules creates the three egress rules that are missing. An
+// ttcEnsureRules creates the three mesh_0 ingress relay rules that are missing. An
 // existing mesh_0 -> peer_link rule that is not ttc-named (rule 1 of
 // MESHSAT-857 on both kits) is adopted as "ttc:aprs" so its ID, filters
 // and match counters survive. Returns the rules keyed by path.
@@ -184,7 +188,7 @@ func (s *Server) ttcEnsureRules(peer, hub string) (map[string]*database.AccessRu
 	if rules["aprs"] == nil {
 		for i := range all {
 			r := &all[i]
-			if r.InterfaceID == "mesh_0" && r.Direction == "egress" && r.Action == "forward" &&
+			if r.InterfaceID == "mesh_0" && r.Direction == "ingress" && r.Action == "forward" &&
 				r.ForwardTo == ttcPeerGroupID && !strings.HasPrefix(r.Name, ttcRulePrefix) {
 				r.Name = ttcRulePrefix + "aprs"
 				if err := s.db.UpdateAccessRule(r); err != nil {
@@ -205,7 +209,7 @@ func (s *Server) ttcEnsureRules(peer, hub string) (map[string]*database.AccessRu
 			fwd = "aprs_0"
 			issues = append(issues, "failover group peer_link is missing; the aprs path forwards to aprs_0 without the SMS fallback")
 		}
-		r := &database.AccessRule{InterfaceID: "mesh_0", Direction: "egress", Priority: 1, Name: ttcRulePrefix + "aprs",
+		r := &database.AccessRule{InterfaceID: "mesh_0", Direction: "ingress", Priority: 1, Name: ttcRulePrefix + "aprs",
 			Enabled: false, Action: "forward", ForwardTo: fwd, Filters: filters, ForwardOptions: "{}",
 			RateLimitPerMin: ttcRateLimit, RateLimitWindow: 60}
 		id, err := s.db.InsertAccessRule(r)
@@ -235,7 +239,7 @@ func (s *Server) ttcEnsureRules(peer, hub string) (map[string]*database.AccessRu
 			}
 			continue
 		}
-		r := &database.AccessRule{InterfaceID: "mesh_0", Direction: "egress", Priority: 1, Name: ttcRulePrefix + sp.path,
+		r := &database.AccessRule{InterfaceID: "mesh_0", Direction: "ingress", Priority: 1, Name: ttcRulePrefix + sp.path,
 			Enabled: false, Action: "forward", ForwardTo: "cellular_0", Filters: filters, ForwardOptions: opts,
 			RateLimitPerMin: ttcRateLimit, RateLimitWindow: 60}
 		id, err := s.db.InsertAccessRule(r)
@@ -418,7 +422,7 @@ func (s *Server) handleGetTTCFlow(w http.ResponseWriter, r *http.Request) {
 
 // handlePutTTCFlow selects the booth path.
 // @Summary Booth flow: select the path
-// @Description Enables exactly one of the three "ttc:<path>" egress rules on mesh_0 and disables the other two, persists the choice in system_config and reloads the rules engine. Creates missing rules first when the numbers are known. [MESHSAT-962]
+// @Description Enables exactly one of the three "ttc:<path>" relay rules (ingress rules on mesh_0) and disables the other two, persists the choice in system_config and reloads the rules engine. Creates missing rules first when the numbers are known. [MESHSAT-962]
 // @Tags ttc
 // @Accept json
 // @Produce json
@@ -470,7 +474,7 @@ func (s *Server) handlePutTTCFlow(w http.ResponseWriter, r *http.Request) {
 
 // handleTTCFlowSetup prepares a kit for the booth flow selector.
 // @Summary Booth flow: one-time setup
-// @Description Stores the peer kit's and the Hub's SMS numbers, creates the SMS contacts and the three "ttc:<path>" egress rules (adopting an existing mesh_0 -> peer_link rule as ttc:aprs), enables the aprs_0 and cellular_0 -> mesh_0 inbound rules, and adds both numbers to cellular_0 allowed_senders (restarts the cellular gateway only when a number was missing). Idempotent. [MESHSAT-962]
+// @Description Stores the peer kit's and the Hub's SMS numbers, creates the SMS contacts and the three "ttc:<path>" relay rules (ingress rules on mesh_0) (adopting an existing mesh_0 -> peer_link rule as ttc:aprs), enables the aprs_0 and cellular_0 -> mesh_0 inbound rules, and adds both numbers to cellular_0 allowed_senders (restarts the cellular gateway only when a number was missing). Idempotent. [MESHSAT-962]
 // @Tags ttc
 // @Accept json
 // @Produce json
