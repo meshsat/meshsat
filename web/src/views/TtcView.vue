@@ -135,8 +135,8 @@ const G = {
   aprsY: 240, hubY: 314, smsY: 386,
 }
 // Half route: the near device and kit large, the air leaving over an edge.
-const HALF_LEFT = { dev: { x: 240, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 790, y: 262 }, airFar: { x: 1340, y: 262 }, edge: 1280, aprsY: 214, hubY: 296, smsY: 378, isl: { x: 56, w: 720 } }
-const HALF_RIGHT = { dev: { x: 1040, y: 262 }, kit: { x: 640, y: 262 }, airNear: { x: 490, y: 262 }, airFar: { x: -60, y: 262 }, edge: 0, aprsY: 214, hubY: 296, smsY: 378, isl: { x: 504, w: 720 } }
+const HALF_LEFT = { dev: { x: 236, y: 300 }, kit: { x: 640, y: 300 }, airNear: { x: 790, y: 300 }, airFar: { x: 1340, y: 300 }, edge: 1280, aprsY: 226, hubY: 320, smsY: 414, isl: { x: 44, w: 736 } }
+const HALF_RIGHT = { dev: { x: 1044, y: 300 }, kit: { x: 640, y: 300 }, airNear: { x: 490, y: 300 }, airFar: { x: -60, y: 300 }, edge: 0, aprsY: 226, hubY: 320, smsY: 414, isl: { x: 500, w: 736 } }
 const P = computed(() => {
   if (layout.value === 'full') {
     return nearIsLeft.value
@@ -162,7 +162,7 @@ const cloudX = computed(() => layout.value === 'full' ? 756 : airNear.value.x + 
 // and the radio waves live.
 const laneTextX = computed(() => (airNear.value.x + P.value.edge) / 2 + (nearIsLeft.value ? 44 : -44))
 // The lanes leave from the kit's edge, not from a point floating beside it.
-const laneStartX = computed(() => kitPos.value.x + (nearIsLeft.value ? 104 : -104))
+const laneStartX = computed(() => kitPos.value.x + (nearIsLeft.value ? 124 : -124))
 
 // ── Booth flow selector (MESHSAT-962) ──
 // The three paths are drawn together; the chosen one is lit, the other two
@@ -466,7 +466,7 @@ const insideMs = computed(() => {
 })
 const msgSize = computed(() => {
   const n = (current.value && current.value.text ? current.value.text : '').length
-  return n > 60 ? 'text-xl lg:text-2xl' : n > 24 ? 'text-2xl lg:text-3xl' : 'text-3xl lg:text-4xl'
+  return n > 44 ? 'text-xl' : n > 20 ? 'text-2xl' : 'text-3xl'
 })
 
 // ── replay of the last real message while idle ───────────────────────
@@ -843,7 +843,7 @@ onUnmounted(() => {
 <template>
   <div class="ttc fixed inset-0 z-[60] bg-gray-950 text-gray-50 flex flex-col select-none overflow-hidden">
     <!-- header: mark (first half of the exit egg), hostname, chips, clock -->
-    <header class="relative flex items-center gap-3 px-4 h-14 shrink-0 border-b border-gray-800">
+    <header class="relative flex items-center gap-3 px-4 h-12 shrink-0 border-b border-gray-800">
       <div class="flex items-center gap-2 shrink-0 select-none" @click="markTap">
         <img src="/meshsat-mark.png" alt="" class="h-7 w-auto" draggable="false" />
         <span class="font-display font-semibold text-base tracking-wide">MeshSat</span>
@@ -869,7 +869,7 @@ onUnmounted(() => {
     <!-- ROUTE VIEW -->
     <main v-show="view === 'route'" class="flex-1 flex flex-col min-h-0">
       <div class="route-wrap flex-1 min-h-0 flex items-center">
-        <svg class="w-full h-full" :class="layout" :viewBox="layout === 'half' ? '0 0 1280 430' : '0 0 1280 462'" :preserveAspectRatio="layout === 'half' ? (nearIsLeft ? 'xMaxYMid meet' : 'xMinYMid meet') : 'xMidYMid meet'" aria-label="Message route">
+        <svg class="w-full h-full" :class="layout" :viewBox="layout === 'half' ? '0 0 1280 546' : '0 0 1280 462'" :preserveAspectRatio="layout === 'half' ? (nearIsLeft ? 'xMaxYMid meet' : 'xMinYMid meet') : 'xMidYMid meet'" aria-label="Message route">
           <defs>
             <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
               <feGaussianBlur stdDeviation="6" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
@@ -878,18 +878,18 @@ onUnmounted(() => {
           </defs>
 
           <!-- the one sentence a visitor needs -->
-          <text v-for="(l, i) in visitorLines" :key="i" x="640" :y="30 + i * 26" text-anchor="middle" class="visitor-line">{{ l }}</text>
+          <text v-for="(l, i) in visitorLines" :key="i" x="640" :y="26 + i * 25" text-anchor="middle" class="visitor-line">{{ l }}</text>
 
           <!-- ═══ HALF LAYOUT: this kit's half, the air leaving over the edge ═══ -->
           <template v-if="layout === 'half'">
             <g class="island near">
-              <rect :x="P.isl.x" y="66" :width="P.isl.w" height="350" rx="30" />
-              <text :x="P.isl.x + P.isl.w / 2" y="100" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, {{ me.channel }}</text>
-              <text v-for="(l, i) in lastHeardLines" :key="i" :x="P.isl.x + P.isl.w / 2" :y="128 + i * 24" text-anchor="middle" class="island-sub">{{ l }}</text>
+              <rect :x="P.isl.x" y="66" :width="P.isl.w" height="454" rx="34" />
+              <text :x="P.isl.x + P.isl.w / 2" y="102" text-anchor="middle" class="island-label">mesh {{ me.mesh }}, {{ me.channel }}</text>
+              <text v-for="(l, i) in lastHeardLines" :key="i" :x="P.isl.x + P.isl.w / 2" :y="130 + i * 24" text-anchor="middle" class="island-sub">{{ l }}</text>
             </g>
             <g class="lanes">
-              <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 60 : 44) : P.kit.x + 100" :y1="P.dev.y"
-                    :x2="nearIsLeft ? P.kit.x - 100 : P.dev.x - (nearDev === 'tdeck' ? 60 : 44)" :y2="P.dev.y" class="lane lora near" />
+              <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 78 : 56) : P.kit.x + 124" :y1="P.dev.y"
+                    :x2="nearIsLeft ? P.kit.x - 124 : P.dev.x - (nearDev === 'tdeck' ? 78 : 56)" :y2="P.dev.y" class="lane lora near" />
               <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
                 <rect :x="Math.min(laneStartX, P.edge)" :y="laneY(ln.lane) - 40" :width="Math.abs(P.edge - laneStartX)" height="80" class="hit" />
                 <line :x1="laneStartX" :y1="laneY(ln.lane)" :x2="P.edge" :y2="laneY(ln.lane)" class="lane path-line" />
@@ -900,11 +900,6 @@ onUnmounted(() => {
                       ? `M ${P.airNear.x + 6 + i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.airNear.x + 6 + i*16} ${laneY('aprs') + 14 + i*10}`
                       : `M ${P.airNear.x - 6 - i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.airNear.x - 6 - i*16} ${laneY('aprs') + 14 + i*10}`" />
                   </g>
-                  <g v-for="i in 3" :key="'we'+i" class="wave" :class="{ pulse: airPulse }" :style="{ animationDelay: (i * 0.5 + 0.25) + 's' }">
-                    <path :d="nearIsLeft
-                      ? `M ${P.edge - 40 - i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 1 ${P.edge - 40 - i*16} ${laneY('aprs') + 14 + i*10}`
-                      : `M ${P.edge + 40 + i*16} ${laneY('aprs') - 14 - i*10} A ${16 + i*10} ${16 + i*10} 0 0 0 ${P.edge + 40 + i*16} ${laneY('aprs') + 14 + i*10}`" />
-                  </g>
                 </template>
                 <g v-if="ln.lane === 'hub'" class="cloud" :transform="`translate(${cloudX},${laneY('hub')})`">
                   <path d="M -44 12 a 16 16 0 0 1 6 -30 a 22 22 0 0 1 42 -8 a 18 18 0 0 1 36 12 a 15 15 0 0 1 -6 26 z" class="cloud-body" />
@@ -913,24 +908,24 @@ onUnmounted(() => {
                 <text :x="laneTextX" :y="laneY(ln.lane) - 15" class="path-label" text-anchor="middle">{{ ln.label }}</text>
                 <text :x="laneTextX" :y="laneY(ln.lane) + 25" class="path-sub" text-anchor="middle">{{ flow.path === ln.key ? ln.chosen : ln.sub }}</text>
               </g>
-              <text :x="(P.airNear.x + P.edge) / 2" :y="laneY('sms') + 47" class="air-tap" text-anchor="middle">tap a path to choose it, again for details</text>
+              <text :x="(P.airNear.x + P.edge) / 2" :y="laneY('sms') + 52" class="air-tap" text-anchor="middle">tap a path to choose it, again for details</text>
             </g>
 
             <!-- near device -->
-            <g :transform="`translate(${P.dev.x},${P.dev.y + 24})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
-              <rect x="-110" y="-110" width="220" height="250" class="hit" rx="16" />
-              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.4" />
-              <TtcDeviceTEcho v-else :scale="1.4" />
-              <text :y="nearDev === 'tdeck' ? 88 : 100" text-anchor="middle" class="st-name">{{ nearDev === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
-              <text :y="nearDev === 'tdeck' ? 110 : 122" text-anchor="middle" class="st-sub">{{ nearDev === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
+            <g :transform="`translate(${P.dev.x},${P.dev.y + 26})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
+              <rect x="-140" y="-150" width="280" height="330" class="hit" rx="16" />
+              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.85" />
+              <TtcDeviceTEcho v-else :scale="1.85" />
+              <text :y="nearDev === 'tdeck' ? 120 : 136" text-anchor="middle" class="st-name">{{ nearDev === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
+              <text :y="nearDev === 'tdeck' ? 144 : 160" text-anchor="middle" class="st-sub">{{ nearDev === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
             </g>
 
             <!-- near kit -->
             <g :transform="`translate(${P.kit.x},${P.kit.y})`" class="station kit near tap" :class="{ flash }" @click="kitTap">
-              <rect x="-110" y="-130" width="220" height="290" class="hit" rx="16" />
-              <image href="/kit-v1.png" x="-84" y="-104" width="168" height="199" class="kit-img" />
-              <text y="112" text-anchor="middle" class="st-name">{{ me.name }}</text>
-              <text y="134" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}</text>
+              <rect x="-130" y="-160" width="260" height="360" class="hit" rx="16" />
+              <image href="/kit-v1.png" x="-112" y="-146" width="224" height="265" class="kit-img" />
+              <text y="150" text-anchor="middle" class="st-name">{{ me.name }}</text>
+              <text y="174" text-anchor="middle" class="st-sub">MeshSat kit, {{ me.callsign }}</text>
             </g>
           </template>
 
@@ -1014,37 +1009,37 @@ onUnmounted(() => {
         </svg>
       </div>
 
-      <!-- strip: the message, its status, the QR, the numbers -->
-      <section class="grid grid-cols-[132px_1fr_290px] lg:grid-cols-[176px_1fr_380px] gap-3 px-4 pb-3 shrink-0">
-        <div class="flex flex-col items-start gap-1 lg:flex-row lg:items-center lg:gap-3">
-          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[76px] h-[76px] lg:w-[92px] lg:h-[92px] shrink-0" draggable="false" @click="qrTap" />
-          <div class="font-sans text-[13px] lg:text-sm leading-tight text-gray-300">meshsat.net<br /><span class="text-gray-500">open source, GPLv3</span></div>
+      <!-- strip: one row. The message is the only thing here a visitor reads;
+           the QR and the crew's numbers stay small. Empty = one quiet line. -->
+      <section class="strip flex items-center gap-4 px-4 pb-2 pt-1 shrink-0" :class="{ live: current }">
+        <div class="flex items-center gap-2 shrink-0" @click="qrTap">
+          <img src="/qr-meshsat.svg" alt="QR code for meshsat.net" class="qr w-[48px] h-[48px] shrink-0" draggable="false" />
+          <div class="font-sans text-[12px] leading-tight text-gray-400">meshsat.net<br /><span class="text-gray-600">open source</span></div>
         </div>
-        <div class="rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2 min-h-[88px] max-h-[150px] lg:max-h-none overflow-hidden flex flex-col justify-center">
-          <button type="button" class="text-left w-full font-display leading-tight text-gray-50 break-words line-clamp-3" :class="current ? msgSize : 'text-xl lg:text-2xl'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
-            {{ current ? displayText(current) : (nearDev === 'tdeck' ? 'Your message will appear here the moment this kit hears it.' : 'The next message from the other kit will appear here the moment it lands.') }}
+        <div class="min-w-0 flex-1 flex flex-col justify-center">
+          <button type="button" class="text-left w-full font-display leading-tight break-words" :class="current ? [msgSize, 'text-gray-50 line-clamp-2'] : 'font-sans text-[15px] text-gray-500'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
+            {{ current ? displayText(current) : (nearDev === 'tdeck' ? 'Your message appears here the moment this kit hears it.' : 'The next message from the other kit appears here the moment it lands.') }}
           </button>
-          <div v-if="current" class="font-sans text-sm text-gray-300 mt-1">
+          <div v-if="current" class="font-sans text-[13px] leading-4 text-gray-300 line-clamp-2">
             {{ statusLine }}
             <span class="text-gray-500"> · {{ current.bytes || (current.text || '').length }} bytes</span>
             <span v-if="current.rssi" class="text-gray-500"> · {{ current.rssi }} dBm</span>
             <span v-if="current.snr" class="text-gray-500"> · SNR {{ current.snr }} dB</span>
+            <span v-if="insideMs !== null" class="text-gray-500"> · through this kit in <span class="text-teal-300">{{ insideMs }} ms</span></span>
           </div>
         </div>
-        <div class="rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2">
-          <div class="grid grid-cols-2 gap-x-3 font-mono text-sm leading-6 tabular-nums">
-            <span class="text-gray-400">last minute</span><span></span>
-            <span class="text-gray-300">LoRa</span><span class="text-gray-50">{{ rateOf('lora','rx') }} in · {{ rateOf('lora','tx') }} out</span>
-            <span class="text-gray-300">APRS</span><span class="text-gray-50">{{ rateOf('aprs','rx') }} in · {{ rateOf('aprs','tx') }} out</span>
-            <span class="text-gray-300">SMS</span><span class="text-gray-50">{{ rateOf('sms','rx') }} in · {{ rateOf('sms','tx') }} out</span>
+        <div class="shrink-0 flex flex-col items-end gap-1">
+          <div v-show="!current" class="font-mono text-[12px] leading-4 text-gray-500 tabular-nums whitespace-nowrap">
+            last minute <span class="text-gray-300">LoRa</span> {{ rateOf('lora','rx') }}·{{ rateOf('lora','tx') }}
+            <span class="text-gray-300 ml-2">APRS</span> {{ rateOf('aprs','rx') }}·{{ rateOf('aprs','tx') }}
+            <span class="text-gray-300 ml-2">SMS</span> {{ rateOf('sms','rx') }}·{{ rateOf('sms','tx') }}
           </div>
-          <div v-if="insideMs !== null" class="font-mono text-xs text-gray-400 mt-1">in and out of this kit in <span class="text-teal-300">{{ insideMs }} ms</span></div>
-          <div class="mt-2 flex items-center gap-2">
-            <button type="button" @click="drawer = !drawer" class="font-mono text-sm px-3 py-1.5 rounded border border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
-            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-sm px-3 py-1.5 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-700 text-gray-400 hover:text-gray-200'">
+          <div class="flex items-center gap-2">
+            <span v-if="testNote" class="font-mono text-[11px] text-gray-500">{{ testNote }}</span>
+            <button type="button" @click="drawer = !drawer" class="font-mono text-[12px] px-2.5 py-1 rounded border border-gray-800 text-gray-500 hover:border-teal-500 hover:text-teal-300 whitespace-nowrap">stats for nerds</button>
+            <button type="button" @click="sendTest" :disabled="testBusy" class="font-mono text-[12px] px-2.5 py-1 rounded border whitespace-nowrap" :class="testArmed ? 'border-teal-500 text-teal-300' : 'border-gray-800 text-gray-500 hover:text-gray-200'">
               {{ testArmed ? 'tap again to send' : 'test frame' }}
             </button>
-            <span v-if="testNote" class="font-mono text-xs text-gray-400">{{ testNote }}</span>
           </div>
         </div>
       </section>
@@ -1216,7 +1211,7 @@ onUnmounted(() => {
 .air-label { font-family: 'IBM Plex Mono', monospace; font-size: 28px; fill: #F7F7F4; letter-spacing: 0.02em; }
 .air-sub { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #B4B4BD; }
 .air-warn { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #FCD34D; }
-.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 21px; fill: #6A6A78; }
+.air-tap { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #6A6A78; }
 .visitor-line { font-family: 'IBM Plex Sans', sans-serif; font-size: 22px; fill: #D6D6DC; }
 .replay-note { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; fill: #8A8A96; }
 .sms-line { stroke: #E0B458; stroke-width: 1.5; stroke-dasharray: 10 8; opacity: 0.55; }
@@ -1301,7 +1296,9 @@ svg.full .st-sub { font-size: 16px; }
 .msg.sms .core { fill: #E0B458; }
 .msg.failed .core { fill: #F0655A; }
 .chip { transition: color 0.3s, border-color 0.3s; }
-.route-wrap { padding: 0 12px; }
+.route-wrap { padding: 0 8px; }
+.strip { min-height: 60px; }
+.strip.live { min-height: 84px; max-height: 124px; }
 @media (prefers-reduced-motion: reduce) {
   .wave path { animation: none; opacity: 0.25; }
   .composer .caret { animation: none; }
