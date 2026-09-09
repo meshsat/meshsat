@@ -63,6 +63,8 @@ type sendToContactResponse struct {
 // @Failure 503 {object} sendToContactResponse
 // @Router /api/messages/send-to-contact [post]
 func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
+	s.touchOperatorActivity()
+
 	if s.dispatcher == nil {
 		writeError(w, http.StatusServiceUnavailable, "dispatcher not available")
 		return
