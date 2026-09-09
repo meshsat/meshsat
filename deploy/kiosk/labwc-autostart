@@ -23,19 +23,30 @@ wlr-randr --output DSI-2 --transform 270 &
 #    Chromium. Otherwise the browser boots faster than docker and
 #    shows "site can't be reached" until the next manual reload.
 #    Poll the bridge's /health endpoint every second; bail out after
-#    5 minutes with a soft launch (Chromium will just retry) so the
-#    screen isn't black forever in a genuinely broken deploy.
+#    5 minutes with a soft launch so the screen isn't black forever in
+#    a genuinely broken deploy. Chromium does NOT retry on its own: a
+#    soft-launched kiosk sits on "site can't be reached" until someone
+#    relaunches it (both kits, 9 Sep 2026, an hour with no bridge
+#    behind a live browser). So a soft launch also arms a watcher that
+#    keeps polling and relaunches Chromium once the bridge answers.
+#    [MESHSAT-994]
 BRIDGE_HEALTH_URL="http://localhost:6050/health"
 BRIDGE_WAIT_MAX=300   # 5 minutes
 
+bridge_healthy() {
+  curl -fsS --max-time 2 "$BRIDGE_HEALTH_URL" >/dev/null 2>&1
+}
+
 i=0
 while [ "$i" -lt "$BRIDGE_WAIT_MAX" ]; do
-  if curl -fsS --max-time 2 "$BRIDGE_HEALTH_URL" >/dev/null 2>&1; then
+  if bridge_healthy; then
     break
   fi
   sleep 1
   i=$((i + 1))
 done
+BRIDGE_SOFT_LAUNCH=0
+[ "$i" -ge "$BRIDGE_WAIT_MAX" ] && BRIDGE_SOFT_LAUNCH=1
 
 # 3. Idle backlight dim — swayidle hooks labwc's idle notifier and
 #    dims the panel to 32/255 after 10 min of no input, restores to
@@ -74,6 +85,8 @@ swayidle -w \
 # readable after the nightly restart timer has relaunched Chromium.
 # [MESHSAT-987]
 KIOSK_LOG="/home/kiosk/.cache/chromium-kiosk.log"
+
+launch_chromium() {
 mkdir -p "$(dirname "$KIOSK_LOG")"
 [ -f "$KIOSK_LOG" ] && mv -f "$KIOSK_LOG" "$KIOSK_LOG.1"
 
@@ -96,6 +109,7 @@ chromium-browser \
   --disable-features=CalculateNativeWinOcclusion,BackForwardCache \
   --js-flags="--max-old-space-size=256" \
   --app="__BRIDGE_URL__" >"$KIOSK_LOG" 2>&1 &
+}
 # NB: the URL MUST be quoted — it contains `&` (query-string
 # separator between kiosk=1 and shell=operator). Without quotes,
 # bash parses the unquoted `&` as job-control and drops everything
@@ -103,3 +117,22 @@ chromium-browser \
 # ignore the `shell=…` role param. Verified on tesseract
 # 2026-04-19: bug dropped the role selector, bringing up the
 # wrong nav surface. [MESHSAT-549]
+
+launch_chromium
+
+# 5. Soft-launch watcher [MESHSAT-994]: the bridge was not healthy when
+#    Chromium started (a deploy still pulling, or a container left in
+#    the exited state by a scripted poweroff), so the kiosk is showing
+#    an error page. Keep polling; once /health answers, replace the
+#    browser with a fresh one pointed at the live bridge. The snap's
+#    processes are named "chrome", not "chromium"; exact-name match
+#    only, never -f, which could match this shell's own command line.
+if [ "$BRIDGE_SOFT_LAUNCH" = "1" ]; then
+  (
+    until bridge_healthy; do sleep 5; done
+    sleep 3
+    pkill -u kiosk -x chrome 2>/dev/null || true
+    sleep 2
+    launch_chromium
+  ) &
+fi

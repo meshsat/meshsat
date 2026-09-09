@@ -14,7 +14,12 @@ services:
   # ── MeshSat Hub ──────────────────────────────────────────────
   meshsat:
     image: ghcr.io/meshsat/meshsat:${MESHSAT_TAG:-latest}
-    restart: unless-stopped
+    # "always", not "unless-stopped": on an appliance the bridge must come
+    # back after every power-on, and unless-stopped honours a manual
+    # `docker stop` across reboots. A clean shutdown recipe that stops the
+    # container before poweroff left both field kits without a bridge on
+    # the next button press (9 Sep 2026). [MESHSAT-994]
+    restart: always
     environment:
       - MESHSAT_MODE=direct
       - MESHSAT_PORT=6050
