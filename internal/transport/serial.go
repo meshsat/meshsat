@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -706,98 +705,37 @@ func ClassifyDevice(vidpid string) string {
 }
 
 // ambiguousZigBeeVIDPIDs lists VID:PIDs shared between Meshtastic and ZigBee.
-// ClassifyDeviceWithProbe uses ZNP protocol probing to disambiguate these.
+// ClassifyDevice reports them as "ambiguous"; only the DeviceSupervisor
+// disambiguates them, by probing an UNCLAIMED port once (ProbeZNP /
+// ProbeMeshtastic / ProbeAT) and remembering the role in its registry.
 var ambiguousZigBeeVIDPIDs = map[string]bool{
 	"10c4:ea60": true, // CP210x — Meshtastic OR SONOFF ZBDongle-P (CC2652P)
 	"1a86:55d4": true, // CH343 — Meshtastic OR SONOFF ZBDongle-E (EFR32MG21)
 }
 
-// probeCacheMu and probeCache prevent repeated ProbeZNP calls against the
-// same port. [MESHSAT-510]
-//
-// The bridge's InterfaceManager runs scanDevices() every 5 seconds and
-// calls ClassifyDeviceWithProbe on every serial port, including ports
-// already claimed by a running gateway. Because the meshsat container runs
-// with CAP_SYS_ADMIN, the TIOCEXCL lock the gateway holds is bypassed —
-// the second open() succeeds, and on CP210x ZigBee dongles (SONOFF
-// ZBDongle-P) the open asserts DTR/RTS, triggering the auto-BSL circuit
-// and resetting the CC2652P Z-Stack firmware. On every reset the network
-// goes back to DEV_HOLD and ZDO_MGMT_PERMIT_JOIN_REQ returns 0xC2
-// (ZNwkInvalidRequest).
-//
-// The cache remembers the disambiguation result per port so we only pay
-// the probe cost (and DTR/RTS risk) once per device appearance. The cache
-// is invalidated by InvalidateProbeCache when a port vanishes, keyed by
-// devPath — hot-swaps re-enter the probe path.
-var (
-	probeCacheMu sync.RWMutex
-	probeCache   = map[string]probeCacheEntry{} // key: "vidpid|devPath"
-)
-
-type probeCacheEntry struct {
-	result string
-	at     time.Time
-}
-
-// probeCacheTTL caps how stale a cached classification can get in the
-// worst case (e.g. if InvalidateProbeCache wasn't called on a hot-swap).
-// 30 minutes is long enough that the periodic 5 s scanner never re-probes
-// a healthy port but short enough that operator actions (like unplug +
-// replug without triggering the supervisor) still converge.
-const probeCacheTTL = 30 * time.Minute
-
-// ClassifyDeviceWithProbe is like ClassifyDevice but runs a 3-way protocol
-// probe (ZNP → Meshtastic → AT) for VID:PIDs shared between Meshtastic,
-// ZigBee, and cellular. Results are cached per port under the same TTL to
-// avoid repeated DTR-triggered resets on ZigBee dongles and T-Call boards.
-// [MESHSAT-646]
-//
-// portPath is the serial device path (e.g. "/dev/ttyUSB3") needed for the
-// probe. Order matters: ZNP first (cheap and safe for non-ZigBee), then
-// Meshtastic (a 32-byte 0xC3 wake at 115200 is benign to the ZigBee stack
-// we just ruled out), then AT last because on T-Call boards the open()
-// syscall briefly asserts DTR regardless — we minimise that window via
-// InitialStatusBits in ProbeAT.
-//
-// If all three probes miss, the base "ambiguous" verdict is cached and
-// returned so /api/devices keeps rendering amber for operator attention.
-func ClassifyDeviceWithProbe(vidpid, portPath string) string {
-	base := ClassifyDevice(vidpid)
-	// We only probe when the VID:PID is in the ambiguous-probe map
-	// (shared with Meshtastic / ZigBee / Cellular). With the ambiguity-
-	// aware ClassifyDevice, `base` is "ambiguous" for those entries —
-	// accept "meshtastic" too so an already-cached result still
-	// short-circuits the probe on legacy callers.
-	if (base != "meshtastic" && base != "ambiguous") || !ambiguousZigBeeVIDPIDs[vidpid] || portPath == "" {
-		return base
+// DeviceTypeForRole maps a DeviceSupervisor role to the device-type
+// vocabulary ClassifyDevice emits ("meshtastic", "iridium", "cellular",
+// "zigbee", "gps"), so callers that know the claimed role of a port can
+// label it without opening it. RoleNone yields "" so a caller can fall
+// back to ClassifyDevice. [MESHSAT-815]
+func DeviceTypeForRole(role DeviceRole) string {
+	switch role {
+	case RoleMeshtastic:
+		return "meshtastic"
+	case RoleIridium9603, RoleIridium9704:
+		return "iridium"
+	case RoleCellular:
+		return "cellular"
+	case RoleZigBee:
+		return "zigbee"
+	case RoleGPS:
+		return "gps"
 	}
-
-	key := vidpid + "|" + portPath
-	probeCacheMu.RLock()
-	cached, ok := probeCache[key]
-	probeCacheMu.RUnlock()
-	if ok && time.Since(cached.at) < probeCacheTTL {
-		return cached.result
-	}
-
-	result := base
-	switch {
-	case ProbeZNP(portPath):
-		result = "zigbee"
-	case ProbeMeshtastic(portPath):
-		result = "meshtastic"
-	case ProbeAT(portPath):
-		result = "cellular"
-	}
-
-	probeCacheMu.Lock()
-	probeCache[key] = probeCacheEntry{result: result, at: time.Now()}
-	probeCacheMu.Unlock()
-	return result
+	return ""
 }
 
 // ProbeAT checks if a serial port speaks AT command protocol at 115200
-// baud (cellular default). Used by ClassifyDeviceWithProbe to resolve
+// baud (cellular default). Used by the DeviceSupervisor to resolve
 // VID:PIDs shared with cellular modems (e.g. T-Call A7670E on CH343
 // 1a86:55d4) after ZNP and Meshtastic probes have been ruled out.
 // [MESHSAT-646]
@@ -836,22 +774,6 @@ func ProbeAT(portName string) bool {
 
 	resp, err := sendAT(p, "AT", 2*time.Second)
 	return err == nil && strings.Contains(resp, "OK")
-}
-
-// InvalidateProbeCache drops cached classifications for a given port. Called
-// by DeviceSupervisor when a port disappears, so the same /dev path being
-// reassigned to a different device (hot-swap) will be re-classified.
-func InvalidateProbeCache(portPath string) {
-	if portPath == "" {
-		return
-	}
-	probeCacheMu.Lock()
-	defer probeCacheMu.Unlock()
-	for k := range probeCache {
-		if strings.HasSuffix(k, "|"+portPath) {
-			delete(probeCache, k)
-		}
-	}
 }
 
 // ZigBee-only VID:PIDs (not shared with other device types).
