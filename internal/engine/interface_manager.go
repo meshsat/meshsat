@@ -90,6 +90,13 @@ type InterfaceManager struct {
 
 	scanInterval  time.Duration
 	onStateChange func(ifaceID, channelType string, newState InterfaceState)
+
+	// classify labels a serial port for the scan without opening it. It is
+	// nil until main.go injects the DeviceSupervisor-backed classifier; the
+	// fallback is the VID:PID table alone. See scanDevices for why the
+	// manager must never probe a port itself. [MESHSAT-815]
+	classifyMu sync.RWMutex
+	classify   func(vidpid, port string) string
 }
 
 // NewInterfaceManager creates a new interface manager.
@@ -109,6 +116,32 @@ func channelNeedsDevice(channelType string) bool {
 	default:
 		return true // mesh, iridium, cellular, zigbee all need hardware
 	}
+}
+
+// SetPortClassifier installs the function scanDevices uses to label a serial
+// port ("meshtastic", "iridium", "cellular", "zigbee", "gps", "ambiguous",
+// "unknown"). The function MUST NOT open the port: main.go wires it to the
+// DeviceSupervisor's registry (the claimed role of the port) with
+// transport.ClassifyDevice as the VID:PID-only fallback. [MESHSAT-815]
+func (m *InterfaceManager) SetPortClassifier(fn func(vidpid, port string) string) {
+	m.classifyMu.Lock()
+	defer m.classifyMu.Unlock()
+	m.classify = fn
+}
+
+// classifyPort resolves the device type for a port through the injected
+// classifier, or the VID:PID table when none is installed. Never opens the
+// port.
+func (m *InterfaceManager) classifyPort(vidpid, port string) string {
+	m.classifyMu.RLock()
+	fn := m.classify
+	m.classifyMu.RUnlock()
+	if fn != nil {
+		if t := fn(vidpid, port); t != "" {
+			return t
+		}
+	}
+	return transport.ClassifyDevice(vidpid)
 }
 
 // SetStateChangeCallback registers a callback that fires when an interface changes state.
@@ -386,7 +419,17 @@ func (m *InterfaceManager) scanDevices() {
 	for _, port := range ports {
 		deviceID := transport.FindUSBDeviceID(port)
 		vidpid := strings.SplitN(deviceID, "+", 2)[0] // VID:PID portion
-		devType := transport.ClassifyDeviceWithProbe(vidpid, port)
+		// Label the port WITHOUT opening it. This scan runs every 5 s over
+		// every serial port, including ports a running transport holds; the
+		// container has CAP_SYS_ADMIN so the transport's TIOCEXCL lock does
+		// not stop a second open(). A probe open asserts DTR/RTS on the
+		// CP210x, which fires the CC2652P auto-BSL circuit and resets the
+		// ZigBee coordinator; on the T-Call's CH9102 it reboots the ESP32.
+		// The old 30-minute probe cache only turned that into a reset every
+		// 30 minutes on both field kits (MESHSAT-815). Port identity comes
+		// from the DeviceSupervisor, which probes an unclaimed port exactly
+		// once and owns the result.
+		devType := m.classifyPort(vidpid, port)
 
 		detected = append(detected, DetectedDevice{
 			Port:       port,
@@ -520,7 +563,7 @@ func (m *InterfaceManager) scanDevices() {
 //
 // Notes:
 //   - "iridium" device class covers both 9603 (SBD) and 9704 (IMT).
-//     The ClassifyDevice / ClassifyDeviceWithProbe disambiguation
+//     The ClassifyDevice / DeviceSupervisor probe disambiguation
 //     happens per-port; until MESHSAT-646 lands we conservatively
 //     only auto-bind into channel_type="iridium" (9603), leaving
 //     "iridium_imt" to an explicit operator bind so we don't route

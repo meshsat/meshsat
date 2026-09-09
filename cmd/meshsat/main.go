@@ -417,6 +417,17 @@ func main() {
 
 	// Interface manager (v0.3.0 — interface-based routing foundation)
 	ifaceMgr := engine.NewInterfaceManager(db)
+	if supervisor != nil {
+		// The interface scan labels ports through the supervisor's registry
+		// (the role that claimed the port) and never opens them; a probe
+		// open resets the CC2652P and reboots the T-Call. [MESHSAT-815]
+		ifaceMgr.SetPortClassifier(func(vidpid, port string) string {
+			if t := transport.DeviceTypeForRole(supervisor.Registry().GetPortRole(port)); t != "" {
+				return t
+			}
+			return transport.ClassifyDevice(vidpid)
+		})
+	}
 	if err := ifaceMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("interface manager start failed")
 	}
