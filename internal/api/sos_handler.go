@@ -48,25 +48,60 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 		trigger = "manual"
 	}
 
+	s.touchOperatorActivity()
+
+	if !s.TriggerSOS(trigger) {
+		writeJSON(w, http.StatusConflict, map[string]string{"status": "already_active"})
+		return
+	}
+
+	s.sos.mu.Lock()
+	startedAt := s.sos.startAt
+	s.sos.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     "activated",
+		"started_at": startedAt.UTC().Format(time.RFC3339),
+		"trigger":    trigger,
+	})
+}
+
+// TriggerSOS starts the SOS burst and reports whether it did. It is the single
+// way an SOS begins: the button on the dashboard and the dead man's switch both
+// arrive here, so both get the already-active guard and the signed audit entry.
+//
+// Before MESHSAT-996 the guard and the audit entry lived in the HTTP handler and
+// the burst lived in sosWorker, so anything that reached sosWorker directly ran
+// without either. A dead man's switch wired straight to the worker could have
+// started a second burst on top of a manual one and corrupted the send counter.
+//
+// Returns false when an SOS is already running, in which case nothing is
+// started and the existing burst continues.
+func (s *Server) TriggerSOS(trigger string) bool {
+	if s.sos == nil {
+		s.sos = &SOSState{}
+	}
+
 	s.sos.mu.Lock()
 	if s.sos.active {
 		s.sos.mu.Unlock()
-		writeJSON(w, http.StatusConflict, map[string]string{"status": "already_active"})
-		return
+		log.Warn().Str("trigger", trigger).Msg("SOS requested while one is already active, ignoring")
+		return false
 	}
 	s.sos.active = true
 	s.sos.startAt = time.Now()
 	s.sos.sends = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	s.sos.cancelFn = cancel
+	startedAt := s.sos.startAt
 	s.sos.mu.Unlock()
 
-	// Immutable audit-log entry — proves the operator intentionally
-	// activated SOS at this moment. Hash-chained by SigningService.
+	// Immutable audit-log entry — proves the SOS started at this moment and
+	// what started it. Hash-chained by SigningService.
 	if s.signing != nil {
 		detail, _ := json.Marshal(map[string]interface{}{
 			"trigger":    trigger,
-			"started_at": s.sos.startAt.UTC().Format(time.RFC3339),
+			"started_at": startedAt.UTC().Format(time.RFC3339),
 		})
 		s.signing.AuditEvent("sos_activated", nil, nil, nil, nil, string(detail))
 	}
@@ -74,11 +109,7 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	go s.sosWorker(ctx)
 
 	log.Warn().Str("trigger", trigger).Msg("SOS ACTIVATED")
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "activated",
-		"started_at": s.sos.startAt.UTC().Format(time.RFC3339),
-		"trigger":    trigger,
-	})
+	return true
 }
 
 // @Summary Cancel SOS alert
@@ -152,11 +183,19 @@ func (s *Server) sosWorker(ctx context.Context) {
 		req := transport.SendRequest{
 			Text: sosText,
 		}
-		if err := s.mesh.SendMessage(ctx, req); err != nil {
+		// Guarded: this runs in a goroutine, so a nil transport here is not an
+		// error return, it is an unrecovered panic that takes the bridge down
+		// during an emergency. A kit whose mesh radio failed to start must
+		// still get the satellite legs below. [MESHSAT-996]
+		if s.mesh == nil {
+			log.Error().Int("attempt", i+1).Msg("SOS: no mesh transport, skipping the mesh leg")
+		} else if err := s.mesh.SendMessage(ctx, req); err != nil {
 			log.Error().Err(err).Int("attempt", i+1).Msg("SOS mesh send failed")
 		} else {
 			log.Warn().Int("attempt", i+1).Msg("SOS sent via mesh")
-			s.recordMeshTX(req)
+			if s.processor != nil {
+				s.recordMeshTX(req)
+			}
 		}
 
 		// Send via satellite if available

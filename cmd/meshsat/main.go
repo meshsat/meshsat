@@ -1967,6 +1967,33 @@ func main() {
 		}
 	}
 
+	// Dead man's switch [MESHSAT-996].
+	//
+	// This is deliberately here, after SetSatFallback above, and not in
+	// cmd/meshsat/app.go where a DeadManSwitch was also being constructed.
+	// app.go's Setup is only reached by its own tests; the shipped binary is
+	// this file, so in production s.deadman was nil, GET /api/deadman answered
+	// from a hardcoded stub and POST /api/deadman returned 503. The Settings
+	// panel has been talking to a stub, and the switch it appeared to arm did
+	// not exist.
+	//
+	// The callback closes over srv rather than the transports directly: the SOS
+	// burst needs the mesh, the Iridium gateways, the GPS reader, the signing
+	// service and the Hub uplink, and srv already holds all five. TriggerSOS
+	// carries the already-active guard and the signed audit entry, so a
+	// deadman-fired SOS cannot start on top of a manual one.
+	deadman := engine.NewDeadManSwitch(db, 4*time.Hour)
+	deadman.SetSOSCallback(func(lat, lon float64, lastSeen time.Time) {
+		log.Warn().
+			Time("last_activity", lastSeen).
+			Float64("lat", lat).Float64("lon", lon).
+			Msg("dead man's switch fired, raising SOS")
+		srv.TriggerSOS("deadman")
+	})
+	deadman.Start(ctx)
+	srv.SetDeadManSwitch(deadman)
+	defer deadman.Stop()
+
 	// Spectrum jamming alert relay: subscribe to state-transition events
 	// from the RTL-SDR monitor and fan them out to (a) the TAK gateway so
 	// all connected ATAK/WinTAK parties and the TAK server see a CoT

@@ -139,6 +139,8 @@ func (s *Server) handleSimulateMeshRx(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string "error"
 // @Router /api/messages/send [post]
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	s.touchOperatorActivity()
+
 	var req transport.SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())

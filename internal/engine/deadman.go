@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,13 +15,19 @@ import (
 // within the configured timeout. It checks every 60 seconds whether the
 // elapsed time since the last Touch() exceeds the timeout threshold.
 type DeadManSwitch struct {
-	db          *database.DB
+	db         *database.DB
+	lastActive atomic.Int64
+	enabled    atomic.Bool
+	triggered  atomic.Bool
+	cancel     context.CancelFunc
+
+	// mu guards the two fields that are not atomics. Both are written by
+	// setters on an API request and read by check() on the ticker goroutine,
+	// which is a data race the race detector will find the moment a test
+	// exercises Start() rather than calling check() directly.
+	mu          sync.RWMutex
 	timeout     time.Duration
-	lastActive  atomic.Int64
-	enabled     atomic.Bool
-	triggered   atomic.Bool
 	sosCallback func(lat, lon float64, lastSeen time.Time)
-	cancel      context.CancelFunc
 }
 
 // NewDeadManSwitch creates a dead man's switch with the given timeout.
@@ -80,7 +87,13 @@ func (d *DeadManSwitch) IsTriggered() bool {
 }
 
 // SetSOSCallback sets the function to call when the timeout expires.
+//
+// Nothing called this outside the tests until MESHSAT-996: the switch armed,
+// counted down, logged "triggered" and sent nothing, while the test suite
+// stayed green because every test injects its own callback.
 func (d *DeadManSwitch) SetSOSCallback(fn func(lat, lon float64, lastSeen time.Time)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.sosCallback = fn
 }
 
@@ -91,11 +104,15 @@ func (d *DeadManSwitch) IsEnabled() bool {
 
 // GetTimeout returns the current timeout duration.
 func (d *DeadManSwitch) GetTimeout() time.Duration {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.timeout
 }
 
 // SetTimeout updates the timeout duration.
 func (d *DeadManSwitch) SetTimeout(t time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.timeout = t
 }
 
@@ -112,9 +129,13 @@ func (d *DeadManSwitch) check() {
 		return
 	}
 
+	d.mu.RLock()
+	timeout, cb := d.timeout, d.sosCallback
+	d.mu.RUnlock()
+
 	lastActive := d.lastActive.Load()
 	elapsed := time.Now().Unix() - lastActive
-	if elapsed <= int64(d.timeout.Seconds()) {
+	if elapsed <= int64(timeout.Seconds()) {
 		return
 	}
 
@@ -122,7 +143,11 @@ func (d *DeadManSwitch) check() {
 	lastSeen := time.Unix(lastActive, 0)
 	log.Warn().Time("last_active", lastSeen).Msg("dead man's switch triggered")
 
-	// Fetch last known GPS position from the positions table
+	// The position the callback is handed is a fallback only. GetLatestGPSPosition
+	// reads the newest row in `positions`, which is shared with mesh peers and
+	// carries no node_id filter, so it can hand back a neighbour's coordinates as
+	// though they were ours. The SOS path prefers its own GPS reader and only
+	// falls back to this. [MESHSAT-996]
 	var lat, lon float64
 	pos, err := d.db.GetLatestGPSPosition()
 	if err == nil && pos != nil {
@@ -130,7 +155,9 @@ func (d *DeadManSwitch) check() {
 		lon = pos.Lon
 	}
 
-	if d.sosCallback != nil {
-		d.sosCallback(lat, lon, lastSeen)
+	if cb == nil {
+		log.Error().Msg("dead man's switch fired with no SOS callback wired: nothing was sent")
+		return
 	}
+	cb(lat, lon, lastSeen)
 }
