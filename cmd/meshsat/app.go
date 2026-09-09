@@ -426,7 +426,15 @@ func (a *App) Setup(ctx context.Context) error {
 	healthScorer := engine.NewHealthScorer(db)
 	srv.SetHealthScorer(healthScorer)
 
+	// The switch is constructed here too, but note that this file is not what
+	// the shipped binary runs: main.go does its own wiring, and for months this
+	// was the ONLY construction site, which is why production had no switch at
+	// all. Keep both in step, and keep the SOS callback wired in main.go where
+	// the satellite fallback is in scope. [MESHSAT-996]
 	deadman := engine.NewDeadManSwitch(db, 4*time.Hour)
+	deadman.SetSOSCallback(func(lat, lon float64, lastSeen time.Time) {
+		srv.TriggerSOS("deadman")
+	})
 	deadman.Start(ctx)
 	srv.SetDeadManSwitch(deadman)
 	a.cleanups = append(a.cleanups, func() { deadman.Stop() })

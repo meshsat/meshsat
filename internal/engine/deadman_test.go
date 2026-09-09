@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -83,4 +85,41 @@ func TestDeadManSwitch_DisabledDoesNotTrigger(t *testing.T) {
 	if callCount != 0 {
 		t.Fatalf("expected 0 SOS calls when disabled, got %d", callCount)
 	}
+}
+
+// The switch fired for months and sent nothing, because SetSOSCallback was only
+// ever called from this file. Every test injected its own callback, so the suite
+// stayed green while production had none. This one pins the case the suite was
+// blind to: an armed switch with no callback must not look like a success.
+// [MESHSAT-996]
+func TestDeadManSwitch_NoCallbackIsNotSilent(t *testing.T) {
+	d := NewDeadManSwitch(testDB(t), time.Second)
+	d.SetEnabled(true)
+	d.lastActive.Store(time.Now().Add(-2 * time.Second).Unix())
+
+	d.check() // must not panic, and must mark itself triggered
+
+	if !d.IsTriggered() {
+		t.Fatal("switch did not mark itself triggered")
+	}
+}
+
+// Start() spawns a goroutine that reads timeout and sosCallback while the API
+// handlers write them. Before MESHSAT-996 both were plain fields and this test
+// under -race reported a data race.
+func TestDeadManSwitch_SettersAreRaceFree(t *testing.T) {
+	d := NewDeadManSwitch(testDB(t), time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(3)
+		go func() { defer wg.Done(); d.SetTimeout(time.Duration(i+1) * time.Minute) }()
+		go func() { defer wg.Done(); d.SetSOSCallback(func(_, _ float64, _ time.Time) {}) }()
+		go func() { defer wg.Done(); _ = d.GetTimeout(); d.check() }()
+	}
+	wg.Wait()
 }

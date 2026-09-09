@@ -2529,7 +2529,7 @@ onUnmounted(() => {
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-4">
         <div>
           <h3 class="text-sm font-semibold text-gray-200 mb-1">Dead Man's Switch</h3>
-          <p class="text-xs text-gray-500">Auto-send SOS if no activity for a configured period. When triggered, sends SOS with last GPS position to all transports.</p>
+          <p class="text-xs text-gray-500">Raises an SOS if you have not used the bridge for a set period. Sends on the mesh and, if a satellite gateway is configured, over Iridium, with your last known position.</p>
         </div>
 
         <!-- Enable toggle -->
@@ -2564,7 +2564,7 @@ onUnmounted(() => {
 
         <!-- Warning -->
         <div class="bg-amber-900/10 border border-amber-700/30 rounded-lg p-3">
-          <p class="text-xs text-amber-400/80">When triggered, sends SOS with last GPS position to all transports. The switch resets on any user activity.</p>
+          <p class="text-xs text-amber-400/80">Sending a message or triggering an SOS resets the timer. Reading the dashboard does not: the switch is asking whether you are still able to act, so only actions count.</p>
         </div>
 
         <!-- Save button -->
