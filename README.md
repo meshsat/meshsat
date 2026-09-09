@@ -35,7 +35,7 @@ services:
   meshsat:
     image: ghcr.io/meshsat/meshsat:latest
     container_name: meshsat
-    restart: unless-stopped
+    restart: always
     privileged: true
     network_mode: host
     environment:
