@@ -76,3 +76,17 @@ func (s *Server) handleSetDeadmanConfig(w http.ResponseWriter, r *http.Request) 
 		Triggered:    s.deadman.IsTriggered(),
 	})
 }
+
+// touchOperatorActivity resets the dead man's switch, if one is wired.
+//
+// Call it only from paths a person drives. It is deliberately NOT middleware:
+// this API has no authentication (the mTLS layer is unlanded), so a blanket
+// rule would let a forgotten browser tab or any host on the LAN hold the switch
+// open forever, which is the exact failure the switch exists to catch. It is
+// also not called on inbound mesh traffic: that is somebody else transmitting,
+// which says nothing about whether this operator is alive. [MESHSAT-996]
+func (s *Server) touchOperatorActivity() {
+	if s.deadman != nil {
+		s.deadman.Touch()
+	}
+}
