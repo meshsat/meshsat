@@ -225,8 +225,8 @@ func TestAPRSGateway_BadFrameKeepsLink(t *testing.T) {
 	g.wg.Add(1)
 	go g.readWorker(ctx)
 
-	// Corrupted: payload ends in a bare FESC. Then a valid frame.
-	rw.feed([]byte{kissFEND, kissData, 'A', kissFESC, kissFEND})
+	// Corrupted: an escape pair that means nothing. Then a valid frame.
+	rw.feed([]byte{kissFEND, kissData, 'A', kissFESC, 'x', kissFEND})
 	good := EncodeAX25Frame(AX25Address{Call: "APMSHT"}, AX25Address{Call: "PEER", SSID: 10}, nil, []byte(">MeshSat PEER ok 1"))
 	rw.feed(KISSEncode(good))
 
@@ -268,16 +268,44 @@ func TestAPRSGateway_BadFrameKeepsLink(t *testing.T) {
 	g.wg.Wait()
 }
 
+// The PicoAPRS V4 closes a few percent of its frames with a stray FESC
+// before the FEND, the AX.25 frame in front of it complete (hex captured
+// on both kits 10 Sep 2026, e.g. ">MeshSat MSPRLX ok 15" + DB). The stray
+// byte is dropped and the frame kept, counted as repaired. [MESHSAT-1020]
+func TestKISSConnSerial_TrailingEscapeIsRepaired(t *testing.T) {
+	rw := newPipeRW()
+	k := newKISSConnRW(rw)
+	good := EncodeAX25Frame(AX25Address{Call: "APMSHT"}, AX25Address{Call: "MSPRLX", SSID: 10}, nil, []byte(">MeshSat MSPRLX ok 15"))
+	wire := KISSEncode(good)
+	wire = append(wire[:len(wire)-1], kissFESC, kissFEND)
+	rw.feed(wire)
+	got, err := k.ReadFrame()
+	if err != nil {
+		t.Fatalf("repairable frame returned %v", err)
+	}
+	if !bytes.Equal(got, good) {
+		t.Fatalf("got %x, want %x", got, good)
+	}
+	if k.RX.Load() != 1 || k.Repaired.Load() != 1 {
+		t.Fatalf("RX=%d Repaired=%d, want 1 and 1", k.RX.Load(), k.Repaired.Load())
+	}
+	// A frame that is nothing but a stray escape is not repairable.
+	rw.feed([]byte{kissFEND, kissData, kissFESC, kissFEND})
+	if _, err := k.ReadFrame(); err == nil {
+		t.Fatal("a command byte plus a bare FESC must not decode")
+	}
+}
+
 func TestKISSConnSerial_BadFrameIsTyped(t *testing.T) {
 	rw := newPipeRW()
 	k := newKISSConnRW(rw)
-	rw.feed([]byte{kissFEND, kissData, 'A', kissFESC, kissFEND})
+	rw.feed([]byte{kissFEND, kissData, 'A', kissFESC, 'x', kissFEND})
 	_, err := k.ReadFrame()
 	var bad *kissFrameError
 	if !errors.As(err, &bad) {
 		t.Fatalf("want kissFrameError, got %T %v", err, err)
 	}
-	if !bytes.Equal(bad.raw, []byte{kissData, 'A', kissFESC}) {
+	if !bytes.Equal(bad.raw, []byte{kissData, 'A', kissFESC, 'x'}) {
 		t.Fatalf("raw bytes %x", bad.raw)
 	}
 	if te, ok := err.(interface{ Timeout() bool }); ok && te.Timeout() {

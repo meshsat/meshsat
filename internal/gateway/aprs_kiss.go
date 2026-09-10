@@ -69,6 +69,12 @@ type KISSConn struct {
 
 	RX atomic.Int64 // frames read from the TNC
 	TX atomic.Int64 // frames sent to the TNC
+	// Repaired counts frames the TNC closed with a stray FESC right before
+	// the FEND. The PicoAPRS V4 does this on a few percent of its frames
+	// (both copies of the same message, so a strict decoder loses the
+	// message): the AX.25 frame in front of the stray byte is complete, so
+	// the byte is dropped and the frame kept. [MESHSAT-1020]
+	Repaired atomic.Int64
 }
 
 // NewKISSConn creates a KISS TCP connection manager.
@@ -215,13 +221,27 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 		frame.WriteByte(buf[0])
 	}
 
-	decoded, err := KISSDecode(frame.Bytes())
+	raw := frame.Bytes()
+	decoded, err := KISSDecode(raw)
 	if err != nil {
-		return nil, &kissFrameError{raw: append([]byte(nil), frame.Bytes()...), err: err}
+		// A lone FESC as the last byte cannot be part of any valid frame
+		// and is what the PicoAPRS appends now and then: strip it and try
+		// once more. Anything else is a corrupted frame.
+		if errors.Is(err, errKISSTrailingEscape) && len(raw) > 2 {
+			if repaired, rerr := KISSDecode(raw[:len(raw)-1]); rerr == nil {
+				k.RX.Add(1)
+				k.Repaired.Add(1)
+				return repaired, nil
+			}
+		}
+		return nil, &kissFrameError{raw: append([]byte(nil), raw...), err: err}
 	}
 	k.RX.Add(1)
 	return decoded, nil
 }
+
+// errKISSTrailingEscape is a frame whose last byte is a bare FESC.
+var errKISSTrailingEscape = errors.New("kiss: trailing escape")
 
 // readByte reads exactly one byte. A serial port with a read timeout returns
 // (0, nil) when nothing arrived; that becomes kissTimeoutError so the worker
@@ -298,7 +318,7 @@ func KISSDecode(frame []byte) ([]byte, error) {
 	}
 
 	if escaped {
-		return nil, fmt.Errorf("kiss: trailing escape")
+		return nil, errKISSTrailingEscape
 	}
 
 	return buf.Bytes(), nil
