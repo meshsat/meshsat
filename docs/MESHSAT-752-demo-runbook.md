@@ -502,7 +502,7 @@ Both kits died with empty packs by 21:09. Cause chain and the fix are on MESHSAT
 Per frame the tuned link sits at about 90 to 100 percent; per message, with `tx_repeat 2`, a loss needs both copies to fail. The link test reports unique decoded frames, so with the repeat on it still counts one per message.
 
 
-## 17. TTC readiness board (updated 8 Sep 2026, end of the booth-selector session; about 75 %)
+## 17. TTC readiness board (updated 8 Sep 2026, end of the booth-selector session; about 75 %; **10 Sep late: about 85 %, section 26 all green and the Hub SMS lane proven, section 18**)
 
 **Amended late on 8 Sep (section 21).** Still about 75 %: everything that moved that evening was software, and the gap to ready is unchanged. Both kits are **powered off** and need a physical X1202 long-press before anything remote works. Two risks were added to the board rather than removed from it: a wedged cellular AT channel can kill both booth SMS lanes for as long as nobody restarts the bridge, while the panel still shows cellular connected (MESHSAT-986); and APRS can still go deaf for up to an hour on the K5 chain (fourth instance that evening, 62 minutes). The PicoAPRS swap is the single highest-value item of the hardware week.
 
@@ -519,7 +519,7 @@ Moved on 8 September: the booth flow selector is live on both kits with four pat
 | Bench items | SanDisk card (MESHSAT-819), X1202 switch plug (MESHSAT-805) arrived; screen protectors FDHYFGDY 2-pack for the Touch Display 2 ordered 8 Sep (Amazon 407-8701954-9922741, EUR 9.99, Sat 12 Sep; one sheet per kit, no spare) | installed on both kits; protector checked against the 155.5 x 88 mm window before peeling, fitted with the top plate off |
 | Plate stack | middle plate sags under the X1202, cells and Pi 5; two extra M3 rods at mid-span of the long edges (MESHSAT-863) | fitted on both kits, plate pulled flat, fieldkit BUILD.md + CAD updated |
 | Software follow-ups | MESHSAT-861 (resolver honours a disabled interface, receive_state after a restart), MESHSAT-859 (time-sync config) | landed and verified |
-| Booth paths on the panel | four lanes drawn, tap to choose (MESHSAT-962; kit-to-kit SMS proven 8 Sep 10:27Z, APRS unchanged, Hub SMS leg open on the Hub side, satellite lane waits for tesseract's 9704 and the Hub route) | 5/5 texts each way on each path on both kits, sections 18 and 20 |
+| Booth paths on the panel | four lanes drawn, tap to choose (MESHSAT-962; kit-to-kit SMS proven 8 Sep 10:27Z, APRS unchanged, **Hub SMS lane proven 10 Sep 20:44 to 20:51Z, 10/10 both ways, 4 to 7 s, MESHSAT-1022**, satellite lane waits for tesseract's 9704 and the Hub route) | 5/5 texts each way on APRS and kit-to-kit SMS on the PicoAPRS chain, IMT lane (section 20) |
 | Hub over SMS/IMT without internet on the kit | satellite fallback uplink wired (MESHSAT-963, code only); Hub commands over SMS/IMT (MESHSAT-964, after the Hub migration) | 963: Hub fleet page shows the kit alive with WiFi off; 964: PING over SMS with WiFi off |
 | Logistics | hotel and taxis arranged, prints and stickers 9 to 11 Sep | booth slot and Hub allowlist from Thomas, transport and setup plan |
 
