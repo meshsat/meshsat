@@ -262,19 +262,20 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		tx = g.kiss.TX.Load()
 	}
 	status := map[string]interface{}{
-		"connected":     connected,
-		"kiss_up":       kissUp,
-		"callsign":      FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
-		"frequency_mhz": g.config.FrequencyMHz,
-		"uptime":        uptime,
-		"rx":            rx,
-		"tx":            tx,
-		"errors":        g.errors.Load(),
-		"bad_frames":    g.badFrames.Load(),
-		"heard_count":   len(g.tracker.GetHeardStations()),
-		"packet_types":  g.tracker.GetPacketTypeBreakdown(),
-		"kiss_addr":     g.kiss.Target(),
-		"tnc_serial":    g.kiss.Serial(),
+		"connected":       connected,
+		"kiss_up":         kissUp,
+		"callsign":        FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
+		"frequency_mhz":   g.config.FrequencyMHz,
+		"uptime":          uptime,
+		"rx":              rx,
+		"tx":              tx,
+		"errors":          g.errors.Load(),
+		"bad_frames":      g.badFrames.Load(),
+		"repaired_frames": g.kiss.Repaired.Load(),
+		"heard_count":     len(g.tracker.GetHeardStations()),
+		"packet_types":    g.tracker.GetPacketTypeBreakdown(),
+		"kiss_addr":       g.kiss.Target(),
+		"tnc_serial":      g.kiss.Serial(),
 	}
 	if g.kiss.Serial() {
 		if ts := g.lastFrameAt.Load(); ts > 0 {
