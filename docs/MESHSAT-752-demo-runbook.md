@@ -602,7 +602,9 @@ deleted (Hub MRs !126 and !129, build 8db42cf1, ids now travel percent-encoded o
 Booth facts that follow: the far kit needs no lane selected (inbound is open, the lane is egress
 only); the Hub's `Relay MO -> SMS Android` route is DISABLED for TTC so the owner's phone does not
 get a copy of every visitor text (re-enable on MESHSAT-860); the five seeded `Satellite -> *`
-routes also match SMS but send nothing. Test tool: `POST /api/messages/simulate-mesh-rx` on the
+routes fired on SMS until 22:11Z the same night (Hub MR !132: they now listen to a `satellite` source
+only, an SOS text over the Hub lane raises the Hub's SOS event, no escalation chain is configured on
+the live Hub). Test tool: `POST /api/messages/simulate-mesh-rx` on the
 sending kit with `hub_sms` selected, then `docker logs` on the far kit for
 `SMS received sender=+3197010258258 text="[<sender SIM>] ..."`.
 
