@@ -1154,31 +1154,35 @@ func main() {
 	// Spectrum monitor — RTL-SDR jamming detection (no CGO, uses rtl_power subprocess)
 	var spectrumMon *spectrum.SpectrumMonitor
 	rtlScanner := spectrum.NewRTLPowerScanner()
-	if rtlScanner != nil {
-		spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrum.DefaultBands)
-		if signingService != nil {
-			spectrumMon.SetSigningService(signingService)
-		}
-		// MESHSAT-650: wire persistence before Start so the retention
-		// goroutine fires alongside the scan loop. Retention window is
-		// operator-tunable; ClampRetention guards us against zero/huge
-		// values.
-		if db != nil {
-			spectrumMon.SetHistoryStore(db)
-			retention := spectrum.DefaultRetentionHours
-			if v := os.Getenv("MESHSAT_SPECTRUM_RETENTION_HOURS"); v != "" {
-				if h, err := strconv.Atoi(v); err == nil {
-					retention = h
-				}
+	// The monitor is built and wired whether or not a dongle is present:
+	// a dongle that appears later (re-seat, replacement, a hub-port power
+	// cycle that brings it back) is attached at runtime by
+	// AttachWhenPresent instead of waiting for the next container
+	// restart. [MESHSAT-1002]
+	spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrum.DefaultBands)
+	if signingService != nil {
+		spectrumMon.SetSigningService(signingService)
+	}
+	// MESHSAT-650: wire persistence before Start so the retention
+	// goroutine fires alongside the scan loop. Retention window is
+	// operator-tunable; ClampRetention guards us against zero/huge
+	// values.
+	if db != nil {
+		spectrumMon.SetHistoryStore(db)
+		retention := spectrum.DefaultRetentionHours
+		if v := os.Getenv("MESHSAT_SPECTRUM_RETENTION_HOURS"); v != "" {
+			if h, err := strconv.Atoi(v); err == nil {
+				retention = h
 			}
-			spectrumMon.SetRetentionHours(retention)
-			log.Info().Int("retention_hours", spectrum.ClampRetention(retention)).
-				Msg("spectrum: history persistence enabled")
 		}
+		spectrumMon.SetRetentionHours(retention)
+		log.Info().Int("retention_hours", spectrum.ClampRetention(retention)).
+			Msg("spectrum: history persistence enabled")
+	}
+	if rtlScanner != nil {
 		spectrumMon.Start(ctx)
 		log.Info().Msg("spectrum monitor started (RTL-SDR detected)")
 	} else {
-		spectrumMon = spectrum.NewSpectrumMonitor(nil, spectrum.DefaultBands)
 		// Narrow the disabled-reason log — the scanner returns nil
 		// for either (a) no binary on PATH or (b) no dongle detected.
 		// Check which so the log actually helps. [MESHSAT-509]
@@ -1187,7 +1191,8 @@ func main() {
 				log.Info().Msg("spectrum monitor disabled (no rtl_power/rtl_power_fftw binary)")
 			}
 		} else if !spectrum.DetectRTLSDR() {
-			log.Info().Msg("spectrum monitor disabled (no RTL-SDR dongle detected on USB)")
+			log.Info().Msg("spectrum monitor disabled (no RTL-SDR dongle detected on USB), watching the bus for one")
+			go spectrum.AttachWhenPresent(ctx, spectrumMon, spectrum.DongleWatchInterval)
 		} else {
 			log.Info().Msg("spectrum monitor disabled (unknown reason)")
 		}
@@ -1326,12 +1331,18 @@ func main() {
 		if spectrumMon != nil {
 			oobActions["rtl_sdr"] = map[byte]oob.Action{
 				oob.LevelHard: func(ctx context.Context) error {
-					id := spectrumMon.Hardware().Scanner.USBPath
-					if id == "" {
-						return errors.New("rtl-sdr not detected")
-					}
+					// Hub-port VBUS cut first: the agent resolves the
+					// dongle by VID:PID and, when it has fallen off the
+					// bus, cuts the port it was last seen on. Only then
+					// the in-container USB reset, which needs the device
+					// enumerated. A dongle that never enumerated on a
+					// root port has no remote remedy. [MESHSAT-1002]
 					if usbPowerCycle(ctx, "rtl_sdr", "") {
 						return nil
+					}
+					id := spectrumMon.Hardware().Scanner.USBPath
+					if id == "" {
+						return errors.New("rtl-sdr not on the bus and no switchable hub port known")
 					}
 					if !transport.USBResetSysfsID("rtl_sdr", id) {
 						return errors.New("usb reset failed")
@@ -2005,7 +2016,9 @@ func main() {
 	//
 	// Scan events are not relayed (high volume, no alert value) — only
 	// transitions. [MESHSAT-509 spectrum alerts]
-	if spectrumMon != nil && spectrumMon.Enabled() {
+	// Subscribed even when the monitor starts disabled: a dongle attached
+	// at runtime starts emitting on the same channel. [MESHSAT-1002]
+	if spectrumMon != nil {
 		spectrumEvents, unsubSpectrum := spectrumMon.Subscribe()
 		go func() {
 			defer unsubSpectrum()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -185,12 +186,12 @@ func (m *SpectrumMonitor) LastGoodScan() (time.Time, int) {
 // scan that really returns samples counts as recovery. Level 1 of the
 // device health ladder for the RTL-SDR. [MESHSAT-817]
 func (m *SpectrumMonitor) RestartScan(_ context.Context) error {
-	if !m.enabled {
+	m.mu.Lock()
+	enabled, cancel := m.enabled, m.curCancel
+	m.mu.Unlock()
+	if !enabled {
 		return fmt.Errorf("spectrum monitor disabled")
 	}
-	m.mu.Lock()
-	cancel := m.curCancel
-	m.mu.Unlock()
 	if cancel != nil {
 		log.Warn().Msg("spectrum: cancelling the running scan")
 		cancel()
@@ -259,11 +260,16 @@ func (m *SpectrumMonitor) SetRetentionHours(hours int) {
 // Start begins spectrum monitoring in a background goroutine.
 // If the scanner is not available, this is a no-op.
 func (m *SpectrumMonitor) Start(ctx context.Context) {
-	if !m.enabled {
+	if !m.Enabled() {
 		log.Info().Msg("spectrum: RTL-SDR not available, monitoring disabled")
 		return
 	}
+	m.startLoops(ctx)
+}
 
+// startLoops launches the scan and retention goroutines. Caller has
+// established that a scanner is attached.
+func (m *SpectrumMonitor) startLoops(ctx context.Context) {
 	ctx, m.cancel = context.WithCancel(ctx)
 	m.mu.Lock()
 	m.startedAt = time.Now()
@@ -275,6 +281,78 @@ func (m *SpectrumMonitor) Start(ctx context.Context) {
 	// nothing to trim. Runs forever until ctx cancels.
 	if m.store != nil {
 		go m.retentionLoop(ctx)
+	}
+}
+
+// Attach gives a monitor that started without a dongle a scanner at
+// runtime and starts monitoring, exactly as if the dongle had been
+// present at boot: every band goes back to calibrating and the
+// scan/retention loops start. A no-op when monitoring already runs or
+// the scanner is not available. Reports whether monitoring started.
+//
+// Why: the RTL-SDR is the one kit device that is detected once at
+// startup. When it fell off parallax's USB bus on 10 Sep 2026 the next
+// deploy restarted the bridge with no dongle, the monitor came up
+// disabled and stayed disabled, and a re-seat would have needed another
+// container restart to be noticed. [MESHSAT-1002]
+func (m *SpectrumMonitor) Attach(ctx context.Context, scanner Scanner) bool {
+	if scanner == nil || !scanner.Available() {
+		return false
+	}
+	m.mu.Lock()
+	if m.enabled {
+		m.mu.Unlock()
+		return false
+	}
+	m.scanner = scanner
+	m.enabled = true
+	now := time.Now()
+	for _, bs := range m.status {
+		bs.State = StateCalibrating
+		bs.Since = now
+		bs.CalibrationStartedAt = time.Time{}
+	}
+	m.mu.Unlock()
+	log.Info().Str("binary", scanner.Info().BinaryPath).Msg("spectrum: RTL-SDR attached at runtime, monitoring enabled")
+	m.startLoops(ctx)
+	return true
+}
+
+// DongleWatchInterval is how often AttachWhenPresent looks for a dongle.
+const DongleWatchInterval = 30 * time.Second
+
+// AttachWhenPresent polls the USB bus until an RTL-SDR appears, then
+// builds a scanner and attaches it to the monitor. Meant for a monitor
+// that was constructed without a scanner because no dongle was present
+// at startup; returns as soon as monitoring starts or ctx ends. The
+// scanner binary must be on PATH, otherwise there is nothing to attach
+// and the loop exits at once. [MESHSAT-1002]
+func AttachWhenPresent(ctx context.Context, m *SpectrumMonitor, interval time.Duration) {
+	if m == nil || interval <= 0 {
+		return
+	}
+	if _, err := exec.LookPath("rtl_power_fftw"); err != nil {
+		if _, err := exec.LookPath("rtl_power"); err != nil {
+			return
+		}
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if m.Enabled() {
+				return
+			}
+			if !DetectRTLSDR() {
+				continue
+			}
+			if s := NewRTLPowerScanner(); s != nil && m.Attach(ctx, s) {
+				return
+			}
+		}
 	}
 }
 
@@ -311,8 +389,11 @@ func (m *SpectrumMonitor) IsJammed(interfaceID string) bool {
 	return false
 }
 
-// Enabled reports whether RTL-SDR monitoring is active.
+// Enabled reports whether RTL-SDR monitoring is active. It can flip
+// from false to true at runtime through Attach. [MESHSAT-1002]
 func (m *SpectrumMonitor) Enabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.enabled
 }
 

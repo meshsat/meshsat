@@ -93,7 +93,9 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 	if gwMgr != nil {
 		dh.Register(zigbeeHealthTarget(gwMgr, supervisor, oobActions["zigbee"], powerCycle))
 	}
-	if spectrumMon != nil && spectrumMon.Enabled() {
+	// Registered even when the monitor starts without a dongle: the probe
+	// reports unknown until one is attached at runtime. [MESHSAT-1002]
+	if spectrumMon != nil {
 		dh.Register(rtlSDRHealthTarget(spectrumMon, oobActions["rtl_sdr"]))
 	}
 	if gpsReader != nil {
@@ -340,9 +342,9 @@ func zigbeeHealthTarget(gwMgr *gateway.Manager, sup *transport.DeviceSupervisor,
 
 // rtlSDRHealthTarget: a scan that returns samples is liveness; two failed
 // scans in a row (each a 90 s hang) or five minutes without a good scan
-// is a wedge. Rungs: cancel the running child (level 1), then the root
-// port USBDEVFS_RESET through the OOB action (no VBUS switching on the
-// Pi's own ports).
+// is a wedge. Rungs: cancel the running child (level 1), then the OOB
+// action (level 3): a hub-port VBUS cut when the dongle sits on a
+// switchable hub, else the root-port USBDEVFS_RESET.
 func rtlSDRHealthTarget(mon *spectrum.SpectrumMonitor, actions map[byte]oob.Action) gateway.HealthTarget {
 	hard := actions[oob.LevelHard]
 	return gateway.HealthTarget{
