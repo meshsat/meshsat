@@ -1083,29 +1083,10 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 
 				log.Info().Str("source", msg.Source).Str("from", fromAddr).Str("text", msg.Text).Msg("gateway inbound message")
 
-				p.Emit(transport.MeshEvent{
-					Type:    "inbound",
-					Message: fmt.Sprintf("Received from %s: %s", fromAddr, truncateText(msg.Text, 80)),
-				})
-
-				// Dispatch through rules engine
+				// Apply ingress transforms (decrypt, decompress) before the live
+				// event and before persisting, so the operator screen's activity
+				// log shows the text and not the APRS ciphertext. [MESHSAT-447, MESHSAT-1000]
 				sourceIface := msg.Source + "_0"
-				if p.dispatcher != nil {
-					routeMsg := rules.RouteMessage{
-						Text:  msg.Text,
-						From:  fromAddr,
-						Plain: msg.Plain,
-					}
-					// Increment ingress sequence number for the source interface
-					if _, err := p.db.IncrementIngressSeq(sourceIface); err != nil {
-						log.Warn().Err(err).Str("interface", sourceIface).Msg("failed to increment ingress seq")
-					}
-					if n := p.dispatcher.DispatchAccess(sourceIface, routeMsg, []byte(msg.Text)); n > 0 {
-						log.Info().Int("deliveries", n).Str("interface", sourceIface).Msg("inbound dispatched via access rules")
-					}
-				}
-
-				// Apply ingress transforms before persisting (decrypt, decompress). [MESHSAT-447]
 				decodedText := msg.Text
 				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain {
 					if iface, err := p.db.GetInterface(sourceIface); err == nil &&
@@ -1118,6 +1099,27 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 						} else {
 							log.Warn().Err(tErr).Str("iface", sourceIface).Msg("gateway inbound: ingress transform failed, storing raw")
 						}
+					}
+				}
+
+				p.Emit(transport.MeshEvent{
+					Type:    "inbound",
+					Message: fmt.Sprintf("Received from %s: %s", fromAddr, truncateText(decodedText, 80)),
+				})
+
+				// Dispatch through rules engine
+				if p.dispatcher != nil {
+					routeMsg := rules.RouteMessage{
+						Text:  msg.Text,
+						From:  fromAddr,
+						Plain: msg.Plain,
+					}
+					// Increment ingress sequence number for the source interface
+					if _, err := p.db.IncrementIngressSeq(sourceIface); err != nil {
+						log.Warn().Err(err).Str("interface", sourceIface).Msg("failed to increment ingress seq")
+					}
+					if n := p.dispatcher.DispatchAccess(sourceIface, routeMsg, []byte(msg.Text)); n > 0 {
+						log.Info().Int("deliveries", n).Str("interface", sourceIface).Msg("inbound dispatched via access rules")
 					}
 				}
 

@@ -32,6 +32,10 @@ const (
 )
 
 // DirectMeshTransport implements MeshTransport via direct serial port access.
+// nodeInfoRequestInterval is the minimum gap between two automatic NodeInfo
+// requests to the same node. [MESHSAT-1000]
+const nodeInfoRequestInterval = 10 * time.Minute
+
 type DirectMeshTransport struct {
 	port string // "/dev/ttyACM0" or "auto"
 
@@ -47,6 +51,10 @@ type DirectMeshTransport struct {
 
 	nodes   map[uint32]*MeshNode
 	nodesMu sync.RWMutex
+	// nodeInfoReqAt records when the transport last asked a node for its
+	// NodeInfo, so an unnamed node that keeps talking is asked once per
+	// nodeInfoRequestInterval instead of once per packet. [MESHSAT-1000]
+	nodeInfoReqAt map[uint32]time.Time
 
 	messages []MeshMessage
 	msgIdx   int
@@ -804,7 +812,24 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 		}
 		t.nodes[pkt.From] = node
 	}
-	needsNodeInfo := node.LongName == "" && pkt.From != myNum
+	// Only a packet this radio could decrypt can come from a node that would
+	// understand our NodeInfo request. A packet that arrives encrypted is from
+	// another mesh on the same frequency (since the channel split the two kit
+	// radios hear each other this way); asking it for NodeInfo sends a directed
+	// packet it cannot decrypt, and its bridge answers with the same request
+	// back, so the two radios ping-pong forever, about 30 requests a minute
+	// each way on the kits, one NAK per request, every hop persisted as a
+	// message row. Never ask across an undecryptable packet, and ask a named
+	// or unnamed node at most once per nodeInfoRequestInterval. [MESHSAT-1000]
+	needsNodeInfo := node.LongName == "" && pkt.From != myNum && pkt.Decoded != nil
+	if needsNodeInfo {
+		if t.nodeInfoReqAt == nil {
+			t.nodeInfoReqAt = make(map[uint32]time.Time)
+		}
+		if last, ok := t.nodeInfoReqAt[pkt.From]; ok && time.Since(last) < nodeInfoRequestInterval {
+			needsNodeInfo = false
+		}
+	}
 	node.LastHeard = msg.RxTime
 	node.LastHeardStr = msg.Timestamp
 	if pkt.RxSNR != 0 {
@@ -834,6 +859,9 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 		connected := t.connected && t.file != nil
 		t.mu.RUnlock()
 		if connected {
+			t.nodesMu.Lock()
+			t.nodeInfoReqAt[pkt.From] = time.Now()
+			t.nodesMu.Unlock()
 			log.Debug().Uint32("node", pkt.From).Msg("auto-requesting NodeInfo from unnamed node")
 			toRadio := buildRequestNodeInfo(myNum, pkt.From)
 			_ = sendFrame(t.file, toRadio)

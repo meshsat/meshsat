@@ -1203,8 +1203,21 @@ function eventDescription(event) {
 }
 
 let saveLogTimer = null
+// A text that arrives after mount (mesh RX, or a relay decoded from APRS or
+// SMS) has to reach the feed too; the poll loop does not touch messages.
+// [MESHSAT-1000]
+let messageRefreshTimer = null
+function scheduleMessageRefresh() {
+  if (messageRefreshTimer) return
+  messageRefreshTimer = setTimeout(() => {
+    messageRefreshTimer = null
+    store.fetchMessages({ limit: 100, portnum: 1 })
+  }, 1500)
+}
+
 function handleSSEEvent(event) {
   const type = event?.type ?? ''
+  if (type === 'message' || type === 'text' || type === 'inbound' || type === 'relay') scheduleMessageRefresh()
   // Parse data JSON if present
   let parsedData = null
   if (event?.data) {
@@ -1497,7 +1510,9 @@ async function fetchAll() {
     store.fetchIridiumSignalFast(),
     store.fetchSatModem(),
     store.fetchDLQ(),
-    store.fetchMessages({ limit: 100 }),
+    // Text only: routing ACKs and undecryptable frames from a neighbouring
+    // mesh would otherwise fill the window and hide the texts. [MESHSAT-1000]
+    store.fetchMessages({ limit: 100, portnum: 1 }),
     store.fetchSOSStatus(),
     store.fetchSignalHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
     store.fetchGSSHistory({ from: Math.floor(Date.now() / 1000) - 6 * 3600 }),
@@ -1595,6 +1610,7 @@ onUnmounted(() => {
   store.closeSSE()
   if (pollTimer) clearInterval(pollTimer)
   if (saveLogTimer) clearTimeout(saveLogTimer)
+  if (messageRefreshTimer) clearTimeout(messageRefreshTimer)
 })
 
 // Widget component map for drag-and-drop rendering
