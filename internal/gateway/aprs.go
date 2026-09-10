@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +43,7 @@ type APRSGateway struct {
 	msgsIn     atomic.Int64
 	msgsOut    atomic.Int64
 	errors     atomic.Int64
+	badFrames  atomic.Int64 // KISS frames from the TNC that did not decode; dropped, link kept
 	lastActive atomic.Int64
 	startTime  time.Time
 
@@ -267,6 +270,7 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"rx":            rx,
 		"tx":            tx,
 		"errors":        g.errors.Load(),
+		"bad_frames":    g.badFrames.Load(),
 		"heard_count":   len(g.tracker.GetHeardStations()),
 		"packet_types":  g.tracker.GetPacketTypeBreakdown(),
 		"kiss_addr":     g.kiss.Target(),
@@ -466,6 +470,9 @@ func (g *APRSGateway) Status() GatewayStatus {
 	}
 	bundled := g.supervisor != nil
 	s.DirewolfBundled = &bundled
+	if bad := g.badFrames.Load(); bad > 0 {
+		s.BadFrames = &bad
+	}
 	if g.supervisor != nil {
 		running := g.supervisor.Running()
 		restarts := g.supervisor.RestartCount()
@@ -518,6 +525,20 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			}
 			// Timeout is normal — just retry
 			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+				continue
+			}
+			// A frame that does not decode is dropped and the link kept:
+			// only a transport error (EOF, a vanished port) reopens it.
+			var bad *kissFrameError
+			if errors.As(err, &bad) {
+				raw := bad.raw
+				if len(raw) > 96 {
+					raw = raw[:96]
+				}
+				log.Warn().Err(bad.err).Int("len", len(bad.raw)).Hex("frame", raw).
+					Msg("aprs: dropped undecodable KISS frame")
+				g.errors.Add(1)
+				g.badFrames.Add(1)
 				continue
 			}
 			log.Warn().Err(err).Msg("aprs: read frame error")
@@ -643,6 +664,14 @@ func (g *APRSGateway) writeWorker(ctx context.Context) {
 func (g *APRSGateway) beaconWorker(ctx context.Context) {
 	defer g.wg.Done()
 	interval := time.Duration(g.config.BeaconSecs) * time.Second
+	// The wait between beacons is jittered by ±20 percent. Two kits with
+	// the same fixed period keep whatever phase they happen to start with,
+	// and if that phase puts each beacon inside the peer's own transmission
+	// (a half-duplex radio hears nothing while it keys) every beacon is
+	// lost until something restarts a gateway. Measured 10 Sep 2026 on the
+	// PicoAPRS chain: identical ~34 s periods on both kits. Randomising the
+	// beacon is also plain APRS practice. The receive watchdog allows
+	// 3 min of silence, so 36 s plus the repeat copy is nowhere near it.
 	first := time.NewTimer(5 * time.Second)
 	defer first.Stop()
 	select {
@@ -680,9 +709,19 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(interval):
+		case <-time.After(jitterDuration(interval, 0.2)):
 		}
 	}
+}
+
+// jitterDuration returns d scaled by a uniform random factor in
+// [1-spread, 1+spread]. A non-positive d or spread comes back unchanged.
+func jitterDuration(d time.Duration, spread float64) time.Duration {
+	if d <= 0 || spread <= 0 {
+		return d
+	}
+	f := 1 + spread*(2*rand.Float64()-1)
+	return time.Duration(float64(d) * f)
 }
 
 // beaconFrame builds beacon number n as an AX.25 UI frame.
