@@ -592,6 +592,20 @@ Bench order when the kits are back:
    per path noted here. Each text must arrive exactly once.
 4. Both SIM balances and the Twilio balance sized for two days at up to two SMS per text.
 
+**Hub lane PROVEN 10 Sep 2026 20:44 to 20:51 UTC (MESHSAT-1022): 10/10 both directions, modem send
+to far-kit receive 4 to 7 s (median 6), inject to far-kit log 11 to 13 s, exactly one copy per text,
+no echo, no `[frag n/m]`.** It took two Hub fixes the same evening: the Twilio webhook's plain-text
+branch never published to the routing engine's topic (only base64 SMS did, and even that carried the
+text under the wrong key), and the phone number's `+` is an MQTT wildcard, so the first corrected
+publish was refused by NATS and took a Hub replica into a 30 s reconnect loop until the pod was
+deleted (Hub MRs !126 and !129, build 8db42cf1, ids now travel percent-encoded on the wire).
+Booth facts that follow: the far kit needs no lane selected (inbound is open, the lane is egress
+only); the Hub's `Relay MO -> SMS Android` route is DISABLED for TTC so the owner's phone does not
+get a copy of every visitor text (re-enable on MESHSAT-860); the five seeded `Satellite -> *`
+routes also match SMS but send nothing. Test tool: `POST /api/messages/simulate-mesh-rx` on the
+sending kit with `hub_sms` selected, then `docker logs` on the far kit for
+`SMS received sender=+3197010258258 text="[<sender SIM>] ..."`.
+
 ## 19. Hub without internet on the kit: the satellite fallback uplink (MESHSAT-963, 8 Sep 2026)
 
 `internal/hubreporter/satfallback.go` existed since April and was never wired (no caller in main.go).
