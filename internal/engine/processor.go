@@ -1102,9 +1102,23 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					}
 				}
 
+				// The event carries the decoded text as data: the packet feed
+				// is a wire view and leaves an encrypted APRS/SMS frame's text
+				// empty, so the booth screen (TtcView) draws a relayed message
+				// from this event, not from the frame. [MESHSAT-1000]
+				inboundData, _ := json.Marshal(map[string]any{
+					"source": msg.Source,
+					"iface":  sourceIface,
+					"from":   fromAddr,
+					"text":   decodedText,
+					"bytes":  len(msg.Text),
+					"plain":  msg.Plain,
+				})
 				p.Emit(transport.MeshEvent{
 					Type:    "inbound",
 					Message: fmt.Sprintf("Received from %s: %s", fromAddr, truncateText(decodedText, 80)),
+					Data:    inboundData,
+					Time:    time.Now().UTC().Format(time.RFC3339Nano),
 				})
 
 				// Dispatch through rules engine

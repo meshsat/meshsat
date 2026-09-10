@@ -307,6 +307,64 @@ function pulseAir() {
   if (airPulseTimer) clearTimeout(airPulseTimer)
   airPulseTimer = setTimeout(() => { airPulse.value = false }, 1400)
 }
+// One inbound trip at a time: a text from the far kit that arrives while
+// an inbound trip is still travelling is dropped here. The repeated APRS
+// copy of every message (tx_repeat 2, 4 s apart) and the bridge's own
+// "inbound" event for the same frame both land within seconds of the
+// first, so an identical text from the same sender inside 15 s is the same
+// message. [MESHSAT-1000]
+let lastInbound = { from: '', text: '', at: 0 }
+function startInboundTrip(p) {
+  const key = { from: (p.from || '').toUpperCase(), text: (p.text || '').trim(), at: Date.now() }
+  if (key.text && key.text === lastInbound.text && key.from === lastInbound.from && key.at - lastInbound.at < 15000) return
+  if (current.value && !current.value.done && current.value.dir === 'in') return
+  lastInbound = key
+  if (p.bearer === 'sat') {
+    const t = newTrip('in', p); t.lane = 'sat'; dot.lane = 'sat'
+    stage(t, 'sat_rx')
+    jump(airFar.value.x, satY.value)
+    moveTo(satX.value, satY.value, 900)
+    setTimeout(() => moveTo(airNear.value.x, satY.value, 700), 950)
+    return
+  }
+  if (p.bearer === 'sms') {
+    const lane = smsLane(p.from)
+    const t = newTrip('in', p); t.lane = lane; dot.lane = lane
+    stage(t, 'sms_rx')
+    jump(airFar.value.x, laneY(lane))
+    if (lane === 'hub') {
+      moveTo(cloudX.value, hubY.value, 700)
+      setTimeout(() => moveTo(airNear.value.x, hubY.value, 700), 750)
+    } else {
+      moveTo(airNear.value.x, laneY(lane), 1400)
+    }
+    return
+  }
+  const t = newTrip('in', p)
+  stage(t, 'aprs_rx')
+  jump(airFar.value.x, aprsY.value)
+  moveTo(airNear.value.x, aprsY.value, 1400)
+}
+// The bridge's "inbound" event: a gateway text after the ingress transforms
+// ran. On an encrypted bearer the packet feed shows the frame as it crossed
+// the air, ciphertext with no text, so the packet path above treats it as
+// housekeeping and only pulses the link; this event is where the message
+// itself arrives. Found 10 Sep 2026: a T-Deck text reached the T-Echo but
+// tesseract's screen never drew it. [MESHSAT-1000]
+const inboundBearer = (source) => source === 'aprs' ? 'aprs'
+  : (source === 'cellular' || source === 'sms') ? 'sms'
+  : (source || '').startsWith('iridium') ? 'sat' : ''
+function onInbound(d) {
+  if (!d || typeof d !== 'object' || !d.text) return
+  const bearer = inboundBearer(d.source)
+  if (!bearer) return
+  const p = { bearer, dir: 'rx', from: d.from || '', text: d.text, bytes: d.bytes || d.text.length, portnum: 1, time: new Date().toISOString() }
+  if (isHousekeeping(p)) return
+  if (bearer === 'aprs' && p.from && peer.value.callsign && p.from.toUpperCase().startsWith(peer.value.callsign.split('-')[0])) {
+    farHeardAt.value = Date.now()
+  }
+  startInboundTrip(p)
+}
 function onPacket(p) {
   packets.value.unshift(p); packets.value.splice(400)
   if (p.bearer === 'lora' && p.dir === 'rx') {
@@ -328,41 +386,19 @@ function onPacket(p) {
     // never touch the message box or start a trip.
     if (isHousekeeping(p)) { pulseAir(); return }
     // A text frame from the far kit starts an inbound trip.
-    if (!current.value || current.value.done || current.value.dir !== 'in') {
-      const t = newTrip('in', p)
-      stage(t, 'aprs_rx')
-      jump(airFar.value.x, aprsY.value)
-      moveTo(airNear.value.x, aprsY.value, 1400)
-    }
+    startInboundTrip(p)
   } else if (p.bearer === 'aprs' && p.dir === 'tx') {
     const t = current.value
     if (t && t.dir === 'out' && !t.done) { stage(t, 'aprs_tx', { bytes: p.bytes, raw: p.raw }); t.bytes = p.bytes || t.bytes }
   } else if (p.bearer === 'sat' && p.dir === 'rx') {
     if (isHousekeeping(p)) return
-    if (!current.value || current.value.done || current.value.dir !== 'in') {
-      const t = newTrip('in', p); t.lane = 'sat'; dot.lane = 'sat'
-      stage(t, 'sat_rx')
-      jump(airFar.value.x, satY.value)
-      moveTo(satX.value, satY.value, 900)
-      setTimeout(() => moveTo(airNear.value.x, satY.value, 700), 950)
-    }
+    startInboundTrip(p)
   } else if (p.bearer === 'sat' && p.dir === 'tx') {
     const t = current.value
     if (t && t.dir === 'out' && !t.done) { stage(t, 'sat_tx', { bytes: p.bytes, mo: p.path }); t.bytes = p.bytes || t.bytes }
   } else if (p.bearer === 'sms' && p.dir === 'rx') {
     if (isHousekeeping(p)) { pulseAir(); return }
-    if (!current.value || current.value.done || current.value.dir !== 'in') {
-      const lane = smsLane(p.from)
-      const t = newTrip('in', p); t.lane = lane; dot.lane = lane
-      stage(t, 'sms_rx')
-      jump(airFar.value.x, laneY(lane))
-      if (lane === 'hub') {
-        moveTo(cloudX.value, hubY.value, 700)
-        setTimeout(() => moveTo(airNear.value.x, hubY.value, 700), 750)
-      } else {
-        moveTo(airNear.value.x, laneY(lane), 1400)
-      }
-    }
+    startInboundTrip(p)
   } else if (p.bearer === 'lora' && p.dir === 'tx') {
     const t = current.value
     if (t && t.dir === 'in' && !t.done) { stage(t, 'lora_tx', { bytes: p.bytes }) }
@@ -464,6 +500,7 @@ function onEvent(ev) {
   if (!ev || typeof ev !== 'object') return
   if (ev.type === 'connected_to_stream') { sseUp.value = true; return }
   if (ev.type === 'packet') { try { onPacket(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data) } catch {} ; return }
+  if (ev.type === 'inbound') { try { onInbound(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data) } catch {} ; return }
   if (typeof ev.type === 'string' && ev.type.startsWith('delivery_')) {
     try { onDelivery({ type: ev.type, data: typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data }) } catch {}
     return
