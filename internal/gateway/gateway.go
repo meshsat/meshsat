@@ -52,6 +52,9 @@ type GatewayStatus struct {
 	ReceiveLevelAt *time.Time `json:"receive_level_at,omitempty"`
 	LastDecodeAt   *time.Time `json:"last_decode_at,omitempty"`
 	ReceiveState   *string    `json:"receive_state,omitempty"`
+	// KISS frames from the TNC that did not decode and were dropped with
+	// the link kept open (serial TNC chain). [MESHSAT-821]
+	BadFrames *int64 `json:"bad_frames,omitempty"`
 }
 
 // EventEmitFunc is a callback for gateways to emit events to the SSE stream.

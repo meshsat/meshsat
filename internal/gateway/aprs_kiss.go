@@ -38,6 +38,22 @@ func (kissTimeoutError) Error() string   { return "kiss: read timeout" }
 func (kissTimeoutError) Timeout() bool   { return true }
 func (kissTimeoutError) Temporary() bool { return true }
 
+// kissFrameError is a KISS frame the TNC delimited but that does not decode
+// (a trailing FESC, an invalid escape pair, a non-data command byte). It is
+// one corrupted frame, not a dead link: the read worker drops it and keeps
+// reading, and logs the raw bytes so the next occurrence tells us what the
+// TNC actually sent. Before this, every decode error closed and reopened
+// the serial port, which discarded whatever the TNC had buffered and, on
+// the PicoAPRS, disturbed the radio through the CP2102's modem lines; both
+// kits lost the peer's repeat copy on each such event (10 Sep 2026).
+type kissFrameError struct {
+	raw []byte // the frame between the FENDs, command byte included
+	err error
+}
+
+func (e *kissFrameError) Error() string { return e.err.Error() }
+func (e *kissFrameError) Unwrap() error { return e.err }
+
 // KISSConn manages one KISS link to a TNC: Direwolf over TCP (the bundled
 // sound-card modem) or a hardware TNC over a serial port (PicoAPRS V4 over
 // USB-C, 115200 baud). RX/TX counters track frames at the KISS level, the
@@ -200,10 +216,11 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 	}
 
 	decoded, err := KISSDecode(frame.Bytes())
-	if err == nil {
-		k.RX.Add(1)
+	if err != nil {
+		return nil, &kissFrameError{raw: append([]byte(nil), frame.Bytes()...), err: err}
 	}
-	return decoded, err
+	k.RX.Add(1)
+	return decoded, nil
 }
 
 // readByte reads exactly one byte. A serial port with a read timeout returns
