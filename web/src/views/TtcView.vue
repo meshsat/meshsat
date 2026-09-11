@@ -232,15 +232,23 @@ async function selectPath(key) {
   const before = flow.value.path
   flow.value.path = key
   flowBusy.value = true
+  flowFailed.value = ''
   try {
-    const r = await api.put('/ttc/flow', { path: key })
+    // 8 s cap: while the bridge restarts (every deploy) a PUT can hang on
+    // the docker proxy, and a hung PUT held flowBusy and ate every later
+    // tap with no sign on the screen. Now the row says "failed" for a
+    // few seconds and the next tap tries again. [MESHSAT-826, 11 Sep 2026]
+    const r = await api.put('/ttc/flow', { path: key }, 8000)
     if (r && r.path) flow.value = r
   } catch (e) {
     flow.value.path = before
+    flowFailed.value = key
+    setTimeout(() => { if (flowFailed.value === key) flowFailed.value = '' }, 4000)
   } finally {
     flowBusy.value = false
   }
 }
+const flowFailed = ref('')
 // Phone numbers as the modem reports them may carry or drop the country
 // code; compare the last nine digits.
 const numEq = (a, b) => {
@@ -1073,6 +1081,7 @@ onUnmounted(() => {
                 <text :x="rowTextX" :y="laneY(ln.lane) - 14" :text-anchor="rowAnchor" class="row-name">{{ ln.name }}<tspan
                   v-if="ln.fact" class="row-fact" dx="14">{{ ln.fact }}</tspan></text>
                 <text v-if="ln.state" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state warn">{{ ln.state }}</text>
+                <text v-else-if="flowFailed === ln.key" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state warn">failed</text>
                 <text v-else-if="flow.path === ln.key" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state on">chosen</text>
                 <text v-if="flow.path === ln.key" :x="rowTextX" :y="laneY(ln.lane) + 28" :text-anchor="rowAnchor" class="row-detail">{{ ln.detail }}</text>
               </g>
@@ -1138,6 +1147,7 @@ onUnmounted(() => {
                 </g>
                 <text :x="G.airL.x + 56" :y="laneY(ln.lane) - 12" text-anchor="start" class="row-name">{{ ln.name }}</text>
                 <text v-if="ln.state" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state warn">{{ ln.state }}</text>
+                <text v-else-if="flowFailed === ln.key" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state warn">failed</text>
                 <text v-else-if="flow.path === ln.key" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state on">chosen</text>
               </g>
             </g>
