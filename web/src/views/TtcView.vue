@@ -23,6 +23,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import SpectrumWaterfall from '@/components/SpectrumWaterfall.vue'
 import TtcDeviceTDeck from '@/components/TtcDeviceTDeck.vue'
 import TtcDeviceTEcho from '@/components/TtcDeviceTEcho.vue'
+import TtcDeviceTDeckPro from '@/components/TtcDeviceTDeckPro.vue'
 import PowerWidget from '@/components/PowerWidget.vue'
 
 const router = useRouter()
@@ -32,16 +33,26 @@ const store = useMeshsatStore()
 // ── identity ─────────────────────────────────────────────────────────
 // Which kit is this panel? From the APRS callsign, overridable with ?kit=.
 // Booth placement (owner, 6 Sep 2026): tesseract on the LEFT of parallax.
-// The keyboard T-Deck sits with parallax, the e-paper T-Echo with
-// tesseract, so the story runs right to left across the table and the
-// screens follow the table. `side` is where the box stands, `device` is
-// what is paired with it, `mesh` the island letter.
+// The T-Deck Plus sits with parallax, the e-paper T-Deck Pro with
+// tesseract (owner, 11 Sep 2026; the T-Echo is kept as a device type),
+// so the story runs right to left across the table and the screens
+// follow the table. `side` is where the box stands, `device` is what is
+// paired with it, `mesh` the island letter.
 const KITS = {
   parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeck', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'techo', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
+  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'tdeckpro', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
 }
 const LEFT_KIT = 'tesseract'
-const DEVICE_NAME = { tdeck: 'T-Deck', techo: 'T-Echo' }
+// Everything the drawing needs per handheld: the photo component, the
+// half-width of the photo where the LoRa lane ends (near at 1.85, full at
+// 1.35), where the caption sits under it, and whether a visitor types on
+// it or only reads it.
+const DEVICES = {
+  tdeck:    { name: 'T-Deck', title: 'T-Deck Plus', sub: 'Meshtastic, keyboard', img: '/tdeck-plus.png', comp: TtcDeviceTDeck, edgeNear: 78, edgeFull: 50, nameNear: 120, nameFull: 72, keyboard: true },
+  tdeckpro: { name: 'T-Deck Pro', title: 'T-Deck Pro', sub: 'Meshtastic, keyboard, e-paper', img: '/tdeck-pro.png', comp: TtcDeviceTDeckPro, edgeNear: 72, edgeFull: 48, nameNear: 120, nameFull: 72, keyboard: true },
+  techo:    { name: 'T-Echo', title: 'T-Echo', sub: 'Meshtastic, e-paper', img: '/techo.png', comp: TtcDeviceTEcho, edgeNear: 56, edgeFull: 36, nameNear: 136, nameFull: 86, keyboard: false },
+}
+const DEVICE_NAME = Object.fromEntries(Object.entries(DEVICES).map(([k, d]) => [k, d.name]))
 const kitName = ref(route.query.kit === 'tesseract' ? 'tesseract' : route.query.kit === 'parallax' ? 'parallax' : '')
 const me = computed(() => KITS[kitName.value] || KITS.parallax)
 const peer = computed(() => KITS[me.value.peer])
@@ -52,10 +63,10 @@ const nearDev = computed(() => me.value.device)
 // drawing at 22 units (the panel shows that as 14 CSS px).
 const visitorLines = computed(() => {
   const side = nearIsLeft.value ? 'right' : 'left'
-  if (layout.value !== 'half') return ['A message typed on the T-Deck leaves over the radio and lands on the other mesh.', 'No internet, no phone network in between.']
-  return nearDev.value === 'tdeck'
-    ? ['Pick up the T-Deck and send a message.', `It leaves over the radio and lands on ${peer.value.name}, the kit on the ${side}. No internet, no phone network.`]
-    : [`Messages from ${peer.value.name}, the kit on the ${side}, arrive over the radio and land on the T-Echo.`, 'Press its button to send one back.']
+  if (layout.value !== 'half') return ['A message typed on a T-Deck leaves over the radio and lands on the other mesh.', 'No internet, no phone network in between.']
+  return DEVICES[nearDev.value].keyboard
+    ? [`Pick up the ${nearDevName.value} and send a message.`, `It leaves over the radio and lands on ${peer.value.name}, the kit on the ${side}. No internet, no phone network.`]
+    : [`Messages from ${peer.value.name}, the kit on the ${side}, arrive over the radio and land on the ${nearDevName.value}.`, 'Press its button to send one back.']
 })
 const nearDevName = computed(() => DEVICE_NAME[nearDev.value])
 const leftKit = computed(() => KITS[LEFT_KIT])
@@ -129,7 +140,7 @@ let tween = null
 let raf = 0
 
 // Geometry (SVG viewBox 1280 x 470).
-// Full route, left to right: T-Deck, parallax, air, tesseract, T-Echo.
+// Full route, left to right: T-Deck Pro, tesseract, air, parallax, T-Deck Plus.
 const G = {
   devL: { x: 150, y: 240 }, kitL: { x: 392, y: 240 }, airL: { x: 490, y: 240 },
   airR: { x: 790, y: 240 }, kitR: { x: 888, y: 240 }, devR: { x: 1130, y: 240 },
@@ -608,6 +619,17 @@ const replayAge = computed(() => {
 // ── what is this? tap cards for the drawings ─────────────────────────
 const card = ref(null)
 const cards = computed(() => ({
+  tdeckpro: {
+    title: 'LilyGO T-Deck Pro',
+    lead: 'The e-paper keyboard device on the table. Type here and the message goes out on the local LoRa mesh.',
+    facts: [
+      ['Radio', 'Semtech SX1262, LoRa at 868 MHz'],
+      ['Brain', 'ESP32-S3, Meshtastic firmware'],
+      ['Screen', '3.1 inch e-paper touch, readable with the power off, physical keyboard'],
+      ['Also', 'GPS, its own battery, no phone or internet needed'],
+      ['On this mesh', nearDev.value === 'tdeckpro' ? (nearDeviceNode.value ? `seen as ${nodeName(nearDeviceNode.value)}` : 'nothing heard from it yet') : 'on the other kit\'s mesh'],
+    ],
+  },
   tdeck: {
     title: 'LilyGO T-Deck Plus',
     lead: 'The keyboard device on the table. Type here and the message goes out on the local LoRa mesh.',
@@ -791,7 +813,7 @@ function tickAttract() {
     cycleAt = Date.now()
   }
 }
-const peerDevName = computed(() => peer.value.device === 'tdeck' ? 'T-Deck' : 'T-Echo')
+const peerDevName = computed(() => DEVICE_NAME[peer.value.device])
 
 // ── composer: double-tap the kit, type on the panel, send to either mesh ──
 // The panel has no keyboard, so the composer draws one. Local mesh is a
@@ -823,7 +845,7 @@ function openComposer() {
   composer.value = { open: true, to: 'local', text: '', shift: false, busy: false, note: '' }
 }
 function closeComposer() { composer.value.open = false }
-const deviceImg = (d) => d === 'tdeck' ? '/tdeck-plus.png' : '/techo.png'
+const deviceImg = (d) => DEVICES[d].img
 const composerOptions = computed(() => ([
   { key: 'local', title: 'Local mesh', sub: `to the ${nearDevName.value} on this table`, img: deviceImg(nearDev.value) },
   { key: 'remote', title: 'Remote mesh', sub: `to the ${peerDevName.value} at ${peer.value.name}, over the air`, img: deviceImg(peer.value.device) },
@@ -1013,8 +1035,8 @@ onUnmounted(() => {
               <text v-for="(l, i) in lastHeardLines" :key="i" :x="P.isl.x + P.isl.w / 2" :y="130 + i * 24" text-anchor="middle" class="island-sub">{{ l }}</text>
             </g>
             <g class="lanes">
-              <line :x1="nearIsLeft ? P.dev.x + (nearDev === 'tdeck' ? 78 : 56) : P.kit.x + 124" :y1="P.dev.y"
-                    :x2="nearIsLeft ? P.kit.x - 124 : P.dev.x - (nearDev === 'tdeck' ? 78 : 56)" :y2="P.dev.y" class="lane lora near" />
+              <line :x1="nearIsLeft ? P.dev.x + DEVICES[nearDev].edgeNear : P.kit.x + 124" :y1="P.dev.y"
+                    :x2="nearIsLeft ? P.kit.x - 124 : P.dev.x - DEVICES[nearDev].edgeNear" :y2="P.dev.y" class="lane lora near" />
               <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent, nosky: ln.lane === 'sat' && satNoModem }]" @click="selectPath(ln.key)">
                 <rect :x="Math.min(laneStartX, P.edge)" :y="laneY(ln.lane) - 40" :width="Math.abs(P.edge - laneStartX)" height="80" class="hit" />
                 <line :x1="laneStartX" :y1="laneY(ln.lane)" :x2="P.edge" :y2="laneY(ln.lane)" class="lane path-line" />
@@ -1060,10 +1082,9 @@ onUnmounted(() => {
             <!-- near device -->
             <g :transform="`translate(${P.dev.x},${P.dev.y + 26})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
               <rect x="-140" y="-150" width="280" height="330" class="hit" rx="16" />
-              <TtcDeviceTDeck v-if="nearDev === 'tdeck'" :scale="1.85" />
-              <TtcDeviceTEcho v-else :scale="1.85" />
-              <text :y="nearDev === 'tdeck' ? 120 : 136" text-anchor="middle" class="st-name">{{ nearDev === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
-              <text :y="nearDev === 'tdeck' ? 144 : 160" text-anchor="middle" class="st-sub">{{ nearDev === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
+              <component :is="DEVICES[nearDev].comp" :scale="1.85" />
+              <text :y="DEVICES[nearDev].nameNear" text-anchor="middle" class="st-name">{{ DEVICES[nearDev].title }}</text>
+              <text :y="DEVICES[nearDev].nameNear + 24" text-anchor="middle" class="st-sub">{{ DEVICES[nearDev].sub }}</text>
             </g>
 
             <!-- near kit -->
@@ -1088,8 +1109,8 @@ onUnmounted(() => {
               <text x="806" y="117" class="island-sub">LoRa 868 MHz, a different channel key</text>
             </g>
             <g class="lanes">
-              <line :x1="G.devL.x + (leftKit.device === 'tdeck' ? 50 : 36)" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-              <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - (rightKit.device === 'tdeck' ? 50 : 36)" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.devL.x + DEVICES[leftKit.device].edgeFull" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
+              <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - DEVICES[rightKit.device].edgeFull" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
               <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
                 <rect :x="G.airL.x" :y="laneY(ln.lane) - 36" :width="G.airR.x - G.airL.x" height="72" class="hit" />
                 <line :x1="G.airL.x" :y1="laneY(ln.lane)" :x2="G.airR.x" :y2="laneY(ln.lane)" class="lane path-line" />
@@ -1124,10 +1145,9 @@ onUnmounted(() => {
             <!-- left slot: device + kit -->
             <g :transform="`translate(${G.devL.x},${G.devL.y})`" class="station tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="openCard(leftKit.device)">
               <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
-              <TtcDeviceTDeck v-if="leftKit.device === 'tdeck'" />
-              <TtcDeviceTEcho v-else />
-              <text :y="leftKit.device === 'tdeck' ? 72 : 86" text-anchor="middle" class="st-name">{{ leftKit.device === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
-              <text :y="leftKit.device === 'tdeck' ? 90 : 104" text-anchor="middle" class="st-sub">{{ leftKit.device === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
+              <component :is="DEVICES[leftKit.device].comp" />
+              <text :y="DEVICES[leftKit.device].nameFull" text-anchor="middle" class="st-name">{{ DEVICES[leftKit.device].title }}</text>
+              <text :y="DEVICES[leftKit.device].nameFull + 18" text-anchor="middle" class="st-sub">{{ DEVICES[leftKit.device].sub }}</text>
             </g>
             <g :transform="`translate(${G.kitL.x},${G.kitL.y})`" class="station kit tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="kitTap">
               <rect x="-90" y="-112" width="180" height="250" class="hit" rx="14" />
@@ -1145,10 +1165,9 @@ onUnmounted(() => {
             </g>
             <g :transform="`translate(${G.devR.x},${G.devR.y})`" class="station tap" :class="[rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && rightKit.name === me.name }]" @click="openCard(rightKit.device)">
               <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
-              <TtcDeviceTDeck v-if="rightKit.device === 'tdeck'" />
-              <TtcDeviceTEcho v-else />
-              <text :y="rightKit.device === 'tdeck' ? 72 : 86" text-anchor="middle" class="st-name">{{ rightKit.device === 'tdeck' ? 'T-Deck Plus' : 'T-Echo' }}</text>
-              <text :y="rightKit.device === 'tdeck' ? 90 : 104" text-anchor="middle" class="st-sub">{{ rightKit.device === 'tdeck' ? 'Meshtastic, keyboard' : 'Meshtastic, e-paper' }}</text>
+              <component :is="DEVICES[rightKit.device].comp" />
+              <text :y="DEVICES[rightKit.device].nameFull" text-anchor="middle" class="st-name">{{ DEVICES[rightKit.device].title }}</text>
+              <text :y="DEVICES[rightKit.device].nameFull + 18" text-anchor="middle" class="st-sub">{{ DEVICES[rightKit.device].sub }}</text>
             </g>
 
             <text :x="nearIsLeft ? 1012 : 268" y="446" text-anchor="middle" class="far-note">
@@ -1175,7 +1194,7 @@ onUnmounted(() => {
         </div>
         <div class="min-w-0 flex-1 flex flex-col justify-center">
           <button type="button" class="text-left w-full font-display leading-tight break-words" :class="current ? [msgSize, 'text-gray-50 line-clamp-2'] : 'font-sans text-[15px] text-gray-500'" @click="toggleText" :title="showText ? 'Tap to hide message text' : 'Tap to show message text'">
-            {{ current ? displayText(current) : (nearDev === 'tdeck' ? 'Your message appears here the moment this kit hears it.' : 'The next message from the other kit appears here the moment it lands.') }}
+            {{ current ? displayText(current) : (DEVICES[nearDev].keyboard ? 'Your message appears here the moment this kit hears it.' : 'The next message from the other kit appears here the moment it lands.') }}
           </button>
           <div v-if="current" class="font-sans text-[13px] leading-4 text-gray-300 line-clamp-2">
             {{ statusLine }}
