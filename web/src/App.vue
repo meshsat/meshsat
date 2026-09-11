@@ -7,6 +7,7 @@ import NavBar from '@/components/NavBar.vue'
 import StatusStrip from '@/components/StatusStrip.vue'
 import MeshSatOSK from '@/components/MeshSatOSK.vue'
 import PowerWidget from '@/components/PowerWidget.vue'
+import KioskScreensaver from '@/components/KioskScreensaver.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
@@ -22,6 +23,10 @@ useShortcuts()
 
 const store = useMeshsatStore()
 const utcTime = ref('')
+
+// The poster screensaver exists only on the kiosk panels; main.js has
+// already stamped html.shell-kiosk by the time App mounts. [MESHSAT-826]
+const isKioskShell = typeof document !== 'undefined' && document.documentElement.classList.contains('shell-kiosk')
 
 // Nav moved into NavBar component so it can branch on shellMode and
 // own the mobile bottom-tab bar cleanly. [MESHSAT-550]
@@ -174,6 +179,9 @@ onUnmounted(() => {
 
     <!-- In-SPA on-screen keyboard for kiosk Chromium [MESHSAT-582] -->
     <MeshSatOSK />
+
+    <!-- Poster after 30 s without a touch, kiosk panels only [MESHSAT-826] -->
+    <KioskScreensaver v-if="isKioskShell" />
   </div>
 </template>
 
