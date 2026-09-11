@@ -285,6 +285,9 @@ function newTrip(dir, seed) {
   }
   trips.value.unshift(t); trips.value.splice(12)
   current.value = t
+  // A live message wakes the panel out of the poster screensaver so the
+  // visitor sees it travel. [MESHSAT-826]
+  try { window.dispatchEvent(new CustomEvent('meshsat:wake')) } catch {}
   replaying.value = false
   dot.dir = dir; dot.lane = 'aprs'; dot.visible = true
   flashNear()
