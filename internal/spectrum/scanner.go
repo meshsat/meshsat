@@ -191,9 +191,61 @@ func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize, 
 	return s.scanLegacy(ctx, freqLow, freqHigh, binSize)
 }
 
-// scanFFTW invokes rtl_power_fftw. We map our (low, high, binSize) into
-// rpfftw's (-f low:high, -b bins). rpfftw requires an even bin count;
-// we round up to the nearest even number of bins.
+// SingleHopSpanHz is the RTL-SDR's instantaneous bandwidth at the sample
+// rate rtl_power_fftw uses by default. A widened scan span above it makes
+// rtl_power_fftw retune (frequency hop), and every hop pays a tuner
+// settle plus a full averaging pass: on the Blog V4 a 3.6 MHz span took
+// 9.5 s against 2 s for a 2.3 MHz one (both kits, 11 Sep 2026,
+// MESHSAT-1017). Every DefaultBands window must stay under it, crop
+// included; TestDefaultBandsScanSingleHop enforces that.
+const SingleHopSpanHz = 2_400_000
+
+// ScanGeometry is what scanFFTW asks rtl_power_fftw for, derived from a
+// band: the widened request (crop gutters included), the number of
+// requested bins, the number of interior bins returned and the crop
+// actually applied. Pure, so it can be tested without a dongle.
+type ScanGeometry struct {
+	WidenedLow  int
+	WidenedHigh int
+	Bins        int // interior bins returned to the caller
+	EffBins     int // bins requested from rtl_power_fftw (even)
+	CropPad     int
+}
+
+// SpanHz is the width of the request as rtl_power_fftw sees it.
+func (g ScanGeometry) SpanHz() int { return g.WidenedHigh - g.WidenedLow }
+
+// scanGeometry maps our (low, high, binSize, cropPad) onto rpfftw's
+// (-f low:high, -b bins). rpfftw requires an even bin count; the extra
+// bin, when needed, goes into the discarded right-side gutter.
+func scanGeometry(freqLow, freqHigh, binSize, cropPad int) (ScanGeometry, error) {
+	span := freqHigh - freqLow
+	if span <= 0 || binSize <= 0 {
+		return ScanGeometry{}, fmt.Errorf("invalid band: low=%d high=%d bin=%d", freqLow, freqHigh, binSize)
+	}
+	bins := span / binSize
+	if bins < 2 {
+		bins = 2
+	}
+	if cropPad < 0 {
+		cropPad = 0
+	}
+	widenedLow := freqLow - cropPad*binSize
+	widenedHigh := freqHigh + cropPad*binSize
+	effBins := (widenedHigh - widenedLow) / binSize
+	if effBins%2 != 0 {
+		effBins++
+		widenedHigh = widenedLow + effBins*binSize
+	}
+	return ScanGeometry{WidenedLow: widenedLow, WidenedHigh: widenedHigh, Bins: bins, EffBins: effBins, CropPad: cropPad}, nil
+}
+
+// BandScanGeometry is scanGeometry for a Band with its effective crop.
+func BandScanGeometry(b Band) (ScanGeometry, error) {
+	return scanGeometry(b.FreqLow, b.FreqHigh, b.BinSize, b.EffectiveCropPad())
+}
+
+// scanFFTW invokes rtl_power_fftw with the geometry from scanGeometry.
 //
 // `-n 1000` = average 1000 FFTs per bin. A single un-averaged FFT of
 // thermal noise has 5-15 dB per-bin variance, which dominates the
@@ -221,29 +273,13 @@ func (s *RTLPowerScanner) Scan(ctx context.Context, freqLow, freqHigh, binSize, 
 // the hops stitch over their own edges, but this path is hit for
 // every band so they all benefit consistently.
 func (s *RTLPowerScanner) scanFFTW(ctx context.Context, freqLow, freqHigh, binSize, cropPad int) ([]float64, error) {
-	span := freqHigh - freqLow
-	if span <= 0 || binSize <= 0 {
-		return nil, fmt.Errorf("invalid band: low=%d high=%d bin=%d", freqLow, freqHigh, binSize)
+	g, err := scanGeometry(freqLow, freqHigh, binSize, cropPad)
+	if err != nil {
+		return nil, err
 	}
-	bins := span / binSize
-	if bins < 2 {
-		bins = 2
-	}
-	if cropPad < 0 {
-		cropPad = 0
-	}
+	bins, cropPad, effBins := g.Bins, g.CropPad, g.EffBins
 
-	widenedLow := freqLow - cropPad*binSize
-	widenedHigh := freqHigh + cropPad*binSize
-	effBins := (widenedHigh - widenedLow) / binSize
-	if effBins%2 != 0 {
-		// rpfftw requires even bins — bump the upper edge so we keep
-		// the extra bin in the discarded right-side gutter.
-		effBins++
-		widenedHigh = widenedLow + effBins*binSize
-	}
-
-	freqArg := fmt.Sprintf("%d:%d", widenedLow, widenedHigh)
+	freqArg := fmt.Sprintf("%d:%d", g.WidenedLow, g.WidenedHigh)
 	// -g 200 = 20.0 dB gain. Default (auto) picks the R828D's highest
 	// available gain (37.2 dB on Blog V4). At 37 dB a nearby HAM TX
 	// at 144.8 MHz saturates the tuner front-end → intermodulation

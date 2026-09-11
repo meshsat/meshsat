@@ -6,6 +6,64 @@ import (
 	"testing"
 )
 
+// TestDefaultBandsScanSingleHop pins the rule that every default band,
+// crop gutters included, fits one tune of the dongle. A widened span
+// above SingleHopSpanHz makes rtl_power_fftw hop and turned the LTE
+// bands' 2 s scan into 9.5 s, which starved calibration forever (both
+// kits, 11 Sep 2026, MESHSAT-1017). [MESHSAT-1017]
+func TestDefaultBandsScanSingleHop(t *testing.T) {
+	for _, b := range DefaultBands {
+		g, err := BandScanGeometry(b)
+		if err != nil {
+			t.Fatalf("%s: %v", b.Name, err)
+		}
+		if g.SpanHz() > SingleHopSpanHz {
+			t.Errorf("%s: widened span %d Hz exceeds the single-hop limit %d Hz (crop %d x %d Hz on %d Hz)",
+				b.Name, g.SpanHz(), SingleHopSpanHz, g.CropPad, b.BinSize, b.FreqHigh-b.FreqLow)
+		}
+		if g.EffBins%2 != 0 {
+			t.Errorf("%s: rtl_power_fftw needs an even bin count, got %d", b.Name, g.EffBins)
+		}
+		if g.Bins <= 0 || g.Bins > g.EffBins {
+			t.Errorf("%s: interior bins %d out of range for %d requested", b.Name, g.Bins, g.EffBins)
+		}
+	}
+}
+
+// TestScanGeometryMatchesFieldArgv checks the arithmetic against the
+// command lines observed on the kits: LoRa 867950000:868650000 / 28
+// bins, GPS L1 1574270000:1576570000 / 92 bins, and the LTE bands the
+// same shape as GPS after the 11 Sep 2026 change.
+func TestScanGeometryMatchesFieldArgv(t *testing.T) {
+	cases := []struct {
+		name          string
+		low, high, bs int
+		crop          int
+		wLow, wHigh   int
+		effBins, bins int
+	}{
+		{"lora_868", 868000000, 868600000, 25000, 2, 867950000, 868650000, 28, 24},
+		{"aprs_144", 144700000, 144900000, 12500, 2, 144675000, 144925000, 20, 16},
+		{"gps_l1", 1574420000, 1576420000, 25000, 6, 1574270000, 1576570000, 92, 80},
+		{"lte_b20_dl", 805000000, 807000000, 25000, 6, 804850000, 807150000, 92, 80},
+		{"lte_b8_dl", 941500000, 943500000, 25000, 6, 941350000, 943650000, 92, 80},
+		{"odd bins rounded up", 100000000, 100075000, 25000, 0, 100000000, 100100000, 4, 3},
+	}
+	for _, c := range cases {
+		g, err := scanGeometry(c.low, c.high, c.bs, c.crop)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if g.WidenedLow != c.wLow || g.WidenedHigh != c.wHigh || g.EffBins != c.effBins || g.Bins != c.bins {
+			t.Errorf("%s: got %d:%d bins=%d interior=%d, want %d:%d bins=%d interior=%d",
+				c.name, g.WidenedLow, g.WidenedHigh, g.EffBins, g.Bins, c.wLow, c.wHigh, c.effBins, c.bins)
+		}
+	}
+	if _, err := scanGeometry(10, 10, 25000, 2); err == nil {
+		t.Error("zero span accepted")
+	}
+}
+
 // TestRTLPowerScanner_NoDemotionOnRepeatedFFTWFailures is the MESHSAT-655
 // regression: before the fix, 3 consecutive fftw failures flipped the
 // scanner onto the legacy rtl_power binary, which hangs forever on the

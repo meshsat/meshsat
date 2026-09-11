@@ -720,28 +720,54 @@ func (m *SpectrumMonitor) recalibrateUnresolved(ctx context.Context) {
 	}
 }
 
+// calibrate builds a band's baseline: it scans for at least
+// CalibrationDuration and, when that window yielded fewer than
+// MinCalibrationSamples, keeps going until it has them or
+// CalibrationMaxDuration is up. The sample count, not the clock, decides
+// the outcome; the clock only bounds the cost. A band that cannot reach
+// the minimum inside the ceiling returns nil with the measured scan
+// duration in the warning, so a slow scan is visible in the log instead
+// of failing quietly every minute. [MESHSAT-1017]
 func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
-	deadline := time.Now().Add(CalibrationDuration)
+	start := time.Now()
+	minDeadline := start.Add(CalibrationDuration)
+	maxDeadline := start.Add(CalibrationMaxDuration)
+	if maxDeadline.Before(minDeadline) {
+		maxDeadline = minDeadline
+	}
 	var allPowers []float64
+	var scanTotal time.Duration
+	scans := 0
+	extended := false
 
-	for time.Now().Before(deadline) {
+	for {
 		if ctx.Err() != nil {
 			return nil
 		}
+		now := time.Now()
+		if !now.Before(minDeadline) {
+			if len(allPowers) >= MinCalibrationSamples || !now.Before(maxDeadline) {
+				break
+			}
+			if !extended {
+				// Past the minimum window with too few samples: this
+				// band's scans are slow. Stretch the UI's countdown to
+				// the ceiling once, then keep sampling.
+				extended = true
+				m.mu.Lock()
+				m.status[band.Name].CalibrationDurationSec = int(CalibrationMaxDuration / time.Second)
+				m.mu.Unlock()
+			}
+		}
 
-		// rtl_power_fftw timeout. Measured on parallax 2026-04-22: a
-		// Blog V4 tuner cold-start in a fresh container takes ~2 min
-		// between process exec and first `Acquisition started` log
-		// (async buffer setup + R828D auto-detect + gain calibration
-		// in librtlsdr). 90 s covers cold-start comfortably without
-		// letting a genuinely stuck scan hold the dongle for minutes.
-		// Warm scans still complete in <10 s so the cap is invisible
-		// in steady state. [MESHSAT-509, MESHSAT-656]
-		powers, err := m.scanOnce(ctx, band, 90*time.Second)
+		scanStart := time.Now()
+		powers, err := m.scanOnce(ctx, band, calibrationScanTimeout)
+		scanTotal += time.Since(scanStart)
+		scans++
 
 		if err != nil {
 			log.Debug().Err(err).Str("band", band.Name).Msg("spectrum: calibration scan failed")
-			time.Sleep(time.Second)
+			time.Sleep(calibrationPause)
 			continue
 		}
 
@@ -781,13 +807,24 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 			CalibrationDurationSec: calDur,
 		})
 
-		time.Sleep(time.Second)
+		time.Sleep(calibrationPause)
 	}
 
-	if len(allPowers) < 5 {
+	var perScan time.Duration
+	if scans > 0 {
+		perScan = scanTotal / time.Duration(scans)
+	}
+	if len(allPowers) < MinCalibrationSamples {
 		log.Warn().Str("band", band.Name).Int("samples", len(allPowers)).
+			Int("min", MinCalibrationSamples).
+			Dur("scan_avg", perScan).Dur("window", time.Since(start)).
 			Msg("spectrum: insufficient calibration samples")
 		return nil
+	}
+	if extended {
+		log.Warn().Str("band", band.Name).Int("samples", len(allPowers)).
+			Dur("scan_avg", perScan).Dur("window", time.Since(start)).
+			Msg("spectrum: calibration needed the extended window, this band's scans are slow")
 	}
 
 	mean, std, mad := baselineStats(allPowers)
@@ -800,18 +837,19 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			return
 		}
 
+		// recalibrateUnresolved writes this map under mu from its own
+		// goroutine; read it under the lock too. [MESHSAT-1017]
+		m.mu.RLock()
 		bl := m.baseline[band.Name]
+		m.mu.RUnlock()
 		if bl == nil {
 			continue // not calibrated yet
 		}
 
-		// rtl_power timeout. The rtl-sdr-blog fork (required for the
-		// RTL-SDR Blog V4's R828D tuner) adds noticeable cold-start
-		// See calibrate() for the timeout rationale. 90 s covers
-		// Blog V4 cold-start; warm scans return in <10 s so this cap
-		// is invisible in steady state. [MESHSAT-509, MESHSAT-656]
+		// One exec per band per tick; the timeout rationale is on
+		// calibrationScanTimeout. [MESHSAT-509, MESHSAT-656]
 		scanStart := time.Now()
-		powers, err := m.scanOnce(ctx, band, 90*time.Second)
+		powers, err := m.scanOnce(ctx, band, calibrationScanTimeout)
 		scanDur := time.Since(scanStart)
 
 		m.mu.Lock()

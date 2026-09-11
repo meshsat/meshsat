@@ -8,12 +8,15 @@ import (
 	"time"
 )
 
-// mockScanner returns configurable power readings for testing.
+// mockScanner returns configurable power readings for testing. `delay`
+// makes every Scan take that long (honouring ctx), which is how the
+// calibration tests model a slow band. [MESHSAT-1017]
 type mockScanner struct {
 	mu      sync.Mutex
 	powers  []float64
 	calls   int
 	enabled bool
+	delay   time.Duration
 }
 
 func newMockScanner(powers []float64) *mockScanner {
@@ -26,11 +29,20 @@ func (s *mockScanner) Info() ScannerInfo {
 	return ScannerInfo{BinaryPath: "mock", DongleVID: "0bda", DonglePID: "2838", USBPath: "mock"}
 }
 
-func (s *mockScanner) Scan(_ context.Context, _, _, _, _ int) ([]float64, error) {
+func (s *mockScanner) Scan(ctx context.Context, _, _, _, _ int) ([]float64, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.calls++
-	return append([]float64{}, s.powers...), nil
+	d := s.delay
+	p := append([]float64{}, s.powers...)
+	s.mu.Unlock()
+	if d > 0 {
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return p, nil
 }
 
 func (s *mockScanner) setPowers(p []float64) {

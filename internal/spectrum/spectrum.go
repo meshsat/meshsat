@@ -46,19 +46,26 @@ func (b Band) EffectiveCropPad() int {
 }
 
 // DefaultBands are the RF bands monitored by the RTL-SDR for jamming
-// detection. All windows are kept narrow (<= 3 MHz span) so each per-band
-// scan completes inside the 5s timeout in monitor.scanAllBands — rtl_power
-// retunes in ~2.4 MHz steps, so wider spans compound retune latency and
-// time out.
+// detection. Every window, INCLUDING its CropPad widening, must stay
+// under SingleHopSpanHz (2.4 MHz, the dongle's instantaneous bandwidth)
+// so a scan is one tune: a span that makes rtl_power_fftw hop costs a
+// retune plus a fresh 1000-average pass per hop, which on the Blog V4
+// turns a 2 s scan into a 9.5 s one. That is exactly what happened to
+// the LTE bands from 22 Apr 2026 (3.0 MHz + 6 crop bins at 50 kHz =
+// 3.6 MHz): three samples per 30 s calibration window, never the five
+// required, retried forever, the dongle busy two thirds of the time and
+// the other bands sampled every 13 to 21 s instead of 3 s (both kits,
+// 11 Sep 2026, MESHSAT-1017). TestDefaultBandsScanSingleHop pins the
+// rule.
 //
 // LTE notes: we can only cover the low-band European allocations with the
 // R820T tuner (24 MHz - 1.766 GHz). Band 3 (1800) and Band 7 (2600) are
 // out of range. Band 20 (800) and Band 8 (900) are the most common EU
 // low-band allocations and catch wideband jammers aimed at cellular.
-// We monitor a 3 MHz slice at the centre of each DL allocation — enough
-// to detect broadband jamming, which is what matters for failover. A
-// narrowband jammer on a specific LTE carrier would be caught by the
-// modem's own RSSI/SNR reporting.
+// We monitor a 2 MHz slice at the centre of each DL allocation, the same
+// shape as GPS L1 — enough to detect broadband jamming, which is what
+// matters for failover. A narrowband jammer on a specific LTE carrier
+// would be caught by the modem's own RSSI/SNR reporting.
 var DefaultBands = []Band{
 	{
 		Name:        "lora_868",
@@ -91,33 +98,63 @@ var DefaultBands = []Band{
 		CropPad:     6,
 	},
 	{
-		// LTE Band 20 DL: 791-821 MHz (EU 800). Monitor 3 MHz at centre
-		// ~806 MHz. Broadband jamming on this band kills 4G + SMS. On
-		// jamming, gateway-level logic can preemptively switch to Iridium
-		// SBD for ops messaging.
+		// LTE Band 20 DL: 791-821 MHz (EU 800). Monitor 2 MHz at centre
+		// 806 MHz (2.3 MHz with the crop, one hop, like GPS L1; was 3 MHz
+		// until 11 Sep 2026, see the DefaultBands comment). Broadband
+		// jamming on this band kills 4G + SMS. On jamming, gateway-level
+		// logic can preemptively switch to Iridium SBD for ops messaging.
 		Name:        "lte_b20_dl",
-		FreqLow:     804500000,
-		FreqHigh:    807500000,
-		BinSize:     50000,
+		FreqLow:     805000000,
+		FreqHigh:    807000000,
+		BinSize:     25000,
 		InterfaceID: "cellular_0",
 		Label:       "LTE Band 20 DL (800)",
 		CropPad:     6,
 	},
 	{
-		// LTE Band 8 DL: 925-960 MHz (EU 900). Monitor 3 MHz at centre
-		// ~942.5 MHz. Dual-band coverage guards against the common
-		// scenario where one of the two bands is jammed but the other
-		// isn't — the modem can fall back to the clear band on its own,
-		// and we can surface that in the UI.
+		// LTE Band 8 DL: 925-960 MHz (EU 900). Monitor 2 MHz at centre
+		// 942.5 MHz (same shape as Band 20). Dual-band coverage guards
+		// against the common scenario where one of the two bands is
+		// jammed but the other isn't — the modem can fall back to the
+		// clear band on its own, and we can surface that in the UI.
 		Name:        "lte_b8_dl",
-		FreqLow:     941000000,
-		FreqHigh:    944000000,
-		BinSize:     50000,
+		FreqLow:     941500000,
+		FreqHigh:    943500000,
+		BinSize:     25000,
 		InterfaceID: "cellular_0",
 		Label:       "LTE Band 8 DL (900)",
 		CropPad:     6,
 	},
 }
+
+// Calibration timing. Package vars, not consts, so tests can shorten
+// them (the persistLogThrottle precedent); do not mutate in production
+// code. [MESHSAT-1017]
+var (
+	// CalibrationDuration is the minimum window a baseline is built
+	// over, so fast bands get a real spread of samples (10 or more).
+	CalibrationDuration = 30 * time.Second
+	// CalibrationMaxDuration is how long calibrate keeps scanning when
+	// the minimum window produced fewer than MinCalibrationSamples. Until
+	// 11 Sep 2026 the window was fixed at 30 s, so a band whose scan took
+	// 9.5 s collected 3 samples and failed forever (the LTE bands, both
+	// kits, MESHSAT-1017). A band that cannot reach the minimum inside
+	// this ceiling is reported with its scan duration and retried later.
+	CalibrationMaxDuration = 90 * time.Second
+	// MinCalibrationSamples is the fewest band averages baselineStats
+	// is trusted with.
+	MinCalibrationSamples = 5
+	// calibrationScanTimeout caps one rtl_power_fftw exec. Measured on
+	// parallax 2026-04-22: a Blog V4 tuner cold-start in a fresh
+	// container takes ~2 min between exec and the first `Acquisition
+	// started` line (async buffer setup + R828D auto-detect + gain
+	// calibration in librtlsdr); 90 s covers a warm start comfortably
+	// without letting a stuck scan hold the dongle for minutes. Warm
+	// scans return in about 2 s. [MESHSAT-509, MESHSAT-656]
+	calibrationScanTimeout = 90 * time.Second
+	// calibrationPause is the breath between two calibration scans.
+	calibrationPause = time.Second
+)
 
 // BandStatus represents the current state of a monitored frequency band.
 type BandStatus struct {
@@ -331,8 +368,7 @@ const (
 	PowerFloorLTE20 = -40.0 // DL carrier already ~-70 to -110; jammer >>baseline+20
 	PowerFloorLTE8  = -40.0
 
-	CalibrationDuration = 30 * time.Second
-	ScanInterval        = 3 * time.Second
+	ScanInterval = 3 * time.Second
 
 	// MeasurementNoiseFloorDB is the minimum physically meaningful
 	// fluctuation size — tied to the rtl_power / RTL-SDR 8-bit ADC
