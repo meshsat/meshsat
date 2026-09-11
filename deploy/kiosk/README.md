@@ -21,7 +21,7 @@ All stock Ubuntu 24.04 (`noble`) packages — zero third-party repos.
 | Kiosk shell | `chromium-browser` | `--kiosk --app=<bridge URL>` mode. |
 | Output rotation | `wlr-randr` | Called from `~/.config/labwc/autostart` to rotate DSI-2 90° CW. |
 | Touch rotation | `/etc/udev/rules.d/99-touch-rotate.rules` | Sets `LIBINPUT_CALIBRATION_MATRIX` on the Goodix touchscreen so input coords track the display rotation. |
-| Idle backlight dim | `swayidle` | 2 min → 20%, 5 min → off, any input → full; posts to the bridge's `/api/system/backlight` REST endpoint. |
+| Idle backlight dim | `swayidle` | 3 min of no input → 32/255 (never on mains, MESHSAT-827), any input → 200/255, via the sudoers-scoped `meshsat-backlight` wrapper. |
 | Autologin | stock `getty@tty1.service` drop-in | Pi boots straight into the `kiosk` user on the console. |
 | Chromium lockdown | `/etc/chromium/policies/managed/meshsat-kiosk.json` | URL allowlist = localhost only; devtools, password manager, history, autofill, printing all disabled. |
 

@@ -7,7 +7,10 @@
 
 const BASE = '/api'
 
-async function request(method, path, body = null, params = null) {
+// `timeoutMs` aborts the fetch so a caller that must not wait forever (the
+// booth route selector during a bridge restart) gets an error instead of
+// a hung promise. [MESHSAT-826]
+async function request(method, path, body = null, params = null, timeoutMs = 0) {
   let url = `${BASE}${path}`
   if (params) {
     const qs = new URLSearchParams()
@@ -25,6 +28,9 @@ async function request(method, path, body = null, params = null) {
   if (body && method !== 'GET') {
     opts.body = JSON.stringify(body)
   }
+  if (timeoutMs > 0 && typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+    opts.signal = AbortSignal.timeout(timeoutMs)
+  }
 
   const res = await fetch(url, opts)
   if (!res.ok) {
@@ -41,7 +47,7 @@ async function request(method, path, body = null, params = null) {
 export default {
   get: (path, params) => request('GET', path, null, params),
   post: (path, body) => request('POST', path, body),
-  put: (path, body) => request('PUT', path, body),
+  put: (path, body, timeoutMs = 0) => request('PUT', path, body, null, timeoutMs),
   del: (path) => request('DELETE', path),
   patch: (path, body) => request('PATCH', path, body),
 

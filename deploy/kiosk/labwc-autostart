@@ -49,7 +49,8 @@ BRIDGE_SOFT_LAUNCH=0
 [ "$i" -ge "$BRIDGE_WAIT_MAX" ] && BRIDGE_SOFT_LAUNCH=1
 
 # 3. Idle backlight dim — swayidle hooks labwc's idle notifier and
-#    dims the panel to 32/255 after 10 min of no input, restores to
+#    dims the panel to 32/255 after 3 min of no input (owner, 11 Sep
+#    2026, was 10 min), restores to
 #    200/255 on activity. The backlight write is delegated to a
 #    sudoers-scoped wrapper (/usr/local/bin/meshsat-backlight),
 #    installed with a one-command sudoers entry so the kiosk user
@@ -57,7 +58,7 @@ BRIDGE_SOFT_LAUNCH=0
 #    `--idle` makes the dim conditional: on mains power (X1202
 #    ac_present) the panel never dims. [MESHSAT-827]
 swayidle -w \
-  timeout 600 'sudo -n /usr/local/bin/meshsat-backlight --idle 32' \
+  timeout 180 'sudo -n /usr/local/bin/meshsat-backlight --idle 32' \
   resume 'sudo -n /usr/local/bin/meshsat-backlight 200' &
 
 # 4. Chromium kiosk — policy lockdown in
