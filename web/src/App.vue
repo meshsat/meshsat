@@ -180,7 +180,7 @@ onUnmounted(() => {
     <!-- In-SPA on-screen keyboard for kiosk Chromium [MESHSAT-582] -->
     <MeshSatOSK />
 
-    <!-- Poster after 30 s without a touch, kiosk panels only [MESHSAT-826] -->
+    <!-- Poster interlude on an untouched panel (20 s every 4 min after 3 min idle), kiosk only [MESHSAT-826] -->
     <KioskScreensaver v-if="isKioskShell" />
   </div>
 </template>
