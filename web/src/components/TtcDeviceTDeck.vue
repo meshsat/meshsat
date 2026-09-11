@@ -11,7 +11,7 @@ defineProps({ scale: { type: Number, default: 1.35 } })
 
 <template>
   <g class="device photo tdeck" :transform="`scale(${scale})`">
-    <image href="/tdeck-plus.png" x="-36" y="-70.3" width="72" height="112" class="photo-img" preserveAspectRatio="xMidYMid meet" />
+    <image href="/tdeck-plus-front.png" x="-36" y="-70.3" width="72" height="112" class="photo-img" preserveAspectRatio="xMidYMid meet" />
     <rect x="-36.6" y="-71.4" width="73.2" height="113.6" rx="8" class="body" />
     <rect x="-28.9" y="-54.8" width="58.5" height="43.7" rx="0.6" class="screen" />
     <g class="ui">

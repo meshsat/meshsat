@@ -48,7 +48,7 @@ const LEFT_KIT = 'tesseract'
 // 1.35), where the caption sits under it, and whether a visitor types on
 // it or only reads it.
 const DEVICES = {
-  tdeck:    { name: 'T-Deck', title: 'T-Deck Plus', sub: 'Meshtastic, keyboard', img: '/tdeck-plus.png', comp: TtcDeviceTDeck, edgeNear: 78, edgeFull: 50, nameNear: 120, nameFull: 72, keyboard: true },
+  tdeck:    { name: 'T-Deck', title: 'T-Deck Plus', sub: 'Meshtastic, keyboard', img: '/tdeck-plus-front.png', comp: TtcDeviceTDeck, edgeNear: 78, edgeFull: 50, nameNear: 120, nameFull: 72, keyboard: true },
   tdeckpro: { name: 'T-Deck Pro', title: 'T-Deck Pro', sub: 'Meshtastic, keyboard, e-paper', img: '/tdeck-pro.png', comp: TtcDeviceTDeckPro, edgeNear: 72, edgeFull: 48, nameNear: 120, nameFull: 72, keyboard: true },
   techo:    { name: 'T-Echo', title: 'T-Echo', sub: 'Meshtastic, e-paper', img: '/techo.png', comp: TtcDeviceTEcho, edgeNear: 56, edgeFull: 36, nameNear: 136, nameFull: 86, keyboard: false },
 }
