@@ -16,6 +16,13 @@ cmd/meshsat/web/dist/*
 # MSVQ-SC ONNX model blobs — fetched out-of-band (~23 MB), not tracked.
 sidecar/msvqsc/models/
 
+# Runtime data written when the binary is run from the repo root. Holds the
+# Reticulum private identity, never commit it. [MESHSAT-1062]
+/data/
+
+# Local-only dev vite config (proxy at a kit); the tracked one is vite.config.js.
+web/vite.config.tmp.js
+
 # Playwright artifacts (per-run) + npm deps for test/e2e.
 test-results/
 test/e2e/test-results/
