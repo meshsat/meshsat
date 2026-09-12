@@ -19,6 +19,119 @@ CONTAINER_NAME="meshsat"
 HOST_PORT="6050"
 HEALTH_TIMEOUT="90"
 
+# =============================================================================
+# Survive an SSH drop [MESHSAT-756]
+# =============================================================================
+# CI runs this script over SSH. On a kit with a flapping WiFi link (parallax,
+# MESHSAT-751) the connection can die mid-run: sshd SIGHUPs the session's
+# process group and the script stops wherever it happened to be. The dangerous
+# window is between "docker rm -f meshsat" and "docker compose up -d" — the kit
+# is left with no bridge and nothing brings it back. That is how parallax lost
+# its bridge on 2026-09-02.
+#
+# So the deploy always runs in its OWN session (setsid: new session, new process
+# group, no controlling terminal), where sshd's SIGHUP cannot reach it. The
+# SSH-attached invocation becomes a follower: it streams the log and exits with
+# the detached run's status. If SSH dies, CI reports a failed deploy and the
+# detached run still finishes — the kit ends up healthy either way.
+DEPLOY_STATE_DIR="/tmp/meshsat-deploy"
+DEPLOY_RUNNER="${DEPLOY_STATE_DIR}/run.sh"
+DEPLOY_LOG="${DEPLOY_STATE_DIR}/deploy.log"
+DEPLOY_STATUS="${DEPLOY_STATE_DIR}/deploy.status"
+DEPLOY_LOCK="${DEPLOY_STATE_DIR}/deploy.lock"
+DEPLOY_PIDFILE="${DEPLOY_STATE_DIR}/deploy.pid"
+
+if [ "${MESHSAT_DEPLOY_DETACHED:-0}" != "1" ]; then
+  # Fail closed. Running attached is exactly the hazard this block removes, so a
+  # missing setsid is a refusal, never a fallback.
+  if ! command -v setsid > /dev/null 2>&1; then
+    echo "ERROR: setsid not found on this device — refusing to run the deploy attached to the SSH session [MESHSAT-756]"
+    exit 1
+  fi
+
+  mkdir -p "$DEPLOY_STATE_DIR"
+
+  # Run from a copy: CI deletes /tmp/ci-deploy-meshsat.sh as soon as the SSH
+  # command returns, which can be while the detached run is still going.
+  if [ "$0" != "$DEPLOY_RUNNER" ]; then
+    cp "$0" "$DEPLOY_RUNNER"
+    chmod +x "$DEPLOY_RUNNER"
+  fi
+
+  rm -f "$DEPLOY_STATUS" "$DEPLOY_PIDFILE"
+  : > "$DEPLOY_LOG"
+
+  MESHSAT_DEPLOY_DETACHED=1 setsid bash "$DEPLOY_RUNNER" \
+    >> "$DEPLOY_LOG" 2>&1 < /dev/null &
+  DEPLOY_PID=$!
+
+  # setsid execs in place when the caller is not already a process group leader
+  # (the usual case for a background job in a non-interactive shell) but forks
+  # when it is — and then $! is setsid's PID, which exits immediately and would
+  # look to the follower below like a dead deploy. The child records its own PID
+  # instead; $! is only the fallback.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$DEPLOY_PIDFILE" ] && break
+    sleep 1
+  done
+  if [ -s "$DEPLOY_PIDFILE" ]; then
+    DEPLOY_PID=$(cat "$DEPLOY_PIDFILE")
+  fi
+  echo "Deploy running detached as PID ${DEPLOY_PID} (log: ${DEPLOY_LOG})"
+
+  # Follow the log until the detached run records its exit status. Deliberately
+  # a poll loop rather than "tail -f --pid": no coreutils version assumptions,
+  # and the status file is written by the child's EXIT trap after all of its
+  # output, so observing it means the log is already complete.
+  DEPLOY_SEEN=0
+  DEPLOY_GRACE=0
+  while :; do
+    DEPLOY_DONE=0
+    [ -f "$DEPLOY_STATUS" ] && DEPLOY_DONE=1
+
+    DEPLOY_SIZE=$(stat -c %s "$DEPLOY_LOG" 2>/dev/null || echo 0)
+    if [ "$DEPLOY_SIZE" -gt "$DEPLOY_SEEN" ]; then
+      tail -c "+$((DEPLOY_SEEN + 1))" "$DEPLOY_LOG" 2>/dev/null || true
+      DEPLOY_SEEN="$DEPLOY_SIZE"
+    fi
+
+    [ "$DEPLOY_DONE" = "1" ] && break
+
+    # The child died without recording a status (killed, OOM). Give it a few
+    # seconds in case the trap is still running, then give up — but note that
+    # the container state is whatever the child left behind, so say so loudly.
+    if ! kill -0 "$DEPLOY_PID" 2>/dev/null; then
+      DEPLOY_GRACE=$((DEPLOY_GRACE + 1))
+      if [ "$DEPLOY_GRACE" -ge 5 ]; then
+        echo "ERROR: detached deploy (PID ${DEPLOY_PID}) exited without recording a status."
+        echo "       Check ${DEPLOY_LOG} and the container state on this device."
+        exit 1
+      fi
+    fi
+
+    sleep 2
+  done
+
+  DEPLOY_RC=$(cat "$DEPLOY_STATUS" 2>/dev/null || echo 1)
+  exit "${DEPLOY_RC:-1}"
+fi
+
+# --- Detached run from here on ---
+trap '' HUP
+trap 'MESHSAT_DEPLOY_RC=$?; echo "$MESHSAT_DEPLOY_RC" > "$DEPLOY_STATUS"' EXIT
+echo $$ > "$DEPLOY_PIDFILE"
+
+# One deploy at a time. A CI retry while an earlier detached run is still
+# tearing down and recreating the container is the one way left to produce the
+# interleaving this whole block exists to prevent.
+if command -v flock > /dev/null 2>&1; then
+  exec 9> "$DEPLOY_LOCK"
+  if ! flock -w 900 9; then
+    echo "ERROR: another MeshSat deploy has held the lock for 15 minutes — refusing to start"
+    exit 1
+  fi
+fi
+
 echo "=== MeshSat Deploy (standalone direct mode) ==="
 echo "  Target: ${DEPLOY_TARGET:-unknown}"
 
@@ -47,16 +160,70 @@ fi
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
 # --- Pull from GHCR ---
-echo "Pulling latest MeshSat image from GHCR..."
-timeout 120 docker pull "${GHCR_IMAGE}:latest" 2>&1 || {
-  echo "Pull failed, using cached..."
-}
+# One retry before giving up. On 2026-09-05 (pipeline 51914) the first pull
+# timed out on parallax's WiFi after most layers had landed and the second
+# attempt took five seconds, because everything was already cached. [MESHSAT-809]
+PULL_OK=0
+for PULL_ATTEMPT in 1 2; do
+  PULL_TIMEOUT=$((PULL_ATTEMPT * 120))
+  echo "Pulling ${GHCR_IMAGE}:latest from GHCR (attempt ${PULL_ATTEMPT}, timeout ${PULL_TIMEOUT}s)..."
+  if timeout "$PULL_TIMEOUT" docker pull "${GHCR_IMAGE}:latest" 2>&1; then
+    PULL_OK=1
+    break
+  fi
+  echo "  Pull attempt ${PULL_ATTEMPT} failed"
+done
+if [ "$PULL_OK" != "1" ]; then
+  echo "  Both pull attempts failed — falling back to the cached image, which must still"
+  echo "  match the digest the pipeline built (checked below)."
+fi
+
 # Never take the running bridge down for an image we do not have. On
 # 2026-09-02 a pull timed out on a flapping WiFi link, the container was
 # stopped and removed, and compose then failed with "No such image",
 # leaving the kit without a bridge. [MESHSAT-756]
 if ! docker image inspect "${GHCR_IMAGE}:latest" >/dev/null 2>&1; then
   echo "ERROR: ${GHCR_IMAGE}:latest is not available locally after the pull; leaving the running container untouched"
+  exit 1
+fi
+
+# =============================================================================
+# The image must be the one this pipeline built [MESHSAT-809]
+# =============================================================================
+# Until now the only check was "some image carries the :latest tag", which a
+# stale cached image satisfies. The container was then recreated from it, the
+# old build answered /health, and the job exited 0 — a green deploy on
+# yesterday's code (parallax, 5 Sep 2026, four minutes on the 3 Sep image).
+#
+# MESHSAT_EXPECTED_DIGEST is the manifest digest the package stage pushed.
+# MESHSAT_EXPECTED_SHA is the commit short sha, which package also pushes as
+# its own tag and which is only used to make the log readable.
+#
+# This runs BEFORE the container is stopped, so a mismatch costs nothing: the
+# bridge keeps running on whatever it already had.
+EXPECTED_DIGEST="${MESHSAT_EXPECTED_DIGEST:-}"
+LOCAL_DIGESTS=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${GHCR_IMAGE}:latest" 2>/dev/null || true)
+LOCAL_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "${GHCR_IMAGE}:latest" 2>/dev/null || echo "unknown")
+
+if [ -z "$EXPECTED_DIGEST" ]; then
+  echo "WARNING: MESHSAT_EXPECTED_DIGEST is not set — cannot prove this is the image the"
+  echo "         pipeline built. Deploying UNVERIFIED (expected only for a hand-run)."
+  IMAGE_VERIFIED="UNVERIFIED"
+elif printf '%s' "$LOCAL_DIGESTS" | grep -qF "$EXPECTED_DIGEST"; then
+  echo "  Image digest matches the pipeline: ${EXPECTED_DIGEST}"
+  IMAGE_VERIFIED="verified"
+else
+  echo ""
+  echo "ERROR: the local ${GHCR_IMAGE}:latest is NOT the image this pipeline built."
+  echo "       expected digest: ${EXPECTED_DIGEST}"
+  echo "       local digests:   ${LOCAL_DIGESTS:-none}"
+  echo "       local image id:  ${LOCAL_IMAGE_ID}"
+  echo "       commit:          ${MESHSAT_EXPECTED_SHA:-unknown}"
+  echo ""
+  echo "       The pull did not deliver the new image (a timeout on this device's link is"
+  echo "       the usual cause). The running container has been left untouched and is still"
+  echo "       serving the previous build. Re-run the deploy, or on the device:"
+  echo "         cd ${COMPOSE_DIR} && docker compose pull && docker compose up -d"
   exit 1
 fi
 
@@ -206,6 +373,13 @@ while [ ${SECONDS_WAITED} -lt ${HEALTH_TIMEOUT} ]; do
     echo "Image:   ${GHCR_IMAGE}:latest"
     echo "Layout:  ${DEPLOY_LAYOUT} (${COMPOSE_DIR})"
     echo "Mode:    standalone direct (docker-compose, serial)"
+    # What is actually RUNNING, not what we hoped to deploy. A tag proves
+    # nothing; this is the line to read when a deploy is in doubt. [MESHSAT-809]
+    RUNNING_IMAGE=$(docker inspect -f '{{.Image}}' "${CONTAINER_NAME}" 2>/dev/null || echo "unknown")
+    RUNNING_CREATED=$(docker image inspect -f '{{.Created}}' "${RUNNING_IMAGE}" 2>/dev/null || echo "unknown")
+    echo "Running: ${RUNNING_IMAGE}"
+    echo "Built:   ${RUNNING_CREATED}"
+    echo "Commit:  ${MESHSAT_EXPECTED_SHA:-unknown} (${IMAGE_VERIFIED})"
     echo ""
     docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep meshsat
     echo ""

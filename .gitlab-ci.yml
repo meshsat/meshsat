@@ -204,6 +204,24 @@ package:
         -t ${MESHSAT_IMAGE}:latest \
         .
       echo "Pushed multi-arch ${MESHSAT_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - |
+      # Hand the manifest digest to the deploy stage so each kit can prove it is
+      # running THIS build and not a cached older one. Without it a pull timeout
+      # silently deploys yesterday's image and the job still goes green.
+      # [MESHSAT-809]
+      MESHSAT_EXPECTED_DIGEST=$(docker buildx imagetools inspect "${MESHSAT_IMAGE}:latest" --format '{{.Manifest.Digest}}')
+      if [ -z "$MESHSAT_EXPECTED_DIGEST" ]; then
+        echo "ERROR: could not read the pushed manifest digest for ${MESHSAT_IMAGE}:latest"
+        exit 1
+      fi
+      echo "Manifest digest: ${MESHSAT_EXPECTED_DIGEST}"
+      {
+        echo "MESHSAT_EXPECTED_DIGEST=${MESHSAT_EXPECTED_DIGEST}"
+        echo "MESHSAT_EXPECTED_SHA=${CI_COMMIT_SHORT_SHA}"
+      } > package.env
+  artifacts:
+    reports:
+      dotenv: package.env
   after_script:
     - docker buildx rm meshsatbuilder || true
   rules:
@@ -265,8 +283,11 @@ deploy:
       fi
     - scp scripts/ci-deploy.sh ${PI_DEPLOY_HOST}:/tmp/ci-deploy-meshsat.sh
     - |
+      # MESHSAT_EXPECTED_* come from the package stage's dotenv report and let
+      # the kit refuse to deploy a cached image that is not this build. A green
+      # deploy previously proved only that /health answered. [MESHSAT-809]
       ssh -o ServerAliveInterval=15 ${PI_DEPLOY_HOST} \
-        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' DEPLOY_TARGET='${DEPLOY_TARGET}' bash /tmp/ci-deploy-meshsat.sh"
+        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' DEPLOY_TARGET='${DEPLOY_TARGET}' MESHSAT_EXPECTED_DIGEST='${MESHSAT_EXPECTED_DIGEST}' MESHSAT_EXPECTED_SHA='${MESHSAT_EXPECTED_SHA}' bash /tmp/ci-deploy-meshsat.sh"
     - ssh ${PI_DEPLOY_HOST} "rm -f /tmp/ci-deploy-meshsat.sh"
   after_script:
     - kill $SSH_AGENT_PID 2>/dev/null || true
