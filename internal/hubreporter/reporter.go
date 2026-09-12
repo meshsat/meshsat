@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -72,6 +73,7 @@ type HubReporter struct {
 	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
+	tlsErr        error             // set when TLS material is present but unusable [MESHSAT-1027]
 
 	// TAK relay stats surfaced to the dashboard widget via a synthetic
 	// gateway entry (type "tak_hub_relay"). The widget reports 0 without
@@ -103,6 +105,20 @@ func NewHubReporter(cfg ReporterConfig, birthFn func() BridgeBirth, healthFn fun
 
 // Start connects to the Hub MQTT broker, publishes the birth certificate,
 // subscribes to the command topic, and starts the health ticker.
+// ErrConnectPending means the first connect did not complete in time but the
+// client is still trying. The caller should arm whatever fallback it has and
+// carry on: this is not a reason to give up on the Hub. [MESHSAT-1027]
+var ErrConnectPending = errors.New("hubreporter: not connected yet, retrying in the background")
+
+// Package vars so tests can shorten them.
+var (
+	// How long Start waits for the first connect before handing back
+	// ErrConnectPending. Retries continue regardless.
+	initialConnectWait = 15 * time.Second
+	// Gap between paho's connect attempts while no session exists.
+	connectRetryInterval = 30 * time.Second
+)
+
 func (r *HubReporter) Start(ctx context.Context) error {
 	if err := r.cfg.Validate(); err != nil {
 		return fmt.Errorf("hubreporter config: %w", err)
@@ -114,6 +130,15 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		SetKeepAlive(60 * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
+		// AutoReconnect only covers a session that was once established: it is
+		// driven from the connection-lost path, which never runs if the first
+		// connect failed. ConnectRetry is the other half, and without it a kit
+		// that boots before its WiFi associates stays off the Hub for the life
+		// of the process — and, worse, never disarms the satellite fallback,
+		// so it keeps paying for Iridium or SMS uplinks after the Hub is
+		// reachable again. [MESHSAT-1027]
+		SetConnectRetry(true).
+		SetConnectRetryInterval(connectRetryInterval).
 		SetCleanSession(false).
 		SetResumeSubs(true).
 		SetOrderMatters(false)
@@ -128,6 +153,12 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	// TLS configuration — needed for ssl://, wss://, or explicit mTLS
 	if tlsCfg := r.buildTLSConfig(); tlsCfg != nil {
 		opts.SetTLSConfig(tlsCfg)
+	}
+	// Unusable TLS material is a configuration fault, not a network one.
+	// Retrying it for the life of the process would never succeed and would
+	// hide the real cause behind broker authentication failures. [MESHSAT-1027]
+	if r.tlsErr != nil {
+		return fmt.Errorf("hubreporter: %w", r.tlsErr)
 	}
 
 	// Extract signing key and certificate PEM for birth message signing.
@@ -197,18 +228,52 @@ func (r *HubReporter) Start(ctx context.Context) error {
 
 	r.client = mqtt.NewClient(opts)
 	token := r.client.Connect()
-	if !token.WaitTimeout(15 * time.Second) {
-		return fmt.Errorf("hubreporter connect timeout")
-	}
-	if token.Error() != nil {
-		return fmt.Errorf("hubreporter connect: %w", token.Error())
+
+	var connectErr error
+	if !token.WaitTimeout(initialConnectWait) {
+		connectErr = fmt.Errorf("no answer within %s", initialConnectWait)
+	} else if err := token.Error(); err != nil {
+		connectErr = err
 	}
 
-	// Start health ticker
+	// The health ticker starts either way. paho keeps retrying in the
+	// background and OnConnect fires whenever the Hub appears, so a reporter
+	// that is merely not connected yet must still be fully wired. [MESHSAT-1027]
 	go r.healthLoop(ctx)
+
+	if connectErr != nil {
+		go r.logWhileDisconnected(ctx)
+		log.Warn().Err(connectErr).Str("hub", r.cfg.HubURL).Dur("retry_every", connectRetryInterval).
+			Msg("hubreporter: first connect did not succeed, retrying in the background")
+		return fmt.Errorf("%w: %v", ErrConnectPending, connectErr)
+	}
 
 	log.Info().Str("hub", r.cfg.HubURL).Str("bridge_id", r.cfg.BridgeID).Msg("hubreporter started")
 	return nil
+}
+
+// logWhileDisconnected reports the still-disconnected state once a minute until
+// the client connects or the process shuts down. paho's own retry logging only
+// appears at its DEBUG logger, which is not wired up, so without this a kit that
+// never reaches the Hub says so exactly once at boot and then goes quiet.
+func (r *HubReporter) logWhileDisconnected(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.stopCh:
+			return
+		case <-t.C:
+			if r.IsConnected() {
+				log.Info().Str("hub", r.cfg.HubURL).Msg("hubreporter: connected after retrying")
+				return
+			}
+			log.Warn().Str("hub", r.cfg.HubURL).Dur("retry_every", connectRetryInterval).
+				Msg("hubreporter: still not connected, retrying")
+		}
+	}
 }
 
 // buildTLSConfig returns a *tls.Config when TLS is needed (ssl://, wss://, mTLS,
@@ -232,11 +297,16 @@ func (r *HubReporter) buildTLSConfig() *tls.Config {
 	if hasCertPEM {
 		cert, err := tls.X509KeyPair(r.cfg.TLSCertPEM, r.cfg.TLSKeyPEM)
 		if err != nil {
+			// Returning a TLS config with no certificate here produced an
+			// authentication failure at the broker instead of a message about
+			// the certificate, which is a long way to travel for a bad PEM.
+			// [MESHSAT-1027]
+			r.tlsErr = fmt.Errorf("parse inline TLS client certificate: %w", err)
 			log.Error().Err(err).Msg("hubreporter: failed to parse inline TLS client certificate")
-		} else {
-			cfg.Certificates = []tls.Certificate{cert}
-			log.Info().Msg("hubreporter: mTLS client certificate loaded from DB")
+			return nil
 		}
+		cfg.Certificates = []tls.Certificate{cert}
+		log.Info().Msg("hubreporter: mTLS client certificate loaded from DB")
 	} else if hasCertFile {
 		cert, err := tls.LoadX509KeyPair(r.cfg.TLSCert, r.cfg.TLSKey)
 		if err != nil {

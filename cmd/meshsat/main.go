@@ -1988,7 +1988,18 @@ func main() {
 		})
 
 		if err := hubReporter.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("hub reporter start failed")
+			// A first connect that has not succeeded yet is not a failure: the
+			// client keeps trying and will arm the birth/subscribe path the
+			// moment the Hub answers. A kit powered on before its WiFi
+			// associates hits this every morning. [MESHSAT-1027]
+			if errors.Is(err, hubreporter.ErrConnectPending) {
+				log.Warn().Err(err).Str("hub", hubURL).Msg("hub reporter not connected yet, retrying in the background")
+			} else {
+				log.Error().Err(err).Msg("hub reporter start failed")
+			}
+			// Arm the fallback either way. It disarms on the eventual connect
+			// through OnMQTTReconnect, which is the path that stops the paid
+			// uplinks once the Hub is reachable.
 			if satFallback != nil {
 				satFallback.OnMQTTDisconnect()
 			}
