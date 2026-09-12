@@ -840,3 +840,26 @@ Six issues, one push each so a regression is attributable. What follows separate
 **MESHSAT-986, a wedged AT channel froze the whole ladder.** `ProbeTimeout` was passed as a context and nothing raced it, so a probe that never returned left the target marked probing, `tick()` skipped it for ever, and the level 2 and level 3 rungs never ran. It is enforced structurally now, which covers every transport rather than the one that happened to fail. Underneath, the cellular command queue no longer has an unbounded send, and `execAT`'s timeout forces a serial reconnect the way `execRawFn`'s always has. **Left out deliberately: the status drift that let `/api/gateways` and `/api/cellular/status` report the modem connected throughout (MESHSAT-1064).** That redefines `connected` on two endpoints the booth screen reads, which is not a change for this week.
 
 **MESHSAT-1021, the beacon and the message kept the same cadence.** Both pairs waited `tx_repeat_gap_ms`, so they advanced in lockstep and a beacon pair aligned with a message pair took out both copies rather than one. Beacons now have their own gap, the message gap is jittered, and a beacon that falls due while the channel has recent traffic waits for a gap, capped so a busy channel can never silence the liveness signal the peer's watchdog waits for.
+
+## 31. 12 Sep 2026, evening: the booth lane carries its own fallback, and tesseract cannot take a 9704 yet
+
+**The booth lane is not just `aprs`, it is APRS with SMS underneath it, and that is already wired.** Section 29 records the owner ruling that the booth default is `aprs`. The ruling was restated on 12 Sep evening as **APRS primary, SMS fallback**, and nothing had to change on the kits, because the `ttc:aprs` rule does not forward to `aprs_0`. It forwards to the failover group **`peer_link`**, live on both kits since 7 Sep 18:00, labelled "Peer kit: APRS first, SMS fallback", `mode: priority`, members `aprs_0` priority 1 and `cellular_0` priority 2.
+
+`FailoverResolver.Resolve` walks members in priority order and **ignores health scores entirely**. This matters: on 12 Sep `cellular_0` scored 61 against `aprs_0`'s 60, and the order did not invert. It drops to SMS only when `aprs_0` is offline, or when `aprs_0` is online but its receiver is deaf, which is the MESHSAT-857 `ReceiveDeaf` check added because an APRS chain that transmits but cannot hear the peer would otherwise swallow every relay in silence.
+
+**If `peer_link` is ever missing**, `ttcEnsureRules` degrades the rule to a bare `aprs_0` forward with **no fallback at all** and reports it in the status `issues` list. So when checking the booth lane, read `issues` on `GET /api/ttc/flow`, not just `path`.
+
+**Do not read the lane name alone as the whole policy.** Seeing `path: aprs` is not evidence that SMS is unavailable; the SMS fallback lives inside that lane.
+
+**tesseract cannot run a 9704 without a reboot first (MESHSAT-1071).** The owner expects IMT hardware on both kits from Mon 14 Sep. The bridge side is already right and needs nothing: the `ttc:imt` rule exists on tesseract pointing at `iridium_imt_0` by design, because `ttcEnsureRules` creates it before the modem is fitted. The gap is OS and compose level:
+
+| | tesseract | parallax |
+|---|---|---|
+| `dtoverlay=uart2-pi5` | **missing** | present |
+| `/dev/ttyAMA2` | **absent** (only ttyAMA0, ttyAMA10) | present |
+| `MESHSAT_IMT_PORT` | absent, compose defaults `auto` | `/dev/ttyAMA2` |
+| `MESHSAT_IMT_GPIO_CHIP` / `I_EN` / `I_BTD` | **not in .env and not in compose** | gpiochip4 / 26 / 23 |
+
+Three consequences. The overlay needs a **reboot**, so this is not a same-day change on the morning the hardware lands. `auto` will never find the modem, because DeviceSupervisor deliberately skips `ttyAMA*`. And a `MESHSAT_*` var only reaches the bridge if compose names it, so setting the three GPIO vars in tesseract's .env alone would silently do nothing.
+
+**Watch the pin.** tesseract drives its 9603 with RI on **BCM 23**, the same pin parallax uses for the 9704's **I_BTD**. That pin changes meaning when the modem is swapped, so `meshsat-gpio.service` and the 9603 power script need reviewing, not just the env. If the 9603 comes out, `DELETE /api/gateways/iridium` removes `iridium_0` correctly (that route resolves to `_0`, unlike the second-instance problem in MESHSAT-983).
