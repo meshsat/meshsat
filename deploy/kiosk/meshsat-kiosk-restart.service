@@ -6,6 +6,16 @@ Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT
 
 [Service]
 Type=oneshot
+# Never recycle a kiosk that has only just come up. [MESHSAT-993]
+#
+# The timer no longer carries Persistent=true, so a missed 03:30 run does not
+# fire at boot, but a recycle minutes after a power-on is wrong however it is
+# triggered: the point of the daily restart is a long-running renderer, and a
+# fresh session has nothing to clean up. On 9 Sep the catch-up run threw both
+# booth screens back to the operator dashboard while someone was at the stand.
+# ExecStartPre exiting non-zero skips ExecStart; the unit is marked failed,
+# which is the honest record of "asked to recycle, refused, too soon".
+ExecStartPre=/bin/sh -c '[ "$(cut -d. -f1 /proc/uptime)" -ge 3600 ] || { echo "uptime under an hour, refusing to recycle the kiosk"; exit 1; }'
 # The getty@tty1 restart tears down the kiosk user's session scope (and
 # therefore labwc + Chromium); autologin spawns them fresh. See
 # scripts/install-kiosk.sh for the session chain. Run as the stricter
