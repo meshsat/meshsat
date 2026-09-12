@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"meshsat/internal/clockstate"
 	"meshsat/internal/gateway"
 )
 
@@ -14,6 +15,12 @@ import (
 type DeviceHealthResponse struct {
 	Enabled bool                   `json:"enabled"`
 	Targets []gateway.TargetStatus `json:"targets"`
+	// Clock is the boot-time clock guard's verdict on the host clock. A kit
+	// that came up with no time source reports trusted=false, and the panel
+	// shows it: nothing else on the dashboard reveals a wrong clock, because
+	// every relative age is measured against the same wrong clock.
+	// [MESHSAT-1056]
+	Clock clockstate.State `json:"clock"`
 }
 
 // DeviceHealthHealRequest is the body of POST /api/devices/health/{target}/heal.
@@ -34,11 +41,23 @@ type DeviceHealthHealRequest struct {
 // @Success 200 {object} DeviceHealthResponse
 // @Router /api/devices/health [get]
 func (s *Server) handleGetDeviceHealth(w http.ResponseWriter, r *http.Request) {
+	clock := clockstate.State{Trusted: true, Source: clockstate.SourceUnknown}
+	if s.clockState != nil {
+		clock = s.clockState.State()
+	}
 	if s.deviceHealth == nil {
-		writeJSON(w, http.StatusOK, DeviceHealthResponse{Enabled: false, Targets: []gateway.TargetStatus{}})
+		writeJSON(w, http.StatusOK, DeviceHealthResponse{
+			Enabled: false,
+			Targets: []gateway.TargetStatus{},
+			Clock:   clock,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, DeviceHealthResponse{Enabled: true, Targets: s.deviceHealth.Status()})
+	writeJSON(w, http.StatusOK, DeviceHealthResponse{
+		Enabled: true,
+		Targets: s.deviceHealth.Status(),
+		Clock:   clock,
+	})
 }
 
 // handlePauseDeviceHealth stops the heal ladder for one target; probes continue.

@@ -111,6 +111,11 @@ type DirectMeshTransport struct {
 	// after a handshake (42 LoRa transmissions on a 43-node NodeDB, the
 	// suspected XIAO wedge trigger); off by default. [MESHSAT-783]
 	timeSyncRemote bool
+
+	// clockTrusted reports whether the host clock may be handed to the
+	// radio. Nil means yes, which is the behaviour on any host without the
+	// boot-time clock guard. [MESHSAT-1056]
+	clockTrusted func() bool
 }
 
 // ErrMeshHandshakeSilent is returned by a connect whose radio never answered
@@ -141,6 +146,24 @@ func (t *DirectMeshTransport) SetTimeSyncRemote(on bool) {
 	t.mu.Lock()
 	t.timeSyncRemote = on
 	t.mu.Unlock()
+}
+
+// SetClockTrustFn supplies the check that decides whether the host clock is
+// good enough to push into the radio's RTC. Without it the transport behaves
+// as before and always pushes. [MESHSAT-1056]
+func (t *DirectMeshTransport) SetClockTrustFn(fn func() bool) {
+	t.mu.Lock()
+	t.clockTrusted = fn
+	t.mu.Unlock()
+}
+
+// clockTrustedForRadio reports whether the host clock is fit to be written
+// into the radio's RTC. No check installed means yes. [MESHSAT-1056]
+func (t *DirectMeshTransport) clockTrustedForRadio() bool {
+	t.mu.RLock()
+	fn := t.clockTrusted
+	t.mu.RUnlock()
+	return fn == nil || fn()
 }
 
 // DisconnectedCh is signalled whenever the transport loses its serial
@@ -1058,6 +1081,15 @@ func (t *DirectMeshTransport) sendTimeSync() {
 	}
 	myNode := t.myNodeNum
 	t.mu.Unlock()
+
+	// A kit that booted without a time source would otherwise write its own
+	// wrong clock into the radio's RTC on every handshake, and the radio then
+	// stamps every packet with it. Leaving the radio alone keeps whatever time
+	// it already had, which is no worse and often better. [MESHSAT-1056]
+	if !t.clockTrustedForRadio() {
+		log.Warn().Msg("meshtastic time sync skipped: host clock is not trusted")
+		return
+	}
 
 	now := uint32(time.Now().Unix())
 

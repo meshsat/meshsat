@@ -22,6 +22,7 @@ import (
 
 	"meshsat/internal/api"
 	"meshsat/internal/channel"
+	"meshsat/internal/clockstate"
 	"meshsat/internal/compress"
 	"meshsat/internal/config"
 	"meshsat/internal/database"
@@ -66,6 +67,26 @@ func main() {
 	}
 	defer db.Close()
 	log.Info().Str("path", cfg.DBPath).Msg("database ready")
+
+	// Host clock trust, as established by the boot-time guard before docker
+	// started (deploy/time/meshsat-clock-guard). A kit Pi 5 has no RTC cell,
+	// so a cold boot can come up hours in the past; when nothing could fix it
+	// the bridge must not hand that clock to the radio or to mesh peers.
+	// Absent file means no guard installed, which reads as trusted.
+	// [MESHSAT-1056]
+	clockStatePath := os.Getenv("MESHSAT_CLOCK_STATE_PATH")
+	if clockStatePath == "" {
+		clockStatePath = clockstate.DefaultPath(cfg.DBPath)
+	}
+	clockGuard := clockstate.NewProvider(clockStatePath)
+	if st := clockGuard.State(); !st.Trusted {
+		log.Warn().
+			Str("path", clockStatePath).
+			Str("source", st.Source).
+			Msg("host clock is NOT trusted: no time will be pushed to the radio or answered to mesh peers")
+	} else {
+		log.Info().Str("path", clockStatePath).Str("source", st.Source).Msg("host clock trusted")
+	}
 
 	// Transport — mode selects communication backend
 	var mesh transport.MeshTransport
@@ -172,6 +193,7 @@ func main() {
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		directMesh.SetConfigTimeout(time.Duration(cfg.MeshConfigTimeoutSec) * time.Second)
 		directMesh.SetTimeSyncRemote(cfg.MeshTimeSyncRemote) // [MESHSAT-783]
+		directMesh.SetClockTrustFn(clockGuard.Trusted)       // [MESHSAT-1056]
 		mesh = directMesh
 
 		directIMT := transport.NewDirectIMTTransport(imtPort)
@@ -942,6 +964,9 @@ func main() {
 		tsConsensus.SetReplyFunc(func(ifaceID string, data []byte) {
 			_ = proc.SendReticulumPacketTo(ifaceID, data)
 		})
+		// Answer peers as unsynchronised while our own clock is untrusted,
+		// rather than offering them an 8-hour-wrong reference. [MESHSAT-1056]
+		tsConsensus.SetClockTrustFn(clockGuard.Trusted)
 		tsConsensus.Start(ctx)
 
 		// Wire time sync dispatch into processor.
@@ -2455,6 +2480,7 @@ func main() {
 		healthScorer.SetReceiveChecker(checkers)
 		failoverResolver.SetReceiveChecker(checkers)
 		srv.SetDeviceHealth(devHealth)
+		srv.SetClockState(clockGuard) // [MESHSAT-1056]
 		go devHealth.Run(ctx)
 		log.Info().Int("tick_sec", cfg.DeviceHealthTickSec).Int("misses", cfg.DeviceHealthMisses).
 			Int("hard_budget", cfg.DeviceHealthHardBudget).Msg("device health watchdog enabled")

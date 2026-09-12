@@ -80,3 +80,67 @@ func TestNewMeshTimeConsensus_StartOffsetWithinPeriod(t *testing.T) {
 		}
 	}
 }
+
+// A kit whose own clock could not be established must not offer itself as a
+// time reference: it still answers, so the peer gets its echo and its
+// round-trip measurement, but with the unsynchronised stratum. [MESHSAT-1056]
+func TestHandleTimeSyncRequest_UntrustedClockAnswersUnsynchronised(t *testing.T) {
+	tests := []struct {
+		name        string
+		trusted     func() bool
+		wantStratum byte
+	}{
+		{"no trust function behaves as before", nil, 5},
+		{"clock trusted", func() bool { return true }, 5},
+		{"clock not trusted", func() bool { return false }, StratumUnsynchronised},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []byte
+			mc := NewMeshTimeConsensus(NewTimeService(nil), fakeIdentity{hash: [DestHashLen]byte{1}}, func(data []byte) {
+				got = data
+			})
+			if tt.trusted != nil {
+				mc.SetClockTrustFn(tt.trusted)
+			}
+
+			mc.HandleTimeSyncRequest(buildRequest([DestHashLen]byte{2}, time.Now().UnixNano()), "")
+
+			if len(got) != timeSyncRespLen {
+				t.Fatalf("no response sent (%d bytes)", len(got))
+			}
+			if got[25] != tt.wantStratum {
+				t.Errorf("stratum = %d, want %d", got[25], tt.wantStratum)
+			}
+			// The echo must survive either way, or the peer cannot match the
+			// response to its request.
+			if binary.LittleEndian.Uint64(got[26:34]) == 0 {
+				t.Error("echo timestamp missing from the response")
+			}
+		})
+	}
+}
+
+// An unsynchronised peer is discarded outright rather than down-weighted:
+// at 1/(stratum+1) a kit eight hours out would still drag the weighted
+// average by a large fraction of its own error. [MESHSAT-1056]
+func TestRecalculateConsensus_SkipsUnsynchronisedPeers(t *testing.T) {
+	ts := NewTimeService(nil)
+	mc := NewMeshTimeConsensus(ts, fakeIdentity{hash: [DestHashLen]byte{1}}, func([]byte) {})
+
+	now := time.Now()
+	good := int64(2 * time.Millisecond)
+	bad := int64(8 * time.Hour)
+	mc.peers[[DestHashLen]byte{2}] = &peerClock{stratum: 3, offsetEWMA: float64(good), lastSeen: now, sampleCount: 4}
+	mc.peers[[DestHashLen]byte{3}] = &peerClock{stratum: StratumUnsynchronised, offsetEWMA: float64(bad), lastSeen: now, sampleCount: 4}
+
+	mc.recalculateConsensus()
+
+	off := ts.Offset()
+	if off > int64(time.Second) {
+		t.Fatalf("offset %v was dragged by the unsynchronised peer", time.Duration(off))
+	}
+	if got := ts.Stratum(); got != 4 {
+		t.Errorf("stratum = %d, want 4 (the good peer at 3, plus one)", got)
+	}
+}

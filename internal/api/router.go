@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"meshsat/internal/channel"
+	"meshsat/internal/clockstate"
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
@@ -51,6 +52,7 @@ type Server struct {
 	onMOCallback  func(imei string)
 	devSupervisor *transport.DeviceSupervisor
 	deviceHealth  *gateway.DeviceHealth // device health watchdog [MESHSAT-817]
+	clockState    *clockstate.Provider  // host clock trust verdict [MESHSAT-1056]
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
 	oob           *oob.Service    // OOB management frames [MESHSAT-756]
@@ -261,6 +263,11 @@ func (s *Server) SetDeviceSupervisor(ds *transport.DeviceSupervisor) {
 // SetDeviceHealth wires the device health watchdog. [MESHSAT-817]
 func (s *Server) SetDeviceHealth(dh *gateway.DeviceHealth) {
 	s.deviceHealth = dh
+}
+
+// SetClockState wires the boot-time clock guard's verdict. [MESHSAT-1056]
+func (s *Server) SetClockState(cs *clockstate.Provider) {
+	s.clockState = cs
 }
 
 // SetResourceTransfer sets the resource transfer manager for file delivery API.
