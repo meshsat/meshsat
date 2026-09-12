@@ -62,6 +62,16 @@ type APRSConfig struct {
 	// Beacons get the same copies. [MESHSAT-857]
 	TXRepeat      int `json:"tx_repeat"`
 	TXRepeatGapMs int `json:"tx_repeat_gap_ms"`
+
+	// BeaconRepeatGapMs spaces the copies of a BEACON. It must differ from
+	// TXRepeatGapMs: when both pairs use the same gap they march in lockstep,
+	// so a beacon pair that starts near a message pair swallows BOTH copies of
+	// the message inside the receiver's own transmission, and a half-duplex
+	// radio hears nothing while it keys. Measured 10 Sep 2026: of the lost
+	// frames, 8 of 11 and 7 of 8 fell within 2 s of the receiver's own
+	// transmit, and 1 to 3 messages in 20 lost both copies. Zero derives a
+	// value from TXRepeatGapMs rather than sharing it. [MESHSAT-1021]
+	BeaconRepeatGapMs int `json:"beacon_repeat_gap_ms"`
 }
 
 // Direwolf timing defaults (Direwolf's own), used when a field is zero.

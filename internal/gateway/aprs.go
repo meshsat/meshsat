@@ -693,12 +693,18 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 		if copies < 1 {
 			copies = 1
 		}
+		// Hold the beacon back while the channel is busy. The beacon is
+		// liveness only: a few seconds late costs nothing, and going out on
+		// top of a message costs that message both copies. [MESHSAT-1021]
+		if !g.waitForQuietChannel(ctx) {
+			return
+		}
 		for i := 0; i < copies; i++ {
 			if i > 0 {
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(g.repeatGap()):
+				case <-time.After(jitterDuration(g.beaconRepeatGap(), 0.2)):
 				}
 			}
 			select {
@@ -802,7 +808,9 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	// Repeat copies: the same frame again after the gap, so a copy lost on
 	// the air is covered by the other; the far kit dedups. [MESHSAT-857]
 	for i := 1; i < g.config.TXRepeat; i++ {
-		time.Sleep(g.repeatGap())
+		// Jittered, so two kits transmitting at the same nominal cadence
+		// cannot keep a fixed offset between their pairs. [MESHSAT-1021]
+		time.Sleep(jitterDuration(g.repeatGap(), 0.25))
 		if err := g.kiss.SendFrame(frame); err != nil {
 			log.Warn().Err(err).Int("copy", i+1).Msg("aprs: send repeat")
 			g.errors.Add(1)
@@ -813,6 +821,64 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 		log.Debug().Int("copy", i+1).Str("msg_ref", msg.MsgRef).Msg("aprs: sent repeat copy")
 	}
 }
+
+// beaconRepeatGap is the pause between the copies of one beacon. It is
+// deliberately NOT the message gap: sharing it made both pairs advance in
+// lockstep, so a beacon pair aligned with a message pair took out both copies
+// of the message rather than one. [MESHSAT-1021]
+func (g *APRSGateway) beaconRepeatGap() time.Duration {
+	if g.config.BeaconRepeatGapMs > 0 {
+		return time.Duration(g.config.BeaconRepeatGapMs) * time.Millisecond
+	}
+	// Seven quarters of the message gap: far enough from it that the two
+	// cadences drift apart within one pair, and still inside the receive
+	// watchdog's patience.
+	return g.repeatGap() * 7 / 4
+}
+
+// waitForQuietChannel delays a due beacon while the channel has recent
+// traffic, up to a cap. It returns false only if the gateway is shutting down.
+// lastActive is updated on both receive and transmit, so this covers the
+// sender's own message pair and a peer's transmission alike. [MESHSAT-1021]
+func (g *APRSGateway) waitForQuietChannel(ctx context.Context) bool {
+	deadline := time.Now().Add(beaconDeferMax)
+	for {
+		last := g.lastActive.Load()
+		if last == 0 {
+			return true
+		}
+		quiet := time.Since(time.Unix(last, 0))
+		if quiet >= beaconQuietFor {
+			return true
+		}
+		// Each wait is clamped to the remaining deferral budget. Without the
+		// clamp a long quiet threshold slept straight past the cap, which
+		// would hold the liveness beacon far longer than intended on a busy
+		// channel.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return true
+		}
+		wait := beaconQuietFor - quiet
+		if wait > remaining {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(wait):
+		}
+	}
+}
+
+// Beacon deferral knobs. Package vars so tests can shorten them.
+var (
+	// How quiet the channel must be before a beacon goes out.
+	beaconQuietFor = 3 * time.Second
+	// How long a beacon may be held back. A busy channel must not silence
+	// the liveness signal the peer's receive watchdog waits for.
+	beaconDeferMax = 20 * time.Second
+)
 
 // repeatGap is the pause between repeat copies of one message.
 func (g *APRSGateway) repeatGap() time.Duration {
