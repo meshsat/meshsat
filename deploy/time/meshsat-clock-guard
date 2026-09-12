@@ -132,7 +132,7 @@ try_cellular() {
 
 	local epoch
 	epoch=$(timeout "$budget" python3 - "$port" <<-'PY'
-		import re, sys, time
+		import calendar, re, sys, time
 		try:
 		    import serial
 		except ImportError:
@@ -168,11 +168,19 @@ try_cellular() {
 		if not m:
 		    sys.exit(1)
 		yy, mo, dd, hh, mi, ss, tz = m.groups()
+		year = 2000 + int(yy)
+		# A modem that has never been given network time answers with its own
+		# epoch, "70/01/01", which this two-digit mapping would turn into 2070.
+		# Reject the whole reply rather than hand the shell a date to sanity
+		# check: 70 means the network never told it anything.
+		if not 2024 <= year <= 2049:
+		    sys.exit(1)
 		# The modem reports local time in the network's zone; the trailing field
-		# is that zone as a count of quarter-hours east of UTC.
+		# is that zone as a count of quarter-hours east of UTC. timegm treats
+		# the reading as UTC, so subtracting the zone gives real UTC without
+		# depending on the host's own timezone.
 		quarters = int(tz) if tz else 0
-		t = (int("20" + yy), int(mo), int(dd), int(hh), int(mi), int(ss), 0, 0, 0)
-		epoch = int(time.mktime(t) - time.timezone) - quarters * 900
+		epoch = calendar.timegm((year, int(mo), int(dd), int(hh), int(mi), int(ss), 0, 0, 0)) - quarters * 900
 		print(epoch)
 	PY
 	) || return 1

@@ -1,6 +1,6 @@
+# MeshSat kit clock guard [MESHSAT-1056] — see scripts/install-kit-time.sh
 [Unit]
 Description=MeshSat clock guard (establish the system clock before the bridge starts)
-Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat [MESHSAT-1056]
 After=chrony.service network.target local-fs.target
 Wants=chrony.service
 Before=docker.service docker.socket
