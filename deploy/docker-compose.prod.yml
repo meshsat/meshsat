@@ -29,6 +29,10 @@ services:
       - MESHSAT_BACKUP_INTERVAL_HOURS=${MESHSAT_BACKUP_INTERVAL_HOURS:-12}
       - MESHSAT_BACKUP_MAX_KEEP=${MESHSAT_BACKUP_MAX_KEEP:-14}
       - MESHSAT_PAID_RATE_LIMIT=${MESHSAT_PAID_RATE_LIMIT:-60}
+      # HTTP API rate limit, requests per minute per source IP. 0 disables it.
+      # The variable was missing from this list, so setting it in .env did
+      # nothing: compose only passes through the variables it names.
+      - MESHSAT_API_RATE_LIMIT=${MESHSAT_API_RATE_LIMIT:-600}
       - MESHSAT_ANNOUNCE_INTERVAL=${MESHSAT_ANNOUNCE_INTERVAL:-300}
       # Optional sidecars (uncomment to enable)
       # - MESHSAT_LLAMAZIP_ADDR=llamazip:50051
