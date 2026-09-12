@@ -214,6 +214,24 @@ func (db *DB) SetDeliveryStatus(id int64, status, lastError, channelRef string) 
 }
 
 // UpdateDeliveryRetry sets the next retry time and increments the retry count.
+// DeferDelivery reschedules a delivery whose bearer was down at the instant it
+// was attempted, WITHOUT consuming one of its retries.
+//
+// A closed serial port or a radio mid-handshake says nothing about the message;
+// it says the link was not up for those few seconds. Counting that as a retry
+// (or, for QoS 0, as a death) threw away a relayed text on 12 Sep 2026 whose
+// mesh radio was back 78 seconds later. The caller bounds how long a delivery
+// may be deferred, so a bearer that never returns does not defer forever.
+// [MESHSAT-1061]
+func (db *DB) DeferDelivery(id int64, nextRetry time.Time, lastError string) error {
+	_, err := db.Exec(`UPDATE message_deliveries SET status = 'retry', next_retry = ?, last_error = ?, updated_at = datetime('now') WHERE id = ?`,
+		nextRetry.UTC().Format("2006-01-02 15:04:05"), lastError, id)
+	if err != nil {
+		return fmt.Errorf("defer delivery %d: %w", id, err)
+	}
+	return nil
+}
+
 func (db *DB) UpdateDeliveryRetry(id int64, nextRetry time.Time, retries int, lastError string) error {
 	_, err := db.Exec(`UPDATE message_deliveries SET status = 'retry', retries = ?, next_retry = ?, last_error = ?, updated_at = datetime('now') WHERE id = ?`,
 		retries, nextRetry.UTC().Format("2006-01-02 15:04:05"), lastError, id)

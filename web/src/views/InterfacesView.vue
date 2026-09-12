@@ -157,7 +157,7 @@ const commonPortnums = [
 
 const ruleForm = ref({
   interface_id: '', direction: 'ingress', priority: 10, name: '', enabled: true,
-  action: 'forward', forward_to: '', qos_level: 0,
+  action: 'forward', forward_to: '', qos_level: 1,
   nodes: [], portnums: [], keyword: '',
   sms_contacts: [],
   node_group: '', sender_group: '', portnum_group: '',
@@ -170,7 +170,7 @@ function openNewRule() {
   editingRule.value = null
   ruleForm.value = {
     interface_id: '', direction: 'ingress', priority: 10, name: '', enabled: true,
-    action: 'forward', forward_to: '', qos_level: 0,
+    action: 'forward', forward_to: '', qos_level: 1,
     nodes: [], portnums: [], keyword: '',
     node_group: '', sender_group: '', portnum_group: '',
     rate_per_min: 0, rate_window_sec: 60,
@@ -203,7 +203,7 @@ function openEditRule(rule) {
     enabled: rule.enabled !== false,
     action: rule.action || 'forward',
     forward_to: rule.forward_to || '',
-    qos_level: rule.qos_level || 0,
+    qos_level: rule.qos_level ?? 1,
     nodes,
     portnums,
     keyword: filters.keyword || '',

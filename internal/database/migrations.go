@@ -1317,6 +1317,17 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS idx_oob_log_peer ON oob_log(peer_id, ts DESC);
 	ALTER TABLE message_deliveries ADD COLUMN destination    TEXT NOT NULL DEFAULT '';
 	ALTER TABLE message_deliveries ADD COLUMN delivery_class TEXT NOT NULL DEFAULT 'message';`,
+
+	// Forwarding rules created before MESHSAT-1061 carry qos_level 0 because the
+	// API decoded a missing field to Go's zero value and the UI's rule editor
+	// offered 0 as its pre-selected option. qos_level 0 means best effort: the
+	// first delivery failure is final, with no retry and no record of one. That
+	// is not what anyone choosing "forward this to that bearer" intended, and it
+	// threw away a relayed text on 12 Sep 2026. Lift the forwarding rules to 1.
+	// Rules that only permit or deny are untouched: they queue no deliveries, so
+	// their QoS means nothing.
+	`UPDATE access_rules SET qos_level = 1, updated_at = datetime('now')
+	 WHERE qos_level = 0 AND forward_to IS NOT NULL AND forward_to != '';`,
 }
 
 func (db *DB) migrate() error {
