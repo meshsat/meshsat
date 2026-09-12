@@ -548,13 +548,30 @@ func (t *DirectCellTransport) ExecAT(_ context.Context, cmd string, timeout time
 	return t.execAT(cmd, timeout)
 }
 
+// cmdEnqueueTimeout bounds how long a caller waits to hand a command to the
+// I/O loop. The loop drains cmdCh every 200 ms in normal operation, so anything
+// near this means it is not running. Package var so tests can shorten it.
+// [MESHSAT-986]
+var cmdEnqueueTimeout = 5 * time.Second
+
 func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string, error) {
 	if t.cmdCh == nil {
 		return "", fmt.Errorf("transport not ready (ioLoop not started)")
 	}
 	ch := make(chan atResult, 1)
+	// The enqueue is bounded. cmdCh is buffered, so a wedged ioLoop is
+	// invisible until the buffer fills; after that this send had no timeout at
+	// all and parked for ever, taking the device-health probe goroutine with
+	// it and freezing the heal ladder (parallax, 8 September). [MESHSAT-986]
+	enqueue := time.NewTimer(cmdEnqueueTimeout)
+	defer enqueue.Stop()
 	select {
 	case t.cmdCh <- atCommand{cmd: cmd, timeout: timeout, resp: ch}:
+	case <-enqueue.C:
+		log.Warn().Str("cmd", cmd).Dur("waited", cmdEnqueueTimeout).
+			Msg("cellular: command queue not draining, forcing serial reconnect")
+		t.forceReconnect()
+		return "", fmt.Errorf("AT command %q could not be queued within %v (I/O loop not draining)", cmd, cmdEnqueueTimeout)
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
 	}
@@ -565,6 +582,13 @@ func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string,
 	case r := <-ch:
 		return r.resp, r.err
 	case <-timer.C:
+		// Same treatment execRawFn has always had: the loop is stuck inside a
+		// serial read that will not return, and closing the port is the only
+		// thing that frees it. Without this the probe path could detect the
+		// wedge and do nothing about it. [MESHSAT-986]
+		log.Warn().Str("cmd", cmd).Dur("timeout", timeout+10*time.Second).
+			Msg("cellular: AT command timed out, forcing serial reconnect")
+		t.forceReconnect()
 		return "", fmt.Errorf("AT command %q timed out after %v", cmd, timeout+10*time.Second)
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
@@ -578,8 +602,15 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 		return "", fmt.Errorf("transport not ready (ioLoop not started)")
 	}
 	ch := make(chan atResult, 1)
+	enqueue := time.NewTimer(cmdEnqueueTimeout)
+	defer enqueue.Stop()
 	select {
 	case t.cmdCh <- atCommand{fn: fn, timeout: timeout, resp: ch}:
+	case <-enqueue.C:
+		log.Warn().Dur("waited", cmdEnqueueTimeout).
+			Msg("cellular: command queue not draining, forcing serial reconnect")
+		t.forceReconnect()
+		return "", fmt.Errorf("raw command could not be queued within %v (I/O loop not draining)", cmdEnqueueTimeout)
 	case <-t.stopCh:
 		return "", fmt.Errorf("transport stopped")
 	}
@@ -1597,7 +1628,13 @@ func (t *DirectCellTransport) LastRxAt() time.Time {
 // Probe checks that the modem answers: a recent byte from it counts, else
 // a plain AT must return OK. ErrCellProbeBusy means a long command holds
 // the I/O loop while bytes still flow. [MESHSAT-817]
-func (t *DirectCellTransport) Probe(_ context.Context) error {
+func (t *DirectCellTransport) Probe(ctx context.Context) error {
+	// The caller's deadline is respected rather than discarded. execAT is
+	// bounded now, so this is a second line rather than the only one.
+	// [MESHSAT-986]
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !t.IsConnected() {
 		if rem := t.HeldFor(); rem > 0 {
 			return fmt.Errorf("%w (%s left)", ErrCellHeld, rem.Truncate(time.Second))

@@ -536,8 +536,35 @@ func (d *DeviceHealth) probe(ctx context.Context, name string) {
 	probeFn, timeout := ts.t.Probe, ts.t.ProbeTimeout
 	d.mu.Unlock()
 
+	// ProbeTimeout is enforced here, not merely offered. [MESHSAT-986]
+	//
+	// It used to be passed as a context and nothing raced it: probeFn was
+	// called synchronously, so a probe that ignored the context (or that
+	// blocked somewhere the context could not reach) never returned, `probing`
+	// stayed true, tick() skipped the target for ever, and the entire heal
+	// ladder froze at whatever rung it was on. parallax's cellular did exactly
+	// that on 8 September: no probe, no miss counted, no escalation, while the
+	// dashboard still showed the modem connected and both SMS lanes were dead.
+	//
+	// The orphaned goroutine is left to finish on its own and its late result
+	// is dropped: the channel is buffered, so it can never block on a receiver
+	// that has gone. A probe that never returns now costs one goroutine, not
+	// the health of the whole device.
 	pctx, cancel := context.WithTimeout(ctx, timeout)
-	res := probeFn(pctx)
+	resCh := make(chan ProbeResult, 1)
+	go func() { resCh <- probeFn(pctx) }()
+
+	var res ProbeResult
+	select {
+	case res = <-resCh:
+	case <-pctx.Done():
+		res = ProbeResult{
+			OK:     false,
+			Detail: fmt.Sprintf("probe did not return within %s", timeout),
+		}
+		log.Warn().Str("target", name).Dur("timeout", timeout).
+			Msg("device health: probe overran its timeout, counting it as a miss")
+	}
 	cancel()
 
 	d.mu.Lock()
