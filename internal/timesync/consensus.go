@@ -41,6 +41,11 @@ const (
 // DestHashLen is the truncated Reticulum destination hash length.
 const DestHashLen = 16
 
+// StratumUnsynchronised is the NTP convention for a clock that must not be
+// used as a reference. We answer with it when our own clock is not trusted,
+// and we discard any peer reading that carries it. [MESHSAT-1056]
+const StratumUnsynchronised = 16
+
 // IdentityProvider gives access to the local routing identity.
 type IdentityProvider interface {
 	DestHash() [DestHashLen]byte
@@ -81,6 +86,10 @@ type MeshTimeConsensus struct {
 	seenMu sync.Mutex
 	seen   map[seenRequest]time.Time
 
+	// clockTrusted reports whether our own clock is worth answering with.
+	// Nil means yes. [MESHSAT-1056]
+	clockTrusted func() bool
+
 	// startOffset delays the first request so two bridges restarted a
 	// multiple of the period apart do not key their radios in the same
 	// second forever (5 Sep 2026: both kits deaf on APRS after a deploy
@@ -106,6 +115,15 @@ func NewMeshTimeConsensus(ts *TimeService, identity IdentityProvider, sendFn Sen
 func (mc *MeshTimeConsensus) SetReplyFunc(fn ReplyFunc) {
 	mc.mu.Lock()
 	mc.replyFn = fn
+	mc.mu.Unlock()
+}
+
+// SetClockTrustFn supplies the check that decides whether this node's clock is
+// fit to answer a peer's time sync request. Without it the node answers as
+// before. [MESHSAT-1056]
+func (mc *MeshTimeConsensus) SetClockTrustFn(fn func() bool) {
+	mc.mu.Lock()
+	mc.clockTrusted = fn
 	mc.mu.Unlock()
 }
 
@@ -225,6 +243,21 @@ func (mc *MeshTimeConsensus) HandleTimeSyncRequest(data []byte, sourceIface stri
 	}
 	stratum := mc.ts.Stratum()
 
+	// A kit that booted with no time source must not be adopted as anyone's
+	// reference. Answering with the unsynchronised stratum keeps the
+	// request/response protocol intact — the peer still gets its echo and its
+	// round-trip measurement — while making the reading unusable, which is
+	// what every consumer of this field, including ApplyCorrection, expects
+	// stratum 16 to mean. [MESHSAT-1056]
+	mc.mu.RLock()
+	trusted := mc.clockTrusted
+	mc.mu.RUnlock()
+	if trusted != nil && !trusted() {
+		log.Debug().Str("peer", hexHash(senderHash)).
+			Msg("timesync: answering unsynchronised, host clock is not trusted")
+		stratum = StratumUnsynchronised
+	}
+
 	resp := make([]byte, timeSyncRespLen)
 	resp[0] = PacketTimeSyncResp
 	copy(resp[1:17], localHash[:])
@@ -326,6 +359,13 @@ func (mc *MeshTimeConsensus) recalculateConsensus() {
 	for _, peer := range mc.peers {
 		// Skip stale peers (>5 min since last response).
 		if time.Since(peer.lastSeen) > 5*time.Minute {
+			continue
+		}
+		// Skip peers that declared themselves unsynchronised. Weighting them
+		// at 1/(stratum+1) is not enough: a kit that booted hours in the past
+		// would still drag the weighted average by a large fraction of its own
+		// error. [MESHSAT-1056]
+		if peer.stratum >= StratumUnsynchronised {
 			continue
 		}
 		// Weight inversely proportional to stratum.

@@ -24,6 +24,12 @@ useShortcuts()
 const store = useMeshsatStore()
 const utcTime = ref('')
 
+// The boot-time clock guard's verdict, from GET /api/devices/health. The
+// header's own UTC reading comes from the browser, which on a kiosk panel is
+// the kit itself, so it cannot reveal a wrong kit clock. [MESHSAT-1056]
+const clockUntrusted = computed(() => store.deviceHealth?.clock?.trusted === false)
+const clockSource = computed(() => store.deviceHealth?.clock?.source || 'unknown')
+
 // The poster screensaver exists only on the kiosk panels; main.js has
 // already stamped html.shell-kiosk by the time App mounts. [MESHSAT-826]
 const isKioskShell = typeof document !== 'undefined' && document.documentElement.classList.contains('shell-kiosk')
@@ -70,6 +76,7 @@ onMounted(() => {
   store.fetchAPRSStatus()
   store.fetchBattery()
   store.fetchLocationSources()
+  store.fetchDeviceHealth()
   // Fetch passes for next-pass countdown (use resolved location)
   store.fetchLocations().then(() => {
     store.fetchLocationSources().then(() => {
@@ -93,6 +100,7 @@ onMounted(() => {
     store.fetchAPRSStatus()
     store.fetchBattery()
     store.fetchLocationSources()
+    store.fetchDeviceHealth()
   }, 10000)
 })
 
@@ -153,6 +161,17 @@ onUnmounted(() => {
 
           <!-- UTC Clock -->
           <span class="text-[10px] font-mono text-gray-500 tabular-nums">{{ utcTime }}</span>
+
+          <!-- Host clock not established at boot: nothing else on the panel
+               reveals it, because every relative age is measured against the
+               same wrong clock. [MESHSAT-1056] -->
+          <span
+            v-if="clockUntrusted"
+            class="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wide bg-tactical-iridium/20 text-tactical-iridium border border-tactical-iridium/40"
+            :title="`The kit booted with no time source (${clockSource}). Timestamps are unreliable; the radio and mesh peers are not being given this clock.`"
+          >
+            clock ?
+          </span>
         </div>
       </div>
     </header>

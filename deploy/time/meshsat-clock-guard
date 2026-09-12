@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# meshsat-clock-guard — make the system clock right, or say it is not, before
+# the bridge starts. [MESHSAT-1056]
+#
+# Why this exists
+# ---------------
+# A field kit Pi 5 has no RTC backup cell, so the kernel comes up at the epoch:
+#
+#   rpi-rtc soc:rpi_rtc: setting system clock to 1970-01-01T00:00:14 UTC (14)
+#
+# `fixrtc` on the kernel command line then sets the clock from the root
+# filesystem's last mount time, and each boot re-writes that field with the
+# value it just restored. The result is a clock frozen at the last mount that
+# happened to be correct: both kits came up at 12 Sep 2026 01:10 twice in a row
+# while the real time was 08:42 and 09:19.
+#
+# Correcting it is left to chrony, and chrony's timing is a coin flip. On the
+# 08:42 boot of 12 Sep 2026 it selected sources and never stepped at all, so the
+# bridge ran its whole 36-minute life 7h32m in the past. On the 09:19 boot it
+# stepped 17 s in, 7 s before docker started. A kit that runs on a wrong clock
+# sets its own LoRa radio's RTC wrong on every handshake, answers mesh time-sync
+# requests with that wrong time, emits TAK CoT events that are born stale, and
+# looks perfectly healthy while doing it, because every "3 s ago" on the panel
+# is measured against the same wrong clock.
+#
+# What this does, in order, bounded by CLOCK_GUARD_DEADLINE seconds:
+#   1. Floor check — a clock later than the install date is taken as sane.
+#   2. chrony    — `chronyc waitsync`, for the case where a network exists.
+#   3. cellular  — one AT+CCLK? read from the A7670E (network time, no internet
+#                  needed). Never USSD: AT+CUSD deadlocks the AT channel.
+#   4. GPS       — one NMEA RMC sentence with a valid fix. Usually fails indoors.
+# It then records the outcome in /run/meshsat/clock-state and a copy the bridge
+# container can read, and ALWAYS exits 0. A booth kit must never be left without
+# a bridge because the clock could not be established.
+#
+# Serial rungs only ever open ports matched by their /dev/serial/by-id name, so
+# they cannot land on the XIAO mesh radio or the PicoAPRS TNC.
+#
+# Config: /etc/meshsat/clock-guard.env (written by scripts/install-kit-time.sh)
+
+set -uo pipefail
+
+ENV_FILE=${CLOCK_GUARD_ENV:-/etc/meshsat/clock-guard.env}
+# shellcheck disable=SC1090
+[ -r "$ENV_FILE" ] && . "$ENV_FILE"
+
+STATE_DIR=${CLOCK_GUARD_STATE_DIR:-/run/meshsat}
+DATA_STATE=${CLOCK_GUARD_DATA_STATE:-/srv/meshsat/data/clock-state}
+FLOOR=${CLOCK_GUARD_FLOOR:-0}
+CHRONY_WAIT=${CLOCK_GUARD_CHRONY_WAIT:-30}
+CELL_ENABLED=${CLOCK_GUARD_CELL:-1}
+GPS_ENABLED=${CLOCK_GUARD_GPS:-1}
+DEADLINE=${CLOCK_GUARD_DEADLINE:-90}
+CELL_GLOB=${CLOCK_GUARD_CELL_GLOB:-/dev/serial/by-id/usb-1a86_USB_Single_Serial_*-if00}
+GPS_GLOB=${CLOCK_GUARD_GPS_GLOB:-/dev/serial/by-id/usb-u-blox_AG_*-if00}
+
+# Ten years past the floor: anything beyond that is a parse error, not a clock.
+MAX_PLAUSIBLE=$((FLOOR + 315360000))
+
+started=$(date +%s)
+log() { echo "clock-guard: $*"; }
+
+deadline_left() {
+	local spent=$(($(date +%s) - started))
+	local left=$((DEADLINE - spent))
+	[ "$left" -lt 0 ] && left=0
+	echo "$left"
+}
+
+plausible() {
+	local t=$1
+	[ "$t" -gt "$FLOOR" ] && [ "$t" -lt "$MAX_PLAUSIBLE" ]
+}
+
+first_match() {
+	local p
+	for p in $1; do
+		[ -e "$p" ] && { echo "$p"; return 0; }
+	done
+	return 1
+}
+
+write_state() {
+	local trusted=$1 source=$2
+	local boot_id="" now
+	[ -r /proc/sys/kernel/random/boot_id ] && boot_id=$(cat /proc/sys/kernel/random/boot_id)
+	now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	local body
+	body=$(
+		printf 'trusted=%s\nsource=%s\nboot_id=%s\nchecked_at=%s\n' \
+			"$trusted" "$source" "$boot_id" "$now"
+	)
+	mkdir -p "$STATE_DIR" 2>/dev/null
+	printf '%s\n' "$body" >"$STATE_DIR/clock-state" 2>/dev/null
+
+	# Second copy where the bridge container can read it without a compose
+	# change: the data directory is already bind-mounted into the container.
+	if [ -n "$DATA_STATE" ] && [ -d "$(dirname "$DATA_STATE")" ]; then
+		printf '%s\n' "$body" >"$DATA_STATE" 2>/dev/null
+	fi
+	log "trusted=$trusted source=$source clock=$now"
+}
+
+# --- rung 2: chrony ---------------------------------------------------------
+try_chrony() {
+	command -v chronyc >/dev/null 2>&1 || return 1
+	local budget
+	budget=$(deadline_left)
+	[ "$budget" -gt "$CHRONY_WAIT" ] && budget=$CHRONY_WAIT
+	[ "$budget" -le 0 ] && return 1
+	log "waiting up to ${budget}s for chrony"
+	# waitsync <max-tries> <max-correction> <max-skew> <interval>
+	timeout "$budget" chronyc waitsync "$budget" 0 0 1 >/dev/null 2>&1 || return 1
+	plausible "$(date +%s)"
+}
+
+# --- rung 3: cellular network time (A7670E) ---------------------------------
+# AT+CCLK? answers "+CCLK: \"yy/MM/dd,hh:mm:ss+zz\"" where zz is the offset from
+# UTC in quarter-hours. Read only; the modem is not reconfigured. DTR and RTS
+# are driven to the same level, per the T-Call reset trap: DTR low with RTS high
+# holds the ESP32 in reset.
+try_cellular() {
+	[ "$CELL_ENABLED" = "1" ] || return 1
+	local port
+	port=$(first_match "$CELL_GLOB") || return 1
+	command -v python3 >/dev/null 2>&1 || return 1
+	local budget
+	budget=$(deadline_left)
+	[ "$budget" -gt 25 ] && budget=25
+	[ "$budget" -le 2 ] && return 1
+	log "asking the cellular modem for network time on $port"
+
+	local epoch
+	epoch=$(timeout "$budget" python3 - "$port" <<-'PY'
+		import re, sys, time
+		try:
+		    import serial
+		except ImportError:
+		    sys.exit(1)
+		port = sys.argv[1]
+		try:
+		    s = serial.Serial()
+		    s.port = port
+		    s.baudrate = 115200
+		    s.timeout = 1
+		    s.dsrdtr = False
+		    s.rtscts = False
+		    s.dtr = False
+		    s.rts = False
+		    s.open()
+		except Exception:
+		    sys.exit(1)
+		try:
+		    s.reset_input_buffer()
+		    s.write(b"AT+CCLK?\r")
+		    s.flush()
+		    buf = ""
+		    deadline = time.monotonic() + 8
+		    while time.monotonic() < deadline:
+		        chunk = s.read(128).decode("ascii", "ignore")
+		        if chunk:
+		            buf += chunk
+		            if "OK" in buf or "ERROR" in buf:
+		                break
+		finally:
+		    s.close()
+		m = re.search(r'\+CCLK:\s*"(\d\d)/(\d\d)/(\d\d),(\d\d):(\d\d):(\d\d)([+-]\d\d)?"', buf)
+		if not m:
+		    sys.exit(1)
+		yy, mo, dd, hh, mi, ss, tz = m.groups()
+		# The modem reports local time in the network's zone; the trailing field
+		# is that zone as a count of quarter-hours east of UTC.
+		quarters = int(tz) if tz else 0
+		t = (int("20" + yy), int(mo), int(dd), int(hh), int(mi), int(ss), 0, 0, 0)
+		epoch = int(time.mktime(t) - time.timezone) - quarters * 900
+		print(epoch)
+	PY
+	) || return 1
+
+	[ -n "$epoch" ] || return 1
+	plausible "$epoch" || { log "modem time $epoch is not plausible, ignored"; return 1; }
+	date -u -s "@$epoch" >/dev/null 2>&1 || return 1
+	return 0
+}
+
+# --- rung 4: GPS ------------------------------------------------------------
+# One RMC sentence, and only with status A (valid fix). Indoors this normally
+# times out, which is why it is the last rung.
+try_gps() {
+	[ "$GPS_ENABLED" = "1" ] || return 1
+	local port
+	port=$(first_match "$GPS_GLOB") || return 1
+	command -v python3 >/dev/null 2>&1 || return 1
+	local budget
+	budget=$(deadline_left)
+	[ "$budget" -gt 12 ] && budget=12
+	[ "$budget" -le 2 ] && return 1
+	log "reading GPS time on $port"
+
+	local epoch
+	epoch=$(timeout "$budget" python3 - "$port" <<-'PY'
+		import calendar, sys, time
+		try:
+		    import serial
+		except ImportError:
+		    sys.exit(1)
+		try:
+		    s = serial.Serial(sys.argv[1], 9600, timeout=1)
+		except Exception:
+		    sys.exit(1)
+		deadline = time.monotonic() + 10
+		try:
+		    while time.monotonic() < deadline:
+		        line = s.readline().decode("ascii", "ignore").strip()
+		        if "RMC" not in line:
+		            continue
+		        f = line.split(",")
+		        if len(f) < 10 or f[2] != "A" or not f[1] or not f[9]:
+		            continue
+		        hh, mi = int(f[1][0:2]), int(f[1][2:4])
+		        ss = int(float(f[1][4:]))
+		        dd, mo, yy = int(f[9][0:2]), int(f[9][2:4]), 2000 + int(f[9][4:6])
+		        print(calendar.timegm((yy, mo, dd, hh, mi, ss, 0, 0, 0)))
+		        break
+		finally:
+		    s.close()
+	PY
+	) || return 1
+
+	[ -n "$epoch" ] || return 1
+	plausible "$epoch" || { log "GPS time $epoch is not plausible, ignored"; return 1; }
+	date -u -s "@$epoch" >/dev/null 2>&1 || return 1
+	return 0
+}
+
+main() {
+	log "floor=$FLOOR clock=$(date -u +%Y-%m-%dT%H:%M:%SZ) deadline=${DEADLINE}s"
+
+	if plausible "$(date +%s)"; then
+		write_state yes floor
+		return 0
+	fi
+
+	if try_chrony; then
+		write_state yes chrony
+		return 0
+	fi
+	if try_cellular; then
+		log "clock set from the cellular network"
+		# Let chrony refine it now that the offset is seconds, not hours.
+		command -v chronyc >/dev/null 2>&1 && chronyc makestep >/dev/null 2>&1
+		write_state yes cellular
+		return 0
+	fi
+	if try_gps; then
+		log "clock set from GPS"
+		command -v chronyc >/dev/null 2>&1 && chronyc makestep >/dev/null 2>&1
+		write_state yes gps
+		return 0
+	fi
+
+	log "no time source reachable, starting the bridge anyway with the clock marked untrusted"
+	write_state no none
+	return 0
+}
+
+main
+exit 0

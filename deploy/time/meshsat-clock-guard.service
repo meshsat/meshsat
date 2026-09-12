@@ -1,0 +1,19 @@
+[Unit]
+Description=MeshSat clock guard (establish the system clock before the bridge starts)
+Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat [MESHSAT-1056]
+After=chrony.service network.target local-fs.target
+Wants=chrony.service
+Before=docker.service docker.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/meshsat-clock-guard
+# The script caps itself at CLOCK_GUARD_DEADLINE (90s default) and always exits
+# 0. This is the outer backstop: a kit must never sit without a bridge because
+# the clock could not be established.
+TimeoutStartSec=120
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target
