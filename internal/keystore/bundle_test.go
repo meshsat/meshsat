@@ -193,7 +193,21 @@ func TestSigningKeyFingerprint(t *testing.T) {
 
 // TestGenerateCrossPlatformTestdata writes a v2 bundle with known keys to testdata/
 // for cross-platform verification by the Android KeyBundleImporter.
+//
+// It is a generator, not an assertion, and it writes into the working tree. Left
+// unguarded it rewrote testdata/v2_bundle.bin on every `make test` and on every CI
+// run, because MarshalBundleV2 stamps time.Now() into the header (bundle.go) and
+// then signs it, so both the timestamp bytes and the signature move each run. The
+// keys and the manifest are derived from the fixed seed below and stay identical,
+// which is why only the bundle ever showed up dirty. Run it deliberately when the
+// bundle format changes:
+//
+//	MESHSAT_REGEN_TESTDATA=1 go test ./internal/keystore/ -run GenerateCrossPlatform
 func TestGenerateCrossPlatformTestdata(t *testing.T) {
+	if os.Getenv("MESHSAT_REGEN_TESTDATA") == "" {
+		t.Skip("generator: set MESHSAT_REGEN_TESTDATA=1 to rewrite testdata/")
+	}
+
 	// Fixed seed for deterministic keypair (test only — not for production)
 	seed := make([]byte, ed25519.SeedSize)
 	for i := range seed {
