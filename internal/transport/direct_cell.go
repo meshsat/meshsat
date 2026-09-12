@@ -706,7 +706,7 @@ func (t *DirectCellTransport) ioLoop() {
 // Called only from ioLoop — no concurrent access.
 func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 	if t.file == nil {
-		cmd.resp <- atResult{err: fmt.Errorf("not connected")}
+		cmd.resp <- atResult{err: ErrNotConnected}
 		return
 	}
 
@@ -1602,7 +1602,7 @@ func (t *DirectCellTransport) Probe(_ context.Context) error {
 		if rem := t.HeldFor(); rem > 0 {
 			return fmt.Errorf("%w (%s left)", ErrCellHeld, rem.Truncate(time.Second))
 		}
-		return errors.New("not connected")
+		return ErrNotConnected
 	}
 	if time.Since(t.LastRxAt()) < 30*time.Second {
 		return nil

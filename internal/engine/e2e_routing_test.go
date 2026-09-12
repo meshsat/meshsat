@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,11 @@ type mockGateway struct {
 	ifaceID   string
 	forwarded []*transport.MeshMessage
 	failNext  bool
+	// down makes every Forward fail with transport.ErrNotConnected until it is
+	// cleared, modelling a bearer whose link is out (a radio re-enumerating, a
+	// serial port closed) rather than a message the bearer rejected.
+	// [MESHSAT-1061]
+	down bool
 }
 
 func (m *mockGateway) Start(ctx context.Context) error { return nil }
@@ -29,6 +35,9 @@ func (m *mockGateway) Stop() error                     { return nil }
 func (m *mockGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.down {
+		return fmt.Errorf("mock gateway: %w", transport.ErrNotConnected)
+	}
 	if m.failNext {
 		m.failNext = false
 		return errDeliveryFailed
@@ -84,6 +93,18 @@ func (p *mockGWProvider) GatewayByInterfaceID(id string) gateway.Gateway {
 type mockMeshTransport struct {
 	mu   sync.Mutex
 	sent []transport.SendRequest
+	// down models the radio's serial link being out while the USB device is
+	// still present — the state a XIAO is in while it re-enumerates. The
+	// delivery worker talks to this transport directly for mesh_0 rather than
+	// through a gateway, so this is the path the booth relay actually takes.
+	// [MESHSAT-1061]
+	down bool
+}
+
+func (m *mockMeshTransport) setDown(down bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.down = down
 }
 
 func (m *mockMeshTransport) Subscribe(ctx context.Context) (<-chan transport.MeshEvent, error) {
@@ -92,6 +113,9 @@ func (m *mockMeshTransport) Subscribe(ctx context.Context) (<-chan transport.Mes
 func (m *mockMeshTransport) SendMessage(ctx context.Context, req transport.SendRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.down {
+		return transport.ErrNotConnected
+	}
 	m.sent = append(m.sent, req)
 	return nil
 }

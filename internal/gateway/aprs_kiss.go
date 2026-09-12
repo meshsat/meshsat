@@ -159,7 +159,7 @@ func (k *KISSConn) SendFrame(payload []byte) error {
 	frame := KISSEncode(payload)
 	rw := k.stream()
 	if rw == nil {
-		return fmt.Errorf("kiss: not connected")
+		return fmt.Errorf("kiss: %w", transport.ErrNotConnected)
 	}
 	if d, ok := rw.(kissDeadliner); ok {
 		if err := d.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
@@ -179,7 +179,7 @@ func (k *KISSConn) SendFrame(payload []byte) error {
 func (k *KISSConn) ReadFrame() ([]byte, error) {
 	rw := k.stream()
 	if rw == nil {
-		return nil, fmt.Errorf("kiss: not connected")
+		return nil, fmt.Errorf("kiss: %w", transport.ErrNotConnected)
 	}
 	d, hasDeadline := rw.(kissDeadliner)
 

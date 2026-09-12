@@ -650,7 +650,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	// Clear MO buffer
@@ -749,7 +749,7 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	// Clear MO buffer before write to prevent stale data resend
@@ -774,7 +774,7 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	t.stopMonitor()
@@ -840,7 +840,7 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	// Step 1: SBDSX — free local status check
@@ -921,7 +921,7 @@ func (t *DirectSatTransport) MOBufferEmpty(ctx context.Context) (bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return false, fmt.Errorf("not connected")
+		return false, ErrNotConnected
 	}
 
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
@@ -950,7 +950,7 @@ func (t *DirectSatTransport) getSignalInternal(_ context.Context, cmd string, ti
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	resp, err := sendAT(t.file, cmd, timeout)
@@ -999,7 +999,7 @@ func (t *DirectSatTransport) GetGeolocation(_ context.Context) (*GeolocationInfo
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	resp, err := sendAT(t.file, "AT-MSGEO", 30*time.Second)
@@ -1017,7 +1017,7 @@ func (t *DirectSatTransport) GetSystemTime(_ context.Context) (*IridiumTime, err
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	resp, err := sendAT(t.file, "AT-MSSTM", 5*time.Second)
@@ -1033,7 +1033,7 @@ func (t *DirectSatTransport) GetFirmwareVersion(_ context.Context) (string, erro
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected {
-		return "", fmt.Errorf("not connected")
+		return "", ErrNotConnected
 	}
 	return t.firmware, nil
 }
@@ -1320,7 +1320,7 @@ func (t *DirectSatTransport) disconnectLocked() {
 // Context-aware rate limit wait matches HAL's sbdixLocked pattern.
 func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error) {
 	if !t.connected || t.file == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
 
 	// Rate limit: min 10s between SBDIX.

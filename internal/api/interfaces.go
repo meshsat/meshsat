@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -390,11 +391,29 @@ func (s *Server) handleGetAccessRules(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Router /api/access-rules [post]
 func (s *Server) handleCreateAccessRule(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "cannot read body: "+err.Error())
+		return
+	}
 	var rule database.AccessRule
-	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+	if err := json.Unmarshal(body, &rule); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+
+	// A rule that does not name a QoS level gets 1, not Go's zero value.
+	// qos_level 0 means best effort, which makes every delivery failure final
+	// with no retry, and the schema's DEFAULT 1 never applies because
+	// InsertAccessRule always writes the column. The result was that every rule
+	// created through the API or the UI was silently best-effort. [MESHSAT-1061]
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(body, &present); err == nil {
+		if _, ok := present["qos_level"]; !ok {
+			rule.QoSLevel = 1
+		}
+	}
+
 	if rule.InterfaceID == "" {
 		writeError(w, http.StatusBadRequest, "interface_id is required")
 		return

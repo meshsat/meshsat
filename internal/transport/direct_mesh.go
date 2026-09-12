@@ -237,7 +237,7 @@ func (t *DirectMeshTransport) ProbeLocal(ctx context.Context, timeout time.Durat
 	my := t.myNodeNum
 	t.mu.RUnlock()
 	if !connected {
-		return errors.New("not connected")
+		return ErrNotConnected
 	}
 	if my == 0 {
 		return errors.New("handshake incomplete: no node number")
@@ -247,7 +247,7 @@ func (t *DirectMeshTransport) ProbeLocal(ctx context.Context, timeout time.Durat
 	t.mu.Lock()
 	if t.file == nil {
 		t.mu.Unlock()
-		return errors.New("not connected")
+		return ErrNotConnected
 	}
 	err := sendFrame(t.file, frame)
 	t.mu.Unlock()
@@ -1188,7 +1188,7 @@ func (t *DirectMeshTransport) SendMessage(ctx context.Context, req SendRequest) 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 
 	var to uint32
@@ -1209,7 +1209,7 @@ func (t *DirectMeshTransport) SendRaw(ctx context.Context, req RawRequest) error
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 
 	var to uint32
@@ -1239,7 +1239,7 @@ func (t *DirectMeshTransport) SendEncryptedRelay(_ context.Context, encryptedPay
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 
 	packet := buildEncryptedPacket(encryptedPayload, to, channel, hopLimit)
@@ -1355,7 +1355,7 @@ func (t *DirectMeshTransport) AdminReboot(_ context.Context, nodeNum uint32, del
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminReboot(t.myNodeNum, nodeNum, delay)
 	return sendFrame(t.file, toRadio)
@@ -1365,7 +1365,7 @@ func (t *DirectMeshTransport) AdminFactoryReset(_ context.Context, nodeNum uint3
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminFactoryReset(t.myNodeNum, nodeNum)
 	return sendFrame(t.file, toRadio)
@@ -1375,7 +1375,7 @@ func (t *DirectMeshTransport) Traceroute(_ context.Context, nodeNum uint32) erro
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	packet := buildTraceroutePacket(nodeNum)
 	toRadio := buildToRadioPacket(packet)
@@ -1386,7 +1386,7 @@ func (t *DirectMeshTransport) SetRadioConfig(_ context.Context, _ string, data j
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminSetConfig(t.myNodeNum, data)
 	return sendFrame(t.file, toRadio)
@@ -1396,7 +1396,7 @@ func (t *DirectMeshTransport) SetModuleConfig(_ context.Context, _ string, data 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminSetModuleConfig(t.myNodeNum, data)
 	return sendFrame(t.file, toRadio)
@@ -1406,7 +1406,7 @@ func (t *DirectMeshTransport) SetChannel(_ context.Context, req ChannelRequest) 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 
 	var psk []byte
@@ -1436,7 +1436,7 @@ func (t *DirectMeshTransport) SendWaypoint(_ context.Context, wp Waypoint) error
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	packet := buildWaypointPacket(wp, 0, 0) // broadcast
 	toRadio := buildToRadioPacket(packet)
@@ -1526,7 +1526,7 @@ func (t *DirectMeshTransport) GetConfigSection(_ context.Context, section string
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	enumVal, ok := configSectionToEnum(section)
 	if !ok {
@@ -1540,7 +1540,7 @@ func (t *DirectMeshTransport) GetModuleConfigSection(_ context.Context, section 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	enumVal, ok := moduleConfigSectionToEnum(section)
 	if !ok {
@@ -1554,7 +1554,7 @@ func (t *DirectMeshTransport) SendPosition(_ context.Context, lat, lon float64, 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	packet := buildPositionPacket(lat, lon, alt, uint32(time.Now().Unix()))
 	toRadio := buildToRadioPacket(packet)
@@ -1565,7 +1565,7 @@ func (t *DirectMeshTransport) SetFixedPosition(_ context.Context, lat, lon float
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminSetFixedPosition(t.myNodeNum, lat, lon, alt)
 	return sendFrame(t.file, toRadio)
@@ -1575,7 +1575,7 @@ func (t *DirectMeshTransport) RemoveFixedPosition(_ context.Context) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminRemoveFixedPosition(t.myNodeNum)
 	return sendFrame(t.file, toRadio)
@@ -1585,7 +1585,7 @@ func (t *DirectMeshTransport) SetOwner(_ context.Context, longName, shortName st
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminSetOwner(t.myNodeNum, longName, shortName)
 	return sendFrame(t.file, toRadio)
@@ -1595,7 +1595,7 @@ func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32)
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildRequestNodeInfo(t.myNodeNum, nodeNum)
 	return sendFrame(t.file, toRadio)
@@ -1605,7 +1605,7 @@ func (t *DirectMeshTransport) RequestStoreForward(_ context.Context, nodeNum uin
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	packet := buildStoreForwardRequest(nodeNum, window)
 	toRadio := buildToRadioPacket(packet)
@@ -1616,7 +1616,7 @@ func (t *DirectMeshTransport) SendRangeTest(_ context.Context, text string, to u
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	packet := buildRangeTestPacket(text, to)
 	toRadio := buildToRadioPacket(packet)
@@ -1627,7 +1627,7 @@ func (t *DirectMeshTransport) SetCannedMessages(_ context.Context, messages stri
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminSetCannedMessages(t.myNodeNum, messages)
 	return sendFrame(t.file, toRadio)
@@ -1637,7 +1637,7 @@ func (t *DirectMeshTransport) GetCannedMessages(_ context.Context) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminGetCannedMessages(t.myNodeNum)
 	return sendFrame(t.file, toRadio)
@@ -1657,7 +1657,7 @@ func (t *DirectMeshTransport) RemoveNode(_ context.Context, nodeNum uint32) erro
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 	toRadio := buildAdminRemoveNode(t.myNodeNum, nodeNum)
 	if err := sendFrame(t.file, toRadio); err != nil {

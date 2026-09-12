@@ -6,6 +6,7 @@ import (
 	encoding_base64 "encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -1602,8 +1603,68 @@ func parseDeliveryTime(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// How a delivery is treated when the bearer itself was down at the moment of
+// the attempt. Package vars so tests can shorten them. [MESHSAT-1061]
+var (
+	// How long to wait before trying again. The worker ticks every 2 s; this is
+	// the floor on when the row becomes eligible again.
+	bearerDownRetryWait = 10 * time.Second
+	// How long a delivery may keep being deferred for a down bearer before it
+	// is treated as an ordinary failure. A kit's mesh radio re-enumerates in
+	// about 80 s; a bearer still down after this window is not coming back in
+	// time to be worth holding a message for.
+	bearerDownDeferWindow = 10 * time.Minute
+)
+
+// deliveryAge returns how long ago the delivery row was created. SQLite hands
+// created_at back as a string in one of two shapes depending on the driver
+// path, so both are tried; an unparseable value returns ok=false and the caller
+// errs toward deferring rather than discarding a message.
+func deliveryAge(createdAt string) (time.Duration, bool) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, createdAt); err == nil {
+			return time.Since(t.UTC()), true
+		}
+	}
+	return 0, false
+}
+
 func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr error) {
 	errMsg := deliveryErr.Error()
+
+	// The bearer was not up at this instant. That is not a rejected message, so
+	// it must not consume a retry and must not kill a QoS 0 delivery outright:
+	// on 12 Sep 2026 a relayed text died here while parallax's mesh radio was
+	// mid-heal, and the radio was back 78 seconds later. Defer instead, bounded
+	// by the age of the delivery. [MESHSAT-1061]
+	if errors.Is(deliveryErr, transport.ErrNotConnected) {
+		age, parsed := deliveryAge(del.CreatedAt)
+		if !parsed || age < bearerDownDeferWindow {
+			next := time.Now().Add(bearerDownRetryWait)
+			if err := w.db.DeferDelivery(del.ID, next, errMsg); err != nil {
+				log.Error().Err(err).Int64("id", del.ID).Msg("failed to defer delivery for a down bearer")
+			}
+			log.Info().Int64("id", del.ID).Str("channel", w.channelID).
+				Dur("age", age.Truncate(time.Second)).Time("next_try", next).
+				Msg("bearer down, delivery deferred without consuming a retry")
+			if w.emit != nil {
+				w.emit(transport.MeshEvent{
+					Type:    "delivery_deferred",
+					Message: fmt.Sprintf("%s is down, delivery deferred: %s", w.channelID, errMsg),
+					Data: deliveryEventData(del, "retry", map[string]interface{}{
+						"error":    errMsg,
+						"deferred": true,
+						"next_try": next.UTC().Format(time.RFC3339),
+					}),
+					Time: time.Now().UTC().Format(time.RFC3339),
+				})
+			}
+			return
+		}
+		log.Warn().Int64("id", del.ID).Str("channel", w.channelID).
+			Dur("age", age.Truncate(time.Second)).
+			Msg("bearer still down past the defer window, treating as an ordinary failure")
+	}
 
 	// QoS 0 (best-effort): mark dead immediately, no retry
 	if del.QoSLevel == 0 {

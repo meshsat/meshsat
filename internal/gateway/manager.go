@@ -843,7 +843,7 @@ func (m *Manager) TestGateway(gwType string) error {
 			return err
 		}
 		if !status.Connected {
-			return fmt.Errorf("modem not connected (%s)", instanceID)
+			return fmt.Errorf("modem %s: %w", instanceID, transport.ErrNotConnected)
 		}
 		return nil
 	case "cellular":
@@ -860,7 +860,7 @@ func (m *Manager) TestGateway(gwType string) error {
 			return err
 		}
 		if !status.Connected {
-			return fmt.Errorf("cellular modem not connected")
+			return fmt.Errorf("cellular modem: %w", transport.ErrNotConnected)
 		}
 		if status.SIMState != "READY" {
 			return fmt.Errorf("SIM not ready: %s", status.SIMState)
@@ -895,7 +895,7 @@ func (m *Manager) TestGateway(gwType string) error {
 		zgw := m.running[zigbeeID]
 		m.mu.RUnlock()
 		if zgw == nil || !zgw.Status().Connected {
-			return fmt.Errorf("zigbee coordinator not connected")
+			return fmt.Errorf("zigbee coordinator: %w", transport.ErrNotConnected)
 		}
 		return nil
 	default:
