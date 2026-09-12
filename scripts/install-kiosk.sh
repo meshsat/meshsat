@@ -127,6 +127,22 @@ install -D -m 0755 -o "$KIOSK_USER" -g "$KIOSK_USER" \
   "$tmp" "/home/$KIOSK_USER/.config/labwc/autostart"
 rm -f "$tmp"
 
+# The runtime URL file wins over the substituted default, and is written ONLY
+# when it does not already exist. [MESHSAT-993]
+#
+# This is what makes a per-kit screen choice survive a re-run of this script.
+# Before it, the booth URL on each kit was a hand edit of the installed
+# autostart file and re-running the installer reverted it without a word. To
+# change it deliberately: write the file, then restart the kiosk session.
+if [ -f /etc/meshsat/kiosk-url ]; then
+  echo "      keeping existing /etc/meshsat/kiosk-url: $(head -1 /etc/meshsat/kiosk-url)"
+else
+  install -d -m 0755 /etc/meshsat
+  printf '%s\n' "$BRIDGE_URL" > /etc/meshsat/kiosk-url
+  chmod 0644 /etc/meshsat/kiosk-url
+  echo "      wrote /etc/meshsat/kiosk-url: $BRIDGE_URL"
+fi
+
 # ─── 6. udev rule for touch rotation ────────────────────────────
 echo "[6/9] Installing touch-rotation udev rule…"
 install -D -m 0644 \

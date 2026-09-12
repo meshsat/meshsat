@@ -5,10 +5,18 @@ Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT
 [Timer]
 # 03:30 local, every day. Low-activity window — no operator watches
 # the screen then, and the kit's network/modem/radio subsystems are
-# unaffected (only the UI layer recycles). Persistent=true so a
-# missed window (kit was powered off) fires on next boot.
+# unaffected (only the UI layer recycles).
 OnCalendar=*-*-* 03:30:00
-Persistent=true
+# Persistent=false (the default) on purpose. [MESHSAT-993]
+#
+# The field kits are switched off overnight, so with Persistent=true the 03:30
+# run they missed fired as a catch-up minutes after the morning power-on: on
+# 9 Sep parallax recycled at 12:57 and tesseract at 13:00, throwing both booth
+# screens back to the operator dashboard while someone was standing at them.
+# A daily recycle exists to stop the renderer degrading over a long session; a
+# kit that has just booted has no long session to clean up, so the catch-up run
+# had nothing to gain and a demo to lose. The service also refuses to run in
+# the first hour of uptime, so neither route can fire at a power-on.
 # Small randomised delay so the two field kits don't restart at the
 # exact same second if they're ever correlated in some future check.
 RandomizedDelaySec=10min

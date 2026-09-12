@@ -87,6 +87,26 @@ swayidle -w \
 # [MESHSAT-987]
 KIOSK_LOG="/home/kiosk/.cache/chromium-kiosk.log"
 
+# The URL is read at launch, not frozen in at install time. [MESHSAT-993]
+#
+# It used to be a literal that scripts/install-kiosk.sh substituted into this
+# file, so pointing a kit at the booth screen meant hand-editing the installed
+# copy on that kit — which is exactly what was done for TTC week, and which any
+# later install-kiosk.sh run would have silently reverted. /etc/meshsat/kiosk-url
+# holds one line; the substituted default is the fallback for a kit that has no
+# such file yet, so an unconfigured kit behaves exactly as before.
+KIOSK_URL_FILE="/etc/meshsat/kiosk-url"
+KIOSK_URL="__BRIDGE_URL__"
+if [ -r "$KIOSK_URL_FILE" ]; then
+  _configured=$(head -1 "$KIOSK_URL_FILE" | tr -d '\r\n')
+  case "$_configured" in
+    http://*|https://*) KIOSK_URL="$_configured" ;;
+    "") ;;
+    *) echo "kiosk-url: ignoring $KIOSK_URL_FILE, not an http(s) URL: $_configured" ;;
+  esac
+fi
+echo "kiosk: launching at $KIOSK_URL"
+
 launch_chromium() {
 mkdir -p "$(dirname "$KIOSK_LOG")"
 [ -f "$KIOSK_LOG" ] && mv -f "$KIOSK_LOG" "$KIOSK_LOG.1"
@@ -109,7 +129,7 @@ chromium-browser \
   --disable-backgrounding-occluded-windows \
   --disable-features=CalculateNativeWinOcclusion,BackForwardCache \
   --js-flags="--max-old-space-size=256" \
-  --app="__BRIDGE_URL__" >"$KIOSK_LOG" 2>&1 &
+  --app="$KIOSK_URL" >"$KIOSK_LOG" 2>&1 &
 }
 # NB: the URL MUST be quoted — it contains `&` (query-string
 # separator between kiosk=1 and shell=operator). Without quotes,
