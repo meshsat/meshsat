@@ -200,6 +200,7 @@ package:
       docker buildx build --no-cache \
         --platform linux/amd64,linux/arm64 \
         --push \
+        --metadata-file buildx-metadata.json \
         -t ${MESHSAT_IMAGE}:${CI_COMMIT_SHORT_SHA} \
         -t ${MESHSAT_IMAGE}:latest \
         .
@@ -209,16 +210,28 @@ package:
       # running THIS build and not a cached older one. Without it a pull timeout
       # silently deploys yesterday's image and the job still goes green.
       # [MESHSAT-809]
-      MESHSAT_EXPECTED_DIGEST=$(docker buildx imagetools inspect "${MESHSAT_IMAGE}:latest" --format '{{.Manifest.Digest}}')
-      if [ -z "$MESHSAT_EXPECTED_DIGEST" ]; then
-        echo "ERROR: could not read the pushed manifest digest for ${MESHSAT_IMAGE}:latest"
-        exit 1
-      fi
+      #
+      # The digest comes from buildx's own metadata file, which records what it
+      # just pushed. Do NOT go back to `imagetools inspect --format`: the buildx
+      # bundled with docker:27 ignores the template and prints the whole
+      # human-readable manifest listing, which produced a multi-line dotenv and
+      # failed the artifact upload with "Invalid Format" (pipeline 53497).
+      MESHSAT_EXPECTED_DIGEST=$(grep -o '"containerimage.digest"[[:space:]]*:[[:space:]]*"sha256:[0-9a-f]*"' buildx-metadata.json | grep -o 'sha256:[0-9a-f]*' | head -1)
+      case "$MESHSAT_EXPECTED_DIGEST" in
+        sha256:????????????????????????????????????????????????????????????????) ;;
+        *)
+          echo "ERROR: no usable manifest digest in buildx-metadata.json:"
+          cat buildx-metadata.json
+          exit 1
+          ;;
+      esac
       echo "Manifest digest: ${MESHSAT_EXPECTED_DIGEST}"
       {
         echo "MESHSAT_EXPECTED_DIGEST=${MESHSAT_EXPECTED_DIGEST}"
         echo "MESHSAT_EXPECTED_SHA=${CI_COMMIT_SHORT_SHA}"
       } > package.env
+      echo "--- package.env ---"
+      cat package.env
   artifacts:
     reports:
       dotenv: package.env
