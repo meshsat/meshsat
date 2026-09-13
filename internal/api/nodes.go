@@ -81,7 +81,7 @@ func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
 
 // handleGetStatus returns the Meshtastic connection status.
 // @Summary Get mesh status
-// @Description Returns current Meshtastic device connection status
+// @Description Returns current Meshtastic device connection status, the radio firmware version and whether the radio's own NodeDB row is zeroed (it then renumbers at its next boot) [MESHSAT-850, MESHSAT-1102]
 // @Tags nodes
 // @Success 200 {object} transport.MeshStatus
 // @Failure 503 {object} map[string]string "mesh transport unavailable"
@@ -112,6 +112,10 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		"hw_model":      status.HWModel,
 		"hw_model_name": status.HWModelName,
 		"num_nodes":     status.NumNodes,
+		// Radio firmware [MESHSAT-850] and whether the radio's own NodeDB
+		// row is zeroed, which renumbers it at its next boot [MESHSAT-1102].
+		"firmware_version": status.FirmwareVersion,
+		"own_row_zeroed":   status.OwnRowZeroed,
 	}
 
 	if s.db != nil {

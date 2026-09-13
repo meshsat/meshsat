@@ -498,6 +498,25 @@ func iridiumHealthTarget(t *transport.DirectSatTransport) gateway.HealthTarget {
 	}
 }
 
+// meshSilentConnectedAfter is how long an open session may go without a frame
+// before the radio counts as silent. A radio that answers at all sends
+// MyNodeInfo within a second of the handshake request. [MESHSAT-850]
+const meshSilentConnectedAfter = 20 * time.Second
+
+// radioSilentSinceConnect reports a radio that has not sent a single frame
+// since its current serial session opened: the transport already gave up on a
+// silent handshake, or the session is open and nothing came back in time.
+// [MESHSAT-850]
+func radioSilentSinceConnect(connected bool, connectedAt, lastFrame time.Time, handshakeFails int, now time.Time) bool {
+	if !connected {
+		return handshakeFails > 0
+	}
+	if connectedAt.IsZero() || now.Sub(connectedAt) < meshSilentConnectedAfter {
+		return false
+	}
+	return !lastFrame.After(connectedAt)
+}
+
 // meshHealthTarget: the Meshtastic radio answers a self-addressed admin
 // get_device_metadata over the serial link with no LoRa transmission, so a
 // radio with zero neighbours still probes healthy. Rungs: reconnect, a
@@ -511,6 +530,21 @@ func meshHealthTarget(cfg *config.Config, dm *transport.DirectMeshTransport, act
 	handshakeGrace := configTimeout + 15*time.Second
 
 	hard := actions[oob.LevelHard]
+
+	// A radio silent since its port opened has a wedged USB stack: the
+	// serial reconnect finds it silent again, the DTR/RTS rung fails with
+	// "broken pipe" and the admin reboot cannot be delivered, so on 12 Sep
+	// the ladder spent about four and a half minutes before its hub-port cut
+	// cured it. With a switchable port the ladder now starts at the cut, on
+	// the first miss. [MESHSAT-850]
+	silent := func() bool {
+		return hard != nil && radioSilentSinceConnect(dm.IsConnected(), dm.ConnectedAt(), dm.LastFrameAt(), dm.HandshakeFails(), time.Now())
+	}
+	silentMiss := func(detail string) gateway.ProbeResult {
+		r := probeMiss(detail)
+		r.Urgent = silent()
+		return r
+	}
 
 	return gateway.HealthTarget{
 		Name:         "mesh",
@@ -526,9 +560,12 @@ func meshHealthTarget(cfg *config.Config, dm *transport.DirectMeshTransport, act
 					return probeMiss(fmt.Sprintf("serial open failed %d times: %s", n, last))
 				}
 				if n := dm.HandshakeFails(); n > 0 {
-					return probeMiss(fmt.Sprintf("radio silent on %d consecutive handshakes", n))
+					return silentMiss(fmt.Sprintf("radio silent on %d consecutive handshakes", n))
 				}
 				return probeMiss("not connected")
+			}
+			if silent() {
+				return silentMiss("connected but no frame from the radio since the port opened")
 			}
 			if dm.MyNodeNum() == 0 {
 				return probeMiss("connected but the radio never sent its node number")
@@ -546,11 +583,11 @@ func meshHealthTarget(cfg *config.Config, dm *transport.DirectMeshTransport, act
 			return probeOK("local probe answered")
 		},
 		Steps: []gateway.HealStep{
-			{Level: gateway.HealLevelSoft, Name: "serial reconnect", Grace: handshakeGrace, Run: dm.Reconnect},
-			{Level: gateway.HealLevelSoft, Name: "DTR/RTS reboot", Grace: handshakeGrace, Run: dm.RebootViaLines},
+			{Level: gateway.HealLevelSoft, Name: "serial reconnect", Grace: handshakeGrace, Skip: silent, Run: dm.Reconnect},
+			{Level: gateway.HealLevelSoft, Name: "DTR/RTS reboot", Grace: handshakeGrace, Skip: silent, Run: dm.RebootViaLines},
 			{
 				Level: gateway.HealLevelDevice, Name: "admin reboot", Grace: 60 * time.Second,
-				Skip: func() bool { return !dm.IsConnected() || dm.MyNodeNum() == 0 },
+				Skip: func() bool { return !dm.IsConnected() || dm.MyNodeNum() == 0 || silent() },
 				Run: func(ctx context.Context) error {
 					return dm.AdminReboot(ctx, dm.MyNodeNum(), 5)
 				},
