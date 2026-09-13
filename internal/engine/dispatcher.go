@@ -1766,23 +1766,37 @@ func (w *DeliveryWorker) failOverToNextMember(del database.MessageDelivery, reas
 		return false
 	}
 
+	// Re-read the canonical row: deliver() mutates the in-memory del.Payload and
+	// del.TextPreview to this bearer's egress ciphertext before handing us the
+	// row (dispatcher.go ~L1366), so copying them here double-encrypts the
+	// message on the next bearer. On the wire the far kit decrypts once and
+	// relays ciphertext to the mesh (found live 14 Sep 2026, akB1-16 over SMS).
+	// The stored row still holds the untransformed payload. If it cannot be
+	// read, fall through to an ordinary retry rather than send garbage.
+	// [MESHSAT-1021]
+	orig, err := w.db.GetDelivery(del.ID)
+	if err != nil || orig == nil {
+		log.Error().Err(err).Int64("id", del.ID).Msg("no ack: cannot re-read the delivery, leaving it to the retry path")
+		return false
+	}
+
 	moved := database.MessageDelivery{
-		MsgRef:      del.MsgRef,
-		RuleID:      del.RuleID,
+		MsgRef:      orig.MsgRef,
+		RuleID:      orig.RuleID,
 		Channel:     next,
 		Status:      "queued",
-		Priority:    del.Priority,
-		Payload:     del.Payload,
-		TextPreview: del.TextPreview,
-		MaxRetries:  del.MaxRetries,
-		Visited:     del.Visited,
-		TTLSeconds:  del.TTLSeconds,
-		ExpiresAt:   del.ExpiresAt,
-		QoSLevel:    del.QoSLevel,
-		Signature:   del.Signature,
-		SignerID:    del.SignerID,
-		Precedence:  del.Precedence,
-		Class:       del.Class,
+		Priority:    orig.Priority,
+		Payload:     orig.Payload,
+		TextPreview: orig.TextPreview,
+		MaxRetries:  orig.MaxRetries,
+		Visited:     orig.Visited,
+		TTLSeconds:  orig.TTLSeconds,
+		ExpiresAt:   orig.ExpiresAt,
+		QoSLevel:    orig.QoSLevel,
+		Signature:   orig.Signature,
+		SignerID:    orig.SignerID,
+		Precedence:  orig.Precedence,
+		Class:       orig.Class,
 	}
 	if seq, seqErr := w.db.IncrementEgressSeq(next); seqErr == nil {
 		moved.SeqNum = seq
