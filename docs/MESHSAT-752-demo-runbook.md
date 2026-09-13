@@ -967,5 +967,22 @@ The silence now points inside the radio, like the self-resets of MESHSAT-1112.
 - **To Verify:**
   - 794: the bench drain test;
   - 986: a wedged AT channel escalating by itself hasn't happened since the fix, and forcing one needs AT+CUSD, which is never sent;
-  - 962: the IMT lane needs tesseract's 9704 (Mon 14); the SIM and Twilio balances and Thomas's OK on the tent card are the owner's; the kit-to-kit SMS lane is tested after this deploy (result on the issue);
+  - 962: the IMT lane needs tesseract's 9704 (Mon 14); the SIM and Twilio balances and Thomas's OK on the tent card are the owner's; the kit-to-kit SMS lane is proven, 5 of 5 each way after the MESHSAT-1114 fix (below);
   - 850: the fast path, the firmware version and three restarts in a row inside 60 s are met (parallax 18, 17 and 54 s), but the cause of the silence is still open.
+
+**After that, 13 Sep 22:26 to 23:56.**
+
+**The kit-to-kit SMS test found a booth-level bug (MESHSAT-1114), fixed the same night.**
+- **Test result:** tesseract to parallax went 5 of 5, but parallax to tesseract only 2 of 5.
+- **What broke:** a damaged CMGS reply (`\r\nCMGS:04\rK\r`) plus a health-probe timeout forced a reconnect mid-send. Commands queued to the replaced session then kept closing each new healthy session.
+- **Impact:** parallax's SMS lanes were dead from 22:29 to 23:20 while the kit looked healthy. Device health ended `failed` after an automatic T-Call hub-port cut. A bridge restart at 23:20 cleared it.
+- **Fix, bb7da1a (pipeline 53824, image `eff2f97c932f`):** modem commands are tied to the session they were queued to, a busy loop isn't cut, and a damaged CMGS reply with a message reference counts as sent.
+- **On the kits:** a level-1 heal forced during a send didn't cascade (3 of 3 delivered, no storm), then kit-to-kit SMS went 5 of 5 each way at 3 to 6 s. The `b2b_sms` lane of MESHSAT-962 is proven.
+
+**tesseract's RTL-SDR left the USB bus at 22:46** after its own watchdog USB reset at 22:43, the same way parallax's did at 17:44. Neither kit has jamming detection until both dongles are re-seated (MESHSAT-855, MESHSAT-1001). Never a warm reboot.
+
+**Health at 23:56:**
+- Both kits on `eff2f97c932f`.
+- Green: mesh, cellular, APRS, satellite (9603 SBD on tesseract, 9704 IMT on parallax), GPS, the ZigBee coordinators, the Hub link, and UPS on mains.
+- Both booth lanes on `aprs` and ready.
+- tesseract's ZigBee temperature sensor is still silent since 6 Sep (MESHSAT-1092).
