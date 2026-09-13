@@ -76,11 +76,12 @@ type APRSConfig struct {
 	// Per-message acknowledgement for encrypted frames, which only a MeshSat
 	// peer can read. The sender appends an APRS message id and waits for the
 	// peer's standard APRS ack; a frame that is not acked within AckTimeoutMs
-	// of its last copy goes out again, AckAttempts times in all, and Forward
+	// goes out again, one copy per attempt and AckAttempts times in all (the
+	// TXRepeat copies do not apply to it), and Forward
 	// then fails so the delivery ledger can move the message to the next
 	// member of its failover group. Measured before this on 13 Sep 2026: 112
 	// of 120 relayed texts arrived and the sender never knew about the other
-	// 8. AckAttempts 0 = default (3), negative = off; AckTimeoutMs 0 = 8000.
+	// 8. AckAttempts 0 = default (4), negative = off; AckTimeoutMs 0 = 8000.
 	// [MESHSAT-1021]
 	AckAttempts  int `json:"ack_attempts"`
 	AckTimeoutMs int `json:"ack_timeout_ms"`

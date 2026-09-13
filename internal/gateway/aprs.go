@@ -890,19 +890,23 @@ func (g *APRSGateway) transmitMessage(ctx context.Context, item *aprsOutbound) e
 		Int("info_len", len(info)).Str("ack_id", item.ackID).Msg("aprs: sent packet")
 	// Repeat copies: the same frame again after the gap, so a copy lost on
 	// the air is covered by the other; the far kit dedups. [MESHSAT-857]
-	for i := 1; i < g.config.TXRepeat; i++ {
+	// A frame that asks for an ack goes out once per attempt instead: the
+	// peer's ack comes back 1.5 to 3 s after the frame, exactly when a blind
+	// repeat keys up, and both radios are half-duplex, so the repeat and the
+	// ack destroyed each other (14 Sep 2026: 38 acks sent, 18 heard, 2 of 20
+	// texts exhausted every attempt although all 20 arrived). The
+	// retransmission after the ack timeout is the repeat. [MESHSAT-1021]
+	copies := g.config.TXRepeat
+	if item.ackID != "" {
+		copies = 1
+	}
+	for i := 1; i < copies; i++ {
 		// Jittered, so two kits transmitting at the same nominal cadence
 		// cannot keep a fixed offset between their pairs. [MESHSAT-1021]
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(jitterDuration(g.repeatGap(), 0.25)):
-		}
-		// A message the peer already acked needs no more copies, and the
-		// channel stays free for the next one. [MESHSAT-1021]
-		if item.alreadyAcked() {
-			log.Debug().Str("ack_id", item.ackID).Msg("aprs: repeat copy skipped, already acked")
-			return nil
 		}
 		// Every copy passes the gate: a peer that keyed up during the gap
 		// must not lose its frame to our repeat. [MESHSAT-1069]
