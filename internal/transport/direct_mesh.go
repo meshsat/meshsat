@@ -1822,6 +1822,20 @@ func (t *DirectMeshTransport) RemoveNode(_ context.Context, nodeNum uint32) erro
 func (t *DirectMeshTransport) Close() error {
 	t.mu.Lock()
 
+	// Tell the radio the client is leaving, as the official client does, so the
+	// firmware closes its phone API session instead of queueing FromRadio
+	// packets for a host that is gone. Best effort: a silent radio may not take
+	// it, and the close below still drops DTR. [MESHSAT-850]
+	if t.connected && t.file != nil {
+		if frame := buildDisconnect(); frame != nil {
+			if err := sendFrame(t.file, frame); err != nil {
+				log.Debug().Err(err).Msg("meshtastic: disconnect frame not sent")
+			} else {
+				time.Sleep(meshDisconnectDwell)
+			}
+		}
+	}
+
 	if t.cancelFunc != nil {
 		t.cancelFunc()
 		// Wait for readerLoop to exit (2s timeout, matching HAL pattern)

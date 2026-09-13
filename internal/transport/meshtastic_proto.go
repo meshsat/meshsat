@@ -623,6 +623,21 @@ func buildWantConfigID(configID uint32) []byte {
 	return data
 }
 
+// buildDisconnect builds ToRadio{disconnect: true}. The official Python client
+// sends it before closing the port; the firmware then closes its phone API
+// session instead of queueing FromRadio packets for a host that is gone.
+// [MESHSAT-850]
+func buildDisconnect() []byte {
+	msg := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Disconnect{Disconnect: true},
+	}
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 // buildToRadioPacket wraps a MeshPacket into a ToRadio message (field 1).
 func buildToRadioPacket(meshPacketBytes []byte) []byte {
 	pkt := &pb.MeshPacket{}

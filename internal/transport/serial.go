@@ -214,8 +214,10 @@ func sendFrame(port serial.Port, payload []byte) error {
 		byte(len(payload) & 0xFF),
 	}
 	buf := append(header, payload...)
-	_, err := port.Write(buf)
-	return err
+	return pacedMeshWrite(func() error {
+		_, err := port.Write(buf)
+		return err
+	})
 }
 
 // meshFrameReader maintains a persistent accumulation buffer for extracting
