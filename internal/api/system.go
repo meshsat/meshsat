@@ -125,8 +125,14 @@ type batteryStatus struct {
 	Voltage    *float64 `json:"voltage"`
 	SOCPercent *float64 `json:"soc_percent"`
 	ACPresent  *bool    `json:"ac_present"`
-	LastUpdate float64  `json:"last_update"`
-	Stale      bool     `json:"stale"`
+	// Charging is nil until the monitor has 30 min of mains history
+	// (or when AC is unknown). [MESHSAT-794]
+	Charging *bool `json:"charging,omitempty"`
+	// InputInsufficient: mains is present but raw SOC fell >= 2 points
+	// over 30 min, so the pack is draining on mains. [MESHSAT-794]
+	InputInsufficient bool    `json:"input_insufficient,omitempty"`
+	LastUpdate        float64 `json:"last_update"`
+	Stale             bool    `json:"stale"`
 }
 
 // @Summary Get X1202 UPS battery status
@@ -134,7 +140,11 @@ type batteryStatus struct {
 // @Description present flag written by the host-side x1202-monitor
 // @Description service (MAX17040 over I²C 0x36).  Field-kit only:
 // @Description requires /run/x1202.json to be bind-mounted into the
-// @Description container.
+// @Description container.  `charging` (omitted while unknown) is true
+// @Description when mains is present and the pack is holding or
+// @Description gaining charge, false on battery or while draining;
+// @Description `input_insufficient` (omitted when false) is true when
+// @Description mains is present but the pack has drained for 30 min.
 // @Tags system
 // @Produce json
 // @Success 200 {object} batteryStatus
