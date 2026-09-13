@@ -3,7 +3,15 @@
 Description=MeshSat clock guard (establish the system clock before the bridge starts)
 After=chrony.service network.target local-fs.target
 Wants=chrony.service
-Before=docker.service docker.socket
+# NOT docker.socket: docker.socket is pulled in by sockets.target, and this unit
+# is After=chrony.service/network.target, which sockets.target precedes. Ordering
+# before docker.socket therefore closes a cycle, and systemd breaks it by DELETING
+# the docker.socket start job. docker.service Requires=docker.socket, so Docker
+# never starts at all on a cold boot: no bridge, and the kiosk waits on /health
+# and never launches Chromium, leaving the booth screen black. Seen on BOTH kits
+# on the first cold boot after this unit landed, 13 Sep 2026. [MESHSAT-1090]
+# Ordering before docker.service alone is sufficient and cycle-free.
+Before=docker.service
 
 [Service]
 Type=oneshot
