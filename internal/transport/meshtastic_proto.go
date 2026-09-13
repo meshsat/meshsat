@@ -262,6 +262,10 @@ func (d *ProtoData) OkToMQTT() bool {
 // ProtoMyNodeInfo represents my_info from config download.
 type ProtoMyNodeInfo struct {
 	MyNodeNum uint32
+	// RebootCount is how often the radio has booted since its preferences
+	// were last reset; a rise between two handshakes is a radio reboot the
+	// host may never have asked for. [MESHSAT-1102]
+	RebootCount uint32
 }
 
 // ProtoNodeInfo represents a NodeInfo from config download or mesh.
@@ -340,7 +344,7 @@ func parseFromRadio(data []byte) (*ProtoFromRadio, error) {
 		}
 	case *pb.FromRadio_MyInfo:
 		if v.MyInfo != nil {
-			fr.MyInfo = &ProtoMyNodeInfo{MyNodeNum: v.MyInfo.GetMyNodeNum()}
+			fr.MyInfo = &ProtoMyNodeInfo{MyNodeNum: v.MyInfo.GetMyNodeNum(), RebootCount: v.MyInfo.GetRebootCount()}
 		}
 	case *pb.FromRadio_NodeInfo:
 		if v.NodeInfo != nil {
@@ -508,7 +512,7 @@ func parseMyNodeInfo(data []byte) (*ProtoMyNodeInfo, error) {
 	if err := proto.Unmarshal(data, m); err != nil {
 		return &ProtoMyNodeInfo{}, nil
 	}
-	return &ProtoMyNodeInfo{MyNodeNum: m.GetMyNodeNum()}, nil
+	return &ProtoMyNodeInfo{MyNodeNum: m.GetMyNodeNum(), RebootCount: m.GetRebootCount()}, nil
 }
 
 func parseNodeInfo(data []byte) (*ProtoNodeInfo, error) {

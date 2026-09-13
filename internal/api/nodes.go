@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -21,6 +22,23 @@ type nodeView struct {
 	transport.MeshNode
 	OtherMesh      bool   `json:"other_mesh"`                 // newest frame from this node was undecryptable
 	LastReadableAt string `json:"last_readable_at,omitempty"` // newest decoded frame from this node, RFC3339
+	// FirmwareVersion is set on the local radio's own entry only, from the
+	// handshake's DeviceMetadata. [MESHSAT-850]
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+}
+
+// markLocalRadio puts the radio's firmware version on the local radio's own
+// NodeDB entry, matched by node number (the user id can keep an old number
+// after the radio renumbers, MESHSAT-1102). [MESHSAT-850]
+func markLocalRadio(views []nodeView, st *transport.MeshStatus) {
+	if st == nil || st.NodeID == "" || st.FirmwareVersion == "" {
+		return
+	}
+	for i := range views {
+		if fmt.Sprintf("!%08x", views[i].Num) == st.NodeID {
+			views[i].FirmwareVersion = st.FirmwareVersion
+		}
+	}
 }
 
 func annotateNodes(nodes []transport.MeshNode, ring []engine.PacketRecord) []nodeView {
@@ -48,7 +66,7 @@ func annotateNodes(nodes []transport.MeshNode, ring []engine.PacketRecord) []nod
 
 // handleGetNodes returns all known mesh nodes from the radio.
 // @Summary Get mesh nodes
-// @Description Returns all known nodes from the Meshtastic radio's NodeDB. Each node carries other_mesh (true when the newest LoRa frame received from it could not be decrypted, i.e. it sits on another channel key) and last_readable_at (newest decoded frame from it), both derived from the in-memory packet ring.
+// @Description Returns all known nodes from the Meshtastic radio's NodeDB. Each node carries other_mesh (true when the newest LoRa frame received from it could not be decrypted, i.e. it sits on another channel key) and last_readable_at (newest decoded frame from it), both derived from the in-memory packet ring. The local radio's own entry also carries firmware_version [MESHSAT-850].
 // @Tags nodes
 // @Success 200 {object} map[string]interface{} "count, nodes"
 // @Failure 503 {object} map[string]string "mesh transport unavailable"
@@ -72,6 +90,9 @@ func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
 		ring = s.processor.Packets().Newest(engine.PacketRingSize, "lora", "rx")
 	}
 	views := annotateNodes(nodes, ring)
+	if st, err := s.mesh.GetStatus(r.Context()); err == nil {
+		markLocalRadio(views, st)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"count": len(views),
@@ -81,7 +102,7 @@ func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
 
 // handleGetStatus returns the Meshtastic connection status.
 // @Summary Get mesh status
-// @Description Returns current Meshtastic device connection status, the radio firmware version and whether the radio's own NodeDB row is zeroed (it then renumbers at its next boot) [MESHSAT-850, MESHSAT-1102]
+// @Description Returns current Meshtastic device connection status, the radio firmware version, whether the radio's own NodeDB row is zeroed (it then renumbers at its next boot) and the radio's reboot_count from the latest handshake [MESHSAT-850, MESHSAT-1102]
 // @Tags nodes
 // @Success 200 {object} transport.MeshStatus
 // @Failure 503 {object} map[string]string "mesh transport unavailable"
@@ -116,6 +137,8 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		// row is zeroed, which renumbers it at its next boot [MESHSAT-1102].
 		"firmware_version": status.FirmwareVersion,
 		"own_row_zeroed":   status.OwnRowZeroed,
+		// A rise between two handshakes is a radio reboot [MESHSAT-1102].
+		"reboot_count": status.RebootCount,
 	}
 
 	if s.db != nil {
