@@ -182,3 +182,23 @@ func TestAbandonSilentHandshake_ClosesItsOwnSession(t *testing.T) {
 		t.Fatalf("own session not torn down: file %v connected %v fails %d", tr.file, tr.connected, tr.handshakeFails)
 	}
 }
+
+// After a hub-port cut tesseract's radio sent a few boot frames and never
+// MyNodeInfo; the handshake then settled on a "partial NodeDB" session that
+// was never retried (13 Sep 2026 20:55). Only MyNodeInfo marks a session as
+// answered. [MESHSAT-850]
+func TestHandleFromRadio_OnlyMyInfoMarksTheSessionAnswered(t *testing.T) {
+	tr := NewDirectMeshTransport("/dev/null")
+	if tr.sessionHasMyInfo() {
+		t.Fatal("a new transport reports MyNodeInfo")
+	}
+	tr.handleFromRadio(fromRadioBytes(t, &pb.FromRadio{PayloadVariant: &pb.FromRadio_NodeInfo{NodeInfo: &pb.NodeInfo{Num: 0x11223344}}}))
+	tr.handleFromRadio(fromRadioBytes(t, &pb.FromRadio{PayloadVariant: &pb.FromRadio_Metadata{Metadata: &pb.DeviceMetadata{FirmwareVersion: "2.6.10"}}}))
+	if tr.sessionHasMyInfo() {
+		t.Fatal("other frames marked the session as answered")
+	}
+	tr.handleFromRadio(myInfoFrame(t, 0x698690dd))
+	if !tr.sessionHasMyInfo() {
+		t.Fatal("MyNodeInfo did not mark the session as answered")
+	}
+}
