@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,6 +122,14 @@ type DirectCellTransport struct {
 	ioDone  chan struct{} // closed when I/O loop exits
 	sigDone chan struct{} // closed when signal poller exits
 	running bool
+
+	// sess is the running I/O loop's session, nil while none runs; a caller
+	// keeps the session it queued to, so a late timeout cannot touch a newer
+	// one. busyUntil is the deadline of the command the loop is executing,
+	// 0 when idle. [MESHSAT-1114]
+	sessMu    sync.Mutex
+	sess      *cellSession
+	busyUntil atomic.Int64
 
 	// Device health inputs [MESHSAT-817]: lastRx is when the modem last
 	// sent bytes; holdUntil keeps every open off the port after a VBUS
@@ -536,6 +545,9 @@ func (t *DirectCellTransport) startLoops() {
 	t.stopCh = make(chan struct{})
 	t.ioDone = make(chan struct{})
 	t.sigDone = make(chan struct{})
+	t.sessMu.Lock()
+	t.sess = &cellSession{cmdCh: t.cmdCh, stop: t.stopCh, done: t.ioDone, file: t.file}
+	t.sessMu.Unlock()
 
 	go t.ioLoop()
 	go t.signalPollerLoop()
@@ -555,81 +567,120 @@ func (t *DirectCellTransport) ExecAT(_ context.Context, cmd string, timeout time
 var cmdEnqueueTimeout = 5 * time.Second
 
 func (t *DirectCellTransport) execAT(cmd string, timeout time.Duration) (string, error) {
-	if t.cmdCh == nil {
-		return "", fmt.Errorf("transport not ready (ioLoop not started)")
-	}
-	ch := make(chan atResult, 1)
-	// The enqueue is bounded. cmdCh is buffered, so a wedged ioLoop is
-	// invisible until the buffer fills; after that this send had no timeout at
-	// all and parked for ever, taking the device-health probe goroutine with
-	// it and freezing the heal ladder (parallax, 8 September). [MESHSAT-986]
-	enqueue := time.NewTimer(cmdEnqueueTimeout)
-	defer enqueue.Stop()
-	select {
-	case t.cmdCh <- atCommand{cmd: cmd, timeout: timeout, resp: ch}:
-	case <-enqueue.C:
-		log.Warn().Str("cmd", cmd).Dur("waited", cmdEnqueueTimeout).
-			Msg("cellular: command queue not draining, forcing serial reconnect")
-		t.forceReconnect()
-		return "", fmt.Errorf("AT command %q could not be queued within %v (I/O loop not draining)", cmd, cmdEnqueueTimeout)
-	case <-t.stopCh:
-		return "", fmt.Errorf("transport stopped")
-	}
-	// Wait with timeout to prevent indefinite blocking if ioLoop hangs
-	timer := time.NewTimer(timeout + 10*time.Second)
-	defer timer.Stop()
-	select {
-	case r := <-ch:
-		return r.resp, r.err
-	case <-timer.C:
-		// Same treatment execRawFn has always had: the loop is stuck inside a
-		// serial read that will not return, and closing the port is the only
-		// thing that frees it. Without this the probe path could detect the
-		// wedge and do nothing about it. [MESHSAT-986]
-		log.Warn().Str("cmd", cmd).Dur("timeout", timeout+10*time.Second).
-			Msg("cellular: AT command timed out, forcing serial reconnect")
-		t.forceReconnect()
-		return "", fmt.Errorf("AT command %q timed out after %v", cmd, timeout+10*time.Second)
-	case <-t.stopCh:
-		return "", fmt.Errorf("transport stopped")
-	}
+	return t.submit(atCommand{cmd: cmd, timeout: timeout}, fmt.Sprintf("AT command %q", cmd))
 }
 
 // execRawFn sends a raw function to execute on the serial port via the I/O loop.
 // Used for multi-step operations like SMS send that need direct port access.
 func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), timeout time.Duration) (string, error) {
-	if t.cmdCh == nil {
-		return "", fmt.Errorf("transport not ready (ioLoop not started)")
+	return t.submit(atCommand{fn: fn, timeout: timeout}, "raw command")
+}
+
+// cellSession is one run of the I/O loop: its command channel, its stop and
+// done channels, and the port it owns. startLoops makes a new one on every
+// connect. [MESHSAT-1114]
+type cellSession struct {
+	cmdCh chan atCommand
+	stop  chan struct{}
+	done  chan struct{} // closed when this session's I/O loop has exited
+	file  serial.Port
+}
+
+// cmdResponseGrace is added to a command's own timeout before its caller
+// gives up on the I/O loop. Package var so tests can shorten it.
+var cmdResponseGrace = 10 * time.Second
+
+// ErrCellSessionEnded means the I/O loop a command was queued to exited
+// before the command ran. [MESHSAT-1114]
+var ErrCellSessionEnded = errors.New("cellular: I/O loop exited before the command ran")
+
+// errCellLoopBusy means a command did not get its turn because the I/O loop
+// is running another one that is still inside its own deadline, typically an
+// SMS waiting for the network's answer. It wraps ErrCellProbeBusy so the
+// device health probe reads it as busy, not as a miss. [MESHSAT-1114]
+var errCellLoopBusy = fmt.Errorf("%w: another command is still inside its deadline", ErrCellProbeBusy)
+
+func (t *DirectCellTransport) currentSession() *cellSession {
+	t.sessMu.Lock()
+	defer t.sessMu.Unlock()
+	return t.sess
+}
+
+// loopBusy reports whether the I/O loop is executing a command that is still
+// inside its own deadline.
+func (t *DirectCellTransport) loopBusy() bool {
+	until := t.busyUntil.Load()
+	return until != 0 && time.Now().UnixNano() < until
+}
+
+// submit hands one command to the running I/O loop and waits for its result.
+//
+// On parallax on 13 Sep 2026 an SMS send queued one second after its I/O loop
+// had exited landed in a channel no loop would ever read, timed out 2 min 25 s
+// later and closed the port of the healthy session that had replaced it; every
+// retry did the same until device health gave up. So a caller only acts on
+// the session it queued to: with no loop running, or when its loop exits, it
+// fails at once, and a timeout closes the port only if that session still
+// owns it. A loop busy with a command still inside its own deadline is never
+// cut: the health probe's AT used to close the port under an SMS that was
+// waiting for the network. [MESHSAT-986, MESHSAT-1114]
+func (t *DirectCellTransport) submit(cmd atCommand, what string) (string, error) {
+	s := t.currentSession()
+	if s == nil {
+		return "", fmt.Errorf("%s: %w (I/O loop not running)", what, ErrNotConnected)
 	}
 	ch := make(chan atResult, 1)
+	cmd.resp = ch
+
+	// The enqueue is bounded. cmdCh is buffered, so a wedged loop is invisible
+	// until the buffer fills; after that an unbounded send parked for ever,
+	// taking the device-health probe goroutine with it and freezing the heal
+	// ladder (parallax, 8 September). [MESHSAT-986]
 	enqueue := time.NewTimer(cmdEnqueueTimeout)
 	defer enqueue.Stop()
 	select {
-	case t.cmdCh <- atCommand{fn: fn, timeout: timeout, resp: ch}:
-	case <-enqueue.C:
-		log.Warn().Dur("waited", cmdEnqueueTimeout).
-			Msg("cellular: command queue not draining, forcing serial reconnect")
-		t.forceReconnect()
-		return "", fmt.Errorf("raw command could not be queued within %v (I/O loop not draining)", cmdEnqueueTimeout)
-	case <-t.stopCh:
+	case s.cmdCh <- cmd:
+	case <-s.done:
+		return "", fmt.Errorf("%s: %w", what, ErrCellSessionEnded)
+	case <-s.stop:
 		return "", fmt.Errorf("transport stopped")
+	case <-enqueue.C:
+		if t.loopBusy() {
+			return "", fmt.Errorf("%s not queued: %w", what, errCellLoopBusy)
+		}
+		log.Warn().Str("cmd", what).Dur("waited", cmdEnqueueTimeout).
+			Msg("cellular: command queue not draining, forcing serial reconnect")
+		t.forceReconnectSession(s)
+		return "", fmt.Errorf("%s could not be queued within %v (I/O loop not draining)", what, cmdEnqueueTimeout)
 	}
-	// Wait with timeout to prevent indefinite blocking if ioLoop hangs
-	timer := time.NewTimer(timeout + 10*time.Second)
+
+	wait := cmd.timeout + cmdResponseGrace
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case r := <-ch:
 		return r.resp, r.err
-	case <-timer.C:
-		// ioLoop is stuck — the raw function is blocking on a serial Read
-		// that will never return. Close the serial port to unblock it.
-		// The reconnect loop will re-establish a clean connection.
-		log.Warn().Dur("timeout", timeout+10*time.Second).
-			Msg("cellular: raw command timed out, forcing serial reconnect")
-		t.forceReconnect()
-		return "", fmt.Errorf("raw command timed out after %v", timeout+10*time.Second)
-	case <-t.stopCh:
+	case <-s.done:
+		// The loop drains its channel on exit; take a result it delivered
+		// before reporting that the command never ran.
+		select {
+		case r := <-ch:
+			return r.resp, r.err
+		default:
+		}
+		return "", fmt.Errorf("%s: %w", what, ErrCellSessionEnded)
+	case <-s.stop:
 		return "", fmt.Errorf("transport stopped")
+	case <-timer.C:
+		if t.loopBusy() {
+			return "", fmt.Errorf("%s: %w", what, errCellLoopBusy)
+		}
+		// The loop is stuck inside a serial read that will not return, and
+		// closing the port is the only thing that frees it. [MESHSAT-986]
+		log.Warn().Str("cmd", what).Dur("timeout", wait).
+			Msg("cellular: command timed out, forcing serial reconnect")
+		t.forceReconnectSession(s)
+		return "", fmt.Errorf("%s timed out after %v", what, wait)
 	}
 }
 
@@ -639,6 +690,13 @@ func (t *DirectCellTransport) execRawFn(fn func(serial.Port) (string, error), ti
 func (t *DirectCellTransport) ioLoop() {
 	defer close(t.ioDone)
 	defer func() {
+		// No new caller may pick this session from here on; callers that
+		// already hold it see ioDone close. [MESHSAT-1114]
+		t.sessMu.Lock()
+		if t.sess != nil && t.sess.done == t.ioDone {
+			t.sess = nil
+		}
+		t.sessMu.Unlock()
 		// Drain pending commands so callers don't hang forever
 		for {
 			select {
@@ -740,6 +798,11 @@ func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 		cmd.resp <- atResult{err: ErrNotConnected}
 		return
 	}
+
+	// While this command runs inside its own deadline, callers queued behind
+	// it wait instead of cutting the port under it. [MESHSAT-1114]
+	t.busyUntil.Store(time.Now().Add(cmd.timeout).UnixNano())
+	defer t.busyUntil.Store(0)
 
 	if cmd.fn != nil {
 		// Raw function — caller handles serial I/O directly
@@ -1177,7 +1240,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 
 		// +CMGS: <mr> means the SMS was accepted by the network — success
 		// even if OK hasn't arrived yet (readATResponse now terminates on +CMGS:)
-		if strings.Contains(smsResp, "+CMGS:") {
+		if cmgsReference.MatchString(smsResp) {
 			log.Info().Str("to", to).Str("cmgs_resp", strings.TrimSpace(smsResp)).
 				Msg("cellular: SMS sent (got +CMGS)")
 		} else {
@@ -1509,6 +1572,12 @@ func (t *DirectCellTransport) checkDataConnection() {
 // It logs every byte received for debugging modem behavior and accepts
 // +CMGS: <mr> as a success indicator (not just OK).
 // ATdebug firmware debug lines (ANSI escapes) are stripped before checking terminators.
+// cmgsReference matches the network's message reference in a CMGS reply,
+// also when the serial path lost the leading "+" or the space: on parallax on
+// 13 Sep 2026 the reply arrived as "\r\nCMGS:04\rK\r", the SMS had gone out,
+// and treating it as no reply sent it again. [MESHSAT-1114]
+var cmgsReference = regexp.MustCompile(`CMGS:\s*\d+`)
+
 func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var resp strings.Builder
@@ -1539,7 +1608,7 @@ func readCMGSResponse(port serial.Port, timeout time.Duration) (string, error) {
 
 			clean := stripATDebugLines(resp.String())
 
-			if strings.Contains(clean, "+CMGS:") {
+			if cmgsReference.MatchString(clean) {
 				// +CMGS: <mr> — SMS accepted by network. Success.
 				return clean, nil
 			}
@@ -1648,6 +1717,9 @@ func (t *DirectCellTransport) Probe(ctx context.Context) error {
 	if err == nil && strings.Contains(resp, "OK") {
 		return nil
 	}
+	if errors.Is(err, ErrCellProbeBusy) {
+		return err
+	}
 	if time.Since(t.LastRxAt()) < 150*time.Second {
 		return ErrCellProbeBusy
 	}
@@ -1682,6 +1754,21 @@ func (t *DirectCellTransport) forceReconnect() {
 		// Don't nil t.file here — let the ioLoop detect the error and clean up.
 		// Setting it nil here could race with the ioLoop's read.
 	}
+}
+
+// forceReconnectSession closes the port of session s, and only while s still
+// owns it: a caller that timed out on a session that has since been replaced
+// must not close the newer session's port. [MESHSAT-1114]
+func (t *DirectCellTransport) forceReconnectSession(s *cellSession) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.file == nil || t.file != s.file {
+		log.Warn().Msg("cellular: timed-out command belonged to an earlier session, leaving the current port alone")
+		return
+	}
+	log.Warn().Msg("cellular: closing serial port to force reconnect")
+	t.file.Close()
 }
 
 func (t *DirectCellTransport) Close() error {
