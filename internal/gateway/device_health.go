@@ -64,6 +64,11 @@ type ProbeResult struct {
 	Unknown bool
 	// Detail is a short human-readable reason shown on the status API.
 	Detail string
+	// Urgent marks a miss that starts the ladder at once instead of after
+	// Misses consecutive misses, for a probe that knows the device is gone
+	// (a radio silent since its port opened). Grace, budget and gap still
+	// apply. [MESHSAT-850]
+	Urgent bool
 }
 
 // HealStep is one rung of a target's ladder.
@@ -308,6 +313,27 @@ func (d *DeviceHealth) ReceiveDeaf(interfaceID string) bool {
 		}
 	}
 	return false
+}
+
+// InterfaceHealth returns the state and detail of the target that covers an
+// interface, so status APIs can show device health beside the link flag. ok
+// is false when no target covers it. [MESHSAT-1064]
+func (d *DeviceHealth) InterfaceHealth(ifaceID string) (state, detail string, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, ts := range d.targets {
+		for _, id := range ts.t.IfaceIDs {
+			if id != ifaceID {
+				continue
+			}
+			if ts.external != nil {
+				s, det := ts.external()
+				return s, det, true
+			}
+			return ts.state, ts.detail, true
+		}
+	}
+	return "", "", false
 }
 
 // Status reports every target, sorted by name.
@@ -638,7 +664,7 @@ func (d *DeviceHealth) applyProbeLocked(ctx context.Context, ts *healthTargetSta
 	case HealthStateDegraded, HealthStateHealing:
 		// Ladder in progress.
 	default:
-		if ts.misses < ts.t.Misses {
+		if ts.misses < ts.t.Misses && !res.Urgent {
 			return
 		}
 		ts.state = HealthStateDegraded

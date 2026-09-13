@@ -114,6 +114,13 @@ type MeshStatus struct {
 	HWModel     int    `json:"hw_model"`
 	HWModelName string `json:"hw_model_name"`
 	NumNodes    int    `json:"num_nodes"`
+	// FirmwareVersion is the radio's firmware from its DeviceMetadata.
+	// [MESHSAT-850]
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	// OwnRowZeroed is true when the radio's NodeDB row for its own node
+	// number came back with an all-zero MAC: the firmware then picks a new
+	// random node number at its next boot. [MESHSAT-1102]
+	OwnRowZeroed bool `json:"own_row_zeroed"`
 }
 
 // SendRequest is a text message send request.

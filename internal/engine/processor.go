@@ -483,6 +483,11 @@ func (p *Processor) handleEvent(ctx context.Context, event transport.MeshEvent) 
 		log.Info().Str("message", event.Message).Msg("store_forward event")
 	case "connected", "disconnected", "config_complete":
 		log.Info().Str("type", event.Type).Str("message", event.Message).Msg("mesh status event")
+	case "node_num_changed":
+		// The radio came back with a different node number; peers that
+		// address it by number follow through OOB address learning.
+		// [MESHSAT-1102]
+		log.Warn().Str("message", event.Message).Msg("mesh radio node number changed")
 	default:
 		log.Debug().Str("type", event.Type).Msg("unhandled event type")
 	}

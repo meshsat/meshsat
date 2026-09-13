@@ -222,6 +222,7 @@ type ProtoFromRadio struct {
 	ConfigCompleteID uint32
 	ModuleConfigRaw  []byte // ModuleConfig message (raw protobuf)
 	ChannelRaw       []byte // Channel message (raw protobuf)
+	FirmwareVersion  string // FromRadio.metadata, sent during the config handshake [MESHSAT-850]
 }
 
 // ProtoMeshPacket represents a parsed MeshPacket.
@@ -359,6 +360,10 @@ func parseFromRadio(data []byte) (*ProtoFromRadio, error) {
 	case *pb.FromRadio_Channel:
 		if v.Channel != nil {
 			fr.ChannelRaw, _ = proto.Marshal(v.Channel)
+		}
+	case *pb.FromRadio_Metadata:
+		if v.Metadata != nil {
+			fr.FirmwareVersion = v.Metadata.GetFirmwareVersion()
 		}
 	}
 

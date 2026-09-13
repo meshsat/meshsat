@@ -104,6 +104,9 @@ type DirectMeshTransport struct {
 	lastConnectErr string
 	lastFrameAt    atomic.Int64 // unix nanos
 	lastLocalReply atomic.Int64 // unix nanos
+	// ownRowZeroed: the radio's NodeDB row for its own number came back
+	// with an all-zero MAC in this session's handshake. [MESHSAT-1102]
+	ownRowZeroed bool
 	// disconnectedCh carries a disconnect signal out of band of the event
 	// channel, which can be full of packets behind slow DB writes. [MESHSAT-811]
 	disconnectedCh chan struct{}
@@ -123,6 +126,14 @@ type DirectMeshTransport struct {
 // silent. Before this the transport reported such a radio as connected
 // with an empty NodeDB indefinitely (parallax, MESHSAT-781). [MESHSAT-817]
 var ErrMeshHandshakeSilent = errors.New("meshtastic: radio silent during config handshake")
+
+// ErrNodeInfoSelf refuses a NodeInfo request addressed to the local radio. The
+// firmware answers such a request by zeroing its own NodeDB row, and at its
+// next boot it picks a new random node number. [MESHSAT-1102]
+var ErrNodeInfoSelf = errors.New("meshtastic: refusing to request NodeInfo from the local radio")
+
+// ErrNodeNumUnknown means the local radio has not reported its node number yet.
+var ErrNodeNumUnknown = errors.New("meshtastic: local node number not known yet")
 
 // NewDirectMeshTransport creates a new direct serial Meshtastic transport.
 // Pass "auto" or "" for port to use auto-detection.
@@ -454,15 +465,22 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	// Start background reader
 	readerCtx, cancel := context.WithCancel(context.Background())
 	t.cancelFunc = cancel
-	t.readerDone = make(chan struct{})
+	done := make(chan struct{})
+	t.readerDone = done
+	t.ownRowZeroed = false
 	go t.readerLoop(readerCtx)
 
-	// Wait for config completion (or timeout)
+	// Wait for config completion (or timeout). The lock is released while
+	// waiting, so a heal rung may open a newer session on the same port in
+	// the meantime; everything below acts on this session's port only and
+	// leaves a newer session alone. [MESHSAT-850]
+	opened := t.connectedAt.UnixNano()
 	configTimeout := t.configTimeout
 	if configTimeout <= 0 {
 		configTimeout = defaultMeshConfigTimeout
 	}
 	deadline := time.After(configTimeout)
+	silentAt := time.After(meshSilentAfter)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -471,53 +489,78 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 
 	for {
 		select {
-		case <-deadline:
-			t.mu.Lock()
-			if t.myNodeNum == 0 {
-				// The radio never even sent MyNodeInfo: enumerated but
-				// silent (the parallax XIAO wedge, MESHSAT-781). Reporting
-				// this as connected hid it for days; fail the connect so the
-				// processor retries and the device health ladder escalates.
-				t.handshakeFails++
-				fails := t.handshakeFails
-				cancel := t.cancelFunc
-				done := t.readerDone
-				t.connected = false
-				t.configDone = false
-				t.mu.Unlock()
-				if cancel != nil {
-					cancel()
-				}
-				if done != nil {
-					select {
-					case <-done:
-					case <-time.After(2 * time.Second):
-					}
-				}
-				t.mu.Lock()
-				if t.file != nil {
-					t.file.Close()
-					t.file = nil
-				}
-				t.mu.Unlock()
-				log.Warn().Int("consecutive", fails).Msg("meshtastic config handshake got no reply from the radio")
-				return ErrMeshHandshakeSilent
+		case <-silentAt:
+			// A radio that answers at all sends MyNodeInfo within a second.
+			// Not one frame by now means enumerated but silent (the parallax
+			// XIAO wedge): give up early so the device health ladder can cut
+			// its hub port instead of waiting out the full timeout.
+			if t.lastFrameAt.Load() <= opened {
+				return t.abandonSilentHandshake(sp, cancel, done)
 			}
-			log.Warn().Msg("meshtastic config handshake timed out, continuing with partial NodeDB")
-			t.configDone = true
+		case <-deadline:
+			if t.lastFrameAt.Load() <= opened {
+				// Reporting a silent radio as connected hid it for days;
+				// fail the connect so the processor retries and the device
+				// health ladder escalates. [MESHSAT-781]
+				return t.abandonSilentHandshake(sp, cancel, done)
+			}
+			t.mu.Lock()
+			if t.file == sp {
+				log.Warn().Msg("meshtastic config handshake timed out, continuing with partial NodeDB")
+				t.configDone = true
+			}
 			t.mu.Unlock()
 			return nil
 		case <-ticker.C:
 			t.mu.RLock()
-			done := t.configDone
+			complete := t.configDone
 			t.mu.RUnlock()
-			if done {
+			if complete {
 				return nil
 			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+}
+
+// meshSilentAfter is how long a new session may go without a single frame
+// from the radio before its handshake is abandoned as silent. Package var so
+// tests can shorten it. [MESHSAT-850]
+var meshSilentAfter = 15 * time.Second
+
+// abandonSilentHandshake tears down a session whose radio never sent a frame
+// and returns ErrMeshHandshakeSilent. It changes the transport only while sp
+// is still the open port: a reconnect that ran while this handshake waited
+// owns the transport now, and closing its port from here was what let an old
+// handshake kill the session a heal rung had just opened. The caller must not
+// hold t.mu. [MESHSAT-850]
+func (t *DirectMeshTransport) abandonSilentHandshake(sp serial.Port, cancel context.CancelFunc, done chan struct{}) error {
+	t.mu.Lock()
+	if t.file != sp {
+		t.mu.Unlock()
+		cancel()
+		log.Debug().Msg("meshtastic: silent handshake superseded by a newer session")
+		return ErrMeshHandshakeSilent
+	}
+	t.handshakeFails++
+	fails := t.handshakeFails
+	t.connected = false
+	t.configDone = false
+	t.mu.Unlock()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+	}
+	t.mu.Lock()
+	if t.file == sp {
+		t.file.Close()
+		t.file = nil
+	}
+	t.mu.Unlock()
+	log.Warn().Int("consecutive", fails).Msg("meshtastic config handshake got no reply from the radio")
+	return ErrMeshHandshakeSilent
 }
 
 // readerLoop continuously reads serial frames, parses them, and updates state.
@@ -589,6 +632,39 @@ func (t *DirectMeshTransport) readerLoop(ctx context.Context) {
 	}
 }
 
+// checkOwnRow inspects the NodeDB row the radio reports for its own node
+// number. A NodeInfo request addressed to the radio's own number makes the
+// firmware overwrite that row with an empty user and an all-zero MAC; at its
+// next boot the radio sees the MAC mismatch and picks a new random node
+// number. This bridge sent exactly that request after every restart whenever
+// a local packet beat MyNodeInfo in the handshake. [MESHSAT-1102]
+func (t *DirectMeshTransport) checkOwnRow(ni *ProtoNodeInfo) {
+	t.mu.Lock()
+	myNum := t.myNodeNum
+	if myNum == 0 || ni == nil || ni.Num != myNum {
+		t.mu.Unlock()
+		return
+	}
+	zeroed := ni.User != nil && macIsZero(ni.User.Macaddr) && ni.User.LongName == "" && ni.User.ShortName == ""
+	was := t.ownRowZeroed
+	t.ownRowZeroed = zeroed
+	t.mu.Unlock()
+	if zeroed && !was {
+		log.Warn().Str("node", fmt.Sprintf("!%08x", myNum)).
+			Msg("meshtastic: the radio's own NodeDB row is zeroed; it will pick a new node number at its next boot")
+	}
+}
+
+// macIsZero reports an empty or all-zero MAC address.
+func macIsZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // watchdogTriggered checks if the serial session is stale and forces a reconnect if needed.
 // Returns true if a reconnect was triggered (caller should exit readerLoop).
 func (t *DirectMeshTransport) watchdogTriggered() bool {
@@ -648,9 +724,18 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 	// MyNodeInfo
 	if fr.MyInfo != nil {
 		t.mu.Lock()
+		prev := t.myNodeNum
 		t.myNodeNum = fr.MyInfo.MyNodeNum
 		t.mu.Unlock()
 		log.Info().Uint32("node_num", fr.MyInfo.MyNodeNum).Msg("meshtastic my_node_num")
+		if prev != 0 && prev != fr.MyInfo.MyNodeNum {
+			// The radio renumbered itself at boot; anything that addresses
+			// it by number, such as the other kit's OOB peer row, has to
+			// follow. [MESHSAT-1102]
+			msg := fmt.Sprintf("radio node number changed from !%08x to !%08x", prev, fr.MyInfo.MyNodeNum)
+			log.Warn().Msg("meshtastic: " + msg)
+			t.emitEvent(MeshEvent{Type: "node_num_changed", Message: msg, Time: time.Now().UTC().Format(time.RFC3339)})
+		}
 	}
 
 	// NodeInfo (from config download).
@@ -666,6 +751,18 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 			t.nodes[incoming.Num] = &incoming
 		}
 		t.nodesMu.Unlock()
+		t.checkOwnRow(fr.NodeInfo)
+	}
+
+	// Firmware version from the handshake's DeviceMetadata. [MESHSAT-850]
+	if fr.FirmwareVersion != "" {
+		t.mu.Lock()
+		changed := t.firmwareVer != fr.FirmwareVersion
+		t.firmwareVer = fr.FirmwareVersion
+		t.mu.Unlock()
+		if changed {
+			log.Info().Str("firmware", fr.FirmwareVersion).Msg("meshtastic firmware version")
+		}
 	}
 
 	// Config sections
@@ -844,7 +941,13 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	// each way on the kits, one NAK per request, every hop persisted as a
 	// message row. Never ask across an undecryptable packet, and ask a named
 	// or unnamed node at most once per nodeInfoRequestInterval. [MESHSAT-1000]
-	needsNodeInfo := node.LongName == "" && pkt.From != myNum && pkt.Decoded != nil
+	//
+	// Never ask the local radio itself, and never before MyNodeInfo has
+	// told us its number: a packet from the local node can arrive ahead of
+	// MyNodeInfo in the handshake, and a NodeInfo request to the radio's own
+	// number makes the firmware zero its own NodeDB row, which renumbers the
+	// radio at its next boot (both kits, 13 Sep 2026). [MESHSAT-1102]
+	needsNodeInfo := node.LongName == "" && myNum != 0 && pkt.From != myNum && pkt.Decoded != nil
 	if needsNodeInfo {
 		if t.nodeInfoReqAt == nil {
 			t.nodeInfoReqAt = make(map[uint32]time.Time)
@@ -1289,10 +1392,12 @@ func (t *DirectMeshTransport) GetStatus(_ context.Context) (*MeshStatus, error) 
 	t.nodesMu.RUnlock()
 
 	status := &MeshStatus{
-		Connected: t.connected,
-		Transport: "serial",
-		Address:   t.port,
-		NumNodes:  numNodes,
+		Connected:       t.connected,
+		Transport:       "serial",
+		Address:         t.port,
+		NumNodes:        numNodes,
+		FirmwareVersion: t.firmwareVer,
+		OwnRowZeroed:    t.ownRowZeroed,
 	}
 
 	if t.myNodeNum != 0 {
@@ -1596,6 +1701,14 @@ func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32)
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
 		return ErrNotConnected
+	}
+	// A request to the radio's own number zeroes its own NodeDB row and
+	// renumbers it at its next boot. [MESHSAT-1102]
+	if t.myNodeNum == 0 {
+		return ErrNodeNumUnknown
+	}
+	if nodeNum == t.myNodeNum {
+		return ErrNodeInfoSelf
 	}
 	toRadio := buildRequestNodeInfo(t.myNodeNum, nodeNum)
 	return sendFrame(t.file, toRadio)

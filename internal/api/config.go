@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -257,7 +258,15 @@ func (s *Server) handleRequestNodeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.mesh.RequestNodeInfo(r.Context(), req.NodeNum); err != nil {
-		writeError(w, http.StatusInternalServerError, "request nodeinfo failed: "+err.Error())
+		switch {
+		case errors.Is(err, transport.ErrNodeInfoSelf):
+			// Would zero the radio's own NodeDB row. [MESHSAT-1102]
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, transport.ErrNodeNumUnknown):
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "request nodeinfo failed: "+err.Error())
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "nodeinfo request sent"})
