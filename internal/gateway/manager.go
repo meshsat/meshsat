@@ -1699,4 +1699,10 @@ type GatewayStatusResponse struct {
 	ReceiveLevelAt *time.Time `json:"receive_level_at,omitempty"`
 	LastDecodeAt   *time.Time `json:"last_decode_at,omitempty"`
 	ReceiveState   *string    `json:"receive_state,omitempty"`
+	// Device health of the device behind this gateway (ok, degraded,
+	// healing, failed, paused, unknown), filled in by the API from the
+	// health watchdog. `connected` stays the link flag: a modem can hold its
+	// serial link while it has stopped answering. [MESHSAT-1064]
+	HealthState  string `json:"health_state,omitempty"`
+	HealthDetail string `json:"health_detail,omitempty"`
 }

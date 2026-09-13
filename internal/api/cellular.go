@@ -123,7 +123,7 @@ func (s *Server) handleGetCellularSignalHistory(w http.ResponseWriter, r *http.R
 }
 
 // @Summary Get cellular modem status
-// @Description Returns cellular modem connection status, SIM state, operator, and network info
+// @Description Returns cellular modem connection status, SIM state, operator, and network info, plus health_state and health_detail from the device health watchdog (connected is only the serial link) [MESHSAT-1064]
 // @Tags cellular
 // @Produce json
 // @Success 200 {object} map[string]interface{}
@@ -133,6 +133,9 @@ func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request)
 	if s.cellTransport != nil {
 		status, err := s.cellTransport.GetStatus(r.Context())
 		if err == nil {
+			if state, detail, ok := s.cellularHealth(); ok {
+				status.HealthState, status.HealthDetail = state, detail
+			}
 			writeJSON(w, http.StatusOK, status)
 			return
 		}
@@ -157,6 +160,10 @@ func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request)
 		if ci.MCC != "" && ci.MNC != "" {
 			result["operator"] = ci.MCC + ci.MNC
 		}
+	}
+	if state, detail, ok := s.cellularHealth(); ok {
+		result["health_state"] = state
+		result["health_detail"] = detail
 	}
 	// Enrich with latest signal reading (has operator PLMN)
 	sig, sigErr := s.db.GetLatestCellularSignal()

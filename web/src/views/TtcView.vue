@@ -218,10 +218,17 @@ const lanes = computed(() => ([
       ? 'This kit hears nothing right now.'
       : 'Radio, straight to the other kit.' },
   { key: 'hub_sms', lane: 'hub', card: 'hub', name: 'SMS via the Hub', fact: '',
-    state: '', detail: 'The Hub passes it on by SMS.' },
+    state: smsState.value, detail: 'The Hub passes it on by SMS.' },
   { key: 'b2b_sms', lane: 'sms', card: 'sms', name: 'SMS kit to kit', fact: '',
-    state: '', detail: 'One text to the other kit\'s SIM.' },
+    state: smsState.value, detail: 'One text to the other kit\'s SIM.' },
 ]))
+// Both SMS routes ride the cellular modem. A modem that keeps its serial
+// link while it has stopped answering reads healing or down on both rows,
+// from the device health watchdog, instead of looking fine. [MESHSAT-1064]
+const smsState = computed(() => {
+  const s = chip('cellular').state
+  return s === 'failed' ? 'down' : (s === 'degraded' || s === 'healing') ? 'healing' : ''
+})
 const laneCard = (lane) => (lanes.value.find(l => l.lane === lane) || {}).card || 'air'
 async function selectPath(key) {
   touch()
