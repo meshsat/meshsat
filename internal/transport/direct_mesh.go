@@ -440,12 +440,12 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	t.connectFails.Store(0)
 	t.lastConnectErr = ""
 
-	// Keep DTR and RTS up when this session closes, so a bridge restart or
-	// a reconnect never de-asserts and re-asserts DTR on the radio's
-	// TinyUSB stack. [MESHSAT-850]
-	if err := keepLinesOnClose(portPath); err != nil {
-		log.Warn().Err(err).Str("port", portPath).Msg("meshtastic: could not clear HUPCL, closing this port will drop DTR")
-	}
+	// The port keeps Linux's HUPCL, so a close drops DTR. Clearing it (as the
+	// official Meshtastic Python client does) was tried on 13 Sep 2026 and
+	// did not stop the silent radio after a restart: parallax went silent on
+	// 2 of 5 restarts with DTR held up, against 1 of 6 before. The radios run
+	// TinyUSB, where a held DTR tells the firmware a host is still reading
+	// while the bridge is down. [MESHSAT-850]
 
 	// Set read timeout for frame reader loop
 	sp.SetReadTimeout(meshReadTimeout)
