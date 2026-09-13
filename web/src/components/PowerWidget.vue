@@ -21,9 +21,14 @@ const pct = computed(() => bat.value ? Math.max(0, Math.min(100, Math.round(bat.
 const onMains = computed(() => !!(bat.value && bat.value.ac_present))
 const full = computed(() => pct.value !== null && pct.value >= 99)
 const stale = computed(() => !!(bat.value && bat.value.stale))
+// Mains is present but the pack kept draining for 30 min: the input
+// cannot carry the kit. Written by the x1202 monitor. [MESHSAT-794]
+const draining = computed(() => !missing.value && !stale.value && !!(bat.value && bat.value.input_insufficient))
+const DRAIN_NOTE = 'input low: pack draining on mains'
 const state = computed(() => {
   if (missing.value || !bat.value) return 'no UPS reading'
   if (stale.value) return 'UPS reading stale'
+  if (draining.value) return DRAIN_NOTE
   if (onMains.value) return full.value ? 'mains, full' : 'mains, charging'
   return 'battery'
 })
@@ -85,7 +90,9 @@ onUnmounted(() => { clearInterval(timer); window.removeEventListener('keydown', 
         <path v-if="onMains" d="M14 3 L11 9 h4 l-2 5 5 -7 h-4 z" fill="#040406" stroke="#040406" stroke-width="0.6" />
       </svg>
       <span v-if="pct !== null" class="tabular-nums">{{ pct }}%</span>
-      <span v-if="!compact" class="text-gray-400">{{ state }}</span>
+      <!-- the header chip is compact on every screen: short word there, the full note in the title and the menu -->
+      <span v-if="draining" class="text-amber-300">{{ compact ? 'input low' : DRAIN_NOTE }}</span>
+      <span v-else-if="!compact" class="text-gray-400">{{ state }}</span>
     </button>
 
     <Teleport to="body">
@@ -97,8 +104,8 @@ onUnmounted(() => { clearInterval(timer); window.removeEventListener('keydown', 
           </div>
           <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 mt-3 text-sm">
             <dt class="text-gray-400">Supply</dt><dd class="text-gray-100">{{ missing ? 'no UPS reading on this kit' : (onMains ? 'mains connected' : 'on battery') }}</dd>
-            <dt class="text-gray-400">Pack</dt><dd class="text-gray-100">{{ pct !== null ? `${pct}%` : '' }}<span v-if="bat && bat.voltage" class="text-gray-400"> at {{ bat.voltage.toFixed(2) }} V</span></dd>
-            <dt class="text-gray-400">Charging</dt><dd class="text-gray-100">{{ missing ? '' : (onMains ? (full ? 'full, holding' : 'yes') : 'no, discharging') }}</dd>
+            <dt class="text-gray-400">Pack</dt><dd class="text-gray-100">{{ pct !== null ? `${pct}%` : '' }}<span v-if="bat && bat.voltage" class="text-gray-400"> at {{ bat.voltage.toFixed(2) }} V</span><span v-if="draining" class="block text-xs text-amber-300">{{ DRAIN_NOTE }}</span></dd>
+            <dt class="text-gray-400">Charging</dt><dd :class="draining ? 'text-amber-300' : 'text-gray-100'">{{ missing ? '' : (draining ? 'no, the input cannot keep up' : (onMains ? (full ? 'full, holding' : 'yes') : 'no, discharging')) }}</dd>
             <dt v-if="stale" class="text-amber-300">Reading</dt><dd v-if="stale" class="text-amber-300">stale, the UPS monitor has not written for a minute</dd>
           </dl>
 
