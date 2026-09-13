@@ -89,9 +89,11 @@ onUnmounted(() => { clearInterval(timer); window.removeEventListener('keydown', 
         <rect v-if="pct !== null" x="3" y="4" :width="Math.max(1, 24 * pct / 100)" height="8" rx="1" fill="currentColor" opacity="0.85" />
         <path v-if="onMains" d="M14 3 L11 9 h4 l-2 5 5 -7 h-4 z" fill="#040406" stroke="#040406" stroke-width="0.6" />
       </svg>
-      <span v-if="pct !== null" class="tabular-nums">{{ pct }}%</span>
-      <!-- the header chip is compact on every screen: short word there, the full note in the title and the menu -->
-      <span v-if="draining" class="text-amber-300">{{ compact ? 'input low' : DRAIN_NOTE }}</span>
+      <span v-if="pct !== null" class="tabular-nums" :class="{ 'text-amber-300': draining }">{{ pct }}%</span>
+      <!-- the compact header chip must keep its width: extra words there pushed the
+           booth header's channel chips into the kit name. Amber percentage in the
+           chip, the full note in the title and the menu. -->
+      <span v-if="draining && !compact" class="text-amber-300">{{ DRAIN_NOTE }}</span>
       <span v-else-if="!compact" class="text-gray-400">{{ state }}</span>
     </button>
 
