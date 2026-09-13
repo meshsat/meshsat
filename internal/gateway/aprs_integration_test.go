@@ -284,6 +284,7 @@ func TestAPRSIntegration_EncryptedForwardWireFormat(t *testing.T) {
 		SSID:             10,
 		FrequencyMHz:     868.0, // ISM, not amateur — avoids the band warning
 		ExternalDirewolf: true,
+		AckAttempts:      -1, // the plain {E1} wire format; aprs_ack_test.go covers the id
 	}
 
 	gw := NewAPRSGateway(cfg, nil)

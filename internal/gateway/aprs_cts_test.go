@@ -245,7 +245,7 @@ func TestAPRSCTS_EveryRepeatCopyPassesTheGate(t *testing.T) {
 	g.SetPacketSink(c.sink, "aprs_0")
 	stopStamp := restampPeer(g, 20*time.Millisecond)
 
-	g.sendMessage(context.Background(), &transport.MeshMessage{From: 0xAABBCCDD, DecodedText: "three copies", MsgRef: "r3"})
+	g.sendMessage(context.Background(), &aprsOutbound{msg: &transport.MeshMessage{From: 0xAABBCCDD, DecodedText: "three copies", MsgRef: "r3"}})
 	stopStamp()
 
 	var times []time.Time
@@ -352,7 +352,7 @@ func TestAPRSCTS_CancelReturnsFalse(t *testing.T) {
 	sctx, scancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, scancel)
 	start = time.Now()
-	s.sendMessage(sctx, &transport.MeshMessage{From: 1, DecodedText: "cancel me", MsgRef: "c1"})
+	s.sendMessage(sctx, &aprsOutbound{msg: &transport.MeshMessage{From: 1, DecodedText: "cancel me", MsgRef: "c1"}})
 	if waited := time.Since(start); waited > time.Second {
 		t.Errorf("sendMessage slept %v through a cancelled repeat gap", waited)
 	}
