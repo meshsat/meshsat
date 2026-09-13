@@ -25,6 +25,11 @@ func TestRadioSilentSinceConnect(t *testing.T) {
 		{"open 30 s, frame after open", true, opened, opened.Add(time.Second), 0, false},
 		{"open only 10 s", true, now.Add(-10 * time.Second), time.Time{}, 0, false},
 		{"no session time", true, time.Time{}, time.Time{}, 0, false},
+		// The retry loop seen on parallax 13 Sep 20:42: a fresh session every
+		// 15 s, each one silent, so no session ever reaches 20 s.
+		{"retry loop: fresh 5 s session after silent handshakes", true, now.Add(-5 * time.Second), opened.Add(-time.Hour), 2, true},
+		// A radio that talks again must never be cut because of an old count.
+		{"stale silent count but a frame in this session", true, opened, opened.Add(2 * time.Second), 1, false},
 	}
 	for _, c := range cases {
 		if got := radioSilentSinceConnect(c.connected, c.connectedAt, c.lastFrame, c.fails, now); got != c.want {
