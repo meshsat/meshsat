@@ -106,9 +106,9 @@ func ackFrom(src AX25Address, to, id string) []byte {
 
 var testPeer = AX25Address{Call: "PA3ENC", SSID: 7}
 
-// The frame carries its id, the peer's ack releases the sender, and the repeat
-// copy is not sent once the ack is in.
-func TestAPRSAck_AckReleasesSenderAndSkipsTheRepeat(t *testing.T) {
+// The frame carries its id, the peer's ack releases the sender, and no blind
+// repeat copy follows it.
+func TestAPRSAck_AckReleasesSenderWithoutABlindRepeat(t *testing.T) {
 	tnc := newMockKISSTNC(t)
 	defer tnc.close()
 	gw := startAckGateway(t, tnc, APRSConfig{TXRepeat: 2, TXRepeatGapMs: 1200, AckTimeoutMs: 3000})
@@ -140,7 +140,7 @@ func TestAPRSAck_AckReleasesSenderAndSkipsTheRepeat(t *testing.T) {
 
 	time.Sleep(1800 * time.Millisecond) // past the latest repeat (1200 ms + 25 %)
 	if n := len(tnc.frames()); n != 1 {
-		t.Fatalf("%d frames on the air, want 1: an acked message needs no repeat copy", n)
+		t.Fatalf("%d frames on the air, want 1: an ack-requested frame goes out once per attempt", n)
 	}
 	st := gw.GetAPRSStatus()
 	if st["acks_received"] != int64(1) || st["ack_failures"] != int64(0) {
@@ -148,20 +148,22 @@ func TestAPRSAck_AckReleasesSenderAndSkipsTheRepeat(t *testing.T) {
 	}
 }
 
-// No ack: the identical frame goes out again, then Forward fails with ErrNoAck.
+// No ack: the identical frame goes out again, one copy per attempt even with
+// TXRepeat set, then Forward fails with ErrNoAck.
 func TestAPRSAck_UnackedMessageIsSentAgainThenFails(t *testing.T) {
 	tnc := newMockKISSTNC(t)
 	defer tnc.close()
-	gw := startAckGateway(t, tnc, APRSConfig{TXRepeat: 1, AckAttempts: 3, AckTimeoutMs: 150})
+	gw := startAckGateway(t, tnc, APRSConfig{TXRepeat: 2, TXRepeatGapMs: 50, AckAttempts: 3, AckTimeoutMs: 150})
 	defer gw.Stop()
 
 	err := gw.Forward(context.Background(), encryptedMsg("QUFBQUFBQUE="))
 	if !errors.Is(err, transport.ErrNoAck) {
 		t.Fatalf("err %v, want ErrNoAck", err)
 	}
+	time.Sleep(200 * time.Millisecond)
 	frames := waitTNCFrames(t, tnc, 3, time.Second)
 	if len(frames) != 3 {
-		t.Fatalf("%d frames, want 3 attempts", len(frames))
+		t.Fatalf("%d frames, want 3: one per attempt, no repeat copies", len(frames))
 	}
 	if string(frames[0]) != string(frames[1]) || string(frames[1]) != string(frames[2]) {
 		t.Fatal("a retransmission differs from the first frame")

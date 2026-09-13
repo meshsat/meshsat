@@ -25,15 +25,15 @@ import (
 // uses the APRS message-ack convention: the sender appends a message id to the
 // info field ("{E1}<ciphertext>{ABCDE"), the receiver answers with a standard
 // APRS ack message addressed to the sender (":MSTSRT-10:ackABCDE"), and a frame
-// that is not acked in time goes out again. When every attempt goes unanswered
-// Forward fails with ErrAPRSNoAck. Plaintext frames and directed messages are
-// unchanged.
+// that is not acked in time goes out again, one copy per attempt. When every
+// attempt goes unanswered Forward fails with ErrAPRSNoAck. Plaintext frames and
+// directed messages are unchanged.
 
 // ErrAPRSNoAck means the peer never acknowledged an encrypted frame.
 var ErrAPRSNoAck = fmt.Errorf("aprs: %w", transport.ErrNoAck)
 
 const (
-	defaultAPRSAckAttempts = 3
+	defaultAPRSAckAttempts = 4
 	defaultAPRSAckTimeout  = 8 * time.Second
 	// aprsAckIDLen is the message id length: five alphanumerics, the longest
 	// APRS 1.0.1 allows.
@@ -137,27 +137,12 @@ func aprsAckReply(pkt *APRSPacket) (id string, reject, ok bool) {
 }
 
 // aprsOutbound is one message for the write worker. With an ack id the frame
-// carries it, the repeat copies stop once the ack is in, and the outcome of the
-// transmission is reported on sent.
+// carries it and goes out once, and the outcome of the transmission is reported
+// on sent.
 type aprsOutbound struct {
 	msg   *transport.MeshMessage
 	ackID string
-	acked <-chan struct{} // closed when the peer acks; nil without an ack id
-	sent  chan error      // buffered; nil for a message nobody waits on
-}
-
-// alreadyAcked reports whether the peer has acked this message. It reads the
-// item's own channel, which stays valid after the waiting Forward returns.
-func (o *aprsOutbound) alreadyAcked() bool {
-	if o.acked == nil {
-		return false
-	}
-	select {
-	case <-o.acked:
-		return true
-	default:
-		return false
-	}
+	sent  chan error // buffered; nil for a message nobody waits on
 }
 
 func (o *aprsOutbound) report(err error) {
@@ -267,7 +252,7 @@ func (g *APRSGateway) forwardAcked(ctx context.Context, msg *transport.MeshMessa
 	attempts := g.config.ackAttempts()
 	start := time.Now()
 	for attempt := 1; attempt <= attempts; attempt++ {
-		item := &aprsOutbound{msg: msg, ackID: id, acked: acked, sent: make(chan error, 1)}
+		item := &aprsOutbound{msg: msg, ackID: id, sent: make(chan error, 1)}
 		select {
 		case g.outCh <- item:
 		case <-acked:
