@@ -63,21 +63,22 @@ func TestAPRSTiming_MessageGapIsJittered(t *testing.T) {
 // than transmitting on top of a message that is mid-pair.
 func TestAPRSTiming_BeaconWaitsForAQuietChannel(t *testing.T) {
 	origQuiet, origMax := beaconQuietFor, beaconDeferMax
-	// lastActive is unix SECONDS, so the threshold has to be seconds too:
-	// at the moment of the call the recorded traffic already reads as up to
-	// one second old.
-	beaconQuietFor = 2 * time.Second
+	// The traffic stamps are nanoseconds, so a sub-second threshold is exact.
+	beaconQuietFor = 500 * time.Millisecond
 	beaconDeferMax = 10 * time.Second
 	defer func() { beaconQuietFor, beaconDeferMax = origQuiet, origMax }()
 
 	g := &APRSGateway{config: APRSConfig{TXRepeat: 2, TXRepeatGapMs: 100}}
-	g.lastActive.Store(time.Now().Unix()) // traffic right now
+	// Our own transmission is long past; a peer frame arrived right now. The
+	// later of the two is what counts.
+	g.lastTX.Store(time.Now().Add(-time.Minute).UnixNano())
+	g.lastPeerRX.Store(time.Now().UnixNano())
 
 	start := time.Now()
 	if !g.waitForQuietChannel(context.Background()) {
 		t.Fatal("waitForQuietChannel reported shutdown")
 	}
-	if waited := time.Since(start); waited < 900*time.Millisecond {
+	if waited := time.Since(start); waited < 450*time.Millisecond {
 		t.Errorf("beacon went out after %v with the channel busy; it should have waited", waited)
 	}
 }
@@ -91,7 +92,7 @@ func TestAPRSTiming_BeaconDeferralIsCapped(t *testing.T) {
 	defer func() { beaconQuietFor, beaconDeferMax = origQuiet, origMax }()
 
 	g := &APRSGateway{config: APRSConfig{TXRepeat: 2, TXRepeatGapMs: 100}}
-	g.lastActive.Store(time.Now().Unix())
+	g.lastPeerRX.Store(time.Now().UnixNano())
 
 	start := time.Now()
 	if !g.waitForQuietChannel(context.Background()) {
@@ -110,7 +111,7 @@ func TestAPRSTiming_BeaconDeferralHonoursShutdown(t *testing.T) {
 	defer func() { beaconQuietFor, beaconDeferMax = origQuiet, origMax }()
 
 	g := &APRSGateway{config: APRSConfig{TXRepeat: 2, TXRepeatGapMs: 100}}
-	g.lastActive.Store(time.Now().Unix())
+	g.lastTX.Store(time.Now().UnixNano())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
