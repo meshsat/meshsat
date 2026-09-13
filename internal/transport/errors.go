@@ -17,3 +17,10 @@ import "errors"
 // message is deliberately the same string the transports used before, so
 // anything reading logs or last_error sees no change.
 var ErrNotConnected = errors.New("not connected")
+
+// ErrNoAck is returned by a bearer that sent a message and never heard the far
+// end acknowledge it: an APRS frame can vanish on the air with nothing telling
+// the sender. The message may or may not have arrived. The delivery worker
+// treats it as not delivered and hands it to the next member of the rule's
+// failover group when there is one. [MESHSAT-1021]
+var ErrNoAck = errors.New("no acknowledgement from the peer")

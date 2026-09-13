@@ -390,6 +390,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			passSched:       d.satellitePassSched(desc),
 			routingIdentity: d.routingIdentity,
 			custodyMgr:      d.custodyMgr,
+			failover:        d.failover,
 			cancel:          workerCancel,
 		}
 		d.workers[iface.ID] = w
@@ -440,6 +441,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		passSched:       d.satellitePassSched(desc),
 		routingIdentity: d.routingIdentity,
 		custodyMgr:      d.custodyMgr,
+		failover:        d.failover,
 		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -1173,6 +1175,7 @@ type DeliveryWorker struct {
 	passSched       PassStateProvider      // satellite pass scheduler (nil for non-satellite)
 	routingIdentity *routing.Identity      // routing identity for delivery confirmations
 	custodyMgr      *CustodyManager        // DTN custody transfer (MESHSAT-408)
+	failover        *FailoverResolver      // next group member when a bearer gets no ack [MESHSAT-1021]
 	cancel          context.CancelFunc     // per-worker cancellation
 }
 
@@ -1666,6 +1669,16 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 			Msg("bearer still down past the defer window, treating as an ordinary failure")
 	}
 
+	// The bearer sent the message and the far end never acknowledged it (APRS,
+	// after every retransmission). Retrying the same link later helps little;
+	// when the rule forwards to a failover group, move the message to the next
+	// member now. On 13 Sep 2026 8 of 120 relayed texts were lost this way, and
+	// the SMS fallback, which only engages for a down or deaf member, never saw
+	// them. [MESHSAT-1021]
+	if errors.Is(deliveryErr, transport.ErrNoAck) && w.failOverToNextMember(del, errMsg) {
+		return
+	}
+
 	// QoS 0 (best-effort): mark dead immediately, no retry
 	if del.QoSLevel == 0 {
 		if err := w.db.SetDeliveryStatus(del.ID, "dead", errMsg, ""); err != nil {
@@ -1734,6 +1747,96 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 			Time: time.Now().UTC().Format(time.RFC3339),
 		})
 	}
+}
+
+// failOverToNextMember queues del on the next available member of its rule's
+// failover group and closes this delivery. It reports false, leaving del to the
+// ordinary retry path, when the rule does not forward to a group or no other
+// member can carry the message now. [MESHSAT-1021]
+func (w *DeliveryWorker) failOverToNextMember(del database.MessageDelivery, reason string) bool {
+	if w.failover == nil || del.RuleID == nil {
+		return false
+	}
+	rule, err := w.db.GetAccessRule(*del.RuleID)
+	if err != nil || rule == nil {
+		return false
+	}
+	next := w.failover.ResolveExcluding(rule.ForwardTo, del.Channel)
+	if next == "" || next == del.Channel || visitedIncludes(del.Visited, next) {
+		return false
+	}
+
+	moved := database.MessageDelivery{
+		MsgRef:      del.MsgRef,
+		RuleID:      del.RuleID,
+		Channel:     next,
+		Status:      "queued",
+		Priority:    del.Priority,
+		Payload:     del.Payload,
+		TextPreview: del.TextPreview,
+		MaxRetries:  del.MaxRetries,
+		Visited:     del.Visited,
+		TTLSeconds:  del.TTLSeconds,
+		ExpiresAt:   del.ExpiresAt,
+		QoSLevel:    del.QoSLevel,
+		Signature:   del.Signature,
+		SignerID:    del.SignerID,
+		Precedence:  del.Precedence,
+		Class:       del.Class,
+	}
+	if seq, seqErr := w.db.IncrementEgressSeq(next); seqErr == nil {
+		moved.SeqNum = seq
+	}
+	newID, err := w.db.InsertDelivery(moved)
+	if err != nil {
+		log.Error().Err(err).Int64("id", del.ID).Str("next", next).Msg("no ack: could not queue the message on the next failover member")
+		return false
+	}
+	moved.ID = newID
+
+	detail := fmt.Sprintf("%s; moved to %s as delivery %d", reason, next, newID)
+	if err := w.db.SetDeliveryStatus(del.ID, "dead", detail, ""); err != nil {
+		log.Error().Err(err).Int64("id", del.ID).Msg("no ack: could not close the original delivery")
+	}
+	if w.signing != nil {
+		ifacePtr := &w.channelID
+		dir := "egress"
+		delID := del.ID
+		w.signing.AuditEvent("failover", ifacePtr, &dir, &delID, del.RuleID, detail)
+	}
+	log.Warn().Int64("id", del.ID).Str("channel", w.channelID).Str("group", rule.ForwardTo).
+		Str("next", next).Int64("new_id", newID).Msg("no ack from the peer, message moved to the next failover member")
+
+	if w.emit != nil {
+		now := time.Now().UTC().Format(time.RFC3339)
+		w.emit(transport.MeshEvent{
+			Type:    "delivery_dead",
+			Message: fmt.Sprintf("No ack on %s, message moved to %s", w.channelID, next),
+			Data:    deliveryEventData(del, "dead", map[string]interface{}{"error": reason, "failed_over_to": next, "new_id": newID}),
+			Time:    now,
+		})
+		w.emit(transport.MeshEvent{
+			Type:    "delivery_queued",
+			Message: fmt.Sprintf("Failover: %s->%s queued", w.channelID, next),
+			Data:    deliveryEventData(moved, "queued", map[string]interface{}{"failed_over_from": w.channelID, "rule_id": *del.RuleID}),
+			Time:    now,
+		})
+	}
+	return true
+}
+
+// visitedIncludes reports whether a delivery's visited JSON array names ifaceID.
+func visitedIncludes(visited, ifaceID string) bool {
+	var ids []string
+	if err := json.Unmarshal([]byte(visited), &ids); err != nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == ifaceID {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *DeliveryWorker) calculateNextRetry(retries int) time.Time {

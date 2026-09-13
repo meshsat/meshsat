@@ -72,6 +72,18 @@ type APRSConfig struct {
 	// transmit, and 1 to 3 messages in 20 lost both copies. Zero derives a
 	// value from TXRepeatGapMs rather than sharing it. [MESHSAT-1021]
 	BeaconRepeatGapMs int `json:"beacon_repeat_gap_ms"`
+
+	// Per-message acknowledgement for encrypted frames, which only a MeshSat
+	// peer can read. The sender appends an APRS message id and waits for the
+	// peer's standard APRS ack; a frame that is not acked within AckTimeoutMs
+	// of its last copy goes out again, AckAttempts times in all, and Forward
+	// then fails so the delivery ledger can move the message to the next
+	// member of its failover group. Measured before this on 13 Sep 2026: 112
+	// of 120 relayed texts arrived and the sender never knew about the other
+	// 8. AckAttempts 0 = default (3), negative = off; AckTimeoutMs 0 = 8000.
+	// [MESHSAT-1021]
+	AckAttempts  int `json:"ack_attempts"`
+	AckTimeoutMs int `json:"ack_timeout_ms"`
 }
 
 // Direwolf timing defaults (Direwolf's own), used when a field is zero.

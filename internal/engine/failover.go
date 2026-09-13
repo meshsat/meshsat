@@ -173,6 +173,35 @@ func (fr *FailoverResolver) Resolve(targetID string) string {
 	return ""
 }
 
+// ResolveExcluding returns the first member of a failover group, in priority
+// order, that is not exclude and can carry traffic now: online and not deaf. It
+// moves a message off a member that just failed to deliver it, so unlike
+// Resolve it never falls back to a member that would only hold the delivery. A
+// target that is not a failover group resolves to "". [MESHSAT-1021]
+func (fr *FailoverResolver) ResolveExcluding(targetID, exclude string) string {
+	group, err := fr.db.GetFailoverGroup(targetID)
+	if err != nil {
+		return ""
+	}
+	members, err := fr.db.GetFailoverMembers(group.ID)
+	if err != nil {
+		return ""
+	}
+	for _, m := range members {
+		if m.InterfaceID == exclude {
+			continue
+		}
+		status, err := fr.ifaceMgr.GetStatus(m.InterfaceID)
+		if err != nil {
+			continue
+		}
+		if fr.online(m.InterfaceID, status.State) && !fr.deaf(m.InterfaceID) {
+			return m.InterfaceID
+		}
+	}
+	return ""
+}
+
 // SelectBearers returns all online members of a bond group as HeMB BearerProfiles.
 // Returns nil if the ID is not a bond group.
 func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(ifaceID string) func(ctx context.Context, data []byte) error) []hemb.BearerProfile {

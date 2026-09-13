@@ -12,7 +12,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
@@ -32,8 +31,8 @@ type APRSGateway struct {
 	db     *database.DB
 	kiss   *KISSConn
 	inCh   chan InboundMessage
-	outCh  chan *transport.MeshMessage
-	rawOut chan []byte // ready AX.25 frames (status beacon) sent by the write worker [MESHSAT-857]
+	outCh  chan *aprsOutbound
+	rawOut chan []byte // ready AX.25 frames (status beacon, acks) sent by the write worker [MESHSAT-857]
 
 	// Nil when APRSConfig.ExternalDirewolf is true — caller is responsible
 	// for running Direwolf out-of-band. [MESHSAT-516]
@@ -79,6 +78,17 @@ type APRSGateway struct {
 	packetMu    sync.RWMutex
 	packetSink  PacketSink
 	packetIface string
+
+	// Per-message acks for encrypted frames. done is closed when the running
+	// gateway stops, so a Forward waiting for an ack returns. [MESHSAT-1021]
+	acks         aprsAckWaiters
+	ackLedger    aprsAckLedger
+	acksSent     atomic.Int64
+	acksReceived atomic.Int64
+	ackRetries   atomic.Int64
+	ackFailures  atomic.Int64
+	lifeMu       sync.Mutex
+	done         chan struct{}
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -214,7 +224,7 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 		db:      db,
 		kiss:    kiss,
 		inCh:    make(chan InboundMessage, 32),
-		outCh:   make(chan *transport.MeshMessage, 10),
+		outCh:   make(chan *aprsOutbound, 10),
 		rawOut:  make(chan []byte, 4),
 		tracker: NewAPRSTracker(),
 	}
@@ -282,6 +292,10 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"bad_frames":      g.badFrames.Load(),
 		"repaired_frames": g.kiss.Repaired.Load(),
 		"cts_deferred":    g.ctsDeferred.Load(),
+		"acks_sent":       g.acksSent.Load(),
+		"acks_received":   g.acksReceived.Load(),
+		"ack_retries":     g.ackRetries.Load(),
+		"ack_failures":    g.ackFailures.Load(),
 		"heard_count":     len(g.tracker.GetHeardStations()),
 		"packet_types":    g.tracker.GetPacketTypeBreakdown(),
 		"kiss_addr":       g.kiss.Target(),
@@ -351,6 +365,10 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 	}
 	g.connected.Store(true)
 
+	g.lifeMu.Lock()
+	g.done = make(chan struct{})
+	g.lifeMu.Unlock()
+
 	g.wg.Add(3)
 	go g.readWorker(bgCtx)
 	go g.writeWorker(bgCtx)
@@ -386,6 +404,12 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 
 // Stop shuts down the APRS gateway.
 func (g *APRSGateway) Stop() error {
+	g.lifeMu.Lock()
+	if g.done != nil {
+		close(g.done)
+		g.done = nil
+	}
+	g.lifeMu.Unlock()
 	if g.cancel != nil {
 		g.cancel()
 	}
@@ -424,20 +448,30 @@ func (g *APRSGateway) dialWithRetry(ctx context.Context, budget time.Duration) e
 	return fmt.Errorf("kiss dial timed out after %s: %w", budget, lastErr)
 }
 
-// Forward enqueues a MeshSat message for APRS transmission.
+// Forward sends a MeshSat message over APRS. An encrypted message, which only a
+// MeshSat peer can read, waits for the peer's ack and fails when none comes
+// (forwardAcked); everything else is queued for the write worker and returns at
+// once. [MESHSAT-1021]
 func (g *APRSGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
+	if msg.Encrypted && g.config.ackAttempts() > 0 {
+		return g.forwardAcked(ctx, msg)
+	}
+	return g.enqueue(msg)
+}
+
+// Enqueue submits a message for outbound delivery without waiting for an ack.
+func (g *APRSGateway) Enqueue(msg *transport.MeshMessage) error {
+	return g.enqueue(msg)
+}
+
+func (g *APRSGateway) enqueue(msg *transport.MeshMessage) error {
 	select {
-	case g.outCh <- msg:
+	case g.outCh <- &aprsOutbound{msg: msg}:
 		return nil
 	default:
 		g.errors.Add(1)
 		return fmt.Errorf("aprs outbound queue full")
 	}
-}
-
-// Enqueue submits a message for outbound delivery via the gateway.
-func (g *APRSGateway) Enqueue(msg *transport.MeshMessage) error {
-	return g.Forward(context.Background(), msg)
 }
 
 // Receive returns the inbound message channel.
@@ -596,8 +630,14 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			if srcAddr != "" {
 				g.tracker.RecordAX25(srcAddr, "")
 			}
+			// A trailing message id asks for an ack. Our own frame echoed by
+			// the TNC is never acked. [MESHSAT-1021]
+			body, ackID := splitAckRequest(string(frame.Info[len(aprsEncryptedPrefix):]))
+			if ackID != "" && !g.isOwnSource(frame.Src) {
+				g.sendAck(frame.Src, ackID)
+			}
 			msg := InboundMessage{
-				Text:     string(frame.Info[len(aprsEncryptedPrefix):]),
+				Text:     body,
 				Source:   "aprs",
 				FromAddr: srcAddr,
 			}
@@ -632,6 +672,14 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 		// Track heard station and activity [MESHSAT-403]
 		g.tracker.RecordRX(pkt)
 
+		// APRS acks and rejects are protocol traffic, not messages: an ack for
+		// one of our frames releases its sender, and none is ever forwarded to
+		// the mesh. [MESHSAT-1021]
+		if id, reject, ok := aprsAckReply(pkt); ok {
+			g.handleAckReply(pkt, id, reject)
+			continue
+		}
+
 		// Status frames ('>', the peer kit's beacon and any station's status
 		// report) are liveness, not messages: they update the heard list and
 		// the receive health and stop here, so an aprs -> mesh relay rule
@@ -665,8 +713,8 @@ func (g *APRSGateway) writeWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-g.outCh:
-			g.sendMessage(ctx, msg)
+		case item := <-g.outCh:
+			g.sendMessage(ctx, item)
 		case frame := <-g.rawOut:
 			g.sendRaw(ctx, frame)
 		}
@@ -775,7 +823,17 @@ func (g *APRSGateway) sendRaw(ctx context.Context, frame []byte) {
 	g.recordFrame(DirTX, frame, "")
 }
 
-func (g *APRSGateway) sendMessage(ctx context.Context, msg *transport.MeshMessage) {
+// sendMessage transmits one queued message and reports the outcome to whoever
+// waits on it. [MESHSAT-1021]
+func (g *APRSGateway) sendMessage(ctx context.Context, item *aprsOutbound) {
+	item.report(g.transmitMessage(ctx, item))
+}
+
+// transmitMessage puts a message on the air, with its repeat copies. The error
+// is about the first copy only: once that is out, a lost repeat is left to the
+// ack or to the far kit's dedup.
+func (g *APRSGateway) transmitMessage(ctx context.Context, item *aprsOutbound) error {
+	msg := item.msg
 	src := AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}
 	dst := AX25Address{Call: "APMSHT", SSID: 0} // APMSxx = MeshSat tocall
 
@@ -794,11 +852,11 @@ func (g *APRSGateway) sendMessage(ctx context.Context, msg *transport.MeshMessag
 		// so strip the raw byte here — leaving it in would double-version
 		// and also push a non-printable byte into an ASCII-only APRS info
 		// field, which many igates/parsers reject.
-		cipherText := []byte(msg.DecodedText)
-		if _, stripped := codec.StripVersionByte(cipherText); stripped != nil {
-			cipherText = stripped
+		info = append([]byte(aprsEncryptedPrefix), aprsCipherText(msg)...)
+		// The trailing message id asks the peer for an ack. [MESHSAT-1021]
+		if item.ackID != "" {
+			info = append(append(info, '{'), item.ackID...)
 		}
-		info = append([]byte(aprsEncryptedPrefix), cipherText...)
 		path = nil
 	} else if msg.Destination != "" {
 		// Directed APRS message to a station (`:ADDRESSEE:text`), used by
@@ -815,12 +873,12 @@ func (g *APRSGateway) sendMessage(ctx context.Context, msg *transport.MeshMessag
 
 	frame := EncodeAX25Frame(dst, src, path, info)
 	if !g.waitClearToSend(ctx) {
-		return
+		return fmt.Errorf("aprs: shutting down: %w", transport.ErrNotConnected)
 	}
 	if err := g.kiss.SendFrame(frame); err != nil {
 		log.Warn().Err(err).Msg("aprs: send frame")
 		g.errors.Add(1)
-		return
+		return fmt.Errorf("aprs: send frame: %v: %w", err, transport.ErrNotConnected)
 	}
 	g.lastTX.Store(time.Now().UnixNano())
 
@@ -829,7 +887,7 @@ func (g *APRSGateway) sendMessage(ctx context.Context, msg *transport.MeshMessag
 	g.lastActive.Store(time.Now().Unix())
 	g.recordFrame(DirTX, frame, msg.MsgRef)
 	log.Debug().Str("callsign", FormatCallsign(src)).Bool("encrypted", msg.Encrypted).
-		Int("info_len", len(info)).Msg("aprs: sent packet")
+		Int("info_len", len(info)).Str("ack_id", item.ackID).Msg("aprs: sent packet")
 	// Repeat copies: the same frame again after the gap, so a copy lost on
 	// the air is covered by the other; the far kit dedups. [MESHSAT-857]
 	for i := 1; i < g.config.TXRepeat; i++ {
@@ -837,24 +895,31 @@ func (g *APRSGateway) sendMessage(ctx context.Context, msg *transport.MeshMessag
 		// cannot keep a fixed offset between their pairs. [MESHSAT-1021]
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(jitterDuration(g.repeatGap(), 0.25)):
+		}
+		// A message the peer already acked needs no more copies, and the
+		// channel stays free for the next one. [MESHSAT-1021]
+		if item.alreadyAcked() {
+			log.Debug().Str("ack_id", item.ackID).Msg("aprs: repeat copy skipped, already acked")
+			return nil
 		}
 		// Every copy passes the gate: a peer that keyed up during the gap
 		// must not lose its frame to our repeat. [MESHSAT-1069]
 		if !g.waitClearToSend(ctx) {
-			return
+			return nil
 		}
 		if err := g.kiss.SendFrame(frame); err != nil {
 			log.Warn().Err(err).Int("copy", i+1).Msg("aprs: send repeat")
 			g.errors.Add(1)
-			return
+			return nil
 		}
 		g.lastTX.Store(time.Now().UnixNano())
 		g.tracker.RecordTX()
 		g.recordFrame(DirTX, frame, msg.MsgRef)
 		log.Debug().Int("copy", i+1).Str("msg_ref", msg.MsgRef).Msg("aprs: sent repeat copy")
 	}
+	return nil
 }
 
 // beaconRepeatGap is the pause between the copies of one beacon. It is
