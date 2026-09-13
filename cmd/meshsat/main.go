@@ -2531,6 +2531,12 @@ func main() {
 		log.Warn().Msg("dispatcher drain timed out after 10s — forcing shutdown")
 	}
 
+	// Close the radio's port here, not only in the deferred close at the very
+	// end: the gateway stops and the HTTP shutdown below take seconds, and docker
+	// kills the process at its stop timeout, before a late close could tell the
+	// radio the client left. Close is idempotent. [MESHSAT-850]
+	mesh.Close()
+
 	if satFallback != nil {
 		satFallback.Stop()
 	}
