@@ -121,6 +121,9 @@ type MeshStatus struct {
 	// number came back with an all-zero MAC: the firmware then picks a new
 	// random node number at its next boot. [MESHSAT-1102]
 	OwnRowZeroed bool `json:"own_row_zeroed"`
+	// RebootCount is the radio's MyNodeInfo.reboot_count from the latest
+	// handshake; 0 before the first one. [MESHSAT-1102]
+	RebootCount uint32 `json:"reboot_count,omitempty"`
 }
 
 // SendRequest is a text message send request.

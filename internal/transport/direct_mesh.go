@@ -46,6 +46,9 @@ type DirectMeshTransport struct {
 
 	myNodeNum   uint32
 	firmwareVer string
+	// rebootCount is MyNodeInfo.reboot_count from the latest handshake.
+	// [MESHSAT-1102]
+	rebootCount uint32
 	configID    uint32
 	configDone  bool
 
@@ -437,6 +440,13 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	t.connectFails.Store(0)
 	t.lastConnectErr = ""
 
+	// Keep DTR and RTS up when this session closes, so a bridge restart or
+	// a reconnect never de-asserts and re-asserts DTR on the radio's
+	// TinyUSB stack. [MESHSAT-850]
+	if err := keepLinesOnClose(portPath); err != nil {
+		log.Warn().Err(err).Str("port", portPath).Msg("meshtastic: could not clear HUPCL, closing this port will drop DTR")
+	}
+
 	// Set read timeout for frame reader loop
 	sp.SetReadTimeout(meshReadTimeout)
 
@@ -737,10 +747,22 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 	if fr.MyInfo != nil {
 		t.mu.Lock()
 		prev := t.myNodeNum
+		prevReboots := t.rebootCount
 		t.myNodeNum = fr.MyInfo.MyNodeNum
+		t.rebootCount = fr.MyInfo.RebootCount
 		t.myInfoThisSession = true
 		t.mu.Unlock()
-		log.Info().Uint32("node_num", fr.MyInfo.MyNodeNum).Msg("meshtastic my_node_num")
+		log.Info().Uint32("node_num", fr.MyInfo.MyNodeNum).Uint32("reboot_count", fr.MyInfo.RebootCount).Msg("meshtastic my_node_num")
+		if prevReboots != 0 && fr.MyInfo.RebootCount > prevReboots {
+			// The radio booted since the last handshake. The host's own heal
+			// rungs (DTR/RTS, admin reboot, hub-port cut) count here too, so
+			// the device health audit tells the two apart; a rise with no
+			// audit row is the radio resetting itself. [MESHSAT-1102]
+			msg := fmt.Sprintf("radio rebooted %d time(s) since the last handshake (reboot_count %d -> %d)",
+				fr.MyInfo.RebootCount-prevReboots, prevReboots, fr.MyInfo.RebootCount)
+			log.Warn().Msg("meshtastic: " + msg)
+			t.emitEvent(MeshEvent{Type: "radio_rebooted", Message: msg, Time: time.Now().UTC().Format(time.RFC3339)})
+		}
 		if prev != 0 && prev != fr.MyInfo.MyNodeNum {
 			// The radio renumbered itself at boot; anything that addresses
 			// it by number, such as the other kit's OOB peer row, has to
@@ -1411,6 +1433,7 @@ func (t *DirectMeshTransport) GetStatus(_ context.Context) (*MeshStatus, error) 
 		NumNodes:        numNodes,
 		FirmwareVersion: t.firmwareVer,
 		OwnRowZeroed:    t.ownRowZeroed,
+		RebootCount:     t.rebootCount,
 	}
 
 	if t.myNodeNum != 0 {
