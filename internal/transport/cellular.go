@@ -30,6 +30,10 @@ type CellStatus struct {
 	SIMLabel     string `json:"sim_label,omitempty"`    // user-assigned SIM card label
 	SMSSent      int64  `json:"sms_sent"`               // total SMS sent since connect [MESHSAT-403]
 	SMSReceived  int64  `json:"sms_received"`           // total SMS received since connect [MESHSAT-403]
+	// Device health of the modem from the health watchdog, set by the API.
+	// Connected is only the serial link. [MESHSAT-1064]
+	HealthState  string `json:"health_state,omitempty"`
+	HealthDetail string `json:"health_detail,omitempty"`
 }
 
 // SIMCardInfo holds saved SIM card settings for auto-apply during modem init.

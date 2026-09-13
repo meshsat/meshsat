@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
-import { priorityLabel, priorityColor, formatTimestamp, formatRelativeTime } from '@/utils/format'
+import { priorityLabel, priorityColor, formatTimestamp, formatRelativeTime, gatewayHealthIssue } from '@/utils/format'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
 
 const store = useMeshsatStore()
@@ -191,13 +191,21 @@ function gwDebugRows(gw) {
   ]
 }
 
+// Device health comes first: a gateway can keep its link while the device
+// behind it has stopped answering. [MESHSAT-1064]
 function gwStatusColor(gw) {
   if (!gw) return 'bg-gray-600'
+  const issue = gatewayHealthIssue(gw)
+  if (issue === 'failed') return 'bg-red-400'
+  if (issue === 'healing') return 'bg-amber-400'
   return gw.connected ? 'bg-emerald-400' : gw.enabled ? 'bg-amber-400' : 'bg-gray-600'
 }
 
 function gwStatusLabel(gw) {
   if (!gw) return 'Not configured'
+  const issue = gatewayHealthIssue(gw)
+  if (issue === 'failed') return 'Not answering'
+  if (issue === 'healing') return 'Healing'
   return gw.connected ? 'Connected' : gw.enabled ? 'Disconnected' : 'Disabled'
 }
 

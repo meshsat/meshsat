@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import api from '@/api/client'
 import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
-import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot } from '@/utils/format'
+import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot, gatewayHealthIssue } from '@/utils/format'
 import SpectrumWidget from '@/components/SpectrumWidget.vue'
 import GatewayRateSparkline from '@/components/GatewayRateSparkline.vue'
 
@@ -530,8 +530,13 @@ const cellBars = computed(() => store.cellularSignal?.bars ?? -1)
 const smsTxCount = computed(() => (store.smsMessages || []).filter(m => m.direction === 'tx').length)
 const smsRxCount = computed(() => (store.smsMessages || []).filter(m => m.direction === 'rx').length)
 const cellStatus = computed(() => {
-  // Check transport status first (direct modem connection)
+  // A modem can hold its serial link while it has stopped answering: the
+  // device health watchdog's verdict comes first. [MESHSAT-1064]
   const cs = store.cellularStatus
+  const issue = gatewayHealthIssue(cellularGw.value) || gatewayHealthIssue(cs)
+  if (issue === 'failed') return { dot: 'bg-red-400', text: 'Not answering' }
+  if (issue === 'healing') return { dot: 'bg-amber-400', text: 'Healing' }
+  // Check transport status first (direct modem connection)
   if (cs?.connected) return { dot: 'bg-sky-400', text: 'Connected' }
   // Check gateway status
   if (cellularGw.value?.connected) return { dot: 'bg-sky-400', text: 'Connected' }

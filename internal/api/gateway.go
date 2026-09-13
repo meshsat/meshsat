@@ -180,7 +180,7 @@ func (s *Server) handleCheckProvisioning(w http.ResponseWriter, r *http.Request)
 
 // handleGetGateways returns the status of all configured gateways.
 // @Summary List all gateways
-// @Description Returns status and config of all gateways (MQTT, Iridium)
+// @Description Returns status and config of all gateways. Each row carries health_state and health_detail from the device health watchdog beside the connected link flag [MESHSAT-1064]
 // @Tags gateways
 // @Success 200 {object} map[string]interface{} "gateways"
 // @Router /api/gateways [get]
@@ -216,7 +216,32 @@ func (s *Server) handleGetGateways(w http.ResponseWriter, r *http.Request) {
 			gws = append(gws, syn)
 		}
 	}
+	applyDeviceHealth(s.deviceHealth, gws)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"gateways": gws})
+}
+
+// applyDeviceHealth copies the health watchdog's verdict for each gateway's
+// device onto its status row. The connected link flag is left as it is: a
+// modem can hold its serial link while it has stopped answering. [MESHSAT-1064]
+func applyDeviceHealth(dh *gateway.DeviceHealth, gws []gateway.GatewayStatusResponse) {
+	if dh == nil {
+		return
+	}
+	for i := range gws {
+		if state, detail, ok := dh.InterfaceHealth(gws[i].InstanceID); ok {
+			gws[i].HealthState = state
+			gws[i].HealthDetail = detail
+		}
+	}
+}
+
+// cellularHealth is the health watchdog's verdict on the cellular modem.
+// [MESHSAT-1064]
+func (s *Server) cellularHealth() (state, detail string, ok bool) {
+	if s.deviceHealth == nil {
+		return "", "", false
+	}
+	return s.deviceHealth.InterfaceHealth("cellular_0")
 }
 
 // handleGetGateway returns the status of a specific gateway.
@@ -237,6 +262,11 @@ func (s *Server) handleGetGateway(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
+	}
+	if s.deviceHealth != nil {
+		if state, detail, ok := s.deviceHealth.InterfaceHealth(status.InstanceID); ok {
+			status.HealthState, status.HealthDetail = state, detail
+		}
 	}
 	writeJSON(w, http.StatusOK, status)
 }

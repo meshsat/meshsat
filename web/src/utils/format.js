@@ -132,14 +132,30 @@ export function priorityColor(p) {
   return p === 0 ? 'text-red-400' : p === 2 ? 'text-gray-500' : 'text-amber-400'
 }
 
+// gatewayHealthIssue reads the device health beside the link flag: a gateway
+// can hold its serial link while the device behind it has stopped answering.
+// Returns 'failed', 'healing' or '' (no known problem). [MESHSAT-1064]
+export function gatewayHealthIssue(gw) {
+  if (!gw || !gw.connected) return ''
+  if (gw.health_state === 'failed') return 'failed'
+  if (gw.health_state === 'degraded' || gw.health_state === 'healing') return 'healing'
+  return ''
+}
+
 export function gatewayStatusColor(gw) {
   if (!gw) return 'text-gray-500'
+  const issue = gatewayHealthIssue(gw)
+  if (issue === 'failed') return 'text-red-400'
+  if (issue === 'healing') return 'text-amber-400'
   if (gw.connected) return 'text-emerald-400'
   return 'text-red-400'
 }
 
 export function gatewayStatusLabel(gw) {
   if (!gw) return 'Not Configured'
+  const issue = gatewayHealthIssue(gw)
+  if (issue === 'failed') return 'Not answering'
+  if (issue === 'healing') return 'Healing'
   if (gw.connected) return 'Connected'
   return 'Disconnected'
 }
