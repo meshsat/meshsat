@@ -504,17 +504,21 @@ func iridiumHealthTarget(t *transport.DirectSatTransport) gateway.HealthTarget {
 const meshSilentConnectedAfter = 20 * time.Second
 
 // radioSilentSinceConnect reports a radio that has not sent a single frame
-// since its current serial session opened: the transport already gave up on a
-// silent handshake, or the session is open and nothing came back in time.
-// [MESHSAT-850]
+// since its current serial session opened, when the transport has already
+// counted a silent handshake or the session has stayed quiet for
+// meshSilentConnectedAfter. The count matters most: a silent radio sends the
+// transport into a retry loop where every attempt opens a fresh session and
+// gives up after 15 s, so a session is never 20 s old (parallax, 13 Sep 20:42).
+// Only a completed config resets the count, and a frame in the current session
+// always means not silent. [MESHSAT-850]
 func radioSilentSinceConnect(connected bool, connectedAt, lastFrame time.Time, handshakeFails int, now time.Time) bool {
-	if !connected {
-		return handshakeFails > 0
-	}
-	if connectedAt.IsZero() || now.Sub(connectedAt) < meshSilentConnectedAfter {
+	if connectedAt.IsZero() || lastFrame.After(connectedAt) {
 		return false
 	}
-	return !lastFrame.After(connectedAt)
+	if handshakeFails > 0 {
+		return true
+	}
+	return connected && now.Sub(connectedAt) >= meshSilentConnectedAfter
 }
 
 // meshHealthTarget: the Meshtastic radio answers a self-addressed admin
