@@ -57,6 +57,15 @@ type APRSGateway struct {
 	// every decoded frame stamps lastFrameAt. [MESHSAT-821]
 	lastFrameAt atomic.Int64
 
+	// Software listen-before-talk (Unix nanoseconds). lastPeerRX is the last
+	// AX.25 frame decoded from any station but this one, so a TNC echo of our
+	// own transmission never holds us; lastTX is the last frame handed to the
+	// TNC. ctsDeferred counts transmissions the gate held back.
+	// [MESHSAT-1021, MESHSAT-1069]
+	lastPeerRX  atomic.Int64
+	lastTX      atomic.Int64
+	ctsDeferred atomic.Int64
+
 	// Frame fan-out: a hardware TNC is one file handle, so the Reticulum
 	// ax25_0 interface receives raw AX.25 payloads from this gateway's
 	// reader instead of opening its own KISS connection. [MESHSAT-821]
@@ -272,6 +281,7 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"errors":          g.errors.Load(),
 		"bad_frames":      g.badFrames.Load(),
 		"repaired_frames": g.kiss.Repaired.Load(),
+		"cts_deferred":    g.ctsDeferred.Load(),
 		"heard_count":     len(g.tracker.GetHeardStations()),
 		"packet_types":    g.tracker.GetPacketTypeBreakdown(),
 		"kiss_addr":       g.kiss.Target(),
@@ -558,6 +568,13 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			log.Debug().Err(err).Msg("aprs: decode AX.25")
 			continue
 		}
+		// A decoded frame from another station means the channel was busy
+		// just now: the transmit gate holds off after it. Our own callsign is
+		// excluded so a TNC echo of our transmission does not hold us.
+		// [MESHSAT-1021, MESHSAT-1069]
+		if frame != nil && !g.isOwnSource(frame.Src) {
+			g.lastPeerRX.Store(time.Now().UnixNano())
+		}
 
 		srcAddr := ""
 		if frame != nil {
@@ -649,9 +666,9 @@ func (g *APRSGateway) writeWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.outCh:
-			g.sendMessage(msg)
+			g.sendMessage(ctx, msg)
 		case frame := <-g.rawOut:
-			g.sendRaw(frame)
+			g.sendRaw(ctx, frame)
 		}
 	}
 }
@@ -743,18 +760,22 @@ func (g *APRSGateway) beaconFrame(n int) []byte {
 }
 
 // sendRaw transmits a ready AX.25 frame on the write worker's turn.
-func (g *APRSGateway) sendRaw(frame []byte) {
+func (g *APRSGateway) sendRaw(ctx context.Context, frame []byte) {
+	if !g.waitClearToSend(ctx) {
+		return
+	}
 	if err := g.kiss.SendFrame(frame); err != nil {
 		log.Warn().Err(err).Msg("aprs: send beacon")
 		g.errors.Add(1)
 		return
 	}
+	g.lastTX.Store(time.Now().UnixNano())
 	g.tracker.RecordTX()
 	g.lastActive.Store(time.Now().Unix())
 	g.recordFrame(DirTX, frame, "")
 }
 
-func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
+func (g *APRSGateway) sendMessage(ctx context.Context, msg *transport.MeshMessage) {
 	src := AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}
 	dst := AX25Address{Call: "APMSHT", SSID: 0} // APMSxx = MeshSat tocall
 
@@ -793,11 +814,15 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	}
 
 	frame := EncodeAX25Frame(dst, src, path, info)
+	if !g.waitClearToSend(ctx) {
+		return
+	}
 	if err := g.kiss.SendFrame(frame); err != nil {
 		log.Warn().Err(err).Msg("aprs: send frame")
 		g.errors.Add(1)
 		return
 	}
+	g.lastTX.Store(time.Now().UnixNano())
 
 	g.msgsOut.Add(1)
 	g.tracker.RecordTX()
@@ -810,12 +835,22 @@ func (g *APRSGateway) sendMessage(msg *transport.MeshMessage) {
 	for i := 1; i < g.config.TXRepeat; i++ {
 		// Jittered, so two kits transmitting at the same nominal cadence
 		// cannot keep a fixed offset between their pairs. [MESHSAT-1021]
-		time.Sleep(jitterDuration(g.repeatGap(), 0.25))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(jitterDuration(g.repeatGap(), 0.25)):
+		}
+		// Every copy passes the gate: a peer that keyed up during the gap
+		// must not lose its frame to our repeat. [MESHSAT-1069]
+		if !g.waitClearToSend(ctx) {
+			return
+		}
 		if err := g.kiss.SendFrame(frame); err != nil {
 			log.Warn().Err(err).Int("copy", i+1).Msg("aprs: send repeat")
 			g.errors.Add(1)
 			return
 		}
+		g.lastTX.Store(time.Now().UnixNano())
 		g.tracker.RecordTX()
 		g.recordFrame(DirTX, frame, msg.MsgRef)
 		log.Debug().Int("copy", i+1).Str("msg_ref", msg.MsgRef).Msg("aprs: sent repeat copy")
@@ -838,16 +873,20 @@ func (g *APRSGateway) beaconRepeatGap() time.Duration {
 
 // waitForQuietChannel delays a due beacon while the channel has recent
 // traffic, up to a cap. It returns false only if the gateway is shutting down.
-// lastActive is updated on both receive and transmit, so this covers the
-// sender's own message pair and a peer's transmission alike. [MESHSAT-1021]
+// Traffic is the later of the last frame decoded from a peer and our own last
+// transmission, so this covers the sender's own message pair and a peer's
+// transmission alike. [MESHSAT-1021]
 func (g *APRSGateway) waitForQuietChannel(ctx context.Context) bool {
 	deadline := time.Now().Add(beaconDeferMax)
 	for {
-		last := g.lastActive.Load()
+		last := g.lastPeerRX.Load()
+		if tx := g.lastTX.Load(); tx > last {
+			last = tx
+		}
 		if last == 0 {
 			return true
 		}
-		quiet := time.Since(time.Unix(last, 0))
+		quiet := time.Since(time.Unix(0, last))
 		if quiet >= beaconQuietFor {
 			return true
 		}
@@ -879,6 +918,113 @@ var (
 	// the liveness signal the peer's receive watchdog waits for.
 	beaconDeferMax = 20 * time.Second
 )
+
+// Transmit gate knobs. Package vars so tests can shorten them.
+var (
+	// How long after the last frame decoded from a peer the channel still
+	// counts as busy. A decoded frame means the peer has just unkeyed; its
+	// repeat copy or a digipeater may follow straight after.
+	aprsRXHoldoff = 1500 * time.Millisecond
+	// The longest the gate holds one transmission. A channel that never goes
+	// quiet must not stall the write worker, so after this the frame goes out.
+	aprsCTSMax = 3 * time.Second
+	// Source for the p-persistence roll, uniform in [0, 1).
+	aprsRand = rand.Float64
+)
+
+// waitClearToSend is a software listen-before-talk gate in front of every
+// frame the write worker hands to the TNC. The PicoAPRS V4 does its own
+// carrier sensing, but nothing published says it honours KISS TXDELAY,
+// PERSIST or SLOTTIME frames, so none are sent and the bridge sequences its
+// own traffic: measured 12 Sep 2026, 14 to 21 percent of frames never
+// arrived with bad_frames at 0.
+//
+// If no peer frame was decoded within aprsRXHoldoff the frame goes out at
+// once. Otherwise the gate waits until the hold-off has passed since the
+// latest peer frame (a new frame extends the wait), then rolls p-persistence
+// with the configured Persist and SlotTime (Direwolf units and defaults): send
+// with probability (Persist+1)/256, else wait a slot and check again. The
+// total wait never exceeds aprsCTSMax; the frame then goes out anyway. It
+// returns false only when ctx is done. [MESHSAT-1021, MESHSAT-1069]
+func (g *APRSGateway) waitClearToSend(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	start := time.Now()
+	holdoff := aprsRXHoldoff
+	if !g.peerHeardWithin(holdoff, start) {
+		return true
+	}
+
+	persist := orDefault(g.config.Persist, direwolfDefaultPersist)
+	if persist > 255 {
+		persist = 255
+	}
+	p := float64(persist+1) / 256
+	slot := time.Duration(orDefault(g.config.SlotTime, direwolfDefaultSlotTime)) * 10 * time.Millisecond
+	deadline := start.Add(aprsCTSMax)
+
+	g.ctsDeferred.Add(1)
+	rolls := 0
+	capped := false
+	defer func() {
+		log.Debug().Dur("waited", time.Since(start)).Int("rolls", rolls).Bool("capped", capped).
+			Msg("aprs: transmit held, channel busy")
+	}()
+
+	for {
+		var wait time.Duration
+		if last := g.lastPeerRX.Load(); last > 0 {
+			wait = time.Until(time.Unix(0, last).Add(holdoff))
+		}
+		if wait <= 0 {
+			// Quiet for the whole hold-off: p-persistence decides.
+			rolls++
+			if aprsRand() < p {
+				return true
+			}
+			wait = slot
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			capped = true
+			return true
+		}
+		if wait > remaining {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(wait):
+		}
+		if !time.Now().Before(deadline) {
+			capped = true
+			return true
+		}
+	}
+}
+
+// peerHeardWithin reports whether a peer frame was decoded less than d
+// before now.
+func (g *APRSGateway) peerHeardWithin(d time.Duration, now time.Time) bool {
+	last := g.lastPeerRX.Load()
+	return last > 0 && now.Sub(time.Unix(0, last)) < d
+}
+
+// isOwnSource reports whether an AX.25 source address is this gateway's own
+// callsign and SSID, compared the way EncodeAX25Frame puts them on the air
+// (upper case, six characters, four-bit SSID), so a TNC echo matches.
+func (g *APRSGateway) isOwnSource(src AX25Address) bool {
+	call := strings.ToUpper(strings.TrimSpace(g.config.Callsign))
+	if len(call) > 6 {
+		call = call[:6]
+	}
+	if call == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(src.Call), call) && src.SSID == g.config.SSID&0x0F
+}
 
 // repeatGap is the pause between repeat copies of one message.
 func (g *APRSGateway) repeatGap() time.Duration {

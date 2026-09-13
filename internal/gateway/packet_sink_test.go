@@ -132,7 +132,7 @@ func TestAPRSPacketFeed_TransmitPaths(t *testing.T) {
 	defer stop()
 
 	// 1. The gateway's own plaintext frame carries the delivery msg_ref.
-	g.sendMessage(&transport.MeshMessage{
+	g.sendMessage(context.Background(), &transport.MeshMessage{
 		From:        0x0a0b0c0d,
 		DecodedText: "relay test",
 		MsgRef:      "20260906-120000-00001",
@@ -158,14 +158,14 @@ func TestAPRSPacketFeed_TransmitPaths(t *testing.T) {
 	}
 
 	// 2. A directed message to a station.
-	g.sendMessage(&transport.MeshMessage{DecodedText: "PING 1", Destination: "MSPRLX-10", RawText: true})
+	g.sendMessage(context.Background(), &transport.MeshMessage{DecodedText: "PING 1", Destination: "MSPRLX-10", RawText: true})
 	rec = c.wait(t)
 	if rec.Text != "PING 1" {
 		t.Errorf("directed text = %q", rec.Text)
 	}
 
 	// 3. An encrypted frame: no text, still counted, no digipeater path.
-	g.sendMessage(&transport.MeshMessage{DecodedText: "AAAA", Encrypted: true})
+	g.sendMessage(context.Background(), &transport.MeshMessage{DecodedText: "AAAA", Encrypted: true})
 	rec = c.wait(t)
 	if rec.Text != "" {
 		t.Errorf("encrypted tx must not expose text, got %q", rec.Text)
