@@ -925,3 +925,47 @@ Both kits now carry `display_auto_detect=0` and `dtoverlay=vc4-kms-dsi-ili9881-7
 **Silent mesh radio (MESHSAT-850).** Restart test on parallax through `POST /api/system/restart` (the bridge container only, not the Pi or the radio). Restarts at 20:24 and 20:33 were clean, 16 and 17 s from container start to config complete. **Restart 3 at 20:41 reproduced the silence**, and showed the first version of the fast path did not fire: the transport abandoned each silent handshake after 15 s as intended (the old code waited 60 s) and reopened the port at once, so every session was younger than the 20 s the silence check waited for. The probe counted plain misses, rung 1 ran a serial reconnect at 20:43:10, the DTR/RTS and admin reboot rungs were then skipped correctly, and the hub-port cut at 20:44:40 brought the radio back at 20:44:58 (51 nodes), 3 min 15 s after the restart instead of about 4.5 min. 5c9d9e9 counts a silent handshake as silence unless the radio has sent a frame in the current session, so the cut comes on the first miss. **The 20:54 deploy of that fix then caught tesseract's radio silent (the first time on tesseract), and the fast path fired as designed:** first silent handshake at 20:54:34, mesh unhealthy at 20:54:49, serial reconnect, DTR/RTS and admin reboot skipped, hub-port cut at 20:54:49, 30 s after the handshake started. **But the radio did not come back:** it re-enumerated at 20:54:54, a few boot frames arrived, the want_config request sent at 20:54:56 was lost while it booted, and because frames had arrived the handshake settled at 20:55:56 on a "partial NodeDB" session without MyNodeInfo that nothing retried; the ladder ran out at 20:57:19 and left mesh failed. A level-1 heal at 21:00:57 reopened the port and the radio answered within a second (`!698690dd`, 12 nodes); tesseract had no mesh for about 6.5 min. A second fix makes MyNodeInfo, not any frame, the sign that a session answered: without it the handshake is abandoned after 15 s and asked again (5c9d9e9 and 89cb4a7, pipelines 53795 and 53801). **The 21:12 deploy of the second fix restarted both bridges cleanly** (handshake to config complete within a second on both, no silence), so the retry after a cut has not been seen live yet; a unit test covers it. Across tonight's restarts the silence hit parallax once in six and tesseract once in four. Recovery for a radio stuck at "connected but the radio never sent its node number" with mesh `failed`: `POST /api/devices/health/mesh/heal {"level":1}`. Hard resets used: one per kit, ageing out within the hour.
 
 **Also this evening:** another session rotated the Hub connection on both kits at 19:26 and 19:28 (backup, `hub_connection` update, `docker compose restart`, backup shredded); the bridge restarts in the logs at those times are that work, not these fixes. parallax's RTL-SDR has been off the bus since 17:44 and needs a re-seat.
+
+## 35. 13 Sep 2026, night: closing the To Verify list end to end (MESHSAT-850, 1102, 1064, 1000, 1027, 794, 1069, 986, 962)
+
+**Deployed:** pipeline 53809 (df1d1ad, image `532f5d4d8996`) on both kits at 22:01. Commits: 43d783e (battery events) and df1d1ad (mesh port lines, reboot count). Checked on both kits: image digest matches the package job, container healthy, handshake within a second, and `sudo stty -F /dev/ttyACM2 -a` shows `-hupcl` on both radios.
+
+**Silent radio after a restart (MESHSAT-850): a lead tested, and not the cause.** Both kit radios are XIAO ESP32-S3 boards on Meshtastic 2.6.10 (USB `2886:0059`). Their firmware variant builds the USB port on TinyUSB with arduino-esp32 2.0.17. In that stack DTR means "a host is present" and writes are thrown away while it is low, and upstream has open reports of the port stalling when DTR is asserted a second time (arduino-esp32 #9582, #7073). The bridge opened the port with Linux defaults, so every close dropped DTR through HUPCL and the next open raised it again. df1d1ad made the bridge clear HUPCL on every mesh session, as the official Meshtastic Python client does ("so the device will not reboot based on RTS and/or DTR"). **It did not stop the silence, and it was reverted the same night.**
+
+Restart series through `POST /api/system/restart` with DTR held up, 22:06 to 22:16:
+- **tesseract:** 10 of 10 clean, 16 to 17 s from container start to config complete.
+- **parallax:** 18, 17, **54**, 17 and **54** s. Restarts 3 and 5 went silent, and the fast path's hub-port cut brought each back. The series stopped at 2 hard resets, so the hourly budget was never spent.
+
+That is 2 of 5 on parallax against 1 of 6 earlier the same evening with Linux defaults. It is too few to prove harm, but there is a plausible mechanism: a held DTR tells TinyUSB a host is still reading while the bridge is down, and its write can block when nobody reads (arduino-esp32 #7554). parallax hears 51 nodes, tesseract 11. The flag lives in the tty's termios until the radio re-enumerates, so after the revert deploy it has to be set back on both kits with `sudo stty -F /dev/ttyACM2 hupcl`.
+
+In restart 3 the lines never changed:
+- the radio stayed silent from the first handshake at 22:08:40;
+- it reset itself within the same second at 22:09:09;
+- the fast path's hub cut at 22:09:10 had it back at 22:09:18;
+- `reboot_count` went from 533 to 534 across that reset and the cut.
+
+The silence now points inside the radio, like the self-resets of MESHSAT-1112.
+
+**Radio resets nobody asked for (MESHSAT-1102 closed, MESHSAT-1112 new).** parallax's radio re-enumerated within the same second at 17:18:15 and 20:22:14 with no host action: no audit row, restart, deploy, sudo command or ROM identity. tesseract's radio never did. `reboot_count` is now on `/api/status` (tesseract 324, parallax 533 at 22:01), and `radio_rebooted` fires when it rises between two handshakes. The device health audit tells the host's own heals apart from self-resets. tesseract's OOB peer 9631 holds parallax's current `!402d9e7b`.
+
+**Booth panels, no stubs.**
+- **Relayed text, both ways (MESHSAT-1000, grim):** tesseract to parallax arrived 3 s after the send, drawn with "through this kit in 1546 ms"; parallax to tesseract with "819 ms". When idle the booth page cycles route 90 s, spectrum 25 s, nerds 20 s, so a capture can land on the packet list instead.
+- **Level-1 cellular heal on tesseract (MESHSAT-1064):** the API read `healing` from 21:44:12 to 21:44:27 with `connected` true, and both SMS rows on the physical panel read `healing` by 21:44:21.
+
+**Hub reporter retry on a kit (MESHSAT-1027).**
+- tesseract's route to the Hub was blocked with a TCP reset to mqtt-hub.meshsat.net's four addresses on port 443, with a timer to lift it as a safety net.
+- The bridge restarted at 22:02:19, and its first connect failed at 22:02:49.
+- The block came off at 22:03:25, and the reporter connected at 22:03:34 in the same container.
+- The satellite fallback never armed (87 s without the Hub).
+
+**Power-on checklist change:** if `tak_hub_relay` is down after a power-on, don't restart the bridge any more. It reconnects within about a minute of WiFi coming up.
+
+**Battery events (MESHSAT-794).** `/api/events` carries `battery` when the pack state changes. On parallax the UPS monitor was stopped for 84 s: `battery: UPS reading stale` came at 22:03:07, and `battery: mains connected` at 22:03:37 after the restart. The drain-to-halt bench test is still owed (owner).
+
+**Where the list stands:**
+- **Done:** 1000, 1064, 1069 (the PicoAPRS BDCD question moves to 1021), 1102, 1027.
+- **To Verify:**
+  - 794: the bench drain test;
+  - 986: a wedged AT channel escalating by itself hasn't happened since the fix, and forcing one needs AT+CUSD, which is never sent;
+  - 962: the IMT lane needs tesseract's 9704 (Mon 14); the SIM and Twilio balances and Thomas's OK on the tent card are the owner's; the kit-to-kit SMS lane is tested after this deploy (result on the issue);
+  - 850: the fast path, the firmware version and three restarts in a row inside 60 s are met (parallax 18, 17 and 54 s), but the cause of the silence is still open.
