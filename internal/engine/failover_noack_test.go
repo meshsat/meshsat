@@ -83,6 +83,15 @@ func TestHandleFailure_NoAckMovesTheMessageToTheNextFailoverMember(t *testing.T)
 	w := noAckWorker(h)
 	w.emit = func(e transport.MeshEvent) { events = append(events, e) }
 
+	// deliver() mutates the in-memory row to this bearer's egress ciphertext
+	// before it calls handleFailure (dispatcher.go ~L1366). Reproduce that: the
+	// row handed to handleFailure carries ciphertext, while the DB row still has
+	// the plaintext. The moved delivery must carry the plaintext, or the next
+	// bearer encrypts ciphertext again and the far kit relays garbage to the
+	// mesh (akB1-16 over SMS, 14 Sep 2026). [MESHSAT-1021]
+	row.Payload = []byte("\x01ZW5jcnlwdGVkLWFwcnMtY2lwaGVydGV4dA==")
+	row.TextPreview = string(row.Payload)
+
 	w.handleFailure(row, errNoAckFromPeer)
 
 	got, err := h.db.GetDelivery(row.ID)
@@ -97,8 +106,14 @@ func TestHandleFailure_NoAckMovesTheMessageToTheNextFailoverMember(t *testing.T)
 		t.Fatalf("%d deliveries on cellular_0, want 1", len(moved))
 	}
 	m := moved[0]
-	if m.Status != "queued" || m.MsgRef != row.MsgRef || string(m.Payload) != "hello booth" ||
-		m.RuleID == nil || *m.RuleID != ruleID || m.Retries != 0 || m.QoSLevel != 1 || m.Visited != row.Visited {
+	if string(m.Payload) != "hello booth" {
+		t.Fatalf("moved payload %q, want the plaintext hello booth (not the mutated ciphertext)", m.Payload)
+	}
+	if m.TextPreview != "hello booth" {
+		t.Fatalf("moved text_preview %q, want hello booth", m.TextPreview)
+	}
+	if m.Status != "queued" || m.MsgRef != row.MsgRef ||
+		m.RuleID == nil || *m.RuleID != ruleID || m.Retries != 0 || m.QoSLevel != 1 || m.Visited != `["mesh_0"]` {
 		t.Fatalf("moved delivery %+v", m)
 	}
 	if len(events) != 2 || events[0].Type != "delivery_dead" || events[1].Type != "delivery_queued" {
