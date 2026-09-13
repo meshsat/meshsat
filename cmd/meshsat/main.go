@@ -495,6 +495,9 @@ func main() {
 	// frame to the processor's ring, which also emits "packet" SSE events.
 	// [MESHSAT-826]
 	gwMgr.SetPacketSink(proc.Packets().Sink())
+	// X1202 pack state changes (mains, draining, low, stale) as "battery"
+	// events on /api/events. [MESHSAT-794]
+	go api.WatchBatteryEvents(ctx, api.X1202StatusPath, 10*time.Second, proc.Emit)
 
 	// Wire node name resolver so SMS shows human-readable sender names
 	gwMgr.SetNodeNameResolver(func(nodeID uint32) string {

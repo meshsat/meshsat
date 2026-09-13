@@ -74,8 +74,10 @@ async function fire(action) {
 function toggle() { open.value = !open.value; if (!open.value) { note.value = ''; busy.value = '' } }
 function onKey(e) { if (e.key === 'Escape') open.value = false }
 
-onMounted(() => { poll(); timer = setInterval(poll, 10000); window.addEventListener('keydown', onKey) })
-onUnmounted(() => { clearInterval(timer); window.removeEventListener('keydown', onKey); holdEnd() })
+// 'meshsat:battery' is re-dispatched from the bridge's SSE "battery" event
+// by the page that holds the stream (booth page, dashboard). [MESHSAT-794]
+onMounted(() => { poll(); timer = setInterval(poll, 10000); window.addEventListener('keydown', onKey); window.addEventListener('meshsat:battery', poll) })
+onUnmounted(() => { clearInterval(timer); window.removeEventListener('keydown', onKey); window.removeEventListener('meshsat:battery', poll); holdEnd() })
 </script>
 
 <template>

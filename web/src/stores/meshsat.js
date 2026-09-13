@@ -869,6 +869,12 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   function connectSSE(onEvent) {
     closeSSE()
     sseHandle = api.sse('/events', (event) => {
+      // Pack state changed: refresh the battery tile and the header chip
+      // without waiting for the 10 s poll. [MESHSAT-794]
+      if (event?.type === 'battery') {
+        fetchBattery()
+        window.dispatchEvent(new CustomEvent('meshsat:battery'))
+      }
       if (onEvent) onEvent(event)
     })
     sseConnected.value = true
