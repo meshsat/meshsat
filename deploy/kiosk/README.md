@@ -58,19 +58,45 @@ labwc config, udev rule, and Chromium policy all rewrite cleanly.
 
 ## DSI panel enablement
 
-The Pi Touch Display 2 needs two lines in `/boot/firmware/config.txt`
-under `[all]` (both kits already have these):
+The Pi Touch Display 2 (7 inch) overlay is `vc4-kms-dsi-ili9881-7inch`
+(Raspberry Pi Touch Display 2 docs and the kernel overlays README).
+`vc4-kms-dsi-7inch` is the overlay of the original 800×480 Touch
+Display. Both kits carry these display lines in
+`/boot/firmware/config.txt` (MESHSAT-1091):
 
 ```
+[all]
 dtoverlay=vc4-kms-v3d
 dtoverlay=vc4-kms-dsi-generic
+display_auto_detect=0
+
+[pi5]
+dtoverlay=vc4-kms-dsi-7inch
+dtoverlay=vc4-kms-dsi-ili9881-7inch
+display_lcd_rotate=2
 ```
 
-Also required: `display_auto_detect=1` (already default).
+**The Touch Display 2 overlay must be the last display overlay.** The
+overlay applied last wins I2C address 0x45 and DSI device 0, so every
+healthy boot logs `Failed to register i2c client 7inch-touchscreen-p at
+0x45 (-16)` and two `failed to add DSI device -17`: those are the
+losing Touch Display 1 and generic nodes, not a fault.
 
-The legacy `dtoverlay=vc4-kms-dsi-7inch` + `display_lcd_rotate=2`
-from the original 800×480 Touch Display do **not** belong here; the
-v4 GPIO revision removes them.
+Why it is pinned: with only `display_auto_detect=1`, the firmware added
+the Touch Display 2 nodes on a cold power-on but not after a warm
+reboot, which left only the Touch Display 1 nodes and a black panel
+until a power cycle (Ubuntu 6.8.0-1051's `rpi-panel-v2-regulator` also
+lacks the shutdown hook Raspberry Pi added in May 2024). Pinned, the
+panel survives a warm reboot. Removing `vc4-kms-dsi-7inch` or
+`vc4-kms-dsi-generic` has not been tested with the pin in place; leave
+them.
+
+**Keep every `config.txt` line under 98 characters, comments included.**
+Raspberry Pi documents a 98-character limit and the firmware does not
+warn: tesseract's 105-byte `gpio=24=ip,pn  # MESHSAT-669 ...` line is
+rejected at every boot (`Invalid gpio command` in the firmware log).
+Read the firmware log before blaming hardware when a `config.txt` line
+seems to have no effect.
 
 ## Touch calibration matrix
 
