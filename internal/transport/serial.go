@@ -9,13 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
-	"golang.org/x/sys/unix"
 )
 
 // Meshtastic serial framing constants
@@ -47,55 +45,6 @@ func openSerial(path string, baud int) (serial.Port, error) {
 	port.SetReadTimeout(100 * time.Millisecond)
 
 	return port, nil
-}
-
-// keepLinesOnClose clears HUPCL on every descriptor this process holds on
-// path, so that closing the port (a bridge restart, a reconnect) leaves DTR
-// and RTS as they are instead of dropping them. The XIAO ESP32-S3 runs
-// Meshtastic 2.6.10 on TinyUSB (arduino-esp32 2.0.17, ARDUINO_USB_MODE=0),
-// where DTR means "a host is present": every close dropped it and the next
-// open raised it again, and that stack has open upstream reports of stalling
-// on exactly that second assertion (arduino-esp32 #9582, #7073), which is
-// the radio that stays silent after a bridge restart until its hub port is
-// cut. The official Meshtastic Python client clears HUPCL before it opens a
-// port "so the device will not reboot based on RTS and/or DTR". The line
-// pulse rung (pulseSerialLines) still drives the lines on purpose.
-// [MESHSAT-850]
-func keepLinesOnClose(path string) error {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		resolved = path
-	}
-	entries, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		return fmt.Errorf("list descriptors: %w", err)
-	}
-	n := 0
-	for _, e := range entries {
-		fd, err := strconv.Atoi(e.Name())
-		if err != nil {
-			continue
-		}
-		link, err := os.Readlink("/proc/self/fd/" + e.Name())
-		if err != nil || (link != resolved && link != path) {
-			continue
-		}
-		tio, err := unix.IoctlGetTermios(fd, unix.TCGETS2)
-		if err != nil {
-			return fmt.Errorf("fd %d: read termios: %w", fd, err)
-		}
-		if tio.Cflag&unix.HUPCL != 0 {
-			tio.Cflag &^= unix.HUPCL
-			if err := unix.IoctlSetTermios(fd, unix.TCSETS2, tio); err != nil {
-				return fmt.Errorf("fd %d: clear HUPCL: %w", fd, err)
-			}
-		}
-		n++
-	}
-	if n == 0 {
-		return fmt.Errorf("no descriptor open on %s", path)
-	}
-	return nil
 }
 
 // OpenKISSSerial opens the serial port of a hardware KISS TNC (PicoAPRS V4
