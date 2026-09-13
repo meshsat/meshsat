@@ -159,6 +159,7 @@ and the kiosk user's `.bash_profile` hook. Packages stay installed
 | Touch off diagonally / mirrored | Try `flipped-90` style matrices; bracket with the 4 mirrored variants: `0 1 0 1 0 0`, `0 -1 1 -1 0 1`, `-1 0 1 0 1 0`, `1 0 0 0 -1 1`. |
 | Chromium opens but shows "site can't be reached" | The bridge container wasn't ready when Chromium first loaded. `sudo pkill -9 -f chromium` — labwc respawns it; or wait ~30 s for the container healthcheck to flip green and reload. |
 | Chromium crashed with apport core | labwc respawns on exit; if persistent, check `/home/kiosk/snap/chromium/common/chromium/Crash Reports`. |
+| Touch lands in one corner, or most of the screen ignores touches | `dmesg \| grep Goodix` shows `Invalid config (719, 1279, 0), using defaults`: the probe misread the GT911 config and registered 0..4095 on both axes. `goodix-touch-rebind.service` rebinds it at boot (`journalctl -u goodix-touch-rebind -b`); by hand, `echo 11-005d \| sudo tee /sys/bus/i2c/drivers/Goodix-TS/unbind`, then the same into `bind`. No reboot needed. MESHSAT-1094. |
 | Touch stopped responding | Cold-boot. Warm reboots can wedge the Goodix controller along with the DSI bridge. |
 
 ## Related YouTrack
