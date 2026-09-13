@@ -22,11 +22,14 @@
 #   7. Installs the Chromium managed-policy file to lock the
 #      kiosk to localhost (devtools + password manager + autofill
 #      + history + printing all off).
-#   +  Installs goodix-touch-rebind.service: on kernel 6.8.0-1051 the
-#      Touch Display 2's Goodix controller races the attiny reset line at
-#      boot and the driver gives up (-121 EREMOTEIO); the unit rebinds
-#      it 10 s after boot when it is not already bound. Hand-installed on
-#      tesseract only until 5 Sep 2026 (MESHSAT-808).
+#   +  Installs goodix-touch-rebind.service + meshsat-goodix-rebind: on
+#      kernel 6.8.0-1051 the Touch Display 2's Goodix controller races the
+#      attiny reset line at boot and the driver gives up (-121 EREMOTEIO),
+#      or binds after misreading the GT911 config ("Invalid config", every
+#      touch lands in one corner). 10 s after boot the helper binds it, or
+#      unbinds and rebinds it, up to three times. Hand-installed on
+#      tesseract only until 5 Sep 2026 (MESHSAT-808); rebind on a bad
+#      config since 13 Sep 2026 (MESHSAT-1094).
 #
 # Idempotent — safe to re-run.
 #
@@ -47,7 +50,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
   echo "This script must run as root: sudo bash $0" >&2
   exit 1
 fi
-for f in meshsat-kiosk-session.sh meshsat-kiosk.json labwc-rc.xml labwc-autostart 99-touch-rotate.rules meshsat-backlight kiosk-brightness.sudoers meshsat-kiosk-restart.service meshsat-kiosk-restart.timer meshsat-ble-addr-pin.sh meshsat-ble-addr-pin.service goodix-touch-rebind.service; do
+for f in meshsat-kiosk-session.sh meshsat-kiosk.json labwc-rc.xml labwc-autostart 99-touch-rotate.rules meshsat-backlight kiosk-brightness.sudoers meshsat-kiosk-restart.service meshsat-kiosk-restart.timer meshsat-ble-addr-pin.sh meshsat-ble-addr-pin.service goodix-touch-rebind.service meshsat-goodix-rebind.sh; do
   if [ ! -f "$DEPLOY_DIR/$f" ]; then
     echo "Deploy file missing: $DEPLOY_DIR/$f" >&2
     exit 1
@@ -216,10 +219,15 @@ systemctl start meshsat-ble-addr-pin.service || {
   echo "  Cold-power-cycle the Pi to clear brcmfmac firmware state if the adapter never appears."
 }
 
-# ─── Goodix touch rebind (MESHSAT-808) ───────────────────────────
-# Idempotent: the unit only binds 11-005d when it is not already bound,
-# so on a kit whose touch probe won the race it is a 10 s no-op.
-echo "[+] Installing Goodix touch-rebind unit (MESHSAT-808)…"
+# ─── Goodix touch rebind (MESHSAT-808, MESHSAT-1094) ─────────────
+# Idempotent: the helper binds 11-005d when its probe lost the attiny race,
+# rebinds it when the probe logged "Invalid config" (touch squeezed into one
+# corner), and otherwise exits, so on a kit whose probe went fine it is a
+# 10 s no-op.
+echo "[+] Installing Goodix touch-rebind unit (MESHSAT-808, MESHSAT-1094)…"
+install -D -m 0755 -o root -g root \
+  "$DEPLOY_DIR/meshsat-goodix-rebind.sh" \
+  /usr/local/bin/meshsat-goodix-rebind
 install -D -m 0644 -o root -g root \
   "$DEPLOY_DIR/goodix-touch-rebind.service" \
   /etc/systemd/system/goodix-touch-rebind.service
