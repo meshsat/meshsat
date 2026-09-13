@@ -863,3 +863,31 @@ Six issues, one push each so a regression is attributable. What follows separate
 Three consequences. The overlay needs a **reboot**, so this is not a same-day change on the morning the hardware lands. `auto` will never find the modem, because DeviceSupervisor deliberately skips `ttyAMA*`. And a `MESHSAT_*` var only reaches the bridge if compose names it, so setting the three GPIO vars in tesseract's .env alone would silently do nothing.
 
 **Watch the pin.** tesseract drives its 9603 with RI on **BCM 23**, the same pin parallax uses for the 9704's **I_BTD**. That pin changes meaning when the modem is swapped, so `meshsat-gpio.service` and the 9603 power script need reviewing, not just the env. If the 9603 comes out, `DELETE /api/gateways/iridium` removes `iridium_0` correctly (that route resolves to `_0`, unlike the second-instance problem in MESHSAT-983).
+
+## 32. 13 Sep 2026: the black booth screen was three faults, one of which stopped Docker from ever starting
+
+The reported symptom was "tesseract's screen is black". It was three independent things, and the middle one would have hit at the stand.
+
+**1. The clock guard was deleting Docker's start job on every cold boot (MESHSAT-1090, fixed in 424fa40).** `meshsat-clock-guard.service` declared `Before=docker.service docker.socket` while being `After=chrony.service network.target`. `docker.socket` is pulled in by `sockets.target`, which precedes both, so ordering before it closed a cycle:
+
+```
+sockets.target: Found ordering cycle on docker.socket/start
+sockets.target: Found dependency on meshsat-clock-guard.service/start
+sockets.target: Job docker.socket/start deleted to break ordering cycle
+```
+
+`docker.service` has `Requires=docker.socket`, so **Docker never started at all**: no `/var/run/docker.sock`, and not even a journal entry for docker.service. No Docker means no bridge; the kiosk autostart polls the bridge `/health` before launching Chromium and therefore times out, bails, and never launches it. The panel comes up with `labwc` on solid black.
+
+Both kits were affected. It had never shown before because both last cold-booted on 12 Sep at 09:20, and the clock guard landed that day at 12:41. **Fix: `Before=docker.service` alone, which is what `scripts/install-kit-time.sh` line 17 already documented.** Proven across two subsequent boots: Docker active unaided, bridge healthy, Chromium launched by itself.
+
+**TTC pre-flight, one line:** `journalctl -b | grep -i "ordering cycle"` must return nothing.
+
+**2. A warm reboot kills the Touch Display 2, and only a power cycle recovers it (MESHSAT-1091).** Proven 2-for-2 on both kits: cold-booted at 13:08 both panels worked, a warm reboot at 13:26 left both with no backlight device and no DSI connector, a power cycle at 13:33 restored both. `display_auto_detect=1` means the firmware identifies the panel at power-on; across a warm reboot the attiny at `11-0045` keeps state, is not identified as a TD2, and the DT node is written for a TD1, leaving four devices deferred for ever on "supplier 11-0045 not ready".
+
+**There is no software recovery.** Binding to `rpi_touchscreen_attiny` gives `Unknown Atmel firmware revision: 0xff`; `modprobe rpi_panel_v2_regulator` does register `rpi_touchscreen_v2` but binding `11-0045` to it silently does nothing, because the firmware-written DT compatible does not match its ID table. The chip answers I2C the whole time (0x45 present, regs 0x01/0x02/0x03 read 0x81/0x03/0x98), so "the chip responds" is not evidence the panel will come up. **Do not chase "pin the TD2 overlay": both DSI overlays are already declared in config.txt and the panel still died.**
+
+**Rule: never `reboot` a kit. `poweroff` and press the X1202 button.** At TTC that means no remote restarts at all.
+
+**3. Never stop the container before a shutdown (owner ruling).** `docker compose stop` records an explicit stop and `restart: always` deliberately does not undo it, so the bridge stays down across the power cycle and produces the same black screen by a different route. Just `poweroff`; systemd stops the container as part of shutdown, which is not an explicit stop. If one has been left stopped: `cd /srv/meshsat && docker compose up -d`, then `systemctl start meshsat-kiosk-restart.service`.
+
+**End state, verified on the final cold boot of both kits with screenshots:** panels rendering `/ttc`, backlight `11-0045` and `card0-DSI-2` present, Docker active unaided, bridge healthy, Chromium launched unaided, all five gateways up, APRS `receive_state ok` with 0 bad frames, TTC lane `aprs` `ready: true` with no issues and `peer_link` resolving `aprs_0 then cellular_0`, device health ok on every target except the satellite one each kit lacks hardware for, RTL-SDR present on both, battery 100 %.
