@@ -528,6 +528,9 @@ function finish(t, failed, after) {
 function onEvent(ev) {
   if (!ev || typeof ev !== 'object') return
   if (ev.type === 'connected_to_stream') { sseUp.value = true; return }
+  // The pack changed state (mains, draining, low): the header's power chip
+  // re-reads now instead of on its next poll. [MESHSAT-794]
+  if (ev.type === 'battery') { window.dispatchEvent(new CustomEvent('meshsat:battery')); return }
   if (ev.type === 'packet') { try { onPacket(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data) } catch {} ; return }
   if (ev.type === 'inbound') { try { onInbound(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data) } catch {} ; return }
   if (typeof ev.type === 'string' && ev.type.startsWith('delivery_')) {

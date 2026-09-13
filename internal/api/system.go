@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/transport"
 )
 
 // Backlight control for the Pi Touch Display 2 (and any other
@@ -151,20 +153,124 @@ type batteryStatus struct {
 // @Failure 404 {object} map[string]string
 // @Router /api/system/battery [get]
 func (s *Server) handleGetBattery(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile("/run/x1202.json")
+	data, err := os.ReadFile(X1202StatusPath)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "UPS not connected (no /run/x1202.json)")
 		return
 	}
-	var bs batteryStatus
-	if err := json.Unmarshal(data, &bs); err != nil {
-		writeError(w, http.StatusInternalServerError, "parse x1202.json: "+err.Error())
+	bs, err := parseBatteryStatus(data, time.Now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Mark stale if last_update > 60s old (x1202-monitor polls every 10s).
-	now := float64(time.Now().Unix())
-	bs.Stale = bs.LastUpdate > 0 && (now-bs.LastUpdate) > 60
 	writeJSON(w, http.StatusOK, bs)
+}
+
+// X1202StatusPath is where the host's x1202-monitor writes the pack state;
+// the field kit compose file bind-mounts it read-only. [MESHSAT-549]
+const X1202StatusPath = "/run/x1202.json"
+
+// batteryLowPercent is the pack level below which a kit on battery reads
+// as low, the same threshold the header's power chip turns red at.
+const batteryLowPercent = 20
+
+// parseBatteryStatus decodes the monitor's status file and marks a reading
+// older than 60 s stale (the monitor polls every 10 s).
+func parseBatteryStatus(data []byte, now time.Time) (*batteryStatus, error) {
+	var bs batteryStatus
+	if err := json.Unmarshal(data, &bs); err != nil {
+		return nil, fmt.Errorf("parse x1202.json: %w", err)
+	}
+	bs.Stale = bs.LastUpdate > 0 && float64(now.Unix())-bs.LastUpdate > 60
+	return &bs, nil
+}
+
+// batteryState names the pack state an operator acts on, with a short
+// message. The level is left out of the key, so a reading that only moves a
+// point or two emits nothing; charging is left out too, because it flips at
+// the full-pack plateau. [MESHSAT-794]
+func batteryState(bs *batteryStatus) (key, message string) {
+	switch {
+	case bs == nil:
+		return "missing", "no UPS reading"
+	case bs.Stale:
+		return "stale", "UPS reading stale"
+	case bs.InputInsufficient:
+		return "draining", "input low: pack draining on mains"
+	case bs.ACPresent != nil && *bs.ACPresent:
+		return "mains", "mains connected"
+	case bs.ACPresent != nil:
+		level := ""
+		if bs.SOCPercent != nil {
+			level = fmt.Sprintf(", pack at %.0f %%", *bs.SOCPercent)
+		}
+		if bs.SOCPercent != nil && *bs.SOCPercent < batteryLowPercent {
+			return "low", "pack low on battery" + level
+		}
+		return "battery", "on battery" + level
+	}
+	return "unknown", "UPS state unknown"
+}
+
+// batteryReadMisses is how many polls in a row must fail to read or parse
+// the status file before it counts as gone: the monitor rewrites the file
+// in place, so a single poll can catch it half written.
+const batteryReadMisses = 3
+
+// batteryWatch folds successive polls of the status file into state
+// changes. [MESHSAT-794]
+type batteryWatch struct {
+	prev   string
+	misses int
+}
+
+// observe takes one poll (nil when the file could not be read or parsed)
+// and reports whether the pack state changed, from what and to what. The
+// first state seen only sets the baseline.
+func (w *batteryWatch) observe(bs *batteryStatus) (changed bool, prev, key, msg string) {
+	if bs == nil && w.misses+1 < batteryReadMisses {
+		w.misses++
+		return false, w.prev, w.prev, ""
+	}
+	if bs != nil {
+		w.misses = 0
+	}
+	prev = w.prev
+	key, msg = batteryState(bs)
+	w.prev = key
+	return prev != "" && key != prev, prev, key, msg
+}
+
+// WatchBatteryEvents re-reads the X1202 monitor's status file every `every`
+// and emits a "battery" event on /api/events whenever the pack state
+// changes: mains lost or back, draining on mains, low on battery, reading
+// stale. The dashboard tile and the booth header's power chip refresh on it
+// instead of on their next poll, and the future SHORE/CHARGING panel lamps
+// (MESHSAT-773) have one event to follow. The first reading only sets the
+// baseline. Returns at once on a host without the file. [MESHSAT-794]
+func WatchBatteryEvents(ctx context.Context, path string, every time.Duration, emit func(transport.MeshEvent)) {
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	var w batteryWatch
+	for {
+		var bs *batteryStatus
+		if data, err := os.ReadFile(path); err == nil {
+			bs, _ = parseBatteryStatus(data, time.Now())
+		}
+		if changed, prev, key, msg := w.observe(bs); changed {
+			payload, _ := json.Marshal(map[string]interface{}{"state": key, "previous": prev, "battery": bs})
+			log.Info().Str("state", key).Str("previous", prev).Msg("battery: " + msg)
+			emit(transport.MeshEvent{Type: "battery", Message: "battery: " + msg, Data: payload, Time: time.Now().UTC().Format(time.RFC3339)})
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // systemPowerRequest is the body of POST /api/system/power. [MESHSAT-831]
