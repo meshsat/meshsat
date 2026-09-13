@@ -223,6 +223,29 @@ func (db *DB) SaveOOBRxWindow(id uint16, high uint32, window uint64) error {
 	return nil
 }
 
+// SetOOBPeerAddress replaces one bearer address of a peer, but only while the
+// stored value is still old, so a concurrent operator PUT or a second frame
+// never loses its write. It reports whether the row changed. [MESHSAT-1102]
+func (db *DB) SetOOBPeerAddress(id uint16, ifaceID, old, updated string) (bool, error) {
+	if ifaceID == "" {
+		return false, fmt.Errorf("set oob peer address: empty interface id")
+	}
+	for _, c := range ifaceID {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+			return false, fmt.Errorf("set oob peer address: invalid interface id %q", ifaceID)
+		}
+	}
+	path := `$."` + ifaceID + `"`
+	res, err := db.Exec(`UPDATE oob_peers SET addresses = json_set(addresses, ?, ?), updated_at = datetime('now')
+		WHERE peer_id = ? AND CASE WHEN json_valid(addresses) THEN json_extract(addresses, ?) END = ?`,
+		path, updated, int64(id), path, old)
+	if err != nil {
+		return false, fmt.Errorf("set oob peer address %d: %w", id, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // InsertOOBLog records one frame event and returns its id.
 func (db *DB) InsertOOBLog(e *OOBLogEntry) (int64, error) {
 	res, err := db.Exec(`INSERT INTO oob_log (peer_id, direction, kind, bearer, from_addr, cmd, counter, result, detail, delivery_id)

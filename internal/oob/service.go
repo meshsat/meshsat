@@ -430,6 +430,7 @@ func (s *Service) HandleInbound(ctx context.Context, ifaceID, fromAddr, text str
 		log.Error().Err(err).Msg("oob: persist replay window")
 	}
 	Global.IncFrame("accepted")
+	s.learnMeshAddress(peer, ifaceID, fromAddr)
 
 	if frame.Reply {
 		s.handleReply(peer, ifaceID, fromAddr, frame)
