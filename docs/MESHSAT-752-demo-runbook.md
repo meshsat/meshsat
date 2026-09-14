@@ -1034,7 +1034,7 @@ At 12:37 parallax's dongle was stalling again (6 failed scans, `healing`). Pausi
 **Booth software still open, in priority order:**
 1. Pause or guard the RTL-SDR reset rung.
 2. A WiFi-off rehearsal of every lane.
-3. The Hub fallback at an offline stand: `MESHSAT_HUB_SMS_NUMBER` is in neither compose nor `.env` on either kit (MESHSAT-963).
+3. The Hub fallback at an offline stand (MESHSAT-963). **Corrected 14 Sep, 13:10 CEST: the SMS leg is armed on both kits.** The bridge takes the Hub number from `system_config` key `ttc_hub_number` before it reads `MESHSAT_HUB_SMS_NUMBER` (`cmd/meshsat/main.go`). The booth flow setup wrote that key on 8 Sep with the Hub's Twilio number, and every bridge start logs `hub satellite fallback armed bearer=auto hub_sms=...`. The earlier finding checked the env var only. Nothing needs setting; the WiFi-off run in item 2 is still owed.
 4. The clock guard floor fix, if the cells do not land.
 5. A longer watch of mesh silences and self-resets on 2.8 (MESHSAT-850, 1112).
 6. The IMT lane end to end, and the JSPR reader panic (MESHSAT-962, 829).
