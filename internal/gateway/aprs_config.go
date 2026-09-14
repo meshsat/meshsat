@@ -37,6 +37,16 @@ type APRSConfig struct {
 	KISSDevice string `json:"kiss_device"`
 	KISSBaud   int    `json:"kiss_baud"` // 0 = 115200
 
+	// RelayThirdParty forwards every decoded APRS frame from any station
+	// (positions, weather, objects, messages to others) to the message
+	// pipeline, where an aprs -> mesh rule relays it. Off by default: only
+	// frames that are for this bridge reach the pipeline (a message
+	// addressed to our callsign, an encrypted MeshSat frame, or a MeshSat
+	// plaintext relay). On a shared channel every passing station's
+	// beacon would otherwise land on the handhelds and the booth screen.
+	// [MESHSAT-1128]
+	RelayThirdParty bool `json:"relay_third_party"`
+
 	// Direwolf channel timing, in Direwolf's own units (10 ms for the
 	// delays, 0..255 for persist). Zero means Direwolf's default. The kit
 	// handhelds need a longer preamble than the 300 ms default before
@@ -116,17 +126,18 @@ func DefaultAPRSConfig() APRSConfig {
 	// gateway config wins once it carries the keys. [MESHSAT-821]
 	kissBaud, _ := strconv.Atoi(os.Getenv("MESHSAT_APRS_KISS_BAUD"))
 	return APRSConfig{
-		KISSDevice:   os.Getenv("MESHSAT_APRS_KISS_DEVICE"),
-		KISSBaud:     kissBaud,
-		KISSHost:     "127.0.0.1",
-		KISSPort:     8001,
-		SSID:         10, // -10 is conventional for igate
-		APRSISServer: "euro.aprs2.net:14580",
-		FrequencyMHz: 144.800, // EU APRS frequency
-		AudioCard:    "AllInOneCable",
-		PTTDevice:    "",
-		PTTLine:      "", // empty => PTT CM108 (auto HID discovery)
-		ModemBaud:    1200,
+		KISSDevice:      os.Getenv("MESHSAT_APRS_KISS_DEVICE"),
+		KISSBaud:        kissBaud,
+		RelayThirdParty: os.Getenv("MESHSAT_APRS_RELAY_THIRD_PARTY") == "1",
+		KISSHost:        "127.0.0.1",
+		KISSPort:        8001,
+		SSID:            10, // -10 is conventional for igate
+		APRSISServer:    "euro.aprs2.net:14580",
+		FrequencyMHz:    144.800, // EU APRS frequency
+		AudioCard:       "AllInOneCable",
+		PTTDevice:       "",
+		PTTLine:         "", // empty => PTT CM108 (auto HID discovery)
+		ModemBaud:       1200,
 	}
 }
 

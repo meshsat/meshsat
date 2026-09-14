@@ -239,14 +239,14 @@ func TestAPRSAck_AckIsNeverForwarded(t *testing.T) {
 
 	tnc.sendRaw(ackFrom(testPeer, "TEST-10", "7K2Q9"))
 	tnc.sendRaw(ackFrom(testPeer, "OTHER-1", "7K2Q9"))
-	tnc.sendAPRSPosition(AX25Address{Call: "PA3XYZ"}, 52.1, 4.5, "after the acks")
+	tnc.sendAPRSMessage(AX25Address{Call: "PA3XYZ"}, "TEST-10", "after the acks")
 	select {
 	case msg := <-gw.Receive():
 		if !strings.Contains(msg.Text, "PA3XYZ") {
 			t.Fatalf("an ack reached Receive: %q", msg.Text)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("position after the acks not delivered")
+		t.Fatal("message after the acks not delivered")
 	}
 }
 

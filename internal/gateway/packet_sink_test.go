@@ -73,12 +73,14 @@ func TestAPRSPacketFeed_ReceiveMessageFrame(t *testing.T) {
 	g, rw, stop := newSerialTestGateway(t, c.sink)
 	defer stop()
 
-	// PA3XYZ-7 sends a directed APRS message to MSPRLX-10 via WIDE1-1,WIDE2-1,
-	// with WIDE1-1 already used (H bit set) as a digipeater would leave it.
+	// PA3XYZ-7 sends a directed APRS message to this gateway (MSTESS-10) via
+	// WIDE1-1,WIDE2-1, with WIDE1-1 already used (H bit set) as a digipeater
+	// would leave it. A message to another station would stay out of the
+	// pipeline since MESHSAT-1128, so it is addressed to us.
 	src := AX25Address{Call: "PA3XYZ", SSID: 7}
 	dst := AX25Address{Call: "APMSHT"}
 	path := []AX25Address{{Call: "WIDE1", SSID: 1}, {Call: "WIDE2", SSID: 1}}
-	info := EncodeAPRSMessage("MSPRLX-10", "hello from the field", "07")
+	info := EncodeAPRSMessage("MSTESS-10", "hello from the field", "07")
 	frame := EncodeAX25Frame(dst, src, path, info)
 	frame[14+6] |= 0x80 // first path slot repeated
 	rw.feed(KISSEncode(frame))
