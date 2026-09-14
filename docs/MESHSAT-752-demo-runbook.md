@@ -1041,3 +1041,31 @@ At 12:37 parallax's dongle was stalling again (6 failed scans, `healing`). Pausi
 7. The full-day and PicoAPRS soaks on the final build (MESHSAT-821, 1028, 1021).
 
 **Git.** 83ff614 (agent allowlist) and this section are committed locally and unpushed under the freeze, together with 4f3eaa8. The next authorised push carries them.
+
+## 38. 14 Sep 2026, afternoon: a push under an owner go, the Hub SMS number that was never missing, and three radio resets on 2.8 that all followed a serial-watchdog port reopen (MESHSAT-850, 1112, 1122, 963, 855)
+
+**Push.** 4f3eaa8, 83ff614, 5f82a6f and f3623c3 went out at 13:04 CEST under an owner go (pipeline 53920). Both deploy jobs verified the digest, and both kits run `sha256:0b90c97c1800`. After the 13:12 restart the radio handshakes completed within 1 s, lane `aprs` was ready, the Hub relay was connected, and 8 minutes later neither kit had activated the Hub fallback. The freeze is back on.
+
+**Hub fallback SMS leg (MESHSAT-963).** It is armed on both kits. The bridge reads `system_config` key `ttc_hub_number` before `MESHSAT_HUB_SMS_NUMBER`, and the flow setup wrote that key on 8 Sep. Item 3 of section 37 is corrected in place; only the WiFi-off run is owed.
+
+**Mesh watch, 13:05 to 16:52 CEST.** A read-only poll of both kits every 60 s: mesh health state, `reboot_count`, kernel USB events on the radio port, and bridge handshake and heal lines.
+- **The serial watchdog.** `MESHSAT_MESH_WATCHDOG_MIN` (default 10; the kit compose does not pass it) closes and reopens the radio port when no packet from another node has arrived for 10 minutes while the NodeDB lists any remote node. On the quiet kit channels that is every 10 to 20 minutes: 38 reopens between the 2.8 flash and 16:52 (tesseract 20, parallax 18).
+- **Three radio self-resets, each after a reopen:**
+
+| Kit | Reopen | Last radio frame | Health detected (3 missed probes) | `reboot_count` | Recovered (step 1) |
+|---|---|---|---|---|---|
+| parallax | 14:13:36 | 14:13:42 | 14:15:53 | 538 -> 539 | 14:16:18 |
+| tesseract | 15:46:02 | 15:46:21 | 15:48:28 | 327 -> 328 | 15:48:53 |
+| parallax | 16:17:48 | 16:18:31 | 16:20:53 | 539 -> 540 | 16:21:18 |
+
+- **Impact.** About 2 minutes of dead mesh each, no hub-port cut, hard budget untouched. No reset happened without a reopen in front of it, and every bridge restart since the flash came back without one.
+- **On 2.8 a radio reboot does not re-enumerate USB.** The kernel log was empty for all three. Watch `reboot_count` or the bridge's `radio rebooted` line, not the kernel USB log; this reverses the 2.6.10 advice.
+- **Recommendation (MESHSAT-1122, owner decision).** Device health's local probe caught all three silences on its own, so the case the serial watchdog was written for is covered. Set `MESHSAT_MESH_WATCHDOG_MIN=0` in both kit compose files (0 disables it) and recreate one kit at a time.
+
+**RTL-SDR reset rung (MESHSAT-855, 1001).** Automatic USB resets since the 11:27 boot: tesseract 12:01, 12:43, 13:06, 15:07 and 15:20; parallax 11:40 and 12:38. All recovered, and both dongles were on the bus at 16:52. Pausing the `rtl_sdr` target until the second hub (17 Sep) is an owner decision. A pause is persisted, survives a bridge restart, keeps the probes running, and never marks an interface jammed.
+
+**Second 9704.** Ground Control activated a demo plan for tesseract's modem the same afternoon, and it shows in the Cloudloop account. MESHSAT-1071 now waits only on the bench swap: the uart2 overlay (a poweroff and a button press), the `.env` IMT values and the BCM 23 review.
+
+**PicoAPRS after a power loss (MESHSAT-1028).** The owner has powered the kits off overnight and pressed PTT for 3 s every morning since the units arrived, and it works, so that test is no longer owed. The TNC port cut and the 24 h soak remain.
+
+**Git.** This section is committed locally and unpushed under the freeze.
