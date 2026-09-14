@@ -208,11 +208,13 @@ func TestAPRSIntegration_ReceivePosition(t *testing.T) {
 	// Give the gateway a moment to start reading
 	time.Sleep(100 * time.Millisecond)
 
-	// Send an APRS position from the mock TNC
+	// Send a MeshSat plaintext relay (a position frame with the MeshSat
+	// marker) from the mock TNC; a plain third-party position would stay
+	// in the heard list since MESHSAT-1128.
 	tnc.sendAPRSPosition(
 		AX25Address{Call: "PA3XYZ", SSID: 7},
 		52.3676, 4.9041,
-		"Mobile station",
+		"[MeshSat !aabbccdd] Mobile station",
 	)
 
 	// Read from receive channel
@@ -440,7 +442,7 @@ func TestAPRSIntegration_MalformedEncryptedFrameDoesNotCrash(t *testing.T) {
 	tnc.sendAPRSPosition(
 		AX25Address{Call: "PA3GUD", SSID: 1},
 		52.0, 4.5,
-		"still alive",
+		"[MeshSat !00000001] still alive",
 	)
 	select {
 	case msg := <-gw.Receive():
@@ -556,15 +558,114 @@ func TestAPRSIntegration_StatusBeaconIsLivenessOnly(t *testing.T) {
 	if gw.Status().MessagesIn != 0 {
 		t.Fatalf("messages_in %d, want 0", gw.Status().MessagesIn)
 	}
-	// It still counts as a heard station and a received frame.
-	tnc.sendAPRSPosition(AX25Address{Call: "PA3XYZ", SSID: 7}, 52.3676, 4.9041, "after the beacon")
+	// A message addressed to us after the beacon still goes through.
+	tnc.sendAPRSMessage(AX25Address{Call: "PA3XYZ", SSID: 7}, "TEST-10", "after the beacon")
 	select {
 	case msg := <-gw.Receive():
 		if !strings.Contains(msg.Text, "PA3XYZ") {
 			t.Fatalf("unexpected message %q", msg.Text)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("position after the beacon was not delivered")
+		t.Fatal("message after the beacon was not delivered")
+	}
+}
+
+func (s *mockKISSTNC) sendAPRSMessage(src AX25Address, to, text string) {
+	dst := AX25Address{Call: "APRS", SSID: 0}
+	frame := EncodeAX25Frame(dst, src, nil, EncodeAPRSMessage(to, text, ""))
+	s.sendCh <- frame
+}
+
+// Frames from stations that are not talking to this bridge stay in the
+// heard list and never enter the message pipeline, so an aprs -> mesh
+// relay rule cannot put a passing station's beacon on the handhelds or the
+// booth screen. What does get through: a message addressed to our callsign
+// (with or without SSID) and a MeshSat plaintext relay. [MESHSAT-1128]
+func TestAPRSIntegration_ThirdPartyFramesStayOutOfThePipeline(t *testing.T) {
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	host, port := splitHostPort(t, tnc.addr())
+	gw := NewAPRSGateway(APRSConfig{KISSHost: host, KISSPort: port, Callsign: "TEST", SSID: 10, FrequencyMHz: 144.800, ExternalDirewolf: true}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	stranger := AX25Address{Call: "PD0PYL", SSID: 5}
+	// A position beacon (the 14 Sep frame was a Mic-E position), an
+	// uncompressed position, and a message to someone else.
+	micE := EncodeAX25Frame(AX25Address{Call: "T2SU4Y", SSID: 0}, stranger,
+		[]AX25Address{{Call: "WIDE1", SSID: 1}, {Call: "WIDE2", SSID: 1}}, []byte("`z:wlRWs/`\"3k}Test Yaesu FTM 510_5\r"))
+	tnc.sendRaw(micE)
+	tnc.sendAPRSPosition(stranger, 52.3676, 4.9041, "passing by")
+	tnc.sendAPRSMessage(stranger, "PA3XYZ-7", "not for the kit")
+	select {
+	case msg := <-gw.Receive():
+		t.Fatalf("third-party frame delivered as a message: %q", msg.Text)
+	case <-time.After(700 * time.Millisecond):
+	}
+	if n := gw.Status().MessagesIn; n != 0 {
+		t.Fatalf("messages_in %d, want 0", n)
+	}
+	if n := gw.thirdPartyDropped.Load(); n != 3 {
+		t.Fatalf("third_party_dropped %d, want 3", n)
+	}
+	heard := false
+	for _, h := range gw.tracker.GetHeardStations() {
+		if h.Callsign == "PD0PYL-5" {
+			heard = true
+		}
+	}
+	if !heard {
+		t.Fatal("the stranger is missing from the heard list")
+	}
+
+	// What must still arrive: a message to our callsign without SSID, one
+	// with SSID, and a MeshSat plaintext relay from a peer bridge.
+	tnc.sendAPRSMessage(stranger, "TEST", "hello kit")
+	tnc.sendAPRSMessage(stranger, "TEST-10", "hello kit again")
+	peer := AX25Address{Call: "MSPRLX", SSID: 10}
+	tnc.sendAPRSPosition(peer, 0, 0, "[MeshSat !4370c1d8] relayed text")
+	for i, want := range []string{"hello kit", "hello kit again", "relayed text"} {
+		select {
+		case msg := <-gw.Receive():
+			if !strings.Contains(msg.Text, want) {
+				t.Fatalf("message %d: got %q, want it to contain %q", i, msg.Text, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("message %d (%q) was not delivered", i, want)
+		}
+	}
+	if n := gw.thirdPartyDropped.Load(); n != 3 {
+		t.Fatalf("third_party_dropped %d after the wanted frames, want 3", n)
+	}
+}
+
+// RelayThirdParty restores the old behaviour for an operator who wants every
+// decoded frame on the pipeline. [MESHSAT-1128]
+func TestAPRSIntegration_RelayThirdPartyOptIn(t *testing.T) {
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	host, port := splitHostPort(t, tnc.addr())
+	gw := NewAPRSGateway(APRSConfig{KISSHost: host, KISSPort: port, Callsign: "TEST", SSID: 10, FrequencyMHz: 144.800, ExternalDirewolf: true, RelayThirdParty: true}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+	time.Sleep(100 * time.Millisecond)
+	tnc.sendAPRSPosition(AX25Address{Call: "PD0PYL", SSID: 5}, 52.3676, 4.9041, "passing by")
+	select {
+	case msg := <-gw.Receive():
+		if !strings.Contains(msg.Text, "PD0PYL-5") {
+			t.Fatalf("unexpected message %q", msg.Text)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("third-party position was not delivered with relay_third_party set")
 	}
 }
 

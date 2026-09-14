@@ -38,13 +38,17 @@ type APRSGateway struct {
 	// for running Direwolf out-of-band. [MESHSAT-516]
 	supervisor *DirewolfSupervisor
 
-	connected  atomic.Bool
-	msgsIn     atomic.Int64
-	msgsOut    atomic.Int64
-	errors     atomic.Int64
-	badFrames  atomic.Int64 // KISS frames from the TNC that did not decode; dropped, link kept
-	lastActive atomic.Int64
-	startTime  time.Time
+	connected atomic.Bool
+	msgsIn    atomic.Int64
+	msgsOut   atomic.Int64
+	errors    atomic.Int64
+	badFrames atomic.Int64 // KISS frames from the TNC that did not decode; dropped, link kept
+	// Decoded frames from other stations that were not for this bridge and
+	// stayed in the heard list instead of entering the message pipeline.
+	// [MESHSAT-1128]
+	thirdPartyDropped atomic.Int64
+	lastActive        atomic.Int64
+	startTime         time.Time
 
 	tracker *APRSTracker
 
@@ -281,25 +285,26 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		tx = g.kiss.TX.Load()
 	}
 	status := map[string]interface{}{
-		"connected":       connected,
-		"kiss_up":         kissUp,
-		"callsign":        FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
-		"frequency_mhz":   g.config.FrequencyMHz,
-		"uptime":          uptime,
-		"rx":              rx,
-		"tx":              tx,
-		"errors":          g.errors.Load(),
-		"bad_frames":      g.badFrames.Load(),
-		"repaired_frames": g.kiss.Repaired.Load(),
-		"cts_deferred":    g.ctsDeferred.Load(),
-		"acks_sent":       g.acksSent.Load(),
-		"acks_received":   g.acksReceived.Load(),
-		"ack_retries":     g.ackRetries.Load(),
-		"ack_failures":    g.ackFailures.Load(),
-		"heard_count":     len(g.tracker.GetHeardStations()),
-		"packet_types":    g.tracker.GetPacketTypeBreakdown(),
-		"kiss_addr":       g.kiss.Target(),
-		"tnc_serial":      g.kiss.Serial(),
+		"connected":           connected,
+		"kiss_up":             kissUp,
+		"callsign":            FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
+		"frequency_mhz":       g.config.FrequencyMHz,
+		"uptime":              uptime,
+		"rx":                  rx,
+		"tx":                  tx,
+		"errors":              g.errors.Load(),
+		"bad_frames":          g.badFrames.Load(),
+		"repaired_frames":     g.kiss.Repaired.Load(),
+		"third_party_dropped": g.thirdPartyDropped.Load(),
+		"cts_deferred":        g.ctsDeferred.Load(),
+		"acks_sent":           g.acksSent.Load(),
+		"acks_received":       g.acksReceived.Load(),
+		"ack_retries":         g.ackRetries.Load(),
+		"ack_failures":        g.ackFailures.Load(),
+		"heard_count":         len(g.tracker.GetHeardStations()),
+		"packet_types":        g.tracker.GetPacketTypeBreakdown(),
+		"kiss_addr":           g.kiss.Target(),
+		"tnc_serial":          g.kiss.Serial(),
 	}
 	if g.kiss.Serial() {
 		if ts := g.lastFrameAt.Load(); ts > 0 {
@@ -685,6 +690,17 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 		// the receive health and stop here, so an aprs -> mesh relay rule
 		// never forwards a beacon to the handhelds. [MESHSAT-857]
 		if pkt.DataType == '>' {
+			continue
+		}
+
+		// Anything else from a station that is not talking to this bridge
+		// (a passing station's position, weather, object, or a message to
+		// someone else) is heard-list only: an aprs -> mesh relay rule must
+		// never put it on the handhelds or the booth screen. [MESHSAT-1128]
+		if !g.relayable(pkt) {
+			g.thirdPartyDropped.Add(1)
+			log.Debug().Str("from", pkt.Source).Str("type", string(pkt.DataType)).
+				Msg("aprs: third-party frame kept out of the message pipeline")
 			continue
 		}
 
@@ -1093,6 +1109,46 @@ func (g *APRSGateway) isOwnSource(src AX25Address) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(src.Call), call) && src.SSID == g.config.SSID&0x0F
+}
+
+// aprsMeshSatMarker opens the comment of every plaintext relay a MeshSat
+// bridge transmits (see transmitMessage), so a peer in plaintext mode is
+// recognised without a callsign list.
+const aprsMeshSatMarker = "[MeshSat "
+
+// relayable reports whether a decoded, non-status frame is for this bridge
+// and may enter the message pipeline: a message addressed to our callsign
+// (OOB requests and replies, operator texts), or a plaintext relay from
+// another MeshSat bridge. Encrypted frames never reach here (own branch),
+// acks and status beacons are handled before. With RelayThirdParty set the
+// old behaviour, everything decoded is a message, is kept. [MESHSAT-1128]
+func (g *APRSGateway) relayable(pkt *APRSPacket) bool {
+	if g.config.RelayThirdParty {
+		return true
+	}
+	switch pkt.DataType {
+	case ':':
+		return g.addressedToUs(pkt.MsgTo)
+	case '!', '=', '/', '@':
+		return strings.HasPrefix(pkt.Comment, aprsMeshSatMarker)
+	default:
+		return strings.Contains(pkt.Raw, aprsMeshSatMarker)
+	}
+}
+
+// addressedToUs matches an APRS message addressee against our callsign,
+// with or without the SSID, case-insensitively.
+func (g *APRSGateway) addressedToUs(to string) bool {
+	to = strings.ToUpper(strings.TrimSpace(to))
+	call := strings.ToUpper(strings.TrimSpace(g.config.Callsign))
+	if to == "" || call == "" {
+		return false
+	}
+	if len(call) > 6 {
+		call = call[:6]
+	}
+	full := FormatCallsign(AX25Address{Call: call, SSID: g.config.SSID & 0x0F})
+	return to == full || to == call
 }
 
 // repeatGap is the pause between repeat copies of one message.

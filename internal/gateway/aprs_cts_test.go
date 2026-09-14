@@ -165,10 +165,12 @@ func TestAPRSCTS_OwnEchoDoesNotHold(t *testing.T) {
 
 	position := func(src AX25Address, comment string) []byte {
 		return KISSEncode(EncodeAX25Frame(AX25Address{Call: "APRS"}, src, nil,
-			EncodeAPRSPosition(52.3676, 4.9041, '/', '-', comment)))
+			EncodeAPRSPosition(52.3676, 4.9041, '/', '-', aprsMeshSatMarker+"!00000001] "+comment)))
 	}
-	// The read worker delivers a position as an inbound message AFTER the
-	// lastPeerRX decision, so receiving it means the decision was made.
+	// The read worker delivers a MeshSat-tagged position as an inbound
+	// message AFTER the lastPeerRX decision, so receiving it means the
+	// decision was made (an untagged third-party position would stay out of
+	// the pipeline since MESHSAT-1128).
 	waitInbound := func(what string) {
 		t.Helper()
 		select {
