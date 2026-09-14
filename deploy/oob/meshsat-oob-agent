@@ -79,7 +79,10 @@ USB_REBIND = {
 # VBUS group even though uhubctl labels them ppps, so root ports are
 # refused. [MESHSAT-786]
 USB_DEVICES = {
-    "mesh": ["2886:0059"],
+    # Meshtastic 2.8 builds the XIAO S3 with ARDUINO_USB_MODE=1 (HWCDC), so the
+    # running radio enumerates as the S3's own USB Serial/JTAG, 303a:1001,
+    # the same identity as its ROM bootloader. [MESHSAT-850]
+    "mesh": ["2886:0059", "303a:1001"],
     "cellular": ["1a86:55d4"],
     "zigbee": ["10c4:ea60"],
     "gps": ["1546:01a7"],
