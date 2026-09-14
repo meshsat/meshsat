@@ -200,6 +200,17 @@ class USBPowerCycleTests(unittest.TestCase):
         with self.assertRaises(agent.Refused):
             agent.plan("usb_power_cycle", {"device": "aioc", "fallback": False})
 
+    def test_mesh_accepts_both_xiao_identities(self):
+        # 2.6 TinyUSB enumerates as Seeed's 2886:0059, 2.8 HWCDC as the S3's
+        # own USB Serial/JTAG 303a:1001. Losing either would refuse the
+        # watchdog's hub-port cut for a silent radio. [MESHSAT-850]
+        self.assertIn("2886:0059", agent.USB_DEVICES["mesh"])
+        self.assertIn("303a:1001", agent.USB_DEVICES["mesh"])
+        agent.resolve_usb_port = lambda role, tty=None: dict(FAKE_DEV, vidpid="303a:1001", name="2-1.4", port=4)
+        argv, _t, post = agent.plan("usb_power_cycle", {"device": "mesh", "tty": "/dev/ttyACM2"})
+        self.assertEqual(argv[argv.index("--usb-cycle") + 1:], ["4", str(agent.DEFAULT_OFF_MS), "2-1", "3-1"])
+        self.assertEqual(post(None)["method"], "power_cycle")
+
     def test_usb_switchable_reports_every_role(self):
         argv, _t, post = agent.plan("usb_switchable", {})
         self.assertIsNone(argv)
