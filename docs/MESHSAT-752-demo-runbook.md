@@ -516,7 +516,7 @@ Moved on 8 September: the booth flow selector is live on both kits with four pat
 |---|---|---|
 | Kit-to-kit relay, APRS first, SMS fallback, both directions | proven through the rules on the UV-K5 + AIOC chain (section 16 numbers) | re-measured on the PicoAPRS chain, then a 24 h soak with beacons only |
 | Booth screen (TTC mode) | 16/16 checks on both panels at the real viewport; rebalanced 8 Sep so the island with the kit and the handheld is the hero and the message strip is one row (d127869, f04fa41), live on both panels | a full-day run on both panels |
-| Radios | Meshtastic 2.6.10 on both kits, mesh split (msat-ttc-01 / 02), Bluetooth off | Bluetooth read-back at the next serial window |
+| Radios | Meshtastic 2.8.0.47db0e3 alpha on both kits since 14 Sep (section 37; 2.6.10 before), mesh split (msat-ttc-01 / 02), Bluetooth off | Bluetooth read-back at the next serial window |
 | Power | 5 V inlet unchanged (both kits died on 4 Sep) | 12 V refit (parts 9 Sep) and 24 h zero-AC-loss on both kits |
 | APRS hardware | PicoAPRS V4 live on both kits since 10 Sep; receive never deaf in 7.5 h; stray-byte frames repaired and the port no longer reopened on a bad frame (MESHSAT-1020); 17 to 20 of 20 texts per run, second copy + SMS fallback behind | MESHSAT-1021 (message copy vs beacon copy share the 4 s gap), 24 h soak, TNC port cut, power-loss + 3 s PTT (MESHSAT-821); K5 + AIOC stay in the pouch until then |
 | Handhelds | T-Echo (mesh A), T-Deck Plus (mesh B), T-Deck Pro ordered, power packs 8 Sep | Pro joined to an island, charging plan for two days |
@@ -1006,3 +1006,38 @@ Four fixes deployed on both kits, one push each, image `49325ebe` (commits da540
 **End state, both kits, image `49325ebe`, verified:** mesh, cellular, APRS (`receive_state ok`), satellite (9603 SBD tesseract / 9704 IMT parallax), GPS, ZigBee coordinators, Hub link, UPS on mains all ok; both booth lanes `aprs`, `ready: true`, no `issues`. Unchanged from before tonight: both RTL-SDRs off the bus (re-seat, MESHSAT-855/1001) and tesseract's ZigBee sensor silent since 6 Sep (MESHSAT-1092).
 
 **FREEZE from here (owner instruction, 14 Sep):** no more pushes to meshsat main before TTC without an explicit go, because every push redeploys and restarts both kits. This section is committed locally and unpushed; it rides the next real push.
+
+## 37. 14 Sep 2026, day: Meshtastic 2.8.0 on both kit radios, the RTL-SDR reset rung again, and where booth software stands (MESHSAT-850, 1112, 1021, 855, 1001, 963, 1056)
+
+**Meshtastic 2.8.0.47db0e3 on both radios (owner go; tesseract 12:03, parallax 12:10 CEST).** 2.8.0 contains PR 10956 (the ESP32-S3 USB CDC post-disconnect watchdog reboot) and builds the XIAO S3 with `ARDUINO_USB_MODE=1` (HWCDC). It is an Alpha: the first 2.8.0 cut was revoked, and the newest beta is 2.7.26. Only app0 was written (0x10000, hash verified). The config exports before and after matched on 47 keys, with one new default key. The handhelds stay on 2.6.10.
+
+**Three things that change for anyone working on the radios.**
+1. **The running radio enumerates as `303a:1001`**, the S3's own USB Serial/JTAG, with the same by-id name as its ROM bootloader. The host agent only allowed hub-port cuts for `2886:0059` and would have refused the watchdog's cure for a silent radio. 83ff614 accepts both ids (with a unit test) and is installed by hand on both kits.
+2. **Node numbers are derived from the public key:** tesseract `!de11f199`, parallax `!4370c1d8`. Both OOB peer rows were updated.
+3. **Reflashing parallax needs hub-port cuts first.** After a config export its TinyUSB stack ignored esptool, and it took two cuts before the ROM bootloader appeared. Recipe and traps: memory `reference_xiao_esp32s3_flash_and_download_mode`.
+
+**Measured.**
+- **Restart series right after the flash:** 5 bridge restarts 60 s apart per kit, both radio ttys at `-hupcl` (DTR held). tesseract 5 of 5 clean, handshake 16 to 17 s. parallax 4 of 5 clean, one handshake at 32 s with no USB disconnect and no heal. Zero hub-port cuts and zero radio self-resets. On 13 Sep, on 2.6.10 with DTR held, parallax went silent on 2 of 5.
+- **Handheld interop confirmed at 12:30:** T-Deck Pro to T-Deck Plus in 3 s, and back in 2 s, over APRS. The first text's ack was lost on the air twice; after 4 attempts it moved to SMS, and parallax dropped the SMS copy through delivery dedup, so it showed once (MESHSAT-1021).
+
+**The RTL-SDR reset rung, again (MESHSAT-855, 1001).** Both dongles were back on the bus at 02:36, most likely after a hand re-seat. The watchdog's automatic USB reset then ran four times by 12:01:
+- tesseract 03:17 and 12:01: recovered.
+- parallax 11:40: recovered.
+- parallax 02:57: dropped the dongle off the bus (`error -62`) until the 11:27 boot.
+
+At 12:37 parallax's dongle was stalling again (6 failed scans, `healing`). Pausing the `rtl_sdr` target until the second hub arrives (17 Sep) is one API call per kit and has not been decided.
+
+**Clock at an offline stand (MESHSAT-1056).** The 11:27 boot came up at the frozen root-fs mount time, 13 Sep 13:23 UTC, and the clock guard wrote `trusted=yes source=floor`. chrony fixed it only because the kits have internet. No RTC cell is fitted yet: tesseract's `battery_voltage` floats at 5128, parallax reads 0, and `charging_voltage` is 0 on both.
+
+**Touch Display 2 cold boot with the pin passed (MESHSAT-1091).** Both kits were powered off at 03:53 and started by button at 11:27: backlight on, DSI-2 present, Chromium up, and the healthy kernel signature (`Failed to register i2c client 7inch-touchscreen-p at 0x45 (-16)` plus two `failed to add DSI device -17`). That was the last owed check for the pin; touch was not tested by hand. The no-warm-reboot rule stays until the owner lifts it.
+
+**Booth software still open, in priority order:**
+1. Pause or guard the RTL-SDR reset rung.
+2. A WiFi-off rehearsal of every lane.
+3. The Hub fallback at an offline stand: `MESHSAT_HUB_SMS_NUMBER` is in neither compose nor `.env` on either kit (MESHSAT-963).
+4. The clock guard floor fix, if the cells do not land.
+5. A longer watch of mesh silences and self-resets on 2.8 (MESHSAT-850, 1112).
+6. The IMT lane end to end, and the JSPR reader panic (MESHSAT-962, 829).
+7. The full-day and PicoAPRS soaks on the final build (MESHSAT-821, 1028, 1021).
+
+**Git.** 83ff614 (agent allowlist) and this section are committed locally and unpushed under the freeze, together with 4f3eaa8. The next authorised push carries them.
