@@ -1069,3 +1069,22 @@ At 12:37 parallax's dongle was stalling again (6 failed scans, `healing`). Pausi
 **PicoAPRS after a power loss (MESHSAT-1028).** The owner has powered the kits off overnight and pressed PTT for 3 s every morning since the units arrived, and it works, so that test is no longer owed. The TNC port cut and the 24 h soak remain.
 
 **Git.** This section is committed locally and unpushed under the freeze.
+
+## 39. 14 Sep 2026, 17:00: a read-only health check, and third-party APRS traffic on the booth relay (MESHSAT-1128)
+
+**Health check, 16:59 to 17:02 CEST.** Both kits green on `sha256:0b90c97c1800`, bridge healthy, compose sha identical.
+- **Host:** `throttled=0x0`, 49 to 54 C, no mmc errors, 0 WiFi disconnects, no ordering cycles, chrony under 1 ms.
+- **Power:** mains, charging, 100 % and 99.8 %, 0 AC-loss events since the 11:27 boot.
+- **Panels:** DSI-2 connected, backlight on, touch bound with a valid config, `/ttc` on lane `aprs` with `ready: true` (grim capture).
+- **Devices:** every device health target ok, except the satellite target on each kit that has no modem for it. PicoAPRS receive ok with 0 bad frames; cellular registered on KPN LTE; 9603 and 9704 answering with 0 bars indoors; GPS sending NMEA without a fix indoors; RTL-SDR scanning with all five bands clear; ZigBee coordinators ready; Hub relay connected.
+- **No new resets:** no radio self-reset after the three in section 38, and no RTL-SDR reset after 15:20 (tesseract) and 12:38 (parallax). Hard budgets untouched, nothing queued or retrying.
+
+**Still owed:** the RTC cells (not fitted at 17:00; tesseract's `battery_voltage` floats at 5982, parallax reads 0) and tesseract's ZigBee sensor (MESHSAT-1092, silent since 6 Sep).
+
+**Cosmetic.** `meshsat-kiosk-restart.service` reads `failed` on both kits because its uptime gate refused at 11:28 ("uptime under an hour, refusing to recycle the kiosk"); the kiosk was up. parallax logs `Invalid URL, ignoring: MESHSAT-628` for the unit's `Documentation=` line at every daemon-reload.
+
+**Third-party APRS traffic reaches the booth relay (MESHSAT-1128).** At 16:06 both kits decoded one Mic-E position frame from an outside station. The bridge stored its raw information field as a text message, both kits relayed it to `mesh_0` through the inbound APRS to mesh booth rules (tesseract rule 3, parallax rule 4), and both panels still showed it garbled as the `/ttc` headline an hour later. `bad_frames` stayed 0, so this is not a decode fault. At TTC every APRS station in range on 144.800 takes the same path: extra LoRa airtime on both meshes, junk on the handhelds and on the booth screen. Tell: `GET /api/aprs/heard` lists a station other than the peer kit. The fix is code and needs an owner go under the freeze.
+
+**Panel screenshot over ssh.** Listing the kiosk user's runtime directory needs root, so the whole grim command, socket lookup included, goes inside `sudo sh -c '...'`; `grim -s 0.5 -` writes the PNG to stdout.
+
+**Git.** This section is committed locally and unpushed under the freeze.
