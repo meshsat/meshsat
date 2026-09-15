@@ -33,14 +33,15 @@ const store = useMeshsatStore()
 // ── identity ─────────────────────────────────────────────────────────
 // Which kit is this panel? From the APRS callsign, overridable with ?kit=.
 // Booth placement (owner, 6 Sep 2026): tesseract on the LEFT of parallax.
-// The T-Deck Plus sits with parallax, the e-paper T-Deck Pro with
-// tesseract (owner, 11 Sep 2026; the T-Echo is kept as a device type),
-// so the story runs right to left across the table and the screens
-// follow the table. `side` is where the box stands, `device` is what is
-// paired with it, `mesh` the island letter.
+// Each kit pairs an e-paper T-Deck Pro since the second one arrived
+// (owner, 15 Sep 2026): Pro (A) with tesseract, Pro (B) with parallax.
+// The T-Deck Plus and the T-Echo stay as device types. The story runs
+// right to left across the table and the screens follow the table.
+// `side` is where the box stands, `device` is what is paired with it,
+// `label` its caption on the drawing, `mesh` the island letter.
 const KITS = {
-  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeck', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'tdeckpro', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
+  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeckpro', label: 'T-Deck Pro (B)', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
+  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'tdeckpro', label: 'T-Deck Pro (A)', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
 }
 const LEFT_KIT = 'tesseract'
 // Everything the drawing needs per handheld: the photo component, the
@@ -144,7 +145,7 @@ let tween = null
 let raf = 0
 
 // Geometry (SVG viewBox 1280 x 470).
-// Full route, left to right: T-Deck Pro, tesseract, air, parallax, T-Deck Plus.
+// Full route, left to right: T-Deck Pro (A), tesseract, air, parallax, T-Deck Pro (B).
 const G = {
   devL: { x: 150, y: 240 }, kitL: { x: 392, y: 240 }, airL: { x: 490, y: 240 },
   airR: { x: 790, y: 240 }, kitR: { x: 888, y: 240 }, devR: { x: 1130, y: 240 },
@@ -1111,7 +1112,7 @@ onUnmounted(() => {
             <g :transform="`translate(${P.dev.x},${P.dev.y + 26})`" class="station near tap" :class="{ flash }" @click="openCard(nearDev)">
               <rect x="-140" y="-150" width="280" height="330" class="hit" rx="16" />
               <component :is="DEVICES[nearDev].comp" :scale="1.85" />
-              <text :y="DEVICES[nearDev].nameNear" text-anchor="middle" class="st-name">{{ DEVICES[nearDev].title }}</text>
+              <text :y="DEVICES[nearDev].nameNear" text-anchor="middle" class="st-name">{{ me.label || DEVICES[nearDev].title }}</text>
               <text :y="DEVICES[nearDev].nameNear + 24" text-anchor="middle" class="st-sub">{{ DEVICES[nearDev].sub }}</text>
             </g>
 
@@ -1175,7 +1176,7 @@ onUnmounted(() => {
             <g :transform="`translate(${G.devL.x},${G.devL.y})`" class="station tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="openCard(leftKit.device)">
               <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
               <component :is="DEVICES[leftKit.device].comp" />
-              <text :y="DEVICES[leftKit.device].nameFull" text-anchor="middle" class="st-name">{{ DEVICES[leftKit.device].title }}</text>
+              <text :y="DEVICES[leftKit.device].nameFull" text-anchor="middle" class="st-name">{{ leftKit.label || DEVICES[leftKit.device].title }}</text>
               <text :y="DEVICES[leftKit.device].nameFull + 18" text-anchor="middle" class="st-sub">{{ DEVICES[leftKit.device].sub }}</text>
             </g>
             <g :transform="`translate(${G.kitL.x},${G.kitL.y})`" class="station kit tap" :class="[leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && leftKit.name === me.name }]" @click="kitTap">
@@ -1195,7 +1196,7 @@ onUnmounted(() => {
             <g :transform="`translate(${G.devR.x},${G.devR.y})`" class="station tap" :class="[rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far'), { flash: flash && rightKit.name === me.name }]" @click="openCard(rightKit.device)">
               <rect x="-90" y="-80" width="180" height="180" class="hit" rx="14" />
               <component :is="DEVICES[rightKit.device].comp" />
-              <text :y="DEVICES[rightKit.device].nameFull" text-anchor="middle" class="st-name">{{ DEVICES[rightKit.device].title }}</text>
+              <text :y="DEVICES[rightKit.device].nameFull" text-anchor="middle" class="st-name">{{ rightKit.label || DEVICES[rightKit.device].title }}</text>
               <text :y="DEVICES[rightKit.device].nameFull + 18" text-anchor="middle" class="st-sub">{{ DEVICES[rightKit.device].sub }}</text>
             </g>
 
