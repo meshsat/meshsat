@@ -57,6 +57,11 @@ type Processor struct {
 	relayDedupMu sync.Mutex
 	relayDedup   map[string]time.Time
 
+	// Inbound frames dropped per interface because they did not
+	// authenticate on an encrypted interface. [MESHSAT-1128]
+	inboundDroppedMu sync.Mutex
+	inboundDropped   map[string]uint64
+
 	// Protocol enhancements (MESHSAT-407)
 	timeSyncHandler   func(data []byte, sourceIface string) // handles 0x14/0x15
 	custodyHandler    func(data []byte, sourceIface string) // handles 0x16 (custody offer)
@@ -80,13 +85,37 @@ type Processor struct {
 // NewProcessor creates a new event processor.
 func NewProcessor(db *database.DB, mesh transport.MeshTransport) *Processor {
 	p := &Processor{
-		db:            db,
-		mesh:          mesh,
-		relayDedup:    make(map[string]time.Time),
-		packetSenders: make(map[string]func(ctx context.Context, data []byte) error),
+		db:             db,
+		mesh:           mesh,
+		relayDedup:     make(map[string]time.Time),
+		inboundDropped: make(map[string]uint64),
+		packetSenders:  make(map[string]func(ctx context.Context, data []byte) error),
 	}
 	p.packets = NewPacketRing(PacketRingSize, p.Emit)
 	return p
+}
+
+// InboundDropped returns, per interface, how many inbound frames were dropped
+// because they did not authenticate on an encrypted interface. [MESHSAT-1128]
+func (p *Processor) InboundDropped() map[string]uint64 {
+	out := make(map[string]uint64)
+	if p == nil {
+		return out
+	}
+	p.inboundDroppedMu.Lock()
+	for k, v := range p.inboundDropped {
+		out[k] = v
+	}
+	p.inboundDroppedMu.Unlock()
+	return out
+}
+
+func (p *Processor) countInboundDropped(iface string) uint64 {
+	p.inboundDroppedMu.Lock()
+	p.inboundDropped[iface]++
+	n := p.inboundDropped[iface]
+	p.inboundDroppedMu.Unlock()
+	return n
 }
 
 // Packets returns the live packet feed ring. Nil-safe: a nil Processor
@@ -1091,8 +1120,17 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				// Apply ingress transforms (decrypt, decompress) before the live
 				// event and before persisting, so the operator screen's activity
 				// log shows the text and not the APRS ciphertext. [MESHSAT-447, MESHSAT-1000]
+				//
+				// On an interface whose chain decrypts, the chain is also the
+				// authentication: AES-GCM rejects anything not produced with the
+				// shared key. A frame that fails it is not from a peer, whatever
+				// its source address or APRS addressee says, so it is dropped here
+				// and never reaches the rules, the booth screen or the message
+				// table. Plain messages (a configured plaintext peer, the Hub's
+				// SMS number) skip the chain as before. [MESHSAT-1128]
 				sourceIface := msg.Source + "_0"
 				decodedText := msg.Text
+				dropped := false
 				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain {
 					if iface, err := p.db.GetInterface(sourceIface); err == nil &&
 						iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
@@ -1101,10 +1139,33 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 							decodedText = string(decoded)
 							log.Info().Str("iface", sourceIface).Int("raw", len(msg.Text)).
 								Int("decoded", len(decodedText)).Msg("gateway inbound: ingress transforms applied")
+						} else if TransformsAuthenticate(iface.IngressTransforms) {
+							n := p.countInboundDropped(sourceIface)
+							log.Warn().Err(tErr).Str("iface", sourceIface).Str("from", fromAddr).
+								Int("bytes", len(msg.Text)).Uint64("dropped_total", n).
+								Msg("gateway inbound: dropped, frame did not authenticate on an encrypted interface")
+							droppedData, _ := json.Marshal(map[string]any{
+								"source": msg.Source,
+								"iface":  sourceIface,
+								"from":   fromAddr,
+								"bytes":  len(msg.Text),
+								"reason": "unauthenticated",
+								"total":  n,
+							})
+							p.Emit(transport.MeshEvent{
+								Type:    "inbound_dropped",
+								Message: fmt.Sprintf("Dropped unauthenticated frame from %s on %s", fromAddr, sourceIface),
+								Data:    droppedData,
+								Time:    time.Now().UTC().Format(time.RFC3339Nano),
+							})
+							dropped = true
 						} else {
 							log.Warn().Err(tErr).Str("iface", sourceIface).Msg("gateway inbound: ingress transform failed, storing raw")
 						}
 					}
+				}
+				if dropped {
+					continue
 				}
 
 				// The event carries the decoded text as data: the packet feed
