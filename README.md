@@ -304,7 +304,7 @@ can override them afterwards.
 |---|---|---|
 | `MESHSAT_PAID_RATE_LIMIT` | `60` | Minimum seconds between paid satellite sends |
 | `MESHSAT_MAX_HOPS` | `8` | Maximum interfaces a message may traverse |
-| `MESHSAT_MESH_WATCHDOG_MIN` | `10` | Minutes of silence before a Meshtastic reconnect |
+| `MESHSAT_MESH_WATCHDOG_MIN` | `0` | Minutes of channel silence before the Meshtastic serial port is reopened; 0 disables it (the device-health mesh probe covers a stalled radio), and a radio that still answers local requests is never reopened |
 | `MESHSAT_MESH_MTU` | `100` | HeMB mesh bearer MTU in bytes, range 1 to 237 |
 | `MESHSAT_OOB_ENABLED` | `false` | OOB management frames: accept authenticated commands over any bearer (first-boot default, UI-managed afterwards) |
 | `MESHSAT_OOB_REPLY_BUDGET` | `12` | OOB replies per peer per hour |

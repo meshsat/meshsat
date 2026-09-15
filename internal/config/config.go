@@ -168,7 +168,7 @@ func Load() *Config {
 		ZigBeePort:                   envStr("MESHSAT_ZIGBEE_PORT", "auto"),
 		PaidRateLimit:                envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 		APIRateLimit:                 envInt("MESHSAT_API_RATE_LIMIT", 600),
-		MeshWatchdogMin:              envInt("MESHSAT_MESH_WATCHDOG_MIN", 10),
+		MeshWatchdogMin:              envInt("MESHSAT_MESH_WATCHDOG_MIN", 0),
 		APRSRxWatchdogMin:            envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
 		APRSRxHeardWithinMin:         envInt("MESHSAT_APRS_RX_HEARD_WITHIN_MIN", 120),
 		APRSRxStatsStaleSec:          envInt("MESHSAT_APRS_RX_STATS_STALE_SEC", 90),

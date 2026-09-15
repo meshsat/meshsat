@@ -713,6 +713,25 @@ func (t *DirectMeshTransport) watchdogTriggered() bool {
 		return false
 	}
 
+	// A quiet channel is not a stale serial session. The radio answers local
+	// admin requests (the device-health probe every 30 s, the config
+	// handshake) over the same link; if it has done so inside the silence
+	// window the port is alive and reopening it would only reset the radio
+	// (every 2.8 self-reset on the kits followed such a reopen). Only a radio
+	// that has also stopped answering locally gets the port reopened.
+	// [MESHSAT-1122]
+	if last := t.lastLocalReply.Load(); last > 0 {
+		replyAgeSec := time.Now().Unix() - time.Unix(0, last).Unix()
+		if replyAgeSec < thresholdSec {
+			log.Info().
+				Int64("silence_sec", silenceSec).
+				Int64("local_reply_age_sec", replyAgeSec).
+				Int("remote_nodes", remoteCount).
+				Msg("meshtastic serial watchdog: channel quiet but the radio answers locally, keeping the port")
+			return false
+		}
+	}
+
 	log.Warn().
 		Int64("silence_sec", silenceSec).
 		Int("remote_nodes", remoteCount).
