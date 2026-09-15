@@ -35,6 +35,7 @@ import (
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
 	"meshsat/internal/oob"
+	"meshsat/internal/relayclient"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/spectrum"
@@ -1247,6 +1248,24 @@ func main() {
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)
 	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
+	// Prepaid SMS bundle counter [MESHSAT-1161]: every +CMGS the modem
+	// returns costs a segment; the count hangs off the transport's sent
+	// hook so relays, OOB frames, API test sends and the Reticulum SMS
+	// interface are all counted. Bundle size and the reminder number are
+	// set with PUT /api/cellular/bundle and persist in system_config.
+	var smsBudget *gateway.SMSBudget
+	if dc, ok := cell.(*transport.DirectCellTransport); ok && dc != nil {
+		smsBudget = gateway.NewSMSBudget(db, cfg.BridgeID, gateway.SMSBudgetOptionsFromEnv(), dc.SendSMS)
+		smsBudget.SetEventEmitter(func(eventType, message string) {
+			proc.Emit(transport.MeshEvent{Type: eventType, Message: message, Time: time.Now().UTC().Format(time.RFC3339)})
+		})
+		dc.SetSentHook(smsBudget.Record)
+		srv.SetSMSBudget(smsBudget)
+		if st := smsBudget.Status(); st != nil {
+			log.Info().Int("size", st.Size).Int("sent", st.Sent).Int("remaining", st.Remaining).Int("warn_at", st.WarnAt).
+				Bool("alert_configured", st.AlertSet).Msg("sms budget: bundle counter loaded")
+		}
+	}
 	srv.SetGPSReader(gpsReader)
 
 	// ZigBee sensor router — fan out temp/humidity/battery/onoff readings to
@@ -1646,6 +1665,7 @@ func main() {
 	hubUsername, hubPassword := cfg.HubUsername, cfg.HubPassword
 	var hubTLSCertPEM, hubTLSKeyPEM, hubTLSCAPEM []byte
 	hubTLSInsecure := false
+	hubAPIURL := cfg.HubAPIURL
 	if raw, dbErr := db.GetSystemConfig("hub_connection"); dbErr == nil && raw != "" {
 		var hc struct {
 			URL         string `json:"url"`
@@ -1656,10 +1676,14 @@ func main() {
 			TLSKeyPEM   string `json:"tls_key_pem"`
 			TLSCAPEM    string `json:"tls_ca_pem"`
 			TLSInsecure bool   `json:"tls_insecure"`
+			APIURL      string `json:"api_url"` // optional; the relay derives it from the MQTT URL otherwise
 		}
 		if json.Unmarshal([]byte(raw), &hc) == nil {
 			if hc.URL != "" {
 				hubURL = hc.URL
+			}
+			if hc.APIURL != "" {
+				hubAPIURL = hc.APIURL
 			}
 			if hc.BridgeID != "" {
 				hubBridgeID = hc.BridgeID
@@ -1685,6 +1709,7 @@ func main() {
 
 	var hubReporter *hubreporter.HubReporter
 	var satFallback *hubreporter.SatFallback // [MESHSAT-963]
+	var hubRelay *relayclient.Client         // [MESHSAT-613]
 	if hubURL != "" {
 		reporterCfg := hubreporter.ReporterConfig{
 			HubURL:         hubURL,
@@ -1893,6 +1918,39 @@ func main() {
 			go satFallback.Run(ctx)
 			log.Info().Str("bearer", bearerPolicy).Str("hub_sms", hubSMS).Int("after_min", cfg.HubFallbackAfterMin).
 				Msg("hub satellite fallback armed")
+		}
+
+		// Hub WebSocket relay [MESHSAT-613]: serve this bridge's own API to
+		// the tenant's phones through the Hub (contract: meshsat-hub
+		// docs/relay.md). The tunnel carries TLS end to end with the same
+		// Hub-issued certificate the MQTT session uses; the Hub sees
+		// ciphertext only. A certificate issued before 2026-09-15 cannot
+		// serve (no ServerAuth, no SAN): Validate says so once and the relay
+		// stays off until it is re-issued on the Fleet page.
+		if cfg.HubRelayEnabled {
+			if hubAPIURL == "" {
+				hubAPIURL = relayclient.DeriveAPIURL(hubURL)
+			}
+			relayCfg := relayclient.Config{
+				HubAPIURL: hubAPIURL,
+				BridgeID:  hubBridgeID,
+				Password:  hubPassword,
+				CertPEM:   hubTLSCertPEM,
+				KeyPEM:    hubTLSKeyPEM,
+				CAPEM:     hubTLSCAPEM,
+				Handler:   srv.Router(),
+			}
+			if err := relayCfg.Validate(); err != nil {
+				log.Warn().Err(err).Msg("hub relay not started")
+			} else {
+				hubRelay = relayclient.New(relayCfg)
+				go func() {
+					if err := hubRelay.Run(ctx); err != nil {
+						log.Warn().Err(err).Msg("hub relay stopped")
+					}
+				}()
+				log.Info().Str("hub_api", hubAPIURL).Str("bridge_id", hubBridgeID).Msg("hub relay armed")
+			}
 		}
 
 		// Command handler — processes commands from the Hub (ping, send_mt, etc.)
@@ -2493,6 +2551,10 @@ func main() {
 		}
 		healthScorer.SetReceiveChecker(checkers)
 		failoverResolver.SetReceiveChecker(checkers)
+		if smsBudget != nil {
+			// No interface ids: a low bundle turns the chip amber, it must not score the SMS lane 0. [MESHSAT-1161]
+			devHealth.RegisterExternal("sms_credit", nil, smsBudget.HealthStatus)
+		}
 		srv.SetDeviceHealth(devHealth)
 		srv.SetClockState(clockGuard) // [MESHSAT-1056]
 		go devHealth.Run(ctx)
@@ -2537,6 +2599,9 @@ func main() {
 	// radio the client left. Close is idempotent. [MESHSAT-850]
 	mesh.Close()
 
+	if hubRelay != nil {
+		hubRelay.Stop()
+	}
 	if satFallback != nil {
 		satFallback.Stop()
 	}

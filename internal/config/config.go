@@ -144,6 +144,11 @@ type Config struct {
 	HubFallbackPositionMin int    // position frame interval in minutes (default 15)
 	HubFallbackHealthMin   int    // health frame interval in minutes (default 60)
 	HubFallbackBearer      string // auto | satellite | sms (default auto)
+
+	// Hub WebSocket relay: serve this bridge's API to the tenant's other
+	// bridges (phones) through the Hub when no direct path exists [MESHSAT-613]
+	HubRelayEnabled bool   // default true; needs a Hub connection and a re-issued certificate
+	HubAPIURL       string // Hub HTTPS API base; empty = derived from the MQTT URL (mqtt-hub.X -> https://hub.X)
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -216,6 +221,9 @@ func Load() *Config {
 		HubFallbackPositionMin: envInt("MESHSAT_HUB_FALLBACK_POSITION_MIN", 15),
 		HubFallbackHealthMin:   envInt("MESHSAT_HUB_FALLBACK_HEALTH_MIN", 60),
 		HubFallbackBearer:      envStr("MESHSAT_HUB_FALLBACK_BEARER", "auto"),
+
+		HubRelayEnabled: envBool("MESHSAT_HUB_RELAY_ENABLED", true),
+		HubAPIURL:       envStr("MESHSAT_HUB_API_URL", ""),
 	}
 }
 

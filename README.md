@@ -305,6 +305,9 @@ can override them afterwards.
 | `MESHSAT_PAID_RATE_LIMIT` | `60` | Minimum seconds between paid satellite sends |
 | `MESHSAT_MAX_HOPS` | `8` | Maximum interfaces a message may traverse |
 | `MESHSAT_MESH_WATCHDOG_MIN` | `0` | Minutes of channel silence before the Meshtastic serial port is reopened; 0 disables it (the device-health mesh probe covers a stalled radio), and a radio that still answers local requests is never reopened |
+| `MESHSAT_SMS_BUNDLE_SIZE` | `0` | Prepaid SMS bundle size in segments (0 = no counter). First-boot default only; `PUT /api/cellular/bundle {"size":250}` records a top-up and persists |
+| `MESHSAT_SMS_BUNDLE_WARN_AT` | `50` | Segments left that turn the SMS chip amber, log a warning and send the top-up reminder (once per bundle) |
+| `MESHSAT_SMS_ALERT_NUMBER` | `""` | E.164 number that gets the top-up reminder SMS; empty = none. Also settable with `alert_number` on the bundle API |
 | `MESHSAT_MESH_MTU` | `100` | HeMB mesh bearer MTU in bytes, range 1 to 237 |
 | `MESHSAT_OOB_ENABLED` | `false` | OOB management frames: accept authenticated commands over any bearer (first-boot default, UI-managed afterwards) |
 | `MESHSAT_OOB_REPLY_BUDGET` | `12` | OOB replies per peer per hour |

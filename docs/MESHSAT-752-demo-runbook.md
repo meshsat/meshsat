@@ -1153,3 +1153,23 @@ Not done over the air: a forged `{E1}` frame (needs a second key on a transmitte
 **MESHSAT-1122:** two-hour quiet window 18:08 to 20:08 with the serial watchdog off: tesseract 0 reopens, 0 heals, reboot_count flat through the 19:37 deploy restart; parallax one self-silence at 19:08 with no reopen behind it, cured by the ladder's hub-port cut in 2 min (reboot 547 -> 548), so MESHSAT-1112 is its own class. 1122 at To Verify.
 
 **MESHSAT-1160, found and fixed the same evening.** At 20:37:53 a `PUT /api/gateways/aprs` (my quiet-block config change) restarted the APRS gateway while a relayed text was being forwarded; `Manager.Gateways()` handed the delivery worker the restart's nil sentinel, `gw.Type()` on it panicked and the bridge died (docker restarted it in 1 s; the kit lost about 5 s). The same gateway stop is the receive watchdog's rung 1 and OOB `RESET aprs 1`, so it could have hit at the booth under APRS load. Fixed in a1875b5 (sentinel skipped in `Gateways()`, nil entry skipped in the worker, `RuleID` guard), deployed 21:22, proven at 21:24 with a gateway restart forced mid-block: RestartCount unchanged, no panic. Lesson for the booth: a red container restart with exit code 0 and a healthy healthcheck one second later is this class; look for `panic:` in `docker logs`.
+
+## 44. 15 Sep 2026, night: the prepaid SMS bundle counter (MESHSAT-1161)
+
+**Why.** parallax's Hub-over-SMS lane failed silently on 15 Sep evening: the modem answered, `+CMGS` came back, the bridge marked every SMS delivered, and nothing arrived because the KPN prepaid card was empty. Both cards now carry a 250-SMS bundle (EUR 7 each, topped up about 21:50), and the bridge counts them down.
+
+**How it counts.** Every SMS the network accepts (`+CMGS` from the T-Call) fires the transport's sent hook, so relays, OOB frames, the API test send and the Reticulum SMS interface are all counted; a text over 160 characters counts its concatenated parts (153 each). The count lives in `system_config` (`sms_bundle_*`) and survives restarts and deploys. It is a software estimate: a top-up made outside the bridge, or SMS sent by the modem while the bridge was down, are not seen. Record every top-up with the API.
+
+**Thresholds.** At 50 left (default, `warn_at`) the `sms_credit` device-health target goes `degraded`: the SMS chip on the panel turns amber with the count in its tooltip, a banner appears under the panel header, the dashboard's cellular widget shows "SMS credit low", the log warns and an `sms_credit_low` SSE event goes out. At the same moment one reminder SMS goes to the configured number (once per bundle; a failed send is retried after 10 min). At 0 left the target is `failed` (red). The target carries no interface ids on purpose, so a low bundle never scores the SMS lane 0 in failover: the lane keeps working until the card is really empty.
+
+**Operating it.**
+```
+GET  /api/cellular/bundle                      counter + reminder number
+PUT  /api/cellular/bundle {"size":250}         top-up recorded, count 0, warning and reminder re-armed
+PUT  /api/cellular/bundle {"size":250,"sent":2}  same, with SMS already sent since the top-up
+PUT  /api/cellular/bundle {"warn_at":50,"alert_number":"+31..."}  threshold and reminder number
+GET  /api/cellular/status  -> sms_bundle {size, sent, remaining, warn_at, low, empty, alerted, alert_configured, reset_at}
+```
+Env first-boot defaults (`MESHSAT_SMS_BUNDLE_SIZE`, `_WARN_AT`, `MESHSAT_SMS_ALERT_NUMBER`) are only used for a key the API has never set; the kits are configured through the API, not the compose files.
+
+**TTC pre-flight.** `GET /api/cellular/bundle` on both kits: `remaining` well above 50, `alert_number` set. After any top-up: `PUT {"size":250}` on that kit.

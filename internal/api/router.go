@@ -52,6 +52,7 @@ type Server struct {
 	onMOCallback  func(imei string)
 	devSupervisor *transport.DeviceSupervisor
 	deviceHealth  *gateway.DeviceHealth // device health watchdog [MESHSAT-817]
+	smsBudget     *gateway.SMSBudget    // prepaid SMS bundle counter [MESHSAT-1161]
 	clockState    *clockstate.Provider  // host clock trust verdict [MESHSAT-1056]
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
@@ -172,6 +173,11 @@ func (s *Server) SetTLEManager(m *engine.TLEManager) {
 // SetCellTransport sets the cellular transport for cellular API endpoints.
 func (s *Server) SetCellTransport(cell transport.CellTransport) {
 	s.cellTransport = cell
+}
+
+// SetSMSBudget installs the prepaid SMS bundle counter. [MESHSAT-1161]
+func (s *Server) SetSMSBudget(b *gateway.SMSBudget) {
+	s.smsBudget = b
 }
 
 // SetGPSReader sets the GPS reader for satellite count and status.
@@ -422,6 +428,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/cellular/pin", s.handleSubmitCellularPIN)
 		r.Get("/cellular/info", s.handleGetCellInfo)
 		r.Get("/cellular/sms", s.handleGetSMSMessages)
+		r.Get("/cellular/bundle", s.handleGetSMSBundle) // [MESHSAT-1161]
+		r.Put("/cellular/bundle", s.handleSetSMSBundle)
 		r.Get("/cellular/broadcasts", s.handleGetCellBroadcasts)
 		r.Post("/cellular/broadcasts/{id}/ack", s.handleAckCellBroadcast)
 		r.Post("/cellular/data/connect", s.handleCellularDataConnect)

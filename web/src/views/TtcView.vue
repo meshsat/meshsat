@@ -99,10 +99,19 @@ const chip = (name) => {
   if (!t) return { state: 'unknown', detail: '' }
   return { state: t.state, detail: t.detail || '' }
 }
+// Prepaid SMS bundle (MESHSAT-1161): the sms_credit target is degraded at
+// 50 left and failed at 0. It colours the SMS chip and shows a banner while
+// the modem itself stays fine; the lanes stay selectable.
+const smsCredit = computed(() => chip('sms_credit'))
+const smsCreditLow = computed(() => smsCredit.value.state === 'degraded' || smsCredit.value.state === 'failed')
+const smsChip = computed(() => {
+  const c = chip('cellular')
+  return (c.state === 'ok' && smsCreditLow.value) ? { state: smsCredit.value.state, detail: smsCredit.value.detail } : c
+})
 const chips = computed(() => ([
   { key: 'mesh', label: 'LoRa mesh', short: 'LoRa', ...chip('mesh') },
   { key: 'aprs', label: 'APRS 144.800', short: 'APRS', ...chip('aprs') },
-  { key: 'cellular', label: 'SMS', short: 'SMS', ...chip('cellular') },
+  { key: 'cellular', label: 'SMS', short: 'SMS', ...smsChip.value },
   { key: 'sat', label: 'Satellite', short: 'SAT', state: flow.value.imt && flow.value.imt.connected ? 'ok' : flow.value.imt && flow.value.imt.running ? 'healing' : 'unknown', detail: 'Iridium IMT' },
 ]))
 const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
@@ -723,6 +732,7 @@ const cards = computed(() => ({
       ['Network', 'the public mobile network, nothing else in between'],
       ['Privacy', 'compressed, then AES-256-GCM, then base64; both kits share the key'],
       ['Size', 'one text message, up to 160 characters'],
+      ['Credit', smsCredit.value.detail ? smsCredit.value.detail.replace(/^SMS credit /, '') : 'prepaid bundle, not counted'],
       ['Right now', flow.value.path === 'b2b_sms' ? 'chosen for the next message from this kit' : 'tap the lane to choose it'],
     ],
   },
@@ -1031,15 +1041,22 @@ onUnmounted(() => {
       <div class="ml-auto flex items-center gap-1.5">
         <span v-for="c in chips" :key="c.key"
           class="chip font-mono text-[11px] px-1.5 py-0.5 rounded border"
-          :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : (c.state === 'healing' || c.state === 'degraded') ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
+          :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : (c.state === 'healing' || c.state === 'degraded') ? 'border-amber-500/50 text-amber-300' : c.state === 'failed' ? 'border-red-500/50 text-red-300' : 'border-gray-700 text-gray-500'"
           :title="c.detail">
           <span class="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle"
-            :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : c.state === 'degraded' ? 'bg-amber-400' : 'bg-gray-600'" /><span class="lg:hidden">{{ c.short }}</span><span class="hidden lg:inline">{{ c.label }}</span>
+            :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : c.state === 'degraded' ? 'bg-amber-400' : c.state === 'failed' ? 'bg-red-400' : 'bg-gray-600'" /><span class="lg:hidden">{{ c.short }}</span><span class="hidden lg:inline">{{ c.label }}</span>
         </span>
         <PowerWidget :kit="me.name" compact />
         <span class="font-mono text-sm lg:text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
       </div>
     </header>
+
+    <!-- prepaid SMS bundle warning: crew-facing, stays until the top-up is recorded [MESHSAT-1161] -->
+    <div v-if="smsCreditLow" class="sms-credit-banner shrink-0 px-4 py-1 text-xs font-mono flex items-center gap-2"
+      :class="smsCredit.state === 'failed' ? 'bg-red-950/80 text-red-200 border-b border-red-800/60' : 'bg-amber-950/80 text-amber-200 border-b border-amber-800/60'">
+      <span class="inline-block w-1.5 h-1.5 rounded-full" :class="smsCredit.state === 'failed' ? 'bg-red-400' : 'bg-amber-400 animate-pulse'" />
+      <span>{{ smsCredit.detail }}</span>
+    </div>
 
     <!-- ROUTE VIEW -->
     <main v-show="view === 'route'" class="flex-1 flex flex-col min-h-0">
