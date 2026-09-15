@@ -909,6 +909,13 @@ func (m *Manager) Gateways() []Gateway {
 	defer m.mu.RUnlock()
 	gws := make([]Gateway, 0, len(m.running))
 	for _, gw := range m.running {
+		// A restart parks a nil sentinel in the map (restartInstance); a
+		// caller ranging over this slice must never see it. A delivery
+		// worker calling Type() on that nil brought the whole bridge down
+		// on 15 Sep 2026 while the APRS gateway restarted. [MESHSAT-1021]
+		if gw == nil {
+			continue
+		}
 		gws = append(gws, gw)
 	}
 	return gws

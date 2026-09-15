@@ -1483,7 +1483,11 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	// Resolve per-rule SMS destinations from forward_options
 	if phones := w.ruleSMSDestinations(del); len(phones) > 0 {
 		msg.SMSDestinations = append(msg.SMSDestinations, phones...)
-		log.Debug().Strs("sms_to", msg.SMSDestinations).Int64("rule_id", *del.RuleID).
+		ruleID := int64(0)
+		if del.RuleID != nil {
+			ruleID = *del.RuleID
+		}
+		log.Debug().Strs("sms_to", msg.SMSDestinations).Int64("rule_id", ruleID).
 			Msg("resolved per-rule SMS destinations from contacts")
 	}
 
@@ -1492,8 +1496,13 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		return gw.Forward(ctx, msg)
 	}
 
-	// Legacy: match by gateway type string
+	// Legacy: match by gateway type string. A gateway mid-restart can be a
+	// nil entry; skipping it turns the send into an ordinary "not running"
+	// retry instead of a panic that takes the bridge down. [MESHSAT-1021]
 	for _, gw := range w.gwProv.Gateways() {
+		if gw == nil {
+			continue
+		}
 		if gw.Type() == w.channelID {
 			return gw.Forward(ctx, msg)
 		}
