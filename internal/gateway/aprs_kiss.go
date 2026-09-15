@@ -75,6 +75,12 @@ type KISSConn struct {
 	// message): the AX.25 frame in front of the stray byte is complete, so
 	// the byte is dropped and the frame kept. [MESHSAT-1020]
 	Repaired atomic.Int64
+	// BytesIn counts every byte read from the TNC since the link last
+	// opened. A serial TNC that stays at zero while beacons go out is a
+	// radio that is off (a PicoAPRS after a night without USB power) or a
+	// dead link, and the receive watchdog reports it as silent. [MESHSAT-1028]
+	BytesIn  atomic.Int64
+	openedAt atomic.Int64 // unix nanos of the last successful Dial
 }
 
 // NewKISSConn creates a KISS TCP connection manager.
@@ -130,9 +136,29 @@ func (k *KISSConn) Dial() error {
 	old := k.rw
 	k.rw = rw
 	k.mu.Unlock()
+	k.BytesIn.Store(0)
+	k.openedAt.Store(time.Now().UnixNano())
 	if old != nil {
 		_ = old.Close()
 	}
+	return nil
+}
+
+// OpenedAt is when the link last opened; zero before the first Dial.
+func (k *KISSConn) OpenedAt() time.Time {
+	ns := k.openedAt.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
+}
+
+// readByte reads one byte from the link and counts it. [MESHSAT-1028]
+func (k *KISSConn) readByte(r io.Reader, buf []byte) error {
+	if err := readByte(r, buf); err != nil {
+		return err
+	}
+	k.BytesIn.Add(1)
 	return nil
 }
 
@@ -193,7 +219,7 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 				return nil, err
 			}
 		}
-		if err := readByte(rw, buf); err != nil {
+		if err := k.readByte(rw, buf); err != nil {
 			return nil, err
 		}
 		if buf[0] == kissFEND {
@@ -208,7 +234,7 @@ func (k *KISSConn) ReadFrame() ([]byte, error) {
 				return nil, err
 			}
 		}
-		if err := readByte(rw, buf); err != nil {
+		if err := k.readByte(rw, buf); err != nil {
 			return nil, err
 		}
 		if buf[0] == kissFEND {
