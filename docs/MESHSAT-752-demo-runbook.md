@@ -1185,3 +1185,19 @@ Env first-boot defaults (`MESHSAT_SMS_BUNDLE_SIZE`, `_WARN_AT`, `MESHSAT_SMS_ALE
 **SMS lanes at volume (962).** 3 texts each way per lane, 12 of 12 delivered, one copy each, bundle counters moved by exactly 3 per block (both cards at 17 used, 233 left). Kit to kit 8 to 21 s; via the Hub 4 to 72 s (Twilio to KPN delivery varies, allow a minute at the booth). Both kits back on `aprs`. Left: the `imt` lane (needs the 9704 on tesseract and sky), Thomas's OK on the tent card, the Twilio credit figure.
 
 **Booth reminders from tonight.** Never re-run an old pipeline's deploy job: the guard refuses to downgrade a kit and the job goes red (seen 23:25, pipeline 54297). The Hub lane can take a minute. After any top-up, `PUT /api/cellular/bundle {"size":250}` on that kit.
+
+## 45a. 16 Sep 2026, addendum to the night: the panel, the Hub rows and what the booth must not do
+
+**Touch Display 2 hang (MESHSAT-1167, new).** parallax's warm reboot at 23:18 left the panel black: `i2c_designware ... controller timed out`, then `rpi_touchscreen_v2 11-0045: Failed to read REG_ID reg: -110`, no DRM connector, kiosk drawing into nothing. The owner's second warm reboot at 23:54 came up identical, because the Pi keeps its 5 V header pins powered through a reboot and the panel's controller never resets. Only `sudo poweroff` and the button clear it. This is NOT the MESHSAT-1091 overlay case: the correct driver binds and the device tree matches the 18:02 warm boot that was fine, and tesseract's 23:03 warm reboot was fine. Cure being tried, bench on 18 Sep when the adapters land: the panel's own cable stays on J1, its 3-pin block goes onto two male jumpers in a USB-A screw-terminal plug, and that plugs into hub B port 1 (`4-1` and `5-1`, ports 1 and 4 free on both kits) so `uhubctl` or the OOB `usb_power_cycle` can reset the panel alone.
+
+**Booth rules learned tonight.** Never warm-reboot a kit at the booth. Never re-run an old pipeline's deploy job: the guard refuses to downgrade a kit and the job goes red (pipeline 54297 at 23:25). Allow a minute on the Hub lane, since Twilio to KPN delivery measured 4 s, 39 s and 72 s for three consecutive texts.
+
+**Hub management over SMS finished (MESHSAT-964).** After the Hub's three fixes (cross-replica reply correlation, multi-segment assembly, and a 15 s HTTP write timeout that cut any reply slower than that, all MESHSAT-1164), every SMS row answers through the API on both kits: PING 9 s, STATUS-NET 15 s with the whole body, LOG 22 s with four segments assembled in order, BEARER 8 s, RESET aprs level 1 8 s. The bridge side gained one fix: BEARER on for a running bearer answers ok instead of unavailable (483d1f6). Satellite rows still need sky.
+
+**Panel verified and closed (MESHSAT-826).** Physical grim capture of tesseract plus Playwright on both kits at 853x480: Satellite lane names the modem, visitor band two lines under 70 characters, zero console errors. The poster interlude re-proven with scaled timings on both kits, image painted at opacity 1; a capture taken the instant `.saver` appears catches the 600 ms fade and shows the page underneath, so wait about a second.
+
+**Clock (MESHSAT-1056).** Three warm reboots tonight all came up at the right time with the RTC cells in. The cold boot with power off is still owed and parallax's power cycle will give it.
+
+**Hub tenancy (MESHSAT-1033).** Three outside beta users were already approved as owners; only our own three bridges hold NATS credentials, so nothing leaked, and the Hub fix removing `meshsat.hub.>` from bridge users is rolling out.
+
+**Booth outreach now tracked:** MESHSAT-1165 (the seven brochure companies) and MESHSAT-1166 (companies without a brochure, with MESHSAT-1158 under it).
