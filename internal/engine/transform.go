@@ -117,6 +117,26 @@ func (tp *TransformPipeline) ApplyIngress(data []byte, transformsJSON string) ([
 	return result, nil
 }
 
+// TransformsAuthenticate reports whether an ingress chain carries a decrypt
+// step. AES-GCM is authenticated, so on such an interface a frame that fails
+// the chain was not produced by a key holder and must not enter the message
+// pipeline; the receiver drops it instead of storing the raw text.
+// A malformed chain counts as authenticating: the interface was configured
+// for ciphertext, and letting raw text through on a config typo is the
+// failure this guards against. [MESHSAT-1128]
+func TransformsAuthenticate(transformsJSON string) bool {
+	transforms, err := parseTransforms(transformsJSON)
+	if err != nil {
+		return true
+	}
+	for _, t := range transforms {
+		if t.Type == "encrypt" || t.Type == "decrypt" {
+			return true
+		}
+	}
+	return false
+}
+
 func parseTransforms(jsonStr string) ([]TransformSpec, error) {
 	if jsonStr == "" || jsonStr == "[]" {
 		return nil, nil
