@@ -194,7 +194,8 @@ func (g *APRSGateway) ReceiveHealth() (ReceiveHealth, bool) {
 	}
 	// Hardware TNC: no audio level exists, only frames. Level -1 and a
 	// zero LevelAt keep the watchdog's "hung Direwolf" branch off.
-	h := ReceiveHealth{Running: g.connected.Load(), Level: -1, RxFrames: g.kiss.RX.Load()}
+	h := ReceiveHealth{Running: g.connected.Load(), Level: -1, RxFrames: g.kiss.RX.Load(),
+		Serial: true, BytesIn: g.kiss.BytesIn.Load(), LinkOpenedAt: g.kiss.OpenedAt()}
 	if ts := g.lastFrameAt.Load(); ts > 0 {
 		h.LastDecodeAt = time.Unix(0, ts)
 	}
@@ -309,6 +310,10 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 	if g.kiss.Serial() {
 		if ts := g.lastFrameAt.Load(); ts > 0 {
 			status["last_decode_at"] = time.Unix(0, ts).UTC().Format(time.RFC3339)
+		}
+		status["tnc_bytes_in"] = g.kiss.BytesIn.Load()
+		if at := g.kiss.OpenedAt(); !at.IsZero() {
+			status["link_opened_at"] = at.UTC().Format(time.RFC3339)
 		}
 	}
 	if g.supervisor != nil {

@@ -105,6 +105,10 @@ const chips = computed(() => ([
   { key: 'sat', label: 'Satellite', short: 'SAT', state: flow.value.imt && flow.value.imt.connected ? 'ok' : flow.value.imt && flow.value.imt.running ? 'healing' : 'unknown', detail: 'Iridium IMT' },
 ]))
 const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
+// The serial TNC has delivered no bytes since its link opened: the PicoAPRS
+// is off (it shuts down on an empty cell after a night without USB power and
+// turns on only with a 3 s PTT press) or the link is dead. [MESHSAT-1028]
+const aprsOff = computed(() => aprs.value.receive_state === 'silent')
 const aprsQuiet = computed(() => aprs.value.receive_state === 'quiet')
 const farAgeS = computed(() => farHeardAt.value ? Math.round((now.value - farHeardAt.value) / 1000) : null)
 const farAlive = computed(() => farAgeS.value !== null && farAgeS.value < 600)
@@ -213,10 +217,12 @@ const lanes = computed(() => ([
       ? 'The modem is not answering yet.'
       : 'Up to space, then down to the other kit.' },
   { key: 'aprs', lane: 'aprs', card: 'air', name: 'APRS radio', fact: '144.800 MHz',
-    state: aprsSilent.value ? 'silent' : '',
-    detail: aprsSilent.value
-      ? 'This kit hears nothing right now.'
-      : 'Radio, straight to the other kit.' },
+    state: aprsOff.value ? 'radio off' : aprsSilent.value ? 'silent' : '',
+    detail: aprsOff.value
+      ? 'No bytes from the radio since power-on. Hold PTT 3 s on the PicoAPRS.'
+      : aprsSilent.value
+        ? 'This kit hears nothing right now.'
+        : 'Radio, straight to the other kit.' },
   { key: 'hub_sms', lane: 'hub', card: 'hub', name: 'SMS via the Hub', fact: '',
     state: smsState.value, detail: 'The Hub passes it on by SMS.' },
   { key: 'b2b_sms', lane: 'sms', card: 'sms', name: 'SMS kit to kit', fact: '',
@@ -728,7 +734,7 @@ const cards = computed(() => ({
       ['Privacy', 'compressed, then AES-256-GCM, then base64; both kits share the key'],
       ['Size', 'a 26-byte text becomes 76 bytes on the air'],
       ['Fallback', 'when the other kit\'s receiver is silent the same message goes as one SMS over LTE'],
-      ['Right now', aprsSilent.value ? 'the receiver on this kit is silent, SMS carries replies' : `receiver ok, ${rateOf('aprs', 'rx')} in and ${rateOf('aprs', 'tx')} out in the last minute`],
+      ['Right now', aprsOff.value ? 'the radio has sent nothing since power-on, hold PTT 3 s on the PicoAPRS' : aprsSilent.value ? 'the receiver on this kit is silent, SMS carries replies' : `receiver ok, ${rateOf('aprs', 'rx')} in and ${rateOf('aprs', 'tx')} out in the last minute`],
     ],
   },
 }))
@@ -1024,10 +1030,10 @@ onUnmounted(() => {
       <div class="ml-auto flex items-center gap-1.5">
         <span v-for="c in chips" :key="c.key"
           class="chip font-mono text-[11px] px-1.5 py-0.5 rounded border"
-          :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : c.state === 'healing' ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
+          :class="c.state === 'ok' ? 'border-emerald-500/40 text-emerald-300' : (c.state === 'healing' || c.state === 'degraded') ? 'border-amber-500/50 text-amber-300' : 'border-gray-700 text-gray-500'"
           :title="c.detail">
           <span class="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle"
-            :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : 'bg-gray-600'" /><span class="lg:hidden">{{ c.short }}</span><span class="hidden lg:inline">{{ c.label }}</span>
+            :class="c.state === 'ok' ? 'bg-emerald-400' : c.state === 'healing' ? 'bg-amber-400 animate-pulse' : c.state === 'degraded' ? 'bg-amber-400' : 'bg-gray-600'" /><span class="lg:hidden">{{ c.short }}</span><span class="hidden lg:inline">{{ c.label }}</span>
         </span>
         <PowerWidget :kit="me.name" compact />
         <span class="font-mono text-sm lg:text-lg text-gray-200 tabular-nums ml-1">{{ clock }}</span>
@@ -1058,7 +1064,7 @@ onUnmounted(() => {
             <g class="lanes">
               <line :x1="nearIsLeft ? P.dev.x + DEVICES[nearDev].edgeNear : P.kit.x + 124" :y1="P.dev.y"
                     :x2="nearIsLeft ? P.kit.x - 124 : P.dev.x - DEVICES[nearDev].edgeNear" :y2="P.dev.y" class="lane lora near" />
-              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent, nosky: ln.lane === 'sat' && satNoModem }]" @click="selectPath(ln.key)">
+              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && (aprsSilent || aprsOff), nosky: ln.lane === 'sat' && satNoModem }]" @click="selectPath(ln.key)">
                 <rect :x="Math.min(laneStartX, P.edge)" :y="laneY(ln.lane) - 40" :width="Math.abs(P.edge - laneStartX)" height="80" class="hit" />
                 <line :x1="laneStartX" :y1="laneY(ln.lane)" :x2="P.edge" :y2="laneY(ln.lane)" class="lane path-line" />
                 <circle :cx="laneStartX" :cy="laneY(ln.lane)" r="7" class="path-start" />
@@ -1133,7 +1139,7 @@ onUnmounted(() => {
             <g class="lanes">
               <line :x1="G.devL.x + DEVICES[leftKit.device].edgeFull" :y1="G.devL.y" :x2="G.kitL.x - 84" :y2="G.kitL.y" class="lane lora" :class="leftKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
               <line :x1="G.kitR.x + 84" :y1="G.kitR.y" :x2="G.devR.x - DEVICES[rightKit.device].edgeFull" :y2="G.devR.y" class="lane lora" :class="rightKit.name === me.name ? 'near' : (farAlive ? 'far-alive' : 'far')" />
-              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && aprsSilent }]" @click="selectPath(ln.key)">
+              <g v-for="ln in lanes" :key="ln.lane" class="path tap" :class="[ln.lane, { selected: flow.path === ln.key, dim: flow.path && flow.path !== ln.key, silent: ln.lane === 'aprs' && (aprsSilent || aprsOff) }]" @click="selectPath(ln.key)">
                 <rect :x="G.airL.x" :y="laneY(ln.lane) - 36" :width="G.airR.x - G.airL.x" height="72" class="hit" />
                 <line :x1="G.airL.x" :y1="laneY(ln.lane)" :x2="G.airR.x" :y2="laneY(ln.lane)" class="lane path-line" />
                 <g class="ic" :class="[ln.lane, { pulse: airPulse && ln.lane === 'aprs' }]"

@@ -353,3 +353,91 @@ func TestRxWatchdog_PeerSilenceStopsAtGatewayRestart(t *testing.T) {
 		t.Fatalf("not recovered: %s", h.wd.State())
 	}
 }
+
+// A serial TNC that has delivered no byte at all since its link opened is
+// reported silent after the cold-start window: one event, no rung (a
+// restart or reopen cannot switch a radio on), and the state clears with
+// the first frame. [MESHSAT-1028]
+func TestRxWatchdog_SerialTNCSilentSinceOpen(t *testing.T) {
+	h := newWDHarness()
+	ctx := context.Background()
+	h.mu.Lock()
+	h.health = ReceiveHealth{Running: true, Level: -1, Serial: true, LinkOpenedAt: h.now}
+	h.mu.Unlock()
+
+	h.advance(time.Minute)
+	h.wd.tick(ctx)
+	if h.wd.State() != ReceiveStateQuiet {
+		t.Fatalf("inside the cold-start window: state %q, want quiet", h.wd.State())
+	}
+	for range 10 {
+		h.advance(time.Minute)
+		h.wd.tick(ctx)
+	}
+	if h.wd.State() != ReceiveStateSilent {
+		t.Fatalf("zero bytes for 11 min: state %q, want silent", h.wd.State())
+	}
+	r, c, b := h.counts()
+	if r+c+b != 0 || h.wd.ReceiveDeaf("aprs_0") {
+		t.Fatalf("silent TNC must not run a rung: restarts=%d cycles=%d bridge=%d deaf=%v", r, c, b, h.wd.ReceiveDeaf("aprs_0"))
+	}
+	h.mu.Lock()
+	events := append([]string(nil), h.events...)
+	h.mu.Unlock()
+	silentEvents := 0
+	for _, e := range events {
+		if e == "aprs_rx_silent" {
+			silentEvents++
+		}
+	}
+	if silentEvents != 1 {
+		t.Fatalf("want exactly one aprs_rx_silent event, got %d (%v)", silentEvents, events)
+	}
+
+	// The operator presses PTT: bytes and a frame arrive.
+	h.mu.Lock()
+	h.health.BytesIn = 90
+	h.mu.Unlock()
+	h.frame()
+	h.wd.tick(ctx)
+	if h.wd.State() != ReceiveStateOK {
+		t.Fatalf("after the first frame: state %q, want ok", h.wd.State())
+	}
+}
+
+// Bytes without frames (noise, a stray byte) mean the radio is on: not
+// silent, the ordinary quiet/deaf logic applies.
+func TestRxWatchdog_SerialTNCWithBytesIsNotSilent(t *testing.T) {
+	h := newWDHarness()
+	ctx := context.Background()
+	h.mu.Lock()
+	h.health = ReceiveHealth{Running: true, Level: -1, Serial: true, LinkOpenedAt: h.now, BytesIn: 3}
+	h.mu.Unlock()
+	for range 12 {
+		h.advance(time.Minute)
+		h.wd.tick(ctx)
+	}
+	if h.wd.State() != ReceiveStateQuiet {
+		t.Fatalf("state %q, want quiet", h.wd.State())
+	}
+}
+
+// A seeded expectation (the peer was heard before a restart) does not turn a
+// TNC with zero bytes into a deaf receiver with a running ladder: silent wins,
+// because the rungs cannot help.
+func TestRxWatchdog_SilentWinsOverSeededExpectation(t *testing.T) {
+	h := newWDHarness()
+	h.wd.lastHeardAt = h.now.Add(-2 * time.Minute)
+	ctx := context.Background()
+	h.mu.Lock()
+	h.health = ReceiveHealth{Running: true, Level: -1, Serial: true, LinkOpenedAt: h.now}
+	h.mu.Unlock()
+	for range 12 {
+		h.advance(time.Minute)
+		h.wd.tick(ctx)
+	}
+	r, c, b := h.counts()
+	if h.wd.State() != ReceiveStateSilent || r+c+b != 0 {
+		t.Fatalf("state %q restarts=%d cycles=%d bridge=%d, want silent and no rung", h.wd.State(), r, c, b)
+	}
+}

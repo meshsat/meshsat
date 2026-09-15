@@ -21,6 +21,12 @@ type ReceiveHealth struct {
 	LastDecodeLevel int
 	AudioErrors     int64
 	RxFrames        int64
+	// Serial TNC only: bytes read from the TNC since the link opened, and
+	// when it opened. Zero bytes after the cold-start window means the
+	// radio is off or the link is dead, not a quiet channel. [MESHSAT-1028]
+	Serial       bool
+	BytesIn      int64
+	LinkOpenedAt time.Time
 }
 
 // Receive states shown on the gateway status.
@@ -29,6 +35,7 @@ const (
 	ReceiveStateOK      = "ok"      // a frame decoded within the silence window
 	ReceiveStateQuiet   = "quiet"   // nothing decoded, but nothing was expected either
 	ReceiveStateDeaf    = "deaf"    // the channel was alive and went silent; recovery running
+	ReceiveStateSilent  = "silent"  // serial TNC delivered no bytes at all since its link opened: radio off or link dead
 )
 
 // RxWatchdogConfig tunes the APRS receive watchdog.
@@ -43,6 +50,11 @@ type RxWatchdogConfig struct {
 	// StatsStale: Direwolf running but no audio report for this long means
 	// the process is hung; that is treated as deaf immediately.
 	StatsStale time.Duration
+	// ColdStart is how long a serial TNC may deliver no bytes at all after
+	// its link opened before it is reported silent. The peer kit beacons
+	// every 30 s, so a live TNC produces bytes within a minute; defaults
+	// to Silence. [MESHSAT-1028]
+	ColdStart time.Duration
 	// Tick is the evaluation period.
 	Tick time.Duration
 	// BridgeCooldown is the minimum spacing between bridge restarts.
@@ -101,6 +113,7 @@ type RxWatchdog struct {
 	stepAt          time.Time
 	bridgeRestartAt time.Time
 	persistedAt     time.Time
+	silentLinkAt    time.Time // link open time already reported as silent
 }
 
 // NewRxWatchdog applies defaults to zero fields.
@@ -116,6 +129,9 @@ func NewRxWatchdog(cfg RxWatchdogConfig, act RxWatchdogActions) *RxWatchdog {
 	}
 	if cfg.Tick <= 0 {
 		cfg.Tick = 30 * time.Second
+	}
+	if cfg.ColdStart <= 0 {
+		cfg.ColdStart = cfg.Silence
 	}
 	if cfg.BridgeCooldown <= 0 {
 		cfg.BridgeCooldown = time.Hour
@@ -200,6 +216,24 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 			w.persistedAt = now
 			go w.act.Persist(w.lastHeardAt, w.bridgeRestartAt)
 		}
+		return
+	}
+
+	// A serial TNC that has delivered no byte at all since its link opened
+	// is not a quiet channel: the radio is off (a PicoAPRS after a night
+	// without USB power turns on only with a 3 s PTT press) or the link is
+	// dead. Report it as silent so the panel says so; no rung runs, since a
+	// gateway restart or a port reopen cannot switch a radio on. Frames
+	// arriving clear it through the heard branch above. [MESHSAT-1028]
+	if h.Serial && h.BytesIn == 0 && !h.LinkOpenedAt.IsZero() && now.Sub(h.LinkOpenedAt) >= w.cfg.ColdStart {
+		w.deaf = false
+		w.step = 0
+		w.stepAt = time.Time{}
+		if !w.silentLinkAt.Equal(h.LinkOpenedAt) {
+			w.silentLinkAt = h.LinkOpenedAt
+			w.notify("aprs_rx_silent", fmt.Sprintf("APRS TNC silent: no bytes from the TNC for %s since the link opened; a PicoAPRS that is off needs a 3 s PTT press", now.Sub(h.LinkOpenedAt).Truncate(time.Second)))
+		}
+		w.setState(ReceiveStateSilent)
 		return
 	}
 

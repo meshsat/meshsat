@@ -328,3 +328,26 @@ func TestJitterDuration(t *testing.T) {
 		t.Fatal("zero duration or zero spread must pass through unchanged")
 	}
 }
+
+// Every byte the TNC delivers is counted, so a link at zero after the
+// cold-start window is a radio that is off. [MESHSAT-1028]
+func TestKISSSerial_CountsBytesIn(t *testing.T) {
+	p := newPipeRW()
+	k := newKISSConnRW(p)
+	if k.BytesIn.Load() != 0 {
+		t.Fatal("fresh link must start at zero bytes")
+	}
+	payload := []byte("\x82\xa0\xa4\xa6@@`\x9a\xa6\xa8\xa6\xa4\xa8\x74\x03\xf0>hello")
+	wire := KISSEncode(payload)
+	p.feed(wire)
+	got, err := k.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("frame mismatch: %q", got)
+	}
+	if n := k.BytesIn.Load(); n != int64(len(wire)) {
+		t.Fatalf("BytesIn = %d, want %d", n, len(wire))
+	}
+}

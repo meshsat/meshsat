@@ -115,6 +115,8 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 				return gateway.HealthStateOK, "receive " + s
 			case gateway.ReceiveStateDeaf:
 				return gateway.HealthStateHealing, "receive deaf, rx watchdog ladder running"
+			case gateway.ReceiveStateSilent:
+				return gateway.HealthStateDegraded, "TNC silent since the link opened: no bytes from the radio, hold PTT 3 s on the PicoAPRS"
 			default:
 				return gateway.HealthStateUnknown, "receive " + s
 			}
