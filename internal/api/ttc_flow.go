@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 )
 
 // Booth flow selector — [MESHSAT-962]
@@ -90,6 +91,7 @@ type ttcFlowStatus struct {
 	PeerNumber string                 `json:"peer_number,omitempty"`
 	HubNumber  string                 `json:"hub_number,omitempty"`
 	IMT        *ttcIMTStatus          `json:"imt,omitempty"`
+	Sat        *ttcSatStatus          `json:"sat,omitempty"`
 	Ready      bool                   `json:"ready"`
 	Issues     []string               `json:"issues,omitempty"`
 }
@@ -108,6 +110,47 @@ type ttcIMTStatus struct {
 	LastMTAt     *time.Time `json:"last_mt_at,omitempty"`
 	Queued       int        `json:"queued"`
 	DLQPending   int64      `json:"dlq_pending"`
+}
+
+// ttcSatStatus names the satellite modem this kit actually carries, so the
+// panel's Satellite lane and chip can say "Iridium SBD" on the 9603 kit
+// instead of "no modem" (tesseract read "no modem" with its 9603 connected,
+// because the lane was built on the IMT block alone). Modem is "imt",
+// "sbd" or "" for none; the IMT block stays for the selectable lane. [MESHSAT-826]
+type ttcSatStatus struct {
+	Modem     string     `json:"modem"`
+	Interface string     `json:"interface,omitempty"`
+	Running   bool       `json:"running"`
+	Connected bool       `json:"connected"`
+	IMEI      string     `json:"imei,omitempty"`
+	LastMOAt  *time.Time `json:"last_mo_at,omitempty"`
+	LastMTAt  *time.Time `json:"last_mt_at,omitempty"`
+}
+
+// ttcSatStatus prefers the IMT gateway (the selectable lane), then SBD.
+func (s *Server) ttcSatStatus() *ttcSatStatus {
+	if s.gwManager == nil {
+		return &ttcSatStatus{}
+	}
+	if gw := s.gwManager.GetIMTGateway(); gw != nil {
+		return ttcSatFromGateway("imt", ttcIMTIface, &gw.IridiumGateway)
+	}
+	if gw := s.gwManager.GetSBDGateway(); gw != nil {
+		return ttcSatFromGateway("sbd", "iridium_0", &gw.IridiumGateway)
+	}
+	return &ttcSatStatus{}
+}
+
+func ttcSatFromGateway(modem, iface string, gw *gateway.IridiumGateway) *ttcSatStatus {
+	st := &ttcSatStatus{Modem: modem, Interface: iface, Running: true, IMEI: gw.IMEI()}
+	st.Connected = gw.Status().Connected
+	if at, _ := gw.LastMO(); !at.IsZero() {
+		st.LastMOAt = &at
+	}
+	if at := gw.LastMT(); !at.IsZero() {
+		st.LastMTAt = &at
+	}
+	return st
 }
 
 // ttcIMTStatus reads the running IMT gateway; nil-safe when the manager or
@@ -481,6 +524,7 @@ func (s *Server) ttcStatus(extraIssues []string) ttcFlowStatus {
 		st.Issues = append(st.Issues, "more than one ttc rule is enabled; a text would leave twice")
 	}
 	st.IMT = s.ttcIMTStatus()
+	st.Sat = s.ttcSatStatus()
 	if st.Path == "imt" && !st.IMT.Running {
 		st.Issues = append(st.Issues, "imt: the 9704 gateway is not running, texts will queue")
 	}

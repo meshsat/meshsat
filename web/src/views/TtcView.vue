@@ -65,9 +65,11 @@ const nearDev = computed(() => me.value.device)
 const visitorLines = computed(() => {
   const side = nearIsLeft.value ? 'right' : 'left'
   if (layout.value !== 'half') return ['A message typed on a T-Deck leaves over the radio and lands on the other mesh.', 'No internet, no phone network in between.']
+  // Two lines of at most about 70 characters: past that the band reads as a
+  // wall of text on the 7-inch panel (MESHSAT-826, noted 8 Sep).
   return DEVICES[nearDev.value].keyboard
-    ? [`Pick up the ${nearDevName.value} and send a message.`, `It leaves over the radio and lands on ${peer.value.name}, the kit on the ${side}. No internet, no phone network.`]
-    : [`Messages from ${peer.value.name}, the kit on the ${side}, arrive over the radio and land on the ${nearDevName.value}.`, 'Press its button to send one back.']
+    ? [`Pick up the ${nearDevName.value} and send a message. No internet, no phone network.`, `It leaves over the radio and lands on ${peer.value.name}, the kit on the ${side}.`]
+    : [`Messages from ${peer.value.name}, the kit on the ${side}, arrive over the radio`, `and land on the ${nearDevName.value}. Press its button to send one back.`]
 })
 const nearDevName = computed(() => DEVICE_NAME[nearDev.value])
 const leftKit = computed(() => KITS[LEFT_KIT])
@@ -112,7 +114,8 @@ const chips = computed(() => ([
   { key: 'mesh', label: 'LoRa mesh', short: 'LoRa', ...chip('mesh') },
   { key: 'aprs', label: 'APRS 144.800', short: 'APRS', ...chip('aprs') },
   { key: 'cellular', label: 'SMS', short: 'SMS', ...smsChip.value },
-  { key: 'sat', label: 'Satellite', short: 'SAT', state: flow.value.imt && flow.value.imt.connected ? 'ok' : flow.value.imt && flow.value.imt.running ? 'healing' : 'unknown', detail: 'Iridium IMT' },
+  { key: 'sat', label: 'Satellite', short: 'SAT', state: sat.value.connected ? 'ok' : sat.value.running ? 'healing' : 'unknown',
+    detail: !sat.value.modem ? 'no satellite modem on this kit' : sat.value.connected ? `${satName.value} connected, no sky indoors` : `${satName.value} gateway up, modem not answering` },
 ]))
 const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
 // The serial TNC has delivered no bytes since its link opened: the PicoAPRS
@@ -213,19 +216,24 @@ const rowCaptionX = computed(() => (laneStartX.value + P.value.edge) / 2)
 // lane they actually took, whatever is selected.
 const flow = ref({ path: '', rules: {}, hub_number: '', peer_number: '', ready: false, issues: [] })
 const flowBusy = ref(false)
-// The satellite leg exists on the panel before the modem is fitted: the
-// lane reads "modem not answering" until the 9704 gateway is up.
-const satNoModem = computed(() => !(flow.value.imt && flow.value.imt.connected))
+// The satellite leg names the modem this kit carries (flow.sat: 9704 IMT
+// on parallax, 9603 SBD on tesseract). Only the IMT kit can select the
+// lane; the SBD kit shows its modem instead of "no modem". [MESHSAT-826]
+const sat = computed(() => flow.value.sat || {})
+const satName = computed(() => sat.value.modem === 'sbd' ? 'Iridium SBD' : sat.value.modem === 'imt' ? 'Iridium IMT' : 'Iridium')
+const satNoModem = computed(() => !sat.value.modem)
+const satSilent = computed(() => !!sat.value.modem && !sat.value.connected)
 // One row per route, riding its own lane line: an icon, the name, the fact
 // that identifies the bearer, and a state word only when that bearer is
 // degraded. The sentence belongs to the chosen route alone — four captions
 // at once read as a wall of text on a 7-inch panel. [MESHSAT-987]
 const lanes = computed(() => ([
-  { key: 'imt', lane: 'sat', card: 'sat', name: 'Satellite', fact: 'Iridium',
-    state: satNoModem.value ? 'no modem' : '',
+  { key: 'imt', lane: 'sat', card: 'sat', name: 'Satellite', fact: satName.value,
+    state: satNoModem.value ? 'no modem' : satSilent.value ? 'modem silent' : '',
     detail: satNoModem.value
-      ? 'The modem is not answering yet.'
-      : 'Up to space, then down to the other kit.' },
+      ? 'No satellite modem on this kit.'
+      : satSilent.value ? 'The modem is not answering yet.'
+      : 'Up to space, then down to the other kit. Needs sky.' },
   { key: 'aprs', lane: 'aprs', card: 'air', name: 'APRS radio', fact: '144.800 MHz',
     state: aprsOff.value ? 'radio off' : aprsSilent.value ? 'silent' : '',
     detail: aprsOff.value
@@ -705,12 +713,12 @@ const cards = computed(() => ({
     title: 'Satellite, Iridium',
     lead: 'The kit sends the text up to an Iridium satellite. The MeshSat Hub gets it from the ground station and sends it back up to the other kit.',
     facts: [
-      ['Path', `this kit's 9704 to Cloudloop, the Hub, Cloudloop to ${peer.value.name}'s 9704`],
-      ['Modem', 'RockBLOCK 9704, Iridium Messaging Transport'],
+      ['Path', `this kit's modem to the ground station, the Hub, and back up to ${peer.value.name}`],
+      ['Modem', sat.value.modem === 'sbd' ? 'RockBLOCK 9603, Iridium Short Burst Data' : sat.value.modem === 'imt' ? 'RockBLOCK 9704, Iridium Messaging Transport' : 'none fitted on this kit'],
       ['Sky', 'needs a view of the sky: outside, or the antenna at a window'],
       ['Time', 'tens of seconds to a few minutes per hop'],
       ['Cost', 'paid per message, so one at a time'],
-      ['Right now', !flow.value.imt || !flow.value.imt.running ? 'no satellite gateway on this kit' : !flow.value.imt.connected ? 'modem not answering' : `modem connected${flow.value.imt.last_mo_at ? ', last uplink ' + Math.max(0, Math.round((Date.now() - Date.parse(flow.value.imt.last_mo_at)) / 60000)) + ' min ago' : ''}${flow.value.imt.queued ? ', ' + flow.value.imt.queued + ' waiting' : ''}`],
+      ['Right now', !sat.value.running ? 'no satellite gateway on this kit' : !sat.value.connected ? 'modem not answering' : `${satName.value} connected, no sky indoors${sat.value.last_mo_at ? ', last uplink ' + Math.max(0, Math.round((Date.now() - Date.parse(sat.value.last_mo_at)) / 60000)) + ' min ago' : ''}${flow.value.imt && flow.value.imt.queued ? ', ' + flow.value.imt.queued + ' waiting' : ''}`],
     ],
   },
   hub: {
