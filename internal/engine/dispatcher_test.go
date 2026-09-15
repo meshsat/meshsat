@@ -1,12 +1,14 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"meshsat/internal/channel"
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 	"meshsat/internal/rules"
 )
 
@@ -394,4 +396,22 @@ func payloadOf(dl []database.MessageDelivery) string {
 		return ""
 	}
 	return string(dl[0].Payload)
+}
+
+// A gateway provider may hand back a nil entry while a gateway restarts (the
+// manager's sentinel). The delivery worker must treat that as "not running",
+// not dereference it: the 15 Sep 2026 APRS restart panicked the bridge here.
+// [MESHSAT-1021]
+type nilEntryProvider struct{}
+
+func (nilEntryProvider) Gateways() []gateway.Gateway                 { return []gateway.Gateway{nil} }
+func (nilEntryProvider) GatewayByInterfaceID(string) gateway.Gateway { return nil }
+
+func TestDeliveryWorker_NilGatewayEntryDoesNotPanic(t *testing.T) {
+	_, db := setupTestDispatcher(t)
+	w := &DeliveryWorker{db: db, channelID: "aprs_0", gwProv: nilEntryProvider{}}
+	err := w.forwardToGateway(context.Background(), database.MessageDelivery{ID: 1, Channel: "aprs_0", TextPreview: "x"}, false)
+	if err == nil || !strings.Contains(err.Error(), "not found or not running") {
+		t.Fatalf("want a not-running error, got %v", err)
+	}
 }
