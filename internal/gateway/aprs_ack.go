@@ -180,6 +180,19 @@ func (w *aprsAckWaiters) register(id string) <-chan struct{} {
 	return e.acked
 }
 
+// pending is how many frames this gateway is currently waiting an ack for.
+func (w *aprsAckWaiters) pending() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, e := range w.m {
+		if !e.done {
+			n++
+		}
+	}
+	return n
+}
+
 func (w *aprsAckWaiters) release(id string) {
 	w.mu.Lock()
 	delete(w.m, id)
