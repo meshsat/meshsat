@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,10 +28,15 @@ type Config struct {
 	// the same credentials (HTTP Basic bridge_id:password).
 	Password string
 	// CertPEM/KeyPEM is the Hub-issued certificate this bridge presents as
-	// the TLS SERVER inside every tunnel; CAPEM is the Hub CA both ends
-	// verify against. Certificates issued before 2026-09-15 lack ServerAuth
-	// and a SAN and are refused by Validate.
-	CertPEM, KeyPEM, CAPEM []byte
+	// the TLS SERVER inside every tunnel. Certificates issued before
+	// 2026-09-15 lack ServerAuth and a SAN and are refused by Validate.
+	CertPEM, KeyPEM []byte
+	// CAPEM is the Hub's bridge CA, the only root either end of a tunnel
+	// verifies against. Leave it EMPTY on a kit: the bridge's stored
+	// tls_ca_pem is the root store for the MQTT broker (Let's Encrypt) and
+	// must not be the bridge CA; Run fetches the bridge CA from the Hub at
+	// GET /api/relay/ca over HTTPS with the system roots instead.
+	CAPEM []byte
 	// Handler answers HTTP inside the tunnels: the bridge's own API router.
 	Handler http.Handler
 	// IdleTimeout closes a client tunnel with no frames for this long (the
@@ -65,18 +71,26 @@ func (c Config) Validate() error {
 	if c.Handler == nil {
 		return errors.New("relayclient: no handler to serve")
 	}
-	_, err := c.serverTLS()
-	return err
+	if _, err := c.serverCert(); err != nil {
+		return err
+	}
+	if len(c.CAPEM) > 0 {
+		if _, err := parseCA(c.CAPEM); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (c Config) serverTLS() (*tls.Config, error) {
+// serverCert loads the bridge certificate and checks it can be a TLS server.
+func (c Config) serverCert() (tls.Certificate, error) {
 	cert, err := tls.X509KeyPair(c.CertPEM, c.KeyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("relayclient: bridge certificate: %w", err)
+		return tls.Certificate{}, fmt.Errorf("relayclient: bridge certificate: %w", err)
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return nil, fmt.Errorf("relayclient: bridge certificate: %w", err)
+		return tls.Certificate{}, fmt.Errorf("relayclient: bridge certificate: %w", err)
 	}
 	serverOK := false
 	for _, eku := range leaf.ExtKeyUsage {
@@ -85,18 +99,89 @@ func (c Config) serverTLS() (*tls.Config, error) {
 		}
 	}
 	if !serverOK || len(leaf.DNSNames) == 0 {
-		return nil, errors.New("relayclient: the bridge certificate cannot serve a relay (no ServerAuth usage or SAN); re-issue it on the Hub's Fleet page")
+		return tls.Certificate{}, errors.New("relayclient: the bridge certificate cannot serve a relay (no ServerAuth usage or SAN); re-issue it on the Hub's Fleet page")
 	}
+	return cert, nil
+}
+
+func parseCA(pemBytes []byte) (*x509.CertPool, error) {
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(c.CAPEM) {
+	if !pool.AppendCertsFromPEM(pemBytes) {
 		return nil, errors.New("relayclient: hub CA PEM does not parse")
+	}
+	return pool, nil
+}
+
+func (c Config) serverTLS(clientCAs *x509.CertPool) (*tls.Config, error) {
+	cert, err := c.serverCert()
+	if err != nil {
+		return nil, err
 	}
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{cert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    pool,
+		ClientCAs:    clientCAs,
 	}, nil
+}
+
+// caPool returns the Hub's bridge CA: the configured PEM when there is one,
+// otherwise fetched from the Hub, retrying until ctx ends. The fetch goes
+// over HTTPS to the Hub's public certificate, so the system roots vouch for
+// which CA a bridge will trust its clients against.
+func (c *Client) caPool(ctx context.Context) (*x509.CertPool, error) {
+	if len(c.cfg.CAPEM) > 0 {
+		return parseCA(c.cfg.CAPEM)
+	}
+	backoff := initialBackoff
+	var lastLog time.Time
+	for {
+		pool, err := fetchCA(ctx, c.cfg.HubAPIURL)
+		if err == nil {
+			slog.Info("relay: bridge CA fetched from the Hub", "hub", c.cfg.HubAPIURL)
+			return pool, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Since(lastLog) > stillDownEvery {
+			slog.Warn("relay: cannot fetch the bridge CA from the Hub", "error", err, "retry_in", backoff)
+			lastLog = time.Now()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			backoff = min(backoff*2, maxBackoff)
+		}
+	}
+}
+
+// caPath is where the Hub publishes its bridge CA certificate (public).
+const caPath = "/api/relay/ca"
+
+func fetchCA(ctx context.Context, hubAPIURL string) (*x509.CertPool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(hubAPIURL, "/")+caPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("relayclient: %s: HTTP %d", caPath, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return nil, err
+	}
+	return parseCA(body)
 }
 
 // Package vars so tests can shorten them.
@@ -148,7 +233,14 @@ func (c *Client) Run(ctx context.Context) error {
 	if err := c.cfg.Validate(); err != nil {
 		return err
 	}
-	tlsCfg, _ := c.cfg.serverTLS()
+	pool, err := c.caPool(ctx)
+	if err != nil {
+		return nil // ctx ended while waiting for the Hub
+	}
+	tlsCfg, err := c.cfg.serverTLS(pool)
+	if err != nil {
+		return err
+	}
 	c.listener = newListener(c.cfg.BridgeID)
 	srv := &http.Server{Handler: c.cfg.Handler, ReadHeaderTimeout: 15 * time.Second}
 	go func() { _ = srv.Serve(tls.NewListener(c.listener, tlsCfg)) }()

@@ -41,28 +41,35 @@ func TestRelayLive(t *testing.T) {
 		return b
 	}
 	hubAPI := need("RELAY_HUB_API")
-	bridgeID, bridgePass := need("RELAY_BRIDGE_ID"), need("RELAY_BRIDGE_PASSWORD")
+	bridgeID, bridgePass := need("RELAY_BRIDGE_ID"), os.Getenv("RELAY_BRIDGE_PASSWORD")
 	clientID, clientPass := need("RELAY_CLIENT_ID"), need("RELAY_CLIENT_PASSWORD")
 	caPEM := read("RELAY_CA")
-	bridgeCert, bridgeKey := read("RELAY_BRIDGE_CERT"), read("RELAY_BRIDGE_KEY")
 	clientCert, clientKey := read("RELAY_CLIENT_CERT"), read("RELAY_CLIENT_KEY")
 
-	c := New(Config{HubAPIURL: hubAPI, BridgeID: bridgeID, Password: bridgePass, CertPEM: bridgeCert, KeyPEM: bridgeKey, CAPEM: caPEM, Handler: testRouter()})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { _ = c.Run(ctx); close(done) }()
-	defer func() {
-		cancel()
-		<-done
-	}()
-	deadline := time.Now().Add(30 * time.Second)
-	for !c.Connected() && time.Now().Before(deadline) {
-		time.Sleep(200 * time.Millisecond)
+	// RELAY_CLIENT_ONLY=1: the bridge end is a real kit already serving
+	// through the Hub (its own relay client, its own API); this process is
+	// only the phone. The bridge PEMs are not needed then.
+	if os.Getenv("RELAY_CLIENT_ONLY") != "1" {
+		bridgeCert, bridgeKey := read("RELAY_BRIDGE_CERT"), read("RELAY_BRIDGE_KEY")
+		c := New(Config{HubAPIURL: hubAPI, BridgeID: bridgeID, Password: bridgePass, CertPEM: bridgeCert, KeyPEM: bridgeKey, CAPEM: caPEM, Handler: testRouter()})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { _ = c.Run(ctx); close(done) }()
+		defer func() {
+			cancel()
+			<-done
+		}()
+		deadline := time.Now().Add(30 * time.Second)
+		for !c.Connected() && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !c.Connected() {
+			t.Fatal("bridge end never connected to the Hub")
+		}
+		t.Logf("bridge end serving through %s as %s", hubAPI, bridgeID)
+	} else {
+		t.Logf("client only: %s is expected to be serving through %s already", bridgeID, hubAPI)
 	}
-	if !c.Connected() {
-		t.Fatal("bridge end never connected to the Hub")
-	}
-	t.Logf("bridge end serving through %s as %s", hubAPI, bridgeID)
 
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
