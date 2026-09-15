@@ -15,6 +15,20 @@ type CellEvent struct {
 	Signal  int             `json:"signal,omitempty"` // bars 0-5, only for "signal" events
 }
 
+// SMSBundleStatus is the prepaid SMS bundle counter: segments the network
+// accepted since the last top-up against the bundle size. [MESHSAT-1161]
+type SMSBundleStatus struct {
+	Size      int        `json:"size"`
+	Sent      int        `json:"sent"`
+	Remaining int        `json:"remaining"`
+	WarnAt    int        `json:"warn_at"`
+	Low       bool       `json:"low"`     // remaining at or below warn_at
+	Empty     bool       `json:"empty"`   // nothing left
+	Alerted   bool       `json:"alerted"` // the top-up reminder SMS went out for this bundle
+	AlertSet  bool       `json:"alert_configured"`
+	ResetAt   *time.Time `json:"reset_at,omitempty"`
+}
+
 // CellStatus represents the connection status of the cellular modem.
 type CellStatus struct {
 	Connected    bool   `json:"connected"`
@@ -30,6 +44,8 @@ type CellStatus struct {
 	SIMLabel     string `json:"sim_label,omitempty"`    // user-assigned SIM card label
 	SMSSent      int64  `json:"sms_sent"`               // total SMS sent since connect [MESHSAT-403]
 	SMSReceived  int64  `json:"sms_received"`           // total SMS received since connect [MESHSAT-403]
+	// SMSBundle is the prepaid bundle counter, nil when none is configured. [MESHSAT-1161]
+	SMSBundle *SMSBundleStatus `json:"sms_bundle,omitempty"`
 	// Device health of the modem from the health watchdog, set by the API.
 	// Connected is only the serial link. [MESHSAT-1064]
 	HealthState  string `json:"health_state,omitempty"`

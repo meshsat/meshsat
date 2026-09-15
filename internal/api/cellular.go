@@ -136,6 +136,9 @@ func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request)
 			if state, detail, ok := s.cellularHealth(); ok {
 				status.HealthState, status.HealthDetail = state, detail
 			}
+			if s.smsBudget != nil {
+				status.SMSBundle = s.smsBudget.Status() // [MESHSAT-1161]
+			}
 			writeJSON(w, http.StatusOK, status)
 			return
 		}
@@ -144,6 +147,11 @@ func (s *Server) handleGetCellularStatus(w http.ResponseWriter, r *http.Request)
 	result := map[string]interface{}{
 		"connected": false,
 		"sim_state": "UNKNOWN",
+	}
+	if s.smsBudget != nil {
+		if st := s.smsBudget.Status(); st != nil {
+			result["sms_bundle"] = st
+		}
 	}
 	ci, err := s.db.GetLatestCellInfo()
 	if err == nil && ci != nil {
@@ -724,6 +732,81 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 	s.db.InsertSMSMessage("tx", req.To, req.Text, "sent", time.Now().Unix())
 	s.recordSMSTX(req.To, outText, req.Text)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+// smsBundleResponse is the bundle counter plus the reminder number, which
+// stays off /cellular/status (the booth panel polls that one). [MESHSAT-1161]
+func (s *Server) smsBundleResponse() map[string]interface{} {
+	out := map[string]interface{}{"configured": false, "alert_number": s.smsBudget.AlertNumber()}
+	if st := s.smsBudget.Status(); st != nil {
+		out["configured"] = true
+		out["bundle"] = st
+	}
+	return out
+}
+
+// @Summary Get the prepaid SMS bundle counter
+// @Description Segments the network accepted since the last top-up against the bundle size, the warning threshold and the top-up reminder number [MESHSAT-1161]
+// @Tags cellular
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {object} map[string]string "no cellular modem"
+// @Router /api/cellular/bundle [get]
+func (s *Server) handleGetSMSBundle(w http.ResponseWriter, r *http.Request) {
+	if s.smsBudget == nil {
+		writeError(w, http.StatusServiceUnavailable, "no cellular modem")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.smsBundleResponse())
+}
+
+// @Summary Record a top-up or tune the prepaid SMS bundle counter
+// @Description size (with optional sent, default 0) records a top-up and re-arms the warning and the reminder; warn_at and alert_number (E.164) change the threshold and the reminder number; each field is optional [MESHSAT-1161]
+// @Tags cellular
+// @Accept json
+// @Produce json
+// @Param body body object true "{size?, sent?, warn_at?, alert_number?}"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string "invalid value"
+// @Failure 503 {object} map[string]string "no cellular modem"
+// @Router /api/cellular/bundle [put]
+func (s *Server) handleSetSMSBundle(w http.ResponseWriter, r *http.Request) {
+	if s.smsBudget == nil {
+		writeError(w, http.StatusServiceUnavailable, "no cellular modem")
+		return
+	}
+	var req struct {
+		Size        *int    `json:"size"`
+		Sent        *int    `json:"sent"`
+		WarnAt      *int    `json:"warn_at"`
+		AlertNumber *string `json:"alert_number"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Size == nil && req.WarnAt == nil && req.AlertNumber == nil {
+		writeError(w, http.StatusBadRequest, "nothing to change: give size, warn_at or alert_number")
+		return
+	}
+	if req.WarnAt != nil || req.AlertNumber != nil {
+		if err := s.smsBudget.Configure(req.WarnAt, req.AlertNumber); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.Size != nil {
+		sent := 0
+		if req.Sent != nil {
+			sent = *req.Sent
+		}
+		if err := s.smsBudget.Reset(*req.Size, sent); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		log.Info().Int("size", *req.Size).Int("sent", sent).Msg("sms budget: top-up recorded via API")
+	}
+	writeJSON(w, http.StatusOK, s.smsBundleResponse())
 }
 
 // --- Webhook Log ---

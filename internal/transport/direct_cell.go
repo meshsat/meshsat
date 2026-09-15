@@ -101,6 +101,10 @@ type DirectCellTransport struct {
 	mnc         string // from AT+COPS? numeric format (e.g. "08" from PLMN "20408")
 	smsSent     int64  // SMS sent counter [MESHSAT-403]
 	smsReceived int64  // SMS received counter [MESHSAT-403]
+	// sentHook runs after the network accepted an SMS (+CMGS), with the
+	// destination and the on-air text; the prepaid bundle counter hangs
+	// here so every send path is counted. [MESHSAT-1161]
+	sentHook func(to, text string)
 
 	// Data connection state
 	dataMu          sync.RWMutex
@@ -169,6 +173,16 @@ func NewDirectCellTransport(port string) *DirectCellTransport {
 func (t *DirectCellTransport) SetSIMCardLookup(fn SIMCardLookupFunc, touchFn func(string)) {
 	t.simLookupFn = fn
 	t.simTouchFn = touchFn
+}
+
+// SetSentHook installs the callback that runs after every SMS the network
+// accepted (+CMGS), whatever the caller: gateway, OOB, API test send,
+// Reticulum SMS interface. It runs inside the send critical section, so it
+// must not call back into the transport synchronously. [MESHSAT-1161]
+func (t *DirectCellTransport) SetSentHook(fn func(to, text string)) {
+	t.stateMu.Lock()
+	t.sentHook = fn
+	t.stateMu.Unlock()
 }
 
 // SetFallbackPIN sets a PIN to use when the SIM's ICCID can't be read (locked SIM)
@@ -1250,7 +1264,11 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 		// Increment SMS sent counter [MESHSAT-403]
 		t.stateMu.Lock()
 		t.smsSent++
+		hook := t.sentHook
 		t.stateMu.Unlock()
+		if hook != nil {
+			hook(to, text) // prepaid bundle counter [MESHSAT-1161]
+		}
 
 		// Post-send settle — give the modem time to finalize before accepting
 		// the next command. The Huawei E220 on 2G needs this between CMGS calls.
