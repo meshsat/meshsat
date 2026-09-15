@@ -782,7 +782,14 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 		// Hold the beacon back while the channel is busy. The beacon is
 		// liveness only: a few seconds late costs nothing, and going out on
 		// top of a message costs that message both copies. [MESHSAT-1021]
-		if !g.waitForQuietChannel(ctx) {
+		//
+		// And never while this kit is waiting for an ack: the peer's ack
+		// lands 1.5 to 3 s after our frame, a half-duplex radio hears
+		// nothing while it keys, and a beacon copy in that window turned a
+		// delivered message into a retry. Measured 15 Sep 2026 at bench
+		// distance: 36 to 40 percent of acks lost with beacons on, 17
+		// percent with them off. [MESHSAT-1021]
+		if !g.waitForNoPendingAck(ctx) || !g.waitForQuietChannel(ctx) {
 			return
 		}
 		for i := 0; i < copies; i++ {
@@ -791,6 +798,11 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case <-time.After(jitterDuration(g.beaconRepeatGap(), 0.2)):
+				}
+				// The repeat copy keeps its spacing; it only yields to an
+				// ack exchange that started in between.
+				if !g.waitForNoPendingAck(ctx) {
+					return
 				}
 			}
 			select {
@@ -805,6 +817,26 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 		case <-time.After(jitterDuration(interval, 0.2)):
 		}
 	}
+}
+
+// waitForNoPendingAck holds a beacon while this gateway has frames waiting
+// for the peer's ack, up to beaconAckDeferMax so the liveness signal is never
+// starved by a peer that answers nothing. Returns false on shutdown.
+// [MESHSAT-1021]
+func (g *APRSGateway) waitForNoPendingAck(ctx context.Context) bool {
+	deadline := time.Now().Add(beaconAckDeferMax)
+	for g.acks.pending() > 0 {
+		if !time.Now().Before(deadline) {
+			log.Debug().Msg("aprs: beacon deferral for pending acks capped")
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(beaconAckPoll):
+		}
+	}
+	return true
 }
 
 // jitterDuration returns d scaled by a uniform random factor in
@@ -1007,6 +1039,12 @@ var (
 	// How long a beacon may be held back. A busy channel must not silence
 	// the liveness signal the peer's receive watchdog waits for.
 	beaconDeferMax = 20 * time.Second
+	// How long a beacon waits for this kit's own ack exchanges to finish.
+	// An exchange is at most ack_attempts times ack_timeout (about 35 s on
+	// the kits); the peer's receive watchdog allows 3 min of silence.
+	beaconAckDeferMax = 45 * time.Second
+	// Poll period while waiting on a pending ack.
+	beaconAckPoll = 250 * time.Millisecond
 )
 
 // Transmit gate knobs. Package vars so tests can shorten them.

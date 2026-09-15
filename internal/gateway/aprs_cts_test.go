@@ -394,3 +394,56 @@ func TestAPRSCTS_BeaconDefersAfterOwnTX(t *testing.T) {
 		t.Errorf("beacon went out %v after our own frame; it should wait ~300 ms", waited)
 	}
 }
+
+// A beacon waits while this kit has a frame waiting for the peer's ack, and
+// goes out once the ack arrives (or the waiter is released). [MESHSAT-1021]
+func TestAPRSCTS_BeaconWaitsForPendingAck(t *testing.T) {
+	origMax, origPoll := beaconAckDeferMax, beaconAckPoll
+	beaconAckDeferMax, beaconAckPoll = 2*time.Second, 20*time.Millisecond
+	t.Cleanup(func() { beaconAckDeferMax, beaconAckPoll = origMax, origPoll })
+
+	g := &APRSGateway{config: APRSConfig{Callsign: "MSTESS", SSID: 10}, tracker: NewAPRSTracker()}
+	if g.acks.pending() != 0 {
+		t.Fatal("fresh gateway has a pending ack")
+	}
+	g.acks.register("ABCDE")
+	if g.acks.pending() != 1 {
+		t.Fatalf("pending = %d, want 1", g.acks.pending())
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		g.acks.resolve("ABCDE")
+	}()
+	start := time.Now()
+	if !g.waitForNoPendingAck(context.Background()) {
+		t.Fatal("reported shutdown")
+	}
+	if waited := time.Since(start); waited < 150*time.Millisecond || waited > 1500*time.Millisecond {
+		t.Fatalf("beacon waited %v; want about 200 ms until the ack resolved", waited)
+	}
+	if g.acks.pending() != 0 {
+		t.Fatalf("pending after resolve = %d", g.acks.pending())
+	}
+}
+
+// A peer that never acks cannot starve the liveness beacon: the wait is capped.
+func TestAPRSCTS_BeaconAckDeferralIsCapped(t *testing.T) {
+	origMax, origPoll := beaconAckDeferMax, beaconAckPoll
+	beaconAckDeferMax, beaconAckPoll = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { beaconAckDeferMax, beaconAckPoll = origMax, origPoll })
+
+	g := &APRSGateway{config: APRSConfig{Callsign: "MSTESS", SSID: 10}, tracker: NewAPRSTracker()}
+	g.acks.register("ZZZZZ")
+	start := time.Now()
+	if !g.waitForNoPendingAck(context.Background()) {
+		t.Fatal("reported shutdown")
+	}
+	if waited := time.Since(start); waited < 250*time.Millisecond || waited > 1500*time.Millisecond {
+		t.Fatalf("beacon waited %v; want about the 300 ms cap", waited)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if g.waitForNoPendingAck(ctx) {
+		t.Fatal("cancelled context must report shutdown")
+	}
+}
