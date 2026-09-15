@@ -180,7 +180,13 @@ func (b *SMSBudget) Record(to, text string) {
 }
 
 // checkLocked raises the warning once per bundle and starts the reminder.
+// Without a bundle there is nothing to be low on: the first PUT that set
+// the reminder number before the size fired a "0 of 250 left" reminder
+// (tesseract, 15 Sep 2026 22:20).
 func (b *SMSBudget) checkLocked() {
+	if b.size <= 0 {
+		return
+	}
 	remaining := b.size - b.sent
 	if remaining > b.warnAt {
 		return
@@ -237,59 +243,75 @@ func (b *SMSBudget) sendAlert(remaining int) {
 	}
 }
 
-// Reset records a top-up: a new bundle of size segments with sent already
-// used (0 for a fresh card). The warning and the reminder re-arm.
-func (b *SMSBudget) Reset(size, sent int) error {
-	if size <= 0 {
+// Apply changes any of the fields under one lock and evaluates the
+// thresholds once at the end, so a PUT that sets size, warn_at and the
+// reminder number together never fires on a half-configured state. A nil
+// leaves that field alone; sent needs size. A changed number re-arms the
+// reminder; a new size records a top-up and re-arms warning and reminder.
+func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
+	if size != nil && *size <= 0 {
 		return errors.New("bundle size must be positive")
 	}
-	if sent < 0 {
+	if sent != nil && *sent < 0 {
 		return errors.New("sent must not be negative")
+	}
+	if sent != nil && size == nil {
+		return errors.New("sent needs size")
+	}
+	if warnAt != nil && *warnAt < 0 {
+		return errors.New("warn_at must not be negative")
+	}
+	var number string
+	if alertNumber != nil {
+		number = strings.TrimSpace(*alertNumber)
+		if number != "" && !strings.HasPrefix(number, "+") {
+			return errors.New("alert_number must be E.164 (+country...)")
+		}
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.size, b.sent = size, sent
-	b.resetAt = b.now()
-	b.alerted, b.warned, b.alertTriedAt = false, false, time.Time{}
-	b.store(cfgSMSBundleSize, strconv.Itoa(size))
-	b.store(cfgSMSBundleSent, strconv.Itoa(sent))
-	b.store(cfgSMSBundleResetAt, b.resetAt.UTC().Format(time.RFC3339))
-	b.store(cfgSMSBundleAlerted, "0")
-	log.Info().Int("size", size).Int("sent", sent).Msg("sms budget: bundle reset")
-	if b.emit != nil {
-		b.emit("sms_credit_reset", fmt.Sprintf("SMS bundle set to %d, %d used", size, sent))
+	if alertNumber != nil {
+		if number != b.alertNumber {
+			b.alerted, b.alertTriedAt = false, time.Time{}
+			b.store(cfgSMSBundleAlerted, "0")
+		}
+		b.alertNumber = number
+		b.store(cfgSMSAlertNumber, number)
+	}
+	if warnAt != nil {
+		b.warnAt = *warnAt
+		b.warned = false
+		b.store(cfgSMSBundleWarnAt, strconv.Itoa(*warnAt))
+	}
+	if size != nil {
+		used := 0
+		if sent != nil {
+			used = *sent
+		}
+		b.size, b.sent = *size, used
+		b.resetAt = b.now()
+		b.alerted, b.warned, b.alertTriedAt = false, false, time.Time{}
+		b.store(cfgSMSBundleSize, strconv.Itoa(*size))
+		b.store(cfgSMSBundleSent, strconv.Itoa(used))
+		b.store(cfgSMSBundleResetAt, b.resetAt.UTC().Format(time.RFC3339))
+		b.store(cfgSMSBundleAlerted, "0")
+		log.Info().Int("size", *size).Int("sent", used).Msg("sms budget: bundle reset")
+		if b.emit != nil {
+			b.emit("sms_credit_reset", fmt.Sprintf("SMS bundle set to %d, %d used", *size, used))
+		}
 	}
 	b.checkLocked()
 	return nil
 }
 
+// Reset records a top-up: a new bundle of size segments with sent already
+// used (0 for a fresh card). The warning and the reminder re-arm.
+func (b *SMSBudget) Reset(size, sent int) error { return b.Apply(&size, &sent, nil, nil) }
+
 // Configure changes the warning threshold and the reminder number; a nil
 // leaves that field alone. A changed number re-arms the reminder.
 func (b *SMSBudget) Configure(warnAt *int, alertNumber *string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if warnAt != nil {
-		if *warnAt < 0 {
-			return errors.New("warn_at must not be negative")
-		}
-		b.warnAt = *warnAt
-		b.warned = false
-		b.store(cfgSMSBundleWarnAt, strconv.Itoa(*warnAt))
-	}
-	if alertNumber != nil {
-		n := strings.TrimSpace(*alertNumber)
-		if n != "" && !strings.HasPrefix(n, "+") {
-			return errors.New("alert_number must be E.164 (+country...)")
-		}
-		if n != b.alertNumber {
-			b.alerted, b.alertTriedAt = false, time.Time{}
-			b.store(cfgSMSBundleAlerted, "0")
-		}
-		b.alertNumber = n
-		b.store(cfgSMSAlertNumber, n)
-	}
-	b.checkLocked()
-	return nil
+	return b.Apply(nil, nil, warnAt, alertNumber)
 }
 
 // AlertNumber is the configured reminder number ("" when none).
