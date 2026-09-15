@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 )
 
 func ttcCall(t *testing.T, s *Server, method, path, body string) (int, ttcFlowStatus, string) {
@@ -57,6 +58,9 @@ func TestTTCFlow_SetupThenSelect(t *testing.T) {
 	}
 	if st.IMT == nil || st.IMT.Running || st.IMT.Interface != ttcIMTIface {
 		t.Errorf("imt status without a gateway manager: %+v", st.IMT)
+	}
+	if st.Sat == nil || st.Sat.Modem != "" || st.Sat.Running {
+		t.Errorf("sat status without a gateway manager: %+v", st.Sat) // [MESHSAT-826]
 	}
 	if st.Rules["aprs"].ForwardTo != ttcPeerGroupID {
 		t.Errorf("aprs rule should forward to %s, got %s", ttcPeerGroupID, st.Rules["aprs"].ForwardTo)
@@ -179,5 +183,20 @@ func TestTTCFlow_IMTRuleRepointed(t *testing.T) {
 	}
 	if st.Rules["imt"].ID != id || st.Rules["imt"].ForwardTo != ttcIMTIface {
 		t.Errorf("imt rule not repointed: %+v", st.Rules["imt"])
+	}
+}
+
+// The Satellite lane names the modem that is present: the 9603 kit says
+// "sbd", the 9704 kit "imt", connected only when the gateway is. [MESHSAT-826]
+func TestTTCSatStatus_NamesTheModemPresent(t *testing.T) {
+	sbd := gateway.NewSBDGateway(gateway.IridiumConfig{}, nil, nil, nil)
+	st := ttcSatFromGateway("sbd", "iridium_0", &sbd.IridiumGateway)
+	if st.Modem != "sbd" || st.Interface != "iridium_0" || !st.Running || st.Connected || st.LastMOAt != nil {
+		t.Fatalf("sbd status: %+v", st)
+	}
+	imt := gateway.NewIMTGateway(gateway.IridiumConfig{}, nil, nil, nil)
+	st = ttcSatFromGateway("imt", ttcIMTIface, &imt.IridiumGateway)
+	if st.Modem != "imt" || st.Interface != ttcIMTIface || !st.Running {
+		t.Fatalf("imt status: %+v", st)
 	}
 }
