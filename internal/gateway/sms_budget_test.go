@@ -235,6 +235,40 @@ func TestSMSBudget_ConfigureValidatesAndRearms(t *testing.T) {
 	}
 }
 
+// The first PUT on a kit sets size, warn_at and the number together on a
+// counter that has no bundle yet; nothing may fire from the in-between
+// state (a "0 of 250 left" reminder went out on 15 Sep 2026).
+func TestSMSBudget_ApplyOnUnconfiguredBundleDoesNotRemind(t *testing.T) {
+	fs := &fakeSender{}
+	var events []string
+	b := NewSMSBudget(newBudgetDB(t), "kitA", SMSBudgetOptions{}, fs.send)
+	b.SetEventEmitter(func(typ, _ string) { events = append(events, typ) })
+	num := "+31600000000"
+	if err := b.Configure(nil, &num); err != nil { // number before size: nothing to be low on
+		t.Fatal(err)
+	}
+	b.Wait()
+	size, sent, warn := 250, 0, 50
+	if err := b.Apply(&size, &sent, &warn, &num); err != nil {
+		t.Fatal(err)
+	}
+	b.Wait()
+	if fs.calls != 0 {
+		t.Fatalf("reminder fired on setup: %v", fs.sent)
+	}
+	for _, e := range events {
+		if e == "sms_credit_low" || e == "sms_credit_alert" {
+			t.Fatalf("warning fired on setup: %v", events)
+		}
+	}
+	if state, _ := b.HealthStatus(); state != HealthStateOK {
+		t.Fatalf("health %s", state)
+	}
+	if err := b.Apply(nil, &sent, nil, nil); err == nil {
+		t.Fatal("sent without size must be rejected")
+	}
+}
+
 func TestSMSBudgetOptionsFromEnv(t *testing.T) {
 	t.Setenv("MESHSAT_SMS_BUNDLE_SIZE", "250")
 	t.Setenv("MESHSAT_SMS_BUNDLE_WARN_AT", "")

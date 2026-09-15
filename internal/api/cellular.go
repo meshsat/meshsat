@@ -789,22 +789,14 @@ func (s *Server) handleSetSMSBundle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nothing to change: give size, warn_at or alert_number")
 		return
 	}
-	if req.WarnAt != nil || req.AlertNumber != nil {
-		if err := s.smsBudget.Configure(req.WarnAt, req.AlertNumber); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	// One call under one lock: the thresholds are evaluated after every
+	// field is in place, never between the number and the size.
+	if err := s.smsBudget.Apply(req.Size, req.Sent, req.WarnAt, req.AlertNumber); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if req.Size != nil {
-		sent := 0
-		if req.Sent != nil {
-			sent = *req.Sent
-		}
-		if err := s.smsBudget.Reset(*req.Size, sent); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		log.Info().Int("size", *req.Size).Int("sent", sent).Msg("sms budget: top-up recorded via API")
+		log.Info().Int("size", *req.Size).Msg("sms budget: top-up recorded via API")
 	}
 	writeJSON(w, http.StatusOK, s.smsBundleResponse())
 }
