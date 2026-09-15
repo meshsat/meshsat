@@ -105,7 +105,9 @@ func TestRelayLive(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(string(body), "ok") {
+	// The test router answers {"status":"ok"}; a real kit's /health answers
+	// {"status":"healthy",...}.
+	if resp.StatusCode != 200 || !(strings.Contains(string(body), `"ok"`) || strings.Contains(string(body), `"healthy"`)) {
 		t.Fatalf("health: %d %s", resp.StatusCode, body)
 	}
 	t.Logf("GET /health through the Hub: %d %s in %s, server certificate CN=%s", resp.StatusCode, strings.TrimSpace(string(body)), time.Since(start).Round(time.Millisecond), peerCN)
