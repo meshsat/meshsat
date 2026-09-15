@@ -100,6 +100,7 @@ type fakeHub struct {
 	serves   int
 	lastAuth string
 	gotServe chan struct{}
+	caPEM    []byte // served at /api/relay/ca when set
 }
 
 func newFakeHub(t *testing.T) *fakeHub {
@@ -107,6 +108,17 @@ func newFakeHub(t *testing.T) *fakeHub {
 	r := chi.NewRouter()
 	r.Get("/api/relay/serve", h.serve)
 	r.Get("/api/relay/connect/{bridge}", h.connect)
+	r.Get("/api/relay/ca", func(w http.ResponseWriter, _ *http.Request) {
+		h.mu.Lock()
+		ca := h.caPEM
+		h.mu.Unlock()
+		if len(ca) == 0 {
+			http.Error(w, "no CA", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		_, _ = w.Write(ca)
+	})
 	h.srv = httptest.NewServer(r)
 	t.Cleanup(h.srv.Close)
 	return h
@@ -354,8 +366,67 @@ func TestValidateRefusesACertificateThatCannotServe(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("a serving certificate refused: %v", err)
 	}
+	cfg.CAPEM = nil // a kit leaves it empty and Run fetches it from the Hub
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an empty CA refused: %v", err)
+	}
+	cfg.CAPEM = []byte("not a pem")
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a garbage CA accepted")
+	}
 	if err := (Config{}).Validate(); err == nil {
 		t.Fatal("empty config accepted")
+	}
+}
+
+// A kit must not carry the bridge CA in its Hub connection (that field is
+// the MQTT broker's root store and the broker has a public certificate), so
+// the relay client fetches the CA from the Hub, and keeps trying until the
+// Hub answers.
+func TestFetchesTheBridgeCAFromTheHubWhenNotConfigured(t *testing.T) {
+	shortKnobs(t)
+	ca := newTestCA(t)
+	hub := newFakeHub(t)
+	hub.auth["kit-a"] = "kit-pass"
+	hub.auth["phone-1"] = "pw"
+	certPEM, keyPEM := ca.issue(t, "kit-a", true)
+	c := New(Config{HubAPIURL: hub.url(), BridgeID: "kit-a", Password: "kit-pass", CertPEM: certPEM, KeyPEM: keyPEM, Handler: testRouter()})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	// The Hub has no CA yet (404): the client must wait, not serve.
+	select {
+	case <-hub.gotServe:
+		t.Fatal("served before the CA was available")
+	case <-time.After(150 * time.Millisecond):
+	}
+	hub.mu.Lock()
+	hub.caPEM = ca.pem
+	hub.mu.Unlock()
+	select {
+	case <-hub.gotServe:
+	case <-time.After(5 * time.Second):
+		t.Fatal("never served after the CA became available")
+	}
+	waitFor(t, "connected", c.Connected)
+
+	// And the fetched CA is the one clients are verified against.
+	pc, pk := ca.issue(t, "phone-1", false)
+	cl := clientThroughHub(t, hub, ca, "kit-a", "phone-1", "pw", pc, pk)
+	resp, err := cl.Get("https://kit-a/health")
+	if err != nil {
+		t.Fatalf("GET through the tunnel: %v", err)
+	}
+	_ = resp.Body.Close()
+	other := newTestCA(t)
+	xc, xk := other.issue(t, "phone-1", false)
+	if _, err := clientThroughHub(t, hub, ca, "kit-a", "phone-1", "pw", xc, xk).Get("https://kit-a/health"); err == nil {
+		t.Fatal("a foreign certificate got through a fetched-CA tunnel")
 	}
 }
 
