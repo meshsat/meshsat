@@ -278,6 +278,12 @@ func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result 
 	if state == 1 {
 		s.cancelRevert(t.IfaceID)
 		if err := s.startBearer(ctx, t.IfaceID); err != nil {
+			// Idempotent, as the spec promises: "on" for a bearer that is
+			// already up (or starting) is a no-op, not a failure (the Hub's
+			// BEARER aprs on to parallax read "unavailable", 15 Sep 2026). [MESHSAT-964]
+			if restartAlreadyUnderway(err) {
+				return Result{Code: RCOK, Body: t.Name + " on already"}
+			}
 			return Result{Code: RCUnavailable, Body: trim(err.Error(), 60)}
 		}
 		return Result{Code: RCOK, Body: t.Name + " on"}
@@ -295,6 +301,9 @@ func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result 
 		body += " rv10m"
 	}
 	if err := s.stopBearer(t.IfaceID); err != nil {
+		if strings.Contains(err.Error(), "not running") {
+			return Result{Code: RCOK, Body: body + " already"}
+		}
 		return Result{Code: RCUnavailable, Body: trim(err.Error(), 60)}
 	}
 	return Result{Code: RCOK, Body: body}
