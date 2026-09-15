@@ -54,6 +54,7 @@ type fakeGateways struct {
 	started []string
 	stopped []string
 	fail    bool
+	running map[string]bool // when set, Start/Stop answer like the manager for an instance already in that state
 }
 
 func (g *fakeGateways) StartGatewayInstance(ctx context.Context, id string) error {
@@ -62,12 +63,18 @@ func (g *fakeGateways) StartGatewayInstance(ctx context.Context, id string) erro
 	if g.fail {
 		return errors.New("no such instance")
 	}
+	if g.running != nil && g.running[id] {
+		return errors.New("gateway " + id + " is already running")
+	}
 	g.started = append(g.started, id)
 	return nil
 }
 func (g *fakeGateways) StopGatewayInstance(id string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.running != nil && !g.running[id] {
+		return errors.New("gateway " + id + " is not running")
+	}
 	g.stopped = append(g.stopped, id)
 	return nil
 }
@@ -411,6 +418,21 @@ func TestExecute_ResetAndBearer(t *testing.T) {
 		res = h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetAPRS, 0))
 		if res.Code != RCOK || strings.Contains(res.Body, "rv10m") || len(h.svc.PendingReverts()) != 0 {
 			t.Fatalf("%s %q reverts=%v", res.Code, res.Body, h.svc.PendingReverts())
+		}
+	})
+	t.Run("bearer_is_idempotent_against_the_manager", func(t *testing.T) {
+		// "on" for a running bearer and "off" for a stopped one are no-ops
+		// that answer ok, as the spec promises. [MESHSAT-964]
+		h.gws.running = map[string]bool{"aprs_0": true, "zigbee_0": false}
+		defer func() { h.gws.running = nil }()
+		h.gws.stopped, h.gws.started = nil, nil
+		res := h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetAPRS, 1))
+		if res.Code != RCOK || !strings.Contains(res.Body, "already") || len(h.gws.started) != 0 {
+			t.Fatalf("on while running: %s %q started=%v", res.Code, res.Body, h.gws.started)
+		}
+		res = h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetZigBee, 0))
+		if res.Code != RCOK || !strings.Contains(res.Body, "already") || len(h.gws.stopped) != 0 {
+			t.Fatalf("off while stopped: %s %q stopped=%v", res.Code, res.Body, h.gws.stopped)
 		}
 	})
 	t.Run("restart_and_reboot_without_hooks", func(t *testing.T) {
