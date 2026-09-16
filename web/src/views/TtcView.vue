@@ -322,15 +322,18 @@ const flowFailed = ref('')
 // bytes again. Only a move the panel made is ever undone, so an operator
 // tap always wins. `silent` cannot flap — it is "no bytes at all since the
 // link opened", so one byte ends it for the life of that link.
-watch(aprsOff, async (off) => {
-  if (!flow.value.path) return
+// The lane is watched beside the radio because `aprsOff` flips exactly once
+// per outage: if the flow request of that same poll had failed, a watch on
+// the radio alone would have nothing to act on and never look again.
+watch([aprsOff, () => flow.value.path], async ([off, path]) => {
+  if (!path) return
   if (off) {
-    if (autoLocked.value || autoMoved.value || flow.value.path !== 'aprs') return
+    if (autoLocked.value || autoMoved.value || path !== 'aprs') return
     if (await applyPath('b2b_sms')) autoMoved.value = true
     return
   }
   // The radio is back: this outage is over, so the lock lifts with it.
-  const handBack = autoMoved.value && flow.value.path === 'b2b_sms'
+  const handBack = autoMoved.value && path === 'b2b_sms'
   autoMoved.value = false
   autoLocked.value = false
   if (handBack) await applyPath('aprs')
