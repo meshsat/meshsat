@@ -262,8 +262,12 @@ const lanes = computed(() => ([
     detail: 'The Hub passes it on by SMS.' },
   { key: 'b2b_sms', lane: 'sms', card: 'sms', name: 'SMS kit to kit', fact: '',
     state: smsState.value, sev: smsState.value === 'down' ? 'bad' : 'warn',
-    // The visitor is told why this lane is lit when nobody chose it.
-    detail: autoMoved.value ? 'APRS radio off, so this kit uses SMS.' : 'One text to the other kit\'s SIM.' },
+    // The visitor is told why this lane is lit when nobody chose it. Derived
+    // from the state, not from the autoMoved flag: that flag lives in this
+    // browser's localStorage, so a second viewer (a phone through the Hub
+    // relay, a screenshot session) would otherwise be told the wrong story
+    // about the same kit.
+    detail: aprsOff.value ? 'APRS radio off, so this kit uses SMS.' : 'One text to the other kit\'s SIM.' },
 ]))
 // Both SMS routes ride the cellular modem. A modem that keeps its serial
 // link while it has stopped answering reads healing or down on both rows,
