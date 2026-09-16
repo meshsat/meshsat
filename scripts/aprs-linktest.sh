@@ -17,7 +17,15 @@ set -u
 sender=${1:?sender}; count=${2:?count}; gap=${3:-20}; block=${4:-$(date +%H%M%S)}; out=${5:-.}
 case "$sender" in tesseract) receiver=parallax;; parallax) receiver=tesseract;; *) echo "sender must be tesseract or parallax" >&2; exit 2;; esac
 K="ssh -i $HOME/.ssh/one_key -o BatchMode=yes -o ConnectTimeout=10"
-host() { echo "kyriakosp@nllei01${1}01"; }
+# A kit answers on its house name or, when it is behind the Mudi 5G router, on its
+# -field name through the WireGuard tunnel. Resolve both once per run so a booth
+# session needs no edit here. [MESHSAT-1182]
+declare -A KIT_ADDR
+for _k in tesseract parallax; do
+  KIT_ADDR[$_k]=$("$(dirname "$0")/kit-host.sh" "$_k") || exit 1
+done
+echo "== kits: tesseract=${KIT_ADDR[tesseract]} parallax=${KIT_ADDR[parallax]}"
+host() { echo "kyriakosp@${KIT_ADDR[$1]}"; }
 api() { $K "$(host "$1")" "curl -s -m 20 ${*:2}"; }
 snap() { # kit tag
   api "$1" localhost:6050/api/aprs/status > "$out/$block-status-$2-$1.json"

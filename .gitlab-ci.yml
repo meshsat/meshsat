@@ -243,14 +243,25 @@ package:
 # -----------------------------------------------------------------------------
 # DEPLOY — Pull latest image on each device and restart MeshSat (via SSH)
 # Deploys to all configured devices in parallel using matrix strategy.
-# Each device has a primary and fallback address (e.g., wired vs wireless).
+# Each device has a primary and one or more fallback addresses.
 # CI variables required per device:
 #   DEPLOY_ADDR_<TARGET>           — primary hostname/IP
-#   DEPLOY_ADDR_ALT_<TARGET>       — fallback hostname/IP (optional)
+#   DEPLOY_ADDR_ALT_<TARGET>       — fallback addresses, space separated (optional)
 #   DEPLOY_USER_<TARGET>           — SSH user (optional, defaults to "cubeos")
-# Field kits (parallax01, tesseract) use DEPLOY_USER=kyriakosp, path /srv/meshsat.
+# Field kits (parallax01, tesseract01) use DEPLOY_USER=kyriakosp, path /srv/meshsat.
 # CubeOS devices use DEPLOY_USER=cubeos, path /cubeos/coreapps/meshsat/appconfig.
 # ci-deploy.sh auto-detects the layout based on which compose file exists.
+#
+# A field kit has TWO names and the job walks them in order [MESHSAT-1182]:
+#   nllei01<kit>01         the kit on the house network
+#   nllei01<kit>01-field   the same kit behind the travel router, reached through a
+#                          VPN tunnel — the path that carries a deploy at an event
+# The travel router advertises the same SSID as the house, so which name answers
+# depends on the access point the kit associated with, not on where the kit
+# physically is. Always probe, never assume. The probe is an SSH login, not a ping:
+# it proves the key works too. A candidate must also ANSWER WITH ITS OWN HOSTNAME
+# before it is used, so a recycled address can never be handed a kit's deploy.
+# Addresses live only in the CI variables; the operational detail is local-only.
 # -----------------------------------------------------------------------------
 deploy:
   stage: deploy
@@ -273,21 +284,44 @@ deploy:
       eval "ALT=\${DEPLOY_ADDR_ALT_${UPPER_TARGET}:-}"
       eval "DEPLOY_USER=\${DEPLOY_USER_${UPPER_TARGET}:-cubeos}"
 
+      # $PRIMARY and $ALT are deliberately unquoted: ALT may hold several
+      # space-separated candidates (name first, IP last) and word splitting is
+      # what turns them into separate attempts. Do not quote them. [MESHSAT-1182]
+      EXPECT_HOST="nllei01${DEPLOY_TARGET}"
       _RESOLVED=""
+      _TRIED=""
       for ADDR in $PRIMARY $ALT; do
         [ -z "$ADDR" ] && continue
-        ssh-keyscan -H "$ADDR" >> ~/.ssh/known_hosts 2>/dev/null || true
-        if ssh -o ConnectTimeout=5 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" true 2>/dev/null; then
-          _RESOLVED="$ADDR"
-          break
+        _TRIED="${_TRIED}${_TRIED:+ }${ADDR}"
+        # -T 3: an unreachable candidate must not cost the keyscan's 5 s default
+        # before the login below even starts.
+        ssh-keyscan -T 3 -H "$ADDR" >> ~/.ssh/known_hosts 2>/dev/null || true
+        GOT_HOST=$(ssh -o ConnectTimeout=4 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" hostname 2>/dev/null | tr -d '\r' | tr 'A-Z' 'a-z')
+        if [ -z "$GOT_HOST" ]; then
+          echo "  ${ADDR}: no answer"
+          continue
         fi
+        if [ "$GOT_HOST" != "$EXPECT_HOST" ]; then
+          echo "  ${ADDR}: answered as '${GOT_HOST}', expected '${EXPECT_HOST}' — skipping"
+          continue
+        fi
+        _RESOLVED="$ADDR"
+        break
       done
       if [ -z "$_RESOLVED" ]; then
-        echo "ERROR: ${DEPLOY_TARGET} unreachable at ${PRIMARY} / ${ALT} — deploy FAILED"
+        echo "ERROR: ${DEPLOY_TARGET} (${EXPECT_HOST}) answered on none of: ${_TRIED:-<no address configured>} — deploy FAILED"
+        echo "       At the booth this means the WireGuard tunnel or the Mudi is down; at home,"
+        echo "       that the kit is off. Check both names by hand before re-running:"
+        echo "         ssh kyriakosp@${EXPECT_HOST} hostname ; ssh kyriakosp@${EXPECT_HOST}-field hostname"
         exit 1
       fi
+      if [ "$_RESOLVED" = "$PRIMARY" ]; then
+        _DEPLOY_PATH="primary address"
+      else
+        _DEPLOY_PATH="fallback address — the kit is away from the house network"
+      fi
       export PI_DEPLOY_HOST="${DEPLOY_USER}@${_RESOLVED}"
-      echo "Deploy target: ${DEPLOY_TARGET} → ${PI_DEPLOY_HOST}"
+      echo "Deploy target: ${DEPLOY_TARGET} → ${PI_DEPLOY_HOST} (${_DEPLOY_PATH})"
   script:
     - |
       if [ -z "${PI_DEPLOY_HOST:-}" ]; then
@@ -300,7 +334,7 @@ deploy:
       # the kit refuse to deploy a cached image that is not this build. A green
       # deploy previously proved only that /health answered. [MESHSAT-809]
       ssh -o ServerAliveInterval=15 ${PI_DEPLOY_HOST} \
-        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' DEPLOY_TARGET='${DEPLOY_TARGET}' MESHSAT_EXPECTED_DIGEST='${MESHSAT_EXPECTED_DIGEST}' MESHSAT_EXPECTED_SHA='${MESHSAT_EXPECTED_SHA}' bash /tmp/ci-deploy-meshsat.sh"
+        "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' DEPLOY_TARGET='${DEPLOY_TARGET}' MESHSAT_EXPECTED_DIGEST='${MESHSAT_EXPECTED_DIGEST}' MESHSAT_EXPECTED_SHA='${MESHSAT_EXPECTED_SHA}' MESHSAT_PULL_TIMEOUT_BASE='${MESHSAT_PULL_TIMEOUT_BASE}' bash /tmp/ci-deploy-meshsat.sh"
     - ssh ${PI_DEPLOY_HOST} "rm -f /tmp/ci-deploy-meshsat.sh"
   after_script:
     - kill $SSH_AGENT_PID 2>/dev/null || true
