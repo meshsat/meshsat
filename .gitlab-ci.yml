@@ -291,14 +291,22 @@ deploy:
       _RESOLVED=""
       _TRIED=""
       for ADDR in $PRIMARY $ALT; do
-        [ -z "$ADDR" ] && continue
+        if [ -z "$ADDR" ]; then continue; fi
         _TRIED="${_TRIED}${_TRIED:+ }${ADDR}"
         # -T 3: an unreachable candidate must not cost the keyscan's 5 s default
         # before the login below even starts.
         ssh-keyscan -T 3 -H "$ADDR" >> ~/.ssh/known_hosts 2>/dev/null || true
-        GOT_HOST=$(ssh -o ConnectTimeout=4 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" hostname 2>/dev/null | tr -d '\r' | tr 'A-Z' 'a-z')
-        if [ -z "$GOT_HOST" ]; then
+        # The job shell runs with -e and pipefail, so an unreachable candidate must
+        # never be the exit status of a bare assignment: ssh exits 255 and the whole
+        # job dies before the next address is tried. Keep the probe inside an `if`,
+        # where -e is suppressed, and normalise afterwards. [MESHSAT-1182]
+        if ! GOT_HOST=$(ssh -o ConnectTimeout=4 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" hostname 2>/dev/null); then
           echo "  ${ADDR}: no answer"
+          continue
+        fi
+        GOT_HOST=$(printf '%s' "$GOT_HOST" | tr -d '\r\n' | tr 'A-Z' 'a-z')
+        if [ -z "$GOT_HOST" ]; then
+          echo "  ${ADDR}: connected but returned no hostname"
           continue
         fi
         if [ "$GOT_HOST" != "$EXPECT_HOST" ]; then
