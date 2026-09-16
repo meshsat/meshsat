@@ -300,7 +300,10 @@ deploy:
         # never be the exit status of a bare assignment: ssh exits 255 and the whole
         # job dies before the next address is tried. Keep the probe inside an `if`,
         # where -e is suppressed, and normalise afterwards. [MESHSAT-1182]
-        if ! GOT_HOST=$(ssh -o ConnectTimeout=4 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" hostname 2>/dev/null); then
+        # ConnectTimeout bounds the TCP connect only. A kit whose sshd answers the
+        # banner and then stalls (seen from the runner on 2026-09-16) would hang the
+        # probe until LoginGraceTime, so the whole login gets a hard ceiling too.
+        if ! GOT_HOST=$(timeout 15 ssh -o ConnectTimeout=4 -o BatchMode=yes "${DEPLOY_USER}@${ADDR}" hostname 2>/dev/null); then
           echo "  ${ADDR}: no answer"
           continue
         fi
