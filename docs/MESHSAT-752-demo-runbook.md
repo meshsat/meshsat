@@ -1306,3 +1306,45 @@ which is what keeps this inside the never-edit-netplan-over-WiFi rule.
 - The tunnel is a **management path, not a demo path**. The 12 Sep "assume nothing, fully offline"
   ruling for the booth still stands: if the router or the 5G dies, the booth story is unchanged and
   all that is lost is the ability to push a fix.
+
+## 48. 16-17 Sep 2026, night: a receipt for every message, printed by the kit that heard it (MESHSAT-1154)
+
+A NETUM ZJ-5809 58 mm thermal printer sits on the stand and every message that arrives on a kit comes
+out as a paper slip the visitor keeps: logo, the kit's callsign, the message, the time, the bearer it
+actually travelled on, and a QR to meshsat.net.
+
+**The design is the owner's, stated twice:** a message arrives on a kit, **that kit finds the printer,
+connects over Bluetooth, prints, then disconnects.** The link is never held open, which is what lets
+both kits share one printer. I proposed a single-owner alternative first (one kit owns the printer, the
+peer's messages reach it over the stand LAN) and was overruled; the owner's design works, including
+both kits firing at the same instant.
+
+**What runs:** `meshsat-receipt-printer.service` on each kit host, hand-installed by
+`scripts/install-receipt-printer.sh`, same pattern as `x1202-monitor` and the OOB agent. Nothing in the
+bridge, the container or the compose file. Stdlib Python only — RFCOMM through `socket.AF_BLUETOOTH`
+and ESC/POS written by hand, because python-escpos and PyBluez are not on the kits and were not going
+to be added days before an event. Config in `/etc/default/meshsat-receipt-printer` (callsign, printer
+address, feed lengths, retry budget).
+
+**Facts worth not rediscovering:**
+- The printer takes a plain RFCOMM connect on **channel 1** with **no pairing**. If its address ever
+  changes, the service re-discovers it by name.
+- Contention with the other kit is expected and is handled by a jittered retry, not a lock. It shows in
+  the log as a retry, never as a lost slip.
+- The logo is a pre-rendered 1-bit raster (`deploy/printer/make-logo-raster.py` on a dev machine), so
+  the kits need no image library. The brand artwork is light-coloured for dark backgrounds, so the
+  raster is built from its **alpha channel** — the silhouette is what a black-on-white head wants.
+- The slip's `via` line comes from the stored message row's `transport`, not the portnum. A wrong
+  bearer on something a visitor takes home is worse than printing nothing.
+- Leave blank paper before and after: the head sits well above the tear bar, and the first build let
+  the owner cut through the URL. `MESHSAT_PRINTER_FEED_BEFORE` / `_AFTER` tune it.
+
+**Proven on the night:** a real print from each kit; both kits printing simultaneously; an injected
+message end to end; and the owner's own T-Deck traffic — four messages, four slips. **One slip per
+message** (owner's decision), printed by the kit that heard it; the relayed copy arriving on the far
+kit does not add a second slip.
+
+**Booth check:** `systemctl is-active meshsat-receipt-printer` and `journalctl -u
+meshsat-receipt-printer` on each kit. A healthy slip logs `queued slip for message <id>` then
+`printed on … channel 1`. A kit that stops printing means the printer is off or out of paper, not the
+service. About 130 slips per roll, 20 rolls in stock.
