@@ -1201,3 +1201,64 @@ Env first-boot defaults (`MESHSAT_SMS_BUNDLE_SIZE`, `_WARN_AT`, `MESHSAT_SMS_ALE
 **Hub tenancy (MESHSAT-1033).** Three outside beta users were already approved as owners; only our own three bridges hold NATS credentials, so nothing leaked, and the Hub fix removing `meshsat.hub.>` from bridge users is rolling out.
 
 **Booth outreach now tracked:** MESHSAT-1165 (the seven brochure companies) and MESHSAT-1166 (companies without a brochure, with MESHSAT-1158 under it).
+
+## 46. 16 Sep 2026: the panel goes red and moves itself, both WhatsApp relay legs, and a gateway that went deaf on reconfiguration
+
+**Five commits, four kit deploys, six issues closed (1028, 793, 794, 1056, 1177, 1179).**
+
+**The booth panel now reacts to a dead APRS radio (MESHSAT-1177, `6ee37f5` + `7e04d26` + `24cc0e0`).**
+The lane state word carries a severity: red `#F87171` for a bearer that cannot carry a message at all
+and that nobody at the panel can recover, amber for the degraded and the merely absent. Red is
+declared after the dim rule on purpose, because the panel dims that row the moment it moves the lane
+away from it. While `receive_state` is `silent` the panel PUTs `b2b_sms` by itself and hands the lane
+back to `aprs` when the TNC delivers bytes again, but only if the panel was the one that moved it;
+one tap during an outage gives the lane to the operator until the radio recovers. Proven in the field
+the same morning, unattended: both kits came up with flat PicoAPRS cells, moved themselves to
+`b2b_sms` at 10:21:36Z, and returned to `aprs` after the PTT press.
+
+**Read this before blaming the relay: `aprs` does NOT fall back to SMS when the radio is off.**
+`rx_watchdog.go` clears its deaf flag on the `silent` branch, so `ReceiveDeaf("aprs_0")` is false,
+`peer_link` keeps `aprs_0` at priority 1, and the kit transmits into a dead radio. The MESHSAT-857
+check only covers `deaf`. Moving the lane is what saves the relay. Untouched by owner decision.
+
+**A gateway reconfigured over the API went deaf until the next bridge restart (MESHSAT-1179, `029f3fb`).**
+`StartGatewayInstance` started gateways on the **HTTP request** context. `net/http` cancels that when
+the handler returns, and `CellularGateway.Start` derives a child of it for `cell.Subscribe`, so the
+transport dropped the gateway's event subscription the moment the response was written. **Nothing
+reported it:** the gateway still answered `connected`, still SENT fine, and inbound SMS still reached
+the transport log and `GET /api/cellular/sms`. It simply never reached `smsListener`, so no rules
+engine, no relay, no delivery row.
+
+> **Booth tell.** If a kit stops relaying inbound SMS, ask what reconfigured a gateway since the last
+> bridge start. `PUT /api/gateways/{type}` and `POST /api/ttc/flow/setup` both walked this path.
+> On any image older than `ce08ba93` the cure is a bridge restart. Fixed by starting gateways on the
+> manager's context, the same rule MESHSAT-858 applied to the receiver callback.
+
+**WhatsApp relay, Bridge half (MESHSAT-1178, `d1e1fa7`).** Two legs, neither a configuration problem.
+- Inbound: `hubRoutedSMS` matched ANY bracketed token, so the Hub's `[#A7] hello` parsed as origin
+  `#A7`, failed the phone-number allowlist and the whole SMS was dropped as a self-echo. The caller
+  now gates on `looksLikeSMSOrigin` (digits, optional `+`) and an unrecognised prefix fails OPEN.
+- Outbound: `meshsat/{device_id}/mo/decoded` had a constant, a builder and no producer, `EventTap`
+  skipped text by design, **and the tap was wired only in `cmd/meshsat/app.go`, whose `Setup()` has
+  no caller.** So no mesh position, telemetry or device birth had ever reached the Hub from a kit.
+  Fourth instance of the app.go trap. Now wired in `main.go`; text rides it behind
+  `MESHSAT_HUB_PUBLISH_TEXT` (default true, no kit compose edit needed), and the payload names the
+  kit in the BODY because DeviceBirth is unretained.
+
+**Our own sanitizer rewrites brackets outbound.** `SanitizeSMSText` maps `[ ] { } | \ ^ ~` to safe
+ASCII whenever the destination is a plaintext peer, guarding `CMS ERROR 305`. Hub to kit is Twilio's
+and untouched; kit to anything over SMS is rewritten. **A token that must survive an SMS hop from a
+kit has to use GSM 7-bit basic characters only.** It also means a kit-to-kit test can never reproduce
+the `[#A7]` inbound case.
+
+**Kit facts settled the same day.**
+- **The PicoAPRS morning press is permanent** (MESHSAT-1028 closed). Power-on is a physical action in
+  the manual and in all 26 firmware versions. The panel now says so in red from a cold start.
+- **Kit power was cables and adapters, not a structural 5 V limit** (MESHSAT-793 closed, owner root
+  cause). Zero AC-loss events over 3 h under full load, `input_insufficient: false` on both kits. The
+  12 V inlet remains the plan as a power-architecture decision, not a workaround.
+- **The RTC cells hold time across a real power-off** (MESHSAT-1056 closed). Clock guard 17 s after a
+  cold boot read 3 days 23 h ahead of the floor. **The guard logs `source=floor` on a GOOD boot too:**
+  it means it validated the clock against the floor and found it ahead. Do not read that as a failure.
+- **`x1202-monitor` clean shutdown shipped but never drained** (MESHSAT-794 closed). If a kit is ever
+  run flat and does not come back cleanly, that is the first thing to re-open.
