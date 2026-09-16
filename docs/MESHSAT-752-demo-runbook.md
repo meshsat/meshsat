@@ -1262,3 +1262,47 @@ the `[#A7]` inbound case.
   it means it validated the clock against the floor and found it ahead. Do not read that as a failure.
 - **`x1202-monitor` clean shutdown shipped but never drained** (MESHSAT-794 closed). If a kit is ever
   run flat and does not come back cleanly, that is the first thing to re-open.
+
+## 47. 16 Sep 2026, evening: the kits get a second name, and GitLab can deploy to them at an event (MESHSAT-1182)
+
+The kits travel behind a **GL.iNet GL-E5800 (Mudi 7)** 5G travel router that holds a VPN tunnel back
+to the estate, so a push to main still reaches them at a stand. Each kit therefore answers on **two
+names**: `nllei01<kit>01` on the house network and `nllei01<kit>01-field` through the tunnel.
+Addresses, subnets and the tunnel design are local-only — `.claude/context/field-kit-hardware.md`,
+memory `reference_kit_field_fqdn_tunnel`, and the infrastructure repo for the router/firewall side.
+
+**The name that answers is not a location.** The travel router advertises the same SSID as the house
+and beats the house APs by a wide margin, so whenever it is powered on both kits roam onto it and the
+plain hostnames stop answering — at home as much as at a venue. That is normal. It is not a ban and
+not a reboot loop; two sessions lost time to those two misdiagnoses on 16 Sep, and both kits vanished
+mid-APRS-diagnosis at 20:08 for exactly this reason. Neither kit's netplan was touched for any of it,
+which is what keeps this inside the never-edit-netplan-over-WiFi rule.
+
+**What changed in this repo.**
+- `.gitlab-ci.yml`: the deploy resolve block walks `DEPLOY_ADDR_<TARGET>` then every space-separated
+  entry of `DEPLOY_ADDR_ALT_<TARGET>`, uses `ssh-keyscan -T 3` so a dead candidate cannot burn 5 s,
+  probes with `ssh ... hostname` (proving the key AND the identity), **refuses an address that answers
+  with the wrong hostname**, and logs whether it used the primary or a fallback address. When nothing
+  answers it names every address it tried and the two commands to check by hand. The loop is
+  `for ADDR in $PRIMARY $ALT` **unquoted** — anything that later quotes `"$ALT"` breaks the multi-address
+  fallback silently.
+- `scripts/ci-deploy.sh`: `MESHSAT_PULL_TIMEOUT_BASE` (CI variable, default 120 s) scales both pull
+  attempts for a congested hall. Only the ~32 MB binary layer changes between builds, so a deploy over
+  the travel router is tens of MB, not the 333 MB image.
+- `scripts/kit-host.sh <tesseract|parallax>` prints whichever name answers (2 s probe each, overridable
+  with `KIT_HOST_TESSERACT` / `KIT_HOST_PARALLAX`). `scripts/aprs-linktest.sh`, `scripts/oob-e2e-kits.py`
+  and `test/e2e/playwright.config.ts` resolve through the same ladder, so event-side diagnostics need
+  no edits.
+
+**Field rules that came out of building it.**
+- Resolve both names before calling a kit dead; when neither answers, read the travel router's own
+  association list and DHCP leases before touching a kit.
+- **Never `wpa_cli scan` on both kits at once.** WiFi is their only management path (eth0 is
+  NO-CARRIER on both) and a scan can hand a kit to another AP — it looks exactly like both boxes
+  dropping off together.
+- **Do not test the estate-to-venue path from the laptop.** It is dual-homed, the return path is
+  asymmetric, and it fails for reasons that have nothing to do with the tunnel. Use the runner or the
+  CI runner host.
+- The tunnel is a **management path, not a demo path**. The 12 Sep "assume nothing, fully offline"
+  ruling for the booth still stands: if the router or the 5G dies, the booth story is unchanged and
+  all that is lost is the ability to push a fix.

@@ -163,9 +163,15 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 # One retry before giving up. On 2026-09-05 (pipeline 51914) the first pull
 # timed out on parallax's WiFi after most layers had landed and the second
 # attempt took five seconds, because everything was already cached. [MESHSAT-809]
+#
+# Only the ~32 MB binary layer changes between builds, so a normal deploy is tens
+# of MB even on the Mudi's 5G link. A congested hall is still a congested hall:
+# MESHSAT_PULL_TIMEOUT_BASE (CI variable, seconds, default 120) raises both
+# attempts without a code push. [MESHSAT-1182]
 PULL_OK=0
+PULL_TIMEOUT_BASE="${MESHSAT_PULL_TIMEOUT_BASE:-120}"
 for PULL_ATTEMPT in 1 2; do
-  PULL_TIMEOUT=$((PULL_ATTEMPT * 120))
+  PULL_TIMEOUT=$((PULL_ATTEMPT * PULL_TIMEOUT_BASE))
   echo "Pulling ${GHCR_IMAGE}:latest from GHCR (attempt ${PULL_ATTEMPT}, timeout ${PULL_TIMEOUT}s)..."
   if timeout "$PULL_TIMEOUT" docker pull "${GHCR_IMAGE}:latest" 2>&1; then
     PULL_OK=1

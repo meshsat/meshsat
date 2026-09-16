@@ -13,13 +13,36 @@ callsigns are the field kit values (MESHSAT-403). [MESHSAT-756]
 """
 import http.client
 import json
+import os
+import socket
 import sys
 import time
 import urllib.error
 import urllib.request
 
-T = "http://nllei01tesseract01:6050"
-P = "http://nllei01parallax01:6050"
+
+def kit_host(kit: str) -> str:
+    """The address a kit answers on right now.
+
+    Each kit has two names: the house one and a -field one that reaches it behind
+    the Mudi 5G router through the WireGuard tunnel. Which answers depends on the
+    access point the kit joined, not on where it is, so probe both. Same ladder as
+    scripts/kit-host.sh and the deploy job. [MESHSAT-1182]
+    """
+    override = os.environ.get(f"KIT_HOST_{kit.upper()}")
+    if override:
+        return override
+    for addr in (f"nllei01{kit}01", f"nllei01{kit}01-field"):
+        try:
+            socket.create_connection((addr, 6050), timeout=2).close()
+            return addr
+        except OSError:
+            continue
+    raise SystemExit(f"{kit}: no answer on nllei01{kit}01 or nllei01{kit}01-field:6050")
+
+
+T = f"http://{kit_host('tesseract')}:6050"
+P = f"http://{kit_host('parallax')}:6050"
 KITS = {"tesseract": T, "parallax": P}
 ADDR = {
     "tesseract": {"cellular_0": "+31653618463", "aprs_0": "MSTSRT-10", "mesh_0": "!a1d763bc"},
