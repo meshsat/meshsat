@@ -1,0 +1,20 @@
+[Unit]
+Description=MeshSat booth receipt printer (one slip per message that arrives on this kit)
+# The bridge may not be up yet at boot; the service follows and reconnects by itself,
+# so a restart limit here would only turn a slow boot into a dead printer.
+StartLimitIntervalSec=0
+Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat
+After=network-online.target bluetooth.target docker.service
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/meshsat-receipt-printer
+ExecStart=/usr/local/bin/meshsat-receipt-printer
+Restart=always
+RestartSec=5
+User=root
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

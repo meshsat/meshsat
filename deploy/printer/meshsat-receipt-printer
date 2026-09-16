@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Booth receipt printer: a slip for every message that arrives on THIS kit. [MESHSAT-1154]
+
+Owner ruling 16 Sep 2026, and the whole design in one line: a message arrives on a kit,
+that kit searches for the printer, connects over Bluetooth, prints, then disconnects.
+The link is never held open, so both kits share one printer by taking turns.
+
+Runs on the kit host (same pattern as x1202-monitor and the OOB agent): systemd unit,
+starts at boot, hand-installed, nothing in the bridge and nothing in the container.
+
+It follows the bridge's own SSE stream on localhost and prints `type: "message"` events
+carrying text. No peer stream, no laptop, no dependency on the other kit being up.
+
+Stdlib only: RFCOMM through socket.AF_BLUETOOTH, ESC/POS written by hand (python-escpos
+and PyBluez are not installed on the kits and will not be added days before an event).
+
+Config: /etc/default/meshsat-receipt-printer
+    MESHSAT_PRINTER_MAC=AA:BB:CC:DD:EE:FF   printer address; empty = discover by name
+    MESHSAT_PRINTER_NAME=BlueTooth Printer  substring matched during discovery
+    MESHSAT_PRINTER_CHANNEL=0               RFCOMM channel; 0 = resolve, then try 1..3
+    MESHSAT_PRINTER_CALLSIGN=MSTSRT-10      printed on the slip
+    MESHSAT_PRINTER_QR=https://meshsat.net  QR payload
+    MESHSAT_BRIDGE_URL=http://127.0.0.1:6050
+    MESHSAT_PRINTER_WIDTH=32                columns (58 mm font A)
+    MESHSAT_PRINTER_LOGO=/usr/local/share/meshsat/meshsat-logo.raster
+    MESHSAT_PRINTER_FEED_BEFORE=3            blank lines before the logo
+    MESHSAT_PRINTER_FEED_AFTER=8             blank lines after the URL, for the tear
+
+Test without hardware:  ./meshsat-receipt-printer --mock --self-test
+"""
+
+import argparse
+import json
+import os
+import random
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from collections import deque
+
+LOG_PREFIX = "receipt-printer"
+
+# ── ESC/POS ────────────────────────────────────────────────────────────────────
+ESC, GS = b"\x1b", b"\x1d"
+INIT = ESC + b"@"
+ALIGN_L, ALIGN_C = ESC + b"a\x00", ESC + b"a\x01"
+BOLD_ON, BOLD_OFF = ESC + b"E\x01", ESC + b"E\x00"
+BIG_ON, BIG_OFF = GS + b"!\x11", GS + b"!\x00"
+
+
+def feed(n: int) -> bytes:
+    return ESC + b"d" + bytes([max(0, min(255, n))])
+
+
+def qr(data: str, module: int = 6) -> bytes:
+    """Native ESC/POS QR (model 2). Cheap printers ignore what they cannot do, so the
+    caller still gets a readable slip if the QR silently fails."""
+    payload = data.encode("ascii", "ignore")
+    store_len = len(payload) + 3
+    return b"".join([
+        GS + b"(k\x04\x001A2\x00",                                    # model 2
+        GS + b"(k\x03\x001C" + bytes([max(1, min(16, module))]),      # module size
+        GS + b"(k\x03\x001E1",                                        # error correction M
+        GS + b"(k" + bytes([store_len & 0xFF, store_len >> 8]) + b"1P0" + payload,
+        GS + b"(k\x03\x001Q0",                                        # print
+    ])
+
+
+def raster(width_px: int, height_px: int, data: bytes, band: int = 64) -> bytes:
+    """GS v 0 — print a 1-bit raster. Sent in bands because cheap heads choke on a
+    single tall block, and a half-printed logo is worse than none."""
+    row_bytes = width_px // 8
+    out = [ALIGN_C]
+    for top in range(0, height_px, band):
+        rows = min(band, height_px - top)
+        chunk = data[top * row_bytes:(top + rows) * row_bytes]
+        out.append(GS + b"v0\x00"
+                   + bytes([row_bytes & 0xFF, row_bytes >> 8, rows & 0xFF, rows >> 8])
+                   + chunk)
+    return b"".join(out)
+
+
+def load_logo(path):
+    """Returns (width, height, bits) or None. Format written by make-logo-raster.py:
+    magic MSR1, uint16 width, uint16 height, packed rows MSB first."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read()
+    except OSError:
+        return None
+    if len(blob) < 8 or blob[:4] != b"MSR1":
+        return None
+    w = int.from_bytes(blob[4:6], "little")
+    h = int.from_bytes(blob[6:8], "little")
+    bits = blob[8:]
+    if w % 8 or len(bits) != (w // 8) * h:
+        return None
+    return w, h, bits
+
+
+def wrap(text: str, width: int) -> list:
+    out, line = [], ""
+    for word in text.split():
+        if not line:
+            line = word
+        elif len(line) + 1 + len(word) <= width:
+            line += " " + word
+        else:
+            out.append(line)
+            line = word
+        while len(line) > width:           # a single word longer than the paper
+            out.append(line[:width])
+            line = line[width:]
+    if line:
+        out.append(line)
+    return out or [""]
+
+
+def ascii_only(s: str) -> str:
+    """The printer's default codepage is CP437; anything else prints as noise."""
+    return s.encode("ascii", "replace").decode("ascii")
+
+
+def build_slip(msg: dict, cfg: dict) -> bytes:
+    text = ascii_only(msg.get("text", ""))
+    when = msg.get("when", time.strftime("%Y-%m-%d %H:%M:%S"))
+    bearer = ascii_only(msg.get("bearer", "") or "mesh")
+    sender = ascii_only(msg.get("from", ""))
+    width = cfg["width"]
+
+    logo = cfg.get("logo")
+    # Lead-in: the tear from the PREVIOUS slip leaves the paper somewhere inside the
+    # mechanism, so start with blank paper or the logo gets clipped at the top.
+    if logo:
+        head = [INIT, feed(cfg["feed_before"]), raster(*logo), b"\n"]
+    else:
+        # No raster installed: the name still has to be on the slip.
+        head = [INIT, feed(cfg["feed_before"]), ALIGN_C, BOLD_ON, BIG_ON,
+                b"MeshSat\n", BIG_OFF, BOLD_OFF]
+    parts = head + [ALIGN_C, BOLD_ON, ascii_only(cfg["callsign"]).encode() + b"\n",
+                    BOLD_OFF, b"-" * width + b"\n", ALIGN_L]
+    for line in wrap(text, width):
+        parts.append(line.encode("ascii", "replace") + b"\n")
+    parts += [b"-" * width + b"\n",
+              f"{'time':<8}{when}\n".encode(),
+              f"{'via':<8}{bearer}\n".encode()]
+    if sender:
+        parts.append(f"{'from':<8}{sender}\n".encode())
+    # Lead-out: the head sits well above the tear bar, so without this the QR and the
+    # URL are still inside the printer and the cut lands on them.
+    parts += [feed(1), ALIGN_C, qr(cfg["qr"]), b"\n",
+              ascii_only(cfg["qr"]).encode() + b"\n", feed(cfg["feed_after"])]
+    return b"".join(parts)
+
+
+# ── Bluetooth: find, connect, print, disconnect ────────────────────────────────
+class Printer:
+    """One slip, one connection. Never holds the link between slips — that is what
+    lets the other kit print too."""
+
+    def __init__(self, cfg, log):
+        self.cfg = cfg
+        self.log = log
+        self.mac = cfg["mac"] or None
+        self.channel = cfg["channel"] or None
+
+    def discover(self):
+        """Inquiry, matched by name. Called when no MAC is configured, and again
+        whenever a connect fails — the printer may have been power-cycled."""
+        name = self.cfg["name"].lower()
+        try:
+            out = subprocess.run(["hcitool", "scan", "--flush"], capture_output=True,
+                                 text=True, timeout=25).stdout
+        except (subprocess.SubprocessError, FileNotFoundError) as exc:
+            self.log(f"discovery failed: {exc}")
+            return None
+        for line in out.splitlines():
+            m = re.match(r"\s*([0-9A-F:]{17})\s+(.*)", line, re.I)
+            if m and name in m.group(2).strip().lower():
+                self.log(f"found '{m.group(2).strip()}' at {m.group(1)}")
+                return m.group(1)
+        self.log(f"no device matching '{self.cfg['name']}' in range")
+        return None
+
+    def sdp_channel(self, mac):
+        """Serial Port channel from SDP; these printers are almost always channel 1."""
+        try:
+            out = subprocess.run(["sdptool", "search", "--bdaddr", mac, "SP"],
+                                 capture_output=True, text=True, timeout=15).stdout
+            m = re.search(r"Channel:\s*(\d+)", out)
+            if m:
+                return int(m.group(1))
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        return None
+
+    def print_slip(self, payload: bytes) -> bool:
+        if not self.mac:
+            self.mac = self.discover()
+            if not self.mac:
+                return False
+        channels = [self.channel] if self.channel else \
+                   [c for c in [self.sdp_channel(self.mac), 1, 2, 3] if c]
+        seen = []
+        for ch in channels:
+            if ch in seen:
+                continue
+            seen.append(ch)
+            sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM,
+                                 socket.BTPROTO_RFCOMM)
+            sock.settimeout(self.cfg["connect_timeout"])
+            try:
+                sock.connect((self.mac, ch))
+                sock.sendall(payload)
+                time.sleep(self.cfg["drain_wait"])   # let the buffer empty before FIN
+                self.channel = ch
+                self.log(f"printed on {self.mac} channel {ch}")
+                return True
+            except OSError as exc:
+                self.log(f"{self.mac} channel {ch}: {exc}")
+            finally:
+                try:
+                    sock.close()                      # release for the other kit
+                except OSError:
+                    pass
+        self.mac = None if not self.cfg["mac"] else self.cfg["mac"]
+        return False
+
+
+class MockPrinter:
+    def __init__(self, cfg, log):
+        self.log, self.out = log, cfg.get("mock_path")
+
+    def print_slip(self, payload: bytes) -> bool:
+        if self.out:
+            with open(self.out, "ab") as fh:
+                fh.write(payload)
+        sys.stdout.write(payload.decode("ascii", "replace")
+                         .replace("\x1b", "<ESC>").replace("\x1d", "<GS>"))
+        sys.stdout.write("\n")
+        self.log(f"mock printed {len(payload)} bytes")
+        return True
+
+
+# ── Queue: contention with the other kit is expected, never fatal ──────────────
+class SlipQueue(threading.Thread):
+    def __init__(self, printer, cfg, log):
+        super().__init__(daemon=True)
+        self.printer, self.cfg, self.log = printer, cfg, log
+        self.q, self.lock = deque(), threading.Lock()
+        self.wake = threading.Event()
+
+    def submit(self, msg):
+        with self.lock:
+            if len(self.q) >= self.cfg["queue_max"]:
+                dropped = self.q.popleft()
+                self.log(f"queue full, dropped slip for {dropped.get('id')}")
+            self.q.append(msg)
+        self.wake.set()
+
+    def run(self):
+        while True:
+            self.wake.wait(timeout=5)
+            self.wake.clear()
+            while True:
+                with self.lock:
+                    msg = self.q.popleft() if self.q else None
+                if msg is None:
+                    break
+                self._print_with_retry(msg)
+
+    def _print_with_retry(self, msg):
+        payload = build_slip(msg, self.cfg)
+        for attempt in range(1, self.cfg["attempts"] + 1):
+            if self.printer.print_slip(payload):
+                return
+            # The far likeliest failure is the other kit holding the one RFCOMM
+            # slot this printer has. Back off with jitter so two kits that collide
+            # do not keep colliding.
+            delay = min(self.cfg["backoff_max"],
+                        self.cfg["backoff"] * (2 ** (attempt - 1)))
+            delay *= 0.75 + random.random() * 0.5
+            self.log(f"attempt {attempt}/{self.cfg['attempts']} failed, "
+                     f"retrying in {delay:.1f}s")
+            time.sleep(delay)
+        self.log(f"gave up on slip for message {msg.get('id')}")
+
+
+# ── Bridge event stream ────────────────────────────────────────────────────────
+def node_id(num):
+    try:
+        return f"!{int(num):08x}"
+    except (TypeError, ValueError):
+        return ""
+
+
+# What the visitor reads on the slip. The event itself only carries the portnum, so the
+# bearer comes from the stored row's `transport` — getting "via" wrong on a slip someone
+# takes home is worse than printing nothing at all.
+BEARER_LABEL = {
+    "radio": "Meshtastic", "mesh": "Meshtastic", "aprs": "APRS 144.800 MHz",
+    "cellular": "SMS", "sms": "SMS", "sbd": "Iridium SBD", "imt": "Iridium IMT",
+    "zigbee": "ZigBee", "ble": "Bluetooth LE", "hub": "MeshSat Hub",
+}
+
+
+def lookup_bearer(bridge, packet_id, log):
+    """Match the event back to its stored row for the real bearer. Best effort: a slip
+    still prints if this fails."""
+    if not packet_id:
+        return ""
+    try:
+        with urllib.request.urlopen(f"{bridge}/api/messages?limit=10", timeout=5) as r:
+            body = json.load(r)
+    except Exception as exc:                            # noqa: BLE001
+        log(f"bearer lookup failed: {exc}")
+        return ""
+    rows = body if isinstance(body, list) else body.get("messages", body.get("data", []))
+    for row in rows or []:
+        if row.get("packet_id") == packet_id:
+            t = (row.get("transport") or "").lower()
+            return BEARER_LABEL.get(t, t)
+    return ""
+
+
+def follow(url, queue, cfg, log):
+    seen = deque(maxlen=512)
+    backoff = 1
+    while True:
+        try:
+            with urllib.request.urlopen(url + "/api/events", timeout=None) as stream:
+                log(f"following {url}/api/events")
+                backoff = 1
+                for raw in stream:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        ev = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("type") != "message":
+                        continue
+                    data = ev.get("data") or {}
+                    text = (data.get("decoded_text") or "").strip()
+                    if not text:
+                        continue
+                    key = data.get("id") or f"{data.get('rx_time')}:{text}"
+                    if key in seen:
+                        continue
+                    seen.append(key)
+                    queue.submit({
+                        "id": key,
+                        "text": text,
+                        "from": node_id(data.get("from")),
+                        "bearer": lookup_bearer(cfg["bridge"], data.get("id"), log)
+                                  or "Meshtastic",
+                        "when": (data.get("timestamp") or "").replace("T", " ")[:19]
+                                or time.strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                    log(f"queued slip for message {key}")
+        except Exception as exc:                       # noqa: BLE001 — never exit
+            log(f"event stream: {exc}; reconnecting in {backoff}s")
+            time.sleep(backoff)
+            backoff = min(30, backoff * 2)
+
+
+def load_config(args):
+    env = os.environ.get
+    return {
+        "mac": env("MESHSAT_PRINTER_MAC", "").strip(),
+        "name": env("MESHSAT_PRINTER_NAME", "BlueTooth Printer").strip(),
+        "channel": int(env("MESHSAT_PRINTER_CHANNEL", "0") or 0),
+        "callsign": env("MESHSAT_PRINTER_CALLSIGN", socket.gethostname()),
+        "qr": env("MESHSAT_PRINTER_QR", "https://meshsat.net"),
+        "width": int(env("MESHSAT_PRINTER_WIDTH", "32") or 32),
+        "bridge": env("MESHSAT_BRIDGE_URL", "http://127.0.0.1:6050").rstrip("/"),
+        "connect_timeout": float(env("MESHSAT_PRINTER_CONNECT_TIMEOUT", "12")),
+        "drain_wait": float(env("MESHSAT_PRINTER_DRAIN_WAIT", "1.5")),
+        "attempts": int(env("MESHSAT_PRINTER_ATTEMPTS", "6")),
+        "backoff": float(env("MESHSAT_PRINTER_BACKOFF", "2")),
+        "backoff_max": float(env("MESHSAT_PRINTER_BACKOFF_MAX", "20")),
+        "queue_max": int(env("MESHSAT_PRINTER_QUEUE_MAX", "20")),
+        "mock_path": args.mock_file,
+        "logo_path": env("MESHSAT_PRINTER_LOGO",
+                         "/usr/local/share/meshsat/meshsat-logo.raster"),
+        # Blank paper above and below the slip so a tear by hand cannot land on the
+        # logo or the URL. Lines, roughly 3.75 mm each on a 58 mm head.
+        "feed_before": int(env("MESHSAT_PRINTER_FEED_BEFORE", "3") or 3),
+        "feed_after": int(env("MESHSAT_PRINTER_FEED_AFTER", "8") or 8),
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description="MeshSat booth receipt printer")
+    ap.add_argument("--mock", action="store_true", help="print to stdout, no Bluetooth")
+    ap.add_argument("--mock-file", help="also append the raw byte stream here")
+    ap.add_argument("--self-test", action="store_true", help="print one sample slip and exit")
+    args = ap.parse_args()
+
+    def log(msg):
+        print(f"{LOG_PREFIX}: {msg}", flush=True)
+
+    cfg = load_config(args)
+    cfg["logo"] = load_logo(cfg["logo_path"])
+    if cfg["logo"]:
+        log(f"logo {cfg['logo'][0]}x{cfg['logo'][1]} from {cfg['logo_path']}")
+    else:
+        log(f"no logo raster at {cfg['logo_path']}, printing the name as text")
+    printer = MockPrinter(cfg, log) if args.mock else Printer(cfg, log)
+
+    if args.self_test:
+        sample = {"id": "self-test", "text": "MeshSat booth test slip: the quick brown fox "
+                                             "jumps over the lazy dog, twice.",
+                  "from": "!de11f199", "bearer": "TEXT_MESSAGE_APP",
+                  "when": time.strftime("%Y-%m-%d %H:%M:%S")}
+        ok = printer.print_slip(build_slip(sample, cfg))
+        log("self-test printed" if ok else "self-test FAILED")
+        return 0 if ok else 1
+
+    queue = SlipQueue(printer, cfg, log)
+    queue.start()
+    log(f"callsign {cfg['callsign']}, printer "
+        f"{cfg['mac'] or 'by name: ' + cfg['name']}, bridge {cfg['bridge']}")
+    follow(cfg["bridge"], queue, cfg, log)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
