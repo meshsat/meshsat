@@ -728,7 +728,19 @@ func (m *Manager) StartGatewayInstance(ctx context.Context, instanceID string) e
 		return err
 	}
 
-	if err := gw.Start(ctx); err != nil {
+	// The gateway's own lifetime is the manager's, never the caller's — the
+	// same rule MESHSAT-858 applied to the receiver callback below, which was
+	// only half the fix. ConfigureInstance is reached from an HTTP handler
+	// (PUT /api/gateways/{type}, POST /api/ttc/flow/setup), so starting the
+	// gateway on the request context meant net/http cancelled it the moment
+	// the response was written: CellularGateway.Start derives a child ctx and
+	// hands it to cell.Subscribe, so the transport dropped the gateway's event
+	// subscription and the kit stopped relaying inbound SMS while still
+	// reporting connected and still able to SEND. It came back only on a
+	// bridge restart. Reproduced on tesseract 16 Sep: two SMS reached the
+	// transport and the SMS history, neither reached the rules engine.
+	// [MESHSAT-1179]
+	if err := gw.Start(m.receiverContext()); err != nil {
 		m.mu.Lock()
 		delete(m.running, instanceID)
 		m.mu.Unlock()
