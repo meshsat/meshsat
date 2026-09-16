@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -724,34 +725,53 @@ func TestEncodeFrameDecode(t *testing.T) {
 		copy(segments[i], payload[start:end])
 	}
 
-	symbols, err := EncodeGeneration(42, segments, 6, cryptoRand())
-	if err != nil {
-		t.Fatalf("EncodeGeneration: %v", err)
-	}
-
-	// Frame each symbol with compact header.
+	// The first K of N symbols carry K random GF(256) coefficient vectors, which
+	// are independent with probability about 1 - 1/256. A rank-deficient draw is a
+	// property of random coding, not a decoder bug, so take another generation
+	// rather than fail on it — the same retry the sibling tests use since 7d7d959
+	// [MESHSAT-513]. This one was missed and took pipeline 54429 red on
+	// 2026-09-16, blocking a deploy. [MESHSAT-1154]
+	const maxAttempts = 10
 	bearer := &BearerProfile{Index: 0, HeaderMode: HeaderModeCompact, MTU: 300}
-	var frames [][]byte
-	for _, sym := range symbols {
-		frames = append(frames, marshalSymbolFrame(bearer, 1, sym, 6))
-	}
-
-	// Parse any 4 of 6 frames and decode.
-	var parsed []CodedSymbol
-	for i := 0; i < 4; i++ {
-		sym, streamID, _, err := parseSymbolFromFrame(frames[i])
+	var decoded [][]byte
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		symbols, err := EncodeGeneration(42, segments, 6, cryptoRand())
 		if err != nil {
-			t.Fatalf("parse frame %d: %v", i, err)
+			t.Fatalf("EncodeGeneration: %v", err)
 		}
-		if streamID != 1 {
-			t.Errorf("frame %d: streamID=%d, want 1", i, streamID)
-		}
-		parsed = append(parsed, sym)
-	}
 
-	decoded, err := TryDecode(parsed, k)
-	if err != nil {
-		t.Fatalf("TryDecode: %v", err)
+		// Frame each symbol with compact header.
+		var frames [][]byte
+		for _, sym := range symbols {
+			frames = append(frames, marshalSymbolFrame(bearer, 1, sym, 6))
+		}
+
+		// Parse any 4 of 6 frames and decode.
+		var parsed []CodedSymbol
+		for i := 0; i < 4; i++ {
+			sym, streamID, _, err := parseSymbolFromFrame(frames[i])
+			if err != nil {
+				t.Fatalf("parse frame %d: %v", i, err)
+			}
+			if streamID != 1 {
+				t.Errorf("frame %d: streamID=%d, want 1", i, streamID)
+			}
+			parsed = append(parsed, sym)
+		}
+
+		decoded, lastErr = TryDecode(parsed, k)
+		if lastErr == nil {
+			break
+		}
+		// Only a rank-deficient draw earns another attempt; anything else is a
+		// real failure and must surface.
+		if !errors.Is(lastErr, ErrNotDecodable) {
+			t.Fatalf("TryDecode: %v", lastErr)
+		}
+	}
+	if lastErr != nil {
+		t.Fatalf("rank-deficient after %d attempts: %v", maxAttempts, lastErr)
 	}
 
 	// Reconstruct payload.
