@@ -1,0 +1,67 @@
+name: Hardware report
+description: You ran MeshSat with hardware that is not in the supported table
+labels: [hardware]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The supported-devices table is short because it only lists hardware that has physically been
+        run. A report about untested hardware is useful whether it worked or not, and a failure is
+        just as worth filing as a success.
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Make, model and chipset.
+      placeholder: RAK WisBlock RAK4631, nRF52840 + SX1262
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Host computer
+        - Meshtastic radio
+        - Satellite modem
+        - Cellular modem
+        - ZigBee coordinator
+        - KISS TNC or packet radio
+        - RTL-SDR
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - Detected and works
+        - Detected but does not pass traffic
+        - Not detected at all
+        - Detected as the wrong device type
+    validations:
+      required: true
+
+  - type: input
+    id: vidpid
+    attributes:
+      label: USB VID:PID
+      description: From `lsusb`. This is what the detection cascade matches on.
+      placeholder: 303a:1001
+    validations:
+      required: false
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What you saw
+      description: |
+        Startup log lines about the device, anything you had to set by hand (for example pinning a
+        port with `MESHSAT_*_PORT`), and whether messages went through.
+      render: shell
+    validations:
+      required: false

@@ -1,0 +1,66 @@
+name: Bug report
+description: Something behaves differently from what the documentation says
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MeshSat is a pre-release prototype, so "it does not work yet" is often a known gap rather
+        than a bug. [What is proven, and what is not](https://github.com/meshsat/meshsat#what-is-proven-and-what-is-not)
+        lists the parts that have never been validated.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: |
+        `docker logs --tail 200 meshsat`. Redact any channel key, callsign or phone number you would
+        rather not publish.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The image tag or commit you are running. `docker inspect -f '{{.Config.Image}}' meshsat`
+      placeholder: ghcr.io/meshsat/meshsat:latest
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: Board or machine, architecture, operating system.
+      placeholder: Raspberry Pi 5 8 GB, arm64, Ubuntu Server 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: devices
+    attributes:
+      label: Devices attached
+      description: Radios and modems, and how they are connected. `lsusb` output is ideal.
+    validations:
+      required: false
+
+  - type: textarea
+    id: state
+    attributes:
+      label: Interface and delivery state
+      description: |
+        If a message did not arrive, these two say more than the log does:
+        `curl -s localhost:6050/api/interfaces | jq .` and `curl -s localhost:6050/api/deliveries | jq .`
+      render: shell
+    validations:
+      required: false

@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://docs.meshsat.net/guide/getting-started
+    about: Install, configuration, transports, architecture and the API reference.
+  - name: Troubleshooting
+    url: https://docs.meshsat.net/guide/troubleshooting
+    about: The failures that actually happen on hardware, and what they usually mean.
+  - name: Matrix room
+    url: https://matrix.to/#/%23meshsat%3Amatrix.nuclearlighters.net
+    about: Questions, and watching what breaks next. History is public.
+  - name: Security contact
+    url: https://meshsat.net/security/
+    about: Report a vulnerability, and check which domains, repos and images are official.
