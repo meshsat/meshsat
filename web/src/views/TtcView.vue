@@ -123,6 +123,15 @@ const aprsSilent = computed(() => aprs.value.receive_state === 'deaf')
 // turns on only with a 3 s PTT press) or the link is dead. [MESHSAT-1028]
 const aprsOff = computed(() => aprs.value.receive_state === 'silent')
 const aprsQuiet = computed(() => aprs.value.receive_state === 'quiet')
+// Set while the panel itself moved this kit's lane off a dead APRS radio,
+// so only its own move is ever handed back; `autoLocked` is one operator
+// tap during the outage, after which the panel keeps its hands off until
+// the radio recovers. Persisted, so the nightly kiosk recycle and the 4 h
+// freshness reload do not lose the hand-back. [MESHSAT-1177]
+const AUTO_KEY = 'meshsat.ttc.autoMoved'
+const autoMoved = ref((() => { try { return localStorage.getItem(AUTO_KEY) === '1' } catch { return false } })())
+const autoLocked = ref(false)
+watch(autoMoved, (v) => { try { v ? localStorage.setItem(AUTO_KEY, '1') : localStorage.removeItem(AUTO_KEY) } catch {} })
 const farAgeS = computed(() => farHeardAt.value ? Math.round((now.value - farHeardAt.value) / 1000) : null)
 const farAlive = computed(() => farAgeS.value !== null && farAgeS.value < 600)
 const now = ref(Date.now())
@@ -227,24 +236,34 @@ const satSilent = computed(() => !!sat.value.modem && !sat.value.connected)
 // that identifies the bearer, and a state word only when that bearer is
 // degraded. The sentence belongs to the chosen route alone — four captions
 // at once read as a wall of text on a 7-inch panel. [MESHSAT-987]
+// `sev` is the colour of the state word: `bad` (red) for a bearer that
+// cannot carry a message at all and that nobody at the panel can recover —
+// the APRS radio switched off, the modem down — against `warn` (amber) for
+// the degraded and the merely absent. Red survives dimming, because the
+// panel moves the lane away from a dead radio and the row it names goes
+// dim in the same breath. [MESHSAT-1177]
 const lanes = computed(() => ([
   { key: 'imt', lane: 'sat', card: 'sat', name: 'Satellite', fact: satName.value,
-    state: satNoModem.value ? 'no modem' : satSilent.value ? 'modem silent' : '',
+    state: satNoModem.value ? 'no modem' : satSilent.value ? 'modem silent' : '', sev: 'warn',
     detail: satNoModem.value
       ? 'No satellite modem on this kit.'
       : satSilent.value ? 'The modem is not answering yet.'
       : 'Up to space, then down to the other kit. Needs sky.' },
   { key: 'aprs', lane: 'aprs', card: 'air', name: 'APRS radio', fact: '144.800 MHz',
     state: aprsOff.value ? 'radio off' : aprsSilent.value ? 'silent' : '',
+    sev: aprsOff.value ? 'bad' : 'warn',
     detail: aprsOff.value
       ? 'No bytes from the radio since power-on. Hold PTT 3 s on the PicoAPRS.'
       : aprsSilent.value
         ? 'This kit hears nothing right now.'
         : 'Radio, straight to the other kit.' },
   { key: 'hub_sms', lane: 'hub', card: 'hub', name: 'SMS via the Hub', fact: '',
-    state: smsState.value, detail: 'The Hub passes it on by SMS.' },
+    state: smsState.value, sev: smsState.value === 'down' ? 'bad' : 'warn',
+    detail: 'The Hub passes it on by SMS.' },
   { key: 'b2b_sms', lane: 'sms', card: 'sms', name: 'SMS kit to kit', fact: '',
-    state: smsState.value, detail: 'One text to the other kit\'s SIM.' },
+    state: smsState.value, sev: smsState.value === 'down' ? 'bad' : 'warn',
+    // The visitor is told why this lane is lit when nobody chose it.
+    detail: autoMoved.value ? 'APRS radio off, so this kit uses SMS.' : 'One text to the other kit\'s SIM.' },
 ]))
 // Both SMS routes ride the cellular modem. A modem that keeps its serial
 // link while it has stopped answering reads healing or down on both rows,
@@ -254,12 +273,10 @@ const smsState = computed(() => {
   return s === 'failed' ? 'down' : (s === 'degraded' || s === 'healing') ? 'healing' : ''
 })
 const laneCard = (lane) => (lanes.value.find(l => l.lane === lane) || {}).card || 'air'
-async function selectPath(key) {
-  touch()
-  const ln = lanes.value.find(l => l.key === key)
-  if (!ln) return
-  if (flow.value.path === key) { openCard(ln.card); return }
-  if (flowBusy.value) return
+// The PUT on its own, so the automatic move can use it without counting as
+// a touch (an automatic switch must not wake the poster screensaver).
+async function applyPath(key) {
+  if (flowBusy.value) return false
   const before = flow.value.path
   flow.value.path = key
   flowBusy.value = true
@@ -271,15 +288,53 @@ async function selectPath(key) {
     // few seconds and the next tap tries again. [MESHSAT-826, 11 Sep 2026]
     const r = await api.put('/ttc/flow', { path: key }, 8000)
     if (r && r.path) flow.value = r
+    return true
   } catch (e) {
     flow.value.path = before
     flowFailed.value = key
     setTimeout(() => { if (flowFailed.value === key) flowFailed.value = '' }, 4000)
+    return false
   } finally {
     flowBusy.value = false
   }
 }
+async function selectPath(key) {
+  touch()
+  const ln = lanes.value.find(l => l.key === key)
+  if (!ln) return
+  if (flow.value.path === key) { openCard(ln.card); return }
+  // A tap owns the lane from here: the panel does not move it again until
+  // the radio recovers, and never undoes this choice. [MESHSAT-1177]
+  autoMoved.value = false
+  autoLocked.value = true
+  await applyPath(key)
+}
 const flowFailed = ref('')
+
+// ── APRS radio off: the panel moves itself to SMS (MESHSAT-1177) ────────
+// The PicoAPRS shuts down on an empty cell after a night without USB power
+// and only a 3 s PTT press turns it back on. Its USB serial link stays up
+// regardless, so `aprs_0` still reads online and the aprs lane keeps
+// transmitting into a radio that is off: `RxWatchdog` clears its deaf flag
+// on the `silent` branch, so `peer_link` never falls through to its SMS
+// member. While the radio is off this kit's egress therefore goes to the
+// kit-to-kit SMS lane on its own, and back to APRS when the TNC delivers
+// bytes again. Only a move the panel made is ever undone, so an operator
+// tap always wins. `silent` cannot flap — it is "no bytes at all since the
+// link opened", so one byte ends it for the life of that link.
+watch(aprsOff, async (off) => {
+  if (!flow.value.path) return
+  if (off) {
+    if (autoLocked.value || autoMoved.value || flow.value.path !== 'aprs') return
+    if (await applyPath('b2b_sms')) autoMoved.value = true
+    return
+  }
+  // The radio is back: this outage is over, so the lock lifts with it.
+  const handBack = autoMoved.value && flow.value.path === 'b2b_sms'
+  autoMoved.value = false
+  autoLocked.value = false
+  if (handBack) await applyPath('aprs')
+})
 // Phone numbers as the modem reports them may carry or drop the country
 // code; compare the last nine digits.
 const numEq = (a, b) => {
@@ -1125,7 +1180,7 @@ onUnmounted(() => {
                 </g>
                 <text :x="rowTextX" :y="laneY(ln.lane) - 14" :text-anchor="rowAnchor" class="row-name">{{ ln.name }}<tspan
                   v-if="ln.fact" class="row-fact" dx="14">{{ ln.fact }}</tspan></text>
-                <text v-if="ln.state" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state warn">{{ ln.state }}</text>
+                <text v-if="ln.state" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" :class="['row-state', ln.sev || 'warn']">{{ ln.state }}</text>
                 <text v-else-if="flowFailed === ln.key" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state warn">failed</text>
                 <text v-else-if="flow.path === ln.key" :x="rowStateX" :y="laneY(ln.lane) - 14" :text-anchor="rowStateAnchor" class="row-state on">chosen</text>
                 <text v-if="flow.path === ln.key" :x="rowTextX" :y="laneY(ln.lane) + 28" :text-anchor="rowAnchor" class="row-detail">{{ ln.detail }}</text>
@@ -1191,7 +1246,7 @@ onUnmounted(() => {
                   </template>
                 </g>
                 <text :x="G.airL.x + 56" :y="laneY(ln.lane) - 12" text-anchor="start" class="row-name">{{ ln.name }}</text>
-                <text v-if="ln.state" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state warn">{{ ln.state }}</text>
+                <text v-if="ln.state" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" :class="['row-state', ln.sev || 'warn']">{{ ln.state }}</text>
                 <text v-else-if="flowFailed === ln.key" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state warn">failed</text>
                 <text v-else-if="flow.path === ln.key" :x="G.airR.x - 6" :y="laneY(ln.lane) - 12" text-anchor="end" class="row-state on">chosen</text>
               </g>
@@ -1467,6 +1522,11 @@ onUnmounted(() => {
 .path .row-detail { font-family: 'IBM Plex Sans', sans-serif; font-size: 19px; fill: #C4C4CE; }
 .path.dim .row-name { fill: #8A8A96; }
 .path.dim .row-fact, .path.dim .row-state { fill: #6E6E7E; }
+/* A bearer that cannot carry a message keeps its red after the panel has
+   moved the lane away and dimmed the row — that is the moment the crew
+   needs to read it. Declared after the dim rule so source order wins, and
+   never Signal Orange, which belongs to live traffic alone. [MESHSAT-1177] */
+.path .row-state.bad, .path.dim .row-state.bad { fill: #F87171; font-weight: 600; }
 .lane-caption { font-family: 'IBM Plex Sans', sans-serif; font-size: 18px; fill: #82828F; }
 /* One icon family: same box, same stroke weight, one per lane, drawn in
    that bearer's colour. Filled only on the chosen route, so which way this
