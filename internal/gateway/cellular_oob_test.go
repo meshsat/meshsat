@@ -167,6 +167,76 @@ func TestCellular_PlaintextPeerHubFormatAndEchoGuard(t *testing.T) {
 	}
 }
 
+// The Hub's WhatsApp relay puts a correlation token at the head of the body,
+// "[#A7] hello from the booth". It is NOT a routed-SMS origin: the token must
+// reach the mesh verbatim or the Hub cannot route the reply, and two visitors'
+// conversations merge. Before the shape check the token parsed as origin
+// "#A7", failed the phone-number allowlist and the whole SMS was dropped as a
+// self-echo. [MESHSAT-1178]
+func TestCellular_BracketedTokenSurvivesVerbatim(t *testing.T) {
+	cell := newFakeCellTransport()
+	gw := NewCellularGateway(CellularConfig{SMSPrefix: "[MeshSat]", MaxSMSSegments: 1,
+		AllowedSenders: []string{"+31653207829", "+3197010258258"}, PlaintextPeers: []string{"+3197010258258"}}, cell, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+
+	send := func(sender, text string) {
+		data, _ := json.Marshal(transport.SMSMessage{Sender: sender, Text: text})
+		cell.events <- transport.CellEvent{Type: "sms_received", Message: text, Data: data}
+	}
+
+	for _, body := range []string{
+		"[#A7] hello from the booth", // the Hub's WhatsApp correlation token
+		"[note] kit to kit",          // any other bracketed word
+		"[] x",                       // empty brackets: never parsed at all
+	} {
+		send("+3197010258258", body)
+		select {
+		case in := <-gw.Receive():
+			if in.Text != body {
+				t.Fatalf("token mangled: got %q want %q", in.Text, body)
+			}
+			if !in.Plain {
+				t.Fatalf("%q: Plain not set, ingress transforms would drop it", body)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%q was dropped, not relayed", body)
+		}
+	}
+
+	// The real routed-SMS format still gets stripped, and the echo of this
+	// kit's own SMS is still dropped: the guard narrowed, it did not go away.
+	send("+3197010258258", "[+31653618463] hello from myself")
+	send("+3197010258258", "[+31653207829] hello via hub")
+	select {
+	case in := <-gw.Receive():
+		if in.Text != "hello via hub" {
+			t.Fatalf("routed SMS: got %q, echo guard or strip broke", in.Text)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no routed inbound within 3 s")
+	}
+}
+
+func TestLooksLikeSMSOrigin(t *testing.T) {
+	yes := []string{"+31653207829", "31653207829", "300234063904190", "+316"}
+	no := []string{"#A7", "", "+", "note", "!de11f199", "+3165 3207829", "A7"}
+	for _, s := range yes {
+		if !looksLikeSMSOrigin(s) {
+			t.Errorf("%q: want origin-shaped", s)
+		}
+	}
+	for _, s := range no {
+		if looksLikeSMSOrigin(s) {
+			t.Errorf("%q: want NOT origin-shaped", s)
+		}
+	}
+}
+
 func TestParseHubRoutedSMS(t *testing.T) {
 	cases := []struct {
 		in, origin, body string
@@ -178,6 +248,10 @@ func TestParseHubRoutedSMS(t *testing.T) {
 		{"hello", "", "", false},
 		{"[] x", "", "", false},
 		{"MS:frame", "", "", false},
+		// The parser still reports the shape for any bracketed token — it is
+		// the CALLER that gates on looksLikeSMSOrigin. Pinned so nobody
+		// "fixes" this one and silently re-breaks the other direction.
+		{"[#A7] hello from the booth", "#A7", "hello from the booth", true},
 	}
 	for _, c := range cases {
 		o, b, ok := ParseHubRoutedSMS(c.in)

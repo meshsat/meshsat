@@ -3,6 +3,7 @@ package hubreporter
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -12,7 +13,9 @@ import (
 
 // EventTap hooks into the processor's event stream and forwards relevant
 // events (positions, telemetry, node info) to the HubReporter. Text messages
-// are intentionally excluded to avoid excessive volume and privacy concerns.
+// were excluded outright for volume and privacy; they are now behind
+// SetPublishText, off unless a caller turns it on, because the Hub needs a
+// mesh reply to reach it to close a relayed conversation. [MESHSAT-1178]
 //
 // Note on MQTT topic namespaces: The HubReporter publishes device data to
 // Hub topics (meshsat/{device_id}/position, meshsat/{device_id}/telemetry).
@@ -20,10 +23,17 @@ import (
 // (msh/cubeos/{channel}/{node}). These are different topic namespaces and
 // do not conflict.
 type EventTap struct {
-	reporter  *HubReporter
-	inventory *DeviceInventory
-	bridgeID  string
+	reporter    *HubReporter
+	inventory   *DeviceInventory
+	bridgeID    string
+	publishText atomic.Bool
 }
+
+// SetPublishText turns publishing of inbound mesh TEXT to the Hub on or off.
+// Off by default: every other event this tap forwards is machine data, while
+// text is what people wrote to each other. Callers set it from
+// MESHSAT_HUB_PUBLISH_TEXT. [MESHSAT-1178]
+func (t *EventTap) SetPublishText(on bool) { t.publishText.Store(on) }
 
 // NewEventTap creates an EventTap that forwards mesh events to the Hub.
 func NewEventTap(reporter *HubReporter, inventory *DeviceInventory, bridgeID string) *EventTap {
@@ -162,9 +172,8 @@ func (t *EventTap) handlePosition(event transport.MeshEvent) {
 	}
 }
 
-// handleMessage processes message events. Only NODEINFO_APP (portnum 4) and
-// POSITION_APP (portnum 3) and TELEMETRY_APP (portnum 67) are extracted.
-// Text messages (portnum 1) are intentionally skipped.
+// handleMessage processes message events: NODEINFO_APP (4), POSITION_APP (3),
+// TELEMETRY_APP (67), and TEXT_MESSAGE_APP (1) when SetPublishText is on.
 func (t *EventTap) handleMessage(event transport.MeshEvent) {
 	var msg struct {
 		From    uint32          `json:"from"`
@@ -177,12 +186,44 @@ func (t *EventTap) handleMessage(event transport.MeshEvent) {
 	}
 
 	switch msg.PortNum {
+	case 1: // TEXT_MESSAGE_APP
+		t.handleTextPortnum(event.Data, msg.From)
 	case 3: // POSITION_APP
 		t.handlePositionPortnum(event.Data, msg.From)
 	case 4: // NODEINFO_APP
 		t.handleNodeInfoPortnum(event.Data, msg.From)
 	case 67: // TELEMETRY_APP
 		t.handleTelemetryPortnum(event.Data, msg.From)
+	}
+}
+
+// handleTextPortnum publishes inbound mesh text to the Hub. This is the
+// return leg of a Hub-relayed conversation: the Hub sent an SMS in, a rule
+// put it on the mesh, and this carries the answer back. Empty text is
+// dropped — an undecryptable packet from a foreign mesh produces one, and
+// there is nothing to relay. [MESHSAT-1178]
+func (t *EventTap) handleTextPortnum(data json.RawMessage, from uint32) {
+	if !t.publishText.Load() || t.reporter == nil {
+		return
+	}
+	var msg transport.MeshMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return
+	}
+	if msg.DecodedText == "" {
+		return
+	}
+	deviceID := fmt.Sprintf("!%08x", from)
+	out := DeviceMessage{
+		DeviceID:  deviceID,
+		Text:      msg.DecodedText,
+		Channel:   int(msg.Channel),
+		SNR:       float64(msg.RxSNR),
+		PacketID:  msg.ID,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := t.reporter.PublishDeviceMessage(out); err != nil {
+		log.Debug().Err(err).Str("device_id", deviceID).Msg("hubreporter: failed to publish mesh text")
 	}
 }
 

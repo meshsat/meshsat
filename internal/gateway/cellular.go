@@ -381,7 +381,20 @@ func (g *CellularGateway) smsListener(ctx context.Context) {
 					// kit that originated it (its routing engine has no
 					// sender filter): an origin that is not an allowed sender
 					// is this kit itself. [MESHSAT-962]
-					if origin, body, ok := ParseHubRoutedSMS(text); ok {
+					//
+					// The shape check is what keeps that guard from eating
+					// everything else in brackets. An origin is a phone number
+					// or an IMEI; a body that merely starts with some other
+					// bracketed token — the Hub's WhatsApp relay puts a
+					// correlation token there, "[#A7] hello" — is NOT a routed
+					// SMS. Before the check it parsed as origin "#A7", failed
+					// the phone-number allowlist and the whole message was
+					// dropped as a self-echo, silently and with a log line
+					// that said the opposite of what happened. Unrecognised
+					// prefixes now fail OPEN: the text passes through
+					// verbatim, token included, which is what the Hub needs
+					// back to route the reply. [MESHSAT-1178]
+					if origin, body, ok := ParseHubRoutedSMS(text); ok && looksLikeSMSOrigin(origin) {
 						if len(g.config.AllowedSenders) > 0 && !isAllowedSender(origin, g.config.AllowedSenders) {
 							log.Info().Str("sender", sender).Str("origin", origin).Msg("cellular: Hub echo of this kit's own SMS, ignoring")
 							continue
@@ -448,8 +461,27 @@ func isAllowedSender(sender string, allowed []string) bool {
 // where origin is the sending kit's number (or a device id). [MESHSAT-962]
 var hubRoutedSMS = regexp.MustCompile(`^\[([^\]\s]+)\]\s?(.*)$`)
 
+// looksLikeSMSOrigin reports whether a bracketed token is shaped like the
+// origin of a Hub-routed SMS: an E.164 number or a bare IMEI, so digits with
+// an optional leading "+". Anything else in brackets is part of the message,
+// not a routing header — see the caller in smsListener. [MESHSAT-1178]
+func looksLikeSMSOrigin(origin string) bool {
+	d := strings.TrimPrefix(origin, "+")
+	if d == "" {
+		return false
+	}
+	for _, r := range d {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // ParseHubRoutedSMS splits "[origin] text" into its parts. ok is false when
-// the text is not in that format.
+// the text is not in that format. It reports the shape only: callers that act
+// on the origin must also check looksLikeSMSOrigin, or any bracketed token at
+// the head of a message is mistaken for a routing header. [MESHSAT-1178]
 func ParseHubRoutedSMS(text string) (origin, body string, ok bool) {
 	m := hubRoutedSMS.FindStringSubmatch(strings.TrimSpace(text))
 	if m == nil {

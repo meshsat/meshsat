@@ -1,8 +1,10 @@
 package hubreporter
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"meshsat/internal/transport"
 )
@@ -248,25 +250,91 @@ func TestEventTapTelemetryNodeUpdate(t *testing.T) {
 	}
 }
 
-func TestEventTapSkipsTextMessages(t *testing.T) {
+// Text is off unless a caller turns it on, and it never registers a device:
+// a node is known from its NodeInfo, not from something it said.
+// [MESHSAT-1178]
+func TestEventTapSkipsTextMessagesByDefault(t *testing.T) {
+	db := newTestDB(t)
+	ob := NewOutbox(db, 10000, 7*24*time.Hour)
+	r := NewHubReporter(
+		ReporterConfig{HubURL: "tcp://hub:1883", BridgeID: "test-bridge"},
+		func() BridgeBirth { return BridgeBirth{} },
+		func() BridgeHealth { return BridgeHealth{} },
+	)
+	r.SetOutbox(ob)
 	inv := NewDeviceInventory(nil, "test-bridge")
-	tap := NewEventTap(nil, inv, "test-bridge")
+	tap := NewEventTap(r, inv, "test-bridge")
+	// SetPublishText deliberately not called.
 
-	msg := transport.MeshMessage{
-		From:        0xaabbccdd,
-		PortNum:     1, // TEXT_MESSAGE_APP
-		DecodedText: "Hello world",
-	}
+	msg := transport.MeshMessage{From: 0xaabbccdd, PortNum: 1, DecodedText: "Hello world"}
 	data, _ := json.Marshal(msg)
+	tap.HandleMeshEvent(transport.MeshEvent{Type: "message", Data: data})
 
-	tap.HandleMeshEvent(transport.MeshEvent{
-		Type: "message",
-		Data: data,
-	})
-
-	// TEXT_MESSAGE_APP should NOT register devices or do anything
 	if inv.IsRegistered("!aabbccdd") {
 		t.Fatal("text messages should not register devices")
+	}
+	if n, _ := ob.Pending(); n != 0 {
+		t.Fatalf("text published with the switch off: %d queued", n)
+	}
+}
+
+// With the switch on, mesh text reaches meshsat/{device_id}/mo/decoded
+// carrying the text and the bridge that heard it. This is the return leg of
+// a Hub-relayed conversation. [MESHSAT-1178]
+func TestEventTapPublishesTextWhenEnabled(t *testing.T) {
+	db := newTestDB(t)
+	ob := NewOutbox(db, 10000, 7*24*time.Hour)
+	r := NewHubReporter(
+		ReporterConfig{HubURL: "tcp://hub:1883", BridgeID: "nllei01tesseract01"},
+		func() BridgeBirth { return BridgeBirth{} },
+		func() BridgeHealth { return BridgeHealth{} },
+	)
+	r.SetOutbox(ob)
+	tap := NewEventTap(r, NewDeviceInventory(nil, "nllei01tesseract01"), "nllei01tesseract01")
+	tap.SetPublishText(true)
+
+	// An empty-text packet (a frame from a mesh we cannot decrypt) carries
+	// nothing to relay and must not be published.
+	empty, _ := json.Marshal(transport.MeshMessage{From: 0xde11f199, PortNum: 1})
+	tap.HandleMeshEvent(transport.MeshEvent{Type: "message", Data: empty})
+	if n, _ := ob.Pending(); n != 0 {
+		t.Fatalf("empty text published: %d queued", n)
+	}
+
+	msg := transport.MeshMessage{From: 0xde11f199, PortNum: 1, DecodedText: "[#A7] on my way", ID: 4242}
+	data, _ := json.Marshal(msg)
+	tap.HandleMeshEvent(transport.MeshEvent{Type: "message", Data: data})
+
+	n, _ := ob.Pending()
+	if n != 1 {
+		t.Fatalf("expected the text queued once, got %d", n)
+	}
+	var gotTopic string
+	var gotPayload []byte
+	if _, err := ob.Replay(context.Background(), func(topic string, payload []byte, qos byte) error {
+		gotTopic, gotPayload = topic, append([]byte{}, payload...)
+		if qos != 1 {
+			t.Errorf("qos = %d, want 1: a visitor's reply must survive an MQTT drop", qos)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if want := "meshsat/!de11f199/mo/decoded"; gotTopic != want {
+		t.Errorf("topic = %q, want %q", gotTopic, want)
+	}
+	var out DeviceMessage
+	if err := json.Unmarshal(gotPayload, &out); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if out.Text != "[#A7] on my way" {
+		t.Errorf("text = %q, want the reply verbatim including the token", out.Text)
+	}
+	if out.BridgeID != "nllei01tesseract01" {
+		t.Errorf("bridge_id = %q — the Hub cannot tell which kit heard it", out.BridgeID)
+	}
+	if out.DeviceID != "!de11f199" {
+		t.Errorf("device_id = %q, want !de11f199", out.DeviceID)
 	}
 }
 

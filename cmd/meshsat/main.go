@@ -2067,6 +2067,36 @@ func main() {
 		} else {
 			log.Info().Str("hub", hubURL).Str("bridge_id", hubBridgeID).Msg("hub reporter started")
 		}
+
+		// Device inventory + event tap [MESHSAT-1178].
+		//
+		// Deliberately here, like the dead man's switch below, and not only in
+		// cmd/meshsat/app.go where it was also being constructed. app.go's
+		// Setup has no caller, so on every kit this tap has never run: no mesh
+		// position, telemetry or device birth has ever reached the Hub, and
+		// the Hub's device registry could not resolve a mesh node to the
+		// bridge it arrived at. Text is the return leg of a Hub-relayed
+		// conversation and rides the same tap, behind its own switch.
+		hubInventory := hubreporter.NewDeviceInventory(hubReporter, hubBridgeID)
+		hubEventTap := hubreporter.NewEventTap(hubReporter, hubInventory, hubBridgeID)
+		hubEventTap.SetPublishText(envBoolDefault("MESHSAT_HUB_PUBLISH_TEXT", true))
+		eventCh, unsubTap := proc.Subscribe()
+		defer unsubTap()
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case event, ok := <-eventCh:
+					if !ok {
+						return
+					}
+					hubEventTap.HandleMeshEvent(event)
+				}
+			}
+		}()
+		log.Info().Bool("text", envBoolDefault("MESHSAT_HUB_PUBLISH_TEXT", true)).
+			Msg("hub event tap started (mesh positions/telemetry/births to the hub)")
 		// Surface Hub TAK-relay counters to the dashboard TAK widget via
 		// a synthetic gateway entry in /api/gateways. [MESHSAT-682]
 		srv.SetHubReporter(hubReporter)

@@ -495,6 +495,16 @@ func (r *HubReporter) PublishDeviceTelemetry(deviceID string, tel DeviceTelemetr
 	return r.publishOrQueue(TopicDeviceTelemetry(deviceID), 0, false, tel)
 }
 
+// PublishDeviceMessage publishes inbound mesh text to the Hub. QoS 1 and
+// outbox-queued: a booth visitor's reply must not be lost to a momentary
+// MQTT drop, which is the whole point of the relay. [MESHSAT-1178]
+func (r *HubReporter) PublishDeviceMessage(msg DeviceMessage) error {
+	msg.Protocol = ProtocolVersion
+	msg.BridgeID = r.cfg.BridgeID
+	r.takMsgsOut.Add(1)
+	return r.publishOrQueue(TopicDeviceMessage(msg.DeviceID), 1, false, msg)
+}
+
 // PublishDeviceSOS publishes a device SOS event to the Hub.
 func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 	sos.BridgeID = r.cfg.BridgeID

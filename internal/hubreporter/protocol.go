@@ -261,6 +261,23 @@ type DeviceTelemetry struct {
 	Timestamp    time.Time `json:"timestamp"`
 }
 
+// DeviceMessage is published to meshsat/{device_id}/mo/decoded — the topic
+// the Rock7 webhook already uses for satellite MO, now also carrying mesh
+// text so the Hub sees a reply to something it relayed in. The topic names
+// the mesh node and the BODY names the kit: DeviceBirth is published
+// unretained, so the Hub cannot rely on its registry to resolve node ->
+// bridge for a message that arrives after a reconnect. [MESHSAT-1178]
+type DeviceMessage struct {
+	Protocol  string    `json:"protocol"`
+	DeviceID  string    `json:"device_id"`
+	BridgeID  string    `json:"bridge_id"`
+	Text      string    `json:"text"`
+	Channel   int       `json:"channel,omitempty"`
+	SNR       float64   `json:"snr,omitempty"`
+	PacketID  uint32    `json:"packet_id,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // DeviceSOS is published to meshsat/{device_id}/sos.
 type DeviceSOS struct {
 	DeviceID  string    `json:"device_id"`
