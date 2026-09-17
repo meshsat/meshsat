@@ -23,6 +23,7 @@ Config: /etc/default/meshsat-receipt-printer
     MESHSAT_BRIDGE_URL=http://127.0.0.1:6050
     MESHSAT_PRINTER_WIDTH=32                columns (58 mm font A)
     MESHSAT_PRINTER_LOGO=/usr/local/share/meshsat/meshsat-logo.raster
+    MESHSAT_PRINTER_HAT=/usr/local/share/meshsat/meshsat-hat.raster   milestone slip
     MESHSAT_PRINTER_FEED_BEFORE=3            blank lines before the logo
     MESHSAT_PRINTER_FEED_AFTER=8             blank lines after the URL, for the tear
     MESHSAT_PRINTER_STRAPLINE=a|b|c          bold lines under the callsign; empty = none
@@ -199,10 +200,19 @@ def build_slip(msg: dict, cfg: dict, serial: int = 0) -> bytes:
     # which kit. [MESHSAT-1201]
     if serial:
         parts.append(f"{'slip':<8}#{serial:04d}\n".encode())
+    # Every 666th slip is the one that wins a hat, so it does not look like the
+    # other 665: a rule, the hat itself, the number at double height, and the
+    # invitation. The hat is a real item - the lockup embroidered on a black cap
+    # (meshsat-website/brand/embroidery) - which is why it prints as a solid
+    # silhouette with the lockup knocked out to bare paper.
     if serial and cfg["milestone"] and serial % cfg["milestone"] == 0:
-        parts += [feed(1), ALIGN_C, BOLD_ON,
+        hat = cfg.get("hat")
+        parts += [feed(1), ALIGN_C, b"-" * width + b"\n"]
+        if hat:
+            parts += [raster(*hat), b"\n"]
+        parts += [ALIGN_C, BOLD_ON, BIG_ON, f"SLIP {serial}\n".encode(), BIG_OFF,
                   ascii_only(cfg["milestone_text"].format(n=serial)).encode() + b"\n",
-                  BOLD_OFF, ALIGN_L]
+                  BOLD_OFF, b"-" * width + b"\n", ALIGN_L]
     # Lead-out: the head sits well above the tear bar, so without this the QR and the
     # URL are still inside the printer and the cut lands on them.
     parts += [feed(1), ALIGN_C, qr(cfg["qr"]), b"\n",
@@ -447,6 +457,8 @@ def load_config(args):
         "mock_path": args.mock_file,
         "logo_path": env("MESHSAT_PRINTER_LOGO",
                          "/usr/local/share/meshsat/meshsat-logo.raster"),
+        "hat_path": env("MESHSAT_PRINTER_HAT",
+                        "/usr/local/share/meshsat/meshsat-hat.raster"),
         # Blank paper above and below the slip so a tear by hand cannot land on the
         # logo or the URL. Lines, roughly 3.75 mm each on a 58 mm head.
         "feed_before": int(env("MESHSAT_PRINTER_FEED_BEFORE", "3") or 3),
@@ -457,7 +469,7 @@ def load_config(args):
         "count_path": env("MESHSAT_PRINTER_COUNT", "/var/lib/meshsat/receipt-count"),
         "milestone": int(env("MESHSAT_PRINTER_MILESTONE", "666") or 0),
         "milestone_text": env("MESHSAT_PRINTER_MILESTONE_TEXT",
-                              "slip {n}. Ask us for your hat. \\m/"),
+                              "Ask us for your hat  \\m/"),
     }
 
 
@@ -473,6 +485,7 @@ def main():
 
     cfg = load_config(args)
     cfg["logo"] = load_logo(cfg["logo_path"])
+    cfg["hat"] = load_logo(cfg["hat_path"])
     if cfg["logo"]:
         log(f"logo {cfg['logo'][0]}x{cfg['logo'][1]} from {cfg['logo_path']}")
     else:
