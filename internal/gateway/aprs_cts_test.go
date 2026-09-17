@@ -448,36 +448,47 @@ func TestAPRSCTS_BeaconAckDeferralIsCapped(t *testing.T) {
 	}
 }
 
-// An ack from the peer is proof it decoded a frame of ours, so the beacon
-// that would carry the same proof is skipped for one interval. Only an ack
-// counts: a frame we transmitted says nothing about what the peer heard.
-// [MESHSAT-1021]
+// An ack from the peer is proof it decoded a frame of ours, so the beacon that
+// would carry the same proof is skipped. The test is "since the last beacon was
+// due", not a fixed window: an ack landing anywhere in the interval counts, and
+// the jittered wake cannot step over it. Only an ack counts; a frame we
+// transmitted says nothing about what the peer heard. [MESHSAT-1021]
 func TestAPRSCTS_BeaconSkippedWhenThePeerAckedUs(t *testing.T) {
 	g := &APRSGateway{config: APRSConfig{Callsign: "MSTESS", SSID: 10, BeaconSecs: 30}, tracker: NewAPRSTracker()}
-	interval := 30 * time.Second
 
-	if g.peerHeardUsWithin(interval) {
+	if g.peerAckedSinceLastBeacon() {
 		t.Fatal("a gateway that never heard an ack claims the peer heard us")
 	}
 	// Our own transmissions must not count.
 	g.lastTX.Store(time.Now().UnixNano())
-	if g.peerHeardUsWithin(interval) {
+	if g.peerAckedSinceLastBeacon() {
 		t.Fatal("our own transmission counted as the peer hearing us")
 	}
 
-	g.lastAckAt.Store(time.Now().UnixNano())
-	if !g.peerHeardUsWithin(interval) {
+	// An ack early in the interval still counts: this is the case a fixed
+	// window missed, and it is the common one, since an ack follows our
+	// frame by 2 to 3 s and frames come right after a beacon as often as
+	// before the next.
+	now := time.Now()
+	g.lastBeaconAt.Store(now.Add(-30 * time.Second).UnixNano())
+	g.lastAckAt.Store(now.Add(-29 * time.Second).UnixNano())
+	if !g.peerAckedSinceLastBeacon() {
+		t.Fatal("an ack one second into the interval did not count")
+	}
+	// An ack older than the last beacon is already represented by it.
+	g.lastAckAt.Store(now.Add(-31 * time.Second).UnixNano())
+	if g.peerAckedSinceLastBeacon() {
+		t.Fatal("an ack older than the last beacon suppressed the next one")
+	}
+	// The skip cannot latch: once a cycle passes with no new ack, the
+	// beacon is due again.
+	g.lastAckAt.Store(now.UnixNano())
+	if !g.peerAckedSinceLastBeacon() {
 		t.Fatal("a fresh ack did not count")
 	}
-	// Older than the interval: the beacon is due again.
-	g.lastAckAt.Store(time.Now().Add(-2 * interval).UnixNano())
-	if g.peerHeardUsWithin(interval) {
-		t.Fatal("an ack two intervals old still suppressed the beacon")
-	}
-	// A zero interval never suppresses.
-	g.lastAckAt.Store(time.Now().UnixNano())
-	if g.peerHeardUsWithin(0) {
-		t.Fatal("a zero interval suppressed the beacon")
+	g.lastBeaconAt.Store(time.Now().UnixNano()) // the worker stamps this every pass
+	if g.peerAckedSinceLastBeacon() {
+		t.Fatal("the skip latched: the same ack suppressed a second beacon")
 	}
 }
 
@@ -492,7 +503,7 @@ func TestAPRSAck_ReceivedAckStampsTheProof(t *testing.T) {
 	if g.acksReceived.Load() != 1 {
 		t.Fatalf("acks_received = %d, want 1", g.acksReceived.Load())
 	}
-	if !g.peerHeardUsWithin(time.Minute) {
+	if !g.peerAckedSinceLastBeacon() {
 		t.Fatal("the ack did not stamp the proof")
 	}
 

@@ -95,7 +95,10 @@ type APRSGateway struct {
 	// unix nanoseconds. An ack proves the peer decoded something of ours,
 	// which is exactly what its receive watchdog is waiting for, so the
 	// beacon that would say the same thing can be skipped. [MESHSAT-1021]
-	lastAckAt      atomic.Int64
+	lastAckAt atomic.Int64
+	// lastBeaconAt is when the beacon worker last came round, whether it
+	// transmitted or skipped, so an ack anywhere in the interval counts.
+	lastBeaconAt   atomic.Int64
 	beaconsSkipped atomic.Int64
 	lifeMu         sync.Mutex
 	done           chan struct{}
@@ -774,20 +777,31 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 	case <-first.C:
 	}
 	n := 0
+	// Every pass through the loop stamps this, sent or skipped, so the test
+	// below is "did the peer ack us since the last time this beacon was
+	// due" rather than a fixed window. A fixed window only catches an ack
+	// that lands in the tail of the interval, and the jittered wake can
+	// step over it entirely. [MESHSAT-1021]
+	g.lastBeaconAt.Store(time.Now().UnixNano())
 	for {
 		// Skip the beacon outright when the peer acknowledged one of our
-		// frames inside the last interval. The beacon exists so the peer's
+		// frames since the last one was due. The beacon exists so the peer's
 		// receive watchdog sees this kit alive; an ack is that same proof,
 		// already on the air and paid for. Skipping takes both copies off a
 		// channel exactly while it carries a relay, which is when ack loss
 		// is worst: 17 percent with nothing else transmitting, up to 69
 		// percent with both kits beaconing (15 Sep 2026, bench distance).
-		// The peer's watchdog allows 3 min of silence against a 30 s
-		// interval, so one skipped beacon is a sixth of that budget and the
-		// next one goes out as usual once the exchange stops. [MESHSAT-1021]
-		if g.peerHeardUsWithin(interval) {
+		//
+		// It cannot silence the beacon: a skip needs a fresh ack every
+		// interval, and an ack can only exist because the peer decoded a
+		// frame of ours. The moment the exchange stops, the next beacon goes
+		// out, at most one interval later against the peer's 3 min silence
+		// budget.
+		skip := g.peerAckedSinceLastBeacon()
+		g.lastBeaconAt.Store(time.Now().UnixNano())
+		if skip {
 			g.beaconsSkipped.Add(1)
-			log.Debug().Msg("aprs: beacon skipped, the peer acked us inside the interval")
+			log.Debug().Msg("aprs: beacon skipped, the peer acked us since the last one")
 			select {
 			case <-ctx.Done():
 				return
@@ -846,16 +860,16 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 	}
 }
 
-// peerHeardUsWithin reports whether the peer acknowledged one of our frames
-// inside d. Only an ack counts: a frame we merely transmitted proves nothing
-// about what the peer decoded, and on this chain a third of them are lost.
-// [MESHSAT-1021]
-func (g *APRSGateway) peerHeardUsWithin(d time.Duration) bool {
-	last := g.lastAckAt.Load()
-	if last == 0 || d <= 0 {
+// peerAckedSinceLastBeacon reports whether the peer acknowledged one of our
+// frames since the last beacon was due. Only an ack counts: a frame we merely
+// transmitted proves nothing about what the peer decoded, and on this chain a
+// third of them are lost. [MESHSAT-1021]
+func (g *APRSGateway) peerAckedSinceLastBeacon() bool {
+	ack := g.lastAckAt.Load()
+	if ack == 0 {
 		return false
 	}
-	return time.Since(time.Unix(0, last)) < d
+	return ack > g.lastBeaconAt.Load()
 }
 
 // waitForNoPendingAck holds a beacon while this gateway has frames waiting
