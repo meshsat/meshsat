@@ -275,8 +275,22 @@ def build_slip(msg: dict, cfg: dict, serial: int = 0) -> bytes:
     for line in wrap(text, width):
         parts.append(line.encode("ascii", "replace") + b"\n")
     parts += [b"-" * width + b"\n",
-              f"{'time':<8}{when}\n".encode(),
-              f"{'via':<8}{bearer}\n".encode()]
+              f"{'time':<8}{when}\n".encode()]
+    # The whole journey, not just the bearer that carried it across. It gets its own
+    # line: the `via` label's eight columns would leave only 24 for the path. With no
+    # crossing to show (TRIGGER=arrival, where nothing has crossed yet) the old single
+    # bearer line stands in.
+    crossing = msg.get("crossing", "")
+    if crossing:
+        # Bold, and at column 0 rather than indented under an eight-column label: the
+        # common path is exactly 32 characters, so there is nowhere to indent it to,
+        # and it is the most interesting line on the slip anyway.
+        parts.append(BOLD_ON)
+        for line in path_lines(msg.get("source", "mesh"), crossing, width):
+            parts.append(ascii_only(line).encode() + b"\n")
+        parts.append(BOLD_OFF)
+    else:
+        parts.append(f"{'via':<8}{bearer}\n".encode())
     if sender:
         parts.append(f"{'from':<8}{sender}\n".encode())
     # Serial, so the stand can see how many slips it has printed and a visitor
@@ -471,6 +485,41 @@ BEARER_LABEL = {
 }
 FRAG_PREFIX = re.compile(r"^\[frag \d+/\d+\]\s*")
 
+# Short names for the path line. "APRS 144.800 MHz" is right on its own line and far
+# too wide inside a path: `Meshtastic <--> APRS 144.800 MHz <--> Meshtastic` is 48
+# characters on 32 columns of paper. [MESHSAT-1201]
+PATH_SHORT = {
+    "aprs": "APRS", "cellular": "SMS", "sms": "SMS", "iridium": "SBD",
+    "iridium_imt": "IMT", "sbd": "SBD", "imt": "IMT", "hub": "Hub",
+    "zigbee": "ZigBee", "ble": "BLE", "reticulum": "RNS",
+    "radio": "Meshtastic", "mesh": "Meshtastic",
+}
+
+
+def path_short(name: str) -> str:
+    base = re.sub(r"_\d+$", "", name or "")
+    return PATH_SHORT.get(base, base or "?")
+
+
+def path_lines(source: str, crossing: str, width: int) -> list:
+    """The whole journey on the slip: where it came in, what carried it across, and
+    the mesh it was put onto at the far end. Owner asked for
+    `Meshtastic <--> APRS <--> Meshtastic`; that is 36 characters and the paper is 32,
+    so the arrow loses its dashes. If even that will not fit - a long bearer name, or
+    narrower paper - it breaks into a stack rather than running off the edge.
+
+    The last hop is the relay's destination, not something this kit watches happen:
+    the far kit puts the message on its own mesh and does not report back here."""
+    a, b, c = path_short(source), path_short(crossing), "Meshtastic"
+    # One arrow for every slip: " <-> " fits a short path but not the common
+    # Meshtastic/APRS/Meshtastic one, and souvenirs from the same stand should not
+    # come out typeset three different ways.
+    for arrow in (" <> ", "<>"):
+        line = f"{a}{arrow}{b}{arrow}{c}"
+        if len(line) <= width:
+            return [line]
+    return [a, f"  <> {b}", f"  <> {c}"]
+
 
 def channel_label(channel: str) -> str:
     """`aprs_0` -> "APRS 144.800 MHz", `iridium_imt_0` -> "Iridium IMT"."""
@@ -488,7 +537,7 @@ def lookup_sender(bridge, text, log):
             body = json.load(r)
     except Exception as exc:                            # noqa: BLE001
         log(f"sender lookup failed: {exc}")
-        return text, "", ""
+        return text, "", "", "mesh"
     rows = body if isinstance(body, list) else body.get("messages", body.get("data", []))
     for row in rows or []:
         if (row.get("direction") or "") != "rx":
@@ -496,8 +545,9 @@ def lookup_sender(bridge, text, log):
         stored = (row.get("decoded_text") or "").strip()
         if stored and (stored == text or stored.startswith(text)):
             return (stored, node_id(row.get("from_node") or row.get("from")),
-                    (row.get("created_at") or "").replace("T", " ")[:19])
-    return text, "", ""
+                    (row.get("created_at") or "").replace("T", " ")[:19],
+                    row.get("transport") or "mesh")
+    return text, "", "", "mesh"
 
 
 def lookup_bearer(bridge, packet_id, log):
@@ -587,10 +637,11 @@ def follow(url, queue, cfg, log):
                     if not text:
                         continue
                     seen.append(ref)
-                    text, sender, when = lookup_sender(cfg["bridge"], text, log)
+                    text, sender, when, source = lookup_sender(cfg["bridge"], text, log)
                     queue.submit({
                         "id": ref, "text": text, "from": sender,
                         "bearer": channel_label(channel),
+                        "source": source, "crossing": channel,
                         "when": when or time.strftime("%Y-%m-%d %H:%M:%S"),
                     })
                     log(f"queued slip for {ref}, crossed on {channel}")
