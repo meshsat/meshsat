@@ -33,6 +33,38 @@ type Band struct {
 	// 2026-04-22: GPS L1 bin 0 = -2.78 dB vs median, bin 5 = -1.35).
 	// Zero means scanner's default (2). [MESHSAT-652, widened per band]
 	CropPad int
+
+	// OwnTraffic marks a band that carries this kit's own radio. Its
+	// legitimate traffic is indistinguishable from a narrowband
+	// interferer on a single scan — a transmitter tens of centimetres
+	// from the SDR lands 40 dB over the floor and fills the window, so
+	// occupancy hits 100 % and the interference tier trips. The design
+	// brief assumed a LoRa burst is under a second and the next scan
+	// clears it, which holds for one burst but not for a busy channel:
+	// two consecutive loud scans about 10 s apart already satisfy the
+	// 10 s interference dwell. Bands flagged here therefore need the
+	// longer dwell below before a tier is adopted. Jamming is unaffected
+	// and still needs flatness >= 0.60, which structured LoRa never
+	// reaches (measured 0.16 on both kits). [MESHSAT-1203]
+	OwnTraffic bool
+}
+
+// InterferenceDwell returns how long an interference candidate must hold
+// before it is adopted for this band.
+func (b Band) InterferenceDwell() time.Duration {
+	if b.OwnTraffic {
+		return OwnTrafficInterferencePersistenceSec * time.Second
+	}
+	return InterferencePersistenceSec * time.Second
+}
+
+// DegradedDwell is the same idea for the degraded tier: our own traffic
+// raises the band average too.
+func (b Band) DegradedDwell() time.Duration {
+	if b.OwnTraffic {
+		return OwnTrafficDegradedPersistenceSec * time.Second
+	}
+	return DegradedPersistenceSec * time.Second
 }
 
 // EffectiveCropPad returns the crop pad the scanner should use,
@@ -112,6 +144,7 @@ var DefaultBands = []Band{
 		InterfaceID: MeshInterfaceID,
 		Label:       "Meshtastic EU868",
 		CropPad:     4,
+		OwnTraffic:  true,
 	},
 	{
 		Name:        "aprs_144",
@@ -236,6 +269,16 @@ type BandStatus struct {
 	// first SSE scan event arrives.
 	LastOccupancy float64 `json:"occupancy"`
 	LastFlatness  float64 `json:"flatness"`
+
+	// The bin-activity cutoff the classifier actually compares against
+	// (baseline + 6 dB), carried here as well as on the scan events so a
+	// freshly loaded page draws the right reference line instead of
+	// guessing. Before MESHSAT-1203 the status payload had no
+	// thresholds and the UI fell back to baseline + 3*std, which on GPS
+	// L1 (std 0.017 dB) drew the "alarm" line 0.05 dB above the noise
+	// and left the trace riding on it.
+	ThreshJammingDB      float64 `json:"thresh_jamming_db"`
+	ThreshInterferenceDB float64 `json:"thresh_interference_db"`
 
 	// Peak-over-event tracking for MIJI-9 accuracy. "Peak" on a single
 	// scan jitters as signals come and go; MIJI reporting wants the
@@ -389,6 +432,14 @@ const (
 	DegradedPersistenceSec     = 30 // moderate elevation sustained
 	InterferencePersistenceSec = 10 // narrowband spike sustained
 	JammingPersistenceSec      = 60 // broadband + flat + occupied
+
+	// A band carrying our own radio needs longer before a tier sticks:
+	// its own traffic recurs, so "sustained for 10 s" is reachable by
+	// two ordinary transmissions. A jammer sits there continuously and
+	// still trips this within two minutes, which costs nothing against
+	// a threat that lasts minutes. [MESHSAT-1203]
+	OwnTrafficInterferencePersistenceSec = 120
+	OwnTrafficDegradedPersistenceSec     = 120
 
 	// Hysteresis — how long a band must be "clean" before demoting.
 	RecoveryPersistenceSec = 30

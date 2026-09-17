@@ -1,6 +1,9 @@
 package spectrum
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // The defect MESHSAT-1203 found: the band bound to mesh_0 did not contain
 // the frequency an EU_868 radio transmits on, so the mesh had no jamming
@@ -106,5 +109,41 @@ func TestApplyMeshBandOverrideEmpty(t *testing.T) {
 		if b != DefaultBands[i] {
 			t.Fatalf("band %s changed on an empty override", b.Name)
 		}
+	}
+}
+
+// A band that carries our own radio must not adopt an interference tier on
+// the 10 s dwell that suits a band we only listen to: two ordinary mesh
+// transmissions about 10 s apart would satisfy it, which is exactly what put
+// mesh_869 into INTERFERENCE on both kits within minutes of going live.
+// [MESHSAT-1203]
+func TestOwnTrafficBandNeedsLongerDwell(t *testing.T) {
+	var mesh Band
+	for _, b := range DefaultBands {
+		if b.Name == "mesh_869" {
+			mesh = b
+		}
+	}
+	if !mesh.OwnTraffic {
+		t.Fatal("mesh_869 must be flagged as carrying our own traffic")
+	}
+
+	// 20 s of interference candidate: adopted on a listen-only band,
+	// rejected on the mesh band.
+	listen := Band{Name: "aprs_144"}
+	if got := promoteStateFor(listen, StateInterference, StateClear, 20*time.Second); got != StateInterference {
+		t.Fatalf("listen-only band after 20 s = %s, want interference", got)
+	}
+	if got := promoteStateFor(mesh, StateInterference, StateClear, 20*time.Second); got != StateClear {
+		t.Fatalf("own-traffic band after 20 s = %s, want clear", got)
+	}
+	// A real interferer sits there; two minutes still trips it.
+	if got := promoteStateFor(mesh, StateInterference, StateClear, 121*time.Second); got != StateInterference {
+		t.Fatalf("own-traffic band after 121 s = %s, want interference", got)
+	}
+	// Jamming is unchanged: it needs flatness >= 0.60, which structured
+	// LoRa never reaches, and keeps the same 60 s dwell.
+	if got := promoteStateFor(mesh, StateJamming, StateClear, 61*time.Second); got != StateJamming {
+		t.Fatalf("own-traffic band jamming after 61 s = %s, want jamming", got)
 	}
 }

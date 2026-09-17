@@ -28,6 +28,14 @@ type RelayStatus struct {
 	LastError     string    `json:"last_error,omitempty"`
 	SuccessCount  int64     `json:"success_count"`
 	ErrorCount    int64     `json:"error_count"`
+
+	// A destination that is simply not configured on this kit is not a
+	// failure. Counting it as one put a permanent red error count on the
+	// /spectrum page of both field kits, where the TAK gateway is not
+	// running by choice. [MESHSAT-1203]
+	SkippedCount   int64     `json:"skipped_count"`
+	LastSkippedAt  time.Time `json:"last_skipped_at,omitempty"`
+	LastSkipReason string    `json:"last_skip_reason,omitempty"`
 }
 
 func NewRelayTracker() *RelayTracker {
@@ -75,6 +83,19 @@ func (t *RelayTracker) RecordFailure(dest string, err error) {
 		rs.LastError = "unknown"
 	}
 	rs.ErrorCount++
+}
+
+// RecordSkipped notes that a relay was not attempted because the
+// destination is not configured or not running. It is deliberately NOT
+// an error: the operator needs to tell "we tried and it failed" apart
+// from "there is nothing to try". [MESHSAT-1203]
+func (t *RelayTracker) RecordSkipped(dest, reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rs := t.ensure(dest)
+	rs.LastSkippedAt = time.Now()
+	rs.LastSkipReason = reason
+	rs.SkippedCount++
 }
 
 // Snapshot returns a deep copy of the current per-destination map

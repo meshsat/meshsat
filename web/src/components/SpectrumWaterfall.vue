@@ -273,44 +273,32 @@ function drawSpectrum(bandName) {
     ctx.stroke()
   }
 
-  // Interference threshold (dashed amber) — baseline + 6σ
-  const yIntf = yAt(band.threshInterference || (band.baselineMean + 6 * band.baselineStd))
+  // ONE reference line: the bin-activity cutoff the classifier actually
+  // compares against, baseline + 6 dB. Two lines used to be drawn, labelled
+  // "3σ jamming" and "6σ interference", and both were wrong since the
+  // detector stopped using sigma multiples: the backend sends baseline+6 for
+  // both, so they landed on top of each other, and before the status payload
+  // carried thresholds at all the page fell back to baseline + 3*std, which
+  // on GPS L1 (std 0.017 dB) drew an "alarm" line 0.05 dB above the noise
+  // with the trace riding on it. Jamming is not a power level — it needs
+  // occupancy >= 0.70 AND flatness >= 0.60 — so there is no honest line to
+  // draw for it. [MESHSAT-1203]
+  const yCut = yAt(band.threshInterference || (band.baselineMean + 6))
   ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)'
   ctx.setLineDash([4 * dpr, 4 * dpr])
   ctx.beginPath()
-  ctx.moveTo(plotL, yIntf)
-  ctx.lineTo(plotL + plotW, yIntf)
-  ctx.stroke()
-
-  // Jamming threshold (dashed red) — baseline + 3σ
-  const yJam = yAt(band.threshJamming || (band.baselineMean + 3 * band.baselineStd))
-  ctx.strokeStyle = 'rgba(220, 38, 38, 0.85)'
-  ctx.setLineDash([6 * dpr, 3 * dpr])
-  ctx.beginPath()
-  ctx.moveTo(plotL, yJam)
-  ctx.lineTo(plotL + plotW, yJam)
+  ctx.moveTo(plotL, yCut)
+  ctx.lineTo(plotL + plotW, yCut)
   ctx.stroke()
   ctx.setLineDash([])
 
-  // Name both lines. A narrowband neighbour can push the trace well above
-  // the red line while the badge still says CLEAR, which is correct — the
-  // state machine is broadband (occupancy + flatness + dwell), not a
-  // single-bin comparison — but an unlabelled red line under a peak reads
-  // as a broken alarm. Labels sit just inside the right edge, above their
-  // line, and are skipped when the two lines are within a label height of
-  // each other. [MESHSAT-1203]
   if (!props.compact) {
     const fs = Math.round(9 * dpr)
     ctx.font = `${fs}px ui-monospace, SFMono-Regular, Menlo, monospace`
     ctx.textAlign = 'right'
     ctx.textBaseline = 'bottom'
-    const labelX = plotL + plotW - 4 * dpr
-    if (Math.abs(yJam - yIntf) >= fs + 2 * dpr) {
-      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)'
-      ctx.fillText('6σ interference', labelX, yIntf - 2 * dpr)
-    }
-    ctx.fillStyle = 'rgba(248, 113, 113, 0.95)'
-    ctx.fillText('3σ jamming', labelX, yJam - 2 * dpr)
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.9)'
+    ctx.fillText('+6 dB bin-active cutoff', plotL + plotW - 4 * dpr, yCut - 2 * dpr)
   }
 
   // FFT trace fill. Map bin index to x using the SAME convention the
@@ -1123,7 +1111,9 @@ function bandRangeText(name) {
 .sa-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  /* 16px gaps pushed FLATNESS onto a second line at the kit panel's 853 px
+     and left a ragged half-empty row. [MESHSAT-1203] */
+  gap: 10px 14px;
   padding: 6px 10px;
   background: #050b1a;
   border-bottom: 1px solid #0f172a;

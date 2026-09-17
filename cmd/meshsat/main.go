@@ -2265,7 +2265,9 @@ func main() {
 						gateway.GlobalTakEventBus.Publish(
 							gateway.CotEventToRecord(&cotEv, "outbound"))
 					} else {
-						relay.RecordFailure("tak_cot", fmt.Errorf("tak gateway not running"))
+						// Not an error: the kits run without a local TAK
+						// gateway on purpose. [MESHSAT-1203]
+						relay.RecordSkipped("tak_cot", "tak gateway not running")
 					}
 					// Hub: QoS 1 + outbox-queued so the alert survives a
 					// link drop (which is exactly the state a jammed kit

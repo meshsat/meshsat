@@ -229,12 +229,57 @@ export const useSpectrumStore = defineStore('spectrum', () => {
           powers: r.powers || r.Powers || [],
           avg: typeof r.avg_db === 'number' ? r.avg_db : (r.AvgDB ?? 0),
           max: typeof r.max_db === 'number' ? r.max_db : (r.MaxDB ?? 0),
+          state: r.state || r.State || '',
         })
       }
       // Splice seeded rows after any that live-SSE already deposited;
       // both are sorted newest-first so concat keeps the order.
       b.rows = b.rows.concat(seeded).slice(0, WATERFALL_ROWS)
+      seedAlertsFromRows(bandName, b, seeded)
     } catch { /* network transient — SSE will take over in <3 s */ }
+  }
+
+  // seedAlertsFromRows recovers the transitions that happened before this
+  // page was opened. Without it "Recent transitions" said "none recorded in
+  // this session" while the band directly above it sat in INTERFERENCE and
+  // the band-detail page reported the transition perfectly well — the list
+  // was fed by live SSE only. Seeded entries are pre-acked: an operator
+  // arriving after the event should see the history, not a modal about
+  // something that already happened. [MESHSAT-1203]
+  function seedAlertsFromRows(bandName, b, rows) {
+    if (!rows || rows.length < 2) return
+    const bad = st => st === 'jamming' || st === 'interference'
+    // rows are newest-first; walk oldest-first so starts precede clears.
+    const chron = rows.slice().reverse()
+    let open = null
+    for (let i = 1; i < chron.length; i++) {
+      const prev = chron[i - 1].state, cur = chron[i].state
+      if (!prev || !cur || prev === cur) continue
+      if (bad(cur) && !bad(prev)) {
+        open = {
+          band: bandName,
+          label: b.meta?.label || bandName,
+          interfaceID: b.meta?.interfaceID || '',
+          freqLow: b.meta?.freqLow || 0,
+          freqHigh: b.meta?.freqHigh || 0,
+          state: cur,
+          startedAt: chron[i].ts,
+          clearedAt: null,
+          peakDB: chron[i].max,
+          powerDB: chron[i].avg,
+          baselineDB: b.baselineMean || 0,
+          acked: true,
+          fromHistory: true,
+        }
+        alerts.value.push(open)
+      } else if (!bad(cur) && bad(prev) && open) {
+        open.clearedAt = chron[i].ts
+        open = null
+      }
+    }
+    // Newest first, and never let history crowd out live alerts.
+    alerts.value.sort((x, y) => new Date(y.startedAt) - new Date(x.startedAt))
+    alerts.value = alerts.value.slice(0, 60)
   }
 
   // loadRange fetches an explicit time window, used by the per-band
@@ -415,12 +460,12 @@ export const useSpectrumStore = defineStore('spectrum', () => {
           state: b.state || 'calibrating',
           baselineMean: b.baseline_mean || 0,
           baselineStd: b.baseline_std || 0,
-          threshJamming: b.baseline_mean && b.baseline_std
-            ? b.baseline_mean + 3 * b.baseline_std
-            : 0,
-          threshInterference: b.baseline_mean && b.baseline_std
-            ? b.baseline_mean + 6 * b.baseline_std
-            : 0,
+          // The status payload carries the classifier's own cutoff since
+          // MESHSAT-1203. The old fallback (baseline + 3*std / + 6*std) was
+          // from the sigma era and drew the line inside the noise on a band
+          // with a small std; baseline + 6 dB is what the detector uses.
+          threshJamming: b.thresh_jamming_db || (b.baseline_mean ? b.baseline_mean + 6 : 0),
+          threshInterference: b.thresh_interference_db || (b.baseline_mean ? b.baseline_mean + 6 : 0),
           // Calibration progress fields come from the /api/spectrum/status
           // poll only — scan-event payloads don't carry them.
           // calibration_started_at arrives as an RFC3339 string or absent

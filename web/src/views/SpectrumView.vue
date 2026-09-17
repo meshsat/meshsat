@@ -33,6 +33,9 @@ function fmtRemaining(sec) {
   return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`
 }
 
+// The band table is built by the backend, so the count belongs to it too.
+const bandCount = computed(() => Object.keys(store.bands || {}).length)
+
 const historyRows = computed(() => {
   return store.alerts.slice(0, 30).map(a => ({
     ...a,
@@ -107,6 +110,12 @@ const relayRows = computed(() => {
       label: RELAY_LABELS[key] || key,
       successCount: v.success_count || 0,
       errorCount: v.error_count || 0,
+      // A destination that is not configured on this kit is skipped, not
+      // failed. The TAK gateway is off on the field kits by choice and every
+      // spectrum transition used to add a red error. [MESHSAT-1203]
+      skippedCount: v.skipped_count || 0,
+      lastSkippedAt: v.last_skipped_at || '',
+      lastSkipReason: v.last_skip_reason || '',
       lastSuccessAt: v.last_success_at || '',
       lastErrorAt: v.last_error_at || '',
       lastError: v.last_error || '',
@@ -132,9 +141,9 @@ function ago(iso) {
       <div>
         <h1 class="text-lg font-semibold tracking-wide">RF Spectrum Monitor</h1>
         <p class="text-xs text-gray-500 mt-1">
-          RTL-SDR jamming detection across 5 bands. State transitions relay via TAK/CoT to all
-          connected parties and to the hub; the dashboard waterfall visualises the live baseline
-          + per-bin power.
+          RTL-SDR jamming detection across {{ bandCount || 'the kit\'s' }} monitored bands. State
+          transitions relay via TAK/CoT to all connected parties and to the hub; the dashboard
+          waterfall visualises the live baseline + per-bin power.
         </p>
       </div>
       <div class="flex items-center gap-3 text-[11px]">
@@ -249,8 +258,13 @@ function ago(iso) {
             <td class="font-mono" :class="r.errorCount > 0 ? 'text-red-300' : 'text-gray-300'">
               {{ r.errorCount }}
             </td>
-            <td class="text-gray-400 truncate max-w-[320px]" :title="r.lastError">
-              {{ r.lastError || '—' }}
+            <td class="text-gray-400 truncate max-w-[320px]"
+                :title="r.lastError || r.lastSkipReason">
+              <span v-if="r.lastError">{{ r.lastError }}</span>
+              <span v-else-if="r.skippedCount > 0" class="text-gray-500">
+                not configured · {{ r.lastSkipReason }} ({{ r.skippedCount }} skipped)
+              </span>
+              <span v-else>—</span>
             </td>
           </tr>
         </tbody>
@@ -314,7 +328,7 @@ function ago(iso) {
         <div class="text-[11px] text-gray-500">most recent 30 events</div>
       </div>
       <div v-if="historyRows.length === 0" class="text-[11px] text-gray-500 italic py-2">
-        No transitions recorded in this session. Jamming or interference events will appear here.
+        No transitions in the retained history. Jamming or interference events will appear here.
       </div>
       <table v-else class="w-full text-[11px]">
         <thead>

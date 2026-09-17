@@ -86,6 +86,9 @@ function resolveWindow() {
 }
 
 const scanRows = ref([])       // newest-first, from LoadScansRange
+// Rows left out of the waterfall because they were recorded under an earlier
+// frequency window for this band. [MESHSAT-1203]
+const staleRangeRows = ref(0)
 const transitions = ref([])    // newest-first, from LoadTransitionsRange
 const loading = ref(false)
 const loadError = ref('')
@@ -185,10 +188,20 @@ function drawWaterfall() {
   // NEXT (older) row's time. Clamped so a single isolated row still
   // gets a visible 2 px-ish band and a pileup of rows doesn't draw a
   // 1 px-tall band.
+  // A row carries no frequency range of its own, so a row recorded before
+  // this band's window changed would be painted across the CURRENT range and
+  // silently misread: after lora_868 moved from 868.000-868.600 to
+  // 867.800-868.600 its older 24-bin rows would be stretched over the new
+  // 32-bin axis. Bin count is the only range fingerprint a row carries, so
+  // rows that disagree with the newest one are left out and counted.
+  // [MESHSAT-1203]
+  const refBins = (rows[0]?.powers || rows[0]?.Powers || []).length
+  let skippedForRange = 0
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]
     const powers = row?.powers || row?.Powers || []
     if (powers.length === 0) continue
+    if (refBins && powers.length !== refBins) { skippedForRange++; continue }
     const ts = +new Date(row.ts || row.TS)
     const tsNext = r + 1 < rows.length
       ? +new Date(rows[r + 1].ts || rows[r + 1].TS)
@@ -228,6 +241,7 @@ function drawWaterfall() {
       }
     }
   }
+  staleRangeRows.value = skippedForRange
   ctx.putImageData(img, 0, 0)
   // Silence the otherwise-unused newestTs — it's handy when debugging
   // the oldest-row placement; keep the reference so lint doesn't drop it.
@@ -307,8 +321,10 @@ function drawSpectrumOverlay() {
 // timestamp → canvas Y directly using the window bounds.
 const transitionMarkers = computed(() => {
   if (scanRows.value.length === 0) return []
-  const newestTs = +new Date(scanRows.value[0].ts || scanRows.value[0].TS)
-  const oldestTs = +new Date(scanRows.value[scanRows.value.length - 1].ts || scanRows.value[scanRows.value.length - 1].TS)
+  // Window bounds, matching drawWaterfall and timeTicks. [MESHSAT-1203]
+  const { from, to } = resolveWindow()
+  const newestTs = to
+  const oldestTs = from
   const span = newestTs - oldestTs || 1
   const out = []
   for (const t of transitions.value) {
@@ -335,11 +351,17 @@ const transitionMarkers = computed(() => {
 
 // Time-axis tick labels along the right side of the waterfall. Five
 // ticks keeps it readable without clutter.
+// The axis labels the WINDOW, because drawWaterfall paints rows at their
+// true position inside the window. Labelling the row range instead made the
+// two disagree whenever the data covered less than the window: on a freshly
+// created band the axis read 19:31 to 19:54 down the full height while the
+// data sat in the top 8 % of the box, and transition markers landed in the
+// empty part. [MESHSAT-1203]
 const timeTicks = computed(() => {
   if (scanRows.value.length === 0) return []
-  const newest = +new Date(scanRows.value[0].ts || scanRows.value[0].TS)
-  const oldest = +new Date(scanRows.value[scanRows.value.length - 1].ts || scanRows.value[scanRows.value.length - 1].TS)
-  const span = newest - oldest
+  const { from, to } = resolveWindow()
+  const newest = to
+  const span = to - from
   if (span <= 0) return []
   const out = []
   for (let i = 0; i <= 5; i++) {
@@ -551,7 +573,9 @@ function goBack() {
     <!-- Waterfall + transition overlay + time axis -->
     <div class="sd-panel">
       <div class="sd-panel-head">
-        <span>Historical waterfall</span>
+        <span>Historical waterfall<span v-if="staleRangeRows > 0" class="sd-stale">
+          · {{ staleRangeRows }} older row{{ staleRangeRows === 1 ? '' : 's' }} hidden (earlier frequency window)
+        </span></span>
         <span class="sd-legend">
           <span class="dot dot-jamming"></span> jamming
           <span class="dot dot-interference"></span> interference
@@ -591,6 +615,7 @@ function goBack() {
 </template>
 
 <style scoped>
+.sd-stale { color: #fbbf24; font-weight: 400; margin-left: 6px; }
 .sd-root {
   padding: 16px 20px 24px;
   background: #020617;
