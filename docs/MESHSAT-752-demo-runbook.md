@@ -1404,6 +1404,7 @@ Then, through the bridge's own SSE stream, one injected mesh message per kit:
 |---|---|
 | tesseract, one message | queued 16:49:51, `printed on 5A:4A:A1:18:4A:B9 channel 1` 16:49:54 |
 | crossed-only trigger, both ways | tesseract sent one across, printed #3, parallax silent; parallax sent one back, printed #4, tesseract silent |
+| path line on paper | `Meshtastic <> APRS <> Meshtastic`, owner confirmed it fits the width |
 | parallax, one message | queued 16:50:21, printed 16:50:31 (first connect after a restart resolves the RFCOMM channel over SDP; it is cached after that) |
 | both kits at the same instant | tesseract 2 s, parallax 5 s, no retries, no losses — the take-turns design holds |
 | bridge restart (the 16:56:57 deploy, unplanned) | both followers reconnected unaided in ~25 s |
@@ -1414,8 +1415,16 @@ message **crossed**, not proof one arrived. The trigger is the sending kit's own
 delivered/sent on a bearer that leaves the kit — for APRS that status is an ack from the far kit,
 the strongest proof the pair can produce. The local mesh hop is ignored, so **a message nothing
 relays prints nothing**, and the kit that sends it across is the one that prints, not the one that
-heard it. `via` is the delivery's own channel, so a message that fell back says SMS. Expect the slip
-up to ~35 s after the visitor pressed send, with the far handheld lighting up first.
+heard it. Expect the slip up to ~35 s after the visitor pressed send, with the far handheld lighting
+up first.
+
+**The slip prints the whole path**, bold, on its own line: `Meshtastic <> APRS <> Meshtastic`. That
+is exactly 32 characters, which is the paper, so there is no `via` label and no room to indent it -
+the owner's `Meshtastic <--> APRS <--> Meshtastic` is 36 and does not fit, and one arrow is used on
+every slip so souvenirs from the same stand match. Bearer names are shortened for the path line only
+(`APRS 144.800 MHz` inside a path is 48). The first hop is the bearer the message really arrived on,
+so a message that lost the radio prints `APRS <> SMS <> Meshtastic`; the last hop is the relay's
+destination, not something the printing kit watches happen.
 `MESHSAT_PRINTER_TRIGGER=arrival` restores print-on-arrival in one line of config — the way out if it
 misbehaves at the booth.
 
