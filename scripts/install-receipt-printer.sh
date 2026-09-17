@@ -64,6 +64,14 @@ if [ -f "${SRC}/meshsat-logo.raster" ]; then
   install -m 0644 "${SRC}/meshsat-logo.raster" /usr/local/share/meshsat/meshsat-logo.raster
   echo "   installed logo raster"
 fi
+# The hat, printed on the milestone slip only (make-hat-raster.py on a dev box).
+if [ -f "${SRC}/meshsat-hat.raster" ]; then
+  install -d -m 0755 /usr/local/share/meshsat
+  install -m 0644 "${SRC}/meshsat-hat.raster" /usr/local/share/meshsat/meshsat-hat.raster
+  echo "   installed hat raster"
+fi
+# Where the slip counter lives. Created here so the first slip does not have to.
+install -d -m 0755 /var/lib/meshsat
 
 # --- 3. Per-kit configuration ------------------------------------------------
 # Written once, then left alone: the MAC and callsign differ per kit and an
