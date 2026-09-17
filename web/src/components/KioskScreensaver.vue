@@ -11,7 +11,14 @@
 // URL overrides, sticky for the tab: ?saverMs=<idle> (0 disables),
 // ?saverShowMs=<poster duration>, ?saverEveryMs=<repeat period>.
 // [MESHSAT-826]
+//
+// Two posters since 17 Sep 2026, shown in turn (owner: the S27 poster is a
+// second slide, the bears poster is NOT replaced). The bears keep the first
+// appearance after a load, so a panel behaves as it always has; the stand
+// poster follows. ?saverSlide=bears|s27 pins one, for auditing a single
+// poster without waiting a full period. [MESHSAT-1154]
 import { ref, onMounted, onUnmounted } from 'vue'
+import PosterStandS27 from '@/components/PosterStandS27.vue'
 
 function setting(key, def) {
   let v = def
@@ -34,12 +41,30 @@ const EVERY_MS = setting('saverEveryMs', 240_000)
 const shown = ref(false)
 let timer = 0
 
+// Which poster this appearance shows. `pinned` is the audit override; without
+// it the two alternate, starting with the bears.
+const SLIDES = ['bears', 's27']
+let pinned = ''
+try {
+  const q = new URLSearchParams(window.location.search || '').get('saverSlide')
+  if (q) { pinned = q; try { sessionStorage.setItem('meshsat.saverSlide', q) } catch {} }
+  else pinned = sessionStorage.getItem('meshsat.saverSlide') || ''
+} catch {}
+const slide = ref(SLIDES.includes(pinned) ? pinned : SLIDES[0])
+let slideIdx = 0
+function nextSlide() {
+  if (SLIDES.includes(pinned)) { slide.value = pinned; return }
+  slide.value = SLIDES[slideIdx % SLIDES.length]
+  slideIdx += 1
+}
+
 function schedule(ms, fn) {
   if (timer) clearTimeout(timer)
   timer = 0
   if (ms > 0) timer = setTimeout(fn, ms)
 }
 function show() {
+  nextSlide()
   shown.value = true
   schedule(SHOW_MS, hide)
 }
@@ -88,7 +113,8 @@ onUnmounted(() => {
   <Transition name="saver">
     <div v-if="shown" class="saver fixed inset-0 z-[200] bg-black select-none" role="presentation"
          @pointerdown="swallow" @touchstart="swallow" @pointerup="dismiss" @click="dismiss" @keydown="dismiss">
-      <img src="/screensaver-bears.png" alt="" class="w-full h-full object-contain" draggable="false" />
+      <img v-if="slide === 'bears'" src="/screensaver-bears.png" alt="" class="w-full h-full object-contain" draggable="false" />
+      <PosterStandS27 v-else />
     </div>
   </Transition>
 </template>
