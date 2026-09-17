@@ -68,8 +68,22 @@ func (b Band) EffectiveCropPad() int {
 // would be caught by the modem's own RSSI/SNR reporting.
 var DefaultBands = []Band{
 	{
+		// Low edge moved 868.000 -> 867.800 on 17 Sep 2026 (MESHSAT-1203).
+		// With the window starting at 868.000 a neighbouring carrier below
+		// it cut into the picture instead of appearing in it: bin 0 read
+		// -35 to -49 dB against a -62/-64 floor on BOTH kits, on roughly
+		// every other scan, with a monotonic skirt over bins 1-3. That is
+		// real RF, not an artifact — a tuner DC spike sits at the tuned
+		// centre (868.30 for the old window) and is constant, this is
+		// bursty and 20+ dB, far past the +3-4 dB IF rolloff CropPad
+		// covers. A 867.9 LoRaWAN uplink (125 kHz wide, so 867.8375 to
+		// 867.9625) fits the shape exactly. Cropping cannot help: the
+		// energy lands inside the reported range. Widening does, because
+		// the carrier then has its own bins to sit in and stops being read
+		// as the band's peak, and 868.1/868.3/868.5 are untouched.
+		// 800 kHz + 2 crop bins each side = 0.9 MHz, still one tune.
 		Name:        "lora_868",
-		FreqLow:     868000000,
+		FreqLow:     867800000,
 		FreqHigh:    868600000,
 		BinSize:     25000,
 		InterfaceID: "mesh_0",
