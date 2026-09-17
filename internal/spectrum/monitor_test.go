@@ -110,8 +110,12 @@ func TestBaselineStats_FiltersInfNaN(t *testing.T) {
 func TestBaselineStats_WithVariance(t *testing.T) {
 	values := []float64{-44.0, -46.0, -44.0, -46.0}
 	mean, std, mad := baselineStats(values)
-	if mean != -45.0 {
-		t.Fatalf("mean: got %f, want -45.0", mean)
+	// The level is a noise-FLOOR estimator (25th percentile) since
+	// MESHSAT-1203, not the arithmetic mean: half these samples carry
+	// something, and the floor of this set is -46. Std and MAD are
+	// unchanged, and still describe the spread. [MESHSAT-1203]
+	if mean != -46.0 {
+		t.Fatalf("level: got %f, want -46.0 (25th percentile)", mean)
 	}
 	if std != 1.0 {
 		t.Fatalf("std: got %f, want 1.0", std)
