@@ -13,10 +13,11 @@
 // [MESHSAT-826]
 //
 // Two posters since 17 Sep 2026, shown in turn (owner: the S27 poster is a
-// second slide, the bears poster is NOT replaced). The bears keep the first
-// appearance after a load, so a panel behaves as it always has; the stand
-// poster follows. ?saverSlide=bears|s27 pins one, for auditing a single
-// poster without waiting a full period. [MESHSAT-1154]
+// second slide, the bears poster is NOT replaced). Which one leads does not
+// matter - they rotate. Adding a third is one entry in SLIDES plus its branch
+// in the template, and the rotation picks it up with no other change.
+// ?saverSlide=bears|s27 pins one, for auditing a single poster without waiting
+// a full period. [MESHSAT-1201]
 import { ref, onMounted, onUnmounted } from 'vue'
 import PosterStandS27 from '@/components/PosterStandS27.vue'
 
@@ -36,7 +37,13 @@ function setting(key, def) {
 }
 const IDLE_MS = setting('saverMs', 180_000)
 const SHOW_MS = setting('saverShowMs', 20_000)
-const EVERY_MS = setting('saverEveryMs', 240_000)
+// One poster about every minute while the panel stays untouched (owner, 17 Sep
+// 2026: "it should rotate between the bears and the rest and the new one every
+// minute or so"). With SHOW_MS at 20 s that is 20 s of poster and 40 s of the
+// live screen, and the next poster in the list each time, so a passer-by sees a
+// different one on almost every glance. It was 4 minutes, which with two posters
+// meant the same one came back after eight. [MESHSAT-1201]
+const EVERY_MS = setting('saverEveryMs', 60_000)
 
 const shown = ref(false)
 let timer = 0
