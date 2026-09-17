@@ -27,7 +27,10 @@ Config: /etc/default/meshsat-receipt-printer
     MESHSAT_PRINTER_FEED_BEFORE=3            blank lines before the logo
     MESHSAT_PRINTER_FEED_AFTER=8             blank lines after the URL, for the tear
     MESHSAT_PRINTER_STRAPLINE=a|b|c          bold lines under the callsign; empty = none
-    MESHSAT_PRINTER_COUNT=/var/lib/meshsat/receipt-count   this kit's slip counter
+    MESHSAT_PRINTER_COUNT=/var/lib/meshsat/receipt-count   the shared slip counter
+    MESHSAT_PRINTER_PEER=host:6051[,host2:6051]   the other kit, for one shared sequence
+    MESHSAT_PRINTER_PEER_TIMEOUT=1.5         seconds to wait on the peer
+    MESHSAT_PRINTER_COUNT_PORT=6051          where this kit serves its own number
     MESHSAT_PRINTER_MILESTONE=666            extra bold line every n slips; 0 = never
     MESHSAT_PRINTER_MILESTONE_TEXT=...       that line, {n} is the slip number
 
@@ -140,8 +143,8 @@ def ascii_only(s: str) -> str:
 
 
 def read_count(path) -> int:
-    """Slips printed by THIS kit. Two kits share one printer, so each keeps its
-    own sequence; the booth total is the two files added up."""
+    """Last slip number this kit knows about. Both kits track the SAME sequence:
+    one printer on the table means one run of slips, whichever kit fed it."""
     try:
         with open(path) as fh:
             return int((fh.read() or "0").strip())
@@ -160,6 +163,82 @@ def write_count(path, n, log) -> None:
         os.replace(tmp, path)
     except OSError as exc:                              # noqa: BLE001
         log(f"could not record slip count: {exc}")
+
+
+# ── one sequence across both kits ──────────────────────────────────────────────
+# Two kits feed one printer, so a per-kit counter numbered the same slip twice and
+# would have owed two hats at 666 (owner, 17 Sep 2026, from the booth bench: "i sent
+# a message from one deck to the other; print happened; serial number 1 -> vice versa
+# ... again serial number 1 -> this is WRONG"). Each service now serves its number on
+# MESHSAT_PRINTER_COUNT_PORT and reads the peer's before it prints, so the two files
+# converge on one run of slips. No shared filesystem and no master: a kit on its own
+# keeps printing and catches up the moment the other answers again.
+
+def peer_count(peers, timeout, log) -> int:
+    """Highest number any reachable peer has printed. Unreachable is normal - the
+    other kit may be off, on the other WiFi, or still booting."""
+    best = 0
+    for addr in peers:
+        try:
+            with urllib.request.urlopen(f"http://{addr}/count", timeout=timeout) as r:
+                best = max(best, int(json.load(r).get("count", 0)))
+            break                                   # first address that answers wins
+        except Exception:                           # noqa: BLE001
+            continue
+    return best
+
+
+def push_count(peers, n, timeout, log) -> None:
+    """Tell the peer where the sequence has got to. Best effort: the max() on the
+    next print recovers whatever is lost here."""
+    body = json.dumps({"count": n}).encode()
+    for addr in peers:
+        try:
+            req = urllib.request.Request(f"http://{addr}/count", data=body,
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=timeout).close()
+            return
+        except Exception:                           # noqa: BLE001
+            continue
+
+
+def serve_count(cfg, log):
+    """A three-line HTTP server so the other kit can read and raise our number."""
+    import http.server
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _send(self, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):                           # noqa: N802
+            self._send({"count": read_count(cfg["count_path"])})
+
+        def do_POST(self):                          # noqa: N802
+            try:
+                size = int(self.headers.get("Content-Length") or 0)
+                n = int(json.loads(self.rfile.read(size)).get("count", 0))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                n = 0
+            # Only ever forward. A stale push must not rewind the sequence.
+            if n > read_count(cfg["count_path"]):
+                write_count(cfg["count_path"], n, log)
+            self._send({"count": read_count(cfg["count_path"])})
+
+        def log_message(self, *a):                  # noqa: A003 - quiet
+            pass
+
+    try:
+        srv = http.server.ThreadingHTTPServer(("", cfg["count_port"]), Handler)
+    except OSError as exc:                          # noqa: BLE001
+        log(f"slip counter not served on :{cfg['count_port']}: {exc}")
+        return
+    log(f"slip counter served on :{cfg['count_port']}")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
 def build_slip(msg: dict, cfg: dict, serial: int = 0) -> bytes:
@@ -337,14 +416,20 @@ class SlipQueue(threading.Thread):
                 self._print_with_retry(msg)
 
     def _print_with_retry(self, msg):
-        # The number is reserved before the first attempt and committed only
-        # when paper came out, so retries reuse it and a slip that is given up
-        # never burns one.
-        serial = read_count(self.cfg["count_path"]) + 1
-        payload = build_slip(msg, self.cfg, serial)
-        for attempt in range(1, self.cfg["attempts"] + 1):
+        cfg = self.cfg
+        for attempt in range(1, cfg["attempts"] + 1):
+            # Worked out again on EVERY attempt, not once up front. The usual
+            # reason an attempt fails is the other kit holding the printer's one
+            # RFCOMM slot, and by the time we retry it has printed and moved the
+            # sequence on - so this is also what keeps two kits that collide from
+            # claiming the same number.
+            serial = max(read_count(cfg["count_path"]),
+                         peer_count(cfg["peers"], cfg["peer_timeout"], self.log)) + 1
+            payload = build_slip(msg, cfg, serial)
             if self.printer.print_slip(payload):
-                write_count(self.cfg["count_path"], serial, self.log)
+                # Committed only now: a slip that is never printed burns no number.
+                write_count(cfg["count_path"], serial, self.log)
+                push_count(cfg["peers"], serial, cfg["peer_timeout"], self.log)
                 self.log(f"slip #{serial} printed")
                 return
             # The far likeliest failure is the other kit holding the one RFCOMM
@@ -467,6 +552,12 @@ def load_config(args):
         "strapline": [s for s in env("MESHSAT_PRINTER_STRAPLINE", DEFAULT_STRAPLINE).split("|")
                       if s.strip()],
         "count_path": env("MESHSAT_PRINTER_COUNT", "/var/lib/meshsat/receipt-count"),
+        # The other kit, so the two share one run of slips. Comma-separated because
+        # each kit answers on two names: the house LAN one and the -field one behind
+        # the Mudi (MESHSAT-1182). First address that answers wins.
+        "peers": [a.strip() for a in env("MESHSAT_PRINTER_PEER", "").split(",") if a.strip()],
+        "peer_timeout": float(env("MESHSAT_PRINTER_PEER_TIMEOUT", "1.5")),
+        "count_port": int(env("MESHSAT_PRINTER_COUNT_PORT", "6051") or 6051),
         "milestone": int(env("MESHSAT_PRINTER_MILESTONE", "666") or 0),
         "milestone_text": env("MESHSAT_PRINTER_MILESTONE_TEXT",
                               "Ask us for your hat  \\m/"),
@@ -501,10 +592,14 @@ def main():
         log("self-test printed" if ok else "self-test FAILED")
         return 0 if ok else 1
 
+    if not args.mock:
+        serve_count(cfg, log)
     queue = SlipQueue(printer, cfg, log)
     queue.start()
     log(f"callsign {cfg['callsign']}, printer "
-        f"{cfg['mac'] or 'by name: ' + cfg['name']}, bridge {cfg['bridge']}")
+        f"{cfg['mac'] or 'by name: ' + cfg['name']}, bridge {cfg['bridge']}, "
+        f"slips at #{read_count(cfg['count_path'])}, "
+        f"peer {','.join(cfg['peers']) or 'none (this kit counts alone)'}")
     follow(cfg["bridge"], queue, cfg, log)
     return 0
 
