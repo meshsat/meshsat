@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Booth receipt printer: a slip for every message that arrives on THIS kit. [MESHSAT-1154]
+"""Booth receipt printer: a slip for every message that MADE IT ACROSS. [MESHSAT-1154]
 
 Owner ruling 16 Sep 2026, and the whole design in one line: a message arrives on a kit,
 that kit searches for the printer, connects over Bluetooth, prints, then disconnects.
@@ -8,8 +8,11 @@ The link is never held open, so both kits share one printer by taking turns.
 Runs on the kit host (same pattern as x1202-monitor and the OOB agent): systemd unit,
 starts at boot, hand-installed, nothing in the bridge and nothing in the container.
 
-It follows the bridge's own SSE stream on localhost and prints `type: "message"` events
-carrying text. No peer stream, no laptop, no dependency on the other kit being up.
+It follows the bridge's own SSE stream on localhost. Since 17 Sep 2026 a slip is proof a
+message CROSSED, not proof one arrived: the trigger is a `delivery_*` event reaching
+delivered/sent on a bearer that leaves this kit (APRS, SMS, satellite, Hub), never the
+local mesh hop. A message nothing relays prints nothing.
+MESHSAT_PRINTER_TRIGGER=arrival restores the old print-on-arrival behaviour.
 
 Stdlib only: RFCOMM through socket.AF_BLUETOOTH, ESC/POS written by hand (python-escpos
 and PyBluez are not installed on the kits and will not be added days before an event).
@@ -27,6 +30,8 @@ Config: /etc/default/meshsat-receipt-printer
     MESHSAT_PRINTER_FEED_BEFORE=3            blank lines before the logo
     MESHSAT_PRINTER_FEED_AFTER=8             blank lines after the URL, for the tear
     MESHSAT_PRINTER_STRAPLINE=a|b|c          bold lines under the callsign; empty = none
+    MESHSAT_PRINTER_TRIGGER=crossed          crossed = print when it made it across;
+                                            arrival = print when it lands here
     MESHSAT_PRINTER_COUNT=/var/lib/meshsat/receipt-count   the shared slip counter
     MESHSAT_PRINTER_PEER=host:6051[,host2:6051]   the other kit, for one shared sequence
     MESHSAT_PRINTER_PEER_TIMEOUT=1.5         seconds to wait on the peer
@@ -446,20 +451,53 @@ class SlipQueue(threading.Thread):
 
 # ── Bridge event stream ────────────────────────────────────────────────────────
 def node_id(num):
+    """SSE events carry the node as a number, stored rows as `!de11f199` already."""
+    if isinstance(num, str) and num.startswith("!"):
+        return num
     try:
         return f"!{int(num):08x}"
     except (TypeError, ValueError):
         return ""
 
 
-# What the visitor reads on the slip. The event itself only carries the portnum, so the
-# bearer comes from the stored row's `transport` — getting "via" wrong on a slip someone
-# takes home is worse than printing nothing at all.
+# What the visitor reads on the slip. Getting "via" wrong on something someone takes
+# home is worse than printing nothing at all, so it is the delivery's own channel: the
+# bearer that actually carried the message off this kit.
 BEARER_LABEL = {
     "radio": "Meshtastic", "mesh": "Meshtastic", "aprs": "APRS 144.800 MHz",
     "cellular": "SMS", "sms": "SMS", "sbd": "Iridium SBD", "imt": "Iridium IMT",
+    "iridium": "Iridium SBD", "iridium_imt": "Iridium IMT", "reticulum": "Reticulum",
     "zigbee": "ZigBee", "ble": "Bluetooth LE", "hub": "MeshSat Hub",
 }
+FRAG_PREFIX = re.compile(r"^\[frag \d+/\d+\]\s*")
+
+
+def channel_label(channel: str) -> str:
+    """`aprs_0` -> "APRS 144.800 MHz", `iridium_imt_0` -> "Iridium IMT"."""
+    base = re.sub(r"_\d+$", "", channel or "")
+    return BEARER_LABEL.get(base, base or "radio")
+
+
+def lookup_sender(bridge, text, log):
+    """The delivery event carries the text cut at 120 characters and nothing about who
+    sent it. The message this kit heard is in its own store, so find it there for the
+    full text, the sending node and the time it arrived. Best effort: a slip still
+    prints from the event alone if this fails."""
+    try:
+        with urllib.request.urlopen(f"{bridge}/api/messages?limit=40", timeout=5) as r:
+            body = json.load(r)
+    except Exception as exc:                            # noqa: BLE001
+        log(f"sender lookup failed: {exc}")
+        return text, "", ""
+    rows = body if isinstance(body, list) else body.get("messages", body.get("data", []))
+    for row in rows or []:
+        if (row.get("direction") or "") != "rx":
+            continue
+        stored = (row.get("decoded_text") or "").strip()
+        if stored and (stored == text or stored.startswith(text)):
+            return (stored, node_id(row.get("from_node") or row.get("from")),
+                    (row.get("created_at") or "").replace("T", " ")[:19])
+    return text, "", ""
 
 
 def lookup_bearer(bridge, packet_id, log):
@@ -497,26 +535,65 @@ def follow(url, queue, cfg, log):
                         ev = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
-                    if ev.get("type") != "message":
-                        continue
+                    ev_type = ev.get("type") or ""
                     data = ev.get("data") or {}
-                    text = (data.get("decoded_text") or "").strip()
+                    if cfg["trigger"] == "arrival":
+                        # The old behaviour, kept as a way back: print the moment a
+                        # message lands on this kit, whether or not it goes anywhere.
+                        if ev_type != "message":
+                            continue
+                        text = (data.get("decoded_text") or "").strip()
+                        if not text:
+                            continue
+                        key = data.get("id") or f"{data.get('rx_time')}:{text}"
+                        if key in seen:
+                            continue
+                        seen.append(key)
+                        queue.submit({
+                            "id": key, "text": text,
+                            "from": node_id(data.get("from")),
+                            "bearer": lookup_bearer(cfg["bridge"], data.get("id"), log)
+                                      or "Meshtastic",
+                            "when": (data.get("timestamp") or "").replace("T", " ")[:19]
+                                    or time.strftime("%Y-%m-%d %H:%M:%S"),
+                        })
+                        log(f"queued slip for message {key}")
+                        continue
+
+                    # Default: a slip is proof a message CROSSED, not proof one
+                    # arrived. Owner, 17 Sep 2026: "the message printed should only be
+                    # the one that made it through the flow deck -> fieldkit ->
+                    # fieldkit -> deck". So the trigger is this kit's own delivery
+                    # completing on a bearer that leaves the kit - for APRS that is an
+                    # ack from the far kit, which is the strongest proof the pair can
+                    # produce. A message nothing relays now prints nothing.
+                    if not ev_type.startswith("delivery_"):
+                        continue
+                    status = (data.get("status") or ev_type[len("delivery_"):]).lower()
+                    if status not in ("delivered", "sent"):
+                        continue
+                    if (data.get("class") or "message") != "message":
+                        continue          # OOB and management frames are not messages
+                    channel = data.get("channel") or ""
+                    if channel.startswith("mesh"):
+                        continue          # the local mesh hop, not a crossing
+                    ref = data.get("msg_ref") or ""
+                    # One slip per journey. An SMS-sized message is fragmented into
+                    # several deliveries that all share the msg_ref, so this is also
+                    # what stops a long message printing three times.
+                    if not ref or ref in seen:
+                        continue
+                    text = FRAG_PREFIX.sub("", (data.get("text_preview") or "").strip())
                     if not text:
                         continue
-                    key = data.get("id") or f"{data.get('rx_time')}:{text}"
-                    if key in seen:
-                        continue
-                    seen.append(key)
+                    seen.append(ref)
+                    text, sender, when = lookup_sender(cfg["bridge"], text, log)
                     queue.submit({
-                        "id": key,
-                        "text": text,
-                        "from": node_id(data.get("from")),
-                        "bearer": lookup_bearer(cfg["bridge"], data.get("id"), log)
-                                  or "Meshtastic",
-                        "when": (data.get("timestamp") or "").replace("T", " ")[:19]
-                                or time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "id": ref, "text": text, "from": sender,
+                        "bearer": channel_label(channel),
+                        "when": when or time.strftime("%Y-%m-%d %H:%M:%S"),
                     })
-                    log(f"queued slip for message {key}")
+                    log(f"queued slip for {ref}, crossed on {channel}")
         except Exception as exc:                       # noqa: BLE001 — never exit
             log(f"event stream: {exc}; reconnecting in {backoff}s")
             time.sleep(backoff)
@@ -551,6 +628,10 @@ def load_config(args):
         # Bold line under the callsign, "|" between lines. Empty = no strapline.
         "strapline": [s for s in env("MESHSAT_PRINTER_STRAPLINE", DEFAULT_STRAPLINE).split("|")
                       if s.strip()],
+        # "crossed" (default): print when this kit's delivery completes on a bearer
+        # that leaves the kit, i.e. the message made it to the other side.
+        # "arrival": the old behaviour, print the moment a message lands here.
+        "trigger": env("MESHSAT_PRINTER_TRIGGER", "crossed").strip().lower(),
         "count_path": env("MESHSAT_PRINTER_COUNT", "/var/lib/meshsat/receipt-count"),
         # The other kit, so the two share one run of slips. Comma-separated because
         # each kit answers on two names: the house LAN one and the -field one behind
