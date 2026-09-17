@@ -1188,7 +1188,24 @@ func main() {
 	// cycle that brings it back) is attached at runtime by
 	// AttachWhenPresent instead of waiting for the next container
 	// restart. [MESHSAT-1002]
-	spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrum.DefaultBands)
+	// The mesh-bound band is static, because a radio's frequency is a
+	// property of the radio and not of the moment. The region is the one
+	// input that is not ours to assume, so MESHSAT_SPECTRUM_MESH_BAND
+	// retunes the band for a region this build has no slot for, and the
+	// check below compares the band against what the radio actually
+	// reports. [MESHSAT-1203]
+	spectrumBands := spectrum.DefaultBands
+	if spec := os.Getenv("MESHSAT_SPECTRUM_MESH_BAND"); spec != "" {
+		retuned, err := spectrum.ApplyMeshBandOverride(spectrumBands, spec)
+		if err != nil {
+			log.Warn().Err(err).Str("spec", spec).
+				Msg("spectrum: MESHSAT_SPECTRUM_MESH_BAND ignored, using the default mesh band")
+		} else {
+			spectrumBands = retuned
+			log.Info().Str("spec", spec).Msg("spectrum: mesh band retuned from the environment")
+		}
+	}
+	spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrumBands)
 	if signingService != nil {
 		spectrumMon.SetSigningService(signingService)
 	}
@@ -1208,6 +1225,48 @@ func main() {
 		log.Info().Int("retention_hours", spectrum.ClampRetention(retention)).
 			Msg("spectrum: history persistence enabled")
 	}
+	// Say it out loud when the mesh band and the radio disagree. Between
+	// April and 17 Sep 2026 the band bound to mesh_0 sat at 868.0-868.6
+	// while an EU_868 radio transmits at 869.4-869.65, so the mesh had no
+	// jamming detection and nobody could see that from the outside.
+	// [MESHSAT-1203]
+	if mesh != nil {
+		go func(bands []spectrum.Band) {
+			for attempt := 0; attempt < 20; attempt++ {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(15 * time.Second):
+				}
+				cfg, err := mesh.GetConfig(ctx)
+				if err != nil || cfg == nil {
+					continue
+				}
+				region := transport.LoraRegionName(cfg)
+				if region == "UNSET" {
+					continue
+				}
+				band, ok, checked := spectrum.MeshBandCoversRegion(bands, region)
+				switch {
+				case !checked:
+					log.Info().Str("region", region).Str("band", band.Name).
+						Msg("spectrum: no mesh slot known for this region, set MESHSAT_SPECTRUM_MESH_BAND if the mesh band is wrong")
+				case ok:
+					log.Info().Str("region", region).Str("band", band.Name).
+						Int("freq_low", band.FreqLow).Int("freq_high", band.FreqHigh).
+						Msg("spectrum: mesh band covers the radio's region")
+				default:
+					low, high, _ := spectrum.MeshRegionSlot(region)
+					log.Warn().Str("region", region).Str("band", band.Name).
+						Int("band_low", band.FreqLow).Int("band_high", band.FreqHigh).
+						Int("region_low", low).Int("region_high", high).
+						Msg("spectrum: the mesh band does NOT cover the radio's region, mesh jamming detection is watching the wrong frequency")
+				}
+				return
+			}
+		}(spectrumBands)
+	}
+
 	if rtlScanner != nil {
 		spectrumMon.Start(ctx)
 		log.Info().Msg("spectrum monitor started (RTL-SDR detected)")

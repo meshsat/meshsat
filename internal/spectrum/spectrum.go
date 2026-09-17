@@ -82,12 +82,36 @@ var DefaultBands = []Band{
 		// the carrier then has its own bins to sit in and stops being read
 		// as the band's peak, and 868.1/868.3/868.5 are untouched.
 		// 800 kHz + 2 crop bins each side = 0.9 MHz, still one tune.
+		//
+		// NOT bound to an interface since 17 Sep 2026 (MESHSAT-1203). This
+		// window watches the 868 ISM sub-band, where 867.9 and 868.5 are
+		// standard LoRaWAN uplink channels (both measured on both kits), and
+		// the mesh is not here at all — see mesh_band.go. While it was bound
+		// to mesh_0 a hall full of LoRaWAN gateways would have scored as the
+		// mesh being jammed. It stays in the scan because it is the busiest
+		// band the kit can see and it says something true about the site.
 		Name:        "lora_868",
 		FreqLow:     867800000,
 		FreqHigh:    868600000,
 		BinSize:     25000,
-		InterfaceID: "mesh_0",
-		Label:       "LoRa EU868",
+		InterfaceID: "",
+		Label:       "LoRa EU868 ISM",
+	},
+	{
+		// The band that actually watches the Meshtastic link: the EU_868
+		// "g3" slot, 869.4-869.65, with 75 kHz of margin each side so the
+		// channel's shoulders are inside the picture rather than smeared up
+		// the wall. LongFast sits at 869.525. 450 kHz + 4 crop bins each
+		// side = 0.65 MHz, one tune. Full reasoning in mesh_band.go;
+		// MESHSAT_SPECTRUM_MESH_BAND retunes it for another region.
+		// [MESHSAT-1203]
+		Name:        "mesh_869",
+		FreqLow:     869300000,
+		FreqHigh:    869750000,
+		BinSize:     25000,
+		InterfaceID: MeshInterfaceID,
+		Label:       "Meshtastic EU868",
+		CropPad:     4,
 	},
 	{
 		Name:        "aprs_144",

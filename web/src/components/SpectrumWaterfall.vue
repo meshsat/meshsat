@@ -48,7 +48,7 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const BAND_ORDER = ['lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
+const BAND_ORDER = ['mesh_869', 'lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
 const orderedBands = computed(() => {
   const keys = Object.keys(store.bands)
   return BAND_ORDER.filter(b => keys.includes(b)).concat(
@@ -688,7 +688,7 @@ function bandRangeText(name) {
 <template>
   <div class="sa-root" :class="{ 'sa-compact': compact }">
     <div class="sa-head">
-      <h3>RF SPECTRUM — 5 monitored bands</h3>
+      <h3>RF SPECTRUM — {{ orderedBands.length }} monitored bands</h3>
       <div class="sa-head-right">
         <button v-if="!compact" type="button" class="sa-pause"
                 :class="{ paused: store.paused }"

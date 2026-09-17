@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"meshsat/internal/transport"
 )
 
 // RadioSetupStatus represents the detected configuration state of the connected Meshtastic device.
@@ -28,29 +30,6 @@ type RadioSetupIssue struct {
 
 // defaultNamePattern matches the factory-default Meshtastic node name "Meshtastic XXXX".
 var defaultNamePattern = regexp.MustCompile(`(?i)^meshtastic[_ ][0-9a-f]{4}$`)
-
-// loraRegionNames maps the Meshtastic RegionCode enum values to human-readable names.
-var loraRegionNames = map[int]string{
-	0:  "UNSET",
-	1:  "US",
-	2:  "EU_433",
-	3:  "EU_868",
-	4:  "CN",
-	5:  "JP",
-	6:  "ANZ",
-	7:  "KR",
-	8:  "TW",
-	9:  "RU",
-	10: "IN",
-	11: "NZ_865",
-	12: "TH",
-	13: "LORA_24",
-	14: "UA_433",
-	15: "UA_868",
-	16: "MY_433",
-	17: "MY_919",
-	18: "SG_923",
-}
 
 // handleGetRadioSetup detects whether the connected Meshtastic device is unconfigured.
 // @Summary Detect radio setup status
@@ -114,12 +93,10 @@ func (s *Server) handleGetRadioSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect LoRa region from config_6 (LoRa config, protobuf field 6 in Config oneof)
-	region := detectLoraRegion(config)
-	if name, ok := loraRegionNames[region]; ok {
-		result.Region = name
-	} else {
-		result.Region = fmt.Sprintf("UNKNOWN(%d)", region)
-	}
+	// Region extraction lives in internal/transport: the spectrum monitor
+	// checks its mesh band against the same value. [MESHSAT-1203]
+	region := transport.LoraRegionCode(config)
+	result.Region = transport.LoraRegionName(config)
 
 	if region == 0 {
 		result.Issues = append(result.Issues, RadioSetupIssue{
@@ -156,42 +133,6 @@ func (s *Server) handleGetRadioSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
-}
-
-// detectLoraRegion extracts the region enum value from the LoRa config section.
-// Config oneof field 6 = LoRa config; within that, field 7 = region enum.
-// Returns 0 (UNSET) if the config is missing or region is not set.
-func detectLoraRegion(config map[string]interface{}) int {
-	// configData keys: "config_1" (device), "config_6" (lora), etc.
-	// The key is "config_<protobuf_field_number>" where lora = field 6.
-	loraRaw, ok := config["config_6"]
-	if !ok {
-		return 0
-	}
-
-	loraMap, ok := loraRaw.(map[string]interface{})
-	if !ok {
-		return 0
-	}
-
-	// Field 7 in LoRa config = region enum
-	regionVal, ok := loraMap["7"]
-	if !ok {
-		return 0
-	}
-
-	switch v := regionVal.(type) {
-	case uint64:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return 0
-	}
 }
 
 // isDefaultChannel checks if channel_0 appears to have factory default settings.

@@ -2,11 +2,17 @@
   "eccm": {
     "_doc": "ECCM (Electronic Counter-Counter-Measures) recommended actions per band and state. Keyed by band name + state ('interference', 'jamming', 'degraded'). Source: FM 3-12 Cyberspace and Electronic Warfare Operations. Keep strings short — they render in a 1-line red banner and in a quick-reference table.",
     "bands": {
+      "mesh_869": {
+        "short": "Mesh 869.5",
+        "interference": "Narrowband interferer in the EU868 g3 slot. Raise the spreading factor or move the mesh channel.",
+        "jamming": "Barrage on the mesh channel. Relay via Iridium SBD or APRS; report MIJI-9 (freq, time, duration) to the hub.",
+        "degraded": "Sustained elevation on the mesh channel — monitor; if >5 min, move channel."
+      },
       "lora_868": {
-        "short": "LoRa EU868",
-        "interference": "Narrowband interferer on EU868. Shift to alt LoRa sub-band (867.X) or ramp spreading factor.",
-        "jamming": "Barrage on EU868 (ISM). Switch mesh to Iridium SBD relay; report MIJI-9 (freq, time, duration) to hub.",
-        "degraded": "Sustained elevation — monitor; if >5 min, shift to alt sub-band."
+        "short": "868 ISM",
+        "interference": "Busy 868 ISM sub-band — 867.9 and 868.5 are LoRaWAN uplink channels. The mesh is not here; informational only.",
+        "jamming": "Wideband energy across 868 ISM. The mesh (869.5) is unaffected; note it for the site survey.",
+        "degraded": "868 ISM traffic above the usual floor — expected at an event. No action."
       },
       "aprs_144": {
         "short": "APRS 144.8",
