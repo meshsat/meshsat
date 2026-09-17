@@ -1276,12 +1276,25 @@ func baselineStats(values []float64) (mean, std, mad float64) {
 		return 0, 0, 0
 	}
 
-	var sum float64
-	for _, v := range finite {
-		sum += v
-	}
-	mean = sum / float64(len(finite))
+	// The level is the MEDIAN, not the arithmetic mean. Calibration runs
+	// for 30 s on a live band, and on a band that carries our own radio a
+	// couple of transmissions land inside that window: each one is 40 dB
+	// over the floor, so the mean is dragged up several dB and every
+	// threshold derived from it goes deaf. Measured on the kits 17 Sep 2026
+	// with the mean in place: mesh_869 calibrated to -59.2 dB with a std of
+	// 7.87 and a MAD of 0.028 — the MAD says almost every sample was
+	// identical and a handful of outliers moved the level by 4 dB. The
+	// median ignores them, and on a quiet band it agrees with the mean to
+	// well inside 0.1 dB, so nothing else changes. ITU-R SM.1880 Annex 2 §5
+	// asks for robust estimators here for exactly this reason.
+	// [MESHSAT-1203]
+	sortedVals := make([]float64, len(finite))
+	copy(sortedVals, finite)
+	sort.Float64s(sortedVals)
+	mean = median(sortedVals)
 
+	// Spread stays measured about the level, so a bursty band still
+	// reports an honest ± on screen.
 	var sumSq float64
 	for _, v := range finite {
 		d := v - mean
