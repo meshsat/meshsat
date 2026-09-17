@@ -352,6 +352,8 @@ func (g *APRSGateway) handleAckReply(pkt *APRSPacket, id string, reject bool) {
 	}
 	if g.acks.resolve(strings.ToUpper(id)) {
 		g.acksReceived.Add(1)
+		// Proof the peer decoded a frame of ours just now. [MESHSAT-1021]
+		g.lastAckAt.Store(time.Now().UnixNano())
 		log.Debug().Str("from", pkt.Source).Str("ack_id", id).Msg("aprs: ack received")
 	}
 }

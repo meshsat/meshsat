@@ -447,3 +447,60 @@ func TestAPRSCTS_BeaconAckDeferralIsCapped(t *testing.T) {
 		t.Fatal("cancelled context must report shutdown")
 	}
 }
+
+// An ack from the peer is proof it decoded a frame of ours, so the beacon
+// that would carry the same proof is skipped for one interval. Only an ack
+// counts: a frame we transmitted says nothing about what the peer heard.
+// [MESHSAT-1021]
+func TestAPRSCTS_BeaconSkippedWhenThePeerAckedUs(t *testing.T) {
+	g := &APRSGateway{config: APRSConfig{Callsign: "MSTESS", SSID: 10, BeaconSecs: 30}, tracker: NewAPRSTracker()}
+	interval := 30 * time.Second
+
+	if g.peerHeardUsWithin(interval) {
+		t.Fatal("a gateway that never heard an ack claims the peer heard us")
+	}
+	// Our own transmissions must not count.
+	g.lastTX.Store(time.Now().UnixNano())
+	if g.peerHeardUsWithin(interval) {
+		t.Fatal("our own transmission counted as the peer hearing us")
+	}
+
+	g.lastAckAt.Store(time.Now().UnixNano())
+	if !g.peerHeardUsWithin(interval) {
+		t.Fatal("a fresh ack did not count")
+	}
+	// Older than the interval: the beacon is due again.
+	g.lastAckAt.Store(time.Now().Add(-2 * interval).UnixNano())
+	if g.peerHeardUsWithin(interval) {
+		t.Fatal("an ack two intervals old still suppressed the beacon")
+	}
+	// A zero interval never suppresses.
+	g.lastAckAt.Store(time.Now().UnixNano())
+	if g.peerHeardUsWithin(0) {
+		t.Fatal("a zero interval suppressed the beacon")
+	}
+}
+
+// handleAckReply stamps the proof and counts the ack. [MESHSAT-1021]
+func TestAPRSAck_ReceivedAckStampsTheProof(t *testing.T) {
+	g := &APRSGateway{config: APRSConfig{Callsign: "MSTESS", SSID: 10}, tracker: NewAPRSTracker()}
+	g.acks.register("ABCDE")
+	if g.lastAckAt.Load() != 0 {
+		t.Fatal("fresh gateway carries an ack timestamp")
+	}
+	g.handleAckReply(&APRSPacket{Source: "MSPRLX-10", MsgTo: "MSTESS-10"}, "ABCDE", false)
+	if g.acksReceived.Load() != 1 {
+		t.Fatalf("acks_received = %d, want 1", g.acksReceived.Load())
+	}
+	if !g.peerHeardUsWithin(time.Minute) {
+		t.Fatal("the ack did not stamp the proof")
+	}
+
+	// A reject releases nothing and proves nothing.
+	g2 := &APRSGateway{config: APRSConfig{Callsign: "MSTESS", SSID: 10}, tracker: NewAPRSTracker()}
+	g2.acks.register("FGHIJ")
+	g2.handleAckReply(&APRSPacket{Source: "MSPRLX-10", MsgTo: "MSTESS-10"}, "FGHIJ", true)
+	if g2.lastAckAt.Load() != 0 {
+		t.Fatal("a reject stamped the proof")
+	}
+}
