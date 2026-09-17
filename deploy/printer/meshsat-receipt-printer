@@ -25,6 +25,7 @@ Config: /etc/default/meshsat-receipt-printer
     MESHSAT_PRINTER_LOGO=/usr/local/share/meshsat/meshsat-logo.raster
     MESHSAT_PRINTER_FEED_BEFORE=3            blank lines before the logo
     MESHSAT_PRINTER_FEED_AFTER=8             blank lines after the URL, for the tear
+    MESHSAT_PRINTER_STRAPLINE=a|b|c          bold lines under the callsign; empty = none
 
 Test without hardware:  ./meshsat-receipt-printer --mock --self-test
 """
@@ -43,6 +44,13 @@ import urllib.request
 from collections import deque
 
 LOG_PREFIX = "receipt-printer"
+
+# Owner's sentence, 17 Sep 2026, broken exactly as the booth poster breaks it so
+# the slip and the panel say the same thing the same way. Each line is already
+# inside the 32-column paper. [MESHSAT-1201]
+DEFAULT_STRAPLINE = ("MeshSat's job is simple:"
+                     "|make all these networks"
+                     "|at TTC26 talk to each other.")
 
 # ── ESC/POS ────────────────────────────────────────────────────────────────────
 ESC, GS = b"\x1b", b"\x1d"
@@ -143,8 +151,16 @@ def build_slip(msg: dict, cfg: dict) -> bytes:
         # No raster installed: the name still has to be on the slip.
         head = [INIT, feed(cfg["feed_before"]), ALIGN_C, BOLD_ON, BIG_ON,
                 b"MeshSat\n", BIG_OFF, BOLD_OFF]
-    parts = head + [ALIGN_C, BOLD_ON, ascii_only(cfg["callsign"]).encode() + b"\n",
-                    BOLD_OFF, b"-" * width + b"\n", ALIGN_L]
+    parts = head + [ALIGN_C, BOLD_ON, ascii_only(cfg["callsign"]).encode() + b"\n"]
+    # The owner's sentence, his words and his line breaks, the same three the
+    # booth poster uses. Bold under the callsign because that is the first
+    # thing read on a slip somebody takes home, and it says what the thing in
+    # front of them is for. Costs about 11 mm of paper, so roughly 115 slips a
+    # roll instead of 130. [MESHSAT-1201]
+    for line in cfg["strapline"]:
+        for part in wrap(line, width):
+            parts.append(ascii_only(part).encode() + b"\n")
+    parts += [BOLD_OFF, b"-" * width + b"\n", ALIGN_L]
     for line in wrap(text, width):
         parts.append(line.encode("ascii", "replace") + b"\n")
     parts += [b"-" * width + b"\n",
@@ -394,6 +410,9 @@ def load_config(args):
         # logo or the URL. Lines, roughly 3.75 mm each on a 58 mm head.
         "feed_before": int(env("MESHSAT_PRINTER_FEED_BEFORE", "3") or 3),
         "feed_after": int(env("MESHSAT_PRINTER_FEED_AFTER", "8") or 8),
+        # Bold line under the callsign, "|" between lines. Empty = no strapline.
+        "strapline": [s for s in env("MESHSAT_PRINTER_STRAPLINE", DEFAULT_STRAPLINE).split("|")
+                      if s.strip()],
     }
 
 
