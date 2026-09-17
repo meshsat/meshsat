@@ -74,6 +74,13 @@ type Deps struct {
 	Actions map[string]map[byte]Action
 	// TriggerScan asks the device supervisor for an immediate USB scan.
 	TriggerScan func()
+	// USBTarget resolves a reset target to the host agent's USB device role
+	// and the tty that disambiguates it, for roles whose VID:PID is shared
+	// with another device (a serial TNC and the ZigBee dongle are both
+	// CP210x). Returning "" for the role falls back to USBDeviceForTarget
+	// with no tty, which is what a kit without a supervisor does.
+	// [MESHSAT-821]
+	USBTarget func(target string) (role, tty string)
 	// OnReset is told about every RESET that ran on a device target, so the
 	// device health watchdog gives the device its grace instead of counting
 	// the outage as misses and books a level 3 against its budget. [MESHSAT-817]
@@ -117,7 +124,10 @@ const usbProbeTTL = 60 * time.Second
 
 // USBDeviceForTarget maps a reset target to the host agent's USB device
 // role (deploy/oob/meshsat-oob-agent USB_DEVICES), or "" when the target is
-// not a USB device the agent can power-cycle.
+// not a USB device the agent can power-cycle. The APRS target has two roles:
+// a sound-card kit cuts the AIOC, a hardware-TNC kit cuts the TNC itself,
+// and only Deps.USBTarget knows which chain this kit runs, so the default
+// here stays the AIOC. [MESHSAT-821]
 func USBDeviceForTarget(name string) string {
 	switch name {
 	case "mesh", "cellular", "zigbee", "gps", "rtl_sdr", "usb_wifi":
@@ -126,6 +136,28 @@ func USBDeviceForTarget(name string) string {
 		return "aioc"
 	}
 	return ""
+}
+
+// usbTarget is USBDeviceForTarget with the wiring's override applied.
+func (s *Service) usbTarget(target string) (role, tty string) {
+	if s.d.USBTarget != nil {
+		if role, tty = s.d.USBTarget(target); role != "" {
+			return role, tty
+		}
+	}
+	return USBDeviceForTarget(target), ""
+}
+
+// usbTTYs is the role -> tty map the agent needs to resolve roles whose
+// VID:PID is shared with another device. [MESHSAT-821]
+func (s *Service) usbTTYs() map[string]string {
+	out := map[string]string{}
+	for _, t := range Targets {
+		if role, tty := s.usbTarget(t.Name); role != "" && tty != "" {
+			out[role] = tty
+		}
+	}
+	return out
 }
 
 // USBSwitchable asks the host agent where each USB device sits and whether
@@ -146,7 +178,11 @@ func (s *Service) USBSwitchable(ctx context.Context) map[string]map[string]any {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	res, err := s.d.Host.Call(cctx, "usb_switchable", nil)
+	var args map[string]any
+	if ttys := s.usbTTYs(); len(ttys) > 0 {
+		args = map[string]any{"ttys": ttys}
+	}
+	res, err := s.d.Host.Call(cctx, "usb_switchable", args)
 	s.usbAt = time.Now()
 	if err != nil {
 		s.usbProbe = nil
@@ -697,7 +733,7 @@ func (s *Service) TargetsInfo() []TargetInfo {
 	out := make([]TargetInfo, 0, len(Targets))
 	for _, t := range Targets {
 		info := TargetInfo{Code: t.Code, Name: t.Name, Kind: t.Kind.String(), IfaceID: t.IfaceID, Bearer: t.IfaceID != "" && s.d.Gateways != nil, Levels: []int{}}
-		if dev := USBDeviceForTarget(t.Name); dev != "" && probe != nil {
+		if dev, _ := s.usbTarget(t.Name); dev != "" && probe != nil {
 			if m := probe[dev]; m != nil {
 				if sw, _ := m["switchable"].(bool); sw {
 					info.PowerCycle = true

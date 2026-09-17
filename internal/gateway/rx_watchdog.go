@@ -76,8 +76,10 @@ type RxWatchdogConfig struct {
 // paths the OOB executor uses: step 1 restarts the APRS gateway (Direwolf
 // respawn, or a fresh open of a serial TNC), step 2 either reopens the
 // TNC's serial port (Reopen, hardware TNC kits) or cuts the AIOC's hub port
-// through the host agent (PowerCycle, sound-card kits), and the last resort
-// restarts the bridge. [MESHSAT-814, MESHSAT-821]
+// through the host agent (PowerCycle, sound-card kits), step 3 on a TNC kit
+// cuts the TNC's own hub port, since a TNC wedged below the serial layer
+// does not come back from a reopen, and the last resort restarts the
+// bridge. [MESHSAT-814, MESHSAT-821]
 type RxWatchdogActions struct {
 	Probe          func() (ReceiveHealth, bool)
 	RestartGateway func(ctx context.Context) error
@@ -288,40 +290,67 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 			w.runStep(ctx, 2, "reopen the TNC serial port", w.act.Reopen)
 			return
 		}
-		w.runStep(ctx, 2, "AIOC USB port power cycle then gateway restart", func(ctx context.Context) error {
-			if w.act.PowerCycle == nil {
-				return fmt.Errorf("no power cycle action")
-			}
-			if err := w.act.PowerCycle(ctx); err != nil {
-				return err
-			}
-			if w.act.RestartGateway != nil {
-				time.AfterFunc(10*time.Second, func() {
-					rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-					defer cancel()
-					if err := w.act.RestartGateway(rctx); err != nil {
-						log.Warn().Err(err).Msg("aprs rx watchdog: gateway restart after power cycle failed")
-					}
-				})
-			}
-			return nil
-		})
+		w.runStep(ctx, 2, "AIOC USB port power cycle then gateway restart", w.cutPortThenRestart)
 	case 2:
-		if !hung || now.Sub(w.bridgeRestartAt) < w.cfg.BridgeCooldown {
+		// A TNC that survived the gateway restart AND the port reopen is
+		// wedged below the serial layer, where only a VBUS cut reaches it.
+		// The rung is safe here because getting this far means the kit heard
+		// frames within HeardWithin and then stopped: a quiet channel never
+		// leaves step 0. [MESHSAT-821]
+		if w.act.Reopen != nil && w.act.PowerCycle != nil {
+			w.runStep(ctx, 3, "TNC USB port power cycle then gateway restart", w.cutPortThenRestart)
 			return
 		}
-		w.bridgeRestartAt = now
-		w.notify("aprs_rx_watchdog", "APRS receive still silent after the gateway restart and step 2: restarting the bridge")
-		w.step = 3
-		w.stepAt = now
-		if w.act.Persist != nil {
-			w.act.Persist(w.lastHeardAt, w.bridgeRestartAt)
+		w.restartBridgeStep(now, hung, 3)
+	case 3:
+		// Only a TNC kit reaches step 3 as the port cut. On a sound-card kit
+		// step 3 is the bridge restart that already ran, and the ladder ends.
+		if w.act.Reopen == nil || w.act.PowerCycle == nil {
+			return
 		}
-		if w.act.RestartBridge != nil {
-			w.act.RestartBridge()
-		}
+		w.restartBridgeStep(now, hung, 4)
 	default:
 		// Ladder exhausted; wait for recovery or the cooldown.
+	}
+}
+
+// cutPortThenRestart cuts the device's hub port through the host agent and
+// restarts the gateway once the device has had time to enumerate again. It is
+// the AIOC's rung 2 on a sound-card kit and the TNC's rung 3 on a hardware-TNC
+// kit. [MESHSAT-814, MESHSAT-821]
+func (w *RxWatchdog) cutPortThenRestart(ctx context.Context) error {
+	if w.act.PowerCycle == nil {
+		return fmt.Errorf("no power cycle action")
+	}
+	if err := w.act.PowerCycle(ctx); err != nil {
+		return err
+	}
+	if w.act.RestartGateway != nil {
+		time.AfterFunc(10*time.Second, func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			if err := w.act.RestartGateway(rctx); err != nil {
+				log.Warn().Err(err).Msg("aprs rx watchdog: gateway restart after power cycle failed")
+			}
+		})
+	}
+	return nil
+}
+
+// restartBridgeStep is the ladder's last resort. Caller holds w.mu.
+func (w *RxWatchdog) restartBridgeStep(now time.Time, hung bool, step int) {
+	if !hung || now.Sub(w.bridgeRestartAt) < w.cfg.BridgeCooldown {
+		return
+	}
+	w.bridgeRestartAt = now
+	w.notify("aprs_rx_watchdog", fmt.Sprintf("APRS receive still silent after step %d: restarting the bridge", step-1))
+	w.step = step
+	w.stepAt = now
+	if w.act.Persist != nil {
+		w.act.Persist(w.lastHeardAt, w.bridgeRestartAt)
+	}
+	if w.act.RestartBridge != nil {
+		w.act.RestartBridge()
 	}
 }
 

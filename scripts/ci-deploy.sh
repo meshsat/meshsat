@@ -40,6 +40,11 @@ DEPLOY_LOG="${DEPLOY_STATE_DIR}/deploy.log"
 DEPLOY_STATUS="${DEPLOY_STATE_DIR}/deploy.status"
 DEPLOY_LOCK="${DEPLOY_STATE_DIR}/deploy.lock"
 DEPLOY_PIDFILE="${DEPLOY_STATE_DIR}/deploy.pid"
+# The OOB host agent CI uploads beside this script, and where the detached run
+# reads it from. [MESHSAT-821]
+OOB_AGENT_UPLOAD="/tmp/meshsat-oob-agent"
+OOB_AGENT_STAGED="${DEPLOY_STATE_DIR}/meshsat-oob-agent"
+OOB_AGENT_INSTALLED="/usr/local/bin/meshsat-oob-agent"
 
 if [ "${MESHSAT_DEPLOY_DETACHED:-0}" != "1" ]; then
   # Fail closed. Running attached is exactly the hazard this block removes, so a
@@ -52,10 +57,14 @@ if [ "${MESHSAT_DEPLOY_DETACHED:-0}" != "1" ]; then
   mkdir -p "$DEPLOY_STATE_DIR"
 
   # Run from a copy: CI deletes /tmp/ci-deploy-meshsat.sh as soon as the SSH
-  # command returns, which can be while the detached run is still going.
+  # command returns, which can be while the detached run is still going. The
+  # OOB agent CI ships beside it is copied for the same reason. [MESHSAT-821]
   if [ "$0" != "$DEPLOY_RUNNER" ]; then
     cp "$0" "$DEPLOY_RUNNER"
     chmod +x "$DEPLOY_RUNNER"
+  fi
+  if [ -f "$OOB_AGENT_UPLOAD" ]; then
+    cp "$OOB_AGENT_UPLOAD" "$OOB_AGENT_STAGED"
   fi
 
   rm -f "$DEPLOY_STATUS" "$DEPLOY_PIDFILE"
@@ -154,6 +163,33 @@ elif [ -f "$CUBEOS_COMPOSE" ]; then
 else
   echo "ERROR: No compose file found at $FIELDKIT_COMPOSE or $CUBEOS_COMPOSE"
   exit 1
+fi
+
+# =============================================================================
+# OOB host agent [MESHSAT-821]
+# =============================================================================
+# The agent runs on the HOST, so the container image never carries it and until
+# now nothing carried it to a kit either: the kits ran whatever version someone
+# last installed by hand. That is how its APRS role still named the AIOC weeks
+# after the PicoAPRS replaced it, which left the TNC's hub port uncuttable.
+#
+# Runs before the container work so a kit is updated even if the pull later
+# fails, and never fails the deploy: a bridge without a fresh agent loses the
+# level-3 rungs, a kit without a bridge loses everything.
+if [ "$DEPLOY_LAYOUT" = "fieldkit" ] && [ -f "$OOB_AGENT_STAGED" ]; then
+  if sudo cmp -s "$OOB_AGENT_STAGED" "$OOB_AGENT_INSTALLED" 2>/dev/null; then
+    echo "  OOB agent: already current"
+  elif sudo install -m 0755 "$OOB_AGENT_STAGED" "$OOB_AGENT_INSTALLED" 2>/dev/null; then
+    # Socket activation: restarting the service drops the listener for a
+    # moment, and the bridge opens a fresh connection per call anyway.
+    if sudo systemctl restart meshsat-oob-agent.service 2>/dev/null; then
+      echo "  OOB agent: installed and restarted"
+    else
+      echo "  OOB agent: installed, service restart failed (it starts on the next call)"
+    fi
+  else
+    echo "  OOB agent: install failed, keeping the one on the kit"
+  fi
 fi
 
 # --- GHCR login ---

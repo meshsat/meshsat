@@ -327,6 +327,93 @@ func TestRxWatchdog_SerialTNCReopenStep(t *testing.T) {
 	}
 }
 
+// A TNC that survives the gateway restart and the port reopen is wedged below
+// the serial layer: rung 3 cuts its hub port, and the gateway restart follows
+// the cut. [MESHSAT-821]
+func TestRxWatchdog_SerialTNCPortCutAfterReopen(t *testing.T) {
+	h := newWDHarness()
+	var reopens int
+	h.wd.act.Reopen = func(ctx context.Context) error { h.mu.Lock(); reopens++; h.mu.Unlock(); return nil }
+	h.mu.Lock()
+	h.health.Level = -1
+	h.health.Serial = true
+	h.health.BytesIn = 4096 // the TNC talks; only decodes stopped
+	h.mu.Unlock()
+	h.wd.act.Probe = func() (ReceiveHealth, bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		hh := h.health
+		hh.LevelAt = time.Time{}
+		return hh, h.ok
+	}
+	ctx := context.Background()
+
+	h.frame()
+	h.wd.tick(ctx)
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx) // step 1: gateway restart
+	waitFor(t, func() bool { r, _, _ := h.counts(); return r == 1 })
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx) // step 2: reopen
+	waitFor(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return reopens == 1 })
+	if _, cycles, _ := h.counts(); cycles != 0 {
+		t.Fatalf("port cut ran at step 2 (%d times), want the reopen first", cycles)
+	}
+
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx) // step 3: the TNC's own hub port
+	waitFor(t, func() bool { _, cycles, _ := h.counts(); return cycles == 1 })
+	if _, _, bridge := h.counts(); bridge != 0 {
+		t.Fatalf("bridge restarted %d times before the port cut", bridge)
+	}
+	if h.wd.step != 3 {
+		t.Fatalf("step %d after the port cut, want 3", h.wd.step)
+	}
+	// A frame ends the episode and resets the ladder.
+	h.frame()
+	h.wd.tick(ctx)
+	if h.wd.State() != ReceiveStateOK {
+		t.Fatalf("state %s after recovery, want ok", h.wd.State())
+	}
+	if h.wd.step != 0 {
+		t.Fatalf("step %d after recovery, want 0", h.wd.step)
+	}
+}
+
+// A sound-card kit keeps the old ladder: the AIOC cut is rung 2 and the bridge
+// restart is the last rung, which must not run twice. [MESHSAT-814]
+func TestRxWatchdog_SoundCardLadderUnchanged(t *testing.T) {
+	h := newWDHarness()
+	ctx := context.Background()
+	h.frame()
+	h.wd.tick(ctx)
+	h.advance(6 * time.Minute)
+	h.mu.Lock()
+	h.health.LevelAt = h.now.Add(-10 * time.Minute) // hung Direwolf
+	h.mu.Unlock()
+	h.wd.act.Probe = func() (ReceiveHealth, bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.health, h.ok
+	}
+	h.wd.tick(ctx) // step 1
+	waitFor(t, func() bool { r, _, _ := h.counts(); return r == 1 })
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx) // step 2: AIOC cut
+	waitFor(t, func() bool { _, c, _ := h.counts(); return c == 1 })
+	h.advance(6 * time.Minute)
+	h.wd.tick(ctx) // step 3: bridge restart
+	waitFor(t, func() bool { _, _, b := h.counts(); return b == 1 })
+	// Further windows must not restart the bridge again: the ladder is done.
+	for i := 0; i < 3; i++ {
+		h.advance(6 * time.Minute)
+		h.wd.tick(ctx)
+	}
+	if _, _, b := h.counts(); b != 1 {
+		t.Fatalf("bridge restarted %d times, want 1", b)
+	}
+}
+
 // Peer silence with Direwolf's own stats alive stops at rung 1; the
 // hardware and bridge rungs need a hung Direwolf. [MESHSAT-857]
 func TestRxWatchdog_PeerSilenceStopsAtGatewayRestart(t *testing.T) {

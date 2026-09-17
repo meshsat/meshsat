@@ -225,6 +225,51 @@ class USBPowerCycleTests(unittest.TestCase):
         out = agent.plan("usb_switchable", {"device": "gps"})[2](None)
         self.assertEqual(out, {"gps": {"switchable": False, "reason": "device not present"}})
 
+    def test_usb_switchable_passes_a_tty_per_role(self):
+        # The TNC and the ZigBee dongle are both 10c4:ea60, so a whole-bus
+        # probe can only tell them apart from the tty the bridge claimed each
+        # one on. Without the map the shared role is ambiguous. [MESHSAT-821]
+        self.assertEqual(agent.USB_DEVICES["aprs"], ["10c4:ea60"])
+        seen = {}
+
+        def resolve(role, tty=None):
+            seen[role] = tty
+            if role in ("aprs", "zigbee") and not tty:
+                raise agent.Refused("ambiguous, pass tty")
+            return dict(FAKE_DEV)
+        agent.resolve_usb_port = resolve
+
+        out = agent.plan("usb_switchable", {"ttys": {"aprs": "/dev/ttyUSB1", "zigbee": "/dev/ttyUSB0"}})[2](None)
+        self.assertEqual(seen["aprs"], "/dev/ttyUSB1")
+        self.assertEqual(seen["zigbee"], "/dev/ttyUSB0")
+        self.assertTrue(out["aprs"]["switchable"])
+        self.assertTrue(out["zigbee"]["switchable"])
+        # gps has no entry in the map and still resolves by VID:PID.
+        self.assertIsNone(seen["gps"])
+        self.assertTrue(out["gps"]["switchable"])
+        # A single-role probe keeps taking "tty".
+        agent.plan("usb_switchable", {"device": "aprs", "tty": "/dev/ttyUSB1"})[2](None)
+        self.assertEqual(seen["aprs"], "/dev/ttyUSB1")
+        # Without a tty the shared role is refused, not silently wrong.
+        out = agent.plan("usb_switchable", {"device": "aprs"})[2](None)
+        self.assertFalse(out["aprs"]["switchable"])
+
+    def test_usb_name_for_tty_follows_a_by_id_symlink(self):
+        # The APRS gateway stores its TNC as /dev/serial/by-id/..., which is
+        # not a tty name; the agent follows the symlink first. [MESHSAT-821]
+        link = "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_1cb0-if00-port0"
+        sysfs = "/sys/devices/platform/usb2/2-1/2-1.2/ttyUSB1"
+        real, exists = os.path.realpath, os.path.exists
+        try:
+            os.path.realpath = lambda p: "/dev/ttyUSB1" if p == link else sysfs
+            os.path.exists = lambda p: p.endswith("2-1.2/idVendor")
+            self.assertEqual(agent.usb_name_for_tty(link), "2-1.2")
+            self.assertEqual(agent.usb_name_for_tty("/dev/ttyUSB1"), "2-1.2")
+        finally:
+            os.path.realpath, os.path.exists = real, exists
+        with self.assertRaises(agent.Refused):
+            agent.usb_name_for_tty("/etc/passwd")
+
     def test_usb_cycle_helper_rejects_bad_args(self):
         self.assertEqual(agent.usb_cycle_main([]), 2)
         self.assertEqual(agent.usb_cycle_main(["0", "3000", "2-1"]), 2)

@@ -1481,6 +1481,20 @@ func main() {
 					supervisor.TriggerScan()
 				}
 			},
+			// Two CP210x devices share 10c4:ea60 on a PicoAPRS kit (the TNC
+			// and the ZigBee dongle), so the agent can only tell them apart
+			// from the tty each one was claimed on. [MESHSAT-821]
+			USBTarget: func(target string) (string, string) {
+				if target == "aprs" {
+					return aprsUSBDevice(cfg, db, gwMgr)
+				}
+				role := oob.USBDeviceForTarget(target)
+				devRole := usbDeviceRole(target)
+				if role == "" || devRole == transport.RoleNone || supervisor == nil {
+					return role, ""
+				}
+				return role, supervisor.Registry().PortByRole(devRole)
+			},
 			OnReset: func(target string, level byte) {
 				if devHealth != nil {
 					devHealth.NoteExternalReset(target, level)
@@ -2516,10 +2530,11 @@ func main() {
 			},
 			RestartGateway: func(ctx context.Context) error { return gwMgr.RestartGatewayInstance(ctx, "aprs_0") },
 			PowerCycle: func(ctx context.Context) error {
-				if usbPowerCycle(ctx, "aioc", "") {
+				role, tty := aprsUSBDevice(cfg, db, gwMgr)
+				if usbPowerCycle(ctx, role, tty) {
 					return nil
 				}
-				return errors.New("AIOC not on a switchable hub port")
+				return fmt.Errorf("%s not on a switchable hub port", role)
 			},
 			Reopen: aprsTNCReopen(gwMgr),
 			RestartBridge: func() {
@@ -2547,13 +2562,18 @@ func main() {
 		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
 	}
 
-	// OOB RESET aprs level 3 on a hardware-TNC kit: reopen the TNC's serial
-	// link, then restart the gateway. A hub-port cut is left to the host
-	// agent for sound-card kits (the AIOC), where it is still the right
-	// hard reset. [MESHSAT-821]
+	// OOB RESET aprs level 3 on a hardware-TNC kit: cut the TNC's hub port,
+	// which is the only rung that clears a TNC wedged below the serial layer
+	// (the executor restarts aprs_0 itself 10 s later). A kit whose TNC is
+	// not on a switchable port, and a sound-card kit whose AIOC the host
+	// agent cuts by VID:PID, fall back to reopening the link and restarting
+	// the gateway. [MESHSAT-821]
 	if reopen := aprsTNCReopen(gwMgr); reopen != nil {
 		oobActions["aprs"] = map[byte]oob.Action{
 			oob.LevelHard: func(ctx context.Context) error {
+				if role, tty := aprsUSBDevice(cfg, db, gwMgr); tty != "" && usbPowerCycle(ctx, role, tty) {
+					return nil
+				}
 				if err := reopen(ctx); err != nil {
 					return err
 				}

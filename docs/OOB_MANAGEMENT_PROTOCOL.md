@@ -122,6 +122,17 @@ ioctl for the serial devices, so a kit without the hub behaves exactly as before
 `GET /api/oob/targets` reports `power_cycle` and `hub_port` per target; the Settings tab shows
 them.
 
+**A shared VID:PID needs its tty, in the listing too (MESHSAT-821).** On a PicoAPRS kit the TNC
+and the ZigBee dongle are both CP210x `10c4:ea60`, so the agent cannot tell them apart from the
+VID:PID alone and answers `ambiguous, pass tty`. The bridge therefore sends a role to tty map
+with the `usb_switchable` probe, built from the tty the device supervisor claimed for each role
+and, for the APRS target, from the running gateway's `kiss_device`. Without that map the listing
+reported a switchable port as not switchable, which is not a hardware limit but reads like one.
+The APRS target has two agent roles: `aioc` on a sound-card kit, resolved by its own VID:PID,
+and `aprs` on a hardware-TNC kit, resolved only from the tty. `RESET aprs 3` on a TNC kit cuts
+the TNC's hub port and lets the executor restart `aprs_0` ten seconds later, falling back to a
+link reopen plus gateway restart when the port is not switchable.
+
 **Cellular level 3 is a modem power toggle with a one-minute blackout (MESHSAT-812, MESHSAT-817).**
 The T-Call's ESP32 boots after the VBUS cut and its firmware pulses PWRKEY once, which turns the
 A7670E on; any open of the CDC port in the following minute resets the ESP32 through DTR and the

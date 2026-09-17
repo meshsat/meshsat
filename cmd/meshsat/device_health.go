@@ -642,6 +642,39 @@ func aprsKISSDevice(cfg *config.Config, db *database.DB) string {
 	return cfg.APRSKISSDevice
 }
 
+// aprsUSBDevice names the host agent's USB role for this kit's APRS chain and
+// the tty that disambiguates it. A hardware TNC (PicoAPRS V4) is a CP2102N,
+// the same VID:PID as the ZigBee dongle, so it resolves only from the tty the
+// gateway opened; a sound-card kit cuts the AIOC, whose VID:PID is its own.
+// Resolved per call, so a gateway recreated by a config change is the one
+// acted on. [MESHSAT-821]
+func aprsUSBDevice(cfg *config.Config, db *database.DB, gwMgr *gateway.Manager) (role, tty string) {
+	if gwMgr != nil {
+		if ag := gwMgr.APRSGateway(); ag != nil && ag.SerialTNC() {
+			if dev := aprsKISSDevice(cfg, db); dev != "" {
+				return "aprs", dev
+			}
+		}
+	}
+	return "aioc", ""
+}
+
+// usbDeviceRole maps a reset target to the device role the supervisor claims
+// its tty under, or RoleNone for a target with no claimed tty. [MESHSAT-821]
+func usbDeviceRole(target string) transport.DeviceRole {
+	switch target {
+	case "mesh":
+		return transport.RoleMeshtastic
+	case "cellular":
+		return transport.RoleCellular
+	case "zigbee":
+		return transport.RoleZigBee
+	case "gps":
+		return transport.RoleGPS
+	}
+	return transport.RoleNone
+}
+
 // aprsTNCReopen returns the receive watchdog's step 2 and the OOB level 3
 // for a hardware-TNC kit, or nil when the running gateway drives Direwolf
 // (then the AIOC hub-port cut applies). Resolved per call so a gateway
