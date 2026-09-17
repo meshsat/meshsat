@@ -71,6 +71,13 @@ const bandLabel = computed(() => bandMeta.value?.label || props.band)
 const bandState = computed(() => store.bands[props.band]?.state || 'calibrating')
 const bandBaselineMean = computed(() => store.bands[props.band]?.baselineMean || 0)
 const bandBaselineStd = computed(() => store.bands[props.band]?.baselineStd || 0)
+// Robust spread, matching the panel header: the std counts the transmissions
+// that sat in the calibration window, the MAD describes the noise floor.
+// [MESHSAT-1203]
+const bandBaselineSpread = computed(() => {
+  const mad = store.bands[props.band]?.baselineMad || 0
+  return Math.max(1.4826 * mad, 0.5)
+})
 
 // Resolve the window to (fromMs, toMs) regardless of which UI
 // control the operator is using. `now` is captured once per fetch to
@@ -521,7 +528,7 @@ function goBack() {
           </span>
           <span class="sd-state" :class="'state-' + bandState">{{ bandState }}</span>
           <span v-if="bandBaselineStd > 0">
-            baseline {{ bandBaselineMean.toFixed(1) }} dB ± {{ bandBaselineStd.toFixed(2) }}
+            baseline {{ bandBaselineMean.toFixed(1) }} dB ± {{ bandBaselineSpread.toFixed(2) }}
           </span>
         </div>
       </div>

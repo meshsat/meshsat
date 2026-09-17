@@ -672,6 +672,22 @@ function fmtNum2(v) {
   return v.toFixed(2)
 }
 
+// The +/- next to the baseline is the ROBUST spread, 1.4826*MAD with the
+// same 0.5 dB measurement floor the backend uses, not the standard
+// deviation. Calibration samples a live band, so on a band carrying our own
+// radio a couple of transmissions sit in the window: after the level moved to
+// the median the kits reported "-62.7 dB +/- 12.32" while the MAD said the
+// floor was flat to 0.04 dB. The std is honest about those samples and
+// useless as a description of the noise, which is what an operator reads this
+// line for. Full precision is on the element's title. [MESHSAT-1203]
+function baselineSpread(name) {
+  const b = store.bands[name]
+  if (!b) return 0
+  const mad = typeof b.baselineMad === 'number' ? b.baselineMad : 0
+  const robust = 1.4826 * mad
+  return Math.max(robust, 0.5)
+}
+
 // Compact mode has no frequency axis, so the band's range goes in the
 // title line instead. [MESHSAT-1203]
 function bandRangeText(name) {
@@ -730,7 +746,9 @@ function bandRangeText(name) {
         <div class="sa-panel-meta">
           <span v-if="!compact">iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
           <span v-if="!compact && store.bands[name]?.state !== 'calibrating'">
-            baseline: {{ store.bands[name]?.baselineMean?.toFixed?.(1) }} dB ± {{ store.bands[name]?.baselineStd?.toFixed?.(2) }}
+            <span :title="`robust spread 1.4826xMAD; sample std ${store.bands[name]?.baselineStd?.toFixed?.(2)} dB`">
+              baseline: {{ store.bands[name]?.baselineMean?.toFixed?.(1) }} dB ± {{ baselineSpread(name).toFixed(2) }}
+            </span>
           </span>
           <span v-if="compact && scanPeakInfo(name)" class="sa-compact-peak">
             {{ scanPeakInfo(name).powerDB.toFixed(0) }} dBm @ {{ (scanPeakInfo(name).freqHz / 1e6).toFixed(2) }}
