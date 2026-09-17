@@ -147,3 +147,36 @@ func TestOwnTrafficBandNeedsLongerDwell(t *testing.T) {
 		t.Fatalf("own-traffic band jamming after 61 s = %s, want jamming", got)
 	}
 }
+
+// Calibration runs on a live band, so a band carrying our own radio gets a
+// couple of 40 dB transmissions inside its 30 s window. The level must ignore
+// them: with the arithmetic mean the kits calibrated mesh_869 to -59.2 dB
+// against a true floor of -63.5, and every threshold derived from it went
+// deaf by 4 dB. [MESHSAT-1203]
+func TestBaselineLevelIgnoresOwnBursts(t *testing.T) {
+	quiet := make([]float64, 0, 23)
+	for i := 0; i < 20; i++ {
+		quiet = append(quiet, -63.5)
+	}
+	// three transmissions caught by the scanner during calibration
+	contaminated := append(append([]float64{}, quiet...), -25.0, -22.0, -24.0)
+
+	cleanLevel, _, _ := baselineStats(quiet)
+	level, _, mad := baselineStats(contaminated)
+
+	if diff := level - cleanLevel; diff > 0.5 || diff < -0.5 {
+		t.Fatalf("level moved %.2f dB (%.2f vs %.2f) when three bursts joined the window", diff, level, cleanLevel)
+	}
+	if mad > 0.5 {
+		t.Fatalf("MAD %.3f: the quiet samples should dominate the spread", mad)
+	}
+	// And the arithmetic mean is what we are avoiding: prove it would have
+	// moved, so this test fails loudly if someone puts it back.
+	var sum float64
+	for _, v := range contaminated {
+		sum += v
+	}
+	if arith := sum / float64(len(contaminated)); arith > cleanLevel+1 == false {
+		t.Fatalf("expected the arithmetic mean (%.2f) to be pulled well above %.2f", arith, cleanLevel)
+	}
+}
