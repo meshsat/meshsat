@@ -26,6 +26,9 @@ Config: /etc/default/meshsat-receipt-printer
     MESHSAT_PRINTER_FEED_BEFORE=3            blank lines before the logo
     MESHSAT_PRINTER_FEED_AFTER=8             blank lines after the URL, for the tear
     MESHSAT_PRINTER_STRAPLINE=a|b|c          bold lines under the callsign; empty = none
+    MESHSAT_PRINTER_COUNT=/var/lib/meshsat/receipt-count   this kit's slip counter
+    MESHSAT_PRINTER_MILESTONE=666            extra bold line every n slips; 0 = never
+    MESHSAT_PRINTER_MILESTONE_TEXT=...       that line, {n} is the slip number
 
 Test without hardware:  ./meshsat-receipt-printer --mock --self-test
 """
@@ -135,7 +138,30 @@ def ascii_only(s: str) -> str:
     return s.encode("ascii", "replace").decode("ascii")
 
 
-def build_slip(msg: dict, cfg: dict) -> bytes:
+def read_count(path) -> int:
+    """Slips printed by THIS kit. Two kits share one printer, so each keeps its
+    own sequence; the booth total is the two files added up."""
+    try:
+        with open(path) as fh:
+            return int((fh.read() or "0").strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def write_count(path, n, log) -> None:
+    """Written only after the paper actually came out, and replaced atomically
+    so a power cut mid-write cannot leave a truncated number."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.write(str(n))
+        os.replace(tmp, path)
+    except OSError as exc:                              # noqa: BLE001
+        log(f"could not record slip count: {exc}")
+
+
+def build_slip(msg: dict, cfg: dict, serial: int = 0) -> bytes:
     text = ascii_only(msg.get("text", ""))
     when = msg.get("when", time.strftime("%Y-%m-%d %H:%M:%S"))
     bearer = ascii_only(msg.get("bearer", "") or "mesh")
@@ -168,6 +194,15 @@ def build_slip(msg: dict, cfg: dict) -> bytes:
               f"{'via':<8}{bearer}\n".encode()]
     if sender:
         parts.append(f"{'from':<8}{sender}\n".encode())
+    # Serial, so the stand can see how many slips it has printed and a visitor
+    # keeps a numbered one. The sequence is this kit's; the callsign above says
+    # which kit. [MESHSAT-1201]
+    if serial:
+        parts.append(f"{'slip':<8}#{serial:04d}\n".encode())
+    if serial and cfg["milestone"] and serial % cfg["milestone"] == 0:
+        parts += [feed(1), ALIGN_C, BOLD_ON,
+                  ascii_only(cfg["milestone_text"].format(n=serial)).encode() + b"\n",
+                  BOLD_OFF, ALIGN_L]
     # Lead-out: the head sits well above the tear bar, so without this the QR and the
     # URL are still inside the printer and the cut lands on them.
     parts += [feed(1), ALIGN_C, qr(cfg["qr"]), b"\n",
@@ -292,9 +327,15 @@ class SlipQueue(threading.Thread):
                 self._print_with_retry(msg)
 
     def _print_with_retry(self, msg):
-        payload = build_slip(msg, self.cfg)
+        # The number is reserved before the first attempt and committed only
+        # when paper came out, so retries reuse it and a slip that is given up
+        # never burns one.
+        serial = read_count(self.cfg["count_path"]) + 1
+        payload = build_slip(msg, self.cfg, serial)
         for attempt in range(1, self.cfg["attempts"] + 1):
             if self.printer.print_slip(payload):
+                write_count(self.cfg["count_path"], serial, self.log)
+                self.log(f"slip #{serial} printed")
                 return
             # The far likeliest failure is the other kit holding the one RFCOMM
             # slot this printer has. Back off with jitter so two kits that collide
@@ -413,6 +454,10 @@ def load_config(args):
         # Bold line under the callsign, "|" between lines. Empty = no strapline.
         "strapline": [s for s in env("MESHSAT_PRINTER_STRAPLINE", DEFAULT_STRAPLINE).split("|")
                       if s.strip()],
+        "count_path": env("MESHSAT_PRINTER_COUNT", "/var/lib/meshsat/receipt-count"),
+        "milestone": int(env("MESHSAT_PRINTER_MILESTONE", "666") or 0),
+        "milestone_text": env("MESHSAT_PRINTER_MILESTONE_TEXT",
+                              "slip {n}. Ask us for your hat. \\m/"),
     }
 
 
