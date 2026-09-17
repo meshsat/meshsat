@@ -903,6 +903,13 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		bs.PowerDB = avg
 		bs.LastOccupancy = occupancy
 		bs.LastFlatness = flatness
+		// Carry the classifier's real cutoff in the status payload too, not
+		// only on the scan events: a freshly loaded page drew its reference
+		// line from baseline + 3*std until the first event arrived, which on
+		// a band with a 0.017 dB std put the line inside the noise.
+		// [MESHSAT-1203]
+		bs.ThreshJammingDB = bl.Mean + DegradedDeltaDB
+		bs.ThreshInterferenceDB = bl.Mean + 6.0
 		oldState := bs.State
 
 		// Candidate tracking: if the tier changed, reset dwell timer.
@@ -912,7 +919,7 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		}
 		heldFor := now.Sub(bs.CandidateSince)
 
-		newState := promoteState(candidate, oldState, heldFor)
+		newState := promoteStateFor(band, candidate, oldState, heldFor)
 
 		if newState != oldState {
 			bs.State = newState
@@ -1127,17 +1134,24 @@ func spectralFlatness(powers []float64) float64 {
 // Promotion requires the tier-specific dwell time. Demotion (to
 // CLEAR) requires RecoveryPersistenceSec of CLEAR-candidate.
 func promoteState(candidate, current SpectrumState, heldFor time.Duration) SpectrumState {
+	return promoteStateFor(Band{}, candidate, current, heldFor)
+}
+
+// promoteStateFor is promoteState with the band's own dwell times. A band
+// that carries our own radio needs longer before interference or degraded
+// sticks — see Band.OwnTraffic. [MESHSAT-1203]
+func promoteStateFor(band Band, candidate, current SpectrumState, heldFor time.Duration) SpectrumState {
 	switch candidate {
 	case StateJamming:
 		if heldFor >= JammingPersistenceSec*time.Second {
 			return StateJamming
 		}
 	case StateInterference:
-		if heldFor >= InterferencePersistenceSec*time.Second {
+		if heldFor >= band.InterferenceDwell() {
 			return StateInterference
 		}
 	case StateDegraded:
-		if heldFor >= DegradedPersistenceSec*time.Second {
+		if heldFor >= band.DegradedDwell() {
 			return StateDegraded
 		}
 	case StateClear:
