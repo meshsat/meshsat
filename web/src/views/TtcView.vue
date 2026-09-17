@@ -1359,9 +1359,12 @@ onUnmounted(() => {
     </div>
 
     <!-- SPECTRUM (attract) -->
-    <main v-show="view === 'spectrum'" class="flex-1 min-h-0 overflow-hidden px-5 py-3">
-      <div class="font-sans text-sm text-gray-300 mb-2">What the kit's software-defined radio hears right now, 868 MHz and 144.8 MHz among them. Touch to return.</div>
-      <div class="h-full overflow-hidden"><SpectrumWaterfall v-if="view === 'spectrum'" /></div>
+    <main v-show="view === 'spectrum'" class="flex-1 min-h-0 overflow-hidden px-5 py-3 flex flex-col">
+      <div class="font-sans text-sm text-gray-300 mb-2 shrink-0">What the kit's software-defined radio hears right now, 868 MHz and 144.8 MHz among them. Touch to return.</div>
+      <!-- compact: the full widget wants 1854 px and this slot is 431 px with
+           overflow hidden and no scrollbar, so the booth showed the LoRa band
+           and clipped the other four. [MESHSAT-1203] -->
+      <div class="flex-1 min-h-0 overflow-hidden"><SpectrumWaterfall v-if="view === 'spectrum'" compact /></div>
     </main>
 
     <!-- COMPOSER: double-tap the kit, type on the panel, send to either mesh -->

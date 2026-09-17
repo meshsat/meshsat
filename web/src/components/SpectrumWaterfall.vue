@@ -38,6 +38,16 @@ const nowMs = ref(Date.now())
 
 const store = useSpectrumStore()
 
+// compact: the booth variant. The full widget is 1854 px tall (5 cards of
+// 352 px) and the TTC screen gives it a 431 px slot with overflow hidden and
+// no scrollbar, so a visitor saw the LoRa band and nothing else for the 25 s
+// the attract loop spends there. Compact drops the FFT trace, the axes and
+// the metrics strip, keeps the waterfall, and lets the five bands divide
+// whatever height the container has. [MESHSAT-1203]
+const props = defineProps({
+  compact: { type: Boolean, default: false },
+})
+
 const BAND_ORDER = ['lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
 const orderedBands = computed(() => {
   const keys = Object.keys(store.bands)
@@ -264,27 +274,44 @@ function drawSpectrum(bandName) {
   }
 
   // Interference threshold (dashed amber) — baseline + 6σ
+  const yIntf = yAt(band.threshInterference || (band.baselineMean + 6 * band.baselineStd))
   ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)'
   ctx.setLineDash([4 * dpr, 4 * dpr])
-  {
-    const y = yAt(band.threshInterference || (band.baselineMean + 6 * band.baselineStd))
-    ctx.beginPath()
-    ctx.moveTo(plotL, y)
-    ctx.lineTo(plotL + plotW, y)
-    ctx.stroke()
-  }
+  ctx.beginPath()
+  ctx.moveTo(plotL, yIntf)
+  ctx.lineTo(plotL + plotW, yIntf)
+  ctx.stroke()
 
   // Jamming threshold (dashed red) — baseline + 3σ
+  const yJam = yAt(band.threshJamming || (band.baselineMean + 3 * band.baselineStd))
   ctx.strokeStyle = 'rgba(220, 38, 38, 0.85)'
   ctx.setLineDash([6 * dpr, 3 * dpr])
-  {
-    const y = yAt(band.threshJamming || (band.baselineMean + 3 * band.baselineStd))
-    ctx.beginPath()
-    ctx.moveTo(plotL, y)
-    ctx.lineTo(plotL + plotW, y)
-    ctx.stroke()
-  }
+  ctx.beginPath()
+  ctx.moveTo(plotL, yJam)
+  ctx.lineTo(plotL + plotW, yJam)
+  ctx.stroke()
   ctx.setLineDash([])
+
+  // Name both lines. A narrowband neighbour can push the trace well above
+  // the red line while the badge still says CLEAR, which is correct — the
+  // state machine is broadband (occupancy + flatness + dwell), not a
+  // single-bin comparison — but an unlabelled red line under a peak reads
+  // as a broken alarm. Labels sit just inside the right edge, above their
+  // line, and are skipped when the two lines are within a label height of
+  // each other. [MESHSAT-1203]
+  if (!props.compact) {
+    const fs = Math.round(9 * dpr)
+    ctx.font = `${fs}px ui-monospace, SFMono-Regular, Menlo, monospace`
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'bottom'
+    const labelX = plotL + plotW - 4 * dpr
+    if (Math.abs(yJam - yIntf) >= fs + 2 * dpr) {
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)'
+      ctx.fillText('6σ interference', labelX, yIntf - 2 * dpr)
+    }
+    ctx.fillStyle = 'rgba(248, 113, 113, 0.95)'
+    ctx.fillText('3σ jamming', labelX, yJam - 2 * dpr)
+  }
 
   // FFT trace fill. Map bin index to x using the SAME convention the
   // waterfall uses (bin 0 at the left edge, bin n-1 at the right edge,
@@ -557,9 +584,14 @@ function axesFor(bandName) {
   return { dbLabels, fLabels, yTop, yBot, legendFloor, legendCeil, legendLabels, tLabels }
 }
 
+// The unit follows the SPAN, not the magnitude. GPS L1 runs 1574.420 to
+// 1576.420 MHz, and GHz at 3 decimals is 1 MHz of resolution across a 2 MHz
+// window: the five-label axis printed "1.575 GHz" twice and "1.576 GHz"
+// twice. Every monitored band is narrower than 10 MHz, so MHz at 3 decimals
+// (1 kHz) always separates the labels. [MESHSAT-1203]
 function fmtFreq(hz, span) {
+  if (span < 10e6) return (hz / 1e6).toFixed(3) + ' MHz'
   if (hz >= 1e9) return (hz / 1e9).toFixed(3) + ' GHz'
-  if (span < 1e6) return (hz / 1e6).toFixed(3) + ' MHz'
   return (hz / 1e6).toFixed(2) + ' MHz'
 }
 
@@ -600,6 +632,11 @@ function eventPeakInfo(name) {
   const b = store.bands[name]
   if (!b) return null
   if (b.eventPeakDB == null || !isFinite(b.eventPeakDB)) return null
+  // The API sends event_peak_db 0 / event_peak_freq_hz 0 when the band has
+  // not transitioned yet, and 0 is both finite and non-null, so every band
+  // printed "0.0 dBm @ 0.000 MHz" — zeros reading as a measurement, and
+  // 0 dBm is an enormous one. No frequency means no event. [MESHSAT-1203]
+  if (!isFinite(b.eventPeakFreqHz) || b.eventPeakFreqHz <= 0) return null
   return { freqHz: b.eventPeakFreqHz, powerDB: b.eventPeakDB }
 }
 
@@ -638,14 +675,22 @@ function fmtNum2(v) {
   if (typeof v !== 'number' || !isFinite(v)) return '—'
   return v.toFixed(2)
 }
+
+// Compact mode has no frequency axis, so the band's range goes in the
+// title line instead. [MESHSAT-1203]
+function bandRangeText(name) {
+  const m = store.bands[name]?.meta
+  if (!m || !isFinite(m.freqLow) || !isFinite(m.freqHigh)) return ''
+  return `${(m.freqLow / 1e6).toFixed(1)}–${(m.freqHigh / 1e6).toFixed(1)} MHz`
+}
 </script>
 
 <template>
-  <div class="sa-root">
+  <div class="sa-root" :class="{ 'sa-compact': compact }">
     <div class="sa-head">
       <h3>RF SPECTRUM — 5 monitored bands</h3>
       <div class="sa-head-right">
-        <button type="button" class="sa-pause"
+        <button v-if="!compact" type="button" class="sa-pause"
                 :class="{ paused: store.paused }"
                 :title="store.paused ? 'Resume waterfall' : 'Pause waterfall'"
                 @click="store.togglePause()">
@@ -682,13 +727,17 @@ function fmtNum2(v) {
       <div class="sa-panel-head">
         <div class="sa-panel-title">
           {{ store.bands[name]?.meta?.label || name }}
-          <span class="sa-id">{{ name }}</span>
-          <span class="sa-expand-hint" aria-hidden="true">⤢ expand</span>
+          <span v-if="!compact" class="sa-id">{{ name }}</span>
+          <span v-if="compact" class="sa-id">{{ bandRangeText(name) }}</span>
+          <span v-if="!compact" class="sa-expand-hint" aria-hidden="true">⤢ expand</span>
         </div>
         <div class="sa-panel-meta">
-          <span>iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
-          <span v-if="store.bands[name]?.state !== 'calibrating'">
+          <span v-if="!compact">iface: {{ store.bands[name]?.meta?.interfaceID || '—' }}</span>
+          <span v-if="!compact && store.bands[name]?.state !== 'calibrating'">
             baseline: {{ store.bands[name]?.baselineMean?.toFixed?.(1) }} dB ± {{ store.bands[name]?.baselineStd?.toFixed?.(2) }}
+          </span>
+          <span v-if="compact && scanPeakInfo(name)" class="sa-compact-peak">
+            {{ scanPeakInfo(name).powerDB.toFixed(0) }} dBm @ {{ (scanPeakInfo(name).freqHz / 1e6).toFixed(2) }}
           </span>
           <span class="sa-state" :style="{ background: stateColour(store.bands[name]?.state) }">
             {{ store.bands[name]?.state || 'calibrating' }}
@@ -699,7 +748,7 @@ function fmtNum2(v) {
            time, ITU-R SM.1880 occupancy, Wiener-entropy flatness.
            Hidden during calibration — values are meaningless without
            a locked baseline. -->
-      <div v-if="store.bands[name]?.state !== 'calibrating' && store.bands[name]?.baselineStd > 0"
+      <div v-if="!compact && store.bands[name]?.state !== 'calibrating' && store.bands[name]?.baselineStd > 0"
            class="sa-metrics">
         <span class="sa-metric" title="Peak of the current FFT sweep">
           <span class="k">peak (now)</span>
@@ -763,7 +812,8 @@ function fmtNum2(v) {
            @mousemove="e => updateHover(name, e, $event.currentTarget)"
            @mouseleave="setHoverOutside(name)">
         <!-- Spectrum canvas -->
-        <canvas :ref="el => { if (el) spectrumCanvases[name] = el }"
+        <canvas v-if="!compact"
+                :ref="el => { if (el) spectrumCanvases[name] = el }"
                 class="sa-spectrum-canvas" />
         <!-- Waterfall canvas -->
         <canvas :ref="el => { if (el) waterfallCanvases[name] = el }"
@@ -772,7 +822,7 @@ function fmtNum2(v) {
         <!-- Axis overlay SVG. viewBox tracks the panel's live pixel
              width so left (46) / right (72) gutters stay at exact CSS
              pixels and freq labels drop under their data columns. -->
-        <svg class="sa-axes" v-if="axesFor(name)"
+        <svg class="sa-axes" v-if="!compact && axesFor(name)"
              :viewBox="`0 0 ${panelPxW} ${PANEL_TOTAL_H}`"
              preserveAspectRatio="none">
           <defs>
@@ -1130,4 +1180,41 @@ function fmtNum2(v) {
   font-style: italic;
   text-align: center;
 }
+
+/* ---- Compact (booth) variant -------------------------------------------
+   Five live waterfall strips dividing whatever height the container has:
+   no FFT trace, no axes, no metrics strip. The TTC screen gives the widget
+   a 431 px slot with overflow hidden and no scrollbar, and the full layout
+   wants 1854 px, so a visitor saw the first band and nothing else for the
+   25 s the attract loop spends on the spectrum page. [MESHSAT-1203] */
+.sa-root.sa-compact {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+}
+.sa-root.sa-compact .sa-head { margin-bottom: 0; }
+.sa-root.sa-compact .sa-head h3 { font-size: 11px; }
+.sa-root.sa-compact .sa-panel {
+  margin-top: 0;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sa-root.sa-compact .sa-panel-head { padding: 2px 6px; }
+.sa-root.sa-compact .sa-panel-title { font-size: 11px; }
+.sa-root.sa-compact .sa-panel-meta { gap: 8px; }
+.sa-root.sa-compact .sa-state { padding: 1px 5px; font-size: 9px; }
+.sa-root.sa-compact .sa-plot { flex: 1 1 0; min-height: 0; height: auto; }
+.sa-root.sa-compact .sa-waterfall-canvas {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+.sa-root.sa-compact .sa-cal-strip { height: 16px; padding: 0 6px; }
+.sa-root.sa-compact .sa-cal-text { font-size: 9px; }
+.sa-compact-peak { font-family: monospace; font-size: 10px; color: #94a3b8; }
 </style>
