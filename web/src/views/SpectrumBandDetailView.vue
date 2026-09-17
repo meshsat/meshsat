@@ -357,14 +357,18 @@ const transitionMarkers = computed(() => {
       ts,
     })
   }
-  // Thin the captions: a marker within 3 % of the box height of one that
-  // already has a label keeps its line and loses its text. Six transitions
-  // inside twenty minutes wrote three captions on top of each other.
+  // Thin the captions. The threshold is a PIXEL distance converted through
+  // the live box height, not a fixed percentage: 3 % looked right and was
+  // marginally too small on the real page, where a 428 px box put three
+  // captions 14 px apart and kept all three, still overlapping. A caption is
+  // ~11 px of text, so 20 px of clearance is the honest minimum.
   // [MESHSAT-1203]
+  const boxH = Math.max(60, waterfallH.value || 640)
+  const minPct = (20 / boxH) * 100
   out.sort((a, b) => a.yPct - b.yPct)
-  let lastLabelled = -99
+  let lastLabelled = -999
   for (const m of out) {
-    if (m.yPct - lastLabelled < 3) m.showLabel = false
+    if (m.yPct - lastLabelled < minPct) m.showLabel = false
     else lastLabelled = m.yPct
   }
   return out
