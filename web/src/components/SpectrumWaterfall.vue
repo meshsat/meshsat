@@ -97,7 +97,12 @@ function turbo(t) {
 //
 // Returns { yTop, yBot } in dBm. Callers compute pixel positions
 // themselves — this is purely the range math.
-function spectrumYRange(powers) {
+// `cutoffDB`, when given, is kept inside the returned range: the reference
+// line is the only thing on the plot that says how far the band is from a
+// verdict, and on a quiet band it sits 6 dB above a noise floor that spans
+// 4 dB, so auto-scaling to the data alone pushed it off the top of every
+// panel and drew nothing at all. [MESHSAT-1203]
+function spectrumYRange(powers, cutoffDB) {
   let mn = Infinity, mx = -Infinity
   if (powers?.length) {
     for (const p of powers) {
@@ -121,8 +126,11 @@ function spectrumYRange(powers) {
   // minimum, so a flat quiet band sits symmetrically in the plot.
   const midPoint = (mn + mx) / 2
   const halfSpan = span / 2
-  const yTop = midPoint + halfSpan + pad
+  let yTop = midPoint + halfSpan + pad
   const yBot = midPoint - halfSpan - pad
+  if (typeof cutoffDB === 'number' && isFinite(cutoffDB) && cutoffDB + 1.5 > yTop) {
+    yTop = cutoffDB + 1.5
+  }
   return { yTop, yBot }
 }
 
@@ -236,7 +244,7 @@ function drawSpectrum(bandName) {
 
   // Y-axis range from the current row's own dB statistics — see
   // spectrumYRange() for why we dropped the baselineStd-derived range.
-  const { yTop, yBot } = spectrumYRange(top.powers)
+  const { yTop, yBot } = spectrumYRange(top.powers, band.threshInterference || (band.baselineMean + 6))
   const yRange = yTop - yBot
   const yAt = (dB) => plotT + ((yTop - dB) / yRange) * plotH
 
@@ -520,7 +528,7 @@ function axesFor(bandName) {
   // canvas trace actually draws — the two used to drift apart on
   // locked-carrier bands where baselineStd collapsed the range.
   const topRow = b.rows?.[0]
-  const { yTop, yBot } = spectrumYRange(topRow?.powers)
+  const { yTop, yBot } = spectrumYRange(topRow?.powers, b?.threshInterference || (b?.baselineMean ? b.baselineMean + 6 : undefined))
   // dBm labels every 5 dB, snapped to round numbers. If the effective
   // span is small (flat quiet band), widen the tick cadence to 1 dB
   // so we still get at least 3 labels — a 4 dB plot at 5 dB/tick would
