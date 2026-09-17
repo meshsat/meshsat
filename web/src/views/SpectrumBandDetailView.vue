@@ -339,12 +339,26 @@ const transitionMarkers = computed(() => {
     out.push({
       yPct,
       color,
+      // Filled in below: only the first marker of a cluster keeps its label,
+      // or a burst of transitions writes three unreadable captions on top of
+      // each other. [MESHSAT-1203]
+      showLabel: true,
       state: t.new_state || t.NewState,
       oldState: t.old_state || t.OldState,
       peakDB: t.peak_db ?? t.PeakDB,
       peakFreqHz: t.peak_freq_hz ?? t.PeakFreqHz,
       ts,
     })
+  }
+  // Thin the captions: a marker within 3 % of the box height of one that
+  // already has a label keeps its line and loses its text. Six transitions
+  // inside twenty minutes wrote three captions on top of each other.
+  // [MESHSAT-1203]
+  out.sort((a, b) => a.yPct - b.yPct)
+  let lastLabelled = -99
+  for (const m of out) {
+    if (m.yPct - lastLabelled < 3) m.showLabel = false
+    else lastLabelled = m.yPct
   }
   return out
 })
@@ -591,7 +605,7 @@ function goBack() {
         <div v-for="(m, i) in transitionMarkers" :key="i"
              class="sd-marker"
              :style="{ top: m.yPct + '%', backgroundColor: m.color }">
-          <span class="sd-marker-label" :style="{ color: m.color }">
+          <span v-if="m.showLabel" class="sd-marker-label" :style="{ color: m.color }">
             {{ m.oldState }}→{{ m.state }}
           </span>
         </div>
