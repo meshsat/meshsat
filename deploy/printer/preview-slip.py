@@ -140,7 +140,9 @@ def main():
     ap.add_argument("--serial", type=int, default=0)
     ap.add_argument("--text", default="Hallo uit Amsterdam! Groeten van stand S27.")
     ap.add_argument("--callsign", default="MSTSRT-10")
-    ap.add_argument("--bearer", default="Meshtastic")
+    ap.add_argument("--bearer", default="APRS 144.800 MHz")
+    ap.add_argument("--source", default="radio", help="bearer it arrived on")
+    ap.add_argument("--crossing", default="aprs_0", help="delivery channel it crossed on")
     ap.add_argument("--sender", default="!de11f199")
     ap.add_argument("--when", default="2026-09-22 10:14:07")
     ap.add_argument("--scale", type=int, default=2, help="upscale the preview")
@@ -156,7 +158,8 @@ def main():
     # Preview the blobs that are committed here, not whatever a kit happens to hold.
     cfg["logo"] = rp.load_logo(os.path.join(here, "meshsat-logo.raster"))
     cfg["hat"] = rp.load_logo(os.path.join(here, "meshsat-hat.raster"))
-    msg = {"text": args.text, "from": args.sender, "bearer": args.bearer, "when": args.when}
+    msg = {"text": args.text, "from": args.sender, "bearer": args.bearer,
+           "source": args.source, "crossing": args.crossing, "when": args.when}
 
     im = render(rp.build_slip(msg, cfg, args.serial))
     if args.scale > 1:
