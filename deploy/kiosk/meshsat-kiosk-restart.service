@@ -2,7 +2,7 @@
 Description=Restart kiosk session (Chromium + labwc) for a clean-slate daily
 # host-ops: allowed-in-standalone — runs from host systemd, not meshsat.
 After=getty@tty1.service
-Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT-628
+Documentation=https://gitlab.nuclearlighters.net/products/meshsat/meshsat MESHSAT-628
 
 [Service]
 Type=oneshot

@@ -477,5 +477,5 @@ changelog:notify-website:
   variables:
     CHANGELOG_RUN: "1"
   trigger:
-    project: products/cubeos/meshsat-website
+    project: products/meshsat/meshsat-website
     branch: main

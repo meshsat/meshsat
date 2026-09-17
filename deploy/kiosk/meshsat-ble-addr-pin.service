@@ -13,7 +13,7 @@ Description=Pin Pi 5 BT adapter flags so Reticulum GATT advertises on the public
 # flags. The script is idempotent and wrapped in per-step timeouts.
 After=bluetooth.service
 Wants=bluetooth.service
-Documentation=https://gitlab.nuclearlighters.net/products/cubeos/meshsat MESHSAT-678
+Documentation=https://gitlab.nuclearlighters.net/products/meshsat/meshsat MESHSAT-678
 
 [Service]
 Type=oneshot
