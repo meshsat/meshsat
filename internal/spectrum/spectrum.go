@@ -441,6 +441,13 @@ const (
 	OwnTrafficInterferencePersistenceSec = 120
 	OwnTrafficDegradedPersistenceSec     = 120
 
+	// Quantile of the calibration samples taken as the band's noise floor.
+	// A floor is a lower bound — signals only add power — so the estimator
+	// has to survive a calibration window that is busy most of the time.
+	// 0.25 tolerates 75 % occupancy and costs under 0.1 dB on a quiet band.
+	// [MESHSAT-1203]
+	BaselineQuantile = 0.25
+
 	// Hysteresis — how long a band must be "clean" before demoting.
 	RecoveryPersistenceSec = 30
 

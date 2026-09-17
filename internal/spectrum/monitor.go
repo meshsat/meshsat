@@ -1276,7 +1276,7 @@ func baselineStats(values []float64) (mean, std, mad float64) {
 		return 0, 0, 0
 	}
 
-	// The level is the MEDIAN, not the arithmetic mean. Calibration runs
+	// The level is a LOW QUANTILE, not the arithmetic mean. Calibration runs
 	// for 30 s on a live band, and on a band that carries our own radio a
 	// couple of transmissions land inside that window: each one is 40 dB
 	// over the floor, so the mean is dragged up several dB and every
@@ -1287,17 +1287,34 @@ func baselineStats(values []float64) (mean, std, mad float64) {
 	// median ignores them, and on a quiet band it agrees with the mean to
 	// well inside 0.1 dB, so nothing else changes. ITU-R SM.1880 Annex 2 §5
 	// asks for robust estimators here for exactly this reason.
+	//
+	// The median was the first fix and it was not enough: it only survives
+	// contamination up to half the samples. Measured on parallax the same
+	// evening, lora_868 calibrated to -57.35 dB while its live quiet floor
+	// sat at -62.7 — that band's window was busy for MORE than half its
+	// duration, so the median followed the traffic. A noise floor is a
+	// lower bound by nature, since signals only ever ADD power, so the
+	// estimator is the 25th percentile: robust up to 75 % occupancy. On a
+	// quiet band it costs nothing, measured on both kits the same evening —
+	// p10, p25 and p50 of the live rows agree to under 0.1 dB.
 	// [MESHSAT-1203]
 	sortedVals := make([]float64, len(finite))
 	copy(sortedVals, finite)
 	sort.Float64s(sortedVals)
-	mean = median(sortedVals)
+	mean = quantile(sortedVals, BaselineQuantile)
 
-	// Spread stays measured about the level, so a bursty band still
-	// reports an honest ± on screen.
+	// Std stays a textbook standard deviation about the ARITHMETIC mean:
+	// the level is a floor estimator and the spread is a spread, and mixing
+	// the two would make `std` an RMS distance from the floor, which is not
+	// what anything reading it expects.
+	var sum float64
+	for _, v := range finite {
+		sum += v
+	}
+	arith := sum / float64(len(finite))
 	var sumSq float64
 	for _, v := range finite {
-		d := v - mean
+		d := v - arith
 		sumSq += d * d
 	}
 	std = math.Sqrt(sumSq / float64(len(finite)))
@@ -1324,6 +1341,22 @@ func baselineStats(values []float64) (mean, std, mad float64) {
 // median returns the middle element (or average of the two middle
 // elements for even-length inputs) of a pre-sorted slice. Panics on
 // empty input; callers must check.
+// quantile returns the p-th value of an ALREADY SORTED slice, nearest-rank.
+// [MESHSAT-1203]
+func quantile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if p <= 0 {
+		return sorted[0]
+	}
+	if p >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	i := int(p * float64(len(sorted)-1))
+	return sorted[i]
+}
+
 func median(sorted []float64) float64 {
 	n := len(sorted)
 	if n%2 == 1 {
