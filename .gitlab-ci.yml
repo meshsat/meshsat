@@ -136,6 +136,24 @@ lint:consistency:
   allow_failure: false
 
 # -----------------------------------------------------------------------------
+# TEST:AGENT — Host agent unit tests (gate: the deploy installs this file)
+# -----------------------------------------------------------------------------
+# The OOB host agent is a host file, not part of the container image, so the Go
+# suite never sees it. Since the deploy stage now installs it on the kits, its
+# own tests gate the deploy too. Stdlib Python only, no root, nothing on the
+# runner is read or switched. [MESHSAT-821]
+test:agent:
+  stage: validate
+  tags: [multiarch]
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache python3
+  script:
+    - cd deploy/oob && python3 -m unittest test_agent -v
+  rules:
+    - when: always
+
+# -----------------------------------------------------------------------------
 # TEST — Run Go test suite (gate: regressions block deploy)
 # -----------------------------------------------------------------------------
 test:
@@ -340,13 +358,17 @@ deploy:
         exit 1
       fi
     - scp scripts/ci-deploy.sh ${PI_DEPLOY_HOST}:/tmp/ci-deploy-meshsat.sh
+    # The OOB host agent lives on the host, not in the image, so nothing used
+    # to carry it to a kit and it drifted from the repo. ci-deploy.sh installs
+    # it when it differs, best effort. [MESHSAT-821]
+    - scp deploy/oob/meshsat-oob-agent ${PI_DEPLOY_HOST}:/tmp/meshsat-oob-agent
     - |
       # MESHSAT_EXPECTED_* come from the package stage's dotenv report and let
       # the kit refuse to deploy a cached image that is not this build. A green
       # deploy previously proved only that /health answered. [MESHSAT-809]
       ssh -o ServerAliveInterval=15 ${PI_DEPLOY_HOST} \
         "GHCR_TOKEN='${GHCR_TOKEN}' GHCR_USER='${GHCR_USER}' DEPLOY_TARGET='${DEPLOY_TARGET}' MESHSAT_EXPECTED_DIGEST='${MESHSAT_EXPECTED_DIGEST}' MESHSAT_EXPECTED_SHA='${MESHSAT_EXPECTED_SHA}' MESHSAT_PULL_TIMEOUT_BASE='${MESHSAT_PULL_TIMEOUT_BASE}' bash /tmp/ci-deploy-meshsat.sh"
-    - ssh ${PI_DEPLOY_HOST} "rm -f /tmp/ci-deploy-meshsat.sh"
+    - ssh ${PI_DEPLOY_HOST} "rm -f /tmp/ci-deploy-meshsat.sh /tmp/meshsat-oob-agent"
   after_script:
     - kill $SSH_AGENT_PID 2>/dev/null || true
   rules:

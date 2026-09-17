@@ -109,6 +109,7 @@ func (h *harness) sends() []sentItem {
 type fakeAgent struct {
 	mu    sync.Mutex
 	calls []string
+	ttys  map[string]any // last usb_switchable role -> tty map
 	ln    net.Listener
 	path  string
 	lines int
@@ -165,16 +166,34 @@ func (a *fakeAgent) serve(conn net.Conn) {
 		reply = agentReply{OK: true, Result: map[string]any{"scheduled": true, "method": "power_cycle", "hub": "2-1", "port": 3}}
 	case "usb_switchable":
 		// mesh and aioc on a switchable hub, cellular on a Pi root port.
-		reply = agentReply{OK: true, Result: map[string]any{
+		res := map[string]any{
 			"mesh":     map[string]any{"switchable": true, "name": "2-1.3", "hub": "2-1", "twin": "3-1", "port": 3},
 			"aioc":     map[string]any{"switchable": true, "name": "2-1.1", "hub": "2-1", "twin": "3-1", "port": 1},
 			"cellular": map[string]any{"switchable": false, "reason": "device is on a root port, not switchable"},
-		}}
+		}
+		// A role whose VID:PID is shared resolves only when the caller sent
+		// its tty, exactly like the real agent. [MESHSAT-821]
+		ttys, _ := req.Args["ttys"].(map[string]any)
+		a.mu.Lock()
+		a.ttys = ttys
+		a.mu.Unlock()
+		if tty, _ := ttys["aprs"].(string); tty != "" {
+			res["aprs"] = map[string]any{"switchable": true, "name": "2-1.2", "hub": "2-1", "twin": "3-1", "port": 2}
+		} else {
+			res["aprs"] = map[string]any{"switchable": false, "reason": "ambiguous, pass tty"}
+		}
+		reply = agentReply{OK: true, Result: res}
 	default:
 		reply = agentReply{OK: false, Error: "unknown action"}
 	}
 	b, _ := json.Marshal(reply)
 	_, _ = conn.Write(append(b, '\n'))
+}
+
+func (a *fakeAgent) lastTTYs() map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ttys
 }
 
 func (a *fakeAgent) called() []string {
@@ -534,6 +553,52 @@ func TestTargetsInfo_PowerCycle(t *testing.T) {
 	}
 	if USBDeviceForTarget("aprs") != "aioc" || USBDeviceForTarget("imt") != "" || USBDeviceForTarget("mesh") != "mesh" {
 		t.Fatal("USBDeviceForTarget mapping")
+	}
+}
+
+// TestTargetsInfo_TNCNeedsItsTTY: on a PicoAPRS kit the APRS target is the
+// TNC's own CP210x, which shares its VID:PID with the ZigBee dongle. Without
+// the tty the agent cannot tell them apart and the target reads as not
+// switchable, which is how a switchable port came to look unswitchable.
+// [MESHSAT-821]
+func TestTargetsInfo_TNCNeedsItsTTY(t *testing.T) {
+	h := newHarness(t, "control", true)
+	byName := func() map[string]TargetInfo {
+		got := map[string]TargetInfo{}
+		for _, ti := range h.svc.TargetsInfo() {
+			got[ti.Name] = ti
+		}
+		return got
+	}
+	// Default wiring is the sound-card chain: aprs -> aioc, no tty.
+	if got := byName(); !got["aprs"].PowerCycle || got["aprs"].HubPort != "2-1.1" {
+		t.Fatalf("aioc kit: %+v", got["aprs"])
+	}
+	if h.agent.lastTTYs() != nil {
+		t.Fatalf("no tty should be sent without a wiring override: %v", h.agent.lastTTYs())
+	}
+
+	const tnc = "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_1cb0-if00-port0"
+	h.svc.d.USBTarget = func(target string) (string, string) {
+		if target == "aprs" {
+			return "aprs", tnc
+		}
+		return "", ""
+	}
+	h.svc.usbProbe, h.svc.usbAt = nil, time.Time{} // the probe is cached for a minute
+	got := byName()
+	if !got["aprs"].PowerCycle || got["aprs"].HubPort != "2-1.2" {
+		t.Fatalf("TNC kit: %+v", got["aprs"])
+	}
+	if tty, _ := h.agent.lastTTYs()["aprs"].(string); tty != tnc {
+		t.Fatalf("agent got ttys %v, want aprs=%s", h.agent.lastTTYs(), tnc)
+	}
+	// The role the executor would cut follows the same wiring.
+	if role, tty := h.svc.usbTarget("aprs"); role != "aprs" || tty != tnc {
+		t.Fatalf("usbTarget(aprs) = %q, %q", role, tty)
+	}
+	if role, tty := h.svc.usbTarget("mesh"); role != "mesh" || tty != "" {
+		t.Fatalf("usbTarget(mesh) = %q, %q", role, tty)
 	}
 }
 

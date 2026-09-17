@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "3"
+VERSION = "4"
 SOCKET_PATH = os.environ.get("MESHSAT_OOB_SOCKET", "/run/meshsat-oob/agent.sock")
 READ_TIMEOUT = 5.0
 MAX_LINE = 4096
@@ -88,6 +88,10 @@ USB_DEVICES = {
     "gps": ["1546:01a7"],
     "usb_wifi": ["0e8d:7612"],
     "aioc": ["1209:7388"],
+    # A hardware TNC (PicoAPRS V4) is a CP2102N, the same VID:PID as the
+    # ZigBee dongle, so this role only ever resolves from the tty the bridge
+    # claimed for it. "aioc" stays for sound-card kits. [MESHSAT-821]
+    "aprs": ["10c4:ea60"],
     "rtl_sdr": ["0bda:2838", "0bda:2832"],
 }
 USB_NAME_RE = re.compile(r"^\d+-\d+(\.\d+)*$")
@@ -190,8 +194,14 @@ def plan(action, args):
     if action == "usb_switchable":
         role = args.get("device")
         roles = [str(role)] if role else sorted(USB_DEVICES)
-        tty = args.get("tty") if role else None
-        return None, 30, lambda _p: usb_switchable(roles, tty)
+        # Roles whose VID:PID is shared with another device (the TNC and the
+        # ZigBee dongle are both CP210x) resolve only from the tty the bridge
+        # claimed for them, so a whole-bus probe takes a role -> tty map and
+        # a single-role probe takes "tty". [MESHSAT-821]
+        ttys = {k: v for k, v in (args.get("ttys") or {}).items() if v}
+        if role and args.get("tty"):
+            ttys = {str(role): args["tty"]}
+        return None, 30, lambda _p: usb_switchable(roles, ttys)
 
     if action == "usb_power_cycle":
         role = str(args.get("device", ""))
@@ -356,8 +366,11 @@ def twin_hub(hub):
 
 
 def usb_name_for_tty(tty):
-    """'/dev/ttyACM1' -> the sysfs USB device name it hangs off ('2-1.3')."""
-    n = os.path.basename(str(tty or ""))
+    """'/dev/ttyACM1' -> the sysfs USB device name it hangs off ('2-1.3').
+    A /dev/serial/by-id/... symlink is followed first: the APRS gateway stores
+    its TNC that way, and realpath on a plain tty returns it unchanged."""
+    raw = str(tty or "")
+    n = os.path.basename(os.path.realpath(raw) if raw.startswith("/dev/") else raw)
     if not re.match(r"^tty[A-Za-z]+\d+$", n):
         raise Refused("bad tty")
     path = os.path.realpath("/sys/class/tty/%s/device" % n)
@@ -406,12 +419,14 @@ def hub_switchable(hub, port):
     return p.returncode == 0 and "Current status for hub" in out and "No compatible devices" not in out
 
 
-def usb_switchable(roles, tty=None):
-    """Per role: where the device sits and whether its port can be power-cycled."""
+def usb_switchable(roles, ttys=None):
+    """Per role: where the device sits and whether its port can be power-cycled.
+    ttys maps a role to the tty that disambiguates it (shared VID:PID)."""
+    ttys = ttys or {}
     out = {}
     for role in roles:
         try:
-            dev = resolve_usb_port(role, tty)
+            dev = resolve_usb_port(role, ttys.get(role))
             dev["switchable"] = hub_switchable(dev["hub"], dev["port"])
             out[role] = dev
         except Refused as e:
