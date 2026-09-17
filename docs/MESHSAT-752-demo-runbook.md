@@ -1445,6 +1445,19 @@ text are `MESHSAT_PRINTER_MILESTONE` / `_MILESTONE_TEXT`; 0 turns it off. Proven
 tesseract at 17:04. **Both counters were zeroed afterwards, so the booth starts at #0001 on each
 kit.**
 
+**Standard procedure: zero the counters after every printer test** (owner, 17 Sep 2026), so the
+number on a visitor's slip is a real count and the hat at 666 is owed to a real person.
+
+```
+scripts/slip-counter.sh            # where both kits are
+scripts/slip-counter.sh zero       # after a test
+scripts/slip-counter.sh set 250    # continue from a known number
+```
+
+**Both kits or neither.** The two share one sequence - a kit takes max(its own, the peer's) + 1
+before printing - so zeroing one alone does nothing: the other kit's number wins on the next slip.
+The script refuses to write only one kit, and reads both back.
+
 **Preview a slip without paper:** `deploy/printer/preview-slip.py out.png --serial 666` renders the
 real ESC/POS byte stream, so a wrong slip previews wrong in the same way. Add `--text`, `--callsign`,
 `--bearer`. Needs Pillow and qrcode, so a dev box, never a kit.
