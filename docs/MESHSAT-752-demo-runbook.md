@@ -1472,3 +1472,105 @@ what makes it safe at a booth with no internet.
 `systemctl is-active meshsat-receipt-printer` on both kits and `sudo cat
 /var/lib/meshsat/receipt-count` to note the starting numbers. About 115 slips per roll now that the
 sentence is on them, 20 rolls in stock.
+
+## 51. 17 Sep 2026, evening: the spectrum monitor was watching the wrong frequency, and twelve other things (MESHSAT-1203)
+
+**The headline: the band bound to `mesh_0` did not contain the mesh.** In EU_868 the Meshtastic
+firmware puts the mesh in the 869.4-869.65 "g3" sub-band, one 250 kHz channel, so LongFast sits at
+**869.525 MHz**. The only LoRa band the monitor had was `lora_868`, 868.0-868.6, bound to `mesh_0`.
+The mesh jamming detector had therefore never seen a single mesh transmission since the monitor was
+written in April.
+
+Worse for the booth: what `lora_868` really watches is the 868 ISM sub-band, where **867.9 and
+868.5 are standard LoRaWAN uplink channels**, both measured on both kits that afternoon. Bound to
+`mesh_0`, a hall full of LoRaWAN gateways would have scored as the mesh being jammed, and a jammed
+interface scores 0 and the dispatcher routes away from it. At a LoRaWAN conference.
+
+| Band | Range | Interface |
+|---|---|---|
+| `mesh_869` (new) | 869.300-869.750, CropPad 4 | `mesh_0` |
+| `lora_868` | 867.800-868.600 | **none** — environment only |
+
+`MESHSAT_SPECTRUM_MESH_BAND="869.3-869.75"` retunes the mesh band for a region the build has no
+slot for (only EU_868 and EU_433 are in the table; a US kit's channels spread over 26 MHz and need
+the override). A startup check reads the radio's region and logs
+`spectrum: mesh band covers the radio's region` — or a warning naming both ranges when it does not.
+That check is the thing that would have caught this in April.
+
+**Measured proof the frequency is right**, since the region table alone is not evidence. Per-bin
+mean of the loud rows on tesseract:
+
+    869.312 -48.8   869.487 -32.5   869.512 -25.2
+    869.412 -44.7   869.538 -24.8   869.562 -24.7   <- flat top
+    869.462 -39.6   869.587 -32.8   869.612 -39.7
+    869.663 -44.7   869.737 -48.1
+    quiet rows: -63.6 dB flat across all 18 bins
+
+Symmetric, flat-topped, centred 869.53, 40 dB over the floor, matching pair for pair on both sides,
+present in 6 of 48 rows and absent from the other 42. Parallax shows the identical profile. Noise
+does not do that and out-of-band desense does not do that.
+
+**Reading this band later:** compare a row against the BAND BASELINE, not against the row's own
+median. The mesh signal fills more than half the 450 kHz window, so the median rises with it and a
+peak-versus-median test goes blind — it found 2 loud rows where a baseline comparison found 6.
+
+**The classifier had to learn about our own radio.** A transmitter tens of centimetres from the SDR
+lands 40 dB over the floor and fills the window: occupancy 100 %, and the interference tier tripped.
+The design brief assumed a LoRa burst is under a second and the next scan clears it, which holds for
+one burst and not for a busy channel, where two transmissions 10 s apart already satisfy the 10 s
+dwell. Both kits sat in INTERFERENCE with the ECCM banner advising the operator to move the mesh
+channel — away from our own transmitter. Bands flagged `OwnTraffic` now need **120 s** before
+interference or degraded sticks. Jamming is untouched: it needs flatness >= 0.60 and structured LoRa
+measures 0.16.
+
+**The baseline estimator, twice.** Calibration runs 30 s on a live band, so our own traffic lands in
+the window. The arithmetic mean took it: `mesh_869` calibrated to -59.2 dB on parallax with a std of
+7.87 and a **MAD of 0.028** — nearly every sample identical, a handful of outliers moving the level
+4 dB, and every threshold derived from it deaf by the same 4 dB. The median fixed that and was still
+not enough: parallax's `lora_868` calibrated to -57.35 while its live quiet floor sat at -62.7,
+because that window was busy for MORE than half its duration. A noise floor is a lower bound —
+signals only ADD power — so the level is now the **25th percentile** (`BaselineQuantile`), robust to
+75 % occupancy and costing under 0.1 dB on a quiet band. `std` stays a textbook standard deviation
+about the arithmetic mean; the `±` on screen is the robust spread, 1.4826·MAD with a 0.5 dB floor.
+
+**The reference line.** There is one, at baseline + 6 dB, labelled `+6 dB bin-active cutoff`, and
+the plotted range always contains it. The two lines before it were labelled "3σ" and "6σ", which the
+detector stopped using: the backend sends baseline+6 for both, so they drew on top of each other,
+and the status payload carried no thresholds at all, so a freshly loaded page fell back to
+baseline + 3·std — on GPS L1, whose std is 0.017 dB, an "alarm" line 0.05 dB above the noise with
+the trace riding on it. **Jamming is not a power level** (it needs occupancy >= 0.70 AND flatness
+>= 0.60), so there is no honest line to draw for it.
+
+**Open, needs an owner ruling: the receiver floor drifts about 1 dB.** Five samples of the `gps_l1`
+live floor, three minutes apart: tesseract -64.75, -63.46, -63.51, -63.48, -63.50; parallax -61.74
+five times. Tesseract's floor stepped once and held; parallax never moved. A one-shot calibration
+therefore sits about a dB from wherever the floor settles, in either direction, per kit. Tracking it
+means a slowly-adapting floor, which can also absorb a real jammer, so it is not a change to make
+days before a booth without a decision. Detection is unaffected: the tiers are 30 % and 70 %
+occupancy against a jammer 25-40 dB over the floor.
+
+**Final state, both kits, all six bands clear:** tesseract -63.49 to -64.28 (mesh ± 1.04, rest
+± 0.50), parallax -61.74 to -61.80 (all ± 0.50). Parallax's whole receiver sits about 2 dB above
+tesseract's, consistently across every band, which is a per-dongle characteristic and not
+contamination.
+
+**Smaller things fixed in the same pass, all of them found by looking at the live page:** the header
+said "across 5 bands" with six on screen; `peak (event)` printed `0.0 dBm @ 0.000 MHz` on every band
+because the API sends 0/0 before the first transition and 0 is finite; the GPS axis printed
+"1.575 GHz" twice because the unit came from the magnitude rather than the span; the band-detail
+axis labelled the row range while the waterfall painted the window, so on a new band the axis read
+19:31-19:54 over the full height while the data sat in the top 8 %; "no transitions recorded in this
+session" sat above a band in INTERFERENCE because that list was fed by live events only, and it is
+seeded from history now, pre-acked; rows recorded before a band's window changed were stretched over
+the current axis, and are hidden and counted instead, since bin count is the only range fingerprint
+a row carries; a destination that is not configured is no longer counted as a relay error, which is
+what put a permanent red count on both kits for a TAK gateway that is off by choice; and the booth
+screen showed one band of six, because the widget wants 1854 px and the TTC slot is 431 px with
+overflow hidden — compact mode drops the trace, the axes and the metrics and gives five strips that
+divide the height.
+
+**Method note worth keeping.** Four audit passes were needed and four of the last six findings were
+caused by the fix before them: drawing the reference line at the real cutoff made it correct and
+invisible, fixing the level exposed a ± of 12.32, the median exposed the >50 % occupancy case, and
+the caption thinning at 3 % of the box was marginally too small for a 428 px box with captions 14 px
+apart. Re-audit after every fix; the first pass is never the last.
