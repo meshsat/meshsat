@@ -1389,3 +1389,52 @@ identifies which physical unit is on which kit without opening anything: tessera
 units' own displays are 255202693282056 (tesseract) and 180444492527880 (parallax), both SW 26 /
 Modem 22B. Radio settings live on the units' buttons only and survive no firmware update or factory
 reset: VHF 1 W, APRS 1 W, VHF BW Wide on, FM Noise Cancel off, AFSK BW Wide on, AFSK RX volume ~3/4.
+
+## 50. 17 Sep 2026: slip content, the slip counter, and the second screensaver poster (MESHSAT-1201)
+
+**The end-to-end run that closed MESHSAT-1154.** Printer packed since the night of 16 Sep, so from
+12:56 to 16:07 six slips queued and were given up, every attempt `[Errno 112] Host is down` on both
+kits. That is the service doing the right thing with nothing to talk to, not a fault: the moment the
+printer was switched on it answered `l2ping` in 13 ms and printed a self-test on the first attempt.
+**A kit that stops printing means the printer is off or out of paper** — the log says which.
+
+Then, through the bridge's own SSE stream, one injected mesh message per kit:
+
+| Test | Result |
+|---|---|
+| tesseract, one message | queued 16:49:51, `printed on 5A:4A:A1:18:4A:B9 channel 1` 16:49:54 |
+| parallax, one message | queued 16:50:21, printed 16:50:31 (first connect after a restart resolves the RFCOMM channel over SDP; it is cached after that) |
+| both kits at the same instant | tesseract 2 s, parallax 5 s, no retries, no losses — the take-turns design holds |
+| bridge restart (the 16:56:57 deploy, unplanned) | both followers reconnected unaided in ~25 s |
+| kit power-on | both services `Started` at the 12:30 boot, `enabled`, no hand-holding |
+
+**What a slip carries now.** Under the callsign, in bold: the owner's sentence, broken over the same
+three lines the booth poster uses, so the paper and the panel say it the same way. In the footer
+block, next to time/via/from, `slip #0042` — this kit's serial. Two kits share one printer, so **each
+keeps its own sequence** in `/var/lib/meshsat/receipt-count`, and the booth total is the two files
+added up; the callsign at the top says which kit a slip came from. The number is reserved before the
+first attempt and written only once paper came out, so retries reuse it and a slip that is given up
+never burns one.
+
+**Every 666th slip wins a hat** (owner, 17 Sep). It prints a rule, the hat, `SLIP 666` at double
+height, and `Ask us for your hat  \m/`. The hat is a real item — `meshsat-website/brand/embroidery`
+puts the lockup on a black cap — so it prints as a solid silhouette with the lockup knocked out to
+bare paper, drawn **in profile**: head on, a cap and a bucket hat have the same outline. Interval and
+text are `MESHSAT_PRINTER_MILESTONE` / `_MILESTONE_TEXT`; 0 turns it off. Proven on paper on
+tesseract at 17:04. **Both counters were zeroed afterwards, so the booth starts at #0001 on each
+kit.**
+
+**Preview a slip without paper:** `deploy/printer/preview-slip.py out.png --serial 666` renders the
+real ESC/POS byte stream, so a wrong slip previews wrong in the same way. Add `--text`, `--callsign`,
+`--bearer`. Needs Pillow and qrcode, so a dev box, never a kit.
+
+**Second screensaver poster.** `KioskScreensaver` now alternates two posters, bears first after a
+load; the bears poster is unchanged. The new one is the owner's sentence over a plan of the TTC26
+hall with stand **S27** lit and pulsing. `?saverSlide=bears|s27` pins one for auditing. Audited on
+both kits at 853x480 / DSF 1.5 after the deploy. Fonts are self-hosted through @fontsource, which is
+what makes it safe at a booth with no internet.
+
+**Power-on checklist, printer lines:** switch the printer on **before** the kits start relaying, then
+`systemctl is-active meshsat-receipt-printer` on both kits and `sudo cat
+/var/lib/meshsat/receipt-count` to note the starting numbers. About 115 slips per roll now that the
+sentence is on them, 20 rolls in stock.
