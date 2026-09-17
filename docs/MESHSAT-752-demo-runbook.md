@@ -1348,3 +1348,44 @@ kit does not add a second slip.
 meshsat-receipt-printer` on each kit. A healthy slip logs `queued slip for message <id>` then
 `printed on … channel 1`. A kit that stops printing means the printer is off or out of paper, not the
 service. About 130 slips per roll, 20 rolls in stock.
+
+## 49. 17 Sep 2026: the APRS receive regression, its cure, and the TNC hub-port cut (MESHSAT-1021, MESHSAT-1196)
+
+**The fault.** Kit-to-kit APRS decode fell to 15 % (tesseract -> parallax) and 44 % (the reverse)
+against a 15 Sep baseline of 65 to 83 % both ways. Delivery on radio drops to about 24 % at those
+rates, so three relayed texts in four reach the far kit by SMS after ~33 s of ack attempts instead
+of over the radio, and each one burns an SMS from a 250 bundle.
+
+**The cure: re-seat both APRS antenna chains.** After a re-seat (together with `AFSK BW Wide`
+switched on, the two not separated) the link returned to **83 % / 74 %, symmetric**, implied
+delivery on radio ~98 %, and an injected text went through on the first attempt with zero retries.
+
+**The rule this establishes: after anything touches an APRS connector, count frames before
+trusting the link.** The 16 Sep pad episode broke and remade every connector in both chains; its
+sign-off was a 3.5-minute hand count reading ~64 % and the real cost only appeared the next day.
+Counting takes seven minutes and is exact:
+
+```bash
+# baseline, then again after 7 minutes; rate = peer's rx delta / this kit's tx delta
+for k in tesseract parallax; do
+  curl -s http://nllei01${k}01:6050/api/aprs/status | jq -c '{rx,tx,receive_state,bad_frames}'
+done
+```
+
+`bad_frames` and `repaired_frames` stay 0 through a healthy degradation: the frames never arrive,
+they do not arrive broken. An asymmetric result points at one kit's chain or unit; a symmetric one
+at the channel.
+
+**What a hub-port cut does and does not do (MESHSAT-1196, new today).** `RESET aprs 3` now cuts the
+TNC's own hub port, resolved from the gateway's `kiss_device`; before today the role still named
+the AIOC and the call answered `device not present`. Proven on both kits: port 2-1.2, 3 s off, 8 to
+10 s of outage, CP2102N re-enumerated, gateway relinked unaided. **It does not cure a deaf
+PicoAPRS** — the unit runs on its own cell and does not reboot, so the cut resets the USB serial
+side only. Use it for a wedged link, never as an answer to poor decode.
+
+**Unit identity, for the booth.** The CP2102N serial in `kiss_addr` on `GET /api/aprs/status`
+identifies which physical unit is on which kit without opening anything: tesseract
+`36414a145c57ed11aeab52ca5720eef3`, parallax `1cb04e3ba957ed11928b4aca5720eef3`. Device IDs on the
+units' own displays are 255202693282056 (tesseract) and 180444492527880 (parallax), both SW 26 /
+Modem 22B. Radio settings live on the units' buttons only and survive no firmware update or factory
+reset: VHF 1 W, APRS 1 W, VHF BW Wide on, FM Noise Cancel off, AFSK BW Wide on, AFSK RX volume ~3/4.
