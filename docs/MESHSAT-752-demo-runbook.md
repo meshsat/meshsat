@@ -1403,18 +1403,30 @@ Then, through the bridge's own SSE stream, one injected mesh message per kit:
 | Test | Result |
 |---|---|
 | tesseract, one message | queued 16:49:51, `printed on 5A:4A:A1:18:4A:B9 channel 1` 16:49:54 |
+| crossed-only trigger, both ways | tesseract sent one across, printed #3, parallax silent; parallax sent one back, printed #4, tesseract silent |
 | parallax, one message | queued 16:50:21, printed 16:50:31 (first connect after a restart resolves the RFCOMM channel over SDP; it is cached after that) |
 | both kits at the same instant | tesseract 2 s, parallax 5 s, no retries, no losses — the take-turns design holds |
 | bridge restart (the 16:56:57 deploy, unplanned) | both followers reconnected unaided in ~25 s |
 | kit power-on | both services `Started` at the 12:30 boot, `enabled`, no hand-holding |
 
+**When a slip prints (changed the same evening, on the owner's bench test).** A slip is proof a
+message **crossed**, not proof one arrived. The trigger is the sending kit's own delivery reaching
+delivered/sent on a bearer that leaves the kit — for APRS that status is an ack from the far kit,
+the strongest proof the pair can produce. The local mesh hop is ignored, so **a message nothing
+relays prints nothing**, and the kit that sends it across is the one that prints, not the one that
+heard it. `via` is the delivery's own channel, so a message that fell back says SMS. Expect the slip
+up to ~35 s after the visitor pressed send, with the far handheld lighting up first.
+`MESHSAT_PRINTER_TRIGGER=arrival` restores print-on-arrival in one line of config — the way out if it
+misbehaves at the booth.
+
 **What a slip carries now.** Under the callsign, in bold: the owner's sentence, broken over the same
 three lines the booth poster uses, so the paper and the panel say it the same way. In the footer
-block, next to time/via/from, `slip #0042` — this kit's serial. Two kits share one printer, so **each
-keeps its own sequence** in `/var/lib/meshsat/receipt-count`, and the booth total is the two files
-added up; the callsign at the top says which kit a slip came from. The number is reserved before the
-first attempt and written only once paper came out, so retries reuse it and a slip that is given up
-never burns one.
+block, next to time/via/from, `slip #0042`. **One sequence for the stand, not one per kit**: each
+service serves its number on port 6051 and reads the peer's (`MESHSAT_PRINTER_PEER`) before printing,
+taking max + 1, and a POST only ever moves the number forward. A kit on its own keeps printing and
+catches up when the other answers. The number is worked out again on every attempt and written only
+once paper came out, so a slip that is given up burns none, and two kits that collide over the
+printer's single RFCOMM slot cannot claim the same one.
 
 **Every 666th slip wins a hat** (owner, 17 Sep). It prints a rule, the hat, `SLIP 666` at double
 height, and `Ask us for your hat  \m/`. The hat is a real item — `meshsat-website/brand/embroidery`
