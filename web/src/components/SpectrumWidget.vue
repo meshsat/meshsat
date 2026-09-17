@@ -19,7 +19,7 @@ const nowMs = ref(Date.now())
 const store = useSpectrumStore()
 const router = useRouter()
 
-const BAND_ORDER = ['lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
+const BAND_ORDER = ['mesh_869', 'lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
 const orderedBands = computed(() => {
   const keys = Object.keys(store.bands)
   return BAND_ORDER.filter(b => keys.includes(b)).concat(
@@ -285,7 +285,8 @@ const borderClass = computed(() => {
 })
 function shortLabel(name) {
   const map = {
-    lora_868: 'LoRa 868',
+    mesh_869: 'Mesh 869.5',
+    lora_868: '868 ISM',
     aprs_144: 'APRS 2m',
     gps_l1: 'GPS L1',
     lte_b20_dl: 'LTE-20',

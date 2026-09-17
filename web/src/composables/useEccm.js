@@ -16,7 +16,7 @@ const ECCM = locale.eccm
 // Canonical ordered band list for the quick-reference table. Derived
 // from the JSON instead of hardcoded so a new band (e.g. DCF77 77.5 kHz)
 // is picked up automatically when added to locales.
-export const BAND_ORDER = ['lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
+export const BAND_ORDER = ['mesh_869', 'lora_868', 'aprs_144', 'gps_l1', 'lte_b20_dl', 'lte_b8_dl']
 
 // eccmAction(bandName, state) → operator-facing recommendation text.
 // Falls back to generic text if the band doesn't have specific
