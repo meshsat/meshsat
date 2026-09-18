@@ -119,6 +119,7 @@ type DirectMeshTransport struct {
 	radioLogMu     sync.Mutex
 	radioLog       []RadioLogLine
 	radioLastReset string
+	consoleBuf     []byte
 	// myInfoThisSession: MyNodeInfo arrived in the current serial session,
 	// the radio's first answer to want_config. [MESHSAT-850]
 	myInfoThisSession bool
@@ -460,7 +461,7 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	sp.SetReadTimeout(meshReadTimeout)
 
 	t.file = sp
-	t.reader = &meshFrameReader{port: sp}
+	t.reader = &meshFrameReader{port: sp, onText: t.consoleText}
 	t.port = portPath
 	t.connectedAt = time.Now()
 	t.configReal = false
@@ -797,6 +798,46 @@ func (t *DirectMeshTransport) recordRadioLog(rec *ProtoLogRecord) {
 	log.Info().Str("radio_level", line.Level).Str("radio_source", line.Source).Msg("radio: " + line.Message)
 	if names {
 		t.emitEvent(MeshEvent{Type: "radio_log", Message: line.Message, Time: line.ReceivedAt})
+	}
+}
+
+// consoleTextMax bounds the partial console line the transport keeps
+// between reads.
+const consoleTextMax = 4096
+
+// consoleText receives the bytes the frame reader discards in front of a
+// protobuf frame. Before a client attaches, and for the first seconds
+// after a boot, Meshtastic prints its log as plain text on the same port,
+// so this is where the boot banner and the reset reason arrive. Complete
+// printable lines go into the radio log with level CONSOLE. [MESHSAT-1112]
+func (t *DirectMeshTransport) consoleText(b []byte) {
+	t.radioLogMu.Lock()
+	t.consoleBuf = append(t.consoleBuf, b...)
+	if len(t.consoleBuf) > consoleTextMax {
+		t.consoleBuf = t.consoleBuf[len(t.consoleBuf)-consoleTextMax:]
+	}
+	var lines []string
+	for {
+		i := strings.IndexByte(string(t.consoleBuf), '\n')
+		if i < 0 {
+			break
+		}
+		raw := t.consoleBuf[:i]
+		t.consoleBuf = t.consoleBuf[i+1:]
+		clean := strings.Map(func(r rune) rune {
+			if r >= 0x20 && r < 0x7f {
+				return r
+			}
+			return -1
+		}, string(raw))
+		clean = strings.TrimSpace(clean)
+		if len(clean) >= 3 {
+			lines = append(lines, clean)
+		}
+	}
+	t.radioLogMu.Unlock()
+	for _, l := range lines {
+		t.recordRadioLog(&ProtoLogRecord{Message: l, Level: "CONSOLE", Source: "tty"})
 	}
 }
 
