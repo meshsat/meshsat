@@ -225,6 +225,19 @@ func sendFrame(port serial.Port, payload []byte) error {
 type meshFrameReader struct {
 	port  serial.Port
 	accum []byte
+	// onText receives the bytes the reader discards in front of a frame
+	// start marker. Until a client attaches, Meshtastic prints its log as
+	// plain text on the same port, and the first seconds after a boot
+	// (the reset reason, the crash report) arrive exactly that way.
+	// [MESHSAT-1112]
+	onText func([]byte)
+}
+
+// discardText hands discarded bytes to onText when one is set.
+func (r *meshFrameReader) discardText(b []byte) {
+	if r.onText != nil && len(b) > 0 {
+		r.onText(b)
+	}
 }
 
 // readFrame blocks until a complete FromRadio protobuf is received.
@@ -263,12 +276,14 @@ func (r *meshFrameReader) extractFrame() []byte {
 		startIdx := findStartMarker(r.accum)
 		if startIdx < 0 {
 			if len(r.accum) > 1 {
+				r.discardText(r.accum[:len(r.accum)-1])
 				r.accum = r.accum[len(r.accum)-1:]
 			}
 			return nil
 		}
 
 		if startIdx > 0 {
+			r.discardText(r.accum[:startIdx])
 			r.accum = r.accum[startIdx:]
 		}
 

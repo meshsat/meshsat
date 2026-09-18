@@ -153,3 +153,25 @@ func TestHandleFromRadio_RebootedAndNotificationEvents(t *testing.T) {
 		t.Errorf("notification not kept as the last reset reason: %q", st.RadioLastResetReason)
 	}
 }
+
+// Plain-text console output in front of a protobuf frame (what the firmware
+// prints before a client attaches, including the boot banner) reaches the
+// radio log as CONSOLE lines instead of being dropped. [MESHSAT-1112]
+func TestFrameReader_ConsoleTextReachesRadioLog(t *testing.T) {
+	tr := NewDirectMeshTransport("/dev/null")
+	r := &meshFrameReader{onText: tr.consoleText}
+	frame, _ := proto.Marshal(&pb.FromRadio{PayloadVariant: &pb.FromRadio_Rebooted{Rebooted: true}})
+	r.accum = append([]byte("INFO  | ??:??:?? 0 Reset reason: 0x4 (RESET_REASON_SOFT)\r\nDEBUG | Battery: usbPower=1\r\n"), 0x94, 0xC3, 0x00, byte(len(frame)))
+	r.accum = append(r.accum, frame...)
+	if got := r.extractFrame(); got == nil {
+		t.Fatal("frame after console text not extracted")
+	}
+	lines := tr.RadioLog(0)
+	if len(lines) != 2 || lines[0].Level != "CONSOLE" || !strings.Contains(lines[0].Message, "Reset reason: 0x4") {
+		t.Fatalf("console lines = %+v", lines)
+	}
+	st, _ := tr.GetStatus(nil)
+	if !strings.Contains(st.RadioLastResetReason, "Reset reason: 0x4") {
+		t.Errorf("reset reason from the console not kept: %q", st.RadioLastResetReason)
+	}
+}
