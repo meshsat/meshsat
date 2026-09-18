@@ -175,3 +175,39 @@ func TestFrameReader_ConsoleTextReachesRadioLog(t *testing.T) {
 		t.Errorf("reset reason from the console not kept: %q", st.RadioLastResetReason)
 	}
 }
+
+// A broadcast never asks the firmware for an ack, a unicast does, and an
+// admin message to the radio's own node does not. [MESHSAT-1112]
+func TestWantAck_BroadcastAndSelfNeverAsk(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"text broadcast", buildTextMessage("hi", 0, 0), false},
+		{"text broadcast explicit", buildTextMessage("hi", meshBroadcast, 0), false},
+		{"text unicast", buildTextMessage("hi", 0x4370c1d8, 0), true},
+		{"raw broadcast asks anyway", buildRawPacket([]byte{1}, 256, 0, 0, true), false},
+		{"raw unicast", buildRawPacket([]byte{1}, 256, 0x4370c1d8, 0, true), true},
+		{"admin to self", buildAdminGetDeviceMetadata(0xde11f199, 0xde11f199), false},
+		{"admin to peer", buildAdminGetDeviceMetadata(0xde11f199, 0x4370c1d8), true},
+	}
+	for _, c := range cases {
+		// The text and raw builders return a bare MeshPacket (SendMessage
+		// wraps it), the admin builder a ToRadio.
+		pkt := &pb.MeshPacket{}
+		if err := proto.Unmarshal(c.data, pkt); err != nil || pkt.GetTo() == 0 {
+			msg := &pb.ToRadio{}
+			if err := proto.Unmarshal(c.data, msg); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			pkt = msg.GetPacket()
+		}
+		if pkt == nil {
+			t.Fatalf("%s: no packet", c.name)
+		}
+		if pkt.GetWantAck() != c.want {
+			t.Errorf("%s: want_ack = %v, want %v", c.name, pkt.GetWantAck(), c.want)
+		}
+	}
+}
