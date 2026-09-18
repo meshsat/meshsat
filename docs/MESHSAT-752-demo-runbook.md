@@ -1689,6 +1689,8 @@ while waiting for setup device command`, `unable to enumerate`. It never came ba
 hourly 3 s cuts, a 10 s cut, a 30 s cut (port read `0000 off` during it) or an unbind and rebind of
 `xhci-hcd.1` on 18 Sep. After the 13:18 deploy the target read "unknown", so nothing tried again.
 
+**Official sources checked (18 Sep 2026, after the owner asked):** rtl-sdr-blog releases (V1.4.0 = the commit we had pinned) and issues (#47 rtl_tcp does not exit cleanly, open since 2024; #76 rtl_tcp zombie after a dongle loss, open PR; #42 gain reset across RF paths, open), osmocom `rtl-sdr` v2.0.3 and its log, and the official V4 guide. Neither driver fixes the `rtlsdr_open` auto-reset or the `rtl_tcp` signal handling, so those two patches stay, now against osmocom.
+
 **The fix.**
 
 | Where | Change |
@@ -1699,7 +1701,8 @@ hourly 3 s cuts, a 10 s cut, a 30 s cut (port read `0000 off` during it) or an u
 | `docker-patches/librtlsdr-no-reset-on-open.patch` | `rtlsdr_open` fails instead of calling `libusb_reset_device`; the build fails if the call survives. |
 | `docker-patches/rtl_tcp-exit-on-signal.patch` | Found by the first level-1 heal on tesseract after the deploy (12:33): `rtl_tcp` swallows a SIGTERM that lands while a client is connected (it ends the session, resets `do_exit` and listens again), so the stop fell through to SIGKILL and `rtlsdr_close` never ran. A real signal now ends the process. It still needs about 5 s (measured 5.08 s: its TCP worker sits in a 5 s `pthread_cond_timedwait` nothing wakes), so the bridge's SIGTERM grace is 12 s, not 5; the log line `worker cond timeout; all threads dead..; bye!` is a clean exit. |
 | `internal/spectrum/rtltcp.go` | Same heal: the scan loop started the next `rtl_tcp` while the old one was still exiting; the new one failed on the busy dongle and the dial reached the old socket. A new reader now waits for the previous process to exit (test fails without it). |
-| `Dockerfile` | rtl-sdr-blog pinned to `aed0ea1`, rtl-power-fftw to `cee9a22`; `rtl_tcp` in the runtime image. |
+| `Dockerfile` | **The driver is now osmocom `rtl-sdr` v2.0.3** (release commit `797f814`), not the rtlsdrblog fork: the official V4 guide (rtl-sdr.com/V4, Linux) installs osmocom, which has full V4 support and upstream's `65f0658` "Fix application hang on USB transfer errors" (Jan 2026) that the Blog fork V1.4.0 lacks. The build asserts both. rtl-power-fftw pinned to `cee9a22`; `rtl_tcp` in the runtime image. |
+| `internal/spectrum/rtltcp.go` | The gain is set again after every retune: rtl-sdr-blog issue #42 (open) reports the R828D gain dropping to 0 dB across an RF-path border while the driver still reports the old value; re-setting it is the documented workaround, and the V4 switches its VHF/UHF inputs on every pass. |
 | `cmd/meshsat/rtlsdr_reset.go` | Level 3: suspend scanning (reader stopped, loops parked), hub-port power cycle, verify the dongle LEFT the bus and CAME BACK, settle 3 s, resume. No USB-reset fallback, and no 10 s SIGKILL after it. |
 | `cmd/meshsat/device_health.go` | Level 1 restarts the reader and is skipped when the dongle is not on the bus. The last hub port is kept in `system_config` `rtl_sdr_usb_location`, and a missing dongle with a known port is a miss, not "unknown", so the ladder still works after a restart. |
 
