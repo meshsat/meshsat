@@ -1742,3 +1742,79 @@ compatibility list flags this model (issue #509: units after the 2022 VL817 B0 t
 port off but keep power). So every level-3 "hub-port power cycle" on the kits is a data reconnect. It
 clears soft hangs, never a wedged chip, and MESHSAT-1167's panel-reset plan does not work on this hub.
 Purpose-built switchable hubs (Yepkit YKUSH family, Acroname USBHub3+) document a real per-port VBUS cut.
+
+## 54. 18 Sep 2026, afternoon: the time-sync beacon was eating the duty cycle, and five closures (MESHSAT-778, 783, 829, 758, 751, 755)
+
+**Health check, 16:07 CEST (read-only).** Both kits green on `sha256:497ecc10`: no throttling, 47 to
+49 °C, mains at 100 % and 99.7 %, chrony synced, RTC cells charging (about 3.0 V), no failed units,
+no mmc errors, panels on. Every device health target ok. Radios: T-Echo with an empty reset
+reason, PicoAPRS with 0 bad frames (tesseract hears ~85 % of parallax, parallax ~78 % of tesseract),
+cellular on KPN LTE (214 and 219 of 250 SMS left), 9603 and 9704 answering at 0 bars indoors,
+RTL-SDR back on the bus on both after the re-seat. Still open: tesseract's ZigBee sensor, silent since 6 Sep
+(MESHSAT-1092). The Hub relay reconnected at 15:41 and 15:59 on both kits in the same second: a Hub
+rollout, not the kits.
+
+**The finding: idle kits at 8.19 % `air_util_tx`** (the radio's own rolling hour on `GET /api/nodes`)
+against the EU868 10 % limit, and the firmware already skipping its own packets
+(`TX air util. >5.000000%. Skip send` every minute in `GET /api/mesh/radio-log`). The radio log
+showed the cause: two 115-byte broadcasts every 30 s at 1.09 s each.
+
+| Source | Packets / h | Airtime / h | Share of 10 % |
+|---|---|---|---|
+| Time-sync request (0x14), every 30 s, sent twice | 240 | 262 s | 7.3 % |
+| Announce burst every 5 min (own + relayed, 1.5 to 1.7 s each) | ~36 | ~58 s | 1.6 % |
+
+Two faults: `MeshTimeConsensus` broadcast its request on every free bearer every 30 s, peer or not,
+and `Processor.BroadcastRoutingPacket` sent on the mesh directly AND through the `mesh_0` packet
+sender `main.go` registers. Nothing on the kits' split meshes can answer 0x14; the kits exchange
+time sync only over `tcp_0`. At 8.2 % the real booth headroom was about 60 relayed texts per hour,
+not the ~150 the booth rule assumed, and hitting the limit is the MESHSAT-1112 crash path.
+
+**The fix (28db753, pipeline 54810, image `59e1ec2b`):** requests go out per interface, every 30 s
+where another bridge asked or answered within 10 min, otherwise one discovery request per
+`MESHSAT_TIMESYNC_DISCOVERY_MIN` (default 10). A peer is learned only from its own 0x14/0x15
+packets, so an MQTT echo of our own request never counts. `BroadcastRoutingPacket` reaches LoRa
+once. New `GET /api/timesync/peers` lists peers (stratum, offset, last RTT, interface) and each
+interface's mode and period. Tests fail with either fix reverted.
+
+**Verified:** `tcp_0` in peer mode within a minute on both kits (offset 2.4 ms, RTT 8 to 11 ms);
+`mesh_0`, `zigbee_0`, `ble_0` on discovery; one time-sync packet per kit on the mesh in 5.5 min
+(was 22). At 17:45 CEST: `air_util_tx` 1.33 % (tesseract) and 1.29 % (parallax), 0 Skip send,
+empty reset reason on both. The ~150 texts per hour booth rule holds again with room to spare.
+
+**Left open on MESHSAT-778:** the Settings view, the docs paragraph on 0x14/0x15 (meshsat-website),
+and bit-rate scaling. The existing budget arithmetic (`routing.DefaultBandwidths` x 2 %) changes no
+current interface; LoRa cost is airtime (1.09 s per 26-byte request), not bits.
+
+**Noticed, not changed:**
+- `main.go` builds the 2 % announce bandwidth limiter and discards it (`_ = bwLimiter`). Wiring it
+  as written would be wrong: its bucket holds one second of budget, 24 bits on the mesh, below any
+  announce (~1,300 bits), so it would drop every relayed announce on LoRa. Worth at most ~1 %
+  airtime; post-TTC.
+- MESHSAT-817: the mesh ladder's "DTR/RTS reboot" rung is an ESP32 auto-reset. On the T-Echo it is
+  a second serial reconnect followed by a 75 s grace window. Skipping it for non-ESP32 radios is a
+  small code change, owner's call.
+
+**Closed after checking every acceptance criterion:**
+- **783:** remote set-time is off by default (`MESHSAT_MESH_TIMESYNC_REMOTE`) and unset on both kits;
+  one local set-time and no remote burst per handshake.
+- **829:** bc570c8 and 7f00015 are in the running build; no unplanned bridge exit on either kit since
+  14 Sep 12:27; the entrypoint is the bridge (PID 1) with `restart: always`.
+- **758:** `ci-deploy.sh` runs under `setsid` with `trap '' HUP`, aborts before touching the
+  container when the image is missing, and leaves it untouched on a digest mismatch.
+- **751:** 0 wlan0 disconnects on either kit in 28 h, one association each; parallax 3 in its whole
+  kept journal (451 in one day on 1 Sep).
+- **755:** blacklist identical on both kits and in git (`deploy/network/`), none of the four modules
+  loaded, 0 scan errors, all six bands clear.
+
+**How to tell a crash from a deploy after the fact.** A container's own log dies with the container,
+so read dockerd's journal: every deliberate stop (deploy, `docker stop`, compose) logs
+`ShouldRestart failed, container will not be restarted ... error="restart canceled"` next to the
+container's `TaskDelete`. A `TaskDelete` without it is an exit the restart policy picked up: a
+crash, a panic, or `POST /api/system/restart`.
+
+```bash
+journalctl -u docker --since -12d --no-pager -o short-iso | grep -E "TaskDelete|restart canceled|signal 15"
+```
+
+On 18 Sep the only such exits in 12 days were the 13 and 14 Sep restart series (sections 35 to 38).
