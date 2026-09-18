@@ -3,9 +3,9 @@ package spectrum
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
-	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -73,6 +73,7 @@ type SpectrumMonitor struct {
 	// second). curCancel kills the running child on RestartScan.
 	scanMu           sync.Mutex
 	curCancel        context.CancelFunc
+	suspended        bool // Suspend holds scanMu until Resume [MESHSAT-1222]
 	consecutiveFails int
 	lastGoodScan     time.Time
 	startedAt        time.Time
@@ -180,14 +181,20 @@ func (m *SpectrumMonitor) LastGoodScan() (time.Time, int) {
 	return m.lastGoodScan, m.consecutiveFails
 }
 
-// RestartScan kills the scanner child currently running (a hung
-// rtl_power_fftw holds the dongle for the whole 90 s timeout); the loops
-// carry on with a fresh exec. The failure counter is left alone so only a
-// scan that really returns samples counts as recovery. Level 1 of the
-// device health ladder for the RTL-SDR. [MESHSAT-817]
+// closableScanner is a reader that holds the dongle between scans and can
+// let go of it (RTLTCPScanner). [MESHSAT-1222]
+type closableScanner interface {
+	Close() error
+}
+
+// RestartScan cancels the running scan and stops the reader process, so the
+// next scan starts a fresh one; the loops carry on. The failure counter is
+// left alone so only a scan that really returns samples counts as
+// recovery. Level 1 of the device health ladder for the RTL-SDR.
+// [MESHSAT-817, MESHSAT-1222]
 func (m *SpectrumMonitor) RestartScan(_ context.Context) error {
 	m.mu.Lock()
-	enabled, cancel := m.enabled, m.curCancel
+	enabled, cancel, sc := m.enabled, m.curCancel, m.scanner
 	m.mu.Unlock()
 	if !enabled {
 		return fmt.Errorf("spectrum monitor disabled")
@@ -196,7 +203,54 @@ func (m *SpectrumMonitor) RestartScan(_ context.Context) error {
 		log.Warn().Msg("spectrum: cancelling the running scan")
 		cancel()
 	}
+	if c, ok := sc.(closableScanner); ok {
+		log.Warn().Msg("spectrum: restarting the reader")
+		_ = c.Close()
+	}
 	return nil
+}
+
+// Suspend stops all scanning until Resume: it cancels the running scan,
+// waits for it to return, stops the reader process so the dongle is
+// released, and keeps every loop parked on scanMu. The RTL-SDR's hub-port
+// power cycle runs between the two, so nothing opens the dongle while it
+// re-enumerates. Before MESHSAT-1222 the cut ran under a live scan and the
+// scan loop re-opened the dongle seconds after it came back; on parallax
+// (17 Sep 2026) that open's USB reset left it off the bus. A second
+// Suspend before Resume is a no-op.
+func (m *SpectrumMonitor) Suspend(_ context.Context) {
+	m.mu.Lock()
+	if m.suspended {
+		m.mu.Unlock()
+		return
+	}
+	cancel := m.curCancel
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	m.scanMu.Lock()
+	m.mu.Lock()
+	m.suspended = true
+	sc := m.scanner
+	m.mu.Unlock()
+	if c, ok := sc.(closableScanner); ok {
+		_ = c.Close()
+	}
+	log.Info().Msg("spectrum: scanning suspended, dongle released")
+}
+
+// Resume lets the loops scan again after Suspend.
+func (m *SpectrumMonitor) Resume() {
+	m.mu.Lock()
+	if !m.suspended {
+		m.mu.Unlock()
+		return
+	}
+	m.suspended = false
+	m.mu.Unlock()
+	m.scanMu.Unlock()
+	log.Info().Msg("spectrum: scanning resumed")
 }
 
 // NewSpectrumMonitor creates a new monitor. It does not start scanning
@@ -331,10 +385,8 @@ func AttachWhenPresent(ctx context.Context, m *SpectrumMonitor, interval time.Du
 	if m == nil || interval <= 0 {
 		return
 	}
-	if _, err := exec.LookPath("rtl_power_fftw"); err != nil {
-		if _, err := exec.LookPath("rtl_power"); err != nil {
-			return
-		}
+	if !ScannerBinaryAvailable() {
+		return
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -349,17 +401,24 @@ func AttachWhenPresent(ctx context.Context, m *SpectrumMonitor, interval time.Du
 			if !DetectRTLSDR() {
 				continue
 			}
-			if s := NewRTLPowerScanner(); s != nil && m.Attach(ctx, s) {
+			if s := NewScanner(); s != nil && m.Attach(ctx, s) {
 				return
 			}
 		}
 	}
 }
 
-// Stop halts spectrum monitoring.
+// Stop halts spectrum monitoring and stops the reader process, so the
+// dongle is closed cleanly on shutdown. [MESHSAT-1222]
 func (m *SpectrumMonitor) Stop() {
 	if m.cancel != nil {
 		m.cancel()
+	}
+	m.mu.RLock()
+	sc := m.scanner
+	m.mu.RUnlock()
+	if c, ok := sc.(closableScanner); ok {
+		_ = c.Close()
 	}
 }
 
@@ -864,6 +923,12 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 
 		if err != nil {
 			log.Debug().Err(err).Str("band", band.Name).Msg("spectrum: scan failed")
+			if errors.Is(err, ErrNoDongle) {
+				// No dongle on the bus: the other bands would fail the
+				// same way. End the pass; the next tick checks again.
+				// [MESHSAT-1222]
+				return
+			}
 			continue
 		}
 

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -124,11 +123,13 @@ func main() {
 			args["tty"] = tty
 		}
 		res, err := call(args)
-		if err != nil && strings.Contains(err.Error(), "device not present") && oobSvc != nil {
+		if err != nil && strings.Contains(err.Error(), "device not present") {
 			// The device fell off the bus (tesseract's ZigBee dongle, 6 Sep
 			// 2026, twice for over an hour): cut the port it was last seen
-			// on. [MESHSAT-817]
-			if loc := oobSvc.LastUSBLocation(dev); loc != "" {
+			// on. The RTL-SDR's port also survives a restart in
+			// system_config, because a dongle lost before a deploy is
+			// otherwise never seen again. [MESHSAT-817, MESHSAT-1222]
+			if loc := usbLastLocation(oobSvc, db, dev); loc != "" {
 				log.Warn().Str("device", dev).Str("location", loc).Msg("oob: device off the bus, power-cycling its last known hub port")
 				res, err = call(map[string]any{"device": dev, "fallback": false, "location": loc})
 			}
@@ -1182,7 +1183,7 @@ func main() {
 
 	// Spectrum monitor — RTL-SDR jamming detection (no CGO, uses rtl_power subprocess)
 	var spectrumMon *spectrum.SpectrumMonitor
-	rtlScanner := spectrum.NewRTLPowerScanner()
+	rtlScanner := spectrum.NewScanner()
 	// The monitor is built and wired whether or not a dongle is present:
 	// a dongle that appears later (re-seat, replacement, a hub-port power
 	// cycle that brings it back) is attached at runtime by
@@ -1274,10 +1275,8 @@ func main() {
 		// Narrow the disabled-reason log — the scanner returns nil
 		// for either (a) no binary on PATH or (b) no dongle detected.
 		// Check which so the log actually helps. [MESHSAT-509]
-		if _, err := exec.LookPath("rtl_power_fftw"); err != nil {
-			if _, err := exec.LookPath("rtl_power"); err != nil {
-				log.Info().Msg("spectrum monitor disabled (no rtl_power/rtl_power_fftw binary)")
-			}
+		if !spectrum.ScannerBinaryAvailable() {
+			log.Info().Msg("spectrum monitor disabled (no rtl_tcp/rtl_power_fftw/rtl_power binary)")
 		} else if !spectrum.DetectRTLSDR() {
 			log.Info().Msg("spectrum monitor disabled (no RTL-SDR dongle detected on USB), watching the bus for one")
 			go spectrum.AttachWhenPresent(ctx, spectrumMon, spectrum.DongleWatchInterval)
@@ -1435,27 +1434,15 @@ func main() {
 	// keystore for the per-peer mgmt keys; without it the feature is off.
 	if ks != nil {
 		if spectrumMon != nil {
-			oobActions["rtl_sdr"] = map[byte]oob.Action{
-				oob.LevelHard: func(ctx context.Context) error {
-					// Hub-port VBUS cut first: the agent resolves the
-					// dongle by VID:PID and, when it has fallen off the
-					// bus, cuts the port it was last seen on. Only then
-					// the in-container USB reset, which needs the device
-					// enumerated. A dongle that never enumerated on a
-					// root port has no remote remedy. [MESHSAT-1002]
-					if usbPowerCycle(ctx, "rtl_sdr", "") {
-						return nil
-					}
-					id := spectrumMon.Hardware().Scanner.USBPath
-					if id == "" {
-						return errors.New("rtl-sdr not on the bus and no switchable hub port known")
-					}
-					if !transport.USBResetSysfsID("rtl_sdr", id) {
-						return errors.New("usb reset failed")
-					}
-					return nil
-				},
-			}
+			// Suspend scanning, hub-port power cycle (the agent resolves
+			// the dongle by VID:PID or cuts its last known port), verify
+			// it left and came back, settle, resume. No USB-reset
+			// fallback: that is what wedged parallax's Blog V4 on 17 Sep
+			// 2026. [MESHSAT-1002, MESHSAT-1222]
+			rtlReset := newRTLSDRReset(spectrumMon.Suspend, spectrumMon.Resume,
+				func(ctx context.Context) bool { return usbPowerCycle(ctx, "rtl_sdr", "") },
+				spectrum.DetectRTLSDR)
+			oobActions["rtl_sdr"] = map[byte]oob.Action{oob.LevelHard: rtlReset.run}
 		}
 		localAlias := cfg.BridgeID
 		if localAlias == "" {
@@ -2655,7 +2642,8 @@ func main() {
 			HardGap:    time.Duration(cfg.DeviceHealthHardGapSec) * time.Second,
 			Seed:       seedDeviceHealth(db),
 		}, deviceHealthActions(db, proc, signingService))
-		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, imtTransport, sat, gwMgr, spectrumMon, gpsReader, rxWatchdog, supervisor, usbPowerCycle)
+		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, imtTransport, sat, gwMgr, spectrumMon, gpsReader, rxWatchdog, supervisor, usbPowerCycle,
+			newRTLSDRLocation(db))
 		checkers := engine.ReceiveCheckers{devHealth}
 		if rxWatchdog != nil {
 			checkers = append(checkers, rxWatchdog)
@@ -2686,6 +2674,11 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
 	cancel() // Stop processor + retention + gateways
+	if spectrumMon != nil {
+		// SIGTERM the rtl_tcp reader so rtlsdr_close runs before docker's
+		// stop timeout. [MESHSAT-1222]
+		spectrumMon.Stop()
+	}
 
 	// Drain dispatcher goroutines (delivery workers + reapers). Workers
 	// read the cancelled ctx, finish any in-flight DB write, then exit.

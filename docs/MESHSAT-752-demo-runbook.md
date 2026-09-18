@@ -1664,3 +1664,47 @@ MESHSAT-1201 (second screensaver poster), MESHSAT-1203 (spectrum mesh band).
 **Found in the 02:30 health check and still open:** parallax's RTL-SDR has been off the USB bus
 since 01:59 (the MESHSAT-855/1001 re-seat pattern). Tesseract's ZigBee sensor has been silent since
 6 Sep (MESHSAT-1092).
+
+## 53. 18 Sep 2026: the RTL-SDR drop-offs were ours too (MESHSAT-1222)
+
+**The headline: two new RTL-SDR Blog V4 dongles did not fail; the bridge drove them into a hang
+and then healed them into a wedge.**
+
+**The trigger.** The spectrum monitor started a fresh `rtl_power_fftw` for every band on every pass:
+six bands back to back on a 3 s ticker, so the dongle was opened, initialised and closed about 1,800
+times an hour. `rtl_power_fftw` is not asynchronous, whatever the Dockerfile said: its
+`Rtlsdr::read()` calls `rtlsdr_reset_buffer` and then `rtlsdr_read_sync`, and librtlsdr's
+`BULK_TIMEOUT` is 0. Every so often the V4 never answered a read and the process hung right after
+`Found Rafael Micro R828D tuner` (the MESHSAT-509 hang class, only rarer). The 90 s timeout
+SIGKILLed it, so `rtlsdr_close` never ran, four failed scans made the device-health probe miss, and
+the ladder cut the hub port. Audit trail: tesseract 6 cuts in 23 h, parallax every 30 to 60 min
+through the afternoon of 17 Sep.
+
+**The wedge.** Level 3 cut the port with the scan loop still running and SIGKILLed whatever scan
+ran 10 s later. The next `rtl_power_fftw` opened a dongle that had re-enumerated seconds earlier;
+its first register write failed and `rtlsdr_open` called `libusb_reset_device()`. parallax, kernel
+log: port cut 23:59:35, re-enumerated 23:59:39, `reset high-speed USB device` 23:59:45, then
+`device descriptor read/64, error -110`, `device not accepting address, error -62`, xHCI `Timeout
+while waiting for setup device command`, `unable to enumerate`. It never came back: not after four
+hourly 3 s cuts, a 10 s cut, a 30 s cut (port read `0000 off` during it) or an unbind and rebind of
+`xhci-hcd.1` on 18 Sep. After the 13:18 deploy the target read "unknown", so nothing tried again.
+
+**The fix.**
+
+| Where | Change |
+|---|---|
+| `internal/spectrum/rtltcp.go` | New default reader: ONE long-lived `rtl_tcp` (async `rtlsdr_read_async`) on 127.0.0.1:6056. The bridge retunes it per band, waits 400 ms, captures 1000 x M samples and computes true `binSize` bins itself with `rtl_power_fftw`'s arithmetic (`(byte-127)`, `10*log10(pwr/repeats/M/sr)`). SIGTERM only, a stream silent for 5 s is restarted, a failed start backs off 2 s to 60 s, no start while the dongle is absent. |
+| same | Narrow bands (`aprs_144`, `mesh_869`, `lora_868`) are tuned so DC and a 50 kHz guard fall outside the band. The old scanner tuned to the middle of the window and overwrote the middle bin to hide DC, and `aprs_144` and `mesh_869` are centred on 144.800 and 869.525, so the bin holding the channel itself was replaced by its neighbours. That is the likeliest reason for "occupancy 0 on aprs_144 while parallax beaconed" (16 Sep). |
+| same | Correction: without `-r`, `rtl_power_fftw` sampled at 2.0 Msps and `-b N` meant N bins across those 2 MHz, not N bins across the window; the 2.3 MHz bands were two hops. The new reader samples at 2.4 Msps and every bin is exactly `binSize` wide. |
+| `docker-patches/librtlsdr-no-reset-on-open.patch` | `rtlsdr_open` fails instead of calling `libusb_reset_device`; the build fails if the call survives. |
+| `Dockerfile` | rtl-sdr-blog pinned to `aed0ea1`, rtl-power-fftw to `cee9a22`; `rtl_tcp` in the runtime image. |
+| `cmd/meshsat/rtlsdr_reset.go` | Level 3: suspend scanning (reader stopped, loops parked), hub-port power cycle, verify the dongle LEFT the bus and CAME BACK, settle 3 s, resume. No USB-reset fallback, and no 10 s SIGKILL after it. |
+| `cmd/meshsat/device_health.go` | Level 1 restarts the reader and is skipped when the dongle is not on the bus. The last hub port is kept in `system_config` `rtl_sdr_usb_location`, and a missing dongle with a known port is a miss, not "unknown", so the ladder still works after a restart. |
+
+Rollback without a rebuild: `MESHSAT_SPECTRUM_READER=rtl_power_fftw` in `.env` AND in both compose
+files (the var has to be named there), then recreate one kit at a time. `GET /api/spectrum/hardware`
+shows `scanner.reader`.
+
+**Checks after a deploy:** `docker exec meshsat pgrep -a rtl_` shows one `rtl_tcp` and never an
+`rtl_power_fftw`; `/api/spectrum/hardware` has `reader: rtl_tcp` and a fresh `last_good_scan_at`;
+`journalctl -k | grep 4-1.3` stays quiet; no `rtl_sdr unhealthy` rows in `/api/audit`.
