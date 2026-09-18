@@ -1,0 +1,44 @@
+Subject: rtl_tcp: exit on SIGTERM even when a client is connected
+
+rtl_tcp's signal handler sets do_exit and cancels the async read, but when
+a client is connected that only ends the session: after the teardown the
+main loop resets do_exit to 0 and listens again. MeshSat's reader stops
+rtl_tcp with SIGTERM so that rtlsdr_close runs; on tesseract (18 Sep 2026)
+the SIGTERM was swallowed this way, the process was SIGKILLed after 5 s
+and the device was never closed. A real signal (non-zero signum; the
+workers call sighandler(0) on socket errors) now ends the process after
+the session teardown, through the existing out: path. [MESHSAT-1222]
+
+--- a/src/rtl_tcp.c
++++ b/src/rtl_tcp.c
+@@ -90,6 +90,12 @@
+ static int llbuf_num = DEFAULT_MAX_NUM_BUFFERS;
+ 
+ static volatile int do_exit = 0;
++/* Set only by a real signal (SIGINT/SIGTERM/SIGQUIT), never by the
++ * workers' sighandler(0) on a socket error. A signal that lands while a
++ * client is connected used to end only that session: the main loop then
++ * reset do_exit and went back to listening, so SIGTERM was ignored and a
++ * supervisor had to SIGKILL, skipping rtlsdr_close. [MeshSat MESHSAT-1222] */
++static volatile int signal_exit = 0;
+ 
+ 
+ void usage(void)
+@@ -146,6 +152,8 @@
+ static void sighandler(int signum)
+ {
+ 	signal(SIGPIPE, SIG_IGN);
++	if (signum)
++		signal_exit = 1;
+ 	fprintf(stderr, "Signal caught, exiting!\n");
+ 	rtlsdr_cancel_async(dev);
+ 	do_exit = 1;
+@@ -654,6 +662,8 @@
+ 			free(prev);
+ 		}
+ 
++		if (signal_exit)
++			goto out;
+ 		do_exit = 0;
+ 		global_numq = 0;
+ 	}

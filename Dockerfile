@@ -56,6 +56,14 @@ RUN cd /src/rtl && patch -p1 < /tmp/librtlsdr-no-reset.patch && \
     if grep -q libusb_reset_device src/librtlsdr.c; then \
       echo "patch sanity failed: libusb_reset_device still in librtlsdr.c"; exit 1; \
     fi
+# rtl_tcp swallowed a SIGTERM that arrived while a client was connected
+# (it only ended the session and listened again), so the bridge had to
+# SIGKILL it and rtlsdr_close never ran. A real signal now ends the
+# process. [MESHSAT-1222]
+COPY docker-patches/rtl_tcp-exit-on-signal.patch /tmp/rtl_tcp-exit.patch
+RUN cd /src/rtl && patch -p1 < /tmp/rtl_tcp-exit.patch && \
+    count=$(grep -c signal_exit src/rtl_tcp.c) && \
+    [ "$count" -ge 3 ] || { echo "patch sanity failed: only $count signal_exit lines in rtl_tcp.c"; exit 1; }
 # Patch rtl_power to call rtlsdr_reset_buffer before each sync read.
 # Without this, rtl_power hangs forever on the Blog V4's R828D tuner
 # because librtlsdr's BULK_TIMEOUT is 0 and the un-primed bulk endpoint
