@@ -11,7 +11,7 @@ transfer; the V4's R828D does not. [MESHSAT-509]
 
 --- a/src/rtl_power.c
 +++ b/src/rtl_power.c
-@@ -543,6 +543,7 @@ void retune(rtlsdr_dev_t *d, int freq)
+@@ -545,6 +545,7 @@
  	rtlsdr_set_center_freq(d, (uint32_t)freq);
  	/* wait for settling and flush buffer */
  	usleep(5000);
@@ -19,11 +19,11 @@ transfer; the V4's R828D does not. [MESHSAT-509]
  	rtlsdr_read_sync(d, &dump, BUFFER_DUMP, &n_read);
  	if (n_read != BUFFER_DUMP) {
  		fprintf(stderr, "Error: bad retune.\n");}
-@@ -962,6 +963,7 @@ int main(int argc, char **argv)
- 	verbose_reset_buffer(dev);
+@@ -962,6 +963,7 @@
  
  	/* actually do stuff */
  	rtlsdr_set_sample_rate(dev, (uint32_t)tunes[0].rate);
 +	verbose_reset_buffer(dev);
  	sine_table(tunes[0].bin_e);
  	next_tick = time(NULL) + interval;
+ 	if (exit_time) {
