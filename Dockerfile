@@ -39,7 +39,23 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 # LTE 800/900 with the stock Alpine rtl-sdr package. The Blog fork
 # (https://github.com/rtlsdrblog/rtl-sdr-blog) carries the V4 tuning
 # patches. [MESHSAT-509 — parallax01 RTL-SDR Blog V4 detected 2026-04-17]
-RUN git clone --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git /src/rtl
+# Pinned to a commit: both patches below are hunks against this source,
+# and an unpinned HEAD could stop them applying or change the V4 code
+# under us without a commit here. [MESHSAT-1222]
+ARG RTLSDR_BLOG_SHA=aed0ea19f3a273370a13c9009b96313c75d54c7b
+RUN git init -q /src/rtl && cd /src/rtl && \
+    git fetch -q --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git "$RTLSDR_BLOG_SHA" && \
+    git checkout -q FETCH_HEAD
+# Never USB-reset the dongle from inside rtlsdr_open: on the Blog V4 that
+# reset is what left parallax's dongle unable to enumerate on 17 Sep 2026.
+# The open fails instead and the bridge escalates to a hub-port power
+# cycle. The sanity check fails the build if the reset call survives.
+# [MESHSAT-1222]
+COPY docker-patches/librtlsdr-no-reset-on-open.patch /tmp/librtlsdr-no-reset.patch
+RUN cd /src/rtl && patch -p1 < /tmp/librtlsdr-no-reset.patch && \
+    if grep -q libusb_reset_device src/librtlsdr.c; then \
+      echo "patch sanity failed: libusb_reset_device still in librtlsdr.c"; exit 1; \
+    fi
 # Patch rtl_power to call rtlsdr_reset_buffer before each sync read.
 # Without this, rtl_power hangs forever on the Blog V4's R828D tuner
 # because librtlsdr's BULK_TIMEOUT is 0 and the un-primed bulk endpoint
@@ -53,13 +69,18 @@ RUN cd /src/rtl && patch -p1 < /tmp/rtl_power-v4.patch && \
     # (1 original verbose_reset_buffer + 2 additions).
     count=$(grep -c reset_buffer src/rtl_power.c) && \
     [ "$count" -ge 3 ] || { echo "patch sanity failed: only $count reset_buffer lines"; exit 1; }
-# Build rtl_power_fftw — async-threaded variant of rtl_power that
-# actually works on the RTL-SDR Blog V4. rtl_power's single-URB sync
-# read hangs on the V4's R828D regardless of reset_buffer patches;
-# rtl_power_fftw uses a multi-buffer async read in a separate thread
-# which keeps the bulk endpoint streaming. Same stdout format as
-# a two-column freq+power CSV, parsed by the Go scanner. [MESHSAT-509]
-RUN git clone --depth=1 https://github.com/AD-Vega/rtl-power-fftw.git /src/rpfftw
+# Build rtl_power_fftw, now only the rollback scanner
+# (MESHSAT_SPECTRUM_READER=rtl_power_fftw). It is NOT asynchronous, as this
+# comment used to claim: Rtlsdr::read() calls rtlsdr_reset_buffer and then
+# rtlsdr_read_sync with BULK_TIMEOUT 0, so a read the V4 never answers
+# blocks forever, and the bridge started one per band per pass. That was
+# the stall behind the RTL-SDR drop-offs of 10-18 Sep 2026. The default
+# reader is rtl_tcp (rtlsdr_read_async, opened once), copied into the
+# runtime image below. [MESHSAT-509, MESHSAT-1222]
+ARG RTL_POWER_FFTW_SHA=cee9a22207ea995bd12adbc6bcfbec92521548b1
+RUN git init -q /src/rpfftw && cd /src/rpfftw && \
+    git fetch -q --depth=1 https://github.com/AD-Vega/rtl-power-fftw.git "$RTL_POWER_FFTW_SHA" && \
+    git checkout -q FETCH_HEAD
 
 RUN mkdir /src/rtl/build && cd /src/rtl/build && \
     # Install into the c-builder's own /usr/local so librtlsdr.pc has
@@ -223,6 +244,9 @@ COPY --from=c-builder /usr/local/bin/rtl_power       /usr/local/bin/rtl_power
 COPY --from=c-builder /usr/local/bin/rtl_test        /usr/local/bin/rtl_test
 COPY --from=c-builder /usr/local/bin/rtl_sdr         /usr/local/bin/rtl_sdr
 COPY --from=c-builder /usr/local/bin/rtl_power_fftw  /usr/local/bin/rtl_power_fftw
+# The spectrum reader: one long-lived async process holds the dongle and
+# the bridge retunes it per band over loopback TCP. [MESHSAT-1222]
+COPY --from=c-builder /usr/local/bin/rtl_tcp         /usr/local/bin/rtl_tcp
 COPY --from=c-builder /usr/local/lib/                /usr/local/lib/
 RUN ldconfig
 

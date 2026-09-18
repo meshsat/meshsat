@@ -82,7 +82,8 @@ func probeMiss(detail string) gateway.ProbeResult { return gateway.ProbeResult{D
 func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, oobActions map[string]map[byte]oob.Action,
 	mesh transport.MeshTransport, cell transport.CellTransport, imt, sat transport.SatTransport,
 	gwMgr *gateway.Manager, spectrumMon *spectrum.SpectrumMonitor, gpsReader *transport.GPSReader, rxWatchdog *gateway.RxWatchdog,
-	supervisor *transport.DeviceSupervisor, powerCycle func(ctx context.Context, dev, tty string) bool) {
+	supervisor *transport.DeviceSupervisor, powerCycle func(ctx context.Context, dev, tty string) bool,
+	rtlLocation rtlSDRLocation) {
 
 	if dm, ok := mesh.(*transport.DirectMeshTransport); ok && dm != nil {
 		dh.Register(meshHealthTarget(cfg, dm, oobActions["mesh"]))
@@ -96,7 +97,7 @@ func registerDeviceHealthTargets(dh *gateway.DeviceHealth, cfg *config.Config, o
 	// Registered even when the monitor starts without a dongle: the probe
 	// reports unknown until one is attached at runtime. [MESHSAT-1002]
 	if spectrumMon != nil {
-		dh.Register(rtlSDRHealthTarget(spectrumMon, oobActions["rtl_sdr"]))
+		dh.Register(rtlSDRHealthTarget(spectrumMon, oobActions["rtl_sdr"], rtlLocation))
 	}
 	if gpsReader != nil {
 		dh.Register(gpsHealthTarget(gpsReader, oobActions["gps"]))
@@ -342,21 +343,49 @@ func zigbeeHealthTarget(gwMgr *gateway.Manager, sup *transport.DeviceSupervisor,
 	}
 }
 
-// rtlSDRHealthTarget: a scan that returns samples is liveness; two failed
-// scans in a row (each a 90 s hang) or five minutes without a good scan
-// is a wedge. Rungs: cancel the running child (level 1), then the OOB
-// action (level 3): a hub-port VBUS cut when the dongle sits on a
-// switchable hub, else the root-port USBDEVFS_RESET.
-func rtlSDRHealthTarget(mon *spectrum.SpectrumMonitor, actions map[byte]oob.Action) gateway.HealthTarget {
+// rtlSDRLocation remembers the hub port the RTL-SDR was last seen on, in
+// system_config, so a dongle that is missing after a restart can still be
+// power-cycled. [MESHSAT-1222]
+type rtlSDRLocation struct {
+	get func() string
+	set func(string)
+}
+
+// rtlSDRHealthTarget: a scan that returns samples is liveness; four failed
+// scans in a row or five minutes without a good scan is a wedge. Rungs:
+// restart the reader (level 1), then the OOB action (level 3): stop
+// scanning, power-cycle the dongle's hub port, check it came back, resume.
+// A monitor that is off because the dongle is missing is a miss, not
+// "unknown", when the dongle has been seen on a port before, so the ladder
+// can still cut that port; a kit that never had a dongle stays unknown.
+func rtlSDRHealthTarget(mon *spectrum.SpectrumMonitor, actions map[byte]oob.Action, loc rtlSDRLocation) gateway.HealthTarget {
 	hard := actions[oob.LevelHard]
+	remember := func() {
+		if loc.set == nil {
+			return
+		}
+		if p := mon.Hardware().Scanner.USBPath; p != "" {
+			loc.set(p)
+		}
+	}
+	lastSeen := func() string {
+		if loc.get == nil {
+			return ""
+		}
+		return loc.get()
+	}
 	return gateway.HealthTarget{
 		Name:       "rtl_sdr",
 		IfaceIDs:   []string{},
 		HardBudget: 2,
 		Probe: func(ctx context.Context) gateway.ProbeResult {
 			if !mon.Enabled() {
+				if at := lastSeen(); at != "" && !spectrum.DetectRTLSDR() {
+					return probeMiss(fmt.Sprintf("dongle not on the USB bus, last seen at %s", at))
+				}
 				return gateway.ProbeResult{Unknown: true, Detail: "spectrum monitor disabled"}
 			}
+			remember()
 			last, fails := mon.LastGoodScan()
 			// A Blog V4 cold start takes about two minutes per band before
 			// the first samples, so early failures are expected: only a
@@ -376,19 +405,25 @@ func rtlSDRHealthTarget(mon *spectrum.SpectrumMonitor, actions map[byte]oob.Acti
 			}
 		},
 		Steps: []gateway.HealStep{
-			{Level: gateway.HealLevelSoft, Name: "cancel scan and restart", Grace: 180 * time.Second, Run: mon.RestartScan},
 			{
-				Level: gateway.HealLevelHard, Name: "USB reset", Grace: 180 * time.Second,
+				Level: gateway.HealLevelSoft, Name: "restart the reader", Grace: 180 * time.Second,
+				// Restarting a reader for a dongle that is not on the bus
+				// only spends the grace window; go straight to the port.
+				Skip: func() bool { return !mon.Enabled() || !spectrum.DetectRTLSDR() },
+				Run:  mon.RestartScan,
+			},
+			{
+				// The action stops scanning itself, waits for the dongle
+				// to come back and resumes; nothing is restarted after
+				// it. The old 10 s RestartScan here SIGKILLed the first
+				// open of the freshly enumerated dongle. [MESHSAT-1222]
+				Level: gateway.HealLevelHard, Name: "hub-port power cycle", Grace: 180 * time.Second,
 				Skip: func() bool { return hard == nil },
 				Run: func(ctx context.Context) error {
 					if hard == nil {
 						return errors.New("no hard reset action registered")
 					}
-					if err := hard(ctx); err != nil {
-						return err
-					}
-					time.AfterFunc(10*time.Second, func() { _ = mon.RestartScan(context.Background()) })
-					return nil
+					return hard(ctx)
 				},
 			},
 		},

@@ -1,0 +1,33 @@
+Subject: librtlsdr: fail rtlsdr_open instead of resetting the device
+
+rtlsdr_open() performs a dummy register write and, when it fails, calls
+libusb_reset_device() and carries on. On the RTL-SDR Blog V4 that USB
+reset is fatal when the dongle is already stalled: on parallax at
+23:59:45 on 17 Sep 2026 the reset was followed by "device descriptor
+read/64, error -110" and "device not accepting address, error -62",
+and the dongle never enumerated again, not after four hub-port power
+cycles, a 30 s port cut or an xHCI controller rebind. The open now
+fails instead; MeshSat's reader backs off and the device-health ladder
+escalates to a hub-port power cycle. [MESHSAT-1222]
+
+--- a/src/librtlsdr.c
++++ b/src/librtlsdr.c
+@@ -1581,10 +1581,15 @@
+ 
+ 	dev->rtl_xtal = DEF_RTL_XTAL_FREQ;
+ 
+-	/* perform a dummy write, if it fails, reset the device */
++	/* perform a dummy write; if it fails, fail the open. MeshSat does
++	 * not reset the device here: a USB reset of a stalled RTL-SDR Blog
++	 * V4 left it unable to enumerate until its power was removed
++	 * (parallax, 17 Sep 2026). The caller backs off and escalates to a
++	 * hub-port power cycle instead. [MESHSAT-1222] */
+ 	if (rtlsdr_write_reg(dev, USBB, USB_SYSCTL, 0x09, 1) < 0) {
+-		fprintf(stderr, "Resetting device...\n");
+-		libusb_reset_device(dev->devh);
++		fprintf(stderr, "Dummy write failed, not resetting the device\n");
++		r = -EIO;
++		goto err;
+ 	}
+ 
+ 	rtlsdr_init_baseband(dev);

@@ -110,3 +110,83 @@ func TestScanOnceSerialisesAndRestartCancels(t *testing.T) {
 		t.Fatalf("fails not reset on success: %d", fails)
 	}
 }
+
+// closingScanner is a blockingScanner that records Close, like the rtl_tcp
+// reader releasing the dongle.
+type closingScanner struct {
+	blockingScanner
+	closes atomic.Int32
+}
+
+func (s *closingScanner) Close() error { s.closes.Add(1); return nil }
+
+// Suspend cancels the running scan, releases the dongle and parks every
+// scan until Resume, so the RTL-SDR's port power cycle never runs under a
+// live reader and nothing re-opens the dongle while it re-enumerates.
+// [MESHSAT-1222]
+func TestSuspendParksScansUntilResume(t *testing.T) {
+	sc := &closingScanner{blockingScanner: blockingScanner{release: make(chan struct{})}}
+	m := NewSpectrumMonitor(sc, DefaultBands[:1])
+	band := DefaultBands[0]
+
+	running := make(chan error, 1)
+	go func() {
+		_, err := m.scanOnce(context.Background(), band, 5*time.Second)
+		running <- err
+	}()
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		sc.mu.Lock()
+		a := sc.active
+		sc.mu.Unlock()
+		if a == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("scan never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	m.Suspend(context.Background())
+	if err := <-running; err == nil {
+		t.Fatal("the running scan was not cancelled by Suspend")
+	}
+	if n := sc.closes.Load(); n != 1 {
+		t.Fatalf("reader closed %d times by Suspend, want 1", n)
+	}
+	m.Suspend(context.Background()) // second Suspend is a no-op, not a deadlock
+
+	close(sc.release)
+	parked := make(chan error, 1)
+	go func() {
+		_, err := m.scanOnce(context.Background(), band, 5*time.Second)
+		parked <- err
+	}()
+	select {
+	case <-parked:
+		t.Fatal("a scan ran while suspended")
+	case <-time.After(200 * time.Millisecond):
+	}
+	m.Resume()
+	select {
+	case err := <-parked:
+		if err != nil {
+			t.Fatalf("scan after Resume: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("scan still parked after Resume")
+	}
+	m.Resume() // extra Resume is a no-op, not an unlock of an unlocked mutex
+}
+
+// RestartScan restarts the reader, not only the running scan.
+func TestRestartScanClosesTheReader(t *testing.T) {
+	sc := &closingScanner{blockingScanner: blockingScanner{release: make(chan struct{})}}
+	m := NewSpectrumMonitor(sc, DefaultBands[:1])
+	if err := m.RestartScan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := sc.closes.Load(); n != 1 {
+		t.Fatalf("reader closed %d times, want 1", n)
+	}
+}

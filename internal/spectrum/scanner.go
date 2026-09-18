@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Scanner abstracts RTL-SDR spectrum scanning for testability.
@@ -32,6 +34,10 @@ type Scanner interface {
 // status panel — what binary we're using, what dongle is attached,
 // and where it lives on the bus.
 type ScannerInfo struct {
+	// Reader names the backend: "rtl_tcp" (one long-lived async reader,
+	// the default since MESHSAT-1222) or "rtl_power_fftw" / "rtl_power"
+	// (one process per band, the rollback path).
+	Reader     string `json:"reader"`
 	BinaryPath string `json:"binary_path"`
 	DongleVID  string `json:"dongle_vid"`
 	DonglePID  string `json:"dongle_pid"`
@@ -42,14 +48,17 @@ type ScannerInfo struct {
 	ProductName string `json:"product_name"`
 }
 
-// RTLPowerScanner runs rtl_power_fftw as a subprocess (no CGO).
+// RTLPowerScanner runs rtl_power_fftw as a subprocess (no CGO), one process
+// per band per pass. Since MESHSAT-1222 it is only the rollback path
+// (MESHSAT_SPECTRUM_READER=rtl_power_fftw); the default is RTLTCPScanner.
 //
-// We explicitly do NOT use upstream rtl_power — its single-URB sync-read
-// code path (`rtlsdr_read_sync` with BULK_TIMEOUT=0) hangs forever on the
-// RTL-SDR Blog V4 regardless of reset_buffer priming. rtl_power_fftw
-// uses multi-buffer async reads in a separate thread, which keeps the
-// V4's bulk endpoint streaming — confirmed on parallax 2026-04-17
-// (rtl_power hangs indefinitely, rtl_power_fftw returns in < 2 s).
+// Correction to what this comment used to say: rtl_power_fftw is NOT
+// asynchronous. Its Rtlsdr::read() calls rtlsdr_reset_buffer and then
+// rtlsdr_read_sync with BULK_TIMEOUT 0, so it hangs on the Blog V4 like
+// rtl_power, only less often; at about 1,800 opens an hour that was a
+// port power cut every 30 min to 8 h on the kits (10-18 Sep 2026). Also,
+// without -r it samples at 2.0 Msps and -b N means N bins across those
+// 2 MHz, not N bins across the requested window.
 //
 // Output format we parse:
 //
@@ -73,6 +82,47 @@ type RTLPowerScanner struct {
 	// this kit. Retry forever on the same binary per MESHSAT-653's
 	// philosophy. [MESHSAT-655]
 	binary string
+}
+
+// NewScanner builds the spectrum reader named by MESHSAT_SPECTRUM_READER:
+// "rtl_tcp" (the default since MESHSAT-1222: one long-lived async reader)
+// or "rtl_power_fftw" (one process per band, kept as the rollback path).
+// An image without rtl_tcp falls back to the per-band scanner rather than go
+// dark. Returns nil, never a typed nil, when no reader can run: no binary
+// on PATH or no dongle on the bus.
+func NewScanner() Scanner {
+	reader := strings.ToLower(strings.TrimSpace(os.Getenv("MESHSAT_SPECTRUM_READER")))
+	switch reader {
+	case "rtl_power_fftw", "rtl_power", "fftw":
+		if s := NewRTLPowerScanner(); s != nil {
+			return s
+		}
+		return nil
+	case "", "rtl_tcp":
+	default:
+		log.Warn().Str("reader", reader).Msg("spectrum: unknown MESHSAT_SPECTRUM_READER, using rtl_tcp")
+	}
+	if s := NewRTLTCPScanner(); s != nil {
+		return s
+	}
+	if _, err := exec.LookPath(rtlTCPBinary); err != nil {
+		if s := NewRTLPowerScanner(); s != nil {
+			log.Warn().Msg("spectrum: rtl_tcp not in this image, falling back to the per-band rtl_power_fftw scanner")
+			return s
+		}
+	}
+	return nil
+}
+
+// ScannerBinaryAvailable reports whether any spectrum reader binary is on
+// PATH, so the caller can tell "no binary" from "no dongle".
+func ScannerBinaryAvailable() bool {
+	for _, b := range []string{rtlTCPBinary, "rtl_power_fftw", "rtl_power"} {
+		if _, err := exec.LookPath(b); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // NewRTLPowerScanner creates a scanner using rtl_power_fftw when it's
@@ -122,6 +172,7 @@ func (s *RTLPowerScanner) Info() ScannerInfo {
 	info := ScannerInfo{}
 	if s != nil {
 		info.BinaryPath = s.binary
+		info.Reader = filepath.Base(s.binary)
 	}
 	if dev := findRTLSDRDevice(); dev != nil {
 		info.DongleVID = dev.VID
