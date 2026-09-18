@@ -736,7 +736,7 @@ func buildMeshPacketFromData(dataBytes []byte, to uint32, channel uint32, viaMqt
 		Channel:        channel,
 		RxTime:         uint32(time.Now().Unix()),
 		HopLimit:       3,
-		WantAck:        true,
+		WantAck:        wantAckFor(to),
 		PayloadVariant: &pb.MeshPacket_Decoded{Decoded: d},
 	}
 	if viaMqtt {
@@ -747,6 +747,23 @@ func buildMeshPacketFromData(dataBytes []byte, to uint32, channel uint32, viaMqt
 		return nil
 	}
 	return data
+}
+
+// meshBroadcast is the Meshtastic broadcast destination.
+const meshBroadcast = 0xFFFFFFFF
+
+// wantAckFor says whether a packet to this destination may ask the
+// firmware for an acknowledgement. On a broadcast, want_ack means "retry
+// until a rebroadcast is heard": on a one- or two-node mesh nobody
+// rebroadcasts, so the firmware retransmits every relayed text up to
+// three times, burns the EU duty cycle three times over, and when the
+// duty-cycle limit then refuses a retransmission it NAKs itself for a
+// packet whose sender is 0 and delivers that NAK to its own client. On
+// 18 Sep 2026 tesseract's T-Echo did exactly that and reset with reason
+// 0x4 and no reboot line, the first self-reset caught with the radio's
+// own log. Only a unicast asks for an ack. [MESHSAT-1112]
+func wantAckFor(to uint32) bool {
+	return to != 0 && to != meshBroadcast
 }
 
 // buildRawPacket builds a MeshPacket with arbitrary portnum and payload.
@@ -764,7 +781,7 @@ func buildMeshPacketBytes(payload []byte, portnum int, to uint32, channel uint32
 		Channel:  channel,
 		RxTime:   uint32(time.Now().Unix()),
 		HopLimit: 3,
-		WantAck:  wantAck,
+		WantAck:  wantAck && wantAckFor(to),
 		PayloadVariant: &pb.MeshPacket_Decoded{
 			Decoded: &pb.Data{
 				Portnum: pb.PortNum(portnum),
@@ -823,7 +840,7 @@ func buildAdminToRadioMsg(myNodeNum, destNode uint32, admin *pb.AdminMessage) []
 		From:     myNodeNum,
 		To:       destNode,
 		HopLimit: 3,
-		WantAck:  true,
+		WantAck:  destNode != myNodeNum, // a message to the radio itself needs no ack [MESHSAT-1112]
 		PayloadVariant: &pb.MeshPacket_Decoded{
 			Decoded: &pb.Data{
 				Portnum:      pb.PortNum_ADMIN_APP,
