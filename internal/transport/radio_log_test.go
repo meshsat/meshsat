@@ -161,13 +161,13 @@ func TestFrameReader_ConsoleTextReachesRadioLog(t *testing.T) {
 	tr := NewDirectMeshTransport("/dev/null")
 	r := &meshFrameReader{onText: tr.consoleText}
 	frame, _ := proto.Marshal(&pb.FromRadio{PayloadVariant: &pb.FromRadio_Rebooted{Rebooted: true}})
-	r.accum = append([]byte("INFO  | ??:??:?? 0 Reset reason: 0x4 (RESET_REASON_SOFT)\r\nDEBUG | Battery: usbPower=1\r\n"), 0x94, 0xC3, 0x00, byte(len(frame)))
+	r.accum = append([]byte("\x1b[32mINFO  \x1b[0m| ??:??:?? 0 \x1b[32mReset reason: 0x4 (RESET_REASON_SOFT)\r\n\x1b[34mDEBUG \x1b[0m| Battery: usbPower=1\r\n"), 0x94, 0xC3, 0x00, byte(len(frame)))
 	r.accum = append(r.accum, frame...)
 	if got := r.extractFrame(); got == nil {
 		t.Fatal("frame after console text not extracted")
 	}
 	lines := tr.RadioLog(0)
-	if len(lines) != 2 || lines[0].Level != "CONSOLE" || !strings.Contains(lines[0].Message, "Reset reason: 0x4") {
+	if len(lines) != 2 || lines[0].Level != "CONSOLE" || lines[0].Message != "INFO  | ??:??:?? 0 Reset reason: 0x4 (RESET_REASON_SOFT)" {
 		t.Fatalf("console lines = %+v", lines)
 	}
 	st, _ := tr.GetStatus(nil)
