@@ -223,6 +223,33 @@ type ProtoFromRadio struct {
 	ModuleConfigRaw  []byte // ModuleConfig message (raw protobuf)
 	ChannelRaw       []byte // Channel message (raw protobuf)
 	FirmwareVersion  string // FromRadio.metadata, sent during the config handshake [MESHSAT-850]
+	// The radio's own account of itself, which the bridge used to discard:
+	// a debug log line (only when security.debug_log_api_enabled is set on
+	// the radio), the "I just rebooted" flag the serial console sends at
+	// boot, and a client notification (errors the firmware wants a client
+	// to see). [MESHSAT-1112]
+	LogRecord    *ProtoLogRecord
+	Rebooted     bool
+	Notification *ProtoClientNotification
+}
+
+// ProtoLogRecord is one FromRadio.log_record: a line of the firmware's own
+// debug log, delivered over the protobuf API. [MESHSAT-1112]
+type ProtoLogRecord struct {
+	Message string
+	Time    uint32
+	Source  string
+	Level   string
+}
+
+// ProtoClientNotification is one FromRadio.clientNotification: a message
+// the firmware addresses to its client, such as a critical error or a
+// reboot it decided on. [MESHSAT-1112]
+type ProtoClientNotification struct {
+	Message string
+	Time    uint32
+	Level   string
+	ReplyID uint32
 }
 
 // ProtoMeshPacket represents a parsed MeshPacket.
@@ -368,6 +395,26 @@ func parseFromRadio(data []byte) (*ProtoFromRadio, error) {
 	case *pb.FromRadio_Metadata:
 		if v.Metadata != nil {
 			fr.FirmwareVersion = v.Metadata.GetFirmwareVersion()
+		}
+	case *pb.FromRadio_LogRecord:
+		if v.LogRecord != nil {
+			fr.LogRecord = &ProtoLogRecord{
+				Message: v.LogRecord.GetMessage(),
+				Time:    v.LogRecord.GetTime(),
+				Source:  v.LogRecord.GetSource(),
+				Level:   v.LogRecord.GetLevel().String(),
+			}
+		}
+	case *pb.FromRadio_Rebooted:
+		fr.Rebooted = v.Rebooted
+	case *pb.FromRadio_ClientNotification:
+		if v.ClientNotification != nil {
+			fr.Notification = &ProtoClientNotification{
+				Message: v.ClientNotification.GetMessage(),
+				Time:    v.ClientNotification.GetTime(),
+				Level:   v.ClientNotification.GetLevel().String(),
+				ReplyID: v.ClientNotification.GetReplyId(),
+			}
 		}
 	}
 

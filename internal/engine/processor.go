@@ -517,6 +517,12 @@ func (p *Processor) handleEvent(ctx context.Context, event transport.MeshEvent) 
 		// address it by number follow through OOB address learning.
 		// [MESHSAT-1102]
 		log.Warn().Str("message", event.Message).Msg("mesh radio node number changed")
+	case "radio_rebooted", "radio_notification", "radio_log":
+		// The radio's own account of a reboot, an error it wants a client
+		// to see, or a log line that names a reset cause. Kept at WARN so
+		// the bridge log carries the firmware's reason next to the
+		// handshake that follows it. [MESHSAT-1112]
+		log.Warn().Str("type", event.Type).Str("message", event.Message).Msg("mesh radio reported")
 	default:
 		log.Debug().Str("type", event.Type).Msg("unhandled event type")
 	}

@@ -350,6 +350,7 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/nodes/{num}", s.handleRemoveNode)
 		r.Post("/nodes/request-info", s.handleRequestNodeInfo)
 		r.Get("/status", s.handleGetStatus)
+		r.Get("/mesh/radio-log", s.handleGetRadioLog) // [MESHSAT-1112]
 
 		r.Get("/events", s.handleSSE)
 
