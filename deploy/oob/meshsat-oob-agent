@@ -81,8 +81,11 @@ USB_REBIND = {
 USB_DEVICES = {
     # Meshtastic 2.8 builds the XIAO S3 with ARDUINO_USB_MODE=1 (HWCDC), so the
     # running radio enumerates as the S3's own USB Serial/JTAG, 303a:1001,
-    # the same identity as its ROM bootloader. [MESHSAT-850]
-    "mesh": ["2886:0059", "303a:1001"],
+    # the same identity as its ROM bootloader. [MESHSAT-850] Since 18 Sep 2026
+    # both kits carry a LILYGO T-Echo (nRF52840) instead, 239a:4405 when
+    # running; its UF2 bootloader is 239a:0029, a mass-storage device with no
+    # tty, so it is not listed. [MESHSAT-1112]
+    "mesh": ["2886:0059", "303a:1001", "239a:4405"],
     "cellular": ["1a86:55d4"],
     "zigbee": ["10c4:ea60"],
     "gps": ["1546:01a7"],
