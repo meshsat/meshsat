@@ -1713,3 +1713,19 @@ shows `scanner.reader`.
 **Checks after a deploy:** `docker exec meshsat pgrep -a rtl_` shows one `rtl_tcp` and never an
 `rtl_power_fftw`; `/api/spectrum/hardware` has `reader: rtl_tcp` and a fresh `last_good_scan_at`;
 `journalctl -k | grep 4-1.3` stays quiet; no `rtl_sdr unhealthy` rows in `/api/audit`.
+
+**End-to-end on tesseract, 18 Sep 2026, osmocom build `6e127b7` (image `3d71aa505dcf`):**
+
+| Check | Result |
+|---|---|
+| Reader | one `rtl_tcp` child of the bridge, never an `rtl_power_fftw`; bridge 2.6 % CPU, `rtl_tcp` 1.0 %, 47.7 °C (52.1 °C in the morning) |
+| Calibration | 28 samples per 30 s window (7 with the per-band scanner) |
+| Baselines | about -66.7 dB on every band, a uniform 2.6 dB below the Blog-fork build (-64.0). The manual-gain code is identical in both drivers, so it is the tuner path; detection is baseline-relative and the absolute floors (-60 APRS, -50 LoRa/GPS, -40 LTE) keep 6.7 to 26.7 dB of margin |
+| Positive control, 300 s, `aprs_144` peaks matched to the APRS tx/rx counters | own PicoAPRS TX +15.3 / +15.5 / +15.4 dB in bin 7 (144.7875-144.800); parallax's frames +4.5 to +4.6 dB in bins 7/8; quiet scans at most +1.04 dB. The per-band scanner saw occupancy 0 here on 16 Sep |
+| Level 1 | reader stopped with SIGTERM, `rtl_tcp` left through `bye!` after 5 s, next reader 1 s later, no overlap |
+| Stall (`kill -STOP` 8 s, then `-CONT`) | stall declared at 5 s, clean exit on CONT, new reader 1 s later, watchdog never escalated |
+| Level 3 | reader stopped, `scanning suspended`, agent cut port 3 on 4-1 AND 5-1 for 3 s, kernel disconnect then re-enumeration 4 s later with no `reset high-speed`, `back on the bus`, 3 s settle, `scanning resumed`, `recovered` |
+
+**parallax's dongle** stays off the bus until a physical re-seat (a 10 s and a 30 s port cut and an
+`xhci-hcd.1` rebind all ended in `descriptor read/64, error -110`); the new build attaches it within
+30 s of it enumerating and remembers its port from then on.
