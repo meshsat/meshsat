@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -110,6 +111,14 @@ type DirectMeshTransport struct {
 	// ownRowZeroed: the radio's NodeDB row for its own number came back
 	// with an all-zero MAC in this session's handshake. [MESHSAT-1102]
 	ownRowZeroed bool
+	// radioLog keeps the last radioLogKeep lines of the radio's own debug
+	// log (FromRadio.log_record, only when the radio has
+	// security.debug_log_api_enabled), and radioLastReset the last line of
+	// it that names a reset, reboot, crash, assert or watchdog. Until now
+	// every reboot's cause went unread. [MESHSAT-1112]
+	radioLogMu     sync.Mutex
+	radioLog       []RadioLogLine
+	radioLastReset string
 	// myInfoThisSession: MyNodeInfo arrived in the current serial session,
 	// the radio's first answer to want_config. [MESHSAT-850]
 	myInfoThisSession bool
@@ -755,11 +764,79 @@ func (t *DirectMeshTransport) watchdogTriggered() bool {
 	return true
 }
 
+// radioLogKeep is how many lines of the radio's own log the bridge holds.
+const radioLogKeep = 200
+
+// radioResetWords matches a radio log line that explains a boot or a
+// crash: the firmware's boot banner ("Reset reason"), its own reboot
+// decisions, asserts, watchdog and brown-out reports. [MESHSAT-1112]
+var radioResetWords = regexp.MustCompile(`(?i)reset reason|reboot|crash|assert|watchdog|panic|critical|brownout|brown-out|fatal`)
+
+// recordRadioLog keeps one line of the radio's own log, logs it under the
+// bridge's log with a radio_ prefix, and turns a line that names a reset
+// cause into a radio_log event so it reaches the audit trail next to the
+// handshake that follows a reboot. [MESHSAT-1112]
+func (t *DirectMeshTransport) recordRadioLog(rec *ProtoLogRecord) {
+	line := RadioLogLine{
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		RadioTime:  rec.Time,
+		Level:      rec.Level,
+		Source:     rec.Source,
+		Message:    strings.TrimRight(rec.Message, "\r\n"),
+	}
+	names := radioResetWords.MatchString(line.Message)
+	t.radioLogMu.Lock()
+	t.radioLog = append(t.radioLog, line)
+	if len(t.radioLog) > radioLogKeep {
+		t.radioLog = t.radioLog[len(t.radioLog)-radioLogKeep:]
+	}
+	if names {
+		t.radioLastReset = line.ReceivedAt + " " + line.Message
+	}
+	t.radioLogMu.Unlock()
+	log.Info().Str("radio_level", line.Level).Str("radio_source", line.Source).Msg("radio: " + line.Message)
+	if names {
+		t.emitEvent(MeshEvent{Type: "radio_log", Message: line.Message, Time: line.ReceivedAt})
+	}
+}
+
+// RadioLog returns the newest n lines of the radio's own log, oldest
+// first; n <= 0 returns everything held. [MESHSAT-1112]
+func (t *DirectMeshTransport) RadioLog(n int) []RadioLogLine {
+	t.radioLogMu.Lock()
+	defer t.radioLogMu.Unlock()
+	src := t.radioLog
+	if n > 0 && n < len(src) {
+		src = src[len(src)-n:]
+	}
+	out := make([]RadioLogLine, len(src))
+	copy(out, src)
+	return out
+}
+
 func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 	fr, err := parseFromRadio(data)
 	if err != nil {
 		log.Warn().Err(err).Msg("meshtastic parse error")
 		return
+	}
+
+	// The radio's own account of itself. [MESHSAT-1112]
+	if fr.LogRecord != nil {
+		t.recordRadioLog(fr.LogRecord)
+	}
+	if fr.Rebooted {
+		msg := "radio reports it rebooted since the last client connection"
+		log.Warn().Msg("meshtastic: " + msg)
+		t.emitEvent(MeshEvent{Type: "radio_rebooted", Message: msg, Time: time.Now().UTC().Format(time.RFC3339)})
+	}
+	if fr.Notification != nil {
+		msg := fmt.Sprintf("radio notification (%s): %s", fr.Notification.Level, strings.TrimSpace(fr.Notification.Message))
+		log.Warn().Msg("meshtastic: " + msg)
+		t.radioLogMu.Lock()
+		t.radioLastReset = time.Now().UTC().Format(time.RFC3339Nano) + " " + msg
+		t.radioLogMu.Unlock()
+		t.emitEvent(MeshEvent{Type: "radio_notification", Message: msg, Time: time.Now().UTC().Format(time.RFC3339)})
 	}
 
 	// MyNodeInfo
@@ -1445,14 +1522,21 @@ func (t *DirectMeshTransport) GetStatus(_ context.Context) (*MeshStatus, error) 
 	numNodes := len(t.nodes)
 	t.nodesMu.RUnlock()
 
+	t.radioLogMu.Lock()
+	lastReset := t.radioLastReset
+	logLines := len(t.radioLog)
+	t.radioLogMu.Unlock()
+
 	status := &MeshStatus{
-		Connected:       t.connected,
-		Transport:       "serial",
-		Address:         t.port,
-		NumNodes:        numNodes,
-		FirmwareVersion: t.firmwareVer,
-		OwnRowZeroed:    t.ownRowZeroed,
-		RebootCount:     t.rebootCount,
+		Connected:            t.connected,
+		Transport:            "serial",
+		Address:              t.port,
+		NumNodes:             numNodes,
+		FirmwareVersion:      t.firmwareVer,
+		OwnRowZeroed:         t.ownRowZeroed,
+		RebootCount:          t.rebootCount,
+		RadioLastResetReason: lastReset,
+		RadioLogLines:        logLines,
 	}
 
 	if t.myNodeNum != 0 {

@@ -124,6 +124,25 @@ type MeshStatus struct {
 	// RebootCount is the radio's MyNodeInfo.reboot_count from the latest
 	// handshake; 0 before the first one. [MESHSAT-1102]
 	RebootCount uint32 `json:"reboot_count,omitempty"`
+	// RadioLastResetReason is the last line of the radio's own log that
+	// names a reset, reboot, crash, assert or watchdog, with the time the
+	// bridge received it; empty until the radio has said so once. The
+	// radio only sends its log when security.debug_log_api_enabled is set.
+	// [MESHSAT-1112]
+	RadioLastResetReason string `json:"radio_last_reset_reason,omitempty"`
+	// RadioLogLines is how many lines of the radio's own log the bridge
+	// holds right now (GET /api/mesh/radio-log). [MESHSAT-1112]
+	RadioLogLines int `json:"radio_log_lines"`
+}
+
+// RadioLogLine is one line of the radio's own debug log as received over
+// the serial API, stamped with the bridge's receive time. [MESHSAT-1112]
+type RadioLogLine struct {
+	ReceivedAt string `json:"received_at"`
+	RadioTime  uint32 `json:"radio_time,omitempty"`
+	Level      string `json:"level"`
+	Source     string `json:"source,omitempty"`
+	Message    string `json:"message"`
 }
 
 // SendRequest is a text message send request.

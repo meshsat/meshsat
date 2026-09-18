@@ -100,6 +100,48 @@ func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// radioLogger is what a mesh transport offers when it keeps the radio's own
+// debug log (the direct serial transport does). [MESHSAT-1112]
+type radioLogger interface {
+	RadioLog(n int) []transport.RadioLogLine
+}
+
+// handleGetRadioLog returns the newest lines of the radio's own debug log.
+// @Summary Get the radio's own log
+// @Description Returns the newest lines of the Meshtastic radio's own debug log as received over the serial API (FromRadio.log_record), oldest first, plus the last line that named a reset, reboot, crash, assert or watchdog. The radio only sends its log when security.debug_log_api_enabled is set on it; until then the list is empty. [MESHSAT-1112]
+// @Tags nodes
+// @Param limit query int false "Newest lines to return (default 100, max 200)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {object} map[string]string "mesh transport unavailable or does not keep the radio log"
+// @Router /api/mesh/radio-log [get]
+func (s *Server) handleGetRadioLog(w http.ResponseWriter, r *http.Request) {
+	if s.mesh == nil {
+		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
+		return
+	}
+	rl, ok := s.mesh.(radioLogger)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "this mesh transport does not keep the radio log")
+		return
+	}
+	limit := 100
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	lines := rl.RadioLog(limit)
+	lastReset := ""
+	if st, err := s.mesh.GetStatus(r.Context()); err == nil {
+		lastReset = st.RadioLastResetReason
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"count":             len(lines),
+		"last_reset_reason": lastReset,
+		"lines":             lines,
+	})
+}
+
 // handleGetStatus returns the Meshtastic connection status.
 // @Summary Get mesh status
 // @Description Returns current Meshtastic device connection status, the radio firmware version, whether the radio's own NodeDB row is zeroed (it then renumbers at its next boot) and the radio's reboot_count from the latest handshake [MESHSAT-850, MESHSAT-1102]
@@ -139,6 +181,10 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		"own_row_zeroed":   status.OwnRowZeroed,
 		// A rise between two handshakes is a radio reboot [MESHSAT-1102].
 		"reboot_count": status.RebootCount,
+		// The radio's own last word on why it booted, and how much of its
+		// log the bridge holds (GET /api/mesh/radio-log) [MESHSAT-1112].
+		"radio_last_reset_reason": status.RadioLastResetReason,
+		"radio_log_lines":         status.RadioLogLines,
 	}
 
 	if s.db != nil {
