@@ -20,6 +20,7 @@ import (
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/spectrum"
+	"meshsat/internal/timesync"
 	"meshsat/internal/transport"
 )
 
@@ -62,6 +63,7 @@ type Server struct {
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
 	spectrumMon   *spectrum.SpectrumMonitor
+	timeConsensus *timesync.MeshTimeConsensus // time-sync peers per interface [MESHSAT-778]
 	restartFn     func()
 	// blePeerMgr manages BLE-client Reticulum links to remote MeshSat
 	// kits paired via Settings > Routing > Bluetooth Peers. Nil until
@@ -310,6 +312,11 @@ func (s *Server) SetInterfaceRegistry(reg *routing.InterfaceRegistry) {
 // SetTCPInterface sets the TCP Reticulum interface for peer management API.
 func (s *Server) SetTCPInterface(iface *routing.TCPInterface) {
 	s.tcpIface = iface
+}
+
+// SetTimeConsensus sets the bridge-to-bridge time sync for GET /api/timesync/peers.
+func (s *Server) SetTimeConsensus(tc *timesync.MeshTimeConsensus) {
+	s.timeConsensus = tc
 }
 
 // SetSpectrumMonitor sets the RTL-SDR spectrum monitor for jamming detection.
@@ -767,6 +774,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/spectrum/stream", s.handleSpectrumStream)
 		r.Get("/spectrum/history", s.handleGetSpectrumHistory)
 		r.Get("/spectrum/transitions", s.handleGetSpectrumTransitions)
+
+		// Bridge-to-bridge time sync [MESHSAT-778]
+		r.Get("/timesync/peers", s.handleGetTimeSyncPeers)
 
 		// Device registry (IMEI-keyed)
 		r.Get("/device-registry", s.handleGetRegisteredDevices)

@@ -917,6 +917,7 @@ func main() {
 	// interface (e.g. TCP) are forwarded to the best route (e.g. satellite).
 	var transportNode *routing.TransportNode
 	var pathFinder *routing.PathFinder
+	var tsConsensus *timesync.MeshTimeConsensus
 	if routingID != nil && ifaceReg != nil {
 		transportNode = routing.NewTransportNode(routingID, 30*time.Minute, ifaceReg.Send)
 		transportNode.Enable()
@@ -961,7 +962,7 @@ func main() {
 		timeService.Start(ctx)
 
 		// Mesh time consensus — exchanges timestamps over Reticulum links.
-		tsConsensus := timesync.NewMeshTimeConsensus(timeService, routingID, func(data []byte) {
+		tsConsensus = timesync.NewMeshTimeConsensus(timeService, routingID, func(data []byte) {
 			proc.BroadcastRoutingPacket(data)
 		})
 		// Responses go back on the interface the request arrived on, not
@@ -969,6 +970,14 @@ func main() {
 		tsConsensus.SetReplyFunc(func(ifaceID string, data []byte) {
 			_ = proc.SendReticulumPacketTo(ifaceID, data)
 		})
+		// Requests go out per interface: every 30 s where another bridge
+		// speaks time sync, one discovery request per period elsewhere, so
+		// LoRa no longer carries a beacon nobody on the mesh can answer.
+		// [MESHSAT-778]
+		tsConsensus.SetInterfaces(proc.FreeRoutingInterfaces, func(ifaceID string, data []byte) {
+			_ = proc.SendReticulumPacketTo(ifaceID, data)
+		})
+		tsConsensus.SetDiscoveryInterval(time.Duration(envIntDefault("MESHSAT_TIMESYNC_DISCOVERY_MIN", 10)) * time.Minute)
 		// Answer peers as unsynchronised while our own clock is untrusted,
 		// rather than offering them an 8-hour-wrong reference. [MESHSAT-1056]
 		tsConsensus.SetClockTrustFn(clockGuard.Trusted)
@@ -979,7 +988,7 @@ func main() {
 			if len(data) > 0 && data[0] == 0x14 {
 				tsConsensus.HandleTimeSyncRequest(data, sourceIface)
 			} else if len(data) > 0 && data[0] == 0x15 {
-				tsConsensus.HandleTimeSyncResponse(data)
+				tsConsensus.HandleTimeSyncResponse(data, sourceIface)
 			}
 		})
 
@@ -1293,6 +1302,7 @@ func main() {
 	srv.SetHostClient(oobHost) // host reboot / poweroff from the panel, independent of the OOB service [MESHSAT-831]
 	srv.SetBurstQueue(burstQueue)
 	srv.SetSpectrumMonitor(spectrumMon)
+	srv.SetTimeConsensus(tsConsensus) // nil without routing [MESHSAT-778]
 
 	// Health scorer — composite health scores for interfaces (with jamming awareness)
 	healthScorer := engine.NewHealthScorer(db)

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -1024,6 +1025,26 @@ func (p *Processor) InjectReticulumPacket(packet []byte, sourceIface string) {
 	p.handleRoutingPacket(transport.MeshEvent{}, packet, sourceIface)
 }
 
+// FreeRoutingInterfaces lists the interfaces BroadcastRoutingPacket reaches:
+// every registered packet sender that is not paid, plus the mesh when it has
+// no sender of its own. Sorted. [MESHSAT-778]
+func (p *Processor) FreeRoutingInterfaces() []string {
+	p.packetSendersMu.RLock()
+	ids := make([]string, 0, len(p.packetSenders)+1)
+	for id := range p.packetSenders {
+		if !isPaidInterface(id) {
+			ids = append(ids, id)
+		}
+	}
+	_, meshRegistered := p.packetSenders["mesh_0"]
+	p.packetSendersMu.RUnlock()
+	if !meshRegistered && p.mesh != nil {
+		ids = append(ids, "mesh_0")
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // isPaidInterface returns true for interfaces where broadcasting protocol
 // overhead (time sync, keepalive, announces) would either cost real money
 // per message (iridium, cellular SMS) or blow up because the interface is
@@ -1064,10 +1085,9 @@ func (p *Processor) sendRoutingPacket(data []byte) {
 // (mesh, TCP, MQTT, AX.25). NEVER sends to paid satellite or cellular
 // interfaces — those cost real money per message.
 func (p *Processor) BroadcastRoutingPacket(data []byte) {
-	// Send to mesh (free, LoRa)
-	p.sendRoutingPacket(data)
 	// Send to free registered packet senders (TCP, MQTT, AX.25) — skip paid interfaces.
 	p.packetSendersMu.RLock()
+	_, meshRegistered := p.packetSenders["mesh_0"]
 	senders := make(map[string]func(ctx context.Context, data []byte) error, len(p.packetSenders))
 	for k, v := range p.packetSenders {
 		// Skip ALL paid satellite and cellular interfaces.
@@ -1077,6 +1097,13 @@ func (p *Processor) BroadcastRoutingPacket(data []byte) {
 		senders[k] = v
 	}
 	p.packetSendersMu.RUnlock()
+
+	// Send to mesh (free, LoRa) unless mesh_0 has its own packet sender:
+	// main.go registers one with the routing subsystem, and sending here as
+	// well put every broadcast on LoRa twice. [MESHSAT-778]
+	if !meshRegistered {
+		p.sendRoutingPacket(data)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
