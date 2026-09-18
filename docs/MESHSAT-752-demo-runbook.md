@@ -1574,3 +1574,93 @@ caused by the fix before them: drawing the reference line at the real cutoff mad
 invisible, fixing the level exposed a ± of 12.32, the median exposed the >50 % occupancy case, and
 the caption thinning at 3 % of the box was marginally too small for a 428 px box with captions 14 px
 apart. Re-audit after every fix; the first pass is never the last.
+
+## 52. 18 Sep 2026, night: the mesh radios' self-resets were ours, APRS acceptance passes, T-Echo kit radios (MESHSAT-1112, MESHSAT-1021)
+
+**The headline: the kit mesh radios did not reset themselves; the bridge made them.** Every
+relayed text went to the radio as a broadcast with `want_ack` set. On a broadcast that flag means
+"retransmit until a rebroadcast is heard", and on a two-node mesh nobody rebroadcasts. The firmware
+retried each text up to three times. The retries filled the EU_868 duty cycle (10 % of airtime per
+hour) and it refused a retry. The firmware then built a Routing NAK addressed to itself, delivered it
+to itself, and soft-reset. The radio logged it at 07:38:32 CEST:
+
+```
+Received text msg from=0x00000000, id=0x194c8cfe, msg=lt-r3p2t-07     <- the bridge's relay, broadcast, WantAck=1
+Send retransmission fr=0x00000000,to=0xffffffff,id=0x194c8cfe, tries left=2
+Duty cycle limit exceeded, abort send, retry in 18 mins
+Error=9, return NAK and drop packet
+Alloc an err=9,to=0xde11f199,idFrom=0x194c8cfe                       <- a NAK to its own node
+Received a NAK for 0x00000000, stopping retransmissions
+Forwarding to phone (... Portnum=5 requestId=0x194c8cfe)
+                                                                       [USB detach, 750 ms]
+S:B:7,2.8.0.47db0e3,t-echo,meshtastic/firmware
+Reset reason: 0x4
+```
+
+A reboot the firmware chooses prints `Reboot in 5 seconds` first; this one did not. That is the
+same event class MESHSAT-1112 had tracked since 13 Sep, on both kits, on XIAO ESP32-S3 and T-Echo,
+on 2.6.10 and 2.8.0.
+
+**Why a week of watching missed it:** the bridge discarded the radio's own account. `FromRadio`
+`log_record`, `rebooted` and `clientNotification` were never parsed, and the plain-text console
+lines in front of the first frame were dropped by the frame reader. With the radio's log captured
+(and `security.debug_log_api_enabled` set on the radio) the first spontaneous reset named its cause.
+
+**What was ruled out first, on the host:** no OOB agent action, no device-health step, no sudo, and
+the hub port stayed powered. The hub is self-powered, with no throttle, over-current or
+under-voltage on either kit. The kernel pattern (disconnect, new device 750 ms later) is a
+device-side detach. The two 17 Sep parallax events happened with no traffic at all.
+
+| Commit | Change |
+|---|---|
+| `a040a0d` | OOB agent: the mesh role accepts the T-Echo, `239a:4405` |
+| `6fd324b` | Bridge keeps the radio log, the reboot flag and notifications; `GET /api/mesh/radio-log`, `radio_last_reset_reason` on `/api/status` |
+| `3f5ea61`, `6f026c6` | ...and the plain-text console lines before a client attaches, ANSI stripped |
+| `eedc963` | **The fix:** want_ack only on unicast; never on a broadcast or on an admin message to the radio itself |
+
+**Config, both radios:** role `CLIENT_MUTE`. As `CLIENT` each radio rebroadcast the other kit's
+packets, which it cannot decrypt on the split channels, doubling its airtime.
+
+**Rule that stays:** the firmware path (duty cycle refuses a send, self-NAK, reset) still exists
+for any refused send. At LongFast a relayed text is about 1.1 s on air and the 5-minute announce
+1.7 s. Keep each kit under about 150 relayed texts per hour at the stand. Before calling a radio
+faulty, read `GET /api/mesh/radio-log`.
+
+### The T-Echo kit radios
+
+Both kits carry a LILYGO T-Echo (nRF52840 + SX1262) since 04:38 CEST. The XIAOs are spares.
+- **Identity kept.** On 2.8 the node number comes from the public key. Importing the XIAO key pairs
+  brought back `!de11f199` and `!4370c1d8`, so OOB peer rows and the Hub inventory stayed valid.
+- **Flash, no button:** stop the bridge, run `meshtastic --enter-dfu`, and the `TECHOBOOT` drive
+  appears in 2 s. Copy `firmware-t-echo-2.8.0.47db0e3.uf2`. The radio is back in 1 s.
+- **Full erase** (the 2.8.0 release notes advise it after repeated crashes): copy
+  `Meshtastic_nRF52_factory_erase_v3_S140_6.1.0.uf2`. The erase app prints "Formating ... Done" and
+  leaves the bootloader in serial-only DFU. Flash the `-ota.zip` with `adafruit-nrfutil dfu serial ...
+  --singlebank`.
+- **Restore after an erase:** `--configure` from the export applies everything except the security
+  block. Set `security.private_key`, `security.public_key` and `security.debug_log_api_enabled`
+  explicitly, then reboot.
+- **Power:** the unit has its own cell. A kit poweroff does not switch it off, so use its switch at
+  night. A hub-port power cut re-enumerates it but need not reboot it. Serial reconnect and the
+  admin reboot are the working heal steps.
+
+### APRS acceptance (MESHSAT-1021, closed)
+
+Six blocks, 20 relayed messages each, one direction at a time, both kits beaconing, ack defaults.
+
+| Run | Radios | Over APRS | End to end |
+|---|---|---|---|
+| Acceptance, 02:36 | XIAO | 117/120 | 120/120 |
+| 05:13 | T-Echo, before erase | 118/120 | 120/120 |
+| 06:57 | T-Echo, after erase | 119/120 | 120/120 |
+| 07:59 | T-Echo, want_ack fix | 119/120 | 120/120 |
+
+Every run was at or above 19/20 each way, with `bad_frames` 0 throughout. Slip counters were zeroed
+after each run (`scripts/slip-counter.sh zero`).
+
+**Also closed tonight on owner verification:** MESHSAT-1182 (deploy over the Mudi tunnel),
+MESHSAT-1201 (second screensaver poster), MESHSAT-1203 (spectrum mesh band).
+
+**Found in the 02:30 health check and still open:** parallax's RTL-SDR has been off the USB bus
+since 01:59 (the MESHSAT-855/1001 re-seat pattern). Tesseract's ZigBee sensor has been silent since
+6 Sep (MESHSAT-1092).
