@@ -31,6 +31,7 @@ type fakeRTLTCP struct {
 	spawns          atomic.Int32
 	center          atomic.Int64
 	freqCmds        atomic.Int32
+	gainCmds        atomic.Int32
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -82,9 +83,12 @@ func (f *fakeRTLTCP) session(c net.Conn) {
 			if _, err := readFull(c, cmd); err != nil {
 				return
 			}
-			if cmd[0] == rtlTCPCmdSetFreq {
+			switch cmd[0] {
+			case rtlTCPCmdSetFreq:
 				f.center.Store(int64(binary.BigEndian.Uint32(cmd[1:])))
 				f.freqCmds.Add(1)
+			case rtlTCPCmdSetGain:
+				f.gainCmds.Add(1)
 			}
 		}
 	}()
@@ -311,6 +315,10 @@ func TestRTLTCPScanFindsToneAndFollowsRetune(t *testing.T) {
 	}
 	if n := f.freqCmds.Load(); n != 3 {
 		t.Errorf("%d retune commands for lora, aprs, lora; want 3", n)
+	}
+	// One gain command at connect plus one after each retune (issue #42).
+	if n := f.gainCmds.Load(); n != 1+3 {
+		t.Errorf("%d gain commands, want 4 (connect + one per retune)", n)
 	}
 	// Same band again: no retune, no settle.
 	if _, err := s.Scan(ctx, 867_800_000, 868_600_000, 25_000, 2); err != nil {

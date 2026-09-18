@@ -12,7 +12,7 @@ escalates to a hub-port power cycle. [MESHSAT-1222]
 
 --- a/src/librtlsdr.c
 +++ b/src/librtlsdr.c
-@@ -1581,10 +1581,15 @@
+@@ -1531,10 +1531,15 @@
  
  	dev->rtl_xtal = DEF_RTL_XTAL_FREQ;
  

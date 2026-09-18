@@ -464,6 +464,15 @@ func (s *RTLTCPScanner) tune(ctx context.Context, freq int) error {
 		s.stopReader("retune failed")
 		return fmt.Errorf("rtl_tcp retune: %w", err)
 	}
+	// Set the gain again after every retune: rtl-sdr-blog issue #42 (open)
+	// reports the R828D's gain dropping to 0 dB across an RF-path border
+	// while the driver still reports the old value, and re-setting it is
+	// the documented workaround. The V4 switches its VHF and UHF inputs on
+	// every pass between aprs_144 and the other bands. [MESHSAT-1222]
+	if err := writeRTLTCPCommand(conn, rtlTCPCmdSetGain, uint32(s.gainTenths)); err != nil {
+		s.stopReader("gain after retune failed")
+		return fmt.Errorf("rtl_tcp gain after retune: %w", err)
+	}
 	s.mu.Lock()
 	s.tuned = freq
 	s.mu.Unlock()

@@ -33,19 +33,22 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       gcc -O2 -Wall -static -o /jspr-helper /tmp/main.c; \
     fi
 
-# Build the rtl-sdr-blog fork of librtlsdr. The RTL-SDR Blog V4 uses an
-# R828D tuner that upstream librtlsdr does not correctly tune in the
-# 800-900 MHz range — rtl_power hangs indefinitely on LoRa EU868 and
-# LTE 800/900 with the stock Alpine rtl-sdr package. The Blog fork
-# (https://github.com/rtlsdrblog/rtl-sdr-blog) carries the V4 tuning
-# patches. [MESHSAT-509 — parallax01 RTL-SDR Blog V4 detected 2026-04-17]
-# Pinned to a commit: both patches below are hunks against this source,
-# and an unpinned HEAD could stop them applying or change the V4 code
-# under us without a commit here. [MESHSAT-1222]
-ARG RTLSDR_BLOG_SHA=aed0ea19f3a273370a13c9009b96313c75d54c7b
+# Build osmocom rtl-sdr (librtlsdr + rtl_tcp/rtl_power), release v2.0.3.
+# The official RTL-SDR Blog V4 guide (rtl-sdr.com/V4, Linux section) now
+# installs osmocom upstream, which carries full V4 support (detection,
+# 28.8 MHz xtal, input switching, HF upconverter). Until MESHSAT-1222 this
+# image built the rtlsdrblog fork (V1.4.0, chosen in April when upstream
+# could not tune the V4, MESHSAT-509); that fork lacks upstream's 65f0658
+# "Fix application hang on USB transfer errors" (Jan 2026), the async-read
+# hang an rtl_tcp reader can hit. The fork's only V4 difference left, an
+# L-band VGA gain tweak, is commented out in its own source.
+# Pinned to the release commit: the patches below are hunks against it.
+ARG RTLSDR_SHA=797f8143266d983c56d8f35d2d442527529dd8a5
 RUN git init -q /src/rtl && cd /src/rtl && \
-    git fetch -q --depth=1 https://github.com/rtlsdrblog/rtl-sdr-blog.git "$RTLSDR_BLOG_SHA" && \
-    git checkout -q FETCH_HEAD
+    git fetch -q --depth=1 https://github.com/osmocom/rtl-sdr.git "$RTLSDR_SHA" && \
+    git checkout -q FETCH_HEAD && \
+    grep -q "Check if device was lost" src/librtlsdr.c && \
+    grep -q '"Blog V4"' src/librtlsdr.c
 # Never USB-reset the dongle from inside rtlsdr_open: on the Blog V4 that
 # reset is what left parallax's dongle unable to enumerate on 17 Sep 2026.
 # The open fails instead and the bridge escalates to a hub-port power
@@ -114,11 +117,10 @@ RUN mkdir /src/rtl/build && cd /src/rtl/build && \
         -DINSTALL_UDEV_RULES=OFF \
         -DDETACH_KERNEL_DRIVER=ON; \
     fi && \
-    make -j"$(nproc)" && make install && ldconfig 2>/dev/null || true
+    make -j"$(nproc)" && make install && { ldconfig 2>/dev/null || true; }
 
-# Build rpfftw against the librtlsdr-blog we just installed to /out.
-# The headers are also pulled from the Blog fork install so rpfftw
-# sees V4-aware init code when it links against librtlsdr.
+# Build rpfftw against the librtlsdr we just installed, so it links the
+# same V4-aware library as rtl_tcp.
 RUN mkdir /src/rpfftw/build && cd /src/rpfftw/build && \
     # librtlsdr is now at /usr/local of the c-builder. Its .pc file's
     # prefix=/usr/local matches the actual install layout — pkg-config
@@ -244,7 +246,7 @@ COPY --from=direwolf-builder /out/usr/local/bin/direwolf      /usr/local/bin/dir
 COPY --from=direwolf-builder /out/usr/local/share/direwolf    /usr/local/share/direwolf
 COPY --chmod=755 scripts/direwolf-preflight.sh                /usr/local/bin/direwolf-preflight.sh
 
-# Bring in the Blog V4-capable rtl_power + librtlsdr. DESTDIR=/out from
+# Bring in the V4-capable rtl_* tools + librtlsdr (osmocom, patched). DESTDIR=/out from
 # the c-builder stage gives us /out/usr/local/bin/rtl_* and
 # /out/usr/local/lib/librtlsdr.so*. We copy the whole tree under
 # /usr/local so the SONAME symlinks and binary layout are preserved.
