@@ -1729,3 +1729,16 @@ shows `scanner.reader`.
 **parallax's dongle** stays off the bus until a physical re-seat (a 10 s and a 30 s port cut and an
 `xhci-hcd.1` rebind all ended in `descriptor read/64, error -110`); the new build attaches it within
 30 s of it enumerating and remembers its port from then on.
+
+**Re-seat and the hub, 18 Sep 2026 afternoon.** A 120 s `uhubctl` cut on BOTH hub halves (port read
+`0000 off`) did not revive parallax's dongle: it signalled connect the second power returned, then
+`descriptor read/64, error -110`. The owner's physical re-seat (15:46) brought it back at once, and the
+new build attached it 5 s after it enumerated, without a restart. tesseract's re-seat was ridden out by
+the reader alone (stall at +5 s, no hammering while absent, streaming 3 s after re-enumeration).
+**The StarTech HB30A4AIB does not cut VBUS in software:** StarTech's datasheet documents only the
+physical push-buttons as power switches ("disconnect power to devices", "RESET DEVICES"; the note says
+they "control power only and do not disable or interrupt data transmission"), and uhubctl's
+compatibility list flags this model (issue #509: units after the 2022 VL817 B0 to C0 change report the
+port off but keep power). So every level-3 "hub-port power cycle" on the kits is a data reconnect. It
+clears soft hangs, never a wedged chip, and MESHSAT-1167's panel-reset plan does not work on this hub.
+Purpose-built switchable hubs (Yepkit YKUSH family, Acroname USBHub3+) document a real per-port VBUS cut.
