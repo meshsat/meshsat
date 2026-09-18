@@ -4,14 +4,30 @@ import (
 	"context"
 	"encoding/binary"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// requestInterval is the period of the time sync request broadcast.
+// requestInterval is the period of the time sync request on an interface
+// where a time-sync peer is present.
 const requestInterval = 30 * time.Second
+
+// RequestInterval is requestInterval for callers outside the package.
+const RequestInterval = requestInterval
+
+// DefaultDiscoveryInterval is the period of the request on an interface where
+// no time-sync peer has spoken within peerTTL. Until 18 Sep 2026 the request
+// went out every 30 s on every free bearer, twice on LoRa, peer or not: 240
+// mesh packets an hour at 1.09 s each, 7.3 % of the EU868 10 % duty cycle on
+// a kit with nobody on its mesh able to answer. [MESHSAT-778]
+const DefaultDiscoveryInterval = 10 * time.Minute
+
+// peerTTL is how long an interface keeps the full request rate after a peer
+// last asked or answered on it. Matches the stale-peer prune.
+const peerTTL = 10 * time.Minute
 
 // seenRequestTTL bounds the request dedup window: the same request can
 // arrive over two links to the same peer (both TCP connections between the
@@ -61,7 +77,38 @@ type peerClock struct {
 	lastOffset  int64   // nanoseconds
 	offsetEWMA  float64 // exponentially weighted moving average
 	lastSeen    time.Time
+	lastRTT     time.Duration
+	iface       string // interface the last response came in on
 	sampleCount int
+}
+
+// ifaceSchedule is the request state of one interface.
+type ifaceSchedule struct {
+	peerSeen time.Time // last request or response from another bridge on it
+	lastSent time.Time // last request we sent on it
+}
+
+// PeerState is a read-only view of one time-sync peer.
+type PeerState struct {
+	DestHash  string    `json:"dest_hash"`
+	Stratum   int       `json:"stratum"`
+	OffsetMs  float64   `json:"offset_ms"`
+	LastRTTMs float64   `json:"last_rtt_ms"`
+	LastSeen  time.Time `json:"last_seen"`
+	Samples   int       `json:"samples"`
+	Iface     string    `json:"iface"`
+	Stale     bool      `json:"stale"`
+}
+
+// InterfaceState is a read-only view of the request schedule on one interface.
+// Mode is "peer" while a time-sync peer spoke on the interface within the peer
+// window, else "discovery".
+type InterfaceState struct {
+	Iface         string     `json:"iface"`
+	Mode          string     `json:"mode"`
+	PeriodSec     int        `json:"period_sec"`
+	PeerSeenAt    *time.Time `json:"peer_seen_at,omitempty"`
+	LastRequestAt *time.Time `json:"last_request_at,omitempty"`
 }
 
 // MeshTimeConsensus implements a simplified NTP-like protocol over
@@ -95,19 +142,52 @@ type MeshTimeConsensus struct {
 	// second forever (5 Sep 2026: both kits deaf on APRS after a deploy
 	// 120 s apart). Randomised in NewMeshTimeConsensus; tests may zero it.
 	startOffset time.Duration
+
+	// Per-interface requests. With ifaceList and ifaceSend set, a request
+	// goes out on an interface every requestInterval while a peer is there
+	// and every discoveryInterval otherwise; without them every request is
+	// broadcast through sendFn as before. [MESHSAT-778]
+	ifaceList         func() []string
+	ifaceSend         ReplyFunc
+	discoveryInterval time.Duration
+	ifaceMu           sync.Mutex
+	ifaces            map[string]*ifaceSchedule
 }
 
 // NewMeshTimeConsensus creates a new mesh time consensus instance.
 func NewMeshTimeConsensus(ts *TimeService, identity IdentityProvider, sendFn SendFunc) *MeshTimeConsensus {
 	return &MeshTimeConsensus{
-		ts:          ts,
-		identity:    identity,
-		sendFn:      sendFn,
-		peers:       make(map[[DestHashLen]byte]*peerClock),
-		pending:     make(map[int64]time.Time),
-		seen:        make(map[seenRequest]time.Time),
-		startOffset: rand.N(requestInterval),
+		ts:                ts,
+		identity:          identity,
+		sendFn:            sendFn,
+		peers:             make(map[[DestHashLen]byte]*peerClock),
+		pending:           make(map[int64]time.Time),
+		seen:              make(map[seenRequest]time.Time),
+		startOffset:       rand.N(requestInterval),
+		discoveryInterval: DefaultDiscoveryInterval,
+		ifaces:            make(map[string]*ifaceSchedule),
 	}
+}
+
+// SetInterfaces switches requests from one broadcast to per-interface sends:
+// list returns the interfaces a request may go out on (the free ones), send
+// transmits on one of them. [MESHSAT-778]
+func (mc *MeshTimeConsensus) SetInterfaces(list func() []string, send ReplyFunc) {
+	mc.mu.Lock()
+	mc.ifaceList = list
+	mc.ifaceSend = send
+	mc.mu.Unlock()
+}
+
+// SetDiscoveryInterval sets the request period on an interface with no peer.
+// Values under requestInterval are raised to it.
+func (mc *MeshTimeConsensus) SetDiscoveryInterval(d time.Duration) {
+	if d < requestInterval {
+		d = requestInterval
+	}
+	mc.ifaceMu.Lock()
+	mc.discoveryInterval = d
+	mc.ifaceMu.Unlock()
 }
 
 // SetReplyFunc routes time sync responses to the interface the request
@@ -195,10 +275,26 @@ func (mc *MeshTimeConsensus) pruneLoop(ctx context.Context) {
 	}
 }
 
-// sendRequest broadcasts a time sync request to all active links.
+// sendRequest sends a time sync request on every interface that is due, or
+// broadcasts it when no per-interface sender is set.
 func (mc *MeshTimeConsensus) sendRequest() {
+	mc.sendRequestAt(time.Now())
+}
+
+func (mc *MeshTimeConsensus) sendRequestAt(now time.Time) {
+	mc.mu.RLock()
+	list, send := mc.ifaceList, mc.ifaceSend
+	mc.mu.RUnlock()
+
+	var due []string
+	if list != nil && send != nil {
+		due = mc.dueInterfaces(list(), now)
+		if len(due) == 0 {
+			return
+		}
+	}
+
 	localHash := mc.identity.DestHash()
-	now := time.Now()
 	nowNanos := now.UnixNano()
 	stratum := mc.ts.Stratum()
 
@@ -213,7 +309,64 @@ func (mc *MeshTimeConsensus) sendRequest() {
 	mc.pending[nowNanos] = now
 	mc.pendingMu.Unlock()
 
-	mc.sendFn(pkt)
+	if list == nil || send == nil {
+		mc.sendFn(pkt)
+		return
+	}
+	for _, id := range due {
+		send(id, pkt)
+	}
+}
+
+// dueInterfaces returns the interfaces a request goes out on at now and marks
+// them sent: every requestInterval where a peer spoke within peerTTL, every
+// discoveryInterval elsewhere, and at once on an interface never sent on.
+// Half a period of slack keeps ticker jitter from skipping a whole period.
+func (mc *MeshTimeConsensus) dueInterfaces(ids []string, now time.Time) []string {
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+
+	var due []string
+	for _, id := range ids {
+		st := mc.ifaces[id]
+		if st == nil {
+			st = &ifaceSchedule{}
+			mc.ifaces[id] = st
+		}
+		period := mc.periodLocked(st, now)
+		if st.lastSent.IsZero() || now.Sub(st.lastSent) >= period-requestInterval/2 {
+			st.lastSent = now
+			due = append(due, id)
+		}
+	}
+	return due
+}
+
+// periodLocked is the request period of one interface. Caller holds ifaceMu.
+func (mc *MeshTimeConsensus) periodLocked(st *ifaceSchedule, now time.Time) time.Duration {
+	if hasPeer(st, now) {
+		return requestInterval
+	}
+	return mc.discoveryInterval
+}
+
+func hasPeer(st *ifaceSchedule, now time.Time) bool {
+	return !st.peerSeen.IsZero() && now.Sub(st.peerSeen) <= peerTTL
+}
+
+// notePeer records that another bridge spoke time sync on iface.
+func (mc *MeshTimeConsensus) notePeer(iface string, now time.Time) {
+	if iface == "" {
+		return
+	}
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	st := mc.ifaces[iface]
+	if st == nil {
+		st = &ifaceSchedule{}
+		mc.ifaces[iface] = st
+	}
+	st.peerSeen = now
 }
 
 // HandleTimeSyncRequest processes an incoming time sync request and sends a response.
@@ -236,6 +389,8 @@ func (mc *MeshTimeConsensus) HandleTimeSyncRequest(data []byte, sourceIface stri
 		return // our own request echoed back
 	}
 	now := time.Now()
+	// A duplicate over a second link still shows a peer on that link.
+	mc.notePeer(sourceIface, now)
 	if mc.seenBefore(senderHash, requestTimestamp, now) {
 		log.Debug().Str("peer", hexHash(senderHash)).Str("iface", sourceIface).
 			Msg("timesync: duplicate request, already answered")
@@ -277,7 +432,8 @@ func (mc *MeshTimeConsensus) HandleTimeSyncRequest(data []byte, sourceIface stri
 
 // HandleTimeSyncResponse processes an incoming time sync response, calculates
 // the clock offset using round-trip measurement, and updates peer state.
-func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte) {
+// sourceIface is the interface it came in on ("" if unknown).
+func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte, sourceIface string) {
 	if len(data) < timeSyncRespLen {
 		return
 	}
@@ -290,6 +446,13 @@ func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte) {
 	remoteTimestamp := int64(binary.LittleEndian.Uint64(data[17:25]))
 	remoteStratum := int(data[25])
 	echoTimestamp := int64(binary.LittleEndian.Uint64(data[26:34]))
+
+	if responderHash == mc.identity.DestHash() {
+		return
+	}
+	// Any answer proves a peer on this interface, even the second copy of
+	// one that already arrived over another link.
+	mc.notePeer(sourceIface, time.Now())
 
 	// Look up the pending request to get the local send time.
 	mc.pendingMu.Lock()
@@ -323,6 +486,8 @@ func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte) {
 	peer.stratum = remoteStratum
 	peer.lastOffset = offset
 	peer.lastSeen = now
+	peer.lastRTT = rtt
+	peer.iface = sourceIface
 	peer.sampleCount++
 	if peer.sampleCount == 1 {
 		peer.offsetEWMA = float64(offset)
@@ -432,6 +597,85 @@ func (mc *MeshTimeConsensus) PeerCount() int {
 		}
 	}
 	return count
+}
+
+// Peers returns the known time-sync peers, most recently heard first.
+func (mc *MeshTimeConsensus) Peers() []PeerState {
+	mc.mu.RLock()
+	defer mc.mu.RUnlock()
+
+	now := time.Now()
+	out := make([]PeerState, 0, len(mc.peers))
+	for _, p := range mc.peers {
+		out = append(out, PeerState{
+			DestHash:  hexHash(p.destHash),
+			Stratum:   p.stratum,
+			OffsetMs:  p.offsetEWMA / 1e6,
+			LastRTTMs: float64(p.lastRTT.Nanoseconds()) / 1e6,
+			LastSeen:  p.lastSeen,
+			Samples:   p.sampleCount,
+			Iface:     p.iface,
+			Stale:     now.Sub(p.lastSeen) > 5*time.Minute,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	return out
+}
+
+// Interfaces returns the request schedule of every interface requests may go
+// out on, sorted by name. A peer heard on any other interface (a paid one,
+// which never carries a request) is not listed. Without per-interface sends
+// it lists the interfaces a peer spoke on.
+func (mc *MeshTimeConsensus) Interfaces() []InterfaceState {
+	mc.mu.RLock()
+	list := mc.ifaceList
+	mc.mu.RUnlock()
+	var ids []string
+	if list != nil {
+		ids = list()
+	}
+
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	now := time.Now()
+	names := make(map[string]bool, len(ids)+len(mc.ifaces))
+	for _, id := range ids {
+		names[id] = true
+	}
+	if list == nil {
+		for id := range mc.ifaces {
+			names[id] = true
+		}
+	}
+	out := make([]InterfaceState, 0, len(names))
+	for id := range names {
+		st := mc.ifaces[id]
+		if st == nil {
+			st = &ifaceSchedule{}
+		}
+		s := InterfaceState{Iface: id, Mode: "discovery", PeriodSec: int(mc.periodLocked(st, now) / time.Second)}
+		if hasPeer(st, now) {
+			s.Mode = "peer"
+		}
+		if !st.peerSeen.IsZero() {
+			t := st.peerSeen
+			s.PeerSeenAt = &t
+		}
+		if !st.lastSent.IsZero() {
+			t := st.lastSent
+			s.LastRequestAt = &t
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Iface < out[j].Iface })
+	return out
+}
+
+// DiscoveryInterval returns the request period on an interface with no peer.
+func (mc *MeshTimeConsensus) DiscoveryInterval() time.Duration {
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	return mc.discoveryInterval
 }
 
 func hexHash(h [DestHashLen]byte) string {

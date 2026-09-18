@@ -99,6 +99,8 @@ type mockMeshTransport struct {
 	// through a gateway, so this is the path the booth relay actually takes.
 	// [MESHSAT-1061]
 	down bool
+	// raw records SendRaw calls (routing packets on PRIVATE_APP). [MESHSAT-778]
+	raw []transport.RawRequest
 }
 
 func (m *mockMeshTransport) setDown(down bool) {
@@ -120,6 +122,9 @@ func (m *mockMeshTransport) SendMessage(ctx context.Context, req transport.SendR
 	return nil
 }
 func (m *mockMeshTransport) SendRaw(ctx context.Context, req transport.RawRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.raw = append(m.raw, req)
 	return nil
 }
 func (m *mockMeshTransport) GetNodes(ctx context.Context) ([]transport.MeshNode, error) {

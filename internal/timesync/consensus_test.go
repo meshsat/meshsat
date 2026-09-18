@@ -144,3 +144,193 @@ func TestRecalculateConsensus_SkipsUnsynchronisedPeers(t *testing.T) {
 		t.Errorf("stratum = %d, want 4 (the good peer at 3, plus one)", got)
 	}
 }
+
+// The request schedule per interface: at once on an interface never sent on,
+// every requestInterval while a peer spoke within peerTTL, every discovery
+// period otherwise, with half a request period of slack for ticker jitter.
+// [MESHSAT-778]
+func TestDueInterfaces_Schedule(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name     string
+		peerAgo  time.Duration // 0 = never
+		sentAgo  time.Duration // 0 = never
+		wantDue  bool
+		wantMode string
+	}{
+		{"never sent, no peer: first discovery goes out", 0, 0, true, "discovery"},
+		{"no peer, sent 30 s ago", 0, 30 * time.Second, false, "discovery"},
+		{"no peer, sent 5 min ago", 0, 5 * time.Minute, false, "discovery"},
+		{"no peer, sent 9 min ago", 0, 9 * time.Minute, false, "discovery"},
+		{"no peer, sent 9 min 45 s ago (slack)", 0, 9*time.Minute + 45*time.Second, true, "discovery"},
+		{"no peer, sent 10 min ago", 0, 10 * time.Minute, true, "discovery"},
+		{"peer 1 min ago, sent 10 s ago", time.Minute, 10 * time.Second, false, "peer"},
+		{"peer 1 min ago, sent 29 s ago (jitter)", time.Minute, 29 * time.Second, true, "peer"},
+		{"peer 1 min ago, sent 30 s ago", time.Minute, 30 * time.Second, true, "peer"},
+		{"peer 9 min 30 s ago, still within the window", 9*time.Minute + 30*time.Second, 30 * time.Second, true, "peer"},
+		{"peer 11 min ago, back to discovery", 11 * time.Minute, time.Minute, false, "discovery"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := NewMeshTimeConsensus(NewTimeService(nil), fakeIdentity{}, func([]byte) {})
+			st := &ifaceSchedule{}
+			if tt.peerAgo > 0 {
+				st.peerSeen = now.Add(-tt.peerAgo)
+			}
+			if tt.sentAgo > 0 {
+				st.lastSent = now.Add(-tt.sentAgo)
+			}
+			mc.ifaces["mesh_0"] = st
+			mc.SetInterfaces(func() []string { return []string{"mesh_0"} }, func(string, []byte) {})
+
+			got := mc.dueInterfaces([]string{"mesh_0"}, now)
+			if due := len(got) == 1; due != tt.wantDue {
+				t.Errorf("due = %v, want %v", due, tt.wantDue)
+			}
+			if tt.wantDue && !mc.ifaces["mesh_0"].lastSent.Equal(now) {
+				t.Error("a due interface must be marked sent")
+			}
+			states := mc.Interfaces()
+			if len(states) != 1 || states[0].Mode != tt.wantMode {
+				t.Errorf("Interfaces() = %+v, want mode %q", states, tt.wantMode)
+			}
+		})
+	}
+}
+
+type ifaceSends struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (s *ifaceSends) send(iface string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(data) != timeSyncReqLen || data[0] != PacketTimeSyncReq {
+		panic("not a time sync request")
+	}
+	s.n[iface]++
+}
+
+func (s *ifaceSends) count(iface string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n[iface]
+}
+
+// Over an hour with nobody answering, the mesh carries one discovery request
+// per period instead of one every 30 s (twice, before the fix); an interface
+// where another bridge asks goes to the full rate at the next tick while the
+// others stay quiet, and drops back to discovery once the peer falls silent.
+// [MESHSAT-778]
+func TestSendRequest_PerInterfaceGating(t *testing.T) {
+	ifaces := []string{"mesh_0", "tcp_0", "zigbee_0"}
+	sends := &ifaceSends{n: map[string]int{}}
+	var broadcast int
+	mc := NewMeshTimeConsensus(NewTimeService(nil), fakeIdentity{hash: [DestHashLen]byte{1}}, func([]byte) { broadcast++ })
+	mc.SetReplyFunc(func(string, []byte) {})
+	mc.SetInterfaces(func() []string { return ifaces }, sends.send)
+
+	// One hour of 30 s ticks, no peer anywhere.
+	t0 := time.Now().Add(-2 * time.Hour)
+	for tick := time.Duration(0); tick < time.Hour; tick += requestInterval {
+		mc.sendRequestAt(t0.Add(tick))
+	}
+	for _, id := range ifaces {
+		if got := sends.count(id); got != 6 {
+			t.Errorf("%s: %d requests in an hour without a peer, want 6 (one per 10 min)", id, got)
+		}
+	}
+	if broadcast != 0 {
+		t.Errorf("broadcast sender used %d times with per-interface sends set", broadcast)
+	}
+
+	// Another bridge asks on tcp_0 now; the next tick sends there only.
+	now := time.Now()
+	mc.HandleTimeSyncRequest(buildRequest([DestHashLen]byte{2}, now.UnixNano()), "tcp_0")
+	before := map[string]int{}
+	for _, id := range ifaces {
+		before[id] = sends.count(id)
+	}
+	for tick := requestInterval; tick <= 5*time.Minute; tick += requestInterval {
+		mc.sendRequestAt(now.Add(tick))
+	}
+	if got := sends.count("tcp_0") - before["tcp_0"]; got != 10 {
+		t.Errorf("tcp_0 with a peer: %d requests in 5 min, want 10", got)
+	}
+	for _, id := range []string{"mesh_0", "zigbee_0"} {
+		if got := sends.count(id) - before[id]; got != 1 {
+			t.Errorf("%s without a peer: %d requests in 5 min, want the 1 discovery that fell due", id, got)
+		}
+	}
+
+	// The peer falls silent: past peerTTL tcp_0 is back on the discovery
+	// period, three requests in the next 30 min instead of sixty.
+	late := now.Add(peerTTL + time.Minute)
+	n := sends.count("tcp_0")
+	for tick := time.Duration(0); tick < 30*time.Minute; tick += requestInterval {
+		mc.sendRequestAt(late.Add(tick))
+	}
+	if got := sends.count("tcp_0") - n; got != 3 {
+		t.Errorf("tcp_0 after the peer went silent: %d requests in 30 min, want 3", got)
+	}
+}
+
+// Without per-interface senders the request is broadcast every tick, as
+// before; a tick with nothing due sends nothing and leaves no pending entry.
+func TestSendRequest_BroadcastFallbackAndNoPendingWhenIdle(t *testing.T) {
+	var broadcast int
+	mc := NewMeshTimeConsensus(NewTimeService(nil), fakeIdentity{}, func([]byte) { broadcast++ })
+	now := time.Now()
+	mc.sendRequestAt(now)
+	mc.sendRequestAt(now.Add(requestInterval))
+	if broadcast != 2 {
+		t.Fatalf("broadcast %d, want 2", broadcast)
+	}
+
+	idle := NewMeshTimeConsensus(NewTimeService(nil), fakeIdentity{}, func([]byte) {})
+	idle.SetInterfaces(func() []string { return []string{"mesh_0"} }, func(string, []byte) {})
+	idle.sendRequestAt(now)                  // first discovery
+	idle.sendRequestAt(now.Add(time.Minute)) // nothing due
+	idle.pendingMu.Lock()
+	defer idle.pendingMu.Unlock()
+	if len(idle.pending) != 1 {
+		t.Errorf("pending = %d, want 1 (no entry for a tick that sent nothing)", len(idle.pending))
+	}
+}
+
+// A response marks a peer on the interface it came in on, and records the
+// round trip and interface for GET /api/timesync/peers; a response carrying
+// our own hash marks nothing. [MESHSAT-778]
+func TestHandleTimeSyncResponse_MarksPeerInterface(t *testing.T) {
+	local := fakeIdentity{hash: [DestHashLen]byte{1}}
+	mc := NewMeshTimeConsensus(NewTimeService(nil), local, func([]byte) {})
+	mc.SetInterfaces(func() []string { return []string{"ax25_0", "mesh_0"} }, func(string, []byte) {})
+
+	sent := time.Now().Add(-120 * time.Millisecond)
+	mc.pending[sent.UnixNano()] = sent
+	resp := func(from [DestHashLen]byte) []byte {
+		b := make([]byte, timeSyncRespLen)
+		b[0] = PacketTimeSyncResp
+		copy(b[1:17], from[:])
+		binary.LittleEndian.PutUint64(b[17:25], uint64(time.Now().UnixNano()))
+		b[25] = 2
+		binary.LittleEndian.PutUint64(b[26:34], uint64(sent.UnixNano()))
+		return b
+	}
+
+	mc.HandleTimeSyncResponse(resp(local.hash), "mesh_0")
+	mc.HandleTimeSyncResponse(resp([DestHashLen]byte{9}), "ax25_0")
+
+	modes := map[string]string{}
+	for _, s := range mc.Interfaces() {
+		modes[s.Iface] = s.Mode
+	}
+	if modes["ax25_0"] != "peer" || modes["mesh_0"] != "discovery" {
+		t.Errorf("modes = %v, want ax25_0 peer and mesh_0 discovery", modes)
+	}
+	peers := mc.Peers()
+	if len(peers) != 1 || peers[0].Iface != "ax25_0" || peers[0].LastRTTMs < 100 || peers[0].Stratum != 2 {
+		t.Errorf("Peers() = %+v, want one peer on ax25_0 with a ~120 ms round trip at stratum 2", peers)
+	}
+}
