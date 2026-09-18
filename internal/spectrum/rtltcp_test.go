@@ -25,6 +25,9 @@ type fakeRTLTCP struct {
 	constant atomic.Bool
 
 	stallAfterBytes atomic.Int64 // stop streaming after this many bytes in a session (0 = never)
+	exitDelay       atomic.Int64 // how long a stopped "process" takes to exit, ns
+	spawnedAt       atomic.Int64
+	exitedAt        atomic.Int64
 	spawns          atomic.Int32
 	center          atomic.Int64
 	freqCmds        atomic.Int32
@@ -129,6 +132,7 @@ func (f *fakeRTLTCP) scanner() *RTLTCPScanner {
 	s.present = func() bool { return true }
 	s.spawn = func(*RTLTCPScanner) (*rtlTCPProc, error) {
 		f.spawns.Add(1)
+		f.spawnedAt.Store(time.Now().UnixNano())
 		done := make(chan struct{})
 		var once sync.Once
 		return &rtlTCPProc{
@@ -139,6 +143,8 @@ func (f *fakeRTLTCP) scanner() *RTLTCPScanner {
 						f.conn.Close()
 					}
 					f.mu.Unlock()
+					time.Sleep(time.Duration(f.exitDelay.Load()))
+					f.exitedAt.Store(time.Now().UnixNano())
 					close(done)
 				})
 			},
@@ -445,4 +451,31 @@ func mustGeom(b Band) ScanGeometry {
 		panic(err)
 	}
 	return g
+}
+
+// A Close from another goroutine that is still waiting for the old process
+// to exit must not let the next Scan start a second one alongside it.
+func TestRTLTCPNeverOverlapsTwoReaders(t *testing.T) {
+	f := newFakeRTLTCP(t, 868_312_500)
+	f.exitDelay.Store(int64(400 * time.Millisecond))
+	s := f.scanner()
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := s.Scan(ctx, 867_800_000, 868_600_000, 25_000, 2); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() { s.Close(); close(closed) }()
+	time.Sleep(50 * time.Millisecond) // Close is now inside the slow exit
+	if _, err := s.Scan(ctx, 867_800_000, 868_600_000, 25_000, 2); err != nil {
+		t.Fatalf("scan after Close: %v", err)
+	}
+	<-closed
+	if n := f.spawns.Load(); n != 2 {
+		t.Fatalf("spawned %d readers, want 2", n)
+	}
+	if f.spawnedAt.Load() < f.exitedAt.Load() {
+		t.Errorf("second reader started %s before the first one exited",
+			time.Duration(f.exitedAt.Load()-f.spawnedAt.Load()))
+	}
 }

@@ -53,6 +53,7 @@ type RTLTCPScanner struct {
 
 	mu        sync.Mutex // guards everything below
 	proc      *rtlTCPProc
+	lastDone  <-chan struct{} // exit of the most recently started process
 	conn      net.Conn
 	notify    chan struct{}
 	ring      []byte
@@ -255,10 +256,33 @@ func (s *RTLTCPScanner) startReader(ctx context.Context) error {
 	if s.spawn == nil {
 		return errors.New("rtl_tcp: no reader configured")
 	}
+	// Never overlap two readers. A Close from another goroutine (the heal
+	// ladder's RestartScan) may still be stopping the previous process;
+	// starting the next one before it exits made the new rtl_tcp fail on
+	// the busy dongle while our dial reached the old one's socket
+	// (tesseract, 18 Sep 2026).
+	s.mu.Lock()
+	prev := s.lastDone
+	s.mu.Unlock()
+	if prev != nil {
+		t := time.NewTimer(15 * time.Second)
+		select {
+		case <-prev:
+			t.Stop()
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+			return errors.New("rtl_tcp: the previous reader process has not exited")
+		}
+	}
 	proc, err := s.spawn(s)
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.lastDone = proc.done
+	s.mu.Unlock()
 	fail := func(err error) error {
 		proc.stop()
 		if t := proc.tail(); t != "" {
