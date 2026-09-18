@@ -771,6 +771,10 @@ const radioLogKeep = 200
 // radioResetWords matches a radio log line that explains a boot or a
 // crash: the firmware's boot banner ("Reset reason"), its own reboot
 // decisions, asserts, watchdog and brown-out reports. [MESHSAT-1112]
+// ansiEscape matches the colour codes the firmware wraps its console
+// lines in ("\x1b[32mINFO \x1b[0m| ...").
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
 var radioResetWords = regexp.MustCompile(`(?i)reset reason|reboot|crash|assert|watchdog|panic|critical|brownout|brown-out|fatal`)
 
 // recordRadioLog keeps one line of the radio's own log, logs it under the
@@ -829,7 +833,7 @@ func (t *DirectMeshTransport) consoleText(b []byte) {
 				return r
 			}
 			return -1
-		}, string(raw))
+		}, ansiEscape.ReplaceAllString(string(raw), ""))
 		clean = strings.TrimSpace(clean)
 		if len(clean) >= 3 {
 			lines = append(lines, clean)
