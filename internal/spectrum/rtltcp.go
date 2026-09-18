@@ -96,6 +96,12 @@ const (
 	rtlTCPCmdSetAGCMode     = 0x08
 	rtlTCPLinkedListBuffers = 50 // rtl_tcp -n: bounds its memory if we ever fall behind
 	rtlTCPAsyncBuffers      = 8  // rtl_tcp -b: URBs kept queued on the dongle
+	// rtl_tcp needs about 5 s to exit on SIGTERM when a client was
+	// connected: its TCP worker sits in a 5 s pthread_cond_timedwait that
+	// nothing wakes once the async read is cancelled (measured 5.08 s on
+	// tesseract, 18 Sep 2026). A 5 s grace always lost that race and
+	// fell through to SIGKILL, which skips rtlsdr_close.
+	rtlTCPStopGrace = 12 * time.Second
 )
 
 // ErrNoDongle is returned by a scan when no RTL-SDR is on the USB bus. The
@@ -716,8 +722,8 @@ func spawnRTLTCP(s *RTLTCPScanner) (*rtlTCPProc, error) {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			select {
 			case <-done:
-			case <-time.After(5 * time.Second):
-				log.Warn().Msg("spectrum: rtl_tcp ignored SIGTERM for 5 s, killing it")
+			case <-time.After(rtlTCPStopGrace):
+				log.Warn().Dur("grace", rtlTCPStopGrace).Msg("spectrum: rtl_tcp ignored SIGTERM, killing it")
 				_ = cmd.Process.Kill()
 				<-done
 			}
