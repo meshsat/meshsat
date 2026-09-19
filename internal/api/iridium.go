@@ -202,9 +202,12 @@ func (s *Server) handleGetPasses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cacheAge, _ := s.tleMgr.CacheAge()
+	tleSource, tleAge := s.tleMgr.DataInfo()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"passes":        passes,
 		"cache_age_sec": cacheAge,
+		"tle_source":    tleSource,
+		"tle_age_sec":   tleAge,
 	})
 }
 
