@@ -764,6 +764,16 @@ func isReticulumPacket(data []byte) bool {
 	if len(data) < 19 {
 		return false
 	}
+	// A MeshSat payload is the protocol version byte followed by base64
+	// text (the egress chain ends in base64). 0x01 reads as valid Reticulum
+	// flags (packet type 1) and a base64 character passes as a hop count, so
+	// without this check every relayed kit-to-kit message was queued for the
+	// routing layer and never reached the message pipeline. A real Reticulum
+	// header carries a 16 byte binary destination hash right after the hops
+	// byte, which cannot be all base64. [MESHSAT-1282]
+	if isVersionedBase64(data) {
+		return false
+	}
 	// Reticulum Type 1: flags(1) + hops(1) + dest(16) + context(1) = 19 bytes min
 	// Reticulum Type 2: flags(1) + hops(1) + transport(16) + dest(16) + context(1) = 35 bytes min
 	flags := data[0]
@@ -1376,4 +1386,20 @@ func assessSignal(bars int) string {
 	default:
 		return "excellent"
 	}
+}
+
+// isVersionedBase64 reports whether data is codec.ProtoVersion1 followed by
+// nothing but base64 alphabet, the wire form of a transformed MeshSat payload.
+func isVersionedBase64(data []byte) bool {
+	if len(data) < 2 || data[0] != 0x01 {
+		return false
+	}
+	for _, b := range data[1:] {
+		switch {
+		case b >= 'A' && b <= 'Z', b >= 'a' && b <= 'z', b >= '0' && b <= '9', b == '+', b == '/', b == '=':
+		default:
+			return false
+		}
+	}
+	return true
 }
