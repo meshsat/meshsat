@@ -99,6 +99,7 @@ func (r *DeviceRegistry) Remove(devPath string) *SerialDeviceEntry {
 	r.claimsMu.Lock()
 	delete(r.claims, devPath)
 	r.claimsMu.Unlock()
+	UnreservePort(devPath)
 
 	entry.State = StateRemoved
 	delete(r.devices, devPath)
@@ -107,6 +108,11 @@ func (r *DeviceRegistry) Remove(devPath string) *SerialDeviceEntry {
 
 // ClaimPort atomically claims a serial port for a role.
 // Returns true if the claim succeeded (port was unclaimed).
+//
+// A claim also reserves the port in the package-level guard, so a scanner
+// or probe that never sees this registry still cannot open the port. The
+// two are written together here rather than at the call sites so they
+// cannot drift. [MESHSAT-1265]
 func (r *DeviceRegistry) ClaimPort(devPath string, role DeviceRole) bool {
 	r.claimsMu.Lock()
 	defer r.claimsMu.Unlock()
@@ -115,14 +121,16 @@ func (r *DeviceRegistry) ClaimPort(devPath string, role DeviceRole) bool {
 		return false
 	}
 	r.claims[devPath] = role
+	ReservePort(devPath, string(role))
 	return true
 }
 
-// ReleasePort releases a serial port claim.
+// ReleasePort releases a serial port claim and its guard reservation.
 func (r *DeviceRegistry) ReleasePort(devPath string) {
 	r.claimsMu.Lock()
 	defer r.claimsMu.Unlock()
 	delete(r.claims, devPath)
+	UnreservePort(devPath)
 }
 
 // GetPortRole returns the role that has claimed a port, or RoleNone.
@@ -231,6 +239,7 @@ func (r *DeviceRegistry) Reconcile(activePorts map[string]bool) []*SerialDeviceE
 			r.claimsMu.Lock()
 			delete(r.claims, devPath)
 			r.claimsMu.Unlock()
+			UnreservePort(devPath)
 
 			delete(r.devices, devPath)
 		}

@@ -2088,6 +2088,9 @@ func (z *DirectZigBeeTransport) SetDeviceAlias(ieeeAddr, alias string) bool {
 // ProbeZNP checks if a serial port speaks Z-Stack ZNP protocol.
 // Sends SYS_PING and checks for a valid response. Non-destructive.
 func ProbeZNP(portName string) bool {
+	if guardProbe(portName, "znp") {
+		return false
+	}
 	mode := &serial.Mode{
 		BaudRate: 115200,
 		DataBits: 8,
@@ -2168,28 +2171,40 @@ func ProbeZNP(portName string) bool {
 // FindZigBeePort auto-detects a ZigBee coordinator dongle.
 // Scans USB serial ports by VID:PID, then probes with ZNP SYS_PING.
 func FindZigBeePort(excludePorts ...string) string {
-	excludeSet := make(map[string]bool)
+	var ports []string
+	for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*"} {
+		matches, _ := filepath.Glob(pattern)
+		ports = append(ports, matches...)
+	}
+	return findZigBeePort(ports, findUSBVIDPID, ProbeZNP, excludePorts)
+}
+
+// findZigBeePort is the half of FindZigBeePort that does not touch the
+// filesystem, so the candidate rules can be tested without hardware.
+//
+// The guard filter is what keeps the search off other devices. A ZigBee
+// coordinator shares 10c4:ea60 with the PicoAPRS V4's CP2102N, so with no
+// dongle on the bus every candidate here was the APRS TNC, and ProbeZNP
+// opens what it is given. [MESHSAT-1265]
+func findZigBeePort(ports []string, vidpidOf func(string) string, probe func(string) bool, excludePorts []string) string {
+	excludeSet := make(map[string]bool, len(excludePorts))
 	for _, p := range excludePorts {
 		excludeSet[p] = true
 	}
 
 	var candidates []string
-	for _, pattern := range []string{"/dev/ttyUSB*", "/dev/ttyACM*"} {
-		matches, _ := filepath.Glob(pattern)
-		for _, port := range matches {
-			if excludeSet[port] {
-				continue
-			}
-			vidpid := findUSBVIDPID(port)
-			if knownZigBeeVIDPIDs[strings.ToLower(vidpid)] {
-				candidates = append(candidates, port)
-			}
+	for _, port := range FilterUnownedPorts(ports) {
+		if excludeSet[port] {
+			continue
+		}
+		if knownZigBeeVIDPIDs[strings.ToLower(vidpidOf(port))] {
+			candidates = append(candidates, port)
 		}
 	}
 
 	// Protocol probe each candidate
 	for _, port := range candidates {
-		if ProbeZNP(port) {
+		if probe(port) {
 			log.Info().Str("port", port).Msg("zigbee: coordinator detected via ZNP probe")
 			return port
 		}

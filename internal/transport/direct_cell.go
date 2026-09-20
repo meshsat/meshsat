@@ -2332,6 +2332,8 @@ func autoDetectCellular(excludePorts []string) string {
 	if matches, _ := findSerialPorts("/dev/ttyACM*"); len(matches) > 0 {
 		ports = append(ports, matches...)
 	}
+	// A later pass AT-probes unknown ports. [MESHSAT-1265]
+	ports = FilterUnownedPorts(ports)
 
 	// Pass 1: VID:PID match with multi-interface awareness.
 	// Modems like Huawei E220 expose 2 USB interfaces — interface 0 is PPP/data
@@ -2382,6 +2384,9 @@ func autoDetectCellular(excludePorts []string) string {
 // probeCellularAT probes a port with AT+CPIN? to check if it's a cellular modem.
 // Cellular modems respond with "+CPIN: READY", Iridium modems give ERROR.
 func probeCellularAT(port string) bool {
+	if guardProbe(port, "cellular_at") {
+		return false
+	}
 	// Lines low and equal: DTR low with RTS high holds a T-Call's ESP32 in
 	// reset (see openSerialLinesLow). [MESHSAT-812]
 	file, err := openSerialLinesLow(port, cellBaud)

@@ -219,8 +219,11 @@ func (s *DeviceSupervisor) ExcludePort(path string) {
 		return
 	}
 	s.excludedMu.Lock()
-	defer s.excludedMu.Unlock()
 	s.excluded[path] = true
+	s.excludedMu.Unlock()
+	// Also reserve it process-wide: the package-level scanners and probes
+	// have no supervisor to ask. [MESHSAT-1265]
+	ReservePort(path, PortOwnerExcluded)
 	log.Info().Str("port", path).Msg("device-supervisor: port excluded from scanning and probing")
 }
 
