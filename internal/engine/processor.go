@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/dedup"
 	"meshsat/internal/gateway"
@@ -170,7 +171,10 @@ func (p *Processor) DecodeIngress(sourceIface, raw string) string {
 	if err != nil || iface.IngressTransforms == "" || iface.IngressTransforms == "[]" {
 		return raw
 	}
-	if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress([]byte(raw), iface.IngressTransforms); tErr == nil {
+	// The sender prepends the protocol version byte after its transforms;
+	// the chain cannot start until it is off. [MESHSAT-1282]
+	_, body := codec.StripVersionByte([]byte(raw))
+	if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress(body, iface.IngressTransforms); tErr == nil {
 		return string(decoded)
 	}
 	return raw
@@ -1167,9 +1171,19 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain {
 					if iface, err := p.db.GetInterface(sourceIface); err == nil &&
 						iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
+						// Strip the protocol version byte first, as DispatchAccess
+						// does. A satellite MT arrives byte-intact with its 0x01
+						// in front, base64 refused it, and this gate dropped every
+						// such frame as unauthenticated before a rule saw it. Text
+						// bearers never showed it: APRS strips the byte on send.
+						// [MESHSAT-1282]
+						_, body := codec.StripVersionByte([]byte(msg.Text))
 						if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress(
-							[]byte(msg.Text), iface.IngressTransforms); tErr == nil {
+							body, iface.IngressTransforms); tErr == nil {
 							decodedText = string(decoded)
+							if text, ok := meshEnvelopeText(decoded); ok {
+								decodedText = text
+							}
 							log.Info().Str("iface", sourceIface).Int("raw", len(msg.Text)).
 								Int("decoded", len(decodedText)).Msg("gateway inbound: ingress transforms applied")
 						} else if TransformsAuthenticate(iface.IngressTransforms) {

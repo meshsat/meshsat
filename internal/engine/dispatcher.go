@@ -491,12 +491,37 @@ func (d *Dispatcher) StopWorker(ifaceID string) {
 // Returns the number of deliveries created. Uses interface IDs for routing.
 // isTextBearer reports whether a channel type carries human text on the
 // wire (SMS, APRS message, mesh text) rather than opaque bytes. [MESHSAT-792]
+//
+// iridium_imt is one too since MESHSAT-1282: every byte over Iridium is
+// credit, and the JSON envelope made an 8-character text 405 bytes on air
+// (the text is in it twice, and smaz2 grows JSON). The far kit puts the body
+// on its mesh, so the body has to be the text. SBD keeps its own compact
+// codec and is left alone.
 func isTextBearer(channelType string) bool {
 	switch channelType {
-	case "cellular", "aprs", "mesh":
+	case "cellular", "aprs", "mesh", "iridium_imt":
 		return true
 	}
 	return false
+}
+
+// meshEnvelopeText returns the text of a mesh-packet JSON envelope, the
+// body a bridge older than MESHSAT-1282 ships over byte bearers. A receiver
+// that relays the body onto a mesh needs the text: the envelope does not fit
+// a Meshtastic text packet, and the loop guard compares against the text
+// the mesh will echo. Anything that is not such an envelope is left alone.
+func meshEnvelopeText(body []byte) (string, bool) {
+	if len(body) < 2 || body[0] != '{' {
+		return "", false
+	}
+	var env struct {
+		PortNum     *int   `json:"portnum"`
+		DecodedText string `json:"decoded_text"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil || env.PortNum == nil || env.DecodedText == "" {
+		return "", false
+	}
+	return env.DecodedText, true
 }
 
 func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessage, payload []byte) int {
@@ -536,6 +561,11 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				log.Debug().Str("source", sourceInterface).
 					Int("raw", len(payload)).Int("decoded", len(decoded)).
 					Msg("ingress transforms applied")
+				// An envelope from an older bridge goes on as its text. [MESHSAT-1282]
+				if text, ok := meshEnvelopeText(decoded); ok {
+					payload = []byte(text)
+					msg.Text = text
+				}
 			}
 		}
 	}
