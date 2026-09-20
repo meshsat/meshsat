@@ -40,8 +40,12 @@ const store = useMeshsatStore()
 // `side` is where the box stands, `device` is what is paired with it,
 // `label` its caption on the drawing, `mesh` the island letter.
 const KITS = {
-  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeckpro', label: 'T-Deck Pro (B)', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'tdeckpro', label: 'T-Deck Pro (A)', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
+  // The callsign is what each kit transmits under ON AIR, which since 21 Sep
+  // 2026 is the callsign hardcoded in the PicoAPRS unit fitted to it, not the
+  // one its name suggests: a unit discards frames from its own callsign, and
+  // the two units swapped kits (MESHSAT-1284). Never derive the kit from it.
+  parallax: { name: 'parallax', callsign: 'MSTSRT-10', side: 'right', device: 'tdeckpro', label: 'T-Deck Pro (B)', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
+  tesseract: { name: 'tesseract', callsign: 'MSPRLX-10', side: 'left', device: 'tdeckpro', label: 'T-Deck Pro (A)', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
 }
 const LEFT_KIT = 'tesseract'
 // Everything the drawing needs per handheld: the photo component, the
@@ -825,16 +829,24 @@ function openCard(k) { card.value = k; touch() }
 let sse = null
 let timers = []
 async function poll() {
-  const [a, h, r, n, d, f] = await Promise.allSettled([
+  const [a, h, r, n, d, f, st] = await Promise.allSettled([
     api.get('/aprs/status'), api.get('/devices/health'), api.get('/packets/rates'),
     api.get('/nodes'), api.get('/deliveries?limit=20'), api.get('/ttc/flow'),
+    kitName.value ? Promise.resolve(null) : api.get('/status'),
   ])
-  if (a.status === 'fulfilled' && a.value) {
-    aprs.value = a.value
-    if (!kitName.value && a.value.callsign) {
-      const cs = String(a.value.callsign).toUpperCase()
-      kitName.value = cs.startsWith('MSTSRT') ? 'tesseract' : 'parallax'
-    }
+  if (a.status === 'fulfilled' && a.value) aprs.value = a.value
+  // Which kit this is, in order: ?kit= in the kiosk URL (set per kit in
+  // /etc/meshsat/kiosk-url, the one source that stays with the box), then the
+  // mesh radio's owner name ("MeshSat tesseract"), then the on-air callsign
+  // looked up in KITS. It used to be the callsign prefix alone, which named
+  // the wrong kit on both panels once the callsigns were crossed on purpose,
+  // and fell back to parallax whenever APRS was down. [MESHSAT-1284]
+  if (!kitName.value) {
+    const owner = st.status === 'fulfilled' && st.value ? String(st.value.node_name || '').toLowerCase() : ''
+    const cs = a.status === 'fulfilled' && a.value ? String(a.value.callsign || '').toUpperCase() : ''
+    const byOwner = Object.keys(KITS).find(k => owner.includes(k))
+    const byCall = cs ? Object.keys(KITS).find(k => KITS[k].callsign.toUpperCase() === cs) : ''
+    kitName.value = byOwner || byCall || ''
   }
   if (h.status === 'fulfilled' && h.value) health.value = h.value.targets || []
   if (r.status === 'fulfilled' && r.value) rates.value = r.value
