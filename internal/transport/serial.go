@@ -146,6 +146,9 @@ func wakeDevice(port serial.Port) error {
 // ProbeAT would then time out against a mid-cold-boot modem, caching an
 // "ambiguous" verdict for 30 min. [MESHSAT-646]
 func ProbeMeshtastic(portName string) bool {
+	if guardProbe(portName, "meshtastic") {
+		return false
+	}
 	mode := &serial.Mode{
 		BaudRate: 115200,
 		DataBits: 8,
@@ -510,6 +513,10 @@ func autoDetectMeshtastic() string {
 	if matches, err := filepath.Glob("/dev/ttyUSB*"); err == nil {
 		usbPorts = matches
 	}
+	// Ports that belong to another device are not candidates for any pass:
+	// pass 2 ZNP-probes an ambiguous CP210x and pass 3 wakes an ACM. [MESHSAT-1265]
+	acmPorts = FilterUnownedPorts(acmPorts)
+	usbPorts = FilterUnownedPorts(usbPorts)
 	allPorts := append(acmPorts, usbPorts...)
 
 	// Pass 1: Unambiguous VID:PID match (Meshtastic-only, not shared with ZigBee/cellular)
@@ -563,6 +570,8 @@ func autoDetectIridium(excludePort string) string {
 	if matches, err := filepath.Glob("/dev/ttyACM*"); err == nil {
 		ports = append(ports, matches...)
 	}
+	// The second pass AT-probes every unknown port. [MESHSAT-1265]
+	ports = FilterUnownedPorts(ports)
 
 	// First pass: match by known Iridium VID:PID (no AT probe needed)
 	for _, port := range ports {
@@ -599,6 +608,9 @@ func autoDetectIridium(excludePort string) string {
 
 // probeAT sends a quick AT handshake to check if a port is an AT modem.
 func probeAT(portPath string) bool {
+	if guardProbe(portPath, "at") {
+		return false
+	}
 	port, err := openSerial(portPath, 19200)
 	if err != nil {
 		return false

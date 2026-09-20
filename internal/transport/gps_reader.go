@@ -178,7 +178,9 @@ func (g *GPSReader) autoDetectGPS() string {
 		ports = append(ports, matches...)
 	}
 
-	for _, port := range ports {
+	// VID:PID only, but a port that belongs to another device is never a
+	// candidate whatever it reports. [MESHSAT-1265]
+	for _, port := range FilterUnownedPorts(ports) {
 		if excludes[port] {
 			continue
 		}
@@ -466,7 +468,9 @@ func autoDetectGPSPort(excludePorts []func() string) string {
 		ports = append(ports, matches...)
 	}
 
-	for _, port := range ports {
+	// VID:PID only, but a port that belongs to another device is never a
+	// candidate whatever it reports. [MESHSAT-1265]
+	for _, port := range FilterUnownedPorts(ports) {
 		if excludes[port] {
 			continue
 		}

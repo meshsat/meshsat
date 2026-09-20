@@ -146,6 +146,16 @@ func (g *ZigBeeGateway) Start(ctx context.Context) error {
 		}
 	}
 
+	// This is the only gateway that resolves its own port instead of being
+	// handed one by the DeviceSupervisor, so it is the only one that can
+	// reach a port another device owns — an explicitly configured path as
+	// well as an auto-detected one. Refuse rather than open it: opening a
+	// CP210x asserts DTR/RTS. [MESHSAT-1265]
+	if !transport.PortAvailableTo(portName, string(transport.RoleZigBee)) {
+		return fmt.Errorf("zigbee: port %s belongs to %s, refusing to open it",
+			portName, transport.PortOwner(portName))
+	}
+
 	// Initialize transport — wire the store BEFORE Start so the device
 	// cache hydrates from DB during coordinator init [MESHSAT-509].
 	g.transport = transport.NewDirectZigBeeTransport()

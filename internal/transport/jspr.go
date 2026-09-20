@@ -1135,6 +1135,9 @@ func mustMarshal(v interface{}) string {
 // RockBLOCK-9704 C library handshake sequence. The modem often responds with
 // "403 MALFORMED" on the first attempt after cold boot or port re-open.
 func probeJSPR(portPath string) bool {
+	if guardProbe(portPath, "jspr") {
+		return false
+	}
 	// Use raw fd with TCSETS2 for correct baud rate on ARM64, and
 	// O_NONBLOCK + select() for the probe (short-lived, needs timeouts).
 	// The long-lived connection uses VMIN=1 VTIME=0 (blocking), but the
@@ -1241,6 +1244,9 @@ func probeJSPR(portPath string) bool {
 // The Go serial library uses blocking reads with SetReadTimeout which works
 // correctly on all UART types. [MESHSAT-403]
 func probeJSPRSerial(portPath string) bool {
+	if guardProbe(portPath, "jspr_serial") {
+		return false
+	}
 	mode := &serial.Mode{
 		BaudRate: 230400,
 		DataBits: 8,
