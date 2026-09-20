@@ -248,7 +248,7 @@ const lanes = computed(() => ([
     detail: satNoModem.value
       ? 'No satellite modem on this kit.'
       : satSilent.value ? 'The modem is not answering yet.'
-      : 'Up to space, then down to the other kit. Needs sky.' },
+      : '' },
   { key: 'aprs', lane: 'aprs', card: 'air', name: 'APRS radio', fact: '144.800 MHz',
     state: aprsOff.value ? 'radio off' : aprsSilent.value ? 'silent' : '',
     sev: aprsOff.value ? 'bad' : 'warn',

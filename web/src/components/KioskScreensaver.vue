@@ -43,7 +43,9 @@ const SHOW_MS = setting('saverShowMs', 20_000)
 // live screen, and the next poster in the list each time, so a passer-by sees a
 // different one on almost every glance. It was 4 minutes, which with two posters
 // meant the same one came back after eight. [MESHSAT-1201]
-const EVERY_MS = setting('saverEveryMs', 60_000)
+// Owner, 21 Sep 2026: every minute is too often on the stand, one poster every
+// 3 minutes; the 3 minute idle wait before the first one is unchanged.
+const EVERY_MS = setting('saverEveryMs', 180_000)
 
 const shown = ref(false)
 let timer = 0
