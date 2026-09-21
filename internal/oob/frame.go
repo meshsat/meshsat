@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Wire constants. See spec section 3.
@@ -26,6 +27,14 @@ const (
 	FlagEnc     byte = 0x01
 	FlagReply   byte = 0x02
 	FlagNoReply byte = 0x04
+	// FlagExpiry marks a frame whose first four argument bytes are the unix
+	// time (seconds, big-endian) after which the receiver must not act on
+	// it. The bytes ride inside the encrypted body or the authenticated
+	// clear body, so they can be neither stripped nor changed. Spec section
+	// 3.1. [MESHSAT-1293]
+	FlagExpiry byte = 0x08
+	// ExpiryLen is the size of the expiry field at the head of the args.
+	ExpiryLen = 4
 
 	HeaderLen   = 9
 	TagLen      = 16
@@ -80,7 +89,20 @@ type Frame struct {
 	PeerID  uint16
 	Counter uint32
 	Cmd     byte
-	Args    []byte // plaintext, len <= MaxArgs
+	Args    []byte // plaintext command arguments, without the expiry field
+	// ExpiresAt is the unix time after which the frame must not be acted
+	// on; 0 means the frame carries no expiry. It costs ExpiryLen of the
+	// MaxArgs budget. [MESHSAT-1293]
+	ExpiresAt uint32
+}
+
+// Expired reports whether f carries an expiry that lies more than skew
+// before now. A frame without an expiry never expires.
+func (f Frame) Expired(now time.Time, skew time.Duration) bool {
+	if f.ExpiresAt == 0 {
+		return false
+	}
+	return now.After(time.Unix(int64(f.ExpiresAt), 0).Add(skew))
 }
 
 // Header is the cheap pre-key view used by the classifier and the drop path.
@@ -101,6 +123,9 @@ func (h Header) Reply() bool { return h.Flags&FlagReply != 0 }
 // NoReply reports whether the sender asked for no answer.
 func (h Header) NoReply() bool { return h.Flags&FlagNoReply != 0 }
 
+// HasExpiry reports whether the args start with an expiry field.
+func (h Header) HasExpiry() bool { return h.Flags&FlagExpiry != 0 }
+
 // Version returns the version nibble.
 func (h Header) Version() byte { return h.Flags >> 4 }
 
@@ -117,6 +142,7 @@ var (
 	ErrArgsLen    = errors.New("oob: args exceed 73 bytes")
 	ErrAuth       = errors.New("oob: authentication failed")
 	ErrBadText    = errors.New("oob: invalid base32 text")
+	ErrBadExpiry  = errors.New("oob: expiry flag set but no expiry field")
 )
 
 // ParseHeader validates magic, version and length bounds without any
@@ -175,7 +201,13 @@ func Seal(f Frame, key []byte, senderRole Role) ([]byte, error) {
 	if f.Counter == 0 {
 		return nil, ErrBadCounter
 	}
-	if len(f.Args) > MaxArgs {
+	body := f.Args
+	if f.ExpiresAt != 0 {
+		body = make([]byte, ExpiryLen, ExpiryLen+len(f.Args))
+		binary.BigEndian.PutUint32(body, f.ExpiresAt)
+		body = append(body, f.Args...)
+	}
+	if len(body) > MaxArgs {
 		return nil, ErrArgsLen
 	}
 	gcm, err := newGCM(key)
@@ -197,6 +229,9 @@ func Seal(f Frame, key []byte, senderRole Role) ([]byte, error) {
 	if f.NoReply {
 		flags |= FlagNoReply
 	}
+	if f.ExpiresAt != 0 {
+		flags |= FlagExpiry
+	}
 	hdr[1] = flags
 	binary.BigEndian.PutUint16(hdr[2:4], f.PeerID)
 	binary.BigEndian.PutUint32(hdr[4:8], f.Counter)
@@ -205,13 +240,13 @@ func Seal(f Frame, key []byte, senderRole Role) ([]byte, error) {
 	nonce := Nonce(f.PeerID, senderRole, dir, f.Counter)
 	if f.Enc {
 		// ciphertext || tag over the args, header authenticated as AAD.
-		return gcm.Seal(hdr, nonce[:], f.Args, hdr), nil
+		return gcm.Seal(hdr, nonce[:], body, hdr), nil
 	}
 	// Clear body: args ride in the clear and join the AAD; the "ciphertext"
 	// is empty so Seal yields the 16-byte tag alone.
-	aad := append(append([]byte{}, hdr...), f.Args...)
+	aad := append(append([]byte{}, hdr...), body...)
 	tag := gcm.Seal(nil, nonce[:], nil, aad)
-	out := append(append([]byte{}, hdr...), f.Args...)
+	out := append(append([]byte{}, hdr...), body...)
 	return append(out, tag...), nil
 }
 
@@ -246,21 +281,33 @@ func Open(wire []byte, key []byte, senderRole Role) (Frame, error) {
 		Counter: h.Counter,
 		Cmd:     h.Cmd,
 	}
+	var body []byte
 	if h.Enc() {
 		args, err := gcm.Open(nil, nonce[:], wire[HeaderLen:], hdr)
 		if err != nil {
 			return Frame{}, ErrAuth
 		}
-		f.Args = args
-		return f, nil
+		body = args
+	} else {
+		clear := wire[HeaderLen : len(wire)-TagLen]
+		tag := wire[len(wire)-TagLen:]
+		aad := append(append([]byte{}, hdr...), clear...)
+		if _, err := gcm.Open(nil, nonce[:], tag, aad); err != nil {
+			return Frame{}, ErrAuth
+		}
+		body = append([]byte{}, clear...)
 	}
-	body := wire[HeaderLen : len(wire)-TagLen]
-	tag := wire[len(wire)-TagLen:]
-	aad := append(append([]byte{}, hdr...), body...)
-	if _, err := gcm.Open(nil, nonce[:], tag, aad); err != nil {
-		return Frame{}, ErrAuth
+	if h.HasExpiry() {
+		if len(body) < ExpiryLen {
+			return Frame{}, ErrBadExpiry
+		}
+		f.ExpiresAt = binary.BigEndian.Uint32(body[:ExpiryLen])
+		if f.ExpiresAt == 0 {
+			return Frame{}, ErrBadExpiry
+		}
+		body = body[ExpiryLen:]
 	}
-	f.Args = append([]byte{}, body...)
+	f.Args = body
 	return f, nil
 }
 
@@ -399,5 +446,5 @@ func (f Frame) String() string {
 	if f.Reply {
 		kind = "reply"
 	}
-	return fmt.Sprintf("oob %s peer=%d ctr=%d cmd=0x%02x enc=%t args=%d", kind, f.PeerID, f.Counter, f.Cmd, f.Enc, len(f.Args))
+	return fmt.Sprintf("oob %s peer=%d ctr=%d cmd=0x%02x enc=%t args=%d expires=%d", kind, f.PeerID, f.Counter, f.Cmd, f.Enc, len(f.Args), f.ExpiresAt)
 }

@@ -21,6 +21,13 @@ type Config struct {
 	Enabled         bool
 	ReplyBudgetHour int
 	HostSocket      string
+	// RequestTTL is how long a request this kit sends stays valid; the far
+	// kit refuses it once that time has passed. 0 = DefaultRequestTTL.
+	// ExpirySkew is the clock difference tolerated when judging whether a
+	// received request has expired. 0 = DefaultExpirySkew. Both come from
+	// the environment and are not persisted. [MESHSAT-1293]
+	RequestTTL time.Duration
+	ExpirySkew time.Duration
 }
 
 // Default values.
@@ -30,6 +37,13 @@ const (
 	MaxReplyChunks         = 4
 	FollowUpDelay          = 30 * time.Second
 	BootCounterBump        = 1 << 16
+	// A request that waits longer than this for a bearer (a satellite MT
+	// queued at Iridium while the kit has no sky, an SMS held by the
+	// carrier) is not executed when it finally arrives: whoever sent it has
+	// long stopped waiting, and a RESET or REBOOT an hour late is a fault,
+	// not a command. [MESHSAT-1293]
+	DefaultRequestTTL = 15 * time.Minute
+	DefaultExpirySkew = 2 * time.Minute
 )
 
 // system_config keys.
@@ -88,6 +102,10 @@ type Deps struct {
 	Status     StatusSources
 	LocalAlias string // default issuer alias for bundles
 	Now        func() time.Time
+	// ClockTrusted reports whether the host clock is established (the
+	// boot-time clock guard). An expiry is only judged against a trusted
+	// clock; nil means trusted. [MESHSAT-1293]
+	ClockTrusted func() bool
 }
 
 // Service is the OOB management frame service.
@@ -233,6 +251,30 @@ func New(cfg Config, d Deps) *Service {
 
 func (s *Service) now() time.Time { return s.d.Now() }
 
+func (s *Service) requestTTL() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg.RequestTTL > 0 {
+		return s.cfg.RequestTTL
+	}
+	return DefaultRequestTTL
+}
+
+func (s *Service) expirySkew() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg.ExpirySkew > 0 {
+		return s.cfg.ExpirySkew
+	}
+	return DefaultExpirySkew
+}
+
+// clockTrusted reports whether this kit's clock can judge an expiry. With no
+// source wired it is trusted.
+func (s *Service) clockTrusted() bool {
+	return s.d.ClockTrusted == nil || s.d.ClockTrusted()
+}
+
 func (s *Service) logf(format string, args ...any) {
 	log.Warn().Msg(fmt.Sprintf(format, args...))
 }
@@ -325,6 +367,12 @@ func (s *Service) SetConfig(c Config) error {
 		}
 	}
 	s.mu.Lock()
+	if c.RequestTTL == 0 {
+		c.RequestTTL = s.cfg.RequestTTL
+	}
+	if c.ExpirySkew == 0 {
+		c.ExpirySkew = s.cfg.ExpirySkew
+	}
 	s.cfg = c
 	if s.d.Host != nil {
 		s.d.Host.Path = c.HostSocket
@@ -406,11 +454,15 @@ func (s *Service) auditRejectOnce(peer uint16, bearer, reason string) {
 }
 
 func (s *Service) reject(peer uint16, bearer, fromAddr, reason string, h Header) {
+	s.rejectDetail(peer, bearer, fromAddr, reason, "", h)
+}
+
+func (s *Service) rejectDetail(peer uint16, bearer, fromAddr, reason, detail string, h Header) {
 	Global.IncFrame(reason)
 	if s.d.DB != nil {
 		_, _ = s.d.DB.InsertOOBLog(&database.OOBLogEntry{
 			PeerID: peer, Direction: "in", Kind: "reject", Bearer: bearer, FromAddr: fromAddr,
-			Cmd: int(h.Cmd), Counter: h.Counter, Result: reason,
+			Cmd: int(h.Cmd), Counter: h.Counter, Result: reason, Detail: detail,
 		})
 	}
 	s.auditRejectOnce(peer, bearer, reason)
@@ -464,6 +516,24 @@ func (s *Service) HandleInbound(ctx context.Context, ifaceID, fromAddr, text str
 	w.Mark(frame.Counter)
 	if err := s.d.DB.SaveOOBRxWindow(peer.PeerID, w.High, w.Bitmap); err != nil {
 		log.Error().Err(err).Msg("oob: persist replay window")
+	}
+	// The counter is spent above either way, so an expired request can never
+	// be replayed into a later window. [MESHSAT-1293]
+	if !frame.Reply && frame.ExpiresAt != 0 {
+		expiresAt := time.Unix(int64(frame.ExpiresAt), 0).UTC()
+		switch {
+		case !s.clockTrusted():
+			log.Warn().Str("cmd", cmdName(frame.Cmd)).Str("bearer", ifaceID).Time("expires_at", expiresAt).
+				Msg("oob: request expiry not checked, this kit's clock is not established")
+		case frame.Expired(s.now(), s.expirySkew()):
+			late := s.now().Sub(expiresAt).Round(time.Second)
+			detail, _ := json.Marshal(map[string]any{"cmd": cmdName(frame.Cmd), "expires_at": expiresAt.Format(time.RFC3339), "late_by": late.String()})
+			s.rejectDetail(peer.PeerID, ifaceID, fromAddr, "expired", string(detail), h)
+			log.Warn().Str("cmd", cmdName(frame.Cmd)).Uint16("peer", peer.PeerID).Str("bearer", ifaceID).
+				Uint32("counter", frame.Counter).Dur("late_by", late).
+				Msg("oob: request arrived after its expiry, not executed")
+			return true
+		}
 	}
 	Global.IncFrame("accepted")
 	s.learnMeshAddress(peer, ifaceID, fromAddr)
@@ -626,6 +696,9 @@ type SendRequest struct {
 	Args    []byte
 	NoReply bool
 	Encrypt *bool // nil = the peer's per-bearer policy
+	// TTL is how long the request stays valid; 0 = the configured default.
+	// [MESHSAT-1293]
+	TTL time.Duration
 }
 
 // SendResult reports what was queued.
@@ -634,6 +707,7 @@ type SendResult struct {
 	Counter    uint32 `json:"counter"`
 	Text       string `json:"text"`
 	Address    string `json:"address,omitempty"`
+	ExpiresAt  string `json:"expires_at,omitempty"` // RFC 3339; the far kit refuses the command after this
 }
 
 // Send frames a request and queues it through the delivery ledger.
@@ -647,7 +721,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if _, ok := CommandByCode(req.Cmd); !ok {
 		return SendResult{}, errors.New("oob: unknown command")
 	}
-	if len(req.Args) > MaxArgs {
+	if len(req.Args) > MaxArgs-ExpiryLen {
 		return SendResult{}, ErrArgsLen
 	}
 	if req.Via == "" {
@@ -673,7 +747,12 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if counter >= MaxCounter {
 		return SendResult{}, errors.New("oob: key exhausted, rotate the peer key")
 	}
-	wire, err := Seal(Frame{Enc: enc, NoReply: req.NoReply, PeerID: peer.PeerID, Counter: counter, Cmd: req.Cmd, Args: req.Args}, key, Role(peer.LocalRole))
+	ttl := req.TTL
+	if ttl <= 0 {
+		ttl = s.requestTTL()
+	}
+	expires := uint32(s.now().Add(ttl).Unix())
+	wire, err := Seal(Frame{Enc: enc, NoReply: req.NoReply, PeerID: peer.PeerID, Counter: counter, Cmd: req.Cmd, Args: req.Args, ExpiresAt: expires}, key, Role(peer.LocalRole))
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -691,7 +770,8 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	}
 	entry.DeliveryID = &delID
 	_, _ = s.d.DB.InsertOOBLog(entry)
-	return SendResult{DeliveryID: delID, Counter: counter, Text: text, Address: addr}, nil
+	return SendResult{DeliveryID: delID, Counter: counter, Text: text, Address: addr,
+		ExpiresAt: time.Unix(int64(expires), 0).UTC().Format(time.RFC3339)}, nil
 }
 
 // ExecuteLocal runs a command for a local or Hub origin (peer id 0) with
