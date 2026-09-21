@@ -56,8 +56,8 @@ type MessageDelivery struct {
 	// transforms replaced it with ciphertext. In memory only, never stored:
 	// it lets the SMS history keep the words that were sent.
 	PlainPreview string `json:"-"`
-	CreatedAt     string     `json:"created_at"`
-	UpdatedAt     string     `json:"updated_at"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 // DeliveryFilter specifies query filters for listing deliveries.
