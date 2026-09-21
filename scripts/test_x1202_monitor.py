@@ -253,6 +253,22 @@ class ChargeWatchTests(Guarded):
         self.assertEqual(len([e for e in events if e.startswith("input recovered")]), 1)
         self.assertEqual(set(actions(steps)), {"none"})
 
+    def test_full_pack_resting_on_mains_is_not_draining(self):
+        # parallax 21 Sep 2026: charger terminated at full, raw SOC drifted
+        # 101.9 -> 98.9 over an hour while the pack sat at 4.17 V on a good
+        # 12 V supply; the old rule flagged "input insufficient".
+        cw = mon.ChargeWatch()
+        for k in range(0, 61):
+            soc = 101.9 - 0.07 * min(k, 30) - 0.03 * max(k - 30, 0)  # 99.8 at 30 min, 98.9 at 60
+            cw.update(k * 60, round(soc, 2), "1", full=98.1, voltage=4.17)
+            self.assertFalse(cw.input_insufficient, "t=%s" % (k * 60))
+        self.assertIs(cw.charging, True)
+        # the same drift with the pack sagging below the recharge threshold is real
+        cw = mon.ChargeWatch()
+        for k in range(0, 31):
+            cw.update(k * 60, round(101.9 - 0.1 * k, 2), "1", full=98.1, voltage=4.05)
+        self.assertTrue(cw.input_insufficient)
+
     def test_rising_soc_on_mains_is_charging(self):
         pts = [(k * 60, 50.0 + 0.2 * k, "1") for k in range(0, 36)]
         _cw, out = charge_run(pts)
