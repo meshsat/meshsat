@@ -2,10 +2,13 @@ package oob
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Origin describes who issued a command and over which bearer it arrived.
@@ -302,13 +305,9 @@ func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result 
 		// Answer first, cut later: the reply leaves on this very bearer.
 		// The revert counts from the cut, so the bearer is off RevertDelay.
 		iface := t.IfaceID
-		s.armRevert(iface, severingStopDelay+RevertDelay, func() {
-			rctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			if err := s.startBearer(rctx, iface); err != nil {
-				s.logf("oob: revert of %s failed: %v", iface, err)
-			}
-		})
+		d := severingStopDelay + RevertDelay
+		s.armRevert(iface, d, s.bearerRevert(iface))
+		s.persistRevert(iface, s.now().Add(d))
 		s.armStop(iface, severingStopDelay, func() {
 			if err := s.stopBearer(iface); err != nil && !strings.Contains(err.Error(), "not running") {
 				s.logf("oob: stop of %s failed: %v", iface, err)
@@ -415,21 +414,93 @@ func (s *Service) cancelStop(ifaceID string) {
 
 func (s *Service) cancelRevert(ifaceID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if t, ok := s.reverts[ifaceID]; ok {
 		t.Stop()
 		delete(s.reverts, ifaceID)
 	}
+	s.mu.Unlock()
+	s.forgetRevert(ifaceID)
 }
 
-func (s *Service) cancelReverts() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, t := range s.reverts {
-		t.Stop()
-		delete(s.reverts, id)
+// bearerRevert is the action of a BEARER revert: turn the bearer back on.
+func (s *Service) bearerRevert(iface string) func() {
+	return func() {
+		s.forgetRevert(iface)
+		rctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := s.startBearer(rctx, iface); err != nil && !restartAlreadyUnderway(err) {
+			s.logf("oob: revert of %s failed: %v", iface, err)
+		}
 	}
 }
+
+// cfgPendingReverts holds the armed BEARER reverts, interface id -> unix
+// deadline, so they survive a bridge restart. The timers live in memory,
+// and a restart inside a revert window (a deploy, a crash, the watchdog)
+// used to leave a bearer switched off for good, the one thing the revert
+// exists to prevent. [MESHSAT-756]
+const cfgPendingReverts = "oob_pending_reverts"
+
+func (s *Service) loadRevertDeadlines() map[string]int64 {
+	m := map[string]int64{}
+	if s.d.DB == nil {
+		return m
+	}
+	if v, err := s.d.DB.GetSystemConfig(cfgPendingReverts); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &m)
+	}
+	return m
+}
+
+func (s *Service) saveRevertDeadlines(m map[string]int64) {
+	if s.d.DB == nil {
+		return
+	}
+	b, _ := json.Marshal(m)
+	if err := s.d.DB.SetSystemConfig(cfgPendingReverts, string(b)); err != nil {
+		s.logf("oob: persist pending reverts: %v", err)
+	}
+}
+
+func (s *Service) persistRevert(iface string, at time.Time) {
+	s.revertsMu.Lock()
+	defer s.revertsMu.Unlock()
+	m := s.loadRevertDeadlines()
+	m[iface] = at.Unix()
+	s.saveRevertDeadlines(m)
+}
+
+func (s *Service) forgetRevert(iface string) {
+	s.revertsMu.Lock()
+	defer s.revertsMu.Unlock()
+	m := s.loadRevertDeadlines()
+	if _, ok := m[iface]; !ok {
+		return
+	}
+	delete(m, iface)
+	s.saveRevertDeadlines(m)
+}
+
+// restoreReverts re-arms the reverts a previous run left pending. One whose
+// deadline passed while the bridge was down runs shortly after start, once
+// the gateways are up.
+func (s *Service) restoreReverts() {
+	s.revertsMu.Lock()
+	m := s.loadRevertDeadlines()
+	s.revertsMu.Unlock()
+	for iface, at := range m {
+		d := time.Until(time.Unix(at, 0))
+		if d < restoredRevertMinDelay {
+			d = restoredRevertMinDelay
+		}
+		s.armRevert(iface, d, s.bearerRevert(iface))
+		log.Warn().Str("iface", iface).Dur("in", d.Round(time.Second)).Msg("oob: BEARER revert restored after a restart")
+	}
+}
+
+// restoredRevertMinDelay gives the gateways time to come up before an
+// overdue revert starts one. A var so tests can shorten it.
+var restoredRevertMinDelay = 15 * time.Second
 
 // PendingReverts lists interfaces with an armed revert timer.
 func (s *Service) PendingReverts() []string {
