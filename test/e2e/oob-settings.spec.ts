@@ -16,10 +16,12 @@ test.describe('Remote Mgmt Settings Tab [MESHSAT-756]', () => {
     await page.getByText('Remote Mgmt', { exact: true }).click();
     await page.waitForTimeout(800);
 
-    await expect(page.getByText('OOB management frames')).toBeVisible();
-    await expect(page.getByText('Peers', { exact: true })).toBeVisible();
-    await expect(page.getByText('Send command')).toBeVisible();
-    await expect(page.getByText('Log', { exact: true })).toBeVisible();
+    // Headings, not bare text: "Peers" and "Log" also appear in the sidebar
+    // and in the log rows, and strict mode refuses an ambiguous locator.
+    await expect(page.getByRole('heading', { name: 'OOB management frames' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Peers', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Send command' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Log', exact: true })).toBeVisible();
     await expect(page.getByText('Save OOB Config')).toBeVisible();
     await expect(page.locator('#oob_enabled')).toBeVisible();
     await expect(page.getByText(/host agent/)).toBeVisible();
@@ -40,7 +42,9 @@ test.describe('Remote Mgmt Settings Tab [MESHSAT-756]', () => {
       await page.getByRole('button', { name: 'Add', exact: true }).click();
       await page.waitForTimeout(800);
 
-      await expect(page.getByText(alias, { exact: true })).toBeVisible();
+      // The new alias shows in the peer list and as an option in the send
+      // panel's peer selector; the list entry is the first.
+      await expect(page.getByText(alias, { exact: true }).first()).toBeVisible();
 
       const res = await page.request.get('/api/oob/peers');
       expect(res.ok()).toBeTruthy();
@@ -63,6 +67,15 @@ test.describe('Remote Mgmt Settings Tab [MESHSAT-756]', () => {
       const sendButton = page.getByRole('button', { name: 'Send', exact: true });
       await expect(sendButton).toBeVisible();
     } finally {
+      // Clean up even when an assertion failed before the id was read: the
+      // first runs against the kits left their test peers behind.
+      if (!peerId) {
+        const res = await page.request.get('/api/oob/peers');
+        if (res.ok()) {
+          const leftover = (await res.json()).find((p: any) => p.alias === alias);
+          if (leftover) peerId = leftover.peer_id;
+        }
+      }
       if (peerId) {
         await page.request.delete(`/api/oob/peers/${peerId}`);
       }
