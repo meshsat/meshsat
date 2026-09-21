@@ -64,11 +64,12 @@ type DirectIMTTransport struct {
 	excludePort   string
 	excludePortFn func() string
 
-	cancelFunc   context.CancelFunc
-	pollDone     chan struct{}
-	sigDone      chan struct{}
-	watchdogDone chan struct{}
-	usbResetDone bool // prevents recursive USB reset in connect()
+	cancelFunc     context.CancelFunc
+	pollDone       chan struct{}
+	sigDone        chan struct{}
+	watchdogDone   chan struct{}
+	usbResetDone   bool // prevents recursive USB reset in connect()
+	powerCycleDone bool // prevents a second power cycle within one connect()
 }
 
 // NewDirectIMTTransport creates a new direct serial IMT transport for the RockBLOCK 9704.
@@ -224,13 +225,14 @@ func (t *DirectIMTTransport) connect() error {
 		return fmt.Errorf("imt: jspr-helper binary not found (checked /usr/local/bin, /usr/bin, ./build)")
 	}
 
-	// Cycle I_EN LOW→HIGH to reset the modem's JSPR state machine.
-	// An unclean disconnect (container kill) leaves the JSPR parser in a stale
-	// session that responds with binary garbage. Cycling I_EN resets the parser
-	// without a full power cycle (I_BTD stays HIGH). This matches the official
-	// C library's rbBeginGpio() which drives I_EN high on every begin. [MESHSAT-403]
+	// Make sure the modem is on, the way Ground Control's rbBeginGpio()
+	// does: I_EN high, wait for I_BTD high. No power cycle here: the cycle
+	// that stood here (MESHSAT-403) pulsed I_EN low for 100 ms, which never
+	// shut the modem down (it kept its apiVersion and operationalState
+	// across every deploy) and is what the hardware guide warns may damage
+	// it. A modem that will not talk gets a real cycle below. [MESHSAT-1282]
 	if t.gpioIEN > 0 {
-		t.resetModemJSPR()
+		t.ensureModemOn()
 	}
 
 	helper, err := startJSPRHelper(helperPath, portPath, jsprBaud)
@@ -267,6 +269,17 @@ func (t *DirectIMTTransport) connect() error {
 		helper.Close()
 		t.file = nil
 		t.conn = nil
+
+		// A modem that will not answer JSPR gets a real power cycle, once
+		// per connect, then one more try. [MESHSAT-1282]
+		if t.gpioIEN > 0 && !t.powerCycleDone {
+			t.powerCycleDone = true
+			log.Warn().Err(beginErr).Msg("imt: JSPR handshake keeps failing, power-cycling the modem")
+			t.powerCycleModem()
+			err := t.connect()
+			t.powerCycleDone = false
+			return err
+		}
 
 		// The modem gets into a hung state after repeated failed serial
 		// sessions. A USB device reset (unbind/bind) recovers it.
@@ -995,6 +1008,19 @@ func (t *DirectIMTTransport) reconnect() error {
 	t.connectMu.Lock()
 	defer t.connectMu.Unlock()
 
+	t.teardown()
+
+	// Reconnect
+	if err := t.connect(); err != nil {
+		return fmt.Errorf("reconnect: %w", err)
+	}
+
+	return nil
+}
+
+// teardown stops the reader and closes the helper, leaving the transport
+// disconnected. Callers hold connectMu.
+func (t *DirectIMTTransport) teardown() {
 	t.mu.Lock()
 	// Stop the reader goroutine
 	if t.conn != nil {
@@ -1011,13 +1037,6 @@ func (t *DirectIMTTransport) reconnect() error {
 
 	// Brief pause for the kernel to clean up USB state
 	time.Sleep(500 * time.Millisecond)
-
-	// Reconnect
-	if err := t.connect(); err != nil {
-		return fmt.Errorf("reconnect: %w", err)
-	}
-
-	return nil
 }
 
 // unbindRebindCP210x escalates beyond USBDEVFS_RESET: it unbinds the cp210x
@@ -1237,25 +1256,31 @@ func (t *DirectIMTTransport) Reconnect(_ context.Context) error {
 // DeviceReset power-cycles the modem through I_EN and opens a fresh JSPR
 // session on it. Device level of the OOB RESET command. [MESHSAT-756]
 //
-// It is a full reconnect, because connect() does the power cycle: before
+// The helper is closed first and the whole begin runs again: before
 // 21 Sep 2026 it cycled I_EN with the helper still attached and then
-// called connect(), which returned at once on a connected transport, so
-// the rebooted modem never got its apiVersion, simConfig and
-// operationalState again. [MESHSAT-1282]
+// called connect(), which returned at once on a connected transport, so a
+// rebooted modem never got its apiVersion, simConfig and operationalState
+// again. [MESHSAT-1282]
 func (t *DirectIMTTransport) DeviceReset(_ context.Context) error {
 	if t.gpioIEN <= 0 {
 		return fmt.Errorf("imt: I_EN GPIO not configured")
 	}
-	return t.reconnect()
+	t.connectMu.Lock()
+	defer t.connectMu.Unlock()
+	t.teardown()
+	t.powerCycleModem()
+	return t.connect()
 }
 
 // 9704 power sequencing, from Ground Control's RockBLOCK 9704 hardware
 // guide: after driving I_EN high, wait for I_BTD to go high before driving
 // it low again, and after driving it low, wait for I_BTD to go low before
 // driving it high; "Failure to follow this procedure may result in damage
-// to the 9704 module." Package variables so tests can drive a fake modem.
+// to the 9704 module." I_EN has a weak pull-up in the modem, so a released
+// line boots it. Package variables so tests can drive a fake modem.
 var (
 	imtGPIOSet      = gpioSetValue
+	imtGPIOHold     = gpioHoldValue
 	imtGPIOGet      = gpioGetValue
 	imtShutdownWait = 30 * time.Second // I_EN low until I_BTD low
 	imtBootWait     = 30 * time.Second // I_EN high until I_BTD high
@@ -1269,46 +1294,55 @@ const (
 	imtShutdownLevel = 0
 )
 
-// resetModemJSPR power-cycles the 9704 through I_EN so the connect that
-// follows meets a freshly booted modem: an unclean disconnect (container
-// kill) leaves its JSPR parser in a stale session that answers with binary
-// garbage. [MESHSAT-403]
-//
-// The cycle follows the guide's sequence: I_EN low, wait for I_BTD low (the
-// modem has shut down), I_EN high, wait for I_BTD high (booted). Until
-// 21 Sep 2026 it held I_EN low for a fixed 2 s, and I_BTD read high again
-// 2 s later on both kits, so the modem was switched back on before it had
-// finished shutting down, on every bridge start. [MESHSAT-1282]
-//
-// A modem whose I_BTD already reads low is off or still booting; it gets
-// I_EN high and the boot wait, since a boot is the fresh start this is for,
-// and driving I_EN low before I_BTD is high would break the other half of
-// the rule. Uses /dev/gpiochipN directly (no gpioset/gpioget binaries in
-// the container).
-func (t *DirectIMTTransport) resetModemJSPR() {
+// ensureModemOn is Ground Control's rbBeginGpio(): I_EN high, wait for
+// I_BTD high. A modem that is already booted is left alone.
+func (t *DirectIMTTransport) ensureModemOn() {
+	chipPath := "/dev/" + t.gpioChip
+	if btd, err := imtGPIOGet(chipPath, t.gpioIBTD); err == nil && btd == imtBootedLevel {
+		log.Info().Msg("imt: 9704 booted (I_BTD high)")
+		return
+	}
+	log.Info().Int("i_en", t.gpioIEN).Msg("imt: 9704 not booted, driving I_EN high")
+	t.bootModem(chipPath)
+}
+
+// powerCycleModem shuts the 9704 down and boots it the way the guide says:
+// I_EN held low until I_BTD goes low, then I_EN high until I_BTD goes high.
+// The low level is held on an open line handle for the whole wait; the old
+// cycle set it and released the line after 100 ms, and the pin did not stay
+// low. A modem that is still booting (I_BTD low) only gets the boot, since
+// driving I_EN low before I_BTD is high would break the other half of the
+// rule. If I_BTD never drops, the modem is still switched back on after the
+// full wait: a modem left off is a dead satellite lane. [MESHSAT-1282]
+func (t *DirectIMTTransport) powerCycleModem() {
 	chipPath := "/dev/" + t.gpioChip
 	log.Info().Str("chip", chipPath).Int("i_en", t.gpioIEN).Int("i_btd", t.gpioIBTD).
 		Msg("imt: power-cycling the 9704 through I_EN")
 
 	if btd, err := imtGPIOGet(chipPath, t.gpioIBTD); err == nil && btd == imtShutdownLevel {
 		log.Info().Msg("imt: I_BTD already low, modem off or booting: I_EN high and wait for boot")
-	} else {
-		if err := imtGPIOSet(chipPath, t.gpioIEN, 0); err != nil {
-			log.Warn().Err(err).Msg("imt: failed to drive I_EN LOW")
-			return
-		}
-		start := time.Now()
-		if t.waitBTD(chipPath, imtShutdownLevel, imtShutdownWait) {
-			log.Info().Dur("took", time.Since(start).Truncate(10*time.Millisecond)).Msg("imt: I_BTD LOW, modem shut down")
-		} else {
-			// The pin read or the wiring is wrong, or the modem hung. A modem
-			// left switched off is a dead satellite lane, so boot it anyway,
-			// after the full wait rather than 2 s, and say so.
-			log.Error().Dur("waited", imtShutdownWait).
-				Msg("imt: I_BTD did not go LOW after I_EN LOW, switching the modem back on regardless")
-		}
+		t.bootModem(chipPath)
+		return
 	}
+	release, err := imtGPIOHold(chipPath, t.gpioIEN, 0)
+	if err != nil {
+		log.Warn().Err(err).Msg("imt: failed to hold I_EN LOW")
+		return
+	}
+	start := time.Now()
+	if t.waitBTD(chipPath, imtShutdownLevel, imtShutdownWait) {
+		log.Info().Dur("took", time.Since(start).Truncate(10*time.Millisecond)).Msg("imt: I_BTD LOW, modem shut down")
+	} else {
+		log.Error().Dur("waited", imtShutdownWait).
+			Msg("imt: I_BTD did not go LOW with I_EN held LOW, switching the modem back on regardless")
+	}
+	release()
+	t.bootModem(chipPath)
+}
 
+// bootModem drives I_EN high and waits for I_BTD high, then lets the modem
+// settle before JSPR.
+func (t *DirectIMTTransport) bootModem(chipPath string) {
 	if err := imtGPIOSet(chipPath, t.gpioIEN, 1); err != nil {
 		log.Warn().Err(err).Msg("imt: failed to drive I_EN HIGH")
 		return
@@ -1334,6 +1368,43 @@ func (t *DirectIMTTransport) waitBTD(chipPath string, level int, wait time.Durat
 		}
 		time.Sleep(imtBTDPoll)
 	}
+}
+
+// gpioHoldValue drives a GPIO pin to value and keeps it there until the
+// returned release is called: the line handle stays open. gpioSetValue
+// releases after 100 ms, and on the kits' Pi 5 a released I_EN does not
+// stay low (21 Sep 2026: 30 s of "low" never shut the 9704 down).
+// [MESHSAT-1282]
+func gpioHoldValue(chipPath string, pin, value int) (func(), error) {
+	fd, err := unix.Open(chipPath, unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", chipPath, err)
+	}
+	defer unix.Close(fd)
+
+	type gpioHandleRequest struct {
+		LineOffsets   [64]uint32
+		Flags         uint32
+		DefaultValues [64]uint8
+		ConsumerLabel [32]byte
+		Lines         uint32
+		Fd            int32
+	}
+	req := gpioHandleRequest{Lines: 1, Flags: 0x02} // GPIOHANDLE_REQUEST_OUTPUT
+	req.LineOffsets[0] = uint32(pin)
+	req.DefaultValues[0] = uint8(value)
+	copy(req.ConsumerLabel[:], "meshsat-imt")
+
+	const gpioHandleRequestIoctl = 0xC16CB403
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), gpioHandleRequestIoctl, uintptr(unsafe.Pointer(&req))); errno != 0 {
+		return nil, fmt.Errorf("GPIO request ioctl pin %d: %v", pin, errno)
+	}
+	if req.Fd <= 0 {
+		return nil, fmt.Errorf("no line fd for pin %d", pin)
+	}
+	lineFd := int(req.Fd)
+	var once sync.Once
+	return func() { once.Do(func() { unix.Close(lineFd) }) }, nil
 }
 
 // gpioSetValue drives a GPIO pin to the given value (0 or 1) using the
