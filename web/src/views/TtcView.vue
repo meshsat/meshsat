@@ -40,12 +40,13 @@ const store = useMeshsatStore()
 // `side` is where the box stands, `device` is what is paired with it,
 // `label` its caption on the drawing, `mesh` the island letter.
 const KITS = {
-  // The callsign is what each kit transmits under ON AIR, which since 21 Sep
-  // 2026 is the callsign hardcoded in the PicoAPRS unit fitted to it, not the
-  // one its name suggests: a unit discards frames from its own callsign, and
-  // the two units swapped kits (MESHSAT-1284). Never derive the kit from it.
-  parallax: { name: 'parallax', callsign: 'MSTSRT-10', side: 'right', device: 'tdeckpro', label: 'T-Deck Pro (B)', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
-  tesseract: { name: 'tesseract', callsign: 'MSPRLX-10', side: 'left', device: 'tdeckpro', label: 'T-Deck Pro (A)', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
+  // The callsign is what each kit transmits under ON AIR: the callsign
+  // hardcoded in the PicoAPRS unit fitted to it, since a unit discards frames
+  // from its own callsign (MESHSAT-1284). The units swapped kits on 20 Sep
+  // 2026 and went back to their own kits on 21 Sep 17:31 NL, so this is the
+  // original mapping again. Never derive the kit from it.
+  parallax: { name: 'parallax', callsign: 'MSPRLX-10', side: 'right', device: 'tdeckpro', label: 'T-Deck Pro (B)', mesh: 'B', channel: 'msat-ttc-02', modem: 'RockBLOCK 9704', peer: 'tesseract' },
+  tesseract: { name: 'tesseract', callsign: 'MSTSRT-10', side: 'left', device: 'tdeckpro', label: 'T-Deck Pro (A)', mesh: 'A', channel: 'msat-ttc-01', modem: 'RockBLOCK 9704', peer: 'parallax' },
 }
 const LEFT_KIT = 'tesseract'
 // Everything the drawing needs per handheld: the photo component, the
