@@ -344,6 +344,15 @@ func (c *Client) serveOnce(ctx context.Context) error {
 		if !c.hasSession(clientID) && (len(payload) == 0 || payload[0] != tlsHandshakeRecord) {
 			continue
 		}
+		// A ClientHello for a client that still has a session is that
+		// client's next tunnel. The Hub never says a tunnel ended, so a
+		// client that kept its HTTP connection alive left the old one open;
+		// writing the new handshake into it failed every other request.
+		// The new tunnel replaces the old. [MESHSAT-1297]
+		if isClientHello(payload) && c.hasSession(clientID) {
+			slog.Debug("relay: new tunnel replaces an open one", "client", clientID)
+			c.drop(clientID)
+		}
 		s := c.sessionFor(clientID)
 		if s == nil {
 			return errors.New("relayclient: listener closed")
@@ -360,6 +369,18 @@ func (c *Client) serveOnce(ctx context.Context) error {
 
 // tlsHandshakeRecord is the TLS record type of a ClientHello.
 const tlsHandshakeRecord = 0x16
+
+// isClientHello reports whether payload starts a TLS handshake: a
+// handshake record (0x16) carrying a ClientHello (handshake type 0x01) in
+// the clear, with a TLS legacy version (0x03 0x0n) in the record header and
+// in the hello. Inside an established TLS 1.3 session every record goes out
+// as application data (0x17), and a TLS 1.2 renegotiation, which the bridge's
+// server refuses anyway, carries an encrypted body, so this only matches the
+// first flight of a new tunnel.
+func isClientHello(payload []byte) bool {
+	return len(payload) >= 10 && payload[0] == tlsHandshakeRecord && payload[1] == 0x03 &&
+		payload[5] == 0x01 && payload[9] == 0x03
+}
 
 func (c *Client) hasSession(id string) bool {
 	c.mu.Lock()
@@ -426,7 +447,7 @@ func (c *Client) pumpOut(s *session) {
 			break
 		}
 	}
-	c.drop(s.id)
+	c.dropSession(s)
 }
 
 func (c *Client) drop(id string) {
@@ -439,6 +460,22 @@ func (c *Client) drop(id string) {
 	if ok {
 		s.close()
 		slog.Debug("relay: client tunnel closed", "client", id)
+	}
+}
+
+// dropSession removes s only while it is still the session of its client:
+// the pump of a replaced tunnel ends after the new one is in place, and
+// dropping by id would take the new one with it.
+func (c *Client) dropSession(s *session) {
+	c.mu.Lock()
+	cur, ok := c.sessions[s.id]
+	if ok && cur == s {
+		delete(c.sessions, s.id)
+	}
+	c.mu.Unlock()
+	s.close()
+	if ok && cur == s {
+		slog.Debug("relay: client tunnel closed", "client", s.id)
 	}
 }
 

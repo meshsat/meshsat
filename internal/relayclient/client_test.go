@@ -613,3 +613,61 @@ func TestStopClosesTheSocketAndRunReturns(t *testing.T) {
 		t.Fatal("Run did not return")
 	}
 }
+
+// A client that keeps its HTTP connection alive leaves its tunnel open, and
+// the Hub never says a tunnel ended. When the same client opens its next
+// tunnel, its ClientHello must start a new session, not be written into the
+// stale one: MeshSat Android failed every other request to tesseract
+// through the relay on 21 Sep 2026, strictly alternating. [MESHSAT-1297]
+func TestANewClientHelloReplacesAStaleTunnelOfTheSameClient(t *testing.T) {
+	shortKnobs(t)
+	ca := newTestCA(t)
+	hub := newFakeHub(t)
+	hub.auth["kit-a"] = "kit-pass"
+	hub.auth["phone-1"] = "phone-pass"
+	c := startClient(t, hub, ca, "kit-a", "kit-pass")
+	<-hub.gotServe
+	waitFor(t, "connected", c.Connected)
+
+	pc, pk := ca.issue(t, "phone-1", false)
+	keepAlive := func() *http.Client {
+		hc := clientThroughHub(t, hub, ca, "kit-a", "phone-1", "phone-pass", pc, pk)
+		hc.Transport.(*http.Transport).DisableKeepAlives = false
+		return hc
+	}
+	for i := 1; i <= 4; i++ {
+		// A fresh transport each time, as a phone app that reconnects does:
+		// the previous connection is still open on the bridge side.
+		resp, err := keepAlive().Get("https://kit-a/health")
+		if err != nil {
+			t.Fatalf("request %d through a new tunnel of the same client: %v", i, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 || !strings.Contains(string(body), `"ok"`) {
+			t.Fatalf("request %d: %d %s", i, resp.StatusCode, body)
+		}
+	}
+	// Each new ClientHello replaced the session before it, so at most one
+	// is open for the client at any time.
+	if n := c.Sessions(); n > 1 {
+		t.Fatalf("%d sessions open for one client", n)
+	}
+}
+
+func TestIsClientHello(t *testing.T) {
+	hello := []byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03}
+	if !isClientHello(hello) {
+		t.Fatal("a ClientHello record was not recognised")
+	}
+	for name, p := range map[string][]byte{
+		"application data":        {0x17, 0x03, 0x03, 0x00, 0x20, 0x01, 0, 0, 0, 0x03},
+		"encrypted handshake":     {0x16, 0x03, 0x03, 0x00, 0x20, 0x9a, 0, 0, 0, 0x55},
+		"close_notify alert":      {0x15, 0x03, 0x03, 0x00, 0x02, 0x01, 0x00},
+		"truncated record header": {0x16, 0x03, 0x01},
+	} {
+		if isClientHello(p) {
+			t.Errorf("%s taken for a ClientHello", name)
+		}
+	}
+}
