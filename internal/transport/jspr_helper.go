@@ -246,19 +246,21 @@ func (h *jsprHelperPort) Write(data []byte) (int, error) {
 // SendMOCommand sends a send_mo command to the helper, which handles the entire
 // MO flow inline (messageOriginate + segment exchange + wait for status).
 // The helper returns the result as a mo_result message on stdout.
-func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, requestRef int) error {
+func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, requestRef int, budget time.Duration) error {
 	cmdObj := struct {
 		Cmd              string `json:"cmd"`
 		TopicID          int    `json:"topic_id"`
 		Data             string `json:"data"`
 		Length           int    `json:"length"`
 		RequestReference int    `json:"request_reference"`
+		TimeoutS         int    `json:"timeout_s"`
 	}{
 		Cmd:              "send_mo",
 		TopicID:          topicID,
 		Data:             dataB64,
 		Length:           length,
 		RequestReference: requestRef,
+		TimeoutS:         int(budget.Seconds()),
 	}
 	cmdBytes, err := json.Marshal(cmdObj)
 	if err != nil {

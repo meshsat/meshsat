@@ -44,6 +44,12 @@ const (
 	jsprReadTimeout     = 500 * time.Millisecond // per-byte select() timeout — matches C library
 	jsprResponseTimeout = 10 * time.Second       // max wait for a response
 	jsprMOTimeout       = 180 * time.Second      // max wait for MO final status
+	// jsprMOHelperBudget is how long the helper may wait for a satellite
+	// before it cancels the MO and settles it (up to 20 s more). It must end
+	// before jsprMOTimeout: the helper used to wait 240 s against Go's 180,
+	// so for a minute Go had given up on a send the helper could still
+	// complete, and the retry duplicated the message. [MESHSAT-1282]
+	jsprMOHelperBudget = 150 * time.Second
 
 	// Well-known topic IDs
 	jsprRawTopic    = 244
@@ -693,6 +699,9 @@ type jsprMOStatus struct {
 	TopicID       int    `json:"topic_id"`
 	MessageID     int    `json:"message_id"`
 	FinalMOStatus string `json:"final_mo_status"`
+	// RequestReference is set by the helper on its mo_result: the reference
+	// Go sent with the send_mo this result belongs to. 0 = an older helper.
+	RequestReference int `json:"request_reference,omitempty"`
 }
 
 type jsprMTAnnounce struct {
@@ -1023,35 +1032,54 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, dataWithCRC []byte, ref int) (string, error) {
 	dataB64 := base64.StdEncoding.EncodeToString(dataWithCRC)
 
-	if err := helper.SendMOCommand(topicID, dataB64, len(dataWithCRC), ref); err != nil {
+	if err := helper.SendMOCommand(topicID, dataB64, len(dataWithCRC), ref, jsprMOHelperBudget); err != nil {
 		return "", fmt.Errorf("send_mo command: %w", err)
 	}
+	return c.awaitHelperMOResult(ref, jsprMOTimeout)
+}
 
-	// The helper will emit intermediate responses (200 messageOriginate, 200 messageOriginateSegment)
-	// and a final mo_result. The readLoop converts these to JSPR wire format.
-	// We wait for the final status via the pending request mechanism.
-	pr := &pendingRequest{
-		target:   "messageOriginateStatus",
-		ch:       make(chan jsprResponse, 1),
-		deadline: time.Now().Add(jsprMOTimeout),
-	}
-	c.pendingMu.Lock()
-	c.pending["messageOriginateStatus"] = pr
-	c.pendingMu.Unlock()
-
-	select {
-	case resp := <-pr.ch:
-		var status jsprMOStatus
-		if err := json.Unmarshal(resp.JSON, &status); err != nil {
-			return "", fmt.Errorf("parse mo_result: %w", err)
+// awaitHelperMOResult waits for the helper's final mo_result for the send_mo
+// that carried ref. The helper emits intermediate responses (200
+// messageOriginate, 200 messageOriginateSegment) and one final mo_result; the
+// readLoop converts them to JSPR wire format and the result reaches us through
+// the pending request mechanism.
+//
+// A result that names another request_reference belongs to an earlier send
+// that Go had already given up on. Taking it would book THIS message with the
+// other one's fate, delivered when it never left or the reverse, so it is
+// logged and skipped. [MESHSAT-1282]
+func (c *jsprConn) awaitHelperMOResult(ref int, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		pr := &pendingRequest{
+			target:   "messageOriginateStatus",
+			ch:       make(chan jsprResponse, 1),
+			deadline: deadline,
 		}
-		log.Info().Str("final_status", status.FinalMOStatus).Int("msg_id", status.MessageID).Msg("jspr: MO via helper complete")
-		return status.FinalMOStatus, nil
-	case <-time.After(jsprMOTimeout):
 		c.pendingMu.Lock()
-		delete(c.pending, "messageOriginateStatus")
+		c.pending["messageOriginateStatus"] = pr
 		c.pendingMu.Unlock()
-		return "", fmt.Errorf("MO helper timeout after %s", jsprMOTimeout)
+
+		select {
+		case resp := <-pr.ch:
+			var status jsprMOStatus
+			if err := json.Unmarshal(resp.JSON, &status); err != nil {
+				return "", fmt.Errorf("parse mo_result: %w", err)
+			}
+			if status.RequestReference != 0 && status.RequestReference != ref {
+				log.Warn().Str("final_status", status.FinalMOStatus).Int("msg_id", status.MessageID).
+					Int("result_ref", status.RequestReference).Int("want_ref", ref).
+					Msg("jspr: MO result belongs to an earlier send, skipped")
+				continue
+			}
+			log.Info().Str("final_status", status.FinalMOStatus).Int("msg_id", status.MessageID).Msg("jspr: MO via helper complete")
+			return status.FinalMOStatus, nil
+		case <-time.After(time.Until(deadline)):
+			c.pendingMu.Lock()
+			delete(c.pending, "messageOriginateStatus")
+			c.pendingMu.Unlock()
+			return "", fmt.Errorf("MO helper timeout after %s", timeout)
+		}
 	}
 }
 
