@@ -523,6 +523,10 @@ func TestRxWatchdog_SilentWinsOverSeededExpectation(t *testing.T) {
 		h.advance(time.Minute)
 		h.wd.tick(ctx)
 	}
+	// Rungs run in goroutines: give one that fired the time to count, or
+	// this test only fails when the scheduler happens to be quick (CI
+	// pipeline 55533, 21 Sep 2026).
+	time.Sleep(50 * time.Millisecond)
 	r, c, b := h.counts()
 	if h.wd.State() != ReceiveStateSilent || r+c+b != 0 {
 		t.Fatalf("state %q restarts=%d cycles=%d bridge=%d, want silent and no rung", h.wd.State(), r, c, b)
