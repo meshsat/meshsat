@@ -1818,3 +1818,57 @@ journalctl -u docker --since -12d --no-pager -o short-iso | grep -E "TaskDelete|
 ```
 
 On 18 Sep the only such exits in 12 days were the 13 and 14 Sep restart series (sections 35 to 38).
+
+## 55. 20-21 Sep 2026, night: the kits after the rebuild, four booth lanes measured, satellite made to wait for the sky (MESHSAT-1265, 1282, 1284, 962, 963)
+
+The kits came back from the bench with the ZigBee dongle, the GPS and the USB WiFi out, a 9704 in
+both, and the two T-Echos and the two PicoAPRS units in each other's kit. Everything below was done
+over SSH; nobody touched the hardware.
+
+**What a swap between kits breaks, and the software cure for each.**
+
+| Swapped | Symptom | Cure |
+|---|---|---|
+| T-Echo | node id follows the radio (key-derived) | cross-restore channel and owner name from the 18 Sep exports (never the 4 Sep PSK-A/B note), fix the OOB peer `mesh_0` rows, reconnect the serial link so the cached config refreshes |
+| PicoAPRS | both kits transmit, neither hears: tx climbing, rx 0, no bad frames, watchdog restart loop | a unit DISCARDS frames whose source is its own MyCall. Each bridge must transmit under the callsign of the unit plugged into it: tesseract = MSPRLX-10, parallax = MSTSRT-10. `GET /api/aprs/status` now carries `receive_hint` when it sees this. 12 % -> 80 % decoded |
+| T-Call (SIM) | SMS lanes point at the wrong number | re-map: tesseract SIM +31653207829, parallax SIM +31653618463, in the gateway's destination/allowed senders, SMS contact 1 and the OOB peer `cellular_0` rows |
+| PicoAPRS by-id path | gateway `connected: false` | `MESHSAT_APRS_KISS_DEVICE` encodes the unit's serial; repoint and recreate |
+
+**The four lanes, five texts each way, one at a time (`simulate-mesh-rx` on the sender, arrival = the
+far kit's radio logging its own injected text), 21 Sep 02:23-03:45Z. No text arrived twice on any lane.**
+
+| Lane | tesseract -> parallax | parallax -> tesseract | Latency |
+|---|---|---|---|
+| `aprs` | 5/5 | 5/5 | 4 to 31 s (a lost first copy costs one 4 s repeat gap or a second beacon slot) |
+| `b2b_sms` | 5/5 | 3/5, then 3/3 on a re-run | 5 to 8 s. The two missing texts were accepted by parallax's modem (`+CMGS` OK, ledger `delivered`) and never reached tesseract's modem or its SMS store: lost between the two KPN prepaid SIMs |
+| `hub_sms` | 5/5 | 4/5, then 2/2 on a re-run | 11 to 12 s, one at 80 s (Twilio -> KPN; 2 min 19 s seen the same night). The missing one was mine: a deploy restarted both bridges while it was in flight |
+| `imt` | 10/10 | 10/10 | minutes, in bursts: both 9704s gain and lose the sky together between the buildings (11 min and 25+ min without a pass the same night) |
+
+**Satellite, what was wrong and is fixed.** (1) The receive gate dropped every relayed frame because
+it ran base64 on the version byte; the body was the JSON envelope, 405 bytes for 8 characters; the MT
+classifier took `0x01 + base64` for a Reticulum packet. (2) The IMT serial watchdog called the port
+dead after 120 s of silence while one send may wait 180 s: it power-cycled the 9704 122 s into every
+slow send. (3) Go stopped listening 60 s before the helper did, and the modem kept an abandoned
+message and sent it later, so retries delivered twice (7 of 20): the helper now cancels an accepted
+message the official way (`PUT messageOriginateStatus {"action":"cancel"}`, RockBLOCK-9704 v1.0.1)
+and reports the modem's verdict; every result carries its `request_reference`. (4) Three tries were
+about nine minutes, shorter than a sky gap: ten tries now, the one hour TTL still bounds it. Soak on
+the final build: 20/20, 0 duplicates, 0 false failures.
+
+**Hub fallback (MESHSAT-963).** With tesseract's path to the Hub blocked (outbound 443 rejected on
+the host for 6 min; never the WiFi), the fallback armed after 5 min 30 s and sent an 87 byte health
+frame as a 116 character SMS to the Hub number; MQTT reconnected 21 s after the block came off and
+the fallback stood down. The satellite leg had been hardcoded to `iridium_0` and could never pick a
+9704; it now uses the modem the kit carries. No position frame at TTC26: no GPS fitted. **An SOS from
+a kit pages the owner three times by SMS (Hub chain "Field kits — on call"); never fire one as a test
+without his go.**
+
+**Street demo, `*F8`.** If the kits cannot leave the hall: phone -> 9603 node -> Rock7 -> Hub -> SMS
+`*F8 text` to both kits -> T-Decks, and a T-Deck reply that starts with `*F8` goes back to the phone as
+`Parallax: text`. `*` = satellite chat, `#` = visitor SMS chat. Bridge unchanged. **Never inject a
+`*F8` test text on a kit: it sends a real MT to the 9603.**
+
+**Test traps met this night.** A push redeploys both kits about 20 min later and eats whatever is in
+flight: never run a lane test across one. `docker logs` starts empty after a deploy, so count
+arrivals from `GET /api/messages`, not from the log. `ssh` inside a `while read` loop eats the rest of
+the input: give it `</dev/null`. `GET /api/deliveries` caps at 50 rows whatever `limit` says.
