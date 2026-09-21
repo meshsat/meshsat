@@ -58,11 +58,19 @@ func RegisterDefaults(r *Registry) {
 		MaxPayload:    102400,
 		DefaultTTL:    3600 * time.Second,
 		IsSatellite:   false,
+		// Ten tries, not three. One try waits up to 150 s for a satellite,
+		// so three tries gave up after about nine minutes, and the kits sit
+		// between buildings that hide the sky for longer than that (11 min
+		// without a pass in the soak of 21 Sep 2026; a 176 byte text died in
+		// 9 min at 0 bars the same night). A try that ends without sky is
+		// cancelled in the modem before transmission, so it costs no airtime
+		// and cannot deliver twice; the one hour TTL still bounds the wait.
+		// [MESHSAT-1282]
 		RetryConfig: RetryConfig{
 			Enabled:     true,
 			InitialWait: 30 * time.Second,
 			MaxWait:     5 * time.Minute,
-			MaxRetries:  3,
+			MaxRetries:  10,
 			BackoffFunc: "exponential",
 		},
 	})
