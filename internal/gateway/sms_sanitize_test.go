@@ -58,3 +58,21 @@ func TestIsGSMSafe(t *testing.T) {
 		})
 	}
 }
+
+// The Hub's satellite chat token ("*F8 text", MESHSAT-1290) has to come back
+// from a T-Deck through a kit's SMS unchanged or the Hub cannot route the
+// reply. It is bare, not bracketed, because brackets are rewritten here, and
+// '*' rather than '$' because '$' is 0x24 in ASCII and 0x02 in GSM 03.38.
+func TestSanitizeSMSText_SatelliteChatTokenSurvives(t *testing.T) {
+	for _, in := range []string{"*F8 on my way", "*f8 ok", "* F8: two minutes", "*F8 - 10:45, stand S27?"} {
+		if got := SanitizeSMSText(in); got != in {
+			t.Errorf("SanitizeSMSText(%q) = %q, want it unchanged", in, got)
+		}
+		if !IsGSMSafe(in) {
+			t.Errorf("%q is not GSM safe", in)
+		}
+	}
+	if got := SanitizeSMSText("[*F8] x"); got == "[*F8] x" {
+		t.Error("brackets now survive the sanitizer: the bare-token reasoning in this test is stale")
+	}
+}
