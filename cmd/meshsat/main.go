@@ -1462,11 +1462,14 @@ func main() {
 			Enabled:         cfg.OOBEnabled,
 			ReplyBudgetHour: cfg.OOBReplyBudget,
 			HostSocket:      cfg.OOBHostSocket,
+			RequestTTL:      time.Duration(cfg.OOBRequestTTLMin) * time.Minute,
+			ExpirySkew:      time.Duration(cfg.OOBExpirySkewSec) * time.Second,
 		}, oob.Deps{
-			DB:       db,
-			Keys:     ks,
-			Gateways: gwMgr,
-			Host:     oobHost,
+			ClockTrusted: clockGuard.Trusted, // [MESHSAT-1293]
+			DB:           db,
+			Keys:         ks,
+			Gateways:     gwMgr,
+			Host:         oobHost,
 			BearersUp: func() map[string]bool {
 				up := map[string]bool{}
 				for _, gs := range gwMgr.GetStatus() {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	qrcode "github.com/skip2/go-qrcode"
@@ -343,11 +344,14 @@ type oobSendBody struct {
 	Args    oob.ArgSpec `json:"args"`
 	NoReply bool        `json:"noreply,omitempty"`
 	Encrypt *bool       `json:"encrypt,omitempty"`
+	// TTLSeconds is how long the far kit may act on the command; 0 = the
+	// kit's default (MESHSAT_OOB_REQUEST_TTL_MIN). [MESHSAT-1293]
+	TTLSeconds int `json:"ttl_s,omitempty"`
 }
 
 // handleOOBSend originates a management command to a peer over a bearer.
 // @Summary Send OOB command
-// @Description Frames the command, queues it through the delivery ledger to the peer's address on the bearer and returns the delivery id and the text form
+// @Description Frames the command, queues it through the delivery ledger to the peer's address on the bearer and returns the delivery id and the text form. The frame carries an expiry (ttl_s, default MESHSAT_OOB_REQUEST_TTL_MIN): a peer that receives it later, a satellite MT held while it had no sky, refuses it.
 // @Tags oob
 // @Accept json
 // @Param body body oobSendBody true "Command"
@@ -374,7 +378,12 @@ func (s *Server) handleOOBSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	res, err := s.oob.Send(r.Context(), oob.SendRequest{PeerID: body.PeerID, Via: body.Via, Cmd: cmd.Code, Args: args, NoReply: body.NoReply, Encrypt: body.Encrypt})
+	if body.TTLSeconds < 0 {
+		writeError(w, http.StatusBadRequest, "ttl_s must not be negative")
+		return
+	}
+	res, err := s.oob.Send(r.Context(), oob.SendRequest{PeerID: body.PeerID, Via: body.Via, Cmd: cmd.Code, Args: args, NoReply: body.NoReply, Encrypt: body.Encrypt,
+		TTL: time.Duration(body.TTLSeconds) * time.Second})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

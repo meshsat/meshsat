@@ -50,6 +50,10 @@ type Config struct {
 	OOBEnabled     bool
 	OOBReplyBudget int
 	OOBHostSocket  string
+	// OOBRequestTTLMin and OOBExpirySkewSec bound how late a management
+	// command may be acted on. [MESHSAT-1293]
+	OOBRequestTTLMin int
+	OOBExpirySkewSec int
 
 	// Device health watchdog [MESHSAT-817]: protocol-level liveness probes
 	// for every USB device and the heal ladder (soft, device, hub-port VBUS
@@ -180,6 +184,8 @@ func Load() *Config {
 		OOBEnabled:                   envBool("MESHSAT_OOB_ENABLED", false),
 		OOBReplyBudget:               envInt("MESHSAT_OOB_REPLY_BUDGET", 12),
 		OOBHostSocket:                envStr("MESHSAT_OOB_HOST_SOCKET", "/run/meshsat-oob/agent.sock"),
+		OOBRequestTTLMin:             envInt("MESHSAT_OOB_REQUEST_TTL_MIN", 15),
+		OOBExpirySkewSec:             envInt("MESHSAT_OOB_EXPIRY_SKEW_S", 120),
 		DeviceHealth:                 envBool("MESHSAT_DEVICE_HEALTH", true),
 		DeviceHealthTickSec:          envInt("MESHSAT_DEVICE_HEALTH_TICK_SEC", 30),
 		DeviceHealthMisses:           envInt("MESHSAT_DEVICE_HEALTH_MISSES", 3),
