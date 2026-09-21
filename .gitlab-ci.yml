@@ -212,7 +212,12 @@ package:
   before_script:
     - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
     - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
-    - docker buildx create --name meshsatbuilder --driver docker-container --use
+    # One builder per job. With a shared name, two pipelines packaging at
+    # once shared one BuildKit container, and the first job's after_script
+    # removed it from under the second, which failed with "failed to receive
+    # status ... graceful_stop" (pipelines 55540 and 55541, 21 Sep 2026).
+    # [MESHSAT-849]
+    - docker buildx create --name meshsatbuilder-${CI_JOB_ID} --driver docker-container --use
     - docker buildx inspect --bootstrap
   script:
     - |
@@ -255,7 +260,7 @@ package:
     reports:
       dotenv: package.env
   after_script:
-    - docker buildx rm meshsatbuilder || true
+    - docker buildx rm meshsatbuilder-${CI_JOB_ID} || true
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
