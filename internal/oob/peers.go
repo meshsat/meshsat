@@ -179,7 +179,10 @@ func (s *Service) UpdatePeer(id uint16, spec PeerSpec, enabled *bool) (*database
 	return s.d.DB.GetOOBPeer(id)
 }
 
-// DeletePeer revokes the key, cancels any revert timer and removes the row.
+// DeletePeer revokes the key and removes the row. Pending BEARER reverts
+// stay armed: they restore this kit's own bearers, whoever switched them
+// off, and cancelling every one of them because some peer was deleted
+// could leave a bearer off for good. [MESHSAT-756]
 func (s *Service) DeletePeer(id uint16) error {
 	p, err := s.d.DB.GetOOBPeer(id)
 	if err != nil {
@@ -188,7 +191,6 @@ func (s *Service) DeletePeer(id uint16) error {
 	if s.d.Keys != nil {
 		_ = s.d.Keys.RevokeKey("mgmt", p.Alias)
 	}
-	s.cancelReverts()
 	return s.d.DB.DeleteOOBPeer(id)
 }
 

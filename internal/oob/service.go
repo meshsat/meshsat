@@ -110,16 +110,17 @@ type Deps struct {
 
 // Service is the OOB management frame service.
 type Service struct {
-	mu       sync.RWMutex
-	cfg      Config
-	d        Deps
-	locks    sync.Map // peer id -> *sync.Mutex
-	buckets  map[uint16]*bucket
-	rejected map[uint16]time.Time
-	reverts  map[string]*time.Timer
-	stops    map[string]*time.Timer // delayed stops of a self-severing BEARER off [MESHSAT-756]
-	restart  func()
-	agentVer string
+	mu        sync.RWMutex
+	cfg       Config
+	d         Deps
+	locks     sync.Map // peer id -> *sync.Mutex
+	buckets   map[uint16]*bucket
+	rejected  map[uint16]time.Time
+	reverts   map[string]*time.Timer
+	stops     map[string]*time.Timer // delayed stops of a self-severing BEARER off [MESHSAT-756]
+	revertsMu sync.Mutex             // orders reads and writes of cfgPendingReverts
+	restart   func()
+	agentVer  string
 
 	// usb_switchable probe cache: the agent runs uhubctl once per device
 	// role, so the answer is kept for usbProbeTTL. [MESHSAT-786]
@@ -298,6 +299,7 @@ func (s *Service) Start(ctx context.Context) error {
 	if err := s.d.DB.BumpOOBTxCounters(BootCounterBump); err != nil {
 		return err
 	}
+	s.restoreReverts()
 	if s.d.Host != nil && s.d.Host.Available() {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		ver, err := s.d.Host.Ping(pctx)

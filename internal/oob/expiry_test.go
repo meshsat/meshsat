@@ -265,3 +265,74 @@ func TestBearerOn_CancelsAPendingCut(t *testing.T) {
 		t.Fatalf("revert still armed: %v", h.svc.PendingReverts())
 	}
 }
+
+// A BEARER revert survives a bridge restart: the deadline is persisted, and
+// a new service on the same database re-arms it, or runs it at once when it
+// fell due while the bridge was down. Before, a restart inside the window
+// left the bearer off for good. [MESHSAT-756]
+func TestBearerRevert_SurvivesARestart(t *testing.T) {
+	h := newHarness(t, RoleControl, false)
+	oldStop, oldMin := severingStopDelay, restoredRevertMinDelay
+	severingStopDelay, restoredRevertMinDelay = 10*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { severingStopDelay, restoredRevertMinDelay = oldStop, oldMin })
+
+	origin := Origin{Role: RoleControl, Bearer: "aprs_0"}
+	if res := h.svc.Execute(context.Background(), origin, CmdBearer, EncodeBearerArgs(TargetAPRS, 0)); res.Code != RCOK {
+		t.Fatalf("off: %s %q", res.Code, res.Body)
+	}
+	if m := h.svc.loadRevertDeadlines(); m["aprs_0"] == 0 {
+		t.Fatalf("revert not persisted: %v", m)
+	}
+
+	// The bridge restarts. The old service is gone; a new one opens the same
+	// database, and the revert fell due while it was down.
+	h.svc.mu.Lock()
+	for _, tm := range h.svc.reverts {
+		tm.Stop()
+	}
+	h.svc.mu.Unlock()
+	h.svc.persistRevert("aprs_0", time.Now().Add(-time.Minute))
+	gws := &fakeGateways{}
+	svc2 := New(Config{Enabled: true, ReplyBudgetHour: 12}, Deps{DB: h.db, Keys: h.keys, Gateways: gws})
+	if err := svc2.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if pr := svc2.PendingReverts(); len(pr) != 1 || pr[0] != "aprs_0" {
+		t.Fatalf("revert not re-armed after the restart: %v", pr)
+	}
+	waitFor(t, func() bool {
+		gws.mu.Lock()
+		defer gws.mu.Unlock()
+		return len(gws.started) == 1 && gws.started[0] == "aprs_0"
+	})
+	if m := svc2.loadRevertDeadlines(); len(m) != 0 {
+		t.Fatalf("a revert that ran is still persisted: %v", m)
+	}
+}
+
+// BEARER on forgets the persisted revert; deleting a peer keeps it.
+func TestBearerRevert_OnForgetsItDeletePeerKeepsIt(t *testing.T) {
+	h := newHarness(t, RoleControl, false)
+	old := severingStopDelay
+	severingStopDelay = 10 * time.Millisecond
+	t.Cleanup(func() { severingStopDelay = old })
+	ctx := context.Background()
+	origin := Origin{Role: RoleControl, Bearer: "cellular_0"}
+
+	h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 0))
+	h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 1))
+	if m := h.svc.loadRevertDeadlines(); len(m) != 0 {
+		t.Fatalf("BEARER on left a persisted revert: %v", m)
+	}
+
+	h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 0))
+	if err := h.svc.DeletePeer(h.peer.PeerID); err != nil {
+		t.Fatal(err)
+	}
+	if pr := h.svc.PendingReverts(); len(pr) != 1 {
+		t.Fatalf("deleting a peer cancelled the kit's bearer revert: %v", pr)
+	}
+	if m := h.svc.loadRevertDeadlines(); m["cellular_0"] == 0 {
+		t.Fatalf("deleting a peer dropped the persisted revert: %v", m)
+	}
+}
