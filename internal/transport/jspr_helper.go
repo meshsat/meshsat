@@ -54,6 +54,13 @@ type jsprHelperPort struct {
 
 	port     string
 	lastRead time.Time
+
+	// moInFlightUntil is set while an MO is with the helper. The helper
+	// blocks on the serial line until the modem reports the final status,
+	// up to jsprMOTimeout, and nothing reaches Go in between, so to the
+	// serial watchdog an MO waiting for a satellite looks exactly like a
+	// dead port. [MESHSAT-1282]
+	moInFlightUntil time.Time
 }
 
 // startJSPRHelper launches the helper subprocess (Python or C).
@@ -133,6 +140,9 @@ func (h *jsprHelperPort) readLoop() {
 		h.mu.Lock()
 		h.byteBuf = append(h.byteBuf, []byte(jsprLine)...)
 		h.lastRead = time.Now()
+		if msg.Target == "messageOriginateStatus" {
+			h.moInFlightUntil = time.Time{} // final status: the MO is over
+		}
 		h.mu.Unlock()
 		h.byteCond.Signal()
 
@@ -258,11 +268,17 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 
 	log.Debug().Int("topic", topicID).Int("length", length).Msg("imt: sending send_mo to helper")
 
-	// Touch lastRead so the serial watchdog doesn't cycle the port during
-	// the MO flow. The helper blocks on serial for up to 2 minutes waiting
-	// for the satellite link, during which no stdout data reaches Go.
+	// Keep the serial watchdog off the port for as long as this MO may
+	// legitimately take. Touching lastRead once was not enough: the watchdog
+	// calls the port dead after 2 minutes of silence and an MO may wait 3
+	// (jsprMOTimeout), so with a masked sky the modem was power-cycled 60 s
+	// before the send could finish, which killed the MO and any MT about to
+	// come down (20 message soak, 21 Sep 2026: 0 of 10 out of tesseract).
+	// The mark is dropped as soon as the modem reports a final status.
+	// [MESHSAT-1282]
 	h.mu.Lock()
 	h.lastRead = time.Now()
+	h.moInFlightUntil = time.Now().Add(jsprMOTimeout + 30*time.Second)
 	h.mu.Unlock()
 
 	_, writeErr := h.stdin.Write(cmdBytes)
@@ -318,6 +334,11 @@ func (h *jsprHelperPort) Close() error {
 func (h *jsprHelperPort) LastRead() time.Time {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// An MO in flight is activity: the line is silent because the modem is
+	// waiting for a satellite, not because the port died. [MESHSAT-1282]
+	if now := time.Now(); now.Before(h.moInFlightUntil) {
+		return now
+	}
 	return h.lastRead
 }
 
