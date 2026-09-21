@@ -602,9 +602,9 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 		return // routing packets are not forwarded through the rules engine
 	}
 
-	// Prevent gateway→mesh→gateway feedback loops:
-	// If this message text was recently injected from a gateway, don't forward it back.
-	if p.isRecentGatewayInjection(msg.DecodedText) {
+	// Prevent gateway→mesh→gateway feedback loops: the radio's own echo of
+	// a text this bridge injected from a gateway is not forwarded back.
+	if p.isGatewayEcho(&msg) {
 		log.Debug().Uint32("packet_id", msg.ID).Msg("skipping forward: message originated from gateway (loop prevention)")
 		return
 	}
@@ -1298,6 +1298,26 @@ func (p *Processor) isRecentGatewayInjection(text string) bool {
 	ts, ok := p.relayDedup[key]
 	p.relayDedupMu.Unlock()
 	return ok && time.Since(ts) < 5*time.Minute
+}
+
+// isGatewayEcho reports whether a mesh text is this bridge's own gateway
+// injection coming back: the text matches one injected in the last 5 minutes
+// AND the local radio sent it. The echo the guard was written for came back
+// from the radio itself; a reply from another node that repeats the text
+// ("yo" answered with "yo") is a new message and must travel. On 21 Sep 2026
+// a handheld's "yo" on parallax's mesh never reached the satellite because a
+// "yo" had come down three minutes earlier. When the transport cannot name
+// the local node (HAL mode, or before the config download), the text alone
+// decides, as it always did. [MESHSAT-1282]
+func (p *Processor) isGatewayEcho(msg *transport.MeshMessage) bool {
+	if !p.isRecentGatewayInjection(msg.DecodedText) {
+		return false
+	}
+	own := meshLocalNode(p.mesh)
+	if own == "" || msg.From == 0 {
+		return true
+	}
+	return fmt.Sprintf("!%08x", msg.From) == own
 }
 
 func gwInjectDedupKey(text string) string {
