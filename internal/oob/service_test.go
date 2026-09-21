@@ -418,6 +418,9 @@ func TestExecute_ResetAndBearer(t *testing.T) {
 		}
 	})
 	t.Run("bearer_off_arriving_arms_revert_and_on_cancels", func(t *testing.T) {
+		old := severingStopDelay
+		severingStopDelay = 20 * time.Millisecond
+		defer func() { severingStopDelay = old }()
 		h.gws.stopped, h.gws.started = nil, nil
 		res := h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 0))
 		if res.Code != RCOK || !strings.Contains(res.Body, "rv10m") {
@@ -426,9 +429,19 @@ func TestExecute_ResetAndBearer(t *testing.T) {
 		if pr := h.svc.PendingReverts(); len(pr) != 1 || pr[0] != "cellular_0" {
 			t.Fatalf("pending reverts %v", pr)
 		}
-		if len(h.gws.stopped) != 1 || h.gws.stopped[0] != "cellular_0" {
-			t.Fatalf("stopped %v", h.gws.stopped)
+		// The bearer the command arrived on is still up when Execute
+		// returns, so the reply can leave on it; the cut follows.
+		h.gws.mu.Lock()
+		stoppedAtOnce := len(h.gws.stopped)
+		h.gws.mu.Unlock()
+		if stoppedAtOnce != 0 {
+			t.Fatalf("the arriving bearer was cut before the reply could leave: stopped %v", h.gws.stopped)
 		}
+		waitFor(t, func() bool {
+			h.gws.mu.Lock()
+			defer h.gws.mu.Unlock()
+			return len(h.gws.stopped) == 1 && h.gws.stopped[0] == "cellular_0"
+		})
 		res = h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 1))
 		if res.Code != RCOK || len(h.svc.PendingReverts()) != 0 || len(h.gws.started) != 1 {
 			t.Fatalf("%s %q reverts=%v started=%v", res.Code, res.Body, h.svc.PendingReverts(), h.gws.started)
