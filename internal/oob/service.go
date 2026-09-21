@@ -117,6 +117,7 @@ type Service struct {
 	buckets  map[uint16]*bucket
 	rejected map[uint16]time.Time
 	reverts  map[string]*time.Timer
+	stops    map[string]*time.Timer // delayed stops of a self-severing BEARER off [MESHSAT-756]
 	restart  func()
 	agentVer string
 
@@ -246,6 +247,7 @@ func New(cfg Config, d Deps) *Service {
 		buckets:  map[uint16]*bucket{},
 		rejected: map[uint16]time.Time{},
 		reverts:  map[string]*time.Timer{},
+		stops:    map[string]*time.Timer{},
 	}
 }
 

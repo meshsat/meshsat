@@ -21,6 +21,14 @@ type Origin struct {
 // OriginHub is the bearer name for Hub-originated commands.
 const OriginHub = "hub"
 
+// severingStopDelay is how long a BEARER off for the bearer the command
+// arrived on waits before it stops that bearer. The reply goes out on the
+// same bearer, and the spec (section 6) promises it leaves before anything
+// disruptive runs: stopping at once queued the reply on a bearer that was
+// already down, and it died unsent (parallax, 21 Sep 2026, "aprs off rv10m"
+// never reached the operator). A var so tests can shorten it. [MESHSAT-756]
+var severingStopDelay = 20 * time.Second
+
 // RevertDelay is how long a self-severing BEARER off waits before the
 // bridge brings the bearer back on its own.
 const RevertDelay = 10 * time.Minute
@@ -277,6 +285,7 @@ func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result 
 	}
 	if state == 1 {
 		s.cancelRevert(t.IfaceID)
+		s.cancelStop(t.IfaceID)
 		if err := s.startBearer(ctx, t.IfaceID); err != nil {
 			// Idempotent, as the spec promises: "on" for a bearer that is
 			// already up (or starting) is a no-op, not a failure (the Hub's
@@ -290,15 +299,22 @@ func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result 
 	}
 	body := t.Name + " off"
 	if severs(o, t) {
+		// Answer first, cut later: the reply leaves on this very bearer.
+		// The revert counts from the cut, so the bearer is off RevertDelay.
 		iface := t.IfaceID
-		s.armRevert(iface, RevertDelay, func() {
+		s.armRevert(iface, severingStopDelay+RevertDelay, func() {
 			rctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			if err := s.startBearer(rctx, iface); err != nil {
 				s.logf("oob: revert of %s failed: %v", iface, err)
 			}
 		})
-		body += " rv10m"
+		s.armStop(iface, severingStopDelay, func() {
+			if err := s.stopBearer(iface); err != nil && !strings.Contains(err.Error(), "not running") {
+				s.logf("oob: stop of %s failed: %v", iface, err)
+			}
+		})
+		return Result{Code: RCOK, Body: fmt.Sprintf("%s in%ds rv10m", body, int(severingStopDelay/time.Second))}
 	}
 	if err := s.stopBearer(t.IfaceID); err != nil {
 		if strings.Contains(err.Error(), "not running") {
@@ -366,6 +382,33 @@ func (s *Service) armRevert(ifaceID string, d time.Duration, fn func()) {
 		s.mu.Unlock()
 		fn()
 	})
+}
+
+// armStop schedules the delayed stop of a self-severing BEARER off,
+// replacing any pending one for the same interface.
+func (s *Service) armStop(ifaceID string, d time.Duration, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.stops[ifaceID]; ok {
+		t.Stop()
+	}
+	s.stops[ifaceID] = time.AfterFunc(d, func() {
+		s.mu.Lock()
+		delete(s.stops, ifaceID)
+		s.mu.Unlock()
+		fn()
+	})
+}
+
+// cancelStop drops a pending delayed stop: a BEARER on that arrives inside
+// the delay must not be followed by the cut.
+func (s *Service) cancelStop(ifaceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.stops[ifaceID]; ok {
+		t.Stop()
+		delete(s.stops, ifaceID)
+	}
 }
 
 func (s *Service) cancelRevert(ifaceID string) {

@@ -212,3 +212,56 @@ func TestRun_ReplyOutlivesALongExecution(t *testing.T) {
 		t.Fatalf("a reset that succeeded replied %s", ra.RC)
 	}
 }
+
+// A BEARER off that cuts the bearer it arrived on answers on that bearer
+// before the cut; parallax's "aprs off rv10m" of 21 Sep 2026 died unsent
+// because the gateway was stopped first. [MESHSAT-756]
+func TestBearerOff_ReplyLeavesBeforeTheCut(t *testing.T) {
+	h := newHarness(t, RoleControl, false)
+	old := severingStopDelay
+	severingStopDelay = 200 * time.Millisecond
+	t.Cleanup(func() { severingStopDelay = old })
+
+	h.svc.HandleInbound(context.Background(), "cellular_0", "+31653207829",
+		h.peerFrame(t, 1, CmdBearer, EncodeBearerArgs(TargetCellular, 0), true, false))
+	waitFor(t, func() bool { return len(h.sends()) == 1 })
+	h.gws.mu.Lock()
+	cutBeforeReply := len(h.gws.stopped)
+	h.gws.mu.Unlock()
+	if cutBeforeReply != 0 {
+		t.Fatalf("the bearer was cut before its reply was queued: %v", h.gws.stopped)
+	}
+	if _, ra := h.openReply(t, h.sends()[0].text); ra.RC != RCOK || !strings.Contains(string(ra.Body), "rv10m") {
+		t.Fatalf("reply %s %q", ra.RC, ra.Body)
+	}
+	waitFor(t, func() bool {
+		h.gws.mu.Lock()
+		defer h.gws.mu.Unlock()
+		return len(h.gws.stopped) == 1
+	})
+}
+
+// BEARER on inside the delay cancels the pending cut and the revert.
+func TestBearerOn_CancelsAPendingCut(t *testing.T) {
+	h := newHarness(t, RoleControl, false)
+	old := severingStopDelay
+	severingStopDelay = 100 * time.Millisecond
+	t.Cleanup(func() { severingStopDelay = old })
+	origin := Origin{Role: RoleControl, Bearer: "cellular_0"}
+	ctx := context.Background()
+	if res := h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 0)); res.Code != RCOK {
+		t.Fatalf("off: %s %q", res.Code, res.Body)
+	}
+	if res := h.svc.Execute(ctx, origin, CmdBearer, EncodeBearerArgs(TargetCellular, 1)); res.Code != RCOK {
+		t.Fatalf("on: %s %q", res.Code, res.Body)
+	}
+	time.Sleep(300 * time.Millisecond)
+	h.gws.mu.Lock()
+	defer h.gws.mu.Unlock()
+	if len(h.gws.stopped) != 0 {
+		t.Fatalf("a cancelled cut still ran: stopped %v", h.gws.stopped)
+	}
+	if len(h.svc.PendingReverts()) != 0 {
+		t.Fatalf("revert still armed: %v", h.svc.PendingReverts())
+	}
+}
