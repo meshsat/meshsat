@@ -101,8 +101,7 @@ func (sf *SatFallback) Run(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	var lastPosition, lastHealth time.Time
-
+	var timers fallbackTimers
 	for {
 		select {
 		case <-ctx.Done():
@@ -110,46 +109,62 @@ func (sf *SatFallback) Run(ctx context.Context) {
 		case <-sf.stopCh:
 			return
 		case <-ticker.C:
-			sf.mu.Lock()
-			disconnectTime := sf.disconnectTime
-			wasActive := sf.active
-			sf.mu.Unlock()
-
-			// Nothing to do if MQTT is connected.
-			if disconnectTime.IsZero() {
-				continue
-			}
-
-			// Check if we should activate fallback mode.
-			elapsed := time.Since(disconnectTime)
-			if !wasActive && elapsed >= sf.cfg.ActivateAfter {
-				sf.mu.Lock()
-				sf.active = true
-				sf.mu.Unlock()
-				log.Warn().
-					Dur("downtime", elapsed).
-					Msg("satfallback: activating satellite fallback mode")
-				// Send an immediate position on activation.
-				sf.sendPosition()
-				lastPosition = time.Now()
-				continue
-			}
-
-			if !wasActive {
-				continue
-			}
-
-			// In active mode: send periodic position and health.
-			now := time.Now()
-			if now.Sub(lastPosition) >= sf.cfg.PositionInterval {
-				sf.sendPosition()
-				lastPosition = now
-			}
-			if now.Sub(lastHealth) >= sf.cfg.HealthInterval {
-				sf.sendHealth()
-				lastHealth = now
-			}
+			sf.step(time.Now(), &timers)
 		}
+	}
+}
+
+// fallbackTimers remembers when each kind of frame last went out.
+type fallbackTimers struct {
+	lastPosition, lastHealth time.Time
+}
+
+// step is one tick of the monitor: activate after ActivateAfter of MQTT
+// downtime, then send position and health on their intervals.
+//
+// Activation sends BOTH frames at once. It used to send the position alone
+// and leave health to its hourly timer, which runs across outages: a kit
+// with no GPS fix (none is fitted for TTC26) whose last health frame was
+// under an hour old went into fallback and told the Hub nothing at all,
+// seen on tesseract on 21 Sep 2026 (armed 04:36:08Z, silent until the link
+// came back). The first thing a Hub needs from a kit that lost its link is
+// that it is alive. [MESHSAT-963]
+func (sf *SatFallback) step(now time.Time, t *fallbackTimers) {
+	sf.mu.Lock()
+	disconnectTime := sf.disconnectTime
+	wasActive := sf.active
+	sf.mu.Unlock()
+
+	// Nothing to do if MQTT is connected.
+	if disconnectTime.IsZero() {
+		return
+	}
+
+	elapsed := now.Sub(disconnectTime)
+	if !wasActive {
+		if elapsed < sf.cfg.ActivateAfter {
+			return
+		}
+		sf.mu.Lock()
+		sf.active = true
+		sf.mu.Unlock()
+		log.Warn().
+			Dur("downtime", elapsed).
+			Msg("satfallback: activating satellite fallback mode")
+		sf.sendPosition()
+		sf.sendHealth()
+		t.lastPosition, t.lastHealth = now, now
+		return
+	}
+
+	// In active mode: send periodic position and health.
+	if now.Sub(t.lastPosition) >= sf.cfg.PositionInterval {
+		sf.sendPosition()
+		t.lastPosition = now
+	}
+	if now.Sub(t.lastHealth) >= sf.cfg.HealthInterval {
+		sf.sendHealth()
+		t.lastHealth = now
 	}
 }
 

@@ -51,3 +51,57 @@ func TestSatFallback_HooksDriveState(t *testing.T) {
 		t.Fatalf("sos fields: %v %s %s %s", err, id, dev, msg)
 	}
 }
+
+// A kit that loses its Hub link must say it is alive as soon as the fallback
+// arms, GPS or no GPS, and again on every new outage, however recent the last
+// health frame was. The hourly health timer used to run across outages, so a
+// second outage inside the hour armed and sent nothing. [MESHSAT-963]
+func TestSatFallback_ArmingSendsHealthOnEveryOutage(t *testing.T) {
+	var kinds []byte
+	sf := NewSatFallback(SatFallbackConfig{
+		BridgeID:      "nllei01tesseract01",
+		ActivateAfter: 5 * time.Minute,
+		SendFn: func(b []byte) error {
+			hdr, _, err := DecodeSatUplink(b)
+			if err != nil {
+				t.Fatalf("undecodable frame: %v", err)
+			}
+			kinds = append(kinds, hdr.MsgType)
+			return nil
+		},
+		PositionFn: func() *Location { return nil }, // no GPS fitted
+		HealthFn:   func() BridgeHealth { return BridgeHealth{} },
+	})
+	var timers fallbackTimers
+	t0 := time.Now()
+
+	outage := func(start time.Time) {
+		sf.OnMQTTDisconnect()
+		sf.mu.Lock()
+		sf.disconnectTime = start
+		sf.mu.Unlock()
+	}
+
+	outage(t0)
+	sf.step(t0.Add(4*time.Minute), &timers)
+	if len(kinds) != 0 {
+		t.Fatalf("sent %d frames before ActivateAfter", len(kinds))
+	}
+	sf.step(t0.Add(5*time.Minute+30*time.Second), &timers)
+	if len(kinds) != 1 || kinds[0] != SatMsgHealthSummary {
+		t.Fatalf("arming sent %v, want one health frame", kinds)
+	}
+	sf.step(t0.Add(6*time.Minute), &timers)
+	if len(kinds) != 1 {
+		t.Fatalf("health repeated inside its interval: %v", kinds)
+	}
+
+	// Link back, then a second outage twenty minutes later.
+	sf.OnMQTTReconnect()
+	t1 := t0.Add(20 * time.Minute)
+	outage(t1)
+	sf.step(t1.Add(5*time.Minute+30*time.Second), &timers)
+	if len(kinds) != 2 || kinds[1] != SatMsgHealthSummary {
+		t.Fatalf("second outage inside the hour sent %v, want a second health frame", kinds)
+	}
+}
