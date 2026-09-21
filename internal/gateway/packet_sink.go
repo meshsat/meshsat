@@ -4,6 +4,10 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"meshsat/internal/codec"
+	"meshsat/internal/transport"
 )
 
 // PacketRecord is one frame seen on a bearer, as the live packet feed reports
@@ -65,6 +69,35 @@ func CapPacketText(s string) string {
 }
 
 func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }
+
+// FeedText returns b as feed text when it reads as text: valid UTF-8 with
+// no control characters beyond tab and newline. Ciphertext, binary frames
+// and the protocol version byte return "", so the feed never shows them as
+// if they were words. [MESHSAT-1282]
+func FeedText(b []byte) string {
+	if !utf8.Valid(b) {
+		return ""
+	}
+	for _, r := range string(b) {
+		if (r < 0x20 && r != '\t' && r != '\n') || r == 0x7f {
+			return ""
+		}
+	}
+	return CapPacketText(string(b))
+}
+
+// satFeedText is the text a satellite send shows in the feed: the words as
+// typed. An encrypted body is ciphertext, so the plaintext the delivery
+// worker kept before its transforms stands in, as it does in the SMS
+// history; the version byte the worker put in front is not text either.
+// [MESHSAT-1282]
+func satFeedText(msg *transport.MeshMessage) string {
+	if msg.Encrypted {
+		return FeedText([]byte(msg.PlainText))
+	}
+	_, body := codec.StripVersionByte([]byte(msg.DecodedText))
+	return FeedText(body)
+}
 
 // aprsPacketRecord builds the feed record for one AX.25 frame as it passed
 // the KISS link. Callsigns, path and text come from the frame itself, so the

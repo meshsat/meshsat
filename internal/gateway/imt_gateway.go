@@ -142,7 +142,7 @@ func (g *IMTGateway) sendIMT(ctx context.Context, msg *transport.MeshMessage) er
 	g.lastActive.Store(time.Now().Unix())
 	log.Info().Int("mo_status", result.MOStatus).Uint32("packet_id", msg.ID).Msg("imt: message sent")
 	g.emit("forward", fmt.Sprintf("IMT sent (mo_status=%d, packet=%d)", result.MOStatus, msg.ID))
-	g.noteMOSuccess(result.MOStatus, len(data), msg.DecodedText, msg.MsgRef, "cloudloop")
+	g.noteMOSuccess(result.MOStatus, len(data), satFeedText(msg), msg.MsgRef, "cloudloop")
 
 	if g.db != nil {
 		g.db.InsertSentRecord(msg.ID, data, msg.DecodedText)
@@ -258,16 +258,10 @@ func (g *IMTGateway) receivePendingMT(_ context.Context) {
 		}
 
 		text := string(payload)
-		log.Info().Int("size", len(payload)).Str("text", text).Msg("imt: MT app message persisted to DB")
-
-		g.db.InsertMessage(&database.Message{
-			FromNode:       "cloudloop",
-			DecodedText:    text,
-			Direction:      "inbound",
-			Transport:      "iridium_imt",
-			PortNumName:    "MT_MESSAGE",
-			DeliveryStatus: "received",
-		})
+		// The processor stores the message once it has decoded it; a row
+		// here held the wire bytes, so every encrypted MT showed twice, once
+		// as ciphertext. [MESHSAT-1282]
+		log.Info().Int("size", len(payload)).Msg("imt: MT app message received")
 
 		g.noteMTReceived("cloudloop", len(payload), text)
 

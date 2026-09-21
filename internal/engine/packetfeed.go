@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"meshsat/internal/codec"
 	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
 )
@@ -95,6 +96,29 @@ func (r *PacketRing) Add(rec PacketRecord) {
 // Sink adapts the ring to the gateway callback type.
 func (r *PacketRing) Sink() gateway.PacketSink {
 	return func(rec PacketRecord) { r.Add(rec) }
+}
+
+// GatewayPacketSink is the sink the gateways write to. A satellite MT
+// arrives as the far kit's wire bytes: the protocol version byte and, on an
+// encrypted link, ciphertext. The feed shows what was said, so the record's
+// text goes through the interface's ingress transforms the way the SMS
+// receive record does. A frame that does not decrypt, or does not read as
+// text, keeps an empty text, as an encrypted SMS send does: the feed never
+// shows ciphertext as if it were the message. Every other record passes
+// unchanged. [MESHSAT-1282]
+func (p *Processor) GatewayPacketSink() gateway.PacketSink {
+	ring := p.Packets()
+	return func(rec PacketRecord) {
+		if rec.Bearer == gateway.BearerSat && rec.Dir == gateway.DirRX && rec.Text != "" {
+			text, clear := p.decodeIngress(rec.Iface, rec.Text)
+			rec.Text = ""
+			if clear {
+				_, body := codec.StripVersionByte([]byte(text))
+				rec.Text = gateway.FeedText(body)
+			}
+		}
+		ring.Add(rec)
+	}
 }
 
 // Len returns the number of records held.

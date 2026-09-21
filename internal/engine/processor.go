@@ -164,20 +164,28 @@ func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, te
 // classifier [MESHSAT-756] and by the cellular event recorder so the SMS
 // history shows the plaintext of encrypted peer traffic. [MESHSAT-822]
 func (p *Processor) DecodeIngress(sourceIface, raw string) string {
+	text, _ := p.decodeIngress(sourceIface, raw)
+	return text
+}
+
+// decodeIngress is DecodeIngress that also reports whether the text is
+// clear: false when the interface has an ingress chain and raw does not
+// decode through it, so raw is still ciphertext as far as this bridge knows.
+func (p *Processor) decodeIngress(sourceIface, raw string) (string, bool) {
 	if p == nil || p.dispatcher == nil || p.dispatcher.TransformPipeline() == nil || p.db == nil {
-		return raw
+		return raw, true
 	}
 	iface, err := p.db.GetInterface(sourceIface)
 	if err != nil || iface.IngressTransforms == "" || iface.IngressTransforms == "[]" {
-		return raw
+		return raw, true
 	}
 	// The sender prepends the protocol version byte after its transforms;
 	// the chain cannot start until it is off. [MESHSAT-1282]
 	_, body := codec.StripVersionByte([]byte(raw))
 	if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress(body, iface.IngressTransforms); tErr == nil {
-		return string(decoded)
+		return string(decoded), true
 	}
-	return raw
+	return raw, false
 }
 
 // SetGatewayProvider sets a dynamic gateway source (e.g. the Manager).
