@@ -314,7 +314,9 @@ func (s *Service) execBearer(ctx context.Context, o Origin, args []byte) Result 
 				s.logf("oob: stop of %s failed: %v", iface, err)
 			}
 		})
-		return Result{Code: RCOK, Body: fmt.Sprintf("%s in%ds rv10m", body, int(severingStopDelay/time.Second))}
+		// The body keeps its old form: an APRS reply carries 10 characters
+		// of body, and the delay is fixed protocol behaviour (spec 6).
+		return Result{Code: RCOK, Body: body + " rv10m"}
 	}
 	if err := s.stopBearer(t.IfaceID); err != nil {
 		if strings.Contains(err.Error(), "not running") {
