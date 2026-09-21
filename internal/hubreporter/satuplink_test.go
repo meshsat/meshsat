@@ -277,3 +277,27 @@ func TestEncodeSatHealth_NoInterfaces(t *testing.T) {
 		t.Errorf("expected 0 interfaces, got %d", len(gotIfaces))
 	}
 }
+
+// The field kits' bridge ids are 18 and 17 characters. The encoder cut them
+// to 16 and the Hub updated nobody. Every frame type must carry the id whole.
+// [MESHSAT-963]
+func TestSatUplinkCarriesTheWholeBridgeID(t *testing.T) {
+	now := time.Unix(1789960000, 0).UTC()
+	for _, id := range []string{"nllei01tesseract01", "nllei01parallax01", "a-hostname-as-long-as-dns-allows-one-label-to-be-63-octets-xxxx"} {
+		frames := map[string][]byte{
+			"health":   EncodeSatHealth(id, 5311, 1, 14, 28, nil, now),
+			"position": EncodeSatPosition(id, 52.1, 4.3, 10, 1, now),
+			"sos":      EncodeSatSOS(id, "!4370c1d8", 52.1, 4.3, "test", now),
+		}
+		for kind, f := range frames {
+			if len(f) <= satHeaderLen+1 {
+				t.Fatalf("%s: frame too short", kind)
+			}
+			n := int(f[satHeaderLen])
+			got := string(f[satHeaderLen+1 : satHeaderLen+1+n])
+			if got != id {
+				t.Errorf("%s frame carries bridge id %q, want %q", kind, got, id)
+			}
+		}
+	}
+}

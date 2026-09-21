@@ -27,7 +27,13 @@ const (
 	satHeaderLen          = 4 // magic(2) + version(1) + type(1)
 
 	// maxBridgeIDLen is the maximum bridge ID length (truncated if longer).
-	maxBridgeIDLen = 16
+	// A bridge id is a hostname (63 octets at most). It was 16, which cut
+	// both field kits' ids ("nllei01tesseract01" arrived as
+	// "nllei01tesseract"): the Hub decoded the frame, matched no bridge,
+	// updated nothing and said nothing, so the fallback reported health for
+	// a kit nobody has. The wire format is unchanged: a one byte length
+	// prefix. [MESHSAT-963]
+	maxBridgeIDLen = 63
 	// maxSOSMessageLen is the maximum SOS text length.
 	maxSOSMessageLen = 64
 	// maxDeviceIDLen is the maximum device ID length.
