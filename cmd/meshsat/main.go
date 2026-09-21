@@ -2017,6 +2017,44 @@ func main() {
 				Msg("hub satellite fallback armed")
 		}
 
+		// MT poll: a 9704 fetches messages waiting at Iridium only inside a
+		// session, which under a masked sky means its own MO, so a kit that
+		// sends nothing over the satellite for IMTMTPollMin minutes sends a
+		// health summary to the Hub (taken off before the Hub's relay) at the
+		// lowest precedence. Satellite sessions on the kits are free demo
+		// usage (owner, 21 Sep 2026). [MESHSAT-1282]
+		if cfg.IMTMTPollMin > 0 && gwMgr.GatewayByInterfaceID("iridium_imt_0") != nil {
+			poller := hubreporter.NewMTPoller(hubreporter.MTPollConfig{
+				Interval: time.Duration(cfg.IMTMTPollMin) * time.Minute,
+				Connected: func() bool {
+					gw := gwMgr.GatewayByInterfaceID("iridium_imt_0")
+					return gw != nil && gw.Status().Connected
+				},
+				LastActivity: func() time.Time {
+					if gw := gwMgr.GatewayByInterfaceID("iridium_imt_0"); gw != nil {
+						return gw.Status().LastActivity
+					}
+					return time.Time{}
+				},
+				Pending: func() int {
+					n, err := db.CountOpenDeliveries("iridium_imt_0")
+					if err != nil {
+						return 1 // unknown: do not add to a queue we cannot see
+					}
+					return n
+				},
+				Frame: func() []byte { return hubreporter.HealthFrame(hubBridgeID, healthFn(), time.Now().UTC()) },
+				Send: func(frame []byte) error {
+					_, _, err := dispatcher.QueueDirectSendTo("iridium_imt_0", fmt.Sprintf("MT poll, health frame %d B", len(frame)),
+						engine.DirectSendOptions{Precedence: string(types.PrecedenceDeferred), Class: database.DeliveryClassHubUplink,
+							Payload: frame, MaxRetries: 2})
+					return err
+				},
+			})
+			go poller.Run(ctx)
+			log.Info().Int("every_min", cfg.IMTMTPollMin).Msg("imt: MT poll armed")
+		}
+
 		// Hub WebSocket relay [MESHSAT-613]: serve this bridge's own API to
 		// the tenant's phones through the Hub (contract: meshsat-hub
 		// docs/relay.md). The tunnel carries TLS end to end with the same
