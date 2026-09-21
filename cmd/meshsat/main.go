@@ -499,7 +499,7 @@ func main() {
 	// Live packet feed (TTC mode): APRS and cellular gateways hand every
 	// frame to the processor's ring, which also emits "packet" SSE events.
 	// [MESHSAT-826]
-	gwMgr.SetPacketSink(proc.Packets().Sink())
+	gwMgr.SetPacketSink(proc.GatewayPacketSink())
 	// X1202 pack state changes (mains, draining, low, stale) as "battery"
 	// events on /api/events. [MESHSAT-794]
 	go api.WatchBatteryEvents(ctx, api.X1202StatusPath, 10*time.Second, proc.Emit)
