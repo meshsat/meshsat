@@ -148,3 +148,29 @@ func TestRegisterDefaults(t *testing.T) {
 		t.Fatalf("webhook MaxPayload = %d, want 0 (unlimited)", wh.MaxPayload)
 	}
 }
+
+// The 9704 lane has to outlast a sky gap: one try waits up to 150 s, and the
+// kits have gone 11 minutes without a pass. [MESHSAT-1282]
+func TestIMTRetriesOutlastASkyGap(t *testing.T) {
+	r := NewRegistry()
+	RegisterDefaults(r)
+	d, ok := r.Get("iridium_imt")
+	if !ok {
+		t.Fatal("iridium_imt not registered")
+	}
+	const perTry = 150 * time.Second
+	var covered time.Duration
+	wait := d.RetryConfig.InitialWait
+	for i := 0; i < d.RetryConfig.MaxRetries; i++ {
+		covered += perTry + wait
+		if wait *= 2; wait > d.RetryConfig.MaxWait {
+			wait = d.RetryConfig.MaxWait
+		}
+	}
+	if covered < 30*time.Minute {
+		t.Fatalf("the IMT lane gives up after %s, shorter than a sky gap the kits have already seen", covered)
+	}
+	if d.DefaultTTL > time.Hour {
+		t.Fatalf("TTL %s no longer bounds the wait", d.DefaultTTL)
+	}
+}
