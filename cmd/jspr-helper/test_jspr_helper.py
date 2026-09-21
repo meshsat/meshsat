@@ -133,3 +133,106 @@ class DrainTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ByteSerial:
+    """A serial port as bytes: what the modem has sent and the host not read."""
+
+    def __init__(self, pending=b""):
+        self.pending = bytearray(pending)
+
+    @property
+    def in_waiting(self):
+        return len(self.pending)
+
+    def read(self, n):
+        out = bytes(self.pending[:n])
+        del self.pending[:n]
+        return out
+
+    def reset_input_buffer(self):
+        self.pending.clear()
+
+
+class ByteHelper(jspr_helper.JSPRHelper):
+    """A helper on the real line reader, over a ByteSerial."""
+
+    def __init__(self, ser, on_write):
+        self.running = True
+        self._rx_buf = bytearray()
+        self._cmd_queue = queue.Queue()
+        self.ser = ser
+        self.emitted = []
+        self._on_write = on_write
+
+    def _serial_write_raw(self, method, target, json_body):
+        self.ser.pending += self._on_write(method, target, json.loads(json_body))
+
+    def emit(self, msg_type, code, target, json_str):
+        self.emitted.append((msg_type, code, target, json.loads(json_str)))
+
+
+class MTDuringMOTest(unittest.TestCase):
+    def test_mt_arriving_as_a_send_begins_is_kept(self):
+        """The 9704 keeps no copy of an MT: half a segment line on the wire
+        when a send starts must reach Go once the rest arrives. [MESHSAT-1282]"""
+        seg = ('299 messageTerminateSegment {"topic_id": 244, "message_id": 5, '
+               '"segment_length": 3, "segment_start": 0, "data": "QUJD"}\r').encode()
+        half = len(seg) // 2
+
+        def on_write(method, target, body):
+            if target == "messageOriginate":
+                return (seg[half:] +
+                        b'200 messageOriginate {"message_id": 23, "message_response": "message_accepted"}\r')
+            if target == "messageOriginateStatus" and body.get("action") == "cancel":
+                return (b'200 messageOriginateStatus {"message_id": 23}\r'
+                        b'299 messageOriginateStatus {"topic_id": 244, "message_id": 23, '
+                        b'"final_mo_status": "message_cancelled_pre_transit"}\r')
+            return b""
+
+        h = ByteHelper(ByteSerial(seg[:half]), on_write)
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=0.05)
+        segs = [e for e in h.emitted if e[2] == "messageTerminateSegment"]
+        self.assertEqual(len(segs), 1, h.emitted)
+        self.assertEqual(segs[0][3]["message_id"], 5)
+        self.assertEqual(segs[0][3]["data"], "QUJD")
+
+
+class HostCancelTest(unittest.TestCase):
+    def test_host_cancel_cancels_the_send_in_the_modem(self):
+        """Go asks to cancel the MT poll for a waiting message: the helper
+        cancels it officially and reports the modem's verdict. [MESHSAT-1282]"""
+        h = FakeHelper(modem("message_cancelled_pre_transit"))
+        h._cancel_refs = {7}
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5)
+        cancels = [w for w in h.written if w[1] == "messageOriginateStatus"]
+        self.assertEqual(len(cancels), 1)
+        res = h.results()
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0][3]["final_mo_status"], "message_cancelled_pre_transit")
+        self.assertEqual(h._cancel_refs, set())
+
+    def test_cancel_for_another_send_is_ignored(self):
+        h = FakeHelper(modem("message_cancelled_pre_transit"))
+        h._cancel_refs = {6}
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=0.05)
+        res = h.results()
+        # Only the timeout path cancelled it, not the request for ref 6.
+        self.assertEqual(len(res), 1)
+        self.assertEqual(h._cancel_refs, {6})
+
+    def test_stdin_cancel_skips_the_queue(self):
+        import os
+        r, w = os.pipe()
+        h = FakeHelper(modem(None))
+        h._cancel_refs = set()
+        os.write(w, b'{"cmd":"cancel_mo","request_reference":9}\n{"cmd":"send","method":"GET","target":"x","json":{}}\n')
+        os.close(w)
+        old = sys.stdin
+        sys.stdin = os.fdopen(r)
+        try:
+            h.stdin_reader()
+        finally:
+            sys.stdin = old
+        self.assertEqual(h._cancel_refs, {9})
+        self.assertEqual(h._cmd_queue.qsize(), 1)

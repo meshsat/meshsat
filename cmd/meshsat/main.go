@@ -2017,12 +2017,16 @@ func main() {
 				Msg("hub satellite fallback armed")
 		}
 
-		// MT poll: a 9704 fetches messages waiting at Iridium only inside a
-		// session, which under a masked sky means its own MO, so a kit that
-		// sends nothing over the satellite for IMTMTPollMin minutes sends a
-		// health summary to the Hub (taken off before the Hub's relay) at the
-		// lowest precedence. Satellite sessions on the kits are free demo
-		// usage (owner, 21 Sep 2026). [MESHSAT-1282]
+		// MT poll: Iridium rings the 9704 when a message waits for it and the
+		// modem pushes it to us, but under a masked sky the ring is missed
+		// and the message waits at Iridium until the kit next reaches the
+		// network, which in practice is its own MO. So a kit that sends
+		// nothing over the satellite for IMTMTPollMin minutes sends a health
+		// summary to the Hub (taken off before the Hub's relay) at Deferred
+		// precedence; a real message queued meanwhile makes it give way
+		// (IMTGateway.yieldDeferred). Our workaround, not a Ground Control
+		// practice. Satellite sessions on the kits are free demo usage
+		// (owner, 21 Sep 2026). [MESHSAT-1282]
 		if cfg.IMTMTPollMin > 0 && gwMgr.GatewayByInterfaceID("iridium_imt_0") != nil {
 			poller := hubreporter.NewMTPoller(hubreporter.MTPollConfig{
 				Interval: time.Duration(cfg.IMTMTPollMin) * time.Minute,

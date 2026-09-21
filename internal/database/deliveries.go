@@ -286,6 +286,24 @@ func (db *DB) CountOpenDeliveries(channel string) (int, error) {
 	return n, nil
 }
 
+// HasDueDeliveryAboveDeferred reports whether a delivery that outranks
+// Deferred is waiting on the channel and due now, the rows
+// GetPendingDeliveries would hand the worker next. The satellite gateway
+// asks while it sends the MT poll (Deferred), to let a real message go
+// first. [MESHSAT-1282]
+func (db *DB) HasDueDeliveryAboveDeferred(channel string) (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_deliveries
+		WHERE channel = ? AND status IN ('queued', 'retry')
+		  AND (next_retry IS NULL OR next_retry <= datetime('now'))
+		  AND (priority = 0 OR expires_at IS NULL OR expires_at > datetime('now'))
+		  AND (`+precedenceRankSQL+`) < 5)`, channel).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("due deliveries above deferred: %w", err)
+	}
+	return n == 1, nil
+}
+
 // CancelDelivery sets a pending delivery to 'dead' status.
 func (db *DB) CancelDelivery(id int64) error {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = 'cancelled', updated_at = datetime('now')
