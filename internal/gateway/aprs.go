@@ -322,8 +322,13 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 			status["last_decode_at"] = time.Unix(0, ts).UTC().Format(time.RFC3339)
 		}
 		status["tnc_bytes_in"] = g.kiss.BytesIn.Load()
+		var linkAge time.Duration
 		if at := g.kiss.OpenedAt(); !at.IsZero() {
 			status["link_opened_at"] = at.UTC().Format(time.RFC3339)
+			linkAge = time.Since(at)
+		}
+		if hint := serialTNCReceiveHint(tx, rx, linkAge); hint != "" {
+			status["receive_hint"] = hint
 		}
 	}
 	if g.supervisor != nil {
@@ -346,6 +351,24 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		status["receive_state"] = st
 	}
 	return status
+}
+
+// serialTNCReceiveHint names the one cause that makes a healthy serial TNC
+// look deaf from the first minute: it transmits, the peer answers, and nothing
+// ever comes up the KISS port. A PicoAPRS throws away every frame whose source
+// is the callsign set on the unit itself, so when two units change kits each
+// one discards its peer below KISS and both bridges read tx climbing, rx zero,
+// no bad frames, watchdog restart loops. It cost a night on 20 Sep 2026; the
+// cure is to transmit under the callsign of the unit that is plugged in.
+// Empty when receive is plausible or it is too early to say. [MESHSAT-1284]
+func serialTNCReceiveHint(tx, rx int64, linkAge time.Duration) string {
+	const minTX, minAge = 10, 5 * time.Minute
+	if tx < minTX || linkAge < minAge || rx*20 > tx {
+		return ""
+	}
+	return "transmitting but hearing almost nothing: if the peer kit is up, check that this bridge's callsign " +
+		"is NOT the one set on the peer's PicoAPRS unit; a unit discards frames sent from its own callsign " +
+		"(each bridge must transmit under the callsign of the unit plugged into it)"
 }
 
 // Start launches the Direwolf subprocess (when bundled), then connects to
