@@ -233,8 +233,13 @@ class ShutdownDecider:
 class ChargeWatch:
     """Raw SOC over the last CHARGE_WINDOW_SEC with mains present.
 
-    input_insufficient: mains present, a full window, and raw SOC down
-    CHARGE_DROP_POINTS from the window's max to the latest sample.  It
+    input_insufficient: mains present, a full window, raw SOC down
+    CHARGE_DROP_POINTS from the window's max to the latest sample, and the
+    pack below FULL_MIN_VOLTAGE when the voltage is known. A full pack
+    rests after the charger terminates and the gauge's raw reading drifts
+    down (parallax 21 Sep 2026: 101.9 -> 98.9 % over an hour at a flat
+    4.17 V, flagged "draining on mains" with a healthy 12 V supply); a pack
+    the input cannot carry sags below the recharge threshold instead.  It
     ends when SOC rises CHARGE_RISE_POINTS above the episode's low
     (a new episode then needs a fresh full window) or when mains has
     been gone for CHARGE_AC_GONE_SEC.
@@ -260,7 +265,7 @@ class ChargeWatch:
         self.low = None
         self.since = None
 
-    def update(self, t, soc, ac, full=None):
+    def update(self, t, soc, ac, full=None, voltage=None):
         """Feed one poll; returns log lines for episode changes."""
         events = []
         if ac == "0":
@@ -297,7 +302,8 @@ class ChargeWatch:
             elig = [s for s in self.samples if self.since is None or s[0] >= self.since]
             if len(elig) >= 2 and elig[-1][0] - elig[0][0] >= self.window:
                 peak = max(s for _, s in elig)
-                if peak - soc >= CHARGE_DROP_POINTS:
+                resting_full = voltage is not None and voltage >= FULL_MIN_VOLTAGE
+                if peak - soc >= CHARGE_DROP_POINTS and not resting_full:
                     self.input_insufficient = True
                     self.low = soc
                     events.append(
@@ -334,7 +340,7 @@ class Monitor:
     def step(self, t, voltage, soc, ac, in_grace=False):
         """t is a monotonic time in seconds; soc is the RAW register."""
         full = self.learner.update(voltage, soc, ac, t)
-        events = self.charge.update(t, soc, ac, full)
+        events = self.charge.update(t, soc, ac, full, voltage)
         if in_grace:
             decision = Decision("none", "boot grace")
         else:
