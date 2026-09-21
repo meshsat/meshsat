@@ -581,16 +581,30 @@ func cmdName(cmd byte) string {
 	return fmt.Sprintf("0x%02x", cmd)
 }
 
+// ExecTimeout bounds one command's execution. It must outlast the slowest
+// legitimate action: a mesh level-1 reset waits for the Meshtastic config
+// handshake, which may take up to transport.DefaultMeshConfigTimeout (60 s).
+// It was 30 s and shared with the reply, so on a radio with a large NodeDB
+// the reset reported agent_error ("context deadline exceeded") although the
+// reconnect succeeded. A var so tests can shorten it. [MESHSAT-810]
+var ExecTimeout = 90 * time.Second
+
+// replyTimeout bounds sealing and queueing the reply, on a context of its
+// own so a long execution cannot leave the reply without one.
+var replyTimeout = 30 * time.Second
+
 // run executes a request and sends the reply.
 func (s *Service) run(peer *database.OOBPeer, ifaceID, fromAddr string, frame Frame) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ectx, ecancel := context.WithTimeout(context.Background(), ExecTimeout)
 	o := Origin{PeerID: peer.PeerID, Alias: peer.Alias, Role: peer.Role, Bearer: ifaceID, FromAddr: fromAddr}
-	res := s.Execute(ctx, o, frame.Cmd, frame.Args)
+	res := s.Execute(ectx, o, frame.Cmd, frame.Args)
+	ecancel()
 	s.recordCommand(o, frame.Cmd, frame.Counter, res)
 	if frame.NoReply {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), replyTimeout)
+	defer cancel()
 	s.reply(ctx, peer, ifaceID, fromAddr, frame, res)
 	if res.FollowUp && res.Code == RCOK {
 		s.after(FollowUpDelay, func() {

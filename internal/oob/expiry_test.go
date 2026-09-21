@@ -177,3 +177,38 @@ func TestSend_StampsAnExpiry(t *testing.T) {
 		}
 	}
 }
+
+// A command that uses its whole execution window still gets its reply out:
+// the reply has a context of its own. [MESHSAT-810]
+func TestRun_ReplyOutlivesALongExecution(t *testing.T) {
+	h := newHarness(t, RoleControl, false)
+	old := ExecTimeout
+	ExecTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { ExecTimeout = old })
+
+	var deadlineLeft time.Duration
+	h.svc.d.Actions["mesh"] = map[byte]Action{LevelSoft: func(ctx context.Context) error {
+		dl, _ := ctx.Deadline()
+		deadlineLeft = time.Until(dl)
+		<-ctx.Done() // a handshake that runs to the end of the window
+		return nil   // and then succeeds, as the transport does
+	}}
+	var replyCtxErr error
+	send := h.svc.d.Send
+	h.svc.d.Send = func(ctx context.Context, iface, addr, text string) (int64, error) {
+		replyCtxErr = ctx.Err()
+		return send(ctx, iface, addr, text)
+	}
+	h.svc.HandleInbound(context.Background(), "cellular_0", "+31653207829",
+		h.peerFrame(t, 1, CmdReset, EncodeResetArgs(TargetMesh, LevelSoft), true, false))
+	waitFor(t, func() bool { return len(h.sends()) == 1 })
+	if deadlineLeft > ExecTimeout || deadlineLeft <= 0 {
+		t.Fatalf("action got %s of deadline, want the exec timeout", deadlineLeft)
+	}
+	if replyCtxErr != nil {
+		t.Fatalf("the reply was queued on an expired context: %v", replyCtxErr)
+	}
+	if _, ra := h.openReply(t, h.sends()[0].text); ra.RC != RCOK {
+		t.Fatalf("a reset that succeeded replied %s", ra.RC)
+	}
+}

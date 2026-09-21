@@ -194,6 +194,9 @@ func main() {
 		directMesh := transport.NewDirectMeshTransport(meshPort)
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		directMesh.SetConfigTimeout(time.Duration(cfg.MeshConfigTimeoutSec) * time.Second)
+		// An OOB mesh reset waits for this handshake: give the executor
+		// the handshake plus margin, never less than its default. [MESHSAT-810]
+		oob.ExecTimeout = oobExecTimeout(time.Duration(cfg.MeshConfigTimeoutSec)*time.Second, oob.ExecTimeout)
 		directMesh.SetTimeSyncRemote(cfg.MeshTimeSyncRemote) // [MESHSAT-783]
 		directMesh.SetClockTrustFn(clockGuard.Trusted)       // [MESHSAT-1056]
 		mesh = directMesh
