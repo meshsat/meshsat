@@ -127,3 +127,42 @@ func TestRefreshFallsBackToTheTLEAPI(t *testing.T) {
 		t.Fatalf("source %s, want tle-api", src)
 	}
 }
+
+// The fallback API must be asked for a stable order: unsorted, its pages shifted between
+// requests and the kits stored some satellites twice and others not at all. [MESHSAT-1242]
+func TestTLEAPIIsAskedForAStableOrder(t *testing.T) {
+	if !strings.Contains(defaultTLEAPIURL, "sort=id") || !strings.Contains(defaultTLEAPIURL, "sort-dir=asc") {
+		t.Fatalf("default TLE API URL has no stable sort: %s", defaultTLEAPIURL)
+	}
+}
+
+// A satellite handed over twice keeps only its newest element set.
+func TestNewestPerSatellite(t *testing.T) {
+	sample := parse3LE(bundledTLEs, 0)
+	a, b := sample[0], sample[1]
+	older := a
+	// Same satellite, an epoch one day earlier (columns 19-32 of line 1).
+	ep := tleEpochUnix(a.Line1)
+	if ep == 0 {
+		t.Fatal("sample has no epoch")
+	}
+	day := []byte(older.Line1)
+	// Decrement the day-of-year field's last integer digit (col 22) to make it older.
+	if day[22] > '0' {
+		day[22]--
+	} else {
+		day[22] = '9'
+		day[21]--
+	}
+	older.Line1 = string(day)
+	if tleEpochUnix(older.Line1) >= ep {
+		t.Fatalf("test setup: the copy is not older")
+	}
+	got := newestPerSatellite([]database.TLECacheEntry{older, b, a, b})
+	if len(got) != 2 {
+		t.Fatalf("got %d sets, want 2 (one per satellite)", len(got))
+	}
+	if got[0].SatelliteName != a.SatelliteName || got[0].Line1 != a.Line1 {
+		t.Fatalf("kept %q, want the newest set of %s", got[0].Line1, a.SatelliteName)
+	}
+}
