@@ -61,6 +61,7 @@ type jsprHelperPort struct {
 	// serial watchdog an MO waiting for a satellite looks exactly like a
 	// dead port. [MESHSAT-1282]
 	moInFlightUntil time.Time
+	moRef           int // request_reference of the MO with the helper, 0 when none
 }
 
 // startJSPRHelper launches the helper subprocess (Python or C).
@@ -142,6 +143,7 @@ func (h *jsprHelperPort) readLoop() {
 		h.lastRead = time.Now()
 		if msg.Target == "messageOriginateStatus" {
 			h.moInFlightUntil = time.Time{} // final status: the MO is over
+			h.moRef = 0
 		}
 		h.mu.Unlock()
 		h.byteCond.Signal()
@@ -281,6 +283,7 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 	h.mu.Lock()
 	h.lastRead = time.Now()
 	h.moInFlightUntil = time.Now().Add(jsprMOTimeout + 30*time.Second)
+	h.moRef = requestRef
 	h.mu.Unlock()
 
 	_, writeErr := h.stdin.Write(cmdBytes)
@@ -288,6 +291,29 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 		return fmt.Errorf("write send_mo: %w", writeErr)
 	}
 	return nil
+}
+
+// CancelMO asks the helper to cancel the MO it is sending, with the
+// official messageOriginateStatus cancel. The send's own result still
+// arrives as usual: cancelled, or mo_ack_received when it was too late.
+// False when no MO is with the helper. [MESHSAT-1282]
+func (h *jsprHelperPort) CancelMO() bool {
+	h.mu.Lock()
+	ref := h.moRef
+	inFlight := ref != 0 && time.Now().Before(h.moInFlightUntil)
+	h.mu.Unlock()
+	if !inFlight {
+		return false
+	}
+	cmd, _ := json.Marshal(struct {
+		Cmd              string `json:"cmd"`
+		RequestReference int    `json:"request_reference"`
+	}{"cancel_mo", ref})
+	if _, err := h.stdin.Write(append(cmd, '\n')); err != nil {
+		log.Warn().Err(err).Int("ref", ref).Msg("imt: write cancel_mo")
+		return false
+	}
+	return true
 }
 
 // splitJSPRLine splits "METHOD target {json}" into parts.

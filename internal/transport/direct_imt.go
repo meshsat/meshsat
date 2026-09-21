@@ -1218,61 +1218,122 @@ func findJSPRHelper() string {
 	return ""
 }
 
-// resetModemJSPR cycles I_EN LOW→HIGH via the Linux GPIO chardev ioctl to
-// reset the 9704's JSPR state machine. After an unclean disconnect, the
-// modem's JSPR parser is stuck in a stale session and responds with binary
-// garbage. Cycling I_EN clears this without a full power cycle.
-//
-// Uses /dev/gpiochipN directly (no gpioset/gpioget binaries needed — they
-// may not be installed inside the Docker container). [MESHSAT-403]
+// CancelMO cancels the MO the modem is sending, if any; its Send then
+// returns the modem's verdict (cancelled, or sent when it was too late).
+// [MESHSAT-1282]
+func (t *DirectIMTTransport) CancelMO() bool {
+	t.mu.Lock()
+	helper, ok := t.file.(*jsprHelperPort)
+	t.mu.Unlock()
+	return ok && helper.CancelMO()
+}
+
 // Reconnect re-runs the JSPR connect sequence. Soft level of the OOB RESET
 // command. [MESHSAT-756]
 func (t *DirectIMTTransport) Reconnect(_ context.Context) error {
 	return t.connect()
 }
 
-// DeviceReset cycles the modem's I_EN line (power enable) when the GPIO is
-// configured, then reconnects. Device level of the OOB RESET command.
-// [MESHSAT-756]
+// DeviceReset power-cycles the modem through I_EN and opens a fresh JSPR
+// session on it. Device level of the OOB RESET command. [MESHSAT-756]
+//
+// It is a full reconnect, because connect() does the power cycle: before
+// 21 Sep 2026 it cycled I_EN with the helper still attached and then
+// called connect(), which returned at once on a connected transport, so
+// the rebooted modem never got its apiVersion, simConfig and
+// operationalState again. [MESHSAT-1282]
 func (t *DirectIMTTransport) DeviceReset(_ context.Context) error {
 	if t.gpioIEN <= 0 {
 		return fmt.Errorf("imt: I_EN GPIO not configured")
 	}
-	t.resetModemJSPR()
-	return t.connect()
+	return t.reconnect()
 }
 
+// 9704 power sequencing, from Ground Control's RockBLOCK 9704 hardware
+// guide: after driving I_EN high, wait for I_BTD to go high before driving
+// it low again, and after driving it low, wait for I_BTD to go low before
+// driving it high; "Failure to follow this procedure may result in damage
+// to the 9704 module." Package variables so tests can drive a fake modem.
+var (
+	imtGPIOSet      = gpioSetValue
+	imtGPIOGet      = gpioGetValue
+	imtShutdownWait = 30 * time.Second // I_EN low until I_BTD low
+	imtBootWait     = 30 * time.Second // I_EN high until I_BTD high
+	imtBTDPoll      = 250 * time.Millisecond
+	imtBootedSettle = 5 * time.Second // after I_BTD high, before JSPR
+)
+
+// I_BTD levels: high once the modem has booted, low once it has shut down.
+const (
+	imtBootedLevel   = 1
+	imtShutdownLevel = 0
+)
+
+// resetModemJSPR power-cycles the 9704 through I_EN so the connect that
+// follows meets a freshly booted modem: an unclean disconnect (container
+// kill) leaves its JSPR parser in a stale session that answers with binary
+// garbage. [MESHSAT-403]
+//
+// The cycle follows the guide's sequence: I_EN low, wait for I_BTD low (the
+// modem has shut down), I_EN high, wait for I_BTD high (booted). Until
+// 21 Sep 2026 it held I_EN low for a fixed 2 s, and I_BTD read high again
+// 2 s later on both kits, so the modem was switched back on before it had
+// finished shutting down, on every bridge start. [MESHSAT-1282]
+//
+// A modem whose I_BTD already reads low is off or still booting; it gets
+// I_EN high and the boot wait, since a boot is the fresh start this is for,
+// and driving I_EN low before I_BTD is high would break the other half of
+// the rule. Uses /dev/gpiochipN directly (no gpioset/gpioget binaries in
+// the container).
 func (t *DirectIMTTransport) resetModemJSPR() {
 	chipPath := "/dev/" + t.gpioChip
-
 	log.Info().Str("chip", chipPath).Int("i_en", t.gpioIEN).Int("i_btd", t.gpioIBTD).
-		Msg("imt: cycling I_EN to reset JSPR state")
+		Msg("imt: power-cycling the 9704 through I_EN")
 
-	// I_EN LOW for 2s
-	if err := gpioSetValue(chipPath, t.gpioIEN, 0); err != nil {
-		log.Warn().Err(err).Msg("imt: failed to drive I_EN LOW")
-		return
+	if btd, err := imtGPIOGet(chipPath, t.gpioIBTD); err == nil && btd == imtShutdownLevel {
+		log.Info().Msg("imt: I_BTD already low, modem off or booting: I_EN high and wait for boot")
+	} else {
+		if err := imtGPIOSet(chipPath, t.gpioIEN, 0); err != nil {
+			log.Warn().Err(err).Msg("imt: failed to drive I_EN LOW")
+			return
+		}
+		start := time.Now()
+		if t.waitBTD(chipPath, imtShutdownLevel, imtShutdownWait) {
+			log.Info().Dur("took", time.Since(start).Truncate(10*time.Millisecond)).Msg("imt: I_BTD LOW, modem shut down")
+		} else {
+			// The pin read or the wiring is wrong, or the modem hung. A modem
+			// left switched off is a dead satellite lane, so boot it anyway,
+			// after the full wait rather than 2 s, and say so.
+			log.Error().Dur("waited", imtShutdownWait).
+				Msg("imt: I_BTD did not go LOW after I_EN LOW, switching the modem back on regardless")
+		}
 	}
-	time.Sleep(2 * time.Second)
 
-	// I_EN HIGH
-	if err := gpioSetValue(chipPath, t.gpioIEN, 1); err != nil {
+	if err := imtGPIOSet(chipPath, t.gpioIEN, 1); err != nil {
 		log.Warn().Err(err).Msg("imt: failed to drive I_EN HIGH")
 		return
 	}
-
-	// Wait for I_BTD HIGH (modem ready), up to 30s
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		val, err := gpioGetValue(chipPath, t.gpioIBTD)
-		if err == nil && val == 1 {
-			log.Info().Msg("imt: I_BTD HIGH — modem JSPR state reset complete")
-			time.Sleep(5 * time.Second)
-			return
-		}
-		time.Sleep(1 * time.Second)
+	start := time.Now()
+	if !t.waitBTD(chipPath, imtBootedLevel, imtBootWait) {
+		log.Warn().Dur("waited", imtBootWait).Msg("imt: I_BTD did not go HIGH after I_EN HIGH")
+		return
 	}
-	log.Warn().Msg("imt: I_BTD did not go HIGH within 30s after I_EN cycle")
+	log.Info().Dur("took", time.Since(start).Truncate(10*time.Millisecond)).Msg("imt: I_BTD HIGH, modem booted")
+	time.Sleep(imtBootedSettle)
+}
+
+// waitBTD polls I_BTD until it reads level or the wait runs out.
+func (t *DirectIMTTransport) waitBTD(chipPath string, level int, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		if v, err := imtGPIOGet(chipPath, t.gpioIBTD); err == nil && v == level {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(imtBTDPoll)
+	}
 }
 
 // gpioSetValue drives a GPIO pin to the given value (0 or 1) using the

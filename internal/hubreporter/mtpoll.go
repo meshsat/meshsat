@@ -9,13 +9,16 @@ import (
 
 // MTPoller makes sure messages waiting at Iridium for this kit come down.
 //
-// A RockBLOCK 9704 has no mailbox check (Ground Control's library offers
-// none): the network pushes a queued MT when the modem is in a session, and
-// under a sky that buildings hide most of the time that in practice means
-// the kit's own MO. On 21 Sep 2026 a kit-to-kit relay and two Hub pings
-// waited at Iridium for over an hour while the kit flickered between 0 and
-// 4 bars, and came down in the same second a short MO from that kit opened
-// a session. So when the kit has been quiet on the satellite for a while,
+// A RockBLOCK 9704 has no mailbox check (no JSPR command for one exists):
+// Iridium rings the modem (one or two ring cycles, Cloudloop's ringStyle)
+// and the modem pushes the message to the host. Under a sky that buildings
+// hide most of the time the ring is missed, and the message waits at
+// Iridium until the kit next reaches the network. On 21 Sep 2026 a
+// kit-to-kit relay and two Hub pings waited there for over an hour while
+// the kit flickered between 0 and 4 bars, and came down in the same second
+// a short MO from that kit opened a session. This is our workaround for a
+// masked sky; Ground Control's guidance is only to keep reading the serial
+// line, which the helper does. So when the kit has been quiet on the satellite for a while,
 // the poller sends one small MO: a health summary for the Hub, which the Hub
 // takes off before its relay, so nothing reaches the other kit.
 type MTPoller struct {

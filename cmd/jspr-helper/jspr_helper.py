@@ -130,6 +130,7 @@ class JSPRHelper:
         self.running = True
         self._rx_buf = bytearray()
         self._cmd_queue = queue.Queue()
+        self._cancel_refs = set()  # request_references Go asked to cancel
 
         # Set FTDI latency timer to 1ms if possible
         dev = os.path.basename(port)
@@ -216,7 +217,18 @@ class JSPRHelper:
         try:
             self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog, timeout_s)
         finally:
+            getattr(self, "_cancel_refs", set()).discard(request_reference)
             self._drain_stale_commands()
+
+    def _take_cancel(self, request_reference):
+        """True once if Go asked to cancel the send carrying this reference.
+        Go does that for the MT poll when a real message is waiting behind
+        it. [MESHSAT-1282]"""
+        refs = getattr(self, "_cancel_refs", None)
+        if refs is None or request_reference not in refs:
+            return False
+        refs.discard(request_reference)
+        return True
 
     def _cancel_and_settle(self, topic_id, msg_id, request_reference, mlog, settle_s=20):
         """Give up on an MO the modem has already accepted, the official way.
@@ -264,14 +276,17 @@ class JSPRHelper:
         return False
 
     def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog, timeout_s=240):
-        # Drain pending data — emit complete lines, then clear partial data
+        # Hand over every complete line already waiting. A partial line stays
+        # in the buffer and completes with the next read: the modem pushes
+        # an MT (messageTerminate and its segments) whenever it arrives, it
+        # keeps no copy (Ground Control: "does not support onboard message
+        # caching"), and flushing the input here used to throw away an MT
+        # that was arriving as a send began. [MESHSAT-1282]
         for resp in self.serial_read_lines():
             if resp["code"] == 299:
                 self.emit("unsolicited", resp["code"], resp["target"], resp["json_str"])
             else:
                 self.emit("response", resp["code"], resp["target"], resp["json_str"])
-        self.ser.reset_input_buffer()
-        self._rx_buf = bytearray()
         time.sleep(0.1)  # 100ms settle — match standalone test script
 
         # Drain any stale messageOriginateStatus from previous MO
@@ -304,6 +319,14 @@ class JSPRHelper:
                 return
             if time.monotonic() > full_deadline:
                 break
+
+            # Go asked to give this send up (the MT poll yielding to a real
+            # message). Only possible once the modem has named the message.
+            if msg_id is not None and self._take_cancel(request_reference):
+                mlog(f"host cancelled msg_id={msg_id}")
+                if self._cancel_and_settle(topic_id, msg_id, request_reference, mlog):
+                    return
+                mlog("cancel did not settle, still waiting for the modem")
 
             lines = self.serial_read_lines()
             if not lines:
@@ -449,6 +472,11 @@ class JSPRHelper:
                     continue
                 try:
                     cmd = json.loads(line)
+                    # A cancel must reach a send that is blocking the event
+                    # loop, so it never waits in the queue. [MESHSAT-1282]
+                    if isinstance(cmd, dict) and cmd.get("cmd") == "cancel_mo":
+                        self._cancel_refs.add(cmd.get("request_reference"))
+                        continue
                     self._cmd_queue.put(cmd)
                 except json.JSONDecodeError as e:
                     log(f"stdin parse error: {e}")

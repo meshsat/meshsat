@@ -1508,6 +1508,7 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	}
 	msg.MsgRef = del.MsgRef // feed correlation only, never serialised [MESHSAT-826]
 	msg.PlainText = del.PlainPreview
+	msg.Precedence = del.Precedence
 	if del.Destination != "" && strings.HasPrefix(w.channelID, "cellular") {
 		msg.SMSDestinations = []string{del.Destination}
 	}

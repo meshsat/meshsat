@@ -116,6 +116,9 @@ func (g *IMTGateway) sendIMT(ctx context.Context, msg *transport.MeshMessage) er
 	var result *transport.SatResult
 	var err error
 
+	stopYield := g.yieldDeferred(ctx, msg)
+	defer stopYield()
+
 	text := msg.DecodedText
 	if text == "" && len(msg.RawPayload) > 0 {
 		data = msg.RawPayload
@@ -275,4 +278,53 @@ func (g *IMTGateway) receivePendingMT(_ context.Context) {
 			log.Warn().Msg("imt: inbound channel full, MT dropped")
 		}
 	}
+}
+
+// imtYieldPoll is how often a Deferred send checks for a message waiting
+// behind it. A package variable so tests can shorten it.
+var imtYieldPoll = 2 * time.Second
+
+// yieldDeferred lets a Deferred send (the MT poll) give way. The modem sends
+// one message at a time and a send may wait minutes for a satellite, so a
+// message queued meanwhile used to wait behind the poll: 1m44s for a
+// handheld's text on 21 Sep 2026. While a Deferred send is on the modem this
+// checks every imtYieldPoll for a delivery that outranks it and is due on
+// this channel, and if one is, cancels the send in the modem (official
+// cancel). The real message's own session brings down whatever the poll
+// was fetching; the poll's delivery takes the worker's usual retry.
+// Returns the function that stops the watch. [MESHSAT-1282]
+func (g *IMTGateway) yieldDeferred(ctx context.Context, msg *transport.MeshMessage) func() {
+	canceller, ok := g.sat.(interface{ CancelMO() bool })
+	if !ok || g.db == nil || msg.Precedence != "Deferred" {
+		return func() {}
+	}
+	g.packetMu.RLock()
+	channel := g.packetIface
+	g.packetMu.RUnlock()
+	if channel == "" {
+		channel = "iridium_imt_0"
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		t := time.NewTicker(imtYieldPoll)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				due, err := g.db.HasDueDeliveryAboveDeferred(channel)
+				if err != nil || !due {
+					continue
+				}
+				if canceller.CancelMO() {
+					log.Info().Str("channel", channel).Str("msg_ref", msg.MsgRef).
+						Msg("imt: a message is waiting, the Deferred send gives way")
+					g.emit("yield", "Deferred send cancelled for a waiting message")
+				}
+				return
+			}
+		}
+	}()
+	return cancel
 }
