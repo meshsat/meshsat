@@ -52,6 +52,10 @@ type MessageDelivery struct {
 	Precedence    string     `json:"precedence,omitempty"`     // STANAG 4406 Edition 2 level (MESHSAT-543)
 	Destination   string     `json:"destination,omitempty"`    // bearer address for reply-to-sender sends; empty = interface default (MESHSAT-756)
 	Class         string     `json:"class"`                    // DeliveryClassMessage (default) or DeliveryClassOOB (MESHSAT-756)
+	// PlainPreview is TextPreview as it was before the worker's egress
+	// transforms replaced it with ciphertext. In memory only, never stored:
+	// it lets the SMS history keep the words that were sent.
+	PlainPreview string `json:"-"`
 	CreatedAt     string     `json:"created_at"`
 	UpdatedAt     string     `json:"updated_at"`
 }

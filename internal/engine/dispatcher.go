@@ -1347,6 +1347,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// as defense-in-depth for cellular we validate and retry (new nonce) if
 	// any non-GSM character appears.
 	encrypted := false
+	del.PlainPreview = del.TextPreview
 	// OOB frames skip interface transforms: they carry their own AEAD and
 	// interface-level encryption would hide the sentinel from a peer that
 	// has the management key but not the interface key. [MESHSAT-756]
@@ -1506,6 +1507,7 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		msg.PortNum = 256 // PRIVATE_APP
 	}
 	msg.MsgRef = del.MsgRef // feed correlation only, never serialised [MESHSAT-826]
+	msg.PlainText = del.PlainPreview
 	if del.Destination != "" && strings.HasPrefix(w.channelID, "cellular") {
 		msg.SMSDestinations = []string{del.Destination}
 	}

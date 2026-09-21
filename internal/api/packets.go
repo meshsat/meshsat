@@ -98,19 +98,3 @@ func (s *Server) handleGetPacketRates(w http.ResponseWriter, r *http.Request) {
 func (s *Server) recordMeshTX(req transport.SendRequest) {
 	s.processor.Packets().Add(engine.MeshTXRecord(s.mesh, "mesh_0", req, ""))
 }
-
-// recordSMSTX adds an SMS tx record for a message the API sent straight
-// through the modem (POST /api/cellular/sms/send). onAir is the text as
-// sent (bytes), plain the operator's text (the decoded text, like the
-// inbound side records). [MESHSAT-826]
-func (s *Server) recordSMSTX(to, onAir, plain string) {
-	s.processor.Packets().Add(gateway.PacketRecord{
-		Time:   time.Now(),
-		Bearer: gateway.BearerSMS,
-		Dir:    gateway.DirTX,
-		Iface:  "cellular_0",
-		To:     to,
-		Bytes:  len(onAir),
-		Text:   plain,
-	})
-}
