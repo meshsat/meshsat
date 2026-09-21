@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
+import TimeSyncPanel from '@/components/TimeSyncPanel.vue'
 import api from '@/api/client'
 
 const store = useMeshsatStore()
@@ -3213,6 +3214,9 @@ onUnmounted(() => {
           </div>
           <p v-if="routingWarning" class="mt-2 text-[10px] text-amber-400 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">{{ routingWarning }}</p>
         </div>
+
+        <!-- Bridge-to-bridge time sync: peers and request schedule [MESHSAT-778] -->
+        <TimeSyncPanel />
 
         <!-- TCP Peers -->
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
