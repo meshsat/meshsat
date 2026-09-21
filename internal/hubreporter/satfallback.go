@@ -211,30 +211,23 @@ func (sf *SatFallback) sendHealth() {
 	if sf.cfg.SendFn == nil || sf.cfg.HealthFn == nil {
 		return
 	}
-	health := sf.cfg.HealthFn()
-
-	var ifaces []SatIfaceStatus
-	for _, ih := range health.Interfaces {
-		online := ih.Status == "online"
-		sig := byte(ih.SignalBars)
-		ifaces = append(ifaces, SatIfaceStatus{
-			Name:   ih.Name,
-			Online: online,
-			Signal: sig,
-		})
-	}
-
-	payload := EncodeSatHealth(
-		sf.cfg.BridgeID,
-		uint32(health.UptimeSec),
-		byte(health.CPUPct),
-		byte(health.MemPct),
-		byte(health.DiskPct),
-		ifaces,
-		time.Now().UTC(),
-	)
+	payload := HealthFrame(sf.cfg.BridgeID, sf.cfg.HealthFn(), time.Now().UTC())
 	log.Info().Int("bytes", len(payload)).Msg("satfallback: sending health via satellite")
 	if err := sf.cfg.SendFn(payload); err != nil {
 		log.Error().Err(err).Msg("satfallback: failed to send health")
 	}
+}
+
+// HealthFrame encodes a bridge health summary as a satellite uplink frame.
+func HealthFrame(bridgeID string, health BridgeHealth, now time.Time) []byte {
+	var ifaces []SatIfaceStatus
+	for _, ih := range health.Interfaces {
+		ifaces = append(ifaces, SatIfaceStatus{
+			Name:   ih.Name,
+			Online: ih.Status == "online",
+			Signal: byte(ih.SignalBars),
+		})
+	}
+	return EncodeSatHealth(bridgeID, uint32(health.UptimeSec), byte(health.CPUPct), byte(health.MemPct),
+		byte(health.DiskPct), ifaces, now)
 }

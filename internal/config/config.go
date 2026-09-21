@@ -148,6 +148,9 @@ type Config struct {
 	HubFallbackPositionMin int    // position frame interval in minutes (default 15)
 	HubFallbackHealthMin   int    // health frame interval in minutes (default 60)
 	HubFallbackBearer      string // auto | satellite | sms (default auto)
+	// IMTMTPollMin is how long the 9704 may stay quiet before the bridge
+	// sends a short MO to fetch waiting MTs; 0 turns it off. [MESHSAT-1282]
+	IMTMTPollMin int
 
 	// Hub WebSocket relay: serve this bridge's API to the tenant's other
 	// bridges (phones) through the Hub when no direct path exists [MESHSAT-613]
@@ -227,6 +230,7 @@ func Load() *Config {
 		HubFallbackPositionMin: envInt("MESHSAT_HUB_FALLBACK_POSITION_MIN", 15),
 		HubFallbackHealthMin:   envInt("MESHSAT_HUB_FALLBACK_HEALTH_MIN", 60),
 		HubFallbackBearer:      envStr("MESHSAT_HUB_FALLBACK_BEARER", "auto"),
+		IMTMTPollMin:           envInt("MESHSAT_IMT_MT_POLL_MIN", 10),
 
 		HubRelayEnabled: envBool("MESHSAT_HUB_RELAY_ENABLED", true),
 		HubAPIURL:       envStr("MESHSAT_HUB_API_URL", ""),

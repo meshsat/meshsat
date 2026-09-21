@@ -271,6 +271,17 @@ func (db *DB) DeliveryStatsAll() ([]DeliveryStats, error) {
 	return result, nil
 }
 
+// CountOpenDeliveries counts the deliveries on a channel that have not
+// finished: queued, sending or waiting for a retry.
+func (db *DB) CountOpenDeliveries(channel string) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM message_deliveries WHERE channel = ? AND status IN ('queued', 'sending', 'retry')`, channel).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count open deliveries: %w", err)
+	}
+	return n, nil
+}
+
 // CancelDelivery sets a pending delivery to 'dead' status.
 func (db *DB) CancelDelivery(id int64) error {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = 'cancelled', updated_at = datetime('now')
