@@ -23,6 +23,28 @@ body {
   color: #040406;
 }
 
+/* The TTC booth screen (TtcView sets html.ttc-mode while it is mounted) is
+   one fixed page on a touch panel. No page zoom (pinch, double tap), no
+   swipe back/forward or pull bounce, no text selection, long-press callout
+   or tap flash. Taps still reach every button, and the packet drawer
+   (.ttc-scroll) still scrolls with one finger; pan-x pan-y leaves pinch
+   out, so a pinch that starts there does not zoom either. [MESHSAT-826] */
+html.ttc-mode,
+html.ttc-mode body {
+  touch-action: none;
+  overscroll-behavior: none;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+html.ttc-mode img { -webkit-user-drag: none; }
+html.ttc-mode .ttc-scroll {
+  touch-action: pan-x pan-y;
+  overscroll-behavior: contain;
+}
+
 /* Hide the mouse cursor AND scrollbars on kiosk browsers. Driven
    by the `shell-kiosk` class set on <html> by main.js when the URL
    carries `?shell=kiosk` (or the UA looks like a kiosk shell).

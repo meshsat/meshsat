@@ -1040,7 +1040,19 @@ function qrTap() {
   if (eggArmedAt && now - eggArmedAt < EGG_QR_WINDOW_MS) { eggArmedAt = 0; router.push('/') }
   else eggArmedAt = 0
 }
+// The booth screen is one fixed page on a touch panel: page zoom, the
+// long-press menu, dragging and scrolling the page are not part of it. A
+// visitor's two-finger pinch zoomed the whole panel on 21 Sep 2026. CSS on
+// html.ttc-mode (style.css) switches the browser gestures off; these catch
+// what CSS cannot. All of it lives only while this view is mounted, so the
+// normal dashboard keeps its scrolling. [MESHSAT-826]
+function blockEvent(e) { e.preventDefault() }
+function blockMultiTouch(e) { if (e.touches && e.touches.length > 1) e.preventDefault() }
+function blockCtrlWheel(e) { if (e.ctrlKey) e.preventDefault() }
+const ZOOM_KEYS = new Set(['+', '=', '-', '_', '0'])
+
 function onKey(e) {
+  if ((e.ctrlKey || e.metaKey) && ZOOM_KEYS.has(e.key)) { e.preventDefault(); return }
   if (composer.value.open) {
     if (e.key === 'Escape') { closeComposer(); return }
     if (e.key === 'Enter') { sendComposed(); return }
@@ -1085,6 +1097,11 @@ onMounted(async () => {
   document.documentElement.classList.add('ttc-mode')
   window.addEventListener('keydown', onKey)
   window.addEventListener('pointerdown', touch, { passive: true })
+  window.addEventListener('contextmenu', blockEvent)
+  window.addEventListener('dragstart', blockEvent)
+  window.addEventListener('gesturestart', blockEvent)
+  window.addEventListener('touchmove', blockMultiTouch, { passive: false })
+  window.addEventListener('wheel', blockCtrlWheel, { passive: false })
   // The operator's NVIS night theme (body.theme-nvis) repaints every grey
   // as phosphor green; the booth screen shows the brand, so lift it while
   // TTC mode is up and put it back on exit.
@@ -1101,6 +1118,11 @@ onUnmounted(() => {
   document.documentElement.classList.remove('ttc-mode')
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointerdown', touch)
+  window.removeEventListener('contextmenu', blockEvent)
+  window.removeEventListener('dragstart', blockEvent)
+  window.removeEventListener('gesturestart', blockEvent)
+  window.removeEventListener('touchmove', blockMultiTouch)
+  window.removeEventListener('wheel', blockCtrlWheel)
   if (hadNvis) document.body.classList.add('theme-nvis')
   if (sse) sse.close()
   timers.forEach(clearInterval)
@@ -1427,7 +1449,7 @@ onUnmounted(() => {
         <span class="ml-auto font-mono text-[11px] text-gray-500">{{ sseUp ? 'live' : 'stream reconnecting' }}</span>
         <button v-if="view !== 'nerds'" type="button" @click="drawer = false" class="ml-3 font-mono text-xs text-gray-400 hover:text-gray-100 px-2">close</button>
       </div>
-      <div class="flex-1 min-h-0 overflow-auto px-4 pb-3 pt-2">
+      <div class="ttc-scroll flex-1 min-h-0 overflow-auto px-4 pb-3 pt-2">
         <!-- packets -->
         <table v-if="tab === 'packets'" class="w-full font-mono text-[11px] leading-5 tabular-nums">
           <thead class="text-gray-500 text-left sticky top-0 bg-gray-900"><tr>
