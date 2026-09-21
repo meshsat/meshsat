@@ -227,10 +227,20 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 	// dead. Report it as silent so the panel says so; no rung runs, since a
 	// gateway restart or a port reopen cannot switch a radio on. Frames
 	// arriving clear it through the heard branch above. [MESHSAT-1028]
-	if h.Serial && h.BytesIn == 0 && !h.LinkOpenedAt.IsZero() && now.Sub(h.LinkOpenedAt) >= w.cfg.ColdStart {
+	if h.Serial && h.BytesIn == 0 && !h.LinkOpenedAt.IsZero() {
 		w.deaf = false
 		w.step = 0
 		w.stepAt = time.Time{}
+		if now.Sub(h.LinkOpenedAt) < w.cfg.ColdStart {
+			// Inside the cold start nothing has come up the link yet, and
+			// no rung can make a radio talk. A peer heard before a restart
+			// used to make this look deaf, and the rung-1 gateway restart
+			// reopened the link and started the cold start over, so an
+			// idle PicoAPRS saw a restart every few minutes instead of
+			// being reported silent. Wait. [MESHSAT-1028]
+			w.setState(ReceiveStateQuiet)
+			return
+		}
 		if !w.silentLinkAt.Equal(h.LinkOpenedAt) {
 			w.silentLinkAt = h.LinkOpenedAt
 			w.notify("aprs_rx_silent", fmt.Sprintf("APRS TNC silent: no bytes from the TNC for %s since the link opened; a PicoAPRS that is off needs a 3 s PTT press", now.Sub(h.LinkOpenedAt).Truncate(time.Second)))
