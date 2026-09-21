@@ -29,6 +29,11 @@ const DefaultDiscoveryInterval = 10 * time.Minute
 // last asked or answered on it. Matches the stale-peer prune.
 const peerTTL = 10 * time.Minute
 
+// requestWireBytes is a time sync request as it goes on air on a slow
+// bearer: the 26-byte packet inside a 16-byte AX.25 UI header, the FCS and
+// the KISS/HDLC flags. Used to hold the request to an airtime budget.
+const requestWireBytes = 48
+
 // seenRequestTTL bounds the request dedup window: the same request can
 // arrive over two links to the same peer (both TCP connections between the
 // kits) and used to be answered twice on every bearer. [MESHSAT-778]
@@ -107,6 +112,7 @@ type InterfaceState struct {
 	Iface         string     `json:"iface"`
 	Mode          string     `json:"mode"`
 	PeriodSec     int        `json:"period_sec"`
+	BitRateBps    int        `json:"bitrate_bps,omitempty"` // 0 = no known limit
 	PeerSeenAt    *time.Time `json:"peer_seen_at,omitempty"`
 	LastRequestAt *time.Time `json:"last_request_at,omitempty"`
 }
@@ -150,8 +156,15 @@ type MeshTimeConsensus struct {
 	ifaceList         func() []string
 	ifaceSend         ReplyFunc
 	discoveryInterval time.Duration
-	ifaceMu           sync.Mutex
-	ifaces            map[string]*ifaceSchedule
+	// bitRate returns an interface's bit rate (0 = unknown or unlimited) and
+	// budgetPct is the share of it a request may use. A slow bearer gets a
+	// request period long enough to stay inside that share: a KISS modem at
+	// 149 bps would otherwise spend 8 % of its airtime on this packet alone
+	// (GitHub meshsat/meshsat#3). [MESHSAT-778]
+	bitRate   func(iface string) int
+	budgetPct float64
+	ifaceMu   sync.Mutex
+	ifaces    map[string]*ifaceSchedule
 }
 
 // NewMeshTimeConsensus creates a new mesh time consensus instance.
@@ -188,6 +201,31 @@ func (mc *MeshTimeConsensus) SetDiscoveryInterval(d time.Duration) {
 	mc.ifaceMu.Lock()
 	mc.discoveryInterval = d
 	mc.ifaceMu.Unlock()
+}
+
+// SetBitRate makes the request period on each interface at least the time
+// the request needs to stay within budgetPct of the interface's bit rate.
+// rate returns 0 for an interface with no known limit. [MESHSAT-778]
+func (mc *MeshTimeConsensus) SetBitRate(rate func(iface string) int, budgetPct float64) {
+	mc.ifaceMu.Lock()
+	mc.bitRate = rate
+	mc.budgetPct = budgetPct
+	mc.ifaceMu.Unlock()
+}
+
+// airtimeFloorLocked is the shortest request period on iface that keeps the
+// request inside the airtime budget; 0 when the interface has no known
+// limit. Caller holds ifaceMu.
+func (mc *MeshTimeConsensus) airtimeFloorLocked(iface string) time.Duration {
+	if mc.bitRate == nil || mc.budgetPct <= 0 {
+		return 0
+	}
+	bps := mc.bitRate(iface)
+	if bps <= 0 {
+		return 0
+	}
+	budget := float64(bps) * mc.budgetPct / 100
+	return time.Duration(float64(requestWireBytes*8) / budget * float64(time.Second)).Round(time.Second)
 }
 
 // SetReplyFunc routes time sync responses to the interface the request
@@ -333,7 +371,7 @@ func (mc *MeshTimeConsensus) dueInterfaces(ids []string, now time.Time) []string
 			st = &ifaceSchedule{}
 			mc.ifaces[id] = st
 		}
-		period := mc.periodLocked(st, now)
+		period := mc.periodLocked(id, st, now)
 		if st.lastSent.IsZero() || now.Sub(st.lastSent) >= period-requestInterval/2 {
 			st.lastSent = now
 			due = append(due, id)
@@ -342,12 +380,18 @@ func (mc *MeshTimeConsensus) dueInterfaces(ids []string, now time.Time) []string
 	return due
 }
 
-// periodLocked is the request period of one interface. Caller holds ifaceMu.
-func (mc *MeshTimeConsensus) periodLocked(st *ifaceSchedule, now time.Time) time.Duration {
+// periodLocked is the request period of one interface: requestInterval with
+// a peer present, discoveryInterval without, and never shorter than the
+// interface's airtime floor. Caller holds ifaceMu.
+func (mc *MeshTimeConsensus) periodLocked(iface string, st *ifaceSchedule, now time.Time) time.Duration {
+	period := mc.discoveryInterval
 	if hasPeer(st, now) {
-		return requestInterval
+		period = requestInterval
 	}
-	return mc.discoveryInterval
+	if floor := mc.airtimeFloorLocked(iface); floor > period {
+		period = floor
+	}
+	return period
 }
 
 func hasPeer(st *ifaceSchedule, now time.Time) bool {
@@ -653,7 +697,10 @@ func (mc *MeshTimeConsensus) Interfaces() []InterfaceState {
 		if st == nil {
 			st = &ifaceSchedule{}
 		}
-		s := InterfaceState{Iface: id, Mode: "discovery", PeriodSec: int(mc.periodLocked(st, now) / time.Second)}
+		s := InterfaceState{Iface: id, Mode: "discovery", PeriodSec: int(mc.periodLocked(id, st, now) / time.Second)}
+		if mc.bitRate != nil {
+			s.BitRateBps = mc.bitRate(id)
+		}
 		if hasPeer(st, now) {
 			s.Mode = "peer"
 		}

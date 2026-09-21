@@ -978,6 +978,19 @@ func main() {
 			_ = proc.SendReticulumPacketTo(ifaceID, data)
 		})
 		tsConsensus.SetDiscoveryInterval(time.Duration(envIntDefault("MESHSAT_TIMESYNC_DISCOVERY_MIN", 10)) * time.Minute)
+		// A slow bearer gets a request period that keeps the request inside
+		// the same 2 % airtime share announces use. [MESHSAT-778]
+		ax25Bitrate := envIntDefault("MESHSAT_AX25_BITRATE", routing.DefaultBandwidths["ax25"])
+		tsConsensus.SetBitRate(func(ifaceID string) int {
+			ct := ifaceID
+			if i := strings.LastIndex(ct, "_"); i > 0 {
+				ct = ct[:i]
+			}
+			if ct == "ax25" {
+				return ax25Bitrate
+			}
+			return routing.DefaultBandwidths[ct]
+		}, routing.DefaultAnnounceBudgetPct)
 		// Answer peers as unsynchronised while our own clock is untrusted,
 		// rather than offering them an 8-hour-wrong reference. [MESHSAT-1056]
 		tsConsensus.SetClockTrustFn(clockGuard.Trusted)
