@@ -560,7 +560,7 @@ onUnmounted(() => {
               Send
             </button>
           </div>
-          <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1.5">SMS sent successfully</div>
+          <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1.5">SMS queued, it leaves as soon as the modem is free</div>
           <div v-if="smsErr" class="text-[10px] text-red-400 mt-1.5">{{ smsErr }}</div>
         </div>
 
@@ -673,7 +673,7 @@ onUnmounted(() => {
             Send
           </button>
         </div>
-        <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1">Sent</div>
+        <div v-if="smsSent" class="text-[10px] text-emerald-400 mt-1">Queued</div>
         <div v-if="smsErr" class="text-[10px] text-red-400 mt-1">{{ smsErr }}</div>
       </div>
     </div>

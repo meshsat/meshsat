@@ -272,6 +272,11 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 		// RawText: an OOB management frame, already GSM-safe base32, sent
 		// verbatim so the peer's classifier finds the sentinel. [MESHSAT-756]
 		text = msg.DecodedText
+	} else if msg.From == 0 {
+		// Written on this kit (the dashboard, an operator), not relayed from
+		// the mesh: the text goes as typed, with no "[MeshSat] sender:"
+		// attribution naming a node that did not send it.
+		text = SanitizeSMSText(msg.DecodedText)
 	} else {
 		// Plain text: human-readable format with sender name
 		sender := g.resolveNodeName(msg.From)
@@ -292,13 +297,20 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 		text = text[:maxLen]
 	}
 
+	// The SMS history keeps the words; the on-air form of an encrypted
+	// message is ciphertext and says nothing to the operator reading it.
+	history := text
+	if msg.Encrypted && msg.PlainText != "" {
+		history = msg.PlainText
+	}
+
 	var firstErr error
 	for _, number := range destinations {
 		if err := g.cell.SendSMS(ctx, number, text); err != nil {
 			log.Error().Err(err).Str("to", number).Msg("cellular: SMS send failed")
 			g.errors.Add(1)
 			if g.db != nil {
-				g.db.InsertSMSMessage("tx", number, text, "failed", time.Now().Unix())
+				g.db.InsertSMSMessage("tx", number, history, "failed", time.Now().Unix())
 			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("SMS to %s: %w", number, err)
@@ -306,7 +318,7 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 			continue
 		}
 		if g.db != nil {
-			g.db.InsertSMSMessage("tx", number, text, "sent", time.Now().Unix())
+			g.db.InsertSMSMessage("tx", number, history, "sent", time.Now().Unix())
 		}
 		g.recordSMS(number, text, msg)
 	}

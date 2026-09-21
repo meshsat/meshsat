@@ -87,6 +87,7 @@ type MeshMessage struct {
 	Destination string `json:"-"` // bearer address: phone, callsign-SSID, !nodeid; empty = interface default
 	RawText     bool   `json:"-"` // send DecodedText verbatim: no prefix, no attribution, no sanitising
 	MsgRef      string `json:"-"` // delivery msg_ref, for the live packet feed only; never on the wire [MESHSAT-826]
+	PlainText   string `json:"-"` // the words before egress transforms, for the SMS history only; never on the wire
 }
 
 // NodeRSSIProvider is implemented by mesh transports that keep the last

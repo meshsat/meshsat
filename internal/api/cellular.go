@@ -3,14 +3,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
 )
 
@@ -680,12 +683,12 @@ func (s *Server) handleDeleteSMSContact(w http.ResponseWriter, r *http.Request) 
 // --- Send SMS ---
 
 // @Summary Send SMS message
-// @Description Sends an SMS message via the cellular modem with optional egress transforms
+// @Description Queues an SMS on cellular_0 through the delivery ledger, like every other send on the kit: the interface's egress transforms (compression, encryption) apply unless the number is a plaintext peer such as the Hub, which gets clear text; the send is retried, counted against the SMS bundle and shown in the delivery queue; the SMS history keeps the words that were sent. A message that would not fit the kit's max_sms_segments on air is refused rather than cut, because a cut ciphertext cannot be read.
 // @Tags cellular
 // @Accept json
 // @Produce json
 // @Param body body object true "SMS" example({"to":"+31612345678","text":"Hello"})
-// @Success 200 {object} map[string]string
+// @Success 202 {object} map[string]interface{} "status queued, delivery_id"
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Failure 503 {object} map[string]string
@@ -693,6 +696,10 @@ func (s *Server) handleDeleteSMSContact(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 	if s.cellTransport == nil {
 		writeError(w, http.StatusServiceUnavailable, "cellular transport not available")
+		return
+	}
+	if s.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "delivery pipeline not available")
 		return
 	}
 
@@ -704,34 +711,66 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	req.To, req.Text = strings.TrimSpace(req.To), strings.TrimSpace(req.Text)
 	if req.To == "" || req.Text == "" {
 		writeError(w, http.StatusBadRequest, "to and text are required")
 		return
 	}
 
-	// Apply egress transforms (smaz2, encrypt, base64) if configured for cellular_0. [MESHSAT-447]
-	outText := req.Text
-	if s.transforms != nil {
-		if iface, err := s.db.GetInterface("cellular_0"); err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
-			transformed, err := s.transforms.ApplyEgress([]byte(req.Text), iface.EgressTransforms)
-			if err != nil {
-				log.Warn().Err(err).Msg("sms: egress transform failed, sending plaintext")
-			} else {
-				outText = string(transformed)
-				log.Info().Int("plain_len", len(req.Text)).Int("transformed_len", len(outText)).
-					Msg("sms: egress transforms applied")
-			}
-		}
+	// This handler used to encrypt and send straight through the modem. It
+	// ignored plaintext_peers, so the Hub got ciphertext it could not read,
+	// and it skipped the ledger: no retry, no queue entry, and the request
+	// waited on the modem. It now takes the same path as every other send.
+	if onAir, limit, err := s.smsOnAirLength(req.To, req.Text); err == nil && limit > 0 && onAir > limit {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"message too long: %d characters on air, this kit sends at most %d (max_sms_segments); shorten it", onAir, limit))
+		return
 	}
-
-	if err := s.cellTransport.SendSMS(r.Context(), req.To, outText); err != nil {
-		s.db.InsertSMSMessage("tx", req.To, req.Text, "failed", time.Now().Unix())
+	id, _, err := s.dispatcher.QueueDirectSendTo("cellular_0", req.Text, engine.DirectSendOptions{Destination: req.To})
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.db.InsertSMSMessage("tx", req.To, req.Text, "sent", time.Now().Unix())
-	s.recordSMSTX(req.To, outText, req.Text)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "delivery_id": id})
+}
+
+// smsOnAirLength gathers what the delivery worker will use for this send
+// (the cellular gateway's config and cellular_0's egress chain) and predicts
+// the on-air length with onAirSMSLength.
+func (s *Server) smsOnAirLength(number, text string) (onAir, limit int, err error) {
+	var cfg gateway.CellularConfig
+	if s.gwManager != nil {
+		if cg, ok := s.gwManager.GatewayByInterfaceID("cellular_0").(*gateway.CellularGateway); ok && cg != nil {
+			cfg = cg.Config()
+		}
+	}
+	var egress func([]byte) ([]byte, error)
+	if s.transforms != nil && s.db != nil {
+		if iface, gerr := s.db.GetInterface("cellular_0"); gerr == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
+			chain := iface.EgressTransforms
+			egress = func(b []byte) ([]byte, error) { return s.transforms.ApplyEgress(b, chain) }
+		}
+	}
+	return onAirSMSLength(cfg, egress, number, text)
+}
+
+// onAirSMSLength predicts how long text is on air to number, with the same
+// choice the delivery worker makes: clear text for a plaintext peer, else the
+// egress chain plus the protocol version byte, else the sanitised text.
+// limit is 160 characters per allowed segment; 0 means unknown, no check.
+func onAirSMSLength(cfg gateway.CellularConfig, egress func([]byte) ([]byte, error), number, text string) (onAir, limit int, err error) {
+	if cfg.MaxSMSSegments <= 0 {
+		return 0, 0, nil
+	}
+	limit = 160 * cfg.MaxSMSSegments
+	if cfg.IsPlaintextPeer(number) || egress == nil {
+		return len(gateway.SanitizeSMSText(text)), limit, nil
+	}
+	out, err := egress([]byte(text))
+	if err != nil {
+		return 0, limit, err
+	}
+	return len(out) + 1, limit, nil // + protocol version byte
 }
 
 // smsBundleResponse is the bundle counter plus the reminder number, which
