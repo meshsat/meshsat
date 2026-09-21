@@ -1079,6 +1079,15 @@ func (c *jsprConn) awaitHelperMOResult(ref int, timeout time.Duration) (string, 
 			delete(c.pending, "messageOriginateStatus")
 			c.pendingMu.Unlock()
 			return "", fmt.Errorf("MO helper timeout after %s", timeout)
+		case <-c.readerDone:
+			// The session was torn down under the send (a reset or a
+			// reconnect): no result can come any more, so fail now and let
+			// the worker retry, rather than hold the channel for the rest of
+			// the three minutes. [MESHSAT-1282]
+			c.pendingMu.Lock()
+			delete(c.pending, "messageOriginateStatus")
+			c.pendingMu.Unlock()
+			return "", fmt.Errorf("MO abandoned: the JSPR session closed while it was in flight")
 		}
 	}
 }

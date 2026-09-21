@@ -317,11 +317,14 @@ func (g *IMTGateway) yieldDeferred(ctx context.Context, msg *transport.MeshMessa
 				if err != nil || !due {
 					continue
 				}
-				if canceller.CancelMO() {
-					log.Info().Str("channel", channel).Str("msg_ref", msg.MsgRef).
-						Msg("imt: a message is waiting, the Deferred send gives way")
-					g.emit("yield", "Deferred send cancelled for a waiting message")
+				// False while the send has not reached the modem yet (or
+				// the session is being rebuilt): keep watching.
+				if !canceller.CancelMO() {
+					continue
 				}
+				log.Info().Str("channel", channel).Str("msg_ref", msg.MsgRef).
+					Msg("imt: a message is waiting, the Deferred send gives way")
+				g.emit("yield", "Deferred send cancelled for a waiting message")
 				return
 			}
 		}
