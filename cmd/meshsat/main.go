@@ -1958,11 +1958,19 @@ func main() {
 					// and has moved traffic in the last 30 min (indoors it has
 					// not, and a queued satellite frame would never leave),
 					// else SMS to the Hub's number.
-					satOK := false
-					if gw := gwMgr.GatewayByInterfaceID("iridium_0"); gw != nil {
+					// The satellite interface is whichever modem this kit
+					// carries. It was hardcoded to iridium_0 (9603), so on a
+					// 9704 kit, which both are since 20 Sep 2026, "auto"
+					// could only ever pick SMS and "satellite" queued onto
+					// an interface that does not exist.
+					satIface, satOK := hubUplinkSatInterface(func(id string) (bool, time.Time, bool) {
+						gw := gwMgr.GatewayByInterfaceID(id)
+						if gw == nil {
+							return false, time.Time{}, false
+						}
 						st := gw.Status()
-						satOK = st.Connected && !st.LastActivity.IsZero() && time.Since(st.LastActivity) < 30*time.Minute
-					}
+						return st.Connected, st.LastActivity, true
+					}, time.Now())
 					useSat := satOK
 					switch bearerPolicy {
 					case "satellite":
@@ -1972,7 +1980,7 @@ func main() {
 					}
 					label := fmt.Sprintf("hub uplink frame, %d B", len(frame))
 					if useSat {
-						_, _, err := dispatcher.QueueDirectSendTo("iridium_0", label,
+						_, _, err := dispatcher.QueueDirectSendTo(satIface, label,
 							engine.DirectSendOptions{Precedence: string(types.PrecedencePriority), Class: database.DeliveryClassHubUplink, Payload: frame})
 						return err
 					}
