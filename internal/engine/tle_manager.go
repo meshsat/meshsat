@@ -27,7 +27,13 @@ const defaultCelestrakURL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=i
 // defaultTLEAPIURL is the fallback source when Celestrak cannot be reached (it drops some
 // addresses outright): the same public element sets, searchable by name, paged. The page
 // number is appended.
-const defaultTLEAPIURL = "https://tle.ivanstanojevic.me/api/tle/?search=IRIDIUM&page-size=100&page="
+//
+// The sort is not decoration. Without one the API's order changes between requests, so a
+// satellite could land on two pages or on none as they were fetched one after another: on
+// 21 Sep 2026 tesseract held 85 element sets with 11 names twice and IRIDIUM 125 and 136
+// missing, and its pass list lacked two passes a reference SGP4 showed overhead (found by
+// the Android session). Sorted by id, the same page returns the same satellites.
+const defaultTLEAPIURL = "https://tle.ivanstanojevic.me/api/tle/?search=IRIDIUM&sort=id&sort-dir=asc&page-size=100&page="
 
 const (
 	tleUserAgent    = "MeshSat-Bridge (+https://meshsat.net)"
@@ -143,6 +149,7 @@ func (m *TLEManager) RefreshTLEs(ctx context.Context) error {
 		source = "tle-api"
 	}
 
+	entries = newestPerSatellite(entries)
 	if err := m.db.ReplaceTLECache(entries); err != nil {
 		return fmt.Errorf("store TLEs: %w", err)
 	}
@@ -244,6 +251,26 @@ func fetchTLEAPI(ctx context.Context) ([]database.TLECacheEntry, error) {
 		return nil, fmt.Errorf("no Iridium NEXT elements in the response")
 	}
 	return entries, nil
+}
+
+// newestPerSatellite keeps one element set per satellite name, the one with the newest
+// epoch, in first-seen order. A paged source can hand the same satellite over twice, and
+// two sets for one name would count its passes twice.
+func newestPerSatellite(entries []database.TLECacheEntry) []database.TLECacheEntry {
+	idx := make(map[string]int, len(entries))
+	out := make([]database.TLECacheEntry, 0, len(entries))
+	for _, e := range entries {
+		i, seen := idx[e.SatelliteName]
+		if !seen {
+			idx[e.SatelliteName] = len(out)
+			out = append(out, e)
+			continue
+		}
+		if tleEpochUnix(e.Line1) > tleEpochUnix(out[i].Line1) {
+			out[i] = e
+		}
+	}
+	return out
 }
 
 // parse3LE reads name/line1/line2 triples.
