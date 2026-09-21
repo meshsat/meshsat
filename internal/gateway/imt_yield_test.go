@@ -14,11 +14,15 @@ import (
 // cancelSat is a fakeSat whose MO waits for a satellite until cancelled.
 type cancelSat struct {
 	fakeSat
+	notYet   atomic.Int32 // CancelMO answers false this many times first
 	cancels  atomic.Int32
 	released chan struct{}
 }
 
 func (c *cancelSat) CancelMO() bool {
+	if c.notYet.Add(-1) >= 0 {
+		return false // the send has not reached the modem yet
+	}
 	if c.cancels.Add(1) == 1 {
 		close(c.released)
 	}
@@ -49,12 +53,14 @@ func TestIMTGateway_DeferredSendYieldsToAWaitingMessage(t *testing.T) {
 		name       string
 		precedence string
 		waiting    string // precedence of a queued row, "" = none
+		notYet     int32
 		wantCancel bool
 	}{
-		{"poll with a message waiting", "Deferred", "Routine", true},
-		{"poll alone", "Deferred", "", false},
-		{"poll behind another poll", "Deferred", "Deferred", false},
-		{"a real message never yields", "Routine", "Flash", false},
+		{"poll with a message waiting", "Deferred", "Routine", 0, true},
+		{"poll not on the modem yet when the message arrives", "Deferred", "Routine", 3, true},
+		{"poll alone", "Deferred", "", 0, false},
+		{"poll behind another poll", "Deferred", "Deferred", 0, false},
+		{"a real message never yields", "Routine", "Flash", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := database.New(filepath.Join(t.TempDir(), "y.db"))
@@ -68,6 +74,7 @@ func TestIMTGateway_DeferredSendYieldsToAWaitingMessage(t *testing.T) {
 				}
 			}
 			sat := &cancelSat{released: make(chan struct{})}
+			sat.notYet.Store(tc.notYet)
 			gw := NewIMTGateway(IridiumConfig{}, sat, db, nil)
 			gw.SetPacketSink(func(PacketRecord) {}, "iridium_imt_0")
 
