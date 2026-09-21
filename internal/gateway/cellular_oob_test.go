@@ -193,6 +193,8 @@ func TestCellular_BracketedTokenSurvivesVerbatim(t *testing.T) {
 		"[#A7] hello from the booth", // the Hub's WhatsApp correlation token
 		"[note] kit to kit",          // any other bracketed word
 		"[] x",                       // empty brackets: never parsed at all
+		"*F8 hello from outside",     // the Hub's satellite chat token, bare on purpose [MESHSAT-1290]
+		"*f8 hello",                  // as a T-Deck keyboard may type it back
 	} {
 		send("+3197010258258", body)
 		select {
