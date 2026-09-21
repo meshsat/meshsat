@@ -13,7 +13,7 @@ Architecture: SINGLE-THREAD EVENT LOOP (MESHSAT-334)
 Commands from Go (stdin JSON):
 - {"cmd":"send", "method":"GET", "target":"apiVersion", "json":{}}
     -> sends single JSPR line, response comes back via event loop
-- {"cmd":"send_mo", "topic_id":244, "data":"BASE64", "length":42, "request_reference":1}
+- {"cmd":"send_mo", "topic_id":244, "data":"BASE64", "length":42, "request_reference":1, "timeout_s":150}
     -> handles entire MO flow inline (originate + segment + wait for status)
     -> returns {"type":"mo_result", "code":200, "target":"messageOriginateStatus", "json":{...}}
 """
@@ -195,17 +195,75 @@ class JSPRHelper:
         self.ser.write(line.encode("ascii"))
         self.ser.flush()
 
-    def do_send_mo(self, topic_id, payload_b64, length, request_reference):
+    def emit_mo_result(self, code, target, json_str, request_reference):
+        """Emit the final result of one send_mo, tagged with the
+        request_reference Go sent with it, so Go can tell a result that
+        belongs to an earlier send from its own. [MESHSAT-1282]"""
+        try:
+            obj = json.loads(json_str)
+            if not isinstance(obj, dict):
+                obj = {}
+        except (json.JSONDecodeError, TypeError):
+            obj = {}
+        obj["request_reference"] = request_reference
+        self.emit("mo_result", code, target, jd(obj))
+
+    def do_send_mo(self, topic_id, payload_b64, length, request_reference, timeout_s=240):
         """Handle entire MO flow inline — single thread, no async.
         Matches the standalone test script exactly."""
         mlog = lambda msg: log(f"MO: {msg}")
 
         try:
-            self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog)
+            self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog, timeout_s)
         finally:
             self._drain_stale_commands()
 
-    def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog):
+    def _cancel_and_settle(self, topic_id, msg_id, request_reference, mlog, settle_s=20):
+        """Give up on an MO the modem has already accepted, the official way.
+
+        Walking away is not enough: the modem keeps the message and may
+        still send it minutes later, after Go has booked the attempt as
+        failed and queued a retry, and the far end gets it twice (7
+        duplicates in the 20 message soak of 21 Sep 2026). Ground Control's
+        library cancels with PUT messageOriginateStatus {"action": "cancel"}
+        (rbCancelMessage, RockBLOCK-9704 v1.0.1); the modem then reports the
+        one true outcome for that message_id: cancelled (a retry is safe) or
+        mo_ack_received (too late, it went, so it IS delivered).
+        Returns True when a final status was emitted. [MESHSAT-1282]"""
+        cmd = jd({"topic_id": topic_id, "message_id": msg_id, "action": "cancel"})
+        mlog(f"TX PUT messageOriginateStatus {cmd}")
+        self._serial_write_raw("PUT", "messageOriginateStatus", cmd)
+        deadline = time.monotonic() + settle_s
+        while self.running and time.monotonic() < deadline:
+            lines = self.serial_read_lines()
+            if not lines:
+                time.sleep(0.010)
+                continue
+            for resp in lines:
+                code, target, json_str = resp["code"], resp["target"], resp["json_str"]
+                mlog(f"RX {code} {target}")
+                if target == "messageOriginateStatus":
+                    if code == 299:
+                        try:
+                            d = json.loads(json_str)
+                        except json.JSONDecodeError:
+                            continue
+                        if d.get("message_id", -1) != msg_id:
+                            mlog(f"LATE status for msg_id={d.get('message_id')} final={d.get('final_mo_status')} (not this MO)")
+                            continue
+                        mlog(f"settled after cancel: msg_id={msg_id} final={d.get('final_mo_status')}")
+                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference)
+                        return True
+                    if code >= 400:
+                        mlog(f"cancel refused by the modem: {code} {json_str[:80]}")
+                        return False
+                    continue  # 200: cancel accepted, the final status follows
+                if code == 299:
+                    self.emit("unsolicited", code, target, json_str)
+        mlog("no final status after cancel")
+        return False
+
+    def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog, timeout_s=240):
         # Drain pending data — emit complete lines, then clear partial data
         for resp in self.serial_read_lines():
             if resp["code"] == 299:
@@ -233,15 +291,16 @@ class JSPRHelper:
         segment_sent = False
         # Two-phase timeout: 30s for initial 200 response, then 4 min for satellite
         initial_deadline = time.monotonic() + 30
-        full_deadline = time.monotonic() + 240
+        full_deadline = time.monotonic() + timeout_s
         got_200 = False
 
         while self.running:
             # Check appropriate deadline
             if not got_200 and time.monotonic() > initial_deadline:
                 mlog("no 200 response to messageOriginate within 30s — modem not responding")
-                self.emit("mo_result", 200, "messageOriginateStatus",
-                          jd({"final_mo_status": "no_response", "message_id": 0, "topic_id": topic_id}))
+                self.emit_mo_result(200, "messageOriginateStatus",
+                                    jd({"final_mo_status": "no_response", "message_id": 0, "topic_id": topic_id}),
+                                    request_reference)
                 return
             if time.monotonic() > full_deadline:
                 break
@@ -272,8 +331,9 @@ class JSPRHelper:
                         mlog(f"message_id={msg_id} response={resp_str}")
                         self.emit("response", code, target, json_str)
                         if resp_str != "message_accepted":
-                            self.emit("mo_result", 200, "messageOriginateStatus",
-                                      jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}))
+                            self.emit_mo_result(200, "messageOriginateStatus",
+                                                jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}),
+                                                request_reference)
                             return
                     except (json.JSONDecodeError, KeyError):
                         pass
@@ -311,9 +371,9 @@ class JSPRHelper:
                         final = d.get("final_mo_status", "unknown")
                         mlog(f"status msg_id={status_msg_id} final={final}")
                         if msg_id is not None and status_msg_id != msg_id:
-                            mlog(f"STALE status (expected msg_id={msg_id}), ignoring")
+                            mlog(f"LATE status for msg_id={status_msg_id} final={final} (expected msg_id={msg_id}), not this MO")
                             continue
-                        self.emit("mo_result", 200, "messageOriginateStatus", json_str)
+                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference)
                         return
                     except (json.JSONDecodeError, KeyError):
                         pass
@@ -322,7 +382,7 @@ class JSPRHelper:
                 # Non-200 error for messageOriginate
                 if code >= 400 and target == "messageOriginate":
                     mlog(f"messageOriginate error: {code}")
-                    self.emit("mo_result", code, target, json_str)
+                    self.emit_mo_result(code, target, json_str, request_reference)
                     return
 
                 # Forward anything else to Go
@@ -331,10 +391,14 @@ class JSPRHelper:
                 else:
                     self.emit("response", code, target, json_str)
 
-        # Timeout
+        # Timeout. If the modem had accepted the message, cancel it and take
+        # the modem's word for what happened to it.
         mlog("TIMEOUT waiting for MO completion")
-        self.emit("mo_result", 200, "messageOriginateStatus",
-                  jd({"final_mo_status": "helper_timeout", "message_id": msg_id or 0, "topic_id": topic_id}))
+        if msg_id is not None and self._cancel_and_settle(topic_id, msg_id, request_reference, mlog):
+            return
+        self.emit_mo_result(200, "messageOriginateStatus",
+                            jd({"final_mo_status": "helper_timeout", "message_id": msg_id or 0, "topic_id": topic_id}),
+                            request_reference)
 
     def _drain_stale_commands(self):
         """Discard queued commands accumulated during MO flow.
@@ -343,12 +407,20 @@ class JSPRHelper:
         cause a rapid burst of writes. Discard them; the next poll
         cycle will issue a fresh one."""
         drained = 0
+        keep = []
         while True:
             try:
-                self._cmd_queue.get_nowait()
-                drained += 1
+                cmd = self._cmd_queue.get_nowait()
             except queue.Empty:
                 break
+            # A send_mo is a message, not a poll: Go is waiting on it for
+            # minutes, so dropping it costs a whole MO timeout and a retry.
+            if cmd.get("cmd") == "send_mo":
+                keep.append(cmd)
+            else:
+                drained += 1
+        for cmd in keep:
+            self._cmd_queue.put(cmd)
         if drained:
             log(f"MO: drained {drained} stale queued commands")
 
@@ -429,6 +501,7 @@ class JSPRHelper:
                         payload_b64=cmd.get("data", ""),
                         length=cmd.get("length", 0),
                         request_reference=cmd.get("request_reference", 1),
+                        timeout_s=cmd.get("timeout_s", 240),
                     )
                 elif cmd_type == "send":
                     method = cmd.get("method", "")

@@ -150,6 +150,7 @@ test:agent:
     - apk add --no-cache python3
   script:
     - cd deploy/oob && python3 -m unittest test_agent -v
+    - cd "$CI_PROJECT_DIR/cmd/jspr-helper" && python3 -m unittest test_jspr_helper -v
   rules:
     - when: always
 
