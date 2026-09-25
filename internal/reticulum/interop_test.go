@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"testing"
 
+	"meshsat/internal/interop/rnsenv"
 	"meshsat/internal/reticulum"
 )
 
@@ -30,21 +31,16 @@ type rnsResult struct {
 const rnsValidateScript = `interop_rns_validate.py`
 const rnsGenerateScript = `interop_rns_generate.py`
 
-func findPython() string {
-	// Try the venv we created for testing
-	if _, err := os.Stat("/tmp/rns-test/bin/python3"); err == nil {
-		return "/tmp/rns-test/bin/python3"
-	}
-	return ""
+// findPython returns the pinned RNS venv interpreter (see internal/interop/rnsenv).
+func findPython(t *testing.T) string {
+	t.Helper()
+	return rnsenv.Python(t)
 }
 
 // TestAnnounceWireFormatMatchesRNS generates a bridge announce and validates
 // it using the Python RNS library (cross-implementation verification).
 func TestAnnounceWireFormatMatchesRNS(t *testing.T) {
-	python := findPython()
-	if python == "" {
-		t.Skip("Python RNS not available (install: python3 -m venv /tmp/rns-test && /tmp/rns-test/bin/pip install rns)")
-	}
+	python := findPython(t)
 
 	scriptPath := findScript(t, rnsValidateScript)
 
@@ -94,10 +90,7 @@ func TestAnnounceWireFormatMatchesRNS(t *testing.T) {
 // TestRNSAnnounceReadByBridge generates an announce using Python RNS and
 // verifies the bridge can parse and validate it.
 func TestRNSAnnounceReadByBridge(t *testing.T) {
-	python := findPython()
-	if python == "" {
-		t.Skip("Python RNS not available")
-	}
+	python := findPython(t)
 
 	scriptPath := findScript(t, rnsGenerateScript)
 
@@ -152,10 +145,7 @@ func TestRNSAnnounceReadByBridge(t *testing.T) {
 
 // TestHDLCFramingMatchesRNS verifies HDLC framing is compatible.
 func TestHDLCFramingMatchesRNS(t *testing.T) {
-	python := findPython()
-	if python == "" {
-		t.Skip("Python RNS not available")
-	}
+	python := findPython(t)
 
 	// Test vectors that exercise all escape conditions
 	testCases := []struct {
@@ -194,7 +184,6 @@ func TestHDLCFramingMatchesRNS(t *testing.T) {
 
 			script := `
 import sys, json
-sys.path.insert(0, '/tmp/rns-test/lib/python3.11/site-packages')
 from RNS.Interfaces.TCPInterface import HDLC
 data = bytes.fromhex(sys.argv[1])
 escaped = HDLC.escape(data)
@@ -222,10 +211,7 @@ print(json.dumps({"escaped": escaped.hex()}))
 
 // TestDestHashComputationMatchesRNS verifies destination hash is computed identically.
 func TestDestHashComputationMatchesRNS(t *testing.T) {
-	python := findPython()
-	if python == "" {
-		t.Skip("Python RNS not available")
-	}
+	python := findPython(t)
 
 	id, err := reticulum.GenerateIdentity()
 	if err != nil {
@@ -239,7 +225,6 @@ func TestDestHashComputationMatchesRNS(t *testing.T) {
 
 	script := `
 import sys, json, hashlib
-sys.path.insert(0, '/tmp/rns-test/lib/python3.11/site-packages')
 pub_key = bytes.fromhex(sys.argv[1])
 app_name = sys.argv[2]
 
@@ -273,10 +258,7 @@ print(json.dumps({"dest_hash": dest_hash.hex(), "name_hash": name_hash.hex(), "i
 
 // TestPacketHeaderFlagsMatchRNS verifies the flags byte layout.
 func TestPacketHeaderFlagsMatchRNS(t *testing.T) {
-	python := findPython()
-	if python == "" {
-		t.Skip("Python RNS not available")
-	}
+	python := findPython(t)
 
 	testCases := []struct {
 		headerType    byte

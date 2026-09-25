@@ -9,7 +9,6 @@ import json
 import struct
 import sys
 
-sys.path.insert(0, '/tmp/rns-test/lib/python3.11/site-packages')
 
 from RNS.Cryptography import Ed25519PublicKey, X25519PublicKey
 

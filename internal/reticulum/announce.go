@@ -4,9 +4,11 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 // Announce represents a parsed Reticulum announce packet payload.
@@ -20,6 +22,7 @@ type Announce struct {
 	DestHash    [TruncatedHashLen]byte
 	Hops        byte
 	ContextFlag byte // 1 if ratchet present
+	Context     byte // ContextNone, or ContextPathResponse when answering a path request
 
 	// Payload fields.
 	PublicKey []byte              // 64 bytes: [32B X25519][32B Ed25519]
@@ -57,9 +60,14 @@ func NewAnnounce(id *Identity, appName string, appData []byte) (*Announce, error
 		sigPub:    id.SigningPublicKey(),
 	}
 
-	if _, err := io.ReadFull(rand.Reader, a.Random[:]); err != nil {
+	// RNS: random_hash = get_random_hash()[:5] + int(time()).to_bytes(5, "big").
+	// Transport nodes read the trailing timestamp to decide whether a
+	// re-announce is newer than the path they hold (Transport.py
+	// timebase_from_random_blob), so it must be real wall-clock time.
+	if _, err := io.ReadFull(rand.Reader, a.Random[:5]); err != nil {
 		return nil, fmt.Errorf("generate random: %w", err)
 	}
+	putUint40(a.Random[5:], uint64(time.Now().Unix()))
 
 	body := a.signableBody()
 	a.Signature = id.Sign(body)
@@ -87,7 +95,8 @@ func (a *Announce) MarshalPayload() []byte {
 	return buf
 }
 
-// MarshalPacket serializes the full announce packet (header + payload).
+// MarshalPacket serializes the full announce packet (header + payload) as
+// the originating node emits it: HEADER_1, broadcast.
 func (a *Announce) MarshalPacket() []byte {
 	h := &Header{
 		HeaderType:    HeaderType1,
@@ -97,10 +106,54 @@ func (a *Announce) MarshalPacket() []byte {
 		PacketType:    PacketAnnounce,
 		Hops:          a.Hops,
 		DestHash:      a.DestHash,
-		Context:       ContextNone,
+		Context:       a.Context,
 		Data:          a.MarshalPayload(),
 	}
 	return h.Marshal()
+}
+
+// MarshalPacketTransport serializes the announce as a transport node
+// rebroadcasts it: HEADER_2 with the transport's IDENTITY hash as transport
+// id, transport type TRANSPORT, the given hop count and context (ContextNone,
+// or ContextPathResponse when it answers a path request).
+// Reference: RNS/Transport.py announce rebroadcast ("announce_entry").
+func (a *Announce) MarshalPacketTransport(transportID [TruncatedHashLen]byte, hops byte, context byte) []byte {
+	h := &Header{
+		HeaderType:    HeaderType2,
+		ContextFlag:   a.ContextFlag,
+		TransportType: TransportTransport,
+		DestType:      DestSingle,
+		PacketType:    PacketAnnounce,
+		Hops:          hops,
+		TransportID:   transportID,
+		DestHash:      a.DestHash,
+		Context:       context,
+		Data:          a.MarshalPayload(),
+	}
+	return h.Marshal()
+}
+
+// EmittedAt returns the announce's emission time carried in the last five
+// bytes of the random hash (zero time when the field is not a plausible
+// timestamp, e.g. an announce from an older bridge with 10 random bytes).
+func (a *Announce) EmittedAt() time.Time {
+	ts := int64(getUint40(a.Random[5:]))
+	if ts < 1_600_000_000 || ts > 4_000_000_000 {
+		return time.Time{}
+	}
+	return time.Unix(ts, 0)
+}
+
+func putUint40(b []byte, v uint64) {
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], v)
+	copy(b[:5], tmp[3:])
+}
+
+func getUint40(b []byte) uint64 {
+	var tmp [8]byte
+	copy(tmp[3:], b[:5])
+	return binary.BigEndian.Uint64(tmp[:])
 }
 
 // UnmarshalAnnouncePayload parses an announce payload from the data field of
@@ -171,7 +224,12 @@ func UnmarshalAnnouncePacket(raw []byte) (*Announce, error) {
 	if h.PacketType != PacketAnnounce {
 		return nil, fmt.Errorf("%w: expected ANNOUNCE, got %s", ErrInvalidFlag, PacketTypeString(h.PacketType))
 	}
-	return UnmarshalAnnouncePayload(h.Data, h.DestHash, h.Hops, h.ContextFlag)
+	a, err := UnmarshalAnnouncePayload(h.Data, h.DestHash, h.Hops, h.ContextFlag)
+	if err != nil {
+		return nil, err
+	}
+	a.Context = h.Context
+	return a, nil
 }
 
 // Verify checks that the announce signature is valid and the destination hash

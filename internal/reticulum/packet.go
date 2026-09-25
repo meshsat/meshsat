@@ -11,6 +11,7 @@ var (
 	ErrWrongType   = errors.New("reticulum: wrong packet type")
 	ErrInvalidFlag = errors.New("reticulum: invalid flag combination")
 	ErrMaxHops     = errors.New("reticulum: max hops exceeded")
+	ErrEmptyData   = errors.New("reticulum: zero-length data field")
 )
 
 // Header represents a parsed Reticulum packet header.
@@ -92,6 +93,10 @@ func UnmarshalHeader(data []byte) (*Header, error) {
 	h := &Header{}
 	h.UnpackFlags(data[0])
 	h.Hops = data[1]
+	// RNS Packet.unpack drops hop counts at or above PATHFINDER_M.
+	if int(h.Hops) >= PathfinderM {
+		return nil, ErrMaxHops
+	}
 
 	pos := 2
 	if h.HeaderType == HeaderType2 {
@@ -111,6 +116,10 @@ func UnmarshalHeader(data []byte) (*Header, error) {
 	if pos < len(data) {
 		h.Data = make([]byte, len(data)-pos)
 		copy(h.Data, data[pos:])
+	} else {
+		// RNS Packet.unpack rejects a zero-length data field; a peer would
+		// drop such a packet, so parse it as malformed here too.
+		return nil, ErrEmptyData
 	}
 
 	return h, nil

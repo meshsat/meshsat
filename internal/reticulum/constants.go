@@ -163,3 +163,34 @@ const (
 	// HMACLen is the HMAC-SHA256 tag length.
 	HMACLen = 32
 )
+
+// Transport-node timing and table constants (RNS/Transport.py, RNS/Link.py).
+const (
+	// PathfinderR: announce rebroadcast retries.
+	PathfinderR = 1
+	// PathfinderG: grace period before rebroadcasting an announce, seconds.
+	PathfinderG = 5
+	// PathfinderRW: random window added to the rebroadcast delay, seconds.
+	PathfinderRW = 0.5
+	// PathfinderE: path expiry, seconds (one week).
+	PathfinderE = 60 * 60 * 24 * 7
+	// LocalRebroadcastsMax: how often a locally originated announce is retried.
+	LocalRebroadcastsMax = 2
+	// PathRequestTimeoutSec: discovery timeout for a forwarded path request.
+	PathRequestTimeoutSec = 15
+	// PathRequestGraceSec: delay before answering a path request from the table.
+	PathRequestGraceSec = 0.4
+	// ReverseTimeoutSec: reverse-table entry lifetime.
+	ReverseTimeoutSec = 8 * 60
+	// LinkTimeoutSec: link-table entry lifetime for unvalidated links.
+	LinkTimeoutSec = 60 * 60 * 2
+	// DefaultPerHopTimeoutSec: establishment timeout per hop.
+	DefaultPerHopTimeoutSec = 6
+	// KeepaliveMaxSec / KeepaliveMinSec bound a link's keepalive interval.
+	KeepaliveMaxSec = 360
+	KeepaliveMinSec = 5
+	// StaleGraceSec is added to the stale time before a link is torn down.
+	StaleGraceSec = 5
+	// AnnounceRandomHashTimestampOffset: byte offset of the 5-byte timestamp.
+	AnnounceRandomHashTimestampOffset = 5
+)
