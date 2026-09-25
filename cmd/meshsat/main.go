@@ -36,6 +36,7 @@ import (
 	"meshsat/internal/oob"
 	"meshsat/internal/relayclient"
 	"meshsat/internal/reticulum"
+	"meshsat/internal/rnode"
 	"meshsat/internal/rnsstack"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
@@ -784,6 +785,73 @@ func main() {
 				ifaceReg.Register(routing.NewReticulumInterface("ax25_0", "aprs", 256, ax25Iface.Send))
 			}
 			log.Info().Str("kiss", cfg.AX25KISSAddr).Str("call", cfg.AX25Callsign).Msg("ax25 reticulum interface started")
+		}
+	}
+
+	// RNode LoRa radio — a Reticulum-native radio (RNode firmware) as its
+	// own interface, beside the Meshtastic radio. Serial (auto via the
+	// device supervisor, pinned by USB serial number, or a device path),
+	// RNode-over-WiFi tcp://, later ble://. [MESHSAT-1349]
+	var rnodeIface *routing.RNodeInterface
+	if cfg.RNodePort != "" {
+		rcfg := routing.RNodeInterfaceConfig{
+			Name:        "rnode_0",
+			Port:        cfg.RNodePort,
+			Preset:      cfg.RNodePreset,
+			FlowControl: cfg.RNodeFlowControl,
+			IDCallsign:  cfg.RNodeIDCallsign,
+			IDInterval:  time.Duration(cfg.RNodeIDIntervalS) * time.Second,
+		}
+		if p := rnode.PresetByID(cfg.RNodePreset); p != nil {
+			rcfg.Params = p.Params
+		}
+		if cfg.RNodeFrequency > 0 {
+			rcfg.Params.Frequency = uint32(cfg.RNodeFrequency)
+		}
+		if cfg.RNodeBandwidth > 0 {
+			rcfg.Params.Bandwidth = uint32(cfg.RNodeBandwidth)
+		}
+		if cfg.RNodeSF > 0 {
+			rcfg.Params.SF = uint8(cfg.RNodeSF)
+		}
+		if cfg.RNodeCR > 0 {
+			rcfg.Params.CR = uint8(cfg.RNodeCR)
+		}
+		if cfg.RNodeTXPower >= 0 {
+			rcfg.Params.TXPower = uint8(cfg.RNodeTXPower)
+		}
+		rcfg.Params.STALock = cfg.RNodeAirtimeShort
+		rcfg.Params.LTALock = cfg.RNodeAirtimeLong
+		rnodeIface = routing.NewRNodeInterface(rcfg, func(packet []byte) {
+			proc.InjectReticulumPacket(packet, "rnode_0")
+		})
+		if err := rnodeIface.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("rnode_0: start failed")
+			rnodeIface = nil
+		} else {
+			proc.RegisterPacketSender("rnode_0", rnodeIface.Send)
+			if ifaceReg != nil {
+				ri := routing.NewReticulumInterface("rnode_0", reticulum.IfaceRNode, reticulum.MTU, rnodeIface.Send)
+				ri.SetOnlineFunc(rnodeIface.IsOnline)
+				ri.SetBitrateFunc(rnodeIface.Bitrate)
+				ifaceReg.Register(ri)
+			}
+			if rnodeIface.NeedsSupervisor() {
+				supervisor.ArmRNodeProbe(true)
+				supervisor.SetCallbacks(transport.RoleRNode, &transport.DriverCallbacks{
+					InstanceID: "rnode_0",
+					OnPortFound: func(port string) {
+						rnodeIface.SetPort(port)
+						log.Info().Str("port", port).Msg("supervisor: rnode port assigned")
+					},
+					OnPortLost: func(port string) {
+						rnodeIface.ClearPort()
+						log.Warn().Str("port", port).Msg("supervisor: rnode port lost")
+					},
+					HasPort: func() bool { return rnodeIface.Port() != "" && rnodeIface.Port() != "auto" },
+				})
+			}
+			log.Info().Str("port", cfg.RNodePort).Str("preset", cfg.RNodePreset).Uint32("freq", rcfg.Params.Frequency).Msg("rnode_0: RNode interface started")
 		}
 	}
 

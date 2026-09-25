@@ -139,6 +139,20 @@ type Config struct {
 	RNSIFACNetkey   string // MESHSAT_RNS_IFAC_NETKEY: interface access code passphrase for tcp_0
 	RNSPathTTLHours int    // MESHSAT_RNS_PATH_TTL_HOURS (default 168, one week like upstream)
 
+	// RNode LoRa radio as a Reticulum interface (rnode_0). [MESHSAT-1349]
+	RNodePort         string  // MESHSAT_RNODE_PORT: "" = off, auto, usb_serial:<sn>, /dev/..., tcp://host[:7633], ble://...
+	RNodePreset       string  // MESHSAT_RNODE_PRESET: us-915, eu-868, au-915, ism-433 (CrossTalk's starters)
+	RNodeFrequency    int     // MESHSAT_RNODE_FREQUENCY Hz (overrides the preset)
+	RNodeBandwidth    int     // MESHSAT_RNODE_BANDWIDTH Hz
+	RNodeSF           int     // MESHSAT_RNODE_SF
+	RNodeCR           int     // MESHSAT_RNODE_CR
+	RNodeTXPower      int     // MESHSAT_RNODE_TXPOWER dBm
+	RNodeAirtimeShort float64 // MESHSAT_RNODE_AIRTIME_SHORT percent, 0 = unset
+	RNodeAirtimeLong  float64 // MESHSAT_RNODE_AIRTIME_LONG percent, 0 = unset
+	RNodeFlowControl  bool    // MESHSAT_RNODE_FLOW_CONTROL
+	RNodeIDCallsign   string  // MESHSAT_RNODE_ID_CALLSIGN: station id beacon, empty = none
+	RNodeIDIntervalS  int     // MESHSAT_RNODE_ID_INTERVAL seconds
+
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
 	LXMFDisplayName          string // MESHSAT_LXMF_DISPLAY_NAME (default "MeshSat <hostname>")
@@ -235,6 +249,18 @@ func Load() *Config {
 		RNSIFACNetname:               envStr("MESHSAT_RNS_IFAC_NETNAME", ""),
 		RNSIFACNetkey:                envStr("MESHSAT_RNS_IFAC_NETKEY", ""),
 		RNSPathTTLHours:              envInt("MESHSAT_RNS_PATH_TTL_HOURS", 168),
+		RNodePort:                    envStr("MESHSAT_RNODE_PORT", ""),
+		RNodePreset:                  envStr("MESHSAT_RNODE_PRESET", "eu-868"),
+		RNodeFrequency:               envInt("MESHSAT_RNODE_FREQUENCY", 0),
+		RNodeBandwidth:               envInt("MESHSAT_RNODE_BANDWIDTH", 0),
+		RNodeSF:                      envInt("MESHSAT_RNODE_SF", 0),
+		RNodeCR:                      envInt("MESHSAT_RNODE_CR", 0),
+		RNodeTXPower:                 envInt("MESHSAT_RNODE_TXPOWER", -1),
+		RNodeAirtimeShort:            envFloat("MESHSAT_RNODE_AIRTIME_SHORT", 0),
+		RNodeAirtimeLong:             envFloat("MESHSAT_RNODE_AIRTIME_LONG", 0),
+		RNodeFlowControl:             envBool("MESHSAT_RNODE_FLOW_CONTROL", false),
+		RNodeIDCallsign:              envStr("MESHSAT_RNODE_ID_CALLSIGN", ""),
+		RNodeIDIntervalS:             envInt("MESHSAT_RNODE_ID_INTERVAL", 600),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),
@@ -301,6 +327,15 @@ func envInt(key string, fallback int) int {
 
 // envBool reads a boolean env var. Accepts "1", "true", "yes", "on"
 // (case-insensitive) as true; anything else as false. Unset → fallback.
+func envFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return fallback
+}
+
 func envBool(key string, fallback bool) bool {
 	v := os.Getenv(key)
 	if v == "" {

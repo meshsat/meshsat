@@ -80,6 +80,11 @@ func (t *registryTx) HWMTU(ifaceID string) int { return t.reg.GetMTU(ifaceID) }
 // TCP, MQTT and the like are unlimited (0); the radios use the same table
 // as the time-sync limiter.
 func (t *registryTx) Bitrate(ifaceID string) int {
+	if ri := t.reg.Get(ifaceID); ri != nil {
+		if bw := ri.Bitrate(); bw > 0 {
+			return bw
+		}
+	}
 	typ := ifaceID
 	if i := strings.LastIndex(ifaceID, "_"); i > 0 {
 		typ = ifaceID[:i]

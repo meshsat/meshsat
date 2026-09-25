@@ -18,6 +18,7 @@ const (
 	RoleCellular    DeviceRole = "cellular"
 	RoleGPS         DeviceRole = "gps"
 	RoleZigBee      DeviceRole = "zigbee"
+	RoleRNode       DeviceRole = "rnode" // RNode firmware LoRa radio (Reticulum native) [MESHSAT-1349]
 	RoleNone        DeviceRole = ""
 )
 
