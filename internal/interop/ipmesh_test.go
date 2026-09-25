@@ -245,8 +245,15 @@ func TestInteropAutoIfaceAgainstRNSD(t *testing.T) {
 		if _, err := exec.LookPath("unshare"); err != nil {
 			t.Skip("unshare not available")
 		}
-		if out, err := exec.Command("unshare", "-rn", "true").CombinedOutput(); err != nil {
-			t.Skipf("user network namespaces unavailable: %v %s", err, out)
+		if _, err := exec.LookPath("ip"); err != nil {
+			t.Skip("iproute2 (ip) not available; the veth pair needs it")
+		}
+		// The whole setup must work in this environment (user namespaces,
+		// CAP_NET_ADMIN inside one, veth support); otherwise skip, as a CI
+		// container without them cannot run this test.
+		probe := `ip link add p0 type veth peer name p1 && ip link set p0 up && ip link set p1 up`
+		if out, err := exec.Command("unshare", "-rn", "sh", "-c", probe).CombinedOutput(); err != nil {
+			t.Skipf("user network namespace with a veth pair unavailable here: %v %s", err, out)
 		}
 		rnsenv.Python(t) // resolve (and create) the venv outside the namespace
 		exe, err := os.Executable()
