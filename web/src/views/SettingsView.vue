@@ -1464,7 +1464,7 @@ async function doIBSSLeave() {
 }
 
 // Routing config + peers + flood control
-const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '' })
+const routingForm = ref({ listen_port: 4242, announce_interval: 300, listen_addr: '', imt_rns_framing: false })
 const routingWarning = ref('')
 const newPeerAddr = ref('')
 const routingPeers = ref([])
@@ -3323,6 +3323,10 @@ onUnmounted(() => {
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
             </div>
           </div>
+          <label class="flex items-start gap-2 mb-3 text-xs text-gray-300">
+            <input type="checkbox" v-model="routingForm.imt_rns_framing" class="mt-0.5">
+            <span>Iridium IMT: CrossTalk framing (<span class="font-mono">RNSI</span> header on every packet). Turn on when the far side is a RockBLOCK 9704 running CrossTalk; receive detects either form. Applies at once.</span>
+          </label>
           <div class="flex items-center gap-2">
             <button @click="saveRoutingConfig" class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600">Save</button>
             <span v-if="routingForm.listen_addr" class="text-[10px] text-gray-500">Currently listening on {{ routingForm.listen_addr }}</span>

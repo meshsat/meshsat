@@ -37,6 +37,8 @@ services:
       - MESHSAT_AUTO_IFACE_GROUP=${MESHSAT_AUTO_IFACE_GROUP:-reticulum}
       - MESHSAT_KISS_PORT=${MESHSAT_KISS_PORT:-}
       - MESHSAT_KISS_BAUD=${MESHSAT_KISS_BAUD:-115200}
+      # CrossTalk IMT framing on iridium_imt_0 (MESHSAT-1351); Settings > Routing overrides.
+      - MESHSAT_IMT_RNS_FRAMING=${MESHSAT_IMT_RNS_FRAMING:-false}
     volumes:
       - meshsat-data:/data
       - /dev:/dev

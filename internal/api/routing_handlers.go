@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -311,6 +312,7 @@ type routingConfig struct {
 	AnnounceInterval int    `json:"announce_interval"`
 	ListenAddr       string `json:"listen_addr"`
 	SMSPeer          string `json:"sms_peer,omitempty"`
+	IMTRNSFraming    bool   `json:"imt_rns_framing"` // CrossTalk "RNSI\x01" header on iridium_imt_0 [MESHSAT-1351]
 	Warning          string `json:"warning,omitempty"`
 }
 
@@ -349,13 +351,30 @@ func (s *Server) handleGetRoutingConfig(w http.ResponseWriter, r *http.Request) 
 // @Success 200 {object} routingConfig
 // @Router /api/routing/config [put]
 func (s *Server) handleSetRoutingConfig(w http.ResponseWriter, r *http.Request) {
-	var req routingConfig
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	var req routingConfig
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Optional fields: only a key that is present changes the stored value.
+	var present struct {
+		IMTRNSFraming *bool `json:"imt_rns_framing"`
+	}
+	_ = json.Unmarshal(body, &present)
 
 	prev := s.loadRoutingConfig()
+
+	if present.IMTRNSFraming != nil {
+		prev.IMTRNSFraming = *present.IMTRNSFraming
+		if s.imtIface != nil {
+			s.imtIface.SetRNSFraming(prev.IMTRNSFraming)
+		}
+	}
 
 	if req.ListenPort > 0 {
 		prev.ListenPort = req.ListenPort
