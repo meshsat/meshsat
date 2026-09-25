@@ -1504,6 +1504,121 @@ async function removePeer(addr) {
   } catch (e) { routingWarning.value = e.message }
 }
 
+// Dynamic Reticulum interfaces: rnode, udp, auto, kiss [MESHSAT-1350]
+const dynIfaces = ref([])
+const dynPresets = ref([])
+const dynPorts = ref([])
+const dynError = ref('')
+const dynFormOpen = ref(false)
+const dynEditingId = ref('')
+const dynTypeLabels = { rnode: 'RNode LoRa', udp: 'UDP (IP mesh)', auto: 'AutoInterface (LAN)', kiss: 'KISS TNC' }
+function emptyDynForm(type = 'rnode') {
+  return {
+    type,
+    enabled: true,
+    rnode: { port: 'auto', preset: 'eu-868', frequency: 867200000, bandwidth: 125000, spreadingfactor: 8, codingrate: 5, txpower: 14,
+      airtime_limit_short: 0, airtime_limit_long: 0, flow_control: false, id_callsign: '', id_interval_min: 10 },
+    udp: { device: '', listen_addr: '0.0.0.0:4242', forward_addr: '' },
+    auto: { group_id: 'reticulum', devices: 'eth0' },
+    kiss: { port: '', baud: 115200, preamble_ms: 350, txtail_ms: 20, persistence: 64, slottime_ms: 20, flow_control: false }
+  }
+}
+const dynForm = ref(emptyDynForm())
+async function loadDynIfaces() {
+  try {
+    const data = await api.get('/routing/ifaces')
+    dynIfaces.value = Array.isArray(data) ? data : []
+  } catch {}
+}
+async function loadDynPickers() {
+  try { const p = await api.get('/routing/rnode/presets'); dynPresets.value = Array.isArray(p) ? p : [] } catch {}
+  try { const p = await api.get('/routing/rnode/ports'); dynPorts.value = Array.isArray(p) ? p : [] } catch {}
+}
+function applyDynPreset() {
+  const p = dynPresets.value.find(x => x.id === dynForm.value.rnode.preset)
+  if (!p) return
+  Object.assign(dynForm.value.rnode, { frequency: p.frequency, bandwidth: p.bandwidth, spreadingfactor: p.spreadingfactor, codingrate: p.codingrate, txpower: p.txpower })
+}
+function openDynForm(iface) {
+  dynError.value = ''
+  loadDynPickers()
+  if (!iface) { dynEditingId.value = ''; dynForm.value = emptyDynForm(); dynFormOpen.value = true; return }
+  const f = emptyDynForm(iface.type)
+  f.enabled = iface.enabled
+  const c = iface.config || {}
+  if (iface.type === 'rnode') {
+    Object.assign(f.rnode, { port: c.port || 'auto', preset: c.preset || '', flow_control: !!c.flow_control, id_callsign: c.id_callsign || '',
+      id_interval_min: c.id_interval ? Math.round(c.id_interval / 6e10) : 10 }, c.params || {})
+  } else if (iface.type === 'udp') {
+    Object.assign(f.udp, { device: c.device || '', listen_addr: c.listen_addr || '', forward_addr: c.forward_addr || '' })
+  } else if (iface.type === 'auto') {
+    Object.assign(f.auto, { group_id: c.group_id || 'reticulum', devices: (c.devices || []).join(', ') })
+  } else if (iface.type === 'kiss') {
+    Object.assign(f.kiss, { port: c.port || '', baud: c.baud || 115200, preamble_ms: c.preamble_ms || 350, txtail_ms: c.txtail_ms || 20,
+      persistence: c.persistence || 64, slottime_ms: c.slottime_ms || 20, flow_control: !!c.flow_control })
+  }
+  dynEditingId.value = iface.id
+  dynForm.value = f
+  dynFormOpen.value = true
+}
+function dynConfigFromForm() {
+  const f = dynForm.value
+  if (f.type === 'rnode') {
+    const r = f.rnode
+    return { port: r.port || 'auto', preset: r.preset || '', flow_control: !!r.flow_control, id_callsign: r.id_callsign || '',
+      id_interval: r.id_callsign ? Number(r.id_interval_min || 10) * 6e10 : 0,
+      params: { frequency: Number(r.frequency), bandwidth: Number(r.bandwidth), spreadingfactor: Number(r.spreadingfactor),
+        codingrate: Number(r.codingrate), txpower: Number(r.txpower),
+        airtime_limit_short: Number(r.airtime_limit_short || 0), airtime_limit_long: Number(r.airtime_limit_long || 0) } }
+  }
+  if (f.type === 'udp') return { device: f.udp.device || '', listen_addr: f.udp.listen_addr || '', forward_addr: f.udp.forward_addr || '' }
+  if (f.type === 'auto') return { group_id: f.auto.group_id || 'reticulum', devices: String(f.auto.devices || '').split(',').map(x => x.trim()).filter(Boolean) }
+  const k = f.kiss
+  return { port: k.port, baud: Number(k.baud), preamble_ms: Number(k.preamble_ms), txtail_ms: Number(k.txtail_ms),
+    persistence: Number(k.persistence), slottime_ms: Number(k.slottime_ms), flow_control: !!k.flow_control }
+}
+async function saveDynIface() {
+  dynError.value = ''
+  const body = { type: dynForm.value.type, enabled: !!dynForm.value.enabled, config: dynConfigFromForm() }
+  try {
+    if (dynEditingId.value) await api.put(`/routing/ifaces/${dynEditingId.value}`, body)
+    else await api.post('/routing/ifaces', body)
+    dynFormOpen.value = false
+    await loadDynIfaces()
+  } catch (e) { dynError.value = e.message }
+}
+async function restartDynIface(id) {
+  dynError.value = ''
+  try { await api.post(`/routing/ifaces/${id}/restart`) } catch (e) { dynError.value = e.message }
+  await loadDynIfaces()
+}
+async function toggleDynIface(iface) {
+  dynError.value = ''
+  try { await api.put(`/routing/ifaces/${iface.id}`, { enabled: !iface.enabled }) } catch (e) { dynError.value = e.message }
+  await loadDynIfaces()
+}
+async function removeDynIface(id) {
+  if (!confirm(`Remove ${id}?`)) return
+  dynError.value = ''
+  try { await api.del(`/routing/ifaces/${id}`) } catch (e) { dynError.value = e.message }
+  await loadDynIfaces()
+}
+function dynStatsLine(iface) {
+  const st = iface.stats || {}
+  if (iface.type === 'rnode' && st.rnode) {
+    const r = st.rnode
+    return `${(r.frequency / 1e6).toFixed(3)} MHz  RSSI ${r.rssi} dBm  SNR ${r.snr} dB  airtime ${(r.airtime_short || 0).toFixed(1)}% / ${(r.airtime_long || 0).toFixed(1)}%  load ${(r.channel_load_short || 0).toFixed(1)}%  ${st.bitrate ? Math.round(st.bitrate) + ' bps' : ''}`
+  }
+  if (iface.type === 'auto') return `${st.peer_count || 0} peer${st.peer_count === 1 ? '' : 's'}${(st.peers || []).length ? ': ' + st.peers.map(p => p.address + ' on ' + p.device).join(', ') : ''}`
+  if (st.rx_bytes !== undefined) return `rx ${st.rx_bytes} B  tx ${st.tx_bytes} B`
+  return ''
+}
+let dynTimer = null
+watch(activeTab, (v) => {
+  if (v === 'routing') { loadDynIfaces(); if (!dynTimer) dynTimer = setInterval(() => { if (activeTab.value === 'routing') loadDynIfaces() }, 10000) }
+})
+onUnmounted(() => { if (dynTimer) clearInterval(dynTimer) })
+
 // Hub connection
 const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false, tls_ca: '', tls_insecure: false })
 const hubWarning = ref('')
@@ -1581,7 +1696,7 @@ onMounted(async () => {
   store.fetchInterfaces()
   refreshAPRSKey()
   loadBondGroups()
-  loadRoutingConfig(); fetchPeers(); loadHubConfig()
+  loadRoutingConfig(); fetchPeers(); loadHubConfig(); loadDynIfaces()
   fetchZigBeeStatus(); fetchZigBeeDevices(); fetchPermitJoinStatus()
   store.fetchRangeTests()
   loadSigningKey()
@@ -3243,6 +3358,122 @@ onUnmounted(() => {
               <button v-if="peer.dynamic" @click="removePeer(peer.address)"
                 class="px-2 py-0.5 rounded bg-red-900 text-red-300 text-[10px] hover:bg-red-800">Remove</button>
               <span v-else class="text-[10px] text-gray-600">env</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reticulum Interfaces: rnode, udp, auto, kiss [MESHSAT-1350] -->
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-1">
+            <h3 class="text-sm font-medium text-gray-200">Reticulum Interfaces</h3>
+            <button @click="openDynForm(null)" class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600">Add</button>
+          </div>
+          <p class="text-xs text-gray-500 mb-3">RNode LoRa radios (USB, WiFi, BLE), IP mesh over UDP or AutoInterface, and KISS TNCs. Changes apply without a restart; wlan0 is never adopted.</p>
+          <p v-if="dynError" class="mb-2 text-[10px] text-amber-400 bg-amber-900/20 rounded px-2 py-1.5 border border-amber-800/40">{{ dynError }}</p>
+          <div v-if="dynIfaces.length === 0 && !dynFormOpen" class="text-xs text-gray-500 text-center py-2">No RNode, UDP, AutoInterface or KISS interface yet.</div>
+          <div v-else class="space-y-1.5">
+            <div v-for="iface in dynIfaces" :key="iface.id" class="bg-gray-900 rounded px-3 py-2 border border-gray-700">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-xs font-mono text-gray-200">{{ iface.id }}</span>
+                  <span class="text-[10px] text-gray-500">{{ dynTypeLabels[iface.type] || iface.type }}</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded"
+                    :class="!iface.enabled ? 'bg-gray-700 text-gray-500' : iface.online ? 'bg-green-900/40 text-green-400' : 'bg-amber-900/40 text-amber-400'">
+                    {{ !iface.enabled ? 'disabled' : iface.online ? 'online' : 'offline' }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-1 shrink-0">
+                  <button @click="openDynForm(iface)" class="px-2 py-0.5 rounded bg-gray-700 text-gray-200 text-[10px] hover:bg-gray-600">Edit</button>
+                  <button @click="restartDynIface(iface.id)" :disabled="!iface.enabled" class="px-2 py-0.5 rounded bg-gray-700 text-gray-200 text-[10px] hover:bg-gray-600 disabled:opacity-40">Restart</button>
+                  <button @click="toggleDynIface(iface)" class="px-2 py-0.5 rounded bg-gray-700 text-gray-200 text-[10px] hover:bg-gray-600">{{ iface.enabled ? 'Disable' : 'Enable' }}</button>
+                  <button @click="removeDynIface(iface.id)" class="px-2 py-0.5 rounded bg-red-900 text-red-300 text-[10px] hover:bg-red-800">Remove</button>
+                </div>
+              </div>
+              <div class="text-[10px] text-gray-500 font-mono mt-1 truncate">{{ iface.summary }}</div>
+              <div v-if="dynStatsLine(iface)" class="text-[10px] text-gray-400 font-mono mt-0.5 truncate">{{ dynStatsLine(iface) }}</div>
+              <div v-if="iface.last_error" class="text-[10px] text-amber-400 mt-0.5 truncate">{{ iface.last_error }}</div>
+            </div>
+          </div>
+
+          <div v-if="dynFormOpen" class="mt-3 bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">Type</label>
+                <select v-model="dynForm.type" :disabled="!!dynEditingId" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 disabled:opacity-60">
+                  <option v-for="(label, t) in dynTypeLabels" :key="t" :value="t">{{ label }}</option>
+                </select>
+              </div>
+              <label class="flex items-end gap-2 pb-1 text-xs text-gray-300"><input type="checkbox" v-model="dynForm.enabled"> Enabled</label>
+            </div>
+
+            <template v-if="dynForm.type === 'rnode'">
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-1">Connection</label>
+                  <input type="text" v-model="dynForm.rnode.port" list="rnode-ports" placeholder="auto, usb_serial:<sn>, /dev/..., tcp://host, ble://name"
+                    class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+                  <datalist id="rnode-ports">
+                    <option v-for="p in dynPorts" :key="p.value" :value="p.value">{{ p.label }}{{ p.in_use ? ' (in use)' : '' }}</option>
+                  </datalist>
+                  <span class="text-[9px] text-gray-600 mt-0.5 block">usb_serial: survives re-enumeration; ports marked in use belong to another driver.</span>
+                </div>
+                <div>
+                  <label class="text-[10px] text-gray-500 block mb-1">Preset</label>
+                  <select v-model="dynForm.rnode.preset" @change="applyDynPreset" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
+                    <option value="">custom</option>
+                    <option v-for="p in dynPresets" :key="p.id" :value="p.id">{{ p.label }}</option>
+                  </select>
+                </div>
+              </div>
+              <div class="grid grid-cols-5 gap-2">
+                <div><label class="text-[10px] text-gray-500 block mb-1">Frequency (Hz)</label><input type="number" v-model.number="dynForm.rnode.frequency" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Bandwidth (Hz)</label><input type="number" v-model.number="dynForm.rnode.bandwidth" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">SF</label><input type="number" v-model.number="dynForm.rnode.spreadingfactor" min="5" max="12" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">CR</label><input type="number" v-model.number="dynForm.rnode.codingrate" min="5" max="8" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">TX (dBm)</label><input type="number" v-model.number="dynForm.rnode.txpower" min="0" max="37" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+              </div>
+              <div class="grid grid-cols-4 gap-2">
+                <div><label class="text-[10px] text-gray-500 block mb-1">Airtime short (%)</label><input type="number" v-model.number="dynForm.rnode.airtime_limit_short" min="0" max="100" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Airtime long (%)</label><input type="number" v-model.number="dynForm.rnode.airtime_limit_long" min="0" max="100" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">ID callsign</label><input type="text" v-model="dynForm.rnode.id_callsign" placeholder="none" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">ID every (min)</label><input type="number" v-model.number="dynForm.rnode.id_interval_min" min="1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+              </div>
+              <label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" v-model="dynForm.rnode.flow_control"> Flow control (wait for READY between frames)</label>
+            </template>
+
+            <template v-else-if="dynForm.type === 'udp'">
+              <div class="grid grid-cols-3 gap-2">
+                <div><label class="text-[10px] text-gray-500 block mb-1">Device (derives addresses)</label><input type="text" v-model="dynForm.udp.device" placeholder="eth0" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Listen</label><input type="text" v-model="dynForm.udp.listen_addr" placeholder="0.0.0.0:4242" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Forward (broadcast)</label><input type="text" v-model="dynForm.udp.forward_addr" placeholder="10.41.255.255:4242" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+              </div>
+              <span class="text-[9px] text-gray-600 block">One raw Reticulum packet per datagram. A Haven / OpenMANET node uses listen 0.0.0.0:4242, forward 10.41.255.255:4242.</span>
+            </template>
+
+            <template v-else-if="dynForm.type === 'auto'">
+              <div class="grid grid-cols-2 gap-2">
+                <div><label class="text-[10px] text-gray-500 block mb-1">Group id</label><input type="text" v-model="dynForm.auto.group_id" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Devices (comma separated)</label><input type="text" v-model="dynForm.auto.devices" placeholder="eth0" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+              </div>
+              <span class="text-[9px] text-gray-600 block">IPv6 link-local discovery on the named devices, as rnsd, Sideband and CrossTalk do. The device only needs to be up.</span>
+            </template>
+
+            <template v-else>
+              <div class="grid grid-cols-3 gap-2">
+                <div><label class="text-[10px] text-gray-500 block mb-1">Port</label><input type="text" v-model="dynForm.kiss.port" placeholder="/dev/serial/by-id/... or tcp://host:8100" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Baud</label><input type="number" v-model.number="dynForm.kiss.baud" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">TX delay (ms)</label><input type="number" v-model.number="dynForm.kiss.preamble_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">TX tail (ms)</label><input type="number" v-model.number="dynForm.kiss.txtail_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Persistence</label><input type="number" v-model.number="dynForm.kiss.persistence" min="0" max="255" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label class="text-[10px] text-gray-500 block mb-1">Slot time (ms)</label><input type="number" v-model.number="dynForm.kiss.slottime_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+              </div>
+              <label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" v-model="dynForm.kiss.flow_control"> Flow control (TNC sends READY)</label>
+              <span class="text-[9px] text-gray-600 block">Raw Reticulum packets as KISS data frames, no AX.25. A Mercury HF modem listens on tcp://host:8100.</span>
+            </template>
+
+            <div class="flex items-center gap-2 pt-1">
+              <button @click="saveDynIface" class="px-3 py-1 bg-teal-700 text-white text-xs rounded hover:bg-teal-600">{{ dynEditingId ? 'Save' : 'Create' }}</button>
+              <button @click="dynFormOpen = false" class="px-3 py-1 bg-gray-700 text-gray-200 text-xs rounded hover:bg-gray-600">Cancel</button>
             </div>
           </div>
         </div>

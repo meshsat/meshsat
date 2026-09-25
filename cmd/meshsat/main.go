@@ -788,14 +788,48 @@ func main() {
 		}
 	}
 
-	// RNode LoRa radio — a Reticulum-native radio (RNode firmware) as its
-	// own interface, beside the Meshtastic radio. Serial (auto via the
-	// device supervisor, pinned by USB serial number, or a device path),
-	// RNode-over-WiFi tcp://, later ble://. [MESHSAT-1349]
-	var rnodeIface *routing.RNodeInterface
+	// Dynamic Reticulum interfaces: RNode LoRa radios (serial, tcp://,
+	// ble://), UDP broadcast and AutoInterface on an IP mesh (Haven, HaLow,
+	// any LAN), and raw KISS TNCs (Mercury HF modem). Persisted in
+	// routing_ifaces and managed from Settings > Routing; the MESHSAT_*
+	// variables only seed a first instance of each type on a fresh
+	// database. [MESHSAT-1349, MESHSAT-1350]
+	dynIfaces := routing.NewIfaceManager(routing.IfaceManagerConfig{
+		DB:         db,
+		Registry:   ifaceReg,
+		Sink:       proc,
+		BLEAdapter: cfg.BLEAdapter,
+		OnRNodeSupervised: func(id string, r *routing.RNodeInterface) {
+			if supervisor == nil {
+				return
+			}
+			supervisor.ArmRNodeProbe(true)
+			supervisor.AddCallbacks(transport.RoleRNode, &transport.DriverCallbacks{
+				InstanceID: id,
+				OnPortFound: func(port string) {
+					r.SetPort(port)
+					log.Info().Str("iface", id).Str("port", port).Msg("supervisor: rnode port assigned")
+				},
+				OnPortLost: func(port string) {
+					r.ClearPort()
+					log.Warn().Str("iface", id).Str("port", port).Msg("supervisor: rnode port lost")
+				},
+				HasPort: func() bool { return r.Port() != "" && r.Port() != "auto" },
+			})
+		},
+		OnRNodeUnsupervised: func(id string) {
+			if supervisor != nil {
+				supervisor.RemoveCallbacks(transport.RoleRNode, id)
+			}
+		},
+		ExcludePort: func(path string) {
+			if supervisor != nil {
+				supervisor.ExcludePort(path)
+			}
+		},
+	})
 	if cfg.RNodePort != "" {
 		rcfg := routing.RNodeInterfaceConfig{
-			Name:        "rnode_0",
 			Port:        cfg.RNodePort,
 			Preset:      cfg.RNodePreset,
 			FlowControl: cfg.RNodeFlowControl,
@@ -822,37 +856,39 @@ func main() {
 		}
 		rcfg.Params.STALock = cfg.RNodeAirtimeShort
 		rcfg.Params.LTALock = cfg.RNodeAirtimeLong
-		rnodeIface = routing.NewRNodeInterface(rcfg, func(packet []byte) {
-			proc.InjectReticulumPacket(packet, "rnode_0")
-		})
-		if err := rnodeIface.Start(ctx); err != nil {
-			log.Error().Err(err).Msg("rnode_0: start failed")
-			rnodeIface = nil
-		} else {
-			proc.RegisterPacketSender("rnode_0", rnodeIface.Send)
-			if ifaceReg != nil {
-				ri := routing.NewReticulumInterface("rnode_0", reticulum.IfaceRNode, reticulum.MTU, rnodeIface.Send)
-				ri.SetOnlineFunc(rnodeIface.IsOnline)
-				ri.SetBitrateFunc(rnodeIface.Bitrate)
-				ifaceReg.Register(ri)
-			}
-			if rnodeIface.NeedsSupervisor() {
-				supervisor.ArmRNodeProbe(true)
-				supervisor.SetCallbacks(transport.RoleRNode, &transport.DriverCallbacks{
-					InstanceID: "rnode_0",
-					OnPortFound: func(port string) {
-						rnodeIface.SetPort(port)
-						log.Info().Str("port", port).Msg("supervisor: rnode port assigned")
-					},
-					OnPortLost: func(port string) {
-						rnodeIface.ClearPort()
-						log.Warn().Str("port", port).Msg("supervisor: rnode port lost")
-					},
-					HasPort: func() bool { return rnodeIface.Port() != "" && rnodeIface.Port() != "auto" },
-				})
-			}
-			log.Info().Str("port", cfg.RNodePort).Str("preset", cfg.RNodePreset).Uint32("freq", rcfg.Params.Frequency).Msg("rnode_0: RNode interface started")
+		if _, err := dynIfaces.Seed(routing.DynTypeRNode, rcfg); err != nil {
+			log.Error().Err(err).Msg("rnode: seed from environment failed")
 		}
+	}
+	if cfg.UDPListen != "" || cfg.UDPForward != "" || cfg.UDPDevice != "" {
+		if _, err := dynIfaces.Seed(routing.DynTypeUDP, routing.UDPInterfaceConfig{
+			Device: cfg.UDPDevice, ListenAddr: cfg.UDPListen, ForwardAddr: cfg.UDPForward,
+		}); err != nil {
+			log.Error().Err(err).Msg("udp: seed from environment failed")
+		}
+	}
+	if cfg.AutoIfaceDevices != "" {
+		var devs []string
+		for _, d := range strings.Split(cfg.AutoIfaceDevices, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				devs = append(devs, d)
+			}
+		}
+		if _, err := dynIfaces.Seed(routing.DynTypeAuto, routing.AutoInterfaceConfig{
+			GroupID: cfg.AutoIfaceGroup, Devices: devs,
+		}); err != nil {
+			log.Error().Err(err).Msg("auto: seed from environment failed")
+		}
+	}
+	if cfg.KISSPort != "" {
+		if _, err := dynIfaces.Seed(routing.DynTypeKISS, routing.KISSInterfaceConfig{
+			Port: cfg.KISSPort, Baud: cfg.KISSBaud, FlowControl: cfg.KISSFlowControl,
+		}); err != nil {
+			log.Error().Err(err).Msg("kiss: seed from environment failed")
+		}
+	}
+	if err := dynIfaces.Load(ctx); err != nil {
+		log.Error().Err(err).Msg("ifacemgr: load failed")
 	}
 
 	// SMS Reticulum interface — cellular SMS transport for Reticulum packets.
@@ -1519,6 +1555,7 @@ func main() {
 	if tcpIface != nil {
 		srv.SetTCPInterface(tcpIface)
 	}
+	srv.SetIfaceManager(dynIfaces)
 	if rnsStack != nil {
 		srv.SetRNSNode(rnsStack.Node)
 		if rnsStack.LXMF != nil {
@@ -2922,6 +2959,7 @@ func main() {
 	if cellSigRecorder != nil {
 		cellSigRecorder.Stop()
 	}
+	dynIfaces.StopAll()
 	ifaceMgr.Stop()
 	tleMgr.Stop()
 	gwMgr.Stop()

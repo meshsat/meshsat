@@ -329,6 +329,14 @@ func (p *Processor) RegisterPacketSender(ifaceID string, fn func(ctx context.Con
 	p.packetSenders[ifaceID] = fn
 }
 
+// UnregisterPacketSender removes a packet sender when a dynamic interface
+// stops (rnode, udp, auto, kiss instances removed at runtime). [MESHSAT-1350]
+func (p *Processor) UnregisterPacketSender(ifaceID string) {
+	p.packetSendersMu.Lock()
+	defer p.packetSendersMu.Unlock()
+	delete(p.packetSenders, ifaceID)
+}
+
 // SendReticulumPacketTo sends a Reticulum packet to the specified interface.
 // Exported for use by ResourceTransfer send callback.
 func (p *Processor) SendReticulumPacketTo(ifaceID string, data []byte) error {

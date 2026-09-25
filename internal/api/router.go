@@ -64,8 +64,9 @@ type Server struct {
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
-	rnsNode       *rns.Node    // upstream-compatible Reticulum node [MESHSAT-1348]
-	lxmfRouter    *lxmf.Router // LXMF endpoint on that node [MESHSAT-1348]
+	rnsNode       *rns.Node             // upstream-compatible Reticulum node [MESHSAT-1348]
+	dynIfaces     *routing.IfaceManager // rnode/udp/auto/kiss instances [MESHSAT-1350]
+	lxmfRouter    *lxmf.Router          // LXMF endpoint on that node [MESHSAT-1348]
 	spectrumMon   *spectrum.SpectrumMonitor
 	timeConsensus *timesync.MeshTimeConsensus // time-sync peers per interface [MESHSAT-778]
 	restartFn     func()
@@ -683,6 +684,17 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/routing/peers/{addr}", s.handleRemovePeer)
 		r.Get("/routing/hub", s.handleGetHubConfig)
 		r.Put("/routing/hub", s.handleSetHubConfig)
+
+		// Dynamic Reticulum interfaces: rnode, udp, auto, kiss [MESHSAT-1350]
+		r.Get("/routing/ifaces", s.handleListDynIfaces)
+		r.Post("/routing/ifaces", s.handleCreateDynIface)
+		r.Get("/routing/ifaces/{id}", s.handleGetDynIface)
+		r.Put("/routing/ifaces/{id}", s.handleUpdateDynIface)
+		r.Delete("/routing/ifaces/{id}", s.handleDeleteDynIface)
+		r.Post("/routing/ifaces/{id}/restart", s.handleRestartDynIface)
+		r.Get("/routing/ifaces/{id}/stats", s.handleDynIfaceStats)
+		r.Get("/routing/rnode/presets", s.handleRNodePresets)
+		r.Get("/routing/rnode/ports", s.handleRNodePorts)
 
 		// Reticulum node (upstream-compatible) [MESHSAT-1348]
 		r.Get("/rns/status", s.handleRNSStatus)

@@ -1346,6 +1346,22 @@ var migrations = []string{
 		updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_rns_paths_expires ON rns_paths(expires_at);`,
+
+	// v57: routing_ifaces — dynamic Reticulum interfaces (rnode, udp, auto,
+	// kiss) managed at runtime from Settings > Routing. A table of its own,
+	// not gateway_config: the gateway manager lists every gateway_config row
+	// on GET /api/gateways and the booth screen, and a row it cannot start
+	// shows as a dead gateway (the zigbee_1 precedent, MESHSAT-982).
+	// [MESHSAT-1350]
+	`CREATE TABLE IF NOT EXISTS routing_ifaces (
+		id TEXT PRIMARY KEY,
+		type TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		config TEXT NOT NULL DEFAULT '{}',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_routing_ifaces_type ON routing_ifaces(type);`,
 }
 
 func (db *DB) migrate() error {

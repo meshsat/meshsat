@@ -859,3 +859,7 @@ var knownZigBeeOnlyVIDPIDs = map[string]bool{
 	"0451:16a8": true, // TI CC2531 (ZigBee only)
 	"1cf1:0030": true, // dresden elektronik ConBee/RaspBee
 }
+
+// RNodeCapableVIDPID is the exported form of rnodeCapableVIDPID for the
+// port picker in Settings > Routing. [MESHSAT-1350]
+func RNodeCapableVIDPID(vidpid string) bool { return rnodeCapableVIDPID(vidpid) }
