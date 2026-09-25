@@ -168,9 +168,19 @@ func (d *Driver) Open(ctx context.Context) error {
 	case TCP:
 		validateWait = 1500 * time.Millisecond
 	}
-	d.opts.Sleep(validateWait)
-	if err := d.validate(); err != nil {
-		return err
+	// Python sleeps a flat 0.25 s and then checks once; polling to the same
+	// deadline is the same contract without the race on a fast link.
+	deadline := time.Now().Add(validateWait)
+	var verr error
+	for {
+		verr = d.validate()
+		if verr == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if verr != nil {
+		return verr
 	}
 	d.mu.Lock()
 	d.online = true
