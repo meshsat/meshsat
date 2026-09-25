@@ -30,6 +30,7 @@ type RNodeInterfaceConfig struct {
 	FlowControl bool          `json:"flow_control"`
 	IDCallsign  string        `json:"id_callsign,omitempty"`
 	IDInterval  time.Duration `json:"id_interval,omitempty"`
+	BLEAdapter  string        `json:"ble_adapter,omitempty"` // hci0 by default
 }
 
 // RNodeTCPPort is the port an RNode listens on over WiFi.
@@ -309,7 +310,11 @@ func (r *RNodeInterface) connect(ctx context.Context) (*rnode.Driver, error) {
 		}
 		link = conn
 	case rnode.BLE:
-		return nil, errors.New("rnode: ble:// transport not implemented yet")
+		l, err := OpenNUSLink(ctx, r.cfg.BLEAdapter, r.cfg.Port)
+		if err != nil {
+			return nil, err
+		}
+		link = l
 	default:
 		path, err := r.resolvePort()
 		if err != nil {
