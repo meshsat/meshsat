@@ -84,7 +84,7 @@ Full install options, configuration and first-run setup: [docs.meshsat.net](http
 
 ## What it bridges
 
-Eight transport bearers, reachable across nine wired Reticulum interfaces.
+Eight transport bearers, reachable across thirteen Reticulum interface types: nine wired to the bearers below, plus RNode LoRa radios, UDP and AutoInterface on an IP mesh, and raw KISS TNCs, added from the Routing settings without a restart.
 
 | Bearer | Hardware | Notes |
 |---|---|---|
@@ -114,7 +114,7 @@ matters, it is probably the most useful thing on the page.
 | Iridium 9603 SBD | Working on hardware |
 | Cellular SMS both directions | Working on hardware |
 | APRS / AX.25 | Working on hardware |
-| Reticulum interoperability | Passes against upstream Python RNS 1.1.4 |
+| Reticulum interoperability | The bridge is a Reticulum transport node and LXMF endpoint, tested in-process against upstream Python RNS 1.5.4 and LXMF 1.1.0: announces, path requests, links, packets with proofs, resources and LXMF messages both ways, also through a stock `rnsd`; RNode, UDP, AutoInterface and KISS interfaces against `rnsd` as well. Not yet exercised against a Sideband or CrossTalk client on real hardware |
 | HeMB bonding across LoRa, TCP and SMS | Three-bearer field test, April 2026, zero failures |
 | HeMB over a paid satellite bearer | **Not validated.** Outstanding work |
 | HeMB mixed free and paid allocation | **Undefined.** See the allocator note below |
