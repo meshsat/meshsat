@@ -18,6 +18,7 @@ import (
 	"meshsat/internal/gateway"
 	"meshsat/internal/hemb"
 	"meshsat/internal/reticulum"
+	"meshsat/internal/rns"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -49,6 +50,11 @@ type Processor struct {
 	pathFinder      *routing.PathFinder
 	routingIdentity *routing.Identity
 	resourceXfer    *routing.ResourceTransfer
+	// rnsNode is the upstream-compatible Reticulum node. When set, every
+	// packet that parses as an RNS header is offered to it first; only what
+	// it declines falls through to the MeshSat-private handlers below.
+	// [MESHSAT-1348]
+	rnsNode *rns.Node
 
 	// Packet sender: sends a Reticulum packet to a specific interface.
 	// Set by main.go to route responses (link proofs, data) to TCP or mesh.
@@ -203,6 +209,12 @@ func (p *Processor) SetRouting(relay *routing.AnnounceRelay, linkMgr *routing.Li
 	p.linkMgr = linkMgr
 	p.keepalive = keepalive
 	p.destTable = destTable
+}
+
+// SetRNSNode wires the upstream-compatible Reticulum node in front of the
+// legacy routing handlers. [MESHSAT-1348]
+func (p *Processor) SetRNSNode(n *rns.Node) {
+	p.rnsNode = n
 }
 
 // SetTransportNode enables Transport Node packet forwarding. When set,
@@ -822,6 +834,17 @@ func (p *Processor) handleRoutingPacket(event transport.MeshEvent, payload []byt
 			p.custodyACKHandler(payload)
 		}
 		return
+	}
+
+	// Upstream-compatible node first. It gets its own copy because it
+	// increments the hops byte in place; what it declines (MeshSat-private
+	// contexts, packets for unknown destinations) continues below untouched.
+	if p.rnsNode != nil && len(payload) >= reticulum.HeaderMinSize {
+		cp := make([]byte, len(payload))
+		copy(cp, payload)
+		if p.rnsNode.Inbound(cp, sourceIface) {
+			return
+		}
 	}
 
 	// Try Reticulum header parsing first (requires at least HeaderMinSize bytes).

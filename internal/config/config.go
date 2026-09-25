@@ -131,6 +131,14 @@ type Config struct {
 	// Routing announce interval in seconds (0 = disabled)
 	AnnounceIntervalSec int
 
+	// Reticulum node (internal/rns): upstream-compatible transport, links and
+	// path requests on every registered interface. [MESHSAT-1348]
+	RNSEnabled      bool   // MESHSAT_RNS_ENABLED (default true)
+	RNSAcceptLinks  bool   // MESHSAT_RNS_ACCEPT_LINKS: peers may open links to this bridge
+	RNSIFACNetname  string // MESHSAT_RNS_IFAC_NETNAME: interface access code network name for tcp_0
+	RNSIFACNetkey   string // MESHSAT_RNS_IFAC_NETKEY: interface access code passphrase for tcp_0
+	RNSPathTTLHours int    // MESHSAT_RNS_PATH_TTL_HOURS (default 168, one week like upstream)
+
 	// Hub uplink — connects bridge to MeshSat Hub MQTT broker
 	HubURL            string // MQTT broker URL (empty = hub disabled)
 	BridgeID          string // unique bridge identifier (default: hostname)
@@ -214,6 +222,11 @@ func Load() *Config {
 		MQTTReticulumBroker:          envStr("MESHSAT_MQTT_RETICULUM_BROKER", ""),
 		MQTTReticulumTopic:           envStr("MESHSAT_MQTT_RETICULUM_TOPIC", "meshsat/reticulum/packet"),
 		AnnounceIntervalSec:          envInt("MESHSAT_ANNOUNCE_INTERVAL", 300),
+		RNSEnabled:                   envBool("MESHSAT_RNS_ENABLED", true),
+		RNSAcceptLinks:               envBool("MESHSAT_RNS_ACCEPT_LINKS", true),
+		RNSIFACNetname:               envStr("MESHSAT_RNS_IFAC_NETNAME", ""),
+		RNSIFACNetkey:                envStr("MESHSAT_RNS_IFAC_NETKEY", ""),
+		RNSPathTTLHours:              envInt("MESHSAT_RNS_PATH_TTL_HOURS", 168),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
 		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),
