@@ -78,6 +78,7 @@ type PacketSenderProvider interface {
 }
 
 type Dispatcher struct {
+	lxmf       LXMFSender // class lxmf deliveries [MESHSAT-1348]
 	db         *database.DB
 	access     *rules.AccessEvaluator // v0.3.0 access rule evaluation
 	failover   *FailoverResolver      // v0.3.0 failover group resolution
@@ -243,6 +244,17 @@ func (d *Dispatcher) SetFragmentManager(fm *ReassemblyBuffer) {
 // SetCustodyManager registers the DTN custody transfer manager.
 func (d *Dispatcher) SetCustodyManager(cm *CustodyManager) {
 	d.custodyMgr = cm
+}
+
+// SetLXMFSender wires the LXMF router in for class-lxmf deliveries; the
+// virtual channel lxmf_0 gets its own worker. [MESHSAT-1348]
+func (d *Dispatcher) SetLXMFSender(s LXMFSender) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.lxmf = s
+	for _, w := range d.workers {
+		w.lxmf = s
+	}
 }
 
 func (d *Dispatcher) SetPacketSenderProvider(p PacketSenderProvider) {
@@ -428,6 +440,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	w := &DeliveryWorker{
+		lxmf:            d.lxmf,
 		channelID:       ifaceID,
 		desc:            desc,
 		db:              d.db,
@@ -1190,8 +1203,16 @@ func (d *Dispatcher) ForwardHeMBFrame(ifaceID string, data []byte) error {
 	})
 }
 
+// LXMFSender delivers a class-lxmf ledger row: it packs, signs and sends the
+// LXMF message and returns once the destination's proof arrived or the
+// attempt failed. [MESHSAT-1348]
+type LXMFSender interface {
+	Deliver(ctx context.Context, del database.MessageDelivery) (hash string, err error)
+}
+
 // DeliveryWorker polls the delivery queue for a single channel and attempts delivery.
 type DeliveryWorker struct {
+	lxmf            LXMFSender // class lxmf deliveries [MESHSAT-1348]
 	channelID       string
 	desc            channel.ChannelDescriptor
 	db              *database.DB
@@ -1283,6 +1304,13 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		if del.CreatedAt == "" {
 			del.CreatedAt = fresh.CreatedAt // for the event's latency_ms only [MESHSAT-826]
 		}
+	}
+
+	// LXMF: the router packs, signs, sends and waits for the proof; the
+	// ledger keeps the retries. No transforms, no gateway. [MESHSAT-1348]
+	if del.Class == database.DeliveryClassLXMF {
+		w.deliverLXMF(ctx, del)
+		return
 	}
 
 	// Egress rule check: evaluate egress rules on the destination interface before sending.
@@ -1542,6 +1570,29 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	}
 
 	return fmt.Errorf("gateway %s not found or not running", w.channelID)
+}
+
+// deliverLXMF hands one class-lxmf row to the LXMF router. A proof from
+// the destination is the ack; anything else is a retry per the ledger.
+func (w *DeliveryWorker) deliverLXMF(ctx context.Context, del database.MessageDelivery) {
+	if w.lxmf == nil {
+		w.handleFailure(del, errors.New("lxmf router not running"))
+		return
+	}
+	if err := w.db.SetDeliveryStatus(del.ID, "sending", "", ""); err != nil {
+		log.Error().Err(err).Int64("id", del.ID).Msg("failed to set delivery sending")
+		return
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	hash, err := w.lxmf.Deliver(sendCtx, del)
+	if err != nil {
+		log.Warn().Err(err).Int64("id", del.ID).Str("dest", del.Destination).Msg("lxmf delivery attempt failed")
+		w.handleFailure(del, err)
+		return
+	}
+	log.Info().Int64("id", del.ID).Str("dest", del.Destination).Str("lxmf_hash", hash).Msg("lxmf message delivered and proved")
+	w.handleSuccess(del)
 }
 
 func (w *DeliveryWorker) handleSuccess(del database.MessageDelivery) {

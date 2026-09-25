@@ -35,6 +35,13 @@ import argparse, json, os, sys, threading, time
 
 import RNS
 import LXMF
+from LXMF import LXStamper
+
+# Stamp generation in one process: the multiprocess generator starts one
+# worker per core, which on a shared test host is both slow to spawn and
+# unwelcome; the stamps it produces are the same.
+LXStamper.job_linux = LXStamper.job_simple
+LXStamper.job_linux_managed = LXStamper.job_simple
 
 out_lock = threading.Lock()
 
