@@ -11,7 +11,6 @@ import struct
 import sys
 import time
 
-sys.path.insert(0, '/tmp/rns-test/lib/python3.11/site-packages')
 
 from RNS.Cryptography import Ed25519PrivateKey, X25519PrivateKey
 

@@ -521,12 +521,10 @@ func TestHeader_EmptyData(t *testing.T) {
 		PacketType: PacketData,
 	}
 	raw := h.Marshal()
-	parsed, err := UnmarshalHeader(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(parsed.Data) != 0 {
-		t.Errorf("expected no data, got %d bytes", len(parsed.Data))
+	// RNS Packet.unpack rejects a zero-length data field, so a peer would
+	// drop this packet; parsing it as malformed keeps both sides in step.
+	if _, err := UnmarshalHeader(raw); err != ErrEmptyData {
+		t.Fatalf("expected ErrEmptyData, got %v", err)
 	}
 }
 

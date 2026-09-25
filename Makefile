@@ -2,7 +2,7 @@ BINARY := meshsat
 BUILD_DIR := build
 GO := CGO_ENABLED=0 go
 
-.PHONY: build build-arm64 build-x86_64 run test fmt lint tidy clean docker web build-with-web
+.PHONY: build build-arm64 build-x86_64 run test interop fmt lint tidy clean docker web build-with-web
 
 build:
 	$(GO) build -o $(BUILD_DIR)/$(BINARY) ./cmd/meshsat
@@ -18,6 +18,11 @@ run:
 
 test:
 	$(GO) test -v ./...
+
+# Reticulum interoperability against the pinned upstream Python RNS/LXMF
+# (internal/interop/rnsenv creates ~/.cache/meshsat/rns-venv-<ver> on first run).
+interop:
+	MESHSAT_INTEROP=1 $(GO) test -count=1 -timeout 600s -run 'RNSGolden|MatchesRNS|ReadByBridge|MatchRNS|Interop' ./internal/reticulum/... ./internal/interop/...
 
 fmt:
 	gofmt -w .

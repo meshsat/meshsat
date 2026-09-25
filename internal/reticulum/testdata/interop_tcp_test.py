@@ -21,7 +21,6 @@ import time
 import threading
 import signal
 
-sys.path.insert(0, '/tmp/rns-test/lib/python3.11/site-packages')
 
 # HDLC framing (matches RNS TCPInterface.py)
 FLAG = 0x7E
@@ -104,7 +103,6 @@ def run_test(bridge_announce_hex: str) -> dict:
     rnsd_proc = subprocess.Popen(
         [sys.executable, "-c", f"""
 import sys, os, time
-sys.path.insert(0, '/tmp/rns-test/lib/python3.11/site-packages')
 os.environ['RNS_INSTANCE'] = 'test_interop'
 
 import RNS
