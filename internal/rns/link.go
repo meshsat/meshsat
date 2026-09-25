@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/msgpack"
 	"meshsat/internal/reticulum"
 )
 
@@ -70,6 +71,13 @@ type Link struct {
 	remoteIdent   []byte // 64-byte public key once identified
 	local         *Destination
 	destIdentity  *reticulum.Identity // initiator: the destination identity
+	resources     *linkResources
+
+	// AcceptResources decides whether an advertised resource of the given
+	// data size is received; nil rejects every resource.
+	AcceptResources func(size int) bool
+	// OnResource receives a completed incoming resource.
+	OnResource func(*Link, []byte)
 
 	// callbacks (initiator side; responder side uses the Destination's)
 	OnEstablished func(*Link)
@@ -284,6 +292,7 @@ func (m *LinkManager) accept(d *Destination, pkt *Packet) {
 		establishTO: time.Duration(reticulum.DefaultPerHopTimeoutSec*max(1, int(h.Hops)))*time.Second + 6*time.Second,
 		keepalive:   reticulum.KeepaliveMaxSec * time.Second, staleTime: 2 * reticulum.KeepaliveMaxSec * time.Second}
 	l.mdu = reticulum.LinkMDU(mtu)
+	l.AcceptResources = d.AcceptResources
 	m.mu.Lock()
 	m.links[id] = l
 	m.mu.Unlock()
@@ -470,8 +479,8 @@ func (m *LinkManager) receive(l *Link, pkt *Packet) {
 	l.mu.Unlock()
 
 	if h.PacketType == reticulum.PacketProof {
-		if h.Context == reticulum.ContextResourcePRF && l.OnContext != nil {
-			l.OnContext(l, pkt)
+		if h.Context == reticulum.ContextResourcePRF {
+			m.handleResourceProof(l, h.Data)
 		}
 		return
 	}
@@ -543,6 +552,49 @@ func (m *LinkManager) receive(l *Link, pkt *Packet) {
 			m.closed(l)
 		}
 
+	case reticulum.ContextResourceAdv:
+		if plain, err := l.Decrypt(h.Data); err == nil {
+			m.handleResourceAdv(l, plain)
+		}
+	case reticulum.ContextResourceReq:
+		if plain, err := l.Decrypt(h.Data); err == nil {
+			m.handleResourceRequest(l, plain)
+		}
+	case reticulum.ContextResource:
+		m.receivePart(l, h.Data)
+	case reticulum.ContextResourceHMU:
+		if plain, err := l.Decrypt(h.Data); err == nil && len(plain) > FullHashLen {
+			var hash [FullHashLen]byte
+			copy(hash[:], plain[:FullHashLen])
+			rs := l.res()
+			rs.mu.Lock()
+			r := rs.incoming[hash]
+			rs.mu.Unlock()
+			if r != nil {
+				if v, _, err := msgpack.UnpackValue(plain[FullHashLen:]); err == nil && v.Kind == msgpack.KindArray && len(v.Array) == 2 {
+					seg, _ := v.Array[0].AsInt()
+					r.hashmapUpdate(int(seg), v.Array[1].Bin)
+					m.requestNext(r)
+				}
+			}
+		}
+	case reticulum.ContextResourceICL, reticulum.ContextResourceRCL:
+		if plain, err := l.Decrypt(h.Data); err == nil && len(plain) == FullHashLen {
+			var hash [FullHashLen]byte
+			copy(hash[:], plain)
+			rs := l.res()
+			rs.mu.Lock()
+			in := rs.incoming[hash]
+			out := rs.outgoing[hash]
+			rs.mu.Unlock()
+			if in != nil {
+				m.concludeIncoming(in, nil, errors.New("cancelled by sender"))
+			}
+			if out != nil {
+				out.fail(errors.New("rejected by receiver"))
+			}
+		}
+
 	case reticulum.ContextLinkIdentify:
 		if l.Initiator {
 			return
@@ -572,6 +624,7 @@ func (m *LinkManager) receive(l *Link, pkt *Packet) {
 
 // watchdog is Link.__watchdog_job for every link, run from the node jobs.
 func (m *LinkManager) watchdog(now time.Time) {
+	m.resourceWatchdog(now)
 	for _, l := range m.All() {
 		l.mu.Lock()
 		switch l.state {

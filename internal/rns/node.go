@@ -244,6 +244,11 @@ type Destination struct {
 	OnLinkPacket func(l *Link, plain []byte, pkt *Packet)
 	// OnLinkClosed is called when such a link closes.
 	OnLinkClosed func(l *Link)
+	// AcceptResources decides whether resources advertised on links to this
+	// destination are received (nil rejects them).
+	AcceptResources func(size int) bool
+	// OnLinkResource receives completed resources on such links.
+	OnLinkResource func(l *Link, data []byte)
 
 	ratchetMu sync.Mutex
 	ratchets  [][]byte // newest first

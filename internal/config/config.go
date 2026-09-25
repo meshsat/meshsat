@@ -139,6 +139,14 @@ type Config struct {
 	RNSIFACNetkey   string // MESHSAT_RNS_IFAC_NETKEY: interface access code passphrase for tcp_0
 	RNSPathTTLHours int    // MESHSAT_RNS_PATH_TTL_HOURS (default 168, one week like upstream)
 
+	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
+	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
+	LXMFDisplayName          string // MESHSAT_LXMF_DISPLAY_NAME (default "MeshSat <hostname>")
+	LXMFStampCost            int    // MESHSAT_LXMF_STAMP_COST: inbound stamp cost announced, 0 = none
+	LXMFEnforceStamps        bool   // MESHSAT_LXMF_ENFORCE_STAMPS: drop inbound messages without a valid stamp
+	LXMFMaxOutboundStampCost int    // MESHSAT_LXMF_MAX_OUTBOUND_STAMP_COST (default 16)
+	LXMFAnnounceIntervalSec  int    // MESHSAT_LXMF_ANNOUNCE_INTERVAL (default 1800)
+
 	// Hub uplink — connects bridge to MeshSat Hub MQTT broker
 	HubURL            string // MQTT broker URL (empty = hub disabled)
 	BridgeID          string // unique bridge identifier (default: hostname)
@@ -227,6 +235,12 @@ func Load() *Config {
 		RNSIFACNetname:               envStr("MESHSAT_RNS_IFAC_NETNAME", ""),
 		RNSIFACNetkey:                envStr("MESHSAT_RNS_IFAC_NETKEY", ""),
 		RNSPathTTLHours:              envInt("MESHSAT_RNS_PATH_TTL_HOURS", 168),
+		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
+		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
+		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),
+		LXMFEnforceStamps:            envBool("MESHSAT_LXMF_ENFORCE_STAMPS", false),
+		LXMFMaxOutboundStampCost:     envInt("MESHSAT_LXMF_MAX_OUTBOUND_STAMP_COST", 16),
+		LXMFAnnounceIntervalSec:      envInt("MESHSAT_LXMF_ANNOUNCE_INTERVAL", 1800),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
 		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),

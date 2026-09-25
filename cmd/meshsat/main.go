@@ -941,6 +941,14 @@ func main() {
 			IFACNetname:      cfg.RNSIFACNetname,
 			IFACNetkey:       cfg.RNSIFACNetkey,
 			PathTTL:          time.Duration(cfg.RNSPathTTLHours) * time.Hour,
+			LXMF: rnsstack.LXMFConfig{
+				Enabled:              cfg.LXMFEnabled,
+				DisplayName:          cfg.LXMFDisplayName,
+				StampCost:            cfg.LXMFStampCost,
+				EnforceStamps:        cfg.LXMFEnforceStamps,
+				MaxOutboundStampCost: cfg.LXMFMaxOutboundStampCost,
+				AnnounceInterval:     time.Duration(cfg.LXMFAnnounceIntervalSec) * time.Second,
+			},
 			OnAnnounce: func(ann *reticulum.Announce, raw []byte, iface string) {
 				legacy, lErr := routing.UnmarshalAnnounce(raw)
 				if lErr != nil {
@@ -1445,6 +1453,11 @@ func main() {
 	}
 	if rnsStack != nil {
 		srv.SetRNSNode(rnsStack.Node)
+		if rnsStack.LXMF != nil {
+			srv.SetLXMFRouter(rnsStack.LXMF)
+			dispatcher.SetLXMFSender(rnsStack)
+			dispatcher.StartWorker(ctx, "lxmf_0", "lxmf")
+		}
 	}
 
 	// BLE peer manager — auto-starts a Reticulum client-link over BLE

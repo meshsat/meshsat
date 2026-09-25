@@ -18,6 +18,10 @@ const (
 	// satellite transport, base64 text over SMS to the Hub's number. Like
 	// oob it bypasses egress rules and interface transforms. [MESHSAT-963]
 	DeliveryClassHubUplink = "hub_uplink"
+	// DeliveryClassLXMF is an LXMF message for a Reticulum destination: the
+	// destination column holds the 32-hex lxmf.delivery hash and the LXMF
+	// router packs, signs and delivers it with a proof wait. [MESHSAT-1348]
+	DeliveryClassLXMF = "lxmf"
 )
 
 // ErrOOBPeerNotFound is returned when no peer matches.
@@ -305,5 +309,5 @@ func (db *DB) PruneOOBLog(keep int) error {
 // egress rules and the interface transforms of its channel (management
 // and Hub-uplink frames carry their own framing). [MESHSAT-963]
 func DeliveryClassBypassesPolicy(class string) bool {
-	return class == DeliveryClassOOB || class == DeliveryClassHubUplink
+	return class == DeliveryClassOOB || class == DeliveryClassHubUplink || class == DeliveryClassLXMF
 }

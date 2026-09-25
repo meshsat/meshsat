@@ -16,6 +16,7 @@ import (
 	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
+	"meshsat/internal/lxmf"
 	"meshsat/internal/oob"
 	"meshsat/internal/rns"
 	"meshsat/internal/routing"
@@ -63,7 +64,8 @@ type Server struct {
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
-	rnsNode       *rns.Node // upstream-compatible Reticulum node [MESHSAT-1348]
+	rnsNode       *rns.Node    // upstream-compatible Reticulum node [MESHSAT-1348]
+	lxmfRouter    *lxmf.Router // LXMF endpoint on that node [MESHSAT-1348]
 	spectrumMon   *spectrum.SpectrumMonitor
 	timeConsensus *timesync.MeshTimeConsensus // time-sync peers per interface [MESHSAT-778]
 	restartFn     func()
@@ -309,6 +311,11 @@ func (s *Server) SetTransformPipeline(tp *engine.TransformPipeline) {
 // SetInterfaceRegistry sets the Reticulum interface registry for flood control API.
 func (s *Server) SetInterfaceRegistry(reg *routing.InterfaceRegistry) {
 	s.ifaceRegistry = reg
+}
+
+// SetLXMFRouter sets the LXMF endpoint for the /api/lxmf routes.
+func (s *Server) SetLXMFRouter(r *lxmf.Router) {
+	s.lxmfRouter = r
 }
 
 // SetRNSNode sets the upstream-compatible Reticulum node for the /api/rns routes.
@@ -686,6 +693,12 @@ func (s *Server) Router() http.Handler {
 		r.Post("/rns/links", s.handleRNSOpenLink)
 		r.Delete("/rns/links/{id}", s.handleRNSCloseLink)
 		r.Post("/rns/announce", s.handleRNSAnnounce)
+
+		// LXMF endpoint [MESHSAT-1348]
+		r.Get("/lxmf/identity", s.handleLXMFIdentity)
+		r.Get("/lxmf/peers", s.handleLXMFPeers)
+		r.Post("/lxmf/send", s.handleLXMFSend)
+		r.Post("/lxmf/announce", s.handleLXMFAnnounce)
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)

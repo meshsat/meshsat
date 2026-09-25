@@ -7,12 +7,16 @@ package rnsstack
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/lxmf"
 	"meshsat/internal/reticulum"
 	"meshsat/internal/rns"
 	"meshsat/internal/routing"
@@ -33,12 +37,26 @@ type Config struct {
 	OnAnnounce func(ann *reticulum.Announce, raw []byte, iface string)
 	// OnPacket receives decrypted single-packet data for meshsat.bridge.
 	OnPacket func(plain []byte, pkt *rns.Packet)
+
+	// LXMF endpoint; Enabled false leaves it out.
+	LXMF LXMFConfig
 }
 
-// Stack is the built node plus the bridge destination.
+// LXMFConfig configures the lxmf.delivery destination.
+type LXMFConfig struct {
+	Enabled              bool
+	DisplayName          string
+	StampCost            int
+	EnforceStamps        bool
+	MaxOutboundStampCost int
+	AnnounceInterval     time.Duration
+}
+
+// Stack is the built node plus the bridge destination and the LXMF router.
 type Stack struct {
 	Node   *rns.Node
 	Bridge *rns.Destination
+	LXMF   *lxmf.Router // nil when disabled
 	cfg    Config
 }
 
@@ -125,6 +143,17 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		st.loadPaths()
 		node.OnPathChanged = func(dest [rns.HashLen]byte, e *rns.PathEntry) { go st.persistPath(e) }
 	}
+	if cfg.LXMF.Enabled {
+		st.LXMF = lxmf.New(node, lxmf.Config{
+			Identity:             cfg.Identity.ReticulumIdentity(),
+			DisplayName:          cfg.LXMF.DisplayName,
+			StampCost:            cfg.LXMF.StampCost,
+			EnforceStamps:        cfg.LXMF.EnforceStamps,
+			MaxOutboundStampCost: cfg.LXMF.MaxOutboundStampCost,
+			OnMessage:            st.storeInbound,
+		})
+		log.Info().Str("lxmf_dest", st.LXMF.HashHex()).Str("display_name", cfg.LXMF.DisplayName).Int("stamp_cost", cfg.LXMF.StampCost).Msg("lxmf: delivery destination registered")
+	}
 	node.Start(ctx)
 	if cfg.AnnounceInterval > 0 {
 		go st.announcer(ctx)
@@ -137,9 +166,20 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 }
 
 func (st *Stack) announcer(ctx context.Context) {
+	lxmfEvery := st.cfg.LXMF.AnnounceInterval
+	if lxmfEvery <= 0 {
+		lxmfEvery = 30 * time.Minute
+	}
+	lastLXMF := time.Time{}
 	announce := func() {
 		if err := st.Node.Announce(st.Bridge, "", false); err != nil {
 			log.Warn().Err(err).Msg("rns: announce failed")
+		}
+		if st.LXMF != nil && time.Since(lastLXMF) >= lxmfEvery {
+			if err := st.LXMF.Announce(); err != nil {
+				log.Warn().Err(err).Msg("lxmf: announce failed")
+			}
+			lastLXMF = time.Now()
 		}
 	}
 	// Give the interfaces a moment to come up, then announce and repeat.
@@ -159,6 +199,82 @@ func (st *Stack) announcer(ctx context.Context) {
 			announce()
 		}
 	}
+}
+
+// storeInbound files an inbound LXMF message in the messages table so the
+// existing inbox shows it. From/to are "lxmf:<hash>", transport "reticulum".
+func (st *Stack) storeInbound(m *lxmf.Message) {
+	if st.cfg.DB == nil {
+		return
+	}
+	text := string(m.Content)
+	if len(m.Title) > 0 {
+		text = string(m.Title) + "\n" + text
+	}
+	row := &database.Message{
+		PacketID:    uint32(m.Hash[0])<<24 | uint32(m.Hash[1])<<16 | uint32(m.Hash[2])<<8 | uint32(m.Hash[3]),
+		FromNode:    "lxmf:" + hex.EncodeToString(m.Source[:]),
+		ToNode:      "lxmf:" + hex.EncodeToString(m.Dest[:]),
+		PortNum:     1,
+		PortNumName: "LXMF",
+		DecodedText: text,
+		RxTime:      int64(m.Timestamp),
+		Direction:   "rx",
+		Transport:   "reticulum",
+	}
+	if _, err := st.cfg.DB.InsertMessageWithStatus(row, "received"); err != nil {
+		log.Warn().Err(err).Msg("lxmf: store inbound message failed")
+	}
+}
+
+// Deliver implements engine.LXMFSender for the delivery ledger: the row's
+// destination is the lxmf.delivery hash, the payload the JSON body from
+// the API (content, title), the preview the content text.
+func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (string, error) {
+	if st.LXMF == nil {
+		return "", errors.New("lxmf router not running")
+	}
+	destBytes, err := hex.DecodeString(del.Destination)
+	if err != nil || len(destBytes) != lxmf.DestLen {
+		return "", fmt.Errorf("lxmf: destination must be 32 hex characters, got %q", del.Destination)
+	}
+	var dest [lxmf.DestLen]byte
+	copy(dest[:], destBytes)
+	body := LXMFBody{Content: del.TextPreview}
+	if len(del.Payload) > 0 {
+		_ = json.Unmarshal(del.Payload, &body)
+	}
+	m, _, err := st.LXMF.Send(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0)
+	if err != nil {
+		return "", err
+	}
+	if st.cfg.DB != nil {
+		text := body.Content
+		if body.Title != "" {
+			text = body.Title + "\n" + text
+		}
+		row := &database.Message{
+			PacketID:    uint32(m.Hash[0])<<24 | uint32(m.Hash[1])<<16 | uint32(m.Hash[2])<<8 | uint32(m.Hash[3]),
+			FromNode:    "lxmf:" + st.LXMF.HashHex(),
+			ToNode:      "lxmf:" + del.Destination,
+			PortNum:     1,
+			PortNumName: "LXMF",
+			DecodedText: text,
+			RxTime:      time.Now().Unix(),
+			Direction:   "tx",
+			Transport:   "reticulum",
+		}
+		if _, err := st.cfg.DB.InsertMessageWithStatus(row, "delivered"); err != nil {
+			log.Warn().Err(err).Msg("lxmf: store outbound message failed")
+		}
+	}
+	return hex.EncodeToString(m.Hash[:]), nil
+}
+
+// LXMFBody is the JSON payload of a class-lxmf ledger row.
+type LXMFBody struct {
+	Content string `json:"content"`
+	Title   string `json:"title,omitempty"`
 }
 
 func (st *Stack) persistPath(e *rns.PathEntry) {

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,6 +51,7 @@ type peerOpts struct {
 	name      string
 	stampCost int
 	enforce   bool
+	loglevel  int
 }
 
 func scriptPath(t *testing.T) string {
@@ -64,7 +66,8 @@ func scriptPath(t *testing.T) string {
 func startPeer(t *testing.T, o peerOpts) *peer {
 	t.Helper()
 	py := rnsenv.Python(t)
-	args := []string{scriptPath(t), "--config-dir", t.TempDir()}
+	cfgDir := t.TempDir()
+	args := []string{scriptPath(t), "--config-dir", cfgDir}
 	if o.transport {
 		args = append(args, "--transport", "yes")
 	}
@@ -82,6 +85,9 @@ func startPeer(t *testing.T, o peerOpts) *peer {
 	}
 	if o.enforce {
 		args = append(args, "--enforce-stamps")
+	}
+	if o.loglevel > 0 {
+		args = append(args, "--loglevel", fmt.Sprint(o.loglevel))
 	}
 	cmd := exec.Command(py, args...)
 	stdin, err := cmd.StdinPipe()
@@ -118,6 +124,15 @@ func startPeer(t *testing.T, o peerOpts) *peer {
 		}
 	}()
 	t.Cleanup(func() {
+		if t.Failed() {
+			if data, err := os.ReadFile(filepath.Join(cfgDir, "rns.log")); err == nil {
+				lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+				if len(lines) > 60 {
+					lines = lines[len(lines)-60:]
+				}
+				t.Logf("[py %s rns.log tail]\n%s", o.name, strings.Join(lines, "\n"))
+			}
+		}
 		p.send(event{"cmd": "quit"})
 		done := make(chan struct{})
 		go func() { cmd.Wait(); close(done) }()
