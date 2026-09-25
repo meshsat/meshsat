@@ -725,11 +725,23 @@ func main() {
 			log.Info().Msg("iridium SBD reticulum interface started")
 		}
 	}
+	var imtIface *routing.SatInterface
 	if imtTransport != nil {
-		imtIface := routing.NewSatInterface(routing.SatInterfaceConfig{
-			Name: "iridium_imt_0",
-			Type: "iridium",
-			MTU:  102400, // 100KB
+		// CrossTalk "RNSI\x01" framing: env seed, DB key wins once saved. [MESHSAT-1351]
+		imtFraming := cfg.IMTRNSFraming
+		if raw, dbErr := db.GetSystemConfig("reticulum_config"); dbErr == nil && raw != "" {
+			var rc struct {
+				IMTRNSFraming *bool `json:"imt_rns_framing"`
+			}
+			if json.Unmarshal([]byte(raw), &rc) == nil && rc.IMTRNSFraming != nil {
+				imtFraming = *rc.IMTRNSFraming
+			}
+		}
+		imtIface = routing.NewSatInterface(routing.SatInterfaceConfig{
+			Name:       "iridium_imt_0",
+			Type:       "iridium",
+			MTU:        102400, // 100KB
+			RNSFraming: imtFraming,
 		}, imtTransport, func(packet []byte) {
 			log.Debug().Int("size", len(packet)).Msg("iridium_imt_0: received reticulum packet via IMT MT")
 			proc.InjectReticulumPacket(packet, "iridium_imt_0")
@@ -1556,6 +1568,9 @@ func main() {
 		srv.SetTCPInterface(tcpIface)
 	}
 	srv.SetIfaceManager(dynIfaces)
+	if imtIface != nil {
+		srv.SetIMTInterface(imtIface)
+	}
 	if rnsStack != nil {
 		srv.SetRNSNode(rnsStack.Node)
 		if rnsStack.LXMF != nil {

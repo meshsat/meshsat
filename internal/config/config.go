@@ -164,6 +164,10 @@ type Config struct {
 	KISSBaud         int    // MESHSAT_KISS_BAUD, default 115200
 	KISSFlowControl  bool   // MESHSAT_KISS_FLOW_CONTROL
 
+	// CrossTalk IMT framing ("RNSI\x01" header) on iridium_imt_0; the DB key
+	// imt_rns_framing in reticulum_config overrides it. [MESHSAT-1351]
+	IMTRNSFraming bool // MESHSAT_IMT_RNS_FRAMING
+
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
 	LXMFDisplayName          string // MESHSAT_LXMF_DISPLAY_NAME (default "MeshSat <hostname>")
@@ -280,6 +284,7 @@ func Load() *Config {
 		KISSPort:                     envStr("MESHSAT_KISS_PORT", ""),
 		KISSBaud:                     envInt("MESHSAT_KISS_BAUD", 115200),
 		KISSFlowControl:              envBool("MESHSAT_KISS_FLOW_CONTROL", false),
+		IMTRNSFraming:                envBool("MESHSAT_IMT_RNS_FRAMING", false),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),

@@ -66,6 +66,7 @@ type Server struct {
 	tcpIface      *routing.TCPInterface
 	rnsNode       *rns.Node             // upstream-compatible Reticulum node [MESHSAT-1348]
 	dynIfaces     *routing.IfaceManager // rnode/udp/auto/kiss instances [MESHSAT-1350]
+	imtIface      *routing.SatInterface // iridium_imt_0, for the live IMT framing toggle [MESHSAT-1351]
 	lxmfRouter    *lxmf.Router          // LXMF endpoint on that node [MESHSAT-1348]
 	spectrumMon   *spectrum.SpectrumMonitor
 	timeConsensus *timesync.MeshTimeConsensus // time-sync peers per interface [MESHSAT-778]
@@ -322,6 +323,12 @@ func (s *Server) SetLXMFRouter(r *lxmf.Router) {
 // SetRNSNode sets the upstream-compatible Reticulum node for the /api/rns routes.
 func (s *Server) SetRNSNode(n *rns.Node) {
 	s.rnsNode = n
+}
+
+// SetIMTInterface sets the IMT satellite Reticulum interface so the RNSI
+// framing toggle in Settings > Routing applies without a restart.
+func (s *Server) SetIMTInterface(iface *routing.SatInterface) {
+	s.imtIface = iface
 }
 
 // SetTCPInterface sets the TCP Reticulum interface for peer management API.

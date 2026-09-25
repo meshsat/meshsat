@@ -22,6 +22,9 @@ type SatInterfaceConfig struct {
 	MTU int
 	// PollInterval is how often to check for inbound MT messages (0 = event-driven only).
 	PollInterval time.Duration
+	// RNSFraming wraps every packet in CrossTalk's "RNSI\x01" IMT header on
+	// send and requires it on receive (auto-detected when off). [MESHSAT-1351]
+	RNSFraming bool
 }
 
 // SatInterface is a bidirectional Reticulum interface over a satellite transport.
@@ -37,6 +40,8 @@ type SatInterface struct {
 	online  bool
 	stopCh  chan struct{}
 	stopped bool
+	framing bool
+	dedup   *imtDedup
 }
 
 // NewSatInterface creates a new satellite Reticulum interface.
@@ -47,7 +52,23 @@ func NewSatInterface(config SatInterfaceConfig, sat transport.SatTransport, call
 		sat:      sat,
 		callback: callback,
 		stopCh:   make(chan struct{}),
+		framing:  config.RNSFraming,
+		dedup:    newIMTDedup(15*time.Minute, 256),
 	}
+}
+
+// SetRNSFraming turns the CrossTalk IMT header on or off at runtime.
+func (s *SatInterface) SetRNSFraming(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.framing = on
+}
+
+// RNSFraming reports whether the CrossTalk IMT header is on.
+func (s *SatInterface) RNSFraming() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.framing
 }
 
 // Start begins monitoring for inbound MT messages and marks the interface online.
@@ -74,16 +95,21 @@ func (s *SatInterface) Start(ctx context.Context) error {
 func (s *SatInterface) Send(ctx context.Context, packet []byte) error {
 	s.mu.Lock()
 	online := s.online
+	framing := s.framing
 	s.mu.Unlock()
 
 	if !online {
 		return fmt.Errorf("satellite interface %s is offline", s.config.Name)
 	}
-	if len(packet) > s.config.MTU {
-		return fmt.Errorf("packet %d bytes exceeds MTU %d for %s", len(packet), s.config.MTU, s.config.Name)
+	wire := packet
+	if framing {
+		wire = EncodeIMTFrame(packet)
+	}
+	if len(wire) > s.config.MTU {
+		return fmt.Errorf("packet %d bytes exceeds MTU %d for %s", len(wire), s.config.MTU, s.config.Name)
 	}
 
-	result, err := s.sat.Send(ctx, packet)
+	result, err := s.sat.Send(ctx, wire)
 	if err != nil {
 		return fmt.Errorf("sat send: %w", err)
 	}
@@ -221,16 +247,35 @@ func (s *SatInterface) handleInbound(ctx context.Context) {
 		return
 	}
 
+	s.deliver(data)
+}
+
+// deliver unwraps CrossTalk's IMT header when present, drops repeats and
+// hands the packet up.
+func (s *SatInterface) deliver(data []byte) {
+	s.mu.Lock()
+	strict := s.framing
+	s.mu.Unlock()
+	packet, framed, err := DecodeIMTFrame(data, strict)
+	if err != nil {
+		log.Warn().Err(err).Str("iface", s.config.Name).Int("size", len(data)).
+			Msg("sat iface: MT message rejected")
+		return
+	}
 	// Validate: Reticulum packets have at least a 2-byte header
-	if len(data) < 2 {
-		log.Debug().Str("iface", s.config.Name).Int("size", len(data)).
+	if len(packet) < 2 {
+		log.Debug().Str("iface", s.config.Name).Int("size", len(packet)).
 			Msg("sat iface: received data too short for Reticulum packet, ignoring")
 		return
 	}
-
-	log.Debug().Str("iface", s.config.Name).Int("size", len(data)).
+	if s.dedup.Seen(packet, time.Now()) {
+		log.Info().Str("iface", s.config.Name).Int("size", len(packet)).Bool("framed", framed).
+			Msg("sat iface: duplicate MT message dropped")
+		return
+	}
+	log.Debug().Str("iface", s.config.Name).Int("size", len(packet)).Bool("framed", framed).
 		Msg("sat iface: received Reticulum packet via MT")
-	s.callback(data)
+	s.callback(packet)
 }
 
 func (s *SatInterface) isStopped() bool {
