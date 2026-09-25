@@ -33,6 +33,16 @@ services:
       # The variable was missing from this list, so setting it in .env did
       # nothing: compose only passes through the variables it names.
       - MESHSAT_API_RATE_LIMIT=${MESHSAT_API_RATE_LIMIT:-600}
+      # Dynamic Reticulum interfaces (MESHSAT-1349/1350): first-boot seeds only.
+      - MESHSAT_RNODE_PORT=${MESHSAT_RNODE_PORT:-}
+      - MESHSAT_RNODE_PRESET=${MESHSAT_RNODE_PRESET:-eu-868}
+      - MESHSAT_UDP_LISTEN=${MESHSAT_UDP_LISTEN:-}
+      - MESHSAT_UDP_FORWARD=${MESHSAT_UDP_FORWARD:-}
+      - MESHSAT_UDP_DEVICE=${MESHSAT_UDP_DEVICE:-}
+      - MESHSAT_AUTO_IFACE_DEVICES=${MESHSAT_AUTO_IFACE_DEVICES:-}
+      - MESHSAT_AUTO_IFACE_GROUP=${MESHSAT_AUTO_IFACE_GROUP:-reticulum}
+      - MESHSAT_KISS_PORT=${MESHSAT_KISS_PORT:-}
+      - MESHSAT_KISS_BAUD=${MESHSAT_KISS_BAUD:-115200}
       - MESHSAT_ANNOUNCE_INTERVAL=${MESHSAT_ANNOUNCE_INTERVAL:-300}
       # Optional sidecars (uncomment to enable)
       # - MESHSAT_LLAMAZIP_ADDR=llamazip:50051

@@ -20,6 +20,7 @@ require (
 	github.com/warthog618/go-gpiocdev v0.9.1
 	go.bug.st/serial v1.6.4
 	golang.org/x/crypto v0.35.0
+	golang.org/x/net v0.36.0
 	golang.org/x/sys v0.30.0
 	google.golang.org/grpc v1.73.0-dev
 	google.golang.org/protobuf v1.36.11
@@ -43,7 +44,6 @@ require (
 	github.com/prometheus/procfs v0.16.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
-	golang.org/x/net v0.36.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect

@@ -153,6 +153,17 @@ type Config struct {
 	RNodeIDCallsign   string  // MESHSAT_RNODE_ID_CALLSIGN: station id beacon, empty = none
 	RNodeIDIntervalS  int     // MESHSAT_RNODE_ID_INTERVAL seconds
 
+	// IP-mesh and TNC Reticulum interfaces, first-boot seeds for the
+	// routing_ifaces table (Settings > Routing owns them after that). [MESHSAT-1350]
+	UDPListen        string // MESHSAT_UDP_LISTEN host:port, "" = off unless MESHSAT_UDP_FORWARD or _DEVICE set
+	UDPForward       string // MESHSAT_UDP_FORWARD host:port (Haven: 10.41.255.255:4242)
+	UDPDevice        string // MESHSAT_UDP_DEVICE network device, derives listen/forward from its broadcast address
+	AutoIfaceDevices string // MESHSAT_AUTO_IFACE_DEVICES comma-separated, "" = off; never wlan0
+	AutoIfaceGroup   string // MESHSAT_AUTO_IFACE_GROUP, default "reticulum"
+	KISSPort         string // MESHSAT_KISS_PORT /dev/... or tcp://host:8100 (Mercury), "" = off
+	KISSBaud         int    // MESHSAT_KISS_BAUD, default 115200
+	KISSFlowControl  bool   // MESHSAT_KISS_FLOW_CONTROL
+
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
 	LXMFDisplayName          string // MESHSAT_LXMF_DISPLAY_NAME (default "MeshSat <hostname>")
@@ -261,6 +272,14 @@ func Load() *Config {
 		RNodeFlowControl:             envBool("MESHSAT_RNODE_FLOW_CONTROL", false),
 		RNodeIDCallsign:              envStr("MESHSAT_RNODE_ID_CALLSIGN", ""),
 		RNodeIDIntervalS:             envInt("MESHSAT_RNODE_ID_INTERVAL", 600),
+		UDPListen:                    envStr("MESHSAT_UDP_LISTEN", ""),
+		UDPForward:                   envStr("MESHSAT_UDP_FORWARD", ""),
+		UDPDevice:                    envStr("MESHSAT_UDP_DEVICE", ""),
+		AutoIfaceDevices:             envStr("MESHSAT_AUTO_IFACE_DEVICES", ""),
+		AutoIfaceGroup:               envStr("MESHSAT_AUTO_IFACE_GROUP", "reticulum"),
+		KISSPort:                     envStr("MESHSAT_KISS_PORT", ""),
+		KISSBaud:                     envInt("MESHSAT_KISS_BAUD", 115200),
+		KISSFlowControl:              envBool("MESHSAT_KISS_FLOW_CONTROL", false),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),
