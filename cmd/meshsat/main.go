@@ -35,6 +35,8 @@ import (
 	"meshsat/internal/keystore"
 	"meshsat/internal/oob"
 	"meshsat/internal/relayclient"
+	"meshsat/internal/reticulum"
+	"meshsat/internal/rnsstack"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/spectrum"
@@ -921,6 +923,45 @@ func main() {
 	var transportNode *routing.TransportNode
 	var pathFinder *routing.PathFinder
 	var tsConsensus *timesync.MeshTimeConsensus
+
+	// Upstream-compatible Reticulum node (RNS 1.5.x semantics: real links,
+	// path requests, proofs, HEADER_2 transport with the identity hash). It
+	// sees every routing packet first; the legacy handlers below only get
+	// what it declines. Remote announces are mirrored into the legacy
+	// destination table and route table so the SPA and kit-to-kit path
+	// discovery keep working during the migration. [MESHSAT-1348]
+	var rnsStack *rnsstack.Stack
+	if routingID != nil && ifaceReg != nil && cfg.RNSEnabled {
+		st, rErr := rnsstack.Build(ctx, rnsstack.Config{
+			Identity:         routingID,
+			Registry:         ifaceReg,
+			DB:               db,
+			AnnounceInterval: time.Duration(cfg.AnnounceIntervalSec) * time.Second,
+			AcceptLinks:      cfg.RNSAcceptLinks,
+			IFACNetname:      cfg.RNSIFACNetname,
+			IFACNetkey:       cfg.RNSIFACNetkey,
+			PathTTL:          time.Duration(cfg.RNSPathTTLHours) * time.Hour,
+			OnAnnounce: func(ann *reticulum.Announce, raw []byte, iface string) {
+				legacy, lErr := routing.UnmarshalAnnounce(raw)
+				if lErr != nil {
+					return
+				}
+				if destTable != nil {
+					destTable.Update(legacy, iface)
+				}
+				if transportNode != nil {
+					transportNode.ProcessAnnounce(legacy, iface)
+				}
+			},
+		})
+		if rErr != nil {
+			log.Error().Err(rErr).Msg("rns node init failed, running legacy routing only")
+		} else {
+			rnsStack = st
+			proc.SetRNSNode(st.Node)
+		}
+	}
+
 	if routingID != nil && ifaceReg != nil {
 		transportNode = routing.NewTransportNode(routingID, 30*time.Minute, ifaceReg.Send)
 		transportNode.Enable()
@@ -1402,6 +1443,9 @@ func main() {
 	if tcpIface != nil {
 		srv.SetTCPInterface(tcpIface)
 	}
+	if rnsStack != nil {
+		srv.SetRNSNode(rnsStack.Node)
+	}
 
 	// BLE peer manager — auto-starts a Reticulum client-link over BLE
 	// when the operator pairs another MeshSat kit. [MESHSAT-633]
@@ -1705,8 +1749,10 @@ func main() {
 	// Start retention worker
 	go engine.StartRetentionWorker(ctx, db, cfg.RetentionDays)
 
-	// Periodic announce broadcasting — send on all online Reticulum interfaces
-	if routingID != nil && cfg.AnnounceIntervalSec > 0 {
+	// Periodic announce broadcasting — send on all online Reticulum interfaces.
+	// The RNS node runs its own announcer with timestamped random hashes, so
+	// this legacy loop only runs when the node is off. [MESHSAT-1348]
+	if routingID != nil && cfg.AnnounceIntervalSec > 0 && rnsStack == nil {
 		go func() {
 			broadcastAnnounce := func() {
 				announce, aErr := routing.NewAnnounce(routingID, nil)

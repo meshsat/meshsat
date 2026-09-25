@@ -1328,6 +1328,24 @@ var migrations = []string{
 	// their QoS means nothing.
 	`UPDATE access_rules SET qos_level = 1, updated_at = datetime('now')
 	 WHERE qos_level = 0 AND forward_to IS NOT NULL AND forward_to != '';`,
+
+	// v56: Reticulum path table persistence for the upstream-compatible node
+	// (internal/rns, MESHSAT-1348). A row is what an announce taught us: the
+	// next hop's transport id, the hop count, the interface, the expiry, the
+	// random blobs heard (to rank re-announces by emission time) and the
+	// announce itself, kept so a path request can be answered after a restart
+	// exactly as Python RNS answers from its cache.
+	`CREATE TABLE IF NOT EXISTS rns_paths (
+		dest_hash     TEXT PRIMARY KEY,
+		next_hop      TEXT    NOT NULL,
+		hops          INTEGER NOT NULL,
+		iface         TEXT    NOT NULL,
+		expires_at    INTEGER NOT NULL,
+		random_blobs  BLOB,
+		announce_raw  BLOB    NOT NULL,
+		updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_rns_paths_expires ON rns_paths(expires_at);`,
 }
 
 func (db *DB) migrate() error {

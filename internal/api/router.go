@@ -17,6 +17,7 @@ import (
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
 	"meshsat/internal/oob"
+	"meshsat/internal/rns"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/spectrum"
@@ -62,6 +63,7 @@ type Server struct {
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
+	rnsNode       *rns.Node // upstream-compatible Reticulum node [MESHSAT-1348]
 	spectrumMon   *spectrum.SpectrumMonitor
 	timeConsensus *timesync.MeshTimeConsensus // time-sync peers per interface [MESHSAT-778]
 	restartFn     func()
@@ -307,6 +309,11 @@ func (s *Server) SetTransformPipeline(tp *engine.TransformPipeline) {
 // SetInterfaceRegistry sets the Reticulum interface registry for flood control API.
 func (s *Server) SetInterfaceRegistry(reg *routing.InterfaceRegistry) {
 	s.ifaceRegistry = reg
+}
+
+// SetRNSNode sets the upstream-compatible Reticulum node for the /api/rns routes.
+func (s *Server) SetRNSNode(n *rns.Node) {
+	s.rnsNode = n
 }
 
 // SetTCPInterface sets the TCP Reticulum interface for peer management API.
@@ -669,6 +676,16 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/routing/peers/{addr}", s.handleRemovePeer)
 		r.Get("/routing/hub", s.handleGetHubConfig)
 		r.Put("/routing/hub", s.handleSetHubConfig)
+
+		// Reticulum node (upstream-compatible) [MESHSAT-1348]
+		r.Get("/rns/status", s.handleRNSStatus)
+		r.Get("/rns/paths", s.handleRNSPaths)
+		r.Post("/rns/paths/{dest}/request", s.handleRNSRequestPath)
+		r.Delete("/rns/paths/{dest}", s.handleRNSDeletePath)
+		r.Get("/rns/links", s.handleRNSLinks)
+		r.Post("/rns/links", s.handleRNSOpenLink)
+		r.Delete("/rns/links/{id}", s.handleRNSCloseLink)
+		r.Post("/rns/announce", s.handleRNSAnnounce)
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)
