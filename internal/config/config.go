@@ -168,6 +168,16 @@ type Config struct {
 	// imt_rns_framing in reticulum_config overrides it. [MESHSAT-1351]
 	IMTRNSFraming bool // MESHSAT_IMT_RNS_FRAMING
 
+	// 10 m HF gateway (hf_0): receive on the RTL-SDR, licence-gated transmit.
+	// First-boot seed of the hf_0 gateway_config row. [MESHSAT-1353]
+	HFRXEnabled     bool    // MESHSAT_HF_RX_ENABLED: seed hf_0 (borrows the RTL-SDR, spectrum bands go blind)
+	HFFreqHz        int     // MESHSAT_HF_FREQ_HZ (28124000)
+	HFRTLTCPPort    int     // MESHSAT_HF_RTLTCP_PORT (6057)
+	HFRTLGainDB     float64 // MESHSAT_HF_RTL_GAIN_DB (20)
+	HFTXCallsign    string  // MESHSAT_HF_TX_CALLSIGN: empty = transmit locked
+	HFTXAudioDevice string  // MESHSAT_HF_TX_AUDIO_DEVICE: ALSA device of the radio's sound card
+	HFTXCATPort     string  // MESHSAT_HF_TX_CAT_PORT: serial port for PTT over CAT
+
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
 	LXMFDisplayName          string // MESHSAT_LXMF_DISPLAY_NAME (default "MeshSat <hostname>")
@@ -285,6 +295,13 @@ func Load() *Config {
 		KISSBaud:                     envInt("MESHSAT_KISS_BAUD", 115200),
 		KISSFlowControl:              envBool("MESHSAT_KISS_FLOW_CONTROL", false),
 		IMTRNSFraming:                envBool("MESHSAT_IMT_RNS_FRAMING", false),
+		HFRXEnabled:                  envBool("MESHSAT_HF_RX_ENABLED", false),
+		HFFreqHz:                     envInt("MESHSAT_HF_FREQ_HZ", 28124000),
+		HFRTLTCPPort:                 envInt("MESHSAT_HF_RTLTCP_PORT", 6057),
+		HFRTLGainDB:                  envFloat("MESHSAT_HF_RTL_GAIN_DB", 20),
+		HFTXCallsign:                 envStr("MESHSAT_HF_TX_CALLSIGN", ""),
+		HFTXAudioDevice:              envStr("MESHSAT_HF_TX_AUDIO_DEVICE", ""),
+		HFTXCATPort:                  envStr("MESHSAT_HF_TX_CAT_PORT", ""),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),

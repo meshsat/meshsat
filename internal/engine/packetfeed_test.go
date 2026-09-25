@@ -176,8 +176,8 @@ func TestPacketRing_RatesWindows(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := r.Rates(now, tc.window)
-			if len(got) != 4 {
-				t.Fatalf("rates must list exactly the four bearers, got %v", got)
+			if len(got) != len(packetBearers) {
+				t.Fatalf("rates must list exactly the %d bearers, got %v", len(packetBearers), got)
 			}
 			for b, want := range tc.want {
 				if got[b] != want {
@@ -250,7 +250,7 @@ func TestPacketRing_NilSafe(t *testing.T) {
 		t.Errorf("nil ring Len = %d", r.Len())
 	}
 	rates := r.Rates(time.Now(), time.Minute)
-	if len(rates) != 4 {
+	if len(rates) != len(packetBearers) {
 		t.Errorf("nil ring Rates must still list the bearers: %v", rates)
 	}
 	var p *Processor

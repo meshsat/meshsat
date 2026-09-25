@@ -32,6 +32,7 @@ type Manager struct {
 	onEventEmit     EventEmitFunc           // SSE event emitter callback
 	nodeNameFn      func(uint32) string     // resolves mesh node ID to name
 	packetSink      PacketSink              // live packet feed sink for APRS + cellular gateways [MESHSAT-826]
+	sdrProvider     func() SDRBorrower      // the spectrum monitor, once it exists; the HF gateway borrows the RTL-SDR [MESHSAT-1353]
 	running         map[string]Gateway      // keyed by instance_id ("iridium_0", "iridium_1")
 	runningByIface  map[string]Gateway      // v0.3.0: keyed by interface ID ("iridium_0")
 	mu              sync.RWMutex
@@ -165,6 +166,24 @@ func (m *Manager) SetEventEmitFunc(fn EventEmitFunc) {
 // SetNodeNameResolver sets the function used to resolve mesh node IDs to names for SMS.
 func (m *Manager) SetNodeNameResolver(fn func(uint32) string) {
 	m.nodeNameFn = fn
+}
+
+// SetSDRProvider wires the spectrum monitor for the HF gateway. The
+// provider is polled, so it may be set after the manager started.
+func (m *Manager) SetSDRProvider(fn func() SDRBorrower) {
+	m.sdrProvider = fn
+}
+
+// GetHFGateway returns the running HF gateway, if any.
+func (m *Manager) GetHFGateway() *HFGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if h, ok := gw.(*HFGateway); ok {
+			return h
+		}
+	}
+	return nil
 }
 
 // SetPacketSink sets the live packet feed sink handed to every APRS and
@@ -1293,6 +1312,27 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 			return nil, err
 		}
 		return NewTAKGateway(*cfg, m.db), nil
+	case "hf":
+		cfg, err := ParseHFConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		gw := NewHFGateway(*cfg, func() SDRBorrower {
+			if m.sdrProvider == nil {
+				return nil
+			}
+			return m.sdrProvider()
+		})
+		if m.onEventEmit != nil {
+			gw.SetEventEmitter(m.onEventEmit)
+		}
+		if m.packetSink != nil {
+			gw.SetPacketSink(m.packetSink, instanceID)
+		}
+		return gw, nil
 	case "aprs":
 		cfg, err := ParseAPRSConfig(configJSON)
 		if err != nil {

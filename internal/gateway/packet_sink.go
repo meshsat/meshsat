@@ -46,6 +46,7 @@ const (
 	BearerAPRS = "aprs"
 	BearerSMS  = "sms"
 	BearerSat  = "sat" // Iridium MO/MT, SBD or IMT [MESHSAT-962]
+	BearerHF   = "hf"  // 10 m HF shouts, Data Slayer's public codec [MESHSAT-1353]
 
 	DirRX = "rx"
 	DirTX = "tx"

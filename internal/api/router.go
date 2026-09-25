@@ -663,6 +663,7 @@ func (s *Server) Router() http.Handler {
 
 		// APRS dashboard (v0.4.0)
 		r.Get("/aprs/status", s.handleGetAPRSStatus)
+		r.Get("/hf/status", s.handleGetHFStatus) // 10 m HF gateway [MESHSAT-1353]
 		r.Get("/aprs/heard", s.handleGetAPRSHeard)
 		r.Get("/aprs/activity", s.handleGetAPRSActivity)
 

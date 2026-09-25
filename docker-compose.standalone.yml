@@ -39,6 +39,13 @@ services:
       - MESHSAT_KISS_BAUD=${MESHSAT_KISS_BAUD:-115200}
       # CrossTalk IMT framing on iridium_imt_0 (MESHSAT-1351); Settings > Routing overrides.
       - MESHSAT_IMT_RNS_FRAMING=${MESHSAT_IMT_RNS_FRAMING:-false}
+      # 10 m HF gateway (MESHSAT-1353): receive on the RTL-SDR (spectrum bands go
+      # blind while on), transmit locked until an operator callsign is set.
+      - MESHSAT_HF_RX_ENABLED=${MESHSAT_HF_RX_ENABLED:-false}
+      - MESHSAT_HF_FREQ_HZ=${MESHSAT_HF_FREQ_HZ:-28124000}
+      - MESHSAT_HF_TX_CALLSIGN=${MESHSAT_HF_TX_CALLSIGN:-}
+      - MESHSAT_HF_TX_AUDIO_DEVICE=${MESHSAT_HF_TX_AUDIO_DEVICE:-}
+      - MESHSAT_HF_TX_CAT_PORT=${MESHSAT_HF_TX_CAT_PORT:-}
     volumes:
       - meshsat-data:/data
       - /dev:/dev

@@ -529,6 +529,26 @@ func main() {
 
 	// Start gateway manager (loads enabled configs from DB).
 	// The receiver callback fires for each gateway started here.
+	// 10 m HF gateway seed: one hf_0 row when MESHSAT_HF_RX_ENABLED is set
+	// and none exists; Settings > Gateways owns it after that. [MESHSAT-1353]
+	if cfg.HFRXEnabled {
+		if _, err := db.GetGatewayConfigByInstance("hf_0"); err != nil {
+			hfCfg := gateway.DefaultHFConfig()
+			hfCfg.FreqHz = cfg.HFFreqHz
+			hfCfg.RTLTCPPort = cfg.HFRTLTCPPort
+			hfCfg.GainDB = cfg.HFRTLGainDB
+			hfCfg.TXCallsign = cfg.HFTXCallsign
+			hfCfg.TXAudioDevice = cfg.HFTXAudioDevice
+			hfCfg.TXCATPort = cfg.HFTXCATPort
+			if raw, err := json.Marshal(hfCfg); err == nil {
+				if err := db.SaveGatewayConfigInstance("hf", "hf_0", true, string(raw)); err != nil {
+					log.Error().Err(err).Msg("hf: seed failed")
+				} else {
+					log.Info().Int("freq_hz", hfCfg.FreqHz).Bool("tx", hfCfg.TXCallsign != "").Msg("hf: seeded hf_0 from environment; edit it under Settings > Gateways from now on")
+				}
+			}
+		}
+	}
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
@@ -1397,6 +1417,14 @@ func main() {
 		}
 	}
 	spectrumMon = spectrum.NewSpectrumMonitor(rtlScanner, spectrumBands)
+	// The HF gateway borrows the RTL-SDR from the monitor (Suspend/Resume);
+	// the provider is polled, so hf_0 may have started before this point.
+	gwMgr.SetSDRProvider(func() gateway.SDRBorrower {
+		if spectrumMon == nil {
+			return nil
+		}
+		return spectrumMon
+	})
 	if signingService != nil {
 		spectrumMon.SetSigningService(signingService)
 	}
