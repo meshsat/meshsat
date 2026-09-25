@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--stamp-cost", type=int, default=0)
     ap.add_argument("--enforce-stamps", action="store_true")
     ap.add_argument("--loglevel", type=int, default=2)
+    ap.add_argument("--keep-config", action="store_true", help="use the config already in --config-dir")
     args = ap.parse_args()
 
     os.makedirs(args.config_dir, exist_ok=True)
@@ -83,7 +84,9 @@ def main():
     listen_ip = 127.0.0.1
     listen_port = {args.listen}
 """
-    with open(os.path.join(args.config_dir, "config"), "w") as f:
+    if args.keep_config: pass
+    else:
+      with open(os.path.join(args.config_dir, "config"), "w") as f:
         f.write(f"""[reticulum]
   enable_transport = {"Yes" if args.transport == "yes" else "No"}
   share_instance = No

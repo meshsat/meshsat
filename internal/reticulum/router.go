@@ -23,6 +23,10 @@ const (
 	IfaceAX25     InterfaceType = "ax25"
 	IfaceBLE      InterfaceType = "ble"
 	IfaceTCP      InterfaceType = "tcp"
+	IfaceRNode    InterfaceType = "rnode" // RNode LoRa radio, RNS native [MESHSAT-1349]
+	IfaceUDP      InterfaceType = "udp"
+	IfaceAuto     InterfaceType = "auto"
+	IfaceKISS     InterfaceType = "kiss"
 	IfaceWebhook  InterfaceType = "webhook"
 )
 
@@ -37,7 +41,8 @@ const (
 // exclude it from bond allocation. [MESHSAT-672]
 func InterfaceCost(iface InterfaceType) float64 {
 	switch iface {
-	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceAX25, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceWebhook:
+	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceAX25, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceWebhook,
+		IfaceRNode, IfaceUDP, IfaceAuto, IfaceKISS:
 		return 0
 	case IfaceCellular:
 		return 0.005 // SMS cost

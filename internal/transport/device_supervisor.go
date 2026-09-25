@@ -45,6 +45,12 @@ type DriverCallbacks struct {
 type DeviceSupervisor struct {
 	registry *DeviceRegistry
 
+	// rnodeArmed lets identifyAndClaimPort run the RNode detect probe on
+	// Meshtastic-looking boards, once per port per boot, while an rnode
+	// instance configured "auto" has no port. [MESHSAT-1349]
+	rnodeArmed  bool
+	rnodeProbed map[string]bool
+
 	// Driver callbacks keyed by role — multiple callbacks per role for multi-instance
 	callbacksMu sync.RWMutex
 	callbacks   map[DeviceRole][]*DriverCallbacks
@@ -561,6 +567,20 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 
 	vidpid := findUSBVIDPID(port)
 
+	// Step 0: RNode detect probe. Every RNode board shares a VID:PID with
+	// the Meshtastic radios, so a plain VID:PID claim would hand an RNode
+	// to mesh_0. Only while an rnode instance is waiting for a port, only
+	// on RNode-capable ids, once per port per boot. [MESHSAT-1349]
+	if vidpid != "" && s.rnodeProbeWanted(port, vidpid) {
+		s.probeMu.Lock()
+		isRNode := ProbeRNode(port)
+		s.probeMu.Unlock()
+		if isRNode {
+			s.claimAndNotify(port, vidpid, RoleRNode, "RNode detect probe")
+			return
+		}
+	}
+
 	// Step 1: VID:PID match (~1ms)
 	if vidpid != "" {
 		role := s.classifyByVIDPID(vidpid, port)
@@ -695,6 +715,45 @@ func (s *DeviceSupervisor) identifyAndClaimPort(port string) {
 	}
 
 	// Unknown — will retry next cycle
+}
+
+// ArmRNodeProbe enables or disables the RNode detect probe (Step 0 of
+// identification). [MESHSAT-1349]
+func (s *DeviceSupervisor) ArmRNodeProbe(on bool) {
+	s.probingMu.Lock()
+	s.rnodeArmed = on
+	if s.rnodeProbed == nil {
+		s.rnodeProbed = make(map[string]bool)
+	}
+	s.probingMu.Unlock()
+}
+
+// rnodeProbeWanted decides whether to run the RNode probe on this port now
+// and records that it ran, so a port is probed at most once per boot.
+func (s *DeviceSupervisor) rnodeProbeWanted(port, vidpid string) bool {
+	if !rnodeCapableVIDPID(vidpid) {
+		return false
+	}
+	s.probingMu.Lock()
+	armed := s.rnodeArmed
+	probed := s.rnodeProbed != nil && s.rnodeProbed[port]
+	if armed && !probed {
+		s.rnodeProbed[port] = true
+	}
+	s.probingMu.Unlock()
+	if !armed || probed {
+		return false
+	}
+	// Only while an rnode instance still needs a port.
+	s.callbacksMu.RLock()
+	cbs := s.callbacks[RoleRNode]
+	s.callbacksMu.RUnlock()
+	for _, cb := range cbs {
+		if cb.HasPort == nil || !cb.HasPort() {
+			return true
+		}
+	}
+	return len(cbs) == 0
 }
 
 // claimAndNotify claims a port for a role and fires callbacks.

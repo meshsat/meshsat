@@ -18,9 +18,26 @@ type ReticulumInterface struct {
 	mtu       int
 	sendFn    func(ctx context.Context, packet []byte) error
 	online    bool
-	floodable bool // false for paid transports (satellite, SMS) — excluded from path request flooding and announce broadcasts
+	floodable bool       // false for paid transports (satellite, SMS) — excluded from path request flooding and announce broadcasts
+	bitrateFn func() int // optional live bit rate (RNode reports it) [MESHSAT-1349]
+	onlineFn  func() bool
 	mu        sync.RWMutex
 }
+
+// SetBitrateFunc supplies a live bit rate in bits per second for the
+// announce cap; nil falls back to the per-type table.
+func (ri *ReticulumInterface) SetBitrateFunc(fn func() int) { ri.bitrateFn = fn }
+
+// Bitrate returns the live bit rate or 0 when unknown.
+func (ri *ReticulumInterface) Bitrate() int {
+	if ri.bitrateFn != nil {
+		return ri.bitrateFn()
+	}
+	return 0
+}
+
+// SetOnlineFunc makes IsOnline ask the transport instead of the flag.
+func (ri *ReticulumInterface) SetOnlineFunc(fn func() bool) { ri.onlineFn = fn }
 
 // NewReticulumInterface creates an interface wrapper. Interfaces with cost > 0
 // (satellite, cellular) are marked non-floodable by default to prevent burning
@@ -54,6 +71,9 @@ func (ri *ReticulumInterface) SetOnline(online bool) {
 }
 
 func (ri *ReticulumInterface) IsOnline() bool {
+	if ri.onlineFn != nil {
+		return ri.onlineFn()
+	}
 	ri.mu.RLock()
 	defer ri.mu.RUnlock()
 	return ri.online

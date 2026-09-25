@@ -4,6 +4,7 @@ package transport
 // Ported from HAL meshtastic_serial.go + iridium_driver.go.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -759,8 +760,56 @@ func DeviceTypeForRole(role DeviceRole) string {
 		return "zigbee"
 	case RoleGPS:
 		return "gps"
+	case RoleRNode:
+		return "rnode"
 	}
 	return ""
+}
+
+// rnodeCapableVIDPID reports whether a board with this VID:PID can carry
+// RNode firmware: the unambiguous Meshtastic ids (ESP32-S3 native USB,
+// XIAO, RAK4631, T-Echo, nRF52840). Never a cellular or ZigBee-shared id:
+// opening the T-Call reboots its ESP32 and the CP2102 asserts lines that
+// reset a CC2652P. [MESHSAT-1349]
+func rnodeCapableVIDPID(vidpid string) bool {
+	return knownMeshtasticVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid]
+}
+
+// ProbeRNode sends the RNode detect burst and waits up to 1.5 s for the
+// detect response (C0 08 46 C0). Meshtastic firmware ignores the bytes.
+// Lines stay low so a T-Echo or XIAO is not reset. [MESHSAT-1349]
+func ProbeRNode(portName string) bool {
+	if guardProbe(portName, "rnode") {
+		return false
+	}
+	port, err := openSerialLinesLow(portName, 115200)
+	if err != nil {
+		return false
+	}
+	defer port.Close()
+	burst := []byte{0xC0, 0x08, 0x73, 0xC0, 0xC0, 0x50, 0x00, 0xC0, 0xC0, 0x48, 0x00, 0xC0, 0xC0, 0x49, 0x00, 0xC0}
+	if _, err := port.Write(burst); err != nil {
+		return false
+	}
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	var acc []byte
+	buf := make([]byte, 256)
+	for time.Now().Before(deadline) {
+		n, err := port.Read(buf)
+		if n > 0 {
+			acc = append(acc, buf[:n]...)
+			if bytes.Contains(acc, []byte{0xC0, 0x08, 0x46}) {
+				return true
+			}
+			if len(acc) > 4096 {
+				return false
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return false
 }
 
 // ProbeAT checks if a serial port speaks AT command protocol at 115200

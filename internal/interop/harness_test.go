@@ -63,6 +63,15 @@ func scriptPath(t *testing.T) string {
 	return p
 }
 
+// startPeerWithConfig runs rnsnode.py with a caller-written RNS config.
+func startPeerWithConfig(t *testing.T, py, cfgDir, config, name string) *peer {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(cfgDir, "config"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return startPeerArgs(t, py, cfgDir, []string{"--config-dir", cfgDir, "--keep-config", "--name", name}, name)
+}
+
 func startPeer(t *testing.T, o peerOpts) *peer {
 	t.Helper()
 	py := rnsenv.Python(t)
@@ -89,6 +98,13 @@ func startPeer(t *testing.T, o peerOpts) *peer {
 	if o.loglevel > 0 {
 		args = append(args, "--loglevel", fmt.Sprint(o.loglevel))
 	}
+	return startPeerArgs(t, py, cfgDir, args[1:], o.name)
+}
+
+func startPeerArgs(t *testing.T, py, cfgDir string, args []string, name string) *peer {
+	t.Helper()
+	args = append([]string{scriptPath(t)}, args...)
+	o := peerOpts{name: name}
 	cmd := exec.Command(py, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

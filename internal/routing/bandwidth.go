@@ -8,6 +8,7 @@ import (
 // Default channel bandwidths in bits per second.
 var DefaultBandwidths = map[string]int{
 	"mesh":     1200,   // LoRa SF12 BW125
+	"rnode":    1200,   // RNode LoRa; the interface reports the real rate once configured [MESHSAT-1349]
 	"ax25":     1200,   // 1200 baud AFSK (PicoAPRS, Direwolf); MESHSAT_AX25_BITRATE overrides for time sync [MESHSAT-778]
 	"iridium":  2400,   // SBD uplink
 	"cellular": 9600,   // SMS GSM 2G
