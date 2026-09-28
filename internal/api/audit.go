@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"meshsat/internal/database"
 	"meshsat/internal/engine"
 )
 
@@ -19,7 +20,8 @@ func (s *Server) SetSigningService(ss *engine.SigningService) {
 // @Produce json
 // @Param limit query integer false "Max entries (default: 100, max: 1000)"
 // @Param interface_id query string false "Filter by interface ID"
-// @Success 200 {array} database.AuditEntry
+// @Param before query integer false "Only entries with a smaller id: the next page of a full copy"
+// @Success 200 {array} database.AuditLogEntry
 // @Failure 500 {object} map[string]string
 // @Router /api/audit [get]
 func (s *Server) handleGetAuditLog(w http.ResponseWriter, r *http.Request) {
@@ -29,22 +31,40 @@ func (s *Server) handleGetAuditLog(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-
-	interfaceID := r.URL.Query().Get("interface_id")
-
-	var entries interface{}
-	var err error
-	if interfaceID != "" {
-		entries, err = s.db.GetAuditLogByInterface(interfaceID, limit)
-	} else {
-		entries, err = s.db.GetAuditLog(limit)
+	var before int64
+	if q := r.URL.Query().Get("before"); q != "" {
+		if n, err := strconv.ParseInt(q, 10, 64); err == nil && n > 0 {
+			before = n
+		}
 	}
+
+	entries, err := s.db.GetAuditLogPage(r.URL.Query().Get("interface_id"), before, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if entries == nil {
+		entries = []database.AuditLogEntry{}
+	}
 
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// handleCountAuditLog returns how many entries the audit log holds.
+// @Summary Count audit log entries
+// @Description Returns the number of entries in the audit log, for "N entries" above a page of it [MESHSAT-1402]
+// @Tags audit
+// @Produce json
+// @Success 200 {object} map[string]int
+// @Failure 500 {object} map[string]string
+// @Router /api/audit/count [get]
+func (s *Server) handleCountAuditLog(w http.ResponseWriter, r *http.Request) {
+	n, err := s.db.CountAuditLog()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"count": n})
 }
 
 // handleVerifyAuditChain verifies the integrity of the audit log hash chain.
