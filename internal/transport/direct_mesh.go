@@ -59,6 +59,11 @@ type DirectMeshTransport struct {
 	// NodeInfo, so an unnamed node that keeps talking is asked once per
 	// nodeInfoRequestInterval instead of once per packet. [MESHSAT-1000]
 	nodeInfoReqAt map[uint32]time.Time
+	// ownUser is the radio's own User as its NodeDB row reported it in the
+	// config download (name, MAC, role, public key). Every NodeInfo request
+	// carries it, because the peer writes the request's User over its row
+	// for us; until it is known no request goes out. Guarded by mu. [MESHSAT-1388]
+	ownUser *ProtoUser
 
 	messages []MeshMessage
 	msgIdx   int
@@ -150,6 +155,11 @@ var ErrNodeInfoSelf = errors.New("meshtastic: refusing to request NodeInfo from 
 
 // ErrNodeNumUnknown means the local radio has not reported its node number yet.
 var ErrNodeNumUnknown = errors.New("meshtastic: local node number not known yet")
+
+// ErrOwnUserUnknown refuses a NodeInfo request before the config download has
+// reported the radio's own NodeDB row: the request carries that User, and one
+// without it blanks our name on the peer. [MESHSAT-1388]
+var ErrOwnUserUnknown = errors.New("meshtastic: the local radio's own name is not known yet")
 
 // NewDirectMeshTransport creates a new direct serial Meshtastic transport.
 // Pass "auto" or "" for port to use auto-detection.
@@ -950,6 +960,7 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 		}
 		t.nodesMu.Unlock()
 		t.checkOwnRow(fr.NodeInfo)
+		t.keepOwnUser(fr.NodeInfo)
 	}
 
 	// Firmware version from the handshake's DeviceMetadata. [MESHSAT-850]
@@ -1181,13 +1192,17 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	if needsNodeInfo && (isNewNode || !hasNodeInfoResponse) {
 		t.mu.RLock()
 		connected := t.connected && t.file != nil
+		// The request carries our own User; before the config download has
+		// reported it there is nothing to send, and the node is asked on its
+		// next packet instead. [MESHSAT-1388]
+		user := protoUserToPB(t.ownUser)
 		t.mu.RUnlock()
-		if connected {
+		if connected && user != nil {
 			t.nodesMu.Lock()
 			t.nodeInfoReqAt[pkt.From] = time.Now()
 			t.nodesMu.Unlock()
 			log.Debug().Uint32("node", pkt.From).Msg("auto-requesting NodeInfo from unnamed node")
-			toRadio := buildRequestNodeInfo(myNum, pkt.From)
+			toRadio := buildRequestNodeInfo(myNum, pkt.From, user)
 			_ = sendFrame(t.file, toRadio)
 		}
 	}
@@ -1894,12 +1909,26 @@ func (t *DirectMeshTransport) RemoveFixedPosition(_ context.Context) error {
 
 func (t *DirectMeshTransport) SetOwner(_ context.Context, longName, shortName string) error {
 	t.mu.RLock()
-	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
+		t.mu.RUnlock()
 		return ErrNotConnected
 	}
 	toRadio := buildAdminSetOwner(t.myNodeNum, longName, shortName)
-	return sendFrame(t.file, toRadio)
+	err := sendFrame(t.file, toRadio)
+	t.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	// The NodeInfo requests carry the new name from now on, not the one
+	// of the last config download. [MESHSAT-1388]
+	t.mu.Lock()
+	if t.ownUser != nil {
+		user := *t.ownUser
+		user.LongName, user.ShortName = longName, shortName
+		t.ownUser = &user
+	}
+	t.mu.Unlock()
+	return nil
 }
 
 func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32) error {
@@ -1916,8 +1945,31 @@ func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32)
 	if nodeNum == t.myNodeNum {
 		return ErrNodeInfoSelf
 	}
-	toRadio := buildRequestNodeInfo(t.myNodeNum, nodeNum)
+	user := protoUserToPB(t.ownUser)
+	if user == nil {
+		return ErrOwnUserUnknown
+	}
+	toRadio := buildRequestNodeInfo(t.myNodeNum, nodeNum, user)
 	return sendFrame(t.file, toRadio)
+}
+
+// keepOwnUser remembers the radio's own User from its NodeDB row in the config
+// download, for the NodeInfo requests to carry. A zeroed row (MESHSAT-1102) is
+// not a User to send, so the last good one stays. [MESHSAT-1388]
+func (t *DirectMeshTransport) keepOwnUser(ni *ProtoNodeInfo) {
+	if ni == nil || ni.User == nil || (ni.User.LongName == "" && ni.User.ShortName == "") {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.myNodeNum == 0 || ni.Num != t.myNodeNum {
+		return
+	}
+	user := *ni.User
+	if user.ID == "" {
+		user.ID = fmt.Sprintf("!%08x", ni.Num)
+	}
+	t.ownUser = &user
 }
 
 func (t *DirectMeshTransport) RequestStoreForward(_ context.Context, nodeNum uint32, window uint32) error {

@@ -36,6 +36,7 @@ func TestHandlePacket_NodeInfoRequestThrottledPerNode(t *testing.T) {
 	tr.file = port
 	tr.connected = true
 	tr.myNodeNum = 1
+	tr.ownUser = &ProtoUser{ID: "!00000001", LongName: "kit-a", ShortName: "KITA"}
 
 	pkt := func() *ProtoMeshPacket {
 		return &ProtoMeshPacket{From: 3, To: 0xffffffff, Decoded: &ProtoData{PortNum: PortNumTelemetry, Payload: []byte{1}}}
