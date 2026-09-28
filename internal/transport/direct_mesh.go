@@ -65,6 +65,11 @@ type DirectMeshTransport struct {
 	// for us; until it is known no request goes out. Guarded by mu. [MESHSAT-1388]
 	ownUser *ProtoUser
 
+	// ble manages the node over Bluetooth LE when the port is `ble` (a phone
+	// or desktop adopting a Meshtastic node, as the apps do); nil otherwise.
+	// [MESHSAT-1390]
+	ble *bleLink
+
 	messages []MeshMessage
 	msgIdx   int
 	msgMu    sync.RWMutex
@@ -164,7 +169,7 @@ var ErrOwnUserUnknown = errors.New("meshtastic: the local radio's own name is no
 // NewDirectMeshTransport creates a new direct serial Meshtastic transport.
 // Pass "auto" or "" for port to use auto-detection.
 func NewDirectMeshTransport(port string) *DirectMeshTransport {
-	return &DirectMeshTransport{
+	t := &DirectMeshTransport{
 		port:           port,
 		nodes:          make(map[uint32]*MeshNode),
 		messages:       make([]MeshMessage, 0, meshMsgBufSize),
@@ -175,6 +180,10 @@ func NewDirectMeshTransport(port string) *DirectMeshTransport {
 		disconnectedCh: make(chan struct{}, 1),
 		configTimeout:  defaultMeshConfigTimeout,
 	}
+	if IsMeshBLE(port) {
+		t.ble = newBLELink(t, port)
+	}
+	return t
 }
 
 // SetTimeSyncRemote enables the post-handshake admin set-time to every
@@ -316,10 +325,11 @@ func (t *DirectMeshTransport) RebootViaLines(ctx context.Context) error {
 	t.mu.RLock()
 	port := t.port
 	t.mu.RUnlock()
-	if IsMeshTCP(port) {
-		// A daemon over TCP has no modem lines; closing the session first
-		// would only drop a link that may be fine. [MESHSAT-1384]
-		return errors.New("no serial lines on a tcp link to meshtasticd")
+	if IsMeshTCP(port) || IsMeshBLE(port) {
+		// A daemon over TCP or a node over Bluetooth has no modem lines;
+		// closing the session first would only drop a link that may be
+		// fine. [MESHSAT-1384, MESHSAT-1390]
+		return fmt.Errorf("no serial lines on a %s link to the node", meshTransportName(port))
 	}
 	t.Close()
 	if port == "" || port == "auto" || port == "supervisor" {
@@ -457,7 +467,20 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 	}
 
 	var sp meshStream
-	if IsMeshTCP(portPath) {
+	if IsMeshBLE(portPath) {
+		// A Meshtastic node over Bluetooth LE, adopted in the app as on
+		// Android and iOS. The link is brought up on its own goroutine; until
+		// it is, this says why and the processor's retry loop comes back
+		// (woken as soon as the link is up). [MESHSAT-1390]
+		link, err := t.bleStream()
+		if err != nil {
+			t.connectFails.Add(1)
+			t.lastConnectErr = err.Error()
+			return err
+		}
+		sp = link
+		log.Info().Str("address", t.ble.Address()).Msg("meshtastic over bluetooth: session opened")
+	} else if IsMeshTCP(portPath) {
 		// A meshtasticd daemon on the network, most often on this same host:
 		// the phone with the LoRa back cover runs the daemon and the bridge
 		// side by side. Same framing, no modem lines. [MESHSAT-1384]
@@ -1609,10 +1632,15 @@ func (t *DirectMeshTransport) GetStatus(_ context.Context) (*MeshStatus, error) 
 	logLines := len(t.radioLog)
 	t.radioLogMu.Unlock()
 
+	address := t.port
+	if t.ble != nil {
+		// The node's Bluetooth address, not the `ble` setting. [MESHSAT-1390]
+		address = t.ble.Address()
+	}
 	status := &MeshStatus{
 		Connected:            t.connected,
 		Transport:            meshTransportName(t.port),
-		Address:              t.port,
+		Address:              address,
 		NumNodes:             numNodes,
 		FirmwareVersion:      t.firmwareVer,
 		OwnRowZeroed:         t.ownRowZeroed,

@@ -45,8 +45,11 @@ func meshTCPAddr(port string) string {
 
 // meshTransportName is what the status page shows for the link in use.
 func meshTransportName(port string) string {
-	if IsMeshTCP(port) {
+	switch {
+	case IsMeshTCP(port):
 		return "tcp"
+	case IsMeshBLE(port):
+		return "ble"
 	}
 	return "serial"
 }

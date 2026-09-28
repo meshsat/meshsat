@@ -380,6 +380,13 @@ func (s *Server) Router() http.Handler {
 		r.Post("/nodes/request-info", s.handleRequestNodeInfo)
 		r.Get("/status", s.handleGetStatus)
 		r.Get("/mesh/radio-log", s.handleGetRadioLog) // [MESHSAT-1112]
+		// The node over Bluetooth (mesh port `ble`): what the Linux app's
+		// Setup > Node shows and asks. [MESHSAT-1390]
+		r.Get("/mesh/ble/scan", s.handleBLEScan)
+		r.Post("/mesh/ble/connect", s.handleBLEConnect)
+		r.Post("/mesh/ble/pair", s.handleBLEPair)
+		r.Get("/mesh/ble/status", s.handleBLEStatus)
+		r.Delete("/mesh/ble", s.handleBLEForget)
 
 		r.Get("/events", s.handleSSE)
 
