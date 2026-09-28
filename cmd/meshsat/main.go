@@ -280,6 +280,10 @@ func main() {
 			},
 			oob.LevelHard: usbResetByRole(transport.RoleMeshtastic, "mesh"),
 		}
+		if transport.IsMeshTCP(meshPort) {
+			// A meshtasticd over TCP has no USB device behind it to reset. [MESHSAT-1384]
+			delete(oobActions["mesh"], oob.LevelHard)
+		}
 		oobActions["cellular"] = map[byte]oob.Action{
 			oob.LevelSoft:   directCell.Reconnect,
 			oob.LevelDevice: directCell.DeviceReset,
@@ -307,8 +311,14 @@ func main() {
 		// two-tier polling (30s port scan + 15s reconciliation).
 		supervisor = transport.NewDeviceSupervisor()
 
-		// Register explicit port overrides from env vars
-		supervisor.SetExplicitPort(transport.RoleMeshtastic, cfg.MeshtasticPort)
+		// Register explicit port overrides from env vars. A mesh port that
+		// names a meshtasticd over TCP is not a device path: the supervisor
+		// never sees it, and must never replace it with a USB radio it finds
+		// (its port-found path hands any claimed Meshtastic radio to the
+		// mesh driver). [MESHSAT-1384]
+		if !transport.IsMeshTCP(cfg.MeshtasticPort) {
+			supervisor.SetExplicitPort(transport.RoleMeshtastic, cfg.MeshtasticPort)
+		}
 		supervisor.SetExplicitPort(transport.RoleIridium9704, cfg.IMTPort)
 		supervisor.SetExplicitPort(transport.RoleIridium9603, cfg.IridiumPort)
 		supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
@@ -324,18 +334,22 @@ func main() {
 
 		// Wire driver callbacks: supervisor notifies transports when ports are
 		// discovered or lost, replacing the old exclude-port daisy chain.
-		supervisor.SetCallbacks(transport.RoleMeshtastic, &transport.DriverCallbacks{
-			InstanceID: "mesh_0",
-			OnPortFound: func(port string) {
-				directMesh.SetPort(port)
-				log.Info().Str("port", port).Msg("supervisor: meshtastic port assigned")
-			},
-			OnPortLost: func(port string) {
-				directMesh.Close()
-				log.Warn().Str("port", port).Msg("supervisor: meshtastic port lost")
-			},
-			HasPort: func() bool { return directMesh.GetPort() != "" && directMesh.GetPort() != "supervisor" },
-		})
+		if transport.IsMeshTCP(meshPort) {
+			log.Info().Str("addr", meshPort).Msg("meshtastic over tcp: the device supervisor leaves the mesh port alone")
+		} else {
+			supervisor.SetCallbacks(transport.RoleMeshtastic, &transport.DriverCallbacks{
+				InstanceID: "mesh_0",
+				OnPortFound: func(port string) {
+					directMesh.SetPort(port)
+					log.Info().Str("port", port).Msg("supervisor: meshtastic port assigned")
+				},
+				OnPortLost: func(port string) {
+					directMesh.Close()
+					log.Warn().Str("port", port).Msg("supervisor: meshtastic port lost")
+				},
+				HasPort: func() bool { return directMesh.GetPort() != "" && directMesh.GetPort() != "supervisor" },
+			})
+		}
 
 		supervisor.SetCallbacks(transport.RoleIridium9704, &transport.DriverCallbacks{
 			InstanceID: "iridium_imt_0",

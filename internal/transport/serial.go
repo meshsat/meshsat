@@ -124,7 +124,7 @@ func pulseSerialLines(path string, baud int) error {
 }
 
 // wakeDevice sends the Meshtastic wake sequence (32 bytes of 0xC3).
-func wakeDevice(port serial.Port) error {
+func wakeDevice(port meshStream) error {
 	wake := make([]byte, meshWakeLen)
 	for i := range wake {
 		wake[i] = meshStart2
@@ -207,7 +207,7 @@ func ProbeMeshtastic(portName string) bool {
 }
 
 // sendFrame sends a Meshtastic framed packet: [0x94][0xC3][len_msb][len_lsb][payload].
-func sendFrame(port serial.Port, payload []byte) error {
+func sendFrame(port meshStream, payload []byte) error {
 	if len(payload) > meshMaxPayload {
 		return fmt.Errorf("payload too large (%d > %d)", len(payload), meshMaxPayload)
 	}
@@ -227,7 +227,7 @@ func sendFrame(port serial.Port, payload []byte) error {
 // meshFrameReader maintains a persistent accumulation buffer for extracting
 // complete Meshtastic protobuf frames from a serial stream.
 type meshFrameReader struct {
-	port  serial.Port
+	port  meshStream
 	accum []byte
 	// onText receives the bytes the reader discards in front of a frame
 	// start marker. Until a client attaches, Meshtastic prints its log as
