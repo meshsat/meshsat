@@ -3,11 +3,27 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
+
+// topologyNodeID is a node id as the graph keys it: eight lowercase hex digits,
+// whatever form it came in ("!A1B3C2EC", "a1b3c2ec"). Empty for anything else.
+func topologyNodeID(id string) string {
+	id = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(id), "!"))
+	if len(id) != 8 {
+		return ""
+	}
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return id
+}
 
 // TopologyNode represents a node in the mesh topology graph.
 type TopologyNode struct {
@@ -107,13 +123,16 @@ func (s *Server) handleGetTopology(w http.ResponseWriter, r *http.Request) {
 		msgs, _, err := s.db.GetMessages(filter)
 		if err == nil {
 			for _, msg := range msgs {
-				src := msg.FromNode
-				dst := msg.ToNode
+				// The store writes node ids as "!a1b3c2ec", the graph keys
+				// them as "a1b3c2ec": compare the same form, or no message
+				// ever matches a node and the graph has no links. [MESHSAT-1397]
+				src := topologyNodeID(msg.FromNode)
+				dst := topologyNodeID(msg.ToNode)
 				if src == "" || dst == "" {
 					continue
 				}
 				// Skip broadcast destination "ffffffff".
-				if dst == "ffffffff" || dst == "FFFFFFFF" {
+				if dst == "ffffffff" {
 					continue
 				}
 				// Only include links where both nodes are known.

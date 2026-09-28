@@ -552,6 +552,11 @@ type hubConnectionConfig struct {
 	HasCert     bool   `json:"has_cert"`
 	TLSInsecure bool   `json:"tls_insecure,omitempty"`
 	Warning     string `json:"warning,omitempty"`
+	// Link is the state of the MQTT session behind these settings, for the
+	// apps' Hub lane: "connected", "disconnected" (the reporter keeps trying by
+	// itself), or "" when no reporter runs (settings saved, the Bridge not
+	// restarted since, or no Hub set up). GET only. [MESHSAT-1397]
+	Link string `json:"link,omitempty"`
 }
 
 // handleGetHubConfig returns the current Hub connection config (password redacted).
@@ -566,7 +571,19 @@ func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.TLSCertPEM = "" // never expose cert PEM in GET
 	cfg.TLSKeyPEM = ""  // never expose key PEM in GET
 	cfg.TLSCAPEM = ""   // never expose CA PEM in GET
+	cfg.Link = s.hubLinkState()
 	writeJSON(w, http.StatusOK, cfg)
+}
+
+// hubLinkState is the Hub session's state as the apps show it. [MESHSAT-1397]
+func (s *Server) hubLinkState() string {
+	if s.hubReporter == nil {
+		return ""
+	}
+	if s.hubReporter.IsConnected() {
+		return "connected"
+	}
+	return "disconnected"
 }
 
 // handleSetHubConfig saves Hub MQTT credentials. Takes effect on next restart.
