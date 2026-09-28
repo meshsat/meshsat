@@ -583,6 +583,16 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 	}
 
 	// Phase 1: Disable DB configs and stop gateways for missing hardware.
+	// A modem that belongs to ModemManager is never in the supervisor's registry: its
+	// transport says whether it is there, so the cellular gateway is created and kept
+	// for it like for a detected serial modem. [MESHSAT-1386]
+	m.mu.RLock()
+	for _, cell := range m.cellTransports {
+		if mm, ok := cell.(*transport.MMCellTransport); ok && mm.Present(ctx) {
+			presentTypes["cellular"]++
+		}
+	}
+	m.mu.RUnlock()
 	configs, _ := m.db.GetAllGatewayConfigs()
 	for _, cfg := range configs {
 		role := gatewayTypeToRole(cfg.Type)

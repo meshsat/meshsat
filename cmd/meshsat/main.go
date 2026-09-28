@@ -604,6 +604,22 @@ func main() {
 		// devices, start gateways for detected devices with enabled configs.
 		// Safe to call now — WaitForInitialScan() already completed above. [MESHSAT-403]
 		gwMgr.ReconcileWithHardware(ctx)
+		// A ModemManager modem raises no device event: reconcile on a clock, so a SIM
+		// put in later starts the cellular gateway without a restart. [MESHSAT-1386]
+		if transport.IsModemManager(cfg.CellularPort) {
+			go func() {
+				ticker := time.NewTicker(60 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						gwMgr.ReconcileWithHardware(ctx)
+					}
+				}
+			}()
+		}
 	}
 
 	// Register gateway manager as dynamic provider so processor always

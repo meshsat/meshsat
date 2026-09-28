@@ -864,3 +864,16 @@ func mmCellInfo(c map[string]dbus.Variant) *CellInfo {
 	}
 	return info
 }
+
+// Present says whether ModemManager has a modem for us right now (the device supervisor
+// never sees it, so the gateway manager asks here).
+func (t *MMCellTransport) Present(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := t.connect(ctx); err != nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.modemPath != ""
+}
