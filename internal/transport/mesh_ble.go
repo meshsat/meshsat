@@ -29,6 +29,13 @@ const (
 	// FromNum as the firmware defines it (src/BluetoothCommon.h); the phone
 	// apps carry a mistyped copy and never receive the doorbell.
 	meshBLEFromNumUUID = "ed9da18c-a800-4f66-a670-aa7547e34453"
+	// meshBLELogRadioUUID notifies the node's log, one LogRecord per value,
+	// while security.debug_log_api_enabled is set and a client subscribes;
+	// older firmware has no such characteristic. [MESHSAT-1406]
+	meshBLELogRadioUUID = "5a3d6e49-06e6-4423-9944-e9de8cdf9547"
+	// bleLogLease is how long the node's log is followed after the last
+	// request to follow it: the page asks every few seconds while it is open.
+	bleLogLease = 30 * time.Second
 	// meshsatPipeServiceUUID is the MeshSat firmware's Iridium modem pipe on
 	// the same link (meshsat-esp32/docs/IRIDIUM-BLE.md). [MESHSAT-1391]
 	meshsatPipeServiceUUID = "b3d305a2-7310-4877-ad12-8e245e71951a"
@@ -295,14 +302,20 @@ type bleGattSession struct {
 	toRadio   dbus.ObjectPath
 	fromRadio dbus.ObjectPath
 	fromNum   dbus.ObjectPath
-	notif     chan struct{}
-	lost      chan struct{}
-	lostOnce  sync.Once
-	unwatch   func()
+	// logRadio is the node's log characteristic, empty when the firmware
+	// has none; onLog receives each value it notifies, and logNotifying
+	// (guarded by the link's mu) says whether it is subscribed. [MESHSAT-1406]
+	logRadio     dbus.ObjectPath
+	onLog        func([]byte)
+	logNotifying bool
+	notif        chan struct{}
+	lost         chan struct{}
+	lostOnce     sync.Once
+	unwatch      func()
 }
 
-func (b *bluezBus) openMeshSession(ctx context.Context, device dbus.ObjectPath) (*bleGattSession, error) {
-	chars, found, err := b.characteristics(device, meshBLEServiceUUID, meshBLEToRadioUUID, meshBLEFromRadioUUID, meshBLEFromNumUUID)
+func (b *bluezBus) openMeshSession(ctx context.Context, device dbus.ObjectPath, onLog func([]byte)) (*bleGattSession, error) {
+	chars, found, err := b.characteristics(device, meshBLEServiceUUID, meshBLEToRadioUUID, meshBLEFromRadioUUID, meshBLEFromNumUUID, meshBLELogRadioUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -310,18 +323,21 @@ func (b *bluezBus) openMeshSession(ctx context.Context, device dbus.ObjectPath) 
 		return nil, errors.New("this device has no Meshtastic service")
 	}
 	s := &bleGattSession{bus: b, device: device, toRadio: chars[meshBLEToRadioUUID], fromRadio: chars[meshBLEFromRadioUUID], fromNum: chars[meshBLEFromNumUUID],
-		notif: make(chan struct{}, 1), lost: make(chan struct{})}
+		logRadio: chars[meshBLELogRadioUUID], onLog: onLog, notif: make(chan struct{}, 1), lost: make(chan struct{})}
 	if s.toRadio == "" || s.fromRadio == "" {
 		return nil, errors.New("the Meshtastic service is missing its characteristics")
 	}
 	devCh, stopDev := b.watch(device)
-	var numCh <-chan propsChange
-	stopNum := func() {}
+	var numCh, logCh <-chan propsChange
+	stopNum, stopLog := func() {}, func() {}
 	if s.fromNum != "" {
 		numCh, stopNum = b.watch(s.fromNum)
 	}
-	s.unwatch = func() { stopDev(); stopNum() }
-	go s.pump(devCh, numCh)
+	if s.logRadio != "" {
+		logCh, stopLog = b.watch(s.logRadio)
+	}
+	s.unwatch = func() { stopDev(); stopNum(); stopLog() }
+	go s.pump(devCh, numCh, logCh)
 	if s.fromNum != "" {
 		if err := b.startNotify(ctx, s.fromNum); err != nil {
 			log.Warn().Err(err).Msg("bluez: no FromNum notifications; polling FromRadio instead")
@@ -332,9 +348,15 @@ func (b *bluezBus) openMeshSession(ctx context.Context, device dbus.ObjectPath) 
 	return s, nil
 }
 
-func (s *bleGattSession) pump(dev, num <-chan propsChange) {
+func (s *bleGattSession) pump(dev, num, logc <-chan propsChange) {
 	for {
 		select {
+		case c := <-logc:
+			if v, ok := c.Changed["Value"]; ok && s.onLog != nil {
+				if value, ok := v.Value().([]byte); ok && len(value) > 0 {
+					s.onLog(value)
+				}
+			}
 		case c := <-dev:
 			if c.Iface == "removed" {
 				s.markLost()
@@ -390,6 +412,9 @@ func (s *bleGattSession) close() {
 	if s.fromNum != "" {
 		s.bus.stopNotify(s.fromNum)
 	}
+	if s.logRadio != "" && s.logNotifying {
+		s.bus.stopNotify(s.logRadio)
+	}
 }
 
 // bleLink manages the node over Bluetooth for a DirectMeshTransport: the
@@ -413,6 +438,9 @@ type bleLink struct {
 	pipe       bool
 	connecting bool
 	loaded     bool
+	// logUntil is when following the node's log ends unless it is asked
+	// for again. [MESHSAT-1406]
+	logUntil time.Time
 }
 
 func newBLELink(t *DirectMeshTransport, port string) *bleLink {
@@ -595,7 +623,7 @@ func (l *bleLink) connectOnce() error {
 		}
 		var session *bleGattSession
 		if lastErr == nil {
-			session, lastErr = bus.openMeshSession(ctx, path)
+			session, lastErr = bus.openMeshSession(ctx, path, l.t.recordLogRadio)
 		}
 		cancel()
 		if lastErr == nil {
@@ -773,6 +801,76 @@ func (l *bleLink) status() BLEStatus {
 	return st
 }
 
+// followLog subscribes to the node's log for bleLogLease from now, and
+// reports whether the node has a log to follow and whether it is followed.
+// The subscription ends by itself when nobody asks again; after a reconnect
+// the next request takes it up on the new session. [MESHSAT-1406]
+func (l *bleLink) followLog() (available, following bool) {
+	l.mu.Lock()
+	l.logUntil = time.Now().Add(bleLogLease)
+	s, bus := l.session, l.bus
+	if s == nil || s.isLost() || s.logRadio == "" || bus == nil {
+		l.mu.Unlock()
+		return s != nil && s.logRadio != "", false
+	}
+	if s.logNotifying {
+		l.mu.Unlock()
+		return true, true
+	}
+	// Claimed before the call, so two requests at once start one
+	// subscription and one lease.
+	s.logNotifying = true
+	l.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := bus.startNotify(ctx, s.logRadio)
+	cancel()
+	if err != nil {
+		l.mu.Lock()
+		s.logNotifying = false
+		l.mu.Unlock()
+		log.Warn().Err(err).Msg("meshtastic over bluetooth: cannot follow the node's log")
+		return true, false
+	}
+	go l.endLogLease(s)
+	return true, true
+}
+
+// endLogLease stops following the node's log on session s once nobody has
+// asked for bleLogLease, or when the session goes.
+func (l *bleLink) endLogLease(s *bleGattSession) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.lost:
+			return
+		case <-tick.C:
+		}
+		l.mu.Lock()
+		expired := time.Now().After(l.logUntil)
+		if expired {
+			s.logNotifying = false
+		}
+		l.mu.Unlock()
+		if expired {
+			s.bus.stopNotify(s.logRadio)
+			return
+		}
+	}
+}
+
+// logStatus reports whether the node has a log to follow and whether it is
+// followed now.
+func (l *bleLink) logStatus() (available, following bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.session
+	if s == nil || s.isLost() {
+		return false, false
+	}
+	return s.logRadio != "", s.logNotifying
+}
+
 // The transport's side: the mesh port `ble` makes a bleLink; these are what
 // the API exposes. [MESHSAT-1390]
 
@@ -831,4 +929,23 @@ func (t *DirectMeshTransport) BLEForget(_ context.Context, removeBond bool) erro
 		return ErrMeshNotBLE
 	}
 	return t.ble.forget(removeBond)
+}
+
+// FollowNodeLog follows the log of the node over Bluetooth for the next
+// 30 s; with no node over Bluetooth it reports nothing to follow.
+// [MESHSAT-1406]
+func (t *DirectMeshTransport) FollowNodeLog() (available, following bool) {
+	if t.ble == nil {
+		return false, false
+	}
+	return t.ble.followLog()
+}
+
+// NodeLogStatus reports whether the node over Bluetooth has a log to follow
+// and whether it is followed now.
+func (t *DirectMeshTransport) NodeLogStatus() (available, following bool) {
+	if t.ble == nil {
+		return false, false
+	}
+	return t.ble.logStatus()
 }

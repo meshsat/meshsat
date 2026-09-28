@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,13 @@ type DirectMeshTransport struct {
 
 	configData map[string]interface{}
 	configMu   sync.RWMutex
+	// settings is the node's settings as protobuf messages, from the config
+	// download and the node's admin replies; writes are laid over it.
+	// Guarded by configMu. [MESHSAT-1405]
+	settings nodeSettings
+	// settingsWriteMu makes each settings write read, merge, send and keep
+	// in one go, so two writes at once cannot undo each other's field.
+	settingsWriteMu sync.Mutex
 
 	neighbors   map[uint32]*NeighborInfo
 	neighborsMu sync.RWMutex
@@ -128,6 +136,7 @@ type DirectMeshTransport struct {
 	// every reboot's cause went unread. [MESHSAT-1112]
 	radioLogMu     sync.Mutex
 	radioLog       []RadioLogLine
+	radioLogSeq    uint64
 	radioLastReset string
 	consoleBuf     []byte
 	// myInfoThisSession: MyNodeInfo arrived in the current serial session,
@@ -820,8 +829,11 @@ func (t *DirectMeshTransport) watchdogTriggered() bool {
 	return true
 }
 
-// radioLogKeep is how many lines of the radio's own log the bridge holds.
-const radioLogKeep = 200
+// radioLogKeep is how many lines of the radio's own log the bridge holds: a
+// node's debug stream over Bluetooth runs to dozens of lines a second in a
+// burst, and a page polling every two seconds must not lose them.
+// [MESHSAT-1406]
+const radioLogKeep = 1000
 
 // radioResetWords matches a radio log line that explains a boot or a
 // crash: the firmware's boot banner ("Reset reason"), its own reboot
@@ -837,6 +849,14 @@ var radioResetWords = regexp.MustCompile(`(?i)reset reason|reboot|crash|assert|w
 // cause into a radio_log event so it reaches the audit trail next to the
 // handshake that follows a reboot. [MESHSAT-1112]
 func (t *DirectMeshTransport) recordRadioLog(rec *ProtoLogRecord) {
+	t.addRadioLog(rec, true)
+}
+
+// addRadioLog keeps one line with the next sequence number. A line of the
+// node's debug stream over Bluetooth (relog false) is neither written into
+// the bridge's own log nor raised as an event: a person is reading that
+// stream on a page, and it runs to dozens of lines a second. [MESHSAT-1406]
+func (t *DirectMeshTransport) addRadioLog(rec *ProtoLogRecord, relog bool) {
 	line := RadioLogLine{
 		ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		RadioTime:  rec.Time,
@@ -846,6 +866,8 @@ func (t *DirectMeshTransport) recordRadioLog(rec *ProtoLogRecord) {
 	}
 	names := radioResetWords.MatchString(line.Message)
 	t.radioLogMu.Lock()
+	t.radioLogSeq++
+	line.Seq = t.radioLogSeq
 	t.radioLog = append(t.radioLog, line)
 	if len(t.radioLog) > radioLogKeep {
 		t.radioLog = t.radioLog[len(t.radioLog)-radioLogKeep:]
@@ -854,10 +876,24 @@ func (t *DirectMeshTransport) recordRadioLog(rec *ProtoLogRecord) {
 		t.radioLastReset = line.ReceivedAt + " " + line.Message
 	}
 	t.radioLogMu.Unlock()
+	if !relog {
+		return
+	}
 	log.Info().Str("radio_level", line.Level).Str("radio_source", line.Source).Msg("radio: " + line.Message)
 	if names {
 		t.emitEvent(MeshEvent{Type: "radio_log", Message: line.Message, Time: line.ReceivedAt})
 	}
+}
+
+// RadioLogAfter returns the lines held with a sequence number above after,
+// oldest first. [MESHSAT-1406]
+func (t *DirectMeshTransport) RadioLogAfter(after uint64) []RadioLogLine {
+	t.radioLogMu.Lock()
+	defer t.radioLogMu.Unlock()
+	i := sort.Search(len(t.radioLog), func(i int) bool { return t.radioLog[i].Seq > after })
+	out := make([]RadioLogLine, len(t.radioLog)-i)
+	copy(out, t.radioLog[i:])
+	return out
 }
 
 // consoleTextMax bounds the partial console line the transport keeps
@@ -997,33 +1033,8 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 		}
 	}
 
-	// Config sections
-	if fr.ConfigRaw != nil {
-		decoded := decodeProtoToMap(fr.ConfigRaw)
-		t.configMu.Lock()
-		for k, v := range decoded {
-			t.configData["config_"+k] = v
-		}
-		t.configMu.Unlock()
-	}
-	if fr.ModuleConfigRaw != nil {
-		decoded := decodeProtoToMap(fr.ModuleConfigRaw)
-		t.configMu.Lock()
-		for k, v := range decoded {
-			t.configData["module_"+k] = v
-		}
-		t.configMu.Unlock()
-	}
-	if fr.ChannelRaw != nil {
-		decoded := decodeProtoToMap(fr.ChannelRaw)
-		t.configMu.Lock()
-		idx := "0"
-		if v, ok := decoded["1"]; ok {
-			idx = fmt.Sprintf("%v", v)
-		}
-		t.configData["channel_"+idx] = decoded
-		t.configMu.Unlock()
-	}
+	// Config sections, typed and numbered. [MESHSAT-1405]
+	t.storeFromRadio(fr)
 
 	// Config complete
 	if fr.ConfigCompleteID != 0 {
@@ -1271,6 +1282,7 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 // handleLocalAdmin records an admin reply from the local radio. [MESHSAT-817]
 func (t *DirectMeshTransport) handleLocalAdmin(pkt *ProtoMeshPacket) {
 	t.lastLocalReply.Store(time.Now().UnixNano())
+	t.storeAdminPayload(pkt.Decoded.Payload) // [MESHSAT-1405]
 	if meta := parseAdminDeviceMetadata(pkt.Decoded.Payload); meta != nil {
 		if meta.FirmwareVersion != "" {
 			t.mu.Lock()
@@ -1736,56 +1748,6 @@ func (t *DirectMeshTransport) Traceroute(_ context.Context, nodeNum uint32) erro
 	return sendFrame(t.file, toRadio)
 }
 
-func (t *DirectMeshTransport) SetRadioConfig(_ context.Context, _ string, data json.RawMessage) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
-	toRadio := buildAdminSetConfig(t.myNodeNum, data)
-	return sendFrame(t.file, toRadio)
-}
-
-func (t *DirectMeshTransport) SetModuleConfig(_ context.Context, _ string, data json.RawMessage) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
-	toRadio := buildAdminSetModuleConfig(t.myNodeNum, data)
-	return sendFrame(t.file, toRadio)
-}
-
-func (t *DirectMeshTransport) SetChannel(_ context.Context, req ChannelRequest) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
-
-	var psk []byte
-	if req.PSK != "" {
-		var err error
-		psk, err = base64.StdEncoding.DecodeString(req.PSK)
-		if err != nil {
-			return fmt.Errorf("invalid PSK base64: %w", err)
-		}
-	}
-
-	role := 0
-	switch req.Role {
-	case "PRIMARY":
-		role = 1
-	case "SECONDARY":
-		role = 2
-	case "DISABLED":
-		role = 0
-	}
-
-	toRadio := buildSetChannel(t.myNodeNum, req.Index, req.Name, psk, role, req.UplinkEnabled, req.DownlinkEnabled)
-	return sendFrame(t.file, toRadio)
-}
-
 func (t *DirectMeshTransport) SendWaypoint(_ context.Context, wp Waypoint) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -1933,30 +1895,6 @@ func (t *DirectMeshTransport) RemoveFixedPosition(_ context.Context) error {
 	}
 	toRadio := buildAdminRemoveFixedPosition(t.myNodeNum)
 	return sendFrame(t.file, toRadio)
-}
-
-func (t *DirectMeshTransport) SetOwner(_ context.Context, longName, shortName string) error {
-	t.mu.RLock()
-	if !t.connected || t.file == nil {
-		t.mu.RUnlock()
-		return ErrNotConnected
-	}
-	toRadio := buildAdminSetOwner(t.myNodeNum, longName, shortName)
-	err := sendFrame(t.file, toRadio)
-	t.mu.RUnlock()
-	if err != nil {
-		return err
-	}
-	// The NodeInfo requests carry the new name from now on, not the one
-	// of the last config download. [MESHSAT-1388]
-	t.mu.Lock()
-	if t.ownUser != nil {
-		user := *t.ownUser
-		user.LongName, user.ShortName = longName, shortName
-		t.ownUser = &user
-	}
-	t.mu.Unlock()
-	return nil
 }
 
 func (t *DirectMeshTransport) RequestNodeInfo(_ context.Context, nodeNum uint32) error {

@@ -547,6 +547,9 @@ func (s *Server) Router() http.Handler {
 		// Admin commands (Phase 2)
 		r.Post("/admin/reboot", s.handleAdminReboot)
 		r.Post("/admin/factory_reset", s.handleAdminFactoryReset)
+		r.Post("/admin/set_clock", s.handleAdminSetClock)       // [MESHSAT-1405]
+		r.Post("/admin/shutdown", s.handleAdminShutdown)        // [MESHSAT-1405]
+		r.Post("/admin/nodedb_reset", s.handleAdminNodeDBReset) // [MESHSAT-1405]
 		r.Post("/admin/traceroute", s.handleTraceroute)
 
 		// Radio/module config (Phase 2)
