@@ -106,12 +106,27 @@ type radioLogger interface {
 	RadioLog(n int) []transport.RadioLogLine
 }
 
+// radioLogReader reads the radio log by sequence number, and nodeLogFollower
+// follows the log of a node over Bluetooth on demand. [MESHSAT-1406]
+type radioLogReader interface {
+	RadioLogAfter(after uint64) []transport.RadioLogLine
+}
+
+type nodeLogFollower interface {
+	FollowNodeLog() (available, following bool)
+	NodeLogStatus() (available, following bool)
+	DebugLogSetting() (enabled, known bool)
+}
+
 // handleGetRadioLog returns the newest lines of the radio's own debug log.
 // @Summary Get the radio's own log
-// @Description Returns the newest lines of the Meshtastic radio's own debug log as received over the serial API (FromRadio.log_record), oldest first, plus the last line that named a reset, reboot, crash, assert or watchdog. The radio only sends its log when security.debug_log_api_enabled is set on it; until then the list is empty. [MESHSAT-1112]
+// @Description Returns lines of the Meshtastic radio's own debug log, oldest first: from the serial API (FromRadio.log_record) and, for a node over Bluetooth, from its LogRadio characteristic; plus the last line that named a reset, reboot, crash, assert or watchdog. The radio only sends its log when security.debug_log_api_enabled is set on it; until then the list is empty. With after, the lines numbered above it (each line has seq); with follow=1, a node over Bluetooth is followed for 30 s from this request. The answer says whether the node offers its log over Bluetooth (available), whether it is followed now (following) and its debug-log setting (null until the node sent it). [MESHSAT-1112, MESHSAT-1406]
 // @Tags nodes
 // @Param limit query int false "Newest lines to return (default 100, max 200)"
+// @Param after query int false "Only the lines with seq above this, up to the 1000 held"
+// @Param follow query int false "1: follow the log of a node over Bluetooth for the next 30 s"
 // @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string "after is not a number"
 // @Failure 503 {object} map[string]string "mesh transport unavailable or does not keep the radio log"
 // @Router /api/mesh/radio-log [get]
 func (s *Server) handleGetRadioLog(w http.ResponseWriter, r *http.Request) {
@@ -124,22 +139,50 @@ func (s *Server) handleGetRadioLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "this mesh transport does not keep the radio log")
 		return
 	}
-	limit := 100
-	if q := r.URL.Query().Get("limit"); q != "" {
-		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 200 {
-			limit = n
+	query := r.URL.Query()
+	var lines []transport.RadioLogLine
+	if q := query.Get("after"); q != "" {
+		after, err := strconv.ParseUint(q, 10, 64)
+		reader, byseq := s.mesh.(radioLogReader)
+		if err != nil || !byseq {
+			writeError(w, http.StatusBadRequest, "after is the seq of the last line read")
+			return
 		}
+		lines = reader.RadioLogAfter(after)
+	} else {
+		limit := 100
+		if q := query.Get("limit"); q != "" {
+			if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 200 {
+				limit = n
+			}
+		}
+		lines = rl.RadioLog(limit)
 	}
-	lines := rl.RadioLog(limit)
 	lastReset := ""
 	if st, err := s.mesh.GetStatus(r.Context()); err == nil {
 		lastReset = st.RadioLastResetReason
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"count":             len(lines),
-		"last_reset_reason": lastReset,
-		"lines":             lines,
-	})
+	answer := map[string]interface{}{
+		"count":                 len(lines),
+		"last_reset_reason":     lastReset,
+		"lines":                 lines,
+		"available":             false,
+		"following":             false,
+		"debug_log_api_enabled": nil,
+	}
+	if f, ok := s.mesh.(nodeLogFollower); ok {
+		var available, following bool
+		if query.Get("follow") == "1" {
+			available, following = f.FollowNodeLog()
+		} else {
+			available, following = f.NodeLogStatus()
+		}
+		answer["available"], answer["following"] = available, following
+		if enabled, known := f.DebugLogSetting(); known {
+			answer["debug_log_api_enabled"] = enabled
+		}
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // handleGetStatus returns the Meshtastic connection status.

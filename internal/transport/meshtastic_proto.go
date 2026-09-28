@@ -220,9 +220,10 @@ type ProtoFromRadio struct {
 	NodeInfo         *ProtoNodeInfo
 	ConfigRaw        []byte // Config message (raw protobuf — kept for decodeProtoToMap passthrough)
 	ConfigCompleteID uint32
-	ModuleConfigRaw  []byte // ModuleConfig message (raw protobuf)
-	ChannelRaw       []byte // Channel message (raw protobuf)
-	FirmwareVersion  string // FromRadio.metadata, sent during the config handshake [MESHSAT-850]
+	ModuleConfigRaw  []byte             // ModuleConfig message (raw protobuf)
+	ChannelRaw       []byte             // Channel message (raw protobuf)
+	FirmwareVersion  string             // FromRadio.metadata, sent during the config handshake [MESHSAT-850]
+	Metadata         *pb.DeviceMetadata // the whole of FromRadio.metadata [MESHSAT-1405]
 	// The radio's own account of itself, which the bridge used to discard:
 	// a debug log line (only when security.debug_log_api_enabled is set on
 	// the radio), the "I just rebooted" flag the serial console sends at
@@ -395,6 +396,7 @@ func parseFromRadio(data []byte) (*ProtoFromRadio, error) {
 	case *pb.FromRadio_Metadata:
 		if v.Metadata != nil {
 			fr.FirmwareVersion = v.Metadata.GetFirmwareVersion()
+			fr.Metadata = v.Metadata
 		}
 	case *pb.FromRadio_LogRecord:
 		if v.LogRecord != nil {
@@ -893,48 +895,6 @@ func buildAdminFactoryReset(myNodeNum, destNode uint32) []byte {
 func buildAdminRemoveNode(myNodeNum, nodeNum uint32) []byte {
 	admin := &pb.AdminMessage{
 		PayloadVariant: &pb.AdminMessage_RemoveByNodenum{RemoveByNodenum: nodeNum},
-	}
-	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
-}
-
-// buildAdminSetConfig builds a ToRadio with AdminMessage set_config.
-func buildAdminSetConfig(myNodeNum uint32, configData []byte) []byte {
-	cfg := &pb.Config{}
-	if err := proto.Unmarshal(configData, cfg); err != nil {
-		return nil
-	}
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetConfig{SetConfig: cfg},
-	}
-	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
-}
-
-// buildAdminSetModuleConfig builds a ToRadio with AdminMessage set_module_config.
-func buildAdminSetModuleConfig(myNodeNum uint32, configData []byte) []byte {
-	cfg := &pb.ModuleConfig{}
-	if err := proto.Unmarshal(configData, cfg); err != nil {
-		return nil
-	}
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetModuleConfig{SetModuleConfig: cfg},
-	}
-	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
-}
-
-// buildSetChannel builds a ToRadio for channel configuration.
-func buildSetChannel(myNodeNum uint32, index uint32, name string, psk []byte, role int, uplinkEnabled, downlinkEnabled bool) []byte {
-	ch := &pb.Channel{
-		Index: int32(index),
-		Settings: &pb.ChannelSettings{
-			Psk:             psk,
-			Name:            name,
-			UplinkEnabled:   uplinkEnabled,
-			DownlinkEnabled: downlinkEnabled,
-		},
-		Role: pb.Channel_Role(role),
-	}
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetChannel{SetChannel: ch},
 	}
 	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }
@@ -1457,18 +1417,6 @@ func buildAdminSetFixedPosition(myNodeNum uint32, lat, lon float64, alt int32) [
 	}
 	admin := &pb.AdminMessage{
 		PayloadVariant: &pb.AdminMessage_SetFixedPosition{SetFixedPosition: p},
-	}
-	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
-}
-
-// buildAdminSetOwner builds an AdminMessage to set the device owner name.
-func buildAdminSetOwner(myNodeNum uint32, longName, shortName string) []byte {
-	user := &pb.User{
-		LongName:  longName,
-		ShortName: shortName,
-	}
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetOwner{SetOwner: user},
 	}
 	return buildAdminToRadioMsg(myNodeNum, myNodeNum, admin)
 }

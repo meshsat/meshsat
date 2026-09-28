@@ -288,8 +288,12 @@ func extractPEMsFromZIP(data []byte) (map[string][]byte, error) {
 	return result, nil
 }
 
+// certFacts are what a credential's card shows about its certificate.
+type certFacts struct{ subject, notAfter, fingerprint string }
+
 func classifyPEMs(pemFiles map[string][]byte) (*parsedBundle, error) {
 	bundle := &parsedBundle{}
+	var ca *certFacts
 
 	for name, data := range pemFiles {
 		rest := data
@@ -309,6 +313,10 @@ func classifyPEMs(pemFiles map[string][]byte) (*parsedBundle, error) {
 				}
 				if cert.IsCA {
 					bundle.caCertPEM = string(pem.EncodeToMemory(block))
+					// Kept in case the upload has no leaf: then the CA is
+					// the certificate, and its card shows these. [MESHSAT-1404]
+					fp := sha256.Sum256(cert.Raw)
+					ca = &certFacts{subject: cert.Subject.CommonName, notAfter: cert.NotAfter.Format("2006-01-02 15:04:05"), fingerprint: hex.EncodeToString(fp[:])}
 				} else {
 					bundle.clientCertPEM = string(pem.EncodeToMemory(block))
 					bundle.subject = cert.Subject.CommonName
@@ -325,6 +333,9 @@ func classifyPEMs(pemFiles map[string][]byte) (*parsedBundle, error) {
 
 	if bundle.caCertPEM == "" && bundle.clientCertPEM == "" && bundle.clientKeyPEM == "" {
 		return nil, fmt.Errorf("no certificates or keys found in uploaded files")
+	}
+	if bundle.clientCertPEM == "" && ca != nil {
+		bundle.subject, bundle.notAfter, bundle.fingerprint = ca.subject, ca.notAfter, ca.fingerprint
 	}
 
 	return bundle, nil

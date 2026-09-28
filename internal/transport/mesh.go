@@ -140,6 +140,9 @@ type MeshStatus struct {
 // RadioLogLine is one line of the radio's own debug log as received over
 // the serial API, stamped with the bridge's receive time. [MESHSAT-1112]
 type RadioLogLine struct {
+	// Seq numbers the lines as the bridge received them, from 1; a reader
+	// asks for the lines after the last one it has. [MESHSAT-1406]
+	Seq        uint64 `json:"seq"`
 	ReceivedAt string `json:"received_at"`
 	RadioTime  uint32 `json:"radio_time,omitempty"`
 	Level      string `json:"level"`
