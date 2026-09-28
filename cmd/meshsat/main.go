@@ -247,27 +247,42 @@ func main() {
 				Msg("iridium: OnOff GPIO configured (MESHSAT_IRIDIUM_ONOFF_PIN)")
 		}
 
-		directCell := transport.NewDirectCellTransport(cellPort)
-		directCell.SetSIMCardLookup(
-			func(iccid string) (*transport.SIMCardInfo, error) {
-				sim, err := db.GetSIMCardByICCID(iccid)
-				if err != nil || sim == nil {
-					return nil, err
-				}
-				return &transport.SIMCardInfo{
-					ICCID: sim.ICCID, Phone: sim.Phone,
-					PIN: sim.PIN, Label: sim.Label,
-				}, nil
-			},
-			func(iccid string) { _ = db.TouchSIMCardLastSeen(iccid) },
-		)
-		// MESHSAT_SIM_PIN: fallback PIN when ICCID can't be read on a locked SIM
-		// (e.g., Huawei E220 firmware doesn't expose ICCID until PIN is entered).
-		// The DB lookup by ICCID takes priority when available. [MESHSAT-445]
-		if envPIN := os.Getenv("MESHSAT_SIM_PIN"); envPIN != "" {
-			directCell.SetFallbackPIN(envPIN)
+		// The modem is either a serial port the bridge drives with AT commands, or
+		// ModemManager's on a Linux phone (MESHSAT_CELLULAR_PORT=modemmanager), where
+		// the system owns the port and the bridge takes SMS, signal and SIM from the
+		// system bus instead. [MESHSAT-1386]
+		var directCell *transport.DirectCellTransport
+		var mmCell *transport.MMCellTransport
+		if transport.IsModemManager(cfg.CellularPort) {
+			mmCell = transport.NewMMCellTransport()
+			if envPIN := os.Getenv("MESHSAT_SIM_PIN"); envPIN != "" {
+				mmCell.SetFallbackPIN(envPIN)
+			}
+			cell = mmCell
+			log.Info().Msg("cellular: ModemManager transport (MESHSAT_CELLULAR_PORT=modemmanager)")
+		} else {
+			directCell = transport.NewDirectCellTransport(cellPort)
+			directCell.SetSIMCardLookup(
+				func(iccid string) (*transport.SIMCardInfo, error) {
+					sim, err := db.GetSIMCardByICCID(iccid)
+					if err != nil || sim == nil {
+						return nil, err
+					}
+					return &transport.SIMCardInfo{
+						ICCID: sim.ICCID, Phone: sim.Phone,
+						PIN: sim.PIN, Label: sim.Label,
+					}, nil
+				},
+				func(iccid string) { _ = db.TouchSIMCardLastSeen(iccid) },
+			)
+			// MESHSAT_SIM_PIN: fallback PIN when ICCID can't be read on a locked SIM
+			// (e.g., Huawei E220 firmware doesn't expose ICCID until PIN is entered).
+			// The DB lookup by ICCID takes priority when available. [MESHSAT-445]
+			if envPIN := os.Getenv("MESHSAT_SIM_PIN"); envPIN != "" {
+				directCell.SetFallbackPIN(envPIN)
+			}
+			cell = directCell
 		}
-		cell = directCell
 
 		// OOB RESET actions for the direct transports (levels: 1 soft, 2
 		// device, 3 hard). Level 3 re-enumerates USB; the device supervisor
@@ -284,12 +299,21 @@ func main() {
 			// A meshtasticd over TCP has no USB device behind it to reset. [MESHSAT-1384]
 			delete(oobActions["mesh"], oob.LevelHard)
 		}
-		oobActions["cellular"] = map[byte]oob.Action{
-			oob.LevelSoft:   directCell.Reconnect,
-			oob.LevelDevice: directCell.DeviceReset,
-			// A VBUS cut of the T-Call is a modem power toggle that only
-			// sticks when nothing opens the port for a minute. [MESHSAT-812]
-			oob.LevelHard: cellularQuietCut(directCell, func() *transport.DeviceSupervisor { return supervisor }, usbPowerCycle),
+		if mmCell != nil {
+			// ModemManager's modem: find it again, or have ModemManager reset it. No USB
+			// port of ours to cut. [MESHSAT-1386]
+			oobActions["cellular"] = map[byte]oob.Action{
+				oob.LevelSoft:   mmCell.Reconnect,
+				oob.LevelDevice: mmCell.DeviceReset,
+			}
+		} else {
+			oobActions["cellular"] = map[byte]oob.Action{
+				oob.LevelSoft:   directCell.Reconnect,
+				oob.LevelDevice: directCell.DeviceReset,
+				// A VBUS cut of the T-Call is a modem power toggle that only
+				// sticks when nothing opens the port for a minute. [MESHSAT-812]
+				oob.LevelHard: cellularQuietCut(directCell, func() *transport.DeviceSupervisor { return supervisor }, usbPowerCycle),
+			}
 		}
 		oobActions["iridium"] = map[byte]oob.Action{
 			oob.LevelSoft: directSat.Reconnect,
@@ -321,7 +345,10 @@ func main() {
 		}
 		supervisor.SetExplicitPort(transport.RoleIridium9704, cfg.IMTPort)
 		supervisor.SetExplicitPort(transport.RoleIridium9603, cfg.IridiumPort)
-		supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
+		if !transport.IsModemManager(cfg.CellularPort) {
+			// ModemManager's modem is not a port of ours to claim. [MESHSAT-1386]
+			supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
+		}
 		supervisor.SetExplicitPort(transport.RoleZigBee, cfg.ZigBeePort)
 
 		// A hardware APRS TNC on a serial port (PicoAPRS V4, a CP2102 with
@@ -377,18 +404,20 @@ func main() {
 			HasPort: func() bool { return directSat.GetPort() != "" && directSat.GetPort() != "supervisor" },
 		})
 
-		supervisor.SetCallbacks(transport.RoleCellular, &transport.DriverCallbacks{
-			InstanceID: "cellular_0",
-			OnPortFound: func(port string) {
-				directCell.SetPort(port)
-				log.Info().Str("port", port).Msg("supervisor: cellular port assigned")
-			},
-			OnPortLost: func(port string) {
-				directCell.Close()
-				log.Warn().Str("port", port).Msg("supervisor: cellular port lost")
-			},
-			HasPort: func() bool { return directCell.GetPort() != "" && directCell.GetPort() != "supervisor" },
-		})
+		if directCell != nil {
+			supervisor.SetCallbacks(transport.RoleCellular, &transport.DriverCallbacks{
+				InstanceID: "cellular_0",
+				OnPortFound: func(port string) {
+					directCell.SetPort(port)
+					log.Info().Str("port", port).Msg("supervisor: cellular port assigned")
+				},
+				OnPortLost: func(port string) {
+					directCell.Close()
+					log.Warn().Str("port", port).Msg("supervisor: cellular port lost")
+				},
+				HasPort: func() bool { return directCell.GetPort() != "" && directCell.GetPort() != "supervisor" },
+			})
+		}
 
 		// ZigBee has no long-lived transport (the gateway allocates one per
 		// start), so the gateway manager does the stop/start on device
@@ -1545,12 +1574,13 @@ func main() {
 	// interface are all counted. Bundle size and the reminder number are
 	// set with PUT /api/cellular/bundle and persist in system_config.
 	var smsBudget *gateway.SMSBudget
-	if dc, ok := cell.(*transport.DirectCellTransport); ok && dc != nil {
-		smsBudget = gateway.NewSMSBudget(db, cfg.BridgeID, gateway.SMSBudgetOptionsFromEnv(), dc.SendSMS)
+	// Both cellular transports carry the sent hook (serial and ModemManager). [MESHSAT-1386]
+	if hooked, ok := cell.(interface{ SetSentHook(func(to, text string)) }); ok && cell != nil {
+		smsBudget = gateway.NewSMSBudget(db, cfg.BridgeID, gateway.SMSBudgetOptionsFromEnv(), cell.SendSMS)
 		smsBudget.SetEventEmitter(func(eventType, message string) {
 			proc.Emit(transport.MeshEvent{Type: eventType, Message: message, Time: time.Now().UTC().Format(time.RFC3339)})
 		})
-		dc.SetSentHook(smsBudget.Record)
+		hooked.SetSentHook(smsBudget.Record)
 		srv.SetSMSBudget(smsBudget)
 		if st := smsBudget.Status(); st != nil {
 			log.Info().Int("size", st.Size).Int("sent", st.Sent).Int("remaining", st.Remaining).Int("warn_at", st.WarnAt).
