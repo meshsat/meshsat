@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -36,11 +37,20 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	log.Debug().Msg("SSE client connected")
 
+	// A comment line every 15 s while nothing happens: a reader with a read
+	// timeout (the Linux app's notifier gives up after 90 s and reconnects,
+	// missing what came in the gap) sees the stream is alive. [MESHSAT-1397]
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			log.Debug().Msg("SSE client disconnected")
 			return
+		case <-keepalive.C:
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
 		case event, ok := <-events:
 			if !ok {
 				return

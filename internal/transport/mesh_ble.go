@@ -92,6 +92,10 @@ type BLEStatus struct {
 	SatellitePipe bool      `json:"satellite_pipe"`
 	Since         time.Time `json:"since,omitempty"`
 	Error         string    `json:"error,omitempty"`
+	// AdapterPowered: whether the phone's Bluetooth adapter is on (nil when
+	// BlueZ is not open). The apps say "Bluetooth is off on this phone" from
+	// it. [MESHSAT-1397]
+	AdapterPowered *bool `json:"adapter_powered,omitempty"`
 }
 
 // gattLink is the node's GATT service as the stream sees it: a fake in tests,
@@ -758,6 +762,13 @@ func (l *bleLink) status() BLEStatus {
 				st.Name = dev.Name
 			}
 		}
+	}
+	if l.bus != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if on, err := l.bus.getBool(ctx, l.bus.adapter, bluezAdapterIf, "Powered"); err == nil {
+			st.AdapterPowered = &on
+		}
+		cancel()
 	}
 	return st
 }

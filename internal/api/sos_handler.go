@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/hubreporter"
 	"meshsat/internal/transport"
 )
 
@@ -21,7 +23,15 @@ type SOSState struct {
 	startAt  time.Time
 	cancelFn context.CancelFunc
 	sends    int
+	// text is what goes out on every route: the caller's words (the apps send
+	// SosMessages' sentence with the person's name and position), or the fixed
+	// sentence below when the caller gave none. [MESHSAT-1397]
+	text    string
+	trigger string
 }
+
+// sosDefaultText is the SOS text when the caller gives none.
+const sosDefaultText = "SOS - EMERGENCY ALERT - Requesting immediate assistance"
 
 // @Summary Activate SOS alert
 // @Description Triggers an SOS emergency alert that sends via mesh and satellite (3x at 30s intervals)
@@ -38,9 +48,12 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	// Best-effort trigger capture so the signed audit-log entry can
 	// record whether the activation came from the 3-s hold, the
 	// double-tap, or an external caller (CLI, TAK, HeMB). Unknown =
-	// "manual". [MESHSAT-562]
+	// "manual". [MESHSAT-562]. The message is the caller's words for every
+	// route (the apps' "SOS: <name> needs help. At <position> at <time>.");
+	// without one the fixed sentence goes. [MESHSAT-1397]
 	var body struct {
 		Trigger string `json:"trigger,omitempty"`
+		Message string `json:"message,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	trigger := body.Trigger
@@ -50,7 +63,7 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 
 	s.touchOperatorActivity()
 
-	if !s.TriggerSOS(trigger) {
+	if !s.TriggerSOSWithText(trigger, sosTextOf(body.Message)) {
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "already_active"})
 		return
 	}
@@ -78,8 +91,29 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 // Returns false when an SOS is already running, in which case nothing is
 // started and the existing burst continues.
 func (s *Server) TriggerSOS(trigger string) bool {
+	return s.TriggerSOSWithText(trigger, sosDefaultText)
+}
+
+// sosTextOf is the text an SOS goes out with: the caller's, trimmed and capped
+// at what one mesh packet carries, or the fixed sentence. [MESHSAT-1397]
+func sosTextOf(message string) string {
+	text := strings.TrimSpace(message)
+	if text == "" {
+		return sosDefaultText
+	}
+	if len(text) > 200 {
+		text = text[:200]
+	}
+	return text
+}
+
+// TriggerSOSWithText is TriggerSOS with the words that go out on every route.
+func (s *Server) TriggerSOSWithText(trigger, text string) bool {
 	if s.sos == nil {
 		s.sos = &SOSState{}
+	}
+	if text == "" {
+		text = sosDefaultText
 	}
 
 	s.sos.mu.Lock()
@@ -91,6 +125,8 @@ func (s *Server) TriggerSOS(trigger string) bool {
 	s.sos.active = true
 	s.sos.startAt = time.Now()
 	s.sos.sends = 0
+	s.sos.text = text
+	s.sos.trigger = trigger
 	ctx, cancel := context.WithCancel(context.Background())
 	s.sos.cancelFn = cancel
 	startedAt := s.sos.startAt
@@ -102,14 +138,62 @@ func (s *Server) TriggerSOS(trigger string) bool {
 		detail, _ := json.Marshal(map[string]interface{}{
 			"trigger":    trigger,
 			"started_at": startedAt.UTC().Format(time.RFC3339),
+			"message":    text,
 		})
 		s.signing.AuditEvent("sos_activated", nil, nil, nil, nil, string(detail))
 	}
 
-	go s.sosWorker(ctx)
+	go s.sosWorker(ctx, text)
 
-	log.Warn().Str("trigger", trigger).Msg("SOS ACTIVATED")
+	log.Warn().Str("trigger", trigger).Str("text", text).Msg("SOS ACTIVATED")
 	return true
+}
+
+// handleSOSTest tells the Hub about a test of the alarm routes, as MeshSat
+// Android does (HubReporter.publishSos with type "test", on the device's sos
+// topic only): the Hub's live map shows it, its SOS detector never sees it, so
+// nobody is paged. The mesh, satellite and SMS legs of a test are the apps'
+// own ordinary sends. [MESHSAT-1397]
+// @Summary Send an alarm test event to the Hub
+// @Description Publishes a test event on the device's SOS topic; the Hub shows it and raises no alarm
+// @Tags sos
+// @Accept json
+// @Produce json
+// @Param body body object{message=string,latitude=number,longitude=number} false "The test's text and where it is from"
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {object} map[string]string "the Hub is not connected"
+// @Router /api/sos/test [post]
+func (s *Server) handleSOSTest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Message   string  `json:"message,omitempty"`
+		Latitude  float64 `json:"latitude,omitempty"`
+		Longitude float64 `json:"longitude,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	text := strings.TrimSpace(body.Message)
+	if text == "" {
+		text = "Test: checking the MeshSat alarm routes. No help needed."
+	}
+	if s.hubReporter == nil || !s.hubReporter.IsConnected() {
+		writeError(w, http.StatusServiceUnavailable, "the Hub is not connected")
+		return
+	}
+	lat, lon := body.Latitude, body.Longitude
+	if lat == 0 && lon == 0 && s.gpsReader != nil {
+		if st := s.gpsReader.GetStatus(); st.Fix {
+			lat, lon = st.Lat, st.Lon
+		}
+	}
+	event := hubreporter.DeviceSOS{DeviceID: "bridge", Type: "test", Message: text, Lat: lat, Lon: lon, Timestamp: time.Now().UTC()}
+	if err := s.hubReporter.PublishDeviceSOS(event); err != nil {
+		writeError(w, http.StatusBadGateway, "the Hub did not take the test event: "+err.Error())
+		return
+	}
+	if s.signing != nil {
+		detail, _ := json.Marshal(map[string]interface{}{"message": text})
+		s.signing.AuditEvent("sos_test", nil, nil, nil, nil, string(detail))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "sent", "message": text, "sent_at": event.Timestamp.Format(time.RFC3339)})
 }
 
 // @Summary Cancel SOS alert
@@ -164,13 +248,18 @@ func (s *Server) handleSOSStatus(w http.ResponseWriter, r *http.Request) {
 	if s.sos.active {
 		resp["started_at"] = s.sos.startAt.UTC().Format(time.RFC3339)
 		resp["sends"] = s.sos.sends
+		resp["message"] = s.sos.text
+		resp["trigger"] = s.sos.trigger
 	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // sosWorker sends SOS messages 3 times with 30s intervals via all available transports.
-func (s *Server) sosWorker(ctx context.Context) {
+func (s *Server) sosWorker(ctx context.Context, sosText string) {
+	if sosText == "" {
+		sosText = sosDefaultText
+	}
 	for i := 0; i < 3; i++ {
 		select {
 		case <-ctx.Done():
@@ -179,7 +268,6 @@ func (s *Server) sosWorker(ctx context.Context) {
 		}
 
 		// Send via mesh (broadcast)
-		sosText := "SOS - EMERGENCY ALERT - Requesting immediate assistance"
 		req := transport.SendRequest{
 			Text: sosText,
 		}

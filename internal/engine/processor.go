@@ -706,33 +706,49 @@ func (p *Processor) handleNodeUpdate(event transport.MeshEvent) {
 }
 
 func (p *Processor) handlePosition(event transport.MeshEvent) {
-	// Position events may come as standalone (not wrapped in node_update)
-	var pos struct {
+	// The mesh transport publishes the node itself (a MeshNode: user_id, num,
+	// latitude, ...) as the event's data. Reading a "node_id" field out of it
+	// stored every position without a node, so the tracks had nothing to draw
+	// (MESHSAT-1397): the node id is the user id, or the number as "!%08x".
+	pos := positionOf(event.Data)
+	if pos == nil {
+		return
+	}
+	if err := p.db.InsertPosition(pos); err != nil {
+		log.Error().Err(err).Str("node", pos.NodeID).Msg("failed to persist position")
+	}
+}
+
+// positionOf is the position row a position event carries, nil when it has
+// no position or no node.
+func positionOf(data json.RawMessage) *database.Position {
+	var node struct {
+		Num       uint32  `json:"num"`
+		UserID    string  `json:"user_id"`
 		NodeID    string  `json:"node_id"`
 		Latitude  float64 `json:"latitude"`
 		Longitude float64 `json:"longitude"`
 		Altitude  int     `json:"altitude"`
 		Sats      int     `json:"sats"`
 	}
-	if err := json.Unmarshal(event.Data, &pos); err != nil {
+	if err := json.Unmarshal(data, &node); err != nil {
 		log.Warn().Err(err).Msg("failed to parse position event")
-		return
+		return nil
 	}
-
-	if pos.Latitude == 0 && pos.Longitude == 0 {
-		return
+	if node.Latitude == 0 && node.Longitude == 0 {
+		return nil
 	}
-
-	dbPos := &database.Position{
-		NodeID:     pos.NodeID,
-		Latitude:   pos.Latitude,
-		Longitude:  pos.Longitude,
-		Altitude:   pos.Altitude,
-		SatsInView: pos.Sats,
+	id := node.UserID
+	if id == "" {
+		id = node.NodeID
 	}
-	if err := p.db.InsertPosition(dbPos); err != nil {
-		log.Error().Err(err).Str("node", pos.NodeID).Msg("failed to persist position")
+	if id == "" && node.Num != 0 {
+		id = fmt.Sprintf("!%08x", node.Num)
 	}
+	if id == "" {
+		return nil
+	}
+	return &database.Position{NodeID: id, Latitude: node.Latitude, Longitude: node.Longitude, Altitude: node.Altitude, SatsInView: node.Sats}
 }
 
 func (p *Processor) handleNeighborInfoEvent(event transport.MeshEvent) {

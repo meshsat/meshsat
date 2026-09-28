@@ -606,6 +606,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/sos/activate", s.handleSOSActivate)
 		r.Post("/sos/cancel", s.handleSOSCancel)
 		r.Get("/sos/status", s.handleSOSStatus)
+		r.Post("/sos/test", s.handleSOSTest) // [MESHSAT-1397]
 
 		// v0.3.0 Interface-based routing
 		r.Get("/interfaces", s.handleGetInterfaces)
