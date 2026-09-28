@@ -124,6 +124,10 @@ type Dispatcher struct {
 	// the end of test cleanup.
 	wg sync.WaitGroup
 
+	// runCtx is the context Start was given: a worker started later for a
+	// link switched on through the API lives as long as the dispatcher.
+	runCtx context.Context
+
 	mu sync.RWMutex
 }
 
@@ -284,6 +288,7 @@ func (d *Dispatcher) satellitePassSched(desc channel.ChannelDescriptor) PassStat
 func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.runCtx = ctx
 
 	// Cancel runaway deliveries with excessive retries (safety net for past bugs).
 	// Deliveries with max_retries=0 (infinite) are capped at 15 retries.
@@ -421,13 +426,20 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 }
 
 // StartWorker starts a delivery worker for a specific interface ID.
-// Called when an interface transitions to ONLINE.
+// Called when an interface transitions to ONLINE, and when a link is
+// switched on through the API. A link that is switched off gets no
+// worker, whatever its device does: what waits for it stays held until
+// it is switched on again. [MESHSAT-1401]
 func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelType string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	if _, exists := d.workers[ifaceID]; exists {
 		return // already running
+	}
+	if iface, err := d.db.GetInterface(ifaceID); err == nil && !iface.Enabled {
+		log.Info().Str("interface", ifaceID).Msg("delivery worker not started: the link is switched off")
+		return
 	}
 
 	desc, ok := d.registry.Get(channelType)
@@ -474,8 +486,29 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 	log.Info().Str("interface", ifaceID).Str("type", channelType).Msg("delivery worker started (state change)")
 }
 
+// ResumeWorker starts the delivery worker of a link that was switched on
+// while the dispatcher runs, with the dispatcher's own context, and
+// releases what was held for it. It does nothing before Start. [MESHSAT-1401]
+func (d *Dispatcher) ResumeWorker(ifaceID string, channelType string) {
+	d.mu.RLock()
+	ctx := d.runCtx
+	d.mu.RUnlock()
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
+	d.StartWorker(ctx, ifaceID, channelType)
+}
+
+// HasWorker reports whether a delivery worker runs for the interface.
+func (d *Dispatcher) HasWorker(ifaceID string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	_, ok := d.workers[ifaceID]
+	return ok
+}
+
 // StopWorker stops the delivery worker for a specific interface ID and holds pending deliveries.
-// Called when an interface transitions to OFFLINE or ERROR.
+// Called when an interface transitions to OFFLINE or ERROR, and when a link is switched off.
 func (d *Dispatcher) StopWorker(ifaceID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

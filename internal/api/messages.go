@@ -137,6 +137,7 @@ func (s *Server) handleSimulateMeshRx(w http.ResponseWriter, r *http.Request) {
 // @Param body body transport.SendRequest true "Message to send"
 // @Success 200 {object} map[string]string "success"
 // @Failure 400 {object} map[string]string "error"
+// @Failure 409 {object} map[string]string "the mesh is switched off"
 // @Router /api/messages/send [post]
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	s.touchOperatorActivity()
@@ -199,6 +200,13 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "mesh transport unavailable")
 		return
 	}
+	// A person who switched the mesh off gets nothing sent on it until it
+	// is switched on again (the SOS worker's own sends are not refused).
+	// [MESHSAT-1401]
+	if s.meshSwitchedOff() {
+		writeError(w, http.StatusConflict, "Not sent: Mesh is switched off. Switch it on in Links.")
+		return
+	}
 	if err := s.mesh.SendMessage(r.Context(), req); err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to send: "+err.Error())
 		return
@@ -233,6 +241,25 @@ func (s *Server) handlePurgeMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"deleted": deleted,
 	})
+}
+
+// meshSwitchedOff reports whether this Bridge has mesh links and every one of
+// them is switched off. A database without mesh interface rows sends as
+// before. [MESHSAT-1401]
+func (s *Server) meshSwitchedOff() bool {
+	if s.db == nil {
+		return false
+	}
+	ifaces, err := s.db.GetInterfacesByType("mesh")
+	if err != nil || len(ifaces) == 0 {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Enabled {
+			return false
+		}
+	}
+	return true
 }
 
 func intParam(s string, fallback int) int {

@@ -301,6 +301,39 @@ func (m *InterfaceManager) UpdateInterface(iface database.Interface) error {
 	return nil
 }
 
+// SetEnabled switches an interface on or off in the database and in the
+// runtime record together, so the list, the binder and the dispatcher see
+// the switch at once; it used to reach the database only and showed after
+// the next restart. A device-less link (mqtt, webhook) is online when on
+// and unbound when off, as Start decides at boot. [MESHSAT-1401]
+func (m *InterfaceManager) SetEnabled(id string, enabled bool) (database.Interface, error) {
+	iface, err := m.db.GetInterface(id)
+	if err != nil {
+		return database.Interface{}, err
+	}
+	iface.Enabled = enabled
+	if err := m.db.UpdateInterface(iface); err != nil {
+		return database.Interface{}, err
+	}
+
+	m.mu.Lock()
+	if rt, ok := m.states[id]; ok {
+		rt.iface = *iface
+		if !channelNeedsDevice(iface.ChannelType) {
+			if enabled {
+				rt.state = StateOnline
+				rt.lastActivity = time.Now()
+			} else {
+				rt.state = StateUnbound
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	log.Info().Str("id", id).Bool("enabled", enabled).Msg("ifacemgr: interface switched")
+	return *iface, nil
+}
+
 // DeleteInterface removes an interface from DB and runtime.
 func (m *InterfaceManager) DeleteInterface(id string) error {
 	if err := m.db.DeleteInterface(id); err != nil {
