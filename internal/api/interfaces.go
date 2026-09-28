@@ -234,7 +234,7 @@ func (s *Server) handleDeleteInterface(w http.ResponseWriter, r *http.Request) {
 
 // handleEnableInterface enables an interface.
 // @Summary Enable interface
-// @Description Enables a transport interface
+// @Description Switches a transport interface on: the interface list shows it at once, its delivery worker starts and what was held for it goes out
 // @Tags interfaces
 // @Produce json
 // @Param id path string true "Interface ID"
@@ -249,7 +249,7 @@ func (s *Server) handleEnableInterface(w http.ResponseWriter, r *http.Request) {
 
 // handleDisableInterface disables an interface.
 // @Summary Disable interface
-// @Description Disables a transport interface
+// @Description Switches a transport interface off: the interface list shows it at once, nothing more goes out by it, and what waits for it is held until it is switched on again
 // @Tags interfaces
 // @Produce json
 // @Param id path string true "Interface ID"
@@ -268,15 +268,25 @@ func (s *Server) setInterfaceEnabled(w http.ResponseWriter, r *http.Request, ena
 		return
 	}
 	id := chi.URLParam(r, "id")
-	iface, err := s.db.GetInterface(id)
-	if err != nil {
+	if _, err := s.db.GetInterface(id); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	iface.Enabled = enabled
-	if err := s.db.UpdateInterface(iface); err != nil {
+	// Through the interface manager, so its own copy follows the database,
+	// then the link's delivery worker: stopped (what waits is held) or
+	// started again (what was held goes out). Both used to wait for a
+	// restart of the Bridge. [MESHSAT-1401]
+	iface, err := s.ifaceMgr.SetEnabled(id, enabled)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.dispatcher != nil {
+		if enabled {
+			s.dispatcher.ResumeWorker(iface.ID, iface.ChannelType)
+		} else {
+			s.dispatcher.StopWorker(iface.ID)
+		}
 	}
 	state := "disabled"
 	if enabled {
