@@ -625,7 +625,9 @@ func meshHealthTarget(cfg *config.Config, dm *transport.DirectMeshTransport, act
 		},
 		Steps: []gateway.HealStep{
 			{Level: gateway.HealLevelSoft, Name: "serial reconnect", Grace: handshakeGrace, Skip: silent, Run: dm.Reconnect},
-			{Level: gateway.HealLevelSoft, Name: "DTR/RTS reboot", Grace: handshakeGrace, Skip: silent, Run: dm.RebootViaLines},
+			// A daemon over TCP has no modem lines to pulse. [MESHSAT-1384]
+			{Level: gateway.HealLevelSoft, Name: "DTR/RTS reboot", Grace: handshakeGrace,
+				Skip: func() bool { return silent() || transport.IsMeshTCP(dm.GetPort()) }, Run: dm.RebootViaLines},
 			{
 				Level: gateway.HealLevelDevice, Name: "admin reboot", Grace: 60 * time.Second,
 				Skip: func() bool { return !dm.IsConnected() || dm.MyNodeNum() == 0 || silent() },

@@ -41,7 +41,7 @@ type DirectMeshTransport struct {
 	port string // "/dev/ttyACM0" or "auto"
 
 	mu        sync.RWMutex
-	file      serial.Port
+	file      meshStream // a serial port, or a TCP link to meshtasticd [MESHSAT-1384]
 	reader    *meshFrameReader
 	connected bool
 
@@ -303,10 +303,15 @@ func (t *DirectMeshTransport) ProbeLocal(ctx context.Context, timeout time.Durat
 // API, then reconnects with bounded retries while the device re-enumerates.
 // It is the device health ladder's second soft rung. [MESHSAT-817]
 func (t *DirectMeshTransport) RebootViaLines(ctx context.Context) error {
-	t.Close()
 	t.mu.RLock()
 	port := t.port
 	t.mu.RUnlock()
+	if IsMeshTCP(port) {
+		// A daemon over TCP has no modem lines; closing the session first
+		// would only drop a link that may be fine. [MESHSAT-1384]
+		return errors.New("no serial lines on a tcp link to meshtasticd")
+	}
+	t.Close()
 	if port == "" || port == "auto" || port == "supervisor" {
 		return errors.New("no serial port assigned")
 	}
@@ -441,31 +446,48 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 		}
 	}
 
-	sp, err := openSerial(portPath, meshBaud)
-	if err != nil {
-		t.connectFails.Add(1)
-		t.lastConnectErr = err.Error()
-		return err
+	var sp meshStream
+	if IsMeshTCP(portPath) {
+		// A meshtasticd daemon on the network, most often on this same host:
+		// the phone with the LoRa back cover runs the daemon and the bridge
+		// side by side. Same framing, no modem lines. [MESHSAT-1384]
+		link, err := dialMeshTCP(portPath)
+		if err != nil {
+			t.connectFails.Add(1)
+			t.lastConnectErr = err.Error()
+			return err
+		}
+		sp = link
+		log.Info().Str("addr", meshTCPAddr(portPath)).Msg("meshtastic tcp connected")
+	} else {
+		var serialPort serial.Port
+		serialPort, err := openSerial(portPath, meshBaud)
+		if err != nil {
+			t.connectFails.Add(1)
+			t.lastConnectErr = err.Error()
+			return err
+		}
+
+		// The port keeps Linux's HUPCL, so a close drops DTR. Clearing it (as the
+		// official Meshtastic Python client does) was tried on 13 Sep 2026 and
+		// did not stop the silent radio after a restart: parallax went silent on
+		// 2 of 5 restarts with DTR held up, against 1 of 6 before. The radios run
+		// TinyUSB, where a held DTR tells the firmware a host is still reading
+		// while the bridge is down. [MESHSAT-850]
+
+		// Set read timeout for frame reader loop
+		serialPort.SetReadTimeout(meshReadTimeout)
+		sp = serialPort
+		log.Info().Str("port", portPath).Msg("meshtastic serial opened")
 	}
 	t.connectFails.Store(0)
 	t.lastConnectErr = ""
-
-	// The port keeps Linux's HUPCL, so a close drops DTR. Clearing it (as the
-	// official Meshtastic Python client does) was tried on 13 Sep 2026 and
-	// did not stop the silent radio after a restart: parallax went silent on
-	// 2 of 5 restarts with DTR held up, against 1 of 6 before. The radios run
-	// TinyUSB, where a held DTR tells the firmware a host is still reading
-	// while the bridge is down. [MESHSAT-850]
-
-	// Set read timeout for frame reader loop
-	sp.SetReadTimeout(meshReadTimeout)
 
 	t.file = sp
 	t.reader = &meshFrameReader{port: sp, onText: t.consoleText}
 	t.port = portPath
 	t.connectedAt = time.Now()
 	t.configReal = false
-	log.Info().Str("port", portPath).Msg("meshtastic serial opened")
 
 	// Wake device
 	if err := wakeDevice(sp); err != nil {
@@ -567,7 +589,7 @@ func (t *DirectMeshTransport) sessionHasMyInfo() bool {
 // owns the transport now, and closing its port from here was what let an old
 // handshake kill the session a heal rung had just opened. The caller must not
 // hold t.mu. [MESHSAT-850]
-func (t *DirectMeshTransport) abandonSilentHandshake(sp serial.Port, cancel context.CancelFunc, done chan struct{}) error {
+func (t *DirectMeshTransport) abandonSilentHandshake(sp meshStream, cancel context.CancelFunc, done chan struct{}) error {
 	t.mu.Lock()
 	if t.file != sp {
 		t.mu.Unlock()
@@ -1574,7 +1596,7 @@ func (t *DirectMeshTransport) GetStatus(_ context.Context) (*MeshStatus, error) 
 
 	status := &MeshStatus{
 		Connected:            t.connected,
-		Transport:            "serial",
+		Transport:            meshTransportName(t.port),
 		Address:              t.port,
 		NumNodes:             numNodes,
 		FirmwareVersion:      t.firmwareVer,
