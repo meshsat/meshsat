@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -195,6 +196,8 @@ func main() {
 		}
 
 		directMesh := transport.NewDirectMeshTransport(meshPort)
+		// A node over Bluetooth is remembered beside the database. [MESHSAT-1390]
+		directMesh.SetBLEStateDir(filepath.Dir(cfg.DBPath))
 		directMesh.SetWatchdogMinutes(cfg.MeshWatchdogMin)
 		directMesh.SetConfigTimeout(time.Duration(cfg.MeshConfigTimeoutSec) * time.Second)
 		// An OOB mesh reset waits for this handshake: give the executor
@@ -295,8 +298,9 @@ func main() {
 			},
 			oob.LevelHard: usbResetByRole(transport.RoleMeshtastic, "mesh"),
 		}
-		if transport.IsMeshTCP(meshPort) {
-			// A meshtasticd over TCP has no USB device behind it to reset. [MESHSAT-1384]
+		if transport.IsMeshTCP(meshPort) || transport.IsMeshBLE(meshPort) {
+			// A meshtasticd over TCP or a node over Bluetooth has no USB device
+			// behind it to reset. [MESHSAT-1384, MESHSAT-1390]
 			delete(oobActions["mesh"], oob.LevelHard)
 		}
 		if mmCell != nil {
@@ -340,7 +344,7 @@ func main() {
 		// never sees it, and must never replace it with a USB radio it finds
 		// (its port-found path hands any claimed Meshtastic radio to the
 		// mesh driver). [MESHSAT-1384]
-		if !transport.IsMeshTCP(cfg.MeshtasticPort) {
+		if !transport.IsMeshTCP(cfg.MeshtasticPort) && !transport.IsMeshBLE(cfg.MeshtasticPort) {
 			supervisor.SetExplicitPort(transport.RoleMeshtastic, cfg.MeshtasticPort)
 		}
 		supervisor.SetExplicitPort(transport.RoleIridium9704, cfg.IMTPort)
@@ -361,8 +365,8 @@ func main() {
 
 		// Wire driver callbacks: supervisor notifies transports when ports are
 		// discovered or lost, replacing the old exclude-port daisy chain.
-		if transport.IsMeshTCP(meshPort) {
-			log.Info().Str("addr", meshPort).Msg("meshtastic over tcp: the device supervisor leaves the mesh port alone")
+		if transport.IsMeshTCP(meshPort) || transport.IsMeshBLE(meshPort) {
+			log.Info().Str("addr", meshPort).Msg("meshtastic over tcp or bluetooth: the device supervisor leaves the mesh port alone")
 		} else {
 			supervisor.SetCallbacks(transport.RoleMeshtastic, &transport.DriverCallbacks{
 				InstanceID: "mesh_0",
