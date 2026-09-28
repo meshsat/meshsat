@@ -439,6 +439,38 @@ func (db *DB) GetAuditLog(limit int) ([]AuditLogEntry, error) {
 	return entries, nil
 }
 
+// CountAuditLog returns how many entries the audit log holds. [MESHSAT-1402]
+func (db *DB) CountAuditLog() (int, error) {
+	var n int
+	if err := db.Get(&n, "SELECT COUNT(*) FROM audit_log"); err != nil {
+		return 0, fmt.Errorf("count audit log: %w", err)
+	}
+	return n, nil
+}
+
+// GetAuditLogPage returns up to limit entries older than beforeID (all when
+// beforeID is 0), newest first, optionally for one interface: the pages a
+// full copy of the log is read in. [MESHSAT-1402]
+func (db *DB) GetAuditLogPage(interfaceID string, beforeID int64, limit int) ([]AuditLogEntry, error) {
+	query := "SELECT * FROM audit_log WHERE 1=1"
+	args := []interface{}{}
+	if interfaceID != "" {
+		query += " AND interface_id = ?"
+		args = append(args, interfaceID)
+	}
+	if beforeID > 0 {
+		query += " AND id < ?"
+		args = append(args, beforeID)
+	}
+	query += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+	var entries []AuditLogEntry
+	if err := db.Select(&entries, query, args...); err != nil {
+		return nil, fmt.Errorf("query audit log page: %w", err)
+	}
+	return entries, nil
+}
+
 // GetAuditLogByInterface returns audit log entries for a specific interface.
 func (db *DB) GetAuditLogByInterface(interfaceID string, limit int) ([]AuditLogEntry, error) {
 	var entries []AuditLogEntry

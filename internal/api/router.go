@@ -652,6 +652,7 @@ func (s *Server) Router() http.Handler {
 		// Audit log and non-repudiation (v0.3.0)
 		r.Get("/audit", s.handleGetAuditLog)
 		r.Get("/audit/verify", s.handleVerifyAuditChain)
+		r.Get("/audit/count", s.handleCountAuditLog)
 		r.Get("/audit/signer", s.handleGetSignerID)
 
 		// ZigBee coordinator (v0.3.0)
