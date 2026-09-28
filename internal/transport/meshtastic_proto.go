@@ -983,7 +983,22 @@ func buildTraceroutePacket(destNode uint32) []byte {
 }
 
 // buildRequestNodeInfo builds a MeshPacket requesting NodeInfo from a remote node.
-func buildRequestNodeInfo(myNodeNum, destNode uint32) []byte {
+// buildRequestNodeInfo asks destNode for its NodeInfo the way the firmware's own
+// sendOurNodeInfo and the Android app's request do: a NODEINFO_APP packet that
+// carries OUR User and wants a response. The payload is not optional. The
+// receiving firmware decodes whatever User the packet carries and writes it
+// over its NodeDB row for the sender (NodeDB::updateUser), so a request with
+// an empty payload blanked the local radio's name, MAC, role and public key on
+// every peer it asked; the same mechanism zeroed the radio's own row when the
+// request was addressed to itself (MESHSAT-1102). [MESHSAT-1388]
+func buildRequestNodeInfo(myNodeNum, destNode uint32, user *pb.User) []byte {
+	if user == nil {
+		return nil
+	}
+	payload, err := proto.Marshal(user)
+	if err != nil {
+		return nil
+	}
 	pkt := &pb.MeshPacket{
 		From:     myNodeNum,
 		To:       destNode,
@@ -992,23 +1007,41 @@ func buildRequestNodeInfo(myNodeNum, destNode uint32) []byte {
 		PayloadVariant: &pb.MeshPacket_Decoded{
 			Decoded: &pb.Data{
 				Portnum:      pb.PortNum_NODEINFO_APP,
+				Payload:      payload,
 				WantResponse: true,
 			},
 		},
 	}
-	pktBytes, err := proto.Marshal(pkt)
-	if err != nil {
-		return nil
-	}
 	toRadio := &pb.ToRadio{
 		PayloadVariant: &pb.ToRadio_Packet{Packet: pkt},
 	}
-	_ = pktBytes
 	data, err := proto.Marshal(toRadio)
 	if err != nil {
 		return nil
 	}
 	return data
+}
+
+// protoUserToPB is the wire form of a User the transport decoded from the
+// radio, every field kept, for sending it back out as our own. [MESHSAT-1388]
+func protoUserToPB(u *ProtoUser) *pb.User {
+	if u == nil {
+		return nil
+	}
+	out := &pb.User{
+		Id:         u.ID,
+		LongName:   u.LongName,
+		ShortName:  u.ShortName,
+		Macaddr:    u.Macaddr,
+		HwModel:    pb.HardwareModel(u.HWModel),
+		IsLicensed: u.IsLicensed,
+		Role:       pb.Config_DeviceConfig_Role(u.Role),
+		PublicKey:  u.PublicKey,
+	}
+	if u.IsUnmessagable {
+		out.IsUnmessagable = proto.Bool(true)
+	}
+	return out
 }
 
 // ============================================================================

@@ -42,6 +42,7 @@ func TestHandlePacket_NeverRequestsNodeInfoFromOwnRadio(t *testing.T) {
 	}
 
 	tr.handleFromRadio(myInfoFrame(t, 0x235779ff))
+	tr.handleFromRadio(ownRowFrame(t, 0x235779ff, "kit-a", "KITA"))
 	tr.handlePacket(telemetry(0x235779ff))
 	if n := port.count(); n != 0 {
 		t.Fatalf("%d NodeInfo requests to the local radio, want 0", n)
@@ -70,6 +71,7 @@ func TestRequestNodeInfo_RefusesLocalRadio(t *testing.T) {
 	if n := port.count(); n != 0 {
 		t.Fatalf("%d frames written for refused requests, want 0", n)
 	}
+	tr.ownUser = &ProtoUser{ID: "!00000005", LongName: "kit-a", ShortName: "KITA"}
 	if err := tr.RequestNodeInfo(ctx, 6); err != nil {
 		t.Fatalf("remote node: %v", err)
 	}
