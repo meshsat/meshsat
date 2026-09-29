@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -47,7 +49,11 @@ type Server struct {
 	routingID     *routing.Identity
 	paidRateLimit int
 	apiRateLimit  int
-	sos           *SOSState
+	// sos is the SOS state, part of the server wherever it is built (its
+	// zero value is no SOS). It was a pointer made on first use without a
+	// lock, so a handler reading it could race the one making it.
+	// [MESHSAT-1430]
+	sos           SOSState
 	webHandler    http.Handler
 	healthScorer  *engine.HealthScorer
 	geofenceMon   *engine.GeofenceMonitor
@@ -97,6 +103,25 @@ type Server struct {
 	// the widget reports 0 even though CoT is flowing. [MESHSAT-682]
 	hubReporter *hubreporter.HubReporter
 	satFallback *hubreporter.SatFallback // [MESHSAT-963]
+	// hubBridgeID is the id this Bridge names itself by to the Hub (main.go's
+	// hubBridgeID: the Hub settings' bridge_id, else MESHSAT_BRIDGE_ID, else
+	// the hostname), the one the satellite fallback's frames carry; the alarm
+	// test's position frame carries it too. Set whether or not a Hub link
+	// runs. [MESHSAT-1430]
+	hubBridgeID string
+	// nowFn is the alarm test's clock; nil means time.Now. Tests set it.
+	nowFn func() time.Time
+	// sosTestMu makes the alarm test's satellite leg (the SOS check, the
+	// look for an open test and the queueing) one step against the start of
+	// an SOS, which cancels the waiting test under it: a test can never slip
+	// into the queue after the SOS that should have cancelled it, nor two
+	// tests in at once. Nothing that can wait on another lock runs under
+	// it. [MESHSAT-1430]
+	sosTestMu sync.Mutex
+	// satTestIfaceFn stands in for the gateway manager's lookup of the
+	// alarm test's satellite link (satelliteTestInterface); nil means the
+	// manager. Tests set it.
+	satTestIfaceFn func() string
 	// baseCtx is the process's long-lived context, for work a handler starts
 	// that must outlive its request (a TCP peer's reconnect loop). Nil until
 	// SetBaseContext; baseContext() then answers context.Background().
@@ -134,6 +159,33 @@ func (s *Server) SetHubReporter(r *hubreporter.HubReporter) {
 // leaves as a compact frame over satellite or SMS when MQTT is down. [MESHSAT-963]
 func (s *Server) SetSatFallback(sf *hubreporter.SatFallback) {
 	s.satFallback = sf
+}
+
+// SetHubBridgeID gives the server the bridge id this Bridge names itself by
+// to the Hub, the same one the satellite fallback's frames carry. The alarm
+// test's satellite leg puts it in its position frame. [MESHSAT-1430]
+func (s *Server) SetHubBridgeID(id string) {
+	s.hubBridgeID = id
+}
+
+// uplinkBridgeID is the bridge id a Hub uplink frame from the API carries:
+// the one set at start, else the one the Hub reporter runs as.
+func (s *Server) uplinkBridgeID() string {
+	if s.hubBridgeID != "" {
+		return s.hubBridgeID
+	}
+	if s.hubReporter != nil {
+		return s.hubReporter.BridgeID()
+	}
+	return ""
+}
+
+// clockNow is time.Now, or the clock a test set.
+func (s *Server) clockNow() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
 }
 
 // SetBLEPeerManager wires the BLE peer manager for auto-RNS-peer on

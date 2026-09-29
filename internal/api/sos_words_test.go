@@ -101,7 +101,7 @@ func TestSOSTest_NeedsTheHub(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("without a Hub the test answered %d: %s", rec.Code, rec.Body.String())
 	}
-	if s.sos != nil && s.sos.active {
+	if s.sosActive() {
 		t.Fatal("a test started an SOS")
 	}
 }

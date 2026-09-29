@@ -2277,11 +2277,15 @@ func TestSF_TTLClockPauseDuringHeld_VerifyExtension(t *testing.T) {
 	h := setupE2E(t)
 	h.addInterface(t, "mqtt_0", "mqtt", true)
 
-	// Insert a delivery with TTL = 300s, expires_at = now + 300s
+	// Insert a delivery with TTL = 300s, expires_at = now + 300s. A rule's
+	// delivery: the clock pauses for those; a direct send's TTL is its
+	// sender's deadline and does not (MESHSAT-1430,
+	// TestDirectSendTTL_ExpiresInsteadOfGoingOut).
 	ttl := 300
+	ruleID := int64(1)
 	expiresAt := time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format("2006-01-02 15:04:05")
 	id, _ := h.db.InsertDelivery(database.MessageDelivery{
-		MsgRef: "ttl-pause", Channel: "mqtt_0", Status: "queued",
+		MsgRef: "ttl-pause", RuleID: &ruleID, Channel: "mqtt_0", Status: "queued",
 		Priority: 1, Payload: []byte("ttl pause"), TextPreview: "ttl pause",
 		MaxRetries: 3, Visited: "[]", TTLSeconds: ttl, ExpiresAt: &expiresAt,
 	})

@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -304,29 +306,126 @@ func (db *DB) HasDueDeliveryAboveDeferred(channel string) (bool, error) {
 	return n == 1, nil
 }
 
-// CancelDelivery sets a pending delivery to 'dead' status.
+// CancelDelivery stops a delivery that has not gone out: queued, waiting for
+// a retry, or held while its link is down. It ends 'dead' with last_error
+// 'cancelled'. A held delivery could not be cancelled before MESHSAT-1430,
+// so it went out whenever its link came back; MeshSat Android's
+// cancelWaiting takes held rows too. A delivery being sent, or already
+// finished, is left as it is and the error says so.
 func (db *DB) CancelDelivery(id int64) error {
-	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = 'cancelled', updated_at = datetime('now')
-		WHERE id = ? AND status IN ('queued', 'retry')`, id)
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = 'cancelled', held_at = NULL, updated_at = datetime('now')
+		WHERE id = ? AND status IN ('queued', 'retry', 'held')`, id)
 	if err != nil {
 		return fmt.Errorf("cancel delivery %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("delivery %d not cancellable (not queued/retry)", id)
+		return fmt.Errorf("delivery %d not cancellable (not queued/retry/held)", id)
 	}
 	return nil
 }
 
-// RetryDelivery forces an immediate retry of a failed/dead delivery.
+// OpenDeliveryByPreview returns the oldest delivery on channel of that class
+// with exactly that text preview which has not finished: queued, waiting for
+// a retry or held, and not past its expiry, or being sent. Nil, nil when
+// there is none. The alarm test's satellite leg asks before it queues, so a
+// second test answers with the first instead of spending a second credit.
+// [MESHSAT-1430]
+func (db *DB) OpenDeliveryByPreview(channel, class, preview string) (*MessageDelivery, error) {
+	var id int64
+	err := db.QueryRow(`SELECT id FROM message_deliveries
+		WHERE channel = ? AND delivery_class = ? AND text_preview = ?
+		  AND (status = 'sending'
+		    OR (status IN ('queued', 'retry', 'held')
+		      AND (priority = 0 OR expires_at IS NULL OR expires_at > datetime('now'))))
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1`, channel, class, preview).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open delivery on %s: %w", channel, err)
+	}
+	return db.GetDelivery(id)
+}
+
+// WaitingDeliveryIDs returns the deliveries of that class with exactly that
+// text preview, on any channel, that have not gone out and can still be
+// cancelled (CancelDelivery): queued, waiting for a retry, or held. An SOS
+// cancels the alarm test's satellite leg this way. [MESHSAT-1430]
+func (db *DB) WaitingDeliveryIDs(class, preview string) ([]int64, error) {
+	rows, err := db.Query(`SELECT id FROM message_deliveries
+		WHERE delivery_class = ? AND text_preview = ? AND status IN ('queued', 'retry', 'held')
+		ORDER BY id ASC`, class, preview)
+	if err != nil {
+		return nil, fmt.Errorf("waiting deliveries: %w", err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan waiting delivery: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// EndSendingDeliveries gives the deliveries of that class with exactly that
+// text preview that are being sent right now (priority above 0) a deadline
+// of now. A send that goes through is unaffected; one that fails and would
+// come back as a retry is never fetched again, and the reaper expires it.
+// An SOS stops the alarm test's satellite leg this way when the test is
+// already on the modem, where it cannot be cancelled. [MESHSAT-1430]
+func (db *DB) EndSendingDeliveries(class, preview string) (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET expires_at = datetime('now'), updated_at = datetime('now')
+		WHERE delivery_class = ? AND text_preview = ? AND status = 'sending' AND priority > 0`, class, preview)
+	if err != nil {
+		return 0, fmt.Errorf("end sending deliveries: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// ClaimDeliveryForSending marks a delivery 'sending' if it is still queued or
+// waiting for a retry, and reports whether it did. The delivery worker
+// claims each row this way before it sends it: a row cancelled, held or
+// expired since the worker fetched it is left as it is, where marking it
+// 'sending' unconditionally undid the cancel and sent it. [MESHSAT-1430]
+func (db *DB) ClaimDeliveryForSending(id int64) (bool, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'sending', last_error = '', channel_ref = '', updated_at = datetime('now')
+		WHERE id = ? AND status IN ('queued', 'retry')`, id)
+	if err != nil {
+		return false, fmt.Errorf("claim delivery %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim delivery %d: %w", id, err)
+	}
+	return n == 1, nil
+}
+
+// ErrSOSFrameNotRetried is RetryDelivery's answer for the SOS's Hub frame.
+var ErrSOSFrameNotRetried = errors.New("the SOS frame to the Hub is not sent again: it would pass the credit budget and raise the SOS at the Hub with its old time; a new SOS sends a new frame")
+
+// RetryDelivery forces an immediate retry of a failed/dead delivery. The
+// SOS's Hub frame (class hub_uplink at priority 0) is never re-queued
+// (ErrSOSFrameNotRetried): the SBD credit budget does not hold it back, and
+// the Hub would raise the SOS again with the frame's old time. [MESHSAT-1431]
 func (db *DB) RetryDelivery(id int64) error {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'queued', next_retry = NULL, updated_at = datetime('now')
-		WHERE id = ? AND status IN ('failed', 'dead')`, id)
+		WHERE id = ? AND status IN ('failed', 'dead') AND NOT (priority = 0 AND delivery_class = ?)`, id, DeliveryClassHubUplink)
 	if err != nil {
 		return fmt.Errorf("retry delivery %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		var priority int
+		var class, status string
+		if db.QueryRow(`SELECT priority, delivery_class, status FROM message_deliveries WHERE id = ?`, id).Scan(&priority, &class, &status) == nil &&
+			priority == 0 && class == DeliveryClassHubUplink && (status == "failed" || status == "dead") {
+			return ErrSOSFrameNotRetried
+		}
 		return fmt.Errorf("delivery %d not retryable (not failed/dead)", id)
 	}
 	return nil
@@ -461,6 +560,8 @@ func (db *DB) RecoverStaleDeliveries() (int64, error) {
 // ExpireDeliveries marks all expired queued/retry deliveries as 'expired'.
 // P0 critical messages (priority=0) are exempt — they never expire.
 // Held deliveries are excluded: TTL clock pauses while held (store-and-forward).
+// A held direct send is expired here once its link is back: unholding keeps
+// its deadline (UnholdDeliveriesForChannel). [MESHSAT-1430]
 func (db *DB) ExpireDeliveries() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'expired', updated_at = datetime('now')
 		WHERE status IN ('queued', 'retry') AND expires_at IS NOT NULL AND expires_at <= datetime('now')
@@ -496,15 +597,20 @@ func (db *DB) HoldDeliveriesForChannel(channel string) (int64, error) {
 }
 
 // UnholdDeliveriesForChannel moves held deliveries back to 'queued' status for a channel.
-// Called when an interface comes back online. Extends expires_at by the duration spent
-// in held state (TTL clock pauses while held).
+// Called when an interface comes back online. Extends a rule delivery's expires_at by
+// the duration spent in held state (TTL clock pauses while held). A direct send's
+// expires_at (rule_id NULL, engine.DirectSendOptions.TTLSeconds) is its sender's
+// deadline and stays as it is: one that passed while the row was held keeps the row
+// out of GetPendingDeliveries, and the reaper expires it. The alarm test's satellite
+// leg held for days would otherwise go out days late, spend a credit and put an old
+// position on the Hub. [MESHSAT-1430]
 func (db *DB) UnholdDeliveriesForChannel(channel string) (int64, error) {
-	// Extend expires_at by (now - held_at) seconds for deliveries that have both
+	// Extend expires_at by (now - held_at) seconds for rule deliveries that have both
 	// a held_at timestamp and an expires_at. This pauses the TTL clock while held.
 	res, err := db.Exec(`UPDATE message_deliveries
 		SET status = 'queued',
 		    expires_at = CASE
-		        WHEN expires_at IS NOT NULL AND held_at IS NOT NULL
+		        WHEN expires_at IS NOT NULL AND held_at IS NOT NULL AND rule_id IS NOT NULL
 		        THEN datetime(expires_at, '+' || CAST((strftime('%s', 'now') - strftime('%s', held_at)) AS TEXT) || ' seconds')
 		        ELSE expires_at
 		    END,
