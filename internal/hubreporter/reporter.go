@@ -74,6 +74,8 @@ type HubReporter struct {
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
 	tlsErr        error             // set when TLS material is present but unusable [MESHSAT-1027]
+	linkState     string            // the link as the apps show it (link.go)
+	linkError     string            // why the last connect failed; cleared by a connect
 
 	// TAK relay stats surfaced to the dashboard widget via a synthetic
 	// gateway entry (type "tak_hub_relay"). The widget reports 0 without
@@ -121,8 +123,11 @@ var (
 
 func (r *HubReporter) Start(ctx context.Context) error {
 	if err := r.cfg.Validate(); err != nil {
-		return fmt.Errorf("hubreporter config: %w", err)
+		err = fmt.Errorf("hubreporter config: %w", err)
+		r.setLink(LinkError, FailureText(err))
+		return err
 	}
+	r.setLink(LinkConnecting, "")
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(r.cfg.HubURL).
@@ -158,8 +163,10 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	// Retrying it for the life of the process would never succeed and would
 	// hide the real cause behind broker authentication failures. [MESHSAT-1027]
 	if r.tlsErr != nil {
+		r.setLink(LinkError, FailureText(r.tlsErr))
 		return fmt.Errorf("hubreporter: %w", r.tlsErr)
 	}
+	opts.SetConnectionNotificationHandler(r.onConnectionNotification)
 
 	// Extract signing key and certificate PEM for birth message signing.
 	r.loadSigningCredentials()
@@ -177,6 +184,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	opts.SetOnConnectHandler(func(_ mqtt.Client) {
 		r.mu.Lock()
 		r.connected = true
+		r.linkState, r.linkError = LinkConnected, ""
 		ob := r.outbox
 		onUp := r.onConnect
 		r.mu.Unlock()
@@ -217,6 +225,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		r.mu.Lock()
 		r.connected = false
+		r.linkState = LinkDisconnected
 		onDown := r.onLost
 		r.mu.Unlock()
 		r.takSubscribed.Store(false)
@@ -454,6 +463,7 @@ func (r *HubReporter) Stop() {
 
 	r.mu.Lock()
 	r.connected = false
+	r.linkState = LinkDisconnected
 	r.mu.Unlock()
 
 	log.Info().Msg("hubreporter stopped")

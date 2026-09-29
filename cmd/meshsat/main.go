@@ -2032,17 +2032,22 @@ func main() {
 	var hubTLSCertPEM, hubTLSKeyPEM, hubTLSCAPEM []byte
 	hubTLSInsecure := false
 	hubAPIURL := cfg.HubAPIURL
+	hubCallsign := ""                                                       // the birth's TAK callsign; "MESHSAT-<bridge id>" when empty [MESHSAT-1417]
+	hubHealthInterval := time.Duration(cfg.HubHealthInterval) * time.Second // the apps' "Health interval (seconds)" overrides it [MESHSAT-1417]
 	if raw, dbErr := db.GetSystemConfig("hub_connection"); dbErr == nil && raw != "" {
 		var hc struct {
-			URL         string `json:"url"`
-			BridgeID    string `json:"bridge_id"`
-			Username    string `json:"username"`
-			Password    string `json:"password"`
-			TLSCertPEM  string `json:"tls_cert_pem"`
-			TLSKeyPEM   string `json:"tls_key_pem"`
-			TLSCAPEM    string `json:"tls_ca_pem"`
-			TLSInsecure bool   `json:"tls_insecure"`
-			APIURL      string `json:"api_url"` // optional; the relay derives it from the MQTT URL otherwise
+			URL            string `json:"url"`
+			BridgeID       string `json:"bridge_id"`
+			Username       string `json:"username"`
+			Password       string `json:"password"`
+			TLSCertPEM     string `json:"tls_cert_pem"`
+			TLSKeyPEM      string `json:"tls_key_pem"`
+			TLSCAPEM       string `json:"tls_ca_pem"`
+			TLSInsecure    bool   `json:"tls_insecure"`
+			APIURL         string `json:"api_url"` // optional; the relay derives it from the MQTT URL otherwise
+			Enabled        *bool  `json:"enabled"` // the apps' "Use the Hub"; absent = on [MESHSAT-1417]
+			Callsign       string `json:"callsign"`
+			HealthInterval int    `json:"health_interval"`
 		}
 		if json.Unmarshal([]byte(raw), &hc) == nil {
 			if hc.URL != "" {
@@ -2070,6 +2075,15 @@ func main() {
 				hubTLSCAPEM = []byte(hc.TLSCAPEM)
 			}
 			hubTLSInsecure = hc.TLSInsecure
+			hubCallsign = hc.Callsign
+			if hc.HealthInterval > 0 {
+				hubHealthInterval = time.Duration(hc.HealthInterval) * time.Second
+			}
+			// Switched off in the apps: no Hub link at all, whatever else is set.
+			if hc.Enabled != nil && !*hc.Enabled {
+				log.Info().Msg("hub: switched off in the settings, no Hub link")
+				hubURL = ""
+			}
 		}
 	}
 
@@ -2089,7 +2103,7 @@ func main() {
 			TLSCA:          cfg.HubTLSCA,   // file path fallback (env var)
 			TLSCAPEM:       hubTLSCAPEM,    // inline PEM from DB (priority)
 			TLSInsecure:    hubTLSInsecure,
-			HealthInterval: time.Duration(cfg.HubHealthInterval) * time.Second,
+			HealthInterval: hubHealthInterval,
 		}
 		birthFn := func() hubreporter.BridgeBirth {
 			ifaces := []hubreporter.InterfaceInfo{}
@@ -2129,6 +2143,9 @@ func main() {
 				CoTType:      hubreporter.CoTBridge,
 				CoTCallsign:  "MESHSAT-" + hubBridgeID,
 				Timestamp:    time.Now().UTC(),
+			}
+			if hubCallsign != "" {
+				birth.CoTCallsign = hubCallsign
 			}
 			if routingID != nil {
 				birth.Reticulum = &hubreporter.ReticulumInfo{

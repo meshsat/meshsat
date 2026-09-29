@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go v1.36.11-20260322113505-561ff4e23fef.1
 	github.com/akhenakh/sgp4 v0.0.0-20250910232432-ca28846088fc
-	github.com/eclipse/paho.mqtt.golang v1.5.0
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/uuid v1.6.0
@@ -19,9 +19,9 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/warthog618/go-gpiocdev v0.9.1
 	go.bug.st/serial v1.6.4
-	golang.org/x/crypto v0.35.0
-	golang.org/x/net v0.36.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/crypto v0.42.0
+	golang.org/x/net v0.44.0
+	golang.org/x/sys v0.36.0
 	google.golang.org/grpc v1.73.0-dev
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -44,8 +44,8 @@ require (
 	github.com/prometheus/procfs v0.16.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
-	golang.org/x/sync v0.12.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	modernc.org/libc v1.61.13 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

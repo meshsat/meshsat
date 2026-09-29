@@ -3,13 +3,16 @@ package api
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"meshsat/internal/hubreporter"
 	"meshsat/internal/routing"
 )
 
@@ -551,27 +554,73 @@ type hubConnectionConfig struct {
 	TLSCAPEM    string `json:"tls_ca_pem,omitempty"`
 	HasCert     bool   `json:"has_cert"`
 	TLSInsecure bool   `json:"tls_insecure,omitempty"`
-	Warning     string `json:"warning,omitempty"`
+	// Enabled is the apps' "Use the Hub": false starts no Hub link at the
+	// Bridge's next start. Absent in settings saved before it existed, which
+	// means on. [MESHSAT-1417]
+	Enabled *bool `json:"enabled,omitempty"`
+	// Callsign is the TAK callsign of the Bridge's birth ("MESHSAT-<bridge id>"
+	// when empty); HealthInterval the seconds between health reports (the
+	// MESHSAT_HUB_HEALTH_INTERVAL default when 0); APIURL the Hub's HTTP API
+	// for the relay (derived from the MQTT URL when empty). [MESHSAT-1417]
+	Callsign       string `json:"callsign,omitempty"`
+	HealthInterval int    `json:"health_interval,omitempty"`
+	APIURL         string `json:"api_url,omitempty"`
+	Warning        string `json:"warning,omitempty"`
 	// Link is the state of the MQTT session behind these settings, for the
 	// apps' Hub lane: "connected", "disconnected" (the reporter keeps trying by
 	// itself), or "" when no reporter runs (settings saved, the Bridge not
 	// restarted since, or no Hub set up). GET only. [MESHSAT-1397]
 	Link string `json:"link,omitempty"`
+	// State is the link as MeshSat Android shows it: "connecting",
+	// "connected", "error" (LastError says why), "disconnected", or "" when no
+	// reporter runs; RunningAs the bridge id the reporter runs as. GET only.
+	// [MESHSAT-1417]
+	State     string `json:"state"`
+	LastError string `json:"last_error,omitempty"`
+	RunningAs string `json:"running_as,omitempty"`
+}
+
+// hubConnectionUpdate is a PUT's body: a field left out keeps what is stored.
+type hubConnectionUpdate struct {
+	URL            string  `json:"url"`
+	BridgeID       string  `json:"bridge_id"`
+	Username       string  `json:"username"`
+	Password       string  `json:"password"`
+	TLSCertPEM     string  `json:"tls_cert_pem"`
+	TLSKeyPEM      string  `json:"tls_key_pem"`
+	TLSCAPEM       *string `json:"tls_ca_pem"`
+	TLSInsecure    *bool   `json:"tls_insecure"`
+	Enabled        *bool   `json:"enabled"`
+	Callsign       *string `json:"callsign"`
+	HealthInterval *int    `json:"health_interval"`
+	APIURL         *string `json:"api_url"`
+}
+
+// hubEnabled reads the stored switch: absent is on.
+func hubEnabled(cfg hubConnectionConfig) bool {
+	return cfg.Enabled == nil || *cfg.Enabled
 }
 
 // handleGetHubConfig returns the current Hub connection config (password redacted).
 // @Summary Get Hub connection config
+// @Description The stored Hub settings (no password, no PEMs) and the link's state as the apps show it.
 // @Tags routing
 // @Produce json
 // @Success 200 {object} hubConnectionConfig
 // @Router /api/routing/hub [get]
 func (s *Server) handleGetHubConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.loadHubConfig()
+	on := hubEnabled(cfg)
+	cfg.Enabled = &on
 	cfg.Password = ""   // never expose password in GET
 	cfg.TLSCertPEM = "" // never expose cert PEM in GET
 	cfg.TLSKeyPEM = ""  // never expose key PEM in GET
 	cfg.TLSCAPEM = ""   // never expose CA PEM in GET
 	cfg.Link = s.hubLinkState()
+	if s.hubReporter != nil {
+		cfg.State, cfg.LastError = s.hubReporter.LinkState()
+		cfg.RunningAs = s.hubReporter.BridgeID()
+	}
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -588,16 +637,22 @@ func (s *Server) hubLinkState() string {
 
 // handleSetHubConfig saves Hub MQTT credentials. Takes effect on next restart.
 // @Summary Set Hub connection config
+// @Description Fields left out keep what is stored; url, bridge_id, username, password and the client certificate are also kept when sent empty. tls_ca_pem sent empty clears the CA. Takes effect at the Bridge's next start.
 // @Tags routing
 // @Accept json
 // @Produce json
-// @Param body body hubConnectionConfig true "Hub MQTT credentials"
+// @Param body body hubConnectionUpdate true "Hub settings"
 // @Success 200 {object} hubConnectionConfig
+// @Failure 400 {object} map[string]string
 // @Router /api/routing/hub [put]
 func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
-	var req hubConnectionConfig
+	var req hubConnectionUpdate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.HealthInterval != nil && (*req.HealthInterval < 0 || *req.HealthInterval > 9999) {
+		writeError(w, http.StatusBadRequest, "health_interval must be 0 to 9999 seconds")
 		return
 	}
 
@@ -622,16 +677,65 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 	if req.TLSKeyPEM != "" {
 		prev.TLSKeyPEM = req.TLSKeyPEM
 	}
-	prev.TLSCAPEM = req.TLSCAPEM // allow clearing by sending empty string
+	// The CA and the insecure flag are kept when left out; an empty CA sent
+	// clears it. Before MESHSAT-1417 a PUT without them cleared both.
+	if req.TLSCAPEM != nil {
+		prev.TLSCAPEM = *req.TLSCAPEM
+	}
+	if req.TLSInsecure != nil {
+		prev.TLSInsecure = *req.TLSInsecure
+	}
+	if req.Enabled != nil {
+		on := *req.Enabled
+		prev.Enabled = &on
+	}
+	if req.Callsign != nil {
+		prev.Callsign = strings.TrimSpace(*req.Callsign)
+	}
+	if req.HealthInterval != nil {
+		prev.HealthInterval = *req.HealthInterval
+	}
+	if req.APIURL != nil {
+		prev.APIURL = strings.TrimSpace(*req.APIURL)
+	}
 	prev.HasCert = prev.TLSCertPEM != "" && prev.TLSKeyPEM != ""
-	prev.TLSInsecure = req.TLSInsecure
 
 	s.saveHubConfig(prev)
 
 	resp := prev
+	on := hubEnabled(prev)
+	resp.Enabled = &on
 	resp.Password = ""
+	resp.TLSCertPEM, resp.TLSKeyPEM, resp.TLSCAPEM = "", "", ""
 	resp.Warning = "Hub connection config saved. Restart the bridge for changes to take effect."
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleHubPing tests the Hub link: a QoS 1 message the broker acknowledges,
+// timed (MeshSat Android's "Test the connection"). [MESHSAT-1417]
+// @Summary Test the Hub link
+// @Description Publishes {"ping":true} with QoS 1 on the bridge's health topic and waits for the broker's acknowledgement. 409 when there is no Hub session.
+// @Tags routing
+// @Produce json
+// @Success 200 {object} map[string]int64 "elapsed_ms"
+// @Failure 409 {object} map[string]string
+// @Failure 502 {object} map[string]string
+// @Router /api/routing/hub/ping [post]
+func (s *Server) handleHubPing(w http.ResponseWriter, r *http.Request) {
+	if s.hubReporter == nil {
+		writeError(w, http.StatusConflict, "not connected")
+		return
+	}
+	elapsed, err := s.hubReporter.Ping()
+	if errors.Is(err, hubreporter.ErrNotConnected) {
+		writeError(w, http.StatusConflict, "not connected")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"elapsed_ms": elapsed.Milliseconds()})
 }
 
 func (s *Server) loadHubConfig() hubConnectionConfig {
