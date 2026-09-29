@@ -1418,7 +1418,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	if w.transforms != nil && !database.DeliveryClassBypassesPolicy(del.Class) && !w.plaintextSMSDelivery(del) {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
-			encrypted = strings.Contains(iface.EgressTransforms, "encrypt")
+			encrypted = ChainEncrypts(iface.EgressTransforms)
 			isCellular := strings.HasPrefix(w.channelID, "cellular")
 
 			applyToData := func(data []byte) ([]byte, error) {
@@ -1449,6 +1449,24 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 							break
 						}
 					}
+				}
+				if tErr != nil && encrypted {
+					// Never the text in the clear on a link set to encrypt: a key that
+					// is not 64 hex characters, or a key_ref nothing resolves, used to
+					// send it untransformed. The delivery gives up with the reason, so
+					// the key can be put right and the message retried. [MESHSAT-1411]
+					reason := "not sent: encryption failed: " + tErr.Error()
+					log.Error().Err(tErr).Str("interface", w.channelID).Int64("id", del.ID).Msg("egress encryption failed, delivery not sent")
+					if err := w.db.SetDeliveryStatus(del.ID, "dead", reason, ""); err != nil {
+						log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery dead")
+					}
+					if w.signing != nil {
+						ifacePtr := &w.channelID
+						dir := "egress"
+						delID := del.ID
+						w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, reason)
+					}
+					return
 				}
 				if tErr != nil {
 					log.Error().Err(tErr).Str("interface", w.channelID).Msg("egress transform failed, sending untransformed")
@@ -1802,6 +1820,15 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 	// the SMS fallback, which only engages for a down or deaf member, never saw
 	// them. [MESHSAT-1021]
 	if errors.Is(deliveryErr, transport.ErrNoAck) && w.failOverToNextMember(del, errMsg) {
+		return
+	}
+
+	// No recipient and no default one: no retry can help. [MESHSAT-1412]
+	if errors.Is(deliveryErr, transport.ErrNoRecipient) {
+		if err := w.db.SetDeliveryStatus(del.ID, "dead", errMsg, ""); err != nil {
+			log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery dead")
+		}
+		log.Info().Int64("id", del.ID).Str("channel", w.channelID).Msg("delivery has no recipient, not sent")
 		return
 	}
 

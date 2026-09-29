@@ -681,6 +681,11 @@ func (m *Manager) Configure(ctx context.Context, gwType string, enabled bool, co
 
 // ConfigureInstance creates or updates a specific gateway instance configuration.
 func (m *Manager) ConfigureInstance(ctx context.Context, gwType, instanceID string, enabled bool, configJSON string) error {
+	// GET answers every secret as "****"; a client that sends the config back
+	// as it read it keeps the stored secret, never the mask. [MESHSAT-1412]
+	if stored, err := m.db.GetGatewayConfigByInstance(instanceID); err == nil && stored != nil {
+		configJSON = unmaskSecrets(configJSON, stored.Config)
+	}
 	if _, err := m.createGatewayForInstance(gwType, instanceID, configJSON); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -1774,4 +1779,59 @@ type GatewayStatusResponse struct {
 	// serial link while it has stopped answering. [MESHSAT-1064]
 	HealthState  string `json:"health_state,omitempty"`
 	HealthDetail string `json:"health_detail,omitempty"`
+}
+
+// secretMask is what redactConfig writes in place of a secret.
+const secretMask = "****"
+
+// unmaskSecrets puts the stored value back wherever the incoming config
+// carries the mask, at any depth (the DynDNS token, a webhook header). A
+// field the stored config does not have keeps the mask, and fails the
+// gateway's own validation if it is required. [MESHSAT-1412]
+func unmaskSecrets(incoming, stored string) string {
+	var in, old map[string]interface{}
+	if json.Unmarshal([]byte(incoming), &in) != nil || json.Unmarshal([]byte(stored), &old) != nil {
+		return incoming
+	}
+	if !unmaskInto(in, old) {
+		return incoming
+	}
+	out, err := json.Marshal(in)
+	if err != nil {
+		return incoming
+	}
+	return string(out)
+}
+
+func unmaskInto(in, old map[string]interface{}) bool {
+	changed := false
+	for k, v := range in {
+		switch val := v.(type) {
+		case string:
+			if val == secretMask {
+				if prev, ok := old[k].(string); ok && prev != secretMask {
+					in[k] = prev
+					changed = true
+				}
+			}
+		case map[string]interface{}:
+			if prev, ok := old[k].(map[string]interface{}); ok && unmaskInto(val, prev) {
+				changed = true
+			}
+		case []interface{}:
+			// A list of objects (webhooks, peers): matched by position.
+			if prev, ok := old[k].([]interface{}); ok {
+				for i, item := range val {
+					m, isMap := item.(map[string]interface{})
+					if !isMap || i >= len(prev) {
+						continue
+					}
+					if pm, ok := prev[i].(map[string]interface{}); ok && unmaskInto(m, pm) {
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	return changed
 }

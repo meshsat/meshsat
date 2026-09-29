@@ -145,6 +145,19 @@ func (db *DB) UpdateInterface(iface *Interface) error {
 	return nil
 }
 
+// SetInterfaceTransforms writes a link's two transform chains and no other
+// column, so a switch or a bind made meanwhile is kept. [MESHSAT-1412]
+func (db *DB) SetInterfaceTransforms(id, ingress, egress string) error {
+	res, err := db.Exec(`UPDATE interfaces SET ingress_transforms=?, egress_transforms=?, updated_at=datetime('now') WHERE id=?`, ingress, egress, id)
+	if err != nil {
+		return fmt.Errorf("set interface transforms: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("interface not found: %s", id)
+	}
+	return nil
+}
+
 // DeleteInterface removes an interface by ID.
 func (db *DB) DeleteInterface(id string) error {
 	_, err := db.Exec("DELETE FROM interfaces WHERE id = ?", id)

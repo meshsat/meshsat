@@ -82,11 +82,13 @@ type interfaceRuntime struct {
 
 // InterfaceManager manages the lifecycle and device binding for all interfaces.
 type InterfaceManager struct {
-	db       *database.DB
-	mu       sync.RWMutex
-	states   map[string]*interfaceRuntime // interface ID → runtime
-	devices  []DetectedDevice             // last scan result
-	cancelFn context.CancelFunc
+	db *database.DB
+	mu sync.RWMutex
+	// transformsMu serialises SetTransforms. [MESHSAT-1412]
+	transformsMu sync.Mutex
+	states       map[string]*interfaceRuntime // interface ID → runtime
+	devices      []DetectedDevice             // last scan result
+	cancelFn     context.CancelFunc
 
 	scanInterval  time.Duration
 	onStateChange func(ifaceID, channelType string, newState InterfaceState)
@@ -299,6 +301,37 @@ func (m *InterfaceManager) UpdateInterface(iface database.Interface) error {
 
 	log.Info().Str("id", iface.ID).Msg("ifacemgr: interface updated")
 	return nil
+}
+
+// SetTransforms changes a link's ingress and/or egress transform chain (nil
+// leaves one as it is) and nothing else: the full PUT replaces every column,
+// and a client that read the list (which has no config) wiped the link's
+// config when it wrote it back. [MESHSAT-1412]
+func (m *InterfaceManager) SetTransforms(id string, ingress, egress *string) (database.Interface, error) {
+	// One at a time: a write of the ingress chain and one of the egress chain
+	// at once must not undo each other.
+	m.transformsMu.Lock()
+	defer m.transformsMu.Unlock()
+	iface, err := m.db.GetInterface(id)
+	if err != nil {
+		return database.Interface{}, err
+	}
+	if ingress != nil {
+		iface.IngressTransforms = *ingress
+	}
+	if egress != nil {
+		iface.EgressTransforms = *egress
+	}
+	if err := m.db.SetInterfaceTransforms(id, iface.IngressTransforms, iface.EgressTransforms); err != nil {
+		return database.Interface{}, err
+	}
+	m.mu.Lock()
+	if rt, ok := m.states[id]; ok {
+		rt.iface.IngressTransforms, rt.iface.EgressTransforms = iface.IngressTransforms, iface.EgressTransforms
+	}
+	m.mu.Unlock()
+	log.Info().Str("id", id).Msg("ifacemgr: interface transforms set")
+	return *iface, nil
 }
 
 // SetEnabled switches an interface on or off in the database and in the

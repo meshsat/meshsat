@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/directory"
 	"meshsat/internal/rules"
@@ -182,5 +184,73 @@ func TestSendToRecipient_RawAddressReachesRow(t *testing.T) {
 	}
 	if del.Channel != "aprs_0" || del.Destination != "PD0XYZ-7" || del.Class != database.DeliveryClassOOB || del.MaxRetries != 5 {
 		t.Fatalf("row: %+v", del)
+	}
+}
+
+// A link set to encrypt never sends the text in the clear: a key that cannot
+// encrypt makes the delivery give up with the reason. [MESHSAT-1411]
+func TestDeliver_EncryptionFailureNeverSendsPlaintext(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "cellular_0", "cellular", true)
+	h.setOnline("cellular_0")
+	gw := h.addGateway("cellular_0", "cellular")
+	for _, chain := range []string{
+		`[{"type":"encrypt","params":{"key":"not-hex"}},{"type":"base64"}]`,
+		`[{"type":"encrypt","params":{"key":"0123"}},{"type":"base64"}]`,
+	} {
+		if _, err := h.db.Exec(`UPDATE interfaces SET egress_transforms = ? WHERE id = 'cellular_0'`, chain); err != nil {
+			t.Fatal(err)
+		}
+		w := newTestWorker(h, "cellular_0", "cellular")
+		w.transforms = h.dispatch.TransformPipeline()
+		id, _, _ := h.dispatch.QueueDirectSend("cellular_0", "meet at the bridge", "")
+		del, _ := h.db.GetDelivery(id)
+		w.deliver(context.Background(), *del)
+		if msgs := gw.messages(); len(msgs) != 0 {
+			t.Fatalf("%s: %d messages left, the first %q", chain, len(msgs), msgs[0].DecodedText)
+		}
+		got, _ := h.db.GetDelivery(id)
+		if got.Status != "dead" || !strings.Contains(got.LastError, "encryption failed") {
+			t.Fatalf("%s: delivery %s %q, want dead with the reason", chain, got.Status, got.LastError)
+		}
+	}
+}
+
+// A text with no recipient and no default number gives up at once, with the
+// reason, instead of retrying what can never go. [MESHSAT-1412]
+func TestDeliver_NoRecipientGivesUpAtOnce(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "cellular_0", "cellular", true)
+	h.setOnline("cellular_0")
+	gw := h.addGateway("cellular_0", "cellular")
+	gw.failWith = transport.ErrNoRecipient
+	w := newTestWorker(h, "cellular_0", "cellular")
+	id, _, _ := h.dispatch.QueueDirectSend("cellular_0", "hello", "")
+	del, _ := h.db.GetDelivery(id)
+	w.deliver(context.Background(), *del)
+	got, _ := h.db.GetDelivery(id)
+	if got.Status != "dead" || got.Retries != 0 || !strings.Contains(got.LastError, "no recipient") {
+		t.Fatalf("delivery %s, %d retries, %q", got.Status, got.Retries, got.LastError)
+	}
+}
+
+// A received brevity code reads as its words. [MESHSAT-1412]
+func TestCannedText(t *testing.T) {
+	first, err := codec.DecodeCanned([]byte{0xCA, 1})
+	if err != nil || first == "" {
+		t.Fatalf("the codebook has no entry 1: %v", err)
+	}
+	for in, want := range map[string]string{
+		string([]byte{0xCA, 1}):       first,
+		string([]byte{0x01, 0xCA, 1}): first, // with the protocol version byte in front
+		"hello":                       "",
+		string([]byte{0xCA}):          "",
+		string([]byte{0xCA, 1, 2}):    "",
+		string([]byte{0xCA, 250}):     "", // no such code
+	} {
+		got, ok := cannedText(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("cannedText(%q) = %q, %v; want %q", in, got, ok, want)
+		}
 	}
 }

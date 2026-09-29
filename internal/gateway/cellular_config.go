@@ -65,9 +65,9 @@ func ParseCellularConfig(data string) (*CellularConfig, error) {
 
 // Validate checks required fields.
 func (c *CellularConfig) Validate() error {
-	if len(c.DestinationNumbers) == 0 && !c.WebhookInEnabled {
-		return fmt.Errorf("at least one destination_number or webhook_in_enabled is required")
-	}
+	// No default number is allowed: a text with no recipient of its own is
+	// then not sent (transport.ErrNoRecipient), as MeshSat Android's "Where a
+	// text goes with no recipient" left empty. [MESHSAT-1412]
 	if c.MaxSMSSegments <= 0 {
 		c.MaxSMSSegments = 1
 	}

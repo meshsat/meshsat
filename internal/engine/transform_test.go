@@ -383,3 +383,65 @@ func TestGenerateEncryptionKey(t *testing.T) {
 		t.Error("two generated keys should not be identical")
 	}
 }
+
+// A key that cannot encrypt, or MSVQ-SC stages out of range, are refused when
+// the chain is saved. [MESHSAT-1412]
+func TestValidateTransforms_KeysAndStagesCheckedWhenSaved(t *testing.T) {
+	key, _ := GenerateEncryptionKey()
+	for chain, bad := range map[string]bool{
+		`[{"type":"encrypt","params":{"key":"` + key + `"}}]`:                false,
+		`[{"type":"encrypt","params":{"key":"` + key[:32] + `"}}]`:           false,
+		`[{"type":"encrypt","params":{"key":"not hex at all"}}]`:             true,
+		`[{"type":"decrypt","params":{"key":"0123"}}]`:                       true,
+		`[{"type":"encrypt","params":{"key":"` + key[:62] + `zz"}}]`:         true,
+		`[{"type":"encrypt","params":{"key_ref":"sms:+31612345678"}}]`:       false,
+		`[{"type":"msvqsc","params":{"stages":"3"}}]`:                        false,
+		`[{"type":"msvqsc","params":{"stages":"auto","channel":"iridium"}}]`: false,
+		`[{"type":"msvqsc"}]`:                             false,
+		`[{"type":"msvqsc","params":{"stages":"9"}}]`:     true,
+		`[{"type":"msvqsc","params":{"stages":"three"}}]`: true,
+	} {
+		_, errs := ValidateTransforms(chain, true, 340)
+		if bad != (len(errs) > 0) {
+			t.Errorf("%s: errors %v, want refused=%v", chain, errs, bad)
+		}
+	}
+}
+
+// An optional decrypt does not authenticate: a frame that fails it is kept as
+// it came, not dropped. [MESHSAT-1412]
+func TestTransformsAuthenticate_OptionalDecrypt(t *testing.T) {
+	key, _ := GenerateEncryptionKey()
+	for chain, want := range map[string]bool{
+		`[{"type":"base64"},{"type":"decrypt","params":{"key":"` + key + `"}}]`:                   true,
+		`[{"type":"base64"},{"type":"decrypt","params":{"key":"` + key + `","optional":"true"}}]`: false,
+		`[{"type":"encrypt","params":{"key":"` + key + `"}},{"type":"base64"}]`:                   true,
+		`[{"type":"base64"}]`: false,
+	} {
+		if got := TransformsAuthenticate(chain); got != want {
+			t.Errorf("%s: authenticates %v, want %v", chain, got, want)
+		}
+	}
+	// Chains are written in send order and applied in reverse on receive.
+	if _, errs := ValidateTransforms(`[{"type":"decrypt","params":{"key":"`+key+`","optional":"true"}},{"type":"base64"}]`, false, 160); len(errs) > 0 {
+		t.Errorf("an optional decrypt is refused: %v", errs)
+	}
+}
+
+// A send chain that encrypts, holds a decrypt by mistake, or cannot be read
+// counts as encrypting: its failure must never send the clear text.
+// [MESHSAT-1411]
+func TestChainEncrypts(t *testing.T) {
+	for chain, want := range map[string]bool{
+		`[{"type":"encrypt","params":{"key":"x"}},{"type":"base64"}]`: true,
+		`[{"type":"decrypt","params":{"key":"x"}}]`:                   true,
+		`[{"type":"base64","params":{"note":"encrypt later"}}]`:       false,
+		`[{"type":"smaz2"}]`: false,
+		`not json`:           true,
+		``:                   false,
+	} {
+		if got := ChainEncrypts(chain); got != want {
+			t.Errorf("ChainEncrypts(%s) = %v, want %v", chain, got, want)
+		}
+	}
+}

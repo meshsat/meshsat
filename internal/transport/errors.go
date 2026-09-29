@@ -24,3 +24,10 @@ var ErrNotConnected = errors.New("not connected")
 // treats it as not delivered and hands it to the next member of the rule's
 // failover group when there is one. [MESHSAT-1021]
 var ErrNoAck = errors.New("no acknowledgement from the peer")
+
+// ErrNoRecipient is returned by a bearer asked to send a message that names no
+// recipient while no default one is set: an SMS forwarded by a rule that names
+// no number, on a gateway with no default number (MeshSat Android: "Leave it
+// empty and a text with no recipient is not sent"). No retry can help, so the
+// delivery worker gives up at once, with the reason. [MESHSAT-1412]
+var ErrNoRecipient = errors.New("not sent: the text has no recipient, and no default number is set")

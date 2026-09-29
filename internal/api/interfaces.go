@@ -145,6 +145,80 @@ func (s *Server) handleUpdateInterface(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, iface)
 }
 
+// handleSetInterfaceTransforms changes only a link's transform chains.
+// @Summary Set a link's transforms
+// @Description Changes the ingress and/or egress transform chain of a link (JSON strings of [{"type","params"}]; a field left out stays as it is) and nothing else: its switch, device and config are kept, unlike PUT /api/interfaces/{id}, which replaces the whole record. The chains are checked as on PUT, and an encrypt key must be 32, 48 or 64 hex characters [MESHSAT-1412]
+// @Tags interfaces
+// @Accept json
+// @Produce json
+// @Param id path string true "Interface ID"
+// @Param body body object{ingress_transforms=string,egress_transforms=string} true "The chains to set"
+// @Success 200 {object} database.Interface
+// @Failure 400 {object} map[string]interface{}
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/interfaces/{id}/transforms [put]
+func (s *Server) handleSetInterfaceTransforms(w http.ResponseWriter, r *http.Request) {
+	if s.ifaceMgr == nil || s.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "interface manager not available")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Ingress *string `json:"ingress_transforms"`
+		Egress  *string `json:"egress_transforms"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Ingress == nil && req.Egress == nil {
+		writeError(w, http.StatusBadRequest, "ingress_transforms or egress_transforms is required")
+		return
+	}
+	current, err := s.db.GetInterface(id)
+	if err != nil || current == nil {
+		writeError(w, http.StatusNotFound, "interface not found: "+id)
+		return
+	}
+	check := *current
+	if req.Ingress != nil {
+		check.IngressTransforms = *req.Ingress
+	}
+	if req.Egress != nil {
+		check.EgressTransforms = *req.Egress
+	}
+	if warns, errs := s.validateInterfaceTransforms(check); len(errs) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "transform validation failed", "errors": errs, "warnings": warns})
+		return
+	}
+	updated, err := s.ifaceMgr.SetTransforms(id, req.Ingress, req.Egress)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// handleTransformCapabilities says which transforms can run on this Bridge.
+// @Summary Transform capabilities
+// @Description Whether MSVQ-SC can encode (its encoder, MESHSAT_MSVQSC_ADDR, answers) and decode here; without the encoder a msvqsc step compresses with smaz2 instead [MESHSAT-1412]
+// @Tags interfaces
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /api/transforms/capabilities [get]
+func (s *Server) handleTransformCapabilities(w http.ResponseWriter, r *http.Request) {
+	var encode, decode bool
+	if s.dispatcher != nil {
+		encode, decode = s.dispatcher.TransformPipeline().MSVQSCCapabilities()
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"msvqsc_encode": encode,
+		"msvqsc_decode": decode,
+		"types":         []string{"encrypt", "decrypt", "base64", "zstd", "smaz2", "llamazip", "msvqsc", "fec"},
+	})
+}
+
 // handleValidateTransforms checks transform chain compatibility with a channel type.
 // @Summary Validate transform chain
 // @Description Checks if a transform chain is compatible with a channel type's capabilities
