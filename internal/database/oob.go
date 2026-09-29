@@ -22,6 +22,14 @@ const (
 	// destination column holds the 32-hex lxmf.delivery hash and the LXMF
 	// router packs, signs and delivers it with a proof wait. [MESHSAT-1348]
 	DeliveryClassLXMF = "lxmf"
+	// DeliveryClassPlain is a text that goes exactly as given: no chat key,
+	// no interface transforms (no encryption, compression or base64), no
+	// attribution. An SOS or an alarm test to an emergency contact is one:
+	// MeshSat Android sends those through SmsManager as plain text whatever
+	// its encryption settings. Only a modem that cannot carry a character
+	// gets it mapped (the GSM clean-up on a kit's AT text-mode modem).
+	// Unlike oob it still passes the egress rules.
+	DeliveryClassPlain = "plain"
 )
 
 // ErrOOBPeerNotFound is returned when no peer matches.
@@ -310,4 +318,12 @@ func (db *DB) PruneOOBLog(keep int) error {
 // and Hub-uplink frames carry their own framing). [MESHSAT-963]
 func DeliveryClassBypassesPolicy(class string) bool {
 	return class == DeliveryClassOOB || class == DeliveryClassHubUplink || class == DeliveryClassLXMF
+}
+
+// DeliveryClassVerbatim reports whether a delivery class goes as its text
+// exactly: no chat key, no interface transforms, no attribution, no
+// sanitising. The classes that bypass the policy do, and plain (which a
+// modem that cannot carry a character still gets mapped).
+func DeliveryClassVerbatim(class string) bool {
+	return DeliveryClassBypassesPolicy(class) || class == DeliveryClassPlain
 }

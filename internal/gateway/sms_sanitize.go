@@ -8,8 +8,10 @@ package gateway
 // and common punctuation. The extension table characters (unsafe on some
 // modems) are: [ ] { } | \ ^ ~ €
 //
-// Non-GSM characters (emoji, accented letters outside GSM set, CJK, etc.)
-// are replaced with '?' to avoid silent encoding failures.
+// ± and ° (in neither table) get readable stand-ins, "+/-" and "deg". Other
+// non-GSM characters (emoji, accented letters outside GSM set, CJK, control
+// characters but the line breaks, etc.) are replaced with '?' to avoid
+// silent encoding failures.
 //
 // This function is designed to be extended: add new entries to
 // gsmUnsafeReplacements for any future modem-specific character issues.
@@ -56,6 +58,10 @@ var gsmUnsafeReplacements = map[rune][]byte{
 	'^':  {'\''},
 	'~':  {'-'},
 	'€':  {'E', 'U', 'R'},
+	// Neither table of GSM 03.38 has these, and "?" would lose what they
+	// say: an SOS's accuracy ("±12 m") and a heading or an elevation.
+	'±': {'+', '/', '-'},
+	'°': {'d', 'e', 'g'},
 }
 
 // isGSM7BitBasic returns true if the rune is in the GSM 03.38 basic character

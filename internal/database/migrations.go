@@ -1362,6 +1362,14 @@ var migrations = []string{
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 	CREATE INDEX IF NOT EXISTS idx_routing_ifaces_type ON routing_ifaces(type);`,
+
+	// v58: per-chat keys. key_bundles.label is MeshSat Android's
+	// conversation_keys.label: "" for a key a person set, hub-rotated-v<n>
+	// from the Hub, "Bridge <type> (<hash>)" from a key bundle.
+	// sms_messages.encrypted says the SMS went or came sealed, so a chat
+	// bubble can carry the lock.
+	`ALTER TABLE key_bundles ADD COLUMN label TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sms_messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func (db *DB) migrate() error {

@@ -168,6 +168,12 @@ type KeyStoreImporter interface {
 	StoreKey(channelType, address string, rawKey []byte) (int, error)
 }
 
+// labelledKeyStore is a KeyStoreImporter that also keeps where a key came
+// from (the keystore does).
+type labelledKeyStore interface {
+	StoreKeyLabelled(channelType, address string, rawKey []byte, label string) (int, error)
+}
+
 // SetKeyStore sets the key store for key_rotate commands. [MESHSAT-447]
 func (ch *CommandHandler) SetKeyStore(ks KeyStoreImporter) {
 	ch.keyStore = ks
@@ -474,7 +480,18 @@ func (ch *CommandHandler) handleKeyRotate(cmd Command) (json.RawMessage, error) 
 		return nil, fmt.Errorf("invalid key_hex: %w", err)
 	}
 
-	localVersion, err := ch.keyStore.StoreKey(payload.ChannelType, payload.Address, rawKey)
+	// Labelled as MeshSat Android labels a Hub rotation, when the store keeps
+	// labels: an sms key rotated this way is that SMS chat's key.
+	var localVersion int
+	if ls, ok := ch.keyStore.(labelledKeyStore); ok {
+		hubVersion := payload.Version
+		if hubVersion <= 0 {
+			hubVersion = 1 // Android's optInt("version", 1)
+		}
+		localVersion, err = ls.StoreKeyLabelled(payload.ChannelType, payload.Address, rawKey, fmt.Sprintf("hub-rotated-v%d", hubVersion))
+	} else {
+		localVersion, err = ch.keyStore.StoreKey(payload.ChannelType, payload.Address, rawKey)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("store key: %w", err)
 	}

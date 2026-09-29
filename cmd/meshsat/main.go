@@ -1732,6 +1732,7 @@ func main() {
 			srv.SetKeyStore(ks)
 			srv.SetTransformPipeline(transforms) // [MESHSAT-447] SMS egress transforms
 			transforms.SetKeyResolver(ks)        // [MESHSAT-447] key_ref → keystore lookup
+			transforms.SetChatKeyResolver(ks)    // per-chat SMS keys, sms:<number> then sms:*
 			// Wire credential loader so MQTT gateways can load certs from DB
 			gateway.SetCredentialLoader(&credentialLoaderAdapter{db: db, ks: ks})
 			log.Info().Msg("key store initialized")

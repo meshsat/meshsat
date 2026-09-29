@@ -14,6 +14,8 @@ func TestSanitizeSMSText(t *testing.T) {
 		{"pipe and backslash", "a|b\\c", "a/b/c"},
 		{"tilde and caret", "~home ^ptr", "-home 'ptr"},
 		{"euro sign", "Price: 5€", "Price: 5EUR"},
+		{"plus-minus and degree", "(±12 m), heading 270°", "(+/-12 m), heading 270deg"},
+		{"control characters but line breaks", "a\x1ab\x1bc\td\x00e\r\nf", "a?b?c?d?e\r\nf"},
 		{"emoji replaced", "Hello 🌍!", "Hello ?!"},
 		{"mixed safe and unsafe", "MeshSat !08abcdef ch0: test[1]", "MeshSat !08abcdef ch0: test(1)"},
 		{"GSM special chars preserved", "café résumé", "café résumé"},
@@ -46,6 +48,8 @@ func TestIsGSMSafe(t *testing.T) {
 		{"tilde", "~test", false},
 		{"caret", "^test", false},
 		{"euro", "5€", false},
+		{"plus-minus", "±12 m", false},
+		{"degree", "45°", false},
 		{"emoji", "Hello 🌍", false},
 		{"empty", "", true},
 	}

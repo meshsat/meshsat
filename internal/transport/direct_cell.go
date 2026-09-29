@@ -1160,8 +1160,47 @@ func (t *DirectCellTransport) pollSignalAndCellInfo() {
 	})
 }
 
+// SMSTextMode reports that this transport types SMS into the modem in AT
+// text mode, where only the GSM basic set gets through (SMSTextModeModem).
+func (t *DirectCellTransport) SMSTextMode() bool { return true }
+
+// ErrSMSUnsafe is returned by SendSMS, before anything is written to the
+// modem, for an SMS whose text holds Ctrl-Z (0x1A) or ESC (0x1B), or whose
+// number holds a quote or a control character. In AT text mode Ctrl-Z ends
+// the message body, so the rest of the text would run as AT commands, and
+// ESC abandons the SMS while the modem still answers OK, which reads as
+// sent; a quote or a line break in the number ends AT+CMGS itself. The send
+// fails, so a delivery is retried and then reported, never marked sent.
+var ErrSMSUnsafe = errors.New("SMS refused: it would reach the modem's AT command line")
+
+// smsATUnsafe checks the number and the text of an SMS for the bytes that
+// would end the AT+CMGS command or the message body early (ErrSMSUnsafe).
+// The callers clean their texts up already (the GSM clean-up turns every
+// control character but a line break into "?", ciphertext goes as base64);
+// this is the last line, whatever the path.
+func smsATUnsafe(to, text string) error {
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c == 0x1A || c == 0x1B {
+			return fmt.Errorf("%w: the text holds 0x%02X at byte %d", ErrSMSUnsafe, c, i)
+		}
+	}
+	for i := 0; i < len(to); i++ {
+		if c := to[i]; c < 0x20 || c == 0x7F || c == '"' {
+			return fmt.Errorf("%w: the number holds 0x%02X at byte %d", ErrSMSUnsafe, c, i)
+		}
+	}
+	return nil
+}
+
+// smsSendSettle is the pause after a sent SMS before the modem takes the next
+// command (the Huawei E220 on 2G needs it). Package var so tests can shorten it.
+var smsSendSettle = 2 * time.Second
+
 // SendSMS sends an SMS to the specified number.
 func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text string) error {
+	if err := smsATUnsafe(to, text); err != nil {
+		return err
+	}
 	if len(text) > maxSMSLength {
 		text = text[:maxSMSLength]
 	}
@@ -1272,7 +1311,7 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 
 		// Post-send settle — give the modem time to finalize before accepting
 		// the next command. The Huawei E220 on 2G needs this between CMGS calls.
-		time.Sleep(2 * time.Second)
+		time.Sleep(smsSendSettle)
 
 		return "OK", nil
 	}, cellSMSSendTimeout+15*time.Second)

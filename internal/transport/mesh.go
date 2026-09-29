@@ -89,6 +89,18 @@ type MeshMessage struct {
 	MsgRef      string `json:"-"` // delivery msg_ref, for the live packet feed only; never on the wire [MESHSAT-826]
 	PlainText   string `json:"-"` // the words before egress transforms, for the SMS history only; never on the wire
 	Precedence  string `json:"-"` // the delivery's precedence, so a gateway can let a Deferred send yield; never on the wire
+
+	// AsWritten marks a person's words sent as written (delivery class
+	// plain, an SOS or an alarm test to an emergency contact), RawText as
+	// well: only a modem that cannot carry a character gets it mapped (the
+	// GSM clean-up on an AT text-mode modem, SMSTextModeModem). Never
+	// serialised.
+	AsWritten bool `json:"-"`
+
+	// SMSTexts is the on-air text per SMS number sealed with that chat's own
+	// key by the delivery worker; the cellular gateway sends it to that
+	// number instead of DecodedText. Never serialised.
+	SMSTexts map[string]string `json:"-"`
 }
 
 // NodeRSSIProvider is implemented by mesh transports that keep the last
