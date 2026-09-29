@@ -120,7 +120,8 @@ func (s *Server) handleDeletePreset(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary Send preset message
-// @Description Sends a preset message via the mesh radio
+// @Description Sends a preset message via the mesh radio. It also goes to TAK as GeoChat from this
+// @Description Bridge when the TAK gateway runs.
 // @Tags presets
 // @Produce json
 // @Param id path integer true "Preset ID"
@@ -169,6 +170,7 @@ func (s *Server) handleSendPreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordMeshTX(req)
+	s.takOwnChat(preset.Text) // a text sent to the mesh, as handleSendMessage [MESHSAT-1421]
 
 	// Persist as sent message
 	dbMsg := &database.Message{

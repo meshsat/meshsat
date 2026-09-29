@@ -36,6 +36,11 @@ const (
 	// RTL-SDR, not a paired device), so the topic is scoped to the bridge
 	// ID and the band identifier is inside the payload.
 	topicBridgeSpectrum = "meshsat/bridge/%s/spectrum"
+
+	// CoT XML the TAK gateway exports, MeshSat Android's "MQTT Export to
+	// Hub" topic (TakIntegration.emit), with the bridge id where Android has
+	// its device id. [MESHSAT-1421]
+	topicTAKCoTOut = "meshsat/%s/tak/cot/out"
 )
 
 // CoT type constants (MIL-STD-2525 symbology).
@@ -81,6 +86,9 @@ func TopicDeviceTelemetry(deviceID string) string { return fmt.Sprintf(topicDevi
 func TopicDeviceSOS(deviceID string) string       { return fmt.Sprintf(topicDeviceSOS, deviceID) }
 func TopicDeviceMessage(deviceID string) string   { return fmt.Sprintf(topicDeviceMessage, deviceID) }
 func TopicBridgeSpectrum(bridgeID string) string  { return fmt.Sprintf(topicBridgeSpectrum, bridgeID) }
+
+// TopicTAKCoTOut is where the TAK gateway's CoT XML goes: meshsat/<id>/tak/cot/out.
+func TopicTAKCoTOut(id string) string { return fmt.Sprintf(topicTAKCoTOut, id) }
 
 // --- Shared types ---
 

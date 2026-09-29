@@ -7,16 +7,22 @@ import (
 	"strings"
 
 	"crypto/sha256"
+
+	"meshsat/internal/gateway"
 )
 
 // handleGetAPRSStatus returns aggregated APRS gateway status.
 // @Summary Get APRS gateway status
-// @Description Returns connection state, callsign, frequency, uptime, counters, packet type breakdown, and MESHSAT-661 encryption state (enabled/transforms/key fingerprint).
+// @Description Returns connection state, callsign, frequency, uptime, counters, packet type breakdown, and MESHSAT-661 encryption state (enabled/transforms/key fingerprint). A running gateway also answers mode (kiss or is), state (disconnected, connecting, connected, error) and last_error; mode is answers aprs_is_server, aprs_is_verified (the server verified the passcode, so the gateway may send), aprs_is_banner, position_beacons and last_beacon_at, and no RF fields (frequency, KISS link, Direwolf, receive health). Not running: connected false and the encryption state only.
 // @Tags aprs
+// @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/aprs/status [get]
 func (s *Server) handleGetAPRSStatus(w http.ResponseWriter, r *http.Request) {
-	agw := s.gwManager.GetAPRSGateway()
+	var agw *gateway.APRSGateway
+	if s.gwManager != nil {
+		agw = s.gwManager.GetAPRSGateway()
+	}
 	if agw == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"connected":  false,
@@ -111,10 +117,14 @@ func aprsEncryptionState(s *Server, ifaceID string) map[string]interface{} {
 // @Summary Get APRS heard stations
 // @Description Returns all stations heard by the APRS gateway with last position and distance
 // @Tags aprs
+// @Produce json
 // @Success 200 {array} gateway.HeardStation
 // @Router /api/aprs/heard [get]
 func (s *Server) handleGetAPRSHeard(w http.ResponseWriter, r *http.Request) {
-	agw := s.gwManager.GetAPRSGateway()
+	var agw *gateway.APRSGateway
+	if s.gwManager != nil {
+		agw = s.gwManager.GetAPRSGateway()
+	}
 	if agw == nil {
 		writeJSON(w, http.StatusOK, []interface{}{})
 		return
@@ -126,10 +136,14 @@ func (s *Server) handleGetAPRSHeard(w http.ResponseWriter, r *http.Request) {
 // @Summary Get APRS packet activity
 // @Description Returns RX/TX packets per minute for the last 30 minutes
 // @Tags aprs
+// @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/aprs/activity [get]
 func (s *Server) handleGetAPRSActivity(w http.ResponseWriter, r *http.Request) {
-	agw := s.gwManager.GetAPRSGateway()
+	var agw *gateway.APRSGateway
+	if s.gwManager != nil {
+		agw = s.gwManager.GetAPRSGateway()
+	}
 	if agw == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"buckets":      []interface{}{},

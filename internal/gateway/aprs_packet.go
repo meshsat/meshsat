@@ -223,6 +223,49 @@ func ParseAPRSPacket(frame *AX25Frame) (*APRSPacket, error) {
 	return pkt, nil
 }
 
+// ParseTNC2Line decodes one APRS-IS line in TNC-2 text form,
+// SOURCE>DEST,PATH1,PATH2:payload. It is a port of MeshSat Android's
+// AprsIsClient.parseTnc2Line and keeps the addresses as the server wrote
+// them: a source such as OE3XYZ-WX, which no AX.25 address can hold, stays
+// OE3XYZ-WX. Positions and messages are decoded by the same helpers as a
+// frame from the TNC. Server comment lines ("#") are the caller's to skip.
+// [MESHSAT-1421]
+func ParseTNC2Line(line string) (*APRSPacket, error) {
+	gt := strings.IndexByte(line, '>')
+	if gt < 1 {
+		return nil, fmt.Errorf("tnc2: no source")
+	}
+	source := line[:gt]
+	rest := line[gt+1:]
+	colon := strings.IndexByte(rest, ':')
+	if colon < 1 || colon >= len(rest)-1 {
+		return nil, fmt.Errorf("tnc2: no destination or no payload")
+	}
+	parts := strings.Split(rest[:colon], ",")
+	payload := rest[colon+1:]
+
+	pkt := &APRSPacket{
+		Source:   source,
+		Dest:     parts[0],
+		Path:     strings.Join(parts[1:], ","),
+		DataType: payload[0],
+		Raw:      payload,
+	}
+	switch pkt.DataType {
+	case '!', '=': // Position without timestamp
+		parseAPRSPosition(pkt, payload[1:])
+	case '/', '@': // Position with timestamp
+		if len(payload) > 8 {
+			parseAPRSPosition(pkt, payload[8:])
+		}
+	case ':': // Message
+		if len(payload) > 1 {
+			parseAPRSMessage(pkt, payload[1:])
+		}
+	}
+	return pkt, nil
+}
+
 // parseAPRSPosition extracts lat/lon from an uncompressed APRS position string.
 // Format: DDMM.MMN/DDDMM.MMW$... where $ is symbol code
 func parseAPRSPosition(pkt *APRSPacket, s string) {
@@ -318,18 +361,16 @@ func EncodeAPRSPosition(lat, lon float64, symbolTable, symbolCode byte, comment 
 		latDir = 'S'
 		lat = -lat
 	}
-	latDeg := int(lat)
-	latMin := (lat - float64(latDeg)) * 60.0
+	latDeg, latMin := aprsDegMin(lat)
 
 	lonDir := byte('E')
 	if lon < 0 {
 		lonDir = 'W'
 		lon = -lon
 	}
-	lonDeg := int(lon)
-	lonMin := (lon - float64(lonDeg)) * 60.0
+	lonDeg, lonMin := aprsDegMin(lon)
 
-	s := fmt.Sprintf("!%02d%05.2f%c%c%03d%05.2f%c%c%s",
+	s := fmt.Sprintf("!%02d%s%c%c%03d%s%c%c%s",
 		latDeg, latMin, latDir,
 		symbolTable,
 		lonDeg, lonMin, lonDir,
@@ -337,6 +378,21 @@ func EncodeAPRSPosition(lat, lon float64, symbolTable, symbolCode byte, comment 
 		comment,
 	)
 	return []byte(s)
+}
+
+// aprsDegMin splits a non-negative coordinate into whole degrees and the
+// minutes as APRS writes them (mm.mm). Minutes that round up to 60.00 carry
+// into the degrees, so 52.99999 is written 5300.00 and not the invalid
+// 5260.00; the position beacon sends real positions, where this happens.
+// [MESHSAT-1421]
+func aprsDegMin(v float64) (int, string) {
+	deg := int(v)
+	mm := fmt.Sprintf("%05.2f", (v-float64(deg))*60.0)
+	if mm == "60.00" {
+		deg++
+		mm = "00.00"
+	}
+	return deg, mm
 }
 
 // EncodeAPRSMessage creates an APRS message packet info field.

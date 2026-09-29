@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/tls"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -41,6 +43,7 @@ import (
 	"meshsat/internal/rnsstack"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
+	"meshsat/internal/selfpos"
 	"meshsat/internal/spectrum"
 	"meshsat/internal/sysinfo"
 	"meshsat/internal/timesync"
@@ -922,6 +925,9 @@ func main() {
 				supervisor.ExcludePort(path)
 			}
 		},
+		// A tcp_rns TLS server that asks for a client certificate gets the
+		// Hub's (the Hub's Reticulum endpoint requires it).
+		ClientCert: hubClientCertificate(db),
 	})
 	if cfg.RNodePort != "" {
 		rcfg := routing.RNodeInterfaceConfig{
@@ -1424,6 +1430,19 @@ func main() {
 		}
 	})
 
+	// A gateway saved with no link gets its <type>_0 link [MESHSAT-1421], through the
+	// interface manager so the list shows it at once, and with its delivery
+	// worker when it is switched on.
+	gwMgr.SetLinkCreator(func(link database.Interface) error {
+		if err := ifaceMgr.CreateInterface(link); err != nil {
+			return err
+		}
+		if link.Enabled {
+			dispatcher.ResumeWorker(link.ID, link.ChannelType)
+		}
+		return nil
+	})
+
 	// Signal recorder — persists satellite signal bar readings to DB.
 	// Each transport is recorded independently with its own source key ("sbd" / "imt").
 	// If only one modem exists, only one poll loop runs.
@@ -1571,6 +1590,10 @@ func main() {
 
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
+	// Work a request starts that must outlive it (a TCP peer added with POST
+	// /api/routing/peers) runs under the process's context. Kept in step
+	// with app.go.
+	srv.SetBaseContext(ctx)
 	// Zones: the shipped binary never made the monitor, so /api/geofences
 	// answered 503 and no position was ever checked. Kept in step with
 	// app.go. [MESHSAT-1414]
@@ -1614,6 +1637,14 @@ func main() {
 		}
 	}
 	srv.SetGPSReader(gpsReader)
+
+	// The device's own position [MESHSAT-1421]: the app's fix (PUT
+	// /api/position/self), else the local node's, else the GPS reader's. The
+	// APRS-IS position beacon and filter read it through the gateway manager.
+	selfPos := &selfpos.Store{}
+	resolveSelfPos := selfPositionResolver(ctx, selfPos, mesh, gpsReader)
+	gwMgr.SetSelfPosition(resolveSelfPos)
+	srv.SetSelfPosition(selfPos, resolveSelfPos)
 
 	// ZigBee sensor router — fan out temp/humidity/battery/onoff readings to
 	// TAK + hub + log per the device's routing config. Wired here (not at
@@ -2538,6 +2569,21 @@ func main() {
 		}
 	}
 
+	// TAK without a TAK server [MESHSAT-1421]: every TAK gateway, the one running
+	// now and any started later, gets the local node's id for its own
+	// callsign, the device's own position for its PLI and SOS (the same
+	// resolver as the APRS-IS beacon: the app's fix, the local node, the GPS
+	// reader), and the Hub link for MQTT Export.
+	takHooks := localNodeTAKHooks(ctx, mesh)
+	takHooks.SelfPosition = func() (lat, lon, altM float64, ok bool) {
+		fix, ok := gwMgr.SelfPosition()
+		return fix.Latitude, fix.Longitude, fix.AltitudeM, ok
+	}
+	if hubReporter != nil {
+		takHooks.Hub = hubReporter
+	}
+	gwMgr.SetTAKHooks(takHooks)
+
 	// Dead man's switch [MESHSAT-996].
 	//
 	// This is deliberately here, after SetSatFallback above, and not in
@@ -2559,6 +2605,15 @@ func main() {
 			Time("last_activity", lastSeen).
 			Float64("lat", lat).Float64("lon", lon).
 			Msg("dead man's switch fired, raising SOS")
+		// The alarm on TAK, as MeshSat Android's sendDeadman, in the
+		// background so it never holds the SOS up. [MESHSAT-1421]
+		if tg := gwMgr.GetTAKGateway(); tg != nil {
+			go func() {
+				if err := tg.SendOwnDeadman(lat, lon, lastSeen); err != nil {
+					log.Warn().Err(err).Msg("dead man's switch: the CoT alarm did not reach every TAK output")
+				}
+			}()
+		}
 		srv.TriggerSOS("deadman")
 	})
 	deadman.Start(ctx)
@@ -3282,4 +3337,37 @@ func envBoolDefault(key string, fallback bool) bool {
 		return true
 	}
 	return false
+}
+
+// hubClientCertificate returns the Hub client certificate and key from the
+// hub_connection settings (tls_cert_pem, tls_key_pem), read at each call so a
+// certificate saved later is presented at the next TLS handshake without a
+// restart. nil, nil when either is missing; an error when they are stored but
+// do not make a key pair. The tcp_rns interfaces present it to a TLS server
+// that asks for a client certificate, as MeshSat Android does.
+func hubClientCertificate(db *database.DB) func() (*tls.Certificate, error) {
+	return func() (*tls.Certificate, error) {
+		raw, err := db.GetSystemConfig("hub_connection")
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && raw == "") {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("hub_connection: %w", err)
+		}
+		var hc struct {
+			TLSCertPEM string `json:"tls_cert_pem"`
+			TLSKeyPEM  string `json:"tls_key_pem"`
+		}
+		if err := json.Unmarshal([]byte(raw), &hc); err != nil {
+			return nil, fmt.Errorf("hub_connection: %w", err)
+		}
+		if hc.TLSCertPEM == "" || hc.TLSKeyPEM == "" {
+			return nil, nil
+		}
+		cert, err := tls.X509KeyPair([]byte(hc.TLSCertPEM), []byte(hc.TLSKeyPEM))
+		if err != nil {
+			return nil, fmt.Errorf("hub_connection: %w", err)
+		}
+		return &cert, nil
+	}
 }

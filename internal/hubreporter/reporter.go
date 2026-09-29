@@ -85,7 +85,8 @@ type HubReporter struct {
 	// MessagesOut counts publishes on topics that the Hub's TAK subscriber
 	// (`meshsat-hub/internal/tak/subscriber.go`) converts to CoT XML and
 	// relays to OpenTAKServer: position / SOS / telemetry / device-birth /
-	// bridge-birth / bridge-health. Spectrum alerts and device-death are
+	// bridge-birth / bridge-health, plus the CoT the TAK gateway exports on
+	// tak/cot/out (PublishTAKCoT). Spectrum alerts and device-death are
 	// explicitly excluded — the Hub has no CoT mapping for them.
 	takSubscribed   atomic.Bool
 	takMsgsIn       atomic.Int64
@@ -532,6 +533,28 @@ func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 func (r *HubReporter) PublishSpectrumAlert(alert SpectrumAlert) error {
 	alert.BridgeID = r.cfg.BridgeID
 	return r.publishOrQueue(TopicBridgeSpectrum(r.cfg.BridgeID), 1, false, alert)
+}
+
+// PublishTAKCoT publishes one CoT XML document, as the TAK gateway built it,
+// on meshsat/<bridge id>/tak/cot/out: MeshSat Android's "MQTT Export to Hub"
+// (TakIntegration.emit), QoS 1 and not retained. Without a session it answers
+// ErrNotConnected and queues nothing: a CoT event goes stale within minutes
+// (cot_stale_seconds), so replaying it later would put old marks on the map.
+// [MESHSAT-1421]
+func (r *HubReporter) PublishTAKCoT(xml []byte) error {
+	if r.client == nil || !r.IsConnected() {
+		return ErrNotConnected
+	}
+	topic := TopicTAKCoTOut(r.cfg.BridgeID)
+	token := r.client.Publish(topic, 1, false, xml)
+	if !token.WaitTimeout(5 * time.Second) {
+		return fmt.Errorf("publish timeout on %s", topic)
+	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("publish %s: %w", topic, err)
+	}
+	r.takMsgsOut.Add(1)
+	return nil
 }
 
 // publishBirth collects and publishes the bridge birth certificate.

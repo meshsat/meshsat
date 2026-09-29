@@ -406,6 +406,7 @@ func (a *App) Setup(ctx context.Context) error {
 
 	// API server
 	srv := api.NewServer(db, a.Mesh, a.Processor, a.GatewayMgr)
+	srv.SetBaseContext(ctx) // kept in step with main.go
 	srv.SetAccessEvaluator(a.AccessEval)
 	srv.SetRegistry(a.Registry)
 	srv.SetTLEManager(a.TLEMgr)

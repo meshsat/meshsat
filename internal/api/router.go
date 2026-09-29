@@ -21,6 +21,7 @@ import (
 	"meshsat/internal/rns"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
+	"meshsat/internal/selfpos"
 	"meshsat/internal/spectrum"
 	"meshsat/internal/timesync"
 	"meshsat/internal/transport"
@@ -96,6 +97,31 @@ type Server struct {
 	// the widget reports 0 even though CoT is flowing. [MESHSAT-682]
 	hubReporter *hubreporter.HubReporter
 	satFallback *hubreporter.SatFallback // [MESHSAT-963]
+	// baseCtx is the process's long-lived context, for work a handler starts
+	// that must outlive its request (a TCP peer's reconnect loop). Nil until
+	// SetBaseContext; baseContext() then answers context.Background().
+	baseCtx context.Context
+	// The device's own position: the app's fix and the resolver with the
+	// node and GPS fallbacks (SetSelfPosition, position.go). [MESHSAT-1421]
+	selfPos        *selfpos.Store
+	selfPosResolve func() (selfpos.Fix, bool)
+}
+
+// SetBaseContext gives the server the process's long-lived context (main.go:
+// the one cancelled at shutdown). Handlers use it instead of r.Context() for
+// anything that must keep running after the response: net/http cancels a
+// request's context as soon as its handler returns.
+func (s *Server) SetBaseContext(ctx context.Context) {
+	s.baseCtx = ctx
+}
+
+// baseContext is the long-lived context, or context.Background() when none
+// was set (tests, and wirings that never stop the server).
+func (s *Server) baseContext() context.Context {
+	if s.baseCtx != nil {
+		return s.baseCtx
+	}
+	return context.Background()
 }
 
 // SetHubReporter wires the Hub MQTT reporter so the TAK dashboard widget
@@ -571,6 +597,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/position/send", s.handleSendPosition)
 		r.Post("/position/fixed", s.handleSetFixedPosition)
 		r.Delete("/position/fixed", s.handleRemoveFixedPosition)
+		r.Put("/position/self", s.handlePutSelfPosition) // the device's own position [MESHSAT-1421]
+		r.Get("/position/self", s.handleGetSelfPosition)
 
 		// Neighbor info
 		r.Get("/neighbors", s.handleGetNeighborInfo)

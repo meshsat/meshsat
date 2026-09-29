@@ -1,7 +1,10 @@
 package hubreporter
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -397,5 +400,68 @@ func TestIsConnectedDefault(t *testing.T) {
 	)
 	if r.IsConnected() {
 		t.Error("new reporter should not be connected")
+	}
+}
+
+// MQTT Export without a Hub session: ErrNotConnected, nothing queued, nothing
+// counted. [MESHSAT-1421]
+func TestPublishTAKCoTNotConnected(t *testing.T) {
+	r := NewHubReporter(
+		ReporterConfig{HubURL: "tcp://127.0.0.1:1", BridgeID: "mule01"},
+		func() BridgeBirth { return BridgeBirth{} },
+		func() BridgeHealth { return BridgeHealth{} },
+	)
+	if err := r.PublishTAKCoT([]byte(`<event version="2.0" uid="MESHSAT-aabbccdd"/>`)); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("PublishTAKCoT without a link = %v, want ErrNotConnected", err)
+	}
+	if n := r.TAKRelayStats().MessagesOut; n != 0 {
+		t.Errorf("a publish that never happened was counted: %d", n)
+	}
+}
+
+// With a session: the CoT XML as is, on meshsat/<bridge id>/tak/cot/out, QoS 1,
+// not retained, counted in the TAK relay's messages out. [MESHSAT-1421]
+func TestPublishTAKCoT_QoS1NotRetained(t *testing.T) {
+	b := newFakeBroker(t, "127.0.0.1:0")
+	r := NewHubReporter(
+		ReporterConfig{HubURL: "tcp://" + b.addr(), BridgeID: "mule01"},
+		func() BridgeBirth { return BridgeBirth{BridgeID: "mule01"} },
+		func() BridgeHealth { return BridgeHealth{BridgeID: "mule01"} },
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer r.Stop()
+
+	// The birth is counted too: wait for it, so the count below is the export's.
+	deadline := time.Now().Add(10 * time.Second)
+	for r.TAKRelayStats().MessagesOut < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := r.TAKRelayStats().MessagesOut
+
+	doc := []byte(`<event version="2.0" uid="MESHSAT-aabbccdd" type="a-f-G-U-C" how="m-g"><point lat="52.3676" lon="4.9041" hae="0" ce="10" le="10"/></event>`)
+	if err := r.PublishTAKCoT(doc); err != nil {
+		t.Fatalf("PublishTAKCoT: %v", err)
+	}
+	if n := r.TAKRelayStats().MessagesOut; n != before+1 {
+		t.Errorf("messages out %d, want %d", n, before+1)
+	}
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case p := <-b.pubs:
+			if p.topic != "meshsat/mule01/tak/cot/out" {
+				continue
+			}
+			if p.qos != 1 || p.retain || !bytes.Equal(p.payload, doc) {
+				t.Fatalf("published qos %d retain %v payload %q", p.qos, p.retain, p.payload)
+			}
+			return
+		case <-timeout:
+			t.Fatal("the broker never got the CoT")
+		}
 	}
 }

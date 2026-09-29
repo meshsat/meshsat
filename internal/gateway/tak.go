@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -20,21 +21,41 @@ import (
 	"meshsat/internal/transport"
 )
 
-// TAKGateway bridges MeshSat messages to/from a TAK server via CoT XML over TCP.
+// TAKGateway bridges MeshSat to TAK. Every CoT it builds (routed mesh
+// messages, SendCotEvent, its own PLI, SOS, dead man and chat) goes out
+// through one fan-out, emit: to the TAK server over TCP or TLS when tak_host
+// is set, as TAK SA multicast when multicast is on (Android's "ATAK
+// Broadcast"), and to the Hub when hub_export is on ("MQTT Export to Hub").
+// CoT from the TAK server comes back in. Without a host it dials nothing.
 type TAKGateway struct {
 	config TAKConfig
 	db     *database.DB
 	inCh   chan InboundMessage
 	outCh  chan *transport.MeshMessage
 
+	// connMu guards conn: the read worker's reconnect replaces it while emit
+	// writes to it from other goroutines. closed stops a reconnect that
+	// finishes after Stop from installing a connection nobody closes.
+	connMu          sync.Mutex
 	conn            net.Conn
-	connected       atomic.Bool
+	closed          bool
+	connected       atomic.Bool  // the TAK server link (meaningful only with a host)
+	running         atomic.Bool  // between Start and Stop
 	negotiatedProto atomic.Int32 // 0=XML, 1=protobuf (set by version negotiation)
 	msgsIn          atomic.Int64
 	msgsOut         atomic.Int64
 	errors          atomic.Int64
 	lastActive      atomic.Int64
 	startTime       time.Time
+
+	// SA multicast (ATAK Broadcast), when config.Multicast. mcastDst replaces
+	// the TAK SA group in tests with a unicast address on 127.0.0.1.
+	mcast    *TAKMulticast
+	mcastDst *net.UDPAddr
+
+	// hooks connect the gateway to the Bridge's own position, node id and
+	// Hub link (SetHooks); they may change while the gateway runs.
+	hooks atomic.Pointer[TAKHooks]
 
 	// Position coalescing: track last PLI send time per node
 	coalesceMu sync.Mutex
@@ -55,32 +76,59 @@ func NewTAKGateway(cfg TAKConfig, db *database.DB) *TAKGateway {
 	}
 }
 
-// Start connects to the TAK server and begins read/write workers.
-// If auto_enroll is enabled and no certificate exists, enrolls first.
+// Start connects to the TAK server, when there is one, joins SA multicast when
+// it is on, and begins the workers. If auto_enroll is enabled and no
+// certificate exists, enrolls first. A configured server that cannot be
+// reached fails Start as it always did; no server is not a failure.
 func (g *TAKGateway) Start(ctx context.Context) error {
 	ctx, g.cancel = context.WithCancel(ctx)
 	g.startTime = time.Now()
 
-	// Auto-enroll if configured and no certificate is available yet
-	if err := g.ensureCertificate(); err != nil {
-		return fmt.Errorf("tak: certificate setup: %w", err)
+	if g.config.Host != "" {
+		// Auto-enroll if configured and no certificate is available yet
+		if err := g.ensureCertificate(); err != nil {
+			g.cancel()
+			return fmt.Errorf("tak: certificate setup: %w", err)
+		}
+
+		conn, err := g.dial()
+		if err != nil {
+			g.cancel()
+			return fmt.Errorf("tak: connect to %s:%d: %w", g.config.Host, g.config.Port, err)
+		}
+		g.conn = conn
+		g.connected.Store(true)
 	}
 
-	conn, err := g.dial()
-	if err != nil {
-		return fmt.Errorf("tak: connect to %s:%d: %w", g.config.Host, g.config.Port, err)
+	if g.config.Multicast {
+		mc := NewTAKMulticast(g.config.MulticastIface)
+		if g.mcastDst != nil {
+			mc.dst = g.mcastDst
+		}
+		if err := mc.Start(ctx); err != nil {
+			g.cancel()
+			g.closeServerConn()
+			return err
+		}
+		g.mcast = mc
 	}
-	g.conn = conn
-	g.connected.Store(true)
 
+	g.running.Store(true)
+	if g.config.Host != "" {
+		g.wg.Add(1)
+		go g.readWorker(ctx)
+	}
 	g.wg.Add(2)
-	go g.readWorker(ctx)
 	go g.writeWorker(ctx)
+	go g.ownPLILoop(ctx)
 
 	log.Info().
 		Str("host", g.config.Host).
 		Int("port", g.config.Port).
 		Bool("ssl", g.config.SSL).
+		Bool("multicast", g.config.Multicast).
+		Str("multicast_iface", g.config.MulticastIface).
+		Bool("hub_export", g.config.HubExport).
 		Msg("tak gateway started")
 	return nil
 }
@@ -145,19 +193,54 @@ func (g *TAKGateway) ensureCertificate() error {
 
 // Stop shuts down the TAK gateway.
 func (g *TAKGateway) Stop() error {
+	g.running.Store(false)
 	if g.cancel != nil {
 		g.cancel()
 	}
-	if g.conn != nil {
-		g.conn.Close()
-	}
+	g.closeServerConn()
 	g.wg.Wait()
+	if g.mcast != nil {
+		g.mcast.Stop()
+	}
 	g.connected.Store(false)
 	log.Info().Msg("tak gateway stopped")
 	return nil
 }
 
-// Forward enqueues a MeshSat message for CoT delivery to the TAK server.
+// serverConn is the current TAK server connection, nil without one.
+func (g *TAKGateway) serverConn() net.Conn {
+	g.connMu.Lock()
+	defer g.connMu.Unlock()
+	return g.conn
+}
+
+// swapServerConn installs a reconnected server connection and closes the old
+// one. It refuses, and the caller closes c, once Stop has run.
+func (g *TAKGateway) swapServerConn(c net.Conn) bool {
+	g.connMu.Lock()
+	defer g.connMu.Unlock()
+	if g.closed {
+		return false
+	}
+	if g.conn != nil {
+		g.conn.Close()
+	}
+	g.conn = c
+	return true
+}
+
+// closeServerConn closes the server connection for good.
+func (g *TAKGateway) closeServerConn() {
+	g.connMu.Lock()
+	defer g.connMu.Unlock()
+	g.closed = true
+	if g.conn != nil {
+		g.conn.Close()
+	}
+}
+
+// Forward enqueues a MeshSat message for CoT delivery through the gateway's
+// outputs (the TAK server, SA multicast, the Hub).
 func (g *TAKGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
 	select {
 	case g.outCh <- msg:
@@ -168,50 +251,16 @@ func (g *TAKGateway) Forward(ctx context.Context, msg *transport.MeshMessage) er
 	}
 }
 
-// SendCotEvent serializes and writes a fully-built CoT event directly to
-// the TAK server connection. Bypasses the MeshMessage→CoT translation in
-// sendMessage(), so callers like the zigbee bridge can publish synthesized
-// sensor markers with their own callsign + position. [MESHSAT-509]
+// SendCotEvent sends a fully-built CoT event through every output the gateway
+// has (emit). Bypasses the MeshMessage→CoT translation in sendMessage(), so
+// callers like the zigbee bridge can publish synthesized sensor markers with
+// their own callsign + position. [MESHSAT-509]
 //
-// Returns nil if the gateway isn't connected — losing a sensor reading
-// during a TAK reconnect is a soft failure, not worth surfacing as an
-// error to the caller (zigbee gateway has no good fallback either).
+// An output without a link right now is not an error for the caller — losing
+// a sensor reading during a TAK reconnect is a soft failure, not worth
+// surfacing (zigbee gateway has no good fallback either).
 func (g *TAKGateway) SendCotEvent(ev CotEvent) error {
-	if !g.connected.Load() || g.conn == nil {
-		return nil
-	}
-	var outBytes []byte
-	if g.useProtobuf() {
-		takMsg, err := CotEventToProto(ev)
-		if err != nil {
-			g.errors.Add(1)
-			return fmt.Errorf("tak: convert CoT to protobuf: %w", err)
-		}
-		outBytes, err = MarshalTakProto(takMsg)
-		if err != nil {
-			g.errors.Add(1)
-			return fmt.Errorf("tak: marshal protobuf: %w", err)
-		}
-	} else {
-		b, err := MarshalCotEvent(ev)
-		if err != nil {
-			g.errors.Add(1)
-			return fmt.Errorf("tak: marshal CoT XML: %w", err)
-		}
-		outBytes = append(b, '\n')
-	}
-	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		log.Warn().Err(err).Msg("tak: set write deadline")
-	}
-	if _, err := g.conn.Write(outBytes); err != nil {
-		g.errors.Add(1)
-		g.connected.Store(false)
-		return fmt.Errorf("tak: write to server: %w", err)
-	}
-	g.msgsOut.Add(1)
-	g.lastActive.Store(time.Now().Unix())
-	GlobalTakEventBus.Publish(CotEventToRecord(&ev, "outbound"))
-	return nil
+	return withoutLinkDown(g.emit(ev))
 }
 
 // Enqueue submits a message for outbound delivery via the gateway.
@@ -224,11 +273,14 @@ func (g *TAKGateway) Receive() <-chan InboundMessage {
 	return g.inCh
 }
 
-// Status returns the current gateway status.
+// Status returns the current gateway status. Connected is the gateway's links
+// together: the TAK server is connected when there is a host, and SA multicast
+// has joined an interface when it is on. The Hub is not part of it (the Hub
+// link has its own state).
 func (g *TAKGateway) Status() GatewayStatus {
 	s := GatewayStatus{
 		Type:        "tak",
-		Connected:   g.connected.Load(),
+		Connected:   g.linksUp(),
 		MessagesIn:  g.msgsIn.Load(),
 		MessagesOut: g.msgsOut.Load(),
 		Errors:      g.errors.Load(),
@@ -240,6 +292,21 @@ func (g *TAKGateway) Status() GatewayStatus {
 		s.ConnectionUptime = time.Since(g.startTime).Truncate(time.Second).String()
 	}
 	return s
+}
+
+// linksUp is Status's Connected: (no host, or the server link is up) and
+// (multicast off, or joined).
+func (g *TAKGateway) linksUp() bool {
+	if !g.running.Load() {
+		return false
+	}
+	if g.config.Host != "" && !g.connected.Load() {
+		return false
+	}
+	if g.config.Multicast && (g.mcast == nil || !g.mcast.Joined()) {
+		return false
+	}
+	return true
 }
 
 // Type returns the gateway type identifier.
@@ -360,8 +427,12 @@ func (g *TAKGateway) sendVersionNegotiation() {
 		now.Format(cotTimeFormat), now.Format(cotTimeFormat),
 		now.Add(30*time.Second).Format(cotTimeFormat))
 
-	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err == nil {
-		g.conn.Write(append([]byte(verXML), '\n')) //nolint:errcheck
+	conn := g.serverConn()
+	if conn == nil {
+		return
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err == nil {
+		conn.Write(append([]byte(verXML), '\n')) //nolint:errcheck
 	}
 	log.Info().Msg("tak: sent XML version negotiation (minProto=0, maxProto=1)")
 }
@@ -381,8 +452,12 @@ func (g *TAKGateway) sendProtobufVersionNegotiation() {
 		log.Warn().Err(err).Msg("tak: marshal protobuf version negotiation")
 		return
 	}
-	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err == nil {
-		g.conn.Write(frame) //nolint:errcheck
+	conn := g.serverConn()
+	if conn == nil {
+		return
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err == nil {
+		conn.Write(frame) //nolint:errcheck
 	}
 	log.Info().Msg("tak: sent protobuf version negotiation confirmation")
 }
@@ -421,7 +496,8 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 	// Send version negotiation on initial connect
 	g.sendVersionNegotiation()
 
-	reader := bufio.NewReaderSize(g.conn, 256*1024)
+	conn := g.serverConn()
+	reader := bufio.NewReaderSize(conn, 256*1024)
 
 	for {
 		select {
@@ -430,7 +506,7 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 		default:
 		}
 
-		if err := g.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			log.Warn().Err(err).Msg("tak: set read deadline")
 			return
 		}
@@ -450,7 +526,8 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			reader = bufio.NewReaderSize(g.conn, 256*1024)
+			conn = g.serverConn()
+			reader = bufio.NewReaderSize(conn, 256*1024)
 			g.sendVersionNegotiation()
 			continue
 		}
@@ -497,7 +574,8 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				reader = bufio.NewReaderSize(g.conn, 256*1024)
+				conn = g.serverConn()
+				reader = bufio.NewReaderSize(conn, 256*1024)
 				g.sendVersionNegotiation()
 				continue
 			}
@@ -541,7 +619,7 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 	}
 }
 
-// writeWorker sends CoT XML events to the TAK server.
+// writeWorker turns the queued mesh messages into CoT and sends them (emit).
 func (g *TAKGateway) writeWorker(ctx context.Context) {
 	defer g.wg.Done()
 
@@ -555,7 +633,9 @@ func (g *TAKGateway) writeWorker(ctx context.Context) {
 	}
 }
 
-// sendMessage converts a MeshMessage to CoT XML and writes it to the TCP stream.
+// sendMessage converts a MeshMessage to CoT and sends it through every output
+// (emit). The node keeps its per-node identity, "meshsat-%08x" and
+// "PREFIX-%04x".
 func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 	uid := fmt.Sprintf("meshsat-%08x", msg.From)
 	callsign := fmt.Sprintf("%s-%04x", g.config.CallsignPrefix, msg.From&0xFFFF)
@@ -626,53 +706,15 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 		}
 	}
 
-	var outBytes []byte
-	if g.useProtobuf() {
-		takMsg, err := CotEventToProto(ev)
-		if err != nil {
-			log.Warn().Err(err).Msg("tak: convert to protobuf")
-			g.errors.Add(1)
-			return
-		}
-		outBytes, err = MarshalTakProto(takMsg)
-		if err != nil {
-			log.Warn().Err(err).Msg("tak: marshal protobuf")
-			g.errors.Add(1)
-			return
-		}
-	} else {
-		var err error
-		outBytes, err = MarshalCotEvent(ev)
-		if err != nil {
-			log.Warn().Err(err).Msg("tak: marshal CoT XML")
-			g.errors.Add(1)
-			return
-		}
-		outBytes = append(outBytes, '\n') // XML uses newline delimiter
-	}
-
-	if !g.connected.Load() || g.conn == nil {
+	err := g.emit(ev)
+	if errors.Is(err, errTAKServerDown) {
+		// A routed message the TAK server could not take is an error, as it
+		// always was; other outputs without a link are not.
 		g.errors.Add(1)
-		return
 	}
-
-	if err := g.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		log.Warn().Err(err).Msg("tak: set write deadline")
+	if hard := withoutLinkDown(err); hard != nil {
+		log.Warn().Err(hard).Str("uid", ev.UID).Msg("tak: CoT not delivered")
 	}
-
-	if _, err := g.conn.Write(outBytes); err != nil {
-		log.Warn().Err(err).Msg("tak: write to server")
-		g.errors.Add(1)
-		g.connected.Store(false)
-		return
-	}
-
-	g.msgsOut.Add(1)
-	g.lastActive.Store(time.Now().Unix())
-	log.Debug().Str("uid", ev.UID).Str("type", ev.Type).Msg("tak: sent CoT event")
-
-	// Publish to CoT event stream for dashboard
-	GlobalTakEventBus.Publish(CotEventToRecord(&ev, "outbound"))
 }
 
 // reconnect attempts to re-establish the TAK server connection with backoff.
@@ -695,10 +737,10 @@ func (g *TAKGateway) reconnect(ctx context.Context) {
 			continue
 		}
 
-		if g.conn != nil {
-			g.conn.Close()
+		if ctx.Err() != nil || !g.swapServerConn(conn) {
+			conn.Close() // stopped while dialling
+			return
 		}
-		g.conn = conn
 		g.connected.Store(true)
 		log.Info().Msg("tak: reconnected to server")
 		return

@@ -40,6 +40,18 @@ func TestTopicBuilders(t *testing.T) {
 	}
 }
 
+// MeshSat Android's MQTT Export topic, with the bridge id. [MESHSAT-1421]
+func TestTopicTAKCoTOut(t *testing.T) {
+	for id, want := range map[string]string{
+		"mule01":        "meshsat/mule01/tak/cot/out",
+		"android-phone": "meshsat/android-phone/tak/cot/out",
+	} {
+		if got := TopicTAKCoTOut(id); got != want {
+			t.Errorf("TopicTAKCoTOut(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestBridgeBirthRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	birth := BridgeBirth{

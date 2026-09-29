@@ -256,10 +256,11 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 }
 
 func TestTAKConfigValidate(t *testing.T) {
-	// Missing host
+	// No host: valid since MESHSAT-1421, the gateway then runs without a TAK server
+	// (TestTAKConfigValidate_NoServer).
 	cfg := DefaultTAKConfig()
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for missing host")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("no host: %v", err)
 	}
 
 	// Valid non-SSL

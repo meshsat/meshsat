@@ -34,7 +34,9 @@ type SOSState struct {
 const sosDefaultText = "SOS - EMERGENCY ALERT - Requesting immediate assistance"
 
 // @Summary Activate SOS alert
-// @Description Triggers an SOS emergency alert that sends via mesh and satellite (3x at 30s intervals)
+// @Description Triggers an SOS emergency alert that sends via mesh and satellite (3x at 30s intervals).
+// @Description When the TAK gateway runs and this Bridge knows its position, the SOS also goes to TAK
+// @Description as a CoT emergency (a-f-G-U-C with a 911 Alert), once, through the gateway's outputs.
 // @Tags sos
 // @Produce json
 // @Success 200 {object} map[string]interface{}
@@ -144,6 +146,10 @@ func (s *Server) TriggerSOSWithText(trigger, text string) bool {
 	}
 
 	go s.sosWorker(ctx, text)
+
+	// TAK clients see the alarm as well, as on MeshSat Android
+	// (SosController). The dead man's switch comes through here too. [MESHSAT-1421]
+	s.takOwnSOS(text)
 
 	log.Warn().Str("trigger", trigger).Str("text", text).Msg("SOS ACTIVATED")
 	return true

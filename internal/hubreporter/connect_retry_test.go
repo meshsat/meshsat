@@ -23,6 +23,15 @@ type fakeBroker struct {
 	closeOnce chan struct{}
 	mu        sync.Mutex
 	conns     []net.Conn
+	pubs      chan fakePublish // every PUBLISH received, while there is room
+}
+
+// fakePublish is one PUBLISH as the broker received it.
+type fakePublish struct {
+	topic   string
+	qos     byte
+	retain  bool
+	payload []byte
 }
 
 // dropSessions ends every open session, as a broker that goes away does.
@@ -41,7 +50,7 @@ func newFakeBroker(t *testing.T, addr string) *fakeBroker {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	b := &fakeBroker{ln: ln, closeOnce: make(chan struct{})}
+	b := &fakeBroker{ln: ln, closeOnce: make(chan struct{}), pubs: make(chan fakePublish, 64)}
 	go b.serve()
 	t.Cleanup(func() { b.Close() })
 	return b
@@ -101,11 +110,21 @@ func (b *fakeBroker) session(c net.Conn) {
 				return
 			}
 		case 3: // PUBLISH — acknowledge QoS 1 so the client does not stall
-			if (br[0]>>1)&0x03 == 1 && len(body) >= 2 {
+			qos := (br[0] >> 1) & 0x03
+			if len(body) >= 2 {
 				topicLen := int(binary.BigEndian.Uint16(body[:2]))
-				if len(body) >= 2+topicLen+2 {
-					id := body[2+topicLen : 2+topicLen+2]
-					c.Write([]byte{0x40, 0x02, id[0], id[1]})
+				if len(body) >= 2+topicLen {
+					rest := body[2+topicLen:]
+					if qos == 1 && len(rest) >= 2 {
+						c.Write([]byte{0x40, 0x02, rest[0], rest[1]})
+					}
+					if qos > 0 && len(rest) >= 2 {
+						rest = rest[2:] // the packet id
+					}
+					select {
+					case b.pubs <- fakePublish{topic: string(body[2 : 2+topicLen]), qos: qos, retain: br[0]&0x01 == 1, payload: rest}:
+					default:
+					}
 				}
 			}
 		case 8: // SUBSCRIBE — SUBACK granting QoS 0

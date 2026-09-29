@@ -3,11 +3,18 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // TAKConfig holds the configuration for the TAK/CoT gateway.
+//
+// A TAK server is optional: with no tak_host the gateway dials nothing and
+// its CoT goes only to the outputs switched on below, TAK SA multicast
+// (MeshSat Android's "ATAK Broadcast") and the Hub ("MQTT Export to Hub").
+// Both default to off, so a gateway saved before they existed behaves as it
+// did. [MESHSAT-1421]
 type TAKConfig struct {
-	Host            string `json:"tak_host"`
+	Host            string `json:"tak_host"` // empty = no TAK server
 	Port            int    `json:"tak_port"`
 	SSL             bool   `json:"tak_ssl"`
 	Protocol        string `json:"protocol"` // "xml" (default) or "protobuf"
@@ -24,8 +31,12 @@ type TAKConfig struct {
 	EnrollUsername string `json:"enroll_username,omitempty"`
 	EnrollPassword string `json:"enroll_password,omitempty"`
 	AutoEnroll     bool   `json:"auto_enroll,omitempty"` // enable auto-enrollment on startup
-	Multicast      bool   `json:"multicast"`             // enable UDP multicast SA (239.2.3.1:6969)
-	MulticastIface string `json:"multicast_iface"`       // network interface for multicast (empty = all)
+	Multicast      bool   `json:"multicast"`             // TAK SA multicast (239.2.3.1:6969, TTL 1): Android's "ATAK Broadcast"
+	MulticastIface string `json:"multicast_iface"`       // interface for multicast (empty = every up, multicast-capable, non-loopback one)
+
+	// HubExport publishes every CoT the gateway builds to the Hub on
+	// meshsat/<bridge id>/tak/cot/out: Android's "MQTT Export to Hub".
+	HubExport bool `json:"hub_export"`
 }
 
 // DefaultTAKConfig returns sensible defaults.
@@ -47,15 +58,16 @@ func ParseTAKConfig(data string) (*TAKConfig, error) {
 	return &cfg, nil
 }
 
-// Validate checks required fields.
+// Validate checks required fields. A config without tak_host is valid: the
+// gateway then runs without a TAK server, and the TLS rules, which are about
+// the server link, do not apply.
 func (c *TAKConfig) Validate() error {
-	if c.Host == "" {
-		return fmt.Errorf("tak_host is required")
-	}
+	c.Host = strings.TrimSpace(c.Host)
+	c.MulticastIface = strings.TrimSpace(c.MulticastIface)
 	if c.Port <= 0 || c.Port > 65535 {
 		c.Port = 8087
 	}
-	if c.SSL {
+	if c.SSL && c.Host != "" {
 		// SSL requires one of: credential_id, cert files, or auto-enroll
 		hasCred := c.CredentialID != ""
 		hasFiles := c.CertFile != "" && c.KeyFile != ""
@@ -74,6 +86,11 @@ func (c *TAKConfig) Validate() error {
 		c.CoalesceSeconds = 30
 	}
 	return nil
+}
+
+// HasServer reports whether a TAK server is configured (tak_host is set).
+func (c *TAKConfig) HasServer() bool {
+	return strings.TrimSpace(c.Host) != ""
 }
 
 // HasEnrollmentConfig returns true if auto-enrollment credentials are configured.
