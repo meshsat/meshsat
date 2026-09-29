@@ -2,6 +2,7 @@ package engine
 
 import (
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -28,12 +29,28 @@ type GeofenceEvent struct {
 	Event  string       `json:"event"` // "enter" or "exit"
 }
 
+// GeofenceEventRecord is one crossing as the log keeps it: the zone's name at
+// the time (it outlives the zone), the node, enter or exit, and when.
+// [MESHSAT-1414]
+type GeofenceEventRecord struct {
+	ZoneName  string `json:"zone_name"`
+	NodeID    string `json:"node_id"`
+	Event     string `json:"event"`
+	Timestamp int64  `json:"timestamp"` // Unix milliseconds
+}
+
+// geofenceLogKeep bounds the in-memory log; Events serves the newest 50.
+const geofenceLogKeep = 1000
+
 // GeofenceMonitor tracks node positions against configured geofence zones
-// and detects enter/exit transitions.
+// and detects enter/exit transitions. Zones and the log live in memory, as
+// MeshSat Android's: they last until the Bridge restarts.
 type GeofenceMonitor struct {
 	zones    []GeofenceZone
 	inside   map[string]map[string]bool // zone_id -> node_id -> was_inside
 	callback func(zone GeofenceZone, nodeID string, event string)
+	log      []GeofenceEventRecord
+	now      func() time.Time
 	mu       sync.RWMutex
 }
 
@@ -41,6 +58,7 @@ type GeofenceMonitor struct {
 func NewGeofenceMonitor() *GeofenceMonitor {
 	return &GeofenceMonitor{
 		inside: make(map[string]map[string]bool),
+		now:    time.Now,
 	}
 }
 
@@ -94,6 +112,7 @@ func (g *GeofenceMonitor) CheckPosition(nodeID string, lat, lon float64) []Geofe
 			if zone.AlertOn == "enter" || zone.AlertOn == "both" {
 				event := GeofenceEvent{Zone: zone, NodeID: nodeID, Event: "enter"}
 				events = append(events, event)
+				g.record(zone, nodeID, "enter")
 				if g.callback != nil {
 					g.callback(zone, nodeID, "enter")
 				}
@@ -107,6 +126,7 @@ func (g *GeofenceMonitor) CheckPosition(nodeID string, lat, lon float64) []Geofe
 			if zone.AlertOn == "exit" || zone.AlertOn == "both" {
 				event := GeofenceEvent{Zone: zone, NodeID: nodeID, Event: "exit"}
 				events = append(events, event)
+				g.record(zone, nodeID, "exit")
 				if g.callback != nil {
 					g.callback(zone, nodeID, "exit")
 				}
@@ -116,6 +136,30 @@ func (g *GeofenceMonitor) CheckPosition(nodeID string, lat, lon float64) []Geofe
 	}
 
 	return events
+}
+
+// record appends a crossing to the log (the lock is held).
+func (g *GeofenceMonitor) record(zone GeofenceZone, nodeID, event string) {
+	g.log = append(g.log, GeofenceEventRecord{ZoneName: zone.Name, NodeID: nodeID, Event: event, Timestamp: g.now().UnixMilli()})
+	if len(g.log) > geofenceLogKeep {
+		g.log = g.log[len(g.log)-geofenceLogKeep:]
+	}
+	log.Info().Str("zone", zone.Name).Str("node", nodeID).Str("event", event).Msg("geofence crossing")
+}
+
+// Events returns the newest crossings, newest first, at most limit (50
+// when limit is 0 or less), as MeshSat Android's getEvents. [MESHSAT-1414]
+func (g *GeofenceMonitor) Events(limit int) []GeofenceEventRecord {
+	if limit <= 0 {
+		limit = 50
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	out := make([]GeofenceEventRecord, 0, limit)
+	for i := len(g.log) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, g.log[i])
+	}
+	return out
 }
 
 // SetCallback sets the function called when a geofence event occurs.

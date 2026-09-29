@@ -81,3 +81,19 @@ func (s *Server) handleDeleteGeofence(w http.ResponseWriter, r *http.Request) {
 	s.geofenceMon.RemoveZone(id)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// handleGetGeofenceEvents returns the newest zone crossings.
+// @Summary Zone crossings
+// @Description The newest crossings of the zones by mesh nodes (a mesh position that enters or leaves a zone set to alert on it), newest first, at most 50, as MeshSat Android's Zones screen lists them. Kept in memory until the Bridge restarts [MESHSAT-1414]
+// @Tags geofences
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 503 {object} map[string]string
+// @Router /api/geofences/events [get]
+func (s *Server) handleGetGeofenceEvents(w http.ResponseWriter, r *http.Request) {
+	if s.geofenceMon == nil {
+		writeError(w, http.StatusServiceUnavailable, "geofence monitor not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"events": s.geofenceMon.Events(50)})
+}

@@ -2,7 +2,11 @@ package engine
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
+
+	"meshsat/internal/database"
+	"meshsat/internal/transport"
 )
 
 // The mesh transport's position event carries the node itself (user_id, num,
@@ -36,5 +40,24 @@ func TestPositionOf_NothingWithoutAPositionOrANode(t *testing.T) {
 	}
 	if pos := positionOf(json.RawMessage(`not json`)); pos != nil {
 		t.Fatalf("bad json gave %+v", pos)
+	}
+}
+
+// A mesh position event goes through the zones. [MESHSAT-1414]
+func TestHandlePosition_ChecksTheZones(t *testing.T) {
+	db, err := database.New(filepath.Join(t.TempDir(), "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	p := NewProcessor(db, nil)
+	g := NewGeofenceMonitor()
+	p.SetGeofenceMonitor(g)
+	g.AddZone(GeofenceZone{ID: "z", Name: "Dam Square", AlertOn: "enter",
+		Polygon: []LatLon{{52.372, 4.892}, {52.372, 4.894}, {52.374, 4.894}, {52.374, 4.892}}})
+	p.handlePosition(transport.MeshEvent{Type: "position", Data: json.RawMessage(`{"num":2712912620,"user_id":"!a1b3c2ec","latitude":52.3731,"longitude":4.8932}`)})
+	ev := g.Events(0)
+	if len(ev) != 1 || ev[0].NodeID != "!a1b3c2ec" || ev[0].Event != "enter" || ev[0].ZoneName != "Dam Square" {
+		t.Fatalf("crossings after a position inside: %+v", ev)
 	}
 }
