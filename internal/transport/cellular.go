@@ -110,6 +110,17 @@ type CellBroadcastMsg struct {
 	Text         string `json:"text"`
 }
 
+// SMSTextModeModem is implemented by a cell transport that types an SMS into
+// the modem in AT text mode (AT+CMGF=1, the modem's own character set): the
+// kits' USB modems (DirectCellTransport). Only the GSM 03.38 basic set gets
+// through there, and some modems (the Huawei E220) fail the whole SMS with
+// CMS ERROR 305 on an extension-table character such as [ ] ~ €. ModemManager
+// (the phones) encodes any text itself, UCS-2 when it must, and does not
+// implement it.
+type SMSTextModeModem interface {
+	SMSTextMode() bool
+}
+
 // CellTransport abstracts how MeshSat talks to a cellular modem.
 type CellTransport interface {
 	Subscribe(ctx context.Context) (<-chan CellEvent, error)

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -500,7 +501,7 @@ func (s *Server) handleAckCellBroadcast(w http.ResponseWriter, r *http.Request) 
 // --- SMS History ---
 
 // @Summary List SMS messages
-// @Description Returns SMS message history with pagination
+// @Description Returns SMS message history with pagination. text is the words: an SMS that came sealed is shown opened (by the sender's chat key, the wildcard's, or the SMS link's chain) and one that went sealed as typed; encrypted says which, for a chat bubble's lock.
 // @Tags cellular
 // @Produce json
 // @Param limit query integer false "Max results (default: 50, max: 500)"
@@ -682,14 +683,47 @@ func (s *Server) handleDeleteSMSContact(w http.ResponseWriter, r *http.Request) 
 
 // --- Send SMS ---
 
+// smsSendRequest is the body of POST /api/cellular/sms/send.
+type smsSendRequest struct {
+	To   string `json:"to"`
+	Text string `json:"text"`
+	// Plain sends the text exactly as given (not even trimmed): no chat key,
+	// no transform chain (no encryption, compression or base64), no
+	// attribution; the SMS history keeps it with encrypted false. For an SOS
+	// or an alarm test to an emergency contact, which MeshSat Android sends
+	// as plain text whatever its encryption settings. A kit's USB modem (AT
+	// text mode) still gets the GSM clean-up, since it cannot carry every
+	// character; ModemManager sends the text as it is. A plain text with a
+	// control character other than a line break is refused (plainTextError).
+	// Default false: as before.
+	Plain bool `json:"plain"`
+}
+
+// plainTextError says why a plain text cannot go as given, nil when it can.
+// A plain text skips the processing every other SMS gets, so whatever it
+// holds reaches the modem: on a kit's USB modem, which takes the text in AT
+// text mode, Ctrl-Z (0x1A) ends the SMS early and what follows runs as AT
+// commands, and ESC (0x1B) drops the SMS while the modem still answers OK.
+// Line breaks (\n, \r) are the only control characters a plain text keeps;
+// the others (C0, DEL, C1) are refused with the first one named.
+func plainTextError(text string) error {
+	for i, r := range text {
+		if r != '\n' && r != '\r' && unicode.IsControl(r) {
+			return fmt.Errorf("plain text must not contain control characters: U+%04X at byte %d (only line breaks, \\n and \\r, may be in it)", r, i)
+		}
+	}
+	return nil
+}
+
 // @Summary Send SMS message
-// @Description Queues an SMS on cellular_0 through the delivery ledger, like every other send on the kit: the interface's egress transforms (compression, encryption) apply unless the number is a plaintext peer such as the Hub, which gets clear text; the send is retried, counted against the SMS bundle and shown in the delivery queue; the SMS history keeps the words that were sent. A message that would not fit the kit's max_sms_segments on air is refused rather than cut, because a cut ciphertext cannot be read.
+// @Description Queues an SMS on cellular_0 through the delivery ledger, like every other send on the kit: a number with a chat key of its own (PUT /api/keys/sms/{number}), or the wildcard's (sms:*), gets the text sealed with that key as MeshSat Android seals it, whether or not the link encrypts; otherwise the interface's egress transforms (compression, encryption) apply; a plaintext peer such as the Hub gets clear text. The send is retried, counted against the SMS bundle and shown in the delivery queue; the SMS history keeps the words that were sent, marked encrypted when they went sealed. A message that would not fit the kit's max_sms_segments on air is refused rather than cut, because a cut ciphertext cannot be read.
+// @Description plain true sends the text exactly as given (an SOS or an alarm test to an emergency contact): no chat key, no transform chain, no attribution, not trimmed; the SMS history keeps it with encrypted false. A kit's USB modem (AT text mode) cannot carry every character, so there it still gets the GSM clean-up ("[" becomes "(", "€" "EUR", "±" "+/-"); ModemManager on a phone sends it exactly. A plain text with a control character other than a line break (\n, \r) is refused with 400. Default false, as above.
 // @Tags cellular
 // @Accept json
 // @Produce json
-// @Param body body object true "SMS" example({"to":"+31612345678","text":"Hello"})
-// @Success 202 {object} map[string]interface{} "status queued, delivery_id"
-// @Failure 400 {object} map[string]string
+// @Param body body smsSendRequest true "SMS" example({"to":"+31612345678","text":"Hello","plain":false})
+// @Success 202 {object} map[string]interface{} "status queued, delivery_id, plain"
+// @Failure 400 {object} map[string]string "to or text missing, a plain text with a control character, or too long for max_sms_segments"
 // @Failure 500 {object} map[string]string
 // @Failure 503 {object} map[string]string
 // @Router /api/cellular/sms/send [post]
@@ -703,55 +737,97 @@ func (s *Server) handleSendSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		To   string `json:"to"`
-		Text string `json:"text"`
-	}
+	var req smsSendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	req.To, req.Text = strings.TrimSpace(req.To), strings.TrimSpace(req.Text)
-	if req.To == "" || req.Text == "" {
+	req.To = strings.TrimSpace(req.To)
+	if !req.Plain {
+		req.Text = strings.TrimSpace(req.Text)
+	}
+	if req.To == "" || strings.TrimSpace(req.Text) == "" {
 		writeError(w, http.StatusBadRequest, "to and text are required")
 		return
+	}
+	if req.Plain {
+		if err := plainTextError(req.Text); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// This handler used to encrypt and send straight through the modem. It
 	// ignored plaintext_peers, so the Hub got ciphertext it could not read,
 	// and it skipped the ledger: no retry, no queue entry, and the request
 	// waited on the modem. It now takes the same path as every other send.
-	if onAir, limit, err := s.smsOnAirLength(req.To, req.Text); err == nil && limit > 0 && onAir > limit {
+	if onAir, limit, err := s.smsOnAirLength(req.To, req.Text, req.Plain); err == nil && limit > 0 && onAir > limit {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
 			"message too long: %d characters on air, this kit sends at most %d (max_sms_segments); shorten it", onAir, limit))
 		return
 	}
-	id, _, err := s.dispatcher.QueueDirectSendTo("cellular_0", req.Text, engine.DirectSendOptions{Destination: req.To})
+	opts := engine.DirectSendOptions{Destination: req.To}
+	if req.Plain {
+		opts.Class = database.DeliveryClassPlain
+	}
+	id, _, err := s.dispatcher.QueueDirectSendTo("cellular_0", req.Text, opts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "delivery_id": id})
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "delivery_id": id, "plain": req.Plain})
 }
 
 // smsOnAirLength gathers what the delivery worker will use for this send
 // (the cellular gateway's config and cellular_0's egress chain) and predicts
-// the on-air length with onAirSMSLength.
-func (s *Server) smsOnAirLength(number, text string) (onAir, limit int, err error) {
+// the on-air length with onAirSMSLength. A plain send is the text itself.
+func (s *Server) smsOnAirLength(number, text string, plain bool) (onAir, limit int, err error) {
 	var cfg gateway.CellularConfig
 	if s.gwManager != nil {
 		if cg, ok := s.gwManager.GatewayByInterfaceID("cellular_0").(*gateway.CellularGateway); ok && cg != nil {
 			cfg = cg.Config()
 		}
 	}
+	if plain {
+		if cfg.MaxSMSSegments <= 0 {
+			return 0, 0, nil
+		}
+		return len(text), 160 * cfg.MaxSMSSegments, nil
+	}
 	var egress func([]byte) ([]byte, error)
 	if s.transforms != nil && s.db != nil {
-		if iface, gerr := s.db.GetInterface("cellular_0"); gerr == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
-			chain := iface.EgressTransforms
+		chain := ""
+		if iface, gerr := s.db.GetInterface("cellular_0"); gerr == nil {
+			chain = iface.EgressTransforms
+		}
+		if chain != "" && chain != "[]" {
 			egress = func(b []byte) ([]byte, error) { return s.transforms.ApplyEgress(b, chain) }
+		}
+		if onAir, limit, sealed, err := sealedSMSLength(cfg, s.transforms, chain, number, text); sealed || err != nil {
+			return onAir, limit, err
 		}
 	}
 	return onAirSMSLength(cfg, egress, number, text)
+}
+
+// sealedSMSLength predicts the on-air length of text to a number with a chat
+// key of its own, or the wildcard's: sealed with it whatever the chain says,
+// as the delivery worker seals it. sealed is false when no chat key applies
+// (none, a plaintext peer, or no segment limit to check against).
+func sealedSMSLength(cfg gateway.CellularConfig, tp *engine.TransformPipeline, chain, number, text string) (onAir, limit int, sealed bool, err error) {
+	if tp == nil || cfg.MaxSMSSegments <= 0 || cfg.IsPlaintextPeer(number) {
+		return 0, 0, false, nil
+	}
+	limit = 160 * cfg.MaxSMSSegments
+	hexKey, _, found, err := tp.SMSChatKey(number)
+	if err != nil || !found {
+		return 0, limit, false, err
+	}
+	wire, err := tp.SealChatSMS([]byte(text), hexKey, chain)
+	if err != nil {
+		return 0, limit, false, err
+	}
+	return len(wire), limit, true, nil
 }
 
 // onAirSMSLength predicts how long text is on air to number, with the same

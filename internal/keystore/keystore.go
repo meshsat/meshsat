@@ -3,7 +3,9 @@ package keystore
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +29,7 @@ type KeyMeta struct {
 	KeyPreview  string  `json:"key_preview"`
 	ExpiresAt   *string `json:"expires_at,omitempty"`
 	CreatedAt   string  `json:"created_at"`
+	Label       string  `json:"label,omitempty"` // hub-rotated-v<n>, "Bridge <type> (<hash>)", or what a person gave
 }
 
 // KeyStore manages envelope-encrypted channel keys with master key wrapping.
@@ -168,6 +171,13 @@ func (ks *KeyStore) RevokeKey(channelType, address string) error {
 // StoreKey imports an externally-provided raw key (e.g. from Hub key_rotate command).
 // If a key already exists for this channel+address, a new version is created. [MESHSAT-447]
 func (ks *KeyStore) StoreKey(channelType, address string, rawKey []byte) (int, error) {
+	return ks.StoreKeyLabelled(channelType, address, rawKey, "")
+}
+
+// StoreKeyLabelled is StoreKey with the label that says where the key came
+// from, as MeshSat Android labels its conversation keys: "" when a person set
+// it, hub-rotated-v<n> from the Hub, "Bridge <type> (<hash>)" from a bundle.
+func (ks *KeyStore) StoreKeyLabelled(channelType, address string, rawKey []byte, label string) (int, error) {
 	if len(rawKey) != aesKeyLen {
 		return 0, fmt.Errorf("key must be %d bytes, got %d", aesKeyLen, len(rawKey))
 	}
@@ -186,13 +196,44 @@ func (ks *KeyStore) StoreKey(channelType, address string, rawKey []byte) (int, e
 	}
 	version := ks.db.MaxKeyVersion(channelType, address) + 1
 
-	if err := ks.db.InsertKeyBundle(channelType, address, wrapped, version); err != nil {
+	if err := ks.db.InsertKeyBundleLabelled(channelType, address, wrapped, version, label); err != nil {
 		return 0, fmt.Errorf("store key: %w", err)
 	}
 
 	log.Info().Str("channel", channelType).Str("address", address).Int("version", version).
-		Msg("keystore: key imported from Hub")
+		Str("label", label).Msg("keystore: key imported")
 	return version, nil
+}
+
+// LookupKey returns the active key of a channel+address with its version and
+// label. found is false when there is none (never set, or revoked); an error
+// is a key that exists but cannot be read, or a database that cannot answer.
+func (ks *KeyStore) LookupKey(channelType, address string) (rawKey []byte, version int, label string, found bool, err error) {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+
+	kb, err := ks.db.GetActiveKeyBundle(channelType, address)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, "", false, nil
+	}
+	if err != nil {
+		return nil, 0, "", false, fmt.Errorf("look up key: %w", err)
+	}
+	raw, err := unwrapKey(ks.masterKey, kb.EncryptedKey)
+	if err != nil {
+		return nil, 0, "", false, fmt.Errorf("unwrap key: %w", err)
+	}
+	return raw, kb.KeyVersion, kb.Label, true, nil
+}
+
+// ChatKeyHex is the key of one chat as hex, for the engine's per-chat SMS
+// keys (sms:<number>, sms:*). Implements engine.ChatKeyResolver.
+func (ks *KeyStore) ChatKeyHex(channelType, address string) (string, bool, error) {
+	raw, _, _, found, err := ks.LookupKey(channelType, address)
+	if err != nil || !found {
+		return "", false, err
+	}
+	return hex.EncodeToString(raw), true, nil
 }
 
 // ResolveKeyHex resolves a key_ref string ("channel_type:address") to a hex-encoded
@@ -236,6 +277,7 @@ func (ks *KeyStore) ListKeys() ([]KeyMeta, error) {
 			KeyPreview:  preview,
 			ExpiresAt:   kb.ExpiresAt,
 			CreatedAt:   kb.CreatedAt,
+			Label:       kb.Label,
 		}
 	}
 	return metas, nil

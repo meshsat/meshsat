@@ -65,7 +65,7 @@ func (g *CellularGateway) SetPacketSink(sink PacketSink, iface string) {
 
 // recordSMS hands one sent SMS to the packet feed. Text is the on-air
 // text for plaintext and OOB frames; ciphertext stays out of the feed.
-func (g *CellularGateway) recordSMS(number, text string, msg *transport.MeshMessage) {
+func (g *CellularGateway) recordSMS(number, text string, msg *transport.MeshMessage, encrypted bool) {
 	g.packetMu.RLock()
 	sink, iface := g.packetSink, g.packetIface
 	g.packetMu.RUnlock()
@@ -81,7 +81,7 @@ func (g *CellularGateway) recordSMS(number, text string, msg *transport.MeshMess
 		Bytes:  len(text),
 		MsgRef: msg.MsgRef,
 	}
-	if !msg.Encrypted {
+	if !encrypted {
 		rec.Text = CapPacketText(text)
 	}
 	sink(rec)
@@ -272,6 +272,20 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 		// RawText: an OOB management frame, already GSM-safe base32, sent
 		// verbatim so the peer's classifier finds the sentinel. [MESHSAT-756]
 		text = msg.DecodedText
+		if msg.AsWritten && g.smsTextMode() {
+			// A plain text (an SOS or an alarm test to an emergency contact)
+			// skips the chat key, the chain and the attribution, but not the
+			// modem's limits. A kit's USB modem takes the text in AT text
+			// mode, which carries the GSM 03.38 basic set only, and the
+			// Huawei E220 fails the whole SMS (CMS ERROR 305) on an
+			// extension-table character; so the text gets the clean-up every
+			// other SMS gets: "[" becomes "(", "€" "EUR", "±" "+/-", a
+			// character with no stand-in "?". Changing a character is the
+			// lesser harm: the modem cannot carry it, and the words still
+			// reach the contact. ModemManager (the phones) encodes any text
+			// itself, so there the text goes exactly as written.
+			text = SanitizeSMSText(text)
+		}
 	} else if msg.From == 0 {
 		// Written on this kit (the dashboard, an operator), not relayed from
 		// the mesh: the text goes as typed, with no "[MeshSat] sender:"
@@ -306,11 +320,24 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 
 	var firstErr error
 	for _, number := range destinations {
-		if err := g.cell.SendSMS(ctx, number, text); err != nil {
+		onAir, words, encrypted := text, history, msg.Encrypted
+		if sealed, ok := msg.SMSTexts[number]; ok {
+			// Sealed with this chat's own key by the delivery worker: the
+			// ciphertext on air, the words in the history.
+			onAir, encrypted = sealed, true
+			if len(onAir) > maxLen {
+				onAir = onAir[:maxLen]
+			}
+			words = sealed
+			if msg.PlainText != "" {
+				words = msg.PlainText
+			}
+		}
+		if err := g.cell.SendSMS(ctx, number, onAir); err != nil {
 			log.Error().Err(err).Str("to", number).Msg("cellular: SMS send failed")
 			g.errors.Add(1)
 			if g.db != nil {
-				g.db.InsertSMSMessage("tx", number, history, "failed", time.Now().Unix())
+				g.db.InsertSMSMessageEncrypted("tx", number, words, "failed", time.Now().Unix(), encrypted)
 			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("SMS to %s: %w", number, err)
@@ -318,9 +345,9 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 			continue
 		}
 		if g.db != nil {
-			g.db.InsertSMSMessage("tx", number, history, "sent", time.Now().Unix())
+			g.db.InsertSMSMessageEncrypted("tx", number, words, "sent", time.Now().Unix(), encrypted)
 		}
-		g.recordSMS(number, text, msg)
+		g.recordSMS(number, onAir, msg, encrypted)
 	}
 
 	g.msgsOut.Add(1)
@@ -330,6 +357,14 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 		g.emit("cellular", fmt.Sprintf("SMS sent to %d destinations", len(destinations)))
 	}
 	return firstErr
+}
+
+// smsTextMode reports whether the modem takes SMS in AT text mode, where only
+// the GSM basic set gets through (transport.SMSTextModeModem): the kits' USB
+// modems, not ModemManager.
+func (g *CellularGateway) smsTextMode() bool {
+	m, ok := g.cell.(transport.SMSTextModeModem)
+	return ok && m.SMSTextMode()
 }
 
 // sendWorker dequeues messages from outCh (legacy/non-dispatcher callers).

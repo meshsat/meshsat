@@ -1513,13 +1513,22 @@ type SMSMessageRecord struct {
 	Error     string `json:"error,omitempty"`
 	Timestamp int64  `json:"timestamp"`
 	CreatedAt string `json:"created_at"`
+	// Encrypted: the SMS went or came sealed (a chat key or the link's
+	// encryption) and Text is its words, for the chat bubble's lock.
+	Encrypted bool `json:"encrypted"`
 }
 
 // InsertSMSMessage persists an SMS message (sent or received).
 func (db *DB) InsertSMSMessage(direction, phone, text, status string, timestamp int64) (int64, error) {
+	return db.InsertSMSMessageEncrypted(direction, phone, text, status, timestamp, false)
+}
+
+// InsertSMSMessageEncrypted persists an SMS message and whether it went or
+// came sealed.
+func (db *DB) InsertSMSMessageEncrypted(direction, phone, text, status string, timestamp int64, encrypted bool) (int64, error) {
 	result, err := db.Exec(
-		`INSERT INTO sms_messages (direction, phone, text, status, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		direction, phone, text, status, timestamp)
+		`INSERT INTO sms_messages (direction, phone, text, status, timestamp, encrypted) VALUES (?, ?, ?, ?, ?, ?)`,
+		direction, phone, text, status, timestamp, encrypted)
 	if err != nil {
 		return 0, err
 	}
@@ -1543,7 +1552,7 @@ func (db *DB) GetSMSMessages(limit, offset int) ([]SMSMessageRecord, error) {
 		limit = 50
 	}
 	rows, err := db.Query(
-		`SELECT id, direction, phone, text, status, error, timestamp, created_at
+		`SELECT id, direction, phone, text, status, error, timestamp, created_at, encrypted
 		 FROM sms_messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
@@ -1552,7 +1561,7 @@ func (db *DB) GetSMSMessages(limit, offset int) ([]SMSMessageRecord, error) {
 	var msgs []SMSMessageRecord
 	for rows.Next() {
 		var m SMSMessageRecord
-		if err := rows.Scan(&m.ID, &m.Direction, &m.Phone, &m.Text, &m.Status, &m.Error, &m.Timestamp, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Direction, &m.Phone, &m.Text, &m.Status, &m.Error, &m.Timestamp, &m.CreatedAt, &m.Encrypted); err != nil {
 			return nil, err
 		}
 		msgs = append(msgs, m)
@@ -1768,13 +1777,29 @@ type KeyBundleRow struct {
 	Status       string  `db:"status"`
 	ExpiresAt    *string `db:"expires_at"`
 	CreatedAt    string  `db:"created_at"`
+	Label        string  `db:"label"` // "" set by a person, hub-rotated-v<n>, "Bridge <type> (<hash>)"
 }
+
+// keyBundleColumns names the key_bundles columns a KeyBundleRow holds. The
+// queries that fill one list them instead of SELECT *: sqlx maps strictly, so
+// a column the struct does not know fails the whole read, and every key
+// lookup failed once a migration had added one the binary did not know. A
+// binary released before this list (SELECT * on v58's label) still fails on
+// a database that has v58; this one keeps working when a later migration
+// adds a column.
+const keyBundleColumns = `id, channel_type, address, encrypted_key, key_version, status, expires_at, created_at, label`
 
 // InsertKeyBundle stores a wrapped key.
 func (db *DB) InsertKeyBundle(channelType, address string, encryptedKey []byte, version int) error {
+	return db.InsertKeyBundleLabelled(channelType, address, encryptedKey, version, "")
+}
+
+// InsertKeyBundleLabelled stores a wrapped key with the label that says
+// where it came from.
+func (db *DB) InsertKeyBundleLabelled(channelType, address string, encryptedKey []byte, version int, label string) error {
 	_, err := db.Exec(
-		`INSERT INTO key_bundles (channel_type, address, encrypted_key, key_version) VALUES (?, ?, ?, ?)`,
-		channelType, address, encryptedKey, version)
+		`INSERT INTO key_bundles (channel_type, address, encrypted_key, key_version, label) VALUES (?, ?, ?, ?, ?)`,
+		channelType, address, encryptedKey, version, label)
 	return err
 }
 
@@ -1782,7 +1807,7 @@ func (db *DB) InsertKeyBundle(channelType, address string, encryptedKey []byte, 
 func (db *DB) GetActiveKeyBundle(channelType, address string) (*KeyBundleRow, error) {
 	var row KeyBundleRow
 	err := db.Get(&row,
-		`SELECT * FROM key_bundles WHERE channel_type = ? AND address = ? AND status = 'active'
+		`SELECT `+keyBundleColumns+` FROM key_bundles WHERE channel_type = ? AND address = ? AND status = 'active'
 		 ORDER BY key_version DESC LIMIT 1`, channelType, address)
 	if err != nil {
 		return nil, err
@@ -1826,7 +1851,7 @@ func (db *DB) RevokeKeyBundle(channelType, address string) error {
 // ListKeyBundles returns all key bundles (for admin listing).
 func (db *DB) ListKeyBundles() ([]KeyBundleRow, error) {
 	var rows []KeyBundleRow
-	err := db.Select(&rows, `SELECT * FROM key_bundles ORDER BY channel_type, address, key_version DESC`)
+	err := db.Select(&rows, `SELECT `+keyBundleColumns+` FROM key_bundles ORDER BY channel_type, address, key_version DESC`)
 	return rows, err
 }
 

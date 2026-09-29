@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/rs/zerolog/log"
@@ -39,6 +41,9 @@ type TransformPipeline struct {
 	keyResolver        KeyResolver        // resolves "channel_type:address" key_ref → hex key [MESHSAT-447]
 	contactKeyResolver ContactKeyResolver // resolves "contact:<uuid>" key_ref → hex key [MESHSAT-537]
 	fecMetrics         FECMetrics
+	// chatKeys finds the per-chat SMS keys, sms:<number> and sms:*
+	// (chatkeys.go). Set once the keystore is up, while workers may run.
+	chatKeys atomic.Pointer[chatKeySource]
 }
 
 // FECStats returns the FEC encode/decode metrics.
@@ -191,34 +196,17 @@ func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byt
 		return compressed, nil
 	case "msvqsc":
 		// Lossy semantic compression via multi-stage residual VQ.
-		if tp.msvqsc == nil || !tp.msvqsc.IsReady() {
+		encoded, err := tp.msvqscEncode(t, data)
+		if errors.Is(err, errMSVQSCUnavailable) {
 			log.Warn().Msg("transform: msvqsc sidecar not available, falling back to smaz2")
 			dict := compress.DictMeshtastic
 			return compress.Compress(data, dict), nil
 		}
-		maxStages := 0 // default: use all stages
-		if s := t.Params["stages"]; s != "" && s != "auto" {
-			for _, c := range s {
-				if c >= '0' && c <= '9' {
-					maxStages = maxStages*10 + int(c-'0')
-				}
-			}
-		} else if s == "auto" {
-			channelType := t.Params["channel"]
-			maxStages = compress.SuggestStages(channelType)
-		}
-		encoded, stages, fidelity, err := tp.msvqsc.Encode(data, maxStages)
 		if err != nil {
 			log.Warn().Err(err).Msg("transform: msvqsc encode failed, falling back to smaz2")
 			dict := compress.DictMeshtastic
 			return compress.Compress(data, dict), nil
 		}
-		log.Debug().
-			Int("original", len(data)).
-			Int("encoded", len(encoded)).
-			Int("stages", stages).
-			Float32("fidelity", fidelity).
-			Msg("transform: msvqsc encoded (lossy)")
 		return encoded, nil
 	case "fec":
 		ds, ps, il, ild := resolveFECParams(t.Params)
@@ -462,6 +450,41 @@ func (tp *TransformPipeline) resolveEncryptKey(t TransformSpec) (string, error) 
 		return "", fmt.Errorf("encrypt transform uses key_ref but no KeyResolver configured")
 	}
 	return tp.keyResolver.ResolveKeyHex(ref)
+}
+
+// errMSVQSCUnavailable: no MSVQ-SC encoder answers (its sidecar is not
+// configured or not ready).
+var errMSVQSCUnavailable = errors.New("msvqsc sidecar not available")
+
+// msvqscEncode runs one msvqsc step on the sidecar's encoder. It fails
+// instead of falling back: applyTransform compresses with smaz2 then, and a
+// chat SMS goes as its text, as MeshSat Android sends it (chatkeys.go).
+func (tp *TransformPipeline) msvqscEncode(t TransformSpec, data []byte) ([]byte, error) {
+	if tp.msvqsc == nil || !tp.msvqsc.IsReady() {
+		return nil, errMSVQSCUnavailable
+	}
+	maxStages := 0 // default: use all stages
+	if s := t.Params["stages"]; s != "" && s != "auto" {
+		for _, c := range s {
+			if c >= '0' && c <= '9' {
+				maxStages = maxStages*10 + int(c-'0')
+			}
+		}
+	} else if s == "auto" {
+		channelType := t.Params["channel"]
+		maxStages = compress.SuggestStages(channelType)
+	}
+	encoded, stages, fidelity, err := tp.msvqsc.Encode(data, maxStages)
+	if err != nil {
+		return nil, err
+	}
+	log.Debug().
+		Int("original", len(data)).
+		Int("encoded", len(encoded)).
+		Int("stages", stages).
+		Float32("fidelity", fidelity).
+		Msg("transform: msvqsc encoded (lossy)")
+	return encoded, nil
 }
 
 // encryptAESGCM encrypts data using AES-256-GCM with the given hex-encoded key.

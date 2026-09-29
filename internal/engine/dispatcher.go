@@ -584,8 +584,17 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		return 0
 	}
 
+	// An SMS one of its chat's keys opens (sms:<from>, then sms:*) goes on as
+	// its words; the link's chain reads the rest, as before.
+	chatOpened := false
+	if len(payload) > 0 && !msg.Plain {
+		if words, ok := d.OpenChatSMS(sourceInterface, msg.From, string(payload)); ok {
+			payload, msg.Text, chatOpened = []byte(words), words, true
+		}
+	}
+
 	// Strip protocol version byte before applying ingress transforms.
-	if len(payload) > 0 {
+	if len(payload) > 0 && !chatOpened {
 		protoVer, stripped := codec.StripVersionByte(payload)
 		codec.LogVersionInfo(protoVer, sourceInterface)
 		payload = stripped
@@ -594,7 +603,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 	// Apply ingress transforms to decrypt/decompress incoming payload.
 	// A message flagged Plain (SMS from a plaintext peer) is already in the
 	// clear and skips them. [MESHSAT-962]
-	if d.transforms != nil && len(payload) > 0 && !msg.Plain {
+	if d.transforms != nil && len(payload) > 0 && !msg.Plain && !chatOpened {
 		iface, err := d.db.GetInterface(sourceInterface)
 		if err == nil && iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
 			decoded, err := d.transforms.ApplyIngress(payload, iface.IngressTransforms)
@@ -989,7 +998,7 @@ func (d *Dispatcher) QueueDirectSend(interfaceID, text, precedence string) (int6
 type DirectSendOptions struct {
 	Precedence  string
 	Destination string // phone number, callsign-SSID or !nodeid; empty = interface default
-	Class       string // database.DeliveryClassMessage (default), DeliveryClassOOB or DeliveryClassHubUplink
+	Class       string // database.DeliveryClassMessage (default), DeliveryClassOOB, DeliveryClassHubUplink or DeliveryClassPlain (the text exactly as given)
 	MaxRetries  int    // 0 = default (3)
 	Payload     []byte // binary payload; text is then only the preview [MESHSAT-963]
 }
@@ -1409,24 +1418,64 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	// any non-GSM character appears.
 	encrypted := false
 	del.PlainPreview = del.TextPreview
+	// A direct SMS is its whole text, not the 200-byte preview: that is what
+	// POST /api/cellular/sms/send checked against the kit's SMS size, and
+	// what is sealed with a chat key, encrypted by the chain or sent in the
+	// clear, and what the SMS history keeps.
+	isCellular := strings.HasPrefix(w.channelID, "cellular")
+	wholeText, direct := "", false
+	if isCellular {
+		wholeText, direct = directSendText(del)
+	}
+	if direct {
+		del.PlainPreview = wholeText
+	}
 	// OOB frames skip interface transforms: they carry their own AEAD and
 	// interface-level encryption would hide the sentinel from a peer that
 	// has the management key but not the interface key. [MESHSAT-756]
 	// SMS to a plaintext peer (the Hub) goes out in the clear as well:
 	// the Hub cannot decrypt the kits' shared key and relays plain text.
 	// [MESHSAT-962]
-	if w.transforms != nil && !database.DeliveryClassBypassesPolicy(del.Class) && !w.plaintextSMSDelivery(del) {
+	// A plain delivery (an SOS or alarm test to an emergency contact) goes
+	// exactly as given: no chat key, no chain.
+	transformable := w.transforms != nil && !database.DeliveryClassVerbatim(del.Class) && !w.plaintextSMSDelivery(del)
+
+	// An SMS to a chat with its own key (sms:<number>, else sms:*) is sealed
+	// with that key whatever the link's chain says, as MeshSat Android does;
+	// the chain is for the numbers without one. A key that cannot seal gives
+	// up with the reason, as a failed encrypt step does. [MESHSAT-1411]
+	var chatTexts map[string]string
+	chatAll := false
+	if transformable && isCellular {
+		texts, first, all, cErr := w.sealChatSMS(del)
+		if cErr != nil {
+			log.Error().Err(cErr).Str("interface", w.channelID).Int64("id", del.ID).Msg("chat key could not seal the SMS, delivery not sent")
+			w.dropNotSent(del, "not sent: encryption failed: "+cErr.Error())
+			return
+		}
+		chatTexts, chatAll = texts, all
+		if chatAll {
+			encrypted = true
+			del.Payload = []byte(first)
+			del.TextPreview = first
+		}
+	}
+
+	if transformable && !chatAll {
 		iface, err := w.db.GetInterface(w.channelID)
 		if err == nil && iface.EgressTransforms != "" && iface.EgressTransforms != "[]" {
 			encrypted = ChainEncrypts(iface.EgressTransforms)
-			isCellular := strings.HasPrefix(w.channelID, "cellular")
 
 			applyToData := func(data []byte) ([]byte, error) {
 				return w.transforms.ApplyEgress(data, iface.EgressTransforms)
 			}
 
 			var inputData []byte
-			if isCellular && encrypted && del.TextPreview != "" {
+			if isCellular && encrypted && direct {
+				// A direct SMS: its whole text, as the API checked it and as a
+				// chat key seals it.
+				inputData = []byte(wholeText)
+			} else if isCellular && encrypted && del.TextPreview != "" {
 				// For cellular SMS with encryption: encrypt ONLY the text preview
 				// (human-readable message), not the full JSON payload.
 				// The MeshSat Android app decrypts to get plain text, not JSON.
@@ -1477,6 +1526,19 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 					del.TextPreview = string(transformed)
 				}
 			}
+		}
+	}
+
+	// Sealed or encrypted whole, a direct SMS that does not fit the kit's SMS
+	// size is not sent at all: the gateway would cut it, and a cut ciphertext
+	// cannot be read. POST /api/cellular/sms/send refuses such a text up
+	// front; this stops the senders that do not check (POST
+	// /api/messages/send, the Hub's commands).
+	if direct {
+		if reason := w.sealedSMSTooLong(del, encrypted, chatTexts); reason != "" {
+			log.Warn().Str("interface", w.channelID).Int64("id", del.ID).Str("reason", reason).Msg("sealed SMS too long for the kit, delivery not sent")
+			w.dropNotSent(del, reason)
+			return
 		}
 	}
 
@@ -1540,7 +1602,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		}
 	} else {
 		// Gateway delivery: find the gateway and forward
-		deliveryErr = w.forwardToGateway(ctx, del, encrypted)
+		deliveryErr = w.forwardToGatewaySealed(ctx, del, encrypted, chatTexts)
 	}
 
 	if deliveryErr != nil {
@@ -1550,7 +1612,29 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	}
 }
 
+// dropNotSent gives a delivery up before it is sent, with the reason in its
+// row and in the audit log: for what no retry can put right (a chat key that
+// cannot seal, a sealed SMS too long for the kit).
+func (w *DeliveryWorker) dropNotSent(del database.MessageDelivery, reason string) {
+	if err := w.db.SetDeliveryStatus(del.ID, "dead", reason, ""); err != nil {
+		log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery dead")
+	}
+	if w.signing != nil {
+		ifacePtr := &w.channelID
+		dir := "egress"
+		delID := del.ID
+		w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, reason)
+	}
+}
+
 func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.MessageDelivery, encrypted bool) error {
+	return w.forwardToGatewaySealed(ctx, del, encrypted, nil)
+}
+
+// forwardToGatewaySealed is forwardToGateway with the SMS texts sealed per
+// number with a chat key (sealChatSMS), which the cellular gateway sends to
+// those numbers instead of the delivery's text.
+func (w *DeliveryWorker) forwardToGatewaySealed(ctx context.Context, del database.MessageDelivery, encrypted bool, chatTexts map[string]string) error {
 	if w.gwProv == nil {
 		return fmt.Errorf("no gateway provider")
 	}
@@ -1561,7 +1645,8 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 		PortNumName: "TEXT_MESSAGE_APP",
 		DecodedText: del.TextPreview,
 	}
-	if len(del.Payload) > 0 {
+	plain := del.Class == database.DeliveryClassPlain
+	if len(del.Payload) > 0 && !plain {
 		var fullMsg transport.MeshMessage
 		if err := json.Unmarshal(del.Payload, &fullMsg); err == nil {
 			msg = &fullMsg
@@ -1571,12 +1656,24 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 			}
 		}
 	}
+	if plain && len(del.Payload) > 0 {
+		// The whole text as it was given (never read as a JSON envelope),
+		// not the 200-byte preview.
+		msg.DecodedText = string(del.Payload)
+	} else if whole, ok := directSendText(del); ok && strings.HasPrefix(w.channelID, "cellular") {
+		// A direct SMS goes whole as well; once sealed or encrypted, its
+		// payload and its preview are both the on-air text.
+		msg.DecodedText = whole
+	}
 	msg.Encrypted = encrypted
 
 	// Per-row destination and class. A destination wins over rule and
-	// gateway defaults; class oob sends the text verbatim. [MESHSAT-756]
+	// gateway defaults; classes oob and plain send the text verbatim
+	// (plain only mapped where a modem cannot carry a character, AsWritten).
+	// [MESHSAT-756]
 	msg.Destination = del.Destination
-	msg.RawText = database.DeliveryClassBypassesPolicy(del.Class)
+	msg.RawText = database.DeliveryClassVerbatim(del.Class)
+	msg.AsWritten = plain
 	if del.Class == database.DeliveryClassHubUplink && !strings.HasPrefix(w.channelID, "cellular") {
 		// Satellite: the frame goes as raw bytes; the preview is a label.
 		// Over SMS the text IS the frame (base64) and RawText sends it bare.
@@ -1588,6 +1685,9 @@ func (w *DeliveryWorker) forwardToGateway(ctx context.Context, del database.Mess
 	msg.MsgRef = del.MsgRef // feed correlation only, never serialised [MESHSAT-826]
 	msg.PlainText = del.PlainPreview
 	msg.Precedence = del.Precedence
+	if len(chatTexts) > 0 {
+		msg.SMSTexts = chatTexts
+	}
 	if del.Destination != "" && strings.HasPrefix(w.channelID, "cellular") {
 		msg.SMSDestinations = []string{del.Destination}
 	}

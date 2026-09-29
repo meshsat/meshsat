@@ -129,28 +129,57 @@ func (s *Server) handleSimulateMeshRx(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted", "from": fmt.Sprintf("!%08x", from), "text": req.Text})
 }
 
+// sendMessageRequest is the body of POST /api/messages/send: the mesh send
+// request, and whether a gateway send goes exactly as given.
+type sendMessageRequest struct {
+	transport.SendRequest
+	// Plain sends the text exactly as given: no chat key, no transform chain
+	// (no encryption, compression or base64), no attribution; the SMS
+	// history keeps it with encrypted false. For an SOS or an alarm test to
+	// an emergency contact, which MeshSat Android sends as plain text
+	// whatever its encryption settings. A kit's USB modem (AT text mode)
+	// still gets the GSM clean-up, since it cannot carry every character;
+	// ModemManager sends the text as it is. A plain text with a control
+	// character other than a line break is refused (plainTextError). Default
+	// false: the link's own processing, as before. A mesh send (no gateway)
+	// goes as given anyway.
+	Plain bool `json:"plain"`
+}
+
 // handleSendMessage sends a text message via the mesh transport or a satellite gateway.
 // @Summary Send a message
 // @Description Sends a text message through the Meshtastic radio or a satellite gateway.
 // @Description Set gateway to "iridium" (9603 SBD), "iridium_imt" (9704 IMT), "mqtt", "cellular", or "webhook".
 // @Description A text sent on the mesh also goes to TAK as GeoChat from this Bridge when the TAK gateway runs.
+// @Description An SMS (gateway "cellular") to a number with a chat key of its own, or the wildcard's (PUT /api/keys/sms/{number}), goes sealed with that key as MeshSat Android seals it, whether or not the link encrypts.
+// @Description plain true sends the text exactly as given (an SOS or an alarm test to an emergency contact): no chat key, no transform chain (no encryption, compression or base64), no attribution, and the SMS history keeps it with encrypted false. A kit's USB modem (AT text mode) cannot carry every character, so there it still gets the GSM clean-up ("[" becomes "(", "€" "EUR", "±" "+/-"); ModemManager on a phone sends it exactly. A plain text with a control character other than a line break (\n, \r) is refused with 400. Default false, the link's own processing.
 // @Tags messages
-// @Param body body transport.SendRequest true "Message to send"
-// @Success 200 {object} map[string]string "success"
-// @Failure 400 {object} map[string]string "error"
+// @Accept json
+// @Produce json
+// @Param body body sendMessageRequest true "Message to send"
+// @Success 200 {object} map[string]interface{} "sent (mesh), or queued with delivery_id, msg_ref, precedence and plain (gateway)"
+// @Failure 400 {object} map[string]string "text missing, a plain text with a control character, a bad precedence or an unknown gateway"
 // @Failure 409 {object} map[string]string "the mesh is switched off"
+// @Failure 503 {object} map[string]string "no dispatcher, gateway manager or mesh transport"
 // @Router /api/messages/send [post]
 func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	s.touchOperatorActivity()
 
-	var req transport.SendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body sendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
+	req := body.SendRequest
 	if req.Text == "" {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
+	}
+	if body.Plain {
+		if err := plainTextError(req.Text); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Normalise precedence (STANAG 4406 Edition 2). Accepts full names and
@@ -181,7 +210,11 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		// `to` names a gateway-side address (phone number for cellular,
 		// CALL-SSID for APRS); empty keeps the interface default. The TTC
 		// composer uses it to text the Hub instead of the peer kit. [MESHSAT-962]
-		delID, msgRef, err := s.dispatcher.QueueDirectSendTo(ifaceID, req.Text, engine.DirectSendOptions{Precedence: string(precedence), Destination: strings.TrimSpace(req.To)})
+		opts := engine.DirectSendOptions{Precedence: string(precedence), Destination: strings.TrimSpace(req.To)}
+		if body.Plain {
+			opts.Class = database.DeliveryClassPlain
+		}
+		delID, msgRef, err := s.dispatcher.QueueDirectSendTo(ifaceID, req.Text, opts)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "queue failed: "+err.Error())
 			return
@@ -192,6 +225,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			"delivery_id": delID,
 			"msg_ref":     msgRef,
 			"precedence":  string(precedence),
+			"plain":       body.Plain,
 		})
 		return
 	}

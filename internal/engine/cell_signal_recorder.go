@@ -194,7 +194,11 @@ func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
 	// encrypted interface, or a modem with no processor wired, keeps the
 	// raw text. Processing is untouched: the gateway path applies the
 	// same transforms on its own copy. [MESHSAT-822]
-	text := r.proc.DecodeIngress(smsHistoryIface, ev.Message)
+	// The sender's chat key, when it has one, opens the SMS first.
+	text, encrypted := ev.Message, false
+	if r.proc != nil {
+		text, encrypted = r.proc.DecodeSMS(smsHistoryIface, sender, ev.Message)
+	}
 
 	// Dedup: skip if identical SMS (same sender+text) was inserted in the last 60 seconds.
 	// Modems can re-send +CMTI if AT+CMGD fails or the URC is retransmitted.
@@ -205,10 +209,10 @@ func (r *CellSignalRecorder) handleSMSReceived(ev transport.CellEvent) {
 		return
 	}
 
-	if _, err := r.db.InsertSMSMessage("rx", sender, text, "delivered", time.Now().Unix()); err != nil {
+	if _, err := r.db.InsertSMSMessageEncrypted("rx", sender, text, "delivered", time.Now().Unix(), encrypted); err != nil {
 		log.Warn().Err(err).Msg("cellular event recorder: SMS insert failed")
 	}
-	log.Info().Str("sender", sender).Bool("decoded", text != ev.Message).Msg("cellular: inbound SMS persisted")
+	log.Info().Str("sender", sender).Bool("decoded", text != ev.Message).Bool("encrypted", encrypted).Msg("cellular: inbound SMS persisted")
 
 	// Live packet feed: bytes are the on-air text, text the decoded copy.
 	// [MESHSAT-826]

@@ -2,11 +2,14 @@ package api
 
 import (
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -187,7 +190,7 @@ func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 
 // handleListKeys returns all key metadata (no raw key material).
 // @Summary List managed keys
-// @Description Returns metadata for all channel encryption keys (keys are redacted)
+// @Description Returns metadata for all channel encryption keys (keys are redacted), each with the label that says where it came from: none when set here, hub-rotated-v<n> from the Hub, "Bridge <type> (<hash>)" from a bundle
 // @Tags keys
 // @Success 200 {array} keystore.KeyMeta
 // @Router /api/keys [get]
@@ -208,12 +211,14 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 
 // handleRevokeKey revokes all keys for a channel+address.
 // @Summary Revoke channel key
-// @Description Immediately invalidates all key versions for a channel+address
+// @Description Immediately invalidates all key versions for a channel+address. For an SMS chat's key (sms:<number>, or sms:* for every number) SMS to and from that number fall back to the wildcard key, then to the SMS link's own chain. The address may be URL-escaped (%2B31612345678) or not (+31612345678); "cellular" is the same key space as "sms".
 // @Tags keys
+// @Produce json
 // @Param type path string true "Channel type (sms, mesh, iridium, etc)"
-// @Param address path string true "Address (phone number, node ID, etc)"
+// @Param address path string true "Address (phone number with its +, node ID, * for every SMS number, etc)"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
 // @Router /api/keys/{type}/{address} [delete]
 func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	if s.keyStore == nil {
@@ -222,14 +227,183 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channelType := chi.URLParam(r, "type")
-	address := chi.URLParam(r, "address")
+	address, err := keyAddress(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if err := s.keyStore.RevokeKey(channelType, address); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// "cellular" names the sms key space (CanonicalChannelType), where
+	// PUT stores it.
+	if canonical, ok := keystore.CanonicalChannelType(channelType); ok && canonical != channelType {
+		if err := s.keyStore.RevokeKey(canonical, address); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// chatKeyMaxLabel bounds the label a key is given over the API.
+const chatKeyMaxLabel = 64
+
+// chatKeyResponse is one chat's key as GET /api/keys/{type}/{address}
+// returns it.
+type chatKeyResponse struct {
+	Key     string `json:"key"`     // 64 hex characters, lower case
+	Version int    `json:"version"` // the keystore's version of this address's key
+	Label   string `json:"label"`   // "" set here, hub-rotated-v<n> from the Hub, "Bridge <type> (<hash>)" from a bundle
+}
+
+// chatKeyType is the keystore channel type of a chat key read or set over
+// the API: every type the keystore knows but mgmt, whose keys belong to the
+// OOB peers (/api/oob/peers) and are registered with them.
+func chatKeyType(raw string) (string, bool) {
+	ct, ok := keystore.CanonicalChannelType(raw)
+	if !ok || ct == "mgmt" {
+		return "", false
+	}
+	return ct, true
+}
+
+// keyAddress is the {address} of /api/keys/{type}/{address} as written. chi
+// hands over the path as the client sent it, so "%2B31612345678" arrives
+// escaped and "+31612345678" as it is; in a path "+" is a plus, never a space.
+func keyAddress(r *http.Request) (string, error) {
+	address, err := url.PathUnescape(chi.URLParam(r, "address"))
+	if err != nil {
+		return "", fmt.Errorf("address: %w", err)
+	}
+	if strings.TrimSpace(address) == "" {
+		return "", fmt.Errorf("address is required")
+	}
+	return address, nil
+}
+
+// validChatKey reports whether k is an AES-256 key in hex: exactly 64 of
+// 0-9, a-f, A-F, as MeshSat Android's chat key sheet accepts.
+func validChatKey(k string) bool {
+	if len(k) != 64 {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// handleGetChatKey returns the key kept for one chat.
+// @Summary Get the key of one chat
+// @Description Returns the active AES-256 key of a channel type and address: the key of an SMS chat (sms:<number>, or sms:* for every number without one of its own), a mesh node's or the satellite chat's. SMS to and from a number are sealed and opened with its key, else the wildcard's, else the SMS link's own chain. Keys set here, rotated by the Hub or imported from a bundle all show, with their label. Key material, on the local API only (as the SMS link's inline key in /api/interfaces). The address may be URL-escaped (%2B31612345678) or not (+31612345678).
+// @Tags keys
+// @Produce json
+// @Param type path string true "Channel type: sms (cellular is the same), mesh, iridium, aprs, zigbee, mqtt, webhook or bond"
+// @Param address path string true "Address: the number with its +, * for every SMS number, a node ID"
+// @Success 200 {object} chatKeyResponse
+// @Failure 400 {object} map[string]string "unknown channel type or no address"
+// @Failure 404 {object} map[string]string "no key for this chat"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "key store not available"
+// @Router /api/keys/{type}/{address} [get]
+func (s *Server) handleGetChatKey(w http.ResponseWriter, r *http.Request) {
+	if s.keyStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "key store not available")
+		return
+	}
+	channelType, ok := chatKeyType(chi.URLParam(r, "type"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown channel type \""+chi.URLParam(r, "type")+"\"")
+		return
+	}
+	address, err := keyAddress(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	raw, version, label, found, err := s.keyStore.LookupKey(channelType, address)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "no key for "+channelType+":"+address)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, chatKeyResponse{Key: hex.EncodeToString(raw), Version: version, Label: label})
+}
+
+// handleSetChatKey sets the key of one chat.
+// @Summary Set the key of one chat
+// @Description Stores an AES-256 key for a channel type and address as its new version (the previous one is retired). The key of an SMS chat (sms:<number>) seals every SMS to that number and opens every SMS from it, whether or not the SMS link encrypts, as MeshSat Android's chat key does; sms:* does so for every number without a key of its own; a plaintext peer (the Hub) keeps its clear text. Sealed as Android seals: SMAZ2 when it makes the text shorter (MSVQ-SC instead when the SMS link's chain uses it), AES-256-GCM, the protocol version byte, base64. The same key and label again changes nothing. Mesh and satellite chats keep a key that changes nothing on the air. The address may be URL-escaped (%2B31612345678) or not (+31612345678).
+// @Tags keys
+// @Accept json
+// @Produce json
+// @Param type path string true "Channel type: sms (cellular is the same), mesh, iridium, aprs, zigbee, mqtt, webhook or bond"
+// @Param address path string true "Address: the number with its +, * for every SMS number, a node ID"
+// @Param body body object true "The key, 64 hex characters, and an optional label" example({"key":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"})
+// @Success 200 {object} map[string]interface{} "status saved or unchanged, channel_type, address, version, label"
+// @Failure 400 {object} map[string]string "unknown channel type, no address, or a key that is not 64 hex characters"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "key store not available"
+// @Router /api/keys/{type}/{address} [put]
+func (s *Server) handleSetChatKey(w http.ResponseWriter, r *http.Request) {
+	if s.keyStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "key store not available")
+		return
+	}
+	channelType, ok := chatKeyType(chi.URLParam(r, "type"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown channel type \""+chi.URLParam(r, "type")+"\"")
+		return
+	}
+	address, err := keyAddress(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Key   string `json:"key"`
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if !validChatKey(req.Key) {
+		writeError(w, http.StatusBadRequest, "key must be 64 hexadecimal characters (AES-256)")
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if len(label) > chatKeyMaxLabel {
+		writeError(w, http.StatusBadRequest, "label is longer than "+strconv.Itoa(chatKeyMaxLabel)+" characters")
+		return
+	}
+	rawKey, _ := hex.DecodeString(req.Key)
+
+	resp := map[string]interface{}{"channel_type": channelType, "address": address, "label": label}
+	// Saving the key a chat already has (Save tapped twice) keeps its version.
+	if cur, version, curLabel, found, err := s.keyStore.LookupKey(channelType, address); err == nil && found &&
+		subtle.ConstantTimeCompare(cur, rawKey) == 1 && curLabel == label {
+		resp["status"], resp["version"] = "unchanged", version
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	version, err := s.keyStore.StoreKeyLabelled(channelType, address, rawKey, label)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp["status"], resp["version"] = "saved", version
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleGetSigningKey returns the bridge's Ed25519 signing public key and fingerprint.
@@ -274,7 +448,9 @@ func (s *Server) handleGetSigningKey(w http.ResponseWriter, r *http.Request) {
 // @Description v1 bundles need an explicit `signing_pub` hex param.
 // @Description Each channel key inside is wrapped under the local
 // @Description master key and stored. TOFU-style: returns the signing
-// @Description fingerprint so the operator can confirm.
+// @Description fingerprint so the operator can confirm. Each key is
+// @Description labelled "Bridge <type> (<hash>)" as MeshSat Android labels
+// @Description it; an sms:<number> entry is that SMS chat's key.
 // @Tags keys
 // @Accept json
 // @Produce json
@@ -361,6 +537,9 @@ func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
 	// from this bridge's perspective.
 	imported := make([]map[string]interface{}, 0, len(parsed.Entries))
 	skipped := make([]map[string]interface{}, 0)
+	// Labelled as MeshSat Android labels an imported conversation key:
+	// "Bridge <type> (<first 8 hex of the bundle's bridge hash>)".
+	bridgeHash := hex.EncodeToString(parsed.BridgeHash[:])[:8]
 	for _, e := range parsed.Entries {
 		ct := keystore.ByteToChannelType(e.ChannelType)
 		if ct == "unknown" {
@@ -373,7 +552,7 @@ func (s *Server) handleImportKeyBundle(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		ver, serr := s.keyStore.StoreKey(ct, e.Address, e.Key[:])
+		ver, serr := s.keyStore.StoreKeyLabelled(ct, e.Address, e.Key[:], "Bridge "+ct+" ("+bridgeHash+")")
 		if serr != nil {
 			writeError(w, http.StatusInternalServerError, "store "+ct+":"+e.Address+": "+serr.Error())
 			return

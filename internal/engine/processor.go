@@ -180,20 +180,41 @@ func (p *Processor) DecodeIngress(sourceIface, raw string) string {
 // clear: false when the interface has an ingress chain and raw does not
 // decode through it, so raw is still ciphertext as far as this bridge knows.
 func (p *Processor) decodeIngress(sourceIface, raw string) (string, bool) {
+	text, clear, _ := p.decodeIngressChain(sourceIface, raw)
+	return text, clear
+}
+
+// decodeIngressChain is decodeIngress that also reports whether the chain
+// that read raw decrypts (raw came sealed).
+func (p *Processor) decodeIngressChain(sourceIface, raw string) (text string, clear, decrypted bool) {
 	if p == nil || p.dispatcher == nil || p.dispatcher.TransformPipeline() == nil || p.db == nil {
-		return raw, true
+		return raw, true, false
 	}
 	iface, err := p.db.GetInterface(sourceIface)
 	if err != nil || iface.IngressTransforms == "" || iface.IngressTransforms == "[]" {
-		return raw, true
+		return raw, true, false
 	}
 	// The sender prepends the protocol version byte after its transforms;
 	// the chain cannot start until it is off. [MESHSAT-1282]
 	_, body := codec.StripVersionByte([]byte(raw))
 	if decoded, tErr := p.dispatcher.TransformPipeline().ApplyIngress(body, iface.IngressTransforms); tErr == nil {
-		return string(decoded), true
+		return string(decoded), true, ChainEncrypts(iface.IngressTransforms)
 	}
-	return raw, false
+	return raw, false, false
+}
+
+// DecodeSMS is DecodeIngress for an SMS from a number: the chat's own key
+// opens it first (sms:<from>, then sms:*), then the interface's ingress
+// chain, as before. encrypted is true when a key opened it, so the SMS
+// history can show the words with the lock.
+func (p *Processor) DecodeSMS(sourceIface, from, raw string) (text string, encrypted bool) {
+	if p != nil && p.dispatcher != nil {
+		if words, ok := p.dispatcher.OpenChatSMS(sourceIface, from, raw); ok {
+			return words, true
+		}
+	}
+	text, clear, decrypted := p.decodeIngressChain(sourceIface, raw)
+	return text, clear && decrypted
 }
 
 // SetGatewayProvider sets a dynamic gateway source (e.g. the Manager).
@@ -1236,7 +1257,16 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				sourceIface := msg.Source + "_0"
 				decodedText := msg.Text
 				dropped := false
-				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain {
+				// An SMS one of its chat's keys opens (sms:<from>, then sms:*)
+				// is its words; the link's chain, and its gate, are for the
+				// rest.
+				chatOpened := false
+				if p.dispatcher != nil && !msg.Plain {
+					if words, ok := p.dispatcher.OpenChatSMS(sourceIface, msg.FromAddr, msg.Text); ok {
+						decodedText, chatOpened = words, true
+					}
+				}
+				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain && !chatOpened {
 					if iface, err := p.db.GetInterface(sourceIface); err == nil &&
 						iface.IngressTransforms != "" && iface.IngressTransforms != "[]" {
 						// Strip the protocol version byte first, as DispatchAccess

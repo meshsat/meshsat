@@ -896,6 +896,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/keys", s.handleListKeys)
 		r.Get("/keys/stats", s.handleGetKeyStats)
 		r.Get("/keys/signing", s.handleGetSigningKey)
+		r.Get("/keys/{type}/{address}", s.handleGetChatKey) // a chat's key, sms:<number> or sms:*
+		r.Put("/keys/{type}/{address}", s.handleSetChatKey)
 		r.Delete("/keys/{type}/{address}", s.handleRevokeKey)
 
 		// OOB management frames [MESHSAT-756]
