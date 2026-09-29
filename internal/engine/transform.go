@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -130,7 +131,10 @@ func TransformsAuthenticate(transformsJSON string) bool {
 		return true
 	}
 	for _, t := range transforms {
-		if t.Type == "encrypt" || t.Type == "decrypt" {
+		// An optional decrypt reads what decrypts and keeps the rest as it
+		// came (MeshSat Android's "Auto-decrypt incoming SMS": a text from an
+		// ordinary phone is not dropped). It does not authenticate. [MESHSAT-1412]
+		if (t.Type == "encrypt" || t.Type == "decrypt") && t.Params["optional"] != "true" {
 			return true
 		}
 	}
@@ -359,11 +363,23 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			endsWithBase64 = false
 			if t.Params["key"] == "" && t.Params["key_ref"] == "" {
 				errors = append(errors, fmt.Sprintf("%s transform requires 'key' or 'key_ref' param", t.Type))
+			} else if k := t.Params["key"]; k != "" && !validAESHexKey(k) {
+				// Checked when saved: a key that cannot encrypt used to fail only
+				// at send time. [MESHSAT-1411, MESHSAT-1412]
+				errors = append(errors, fmt.Sprintf("%s key must be 64 hex characters (AES-256; 32 or 48 for AES-128 or -192)", t.Type))
+			}
+		case "msvqsc":
+			hasBinaryOutput = true
+			endsWithBase64 = false
+			if st := t.Params["stages"]; st != "" && st != "auto" {
+				if n, err := strconv.Atoi(st); err != nil || n < 1 || n > 8 {
+					errors = append(errors, fmt.Sprintf("msvqsc stages must be 1 to 8 or auto, not %q", st))
+				}
 			}
 		case "fec":
 			hasBinaryOutput = true
 			endsWithBase64 = false
-		case "zstd", "smaz2", "llamazip", "msvqsc":
+		case "zstd", "smaz2", "llamazip":
 			hasBinaryOutput = true
 			endsWithBase64 = false
 		case "base64":
@@ -518,4 +534,43 @@ func GenerateEncryptionKey() (string, error) {
 		return "", fmt.Errorf("generate key: %w", err)
 	}
 	return hex.EncodeToString(key), nil
+}
+
+// validAESHexKey reports whether a hex key is an AES key: 16, 24 or 32 bytes.
+func validAESHexKey(k string) bool {
+	if len(k) != 32 && len(k) != 48 && len(k) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(k)
+	return err == nil
+}
+
+// MSVQSCCapabilities says whether MSVQ-SC can encode (its sidecar answers) and
+// decode (the codebook is loaded, or the sidecar answers) on this Bridge.
+// Without the encoder a msvqsc step compresses with smaz2 instead, which a
+// MeshSat on the other end reads as garbage. [MESHSAT-1412]
+func (tp *TransformPipeline) MSVQSCCapabilities() (encode, decode bool) {
+	if tp == nil {
+		return false, false
+	}
+	encode = tp.msvqsc != nil && tp.msvqsc.IsReady()
+	decode = tp.codebook != nil || encode
+	return encode, decode
+}
+
+// ChainEncrypts reports whether a send chain holds an encrypt step (or a
+// decrypt step put there by mistake, which cannot run on send), or cannot be
+// read at all: on such a link a failed chain must not send the text in the
+// clear. It parses the chain; a substring test missed "decrypt". [MESHSAT-1411]
+func ChainEncrypts(transformsJSON string) bool {
+	transforms, err := parseTransforms(transformsJSON)
+	if err != nil {
+		return true
+	}
+	for _, t := range transforms {
+		if t.Type == "encrypt" || t.Type == "decrypt" {
+			return true
+		}
+	}
+	return false
 }

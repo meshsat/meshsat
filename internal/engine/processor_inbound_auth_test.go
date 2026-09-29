@@ -236,3 +236,24 @@ func TestTransformsAuthenticate(t *testing.T) {
 		}
 	}
 }
+
+// With an optional decrypt (MeshSat Android's "Auto-decrypt incoming SMS"), a
+// text from an ordinary phone is kept as it came and an encrypted one is read.
+// [MESHSAT-1412]
+func TestGatewayReceiver_OptionalDecryptKeepsPlainTexts(t *testing.T) {
+	key := strings.Repeat("5a", 32)
+	chain := `[{"type":"decrypt","params":{"key":"` + key + `","optional":"true"}},{"type":"base64"}]`
+	p, db, tp, gw := newInboundAuthHarness(t, "cellular_0", "cellular", chain)
+	msgs, dropped := deliver(t, p, db, gw, gateway.InboundMessage{Text: "see you at six", Source: "cellular", FromAddr: "+31612345678"})
+	if dropped != 0 || len(msgs) == 0 || msgs[0].DecodedText != "see you at six" {
+		t.Fatalf("plain text: dropped %d, stored %+v", dropped, msgs)
+	}
+	wire, err := tp.ApplyEgress([]byte("encrypted hello"), `[{"type":"encrypt","params":{"key":"`+key+`"}},{"type":"base64"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, dropped = deliver(t, p, db, gw, gateway.InboundMessage{Text: string(wire), Source: "cellular", FromAddr: "+31612345678"})
+	if dropped != 0 || len(msgs) == 0 || msgs[0].DecodedText != "encrypted hello" {
+		t.Fatalf("encrypted text: dropped %d, stored %+v", dropped, msgs)
+	}
+}

@@ -616,6 +616,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/interfaces/{id}", s.handleGetInterface)
 		r.Post("/interfaces", s.handleCreateInterface)
 		r.Put("/interfaces/{id}", s.handleUpdateInterface)
+		r.Put("/interfaces/{id}/transforms", s.handleSetInterfaceTransforms) // [MESHSAT-1412]
+		r.Get("/transforms/capabilities", s.handleTransformCapabilities)     // [MESHSAT-1412]
 		r.Delete("/interfaces/{id}", s.handleDeleteInterface)
 		r.Post("/interfaces/{id}/bind", s.handleBindDevice)
 		r.Post("/interfaces/{id}/unbind", s.handleUnbindDevice)

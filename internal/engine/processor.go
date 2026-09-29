@@ -1269,6 +1269,11 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				if dropped {
 					continue
 				}
+				// A brevity code (0xCA + id, MeshSat Android's quick messages)
+				// reads as its words. [MESHSAT-1412]
+				if text, ok := cannedText(decodedText); ok {
+					decodedText = text
+				}
 
 				// The event carries the decoded text as data: the packet feed
 				// is a wire view and leaves an encrypted APRS/SMS frame's text
@@ -1449,4 +1454,19 @@ func (p *Processor) broadcast(event transport.MeshEvent) {
 
 func base64Encode(data []byte) string {
 	return base64.StdEncoding.EncodeToString(data)
+}
+
+// cannedText reads a brevity code, two bytes 0xCA and the code's number (the
+// codebook MeshSat Android's CannedCodebook carries too), as its text. A
+// payload that is not exactly one code is left alone. [MESHSAT-1412]
+func cannedText(s string) (string, bool) {
+	_, body := codec.StripVersionByte([]byte(s))
+	if len(body) != 2 || !codec.IsCanned(body) {
+		return "", false
+	}
+	text, err := codec.DecodeCanned(body)
+	if err != nil || text == "" {
+		return "", false
+	}
+	return text, true
 }

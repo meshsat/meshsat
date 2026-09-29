@@ -250,7 +250,7 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 	}
 
 	if len(destinations) == 0 {
-		return fmt.Errorf("no SMS destinations configured")
+		return transport.ErrNoRecipient
 	}
 
 	// A plaintext peer (the Hub) gets the bare text: its routing engine

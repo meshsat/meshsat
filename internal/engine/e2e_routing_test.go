@@ -28,6 +28,8 @@ type mockGateway struct {
 	// serial port closed) rather than a message the bearer rejected.
 	// [MESHSAT-1061]
 	down bool
+	// failWith makes every Forward fail with this error. [MESHSAT-1412]
+	failWith error
 }
 
 func (m *mockGateway) Start(ctx context.Context) error { return nil }
@@ -37,6 +39,9 @@ func (m *mockGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 	defer m.mu.Unlock()
 	if m.down {
 		return fmt.Errorf("mock gateway: %w", transport.ErrNotConnected)
+	}
+	if m.failWith != nil {
+		return m.failWith
 	}
 	if m.failNext {
 		m.failNext = false
