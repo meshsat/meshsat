@@ -445,6 +445,7 @@ func (a *App) Setup(ctx context.Context) error {
 
 	geofenceMon := engine.NewGeofenceMonitor()
 	srv.SetGeofenceMonitor(geofenceMon)
+	a.Processor.SetGeofenceMonitor(geofenceMon) // [MESHSAT-1414]
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 	if a.LinkMgr != nil {
 		srv.SetLinkManager(a.LinkMgr)

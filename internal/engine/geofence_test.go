@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 )
 
 // A simple square polygon around (0,0): corners at (-1,-1), (-1,1), (1,1), (1,-1)
@@ -218,5 +219,36 @@ func TestGeofenceMonitor_EnterOnlyNoExitEvent(t *testing.T) {
 	events = gm.CheckPosition("node1", 5, 5)
 	if len(events) != 0 {
 		t.Fatalf("expected 0 events on exit for enter-only zone, got %d", len(events))
+	}
+}
+
+// Every crossing is kept, the zone's name with it (it outlives the zone), and
+// the newest 50 are served newest first. [MESHSAT-1414]
+func TestGeofenceMonitor_LogsCrossingsNewestFirst(t *testing.T) {
+	g := NewGeofenceMonitor()
+	clock := time.Unix(1790000000, 0)
+	g.now = func() time.Time { clock = clock.Add(time.Second); return clock }
+	square := []LatLon{{46.99, -122.01}, {46.99, -121.99}, {47.01, -121.99}, {47.01, -122.01}}
+	g.AddZone(GeofenceZone{ID: "z1", Name: "Home", Polygon: square, AlertOn: "both"})
+	if ev := g.Events(0); len(ev) != 0 {
+		t.Fatalf("a log before any crossing: %v", ev)
+	}
+	g.CheckPosition("!a1b3c2ec", 47.0, -122.0)
+	g.CheckPosition("!a1b3c2ec", 48.0, -122.0)
+	ev := g.Events(0)
+	if len(ev) != 2 || ev[0].Event != "exit" || ev[1].Event != "enter" || ev[0].ZoneName != "Home" || ev[0].NodeID != "!a1b3c2ec" || ev[0].Timestamp <= ev[1].Timestamp {
+		t.Fatalf("log = %+v", ev)
+	}
+	g.RemoveZone("z1")
+	if ev := g.Events(0); len(ev) != 2 || ev[0].ZoneName != "Home" {
+		t.Fatalf("the log after the zone went: %+v", ev)
+	}
+	g.AddZone(GeofenceZone{ID: "z2", Name: "Camp", Polygon: square, AlertOn: "both"})
+	for i := 0; i < 30; i++ {
+		g.CheckPosition("!a1b3c2ec", 47.0, -122.0)
+		g.CheckPosition("!a1b3c2ec", 48.0, -122.0)
+	}
+	if ev := g.Events(0); len(ev) != 50 || ev[0].ZoneName != "Camp" || ev[0].Event != "exit" {
+		t.Fatalf("the newest 50: %d, first %+v", len(ev), ev[0])
 	}
 }

@@ -33,6 +33,8 @@ type GatewayProvider interface {
 
 // Processor ingests mesh events, persists them, and routes to gateways.
 type Processor struct {
+	// geofence checks every mesh position against the zones. [MESHSAT-1414]
+	geofence   *GeofenceMonitor
 	db         *database.DB
 	mesh       transport.MeshTransport
 	gwProv     GatewayProvider            // dynamic provider (gateway manager)
@@ -717,6 +719,17 @@ func (p *Processor) handlePosition(event transport.MeshEvent) {
 	if err := p.db.InsertPosition(pos); err != nil {
 		log.Error().Err(err).Str("node", pos.NodeID).Msg("failed to persist position")
 	}
+	// Every mesh position crosses the zones, as MeshSat Android's service
+	// checks each position packet. [MESHSAT-1414]
+	if p.geofence != nil {
+		p.geofence.CheckPosition(pos.NodeID, pos.Latitude, pos.Longitude)
+	}
+}
+
+// SetGeofenceMonitor gives the processor the zones every mesh position is
+// checked against. [MESHSAT-1414]
+func (p *Processor) SetGeofenceMonitor(g *GeofenceMonitor) {
+	p.geofence = g
 }
 
 // positionOf is the position row a position event carries, nil when it has

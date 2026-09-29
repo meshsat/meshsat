@@ -736,6 +736,7 @@ func (s *Server) Router() http.Handler {
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)
+		r.Get("/geofences/events", s.handleGetGeofenceEvents) // [MESHSAT-1414]
 		r.Post("/geofences", s.handleCreateGeofence)
 		r.Delete("/geofences/{id}", s.handleDeleteGeofence)
 

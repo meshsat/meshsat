@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"meshsat/internal/engine"
 	"meshsat/internal/transport"
 )
 
@@ -271,5 +272,21 @@ func TestNodeAdmin_Endpoints(t *testing.T) {
 	type plain struct{ transport.MeshTransport }
 	if w := serve(t, &Server{mesh: plain{}}, "POST", "/api/admin/shutdown", `{}`); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("a transport without node admin: %d", w.Code)
+	}
+}
+
+// The crossings are served newest first. [MESHSAT-1414]
+func TestGeofenceEvents_Endpoint(t *testing.T) {
+	g := engine.NewGeofenceMonitor()
+	g.AddZone(engine.GeofenceZone{ID: "z", Name: "Home", AlertOn: "both", Polygon: []engine.LatLon{{Lat: 0, Lon: 0}, {Lat: 0, Lon: 1}, {Lat: 1, Lon: 1}, {Lat: 1, Lon: 0}}})
+	g.CheckPosition("!a1b3c2ec", 0.5, 0.5)
+	s := &Server{}
+	s.SetGeofenceMonitor(g)
+	w := serve(t, s, "GET", "/api/geofences/events", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"zone_name":"Home"`) || !strings.Contains(w.Body.String(), `"event":"enter"`) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if w := serve(t, &Server{}, "GET", "/api/geofences/events", ""); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("without a monitor: %d", w.Code)
 	}
 }

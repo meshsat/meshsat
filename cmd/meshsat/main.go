@@ -1571,6 +1571,12 @@ func main() {
 
 	// API server
 	srv := api.NewServer(db, mesh, proc, gwMgr)
+	// Zones: the shipped binary never made the monitor, so /api/geofences
+	// answered 503 and no position was ever checked. Kept in step with
+	// app.go. [MESHSAT-1414]
+	geofenceMon := engine.NewGeofenceMonitor()
+	srv.SetGeofenceMonitor(geofenceMon)
+	proc.SetGeofenceMonitor(geofenceMon)
 	srv.SetHostClient(oobHost) // host reboot / poweroff from the panel, independent of the OOB service [MESHSAT-831]
 	srv.SetBurstQueue(burstQueue)
 	srv.SetSpectrumMonitor(spectrumMon)
