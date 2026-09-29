@@ -1,13 +1,14 @@
 package routing
 
 // IfaceManager: the runtime lifecycle of the dynamic Reticulum interface
-// types (rnode, udp, auto, kiss), persisted in routing_ifaces and driven
-// from Settings > Routing without a restart. Environment variables seed a
-// first instance on a fresh database; after that the table is the truth.
+// types (rnode, udp, auto, kiss, tcp_rns), persisted in routing_ifaces and
+// driven from Settings > Routing without a restart. Environment variables seed
+// a first instance on a fresh database; after that the table is the truth.
 // [MESHSAT-1350]
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -28,10 +29,14 @@ const (
 	DynTypeUDP   = "udp"
 	DynTypeAuto  = "auto"
 	DynTypeKISS  = "kiss"
+	// DynTypeTCPRNS is the RNS TCP client (TCPRNSClient). Its first instance
+	// is tcp_rns_0, MeshSat Android's link id; the name keeps it clear of the
+	// static tcp_0.
+	DynTypeTCPRNS = "tcp_rns"
 )
 
 // DynTypes lists the types the manager knows, in UI order.
-var DynTypes = []string{DynTypeRNode, DynTypeUDP, DynTypeAuto, DynTypeKISS}
+var DynTypes = []string{DynTypeRNode, DynTypeUDP, DynTypeAuto, DynTypeKISS, DynTypeTCPRNS}
 
 // PacketSink is the processor side the manager plugs interfaces into.
 type PacketSink interface {
@@ -62,9 +67,17 @@ type IfaceManagerConfig struct {
 	OnRNodeUnsupervised func(id string)
 	// ExcludePort keeps the device supervisor off a KISS TNC's serial port.
 	ExcludePort func(path string)
+	// ClientCert supplies the certificate a tcp_rns TLS connection presents
+	// when the server asks for one; it is called at each such handshake.
+	// main.go returns the Hub client certificate and key from hub_connection
+	// when both are stored. Nil, or a nil certificate, presents none.
+	ClientCert func() (*tls.Certificate, error)
 }
 
-// DynIfaceStatus is the API view of one managed interface.
+// DynIfaceStatus is the API view of one managed interface. For tcp_rns,
+// online means connected, last_error is the last connect or TLS handshake
+// error (a connection clears it), and summary is "host:port", or
+// "host:port, TLS" when the link is TLS.
 type DynIfaceStatus struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
@@ -181,6 +194,24 @@ func ValidateDynConfig(ifType string, raw json.RawMessage) (json.RawMessage, err
 		if c.Port == "" {
 			return nil, fmt.Errorf("kiss: port required (/dev/... or tcp://host:port)")
 		}
+		return json.Marshal(c)
+	case DynTypeTCPRNS:
+		var c TCPRNSConfig
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return nil, fmt.Errorf("tcp_rns config: %w", err)
+		}
+		c.Host = strings.TrimSpace(c.Host)
+		if c.Host == "" {
+			return nil, fmt.Errorf("tcp_rns: host required")
+		}
+		if c.Port == 0 {
+			c.Port = TCPRNSDefaultPort
+		}
+		if c.Port < 1 || c.Port > 65535 {
+			return nil, fmt.Errorf("tcp_rns: port must be 1-65535")
+		}
+		// tls is kept as sent: port 443 turns TLS on at connect time
+		// (TCPRNSEffectiveTLS), not in the stored switch.
 		return json.Marshal(c)
 	}
 	return nil, fmt.Errorf("unknown interface type %q", ifType)
@@ -390,6 +421,12 @@ func (m *IfaceManager) status(in *dynInstance) DynIfaceStatus {
 			if le := x.LastError(); le != "" {
 				s.LastError = le
 			}
+		case *TCPRNSClient:
+			rx, tx := x.Counters()
+			s.Stats = map[string]any{"rx_bytes": rx, "tx_bytes": tx}
+			if le := x.LastError(); le != "" {
+				s.LastError = le
+			}
 		}
 	}
 	return s
@@ -441,6 +478,12 @@ func (m *IfaceManager) build(row database.RoutingIface) (dynIface, reticulum.Int
 		}
 		sum := fmt.Sprintf("%s, %d baud", c.Port, c.Baud)
 		return NewKISSInterface(c, cb), reticulum.IfaceKISS, KISSHWMTU, sum, nil
+	case DynTypeTCPRNS:
+		var c TCPRNSConfig
+		if err := json.Unmarshal([]byte(row.Config), &c); err != nil {
+			return nil, "", 0, "", err
+		}
+		return NewTCPRNSClient(row.ID, c, m.cfg.ClientCert, cb), reticulum.IfaceTCP, TCPRNSHWMTU, c.Summary(), nil
 	}
 	return nil, "", 0, "", fmt.Errorf("unknown interface type %q", row.Type)
 }

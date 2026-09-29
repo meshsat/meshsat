@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -245,6 +247,34 @@ func TestValidateDynConfig(t *testing.T) {
 	if _, err := ValidateDynConfig(DynTypeKISS, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("kiss without port accepted")
 	}
+
+	// tcp_rns: the host is required, the port defaults to 4242 and must be
+	// 1-65535, and tls is stored as sent (port 443 forces TLS only when dialling).
+	for _, c := range []struct{ in, want, err string }{
+		{`{}`, "", "tcp_rns: host required"},
+		{``, "", "tcp_rns: host required"},
+		{`{"host":"   ","port":4242}`, "", "tcp_rns: host required"},
+		{`{"host":"rns.example.org"}`, `{"host":"rns.example.org","port":4242,"tls":false}`, ""},
+		{`{"host":" 10.0.0.5 ","port":0,"tls":true}`, `{"host":"10.0.0.5","port":4242,"tls":true}`, ""},
+		{`{"host":"reticulum.meshsat.net","port":4243,"tls":true}`, `{"host":"reticulum.meshsat.net","port":4243,"tls":true}`, ""},
+		{`{"host":"rns.example.org","port":443}`, `{"host":"rns.example.org","port":443,"tls":false}`, ""},
+		{`{"host":"h","port":1}`, `{"host":"h","port":1,"tls":false}`, ""},
+		{`{"host":"h","port":65535}`, `{"host":"h","port":65535,"tls":false}`, ""},
+		{`{"host":"h","port":65536}`, "", "tcp_rns: port must be 1-65535"},
+		{`{"host":"h","port":-1}`, "", "tcp_rns: port must be 1-65535"},
+		{`{"host":"h","port":"4242"}`, "", "tcp_rns config: "},
+	} {
+		norm, err := ValidateDynConfig(DynTypeTCPRNS, json.RawMessage(c.in))
+		if c.err != "" {
+			if err == nil || !strings.HasPrefix(err.Error(), c.err) {
+				t.Errorf("tcp_rns %s: error %v, want %q", c.in, err, c.err)
+			}
+			continue
+		}
+		if err != nil || string(norm) != c.want {
+			t.Errorf("tcp_rns %s: %s %v, want %s", c.in, norm, err, c.want)
+		}
+	}
 }
 
 func TestIfaceManagerLifecycle(t *testing.T) {
@@ -336,5 +366,65 @@ func TestIfaceManagerLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCond(t, "kiss connect error surfaced", 8*time.Second, func() bool { s, _ := m2.Get(kid); return s.Running && !s.Online && s.LastError != "" })
+
+	// tcp_rns: the first instance is tcp_rns_0 (Android's link id), online
+	// means connected, packets reach the sink under its id, disabling stops
+	// it and keeps the config, and a refused connection is not online.
+	node := startRNSNode(t, nil, []byte(helloFromNode))
+	rnsCfg := `{"host":"127.0.0.1","port":` + strconv.Itoa(node.port()) + `,"tls":false}`
+	tid, err := m2.Create(DynTypeTCPRNS, json.RawMessage(`{"host":"127.0.0.1","port":`+strconv.Itoa(node.port())+`}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tid != "tcp_rns_0" {
+		t.Fatalf("id %s, want tcp_rns_0", tid)
+	}
+	waitCond(t, "tcp_rns online", 5*time.Second, func() bool { s, _ := m2.Get(tid); return s.Online })
+	st, _ = m2.Get(tid)
+	if !st.Running || !st.Enabled || st.LastError != "" || st.Summary != "127.0.0.1:"+strconv.Itoa(node.port()) || string(st.Config) != rnsCfg {
+		t.Fatalf("tcp_rns status %+v", st)
+	}
+	ri := reg.Get(tid)
+	if ri == nil || ri.Type() != "tcp" || ri.MTU() != TCPRNSHWMTU || !ri.IsFloodable() || !ri.IsOnline() || !sink.senders[tid] {
+		t.Fatalf("tcp_rns not wired: %+v senders=%v", ri, sink.senders)
+	}
+	waitCond(t, "inbound via tcp_rns", 3*time.Second, func() bool {
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		for _, p := range sink.packets {
+			if p == "tcp_rns_0:"+helloFromNode {
+				return true
+			}
+		}
+		return false
+	})
+	if err := ri.Send(ctx, []byte(helloToNode)); err != nil {
+		t.Fatal(err)
+	}
+	waitCond(t, "outbound via tcp_rns", 3*time.Second, func() bool { got := node.view().got; return len(got) == 1 && got[0] == helloToNode })
+	// PUT enabled:false (no config): stopped, unwired, config kept, connection closed.
+	if err := m2.Update(tid, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = m2.Get(tid)
+	if st.Enabled || st.Running || st.Online || reg.Get(tid) != nil || sink.senders[tid] || string(st.Config) != rnsCfg {
+		t.Fatalf("tcp_rns after disable: %+v", st)
+	}
+	waitCond(t, "the node sees the connection closed", 3*time.Second, func() bool { return node.view().ends == 1 })
+	if n := node.view().accepts; n != 1 {
+		t.Fatalf("%d connections to the node, want 1", n)
+	}
+	// Enabled again towards a port nobody listens on: running, not online, the refusal in last_error.
+	if err := m2.Update(tid, json.RawMessage(`{"host":"127.0.0.1","port":`+strconv.Itoa(freePortNum(t))+`}`), true); err != nil {
+		t.Fatal(err)
+	}
+	waitCond(t, "refused connection surfaced", 8*time.Second, func() bool { s, _ := m2.Get(tid); return s.LastError != "" })
+	st, _ = m2.Get(tid)
+	if !st.Running || st.Online || !strings.Contains(st.LastError, "refused") || reg.Get(tid) == nil || reg.Get(tid).IsOnline() {
+		t.Fatalf("tcp_rns refused: %+v", st)
+	}
+	if err := reg.Get(tid).Send(ctx, []byte(helloToNode)); err == nil {
+		t.Fatal("sent while not connected")
+	}
 	m2.StopAll()
 }

@@ -133,6 +133,7 @@ func (s *Server) handleSimulateMeshRx(w http.ResponseWriter, r *http.Request) {
 // @Summary Send a message
 // @Description Sends a text message through the Meshtastic radio or a satellite gateway.
 // @Description Set gateway to "iridium" (9603 SBD), "iridium_imt" (9704 IMT), "mqtt", "cellular", or "webhook".
+// @Description A text sent on the mesh also goes to TAK as GeoChat from this Bridge when the TAK gateway runs.
 // @Tags messages
 // @Param body body transport.SendRequest true "Message to send"
 // @Success 200 {object} map[string]string "success"
@@ -212,6 +213,7 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordMeshTX(req)
+	s.takOwnChat(req.Text) // Android's sendChat for every text sent to the mesh [MESHSAT-1421]
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 

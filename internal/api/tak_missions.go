@@ -16,6 +16,8 @@ import (
 // @Tags tak
 // @Produce json
 // @Success 200 {array} gateway.MartiMission
+// @Failure 400 {object} map[string]string "no TAK gateway, or it has no TAK server (tak_host)"
+// @Failure 502 {object} map[string]string "the TAK server did not answer"
 // @Router /api/tak/missions [get]
 func (s *Server) handleTAKMissions(w http.ResponseWriter, r *http.Request) {
 	client, err := s.getMartiClient()
@@ -41,6 +43,8 @@ func (s *Server) handleTAKMissions(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param file formance file true "File to upload"
 // @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string "no TAK gateway, or it has no TAK server (tak_host)"
+// @Failure 502 {object} map[string]string "the TAK server did not answer"
 // @Router /api/tak/upload [post]
 func (s *Server) handleTAKUpload(w http.ResponseWriter, r *http.Request) {
 	client, err := s.getMartiClient()
@@ -78,6 +82,8 @@ func (s *Server) handleTAKUpload(w http.ResponseWriter, r *http.Request) {
 // @Produce octet-stream
 // @Param hash query string true "Content hash"
 // @Success 200 {file} binary
+// @Failure 400 {object} map[string]string "no TAK gateway, or it has no TAK server (tak_host)"
+// @Failure 502 {object} map[string]string "the TAK server did not answer"
 // @Router /api/tak/download [get]
 func (s *Server) handleTAKDownload(w http.ResponseWriter, r *http.Request) {
 	hash := r.URL.Query().Get("hash")
@@ -111,6 +117,8 @@ func (s *Server) handleTAKDownload(w http.ResponseWriter, r *http.Request) {
 // @Tags tak
 // @Produce json
 // @Success 200 {string} string
+// @Failure 400 {object} map[string]string "no TAK gateway, or it has no TAK server (tak_host)"
+// @Failure 502 {object} map[string]string "the TAK server did not answer"
 // @Router /api/tak/sa [get]
 func (s *Server) handleTAKSASnapshot(w http.ResponseWriter, r *http.Request) {
 	client, err := s.getMartiClient()
@@ -134,6 +142,8 @@ func (s *Server) handleTAKSASnapshot(w http.ResponseWriter, r *http.Request) {
 // @Tags tak
 // @Param name path string true "Mission name"
 // @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string "no TAK gateway, or it has no TAK server (tak_host)"
+// @Failure 502 {object} map[string]string "the TAK server did not answer"
 // @Router /api/tak/missions/{name}/subscribe [post]
 func (s *Server) handleTAKSubscribeMission(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
@@ -168,6 +178,11 @@ func (s *Server) getMartiClient() (*gateway.MartiClient, error) {
 	cfg, err := gateway.ParseTAKConfig(gwCfg.Config)
 	if err != nil {
 		return nil, err
+	}
+	// A TAK gateway can run without a TAK server (SA multicast, Hub export
+	// only); then there is no Marti API to talk to. [MESHSAT-1421]
+	if !cfg.HasServer() {
+		return nil, fmt.Errorf("the TAK gateway has no TAK server (tak_host)")
 	}
 
 	// Marti API uses HTTPS on port 8443 (same host as CoT on 8087/8089)

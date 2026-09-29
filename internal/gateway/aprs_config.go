@@ -2,13 +2,37 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"net"
 	"os"
 	"strconv"
+	"strings"
 )
+
+// APRS gateway link modes. [MESHSAT-1421]
+const (
+	// APRSModeKISS is a KISS TNC: Direwolf over TCP or a hardware TNC on a
+	// serial port, the radio. The default; an empty mode means it.
+	APRSModeKISS = "kiss"
+	// APRSModeIS is APRS-IS Direct: a TCP line client to an APRS-IS server
+	// over the internet, no radio and no Direwolf, as MeshSat Android's
+	// "APRS-IS Direct".
+	APRSModeIS = "is"
+)
+
+// DefaultAPRSISServer is Android's APRS-IS server, the rotating pool of the
+// Tier 2 network on its user-defined filter port. [Q14]
+const DefaultAPRSISServer = "rotate.aprs2.net:14580"
+
+// defaultAPRSISPort is the filter port a server given without one gets.
+const defaultAPRSISPort = "14580"
 
 // APRSConfig holds the configuration for the APRS gateway.
 type APRSConfig struct {
+	// Mode selects the link: "kiss" (or empty) or "is". [MESHSAT-1421]
+	Mode         string  `json:"mode"`
 	KISSHost     string  `json:"kiss_host"`
 	KISSPort     int     `json:"kiss_port"`
 	Callsign     string  `json:"callsign"`
@@ -17,6 +41,24 @@ type APRSConfig struct {
 	APRSISServer string  `json:"aprs_is_server"`
 	APRSISPass   string  `json:"aprs_is_passcode"`
 	FrequencyMHz float64 `json:"frequency_mhz"`
+
+	// APRS-IS filter, mode is: the login asks the server for the traffic
+	// within APRSISFilterKm of the centre ("filter r/lat/lon/km"). The
+	// centre is APRSISFilterLat/Lon, or when both are 0 the device's own
+	// position at connect time; with neither the login carries no filter
+	// clause, as Android's does without a location. 0 km is allowed.
+	// [MESHSAT-1421]
+	APRSISFilterKm  int     `json:"aprs_is_filter_km"`
+	APRSISFilterLat float64 `json:"aprs_is_filter_lat"`
+	APRSISFilterLon float64 `json:"aprs_is_filter_lon"`
+
+	// Position beacon, mode is only: the device's own position as an APRS
+	// position report to APRS-IS, smart-beaconed as Android's AprsBeacon
+	// (slow rate every PositionBeaconMin minutes, at least 60 s, 90 s while
+	// moving, at once on a turn). Never over RF: the status beacon below
+	// is the kits' own and stays as it is. [MESHSAT-1421]
+	PositionBeacon    bool `json:"position_beacon"`
+	PositionBeaconMin int  `json:"position_beacon_min"`
 
 	// Bundled-Direwolf supervisor settings. [MESHSAT-516/517]
 	// When ExternalDirewolf is true, MeshSat connects to a KISS server on
@@ -113,7 +155,11 @@ func orDefault(v, def int) int {
 }
 
 // SerialTNC reports whether the gateway talks to a hardware TNC over serial.
-func (c APRSConfig) SerialTNC() bool { return c.KISSDevice != "" }
+// Never in mode is, which has no TNC.
+func (c APRSConfig) SerialTNC() bool { return c.KISSDevice != "" && !c.IsMode() }
+
+// IsMode reports whether the gateway runs APRS-IS Direct instead of a TNC.
+func (c APRSConfig) IsMode() bool { return c.Mode == APRSModeIS }
 
 // DefaultAPRSConfig returns sensible defaults for EU APRS on an AIOC kit.
 // PTT defaults to CM108 HID (AIOC's actual PTT path) — the ACM serial
@@ -125,19 +171,28 @@ func DefaultAPRSConfig() APRSConfig {
 	// a kit can be switched to a PicoAPRS from its compose file; the stored
 	// gateway config wins once it carries the keys. [MESHSAT-821]
 	kissBaud, _ := strconv.Atoi(os.Getenv("MESHSAT_APRS_KISS_BAUD"))
+
+	// The APRS-IS passcode has no default here on purpose: GET re-parses
+	// the saved JSON with these defaults and masks any non-empty passcode,
+	// so a default would read "****" for a passcode never set. Validate
+	// supplies "-1" (receive only) to the running gateway in mode is.
+	// [MESHSAT-1421]
 	return APRSConfig{
-		KISSDevice:      os.Getenv("MESHSAT_APRS_KISS_DEVICE"),
-		KISSBaud:        kissBaud,
-		RelayThirdParty: os.Getenv("MESHSAT_APRS_RELAY_THIRD_PARTY") == "1",
-		KISSHost:        "127.0.0.1",
-		KISSPort:        8001,
-		SSID:            10, // -10 is conventional for igate
-		APRSISServer:    "euro.aprs2.net:14580",
-		FrequencyMHz:    144.800, // EU APRS frequency
-		AudioCard:       "AllInOneCable",
-		PTTDevice:       "",
-		PTTLine:         "", // empty => PTT CM108 (auto HID discovery)
-		ModemBaud:       1200,
+		Mode:              APRSModeKISS,
+		KISSDevice:        os.Getenv("MESHSAT_APRS_KISS_DEVICE"),
+		KISSBaud:          kissBaud,
+		RelayThirdParty:   os.Getenv("MESHSAT_APRS_RELAY_THIRD_PARTY") == "1",
+		KISSHost:          "127.0.0.1",
+		KISSPort:          8001,
+		SSID:              10, // -10 is conventional for igate
+		APRSISServer:      DefaultAPRSISServer,
+		APRSISFilterKm:    100,
+		PositionBeaconMin: 10,
+		FrequencyMHz:      144.800, // EU APRS frequency
+		AudioCard:         "AllInOneCable",
+		PTTDevice:         "",
+		PTTLine:           "", // empty => PTT CM108 (auto HID discovery)
+		ModemBaud:         1200,
 	}
 }
 
@@ -152,11 +207,23 @@ func ParseAPRSConfig(data string) (*APRSConfig, error) {
 
 // Validate checks required fields.
 func (c *APRSConfig) Validate() error {
+	switch c.Mode {
+	case "":
+		c.Mode = APRSModeKISS
+	case APRSModeKISS, APRSModeIS:
+	default:
+		return fmt.Errorf("mode must be kiss or is")
+	}
 	if c.Callsign == "" {
 		return fmt.Errorf("callsign is required for APRS")
 	}
 	if c.SSID < 0 || c.SSID > 15 {
 		return fmt.Errorf("ssid must be 0-15")
+	}
+	if c.IsMode() {
+		if err := c.validateIS(); err != nil {
+			return err
+		}
 	}
 	if c.KISSHost == "" {
 		c.KISSHost = "127.0.0.1"
@@ -182,9 +249,9 @@ func (c *APRSConfig) Validate() error {
 			c.ModemBaud = 1200
 		}
 	}
-	if c.APRSISEnable {
+	if c.APRSISEnable && !c.IsMode() {
 		if c.APRSISServer == "" {
-			c.APRSISServer = "euro.aprs2.net:14580"
+			c.APRSISServer = DefaultAPRSISServer
 		}
 		if c.APRSISPass == "" {
 			return fmt.Errorf("aprs_is_passcode is required when APRS-IS is enabled")
@@ -194,6 +261,82 @@ func (c *APRSConfig) Validate() error {
 		c.FrequencyMHz = 144.800
 	}
 	return nil
+}
+
+// validateIS checks and completes the APRS-IS Direct settings. The passcode
+// defaults to "-1", receive only, as Android's does, and is otherwise the
+// server's to judge (a wrong one logs in unverified). Only what would break
+// the login line or a packet header is refused: a stray space or line break
+// there would be read by the server as more words or a second command.
+// [MESHSAT-1421]
+func (c *APRSConfig) validateIS() error {
+	if !aprsISCallsignOK(strings.TrimSpace(c.Callsign)) {
+		return fmt.Errorf("callsign must be 1-6 letters and digits for APRS-IS (the SSID is its own field)")
+	}
+	pass := strings.TrimSpace(c.APRSISPass)
+	if pass == "" {
+		pass = "-1"
+	}
+	if !aprsISTokenOK(pass, 16) {
+		return fmt.Errorf("aprs_is_passcode must be one word, without spaces (-1 for receive only)")
+	}
+	c.APRSISPass = pass
+	server, err := normalizeAPRSISServer(c.APRSISServer)
+	if err != nil {
+		return err
+	}
+	c.APRSISServer = server
+	if c.APRSISFilterKm < 0 {
+		return fmt.Errorf("aprs_is_filter_km must be 0 or more")
+	}
+	if math.Abs(c.APRSISFilterLat) > 90 {
+		return fmt.Errorf("aprs_is_filter_lat must be -90 to 90")
+	}
+	if math.Abs(c.APRSISFilterLon) > 180 {
+		return fmt.Errorf("aprs_is_filter_lon must be -180 to 180")
+	}
+	if c.PositionBeaconMin < 0 || c.PositionBeaconMin > 1440 {
+		return fmt.Errorf("position_beacon_min must be 0-1440")
+	}
+	return nil
+}
+
+// aprsISCallsignOK reports whether call can stand in an APRS-IS login and
+// packet header: one to six letters and digits, as Android's field takes
+// and an AX.25 address holds.
+func aprsISCallsignOK(call string) bool {
+	if call == "" || len(call) > 6 {
+		return false
+	}
+	for _, r := range call {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeAPRSISServer returns the server as host:port. Empty means the
+// default server, a host without a port gets the filter port 14580.
+func normalizeAPRSISServer(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return DefaultAPRSISServer, nil
+	}
+	bad := fmt.Errorf("aprs_is_server must be host:port")
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		var aerr *net.AddrError
+		if !errors.As(err, &aerr) || aerr.Err != "missing port in address" {
+			return "", bad
+		}
+		host, port = strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"), defaultAPRSISPort
+	}
+	p, err := strconv.Atoi(port)
+	if host == "" || strings.ContainsAny(host, " \t\r\n/@") || err != nil || p < 1 || p > 65535 {
+		return "", bad
+	}
+	return net.JoinHostPort(host, strconv.Itoa(p)), nil
 }
 
 // Redacted returns a copy with secrets masked.

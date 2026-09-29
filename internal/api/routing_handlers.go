@@ -446,11 +446,15 @@ func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
 
 // handleAddPeer adds a dynamic outbound peer connection.
 // @Summary Add Reticulum TCP peer
+// @Description Adds an outbound plain-TCP peer on tcp_0 and persists it. The peer connects in the background and keeps reconnecting until it is removed or the Bridge stops; it does not end with this request.
 // @Tags routing
 // @Accept json
 // @Produce json
 // @Param body body addPeerRequest true "Peer address (host:port)"
 // @Success 201 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string "peer already exists"
+// @Failure 503 {object} map[string]string "tcp_0 not active (MESHSAT_TCP_LISTEN=none)"
 // @Router /api/routing/peers [post]
 func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if s.tcpIface == nil {
@@ -468,7 +472,10 @@ func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.tcpIface.AddPeer(r.Context(), req.Address); err != nil {
+	// The peer's reconnect loop lives under the server's context: net/http
+	// cancels r.Context() when this handler returns, which ended the loop
+	// after its first connection.
+	if err := s.tcpIface.AddPeer(s.baseContext(), req.Address); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

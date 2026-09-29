@@ -55,6 +55,20 @@ type GatewayStatus struct {
 	// KISS frames from the TNC that did not decode and were dropped with
 	// the link kept open (serial TNC chain). [MESHSAT-821]
 	BadFrames *int64 `json:"bad_frames,omitempty"`
+
+	// APRS-only, both modes: the link mode (kiss, is), its state
+	// (disconnected, connecting, connected, error) and the last link
+	// error. Mode is adds the APRS-IS session (server, whether the server
+	// verified the passcode, its banner) and the position beacon's count
+	// and last time. [MESHSAT-1421]
+	Mode            string     `json:"mode,omitempty"`
+	State           string     `json:"state,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	APRSISServer    string     `json:"aprs_is_server,omitempty"`
+	APRSISVerified  *bool      `json:"aprs_is_verified,omitempty"`
+	APRSISBanner    string     `json:"aprs_is_banner,omitempty"`
+	PositionBeacons *int64     `json:"position_beacons,omitempty"`
+	LastBeaconAt    *time.Time `json:"last_beacon_at,omitempty"`
 }
 
 // EventEmitFunc is a callback for gateways to emit events to the SSE stream.

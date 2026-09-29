@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/certpin"
+	"meshsat/internal/channel"
 	"meshsat/internal/database"
+	"meshsat/internal/selfpos"
 	"meshsat/internal/transport"
 )
 
@@ -43,6 +46,20 @@ type Manager struct {
 	satTransports  map[string]transport.SatTransport  // instance_id → SatTransport
 	cellTransports map[string]transport.CellTransport // instance_id → CellTransport
 	transportsMu   sync.RWMutex
+
+	// takHooks are the own position, node id and Hub link every TAK gateway
+	// gets (SetTAKHooks). [MESHSAT-1421]
+	takHooks atomic.Pointer[TAKHooks]
+	// selfPos resolves the device's own position (the app's fix, then the
+	// local node, then the GPS reader); gateways read it through
+	// SelfPosition, so main.go may wire it after they started. [MESHSAT-1421]
+	selfPosMu sync.RWMutex
+	selfPos   func() (selfpos.Fix, bool)
+	// linkCreator adds a missing link row (MESHSAT-1421). main.go routes it
+	// through the interface manager and the dispatcher, so the list shows
+	// the link at once and its delivery worker runs; nil writes the row
+	// to the database only.
+	linkCreator func(database.Interface) error
 }
 
 // NewManager creates a new gateway manager.
@@ -172,6 +189,45 @@ func (m *Manager) SetNodeNameResolver(fn func(uint32) string) {
 // provider is polled, so it may be set after the manager started.
 func (m *Manager) SetSDRProvider(fn func() SDRBorrower) {
 	m.sdrProvider = fn
+}
+
+// SetTAKHooks connects every TAK gateway the manager starts from now on, and
+// the one running now, to the Bridge's own position, its node id and the Hub
+// link (TAKHooks). A later call replaces all three. [MESHSAT-1421]
+func (m *Manager) SetTAKHooks(h TAKHooks) {
+	m.takHooks.Store(&h)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if tg, ok := gw.(*TAKGateway); ok && tg != nil {
+			tg.SetHooks(h)
+		}
+	}
+}
+
+// SetSelfPosition installs the resolver of the device's own position. It is
+// read at every use, so gateways already running pick it up. [MESHSAT-1421]
+func (m *Manager) SetSelfPosition(fn func() (selfpos.Fix, bool)) {
+	m.selfPosMu.Lock()
+	m.selfPos = fn
+	m.selfPosMu.Unlock()
+}
+
+// SelfPosition resolves the device's own position now; false when none is
+// known or nothing is wired. [MESHSAT-1421]
+func (m *Manager) SelfPosition() (selfpos.Fix, bool) {
+	m.selfPosMu.RLock()
+	fn := m.selfPos
+	m.selfPosMu.RUnlock()
+	if fn == nil {
+		return selfpos.Fix{}, false
+	}
+	return fn()
+}
+
+// SetLinkCreator installs how a missing link row is created (MESHSAT-1421).
+func (m *Manager) SetLinkCreator(fn func(database.Interface) error) {
+	m.linkCreator = fn
 }
 
 // GetHFGateway returns the running HF gateway, if any.
@@ -693,6 +749,8 @@ func (m *Manager) ConfigureInstance(ctx context.Context, gwType, instanceID stri
 	if err := m.db.SaveGatewayConfigInstance(gwType, instanceID, enabled, configJSON); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	// Before the start, so the new link is bound to the gateway at once.
+	m.ensureLink(gwType, enabled)
 
 	m.mu.Lock()
 	if existing, ok := m.running[instanceID]; ok {
@@ -706,6 +764,68 @@ func (m *Manager) ConfigureInstance(ctx context.Context, gwType, instanceID stri
 		return m.StartGatewayInstance(ctx, instanceID)
 	}
 	return nil
+}
+
+// ensureLink gives a gateway type that has no link row its <type>_0 link,
+// labelled as the channel registry names the type (internal/channel,
+// "APRS (Direwolf)", "TAK/CoT", ...) and switched as the gateway was saved.
+// Link rows are otherwise seeded only by migrations, so a Bridge whose
+// database predates the gateway (the phone's: mesh_0 and iridium_imt_0)
+// ran a gateway no rule could reach until someone made the link by hand. A
+// type that already has a link, under any id, keeps what it has; a type the
+// registry does not know gets none. A failure is logged and never fails
+// the save. [MESHSAT-1421]
+func (m *Manager) ensureLink(gwType string, enabled bool) {
+	if m.db == nil {
+		return
+	}
+	label, known := channelLabel(gwType)
+	if !known {
+		return
+	}
+	id := gwType + "_0"
+	if _, err := m.db.GetInterface(id); err == nil {
+		return
+	}
+	if links, err := m.db.GetInterfacesByType(gwType); err != nil || len(links) > 0 {
+		return
+	}
+	link := database.Interface{
+		ID:                id,
+		ChannelType:       gwType,
+		Label:             label,
+		Enabled:           enabled,
+		Config:            "{}",
+		IngressTransforms: "[]",
+		EgressTransforms:  "[]",
+	}
+	create := m.linkCreator
+	if create == nil {
+		create = func(l database.Interface) error { return m.db.InsertInterface(&l) }
+	}
+	if err := create(link); err != nil {
+		log.Warn().Err(err).Str("link", id).Msg("gwmgr: could not create the missing link")
+		return
+	}
+	log.Info().Str("link", id).Str("label", label).Bool("enabled", enabled).Msg("gwmgr: created the missing link for the gateway")
+}
+
+var (
+	channelLabelsOnce sync.Once
+	channelLabels     *channel.Registry
+)
+
+// channelLabel is the registry's label for a channel type.
+func channelLabel(channelType string) (string, bool) {
+	channelLabelsOnce.Do(func() {
+		channelLabels = channel.NewRegistry()
+		channel.RegisterDefaults(channelLabels)
+	})
+	d, ok := channelLabels.Get(channelType)
+	if !ok || d.Label == "" {
+		return "", false
+	}
+	return d.Label, true
 }
 
 // Delete stops and removes a gateway configuration (legacy — first instance).
@@ -1167,6 +1287,7 @@ func (m *Manager) GetStatus() []GatewayStatusResponse {
 			resp.ReceiveLevelAt = status.ReceiveLevelAt
 			resp.LastDecodeAt = status.LastDecodeAt
 			resp.ReceiveState = status.ReceiveState
+			resp.copyLinkStatus(status)
 		}
 
 		resp.Config = m.redactConfig(cfg.Type, cfg.Config)
@@ -1215,6 +1336,7 @@ func (m *Manager) GetSingleStatus(gwType string) (*GatewayStatusResponse, error)
 		resp.ReceiveLevelAt = status.ReceiveLevelAt
 		resp.LastDecodeAt = status.LastDecodeAt
 		resp.ReceiveState = status.ReceiveState
+		resp.copyLinkStatus(status)
 	}
 
 	return resp, nil
@@ -1326,7 +1448,11 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		return NewTAKGateway(*cfg, m.db), nil
+		tgw := NewTAKGateway(*cfg, m.db)
+		if h := m.takHooks.Load(); h != nil {
+			tgw.SetHooks(*h)
+		}
+		return tgw, nil
 	case "hf":
 		cfg, err := ParseHFConfig(configJSON)
 		if err != nil {
@@ -1360,6 +1486,7 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 		if m.packetSink != nil {
 			agw.SetPacketSink(m.packetSink, instanceID)
 		}
+		agw.SetSelfPosition(m.SelfPosition) // APRS-IS filter centre, position beacon [MESHSAT-1421]
 		return agw, nil
 	default:
 		return nil, fmt.Errorf("unknown gateway type: %s", gwType)
@@ -1779,6 +1906,25 @@ type GatewayStatusResponse struct {
 	// serial link while it has stopped answering. [MESHSAT-1064]
 	HealthState  string `json:"health_state,omitempty"`
 	HealthDetail string `json:"health_detail,omitempty"`
+
+	// APRS link mode, state and last error, and the APRS-IS session and
+	// position beacon of mode is. See GatewayStatus. [MESHSAT-1421]
+	Mode            string     `json:"mode,omitempty"`
+	State           string     `json:"state,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	APRSISServer    string     `json:"aprs_is_server,omitempty"`
+	APRSISVerified  *bool      `json:"aprs_is_verified,omitempty"`
+	APRSISBanner    string     `json:"aprs_is_banner,omitempty"`
+	PositionBeacons *int64     `json:"position_beacons,omitempty"`
+	LastBeaconAt    *time.Time `json:"last_beacon_at,omitempty"`
+}
+
+// copyLinkStatus copies the APRS link fields of a running gateway's status
+// onto its response row. [MESHSAT-1421]
+func (r *GatewayStatusResponse) copyLinkStatus(s GatewayStatus) {
+	r.Mode, r.State, r.LastError = s.Mode, s.State, s.LastError
+	r.APRSISServer, r.APRSISVerified, r.APRSISBanner = s.APRSISServer, s.APRSISVerified, s.APRSISBanner
+	r.PositionBeacons, r.LastBeaconAt = s.PositionBeacons, s.LastBeaconAt
 }
 
 // secretMask is what redactConfig writes in place of a secret.

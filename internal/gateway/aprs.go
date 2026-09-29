@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/selfpos"
 	"meshsat/internal/transport"
 )
 
@@ -103,6 +104,23 @@ type APRSGateway struct {
 	lifeMu         sync.Mutex
 	done           chan struct{}
 
+	// APRS-IS Direct (mode is): the session with the server. Nil in mode
+	// kiss, and the test every mode switch below reads. [MESHSAT-1421]
+	is *aprsISLink
+	// running is true from a successful Start to Stop; the link state of
+	// mode kiss reads it. lastLinkErr is the last TNC link error of mode
+	// kiss, cleared when the link is back. [MESHSAT-1421]
+	running     atomic.Bool
+	lastLinkErr atomic.Value // string
+
+	// The device's own position (APRS-IS filter centre, position beacon)
+	// and the position beacon's count and last time, unix nanoseconds.
+	// [MESHSAT-1421]
+	selfPosMu            sync.RWMutex
+	selfPos              func() (selfpos.Fix, bool)
+	positionBeacons      atomic.Int64
+	lastPositionBeaconAt atomic.Int64
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -182,19 +200,29 @@ func (g *APRSGateway) SerialTNC() bool { return g.kiss.Serial() }
 // where a hub-port VBUS cut would not even reboot a PicoAPRS running on its
 // own battery. [MESHSAT-821]
 func (g *APRSGateway) ReopenTNC(ctx context.Context) error {
+	if g.is != nil {
+		return fmt.Errorf("aprs: no TNC in mode is")
+	}
 	_ = g.kiss.Close()
 	g.connected.Store(false)
 	if err := g.dialWithRetry(ctx, 20*time.Second); err != nil {
+		g.setLinkError(err)
 		return fmt.Errorf("aprs: reopen %s: %w", g.kiss.Target(), err)
 	}
 	g.connected.Store(true)
+	g.setLinkError(nil)
 	log.Info().Str("kiss", g.kiss.Target()).Msg("aprs: TNC link reopened")
 	return nil
 }
 
 // ReceiveHealth exposes the bundled supervisor's receive-side signals. The
-// second value is false for an external Direwolf, where nothing is known.
+// second value is false for an external Direwolf, where nothing is known,
+// and in mode is, which has no receiver: the receive watchdog then never
+// walks its RF ladder (AIOC power cut, TNC reopen). [MESHSAT-1421]
 func (g *APRSGateway) ReceiveHealth() (ReceiveHealth, bool) {
+	if g.is != nil {
+		return ReceiveHealth{}, false
+	}
 	if g.supervisor != nil {
 		return g.supervisor.ReceiveHealth(), true
 	}
@@ -215,6 +243,9 @@ func (g *APRSGateway) ReceiveHealth() (ReceiveHealth, bool) {
 func (g *APRSGateway) SetReceiveState(state string) { g.receiveState.Store(state) }
 
 func (g *APRSGateway) currentReceiveState() string {
+	if g.is != nil {
+		return "" // no receiver to judge in mode is
+	}
 	if v, ok := g.receiveState.Load().(string); ok && v != "" {
 		return v
 	}
@@ -227,10 +258,16 @@ func (g *APRSGateway) currentReceiveState() string {
 // NewAPRSGateway creates a new APRS gateway.
 func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 	var kiss *KISSConn
-	if cfg.SerialTNC() {
+	switch {
+	case cfg.IsMode():
+		// APRS-IS Direct has no TNC. The KISS link object stays so every
+		// RF path reads "not connected", and it has no address, so nothing
+		// can ever open it. [MESHSAT-1421]
+		kiss = NewKISSConn("")
+	case cfg.SerialTNC():
 		kiss = NewKISSSerialConn(cfg.KISSDevice, cfg.KISSBaud)
 		cfg.ExternalDirewolf = true
-	} else {
+	default:
 		kiss = NewKISSConn(fmt.Sprintf("%s:%d", cfg.KISSHost, cfg.KISSPort))
 	}
 	g := &APRSGateway{
@@ -242,6 +279,11 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 		rawOut:  make(chan []byte, 4),
 		tracker: NewAPRSTracker(),
 	}
+	if cfg.IsMode() {
+		// No Direwolf supervisor either, whatever external_direwolf says.
+		g.is = &aprsISLink{state: APRSStateDisconnected}
+		return g
+	}
 	if !cfg.ExternalDirewolf {
 		g.supervisor = NewDirewolfSupervisor(cfg)
 	}
@@ -251,7 +293,11 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 // KISSSendFrame sends a raw AX.25 frame via the APRS gateway's KISS connection.
 // Used by the AX25 Reticulum interface to route TX through the same pipeline
 // node, so all TX is counted by the KISSConn's atomic counter. [MESHSAT-403]
+// Mode is has no radio and refuses. [MESHSAT-1421]
 func (g *APRSGateway) KISSSendFrame(payload []byte) error {
+	if g.is != nil {
+		return fmt.Errorf("aprs: no radio in mode is: %w", transport.ErrNotConnected)
+	}
 	if err := g.kiss.SendFrame(payload); err != nil {
 		return err
 	}
@@ -276,7 +322,13 @@ func (g *APRSGateway) Tracker() *APRSTracker {
 // external, we fall back to the meshsat-level KISS counters — they miss
 // externally injected frames but are the best proxy available.
 // [MESHSAT-514]
+//
+// Both modes carry mode, state (disconnected, connecting, connected, error)
+// and last_error; mode is answers from aprsISStatus. [MESHSAT-1421]
 func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
+	if g.is != nil {
+		return g.aprsISStatus()
+	}
 	kissUp := g.connected.Load()
 	connected := kissUp
 	if g.supervisor != nil {
@@ -296,6 +348,9 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 	}
 	status := map[string]interface{}{
 		"connected":           connected,
+		"mode":                APRSModeKISS,
+		"state":               g.kissState(connected),
+		"last_error":          g.linkError(),
 		"kiss_up":             kissUp,
 		"callsign":            FormatCallsign(AX25Address{Call: g.config.Callsign, SSID: g.config.SSID}),
 		"frequency_mhz":       g.config.FrequencyMHz,
@@ -371,6 +426,34 @@ func serialTNCReceiveHint(tx, rx int64, linkAge time.Duration) string {
 		"(each bridge must transmit under the callsign of the unit plugged into it)"
 }
 
+// kissState is the link state in mode kiss: connected while the TNC link
+// (and a bundled Direwolf) is up, connecting while it is being reopened,
+// disconnected before Start and after Stop. [MESHSAT-1421]
+func (g *APRSGateway) kissState(connected bool) string {
+	switch {
+	case !g.running.Load():
+		return APRSStateDisconnected
+	case connected:
+		return APRSStateConnected
+	default:
+		return APRSStateConnecting
+	}
+}
+
+// setLinkError records the last TNC link error of mode kiss; nil clears it.
+func (g *APRSGateway) setLinkError(err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	g.lastLinkErr.Store(msg)
+}
+
+func (g *APRSGateway) linkError() string {
+	s, _ := g.lastLinkErr.Load().(string)
+	return s
+}
+
 // Start launches the Direwolf subprocess (when bundled), then connects to
 // its KISS server and starts the read/write workers.
 //
@@ -380,7 +463,13 @@ func serialTNCReceiveHint(tx, rx int64, linkAge time.Duration) string {
 // response returns, which would SIGTERM Direwolf 1-2 s after spawn.
 // Gateway lifetime is controlled explicitly by Stop() instead.
 // [MESHSAT-514, diagnosed 2026-04-17]
+//
+// Mode is starts APRS-IS Direct instead: no Direwolf, no KISS dial, and it
+// returns at once while the session connects in the background. [MESHSAT-1421]
 func (g *APRSGateway) Start(ctx context.Context) error {
+	if g.is != nil {
+		return g.startIS()
+	}
 	// Detached ctx owns the supervisor + workers. The caller's ctx is
 	// only used to time-bound the initial dial (if a request-level
 	// cancel comes in mid-dial, we abort dialing and Stop cleanly).
@@ -407,6 +496,8 @@ func (g *APRSGateway) Start(ctx context.Context) error {
 		return fmt.Errorf("aprs: %w", err)
 	}
 	g.connected.Store(true)
+	g.running.Store(true)
+	g.setLinkError(nil)
 
 	g.lifeMu.Lock()
 	g.done = make(chan struct{})
@@ -459,6 +550,10 @@ func (g *APRSGateway) Stop() error {
 	g.kiss.Close()
 	g.wg.Wait()
 	g.connected.Store(false)
+	g.running.Store(false)
+	if g.is != nil {
+		g.is.ended(APRSStateDisconnected, nil)
+	}
 	g.closeSubscribers()
 	if g.supervisor != nil {
 		g.supervisor.Stop()
@@ -495,7 +590,13 @@ func (g *APRSGateway) dialWithRetry(ctx context.Context, budget time.Duration) e
 // MeshSat peer can read, waits for the peer's ack and fails when none comes
 // (forwardAcked); everything else is queued for the write worker and returns at
 // once. [MESHSAT-1021]
+//
+// In mode is a text goes to APRS-IS at once and the outcome is returned:
+// refused when encrypted or receive only, not connected, or sent. [MESHSAT-1421]
 func (g *APRSGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
+	if g.is != nil {
+		return g.forwardIS(msg)
+	}
 	if msg.Encrypted && g.config.ackAttempts() > 0 {
 		return g.forwardAcked(ctx, msg)
 	}
@@ -503,7 +604,11 @@ func (g *APRSGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 }
 
 // Enqueue submits a message for outbound delivery without waiting for an ack.
+// In mode is it is Forward: one line on a TCP connection does not queue.
 func (g *APRSGateway) Enqueue(msg *transport.MeshMessage) error {
+	if g.is != nil {
+		return g.forwardIS(msg)
+	}
 	return g.enqueue(msg)
 }
 
@@ -529,7 +634,12 @@ func (g *APRSGateway) Receive() <-chan InboundMessage {
 // shared gateway list agree. MessagesIn/MessagesOut are OTA frame
 // counters from the supervisor when bundled; otherwise the meshsat-
 // originated counters (best-effort fallback for external mode).
+//
+// In mode is Connected is the APRS-IS state being connected. [MESHSAT-1421]
 func (g *APRSGateway) Status() GatewayStatus {
+	if g.is != nil {
+		return g.aprsISGatewayStatus()
+	}
 	kissUp := g.connected.Load()
 	connected := kissUp
 	if g.supervisor != nil {
@@ -549,6 +659,9 @@ func (g *APRSGateway) Status() GatewayStatus {
 		MessagesIn:  msgsIn,
 		MessagesOut: msgsOut,
 		Errors:      g.errors.Load(),
+		Mode:        APRSModeKISS,
+		State:       g.kissState(connected),
+		LastError:   g.linkError(),
 	}
 	if ts := g.lastActive.Load(); ts > 0 {
 		s.LastActivity = time.Unix(ts, 0)
@@ -631,6 +744,7 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			}
 			log.Warn().Err(err).Msg("aprs: read frame error")
 			g.errors.Add(1)
+			g.setLinkError(err)
 			g.connected.Store(false)
 			g.reconnect(ctx)
 			continue
@@ -712,50 +826,59 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			continue
 		}
 
-		// Track heard station and activity [MESHSAT-403]
-		g.tracker.RecordRX(pkt)
+		g.handleParsedPacket(pkt, srcAddr)
+	}
+}
 
-		// APRS acks and rejects are protocol traffic, not messages: an ack for
-		// one of our frames releases its sender, and none is ever forwarded to
-		// the mesh. [MESHSAT-1021]
-		if id, reject, ok := aprsAckReply(pkt); ok {
-			g.handleAckReply(pkt, id, reject)
-			continue
-		}
+// handleParsedPacket is the receive path of every decoded APRS packet, from
+// the TNC or from APRS-IS, so both modes treat a packet alike: the heard
+// list, acks for our own frames, status frames that stop here, third-party
+// traffic that stays in the heard list, and what is for this bridge onto the
+// inbound channel. srcAddr is the sender as the message carries it. [MESHSAT-1421]
+func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) {
+	// Track heard station and activity [MESHSAT-403]
+	g.tracker.RecordRX(pkt)
 
-		// Status frames ('>', the peer kit's beacon and any station's status
-		// report) are liveness, not messages: they update the heard list and
-		// the receive health and stop here, so an aprs -> mesh relay rule
-		// never forwards a beacon to the handhelds. [MESHSAT-857]
-		if pkt.DataType == '>' {
-			continue
-		}
+	// APRS acks and rejects are protocol traffic, not messages: an ack for
+	// one of our frames releases its sender, and none is ever forwarded to
+	// the mesh. [MESHSAT-1021]
+	if id, reject, ok := aprsAckReply(pkt); ok {
+		g.handleAckReply(pkt, id, reject)
+		return
+	}
 
-		// Anything else from a station that is not talking to this bridge
-		// (a passing station's position, weather, object, or a message to
-		// someone else) is heard-list only: an aprs -> mesh relay rule must
-		// never put it on the handhelds or the booth screen. [MESHSAT-1128]
-		if !g.relayable(pkt) {
-			g.thirdPartyDropped.Add(1)
-			log.Debug().Str("from", pkt.Source).Str("type", string(pkt.DataType)).
-				Msg("aprs: third-party frame kept out of the message pipeline")
-			continue
-		}
+	// Status frames ('>', the peer kit's beacon and any station's status
+	// report) are liveness, not messages: they update the heard list and
+	// the receive health and stop here, so an aprs -> mesh relay rule
+	// never forwards a beacon to the handhelds. [MESHSAT-857]
+	if pkt.DataType == '>' {
+		return
+	}
 
-		text := g.formatInboundText(pkt)
-		msg := InboundMessage{
-			Text:     text,
-			Source:   "aprs",
-			FromAddr: srcAddr,
-		}
+	// Anything else from a station that is not talking to this bridge
+	// (a passing station's position, weather, object, or a message to
+	// someone else) is heard-list only: an aprs -> mesh relay rule must
+	// never put it on the handhelds or the booth screen. [MESHSAT-1128]
+	if !g.relayable(pkt) {
+		g.thirdPartyDropped.Add(1)
+		log.Debug().Str("from", pkt.Source).Str("type", string(pkt.DataType)).
+			Msg("aprs: third-party frame kept out of the message pipeline")
+		return
+	}
 
-		select {
-		case g.inCh <- msg:
-			g.msgsIn.Add(1)
-			g.lastActive.Store(time.Now().Unix())
-		default:
-			log.Warn().Msg("aprs: inbound channel full")
-		}
+	text := g.formatInboundText(pkt)
+	msg := InboundMessage{
+		Text:     text,
+		Source:   "aprs",
+		FromAddr: srcAddr,
+	}
+
+	select {
+	case g.inCh <- msg:
+		g.msgsIn.Add(1)
+		g.lastActive.Store(time.Now().Unix())
+	default:
+		log.Warn().Msg("aprs: inbound channel full")
 	}
 }
 
@@ -1300,6 +1423,7 @@ func (g *APRSGateway) reconnect(ctx context.Context) {
 
 		if err := g.kiss.Dial(); err != nil {
 			log.Warn().Err(err).Dur("retry_in", wait).Msg("aprs: reconnect failed")
+			g.setLinkError(err)
 			wait *= 2
 			if wait > 5*time.Minute {
 				wait = 5 * time.Minute
@@ -1308,6 +1432,7 @@ func (g *APRSGateway) reconnect(ctx context.Context) {
 		}
 
 		g.connected.Store(true)
+		g.setLinkError(nil)
 		log.Info().Str("kiss", g.kiss.Target()).Msg("aprs: reconnected to the TNC")
 		return
 	}
