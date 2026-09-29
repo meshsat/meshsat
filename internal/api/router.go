@@ -707,6 +707,7 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/routing/peers/{addr}", s.handleRemovePeer)
 		r.Get("/routing/hub", s.handleGetHubConfig)
 		r.Put("/routing/hub", s.handleSetHubConfig)
+		r.Post("/routing/hub/ping", s.handleHubPing)
 
 		// Dynamic Reticulum interfaces: rnode, udp, auto, kiss [MESHSAT-1350]
 		r.Get("/routing/ifaces", s.handleListDynIfaces)

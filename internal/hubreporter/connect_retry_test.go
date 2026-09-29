@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,18 @@ type fakeBroker struct {
 	ln        net.Listener
 	connects  atomic.Int32
 	closeOnce chan struct{}
+	mu        sync.Mutex
+	conns     []net.Conn
+}
+
+// dropSessions ends every open session, as a broker that goes away does.
+func (b *fakeBroker) dropSessions() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, c := range b.conns {
+		c.Close()
+	}
+	b.conns = nil
 }
 
 func newFakeBroker(t *testing.T, addr string) *fakeBroker {
@@ -60,6 +73,9 @@ func (b *fakeBroker) serve() {
 // only needs the session to stay up long enough for OnConnect to fire.
 func (b *fakeBroker) session(c net.Conn) {
 	defer c.Close()
+	b.mu.Lock()
+	b.conns = append(b.conns, c)
+	b.mu.Unlock()
 	br := make([]byte, 1)
 	for {
 		if _, err := io.ReadFull(c, br); err != nil {
