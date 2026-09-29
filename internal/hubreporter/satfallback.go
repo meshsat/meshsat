@@ -15,8 +15,12 @@ type SatFallbackConfig struct {
 	PositionInterval time.Duration              // send position every X (default 15min)
 	HealthInterval   time.Duration              // send health every X (default 1hour)
 	SendFn           func(payload []byte) error // function to send raw bytes via satellite
-	HealthFn         func() BridgeHealth        // collect current health metrics
-	PositionFn       func() *Location           // collect current bridge position
+	// SOSSendFn sends an SOS frame under the SOS's reference, by the
+	// bearers the SOS does not carry itself (SMS to the Hub's number); nil
+	// falls back to SendFn. [MESHSAT-1446]
+	SOSSendFn  func(frame []byte, msgRef string) error
+	HealthFn   func() BridgeHealth // collect current health metrics
+	PositionFn func() *Location    // collect current bridge position
 }
 
 func (c *SatFallbackConfig) defaults() {
@@ -92,6 +96,21 @@ func (sf *SatFallback) PublishSOS(deviceID string, lat, lon float64, message str
 		Int("bytes", len(payload)).
 		Msg("satfallback: sending SOS via satellite")
 	return sf.cfg.SendFn(payload)
+}
+
+// PublishSOSFrame sends an SOS frame the caller built, under the SOS's
+// reference (msgRef), by SOSSendFn: the SOS queues its satellite leg itself,
+// and this is its SMS to the Hub's number. [MESHSAT-1446]
+func (sf *SatFallback) PublishSOSFrame(frame []byte, msgRef string) error {
+	if sf.cfg.SOSSendFn == nil {
+		if sf.cfg.SendFn == nil {
+			log.Warn().Msg("satfallback: SOS requested but no send function configured")
+			return nil
+		}
+		return sf.cfg.SendFn(frame)
+	}
+	log.Info().Str("msg_ref", msgRef).Int("bytes", len(frame)).Msg("satfallback: SOS frame to the Hub")
+	return sf.cfg.SOSSendFn(frame, msgRef)
 }
 
 // Run starts the background satellite fallback monitor loop.

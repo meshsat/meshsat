@@ -179,3 +179,64 @@ func TestHubUplinkSender_TheSOSFrameGoesBeforeAnAlarmTest(t *testing.T) {
 		t.Fatal("no Hub SMS number and no satellite: queued anyway")
 	}
 }
+
+// The SOS frame's SMS to the Hub's number (hubUplinkSOSSender): only where
+// the bearer choice takes SMS ("sms", or "auto" without a satellite in
+// reach), under the SOS's reference, at priority 0 and precedence
+// Override; never by satellite, which is the SOS's own leg; an error when
+// SMS is chosen and the Hub has no number. [MESHSAT-1446]
+func TestHubUplinkSOSSender_OnlyTheSMSToTheHub(t *testing.T) {
+	db, err := database.New(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	d := engine.NewDispatcher(db, reg, nil, nil) // never started: nothing is sent
+	frame := hubreporter.EncodeSatSOS("nllei01tesseract01", "bridge", 52.1601, 4.4970, "SOS: Anna needs help", time.Unix(1790000000, 0))
+	inReach := func(string) (bool, time.Time, bool) { return true, time.Now(), true }
+	indoors := func(string) (bool, time.Time, bool) { return true, time.Time{}, true }
+	count := func() int {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM message_deliveries`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for _, tc := range []struct {
+		policy string
+		status func(string) (bool, time.Time, bool)
+		sms    bool
+	}{
+		{"auto", inReach, false},
+		{"auto", indoors, true},
+		{"satellite", indoors, false},
+		{"sms", inReach, true},
+	} {
+		before := count()
+		ref := "sos-1790000000000-hubsms-" + tc.policy
+		if err := hubUplinkSOSSender(d, tc.status, tc.policy, "+31612345678")(frame, ref); err != nil {
+			t.Fatalf("%s: %v", tc.policy, err)
+		}
+		if got := count() - before; (got == 1) != tc.sms || got > 1 {
+			t.Fatalf("%s: %d rows queued, want SMS %v", tc.policy, got, tc.sms)
+		}
+		if !tc.sms {
+			continue
+		}
+		var del database.MessageDelivery
+		if err := db.QueryRow(`SELECT channel, msg_ref, destination, priority, precedence, text_preview FROM message_deliveries ORDER BY id DESC LIMIT 1`).
+			Scan(&del.Channel, &del.MsgRef, &del.Destination, &del.Priority, &del.Precedence, &del.TextPreview); err != nil {
+			t.Fatal(err)
+		}
+		if del.Channel != "cellular_0" || del.MsgRef != ref || del.Destination != "+31612345678" || del.Priority != 0 ||
+			del.Precedence != "Override" || del.TextPreview != base64.StdEncoding.EncodeToString(frame) {
+			t.Fatalf("%s: %+v", tc.policy, del)
+		}
+	}
+	if err := hubUplinkSOSSender(d, indoors, "auto", "")(frame, "sos-1-hubsms"); err == nil {
+		t.Fatal("SMS chosen without a Hub number: no error")
+	}
+}

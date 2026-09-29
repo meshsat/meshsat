@@ -128,7 +128,29 @@ type Dispatcher struct {
 	// link switched on through the API lives as long as the dispatcher.
 	runCtx context.Context
 
+	// gate is asked before each delivery is sent (SetSendGate); the workers
+	// read it through this pointer, so one set later reaches them all.
+	gate atomic.Pointer[SendGate]
+
 	mu sync.RWMutex
+}
+
+// SendGate is asked before a delivery is sent: false means it must not go
+// out, and the worker ends it cancelled instead. The SOS uses it for its
+// legs, as MeshSat Android's SosController.mayDeliver: a leg of an SOS that
+// was cancelled never goes out, not even one whose send was under way when
+// the SOS was cancelled and then failed, which the queue would otherwise
+// try again after the cancellation. [MESHSAT-1446]
+type SendGate func(del database.MessageDelivery) bool
+
+// SetSendGate installs the gate every delivery worker asks before it sends
+// (nil removes it); workers already running see it at once.
+func (d *Dispatcher) SetSendGate(fn SendGate) {
+	if fn == nil {
+		d.gate.Store(nil)
+		return
+	}
+	d.gate.Store(&fn)
 }
 
 // Wait blocks until every goroutine started by this dispatcher has
@@ -417,6 +439,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			routingIdentity: d.routingIdentity,
 			custodyMgr:      d.custodyMgr,
 			failover:        d.failover,
+			gate:            &d.gate,
 			cancel:          workerCancel,
 		}
 		d.workers[iface.ID] = w
@@ -486,6 +509,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		routingIdentity: d.routingIdentity,
 		custodyMgr:      d.custodyMgr,
 		failover:        d.failover,
+		gate:            &d.gate,
 		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -1038,6 +1062,14 @@ type DirectSendOptions struct {
 	// when the link is back instead of going out. 0 is no deadline; ignored
 	// with Critical. [MESHSAT-1430]
 	TTLSeconds int
+	// MsgRef is the row's reference, for a sender that names its rows (the
+	// SOS's legs, "sos-<start>-<route>", which its send gate reads); empty
+	// gives the usual time-based one. [MESHSAT-1446]
+	MsgRef string
+	// RetryForever keeps the row trying until it goes out or is cancelled
+	// (max_retries 0): an SOS leg, which MeshSat Android retries every few
+	// minutes until it goes. MaxRetries is then ignored. [MESHSAT-1446]
+	RetryForever bool
 }
 
 // QueueDirectSendTo is QueueDirectSend with DirectSendOptions. A delivery of
@@ -1053,11 +1085,17 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 	if maxRetries <= 0 {
 		maxRetries = 3
 	}
+	if opts.RetryForever {
+		maxRetries = 0 // handleFailure gives up only while max_retries > 0
+	}
 	priority := 1
 	if opts.Critical {
 		priority = 0
 	}
-	msgRef := time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
+	msgRef := opts.MsgRef
+	if msgRef == "" {
+		msgRef = time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
+	}
 
 	payload := []byte(text)
 	if len(opts.Payload) > 0 {
@@ -1313,12 +1351,13 @@ type DeliveryWorker struct {
 	packets         *PacketRing // live packet feed (nil = off) [MESHSAT-826]
 	signing         *SigningService
 	transforms      *TransformPipeline
-	access          *rules.AccessEvaluator // egress rule check before send
-	passSched       PassStateProvider      // satellite pass scheduler (nil for non-satellite)
-	routingIdentity *routing.Identity      // routing identity for delivery confirmations
-	custodyMgr      *CustodyManager        // DTN custody transfer (MESHSAT-408)
-	failover        *FailoverResolver      // next group member when a bearer gets no ack [MESHSAT-1021]
-	cancel          context.CancelFunc     // per-worker cancellation
+	access          *rules.AccessEvaluator    // egress rule check before send
+	passSched       PassStateProvider         // satellite pass scheduler (nil for non-satellite)
+	routingIdentity *routing.Identity         // routing identity for delivery confirmations
+	custodyMgr      *CustodyManager           // DTN custody transfer (MESHSAT-408)
+	failover        *FailoverResolver         // next group member when a bearer gets no ack [MESHSAT-1021]
+	gate            *atomic.Pointer[SendGate] // the dispatcher's send gate (nil = none) [MESHSAT-1446]
+	cancel          context.CancelFunc        // per-worker cancellation
 }
 
 // Run polls the delivery queue and processes pending deliveries.
@@ -1448,6 +1487,12 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 				return
 			}
 		}
+	}
+
+	// A delivery the send gate refuses (a leg of an SOS that was cancelled)
+	// ends cancelled, as a cancel in the queue ends it. [MESHSAT-1446]
+	if !w.mayDeliver(del) {
+		return
 	}
 
 	// Mark as sending, if it is still queued or waiting for a retry: a row
@@ -1667,6 +1712,26 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 	} else {
 		w.handleSuccess(del)
 	}
+}
+
+// mayDeliver asks the dispatcher's send gate whether del may go out. One it
+// refuses is cancelled where it stands (queued or waiting for a retry, the
+// states a worker picks up), and false comes back: it is not sent.
+func (w *DeliveryWorker) mayDeliver(del database.MessageDelivery) bool {
+	if w.gate == nil {
+		return true
+	}
+	gate := w.gate.Load()
+	if gate == nil || (*gate)(del) {
+		return true
+	}
+	if err := w.db.CancelDelivery(del.ID); err != nil {
+		log.Warn().Err(err).Int64("id", del.ID).Msg("send gate: a refused delivery could not be cancelled; it is not sent")
+	} else {
+		log.Warn().Int64("id", del.ID).Str("channel", w.channelID).Str("msg_ref", del.MsgRef).
+			Msg("send gate: delivery refused (its SOS was cancelled), cancelled instead of sent")
+	}
+	return false
 }
 
 // dropNotSent gives a delivery up before it is sent, with the reason in its

@@ -3,15 +3,16 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 
@@ -22,30 +23,53 @@ import (
 	"meshsat/internal/types"
 )
 
-// SOSState tracks an active SOS alert.
+// SOSState is the SOS this Bridge carries, while it is on and after it
+// was cancelled: its legs, each a delivery in the queue or the Hub told
+// over the internet, and what was cancelled. The run is kept in the
+// database (sosRunKey), so a restart neither ends an SOS nor lets the legs
+// of a cancelled one go out. [MESHSAT-1446]
 type SOSState struct {
 	mu       sync.Mutex
 	active   bool
 	startAt  time.Time
 	cancelFn context.CancelFunc
-	sends    int
 	// text is what goes out on every route: the caller's words (the apps send
 	// SosMessages' sentence with the person's name and position), or the fixed
 	// sentence below when the caller gave none. [MESHSAT-1397]
-	text    string
-	trigger string
+	text     string
+	trigger  string
+	run      *sosRun   // the SOS on now, or the last one; nil before the first
+	load     sync.Once // the run kept in the database, read once
+	restored bool      // RestoreSOS ran
+	// The run is written to the database outside mu, in the order its
+	// snapshots were taken: a slow write never holds up the send gate.
+	saveMu   sync.Mutex
+	saveSeq  uint64 // the newest snapshot taken (under mu)
+	savedSeq uint64 // the newest snapshot written (under saveMu)
 }
 
 // sosDefaultText is the SOS text when the caller gives none.
 const sosDefaultText = "SOS - EMERGENCY ALERT - Requesting immediate assistance"
 
+// sosActivateBody is what POST /api/sos/activate takes. [MESHSAT-1397,
+// MESHSAT-1446]
+type sosActivateBody struct {
+	Trigger   string   `json:"trigger,omitempty"`
+	Message   string   `json:"message,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
+	Routes    []string `json:"routes,omitempty"`
+}
+
 // @Summary Activate SOS alert
-// @Description Triggers an SOS emergency alert that sends via mesh and satellite (3x at 30s intervals).
-// @Description When the TAK gateway runs and this Bridge knows its position, the SOS also goes to TAK
-// @Description as a CoT emergency (a-f-G-U-C with a 911 Alert), once, through the gateway's outputs.
+// @Description Starts an SOS on every route this Bridge carries that is set up, as MeshSat Android does (SosController): each route is a leg that waits while its link is down and goes out when the link is back, and keeps trying until the SOS is cancelled. The mesh leg is the text broadcast on the mesh; the satellite leg is the SOS frame to the Hub (type 0x02, the one the Hub raises an SOS from), on the modem this Bridge has (the 9704's link first, then the 9603's); the Hub leg tells the Hub over the internet once its link is up, with the id the Hub files the satellite frame under, so the Hub pages once. Every leg goes at precedence Override and priority 0: first in its queue, never evicted, never expired, past the credit budget and the routing rules.
+// @Description Without "routes" the Bridge takes every route set up: the mesh while it has a mesh radio and the mesh link is switched on, the satellite while a satellite modem runs or one was bound to a switched-on satellite link, the Hub while it is set up. "routes" (any of "mesh", "satellite", "hub") names the routes the caller's own screen promised: a named satellite leg waits for a modem that is not there yet. A named route this Bridge cannot carry is listed in "skipped" by GET /api/sos/status. SMS to the emergency contacts is the apps' own send. When the TAK gateway runs and this Bridge knows its position, the SOS also goes to TAK as a CoT emergency, once. The SOS stays on until POST /api/sos/cancel; the legs are in GET /api/sos/status.
 // @Tags sos
+// @Accept json
 // @Produce json
-// @Success 200 {object} map[string]interface{}
+// @Param body body object{trigger=string,message=string,latitude=number,longitude=number,routes=[]string} false "What started it, the words for every route, where the person is (both or neither; the satellite frame carries it, else this Bridge's GPS fix), and the routes to take"
+// @Success 200 {object} map[string]interface{} "status activated, id, started_at, trigger"
+// @Failure 400 {object} map[string]string "a route that is not mesh, satellite or hub; latitude without longitude or one out of range"
 // @Failure 409 {object} map[string]string "already active"
 // @Router /api/sos/activate [post]
 func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
@@ -54,36 +78,59 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	// double-tap, or an external caller (CLI, TAK, HeMB). Unknown =
 	// "manual". [MESHSAT-562]. The message is the caller's words for every
 	// route (the apps' "SOS: <name> needs help. At <position> at <time>.");
-	// without one the fixed sentence goes. [MESHSAT-1397]
-	var body struct {
-		Trigger string `json:"trigger,omitempty"`
-		Message string `json:"message,omitempty"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	// without one the fixed sentence goes. [MESHSAT-1397] A body that does
+	// not decode still starts the SOS with the defaults: an SOS is never
+	// refused for its form.
+	var body sosActivateBody
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
 	trigger := body.Trigger
 	if trigger == "" {
 		trigger = "manual"
 	}
+	for _, route := range body.Routes {
+		if route != sosRouteMesh && route != sosRouteSatellite && route != sosRouteHub {
+			writeError(w, http.StatusBadRequest, "unknown route "+strconv.Quote(route)+": mesh, satellite or hub")
+			return
+		}
+	}
+	var pos *sosPosition
+	switch {
+	case body.Latitude != nil && body.Longitude != nil:
+		lat, lon := *body.Latitude, *body.Longitude
+		if lat < -90 || lat > 90 || lon < -180 || lon > 180 || math.IsNaN(lat) || math.IsNaN(lon) {
+			writeError(w, http.StatusBadRequest, "latitude must be -90 to 90 and longitude -180 to 180")
+			return
+		}
+		pos = &sosPosition{Lat: lat, Lon: lon}
+	case body.Latitude != nil || body.Longitude != nil:
+		writeError(w, http.StatusBadRequest, "send latitude and longitude together, or neither")
+		return
+	}
 
 	s.touchOperatorActivity()
 
-	if !s.TriggerSOSWithText(trigger, sosTextOf(body.Message)) {
+	if !s.TriggerSOSAt(trigger, sosTextOf(body.Message), pos, body.Routes) {
 		writeJSON(w, http.StatusConflict, map[string]string{"status": "already_active"})
 		return
 	}
 
 	s.sos.mu.Lock()
 	startedAt := s.sos.startAt
+	var id int64
+	if s.sos.run != nil {
+		id = s.sos.run.ID
+	}
 	s.sos.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":     "activated",
+		"id":         id,
 		"started_at": startedAt.UTC().Format(time.RFC3339),
 		"trigger":    trigger,
 	})
 }
 
-// TriggerSOS starts the SOS burst and reports whether it did. It is the single
+// TriggerSOS starts the SOS and reports whether it did. It is the single
 // way an SOS begins: the button on the dashboard and the dead man's switch both
 // arrive here, so both get the already-active guard and the signed audit entry.
 //
@@ -93,9 +140,9 @@ func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 // started a second burst on top of a manual one and corrupted the send counter.
 //
 // Returns false when an SOS is already running, in which case nothing is
-// started and the existing burst continues.
+// started and the existing one continues.
 func (s *Server) TriggerSOS(trigger string) bool {
-	return s.TriggerSOSWithText(trigger, sosDefaultText)
+	return s.TriggerSOSAt(trigger, sosDefaultText, nil, nil)
 }
 
 // sosTextOf is the text an SOS goes out with: the caller's, trimmed and capped
@@ -107,14 +154,41 @@ func sosTextOf(message string) string {
 	}
 	if len(text) > 200 {
 		text = text[:200]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
 	}
 	return text
 }
 
 // TriggerSOSWithText is TriggerSOS with the words that go out on every route.
 func (s *Server) TriggerSOSWithText(trigger, text string) bool {
+	return s.TriggerSOSAt(trigger, text, nil, nil)
+}
+
+// TriggerSOSAt is TriggerSOS with the words, where the person is (nil: this
+// Bridge's GPS fix, if it has one) and the routes the caller names (nil:
+// every route set up). The legs are worked out and queued by the SOS's own
+// goroutine (sosWorker): the satellite modem's lookup takes the gateway
+// manager's lock, which a gateway being stopped can hold for a whole modem
+// session, and the start of an SOS waits for nothing. [MESHSAT-1446]
+func (s *Server) TriggerSOSAt(trigger, text string, pos *sosPosition, routes []string) bool {
 	if text == "" {
 		text = sosDefaultText
+	}
+	s.sosLoad()
+
+	now := s.clockNow()
+	run := &sosRun{
+		ID:        now.UnixMilli(),
+		StartedAt: now.UTC().Format(time.RFC3339),
+		Text:      text,
+		Trigger:   trigger,
+		Named:     routes != nil,
+		Routes:    append([]string(nil), routes...),
+	}
+	if pos != nil {
+		run.Lat, run.Lon, run.HasPosition = pos.Lat, pos.Lon, true
 	}
 
 	s.sos.mu.Lock()
@@ -123,15 +197,20 @@ func (s *Server) TriggerSOSWithText(trigger, text string) bool {
 		log.Warn().Str("trigger", trigger).Msg("SOS requested while one is already active, ignoring")
 		return false
 	}
+	if last := s.sos.run; last != nil && run.ID <= last.ID {
+		run.ID = last.ID + 1 // the legs' references stay unique, whatever the clock did
+	}
 	s.sos.active = true
-	s.sos.startAt = time.Now()
-	s.sos.sends = 0
+	s.sos.startAt = now
 	s.sos.text = text
 	s.sos.trigger = trigger
+	s.sos.run = run
 	ctx, cancel := context.WithCancel(context.Background())
 	s.sos.cancelFn = cancel
 	startedAt := s.sos.startAt
+	raw, seq := s.sosMarshalLocked()
 	s.sos.mu.Unlock()
+	s.sosWrite(raw, seq)
 
 	// Immutable audit-log entry — proves the SOS started at this moment and
 	// what started it. Hash-chained by SigningService.
@@ -144,7 +223,7 @@ func (s *Server) TriggerSOSWithText(trigger, text string) bool {
 		s.signing.AuditEvent("sos_activated", nil, nil, nil, nil, string(detail))
 	}
 
-	go s.sosWorker(ctx, text)
+	go s.sosWorker(ctx, run.ID)
 
 	// TAK clients see the alarm as well, as on MeshSat Android
 	// (SosController). The dead man's switch comes through here too. [MESHSAT-1421]
@@ -155,7 +234,7 @@ func (s *Server) TriggerSOSWithText(trigger, text string) bool {
 	// holds them up. [MESHSAT-1430]
 	s.cancelSatelliteTests()
 
-	log.Warn().Str("trigger", trigger).Str("text", text).Msg("SOS ACTIVATED")
+	log.Warn().Str("trigger", trigger).Str("text", text).Int64("sos", run.ID).Msg("SOS ACTIVATED")
 	return true
 }
 
@@ -494,158 +573,103 @@ func sosTestFrameBridgeID(frame []byte) string {
 	return id
 }
 
+// sosCancelBody is what POST /api/sos/cancel takes. [MESHSAT-1446]
+type sosCancelBody struct {
+	Message string `json:"message,omitempty"`
+}
+
 // @Summary Cancel SOS alert
-// @Description Cancels an active SOS emergency alert
+// @Description Cancels the active SOS, as MeshSat Android does: every leg that has not gone out is cancelled where it waits (and one being sent when this came in is not tried again if that send fails), and the routes that carried the SOS are told it is over: the mesh by a broadcast of the cancellation (a leg of its own, "cancel_legs"), the Hub over the internet if it had the SOS. The satellite leg gets no cancellation; the frame the Hub got stays its alert. "message" is the cancellation's words (the apps send "Alarm cancelled: <name> is safe and needs no help now."); without them the words are Android's for a person without a name. They must not contain SOS, MAYDAY or EMERGENCY: the Hub raises an alarm for any text with one of those words.
 // @Tags sos
+// @Accept json
 // @Produce json
-// @Success 200 {object} map[string]string
+// @Param body body object{message=string} false "The cancellation's words"
+// @Success 200 {object} map[string]interface{} "status cancelled (with id and cancel_legs), or not_active"
+// @Failure 400 {object} map[string]string "words that contain SOS, MAYDAY or EMERGENCY"
 // @Router /api/sos/cancel [post]
 func (s *Server) handleSOSCancel(w http.ResponseWriter, r *http.Request) {
-	s.sos.mu.Lock()
-	defer s.sos.mu.Unlock()
+	var body sosCancelBody
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
+	text := strings.TrimSpace(body.Message)
+	if text == "" {
+		text = sosCancelDefaultText
+	}
+	if len(text) > 200 {
+		text = text[:200]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+	}
+	if sosAlarmWord(text) {
+		writeError(w, http.StatusBadRequest, "the cancellation must not contain SOS, MAYDAY or EMERGENCY: the Hub raises an alarm for any text with one of those words")
+		return
+	}
+	s.sosLoad()
 
-	if !s.sos.active {
+	s.sos.mu.Lock()
+	if !s.sos.active || s.sos.run == nil {
+		s.sos.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "not_active"})
 		return
 	}
-
 	s.sos.active = false
 	if s.sos.cancelFn != nil {
 		s.sos.cancelFn()
 	}
+	run := s.sos.run
+	run.CancelledAt = s.clockNow().UTC().Format(time.RFC3339)
+	run.CancelText = text
+	id := run.ID
+	raw, seq := s.sosMarshalLocked()
+	s.sos.mu.Unlock()
+	s.sosWrite(raw, seq)
 
-	log.Warn().Msg("SOS CANCELLED")
-	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+	legs := s.sosCancelLegs(id, text)
+
+	if s.signing != nil {
+		detail, _ := json.Marshal(map[string]interface{}{"sos": id})
+		s.signing.AuditEvent("sos_cancelled", nil, nil, nil, nil, string(detail))
+	}
+	log.Warn().Int64("sos", id).Msg("SOS CANCELLED")
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "cancelled", "id": id, "cancel_legs": legs})
 }
 
 // @Summary Get SOS status
-// @Description Returns current SOS alert status and send count
+// @Description The SOS on now: its words, what started it, and its legs with where each stands. A leg queued is a delivery (msg_ref, delivery_id, and the delivery's own status, last_error and ack_status: GET /api/deliveries/message/{ref} follows it too); a satellite leg waiting for a modem has status "waiting" and no delivery yet; the Hub leg is "waiting" until the Hub took it over the internet, then "sent" with sent_at. "sends" counts the legs that have gone out. "skipped" says why a route is not taken. Without an SOS on: active false.
 // @Tags sos
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/sos/status [get]
 func (s *Server) handleSOSStatus(w http.ResponseWriter, r *http.Request) {
+	s.sosLoad()
 	s.sos.mu.Lock()
-	defer s.sos.mu.Unlock()
+	active := s.sos.active
+	var run sosRun
+	if s.sos.run != nil {
+		run = s.sos.run.copy()
+	}
+	startAt, text, trigger := s.sos.startAt, s.sos.text, s.sos.trigger
+	s.sos.mu.Unlock()
 
 	resp := map[string]interface{}{
-		"active": s.sos.active,
+		"active": active,
 	}
-	if s.sos.active {
-		resp["started_at"] = s.sos.startAt.UTC().Format(time.RFC3339)
-		resp["sends"] = s.sos.sends
-		resp["message"] = s.sos.text
-		resp["trigger"] = s.sos.trigger
+	if active {
+		legs := s.sosLegStates(run)
+		sends := 0
+		for _, leg := range legs {
+			if leg.Status == "sent" || leg.Status == "delivered" {
+				sends++
+			}
+		}
+		resp["id"] = run.ID
+		resp["started_at"] = startAt.UTC().Format(time.RFC3339)
+		resp["sends"] = sends
+		resp["message"] = text
+		resp["trigger"] = trigger
+		resp["legs"] = legs
+		resp["skipped"] = append([]string{}, run.Skipped...)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// sosWorker sends SOS messages 3 times with 30s intervals via all available transports.
-func (s *Server) sosWorker(ctx context.Context, sosText string) {
-	if sosText == "" {
-		sosText = sosDefaultText
-	}
-	for i := 0; i < 3; i++ {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Send via mesh (broadcast)
-		req := transport.SendRequest{
-			Text: sosText,
-		}
-		// Guarded: this runs in a goroutine, so a nil transport here is not an
-		// error return, it is an unrecovered panic that takes the bridge down
-		// during an emergency. A kit whose mesh radio failed to start must
-		// still get the satellite legs below. [MESHSAT-996]
-		if s.mesh == nil {
-			log.Error().Int("attempt", i+1).Msg("SOS: no mesh transport, skipping the mesh leg")
-		} else if err := s.mesh.SendMessage(ctx, req); err != nil {
-			log.Error().Err(err).Int("attempt", i+1).Msg("SOS mesh send failed")
-		} else {
-			log.Warn().Int("attempt", i+1).Msg("SOS sent via mesh")
-			if s.processor != nil {
-				s.recordMeshTX(req)
-			}
-		}
-
-		// Send via satellite if available
-		if s.gwManager != nil {
-			sosPayload := encodeSOSPayload(0, 0, 0) // position will be 0 if GPS unavailable
-			for _, gw := range s.gwManager.Gateways() {
-				if gw.Type() == "iridium" {
-					// SOS bypasses all queuing — send directly, and past the
-					// credit budget: a used-up daily or monthly budget failed
-					// this leg with "budget exceeded". [MESHSAT-1431]
-					if err := gw.Forward(ctx, &transport.MeshMessage{
-						PortNum:     1,
-						DecodedText: sosText,
-						Critical:    true,
-					}); err != nil {
-						log.Error().Err(err).Int("attempt", i+1).Msg("SOS satellite send failed")
-					} else {
-						log.Warn().Int("attempt", i+1).Msg("SOS sent via satellite")
-					}
-				}
-			}
-			_ = sosPayload // payload used for direct SBD if needed
-		}
-
-		// Hub uplink frame when the MQTT link is down: satellite first,
-		// SMS to the Hub's number otherwise. The Hub decodes it from any of
-		// its webhooks and raises the SOS. [MESHSAT-963]
-		if s.satFallback != nil && i == 0 {
-			var lat, lon float64
-			if s.gpsReader != nil {
-				if st := s.gpsReader.GetStatus(); st.Fix {
-					lat, lon = st.Lat, st.Lon
-				}
-			}
-			if err := s.satFallback.PublishSOS("bridge", lat, lon, sosText); err != nil {
-				log.Error().Err(err).Msg("SOS hub uplink frame failed")
-			}
-		}
-
-		s.sos.mu.Lock()
-		s.sos.sends++
-		s.sos.mu.Unlock()
-
-		// Wait 30s between sends (unless cancelled)
-		if i < 2 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(30 * time.Second):
-			}
-		}
-	}
-
-	// Mark SOS as completed (all 3 sends done)
-	s.sos.mu.Lock()
-	s.sos.active = false
-	s.sos.mu.Unlock()
-	log.Warn().Msg("SOS sequence completed (3 sends)")
-}
-
-// encodeSOSPayload creates a compact SOS payload (15 bytes).
-// Byte 0: 0x06 (MSG_TYPE_SOS)
-// Byte 1: flags (0x01 = active)
-// Bytes 2-5: latitude (int32 BE, *1e7)
-// Bytes 6-9: longitude (int32 BE, *1e7)
-// Bytes 10-11: altitude (uint16 BE)
-// Bytes 12-15: timestamp (uint32 BE)
-func encodeSOSPayload(lat, lon float64, alt int16) []byte {
-	buf := make([]byte, 16)
-	buf[0] = 0x06 // MSG_TYPE_SOS
-	buf[1] = 0x01 // active
-
-	binary.BigEndian.PutUint32(buf[2:6], uint32(int32(math.Round(lat*1e7))))
-	binary.BigEndian.PutUint32(buf[6:10], uint32(int32(math.Round(lon*1e7))))
-	binary.BigEndian.PutUint16(buf[10:12], uint16(alt))
-	binary.BigEndian.PutUint32(buf[12:16], uint32(time.Now().Unix()))
-
-	return buf
 }

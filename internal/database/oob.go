@@ -30,6 +30,11 @@ const (
 	// gets it mapped (the GSM clean-up on a kit's AT text-mode modem).
 	// Unlike oob it still passes the egress rules.
 	DeliveryClassPlain = "plain"
+	// DeliveryClassSOS is an SOS broadcast on the mesh, and its
+	// cancellation: the text exactly as given, and past the egress rules,
+	// as the SOS burst's direct sends it replaces went. A routing rule
+	// never holds an SOS back. [MESHSAT-1446]
+	DeliveryClassSOS = "sos"
 )
 
 // ErrOOBPeerNotFound is returned when no peer matches.
@@ -317,7 +322,7 @@ func (db *DB) PruneOOBLog(keep int) error {
 // egress rules and the interface transforms of its channel (management
 // and Hub-uplink frames carry their own framing). [MESHSAT-963]
 func DeliveryClassBypassesPolicy(class string) bool {
-	return class == DeliveryClassOOB || class == DeliveryClassHubUplink || class == DeliveryClassLXMF
+	return class == DeliveryClassOOB || class == DeliveryClassHubUplink || class == DeliveryClassLXMF || class == DeliveryClassSOS
 }
 
 // DeliveryClassVerbatim reports whether a delivery class goes as its text
