@@ -11,6 +11,7 @@ import (
 	"meshsat/internal/channel"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
+	"meshsat/internal/hubreporter"
 	"meshsat/internal/transport"
 )
 
@@ -45,17 +46,24 @@ func sosLiveServer(t *testing.T, modem transport.SatTransport) *Server {
 
 // stallSat is a 9603 whose first frame stays on the modem until the test
 // ends that session, as a failure (mo_status 32, no network); texts and
-// later frames go at once.
+// later frames go at once. An SOS's own frame is counted apart and always
+// goes. [MESHSAT-1446]
 type stallSat struct {
 	*apiSat
 	onModem chan struct{} // closed when the first frame is on the modem
 	finish  chan struct{} // closing it ends that session, failed
 	mu      sync.Mutex
 	frames  int
+	sos     int
 }
 
-func (m *stallSat) Send(_ context.Context, _ []byte) (*transport.SatResult, error) {
+func (m *stallSat) Send(_ context.Context, data []byte) (*transport.SatResult, error) {
 	m.mu.Lock()
+	if hubreporter.IsSatSOS(data) {
+		m.sos++
+		m.mu.Unlock()
+		return &transport.SatResult{MOStatus: 0}, nil
+	}
 	m.frames++
 	first := m.frames == 1
 	m.mu.Unlock()
@@ -74,13 +82,19 @@ func (m *stallSat) frameSessions() int {
 	defer m.mu.Unlock()
 	return m.frames
 }
+func (m *stallSat) sosSessions() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sos
+}
 
 // A test already on the modem when an SOS starts cannot be cancelled, but
 // if that session fails it is not tried again: the SOS gives it a deadline
 // of now, so the retry it comes back as is never handed to the delivery
 // worker and the reaper expires it. It came back minutes later, in the
 // middle of the emergency, and spent a credit on a test position at the
-// Hub. [MESHSAT-1430]
+// Hub. [MESHSAT-1430] The SOS's own frame goes on the same modem once the
+// test's session is over. [MESHSAT-1446]
 func TestSOSTest_ATestOnTheModemWhenAnSOSStartsIsNotTriedAgain(t *testing.T) {
 	modem := &stallSat{apiSat: &apiSat{kind: "sbd", connected: true}, onModem: make(chan struct{}), finish: make(chan struct{})}
 	s := sosLiveServer(t, modem)
@@ -128,6 +142,9 @@ func TestSOSTest_ATestOnTheModemWhenAnSOSStartsIsNotTriedAgain(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 	if n := modem.frameSessions(); n != 1 {
 		t.Fatalf("the modem got %d sessions for the test, want 1", n)
+	}
+	if n := modem.sosSessions(); n != 1 {
+		t.Fatalf("the modem got %d sessions for the SOS's own frame, want 1", n)
 	}
 	if n, err := s.db.ExpireDeliveries(); err != nil || n != 1 {
 		t.Fatalf("the reaper expired %d (%v)", n, err)
@@ -182,8 +199,8 @@ func TestSOSTest_AnSOSDoesNotWaitForATestOnItsGatewayLookup(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("the test after the SOS began: %d %s, want 409", w.Code, w.Body.String())
 	}
-	if n := deliveryCount(t, s); n != 0 {
-		t.Fatalf("%d deliveries queued", n)
+	if n := testDeliveryCount(t, s); n != 0 {
+		t.Fatalf("%d tests queued", n)
 	}
 }
 
@@ -281,7 +298,7 @@ func TestSOS_StartsWhileTheGatewayManagerIsBusy(t *testing.T) {
 	if w := <-answer; w.Code != http.StatusConflict && w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("the test after the SOS began: %d %s, want 409 or 503", w.Code, w.Body.String())
 	}
-	if n := deliveryCount(t, s); n != 0 {
-		t.Fatalf("%d deliveries queued", n)
+	if n := testDeliveryCount(t, s); n != 0 {
+		t.Fatalf("%d tests queued", n)
 	}
 }

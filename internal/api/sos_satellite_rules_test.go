@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"meshsat/internal/channel"
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
@@ -198,8 +199,8 @@ func TestSOSTest_SatelliteRefusedWhileAnSOSIsActive(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "an SOS is active") {
 		t.Fatalf("during an SOS: %d %s, want 409", w.Code, w.Body.String())
 	}
-	if n := deliveryCount(t, s); n != 0 {
-		t.Fatalf("%d deliveries queued during an SOS", n)
+	if n := testDeliveryCount(t, s); n != 0 {
+		t.Fatalf("%d tests queued during an SOS", n)
 	}
 
 	if w := post(t, s, "/api/sos/cancel", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "cancelled") {
@@ -280,14 +281,19 @@ func TestSOSTest_AnSOSCancelsTheWaitingTest(t *testing.T) {
 	}
 }
 
-// okSat is a 9603 whose sessions all succeed; it records the texts sent.
+// okSat is a 9603 whose sessions all succeed; it records the texts and
+// the frames sent.
 type okSat struct {
 	*apiSat
-	mu    sync.Mutex
-	texts []string
+	mu     sync.Mutex
+	texts  []string
+	frames [][]byte
 }
 
-func (o *okSat) Send(_ context.Context, _ []byte) (*transport.SatResult, error) {
+func (o *okSat) Send(_ context.Context, data []byte) (*transport.SatResult, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.frames = append(o.frames, append([]byte(nil), data...))
 	return &transport.SatResult{MOStatus: 0}, nil
 }
 func (o *okSat) SendText(_ context.Context, text string) (*transport.SatResult, error) {
@@ -301,11 +307,16 @@ func (o *okSat) sentTexts() []string {
 	defer o.mu.Unlock()
 	return append([]string(nil), o.texts...)
 }
+func (o *okSat) sentFrames() [][]byte {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([][]byte(nil), o.frames...)
+}
 
-// With the day's credit budget used up, the SOS burst's direct satellite
-// send still goes (MeshMessage.Critical); it failed with "sbd: budget
-// exceeded" before. An ordinary send on the same gateway is still refused.
-// The modem is a fake: no satellite session opens. [MESHSAT-1431]
+// With the day's credit budget used up, the SOS's satellite leg still goes:
+// its frame is a priority 0 Hub uplink row, which the delivery worker marks
+// Critical. An ordinary send on the same gateway is still refused. The modem
+// is a fake: no satellite session opens. [MESHSAT-1431, MESHSAT-1446]
 func TestSOS_TheSatelliteLegPassesAnExhaustedBudget(t *testing.T) {
 	modem := &okSat{apiSat: &apiSat{kind: "sbd", connected: true}}
 	s := newTestServerWithDB(t)
@@ -314,14 +325,21 @@ func TestSOS_TheSatelliteLegPassesAnExhaustedBudget(t *testing.T) {
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		mgr.Stop()
-		cancel()
-	})
 	if err := mgr.ConfigureInstance(ctx, "iridium", "iridium_0", true, `{"mailbox_mode":"off","auto_receive":false,"daily_budget":1}`); err != nil {
 		t.Fatal(err)
 	}
+	reg := channel.NewRegistry()
+	channel.RegisterDefaults(reg)
+	d := engine.NewDispatcher(s.db, reg, mgr, nil)
+	d.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		d.Wait()
+		mgr.Stop()
+	})
 	s.gwManager = mgr
+	s.SetDispatcher(d)
+	s.SetHubBridgeID("msa-flaneur")
 	if err := s.db.InsertCreditUsage(nil, 1, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -339,15 +357,18 @@ func TestSOS_TheSatelliteLegPassesAnExhaustedBudget(t *testing.T) {
 		t.Fatal("the SOS was refused")
 	}
 	t.Cleanup(stopSOS(s))
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
-		texts := modem.sentTexts()
-		if len(texts) == 1 && texts[0] == sosDefaultText {
+		frames := modem.sentFrames()
+		if len(frames) == 1 && hubreporter.IsSatSOS(frames[0]) {
 			break
 		}
-		if len(texts) > 1 || time.Now().After(deadline) {
-			t.Fatalf("the modem sent %q, want the SOS text alone", texts)
+		if len(frames) > 1 || time.Now().After(deadline) {
+			t.Fatalf("the modem sent %d frames, want the SOS frame alone", len(frames))
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if texts := modem.sentTexts(); len(texts) != 0 {
+		t.Fatalf("the modem sent texts %q; the SOS goes as its frame", texts)
 	}
 }

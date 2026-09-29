@@ -523,6 +523,45 @@ func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 	return r.publishOrQueue(TopicDeviceSOS(sos.DeviceID), 1, false, sos)
 }
 
+// SOSAlert is an SOS as the Hub's SOS detector reads it on
+// meshsat/<device>/mo/decoded: sos true raises the alert, and its id is the
+// one the Hub files the same SOS's satellite frame under
+// ("sos-<bearer>-<bridge id>-<unix seconds>", meshsat-hub
+// internal/bridge/uplink.go), so the Hub pages once whichever way the SOS
+// arrives first. A cancellation goes the same way with sos false. As MeshSat
+// Android's HubReporter.publishSos. [MESHSAT-1446]
+type SOSAlert struct {
+	ID        string   `json:"id"`
+	IMEI      string   `json:"imei"`
+	BridgeID  string   `json:"bridge_id"`
+	Text      string   `json:"text"`
+	SOS       bool     `json:"sos"`
+	Channel   string   `json:"channel"`
+	Source    string   `json:"source"`
+	Lat       *float64 `json:"lat,omitempty"`
+	Lon       *float64 `json:"lon,omitempty"`
+	Timestamp string   `json:"timestamp"`
+}
+
+// PublishSOSNow tells the Hub of an SOS, or of its cancellation, over the
+// MQTT link now: the alert on the device's mo/decoded topic, which the Hub's
+// SOS detector reads, and the event on its sos topic, which the Hub's live
+// map, webhooks and TAK read. Both QoS 1, neither retained. Without a
+// session it answers ErrNotConnected and queues nothing: the SOS keeps
+// trying by itself, and knows when the Hub has it. [MESHSAT-1446]
+func (r *HubReporter) PublishSOSNow(alert SOSAlert, event DeviceSOS) error {
+	if r.client == nil || !r.IsConnected() {
+		return ErrNotConnected
+	}
+	alert.BridgeID = r.cfg.BridgeID
+	event.BridgeID = r.cfg.BridgeID
+	if err := r.publish(TopicDeviceMessage(alert.IMEI), 1, false, alert); err != nil {
+		return err
+	}
+	r.takMsgsOut.Add(1)
+	return r.publish(TopicDeviceSOS(event.DeviceID), 1, false, event)
+}
+
 // PublishSpectrumAlert publishes an RTL-SDR jamming-detection alert to the
 // Hub. Sent on every state transition (clear <-> jamming <-> interference)
 // so the hub can aggregate and raise a cross-kit alarm when multiple

@@ -2382,14 +2382,10 @@ func main() {
 				// as the bearer policy says (hubUplinkSender). The SOS frame
 				// is queued at priority 0, the rest at 1. [MESHSAT-963,
 				// MESHSAT-1430]
-				SendFn: hubUplinkSender(dispatcher, func(id string) (bool, time.Time, bool) {
-					gw := gwMgr.GatewayByInterfaceID(id)
-					if gw == nil {
-						return false, time.Time{}, false
-					}
-					st := gw.Status()
-					return st.Connected, st.LastActivity, true
-				}, bearerPolicy, hubSMS),
+				SendFn: hubUplinkSender(dispatcher, hubUplinkGatewayStatus(gwMgr), bearerPolicy, hubSMS),
+				// The SOS frame by SMS to the Hub's number; the SOS
+				// queues its satellite leg itself. [MESHSAT-1446]
+				SOSSendFn: hubUplinkSOSSender(dispatcher, hubUplinkGatewayStatus(gwMgr), bearerPolicy, hubSMS),
 			})
 			hubReporter.SetConnectionHooks(satFallback.OnMQTTReconnect, satFallback.OnMQTTDisconnect)
 			go satFallback.Run(ctx)
@@ -2674,6 +2670,11 @@ func main() {
 	deadman.Start(ctx)
 	srv.SetDeadManSwitch(deadman)
 	defer deadman.Stop()
+
+	// An SOS that was on when the Bridge stopped is on again: its legs
+	// already queued are in the queue, and it goes on looking for its
+	// satellite modem and the Hub's link. [MESHSAT-1446]
+	srv.RestoreSOS()
 
 	// Spectrum jamming alert relay: subscribe to state-transition events
 	// from the RTL-SDR monitor and fan them out to (a) the TAK gateway so

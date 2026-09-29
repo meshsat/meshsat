@@ -72,6 +72,17 @@ func postSatTest(t *testing.T, s *Server, body string) (sosSatAnswer, *database.
 	return resp, del
 }
 
+// testDeliveryCount counts the alarm test's satellite legs in the queue,
+// leaving out what an SOS queues of its own. [MESHSAT-1446]
+func testDeliveryCount(t *testing.T, s *Server) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM message_deliveries WHERE text_preview = ?`, sosTestSatellitePreview).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func deliveryCount(t *testing.T, s *Server) int {
 	t.Helper()
 	var n int

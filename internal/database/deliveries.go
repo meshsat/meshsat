@@ -387,6 +387,26 @@ func (db *DB) EndSendingDeliveries(class, preview string) (int64, error) {
 	return res.RowsAffected()
 }
 
+// WaitingDeliveryIDsByRef lists the deliveries under msgRef that can still
+// be cancelled (queued, waiting for a retry, or held): an SOS's SMS to the
+// Hub's number, which its cancellation stops. [MESHSAT-1446]
+func (db *DB) WaitingDeliveryIDsByRef(msgRef string) ([]int64, error) {
+	rows, err := db.Query(`SELECT id FROM message_deliveries WHERE msg_ref = ? AND status IN ('queued', 'retry', 'held')`, msgRef)
+	if err != nil {
+		return nil, fmt.Errorf("waiting deliveries by ref: %w", err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("waiting deliveries by ref: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // ClaimDeliveryForSending marks a delivery 'sending' if it is still queued or
 // waiting for a retry, and reports whether it did. The delivery worker
 // claims each row this way before it sends it: a row cancelled, held or

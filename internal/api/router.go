@@ -310,6 +310,10 @@ func (s *Server) SetInterfaceManager(m *engine.InterfaceManager) {
 // SetDispatcher sets the dispatcher for loop metrics exposure.
 func (s *Server) SetDispatcher(d *engine.Dispatcher) {
 	s.dispatcher = d
+	// A leg of a cancelled SOS never goes out (sosMayDeliver). [MESHSAT-1446]
+	if d != nil {
+		d.SetSendGate(s.sosMayDeliver)
+	}
 }
 
 // SetLinkManager sets the routing link manager for link API endpoints.

@@ -6,8 +6,9 @@ import { useMeshsatStore } from '@/stores/meshsat'
 //
 // Acceptance: ≤2 taps from any screen. Confirmation requires either
 // a 3-second hold OR a second tap within 2 seconds. The underlying
-// /api/sos/activate call fans out FLASH-precedence messages over
-// mesh + every online satellite gateway (existing handler).
+// /api/sos/activate call starts the SOS on every route that is set up:
+// each leg waits while its link is down and goes out when it is back,
+// until Cancel. [MESHSAT-1446]
 //
 // This component is designed to sit in both the persistent status
 // strip (compact "SOS" pill) and any page that wants the full
@@ -75,7 +76,7 @@ onUnmounted(() => { if (holdTimer) clearInterval(holdTimer) })
   <div v-if="store.sosStatus?.active"
     class="flex items-center gap-2 px-3 py-1.5 rounded border border-red-500 bg-red-500/20 animate-pulse">
     <span class="text-[10px] font-bold text-red-300 tracking-wider">SOS ACTIVE</span>
-    <span class="text-[10px] text-red-300/80">{{ store.sosStatus.sends || 0 }}/3</span>
+    <span v-if="store.sosStatus.legs?.length" class="text-[10px] text-red-300/80">{{ store.sosStatus.sends || 0 }}/{{ store.sosStatus.legs.length }}</span>
     <button type="button" @click="onCancel"
       class="px-2 py-0.5 rounded bg-gray-700 text-gray-200 text-[10px] font-medium min-h-[28px]">
       Cancel
