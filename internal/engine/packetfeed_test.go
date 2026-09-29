@@ -219,7 +219,7 @@ func TestPacketRing_AddEmitsPacketEvent(t *testing.T) {
 		t.Fatalf("data is not JSON: %v", err)
 	}
 	for _, key := range []string{"time", "bearer", "dir", "iface", "from", "to", "bytes", "rssi", "snr",
-		"hops", "channel", "portnum", "portnum_name", "text", "raw", "path", "msg_ref"} {
+		"hops", "hop_start", "channel", "portnum", "portnum_name", "text", "raw", "path", "msg_ref"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("packet JSON is missing %q", key)
 		}
@@ -291,7 +291,7 @@ func TestMeshRXRecord(t *testing.T) {
 			},
 			want: PacketRecord{
 				Bearer: "lora", Dir: "rx", Iface: "mesh_0", From: "!11223344", To: "broadcast",
-				Bytes: len(text), RSSI: -82, SNR: 7.25, Hops: 0, Channel: 2, PortNum: 1,
+				Bytes: len(text), RSSI: -82, SNR: 7.25, Hops: 0, HopStart: 3, Channel: 2, PortNum: 1,
 				PortNumName: "TEXT_MESSAGE_APP", Text: text,
 			},
 		},
@@ -303,7 +303,31 @@ func TestMeshRXRecord(t *testing.T) {
 			},
 			want: PacketRecord{
 				Bearer: "lora", Dir: "rx", Iface: "mesh_0", From: "!deadbeef", To: "!11223344",
-				Bytes: 7, Hops: 2, PortNum: 67, PortNumName: "TELEMETRY_APP",
+				Bytes: 7, Hops: 2, HopStart: 3, PortNum: 67, PortNumName: "TELEMETRY_APP",
+			},
+		},
+		{
+			// Firmware that sends no hop_start: hops 0 means unknown, not
+			// heard directly, and hop_start 0 says so.
+			name: "no hop_start: hop count unknown",
+			msg: transport.MeshMessage{
+				From: 0x11223344, To: 0xffffffff, PortNum: 3, PortNumName: "POSITION_APP",
+				RawPayload: []byte{1}, RxSNR: 6.5, HopLimit: 3,
+			},
+			want: PacketRecord{
+				Bearer: "lora", Dir: "rx", Iface: "mesh_0", From: "!11223344", To: "broadcast",
+				Bytes: 1, RSSI: -82, SNR: 6.5, Hops: 0, HopStart: 0, PortNum: 3, PortNumName: "POSITION_APP",
+			},
+		},
+		{
+			name: "hop_start below hop_limit: hop count unknown",
+			msg: transport.MeshMessage{
+				From: 0x11223344, To: 0xffffffff, PortNum: 3, PortNumName: "POSITION_APP",
+				RawPayload: []byte{1}, HopLimit: 5, HopStart: 3,
+			},
+			want: PacketRecord{
+				Bearer: "lora", Dir: "rx", Iface: "mesh_0", From: "!11223344", To: "broadcast",
+				Bytes: 1, RSSI: -82, Hops: 0, HopStart: 0, PortNum: 3, PortNumName: "POSITION_APP",
 			},
 		},
 		{
@@ -338,6 +362,48 @@ func TestMeshRXRecord(t *testing.T) {
 			got.Time = time.Time{}
 			if got != tc.want {
 				t.Errorf("\n got %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A client of /api/packets tells "heard directly" (hops 0, hop_start > 0)
+// from "hop count unknown" (hop_start 0) and from relayed (hops > 0), which
+// hops alone could not. [B23]
+func TestMeshRXRecord_HopStartInTheFeedJSON(t *testing.T) {
+	mesh := &rssiMesh{}
+	for _, tc := range []struct {
+		name            string
+		limit, start    int // the header's hop_limit and hop_start
+		hops, wantStart int // the record's hops and hop_start
+		heardDirectly   bool
+	}{
+		{"heard directly", 7, 7, 0, 7, true},
+		{"relayed twice", 5, 7, 2, 7, false},
+		{"old firmware, no hop_start", 3, 0, 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := meshRXRecord(mesh, &transport.MeshMessage{From: 0x11223344, To: 0xffffffff, PortNum: 1,
+				DecodedText: "hi", HopLimit: tc.limit, HopStart: tc.start})
+			raw, err := json.Marshal(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Hops     *int `json:"hops"`
+				HopStart *int `json:"hop_start"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Hops == nil || got.HopStart == nil {
+				t.Fatalf("hops and hop_start must always be present: %s", raw)
+			}
+			if *got.Hops != tc.hops || *got.HopStart != tc.wantStart {
+				t.Fatalf("hops %d hop_start %d, want %d %d", *got.Hops, *got.HopStart, tc.hops, tc.wantStart)
+			}
+			if direct := *got.HopStart > 0 && *got.Hops == 0; direct != tc.heardDirectly {
+				t.Fatalf("heard directly %v, want %v", direct, tc.heardDirectly)
 			}
 		})
 	}

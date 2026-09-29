@@ -469,8 +469,9 @@ func (s *Server) Router() http.Handler {
 		// Iridium scheduler (pass-aware smart timing)
 		r.Get("/iridium/scheduler", s.handleGetSchedulerStatus)
 
-		// Iridium mailbox — manual one-shot check
+		// Iridium mailbox — the check a person asks for, and its outcome
 		r.Post("/iridium/mailbox/check", s.handleManualMailboxCheck)
+		r.Get("/iridium/mailbox", s.handleGetMailboxCheck)
 
 		// Iridium system time (AT-MSSTM)
 		r.Get("/iridium/time", s.handleGetIridiumTime)

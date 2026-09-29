@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -131,6 +132,15 @@ func (a *App) Setup(ctx context.Context) error {
 		a.Processor.Emit(transport.MeshEvent{
 			Type:    eventType,
 			Message: message,
+			Time:    time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+	// Events that carry a state object in data (the mailbox check).
+	a.GatewayMgr.SetEventDataEmitFunc(func(eventType, message string, data json.RawMessage) {
+		a.Processor.Emit(transport.MeshEvent{
+			Type:    eventType,
+			Message: message,
+			Data:    data,
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
 	})

@@ -33,6 +33,8 @@ type Manager struct {
 	onReceiverStart ReceiverStartFunc       // called when a gateway starts
 	receiverCtx     context.Context         // lifetime of inbound receivers: the manager's, never a caller's [MESHSAT-858]
 	onEventEmit     EventEmitFunc           // SSE event emitter callback
+	onEventData     EventDataEmitFunc       // SSE events that carry a data object (the mailbox check)
+	mailbox         mailboxCheck            // the mailbox check a person asks for: running, last outcome
 	nodeNameFn      func(uint32) string     // resolves mesh node ID to name
 	packetSink      PacketSink              // live packet feed sink for APRS + cellular gateways [MESHSAT-826]
 	sdrProvider     func() SDRBorrower      // the spectrum monitor, once it exists; the HF gateway borrows the RTL-SDR [MESHSAT-1353]
@@ -1829,6 +1831,50 @@ func (m *Manager) GetIridiumSignalFast(ctx context.Context) (*transport.SignalIn
 	return sat.GetSignalFast(ctx)
 }
 
+// satTransportOf returns the transport of one modem: "sbd" the 9603, "imt"
+// the 9704, "" the one the signal endpoints have always picked
+// (activeSatTransport), so a page that shows both modems can read each.
+func (m *Manager) satTransportOf(ctx context.Context, modemType string) (transport.SatTransport, error) {
+	switch modemType {
+	case "sbd":
+		if m.sat == nil {
+			return nil, fmt.Errorf("SBD transport not available")
+		}
+		return m.sat, nil
+	case "imt":
+		if m.imtSat == nil {
+			return nil, fmt.Errorf("IMT transport not available")
+		}
+		return m.imtSat, nil
+	case "":
+		if sat := m.activeSatTransport(ctx); sat != nil {
+			return sat, nil
+		}
+		return nil, fmt.Errorf("satellite transport not available")
+	}
+	return nil, fmt.Errorf("unknown modem type %q (sbd or imt)", modemType)
+}
+
+// GetIridiumSignalOf is GetIridiumSignal (blocking AT+CSQ) for one modem:
+// "sbd", "imt", or "" for the automatic choice.
+func (m *Manager) GetIridiumSignalOf(ctx context.Context, modemType string) (*transport.SignalInfo, error) {
+	sat, err := m.satTransportOf(ctx, modemType)
+	if err != nil {
+		return nil, err
+	}
+	return sat.GetSignal(ctx)
+}
+
+// GetIridiumSignalFastOf is GetIridiumSignalFast (cached AT+CSQF) for one
+// modem: "sbd", "imt", or "" for the automatic choice.
+func (m *Manager) GetIridiumSignalFastOf(ctx context.Context, modemType string) (*transport.SignalInfo, error) {
+	sat, err := m.satTransportOf(ctx, modemType)
+	if err != nil {
+		return nil, err
+	}
+	return sat.GetSignalFast(ctx)
+}
+
 // GetIridiumGeolocation returns Iridium-derived geolocation (AT-MSGEO).
 // Only available on SBD (9603). Returns error for IMT (9704).
 func (m *Manager) GetIridiumGeolocation(ctx context.Context) (*transport.GeolocationInfo, error) {
@@ -1853,27 +1899,6 @@ func (m *Manager) GetIridiumTime(ctx context.Context) (*transport.IridiumTime, e
 		return nil, fmt.Errorf("system time requires SBD (9603) modem — not available with IMT (9704)")
 	}
 	return sbd.GetSystemTime(ctx)
-}
-
-// ManualMailboxCheck triggers a one-shot mailbox check on the first running Iridium gateway.
-func (m *Manager) ManualMailboxCheck(ctx context.Context) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, gw := range m.running {
-		if gw == nil {
-			continue
-		}
-		if sgw, ok := gw.(*SBDGateway); ok {
-			sgw.ManualMailboxCheck(ctx)
-			return nil
-		}
-		if igw, ok := gw.(*IMTGateway); ok {
-			igw.ManualMailboxCheck(ctx)
-			return nil
-		}
-	}
-	return fmt.Errorf("iridium gateway not running")
 }
 
 // GatewayStatusResponse is the API response for gateway status.

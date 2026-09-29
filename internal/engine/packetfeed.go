@@ -287,8 +287,12 @@ func meshRXRecord(mesh transport.MeshTransport, msg *transport.MeshMessage) Pack
 		PortNum:     msg.PortNum,
 		PortNumName: msg.PortNumName,
 	}
+	// hops is 0 both for "heard directly" and for "unknown" (firmware that
+	// sends no hop_start, or a header whose hop_start is below its
+	// hop_limit); hop_start tells them apart, set only when hops is known.
 	if msg.HopStart > 0 && msg.HopStart >= msg.HopLimit {
 		rec.Hops = msg.HopStart - msg.HopLimit
+		rec.HopStart = msg.HopStart
 	}
 	switch {
 	case msg.PortNum == int(transport.PortNumTextMessage):

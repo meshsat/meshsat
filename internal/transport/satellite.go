@@ -63,6 +63,14 @@ type SatResult struct {
 	MTLength   int    `json:"mt_length"`
 	MTQueued   int    `json:"mt_queued"`
 	StatusText string `json:"status_text"`
+
+	// NoSession is set by a MailboxCheck that opened no satellite session:
+	// nothing called for one, the message was already in the modem, or the
+	// modem (the 9704) fetches its messages by itself. The gateway records a
+	// session in the GSS history only when one ran; an empty result used to
+	// count as a successful registration. Never on the wire, so a HAL answer
+	// reads as a session, as before.
+	NoSession bool `json:"-"`
 }
 
 // SBDResult is an alias for SatResult for backward compatibility.

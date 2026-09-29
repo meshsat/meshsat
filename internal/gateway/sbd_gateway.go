@@ -43,6 +43,7 @@ func NewSBDGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.D
 // Start subscribes to Iridium SSE for ring alerts and starts send, DLQ, poll workers.
 func (g *SBDGateway) Start(ctx context.Context) error {
 	ctx, g.cancel = context.WithCancel(ctx)
+	g.setRunContext(ctx)
 	g.startTime = time.Now()
 
 	// Check modem status

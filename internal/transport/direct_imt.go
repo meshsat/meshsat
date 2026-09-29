@@ -486,7 +486,7 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SatResult, erro
 	t.mu.Lock()
 	if !t.connected || t.conn == nil {
 		t.mu.Unlock()
-		return &SatResult{MOStatus: IMTStatusNoNetwork, StatusText: "not connected"}, nil
+		return &SatResult{MOStatus: IMTStatusNoNetwork, StatusText: "not connected", NoSession: true}, nil
 	}
 	t.mu.Unlock()
 
@@ -508,6 +508,7 @@ func (t *DirectIMTTransport) MailboxCheck(ctx context.Context) (*SatResult, erro
 		MTQueued:   pending,
 		MTReceived: pending > 0,
 		StatusText: "IMT poll complete",
+		NoSession:  true, // a look at what the modem pushed, no session
 	}
 	if pending > 0 {
 		result.MTStatus = 1
