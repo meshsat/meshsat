@@ -18,9 +18,10 @@ import (
 // MeshSat Android's FakeModem (IridiumSppOverPipeTest.kt at v2.19.4): echo
 // off (the Bridge sends ATE0 at connect), +SBDSX and +SBDIX answers,
 // binary SBDRB frames, SBDD0/1/2, SBDWT and SBDWB into an MO buffer, and
-// OK for the rest. Every SBDIX records what the MO buffer held when it went
-// out. A dropped link fails every read and write at once, as an unplugged
-// adapter does.
+// OK for the rest; optionally a ring-alert flag and a gateway MT queue whose
+// sessions empty the MT buffer as they start. Every SBDIX records what the
+// MO buffer held when it went out. A dropped link fails every read and
+// write at once, as an unplugged adapter does.
 type sbdEmu struct {
 	serial.Port
 
@@ -36,12 +37,25 @@ type sbdEmu struct {
 	sbdixReply   string   // the +SBDIX line
 	sbdixSilent  bool     // the session never answers
 	sbdd0Fails   bool     // SBDD0 answers 1 (not cleared)
+	sbdd1Fails   bool     // SBDD1 answers 1: the MT buffer keeps its message
 	sbdrbCorrupt bool     // SBDRB frames arrive with a wrong checksum
 	mo           []byte   // the MO buffer
 	mt           []byte   // the MT buffer
 	carried      []string // what the MO buffer held at each SBDIX, in order
 	binLeft      int      // SBDWB payload and checksum bytes still to come
 	bin          []byte
+	// loadLost: the modem takes an SBDWT or SBDWB load but its answer is
+	// lost on the line (SBDWT answered ERROR, SBDWB's result code garbled).
+	loadLost bool
+	// ra is the ring-alert flag live SBDSX reports; a gssLive session
+	// answers it.
+	ra bool
+	// gssLive: a session empties the MT buffer as it starts, as the ISU
+	// does, brings in the first message of gss, and its +SBDIX answer is
+	// built from them (MO status 0) instead of sbdixReply.
+	gssLive bool
+	gss     [][]byte
+	momsn   int
 	// onCommand is called with every command once it is answered, in the
 	// goroutine that wrote it (which holds the transport's serial lock),
 	// with e.mu not held.
@@ -132,6 +146,10 @@ func (e *sbdEmu) loadBinary() {
 		return
 	}
 	e.mo = append([]byte(nil), payload...)
+	if e.loadLost {
+		e.out = append(e.out, "\r\n\x7f\r\n\r\nOK\r\n"...) // the 0 garbled on the line
+		return
+	}
 	e.out = append(e.out, "\r\n0\r\n\r\nOK\r\n"...)
 }
 
@@ -158,24 +176,44 @@ func (e *sbdEmu) answer(cmd string) {
 		case e.sbdsxBroken:
 			reply("\r\nERROR\r\n")
 		case e.sbdsxLive:
-			mo, mt, mtmsn := 0, 0, -1
+			mo, mt, mtmsn, ra := 0, 0, -1, 0
 			if len(e.mo) > 0 {
 				mo = 1
 			}
 			if len(e.mt) > 0 {
 				mt, mtmsn = 1, 6
 			}
-			reply(fmt.Sprintf("\r\n+SBDSX: %d, 218, %d, %d, 0, 0\r\n\r\nOK\r\n", mo, mt, mtmsn))
+			if e.ra {
+				ra = 1
+			}
+			reply(fmt.Sprintf("\r\n+SBDSX: %d, 218, %d, %d, %d, 0\r\n\r\nOK\r\n", mo, mt, mtmsn, ra))
 		default:
 			reply("\r\n" + e.sbdsxReply + "\r\n\r\nOK\r\n")
 		}
 	case cmd == "AT+SBDIX" || cmd == "AT+SBDIXA":
 		e.carried = append(e.carried, string(e.mo))
+		if e.gssLive {
+			e.mt, e.ra = nil, false
+			e.momsn++
+			mtStatus := 0
+			if len(e.gss) > 0 {
+				e.mt, e.gss = e.gss[0], e.gss[1:]
+				mtStatus = 1
+			}
+			if !e.sbdixSilent {
+				reply(fmt.Sprintf("\r\n+SBDIX: 0, %d, %d, 7, %d, %d\r\n\r\nOK\r\n", e.momsn, mtStatus, len(e.mt), len(e.gss)))
+			}
+			return
+		}
 		if !e.sbdixSilent {
 			reply("\r\n" + e.sbdixReply + "\r\n\r\nOK\r\n")
 		}
 	case strings.HasPrefix(cmd, "AT+SBDWT="):
 		e.mo = []byte(strings.TrimPrefix(cmd, "AT+SBDWT="))
+		if e.loadLost {
+			reply("\r\nERROR\r\n")
+			return
+		}
 		reply("\r\nOK\r\n")
 	case strings.HasPrefix(cmd, "AT+SBDWB="):
 		n, err := strconv.Atoi(strings.TrimPrefix(cmd, "AT+SBDWB="))
@@ -193,6 +231,10 @@ func (e *sbdEmu) answer(cmd string) {
 			reply("\r\n0\r\n\r\nOK\r\n")
 		}
 	case cmd == "AT+SBDD1":
+		if e.sbdd1Fails {
+			reply("\r\n1\r\n\r\nOK\r\n")
+			return
+		}
 		e.mt = nil
 		reply("\r\n0\r\n\r\nOK\r\n")
 	case cmd == "AT+SBDD2":
@@ -253,6 +295,12 @@ func (e *sbdEmu) mtBuffer() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return string(e.mt)
+}
+
+func (e *sbdEmu) moBuffer() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return string(e.mo)
 }
 
 func indexOf(cmds []string, cmd string) int {
@@ -947,5 +995,417 @@ func TestSend_LinkReopenedDuringTheRateLimitWaitSendsNothing(t *testing.T) {
 	}
 	if n := e.count("AT+SBDIX") + next.count("AT+SBDIX"); n != 0 {
 		t.Fatalf("%d sessions went out (new link: %q)", n, next.sent())
+	}
+}
+
+// The ring-alert path (the gateway's handleRingAlertWithRetry, the Reticulum
+// interface's handleInbound) reads with Receive after MailboxCheck returns.
+// A send queued behind the check took the session lock in between, and its
+// session emptied the MT buffer (the ISU clears it as a session starts), so
+// the message the check had reported was gone when Receive came. The check
+// now reads it under the same lock hold that found it, and Receive hands it
+// over after the send's session, once: a message already waiting, and one
+// the check's own session brought in.
+func TestMailboxCheck_RingAlertKeepsItsMTAcrossAQueuedSend(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		waiting bool // the MT is in the modem already; else the check's session brings it
+	}{
+		{"the MT waiting in the modem", true},
+		{"the MT brought by the check's session", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSBDEmu()
+			e.sbdsxLive = true
+			e.gssLive = true
+			if tc.waiting {
+				e.mt = []byte("for you")
+			} else {
+				e.ra = true
+				e.gss = [][]byte{[]byte("for you")}
+			}
+			tr := emuTransport(t, e)
+
+			// The send is requested while the check holds the session lock
+			// (the check's first command runs under it), so it queues behind
+			// the check; its own session need not wait 10 s after the check's.
+			send := queuedSend{"queued text", false}
+			var sent <-chan sendOutcome
+			var once sync.Once
+			e.set(func(e *sbdEmu) {
+				e.onCommand = func(cmd string) {
+					switch cmd {
+					case "AT+SBDSX":
+						once.Do(func() {
+							sent = send.start(tr)
+							time.Sleep(50 * time.Millisecond) // blocked on the session lock
+						})
+					case send.load():
+						tr.lastSBDIX = time.Now().Add(-time.Hour)
+					}
+				}
+			})
+
+			res, err := tr.MailboxCheck(context.Background())
+			if err != nil || res.MTStatus != 1 || res.MTLength == 0 {
+				t.Fatalf("the ring alert's check: %+v %v, want a message reported", res, err)
+			}
+			if res.NoSession != tc.waiting {
+				t.Fatalf("NoSession %v, want %v", res.NoSession, tc.waiting)
+			}
+			so := await(t, sent, "the queued send")
+			if so.err != nil || so.res.MOStatus != 0 {
+				t.Fatalf("send: %+v %v", so.res, so.err)
+			}
+
+			// The caller's Receive, after the send's session.
+			data, err := tr.Receive(context.Background())
+			if err != nil || string(data) != "for you" {
+				t.Fatalf("receive after the send's session: %q %v, want the message", data, err)
+			}
+			if again, err := tr.Receive(context.Background()); err != nil || len(again) != 0 {
+				t.Fatalf("a second receive: %q %v, want nothing", again, err)
+			}
+
+			cmds := e.sent()
+			sendIX := indexFrom(cmds, indexOf(cmds, send.load()), "AT+SBDIX")
+			if rb := indexOf(cmds, "AT+SBDRB"); rb < 0 || sendIX < 0 || rb > sendIX {
+				t.Fatalf("the MT was not read before the send's session: %q", cmds)
+			}
+			want := []string{send.payload}
+			if !tc.waiting {
+				want = []string{"", send.payload}
+			}
+			if got := e.sessions(); !slices.Equal(got, want) {
+				t.Fatalf("the sessions carried %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A send whose load the modem took but whose answer was lost fails before
+// its session. It left the message in the MO buffer, where the next session
+// (a ring alert's, which sent whatever it found there) carried it, and the
+// queue's retry carried it again. A send now empties the buffer on every
+// failure after its load: the next session carries none of it, and the
+// retry sends it once.
+func TestSend_FailureAfterTheLoadLeavesTheMOBufferEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		send queuedSend
+	}{
+		{"binary", queuedSend{"queued data", true}},
+		{"text", queuedSend{"queued text", false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSBDEmu()
+			e.sbdsxLive = true
+			e.gssLive = true
+			e.loadLost = true
+			tr := emuTransport(t, e)
+
+			if o := await(t, tc.send.start(tr), "the send"); o.err == nil {
+				t.Fatalf("the send did not fail: %+v", o.res)
+			}
+			cmds := e.sent()
+			if load := indexOf(cmds, tc.send.load()); load < 0 || indexFrom(cmds, load, "AT+SBDD0") < 0 {
+				t.Fatalf("the MO buffer was not cleared after the failed load: %q", cmds)
+			}
+			if mo := e.moBuffer(); mo != "" {
+				t.Fatalf("MO buffer %q after the failed send, want it empty", mo)
+			}
+			if n := e.count("AT+SBDIX"); n != 0 {
+				t.Fatalf("the failed send opened a session: %q", cmds)
+			}
+
+			// The next session, a ring alert's, carries none of it.
+			e.set(func(e *sbdEmu) { e.ra, e.loadLost = true, false })
+			if res, err := tr.MailboxCheck(context.Background()); err != nil || res.NoSession {
+				t.Fatalf("the ring alert's check: %+v %v, want a session", res, err)
+			}
+			// The queue's retry sends it, once.
+			tr.mu.Lock()
+			tr.lastSBDIX = time.Now().Add(-time.Hour)
+			tr.mu.Unlock()
+			if o := await(t, tc.send.start(tr), "the retry"); o.err != nil || o.res.MOStatus != 0 {
+				t.Fatalf("retry: %+v %v", o.res, o.err)
+			}
+			if got, want := e.sessions(), []string{"", tc.send.payload}; !slices.Equal(got, want) {
+				t.Fatalf("the sessions carried %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Whatever is left in the MO buffer when the ring alert's check runs (a
+// send's clear that did not get through) belongs to a send that failed and
+// that its queue retries, so it is cleared before any session and never
+// sent: sent from here it went out twice. It no longer calls for a session
+// by itself, and a buffer the modem will not clear keeps any session from
+// going out, as in the button's check.
+func TestMailboxCheck_ClearsALeftoverMOInsteadOfSendingIt(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ra       bool
+		stuck    bool // the modem will not clear the MO buffer
+		wantErr  bool
+		sessions []string
+	}{
+		{"with a ring alert", true, false, false, []string{""}},
+		{"alone", false, false, false, nil},
+		{"that will not clear", true, true, true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSBDEmu()
+			e.sbdsxLive = true
+			e.gssLive = true
+			e.mo = []byte("leftover")
+			e.ra = tc.ra
+			e.sbdd0Fails = tc.stuck
+			tr := emuTransport(t, e)
+
+			res, err := tr.MailboxCheck(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err %v, want an error: %v", err, tc.wantErr)
+			}
+			if err == nil && res.NoSession != (tc.sessions == nil) {
+				t.Fatalf("NoSession %v, want %v", res.NoSession, tc.sessions == nil)
+			}
+			if got := e.sessions(); !slices.Equal(got, tc.sessions) {
+				t.Fatalf("the sessions carried %q, want %q (%q)", got, tc.sessions, e.sent())
+			}
+			if !tc.stuck && e.moBuffer() != "" {
+				t.Fatalf("MO buffer %q, want it cleared", e.moBuffer())
+			}
+		})
+	}
+}
+
+// A send's own session can bring an MT in. The send returned with the
+// message still in the modem, and the gateway's follow-up check
+// (handleRingAlert: MailboxCheck, then Receive) came only after the send let
+// go of the session lock; a send already queued for it ran its session
+// first and emptied the MT buffer. The send now holds the message itself:
+// the queued send's session cannot touch it, the follow-up check reports it
+// without opening a session, and Receive hands it over once.
+func TestSend_HoldsTheMTItsSessionBroughtIn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		first queuedSend
+	}{
+		{"binary send", queuedSend{"first data", true}},
+		{"text send", queuedSend{"first text", false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSBDEmu()
+			e.sbdsxLive = true
+			e.gssLive = true
+			e.gss = [][]byte{[]byte("for you")}
+			tr := emuTransport(t, e)
+
+			// The second send is requested while the first holds the session
+			// lock (its load runs under it), so it queues behind the first;
+			// its own session need not wait 10 s after the first one's.
+			second := queuedSend{"second text", false}
+			var queued <-chan sendOutcome
+			var once sync.Once
+			e.set(func(e *sbdEmu) {
+				e.onCommand = func(cmd string) {
+					switch cmd {
+					case tc.first.load():
+						once.Do(func() {
+							queued = second.start(tr)
+							time.Sleep(50 * time.Millisecond) // blocked on the session lock
+						})
+					case second.load():
+						tr.lastSBDIX = time.Now().Add(-time.Hour)
+					}
+				}
+			})
+
+			fo := await(t, tc.first.start(tr), "the first send")
+			if fo.err != nil || fo.res.MOStatus != 0 || fo.res.MTStatus != 1 {
+				t.Fatalf("first send: %+v %v, want sent with a message in", fo.res, fo.err)
+			}
+			so := await(t, queued, "the queued send")
+			if so.err != nil || so.res.MOStatus != 0 || so.res.MTStatus != 0 {
+				t.Fatalf("queued send: %+v %v", so.res, so.err)
+			}
+
+			// The gateway's follow-up check, after both sends.
+			res, err := tr.MailboxCheck(context.Background())
+			if err != nil || res.MTStatus != 1 || res.MTLength == 0 || !res.NoSession {
+				t.Fatalf("follow-up check: %+v %v, want the message reported and no session", res, err)
+			}
+			if data, err := tr.Receive(context.Background()); err != nil || string(data) != "for you" {
+				t.Fatalf("receive: %q %v, want the message", data, err)
+			}
+			if again, err := tr.Receive(context.Background()); err != nil || len(again) != 0 {
+				t.Fatalf("a second receive: %q %v, want nothing", again, err)
+			}
+			if res, err := tr.MailboxCheck(context.Background()); err != nil || res.MTStatus == 1 || !res.NoSession {
+				t.Fatalf("the next check: %+v %v, want nothing reported and no session", res, err)
+			}
+
+			cmds := e.sent()
+			queuedIX := indexFrom(cmds, indexOf(cmds, second.load()), "AT+SBDIX")
+			if rb := indexOf(cmds, "AT+SBDRB"); rb < 0 || queuedIX < 0 || rb > queuedIX {
+				t.Fatalf("the MT was not read before the queued send's session: %q", cmds)
+			}
+			if got, want := e.sessions(), []string{tc.first.payload, second.payload}; !slices.Equal(got, want) {
+				t.Fatalf("the sessions carried %q, want %q (no other session)", got, want)
+			}
+		})
+	}
+}
+
+// When no follow-up check runs for a send whose session brought a message
+// in (the gateway's ringAlertActive skips the spawn while another check
+// runs), the held message survives later sessions and the next Receive
+// hands it over, once. A send whose session brings nothing in reads
+// nothing.
+func TestSend_HeldMTWaitsForTheNextReceive(t *testing.T) {
+	e := newSBDEmu()
+	e.sbdsxLive = true
+	e.gssLive = true
+	e.gss = [][]byte{[]byte("for you")}
+	tr := emuTransport(t, e)
+
+	first, next := queuedSend{"first text", false}, queuedSend{"next text", false}
+	if o := await(t, first.start(tr), "the send"); o.err != nil || o.res.MTStatus != 1 {
+		t.Fatalf("send: %+v %v, want a message in", o.res, o.err)
+	}
+	tr.mu.Lock()
+	tr.lastSBDIX = time.Now().Add(-time.Hour)
+	tr.mu.Unlock()
+	if o := await(t, next.start(tr), "the next send"); o.err != nil || o.res.MTStatus != 0 {
+		t.Fatalf("next send: %+v %v", o.res, o.err)
+	}
+	if n := e.count("AT+SBDRB"); n != 1 {
+		t.Fatalf("%d SBDRB, want only the first send's read: %q", n, e.sent())
+	}
+
+	if data, err := tr.Receive(context.Background()); err != nil || string(data) != "for you" {
+		t.Fatalf("receive: %q %v, want the message", data, err)
+	}
+	if again, err := tr.Receive(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("a second receive: %q %v, want nothing", again, err)
+	}
+	if got, want := e.sessions(), []string{first.payload, next.payload}; !slices.Equal(got, want) {
+		t.Fatalf("the sessions carried %q, want %q", got, want)
+	}
+}
+
+// A person's check hands over a message a send's session brought in and no
+// follow-up check has taken yet: the modem no longer has it for the check's
+// free read.
+func TestCheckMailboxNow_HandsOverAMessageASendHeld(t *testing.T) {
+	e := newSBDEmu()
+	e.sbdsxLive = true
+	e.gssLive = true
+	e.gss = [][]byte{[]byte("for you")}
+	tr := emuTransport(t, e)
+
+	send := queuedSend{"first text", false}
+	if o := await(t, send.start(tr), "the send"); o.err != nil || o.res.MTStatus != 1 {
+		t.Fatalf("send: %+v %v, want a message in", o.res, o.err)
+	}
+	tr.mu.Lock()
+	tr.lastSBDIX = time.Now().Add(-time.Hour)
+	tr.mu.Unlock()
+
+	out := tr.CheckMailboxNow(context.Background())
+	want := MailboxResult{Kind: MailboxChecked, MOStatus: 0, Received: 1, StillQueued: 0}
+	if out.Result != want || len(out.Messages) != 1 || string(out.Messages[0]) != "for you" {
+		t.Fatalf("check: %+v, want %+v with the held message", out, want)
+	}
+	if again, err := tr.Receive(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("a receive after the check: %q %v, want nothing", again, err)
+	}
+	if got, want := e.sessions(), []string{send.payload, ""}; !slices.Equal(got, want) {
+		t.Fatalf("the sessions carried %q, want %q", got, want)
+	}
+}
+
+// When the clear after a read does not go through, the modem keeps
+// reporting the message in its MT buffer (the MT flag stays set after
+// SBDRB). It is not read, held or handed over again: the follow-up check
+// reports the held copy without a session, Receive hands it over once, and
+// later reads and checks leave the modem's copy alone. The next session
+// empties the buffer, and a message it brings in is handed over.
+func TestMailboxCheck_AMessageStillInTheModemAfterItsReadIsNotHandedOverTwice(t *testing.T) {
+	e := newSBDEmu()
+	e.sbdsxLive = true
+	e.gssLive = true
+	e.gss = [][]byte{[]byte("for you"), []byte("then this")}
+	e.sbdd1Fails = true
+	tr := emuTransport(t, e)
+
+	first := queuedSend{"first text", false}
+	if o := await(t, first.start(tr), "the send"); o.err != nil || o.res.MTStatus != 1 {
+		t.Fatalf("send: %+v %v, want a message in", o.res, o.err)
+	}
+	if got := e.mtBuffer(); got != "for you" {
+		t.Fatalf("MT buffer %q, want the message still in the modem", got)
+	}
+
+	res, err := tr.MailboxCheck(context.Background())
+	if err != nil || res.MTStatus != 1 || !res.NoSession {
+		t.Fatalf("follow-up check: %+v %v, want the held message reported and no session", res, err)
+	}
+	if data, err := tr.Receive(context.Background()); err != nil || string(data) != "for you" {
+		t.Fatalf("receive: %q %v, want the message", data, err)
+	}
+	if again, err := tr.Receive(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("a second receive: %q %v, want nothing", again, err)
+	}
+	if res, err := tr.MailboxCheck(context.Background()); err != nil || res.MTStatus == 1 || !res.NoSession {
+		t.Fatalf("the next check: %+v %v, want nothing reported and no session", res, err)
+	}
+	if n := e.count("AT+SBDRB"); n != 1 {
+		t.Fatalf("%d SBDRB, want the message read once: %q", n, e.sent())
+	}
+	if n := e.count("AT+SBDIX"); n != 1 {
+		t.Fatalf("%d SBDIX, want only the send's: %q", n, e.sent())
+	}
+
+	// The next session empties the buffer and brings the next message in.
+	tr.mu.Lock()
+	tr.lastSBDIX = time.Now().Add(-time.Hour)
+	tr.mu.Unlock()
+	next := queuedSend{"next text", false}
+	if o := await(t, next.start(tr), "the next send"); o.err != nil || o.res.MTStatus != 1 {
+		t.Fatalf("next send: %+v %v, want the next message in", o.res, o.err)
+	}
+	if data, err := tr.Receive(context.Background()); err != nil || string(data) != "then this" {
+		t.Fatalf("receive after the next session: %q %v, want the new message", data, err)
+	}
+	if got, want := e.sessions(), []string{first.payload, next.payload}; !slices.Equal(got, want) {
+		t.Fatalf("the sessions carried %q, want %q", got, want)
+	}
+}
+
+// An SBDIX the modem refuses with ERROR runs no session and leaves the MT
+// buffer as it was, so a message already read that is still there (its
+// clear did not go through) is not handed over again.
+func TestReceive_AMessageLeftInTheModemSurvivesARefusedSBDIX(t *testing.T) {
+	e := newSBDEmu()
+	e.sbdsxLive = true
+	e.mt = []byte("for you")
+	e.sbdd1Fails = true
+	tr := emuTransport(t, e)
+
+	if data, err := tr.Receive(context.Background()); err != nil || string(data) != "for you" {
+		t.Fatalf("receive: %q %v, want the message", data, err)
+	}
+	e.set(func(e *sbdEmu) { e.sbdixReply = "ERROR" })
+	if res, err := tr.SendText(context.Background(), "refused"); err == nil {
+		t.Fatalf("send: %+v, want the refused SBDIX to fail it", res)
+	}
+	if again, err := tr.Receive(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("receive after the refused SBDIX: %q %v, want nothing", again, err)
+	}
+	if n := e.count("AT+SBDRB"); n != 1 {
+		t.Fatalf("%d SBDRB, want the message read once: %q", n, e.sent())
 	}
 }

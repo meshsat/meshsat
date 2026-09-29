@@ -48,6 +48,8 @@ type DirectSatTransport struct {
 	// send's load and its SBDIX, and a check that took mu there emptied the
 	// send's buffer, so the send's SBDIX went out empty, the modem answered
 	// MO status 0 and the queue marked sent a message that never left.
+	// MailboxCheck also reads a message it finds in the MT buffer under it
+	// (mtHeld), so no queued send's session empties that buffer first.
 	// Lock order: sessionMu, then mu, never the other way. Only those four
 	// entry points take it, none of them calls another, and the monitor
 	// goroutines stopMonitor waits for take only mu, so its waits cannot
@@ -118,6 +120,24 @@ type DirectSatTransport struct {
 	// or whose link fails under it (from the session's start); read only by
 	// CheckMailboxNow, so sends and ring alerts go on as before.
 	sbdixHeldUntil time.Time
+
+	// mtHeld are the MT messages read out of the modem under the
+	// session-lock hold that found them, oldest first: by MailboxCheck, and
+	// by Send and SendText when their own session brought one in. Receive
+	// hands them over before it reads the modem, and CheckMailboxNow hands
+	// them all over. The ring-alert path calls Receive after MailboxCheck
+	// returns (and after a send, after its follow-up check), and a queued
+	// send's session in between emptied the MT buffer, losing the message
+	// (MESHSAT-1427). Guarded by mu.
+	mtHeld [][]byte
+	// mtStale: the MT buffer still holds a message already read out of it,
+	// because the AT+SBDD1 after the read did not go through, so the modem
+	// keeps reporting it. No read hands it over again (readMTLocked clears
+	// it again and reports none) and MailboxCheck does not count the MT
+	// flag for it. Reset by whatever may change the buffer: a clear that
+	// goes through, a session (it empties the buffer as it starts and may
+	// bring a new message in), a connect. Guarded by mu.
+	mtStale bool
 
 	// Signal state
 	signalMu   sync.RWMutex
@@ -325,6 +345,7 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	t.file = sp
 	t.port = portPath
 	t.connGen++ // a new link: the SBDD0/SBDD1 below empty both buffers
+	t.mtStale = false
 
 	// Drain any stale data from the serial buffer before first command
 	drainPort(sp)
@@ -666,9 +687,10 @@ func (t *DirectSatTransport) isConnected() bool {
 // ============================================================================
 
 // Send transmits binary data via SBD (AT+SBDWB + AT+SBDIX).
-// Holds the session lock from its first MO command to its post-session
-// SBDD0, so no mailbox check empties or sends the loaded buffer before this
-// SBDIX, and mu except where sbdixLocked lets go of it (see sessionMu).
+// Holds the session lock from its first MO command to its last SBDD0, so
+// no mailbox check empties or sends the loaded buffer before this SBDIX,
+// and mu except where sbdixLocked lets go of it (see sessionMu). From the
+// load on the MO buffer is emptied again however the send ends.
 func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data is empty")
@@ -690,6 +712,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	if err != nil || strings.Contains(resp, "ERROR") {
 		return nil, fmt.Errorf("failed to clear MO buffer")
 	}
+	defer t.clearMOAfterSendLocked()
 
 	// Initiate binary write
 	resp, err = sendAT(t.file, fmt.Sprintf("AT+SBDWB=%d", len(data)), 5*time.Second)
@@ -756,20 +779,32 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		log.Warn().Str("probe", probeResp).Msg("iridium: modem not clean after SBDWB, extra drain")
 	}
 
-	// SBDIX
-	result, err := t.sbdixLocked(ctx)
-	// Always clear MO buffer after SBDIX attempt — the caller (gateway DLQ)
-	// retains the payload for retry. Leaving stale MO data causes MailboxCheck
-	// to endlessly re-trigger SBDIX on every poll cycle.
+	// SBDIX; the MO buffer is cleared after it (clearMOAfterSendLocked). A
+	// message the session brought in is held for the follow-up check.
+	res, err := t.sbdixLocked(ctx)
+	t.holdSessionMTLocked(res, err, "send")
+	return res, err
+}
+
+// clearMOAfterSendLocked empties the MO buffer once a send that loaded it
+// is over, best effort (a link that is down has its buffers emptied by the
+// next connect). Send and SendText defer it from the load on, so it runs
+// under both locks however they end. After an SBDIX attempt the caller
+// (the gateway DLQ) retains the payload for retry, and stale MO data made
+// MailboxCheck re-trigger SBDIX on every poll cycle. After a failure
+// between the load and the SBDIX the modem may hold the message though its
+// answer was lost, and a later session sent it a second time while the
+// queue retried it (MESHSAT-1427). Caller holds t.sessionMu and t.mu.
+func (t *DirectSatTransport) clearMOAfterSendLocked() {
 	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	}
-	return result, err
 }
 
 // SendText transmits a text SBD message (AT+SBDWT + AT+SBDIX).
-// Holds the session lock from its first MO command to its post-session
-// SBDD0, and mu except where sbdixLocked lets go of it, as Send does.
+// Holds the session lock from its first MO command to its last SBDD0, and
+// mu except where sbdixLocked lets go of it, as Send does; from the load
+// on the MO buffer is emptied again however the send ends.
 func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDResult, error) {
 	if len(text) > 120 {
 		return nil, fmt.Errorf("text too long (max 120 chars for AT+SBDWT)")
@@ -789,35 +824,90 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 
 	// Clear MO buffer before write to prevent stale data resend
 	sendAT(t.file, "AT+SBDD0", iridiumReadTimeout)
+	defer t.clearMOAfterSendLocked()
 
 	resp, err := sendAT(t.file, "AT+SBDWT="+text, 5*time.Second)
 	if err != nil || !strings.Contains(resp, "OK") {
+		// The modem may have taken the text though its OK was lost.
 		return nil, fmt.Errorf("AT+SBDWT failed: %s", resp)
 	}
 
-	result, err := t.sbdixLocked(ctx)
-	// Always clear MO after SBDIX attempt (same rationale as Send)
-	if t.connected && t.file != nil {
-		sendAT(t.file, "AT+SBDD0", 3*time.Second)
-	}
-	return result, err
+	// SBDIX; the MO buffer is cleared after it (clearMOAfterSendLocked). A
+	// message the session brought in is held for the follow-up check.
+	res, err := t.sbdixLocked(ctx)
+	t.holdSessionMTLocked(res, err, "send")
+	return res, err
 }
 
-// Receive reads the MT buffer (AT+SBDRB).
+// Receive hands over the next MT message: one a MailboxCheck already read
+// out of the modem (mtHeld) first, even with the link down, else the MT
+// buffer (AT+SBDRB).
 // Stops monitor because it does raw serial reads (matches HAL ReadBinaryMT).
 func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.mtHeld) > 0 {
+		data := t.mtHeld[0]
+		t.mtHeld[0] = nil
+		t.mtHeld = t.mtHeld[1:]
+		if len(t.mtHeld) == 0 {
+			t.mtHeld = nil
+		}
+		return data, nil
+	}
 	if !t.connected || t.file == nil {
 		return nil, ErrNotConnected
 	}
 	return t.readMTLocked()
 }
 
+// holdMTLocked reads the MT buffer under the caller's session-lock hold and
+// keeps a message it finds for Receive. A read that fails leaves the
+// message in the modem, where Receive tries again. Caller holds t.sessionMu
+// and t.mu and has checked the connection.
+func (t *DirectSatTransport) holdMTLocked(what string) {
+	data, err := t.readMTLocked()
+	if err != nil {
+		log.Warn().Err(err).Str("mt", what).Msg("iridium: reading the MT failed, left in the modem for Receive")
+		return
+	}
+	if len(data) > 0 {
+		t.mtHeld = append(t.mtHeld, data)
+	}
+}
+
+// holdSessionMTLocked holds the message a session brought in (MT status 1),
+// read under the same session-lock hold as the session: the caller's
+// follow-up (a send's check, the ring alert's Receive) comes after the hold
+// ends, when a queued send's session would empty the MT buffer first
+// (MESHSAT-1427). Nothing for a session that brought nothing in. Caller
+// holds t.sessionMu and t.mu.
+func (t *DirectSatTransport) holdSessionMTLocked(res *SBDResult, err error, what string) {
+	if err == nil && res != nil && res.MTStatus == 1 && t.connected && t.file != nil {
+		t.holdMTLocked(what)
+	}
+}
+
+// takeHeldLocked hands over every held message, oldest first. Caller holds
+// t.mu.
+func (t *DirectSatTransport) takeHeldLocked() [][]byte {
+	held := t.mtHeld
+	t.mtHeld = nil
+	return held
+}
+
 // readMTLocked reads the MT buffer (AT+SBDRB) and clears it (AT+SBDD1)
-// after a good read: the body of Receive, shared with CheckMailboxNow.
-// Caller holds t.mu and has checked the connection.
+// after a good read: the body of Receive, shared with CheckMailboxNow and
+// MailboxCheck (holdMTLocked). A message it read before that is still in
+// the buffer because its clear did not go through (mtStale) is not read
+// again: it clears the buffer again and reports none. Caller holds t.mu and
+// has checked the connection.
 func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
+	if t.mtStale {
+		t.mtStale = !t.clearMTLocked()
+		return nil, nil
+	}
+
 	t.stopMonitor()
 	defer t.startMonitor()
 
@@ -861,8 +951,13 @@ func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
 		return nil, err
 	}
 
-	// Clear MT buffer after successful read to prevent re-reading stale data
-	sendAT(t.file, "AT+SBDD1", iridiumReadTimeout)
+	// Clear MT buffer after successful read to prevent re-reading stale data.
+	// A clear that does not go through leaves the message there and the
+	// modem keeps reporting it: mtStale keeps it from being handed over
+	// twice (MESHSAT-1427).
+	if !t.clearMTLocked() && len(data) > 0 {
+		t.mtStale = true
+	}
 
 	return data, nil
 }
@@ -871,14 +966,18 @@ func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
 // SBDIX only runs when there's a reason — each empty-MO SBDIX costs 1 credit.
 //
 // SBDIX triggers:
-//   - MO buffer has data (outbound message pending)
 //   - Ring alert (RA) flag set
 //   - MT waiting > 0 (from previous SBDIX)
 //   - GSS sync overdue (>15min since last successful SBDIX) — periodic MT discovery
 //
-// Holds the session lock for the whole check, so the MO buffer it reads,
-// empties or sends is never one a send has loaded and not yet sent, and mu
-// except where sbdixLocked lets go of it (see sessionMu).
+// A message in the MT buffer, waiting there or brought in by this check's
+// session, is read under the same lock hold and kept for the caller's
+// Receive (mtHeld). A leftover in the MO buffer is cleared, never sent,
+// and no longer calls for a session (MESHSAT-1427).
+//
+// Holds the session lock for the whole check, so the MO buffer it reads
+// or empties is never one a send has loaded and not yet sent, and mu
+// except where sbdixLocked and readMTLocked let go of it (see sessionMu).
 func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) {
 	t.sessionMu.Lock()
 	defer t.sessionMu.Unlock()
@@ -906,21 +1005,50 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		Bool("ra", status.RAFlag).Int("waiting", status.MTWaiting).
 		Msg("iridium: mailbox SBDSX status")
 
-	// If MT buffer already has data from a piggybacked delivery, report immediately
+	// If MT buffer already has data from a piggybacked delivery, it is read
+	// now, under this lock hold, and kept for the caller's Receive: a send
+	// queued behind this check would otherwise run its session before that
+	// Receive and empty the MT buffer (MESHSAT-1427). No SBDIX while one
+	// waits, read or held (a send holds the one its own session brought in).
+	// The MT flag counts only for a message not read yet: for one read
+	// already whose clear did not go through (mtStale) the read clears the
+	// buffer again and holds nothing, so it is never handed over twice.
+	mtNew := status.MTFlag && !t.mtStale
 	if status.MTFlag {
-		log.Info().Msg("iridium: MT buffer has data (piggybacked), no SBDIX needed")
-		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true, NoSession: true}, nil
+		t.holdMTLocked("waiting")
+	}
+	if mtNew || len(t.mtHeld) > 0 {
+		length := 1 // not known when the read failed: Receive reads it
+		if len(t.mtHeld) > 0 {
+			length = len(t.mtHeld[0])
+		}
+		log.Info().Int("held", len(t.mtHeld)).Msg("iridium: MT buffer has data (piggybacked), no SBDIX needed")
+		return &SBDResult{MTStatus: 1, MTLength: length, MTReceived: true, NoSession: true}, nil
+	}
+
+	// A leftover in the MO buffer is cleared here, never sent: no send is
+	// between its load and its session (each holds the session lock across
+	// both, as this check does) and every send empties the buffer however
+	// it ends, so a leftover belongs to a send that failed and that its
+	// queue retries; sent from here it went out twice (MESHSAT-1427), as
+	// the button's check found (CheckMailboxNow). A buffer the modem will
+	// not clear is never sent.
+	if status.MOFlag {
+		if !t.clearMOLocked() {
+			log.Warn().Msg("iridium: a leftover MO could not be cleared, skipping SBDIX")
+			return nil, fmt.Errorf("a leftover MO could not be cleared (AT+SBDD0)")
+		}
+		log.Info().Msg("iridium: a leftover MO was cleared, not sent (its sender retries it)")
 	}
 
 	// Determine if SBDIX is warranted (each costs 1 credit with empty MO).
 	// NetAv veto: if the NetAv GPIO is wired, skip RA- and sync-driven
-	// SBDIX attempts when no satellite is currently visible. MOFlag and
-	// MTWaiting always pass (caller has committed to a session anyway).
+	// SBDIX attempts when no satellite is currently visible. MTWaiting
+	// always passes (caller has committed to a session anyway).
 	gssSyncOverdue := time.Since(t.lastGSSSync) > 15*time.Minute
 	netAvWired := t.netAvLine != nil
 	netAvOk := !netAvWired || t.netAvState.Load()
-	hasReason := status.MOFlag ||
-		(status.RAFlag && netAvOk) ||
+	hasReason := (status.RAFlag && netAvOk) ||
 		status.MTWaiting > 0 ||
 		(gssSyncOverdue && netAvOk)
 
@@ -934,17 +1062,16 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		return &SBDResult{NoSession: true}, nil
 	}
 
-	if gssSyncOverdue && !status.MOFlag && !status.RAFlag && status.MTWaiting == 0 {
+	if gssSyncOverdue && !status.RAFlag && status.MTWaiting == 0 {
 		log.Info().Dur("since_last_sync", time.Since(t.lastGSSSync)).
 			Msg("iridium: GSS sync overdue, forcing SBDIX for MT discovery")
 	}
 
-	// Step 2: SBDIX — satellite session
-	// Clear MO if empty to prevent "[No payload]" sends
+	// Step 2: SBDIX — satellite session, with an empty MO buffer
+	// Clear MO if empty to prevent "[No payload]" sends (a leftover was
+	// cleared above)
 	if !status.MOFlag {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
-	} else {
-		log.Info().Msg("iridium: MO buffer has outbound data, sending via SBDIX")
 	}
 
 	// Update GSS sync timestamp BEFORE SBDIX — even if it fails, we attempted.
@@ -956,6 +1083,9 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	if t.connected && t.file != nil {
 		sendAT(t.file, "AT+SBDD0", 3*time.Second)
 	}
+	// A message the session brought in is read under the same hold and kept
+	// for the caller's Receive, as a waiting one is above (MESHSAT-1427).
+	t.holdSessionMTLocked(result, err, "session")
 	return result, err
 }
 
@@ -1450,6 +1580,13 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 		return nil, fmt.Errorf("SBDIX write failed: %w", err)
 	}
 	resp, err := readSBDIXResponse(t.file, timeout)
+	if strings.Contains(resp, "IX:") {
+		// A session ran (an SBDIX refused with ERROR runs none): it emptied
+		// the MT buffer as it started and may have brought a new message
+		// in, so whatever a read left there is gone. A session whose answer
+		// never came ends in a disconnect, and the next connect resets it.
+		t.mtStale = false
+	}
 	// Restart monitor after SBDIX (whether success or failure)
 	t.startMonitor()
 
