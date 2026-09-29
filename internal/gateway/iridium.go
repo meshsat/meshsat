@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -547,6 +548,9 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 		}
 
 		result, err := g.sat.Send(ctx, dl.Payload)
+		if g.settleUnknownDeadLetter(dl, err) {
+			continue
+		}
 		// Treat successful HTTP but failed SBD session as a send error
 		moStatus := -1
 		if err == nil && !result.MOSuccess() {
@@ -584,6 +588,26 @@ func (g *IridiumGateway) processDLQ(ctx context.Context, retryBase int) {
 			go g.handleRingAlert(ctx)
 		}
 	}
+}
+
+// settleUnknownDeadLetter ends a dead letter whose session may have gone out
+// with its outcome unknown (transport.ErrOutcomeUnknown: the link to the
+// MeshSat node dropped under it): it is never sent again by itself, as the
+// delivery queue never retries such a message. Reports whether it did.
+// [MESHSAT-1391]
+func (g *IridiumGateway) settleUnknownDeadLetter(dl database.DeadLetter, err error) bool {
+	if !errors.Is(err, transport.ErrOutcomeUnknown) {
+		return false
+	}
+	reason := "may have been sent, not sent again by itself: " + err.Error()
+	if expErr := g.db.ExpireDeadLetter(dl.ID, reason); expErr != nil {
+		log.Error().Err(expErr).Int64("dlq_id", dl.ID).Msg("iridium: failed to end a dead letter that may have been sent")
+		return true
+	}
+	g.dlqPending.Add(-1)
+	log.Warn().Int64("dlq_id", dl.ID).Uint32("packet_id", dl.PacketID).
+		Msg("iridium: DLQ message may have been sent (the session's outcome is unknown); not sent again")
+	return true
 }
 
 // ringAlertListener subscribes to Iridium SSE for ring alert and signal events.
@@ -757,6 +781,9 @@ func (g *IridiumGateway) processDLQImmediate(ctx context.Context, retryBase int)
 		}
 
 		result, err := g.sat.Send(ctx, dl.Payload)
+		if g.settleUnknownDeadLetter(dl, err) {
+			continue
+		}
 		// Treat successful HTTP but failed SBD session as a send error
 		moStatus := -1
 		if err == nil && !result.MOSuccess() {

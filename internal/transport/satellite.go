@@ -34,6 +34,13 @@ type SatStatus struct {
 	NetworkAvailableSince *time.Time `json:"network_available_since,omitempty"`
 	LastRingAlert         *time.Time `json:"last_ring_alert,omitempty"`
 	RIPulseCount          int64      `json:"ri_pulse_count,omitempty"`
+	// Manufacturer is AT+CGMI's answer, and Silent says the node's modem has
+	// not answered AT for a minute while this Bridge holds it (none fitted,
+	// or no power; the checks go on). Both are set over the MeshSat node's
+	// pipe only (MESHSAT_IRIDIUM_PORT=ble), so a USB 9603's status reads as
+	// it always did. [MESHSAT-1391]
+	Manufacturer string `json:"manufacturer,omitempty"`
+	Silent       bool   `json:"silent,omitempty"`
 }
 
 // IridiumTime represents the Iridium network system time from AT-MSSTM.

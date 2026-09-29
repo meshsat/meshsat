@@ -298,6 +298,15 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		log.Warn().Int64("cancelled", n).Msg("dispatcher: cancelled runaway deliveries exceeding retry limits")
 	}
 
+	// A satellite delivery a stop left "sending" may have gone out: it is
+	// given up, "may have been sent", never sent again by itself (a second
+	// session could deliver it twice, each billed). [MESHSAT-1391]
+	if n, err := d.db.EndStaleSatelliteSends(); err != nil {
+		log.Error().Err(err).Msg("dispatcher: failed to end stale satellite sends")
+	} else if n > 0 {
+		log.Warn().Int64("ended", n).Msg("dispatcher: satellite sends under way at the last stop may have been sent; given up, not sent again")
+	}
+
 	// Recover stale "sending" deliveries from previous crash/restart.
 	// These were mid-delivery when the process died and are now stuck.
 	if n, err := d.db.RecoverStaleDeliveries(); err != nil {
@@ -429,16 +438,26 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 // Called when an interface transitions to ONLINE, and when a link is
 // switched on through the API. A link that is switched off gets no
 // worker, whatever its device does: what waits for it stays held until
-// it is switched on again. [MESHSAT-1401]
+// it is switched on again. [MESHSAT-1401] What is held for a link that is
+// switched on goes back to the queue, a worker already running or not.
 func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelType string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if _, exists := d.workers[ifaceID]; exists {
-		return // already running
-	}
 	if iface, err := d.db.GetInterface(ifaceID); err == nil && !iface.Enabled {
 		log.Info().Str("interface", ifaceID).Msg("delivery worker not started: the link is switched off")
+		return
+	}
+	if _, exists := d.workers[ifaceID]; exists {
+		// Already running (the start's startInterfaceWorkers, which
+		// releases nothing): what was held for the link goes back to the
+		// queue all the same, or deliveries a detach held before a restart
+		// stayed held while the link was up. [MESHSAT-1391]
+		if n, err := d.db.UnholdDeliveriesForChannel(ifaceID); err != nil {
+			log.Error().Err(err).Str("interface", ifaceID).Msg("failed to unhold deliveries")
+		} else if n > 0 {
+			log.Info().Str("interface", ifaceID).Int64("count", n).Msg("unheld deliveries on interface online")
+		}
 		return
 	}
 
@@ -1899,6 +1918,14 @@ func parseDeliveryTime(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// UnconfirmedPrefix opens the last_error of a delivery given up because its
+// satellite session's outcome is unknown (transport.ErrOutcomeUnknown): its
+// status is "dead", which every queue lists under what did not go out with
+// a Retry, and the reason says it may have been sent (the words MeshSat
+// Android shows for such a send). The database's, which ends a satellite
+// send a stop left under way the same way. [MESHSAT-1391]
+const UnconfirmedPrefix = database.UnconfirmedPrefix
+
 // How a delivery is treated when the bearer itself was down at the moment of
 // the attempt. Package vars so tests can shorten them. [MESHSAT-1061]
 var (
@@ -1927,6 +1954,48 @@ func deliveryAge(createdAt string) (time.Duration, bool) {
 
 func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr error) {
 	errMsg := deliveryErr.Error()
+
+	// A satellite session whose outcome never reached this Bridge: its
+	// answer did not come back (the link to the MeshSat node dropped under
+	// it, or the answer never arrived) and the node's account could not
+	// settle it. The message may have been sent, and a second session could
+	// deliver it twice (each one billed), so it is never retried or failed
+	// over by itself, whatever its QoS: it ends given up, with a reason that
+	// says it may have been sent, and only a person's Retry in the queue
+	// sends it again. [MESHSAT-1391]
+	//
+	// Not the SOS's frame to the Hub: a person's Retry never sends it again
+	// (database.ErrSOSFrameNotRetried), so given up here it was lost for
+	// good. It keeps the queue's own retries: a duplicate SOS frame within
+	// minutes is the lesser harm.
+	sosFrame := del.Priority == 0 && del.Class == database.DeliveryClassHubUplink
+	if errors.Is(deliveryErr, transport.ErrOutcomeUnknown) && sosFrame {
+		log.Warn().Int64("id", del.ID).Str("channel", w.channelID).
+			Msg("the SOS frame's satellite session has an unknown outcome; it may have been sent, and it is retried all the same")
+	}
+	if errors.Is(deliveryErr, transport.ErrOutcomeUnknown) && !sosFrame {
+		reason := UnconfirmedPrefix + ": the satellite session's answer never reached this Bridge and the node could not settle its outcome, so it is not sent again by itself (a second session could deliver it twice). Retry it if it did not arrive. (" + errMsg + ")"
+		if err := w.db.SetDeliveryStatus(del.ID, "dead", reason, ""); err != nil {
+			log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark a delivery that may have been sent")
+		}
+		if w.signing != nil {
+			ifacePtr := &w.channelID
+			dir := "egress"
+			delID := del.ID
+			w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, "may have been sent: the session's outcome is unknown")
+		}
+		log.Warn().Int64("id", del.ID).Str("channel", w.channelID).
+			Msg("delivery may have been sent (the satellite session's outcome is unknown); not retried by itself")
+		if w.emit != nil {
+			w.emit(transport.MeshEvent{
+				Type:    "delivery_dead",
+				Message: fmt.Sprintf("Delivery to %s may have been sent; not retried by itself: %s", w.channelID, errMsg),
+				Data:    deliveryEventData(del, "dead", map[string]interface{}{"error": reason, "unconfirmed": true}),
+				Time:    time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+		return
+	}
 
 	// The bearer was not up at this instant. That is not a rejected message, so
 	// it must not consume a retry and must not kill a QoS 0 delivery outright:

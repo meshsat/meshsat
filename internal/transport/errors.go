@@ -31,3 +31,13 @@ var ErrNoAck = errors.New("no acknowledgement from the peer")
 // empty and a text with no recipient is not sent"). No retry can help, so the
 // delivery worker gives up at once, with the reason. [MESHSAT-1412]
 var ErrNoRecipient = errors.New("not sent: the text has no recipient, and no default number is set")
+
+// ErrOutcomeUnknown is returned by a satellite send whose session may have
+// gone out while its outcome never reached this Bridge: the link to the
+// MeshSat node dropped while the node's modem ran the session (or the write
+// of AT+SBDIX failed where it may have landed), and the node's own account
+// of its sessions could not settle it. A second session could deliver the
+// message twice, and every session is billed, so the delivery worker never
+// sends it again by itself: the delivery ends marked as possibly sent, and
+// only a person's Retry sends it again. [MESHSAT-1391]
+var ErrOutcomeUnknown = errors.New("the outcome of the satellite session is unknown: the message may have been sent")

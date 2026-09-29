@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -74,6 +75,12 @@ type bluezBus struct {
 	sigCh    chan *dbus.Signal
 	watchMu  sync.Mutex
 	watchers map[dbus.ObjectPath][]chan propsChange
+
+	// dropped counts the signals a watcher that fell behind never got (its
+	// channel full), logged at most once a minute: over the node's modem
+	// pipe each one is bytes of the modem's answer. [MESHSAT-1391]
+	dropped    atomic.Uint64
+	droppedLog atomic.Int64
 }
 
 func openBlueZ(adapter string) (*bluezBus, error) {
@@ -141,7 +148,20 @@ func (b *bluezBus) deliver(path dbus.ObjectPath, change propsChange) {
 		select {
 		case w <- change:
 		default:
+			b.noteDropped(path)
 		}
+	}
+}
+
+// noteDropped counts a signal a watcher did not take, and says so at most
+// once a minute.
+func (b *bluezBus) noteDropped(path dbus.ObjectPath) {
+	n := b.dropped.Add(1)
+	now := time.Now().UnixNano()
+	last := b.droppedLog.Load()
+	if (last == 0 || time.Duration(now-last) >= time.Minute) && b.droppedLog.CompareAndSwap(last, now) {
+		log.Warn().Uint64("dropped", n).Str("path", string(path)).
+			Msg("bluez: a watcher fell behind; signals it did not take were dropped")
 	}
 }
 
