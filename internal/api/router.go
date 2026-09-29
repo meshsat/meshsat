@@ -511,6 +511,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/contacts", s.handleGetContacts)
 		r.Post("/contacts", s.handleCreateContact)
 		r.Get("/contacts/lookup", s.handleLookupContact)
+		r.Get("/contacts/card", s.handleGetContactCard) // [MESHSAT-1416]
 		r.Get("/contacts/{id}", s.handleGetContact)
 		r.Put("/contacts/{id}", s.handleUpdateContact)
 		r.Delete("/contacts/{id}", s.handleDeleteContact)
