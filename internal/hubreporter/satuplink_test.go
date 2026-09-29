@@ -301,3 +301,30 @@ func TestSatUplinkCarriesTheWholeBridgeID(t *testing.T) {
 		}
 	}
 }
+
+// IsSatSOS picks the SOS frame, the one the satellite fallback's send queues
+// at priority 0, and nothing else: not the position or health frame, not a
+// frame of another version, not bytes that are no frame. [MESHSAT-1430]
+func TestIsSatSOS(t *testing.T) {
+	now := time.Unix(1790000000, 0).UTC()
+	sos := EncodeSatSOS("nllei01tesseract01", "bridge", 52.1601, 4.4970, "SOS: Anna needs help.", now)
+	otherVersion := append([]byte(nil), sos...)
+	otherVersion[2] = satUplinkVersion + 1
+	for _, tc := range []struct {
+		name  string
+		frame []byte
+		want  bool
+	}{
+		{"SOS", sos, true},
+		{"position", EncodeSatPosition("nllei01tesseract01", 52.1601, 4.4970, 3.9, 1, now), false},
+		{"health", EncodeSatHealth("nllei01tesseract01", 5311, 1, 14, 28, nil, now), false},
+		{"SOS of another version", otherVersion, false},
+		{"a text", []byte("SOS - EMERGENCY ALERT"), false},
+		{"header only, cut", sos[:3], false},
+		{"nothing", nil, false},
+	} {
+		if got := IsSatSOS(tc.frame); got != tc.want {
+			t.Errorf("%s: IsSatSOS %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

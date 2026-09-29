@@ -307,7 +307,10 @@ func creditCost(payloadLen int) int {
 }
 
 // budgetAllows checks if a send is within daily/monthly credit limits.
-// Priority 0 (critical) always passes, using the critical reserve.
+// Priority 0 (critical) always passes, whatever the budget says (the
+// critical_reserve setting is not enforced here). sendSBD asks with 0 only
+// for an SOS (transport.MeshMessage.Critical), with 1 for everything else.
+// [MESHSAT-1431]
 func (g *IridiumGateway) budgetAllows(cost int, priority int) bool {
 	if g.db == nil {
 		return true

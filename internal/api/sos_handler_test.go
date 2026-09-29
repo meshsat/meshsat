@@ -1,6 +1,9 @@
 package api
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -60,4 +63,30 @@ func TestTriggerSOS_SurvivesMissingTransports(t *testing.T) {
 // wired, and on a Hub-less build there is never one.
 func TestTouchOperatorActivity_NilSafe(t *testing.T) {
 	(&Server{}).touchOperatorActivity()
+}
+
+// The SOS state is part of the server, however it is built: on a server
+// nobody has used yet, a status read, the alarm test's SOS check and an SOS
+// start do not race over making it (go test -race). It was made on first
+// use, without a lock. [MESHSAT-1430]
+func TestSOSState_ReadyWithTheServer(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(stopSOS(s))
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = s.sosActive()
+		}()
+		go func() {
+			defer wg.Done()
+			s.handleSOSStatus(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/sos/status", nil))
+		}()
+	}
+	started := s.TriggerSOS("hold")
+	wg.Wait()
+	if !started || !s.sosActive() {
+		t.Fatalf("started %v, active %v", started, s.sosActive())
+	}
 }

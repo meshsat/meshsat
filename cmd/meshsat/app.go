@@ -432,6 +432,7 @@ func (a *App) Setup(ctx context.Context) error {
 	}
 	srv.SetDispatcher(a.Dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
+	srv.SetHubBridgeID(cfg.BridgeID) // kept in step with main.go [MESHSAT-1430]
 
 	// Field intelligence features
 	healthScorer := engine.NewHealthScorer(db)

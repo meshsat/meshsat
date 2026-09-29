@@ -101,6 +101,15 @@ type MeshMessage struct {
 	// key by the delivery worker; the cellular gateway sends it to that
 	// number instead of DecodedText. Never serialised.
 	SMSTexts map[string]string `json:"-"`
+
+	// Critical marks an emergency: the SBD gateway's credit budget (daily
+	// and monthly) never holds it back. Only the Bridge's own SOS sets it:
+	// the burst's direct satellite send, and the delivery worker for the
+	// SOS's Hub frame (a hub_uplink row at priority 0). Everything else
+	// stays under the budget, a routing rule's delivery whatever its
+	// priority included. Never serialised, so no stored or relayed
+	// envelope can claim it. [MESHSAT-1431]
+	Critical bool `json:"-"`
 }
 
 // NodeRSSIProvider is implemented by mesh transports that keep the last

@@ -2127,6 +2127,9 @@ func main() {
 			}
 		}
 	}
+	// The alarm test's satellite leg names the bridge as the fallback's frames
+	// do, with or without a Hub link. [MESHSAT-1430]
+	srv.SetHubBridgeID(hubBridgeID)
 
 	var hubReporter *hubreporter.HubReporter
 	var satFallback *hubreporter.SatFallback // [MESHSAT-963]
@@ -2306,45 +2309,18 @@ func main() {
 					}
 					return &hubreporter.Location{Lat: st.Lat, Lon: st.Lon, Alt: st.AltM, Source: "gps"}
 				},
-				SendFn: func(frame []byte) error {
-					// Bearer choice: "satellite" and "sms" force one leg;
-					// "auto" takes the satellite gateway when it is connected
-					// and has moved traffic in the last 30 min (indoors it has
-					// not, and a queued satellite frame would never leave),
-					// else SMS to the Hub's number.
-					// The satellite interface is whichever modem this kit
-					// carries. It was hardcoded to iridium_0 (9603), so on a
-					// 9704 kit, which both are since 20 Sep 2026, "auto"
-					// could only ever pick SMS and "satellite" queued onto
-					// an interface that does not exist.
-					satIface, satOK := hubUplinkSatInterface(func(id string) (bool, time.Time, bool) {
-						gw := gwMgr.GatewayByInterfaceID(id)
-						if gw == nil {
-							return false, time.Time{}, false
-						}
-						st := gw.Status()
-						return st.Connected, st.LastActivity, true
-					}, time.Now())
-					useSat := satOK
-					switch bearerPolicy {
-					case "satellite":
-						useSat = true
-					case "sms":
-						useSat = false
+				// Satellite if it is in reach, else SMS to the Hub's number,
+				// as the bearer policy says (hubUplinkSender). The SOS frame
+				// is queued at priority 0, the rest at 1. [MESHSAT-963,
+				// MESHSAT-1430]
+				SendFn: hubUplinkSender(dispatcher, func(id string) (bool, time.Time, bool) {
+					gw := gwMgr.GatewayByInterfaceID(id)
+					if gw == nil {
+						return false, time.Time{}, false
 					}
-					label := fmt.Sprintf("hub uplink frame, %d B", len(frame))
-					if useSat {
-						_, _, err := dispatcher.QueueDirectSendTo(satIface, label,
-							engine.DirectSendOptions{Precedence: string(types.PrecedencePriority), Class: database.DeliveryClassHubUplink, Payload: frame})
-						return err
-					}
-					if hubSMS == "" {
-						return fmt.Errorf("hub uplink: no satellite in reach and no Hub SMS number configured")
-					}
-					_, _, err := dispatcher.QueueDirectSendTo("cellular_0", base64.StdEncoding.EncodeToString(frame),
-						engine.DirectSendOptions{Precedence: string(types.PrecedencePriority), Class: database.DeliveryClassHubUplink, Destination: hubSMS})
-					return err
-				},
+					st := gw.Status()
+					return st.Connected, st.LastActivity, true
+				}, bearerPolicy, hubSMS),
 			})
 			hubReporter.SetConnectionHooks(satFallback.OnMQTTReconnect, satFallback.OnMQTTDisconnect)
 			go satFallback.Run(ctx)

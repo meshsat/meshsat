@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -90,9 +91,9 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, del)
 }
 
-// POST /api/deliveries/{id}/cancel — cancel a queued/retry delivery
+// POST /api/deliveries/{id}/cancel — cancel a queued/retry/held delivery
 // @Summary Cancel delivery
-// @Description Cancels a queued or retrying delivery
+// @Description Cancels a delivery that has not gone out: queued, retrying, or held while its link is down (held since MESHSAT-1430). It ends dead with last_error "cancelled". One being sent or already finished is not cancellable (500).
 // @Tags deliveries
 // @Produce json
 // @Param id path integer true "Delivery ID"
@@ -116,12 +117,13 @@ func (s *Server) handleCancelDelivery(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/deliveries/{id}/retry — retry a failed/dead delivery
 // @Summary Retry delivery
-// @Description Re-queues a failed or dead-lettered delivery for another attempt
+// @Description Re-queues a failed or dead-lettered delivery for another attempt. The SOS's frame to the Hub (class hub_uplink at priority 0) is refused with 409: it would pass the SBD credit budget and raise the SOS at the Hub again with its old time; a new SOS sends a new frame (MESHSAT-1431).
 // @Tags deliveries
 // @Produce json
 // @Param id path integer true "Delivery ID"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string "the SOS frame to the Hub, never sent again"
 // @Failure 500 {object} map[string]string
 // @Router /api/deliveries/{id}/retry [post]
 func (s *Server) handleRetryDelivery(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +134,10 @@ func (s *Server) handleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.RetryDelivery(id); err != nil {
+		if errors.Is(err, database.ErrSOSFrameNotRetried) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to retry delivery")
 		return
 	}

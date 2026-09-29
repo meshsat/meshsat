@@ -79,6 +79,10 @@ func writeLenPrefixedString(buf []byte, s string, maxLen int) int {
 //
 //	Header(4) + bridgeID_len(1) + bridgeID(var) + lat(4,float32) + lon(4,float32) +
 //	alt(2,int16 meters) + source(1) + timestamp(4,uint32 unix)
+//
+// MeshSat Android's SosMessages.positionFrame (the alarm test's satellite
+// leg) writes the same bytes, except that it cuts the bridge id at 16 bytes
+// (at a character boundary) where this cuts it at maxBridgeIDLen bytes.
 func EncodeSatPosition(bridgeID string, lat, lon float64, alt float32, source byte, timestamp time.Time) []byte {
 	if len(bridgeID) > maxBridgeIDLen {
 		bridgeID = bridgeID[:maxBridgeIDLen]
@@ -92,13 +96,30 @@ func EncodeSatPosition(bridgeID string, lat, lon float64, alt float32, source by
 	off += 4
 	binary.BigEndian.PutUint32(buf[off:], math.Float32bits(float32(lon)))
 	off += 4
-	altI16 := int16(alt)
-	binary.BigEndian.PutUint16(buf[off:], uint16(altI16))
+	binary.BigEndian.PutUint16(buf[off:], uint16(satAltitude(alt)))
 	off += 2
 	buf[off] = source
 	off++
 	binary.BigEndian.PutUint32(buf[off:], uint32(timestamp.Unix()))
 	return buf
+}
+
+// satAltitude is the position frame's height: whole metres cut toward zero,
+// held to what an int16 carries, 0 for NaN, as MeshSat Android computes it
+// (Float.toInt, then coerceIn). A bare int16(alt) of a value outside that
+// range is implementation-dependent in Go; on amd64 40000 m went out as
+// -25536 and +Inf as 0. The height now comes from a phone's request body
+// too (POST /api/sos/test). [MESHSAT-1430]
+func satAltitude(alt float32) int16 {
+	switch {
+	case math.IsNaN(float64(alt)):
+		return 0
+	case alt >= math.MaxInt16:
+		return math.MaxInt16
+	case alt <= math.MinInt16:
+		return math.MinInt16
+	}
+	return int16(alt)
 }
 
 // EncodeSatSOS encodes an SOS message for satellite uplink.
@@ -213,6 +234,14 @@ func DecodeSatUplink(data []byte) (header SatUplinkHeader, payload []byte, err e
 	}
 	header.MsgType = data[3]
 	return header, data[satHeaderLen:], nil
+}
+
+// IsSatSOS reports whether data is an SOS uplink frame (EncodeSatSOS): the
+// magic, this version, type 0x02. The satellite fallback's send queues it,
+// alone of the frames, at priority 0. [MESHSAT-1430]
+func IsSatSOS(data []byte) bool {
+	header, _, err := DecodeSatUplink(data)
+	return err == nil && header.MsgType == SatMsgSOS
 }
 
 func readLenPrefixedString(data []byte) (string, int, error) {

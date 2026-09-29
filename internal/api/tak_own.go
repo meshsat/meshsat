@@ -23,12 +23,16 @@ func (s *Server) takGateway() *gateway.TAKGateway {
 }
 
 // takOwnSOS puts an SOS that just started on TAK, at this Bridge's position.
+// The TAK gateway is looked up in the background with the send: the lookup
+// takes the gateway manager's lock, which a gateway being stopped can hold
+// for a whole modem session, and the start of an SOS must not wait for it.
+// [MESHSAT-1430]
 func (s *Server) takOwnSOS(text string) {
-	tg := s.takGateway()
-	if tg == nil {
-		return
-	}
 	go func() {
+		tg := s.takGateway()
+		if tg == nil {
+			return
+		}
 		err := tg.SendOwnSOS(text)
 		switch {
 		case errors.Is(err, gateway.ErrTAKNoPosition):

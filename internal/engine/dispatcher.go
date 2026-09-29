@@ -1001,6 +1001,24 @@ type DirectSendOptions struct {
 	Class       string // database.DeliveryClassMessage (default), DeliveryClassOOB, DeliveryClassHubUplink or DeliveryClassPlain (the text exactly as given)
 	MaxRetries  int    // 0 = default (3)
 	Payload     []byte // binary payload; text is then only the preview [MESHSAT-963]
+	// Critical queues the row at priority 0 instead of 1. That changes its
+	// place in the queue, not its precedence: it goes before the priority 1
+	// rows of the same precedence (rows of a higher precedence still go
+	// first), no arrival ever evicts it, and it never expires, TTLSeconds
+	// or not. A priority 0 row of class hub_uplink is also exempt from the
+	// SBD gateway's credit budget (transport.MeshMessage.Critical, set by
+	// the delivery worker). Only the SOS's Hub frame is queued this way;
+	// the alarm test's satellite leg is not, so it can never outrank the
+	// SOS. [MESHSAT-1430, MESHSAT-1431]
+	Critical bool
+	// TTLSeconds gives the row a deadline, now plus this many seconds, in
+	// expires_at: past it the row expires instead of going out. Unlike a
+	// rule delivery's TTL, the clock does not stop while the row is held
+	// (its link down or switched off): a direct send's deadline is its
+	// sender's, the alarm test's 30 minutes, and a row held past it expires
+	// when the link is back instead of going out. 0 is no deadline; ignored
+	// with Critical. [MESHSAT-1430]
+	TTLSeconds int
 }
 
 // QueueDirectSendTo is QueueDirectSend with DirectSendOptions. A delivery of
@@ -1015,6 +1033,10 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 	maxRetries := opts.MaxRetries
 	if maxRetries <= 0 {
 		maxRetries = 3
+	}
+	priority := 1
+	if opts.Critical {
+		priority = 0
 	}
 	msgRef := time.Now().UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%05d", time.Now().Nanosecond()/10000)
 
@@ -1031,7 +1053,7 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 		MsgRef:      msgRef,
 		Channel:     interfaceID,
 		Status:      "queued",
-		Priority:    1,
+		Priority:    priority,
 		Payload:     payload,
 		TextPreview: preview,
 		MaxRetries:  maxRetries,
@@ -1039,6 +1061,14 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 		Precedence:  precedence,
 		Destination: opts.Destination,
 		Class:       class,
+	}
+
+	// The sender's deadline; a priority 0 row never expires, as in
+	// DispatchAccess. [MESHSAT-1430]
+	if opts.TTLSeconds > 0 && priority > 0 {
+		del.TTLSeconds = opts.TTLSeconds
+		exp := time.Now().Add(time.Duration(opts.TTLSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
+		del.ExpiresAt = &exp
 	}
 
 	// Assign egress sequence number
@@ -1401,9 +1431,17 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		}
 	}
 
-	// Mark as sending
-	if err := w.db.SetDeliveryStatus(del.ID, "sending", "", ""); err != nil {
+	// Mark as sending, if it is still queued or waiting for a retry: a row
+	// cancelled, held or expired since the re-read above stays as it is.
+	// Marking it unconditionally undid a cancel that came in between (an
+	// SOS cancelling the alarm test) and sent the row. [MESHSAT-1430]
+	claimed, err := w.db.ClaimDeliveryForSending(del.ID)
+	if err != nil {
 		log.Error().Err(err).Int64("id", del.ID).Msg("failed to set delivery sending")
+		return
+	}
+	if !claimed {
+		log.Debug().Int64("id", del.ID).Msg("delivery no longer queued, not sent")
 		return
 	}
 
@@ -1685,6 +1723,12 @@ func (w *DeliveryWorker) forwardToGatewaySealed(ctx context.Context, del databas
 	msg.MsgRef = del.MsgRef // feed correlation only, never serialised [MESHSAT-826]
 	msg.PlainText = del.PlainPreview
 	msg.Precedence = del.Precedence
+	// The SOS's Hub frame, the one hub_uplink row queued at priority 0, is
+	// an emergency: the SBD gateway's credit budget never holds it back.
+	// Nothing else is: not the satellite fallback's position and health
+	// frames (priority 1), not the alarm test, not a routing rule's
+	// delivery whatever its priority. [MESHSAT-1431]
+	msg.Critical = del.Priority == 0 && del.Class == database.DeliveryClassHubUplink
 	if len(chatTexts) > 0 {
 		msg.SMSTexts = chatTexts
 	}
@@ -1730,8 +1774,13 @@ func (w *DeliveryWorker) deliverLXMF(ctx context.Context, del database.MessageDe
 		w.handleFailure(del, errors.New("lxmf router not running"))
 		return
 	}
-	if err := w.db.SetDeliveryStatus(del.ID, "sending", "", ""); err != nil {
+	claimed, err := w.db.ClaimDeliveryForSending(del.ID)
+	if err != nil {
 		log.Error().Err(err).Int64("id", del.ID).Msg("failed to set delivery sending")
+		return
+	}
+	if !claimed {
+		log.Debug().Int64("id", del.ID).Msg("delivery no longer queued, not sent")
 		return
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
