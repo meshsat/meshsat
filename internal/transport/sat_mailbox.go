@@ -83,14 +83,20 @@ func (t *DirectSatTransport) holdSBDIXUntil(until time.Time) {
 	}
 }
 
-// clearMOLocked empties the MO buffer (AT+SBDD0). True when the modem did
-// not refuse: it answers 0 (cleared) or 1 (error), then OK. Caller holds
-// t.sessionMu and t.mu.
-func (t *DirectSatTransport) clearMOLocked() bool {
+// clearMOLocked empties the MO buffer (AT+SBDD0). Caller holds t.sessionMu
+// and t.mu.
+func (t *DirectSatTransport) clearMOLocked() bool { return t.clearBufferLocked("AT+SBDD0") }
+
+// clearMTLocked empties the MT buffer (AT+SBDD1). Caller holds t.mu.
+func (t *DirectSatTransport) clearMTLocked() bool { return t.clearBufferLocked("AT+SBDD1") }
+
+// clearBufferLocked sends an AT+SBDD command. True when the modem did not
+// refuse: it answers 0 (cleared) or 1 (error), then OK. Caller holds t.mu.
+func (t *DirectSatTransport) clearBufferLocked(cmd string) bool {
 	if !t.connected || t.file == nil {
 		return false
 	}
-	resp, err := sendAT(t.file, "AT+SBDD0", iridiumReadTimeout)
+	resp, err := sendAT(t.file, cmd, iridiumReadTimeout)
 	if err != nil || strings.Contains(resp, "ERROR") {
 		return false
 	}
@@ -106,7 +112,9 @@ func (t *DirectSatTransport) clearMOLocked() bool {
 // exactly one satellite session, billed (at least one credit even when
 // nothing waits), unless the modem is not connected, the hold after a
 // failed session runs, the modem does not answer the free status check, or
-// a message waiting in the MT buffer cannot be read.
+// a message waiting in the MT buffer cannot be read. Messages already read
+// out of the modem and held (mtHeld) are handed over first, whatever else
+// the check finds, unless ctx has ended.
 // Holds the session lock for the whole check (see sessionMu), so it queues
 // behind a send that has loaded the MO buffer until that send's session has
 // ended, and no send loads the buffer until this check's session has ended;
@@ -119,7 +127,16 @@ func (t *DirectSatTransport) CheckMailboxNow(ctx context.Context) MailboxCheckOu
 
 	var out MailboxCheckOutcome
 	out.Result.MOStatus = MOStatusUnknown
-	if !t.connected || t.file == nil || ctx.Err() != nil {
+	if ctx.Err() != nil {
+		// The gateway stopped: held messages stay for its successor.
+		out.Result.Kind = MailboxNotConnected
+		return out
+	}
+	// A message a send's session brought in waits here, not in the modem,
+	// until a follow-up check's Receive takes it (MESHSAT-1427); the free
+	// read below would not find it.
+	out.Messages = t.takeHeldLocked()
+	if !t.connected || t.file == nil {
 		out.Result.Kind = MailboxNotConnected
 		return out
 	}
