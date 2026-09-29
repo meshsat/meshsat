@@ -44,6 +44,7 @@ func NewIMTGateway(cfg IridiumConfig, sat transport.SatTransport, db *database.D
 // IMT does NOT start ring alert listener or poll worker — MT is push-based.
 func (g *IMTGateway) Start(ctx context.Context) error {
 	ctx, g.cancel = context.WithCancel(ctx)
+	g.setRunContext(ctx)
 	g.startTime = time.Now()
 
 	// Check modem status
@@ -244,21 +245,24 @@ func (g *IMTGateway) imtListenOnce(ctx context.Context) error {
 // receivePendingMT reads app-level MT payloads from the transport's message queue
 // and persists them to the messages database + inbound channel. [MESHSAT-447]
 // Uses ReceiveMessage() (not Receive()) to read from the app queue, not the Reticulum queue.
-func (g *IMTGateway) receivePendingMT(_ context.Context) {
+// Returns how many it handed over.
+func (g *IMTGateway) receivePendingMT(_ context.Context) int {
 	type messageReceiver interface {
 		ReceiveMessage() ([]byte, error)
 	}
 	mr, ok := g.sat.(messageReceiver)
 	if !ok {
 		log.Warn().Msg("imt: transport does not support ReceiveMessage()")
-		return
+		return 0
 	}
 
+	n := 0
 	for {
 		payload, err := mr.ReceiveMessage()
 		if err != nil || payload == nil {
-			return
+			return n
 		}
+		n++
 
 		text := string(payload)
 		// The processor stores the message once it has decoded it; a row

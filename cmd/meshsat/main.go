@@ -549,6 +549,15 @@ func main() {
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
 	})
+	// Events that carry a state object in data (the mailbox check).
+	gwMgr.SetEventDataEmitFunc(func(eventType, message string, data json.RawMessage) {
+		proc.Emit(transport.MeshEvent{
+			Type:    eventType,
+			Message: message,
+			Data:    data,
+			Time:    time.Now().UTC().Format(time.RFC3339),
+		})
+	})
 	// Live packet feed (TTC mode): APRS and cellular gateways hand every
 	// frame to the processor's ring, which also emits "packet" SSE events.
 	// [MESHSAT-826]

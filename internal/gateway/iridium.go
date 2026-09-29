@@ -43,6 +43,12 @@ type IridiumGateway struct {
 	wg        sync.WaitGroup
 	emitEvent EventEmitFunc
 
+	// runCtx is the context Start derived for the gateway's own workers; a
+	// mailbox check a person asks for runs on it, never on the HTTP
+	// request's, which Go cancels when the handler returns.
+	runCtxMu sync.RWMutex
+	runCtx   context.Context
+
 	gwLabel   string // "SBD" or "IMT" — for log messages
 	gwType    string // "iridium" or "iridium_imt" — gateway type ID
 	gssSource string // "sbd_gss" or "imt_gss" — GSS recording source key
@@ -166,6 +172,23 @@ func (g *IridiumGateway) emit(eventType, message string) {
 // PassSchedulerRef returns the pass scheduler (may be nil).
 func (g *IridiumGateway) PassSchedulerRef() *PassScheduler {
 	return g.scheduler
+}
+
+// setRunContext records the context Start derived for the gateway.
+func (g *IridiumGateway) setRunContext(ctx context.Context) {
+	g.runCtxMu.Lock()
+	g.runCtx = ctx
+	g.runCtxMu.Unlock()
+}
+
+// runContext is the gateway's own context: live from Start until Stop.
+func (g *IridiumGateway) runContext() context.Context {
+	g.runCtxMu.RLock()
+	defer g.runCtxMu.RUnlock()
+	if g.runCtx == nil {
+		return context.Background()
+	}
+	return g.runCtx
 }
 
 // Start is not implemented on the base — use SBDGateway.Start() or IMTGateway.Start().
@@ -787,7 +810,9 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 	if err != nil {
 		log.Error().Err(err).Int("attempt", attempt).Msg("iridium: mailbox check failed")
 		g.errors.Add(1)
-		g.recordGSSRegistration(false, 0)
+		// No GSS row: no session answered. The free SBDSX failed, or the
+		// session's answer never came, so nothing is known about a
+		// registration.
 		// Retry after 30s if this was a ring-alert-triggered check (max 3 retries)
 		if attempt < 3 {
 			go func() {
@@ -801,12 +826,17 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 		return
 	}
 
-	// Record GSS registration result
-	g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
+	// Record the GSS registration only when a session ran: an empty result
+	// (nothing called for a session, or the message was already in the
+	// modem) has MO status 0 and used to count as a successful session, so
+	// the sky card showed sessions that never happened.
+	if !result.NoSession {
+		g.recordGSSRegistration(result.MOSuccess(), result.MOStatus)
+	}
 
 	log.Info().Int("mt_status", result.MTStatus).Int("mt_length", result.MTLength).
 		Int("mt_queued", result.MTQueued).Bool("mt_received", result.MTReceived).
-		Int("attempt", attempt).Msg("iridium: mailbox check result")
+		Bool("session", !result.NoSession).Int("attempt", attempt).Msg("iridium: mailbox check result")
 
 	if result.MTStatus != 1 || result.MTLength == 0 {
 		// SBDIX succeeded but no MT message delivered. If the modem received a ring alert
@@ -836,6 +866,16 @@ func (g *IridiumGateway) handleRingAlertWithRetry(ctx context.Context, attempt i
 
 	if len(data) == 0 {
 		log.Warn().Msg("iridium: received empty MT buffer")
+		return
+	}
+	g.deliverMT(data)
+}
+
+// deliverMT hands one MT payload read from the modem on: an ACK updates its
+// delivery, anything else is decoded (compact binary, else plain text),
+// recorded and passed to the inbound channel.
+func (g *IridiumGateway) deliverMT(data []byte) {
+	if len(data) == 0 {
 		return
 	}
 
@@ -977,11 +1017,6 @@ func (g *IridiumGateway) ResetPassCounters() (attempts, successes int64) {
 	attempts = g.passAttempts.Swap(0)
 	successes = g.passSuccesses.Swap(0)
 	return
-}
-
-// ManualMailboxCheck triggers a one-shot mailbox check (for "Check Mailbox Now" button).
-func (g *IridiumGateway) ManualMailboxCheck(ctx context.Context) {
-	go g.handleRingAlert(ctx)
 }
 
 // recordGSSRegistration persists a satellite session outcome to signal_history.

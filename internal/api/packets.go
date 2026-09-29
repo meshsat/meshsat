@@ -29,7 +29,7 @@ type packetRatesWindow struct {
 }
 
 // @Summary Live packet feed
-// @Description Newest-first records of frames seen on the LoRa, APRS and SMS bearers (both directions) from the in-memory 500-record ring. Each record carries time, bearer, dir, iface, from, to, bytes, rssi, snr, hops, channel, portnum, portnum_name, text, raw, path and msg_ref.
+// @Description Newest-first records of frames seen on the LoRa, APRS and SMS bearers (both directions) from the in-memory 500-record ring. Each record carries time, bearer, dir, iface, from, to, bytes, rssi, snr, hops, hop_start, channel, portnum, portnum_name, text, raw, path and msg_ref. On LoRa, hop_start is the hop limit the sender set and is 0 when the hop count is unknown: hops 0 with hop_start > 0 means heard directly, hop_start 0 means unknown.
 // @Tags packets
 // @Produce json
 // @Param limit query integer false "Max records (default 200, max 500)"

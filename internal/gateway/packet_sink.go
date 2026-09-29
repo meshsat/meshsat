@@ -25,6 +25,7 @@ type PacketRecord struct {
 	RSSI        int       `json:"rssi"`         // dBm, 0 when unknown
 	SNR         float32   `json:"snr"`          // dB, 0 when unknown
 	Hops        int       `json:"hops"`         // LoRa: hop_start - hop_limit; APRS: digipeater slots used
+	HopStart    int       `json:"hop_start"`    // LoRa: the hop limit the sender set, 0 when the hop count is unknown (hops 0 with hop_start > 0 = heard directly)
 	Channel     int       `json:"channel"`      // LoRa channel index
 	PortNum     int       `json:"portnum"`      // Meshtastic portnum (LoRa)
 	PortNumName string    `json:"portnum_name"` // Meshtastic portnum name (LoRa)

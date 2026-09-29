@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 )
 
 // handleGetSignalHistory returns raw or aggregated signal history.
@@ -579,20 +581,44 @@ type resolvedLocation struct {
 	Timestamp  int64   `json:"timestamp,omitempty"`
 }
 
-// handleManualMailboxCheck triggers a one-shot mailbox check.
-// @Summary Trigger manual mailbox check
-// @Description Triggers a one-shot Iridium SBD mailbox check (SBDIX) to retrieve pending MT messages
+// handleManualMailboxCheck starts the mailbox check a person asked for.
+// @Summary Check the satellite mailbox now
+// @Description Starts one mailbox check and answers at once; the check runs to the end on the Bridge's own context, not the request's. On the SBD (9603) gateway, which is used whenever it runs: a message already in the modem's MT buffer is read first, for free, the MO buffer is emptied (the delivery queue keeps outgoing messages for its retry), then exactly one Iridium session (AT+SBDIX) is opened, billed at least 1 credit even when nothing waits. Within 180 s of a session that ended with MO status 32 or 36 or lost its link no session is opened and the outcome is held. On the IMT (9704) gateway, used only when no SBD gateway runs, no session is opened: the 9704 fetches its messages by itself, and the check hands over what it holds. The outcome is read from GET /api/iridium/mailbox and announced as a "mailbox" event on /api/events. With no Iridium gateway the answer is 503 and the kept outcome becomes not_connected.
 // @Tags iridium
 // @Produce json
-// @Success 200 {object} map[string]string
-// @Failure 503 {object} map[string]string
+// @Success 200 {object} map[string]string "{\"status\":\"mailbox check started\"}"
+// @Failure 409 {object} map[string]string "{\"error\":\"a mailbox check is already running\"}"
+// @Failure 503 {object} map[string]string "{\"error\":\"iridium gateway not running\"}"
 // @Router /api/iridium/mailbox/check [post]
 func (s *Server) handleManualMailboxCheck(w http.ResponseWriter, r *http.Request) {
-	if err := s.gwManager.ManualMailboxCheck(r.Context()); err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "mailbox check triggered"})
+	switch err := s.gwManager.StartMailboxCheck(); {
+	case errors.Is(err, gateway.ErrMailboxCheckRunning):
+		writeError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "mailbox check started"})
+	}
+}
+
+// handleGetMailboxCheck returns the mailbox check a person asked for.
+// @Summary Satellite mailbox check state
+// @Description Whether a mailbox check runs, the outcome of the last one and when it ended (RFC3339, UTC). result and finished_at are null before the first check and while a check runs; the state is kept in memory and starts empty after a restart. result.kind is one of not_connected, held (seconds: until a session may run again, rounded up), session_failed (mo_status: the +SBDIX MO status, 32 = no network service, no credit used), no_answer, link_lost (the link to the modem dropped during the session; what it fetched is unknown) and checked (received: messages handed over, the free read included; still_queued: messages still waiting at the gateway). mo_status is -1 when no session answered. The same object is the data of every "mailbox" event on /api/events that carries data: one when a check starts (running true) and one when it ends.
+// @Tags iridium
+// @Produce json
+// @Success 200 {object} gateway.MailboxCheckState
+// @Failure 503 {object} map[string]string "{\"error\":\"gateway manager not available\"}"
+// @Router /api/iridium/mailbox [get]
+func (s *Server) handleGetMailboxCheck(w http.ResponseWriter, r *http.Request) {
+	if s.gwManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.gwManager.GetMailboxCheck())
 }
 
 func now() int64 {

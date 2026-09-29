@@ -13,11 +13,38 @@ import (
 	"meshsat/internal/gateway"
 )
 
+// satModemType reads the optional ?type= of the signal endpoints: "sbd" (the
+// 9603), "imt" (the 9704) or "" (the automatic choice, as before). False for
+// anything else.
+func satModemType(r *http.Request) (string, bool) {
+	switch t := r.URL.Query().Get("type"); t {
+	case "", "sbd", "imt":
+		return t, true
+	}
+	return "", false
+}
+
+// signalSourcesOf is the signal_history sources a modem's readings are kept
+// under: the 9603's "sbd" (legacy "iridium" when read through the HAL), the
+// 9704's "imt", or all three for the automatic choice.
+func signalSourcesOf(modemType string) []string {
+	switch modemType {
+	case "sbd":
+		return []string{"sbd", "iridium"}
+	case "imt":
+		return []string{"imt"}
+	}
+	return []string{"sbd", "imt", "iridium"}
+}
+
 // handleGetIridiumSignalFast returns a cached Iridium signal reading (AT+CSQF, ~100ms).
 // @Summary Get Iridium signal (fast)
-// @Description Returns cached satellite signal bars using AT+CSQF (non-blocking)
+// @Description Returns cached satellite signal bars using AT+CSQF (non-blocking). Without type the connected modem answers, the 9704 first, as always; type=sbd reads the 9603 and type=imt the 9704, each on its own (the fallbacks to the last recorded reading use that modem's readings only).
 // @Tags iridium
+// @Produce json
+// @Param type query string false "Which modem: sbd (9603) or imt (9704); omitted = the connected one, the 9704 first" Enums(sbd, imt)
 // @Success 200 {object} transport.SignalInfo
+// @Failure 400 {object} map[string]string "type is not sbd or imt"
 // @Failure 503 {object} map[string]string "unavailable"
 // @Router /api/iridium/signal/fast [get]
 func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Request) {
@@ -25,13 +52,19 @@ func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
 		return
 	}
+	modemType, ok := satModemType(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "type must be sbd or imt")
+		return
+	}
+	sources := signalSourcesOf(modemType)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	sig, err := s.gwManager.GetIridiumSignalFast(ctx)
+	sig, err := s.gwManager.GetIridiumSignalFastOf(ctx, modemType)
 	if err != nil {
 		// On timeout, fall back to latest DB reading (check sbd, imt, and legacy "iridium")
 		if s.db != nil {
-			if latest, dbErr := s.db.GetLatestSignalMulti([]string{"sbd", "imt", "iridium"}); dbErr == nil && latest != nil {
+			if latest, dbErr := s.db.GetLatestSignalMulti(sources); dbErr == nil && latest != nil {
 				writeJSON(w, http.StatusOK, map[string]interface{}{
 					"bars":       int(latest.Value),
 					"assessment": signalAssessment(int(latest.Value)),
@@ -48,7 +81,7 @@ func (s *Server) handleGetIridiumSignalFast(w http.ResponseWriter, r *http.Reque
 	// When instantaneous reading is 0 (common between passes), fall back to
 	// the most recent non-zero signal recorded in the last 10 minutes.
 	if sig.Bars == 0 && s.db != nil {
-		if latest, err := s.db.GetLatestSignalMulti([]string{"sbd", "imt", "iridium"}); err == nil && latest != nil {
+		if latest, err := s.db.GetLatestSignalMulti(sources); err == nil && latest != nil {
 			sig.Bars = int(latest.Value)
 			sig.Assessment = signalAssessment(sig.Bars)
 		}
@@ -72,9 +105,12 @@ func signalAssessment(bars int) string {
 
 // handleGetIridiumSignal returns a fresh Iridium signal reading (blocking AT+CSQ, up to 60s).
 // @Summary Get Iridium signal (blocking)
-// @Description Returns fresh satellite signal bars using AT+CSQ (blocks until modem responds)
+// @Description Returns fresh satellite signal bars using AT+CSQ (blocks until modem responds). Without type the connected modem answers, the 9704 first, as always; type=sbd reads the 9603 and type=imt the 9704.
 // @Tags iridium
+// @Produce json
+// @Param type query string false "Which modem: sbd (9603) or imt (9704); omitted = the connected one, the 9704 first" Enums(sbd, imt)
 // @Success 200 {object} transport.SignalInfo
+// @Failure 400 {object} map[string]string "type is not sbd or imt"
 // @Failure 503 {object} map[string]string "unavailable"
 // @Router /api/iridium/signal [get]
 func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +118,12 @@ func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "gateway manager not available")
 		return
 	}
-	sig, err := s.gwManager.GetIridiumSignal(r.Context())
+	modemType, ok := satModemType(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "type must be sbd or imt")
+		return
+	}
+	sig, err := s.gwManager.GetIridiumSignalOf(r.Context(), modemType)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return

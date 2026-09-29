@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -37,12 +38,32 @@ type DirectSatTransport struct {
 	// SBDSX); the device health probe's liveness input. [MESHSAT-817]
 	lastReply atomic.Int64
 
+	// sessionMu makes a satellite session and the MO buffer it sends one
+	// piece of work. Every path that loads the MO buffer and sends it (Send,
+	// SendText: SBDD0, SBDWB or SBDWT, SBDIX, SBDD0) holds it from its first
+	// MO command to its last, and every mailbox check that empties the MO
+	// buffer and opens a session (MailboxCheck, CheckMailboxNow) holds it for
+	// the whole check. mu alone did not: sbdixLocked lets go of mu while it
+	// waits out minSBDIXInterval and while it stops the monitor, between a
+	// send's load and its SBDIX, and a check that took mu there emptied the
+	// send's buffer, so the send's SBDIX went out empty, the modem answered
+	// MO status 0 and the queue marked sent a message that never left.
+	// Lock order: sessionMu, then mu, never the other way. Only those four
+	// entry points take it, none of them calls another, and the monitor
+	// goroutines stopMonitor waits for take only mu, so its waits cannot
+	// deadlock.
+	sessionMu sync.Mutex
+
 	mu        sync.Mutex
 	file      serial.Port
 	connected bool
-	imei      string
-	model     string
-	firmware  string
+	// connGen counts the links connectLocked opened. Every connect empties
+	// both SBD buffers, so sbdixLocked sends no session on a later link than
+	// the one its caller loaded the MO buffer on.
+	connGen  uint64
+	imei     string
+	model    string
+	firmware string
 
 	// MSSTM workaround: older firmware TA16005 hangs on SBDIX without prior MSSTM
 	needsMSSTMWorkaround bool
@@ -91,6 +112,12 @@ type DirectSatTransport struct {
 	// SBDIX rate limiting
 	lastSBDIX   time.Time
 	lastGSSSync time.Time // last successful SBDIX that reached the GSS (for MT discovery)
+
+	// sbdixHeldUntil: no mailbox check a person asks for opens a session
+	// before this time. Set by every SBDIX that ends with MO status 32 or 36,
+	// or whose link fails under it (from the session's start); read only by
+	// CheckMailboxNow, so sends and ring alerts go on as before.
+	sbdixHeldUntil time.Time
 
 	// Signal state
 	signalMu   sync.RWMutex
@@ -297,6 +324,7 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 
 	t.file = sp
 	t.port = portPath
+	t.connGen++ // a new link: the SBDD0/SBDD1 below empty both buffers
 
 	// Drain any stale data from the serial buffer before first command
 	drainPort(sp)
@@ -638,7 +666,9 @@ func (t *DirectSatTransport) isConnected() bool {
 // ============================================================================
 
 // Send transmits binary data via SBD (AT+SBDWB + AT+SBDIX).
-// Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL SendBinary).
+// Holds the session lock from its first MO command to its post-session
+// SBDD0, so no mailbox check empties or sends the loaded buffer before this
+// SBDIX, and mu except where sbdixLocked lets go of it (see sessionMu).
 func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data is empty")
@@ -647,6 +677,8 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		return nil, fmt.Errorf("data too large (max 340 bytes for SBD)")
 	}
 
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
@@ -736,7 +768,8 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 }
 
 // SendText transmits a text SBD message (AT+SBDWT + AT+SBDIX).
-// Holds mu throughout — monitor is blocked on mu.Lock() (matches HAL pattern).
+// Holds the session lock from its first MO command to its post-session
+// SBDD0, and mu except where sbdixLocked lets go of it, as Send does.
 func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDResult, error) {
 	if len(text) > 120 {
 		return nil, fmt.Errorf("text too long (max 120 chars for AT+SBDWT)")
@@ -746,6 +779,8 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 		return nil, fmt.Errorf("text contains invalid characters (CR, LF, or null)")
 	}
 
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
@@ -776,7 +811,13 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	if !t.connected || t.file == nil {
 		return nil, ErrNotConnected
 	}
+	return t.readMTLocked()
+}
 
+// readMTLocked reads the MT buffer (AT+SBDRB) and clears it (AT+SBDD1)
+// after a good read: the body of Receive, shared with CheckMailboxNow.
+// Caller holds t.mu and has checked the connection.
+func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
 	t.stopMonitor()
 	defer t.startMonitor()
 
@@ -835,8 +876,12 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 //   - MT waiting > 0 (from previous SBDIX)
 //   - GSS sync overdue (>15min since last successful SBDIX) — periodic MT discovery
 //
-// Holds mu throughout — monitor is blocked on mu.Lock().
+// Holds the session lock for the whole check, so the MO buffer it reads,
+// empties or sends is never one a send has loaded and not yet sent, and mu
+// except where sbdixLocked lets go of it (see sessionMu).
 func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, error) {
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.connected || t.file == nil {
@@ -864,7 +909,7 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	// If MT buffer already has data from a piggybacked delivery, report immediately
 	if status.MTFlag {
 		log.Info().Msg("iridium: MT buffer has data (piggybacked), no SBDIX needed")
-		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true}, nil
+		return &SBDResult{MTStatus: 1, MTLength: 1, MTReceived: true, NoSession: true}, nil
 	}
 
 	// Determine if SBDIX is warranted (each costs 1 credit with empty MO).
@@ -886,7 +931,7 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 		} else {
 			log.Debug().Msg("iridium: no reason for SBDIX, skipping")
 		}
-		return &SBDResult{}, nil
+		return &SBDResult{NoSession: true}, nil
 	}
 
 	if gssSyncOverdue && !status.MOFlag && !status.RAFlag && status.MTWaiting == 0 {
@@ -1316,16 +1361,26 @@ func (t *DirectSatTransport) disconnectLocked() {
 // Internal helpers
 // ============================================================================
 
-// sbdixLocked performs AT+SBDIX with rate limiting. Caller must hold t.mu.
+// sbdixLocked performs AT+SBDIX with rate limiting. The caller holds
+// t.sessionMu and t.mu and has loaded (or emptied) the MO buffer on the
+// current link. mu is let go during the rate-limit wait and while the
+// monitor stops; the session lock is not, so no other session or MO command
+// comes in between (see sessionMu). A link closed or reopened meanwhile has
+// lost the MO buffer, and no session is sent.
 // Context-aware rate limit wait matches HAL's sbdixLocked pattern.
 func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error) {
 	if !t.connected || t.file == nil {
 		return nil, ErrNotConnected
 	}
+	// The link the caller loaded the MO buffer on. Every connect empties the
+	// buffer, so an SBDIX on a later link would go out empty and answer MO
+	// status 0 for a message that never left.
+	gen := t.connGen
+	linkGone := func() bool { return !t.connected || t.file == nil || t.connGen != gen }
 
 	// Rate limit: min 10s between SBDIX.
-	// Stop monitor+poller during wait instead of releasing mutex — prevents
-	// other goroutines from consuming serial bytes that corrupt SBDIX parsing.
+	// Stop monitor+poller before letting go of mu for the wait, so no other
+	// goroutine consumes serial bytes that would corrupt SBDIX parsing.
 	if elapsed := time.Since(t.lastSBDIX); elapsed < minSBDIXInterval {
 		wait := minSBDIXInterval - elapsed
 		log.Info().Dur("wait", wait).Msg("iridium SBDIX rate limit")
@@ -1340,16 +1395,25 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 		}
 		t.mu.Lock()
 		// Re-check state after re-acquiring
-		if !t.connected || t.file == nil {
-			t.startMonitor()
-			return nil, fmt.Errorf("disconnected during rate limit wait")
+		if linkGone() {
+			if t.connected && t.file != nil {
+				t.startMonitor()
+			}
+			return nil, fmt.Errorf("disconnected during rate limit wait: %w", ErrNotConnected)
 		}
 		// Drain any bytes the modem sent during the wait (unsolicited URCs, echo)
 		drainPort(t.file)
 	} else {
 		// Even without rate-limit wait, stop monitor before SBDIX to prevent
-		// concurrent serial reads from corrupting the response
+		// concurrent serial reads from corrupting the response. stopMonitor
+		// lets go of mu while the goroutines exit: re-check the link.
 		t.stopMonitor()
+		if linkGone() {
+			if t.connected && t.file != nil {
+				t.startMonitor()
+			}
+			return nil, fmt.Errorf("disconnected while stopping the monitor: %w", ErrNotConnected)
+		}
 	}
 
 	t.lastSBDIX = time.Now()
@@ -1394,13 +1458,30 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 		// processing the satellite session and will send its response later.
 		// Force disconnect so the reconnect loop re-establishes a clean port.
 		log.Warn().Err(err).Msg("iridium: SBDIX failed, forcing serial reconnect")
+		linkLost := !errors.Is(err, errSBDIXReadTimeout) && !errors.Is(err, errSBDIXTooLarge)
+		if linkLost {
+			// The port itself failed while the session ran: the modem may
+			// well have finished it, so its outcome is unknown. The ISU
+			// registers once every 3 minutes and every SBDIX registers, so
+			// the hold runs from the session's start (lastSBDIX, set under
+			// this same lock hold), as after a 32 or 36.
+			t.holdSBDIXUntil(t.lastSBDIX.Add(SBDIXHold))
+		}
 		t.disconnectLocked()
+		if linkLost {
+			return nil, fmt.Errorf("SBDIX failed: %w: %v", errSBDIXLinkLost, err)
+		}
 		return nil, fmt.Errorf("SBDIX failed: %w", err)
 	}
 
 	ix, err := parseSBDIX(resp)
 	if err != nil {
 		return nil, err
+	}
+	if ix.moStatus == 32 || ix.moStatus == 36 {
+		// No network service, or the gateway asks to wait 3 minutes since
+		// the last registration.
+		t.holdSBDIXUntil(time.Now().Add(SBDIXHold))
 	}
 
 	return &SBDResult{
@@ -1454,7 +1535,7 @@ func readSBDIXResponse(port serial.Port, timeout time.Duration) (string, error) 
 
 	for {
 		if time.Now().After(deadline) {
-			return resp.String(), fmt.Errorf("read timeout")
+			return resp.String(), errSBDIXReadTimeout
 		}
 
 		n, err := port.Read(buf)
@@ -1479,7 +1560,7 @@ func readSBDIXResponse(port serial.Port, timeout time.Duration) (string, error) 
 			}
 
 			if resp.Len() > maxResp {
-				return full, fmt.Errorf("response too large (%d bytes)", resp.Len())
+				return full, fmt.Errorf("%w (%d bytes)", errSBDIXTooLarge, resp.Len())
 			}
 		}
 
@@ -1488,6 +1569,16 @@ func readSBDIXResponse(port serial.Port, timeout time.Duration) (string, error) 
 		}
 	}
 }
+
+// Errors of readSBDIXResponse and sbdixLocked. A timeout or an oversized
+// answer means the modem did not answer the session; any other read error
+// is the port failing under it (errSBDIXLinkLost). The texts are the ones
+// these paths always logged.
+var (
+	errSBDIXReadTimeout = errors.New("read timeout")
+	errSBDIXTooLarge    = errors.New("response too large")
+	errSBDIXLinkLost    = errors.New("the link to the modem failed during the session")
+)
 
 func (r sbdixResult) statusText() string {
 	if r.moStatus >= 0 && r.moStatus <= 4 {
