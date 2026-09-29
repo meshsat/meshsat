@@ -548,11 +548,54 @@ func (db *DB) CancelRunawayDeliveries(safetyLimit int) (int64, error) {
 
 // RecoverStaleDeliveries resets deliveries stuck in 'sending' status back to 'retry'.
 // This happens when the process crashes or restarts mid-delivery.
+// A satellite send is never among them (EndStaleSatelliteSends ends it),
+// but for the SOS's frame to the Hub, which is sent again as before: a
+// person's Retry never sends it (ErrSOSFrameNotRetried), and a duplicate
+// SOS frame is the lesser harm. [MESHSAT-1391]
 func (db *DB) RecoverStaleDeliveries() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'retry', last_error = 'recovered after restart', next_retry = datetime('now'), updated_at = datetime('now')
-		WHERE status = 'sending'`)
+		WHERE status = 'sending' AND (NOT (`+satelliteChannelSQL+`) OR `+sosFrameSQL+`)`, DeliveryClassHubUplink)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale deliveries: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// UnconfirmedPrefix opens the last_error of a delivery given up because its
+// satellite session may have gone out while its outcome is unknown: its
+// status is "dead", which every queue lists under what did not go out,
+// with a Retry, and the reason says it may have been sent (the words
+// MeshSat Android shows for such a send). [MESHSAT-1391]
+const UnconfirmedPrefix = "May have been sent"
+
+// satelliteChannelSQL matches the deliveries of a satellite link: every
+// session is billed, and one whose outcome is unknown may have sent the
+// message. A link is known by the channel type of its interface row
+// (iridium, iridium_imt), whatever its name, and by its name (iridium_...)
+// only when it has no row: a link a person named iridium_relay is whatever
+// its row says. [MESHSAT-1391]
+const satelliteChannelSQL = `(channel IN (SELECT id FROM interfaces WHERE channel_type LIKE 'iridium%')
+		OR (channel LIKE 'iridium%' AND channel NOT IN (SELECT id FROM interfaces)))`
+
+// sosFrameSQL matches the SOS's frame to the Hub: class hub_uplink, queued
+// at priority 0 (RetryDelivery). Its one argument is DeliveryClassHubUplink.
+const sosFrameSQL = `(priority = 0 AND delivery_class = ?)`
+
+// EndStaleSatelliteSends ends the satellite deliveries a stop left 'sending'
+// (the process stopped while a session ran, or while its outcome was being
+// settled): each may have gone out, and a second session could deliver it
+// twice, each billed. Given up with the reason instead of sent again at
+// start, as the delivery worker gives up a session whose outcome is unknown;
+// the queue's Retry is a person's to press. Not the SOS's frame to the Hub,
+// which RecoverStaleDeliveries sends again as before (no Retry would).
+// Run before RecoverStaleDeliveries. [MESHSAT-1391]
+func (db *DB) EndStaleSatelliteSends() (int64, error) {
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = ?, updated_at = datetime('now')
+		WHERE status = 'sending' AND `+satelliteChannelSQL+` AND NOT `+sosFrameSQL,
+		UnconfirmedPrefix+": the Bridge stopped while this satellite send was under way, so it is not sent again by itself (a second session could deliver it twice). Retry it if it did not arrive.",
+		DeliveryClassHubUplink)
+	if err != nil {
+		return 0, fmt.Errorf("end stale satellite sends: %w", err)
 	}
 	return res.RowsAffected()
 }

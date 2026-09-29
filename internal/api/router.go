@@ -465,6 +465,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/mesh/ble/pair", s.handleBLEPair)
 		r.Get("/mesh/ble/status", s.handleBLEStatus)
 		r.Delete("/mesh/ble", s.handleBLEForget)
+		// The node's RockBLOCK through its modem pipe. [MESHSAT-1391]
+		r.Put("/mesh/ble/satellite", s.handleBLESetSatellite)
+		r.Get("/mesh/ble/satellite/stats", s.handleBLESatelliteStats)
 
 		r.Get("/events", s.handleSSE)
 

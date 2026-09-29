@@ -62,6 +62,136 @@ type Manager struct {
 	// the link at once and its delivery worker runs; nil writes the row
 	// to the database only.
 	linkCreator func(database.Interface) error
+
+	// sbdPipe, when set, says whether the adopted MeshSat node's modem pipe is
+	// there for the SBD gateway (MESHSAT_IRIDIUM_PORT=ble): the pipe stands in
+	// for a USB 9603, so the supervisor's 9603 finds and losses leave iridium_0
+	// alone, reconcile counts the pipe as its hardware, and AttachSBDPipe and
+	// DetachSBDPipe start and stop it. [MESHSAT-1391]
+	sbdPipe func() bool
+	// sbdPipeStop and sbdPipeResume stop and resume the delivery workers of
+	// the SBD gateway's links with it (SetSBDPipeWorkers).
+	sbdPipeStop   func(linkID string)
+	sbdPipeResume func(linkID, channelType string)
+}
+
+// sbdPipeInstance is the SBD gateway the node's pipe carries.
+const sbdPipeInstance = "iridium_0"
+
+// SetSBDPipe makes the node's modem pipe the SBD gateway's hardware; present
+// says whether it is there now (the link up, the switch on). [MESHSAT-1391]
+func (m *Manager) SetSBDPipe(present func() bool) {
+	m.mu.Lock()
+	m.sbdPipe = present
+	m.mu.Unlock()
+}
+
+func (m *Manager) sbdPipeFn() func() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sbdPipe
+}
+
+// SetSBDPipeWorkers wires the delivery workers of the links the node's modem
+// pipe serves (the dispatcher's StopWorker and ResumeWorker). DetachSBDPipe
+// stops them before it stops the gateway, so what waits for those links is
+// held while the node's modem is away: a delivery that found no gateway
+// failed with "gateway iridium_0 not found or not running", which killed a
+// QoS 0 message at once and spent QoS 1+ retries in an ordinary Bluetooth
+// outage. AttachSBDPipe resumes them once the gateway runs. [MESHSAT-1391]
+func (m *Manager) SetSBDPipeWorkers(stop func(linkID string), resume func(linkID, channelType string)) {
+	m.mu.Lock()
+	m.sbdPipeStop, m.sbdPipeResume = stop, resume
+	m.mu.Unlock()
+}
+
+// sbdPipeLinks are the links the SBD gateway serves (channel type iridium).
+func (m *Manager) sbdPipeLinks() []string {
+	if m.db == nil {
+		return nil
+	}
+	links, err := m.db.GetInterfacesByType("iridium")
+	if err != nil {
+		log.Warn().Err(err).Msg("gwmgr: the SBD gateway's links could not be read")
+		return nil
+	}
+	ids := make([]string, 0, len(links))
+	for _, l := range links {
+		ids = append(ids, l.ID)
+	}
+	return ids
+}
+
+// AttachSBDPipe starts the SBD gateway on the node's modem pipe, creating or
+// re-enabling its config and its link as a USB 9603 plugged in would, then
+// resumes the delivery workers of its links. A gateway already running is
+// left as it is. [MESHSAT-1391]
+func (m *Manager) AttachSBDPipe(ctx context.Context) error {
+	m.mu.RLock()
+	_, running := m.running[sbdPipeInstance]
+	m.mu.RUnlock()
+	if !running {
+		cfg, err := m.db.GetGatewayConfigByInstance(sbdPipeInstance)
+		if err != nil {
+			if err := m.db.SaveGatewayConfigInstance("iridium", sbdPipeInstance, true, "{}"); err != nil {
+				return fmt.Errorf("sbd over the node: %w", err)
+			}
+		} else if !cfg.Enabled {
+			if err := m.db.SaveGatewayConfigInstance("iridium", sbdPipeInstance, true, cfg.Config); err != nil {
+				return fmt.Errorf("sbd over the node: %w", err)
+			}
+		}
+		m.ensureLink("iridium", true)
+		log.Info().Str("instance", sbdPipeInstance).Msg("gwmgr: the MeshSat node's modem is there, starting the SBD gateway")
+		if err := m.StartGatewayInstance(ctx, sbdPipeInstance); err != nil {
+			m.mu.RLock()
+			gw := m.running[sbdPipeInstance]
+			m.mu.RUnlock()
+			if gw == nil {
+				// Not started (a start of another path still in flight
+				// resumes nothing either: its own attach or reconcile does).
+				return err
+			}
+		}
+	}
+	m.mu.RLock()
+	resume := m.sbdPipeResume
+	m.mu.RUnlock()
+	if resume != nil {
+		for _, id := range m.sbdPipeLinks() {
+			resume(id, "iridium")
+		}
+	}
+	return nil
+}
+
+// DetachSBDPipe stops the delivery workers of the SBD gateway's links, so
+// what waits for them is held, then the SBD gateway itself, when the node's
+// modem goes (the link lost, the switch off). Its config stays enabled, as
+// for a USB 9603 unplugged; a start in flight is left to finish.
+// [MESHSAT-1391]
+func (m *Manager) DetachSBDPipe() {
+	m.mu.RLock()
+	stop := m.sbdPipeStop
+	m.mu.RUnlock()
+	if stop != nil {
+		for _, id := range m.sbdPipeLinks() {
+			stop(id)
+		}
+	}
+	m.mu.Lock()
+	gw, ok := m.running[sbdPipeInstance]
+	if !ok || gw == nil {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.running, sbdPipeInstance)
+	m.unsyncIfaceMap(gw)
+	m.mu.Unlock()
+	log.Info().Str("instance", sbdPipeInstance).Msg("gwmgr: the MeshSat node's modem went, stopping the SBD gateway")
+	if err := gw.Stop(); err != nil {
+		log.Warn().Err(err).Str("instance", sbdPipeInstance).Msg("gwmgr: stopping the SBD gateway")
+	}
 }
 
 // NewManager creates a new gateway manager.
@@ -421,6 +551,9 @@ func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEven
 	if gwType == "" {
 		return // not a gateway-backed device (meshtastic, gps, unknown)
 	}
+	if gwType == "iridium" && m.sbdPipeFn() != nil {
+		return // the SBD gateway rides the node's pipe, never a USB 9603 [MESHSAT-1391]
+	}
 
 	// Resolve which instance owns this port
 	instanceID := ""
@@ -651,6 +784,17 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 		}
 	}
 	m.mu.RUnlock()
+	// The node's modem pipe is the SBD gateway's hardware in place of any
+	// USB 9603 the supervisor knows, and the gateway goes with it through
+	// AttachSBDPipe and DetachSBDPipe, which hold its links' deliveries while
+	// it is away. [MESHSAT-1391]
+	pipe := m.sbdPipeFn()
+	if pipe != nil {
+		delete(presentTypes, "iridium")
+		if pipe() {
+			presentTypes["iridium"] = 1
+		}
+	}
 	configs, _ := m.db.GetAllGatewayConfigs()
 	for _, cfg := range configs {
 		role := gatewayTypeToRole(cfg.Type)
@@ -671,8 +815,15 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 			m.db.SaveGatewayConfigInstance(cfg.Type, instanceID, false, cfg.Config)
 		}
 
+		if pipe != nil && cfg.Type == "iridium" && instanceID == sbdPipeInstance {
+			m.DetachSBDPipe()
+			continue
+		}
 		m.mu.Lock()
-		if gw, ok := m.running[instanceID]; ok {
+		// A nil entry is a start in flight (StartGatewayInstance's
+		// sentinel): left to finish, as the device events leave it; the
+		// next reconcile stops what it started. [MESHSAT-1391]
+		if gw, ok := m.running[instanceID]; ok && gw != nil {
 			gw.Stop()
 			delete(m.running, instanceID)
 			m.unsyncIfaceMap(gw)
@@ -694,6 +845,12 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 	for gwType, hwCount := range presentTypes {
 		// Skip if we already have enough running instances for this type
 		if runningByType[gwType] >= hwCount {
+			continue
+		}
+		if pipe != nil && gwType == "iridium" {
+			if err := m.AttachSBDPipe(ctx); err != nil {
+				log.Warn().Err(err).Msg("gwmgr: reconcile — the SBD gateway did not start on the node's modem")
+			}
 			continue
 		}
 

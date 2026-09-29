@@ -136,7 +136,7 @@ func (t *DirectSatTransport) CheckMailboxNow(ctx context.Context) MailboxCheckOu
 	// until a follow-up check's Receive takes it (MESHSAT-1427); the free
 	// read below would not find it.
 	out.Messages = t.takeHeldLocked()
-	if !t.connected || t.file == nil {
+	if !t.lineUpLocked() {
 		out.Result.Kind = MailboxNotConnected
 		return out
 	}
@@ -149,6 +149,14 @@ func (t *DirectSatTransport) CheckMailboxNow(ctx context.Context) MailboxCheckOu
 	// Free: what the modem holds, and what it last heard the gateway holds.
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
+		if errors.Is(err, errPipeNotOwned) {
+			// The node has taken its modem back: a handover, not a fault of
+			// the link (PortGone drops the line), and nothing went out.
+			// [MESHSAT-1391]
+			log.Info().Msg("iridium: mailbox check: the node holds its modem, no session")
+			out.Result.Kind = MailboxNotConnected
+			return out
+		}
 		log.Warn().Err(err).Msg("iridium: mailbox check: SBDSX failed, forcing serial reconnect")
 		t.disconnectLocked()
 		out.Result.Kind = MailboxNoAnswer
@@ -168,7 +176,7 @@ func (t *DirectSatTransport) CheckMailboxNow(ctx context.Context) MailboxCheckOu
 	// path, which never opens a session while one waits), where a session
 	// would lose it.
 	if status.MTFlag {
-		data, err := t.readMTLocked()
+		data, err := t.readMTLocked(status.MTMSN)
 		if err != nil {
 			log.Warn().Err(err).Msg("iridium: mailbox check: reading the waiting MT failed, no session")
 			out.Result.Kind = MailboxNoAnswer
@@ -208,9 +216,10 @@ func (t *DirectSatTransport) CheckMailboxNow(ctx context.Context) MailboxCheckOu
 		case errors.Is(err, errSBDIXReadTimeout), errors.Is(err, errSBDIXTooLarge):
 			// The session went out; its answer never came.
 			out.Result.Kind = MailboxNoAnswer
-		case ctx.Err() != nil, errors.Is(err, ErrNotConnected), !t.connected, t.file == nil:
+		case ctx.Err() != nil, errors.Is(err, ErrNotConnected), errors.Is(err, errPipeNotOwned), !t.connected, t.file == nil:
 			// No session went out: the gateway stopped, or the link went
-			// down (or was reopened) during the rate-limit wait.
+			// down (or was reopened) during the rate-limit wait, or the
+			// node took its modem back and refused the SBDIX.
 			out.Result.Kind = MailboxNotConnected
 		default:
 			// SBDIX could not be written, or its answer not read.
@@ -225,7 +234,7 @@ func (t *DirectSatTransport) CheckMailboxNow(ctx context.Context) MailboxCheckOu
 	// A message that came in with the session is read now, before another
 	// session overwrites it.
 	if res.MTStatus == 1 && t.connected && t.file != nil {
-		if data, err := t.readMTLocked(); err != nil {
+		if data, err := t.readMTLocked(res.MTMSN); err != nil {
 			log.Warn().Err(err).Msg("iridium: mailbox check: reading the session's MT failed")
 		} else if len(data) > 0 {
 			out.Messages = append(out.Messages, data)

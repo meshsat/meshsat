@@ -103,6 +103,15 @@ type BLEStatus struct {
 	// BlueZ is not open). The apps say "Bluetooth is off on this phone" from
 	// it. [MESHSAT-1397]
 	AdapterPowered *bool `json:"adapter_powered,omitempty"`
+	// SatelliteEnabled is the switch "Use the node's modem" (default on),
+	// kept with the node: off, the node keeps its RockBLOCK. SatelliteOwner
+	// is who holds that modem by the node's STATUS: none, phone (this
+	// Bridge, in the contract's word), node, or "" when unknown or there is
+	// no pipe. SatelliteLinkBroken: three writes in a row did not reach the
+	// node's modem and none has since. [MESHSAT-1391]
+	SatelliteEnabled    bool   `json:"satellite_enabled"`
+	SatelliteOwner      string `json:"satellite_owner"`
+	SatelliteLinkBroken bool   `json:"satellite_link_broken"`
 }
 
 // gattLink is the node's GATT service as the stream sees it: a fake in tests,
@@ -441,13 +450,25 @@ type bleLink struct {
 	// logUntil is when following the node's log ends unless it is asked
 	// for again. [MESHSAT-1406]
 	logUntil time.Time
+
+	// The node's modem pipe (mesh_ble_pipe.go). [MESHSAT-1391]
+	satOff       bool          // the switch "Use the node's modem" is off
+	pipeSess     *blePipe      // the pipe on the current session, nil without one
+	pipeHealth   *pipeHealth   // failed writes across sessions: satellite_link_broken
+	satDriver    satPipeDriver // the SBD transport, when the pipe is its line
+	pipeKick     chan struct{} // the claim loop's cue: the switch moved
+	availFn      func(bool)    // the SBD gateway's attach and detach
+	availKick    chan struct{}
+	recoverAt    time.Time
+	recoverTimer *time.Timer
 }
 
 func newBLELink(t *DirectMeshTransport, port string) *bleLink {
-	l := &bleLink{t: t, adapter: os.Getenv("MESHSAT_BLE_ADAPTER"), stateDir: "/var/lib/meshsat", mode: "idle"}
+	l := &bleLink{t: t, adapter: os.Getenv("MESHSAT_BLE_ADAPTER"), stateDir: "/var/lib/meshsat", mode: "idle",
+		pipeHealth: &pipeHealth{}, pipeKick: make(chan struct{}, 1)}
 	if addr := meshBLEAddress(port); addr != "" {
+		// Named by the port: the memory only gives its switch.
 		l.address = addr
-		l.loaded = true
 	}
 	return l
 }
@@ -456,11 +477,15 @@ type bleNodeRecord struct {
 	Address  string    `json:"address"`
 	Name     string    `json:"name,omitempty"`
 	ChosenAt time.Time `json:"chosen_at"`
+	// Satellite is the switch "Use the node's modem", written when off (the
+	// default is on). [MESHSAT-1391]
+	Satellite *bool `json:"satellite_enabled,omitempty"`
 }
 
 func (l *bleLink) nodeFile() string { return filepath.Join(l.stateDir, bleNodeFile) }
 
-// load reads the remembered node once (unless the port named one).
+// load reads the remembered node once; a port that names an address wins
+// over the memory's address. Caller holds l.mu (or owns the link alone).
 func (l *bleLink) load() {
 	if l.loaded {
 		return
@@ -471,22 +496,47 @@ func (l *bleLink) load() {
 		return
 	}
 	var rec bleNodeRecord
-	if json.Unmarshal(data, &rec) == nil && rec.Address != "" {
+	if json.Unmarshal(data, &rec) != nil {
+		return
+	}
+	if rec.Satellite != nil {
+		l.satOff = !*rec.Satellite
+	}
+	if l.address == "" && rec.Address != "" {
 		l.address, l.name = strings.ToUpper(rec.Address), rec.Name
 	}
 }
 
+// save remembers the node and its satellite switch. Caller must not hold l.mu.
 func (l *bleLink) save() {
+	l.mu.Lock()
 	rec := bleNodeRecord{Address: l.address, Name: l.name, ChosenAt: time.Now().UTC()}
+	if l.satOff {
+		off := false
+		rec.Satellite = &off
+	}
+	dir, file := l.stateDir, l.nodeFile()
+	l.mu.Unlock()
 	data, _ := json.Marshal(rec)
-	if err := os.MkdirAll(l.stateDir, 0o755); err == nil {
-		if err := os.WriteFile(l.nodeFile(), data, 0o644); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err == nil {
+		if err := os.WriteFile(file, data, 0o644); err != nil {
 			log.Warn().Err(err).Msg("bluez: cannot remember the node")
 		}
 	}
 }
 
-func (l *bleLink) forgetFile() { _ = os.Remove(l.nodeFile()) }
+// forgetFile forgets the node; a switch turned off outlives it, as Android's
+// setting outlives the node it was set with.
+func (l *bleLink) forgetFile() {
+	l.mu.Lock()
+	off := l.satOff
+	l.mu.Unlock()
+	if off {
+		l.save()
+		return
+	}
+	_ = os.Remove(l.nodeFile())
+}
 
 // ensureBus opens BlueZ and registers the pairing agent once. Caller holds l.mu.
 func (l *bleLink) ensureBus() error {
@@ -638,6 +688,10 @@ func (l *bleLink) connectOnce() error {
 			l.mu.Unlock()
 			l.save()
 			log.Info().Str("address", address).Str("name", name).Bool("satellite_pipe", pipe).Msg("meshtastic over bluetooth: link up")
+			if pipe {
+				// The node's RockBLOCK rides the same link. [MESHSAT-1391]
+				l.startPipe(bus, path, session)
+			}
 			return nil
 		}
 		log.Warn().Err(lastErr).Int("attempt", attempt).Msg("meshtastic over bluetooth: connect failed")
@@ -712,19 +766,33 @@ func (l *bleLink) choose(address string) error {
 	l.mu.Lock()
 	l.load()
 	previous := l.address
-	if previous != "" && previous != addr {
-		if l.session != nil {
-			l.session.close()
-			l.session = nil
-		}
-		if l.bus != nil {
-			l.bus.disconnect(l.bus.devicePath(previous))
-		}
+	l.mu.Unlock()
+	replacing := previous != "" && previous != addr
+	if replacing {
+		// The previous node's modem pipe ends first, never in the middle
+		// of a satellite session of this Bridge. [MESHSAT-1391]
+		l.endPipe()
+	}
+	l.mu.Lock()
+	var old *bleGattSession
+	bus := l.bus
+	if replacing {
+		old, l.session = l.session, nil
 	}
 	l.address, l.name, l.pipe = addr, "", false
 	l.mode, l.since, l.lastErr = "idle", time.Now(), ""
 	l.mu.Unlock()
+	if old != nil {
+		old.close()
+	}
+	if replacing && bus != nil {
+		bus.disconnect(bus.devicePath(previous))
+	}
 	l.save()
+	if previous != addr {
+		// Another node's modem: nothing wrong with it yet. [MESHSAT-1391]
+		l.pipeHealth.reset()
+	}
 	if previous != "" && previous != addr {
 		l.t.Close()
 	}
@@ -746,6 +814,9 @@ func (l *bleLink) pair(pin string) error {
 // forget drops the node: link and memory, and the bond too when asked (Android's
 // "Disconnect" keeps the bond; a stale one is cleared by forgetting with it).
 func (l *bleLink) forget(removeBond bool) error {
+	// The node's modem pipe ends first, never in the middle of a satellite
+	// session of this Bridge. [MESHSAT-1391]
+	l.endPipe()
 	l.t.Close()
 	l.mu.Lock()
 	l.load()
@@ -757,6 +828,7 @@ func (l *bleLink) forget(removeBond bool) error {
 	l.address, l.name, l.pipe = "", "", false
 	l.mode, l.since, l.lastErr = "idle", time.Now(), ""
 	l.mu.Unlock()
+	l.pipeHealth.reset()
 	l.forgetFile()
 	if address != "" && bus != nil {
 		path := bus.devicePath(address)
@@ -775,6 +847,11 @@ func (l *bleLink) status() BLEStatus {
 	defer l.mu.Unlock()
 	l.load()
 	st := BLEStatus{Mode: l.mode, Address: l.address, Name: l.name, SatellitePipe: l.pipe, Since: l.since, Error: l.lastErr}
+	st.SatelliteEnabled = !l.satOff
+	if l.pipeSess != nil {
+		st.SatelliteOwner = l.pipeSess.Owner()
+	}
+	st.SatelliteLinkBroken, _ = l.pipeHealth.state()
 	if l.session != nil && !l.session.isLost() {
 		st.Connected = true
 	} else if l.mode == "ready" {

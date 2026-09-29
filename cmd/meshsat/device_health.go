@@ -517,6 +517,11 @@ func iridiumHealthTarget(t *transport.DirectSatTransport) gateway.HealthTarget {
 			if port == "" || port == "auto" || port == "supervisor" {
 				return gateway.ProbeResult{Unknown: true, Detail: "no serial port assigned"}
 			}
+			if t.OverPipe() && !t.IsConnected() {
+				// The Bluetooth node's modem comes and goes with the node and
+				// its switch; the pipe probes it again by itself. [MESHSAT-1391]
+				return gateway.ProbeResult{Unknown: true, Detail: "the node's modem is not this Bridge's now"}
+			}
 			if !t.IsConnected() {
 				return probeMiss("not connected")
 			}

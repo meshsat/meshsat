@@ -6,6 +6,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -51,17 +52,21 @@ type DirectSatTransport struct {
 	// MailboxCheck also reads a message it finds in the MT buffer under it
 	// (mtHeld), so no queued send's session empties that buffer first.
 	// Lock order: sessionMu, then mu, never the other way. Only those four
-	// entry points take it, none of them calls another, and the monitor
-	// goroutines stopMonitor waits for take only mu, so its waits cannot
-	// deadlock.
+	// entry points take it, and Quiesce (the node link giving the modem
+	// back, or ending the link, over the node's pipe), none of them calls
+	// another, and the monitor goroutines stopMonitor waits for take only
+	// mu, so its waits cannot deadlock. A send over the node's pipe whose
+	// session the link cut keeps it while it settles the outcome from the
+	// node's account (settleCutSession), with mu let go.
 	sessionMu sync.Mutex
 
 	mu        sync.Mutex
 	file      serial.Port
 	connected bool
-	// connGen counts the links connectLocked opened. Every connect empties
-	// both SBD buffers, so sbdixLocked sends no session on a later link than
-	// the one its caller loaded the MO buffer on.
+	// connGen counts the links connectLocked opened, and the node's pipe
+	// set-up (initPipeModemLocked). Every connect empties the MO buffer (a
+	// serial one both SBD buffers), so sbdixLocked sends no session on a
+	// later link than the one its caller loaded the MO buffer on.
 	connGen  uint64
 	imei     string
 	model    string
@@ -123,7 +128,9 @@ type DirectSatTransport struct {
 
 	// mtHeld are the MT messages read out of the modem under the
 	// session-lock hold that found them, oldest first: by MailboxCheck, and
-	// by Send and SendText when their own session brought one in. Receive
+	// by Send and SendText when their own session brought one in; over the
+	// node's pipe also by the set-up's free read when the link comes up
+	// (under mu, before anything sees the link up). Receive
 	// hands them over before it reads the modem, and CheckMailboxNow hands
 	// them all over. The ring-alert path calls Receive after MailboxCheck
 	// returns (and after a send, after its follow-up check), and a queued
@@ -136,8 +143,15 @@ type DirectSatTransport struct {
 	// it again and reports none) and MailboxCheck does not count the MT
 	// flag for it. Reset by whatever may change the buffer: a clear that
 	// goes through, a session (it empties the buffer as it starts and may
-	// bring a new message in), a connect. Guarded by mu.
-	mtStale bool
+	// bring a new message in), a serial connect. It names the modem and the
+	// message (mtReadMark): over the node's pipe it outlives the link, while
+	// the node may run sessions of its own, and another node may be chosen,
+	// so the set-up clears the buffer only for that very message in that
+	// very modem. Guarded by mu.
+	mtStale *mtReadMark
+	// connIMEI is the IMEI read on the current connection, "" when it was
+	// not read (under mu).
+	connIMEI string
 
 	// Signal state
 	signalMu   sync.RWMutex
@@ -163,6 +177,36 @@ type DirectSatTransport struct {
 	// Exclude port (if Meshtastic already claimed it)
 	excludePort   string
 	excludePortFn func() string // dynamic resolver (takes precedence over static)
+
+	// The adopted MeshSat node's modem pipe instead of a device path
+	// (MESHSAT_IRIDIUM_PORT=ble, direct_sat_pipe.go): opener hands out the
+	// pipe's port while the node gives this Bridge its modem; the pipe loop
+	// connects over it on PortReady and drops it on PortGone. Never
+	// auto-detects, never touches GPIO. Nil for a serial modem. [MESHSAT-1391]
+	opener       func(ctx context.Context) (serial.Port, error)
+	pipeKick     chan struct{} // made once, never replaced
+	pipeStop     chan struct{} // closed by Close
+	pipeStopOnce sync.Once
+	pipeWant     atomic.Bool
+	pipeGen      atomic.Uint64
+	pipeConnGen  uint64 // pipeGen the current connection was made for (under mu)
+	pipeCur      atomic.Pointer[pipeCurPort]
+	pipeWake     pipeWakeTimings
+	silent       atomic.Bool
+	portRings    bool   // the port spots SBDRING itself (under mu)
+	manufacturer string // AT+CGMI, asked over the pipe (under mu)
+	// nodeStats reads the node's STATS now: its account of its modem's
+	// sessions, which settles a session whose answer the link lost
+	// (settleCutSession). Nil over a serial modem (under mu).
+	nodeStats func(ctx context.Context) (*PipeStats, error)
+	// abandoning counts the Quiesce calls of a node that is being forgotten
+	// or replaced: a send waiting to settle a cut session gives up.
+	abandoning atomic.Int32
+	// lifetime ends when the Bridge stops (SetLifetime): a send waiting to
+	// settle a cut session gives up then, so its delivery ends given up
+	// (may have been sent) before the process exits, never 'sending' for
+	// the next start to send again (under mu).
+	lifetime context.Context
 }
 
 // NewDirectSatTransport creates a new direct serial Iridium transport.
@@ -172,6 +216,9 @@ func NewDirectSatTransport(port string) *DirectSatTransport {
 		port:      port,
 		ringCh:    make(chan struct{}, 1),
 		eventSubs: make(map[uint64]chan SatEvent),
+		pipeKick:  make(chan struct{}, 1),
+		pipeStop:  make(chan struct{}),
+		pipeWake:  defaultPipeWake,
 	}
 }
 
@@ -219,6 +266,9 @@ func (t *DirectSatTransport) LastReplyAt() time.Time {
 
 // Reconnect closes any existing connection and reconnects on the current port.
 func (t *DirectSatTransport) Reconnect(ctx context.Context) error {
+	if t.isPipe() {
+		return t.reprobePipe()
+	}
 	t.Close()
 	t.mu.Lock()
 	err := t.connectLocked(ctx)
@@ -227,17 +277,31 @@ func (t *DirectSatTransport) Reconnect(ctx context.Context) error {
 }
 
 // Subscribe opens the serial connection and starts ring alert + signal monitoring.
+// Over the node's pipe it never connects: the pipe loop does, whenever the
+// node gives this Bridge its modem, and the subscriber hears "connected".
 func (t *DirectSatTransport) Subscribe(ctx context.Context) (<-chan SatEvent, error) {
 	t.mu.Lock()
-	if !t.connected {
+	pipe := t.opener != nil
+	if !t.connected && !pipe {
 		if err := t.connectLocked(ctx); err != nil {
 			t.mu.Unlock()
 			return nil, fmt.Errorf("connect: %w", err)
 		}
 	}
+	// Over the node's pipe a message already read out of the modem (when
+	// the link came up, or with a session) waits for a subscriber that
+	// fetches it (the gateway's mailbox check, which opens no session for
+	// it).
+	heldMT := pipe && t.connected && len(t.mtHeld) > 0
 	t.mu.Unlock()
+	if pipe {
+		t.kickPipe()
+	}
 
 	ch := make(chan SatEvent, 32)
+	if heldMT {
+		ch <- mtHeldEvent()
+	}
 	t.eventMu.Lock()
 	id := t.nextSubID
 	t.nextSubID++
@@ -345,7 +409,8 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	t.file = sp
 	t.port = portPath
 	t.connGen++ // a new link: the SBDD0/SBDD1 below empty both buffers
-	t.mtStale = false
+	t.mtStale = nil
+	t.connIMEI = ""
 
 	// Drain any stale data from the serial buffer before first command
 	drainPort(sp)
@@ -370,6 +435,7 @@ func (t *DirectSatTransport) connectLocked(ctx context.Context) error {
 	resp, err = sendAT(sp, "AT+CGSN", iridiumReadTimeout)
 	if err == nil {
 		t.imei = parseATValue(resp)
+		t.connIMEI = t.imei
 	}
 	// AT+CGMM — get model
 	resp, err = sendAT(sp, "AT+CGMM", iridiumReadTimeout)
@@ -589,6 +655,9 @@ func (t *DirectSatTransport) monitorLoop() {
 		// Read under lock with 100ms timeout — releases lock quickly
 		t.file.SetReadTimeout(100 * time.Millisecond)
 		n, err := t.file.Read(buf)
+		// The node's pipe spots SBDRING in every byte the modem sends, so it
+		// is not counted twice here. [MESHSAT-1391]
+		portRings := t.portRings
 		t.mu.Unlock()
 
 		if n == 0 && err == nil {
@@ -612,6 +681,7 @@ func (t *DirectSatTransport) monitorLoop() {
 				t.file.Close()
 				t.file = nil
 			}
+			t.pipeDisconnectedLocked()
 			t.mu.Unlock()
 			return
 		}
@@ -620,7 +690,7 @@ func (t *DirectSatTransport) monitorLoop() {
 			line = append(line, buf[0])
 			if buf[0] == '\n' {
 				s := strings.TrimSpace(string(line))
-				if s == "SBDRING" {
+				if s == "SBDRING" && !portRings {
 					log.Info().Msg("iridium SBDRING received")
 					t.emitEvent(SatEvent{
 						Type:    "ring_alert",
@@ -690,7 +760,10 @@ func (t *DirectSatTransport) isConnected() bool {
 // Holds the session lock from its first MO command to its last SBDD0, so
 // no mailbox check empties or sends the loaded buffer before this SBDIX,
 // and mu except where sbdixLocked lets go of it (see sessionMu). From the
-// load on the MO buffer is emptied again however the send ends.
+// load on the MO buffer is emptied again however the send ends. Over the
+// node's pipe, a line that went before the SBDIX is ErrNotConnected (no
+// session ran), and a session whose answer the link lost is settled from
+// the node's account (sbdixSettledLocked).
 func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data is empty")
@@ -703,13 +776,16 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	defer t.sessionMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if !t.lineUpLocked() {
 		return nil, ErrNotConnected
 	}
 
 	// Clear MO buffer
 	resp, err := sendAT(t.file, "AT+SBDD0", iridiumReadTimeout)
 	if err != nil || strings.Contains(resp, "ERROR") {
+		if pipeLineGone(err) {
+			return nil, fmt.Errorf("failed to clear MO buffer: %w: %w", ErrNotConnected, err)
+		}
 		return nil, fmt.Errorf("failed to clear MO buffer")
 	}
 	defer t.clearMOAfterSendLocked()
@@ -717,6 +793,9 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	// Initiate binary write
 	resp, err = sendAT(t.file, fmt.Sprintf("AT+SBDWB=%d", len(data)), 5*time.Second)
 	if err != nil {
+		if pipeLineGone(err) {
+			return nil, fmt.Errorf("AT+SBDWB failed: %w: %w", ErrNotConnected, err)
+		}
 		return nil, fmt.Errorf("AT+SBDWB failed: %w", err)
 	}
 	if !strings.Contains(resp, "READY") {
@@ -736,12 +815,18 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		return nil, fmt.Errorf("disconnected")
 	}
 	if _, err := t.file.Write(payload.Bytes()); err != nil {
+		if pipeLineGone(err) {
+			return nil, fmt.Errorf("binary write failed: %w: %w", ErrNotConnected, err)
+		}
 		return nil, fmt.Errorf("binary write failed: %w", err)
 	}
 
 	// Read write result
 	writeResp, err := readATResponse(t.file, 5*time.Second)
 	if err != nil {
+		if pipeLineGone(err) {
+			return nil, fmt.Errorf("binary write response failed: %w: %w", ErrNotConnected, err)
+		}
 		return nil, fmt.Errorf("binary write response failed: %w", err)
 	}
 	writeOK := false
@@ -781,9 +866,23 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 
 	// SBDIX; the MO buffer is cleared after it (clearMOAfterSendLocked). A
 	// message the session brought in is held for the follow-up check.
-	res, err := t.sbdixLocked(ctx)
+	res, err := t.sbdixSettledLocked(ctx)
 	t.holdSessionMTLocked(res, err, "send")
 	return res, err
+}
+
+// lineUpLocked: connected with a port and, over the node's pipe, still the
+// line this Bridge may use (the node gives it the modem and the switch has
+// not sent it back). No session starts otherwise. Caller holds t.mu.
+func (t *DirectSatTransport) lineUpLocked() bool {
+	return t.connected && t.file != nil && (t.opener == nil || t.pipeWant.Load())
+}
+
+// pipeLineGone: a command over the node's pipe met a port that is dead (the
+// link lost, the modem given back) or a modem the node does not give this
+// Bridge any more. Before an SBDIX nothing was sent: the bearer is down.
+func pipeLineGone(err error) bool {
+	return errors.Is(err, errPipeLinkLost) || errors.Is(err, errPipeNotOwned)
 }
 
 // clearMOAfterSendLocked empties the MO buffer once a send that loaded it
@@ -818,23 +917,31 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 	defer t.sessionMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if !t.lineUpLocked() {
 		return nil, ErrNotConnected
 	}
 
 	// Clear MO buffer before write to prevent stale data resend
-	sendAT(t.file, "AT+SBDD0", iridiumReadTimeout)
+	if _, err := sendAT(t.file, "AT+SBDD0", iridiumReadTimeout); pipeLineGone(err) {
+		// Nothing loaded, no session: the node's link went, or its modem.
+		return nil, fmt.Errorf("failed to clear MO buffer: %w: %w", ErrNotConnected, err)
+	}
 	defer t.clearMOAfterSendLocked()
 
 	resp, err := sendAT(t.file, "AT+SBDWT="+text, 5*time.Second)
 	if err != nil || !strings.Contains(resp, "OK") {
+		if pipeLineGone(err) {
+			// No session ran; a text the modem took is emptied by the next
+			// connect.
+			return nil, fmt.Errorf("AT+SBDWT failed: %w: %w", ErrNotConnected, err)
+		}
 		// The modem may have taken the text though its OK was lost.
 		return nil, fmt.Errorf("AT+SBDWT failed: %s", resp)
 	}
 
 	// SBDIX; the MO buffer is cleared after it (clearMOAfterSendLocked). A
 	// message the session brought in is held for the follow-up check.
-	res, err := t.sbdixLocked(ctx)
+	res, err := t.sbdixSettledLocked(ctx)
 	t.holdSessionMTLocked(res, err, "send")
 	return res, err
 }
@@ -858,15 +965,16 @@ func (t *DirectSatTransport) Receive(_ context.Context) ([]byte, error) {
 	if !t.connected || t.file == nil {
 		return nil, ErrNotConnected
 	}
-	return t.readMTLocked()
+	return t.readMTLocked(-1)
 }
 
 // holdMTLocked reads the MT buffer under the caller's session-lock hold and
 // keeps a message it finds for Receive. A read that fails leaves the
-// message in the modem, where Receive tries again. Caller holds t.sessionMu
-// and t.mu and has checked the connection.
-func (t *DirectSatTransport) holdMTLocked(what string) {
-	data, err := t.readMTLocked()
+// message in the modem, where Receive tries again. mtmsn is the message's
+// MTMSN when the caller knows it (AT+SBDSX, the session's +SBDIX), else -1.
+// Caller holds t.sessionMu and t.mu and has checked the connection.
+func (t *DirectSatTransport) holdMTLocked(what string, mtmsn int) {
+	data, err := t.readMTLocked(mtmsn)
 	if err != nil {
 		log.Warn().Err(err).Str("mt", what).Msg("iridium: reading the MT failed, left in the modem for Receive")
 		return
@@ -884,7 +992,7 @@ func (t *DirectSatTransport) holdMTLocked(what string) {
 // holds t.sessionMu and t.mu.
 func (t *DirectSatTransport) holdSessionMTLocked(res *SBDResult, err error, what string) {
 	if err == nil && res != nil && res.MTStatus == 1 && t.connected && t.file != nil {
-		t.holdMTLocked(what)
+		t.holdMTLocked(what, res.MTMSN)
 	}
 }
 
@@ -899,12 +1007,21 @@ func (t *DirectSatTransport) takeHeldLocked() [][]byte {
 // readMTLocked reads the MT buffer (AT+SBDRB) and clears it (AT+SBDD1)
 // after a good read: the body of Receive, shared with CheckMailboxNow and
 // MailboxCheck (holdMTLocked). A message it read before that is still in
-// the buffer because its clear did not go through (mtStale) is not read
-// again: it clears the buffer again and reports none. Caller holds t.mu and
-// has checked the connection.
-func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
-	if t.mtStale {
-		t.mtStale = !t.clearMTLocked()
+// the buffer because its clear did not go through (mtStale) is not handed
+// over again: over a serial modem the buffer is cleared again and none is
+// reported. Over the node's pipe the frame is read by pipeReadMTLocked,
+// which reads the buffer before it clears anything and clears it unread only
+// when it holds the very message marked. mtmsn is the MTMSN of the message
+// in the buffer when the caller knows it (AT+SBDSX, the session's +SBDIX),
+// else -1. Caller holds t.mu and has checked the connection.
+func (t *DirectSatTransport) readMTLocked(mtmsn int) ([]byte, error) {
+	if t.mtStale != nil && t.opener == nil {
+		// Over a serial modem the mark lasts no longer than its connection
+		// (every connect empties the buffer), so the buffer holds the very
+		// message marked: cleared again, blind.
+		if t.clearMTLocked() {
+			t.mtStale = nil
+		}
 		return nil, nil
 	}
 
@@ -914,6 +1031,13 @@ func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
 	// Re-check state after stopMonitor (mutex was briefly released)
 	if !t.connected || t.file == nil {
 		return nil, fmt.Errorf("disconnected during monitor stop")
+	}
+
+	if t.opener != nil {
+		// Over the node's pipe notifications split the frame anywhere, so
+		// it is read until whole, and a mark (which outlives the link) is
+		// matched against what the buffer holds. [MESHSAT-1391]
+		return t.pipeReadMTLocked(mtmsn)
 	}
 
 	// Send AT+SBDRB
@@ -956,10 +1080,36 @@ func (t *DirectSatTransport) readMTLocked() ([]byte, error) {
 	// modem keeps reporting it: mtStale keeps it from being handed over
 	// twice (MESHSAT-1427).
 	if !t.clearMTLocked() && len(data) > 0 {
-		t.mtStale = true
+		t.mtStale = newMTReadMark(t.connIMEI, mtmsn, data)
 	}
 
 	return data, nil
+}
+
+// mtReadMark marks the message in the MT buffer as already handed over (its
+// AT+SBDD1 did not go through): the modem it was read from (its IMEI, as
+// read on that connection), its MTMSN and its hash, so that it is cleared
+// unread only while it is that very message in that very modem.
+type mtReadMark struct {
+	imei  string
+	mtmsn int // -1 when not known
+	sum   [sha256.Size]byte
+}
+
+func newMTReadMark(imei string, mtmsn int, data []byte) *mtReadMark {
+	return &mtReadMark{imei: imei, mtmsn: mtmsn, sum: sha256.Sum256(data)}
+}
+
+// matches reports whether data, with its MTMSN (-1 when not known), in the
+// modem of imei is the message marked. An IMEI not read on either
+// connection matches nothing. Two messages alike in every byte are told
+// apart by their MTMSN (every MT session numbers its message); only when
+// either MTMSN is not known do the bytes alone decide.
+func (m *mtReadMark) matches(imei string, mtmsn int, data []byte) bool {
+	if m == nil || m.imei == "" || m.imei != imei || m.sum != sha256.Sum256(data) {
+		return false
+	}
+	return m.mtmsn < 0 || mtmsn < 0 || m.mtmsn == mtmsn
 }
 
 // MailboxCheck performs SBDSX (free local check) then conditional SBDIX.
@@ -983,13 +1133,28 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	defer t.sessionMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.connected || t.file == nil {
+	if len(t.mtHeld) > 0 && (t.opener != nil || !t.lineUpLocked()) {
+		// A message already read out of the modem (over the node's pipe by
+		// the set-up when the link came up, or with a session) waits to be
+		// handed over, link or no link, as CheckMailboxNow hands it over:
+		// Receive gives it. No session ran, so the ring alert records no
+		// GSS row for it. A serial modem that is up is read as well first
+		// (below), so no queued send's session empties its buffer.
+		// [MESHSAT-1391]
+		return &SBDResult{MTStatus: 1, MTLength: len(t.mtHeld[0]), MTReceived: true, NoSession: true}, nil
+	}
+	if !t.lineUpLocked() {
 		return nil, ErrNotConnected
 	}
 
 	// Step 1: SBDSX — free local status check
 	resp, err := sendAT(t.file, "AT+SBDSX", 5*time.Second)
 	if err != nil {
+		if errors.Is(err, errPipeNotOwned) {
+			// The node has taken its modem back: a handover, not a fault of
+			// the link (PortGone drops the line). [MESHSAT-1391]
+			return nil, fmt.Errorf("SBDSX failed: %w", err)
+		}
 		log.Warn().Err(err).Msg("iridium: SBDSX failed, forcing serial reconnect")
 		t.disconnectLocked()
 		return nil, fmt.Errorf("SBDSX failed: %w", err)
@@ -1013,9 +1178,9 @@ func (t *DirectSatTransport) MailboxCheck(ctx context.Context) (*SBDResult, erro
 	// The MT flag counts only for a message not read yet: for one read
 	// already whose clear did not go through (mtStale) the read clears the
 	// buffer again and holds nothing, so it is never handed over twice.
-	mtNew := status.MTFlag && !t.mtStale
+	mtNew := status.MTFlag && t.mtStale == nil
 	if status.MTFlag {
-		t.holdMTLocked("waiting")
+		t.holdMTLocked("waiting", status.MTMSN)
 	}
 	if mtNew || len(t.mtHeld) > 0 {
 		length := 1 // not known when the read failed: Receive reads it
@@ -1147,12 +1312,14 @@ func (t *DirectSatTransport) GetStatus(_ context.Context) (*SatStatus, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	s := &SatStatus{
-		Connected: t.connected,
-		Port:      t.port,
-		IMEI:      t.imei,
-		Model:     t.model,
-		Type:      "sbd",
-		Firmware:  t.firmware,
+		Connected:    t.connected,
+		Port:         t.port,
+		IMEI:         t.imei,
+		Model:        t.model,
+		Type:         "sbd",
+		Firmware:     t.firmware,
+		Manufacturer: t.manufacturer,
+		Silent:       t.silent.Load(),
 	}
 	if t.netAvLine != nil {
 		s.NetworkAvailable = t.netAvState.Load()
@@ -1419,6 +1586,9 @@ func (t *DirectSatTransport) wakeLocked() error {
 }
 
 func (t *DirectSatTransport) Close() error {
+	// Over the node's pipe: the pipe loop ends, a command in flight too.
+	t.stopPipe()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -1461,6 +1631,7 @@ func (t *DirectSatTransport) Close() error {
 		t.file.Close()
 		t.file = nil
 	}
+	t.pipeDisconnectedLocked()
 	return nil
 }
 
@@ -1474,6 +1645,7 @@ func (t *DirectSatTransport) disconnectLocked() {
 		t.file.Close()
 		t.file = nil
 	}
+	t.pipeDisconnectedLocked()
 
 	// Stop monitor and signal poller goroutines cleanly.
 	// stopMonitor temporarily releases t.mu for goroutines to exit.
@@ -1498,15 +1670,37 @@ func (t *DirectSatTransport) disconnectLocked() {
 // comes in between (see sessionMu). A link closed or reopened meanwhile has
 // lost the MO buffer, and no session is sent.
 // Context-aware rate limit wait matches HAL's sbdixLocked pattern.
+// Over the node's pipe a session whose answer never came back (the link
+// went under it, or the write of AT+SBDIX failed where it may have landed)
+// ends at once with MO status MOStatusUnknown and errSBDIXLinkLost: what a
+// mailbox check needs. A send settles it first (sbdixSettledLocked).
 func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error) {
+	return t.sbdixSessionLocked(ctx, false)
+}
+
+// sbdixSettledLocked is sbdixLocked for a send, whose message a second
+// session could deliver twice: over the node's pipe a session whose answer
+// the link lost is settled from the node's own account before it returns
+// (settleCutSession), so it answers the session's real result, or
+// ErrOutcomeUnknown, which the queue never retries by itself; never a
+// failure the queue retries. mu is let go while it waits for that account;
+// the session lock is not.
+func (t *DirectSatTransport) sbdixSettledLocked(ctx context.Context) (*SBDResult, error) {
+	return t.sbdixSessionLocked(ctx, true)
+}
+
+func (t *DirectSatTransport) sbdixSessionLocked(ctx context.Context, settle bool) (*SBDResult, error) {
 	if !t.connected || t.file == nil {
 		return nil, ErrNotConnected
 	}
 	// The link the caller loaded the MO buffer on. Every connect empties the
 	// buffer, so an SBDIX on a later link would go out empty and answer MO
-	// status 0 for a message that never left.
+	// status 0 for a message that never left. Over the node's pipe, no
+	// session starts once the modem is being given back (PortLeaving).
 	gen := t.connGen
-	linkGone := func() bool { return !t.connected || t.file == nil || t.connGen != gen }
+	linkGone := func() bool {
+		return !t.connected || t.file == nil || t.connGen != gen || (t.opener != nil && !t.pipeWant.Load())
+	}
 
 	// Rate limit: min 10s between SBDIX.
 	// Stop monitor+poller before letting go of mu for the wait, so no other
@@ -1520,7 +1714,10 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 		case <-ctx.Done():
 			t.mu.Lock()
 			t.startMonitor()
-			return nil, ctx.Err()
+			// No session went out: the caller stopped (a delivery worker is
+			// stopped while its link is away), which is not the message's
+			// failure.
+			return nil, fmt.Errorf("no session: %w: %w", ErrNotConnected, ctx.Err())
 		case <-time.After(wait):
 		}
 		t.mu.Lock()
@@ -1548,12 +1745,35 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 
 	t.lastSBDIX = time.Now()
 
+	// Over the node's pipe, the node's own account before the session: what
+	// settles it should its answer not come back. [MESHSAT-1391]
+	var mark *pipeSessionMark
+	if t.opener != nil {
+		m, err := t.pipeSessionMarkLocked()
+		if err != nil {
+			t.startMonitor()
+			return nil, err
+		}
+		mark = m
+	}
+
 	// Drain serial buffer and verify modem is responsive before SBDIX.
 	// Without this, residual bytes from prior AT commands (signal polls, etc.)
 	// get prepended to the SBDIX response, causing "no +SBDIX in response" errors.
 	drainPort(t.file)
 	if probeResp, probeErr := sendAT(t.file, "AT", 3*time.Second); probeErr != nil || !strings.Contains(probeResp, "OK") {
 		drainPort(t.file)
+		if mark != nil && mark.before.flightStuck {
+			// The node still says the session before this one is in flight
+			// (its flag stuck past pipeFlightCap: the modem never answered
+			// it), and the modem does not answer AT either: it is not
+			// working. No session is written into it, where each one ended
+			// with its outcome unknown ("may have been sent"): the line is
+			// not up for a send. [MESHSAT-1391]
+			log.Warn().Str("probe", probeResp).Msg("iridium: the node's modem answers nothing since a session it never answered; no session opened")
+			t.startMonitor()
+			return nil, fmt.Errorf("no session: the node's modem answers nothing since a session it never answered: %w", ErrNotConnected)
+		}
 		log.Warn().Str("probe", probeResp).Msg("iridium: modem not clean before SBDIX, extra drain")
 	}
 
@@ -1575,17 +1795,39 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 	// by "OK" before the actual +SBDIX: response, which confuses the generic
 	// readATResponse (it stops at the first "OK").
 	drainPort(t.file)
-	if _, err := t.file.Write([]byte("AT+SBDIX\r")); err != nil {
-		t.startMonitor()
-		return nil, fmt.Errorf("SBDIX write failed: %w", err)
+	var resp string
+	var err error
+	n, werr := t.file.Write([]byte("AT+SBDIX\r"))
+	if mark != nil {
+		mark.writtenAt = time.Now()
 	}
-	resp, err := readSBDIXResponse(t.file, timeout)
+	if werr != nil {
+		switch {
+		case t.opener != nil && n == 0 && pipeLineGone(werr):
+			// Nothing reached the node (the port was dead, or the modem not
+			// this Bridge's): no session ran.
+			t.disconnectLocked()
+			return nil, fmt.Errorf("SBDIX not sent: %w: %w", ErrNotConnected, werr)
+		case t.opener == nil || !errors.Is(werr, errPipeWriteFailed):
+			t.startMonitor()
+			return nil, fmt.Errorf("SBDIX write failed: %w", werr)
+		}
+		// Over the node's pipe a write that failed may have landed all the
+		// same, its acknowledgement lost (a D-Bus timeout, a drop after the
+		// node took the bytes): the modem may be running the session. It
+		// is a cut session, as one whose link went under it.
+		err = fmt.Errorf("SBDIX write not acknowledged: %w", werr)
+	} else {
+		resp, err = readSBDIXResponse(t.file, timeout)
+	}
 	if strings.Contains(resp, "IX:") {
 		// A session ran (an SBDIX refused with ERROR runs none): it emptied
 		// the MT buffer as it started and may have brought a new message
 		// in, so whatever a read left there is gone. A session whose answer
-		// never came ends in a disconnect, and the next connect resets it.
-		t.mtStale = false
+		// never came ends in a disconnect: a serial connect empties the
+		// buffer, and over the node's pipe the set-up reads it and matches
+		// the mark against what it finds (setupReadMTLocked).
+		t.mtStale = nil
 	}
 	// Restart monitor after SBDIX (whether success or failure)
 	t.startMonitor()
@@ -1605,14 +1847,42 @@ func (t *DirectSatTransport) sbdixLocked(ctx context.Context) (*SBDResult, error
 			t.holdSBDIXUntil(t.lastSBDIX.Add(SBDIXHold))
 		}
 		t.disconnectLocked()
+		cause := err
 		if linkLost {
-			return nil, fmt.Errorf("SBDIX failed: %w: %v", errSBDIXLinkLost, err)
+			cause = fmt.Errorf("%w: %w", errSBDIXLinkLost, err)
 		}
-		return nil, fmt.Errorf("SBDIX failed: %w", err)
+		if t.opener != nil && settle {
+			// Over the node's pipe the node reads the session's answer off
+			// its modem whatever reached this Bridge, and keeps it: the link
+			// went under the session (or the write of AT+SBDIX failed where
+			// it may have landed), or it stayed while the answer never came
+			// (a notification BlueZ dropped, an answer later than the read
+			// timeout, one too long to be one). A send learns the outcome
+			// from the node's account; retried as a failure, the message
+			// went out again in a second billed session.
+			return t.settleLocked(mark, cause)
+		}
+		if !linkLost {
+			return nil, fmt.Errorf("SBDIX failed: %w", err)
+		}
+		if t.opener == nil {
+			// Over a cable nothing finishes the session for this Bridge.
+			return nil, fmt.Errorf("SBDIX failed: %w", cause)
+		}
+		// MO status MOStatusUnknown goes beside the error: the node finishes
+		// the session and its outcome never reaches this Bridge here.
+		log.Warn().Msg("iridium: the link to the node dropped during a satellite session; its outcome is not known here")
+		return pipeCutResult(), fmt.Errorf("SBDIX failed: %w", cause)
 	}
 
 	ix, err := parseSBDIX(resp)
 	if err != nil {
+		if t.opener != nil && settle && strings.Contains(resp, "IX:") {
+			// The modem answered the session in words this Bridge could not
+			// read (the node read them off its UART). An answer of ERROR
+			// alone runs no session: a plain failure, as over a cable.
+			return t.settleLocked(mark, fmt.Errorf("SBDIX answer not readable: %w", err))
+		}
 		return nil, err
 	}
 	if ix.moStatus == 32 || ix.moStatus == 36 {
@@ -1715,6 +1985,11 @@ var (
 	errSBDIXReadTimeout = errors.New("read timeout")
 	errSBDIXTooLarge    = errors.New("response too large")
 	errSBDIXLinkLost    = errors.New("the link to the modem failed during the session")
+	// errSBDIXRefused: a session over the node's pipe whose answer never
+	// reached this Bridge ended, by the node's account, with no new answer
+	// (the modem answered ERROR, which runs no session): nothing was sent,
+	// and the queue may send it again. [MESHSAT-1391]
+	errSBDIXRefused = errors.New("the modem refused the session (ERROR, by the node's account): nothing was sent")
 )
 
 func (r sbdixResult) statusText() string {
@@ -1760,8 +2035,11 @@ func parseSBDIX(resp string) (sbdixResult, error) {
 
 // sbdStatus holds the result of AT+SBDSX (free local check, no satellite session).
 type sbdStatus struct {
-	MOFlag    bool
-	MTFlag    bool
+	MOFlag bool
+	MTFlag bool
+	// MTMSN is the sequence number of the message in the MT buffer (the
+	// most recent MT session's), -1 when there is none.
+	MTMSN     int
 	RAFlag    bool
 	MTWaiting int
 }
@@ -1782,6 +2060,11 @@ func parseSBDSX(resp string) (sbdStatus, error) {
 	s.MOFlag = moFlag != 0
 	mtFlag, _ := strconv.Atoi(strings.TrimSpace(parts[2]))
 	s.MTFlag = mtFlag != 0
+	if n, err := strconv.Atoi(strings.TrimSpace(parts[3])); err == nil {
+		s.MTMSN = n
+	} else {
+		s.MTMSN = -1
+	}
 	raFlag, _ := strconv.Atoi(strings.TrimSpace(parts[4]))
 	s.RAFlag = raFlag != 0
 	s.MTWaiting, _ = strconv.Atoi(strings.TrimSpace(parts[5]))

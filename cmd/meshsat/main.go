@@ -103,6 +103,12 @@ func main() {
 	var gpsExcludePorts []func() string        // populated in direct mode for GPS reader
 	var supervisor *transport.DeviceSupervisor // populated in direct mode for USB discovery
 	var devHealth *gateway.DeviceHealth        // device health watchdog, built after the gateways [MESHSAT-817]
+	// The Bluetooth node's modem pipe as the SBD gateway's hardware
+	// (MESHSAT_IRIDIUM_PORT=ble): set, and usable with the node over
+	// Bluetooth, whose transport carries it. [MESHSAT-1391]
+	var sbdPipeSetting, sbdPipeUsable bool
+	var sbdPipeMesh *transport.DirectMeshTransport
+	var sbdPipeSat *transport.DirectSatTransport
 
 	// OOB management RESET actions per target and level, registered here
 	// where the concrete transports are in scope. [MESHSAT-756]
@@ -193,6 +199,18 @@ func main() {
 		if cfg.IridiumPort != "" && cfg.IridiumPort != "auto" {
 			iridiumPort = cfg.IridiumPort
 		}
+		// MESHSAT_IRIDIUM_PORT=ble: the 9603 is the adopted Bluetooth node's,
+		// reached through its modem pipe, and the supervisor never gives the
+		// SBD transport a USB port. It needs the node over Bluetooth; without
+		// it the 9603 stays off. [MESHSAT-1391]
+		satPipeSetting := transport.IsSatPipe(cfg.IridiumPort)
+		satPipe := satPipeSetting && transport.IsMeshBLE(cfg.MeshtasticPort)
+		if satPipeSetting && !satPipe {
+			log.Error().Str("mesh_port", cfg.MeshtasticPort).
+				Msg("MESHSAT_IRIDIUM_PORT=ble is the Bluetooth node's modem and needs MESHSAT_MESHTASTIC_PORT=ble; the 9603 stays off")
+			iridiumPort = "supervisor" // and nothing registers for it below
+		}
+		sbdPipeSetting, sbdPipeUsable = satPipeSetting, satPipe
 		cellPort := "supervisor"
 		if cfg.CellularPort != "" && cfg.CellularPort != "auto" {
 			cellPort = cfg.CellularPort
@@ -235,18 +253,28 @@ func main() {
 		}
 
 		directSat := transport.NewDirectSatTransport(iridiumPort)
-		if cfg.IridiumSleepPin > 0 {
+		if satPipe {
+			// The node powers and wires its modem: no GPIO here.
+			if err := directMesh.UseSatellitePipe(directSat); err != nil {
+				log.Error().Err(err).Msg("iridium: the node's modem pipe cannot be used")
+				sbdPipeUsable = false
+			} else {
+				sbdPipeMesh, sbdPipeSat = directMesh, directSat
+				log.Info().Msg("iridium: the 9603 is the Bluetooth node's, through its modem pipe (MESHSAT_IRIDIUM_PORT=ble)")
+			}
+		}
+		if cfg.IridiumSleepPin > 0 && !satPipeSetting {
 			directSat.SetSleepPin(cfg.IridiumSleepPin)
 		}
-		if cfg.IridiumNetAvPin > 0 {
+		if cfg.IridiumNetAvPin > 0 && !satPipeSetting {
 			directSat.SetNetAvPin(cfg.IridiumNetAvPin)
 			log.Info().Int("pin", cfg.IridiumNetAvPin).Msg("iridium: NetAv GPIO configured (MESHSAT_IRIDIUM_NETAV_PIN)")
 		}
-		if cfg.IridiumRIPin > 0 {
+		if cfg.IridiumRIPin > 0 && !satPipeSetting {
 			directSat.SetRIPin(cfg.IridiumRIPin)
 			log.Info().Int("pin", cfg.IridiumRIPin).Msg("iridium: RI GPIO configured (MESHSAT_IRIDIUM_RI_PIN)")
 		}
-		if cfg.IridiumOnOffPin > 0 {
+		if cfg.IridiumOnOffPin > 0 && !satPipeSetting {
 			directSat.SetOnOffPin(cfg.IridiumOnOffPin)
 			directSat.SetOnOffActiveHigh(cfg.IridiumOnOffActiveHigh)
 			log.Info().Int("pin", cfg.IridiumOnOffPin).Bool("active_high", cfg.IridiumOnOffActiveHigh).
@@ -351,7 +379,9 @@ func main() {
 			supervisor.SetExplicitPort(transport.RoleMeshtastic, cfg.MeshtasticPort)
 		}
 		supervisor.SetExplicitPort(transport.RoleIridium9704, cfg.IMTPort)
-		supervisor.SetExplicitPort(transport.RoleIridium9603, cfg.IridiumPort)
+		if !satPipeSetting {
+			supervisor.SetExplicitPort(transport.RoleIridium9603, cfg.IridiumPort)
+		}
 		if !transport.IsModemManager(cfg.CellularPort) {
 			// ModemManager's modem is not a port of ours to claim. [MESHSAT-1386]
 			supervisor.SetExplicitPort(transport.RoleCellular, cfg.CellularPort)
@@ -398,18 +428,22 @@ func main() {
 			HasPort: func() bool { return directIMT.GetPort() != "" && directIMT.GetPort() != "supervisor" },
 		})
 
-		supervisor.SetCallbacks(transport.RoleIridium9603, &transport.DriverCallbacks{
-			InstanceID: "iridium_0",
-			OnPortFound: func(port string) {
-				directSat.SetPort(port)
-				log.Info().Str("port", port).Msg("supervisor: 9603 SBD port assigned")
-			},
-			OnPortLost: func(port string) {
-				directSat.Close()
-				log.Warn().Str("port", port).Msg("supervisor: 9603 SBD port lost")
-			},
-			HasPort: func() bool { return directSat.GetPort() != "" && directSat.GetPort() != "supervisor" },
-		})
+		if satPipeSetting {
+			log.Info().Msg("iridium over the Bluetooth node: the device supervisor never assigns the 9603 a USB port")
+		} else {
+			supervisor.SetCallbacks(transport.RoleIridium9603, &transport.DriverCallbacks{
+				InstanceID: "iridium_0",
+				OnPortFound: func(port string) {
+					directSat.SetPort(port)
+					log.Info().Str("port", port).Msg("supervisor: 9603 SBD port assigned")
+				},
+				OnPortLost: func(port string) {
+					directSat.Close()
+					log.Warn().Str("port", port).Msg("supervisor: 9603 SBD port lost")
+				},
+				HasPort: func() bool { return directSat.GetPort() != "" && directSat.GetPort() != "supervisor" },
+			})
+		}
 
 		if directCell != nil {
 			supervisor.SetCallbacks(transport.RoleCellular, &transport.DriverCallbacks{
@@ -484,6 +518,12 @@ func main() {
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if sbdPipeSat != nil {
+		// A send settling the outcome of a session the Bluetooth link cut
+		// gives up at shutdown, so its delivery ends "may have been sent"
+		// within the drain below instead of 'sending'. [MESHSAT-1391]
+		sbdPipeSat.SetLifetime(ctx)
+	}
 
 	// Deduplicator (in-memory, composite key, 10min TTL, 10k max)
 	deduplicator := dedup.New(10*time.Minute, 10000)
@@ -524,6 +564,15 @@ func main() {
 
 	// Gateway manager
 	gwMgr := gateway.NewManager(db, sat)
+	if sbdPipeSetting {
+		// The SBD gateway follows the node's modem pipe, never a USB 9603;
+		// without a usable pipe it never starts. [MESHSAT-1391]
+		present := func() bool { return false }
+		if sbdPipeUsable && sbdPipeMesh != nil {
+			present = sbdPipeMesh.SatellitePipeAvailable
+		}
+		gwMgr.SetSBDPipe(present)
+	}
 	if imtTransport != nil {
 		gwMgr.SetIMTTransport(imtTransport)
 	}
@@ -1451,6 +1500,26 @@ func main() {
 		}
 		return nil
 	})
+
+	// The SBD gateway attaches when the Bluetooth node's link is up with its
+	// modem pipe and the switch "Use the node's modem" is on, and detaches
+	// when the node goes. Wired after the link creator, so a phone's
+	// database gets its iridium_0 link at once. A detach stops the delivery
+	// workers of its links first, so what waits for them is held through a
+	// Bluetooth outage (not failed for a gateway that is not running), and
+	// an attach resumes them. [MESHSAT-1391]
+	if sbdPipeUsable && sbdPipeMesh != nil {
+		gwMgr.SetSBDPipeWorkers(dispatcher.StopWorker, dispatcher.ResumeWorker)
+		sbdPipeMesh.OnSatellitePipe(func(up bool) {
+			if !up {
+				gwMgr.DetachSBDPipe()
+				return
+			}
+			if err := gwMgr.AttachSBDPipe(ctx); err != nil {
+				log.Warn().Err(err).Msg("iridium: the SBD gateway did not start on the node's modem")
+			}
+		})
+	}
 
 	// Signal recorder — persists satellite signal bar readings to DB.
 	// Each transport is recorded independently with its own source key ("sbd" / "imt").

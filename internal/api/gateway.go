@@ -135,7 +135,7 @@ func (s *Server) handleGetIridiumSignal(w http.ResponseWriter, r *http.Request) 
 // Query param: type=sbd|imt (optional). If omitted, returns both modems in an array.
 // If type is specified, returns a single modem object for backward compatibility.
 // @Summary Get satellite modem info
-// @Description Returns the modem model (RockBLOCK 9603/9704), IMEI, port, type ("sbd" or "imt"), and connection state
+// @Description Returns the modem model (RockBLOCK 9603/9704), IMEI, port, type ("sbd" or "imt"), and connection state. For the Bluetooth node's 9603 (MESHSAT_IRIDIUM_PORT=ble, port "ble") also manufacturer (AT+CGMI) and silent (the node's modem has not answered AT for a minute while this Bridge holds it; the checks go on)
 // @Tags iridium
 // @Success 200 {object} transport.SatStatus
 // @Failure 503 {object} map[string]string
