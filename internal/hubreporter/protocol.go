@@ -10,6 +10,7 @@ package hubreporter
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -37,10 +38,19 @@ const (
 	// ID and the band identifier is inside the payload.
 	topicBridgeSpectrum = "meshsat/bridge/%s/spectrum"
 
-	// CoT XML the TAK gateway exports, MeshSat Android's "MQTT Export to
-	// Hub" topic (TakIntegration.emit), with the bridge id where Android has
-	// its device id. [MESHSAT-1421]
-	topicTAKCoTOut = "meshsat/%s/tak/cot/out"
+	// CoT XML the TAK gateway exports to the Hub ("MQTT Export to Hub"), on
+	// the bridge's OWN subtree. It was meshsat/<id>/tak/cot/out until
+	// MESHSAT-1462, a topic no bridge credential was ever allowed to publish:
+	// the broker grants each bridge meshsat/bridge/<its id>/# and nothing
+	// device-shaped for TAK, so the export went nowhere. The Hub listens here
+	// (meshsat-hub MESHSAT-1458) and forwards to the tenant's TAK servers.
+	topicTAKCoTOut = "meshsat/bridge/%s/tak/cot/out"
+
+	// What the Hub delivers back (meshsat-hub MESHSAT-1461): an event from one
+	// of the tenant's TAK servers on this topic, and an event another bridge
+	// of the tenant exported one level below it, with that bridge's id as the
+	// last segment.
+	topicTAKCoTIn = "meshsat/broadcast/tak/cot/in"
 )
 
 // CoT type constants (MIL-STD-2525 symbology).
@@ -87,8 +97,36 @@ func TopicDeviceSOS(deviceID string) string       { return fmt.Sprintf(topicDevi
 func TopicDeviceMessage(deviceID string) string   { return fmt.Sprintf(topicDeviceMessage, deviceID) }
 func TopicBridgeSpectrum(bridgeID string) string  { return fmt.Sprintf(topicBridgeSpectrum, bridgeID) }
 
-// TopicTAKCoTOut is where the TAK gateway's CoT XML goes: meshsat/<id>/tak/cot/out.
-func TopicTAKCoTOut(id string) string { return fmt.Sprintf(topicTAKCoTOut, id) }
+// TopicTAKCoTOut is where the TAK gateway's CoT XML goes:
+// meshsat/bridge/<bridge id>/tak/cot/out.
+func TopicTAKCoTOut(bridgeID string) string {
+	return fmt.Sprintf(topicTAKCoTOut, topicSegment(bridgeID))
+}
+
+// TAKCoTInFilters are the two subscriptions that receive what the Hub
+// delivers: the topic itself and one level below it.
+func TAKCoTInFilters() []string {
+	return []string{topicTAKCoTIn, topicTAKCoTIn + "/+"}
+}
+
+// TAKCoTSender returns the bridge that exported an event the Hub delivered, as
+// the topic names it, or "" for an event that came from a TAK server (or for
+// any other topic). The value is the topic segment, percent-encoded as the Hub
+// writes it; compare it with topicSegment(own id).
+func TAKCoTSender(topic string) string {
+	rest, ok := strings.CutPrefix(topic, topicTAKCoTIn+"/")
+	if !ok || rest == "" || strings.Contains(rest, "/") {
+		return ""
+	}
+	return rest
+}
+
+// topicSegment writes an id as the Hub writes one into a topic: + # / and %
+// percent-encoded (meshsat-hub hubmqtt.EncodeSegment). Ordinary bridge ids are
+// unchanged by it.
+func topicSegment(id string) string {
+	return strings.NewReplacer("%", "%25", "+", "%2B", "#", "%23", "/", "%2F").Replace(id)
+}
 
 // --- Shared types ---
 

@@ -419,8 +419,9 @@ func TestPublishTAKCoTNotConnected(t *testing.T) {
 	}
 }
 
-// With a session: the CoT XML as is, on meshsat/<bridge id>/tak/cot/out, QoS 1,
-// not retained, counted in the TAK relay's messages out. [MESHSAT-1421]
+// With a session: the CoT XML as is, on meshsat/bridge/<bridge id>/tak/cot/out,
+// QoS 1, not retained, counted in the TAK relay's messages out.
+// [MESHSAT-1421, MESHSAT-1462]
 func TestPublishTAKCoT_QoS1NotRetained(t *testing.T) {
 	b := newFakeBroker(t, "127.0.0.1:0")
 	r := NewHubReporter(
@@ -453,7 +454,7 @@ func TestPublishTAKCoT_QoS1NotRetained(t *testing.T) {
 	for {
 		select {
 		case p := <-b.pubs:
-			if p.topic != "meshsat/mule01/tak/cot/out" {
+			if p.topic != "meshsat/bridge/mule01/tak/cot/out" {
 				continue
 			}
 			if p.qos != 1 || p.retain || !bytes.Equal(p.payload, doc) {
@@ -463,5 +464,44 @@ func TestPublishTAKCoT_QoS1NotRetained(t *testing.T) {
 		case <-timeout:
 			t.Fatal("the broker never got the CoT")
 		}
+	}
+}
+
+// The Hub delivers what a bridge exports to the tenant's OTHER bridges, and the
+// broker hands this bridge its own as well. It is dropped by the topic that names
+// the sender: this bridge exports events for mesh nodes other than itself, so the
+// event's uid does not say who sent it. [MESHSAT-1462]
+func TestInboundTAKCoT_DropsWhatThisBridgeExported(t *testing.T) {
+	r := NewHubReporter(
+		ReporterConfig{HubURL: "tcp://127.0.0.1:1", BridgeID: "mule01"},
+		func() BridgeBirth { return BridgeBirth{BridgeID: "mule01"} },
+		func() BridgeHealth { return BridgeHealth{BridgeID: "mule01"} },
+	)
+	var got [][]byte
+	r.SetTAKCoTHandler(func(xml []byte) { got = append(got, xml) })
+	doc := []byte(`<event uid="meshsat-0a1b2c3d" type="a-f-G-U-C"><point lat="52.1" lon="4.5"/></event>`)
+
+	// Its own export, back from the Hub: dropped, and not counted as traffic.
+	r.handleTAKCoT("meshsat/broadcast/tak/cot/in/mule01", doc)
+	if len(got) != 0 {
+		t.Fatalf("the bridge took back an event it exported itself")
+	}
+	if n := r.TAKRelayStats().MessagesIn; n != 0 {
+		t.Errorf("an event the bridge dropped was counted as received: %d", n)
+	}
+
+	// Another bridge's export, and an event from a TAK server: both taken.
+	r.handleTAKCoT("meshsat/broadcast/tak/cot/in/rocket01", doc)
+	r.handleTAKCoT("meshsat/broadcast/tak/cot/in", doc)
+	if len(got) != 2 {
+		t.Fatalf("%d events taken, want 2 (another bridge's and a TAK server's)", len(got))
+	}
+	if n := r.TAKRelayStats().MessagesIn; n != 2 {
+		t.Errorf("messages in %d, want 2", n)
+	}
+	// A bridge whose id merely starts the same is somebody else.
+	r.handleTAKCoT("meshsat/broadcast/tak/cot/in/mule011", doc)
+	if len(got) != 3 {
+		t.Errorf("an event from a bridge with a longer id was taken for this bridge's own")
 	}
 }
