@@ -40,11 +40,14 @@ func TestTopicBuilders(t *testing.T) {
 	}
 }
 
-// MeshSat Android's MQTT Export topic, with the bridge id. [MESHSAT-1421]
+// The export rides the bridge's own subtree, which is the only place a bridge
+// credential may publish TAK. [MESHSAT-1462]
 func TestTopicTAKCoTOut(t *testing.T) {
 	for id, want := range map[string]string{
-		"mule01":        "meshsat/mule01/tak/cot/out",
-		"android-phone": "meshsat/android-phone/tak/cot/out",
+		"mule01":        "meshsat/bridge/mule01/tak/cot/out",
+		"android-phone": "meshsat/bridge/android-phone/tak/cot/out",
+		// An id is written the way the Hub writes one into a topic.
+		"kit+1/2": "meshsat/bridge/kit%2B1%2F2/tak/cot/out",
 	} {
 		if got := TopicTAKCoTOut(id); got != want {
 			t.Errorf("TopicTAKCoTOut(%q) = %q, want %q", id, got, want)
@@ -255,5 +258,28 @@ func TestBridgeHealthRoundTrip(t *testing.T) {
 	}
 	if decoded.Reticulum.Routes != 5 {
 		t.Errorf("routes: got %d", decoded.Reticulum.Routes)
+	}
+}
+
+// What the Hub delivers back arrives on two topics; the second names the bridge
+// that exported the event. [MESHSAT-1462]
+func TestTAKCoTInTopics(t *testing.T) {
+	want := []string{"meshsat/broadcast/tak/cot/in", "meshsat/broadcast/tak/cot/in/+"}
+	got := TAKCoTInFilters()
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("TAKCoTInFilters() = %v, want %v", got, want)
+	}
+	for topic, sender := range map[string]string{
+		"meshsat/broadcast/tak/cot/in":             "", // from a TAK server
+		"meshsat/broadcast/tak/cot/in/mule01":      "mule01",
+		"meshsat/broadcast/tak/cot/in/kit%2B1":     "kit%2B1",
+		"meshsat/broadcast/tak/cot/in/":            "",
+		"meshsat/broadcast/tak/cot/in/mule01/more": "",
+		"meshsat/bridge/mule01/tak/cot/out":        "",
+		"meshsat/broadcast/tak/cot/inmule01":       "",
+	} {
+		if got := TAKCoTSender(topic); got != sender {
+			t.Errorf("TAKCoTSender(%q) = %q, want %q", topic, got, sender)
+		}
 	}
 }

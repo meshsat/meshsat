@@ -29,7 +29,7 @@ var ErrTAKNoPosition = errors.New("tak: no position of this Bridge, nothing sent
 
 // TAKHub is where MQTT Export (hub_export) goes: the Hub reporter,
 // hubreporter.(*HubReporter), which publishes on
-// meshsat/<bridge id>/tak/cot/out.
+// meshsat/bridge/<bridge id>/tak/cot/out.
 type TAKHub interface {
 	IsConnected() bool
 	PublishTAKCoT(xml []byte) error

@@ -575,8 +575,9 @@ func (r *HubReporter) PublishSpectrumAlert(alert SpectrumAlert) error {
 }
 
 // PublishTAKCoT publishes one CoT XML document, as the TAK gateway built it,
-// on meshsat/<bridge id>/tak/cot/out: MeshSat Android's "MQTT Export to Hub"
-// (TakIntegration.emit), QoS 1 and not retained. Without a session it answers
+// on meshsat/bridge/<bridge id>/tak/cot/out ("MQTT Export to Hub"), QoS 1 and
+// not retained. The Hub forwards it to the tenant's TAK servers and to the
+// tenant's other bridges. Without a session it answers
 // ErrNotConnected and queues nothing: a CoT event goes stale within minutes
 // (cot_stale_seconds), so replaying it later would put old marks on the map.
 // [MESHSAT-1421]
@@ -651,13 +652,24 @@ func (r *HubReporter) subscribeCmd() {
 	}
 }
 
-// subscribeTAKCoT subscribes to broadcast TAK CoT events from the Hub.
-// When the Hub receives CoT from OpenTAKServer, it publishes to this topic.
-// The bridge parses the CoT XML and stores positions in its local DB,
-// making them visible on the bridge map alongside mesh node positions.
+// subscribeTAKCoT subscribes to what the Hub delivers of the tenant's TAK
+// traffic: events from the tenant's TAK servers, and events the tenant's other
+// bridges exported (one level below, named by the sender). The bridge parses the
+// CoT XML and stores positions in its local DB, making them visible on the bridge
+// map alongside mesh node positions. [MESHSAT-1462]
 func (r *HubReporter) subscribeTAKCoT() {
-	topic := "meshsat/broadcast/tak/cot/in"
+	for _, topic := range TAKCoTInFilters() {
+		if !r.subscribeTAKCoTFilter(topic) {
+			return
+		}
+	}
+	r.takSubscribed.Store(true)
+}
 
+// subscribeTAKCoTFilter subscribes one filter, with retries. One filter per
+// SUBSCRIBE on purpose: a broker that refuses one of several in a single packet
+// leaves it unclear which are live.
+func (r *HubReporter) subscribeTAKCoTFilter(topic string) bool {
 	const maxRetries = 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		token := r.client.Subscribe(topic, 1, r.onTAKCoT)
@@ -668,7 +680,7 @@ func (r *HubReporter) subscribeTAKCoT() {
 				continue
 			}
 			log.Error().Str("topic", topic).Msg("hubreporter: TAK CoT subscribe failed after all retries")
-			return
+			return false
 		}
 		if token.Error() != nil {
 			log.Error().Err(token.Error()).Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: TAK CoT subscribe failed")
@@ -677,20 +689,31 @@ func (r *HubReporter) subscribeTAKCoT() {
 				continue
 			}
 			log.Error().Str("topic", topic).Msg("hubreporter: TAK CoT subscribe failed after all retries")
-			return
+			return false
 		}
-		log.Info().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: subscribed to TAK CoT broadcast")
-		r.takSubscribed.Store(true)
-		return
+		log.Info().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: subscribed to TAK CoT from the Hub")
+		return true
 	}
+	return false
 }
 
 // onTAKCoT handles inbound CoT XML events from the Hub TAK relay.
 func (r *HubReporter) onTAKCoT(_ mqtt.Client, msg mqtt.Message) {
+	r.handleTAKCoT(msg.Topic(), msg.Payload())
+}
+
+// handleTAKCoT takes one delivered event. An event this bridge exported itself
+// comes back on the topic that names it as the sender, and is dropped: by the
+// TOPIC, not by the event's uid, because this bridge exports events for mesh
+// nodes other than itself and those carry their uid, not ours.
+func (r *HubReporter) handleTAKCoT(topic string, payload []byte) {
+	if sender := TAKCoTSender(topic); sender != "" && sender == topicSegment(r.cfg.BridgeID) {
+		return
+	}
 	r.takMsgsIn.Add(1)
 	r.takLastActivity.Store(time.Now().Unix())
 	if r.takCotHandler != nil {
-		r.takCotHandler(msg.Payload())
+		r.takCotHandler(payload)
 	}
 }
 

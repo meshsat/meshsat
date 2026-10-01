@@ -35,7 +35,7 @@ type TAKConfig struct {
 	MulticastIface string `json:"multicast_iface"`       // interface for multicast (empty = every up, multicast-capable, non-loopback one)
 
 	// HubExport publishes every CoT the gateway builds to the Hub on
-	// meshsat/<bridge id>/tak/cot/out: Android's "MQTT Export to Hub".
+	// meshsat/bridge/<bridge id>/tak/cot/out: "MQTT Export to Hub".
 	HubExport bool `json:"hub_export"`
 }
 
