@@ -84,21 +84,46 @@ Full install options, configuration and first-run setup: [docs.meshsat.net](http
 
 ## What it bridges
 
-Eight transport bearers, reachable across thirteen Reticulum interface types: nine wired to the bearers below, plus RNode LoRa radios, UDP and AutoInterface on an IP mesh, and raw KISS TNCs, added from the Routing settings without a restart.
+Every channel carries a status, the same as on [meshsat.net](https://meshsat.net/) and the docs:
 
-| Bearer | Hardware | Notes |
+- **LIVE**: runs on our prototype hardware today
+- **CODE**: in the Bridge, not running on a kit
+- **BENCH**: on our bench, not in a kit yet
+- **COMING SOON**: on its way to the bench, nothing tested
+- **FUTURE PLAN**: planned, nothing bought
+
+| Group | Channel | Status |
 |---|---|---|
-| **Meshtastic LoRa** | ESP32 / nRF52 radios | Full protocol via the official `buf.build` protobuf bindings |
-| **Iridium SBD** | RockBLOCK 9603N | 340 byte messages, AT commands, pass-aware scheduling |
-| **Iridium IMT** | RockBLOCK 9704 | 100 KB messages, JSPR protocol |
-| **Cellular SMS** | A7670E, SIM7600G-H, and similar | AT commands, SMS and data |
-| **APRS / AX.25** | Any KISS TNC, Direwolf bundled | Direwolf runs supervised in-container on loopback |
-| **ZigBee** | CC2652P | Z-Stack ZNP binary protocol |
-| **BLE** | Host Bluetooth | GATT peripheral via BlueZ, with segmentation |
-| **TCP** | Any IP link | Interoperates with upstream Python RNS |
+| Satellite | [Iridium IMT](https://docs.meshsat.net/transports/iridium-imt) (RockBLOCK 9704) | LIVE |
+| | [Iridium through a MeshSat node](https://docs.meshsat.net/transports/iridium-node) | LIVE |
+| | [Iridium SBD](https://docs.meshsat.net/transports/iridium-sbd) (RockBLOCK 9603N) | CODE |
+| Radio | [Meshtastic LoRa](https://docs.meshsat.net/transports/meshtastic) | LIVE |
+| | [APRS](https://docs.meshsat.net/transports/aprs) | LIVE |
+| | [Cellular SMS and data](https://docs.meshsat.net/transports/cellular) | LIVE |
+| | [WiFi](https://docs.meshsat.net/transports/wifi) | LIVE |
+| | [10 m HF gateway](https://docs.meshsat.net/transports/hf-10m) | CODE |
+| | [HF data](https://docs.meshsat.net/transports/hf-data) | COMING SOON |
+| | [TETRA Direct Mode](https://docs.meshsat.net/transports/tetra) | COMING SOON |
+| | [Wi-Fi HaLow](https://docs.meshsat.net/transports/halow) | COMING SOON |
+| | [Own 2G cell](https://docs.meshsat.net/transports/gsm-cell) | COMING SOON |
+| Wired | [Fiber](https://docs.meshsat.net/transports/fiber) | COMING SOON |
+| | [Single-pair copper](https://docs.meshsat.net/transports/single-pair-ethernet) | FUTURE PLAN |
+| Short range | [ZigBee](https://docs.meshsat.net/transports/zigbee) | CODE |
+| | [Bluetooth LE](https://docs.meshsat.net/transports/ble) | CODE |
+| | [RNode](https://docs.meshsat.net/transports/rnode) | CODE |
+| | [KISS TNC](https://docs.meshsat.net/transports/kiss) | CODE |
+| IP and Hub | [Hub link](https://docs.meshsat.net/transports/hub-link) | LIVE |
+| | [MQTT](https://docs.meshsat.net/transports/mqtt) | LIVE |
+| | [TAK](https://docs.meshsat.net/transports/tak) | LIVE |
+| | [Reticulum over TCP](https://docs.meshsat.net/guide/features/reticulum) | LIVE |
+| | [Webhooks](https://docs.meshsat.net/transports/webhooks) | CODE |
+| | [IP mesh: UDP and AutoInterface](https://docs.meshsat.net/transports/ip-mesh) | CODE |
+| Receive only | [Jamming watch](https://docs.meshsat.net/transports/jamming-watch) | LIVE |
+| | [Cell broadcast alerts](https://docs.meshsat.net/transports/cell-broadcast) | CODE |
+| | [DCF77 time signal](https://docs.meshsat.net/transports/dcf77) | BENCH |
 
-Plus **TAK** (CoT XML), **MQTT** and **webhooks** as routing destinations, and multi-instance
-gateways so two modems of the same type run side by side with independent config and workers.
+Multi-instance gateways let two modems of the same type run side by side with independent config
+and workers.
 
 Per-bearer detail: [docs.meshsat.net/transports](https://docs.meshsat.net/transports/).
 
@@ -181,7 +206,7 @@ field intelligence, the Android app.
 
 Next: DTN custody transfer and bundle fragmentation in the delivery ledger, Reed-Solomon forward
 error correction in the transform pipeline, GPS-denied time sync, and capacity-aware cost semantics
-for HeMB with an RFC submission to follow the measurement. Later: HF radio (NVIS/ALE), DMR,
+for HeMB with an RFC submission to follow the measurement. Later: the COMING SOON channels in the table above,
 federated mesh-of-meshes.
 
 ## Related projects
