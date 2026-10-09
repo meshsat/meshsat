@@ -107,7 +107,7 @@ Every channel carries a status, the same as on [meshsat.net](https://meshsat.net
 | | [Wi-Fi HaLow](https://docs.meshsat.net/transports/halow) | COMING SOON |
 | | [Own 2G cell](https://docs.meshsat.net/transports/gsm-cell) | COMING SOON |
 | Wired | [Fiber](https://docs.meshsat.net/transports/fiber) | COMING SOON |
-| | [Single-pair copper](https://docs.meshsat.net/transports/single-pair-ethernet) | FUTURE PLAN |
+| | [Single-pair copper](https://docs.meshsat.net/transports/single-pair-ethernet) | COMING SOON |
 | Short range | [ZigBee](https://docs.meshsat.net/transports/zigbee) | CODE |
 | | [Bluetooth LE](https://docs.meshsat.net/transports/ble) | CODE |
 | | [RNode](https://docs.meshsat.net/transports/rnode) | CODE |
