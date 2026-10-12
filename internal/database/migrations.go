@@ -1370,6 +1370,13 @@ var migrations = []string{
 	// bubble can carry the lock.
 	`ALTER TABLE key_bundles ADD COLUMN label TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sms_messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;`,
+
+	// v59: lxmf_0, the link of the LXMF endpoint, so an access rule can
+	// forward to it (satellite text to a Sideband user) and from it (an
+	// LXMF message out over a satellite). Device-less, like mqtt and
+	// webhook: online when on. [MESHSAT-1554]
+	`INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
+		VALUES ('lxmf_0', 'lxmf', 'Reticulum LXMF', 1, '{}');`,
 }
 
 func (db *DB) migrate() error {

@@ -160,6 +160,7 @@ const ruleForm = ref({
   action: 'forward', forward_to: '', qos_level: 1,
   nodes: [], portnums: [], keyword: '',
   sms_contacts: [],
+  lxmf_destinations: [], lxmf_title: '', lxmf_dest_input: '',
   node_group: '', sender_group: '', portnum_group: '',
   rate_per_min: 0, rate_window_sec: 60,
   schedule_type: 'none', schedule_value: '',
@@ -172,11 +173,14 @@ function openNewRule() {
     interface_id: '', direction: 'ingress', priority: 10, name: '', enabled: true,
     action: 'forward', forward_to: '', qos_level: 1,
     nodes: [], portnums: [], keyword: '',
+    sms_contacts: [],
+    lxmf_destinations: [], lxmf_title: '', lxmf_dest_input: '',
     node_group: '', sender_group: '', portnum_group: '',
     rate_per_min: 0, rate_window_sec: 60,
     schedule_type: 'none', schedule_value: '',
     showAdvancedFilters: false
   }
+  store.fetchLXMFPeers()
   showCreateRule.value = true
 }
 
@@ -190,10 +194,15 @@ function openEditRule(rule) {
   try { if (filters.portnums) portnums = (typeof filters.portnums === 'string' ? JSON.parse(filters.portnums) : filters.portnums).map(Number) } catch {}
   // Parse SMS contacts from forward_options
   let smsContacts = []
+  let lxmfDestinations = []
+  let lxmfTitle = ''
   try {
     const fwdOpts = typeof rule.forward_options === 'string' ? JSON.parse(rule.forward_options || '{}') : (rule.forward_options || {})
     if (fwdOpts.sms_contacts) smsContacts = fwdOpts.sms_contacts
+    if (Array.isArray(fwdOpts.lxmf_destinations)) lxmfDestinations = fwdOpts.lxmf_destinations
+    if (fwdOpts.lxmf_title) lxmfTitle = fwdOpts.lxmf_title
   } catch {}
+  store.fetchLXMFPeers()
   const hasAdvanced = !!(filters.node_group || filters.sender_group || filters.portnum_group)
   ruleForm.value = {
     interface_id: rule.interface_id || '',
@@ -208,6 +217,9 @@ function openEditRule(rule) {
     portnums,
     keyword: filters.keyword || '',
     sms_contacts: smsContacts,
+    lxmf_destinations: lxmfDestinations,
+    lxmf_title: lxmfTitle,
+    lxmf_dest_input: '',
     node_group: filters.node_group || '',
     sender_group: filters.sender_group || '',
     portnum_group: filters.portnum_group || '',
@@ -222,6 +234,7 @@ function openEditRule(rule) {
 
 async function saveRule() {
   if (!ruleForm.value.interface_id || !ruleForm.value.name) return
+  if (forwardsToLXMF.value && ruleForm.value.lxmf_destinations.length === 0) return
   const filters = {}
   // Inline filters (direct node/portnum pickers)
   if (ruleForm.value.nodes && ruleForm.value.nodes.length > 0) filters.nodes = JSON.stringify(ruleForm.value.nodes)
@@ -236,6 +249,10 @@ async function saveRule() {
   const fwdOpts = {}
   if (ruleForm.value.sms_contacts && ruleForm.value.sms_contacts.length > 0) {
     fwdOpts.sms_contacts = ruleForm.value.sms_contacts.map(Number)
+  }
+  if (forwardsToLXMF.value && ruleForm.value.lxmf_destinations.length > 0) {
+    fwdOpts.lxmf_destinations = [...ruleForm.value.lxmf_destinations]
+    if (ruleForm.value.lxmf_title.trim()) fwdOpts.lxmf_title = ruleForm.value.lxmf_title.trim()
   }
 
   const payload = {
@@ -496,6 +513,28 @@ const knownNodes = computed(() => {
   }))
 })
 
+// LXMF (lxmf_0): a rule forwarding to it names its recipients by their
+// lxmf.delivery hash, and one reading from it can name its senders as
+// "lxmf:<hash>". Peers come from their announces. [MESHSAT-1554]
+const LXMF_HASH = /^[0-9a-f]{32}$/
+const forwardsToLXMF = computed(() => ruleForm.value.action === 'forward' && (ruleForm.value.forward_to || '').startsWith('lxmf'))
+const readsFromLXMF = computed(() => (ruleForm.value.interface_id || '').startsWith('lxmf'))
+const lxmfPeerName = (hash) => {
+  const p = (store.lxmfPeers || []).find(x => x.dest_hash === hash)
+  return p && p.display_name ? p.display_name : ''
+}
+const lxmfUnheard = computed(() => ruleForm.value.lxmf_destinations.filter(h => !(store.lxmfPeers || []).some(p => p.dest_hash === h)))
+const lxmfDestInputValid = computed(() => LXMF_HASH.test((ruleForm.value.lxmf_dest_input || '').trim().toLowerCase()))
+function addLXMFDestination() {
+  const h = (ruleForm.value.lxmf_dest_input || '').trim().toLowerCase()
+  if (!LXMF_HASH.test(h)) return
+  if (!ruleForm.value.lxmf_destinations.includes(h)) ruleForm.value.lxmf_destinations.push(h)
+  ruleForm.value.lxmf_dest_input = ''
+}
+function removeLXMFDestination(h) {
+  ruleForm.value.lxmf_destinations = ruleForm.value.lxmf_destinations.filter(x => x !== h)
+}
+
 // Helper: resolve node ID to display name
 function nodeDisplayName(nodeId) {
   const node = knownNodes.value.find(n => n.id === nodeId)
@@ -558,6 +597,7 @@ onMounted(() => {
   store.fetchFailoverGroups()
   store.fetchTransportChannels()
   store.fetchSMSContacts()
+  store.fetchLXMFPeers()
   store.fetchNodes()
   store.fetchHealthScores()
   pollTimer = setInterval(() => {
@@ -766,8 +806,23 @@ onUnmounted(() => {
         <div class="border-t border-gray-700 pt-3 mb-3">
           <div class="text-[10px] text-gray-500 uppercase mb-2">Filters</div>
 
+          <!-- Sender filter for lxmf_0: LXMF peers by their announce [MESHSAT-1554] -->
+          <div v-if="readsFromLXMF" class="mb-3">
+            <label class="text-[10px] text-gray-600 mb-1 block">From LXMF senders (empty = anyone who messages this bridge)</label>
+            <div v-if="(store.lxmfPeers || []).length > 0" class="flex flex-wrap gap-1.5 bg-gray-900 rounded border border-gray-700 p-2 max-h-32 overflow-y-auto">
+              <label v-for="peer in store.lxmfPeers" :key="peer.dest_hash"
+                class="flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                :class="ruleForm.nodes.includes('lxmf:' + peer.dest_hash) ? 'bg-teal-900/50 text-teal-300 border border-teal-700' : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'">
+                <input type="checkbox" :value="'lxmf:' + peer.dest_hash" v-model="ruleForm.nodes" class="rounded w-3 h-3" />
+                <span class="truncate max-w-[140px]">{{ peer.display_name || 'unnamed' }}</span>
+                <span class="font-mono text-[10px] text-gray-500">{{ peer.dest_hash.slice(0, 8) }}</span>
+              </label>
+            </div>
+            <div v-else class="text-xs text-gray-600 py-1">No LXMF peer heard yet. A peer shows here once its announce arrives.</div>
+          </div>
+
           <!-- Node filter -->
-          <div class="mb-3">
+          <div v-else class="mb-3">
             <label class="text-[10px] text-gray-600 mb-1 block">From nodes (empty = any node)</label>
             <div v-if="knownNodes.length > 0" class="flex flex-wrap gap-1.5 bg-gray-900 rounded border border-gray-700 p-2 max-h-32 overflow-y-auto">
               <label v-for="node in knownNodes" :key="node.id"
@@ -815,6 +870,37 @@ onUnmounted(() => {
               </label>
             </div>
             <div v-else class="text-xs text-gray-600 py-1">No SMS contacts. Add contacts in Settings > Cellular first.</div>
+          </div>
+
+          <!-- LXMF recipients (shown when forwarding to lxmf_0) [MESHSAT-1554] -->
+          <div v-if="forwardsToLXMF" class="mb-3" data-testid="lxmf-recipients">
+            <label class="text-[10px] text-gray-600 mb-1 block">LXMF recipients: Sideband, CrossTalk, NomadNet or MeshChat users (at least one)</label>
+            <div v-if="(store.lxmfPeers || []).length > 0" class="flex flex-wrap gap-1.5 bg-gray-900 rounded border border-gray-700 p-2 max-h-32 overflow-y-auto">
+              <label v-for="peer in store.lxmfPeers" :key="peer.dest_hash"
+                class="flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                :class="ruleForm.lxmf_destinations.includes(peer.dest_hash) ? 'bg-teal-900/50 text-teal-300 border border-teal-700' : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'">
+                <input type="checkbox" :value="peer.dest_hash" v-model="ruleForm.lxmf_destinations" class="rounded w-3 h-3" />
+                <span class="truncate max-w-[140px]">{{ peer.display_name || 'unnamed' }}</span>
+                <span class="font-mono text-[10px] text-gray-500">{{ peer.dest_hash.slice(0, 8) }}</span>
+              </label>
+            </div>
+            <div v-if="lxmfUnheard.length > 0" class="flex flex-wrap gap-1.5 mt-1.5">
+              <span v-for="h in lxmfUnheard" :key="h"
+                class="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-teal-900/50 text-teal-300 border border-teal-700">
+                {{ h }}
+                <button type="button" @click="removeLXMFDestination(h)" class="text-gray-400 hover:text-gray-200" :aria-label="'Remove ' + h">x</button>
+              </span>
+            </div>
+            <div class="flex gap-2 mt-1.5">
+              <input v-model="ruleForm.lxmf_dest_input" placeholder="LXMF address (32 hex), for a peer not heard yet"
+                @keydown.enter.prevent="addLXMFDestination"
+                class="flex-1 min-w-0 px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs font-mono text-gray-300" />
+              <button type="button" @click="addLXMFDestination" :disabled="!lxmfDestInputValid"
+                class="px-3 py-1.5 rounded text-xs bg-gray-800 border border-gray-700 text-gray-300 disabled:opacity-40">Add</button>
+            </div>
+            <input v-model="ruleForm.lxmf_title" placeholder="Message title (optional, e.g. via Iridium)" maxlength="64"
+              class="w-full mt-1.5 px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-300" />
+            <div v-if="ruleForm.lxmf_destinations.length === 0" class="text-[10px] text-amber-400 mt-1">Pick or add at least one recipient: an LXMF message has no default address.</div>
           </div>
 
           <!-- Advanced: Object Groups (collapsible) -->
@@ -904,7 +990,8 @@ onUnmounted(() => {
         </div>
 
         <div class="flex gap-2">
-          <button @click="saveRule" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">
+          <button @click="saveRule" :disabled="forwardsToLXMF && ruleForm.lxmf_destinations.length === 0"
+            class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40 disabled:hover:bg-teal-600">
             {{ editingRule ? 'Update' : 'Create' }}
           </button>
           <button @click="showCreateRule = false" class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>

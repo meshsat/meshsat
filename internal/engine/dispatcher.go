@@ -165,6 +165,11 @@ func (d *Dispatcher) Wait() {
 type forwardOptions struct {
 	TTLSeconds  int     `json:"ttl_seconds"`
 	SMSContacts []int64 `json:"sms_contacts"` // SMS contact IDs → resolved to phone numbers at delivery time
+	// LXMFDestinations are the lxmf.delivery hashes (32 hex) a rule that
+	// forwards to lxmf_0 sends to, one ledger row each; LXMFTitle is the
+	// message title they get. [MESHSAT-1554]
+	LXMFDestinations []string `json:"lxmf_destinations"`
+	LXMFTitle        string   `json:"lxmf_title"`
 }
 
 // NewDispatcher creates a dispatcher wired to the channel registry and gateways.
@@ -867,6 +872,23 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			continue
 		}
 
+		// LXMF: one class-lxmf row per destination the rule names, the
+		// text as the content; the router packs, signs and sends it.
+		// [MESHSAT-1554]
+		if channelType == "lxmf" {
+			text := msg.Text
+			if text == "" {
+				text = string(payload)
+			}
+			// A brevity code (MeshSat Android's quick messages) goes on
+			// as its words: a Sideband user cannot read 0xCA + id.
+			if words, ok := cannedText(text); ok {
+				text = words
+			}
+			count += d.queueLXMFForward(m.Rule, sourceInterface, destInterface, msgRef, text, fwdOpts, visited, maxRetries, ttlSeconds)
+			continue
+		}
+
 		// Queue limit check: higher-precedence / higher-priority arrivals
 		// evict weaker queued deliveries. STANAG 4406 precedence is the
 		// primary key (Flash > Routine regardless of priority int), with
@@ -1020,6 +1042,94 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		}
 	}
 
+	return count
+}
+
+// lxmfHashLen is the hex length of an lxmf.delivery destination hash.
+const lxmfHashLen = 32
+
+// queueLXMFForward queues what an access rule forwards to lxmf_0: one
+// class-lxmf row per destination in forward_options.lxmf_destinations, the
+// body {content, title} the LXMF sender reads. A rule that names no valid
+// destination queues nothing: an LXMF message has no default recipient.
+// [MESHSAT-1554]
+func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface, destInterface, msgRef, text string,
+	opts forwardOptions, visited string, maxRetries, ttlSeconds int) int {
+	if text == "" {
+		return 0
+	}
+	body, _ := json.Marshal(map[string]string{"content": text, "title": opts.LXMFTitle})
+	preview := text
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+	ruleID := rule.ID
+	count := 0
+	seen := make(map[string]bool)
+	for _, raw := range opts.LXMFDestinations {
+		dest := strings.ToLower(strings.TrimSpace(raw))
+		if b, err := hex.DecodeString(dest); err != nil || len(dest) != lxmfHashLen || len(b) != lxmfHashLen/2 {
+			log.Warn().Int64("rule_id", rule.ID).Str("destination", raw).Msg("lxmf forward: not a 32-hex lxmf.delivery hash, skipped")
+			continue
+		}
+		if seen[dest] {
+			continue
+		}
+		seen[dest] = true
+		del := database.MessageDelivery{
+			MsgRef:      msgRef,
+			RuleID:      &ruleID,
+			Channel:     destInterface,
+			Status:      "queued",
+			Priority:    rule.Priority,
+			Payload:     body,
+			TextPreview: preview,
+			MaxRetries:  maxRetries,
+			Visited:     visited,
+			QoSLevel:    rule.QoSLevel,
+			Destination: dest,
+			Class:       database.DeliveryClassLXMF,
+		}
+		if ttlSeconds > 0 && rule.Priority > 0 {
+			del.TTLSeconds = ttlSeconds
+			exp := time.Now().Add(time.Duration(ttlSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
+			del.ExpiresAt = &exp
+		}
+		if seq, err := d.db.IncrementEgressSeq(destInterface); err == nil {
+			del.SeqNum = seq
+		}
+		if d.signing != nil {
+			del.Signature = d.signing.Sign(body)
+			del.SignerID = d.signing.SignerID()
+		}
+		delID, err := d.db.InsertDelivery(del)
+		if err != nil {
+			log.Error().Err(err).Int64("rule_id", rule.ID).Str("destination", dest).Msg("lxmf forward: failed to queue")
+			continue
+		}
+		del.ID = delID
+		if d.signing != nil {
+			dir := "egress"
+			d.signing.AuditEvent("dispatch", &sourceInterface, &dir, &delID, &ruleID, preview)
+		}
+		count++
+		log.Info().Int64("rule_id", rule.ID).Str("dest", destInterface).Str("destination", dest).Str("msg_ref", msgRef).Msg("access delivery queued for lxmf")
+		if d.emit != nil {
+			d.emit(transport.MeshEvent{
+				Type:    "delivery_queued",
+				Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", rule.Name, sourceInterface, destInterface),
+				Data: deliveryEventData(del, "queued", map[string]interface{}{
+					"source":    sourceInterface,
+					"rule_id":   rule.ID,
+					"rule_name": rule.Name,
+				}),
+				Time: time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	if count == 0 {
+		log.Warn().Int64("rule_id", rule.ID).Str("rule", rule.Name).Msg("lxmf forward: the rule names no destination, nothing queued")
+	}
 	return count
 }
 

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -58,6 +59,19 @@ type Stack struct {
 	Bridge *rns.Destination
 	LXMF   *lxmf.Router // nil when disabled
 	cfg    Config
+
+	inboundMu sync.RWMutex
+	onInbound func(source, text string)
+}
+
+// SetInboundHook hands every accepted inbound LXMF message, after it is
+// filed, to fn with the sender's lxmf.delivery hash (hex) and the text,
+// title first. main.go feeds it to the access rules as lxmf_0, so a rule
+// can carry it on over a satellite. [MESHSAT-1554]
+func (st *Stack) SetInboundHook(fn func(source, text string)) {
+	st.inboundMu.Lock()
+	st.onInbound = fn
+	st.inboundMu.Unlock()
 }
 
 // registryTx adapts the interface registry to rns.Transmitter.
@@ -223,12 +237,22 @@ func (st *Stack) announcer(ctx context.Context) {
 // storeInbound files an inbound LXMF message in the messages table so the
 // existing inbox shows it. From/to are "lxmf:<hash>", transport "reticulum".
 func (st *Stack) storeInbound(m *lxmf.Message) {
-	if st.cfg.DB == nil {
-		return
-	}
 	text := string(m.Content)
 	if len(m.Title) > 0 {
 		text = string(m.Title) + "\n" + text
+	}
+	st.fileInbound(m, text)
+	st.inboundMu.RLock()
+	fn := st.onInbound
+	st.inboundMu.RUnlock()
+	if fn != nil && text != "" {
+		fn(hex.EncodeToString(m.Source[:]), text)
+	}
+}
+
+func (st *Stack) fileInbound(m *lxmf.Message, text string) {
+	if st.cfg.DB == nil {
+		return
 	}
 	row := &database.Message{
 		PacketID:    uint32(m.Hash[0])<<24 | uint32(m.Hash[1])<<16 | uint32(m.Hash[2])<<8 | uint32(m.Hash[3]),

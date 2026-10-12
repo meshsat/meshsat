@@ -198,6 +198,27 @@ func RegisterDefaults(r *Registry) {
 		},
 	})
 
+	// LXMF over Reticulum: the bridge's own lxmf.delivery endpoint as a
+	// link. A rule that forwards to lxmf_0 names its destinations in
+	// forward_options.lxmf_destinations; the router waits for the proof,
+	// so the retries are few and patient. [MESHSAT-1554]
+	r.Register(ChannelDescriptor{
+		ID:         "lxmf",
+		Label:      "Reticulum LXMF",
+		IsPaid:     false,
+		CanSend:    true,
+		CanReceive: true,
+		MaxPayload: 0, // large messages go as an RNS resource
+		DefaultTTL: 3600 * time.Second,
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 30 * time.Second,
+			MaxWait:     10 * time.Minute,
+			MaxRetries:  5,
+			BackoffFunc: "exponential",
+		},
+	})
+
 	// IPoUGRS is RESERVED AND NOT IMPLEMENTED. It originates from an
 	// April-1st RFC-tradition draft and has no transmit or receive driver
 	// anywhere in the tree — only this descriptor, a HeMB bearer profile

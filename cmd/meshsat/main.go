@@ -1798,6 +1798,17 @@ func main() {
 			srv.SetLXMFRouter(rnsStack.LXMF)
 			dispatcher.SetLXMFSender(rnsStack)
 			dispatcher.StartWorker(ctx, "lxmf_0", "lxmf")
+			// An inbound LXMF message meets the access rules as lxmf_0, sender
+			// "lxmf:<hash>", so a rule can carry it on (over a satellite to a
+			// MeshSat app on the far side, the Data Slayer path). [MESHSAT-1554]
+			rnsStack.SetInboundHook(func(source, text string) {
+				dispatcher.DispatchAccess("lxmf_0", rules.RouteMessage{
+					Text:    text,
+					From:    "lxmf:" + source,
+					PortNum: 1,
+					Plain:   true,
+				}, []byte(text))
+			})
 		}
 	}
 
