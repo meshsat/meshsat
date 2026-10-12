@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"meshsat/internal/reticulum"
 )
 
 // Paid links [MESHSAT-1547].
@@ -275,4 +277,55 @@ func (n *Node) LoadPaidPolicies(raw string) (int, error) {
 		count++
 	}
 	return count, nil
+}
+
+// PaidCrossing is one Reticulum data packet that crossed a paid link with a
+// policy [MESHSAT-1550]: what the receipt printer prints so the hop is
+// visible on camera. The payload is end-to-end encrypted, so there is no
+// text to show, only that it crossed, which way, and for whom.
+type PaidCrossing struct {
+	Iface   string
+	Inbound bool // true: arrived over the paid link; false: sent onto it
+	Dest    [HashLen]byte
+	Bytes   int
+}
+
+// paidCrossingGap throttles crossings per interface, destination and
+// direction: a link's packets for one message arrive within seconds, and
+// one slip per message is the point.
+const paidCrossingGap = time.Minute
+
+// noteCrossing reports a DATA packet with no special context (a message, not
+// link control or a keepalive) on a paid interface that has a policy.
+func (n *Node) noteCrossing(ifaceID string, raw []byte, inbound bool) {
+	cb := n.OnPaidCrossing
+	if cb == nil {
+		return
+	}
+	n.mu.Lock()
+	_, opened := n.paid[ifaceID]
+	n.mu.Unlock()
+	if !opened {
+		return
+	}
+	h, err := reticulum.UnmarshalHeader(raw)
+	if err != nil || h.PacketType != reticulum.PacketData || h.Context != reticulum.ContextNone {
+		return
+	}
+	k := crossingKey{iface: ifaceID, dest: h.DestHash, inbound: inbound}
+	now := n.now()
+	n.mu.Lock()
+	if last, ok := n.crossings[k]; ok && now.Sub(last) < paidCrossingGap {
+		n.mu.Unlock()
+		return
+	}
+	n.crossings[k] = now
+	n.mu.Unlock()
+	cb(PaidCrossing{Iface: ifaceID, Inbound: inbound, Dest: h.DestHash, Bytes: len(raw)})
+}
+
+type crossingKey struct {
+	iface   string
+	dest    [HashLen]byte
+	inbound bool
 }

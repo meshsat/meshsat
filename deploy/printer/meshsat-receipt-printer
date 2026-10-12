@@ -286,7 +286,7 @@ def build_slip(msg: dict, cfg: dict, serial: int = 0) -> bytes:
         # common path is exactly 32 characters, so there is nowhere to indent it to,
         # and it is the most interesting line on the slip anyway.
         parts.append(BOLD_ON)
-        for line in path_lines(msg.get("source", "mesh"), crossing, width):
+        for line in path_lines(msg.get("source", "mesh"), crossing, width, msg.get("end", "Meshtastic")):
             parts.append(ascii_only(line).encode() + b"\n")
         parts.append(BOLD_OFF)
     else:
@@ -501,7 +501,7 @@ def path_short(name: str) -> str:
     return PATH_SHORT.get(base, base or "?")
 
 
-def path_lines(source: str, crossing: str, width: int) -> list:
+def path_lines(source: str, crossing: str, width: int, end: str = "Meshtastic") -> list:
     """The whole journey on the slip: where it came in, what carried it across, and
     the mesh it was put onto at the far end. Owner asked for
     `Meshtastic <--> APRS <--> Meshtastic`; that is 36 characters and the paper is 32,
@@ -510,7 +510,7 @@ def path_lines(source: str, crossing: str, width: int) -> list:
 
     The last hop is the relay's destination, not something this kit watches happen:
     the far kit puts the message on its own mesh and does not report back here."""
-    a, b, c = path_short(source), path_short(crossing), "Meshtastic"
+    a, b, c = path_short(source), path_short(crossing), path_short(end)
     # One arrow for every slip: " <-> " fits a short path but not the common
     # Meshtastic/APRS/Meshtastic one, and souvenirs from the same stand should not
     # come out typeset three different ways.
@@ -608,6 +608,32 @@ def follow(url, queue, cfg, log):
                                     or time.strftime("%Y-%m-%d %H:%M:%S"),
                         })
                         log(f"queued slip for message {key}")
+                        continue
+
+                    # A Reticulum message that crossed the satellite link (MESHSAT-1550).
+                    # Its content is end-to-end encrypted, so the slip says that
+                    # instead of a text; the bridge sends at most one such event per
+                    # destination, direction and minute.
+                    if ev_type == "rns_crossing":
+                        sat = data.get("iface") or "iridium_imt"
+                        key = f"rns:{data.get('dest', '')}:{data.get('inbound')}:{int(time.time() // 60)}"
+                        if key in seen:
+                            continue
+                        seen.append(key)
+                        inbound = bool(data.get("inbound"))
+                        queue.submit({
+                            "id": key,
+                            "text": ("A Reticulum message just came down from the satellite."
+                                     if inbound else
+                                     "A Reticulum message just went up to the satellite.")
+                                    + " It is encrypted end to end: this kit carries it"
+                                    " but cannot read it.",
+                            "from": "",
+                            "bearer": channel_label(sat),
+                            "source": "reticulum", "crossing": sat, "end": "reticulum",
+                            "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        })
+                        log(f"queued slip for a Reticulum crossing on {sat}")
                         continue
 
                     # Default: a slip is proof a message CROSSED, not proof one
