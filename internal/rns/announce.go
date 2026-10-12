@@ -161,6 +161,9 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 	n.mu.Unlock()
 
 	for _, ifc := range answerOn {
+		if !n.paidGate(ifc, h.DestHash, paidAnnounce) {
+			continue
+		}
 		n.transmit(ifc, ann.MarshalPacketTransport(n.idHash, byte(hops), reticulum.ContextPathResponse))
 	}
 	for _, w := range waiters {
@@ -190,6 +193,8 @@ func (n *Node) processAnnounceTable(now time.Time) {
 	type out struct {
 		raw    []byte
 		ifaces []string
+		dest   [HashLen]byte
+		source string
 	}
 	var outgoing []out
 	n.mu.Lock()
@@ -212,7 +217,7 @@ func (n *Node) processAnnounceTable(now time.Time) {
 			// whole point, and on a multi-peer TCP interface the other peers
 			// only hear it that way. Upstream sends a fresh packet with no
 			// receiving interface, so it does the same.
-			o := out{raw: raw}
+			o := out{raw: raw, dest: dest, source: e.sourceIface}
 			if e.attachedIface != "" {
 				o.ifaces = []string{e.attachedIface}
 			}
@@ -227,7 +232,12 @@ func (n *Node) processAnnounceTable(now time.Time) {
 	for _, o := range outgoing {
 		ifaces := o.ifaces
 		if ifaces == nil {
-			ifaces = n.tx.Floodable()
+			// Paid interfaces open to this destination join the flood, never
+			// the one the announce came in on: on a paid link that echo is a
+			// paid message for nothing.
+			ifaces = append(n.tx.Floodable(), n.paidTake(o.dest, paidAnnounce, o.source)...)
+		} else if !n.paidGate(ifaces[0], o.dest, paidAnnounce) {
+			continue // a path response on a paid link for an unlisted destination
 		}
 		for _, id := range ifaces {
 			n.sendAnnounceOn(id, o.raw, now)
@@ -248,7 +258,7 @@ type announceQueue struct {
 // (Transport.outbound). Announces beyond the cap are queued, newest last,
 // and released as the budget allows; the queue is bounded.
 func (n *Node) sendAnnounceOn(ifaceID string, raw []byte, now time.Time) {
-	bitrate := n.tx.Bitrate(ifaceID)
+	bitrate := n.announceBitrate(ifaceID)
 	if bitrate <= 0 {
 		n.transmit(ifaceID, raw)
 		return
@@ -285,6 +295,7 @@ func (n *Node) sendAnnounceOn(ifaceID string, raw []byte, now time.Time) {
 
 func (n *Node) flushAnnounceQueue(ifaceID string) {
 	now := n.now()
+	bitrate := n.announceBitrate(ifaceID)
 	n.mu.Lock()
 	q := n.announceQueue[ifaceID]
 	if q == nil || len(q.pending) == 0 {
@@ -296,9 +307,11 @@ func (n *Node) flushAnnounceQueue(ifaceID string) {
 	}
 	raw := q.pending[0]
 	q.pending = q.pending[1:]
-	bitrate := n.tx.Bitrate(ifaceID)
-	txTime := float64(len(raw)*8) / float64(bitrate)
-	q.allowedAt = now.Add(time.Duration(txTime / (float64(reticulum.AnnounceCap) / 100) * float64(time.Second)))
+	q.allowedAt = now
+	if bitrate > 0 {
+		txTime := float64(len(raw)*8) / float64(bitrate)
+		q.allowedAt = now.Add(time.Duration(txTime / (float64(reticulum.AnnounceCap) / 100) * float64(time.Second)))
+	}
 	if len(q.pending) > 0 {
 		q.timer = time.AfterFunc(time.Until(q.allowedAt), func() { n.flushAnnounceQueue(ifaceID) })
 	} else {
@@ -309,7 +322,8 @@ func (n *Node) flushAnnounceQueue(ifaceID string) {
 }
 
 // Announce emits an announce for a local destination on every floodable
-// interface (or only on ifaceID when set), with the given app data.
+// interface and every paid interface open to it (or only on ifaceID when
+// set, which a paid interface still gates), with the given app data.
 func (n *Node) Announce(d *Destination, ifaceID string, pathResponse bool) error {
 	var appData []byte
 	if d.AppData != nil {
@@ -325,9 +339,12 @@ func (n *Node) Announce(d *Destination, ifaceID string, pathResponse bool) error
 	raw := ann.MarshalPacket()
 	now := n.now()
 	if ifaceID != "" {
+		if !n.paidGate(ifaceID, d.Hash, paidAnnounce) {
+			return nil
+		}
 		n.sendAnnounceOn(ifaceID, raw, now)
 	} else {
-		for _, id := range n.tx.Floodable() {
+		for _, id := range append(n.tx.Floodable(), n.paidTake(d.Hash, paidAnnounce, "")...) {
 			n.sendAnnounceOn(id, raw, now)
 		}
 	}

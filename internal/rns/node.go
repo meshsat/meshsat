@@ -37,7 +37,8 @@ type Transmitter interface {
 	Transmit(ifaceID string, raw []byte) error
 	// Floodable lists the online interfaces that may carry broadcast
 	// traffic (announces, path requests, packets with no known path).
-	// Paid bearers must never be listed.
+	// Paid bearers must never be listed; a PaidPolicy opens one to a few
+	// named destinations instead (paidlinks.go).
 	Floodable() []string
 	// HWMTU returns the interface's hardware MTU, or 0 when unknown.
 	HWMTU(ifaceID string) int
@@ -106,6 +107,9 @@ type Node struct {
 	receipts map[[FullHashLen]byte]*Receipt
 	ifac     map[string]*reticulum.IFAC
 
+	paid     map[string]*PaidPolicy // paid interfaces open to listed destinations [MESHSAT-1547]
+	paidLast map[paidKey]time.Time
+
 	links *LinkManager
 
 	// OnAnnounce is called for every valid announce that was accepted into
@@ -125,6 +129,10 @@ type Stats struct {
 	Forwarded, LinkTransit   uint64
 	PathRequestsRx           uint64
 	IFACViolations           uint64
+	// PaidTx counts announces, path responses and path requests sent on a
+	// paid interface under its policy; PaidSuppressed those held back
+	// (destination not listed, or its interval not yet passed).
+	PaidTx, PaidSuppressed uint64
 }
 
 // ErrNoPath is returned when a packet cannot be delivered.
@@ -169,6 +177,8 @@ func New(cfg Config, tx Transmitter) (*Node, error) {
 		pathWaiters:   make(map[[HashLen]byte][]chan struct{}),
 		receipts:      make(map[[FullHashLen]byte]*Receipt),
 		ifac:          make(map[string]*reticulum.IFAC),
+		paid:          make(map[string]*PaidPolicy),
+		paidLast:      make(map[paidKey]time.Time),
 	}
 	n.links = newLinkManager(n)
 	return n, nil

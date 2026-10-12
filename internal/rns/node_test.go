@@ -27,6 +27,7 @@ type fakeTx struct {
 	name string
 	mu   sync.Mutex
 	sent map[string]int
+	paid map[string]bool // interfaces left out of Floodable, like a satellite
 }
 
 func (f *fakeTx) Transmit(ifaceID string, raw []byte) error {
@@ -47,9 +48,11 @@ func (f *fakeTx) Transmit(ifaceID string, raw []byte) error {
 func (f *fakeTx) Floodable() []string {
 	f.net.mu.Lock()
 	defer f.net.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []string
 	for k := range f.net.wires {
-		if len(k) > len(f.name)+1 && k[:len(f.name)+1] == f.name+"/" {
+		if len(k) > len(f.name)+1 && k[:len(f.name)+1] == f.name+"/" && !f.paid[k[len(f.name)+1:]] {
 			out = append(out, k[len(f.name)+1:])
 		}
 	}

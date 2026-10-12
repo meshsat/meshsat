@@ -1660,6 +1660,30 @@ async function toggleFloodable(iface) {
   await store.setFloodable(iface.id, enabling)
 }
 
+// Paid links: which Reticulum destinations may cross a satellite/SMS link [MESHSAT-1547]
+const paidDrafts = ref({})
+const paidMsg = ref({})
+watch(() => store.paidLinks, (links) => {
+  for (const link of links) {
+    if (!paidDrafts.value[link.id]) {
+      paidDrafts.value[link.id] = {
+        dests: (link.policy?.dests || []).join('\n'),
+        minutes: Math.round((link.policy?.min_interval_sec || 300) / 60),
+      }
+    }
+  }
+}, { immediate: true })
+async function savePaidLink(link) {
+  const d = paidDrafts.value[link.id]
+  if (!d) return
+  const dests = d.dests.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean)
+  paidMsg.value[link.id] = ''
+  try {
+    await store.setPaidLink(link.id, { dests, min_interval_sec: Math.max(1, Number(d.minutes) || 5) * 60, bitrate: link.policy?.bitrate || 0 })
+    paidMsg.value[link.id] = dests.length ? `open to ${dests.length} address(es)` : 'closed'
+  } catch (e) { paidMsg.value[link.id] = e.message }
+}
+
 // Signal polling
 let signalTimer = null
 
@@ -1693,6 +1717,7 @@ onMounted(async () => {
   loadMQTT(); loadIridium(); loadBudget(); loadCellular(); loadZigBee(); loadDeadman(); loadDeviceMqtt(); loadTAK(); loadTAKEnrollStatus()
   store.fetchCredentials()
   store.fetchRoutingInterfaces()
+  store.fetchPaidLinks()
   store.fetchInterfaces()
   refreshAPRSKey()
   loadBondGroups()
@@ -3557,6 +3582,36 @@ onUnmounted(() => {
                 <input type="checkbox" :checked="iface.floodable" @change="toggleFloodable(iface)"
                   class="rounded bg-gray-900 border-gray-700">
               </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Paid links: Reticulum allow-list [MESHSAT-1547] -->
+        <div v-if="store.paidLinks.length" class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <h3 class="text-sm font-medium text-gray-200 mb-1">Paid Links: Reticulum Allow-List</h3>
+          <p class="text-xs text-gray-500 mb-3">Announces and path requests for these addresses only cross the link, each at most once per interval. List the same addresses on the bridge at the other end.</p>
+          <div class="space-y-3">
+            <div v-for="link in store.paidLinks" :key="link.id" class="bg-gray-900 rounded px-3 py-2 border border-gray-700">
+              <div class="flex items-center gap-3 mb-2">
+                <span class="text-xs font-mono text-gray-200">{{ link.id }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded"
+                  :class="link.online ? 'bg-green-900/40 text-green-400' : 'bg-gray-700 text-gray-500'">
+                  {{ link.online ? 'online' : 'offline' }}
+                </span>
+                <span class="text-[10px] text-gray-500">{{ link.policy.dests.length ? `open to ${link.policy.dests.length}` : 'closed' }}</span>
+              </div>
+              <textarea v-if="paidDrafts[link.id]" v-model="paidDrafts[link.id].dests" rows="3" spellcheck="false"
+                placeholder="destination hashes, 32 hex each, one per line"
+                class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] font-mono text-gray-200"></textarea>
+              <div class="flex items-center gap-2 mt-2">
+                <span class="text-[10px] text-gray-500">at most once per</span>
+                <input v-if="paidDrafts[link.id]" v-model.number="paidDrafts[link.id].minutes" type="number" min="1"
+                  class="w-16 bg-gray-950 border border-gray-700 rounded px-2 py-0.5 text-[11px] text-gray-200">
+                <span class="text-[10px] text-gray-500">min</span>
+                <button @click="savePaidLink(link)"
+                  class="ml-auto px-2 py-0.5 bg-violet-700 text-white rounded text-[11px] hover:bg-violet-600">Save</button>
+              </div>
+              <div v-if="paidMsg[link.id]" class="mt-1 text-[10px] text-gray-400">{{ paidMsg[link.id] }}</div>
             </div>
           </div>
         </div>
