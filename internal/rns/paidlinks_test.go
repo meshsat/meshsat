@@ -2,6 +2,7 @@ package rns
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -261,5 +262,58 @@ func TestPaidLinkExtraHopsKeepLinksWorking(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("link data did not cross")
 		}
+	}
+}
+
+// A data packet crossing an opened paid link is reported once per minute
+// per interface, destination and direction; announces and proofs are not.
+func TestPaidCrossingReportsMessagesOnly(t *testing.T) {
+	a, t1, t2, b, _, _, cancel := satNet(t)
+	defer cancel()
+	bDest := b.AddDestination(&Destination{Name: "test.delivery", ProveAll: true})
+	var mu sync.Mutex
+	var seen []PaidCrossing
+	record := func(c PaidCrossing) { mu.Lock(); seen = append(seen, c); mu.Unlock() }
+	t1.OnPaidCrossing, t2.OnPaidCrossing = record, record
+	for _, n := range []*Node{t1, t2} {
+		n.SetPaidPolicy("sat", &PaidPolicy{Dests: [][HashLen]byte{bDest.Hash}})
+	}
+	if err := b.Announce(bDest, "", false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "A learns B", func() bool { return a.Paths().Has(bDest.Hash) })
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	if len(seen) != 0 {
+		t.Fatalf("an announce was reported as a crossing: %+v", seen)
+	}
+	mu.Unlock()
+	for i := 0; i < 2; i++ {
+		r, err := a.SendData(bDest.Hash, []byte("hello"), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-r.Done()
+	}
+	waitFor(t, "both crossings", func() bool { mu.Lock(); defer mu.Unlock(); return len(seen) >= 2 })
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("want one outbound (T1) and one inbound (T2) crossing for two messages in a minute, got %+v", seen)
+	}
+	var in, out int
+	for _, c := range seen {
+		if c.Dest != bDest.Hash || c.Iface != "sat" {
+			t.Fatalf("crossing %+v", c)
+		}
+		if c.Inbound {
+			in++
+		} else {
+			out++
+		}
+	}
+	if in != 1 || out != 1 {
+		t.Fatalf("directions: in %d out %d", in, out)
 	}
 }

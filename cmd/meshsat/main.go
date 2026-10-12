@@ -40,6 +40,7 @@ import (
 	"meshsat/internal/relayclient"
 	"meshsat/internal/reticulum"
 	"meshsat/internal/rnode"
+	"meshsat/internal/rns"
 	"meshsat/internal/rnsstack"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
@@ -1230,6 +1231,19 @@ func main() {
 		} else {
 			rnsStack = st
 			proc.SetRNSNode(st.Node)
+			// A Reticulum message crossing the satellite (or another paid
+			// link with a policy) becomes an "rns_crossing" event, which the
+			// receipt printer prints so the hop is visible. [MESHSAT-1550]
+			st.Node.OnPaidCrossing = func(c rns.PaidCrossing) {
+				data, _ := json.Marshal(map[string]any{
+					"iface": c.Iface, "inbound": c.Inbound, "dest": hex.EncodeToString(c.Dest[:]), "bytes": c.Bytes,
+				})
+				msg := "Reticulum message sent over " + c.Iface
+				if c.Inbound {
+					msg = "Reticulum message arrived over " + c.Iface
+				}
+				proc.Emit(transport.MeshEvent{Type: "rns_crossing", Message: msg, Data: data, Time: time.Now().UTC().Format(time.RFC3339)})
+			}
 		}
 	}
 

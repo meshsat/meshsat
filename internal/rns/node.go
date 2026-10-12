@@ -107,8 +107,9 @@ type Node struct {
 	receipts map[[FullHashLen]byte]*Receipt
 	ifac     map[string]*reticulum.IFAC
 
-	paid     map[string]*PaidPolicy // paid interfaces open to listed destinations [MESHSAT-1547]
-	paidLast map[paidKey]time.Time
+	paid      map[string]*PaidPolicy // paid interfaces open to listed destinations [MESHSAT-1547]
+	paidLast  map[paidKey]time.Time
+	crossings map[crossingKey]time.Time
 
 	links *LinkManager
 
@@ -117,6 +118,10 @@ type Node struct {
 	OnAnnounce func(ann *reticulum.Announce, pkt *Packet)
 	// OnPathChanged is called when a path table entry is added or replaced.
 	OnPathChanged func(dest [HashLen]byte, entry *PathEntry)
+	// OnPaidCrossing is called, without the node lock, for a data packet
+	// that crosses a paid link with a policy, at most once a minute per
+	// interface, destination and direction [MESHSAT-1550].
+	OnPaidCrossing func(c PaidCrossing)
 
 	stats Stats
 }
@@ -179,6 +184,7 @@ func New(cfg Config, tx Transmitter) (*Node, error) {
 		ifac:          make(map[string]*reticulum.IFAC),
 		paid:          make(map[string]*PaidPolicy),
 		paidLast:      make(map[paidKey]time.Time),
+		crossings:     make(map[crossingKey]time.Time),
 	}
 	n.links = newLinkManager(n)
 	return n, nil
@@ -356,6 +362,7 @@ func (n *Node) Inbound(raw []byte, ifaceID string) bool {
 	if err != nil {
 		return false
 	}
+	n.noteCrossing(ifaceID, raw, true)
 	pkt := &Packet{Raw: raw, Hdr: hdr, Hash: reticulum.PacketHash(raw), Iface: ifaceID}
 	n.count(func(s *Stats) { s.RxPackets++ })
 
@@ -531,6 +538,7 @@ func (n *Node) transmit(ifaceID string, raw []byte) error {
 	f := n.ifac[ifaceID]
 	n.stats.TxPackets++
 	n.mu.Unlock()
+	plain := raw
 	if f != nil {
 		raw = f.Wrap(raw)
 	}
@@ -538,6 +546,7 @@ func (n *Node) transmit(ifaceID string, raw []byte) error {
 		log.Debug().Err(err).Str("iface", ifaceID).Msg("rns: transmit failed")
 		return err
 	}
+	n.noteCrossing(ifaceID, plain, false)
 	return nil
 }
 
