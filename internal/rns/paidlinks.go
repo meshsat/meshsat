@@ -39,7 +39,20 @@ type PaidPolicy struct {
 	// Bitrate for the announce cap on this interface when the transmitter
 	// reports none; 0 leaves the cap off.
 	Bitrate int
+	// ExtraHops is added to the hop count of EVERY packet that arrives on
+	// this interface, on top of the usual one [MESHSAT-1548]: the slow hop
+	// counts as several. A stock client times a link setup out at its
+	// first-hop timeout plus 6 s per hop, far below a satellite round trip
+	// through the Hub; counting the hop as N gives it the time the link
+	// takes. It must apply to every packet type, announces, link requests
+	// and link proofs alike, because a transport and the initiator both
+	// check that a link proof arrives with the hop count the path promised.
+	// 0 (the default) leaves hop counts as upstream computes them.
+	ExtraHops int
 }
+
+// MaxPaidExtraHops keeps an inflated path well inside PATHFINDER_M.
+const MaxPaidExtraHops = 32
 
 func (p *PaidPolicy) allows(dest [HashLen]byte) bool {
 	for _, d := range p.Dests {
@@ -178,16 +191,27 @@ func (n *Node) announceBitrate(ifaceID string) int {
 	return 0
 }
 
+// paidExtraHops is the hop count added to packets arriving on ifaceID.
+func (n *Node) paidExtraHops(ifaceID string) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if p := n.paid[ifaceID]; p != nil {
+		return p.ExtraHops
+	}
+	return 0
+}
+
 // PaidPolicyJSON is the persisted and API form of one policy.
 type PaidPolicyJSON struct {
 	Dests          []string `json:"dests"`
 	MinIntervalSec int      `json:"min_interval_sec"`
 	Bitrate        int      `json:"bitrate"`
+	ExtraHops      int      `json:"extra_hops"`
 }
 
 // ToJSON renders a policy with hex destination hashes.
 func (p PaidPolicy) ToJSON() PaidPolicyJSON {
-	out := PaidPolicyJSON{Dests: make([]string, 0, len(p.Dests)), MinIntervalSec: int(p.MinInterval / time.Second), Bitrate: p.Bitrate}
+	out := PaidPolicyJSON{Dests: make([]string, 0, len(p.Dests)), MinIntervalSec: int(p.MinInterval / time.Second), Bitrate: p.Bitrate, ExtraHops: p.ExtraHops}
 	for _, d := range p.Dests {
 		out.Dests = append(out.Dests, hex.EncodeToString(d[:]))
 	}
@@ -201,7 +225,10 @@ func ParsePaidPolicy(j PaidPolicyJSON) (*PaidPolicy, error) {
 	if j.MinIntervalSec < 0 || j.Bitrate < 0 {
 		return nil, fmt.Errorf("min_interval_sec and bitrate must not be negative")
 	}
-	p := &PaidPolicy{MinInterval: time.Duration(j.MinIntervalSec) * time.Second, Bitrate: j.Bitrate}
+	if j.ExtraHops < 0 || j.ExtraHops > MaxPaidExtraHops {
+		return nil, fmt.Errorf("extra_hops must be 0 to %d", MaxPaidExtraHops)
+	}
+	p := &PaidPolicy{MinInterval: time.Duration(j.MinIntervalSec) * time.Second, Bitrate: j.Bitrate, ExtraHops: j.ExtraHops}
 	seen := map[[HashLen]byte]bool{}
 	for _, s := range j.Dests {
 		b, err := hex.DecodeString(s)

@@ -102,8 +102,14 @@ func TestMeasureLXMFAcrossSlowPaidLink(t *testing.T) {
 
 	a := startPeer(t, peerOpts{name: "A", connect: fmt.Sprintf("127.0.0.1:%d", port1)})
 	b := startPeer(t, peerOpts{name: "B", connect: fmt.Sprintf("127.0.0.1:%d", port2)})
+	extra := 0
+	if v := os.Getenv("MESHSAT_SLOWLINK_EXTRA_HOPS"); v != "" {
+		if _, err := fmt.Sscan(v, &extra); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, n := range []*rns.Node{t1, t2} {
-		n.SetPaidPolicy("sat", &rns.PaidPolicy{Dests: [][16]byte{h16(a.Delivery), h16(b.Delivery)}})
+		n.SetPaidPolicy("sat", &rns.PaidPolicy{Dests: [][16]byte{h16(a.Delivery), h16(b.Delivery)}, ExtraHops: extra})
 	}
 	time.Sleep(2 * time.Second) // both TCP clients attached
 
@@ -146,7 +152,7 @@ func TestMeasureLXMFAcrossSlowPaidLink(t *testing.T) {
 		}
 	}
 	time.Sleep(delay + 2*time.Second) // let late copies land before counting
-	t.Logf("MEASURE method=%s delay=%s received_after=%s sender_result=%s after=%s data_packets_on_sat=%d proofs_back_on_sat=%d",
-		method, delay, recvAfter.Round(time.Second), result, resultAfter.Round(time.Second),
+	t.Logf("MEASURE method=%s extra_hops=%d delay=%s received_after=%s sender_result=%s after=%s data_packets_on_sat=%d proofs_back_on_sat=%d",
+		method, extra, delay, recvAfter.Round(time.Second), result, resultAfter.Round(time.Second),
 		tx1.satCount()-before, tx2.satCount()-beforeBack)
 }

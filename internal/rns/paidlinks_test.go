@@ -193,3 +193,73 @@ func TestParsePaidPolicy(t *testing.T) {
 		t.Fatalf("nil policy did not remove it")
 	}
 }
+
+// ExtraHops applies to every packet that arrives on the paid link, so the
+// path, a link request and its proof all agree on the count: a link still
+// establishes across it, and the far side sees the slow hop as several.
+func TestPaidLinkExtraHopsKeepLinksWorking(t *testing.T) {
+	a, t1, t2, b, _, _, cancel := satNet(t)
+	defer cancel()
+	got := make(chan string, 4)
+	bDest := b.AddDestination(&Destination{Name: "test.delivery", AcceptLinks: true, ProveAll: true,
+		OnPacket:     func(plain []byte, pkt *Packet) { got <- string(plain) },
+		OnLinkPacket: func(l *Link, plain []byte, pkt *Packet) { got <- string(plain) }})
+	for _, n := range []*Node{t1, t2} {
+		n.SetPaidPolicy("sat", &PaidPolicy{Dests: [][HashLen]byte{bDest.Hash}, ExtraHops: 8})
+	}
+	if err := b.Announce(bDest, "", false); err != nil {
+		t.Fatal(err)
+	}
+	// B -> T2 (1) -> sat (2 + 8) -> A (11).
+	waitFor(t, "A learns B with the satellite hop counted as nine", func() bool { return a.Paths().Hops(bDest.Hash) == 11 })
+
+	r, err := a.SendData(bDest.Hash, []byte("single packet"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case res := <-r.Done():
+		if !res.Delivered {
+			t.Fatalf("proof not delivered across the inflated hop")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no proof back")
+	}
+
+	established := make(chan *Link, 1)
+	l, err := a.Links().Initiate(bDest.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.OnEstablished = func(l *Link) { established <- l }
+	select {
+	case <-established:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("link not established across the inflated hop, state %s", l.State())
+	}
+	waitFor(t, "responder active", func() bool {
+		for _, x := range b.Links().All() {
+			if x.ID == l.ID && x.State() == LinkActive {
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := a.Links().Send(l, []byte("over the link")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case s := <-got:
+			if s == "over the link" {
+				if _, err := ParsePaidPolicy(PaidPolicyJSON{ExtraHops: MaxPaidExtraHops + 1}); err == nil {
+					t.Fatalf("extra_hops above the ceiling accepted")
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatalf("link data did not cross")
+		}
+	}
+}

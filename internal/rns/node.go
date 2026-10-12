@@ -364,7 +364,11 @@ func (n *Node) Inbound(raw []byte, ifaceID string) bool {
 		return true
 	}
 
-	// hops++ as Transport.inbound does before anything else.
+	// hops++ as Transport.inbound does before anything else; a paid link
+	// with ExtraHops counts as more than one hop for every packet.
+	if extra := n.paidExtraHops(ifaceID); extra > 0 && int(hdr.Hops)+1+extra <= 255 {
+		hdr.Hops += byte(extra)
+	}
 	hdr.Hops++
 	raw[1] = hdr.Hops
 
