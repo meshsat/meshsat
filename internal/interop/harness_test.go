@@ -42,6 +42,7 @@ type peer struct {
 	log    []event
 	// from the ready event
 	Identity, Delivery, Raw, TransportID string
+	cfgDir                               string // the peer's RNS config dir (rns.log lives here)
 }
 
 type peerOpts struct {
@@ -118,7 +119,7 @@ func startPeerArgs(t *testing.T, py, cfgDir string, args []string, name string) 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start rnsnode.py: %v", err)
 	}
-	p := &peer{t: t, cmd: cmd, stdin: stdin, events: make(chan event, 256)}
+	p := &peer{t: t, cmd: cmd, stdin: stdin, events: make(chan event, 256), cfgDir: cfgDir}
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1<<20), 1<<20)

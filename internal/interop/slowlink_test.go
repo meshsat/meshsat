@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -32,15 +33,30 @@ type slowTx struct {
 	delay time.Duration
 	mu    sync.Mutex
 	sat   int
+	queue chan satFrame // FIFO, like one modem's MO queue: order is kept
+	once  sync.Once
+}
+
+type satFrame struct {
+	raw []byte
+	due time.Time
 }
 
 func (x *slowTx) Transmit(ifaceID string, raw []byte) error {
 	if ifaceID == "sat" {
+		x.once.Do(func() {
+			x.queue = make(chan satFrame, 1024)
+			go func() {
+				for f := range x.queue {
+					time.Sleep(time.Until(f.due))
+					x.peer().Inbound(f.raw, "sat")
+				}
+			}()
+		})
 		x.mu.Lock()
 		x.sat++
 		x.mu.Unlock()
-		cp := append([]byte(nil), raw...)
-		time.AfterFunc(x.delay, func() { x.peer().Inbound(cp, "sat") })
+		x.queue <- satFrame{raw: append([]byte(nil), raw...), due: time.Now().Add(x.delay)}
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -100,8 +116,24 @@ func TestMeasureLXMFAcrossSlowPaidLink(t *testing.T) {
 	t1, tx1, port1 := slowBridge(t, ctx, delay, func() *rns.Node { return t2 })
 	t2, tx2, port2 := slowBridge(t, ctx, delay, func() *rns.Node { return t1 })
 
-	a := startPeer(t, peerOpts{name: "A", connect: fmt.Sprintf("127.0.0.1:%d", port1)})
-	b := startPeer(t, peerOpts{name: "B", connect: fmt.Sprintf("127.0.0.1:%d", port2)})
+	loglevel := 0
+	if v := os.Getenv("MESHSAT_SLOWLINK_LOGLEVEL"); v != "" {
+		if _, err := fmt.Sscan(v, &loglevel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := startPeer(t, peerOpts{name: "A", connect: fmt.Sprintf("127.0.0.1:%d", port1), loglevel: loglevel})
+	b := startPeer(t, peerOpts{name: "B", connect: fmt.Sprintf("127.0.0.1:%d", port2), loglevel: loglevel})
+	// MESHSAT_SLOWLINK_LOGDIR keeps both peers' rns.log for reading afterwards.
+	if dir := os.Getenv("MESHSAT_SLOWLINK_LOGDIR"); dir != "" {
+		t.Cleanup(func() {
+			for name, p := range map[string]*peer{"A": a, "B": b} {
+				if data, err := os.ReadFile(filepath.Join(p.cfgDir, "rns.log")); err == nil {
+					_ = os.WriteFile(filepath.Join(dir, "rns-"+name+".log"), data, 0o644)
+				}
+			}
+		})
+	}
 	extra := 0
 	if v := os.Getenv("MESHSAT_SLOWLINK_EXTRA_HOPS"); v != "" {
 		if _, err := fmt.Sscan(v, &extra); err != nil {
@@ -155,4 +187,39 @@ func TestMeasureLXMFAcrossSlowPaidLink(t *testing.T) {
 	t.Logf("MEASURE method=%s extra_hops=%d delay=%s received_after=%s sender_result=%s after=%s data_packets_on_sat=%d proofs_back_on_sat=%d",
 		method, extra, delay, recvAfter.Round(time.Second), result, resultAfter.Round(time.Second),
 		tx1.satCount()-before, tx2.satCount()-beforeBack)
+
+	// MESHSAT_SLOWLINK_REPLY=1: B answers with the method Sideband and
+	// MeshChat would pick on their own ("auto": opportunistic when no link
+	// exists and A announced a ratchet, else direct over the link A opened).
+	if os.Getenv("MESHSAT_SLOWLINK_REPLY") != "1" || recvAfter <= 0 {
+		return
+	}
+	fromB, fromA := tx2.satCount(), tx1.satCount()
+	replyAt := time.Now()
+	b.send(event{"cmd": "send_lxm", "dest": a.Delivery, "content": "reply from the grid", "method": "auto"})
+	sent := b.wait("lxm_sent", nil, 10*time.Second)
+	var replyRecv, replyResultAfter time.Duration
+	replyResult := ""
+	replyDeadline := time.After(6*delay + 4*time.Minute)
+wait:
+	for replyResult == "" || replyRecv == 0 {
+		select {
+		case ev, ok := <-a.events:
+			if ok && ev["event"] == "lxm_received" && replyRecv == 0 {
+				replyRecv = time.Since(replyAt)
+			}
+		case ev, ok := <-b.events:
+			if ok && (ev["event"] == "lxm_delivered" || ev["event"] == "lxm_failed") && replyResult == "" {
+				replyResult = ev["event"].(string)
+				replyResultAfter = time.Since(replyAt)
+			}
+		case <-replyDeadline:
+			replyResult += " (deadline)"
+			break wait
+		}
+	}
+	time.Sleep(delay + 2*time.Second)
+	t.Logf("REPLY method_chosen=%v received_after=%s sender_result=%s after=%s packets_on_sat=%d proofs_back_on_sat=%d",
+		sent["method"], replyRecv.Round(time.Second), replyResult, replyResultAfter.Round(time.Second),
+		tx2.satCount()-fromB, tx1.satCount()-fromA)
 }

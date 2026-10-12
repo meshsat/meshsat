@@ -21,7 +21,7 @@ Commands (JSON objects):
   {"cmd":"link","dest":HEX}                open an RNS.Link to dest (must be known)
   {"cmd":"link_send","link":HEX,"data":TEXT}  send data on a link, report proof
   {"cmd":"link_close","link":HEX}
-  {"cmd":"send_lxm","dest":HEX,"content":TEXT,"title":TEXT,"method":"opportunistic|direct"}
+  {"cmd":"send_lxm","dest":HEX,"content":TEXT,"title":TEXT,"method":"opportunistic|direct|auto"}
   {"cmd":"send_packet","dest":HEX,"data":TEXT}  single encrypted packet to a SINGLE dest, waits for proof
   {"cmd":"set_keepalive","link":HEX,"seconds":N}
   {"cmd":"status"}
@@ -224,7 +224,17 @@ def main():
                     emit(event="error", error="destination identity unknown")
                     continue
                 dest = RNS.Destination(ident, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
-                method = LXMF.LXMessage.DIRECT if cmd.get("method") == "direct" else LXMF.LXMessage.OPPORTUNISTIC
+                m = cmd.get("method")
+                if m == "auto":
+                    # Sideband's and MeshChat's own choice (send_message in both):
+                    # opportunistic when no delivery link exists and the
+                    # destination announced a ratchet, otherwise direct.
+                    if not router.delivery_link_available(d) and RNS.Identity.current_ratchet_id(d) != None:
+                        method = LXMF.LXMessage.OPPORTUNISTIC
+                    else:
+                        method = LXMF.LXMessage.DIRECT
+                else:
+                    method = LXMF.LXMessage.DIRECT if m == "direct" else LXMF.LXMessage.OPPORTUNISTIC
                 lxm = LXMF.LXMessage(dest, delivery, cmd.get("content", "").encode("utf-8"),
                                      title=cmd.get("title", "").encode("utf-8"), desired_method=method)
                 lxm.register_delivery_callback(lambda m: emit(event="lxm_delivered", hash=m.hash.hex()))
