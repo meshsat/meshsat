@@ -92,10 +92,14 @@ func TestIMTDedup(t *testing.T) {
 
 // mockSat is a SatTransport whose MT mailbox the test fills.
 type mockSat struct {
-	mu     sync.Mutex
-	sent   [][]byte
-	mt     [][]byte
-	events chan transport.SatEvent
+	mu       sync.Mutex
+	sent     [][]byte
+	attempts [][]byte // every Send call, failed ones included
+	mt       [][]byte
+	events   chan transport.SatEvent
+	failNext int           // fail this many Send calls first
+	failAll  bool          // fail every Send
+	delay    time.Duration // each Send takes this long
 }
 
 func newMockSat() *mockSat { return &mockSat{events: make(chan transport.SatEvent, 8)} }
@@ -103,10 +107,25 @@ func (m *mockSat) Subscribe(ctx context.Context) (<-chan transport.SatEvent, err
 	return m.events, nil
 }
 func (m *mockSat) Send(ctx context.Context, data []byte) (*transport.SatResult, error) {
+	if m.delay > 0 {
+		time.Sleep(m.delay)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.attempts = append(m.attempts, append([]byte(nil), data...))
+	if m.failAll || m.failNext > 0 {
+		if m.failNext > 0 {
+			m.failNext--
+		}
+		return &transport.SatResult{MOStatus: 32}, nil
+	}
 	m.sent = append(m.sent, append([]byte(nil), data...))
 	return &transport.SatResult{MOStatus: 0}, nil
+}
+func (m *mockSat) sentCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sent)
 }
 func (m *mockSat) SendText(ctx context.Context, text string) (*transport.SatResult, error) {
 	return m.Send(ctx, []byte(text))
@@ -174,6 +193,7 @@ func TestSatInterfaceIMTFraming(t *testing.T) {
 	if err := iface.Send(ctx, pkt); err != nil {
 		t.Fatal(err)
 	}
+	waitCond(t, "queued packet sent", 3*time.Second, func() bool { return sat.sentCount() == 1 })
 	if !bytes.Equal(sat.lastSent(), pkt) {
 		t.Fatalf("framed while off")
 	}
@@ -198,6 +218,7 @@ func TestSatInterfaceIMTFraming(t *testing.T) {
 	if err := iface.Send(ctx, pkt); err != nil {
 		t.Fatal(err)
 	}
+	waitCond(t, "framed packet sent", 3*time.Second, func() bool { return sat.sentCount() == 2 })
 	if !bytes.Equal(sat.lastSent(), EncodeIMTFrame(pkt)) {
 		t.Fatalf("not framed while on")
 	}
@@ -217,5 +238,74 @@ func TestSatInterfaceIMTFraming(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if count() != 3 {
 		t.Fatalf("bad version accepted")
+	}
+}
+
+// Packets reach the modem in the order they were handed over, a failed MO
+// is retried before the next packet goes, and Send never waits for the
+// modem. [MESHSAT-1548]
+func TestSatInterfaceSendQueueKeepsOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sat := newMockSat()
+	sat.failNext = 2 // the first packet fails twice
+	sat.delay = 50 * time.Millisecond
+	iface := NewSatInterface(SatInterfaceConfig{Name: "iridium_imt_0", Type: "iridium", MTU: 600,
+		RetryBackoff: []time.Duration{10 * time.Millisecond}}, sat, func([]byte) {})
+	if err := iface.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer iface.Stop()
+	start := time.Now()
+	for i := byte(1); i <= 3; i++ {
+		if err := iface.Send(ctx, []byte{i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if took := time.Since(start); took > 40*time.Millisecond {
+		t.Fatalf("Send waited for the modem (%s)", took)
+	}
+	waitCond(t, "all three sent", 3*time.Second, func() bool { return sat.sentCount() == 3 })
+	sat.mu.Lock()
+	defer sat.mu.Unlock()
+	want := [][]byte{{1}, {1}, {1}, {2}, {3}}
+	if len(sat.attempts) != len(want) {
+		t.Fatalf("attempts %v", sat.attempts)
+	}
+	for i := range want {
+		if !bytes.Equal(sat.attempts[i], want[i]) {
+			t.Fatalf("attempt order %v, want %v (a later packet overtook a retried one)", sat.attempts, want)
+		}
+	}
+	if st := iface.QueueStats(); st.Sent != 3 || st.Retried != 2 || st.Dropped != 0 {
+		t.Fatalf("stats %+v", st)
+	}
+}
+
+// A packet that cannot go out in time is dropped and the next one goes.
+func TestSatInterfaceSendQueueDropsStalePackets(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sat := newMockSat()
+	sat.failAll = true
+	iface := NewSatInterface(SatInterfaceConfig{Name: "iridium_imt_0", Type: "iridium", MTU: 600,
+		MaxAge: 150 * time.Millisecond, RetryBackoff: []time.Duration{20 * time.Millisecond}}, sat, func([]byte) {})
+	if err := iface.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer iface.Stop()
+	if err := iface.Send(ctx, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	waitCond(t, "first packet dropped", 3*time.Second, func() bool { return iface.QueueStats().Dropped == 1 })
+	sat.mu.Lock()
+	sat.failAll = false
+	sat.mu.Unlock()
+	if err := iface.Send(ctx, []byte{2}); err != nil {
+		t.Fatal(err)
+	}
+	waitCond(t, "next packet sent", 3*time.Second, func() bool { return sat.sentCount() == 1 })
+	if !bytes.Equal(sat.lastSent(), []byte{2}) {
+		t.Fatalf("sent %x", sat.lastSent())
 	}
 }
