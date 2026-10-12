@@ -237,7 +237,10 @@ func (r *Router) Send(ctx context.Context, dest [DestLen]byte, content, title []
 	method := wantMethod
 	if method == 0 {
 		method = Direct
-		if m.ContentSize() <= PacketMaxContent {
+		// Opportunistic only off the satellite: its sender gives up after a
+		// few seconds per hop, while a direct link waits for the round trip
+		// the path's hop count promises [MESHSAT-1548].
+		if m.ContentSize() <= PacketMaxContent && !r.node.CrossesPaidLink(dest) {
 			method = Opportunistic
 		}
 	}
@@ -340,9 +343,15 @@ func (r *Router) linkTo(ctx context.Context, dest [DestLen]byte) (*rns.Link, err
 	l.OnPacket = func(l *rns.Link, plain []byte, pkt *rns.Packet) { r.Inbound(plain, Direct, pkt.Iface) }
 	l.AcceptResources = r.acceptResource
 	l.OnResource = func(l *rns.Link, data []byte) { r.Inbound(data, Direct, l.Iface) }
+	// At least the link's own establishment timeout, which grows with the
+	// path's hops (a satellite link counts as several).
+	wait := LinkEstablishTimeout
+	if lt := l.EstablishTimeout() + 10*time.Second; lt > wait {
+		wait = lt
+	}
 	select {
 	case <-est:
-	case <-time.After(LinkEstablishTimeout):
+	case <-time.After(wait):
 		r.node.Links().Teardown(l)
 		return nil, ErrLinkFailed
 	case <-ctx.Done():
@@ -383,3 +392,7 @@ func (r *Router) Peers() []Peer {
 	}
 	return out
 }
+
+// SlowPath reports whether a delivery to dest crosses a paid link, so the
+// caller can give it the minutes a satellite round trip takes.
+func (r *Router) SlowPath(dest [DestLen]byte) bool { return r.node.CrossesPaidLink(dest) }

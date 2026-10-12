@@ -1867,7 +1867,18 @@ func (w *DeliveryWorker) deliverLXMF(ctx context.Context, del database.MessageDe
 		log.Debug().Int64("id", del.ID).Msg("delivery no longer queued, not sent")
 		return
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	timeout := 3 * time.Minute
+	// A sender that knows the path crosses a satellite asks for longer: a
+	// link setup and the message's proof are two round trips of a minute or
+	// more each [MESHSAT-1548].
+	if t, ok := w.lxmf.(interface {
+		DeliverTimeout(dest string) time.Duration
+	}); ok {
+		if d := t.DeliverTimeout(del.Destination); d > timeout {
+			timeout = d
+		}
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	hash, err := w.lxmf.Deliver(sendCtx, del)
 	if err != nil {

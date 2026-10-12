@@ -349,3 +349,21 @@ func (st *Stack) loadPaths() {
 		log.Info().Int("paths", n).Msg("rns: paths loaded from database")
 	}
 }
+
+// DeliverTimeout gives a delivery whose path crosses a paid link (the
+// satellite) ten minutes instead of the ledger's three [MESHSAT-1548].
+func (st *Stack) DeliverTimeout(dest string) time.Duration {
+	if st.LXMF == nil {
+		return 0
+	}
+	b, err := hex.DecodeString(dest)
+	if err != nil || len(b) != lxmf.DestLen {
+		return 0
+	}
+	var d [lxmf.DestLen]byte
+	copy(d[:], b)
+	if st.LXMF.SlowPath(d) {
+		return 10 * time.Minute
+	}
+	return 0
+}

@@ -674,3 +674,8 @@ func (m *LinkManager) closeAll() {
 		m.Teardown(l)
 	}
 }
+
+// EstablishTimeout is how long the initiator waits for the link proof: the
+// per-hop timeout times the path's hops plus one, so a path learned over a
+// paid link with ExtraHops waits for the satellite round trip.
+func (l *Link) EstablishTimeout() time.Duration { return l.establishTO }
