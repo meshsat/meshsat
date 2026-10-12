@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"meshsat/internal/lxmf"
 	"meshsat/internal/reticulum"
 	"meshsat/internal/rns"
 	"meshsat/internal/routing"
@@ -78,6 +79,11 @@ func (x *slowTx) satCount() int {
 }
 
 func slowBridge(t *testing.T, ctx context.Context, delay time.Duration, peer func() *rns.Node) (*rns.Node, *slowTx, int) {
+	n, tx, port, _ := slowBridgeID(t, ctx, delay, peer)
+	return n, tx, port
+}
+
+func slowBridgeID(t *testing.T, ctx context.Context, delay time.Duration, peer func() *rns.Node) (*rns.Node, *slowTx, int, *reticulum.Identity) {
 	t.Helper()
 	id, _ := reticulum.GenerateIdentity()
 	port := freePort(t)
@@ -95,7 +101,7 @@ func slowBridge(t *testing.T, ctx context.Context, delay time.Duration, peer fun
 	}
 	n.Start(ctx)
 	t.Cleanup(tcp.Stop)
-	return n, tx, port
+	return n, tx, port, id
 }
 
 func TestMeasureLXMFAcrossSlowPaidLink(t *testing.T) {
@@ -222,4 +228,58 @@ wait:
 	t.Logf("REPLY method_chosen=%v received_after=%s sender_result=%s after=%s packets_on_sat=%d proofs_back_on_sat=%d",
 		sent["method"], replyRecv.Round(time.Second), replyResult, replyResultAfter.Round(time.Second),
 		tx2.satCount()-fromB, tx1.satCount()-fromA)
+}
+
+// The bridge itself sends across the slow paid link to a stock LXMF client
+// (MESHSAT_SLOWLINK=1, same delay and hops settings): the Go router must
+// pick direct because the path crosses the paid link, wait for the link as
+// long as the hops say, and see the proof. [MESHSAT-1548]
+func TestMeasureBridgeLXMFAcrossSlowPaidLink(t *testing.T) {
+	if os.Getenv("MESHSAT_SLOWLINK") != "1" {
+		t.Skip("measurement; set MESHSAT_SLOWLINK=1 (takes minutes)")
+	}
+	delay := 30 * time.Second
+	if v := os.Getenv("MESHSAT_SLOWLINK_DELAY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		delay = d
+	}
+	extra := 0
+	if v := os.Getenv("MESHSAT_SLOWLINK_EXTRA_HOPS"); v != "" {
+		if _, err := fmt.Sscan(v, &extra); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var t1, t2 *rns.Node
+	t1, _, _, id1 := slowBridgeID(t, ctx, delay, func() *rns.Node { return t2 })
+	t2, _, port2 := slowBridge(t, ctx, delay, func() *rns.Node { return t1 })
+	b := startPeer(t, peerOpts{name: "B", connect: fmt.Sprintf("127.0.0.1:%d", port2)})
+	r := lxmf.New(t1, lxmf.Config{Identity: id1, DisplayName: "US bridge"})
+	for _, n := range []*rns.Node{t1, t2} {
+		n.SetPaidPolicy("sat", &rns.PaidPolicy{Dests: [][16]byte{h16(b.Delivery), r.Hash()}, ExtraHops: extra})
+	}
+	time.Sleep(2 * time.Second)
+	b.send(event{"cmd": "announce"})
+	waitFor(t, "bridge learns B across the paid link", delay+30*time.Second, func() bool { return t1.Paths().Has(h16(b.Delivery)) })
+	start := time.Now()
+	sctx, scancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer scancel()
+	_, res, err := r.Send(sctx, h16(b.Delivery), []byte("from the bridge"), nil, lxmf.MapOf(), 0)
+	method := ""
+	if res != nil {
+		method = fmt.Sprint(res.Method)
+	}
+	recv := ""
+	if ev := b.wait("lxm_received", nil, 30*time.Second); ev != nil {
+		recv = fmt.Sprint(ev["content"])
+	}
+	t.Logf("MEASURE bridge-send delay=%s extra_hops=%d method=%s err=%v after=%s received=%q",
+		delay, extra, method, err, time.Since(start).Round(time.Second), recv)
+	if err != nil {
+		t.Errorf("bridge send failed: %v", err)
+	}
 }

@@ -317,3 +317,26 @@ func TestPaidCrossingReportsMessagesOnly(t *testing.T) {
 		t.Fatalf("directions: in %d out %d", in, out)
 	}
 }
+
+func TestCrossesPaidLink(t *testing.T) {
+	a, t1, t2, b, _, _, cancel := satNet(t)
+	defer cancel()
+	bDest := b.AddDestination(&Destination{Name: "test.delivery"})
+	for _, n := range []*Node{t1, t2} {
+		n.SetPaidPolicy("sat", &PaidPolicy{Dests: [][HashLen]byte{bDest.Hash}})
+	}
+	if err := b.Announce(bDest, "", false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "A learns B", func() bool { return a.Paths().Has(bDest.Hash) })
+	if !t1.CrossesPaidLink(bDest.Hash) {
+		t.Fatalf("T1 reaches B over the paid link but does not say so")
+	}
+	if t2.CrossesPaidLink(bDest.Hash) || a.CrossesPaidLink(bDest.Hash) {
+		t.Fatalf("a node whose next hop is a free link claims a paid crossing")
+	}
+	var unknown [HashLen]byte
+	if t1.CrossesPaidLink(unknown) {
+		t.Fatalf("an unknown destination crosses nothing")
+	}
+}

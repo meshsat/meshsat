@@ -329,3 +329,16 @@ type crossingKey struct {
 	dest    [HashLen]byte
 	inbound bool
 }
+
+// CrossesPaidLink reports whether the known path to dest leaves this node on
+// a paid interface with a policy, i.e. over the satellite [MESHSAT-1548].
+func (n *Node) CrossesPaidLink(dest [HashLen]byte) bool {
+	iface := n.NextHopInterface(dest)
+	if iface == "" {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, ok := n.paid[iface]
+	return ok
+}
