@@ -937,6 +937,19 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     return await api.get('/cellular/sim-cards/current')
   }
 
+  // LXMF peers heard by their announces (Sideband, CrossTalk, NomadNet,
+  // MeshChat): the recipients and senders an access rule can name for
+  // lxmf_0. [MESHSAT-1554]
+  const lxmfPeers = ref([])
+
+  async function fetchLXMFPeers() {
+    try {
+      lxmfPeers.value = await api.get('/lxmf/peers')
+    } catch {
+      lxmfPeers.value = [] // LXMF off: the pickers fall back to typing a hash
+    }
+  }
+
   // SMS Contacts
   const smsContacts = ref([])
 
@@ -1968,6 +1981,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     fetchDLQ,
     simCards, fetchSIMCards, createSIMCard, updateSIMCard, deleteSIMCard, readCurrentICCID,
     smsContacts, fetchSMSContacts, createSMSContact, updateSMSContact, deleteSMSContact, sendSMS,
+    lxmfPeers, fetchLXMFPeers,
     oobPeers, oobLog, oobConfig, oobTargets, oobAgent,
     fetchOOBConfig, setOOBConfig, fetchOOBPeers, createOOBPeer, updateOOBPeer, deleteOOBPeer,
     issueOOBBundle, exportOOBPeerKey, sendOOB, fetchOOBLog, fetchOOBTargets, fetchOOBAgent,
