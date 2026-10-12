@@ -1669,6 +1669,7 @@ watch(() => store.paidLinks, (links) => {
       paidDrafts.value[link.id] = {
         dests: (link.policy?.dests || []).join('\n'),
         minutes: Math.round((link.policy?.min_interval_sec || 300) / 60),
+        hops: link.policy?.extra_hops || 0,
       }
     }
   }
@@ -1679,7 +1680,8 @@ async function savePaidLink(link) {
   const dests = d.dests.split(/[\s,]+/).map(x => x.trim().toLowerCase()).filter(Boolean)
   paidMsg.value[link.id] = ''
   try {
-    await store.setPaidLink(link.id, { dests, min_interval_sec: Math.max(1, Number(d.minutes) || 5) * 60, bitrate: link.policy?.bitrate || 0 })
+    const hops = Math.min(32, Math.max(0, Math.round(Number(d.hops) || 0)))
+    await store.setPaidLink(link.id, { dests, min_interval_sec: Math.max(1, Number(d.minutes) || 5) * 60, bitrate: link.policy?.bitrate || 0, extra_hops: hops })
     paidMsg.value[link.id] = dests.length ? `open to ${dests.length} address(es)` : 'closed'
   } catch (e) { paidMsg.value[link.id] = e.message }
 }
@@ -3607,7 +3609,11 @@ onUnmounted(() => {
                 <span class="text-[10px] text-gray-500">at most once per</span>
                 <input v-if="paidDrafts[link.id]" v-model.number="paidDrafts[link.id].minutes" type="number" min="1"
                   class="w-16 bg-gray-950 border border-gray-700 rounded px-2 py-0.5 text-[11px] text-gray-200">
-                <span class="text-[10px] text-gray-500">min</span>
+                <span class="text-[10px] text-gray-500">min, count as</span>
+                <input v-if="paidDrafts[link.id]" v-model.number="paidDrafts[link.id].hops" type="number" min="0" max="32"
+                  title="Extra hops for every packet that crosses this link, so Reticulum clients wait long enough for a satellite round trip"
+                  class="w-14 bg-gray-950 border border-gray-700 rounded px-2 py-0.5 text-[11px] text-gray-200">
+                <span class="text-[10px] text-gray-500">extra hops</span>
                 <button @click="savePaidLink(link)"
                   class="ml-auto px-2 py-0.5 bg-violet-700 text-white rounded text-[11px] hover:bg-violet-600">Save</button>
               </div>
