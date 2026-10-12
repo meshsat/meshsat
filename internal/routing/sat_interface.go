@@ -25,6 +25,27 @@ type SatInterfaceConfig struct {
 	// RNSFraming wraps every packet in CrossTalk's "RNSI\x01" IMT header on
 	// send and requires it on receive (auto-detected when off). [MESHSAT-1351]
 	RNSFraming bool
+
+	// Send queue [MESHSAT-1548]. Packets go to the modem one at a time, in
+	// the order they were handed over, and a failed MO is retried before
+	// the next packet goes: a Reticulum link sends its RTT packet and the
+	// first message back to back, and the far end drops a message that
+	// overtakes the RTT packet. Zero values take the defaults.
+	QueueSize    int             // packets waiting for the modem (64)
+	SendTimeout  time.Duration   // one MO attempt (4 min: the 9704 itself waits up to 180 s)
+	MaxAge       time.Duration   // a packet not sent by then is dropped (15 min)
+	RetryBackoff []time.Duration // waits between attempts (5 s, 15 s, 30 s, 60 s, then 120 s)
+}
+
+type satOut struct {
+	wire   []byte
+	queued time.Time
+}
+
+// SatQueueStats are the send queue's counters.
+type SatQueueStats struct {
+	Queued, Sent, Retried, Dropped int64
+	Waiting                        int
 }
 
 // SatInterface is a bidirectional Reticulum interface over a satellite transport.
@@ -42,12 +63,28 @@ type SatInterface struct {
 	stopped bool
 	framing bool
 	dedup   *imtDedup
+
+	queue                          chan satOut
+	queued, sent, retried, dropped int64
 }
 
 // NewSatInterface creates a new satellite Reticulum interface.
 // The callback is invoked for each received Reticulum packet from MT messages.
 func NewSatInterface(config SatInterfaceConfig, sat transport.SatTransport, callback func(packet []byte)) *SatInterface {
+	if config.QueueSize <= 0 {
+		config.QueueSize = 64
+	}
+	if config.SendTimeout <= 0 {
+		config.SendTimeout = 4 * time.Minute
+	}
+	if config.MaxAge <= 0 {
+		config.MaxAge = 15 * time.Minute
+	}
+	if len(config.RetryBackoff) == 0 {
+		config.RetryBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute}
+	}
 	return &SatInterface{
+		queue:    make(chan satOut, config.QueueSize),
 		config:   config,
 		sat:      sat,
 		callback: callback,
@@ -84,6 +121,7 @@ func (s *SatInterface) Start(ctx context.Context) error {
 
 	// Subscribe to transport events for push-based MT and status changes
 	go s.eventLoop(ctx)
+	go s.sendLoop(ctx)
 
 	log.Info().Str("iface", s.config.Name).Str("type", string(s.config.Type)).
 		Int("mtu", s.config.MTU).Bool("online", s.IsOnline()).
@@ -109,17 +147,85 @@ func (s *SatInterface) Send(ctx context.Context, packet []byte) error {
 		return fmt.Errorf("packet %d bytes exceeds MTU %d for %s", len(wire), s.config.MTU, s.config.Name)
 	}
 
-	result, err := s.sat.Send(ctx, wire)
-	if err != nil {
-		return fmt.Errorf("sat send: %w", err)
+	// Queued, not sent: an MO can take minutes, and the caller (the
+	// Reticulum node) must not wait for it or race another packet past it.
+	select {
+	case s.queue <- satOut{wire: append([]byte(nil), wire...), queued: time.Now()}:
+		s.mu.Lock()
+		s.queued++
+		s.mu.Unlock()
+		return nil
+	default:
+		s.mu.Lock()
+		s.dropped++
+		s.mu.Unlock()
+		return fmt.Errorf("satellite interface %s: send queue full (%d)", s.config.Name, s.config.QueueSize)
 	}
-	if !result.MOSuccess() {
-		return fmt.Errorf("sat send failed (mo_status=%d)", result.MOStatus)
-	}
+}
 
-	log.Debug().Str("iface", s.config.Name).Int("size", len(packet)).
-		Int("mo_status", result.MOStatus).Msg("sat iface: packet sent")
-	return nil
+// QueueStats reports the send queue's counters.
+func (s *SatInterface) QueueStats() SatQueueStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SatQueueStats{Queued: s.queued, Sent: s.sent, Retried: s.retried, Dropped: s.dropped, Waiting: len(s.queue)}
+}
+
+// sendLoop is the only sender: one packet at a time, in order.
+func (s *SatInterface) sendLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case out := <-s.queue:
+			s.sendOne(ctx, out)
+		}
+	}
+}
+
+// sendOne tries one packet until it is sent or too old. The packets behind
+// it wait: order matters more than any single packet's latency.
+func (s *SatInterface) sendOne(ctx context.Context, out satOut) {
+	for attempt := 0; ; attempt++ {
+		if age := time.Since(out.queued); age > s.config.MaxAge {
+			s.mu.Lock()
+			s.dropped++
+			s.mu.Unlock()
+			log.Warn().Str("iface", s.config.Name).Dur("age", age).Int("attempts", attempt).Msg("sat iface: packet dropped, not sent in time")
+			return
+		}
+		actx, cancel := context.WithTimeout(ctx, s.config.SendTimeout)
+		result, err := s.sat.Send(actx, out.wire)
+		cancel()
+		if err == nil && result != nil && result.MOSuccess() {
+			s.mu.Lock()
+			s.sent++
+			s.mu.Unlock()
+			log.Debug().Str("iface", s.config.Name).Int("size", len(out.wire)).Int("attempt", attempt+1).
+				Dur("waited", time.Since(out.queued)).Msg("sat iface: packet sent")
+			return
+		}
+		if err == nil {
+			mo := -1
+			if result != nil {
+				mo = result.MOStatus
+			}
+			err = fmt.Errorf("mo_status=%d", mo)
+		}
+		wait := s.config.RetryBackoff[min(attempt, len(s.config.RetryBackoff)-1)]
+		s.mu.Lock()
+		s.retried++
+		s.mu.Unlock()
+		log.Warn().Err(err).Str("iface", s.config.Name).Int("attempt", attempt+1).Dur("retry_in", wait).Msg("sat iface: send failed, retrying before the next packet")
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case <-time.After(wait):
+		}
+	}
 }
 
 // Stop shuts down the satellite interface.

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"meshsat/internal/rns"
+	"meshsat/internal/routing"
 )
 
 // rnsStatusResponse is the /api/rns/status body.
@@ -18,6 +19,9 @@ type rnsStatusResponse struct {
 	Paths       int       `json:"paths"`
 	Links       int       `json:"links"`
 	Stats       rns.Stats `json:"stats"`
+	// IMTQueue is iridium_imt_0's send queue: packets waiting for the 9704,
+	// sent, retried, dropped [MESHSAT-1548]. Absent without a 9704.
+	IMTQueue *routing.SatQueueStats `json:"imt_queue,omitempty"`
 }
 
 // rnsLinkResponse describes one link.
@@ -54,10 +58,15 @@ func (s *Server) handleRNSStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.rnsNode.IdentityHash()
-	writeJSON(w, http.StatusOK, rnsStatusResponse{
+	resp := rnsStatusResponse{
 		Enabled: true, TransportID: hex.EncodeToString(tid[:]),
 		Paths: s.rnsNode.Paths().Count(), Links: len(s.rnsNode.Links().All()), Stats: s.rnsNode.Stats(),
-	})
+	}
+	if s.imtIface != nil {
+		q := s.imtIface.QueueStats()
+		resp.IMTQueue = &q
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleRNSPaths lists the path table.
