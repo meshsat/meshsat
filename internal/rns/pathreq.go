@@ -132,7 +132,7 @@ func (n *Node) handlePathRequest(pkt *Packet) {
 	n.mu.Unlock()
 	var tag16 [HashLen]byte
 	copy(tag16[:], tag)
-	for _, id := range n.tx.Floodable() {
+	for _, id := range append(n.tx.Floodable(), n.paidTake(dest, paidPathRequest, pkt.Iface)...) {
 		if id != pkt.Iface {
 			n.sendPathRequest(dest, id, tag16)
 		}
@@ -194,7 +194,7 @@ func (n *Node) RequestPath(ctx context.Context, dest [HashLen]byte, timeout time
 	n.pathRequests[dest] = n.now()
 	n.mu.Unlock()
 	tag := randomHash()
-	for _, id := range n.tx.Floodable() {
+	for _, id := range append(n.tx.Floodable(), n.paidTake(dest, paidPathRequest, "")...) {
 		n.sendPathRequest(dest, id, tag)
 	}
 	select {

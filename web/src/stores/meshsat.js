@@ -1662,6 +1662,21 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
+  // Paid links: Reticulum allow-list per satellite/SMS interface [MESHSAT-1547]
+  const paidLinks = ref([])
+  async function fetchPaidLinks() {
+    try {
+      const data = await api.get('/routing/paid-links')
+      paidLinks.value = Array.isArray(data) ? data : []
+    } catch { paidLinks.value = [] }
+  }
+  async function setPaidLink(ifaceID, policy) {
+    try {
+      await api.put(`/routing/paid-links/${ifaceID}`, policy)
+      await fetchPaidLinks()
+    } catch (e) { error.value = e.message; throw e }
+  }
+
   // Reticulum dashboard widget
   const reticulumStatus = ref({ identity: null, destinations: 0, peers: [], links: 0, interfaces: [] })
   async function fetchReticulumStatus() {
@@ -1981,6 +1996,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     credentials, expiringCredentials, fetchCredentials, fetchExpiringCredentials,
     uploadCredential, deleteCredential, applyCredential,
     routingInterfaces, fetchRoutingInterfaces, setFloodable,
+    paidLinks, fetchPaidLinks, setPaidLink,
     reticulumStatus, fetchReticulumStatus,
     aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity,
     bondGroups, fetchBondGroups,

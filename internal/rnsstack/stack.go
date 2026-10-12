@@ -76,6 +76,13 @@ func (t *registryTx) Floodable() []string {
 
 func (t *registryTx) HWMTU(ifaceID string) int { return t.reg.GetMTU(ifaceID) }
 
+// Online lets the node skip a paid interface that is down instead of
+// booking an announce on it [MESHSAT-1547].
+func (t *registryTx) Online(ifaceID string) bool {
+	ri := t.reg.Get(ifaceID)
+	return ri != nil && ri.IsOnline()
+}
+
 // Bitrate maps an interface id to the bit rate the announce cap works with.
 // TCP, MQTT and the like are unlimited (0); the radios use the same table
 // as the time-sync limiter.
@@ -145,6 +152,13 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		}
 	}
 	if cfg.DB != nil {
+		if raw, err := cfg.DB.GetSystemConfig(rns.PaidPoliciesConfigKey); err == nil && raw != "" {
+			if n, err := node.LoadPaidPolicies(raw); err != nil {
+				log.Warn().Err(err).Msg("rns: paid link policies unreadable, every paid link stays closed")
+			} else if n > 0 {
+				log.Info().Int("interfaces", n).Msg("rns: paid link policies loaded")
+			}
+		}
 		st.loadPaths()
 		node.OnPathChanged = func(dest [rns.HashLen]byte, e *rns.PathEntry) { go st.persistPath(e) }
 	}

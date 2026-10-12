@@ -788,6 +788,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/routing/identity", s.handleGetRoutingIdentity)
 		r.Get("/routing/floodable", s.handleGetFloodable)
 		r.Put("/routing/floodable/{ifaceID}", s.handleSetFloodable)
+		r.Get("/routing/paid-links", s.handleGetPaidLinks)                // [MESHSAT-1547]
+		r.Put("/routing/paid-links/{ifaceID}", s.handleSetPaidLink)       // [MESHSAT-1547]
+		r.Delete("/routing/paid-links/{ifaceID}", s.handleDeletePaidLink) // [MESHSAT-1547]
 		r.Get("/routing/config", s.handleGetRoutingConfig)
 		r.Put("/routing/config", s.handleSetRoutingConfig)
 		r.Get("/routing/peers", s.handleGetPeers)
