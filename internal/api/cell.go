@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"meshsat/internal/database"
@@ -197,4 +198,46 @@ func (s *Server) handleCellPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, peers)
+}
+
+// @Summary The cell's transmit log
+// @Description Every key-up, key-down and refused key-up of the 2G cell's radio, oldest first: time (UTC), event, ARFCN and frequency, the TX setting, the estimated output, the purpose, the operator and the licence cited. The row is written before the radio keys up. format=md returns the table the monthly report is drawn from.
+// @Tags cell
+// @Produce json
+// @Param format query string false "md for the markdown table"
+// @Param limit query integer false "at most this many rows (default all)"
+// @Success 200 {array} database.CellTXRow
+// @Failure 500 {object} map[string]string
+// @Router /api/cell/txlog [get]
+func (s *Server) handleCellTXLog(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	rows, err := s.db.ListCellTX(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if r.URL.Query().Get("format") != "md" {
+		writeJSON(w, http.StatusOK, rows)
+		return
+	}
+	var b strings.Builder
+	b.WriteString("| UTC | freq (MHz) / ARFCN | TX setting | est. output | event | purpose | operator | licence |\n")
+	b.WriteString("|-----|--------------------|-----------|-------------|-------|---------|----------|---------|\n")
+	for _, row := range rows {
+		esc := func(v string) string { return strings.ReplaceAll(v, "|", "/") }
+		at := row.At
+		if !strings.HasSuffix(at, "Z") {
+			at += "Z"
+		}
+		b.WriteString("| " + at + " | " + strconv.FormatFloat(row.FreqMHz, 'f', 1, 64) + " / ARFCN " + strconv.Itoa(row.ARFCN) + " | " +
+			esc(row.Setting) + " | " + esc(row.Output) + " | " + row.Event + " | " + esc(row.Purpose) + " | " + esc(row.Operator) + " | " + esc(row.Licence) + " |\n")
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(b.String()))
 }

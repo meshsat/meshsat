@@ -123,3 +123,66 @@ func (db *DB) NudgeDeliveries(channel string, destinations []string) (int64, err
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// CellTXRow is one line of the cell's transmit log. [MESHSAT-1578]
+type CellTXRow struct {
+	ID       int64   `json:"id"`
+	At       string  `json:"at"`
+	Event    string  `json:"event"`
+	ARFCN    int     `json:"arfcn"`
+	FreqMHz  float64 `json:"freq_mhz"`
+	Setting  string  `json:"setting"`
+	Output   string  `json:"output"`
+	Purpose  string  `json:"purpose"`
+	Operator string  `json:"operator"`
+	Licence  string  `json:"licence"`
+}
+
+// InsertCellTX appends a transmit-log row.
+func (db *DB) InsertCellTX(at time.Time, event string, arfcn int, freqMHz float64, setting, output, purpose, operator, licence string) error {
+	_, err := db.Exec(`INSERT INTO cell_tx_log (at, event, arfcn, freq_mhz, setting, output, purpose, operator, licence)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		at.UTC().Format("2006-01-02 15:04:05"), event, arfcn, freqMHz, setting, output, purpose, operator, licence)
+	if err != nil {
+		return fmt.Errorf("insert cell tx log: %w", err)
+	}
+	return nil
+}
+
+// ListCellTX returns the transmit log, oldest first, at most limit rows
+// (0 = all).
+func (db *DB) ListCellTX(limit int) ([]CellTXRow, error) {
+	q := `SELECT id, at, event, arfcn, freq_mhz, setting, output, purpose, operator, licence FROM cell_tx_log ORDER BY id ASC`
+	var rows interface {
+		Next() bool
+		Scan(dest ...any) error
+		Close() error
+		Err() error
+	}
+	var err error
+	if limit > 0 {
+		rows, err = db.Query(q+" LIMIT ?", limit)
+	} else {
+		rows, err = db.Query(q)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list cell tx log: %w", err)
+	}
+	defer rows.Close()
+	out := []CellTXRow{}
+	for rows.Next() {
+		var r CellTXRow
+		if err := rows.Scan(&r.ID, &r.At, &r.Event, &r.ARFCN, &r.FreqMHz, &r.Setting, &r.Output, &r.Purpose, &r.Operator, &r.Licence); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CountCellTX counts the transmit-log rows.
+func (db *DB) CountCellTX() (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM cell_tx_log`).Scan(&n)
+	return n, err
+}

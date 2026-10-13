@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/cell"
 	"meshsat/internal/database"
 )
 
@@ -33,6 +34,9 @@ type CellHost struct {
 	agent HostCaller
 	db    *database.DB
 	mgr   *Manager
+	// local runs the cell inside the Bridge (the image carries the Osmocom
+	// daemons); nil falls back to the kit's host package through the agent.
+	local *cell.Runner
 
 	mu        sync.Mutex
 	port      string
@@ -42,10 +46,15 @@ type CellHost struct {
 	adopting  bool
 }
 
-// NewCellHost wires the host agent, the database and the gateway manager.
-func NewCellHost(agent HostCaller, db *database.DB, mgr *Manager) *CellHost {
-	return &CellHost{agent: agent, db: db, mgr: mgr}
+// NewCellHost wires the host agent, the database and the gateway manager;
+// local, when not nil, runs the cell inside the Bridge and the agent is
+// not used.
+func NewCellHost(agent HostCaller, db *database.DB, mgr *Manager, local *cell.Runner) *CellHost {
+	return &CellHost{agent: agent, db: db, mgr: mgr, local: local}
 }
+
+// Local reports whether the cell runs inside the Bridge.
+func (h *CellHost) Local() bool { return h.local != nil }
 
 const cellInstance = "cell_0"
 
@@ -102,6 +111,11 @@ func (h *CellHost) OnPlutoConnected(ctx context.Context, port string) {
 	log.Info().Str("port", port).Msg("cell: the cell's SDR is on USB, adopting it")
 	h.mgr.emitEvent("cell", "The cell's SDR (Pluto) is on USB, adopting it")
 
+	if h.local != nil {
+		h.adoptLocal(ctx)
+		return
+	}
+
 	st, err := h.call(ctx, "cell_adopt", nil, 25*time.Second)
 	if err != nil {
 		h.setErr(err)
@@ -137,6 +151,45 @@ func (h *CellHost) OnPlutoConnected(ctx context.Context, port string) {
 	h.mu.Unlock()
 	log.Info().Msg("cell: adopted; the core is up and cell_0 is binding; the radio waits for an operator")
 	h.mgr.emitEvent("cell", "Cell adopted: core up, cell_0 binding; the radio waits for an operator's purpose")
+}
+
+// adoptLocal runs the cell inside the Bridge: the Pluto's network, the
+// daemons, the SIMs, the radio when auto, then cell_0 bound to the local
+// SMPP server with the generated password.
+func (h *CellHost) adoptLocal(ctx context.Context) {
+	cfg := h.local.Config()
+	if err := h.local.Up(ctx); err != nil {
+		h.setErr(err)
+		log.Warn().Err(err).Msg("cell: the cell did not come up")
+		h.mgr.emitEvent("cell", "Cell not up: "+err.Error())
+		return
+	}
+	setCellHostPassword(h.local.Password())
+	smpp := map[string]any{"bind": "127.0.0.1", "port": cell.SMPPPort, "system_id": cfg.SMPPSystemID,
+		"short_code": cfg.ShortCode, "password": h.local.Password()}
+	if err := h.seedGateway(smpp); err != nil {
+		h.setErr(err)
+		log.Warn().Err(err).Msg("cell: cell_0 not seeded")
+		return
+	}
+	h.mgr.ensureLink("cell", true)
+	if err := h.startGateway(ctx); err != nil {
+		h.setErr(err)
+		log.Warn().Err(err).Msg("cell: cell_0 did not start")
+		return
+	}
+	h.mu.Lock()
+	h.adoptedAt = time.Now()
+	h.lastErr = ""
+	h.mu.Unlock()
+	radio := "the radio waits for an operator"
+	if h.local.RadioActive() {
+		radio = "the radio is on the air"
+	} else if cfg.AutoRadio {
+		radio = "the radio did not key up (see the cell status)"
+	}
+	log.Info().Msg("cell: adopted; core up, cell_0 binding; " + radio)
+	h.mgr.emitEvent("cell", "Cell adopted: core up, cell_0 binding; "+radio)
 }
 
 // seedGateway writes cell_0 from the host's settings when there is no row,
@@ -218,11 +271,15 @@ func (h *CellHost) OnPlutoRemoved(ctx context.Context, port string) {
 	h.mu.Unlock()
 	log.Warn().Str("port", port).Msg("cell: the cell's SDR left the USB bus; radio and core down")
 	h.mgr.emitEvent("cell", "The cell's SDR left: radio and core stopped, cell_0 off")
-	if _, err := h.call(ctx, "cell_radio", map[string]any{"op": "stop"}, 60*time.Second); err != nil && !errors.Is(err, ErrNoCellKit) {
-		log.Warn().Err(err).Msg("cell: radio stop after the Pluto left")
-	}
-	if _, err := h.call(ctx, "cell_core", map[string]any{"op": "stop"}, 60*time.Second); err != nil && !errors.Is(err, ErrNoCellKit) {
-		log.Warn().Err(err).Msg("cell: core stop after the Pluto left")
+	if h.local != nil {
+		h.local.Down(ctx)
+	} else {
+		if _, err := h.call(ctx, "cell_radio", map[string]any{"op": "stop"}, 60*time.Second); err != nil && !errors.Is(err, ErrNoCellKit) {
+			log.Warn().Err(err).Msg("cell: radio stop after the Pluto left")
+		}
+		if _, err := h.call(ctx, "cell_core", map[string]any{"op": "stop"}, 60*time.Second); err != nil && !errors.Is(err, ErrNoCellKit) {
+			log.Warn().Err(err).Msg("cell: core stop after the Pluto left")
+		}
 	}
 	if err := h.mgr.StopGatewayInstance(cellInstance); err != nil {
 		log.Debug().Err(err).Msg("cell: cell_0 was not running")
@@ -232,15 +289,26 @@ func (h *CellHost) OnPlutoRemoved(ctx context.Context, port string) {
 	}
 }
 
+// Shutdown keys the radio down and stops the core when the Bridge stops:
+// the daemons are its children and an emission never outlives the process
+// that logged it.
+func (h *CellHost) Shutdown(ctx context.Context) {
+	if h.local != nil && h.local.IsUp() {
+		h.local.Down(ctx)
+	}
+}
+
 // HostStatus is what the host reports plus what the bridge knows.
 type HostStatus struct {
-	Agent     bool           `json:"agent"`      // the host agent answers
-	Installed bool           `json:"installed"`  // the kit has the cell package
-	PlutoPort string         `json:"pluto_port"` // the console tty the bridge saw the SDR on
-	Present   bool           `json:"present"`    // the SDR is on USB (the bridge's view)
-	AdoptedAt *time.Time     `json:"adopted_at,omitempty"`
-	LastError string         `json:"last_error,omitempty"`
-	Host      map[string]any `json:"host,omitempty"` // cellctl status: pluto, core, radio, bts, phones, licence, tx_log
+	Agent     bool       `json:"agent"`      // the host agent answers
+	Installed bool       `json:"installed"`  // the kit has the cell package
+	PlutoPort string     `json:"pluto_port"` // the console tty the bridge saw the SDR on
+	Present   bool       `json:"present"`    // the SDR is on USB (the bridge's view)
+	AdoptedAt *time.Time `json:"adopted_at,omitempty"`
+	LastError string     `json:"last_error,omitempty"`
+	TXLogRows int        `json:"tx_log_rows"`
+	Host      any        `json:"host,omitempty"` // the cell's status: pluto, core, radio, bts, phones, licence (cell.Status, or cellctl's JSON)
+	Local     bool       `json:"local"`          // the daemons run inside the Bridge
 }
 
 // Status asks the host and merges the bridge's own view.
@@ -252,6 +320,14 @@ func (h *CellHost) Status(ctx context.Context) HostStatus {
 		st.AdoptedAt = &t
 	}
 	h.mu.Unlock()
+	if h.local != nil {
+		st.Local, st.Installed, st.Agent = true, true, true
+		if n, err := h.db.CountCellTX(); err == nil {
+			st.TXLogRows = n
+		}
+		st.Host = h.local.Status()
+		return st
+	}
 	st.Agent = h.agent != nil && h.agent.Available()
 	if !st.Agent {
 		return st
@@ -281,6 +357,14 @@ func (h *CellHost) Radio(ctx context.Context, op, purpose string) (map[string]an
 		if len(purpose) < 3 {
 			return nil, errors.New("cell: a purpose for the TX log is required to key the radio up")
 		}
+		if h.local != nil {
+			if err := h.local.RadioStart(ctx, purpose); err != nil {
+				h.mgr.emitEvent("cell", "Radio NOT keyed up: "+err.Error())
+				return nil, err
+			}
+			h.mgr.emitEvent("cell", "Radio keyed up: "+purpose)
+			return map[string]any{"radio": "up", "arfcn": []int{h.local.Config().ARFCN}, "licence": h.local.Config().Licence}, nil
+		}
 		res, err := h.call(ctx, "cell_radio", map[string]any{"op": "start", "purpose": purpose}, 90*time.Second)
 		if err != nil {
 			h.mgr.emitEvent("cell", "Radio NOT keyed up: "+err.Error())
@@ -289,6 +373,13 @@ func (h *CellHost) Radio(ctx context.Context, op, purpose string) (map[string]an
 		h.mgr.emitEvent("cell", "Radio keyed up: "+purpose)
 		return res, nil
 	case "stop":
+		if h.local != nil {
+			if err := h.local.RadioStop(ctx); err != nil {
+				return nil, err
+			}
+			h.mgr.emitEvent("cell", "Radio keyed down")
+			return map[string]any{"radio": "down"}, nil
+		}
 		res, err := h.call(ctx, "cell_radio", map[string]any{"op": "stop"}, 60*time.Second)
 		if err != nil {
 			return nil, err
@@ -303,6 +394,20 @@ func (h *CellHost) Radio(ctx context.Context, op, purpose string) (map[string]an
 func (h *CellHost) Core(ctx context.Context, op string) (map[string]any, error) {
 	if op != "start" && op != "stop" {
 		return nil, fmt.Errorf("cell: unknown core action %q (start or stop)", op)
+	}
+	if h.local != nil {
+		if op == "stop" {
+			h.local.Down(ctx)
+			return map[string]any{"core": "down"}, nil
+		}
+		if err := h.local.UpCore(ctx); err != nil {
+			return nil, err
+		}
+		setCellHostPassword(h.local.Password())
+		if err := h.startGateway(ctx); err != nil {
+			log.Warn().Err(err).Msg("cell: cell_0 did not start with the core")
+		}
+		return map[string]any{"core": "up"}, nil
 	}
 	res, err := h.call(ctx, "cell_core", map[string]any{"op": op}, 60*time.Second)
 	if err != nil {

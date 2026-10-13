@@ -119,7 +119,7 @@ func TestCellHostAdoptsAndReleasesThePluto(t *testing.T) {
 	var evMu sync.Mutex
 	m.SetEventEmitFunc(func(_, msg string) { evMu.Lock(); events = append(events, msg); evMu.Unlock() })
 	agent := &fakeAgent{available: true, installed: true, password: "kitpw", bind: host, port: atoi(port)}
-	h := NewCellHost(agent, db, m)
+	h := NewCellHost(agent, db, m, nil)
 	m.SetCellHost(h)
 	t.Cleanup(func() { setCellHostPassword("") })
 
@@ -195,7 +195,7 @@ func TestCellHostWithoutAgentOrPackage(t *testing.T) {
 	m := NewManager(db, nil)
 	t.Cleanup(m.Stop)
 	// No agent socket: nothing happens, the status says so.
-	h := NewCellHost(&fakeAgent{available: false}, db, m)
+	h := NewCellHost(&fakeAgent{available: false}, db, m, nil)
 	h.OnPlutoConnected(context.Background(), "/dev/ttyACM3")
 	if st := h.Status(context.Background()); st.Agent || st.LastError == "" || !strings.Contains(st.LastError, "host agent") {
 		t.Fatalf("status %+v", st)
@@ -204,7 +204,7 @@ func TestCellHostWithoutAgentOrPackage(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	// Agent there, no cell package: the status says so, nothing is seeded.
-	h = NewCellHost(&fakeAgent{available: true, installed: false}, db, m)
+	h = NewCellHost(&fakeAgent{available: true, installed: false}, db, m, nil)
 	h.OnPlutoConnected(context.Background(), "/dev/ttyACM3")
 	if st := h.Status(context.Background()); !st.Agent || st.Installed {
 		t.Fatalf("status %+v", st)
