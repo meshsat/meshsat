@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"meshsat/internal/reticulum"
 )
 
 // satNet builds A - T1 =sat= T2 - B: T1 and T2 are bridges joined by a paid
@@ -338,5 +340,98 @@ func TestCrossesPaidLink(t *testing.T) {
 	var unknown [HashLen]byte
 	if t1.CrossesPaidLink(unknown) {
 		t.Fatalf("an unknown destination crosses nothing")
+	}
+}
+
+// A destination ON the far bridge (its own lxmf.delivery) is announced
+// HEADER_1 across the paid link, so the near bridge's path names the
+// destination itself as next hop while ExtraHops counts it as many hops.
+// It is still a direct neighbour: packets to it must go HEADER_1, or the
+// receiver drops them as transport traffic for somebody else. Found by the
+// meshsat-android session (MESHSAT-1553) on the phone <-> Tim's Bridge leg.
+// [MESHSAT-1548]
+func TestPaidLinkExtraHopsReachTheFarBridgeItself(t *testing.T) {
+	_, t1, t2, _, _, _, cancel := satNet(t)
+	defer cancel()
+	got := make(chan string, 4)
+	far := t2.AddDestination(&Destination{Name: "test.delivery", AcceptLinks: true, ProveAll: true,
+		OnPacket:     func(plain []byte, pkt *Packet) { got <- string(plain) },
+		OnLinkPacket: func(l *Link, plain []byte, pkt *Packet) { got <- string(plain) }})
+	for _, n := range []*Node{t1, t2} {
+		n.SetPaidPolicy("sat", &PaidPolicy{Dests: [][HashLen]byte{far.Hash}, ExtraHops: 8})
+	}
+	if err := t2.Announce(far, "", false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "T1 learns the far bridge's own destination across the inflated hop", func() bool { return t1.Paths().Hops(far.Hash) == 9 })
+	if e := t1.paths.Get(far.Hash); e == nil || e.NextHop != far.Hash {
+		t.Fatalf("path %+v: want the destination itself as next hop", e)
+	}
+
+	r, err := t1.SendData(far.Hash, []byte("to the far bridge"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case res := <-r.Done():
+		if !res.Delivered {
+			t.Fatalf("packet to a direct neighbour across the paid link not proved")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no proof back from the far bridge")
+	}
+	if s := <-got; s != "to the far bridge" {
+		t.Fatalf("got %q", s)
+	}
+
+	established := make(chan *Link, 1)
+	l, err := t1.Links().Initiate(far.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.OnEstablished = func(l *Link) { established <- l }
+	select {
+	case <-established:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("link to the far bridge's own destination not established, state %s", l.State())
+	}
+}
+
+// The same packet as an older MeshSat node writes it, HEADER_2 with the
+// destination itself as transport id, is taken as local instead of
+// dropped. [MESHSAT-1548]
+func TestHeader2NamingALocalDestinationIsTakenAsLocal(t *testing.T) {
+	_, t1, t2, _, _, _, cancel := satNet(t)
+	defer cancel()
+	got := make(chan string, 1)
+	far := t2.AddDestination(&Destination{Name: "test.delivery", ProveAll: true,
+		OnPacket: func(plain []byte, pkt *Packet) { got <- string(plain) }})
+	for _, n := range []*Node{t1, t2} {
+		n.SetPaidPolicy("sat", &PaidPolicy{Dests: [][HashLen]byte{far.Hash}, ExtraHops: 8})
+	}
+	if err := t2.Announce(far, "", false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "T1 learns the far destination", func() bool { return t1.Paths().Hops(far.Hash) == 9 })
+	k := t1.Recall(far.Hash)
+	if k == nil || k.Identity == nil {
+		t.Fatal("far identity not recalled")
+	}
+	ct, err := k.Identity.Encrypt([]byte("old style"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := (&reticulum.Header{HeaderType: reticulum.HeaderType1, DestType: reticulum.DestSingle, PacketType: reticulum.PacketData,
+		Hops: 9, DestHash: far.Hash, Context: reticulum.ContextNone, Data: ct}).Marshal()
+	if !t2.Inbound(reticulum.RewriteForTransport(raw, far.Hash), "sat") {
+		t.Fatalf("not handled")
+	}
+	select {
+	case s := <-got:
+		if s != "old style" {
+			t.Fatalf("got %q", s)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("HEADER_2 naming the local destination as transport id was dropped")
 	}
 }

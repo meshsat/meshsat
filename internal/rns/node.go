@@ -362,6 +362,19 @@ func (n *Node) Inbound(raw []byte, ifaceID string) bool {
 	if err != nil {
 		return false
 	}
+	// A MeshSat node from before this fix (MESHSAT-1548) wrote a packet to a neighbour
+	// across a paid link with ExtraHops as HEADER_2, the destination itself
+	// as transport id. When that destination is ours, it is ours: strip the
+	// header instead of dropping the packet as transport traffic for
+	// somebody else. The packet hash leaves the transport fields out, so it
+	// does not change.
+	if hdr.HeaderType == reticulum.HeaderType2 && hdr.PacketType != reticulum.PacketAnnounce &&
+		hdr.TransportID == hdr.DestHash && hdr.TransportID != n.idHash && n.LocalDestination(hdr.DestHash) != nil {
+		if stripped, serr := reticulum.UnmarshalHeader(reticulum.StripTransport(raw)); serr == nil {
+			raw = reticulum.StripTransport(raw)
+			hdr = stripped
+		}
+	}
 	n.noteCrossing(ifaceID, raw, true)
 	pkt := &Packet{Raw: raw, Hdr: hdr, Hash: reticulum.PacketHash(raw), Iface: ifaceID}
 	n.count(func(s *Stats) { s.RxPackets++ })

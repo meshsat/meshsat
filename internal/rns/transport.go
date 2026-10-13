@@ -42,7 +42,7 @@ func (n *Node) forwardTransport(pkt *Packet) bool {
 	now := n.now()
 	var out []byte
 	switch {
-	case entry.Hops > 1:
+	case !entry.Direct():
 		out = reticulum.RewriteForTransport(pkt.Raw, entry.NextHop)
 	default:
 		out = reticulum.StripTransport(pkt.Raw)
@@ -115,7 +115,7 @@ func (n *Node) forwardHeader1(pkt *Packet) bool {
 		return false
 	}
 	var out []byte
-	if entry.Hops > 1 {
+	if !entry.Direct() {
 		out = reticulum.RewriteForTransport(pkt.Raw, entry.NextHop)
 	} else {
 		out = append([]byte(nil), pkt.Raw...)

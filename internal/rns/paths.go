@@ -22,8 +22,15 @@ type PathEntry struct {
 	Unresponsive bool
 }
 
-// Direct reports whether the destination is one hop away.
-func (e *PathEntry) Direct() bool { return e.Hops <= 1 }
+// Direct reports whether the destination is a neighbour, reached without a
+// transport header. Upstream reads that from hops <= 1 alone, which holds
+// while hops are never inflated; a paid link's ExtraHops counts a neighbour
+// across it as many hops, so a path learned from the destination's own
+// HEADER_1 announce (next hop = the destination) is direct as well.
+// Otherwise every packet to it went HEADER_2 with the destination as
+// transport id, and the receiver dropped it as somebody else's transport
+// traffic. [MESHSAT-1548]
+func (e *PathEntry) Direct() bool { return e.Hops <= 1 || e.NextHop == e.DestHash }
 
 // EmittedAt is the newest emission timestamp among the random blobs.
 func (e *PathEntry) EmittedAt() int64 {
