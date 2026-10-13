@@ -809,6 +809,12 @@ func (s *DeviceSupervisor) claimAndNotify(port, vidpid string, role DeviceRole, 
 
 // classifyByVIDPID returns the role for a known VID:PID, or RoleNone for unknown/ambiguous.
 func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
+	// The cell's SDR: claimed by id so no probe ever types into its console.
+	// [MESHSAT-1578]
+	if knownCellSDRVIDPIDs[vidpid] {
+		return RoleCellSDR
+	}
+
 	// Check for unambiguous Meshtastic (not shared with ZigBee or cellular)
 	if knownMeshtasticVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] {
 		return RoleMeshtastic

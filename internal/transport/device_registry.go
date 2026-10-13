@@ -19,7 +19,11 @@ const (
 	RoleGPS         DeviceRole = "gps"
 	RoleZigBee      DeviceRole = "zigbee"
 	RoleRNode       DeviceRole = "rnode" // RNode firmware LoRa radio (Reticulum native) [MESHSAT-1349]
-	RoleNone        DeviceRole = ""
+	// RoleCellSDR is the MeshSat 2G cell's SDR (a Pluto Nano on the
+	// meshsat-cell image): known by USB id, never opened by the bridge (its
+	// tty is a Linux console), adopted through the host agent. [MESHSAT-1578]
+	RoleCellSDR DeviceRole = "cell_sdr"
+	RoleNone    DeviceRole = ""
 )
 
 // DeviceState tracks a device's lifecycle from detection through connection.

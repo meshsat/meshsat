@@ -447,6 +447,15 @@ var knownMeshtasticVIDPIDs = map[string]bool{
 	"1915:520f": true, // Nordic nRF52840 (RAK, T-Echo)
 }
 
+// The MeshSat 2G cell's SDR: a Pluto Nano (Analog Devices 0456:b673 running,
+// 0456:b674 in DFU). It enumerates with an RNDIS network interface, a mass
+// storage and a CDC-ACM console; the console tty is a Linux login, so the
+// bridge never opens it. [MESHSAT-1578]
+var knownCellSDRVIDPIDs = map[string]bool{
+	"0456:b673": true,
+	"0456:b674": true,
+}
+
 // GPS VID:PID pairs to exclude from radio scan
 var gpsVIDPIDs = map[string]bool{
 	"1546:01a6": true, // u-blox 7 older variant (ACM)
@@ -708,9 +717,10 @@ func ClassifyDevice(vidpid string) string {
 	inC := knownCellularVIDPIDs[vidpid]
 	inZ := knownZigBeeOnlyVIDPIDs[vidpid] || ambiguousZigBeeVIDPIDs[vidpid]
 	inG := gpsVIDPIDs[vidpid]
+	inS := knownCellSDRVIDPIDs[vidpid]
 
 	n := 0
-	for _, b := range []bool{inM, inI, inC, inZ, inG} {
+	for _, b := range []bool{inM, inI, inC, inZ, inG, inS} {
 		if b {
 			n++
 		}
@@ -728,6 +738,8 @@ func ClassifyDevice(vidpid string) string {
 		return "cellular"
 	case inZ:
 		return "zigbee"
+	case inS:
+		return "cell_sdr"
 	case inG:
 		return "gps"
 	}
@@ -762,6 +774,8 @@ func DeviceTypeForRole(role DeviceRole) string {
 		return "gps"
 	case RoleRNode:
 		return "rnode"
+	case RoleCellSDR:
+		return "cell_sdr"
 	}
 	return ""
 }
@@ -863,3 +877,6 @@ var knownZigBeeOnlyVIDPIDs = map[string]bool{
 // RNodeCapableVIDPID is the exported form of rnodeCapableVIDPID for the
 // port picker in Settings > Routing. [MESHSAT-1350]
 func RNodeCapableVIDPID(vidpid string) bool { return rnodeCapableVIDPID(vidpid) }
+
+// ClassifyDeviceForTest is ClassifyDevice for other packages' tests.
+func ClassifyDeviceForTest(vidpid string) string { return ClassifyDevice(vidpid) }

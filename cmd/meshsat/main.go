@@ -683,6 +683,7 @@ func main() {
 			}
 		}
 	}
+	cellHost := gateway.NewCellHost(oobHost, db, gwMgr)
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
@@ -690,6 +691,9 @@ func main() {
 	// Wire device supervisor → gateway manager: auto-start/stop gateways
 	// when hardware is connected, disconnected, or hot-swapped.
 	if supervisor != nil {
+		// The cell's SDR (a Pluto on USB) is adopted through the host agent:
+		// core up, cell_0 bound; the radio waits for an operator. [MESHSAT-1578]
+		gwMgr.SetCellHost(cellHost)
 		gwMgr.WatchDeviceEvents(ctx, supervisor)
 		// Reconcile DB configs with actual hardware: stop gateways for missing
 		// devices, start gateways for detected devices with enabled configs.
@@ -1718,6 +1722,7 @@ func main() {
 	srv.SetGeofenceMonitor(geofenceMon)
 	proc.SetGeofenceMonitor(geofenceMon)
 	srv.SetHostClient(oobHost) // host reboot / poweroff from the panel, independent of the OOB service [MESHSAT-831]
+	srv.SetCellHost(cellHost)  // the cell's host side: Pluto, core, radio, phones [MESHSAT-1578]
 	srv.SetBurstQueue(burstQueue)
 	srv.SetSpectrumMonitor(spectrumMon)
 	srv.SetTimeConsensus(tsConsensus) // nil without routing [MESHSAT-778]

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -74,20 +75,112 @@ func (s *Server) handleCellSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "queued", "delivery_id": id, "to": gateway.CellAddress(msisdn)})
 }
 
-// @Summary MeshSat cell gateway status
-// @Description The cell gateway's settings (host, port, system id, short code, reply window, receipts) and its SMPP link: state (disconnected, connecting, bound), since when, the last error, reconnects and bind refusals, the enquire_link round trip, when the cell last sent anything, and the counters: texts in and out, texts refused because they were not for the short code, delivery receipts, submits refused because the phone was off the cell, alerts, errors, and concatenated parts still waiting for the rest.
+// cellStatusResponse is GET /api/cell/status: the gateway side (nil when no
+// cell gateway runs) and the kit's host side (the Pluto, the core, the radio,
+// the phones), when the host agent and the cell package are there.
+type cellStatusResponse struct {
+	Configured bool                `json:"configured"` // a cell gateway runs
+	Gateway    *gateway.CellStatus `json:"gateway,omitempty"`
+	Host       *gateway.HostStatus `json:"host,omitempty"`
+}
+
+// @Summary MeshSat cell status
+// @Description gateway: the cell gateway's settings and its SMPP link (state, since when, the last error, reconnects, bind refusals, enquire_link round trip) and counters (texts in and out, texts refused as not for the short code, receipts, submits refused because the phone was off the cell, alerts, errors, concatenated parts waiting); null when no cell gateway runs. host: the kit's host side through the OOB agent: whether the agent answers and the cell package is installed, the Pluto (on USB, state, interface, reachable), the core units, the radio (active, since), the BTS as osmo-bsc reports it, the phones the MSC's VLR knows, the ARFCN, the licence and site attestation, and the TX log. The radio keys up only through POST /api/cell/radio.
 // @Tags cell
 // @Produce json
-// @Success 200 {object} gateway.CellStatus
-// @Failure 503 {object} map[string]string "no cell gateway configured"
+// @Success 200 {object} cellStatusResponse
 // @Router /api/cell/status [get]
 func (s *Server) handleCellStatus(w http.ResponseWriter, r *http.Request) {
-	cg := s.cellGateway()
-	if cg == nil {
-		writeError(w, http.StatusServiceUnavailable, "no cell gateway: set CELL_SMPP_HOST or configure gateway type cell")
+	resp := cellStatusResponse{}
+	if cg := s.cellGateway(); cg != nil {
+		st := cg.CellStatus()
+		resp.Configured = true
+		resp.Gateway = &st
+	}
+	if s.cellHost != nil {
+		hs := s.cellHost.Status(r.Context())
+		resp.Host = &hs
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// cellRadioRequest is the body of POST /api/cell/radio.
+type cellRadioRequest struct {
+	Action  string `json:"action"`  // start or stop
+	Purpose string `json:"purpose"` // start: what this emission is for; written to the kit's TX log (licence RDI-2610-00385)
+}
+
+// @Summary Key the cell's radio up or down
+// @Description start keys osmo-bts-trx up on the kit's host through the OOB agent, after the host's preflight: DCS1800 and ARFCN 861-885 in the installed configs, band 1800 on the BTS, the Pluto on USB and running the meshsat-cell image, the licence number and the site attestation (CELL_SITE_OK=yes) in the host's cell.env. A purpose is required and goes into the kit's TX log before the radio keys up; a refusal names its reason. stop keys the radio down, writes the closing log row and parks the Pluto's transmitter. The core (no emission) is handled by POST /api/cell/core and by the adoption of the Pluto.
+// @Tags cell
+// @Accept json
+// @Produce json
+// @Param body body cellRadioRequest true "action and purpose" example({"action":"start","purpose":"MESHSAT-1578 e2e, Pixel texts the kit"})
+// @Success 200 {object} map[string]interface{} "what the host did: radio, arfcn, licence, tx_log"
+// @Failure 400 {object} map[string]string "unknown action, no purpose"
+// @Failure 409 {object} map[string]string "the host refused: the preflight's reason"
+// @Failure 503 {object} map[string]string "no host agent, or no cell package on the kit"
+// @Router /api/cell/radio [post]
+func (s *Server) handleCellRadio(w http.ResponseWriter, r *http.Request) {
+	if s.cellHost == nil {
+		writeError(w, http.StatusServiceUnavailable, "no cell host on this bridge")
 		return
 	}
-	writeJSON(w, http.StatusOK, cg.CellStatus())
+	var req cellRadioRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	res, err := s.cellHost.Radio(r.Context(), strings.ToLower(strings.TrimSpace(req.Action)), req.Purpose)
+	if err != nil {
+		writeError(w, cellHostErrorStatus(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// cellCoreRequest is the body of POST /api/cell/core.
+type cellCoreRequest struct {
+	Action string `json:"action"` // start or stop
+}
+
+// @Summary Start or stop the cell's core
+// @Description The core (stp, hlr, mgw, msc, cbc, bsc) on the kit's host, through the OOB agent; nothing transmits. start also binds cell_0. stop keys the radio down first.
+// @Tags cell
+// @Accept json
+// @Produce json
+// @Param body body cellCoreRequest true "action" example({"action":"start"})
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string "the host refused"
+// @Failure 503 {object} map[string]string "no host agent, or no cell package on the kit"
+// @Router /api/cell/core [post]
+func (s *Server) handleCellCore(w http.ResponseWriter, r *http.Request) {
+	if s.cellHost == nil {
+		writeError(w, http.StatusServiceUnavailable, "no cell host on this bridge")
+		return
+	}
+	var req cellCoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	res, err := s.cellHost.Core(r.Context(), strings.ToLower(strings.TrimSpace(req.Action)))
+	if err != nil {
+		writeError(w, cellHostErrorStatus(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func cellHostErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, gateway.ErrNoCellHost), errors.Is(err, gateway.ErrNoCellKit):
+		return http.StatusServiceUnavailable
+	case strings.Contains(err.Error(), "unknown"), strings.Contains(err.Error(), "purpose"):
+		return http.StatusBadRequest
+	}
+	return http.StatusConflict
 }
 
 // @Summary Phones seen on the MeshSat cell
