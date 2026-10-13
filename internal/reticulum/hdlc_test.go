@@ -211,3 +211,24 @@ func TestHDLCFrameReader_SpecialBytesInPayload(t *testing.T) {
 		t.Fatalf("payload mismatch: got %x, want %x", frames[0], payload)
 	}
 }
+
+// A frame that is opened and never closed is dropped once it is longer than
+// any frame can be, and the reader still decodes the next frame.
+func TestHDLCFrameReaderBoundsAnOpenFrame(t *testing.T) {
+	r := NewHDLCFrameReader()
+	chunk := bytes.Repeat([]byte{0x41}, 64*1024)
+	r.Feed([]byte{HDLCFlag})
+	for i := 0; i < 2*HDLCMaxBuffered/len(chunk); i++ {
+		if frames := r.Feed(chunk); len(frames) != 0 {
+			t.Fatalf("got a frame from an unterminated stream")
+		}
+		if len(r.buf) > HDLCMaxBuffered {
+			t.Fatalf("buffer grew to %d, bound is %d", len(r.buf), HDLCMaxBuffered)
+		}
+	}
+	pkt := bytes.Repeat([]byte{0x02}, HeaderMinSize+4)
+	frames := r.Feed(HDLCFrame(pkt))
+	if len(frames) != 1 || !bytes.Equal(frames[0], pkt) {
+		t.Fatalf("the next frame after the dropped one: got %d frames", len(frames))
+	}
+}

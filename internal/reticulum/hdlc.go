@@ -54,6 +54,13 @@ func HDLCFrame(data []byte) []byte {
 	return frame
 }
 
+// HDLCMaxBuffered bounds what a reader keeps while it waits for a frame's
+// closing flag: twice the largest TCP frame (RNS TCPInterface.HW_MTU 262144,
+// escaped at worst to double) plus both flags. A peer that opens a frame and
+// never closes it used to grow the buffer without bound. Same bound as the
+// Hub's rnswire (MESHSAT-1555).
+const HDLCMaxBuffered = 2*262144 + 2
+
 // HDLCFrameReader extracts complete HDLC frames from a byte stream.
 // It accumulates data and returns complete packets when available.
 type HDLCFrameReader struct {
@@ -94,8 +101,13 @@ func (r *HDLCFrameReader) Feed(data []byte) [][]byte {
 			}
 		}
 		if end < 0 {
-			// Only one flag — trim before it and wait for more data
+			// Only one flag — trim before it and wait for more data,
+			// unless the open frame is already longer than any frame can
+			// be: then it is dropped.
 			r.buf = r.buf[start:]
+			if len(r.buf) > HDLCMaxBuffered {
+				r.buf = r.buf[:0]
+			}
 			break
 		}
 
