@@ -116,6 +116,54 @@ class PlanTests(unittest.TestCase):
 FAKE_DEV = {"name": "2-1.3", "vidpid": "2886:0059", "hub": "2-1", "twin": "3-1", "port": 3}
 
 
+class CellTests(unittest.TestCase):
+    """The cell actions: cellctl with fixed argv, the purpose checked, refused
+    without the cell package. [MESHSAT-1578]"""
+
+    def setUp(self):
+        self._exists = agent.os.path.exists
+        agent.os.path.exists = lambda p: True if p == agent.CELLCTL else self._exists(p)
+
+    def tearDown(self):
+        agent.os.path.exists = self._exists
+
+    def test_status_and_adopt(self):
+        argv, timeout, post = agent.plan("cell_status", {})
+        self.assertEqual(argv, [agent.CELLCTL, "status"])
+        argv, _t, _p = agent.plan("cell_adopt", {})
+        self.assertEqual(argv, [agent.CELLCTL, "status", "--with-secret"])
+
+        class P:
+            stdout = '{"ok": true, "radio": {"active": false}}'
+        self.assertEqual(post(P())["radio"], {"active": False})
+
+    def test_core_and_radio(self):
+        argv, _t, _p = agent.plan("cell_core", {"op": "start"})
+        self.assertEqual(argv, [agent.CELLCTL, "core", "start"])
+        argv, _t, _p = agent.plan("cell_radio", {"op": "stop"})
+        self.assertEqual(argv, [agent.CELLCTL, "radio", "stop"])
+        argv, timeout, _p = agent.plan("cell_radio", {"op": "start", "purpose": "MESHSAT-1578 e2e,  Pixel texts  the kit"})
+        self.assertEqual(argv, [agent.CELLCTL, "radio", "start", "MESHSAT-1578 e2e, Pixel texts the kit"])
+        self.assertGreaterEqual(timeout, 60)
+
+    def test_refusals(self):
+        for bad in ({"op": "restart"}, {"op": "start; reboot"}, {}):
+            with self.assertRaises(agent.Refused):
+                agent.plan("cell_core", bad)
+        for purpose in ("", "no", "x" * 121, "pipe | injection", "`id`", "$(id)", "semi;colon\x00"):
+            with self.assertRaises(agent.Refused):
+                agent.plan("cell_radio", {"op": "start", "purpose": purpose})
+        # Line breaks and runs of spaces collapse to one space: one log row.
+        argv, _t, _p = agent.plan("cell_radio", {"op": "start", "purpose": "two\nlines   here"})
+        self.assertEqual(argv[-1], "two lines here")
+
+    def test_not_installed(self):
+        agent.os.path.exists = self._exists
+        with self.assertRaises(agent.Refused) as cm:
+            agent.plan("cell_status", {})
+        self.assertIn("not installed", str(cm.exception))
+
+
 class USBPowerCycleTests(unittest.TestCase):
     """usb_power_cycle / usb_switchable with the sysfs and uhubctl lookups
     replaced, so nothing on the test host is read or switched. [MESHSAT-786]"""

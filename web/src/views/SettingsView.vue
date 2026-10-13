@@ -19,6 +19,7 @@ const allTabs = [
   { id: 'position',      label: 'Position',      tier: 'operator' },
   { id: 'iridium',       label: 'Satellite',     tier: 'operator' },
   { id: 'cellular',      label: 'Cellular',      tier: 'operator' },
+  { id: 'cell',          label: '2G Cell',       tier: 'operator' },
   { id: 'canned',        label: 'Canned Msg',    tier: 'engineer' },
   { id: 'mqtt',          label: 'MQTT',          tier: 'engineer' },
   { id: 'device_mqtt',   label: 'Device MQTT',   tier: 'engineer' },
@@ -991,6 +992,39 @@ async function unlockSettingsPIN() {
 }
 
 const cellularGw = computed(() => (store.gateways || []).find(g => g.type === 'cellular'))
+
+// The MeshSat 2G cell: the Pluto on USB, the core and the radio on the kit's
+// host, the phones on the cell, the SMPP link. The radio keys up only from
+// here, with a purpose the kit's TX log records (licence RDI-2610-00385).
+// [MESHSAT-1578]
+const cell = ref(null)
+const cellBusy = ref(false)
+const cellMsg = ref('')
+const cellPurpose = ref('')
+let cellTimer = null
+async function fetchCell() {
+  try { cell.value = await api.get('/cell/status') } catch (e) { cellMsg.value = e.message }
+}
+async function cellRadio(action) {
+  cellBusy.value = true
+  cellMsg.value = ''
+  try {
+    const r = await api.post('/cell/radio', { action, purpose: cellPurpose.value })
+    cellMsg.value = action === 'start' ? `Radio up on ARFCN ${(r.arfcn || []).join(', ')}; logged in ${r.tx_log || 'the TX log'}` : 'Radio down, logged'
+  } catch (e) { cellMsg.value = e.message } finally { cellBusy.value = false; fetchCell() }
+}
+async function cellCore(action) {
+  cellBusy.value = true
+  cellMsg.value = ''
+  try { await api.post('/cell/core', { action }); cellMsg.value = `Core ${action}ed` } catch (e) { cellMsg.value = e.message } finally { cellBusy.value = false; fetchCell() }
+}
+const cellHost = computed(() => cell.value?.host?.host || null)
+const cellPhones = computed(() => cellHost.value?.phones || [])
+watch(activeTab, (t) => {
+  if (t === 'cell') { fetchCell(); cellTimer = setInterval(fetchCell, 5000) }
+  else if (cellTimer) { clearInterval(cellTimer); cellTimer = null }
+})
+onUnmounted(() => { if (cellTimer) clearInterval(cellTimer) })
 
 function loadCellular() {
   if (cellularGw.value?.config) {
@@ -2055,6 +2089,67 @@ onUnmounted(() => {
     </div>
 
     <!-- Cellular -->
+    <div v-if="activeTab === 'cell'" class="space-y-4">
+      <!-- The cell's SDR, core and radio on the kit's host -->
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">MeshSat 2G cell</h4>
+        <div v-if="!cell" class="text-[11px] text-gray-500">Loading</div>
+        <div v-else-if="!cell.host?.agent" class="text-[11px] text-amber-400">No host agent on this bridge: the cell cannot be run from here (scripts/install-oob-agent.sh on the kit).</div>
+        <div v-else-if="!cell.host?.installed" class="text-[11px] text-amber-400">The kit has no cell package (meshsat-cell kit/install-cell-kit.sh).</div>
+        <div v-else class="space-y-2 text-[11px]">
+          <div class="flex justify-between"><span class="text-gray-500">SDR (Pluto) on USB</span>
+            <span :class="cellHost?.pluto?.present ? 'text-green-400' : 'text-gray-400'">{{ cellHost?.pluto?.present ? (cellHost.pluto.state === 'dfu' ? 'present, DFU mode' : (cellHost.pluto.reachable ? 'present, reachable' : 'present, not reachable')) : 'absent' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Adopted</span>
+            <span class="text-gray-300">{{ cell.host?.adopted_at ? new Date(cell.host.adopted_at).toLocaleString() : (cell.host?.last_error || 'no') }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Core (no emission)</span>
+            <span :class="cellHost?.core?.up ? 'text-green-400' : 'text-gray-400'">{{ cellHost?.core?.up ? 'up' : 'down' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Radio (osmo-bts-trx)</span>
+            <span :class="cellHost?.radio?.active ? 'text-red-400' : 'text-gray-400'">{{ cellHost?.radio?.active ? 'ON AIR since ' + cellHost.radio.since : 'off' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">ARFCN</span>
+            <span class="text-gray-300 font-mono">{{ (cellHost?.arfcn || []).join(', ') || '-' }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Licence</span>
+            <span class="text-gray-300">{{ cellHost?.licence?.number || '-' }} <span :class="cellHost?.licence?.site_ok ? 'text-green-400' : 'text-amber-400'">{{ cellHost?.licence?.site_ok ? '(site attested)' : '(site not attested: CELL_SITE_OK)' }}</span></span></div>
+          <div class="flex justify-between"><span class="text-gray-500">TX log rows</span>
+            <span class="text-gray-300">{{ cellHost?.tx_log?.rows ?? '-' }}</span></div>
+          <div v-if="cellHost?.bts?.raw?.length" class="text-gray-400 font-mono whitespace-pre-wrap">{{ cellHost.bts.raw.join('\n') }}</div>
+        </div>
+      </div>
+
+      <div v-if="cell?.host?.installed" class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <h4 class="text-sm font-medium text-gray-200">Radio</h4>
+        <p class="text-[11px] text-gray-500">The radio keys up only from here. The purpose goes into the kit's TX log before the first emission; the host refuses without the band checks, the Pluto on the cell image and the site attestation.</p>
+        <input v-model="cellPurpose" type="text" placeholder="Purpose of this emission (for the TX log)" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <div class="flex gap-2">
+          <button :disabled="cellBusy || cellHost?.radio?.active" @click="cellRadio('start')" class="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 disabled:opacity-40 text-xs text-white">Key radio up</button>
+          <button :disabled="cellBusy || !cellHost?.radio?.active" @click="cellRadio('stop')" class="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-xs text-gray-100">Key radio down</button>
+          <button :disabled="cellBusy || cellHost?.core?.up" @click="cellCore('start')" class="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-xs text-gray-100">Start core</button>
+          <button :disabled="cellBusy || !cellHost?.core?.up" @click="cellCore('stop')" class="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-xs text-gray-100">Stop core</button>
+        </div>
+        <div v-if="cellMsg" class="text-[11px] text-amber-300">{{ cellMsg }}</div>
+      </div>
+
+      <div v-if="cell?.host?.installed" class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2">
+        <h4 class="text-sm font-medium text-gray-200">Phones on the cell</h4>
+        <div v-if="!cellPhones.length" class="text-[11px] text-gray-500">None registered{{ cellHost?.core?.up ? '' : ' (core down)' }}</div>
+        <div v-for="p in cellPhones" :key="p.imsi" class="flex justify-between text-[11px]">
+          <span class="text-gray-300 font-mono">{{ p.msisdn || '?' }}</span>
+          <span class="text-gray-500 font-mono">IMSI {{ p.imsi }}<span v-if="p.last_seen"> · {{ p.last_seen }}</span></span>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-2 text-[11px]">
+        <h4 class="text-sm font-medium text-gray-200">SMPP link (cell_0)</h4>
+        <div v-if="!cell?.configured" class="text-gray-500">No cell gateway running: it starts when the Pluto is adopted, or with CELL_SMPP_HOST.</div>
+        <template v-else>
+          <div class="flex justify-between"><span class="text-gray-500">State</span>
+            <span :class="cell.gateway?.link?.state === 'bound' ? 'text-green-400' : 'text-amber-400'">{{ cell.gateway?.link?.state }}<span v-if="cell.gateway?.link?.last_error" class="text-gray-500"> ({{ cell.gateway.link.last_error }})</span></span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Server</span><span class="text-gray-300 font-mono">{{ cell.gateway?.host }}:{{ cell.gateway?.port }} as {{ cell.gateway?.system_id }}, short code {{ cell.gateway?.short_code }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Texts in / out</span><span class="text-gray-300">{{ cell.gateway?.messages_in }} / {{ cell.gateway?.messages_out }}</span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Phone off the cell / refused / receipts</span><span class="text-gray-300">{{ cell.gateway?.phone_absent }} / {{ cell.gateway?.refused_in }} / {{ cell.gateway?.receipts }}</span></div>
+        </template>
+      </div>
+    </div>
+
     <div v-if="activeTab === 'cellular'">
       <!-- Modem Status (read-only) -->
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">

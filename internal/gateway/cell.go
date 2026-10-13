@@ -141,7 +141,10 @@ func (g *CellGateway) Start(ctx context.Context) error {
 		}
 	}
 	if password == "" {
-		return errors.New("cell: no smpp password (CELL_SMPP_PASSWORD or the password field)")
+		password = CellHostPassword() // handed over by the kit's host at adoption [MESHSAT-1578]
+	}
+	if password == "" {
+		return errors.New("cell: no smpp password (CELL_SMPP_PASSWORD, the password field, or the host's cell.env)")
 	}
 	if len(password) > 8 {
 		return errors.New("cell: the smpp password is longer than 8 characters (SMPP 3.4)")

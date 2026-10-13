@@ -25,6 +25,7 @@ type ReceiverStartFunc func(ctx context.Context, gw Gateway)
 
 // Manager coordinates gateway lifecycle (start/stop/config).
 type Manager struct {
+	cellHost        CellHostHandler // adopts the cell's SDR [MESHSAT-1578]
 	db              *database.DB
 	sat             transport.SatTransport  // optional, for iridium SBD gateway (9603)
 	imtSat          transport.SatTransport  // optional, for iridium IMT gateway (9704)
@@ -538,12 +539,40 @@ func (m *Manager) WatchDeviceEvents(ctx context.Context, supervisor *transport.D
 		}
 	}()
 
+	// A device the first scan identified before this subscription existed
+	// never sends its event again. The hardware-backed gateways get theirs
+	// from ReconcileWithHardware; the cell's SDR gets its adoption here.
+	// [MESHSAT-1578]
+	if m.cellHost != nil {
+		for _, entry := range supervisor.Registry().ListAll() {
+			if entry != nil && entry.Role == transport.RoleCellSDR {
+				log.Info().Str("port", entry.DevPath).Msg("gwmgr: the cell's SDR was already on USB at start, adopting it")
+				go m.handleDeviceEvent(ctx, transport.DeviceEvent{Type: "device_connected", Device: entry})
+			}
+		}
+	}
+
 	log.Info().Msg("gwmgr: watching device supervisor events for hot-swap")
 }
 
 // handleDeviceEvent reacts to a single device supervisor event.
 func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEvent) {
 	if ev.Device == nil {
+		return
+	}
+
+	// The cell's SDR has no gateway of its own: the cell host adopts it
+	// (core up through the host agent, cell_0 bound) and lets it go.
+	// [MESHSAT-1578]
+	if ev.Device.Role == transport.RoleCellSDR {
+		if h := m.cellHost; h != nil {
+			switch ev.Type {
+			case "device_connected":
+				go h.OnPlutoConnected(ctx, ev.Device.DevPath)
+			case "device_disconnected", "device_removed":
+				go h.OnPlutoRemoved(ctx, ev.Device.DevPath)
+			}
+		}
 		return
 	}
 
@@ -1795,6 +1824,17 @@ func (m *Manager) GetCellularGateway() *CellularGateway {
 		}
 	}
 	return nil
+}
+
+// CellHostHandler adopts and releases the cell's SDR. [MESHSAT-1578]
+type CellHostHandler interface {
+	OnPlutoConnected(ctx context.Context, port string)
+	OnPlutoRemoved(ctx context.Context, port string)
+}
+
+// SetCellHost installs the handler for the cell's SDR.
+func (m *Manager) SetCellHost(h CellHostHandler) {
+	m.cellHost = h
 }
 
 // GetCellGateway returns the running MeshSat cell gateway, or nil. [MESHSAT-1557]

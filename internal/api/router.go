@@ -66,8 +66,9 @@ type Server struct {
 	clockState    *clockstate.Provider  // host clock trust verdict [MESHSAT-1056]
 	resourceXfer  *routing.ResourceTransfer
 	keyStore      *keystore.KeyStore
-	oob           *oob.Service    // OOB management frames [MESHSAT-756]
-	host          *oob.HostClient // host agent for reboot / poweroff [MESHSAT-831]
+	oob           *oob.Service      // OOB management frames [MESHSAT-756]
+	host          *oob.HostClient   // host agent for reboot / poweroff [MESHSAT-831]
+	cellHost      *gateway.CellHost // the cell's SDR, core and radio on the host [MESHSAT-1578]
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
@@ -383,6 +384,11 @@ func (s *Server) SetOOBService(svc *oob.Service) {
 
 // SetHostClient wires the OOB host agent client, the only path from the
 // container to a host reboot or halt. [MESHSAT-831]
+// SetCellHost sets the cell's host side (Pluto, core, radio) for the /api/cell routes. [MESHSAT-1578]
+func (s *Server) SetCellHost(h *gateway.CellHost) {
+	s.cellHost = h
+}
+
 func (s *Server) SetHostClient(h *oob.HostClient) {
 	s.host = h
 }
@@ -584,6 +590,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/cell/sms/send", s.handleCellSend)
 		r.Get("/cell/status", s.handleCellStatus)
 		r.Get("/cell/peers", s.handleCellPeers)
+		r.Post("/cell/radio", s.handleCellRadio) // the operator keys the radio, with a purpose [MESHSAT-1578]
+		r.Post("/cell/core", s.handleCellCore)
 
 		// Directory import / export — vCard 4.0 + CSV [MESHSAT-541].
 		// Writes land in the v44+ directory_* tables; legacy /api/contacts

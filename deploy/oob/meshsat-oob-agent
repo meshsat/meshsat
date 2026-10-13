@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "4"
+VERSION = "5"
 SOCKET_PATH = os.environ.get("MESHSAT_OOB_SOCKET", "/run/meshsat-oob/agent.sock")
 READ_TIMEOUT = 5.0
 MAX_LINE = 4096
@@ -108,6 +108,14 @@ AGENT_EXE = os.path.abspath(globals().get("__file__") or "/usr/local/bin/meshsat
 
 MAX_DELAY = 3600
 MAX_LINES = 50
+
+# The MeshSat 2G cell on the kit (meshsat-cell kit/): the Bridge adopts the
+# Pluto through these, cellctl does the work and the compliance checks. The
+# purpose string goes into the kit's TX log, so it is plain text only.
+# [MESHSAT-1578]
+CELLCTL = "/usr/local/bin/cellctl"
+CELL_OPS = {"start", "stop"}
+CELL_PURPOSE_RE = re.compile(r"^[\w .,:;()/+@#&'-]{3,120}$")
 
 
 def log(msg):
@@ -237,7 +245,38 @@ def plan(action, args):
                   "twin": dev["twin"], "port": dev["port"], "off_ms": off_ms, "unit": unit}
         return argv, 10, lambda _p: result
 
+    if action in ("cell_status", "cell_adopt", "cell_core", "cell_radio"):
+        return plan_cell(action, args)
+
     raise Refused("unknown action")
+
+
+def cell_json(p):
+    try:
+        return json.loads(p.stdout or "{}")
+    except ValueError:
+        raise Refused("cellctl answered no JSON")
+
+
+def plan_cell(action, args):
+    """cellctl calls: status (with the SMPP secret for adopt), core and radio."""
+    if not os.path.exists(CELLCTL):
+        raise Refused("cell not installed")
+    if action == "cell_status":
+        return [CELLCTL, "status"], 25, cell_json
+    if action == "cell_adopt":
+        return [CELLCTL, "status", "--with-secret"], 25, cell_json
+    op = str(args.get("op", ""))
+    if op not in CELL_OPS:
+        raise Refused("op must be start or stop")
+    if action == "cell_core":
+        return [CELLCTL, "core", op], 60, cell_json
+    if op == "stop":
+        return [CELLCTL, "radio", "stop"], 60, cell_json
+    purpose = " ".join(str(args.get("purpose", "")).split())
+    if not CELL_PURPOSE_RE.match(purpose):
+        raise Refused("purpose must be 3 to 120 plain characters")
+    return [CELLCTL, "radio", "start", purpose], 90, cell_json
 
 
 def run_argv(argv, timeout):
