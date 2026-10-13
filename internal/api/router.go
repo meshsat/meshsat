@@ -592,6 +592,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/cell/peers", s.handleCellPeers)
 		r.Post("/cell/radio", s.handleCellRadio) // the operator keys the radio, with a purpose [MESHSAT-1578]
 		r.Post("/cell/core", s.handleCellCore)
+		r.Get("/cell/txlog", s.handleCellTXLog) // the transmit log the licence asks for
 
 		// Directory import / export — vCard 4.0 + CSV [MESHSAT-541].
 		// Writes land in the v44+ directory_* tables; legacy /api/contacts

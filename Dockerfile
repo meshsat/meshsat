@@ -236,6 +236,22 @@ RUN apt-get update -qq && \
       bluez wpasupplicant iw rfkill iproute2 util-linux && \
     rm -rf /var/lib/apt/lists/*
 
+# The MeshSat 2G cell: Osmocom's core and BTS from the osmocom "latest" feed
+# (Debian 12, amd64 and arm64, the versions proven on the bench: osmo-bsc
+# 1.15, osmo-bts-trx 1.12, osmo-msc 1.16, osmo-hlr 1.9, osmo-mgw 1.16, osmo-stp
+# 2.3, osmo-cbc 0.5). The bridge starts them itself when the cell's SDR (a
+# Pluto Nano) is on USB and renders their configs; nothing else to install
+# on a kit. osmo-trx runs on the Pluto. [MESHSAT-1578]
+RUN mkdir -p /etc/apt/keyrings && \
+    wget -qO /etc/apt/keyrings/osmocom-latest.asc https://downloads.osmocom.org/packages/osmocom:/latest/Debian_12/Release.key && \
+    echo "deb [signed-by=/etc/apt/keyrings/osmocom-latest.asc] https://downloads.osmocom.org/packages/osmocom:/latest/Debian_12/ ./" \
+      > /etc/apt/sources.list.d/osmocom-latest.list && \
+    apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+      osmo-stp osmo-hlr osmo-mgw osmo-msc osmo-cbc osmo-bsc osmo-bts-trx && \
+    rm -rf /var/lib/apt/lists/* && \
+    osmo-bts-trx --version | head -1 && osmo-msc --version | head -1
+
 COPY --from=builder   /meshsat                    /usr/local/bin/meshsat
 COPY --from=c-builder /jspr-helper                /usr/local/bin/jspr-helper
 COPY --chmod=755      cmd/jspr-helper/jspr_helper.py /usr/local/bin/jspr_helper.py

@@ -2108,9 +2108,11 @@ onUnmounted(() => {
           <div class="flex justify-between"><span class="text-gray-500">ARFCN</span>
             <span class="text-gray-300 font-mono">{{ (cellHost?.arfcn || []).join(', ') || '-' }}</span></div>
           <div class="flex justify-between"><span class="text-gray-500">Licence</span>
-            <span class="text-gray-300">{{ cellHost?.licence?.number || '-' }} <span :class="cellHost?.licence?.site_ok ? 'text-green-400' : 'text-amber-400'">{{ cellHost?.licence?.site_ok ? '(site attested)' : '(site not attested: CELL_SITE_OK)' }}</span></span></div>
+            <span class="text-gray-300">{{ cellHost?.licence?.number || 'not set (MESHSAT_CELL_LICENCE)' }}<span v-if="cellHost?.licence?.band" class="text-gray-500"> · {{ cellHost.licence.band }} ARFCN {{ cellHost.licence.arfcn_block }}</span><span v-if="cellHost?.licence?.site_ok !== undefined" :class="cellHost.licence.site_ok ? 'text-green-400' : 'text-amber-400'"> {{ cellHost.licence.site_ok ? '(site attested)' : '(site not attested: CELL_SITE_OK)' }}</span></span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Runs</span>
+            <span class="text-gray-300">{{ cell.host?.local ? 'inside the Bridge, radio ' + (cellHost?.auto_radio ? 'automatic when the SDR is plugged in' : 'on request only') : 'on the kit host (cellctl)' }}</span></div>
           <div class="flex justify-between"><span class="text-gray-500">TX log rows</span>
-            <span class="text-gray-300">{{ cellHost?.tx_log?.rows ?? '-' }}</span></div>
+            <span class="text-gray-300">{{ cell.host?.tx_log_rows ?? cellHost?.tx_log?.rows ?? '-' }} <a class="text-blue-400 underline" href="/api/cell/txlog?format=md" target="_blank">export</a></span></div>
           <div v-if="cellHost?.bts?.raw?.length" class="text-gray-400 font-mono whitespace-pre-wrap">{{ cellHost.bts.raw.join('\n') }}</div>
         </div>
       </div>

@@ -1397,6 +1397,23 @@ var migrations = []string{
 		reachable_at  DATETIME,
 		last_dialled  TEXT NOT NULL DEFAULT ''
 	);`,
+
+	// v61: the cell's transmit log. Every key-up and key-down of the 2G
+	// cell's radio is a row, written before the radio keys up, with the
+	// settings, the purpose, the operator and the licence it cites: the
+	// source of the monthly report the licence asks for. [MESHSAT-1578]
+	`CREATE TABLE IF NOT EXISTS cell_tx_log (
+		id        INTEGER PRIMARY KEY AUTOINCREMENT,
+		at        DATETIME NOT NULL,
+		event     TEXT NOT NULL,
+		arfcn     INTEGER NOT NULL DEFAULT 0,
+		freq_mhz  REAL NOT NULL DEFAULT 0,
+		setting   TEXT NOT NULL DEFAULT '',
+		output    TEXT NOT NULL DEFAULT '',
+		purpose   TEXT NOT NULL DEFAULT '',
+		operator  TEXT NOT NULL DEFAULT '',
+		licence   TEXT NOT NULL DEFAULT ''
+	);`,
 }
 
 func (db *DB) migrate() error {

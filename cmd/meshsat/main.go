@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
@@ -23,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/api"
+	gsmcell "meshsat/internal/cell"
 	"meshsat/internal/channel"
 	"meshsat/internal/clockstate"
 	"meshsat/internal/compress"
@@ -683,7 +685,48 @@ func main() {
 			}
 		}
 	}
-	cellHost := gateway.NewCellHost(oobHost, db, gwMgr)
+	// The cell runs inside the Bridge when the image carries the Osmocom
+	// daemons: the SDR on USB is the whole configuration. The SMPP password
+	// is generated once and kept in system_config. [MESHSAT-1578]
+	var cellRunner *gsmcell.Runner
+	if gsmcell.Available("") {
+		subs := gsmcell.DefaultSubscribers
+		if cfg.CellSubscribers != "" {
+			if parsed, err := gsmcell.ParseSubscribers(cfg.CellSubscribers); err != nil {
+				log.Error().Err(err).Msg("cell: MESHSAT_CELL_SUBSCRIBERS refused, the test SIMs are used")
+			} else {
+				subs = parsed
+			}
+		}
+		pw, err := cellSMPPPassword(db)
+		if err != nil {
+			log.Error().Err(err).Msg("cell: no SMPP password, the cell will not run")
+		} else {
+			hostname, _ := os.Hostname()
+			rc := gsmcell.Config{
+				DataDir:      filepath.Join(filepath.Dir(cfg.DBPath), "cell"),
+				ARFCN:        cfg.CellARFCN,
+				AutoRadio:    cfg.CellAutoRadio,
+				Licence:      cfg.CellLicence,
+				Auth:         cfg.CellAuth,
+				SMPPSystemID: cfg.CellSMPPSystemID,
+				SMPPPassword: pw,
+				ShortCode:    cfg.CellShortCode,
+				Subscribers:  subs,
+				Operator:     hostname,
+			}
+			if r, err := gsmcell.New(rc, cellTXLog{db: db}); err != nil {
+				log.Error().Err(err).Msg("cell: configuration refused, the cell will not run")
+			} else {
+				cellRunner = r
+				log.Info().Int("arfcn", rc.ARFCN).Bool("auto_radio", rc.AutoRadio).Int("sims", len(subs)).
+					Msg("cell: the image carries the cell; plug the SDR in and it runs")
+			}
+		}
+	} else {
+		log.Info().Msg("cell: no Osmocom daemons in this image; a kit-side cell package would be driven through the host agent")
+	}
+	cellHost := gateway.NewCellHost(oobHost, db, gwMgr, cellRunner)
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
@@ -3258,6 +3301,9 @@ func main() {
 	dynIfaces.StopAll()
 	ifaceMgr.Stop()
 	tleMgr.Stop()
+	// The cell's radio and core are the Bridge's children: down before the
+	// gateways, so no emission outlives the process that logged it. [MESHSAT-1578]
+	cellHost.Shutdown(context.Background())
 	gwMgr.Stop()
 	if tcpIface != nil {
 		tcpIface.Stop()
@@ -3481,4 +3527,33 @@ func hubClientCertificate(db *database.DB) func() (*tls.Certificate, error) {
 		}
 		return &cert, nil
 	}
+}
+
+// cellTXLog writes the cell's transmit log into the database. [MESHSAT-1578]
+type cellTXLog struct{ db *database.DB }
+
+func (l cellTXLog) AppendTX(row gsmcell.TXRow) error {
+	return l.db.InsertCellTX(row.At, row.Event, row.ARFCN, row.FreqMHz, row.Setting, row.Output, row.Purpose, row.Operator, row.Licence)
+}
+
+// cellSMPPPassword is the one the cell's SMSC and the Bridge's gateway
+// share: generated once (8 characters, the SMPP 3.4 limit) and kept in
+// system_config, never printed.
+func cellSMPPPassword(db *database.DB) (string, error) {
+	if pw, err := db.GetSystemConfig("cell_smpp_password"); err == nil && len(pw) > 0 && len(pw) <= 8 {
+		return pw, nil
+	}
+	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	pw := string(b)
+	if err := db.SetSystemConfig("cell_smpp_password", pw); err != nil {
+		return "", err
+	}
+	return pw, nil
 }

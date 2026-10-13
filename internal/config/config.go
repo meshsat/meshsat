@@ -187,6 +187,12 @@ type Config struct {
 	CellSMPPSystemID string // CELL_SMPP_SYSTEM_ID (meshsat-bridge, at most 15 characters)
 	CellSMPPPassword string // CELL_SMPP_PASSWORD (at most 8 characters; read by the gateway at start, never stored)
 	CellShortCode    string // CELL_SHORT_CODE (1000): the kit's number on the cell
+	// The cell run inside the Bridge when its SDR is on USB. [MESHSAT-1578]
+	CellAutoRadio   bool   // MESHSAT_CELL_AUTO_RADIO (true): key the radio up when the SDR is adopted
+	CellARFCN       int    // MESHSAT_CELL_ARFCN (873): the carrier, refused outside the licensed 861-885
+	CellLicence     string // MESHSAT_CELL_LICENCE: cited on every TX-log row
+	CellAuth        string // MESHSAT_CELL_AUTH (optional): optional or required (needs the USIM keys)
+	CellSubscribers string // MESHSAT_CELL_SUBSCRIBERS: "IMSI:MSISDN,..."; empty = the four test USIMs
 
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
@@ -317,6 +323,11 @@ func Load() *Config {
 		CellSMPPSystemID:             envStrAlt("MESHSAT_CELL_SMPP_SYSTEM_ID", "CELL_SMPP_SYSTEM_ID", "meshsat-bridge"),
 		CellSMPPPassword:             envStrAlt("MESHSAT_CELL_SMPP_PASSWORD", "CELL_SMPP_PASSWORD", ""),
 		CellShortCode:                envStrAlt("MESHSAT_CELL_SHORT_CODE", "CELL_SHORT_CODE", "1000"),
+		CellAutoRadio:                envBool("MESHSAT_CELL_AUTO_RADIO", true),
+		CellARFCN:                    envInt("MESHSAT_CELL_ARFCN", 873),
+		CellLicence:                  envStr("MESHSAT_CELL_LICENCE", ""),
+		CellAuth:                     envStr("MESHSAT_CELL_AUTH", "optional"),
+		CellSubscribers:              envStr("MESHSAT_CELL_SUBSCRIBERS", ""),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),
