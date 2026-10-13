@@ -42,6 +42,14 @@ services:
       # 10 m HF gateway (MESHSAT-1353): receive on the RTL-SDR (spectrum bands go
       # blind while on), transmit locked until an operator callsign is set.
       - MESHSAT_HF_RX_ENABLED=${MESHSAT_HF_RX_ENABLED:-false}
+      # The MeshSat 2G cell over SMPP (MESHSAT-1557): no host = no cell gateway. The
+      # password comes from the environment at start (OpenBao secret/meshsat/cell/smpp),
+      # never from a file in the repo.
+      - CELL_SMPP_HOST=${CELL_SMPP_HOST:-}
+      - CELL_SMPP_PORT=${CELL_SMPP_PORT:-2775}
+      - CELL_SMPP_SYSTEM_ID=${CELL_SMPP_SYSTEM_ID:-meshsat-bridge}
+      - CELL_SMPP_PASSWORD=${CELL_SMPP_PASSWORD:-}
+      - CELL_SHORT_CODE=${CELL_SHORT_CODE:-1000}
       - MESHSAT_HF_FREQ_HZ=${MESHSAT_HF_FREQ_HZ:-28124000}
       - MESHSAT_HF_TX_CALLSIGN=${MESHSAT_HF_TX_CALLSIGN:-}
       - MESHSAT_HF_TX_AUDIO_DEVICE=${MESHSAT_HF_TX_AUDIO_DEVICE:-}

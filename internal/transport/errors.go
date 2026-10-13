@@ -41,3 +41,13 @@ var ErrNoRecipient = errors.New("not sent: the text has no recipient, and no def
 // sends it again by itself: the delivery ends marked as possibly sent, and
 // only a person's Retry sends it again. [MESHSAT-1391]
 var ErrOutcomeUnknown = errors.New("the outcome of the satellite session is unknown: the message may have been sent")
+
+// ErrSubscriberAbsent is returned by the cell gateway when the MeshSat 2G
+// cell refused a text because the phone is not registered on it right now
+// (SMPP status 0x0B, unknown subscriber) or did not answer its paging
+// (0xFE, delivery failure). The cell does not queue it. A phone that comes
+// back in range registers at once and its periodic location update is at
+// most 30 minutes, so the delivery worker keeps the row and retries on a
+// schedule of its own instead of spending the channel's retries.
+// [MESHSAT-1557]
+var ErrSubscriberAbsent = errors.New("the phone is not on the cell right now")

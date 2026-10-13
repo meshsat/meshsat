@@ -178,6 +178,16 @@ type Config struct {
 	HFTXAudioDevice string  // MESHSAT_HF_TX_AUDIO_DEVICE: ALSA device of the radio's sound card
 	HFTXCATPort     string  // MESHSAT_HF_TX_CAT_PORT: serial port for PTT over CAT
 
+	// The MeshSat 2G cell over SMPP (cell_0): first-boot seed of the cell_0
+	// gateway_config row when a host is set; Settings > Gateways owns it
+	// after that. The password stays in the environment unless an operator
+	// stores one. [MESHSAT-1557]
+	CellSMPPHost     string // CELL_SMPP_HOST (or MESHSAT_CELL_SMPP_HOST): empty = no cell gateway
+	CellSMPPPort     int    // CELL_SMPP_PORT (2775)
+	CellSMPPSystemID string // CELL_SMPP_SYSTEM_ID (meshsat-bridge, at most 15 characters)
+	CellSMPPPassword string // CELL_SMPP_PASSWORD (at most 8 characters; read by the gateway at start, never stored)
+	CellShortCode    string // CELL_SHORT_CODE (1000): the kit's number on the cell
+
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
 	LXMFDisplayName          string // MESHSAT_LXMF_DISPLAY_NAME (default "MeshSat <hostname>")
@@ -302,6 +312,11 @@ func Load() *Config {
 		HFTXCallsign:                 envStr("MESHSAT_HF_TX_CALLSIGN", ""),
 		HFTXAudioDevice:              envStr("MESHSAT_HF_TX_AUDIO_DEVICE", ""),
 		HFTXCATPort:                  envStr("MESHSAT_HF_TX_CAT_PORT", ""),
+		CellSMPPHost:                 envStrAlt("MESHSAT_CELL_SMPP_HOST", "CELL_SMPP_HOST", ""),
+		CellSMPPPort:                 envIntAlt("MESHSAT_CELL_SMPP_PORT", "CELL_SMPP_PORT", 2775),
+		CellSMPPSystemID:             envStrAlt("MESHSAT_CELL_SMPP_SYSTEM_ID", "CELL_SMPP_SYSTEM_ID", "meshsat-bridge"),
+		CellSMPPPassword:             envStrAlt("MESHSAT_CELL_SMPP_PASSWORD", "CELL_SMPP_PASSWORD", ""),
+		CellShortCode:                envStrAlt("MESHSAT_CELL_SHORT_CODE", "CELL_SHORT_CODE", "1000"),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),
@@ -347,6 +362,19 @@ func envStr(key, fallback string) string {
 }
 
 // envStrAlt tries the primary key, then an alternate key, then falls back.
+// envIntAlt reads primary, then alt, as an integer; a value that is not a
+// number falls back.
+func envIntAlt(primary, alt string, fallback int) int {
+	for _, key := range []string{primary, alt} {
+		if v := os.Getenv(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
+		}
+	}
+	return fallback
+}
+
 func envStrAlt(primary, alt, fallback string) string {
 	if v := os.Getenv(primary); v != "" {
 		return v
