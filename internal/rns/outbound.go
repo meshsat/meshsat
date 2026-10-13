@@ -25,7 +25,7 @@ func (n *Node) outbound(raw []byte, dest [HashLen]byte, destType byte) ([]string
 	if hdr.PacketType != reticulum.PacketAnnounce && destType != reticulum.DestPlain && destType != reticulum.DestGroup {
 		if e := n.paths.Get(dest); e != nil && n.now().Before(e.Expires) {
 			out := raw
-			if e.Hops > 1 {
+			if !e.Direct() {
 				out = reticulum.RewriteForTransport(raw, e.NextHop)
 			}
 			e.Timestamp = n.now()
