@@ -1211,6 +1211,18 @@ func (m *Manager) TestGateway(gwType string) error {
 		}
 		resp.Body.Close()
 		return nil
+	case "cell":
+		// Never a second bind to test with: the cell keeps one session per
+		// system id and a test bind would displace the live one. The
+		// running gateway's own state is the answer.
+		cg := m.GetCellGateway()
+		if cg == nil {
+			return fmt.Errorf("cell gateway not running")
+		}
+		if !cg.Bound() {
+			return fmt.Errorf("cell: not bound (%s)", cg.linkState())
+		}
+		return nil
 	case "zigbee":
 		zigbeeID := m.findRunningInstance("zigbee")
 		if zigbeeID == "" {
@@ -1633,6 +1645,25 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 			gw.SetPacketSink(m.packetSink, instanceID)
 		}
 		return gw, nil
+	case "cell":
+		cfg, err := ParseCellConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		gw := NewCellGateway(*cfg, m.db, instanceID)
+		if m.onEventEmit != nil {
+			gw.SetEventEmitter(m.onEventEmit)
+		}
+		if m.nodeNameFn != nil {
+			gw.SetNodeNameResolver(m.nodeNameFn)
+		}
+		if m.packetSink != nil {
+			gw.SetPacketSink(m.packetSink, instanceID)
+		}
+		return gw, nil
 	case "aprs":
 		cfg, err := ParseAPRSConfig(configJSON)
 		if err != nil {
@@ -1699,6 +1730,13 @@ func (m *Manager) redactConfig(gwType, configJSON string) json.RawMessage {
 		}
 		data, _ := json.Marshal(cfg.Redacted())
 		return data
+	case "cell":
+		cfg, err := ParseCellConfig(configJSON)
+		if err != nil {
+			return json.RawMessage(configJSON)
+		}
+		data, _ := json.Marshal(cfg.Redacted())
+		return data
 	default:
 		return json.RawMessage(configJSON)
 	}
@@ -1754,6 +1792,18 @@ func (m *Manager) GetCellularGateway() *CellularGateway {
 		}
 		if cgw, ok := gw.(*CellularGateway); ok {
 			return cgw
+		}
+	}
+	return nil
+}
+
+// GetCellGateway returns the running MeshSat cell gateway, or nil. [MESHSAT-1557]
+func (m *Manager) GetCellGateway() *CellGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if cg, ok := gw.(*CellGateway); ok && cg != nil {
+			return cg
 		}
 	}
 	return nil

@@ -1377,6 +1377,26 @@ var migrations = []string{
 	// webhook: online when on. [MESHSAT-1554]
 	`INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
 		VALUES ('lxmf_0', 'lxmf', 'Reticulum LXMF', 1, '{}');`,
+
+	// v60: the MeshSat 2G cell over SMPP. cell_0 is the link of the cell
+	// gateway (device-less, like lxmf_0: a rule can forward to it and from
+	// it), and cell_peers remembers every phone that texted the kit's short
+	// code, when, and whether the cell last reported it reachable, so a
+	// reply from the mesh finds its way back and a retry can wait for the
+	// phone. [MESHSAT-1557]
+	`INSERT OR IGNORE INTO interfaces (id, channel_type, label, enabled, config)
+		VALUES ('cell_0', 'cell', 'MeshSat cell SMS', 1, '{}');
+	CREATE TABLE IF NOT EXISTS cell_peers (
+		msisdn        TEXT PRIMARY KEY,
+		first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_rx_at    DATETIME,
+		last_tx_at    DATETIME,
+		rx_count      INTEGER NOT NULL DEFAULT 0,
+		tx_count      INTEGER NOT NULL DEFAULT 0,
+		reachable     INTEGER,
+		reachable_at  DATETIME,
+		last_dialled  TEXT NOT NULL DEFAULT ''
+	);`,
 }
 
 func (db *DB) migrate() error {

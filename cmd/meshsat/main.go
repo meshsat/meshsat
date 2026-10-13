@@ -658,6 +658,31 @@ func main() {
 			}
 		}
 	}
+	// MeshSat 2G cell seed: one cell_0 row when CELL_SMPP_HOST is set and
+	// none exists; Settings > Gateways (PUT /api/gateways/cell) owns it
+	// after that. The password is not written: the gateway reads
+	// CELL_SMPP_PASSWORD at start while the stored field is empty, so the
+	// secret stays out of a database that gets copied for debugging.
+	// [MESHSAT-1557]
+	if cfg.CellSMPPHost != "" {
+		if _, err := db.GetGatewayConfigByInstance("cell_0"); err != nil {
+			cellCfg := gateway.DefaultCellConfig()
+			cellCfg.Host = cfg.CellSMPPHost
+			cellCfg.Port = cfg.CellSMPPPort
+			cellCfg.SystemID = cfg.CellSMPPSystemID
+			cellCfg.ShortCode = cfg.CellShortCode
+			if err := cellCfg.Validate(); err != nil {
+				log.Error().Err(err).Msg("cell: the environment's settings are refused, nothing seeded")
+			} else if raw, err := json.Marshal(cellCfg); err == nil {
+				if err := db.SaveGatewayConfigInstance("cell", "cell_0", true, string(raw)); err != nil {
+					log.Error().Err(err).Msg("cell: seed failed")
+				} else {
+					log.Info().Str("host", cellCfg.Host).Int("port", cellCfg.Port).Str("short_code", cellCfg.ShortCode).
+						Msg("cell: seeded cell_0 from environment; edit it under Settings > Gateways from now on")
+				}
+			}
+		}
+	}
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}

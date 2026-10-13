@@ -194,7 +194,7 @@ func channelCostScore(channelType string) int {
 	switch channelType {
 	case "mesh", "mqtt", "webhook":
 		return 100
-	case "cellular", "sms":
+	case "cellular", "sms", "cell":
 		return 60
 	case "iridium":
 		return 30

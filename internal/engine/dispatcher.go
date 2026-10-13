@@ -170,6 +170,11 @@ type forwardOptions struct {
 	// message title they get. [MESHSAT-1554]
 	LXMFDestinations []string `json:"lxmf_destinations"`
 	LXMFTitle        string   `json:"lxmf_title"`
+	// CellDestinations are the phones on the MeshSat cell a rule that
+	// forwards to cell_0 texts ("1001" or "cell:1001"), one ledger row
+	// each; empty falls back to the gateway's list, then to the phones
+	// that texted the kit within its reply window. [MESHSAT-1557]
+	CellDestinations []string `json:"cell_destinations"`
 }
 
 // NewDispatcher creates a dispatcher wired to the channel registry and gateways.
@@ -593,7 +598,7 @@ func (d *Dispatcher) StopWorker(ifaceID string) {
 // codec and is left alone.
 func isTextBearer(channelType string) bool {
 	switch channelType {
-	case "cellular", "aprs", "mesh", "iridium_imt":
+	case "cellular", "aprs", "mesh", "iridium_imt", "cell":
 		return true
 	}
 	return false
@@ -950,99 +955,129 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			maxRetries = 0
 		}
 
-		del := database.MessageDelivery{
-			MsgRef:      msgRef,
-			RuleID:      &ruleID,
-			Channel:     destInterface, // resolved interface ID as delivery target
-			Status:      "queued",
-			Priority:    m.Rule.Priority,
-			Payload:     wire,
-			TextPreview: preview,
-			MaxRetries:  maxRetries,
-			Visited:     visited,
-			QoSLevel:    m.Rule.QoSLevel,
-		}
-
-		// Set TTL expiry if configured (P0 critical messages exempt — never expire)
-		if ttlSeconds > 0 && m.Rule.Priority > 0 {
-			del.TTLSeconds = ttlSeconds
-			exp := time.Now().Add(time.Duration(ttlSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
-			del.ExpiresAt = &exp
-		}
-
-		// Assign egress sequence number
-		if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
-			del.SeqNum = seq
-		}
-
-		// Sign the payload for non-repudiation
-		if d.signing != nil && len(wire) > 0 {
-			del.Signature = d.signing.Sign(wire)
-			del.SignerID = d.signing.SignerID()
-		}
-
-		// DTN bundle fragmentation (MESHSAT-408): if payload exceeds interface MTU,
-		// split into fragments and create one delivery per fragment.
-		if d.fragmentMgr != nil && desc.MaxPayload > 0 && len(wire) > desc.MaxPayload {
-			bundleID, fragments, fragErr := Fragment(wire, desc.MaxPayload)
-			if fragErr == nil && len(fragments) > 1 {
-				log.Info().
-					Int("fragments", len(fragments)).
-					Int("mtu", desc.MaxPayload).
-					Int("payload", len(wire)).
-					Str("bundle_id", fmt.Sprintf("%x", bundleID[:8])).
-					Str("dest", destInterface).
-					Msg("DTN: payload exceeds MTU, fragmenting")
-
-				for fi, frag := range fragments {
-					fragDel := del // copy base delivery
-					fragDel.Payload = frag
-					fragDel.TextPreview = fmt.Sprintf("[frag %d/%d] %s", fi+1, len(fragments), preview)
-					if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
-						fragDel.SeqNum = seq
-					}
-					if _, fragInsertErr := d.db.InsertDelivery(fragDel); fragInsertErr != nil {
-						log.Error().Err(fragInsertErr).Int("fragment", fi).Msg("DTN: failed to insert fragment delivery")
-					} else {
-						count++
-					}
-				}
-				continue // skip single-delivery insertion below
+		// The MeshSat cell is point to point: one row per phone, so a
+		// phone that is off the cell holds up its own row only, and the
+		// cell's alert for that phone wakes exactly that row. With no
+		// phone to name, one row without an address goes in and ends
+		// "no recipient" in the ledger, where the operator sees it.
+		// [MESHSAT-1557]
+		destinations := []string{""}
+		if channelType == "cell" {
+			if dests := d.cellDestinations(destInterface, fwdOpts); len(dests) > 0 {
+				destinations = dests
 			}
 		}
+		for _, destination := range destinations {
+			del := database.MessageDelivery{
+				MsgRef:      msgRef,
+				RuleID:      &ruleID,
+				Channel:     destInterface, // resolved interface ID as delivery target
+				Status:      "queued",
+				Priority:    m.Rule.Priority,
+				Payload:     wire,
+				TextPreview: preview,
+				MaxRetries:  maxRetries,
+				Visited:     visited,
+				QoSLevel:    m.Rule.QoSLevel,
+				Destination: destination,
+			}
 
-		delID, err := d.db.InsertDelivery(del)
-		if err != nil {
-			log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Msg("failed to create access delivery")
-			continue
-		}
-		del.ID = delID
+			// Set TTL expiry if configured (P0 critical messages exempt — never expire)
+			if ttlSeconds > 0 && m.Rule.Priority > 0 {
+				del.TTLSeconds = ttlSeconds
+				exp := time.Now().Add(time.Duration(ttlSeconds) * time.Second).UTC().Format("2006-01-02 15:04:05")
+				del.ExpiresAt = &exp
+			}
 
-		// Audit the dispatch event
-		if d.signing != nil {
-			ifacePtr := &sourceInterface
-			dir := "egress"
-			d.signing.AuditEvent("dispatch", ifacePtr, &dir, &delID, &ruleID, preview)
-		}
+			// Assign egress sequence number
+			if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
+				del.SeqNum = seq
+			}
 
-		count++
-		log.Info().Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Str("msg_ref", msgRef).Msg("access delivery queued")
+			// Sign the payload for non-repudiation
+			if d.signing != nil && len(wire) > 0 {
+				del.Signature = d.signing.Sign(wire)
+				del.SignerID = d.signing.SignerID()
+			}
 
-		if d.emit != nil {
-			d.emit(transport.MeshEvent{
-				Type:    "delivery_queued",
-				Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", m.Rule.Name, sourceInterface, destInterface),
-				Data: deliveryEventData(del, "queued", map[string]interface{}{
-					"source":    sourceInterface,
-					"rule_id":   m.Rule.ID,
-					"rule_name": m.Rule.Name,
-				}),
-				Time: time.Now().UTC().Format(time.RFC3339),
-			})
+			// DTN bundle fragmentation (MESHSAT-408): if payload exceeds interface MTU,
+			// split into fragments and create one delivery per fragment.
+			if d.fragmentMgr != nil && desc.MaxPayload > 0 && len(wire) > desc.MaxPayload {
+				bundleID, fragments, fragErr := Fragment(wire, desc.MaxPayload)
+				if fragErr == nil && len(fragments) > 1 {
+					log.Info().
+						Int("fragments", len(fragments)).
+						Int("mtu", desc.MaxPayload).
+						Int("payload", len(wire)).
+						Str("bundle_id", fmt.Sprintf("%x", bundleID[:8])).
+						Str("dest", destInterface).
+						Msg("DTN: payload exceeds MTU, fragmenting")
+
+					for fi, frag := range fragments {
+						fragDel := del // copy base delivery
+						fragDel.Payload = frag
+						fragDel.TextPreview = fmt.Sprintf("[frag %d/%d] %s", fi+1, len(fragments), preview)
+						if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
+							fragDel.SeqNum = seq
+						}
+						if _, fragInsertErr := d.db.InsertDelivery(fragDel); fragInsertErr != nil {
+							log.Error().Err(fragInsertErr).Int("fragment", fi).Msg("DTN: failed to insert fragment delivery")
+						} else {
+							count++
+						}
+					}
+					continue // skip single-delivery insertion below
+				}
+			}
+
+			delID, err := d.db.InsertDelivery(del)
+			if err != nil {
+				log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Msg("failed to create access delivery")
+				continue
+			}
+			del.ID = delID
+
+			// Audit the dispatch event
+			if d.signing != nil {
+				ifacePtr := &sourceInterface
+				dir := "egress"
+				d.signing.AuditEvent("dispatch", ifacePtr, &dir, &delID, &ruleID, preview)
+			}
+
+			count++
+			log.Info().Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Str("msg_ref", msgRef).Msg("access delivery queued")
+
+			if d.emit != nil {
+				d.emit(transport.MeshEvent{
+					Type:    "delivery_queued",
+					Message: fmt.Sprintf("AccessRule '%s': %s→%s queued", m.Rule.Name, sourceInterface, destInterface),
+					Data: deliveryEventData(del, "queued", map[string]interface{}{
+						"source":    sourceInterface,
+						"rule_id":   m.Rule.ID,
+						"rule_name": m.Rule.Name,
+					}),
+					Time: time.Now().UTC().Format(time.RFC3339),
+				})
+			}
 		}
 	}
 
 	return count
+}
+
+// cellDestinations asks the running cell gateway where a rule's text goes
+// (the rule's cell_destinations, its own list, or the phones that texted
+// the kit lately), as "cell:<msisdn>" addresses. Nil without a gateway or
+// a phone. [MESHSAT-1557]
+func (d *Dispatcher) cellDestinations(ifaceID string, opts forwardOptions) []string {
+	if d.gwProv == nil {
+		return nil
+	}
+	cg, ok := d.gwProv.GatewayByInterfaceID(ifaceID).(*gateway.CellGateway)
+	if !ok || cg == nil {
+		return nil
+	}
+	return cg.Destinations(opts.CellDestinations)
 }
 
 // lxmfHashLen is the hex length of an lxmf.delivery destination hash.
@@ -2123,6 +2158,14 @@ var (
 	// about 80 s; a bearer still down after this window is not coming back in
 	// time to be worth holding a message for.
 	bearerDownDeferWindow = 10 * time.Minute
+
+	// A phone off the MeshSat cell: retry every minute for the first ten
+	// minutes, then every five minutes (the periodic location update is at
+	// most 30 min), give up after a day. [MESHSAT-1557]
+	cellAbsentRetryEarly  = 60 * time.Second
+	cellAbsentEarlyWindow = 10 * time.Minute
+	cellAbsentRetryLate   = 5 * time.Minute
+	cellAbsentGiveUp      = 24 * time.Hour
 )
 
 // deliveryAge returns how long ago the delivery row was created. SQLite hands
@@ -2177,6 +2220,65 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 				Type:    "delivery_dead",
 				Message: fmt.Sprintf("Delivery to %s may have been sent; not retried by itself: %s", w.channelID, errMsg),
 				Data:    deliveryEventData(del, "dead", map[string]interface{}{"error": reason, "unconfirmed": true}),
+				Time:    time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+		return
+	}
+
+	// The phone is not on the MeshSat cell right now (SMPP 0x0B, or its
+	// paging failed, 0xFE) and the cell does not queue for it. A phone
+	// that comes back registers at once and its periodic location update
+	// is at most 30 minutes away, so the row waits on a clock of its own
+	// without spending the channel's retries: every minute for the first
+	// ten, then every five minutes, for a day. An alert_notification from
+	// the cell makes it due at once (database.NudgeDeliveries). After a
+	// day the phone did not come back and the row ends dead, with the
+	// reason. [MESHSAT-1557]
+	if errors.Is(deliveryErr, transport.ErrSubscriberAbsent) {
+		age, parsed := deliveryAge(del.CreatedAt)
+		if !parsed || age < cellAbsentGiveUp {
+			wait := cellAbsentRetryEarly
+			if parsed && age >= cellAbsentEarlyWindow {
+				wait = cellAbsentRetryLate
+			}
+			next := time.Now().Add(wait)
+			if err := w.db.DeferDelivery(del.ID, next, errMsg); err != nil {
+				log.Error().Err(err).Int64("id", del.ID).Msg("failed to defer delivery for an absent phone")
+			}
+			log.Info().Int64("id", del.ID).Str("channel", w.channelID).Str("to", del.Destination).
+				Dur("age", age.Truncate(time.Second)).Time("next_try", next).
+				Msg("the phone is not on the cell, delivery waits for it without consuming a retry")
+			if w.emit != nil {
+				w.emit(transport.MeshEvent{
+					Type:    "delivery_deferred",
+					Message: fmt.Sprintf("%s is not on the cell, delivery waits: %s", del.Destination, errMsg),
+					Data: deliveryEventData(del, "retry", map[string]interface{}{
+						"error":    errMsg,
+						"deferred": true,
+						"next_try": next.UTC().Format(time.RFC3339),
+					}),
+					Time: time.Now().UTC().Format(time.RFC3339),
+				})
+			}
+			return
+		}
+		reason := fmt.Sprintf("the phone did not come back on the cell within %s: %s", cellAbsentGiveUp, errMsg)
+		if err := w.db.SetDeliveryStatus(del.ID, "dead", reason, ""); err != nil {
+			log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery dead")
+		}
+		if w.signing != nil {
+			ifacePtr := &w.channelID
+			dir := "egress"
+			delID := del.ID
+			w.signing.AuditEvent("drop", ifacePtr, &dir, &delID, del.RuleID, reason)
+		}
+		log.Warn().Int64("id", del.ID).Str("channel", w.channelID).Str("to", del.Destination).Msg("the phone did not come back on the cell, delivery given up")
+		if w.emit != nil {
+			w.emit(transport.MeshEvent{
+				Type:    "delivery_dead",
+				Message: fmt.Sprintf("Delivery to %s given up: %s", del.Destination, reason),
+				Data:    deliveryEventData(del, "dead", map[string]interface{}{"error": reason}),
 				Time:    time.Now().UTC().Format(time.RFC3339),
 			})
 		}

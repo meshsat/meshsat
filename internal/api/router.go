@@ -580,6 +580,11 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/cellular/contacts/{id}", s.handleDeleteSMSContact)
 		r.Post("/cellular/sms/send", s.handleSendSMS)
 
+		// The MeshSat 2G cell over SMPP (gateway type cell, link cell_0). [MESHSAT-1557]
+		r.Post("/cell/sms/send", s.handleCellSend)
+		r.Get("/cell/status", s.handleCellStatus)
+		r.Get("/cell/peers", s.handleCellPeers)
+
 		// Directory import / export — vCard 4.0 + CSV [MESHSAT-541].
 		// Writes land in the v44+ directory_* tables; legacy /api/contacts
 		// continues to serve the v23 path during the grace window.

@@ -105,7 +105,7 @@ Every channel carries a status, the same as on [meshsat.net](https://meshsat.net
 | | [HF data](https://docs.meshsat.net/transports/hf-data) | COMING SOON |
 | | [TETRA Direct Mode](https://docs.meshsat.net/transports/tetra) | COMING SOON |
 | | [Wi-Fi HaLow](https://docs.meshsat.net/transports/halow) | COMING SOON |
-| | [Own 2G cell](https://docs.meshsat.net/transports/gsm-cell) | COMING SOON |
+| | [Own 2G cell](https://docs.meshsat.net/transports/gsm-cell) | BENCH |
 | Wired | [Fiber](https://docs.meshsat.net/transports/fiber) | COMING SOON |
 | | [Single-pair copper](https://docs.meshsat.net/transports/single-pair-ethernet) | COMING SOON |
 | Short range | [ZigBee](https://docs.meshsat.net/transports/zigbee) | CODE |

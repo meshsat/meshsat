@@ -113,7 +113,7 @@ func NewInterfaceManager(db *database.DB) *InterfaceManager {
 // channelNeedsDevice returns true if the channel type requires a USB serial device binding.
 func channelNeedsDevice(channelType string) bool {
 	switch channelType {
-	case "mqtt", "webhook", "lxmf":
+	case "mqtt", "webhook", "lxmf", "cell":
 		return false
 	default:
 		return true // mesh, iridium, cellular, zigbee all need hardware

@@ -219,6 +219,30 @@ func RegisterDefaults(r *Registry) {
 		},
 	})
 
+	// The MeshSat 2G cell over SMPP: texts between a phone on the kit's own
+	// cell and the Bridge. Free (our cell), a text bearer, point to point
+	// (one row per phone). MaxPayload 0 keeps the DTN fragmenter out: the
+	// gateway splits a long text into concatenated SMS parts itself. A
+	// phone that is off the cell is not a failed send: the worker keeps the
+	// row on a schedule of its own (transport.ErrSubscriberAbsent), so the
+	// channel's own retries are for the rest. [MESHSAT-1557]
+	r.Register(ChannelDescriptor{
+		ID:         "cell",
+		Label:      "MeshSat cell SMS",
+		IsPaid:     false,
+		CanSend:    true,
+		CanReceive: true,
+		MaxPayload: 0,
+		DefaultTTL: 86400 * time.Second,
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 30 * time.Second,
+			MaxWait:     5 * time.Minute,
+			MaxRetries:  5,
+			BackoffFunc: "exponential",
+		},
+	})
+
 	// IPoUGRS is RESERVED AND NOT IMPLEMENTED. It originates from an
 	// April-1st RFC-tradition draft and has no transmit or receive driver
 	// anywhere in the tree — only this descriptor, a HeMB bearer profile
