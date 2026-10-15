@@ -2,8 +2,10 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -552,18 +554,46 @@ func (db *DB) EvictLowestPriority(channel string) (int64, error) {
 // CancelRunawayDeliveries kills queued/retry deliveries whose retry count exceeds
 // their max_retries setting. This cleans up deliveries that accumulated excessive
 // retries due to bugs (e.g. SBDIX parse failures causing false retries).
-// Deliveries with max_retries=0 (infinite) are capped at the safetyLimit.
+// Deliveries with max_retries=0 (infinite) are capped at the safetyLimit,
+// except the legs of the SOS kept in the database: an SOS leg is tried
+// until it goes or the SOS is cancelled, so one that waited out 15 retries
+// for a link (a satellite with no sky) is not a runaway, and killing it at
+// a restart silenced the SOS on that route. Its legs and, once cancelled,
+// its cancellation legs are "sos-<id>-..." (api/sos_legs.go); the legs of
+// an earlier SOS are cleaned up as before. [MESHSAT-1581]
 func (db *DB) CancelRunawayDeliveries(safetyLimit int) (int64, error) {
+	sos := db.sosRunRefPrefix()
 	res, err := db.Exec(`UPDATE message_deliveries
 		SET status = 'dead', last_error = 'cancelled: exceeded retry limit on startup cleanup', updated_at = datetime('now')
 		WHERE status IN ('queued', 'retry')
 		  AND ((max_retries > 0 AND retries >= max_retries)
-		    OR (max_retries = 0 AND retries >= ?))`,
-		safetyLimit)
+		    OR (max_retries = 0 AND retries >= ?))
+		  AND NOT (? <> '' AND substr(msg_ref, 1, length(?)) = ?)`,
+		safetyLimit, sos, sos, sos)
 	if err != nil {
 		return 0, fmt.Errorf("cancel runaway deliveries: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// sosRunConfigKey is the system_config key the SOS is kept under
+// (api/sos_legs.go, sosRunKey).
+const sosRunConfigKey = "sos_run"
+
+// sosRunRefPrefix is the msg_ref prefix of the legs of the SOS kept in the
+// database ("sos-<id>-"), or "" when there is none or it does not read.
+func (db *DB) sosRunRefPrefix() string {
+	raw, err := db.GetSystemConfig(sosRunConfigKey)
+	if err != nil || raw == "" {
+		return ""
+	}
+	var run struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &run); err != nil || run.ID <= 0 {
+		return ""
+	}
+	return "sos-" + strconv.FormatInt(run.ID, 10) + "-"
 }
 
 // RecoverStaleDeliveries resets deliveries stuck in 'sending' status back to 'retry'.
