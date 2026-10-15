@@ -32,6 +32,13 @@ var ErrNoAck = errors.New("no acknowledgement from the peer")
 // delivery worker gives up at once, with the reason. [MESHSAT-1412]
 var ErrNoRecipient = errors.New("not sent: the text has no recipient, and no default number is set")
 
+// ErrPayloadTooLong is returned by a bearer asked to send a message that does
+// not fit it, where cutting it would destroy it: ciphertext or a signed frame
+// cut short cannot be decrypted or verified at the far end. Nothing is sent.
+// No retry can help, so the delivery worker gives up at once, with the
+// reason. [MESHSAT-1581]
+var ErrPayloadTooLong = errors.New("not sent: the message does not fit, and cutting it would make it unreadable")
+
 // ErrOutcomeUnknown is returned by a satellite send whose session may have
 // gone out while its outcome never reached this Bridge: the link to the
 // MeshSat node dropped while the node's modem ran the session (or the write

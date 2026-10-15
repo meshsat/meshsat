@@ -305,8 +305,21 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 		text = SanitizeSMSText(text)
 	}
 
-	// Truncate to SMS limit
+	// Truncate to SMS limit: a person's words (a relayed text, an SOS to an
+	// emergency contact) lose their tail, as before. A ciphertext or a frame
+	// (OOB, the Hub's) cut short cannot be decrypted or verified at the far
+	// end, so it is refused instead: it used to be cut, and every encrypted
+	// text over 160 characters arrived as garbage. The kits' USB modems send
+	// one SMS of at most 160 characters whatever max_sms_segments says
+	// (DirectCellTransport.SendSMS). [MESHSAT-1581]
 	maxLen := 160 * g.config.MaxSMSSegments
+	whole := maxLen
+	if g.smsTextMode() && whole > 160 {
+		whole = 160
+	}
+	if (msg.Encrypted || (msg.RawText && !msg.AsWritten)) && len(text) > whole {
+		return fmt.Errorf("SMS of %d characters, %d fit: %w", len(text), whole, transport.ErrPayloadTooLong)
+	}
 	if len(text) > maxLen {
 		text = text[:maxLen]
 	}
@@ -325,8 +338,14 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 			// Sealed with this chat's own key by the delivery worker: the
 			// ciphertext on air, the words in the history.
 			onAir, encrypted = sealed, true
-			if len(onAir) > maxLen {
-				onAir = onAir[:maxLen]
+			if len(onAir) > whole {
+				err := fmt.Errorf("SMS of %d characters, %d fit: %w", len(onAir), whole, transport.ErrPayloadTooLong)
+				log.Error().Err(err).Str("to", number).Msg("cellular: sealed SMS too long, not sent")
+				g.errors.Add(1)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("SMS to %s: %w", number, err)
+				}
+				continue
 			}
 			words = sealed
 			if msg.PlainText != "" {

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -252,5 +253,24 @@ func TestCannedText(t *testing.T) {
 		if got != want || ok != (want != "") {
 			t.Errorf("cannedText(%q) = %q, %v; want %q", in, got, ok, want)
 		}
+	}
+}
+
+// A message the bearer cannot carry without destroying it (a ciphertext too
+// long for one SMS) gives up at once, with the reason: no retry can make it
+// fit. [MESHSAT-1581]
+func TestDeliver_TooLongGivesUpAtOnce(t *testing.T) {
+	h := setupE2E(t)
+	h.addInterface(t, "cellular_0", "cellular", true)
+	h.setOnline("cellular_0")
+	gw := h.addGateway("cellular_0", "cellular")
+	gw.failWith = fmt.Errorf("SMS of 172 characters, 160 fit: %w", transport.ErrPayloadTooLong)
+	w := newTestWorker(h, "cellular_0", "cellular")
+	id, _, _ := h.dispatch.QueueDirectSend("cellular_0", "hello", "")
+	del, _ := h.db.GetDelivery(id)
+	w.deliver(context.Background(), *del)
+	got, _ := h.db.GetDelivery(id)
+	if got.Status != "dead" || got.Retries != 0 || !strings.Contains(got.LastError, "does not fit") {
+		t.Fatalf("delivery %s, %d retries, %q", got.Status, got.Retries, got.LastError)
 	}
 }

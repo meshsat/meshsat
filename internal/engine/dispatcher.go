@@ -2329,8 +2329,9 @@ func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr
 		return
 	}
 
-	// No recipient and no default one: no retry can help. [MESHSAT-1412]
-	if errors.Is(deliveryErr, transport.ErrNoRecipient) {
+	// No recipient and no default one, or a message the bearer cannot carry
+	// without destroying it: no retry can help. [MESHSAT-1412, MESHSAT-1581]
+	if errors.Is(deliveryErr, transport.ErrNoRecipient) || errors.Is(deliveryErr, transport.ErrPayloadTooLong) {
 		if err := w.db.SetDeliveryStatus(del.ID, "dead", errMsg, ""); err != nil {
 			log.Error().Err(err).Int64("id", del.ID).Msg("failed to mark delivery dead")
 		}
