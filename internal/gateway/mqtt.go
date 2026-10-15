@@ -202,10 +202,12 @@ func (g *MQTTGateway) Stop() error {
 	return nil
 }
 
-// Forward publishes a mesh message to MQTT.
+// Forward publishes a mesh message to MQTT. With no broker connection it
+// fails with transport.ErrNotConnected: it used to return nil, so the
+// delivery ledger marked a message delivered that never left. [MESHSAT-1581]
 func (g *MQTTGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
 	if !g.connected.Load() {
-		return nil // silently skip if disconnected
+		return fmt.Errorf("mqtt: %w", transport.ErrNotConnected)
 	}
 
 	topic := fmt.Sprintf("%s/%s/%08x", g.config.TopicPrefix, g.config.ChannelName, msg.From)
