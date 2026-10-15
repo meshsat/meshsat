@@ -214,15 +214,21 @@ func (s *Server) handleUpdateBondGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, existing)
 }
 
-// handleHeMBSend sends a payload through a HeMB bond group.
-// @Summary Send payload via HeMB bond group
+// handleHeMBSend sends a payload through a HeMB bond group. Experimental:
+// refused with 409 unless MESHSAT_HEMB_EXPERIMENTAL=true. [MESHSAT-1581]
+// @Summary Send payload via HeMB bond group (experimental, opt-in)
 // @Tags hemb
 // @Accept json
 // @Produce json
 // @Param body body object true "Send request" example({"bond_group":"bond1","payload_b64":"..."})
 // @Success 200 {object} map[string]any
+// @Failure 409 {object} map[string]string "HeMB is experimental and off"
 // @Router /api/hemb/send [post]
 func (s *Server) handleHeMBSend(w http.ResponseWriter, r *http.Request) {
+	if !hemb.Experimental() {
+		writeError(w, http.StatusConflict, hemb.ErrExperimentalOff.Error())
+		return
+	}
 	var req struct {
 		BondGroup  string `json:"bond_group"`
 		PayloadB64 string `json:"payload_b64"` // base64-encoded payload
@@ -300,14 +306,20 @@ func (s *Server) handleGetHeMBStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHeMBFaultInject injects a fault on a bearer interface for field testing.
-// @Summary Inject bearer fault
+// Experimental: refused with 409 unless MESHSAT_HEMB_EXPERIMENTAL=true. [MESHSAT-1581]
+// @Summary Inject bearer fault (HeMB, experimental, opt-in)
 // @Tags hemb
 // @Accept json
 // @Produce json
 // @Param body body object true "Fault inject request" example({"interface_id":"tcp_0"})
 // @Success 200 {object} map[string]string
+// @Failure 409 {object} map[string]string "HeMB is experimental and off"
 // @Router /hemb/fault-inject [post]
 func (s *Server) handleHeMBFaultInject(w http.ResponseWriter, r *http.Request) {
+	if !hemb.Experimental() {
+		writeError(w, http.StatusConflict, hemb.ErrExperimentalOff.Error())
+		return
+	}
 	if s.dispatcher == nil {
 		writeError(w, http.StatusServiceUnavailable, "dispatcher not available")
 		return

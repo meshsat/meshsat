@@ -2897,7 +2897,12 @@ func main() {
 	// plaintext (status-quo behaviour). A future HeMB frame header
 	// revision should embed the bond-group ID so per-bond transforms
 	// become unambiguous; tracked as a follow-up in MESHSAT-664.
-	{
+	// HeMB is experimental and opt-in (MESHSAT_HEMB_EXPERIMENTAL): with it
+	// off no receive bonder is registered, whatever bond groups exist.
+	// [MESHSAT-1581]
+	if !hemb.Experimental() {
+		log.Info().Msg("hemb: experimental and off (MESHSAT_HEMB_EXPERIMENTAL), no receive bonder, no TUN adapter")
+	} else {
 		groups, gerr := db.GetAllBondGroups()
 		if gerr == nil && len(groups) > 0 {
 			bondIngressTransforms := ""
@@ -3011,14 +3016,11 @@ func main() {
 	}
 
 	// HeMB TUN adapter — creates a virtual network interface for IP-over-HeMB bonding.
-	// Enabled by MESHSAT_HEMB_TUN env var. In standalone mode we
-	// default to "hemb0" so HeMB multi-bearer send is actually wired
-	// without operator config; set MESHSAT_HEMB_TUN=none to opt out
-	// (locked-down deployments, or systems without CAP_NET_ADMIN).
+	// Off unless MESHSAT_HEMB_EXPERIMENTAL=true and MESHSAT_HEMB_TUN names
+	// the device (e.g. hemb0); "none" stays accepted. It defaulted to hemb0
+	// in standalone mode until HeMB became opt-in. [MESHSAT-1581]
 	tunName := os.Getenv("MESHSAT_HEMB_TUN")
-	if tunName == "" && cfg.Mode == "direct" {
-		tunName = "hemb0"
-	} else if tunName == "none" {
+	if tunName == "none" || !hemb.Experimental() {
 		tunName = ""
 	}
 	if tunName != "" {
