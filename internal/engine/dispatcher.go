@@ -689,6 +689,15 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 	for _, m := range matches {
 		// Check if the forwarding target is a HeMB bond group.
 		if d.db.IsBondGroup(m.ForwardTo) {
+			// HeMB is experimental and opt-in: with it off, a rule that
+			// forwards to a bond group sends nothing. [MESHSAT-1581]
+			if !hemb.Experimental() {
+				log.Warn().Str("bond_group", m.ForwardTo).Msg("hemb: rule forwards to a bond group, HeMB is experimental and off, not sent")
+				if d.signing != nil {
+					d.signing.AuditEvent("drop", nil, nil, nil, nil, "HeMB experimental off: bond group "+m.ForwardTo)
+				}
+				continue
+			}
 			if d.failover != nil {
 				sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
 					// Try gateway first (satellite, cellular, MQTT, etc.).
@@ -1371,6 +1380,9 @@ func (d *Dispatcher) reapAckTimeouts() {
 // SendViaBondGroup sends a payload through a HeMB bond group.
 // Returns the number of bearers used or an error.
 func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, error) {
+	if !hemb.Experimental() {
+		return 0, hemb.ErrExperimentalOff // [MESHSAT-1581]
+	}
 	if d.failover == nil {
 		return 0, fmt.Errorf("failover resolver not initialized")
 	}
@@ -1468,6 +1480,9 @@ func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, erro
 // ForwardHeMBFrame sends a raw HeMB frame to a specific interface via its gateway.
 // Used by the TUN adapter to route coded symbols to physical transports.
 func (d *Dispatcher) ForwardHeMBFrame(ifaceID string, data []byte) error {
+	if !hemb.Experimental() {
+		return hemb.ErrExperimentalOff // [MESHSAT-1581]
+	}
 	gw := d.gwProv.GatewayByInterfaceID(ifaceID)
 	if gw == nil {
 		return fmt.Errorf("no gateway for interface %q", ifaceID)
