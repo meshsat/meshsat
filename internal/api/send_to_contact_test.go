@@ -42,7 +42,7 @@ func testServerWithDispatcher(t *testing.T, kinds ...directory.Kind) (*Server, *
 func kindChannelType(k directory.Kind) string {
 	switch k {
 	case directory.KindSMS:
-		return "sms"
+		return "cellular" // the cellular gateway sends a contact's SMS [MESHSAT-1581]
 	case directory.KindMeshtastic:
 		return "mesh"
 	case directory.KindAPRS:
@@ -109,7 +109,7 @@ func TestSendToContact_AllBearers(t *testing.T) {
 	_ = store.CreateContact(t.Context(), c)
 	for _, a := range []directory.Address{
 		{ContactID: c.ID, Kind: directory.KindSMS, Value: "+316"},
-		{ContactID: c.ID, Kind: directory.KindMeshtastic, Value: "!m"},
+		{ContactID: c.ID, Kind: directory.KindMeshtastic, Value: "!0000000a"},
 		{ContactID: c.ID, Kind: directory.KindAPRS, Value: "X-1"},
 	} {
 		a := a
