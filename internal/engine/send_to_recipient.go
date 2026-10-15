@@ -2,12 +2,16 @@ package engine
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/database"
 	"meshsat/internal/directory"
 	"meshsat/internal/types"
 )
@@ -66,15 +70,20 @@ type SendResult struct {
 // handler picks up a queued delivery). The mapping is the inverse of
 // the v44 bridge migration's kind-normalisation step: MESHTASTIC →
 // "mesh", IRIDIUM_SBD → "iridium", etc.
+//
+// SMS goes to the cellular gateway: "sms" is the channel type of sms_0,
+// Reticulum's packet interface over SMS, which has no delivery gateway, so
+// a contact's SMS queued there never went out. A Reticulum contact is an
+// LXMF message (queueContactAddress); it used to map to "tcp", which has no
+// gateway either. [MESHSAT-1581]
 var kindToChannelType = map[directory.Kind]string{
-	directory.KindSMS:        "sms",
+	directory.KindSMS:        "cellular",
 	directory.KindMeshtastic: "mesh",
 	directory.KindAPRS:       "aprs",
 	directory.KindIridiumSBD: "iridium",
 	directory.KindIridiumIMT: "iridium_imt",
 	directory.KindCellular:   "cellular",
 	directory.KindTAK:        "tak",
-	directory.KindReticulum:  "tcp", // Reticulum uses the TCP interface as default bearer
 	directory.KindZigBee:     "zigbee",
 	directory.KindBLE:        "ble",
 	directory.KindWebhook:    "webhook",
@@ -168,12 +177,7 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 	}
 
 	for _, a := range addrs {
-		ifaceID, err := d.interfaceForKind(a.Kind)
-		if err != nil {
-			res.Errors[a.Kind] = err
-			continue
-		}
-		delID, _, err := d.QueueDirectSend(ifaceID, string(body), string(res.Precedence))
+		delID, err := d.queueContactAddress(a, body, res.Precedence)
 		if err != nil {
 			res.Errors[a.Kind] = err
 			continue
@@ -191,6 +195,70 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		return res, fmt.Errorf("no bearer queued (no addresses matched any interface)")
 	}
 	return res, nil
+}
+
+// queueContactAddress queues body for one of a contact's addresses, with
+// that address on the row as its destination, so the gateway sends to the
+// contact the strategy chose. The destination used to be dropped: an SMS
+// went to the gateway's own default numbers and a mesh text was broadcast
+// to everyone. [MESHSAT-1581]
+func (d *Dispatcher) queueContactAddress(a directory.Address, body []byte, precedence types.Precedence) (int64, error) {
+	dest, err := contactDestination(a)
+	if err != nil {
+		return 0, err
+	}
+	if a.Kind == directory.KindReticulum {
+		// As POST /api/lxmf/send queues it: the router packs, signs and
+		// waits for the proof, the ledger keeps the retries.
+		payload, _ := json.Marshal(map[string]string{"content": string(body), "title": ""})
+		id, _, err := d.QueueDirectSendTo("lxmf_0", string(body), DirectSendOptions{
+			Precedence:  string(precedence),
+			Destination: dest,
+			Class:       database.DeliveryClassLXMF,
+			MaxRetries:  5,
+			Payload:     payload,
+		})
+		return id, err
+	}
+	ifaceID, err := d.interfaceForKind(a.Kind)
+	if err != nil {
+		return 0, err
+	}
+	id, _, err := d.QueueDirectSendTo(ifaceID, string(body), DirectSendOptions{
+		Precedence:  string(precedence),
+		Destination: dest,
+	})
+	return id, err
+}
+
+// contactDestination is an address in the form its gateway reads from a
+// delivery's destination: a mesh node id "!xxxxxxxx", an upper-case APRS
+// callsign, a 32-hex LXMF destination hash, anything else as stored (an
+// SMS number). An address that cannot be one is refused, never sent to a
+// default.
+func contactDestination(a directory.Address) (string, error) {
+	v := strings.TrimSpace(a.Value)
+	if v == "" {
+		return "", fmt.Errorf("%s address is empty", a.Kind)
+	}
+	switch a.Kind {
+	case directory.KindMeshtastic:
+		id := strings.ToLower(v)
+		bang := strings.HasPrefix(id, "!")
+		id = strings.TrimPrefix(id, "!")
+		if _, err := strconv.ParseUint(id, 16, 32); err != nil || len(id) > 8 || (!bang && len(id) != 8) {
+			return "", fmt.Errorf("mesh address %q is not a node id (!xxxxxxxx)", a.Value)
+		}
+		return "!" + id, nil
+	case directory.KindAPRS:
+		return strings.ToUpper(v), nil
+	case directory.KindReticulum:
+		if b, err := hex.DecodeString(v); err != nil || len(b) != 16 {
+			return "", fmt.Errorf("reticulum address %q is not a 32-hex LXMF destination hash", a.Value)
+		}
+		return strings.ToLower(v), nil
+	}
+	return v, nil
 }
 
 // resolveStrategy walks the policy hierarchy: explicit opts →
