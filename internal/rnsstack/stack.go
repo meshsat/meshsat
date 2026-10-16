@@ -179,6 +179,16 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		st.loadPaths()
 		node.OnPathChanged = func(dest [rns.HashLen]byte, e *rns.PathEntry) { go st.persistPath(e) }
 	}
+	// The late-proof listener goes in before the node is reachable: Build
+	// returns the node to main.go, which only then hands it to the
+	// packet ingress (Processor.SetRNSNode), so no proof can arrive before
+	// it, be dropped and then filtered as a duplicate (red-team A13-R2).
+	// [MESHSAT-1584]
+	if cfg.DB != nil && cfg.LXMF.Enabled {
+		if err := st.EnableLateProofs(cfg.DB, nil); err != nil {
+			log.Error().Err(err).Msg("lxmf: stored proof hashes unreadable; every unmatched proof is checked against the database")
+		}
+	}
 	if cfg.LXMF.Enabled {
 		st.LXMF = lxmf.New(node, lxmf.Config{
 			Identity:             cfg.Identity.ReticulumIdentity(),
@@ -441,17 +451,27 @@ type lateProofs struct {
 	notify func(intentID string)
 	mu     sync.Mutex
 	expect map[[rns.HashLen]byte]struct{} // first 16 bytes of the hashes waited for
+	// unfiltered: the stored hashes could not be loaded, so every unmatched
+	// proof is checked against the database instead of the set.
+	unfiltered bool
 }
+
+// Test seams: loading the stored hashes, and storing one before a send.
+var (
+	loadExpectedProofs = func(db *database.DB) ([]string, error) { return db.ExpectedProofHashes() }
+	storeProof         = func(db *database.DB, attemptID int64, gen int, hash, key string) error {
+		return db.SetTransmissionProof(attemptID, gen, hash, key)
+	}
+)
 
 // EnableLateProofs turns that on: the hashes stored before a restart are
 // loaded, and the node hands every unmatched proof here. notify (may be
 // nil) hears which intent got evidence; its heartbeat finds it anyway.
+// When loading fails the listener is installed all the same, checking
+// every unmatched proof against the database, and the error is returned.
 func (st *Stack) EnableLateProofs(db *database.DB, notify func(intentID string)) error {
-	hashes, err := db.ExpectedProofHashes()
-	if err != nil {
-		return err
-	}
-	lp := &lateProofs{db: db, notify: notify, expect: map[[rns.HashLen]byte]struct{}{}}
+	hashes, err := loadExpectedProofs(db)
+	lp := &lateProofs{db: db, notify: notify, expect: map[[rns.HashLen]byte]struct{}{}, unfiltered: err != nil}
 	for _, h := range hashes {
 		if b, err := hex.DecodeString(h); err == nil && len(b) >= rns.HashLen {
 			var k [rns.HashLen]byte
@@ -467,21 +487,36 @@ func (st *Stack) EnableLateProofs(db *database.DB, notify func(intentID string))
 			prev(pkt)
 		}
 	}
-	return nil
+	return err
+}
+
+// SetLateProofNotify names who hears that an intent got late evidence (the
+// Escalator, created after the stack).
+func (st *Stack) SetLateProofNotify(notify func(intentID string)) {
+	if lp := st.late; lp != nil {
+		lp.mu.Lock()
+		lp.notify = notify
+		lp.mu.Unlock()
+	}
 }
 
 // watch sets a send's hooks for one intent attempt (its row and claim
 // generation).
 func (lp *lateProofs) watch(opts *lxmf.SendOptions, attemptID int64, gen int) {
-	opts.OnSent = func(h [32]byte, key ed25519.PublicKey) {
+	// Stored before the packet is written; a failure to store stops the
+	// write, so no transmission goes out without what its proof needs
+	// (red-team A13-R1).
+	opts.Prepare = func(h [32]byte, key ed25519.PublicKey) error {
+		if err := storeProof(lp.db, attemptID, gen, hex.EncodeToString(h[:]), hex.EncodeToString(key)); err != nil {
+			log.Warn().Err(err).Int64("attempt", attemptID).Msg("lxmf: proof hash not stored; the packet is not sent")
+			return err
+		}
 		var k [rns.HashLen]byte
 		copy(k[:], h[:])
 		lp.mu.Lock()
 		lp.expect[k] = struct{}{}
 		lp.mu.Unlock()
-		if err := lp.db.SetTransmissionProof(attemptID, gen, hex.EncodeToString(h[:]), hex.EncodeToString(key)); err != nil {
-			log.Warn().Err(err).Int64("attempt", attemptID).Msg("lxmf: proof hash not stored; a late proof will not count")
-		}
+		return nil
 	}
 	opts.OnLateDelivery = func() {
 		e, err := lp.db.RecordLateDelivery(attemptID, gen)
@@ -512,8 +547,9 @@ func (lp *lateProofs) take(pkt *rns.Packet) {
 	}
 	lp.mu.Lock()
 	_, waited := lp.expect[key]
+	unfiltered := lp.unfiltered
 	lp.mu.Unlock()
-	if !waited {
+	if !waited && !unfiltered {
 		return // someone else's proof passing through, or one already taken
 	}
 	valid := func(proofHash, proofKey string) bool {
@@ -546,7 +582,10 @@ func (lp *lateProofs) recorded(e database.DeliveryEvidence) {
 	}
 	log.Info().Str("intent", e.IntentID).Int64("transmission", e.TransmissionID).
 		Msg("lxmf: a proof came after the send stopped waiting; recorded as evidence")
-	if lp.notify != nil {
-		lp.notify(e.IntentID)
+	lp.mu.Lock()
+	notify := lp.notify
+	lp.mu.Unlock()
+	if notify != nil {
+		notify(e.IntentID)
 	}
 }

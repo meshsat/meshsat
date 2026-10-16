@@ -16,7 +16,7 @@ import (
 // A-13 against upstream: the bridge stops waiting the moment its LXMF
 // packet is out, so the stock Python receiver's proof (RNS 1.5.4, LXMF
 // 1.1.0) arrives after the wait. It reaches Node.OnUnmatchedProof and
-// validates against the hash and key OnSent reported, which is all the
+// validates against the hash and key Prepare reported, which is all the
 // ledger needs to record it. [MESHSAT-1584]
 func TestInteropLXMFLateProofReachesTheHook(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -34,7 +34,7 @@ func TestInteropLXMFLateProofReachesTheHook(t *testing.T) {
 	var sentKey ed25519.PublicKey
 	sendCtx, stop := context.WithCancel(ctx)
 	_, _, err := r.SendWith(sendCtx, h16(p.Delivery), []byte("late proof"), nil, lxmf.MapOf(), lxmf.Opportunistic, lxmf.SendOptions{
-		OnSent: func(h [32]byte, k ed25519.PublicKey) { sentHash, sentKey = h, k; stop() },
+		Prepare: func(h [32]byte, k ed25519.PublicKey) error { sentHash, sentKey = h, k; stop(); return nil },
 	})
 	if err == nil {
 		t.Skip("the proof beat the cancelled wait; nothing late to check this run")
@@ -48,7 +48,7 @@ func TestInteropLXMFLateProofReachesTheHook(t *testing.T) {
 		t.Fatalf("implicit proof addressed to %x; want the packet hash prefix %x", pkt.Hdr.DestHash, sentHash[:16])
 	}
 	if err := reticulum.ValidateProof(pkt.Hdr.Data, sentHash, sentKey); err != nil {
-		t.Fatalf("upstream's proof does not validate against what OnSent reported: %v (%d bytes)", err, len(pkt.Hdr.Data))
+		t.Fatalf("upstream's proof does not validate against what Prepare reported: %v (%d bytes)", err, len(pkt.Hdr.Data))
 	}
 	t.Logf("upstream proof: %d bytes (implicit=%v), validated after the wait ended", len(pkt.Hdr.Data), len(pkt.Hdr.Data) == reticulum.ImplicitProofLen)
 }

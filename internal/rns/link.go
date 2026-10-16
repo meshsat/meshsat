@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -380,18 +381,26 @@ func (m *LinkManager) handleProof(pkt *Packet) {
 
 // sendLinkPacket transmits a packet on the link's interface (Transport.outbound for LINK destinations).
 func (m *LinkManager) sendLinkPacket(l *Link, ptype, context byte, data []byte) []byte {
+	raw := buildLinkPacket(l, ptype, context, data)
+	m.writeLinkPacket(l, context, raw)
+	return raw
+}
+
+func buildLinkPacket(l *Link, ptype, context byte, data []byte) []byte {
 	h := &reticulum.Header{HeaderType: reticulum.HeaderType1, DestType: reticulum.DestLink, PacketType: ptype,
 		DestHash: l.ID, Context: context, Data: data}
-	raw := h.Marshal()
+	return h.Marshal()
+}
+
+func (m *LinkManager) writeLinkPacket(l *Link, context byte, raw []byte) {
 	l.lastOutbound = m.n.now()
 	if context == reticulum.ContextKeepalive {
 		l.lastKeepalive = l.lastOutbound
 	}
 	if l.freeOnly && !m.n.FreeInterface(l.Iface) {
-		return raw // a free-only link never leaves on a paid interface
+		return // a free-only link never leaves on a paid interface
 	}
 	m.n.transmit(l.Iface, raw)
-	return raw
 }
 
 // Allows reports whether a send under c may use this link: under FreeOnly
@@ -410,6 +419,12 @@ func (m *LinkManager) Send(l *Link, plain []byte) (*Receipt, error) {
 // anything is encrypted or sent when the link is on an interface the
 // constraint, or the link's own, does not allow. [MESHSAT-1584]
 func (m *LinkManager) SendWith(l *Link, plain []byte, c Constraint) (*Receipt, error) {
+	return m.SendPrepared(l, plain, c, nil)
+}
+
+// SendPrepared is SendWith with a prepare step after the packet is built
+// and before it is written (Node.SendDataPrepared). [MESHSAT-1584]
+func (m *LinkManager) SendPrepared(l *Link, plain []byte, c Constraint, prepare PrepareFunc) (*Receipt, error) {
 	if (c.FreeOnly || l.freeOnly) && !m.n.FreeInterface(l.Iface) {
 		return nil, ErrPaidRefused
 	}
@@ -425,13 +440,19 @@ func (m *LinkManager) SendWith(l *Link, plain []byte, c Constraint) (*Receipt, e
 	if err != nil {
 		return nil, err
 	}
-	raw := m.sendLinkPacket(l, reticulum.PacketData, reticulum.ContextNone, ct)
+	raw := buildLinkPacket(l, reticulum.PacketData, reticulum.ContextNone, ct)
 	r := &Receipt{Hash: reticulum.PacketHash(raw), Dest: l.ID, SentAt: m.n.now(), link: l,
 		Timeout: m.n.now().Add(time.Duration(reticulum.DefaultPerHopTimeoutSec*max(1, l.expectedHops))*time.Second + 6*time.Second)}
 	// Link proofs are signed by the peer's link signing key: the destination
 	// identity when we initiated, the initiator's ephemeral key otherwise.
 	r.sigPub = l.peerSigPub
+	if prepare != nil {
+		if err := prepare(r.Hash, r.sigPub); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrNotPrepared, err)
+		}
+	}
 	m.n.addReceipt(r)
+	m.writeLinkPacket(l, reticulum.ContextNone, raw)
 	return r, nil
 }
 
