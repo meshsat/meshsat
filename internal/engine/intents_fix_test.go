@@ -315,11 +315,10 @@ func TestIntentFix_AcceptanceStampSurvivesARestart(t *testing.T) {
 // anyway, its answer names both transmissions and completes neither.
 func TestIntentFix_ReusedPacketIDStaysAmbiguous(t *testing.T) {
 	h := newIntentHarness(t)
-	h.mesh.fixedID = 0x0badf00d
-	h.workers["mesh_0"].mesh = pickOwnIDMesh{m: h.mesh}
 	c := h.contact(meshAddr(0))
 	old := h.submit(c, "old", directory.StrategyPrimaryOnly)
 	h.work("mesh_0")
+	h.reuseMeshID(old, "0badf00d")
 	if _, err := h.db.Exec(`UPDATE delivery_transmissions SET handoff_at = datetime('now', '-2 hours') WHERE intent_id = ?`, old); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +326,8 @@ func TestIntentFix_ReusedPacketIDStaysAmbiguous(t *testing.T) {
 		t.Fatal("an id of a kept transmission two hours old is free again")
 	}
 	fresh := h.submit(c, "new", directory.StrategyPrimaryOnly)
-	h.work("mesh_0") // the radio picks 0badf00d again
+	h.work("mesh_0")
+	h.reuseMeshID(fresh, "0badf00d") // the radio sent it under the old id anyway
 	h.ack(0x0badf00d, annMesh, 0)
 	for _, id := range []string{old, fresh} {
 		if s := h.snap(id); s.Intent.Outcome == database.OutcomeDeliveredDevice || len(s.Evidence) != 0 {

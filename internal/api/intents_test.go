@@ -20,6 +20,8 @@ type idMesh struct{ transport.MeshTransport }
 
 func (idMesh) SendMessageID(context.Context, transport.SendRequest) (uint32, error) { return 1, nil }
 
+func (idMesh) SendMessageWithID(context.Context, transport.SendRequest, uint32) error { return nil }
+
 // The delivery-intent endpoints (HeMB-NG stage 1a, r3 D11 and B10):
 // send-to-contact with an Idempotency-Key, the refusals that write nothing
 // (400, 409, 413, 422), the status, the cancel. [MESHSAT-1581]
