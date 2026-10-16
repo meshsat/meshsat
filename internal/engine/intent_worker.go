@@ -10,6 +10,7 @@ import (
 
 	"meshsat/internal/codec"
 	"meshsat/internal/database"
+	"meshsat/internal/gateway"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
 )
@@ -51,8 +52,18 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 	gen := del.ClaimGen
 	defer w.intents.Notify(del.IntentID)
 
-	// Pre-send checks: no transmission, no call.
-	text, refuse := w.intentPreSend(del)
+	// Pre-send checks: no transmission, no call. A route of a gateway
+	// adapter (stage 1b) has its own. [MESHSAT-1584]
+	var ad gateway.IntentAdapter
+	var text string
+	var encrypted bool
+	var refuse *intentRefusal
+	if del.Class != database.DeliveryClassLXMF && w.channelID != "mesh_0" && w.channelID != "mesh" {
+		ad = w.intentAdapterFor()
+		text, encrypted, refuse = w.intentPreSendGateway(del, ad)
+	} else {
+		text, refuse = w.intentPreSend(del)
+	}
 	if refuse != nil {
 		if err := w.db.EndAttemptNotSent(del.ID, gen, refuse.Reason, refuse.Detail, refuse.Retryable, time.Now().Add(intentOfflineRetry)); err != nil {
 			log.Error().Err(err).Int64("id", del.ID).Msg("intent attempt: could not record the refusal")
@@ -77,7 +88,15 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 	// after a stop, names this transmission (red-team F-2, R-3).
 	var meshID uint32
 	var corr database.Correlation
-	if del.Class != database.DeliveryClassLXMF {
+	if ad != nil {
+		v, err := w.reserveCorr(ad.IntentCorrKind(), ad.IntentNewCorr)
+		if err != nil {
+			_, _ = w.db.FinalizeTransmission(txID, database.TransmissionResult{Class: database.ClassNotSent, Retryable: true,
+				ConsumeRetry: true, Detail: "no correlation: " + err.Error()})
+			return
+		}
+		corr = database.Correlation{Kind: ad.IntentCorrKind(), Value: v, Scope: w.channelID, Peer: del.Destination}
+	} else if del.Class != database.DeliveryClassLXMF {
 		if meshID, err = w.reserveMeshID(); err != nil {
 			_, _ = w.db.FinalizeTransmission(txID, database.TransmissionResult{Class: database.ClassNotSent, Retryable: true,
 				ConsumeRetry: true, Detail: "no packet id: " + err.Error()})
@@ -96,6 +115,8 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 	switch {
 	case del.Class == database.DeliveryClassLXMF:
 		out = w.sendIntentLXMF(ctx, del)
+	case ad != nil:
+		out = w.sendIntentGateway(ctx, del, ad, text, encrypted, corr.Value)
 	case w.channelID == "mesh_0" || w.channelID == "mesh":
 		out = w.sendIntentMesh(ctx, del, text, meshID)
 	default:
@@ -107,7 +128,7 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 		out.Detail = "link down: " + out.Detail
 	}
 	res := out.transmissionResult()
-	if del.Class != database.DeliveryClassLXMF {
+	if del.Class != database.DeliveryClassLXMF && ad == nil {
 		res.Reconcile, res.MatchWindowS = classifyMeshReceipt, meshCorrWindowS
 	}
 	if out.Class == database.ClassAccepted {
@@ -256,4 +277,17 @@ func (w *DeliveryWorker) sendIntentLXMF(ctx context.Context, del database.Messag
 		out.Corr = Correlation{Kind: "lxmf_hash", Value: hash, Scope: "lxmf_0", Peer: del.Destination}
 	}
 	return out
+}
+
+// intentAdapterFor is this worker's gateway when it can carry intents.
+func (w *DeliveryWorker) intentAdapterFor() gateway.IntentAdapter {
+	if w.gwProv == nil {
+		return nil
+	}
+	gw := w.gwProv.GatewayByInterfaceID(w.channelID)
+	if gw == nil {
+		return nil
+	}
+	ad, _ := gw.(gateway.IntentAdapter)
+	return ad
 }

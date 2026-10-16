@@ -388,6 +388,13 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 			p.Reason = reasonOversize
 			return p
 		}
+	case directory.KindAPRS:
+		// Stage 1b: an APRS message with our own message id; an ack from
+		// the addressed station is its receipt. [MESHSAT-1584]
+		p.AdapterMode = modeAPRS
+		p.CompletionRule = database.OutcomeDeliveredDevice
+		e.admitGateway(&p, a.Kind, payload)
+		return p
 	default:
 		p.Reason = reasonNotEnabled
 		return p
@@ -437,6 +444,9 @@ func (e *Escalator) usable(p database.RoutePlanEntry) bool {
 			return false
 		}
 		return true
+	}
+	if gatewayModes[p.AdapterMode] {
+		return e.d.intentAdapter(p.InterfaceID) != nil
 	}
 	return false
 }
