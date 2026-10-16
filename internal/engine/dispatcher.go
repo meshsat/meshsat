@@ -116,6 +116,10 @@ type Dispatcher struct {
 	// [Dispatcher.SendToRecipient] accepts only RawRecipient targets.
 	recipientResolver RecipientResolver
 
+	// escalator owns the delivery intents (nil = none in the database and
+	// MESHSAT_DELIVERY_INTENTS off). [MESHSAT-1581]
+	escalator *Escalator
+
 	// wg tracks every goroutine spawned by Start / StartWorker so
 	// callers (tests, graceful shutdown) can Wait() for all workers to
 	// drain before closing the underlying database. Without this,
@@ -317,6 +321,14 @@ func (d *Dispatcher) satellitePassSched(desc channel.ChannelDescriptor) PassStat
 }
 
 // Start launches per-channel delivery workers.
+// SetEscalator attaches the owner of delivery intents. Call before Start:
+// Start settles the intents' attempts a stop left in flight before any
+// worker runs, and runs the Escalator's loop. [MESHSAT-1581]
+func (d *Dispatcher) SetEscalator(e *Escalator) { d.escalator = e }
+
+// Escalator returns the owner of delivery intents, or nil.
+func (d *Dispatcher) Escalator() *Escalator { return d.escalator }
+
 func (d *Dispatcher) Start(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -345,6 +357,20 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		log.Error().Err(err).Msg("dispatcher: failed to recover stale deliveries")
 	} else if n > 0 {
 		log.Info().Int64("recovered", n).Msg("dispatcher: recovered stale 'sending' deliveries to 'retry'")
+	}
+
+	// Delivery intents: their attempts left in flight are settled from
+	// durable state before any worker runs (the legacy recovery above
+	// skips them), then the Escalator owns them. [MESHSAT-1581]
+	if d.escalator != nil {
+		if err := d.escalator.Recover(); err != nil {
+			log.Error().Err(err).Msg("dispatcher: delivery intent recovery failed")
+		}
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.escalator.Run(ctx)
+		}()
 	}
 
 	// Per-interface delivery workers: one worker per enabled interface instance.
@@ -450,6 +476,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			custodyMgr:      d.custodyMgr,
 			failover:        d.failover,
 			gate:            &d.gate,
+			intents:         d.escalator,
 			cancel:          workerCancel,
 		}
 		d.workers[iface.ID] = w
@@ -520,6 +547,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		custodyMgr:      d.custodyMgr,
 		failover:        d.failover,
 		gate:            &d.gate,
+		intents:         d.escalator,
 		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -1517,6 +1545,7 @@ type DeliveryWorker struct {
 	custodyMgr      *CustodyManager           // DTN custody transfer (MESHSAT-408)
 	failover        *FailoverResolver         // next group member when a bearer gets no ack [MESHSAT-1021]
 	gate            *atomic.Pointer[SendGate] // the dispatcher's send gate (nil = none) [MESHSAT-1446]
+	intents         *Escalator                // owner of delivery intents (nil = none) [MESHSAT-1581]
 	cancel          context.CancelFunc        // per-worker cancellation
 }
 
@@ -1594,6 +1623,14 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		if del.CreatedAt == "" {
 			del.CreatedAt = fresh.CreatedAt // for the event's latency_ms only [MESHSAT-826]
 		}
+	}
+
+	// An attempt of a delivery intent: claimed under the intent's fence,
+	// sent once per authorized transmission, finalized in one
+	// transaction. [MESHSAT-1581]
+	if del.IntentID != "" {
+		w.deliverIntent(ctx, del)
+		return
 	}
 
 	// LXMF: the router packs, signs, sends and waits for the proof; the

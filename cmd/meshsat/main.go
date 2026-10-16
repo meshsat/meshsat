@@ -1560,6 +1560,22 @@ func main() {
 	)
 	log.Info().Msg("DTN custody + fragment managers wired")
 
+	// Delivery intents (HeMB-NG stage 1a): a send-to-contact becomes an
+	// intent with a frozen route plan, its attempts ordinary delivery rows,
+	// one Escalator deciding every next step. MESHSAT_DELIVERY_INTENTS
+	// (default false) turns new submissions on; with it off the Escalator
+	// still runs while intents from an earlier run are active, so they end
+	// under one owner. Wired before Start: Start settles their attempts
+	// left in flight before any worker runs. [MESHSAT-1581]
+	var escalator *engine.Escalator
+	intentsOn := engine.DeliveryIntentsEnabled()
+	if active, err := db.ActiveIntentIDs(); intentsOn || (err == nil && len(active) > 0) {
+		escalator = engine.NewEscalator(db, dispatcher, engine.DefaultEscalatorConfig(), engine.SystemIntentClock(clockGuard.Trusted), intentsOn)
+		dispatcher.SetEscalator(escalator)
+		proc.SetRoutingReceiptHook(escalator.MeshRoutingReceipt)
+		log.Info().Bool("accepting", intentsOn).Int("active", len(active)).Msg("delivery intents: Escalator on")
+	}
+
 	dispatcher.Start(ctx)
 	proc.SetDispatcher(dispatcher)
 	log.Info().Msg("dispatcher + delivery workers started")
@@ -1937,6 +1953,9 @@ func main() {
 			log.Info().Msg("dispatcher: recipient resolver wired")
 		}
 	}
+	// The LXMF sender and the recipient resolver are wired: the Escalator
+	// can judge routes now. [MESHSAT-1581]
+	escalator.SetReady()
 
 	// OOB management frames [MESHSAT-756]: authenticated single-message
 	// commands over any bearer, executed from a fixed allowlist. Needs the

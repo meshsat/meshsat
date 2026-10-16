@@ -5,7 +5,9 @@ package transport
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1554,6 +1556,52 @@ func (t *DirectMeshTransport) SendMessage(ctx context.Context, req SendRequest) 
 	packet := buildTextMessage(req.Text, to, uint32(req.Channel))
 	toRadio := buildToRadioPacket(packet)
 	return sendFrame(t.file, toRadio)
+}
+
+// SendMessageID sends a text as SendMessage does, under a packet id of its
+// own choosing, and returns that id: a unicast asks for an acknowledgement
+// (wantAckFor), and the destination's ROUTING_APP answer names the id as its
+// request_id, which ties the answer to this send. A send that never reached
+// the serial write wraps ErrNotSubmitted (or is ErrNotConnected). [MESHSAT-1581]
+func (t *DirectMeshTransport) SendMessageID(ctx context.Context, req SendRequest) (uint32, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if !t.connected || t.file == nil {
+		return 0, ErrNotConnected
+	}
+	var to uint32
+	if req.To != "" {
+		n, err := strconv.ParseUint(strings.TrimPrefix(req.To, "!"), 16, 32)
+		if err != nil {
+			return 0, fmt.Errorf("%w: invalid destination %s", ErrNotSubmitted, req.To)
+		}
+		to = uint32(n)
+	}
+	id, err := newMeshPacketID()
+	if err != nil {
+		return 0, fmt.Errorf("%w: packet id: %v", ErrNotSubmitted, err)
+	}
+	packet := buildTextMessageWithID(req.Text, to, uint32(req.Channel), id)
+	if packet == nil {
+		return 0, fmt.Errorf("%w: could not encode the packet", ErrNotSubmitted)
+	}
+	if err := sendFrame(t.file, buildToRadioPacket(packet)); err != nil {
+		return id, err
+	}
+	return id, nil
+}
+
+// newMeshPacketID is a random non-zero packet id.
+func newMeshPacketID() (uint32, error) {
+	var b [4]byte
+	for {
+		if _, err := cryptorand.Read(b[:]); err != nil {
+			return 0, err
+		}
+		if id := binary.BigEndian.Uint32(b[:]); id != 0 {
+			return id, nil
+		}
+	}
 }
 
 func (t *DirectMeshTransport) SendRaw(ctx context.Context, req RawRequest) error {

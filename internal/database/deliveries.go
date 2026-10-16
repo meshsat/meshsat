@@ -56,12 +56,42 @@ type MessageDelivery struct {
 	Precedence    string     `json:"precedence,omitempty"`     // STANAG 4406 Edition 2 level (MESHSAT-543)
 	Destination   string     `json:"destination,omitempty"`    // bearer address for reply-to-sender sends; empty = interface default (MESHSAT-756)
 	Class         string     `json:"class"`                    // DeliveryClassMessage (default) or DeliveryClassOOB (MESHSAT-756)
+	// An attempt of a delivery intent (intents.go) carries its intent, its
+	// round, its number within the intent and its route in the plan; the
+	// latest transmission's outcome class; how many claims it has had
+	// (claim_gen, the generation its transmission is authorized under);
+	// and the reason it was retired or not sent. Empty and zero on every
+	// other row. [MESHSAT-1581]
+	IntentID     string `json:"intent_id,omitempty"`
+	Round        int    `json:"round,omitempty"`
+	AttemptNo    int    `json:"attempt_no,omitempty"`
+	RouteIndex   int    `json:"route_index,omitempty"`
+	OutcomeClass string `json:"outcome_class,omitempty"`
+	ClaimGen     int    `json:"claim_gen,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 	// PlainPreview is TextPreview as it was before the worker's egress
 	// transforms replaced it with ciphertext. In memory only, never stored:
 	// it lets the SMS history keep the words that were sent.
 	PlainPreview string `json:"-"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
+}
+
+// deliveryColumns is the column list every MessageDelivery query selects,
+// in the order of scanTargets.
+const deliveryColumns = `id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
+		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
+		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
+		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at,
+		COALESCE(intent_id, ''), round, attempt_no, route_index, outcome_class, claim_gen, reason`
+
+// scanTargets are the fields deliveryColumns scans into.
+func (d *MessageDelivery) scanTargets() []any {
+	return []any{&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
+		&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
+		&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
+		&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt,
+		&d.IntentID, &d.Round, &d.AttemptNo, &d.RouteIndex, &d.OutcomeClass, &d.ClaimGen, &d.Reason}
 }
 
 // DeliveryFilter specifies query filters for listing deliveries.
@@ -110,17 +140,11 @@ func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
 
 // GetDelivery returns a single delivery by ID.
 func (db *DB) GetDelivery(id int64) (*MessageDelivery, error) {
-	row := db.QueryRow(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
-		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
-		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
-		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at
+	row := db.QueryRow(`SELECT `+deliveryColumns+`
 		FROM message_deliveries WHERE id = ?`, id)
 
 	var d MessageDelivery
-	err := row.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
-		&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-		&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-		&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt)
+	err := row.Scan(d.scanTargets()...)
 	if err != nil {
 		return nil, fmt.Errorf("get delivery %d: %w", id, err)
 	}
@@ -145,7 +169,7 @@ func (db *DB) GetDeliveries(f DeliveryFilter) ([]MessageDelivery, error) {
 		args = append(args, f.MsgRef)
 	}
 
-	query := "SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, last_error, channel_ref, cost, visited, ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp, signature, signer_id, precedence, destination, delivery_class, created_at, updated_at FROM message_deliveries"
+	query := "SELECT " + deliveryColumns + " FROM message_deliveries"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -166,10 +190,7 @@ func (db *DB) GetDeliveries(f DeliveryFilter) ([]MessageDelivery, error) {
 	var result []MessageDelivery
 	for rows.Next() {
 		var d MessageDelivery
-		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
-			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-			&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(d.scanTargets()...); err != nil {
 			return nil, fmt.Errorf("scan delivery: %w", err)
 		}
 		result = append(result, d)
@@ -182,10 +203,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.Query(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
-		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
-		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
-		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at
+	rows, err := db.Query(`SELECT `+deliveryColumns+`
 		FROM message_deliveries
 		WHERE channel = ? AND status IN ('queued', 'retry')
 		  AND (next_retry IS NULL OR next_retry <= datetime('now'))
@@ -200,10 +218,7 @@ func (db *DB) GetPendingDeliveries(channel string, limit int) ([]MessageDelivery
 	var result []MessageDelivery
 	for rows.Next() {
 		var d MessageDelivery
-		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
-			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-			&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(d.scanTargets()...); err != nil {
 			return nil, fmt.Errorf("scan pending delivery: %w", err)
 		}
 		result = append(result, d)
@@ -316,12 +331,18 @@ func (db *DB) HasDueDeliveryAboveDeferred(channel string) (bool, error) {
 // finished, is left as it is and the error says so.
 func (db *DB) CancelDelivery(id int64) error {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = 'cancelled', held_at = NULL, updated_at = datetime('now')
-		WHERE id = ? AND status IN ('queued', 'retry', 'held')`, id)
+		WHERE id = ? AND status IN ('queued', 'retry', 'held') AND intent_id IS NULL`, id)
 	if err != nil {
 		return fmt.Errorf("cancel delivery %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		// An intent's attempt is cancelled with its intent: only the
+		// Escalator retires an intent's rows. [MESHSAT-1581]
+		var intentID string
+		if db.QueryRow(`SELECT COALESCE(intent_id, '') FROM message_deliveries WHERE id = ?`, id).Scan(&intentID) == nil && intentID != "" {
+			return fmt.Errorf("%w: delivery %d is an attempt of intent %s; cancel the intent", ErrIntentAttempt, id, intentID)
+		}
 		return fmt.Errorf("delivery %d not cancellable (not queued/retry/held)", id)
 	}
 	return nil
@@ -414,9 +435,23 @@ func (db *DB) WaitingDeliveryIDsByRef(msgRef string) ([]int64, error) {
 // claims each row this way before it sends it: a row cancelled, held or
 // expired since the worker fetched it is left as it is, where marking it
 // 'sending' unconditionally undid the cancel and sent it. [MESHSAT-1430]
+//
+// An attempt of a delivery intent is claimed only while its intent is
+// active and the attempt is of the intent's active round, in the same
+// statement, so SQLite orders it against every transition of the
+// Escalator: either a retire commits first and the claim changes nothing,
+// or the claim commits first and the retire leaves the row in flight. Each
+// claim also counts claim_gen up: the transmission authorized under the
+// claim carries that generation. [MESHSAT-1581]
 func (db *DB) ClaimDeliveryForSending(id int64) (bool, error) {
-	res, err := db.Exec(`UPDATE message_deliveries SET status = 'sending', last_error = '', channel_ref = '', updated_at = datetime('now')
-		WHERE id = ? AND status IN ('queued', 'retry')`, id)
+	res, err := db.Exec(`UPDATE message_deliveries SET status = 'sending', last_error = '', channel_ref = '',
+		claim_gen = claim_gen + 1, updated_at = datetime('now')
+		WHERE id = ? AND status IN ('queued', 'retry')
+		  AND (intent_id IS NULL OR EXISTS (
+			SELECT 1 FROM delivery_intents i
+			 WHERE i.id = message_deliveries.intent_id
+			   AND i.state = 'active'
+			   AND i.active_round = message_deliveries.round))`, id)
 	if err != nil {
 		return false, fmt.Errorf("claim delivery %d: %w", id, err)
 	}
@@ -505,7 +540,7 @@ func (db *DB) WeakestEvictable(channel string) (*EvictCandidate, error) {
 	row := db.QueryRow(`SELECT id, (`+precedenceRankSQL+`), priority, precedence
 		FROM message_deliveries
 		WHERE channel = ? AND status IN ('queued', 'retry', 'held')
-		  AND priority > 0
+		  AND priority > 0 AND intent_id IS NULL
 		ORDER BY (`+precedenceRankSQL+`) DESC, priority DESC, created_at DESC
 		LIMIT 1`, channel)
 	var c EvictCandidate
@@ -522,7 +557,7 @@ func (db *DB) WeakestEvictable(channel string) (*EvictCandidate, error) {
 func (db *DB) EvictDelivery(id int64, reason string) (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead',
 		last_error = ?, updated_at = datetime('now')
-		WHERE id = ? AND status IN ('queued', 'retry', 'held')`, reason, id)
+		WHERE id = ? AND status IN ('queued', 'retry', 'held') AND intent_id IS NULL`, reason, id)
 	if err != nil {
 		return 0, fmt.Errorf("evict delivery %d: %w", id, err)
 	}
@@ -541,7 +576,7 @@ func (db *DB) EvictLowestPriority(channel string) (int64, error) {
 		WHERE id = (
 			SELECT id FROM message_deliveries
 			WHERE channel = ? AND status IN ('queued', 'retry', 'held')
-			  AND priority > 0
+			  AND priority > 0 AND intent_id IS NULL
 			ORDER BY (`+precedenceRankSQL+`) DESC, priority DESC, created_at DESC
 			LIMIT 1
 		)`, channel)
@@ -565,7 +600,7 @@ func (db *DB) CancelRunawayDeliveries(safetyLimit int) (int64, error) {
 	sos := db.sosRunRefPrefix()
 	res, err := db.Exec(`UPDATE message_deliveries
 		SET status = 'dead', last_error = 'cancelled: exceeded retry limit on startup cleanup', updated_at = datetime('now')
-		WHERE status IN ('queued', 'retry')
+		WHERE status IN ('queued', 'retry') AND intent_id IS NULL
 		  AND ((max_retries > 0 AND retries >= max_retries)
 		    OR (max_retries = 0 AND retries >= ?))
 		  AND NOT (? <> '' AND substr(msg_ref, 1, length(?)) = ?)`,
@@ -604,7 +639,7 @@ func (db *DB) sosRunRefPrefix() string {
 // SOS frame is the lesser harm. [MESHSAT-1391]
 func (db *DB) RecoverStaleDeliveries() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'retry', last_error = 'recovered after restart', next_retry = datetime('now'), updated_at = datetime('now')
-		WHERE status = 'sending' AND (NOT (`+satelliteChannelSQL+`) OR `+sosFrameSQL+`)`, DeliveryClassHubUplink)
+		WHERE status = 'sending' AND intent_id IS NULL AND (NOT (`+satelliteChannelSQL+`) OR `+sosFrameSQL+`)`, DeliveryClassHubUplink)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale deliveries: %w", err)
 	}
@@ -641,7 +676,7 @@ const sosFrameSQL = `(priority = 0 AND delivery_class = ?)`
 // Run before RecoverStaleDeliveries. [MESHSAT-1391]
 func (db *DB) EndStaleSatelliteSends() (int64, error) {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = ?, updated_at = datetime('now')
-		WHERE status = 'sending' AND `+satelliteChannelSQL+` AND NOT `+sosFrameSQL,
+		WHERE status = 'sending' AND intent_id IS NULL AND `+satelliteChannelSQL+` AND NOT `+sosFrameSQL,
 		UnconfirmedPrefix+": the Bridge stopped while this satellite send was under way, so it is not sent again by itself (a second session could deliver it twice). Retry it if it did not arrive.",
 		DeliveryClassHubUplink)
 	if err != nil {
@@ -735,12 +770,9 @@ func (db *DB) SetDeliveryAck(id int64, ackStatus string) error {
 
 // GetPendingAcks returns deliveries on a channel with ack_status="pending" older than timeoutSecs.
 func (db *DB) GetPendingAcks(channel string, timeoutSecs int) ([]MessageDelivery, error) {
-	rows, err := db.Query(`SELECT id, msg_ref, rule_id, channel, status, priority, payload, text_preview,
-		retries, max_retries, next_retry, last_error, channel_ref, cost, visited,
-		ttl_seconds, expires_at, qos_level, seq_num, ack_status, ack_timestamp,
-		signature, signer_id, precedence, destination, delivery_class, created_at, updated_at
+	rows, err := db.Query(`SELECT `+deliveryColumns+`
 		FROM message_deliveries
-		WHERE channel = ? AND ack_status = 'pending'
+		WHERE channel = ? AND ack_status = 'pending' AND intent_id IS NULL
 		  AND ack_timestamp IS NOT NULL
 		  AND ack_timestamp <= datetime('now', '-' || ? || ' seconds')
 		ORDER BY created_at ASC`, channel, timeoutSecs)
@@ -752,10 +784,7 @@ func (db *DB) GetPendingAcks(channel string, timeoutSecs int) ([]MessageDelivery
 	var result []MessageDelivery
 	for rows.Next() {
 		var d MessageDelivery
-		if err := rows.Scan(&d.ID, &d.MsgRef, &d.RuleID, &d.Channel, &d.Status, &d.Priority, &d.Payload,
-			&d.TextPreview, &d.Retries, &d.MaxRetries, &d.NextRetry, &d.LastError, &d.ChannelRef,
-			&d.Cost, &d.Visited, &d.TTLSeconds, &d.ExpiresAt, &d.QoSLevel, &d.SeqNum, &d.AckStatus, &d.AckTimestamp,
-			&d.Signature, &d.SignerID, &d.Precedence, &d.Destination, &d.Class, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(d.scanTargets()...); err != nil {
 			return nil, fmt.Errorf("scan pending ack: %w", err)
 		}
 		result = append(result, d)
