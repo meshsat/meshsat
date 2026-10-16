@@ -70,6 +70,7 @@ const (
 	reasonOversize      = "skipped_oversize"
 	reasonEncoding      = "skipped_encoding"
 	reasonNoPrice       = "skipped_no_price"
+	reasonBudget        = "skipped_budget"
 )
 
 // IntentRequest is a send-to-contact handed to the intent path.
@@ -183,6 +184,15 @@ func (e *Escalator) Submit(ctx context.Context, req IntentRequest) (*IntentSubmi
 	in.HeartbeatWallAt = &wall
 	in.HeartbeatWallTrusted = e.clock.WallTrusted()
 	in.RoutePlan = e.routePlan(contact.Addresses, req.Body)
+	if in.CapMinor != nil {
+		// A paid route whose one submission costs more than the cap is
+		// never tried (r3 D8). [MESHSAT-1584]
+		for i := range in.RoutePlan {
+			if p := &in.RoutePlan[i]; p.Admitted && p.Paid && p.EstMinor > *in.CapMinor {
+				p.Admitted, p.Reason = false, reasonBudget
+			}
+		}
+	}
 	for i := range in.RoutePlan {
 		if in.RoutePlan[i].Admitted && in.RoutePlan[i].AdapterMode == modeLXMF {
 			ts, err := e.db.AllocateWireTimestampMs(e.clock.Wall().UnixMilli())
@@ -395,6 +405,13 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 		p.CompletionRule = database.OutcomeDeliveredDevice
 		e.admitGateway(&p, a.Kind, payload)
 		return p
+	case directory.KindSMS:
+		// Stage 1b, a paid route (B9): one SMS through the kit's modem;
+		// accepted by the network is all it knows (no status reports yet,
+		// B7(i)), so no completion rule. [MESHSAT-1584]
+		p.AdapterMode = modeSMS
+		e.admitGateway(&p, a.Kind, payload)
+		return p
 	default:
 		p.Reason = reasonNotEnabled
 		return p
@@ -446,7 +463,15 @@ func (e *Escalator) usable(p database.RoutePlanEntry) bool {
 		return true
 	}
 	if gatewayModes[p.AdapterMode] {
-		return e.d.intentAdapter(p.InterfaceID) != nil
+		ad := e.d.intentAdapter(p.InterfaceID)
+		if ad == nil {
+			return false
+		}
+		if billed(ad) {
+			t, err := e.d.db.CurrentTariff(p.InterfaceID)
+			return err == nil && t != nil
+		}
+		return true
 	}
 	return false
 }

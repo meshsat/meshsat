@@ -96,6 +96,7 @@ type RoutePlanEntry struct {
 	TransformSHA256 string `json:"transform_sha256,omitempty"`
 	EstWireBytes    int    `json:"est_wire_bytes"`
 	EstUnits        int    `json:"est_units"`
+	EstMinor        int64  `json:"est_minor,omitempty"` // one submission at the tariff of admission (B9)
 	UnitKind        string `json:"unit_kind,omitempty"`
 	TariffID        int64  `json:"tariff_id,omitempty"`
 	TariffVersion   int    `json:"tariff_version,omitempty"`
@@ -1456,15 +1457,84 @@ func (db *DB) AllocateWireTimestampMs(nowMs int64) (int64, error) {
 
 // Tariff prices one unit kind on one interface.
 type Tariff struct {
-	ID          int64
-	InterfaceID string
-	UnitKind    string
-	UnitBytes   int
-	MinUnits    int
-	PriceMinor  int64
-	Currency    string
-	Version     int
-	Free        bool
+	ID          int64  `json:"id"`
+	InterfaceID string `json:"interface_id"`
+	UnitKind    string `json:"unit_kind"`
+	UnitBytes   int    `json:"unit_bytes"`
+	MinUnits    int    `json:"min_units"`
+	PriceMinor  int64  `json:"price_minor"`
+	Currency    string `json:"currency"`
+	Version     int    `json:"version"`
+	Free        bool   `json:"free"`
+}
+
+// Units is what one submission of wireBytes costs in this tariff's unit:
+// ceil(bytes / unit_bytes) with unit_bytes > 0, else one per submission;
+// never fewer than min_units (r3 D8). [MESHSAT-1584]
+func (t Tariff) Units(wireBytes int) int {
+	u := 1
+	if t.UnitBytes > 0 {
+		u = (wireBytes + t.UnitBytes - 1) / t.UnitBytes
+	}
+	if u < t.MinUnits {
+		u = t.MinUnits
+	}
+	if u < 1 {
+		u = 1
+	}
+	return u
+}
+
+// Price is units at this tariff, in minor units of its currency.
+func (t Tariff) Price(units int) int64 {
+	if t.Free {
+		return 0
+	}
+	return int64(units) * t.PriceMinor
+}
+
+// InsertTariff adds a new version of an interface's tariff, valid now; the
+// version counts up per interface. Earlier versions stay for the record.
+func (db *DB) InsertTariff(t Tariff) (Tariff, error) {
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		var v int
+		if err := tx.Get(&v, `SELECT COALESCE(MAX(version), 0) FROM delivery_tariffs WHERE interface_id = ?`, t.InterfaceID); err != nil {
+			return err
+		}
+		t.Version = v + 1
+		if t.Currency == "" {
+			t.Currency = "EUR"
+		}
+		res, err := tx.Exec(`INSERT INTO delivery_tariffs (interface_id, unit_kind, unit_bytes, min_units, price_minor, currency, version, valid_from, free)
+			VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`, t.InterfaceID, t.UnitKind, t.UnitBytes, t.MinUnits, t.PriceMinor, t.Currency, t.Version, boolInt(t.Free))
+		if err != nil {
+			return err
+		}
+		t.ID, err = res.LastInsertId()
+		return err
+	})
+	return t, err
+}
+
+// ListTariffs returns every tariff version, newest first per interface.
+func (db *DB) ListTariffs() ([]Tariff, error) {
+	rows, err := db.Query(`SELECT id, interface_id, unit_kind, unit_bytes, min_units, price_minor, currency, version, free
+		FROM delivery_tariffs ORDER BY interface_id, version DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Tariff
+	for rows.Next() {
+		var t Tariff
+		var free int
+		if err := rows.Scan(&t.ID, &t.InterfaceID, &t.UnitKind, &t.UnitBytes, &t.MinUnits, &t.PriceMinor, &t.Currency, &t.Version, &free); err != nil {
+			return nil, err
+		}
+		t.Free = free != 0
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // CurrentTariff returns the newest tariff of an interface, or nil.

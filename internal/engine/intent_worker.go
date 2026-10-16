@@ -72,12 +72,24 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 		return
 	}
 
-	// Free routes only in stage 1a: nothing to reserve (B9 prices paid
-	// routes and reserves per transmission).
-	txID, err := w.db.AuthorizeTransmission(del.ID, gen, "", 0, 0)
+	// A paid route is priced now, with the current tariff and the wire as
+	// it is, and that figure is reserved against the intent's cap with the
+	// transmission, before any call (r3 D8, B9). A free route reserves
+	// nothing. [MESHSAT-1584]
+	tariff, units, minor, refuse := w.intentPrice(ad, text)
+	if refuse != nil {
+		_ = w.db.EndAttemptNotSent(del.ID, gen, refuse.Reason, refuse.Detail, false, time.Time{})
+		log.Info().Int64("id", del.ID).Str("intent", del.IntentID).Str("reason", refuse.Reason).Msg("intent attempt not sent")
+		return
+	}
+	unitKind := ""
+	if tariff != nil {
+		unitKind = tariff.UnitKind
+	}
+	txID, err := w.db.AuthorizeTransmission(del.ID, gen, unitKind, units, minor)
 	if err != nil {
 		if errors.Is(err, database.ErrOverCap) {
-			_ = w.db.EndAttemptNotSent(del.ID, gen, "skipped_budget", err.Error(), false, time.Time{})
+			_ = w.db.EndAttemptNotSent(del.ID, gen, w.overCapReason(del, tariff, minor), err.Error(), false, time.Time{})
 		}
 		log.Error().Err(err).Int64("id", del.ID).Msg("intent attempt: authorization failed; not sent")
 		return
@@ -116,7 +128,7 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 	case del.Class == database.DeliveryClassLXMF:
 		out = w.sendIntentLXMF(ctx, del)
 	case ad != nil:
-		out = w.sendIntentGateway(ctx, del, ad, text, encrypted, corr.Value)
+		out = w.sendIntentGateway(ctx, del, ad, text, encrypted, corr.Value, tariff)
 	case w.channelID == "mesh_0" || w.channelID == "mesh":
 		out = w.sendIntentMesh(ctx, del, text, meshID)
 	default:

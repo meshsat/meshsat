@@ -31,11 +31,20 @@ type IntentAdapter interface {
 	SetIntentReceiptSink(fn func(IntentReceipt))
 }
 
+// IntentBilled is an adapter whose submissions cost money (r3 D8, B9):
+// the engine prices each with the interface's tariff, reserves it against
+// the intent's cap before the send, and the adapter reports what it was
+// charged. An adapter that does not implement it carries free routes.
+type IntentBilled interface {
+	IntentBilled() bool
+}
+
 // IntentSend is one submission of an intent's attempt.
 type IntentSend struct {
 	Destination string // the route's address, as admitted
 	Text        string // the wire text after the egress transforms
 	Encrypted   bool   // the egress chain encrypted it
+	PlainText   string // the text before the transforms, for a history the operator reads
 	CorrValue   string // chosen before the send, stored with the handoff
 	MsgRef      string
 }
@@ -59,6 +68,13 @@ type IntentOutcome struct {
 	Reason       string
 	// Receipt is an answer that came within the call.
 	Receipt *IntentReceipt
+	// Charged: the provider counts this submission, ChargedUnits of the
+	// tariff's unit (an SMS, a satellite credit); Confirmed when the
+	// provider said so rather than the adapter estimating it. A billed
+	// adapter reports no charge for a submission that never left.
+	Charged         bool
+	ChargedUnits    int
+	ChargeConfirmed bool
 }
 
 // IntentReceipt is one answer about a submission, inside or after the call.

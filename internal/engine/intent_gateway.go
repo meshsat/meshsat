@@ -21,10 +21,19 @@ import (
 // the send, one submission per call, answers after the call through the
 // receipt sink. [MESHSAT-1584]
 
-const modeAPRS = "aprs"
+const (
+	modeAPRS = "aprs"
+	modeSMS  = "sms"
+)
 
 // gatewayModes are the adapter modes a gateway carries.
-var gatewayModes = map[string]bool{modeAPRS: true}
+var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true}
+
+// billed reports whether an adapter's submissions cost money (B9).
+func billed(ad gateway.IntentAdapter) bool {
+	b, ok := ad.(gateway.IntentBilled)
+	return ok && b.IntentBilled()
+}
 
 // intentAdapter is the running gateway of an interface when it can carry
 // intents, else nil.
@@ -86,7 +95,51 @@ func (e *Escalator) admitGateway(p *database.RoutePlanEntry, kind directory.Kind
 		p.Reason = reason
 		return
 	}
+	if billed(ad) {
+		// A paid route is priced with its interface's tariff; one without a
+		// tariff is never priced at zero (r3 D8). [MESHSAT-1584]
+		p.Paid = true
+		t, err := e.d.db.CurrentTariff(ifaceID)
+		if err != nil || t == nil {
+			p.Reason = reasonNoPrice
+			return
+		}
+		units := t.Units(len(wire))
+		p.UnitKind, p.EstUnits, p.TariffID, p.TariffVersion, p.EstMinor = t.UnitKind, units, t.ID, t.Version, t.Price(units)
+		p.Paid = !t.Free
+	}
 	p.Admitted = true
+}
+
+// intentPrice is what this attempt costs now (r3 D8 reprice: the current
+// tariff, the wire bytes after the chain as it is now). tariff is nil for a
+// free route; refuse is set when a paid route has no tariff.
+func (w *DeliveryWorker) intentPrice(ad gateway.IntentAdapter, text string) (tariff *database.Tariff, units int, minor int64, refuse *intentRefusal) {
+	if ad == nil || !billed(ad) {
+		return nil, 0, 0, nil
+	}
+	t, err := w.db.CurrentTariff(w.channelID)
+	if err != nil || t == nil {
+		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice, Detail: "the route has no tariff"}
+	}
+	units = t.Units(len(text))
+	return t, units, t.Price(units), nil
+}
+
+// overCapReason says why an authorization over the cap was refused:
+// reprice when the figure differs from the one admitted (a changed tariff
+// or chain), else skipped_budget.
+func (w *DeliveryWorker) overCapReason(del database.MessageDelivery, t *database.Tariff, minor int64) string {
+	in, err := w.db.GetIntent(del.IntentID)
+	if err != nil || t == nil {
+		return "skipped_budget"
+	}
+	for _, p := range in.RoutePlan {
+		if p.RouteIndex == del.RouteIndex && (p.EstMinor != minor || p.TariffVersion != t.Version || p.TariffID != t.ID) {
+			return "reprice"
+		}
+	}
+	return "skipped_budget"
 }
 
 // intentPreSendGateway is intentPreSend for a gateway route: the egress
@@ -143,12 +196,17 @@ func (w *DeliveryWorker) reserveCorr(kind string, next func() (string, error)) (
 
 // sendIntentGateway makes the submission through the adapter. Answers that
 // come after it returns reach the ledger through the receipt sink.
-func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.MessageDelivery, ad gateway.IntentAdapter, text string, encrypted bool, corrValue string) SendOutcome {
+func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.MessageDelivery, ad gateway.IntentAdapter, text string, encrypted bool, corrValue string, tariff *database.Tariff) SendOutcome {
 	ad.SetIntentReceiptSink(w.intentGatewayReceipt)
 	o := ad.IntentSend(ctx, gateway.IntentSend{Destination: del.Destination, Text: text, Encrypted: encrypted,
-		CorrValue: corrValue, MsgRef: del.MsgRef})
+		PlainText: string(del.Payload), CorrValue: corrValue, MsgRef: del.MsgRef})
 	out := SendOutcome{Class: o.Class, AcceptedBy: o.AcceptedBy, Retryable: o.Retryable, ConsumeRetry: o.ConsumeRetry,
 		Detail: o.Detail, Reason: o.Reason}
+	if o.Charged && tariff != nil {
+		// Billing is a fact of its own (r3 D8): incurred whatever the outcome.
+		out.Charges = append(out.Charges, Charge{UnitKind: tariff.UnitKind, Units: o.ChargedUnits,
+			Minor: tariff.Price(o.ChargedUnits), Confirmed: o.ChargeConfirmed})
+	}
 	if o.Class != database.ClassNotSent {
 		out.Corr = Correlation{Kind: ad.IntentCorrKind(), Value: corrValue, Scope: w.channelID, Peer: del.Destination}
 	}

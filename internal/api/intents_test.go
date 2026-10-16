@@ -88,7 +88,7 @@ func TestSendToContact_DeliveryIntents(t *testing.T) {
 	}
 	smsOnly := newContact(directory.Address{Kind: directory.KindSMS, Value: "+31600000001"})
 	if rr, resp := post("/api/messages/send-to-contact", fmt.Sprintf(`{"contact_id":%q,"text":"x"}`, smsOnly), ""); rr.Code != http.StatusUnprocessableEntity ||
-		len(resp.PerBearer) != 1 || !strings.Contains(resp.PerBearer[0].Error, "skipped_route_not_enabled") {
+		len(resp.PerBearer) != 1 || !strings.Contains(resp.PerBearer[0].Error, "skipped_offline") { // SMS is a route since stage 1b; no SMS gateway runs here
 		t.Fatalf("no usable route: %d %s; want 422 with the reason", rr.Code, rr.Body.String())
 	}
 	if rr, _ := post("/api/messages/send-to-contact", fmt.Sprintf(`{"contact_id":%q,"text":%q}`, mesh, strings.Repeat("a", 101)), ""); rr.Code != http.StatusRequestEntityTooLarge {
