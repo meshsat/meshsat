@@ -68,13 +68,20 @@ type lxmfPair struct {
 	stack             *rnsstack.Stack
 	remoteRouter      *lxmf.Router
 	received          atomic.Int32
+	onMessage         func(*lxmf.Message)
 }
 
 func newLXMFPair(t *testing.T, localFree, remoteFree []string, carries ...string) *lxmfPair {
 	t.Helper()
+	dst, _ := reticulum.GenerateIdentity()
+	return newLXMFPairWith(t, dst, localFree, remoteFree, carries...)
+}
+
+// newLXMFPairWith is newLXMFPair with the remote router's identity given.
+func newLXMFPairWith(t *testing.T, dst *reticulum.Identity, localFree, remoteFree []string, carries ...string) *lxmfPair {
+	t.Helper()
 	p := &lxmfPair{localTX: newLinkTx(localFree, carries...), remoteTX: newLinkTx(remoteFree, carries...)}
 	src, _ := reticulum.GenerateIdentity()
-	dst, _ := reticulum.GenerateIdentity()
 	var err error
 	if p.local, err = rns.New(rns.Config{Identity: src}, p.localTX); err != nil {
 		t.Fatal(err)
@@ -83,7 +90,12 @@ func newLXMFPair(t *testing.T, localFree, remoteFree []string, carries ...string
 		t.Fatal(err)
 	}
 	p.localTX.peer, p.remoteTX.peer = p.remote, p.local
-	p.remoteRouter = lxmf.New(p.remote, lxmf.Config{Identity: dst, OnMessage: func(*lxmf.Message) { p.received.Add(1) }})
+	p.remoteRouter = lxmf.New(p.remote, lxmf.Config{Identity: dst, OnMessage: func(m *lxmf.Message) {
+		if p.onMessage != nil {
+			p.onMessage(m)
+		}
+		p.received.Add(1)
+	}})
 	p.stack = &rnsstack.Stack{Node: p.local, LXMF: lxmf.New(p.local, lxmf.Config{Identity: src})}
 	return p
 }
@@ -298,33 +310,34 @@ func TestIntentFix_AcceptanceStampSurvivesARestart(t *testing.T) {
 	}
 }
 
-// A-14: a packet id is matched only inside its window: an id used again
-// after the window names the newer transmission alone; CorrelationInUse
-// tells a sender which ids are still live.
-func TestIntentFix_ReusedPacketIDAfterTheWindow(t *testing.T) {
+// R-3 (replacing the one-hour window of A-14): an id stays taken for as
+// long as its transmission is kept, however old; when the radio reuses one
+// anyway, its answer names both transmissions and completes neither.
+func TestIntentFix_ReusedPacketIDStaysAmbiguous(t *testing.T) {
 	h := newIntentHarness(t)
 	h.mesh.fixedID = 0x0badf00d
 	h.workers["mesh_0"].mesh = pickOwnIDMesh{m: h.mesh}
 	c := h.contact(meshAddr(0))
 	old := h.submit(c, "old", directory.StrategyPrimaryOnly)
 	h.work("mesh_0")
-	if live, _ := h.db.CorrelationInUse(meshCorrKind, "0badf00d", "mesh_0", meshCorrWindowS); !live {
-		t.Fatal("a fresh id is not live")
-	}
 	if _, err := h.db.Exec(`UPDATE delivery_transmissions SET handoff_at = datetime('now', '-2 hours') WHERE intent_id = ?`, old); err != nil {
 		t.Fatal(err)
 	}
-	if live, _ := h.db.CorrelationInUse(meshCorrKind, "0badf00d", "mesh_0", meshCorrWindowS); live {
-		t.Fatal("an id two hours old is still live")
+	if live, _ := h.db.CorrelationInUse(meshCorrKind, "0badf00d", "mesh_0", meshCorrWindowS); !live {
+		t.Fatal("an id of a kept transmission two hours old is free again")
 	}
 	fresh := h.submit(c, "new", directory.StrategyPrimaryOnly)
-	h.work("mesh_0")
+	h.work("mesh_0") // the radio picks 0badf00d again
 	h.ack(0x0badf00d, annMesh, 0)
-	if s := h.snap(fresh); s.Intent.Outcome != database.OutcomeDeliveredDevice {
-		t.Fatalf("the newer transmission: %s/%s", s.Intent.State, s.Intent.Outcome)
+	for _, id := range []string{old, fresh} {
+		if s := h.snap(id); s.Intent.Outcome == database.OutcomeDeliveredDevice || len(s.Evidence) != 0 {
+			t.Fatalf("intent %s took a reused id's answer: %s, %d evidence", id, s.Intent.Outcome, len(s.Evidence))
+		}
 	}
-	if s := h.snap(old); s.Intent.Outcome == database.OutcomeDeliveredDevice || len(s.Evidence) != 0 {
-		t.Fatalf("the expired transmission took the ACK: %s, %d evidence", s.Intent.Outcome, len(s.Evidence))
+	var amb int
+	_ = h.db.QueryRow(`SELECT COUNT(*) FROM delivery_evidence WHERE ambiguous = 1`).Scan(&amb)
+	if amb != 1 {
+		t.Fatalf("%d ambiguous answers; want 1", amb)
 	}
 }
 

@@ -1,0 +1,11 @@
+{
+  "closed": "01a144c2-9f04-74c7-9c60-1cd31faab9cc",
+  "commit": "2a91688",
+  "known": "01a144c2-9f0a-7c08-bec6-ef49ea227649",
+  "note": "synthetic test identity, never used outside this fixture",
+  "queued": "01a144c2-9f03-74e5-a176-fe27349eae44",
+  "remote_dest": "2baf16ea7deacef06fa48fd534b20ff0",
+  "remote_enc_priv": "f58a07a0e4d0865bd6e7e3bdc390d62dfbae2003da2768a5c516ccce6032ac60",
+  "remote_sig_priv": "7b83244bd0c2277d38b1bde5edc96e290d26d7365e6dc3ae458f04aa84dee1f11c16bc060fe97922a1fd616ac815f5978beca5dc9f6b6fdccb13cbcb3815fefe",
+  "schema": "62"
+}

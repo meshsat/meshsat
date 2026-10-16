@@ -188,8 +188,8 @@ type meshPreparedSender interface {
 	SendMessageWithID(ctx context.Context, req transport.SendRequest, id uint32) error
 }
 
-// reserveMeshID picks a random packet id that no transmission on this
-// interface used inside the correlation window.
+// reserveMeshID picks a random packet id that no kept transmission on this
+// interface used.
 func (w *DeliveryWorker) reserveMeshID() (uint32, error) {
 	for i := 0; i < 8; i++ {
 		id, err := transport.NewMeshPacketID()

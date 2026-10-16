@@ -290,3 +290,97 @@ func TestReviewDistinctLXMFIntentsHaveDistinctHashes(t *testing.T) {
 		}
 	}
 }
+
+// The closure review of the corrective patch (7a8702e) added three more;
+// kept as written, except: reviewV62Upgrade falls back to the fixture in
+// testdata (made by 2a91688, see v62-intents.json) and accepts any version
+// from 63 on (v64 came with the fix); the reuse test no longer asserts at
+// setup that the old id was released, which the fix stopped doing on
+// purpose (the radio reuses it anyway, which is the case under test).
+
+func TestReviewUpgradeV62QueuedLXMFStaysFree(t *testing.T) {
+	h := reviewV62Upgrade(t)
+	var id string
+	if err := h.db.Get(&id, `SELECT id FROM delivery_intents WHERE payload = ?`, []byte("v62 queued LXMF")); err != nil {
+		t.Fatal(err)
+	}
+	s := h.snap(id)
+	var body rnsstack.LXMFBody
+	if err := json.Unmarshal(s.Rows[0].Payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("migrated stored attempt: intent=%s free_only=%t payload=%s", id, body.FreeOnly, s.Rows[0].Payload)
+	identity, err := reticulum.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := &reviewPaidTransmitter{}
+	node, err := rns.New(rns.Config{Identity: identity}, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destBytes, err := hex.DecodeString(annLXMF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dest [rns.HashLen]byte
+	copy(dest[:], destBytes)
+	node.SetPaidPolicy("iridium_0", &rns.PaidPolicy{Dests: [][rns.HashLen]byte{dest}})
+	stack := &rnsstack.Stack{Node: node, LXMF: lxmf.New(node, lxmf.Config{Identity: identity})}
+	h.d.SetLXMFSender(stack)
+	h.workers["lxmf_0"].lxmf = stack
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	h.ctx = ctx
+	h.work("lxmf_0")
+	s = h.snap(id)
+	if len(tx.sent) != 0 {
+		t.Fatalf("v62 queued intent emitted paid packets after real v63 migration with flag off: packets=%v reserved=%d incurred=%d possible=%d",
+			tx.sent, s.Intent.ReservedMinor, s.Intent.IncurredMinor, s.Intent.PossibleMinor)
+	}
+}
+
+func TestReviewUpgradeV62ReplaysClosedEvidence(t *testing.T) {
+	h := reviewV62Upgrade(t)
+	var id string
+	if err := h.db.Get(&id, `SELECT id FROM delivery_intents WHERE payload = ?`, []byte("v62 closed with unapplied ACK")); err != nil {
+		t.Fatal(err)
+	}
+	h.esc.Heartbeat()
+	s := h.snap(id)
+	var dirty int
+	if err := h.db.Get(&dirty, `SELECT dirty FROM delivery_intents WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Evidence) != 1 || !s.Evidence[0].Matched || s.Evidence[0].Completes != database.OutcomeDeliveredDevice {
+		t.Fatalf("fixture evidence was not preserved: %+v", s.Evidence)
+	}
+	if s.Intent.Outcome != database.OutcomeDeliveredDevice {
+		t.Fatalf("v62 matched ACK remains unapplied after v63 startup and heartbeat: outcome=%s evidence=%s dirty=%d",
+			s.Intent.Outcome, s.Evidence[0].Completes, dirty)
+	}
+}
+
+func TestReviewRetainedOldACKCannotCompleteNewIntent(t *testing.T) {
+	h := newIntentHarness(t)
+	h.mesh.fixedID = 0x0badf00d
+	h.workers["mesh_0"].mesh = pickOwnIDMesh{m: h.mesh}
+	c := h.contact(meshAddr(0))
+	old := h.submit(c, "old message with delayed ACK", directory.StrategyPrimaryOnly)
+	h.work("mesh_0")
+	h.drain()
+	h.clock.Advance(121 * time.Second)
+	h.esc.Heartbeat()
+	if _, err := h.db.Exec(`UPDATE delivery_transmissions SET handoff_at = datetime('now', '-2 hours') WHERE intent_id = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+	fresh := h.submit(c, "new message without any recipient ACK", directory.StrategyPrimaryOnly)
+	h.work("mesh_0")
+	h.drain()
+	h.ack(0x0badf00d, annMesh, 0)
+	s := h.snap(fresh)
+	if s.Intent.Outcome == database.OutcomeDeliveredDevice {
+		t.Fatalf("the delayed ACK for retained old intent %s completed new intent %s: outcome=%s matched_evidence=%+v",
+			old, fresh, s.Intent.Outcome, s.Evidence)
+	}
+}
