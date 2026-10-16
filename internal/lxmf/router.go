@@ -2,6 +2,7 @@ package lxmf
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -239,6 +240,38 @@ type SendOptions struct {
 	// ErrPaidPath. A delivery intent's attempt sends this way until paid
 	// routes have a price (B9). [MESHSAT-1584]
 	FreeOnly bool
+	// OnSent is called once the message's packet is out, before the wait
+	// for its proof, with the packet hash the proof will name and the key
+	// that must sign it, so a caller can match a proof that comes after
+	// this call gave up, or after a restart (Node.OnUnmatchedProof). Not
+	// called for a resource transfer. [MESHSAT-1584, A-13]
+	OnSent func(proofHash [32]byte, proofKey ed25519.PublicKey)
+	// OnLateDelivery is called, from another goroutine, when a resource
+	// transfer this call stopped waiting for is proven after all (only
+	// while this process runs; a resource dies with its link).
+	OnLateDelivery func()
+}
+
+// lateResourceWait bounds how long a resource whose sender stopped waiting
+// is still watched for its proof.
+const lateResourceWait = time.Hour
+
+// awaitReceipt waits for a packet's proof. When the wait ends without one,
+// the receipt is forgotten: a later proof goes to Node.OnUnmatchedProof.
+// A proof that came in just before is still taken here.
+func (r *Router) awaitReceipt(ctx context.Context, rc *rns.Receipt) (rns.ReceiptResult, error) {
+	select {
+	case out := <-rc.Done():
+		return out, nil
+	case <-ctx.Done():
+		r.node.ForgetReceipt(rc.Hash)
+		select {
+		case out := <-rc.Done():
+			return out, nil
+		default:
+		}
+		return rns.ReceiptResult{}, ctx.Err()
+	}
 }
 
 // SendWith is Send with SendOptions.
@@ -304,16 +337,18 @@ func (r *Router) SendWith(ctx context.Context, dest [DestLen]byte, content, titl
 		if err != nil {
 			return m, res, paid(err)
 		}
-		select {
-		case out := <-rc.Done():
-			if !out.Delivered {
-				return m, res, ErrNotDelivered
-			}
-			res.RTT = out.RTT
-			return m, res, nil
-		case <-ctx.Done():
-			return m, res, ctx.Err()
+		if opts.OnSent != nil {
+			opts.OnSent(rc.Hash, rc.SigningKey())
 		}
+		out, err := r.awaitReceipt(ctx, rc)
+		if err != nil {
+			return m, res, err
+		}
+		if !out.Delivered {
+			return m, res, ErrNotDelivered
+		}
+		res.RTT = out.RTT
+		return m, res, nil
 	case Direct:
 		l, err := r.linkTo(ctx, dest, c)
 		if err != nil {
@@ -335,16 +370,18 @@ func (r *Router) SendWith(ctx context.Context, dest [DestLen]byte, content, titl
 				r.forgetLink(l)
 				return m, res, err
 			}
-			select {
-			case out := <-rc.Done():
-				if !out.Delivered {
-					r.node.Links().Teardown(l)
-					return m, res, ErrNotDelivered
-				}
-				res.RTT = out.RTT
-			case <-ctx.Done():
-				return m, res, ctx.Err()
+			if opts.OnSent != nil {
+				opts.OnSent(rc.Hash, rc.SigningKey())
 			}
+			out, err := r.awaitReceipt(ctx, rc)
+			if err != nil {
+				return m, res, err
+			}
+			if !out.Delivered {
+				r.node.Links().Teardown(l)
+				return m, res, ErrNotDelivered
+			}
+			res.RTT = out.RTT
 		} else {
 			// Larger messages travel as an RNS resource on the link.
 			or, err := r.node.Links().SendResourceWith(l, m.Packed, c)
@@ -361,6 +398,17 @@ func (r *Router) SendWith(ctx context.Context, dest [DestLen]byte, content, titl
 				}
 				res.RTT = time.Since(start)
 			case <-ctx.Done():
+				if late := opts.OnLateDelivery; late != nil {
+					go func() {
+						select {
+						case out := <-or.Done():
+							if out.Delivered {
+								late()
+							}
+						case <-time.After(lateResourceWait):
+						}
+					}()
+				}
 				return m, res, ctx.Err()
 			}
 		}

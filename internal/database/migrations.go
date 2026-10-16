@@ -1584,6 +1584,15 @@ var migrations = []string{
 			(scope_id IN ('Routine', 'Deferred') AND strategy = 'PRIMARY_ONLY'))));
 	UPDATE directory_dispatch_policy SET strategy = 'ALL_BEARERS', updated_at = datetime('now')
 	WHERE seeded = 1 AND strategy IN ('HEMB_BONDED', 'ANY_REACHABLE', 'ORDERED_FALLBACK');`,
+
+	// v66: A-13, a late LXMF proof. proof_hash is the packet hash the
+	// destination's proof names, proof_key the key that must sign it,
+	// stored as the packet goes out, so a proof that comes after the send
+	// stopped waiting, or after a restart, still finds its transmission.
+	// [MESHSAT-1584]
+	`ALTER TABLE delivery_transmissions ADD COLUMN proof_hash TEXT NOT NULL DEFAULT '';
+	ALTER TABLE delivery_transmissions ADD COLUMN proof_key TEXT NOT NULL DEFAULT '';
+	CREATE INDEX IF NOT EXISTS idx_delivery_tx_proof ON delivery_transmissions(proof_hash) WHERE proof_hash != '';`,
 }
 
 func (db *DB) migrate() error {

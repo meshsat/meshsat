@@ -122,6 +122,12 @@ type Node struct {
 	// that crosses a paid link with a policy, at most once a minute per
 	// interface, destination and direction [MESHSAT-1550].
 	OnPaidCrossing func(c PaidCrossing)
+	// OnUnmatchedProof is called, without the node lock, for a proof that
+	// no held receipt took: its waiter gave up (ForgetReceipt), its receipt
+	// timed out, the process restarted since the packet went out, or it is
+	// someone else's proof passing through. The caller validates it against
+	// what it stored. [MESHSAT-1584]
+	OnUnmatchedProof func(pkt *Packet)
 
 	stats Stats
 }

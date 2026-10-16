@@ -1520,3 +1520,122 @@ func (db *DB) PruneClosedIntents(days int) (int64, error) {
 	})
 	return n, err
 }
+
+// ---- A-13: proofs that come after the send stopped waiting ----
+
+// SetTransmissionProof stores, on the attempt's handed-off transmission of
+// this generation, the packet hash its proof will name and the key that
+// must sign it (hex), as the packet goes out. [MESHSAT-1584]
+func (db *DB) SetTransmissionProof(attemptID int64, gen int, proofHash, proofKey string) error {
+	res, err := db.Exec(`UPDATE delivery_transmissions SET proof_hash = ?, proof_key = ?
+		WHERE attempt_id = ? AND gen = ? AND state = 'handed_off'`, proofHash, proofKey, attemptID, gen)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no handed-off transmission for attempt %d generation %d", attemptID, gen)
+	}
+	return nil
+}
+
+// ExpectedProofHashes lists the proof hashes of kept transmissions that no
+// proof has completed yet.
+func (db *DB) ExpectedProofHashes() ([]string, error) {
+	var out []string
+	err := db.Select(&out, `SELECT t.proof_hash FROM delivery_transmissions t
+		WHERE t.proof_hash != '' AND NOT EXISTS (SELECT 1 FROM delivery_evidence e
+			WHERE e.transmission_id = t.id AND e.event = 'proof' AND e.matched = 1)`)
+	return out, err
+}
+
+// RecordProofEvidence takes a proof no waiting send took (A-13). hash is
+// the full packet hash (hex) for an explicit proof, or its first 16 bytes
+// for an implicit one (prefix). valid checks the proof against a candidate
+// transmission's stored hash and key. One valid candidate gets the proof
+// as matched evidence (destination_node, signed, completing
+// accepted_destination_node) and its intent is marked dirty, in one
+// transaction; a second copy of the same proof adds nothing. found is false
+// when no stored transmission is proven by it (someone else's proof).
+func (db *DB) RecordProofEvidence(hash string, prefix bool, valid func(proofHash, proofKey string) bool) (e DeliveryEvidence, found bool, err error) {
+	err = db.withTx(func(tx *sqlx.Tx) error {
+		q := `SELECT id, attempt_id, intent_id, proof_hash, proof_key FROM delivery_transmissions WHERE proof_hash = ?`
+		if prefix {
+			q = `SELECT id, attempt_id, intent_id, proof_hash, proof_key FROM delivery_transmissions
+				WHERE proof_hash != '' AND substr(proof_hash, 1, ?) = ?`
+		}
+		args := []any{hash}
+		if prefix {
+			args = []any{len(hash), hash}
+		}
+		rows, err := tx.Query(q, args...)
+		if err != nil {
+			return err
+		}
+		type cand struct {
+			id, attempt                    int64
+			intent, ph, pk, ck, cv, cs, cp string
+		}
+		var proven []cand
+		for rows.Next() {
+			var c cand
+			if err := rows.Scan(&c.id, &c.attempt, &c.intent, &c.ph, &c.pk); err != nil {
+				rows.Close()
+				return err
+			}
+			if valid(c.ph, c.pk) {
+				proven = append(proven, c)
+			}
+		}
+		rows.Close()
+		if len(proven) != 1 {
+			// None: not ours. More than one: a signature over two packet
+			// hashes at once cannot happen; refuse rather than guess.
+			return nil
+		}
+		found = true
+		e, err = proofEvidenceTx(tx, proven[0].id)
+		return err
+	})
+	return e, found, err
+}
+
+// RecordLateDelivery takes a proof of a resource transfer that came after
+// the send stopped waiting (A-13): the attempt's transmission of this
+// generation gets it, as RecordProofEvidence does. A resource is proven on
+// its link, inside this process, so no stored hash is needed.
+func (db *DB) RecordLateDelivery(attemptID int64, gen int) (e DeliveryEvidence, err error) {
+	err = db.withTx(func(tx *sqlx.Tx) error {
+		var txID int64
+		if err := tx.Get(&txID, `SELECT id FROM delivery_transmissions WHERE attempt_id = ? AND gen = ?`, attemptID, gen); err != nil {
+			return err
+		}
+		e, err = proofEvidenceTx(tx, txID)
+		return err
+	})
+	return e, err
+}
+
+// proofEvidenceTx records a destination's signed proof for a transmission
+// as matched evidence and marks its intent dirty; once per transmission.
+func proofEvidenceTx(tx *sqlx.Tx, txID int64) (DeliveryEvidence, error) {
+	var have int
+	if err := tx.Get(&have, `SELECT COUNT(*) FROM delivery_evidence WHERE transmission_id = ? AND event = 'proof' AND matched = 1`, txID); err != nil {
+		return DeliveryEvidence{}, err
+	}
+	if have > 0 {
+		return DeliveryEvidence{}, nil
+	}
+	e := DeliveryEvidence{TransmissionID: txID, Source: "destination_node", Event: "proof",
+		Completes: OutcomeAcceptedDestinationNode, Trust: "signed", Matched: true}
+	if err := tx.QueryRow(`SELECT attempt_id, intent_id, corr_kind, corr_value, corr_scope, corr_peer FROM delivery_transmissions WHERE id = ?`, txID).
+		Scan(&e.AttemptID, &e.IntentID, &e.CorrKind, &e.CorrValue, &e.CorrScope, &e.CorrPeer); err != nil {
+		return DeliveryEvidence{}, err
+	}
+	id, err := insertEvidenceTx(tx, e)
+	if err != nil {
+		return DeliveryEvidence{}, err
+	}
+	e.ID = id
+	_, err = tx.Exec(`UPDATE delivery_intents SET dirty = 1 WHERE id = ?`, e.IntentID)
+	return e, err
+}

@@ -1887,6 +1887,12 @@ func main() {
 		srv.SetRNSNode(rnsStack.Node)
 		if rnsStack.LXMF != nil {
 			srv.SetLXMFRouter(rnsStack.LXMF)
+			// A proof that comes after an intent's LXMF send stopped waiting,
+			// or after a restart, is still recorded (A-13); before the worker
+			// starts, so every send stores its proof hash. [MESHSAT-1584]
+			if err := rnsStack.EnableLateProofs(db, escalator.Notify); err != nil {
+				log.Warn().Err(err).Msg("lxmf: late proofs not enabled")
+			}
 			dispatcher.SetLXMFSender(rnsStack)
 			dispatcher.StartWorker(ctx, "lxmf_0", "lxmf")
 			// An inbound LXMF message meets the access rules as lxmf_0, sender

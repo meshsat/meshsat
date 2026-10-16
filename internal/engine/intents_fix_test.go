@@ -31,6 +31,27 @@ type linkTx struct {
 	peer    *rns.Node
 	free    []string
 	carries map[string]bool
+	// hold keeps back the packets it says yes to until release (a proof
+	// that comes late). [MESHSAT-1584]
+	hold func(raw []byte) bool
+	held [][2][]byte
+}
+
+// release delivers the held packets now (to whoever is the peer then).
+func (t *linkTx) release() {
+	t.mu.Lock()
+	held := t.held
+	t.held, t.hold = nil, nil
+	t.mu.Unlock()
+	for _, h := range held {
+		_ = t.Transmit(string(h[0]), h[1])
+	}
+}
+
+func (t *linkTx) heldCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.held)
 }
 
 func newLinkTx(free []string, carries ...string) *linkTx {
@@ -43,6 +64,11 @@ func newLinkTx(free []string, carries ...string) *linkTx {
 
 func (t *linkTx) Transmit(iface string, raw []byte) error {
 	t.mu.Lock()
+	if t.hold != nil && t.hold(raw) {
+		t.held = append(t.held, [2][]byte{[]byte(iface), append([]byte(nil), raw...)})
+		t.mu.Unlock()
+		return nil
+	}
 	t.sent[iface]++
 	peer, carry := t.peer, t.carries[iface]
 	t.mu.Unlock()

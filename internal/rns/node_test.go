@@ -28,10 +28,35 @@ type fakeTx struct {
 	mu   sync.Mutex
 	sent map[string]int
 	paid map[string]bool // interfaces left out of Floodable, like a satellite
+	// hold, when set, keeps back the packets it says yes to until
+	// release; a proof that arrives late.
+	hold func(raw []byte) bool
+	held []heldPacket
+}
+
+type heldPacket struct {
+	iface string
+	raw   []byte
+}
+
+// release delivers the held packets now.
+func (f *fakeTx) release() {
+	f.mu.Lock()
+	held := f.held
+	f.held, f.hold = nil, nil
+	f.mu.Unlock()
+	for _, h := range held {
+		_ = f.Transmit(h.iface, h.raw)
+	}
 }
 
 func (f *fakeTx) Transmit(ifaceID string, raw []byte) error {
 	f.mu.Lock()
+	if f.hold != nil && f.hold(raw) {
+		f.held = append(f.held, heldPacket{ifaceID, append([]byte(nil), raw...)})
+		f.mu.Unlock()
+		return nil
+	}
 	f.sent[ifaceID]++
 	f.mu.Unlock()
 	f.net.mu.Lock()

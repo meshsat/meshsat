@@ -28,6 +28,25 @@ type ReceiptResult struct {
 // Done yields the result once (delivered or timed out).
 func (r *Receipt) Done() <-chan ReceiptResult { return r.done }
 
+// SigningKey is the key that must sign this packet's proof: the
+// destination's identity, or the peer's link key for a link packet.
+func (r *Receipt) SigningKey() ed25519.PublicKey { return r.sigPub }
+
+// afterProofValidated, when set by a test, runs between a proof's
+// validation and its hand-over: where a ForgetReceipt can come in between.
+var afterProofValidated func()
+
+// ForgetReceipt stops waiting for a receipt's proof: a proof that arrives
+// later goes to OnUnmatchedProof, as one for a receipt that timed out or
+// was never in this process does. Either the receipt takes a proof (and
+// Done yields it) or the hook does, never both and never neither, because
+// a proof is handed to a receipt only while it is still held. [MESHSAT-1584]
+func (n *Node) ForgetReceipt(hash [FullHashLen]byte) {
+	n.mu.Lock()
+	delete(n.receipts, hash)
+	n.mu.Unlock()
+}
+
 func (n *Node) addReceipt(r *Receipt) {
 	r.done = make(chan ReceiptResult, 1)
 	n.mu.Lock()
@@ -69,15 +88,29 @@ func (n *Node) handleReceiptProof(pkt *Packet) {
 			continue
 		}
 		if err := reticulum.ValidateProof(data, r.Hash, r.sigPub); err == nil {
-			n.mu.Lock()
-			delete(n.receipts, r.Hash)
-			n.mu.Unlock()
-			if r.link != nil {
-				r.link.lastProof = n.now()
+			if afterProofValidated != nil {
+				afterProofValidated()
 			}
-			r.done <- ReceiptResult{Delivered: true, RTT: n.now().Sub(r.SentAt)}
-			return
+			// Handed over only while the receipt is still held, under the
+			// lock ForgetReceipt takes: done has room for this one result.
+			n.mu.Lock()
+			_, held := n.receipts[r.Hash]
+			if held {
+				delete(n.receipts, r.Hash)
+				r.done <- ReceiptResult{Delivered: true, RTT: n.now().Sub(r.SentAt)}
+			}
+			n.mu.Unlock()
+			if held {
+				if r.link != nil {
+					r.link.lastProof = n.now()
+				}
+				return
+			}
+			break
 		}
+	}
+	if hook := n.OnUnmatchedProof; hook != nil {
+		hook(pkt)
 	}
 }
 
