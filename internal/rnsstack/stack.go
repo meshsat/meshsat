@@ -6,6 +6,7 @@ package rnsstack
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -62,6 +63,8 @@ type Stack struct {
 
 	inboundMu sync.RWMutex
 	onInbound func(source, text string)
+
+	late *lateProofs // nil until EnableLateProofs
 }
 
 // SetInboundHook hands every accepted inbound LXMF message, after it is
@@ -295,8 +298,11 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	// that field existed would otherwise go out on a paid link (red-team
 	// U-1). Paid intent routes come with B9 and a typed authorization.
 	freeOnly := body.FreeOnly || del.IntentID != ""
-	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0,
-		lxmf.SendOptions{Timestamp: body.Timestamp, FreeOnly: freeOnly})
+	opts := lxmf.SendOptions{Timestamp: body.Timestamp, FreeOnly: freeOnly}
+	if lp := st.late; lp != nil && del.IntentID != "" {
+		lp.watch(&opts, del.ID, del.ClaimGen)
+	}
+	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0, opts)
 	if err != nil {
 		if m != nil {
 			return hex.EncodeToString(m.Hash[:]), err
@@ -423,4 +429,124 @@ func (st *Stack) DeliverTimeout(dest string) time.Duration {
 		return 10 * time.Minute
 	}
 	return 0
+}
+
+// lateProofs makes a destination's proof count when it comes after an
+// intent's LXMF send stopped waiting for it, or after a restart (A-13):
+// the packet hash and the signing key are stored with the transmission as
+// the packet goes out, and a proof no waiting send took is checked against
+// them and recorded as evidence. [MESHSAT-1584]
+type lateProofs struct {
+	db     *database.DB
+	notify func(intentID string)
+	mu     sync.Mutex
+	expect map[[rns.HashLen]byte]struct{} // first 16 bytes of the hashes waited for
+}
+
+// EnableLateProofs turns that on: the hashes stored before a restart are
+// loaded, and the node hands every unmatched proof here. notify (may be
+// nil) hears which intent got evidence; its heartbeat finds it anyway.
+func (st *Stack) EnableLateProofs(db *database.DB, notify func(intentID string)) error {
+	hashes, err := db.ExpectedProofHashes()
+	if err != nil {
+		return err
+	}
+	lp := &lateProofs{db: db, notify: notify, expect: map[[rns.HashLen]byte]struct{}{}}
+	for _, h := range hashes {
+		if b, err := hex.DecodeString(h); err == nil && len(b) >= rns.HashLen {
+			var k [rns.HashLen]byte
+			copy(k[:], b)
+			lp.expect[k] = struct{}{}
+		}
+	}
+	st.late = lp
+	prev := st.Node.OnUnmatchedProof
+	st.Node.OnUnmatchedProof = func(pkt *rns.Packet) {
+		lp.take(pkt)
+		if prev != nil {
+			prev(pkt)
+		}
+	}
+	return nil
+}
+
+// watch sets a send's hooks for one intent attempt (its row and claim
+// generation).
+func (lp *lateProofs) watch(opts *lxmf.SendOptions, attemptID int64, gen int) {
+	opts.OnSent = func(h [32]byte, key ed25519.PublicKey) {
+		var k [rns.HashLen]byte
+		copy(k[:], h[:])
+		lp.mu.Lock()
+		lp.expect[k] = struct{}{}
+		lp.mu.Unlock()
+		if err := lp.db.SetTransmissionProof(attemptID, gen, hex.EncodeToString(h[:]), hex.EncodeToString(key)); err != nil {
+			log.Warn().Err(err).Int64("attempt", attemptID).Msg("lxmf: proof hash not stored; a late proof will not count")
+		}
+	}
+	opts.OnLateDelivery = func() {
+		e, err := lp.db.RecordLateDelivery(attemptID, gen)
+		if err != nil {
+			log.Warn().Err(err).Int64("attempt", attemptID).Msg("lxmf: late resource proof not recorded")
+			return
+		}
+		lp.recorded(e)
+	}
+}
+
+// take checks a proof no waiting send took against the stored hashes.
+func (lp *lateProofs) take(pkt *rns.Packet) {
+	data := pkt.Hdr.Data
+	var key [rns.HashLen]byte
+	var lookup string
+	prefix := false
+	switch len(data) {
+	case reticulum.ExplicitProofLen:
+		copy(key[:], data[:rns.HashLen])
+		lookup = hex.EncodeToString(data[:rns.FullHashLen])
+	case reticulum.ImplicitProofLen:
+		// Addressed to the truncated packet hash.
+		key = pkt.Hdr.DestHash
+		lookup, prefix = hex.EncodeToString(key[:]), true
+	default:
+		return
+	}
+	lp.mu.Lock()
+	_, waited := lp.expect[key]
+	lp.mu.Unlock()
+	if !waited {
+		return // someone else's proof passing through, or one already taken
+	}
+	valid := func(proofHash, proofKey string) bool {
+		hb, err1 := hex.DecodeString(proofHash)
+		kb, err2 := hex.DecodeString(proofKey)
+		if err1 != nil || err2 != nil || len(hb) != rns.FullHashLen || len(kb) != ed25519.PublicKeySize {
+			return false
+		}
+		var h [rns.FullHashLen]byte
+		copy(h[:], hb)
+		return reticulum.ValidateProof(data, h, ed25519.PublicKey(kb)) == nil
+	}
+	e, found, err := lp.db.RecordProofEvidence(lookup, prefix, valid)
+	if err != nil {
+		log.Warn().Err(err).Msg("lxmf: late proof not recorded")
+		return
+	}
+	if !found {
+		return
+	}
+	lp.mu.Lock()
+	delete(lp.expect, key)
+	lp.mu.Unlock()
+	lp.recorded(e)
+}
+
+func (lp *lateProofs) recorded(e database.DeliveryEvidence) {
+	if e.ID == 0 {
+		return // this transmission had its proof already
+	}
+	log.Info().Str("intent", e.IntentID).Int64("transmission", e.TransmissionID).
+		Msg("lxmf: a proof came after the send stopped waiting; recorded as evidence")
+	if lp.notify != nil {
+		lp.notify(e.IntentID)
+	}
 }
