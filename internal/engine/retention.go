@@ -43,6 +43,14 @@ func prune(db *database.DB, days int) {
 		log.Info().Int64("deleted", deleted).Int("retention_days", days).Msg("retention prune complete")
 	}
 
+	// Closed delivery intents with their transmissions and evidence, and
+	// the submissions left without one (r3 D2). [MESHSAT-1581]
+	if n, err := db.PruneClosedIntents(days); err != nil {
+		log.Error().Err(err).Msg("delivery intent prune failed")
+	} else if n > 0 {
+		log.Info().Int64("deleted", n).Msg("delivery intents pruned")
+	}
+
 	// Prune sent/expired dead letters (same retention window)
 	dlqDeleted, err := db.PruneDeadLetters(days)
 	if err != nil {

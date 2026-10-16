@@ -39,6 +39,14 @@ var ErrNoRecipient = errors.New("not sent: the text has no recipient, and no def
 // reason. [MESHSAT-1581]
 var ErrPayloadTooLong = errors.New("not sent: the message does not fit, and cutting it would make it unreadable")
 
+// ErrNotSubmitted is wrapped by a send that knows nothing left the device:
+// a pre-send refusal, or a write that never started. A delivery intent's
+// attempt that ends with it is proven not sent and may be retried or
+// escalated; any other error means the outcome is unknown (architecture r3
+// D18). ErrNotConnected, ErrPayloadTooLong and ErrNoRecipient say the same
+// and are read the same way. [MESHSAT-1581]
+var ErrNotSubmitted = errors.New("not submitted: nothing left the device")
+
 // ErrOutcomeUnknown is returned by a satellite send whose session may have
 // gone out while its outcome never reached this Bridge: the link to the
 // MeshSat node dropped while the node's modem ran the session (or the write

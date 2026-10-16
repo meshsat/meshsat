@@ -287,8 +287,13 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	if len(del.Payload) > 0 {
 		_ = json.Unmarshal(del.Payload, &body)
 	}
-	m, _, err := st.LXMF.Send(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0)
+	// A delivery intent's attempt names the message's timestamp (ts), so
+	// its retries are one message with one hash. [MESHSAT-1581]
+	m, _, err := st.LXMF.SendAt(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0, body.Timestamp)
 	if err != nil {
+		if m != nil {
+			return hex.EncodeToString(m.Hash[:]), err
+		}
 		return "", err
 	}
 	if st.cfg.DB != nil {
@@ -314,10 +319,30 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	return hex.EncodeToString(m.Hash[:]), nil
 }
 
-// LXMFBody is the JSON payload of a class-lxmf ledger row.
+// LXMFBody is the JSON payload of a class-lxmf ledger row. Timestamp, in
+// seconds since the epoch, is set on a delivery intent's attempts; empty
+// means now.
 type LXMFBody struct {
-	Content string `json:"content"`
-	Title   string `json:"title,omitempty"`
+	Content   string  `json:"content"`
+	Title     string  `json:"title,omitempty"`
+	Timestamp float64 `json:"ts,omitempty"`
+}
+
+// CrossesPaidLink reports whether the known path to an LXMF destination
+// (32 hex characters) leaves this node on a paid link, the satellite. A
+// delivery intent never sends over one without a price (architecture r3
+// D8). [MESHSAT-1581]
+func (st *Stack) CrossesPaidLink(destHex string) bool {
+	if st.LXMF == nil {
+		return false
+	}
+	b, err := hex.DecodeString(destHex)
+	if err != nil || len(b) != lxmf.DestLen {
+		return false
+	}
+	var dest [lxmf.DestLen]byte
+	copy(dest[:], b)
+	return st.LXMF.SlowPath(dest)
 }
 
 func (st *Stack) persistPath(e *rns.PathEntry) {

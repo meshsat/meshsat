@@ -48,6 +48,10 @@ type SendOptions struct {
 	// management replies use them). [MESHSAT-756]
 	Class      string
 	MaxRetries int
+	// Source and IdempotencyKey scope a retried request to its first
+	// submission on the delivery-intent path (spa, api, hub). [MESHSAT-1581]
+	Source         string
+	IdempotencyKey string
 }
 
 // SendResult reports what the dispatcher actually did on behalf of a
@@ -63,6 +67,10 @@ type SendResult struct {
 	Errors      map[directory.Kind]error
 	Strategy    directory.Strategy
 	Precedence  types.Precedence
+	// Intent is the submission when the send went the delivery-intent
+	// way (MESHSAT_DELIVERY_INTENTS); DeliveryIDs then hold its round-1
+	// attempts and Errors the routes it did not admit. [MESHSAT-1581]
+	Intent *IntentSubmission
 }
 
 // kindToChannelType maps a directory.Kind to the `channel_type` value
@@ -160,6 +168,9 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 	if d.recipientResolver == nil {
 		return res, fmt.Errorf("SendToRecipient: no RecipientResolver configured")
 	}
+	if d.escalator.Accepting() {
+		return d.sendViaIntent(ctx, rcpt, body, opts, res)
+	}
 
 	contact, err := d.recipientResolver.Resolve(ctx, rcpt.ContactID)
 	if err != nil {
@@ -193,6 +204,41 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 			return res, fmt.Errorf("all bearers failed: %w", e)
 		}
 		return res, fmt.Errorf("no bearer queued (no addresses matched any interface)")
+	}
+	return res, nil
+}
+
+// sendViaIntent is SendToRecipient on the delivery-intent path: one
+// submission, one intent, its round-1 attempts. [MESHSAT-1581]
+func (d *Dispatcher) sendViaIntent(ctx context.Context, rcpt RecipientRef, body []byte, opts SendOptions, res SendResult) (SendResult, error) {
+	sub, err := d.escalator.Submit(ctx, IntentRequest{
+		Source: opts.Source, IdempotencyKey: opts.IdempotencyKey, ContactID: rcpt.ContactID, Body: body,
+		Precedence: res.Precedence, Strategy: opts.Strategy, MaxCostCents: opts.MaxCostCents,
+	})
+	if err != nil {
+		return res, err
+	}
+	res.Intent = sub
+	if len(sub.Intents) == 0 {
+		return res, nil
+	}
+	in := sub.Intents[0]
+	res.Strategy = directory.Strategy(in.EffectiveStrategy)
+	kindOf := map[int]directory.Kind{}
+	for _, p := range in.RoutePlan {
+		kindOf[p.RouteIndex] = directory.Kind(p.Kind)
+		if !p.Admitted {
+			res.Errors[directory.Kind(p.Kind)] = fmt.Errorf("not used: %s", p.Reason)
+		}
+	}
+	if len(sub.RowIDs) > 0 {
+		for _, id := range sub.RowIDs[0] {
+			if row, err := d.db.GetDelivery(id); err == nil {
+				k := kindOf[row.RouteIndex]
+				res.DeliveryIDs[k] = append(res.DeliveryIDs[k], id)
+				delete(res.Errors, k)
+			}
+		}
 	}
 	return res, nil
 }

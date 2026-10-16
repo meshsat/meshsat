@@ -713,6 +713,34 @@ func buildTextMessage(text string, to uint32, channel uint32) []byte {
 	return buildMeshPacketBytes([]byte(text), int(pb.PortNum_TEXT_MESSAGE_APP), to, channel, true, false)
 }
 
+// buildTextMessageWithID is buildTextMessage with the packet id set by the
+// client: the radio keeps a non-zero id, and the destination's ROUTING_APP
+// acknowledgement carries it back as request_id. [MESHSAT-1581]
+func buildTextMessageWithID(text string, to uint32, channel uint32, id uint32) []byte {
+	if to == 0 {
+		to = meshBroadcast
+	}
+	pkt := &pb.MeshPacket{
+		Id:       id,
+		To:       to,
+		Channel:  channel,
+		RxTime:   uint32(time.Now().Unix()),
+		HopLimit: 3,
+		WantAck:  wantAckFor(to),
+		PayloadVariant: &pb.MeshPacket_Decoded{
+			Decoded: &pb.Data{
+				Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+				Payload: []byte(text),
+			},
+		},
+	}
+	data, err := proto.Marshal(pkt)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 // buildMeshPacket builds the outer MeshPacket wrapper.
 func buildMeshPacket(decodedPayload []byte, to uint32, channel uint32) []byte {
 	// This function expects pre-encoded Data bytes — parse and re-encode

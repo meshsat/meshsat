@@ -210,6 +210,19 @@ type SendResult struct {
 // proof. wantMethod 0 lets the size decide (opportunistic when it fits one
 // packet, otherwise a link). The caller (the delivery ledger) retries.
 func (r *Router) Send(ctx context.Context, dest [DestLen]byte, content, title []byte, fields Value, wantMethod Method) (*Message, *SendResult, error) {
+	return r.SendAt(ctx, dest, content, title, fields, wantMethod, 0)
+}
+
+// SendAt is Send with the message's timestamp given (seconds since the
+// epoch; 0 = now). The timestamp is part of the message hash, so every
+// retry of one message under the same timestamp is the same message: the
+// receiver's dedup (24 h, by hash) drops a copy it already has, and a proof
+// for any copy proves the one message. A delivery intent's attempts send
+// this way (architecture r3 D10, B7(d)). [MESHSAT-1581]
+//
+// An error wrapping ErrUnknownDestination, ErrNoPath, ErrLinkFailed or
+// ErrStampCostTooHigh means the message itself never left this node.
+func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title []byte, fields Value, wantMethod Method, timestamp float64) (*Message, *SendResult, error) {
 	known := r.node.Recall(dest)
 	if known == nil || known.Identity == nil {
 		if !r.node.RequestPath(ctx, dest, PathRequestWait) {
@@ -224,7 +237,7 @@ func (r *Router) Send(ctx context.Context, dest [DestLen]byte, content, title []
 	if stampCost > r.cfg.MaxOutboundStampCost {
 		return nil, nil, ErrStampCostTooHigh
 	}
-	m := &Message{Dest: dest, Source: r.Dest.Hash, Title: title, Content: content, Fields: fields}
+	m := &Message{Dest: dest, Source: r.Dest.Hash, Title: title, Content: content, Fields: fields, Timestamp: timestamp}
 	stamper := func(h [32]byte, cost int) []byte {
 		sctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
@@ -273,6 +286,10 @@ func (r *Router) Send(ctx context.Context, dest [DestLen]byte, content, title []
 	case Direct:
 		l, err := r.linkTo(ctx, dest)
 		if err != nil {
+			// No link, no message: what failed was the link request.
+			if !errors.Is(err, ErrLinkFailed) {
+				err = fmt.Errorf("%w: %v", ErrLinkFailed, err)
+			}
 			return m, res, err
 		}
 		if m.ContentSize() <= LinkMaxContent {

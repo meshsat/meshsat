@@ -99,6 +99,7 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 // @Param id path integer true "Delivery ID"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /api/deliveries/{id}/cancel [post]
 func (s *Server) handleCancelDelivery(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +110,12 @@ func (s *Server) handleCancelDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.CancelDelivery(id); err != nil {
+		// An attempt of a delivery intent is cancelled with its intent
+		// (POST /api/deliveries/intents/{id}/cancel). [MESHSAT-1581]
+		if errors.Is(err, database.ErrIntentAttempt) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to cancel delivery")
 		return
 	}

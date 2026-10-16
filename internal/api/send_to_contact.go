@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"meshsat/internal/database"
 	"meshsat/internal/directory"
 	"meshsat/internal/engine"
 	"meshsat/internal/types"
@@ -42,6 +44,16 @@ type sendToContactResponse struct {
 	Strategy   string            `json:"strategy"`
 	Precedence string            `json:"precedence"`
 	PerBearer  []perBearerStatus `json:"per_bearer"`
+
+	// With MESHSAT_DELIVERY_INTENTS on: the submission, its intent (one
+	// per recipient; GET /api/deliveries/intents/{id} has its status),
+	// the strategy asked for and why the one used was chosen, and whether
+	// the Idempotency-Key named an earlier submission. [MESHSAT-1581]
+	SubmissionID      string   `json:"submission_id,omitempty"`
+	IntentIDs         []string `json:"intent_ids,omitempty"`
+	RequestedStrategy string   `json:"requested_strategy,omitempty"`
+	StrategyReason    string   `json:"strategy_reason,omitempty"`
+	Existing          bool     `json:"existing,omitempty"`
 }
 
 // @Summary Send a message to a contact
@@ -53,13 +65,27 @@ type sendToContactResponse struct {
 // @Description when every bearer fails to queue; the body still
 // @Description carries the `per_bearer` breakdown so operators see
 // @Description which bearer rejected the send and why.
+// @Description With MESHSAT_DELIVERY_INTENTS on, a contact send becomes a
+// @Description delivery intent (submission_id, intent_ids): its routes are
+// @Description tried by the strategy (PRIMARY_ONLY, ALL_BEARERS,
+// @Description ORDERED_FALLBACK; any other explicit strategy is 400), and
+// @Description GET /api/deliveries/intents/{id} reports what is known. An
+// @Description Idempotency-Key header makes a retried request return the
+// @Description first submission; the same key with a different request is
+// @Description 409. Without a key a retried request sends again. 413: no
+// @Description route can carry a message that long; 422: no route of the
+// @Description contact can be used (per_bearer says why).
 // @Tags messages
 // @Accept json
 // @Produce json
 // @Param body body sendToContactRequest true "Target contact and message text"
+// @Param Idempotency-Key header string false "Retry protection for this request (intent path)"
 // @Success 200 {object} sendToContactResponse
 // @Success 207 {object} sendToContactResponse
 // @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 413 {object} sendToContactResponse
+// @Failure 422 {object} sendToContactResponse
 // @Failure 503 {object} sendToContactResponse
 // @Router /api/messages/send-to-contact [post]
 func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
@@ -106,12 +132,39 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := engine.SendOptions{
-		Precedence: precedence,
-		Strategy:   strategy,
+		Precedence:     precedence,
+		Strategy:       strategy,
+		Source:         "api",
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+	}
+	if r.Header.Get("X-MeshSat-Client") == "spa" {
+		opts.Source = "spa"
 	}
 
 	res, err := s.dispatcher.SendToRecipient(r.Context(), ref, []byte(req.Text), opts)
 	resp := sendToContactResponseFrom(res)
+
+	// The delivery-intent path's refusals: nothing was written. [MESHSAT-1581]
+	var noRoute *engine.NoRouteError
+	switch {
+	case errors.Is(err, engine.ErrUnsupportedStrategy):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case errors.Is(err, database.ErrIdempotencyConflict):
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	case errors.As(err, &noRoute):
+		resp.Queued = false
+		for _, p := range noRoute.Plan {
+			resp.PerBearer = append(resp.PerBearer, perBearerStatus{Kind: p.Kind, Error: "not used: " + p.Reason})
+		}
+		code := http.StatusUnprocessableEntity
+		if noRoute.Oversize {
+			code = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, code, resp)
+		return
+	}
 
 	if err != nil {
 		// No bearer queued at all → 503 with the per-bearer
@@ -157,6 +210,15 @@ func sendToContactResponseFrom(res engine.SendResult) sendToContactResponse {
 	resp := sendToContactResponse{
 		Strategy:   string(res.Strategy),
 		Precedence: string(res.Precedence),
+	}
+	if sub := res.Intent; sub != nil {
+		resp.SubmissionID = sub.Submission.ID
+		resp.IntentIDs = sub.Submission.IntentIDs
+		resp.Existing = sub.Existing
+		if len(sub.Intents) > 0 {
+			resp.RequestedStrategy = sub.Intents[0].RequestedStrategy
+			resp.StrategyReason = sub.Intents[0].StrategyReason
+		}
 	}
 	kinds := map[string]struct{}{}
 	for k := range res.DeliveryIDs {

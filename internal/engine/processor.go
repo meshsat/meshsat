@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -33,6 +34,10 @@ type GatewayProvider interface {
 
 // Processor ingests mesh events, persists them, and routes to gateways.
 type Processor struct {
+	// routingReceipt takes every ROUTING_APP packet that answers a
+	// request (an acknowledgement or a NAK): the delivery intents'
+	// evidence for a mesh attempt. Nil = none. [MESHSAT-1581]
+	routingReceipt atomic.Pointer[func(ifaceID string, msg transport.MeshMessage)]
 	// geofence checks every mesh position against the zones. [MESHSAT-1414]
 	geofence   *GeofenceMonitor
 	db         *database.DB
@@ -156,6 +161,16 @@ func (p *Processor) SetOOBInbound(fn func(ctx context.Context, ifaceID, fromAddr
 	p.oobMu.Lock()
 	p.oobInbound = fn
 	p.oobMu.Unlock()
+}
+
+// SetRoutingReceiptHook hands every ROUTING_APP answer from the mesh to fn
+// (the Escalator's MeshRoutingReceipt). [MESHSAT-1581]
+func (p *Processor) SetRoutingReceiptHook(fn func(ifaceID string, msg transport.MeshMessage)) {
+	if fn == nil {
+		p.routingReceipt.Store(nil)
+		return
+	}
+	p.routingReceipt.Store(&fn)
 }
 
 func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, text string) bool {
@@ -612,6 +627,15 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 	// the OOB classifier so management frames on the air show up too.
 	// [MESHSAT-826]
 	p.packets.Add(meshRXRecord(p.mesh, &msg))
+
+	// An acknowledgement or NAK that names a request: evidence for a
+	// delivery intent's mesh attempt, matched by its request_id.
+	// [MESHSAT-1581]
+	if msg.PortNum == int(transport.PortNumRouting) && msg.RequestID != 0 {
+		if h := p.routingReceipt.Load(); h != nil {
+			(*h)("mesh_0", msg)
+		}
+	}
 
 	// OOB management frames typed on a phone or sent by a peer kit over
 	// LoRa are consumed here, before persistence and the rules engine.

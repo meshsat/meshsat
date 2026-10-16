@@ -1414,6 +1414,138 @@ var migrations = []string{
 		operator  TEXT NOT NULL DEFAULT '',
 		licence   TEXT NOT NULL DEFAULT ''
 	);`,
+
+	// v62: delivery intents. One submission of a send-to-contact holds one
+	// intent per recipient; an intent holds the message, its frozen route
+	// plan and its state, and its attempts are ordinary delivery rows
+	// (intent_id set), so the workers, transforms and gateways stay the
+	// path every send takes. A transmission is one physical submission of
+	// one attempt (claim_gen numbers them), with its own outcome and
+	// charge; evidence is what came back, matched to a transmission or
+	// stored unmatched or ambiguous. Tariffs price a paid route; an intent
+	// never uses one without. Rows without intent_id are untouched.
+	// Only used with MESHSAT_DELIVERY_INTENTS=true. [MESHSAT-1581]
+	`CREATE TABLE IF NOT EXISTS delivery_submissions (
+		id              TEXT PRIMARY KEY,
+		source          TEXT NOT NULL,
+		idempotency_key TEXT,
+		request_sha256  TEXT NOT NULL,
+		intent_ids      TEXT NOT NULL DEFAULT '[]',
+		created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_submissions_key
+		ON delivery_submissions(source, idempotency_key) WHERE idempotency_key IS NOT NULL;
+	CREATE TABLE IF NOT EXISTS delivery_intents (
+		id                     TEXT PRIMARY KEY,
+		submission_id          TEXT NOT NULL,
+		contact_id             TEXT NOT NULL DEFAULT '',
+		precedence             TEXT NOT NULL DEFAULT 'Routine',
+		class                  TEXT NOT NULL DEFAULT 'message',
+		payload                BLOB NOT NULL,
+		payload_sha256         TEXT NOT NULL,
+		requested_strategy     TEXT NOT NULL DEFAULT '',
+		effective_strategy     TEXT NOT NULL,
+		strategy_reason        TEXT NOT NULL DEFAULT '',
+		policy_version         TEXT NOT NULL DEFAULT '',
+		route_plan             TEXT NOT NULL,
+		state                  TEXT NOT NULL DEFAULT 'active',
+		outcome                TEXT NOT NULL DEFAULT 'pending',
+		possible_duplicate     INTEGER NOT NULL DEFAULT 0,
+		version                INTEGER NOT NULL DEFAULT 1,
+		active_round           INTEGER NOT NULL DEFAULT 1,
+		round_started_ms       INTEGER NOT NULL DEFAULT 0,
+		cap_minor              INTEGER,
+		currency               TEXT NOT NULL DEFAULT 'EUR',
+		reserved_minor         INTEGER NOT NULL DEFAULT 0,
+		incurred_minor         INTEGER NOT NULL DEFAULT 0,
+		possible_minor         INTEGER NOT NULL DEFAULT 0,
+		elapsed_ms             INTEGER NOT NULL DEFAULT 0,
+		heartbeat_wall_at      DATETIME,
+		heartbeat_wall_trusted INTEGER NOT NULL DEFAULT 0,
+		expiry_allow_s         INTEGER NOT NULL DEFAULT 0,
+		expires_at             DATETIME,
+		cancelled_at           DATETIME,
+		cancel_reason          TEXT NOT NULL DEFAULT '',
+		last_transition        TEXT NOT NULL DEFAULT 'T1',
+		created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		closed_at              DATETIME
+	);
+	CREATE INDEX IF NOT EXISTS idx_delivery_intents_state ON delivery_intents(state);
+	CREATE INDEX IF NOT EXISTS idx_delivery_intents_contact ON delivery_intents(contact_id, created_at);
+	ALTER TABLE message_deliveries ADD COLUMN intent_id TEXT;
+	ALTER TABLE message_deliveries ADD COLUMN round INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE message_deliveries ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE message_deliveries ADD COLUMN route_index INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE message_deliveries ADD COLUMN outcome_class TEXT NOT NULL DEFAULT '';
+	ALTER TABLE message_deliveries ADD COLUMN accepted_at DATETIME;
+	ALTER TABLE message_deliveries ADD COLUMN accepted_elapsed_ms INTEGER;
+	ALTER TABLE message_deliveries ADD COLUMN transform_sha256 TEXT NOT NULL DEFAULT '';
+	ALTER TABLE message_deliveries ADD COLUMN claim_gen INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE message_deliveries ADD COLUMN reason TEXT NOT NULL DEFAULT '';
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_message_deliveries_intent_attempt
+		ON message_deliveries(intent_id, attempt_no) WHERE intent_id IS NOT NULL;
+	CREATE TABLE IF NOT EXISTS delivery_transmissions (
+		id                INTEGER PRIMARY KEY AUTOINCREMENT,
+		attempt_id        INTEGER NOT NULL,
+		intent_id         TEXT NOT NULL,
+		gen               INTEGER NOT NULL,
+		state             TEXT NOT NULL DEFAULT 'authorized',
+		unit_kind         TEXT NOT NULL DEFAULT '',
+		reserved_units    INTEGER NOT NULL DEFAULT 0,
+		authorized_minor  INTEGER NOT NULL DEFAULT 0,
+		reserved_minor    INTEGER NOT NULL DEFAULT 0,
+		handoff_at        DATETIME,
+		outcome_class     TEXT NOT NULL DEFAULT '',
+		retryable         INTEGER NOT NULL DEFAULT 0,
+		accepted_by       TEXT NOT NULL DEFAULT '',
+		corr_kind         TEXT NOT NULL DEFAULT '',
+		corr_value        TEXT NOT NULL DEFAULT '',
+		corr_scope        TEXT NOT NULL DEFAULT '',
+		corr_peer         TEXT NOT NULL DEFAULT '',
+		charged_units     INTEGER NOT NULL DEFAULT 0,
+		charged_minor     INTEGER NOT NULL DEFAULT 0,
+		possible_minor    INTEGER NOT NULL DEFAULT 0,
+		charge_state      TEXT NOT NULL DEFAULT 'none',
+		detail            TEXT NOT NULL DEFAULT '',
+		created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		finished_at       DATETIME,
+		UNIQUE(attempt_id, gen)
+	);
+	CREATE INDEX IF NOT EXISTS idx_delivery_transmissions_intent ON delivery_transmissions(intent_id);
+	CREATE INDEX IF NOT EXISTS idx_delivery_transmissions_corr ON delivery_transmissions(corr_kind, corr_value);
+	CREATE TABLE IF NOT EXISTS delivery_evidence (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		intent_id       TEXT,
+		attempt_id      INTEGER,
+		transmission_id INTEGER,
+		source          TEXT NOT NULL,
+		event           TEXT NOT NULL,
+		completes       TEXT NOT NULL DEFAULT '',
+		corr_kind       TEXT NOT NULL DEFAULT '',
+		corr_value      TEXT NOT NULL DEFAULT '',
+		corr_scope      TEXT NOT NULL DEFAULT '',
+		corr_peer       TEXT NOT NULL DEFAULT '',
+		trust           TEXT NOT NULL DEFAULT 'unauthenticated',
+		matched         INTEGER NOT NULL DEFAULT 0,
+		ambiguous       INTEGER NOT NULL DEFAULT 0,
+		candidates      TEXT NOT NULL DEFAULT '[]',
+		applied         INTEGER NOT NULL DEFAULT 0,
+		received_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_delivery_evidence_intent ON delivery_evidence(intent_id);
+	CREATE TABLE IF NOT EXISTS delivery_tariffs (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		interface_id TEXT NOT NULL,
+		unit_kind    TEXT NOT NULL,
+		unit_bytes   INTEGER NOT NULL DEFAULT 0,
+		min_units    INTEGER NOT NULL DEFAULT 1,
+		price_minor  INTEGER NOT NULL DEFAULT 0,
+		currency     TEXT NOT NULL DEFAULT 'EUR',
+		version      INTEGER NOT NULL DEFAULT 1,
+		valid_from   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		free         INTEGER NOT NULL DEFAULT 0
+	);`,
 }
 
 func (db *DB) migrate() error {
