@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,13 @@ type submitModem struct {
 	afterBody  string // "" = the port fails after the body
 	failPrompt bool
 	readErr    bool
+	// The text contract: cscs is the character set the modem reports
+	// ("" = IRA), cscsRefuse makes it refuse AT+CSCS=, cscsStuck keeps the
+	// reported set whatever is written; dcs is AT+CSMP?'s coding.
+	cscs       string
+	cscsRefuse bool
+	cscsStuck  bool
+	dcs        int
 }
 
 func (m *submitModem) Write(b []byte) (int, error) {
@@ -48,6 +56,23 @@ func (m *submitModem) Write(b []byte) (int, error) {
 			m.inBody = true
 			m.reply = append(m.reply, "\r\n> "...)
 		}
+	case bytes.HasPrefix(b, []byte("AT+CSCS?")):
+		cs := m.cscs
+		if cs == "" {
+			cs = "IRA"
+		}
+		m.reply = append(m.reply, "\r\n+CSCS: \""+cs+"\"\r\n\r\nOK\r\n"...)
+	case bytes.HasPrefix(b, []byte("AT+CSCS=")):
+		if m.cscsRefuse {
+			m.reply = append(m.reply, "\r\nERROR\r\n"...)
+			break
+		}
+		if !m.cscsStuck {
+			m.cscs = strings.Trim(strings.TrimSpace(string(b[len("AT+CSCS="):])), `"`)
+		}
+		m.reply = append(m.reply, "\r\nOK\r\n"...)
+	case bytes.HasPrefix(b, []byte("AT+CSMP?")):
+		m.reply = append(m.reply, fmt.Sprintf("\r\n+CSMP: 17,167,0,%d\r\n\r\nOK\r\n", m.dcs)...)
 	case bytes.HasPrefix(b, []byte("AT")):
 		m.reply = append(m.reply, "\r\nOK\r\n"...)
 	}

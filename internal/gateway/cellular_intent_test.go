@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -106,3 +107,42 @@ func TestSMSIntent_Outcomes(t *testing.T) {
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+// B9SMS-R1: a modem command still running when the send stopped waiting
+// is unknown, never not sent, and carries no charge (the reservation stays
+// as possible).
+func TestSMSIntent_UnfinishedIsUnknown(t *testing.T) {
+	cell := &submitCell{fakeCellTransport: newFakeCellTransport(),
+		res: transport.SMSSubmit{Phase: transport.SMSUnfinished}, err: errors.New("still running")}
+	gw, _ := smsIntentGateway(t, cell, CellularConfig{})
+	o := gw.IntentSend(context.Background(), IntentSend{Destination: "+31612345678", Text: "hello", CorrValue: "c1"})
+	if o.Class != IntentUnknown || o.Retryable || o.Charged {
+		t.Fatalf("outcome %+v; want unknown, not retryable, no charge", o)
+	}
+}
+
+// r3 D8: with a prepaid bundle set, an intent SMS goes only while one is
+// left; refused at admission and again before the send, with no modem call.
+func TestSMSIntent_BundleGate(t *testing.T) {
+	db := newBudgetDB(t)
+	b := NewSMSBudget(db, "kitA", SMSBudgetOptions{Size: 2, WarnAt: 1}, (&fakeSender{}).send)
+	SetSMSBundleGate(b.Allow)
+	t.Cleanup(func() { SetSMSBundleGate(nil) })
+	cell := &submitCell{fakeCellTransport: newFakeCellTransport(), res: transport.SMSSubmit{Phase: transport.SMSAccepted, Ref: 1}}
+	gw, _ := smsIntentGateway(t, cell, CellularConfig{})
+	if r, _ := gw.IntentAdmit("+31612345678", []byte("hello"), false); r != "" {
+		t.Fatalf("bundle with 2 left refused: %s", r)
+	}
+	b.Record("+31612345678", "one")
+	b.Record("+31612345678", "two")
+	r, detail := gw.IntentAdmit("+31612345678", []byte("hello"), false)
+	o := gw.IntentSend(context.Background(), IntentSend{Destination: "+31612345678", Text: "hello", CorrValue: "c2"})
+	if r != "skipped_budget" || o.Class != IntentNotSent || o.Reason != "skipped_budget" || len(cell.sent) != 0 {
+		t.Fatalf("spent bundle: admit %q (%s), send %+v, %d modem calls; want skipped_budget and no call", r, detail, o, len(cell.sent))
+	}
+	// No bundle configured: nothing to count against, nothing refused.
+	nb := NewSMSBudget(newBudgetDB(t), "kitB", SMSBudgetOptions{}, (&fakeSender{}).send)
+	if ok, why := nb.Allow(1); !ok {
+		t.Fatalf("no bundle refused: %s", why)
+	}
+}

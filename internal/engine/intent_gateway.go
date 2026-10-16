@@ -106,8 +106,15 @@ func (e *Escalator) admitGateway(p *database.RoutePlanEntry, kind directory.Kind
 			p.Reason = reasonNoPrice
 			return
 		}
-		units := t.Units(len(wire))
-		p.UnitKind, p.EstUnits, p.TariffID, p.TariffVersion, p.EstMinor = t.UnitKind, units, t.ID, t.Version, t.Price(units)
+		// A tariff that cannot price this intent (another currency, out of
+		// bounds, a cost past int64) is no price (B9SMS-R3, R5).
+		units, minor, err := t.Cost(len(wire))
+		if err != nil {
+			log.Warn().Err(err).Str("iface", ifaceID).Int64("tariff", t.ID).Msg("intent: the tariff cannot price this route")
+			p.Reason = reasonNoPrice
+			return
+		}
+		p.UnitKind, p.EstUnits, p.TariffID, p.TariffVersion, p.EstMinor = t.UnitKind, units, t.ID, t.Version, minor
 		p.Paid = !t.Free
 	}
 	p.Admitted = true
@@ -115,8 +122,10 @@ func (e *Escalator) admitGateway(p *database.RoutePlanEntry, kind directory.Kind
 
 // intentPrice is what this attempt costs now (r3 D8 reprice: the current
 // tariff, the wire bytes after the chain as it is now). tariff is nil for a
-// free route; refuse is set when a paid route has no tariff.
-func (w *DeliveryWorker) intentPrice(ad gateway.IntentAdapter, text string) (tariff *database.Tariff, units int, minor int64, refuse *intentRefusal) {
+// free route; refuse is set when a paid route has no tariff, or one that
+// cannot price this intent: a currency other than the intent's (checked
+// again here, at the authorization, B9SMS-R3), or out of bounds (R5).
+func (w *DeliveryWorker) intentPrice(ad gateway.IntentAdapter, del database.MessageDelivery, text string) (tariff *database.Tariff, units int, minor int64, refuse *intentRefusal) {
 	if ad == nil || !billed(ad) {
 		return nil, 0, 0, nil
 	}
@@ -124,8 +133,19 @@ func (w *DeliveryWorker) intentPrice(ad gateway.IntentAdapter, text string) (tar
 	if err != nil || t == nil {
 		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice, Detail: "the route has no tariff"}
 	}
-	units = t.Units(len(text))
-	return t, units, t.Price(units), nil
+	in, err := w.db.GetIntent(del.IntentID)
+	if err != nil {
+		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice, Detail: "the intent could not be read: " + err.Error()}
+	}
+	if t.Currency != in.Currency {
+		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice,
+			Detail: fmt.Sprintf("the tariff is in %s and the intent in %s; nothing is converted", t.Currency, in.Currency)}
+	}
+	units, minor, err = t.Cost(len(text))
+	if err != nil {
+		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice, Detail: "the tariff cannot price this send: " + err.Error()}
+	}
+	return t, units, minor, nil
 }
 
 // overCapReason says why an authorization over the cap was refused:
@@ -206,8 +226,16 @@ func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.Mes
 		Detail: o.Detail, Reason: o.Reason}
 	if o.Charged && tariff != nil {
 		// Billing is a fact of its own (r3 D8): incurred whatever the outcome.
-		out.Charges = append(out.Charges, Charge{UnitKind: tariff.UnitKind, Units: o.ChargedUnits,
-			Minor: tariff.Price(o.ChargedUnits), Confirmed: o.ChargeConfirmed})
+		// An estimate is the tariff's own count for this submission, its
+		// minimum included, never fewer units than the adapter saw go (one
+		// SMS is one physical submission, not the tariff's units,
+		// B9SMS-R4); only the provider's confirmed figure replaces it.
+		units := o.ChargedUnits
+		if !o.ChargeConfirmed {
+			units = max(units, tariff.Units(len(text)))
+		}
+		out.Charges = append(out.Charges, Charge{UnitKind: tariff.UnitKind, Units: units,
+			Minor: tariff.Price(units), Confirmed: o.ChargeConfirmed})
 	}
 	if o.Class != database.ClassNotSent {
 		out.Corr = Correlation{Kind: ad.IntentCorrKind(), Value: corrValue, Scope: w.channelID, Peer: del.Destination}

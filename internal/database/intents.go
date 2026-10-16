@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +82,9 @@ var (
 	ErrClaimLost = errors.New("the attempt is no longer claimed under this generation")
 	// ErrOverCap: the reservation does not fit the intent's cap.
 	ErrOverCap = errors.New("the intent's cost cap does not allow this submission")
+	// ErrBadAmount: a reservation or a charge that is negative, which no
+	// valid tariff produces (B9SMS-R5). [MESHSAT-1584]
+	ErrBadAmount = errors.New("a negative amount is never reserved or charged")
 	// ErrIntentNotFound: no intent with that id.
 	ErrIntentNotFound = errors.New("delivery intent not found")
 )
@@ -584,6 +588,9 @@ func loadSnapshotTx(tx *sqlx.Tx, id string) (*IntentSnapshot, error) {
 // ErrClaimLost when the row is no longer sending under that claim,
 // ErrOverCap when the cap does not allow it; nothing is written then.
 func (db *DB) AuthorizeTransmission(attemptID int64, gen int, unitKind string, units int, reservedMinor int64) (int64, error) {
+	if reservedMinor < 0 || units < 0 {
+		return 0, ErrBadAmount
+	}
 	var txID int64
 	err := db.withTx(func(tx *sqlx.Tx) error {
 		var intentID string
@@ -713,6 +720,10 @@ func finalizeTx(tx *sqlx.Tx, txID int64, r TransmissionResult) (string, error) {
 	// reservation as possible; the rest is released (r3 D8, G1).
 	reserved := t.ReservedMinor
 	charged := r.ChargedMinor
+	if charged < 0 || r.ChargedUnits < 0 {
+		// Left handed off: the restart recovery reads it as unknown.
+		return "", fmt.Errorf("finalize %d: %w", txID, ErrBadAmount)
+	}
 	var possible int64
 	chargeState := "none"
 	switch {
@@ -1468,6 +1479,38 @@ type Tariff struct {
 	Free        bool   `json:"free"`
 }
 
+// What a tariff may say in this release (B9SMS-R3, R5): prices in EUR, the
+// intents' currency, with no conversion; at most EUR 10.000 a unit, 10.000
+// units at least per submission, 1 MiB a unit, so no cost overflows.
+// [MESHSAT-1584]
+const (
+	TariffCurrency      = "EUR"
+	MaxTariffPriceMinor = 1_000_000
+	MaxTariffMinUnits   = 10_000
+	MaxTariffUnitBytes  = 1 << 20
+)
+
+// Validate says whether the tariff can price a delivery intent. The
+// engine asks it of every stored tariff it uses, so a row written before
+// these limits, or past the API, never prices a send.
+func (t Tariff) Validate() error {
+	switch {
+	case t.UnitKind == "":
+		return errors.New("the tariff names no unit")
+	case t.Currency != TariffCurrency:
+		return fmt.Errorf("the tariff is in %q; this release prices in %s only, with no conversion", t.Currency, TariffCurrency)
+	case t.PriceMinor < 0 || t.PriceMinor > MaxTariffPriceMinor:
+		return fmt.Errorf("price_minor %d is outside 0..%d", t.PriceMinor, MaxTariffPriceMinor)
+	case t.MinUnits < 0 || t.MinUnits > MaxTariffMinUnits:
+		return fmt.Errorf("min_units %d is outside 1..%d", t.MinUnits, MaxTariffMinUnits)
+	case t.UnitBytes < 0 || t.UnitBytes > MaxTariffUnitBytes:
+		return fmt.Errorf("unit_bytes %d is outside 0..%d", t.UnitBytes, MaxTariffUnitBytes)
+	case !t.Free && t.PriceMinor == 0:
+		return errors.New("a paid tariff with no price")
+	}
+	return nil
+}
+
 // Units is what one submission of wireBytes costs in this tariff's unit:
 // ceil(bytes / unit_bytes) with unit_bytes > 0, else one per submission;
 // never fewer than min_units (r3 D8). [MESHSAT-1584]
@@ -1485,12 +1528,29 @@ func (t Tariff) Units(wireBytes int) int {
 	return u
 }
 
-// Price is units at this tariff, in minor units of its currency.
+// Price is units at this tariff, in minor units of its currency. It never
+// wraps: a product past int64 is math.MaxInt64, which no cap allows.
 func (t Tariff) Price(units int) int64 {
-	if t.Free {
+	if t.Free || units <= 0 || t.PriceMinor <= 0 {
 		return 0
 	}
+	if t.PriceMinor > math.MaxInt64/int64(units) {
+		return math.MaxInt64
+	}
 	return int64(units) * t.PriceMinor
+}
+
+// Cost is what one submission of wireBytes costs: its units and its price,
+// or why the tariff cannot price it (Validate, or a price past the limit).
+func (t Tariff) Cost(wireBytes int) (units int, minor int64, err error) {
+	if err := t.Validate(); err != nil {
+		return 0, 0, err
+	}
+	units = t.Units(wireBytes)
+	if minor = t.Price(units); minor == math.MaxInt64 {
+		return 0, 0, fmt.Errorf("%d units at %d is past what can be priced", units, t.PriceMinor)
+	}
+	return units, minor, nil
 }
 
 // InsertTariff adds a new version of an interface's tariff, valid now; the

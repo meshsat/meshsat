@@ -1221,7 +1221,10 @@ const (
 	SMSNotSent    SMSPhase = iota // the text never went to the modem with its Ctrl-Z
 	SMSHandedOver                 // text and Ctrl-Z went to the modem; the network's answer did not come
 	SMSRefused                    // the network refused it (+CMS ERROR): not sent
-	SMSAccepted                   // the network accepted it (+CMGS)
+	SMSAccepted                   // the network accepted it (+CMGS: <mr>)
+	// SMSUnfinished: the command had started and was still running when
+	// the caller stopped waiting; it may yet submit the SMS (B9SMS-R1).
+	SMSUnfinished
 )
 
 // SMSSubmit is what SubmitSMS knows: the phase reached and, when accepted,
@@ -1239,8 +1242,10 @@ var smsSubmitTimeout = cellSMSSendTimeout + 15*time.Second
 
 // SubmitSMS sends one SMS of at most 160 characters, as SendSMS does, but
 // never cuts the text and says how far the submission got. A command still
-// queued when the caller gives up (behind a busy one) never starts, so a
-// result of SMSNotSent is final. [MESHSAT-1584]
+// queued when the caller gives up (behind a busy one) never starts: that
+// SMSNotSent is final. A command that started owns its result: if the
+// caller stops waiting while it runs, the answer is SMSUnfinished, never
+// SMSNotSent, because it may still submit (B9SMS-R1). [MESHSAT-1584]
 func (t *DirectCellTransport) SubmitSMS(ctx context.Context, to, text string) (SMSSubmit, error) {
 	if err := smsATUnsafe(to, text); err != nil {
 		return SMSSubmit{}, err
@@ -1248,19 +1253,32 @@ func (t *DirectCellTransport) SubmitSMS(ctx context.Context, to, text string) (S
 	if len(text) > maxSMSLength {
 		return SMSSubmit{}, fmt.Errorf("%d characters, one SMS takes %d: %w", len(text), maxSMSLength, ErrPayloadTooLong)
 	}
-	var state, phase atomic.Int32 // state: 0 queued, 1 started, 2 abandoned
+	// state: 0 queued, 1 running, 2 abandoned before it started, 3 finished.
+	var state, phase atomic.Int32
 	var ref atomic.Int64
 	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: intent SMS send starting")
 	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
 		if !state.CompareAndSwap(0, 1) {
 			return "", errSMSAbandoned
 		}
+		defer state.Store(3)
 		return t.cmgs(sp, to, text, &phase, &ref)
 	}, smsSubmitTimeout)
 	if state.CompareAndSwap(0, 2) {
 		return SMSSubmit{Phase: SMSNotSent}, err // never started, and now never will
 	}
-	return SMSSubmit{Phase: SMSPhase(phase.Load()), Ref: ref.Load()}, err
+	if state.Load() != 3 {
+		// Still running: it may yet put the Ctrl-Z on the line.
+		if err == nil {
+			err = errors.New("cellular: the SMS command is still running")
+		}
+		return SMSSubmit{Phase: SMSUnfinished}, fmt.Errorf("the wait ended while the SMS command ran, it may still be submitted: %w", err)
+	}
+	got := SMSSubmit{Phase: SMSPhase(phase.Load()), Ref: ref.Load()}
+	if got.Phase == SMSHandedOver && err == nil {
+		err = errors.New("the modem answered without a +CMGS reference")
+	}
+	return got, err
 }
 
 func setSMSPhase(p *atomic.Int32, v SMSPhase) {
@@ -1270,6 +1288,33 @@ func setSMSPhase(p *atomic.Int32, v SMSPhase) {
 }
 
 var cmgsRefNumber = regexp.MustCompile(`CMGS:\s*(\d+)`)
+
+var (
+	cscsRead = regexp.MustCompile(`\+CSCS:\s*"([A-Z0-9]+)"`)
+	csmpRead = regexp.MustCompile(`(?m)\+CSMP:.*,\s*(\d+)\s*$`)
+)
+
+// smsTextContract sets and checks what a delivery intent's SMS text was
+// admitted for (B7(l)): the TE character set IRA, so printable ASCII goes
+// to the modem as it is and the modem maps it to the GSM 7-bit alphabet
+// (A76XX manual 2.2.20: the default, saved by the modem, so another value
+// would survive a reboot), and the text-mode data coding scheme 0, GSM 7
+// bit, the 160-character coding (9.2.6, 9.2.13). Anything else and the
+// SMS is not sent. [MESHSAT-1584]
+func smsTextContract(sp serial.Port) error {
+	if resp, err := sendAT(sp, `AT+CSCS="IRA"`, 3*time.Second); err != nil || !strings.Contains(resp, "OK") {
+		return fmt.Errorf("the modem did not take AT+CSCS=\"IRA\" (%q, %v)", strings.TrimSpace(resp), err)
+	}
+	resp, err := sendAT(sp, "AT+CSCS?", 3*time.Second)
+	if m := cscsRead.FindStringSubmatch(resp); err != nil || m == nil || m[1] != "IRA" {
+		return fmt.Errorf("the modem's character set is not IRA (%q, %v)", strings.TrimSpace(resp), err)
+	}
+	resp, err = sendAT(sp, "AT+CSMP?", 3*time.Second)
+	if m := csmpRead.FindStringSubmatch(strings.ReplaceAll(resp, "\r", "\n")); err != nil || m == nil || m[1] != "0" {
+		return fmt.Errorf("the modem's text-mode coding is not GSM 7-bit, dcs 0 (%q, %v)", strings.TrimSpace(resp), err)
+	}
+	return nil
+}
 
 // cmgs is one AT+CMGS exchange on the I/O loop. phase and ref, when given,
 // record how far it got.
@@ -1298,6 +1343,14 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 	log.Debug().Msg("cellular: SMS setting CMGF=1")
 	if cmgfResp, cmgfErr := sendAT(sp, "AT+CMGF=1", 3*time.Second); cmgfErr != nil || strings.Contains(cmgfResp, "ERROR") {
 		return "", fmt.Errorf("failed to set text mode: %v", cmgfErr)
+	}
+	// A delivery intent's SMS goes only under the text contract it was
+	// admitted for (B7(l)): checked on every send, so a reconnect or a
+	// setting kept from earlier cannot change it. [MESHSAT-1584]
+	if phase != nil {
+		if err := smsTextContract(sp); err != nil {
+			return "", err
+		}
 	}
 
 	// AT+CMGS="number"
@@ -1341,7 +1394,11 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 		return "", fmt.Errorf("write text failed: %w", err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if _, err := sp.Write([]byte{0x1A}); err != nil {
+	if n, err := sp.Write([]byte{0x1A}); err != nil {
+		if n > 0 {
+			// The Ctrl-Z reached the modem: it may submit (B9SMS-R1).
+			setSMSPhase(phase, SMSHandedOver)
+		}
 		return "", fmt.Errorf("write Ctrl-Z failed: %w", err)
 	}
 	setSMSPhase(phase, SMSHandedOver)
@@ -1359,10 +1416,16 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 		setSMSPhase(phase, SMSRefused)
 		return "", fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
 	}
-	setSMSPhase(phase, SMSAccepted)
-	if m := cmgsRefNumber.FindStringSubmatch(smsResp); m != nil && ref != nil {
+	// Only a +CMGS reference is the network's acceptance (A76XX manual
+	// 9.2.13: "+CMGS: <mr>" then OK; a bare OK is the answer to a
+	// cancelled send). Without one the phase stays handed over: the SMS
+	// may have gone (B9SMS-R2). Reference 0 is a reference.
+	if m := cmgsRefNumber.FindStringSubmatch(smsResp); m != nil {
 		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
-			ref.Store(n)
+			setSMSPhase(phase, SMSAccepted)
+			if ref != nil {
+				ref.Store(n)
+			}
 		}
 	}
 
