@@ -180,8 +180,10 @@ func TestDirectoryMigrationBackfill(t *testing.T) {
 	).Scan(&flashStrategy); err != nil {
 		t.Fatalf("flash strategy: %v", err)
 	}
-	if flashStrategy != "HEMB_BONDED" {
-		t.Errorf("Flash strategy: got %q, want HEMB_BONDED", flashStrategy)
+	// v48 seeded HEMB_BONDED; v65 moved the unedited seed to ALL_BEARERS,
+	// what it did (stage 0b). [MESHSAT-1584]
+	if flashStrategy != "ALL_BEARERS" {
+		t.Errorf("Flash strategy: got %q, want ALL_BEARERS", flashStrategy)
 	}
 	var routineStrategy string
 	if err := db.QueryRow(

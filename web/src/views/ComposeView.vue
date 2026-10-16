@@ -175,15 +175,13 @@ async function onSend() {
       <div>
         <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
           Strategy (override)
-          <FieldHelp text="PRIMARY_ONLY queues on the highest-ranked bearer only. ALL_BEARERS queues one delivery per bearer kind. HEMB_BONDED sends the same message across bonded bearers in parallel for redundancy. Empty = use the contact's stored policy." />
+          <FieldHelp text="PRIMARY_ONLY queues on the highest-ranked bearer only. ALL_BEARERS queues one delivery per bearer kind. ORDERED_FALLBACK tries the bearers one after another and needs delivery intents (MESHSAT_DELIVERY_INTENTS); without them the bridge refuses it. Empty = use the contact's stored policy." />
         </label>
         <select v-model="strategy" class="w-full px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs">
           <option value="">Auto (policy)</option>
           <option value="PRIMARY_ONLY">Primary only</option>
-          <option value="ANY_REACHABLE">Any reachable</option>
-          <option value="ORDERED_FALLBACK">Ordered fallback</option>
-          <option value="HEMB_BONDED">HeMB bonded</option>
           <option value="ALL_BEARERS">All bearers</option>
+          <option value="ORDERED_FALLBACK">Ordered fallback (delivery intents)</option>
         </select>
       </div>
       <div>

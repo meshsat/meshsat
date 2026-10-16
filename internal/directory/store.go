@@ -280,8 +280,12 @@ type DispatchPolicy struct {
 	AllowBearers       string      `db:"allow_bearers"       json:"allow_bearers"`
 	DenyBearers        string      `db:"deny_bearers"        json:"deny_bearers"`
 	PrecedenceOverride string      `db:"precedence_override" json:"precedence_override"`
-	CreatedAt          string      `db:"created_at"          json:"created_at"`
-	UpdatedAt          string      `db:"updated_at"          json:"updated_at"`
+	// Seeded: the row holds a value the bridge's migrations wrote and
+	// nobody has edited it since (v65). Every write through the store
+	// clears it. [MESHSAT-1584]
+	Seeded    bool   `db:"seeded"     json:"seeded"`
+	CreatedAt string `db:"created_at" json:"created_at"`
+	UpdatedAt string `db:"updated_at" json:"updated_at"`
 }
 
 // ContactFilter is the selection criteria for ListContacts.

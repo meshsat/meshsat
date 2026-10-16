@@ -20,13 +20,14 @@ type fakeApplier struct {
 	mu         sync.Mutex
 	applied    *DirectorySnapshot
 	applyError error
+	report     DirectoryApplyReport
 }
 
-func (f *fakeApplier) ApplySnapshot(_ context.Context, s *DirectorySnapshot) error {
+func (f *fakeApplier) ApplySnapshot(_ context.Context, s *DirectorySnapshot) (DirectoryApplyReport, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = s
-	return f.applyError
+	return f.report, f.applyError
 }
 
 // memTrustAnchorStore is an in-memory TrustAnchorStore for tests.
@@ -269,5 +270,35 @@ func TestDirectoryTrustAnchorRotate_WrongAlgorithmRejected(t *testing.T) {
 	})
 	if _, err := ch.handleDirectoryTrustAnchorRotate(Command{Payload: payload}); err == nil {
 		t.Fatal("expected algorithm rejection")
+	}
+}
+
+// The reply to a directory_push names each policy row applied and each
+// refused, with the reason (HeMB-NG r3 D12, S2). [MESHSAT-1584]
+func TestDirectoryPush_ReplyNamesRefusedPolicies(t *testing.T) {
+	ch, app, anchor := newHandlerWithDeps(t)
+	snap, pubPKIX, _ := newSignedSnapshot(t)
+	anchor.pub = pubPKIX
+	app.report = DirectoryApplyReport{
+		PoliciesApplied: []string{"p-ok"},
+		PoliciesRejected: []PolicyRejection{{ID: "p-bonded", ScopeType: "precedence", ScopeID: "Flash",
+			Strategy: "HEMB_BONDED", Reason: "unsupported_strategy", Detail: "HEMB_BONDED is not implemented by this bridge"}},
+	}
+	payload, _ := json.Marshal(snap)
+	resp, err := ch.handleDirectoryPush(Command{Cmd: "directory_push", Payload: payload, RequestID: "req-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Applied          bool              `json:"applied"`
+		PoliciesApplied  []string          `json:"policies_applied"`
+		PoliciesRejected []PolicyRejection `json:"policies_rejected"`
+	}
+	if err := json.Unmarshal(resp, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Applied || len(got.PoliciesApplied) != 1 || got.PoliciesApplied[0] != "p-ok" ||
+		len(got.PoliciesRejected) != 1 || got.PoliciesRejected[0].ID != "p-bonded" || got.PoliciesRejected[0].Reason != "unsupported_strategy" {
+		t.Fatalf("reply %s", resp)
 	}
 }

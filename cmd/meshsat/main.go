@@ -1953,6 +1953,17 @@ func main() {
 			// [MESHSAT-544 / S2-01]
 			dispatcher.SetRecipientResolver(dirStore)
 			log.Info().Msg("dispatcher: recipient resolver wired")
+			// A policy row naming a strategy the bridge does not implement
+			// is used as legacy compatibility; say so once at start (r3
+			// D12; GET /api/directory/policies?unsupported=1). [MESHSAT-1584]
+			if pols, err := dirStore.ListPolicies(ctx); err == nil {
+				for _, p := range pols {
+					if eff, reason := engine.StoredStrategy(p.Strategy, dispatcher.DeliveryIntents()); reason != "" {
+						log.Warn().Str("scope", string(p.ScopeType)+":"+p.ScopeID).Str("strategy", string(p.Strategy)).
+							Str("used_as", string(eff)).Str("reason", reason).Msg("dispatch policy names a strategy this bridge does not implement")
+					}
+				}
+			}
 		}
 	}
 	// The LXMF sender and the recipient resolver are wired: the Escalator
@@ -2643,7 +2654,7 @@ func main() {
 		// (stored in system_config) and replace the local directory
 		// tables via a thin applier. [MESHSAT-540]
 		cmdHandler.SetTrustAnchorStore(&bridgeDirectoryTrustStore{db: db})
-		cmdHandler.SetDirectoryApplier(&bridgeDirectoryApplier{dir: directory.NewSQLStore(db.DB)})
+		cmdHandler.SetDirectoryApplier(&bridgeDirectoryApplier{dir: directory.NewSQLStore(db.DB), supported: dispatcher.StrategySupported})
 		hubReporter.SetCommandHandler(cmdHandler)
 
 		// TAK CoT relay: when Hub broadcasts TAK positions from OTS,
@@ -3419,18 +3430,54 @@ func (s *bridgeDirectoryTrustStore) GetDirectoryTrustAnchor() ([]byte, error) {
 }
 
 // bridgeDirectoryApplier turns a verified Hub snapshot into writes
-// against the bridge's internal/directory SQLStore. Contacts, groups,
-// and policies are upserted by ID; any rows not in the snapshot are
-// left in place (delta semantics — Hub must emit a follow-up revoke
-// command to clear a removed contact). [MESHSAT-540]
+// against the bridge's internal/directory SQLStore. Contacts are upserted
+// by ID; any rows not in the snapshot are left in place (delta semantics —
+// Hub must emit a follow-up revoke command to clear a removed contact).
+// [MESHSAT-540] Groups are not applied. Each dispatch policy row is
+// applied when the bridge implements it as written and refused by name
+// otherwise (supported: the strategies it implements now). [MESHSAT-1584]
 type bridgeDirectoryApplier struct {
-	dir *directory.SQLStore
+	dir       *directory.SQLStore
+	supported func(directory.Strategy) bool
 }
 
-func (a *bridgeDirectoryApplier) ApplySnapshot(ctx context.Context, snap *hubreporter.DirectorySnapshot) error {
+func (a *bridgeDirectoryApplier) ApplySnapshot(ctx context.Context, snap *hubreporter.DirectorySnapshot) (hubreporter.DirectoryApplyReport, error) {
+	var report hubreporter.DirectoryApplyReport
 	if snap == nil {
-		return fmt.Errorf("nil snapshot")
+		return report, fmt.Errorf("nil snapshot")
 	}
+	if err := a.applyContacts(ctx, snap); err != nil {
+		return report, err
+	}
+	rows := make([]directory.PushedPolicy, 0, len(snap.Policies))
+	for _, p := range snap.Policies {
+		rows = append(rows, directory.PushedPolicy{
+			ID: p.ID, ScopeType: p.ScopeType, ScopeID: p.ScopeID, Strategy: directory.Strategy(p.Strategy),
+			Preferred: p.Preferred, Fallback: p.Fallback, RequireEncryption: p.RequireEncryption,
+			MaxRetries: p.MaxRetries, RetryDelay: p.RetryDelay, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+		})
+	}
+	supported := a.supported
+	if supported == nil {
+		supported = func(s directory.Strategy) bool {
+			_, reason := engine.StoredStrategy(s, false)
+			return reason == ""
+		}
+	}
+	applied, rejected, err := a.dir.ApplyPushedPolicies(ctx, rows, supported)
+	report.PoliciesApplied = applied
+	for _, rj := range rejected {
+		report.PoliciesRejected = append(report.PoliciesRejected, hubreporter.PolicyRejection{
+			ID: rj.ID, ScopeType: rj.ScopeType, ScopeID: rj.ScopeID, Strategy: rj.Strategy, Reason: rj.Reason, Detail: rj.Detail,
+		})
+	}
+	if err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+func (a *bridgeDirectoryApplier) applyContacts(ctx context.Context, snap *hubreporter.DirectorySnapshot) error {
 	for i := range snap.Contacts {
 		src := &snap.Contacts[i]
 		c := &directory.Contact{

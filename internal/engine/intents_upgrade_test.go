@@ -239,6 +239,11 @@ func TestUpgradeV63DatabaseIsRepaired(t *testing.T) {
 	if _, err := db.Exec(`UPDATE schema_version SET version = 63`); err != nil {
 		t.Fatal(err)
 	}
+	// A v63 database has no v65 column (B5): undo it, or reopening would
+	// add it twice. [MESHSAT-1584]
+	if _, err := db.Exec(`ALTER TABLE directory_dispatch_policy DROP COLUMN seeded`); err != nil {
+		t.Fatal(err)
+	}
 	_ = db.Close()
 	db, err = database.New(path) // v63 -> current
 	if err != nil {

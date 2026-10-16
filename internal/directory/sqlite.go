@@ -601,7 +601,7 @@ func (s *SQLStore) ListGroupMembers(ctx context.Context, groupID string) ([]Cont
 
 const policyCols = `
 	id, scope_type, scope_id, strategy, max_cost_cents, max_latency_ms,
-	allow_bearers, deny_bearers, precedence_override, created_at, updated_at`
+	allow_bearers, deny_bearers, precedence_override, seeded, created_at, updated_at`
 
 func (s *SQLStore) GetPolicy(ctx context.Context, scope PolicyScope, scopeID string) (*DispatchPolicy, error) {
 	if scope == "" {
@@ -648,11 +648,12 @@ func (s *SQLStore) UpsertPolicy(ctx context.Context, p *DispatchPolicy) error {
 		p.CreatedAt = ts
 	}
 	p.UpdatedAt = ts
+	p.Seeded = false // a written row is somebody's choice, not a seed (v65)
 	_, err := s.db.NamedExecContext(ctx, `
 		INSERT INTO directory_dispatch_policy (`+policyCols+`) VALUES (
 			:id, :scope_type, :scope_id, :strategy, :max_cost_cents,
 			:max_latency_ms, :allow_bearers, :deny_bearers,
-			:precedence_override, :created_at, :updated_at)
+			:precedence_override, :seeded, :created_at, :updated_at)
 		ON CONFLICT(scope_type, scope_id) DO UPDATE SET
 			strategy = excluded.strategy,
 			max_cost_cents = excluded.max_cost_cents,
@@ -660,6 +661,7 @@ func (s *SQLStore) UpsertPolicy(ctx context.Context, p *DispatchPolicy) error {
 			allow_bearers = excluded.allow_bearers,
 			deny_bearers = excluded.deny_bearers,
 			precedence_override = excluded.precedence_override,
+			seeded = 0,
 			updated_at = excluded.updated_at`, p)
 	return translateErr(err)
 }

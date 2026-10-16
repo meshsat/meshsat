@@ -1561,6 +1561,29 @@ var migrations = []string{
 	// intent is never reopened or sent again. Also repairs a database
 	// already at v63. [MESHSAT-1584]
 	`UPDATE delivery_intents SET dirty = 1;`,
+
+	// v65: stage 0b (HeMB-NG r3 D12, B5). seeded marks a dispatch policy
+	// row that still holds the value v48 wrote (never edited: updated_at =
+	// created_at); every write through the store clears it. The seeded
+	// precedence rows that name a strategy the bridge does not implement
+	// (Override and Flash HEMB_BONDED, Immediate ANY_REACHABLE, Priority
+	// ORDERED_FALLBACK) move to ALL_BEARERS, which is what they did; they
+	// stay seeded, and updated_at moves so the policy version a delivery
+	// intent records changes with the value. Edited rows are kept as they
+	// are and resolve as labelled legacy compatibility. Re-seeding Priority
+	// to ORDERED_FALLBACK is a separate, owner-approved migration.
+	// [MESHSAT-1584]
+	`ALTER TABLE directory_dispatch_policy ADD COLUMN seeded INTEGER NOT NULL DEFAULT 0;
+	UPDATE directory_dispatch_policy SET seeded = 1
+	WHERE updated_at = created_at AND (
+		(scope_type = 'default' AND scope_id = '' AND strategy = 'PRIMARY_ONLY') OR
+		(scope_type = 'precedence' AND (
+			(scope_id IN ('Override', 'Flash') AND strategy = 'HEMB_BONDED') OR
+			(scope_id = 'Immediate' AND strategy = 'ANY_REACHABLE') OR
+			(scope_id = 'Priority' AND strategy = 'ORDERED_FALLBACK') OR
+			(scope_id IN ('Routine', 'Deferred') AND strategy = 'PRIMARY_ONLY'))));
+	UPDATE directory_dispatch_policy SET strategy = 'ALL_BEARERS', updated_at = datetime('now')
+	WHERE seeded = 1 AND strategy IN ('HEMB_BONDED', 'ANY_REACHABLE', 'ORDERED_FALLBACK');`,
 }
 
 func (db *DB) migrate() error {

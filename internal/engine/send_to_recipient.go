@@ -61,12 +61,16 @@ type SendOptions struct {
 // Errors records per-kind failures encountered during dispatch —
 // non-fatal so a partial fan-out still produces as many IDs as the
 // bearers accepted. Strategy is the strategy that was actually used
-// (after policy resolution). [MESHSAT-544]
+// (after policy resolution). [MESHSAT-544] RequestedStrategy is the one
+// asked for or held by the policy row, StrategyReason why Strategy was
+// used (r3 D12). [MESHSAT-1584]
 type SendResult struct {
-	DeliveryIDs map[directory.Kind][]int64
-	Errors      map[directory.Kind]error
-	Strategy    directory.Strategy
-	Precedence  types.Precedence
+	DeliveryIDs       map[directory.Kind][]int64
+	Errors            map[directory.Kind]error
+	Strategy          directory.Strategy
+	RequestedStrategy directory.Strategy
+	StrategyReason    string
+	Precedence        types.Precedence
 	// Intent is the submission when the send went the delivery-intent
 	// way (MESHSAT_DELIVERY_INTENTS); DeliveryIDs then hold its round-1
 	// attempts and Errors the routes it did not admit. [MESHSAT-1581]
@@ -124,10 +128,11 @@ func (d *Dispatcher) SetRecipientResolver(r RecipientResolver) {
 //  4. Default policy (scope_type=default, scope_id="").
 //  5. PRIMARY_ONLY fallback.
 //
-// Currently implemented strategies: PRIMARY_ONLY, ALL_BEARERS. The
-// other three (ORDERED_FALLBACK, ANY_REACHABLE, HEMB_BONDED) fall back
-// to ALL_BEARERS with a warning log; full async fallback + HeMB
-// coordination land in follow-ups. [MESHSAT-544]
+// Implemented strategies: PRIMARY_ONLY, ALL_BEARERS; ORDERED_FALLBACK
+// too on the delivery-intent path. An explicit request for another is
+// ErrUnsupportedStrategy before anything is queued; a policy row holding
+// another resolves as StoredStrategy says, labelled in StrategyReason
+// (r3 D12, stage 0b). [MESHSAT-544, MESHSAT-1584]
 func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, body []byte, opts SendOptions) (SendResult, error) {
 	res := SendResult{
 		DeliveryIDs: map[directory.Kind][]int64{},
@@ -180,7 +185,11 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		return res, fmt.Errorf("contact %s has no addresses", rcpt.ContactID)
 	}
 
-	res.Strategy = d.resolveStrategy(ctx, rcpt.ContactID, res.Precedence, opts.Strategy)
+	sr, err := d.resolveStrategy(ctx, rcpt.ContactID, res.Precedence, opts.Strategy, nil, false)
+	if err != nil {
+		return res, err
+	}
+	res.Strategy, res.RequestedStrategy, res.StrategyReason = sr.Effective, sr.Requested, sr.Reason
 
 	addrs := selectAddresses(contact.Addresses, res.Strategy)
 	if len(addrs) == 0 {
@@ -224,6 +233,7 @@ func (d *Dispatcher) sendViaIntent(ctx context.Context, rcpt RecipientRef, body 
 	}
 	in := sub.Intents[0]
 	res.Strategy = directory.Strategy(in.EffectiveStrategy)
+	res.RequestedStrategy, res.StrategyReason = directory.Strategy(in.RequestedStrategy), in.StrategyReason
 	kindOf := map[int]directory.Kind{}
 	for _, p := range in.RoutePlan {
 		kindOf[p.RouteIndex] = directory.Kind(p.Kind)
@@ -307,43 +317,10 @@ func contactDestination(a directory.Address) (string, error) {
 	return v, nil
 }
 
-// resolveStrategy walks the policy hierarchy: explicit opts →
-// contact-scoped policy → precedence-scoped policy → default policy
-// → PRIMARY_ONLY fall-back. Returns the strategy that will actually
-// drive the dispatch. Missing resolver or lookup failures degrade
-// gracefully to the next tier.
-func (d *Dispatcher) resolveStrategy(ctx context.Context, contactID string, precedence types.Precedence, explicit directory.Strategy) directory.Strategy {
-	if explicit != "" {
-		return explicit
-	}
-	if d.recipientResolver == nil {
-		return directory.StrategyPrimaryOnly
-	}
-	tryScope := func(scope directory.PolicyScope, scopeID string) (directory.Strategy, bool) {
-		p, err := d.recipientResolver.GetPolicy(ctx, scope, scopeID)
-		if err != nil || p == nil || p.Strategy == "" {
-			return "", false
-		}
-		return p.Strategy, true
-	}
-	if s, ok := tryScope(directory.ScopeContact, contactID); ok {
-		return s
-	}
-	if s, ok := tryScope(directory.ScopePrecedence, string(precedence)); ok {
-		return s
-	}
-	if s, ok := tryScope(directory.ScopeDefault, ""); ok {
-		return s
-	}
-	return directory.StrategyPrimaryOnly
-}
-
 // selectAddresses picks the subset of a contact's addresses that the
-// strategy should queue against. PRIMARY_ONLY chooses the lowest-
-// primary_rank address across all kinds; the other strategies fan out
-// across every address (ORDERED_FALLBACK / ANY_REACHABLE / HEMB_BONDED
-// treated identically today — future stories wire cross-delivery
-// observation and bond-group coordination).
+// strategy queues against: PRIMARY_ONLY the lowest-primary_rank address
+// across all kinds, ALL_BEARERS every address. Resolution hands it only
+// these two (r3 D12); anything else is one address, as before.
 func selectAddresses(all []directory.Address, strategy directory.Strategy) []directory.Address {
 	if len(all) == 0 {
 		return nil
@@ -362,14 +339,7 @@ func selectAddresses(all []directory.Address, strategy directory.Strategy) []dir
 	case directory.StrategyPrimaryOnly:
 		// One bearer only.
 		return sorted[:1]
-	case directory.StrategyAllBearers,
-		directory.StrategyAnyReachable,
-		directory.StrategyHeMBBonded,
-		directory.StrategyOrderedFallback:
-		// Today all three mean "queue on every address". Async
-		// fallback + bond coordination land in follow-ups; the
-		// delivery ledger still records distinct rows so the UI can
-		// differentiate once they do.
+	case directory.StrategyAllBearers:
 		return sorted
 	default:
 		log.Warn().Str("strategy", string(strategy)).Msg("SendToRecipient: unknown strategy, defaulting to PRIMARY_ONLY")

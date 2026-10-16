@@ -276,48 +276,17 @@ func (e *Escalator) loadSubmission(s *database.DeliverySubmission) (*IntentSubmi
 	return out, nil
 }
 
-// resolveIntentStrategy is r3 D12 on the intent path. Supported:
-// PRIMARY_ONLY, ALL_BEARERS, ORDERED_FALLBACK. An explicit request for any
-// other is refused before anything is written. A policy row with an
-// unsupported strategy, and a precedence row that still holds its seeded
-// ORDERED_FALLBACK (whose behaviour until now was ALL_BEARERS; re-seeding
-// it is the owner's call, r3 D12), resolve to ALL_BEARERS with
-// strategy_reason legacy_compat_all_bearers.
+// resolveIntentStrategy is r3 D12 on the intent path: PRIMARY_ONLY,
+// ALL_BEARERS and ORDERED_FALLBACK are implemented; an explicit request
+// for any other is refused before anything is written; a policy row
+// with another resolves as StoredStrategy says. The seeded Priority
+// ORDERED_FALLBACK, which did ALL_BEARERS, is ALL_BEARERS since v65 (B5).
 func (e *Escalator) resolveIntentStrategy(ctx context.Context, req IntentRequest) (requested, effective directory.Strategy, reason, version string, capCents *int, err error) {
-	capCents = req.MaxCostCents
-	supported := func(s directory.Strategy) bool {
-		return s == directory.StrategyPrimaryOnly || s == directory.StrategyAllBearers || s == directory.StrategyOrderedFallback
+	r, err := e.d.resolveStrategy(ctx, req.ContactID, req.Precedence, req.Strategy, req.MaxCostCents, true)
+	if err != nil {
+		return req.Strategy, "", "", "", nil, err
 	}
-	if req.Strategy != "" {
-		if !supported(req.Strategy) {
-			return req.Strategy, "", "", "", nil, fmt.Errorf("%w: %s (supported: PRIMARY_ONLY, ALL_BEARERS, ORDERED_FALLBACK)", ErrUnsupportedStrategy, req.Strategy)
-		}
-		return req.Strategy, req.Strategy, "requested", "", capCents, nil
-	}
-	r := e.d.recipientResolver
-	for _, sc := range []struct {
-		scope directory.PolicyScope
-		id    string
-	}{{directory.ScopeContact, req.ContactID}, {directory.ScopePrecedence, string(req.Precedence)}, {directory.ScopeDefault, ""}} {
-		p, perr := r.GetPolicy(ctx, sc.scope, sc.id)
-		if perr != nil || p == nil || p.Strategy == "" {
-			continue
-		}
-		version = p.ID + "@" + p.UpdatedAt
-		if capCents == nil {
-			capCents = p.MaxCostCents
-		}
-		seeded := sc.scope == directory.ScopePrecedence && p.UpdatedAt == p.CreatedAt
-		switch {
-		case supported(p.Strategy) && !(seeded && p.Strategy == directory.StrategyOrderedFallback):
-			return p.Strategy, p.Strategy, "policy:" + string(sc.scope), version, capCents, nil
-		case p.Strategy == directory.StrategyOrderedFallback, p.Strategy == directory.StrategyAnyReachable, p.Strategy == directory.StrategyHeMBBonded:
-			return p.Strategy, directory.StrategyAllBearers, "legacy_compat_all_bearers", version, capCents, nil
-		default:
-			return p.Strategy, directory.StrategyPrimaryOnly, "unknown_strategy_primary_only", version, capCents, nil
-		}
-	}
-	return "", directory.StrategyPrimaryOnly, "default", "", capCents, nil
+	return r.Requested, r.Effective, r.Reason, r.Version, r.CapCents, nil
 }
 
 // routePlan orders a contact's addresses by rank (kind as the tiebreak, as
