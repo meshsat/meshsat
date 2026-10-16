@@ -492,9 +492,13 @@ func (g *APRSGateway) aprsISTransmit(info string) error {
 	g.is.wmu.Lock()
 	defer g.is.wmu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(aprsISWriteTimeout))
-	if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
+	if n, err := io.WriteString(conn, line+"\r\n"); err != nil {
 		g.errors.Add(1)
 		_ = conn.Close() // the reader ends the session and reconnects
+		if n > 0 {
+			// Part of the line, or all of it, went out (APRS-R1).
+			return fmt.Errorf("aprs-is: send: %v (%w; %w)", err, errAPRSWriteStarted, transport.ErrNotConnected)
+		}
 		return fmt.Errorf("aprs-is: send: %v: %w", err, transport.ErrNotConnected)
 	}
 	g.is.tx.Add(1)

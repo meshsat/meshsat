@@ -412,7 +412,7 @@ func TestAPRSCTS_BeaconWaitsForPendingAck(t *testing.T) {
 	}
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		g.acks.resolve("ABCDE")
+		g.acks.answer("ABCDE", "PA3ENC-7", false)
 	}()
 	start := time.Now()
 	if !g.waitForNoPendingAck(context.Background()) {

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -32,52 +33,27 @@ const (
 	aprsMaxMessageText = 67
 	// aprsMaxInfo is the longest AX.25 information field.
 	aprsMaxInfo = 256
-	// aprsIntentKeep is how long an intent's message id is remembered for
-	// an ack that comes after the send returned.
-	aprsIntentKeep = 24 * time.Hour
-	aprsIntentMax  = 4096
 )
 
-// aprsIntentState remembers the message ids of recent intent sends, so an
-// answer that comes after IntentSend returned still reaches the engine.
+// aprsIntentState holds this gateway's own receipt sink; without one the
+// process-wide sink takes the answers (SetDefaultIntentReceiptSink).
 type aprsIntentState struct {
 	mu   sync.Mutex
 	sink func(IntentReceipt)
-	sent map[string]aprsIntentSent
 }
 
-type aprsIntentSent struct {
-	dest string
-	at   time.Time
-}
-
-func (s *aprsIntentState) remember(id, dest string) {
+func (s *aprsIntentState) currentSink() func(IntentReceipt) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.sent == nil {
-		s.sent = make(map[string]aprsIntentSent)
+	if s.sink != nil {
+		return s.sink
 	}
-	now := time.Now()
-	if len(s.sent) >= aprsIntentMax {
-		for k, v := range s.sent {
-			if now.Sub(v.at) > aprsIntentKeep || len(s.sent) >= aprsIntentMax {
-				delete(s.sent, k)
-			}
-		}
-	}
-	s.sent[id] = aprsIntentSent{dest: dest, at: now}
+	return defaultIntentReceiptSink()
 }
 
-func (s *aprsIntentState) lookup(id string) (aprsIntentSent, func(IntentReceipt), bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.sent[id]
-	if ok && time.Since(e.at) > aprsIntentKeep {
-		delete(s.sent, id)
-		ok = false
-	}
-	return e, s.sink, ok
-}
+// errAPRSWriteStarted marks a write that failed after bytes went to the TNC
+// or the APRS-IS server: the frame may be on the air (APRS-R1).
+var errAPRSWriteStarted = errors.New("aprs: the write started before it failed")
 
 // IntentCorrKind implements IntentAdapter.
 func (g *APRSGateway) IntentCorrKind() string { return APRSIntentCorrKind }
@@ -152,8 +128,7 @@ func (g *APRSGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcom
 	if stopped == nil {
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: "aprs gateway not running"}
 	}
-	g.intents.remember(id, dest)
-	acked := g.acks.registerIntent(id)
+	acked := g.acks.registerIntent(id, dest)
 	defer g.acks.release(id)
 
 	msg := &transport.MeshMessage{Destination: dest, DecodedText: s.Text, Encrypted: s.Encrypted, MsgRef: s.MsgRef}
@@ -161,23 +136,47 @@ func (g *APRSGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcom
 	if attempts < 1 {
 		attempts = 1
 	}
-	sent, queued := 0, false
+	sent, queued, maybe := 0, false, false
 	start := time.Now()
 	ended := func(why string) IntentOutcome {
 		switch {
 		case sent > 0:
 			return IntentOutcome{Class: IntentAccepted, AcceptedBy: "radio",
 				Detail: fmt.Sprintf("%d transmission(s), no answer before %s", sent, why)}
-		case queued:
-			// Handed to the write worker, which may still put it on the air.
-			return IntentOutcome{Class: IntentUnknown, Detail: "queued for the radio when " + why}
+		case queued, maybe:
+			// Handed to the write worker, or a write that failed after it
+			// started: it may still be, or be, on the air (APRS-R1).
+			return IntentOutcome{Class: IntentUnknown, Detail: "may be on the air: " + why}
 		}
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: why}
+	}
+	// waitAnswer waits one ack timeout for the addressed station.
+	waitAnswer := func() (IntentOutcome, bool) {
+		wait := time.NewTimer(jitterDuration(g.config.ackTimeout(), 0.2))
+		defer wait.Stop()
+		select {
+		case <-acked:
+			return g.intentAnswered(id, dest, start), true
+		case <-wait.C:
+			return IntentOutcome{}, false
+		case <-stopped:
+			return ended("the gateway stopped"), true
+		case <-ctx.Done():
+			return ended("the send was abandoned"), true
+		}
 	}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		var item *aprsOutbound
 		if g.is != nil {
 			if err := g.aprsISTransmit(string(EncodeAPRSMessage(dest, s.Text, id))); err != nil {
+				if errors.Is(err, errAPRSWriteStarted) {
+					// The line may be out: wait for its answer, send no more.
+					maybe = true
+					if o, done := waitAnswer(); done {
+						return o
+					}
+					return ended("the connection failed during a write: " + err.Error())
+				}
 				if sent > 0 {
 					return ended("the connection failed: " + err.Error())
 				}
@@ -200,7 +199,16 @@ func (g *APRSGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcom
 			case err := <-item.sent:
 				queued = false
 				if err != nil {
-					// A KISS frame that failed to reach the TNC is not on the air.
+					if errors.Is(err, errAPRSWriteStarted) {
+						// Bytes went to the TNC: the frame may be on the air.
+						// Wait for its answer and send no more (APRS-R1).
+						maybe = true
+						if o, done := waitAnswer(); done {
+							return o
+						}
+						return ended("the TNC failed during a write: " + err.Error())
+					}
+					// Nothing of this frame went to the TNC.
 					if sent == 0 {
 						return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: err.Error()}
 					}
@@ -215,18 +223,8 @@ func (g *APRSGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcom
 				return ended("the send was abandoned")
 			}
 		}
-		wait := time.NewTimer(jitterDuration(g.config.ackTimeout(), 0.2))
-		select {
-		case <-acked:
-			wait.Stop()
-			return g.intentAnswered(id, dest, start)
-		case <-wait.C:
-		case <-stopped:
-			wait.Stop()
-			return ended("the gateway stopped")
-		case <-ctx.Done():
-			wait.Stop()
-			return ended("the send was abandoned")
+		if o, done := waitAnswer(); done {
+			return o
 		}
 	}
 	return ended(fmt.Sprintf("%d attempts", attempts))
@@ -242,29 +240,41 @@ func (g *APRSGateway) intentAnswered(id, dest string, start time.Time) IntentOut
 	return out
 }
 
+// aprsAckedStation is what an APRS ack proves: the station acknowledged
+// the message; unauthenticated, so never "delivered" (r3 D11, APRS-R3).
+const aprsAckedStation = "acked_station"
+
 // aprsIntentReceipt is an ack or reject as evidence: an ack from the
-// addressed station completes delivered_device; an ack from another
-// station, or a reject, completes nothing.
+// addressed station completes acked_station; an ack from another station,
+// or a reject, completes nothing.
 func aprsIntentReceipt(id, from, dest string, reject bool) IntentReceipt {
 	r := IntentReceipt{CorrKind: APRSIntentCorrKind, CorrValue: id, Scope: "aprs_0", Peer: from,
 		Source: "station", Event: "ack", Trust: "unauthenticated"}
 	switch {
 	case reject:
 		r.Event = "rej"
-	case strings.EqualFold(strings.TrimSpace(from), dest):
-		r.Completes = "delivered_device"
+	case sameStation(from, dest):
+		r.Completes = aprsAckedStation
 	}
 	return r
 }
 
-// lateIntentReceipt hands an answer that came after IntentSend returned
-// to the engine, when the id is one of our recent intent sends.
+// lateIntentReceipt hands an answer no send waited for to the ledger,
+// which matches its id against the transmissions it kept and completes one
+// only when it went to the answering station: the gateway itself keeps
+// nothing, so a restart or a new gateway loses no answer (APRS-R2).
 func (g *APRSGateway) lateIntentReceipt(id, from string, reject bool) {
-	e, sink, ok := g.intents.lookup(id)
-	if !ok || sink == nil {
+	sink := g.intents.currentSink()
+	if sink == nil {
 		return
 	}
-	r := aprsIntentReceipt(id, from, e.dest, reject)
-	log.Info().Str("ack_id", id).Str("from", from).Bool("reject", reject).Msg("aprs: late answer to an intent send")
+	r := IntentReceipt{CorrKind: APRSIntentCorrKind, CorrValue: id, Scope: "aprs_0", Peer: from,
+		Source: "station", Event: "ack", Trust: "unauthenticated"}
+	if reject {
+		r.Event = "rej"
+	} else {
+		r.CompletesIfPeer = aprsAckedStation
+	}
+	log.Info().Str("ack_id", id).Str("from", from).Bool("reject", reject).Msg("aprs: answer with no send waiting, to the ledger")
 	sink(r)
 }

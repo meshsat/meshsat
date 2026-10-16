@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -217,26 +219,90 @@ func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.Mes
 	return out
 }
 
-// intentGatewayReceipt records an answer that came after the send returned,
-// when a kept transmission carries its correlation (stored at the handoff),
-// and tells the Escalator.
+// intentGatewayReceipt records an answer that came after the send returned
+// (IntentReceiptRecorder), and tells the Escalator.
 func (w *DeliveryWorker) intentGatewayReceipt(r gateway.IntentReceipt) {
-	if r.Scope == "" {
-		r.Scope = w.channelID
+	rec := &IntentReceiptRecorder{db: w.db, scope: w.channelID}
+	if w.intents != nil {
+		rec.notify = w.intents.Notify
 	}
-	inUse, err := w.db.CorrelationInUse(r.CorrKind, r.CorrValue, r.Scope, 0)
+	rec.Record(r)
+}
+
+// gatewayCorrWindowS bounds how long after its handoff a kept transmission
+// takes an answer, per correlation kind (0 = while it is kept). An APRS ack
+// is an unauthenticated five-character id: a day covers every retry
+// schedule and keeps an id from matching a send nobody waits for any more.
+var gatewayCorrWindowS = map[string]int{gateway.APRSIntentCorrKind: 24 * 60 * 60}
+
+// IntentReceiptRecorder takes the answers a gateway's intent adapter
+// reports, during or after a send, before or after a restart: the kept
+// transmission is the authority (its correlation, interface, peer and
+// handoff time), never the gateway's memory (APRS-R2). It is installed as
+// the process-wide sink before any gateway starts. [MESHSAT-1584]
+type IntentReceiptRecorder struct {
+	db     *database.DB
+	scope  string
+	mu     sync.Mutex
+	notify func(string)
+}
+
+// NewIntentReceiptRecorder makes a recorder over db.
+func NewIntentReceiptRecorder(db *database.DB) *IntentReceiptRecorder {
+	return &IntentReceiptRecorder{db: db}
+}
+
+// SetNotify sets who hears that an intent got evidence (the Escalator,
+// once it exists; until then the intent's dirty flag carries it).
+func (rec *IntentReceiptRecorder) SetNotify(fn func(string)) {
+	rec.mu.Lock()
+	rec.notify = fn
+	rec.mu.Unlock()
+}
+
+// samePeer compares two addresses as an answer names them.
+func samePeer(a, b string) bool {
+	return a != "" && strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// Record stores r against the one kept transmission with its correlation
+// within the window. What it completes is decided against that
+// transmission: CompletesIfPeer, and Completes too, only when the answer
+// came from the peer the transmission went to.
+func (rec *IntentReceiptRecorder) Record(r gateway.IntentReceipt) {
+	if rec == nil || rec.db == nil || r.CorrKind == "" || r.CorrValue == "" {
+		return
+	}
+	if r.Scope == "" {
+		r.Scope = rec.scope
+	}
+	window := gatewayCorrWindowS[r.CorrKind]
+	inUse, err := rec.db.CorrelationInUse(r.CorrKind, r.CorrValue, r.Scope, window)
 	if err != nil || !inUse {
 		return
 	}
-	e, err := w.db.RecordEvidence(database.DeliveryEvidence{Source: r.Source, Event: r.Event, Completes: r.Completes,
-		CorrKind: r.CorrKind, CorrValue: r.CorrValue, CorrScope: r.Scope, CorrPeer: r.Peer, Trust: r.Trust}, 0, nil)
+	e, err := rec.db.RecordEvidence(database.DeliveryEvidence{Source: r.Source, Event: r.Event,
+		CorrKind: r.CorrKind, CorrValue: r.CorrValue, CorrScope: r.Scope, CorrPeer: r.Peer, Trust: r.Trust}, window,
+		func(t database.DeliveryTransmission) (string, string, string, string) {
+			completes := ""
+			if samePeer(t.CorrPeer, r.Peer) {
+				completes = r.Completes
+				if r.CompletesIfPeer != "" {
+					completes = r.CompletesIfPeer
+				}
+			}
+			return r.Event, r.Source, r.Trust, completes
+		})
 	if err != nil {
 		log.Warn().Err(err).Str("corr", r.CorrValue).Msg("intent: late answer not recorded")
 		return
 	}
-	if e.Matched && w.intents != nil {
-		w.intents.Notify(e.IntentID)
+	rec.mu.Lock()
+	notify := rec.notify
+	rec.mu.Unlock()
+	if e.Matched && notify != nil {
+		notify(e.IntentID)
 	}
 	log.Info().Str("corr", fmt.Sprintf("%s:%s", r.CorrKind, r.CorrValue)).Str("event", r.Event).Bool("matched", e.Matched).
-		Msg("intent: late answer recorded")
+		Str("completes", e.Completes).Msg("intent: late answer recorded")
 }

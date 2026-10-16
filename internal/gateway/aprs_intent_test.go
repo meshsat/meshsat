@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -22,7 +24,8 @@ func intentInfo(t *testing.T, frame []byte) string {
 }
 
 // An encrypted intent frame carries the id the engine chose; the addressed
-// station's ack comes back as a receipt that completes delivered_device.
+// station's ack comes back as a receipt that completes acked_station (an
+// unauthenticated station ack, never delivered, APRS-R3).
 func TestAPRSIntent_EncryptedAckFromTheAddressedStation(t *testing.T) {
 	tnc := newMockKISSTNC(t)
 	defer tnc.close()
@@ -39,7 +42,7 @@ func TestAPRSIntent_EncryptedAckFromTheAddressedStation(t *testing.T) {
 	tnc.sendRaw(ackFrom(testPeer, "TEST-10", "K7Q2Z"))
 	select {
 	case o := <-res:
-		if o.Class != IntentAccepted || o.Receipt == nil || o.Receipt.Event != "ack" || o.Receipt.Completes != "delivered_device" ||
+		if o.Class != IntentAccepted || o.Receipt == nil || o.Receipt.Event != "ack" || o.Receipt.Completes != "acked_station" ||
 			o.Receipt.CorrKind != APRSIntentCorrKind || o.Receipt.CorrValue != "K7Q2Z" || o.Receipt.Peer != intentDest {
 			t.Fatalf("outcome %+v receipt %+v", o, o.Receipt)
 		}
@@ -48,43 +51,78 @@ func TestAPRSIntent_EncryptedAckFromTheAddressedStation(t *testing.T) {
 	}
 }
 
-// An ack from another station, or a reject, completes nothing.
-func TestAPRSIntent_OtherStationOrRejectCompletesNothing(t *testing.T) {
+// A reject from the addressed station ends the send and completes
+// nothing; an ack or a reject from another station leaves the send waiting
+// for the addressed station (APRS-R4), and goes to the sink, which never
+// completes anything for it.
+func TestAPRSIntent_RejectAndOtherStations(t *testing.T) {
+	other := AX25Address{Call: "PD0XYZ", SSID: 1}
+	rej := func(from AX25Address, id string) []byte {
+		return EncodeAX25Frame(AX25Address{Call: "APMSHT"}, from, nil, EncodeAPRSMessage("TEST-10", "rej"+id, ""))
+	}
 	for _, tc := range []struct {
-		name  string
-		frame func(id string) []byte
-		event string
+		name    string
+		frame   func(id string) []byte
+		ends    bool
+		event   string
+		sinkGot string // the event the sink takes, "" for none
 	}{
-		{"other_station", func(id string) []byte { return ackFrom(AX25Address{Call: "PD0XYZ", SSID: 1}, "TEST-10", id) }, "ack"},
-		{"reject", func(id string) []byte {
-			return EncodeAX25Frame(AX25Address{Call: "APMSHT"}, testPeer, nil, EncodeAPRSMessage("TEST-10", "rej"+id, ""))
-		}, "rej"},
+		{"reject_from_the_addressed_station", func(id string) []byte { return rej(testPeer, id) }, true, "rej", ""},
+		{"ack_from_another_station", func(id string) []byte { return ackFrom(other, "TEST-10", id) }, false, "", "ack"},
+		{"reject_from_another_station", func(id string) []byte { return rej(other, id) }, false, "", "rej"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tnc := newMockKISSTNC(t)
 			defer tnc.close()
-			gw := startAckGateway(t, tnc, APRSConfig{AckTimeoutMs: 3000})
+			gw := startAckGateway(t, tnc, APRSConfig{AckAttempts: 1, AckTimeoutMs: 800})
 			defer gw.Stop()
+			var mu sync.Mutex
+			var sunk []IntentReceipt
+			gw.SetIntentReceiptSink(func(r IntentReceipt) { mu.Lock(); sunk = append(sunk, r); mu.Unlock() })
 			res := make(chan IntentOutcome, 1)
 			go func() {
 				res <- gw.IntentSend(context.Background(), IntentSend{Destination: intentDest, Text: "\x01QUJD", Encrypted: true, CorrValue: "ABCDE"})
 			}()
 			waitTNCFrames(t, tnc, 1, 2*time.Second)
 			tnc.sendRaw(tc.frame("ABCDE"))
+			if tc.ends {
+				select {
+				case o := <-res:
+					if o.Class != IntentAccepted || o.Receipt == nil || o.Receipt.Event != tc.event || o.Receipt.Completes != "" {
+						t.Fatalf("outcome %+v receipt %+v", o, o.Receipt)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("no outcome")
+				}
+				return
+			}
 			select {
 			case o := <-res:
-				if o.Class != IntentAccepted || o.Receipt == nil || o.Receipt.Event != tc.event || o.Receipt.Completes != "" {
-					t.Fatalf("outcome %+v receipt %+v", o, o.Receipt)
+				t.Fatalf("another station's answer ended the send: %+v receipt %+v", o, o.Receipt)
+			case <-time.After(300 * time.Millisecond):
+			}
+			tnc.sendRaw(ackFrom(testPeer, "TEST-10", "ABCDE"))
+			select {
+			case o := <-res:
+				if o.Receipt == nil || o.Receipt.Peer != intentDest || o.Receipt.Completes != "acked_station" {
+					t.Fatalf("the addressed station's ack after it: %+v receipt %+v", o, o.Receipt)
 				}
 			case <-time.After(3 * time.Second):
-				t.Fatal("no outcome")
+				t.Fatal("the addressed station's ack did not end the send")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(sunk) != 1 || sunk[0].Event != tc.sinkGot || sunk[0].Peer != "PD0XYZ-1" || sunk[0].Completes != "" ||
+				(tc.sinkGot == "rej" && sunk[0].CompletesIfPeer != "") {
+				t.Fatalf("sink took %+v; want one %s from PD0XYZ-1 that completes nothing by itself", sunk, tc.sinkGot)
 			}
 		})
 	}
 }
 
 // No answer: one frame per attempt, then accepted by the radio with no
-// receipt; an ack after the call returned reaches the sink.
+// receipt; an ack after the call returned reaches the sink as a candidate
+// the ledger completes only for a transmission to that station (APRS-R2).
 func TestAPRSIntent_NoAnswerThenLateAck(t *testing.T) {
 	tnc := newMockKISSTNC(t)
 	defer tnc.close()
@@ -113,7 +151,8 @@ func TestAPRSIntent_NoAnswerThenLateAck(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(late) != 1 || late[0].CorrValue != "LATE1" || late[0].Completes != "delivered_device" {
+	if len(late) != 1 || late[0].CorrValue != "LATE1" || late[0].Peer != intentDest || late[0].Completes != "" ||
+		late[0].CompletesIfPeer != "acked_station" {
 		t.Fatalf("late receipts %+v", late)
 	}
 }
@@ -174,5 +213,103 @@ func TestAPRSIntent_NotRunning(t *testing.T) {
 	gw := NewAPRSGateway(APRSConfig{Callsign: "TEST", SSID: 10}, nil)
 	if o := gw.IntentSend(context.Background(), IntentSend{Destination: intentDest, Text: "hi", CorrValue: "A1"}); o.Class != IntentNotSent || !o.Retryable {
 		t.Fatalf("outcome %+v", o)
+	}
+}
+
+// A gateway that never sent anything and has no sink of its own (a fresh
+// gateway after a restart or a replacement) hands an answer to the
+// process-wide sink installed before it started (APRS-R2).
+func TestAPRSIntent_FreshGatewayUsesTheDefaultSink(t *testing.T) {
+	var mu sync.Mutex
+	var got []IntentReceipt
+	SetDefaultIntentReceiptSink(func(r IntentReceipt) { mu.Lock(); got = append(got, r); mu.Unlock() })
+	t.Cleanup(func() { SetDefaultIntentReceiptSink(nil) })
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	gw := startAckGateway(t, tnc, APRSConfig{AckAttempts: 1, AckTimeoutMs: 100})
+	defer gw.Stop()
+	tnc.sendRaw(ackFrom(testPeer, "TEST-10", "OLD42"))
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0].CorrKind != APRSIntentCorrKind || got[0].CorrValue != "OLD42" || got[0].Peer != intentDest ||
+		got[0].CompletesIfPeer != "acked_station" || got[0].Completes != "" {
+		t.Fatalf("default sink took %+v", got)
+	}
+	// Its own sink, once set, wins.
+	var own int
+	gw.SetIntentReceiptSink(func(IntentReceipt) { own++ })
+	gw.lateIntentReceipt("OLD43", intentDest, false)
+	if own != 1 || len(got) != 1 {
+		t.Fatalf("own sink %d, default %d; want the gateway's own sink to take it", own, len(got))
+	}
+}
+
+// isWriteFault is an APRS-IS connection whose write fails: before any byte
+// (refused) or after the whole line went to the server.
+type isWriteFault struct {
+	net.Conn
+	before bool
+}
+
+func (c *isWriteFault) Write(p []byte) (int, error) {
+	if c.before {
+		return 0, errors.New("review: refused before write")
+	}
+	n, err := c.Conn.Write(p)
+	if err == nil {
+		err = errors.New("review: error after the line reached the server")
+	}
+	return n, err
+}
+
+// APRS-R1 on APRS-IS: a write that failed before any byte is not sent and
+// may be retried; one that failed after the line went out is unknown, and
+// no second line follows.
+func TestAPRSIntent_ISWriteFailureClassification(t *testing.T) {
+	setAPRSISKnobs(t, 50*time.Millisecond)
+	for _, tc := range []struct {
+		name   string
+		before bool
+		want   string
+		lines  int
+	}{
+		{"zero_write", true, IntentNotSent, 0},
+		{"line_then_error", false, IntentUnknown, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeAPRSIS(t, logrespVerified)
+			g := newISGateway(t, f, func(c *APRSConfig) { c.AckAttempts, c.AckTimeoutMs = 2, 200 })
+			startGateway(t, g)
+			f.waitLogins(t, 1, 5*time.Second)
+			waitISState(t, g, APRSStateConnected, 5*time.Second)
+			g.is.mu.Lock()
+			g.is.conn = &isWriteFault{Conn: g.is.conn, before: tc.before}
+			g.is.mu.Unlock()
+			o := g.IntentSend(context.Background(), IntentSend{Destination: "PA3ABC-7", Text: "is write", CorrValue: "IS001"})
+			if tc.lines > 0 {
+				f.waitLine(t, "N0CALL-10>APMSHT,TCPIP*::PA3ABC-7 :is write{IS001", 5*time.Second)
+			}
+			time.Sleep(300 * time.Millisecond)
+			_, lines, _ := f.snapshot()
+			n := 0
+			for _, l := range lines {
+				if strings.Contains(l, "{IS001") {
+					n++
+				}
+			}
+			if o.Class != tc.want || n != tc.lines || (tc.want == IntentNotSent) != o.Retryable {
+				t.Fatalf("class %s retryable %v, %d lines (%s); want %s and %d", o.Class, o.Retryable, n, o.Detail, tc.want, tc.lines)
+			}
+		})
 	}
 }

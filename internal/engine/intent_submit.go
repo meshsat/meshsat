@@ -400,9 +400,10 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 		}
 	case directory.KindAPRS:
 		// Stage 1b: an APRS message with our own message id; an ack from
-		// the addressed station is its receipt. [MESHSAT-1584]
+		// the addressed station is its receipt: acked by the station,
+		// unauthenticated, never "delivered" (r3 D11, APRS-R3). [MESHSAT-1584]
 		p.AdapterMode = modeAPRS
-		p.CompletionRule = database.OutcomeDeliveredDevice
+		p.CompletionRule = database.OutcomeAckedStation
 		e.admitGateway(&p, a.Kind, payload)
 		return p
 	case directory.KindSMS:
