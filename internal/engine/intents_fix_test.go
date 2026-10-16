@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -324,5 +325,60 @@ func TestIntentFix_ReusedPacketIDAfterTheWindow(t *testing.T) {
 	}
 	if s := h.snap(old); s.Intent.Outcome == database.OutcomeDeliveredDevice || len(s.Evidence) != 0 {
 		t.Fatalf("the expired transmission took the ACK: %s, %d evidence", s.Intent.Outcome, len(s.Evidence))
+	}
+}
+
+// F-1 at the send itself: with the path on a paid interface (as after a
+// path change between the router's check and the send), a constrained
+// packet and a constrained link request leave nothing on it; the same
+// calls without the constraint do (positive control).
+func TestIntentFix_RNSRefusesAPaidPathAtTheSend(t *testing.T) {
+	p := newLXMFPair(t, []string{"lora_rns"}, nil, "iridium_0")
+	dest := p.remoteRouter.Hash()
+	p.remote.SetPaidPolicy("iridium_0", &rns.PaidPolicy{Dests: [][rns.HashLen]byte{dest}})
+	if err := p.remoteRouter.Announce(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for p.local.NextHopInterface(dest) != "iridium_0" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if p.local.NextHopInterface(dest) != "iridium_0" {
+		t.Fatal("setup: no path on iridium_0")
+	}
+	free := rns.Constraint{FreeOnly: true}
+	before := p.localTX.count("iridium_0")
+	if _, err := p.local.SendDataWith(dest, []byte("x"), true, free); !errors.Is(err, rns.ErrPaidRefused) {
+		t.Fatalf("constrained packet: %v; want ErrPaidRefused", err)
+	}
+	if _, err := p.local.Links().InitiateWith(dest, free); !errors.Is(err, rns.ErrPaidRefused) {
+		t.Fatalf("constrained link request: %v; want ErrPaidRefused", err)
+	}
+	if n := p.localTX.count("iridium_0") - before; n != 0 {
+		t.Fatalf("%d packets left on the paid interface", n)
+	}
+	if _, err := p.local.SendDataWith(dest, []byte("x"), false, rns.Constraint{}); err != nil || p.localTX.count("iridium_0") == before {
+		t.Fatalf("positive control: unconstrained send %v, %d packets", err, p.localTX.count("iridium_0")-before)
+	}
+}
+
+// F-1 on links: an existing link on a paid interface is not used by a
+// constrained send, and a constrained packet or resource on it is refused
+// before anything is encrypted or sent.
+func TestIntentFix_RNSRefusesAPaidLink(t *testing.T) {
+	p := newLXMFPair(t, []string{"lora_rns"}, nil)
+	free := rns.Constraint{FreeOnly: true}
+	paid, ok := &rns.Link{Iface: "iridium_0"}, &rns.Link{Iface: "lora_rns"}
+	if p.local.Links().Allows(paid, free) || !p.local.Links().Allows(ok, free) || !p.local.Links().Allows(paid, rns.Constraint{}) {
+		t.Fatal("Allows does not follow the interface")
+	}
+	if _, err := p.local.Links().SendWith(paid, []byte("x"), free); !errors.Is(err, rns.ErrPaidRefused) {
+		t.Fatalf("packet on a paid link: %v", err)
+	}
+	if _, err := p.local.Links().SendResourceWith(paid, []byte("x"), free); !errors.Is(err, rns.ErrPaidRefused) {
+		t.Fatalf("resource on a paid link: %v", err)
+	}
+	if n := p.localTX.count("iridium_0"); n != 0 {
+		t.Fatalf("%d packets on the paid link", n)
 	}
 }
