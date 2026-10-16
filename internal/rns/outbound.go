@@ -2,6 +2,7 @@ package rns
 
 import (
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"time"
@@ -74,6 +75,25 @@ func (n *Node) SendData(dest [HashLen]byte, plaintext []byte, wantReceipt bool) 
 
 // SendDataWith is SendData under a constraint (outboundWith). [MESHSAT-1584]
 func (n *Node) SendDataWith(dest [HashLen]byte, plaintext []byte, wantReceipt bool, c Constraint) (*Receipt, error) {
+	return n.SendDataPrepared(dest, plaintext, wantReceipt, c, nil)
+}
+
+// PrepareFunc gets a packet's hash and the key that must sign its proof
+// once the packet is built and before it is written; an error stops the
+// send with nothing written. A caller stores them here so a proof that
+// comes after any failure or restart still finds its transmission (A-13,
+// red-team A13-R1). [MESHSAT-1584]
+type PrepareFunc func(hash [FullHashLen]byte, key ed25519.PublicKey) error
+
+// ErrNotPrepared wraps a PrepareFunc's error: nothing was written.
+var ErrNotPrepared = errors.New("rns: the send was not prepared; nothing was written")
+
+// SendDataPrepared is SendDataWith with a prepare step before the write
+// (wantReceipt is implied when prepare is set).
+func (n *Node) SendDataPrepared(dest [HashLen]byte, plaintext []byte, wantReceipt bool, c Constraint, prepare PrepareFunc) (*Receipt, error) {
+	if prepare != nil {
+		wantReceipt = true
+	}
 	k := n.Recall(dest)
 	if k == nil || k.Identity == nil {
 		return nil, ErrUnknownDestination
@@ -101,6 +121,11 @@ func (n *Node) SendDataWith(dest [HashLen]byte, plaintext []byte, wantReceipt bo
 		r = &Receipt{Hash: reticulum.PacketHash(raw), Dest: dest, SentAt: n.now(),
 			Timeout: n.now().Add(time.Duration(reticulum.DefaultPerHopTimeoutSec*hops)*time.Second + 6*time.Second),
 			sigPub:  k.Identity.SigningPublicKey()}
+		if prepare != nil {
+			if err := prepare(r.Hash, r.sigPub); err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrNotPrepared, err)
+			}
+		}
 		n.addReceipt(r)
 	}
 	if _, err := n.outboundWith(raw, dest, reticulum.DestSingle, c); err != nil {

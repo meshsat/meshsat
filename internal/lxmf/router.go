@@ -240,16 +240,28 @@ type SendOptions struct {
 	// ErrPaidPath. A delivery intent's attempt sends this way until paid
 	// routes have a price (B9). [MESHSAT-1584]
 	FreeOnly bool
-	// OnSent is called once the message's packet is out, before the wait
-	// for its proof, with the packet hash the proof will name and the key
-	// that must sign it, so a caller can match a proof that comes after
-	// this call gave up, or after a restart (Node.OnUnmatchedProof). Not
-	// called for a resource transfer. [MESHSAT-1584, A-13]
-	OnSent func(proofHash [32]byte, proofKey ed25519.PublicKey)
+	// Prepare is called with the packet hash the proof will name and the
+	// key that must sign it once the message's packet is built and before
+	// it is written, so a caller can store them first: a proof that comes
+	// after this call gave up, after a send error, or after a restart,
+	// still finds them (Node.OnUnmatchedProof). An error stops the send
+	// with nothing written (ErrNotPrepared). Not called for a resource
+	// transfer. [MESHSAT-1584, A-13, red-team A13-R1]
+	Prepare func(proofHash [32]byte, proofKey ed25519.PublicKey) error
 	// OnLateDelivery is called, from another goroutine, when a resource
 	// transfer this call stopped waiting for is proven after all (only
 	// while this process runs; a resource dies with its link).
 	OnLateDelivery func()
+}
+
+// ErrNotPrepared means the caller's Prepare failed: nothing was written.
+var ErrNotPrepared = errors.New("lxmf: the send was not prepared, nothing was written")
+
+func notPrepared(err error) error {
+	if errors.Is(err, rns.ErrNotPrepared) {
+		return fmt.Errorf("%w: %v", ErrNotPrepared, err)
+	}
+	return err
 }
 
 // lateResourceWait bounds how long a resource whose sender stopped waiting
@@ -333,12 +345,9 @@ func (r *Router) SendWith(ctx context.Context, dest [DestLen]byte, content, titl
 	start := time.Now()
 	switch method {
 	case Opportunistic:
-		rc, err := r.node.SendDataWith(dest, m.Packed[DestLen:], true, c)
+		rc, err := r.node.SendDataPrepared(dest, m.Packed[DestLen:], true, c, rns.PrepareFunc(opts.Prepare))
 		if err != nil {
-			return m, res, paid(err)
-		}
-		if opts.OnSent != nil {
-			opts.OnSent(rc.Hash, rc.SigningKey())
+			return m, res, notPrepared(paid(err))
 		}
 		out, err := r.awaitReceipt(ctx, rc)
 		if err != nil {
@@ -362,16 +371,16 @@ func (r *Router) SendWith(ctx context.Context, dest [DestLen]byte, content, titl
 			return m, res, err
 		}
 		if m.ContentSize() <= LinkMaxContent {
-			rc, err := r.node.Links().SendWith(l, m.Packed, c)
+			rc, err := r.node.Links().SendPrepared(l, m.Packed, c, rns.PrepareFunc(opts.Prepare))
 			if err != nil {
 				if errors.Is(err, rns.ErrPaidRefused) {
 					return m, res, paid(err)
 				}
+				if errors.Is(err, rns.ErrNotPrepared) {
+					return m, res, notPrepared(err)
+				}
 				r.forgetLink(l)
 				return m, res, err
-			}
-			if opts.OnSent != nil {
-				opts.OnSent(rc.Hash, rc.SigningKey())
 			}
 			out, err := r.awaitReceipt(ctx, rc)
 			if err != nil {

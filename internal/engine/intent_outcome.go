@@ -98,6 +98,10 @@ func lxmfOutcome(hash string, err error) SendOutcome {
 		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "skipped_no_price"}
 	case errors.Is(err, lxmf.ErrUnknownDestination), errors.Is(err, lxmf.ErrNoPath), errors.Is(err, lxmf.ErrLinkFailed):
 		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "not_sent"}
+	case errors.Is(err, lxmf.ErrNotPrepared):
+		// The proof's hash could not be stored first, so nothing was
+		// written (red-team A13-R1). [MESHSAT-1584]
+		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "not_sent"}
 	case errors.Is(err, lxmf.ErrStampCostTooHigh), errors.Is(err, lxmf.ErrTooLarge):
 		return SendOutcome{Class: database.ClassNotSent, Detail: err.Error(), Reason: "not_sent"}
 	}
