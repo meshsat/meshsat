@@ -150,3 +150,36 @@ func TestIntentClaimFence(t *testing.T) {
 		t.Fatalf("row %s gen %d; the old generation's finalization moved the new claim", d.Status, d.ClaimGen)
 	}
 }
+
+// F-4: wire timestamps are distinct and never go back, within one
+// millisecond, with the clock stepping back, and across a reopen.
+func TestAllocateWireTimestampMs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wire.db")
+	db, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int64
+	for _, now := range []int64{1000, 1000, 1000, 900, 5000} {
+		v, err := db.AllocateWireTimestampMs(now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, v)
+	}
+	want := []int64{1000, 1001, 1002, 1003, 5000}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("allocations %v; want %v", got, want)
+		}
+	}
+	_ = db.Close()
+	db, err = New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if v, _ := db.AllocateWireTimestampMs(10); v != 5001 {
+		t.Fatalf("after a reopen: %d; want 5001", v)
+	}
+}

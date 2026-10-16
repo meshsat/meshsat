@@ -288,8 +288,10 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 		_ = json.Unmarshal(del.Payload, &body)
 	}
 	// A delivery intent's attempt names the message's timestamp (ts), so
-	// its retries are one message with one hash. [MESHSAT-1581]
-	m, _, err := st.LXMF.SendAt(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0, body.Timestamp)
+	// its retries are one message with one hash [MESHSAT-1581], and sends
+	// on free interfaces only, at every step (free_only) [MESHSAT-1584].
+	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0,
+		lxmf.SendOptions{Timestamp: body.Timestamp, FreeOnly: body.FreeOnly})
 	if err != nil {
 		if m != nil {
 			return hex.EncodeToString(m.Hash[:]), err
@@ -326,6 +328,7 @@ type LXMFBody struct {
 	Content   string  `json:"content"`
 	Title     string  `json:"title,omitempty"`
 	Timestamp float64 `json:"ts,omitempty"`
+	FreeOnly  bool    `json:"free_only,omitempty"`
 }
 
 // CrossesPaidLink reports whether the known path to an LXMF destination

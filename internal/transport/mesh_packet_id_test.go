@@ -27,7 +27,7 @@ func TestBuildTextMessageWithID(t *testing.T) {
 	}
 	seen := map[uint32]bool{}
 	for i := 0; i < 1000; i++ {
-		id, err := newMeshPacketID()
+		id, err := NewMeshPacketID()
 		if err != nil || id == 0 {
 			t.Fatalf("packet id %d: %v", id, err)
 		}

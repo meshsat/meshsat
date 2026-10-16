@@ -1564,16 +1564,18 @@ func main() {
 	// intent with a frozen route plan, its attempts ordinary delivery rows,
 	// one Escalator deciding every next step. MESHSAT_DELIVERY_INTENTS
 	// (default false) turns new submissions on; with it off the Escalator
-	// still runs while intents from an earlier run are active, so they end
-	// under one owner. Wired before Start: Start settles their attempts
-	// left in flight before any worker runs. [MESHSAT-1581]
+	// still runs while any intent is kept (open, or closed and inside the
+	// retention): open ones end under one owner, and answers to closed
+	// ones are still taken in (red-team F-3). Wired before Start: Start
+	// settles their attempts left in flight before any worker runs.
+	// [MESHSAT-1581, MESHSAT-1584]
 	var escalator *engine.Escalator
 	intentsOn := engine.DeliveryIntentsEnabled()
-	if active, err := db.ActiveIntentIDs(); intentsOn || (err == nil && len(active) > 0) {
+	if kept, err := db.HasIntents(); intentsOn || (err == nil && kept) {
 		escalator = engine.NewEscalator(db, dispatcher, engine.DefaultEscalatorConfig(), engine.SystemIntentClock(clockGuard.Trusted), intentsOn)
 		dispatcher.SetEscalator(escalator)
 		proc.SetRoutingReceiptHook(escalator.MeshRoutingReceipt)
-		log.Info().Bool("accepting", intentsOn).Int("active", len(active)).Msg("delivery intents: Escalator on")
+		log.Info().Bool("accepting", intentsOn).Msg("delivery intents: Escalator on")
 	}
 
 	dispatcher.Start(ctx)

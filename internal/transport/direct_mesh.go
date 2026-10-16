@@ -1564,35 +1564,43 @@ func (t *DirectMeshTransport) SendMessage(ctx context.Context, req SendRequest) 
 // request_id, which ties the answer to this send. A send that never reached
 // the serial write wraps ErrNotSubmitted (or is ErrNotConnected). [MESHSAT-1581]
 func (t *DirectMeshTransport) SendMessageID(ctx context.Context, req SendRequest) (uint32, error) {
+	id, err := NewMeshPacketID()
+	if err != nil {
+		return 0, fmt.Errorf("%w: packet id: %v", ErrNotSubmitted, err)
+	}
+	return id, t.SendMessageWithID(ctx, req, id)
+}
+
+// SendMessageWithID sends a text under a packet id the caller chose and
+// stored before the send (MeshSat's delivery intents keep it with the
+// transmission at the handoff, so an acknowledgement that comes back
+// before the send returns, or after a stop, still names it). [MESHSAT-1584]
+func (t *DirectMeshTransport) SendMessageWithID(ctx context.Context, req SendRequest, id uint32) error {
+	if id == 0 {
+		return fmt.Errorf("%w: packet id 0", ErrNotSubmitted)
+	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if !t.connected || t.file == nil {
-		return 0, ErrNotConnected
+		return ErrNotConnected
 	}
 	var to uint32
 	if req.To != "" {
 		n, err := strconv.ParseUint(strings.TrimPrefix(req.To, "!"), 16, 32)
 		if err != nil {
-			return 0, fmt.Errorf("%w: invalid destination %s", ErrNotSubmitted, req.To)
+			return fmt.Errorf("%w: invalid destination %s", ErrNotSubmitted, req.To)
 		}
 		to = uint32(n)
 	}
-	id, err := newMeshPacketID()
-	if err != nil {
-		return 0, fmt.Errorf("%w: packet id: %v", ErrNotSubmitted, err)
-	}
 	packet := buildTextMessageWithID(req.Text, to, uint32(req.Channel), id)
 	if packet == nil {
-		return 0, fmt.Errorf("%w: could not encode the packet", ErrNotSubmitted)
+		return fmt.Errorf("%w: could not encode the packet", ErrNotSubmitted)
 	}
-	if err := sendFrame(t.file, buildToRadioPacket(packet)); err != nil {
-		return id, err
-	}
-	return id, nil
+	return sendFrame(t.file, buildToRadioPacket(packet))
 }
 
-// newMeshPacketID is a random non-zero packet id.
-func newMeshPacketID() (uint32, error) {
+// NewMeshPacketID is a random non-zero packet id.
+func NewMeshPacketID() (uint32, error) {
 	var b [4]byte
 	for {
 		if _, err := cryptorand.Read(b[:]); err != nil {

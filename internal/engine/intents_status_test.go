@@ -325,7 +325,8 @@ func TestIntentS15_EvidenceMatching(t *testing.T) {
 	})
 	t.Run("one packet id on two transmissions", func(t *testing.T) {
 		h := newIntentHarness(t)
-		h.mesh.fixedID = 0x00c0ffee
+		h.mesh.fixedID = 0x00c0ffee // a radio that picks its own ids, and picks one twice
+		h.workers["mesh_0"].mesh = pickOwnIDMesh{m: h.mesh}
 		c := h.contact(meshAddr(0))
 		a := h.submit(c, "j", directory.StrategyPrimaryOnly)
 		b := h.submit(c, "k", directory.StrategyPrimaryOnly)
