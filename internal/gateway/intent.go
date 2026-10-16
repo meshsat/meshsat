@@ -1,6 +1,9 @@
 package gateway
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // A gateway that can carry a delivery intent's attempt (HeMB-NG r3 D18,
 // stage 1b). The engine imports this package, so the contract lives here
@@ -86,5 +89,22 @@ type IntentReceipt struct {
 	Source    string // e.g. "station"
 	Event     string // e.g. "ack", "rej"
 	Completes string // the outcome it completes, "" when it completes nothing
-	Trust     string // "unauthenticated", "signed", ...
+	// CompletesIfPeer: the outcome it completes when the kept transmission
+	// went to Peer (the ledger checks; an answer that came after the
+	// gateway forgot the send, APRS-R2).
+	CompletesIfPeer string
+	Trust           string // "unauthenticated", "signed", ...
+}
+
+// The process-wide receipt sink: answers that arrive while no send waits
+// (after a restart, a gateway replacement, or the call's end) go here, set
+// once before any gateway starts. A gateway's own sink, when set, wins.
+var defaultIntentSink atomic.Value // func(IntentReceipt)
+
+// SetDefaultIntentReceiptSink installs the process-wide receipt sink.
+func SetDefaultIntentReceiptSink(fn func(IntentReceipt)) { defaultIntentSink.Store(fn) }
+
+func defaultIntentReceiptSink() func(IntentReceipt) {
+	fn, _ := defaultIntentSink.Load().(func(IntentReceipt))
+	return fn
 }

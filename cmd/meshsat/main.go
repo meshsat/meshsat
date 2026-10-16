@@ -727,6 +727,11 @@ func main() {
 		log.Info().Msg("cell: no Osmocom daemons in this image; a kit-side cell package would be driven through the host agent")
 	}
 	cellHost := gateway.NewCellHost(oobHost, db, gwMgr, cellRunner)
+	// Answers to delivery intents (an APRS ack) go to the ledger from the
+	// first frame a gateway takes in, whichever gateway instance takes it,
+	// before and after a restart (APRS-R2). [MESHSAT-1584]
+	intentReceipts := engine.NewIntentReceiptRecorder(db)
+	gateway.SetDefaultIntentReceiptSink(intentReceipts.Record)
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}
@@ -1575,6 +1580,7 @@ func main() {
 		escalator = engine.NewEscalator(db, dispatcher, engine.DefaultEscalatorConfig(), engine.SystemIntentClock(clockGuard.Trusted), intentsOn)
 		dispatcher.SetEscalator(escalator)
 		proc.SetRoutingReceiptHook(escalator.MeshRoutingReceipt)
+		intentReceipts.SetNotify(escalator.Notify)
 		log.Info().Bool("accepting", intentsOn).Msg("delivery intents: Escalator on")
 	}
 

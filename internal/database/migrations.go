@@ -1593,6 +1593,27 @@ var migrations = []string{
 	`ALTER TABLE delivery_transmissions ADD COLUMN proof_hash TEXT NOT NULL DEFAULT '';
 	ALTER TABLE delivery_transmissions ADD COLUMN proof_key TEXT NOT NULL DEFAULT '';
 	CREATE INDEX IF NOT EXISTS idx_delivery_tx_proof ON delivery_transmissions(proof_hash) WHERE proof_hash != '';`,
+
+	// v67: APRS-R3. An APRS station's ack is acked_station (unauthenticated,
+	// r3 D11), never delivered_device; results stored before the fix are
+	// relabelled: the station-ack evidence, the APRS routes' completion
+	// rule, and an intent whose outcome came from such an ack alone. A
+	// Meshtastic delivered_device is left as it is. [MESHSAT-1584]
+	`UPDATE delivery_evidence SET completes = 'acked_station'
+	WHERE corr_kind = 'aprs_msgid' AND source = 'station' AND event = 'ack' AND completes = 'delivered_device';
+	UPDATE delivery_intents SET route_plan = (
+		SELECT json_group_array(CASE
+			WHEN json_extract(value, '$.adapter_mode') = 'aprs' AND json_extract(value, '$.completion_rule') = 'delivered_device'
+			THEN json_set(value, '$.completion_rule', 'acked_station') ELSE json(value) END)
+		FROM (SELECT value FROM json_each(delivery_intents.route_plan) ORDER BY key))
+	WHERE json_valid(route_plan) AND EXISTS (SELECT 1 FROM json_each(delivery_intents.route_plan)
+		WHERE json_extract(value, '$.adapter_mode') = 'aprs' AND json_extract(value, '$.completion_rule') = 'delivered_device');
+	UPDATE delivery_intents SET outcome = 'acked_station'
+	WHERE outcome = 'delivered_device'
+		AND EXISTS (SELECT 1 FROM delivery_evidence e WHERE e.intent_id = delivery_intents.id AND e.matched = 1
+			AND e.corr_kind = 'aprs_msgid' AND e.completes = 'acked_station')
+		AND NOT EXISTS (SELECT 1 FROM delivery_evidence e WHERE e.intent_id = delivery_intents.id AND e.matched = 1
+			AND e.completes = 'delivered_device');`,
 }
 
 func (db *DB) migrate() error {

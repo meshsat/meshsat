@@ -1140,9 +1140,15 @@ func (g *APRSGateway) transmitMessage(ctx context.Context, item *aprsOutbound) e
 	if !g.waitClearToSend(ctx) {
 		return fmt.Errorf("aprs: shutting down: %w", transport.ErrNotConnected)
 	}
-	if err := g.kiss.SendFrame(frame); err != nil {
-		log.Warn().Err(err).Msg("aprs: send frame")
+	if n, err := g.kiss.SendFrameN(frame); err != nil {
+		log.Warn().Err(err).Int("bytes_taken", n).Msg("aprs: send frame")
 		g.errors.Add(1)
+		if n > 0 {
+			// Bytes went to the TNC: the frame may be on the air. The
+			// legacy queue reads it as before (not connected); a delivery
+			// intent reads it as unknown (APRS-R1). [MESHSAT-1584]
+			return fmt.Errorf("aprs: send frame: %v (%w; %w)", err, errAPRSWriteStarted, transport.ErrNotConnected)
+		}
 		return fmt.Errorf("aprs: send frame: %v: %w", err, transport.ErrNotConnected)
 	}
 	g.lastTX.Store(time.Now().UnixNano())

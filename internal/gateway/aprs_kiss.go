@@ -182,21 +182,29 @@ func (k *KISSConn) stream() io.ReadWriteCloser {
 
 // SendFrame encodes and sends a KISS frame containing an AX.25 payload.
 func (k *KISSConn) SendFrame(payload []byte) error {
+	_, err := k.SendFrameN(payload)
+	return err
+}
+
+// SendFrameN is SendFrame with the number of bytes the link took: with an
+// error, 0 means nothing went to the TNC, anything else that the frame may
+// be on the air (APRS-R1). [MESHSAT-1584]
+func (k *KISSConn) SendFrameN(payload []byte) (int, error) {
 	frame := KISSEncode(payload)
 	rw := k.stream()
 	if rw == nil {
-		return fmt.Errorf("kiss: %w", transport.ErrNotConnected)
+		return 0, fmt.Errorf("kiss: %w", transport.ErrNotConnected)
 	}
 	if d, ok := rw.(kissDeadliner); ok {
 		if err := d.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	_, err := rw.Write(frame)
+	n, err := rw.Write(frame)
 	if err == nil {
 		k.TX.Add(1)
 	}
-	return err
+	return n, err
 }
 
 // ReadFrame reads and decodes a single KISS frame from the link and returns

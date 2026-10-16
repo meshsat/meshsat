@@ -115,7 +115,7 @@ func ackReceipt(corr, from, completes, event string) *gateway.IntentReceipt {
 
 // Admitted as an APRS route; the message id is chosen, stored with the
 // handoff before the gateway has it, and is the one the gateway sends; the
-// addressed station's ack within the call completes delivered_device.
+// addressed station's ack within the call completes acked_station.
 func TestIntentAPRS_PreparedIDAndAckInTheCall(t *testing.T) {
 	h := newIntentHarness(t)
 	f := &fakeAPRS{}
@@ -128,17 +128,17 @@ func TestIntentAPRS_PreparedIDAndAckInTheCall(t *testing.T) {
 		}
 	}
 	f.answer = func(s gateway.IntentSend) gateway.IntentOutcome {
-		return gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "radio", Receipt: ackReceipt(s.CorrValue, aprsDest, database.OutcomeDeliveredDevice, "ack")}
+		return gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "radio", Receipt: ackReceipt(s.CorrValue, aprsDest, database.OutcomeAckedStation, "ack")}
 	}
 	id := h.submit(aprsContact(h), "meet at the gate", directory.StrategyPrimaryOnly)
 	in, _ := h.db.GetIntent(id)
-	if p := in.RoutePlan[0]; !p.Admitted || p.AdapterMode != modeAPRS || p.InterfaceID != "aprs_0" || p.Destination != aprsDest || p.CompletionRule != database.OutcomeDeliveredDevice {
+	if p := in.RoutePlan[0]; !p.Admitted || p.AdapterMode != modeAPRS || p.InterfaceID != "aprs_0" || p.Destination != aprsDest || p.CompletionRule != database.OutcomeAckedStation {
 		t.Fatalf("plan %+v", p)
 	}
 	h.work("aprs_0")
 	h.drain()
 	s := h.snap(id)
-	if s.Intent.Outcome != database.OutcomeDeliveredDevice || s.Intent.State != database.IntentClosed || f.count() != 1 {
+	if s.Intent.Outcome != database.OutcomeAckedStation || s.Intent.State != database.IntentClosed || f.count() != 1 {
 		t.Fatalf("%s/%s after %d sends; evidence %+v", s.Intent.State, s.Intent.Outcome, f.count(), s.Evidence)
 	}
 	if f.sends[0].Destination != aprsDest || f.sends[0].Text != "meet at the gate" || f.sends[0].Encrypted {
@@ -159,15 +159,15 @@ func TestIntentAPRS_LateAckThroughTheSink(t *testing.T) {
 	if s := h.snap(id); s.Intent.State != database.IntentActive || s.Transmissions[0].OutcomeClass != database.ClassAccepted {
 		t.Fatalf("before the ack: %s/%s %+v", s.Intent.State, s.Intent.Outcome, s.Transmissions)
 	}
-	f.late(*ackReceipt("ZZZZZ", aprsDest, database.OutcomeDeliveredDevice, "ack"))
+	f.late(*ackReceipt("ZZZZZ", aprsDest, database.OutcomeAckedStation, "ack"))
 	var n int
 	_ = h.db.QueryRow(`SELECT COUNT(*) FROM delivery_evidence`).Scan(&n)
 	if n != 0 {
 		t.Fatalf("an answer for an id no kept transmission carries was recorded (%d rows)", n)
 	}
-	f.late(*ackReceipt(f.sends[0].CorrValue, aprsDest, database.OutcomeDeliveredDevice, "ack"))
+	f.late(*ackReceipt(f.sends[0].CorrValue, aprsDest, database.OutcomeAckedStation, "ack"))
 	h.drain()
-	if s := h.snap(id); s.Intent.Outcome != database.OutcomeDeliveredDevice {
+	if s := h.snap(id); s.Intent.Outcome != database.OutcomeAckedStation {
 		t.Fatalf("after the late ack: %s/%s %+v", s.Intent.State, s.Intent.Outcome, s.Evidence)
 	}
 }
