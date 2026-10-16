@@ -224,8 +224,7 @@ func TestSendToRecipient_StrategyResolution_FallsToContactPolicy(t *testing.T) {
 
 func TestSendToRecipient_StrategyResolution_PrecedenceDefault(t *testing.T) {
 	// No contact policy → falls to precedence-scoped default (seeded
-	// by v48 migration: Flash → HEMB_BONDED which selectAddresses
-	// currently treats as ALL_BEARERS).
+	// by v48 as HEMB_BONDED, which fanned out; ALL_BEARERS since v65).
 	d, store := testDispatcher(t, directory.KindSMS, directory.KindMeshtastic)
 	ctx := context.Background()
 
@@ -243,10 +242,9 @@ func TestSendToRecipient_StrategyResolution_PrecedenceDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Strategy != directory.StrategyHeMBBonded {
-		t.Errorf("Flash default: got %q, want HEMB_BONDED", res.Strategy)
+	if res.Strategy != directory.StrategyAllBearers || res.StrategyReason != "policy:precedence" {
+		t.Errorf("Flash default: got %q (%s), want ALL_BEARERS from the precedence policy", res.Strategy, res.StrategyReason)
 	}
-	// HEMB_BONDED falls back to ALL_BEARERS in selectAddresses (MVP).
 	if len(res.DeliveryIDs) != 2 {
 		t.Errorf("expected 2 bearers, got %d", len(res.DeliveryIDs))
 	}

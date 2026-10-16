@@ -23,7 +23,7 @@ type sendToContactRequest struct {
 	GroupID    string `json:"group_id,omitempty"`
 	Text       string `json:"text"`
 	Precedence string `json:"precedence,omitempty"` // Override|Flash|Immediate|Priority|Routine|Deferred, or ACP-127 prosign
-	Strategy   string `json:"strategy,omitempty"`   // PRIMARY_ONLY|ANY_REACHABLE|ORDERED_FALLBACK|HEMB_BONDED|ALL_BEARERS
+	Strategy   string `json:"strategy,omitempty"`   // PRIMARY_ONLY|ALL_BEARERS, and ORDERED_FALLBACK with delivery intents on; others 400
 
 	// Raw-send escape hatch: queue directly on a named interface
 	// without a directory lookup. Useful when the operator has a
@@ -45,15 +45,19 @@ type sendToContactResponse struct {
 	Precedence string            `json:"precedence"`
 	PerBearer  []perBearerStatus `json:"per_bearer"`
 
+	// The strategy asked for (or held by the policy row) and why the one
+	// used was chosen, e.g. legacy_compat_all_bearers (r3 D12).
+	// [MESHSAT-1584]
+	RequestedStrategy string `json:"requested_strategy,omitempty"`
+	StrategyReason    string `json:"strategy_reason,omitempty"`
+
 	// With MESHSAT_DELIVERY_INTENTS on: the submission, its intent (one
 	// per recipient; GET /api/deliveries/intents/{id} has its status),
-	// the strategy asked for and why the one used was chosen, and whether
-	// the Idempotency-Key named an earlier submission. [MESHSAT-1581]
-	SubmissionID      string   `json:"submission_id,omitempty"`
-	IntentIDs         []string `json:"intent_ids,omitempty"`
-	RequestedStrategy string   `json:"requested_strategy,omitempty"`
-	StrategyReason    string   `json:"strategy_reason,omitempty"`
-	Existing          bool     `json:"existing,omitempty"`
+	// and whether the Idempotency-Key named an earlier submission.
+	// [MESHSAT-1581]
+	SubmissionID string   `json:"submission_id,omitempty"`
+	IntentIDs    []string `json:"intent_ids,omitempty"`
+	Existing     bool     `json:"existing,omitempty"`
 }
 
 // @Summary Send a message to a contact
@@ -65,10 +69,13 @@ type sendToContactResponse struct {
 // @Description when every bearer fails to queue; the body still
 // @Description carries the `per_bearer` breakdown so operators see
 // @Description which bearer rejected the send and why.
+// @Description Strategies: PRIMARY_ONLY and ALL_BEARERS; any other
+// @Description explicit strategy is 400 before anything is queued. A policy
+// @Description row holding an unimplemented one is used as ALL_BEARERS and
+// @Description says so (strategy_reason legacy_compat_all_bearers).
 // @Description With MESHSAT_DELIVERY_INTENTS on, a contact send becomes a
 // @Description delivery intent (submission_id, intent_ids): its routes are
-// @Description tried by the strategy (PRIMARY_ONLY, ALL_BEARERS,
-// @Description ORDERED_FALLBACK; any other explicit strategy is 400), and
+// @Description tried by the strategy (ORDERED_FALLBACK as well), and
 // @Description GET /api/deliveries/intents/{id} reports what is known. An
 // @Description Idempotency-Key header makes a retried request return the
 // @Description first submission; the same key with a different request is
@@ -208,17 +215,15 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 // an error becomes a single entry; kinds with neither are omitted.
 func sendToContactResponseFrom(res engine.SendResult) sendToContactResponse {
 	resp := sendToContactResponse{
-		Strategy:   string(res.Strategy),
-		Precedence: string(res.Precedence),
+		Strategy:          string(res.Strategy),
+		Precedence:        string(res.Precedence),
+		RequestedStrategy: string(res.RequestedStrategy),
+		StrategyReason:    res.StrategyReason,
 	}
 	if sub := res.Intent; sub != nil {
 		resp.SubmissionID = sub.Submission.ID
 		resp.IntentIDs = sub.Submission.IntentIDs
 		resp.Existing = sub.Existing
-		if len(sub.Intents) > 0 {
-			resp.RequestedStrategy = sub.Intents[0].RequestedStrategy
-			resp.StrategyReason = sub.Intents[0].StrategyReason
-		}
 	}
 	kinds := map[string]struct{}{}
 	for k := range res.DeliveryIDs {

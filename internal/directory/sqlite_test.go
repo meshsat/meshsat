@@ -532,12 +532,13 @@ func TestPolicy_SeededPrecedenceDefaults(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 
-	// From migration v48 seed.
+	// The v48 seed as v65 left it: the strategies the bridge does not
+	// implement became ALL_BEARERS, what they did. [MESHSAT-1584]
 	cases := map[string]directory.Strategy{
-		"Override":  directory.StrategyHeMBBonded,
-		"Flash":     directory.StrategyHeMBBonded,
-		"Immediate": directory.StrategyAnyReachable,
-		"Priority":  directory.StrategyOrderedFallback,
+		"Override":  directory.StrategyAllBearers,
+		"Flash":     directory.StrategyAllBearers,
+		"Immediate": directory.StrategyAllBearers,
+		"Priority":  directory.StrategyAllBearers,
 		"Routine":   directory.StrategyPrimaryOnly,
 		"Deferred":  directory.StrategyPrimaryOnly,
 	}
@@ -547,8 +548,8 @@ func TestPolicy_SeededPrecedenceDefaults(t *testing.T) {
 			t.Errorf("get precedence %q: %v", prec, err)
 			continue
 		}
-		if p.Strategy != want {
-			t.Errorf("%s strategy: got %q, want %q", prec, p.Strategy, want)
+		if p.Strategy != want || !p.Seeded {
+			t.Errorf("%s strategy: got %q seeded %v, want %q seeded", prec, p.Strategy, p.Seeded, want)
 		}
 	}
 	// Default row exists.

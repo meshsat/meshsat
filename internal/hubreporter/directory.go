@@ -22,8 +22,30 @@ type DirectoryApplier interface {
 	// ApplySnapshot replaces the tenant's directory state with the
 	// given snapshot. The handler verifies the ECDSA-P256 signature
 	// before invoking this, so implementations may treat the payload
-	// as trusted.
-	ApplySnapshot(ctx context.Context, snap *DirectorySnapshot) error
+	// as trusted. The report names the policy rows applied and those
+	// refused, and the command reply carries it.
+	ApplySnapshot(ctx context.Context, snap *DirectorySnapshot) (DirectoryApplyReport, error)
+}
+
+// DirectoryApplyReport is what a directory_push did with the snapshot's
+// dispatch policies: each row is applied or refused by name, and the
+// supported rows of a push apply whatever the others are (HeMB-NG r3
+// D12, S2). [MESHSAT-1584]
+type DirectoryApplyReport struct {
+	PoliciesApplied  []string          `json:"policies_applied"`
+	PoliciesRejected []PolicyRejection `json:"policies_rejected"`
+}
+
+// PolicyRejection is a pushed policy row the bridge did not apply.
+// Reason: invalid, unsupported_scope, unsupported_strategy,
+// unsupported_field or seeded_default.
+type PolicyRejection struct {
+	ID        string `json:"id"`
+	ScopeType string `json:"scope_type"`
+	ScopeID   string `json:"scope_id"`
+	Strategy  string `json:"strategy"`
+	Reason    string `json:"reason"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 // TrustAnchorStore lets the bridge persist (and later read back) the
@@ -188,8 +210,14 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 		return nil, fmt.Errorf("directory_push: signature verification failed")
 	}
 
-	if err := ch.dirApplier.ApplySnapshot(context.Background(), &snap); err != nil {
+	report, err := ch.dirApplier.ApplySnapshot(context.Background(), &snap)
+	if err != nil {
 		return nil, fmt.Errorf("directory_push: apply: %w", err)
+	}
+	for _, rj := range report.PoliciesRejected {
+		log.Warn().Str("policy_id", rj.ID).Str("scope", rj.ScopeType+":"+rj.ScopeID).Str("strategy", rj.Strategy).
+			Str("reason", rj.Reason).Str("detail", rj.Detail).Str("request_id", cmd.RequestID).
+			Msg("commander: directory_push policy not applied")
 	}
 	log.Info().
 		Str("tenant_id", snap.TenantID).
@@ -197,13 +225,22 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 		Int("contacts", len(snap.Contacts)).
 		Int("groups", len(snap.Groups)).
 		Int("policies", len(snap.Policies)).
+		Int("policies_applied", len(report.PoliciesApplied)).
+		Int("policies_rejected", len(report.PoliciesRejected)).
 		Str("request_id", cmd.RequestID).
 		Msg("commander: directory_push applied")
+	if report.PoliciesApplied == nil {
+		report.PoliciesApplied = []string{}
+	}
+	if report.PoliciesRejected == nil {
+		report.PoliciesRejected = []PolicyRejection{}
+	}
 	result := struct {
 		TenantID string `json:"tenant_id"`
 		Version  int64  `json:"version"`
 		Applied  bool   `json:"applied"`
-	}{snap.TenantID, snap.Version, true}
+		DirectoryApplyReport
+	}{snap.TenantID, snap.Version, true, report}
 	out, _ := json.Marshal(result)
 	return out, nil
 }
