@@ -1,0 +1,93 @@
+[
+  {
+    "name": "without_metadata",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBgaXwhrLTQod4ZS69jUhCv9iSw8ESOTVOT9xk9gMh9mHD+gELxgBTa85JBribbUuQhT7Rqu//zId3ZzH6rmVaQ==",
+    "payload": {
+      "tenant_id": "review-tenant",
+      "version": 1,
+      "signed_at": "2026-10-16T12:00:00Z",
+      "signature": "MEUCIQCzBzP/RX59fDfddJibEVhaR2LKgayGk+vtqHd7273BfQIgZ7lbYZk1Ou+g1ADXoTPinysegf4beTk5Kb5WxPRMsfE=",
+      "contacts": [
+        {
+          "id": "review-contact",
+          "tenant_id": "review-tenant",
+          "display_name": "Review Fixture",
+          "origin": "hub",
+          "addresses": [
+            {
+              "kind": "SMS",
+              "value": "+31600000000",
+              "primary_rank": 0
+            }
+          ],
+          "created_at": "2026-10-16T12:00:00Z",
+          "updated_at": "2026-10-16T12:00:00Z"
+        }
+      ],
+      "policies": [
+        {
+          "id": "supported",
+          "scope_type": "default",
+          "strategy": "PRIMARY_ONLY",
+          "created_at": "2026-10-16T12:00:00Z",
+          "updated_at": "2026-10-16T12:00:00Z"
+        },
+        {
+          "id": "unsupported",
+          "scope_type": "precedence",
+          "scope_id": "Flash",
+          "strategy": "HEMB_BONDED",
+          "created_at": "2026-10-16T12:00:00Z",
+          "updated_at": "2026-10-16T12:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "name": "with_metadata",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBgaXwhrLTQod4ZS69jUhCv9iSw8ESOTVOT9xk9gMh9mHD+gELxgBTa85JBribbUuQhT7Rqu//zId3ZzH6rmVaQ==",
+    "payload": {
+      "tenant_id": "review-tenant",
+      "version": 1,
+      "signed_at": "2026-10-16T12:00:00Z",
+      "signature": "MEYCIQCUpQnMxic8BzNVf+L2EDkERACFHpv4hE4nLfD/ElNw3AIhAL5czIerFfBbKH5j9OlKWVB6lgNh4qvXLzb0pxcE+NGO",
+      "contacts": [
+        {
+          "id": "review-contact",
+          "tenant_id": "review-tenant",
+          "display_name": "Review Fixture",
+          "origin": "hub",
+          "addresses": [
+            {
+              "kind": "SMS",
+              "value": "+31600000000",
+              "primary_rank": 0
+            }
+          ],
+          "metadata": {
+            "review": "present"
+          },
+          "created_at": "2026-10-16T12:00:00Z",
+          "updated_at": "2026-10-16T12:00:00Z"
+        }
+      ],
+      "policies": [
+        {
+          "id": "supported",
+          "scope_type": "default",
+          "strategy": "PRIMARY_ONLY",
+          "created_at": "2026-10-16T12:00:00Z",
+          "updated_at": "2026-10-16T12:00:00Z"
+        },
+        {
+          "id": "unsupported",
+          "scope_type": "precedence",
+          "scope_id": "Flash",
+          "strategy": "HEMB_BONDED",
+          "created_at": "2026-10-16T12:00:00Z",
+          "updated_at": "2026-10-16T12:00:00Z"
+        }
+      ]
+    }
+  }
+]

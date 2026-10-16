@@ -132,3 +132,48 @@ func TestIntentStrategy_AfterTheMigration(t *testing.T) {
 		t.Fatal("a refused request wrote a submission")
 	}
 }
+
+// B5-R1: the explicit strategy is checked before any branch can queue. A
+// raw send is one destination on one interface and never an intent, so
+// only no strategy or PRIMARY_ONLY describes it, with delivery intents off
+// and on (raw ORDERED_FALLBACK is refused in both). Refusals write no
+// delivery, submission or intent; the raw positive controls queue one row.
+// A group target with an unsupported strategy is refused the same way.
+func TestSendToRecipient_RawStrategyCheckedBeforeQueue(t *testing.T) {
+	h := newIntentHarness(t)
+	raw := RecipientRef{Raw: &RawRecipient{InterfaceID: "cellular_0", Address: "+31600000000"}}
+	rows := func() [3]int {
+		var n [3]int
+		for i, tbl := range []string{"message_deliveries", "delivery_submissions", "delivery_intents"} {
+			_ = h.db.QueryRow(`SELECT COUNT(*) FROM ` + tbl).Scan(&n[i])
+		}
+		return n
+	}
+	for _, intents := range []bool{false, true} {
+		h.start(intents)
+		if h.d.DeliveryIntents() != intents {
+			t.Fatalf("intents %v not set", intents)
+		}
+		for _, s := range []directory.Strategy{directory.StrategyHeMBBonded, directory.StrategyAnyReachable,
+			directory.StrategyOrderedFallback, directory.StrategyAllBearers, "BOGUS"} {
+			before := rows()
+			_, err := h.d.SendToRecipient(h.ctx, raw, []byte("x"), SendOptions{Strategy: s})
+			if !errors.Is(err, ErrUnsupportedStrategy) || rows() != before {
+				t.Errorf("intents %v, raw %s: %v, rows %v -> %v; want ErrUnsupportedStrategy and nothing written", intents, s, err, before, rows())
+			}
+			_, err = h.d.SendToRecipient(h.ctx, RecipientRef{GroupID: "team"}, []byte("x"), SendOptions{Strategy: directory.StrategyHeMBBonded})
+			if !errors.Is(err, ErrUnsupportedStrategy) {
+				t.Errorf("intents %v, group HEMB_BONDED: %v", intents, err)
+			}
+		}
+		for _, s := range []directory.Strategy{"", directory.StrategyPrimaryOnly} {
+			before := rows()
+			res, err := h.d.SendToRecipient(h.ctx, raw, []byte("x"), SendOptions{Strategy: s})
+			after := rows()
+			if err != nil || after[0] != before[0]+1 || after[1] != before[1] || after[2] != before[2] ||
+				res.Strategy != directory.StrategyPrimaryOnly || res.StrategyReason != StrategyReasonRaw {
+				t.Errorf("intents %v, raw %q: %v %+v, rows %v -> %v; want one delivery row", intents, s, err, res, before, after)
+			}
+		}
+	}
+}

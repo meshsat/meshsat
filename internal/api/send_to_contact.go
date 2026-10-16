@@ -23,7 +23,7 @@ type sendToContactRequest struct {
 	GroupID    string `json:"group_id,omitempty"`
 	Text       string `json:"text"`
 	Precedence string `json:"precedence,omitempty"` // Override|Flash|Immediate|Priority|Routine|Deferred, or ACP-127 prosign
-	Strategy   string `json:"strategy,omitempty"`   // PRIMARY_ONLY|ALL_BEARERS, and ORDERED_FALLBACK with delivery intents on; others 400
+	Strategy   string `json:"strategy,omitempty"`   // PRIMARY_ONLY|ALL_BEARERS, and ORDERED_FALLBACK with delivery intents on; others 400; raw: PRIMARY_ONLY only
 
 	// Raw-send escape hatch: queue directly on a named interface
 	// without a directory lookup. Useful when the operator has a
@@ -72,7 +72,9 @@ type sendToContactResponse struct {
 // @Description Strategies: PRIMARY_ONLY and ALL_BEARERS; any other
 // @Description explicit strategy is 400 before anything is queued. A policy
 // @Description row holding an unimplemented one is used as ALL_BEARERS and
-// @Description says so (strategy_reason legacy_compat_all_bearers).
+// @Description says so (strategy_reason legacy_compat_all_bearers). A raw
+// @Description send (raw_interface_id) is one destination and never an
+// @Description intent: no strategy or PRIMARY_ONLY, anything else is 400.
 // @Description With MESHSAT_DELIVERY_INTENTS on, a contact send becomes a
 // @Description delivery intent (submission_id, intent_ids): its routes are
 // @Description tried by the strategy (ORDERED_FALLBACK as well), and

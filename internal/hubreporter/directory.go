@@ -1,6 +1,7 @@
 package hubreporter
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
@@ -57,9 +58,14 @@ type TrustAnchorStore interface {
 }
 
 // DirectorySnapshot mirrors the Hub-side directory.Snapshot wire
-// shape. The two types are not imported across the repo boundary;
-// instead they are kept byte-compatible via canonical JSON and a
-// narrow set of fields the bridge actually consumes.
+// shape. The two types are not imported across the repo boundary.
+// The signature is checked over these types marshalled again, so every
+// type here must carry every field of the Hub's, with the same JSON tag
+// in the same order, whether or not the bridge uses it: a field missing
+// here is dropped by encoding/json and the signature fails (B5-R2, Hub
+// contact metadata). testdata/hub-directory-push-*.json are payloads
+// signed by the Hub's own code; their test fails when the types drift.
+// [MESHSAT-1584]
 type DirectorySnapshot struct {
 	TenantID  string             `json:"tenant_id"`
 	Version   int64              `json:"version"`
@@ -71,10 +77,10 @@ type DirectorySnapshot struct {
 	Policies  []DirectoryPolicy  `json:"policies,omitempty"`
 }
 
-// DirectoryContact carries the fields from the Hub's directory.Contact
-// that the bridge persists. Unknown fields round-trip through the
-// canonical-JSON signature verification because the bridge echoes
-// them back via ApplySnapshot.
+// DirectoryContact mirrors the Hub's directory.Contact field for field
+// (meshsat-hub internal/directory/store.go). The bridge persists only
+// some of them; the rest (keys, policy and group ids, metadata) are
+// here so the signature verifies.
 type DirectoryContact struct {
 	ID              string                `json:"id"`
 	TenantID        string                `json:"tenant_id"`
@@ -95,6 +101,7 @@ type DirectoryContact struct {
 	Keys            []DirectoryContactKey `json:"keys,omitempty"`
 	PolicyID        string                `json:"policy_id,omitempty"`
 	GroupIDs        []string              `json:"group_ids,omitempty"`
+	Metadata        map[string]string     `json:"metadata,omitempty"`
 	CreatedAt       time.Time             `json:"created_at"`
 	UpdatedAt       time.Time             `json:"updated_at"`
 }
@@ -207,6 +214,14 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 	}
 	digest := sha256.Sum256(canonical)
 	if !ecdsa.VerifyASN1(pub, digest[:], snap.Signature) {
+		// Still refused. Say so when the cause may be a Hub field this
+		// bridge's types do not carry: dropped on decode, it changes the
+		// bytes the signature covers.
+		strict := json.NewDecoder(bytes.NewReader(cmd.Payload))
+		strict.DisallowUnknownFields()
+		if err := strict.Decode(&DirectorySnapshot{}); err != nil {
+			return nil, fmt.Errorf("directory_push: signature verification failed; the snapshot has a field this bridge does not know (%v), update the bridge", err)
+		}
 		return nil, fmt.Errorf("directory_push: signature verification failed")
 	}
 
