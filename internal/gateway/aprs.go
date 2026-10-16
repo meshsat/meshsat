@@ -88,6 +88,7 @@ type APRSGateway struct {
 	// gateway stops, so a Forward waiting for an ack returns. [MESHSAT-1021]
 	acks         aprsAckWaiters
 	ackLedger    aprsAckLedger
+	intents      aprsIntentState // delivery-intent sends and their late answers [MESHSAT-1584]
 	acksSent     atomic.Int64
 	acksReceived atomic.Int64
 	ackRetries   atomic.Int64
@@ -826,6 +827,16 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			continue
 		}
 
+		// A directed message to this station with a message id is
+		// acknowledged, as APRS 1.0.1 asks and mode is already does; a
+		// MeshSat sender's delivery intent waits for it. [MESHSAT-1584]
+		if frame != nil && pkt.DataType == ':' && pkt.MsgID != "" && !g.isOwnSource(frame.Src) &&
+			strings.EqualFold(strings.TrimSpace(pkt.MsgTo), g.ownCall()) && validAckID(pkt.MsgID) {
+			if _, _, isReply := aprsAckReply(pkt); !isReply {
+				g.sendAck(frame.Src, pkt.MsgID)
+			}
+		}
+
 		g.handleParsedPacket(pkt, srcAddr)
 	}
 }
@@ -1114,7 +1125,9 @@ func (g *APRSGateway) transmitMessage(ctx context.Context, item *aprsOutbound) e
 		// Directed APRS message to a station (`:ADDRESSEE:text`), used by
 		// OOB replies and any delivery row carrying a destination. No
 		// message id is attached, so no ack handling is needed. [MESHSAT-756]
-		info = EncodeAPRSMessage(msg.Destination, msg.DecodedText, "")
+		// A delivery intent's send carries its message id (`{ID`), which
+		// the station acknowledges as APRS 1.0.1 asks. [MESHSAT-1584]
+		info = EncodeAPRSMessage(msg.Destination, msg.DecodedText, item.ackID)
 	} else if msg.DecodedText != "" {
 		// Plaintext: send as third-party traffic with attribution.
 		comment := fmt.Sprintf("[MeshSat !%08x] %s", msg.From, msg.DecodedText)
@@ -1486,4 +1499,9 @@ func (g *APRSGateway) silenceWatchdog(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// ownCall is this station's callsign with its SSID, as an addressee.
+func (g *APRSGateway) ownCall() string {
+	return FormatCallsign(AX25Address{Call: strings.ToUpper(strings.TrimSpace(g.config.Callsign)), SSID: g.config.SSID})
 }

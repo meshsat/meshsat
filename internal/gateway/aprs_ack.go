@@ -164,6 +164,48 @@ type aprsAckWaiters struct {
 type aprsAckWaiter struct {
 	acked chan struct{}
 	done  bool
+	// intent: a delivery intent's send, which a reject also releases;
+	// from and reject say who answered and how. [MESHSAT-1584]
+	intent bool
+	from   string
+	reject bool
+}
+
+// registerIntent is register for a delivery intent's send.
+func (w *aprsAckWaiters) registerIntent(id string) <-chan struct{} {
+	ch := w.register(id)
+	w.mu.Lock()
+	if e, ok := w.m[id]; ok {
+		e.intent = true
+	}
+	w.mu.Unlock()
+	return ch
+}
+
+// answer marks id answered by from (an ack, or a reject for an intent's
+// send) and reports whether anyone was waiting for it.
+func (w *aprsAckWaiters) answer(id, from string, reject bool) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	e, ok := w.m[id]
+	if !ok || (reject && !e.intent) {
+		return false
+	}
+	if !e.done {
+		e.done, e.from, e.reject = true, from, reject
+		close(e.acked)
+	}
+	return true
+}
+
+// answerOf says who answered id and whether it was a reject.
+func (w *aprsAckWaiters) answerOf(id string) (from string, reject bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if e, ok := w.m[id]; ok {
+		return e.from, e.reject
+	}
+	return "", false
 }
 
 func (w *aprsAckWaiters) register(id string) <-chan struct{} {
@@ -346,11 +388,18 @@ func (g *APRSGateway) handleAckReply(pkt *APRSPacket, id string, reject bool) {
 	if !strings.EqualFold(strings.TrimSpace(pkt.MsgTo), own) {
 		return
 	}
+	uid := strings.ToUpper(id)
 	if reject {
 		log.Warn().Str("from", pkt.Source).Str("ack_id", id).Msg("aprs: the peer rejected a message")
+		if !g.acks.answer(uid, pkt.Source, true) {
+			g.lateIntentReceipt(uid, pkt.Source, true)
+		}
 		return
 	}
-	if g.acks.resolve(strings.ToUpper(id)) {
+	if !g.acks.answer(uid, pkt.Source, false) {
+		g.lateIntentReceipt(uid, pkt.Source, false)
+	}
+	if g.acks.resolve(uid) {
 		g.acksReceived.Add(1)
 		// Proof the peer decoded a frame of ours just now. [MESHSAT-1021]
 		g.lastAckAt.Store(time.Now().UnixNano())
