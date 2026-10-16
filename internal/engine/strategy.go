@@ -17,6 +17,7 @@ const (
 	StrategyReasonDefault      = "default"
 	StrategyReasonLegacyCompat = "legacy_compat_all_bearers"
 	StrategyReasonUnknown      = "unknown_strategy_primary_only"
+	StrategyReasonRaw          = "raw_destination"
 )
 
 // SupportedStrategies is what the bridge implements (r3 D12, stage 0b):
@@ -65,6 +66,27 @@ func (d *Dispatcher) StrategySupported(s directory.Strategy) bool {
 	return slices.Contains(SupportedStrategies(d.DeliveryIntents()), s)
 }
 
+// explicitStrategyError is ErrUnsupportedStrategy for an explicit
+// strategy outside supported, nil otherwise. raw: the request names one
+// destination on one interface, which only PRIMARY_ONLY describes.
+func explicitStrategyError(explicit directory.Strategy, supported []directory.Strategy, raw bool) error {
+	if slices.Contains(supported, explicit) {
+		return nil
+	}
+	names := make([]string, len(supported))
+	for i, s := range supported {
+		names[i] = string(s)
+	}
+	msg := fmt.Sprintf("%s (supported: %s)", explicit, strings.Join(names, ", "))
+	switch {
+	case raw:
+		msg = fmt.Sprintf("%s (a raw send has one destination on one interface: no strategy, or PRIMARY_ONLY)", explicit)
+	case explicit == directory.StrategyOrderedFallback:
+		msg += "; ORDERED_FALLBACK needs MESHSAT_DELIVERY_INTENTS=true"
+	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedStrategy, msg)
+}
+
 // resolveStrategy walks explicit -> contact policy -> precedence policy ->
 // default policy -> PRIMARY_ONLY (r3 D12). An explicit strategy the bridge
 // does not implement is ErrUnsupportedStrategy, before anything is
@@ -72,17 +94,8 @@ func (d *Dispatcher) StrategySupported(s directory.Strategy) bool {
 func (d *Dispatcher) resolveStrategy(ctx context.Context, contactID string, precedence types.Precedence, explicit directory.Strategy, capCents *int, intents bool) (StrategyResolution, error) {
 	res := StrategyResolution{CapCents: capCents}
 	if explicit != "" {
-		supported := SupportedStrategies(intents)
-		if !slices.Contains(supported, explicit) {
-			names := make([]string, len(supported))
-			for i, s := range supported {
-				names[i] = string(s)
-			}
-			msg := fmt.Sprintf("%s (supported: %s)", explicit, strings.Join(names, ", "))
-			if explicit == directory.StrategyOrderedFallback {
-				msg += "; ORDERED_FALLBACK needs MESHSAT_DELIVERY_INTENTS=true"
-			}
-			return res, fmt.Errorf("%w: %s", ErrUnsupportedStrategy, msg)
+		if err := explicitStrategyError(explicit, SupportedStrategies(intents), false); err != nil {
+			return res, err
 		}
 		res.Requested, res.Effective, res.Reason = explicit, explicit, StrategyReasonRequested
 		return res, nil

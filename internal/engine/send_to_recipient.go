@@ -143,6 +143,20 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		res.Precedence = types.DefaultPrecedence
 	}
 
+	// An explicit strategy is checked before any branch can queue (r3
+	// D12, B5-R1). A raw send is one destination on a named interface and
+	// never becomes a delivery intent, so only PRIMARY_ONLY describes it,
+	// whatever MESHSAT_DELIVERY_INTENTS says. [MESHSAT-1584]
+	if opts.Strategy != "" {
+		supported := SupportedStrategies(d.DeliveryIntents())
+		if rcpt.Raw != nil {
+			supported = []directory.Strategy{directory.StrategyPrimaryOnly}
+		}
+		if err := explicitStrategyError(opts.Strategy, supported, rcpt.Raw != nil); err != nil {
+			return res, err
+		}
+	}
+
 	// Raw escape hatch: no directory lookup, queue directly on the
 	// named interface with the caller's precedence.
 	if rcpt.Raw != nil {
@@ -163,7 +177,7 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		// Raw sends don't have a bearer kind on their face; record
 		// under the empty Kind so callers can see "one generic ID".
 		res.DeliveryIDs[directory.Kind("")] = []int64{id}
-		res.Strategy = directory.StrategyPrimaryOnly
+		res.Strategy, res.RequestedStrategy, res.StrategyReason = directory.StrategyPrimaryOnly, opts.Strategy, StrategyReasonRaw
 		return res, nil
 	}
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,5 +64,64 @@ func TestDirectoryApplier_PushAppliesSupportedRowsAndNamesTheRest(t *testing.T) 
 	}
 	if c, err := store.Resolve(context.Background(), "11111111-1111-4111-8111-111111111111"); err != nil || len(c.Addresses) != 1 {
 		t.Fatalf("the push's contact: %+v %v", c, err)
+	}
+}
+
+// S2, push half, end to end on the bridge (B5-R2 closure): payloads
+// signed by the Hub's own code (internal/hubreporter/testdata) go through
+// CommandHandler.HandleCommand with the real trust store and the real
+// applier on a real database. The supported rows apply, the others are
+// refused, the contact (with Hub metadata on it) lands.
+func TestDirectoryPush_HubSignedFixturesThroughTheRealApplier(t *testing.T) {
+	raw, err := os.ReadFile("../../internal/hubreporter/testdata/hub-directory-push-a98e938.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []struct {
+		Name      string          `json:"name"`
+		PublicKey []byte          `json:"public_key"`
+		Payload   json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	const contactID = "0b5f0000-0000-4000-8000-000000000001"
+	for _, fx := range fixtures {
+		t.Run(fx.Name, func(t *testing.T) {
+			db, err := database.New(filepath.Join(t.TempDir(), "bridge.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			d := engine.NewDispatcher(db, channel.NewRegistry(), nil, nil)
+			store := directory.NewSQLStore(db.DB)
+			trust := &bridgeDirectoryTrustStore{db: db}
+			if err := trust.SetDirectoryTrustAnchor(fx.PublicKey); err != nil {
+				t.Fatal(err)
+			}
+			ch := hubreporter.NewCommandHandler(nil, "b5-bridge", nil)
+			ch.SetTrustAnchorStore(trust)
+			ch.SetDirectoryApplier(&bridgeDirectoryApplier{dir: store, supported: d.StrategySupported})
+			cmd, _ := json.Marshal(hubreporter.Command{Protocol: hubreporter.ProtocolVersion, Cmd: "directory_push",
+				RequestID: fx.Name, Payload: fx.Payload, Timestamp: time.Now().UTC()})
+			ch.HandleCommand(cmd)
+
+			ctx := context.Background()
+			if c, err := store.Resolve(ctx, contactID); err != nil || len(c.Addresses) == 0 {
+				t.Fatalf("contact not applied: %+v %v", c, err)
+			}
+			if p, err := store.GetPolicy(ctx, directory.ScopeContact, contactID); err != nil || p.Strategy != directory.StrategyAllBearers || p.Seeded {
+				t.Fatalf("supported contact policy: %+v %v", p, err)
+			}
+			if p, _ := store.GetPolicy(ctx, directory.ScopeDefault, ""); p.Strategy != directory.StrategyPrimaryOnly || p.Seeded {
+				t.Fatalf("supported default policy not applied: %+v", p)
+			}
+			if p, _ := store.GetPolicy(ctx, directory.ScopePrecedence, "Flash"); p.Strategy != directory.StrategyAllBearers || !p.Seeded {
+				t.Fatalf("Flash changed by a refused HEMB_BONDED row: %+v", p)
+			}
+			if p, _ := store.GetPolicy(ctx, directory.ScopePrecedence, "Routine"); !p.Seeded {
+				t.Fatalf("Routine changed by a row asking for unimplemented fields: %+v", p)
+			}
+		})
 	}
 }
