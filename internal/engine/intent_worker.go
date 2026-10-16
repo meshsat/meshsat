@@ -71,22 +71,19 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 		log.Error().Err(err).Int64("id", del.ID).Msg("intent attempt: authorization failed; not sent")
 		return
 	}
-	// A mesh send under a packet id of our own: the id is reserved (not
-	// live on another transmission inside the window) and stored with the
-	// handoff, before the radio has it, so an answer that comes back
-	// before finalization, or after a stop, names this transmission
-	// (red-team F-2).
+	// A mesh send under a packet id of our own: the id is reserved (no
+	// kept transmission used it) and stored with the handoff, before the
+	// radio has it, so an answer that comes back before finalization, or
+	// after a stop, names this transmission (red-team F-2, R-3).
 	var meshID uint32
 	var corr database.Correlation
 	if del.Class != database.DeliveryClassLXMF {
-		if _, ok := w.mesh.(meshPreparedSender); ok {
-			if meshID, err = w.reserveMeshID(); err != nil {
-				_, _ = w.db.FinalizeTransmission(txID, database.TransmissionResult{Class: database.ClassNotSent, Retryable: true,
-					ConsumeRetry: true, Detail: "no packet id: " + err.Error()})
-				return
-			}
-			corr = database.Correlation{Kind: meshCorrKind, Value: fmt.Sprintf("%08x", meshID), Scope: w.channelID, Peer: del.Destination}
+		if meshID, err = w.reserveMeshID(); err != nil {
+			_, _ = w.db.FinalizeTransmission(txID, database.TransmissionResult{Class: database.ClassNotSent, Retryable: true,
+				ConsumeRetry: true, Detail: "no packet id: " + err.Error()})
+			return
 		}
+		corr = database.Correlation{Kind: meshCorrKind, Value: fmt.Sprintf("%08x", meshID), Scope: w.channelID, Peer: del.Destination}
 	}
 	if err := w.db.MarkTransmissionHandedOffWith(txID, corr); err != nil {
 		log.Error().Err(err).Int64("id", del.ID).Msg("intent attempt: handoff not recorded; not sent")
@@ -161,6 +158,14 @@ func (w *DeliveryWorker) intentPreSend(del database.MessageDelivery) (string, *i
 		}
 		return "", nil
 	}
+	// Only a radio that sends under a packet id chosen and stored before
+	// the send: with one that picks its own and tells it after, an answer
+	// can arrive before the id is known, and a reused id would then name
+	// an older transmission (red-team R-3). Refused before any
+	// transmission; the kits' radio is such a radio.
+	if _, ok := w.mesh.(meshPreparedSender); !ok || w.mesh == nil {
+		return "", &intentRefusal{Reason: reasonUnsupported, Detail: "the mesh transport cannot send under a packet id chosen before the send"}
+	}
 	if w.access != nil && w.access.HasEgressRules(w.channelID) {
 		if len(w.access.EvaluateEgress(w.channelID, rules.RouteMessage{Text: del.TextPreview})) == 0 {
 			return "", &intentRefusal{Reason: "denied", Detail: "egress rules denied"}
@@ -207,29 +212,17 @@ func (w *DeliveryWorker) reserveMeshID() (uint32, error) {
 	return 0, errors.New("every packet id tried is still live")
 }
 
-// sendIntentMesh sends a mesh attempt under its packet id: the one
-// prepared (meshID), or, for a transport that picks its own, the one it
-// returns. The correlation is kept whatever the outcome: a send that
-// failed after the radio may have it still names this transmission.
+// sendIntentMesh sends a mesh attempt under its prepared packet id. The
+// correlation is kept whatever the outcome: a send that failed after the
+// radio may have it still names this transmission.
 func (w *DeliveryWorker) sendIntentMesh(ctx context.Context, del database.MessageDelivery, text string, meshID uint32) SendOutcome {
 	req := transport.SendRequest{Text: text, To: del.Destination}
-	var id uint32
-	var err error
-	switch {
-	case meshID != 0:
-		err = w.mesh.(meshPreparedSender).SendMessageWithID(ctx, req, meshID)
-		id = meshID
-	default:
-		sender, ok := w.mesh.(meshIDSender)
-		if !ok || w.mesh == nil {
-			return SendOutcome{Class: database.ClassNotSent, Detail: "the mesh transport cannot send under its own packet id", Reason: reasonUnsupported}
-		}
-		id, err = sender.SendMessageID(ctx, req)
+	sender, ok := w.mesh.(meshPreparedSender)
+	if !ok || meshID == 0 {
+		return SendOutcome{Class: database.ClassNotSent, Detail: "the mesh transport cannot send under a packet id chosen before the send", Reason: reasonUnsupported}
 	}
-	var corr Correlation
-	if id != 0 {
-		corr = Correlation{Kind: meshCorrKind, Value: fmt.Sprintf("%08x", id), Scope: w.channelID, Peer: del.Destination}
-	}
+	err := sender.SendMessageWithID(ctx, req, meshID)
+	corr := Correlation{Kind: meshCorrKind, Value: fmt.Sprintf("%08x", meshID), Scope: w.channelID, Peer: del.Destination}
 	if err != nil {
 		out := LegacyOutcome(err)
 		if out.Class != database.ClassNotSent {

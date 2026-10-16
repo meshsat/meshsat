@@ -47,12 +47,29 @@ func (m *reviewReceiptMesh) receipt() {
 		PortNum: int(transport.PortNumRouting), Routing: &transport.RoutingInfo{ErrorReason: 0, ErrorName: "NONE"}})
 }
 
+// reviewPreparedReceiptMesh is reviewReceiptMesh on the contract the fix
+// requires: the send takes the id the engine chose and stored.
+type reviewPreparedReceiptMesh struct {
+	reviewReceiptMesh
+}
+
+func (m *reviewPreparedReceiptMesh) SendMessageWithID(_ context.Context, _ transport.SendRequest, id uint32) error {
+	m.id = id
+	if m.early {
+		m.receipt()
+	}
+	return m.err
+}
+
+// Adapted (fix2 closure review): the self-picking adapter is now refused
+// (TestReviewReusedIDReceiptBeforeReturnMustStayAmbiguous), so both
+// orderings run on the prepared-id send, with the reviewer's assertions.
 func TestReviewMeshCorrelationSurvivesReceiptOrdering(t *testing.T) {
 	for _, early := range []bool{true, false} {
 		t.Run(fmt.Sprintf("early_receipt_%t", early), func(t *testing.T) {
 			h := newIntentHarness(t)
 			id := h.submit(h.contact(meshAddr(0), lxmfAddr(1)), "receipt ordering", directory.StrategyOrderedFallback)
-			m := &reviewReceiptMesh{esc: h.esc, early: early, id: 0x12345678}
+			m := &reviewPreparedReceiptMesh{reviewReceiptMesh{esc: h.esc, early: early}}
 			if !early {
 				m.err = errors.New("serial write returned an error after possible submission")
 			}
@@ -64,7 +81,7 @@ func TestReviewMeshCorrelationSurvivesReceiptOrdering(t *testing.T) {
 			h.drain()
 			s := h.snap(id)
 			var unmatched int
-			if err := h.db.Get(&unmatched, `SELECT COUNT(*) FROM delivery_evidence WHERE corr_value = '12345678' AND matched = 0`); err != nil {
+			if err := h.db.Get(&unmatched, `SELECT COUNT(*) FROM delivery_evidence WHERE corr_value = ? AND matched = 0`, fmt.Sprintf("%08x", m.id)); err != nil {
 				t.Fatal(err)
 			}
 			if s.Intent.State != database.IntentClosed || s.Intent.Outcome != database.OutcomeDeliveredDevice {
@@ -361,13 +378,14 @@ func TestReviewUpgradeV62ReplaysClosedEvidence(t *testing.T) {
 	}
 }
 
+// Adapted (fix2): both sends are prepared-id sends, and the reuse is
+// applied to their stored ids, as a radio that reused one would leave it.
 func TestReviewRetainedOldACKCannotCompleteNewIntent(t *testing.T) {
 	h := newIntentHarness(t)
-	h.mesh.fixedID = 0x0badf00d
-	h.workers["mesh_0"].mesh = pickOwnIDMesh{m: h.mesh}
 	c := h.contact(meshAddr(0))
 	old := h.submit(c, "old message with delayed ACK", directory.StrategyPrimaryOnly)
 	h.work("mesh_0")
+	h.reuseMeshID(old, "0badf00d")
 	h.drain()
 	h.clock.Advance(121 * time.Second)
 	h.esc.Heartbeat()
@@ -376,11 +394,67 @@ func TestReviewRetainedOldACKCannotCompleteNewIntent(t *testing.T) {
 	}
 	fresh := h.submit(c, "new message without any recipient ACK", directory.StrategyPrimaryOnly)
 	h.work("mesh_0")
+	h.reuseMeshID(fresh, "0badf00d")
 	h.drain()
 	h.ack(0x0badf00d, annMesh, 0)
 	s := h.snap(fresh)
 	if s.Intent.Outcome == database.OutcomeDeliveredDevice {
 		t.Fatalf("the delayed ACK for retained old intent %s completed new intent %s: outcome=%s matched_evidence=%+v",
 			old, fresh, s.Intent.Outcome, s.Evidence)
+	}
+}
+
+// countingFallbackMesh is the review's self-picking adapter with a count
+// of its sends.
+type countingFallbackMesh struct {
+	*reviewReceiptMesh
+	calls int
+}
+
+func (m *countingFallbackMesh) SendMessageID(ctx context.Context, req transport.SendRequest) (uint32, error) {
+	m.calls++
+	return m.reviewReceiptMesh.SendMessageID(ctx, req)
+}
+
+// The fix2 closure review's case, in the form it asks for once the
+// fallback is gone: a radio that picks its own id and could answer before
+// telling it is refused before it is called, and the older intent that
+// holds the id it would reuse is not changed.
+func TestReviewReusedIDReceiptBeforeReturnMustStayAmbiguous(t *testing.T) {
+	h := newIntentHarness(t)
+	contact := h.contact(meshAddr(0))
+	old := h.submit(contact, "older unconfirmed transmission", directory.StrategyPrimaryOnly)
+	h.work("mesh_0") // the kits' radio: prepared id
+	h.reuseMeshID(old, "0badf00d")
+	h.drain()
+	h.clock.Advance(121 * time.Second)
+	h.esc.Heartbeat()
+	before := h.snap(old)
+	if before.Intent.Outcome != database.OutcomeAcceptedUnconfirmed {
+		t.Fatalf("old fixture: %s", before.Intent.Outcome)
+	}
+	if _, err := h.db.Exec(`UPDATE delivery_transmissions SET handoff_at = datetime('now', '-2 hours') WHERE intent_id = ?`, old); err != nil {
+		t.Fatal(err)
+	}
+	mesh := &countingFallbackMesh{reviewReceiptMesh: &reviewReceiptMesh{esc: h.esc, id: 0x0badf00d, early: true}}
+	h.workers["mesh_0"].mesh = mesh
+	fresh := h.submit(contact, "new transmission whose ACK overtakes return", directory.StrategyPrimaryOnly)
+	h.work("mesh_0")
+	h.drain()
+	h.esc.Heartbeat()
+	after, newer := h.snap(old), h.snap(fresh)
+	var evidence int
+	if err := h.db.Get(&evidence, `SELECT COUNT(*) FROM delivery_evidence WHERE corr_value = '0badf00d'`); err != nil {
+		t.Fatal(err)
+	}
+	if mesh.calls != 0 || evidence != 0 {
+		t.Fatalf("the self-picking adapter was called %d times, %d answers stored; want refused before any call", mesh.calls, evidence)
+	}
+	if after.Intent.Outcome != before.Intent.Outcome || after.Intent.Version != before.Intent.Version {
+		t.Fatalf("the older intent changed: %s v%d -> %s v%d", before.Intent.Outcome, before.Intent.Version, after.Intent.Outcome, after.Intent.Version)
+	}
+	r := rowsByRound(newer)[1]
+	if newer.Intent.Outcome == database.OutcomeDeliveredDevice || r.Status != database.AttemptNotSent || r.Reason != "skipped_unsupported" || len(newer.Transmissions) != 0 {
+		t.Fatalf("the new intent: %s, row %s/%s, %d transmissions; want not sent before any transmission", newer.Intent.Outcome, r.Status, r.Reason, len(newer.Transmissions))
 	}
 }

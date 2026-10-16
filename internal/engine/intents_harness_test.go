@@ -96,15 +96,14 @@ func (m *fakeIDMesh) SendMessageWithID(_ context.Context, req transport.SendRequ
 	return nil
 }
 
-// pickOwnIDMesh is a radio that chooses its own packet ids (no prepared
-// send): the engine learns the id only when the send returns.
-type pickOwnIDMesh struct {
-	transport.MeshTransport
-	m *fakeIDMesh
-}
-
-func (p pickOwnIDMesh) SendMessageID(ctx context.Context, req transport.SendRequest) (uint32, error) {
-	return p.m.SendMessageID(ctx, req)
+// reuseMeshID gives an intent's mesh transmissions the packet id id, as
+// a radio that reused one would have sent them (the engine itself never
+// hands out an id a kept transmission has).
+func (h *intentHarness) reuseMeshID(intentID string, id string) {
+	h.t.Helper()
+	if _, err := h.db.Exec(`UPDATE delivery_transmissions SET corr_value = ? WHERE intent_id = ? AND corr_kind = ?`, id, intentID, meshCorrKind); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 func (m *fakeIDMesh) SendMessage(ctx context.Context, req transport.SendRequest) error {

@@ -346,11 +346,6 @@ func (e *Escalator) routePlan(addrs []directory.Address, payload []byte) []datab
 	return plan
 }
 
-// meshIDSender is a mesh transport that sends under its own packet id.
-type meshIDSender interface {
-	SendMessageID(ctx context.Context, req transport.SendRequest) (uint32, error)
-}
-
 // paidPathChecker is an LXMF sender that knows whether its path to a
 // destination leaves on a paid link.
 type paidPathChecker interface {
@@ -388,8 +383,8 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 			p.Reason = reasonOffline
 			return p
 		}
-		if _, ok := e.d.mesh.(meshIDSender); !ok || e.d.mesh == nil {
-			p.Reason = reasonUnsupported
+		if _, ok := e.d.mesh.(meshPreparedSender); !ok || e.d.mesh == nil {
+			p.Reason = reasonUnsupported // no send under a packet id chosen first (R-3)
 			return p
 		}
 		size, chainSHA, err := e.meshWireSize(iface.EgressTransforms, payload)
@@ -463,7 +458,7 @@ func (e *Escalator) usable(p database.RoutePlanEntry) bool {
 	}
 	switch p.AdapterMode {
 	case modeMeshUnicast:
-		_, ok := e.d.mesh.(meshIDSender)
+		_, ok := e.d.mesh.(meshPreparedSender)
 		return ok
 	case modeLXMF:
 		if e.d.lxmf == nil {
