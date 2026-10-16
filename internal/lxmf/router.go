@@ -31,6 +31,9 @@ var (
 	ErrLinkFailed         = errors.New("lxmf: link could not be established")
 	ErrTooLarge           = errors.New("lxmf: message needs a resource transfer, not implemented yet")
 	ErrStampCostTooHigh   = errors.New("lxmf: destination requires a stamp cost above the configured maximum")
+	// ErrPaidPath: a free-only send (SendOptions.FreeOnly) whose path
+	// leaves on a paid link. Nothing of the message was sent. [MESHSAT-1584]
+	ErrPaidPath = errors.New("lxmf: the path to the destination leaves on a paid link, which this send may not use")
 )
 
 // Config configures a Router.
@@ -223,9 +226,34 @@ func (r *Router) Send(ctx context.Context, dest [DestLen]byte, content, title []
 // An error wrapping ErrUnknownDestination, ErrNoPath, ErrLinkFailed or
 // ErrStampCostTooHigh means the message itself never left this node.
 func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title []byte, fields Value, wantMethod Method, timestamp float64) (*Message, *SendResult, error) {
+	return r.SendWith(ctx, dest, content, title, fields, wantMethod, SendOptions{Timestamp: timestamp})
+}
+
+// SendOptions are a send's timestamp (SendAt) and its route constraint.
+type SendOptions struct {
+	Timestamp float64
+	// FreeOnly: every packet of this send (path request, link request,
+	// the message, link packets, resource parts) leaves on a free
+	// interface only, whatever the paid policies allow other traffic. A
+	// send whose path is on a paid link sends nothing and returns
+	// ErrPaidPath. A delivery intent's attempt sends this way until paid
+	// routes have a price (B9). [MESHSAT-1584]
+	FreeOnly bool
+}
+
+// SendWith is Send with SendOptions.
+func (r *Router) SendWith(ctx context.Context, dest [DestLen]byte, content, title []byte, fields Value, wantMethod Method, opts SendOptions) (*Message, *SendResult, error) {
+	c := rns.Constraint{FreeOnly: opts.FreeOnly}
+	paid := func(err error) error {
+		if errors.Is(err, rns.ErrPaidRefused) {
+			return fmt.Errorf("%w: %v", ErrPaidPath, err)
+		}
+		return err
+	}
+	timestamp := opts.Timestamp
 	known := r.node.Recall(dest)
 	if known == nil || known.Identity == nil {
-		if !r.node.RequestPath(ctx, dest, PathRequestWait) {
+		if !r.node.RequestPathWith(ctx, dest, PathRequestWait, c) {
 			return nil, nil, ErrUnknownDestination
 		}
 		known = r.node.Recall(dest)
@@ -262,16 +290,19 @@ func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title 
 	}
 	res := &SendResult{Method: method, StampCost: stampCost, Attempts: 1}
 	if !r.node.Paths().Has(dest) {
-		if !r.node.RequestPath(ctx, dest, PathRequestWait) {
+		if !r.node.RequestPathWith(ctx, dest, PathRequestWait, c) {
 			return m, res, ErrNoPath
 		}
+	}
+	if c.FreeOnly && !r.node.FreeInterface(r.node.NextHopInterface(dest)) {
+		return m, res, ErrPaidPath
 	}
 	start := time.Now()
 	switch method {
 	case Opportunistic:
-		rc, err := r.node.SendData(dest, m.Packed[DestLen:], true)
+		rc, err := r.node.SendDataWith(dest, m.Packed[DestLen:], true, c)
 		if err != nil {
-			return m, res, err
+			return m, res, paid(err)
 		}
 		select {
 		case out := <-rc.Done():
@@ -284,8 +315,11 @@ func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title 
 			return m, res, ctx.Err()
 		}
 	case Direct:
-		l, err := r.linkTo(ctx, dest)
+		l, err := r.linkTo(ctx, dest, c)
 		if err != nil {
+			if errors.Is(err, rns.ErrPaidRefused) {
+				return m, res, paid(err)
+			}
 			// No link, no message: what failed was the link request.
 			if !errors.Is(err, ErrLinkFailed) {
 				err = fmt.Errorf("%w: %v", ErrLinkFailed, err)
@@ -293,8 +327,11 @@ func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title 
 			return m, res, err
 		}
 		if m.ContentSize() <= LinkMaxContent {
-			rc, err := r.node.Links().Send(l, m.Packed)
+			rc, err := r.node.Links().SendWith(l, m.Packed, c)
 			if err != nil {
+				if errors.Is(err, rns.ErrPaidRefused) {
+					return m, res, paid(err)
+				}
 				r.forgetLink(l)
 				return m, res, err
 			}
@@ -310,9 +347,9 @@ func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title 
 			}
 		} else {
 			// Larger messages travel as an RNS resource on the link.
-			or, err := r.node.Links().SendResource(l, m.Packed)
+			or, err := r.node.Links().SendResourceWith(l, m.Packed, c)
 			if err != nil {
-				return m, res, err
+				return m, res, paid(err)
 			}
 			select {
 			case out := <-or.Done():
@@ -338,18 +375,18 @@ func (r *Router) SendAt(ctx context.Context, dest [DestLen]byte, content, title 
 
 // linkTo returns an active link to a delivery destination: a backchannel
 // the peer opened, a direct link we already hold, or a new one.
-func (r *Router) linkTo(ctx context.Context, dest [DestLen]byte) (*rns.Link, error) {
+func (r *Router) linkTo(ctx context.Context, dest [DestLen]byte, c rns.Constraint) (*rns.Link, error) {
 	r.mu.Lock()
-	if l := r.backchannel[dest]; l != nil && l.State() == rns.LinkActive {
+	if l := r.backchannel[dest]; l != nil && l.State() == rns.LinkActive && r.node.Links().Allows(l, c) {
 		r.mu.Unlock()
 		return l, nil
 	}
-	if l := r.directLinks[dest]; l != nil && l.State() == rns.LinkActive {
+	if l := r.directLinks[dest]; l != nil && l.State() == rns.LinkActive && r.node.Links().Allows(l, c) {
 		r.mu.Unlock()
 		return l, nil
 	}
 	r.mu.Unlock()
-	l, err := r.node.Links().Initiate(dest)
+	l, err := r.node.Links().InitiateWith(dest, c)
 	if err != nil {
 		return nil, err
 	}

@@ -92,6 +92,10 @@ func lxmfOutcome(hash string, err error) SendOutcome {
 		}
 	}
 	switch {
+	case errors.Is(err, lxmf.ErrPaidPath):
+		// The free-only send found its path on a paid link and sent
+		// nothing; a free path may appear later. [MESHSAT-1584]
+		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "skipped_no_price"}
 	case errors.Is(err, lxmf.ErrUnknownDestination), errors.Is(err, lxmf.ErrNoPath), errors.Is(err, lxmf.ErrLinkFailed):
 		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "not_sent"}
 	case errors.Is(err, lxmf.ErrStampCostTooHigh), errors.Is(err, lxmf.ErrTooLarge):

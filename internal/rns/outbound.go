@@ -18,12 +18,23 @@ var ErrUnknownDestination = errors.New("rns: destination identity unknown")
 // otherwise broadcast on every floodable interface. Returns the interface(s)
 // used.
 func (n *Node) outbound(raw []byte, dest [HashLen]byte, destType byte) ([]string, error) {
+	return n.outboundWith(raw, dest, destType, Constraint{})
+}
+
+// outboundWith is outbound under a constraint: a known path on an
+// interface the constraint refuses sends nothing (ErrPaidRefused); the
+// broadcast without a path goes on the floodable interfaces, which are the
+// free ones. [MESHSAT-1584]
+func (n *Node) outboundWith(raw []byte, dest [HashLen]byte, destType byte, c Constraint) ([]string, error) {
 	hdr, err := reticulum.UnmarshalHeader(raw)
 	if err != nil {
 		return nil, err
 	}
 	if hdr.PacketType != reticulum.PacketAnnounce && destType != reticulum.DestPlain && destType != reticulum.DestGroup {
 		if e := n.paths.Get(dest); e != nil && n.now().Before(e.Expires) {
+			if !c.allows(n, e.Iface) {
+				return nil, ErrPaidRefused
+			}
 			out := raw
 			if !e.Direct() {
 				out = reticulum.RewriteForTransport(raw, e.NextHop)
@@ -58,6 +69,11 @@ func (n *Node) NextHopInterface(dest [HashLen]byte) string {
 // must be known from an announce. The returned Receipt resolves when the
 // destination's proof arrives.
 func (n *Node) SendData(dest [HashLen]byte, plaintext []byte, wantReceipt bool) (*Receipt, error) {
+	return n.SendDataWith(dest, plaintext, wantReceipt, Constraint{})
+}
+
+// SendDataWith is SendData under a constraint (outboundWith). [MESHSAT-1584]
+func (n *Node) SendDataWith(dest [HashLen]byte, plaintext []byte, wantReceipt bool, c Constraint) (*Receipt, error) {
 	k := n.Recall(dest)
 	if k == nil || k.Identity == nil {
 		return nil, ErrUnknownDestination
@@ -87,7 +103,7 @@ func (n *Node) SendData(dest [HashLen]byte, plaintext []byte, wantReceipt bool) 
 			sigPub:  k.Identity.SigningPublicKey()}
 		n.addReceipt(r)
 	}
-	if _, err := n.outbound(raw, dest, reticulum.DestSingle); err != nil {
+	if _, err := n.outboundWith(raw, dest, reticulum.DestSingle, c); err != nil {
 		if r != nil {
 			n.mu.Lock()
 			delete(n.receipts, r.Hash)

@@ -182,6 +182,12 @@ func (n *Node) sendPathRequest(dest [HashLen]byte, ifaceID string, tag [HashLen]
 // RequestPath asks the network for a path and waits up to ctx/timeout for
 // an announce to arrive. Returns true when a path is known afterwards.
 func (n *Node) RequestPath(ctx context.Context, dest [HashLen]byte, timeout time.Duration) bool {
+	return n.RequestPathWith(ctx, dest, timeout, Constraint{})
+}
+
+// RequestPathWith is RequestPath under a constraint: FreeOnly asks on the
+// free interfaces only, never on a paid one. [MESHSAT-1584]
+func (n *Node) RequestPathWith(ctx context.Context, dest [HashLen]byte, timeout time.Duration, c Constraint) bool {
 	if n.paths.Has(dest) {
 		return true
 	}
@@ -194,7 +200,11 @@ func (n *Node) RequestPath(ctx context.Context, dest [HashLen]byte, timeout time
 	n.pathRequests[dest] = n.now()
 	n.mu.Unlock()
 	tag := randomHash()
-	for _, id := range append(n.tx.Floodable(), n.paidTake(dest, paidPathRequest, "")...) {
+	ids := n.tx.Floodable()
+	if !c.FreeOnly {
+		ids = append(ids, n.paidTake(dest, paidPathRequest, "")...)
+	}
+	for _, id := range ids {
 		n.sendPathRequest(dest, id, tag)
 	}
 	select {

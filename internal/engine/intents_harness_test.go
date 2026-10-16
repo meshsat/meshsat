@@ -83,6 +83,30 @@ func (m *fakeIDMesh) SendMessageID(_ context.Context, req transport.SendRequest)
 	return id, nil
 }
 
+// SendMessageWithID is the prepared-id send the kits' radio offers.
+func (m *fakeIDMesh) SendMessageWithID(_ context.Context, req transport.SendRequest, id uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.attempts++
+	if m.err != nil {
+		return m.err
+	}
+	m.sent = append(m.sent, req)
+	m.ids = append(m.ids, id)
+	return nil
+}
+
+// pickOwnIDMesh is a radio that chooses its own packet ids (no prepared
+// send): the engine learns the id only when the send returns.
+type pickOwnIDMesh struct {
+	transport.MeshTransport
+	m *fakeIDMesh
+}
+
+func (p pickOwnIDMesh) SendMessageID(ctx context.Context, req transport.SendRequest) (uint32, error) {
+	return p.m.SendMessageID(ctx, req)
+}
+
 func (m *fakeIDMesh) SendMessage(ctx context.Context, req transport.SendRequest) error {
 	_, err := m.SendMessageID(ctx, req)
 	return err

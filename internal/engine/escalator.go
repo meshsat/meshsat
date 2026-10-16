@@ -236,7 +236,10 @@ func (e *Escalator) Run(ctx context.Context) {
 	}
 }
 
-// Heartbeat persists every active intent's clock and looks at each again.
+// Heartbeat persists every active intent's clock and looks again at every
+// active intent and every closed one something was written about since
+// (dirty): a notice is only a hint, durable state is what is acted on, so
+// a dropped notice or a restart cannot strand a receipt (red-team F-3).
 func (e *Escalator) Heartbeat() {
 	ids, err := e.db.ActiveIntentIDs()
 	if err != nil {
@@ -254,14 +257,22 @@ func (e *Escalator) Heartbeat() {
 	if err := e.db.PersistIntentClocks(persist, e.clock.Wall(), e.clock.WallTrusted()); err != nil {
 		log.Error().Err(err).Msg("delivery intents: persist clocks")
 	}
-	for _, id := range ids {
-		e.Evaluate(id)
-	}
+	e.EvaluateAll()
 }
 
-// EvaluateAll looks at every active intent.
+// ElapsedNow is an intent's elapsed time now, on the Escalator's clock: the
+// worker stamps an acceptance with it.
+func (e *Escalator) ElapsedNow(id string) (int64, bool) {
+	in, err := e.db.GetIntent(id)
+	if err != nil || in.State != database.IntentActive {
+		return 0, false
+	}
+	return e.elapsedMs(id, in.ElapsedMs), true
+}
+
+// EvaluateAll looks at every active intent and every dirty closed one.
 func (e *Escalator) EvaluateAll() {
-	ids, err := e.db.ActiveIntentIDs()
+	ids, err := e.db.IntentsToReview()
 	if err != nil {
 		log.Error().Err(err).Msg("delivery intents: list")
 		return
@@ -310,24 +321,18 @@ func (e *Escalator) Evaluate(id string) {
 // evaluateClosed applies T14: evidence (or an in-flight attempt's
 // outcome) that arrives after an intent closed is recorded and may upgrade
 // its outcome by the D11 rule; it never reopens the intent, never sends.
+// One transaction, which also clears the intent's dirty flag.
 func (e *Escalator) evaluateClosed(id string) {
-	snap, err := e.db.LoadIntentSnapshot(id)
-	if err != nil || snap.Intent.State != database.IntentClosed {
+	up, err := e.db.ReviewClosedIntent(id, func(s *database.IntentSnapshot) (string, bool) {
+		return outcomeRule(s), possibleDuplicate(s)
+	}, func(a, b string) bool { return outcomeStrength(a) > outcomeStrength(b) })
+	if err != nil {
+		log.Error().Err(err).Str("intent", id).Msg("delivery intents: closed review failed")
 		return
 	}
-	best := outcomeRule(snap)
-	dup := possibleDuplicate(snap)
-	if outcomeStrength(best) <= outcomeStrength(snap.Intent.Outcome) {
-		// No stronger outcome; an attempt in flight at the close may still
-		// make a second copy.
-		if dup != snap.Intent.PossibleDuplicate {
-			_, _ = e.db.UpgradeClosedOutcome(id, snap.Intent.Version, "", dup)
-		}
-		return
-	}
-	if ok, err := e.db.UpgradeClosedOutcome(id, snap.Intent.Version, best, dup); err == nil && ok {
-		log.Info().Str("intent", id).Str("from", snap.Intent.Outcome).Str("to", best).Msg("delivery intent: late evidence upgraded the outcome (T14)")
-		e.emitIntent(id, "T14", best)
+	if up != "" {
+		log.Info().Str("intent", id).Str("to", up).Msg("delivery intent: late evidence upgraded the outcome (T14)")
+		e.emitIntent(id, "T14", up)
 	}
 }
 

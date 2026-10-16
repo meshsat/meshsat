@@ -46,6 +46,9 @@ type Link struct {
 	Dest      [HashLen]byte // remote destination (initiator) or local destination (responder)
 	Initiator bool
 	Iface     string
+	// freeOnly: the link was requested under Constraint.FreeOnly, and no
+	// packet of it leaves on an interface that is not free. [MESHSAT-1584]
+	freeOnly bool
 
 	mu            sync.Mutex
 	state         LinkState
@@ -197,6 +200,12 @@ func (m *LinkManager) updateKeepalive(l *Link) {
 
 // Initiate opens a link to a remote destination known from an announce.
 func (m *LinkManager) Initiate(dest [HashLen]byte) (*Link, error) {
+	return m.InitiateWith(dest, Constraint{})
+}
+
+// InitiateWith is Initiate under a constraint: the link request obeys it,
+// and so does every later packet of the link. [MESHSAT-1584]
+func (m *LinkManager) InitiateWith(dest [HashLen]byte, c Constraint) (*Link, error) {
 	n := m.n
 	k := n.Recall(dest)
 	if k == nil || k.Identity == nil {
@@ -232,12 +241,13 @@ func (m *LinkManager) Initiate(dest [HashLen]byte) (*Link, error) {
 	l := &Link{ID: id, Dest: dest, Initiator: true, state: LinkPending, prv: prv, sigPrv: sigPrv,
 		peerSigPub: k.Identity.SigningPublicKey(), destIdentity: k.Identity, mtu: mtu, requestTime: now,
 		establishTO:  time.Duration(reticulum.DefaultPerHopTimeoutSec*hops)*time.Second + 6*time.Second,
-		expectedHops: hops, keepalive: reticulum.KeepaliveMaxSec * time.Second, staleTime: 2 * reticulum.KeepaliveMaxSec * time.Second}
+		expectedHops: hops, keepalive: reticulum.KeepaliveMaxSec * time.Second, staleTime: 2 * reticulum.KeepaliveMaxSec * time.Second,
+		freeOnly: c.FreeOnly}
 	l.mdu = reticulum.LinkMDU(mtu)
 	m.mu.Lock()
 	m.pending[id] = l
 	m.mu.Unlock()
-	ifaces, err := n.outbound(raw, dest, reticulum.DestSingle)
+	ifaces, err := n.outboundWith(raw, dest, reticulum.DestSingle, c)
 	if err != nil {
 		m.mu.Lock()
 		delete(m.pending, id)
@@ -377,13 +387,32 @@ func (m *LinkManager) sendLinkPacket(l *Link, ptype, context byte, data []byte) 
 	if context == reticulum.ContextKeepalive {
 		l.lastKeepalive = l.lastOutbound
 	}
+	if l.freeOnly && !m.n.FreeInterface(l.Iface) {
+		return raw // a free-only link never leaves on a paid interface
+	}
 	m.n.transmit(l.Iface, raw)
 	return raw
+}
+
+// Allows reports whether a send under c may use this link: under FreeOnly
+// only a link on a free interface. [MESHSAT-1584]
+func (m *LinkManager) Allows(l *Link, c Constraint) bool {
+	return l != nil && c.allows(m.n, l.Iface)
 }
 
 // Send encrypts plaintext and sends it as a link DATA packet, returning a
 // receipt that resolves when the peer's proof arrives.
 func (m *LinkManager) Send(l *Link, plain []byte) (*Receipt, error) {
+	return m.SendWith(l, plain, Constraint{})
+}
+
+// SendWith is Send under a constraint: refused (ErrPaidRefused) before
+// anything is encrypted or sent when the link is on an interface the
+// constraint, or the link's own, does not allow. [MESHSAT-1584]
+func (m *LinkManager) SendWith(l *Link, plain []byte, c Constraint) (*Receipt, error) {
+	if (c.FreeOnly || l.freeOnly) && !m.n.FreeInterface(l.Iface) {
+		return nil, ErrPaidRefused
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.state != LinkActive && l.state != LinkStale {

@@ -138,6 +138,16 @@ func mapHash(part []byte, random [resourceRandomHashLen]byte) [resourceMapHashLe
 // SendResource advertises payload on the link and serves it. The returned
 // resource resolves when the receiver proves it.
 func (m *LinkManager) SendResource(l *Link, payload []byte) (*OutgoingResource, error) {
+	return m.SendResourceWith(l, payload, Constraint{})
+}
+
+// SendResourceWith is SendResource under a constraint, checked before the
+// transfer starts; its parts go on the link's interface, which does not
+// change once the link is up. [MESHSAT-1584]
+func (m *LinkManager) SendResourceWith(l *Link, payload []byte, c Constraint) (*OutgoingResource, error) {
+	if (c.FreeOnly || l.freeOnly) && !m.n.FreeInterface(l.Iface) {
+		return nil, ErrPaidRefused
+	}
 	if l.State() != LinkActive && l.State() != LinkStale {
 		return nil, errors.New("rns: link not active")
 	}

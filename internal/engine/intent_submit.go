@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,6 +183,15 @@ func (e *Escalator) Submit(ctx context.Context, req IntentRequest) (*IntentSubmi
 	in.HeartbeatWallAt = &wall
 	in.HeartbeatWallTrusted = e.clock.WallTrusted()
 	in.RoutePlan = e.routePlan(contact.Addresses, req.Body)
+	for i := range in.RoutePlan {
+		if in.RoutePlan[i].Admitted && in.RoutePlan[i].AdapterMode == modeLXMF {
+			ts, err := e.db.AllocateWireTimestampMs(e.clock.Wall().UnixMilli())
+			if err != nil {
+				return nil, err
+			}
+			in.RoutePlan[i].WireTimestampMs = ts
+		}
+	}
 
 	// Round 1 (r3 section 3a): PRIMARY_ONLY the primary route, which
 	// must admit; ORDERED_FALLBACK the first route that admits;
@@ -478,8 +488,10 @@ func (e *Escalator) eligibility(in *database.DeliveryIntent) map[int]bool {
 }
 
 // intentTimestamp is the intent's creation time in seconds, from its
-// UUIDv7 id (the first 48 bits are milliseconds since the epoch): the LXMF
-// timestamp of every attempt, so every copy is one message (B7(d)).
+// UUIDv7 id (the first 48 bits are milliseconds since the epoch). Only a
+// fallback for a plan without an allocated wire timestamp: two intents in
+// one millisecond share it (red-team F-4), so Submit allocates one per
+// route (RoutePlanEntry.WireTimestampMs).
 func intentTimestamp(in database.DeliveryIntent) float64 {
 	if u, err := uuid.Parse(in.ID); err == nil && u.Version() == 7 {
 		var b [8]byte
@@ -521,14 +533,53 @@ func (e *Escalator) buildRow(in database.DeliveryIntent, p database.RoutePlanEnt
 		RouteIndex:  p.RouteIndex,
 	}
 	if p.AdapterMode == modeLXMF {
+		// The route's wire timestamp, allocated at submission (one hash
+		// for every retry, a distinct one per intent), and free_only:
+		// every packet of the send stays off paid links. [MESHSAT-1584]
+		ts := intentTimestamp(in)
+		if p.WireTimestampMs > 0 {
+			ts = float64(p.WireTimestampMs) / 1000
+		}
 		row.Class = database.DeliveryClassLXMF
-		row.Payload, _ = json.Marshal(map[string]any{"content": text, "title": "", "ts": intentTimestamp(in)})
+		row.Payload, _ = json.Marshal(map[string]any{"content": text, "title": "", "ts": ts, "free_only": true})
 	}
 	if e.d != nil && e.d.signing != nil {
 		row.Signature = e.d.signing.Sign(row.Payload)
 		row.SignerID = e.d.signing.SignerID()
 	}
 	return row
+}
+
+// meshCorrKind and meshCorrWindowS: a mesh transmission is named by its
+// packet id on its interface, for an hour after the handoff. The firmware
+// acknowledges within seconds; the window bounds what a reused id can be
+// confused with, and two transmissions under one id inside it make the
+// answer ambiguous (red-team A-14). [MESHSAT-1584]
+const (
+	meshCorrKind    = "mesh_packet_id"
+	meshCorrWindowS = 3600
+)
+
+// classifyMeshReceipt says what a ROUTING_APP answer stored as e proves of
+// the one transmission t it names: from the destination with no error,
+// the destination radio's acknowledgement; with no error from another node
+// (a relay, our own radio's implicit acknowledgement), nothing; any error,
+// that no acknowledgement will come.
+func classifyMeshReceipt(t database.DeliveryTransmission, e database.DeliveryEvidence) (event, source, trust, completes string) {
+	reason, name := uint64(0), "NONE"
+	if parts := strings.SplitN(e.Event, ":", 3); len(parts) == 3 && parts[0] == "routing" {
+		reason, _ = strconv.ParseUint(parts[1], 10, 32)
+		name = parts[2]
+	}
+	switch {
+	case reason == 0 && e.CorrPeer == t.CorrPeer:
+		return "ack", "destination_node", "unauthenticated", database.OutcomeDeliveredDevice
+	case reason == 0:
+		return "relay_ack", "radio", "unauthenticated", ""
+	case e.CorrPeer == t.CorrPeer:
+		return "nak:" + name, "destination_node", "unauthenticated", ""
+	}
+	return "nak:" + name, "radio", "unauthenticated", ""
 }
 
 // MeshRoutingReceipt takes a ROUTING_APP packet from the mesh (r3 B7(a)):
@@ -543,26 +594,21 @@ func (e *Escalator) MeshRoutingReceipt(ifaceID string, msg transport.MeshMessage
 	if e == nil || msg.RequestID == 0 {
 		return
 	}
-	reason, name := uint32(0), "ACK"
+	reason, name := uint32(0), "NONE"
 	if msg.Routing != nil {
-		reason, name = msg.Routing.ErrorReason, msg.Routing.ErrorName
-	}
-	from := fmt.Sprintf("!%08x", msg.From)
-	ev := database.DeliveryEvidence{
-		Source: "radio", Event: "routing:" + name, Trust: "unauthenticated",
-		CorrKind: "mesh_packet_id", CorrValue: fmt.Sprintf("%08x", msg.RequestID), CorrScope: ifaceID, CorrPeer: from,
-	}
-	stored, err := e.db.RecordEvidence(ev, func(t database.DeliveryTransmission) (string, string, string, string) {
-		switch {
-		case reason == 0 && from == t.CorrPeer:
-			return "ack", "destination_node", "unauthenticated", database.OutcomeDeliveredDevice
-		case reason == 0:
-			return "relay_ack", "radio", "unauthenticated", ""
-		case from == t.CorrPeer:
-			return "nak:" + name, "destination_node", "unauthenticated", ""
-		default:
-			return "nak:" + name, "radio", "unauthenticated", ""
+		reason = msg.Routing.ErrorReason
+		if msg.Routing.ErrorName != "" {
+			name = msg.Routing.ErrorName
 		}
+	}
+	// What the answer said, kept with it: an answer that overtakes its
+	// send's finalization is matched later from this (reconcile).
+	ev := database.DeliveryEvidence{
+		Source: "radio", Event: fmt.Sprintf("routing:%d:%s", reason, name), Trust: "unauthenticated",
+		CorrKind: meshCorrKind, CorrValue: fmt.Sprintf("%08x", msg.RequestID), CorrScope: ifaceID, CorrPeer: fmt.Sprintf("!%08x", msg.From),
+	}
+	stored, err := e.db.RecordEvidence(ev, meshCorrWindowS, func(t database.DeliveryTransmission) (string, string, string, string) {
+		return classifyMeshReceipt(t, ev)
 	})
 	if err != nil {
 		return

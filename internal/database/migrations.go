@@ -1546,6 +1546,13 @@ var migrations = []string{
 		valid_from   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		free         INTEGER NOT NULL DEFAULT 0
 	);`,
+
+	// v63: a delivery intent is dirty from any write that can change what
+	// is known about it (a finalized transmission, matched evidence) until
+	// the Escalator has looked at it, open or closed, so a lost notice or
+	// a restart never strands durable evidence (red-team F-3). [MESHSAT-1584]
+	`ALTER TABLE delivery_intents ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
+	CREATE INDEX IF NOT EXISTS idx_delivery_intents_dirty ON delivery_intents(dirty) WHERE dirty = 1;`,
 }
 
 func (db *DB) migrate() error {

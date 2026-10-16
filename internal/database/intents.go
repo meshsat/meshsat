@@ -104,8 +104,14 @@ type RoutePlanEntry struct {
 	// establishes (delivered_device, accepted_destination_node); empty
 	// when the route has no receipt that proves arrival.
 	CompletionRule string `json:"completion_rule,omitempty"`
-	QueueAllowS    int    `json:"queue_allow_s"`
-	ReceiptAllowS  int    `json:"receipt_allow_s"`
+	// WireTimestampMs is the LXMF timestamp of every attempt on this
+	// route, allocated once at submission (AllocateWireTimestampMs): part
+	// of the message hash, so the intent's retries are one message, and
+	// no two intents share one, so two intentional messages with the same
+	// text stay two (r3 D10). [MESHSAT-1584]
+	WireTimestampMs int64 `json:"wire_ts_ms,omitempty"`
+	QueueAllowS     int   `json:"queue_allow_s"`
+	ReceiptAllowS   int   `json:"receipt_allow_s"`
 	// EscalateUnconfirmed: escalate after an accepted, unconfirmed
 	// attempt on this route once its receipt allowance has passed (r3 D6,
 	// off by default). A route with a completion rule always may (T5).
@@ -613,8 +619,24 @@ func (db *DB) AuthorizeTransmission(attemptID int64, gen int, unitKind string, u
 // MarkTransmissionHandedOff records that the adapter is about to be called:
 // from here on the outcome is unknown until finalization (r3 D5 step 2).
 func (db *DB) MarkTransmissionHandedOff(txID int64) error {
-	res, err := db.Exec(`UPDATE delivery_transmissions SET state = 'handed_off', handoff_at = datetime('now')
-		WHERE id = ? AND state = 'authorized'`, txID)
+	return db.MarkTransmissionHandedOffWith(txID, Correlation{})
+}
+
+// Correlation is what later evidence must carry to name a transmission:
+// kind and value within a scope (the interface); peer is who it went to.
+type Correlation struct {
+	Kind, Value, Scope, Peer string
+}
+
+// MarkTransmissionHandedOffWith is MarkTransmissionHandedOff with the
+// correlation the send will carry, prepared before the call (a mesh packet
+// id): a receipt that comes back before finalization, or after a stop
+// between the send and finalization, still finds its transmission
+// (red-team F-2). [MESHSAT-1584]
+func (db *DB) MarkTransmissionHandedOffWith(txID int64, c Correlation) error {
+	res, err := db.Exec(`UPDATE delivery_transmissions SET state = 'handed_off', handoff_at = datetime('now'),
+		corr_kind = ?, corr_value = ?, corr_scope = ?, corr_peer = ?
+		WHERE id = ? AND state = 'authorized'`, c.Kind, c.Value, c.Scope, c.Peer, txID)
 	if err != nil {
 		return fmt.Errorf("handoff %d: %w", txID, err)
 	}
@@ -643,7 +665,20 @@ type TransmissionResult struct {
 	// Evidence that came back within the call (an LXMF proof), matched to
 	// this transmission in the same transaction.
 	Evidence []DeliveryEvidence
+	// AcceptedElapsedMs is the intent's elapsed time at acceptance, from
+	// the Escalator's clock: the receipt allowance runs from it.
+	AcceptedElapsedMs *int64
+	// Reconcile classifies evidence stored before this transmission's
+	// correlation was known (a receipt that overtook the finalization):
+	// matched now when this transmission is its only candidate (F-2).
+	Reconcile EvidenceReclassifier
+	// MatchWindowS bounds the evidence Reconcile looks at, from the handoff.
+	MatchWindowS int
 }
+
+// EvidenceReclassifier says what stored evidence proves of the one
+// transmission it turned out to name.
+type EvidenceReclassifier func(t DeliveryTransmission, e DeliveryEvidence) (event, source, trust, completes string)
 
 // FinalizeTransmission settles one transmission in one transaction (G1):
 // its outcome, correlation and charge; the end of its reservation, on the
@@ -688,12 +723,26 @@ func finalizeTx(tx *sqlx.Tx, txID int64, r TransmissionResult) (string, error) {
 		possible = reserved
 		chargeState = "possible"
 	}
+	// A correlation prepared at the handoff stays when the result names
+	// none (an error after a send that may have gone out keeps its id).
+	if r.CorrKind == "" {
+		r.CorrKind, r.CorrValue, r.CorrScope, r.CorrPeer = t.CorrKind, t.CorrValue, t.CorrScope, t.CorrPeer
+	}
 	if _, err := tx.Exec(`UPDATE delivery_transmissions SET state = 'done', outcome_class = ?, retryable = ?, accepted_by = ?,
 		corr_kind = ?, corr_value = ?, corr_scope = ?, corr_peer = ?, charged_units = ?, charged_minor = ?,
 		possible_minor = ?, reserved_minor = 0, charge_state = ?, detail = ?, finished_at = datetime('now')
 		WHERE id = ?`, r.Class, boolInt(r.Retryable), r.AcceptedBy, r.CorrKind, r.CorrValue, r.CorrScope, r.CorrPeer,
 		r.ChargedUnits, charged, possible, chargeState, r.Detail, txID); err != nil {
 		return "", fmt.Errorf("finalize %d: transmission: %w", txID, err)
+	}
+	t.CorrKind, t.CorrValue, t.CorrScope, t.CorrPeer = r.CorrKind, r.CorrValue, r.CorrScope, r.CorrPeer
+	if _, err := tx.Exec(`UPDATE delivery_intents SET dirty = 1 WHERE id = ?`, t.IntentID); err != nil {
+		return "", fmt.Errorf("finalize %d: dirty: %w", txID, err)
+	}
+	if r.Reconcile != nil && t.CorrKind != "" {
+		if err := reconcileTx(tx, *t, r.Reconcile, r.MatchWindowS); err != nil {
+			return "", err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE delivery_intents SET reserved_minor = reserved_minor - ?, incurred_minor = incurred_minor + ?,
 		possible_minor = possible_minor + ?, updated_at = datetime('now') WHERE id = ?`, reserved, charged, possible, t.IntentID); err != nil {
@@ -714,7 +763,8 @@ func finalizeTx(tx *sqlx.Tx, txID int64, r TransmissionResult) (string, error) {
 	switch r.Class {
 	case ClassAccepted:
 		_, err = tx.Exec(`UPDATE message_deliveries SET status = 'accepted', outcome_class = 'accepted', accepted_at = datetime('now'),
-			last_error = '', channel_ref = ?, reason = 'sent', updated_at = datetime('now') WHERE id = ?`, r.CorrValue, t.AttemptID)
+			accepted_elapsed_ms = ?, last_error = '', channel_ref = ?, reason = 'sent', updated_at = datetime('now') WHERE id = ?`,
+			r.AcceptedElapsedMs, r.CorrValue, t.AttemptID)
 	case ClassUnknown:
 		_, err = tx.Exec(`UPDATE message_deliveries SET status = 'unknown', outcome_class = 'unknown', last_error = ?,
 			reason = 'withheld_outcome_unknown', updated_at = datetime('now') WHERE id = ?`, r.Detail, t.AttemptID)
@@ -923,29 +973,110 @@ func insertEvidenceTx(tx *sqlx.Tx, e DeliveryEvidence) (int64, error) {
 // nothing).
 type EvidenceClassifier func(t DeliveryTransmission) (event, source, trust, completes string)
 
-// RecordEvidence stores evidence and matches it by the fields it carries
-// itself (r3 D18): the transmissions with its correlation kind and value
-// within its scope, open or closed. Exactly one: matched, and classify
-// says what it proves. None: stored unmatched. More than one: stored
-// ambiguous with the candidates; it completes nothing. Returns the stored
-// row.
-func (db *DB) RecordEvidence(e DeliveryEvidence, classify EvidenceClassifier) (DeliveryEvidence, error) {
-	err := db.withTx(func(tx *sqlx.Tx) error {
-		rows, err := tx.Query(`SELECT `+transmissionColumns+` FROM delivery_transmissions
-			WHERE corr_kind = ? AND corr_value = ? AND corr_scope = ?`, e.CorrKind, e.CorrValue, e.CorrScope)
+// candidatesTx are the transmissions a piece of evidence can name: its
+// correlation kind and value within its scope, handed off no longer than
+// windowS before the evidence arrived (0 = no bound). A reference used
+// again after the window names only the newer transmission; two inside it
+// are ambiguous.
+func candidatesTx(tx *sqlx.Tx, kind, value, scope, receivedAt string, windowS int) ([]DeliveryTransmission, error) {
+	q := `SELECT ` + transmissionColumns + ` FROM delivery_transmissions WHERE corr_kind = ? AND corr_value = ? AND corr_scope = ?`
+	args := []any{kind, value, scope}
+	if windowS > 0 {
+		q += ` AND handoff_at IS NOT NULL AND handoff_at <= datetime(?) AND datetime(handoff_at, '+' || ? || ' seconds') >= datetime(?)`
+		args = append(args, receivedAt, windowS, receivedAt)
+	}
+	rows, err := tx.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("match evidence: %w", err)
+	}
+	defer rows.Close()
+	var cands []DeliveryTransmission
+	for rows.Next() {
+		t, err := scanTransmission(rows)
 		if err != nil {
-			return fmt.Errorf("match evidence: %w", err)
+			return nil, err
 		}
-		var cands []DeliveryTransmission
-		for rows.Next() {
-			t, err := scanTransmission(rows)
-			if err != nil {
-				rows.Close()
+		cands = append(cands, *t)
+	}
+	return cands, rows.Err()
+}
+
+// reconcileTx matches the unmatched evidence stored for a correlation that
+// is only now known, under the same rule as RecordEvidence: matched when
+// t is its only candidate, ambiguous when there are more.
+func reconcileTx(tx *sqlx.Tx, t DeliveryTransmission, classify EvidenceReclassifier, windowS int) error {
+	rows, err := tx.Query(`SELECT `+evidenceColumns+` FROM delivery_evidence
+		WHERE matched = 0 AND ambiguous = 0 AND corr_kind = ? AND corr_value = ? AND corr_scope = ?`, t.CorrKind, t.CorrValue, t.CorrScope)
+	if err != nil {
+		return fmt.Errorf("reconcile: %w", err)
+	}
+	var evs []DeliveryEvidence
+	for rows.Next() {
+		e, err := scanEvidence(rows)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		evs = append(evs, *e)
+	}
+	rows.Close()
+	for _, e := range evs {
+		cands, err := candidatesTx(tx, e.CorrKind, e.CorrValue, e.CorrScope, e.ReceivedAt, windowS)
+		if err != nil {
+			return err
+		}
+		switch {
+		case len(cands) == 1 && cands[0].ID == t.ID:
+			event, source, trust, completes := classify(t, e)
+			if _, err := tx.Exec(`UPDATE delivery_evidence SET matched = 1, intent_id = ?, attempt_id = ?, transmission_id = ?,
+				event = ?, source = ?, trust = ?, completes = ? WHERE id = ?`,
+				t.IntentID, t.AttemptID, t.ID, event, source, trust, completes, e.ID); err != nil {
+				return fmt.Errorf("reconcile %d: %w", e.ID, err)
+			}
+			if _, err := tx.Exec(`UPDATE delivery_intents SET dirty = 1 WHERE id = ?`, t.IntentID); err != nil {
 				return err
 			}
-			cands = append(cands, *t)
+		case len(cands) > 1:
+			var ids []int64
+			for _, c := range cands {
+				ids = append(ids, c.ID)
+			}
+			b, _ := json.Marshal(ids)
+			if _, err := tx.Exec(`UPDATE delivery_evidence SET ambiguous = 1, candidates = ? WHERE id = ?`, string(b), e.ID); err != nil {
+				return fmt.Errorf("reconcile %d: %w", e.ID, err)
+			}
 		}
-		rows.Close()
+	}
+	return nil
+}
+
+// CorrelationInUse reports whether a correlation value is still live: a
+// transmission in that scope handed off under it within windowS seconds.
+// A sender that picks its own references (mesh packet ids) picks another.
+func (db *DB) CorrelationInUse(kind, value, scope string, windowS int) (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM delivery_transmissions WHERE corr_kind = ? AND corr_value = ? AND corr_scope = ?
+		AND (handoff_at IS NULL OR datetime(handoff_at, '+' || ? || ' seconds') >= datetime('now'))`, kind, value, scope, windowS).Scan(&n)
+	return n > 0, err
+}
+
+// RecordEvidence stores evidence and matches it by the fields it carries
+// itself (r3 D18): the transmissions with its correlation kind and value
+// within its scope, open or closed, handed off within windowS seconds
+// (0 = no bound). Exactly one: matched, and classify says what it proves.
+// None: stored unmatched (a later finalization may still reconcile it).
+// More than one: stored ambiguous with the candidates; it completes
+// nothing. Returns the stored row.
+func (db *DB) RecordEvidence(e DeliveryEvidence, windowS int, classify EvidenceClassifier) (DeliveryEvidence, error) {
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		var now string
+		if err := tx.QueryRow(`SELECT datetime('now')`).Scan(&now); err != nil {
+			return err
+		}
+		cands, err := candidatesTx(tx, e.CorrKind, e.CorrValue, e.CorrScope, now, windowS)
+		if err != nil {
+			return err
+		}
 		switch len(cands) {
 		case 0:
 			e.Matched, e.Completes = false, ""
@@ -963,6 +1094,9 @@ func (db *DB) RecordEvidence(e DeliveryEvidence, classify EvidenceClassifier) (D
 		}
 		id, err := insertEvidenceTx(tx, e)
 		e.ID = id
+		if err == nil && e.Matched {
+			_, err = tx.Exec(`UPDATE delivery_intents SET dirty = 1 WHERE id = ?`, e.IntentID)
+		}
 		return err
 	})
 	return e, err
@@ -1011,6 +1145,10 @@ func (db *DB) ApplyIntentChange(intentID string, decide func(*IntentSnapshot) *I
 	err := db.withTx(func(tx *sqlx.Tx) error {
 		snap, err := loadSnapshotTx(tx, intentID)
 		if err != nil {
+			return err
+		}
+		// Looked at: whatever made it dirty is now in this decision.
+		if _, err := tx.Exec(`UPDATE delivery_intents SET dirty = 0 WHERE id = ?`, intentID); err != nil {
 			return err
 		}
 		ch := decide(snap)
@@ -1108,6 +1246,71 @@ func (db *DB) ApplyIntentChange(intentID string, decide func(*IntentSnapshot) *I
 		return nil
 	})
 	return applied, err
+}
+
+// ReviewClosedIntent looks at a closed intent in one transaction (T14):
+// decide returns the outcome the D11 rule gives now and the possible
+// duplicate; a stronger outcome is recorded (version + 1), never a reopen,
+// never a send; the dirty flag is cleared. stronger orders outcomes.
+// Returns the outcome when it was upgraded.
+func (db *DB) ReviewClosedIntent(intentID string, decide func(*IntentSnapshot) (string, bool), stronger func(a, b string) bool) (string, error) {
+	var upgraded string
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		snap, err := loadSnapshotTx(tx, intentID)
+		if err != nil {
+			return err
+		}
+		if snap.Intent.State != IntentClosed {
+			return nil
+		}
+		if _, err := tx.Exec(`UPDATE delivery_intents SET dirty = 0 WHERE id = ?`, intentID); err != nil {
+			return err
+		}
+		best, dup := decide(snap)
+		if dup != snap.Intent.PossibleDuplicate {
+			if _, err := tx.Exec(`UPDATE delivery_intents SET possible_duplicate = ? WHERE id = ?`, boolInt(dup), intentID); err != nil {
+				return err
+			}
+		}
+		if stronger(best, snap.Intent.Outcome) {
+			if _, err := tx.Exec(`UPDATE delivery_intents SET outcome = ?, version = version + 1, last_transition = 'T14',
+				updated_at = datetime('now') WHERE id = ?`, best, intentID); err != nil {
+				return fmt.Errorf("T14: %w", err)
+			}
+			upgraded = best
+		}
+		return nil
+	})
+	return upgraded, err
+}
+
+// IntentsToReview are the intents the Escalator must look at: every active
+// one, and every closed one something was written about since it last
+// looked (dirty).
+func (db *DB) IntentsToReview() ([]string, error) {
+	rows, err := db.Query(`SELECT id FROM delivery_intents WHERE state = 'active' OR dirty = 1 ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("intents to review: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// HasIntents reports whether any delivery intent is kept, open or closed:
+// while one is, its transmissions can still be answered, and the
+// Escalator runs to take the answers in.
+func (db *DB) HasIntents() (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM delivery_intents LIMIT 1)`).Scan(&n)
+	return n > 0, err
 }
 
 // UpgradeClosedOutcome sets a closed intent's outcome from late evidence
@@ -1212,6 +1415,35 @@ func parseSQLiteTime(s string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// ---- wire identity (r3 D10) ----
+
+const wireTimestampKey = "intent_wire_ts_last_ms"
+
+// AllocateWireTimestampMs hands out an LXMF wire timestamp in milliseconds:
+// nowMs, or one past the last one handed out, whichever is later, so every
+// allocation is distinct and none goes back in time. The last value is
+// kept in system_config, so a restart does not hand one out again.
+// [MESHSAT-1584]
+func (db *DB) AllocateWireTimestampMs(nowMs int64) (int64, error) {
+	var next int64
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		var raw string
+		err := tx.QueryRow(`SELECT value FROM system_config WHERE key = ?`, wireTimestampKey).Scan(&raw)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		last, _ := strconv.ParseInt(raw, 10, 64)
+		next = nowMs
+		if next <= last {
+			next = last + 1
+		}
+		_, err = tx.Exec(`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, datetime('now'))
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`, wireTimestampKey, strconv.FormatInt(next, 10))
+		return err
+	})
+	return next, err
 }
 
 // ---- tariffs (r3 D8) ----
