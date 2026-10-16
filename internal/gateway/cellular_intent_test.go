@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,15 +15,18 @@ import (
 
 type submitCell struct {
 	*fakeCellTransport
-	res  transport.SMSSubmit
-	err  error
-	sent []string
+	res    transport.SMSSubmit
+	err    error
+	bundle error // what SMSBundleCheck answers
+	sent   []string
 }
 
 func (c *submitCell) SubmitSMS(_ context.Context, to, text string) (transport.SMSSubmit, error) {
 	c.sent = append(c.sent, to+" "+text)
 	return c.res, c.err
 }
+
+func (c *submitCell) SMSBundleCheck(int) error { return c.bundle }
 
 func smsIntentGateway(t *testing.T, cell transport.CellTransport, cfg CellularConfig) (*CellularGateway, *database.DB) {
 	t.Helper()
@@ -121,28 +125,34 @@ func TestSMSIntent_UnfinishedIsUnknown(t *testing.T) {
 	}
 }
 
-// r3 D8: with a prepaid bundle set, an intent SMS goes only while one is
-// left; refused at admission and again before the send, with no modem call.
+// r3 D8: a spent bundle refuses at admission (no modem call) and, when the
+// modem's I/O loop refuses the hold, the send is not sent and not retried
+// on this route; a counter not set up yet is a route not ready, which
+// waits (B9FIX-R1, R3).
 func TestSMSIntent_BundleGate(t *testing.T) {
-	db := newBudgetDB(t)
-	b := NewSMSBudget(db, "kitA", SMSBudgetOptions{Size: 2, WarnAt: 1}, (&fakeSender{}).send)
-	SetSMSBundleGate(b.Allow)
-	t.Cleanup(func() { SetSMSBundleGate(nil) })
-	cell := &submitCell{fakeCellTransport: newFakeCellTransport(), res: transport.SMSSubmit{Phase: transport.SMSAccepted, Ref: 1}}
+	spent := fmt.Errorf("%w: 0 of 2 left", transport.ErrSMSBundle)
+	cell := &submitCell{fakeCellTransport: newFakeCellTransport(), bundle: spent}
 	gw, _ := smsIntentGateway(t, cell, CellularConfig{})
-	if r, _ := gw.IntentAdmit("+31612345678", []byte("hello"), false); r != "" {
-		t.Fatalf("bundle with 2 left refused: %s", r)
-	}
-	b.Record("+31612345678", "one")
-	b.Record("+31612345678", "two")
 	r, detail := gw.IntentAdmit("+31612345678", []byte("hello"), false)
 	o := gw.IntentSend(context.Background(), IntentSend{Destination: "+31612345678", Text: "hello", CorrValue: "c2"})
-	if r != "skipped_budget" || o.Class != IntentNotSent || o.Reason != "skipped_budget" || len(cell.sent) != 0 {
+	if r != "skipped_budget" || o.Class != IntentNotSent || o.Reason != "skipped_budget" || o.Retryable || len(cell.sent) != 0 {
 		t.Fatalf("spent bundle: admit %q (%s), send %+v, %d modem calls; want skipped_budget and no call", r, detail, o, len(cell.sent))
 	}
-	// No bundle configured: nothing to count against, nothing refused.
-	nb := NewSMSBudget(newBudgetDB(t), "kitB", SMSBudgetOptions{}, (&fakeSender{}).send)
-	if ok, why := nb.Allow(1); !ok {
-		t.Fatalf("no bundle refused: %s", why)
+
+	// The snapshot allowed it, the hold on the loop did not.
+	cell = &submitCell{fakeCellTransport: newFakeCellTransport(), res: transport.SMSSubmit{Phase: transport.SMSNotSent}, err: spent}
+	gw, _ = smsIntentGateway(t, cell, CellularConfig{})
+	if o := gw.IntentSend(context.Background(), IntentSend{Destination: "+31612345678", Text: "hello", CorrValue: "c3"}); o.Class != IntentNotSent || o.Reason != "skipped_budget" || o.Retryable {
+		t.Fatalf("hold refused on the loop: %+v; want not sent, skipped_budget, not retryable", o)
+	}
+
+	notReady := &submitCell{fakeCellTransport: newFakeCellTransport(), bundle: transport.ErrSMSBundleNotReady,
+		res: transport.SMSSubmit{Phase: transport.SMSNotSent}, err: transport.ErrSMSBundleNotReady}
+	gw, _ = smsIntentGateway(t, notReady, CellularConfig{})
+	if r, _ := gw.IntentAdmit("+31612345678", []byte("hello"), false); r != "skipped_offline" {
+		t.Fatalf("no counter yet: admit %q; want skipped_offline", r)
+	}
+	if o := gw.IntentSend(context.Background(), IntentSend{Destination: "+31612345678", Text: "hello", CorrValue: "c4"}); o.Class != IntentNotSent || o.Reason != "skipped_offline" || !o.Retryable || o.ConsumeRetry {
+		t.Fatalf("no counter yet: %+v; want not sent, skipped_offline, retryable without spending a retry", o)
 	}
 }

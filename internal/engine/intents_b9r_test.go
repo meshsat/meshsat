@@ -111,3 +111,42 @@ func TestIntentB9R_PriceBounds(t *testing.T) {
 		}
 	})
 }
+
+// B9FIX-R3 on the engine: a route not ready at the send (its bundle counter
+// not set up yet) waits without a transmission and without spending a
+// retry, and goes once it is ready; a spent bundle ends the attempt.
+func TestIntentB9R_RouteNotReadyWaits(t *testing.T) {
+	h := newIntentHarness(t)
+	f := &fakeSMS{answer: gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "carrier", Charged: true, ChargedUnits: 1}}
+	useSMS(t, h, f)
+	smsTariff(t, h, 3)
+	id := h.submit(smsContact(h), "x", directory.StrategyPrimaryOnly)
+	f.setAdmit("skipped_offline")
+	h.work("cellular_0")
+	h.drain()
+	s := h.snap(id)
+	if f.count() != 0 || len(s.Transmissions) != 0 || len(s.Rows) != 1 || s.Rows[0].Status == database.AttemptNotSent || s.Rows[0].Retries != 0 {
+		t.Fatalf("not ready: %d sends, %d transmissions, attempts %+v; want it waiting, no retry spent", f.count(), len(s.Transmissions), s.Rows)
+	}
+	f.setAdmit("")
+	h.due()
+	h.work("cellular_0")
+	h.drain()
+	if s := h.snap(id); f.count() != 1 || len(s.Transmissions) != 1 {
+		t.Fatalf("once ready: %d sends, %d transmissions; want one", f.count(), len(s.Transmissions))
+	}
+
+	h2 := newIntentHarness(t)
+	f2 := &fakeSMS{admit: "skipped_budget"}
+	useSMS(t, h2, f2)
+	smsTariff(t, h2, 3)
+	f2.setAdmit("")
+	id2 := h2.submit(smsContact(h2), "x", directory.StrategyPrimaryOnly)
+	f2.setAdmit("skipped_budget")
+	h2.work("cellular_0")
+	h2.drain()
+	rows2 := h2.snap(id2).Rows
+	if f2.count() != 0 || len(rows2) != 1 || rows2[0].Status != database.AttemptNotSent || rows2[0].Reason != "skipped_budget" {
+		t.Fatalf("spent bundle: %d sends, attempts %+v; want not sent, skipped_budget", f2.count(), rows2)
+	}
+}

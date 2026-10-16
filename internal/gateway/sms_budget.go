@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -21,10 +20,19 @@ import (
 // SMSBudget counts the SMS segments the network accepted (+CMGS) against a
 // prepaid bundle, so an empty prepaid card is announced before it happens
 // instead of showing up as a lane that silently stopped delivering
-// (parallax, 15 Sep 2026). The count hangs off the transport's sent hook,
-// so every send path is counted: gateway relays, OOB frames, the API test
-// send and the Reticulum SMS interface. State lives in system_config and
-// survives restarts; a top-up is recorded with Reset. [MESHSAT-1161]
+// (parallax, 15 Sep 2026). The serial modem holds every SMS's share on its
+// I/O loop (transport.SMSSpend, HoldSMS), so every send path is counted:
+// gateway relays, OOB frames, the API test send and the Reticulum SMS
+// interface; the ModemManager modem reports accepted SMS to Record. State
+// lives in system_config and survives restarts; a top-up is recorded with
+// Reset. [MESHSAT-1161]
+//
+// Three counts (B9FIX-R1, R2): sent is what the network accepted (+CMGS);
+// uncertain is what went to the modem without a +CMGS (a bare OK, no
+// answer), which may have been billed, kept across a restart until the
+// next top-up replaces the figures; held is the share of the SMS command
+// running now. What is left is the size less all three, and a delivery
+// intent's SMS goes only while that covers it (r3 D8). [MESHSAT-1584]
 //
 // Thresholds: at or below WarnAt segments left the target reports degraded,
 // a warning is logged, an SSE event goes out and, when an alert number is
@@ -36,6 +44,8 @@ type SMSBudget struct {
 	kit          string
 	size         int
 	sent         int
+	uncertain    int // went to the modem without a +CMGS; persisted
+	held         int // the SMS command running now; in memory only
 	warnAt       int
 	alertNumber  string
 	resetAt      time.Time
@@ -54,6 +64,7 @@ type SMSBudget struct {
 const (
 	cfgSMSBundleSize    = "sms_bundle_size"
 	cfgSMSBundleSent    = "sms_bundle_sent"
+	cfgSMSBundleUnsure  = "sms_bundle_uncertain"
 	cfgSMSBundleResetAt = "sms_bundle_reset_at"
 	cfgSMSBundleWarnAt  = "sms_bundle_warn_at"
 	cfgSMSAlertNumber   = "sms_alert_number"
@@ -97,6 +108,7 @@ func NewSMSBudget(db *database.DB, kit string, opts SMSBudgetOptions, send func(
 	b := &SMSBudget{db: db, kit: kit, send: send, now: time.Now}
 	b.size = b.loadInt(cfgSMSBundleSize, opts.Size)
 	b.sent = b.loadInt(cfgSMSBundleSent, 0)
+	b.uncertain = max(b.loadInt(cfgSMSBundleUnsure, 0), 0)
 	b.warnAt = b.loadInt(cfgSMSBundleWarnAt, opts.WarnAt)
 	b.alertNumber = b.loadStr(cfgSMSAlertNumber, opts.AlertNumber)
 	b.alerted = b.loadInt(cfgSMSBundleAlerted, 0) == 1
@@ -174,8 +186,101 @@ func (b *SMSBudget) Record(to, text string) {
 	segs := SMSSegments(text)
 	b.sent += segs
 	b.store(cfgSMSBundleSent, strconv.Itoa(b.sent))
-	remaining := b.size - b.sent
-	log.Info().Str("to", to).Int("segments", segs).Int("sent", b.sent).Int("size", b.size).Int("remaining", remaining).
+	log.Info().Str("to", to).Int("segments", segs).Int("sent", b.sent).Int("size", b.size).Int("remaining", b.leftLocked()).
+		Msg("sms budget: segment counted")
+	b.checkLocked()
+}
+
+// leftLocked is what the bundle still covers: the size less what was
+// accepted, what may have gone and what the running command holds.
+func (b *SMSBudget) leftLocked() int { return b.size - b.sent - b.uncertain - b.held }
+
+// HoldSMS implements transport.SMSSpend: the share of one SMS, taken on
+// the modem's I/O loop before its first byte. A delivery intent's SMS
+// (enforce) is refused when what is left does not cover it (r3 D8,
+// B9FIX-R1); every other send path is counted only. Without a bundle
+// nothing is counted or refused.
+func (b *SMSBudget) HoldSMS(to, text string, enforce bool) (transport.SMSHold, error) {
+	segs := SMSSegments(text)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.size <= 0 {
+		return smsNoHold{}, nil
+	}
+	if left := b.leftLocked(); enforce && left < segs {
+		return nil, fmt.Errorf("%w: %s", transport.ErrSMSBundle, b.shortLocked(left, segs))
+	}
+	b.held += segs
+	return &smsHold{b: b, to: to, segs: segs}, nil
+}
+
+func (b *SMSBudget) shortLocked(left, segs int) string {
+	s := fmt.Sprintf("the prepaid SMS bundle has %d of %d left, this SMS takes %d", max(left, 0), b.size, segs)
+	if b.uncertain > 0 {
+		s += fmt.Sprintf(" (%d went without a network reference and count as used until the next top-up)", b.uncertain)
+	}
+	return s
+}
+
+// smsNoHold is the share of an SMS sent with no bundle set.
+type smsNoHold struct{}
+
+func (smsNoHold) Possible()                 {}
+func (smsNoHold) Settle(transport.SMSPhase) {}
+
+// smsHold is one SMS's share: held while its command runs, possible use
+// from the moment its text goes to the modem, then used or given back.
+type smsHold struct {
+	b              *SMSBudget
+	to             string
+	segs           int
+	possible, done bool
+}
+
+// Possible implements transport.SMSHold: the text goes to the modem now.
+// Written before the text goes, so a restart in between keeps it.
+func (h *smsHold) Possible() {
+	b := h.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if h.possible || h.done {
+		return
+	}
+	h.possible = true
+	b.held = max(b.held-h.segs, 0)
+	b.uncertain += h.segs
+	b.store(cfgSMSBundleUnsure, strconv.Itoa(b.uncertain))
+}
+
+// Settle implements transport.SMSHold.
+func (h *smsHold) Settle(p transport.SMSPhase) {
+	b := h.b
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if h.done {
+		return
+	}
+	h.done = true
+	if h.possible && p != transport.SMSAccepted && p != transport.SMSRefused && p != transport.SMSNotSent {
+		// No +CMGS and no refusal: it may have been billed. It stays
+		// possible use (B9FIX-R2).
+		log.Warn().Str("to", h.to).Int("segments", h.segs).Int("uncertain", b.uncertain).Int("remaining", b.leftLocked()).
+			Msg("sms budget: no network reference, counted as possible use until the next top-up")
+		b.checkLocked()
+		return
+	}
+	if h.possible {
+		b.uncertain = max(b.uncertain-h.segs, 0)
+		b.store(cfgSMSBundleUnsure, strconv.Itoa(b.uncertain))
+	} else {
+		b.held = max(b.held-h.segs, 0)
+	}
+	if p != transport.SMSAccepted {
+		return
+	}
+	b.sent += h.segs
+	b.store(cfgSMSBundleSent, strconv.Itoa(b.sent))
+	log.Info().Str("to", h.to).Int("segments", h.segs).Int("sent", b.sent).Int("size", b.size).Int("remaining", b.leftLocked()).
 		Msg("sms budget: segment counted")
 	b.checkLocked()
 }
@@ -188,7 +293,7 @@ func (b *SMSBudget) checkLocked() {
 	if b.size <= 0 {
 		return
 	}
-	remaining := b.size - b.sent
+	remaining := b.leftLocked()
 	if remaining > b.warnAt {
 		return
 	}
@@ -248,7 +353,9 @@ func (b *SMSBudget) sendAlert(remaining int) {
 // thresholds once at the end, so a PUT that sets size, warn_at and the
 // reminder number together never fires on a half-configured state. A nil
 // leaves that field alone; sent needs size. A changed number re-arms the
-// reminder; a new size records a top-up and re-arms warning and reminder.
+// reminder; a new size records a top-up and re-arms warning and reminder,
+// and its figures replace the uncertain count (the carrier's balance is
+// what the operator read).
 func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
 	if size != nil && *size <= 0 {
 		return errors.New("bundle size must be positive")
@@ -289,11 +396,12 @@ func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
 		if sent != nil {
 			used = *sent
 		}
-		b.size, b.sent = *size, used
+		b.size, b.sent, b.uncertain = *size, used, 0
 		b.resetAt = b.now()
 		b.alerted, b.warned, b.alertTriedAt = false, false, time.Time{}
 		b.store(cfgSMSBundleSize, strconv.Itoa(*size))
 		b.store(cfgSMSBundleSent, strconv.Itoa(used))
+		b.store(cfgSMSBundleUnsure, "0")
 		b.store(cfgSMSBundleResetAt, b.resetAt.UTC().Format(time.RFC3339))
 		b.store(cfgSMSBundleAlerted, "0")
 		log.Info().Int("size", *size).Int("sent", used).Msg("sms budget: bundle reset")
@@ -329,9 +437,9 @@ func (b *SMSBudget) Status() *transport.SMSBundleStatus {
 	if b.size <= 0 {
 		return nil
 	}
-	remaining := b.size - b.sent
+	remaining := b.leftLocked()
 	st := &transport.SMSBundleStatus{
-		Size: b.size, Sent: b.sent, Remaining: remaining, WarnAt: b.warnAt,
+		Size: b.size, Sent: b.sent, Uncertain: b.uncertain, Remaining: remaining, WarnAt: b.warnAt,
 		Low: remaining <= b.warnAt, Empty: remaining <= 0, Alerted: b.alerted, AlertSet: b.alertNumber != "",
 	}
 	if !b.resetAt.IsZero() {
@@ -352,10 +460,10 @@ func (b *SMSBudget) HealthStatus() (state, detail string) {
 	if b.size <= 0 {
 		return HealthStateUnknown, "no SMS bundle configured"
 	}
-	remaining := b.size - b.sent
+	remaining := b.leftLocked()
 	switch {
 	case remaining <= 0:
-		return HealthStateFailed, fmt.Sprintf("SMS credit spent: %d of %d used, top up the prepaid SIM", b.sent, b.size)
+		return HealthStateFailed, fmt.Sprintf("SMS credit spent: %d of %d used, top up the prepaid SIM", b.size-remaining, b.size)
 	case remaining <= b.warnAt:
 		return HealthStateDegraded, fmt.Sprintf("SMS credit low: %d of %d left, top up the prepaid SIM", remaining, b.size)
 	default:
@@ -363,33 +471,17 @@ func (b *SMSBudget) HealthStatus() (state, detail string) {
 	}
 }
 
-// Allow says whether a delivery intent may send segments more SMS now: with
-// a bundle set, only while that many are left (r3 D8: a paid route never
-// spends past what was bought). Without a bundle it allows: nothing is
-// counted against. Only the intent route asks; every other send path is
-// counted, not refused. [MESHSAT-1584]
-func (b *SMSBudget) Allow(segments int) (bool, string) {
+// AllowSMS implements transport.SMSSpend: whether a delivery intent may
+// send segments more SMS now, the HoldSMS check without a hold. Without a
+// bundle it allows: nothing is counted against. [MESHSAT-1584]
+func (b *SMSBudget) AllowSMS(segments int) (bool, string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.size <= 0 {
 		return true, ""
 	}
-	if remaining := b.size - b.sent; remaining < segments {
-		return false, fmt.Sprintf("the prepaid SMS bundle has %d of %d left, this SMS takes %d", max(remaining, 0), b.size, segments)
-	}
-	return true, ""
-}
-
-// The process-wide bundle gate for the intent route, set once in main when
-// the bundle counter exists.
-var smsBundleGate atomic.Value // func(int) (bool, string)
-
-// SetSMSBundleGate installs the bundle gate the SMS intent route asks.
-func SetSMSBundleGate(fn func(segments int) (bool, string)) { smsBundleGate.Store(fn) }
-
-func smsBundleAllows(segments int) (bool, string) {
-	if fn, _ := smsBundleGate.Load().(func(int) (bool, string)); fn != nil {
-		return fn(segments)
+	if left := b.leftLocked(); left < segments {
+		return false, b.shortLocked(left, segments)
 	}
 	return true, ""
 }

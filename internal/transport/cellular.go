@@ -17,9 +17,13 @@ type CellEvent struct {
 
 // SMSBundleStatus is the prepaid SMS bundle counter: segments the network
 // accepted since the last top-up against the bundle size. [MESHSAT-1161]
+// Uncertain is what went to the modem without a network reference (it may
+// have been billed); Remaining is the size less sent, uncertain and the
+// SMS being sent now. [MESHSAT-1584]
 type SMSBundleStatus struct {
 	Size      int        `json:"size"`
 	Sent      int        `json:"sent"`
+	Uncertain int        `json:"uncertain"`
 	Remaining int        `json:"remaining"`
 	WarnAt    int        `json:"warn_at"`
 	Low       bool       `json:"low"`     // remaining at or below warn_at

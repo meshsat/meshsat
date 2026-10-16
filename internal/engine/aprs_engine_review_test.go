@@ -123,7 +123,7 @@ func reviewWaitAPRSAck(t *testing.T, h *intentHarness, id string) *database.Inte
 		h.drain()
 		s := h.snap(id)
 		for _, e := range s.Evidence {
-			if e.Event == "ack" && e.Matched {
+			if e.Event == "ack" && e.Matched && s.Intent.Outcome == database.OutcomeAckedStation {
 				return s
 			}
 		}

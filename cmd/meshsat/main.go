@@ -518,6 +518,32 @@ func main() {
 		defer cell.Close()
 	}
 
+	// Prepaid SMS bundle counter [MESHSAT-1161], set on the modem here,
+	// before any gateway, interface or delivery worker exists that could
+	// send (B9FIX-R3): the serial modem holds every SMS's share on its I/O
+	// loop, so relays, OOB frames, API test sends and the Reticulum SMS
+	// interface are counted and a delivery intent's SMS goes only while the
+	// bundle covers it (r3 D8, B9FIX-R1); the ModemManager modem counts
+	// what it reports accepted. Bundle size and the reminder number are set
+	// with PUT /api/cellular/bundle and persist in system_config.
+	var smsBudget *gateway.SMSBudget
+	if cell != nil {
+		switch c := cell.(type) {
+		case interface{ SetSMSSpend(transport.SMSSpend) }:
+			smsBudget = gateway.NewSMSBudget(db, cfg.BridgeID, gateway.SMSBudgetOptionsFromEnv(), cell.SendSMS)
+			c.SetSMSSpend(smsBudget)
+		case interface{ SetSentHook(func(to, text string)) }: // ModemManager [MESHSAT-1386]
+			smsBudget = gateway.NewSMSBudget(db, cfg.BridgeID, gateway.SMSBudgetOptionsFromEnv(), cell.SendSMS)
+			c.SetSentHook(smsBudget.Record)
+		}
+		if smsBudget != nil {
+			if st := smsBudget.Status(); st != nil {
+				log.Info().Int("size", st.Size).Int("sent", st.Sent).Int("uncertain", st.Uncertain).Int("remaining", st.Remaining).
+					Int("warn_at", st.WarnAt).Bool("alert_configured", st.AlertSet).Msg("sms budget: bundle counter loaded")
+			}
+		}
+	}
+
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -564,6 +590,11 @@ func main() {
 	// Processor
 	proc := engine.NewProcessor(db, mesh)
 	proc.SetDeduplicator(deduplicator)
+	if smsBudget != nil {
+		smsBudget.SetEventEmitter(func(eventType, message string) {
+			proc.Emit(transport.MeshEvent{Type: eventType, Message: message, Time: time.Now().UTC().Format(time.RFC3339)})
+		})
+	}
 
 	// Gateway manager
 	gwMgr := gateway.NewManager(db, sat)
@@ -1806,27 +1837,10 @@ func main() {
 	srv.SetPassScheduler(gwMgr.GetPassScheduler())
 	srv.SetCellTransport(cell)
 	log.Info().Bool("cell_set", cell != nil).Msg("API server: cellTransport configured")
-	// Prepaid SMS bundle counter [MESHSAT-1161]: every +CMGS the modem
-	// returns costs a segment; the count hangs off the transport's sent
-	// hook so relays, OOB frames, API test sends and the Reticulum SMS
-	// interface are all counted. Bundle size and the reminder number are
-	// set with PUT /api/cellular/bundle and persist in system_config.
-	var smsBudget *gateway.SMSBudget
-	// Both cellular transports carry the sent hook (serial and ModemManager). [MESHSAT-1386]
-	if hooked, ok := cell.(interface{ SetSentHook(func(to, text string)) }); ok && cell != nil {
-		smsBudget = gateway.NewSMSBudget(db, cfg.BridgeID, gateway.SMSBudgetOptionsFromEnv(), cell.SendSMS)
-		smsBudget.SetEventEmitter(func(eventType, message string) {
-			proc.Emit(transport.MeshEvent{Type: eventType, Message: message, Time: time.Now().UTC().Format(time.RFC3339)})
-		})
-		hooked.SetSentHook(smsBudget.Record)
-		// The SMS delivery-intent route sends only while the bundle has an
-		// SMS left (r3 D8); the other paths are counted, not refused. [MESHSAT-1584]
-		gateway.SetSMSBundleGate(smsBudget.Allow)
+	// The prepaid SMS bundle counter was set on the modem at start, before
+	// anything could send (B9FIX-R3). [MESHSAT-1161, 1584]
+	if smsBudget != nil {
 		srv.SetSMSBudget(smsBudget)
-		if st := smsBudget.Status(); st != nil {
-			log.Info().Int("size", st.Size).Int("sent", st.Sent).Int("remaining", st.Remaining).Int("warn_at", st.WarnAt).
-				Bool("alert_configured", st.AlertSet).Msg("sms budget: bundle counter loaded")
-		}
 	}
 	srv.SetGPSReader(gpsReader)
 

@@ -24,6 +24,7 @@ type fakeSMS struct {
 	answer gateway.IntentOutcome
 	onSend func(gateway.IntentSend)
 	n      int
+	admit  string // what IntentAdmit answers, "" = admitted
 }
 
 func (f *fakeSMS) Start(context.Context) error { return nil }
@@ -31,14 +32,19 @@ func (f *fakeSMS) Stop() error                 { return nil }
 func (f *fakeSMS) Forward(context.Context, *transport.MeshMessage) error {
 	return errors.New("not the intent path")
 }
-func (f *fakeSMS) Enqueue(*transport.MeshMessage) error              { return errors.New("not the intent path") }
-func (f *fakeSMS) Receive() <-chan gateway.InboundMessage            { return nil }
-func (f *fakeSMS) Status() gateway.GatewayStatus                     { return gateway.GatewayStatus{} }
-func (f *fakeSMS) Type() string                                      { return "cellular" }
-func (f *fakeSMS) IntentCorrKind() string                            { return gateway.SMSIntentCorrKind }
-func (f *fakeSMS) SetIntentReceiptSink(func(gateway.IntentReceipt))  {}
-func (f *fakeSMS) IntentAdmit(string, []byte, bool) (string, string) { return "", "" }
-func (f *fakeSMS) IntentBilled() bool                                { return true }
+func (f *fakeSMS) Enqueue(*transport.MeshMessage) error             { return errors.New("not the intent path") }
+func (f *fakeSMS) Receive() <-chan gateway.InboundMessage           { return nil }
+func (f *fakeSMS) Status() gateway.GatewayStatus                    { return gateway.GatewayStatus{} }
+func (f *fakeSMS) Type() string                                     { return "cellular" }
+func (f *fakeSMS) IntentCorrKind() string                           { return gateway.SMSIntentCorrKind }
+func (f *fakeSMS) SetIntentReceiptSink(func(gateway.IntentReceipt)) {}
+func (f *fakeSMS) IntentAdmit(string, []byte, bool) (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.admit, ""
+}
+func (f *fakeSMS) setAdmit(r string)  { f.mu.Lock(); f.admit = r; f.mu.Unlock() }
+func (f *fakeSMS) IntentBilled() bool { return true }
 func (f *fakeSMS) IntentNewCorr() (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
