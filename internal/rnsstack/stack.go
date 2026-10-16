@@ -289,9 +289,14 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	}
 	// A delivery intent's attempt names the message's timestamp (ts), so
 	// its retries are one message with one hash [MESHSAT-1581], and sends
-	// on free interfaces only, at every step (free_only) [MESHSAT-1584].
+	// on free interfaces only, at every step [MESHSAT-1584]. Free-only
+	// follows from the row being an intent's attempt (its durable
+	// intent_id), not from the body's free_only alone: a row written before
+	// that field existed would otherwise go out on a paid link (red-team
+	// U-1). Paid intent routes come with B9 and a typed authorization.
+	freeOnly := body.FreeOnly || del.IntentID != ""
 	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0,
-		lxmf.SendOptions{Timestamp: body.Timestamp, FreeOnly: body.FreeOnly})
+		lxmf.SendOptions{Timestamp: body.Timestamp, FreeOnly: freeOnly})
 	if err != nil {
 		if m != nil {
 			return hex.EncodeToString(m.Hash[:]), err

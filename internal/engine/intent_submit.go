@@ -551,13 +551,16 @@ func (e *Escalator) buildRow(in database.DeliveryIntent, p database.RoutePlanEnt
 }
 
 // meshCorrKind and meshCorrWindowS: a mesh transmission is named by its
-// packet id on its interface, for an hour after the handoff. The firmware
-// acknowledges within seconds; the window bounds what a reused id can be
-// confused with, and two transmissions under one id inside it make the
-// answer ambiguous (red-team A-14). [MESHSAT-1584]
+// packet id on its interface for as long as the transmission is kept
+// (window 0: no time bound). An answer's age says nothing about which send
+// it answers, so an id we pick is never one a kept transmission used, and
+// an id the radio reused names every kept transmission that had it: the
+// answer is ambiguous and completes nothing (red-team R-3). The one
+// assumption: no answer arrives after its transmission was pruned
+// (retention, at least a day). [MESHSAT-1584]
 const (
 	meshCorrKind    = "mesh_packet_id"
-	meshCorrWindowS = 3600
+	meshCorrWindowS = 0
 )
 
 // classifyMeshReceipt says what a ROUTING_APP answer stored as e proves of

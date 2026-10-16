@@ -1050,13 +1050,19 @@ func reconcileTx(tx *sqlx.Tx, t DeliveryTransmission, classify EvidenceReclassif
 	return nil
 }
 
-// CorrelationInUse reports whether a correlation value is still live: a
-// transmission in that scope handed off under it within windowS seconds.
-// A sender that picks its own references (mesh packet ids) picks another.
+// CorrelationInUse reports whether a correlation value is taken: a
+// transmission in that scope used it within windowS seconds, or, with
+// windowS 0, any transmission still kept. A sender that picks its own
+// references (mesh packet ids) picks another.
 func (db *DB) CorrelationInUse(kind, value, scope string, windowS int) (bool, error) {
+	q := `SELECT COUNT(*) FROM delivery_transmissions WHERE corr_kind = ? AND corr_value = ? AND corr_scope = ?`
+	args := []any{kind, value, scope}
+	if windowS > 0 {
+		q += ` AND (handoff_at IS NULL OR datetime(handoff_at, '+' || ? || ' seconds') >= datetime('now'))`
+		args = append(args, windowS)
+	}
 	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM delivery_transmissions WHERE corr_kind = ? AND corr_value = ? AND corr_scope = ?
-		AND (handoff_at IS NULL OR datetime(handoff_at, '+' || ? || ' seconds') >= datetime('now'))`, kind, value, scope, windowS).Scan(&n)
+	err := db.QueryRow(q, args...).Scan(&n)
 	return n > 0, err
 }
 

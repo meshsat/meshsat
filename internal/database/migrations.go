@@ -1553,6 +1553,14 @@ var migrations = []string{
 	// a restart never strands durable evidence (red-team F-3). [MESHSAT-1584]
 	`ALTER TABLE delivery_intents ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0;
 	CREATE INDEX IF NOT EXISTS idx_delivery_intents_dirty ON delivery_intents(dirty) WHERE dirty = 1;`,
+
+	// v64: every intent kept from before v63 is looked at once more: v63
+	// started them all clean, so evidence stored before it (a matched ACK
+	// on a closed intent whose notice was never taken in) waited for a
+	// write that never came (red-team U-2). One review each; a closed
+	// intent is never reopened or sent again. Also repairs a database
+	// already at v63. [MESHSAT-1584]
+	`UPDATE delivery_intents SET dirty = 1;`,
 }
 
 func (db *DB) migrate() error {
