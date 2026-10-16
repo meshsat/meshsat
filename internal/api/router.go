@@ -601,6 +601,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/directory/import/csv", s.handleImportCSV)
 		r.Get("/directory/export/vcard", s.handleExportVCard)
 		r.Get("/directory/policies", s.handleListDirectoryPolicies) // what each dispatch policy does [MESHSAT-1584]
+		r.Get("/delivery/tariffs", s.handleListTariffs)             // prices of the paid intent routes (B9) [MESHSAT-1584]
+		r.Post("/delivery/tariffs", s.handleCreateTariff)
 
 		// Contact-aware send [MESHSAT-545 / S2-02]. Wraps
 		// Dispatcher.SendToRecipient — resolves the contact to its

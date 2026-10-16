@@ -1207,116 +1207,188 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 
 	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS send starting")
 	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
-		log.Debug().Msg("cellular: SMS raw fn entered, draining")
-		// Ensure modem is in a clean state before CMGS.
-		drainPort(sp)
-
-		// Probe with AT to verify modem is responsive and not mid-command
-		log.Debug().Msg("cellular: SMS probing AT")
-		probeResp, probeErr := sendAT(sp, "AT", 5*time.Second)
-		log.Debug().Err(probeErr).Str("resp", fmt.Sprintf("%q", probeResp)).Msg("cellular: SMS probe result")
-		if probeErr != nil || !strings.Contains(probeResp, "OK") {
-			// Modem may be stuck in SMS input mode from a previous failed CMGS.
-			log.Debug().Msg("cellular: SMS probe failed, sending ESC")
-			sp.Write([]byte{0x1B})
-			time.Sleep(500 * time.Millisecond)
-			drainPort(sp)
-			probeResp, probeErr = sendAT(sp, "AT", 5*time.Second)
-			if probeErr != nil {
-				return "", fmt.Errorf("modem not responding: %w", probeErr)
-			}
-		}
-
-		// Ensure text mode is set before every CMGS.
-		log.Debug().Msg("cellular: SMS setting CMGF=1")
-		if cmgfResp, cmgfErr := sendAT(sp, "AT+CMGF=1", 3*time.Second); cmgfErr != nil || strings.Contains(cmgfResp, "ERROR") {
-			return "", fmt.Errorf("failed to set text mode: %v", cmgfErr)
-		}
-
-		// AT+CMGS="number"
-		cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
-		drainPort(sp)
-		if _, err := sp.Write([]byte(cmd + "\r")); err != nil {
-			return "", fmt.Errorf("write CMGS failed: %w", err)
-		}
-
-		// Wait for ">" prompt
-		deadline := time.Now().Add(10 * time.Second)
-		sp.SetReadTimeout(50 * time.Millisecond)
-		buf := make([]byte, 256)
-		var resp strings.Builder
-		for {
-			if time.Now().After(deadline) {
-				return "", fmt.Errorf("timeout waiting for > prompt (got: %q)", resp.String())
-			}
-			n, err := sp.Read(buf)
-			if n > 0 {
-				chunk := buf[:n]
-				resp.Write(chunk)
-				log.Debug().Str("hex", fmt.Sprintf("%x", chunk)).Int("n", n).
-					Msg("cellular: CMGS prompt bytes")
-				if strings.Contains(resp.String(), ">") {
-					break
-				}
-			}
-			if err != nil {
-				return "", fmt.Errorf("read failed: %w", err)
-			}
-		}
-		log.Debug().Str("prompt_buf", resp.String()).Msg("cellular: got > prompt, sending text")
-
-		// Drain any remaining echo data after > prompt before sending text
-		drainPort(sp)
-
-		// Send text body first, then Ctrl+Z separately.
-		// Some modems (Huawei E220 on 2G) need Ctrl-Z as a distinct write.
-		if _, err := sp.Write([]byte(text)); err != nil {
-			return "", fmt.Errorf("write text failed: %w", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-		if _, err := sp.Write([]byte{0x1A}); err != nil {
-			return "", fmt.Errorf("write Ctrl-Z failed: %w", err)
-		}
-
-		log.Debug().Str("to", to).Int("text_len", len(text)).Msg("cellular: text+Ctrl-Z sent, waiting for response")
-
-		// Read CMGS response with detailed byte logging.
-		// The Huawei E220 on 2G can take 60-120s to respond after Ctrl-Z.
-		smsResp, err := readCMGSResponse(sp, cellSMSSendTimeout)
-
-		if err != nil {
-			return "", fmt.Errorf("SMS send failed: %w", err)
-		}
-		if strings.Contains(smsResp, "ERROR") {
-			return "", fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
-		}
-
-		// +CMGS: <mr> means the SMS was accepted by the network — success
-		// even if OK hasn't arrived yet (readATResponse now terminates on +CMGS:)
-		if cmgsReference.MatchString(smsResp) {
-			log.Info().Str("to", to).Str("cmgs_resp", strings.TrimSpace(smsResp)).
-				Msg("cellular: SMS sent (got +CMGS)")
-		} else {
-			log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
-		}
-
-		// Increment SMS sent counter [MESHSAT-403]
-		t.stateMu.Lock()
-		t.smsSent++
-		hook := t.sentHook
-		t.stateMu.Unlock()
-		if hook != nil {
-			hook(to, text) // prepaid bundle counter [MESHSAT-1161]
-		}
-
-		// Post-send settle — give the modem time to finalize before accepting
-		// the next command. The Huawei E220 on 2G needs this between CMGS calls.
-		time.Sleep(smsSendSettle)
-
-		return "OK", nil
+		return t.cmgs(sp, to, text, nil, nil)
 	}, cellSMSSendTimeout+15*time.Second)
 
 	return err
+}
+
+// SMSPhase says how far one SMS submission got (a delivery intent needs to
+// know whether anything left the device, r3 D18). [MESHSAT-1584]
+type SMSPhase int32
+
+const (
+	SMSNotSent    SMSPhase = iota // the text never went to the modem with its Ctrl-Z
+	SMSHandedOver                 // text and Ctrl-Z went to the modem; the network's answer did not come
+	SMSRefused                    // the network refused it (+CMS ERROR): not sent
+	SMSAccepted                   // the network accepted it (+CMGS)
+)
+
+// SMSSubmit is what SubmitSMS knows: the phase reached and, when accepted,
+// the network's message reference.
+type SMSSubmit struct {
+	Phase SMSPhase
+	Ref   int64
+}
+
+var errSMSAbandoned = errors.New("cellular: SMS abandoned before it started")
+
+// smsSubmitTimeout is SubmitSMS's command timeout (as SendSMS's); a package
+// var so a test can give up sooner.
+var smsSubmitTimeout = cellSMSSendTimeout + 15*time.Second
+
+// SubmitSMS sends one SMS of at most 160 characters, as SendSMS does, but
+// never cuts the text and says how far the submission got. A command still
+// queued when the caller gives up (behind a busy one) never starts, so a
+// result of SMSNotSent is final. [MESHSAT-1584]
+func (t *DirectCellTransport) SubmitSMS(ctx context.Context, to, text string) (SMSSubmit, error) {
+	if err := smsATUnsafe(to, text); err != nil {
+		return SMSSubmit{}, err
+	}
+	if len(text) > maxSMSLength {
+		return SMSSubmit{}, fmt.Errorf("%d characters, one SMS takes %d: %w", len(text), maxSMSLength, ErrPayloadTooLong)
+	}
+	var state, phase atomic.Int32 // state: 0 queued, 1 started, 2 abandoned
+	var ref atomic.Int64
+	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: intent SMS send starting")
+	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
+		if !state.CompareAndSwap(0, 1) {
+			return "", errSMSAbandoned
+		}
+		return t.cmgs(sp, to, text, &phase, &ref)
+	}, smsSubmitTimeout)
+	if state.CompareAndSwap(0, 2) {
+		return SMSSubmit{Phase: SMSNotSent}, err // never started, and now never will
+	}
+	return SMSSubmit{Phase: SMSPhase(phase.Load()), Ref: ref.Load()}, err
+}
+
+func setSMSPhase(p *atomic.Int32, v SMSPhase) {
+	if p != nil {
+		p.Store(int32(v))
+	}
+}
+
+var cmgsRefNumber = regexp.MustCompile(`CMGS:\s*(\d+)`)
+
+// cmgs is one AT+CMGS exchange on the I/O loop. phase and ref, when given,
+// record how far it got.
+func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomic.Int32, ref *atomic.Int64) (string, error) {
+	log.Debug().Msg("cellular: SMS raw fn entered, draining")
+	// Ensure modem is in a clean state before CMGS.
+	drainPort(sp)
+
+	// Probe with AT to verify modem is responsive and not mid-command
+	log.Debug().Msg("cellular: SMS probing AT")
+	probeResp, probeErr := sendAT(sp, "AT", 5*time.Second)
+	log.Debug().Err(probeErr).Str("resp", fmt.Sprintf("%q", probeResp)).Msg("cellular: SMS probe result")
+	if probeErr != nil || !strings.Contains(probeResp, "OK") {
+		// Modem may be stuck in SMS input mode from a previous failed CMGS.
+		log.Debug().Msg("cellular: SMS probe failed, sending ESC")
+		sp.Write([]byte{0x1B})
+		time.Sleep(500 * time.Millisecond)
+		drainPort(sp)
+		probeResp, probeErr = sendAT(sp, "AT", 5*time.Second)
+		if probeErr != nil {
+			return "", fmt.Errorf("modem not responding: %w", probeErr)
+		}
+	}
+
+	// Ensure text mode is set before every CMGS.
+	log.Debug().Msg("cellular: SMS setting CMGF=1")
+	if cmgfResp, cmgfErr := sendAT(sp, "AT+CMGF=1", 3*time.Second); cmgfErr != nil || strings.Contains(cmgfResp, "ERROR") {
+		return "", fmt.Errorf("failed to set text mode: %v", cmgfErr)
+	}
+
+	// AT+CMGS="number"
+	cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
+	drainPort(sp)
+	if _, err := sp.Write([]byte(cmd + "\r")); err != nil {
+		return "", fmt.Errorf("write CMGS failed: %w", err)
+	}
+
+	// Wait for ">" prompt
+	deadline := time.Now().Add(10 * time.Second)
+	sp.SetReadTimeout(50 * time.Millisecond)
+	buf := make([]byte, 256)
+	var resp strings.Builder
+	for {
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timeout waiting for > prompt (got: %q)", resp.String())
+		}
+		n, err := sp.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			resp.Write(chunk)
+			log.Debug().Str("hex", fmt.Sprintf("%x", chunk)).Int("n", n).
+				Msg("cellular: CMGS prompt bytes")
+			if strings.Contains(resp.String(), ">") {
+				break
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("read failed: %w", err)
+		}
+	}
+	log.Debug().Str("prompt_buf", resp.String()).Msg("cellular: got > prompt, sending text")
+
+	// Drain any remaining echo data after > prompt before sending text
+	drainPort(sp)
+
+	// Send text body first, then Ctrl+Z separately.
+	// Some modems (Huawei E220 on 2G) need Ctrl-Z as a distinct write.
+	if _, err := sp.Write([]byte(text)); err != nil {
+		return "", fmt.Errorf("write text failed: %w", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := sp.Write([]byte{0x1A}); err != nil {
+		return "", fmt.Errorf("write Ctrl-Z failed: %w", err)
+	}
+	setSMSPhase(phase, SMSHandedOver)
+
+	log.Debug().Str("to", to).Int("text_len", len(text)).Msg("cellular: text+Ctrl-Z sent, waiting for response")
+
+	// Read CMGS response with detailed byte logging.
+	// The Huawei E220 on 2G can take 60-120s to respond after Ctrl-Z.
+	smsResp, err := readCMGSResponse(sp, cellSMSSendTimeout)
+
+	if err != nil {
+		return "", fmt.Errorf("SMS send failed: %w", err)
+	}
+	if strings.Contains(smsResp, "ERROR") {
+		setSMSPhase(phase, SMSRefused)
+		return "", fmt.Errorf("SMS send error: %s", strings.TrimSpace(smsResp))
+	}
+	setSMSPhase(phase, SMSAccepted)
+	if m := cmgsRefNumber.FindStringSubmatch(smsResp); m != nil && ref != nil {
+		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+			ref.Store(n)
+		}
+	}
+
+	// +CMGS: <mr> means the SMS was accepted by the network — success
+	// even if OK hasn't arrived yet (readATResponse now terminates on +CMGS:)
+	if cmgsReference.MatchString(smsResp) {
+		log.Info().Str("to", to).Str("cmgs_resp", strings.TrimSpace(smsResp)).
+			Msg("cellular: SMS sent (got +CMGS)")
+	} else {
+		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
+	}
+
+	// Increment SMS sent counter [MESHSAT-403]
+	t.stateMu.Lock()
+	t.smsSent++
+	hook := t.sentHook
+	t.stateMu.Unlock()
+	if hook != nil {
+		hook(to, text) // prepaid bundle counter [MESHSAT-1161]
+	}
+
+	// Post-send settle — give the modem time to finalize before accepting
+	// the next command. The Huawei E220 on 2G needs this between CMGS calls.
+	time.Sleep(smsSendSettle)
+
+	return "OK", nil
 }
 
 // GetSignal returns current signal strength.
