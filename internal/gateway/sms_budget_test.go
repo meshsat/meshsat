@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"meshsat/internal/database"
+	"meshsat/internal/transport"
 )
 
 // [MESHSAT-1161] prepaid SMS bundle counter.
@@ -280,5 +281,90 @@ func TestSMSBudgetOptionsFromEnv(t *testing.T) {
 	t.Setenv("MESHSAT_SMS_BUNDLE_SIZE", "-5")
 	if SMSBudgetOptionsFromEnv().Size != 0 {
 		t.Fatal("negative size must fall back to 0")
+	}
+}
+
+// The share of one SMS through its life (B9FIX-R1, R2): held while its
+// command runs, possible use once its text goes (persisted), then used on
+// +CMGS, given back on a refusal or a send that never went, kept on no
+// reference. [MESHSAT-1584]
+func TestSMSBudget_HoldLifecycle(t *testing.T) {
+	db := newBudgetDB(t)
+	b := NewSMSBudget(db, "kitA", SMSBudgetOptions{Size: 3, WarnAt: 0}, (&fakeSender{}).send)
+	left := func() int { return b.Status().Remaining }
+
+	h1, err := b.HoldSMS("+311", "one", true)
+	if err != nil || left() != 2 {
+		t.Fatalf("hold: %v, %d left; want 2", err, left())
+	}
+	h1.Settle(transport.SMSNotSent) // never reached the modem
+	if left() != 3 {
+		t.Fatalf("a send that never went kept its share: %d left", left())
+	}
+
+	h2, _ := b.HoldSMS("+311", "two", true)
+	h2.Possible()
+	if st := b.Status(); st.Uncertain != 1 || st.Remaining != 2 {
+		t.Fatalf("possible use: %+v", st)
+	}
+	h2.Settle(transport.SMSRefused)
+	if st := b.Status(); st.Uncertain != 0 || st.Sent != 0 || st.Remaining != 3 {
+		t.Fatalf("a refusal kept its share: %+v", st)
+	}
+
+	h3, _ := b.HoldSMS("+311", "three", true)
+	h3.Possible()
+	h3.Settle(transport.SMSAccepted)
+	h3.Settle(transport.SMSAccepted) // once
+	if st := b.Status(); st.Sent != 1 || st.Uncertain != 0 || st.Remaining != 2 {
+		t.Fatalf("accepted: %+v; want sent 1", st)
+	}
+
+	h4, _ := b.HoldSMS("+311", "four", true)
+	h4.Possible()
+	h4.Settle(transport.SMSHandedOver)
+	h5, _ := b.HoldSMS("+311", "five", false) // counted only, never refused
+	if st := b.Status(); st.Uncertain != 1 || st.Remaining != 0 {
+		t.Fatalf("no reference plus a running send: %+v; want uncertain 1, nothing left", st)
+	}
+	if _, err := b.HoldSMS("+311", "six", true); !errors.Is(err, transport.ErrSMSBundle) {
+		t.Fatalf("intent SMS with nothing left: %v; want ErrSMSBundle", err)
+	}
+	if ok, _ := b.AllowSMS(1); ok {
+		t.Fatal("the snapshot check ignores the running send")
+	}
+	if state, detail := b.HealthStatus(); state != HealthStateFailed {
+		t.Fatalf("health %s (%s); want failed", state, detail)
+	}
+
+	// A top-up while a share is possible use: the operator's figures win,
+	// and the late answer never drives a count below zero.
+	h5.Possible()
+	if err := b.Reset(10, 2); err != nil {
+		t.Fatal(err)
+	}
+	h5.Settle(transport.SMSRefused)
+	if st := b.Status(); st.Uncertain != 0 || st.Sent != 2 || st.Remaining != 8 {
+		t.Fatalf("after a top-up: %+v; want sent 2, uncertain 0, 8 left", st)
+	}
+	if v, _ := db.GetSystemConfig("sms_bundle_uncertain"); v != "0" {
+		t.Fatalf("stored uncertain %q; want 0", v)
+	}
+}
+
+// No bundle set: nothing is counted or refused.
+func TestSMSBudget_NoBundleHolds(t *testing.T) {
+	b := NewSMSBudget(newBudgetDB(t), "kitA", SMSBudgetOptions{}, (&fakeSender{}).send)
+	h, err := b.HoldSMS("+311", "x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Possible()
+	h.Settle(transport.SMSAccepted)
+	if b.Status() != nil {
+		t.Fatal("a status without a bundle")
+	}
+	if ok, why := b.AllowSMS(5); !ok {
+		t.Fatalf("no bundle refused: %s", why)
 	}
 }

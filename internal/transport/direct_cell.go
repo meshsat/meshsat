@@ -102,9 +102,11 @@ type DirectCellTransport struct {
 	smsSent     int64  // SMS sent counter [MESHSAT-403]
 	smsReceived int64  // SMS received counter [MESHSAT-403]
 	// sentHook runs after the network accepted an SMS (+CMGS), with the
-	// destination and the on-air text; the prepaid bundle counter hangs
-	// here so every send path is counted. [MESHSAT-1161]
+	// destination and the on-air text. [MESHSAT-1161]
 	sentHook func(to, text string)
+	// spend is the prepaid bundle every SMS holds its share of on the I/O
+	// loop, whatever the send path (SetSMSSpend). [MESHSAT-1161, 1584]
+	spend SMSSpend
 
 	// Data connection state
 	dataMu          sync.RWMutex
@@ -177,12 +179,57 @@ func (t *DirectCellTransport) SetSIMCardLookup(fn SIMCardLookupFunc, touchFn fun
 
 // SetSentHook installs the callback that runs after every SMS the network
 // accepted (+CMGS), whatever the caller: gateway, OOB, API test send,
-// Reticulum SMS interface. It runs inside the send critical section, so it
-// must not call back into the transport synchronously. [MESHSAT-1161]
+// Reticulum SMS interface. Only a +CMGS reference runs it, never a bare OK
+// (B9FIX-R2). It runs inside the send critical section, so it must not
+// call back into the transport synchronously. [MESHSAT-1161]
 func (t *DirectCellTransport) SetSentHook(fn func(to, text string)) {
 	t.stateMu.Lock()
 	t.sentHook = fn
 	t.stateMu.Unlock()
+}
+
+// SetSMSSpend installs the prepaid bundle counter. Every SMS, whatever the
+// send path, holds its share on the I/O loop and settles it from the
+// modem's answer; a delivery intent's SMS is refused there when the bundle
+// cannot take it (r3 D8, B9FIX-R1). main sets it before anything can send;
+// until then SMSBundleCheck answers ErrSMSBundleNotReady and the intent
+// route does not submit (B9FIX-R3). [MESHSAT-1161, 1584]
+func (t *DirectCellTransport) SetSMSSpend(s SMSSpend) {
+	t.stateMu.Lock()
+	t.spend = s
+	t.stateMu.Unlock()
+}
+
+func (t *DirectCellTransport) smsSpend() SMSSpend {
+	t.stateMu.RLock()
+	defer t.stateMu.RUnlock()
+	return t.spend
+}
+
+// SMSBundleCheck says whether the bundle can take an intent SMS of
+// segments now, without a hold: nil, ErrSMSBundleNotReady before
+// SetSMSSpend, or an error wrapping ErrSMSBundle. The hold on the I/O loop
+// still decides; this only spares a queue. [MESHSAT-1584]
+func (t *DirectCellTransport) SMSBundleCheck(segments int) error {
+	s := t.smsSpend()
+	if s == nil {
+		return ErrSMSBundleNotReady
+	}
+	if ok, why := s.AllowSMS(segments); !ok {
+		return fmt.Errorf("%w: %s", ErrSMSBundle, why)
+	}
+	return nil
+}
+
+// smsHoldFor takes the bundle share of one SMS on the I/O loop. Without a
+// counter nothing is counted, as before the counter existed; the intent
+// route asks SMSBundleCheck first and does not submit then (B9FIX-R3).
+func (t *DirectCellTransport) smsHoldFor(to, text string, intent bool) (SMSHold, error) {
+	s := t.smsSpend()
+	if s == nil {
+		return nil, nil
+	}
+	return s.HoldSMS(to, text, intent)
 }
 
 // SetFallbackPIN sets a PIN to use when the SIM's ICCID can't be read (locked SIM)
@@ -1206,8 +1253,9 @@ func (t *DirectCellTransport) SendSMS(ctx context.Context, to string, text strin
 	}
 
 	log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS send starting")
+	var phase atomic.Int32
 	_, err := t.execRawFn(func(sp serial.Port) (string, error) {
-		return t.cmgs(sp, to, text, nil, nil)
+		return t.cmgs(sp, to, text, false, &phase, nil)
 	}, cellSMSSendTimeout+15*time.Second)
 
 	return err
@@ -1240,6 +1288,10 @@ var errSMSAbandoned = errors.New("cellular: SMS abandoned before it started")
 // var so a test can give up sooner.
 var smsSubmitTimeout = cellSMSSendTimeout + 15*time.Second
 
+// smsAnswerTimeout is how long an SMS waits for the network's answer after
+// its Ctrl-Z; a package var so a test can see the no-answer path.
+var smsAnswerTimeout = cellSMSSendTimeout
+
 // SubmitSMS sends one SMS of at most 160 characters, as SendSMS does, but
 // never cuts the text and says how far the submission got. A command still
 // queued when the caller gives up (behind a busy one) never starts: that
@@ -1262,7 +1314,7 @@ func (t *DirectCellTransport) SubmitSMS(ctx context.Context, to, text string) (S
 			return "", errSMSAbandoned
 		}
 		defer state.Store(3)
-		return t.cmgs(sp, to, text, &phase, &ref)
+		return t.cmgs(sp, to, text, true, &phase, &ref)
 	}, smsSubmitTimeout)
 	if state.CompareAndSwap(0, 2) {
 		return SMSSubmit{Phase: SMSNotSent}, err // never started, and now never will
@@ -1316,9 +1368,25 @@ func smsTextContract(sp serial.Port) error {
 	return nil
 }
 
-// cmgs is one AT+CMGS exchange on the I/O loop. phase and ref, when given,
-// record how far it got.
-func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomic.Int32, ref *atomic.Int64) (string, error) {
+// cmgs is one AT+CMGS exchange on the I/O loop; phase records how far it
+// got and ref, when given, the network's reference. intent marks a
+// delivery intent's SMS: held to the text contract and refused when the
+// prepaid bundle cannot take it.
+//
+// The bundle share is held here, on the loop that runs one command at a
+// time, before the first byte, and settled here from the answer, so no
+// SMS is checked against a count another one is still changing
+// (B9FIX-R1): +CMGS counts it as used, a refusal or a send that never put
+// its Ctrl-Z on the line gives it back, and a Ctrl-Z without a +CMGS
+// (a bare OK, no answer) stays possible use (B9FIX-R2).
+func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool, phase *atomic.Int32, ref *atomic.Int64) (string, error) {
+	hold, err := t.smsHoldFor(to, text, intent)
+	if err != nil {
+		return "", err
+	}
+	if hold != nil {
+		defer func() { hold.Settle(SMSPhase(phase.Load())) }()
+	}
 	log.Debug().Msg("cellular: SMS raw fn entered, draining")
 	// Ensure modem is in a clean state before CMGS.
 	drainPort(sp)
@@ -1347,7 +1415,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 	// A delivery intent's SMS goes only under the text contract it was
 	// admitted for (B7(l)): checked on every send, so a reconnect or a
 	// setting kept from earlier cannot change it. [MESHSAT-1584]
-	if phase != nil {
+	if intent {
 		if err := smsTextContract(sp); err != nil {
 			return "", err
 		}
@@ -1388,6 +1456,12 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 	// Drain any remaining echo data after > prompt before sending text
 	drainPort(sp)
 
+	// From the text on, the SMS may go: its share is possible use, kept
+	// across a restart, until the answer settles it.
+	if hold != nil {
+		hold.Possible()
+	}
+
 	// Send text body first, then Ctrl+Z separately.
 	// Some modems (Huawei E220 on 2G) need Ctrl-Z as a distinct write.
 	if _, err := sp.Write([]byte(text)); err != nil {
@@ -1407,7 +1481,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 
 	// Read CMGS response with detailed byte logging.
 	// The Huawei E220 on 2G can take 60-120s to respond after Ctrl-Z.
-	smsResp, err := readCMGSResponse(sp, cellSMSSendTimeout)
+	smsResp, err := readCMGSResponse(sp, smsAnswerTimeout)
 
 	if err != nil {
 		return "", fmt.Errorf("SMS send failed: %w", err)
@@ -1431,20 +1505,24 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, phase *atomi
 
 	// +CMGS: <mr> means the SMS was accepted by the network — success
 	// even if OK hasn't arrived yet (readATResponse now terminates on +CMGS:)
-	if cmgsReference.MatchString(smsResp) {
+	if SMSPhase(phase.Load()) == SMSAccepted {
 		log.Info().Str("to", to).Str("cmgs_resp", strings.TrimSpace(smsResp)).
 			Msg("cellular: SMS sent (got +CMGS)")
+		// The sent counter and the hook move on +CMGS only (B9FIX-R2).
+		// [MESHSAT-403]
+		t.stateMu.Lock()
+		t.smsSent++
+		hook := t.sentHook
+		t.stateMu.Unlock()
+		if hook != nil {
+			hook(to, text)
+		}
 	} else {
-		log.Info().Str("to", to).Int("len", len(text)).Msg("cellular: SMS sent OK")
-	}
-
-	// Increment SMS sent counter [MESHSAT-403]
-	t.stateMu.Lock()
-	t.smsSent++
-	hook := t.sentHook
-	t.stateMu.Unlock()
-	if hook != nil {
-		hook(to, text) // prepaid bundle counter [MESHSAT-1161]
+		// No reference: it may have gone. The bundle keeps it as possible
+		// use; SendSMS still answers nil here, as it always did, and only
+		// the intent path reports it unknown.
+		log.Warn().Str("to", to).Int("len", len(text)).Str("resp", strings.TrimSpace(smsResp)).
+			Msg("cellular: SMS answered without a +CMGS reference, counted as possible use")
 	}
 
 	// Post-send settle — give the modem time to finalize before accepting

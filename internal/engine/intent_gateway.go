@@ -192,7 +192,9 @@ func (w *DeliveryWorker) intentPreSendGateway(del database.MessageDelivery, ad g
 		if r == reasonOversize {
 			r = "oversize"
 		}
-		return "", false, &intentRefusal{Reason: r, Detail: detail + " (checked again before the send)"}
+		// A route not ready yet waits, as one whose gateway is not running
+		// (B9FIX-R3); every other refusal ends the attempt.
+		return "", false, &intentRefusal{Reason: r, Detail: detail + " (checked again before the send)", Retryable: r == reasonOffline}
 	}
 	return text, encrypted, nil
 }

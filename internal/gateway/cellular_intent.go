@@ -28,7 +28,9 @@ import (
 // Accepted by the network (+CMGS: <mr>) is accepted by the carrier, which
 // is all the first release knows (status reports are B7(i)); the outcome
 // is never "delivered to the recipient". With a prepaid bundle set, an SMS
-// goes only while one is left (r3 D8).
+// goes only while what is left covers it (r3 D8): checked here to spare a
+// queue, decided by the modem's I/O loop, which holds each SMS's share
+// before its first byte (B9FIX-R1).
 
 // SMSIntentCorrKind is the correlation kind of an SMS submission. No answer
 // carries it yet; it names the submission in the ledger.
@@ -36,9 +38,21 @@ const SMSIntentCorrKind = "sms_ref"
 
 var smsIntentNumberRE = regexp.MustCompile(`^\+?[0-9]{3,15}$`)
 
-// smsSubmitter is a modem that can say how far an SMS submission got.
+// smsSubmitter is a modem that can say how far an SMS submission got and
+// whether its prepaid bundle can take one more.
 type smsSubmitter interface {
 	SubmitSMS(ctx context.Context, to, text string) (transport.SMSSubmit, error)
+	SMSBundleCheck(segments int) error
+}
+
+// smsBundleRefusal is the admission answer for a bundle check's error: a
+// counter not set up yet is a route not ready (B9FIX-R3), anything else
+// a spent bundle.
+func smsBundleRefusal(err error) (reason, detail string) {
+	if errors.Is(err, transport.ErrSMSBundleNotReady) {
+		return "skipped_offline", err.Error()
+	}
+	return "skipped_budget", err.Error()
 }
 
 // IntentCorrKind implements IntentAdapter.
@@ -89,7 +103,8 @@ func (g *CellularGateway) IntentAdmit(dest string, wire []byte, encrypted bool) 
 	if !smsIntentNumberRE.MatchString(number) {
 		return "skipped_bad_address", fmt.Sprintf("%q is not a phone number", dest)
 	}
-	if _, ok := g.cell.(smsSubmitter); !ok {
+	sub, ok := g.cell.(smsSubmitter)
+	if !ok {
 		return "skipped_unsupported", "this modem cannot say whether an SMS left"
 	}
 	if encrypted && g.config.IsPlaintextPeer(number) {
@@ -107,8 +122,8 @@ func (g *CellularGateway) IntentAdmit(dest string, wire []byte, encrypted bool) 
 	if text == "" {
 		return "skipped_encoding", "nothing to send"
 	}
-	if ok, why := smsBundleAllows(1); !ok {
-		return "skipped_budget", why
+	if err := sub.SMSBundleCheck(1); err != nil {
+		return smsBundleRefusal(err)
 	}
 	return "", ""
 }
@@ -116,7 +131,8 @@ func (g *CellularGateway) IntentAdmit(dest string, wire []byte, encrypted bool) 
 // IntentSend implements IntentAdapter: one SMS, and how far it got.
 func (g *CellularGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcome {
 	if reason, detail := g.IntentAdmit(s.Destination, []byte(s.Text), s.Encrypted); reason != "" {
-		return IntentOutcome{Class: IntentNotSent, Reason: reason, Detail: detail}
+		// A route not ready yet (no bundle counter, B9FIX-R3) waits.
+		return IntentOutcome{Class: IntentNotSent, Reason: reason, Detail: detail, Retryable: reason == "skipped_offline"}
 	}
 	number := strings.TrimSpace(s.Destination)
 	text := smsIntentText([]byte(s.Text), s.Encrypted)
@@ -156,6 +172,12 @@ func (g *CellularGateway) IntentSend(ctx context.Context, s IntentSend) IntentOu
 		// sent again for it.
 		g.errors.Add(1)
 		return IntentOutcome{Class: IntentUnknown, Detail: "may still be submitted: " + detail}
+	}
+	if errors.Is(err, transport.ErrSMSBundle) || errors.Is(err, transport.ErrSMSBundleNotReady) {
+		// Refused on the I/O loop before any byte: the bundle had no room
+		// once the command ahead settled (B9FIX-R1), or no counter is set.
+		reason, _ := smsBundleRefusal(err)
+		return IntentOutcome{Class: IntentNotSent, Retryable: reason == "skipped_offline", Reason: reason, Detail: detail}
 	}
 	g.errors.Add(1)
 	if errors.Is(err, transport.ErrNotConnected) {

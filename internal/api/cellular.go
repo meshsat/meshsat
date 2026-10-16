@@ -861,7 +861,7 @@ func (s *Server) smsBundleResponse() map[string]interface{} {
 }
 
 // @Summary Get the prepaid SMS bundle counter
-// @Description Segments the network accepted since the last top-up against the bundle size, the warning threshold and the top-up reminder number [MESHSAT-1161]
+// @Description Segments the network accepted (+CMGS) since the last top-up against the bundle size, the segments that went to the modem without a network reference (uncertain: they may have been billed and count as used until the next top-up), what is left (size less both and the SMS being sent), the warning threshold and the top-up reminder number [MESHSAT-1161, MESHSAT-1584]
 // @Tags cellular
 // @Produce json
 // @Success 200 {object} map[string]interface{}
@@ -876,7 +876,7 @@ func (s *Server) handleGetSMSBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary Record a top-up or tune the prepaid SMS bundle counter
-// @Description size (with optional sent, default 0) records a top-up and re-arms the warning and the reminder; warn_at and alert_number (E.164) change the threshold and the reminder number; each field is optional [MESHSAT-1161]
+// @Description size (with optional sent, default 0) records a top-up and re-arms the warning and the reminder, and its figures replace the uncertain count; warn_at and alert_number (E.164) change the threshold and the reminder number; each field is optional [MESHSAT-1161, MESHSAT-1584]
 // @Tags cellular
 // @Accept json
 // @Produce json
