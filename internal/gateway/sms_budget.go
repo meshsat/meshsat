@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -360,6 +361,37 @@ func (b *SMSBudget) HealthStatus() (state, detail string) {
 	default:
 		return HealthStateOK, fmt.Sprintf("SMS credit %d of %d left", remaining, b.size)
 	}
+}
+
+// Allow says whether a delivery intent may send segments more SMS now: with
+// a bundle set, only while that many are left (r3 D8: a paid route never
+// spends past what was bought). Without a bundle it allows: nothing is
+// counted against. Only the intent route asks; every other send path is
+// counted, not refused. [MESHSAT-1584]
+func (b *SMSBudget) Allow(segments int) (bool, string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.size <= 0 {
+		return true, ""
+	}
+	if remaining := b.size - b.sent; remaining < segments {
+		return false, fmt.Sprintf("the prepaid SMS bundle has %d of %d left, this SMS takes %d", max(remaining, 0), b.size, segments)
+	}
+	return true, ""
+}
+
+// The process-wide bundle gate for the intent route, set once in main when
+// the bundle counter exists.
+var smsBundleGate atomic.Value // func(int) (bool, string)
+
+// SetSMSBundleGate installs the bundle gate the SMS intent route asks.
+func SetSMSBundleGate(fn func(segments int) (bool, string)) { smsBundleGate.Store(fn) }
+
+func smsBundleAllows(segments int) (bool, string) {
+	if fn, _ := smsBundleGate.Load().(func(int) (bool, string)); fn != nil {
+		return fn(segments)
+	}
+	return true, ""
 }
 
 // Wait blocks until an in-flight reminder send has finished (tests).

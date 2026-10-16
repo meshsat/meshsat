@@ -22,10 +22,13 @@ import (
 // One SMS of at most 160 characters per submission, never cut or changed:
 // a ciphertext goes as its base64 (the version byte is dropped, as MeshSat
 // Android expects), a plain text only when every character is one this path
-// carries unchanged (printable ASCII in the GSM 03.38 basic table; AT text
-// mode never sets AT+CSCS). Accepted by the network (+CMGS) is accepted by
-// the carrier, which is all the first release knows (status reports are
-// B7(i)); the outcome is never "delivered to the recipient".
+// carries unchanged (printable ASCII in the GSM 03.38 basic table). The
+// modem is held to that contract on every send (the TE character set IRA,
+// text-mode coding GSM 7-bit; transport.smsTextContract), or nothing goes.
+// Accepted by the network (+CMGS: <mr>) is accepted by the carrier, which
+// is all the first release knows (status reports are B7(i)); the outcome
+// is never "delivered to the recipient". With a prepaid bundle set, an SMS
+// goes only while one is left (r3 D8).
 
 // SMSIntentCorrKind is the correlation kind of an SMS submission. No answer
 // carries it yet; it names the submission in the ledger.
@@ -104,6 +107,9 @@ func (g *CellularGateway) IntentAdmit(dest string, wire []byte, encrypted bool) 
 	if text == "" {
 		return "skipped_encoding", "nothing to send"
 	}
+	if ok, why := smsBundleAllows(1); !ok {
+		return "skipped_budget", why
+	}
 	return "", ""
 }
 
@@ -143,7 +149,13 @@ func (g *CellularGateway) IntentSend(ctx context.Context, s IntentSend) IntentOu
 			Detail: "refused by the network: " + detail}
 	case transport.SMSHandedOver:
 		g.errors.Add(1)
-		return IntentOutcome{Class: IntentUnknown, Detail: "handed to the modem, no answer from the network: " + detail}
+		return IntentOutcome{Class: IntentUnknown, Detail: "handed to the modem, no acceptance from the network: " + detail}
+	case transport.SMSUnfinished:
+		// The modem command still runs and may yet submit it (B9SMS-R1):
+		// unknown, so its price stays counted as possible and nothing is
+		// sent again for it.
+		g.errors.Add(1)
+		return IntentOutcome{Class: IntentUnknown, Detail: "may still be submitted: " + detail}
 	}
 	g.errors.Add(1)
 	if errors.Is(err, transport.ErrNotConnected) {

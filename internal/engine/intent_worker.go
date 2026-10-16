@@ -76,7 +76,7 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 	// it is, and that figure is reserved against the intent's cap with the
 	// transmission, before any call (r3 D8, B9). A free route reserves
 	// nothing. [MESHSAT-1584]
-	tariff, units, minor, refuse := w.intentPrice(ad, text)
+	tariff, units, minor, refuse := w.intentPrice(ad, del, text)
 	if refuse != nil {
 		_ = w.db.EndAttemptNotSent(del.ID, gen, refuse.Reason, refuse.Detail, false, time.Time{})
 		log.Info().Int64("id", del.ID).Str("intent", del.IntentID).Str("reason", refuse.Reason).Msg("intent attempt not sent")

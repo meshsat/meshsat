@@ -1819,6 +1819,9 @@ func main() {
 			proc.Emit(transport.MeshEvent{Type: eventType, Message: message, Time: time.Now().UTC().Format(time.RFC3339)})
 		})
 		hooked.SetSentHook(smsBudget.Record)
+		// The SMS delivery-intent route sends only while the bundle has an
+		// SMS left (r3 D8); the other paths are counted, not refused. [MESHSAT-1584]
+		gateway.SetSMSBundleGate(smsBudget.Allow)
 		srv.SetSMSBudget(smsBudget)
 		if st := smsBudget.Status(); st != nil {
 			log.Info().Int("size", st.Size).Int("sent", st.Sent).Int("remaining", st.Remaining).Int("warn_at", st.WarnAt).
