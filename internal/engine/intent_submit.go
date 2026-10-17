@@ -420,6 +420,14 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 		p.AdapterMode = modeIMT
 		e.admitGateway(&p, a.Kind, payload)
 		return p
+	case directory.KindIridiumSBD:
+		// A paid route (B9): one SBD session through the kit's 9603, only
+		// to the destination recorded for its messages; taken by the
+		// Iridium gateway is all it knows, so no completion rule.
+		// [MESHSAT-1584]
+		p.AdapterMode = modeSBD
+		e.admitGateway(&p, a.Kind, payload)
+		return p
 	default:
 		p.Reason = reasonNotEnabled
 		return p

@@ -42,6 +42,14 @@ type IntentBilled interface {
 	IntentBilled() bool
 }
 
+// IntentSized is a billed adapter whose provider bills a frame other than
+// the wire text (the SBD compact frame): the engine prices that many bytes,
+// at admission, at authorization and for the charge, so the reservation is
+// the charge. [MESHSAT-1584]
+type IntentSized interface {
+	IntentBilledBytes(wire []byte) int
+}
+
 // IntentSend is one submission of an intent's attempt.
 type IntentSend struct {
 	Destination string // the route's address, as admitted
