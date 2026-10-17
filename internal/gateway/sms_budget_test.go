@@ -330,7 +330,7 @@ func TestSMSBudget_HoldLifecycle(t *testing.T) {
 	if _, err := b.HoldSMS("+311", "six", true); !errors.Is(err, transport.ErrSMSBundle) {
 		t.Fatalf("intent SMS with nothing left: %v; want ErrSMSBundle", err)
 	}
-	if ok, _ := b.AllowSMS(1); ok {
+	if b.CheckSMS(1) == nil {
 		t.Fatal("the snapshot check ignores the running send")
 	}
 	if state, detail := b.HealthStatus(); state != HealthStateFailed {
@@ -364,7 +364,45 @@ func TestSMSBudget_NoBundleHolds(t *testing.T) {
 	if b.Status() != nil {
 		t.Fatal("a status without a bundle")
 	}
-	if ok, why := b.AllowSMS(5); !ok {
-		t.Fatalf("no bundle refused: %s", why)
+	if err := b.CheckSMS(5); err != nil {
+		t.Fatalf("no bundle refused: %v", err)
+	}
+}
+
+// A counted-only SMS whose share cannot be stored still goes (the legacy
+// paths are never refused) and is counted in memory; an intent SMS does
+// not go (B9FIX-R4). The status shows the storage error.
+func TestSMSBudget_StoreFailureByPath(t *testing.T) {
+	db := newBudgetDB(t)
+	b := NewSMSBudget(db, "kitA", SMSBudgetOptions{}, (&fakeSender{}).send)
+	if err := b.Reset(3, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_unsure BEFORE INSERT ON system_config
+		WHEN NEW.key = 'sms_bundle_uncertain' AND CAST(NEW.value AS INTEGER) > 0
+		BEGIN SELECT RAISE(ABORT, 'rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	hi, err := b.HoldSMS("+311", "intent", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hi.Possible(); !errors.Is(err, transport.ErrSMSBundleNotReady) {
+		t.Fatalf("intent SMS with an unstored share: %v; want ErrSMSBundleNotReady (do not send)", err)
+	}
+	hi.Settle(transport.SMSNotSent)
+	hl, _ := b.HoldSMS("+311", "legacy", false)
+	if err := hl.Possible(); err != nil {
+		t.Fatalf("counted-only SMS refused: %v", err)
+	}
+	if st := b.Status(); st.Uncertain != 1 || st.Remaining != 2 || st.Error == "" {
+		t.Fatalf("counted in memory: %+v; want uncertain 1 and the error", st)
+	}
+	if state, _ := b.HealthStatus(); state != HealthStateDegraded {
+		t.Fatalf("health %s; want degraded", state)
+	}
+	hl.Settle(transport.SMSRefused)
+	if st := b.Status(); st.Uncertain != 0 || st.Remaining != 3 {
+		t.Fatalf("refused: %+v; want the share back", st)
 	}
 }

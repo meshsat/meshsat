@@ -31,6 +31,9 @@ type SMSBundleStatus struct {
 	Alerted   bool       `json:"alerted"` // the top-up reminder SMS went out for this bundle
 	AlertSet  bool       `json:"alert_configured"`
 	ResetAt   *time.Time `json:"reset_at,omitempty"`
+	// Error: the stored bundle could not be read (nothing else is known)
+	// or its count could not be stored. [MESHSAT-1584]
+	Error string `json:"error,omitempty"`
 }
 
 // CellStatus represents the connection status of the cellular modem.

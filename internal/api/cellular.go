@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -883,6 +884,7 @@ func (s *Server) handleGetSMSBundle(w http.ResponseWriter, r *http.Request) {
 // @Param body body object true "{size?, sent?, warn_at?, alert_number?}"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} map[string]string "invalid value"
+// @Failure 500 {object} map[string]string "the bundle could not be read or stored; nothing changed"
 // @Failure 503 {object} map[string]string "no cellular modem"
 // @Router /api/cellular/bundle [put]
 func (s *Server) handleSetSMSBundle(w http.ResponseWriter, r *http.Request) {
@@ -907,7 +909,11 @@ func (s *Server) handleSetSMSBundle(w http.ResponseWriter, r *http.Request) {
 	// One call under one lock: the thresholds are evaluated after every
 	// field is in place, never between the number and the size.
 	if err := s.smsBudget.Apply(req.Size, req.Sent, req.WarnAt, req.AlertNumber); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if errors.Is(err, gateway.ErrSMSBundleStorage) {
+			status = http.StatusInternalServerError
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	if req.Size != nil {

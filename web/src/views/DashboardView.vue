@@ -537,6 +537,7 @@ const cellStatus = computed(() => {
   if (issue === 'failed') return { dot: 'bg-red-400', text: 'Not answering' }
   if (issue === 'healing') return { dot: 'bg-amber-400', text: 'Healing' }
   // Prepaid bundle nearly or fully spent: the modem is fine, the card is not. [MESHSAT-1161]
+  if (cs?.connected && cs?.sms_bundle?.error && !cs?.sms_bundle?.size) return { dot: 'bg-red-400', text: 'SMS credit unreadable' }
   if (cs?.connected && cs?.sms_bundle?.empty) return { dot: 'bg-red-400', text: 'SMS credit spent' }
   if (cs?.connected && cs?.sms_bundle?.low) return { dot: 'bg-amber-400', text: 'SMS credit low' }
   // Check transport status first (direct modem connection)

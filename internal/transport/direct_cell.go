@@ -208,17 +208,15 @@ func (t *DirectCellTransport) smsSpend() SMSSpend {
 
 // SMSBundleCheck says whether the bundle can take an intent SMS of
 // segments now, without a hold: nil, ErrSMSBundleNotReady before
-// SetSMSSpend, or an error wrapping ErrSMSBundle. The hold on the I/O loop
-// still decides; this only spares a queue. [MESHSAT-1584]
+// SetSMSSpend or while the counter cannot be read, or an error wrapping
+// ErrSMSBundle. The hold on the I/O loop still decides; this only spares
+// a queue. [MESHSAT-1584]
 func (t *DirectCellTransport) SMSBundleCheck(segments int) error {
 	s := t.smsSpend()
 	if s == nil {
 		return ErrSMSBundleNotReady
 	}
-	if ok, why := s.AllowSMS(segments); !ok {
-		return fmt.Errorf("%w: %s", ErrSMSBundle, why)
-	}
-	return nil
+	return s.CheckSMS(segments)
 }
 
 // smsHoldFor takes the bundle share of one SMS on the I/O loop. Without a
@@ -1421,6 +1419,16 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 		}
 	}
 
+	// From AT+CMGS on, the SMS may go: its share is possible use, stored
+	// before the command, kept across a restart, until the answer settles
+	// it. A delivery intent's SMS whose share cannot be stored does not
+	// go (B9FIX-R4).
+	if hold != nil {
+		if err := hold.Possible(); err != nil {
+			return "", err
+		}
+	}
+
 	// AT+CMGS="number"
 	cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
 	drainPort(sp)
@@ -1455,12 +1463,6 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 
 	// Drain any remaining echo data after > prompt before sending text
 	drainPort(sp)
-
-	// From the text on, the SMS may go: its share is possible use, kept
-	// across a restart, until the answer settles it.
-	if hold != nil {
-		hold.Possible()
-	}
 
 	// Send text body first, then Ctrl+Z separately.
 	// Some modems (Huawei E220 on 2G) need Ctrl-Z as a distinct write.
