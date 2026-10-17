@@ -34,6 +34,8 @@ var vcardXMeshsatKinds = map[string]Kind{
 	"X-MESHSAT-BLE":         KindBLE,
 	"X-MESHSAT-WEBHOOK":     KindWebhook,
 	"X-MESHSAT-MQTT":        KindMQTT,
+	"X-MESHSAT-TETRA":       KindTETRA,
+	"X-MESHSAT-CELL":        KindCell,
 }
 
 // ParseVCards reads one or more vCard 4.0 BEGIN:VCARD .. END:VCARD

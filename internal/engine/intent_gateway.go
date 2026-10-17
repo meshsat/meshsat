@@ -24,14 +24,17 @@ import (
 // receipt sink. [MESHSAT-1584]
 
 const (
-	modeAPRS = "aprs"
-	modeSMS  = "sms"
-	modeIMT  = "imt"
-	modeSBD  = "sbd"
+	modeAPRS  = "aprs"
+	modeSMS   = "sms"
+	modeIMT   = "imt"
+	modeSBD   = "sbd"
+	modeTETRA = "tetra"
+	modeCell  = "cell"
+	modeZB    = "zigbee"
 )
 
 // gatewayModes are the adapter modes a gateway carries.
-var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true, modeSBD: true}
+var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true, modeSBD: true, modeTETRA: true, modeCell: true, modeZB: true}
 
 // billed reports whether an adapter's submissions cost money (B9).
 func billed(ad gateway.IntentAdapter) bool {

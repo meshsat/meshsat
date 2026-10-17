@@ -35,6 +35,10 @@ type ZigBeeGateway struct {
 	// unwired (e.g. TAK gateway disabled) the corresponding hop is skipped
 	// silently. [MESHSAT-509]
 	sensorRouter zigbeeSensorRouter
+
+	// intentTx sends an intent's frame; the transport when nil (a test
+	// sets a fake). [MESHSAT-1584]
+	intentTx zigbeeSender
 }
 
 // zigbeeSensorRouter is the dependency-injected target set for sensor

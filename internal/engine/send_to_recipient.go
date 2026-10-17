@@ -107,6 +107,8 @@ var kindToChannelType = map[directory.Kind]string{
 	directory.KindBLE:        "ble",
 	directory.KindWebhook:    "webhook",
 	directory.KindMQTT:       "mqtt",
+	directory.KindTETRA:      "tetra",
+	directory.KindCell:       "cell",
 }
 
 // RecipientResolver is the narrow view of [directory.Store] the

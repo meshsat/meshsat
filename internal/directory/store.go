@@ -35,6 +35,12 @@ const (
 	KindWebhook    Kind = "WEBHOOK"
 	KindEmail      Kind = "EMAIL"
 	KindMQTT       Kind = "MQTT"
+	// KindTETRA is an SDS address: a DMO talk group or a radio's ITSI
+	// (owner ruling 17 Oct 2026). KindCell is a phone's number on the
+	// MeshSat 2G cell, the short MSISDN (e.g. 1001), apart from its
+	// public SMS number. [MESHSAT-1584]
+	KindTETRA Kind = "TETRA"
+	KindCell  Kind = "CELL"
 )
 
 // AllKinds is the full set of recognised bearer kinds, in the order
@@ -42,7 +48,7 @@ const (
 var AllKinds = []Kind{
 	KindSMS, KindMeshtastic, KindAPRS, KindIridiumSBD, KindIridiumIMT,
 	KindCellular, KindTAK, KindReticulum, KindZigBee, KindBLE,
-	KindWebhook, KindEmail, KindMQTT,
+	KindWebhook, KindEmail, KindMQTT, KindTETRA, KindCell,
 }
 
 // Valid reports whether k is a recognised bearer kind.

@@ -356,8 +356,14 @@ func (g *CellGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 			}
 			return fmt.Errorf("cell: %s: %w", smpp.StatusText(status), transport.ErrSubscriberAbsent)
 		default:
+			// A refusal reached no phone: nothing was delivered (forward
+			// mode answers only once the phone acknowledged). A later
+			// part's refusal follows parts that were. [MESHSAT-1584]
 			g.errors.Add(1)
-			return fmt.Errorf("cell: submit_sm refused: %s (0x%02x)", smpp.StatusText(status), status)
+			if i == 0 {
+				return fmt.Errorf("cell: submit_sm refused: %s (0x%02x): %w", smpp.StatusText(status), status, transport.ErrNotSubmitted)
+			}
+			return fmt.Errorf("cell: submit_sm part %d/%d refused: %s (0x%02x)", i+1, len(parts), smpp.StatusText(status), status)
 		}
 	}
 

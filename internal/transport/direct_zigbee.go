@@ -1061,14 +1061,16 @@ func hexDecodeIEEE(s string) ([8]byte, error) {
 // chance of delivery.
 func (z *DirectZigBeeTransport) Send(dstAddr uint16, dstEP byte, clusterID uint16, data []byte) error {
 	z.mu.Lock()
+	// Down or not yet a coordinator: nothing was written, the link is not
+	// up (ErrNotConnected). [MESHSAT-1584]
 	if !z.running {
 		z.mu.Unlock()
-		return fmt.Errorf("zigbee transport not running")
+		return fmt.Errorf("zigbee transport not running: %w", ErrNotConnected)
 	}
 	if z.coordState != ZNPDevStateCoord {
 		state := z.coordState
 		z.mu.Unlock()
-		return fmt.Errorf("zigbee coordinator not ready (state=%s)", ZNPDevStateName(state))
+		return fmt.Errorf("zigbee coordinator not ready (state=%s): %w", ZNPDevStateName(state), ErrNotConnected)
 	}
 	z.transID++
 	tid := z.transID

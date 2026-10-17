@@ -420,6 +420,28 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 		p.AdapterMode = modeIMT
 		e.admitGateway(&p, a.Kind, payload)
 		return p
+	case directory.KindTETRA:
+		// A free route: one SDS through the kit's TETRA radio to a talk
+		// group (or later an ITSI); taken by the radio is all a group SDS
+		// says, so no completion rule. [MESHSAT-1584]
+		p.AdapterMode = modeTETRA
+		e.admitGateway(&p, a.Kind, payload)
+		return p
+	case directory.KindZigBee:
+		// A free route: one frame through the kit's ZigBee coordinator to
+		// one device; written to the coordinator is all it knows (no APS
+		// acknowledgement), so no completion rule. [MESHSAT-1584]
+		p.AdapterMode = modeZB
+		e.admitGateway(&p, a.Kind, payload)
+		return p
+	case directory.KindCell:
+		// A free route: one text to a phone on the MeshSat 2G cell; in
+		// forward mode the cell answers once the phone acknowledged it, so
+		// the route completes delivered to the handset. [MESHSAT-1584]
+		p.AdapterMode = modeCell
+		p.CompletionRule = database.OutcomeDeliveredHandset
+		e.admitGateway(&p, a.Kind, payload)
+		return p
 	case directory.KindIridiumSBD:
 		// A paid route (B9): one SBD session through the kit's 9603, only
 		// to the destination recorded for its messages; taken by the
