@@ -90,6 +90,11 @@ type pendingRequest struct {
 	target   string
 	ch       chan jsprResponse // buffered, capacity 1
 	deadline time.Time
+	// keep: the waiter takes several replies and removes the request
+	// itself. A wait for an MO result skips replies that are not its own,
+	// and a request deleted at the first of them left the real result,
+	// arriving right after, with nobody to take it. [MESHSAT-1584]
+	keep bool
 }
 
 // jsprWriteRequest is sent to the reader goroutine's write channel.
@@ -223,7 +228,9 @@ func (c *jsprConn) readerLoop() {
 		// Dispatch to pending request
 		c.pendingMu.Lock()
 		if pr, ok := c.pending[resp.Target]; ok {
-			delete(c.pending, resp.Target)
+			if !pr.keep {
+				delete(c.pending, resp.Target)
+			}
 			c.pendingMu.Unlock()
 			log.Debug().Int("code", resp.Code).Str("target", resp.Target).Msg("jspr: dispatched to caller")
 			// Non-blocking send (channel is buffered with capacity 1)
@@ -245,7 +252,9 @@ func (c *jsprConn) readerLoop() {
 				break
 			}
 			if anyPR != nil {
-				delete(c.pending, anyKey)
+				if !anyPR.keep {
+					delete(c.pending, anyKey)
+				}
 				c.pendingMu.Unlock()
 				log.Debug().Int("code", resp.Code).Str("target", resp.Target).Str("expected", anyPR.target).Msg("jspr: delivering error response with mismatched target")
 				select {
@@ -702,7 +711,32 @@ type jsprMOStatus struct {
 	// RequestReference is set by the helper on its mo_result: the reference
 	// Go sent with the send_mo this result belongs to. 0 = an older helper.
 	RequestReference int `json:"request_reference,omitempty"`
+	// RefusedAt and SegmentSupplied are the helper's own account where it
+	// has one: "originate" when the modem refused the message before it
+	// held it, and whether the payload was handed to the modem at all.
+	// [MESHSAT-1584]
+	RefusedAt       string `json:"refused_at,omitempty"`
+	SegmentSupplied *bool  `json:"segment_supplied,omitempty"`
 }
+
+// moResult is how one MO ended as far as this side can tell: the modem's
+// final status, or the helper's marker for a send it ended itself, and
+// whether the payload reached the modem. That decides what an end without
+// a status from the modem means: a 9704 transmits only data it was given,
+// and a message it refused at messageOriginate it never held. [MESHSAT-1584]
+type moResult struct {
+	Status   string
+	Supplied moSupplied
+}
+
+// moSupplied says whether an MO's payload was handed to the modem.
+type moSupplied int8
+
+const (
+	moSuppliedUnknown moSupplied = iota
+	moSuppliedNo
+	moSuppliedYes
+)
 
 type jsprMTAnnounce struct {
 	TopicID          int `json:"topic_id"`
@@ -928,8 +962,16 @@ func (c *jsprConn) jsprCheckProvisioning() ([]jsprProvisioningTopic, error) {
 // Handles the full flow: messageOriginate → segment responses → final status.
 // Returns final MO status string and any error.
 func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
+	r, err := c.jsprSendMOResult(topicID, payload, false)
+	return r.Status, err
+}
+
+// jsprSendMOResult is jsprSendMO with the whole account of the send. strict
+// takes from the helper only a result tagged with this send's reference: a
+// delivery intent's MO must not be booked with another reply. [MESHSAT-1584]
+func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, strict bool) (moResult, error) {
 	if len(payload) > jsprMaxPayload {
-		return "", fmt.Errorf("payload too large: %d bytes (max %d)", len(payload), jsprMaxPayload)
+		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("payload too large: %d bytes (max %d)", len(payload), jsprMaxPayload)
 	}
 
 	// Append CRC to payload
@@ -940,7 +982,7 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 	// The helper responds to segment requests inline on the serial thread,
 	// avoiding the ~1s async latency that causes "segment_not_supplied".
 	if helper, ok := c.port.(*jsprHelperPort); ok {
-		return c.jsprSendMOViaHelper(helper, topicID, dataWithCRC, ref)
+		return c.jsprSendMOViaHelper(helper, topicID, dataWithCRC, ref, strict)
 	}
 
 	// 1. Initiate MO
@@ -950,21 +992,23 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 		RequestReference: ref,
 	})
 	if err != nil {
-		return "", fmt.Errorf("messageOriginate: %w", err)
+		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("messageOriginate: %w", err)
 	}
 	if resp.Code != jsprCodeOK {
-		return "", fmt.Errorf("messageOriginate returned code %d", resp.Code)
+		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("messageOriginate returned code %d", resp.Code)
 	}
 
 	var moResp jsprMOResponse
 	if err := json.Unmarshal(resp.JSON, &moResp); err != nil {
-		return "", fmt.Errorf("parse messageOriginate response: %w", err)
+		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("parse messageOriginate response: %w", err)
 	}
 	if moResp.MessageResponse != "message_accepted" {
-		return moResp.MessageResponse, fmt.Errorf("message not accepted: %s", moResp.MessageResponse)
+		return moResult{Status: moResp.MessageResponse, Supplied: moSuppliedNo},
+			fmt.Errorf("message not accepted: %s", moResp.MessageResponse)
 	}
 
 	msgID := moResp.MessageID
+	supplied := moSuppliedNo
 
 	// 2. Wait for segment requests and final status via unsolicited buffer.
 	// The reader goroutine handles all serial reads; we just consume the buffer.
@@ -990,6 +1034,7 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 			}
 
 			segData := base64.StdEncoding.EncodeToString(dataWithCRC[start:end])
+			supplied = moSuppliedYes
 			segResp, err := c.sendRequestWithTimeout("PUT", "messageOriginateSegment", jsprMOSegmentPut{
 				TopicID:       topicID,
 				MessageID:     msgID,
@@ -1014,7 +1059,7 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 			}
 			log.Info().Str("final_status", status.FinalMOStatus).Int("status_msg_id", status.MessageID).Int("expected_msg_id", msgID).Msg("jspr: MO final status received")
 			if status.MessageID == msgID {
-				return status.FinalMOStatus, nil
+				return moResult{Status: status.FinalMOStatus, Supplied: supplied}, nil
 			}
 		}
 
@@ -1022,20 +1067,27 @@ func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
 		c.waitForUnsolicited(50 * time.Millisecond)
 	}
 
-	return "", fmt.Errorf("MO timeout after %s", jsprMOTimeout)
+	return moResult{Supplied: supplied}, fmt.Errorf("MO timeout after %s", jsprMOTimeout)
 }
 
 // jsprSendMOViaHelper delegates the entire MO flow to the Python helper.
 // The helper handles messageOriginate + segment exchange inline on the serial
 // thread, responding to segment requests in sub-millisecond time.
 // The result comes back as a "mo_result" message (code 200, target messageOriginateStatus).
-func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, dataWithCRC []byte, ref int) (string, error) {
+func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, dataWithCRC []byte, ref int, strict bool) (moResult, error) {
 	dataB64 := base64.StdEncoding.EncodeToString(dataWithCRC)
 
+	// Wait before asking: a result that came back before the wait was
+	// registered had nobody to take it, and the send waited out its three
+	// minutes for a message that had gone. [MESHSAT-1584]
+	w := c.expectHelperMOResult(jsprMOTimeout)
 	if err := helper.SendMOCommand(topicID, dataB64, len(dataWithCRC), ref, jsprMOHelperBudget); err != nil {
-		return "", fmt.Errorf("send_mo command: %w", err)
+		w.done()
+		// The helper reads whole lines: a command it did not get whole is
+		// never started.
+		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("send_mo command: %w", err)
 	}
-	return c.awaitHelperMOResult(ref, jsprMOTimeout)
+	return c.awaitMOResult(w, ref, strict)
 }
 
 // awaitHelperMOResult waits for the helper's final mo_result for the send_mo
@@ -1048,14 +1100,49 @@ func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, data
 // that Go had already given up on. Taking it would book THIS message with the
 // other one's fate, delivered when it never left or the reverse, so it is
 // logged and skipped. [MESHSAT-1282]
-func (c *jsprConn) awaitHelperMOResult(ref int, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
+//
+// strict also skips a result with no reference at all: the helper tags every
+// result it sends, so an untagged one is some other command's error reply,
+// which the reader hands to any waiting request. [MESHSAT-1584]
+func (c *jsprConn) awaitHelperMOResult(ref int, timeout time.Duration, strict bool) (moResult, error) {
+	return c.awaitMOResult(c.expectHelperMOResult(timeout), ref, strict)
+}
+
+// moWait is a registered wait for one send's MO result.
+type moWait struct {
+	c  *jsprConn
+	pr *pendingRequest
+}
+
+// expectHelperMOResult registers the wait for an MO result; it stays
+// registered through replies that are not the send's own, until done.
+func (c *jsprConn) expectHelperMOResult(timeout time.Duration) moWait {
+	pr := &pendingRequest{
+		target:   "messageOriginateStatus",
+		ch:       make(chan jsprResponse, 8),
+		deadline: time.Now().Add(timeout),
+		keep:     true,
+	}
+	c.pendingMu.Lock()
+	c.pending["messageOriginateStatus"] = pr
+	c.pendingMu.Unlock()
+	return moWait{c: c, pr: pr}
+}
+
+// done removes the wait.
+func (w moWait) done() {
+	w.c.pendingMu.Lock()
+	if w.c.pending["messageOriginateStatus"] == w.pr {
+		delete(w.c.pending, "messageOriginateStatus")
+	}
+	w.c.pendingMu.Unlock()
+}
+
+// awaitMOResult takes the result of the send that carried ref from w.
+func (c *jsprConn) awaitMOResult(w moWait, ref int, strict bool) (moResult, error) {
+	pr, deadline, timeout := w.pr, w.pr.deadline, time.Until(w.pr.deadline).Round(time.Second)
+	defer w.done()
 	for {
-		pr := &pendingRequest{
-			target:   "messageOriginateStatus",
-			ch:       make(chan jsprResponse, 1),
-			deadline: deadline,
-		}
 		c.pendingMu.Lock()
 		c.pending["messageOriginateStatus"] = pr
 		c.pendingMu.Unlock()
@@ -1064,7 +1151,7 @@ func (c *jsprConn) awaitHelperMOResult(ref int, timeout time.Duration) (string, 
 		case resp := <-pr.ch:
 			var status jsprMOStatus
 			if err := json.Unmarshal(resp.JSON, &status); err != nil {
-				return "", fmt.Errorf("parse mo_result: %w", err)
+				return moResult{}, fmt.Errorf("parse mo_result: %w", err)
 			}
 			if status.RequestReference != 0 && status.RequestReference != ref {
 				log.Warn().Str("final_status", status.FinalMOStatus).Int("msg_id", status.MessageID).
@@ -1072,22 +1159,31 @@ func (c *jsprConn) awaitHelperMOResult(ref int, timeout time.Duration) (string, 
 					Msg("jspr: MO result belongs to an earlier send, skipped")
 				continue
 			}
+			if status.RequestReference == 0 && strict {
+				log.Warn().Int("code", resp.Code).Str("target", resp.Target).Int("want_ref", ref).
+					Msg("jspr: a reply without a reference is not this MO's result, skipped")
+				continue
+			}
+			r := moResult{Status: status.FinalMOStatus}
+			if status.SegmentSupplied != nil {
+				r.Supplied = moSuppliedNo
+				if *status.SegmentSupplied {
+					r.Supplied = moSuppliedYes
+				}
+			}
+			if status.RefusedAt == "originate" || (resp.Code >= 400 && status.RequestReference == ref) {
+				r.Supplied = moSuppliedNo // refused at messageOriginate: never held
+			}
 			log.Info().Str("final_status", status.FinalMOStatus).Int("msg_id", status.MessageID).Msg("jspr: MO via helper complete")
-			return status.FinalMOStatus, nil
+			return r, nil
 		case <-time.After(time.Until(deadline)):
-			c.pendingMu.Lock()
-			delete(c.pending, "messageOriginateStatus")
-			c.pendingMu.Unlock()
-			return "", fmt.Errorf("MO helper timeout after %s", timeout)
+			return moResult{}, fmt.Errorf("MO helper timeout after %s", timeout)
 		case <-c.readerDone:
 			// The session was torn down under the send (a reset or a
 			// reconnect): no result can come any more, so fail now and let
 			// the worker retry, rather than hold the channel for the rest of
 			// the three minutes. [MESHSAT-1282]
-			c.pendingMu.Lock()
-			delete(c.pending, "messageOriginateStatus")
-			c.pendingMu.Unlock()
-			return "", fmt.Errorf("MO abandoned: the JSPR session closed while it was in flight")
+			return moResult{}, fmt.Errorf("MO abandoned: the JSPR session closed while it was in flight")
 		}
 	}
 }

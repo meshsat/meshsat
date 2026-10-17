@@ -39,8 +39,8 @@ func TestAwaitHelperMOResult_SkipsAnotherSendsResult(t *testing.T) {
 	}
 	done := make(chan out, 1)
 	go func() {
-		s, err := c.awaitHelperMOResult(23, 5*time.Second)
-		done <- out{s, err}
+		r, err := c.awaitHelperMOResult(23, 5*time.Second, false)
+		done <- out{r.Status, err}
 	}()
 
 	deliverMOResult(t, c, jsprMOStatus{MessageID: 22, FinalMOStatus: "mo_ack_received", RequestReference: 22})
@@ -67,8 +67,8 @@ func TestAwaitHelperMOResult_AcceptsUntaggedResult(t *testing.T) {
 	c := &jsprConn{pending: make(map[string]*pendingRequest)}
 	done := make(chan string, 1)
 	go func() {
-		s, _ := c.awaitHelperMOResult(7, 5*time.Second)
-		done <- s
+		r, _ := c.awaitHelperMOResult(7, 5*time.Second, false)
+		done <- r.Status
 	}()
 	deliverMOResult(t, c, jsprMOStatus{MessageID: 9, FinalMOStatus: "mo_ack_received"})
 	select {
@@ -83,7 +83,7 @@ func TestAwaitHelperMOResult_AcceptsUntaggedResult(t *testing.T) {
 
 func TestAwaitHelperMOResult_TimesOutAndClearsPending(t *testing.T) {
 	c := &jsprConn{pending: make(map[string]*pendingRequest)}
-	if _, err := c.awaitHelperMOResult(1, 30*time.Millisecond); err == nil {
+	if _, err := c.awaitHelperMOResult(1, 30*time.Millisecond, false); err == nil {
 		t.Fatal("want a timeout error")
 	}
 	if len(c.pending) != 0 {

@@ -413,6 +413,13 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 		p.AdapterMode = modeSMS
 		e.admitGateway(&p, a.Kind, payload)
 		return p
+	case directory.KindIridiumIMT:
+		// A paid route (B9): one MO through the kit's 9704, only to the
+		// destination recorded for its messages; acknowledged by the
+		// network is all it knows, so no completion rule. [MESHSAT-1584]
+		p.AdapterMode = modeIMT
+		e.admitGateway(&p, a.Kind, payload)
+		return p
 	default:
 		p.Reason = reasonNotEnabled
 		return p

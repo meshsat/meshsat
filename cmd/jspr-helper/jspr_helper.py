@@ -196,16 +196,24 @@ class JSPRHelper:
         self.ser.write(line.encode("ascii"))
         self.ser.flush()
 
-    def emit_mo_result(self, code, target, json_str, request_reference):
+    def emit_mo_result(self, code, target, json_str, request_reference, extra=None):
         """Emit the final result of one send_mo, tagged with the
         request_reference Go sent with it, so Go can tell a result that
-        belongs to an earlier send from its own. [MESHSAT-1282]"""
+        belongs to an earlier send from its own. [MESHSAT-1282]
+
+        extra carries this side's own account where it has one:
+        "segment_supplied" (whether the payload was handed to the modem,
+        which transmits only data it was given) and "refused_at":
+        "originate" (the modem refused the message before it held it).
+        [MESHSAT-1584]"""
         try:
             obj = json.loads(json_str)
             if not isinstance(obj, dict):
                 obj = {}
         except (json.JSONDecodeError, TypeError):
             obj = {}
+        if extra:
+            obj.update(extra)
         obj["request_reference"] = request_reference
         self.emit("mo_result", code, target, jd(obj))
 
@@ -310,12 +318,15 @@ class JSPRHelper:
         got_200 = False
 
         while self.running:
-            # Check appropriate deadline
-            if not got_200 and time.monotonic() > initial_deadline:
+            # Check appropriate deadline. Once the payload is with the modem
+            # (its 200 lost, the segment request answered) the modem may
+            # send it: wait for its final status like any other send.
+            # [MESHSAT-1584]
+            if not got_200 and not segment_sent and time.monotonic() > initial_deadline:
                 mlog("no 200 response to messageOriginate within 30s — modem not responding")
                 self.emit_mo_result(200, "messageOriginateStatus",
                                     jd({"final_mo_status": "no_response", "message_id": 0, "topic_id": topic_id}),
-                                    request_reference)
+                                    request_reference, {"segment_supplied": False})
                 return
             if time.monotonic() > full_deadline:
                 break
@@ -356,7 +367,7 @@ class JSPRHelper:
                         if resp_str != "message_accepted":
                             self.emit_mo_result(200, "messageOriginateStatus",
                                                 jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}),
-                                                request_reference)
+                                                request_reference, {"refused_at": "originate", "segment_supplied": False})
                             return
                     except (json.JSONDecodeError, KeyError):
                         pass
@@ -366,6 +377,8 @@ class JSPRHelper:
                 if code == 299 and target == "messageOriginateSegment" and not segment_sent:
                     try:
                         d = json.loads(json_str)
+                        if msg_id is None:
+                            msg_id = d.get("message_id")  # its 200 never came
                         seg_cmd = jd({
                             "topic_id": d.get("topic_id", topic_id),
                             "message_id": d.get("message_id", msg_id),
@@ -396,7 +409,8 @@ class JSPRHelper:
                         if msg_id is not None and status_msg_id != msg_id:
                             mlog(f"LATE status for msg_id={status_msg_id} final={final} (expected msg_id={msg_id}), not this MO")
                             continue
-                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference)
+                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference,
+                                            {"segment_supplied": segment_sent})
                         return
                     except (json.JSONDecodeError, KeyError):
                         pass
@@ -405,7 +419,8 @@ class JSPRHelper:
                 # Non-200 error for messageOriginate
                 if code >= 400 and target == "messageOriginate":
                     mlog(f"messageOriginate error: {code}")
-                    self.emit_mo_result(code, target, json_str, request_reference)
+                    self.emit_mo_result(code, target, json_str, request_reference,
+                                        {"refused_at": "originate", "segment_supplied": False})
                     return
 
                 # Forward anything else to Go
@@ -421,7 +436,7 @@ class JSPRHelper:
             return
         self.emit_mo_result(200, "messageOriginateStatus",
                             jd({"final_mo_status": "helper_timeout", "message_id": msg_id or 0, "topic_id": topic_id}),
-                            request_reference)
+                            request_reference, {"segment_supplied": segment_sent})
 
     def _drain_stale_commands(self):
         """Discard queued commands accumulated during MO flow.

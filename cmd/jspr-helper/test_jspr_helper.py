@@ -236,3 +236,114 @@ class HostCancelTest(unittest.TestCase):
             sys.stdin = old
         self.assertEqual(h._cancel_refs, {9})
         self.assertEqual(h._cmd_queue.qsize(), 1)
+
+
+class FakeClock:
+    """time.monotonic and time.sleep for the helper's 30 s first-answer
+    deadline: every sleep moves the clock on by step seconds."""
+
+    def __init__(self, step):
+        self.now, self.step = 1000.0, step
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, _s):
+        self.now += self.step
+
+
+class PayloadAccountTest(unittest.TestCase):
+    """What the helper says about a send it ends itself: whether the modem
+    got the payload, and whether the modem refused the message outright.
+    Go reads it to tell a send that cannot have left from one that may
+    have. [MESHSAT-1584]"""
+
+    def run_with_clock(self, h, step, timeout_s):
+        from unittest import mock
+        clock = FakeClock(step)
+        with mock.patch.object(jspr_helper.time, "monotonic", clock.monotonic), \
+                mock.patch.object(jspr_helper.time, "sleep", clock.sleep):
+            h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=timeout_s)
+
+    def test_no_answer_at_all_says_the_payload_never_went(self):
+        h = FakeHelper(lambda *a: [])
+        self.run_with_clock(h, 5, 240)
+        res = h.results()
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0][3]["final_mo_status"], "no_response")
+        self.assertIs(res[0][3]["segment_supplied"], False)
+
+    def test_a_lost_200_with_the_payload_supplied_waits_for_the_modem(self):
+        """The modem's 200 never came but it asked for the segment and got
+        it: it may send the message, so the helper waits for its final
+        status instead of reporting no_response at 30 s."""
+        state = {"reads": 0}
+
+        def on_write(method, target, body):
+            if target == "messageOriginate":
+                return [line(299, "messageOriginateSegment",
+                             {"topic_id": 244, "message_id": 23, "segment_length": 3, "segment_start": 0})]
+            return []
+
+        h = FakeHelper(on_write)
+        orig = h.serial_read_lines
+
+        def reads():
+            state["reads"] += 1
+            if state["reads"] == 40:  # well past the 30 s first-answer deadline
+                return [line(299, "messageOriginateStatus",
+                             {"topic_id": 244, "message_id": 23, "final_mo_status": "mo_ack_received"})]
+            return orig()
+        h.serial_read_lines = reads
+        self.run_with_clock(h, 1, 240)
+        segs = [w for w in h.written if w[1] == "messageOriginateSegment"]
+        self.assertEqual(len(segs), 1)
+        res = h.results()
+        self.assertEqual(len(res), 1, res)
+        self.assertEqual(res[0][3]["final_mo_status"], "mo_ack_received")
+        self.assertIs(res[0][3]["segment_supplied"], True)
+
+    def test_a_refusal_at_originate_is_marked(self):
+        def on_write(method, target, body):
+            if target == "messageOriginate":
+                return [line(200, "messageOriginate", {"message_response": "subscription_invalid"})]
+            return []
+        h = FakeHelper(on_write)
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5)
+        res = h.results()
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0][3]["final_mo_status"], "subscription_invalid")
+        self.assertEqual(res[0][3]["refused_at"], "originate")
+        self.assertIs(res[0][3]["segment_supplied"], False)
+
+    def test_an_error_code_at_originate_is_marked(self):
+        def on_write(method, target, body):
+            if target == "messageOriginate":
+                return [line(418, "messageOriginate", {"error": "wrong state"})]
+            return []
+        h = FakeHelper(on_write)
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5)
+        res = h.results()
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0][1], 418)
+        self.assertEqual(res[0][3]["refused_at"], "originate")
+        self.assertEqual(res[0][3]["request_reference"], 7)
+
+    def test_helper_timeout_says_whether_the_segment_went(self):
+        for asked, want in ((False, False), (True, True)):
+            def on_write(method, target, body, asked=asked):
+                if target == "messageOriginate":
+                    out = [line(200, "messageOriginate", {"message_id": 23, "message_response": "message_accepted"})]
+                    if asked:
+                        out.append(line(299, "messageOriginateSegment",
+                                        {"topic_id": 244, "message_id": 23, "segment_length": 3, "segment_start": 0}))
+                    return out
+                return []  # silent to the cancel too
+            h = FakeHelper(on_write)
+            orig = h._cancel_and_settle
+            h._cancel_and_settle = lambda *a, **k: orig(*a, settle_s=0.05, **k)
+            h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=0.05)
+            res = h.results()
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0][3]["final_mo_status"], "helper_timeout")
+            self.assertIs(res[0][3]["segment_supplied"], want)
