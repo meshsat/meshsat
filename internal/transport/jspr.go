@@ -966,16 +966,16 @@ func (c *jsprConn) jsprCheckProvisioning() ([]jsprProvisioningTopic, error) {
 // Handles the full flow: messageOriginate → segment responses → final status.
 // Returns final MO status string and any error.
 func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
-	r, err := c.jsprSendMOResult(topicID, payload, c.nextRef(), false)
+	r, err := c.jsprSendMOResult(topicID, payload, c.nextRef(), "", false)
 	return r.Status, err
 }
 
 // jsprSendMOResult is jsprSendMO with the whole account of the send, under
-// the request_reference ref the caller took with nextRef (so it can name
-// this send to a cancel). strict takes from the helper only a result
-// tagged with ref: a delivery intent's MO must not be booked with another
-// reply. [MESHSAT-1584]
-func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, ref int, strict bool) (moResult, error) {
+// the request_reference ref the caller took with nextRef and the op token
+// that names this send to a cancel. strict takes from the helper only a
+// result tagged with ref: a delivery intent's MO must not be booked with
+// another reply. [MESHSAT-1584]
+func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, ref int, op string, strict bool) (moResult, error) {
 	if len(payload) > jsprMaxPayload {
 		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("payload too large: %d bytes (max %d)", len(payload), jsprMaxPayload)
 	}
@@ -987,7 +987,7 @@ func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, ref int, strict
 	// The helper responds to segment requests inline on the serial thread,
 	// avoiding the ~1s async latency that causes "segment_not_supplied".
 	if helper, ok := c.port.(*jsprHelperPort); ok {
-		return c.jsprSendMOViaHelper(helper, topicID, dataWithCRC, ref, strict)
+		return c.jsprSendMOViaHelper(helper, topicID, dataWithCRC, ref, op, strict)
 	}
 
 	// 1. Initiate MO
@@ -1079,14 +1079,14 @@ func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, ref int, strict
 // The helper handles messageOriginate + segment exchange inline on the serial
 // thread, responding to segment requests in sub-millisecond time.
 // The result comes back as a "mo_result" message (code 200, target messageOriginateStatus).
-func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, dataWithCRC []byte, ref int, strict bool) (moResult, error) {
+func (c *jsprConn) jsprSendMOViaHelper(helper *jsprHelperPort, topicID int, dataWithCRC []byte, ref int, op string, strict bool) (moResult, error) {
 	dataB64 := base64.StdEncoding.EncodeToString(dataWithCRC)
 
 	// Wait before asking: a result that came back before the wait was
 	// registered had nobody to take it, and the send waited out its three
 	// minutes for a message that had gone. [MESHSAT-1584]
 	w := c.expectHelperMOResult(jsprMOTimeout)
-	if err := helper.SendMOCommand(topicID, dataB64, len(dataWithCRC), ref, jsprMOHelperBudget); err != nil {
+	if err := helper.SendMOCommand(topicID, dataB64, len(dataWithCRC), ref, op, jsprMOHelperBudget); err != nil {
 		w.done()
 		// The helper reads whole lines: a command it did not get whole is
 		// never started.

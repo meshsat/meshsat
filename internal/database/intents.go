@@ -134,7 +134,18 @@ type DeliverySubmission struct {
 	RequestSHA256  string   `json:"request_sha256"`
 	IntentIDs      []string `json:"intent_ids"`
 	CreatedAt      string   `json:"created_at"`
+	// Mode is SubmissionIntent, or SubmissionLegacy for a send made
+	// outside delivery intents, whose LegacyResult (JSON) holds what it
+	// queued. [MESHSAT-1584]
+	Mode         string `json:"mode"`
+	LegacyResult string `json:"legacy_result,omitempty"`
 }
+
+// Submission modes.
+const (
+	SubmissionIntent = "intent"
+	SubmissionLegacy = "legacy"
+)
 
 // DeliveryIntent is one recipient's message and its state (r3 D2).
 type DeliveryIntent struct {
@@ -341,8 +352,9 @@ func getSubmission(q queryer, where string, args ...any) (*DeliverySubmission, e
 	var s DeliverySubmission
 	var key sql.NullString
 	var ids string
-	err := q.QueryRow(`SELECT id, source, idempotency_key, request_sha256, intent_ids, created_at
-		FROM delivery_submissions WHERE `+where, args...).Scan(&s.ID, &s.Source, &key, &s.RequestSHA256, &ids, &s.CreatedAt)
+	err := q.QueryRow(`SELECT id, source, idempotency_key, request_sha256, intent_ids, created_at, mode, legacy_result
+		FROM delivery_submissions WHERE `+where, args...).Scan(&s.ID, &s.Source, &key, &s.RequestSHA256, &ids, &s.CreatedAt,
+		&s.Mode, &s.LegacyResult)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -352,6 +364,56 @@ func getSubmission(q queryer, where string, args ...any) (*DeliverySubmission, e
 	s.IdempotencyKey = key.String
 	_ = json.Unmarshal([]byte(ids), &s.IntentIDs)
 	return &s, nil
+}
+
+// CreateLegacySubmission writes a send made outside delivery intents under
+// its idempotency key: every delivery row it queues and the submission
+// (mode legacy, with result(ids) as its result), in one transaction, or
+// nothing. A submission the same source already made under the key comes
+// back as existing (whichever mode made it) when its fingerprint is the
+// same, and nothing is written; with another fingerprint,
+// ErrIdempotencyConflict. The database has one connection, so the check and
+// the writes cannot interleave with another request. [MESHSAT-1584]
+func (db *DB) CreateLegacySubmission(sub DeliverySubmission, dels []MessageDelivery, result func(ids []int64) (string, error)) (existing *DeliverySubmission, ids []int64, err error) {
+	if sub.IdempotencyKey == "" {
+		return nil, nil, errors.New("legacy submission: no idempotency key")
+	}
+	err = db.withTx(func(tx *sqlx.Tx) error {
+		prev, err := getSubmission(tx, `source = ? AND idempotency_key = ?`, sub.Source, sub.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if prev != nil {
+			if prev.RequestSHA256 != sub.RequestSHA256 {
+				return ErrIdempotencyConflict
+			}
+			existing = prev
+			return nil
+		}
+		for _, d := range dels {
+			id, err := insertDelivery(tx, d)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		res, err := result(ids)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO delivery_submissions (id, source, idempotency_key, request_sha256, intent_ids, mode, legacy_result)
+			VALUES (?, ?, ?, ?, '[]', ?, ?)`, sub.ID, sub.Source, sub.IdempotencyKey, sub.RequestSHA256, SubmissionLegacy, res); err != nil {
+			return fmt.Errorf("insert submission: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if existing != nil {
+		return existing, nil, nil
+	}
+	return nil, ids, nil
 }
 
 // CreateSubmission writes a submission, every intent and their round-1

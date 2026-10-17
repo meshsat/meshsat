@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -181,5 +182,39 @@ func TestAllocateWireTimestampMs(t *testing.T) {
 	defer db.Close()
 	if v, _ := db.AllocateWireTimestampMs(10); v != 5001 {
 		t.Fatalf("after a reopen: %d; want 5001", v)
+	}
+}
+
+// A keyed send outside delivery intents is written whole or not at all: a
+// failure after its rows were inserted leaves neither rows nor a
+// submission (review B10-R4). [MESHSAT-1584]
+func TestCreateLegacySubmission_AllOrNothing(t *testing.T) {
+	db := testDB(t)
+	sub := DeliverySubmission{ID: "s1", Source: "spa", IdempotencyKey: "k", RequestSHA256: "fp"}
+	dels := []MessageDelivery{{MsgRef: "a", Channel: "mesh_0", Status: "queued"}, {MsgRef: "b", Channel: "mesh_0", Status: "queued"}}
+	if _, _, err := db.CreateLegacySubmission(sub, dels, func([]int64) (string, error) { return "", errors.New("boom") }); err == nil {
+		t.Fatal("want the error")
+	}
+	var rows, subs int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM message_deliveries`).Scan(&rows)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM delivery_submissions`).Scan(&subs)
+	if rows != 0 || subs != 0 {
+		t.Fatalf("%d rows, %d submissions left after a failed write", rows, subs)
+	}
+	existing, ids, err := db.CreateLegacySubmission(sub, dels, func(ids []int64) (string, error) { return `{"n":2}`, nil })
+	if err != nil || existing != nil || len(ids) != 2 {
+		t.Fatalf("%v %v %v", existing, ids, err)
+	}
+	existing, ids, err = db.CreateLegacySubmission(sub, dels, func([]int64) (string, error) { return "{}", nil })
+	if err != nil || existing == nil || existing.Mode != SubmissionLegacy || existing.LegacyResult != `{"n":2}` || ids != nil {
+		t.Fatalf("second write under the key: %+v %v %v", existing, ids, err)
+	}
+	sub.RequestSHA256 = "other"
+	if _, _, err := db.CreateLegacySubmission(sub, dels, func([]int64) (string, error) { return "{}", nil }); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("another request under the key: %v", err)
+	}
+	_ = db.QueryRow(`SELECT COUNT(*) FROM message_deliveries`).Scan(&rows)
+	if rows != 2 {
+		t.Fatalf("%d rows; want the first write's 2", rows)
 	}
 }

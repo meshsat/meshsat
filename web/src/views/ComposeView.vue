@@ -84,6 +84,9 @@ function bearerColour(kind) {
 // [MESHSAT-1584]
 let pendingKey = ''
 let pendingFor = ''
+// The last send under pendingKey got no definitive answer: it may have been
+// queued. Only a success under the same key settles it (review B10-R1).
+let unresolved = false
 function newKey() {
   const b = new Uint8Array(16)
   crypto.getRandomValues(b)
@@ -104,13 +107,16 @@ function definitive(e) {
 }
 
 function refusalText(e) {
+  const why = e.status ? `HTTP ${e.status}` : 'no answer'
+  if (unresolved && definitive(e)) {
+    return `The earlier send is still not known to have been queued (now ${why}: ${e.message || 'refused'}). Send again retries it under the same key: it is not sent twice.`
+  }
   switch (e.status) {
     case 413: return 'Too long for every route this contact has.'
     case 422: return 'No route of this contact can carry this message.'
     case 503: if (definitive(e)) return 'No bearer took the message.'
   }
   if (!definitive(e)) {
-    const why = e.status ? `HTTP ${e.status}` : 'no answer'
     return `Not known whether it was queued (${why}). Send again to retry the same message: it is not sent twice.`
   }
   return e.message || 'Send failed'
@@ -177,16 +183,21 @@ async function onSend() {
     // (MESHSAT-552) adds per-bearer tick rendering in Inbox.
     if (strategy.value) payload.strategy = strategy.value
     const fingerprint = JSON.stringify(payload)
-    if (!pendingKey || fingerprint !== pendingFor) { pendingKey = newKey(); pendingFor = fingerprint }
+    if (!pendingKey || fingerprint !== pendingFor) { pendingKey = newKey(); pendingFor = fingerprint; unresolved = false }
     result.value = await store.sendToContact(payload, pendingKey)
+    // Only a success settles the message: the next Send is a new one.
     pendingKey = ''
+    unresolved = false
     // Clear body on success; keep contact + precedence for quick resend.
     if (result.value?.queued) text.value = ''
     refreshRecent()
   } catch (e) {
-    // A definitive refusal ends this message: the next Send is a new one.
-    // An unresolved answer keeps the key for the retry.
-    if (definitive(e)) pendingKey = ''
+    // Any failure keeps the key while the message is unchanged: a refusal
+    // that wrote nothing is retried safely under it, and one that came
+    // after an unanswered send must not let that send be made again under
+    // a new key (review B10-R1). The bridge honours the key with delivery
+    // intents on or off (B10-R4).
+    if (!definitive(e)) unresolved = true
     if (e.body?.per_bearer) result.value = e.body
     error.value = refusalText(e)
   } finally {

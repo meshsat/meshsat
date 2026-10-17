@@ -115,6 +115,16 @@ type DeliveryStats struct {
 // ('Routine') — callers may leave it unset for backwards-compatible
 // behaviour.
 func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
+	return insertDelivery(db.DB, d)
+}
+
+// execer is a database or a transaction.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// insertDelivery is InsertDelivery on db or inside a transaction.
+func insertDelivery(q execer, d MessageDelivery) (int64, error) {
 	visited := d.Visited
 	if visited == "" {
 		visited = "[]"
@@ -127,7 +137,7 @@ func (db *DB) InsertDelivery(d MessageDelivery) (int64, error) {
 	if class == "" {
 		class = DeliveryClassMessage
 	}
-	res, err := db.Exec(`INSERT INTO message_deliveries
+	res, err := q.Exec(`INSERT INTO message_deliveries
 		(msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, seq_num, signature, signer_id, precedence, destination, delivery_class)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.Retries, d.MaxRetries, d.NextRetry, visited,

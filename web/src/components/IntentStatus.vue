@@ -28,6 +28,11 @@ let startedAt = Date.now()
 let closedAt = 0
 let stopped = false
 let closedEmitted = false
+// Each read and each cancel takes a generation; an answer applies only
+// when it is still the newest for this intent, so a slow Refresh, a poll
+// or a read from before Cancel never overwrites a newer status (review
+// B10-R5).
+let gen = 0
 
 const active = computed(() => view.value?.state === 'active')
 // A transmission authorized or handed off and not yet done: its outcome
@@ -45,12 +50,22 @@ const recipient = computed(() => {
 
 async function load() {
   if (timer) { clearTimeout(timer); timer = null }
+  const my = ++gen
+  const id = props.intentId
+  let next = null
+  let err = ''
   try {
-    view.value = await store.fetchIntent(props.intentId)
+    next = await store.fetchIntent(id)
+  } catch (e) {
+    err = e.message || 'Status not available'
+  }
+  if (my !== gen || id !== props.intentId || stopped) return
+  if (next) {
+    view.value = next
     loadError.value = ''
     checkedAt.value = new Date()
-  } catch (e) {
-    loadError.value = e.message || 'Status not available'
+  } else {
+    loadError.value = err
   }
   schedule()
 }
@@ -72,6 +87,7 @@ onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer) })
 watch(() => props.intentId, () => {
   if (timer) clearTimeout(timer)
   timer = null
+  gen++
   startedAt = Date.now()
   closedAt = 0
   closedEmitted = false
@@ -82,14 +98,22 @@ watch(() => props.intentId, () => {
 async function onCancel() {
   if (!confirm('Stop this message? Nothing more is sent; an attempt already with a radio or modem may still go out.')) return
   cancelling.value = true
+  // Reads started before this cancel are now stale (gen); a poll that
+  // fires after it reads the newer state and is kept.
+  const my = ++gen
+  const id = props.intentId
   try {
-    view.value = await store.cancelIntent(props.intentId, 'cancelled from the compose screen')
+    const next = await store.cancelIntent(id, 'cancelled from the compose screen')
+    if (my === gen && id === props.intentId) {
+      view.value = next
+      checkedAt.value = new Date()
+    }
   } catch (e) {
-    loadError.value = e.message || 'Cancel failed'
+    if (my === gen) loadError.value = e.message || 'Cancel failed'
   } finally {
     cancelling.value = false
   }
-  schedule()
+  if (my === gen) schedule()
 }
 
 const tone = computed(() => {

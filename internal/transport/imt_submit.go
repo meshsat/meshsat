@@ -2,7 +2,10 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -54,11 +57,23 @@ type IMTSubmit struct {
 	Inconsistent bool
 }
 
-// moOp is the MO with the modem: its reference and whether a cancel may
-// touch it.
+// moOp is the MO with the modem: its reference, its op token (never
+// reused, unlike the reference, which wraps at 100) and whether a cancel
+// may touch it.
 type moOp struct {
 	ref         int
+	token       string
 	cancellable bool
+}
+
+// newMOOpToken names one MO for cancels: random, so it is not reused within
+// a process or across a restart.
+func newMOOpToken() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("t%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // imtStatusBasis is the 14 final MO statuses of RockBLOCK-9704 v1.1.2
@@ -194,11 +209,12 @@ func (t *DirectIMTTransport) SubmitMO(ctx context.Context, data []byte) (IMTSubm
 	}
 	conn := t.conn
 	ref := conn.nextRef()
-	t.moCur = &moOp{ref: ref, cancellable: false}
+	op := &moOp{ref: ref, token: newMOOpToken(), cancellable: false}
+	t.moCur = op
 	t.mu.Unlock()
 	defer t.endMO()
 
-	r, err := conn.jsprSendMOResult(jsprRawTopic, data, ref, true)
+	r, err := conn.jsprSendMOResult(jsprRawTopic, data, ref, op.token, true)
 	sub := classifyIMTMO(r)
 	sub.Status, sub.MOStatus = r.Status, imtMOStatusCode(r.Status)
 	if sub.Inconsistent {

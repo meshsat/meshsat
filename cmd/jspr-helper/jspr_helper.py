@@ -13,7 +13,8 @@ Architecture: SINGLE-THREAD EVENT LOOP (MESHSAT-334)
 Commands from Go (stdin JSON):
 - {"cmd":"send", "method":"GET", "target":"apiVersion", "json":{}}
     -> sends single JSPR line, response comes back via event loop
-- {"cmd":"send_mo", "topic_id":244, "data":"BASE64", "length":42, "request_reference":1, "timeout_s":150}
+- {"cmd":"send_mo", "topic_id":244, "data":"BASE64", "length":42, "request_reference":1, "timeout_s":150, "op":"9f2c..."}
+- {"cmd":"cancel_mo", "op":"9f2c..."}  (cancels only the send that carried that op)
     -> handles entire MO flow inline (originate + segment + wait for status)
     -> returns {"type":"mo_result", "code":200, "target":"messageOriginateStatus", "json":{...}}
 """
@@ -130,7 +131,7 @@ class JSPRHelper:
         self.running = True
         self._rx_buf = bytearray()
         self._cmd_queue = queue.Queue()
-        self._cancel_refs = set()  # request_references Go asked to cancel
+        self._cancel_ops = set()  # op tokens of the sends Go asked to cancel
 
         # Set FTDI latency timer to 1ms if possible
         dev = os.path.basename(port)
@@ -217,35 +218,36 @@ class JSPRHelper:
         obj["request_reference"] = request_reference
         self.emit("mo_result", code, target, jd(obj))
 
-    def do_send_mo(self, topic_id, payload_b64, length, request_reference, timeout_s=240):
+    def do_send_mo(self, topic_id, payload_b64, length, request_reference, timeout_s=240, op=""):
         """Handle entire MO flow inline — single thread, no async.
         Matches the standalone test script exactly."""
         mlog = lambda msg: log(f"MO: {msg}")
 
-        # A cancel Go wrote for an earlier send is void now: it must never
-        # wait here until a later send reuses that reference (they wrap at
-        # 100). One for this send, written while it queued, still counts.
-        # [MESHSAT-1584]
-        refs = getattr(self, "_cancel_refs", None)
-        if refs:
-            for r in list(refs):
-                if r != request_reference:
-                    refs.discard(r)
-                    mlog(f"dropped a cancel for ref={r}, not the send now starting (ref={request_reference})")
+        # A cancel names one send by its op token, which Go never reuses
+        # (the modem's request_reference wraps at 100, so it cannot name a
+        # send). A cancel for an earlier send is void now; one for this
+        # send, written while it queued, still counts. [MESHSAT-1584]
+        ops = getattr(self, "_cancel_ops", None)
+        if ops:
+            for o in list(ops):
+                if o != op:
+                    ops.discard(o)
+                    mlog(f"dropped a cancel for op={o}, not the send now starting (op={op})")
         try:
-            self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog, timeout_s)
+            self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog, timeout_s, op)
         finally:
-            getattr(self, "_cancel_refs", set()).discard(request_reference)
+            getattr(self, "_cancel_ops", set()).discard(op)
             self._drain_stale_commands()
 
-    def _take_cancel(self, request_reference):
-        """True once if Go asked to cancel the send carrying this reference.
+    def _take_cancel(self, op):
+        """True once if Go asked to cancel the send carrying this op token.
         Go does that for the MT poll when a real message is waiting behind
-        it. [MESHSAT-1282]"""
-        refs = getattr(self, "_cancel_refs", None)
-        if refs is None or request_reference not in refs:
+        it. A send without an op cannot be cancelled. [MESHSAT-1282,
+        MESHSAT-1584]"""
+        ops = getattr(self, "_cancel_ops", None)
+        if not op or ops is None or op not in ops:
             return False
-        refs.discard(request_reference)
+        ops.discard(op)
         return True
 
     @staticmethod
@@ -301,7 +303,7 @@ class JSPRHelper:
         mlog("no final status after cancel")
         return False
 
-    def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog, timeout_s=240):
+    def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog, timeout_s=240, op=""):
         """One MO, bound to one modem message the whole way.
 
         The send's identity is the message_id of the originate reply that
@@ -361,7 +363,7 @@ class JSPRHelper:
 
             # Go asked to give this send up (the MT poll yielding to a real
             # message). Only possible once the modem has named the message.
-            if msg_id is not None and self._take_cancel(request_reference):
+            if msg_id is not None and self._take_cancel(op):
                 mlog(f"host cancelled msg_id={msg_id}")
                 if self._cancel_and_settle(topic_id, msg_id, request_reference, mlog, supplied=segment_sent):
                     return
@@ -534,7 +536,10 @@ class JSPRHelper:
                     # A cancel must reach a send that is blocking the event
                     # loop, so it never waits in the queue. [MESHSAT-1282]
                     if isinstance(cmd, dict) and cmd.get("cmd") == "cancel_mo":
-                        self._cancel_refs.add(cmd.get("request_reference"))
+                        if cmd.get("op"):
+                            self._cancel_ops.add(cmd["op"])
+                        else:
+                            log("cancel_mo without an op: it cannot name a send, ignored")
                         continue
                     self._cmd_queue.put(cmd)
                 except json.JSONDecodeError as e:
@@ -589,6 +594,7 @@ class JSPRHelper:
                         length=cmd.get("length", 0),
                         request_reference=cmd.get("request_reference", 1),
                         timeout_s=cmd.get("timeout_s", 240),
+                        op=cmd.get("op", ""),
                     )
                 elif cmd_type == "send":
                     method = cmd.get("method", "")

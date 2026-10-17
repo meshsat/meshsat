@@ -165,12 +165,13 @@ class IMTHelperOwnershipReview(unittest.TestCase):
         self.assertEqual(res[0]["final_mo_status"], "mo_ack_received")
 
     def test_a_stale_cancel_is_dropped_when_a_new_send_starts(self):
-        # Go wrote a cancel for reference 5 after that send ended; it must
-        # not wait for reference 5 to come round again.
+        # Go wrote a cancel for an earlier send's op after that send ended;
+        # it is dropped when the next send starts. One for the starting
+        # send itself is taken by it.
         h = FakeHelper(lambda *a: [])
-        h._cancel_refs = {5, 7}
-        h.do_send_mo(244, "QUJD", 3, 7, timeout_s=0.05)
-        self.assertEqual(h._cancel_refs, set())
+        h._cancel_ops = {"op-old", "op-now"}
+        h.do_send_mo(244, "QUJD", 3, 7, timeout_s=0.05, op="op-now")
+        self.assertEqual(h._cancel_ops, set())
 
 
 if __name__ == "__main__":

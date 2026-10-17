@@ -1258,6 +1258,19 @@ type DirectSendOptions struct {
 // class oob bypasses egress rules and interface transforms in the worker
 // because the OOB frame carries its own authentication and encryption.
 func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSendOptions) (int64, string, error) {
+	del := d.prepareDirectSend(interfaceID, text, opts)
+	delID, err := d.db.InsertDelivery(del)
+	if err != nil {
+		return 0, "", fmt.Errorf("queue delivery: %w", err)
+	}
+	d.directSendQueued(del, delID)
+	return delID, del.MsgRef, nil
+}
+
+// prepareDirectSend builds the delivery row QueueDirectSendTo writes,
+// without writing it, so a caller can write several in one transaction
+// (an idempotent send, B10-R4). [MESHSAT-1584]
+func (d *Dispatcher) prepareDirectSend(interfaceID, text string, opts DirectSendOptions) database.MessageDelivery {
 	precedence := opts.Precedence
 	class := opts.Class
 	if class == "" {
@@ -1320,25 +1333,22 @@ func (d *Dispatcher) QueueDirectSendTo(interfaceID, text string, opts DirectSend
 		del.Signature = d.signing.Sign(payload)
 		del.SignerID = d.signing.SignerID()
 	}
+	return del
+}
 
-	delID, err := d.db.InsertDelivery(del)
-	if err != nil {
-		return 0, "", fmt.Errorf("queue delivery: %w", err)
-	}
-
-	log.Info().Int64("id", delID).Str("channel", interfaceID).Str("msg_ref", msgRef).Msg("direct send queued via delivery ledger")
+// directSendQueued logs and announces a direct send's row once written.
+func (d *Dispatcher) directSendQueued(del database.MessageDelivery, delID int64) {
+	log.Info().Int64("id", delID).Str("channel", del.Channel).Str("msg_ref", del.MsgRef).Msg("direct send queued via delivery ledger")
 
 	if d.emit != nil {
 		del.ID = delID
 		d.emit(transport.MeshEvent{
 			Type:    "delivery_queued",
-			Message: fmt.Sprintf("Direct send queued: %s → %s", preview, interfaceID),
+			Message: fmt.Sprintf("Direct send queued: %s → %s", del.TextPreview, del.Channel),
 			Data:    deliveryEventData(del, "queued", nil),
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
 	}
-
-	return delID, msgRef, nil
 }
 
 // isDeliveryDuplicate checks whether the same payload was recently dispatched to

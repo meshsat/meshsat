@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -49,7 +50,8 @@ type SendOptions struct {
 	Class      string
 	MaxRetries int
 	// Source and IdempotencyKey scope a retried request to its first
-	// submission on the delivery-intent path (spa, api, hub). [MESHSAT-1581]
+	// submission (spa, api, hub), on the delivery-intent path and, since
+	// B10-R4, outside it too. [MESHSAT-1581, MESHSAT-1584]
 	Source         string
 	IdempotencyKey string
 }
@@ -75,6 +77,11 @@ type SendResult struct {
 	// way (MESHSAT_DELIVERY_INTENTS); DeliveryIDs then hold its round-1
 	// attempts and Errors the routes it did not admit. [MESHSAT-1581]
 	Intent *IntentSubmission
+	// Legacy is the submission of a send made outside delivery intents
+	// under an idempotency key; Existing says it was made by an earlier
+	// request with that key and nothing was queued now. [MESHSAT-1584]
+	Legacy   *database.DeliverySubmission
+	Existing bool
 }
 
 // kindToChannelType maps a directory.Kind to the `channel_type` value
@@ -159,9 +166,44 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 
 	// Raw escape hatch: no directory lookup, queue directly on the
 	// named interface with the caller's precedence.
+	// A key names one send whatever the mode: a request that comes again
+	// under it (an answer lost on the way back) gets the first send's
+	// result, made with delivery intents or without, and nothing is queued
+	// again, also when MESHSAT_DELIVERY_INTENTS changed in between
+	// (B10-R4). [MESHSAT-1584]
+	fp := d.sendFingerprint(rcpt, body, opts, res.Precedence)
+	if opts.IdempotencyKey != "" {
+		prev, err := d.db.GetSubmissionByKey(sendSource(opts), opts.IdempotencyKey)
+		if err != nil {
+			return res, err
+		}
+		if prev != nil {
+			if prev.RequestSHA256 != fp {
+				return res, database.ErrIdempotencyConflict
+			}
+			if prev.Mode == database.SubmissionLegacy {
+				return replayLegacySend(prev, res)
+			}
+			if d.escalator == nil {
+				return res, errors.New("this key named a delivery intent and delivery intents are not running")
+			}
+			return d.sendViaIntent(ctx, rcpt, body, opts, res)
+		}
+	}
+
 	if rcpt.Raw != nil {
 		if rcpt.Raw.InterfaceID == "" {
 			return res, fmt.Errorf("RawRecipient requires InterfaceID")
+		}
+		if opts.IdempotencyKey != "" {
+			del := d.prepareDirectSend(rcpt.Raw.InterfaceID, string(body), DirectSendOptions{
+				Precedence:  string(res.Precedence),
+				Destination: rcpt.Raw.Address,
+				Class:       opts.Class,
+				MaxRetries:  opts.MaxRetries,
+			})
+			res.Strategy, res.RequestedStrategy, res.StrategyReason = directory.StrategyPrimaryOnly, opts.Strategy, StrategyReasonRaw
+			return d.queueLegacyKeyed(opts, fp, []directory.Kind{""}, []database.MessageDelivery{del}, res)
 		}
 		// The raw address reaches the delivery row as its destination
 		// (reply-to-sender) instead of being dropped. [MESHSAT-756]
@@ -210,13 +252,29 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		return res, fmt.Errorf("contact %s has no addresses usable by strategy %s", rcpt.ContactID, res.Strategy)
 	}
 
-	for _, a := range addrs {
-		delID, err := d.queueContactAddress(a, body, res.Precedence)
-		if err != nil {
-			res.Errors[a.Kind] = err
-			continue
+	if opts.IdempotencyKey != "" {
+		var kinds []directory.Kind
+		var dels []database.MessageDelivery
+		for _, a := range addrs {
+			del, err := d.prepareContactAddress(a, body, res.Precedence)
+			if err != nil {
+				res.Errors[a.Kind] = err
+				continue
+			}
+			kinds, dels = append(kinds, a.Kind), append(dels, del)
 		}
-		res.DeliveryIDs[a.Kind] = append(res.DeliveryIDs[a.Kind], delID)
+		if len(dels) > 0 {
+			return d.queueLegacyKeyed(opts, fp, kinds, dels, res)
+		}
+	} else {
+		for _, a := range addrs {
+			delID, err := d.queueContactAddress(a, body, res.Precedence)
+			if err != nil {
+				res.Errors[a.Kind] = err
+				continue
+			}
+			res.DeliveryIDs[a.Kind] = append(res.DeliveryIDs[a.Kind], delID)
+		}
 	}
 
 	if len(res.DeliveryIDs) == 0 {
@@ -273,32 +331,45 @@ func (d *Dispatcher) sendViaIntent(ctx context.Context, rcpt RecipientRef, body 
 // went to the gateway's own default numbers and a mesh text was broadcast
 // to everyone. [MESHSAT-1581]
 func (d *Dispatcher) queueContactAddress(a directory.Address, body []byte, precedence types.Precedence) (int64, error) {
-	dest, err := contactDestination(a)
+	del, err := d.prepareContactAddress(a, body, precedence)
 	if err != nil {
 		return 0, err
+	}
+	id, err := d.db.InsertDelivery(del)
+	if err != nil {
+		return 0, fmt.Errorf("queue delivery: %w", err)
+	}
+	d.directSendQueued(del, id)
+	return id, nil
+}
+
+// prepareContactAddress builds the row queueContactAddress writes, without
+// writing it.
+func (d *Dispatcher) prepareContactAddress(a directory.Address, body []byte, precedence types.Precedence) (database.MessageDelivery, error) {
+	dest, err := contactDestination(a)
+	if err != nil {
+		return database.MessageDelivery{}, err
 	}
 	if a.Kind == directory.KindReticulum {
 		// As POST /api/lxmf/send queues it: the router packs, signs and
 		// waits for the proof, the ledger keeps the retries.
 		payload, _ := json.Marshal(map[string]string{"content": string(body), "title": ""})
-		id, _, err := d.QueueDirectSendTo("lxmf_0", string(body), DirectSendOptions{
+		return d.prepareDirectSend("lxmf_0", string(body), DirectSendOptions{
 			Precedence:  string(precedence),
 			Destination: dest,
 			Class:       database.DeliveryClassLXMF,
 			MaxRetries:  5,
 			Payload:     payload,
-		})
-		return id, err
+		}), nil
 	}
 	ifaceID, err := d.interfaceForKind(a.Kind)
 	if err != nil {
-		return 0, err
+		return database.MessageDelivery{}, err
 	}
-	id, _, err := d.QueueDirectSendTo(ifaceID, string(body), DirectSendOptions{
+	return d.prepareDirectSend(ifaceID, string(body), DirectSendOptions{
 		Precedence:  string(precedence),
 		Destination: dest,
-	})
-	return id, err
+	}), nil
 }
 
 // contactDestination is an address in the form its gateway reads from a
