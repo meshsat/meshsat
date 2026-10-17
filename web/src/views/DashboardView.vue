@@ -1533,6 +1533,7 @@ async function doBurstFlush() {
 
 // ── Lifecycle ──
 let pollTimer = null
+let detectTimer = null
 
 async function fetchAll() {
   await Promise.all([
@@ -1632,6 +1633,15 @@ onMounted(() => {
     store.fetchTrustedPeers()
   }, 15000)
 
+  // Hardware detection for the widgets (useDashboardLayout): the gateway
+  // list and the Bridge's device scan, every 5 s, so a radio plugged in
+  // shows up within seconds. Both are local reads. [MESHSAT-1588]
+  store.fetchDevices()
+  detectTimer = setInterval(() => {
+    store.fetchGateways()
+    store.fetchDevices()
+  }, 5000)
+
   // Seed the Links widget on first render — poll only fires 15 s in.
   store.fetchWifiInterfaces()
   store.fetchBluetoothStatus()
@@ -1642,6 +1652,7 @@ onMounted(() => {
 onUnmounted(() => {
   store.closeSSE()
   if (pollTimer) clearInterval(pollTimer)
+  if (detectTimer) clearInterval(detectTimer)
   if (saveLogTimer) clearTimeout(saveLogTimer)
   if (messageRefreshTimer) clearTimeout(messageRefreshTimer)
 })

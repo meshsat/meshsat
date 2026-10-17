@@ -1311,6 +1311,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   // Interfaces (v0.3.0)
   const interfaces = ref([])
   const devices = ref([])
+  const devicesLoaded = ref(false) // /api/devices answered once [MESHSAT-1588]
   const usbDevices = ref([])
   const accessRules = ref([])
   const objectGroups = ref([])
@@ -1381,6 +1382,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     try {
       const data = await api.get('/devices')
       devices.value = Array.isArray(data) ? data : []
+      devicesLoaded.value = true
     } catch (e) { error.value = e.message }
   }
 
@@ -2025,7 +2027,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     webhookLog, fetchWebhookLog,
     iridiumGeolocation, triggerIridiumGeolocation,
     interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice, generateEncryptionKey,
-    devices, fetchDevices, usbDevices, fetchUSBDevices,
+    devices, devicesLoaded, fetchDevices, usbDevices, fetchUSBDevices,
     deviceHealth, fetchDeviceHealth, deviceHealthFor,
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
     objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,

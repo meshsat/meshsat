@@ -1,10 +1,14 @@
 // The engineer dashboard's widgets: which exist, which this screen shows,
 // and what happens when hardware comes and goes. [MESHSAT-1588]
 //
-// - A hardware widget whose device is gone is hidden ("not detected"):
-//   the Bridge disables a gateway whose hardware it cannot find, so an
-//   enabled gateway of the widget's type is the sign the device is there.
-//   A device that is there but down stays on screen, showing it is down.
+// - A hardware widget whose device is gone is hidden ("not connected").
+//   A USB device the Bridge names (deviceTypes: the radio's class in
+//   /api/devices, the scan it runs every 5 s) is there while the scan sees
+//   it or its gateway is connected, so it goes the moment it is unplugged.
+//   Other hardware (a modem on the Pi's UART, a ModemManager modem) is
+//   there while its gateway is enabled: the Bridge disables a gateway
+//   whose hardware it cannot find. A device that is there but down stays
+//   on screen, showing it is down.
 // - A device that shows up for the first time on this screen brings its
 //   widget, at its default place, and the arrival is announced once.
 // - A widget the person removed stays removed, hardware or not; when its
@@ -21,8 +25,8 @@ export const WIDGETS = [
   { id: 'mesh',      label: 'Meshtastic', kind: 'core' },
   { id: 'cellular',  label: 'Cellular',   kind: 'hardware', gateways: ['cellular'], device: 'cellular modem' },
   { id: 'aprs',      label: 'APRS',       kind: 'hardware', gateways: ['aprs'], device: 'APRS radio' },
-  { id: 'tetra',     label: 'TETRA',      kind: 'hardware', gateways: ['tetra'], device: 'TETRA radio' },
-  { id: 'zigbee',    label: 'ZigBee',     kind: 'hardware', gateways: ['zigbee'], device: 'ZigBee dongle' },
+  { id: 'tetra',     label: 'TETRA',      kind: 'hardware', gateways: ['tetra'], deviceTypes: ['tetra'], device: 'TETRA radio' },
+  { id: 'zigbee',    label: 'ZigBee',     kind: 'hardware', gateways: ['zigbee'], deviceTypes: ['zigbee'], device: 'ZigBee dongle' },
   { id: 'reticulum', label: 'Reticulum',  kind: 'software' },
   { id: 'tak',       label: 'TAK',        kind: 'software' },
   { id: 'sos',       label: 'SOS',        kind: 'core' },
@@ -66,12 +70,18 @@ export function mergeOrder(saved) {
   return out
 }
 
-// presence of a widget's hardware: true, false, or null while the
-// gateway list has not loaded (nothing is hidden or announced then).
-export function presence(widget, gateways, loaded) {
+// presence of a widget's hardware: true, false, or null while the lists
+// it needs have not loaded (nothing is hidden or announced then).
+export function presence(widget, gateways, gatewaysLoaded, devices, devicesLoaded) {
   if (widget.kind !== 'hardware') return true
-  if (!loaded) return null
-  return (gateways || []).some(g => widget.gateways.includes(g.type) && g.enabled)
+  if (!gatewaysLoaded) return null
+  const gws = (gateways || []).filter(g => widget.gateways.includes(g.type))
+  if (widget.deviceTypes) {
+    if (!devicesLoaded) return null
+    if ((devices || []).some(d => widget.deviceTypes.includes(d.device_type))) return true
+    return gws.some(g => g.enabled && g.connected)
+  }
+  return gws.some(g => g.enabled)
 }
 
 export function useDashboardLayout(store) {
@@ -91,7 +101,8 @@ export function useDashboardLayout(store) {
   }
 
   const loaded = computed(() => !!store.gatewaysLoaded)
-  const present = computed(() => Object.fromEntries(WIDGETS.map(w => [w.id, presence(w, store.gateways, loaded.value)])))
+  const present = computed(() => Object.fromEntries(WIDGETS.map(w =>
+    [w.id, presence(w, store.gateways, loaded.value, store.devices, !!store.devicesLoaded)])))
 
   const visible = computed(() => order.value.filter(id => {
     if (removed.value.includes(id)) return false
@@ -105,7 +116,7 @@ export function useDashboardLayout(store) {
   // this screen. The first load only records what is there.
   let firstLook = true
   watch(present, now => {
-    if (!loaded.value) return
+    if (Object.values(now).some(v => v === null)) return
     const newly = WIDGETS.filter(w => w.kind === 'hardware' && now[w.id] === true && !seen.value.includes(w.id))
     if (newly.length === 0) { firstLook = false; return }
     seen.value = [...seen.value, ...newly.map(w => w.id)]
