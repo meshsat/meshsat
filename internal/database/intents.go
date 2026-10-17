@@ -1488,6 +1488,10 @@ func (db *DB) SetIntentElapsed(id string, ms int64) error {
 	return err
 }
 
+// ParseTime reads a time the database stored (DATETIME columns come back as
+// RFC 3339, TEXT ones as SQLite's own form). [MESHSAT-1584]
+func ParseTime(s string) (time.Time, bool) { return parseSQLiteTime(s) }
+
 func parseSQLiteTime(s string) (time.Time, bool) {
 	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339, "2006-01-02T15:04:05Z"} {
 		if t, err := time.Parse(layout, s); err == nil {

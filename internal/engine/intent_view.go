@@ -98,13 +98,12 @@ func BuildIntentView(s *database.IntentSnapshot) IntentView {
 			av := AttemptView{DeliveryID: r.ID, Round: r.Round, AttemptNo: r.AttemptNo, Status: r.Status,
 				Reason: r.Reason, LastError: r.LastError, AcceptedAt: r.AcceptedAt,
 				Transmissions: txByRow[r.ID], Evidence: evByRow[r.ID]}
-			dropped := map[int64]bool{}
+			dropped := droppedTransmissions(s)
 			for _, e := range av.Evidence {
 				if e.Matched && e.Completes != "" {
 					addFact(outcomeLabel(e.Completes))
 				}
-				if e.Matched && strings.HasPrefix(e.Event, "dropped:") {
-					dropped[e.TransmissionID] = true
+				if e.Matched && strings.HasPrefix(e.Event, "dropped:") && dropped[e.TransmissionID] {
 					addFact(fmt.Sprintf("not sent: the radio on %s refused it (%s)", p.InterfaceID, strings.TrimPrefix(e.Event, "dropped:")))
 				}
 			}

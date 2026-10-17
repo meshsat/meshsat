@@ -618,11 +618,11 @@ func classifyMeshReceipt(t database.DeliveryTransmission, e database.DeliveryEvi
 		return "relay_ack", "radio", "unauthenticated", ""
 	case e.CorrPeer == t.CorrPeer:
 		return "nak:" + name, "destination_node", "unauthenticated", ""
-	case e.Source == meshOwnRadio && meshLocalRefusal[reason]:
-		// Our own radio refused the packet and sent nothing (live, 17 Oct
-		// 2026: a DM to a node whose public key the radio did not have,
-		// PKI_SEND_FAIL_PUBLIC_KEY): the transmission is not sent, whatever
-		// the serial handoff said. [MESHSAT-1584]
+	case e.Source == meshOwnRadio && meshRefusedNothingSent(reason, t, e):
+		// Our own radio refused the packet and nothing of it was sent
+		// (live, 17 Oct 2026: a DM to a node whose public key the radio did
+		// not have, PKI_SEND_FAIL_PUBLIC_KEY): the transmission is not
+		// sent, whatever the serial handoff said. [MESHSAT-1584]
 		return "dropped:" + name, meshOwnRadio, "unauthenticated", ""
 	}
 	return "nak:" + name, "radio", "unauthenticated", ""
@@ -633,15 +633,58 @@ func classifyMeshReceipt(t database.DeliveryTransmission, e database.DeliveryEvi
 // packet we handed it, not a relay's or the destination's.
 const meshOwnRadio = "own_radio"
 
-// meshLocalRefusal are the Routing.Error values with which our own radio
-// refuses a packet before anything goes on air (Meshtastic mesh.proto):
-// NO_INTERFACE 4, NO_CHANNEL 6, TOO_LARGE 7 ("exceeds interface MTU after
-// encoding"), DUTY_CYCLE_LIMIT 9 ("cannot send currently"), PKI_FAILED 34
-// ("did not send the message at all"), RATE_LIMIT_EXCEEDED 38,
-// PKI_SEND_FAIL_PUBLIC_KEY 39 ("no public key for the remote node"). The
-// same codes from a relay mean the packet left us; MAX_RETRANSMIT and the
-// rest mean it was sent and nobody answered.
-var meshLocalRefusal = map[uint64]bool{4: true, 6: true, 7: true, 9: true, 34: true, 38: true, 39: true}
+// Which of our own radio's refusals prove that nothing of the packet went on
+// air, read from the firmware the kits run (meshsat-firmware, upstream
+// 2.8.0.47db0e3; review RADIO-R1):
+//
+//   - NO_INTERFACE 4 (Router::sendLocal) and RATE_LIMIT_EXCEEDED 38 (the
+//     phone API's text throttle) only ever refuse the packet as the Bridge
+//     hands it over: nothing was sent, ever.
+//   - NO_CHANNEL 6, TOO_LARGE 7, PKI_FAILED 34 and PKI_SEND_FAIL_PUBLIC_KEY
+//     39 come from the encode step in Router::send, which every copy goes
+//     through, retransmissions included (ReliableRouter keeps the decoded
+//     packet and re-sends it). Such a refusal stops the retransmissions, but
+//     proves nothing earlier went only when it refuses the first copy: the
+//     first retransmission waits at least PROCESSING_TIME_MSEC, 4.5 s, plus
+//     two airtimes (RadioInterface::getRetransmissionMsec). So it counts
+//     when it came within meshFirstCopyS of the handoff.
+//   - DUTY_CYCLE_LIMIT 9 never proves it: Router::send checks it on every
+//     copy, and ReliableRouter keeps the packet for a later retry after it
+//     (it does not stop retransmission on that error), so a copy may have
+//     gone before it or may go after it.
+//
+// The same codes from a relay mean the packet left us; MAX_RETRANSMIT and
+// the rest mean it was sent and nobody answered.
+var (
+	meshRefusedAtHandoff = map[uint64]bool{4: true, 38: true}
+	meshRefusedAtEncode  = map[uint64]bool{6: true, 7: true, 34: true, 39: true}
+)
+
+// meshFirstCopyS bounds, in the whole seconds the ledger stores, how long
+// after the handoff a refusal can only be about the first copy: 3 observed
+// seconds is under 4 real ones, below the 4.5 s before any retransmission.
+const meshFirstCopyS = 3
+
+func meshRefusedNothingSent(reason uint64, t database.DeliveryTransmission, e database.DeliveryEvidence) bool {
+	if meshRefusedAtHandoff[reason] {
+		return true
+	}
+	if !meshRefusedAtEncode[reason] || t.HandoffAt == nil {
+		return false
+	}
+	handoff, ok := database.ParseTime(*t.HandoffAt)
+	if !ok {
+		return false
+	}
+	at := time.Now().UTC()
+	if e.ReceivedAt != "" {
+		if r, ok := database.ParseTime(e.ReceivedAt); ok {
+			at = r
+		}
+	}
+	d := at.Sub(handoff)
+	return d >= 0 && d <= meshFirstCopyS*time.Second
+}
 
 // MeshRoutingReceipt takes a ROUTING_APP packet from the mesh (r3 B7(a)):
 // stored as evidence and matched by its request_id to the transmission

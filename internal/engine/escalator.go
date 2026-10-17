@@ -346,10 +346,16 @@ func (e *Escalator) Evaluate(id string) {
 // outcome) that arrives after an intent closed is recorded and may upgrade
 // its outcome by the D11 rule; it never reopens the intent, never sends.
 // One transaction, which also clears the intent's dirty flag.
+//
+// It also corrects an outcome the acceptance of a send made, once evidence
+// shows that send never left (our own radio's refusal after the intent
+// closed, review RADIO-R2): accepted, not confirmed, or may have been sent
+// become what the intent closed as with nothing sent, cancelled, expired
+// or failed. Still closed, nothing sent again; any completion stays.
 func (e *Escalator) evaluateClosed(id string) {
 	up, err := e.db.ReviewClosedIntent(id, func(s *database.IntentSnapshot) (string, bool) {
-		return outcomeRule(s), possibleDuplicate(s)
-	}, func(a, b string) bool { return outcomeStrength(a) > outcomeStrength(b) })
+		return closedOutcome(s), possibleDuplicate(s)
+	}, func(a, b string) bool { return outcomeStrength(a) > outcomeStrength(b) || correctsAcceptance(a, b) })
 	if err != nil {
 		log.Error().Err(err).Str("intent", id).Msg("delivery intents: closed review failed")
 		return
@@ -561,14 +567,59 @@ func outcomeRule(s *database.IntentSnapshot) string {
 // droppedTransmissions are the transmissions our own radio refused and sent
 // nothing of (matched "dropped" evidence, classifyMeshReceipt): the serial
 // handoff made them accepted, the radio's own NAK says nothing left.
+// Completion evidence for the same transmission wins over a refusal (review
+// RADIO-R1): something was received, so something was sent.
 func droppedTransmissions(s *database.IntentSnapshot) map[int64]bool {
-	m := map[int64]bool{}
+	m, completed := map[int64]bool{}, map[int64]bool{}
 	for _, ev := range s.Evidence {
-		if ev.Matched && ev.TransmissionID != 0 && strings.HasPrefix(ev.Event, "dropped") {
+		if !ev.Matched || ev.TransmissionID == 0 {
+			continue
+		}
+		switch {
+		case ev.Completes != "":
+			completed[ev.TransmissionID] = true
+		case strings.HasPrefix(ev.Event, "dropped"):
 			m[ev.TransmissionID] = true
 		}
 	}
+	for id := range completed {
+		delete(m, id)
+	}
 	return m
+}
+
+// closedOutcome is the D11 rule for a closed intent, with what it closed as
+// in place of failed: cancelled (T13), expired (T12).
+func closedOutcome(s *database.IntentSnapshot) string {
+	out := outcomeRule(s)
+	if out != database.OutcomeFailed {
+		return out
+	}
+	if s.Intent.CancelledAt != nil {
+		return database.OutcomeCancelled
+	}
+	// Closed by its expiry allowance (T12): its clock reached it, which
+	// also holds after a later T14 rewrote the last transition.
+	if s.Intent.LastTransition == "T12" || (s.Intent.ExpiryAllowS > 0 && s.Intent.ElapsedMs >= int64(s.Intent.ExpiryAllowS)*1000) {
+		return database.OutcomeExpired
+	}
+	return out
+}
+
+// correctsAcceptance: a nothing-sent outcome replacing one an accepted or
+// possibly sent transmission made (RADIO-R2). Transmissions never change
+// class, so the rule only gives such an outcome once evidence dropped them.
+func correctsAcceptance(next, current string) bool {
+	switch current {
+	case database.OutcomeAcceptedUnconfirmed, database.OutcomeMayHaveBeenSent:
+	default:
+		return false
+	}
+	switch next {
+	case database.OutcomeFailed, database.OutcomeCancelled, database.OutcomeExpired:
+		return true
+	}
+	return false
 }
 
 // outcomeStrength orders outcomes for T14: evidence beats acceptance beats

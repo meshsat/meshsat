@@ -50,9 +50,11 @@ type SBDSubmit struct {
 //   - 5 to 8, 11, 12, 14, 15: the gateway reported it did not take the MO
 //     (failure, queue full, too many segments, bad segment size, access
 //     denied). Not sent.
-//   - 16 locked, 32 to 38 unable to initiate the call (no service, antenna,
-//     radio off, busy, the 3-minute wait, SBD disabled, traffic
-//     management): no call was made. Not sent.
+//   - 16 locked; 32 to 36 unable to initiate the call (no service,
+//     antenna, radio off, busy, the 3-minute wait); 37 SBD service
+//     temporarily disabled; 38 refused for a traffic management period
+//     (+SBDLOE). The modem reports none of them as a transferred MO. Not
+//     sent, retryable.
 //   - 64 band violation, 65 PLL lock failure: the transmitter refused or
 //     failed before anything went out. Not sent.
 //   - Anything else, the reserved ranges included, is unknown.
