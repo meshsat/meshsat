@@ -26,10 +26,11 @@ import (
 const (
 	modeAPRS = "aprs"
 	modeSMS  = "sms"
+	modeIMT  = "imt"
 )
 
 // gatewayModes are the adapter modes a gateway carries.
-var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true}
+var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true}
 
 // billed reports whether an adapter's submissions cost money (B9).
 func billed(ad gateway.IntentAdapter) bool {

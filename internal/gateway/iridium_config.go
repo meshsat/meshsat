@@ -53,6 +53,15 @@ type IridiumConfig struct {
 	IdlePollSec     int    `json:"idle_poll_sec"`    // MT poll interval in idle mode (SBD only)
 	ActivePollSec   int    `json:"active_poll_sec"`  // MT poll interval in active mode (SBD only)
 	PowerProfile    string `json:"power_profile"`    // "default" or "low_power" (SBD only, sleep GPIO)
+
+	// --- IMT-only (9704) ---
+	// MODestination is where the provider delivers this modem's MOs as a
+	// satellite message (the far modem's IMEI, through Cloudloop and the
+	// Hub's relay route), recorded by the operator, never inferred. The 9704
+	// puts no recipient on the wire, so a delivery intent's IMT route is
+	// admitted only for the contact whose IMT address is this; empty = no
+	// IMT route for intents. [MESHSAT-1584]
+	MODestination string `json:"mo_destination,omitempty"`
 }
 
 // DefaultIridiumConfig returns sensible defaults for SBD.

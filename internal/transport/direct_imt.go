@@ -64,6 +64,12 @@ type DirectIMTTransport struct {
 	excludePort   string
 	excludePortFn func() string
 
+	// One MO at a time (acquireMO), and whether the MO with the modem may
+	// be cancelled: a delivery intent's may not (SubmitMO). [MESHSAT-1584]
+	moSem      chan struct{}
+	moSemOnce  sync.Once
+	moNoCancel bool // guarded by mu
+
 	cancelFunc     context.CancelFunc
 	pollDone       chan struct{}
 	sigDone        chan struct{}
@@ -360,6 +366,13 @@ const (
 // Send sends a binary message via IMT (Mobile Originated).
 // Returns native JSPR result codes (not synthetic SBD mapping).
 func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SatResult, error) {
+	release, err := t.acquireMO(ctx)
+	if err != nil {
+		return &SatResult{MOStatus: IMTStatusGenericFail, StatusText: err.Error()},
+			fmt.Errorf("imt: not started, the modem was busy with another message: %w", err)
+	}
+	defer release()
+
 	t.mu.Lock()
 	if !t.connected {
 		t.mu.Unlock()
@@ -376,24 +389,7 @@ func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SatResult,
 		}, err
 	}
 
-	result := &SatResult{
-		StatusText: status,
-	}
-
-	switch status {
-	case "mo_ack_received":
-		result.MOStatus = IMTStatusSuccess
-	case "message_expired":
-		result.MOStatus = IMTStatusExpired
-	case "network_error":
-		result.MOStatus = IMTStatusNoNetwork
-	case "message_discarded_on_overflow":
-		result.MOStatus = IMTStatusOverflow
-	default:
-		result.MOStatus = IMTStatusGenericFail
-	}
-
-	return result, nil
+	return &SatResult{StatusText: status, MOStatus: imtMOStatusCode(status)}, nil
 }
 
 // SendText sends a text message via IMT.
@@ -1244,8 +1240,9 @@ func findJSPRHelper() string {
 func (t *DirectIMTTransport) CancelMO() bool {
 	t.mu.Lock()
 	helper, ok := t.file.(*jsprHelperPort)
+	noCancel := t.moNoCancel // a delivery intent's MO [MESHSAT-1584]
 	t.mu.Unlock()
-	return ok && helper.CancelMO()
+	return ok && !noCancel && helper.CancelMO()
 }
 
 // Reconnect re-runs the JSPR connect sequence. Soft level of the OOB RESET

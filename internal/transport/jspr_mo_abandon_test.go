@@ -12,7 +12,7 @@ func TestAwaitHelperMOResult_SessionClosedEndsTheWait(t *testing.T) {
 	c := &jsprConn{pending: map[string]*pendingRequest{}, readerDone: make(chan struct{})}
 	close(c.readerDone)
 	start := time.Now()
-	_, err := c.awaitHelperMOResult(1, time.Minute)
+	_, err := c.awaitHelperMOResult(1, time.Minute, false)
 	if err == nil || !strings.Contains(err.Error(), "session closed") {
 		t.Fatalf("err = %v, want the session-closed error", err)
 	}
