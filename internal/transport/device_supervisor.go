@@ -816,8 +816,13 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 	}
 
 	// A TETRA radio's PEI: claimed by id so the AT probe never takes it
-	// for a 9603. [MESHSAT-1588]
+	// for a 9603. The radio enumerates two ports; AT is interface 0, so
+	// the other one is claimed as aux and starts no gateway of its own.
+	// [MESHSAT-1588]
 	if knownTetraVIDPIDs[vidpid] {
+		if iface := findUSBInterfaceNum(port); iface != "" && iface != "00" {
+			return RoleTetraAux
+		}
 		return RoleTetra
 	}
 

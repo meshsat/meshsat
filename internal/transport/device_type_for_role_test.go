@@ -16,6 +16,7 @@ func TestDeviceTypeForRole(t *testing.T) {
 		{RoleZigBee, "zigbee"},
 		{RoleGPS, "gps"},
 		{RoleTetra, "tetra"},
+		{RoleTetraAux, "tetra_aux"},
 		{RoleNone, ""},
 		{DeviceRole("something-new"), ""},
 	}

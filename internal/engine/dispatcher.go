@@ -620,7 +620,7 @@ func (d *Dispatcher) StopWorker(ifaceID string) {
 // codec and is left alone.
 func isTextBearer(channelType string) bool {
 	switch channelType {
-	case "cellular", "aprs", "mesh", "iridium_imt", "cell":
+	case "cellular", "aprs", "mesh", "iridium_imt", "cell", "tetra":
 		return true
 	}
 	return false
