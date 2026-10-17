@@ -24,6 +24,8 @@ type tetraFake struct {
 	mode     int
 	refuse   bool
 	collide  bool // the radio takes the SDS, then reports it not sent
+	peer     bool // a MeshSat Bridge on the group: acks texts, answers hellos
+	links    []tetra.Link
 	toGW     *io.PipeWriter
 	closeAll func()
 }
@@ -81,8 +83,18 @@ func (f *tetraFake) serve(r io.Reader, w io.Writer) {
 			if err != nil {
 				return
 			}
+			hexPDU := strings.TrimSpace(strings.TrimSuffix(data, "\x1a"))
+			raw, _ := hex.DecodeString(hexPDU)
 			f.mu.Lock()
-			f.pdus = append(f.pdus, strings.TrimSpace(strings.TrimSuffix(data, "\x1a")))
+			isLink := len(raw) > 0 && raw[0] == tetra.LinkPID
+			if isLink {
+				if l, err := tetra.DecodeLink(raw); err == nil {
+					f.links = append(f.links, l)
+				}
+			} else {
+				f.pdus = append(f.pdus, hexPDU)
+			}
+			peer := f.peer
 			f.mu.Unlock()
 			if refuse {
 				f.say(w, "+CME ERROR: 3")
@@ -104,6 +116,15 @@ func (f *tetraFake) serve(r io.Reader, w io.Writer) {
 				continue
 			}
 			f.say(w, "+CMGS: 0", "", "OK", "+CMGS: 0,4,"+ref)
+			// The far Bridge answers what it heard.
+			if peer && len(raw) > 4 && !isLink {
+				ack, bits := tetra.EncodeLink(tetra.Link{Kind: tetra.LinkAck, Ref: raw[2], Hash: tetra.TextHash(raw[4:])})
+				f.say(w, "+CTSDSR: 12,100,0,2000,0,"+itoa(bits), hex.EncodeToString(ack))
+			}
+			if peer && isLink && len(raw) > 1 && raw[1]&0x0F == tetra.LinkHello {
+				rep, bits := tetra.EncodeLink(tetra.Link{Kind: tetra.LinkHelloReply, Tag: 77})
+				f.say(w, "+CTSDSR: 12,100,0,2000,0,"+itoa(bits), hex.EncodeToString(rep))
+			}
 		case cmd == "ATI":
 			itsi, gtsi := "2340239200000100", "2340239200003000"
 			if mode == 1 {
@@ -163,10 +184,18 @@ func has(list []string, want string) bool {
 	return false
 }
 
+func (f *tetraFake) sentLinks() []tetra.Link {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tetra.Link{}, f.links...)
+}
+
 func startTetra(t *testing.T, f *tetraFake, cfg TetraConfig) *TetraGateway {
 	t.Helper()
 	g := NewTetraGateway(cfg, "tetra_0", func() string { return "/dev/ttyUSB1" })
 	g.open = f.open
+	g.ackTimeout = 400 * time.Millisecond
+	g.jitter = func(time.Duration) time.Duration { return 0 }
 	g.SetNodeNameResolver(func(n uint32) string {
 		if n == 0x4370c1d8 {
 			return "tess"
@@ -549,5 +578,140 @@ func TestTetraRadioNotSentIsAFailure(t *testing.T) {
 	f.mu.Unlock()
 	if err := g.Forward(context.Background(), &transport.MeshMessage{DecodedText: "again", AsWritten: true}); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+func waitTetra(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("never: %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// With no MeshSat peer known (a group of plain handhelds) nothing waits
+// for an acknowledgement and nothing is sent twice.
+func TestTetraWithoutAPeerNothingWaits(t *testing.T) {
+	f := newTetraFake(1)
+	g := startTetra(t, f, DefaultTetraConfig())
+	start := time.Now()
+	res, err := g.Send(context.Background(), &transport.MeshMessage{DecodedText: "to the handhelds", AsWritten: true})
+	if err != nil || res.Confirmed {
+		t.Fatalf("send: %+v %v", res, err)
+	}
+	if time.Since(start) > 300*time.Millisecond {
+		t.Fatal("waited for an acknowledgement nobody gives")
+	}
+	if st := g.TetraStatus(); st.Unconfirmed != 1 || st.WaitsForAcks || st.Peers != 0 {
+		t.Fatalf("status %+v", st)
+	}
+}
+
+// A peer's hello makes the gateway answer and wait for acks from then on;
+// an acknowledged send is confirmed, an unacknowledged one is ErrNoAck.
+func TestTetraAPeerConfirmsAndSilenceIsRetried(t *testing.T) {
+	f := newTetraFake(1)
+	g := startTetra(t, f, DefaultTetraConfig())
+	hello, bits := tetra.EncodeLink(tetra.Link{Kind: tetra.LinkHello, Tag: 42})
+	f.incoming("+CTSDSR: 12,100,0,2000,0,"+itoa(bits), hex.EncodeToString(hello))
+	waitTetra(t, "a hello reply", func() bool {
+		for _, l := range f.sentLinks() {
+			if l.Kind == tetra.LinkHelloReply && l.Tag == g.acks.selfTag {
+				return true
+			}
+		}
+		return false
+	})
+	if st := g.TetraStatus(); st.Peers != 1 || !st.WaitsForAcks {
+		t.Fatalf("after hello: %+v", st)
+	}
+
+	f.mu.Lock()
+	f.peer = true
+	f.mu.Unlock()
+	res, err := g.Send(context.Background(), &transport.MeshMessage{DecodedText: "confirmed please", AsWritten: true})
+	if err != nil || !res.Confirmed {
+		t.Fatalf("with a peer acking: %+v %v", res, err)
+	}
+	long := strings.Repeat("parts each acknowledged ", 9)
+	if res, err := g.Send(context.Background(), &transport.MeshMessage{DecodedText: long, AsWritten: true}); err != nil || !res.Confirmed || res.Parts < 2 {
+		t.Fatalf("split text: %+v %v", res, err)
+	}
+
+	f.mu.Lock()
+	f.peer = false // both radios keyed up at once: nothing arrived, nobody acks
+	f.mu.Unlock()
+	err = g.Forward(context.Background(), &transport.MeshMessage{DecodedText: "lost in a collision", AsWritten: true})
+	if !errors.Is(err, transport.ErrNoAck) {
+		t.Fatalf("unacknowledged: %v", err)
+	}
+	st := g.TetraStatus()
+	if st.Acked < 3 || st.Unacked != 1 {
+		t.Fatalf("counters %+v", st)
+	}
+}
+
+// Every text received is acknowledged with its reference and hash; the
+// same text again (a retry whose ack was lost) is acknowledged again but
+// delivered once.
+func TestTetraAcksWhatItReceivesAndDeliversARepeatOnce(t *testing.T) {
+	f := newTetraFake(1)
+	g := startTetra(t, f, DefaultTetraConfig())
+	text := "from the other kit"
+	for _, ref := range []byte{0x21, 0x22} {
+		pdu, bits := tetra.EncodeText(ref, text)
+		f.incoming("+CTSDSR: 12,100,0,2000,0,"+itoa(bits), hex.EncodeToString(append(pdu, "\r\r7530236100000100"...)))
+	}
+	waitTetra(t, "two acks", func() bool {
+		n := 0
+		for _, l := range f.sentLinks() {
+			if l.Kind == tetra.LinkAck && l.Hash == tetra.TextHash(tetra.BodyOf(text)) && (l.Ref == 0x21 || l.Ref == 0x22) {
+				n++
+			}
+		}
+		return n == 2
+	})
+	select {
+	case m := <-g.Receive():
+		if m.Text != text {
+			t.Fatalf("got %q", m.Text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("not delivered")
+	}
+	select {
+	case m := <-g.Receive():
+		t.Fatalf("the repeat was delivered: %q", m.Text)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if st := g.TetraStatus(); st.Repeats != 1 || st.MessagesIn != 1 {
+		t.Fatalf("counters %+v", st)
+	}
+}
+
+func TestTetraAcksOffNeitherAcksNorWaits(t *testing.T) {
+	f := newTetraFake(1)
+	cfg := DefaultTetraConfig()
+	cfg.Acks = "off"
+	g := startTetra(t, f, cfg)
+	hello, bits := tetra.EncodeLink(tetra.Link{Kind: tetra.LinkHello, Tag: 42})
+	f.incoming("+CTSDSR: 12,100,0,2000,0,"+itoa(bits), hex.EncodeToString(hello))
+	pdu, tbits := tetra.EncodeText(5, "no ack wanted")
+	f.incoming("+CTSDSR: 12,100,0,2000,0,"+itoa(tbits), hex.EncodeToString(pdu))
+	<-g.Receive()
+	if res, err := g.Send(context.Background(), &transport.MeshMessage{DecodedText: "x", AsWritten: true}); err != nil || res.Confirmed {
+		t.Fatalf("send: %+v %v", res, err)
+	}
+	time.Sleep(1500 * time.Millisecond) // past the hello's and an ack's pause
+	if links := f.sentLinks(); len(links) != 0 {
+		t.Fatalf("acks off sent link control: %+v", links)
+	}
+	if _, err := ParseTetraConfig(`{"acks":"sometimes"}`); err != nil {
+		t.Fatal(err)
+	} else if c, _ := ParseTetraConfig(`{"acks":"sometimes"}`); c.Validate() == nil {
+		t.Fatal("acks sometimes accepted")
 	}
 }

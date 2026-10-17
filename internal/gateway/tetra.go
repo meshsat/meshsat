@@ -51,7 +51,14 @@ type TetraGateway struct {
 	since     time.Time
 
 	sendMu sync.Mutex // the radio sends one SDS at a time
+	fwdMu  sync.Mutex // one message (all its parts and their acks) at a time
 	ref    atomic.Uint32
+	acks   *tetraAcks
+	runCtx context.Context
+	// jitter and ackTimeout are tetraJitter and tetraAckTimeout, per
+	// gateway so a test can set its own without touching the others.
+	jitter     func(time.Duration) time.Duration
+	ackTimeout time.Duration
 
 	asmMu sync.Mutex // parts of split texts waiting for the rest
 	asm   map[string]*tetraAssembly
@@ -92,6 +99,9 @@ func NewTetraGateway(cfg TetraConfig, instanceID string, findPort func() string)
 		mode:       -1,
 		battery:    -1,
 		maxBits:    tetraDefaultMaxBits,
+		acks:       newTetraAcks(),
+		jitter:     tetraJitter,
+		ackTimeout: tetraAckTimeout,
 	}
 }
 
@@ -146,6 +156,7 @@ func (g *TetraGateway) Start(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	g.cancel = cancel
+	g.runCtx = ctx
 	sess, err := g.connect(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("tetra: the radio did not open, retrying in the background")
@@ -261,6 +272,7 @@ func (g *TetraGateway) connect(ctx context.Context) (*tetra.Session, error) {
 		Str("group", tetra.SSIOf(id.GTSI)).Str("mode", modeName(mode)).Int("max_bits", maxBits).Int("battery", battery).
 		Msg("tetra: radio ready, texts come to the Bridge")
 	g.emit("tetra", fmt.Sprintf("TETRA radio ready (%s, group %s)", modeName(mode), tetra.SSIOf(id.GTSI)))
+	go g.sayHello()
 	return sess, nil
 }
 
@@ -450,55 +462,89 @@ func splitText(text string, maxBytes int) []string {
 	return parts
 }
 
-// Forward sends one message as SDS: one text if it fits, else plain words
-// in numbered parts. A sealed, raw or OOB payload that does not fit one SDS
-// is refused (transport.ErrPayloadTooLong): cutting it would destroy it.
+// TetraSendResult says how far a send got.
+type TetraSendResult struct {
+	// Confirmed: a MeshSat Bridge on the group acknowledged every SDS of
+	// the message (tetra_ack.go). False with a nil error: the radio sent
+	// it and no peer is known to acknowledge (a group of plain handhelds,
+	// or acks off), so arrival is not known.
+	Confirmed bool
+	Parts     int
+}
+
+// Forward sends one message as SDS (Send without its result).
 func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
+	_, err := g.Send(ctx, msg)
+	return err
+}
+
+// Send sends one message as SDS: one text if it fits, else plain words in
+// numbered parts. A sealed, raw or OOB payload that does not fit one SDS
+// is refused (transport.ErrPayloadTooLong): cutting it would destroy it.
+// With a MeshSat peer on the group (or acks on) every SDS waits for the
+// peer's acknowledgement, and one nobody acknowledged is transport.ErrNoAck.
+func (g *TetraGateway) Send(ctx context.Context, msg *transport.MeshMessage) (TetraSendResult, error) {
+	res := TetraSendResult{}
 	g.mu.RLock()
 	sess, maxBytes := g.sess, g.textLimit()
 	g.mu.RUnlock()
 	if sess == nil {
-		return fmt.Errorf("tetra: radio %s: %w", g.stateString(), transport.ErrNotConnected)
+		return res, fmt.Errorf("tetra: radio %s: %w", g.stateString(), transport.ErrNotConnected)
 	}
 	dest, err := g.destination(msg)
 	if err != nil {
-		return err
+		return res, err
 	}
 	text := g.outboundText(msg)
 	if strings.TrimSpace(text) == "" {
-		return errors.New("tetra: nothing to send")
+		return res, errors.New("tetra: nothing to send")
 	}
 	parts := []string{text}
 	if tetra.TextBytes(text) > maxBytes {
 		if msg.Encrypted || msg.RawText {
 			g.refusedLong.Add(1)
-			return fmt.Errorf("tetra: %d bytes, one SDS holds %d: %w", tetra.TextBytes(text), maxBytes, transport.ErrPayloadTooLong)
+			return res, fmt.Errorf("tetra: %d bytes, one SDS holds %d: %w", tetra.TextBytes(text), maxBytes, transport.ErrPayloadTooLong)
 		}
 		if parts = splitText(text, maxBytes); parts == nil {
 			g.refusedLong.Add(1)
-			return fmt.Errorf("tetra: the text cannot be split to fit %d bytes: %w", maxBytes, transport.ErrPayloadTooLong)
+			return res, fmt.Errorf("tetra: the text cannot be split to fit %d bytes: %w", maxBytes, transport.ErrPayloadTooLong)
 		}
 	}
 
-	g.sendMu.Lock()
-	defer g.sendMu.Unlock()
+	g.fwdMu.Lock()
+	defer g.fwdMu.Unlock()
+	res.Parts = len(parts)
+	wantAck := g.wantAck()
+	confirmed := wantAck
 	for i, part := range parts {
 		ref := byte(g.ref.Add(1))
 		pdu, bits := tetra.EncodeText(ref, part)
+		key := tetraAckKey{ref, tetra.TextHash(tetra.BodyOf(part))}
+		var ackCh chan struct{}
+		if wantAck {
+			ackCh = g.expectAck(key) // before the send: an ack can beat the report
+		}
+		if !sleepCtx(ctx, g.sendPause()) {
+			g.dropAck(key)
+			return res, ctx.Err()
+		}
+		g.sendMu.Lock()
 		rep, err := sess.SendSDS(ctx, dest, ref, pdu, bits)
+		g.sendMu.Unlock()
 		if err != nil {
+			g.dropAck(key)
 			g.errs.Add(1)
 			var cme *tetra.CMEError
 			switch {
 			case errors.Is(err, tetra.ErrClosed):
-				return fmt.Errorf("tetra: the radio's port closed: %w", transport.ErrNotConnected)
+				return res, fmt.Errorf("tetra: the radio's port closed: %w", transport.ErrNotConnected)
 			case errors.As(err, &cme) && cme.Code == 24 && i == 0:
 				// Too long for the radio: no retry can help.
 				g.refusedLong.Add(1)
-				return fmt.Errorf("tetra: the radio refused the SDS to %s as too long (%d bytes): %v: %w", dest, len(pdu), err, transport.ErrPayloadTooLong)
+				return res, fmt.Errorf("tetra: the radio refused the SDS to %s as too long (%d bytes): %v: %w", dest, len(pdu), err, transport.ErrPayloadTooLong)
 			case errors.As(err, &cme) && i == 0:
 				// The radio refused before anything went on air.
-				return fmt.Errorf("tetra: the radio refused the SDS to %s: %v: %w", dest, err, transport.ErrNotSubmitted)
+				return res, fmt.Errorf("tetra: the radio refused the SDS to %s: %v: %w", dest, err, transport.ErrNotSubmitted)
 			case errors.Is(err, tetra.ErrRadioNotSent):
 				// The radio took it and then said it did not go, as when
 				// both kits sent at the same instant (17 Oct 2026: +CME
@@ -512,7 +558,7 @@ func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) 
 				log.Warn().Str("to", dest).Int("part", i+1).Int("parts", len(parts)).
 					Msg("tetra: a later part failed; the retry sends every part again")
 			}
-			return fmt.Errorf("tetra: send to %s: %w", dest, err)
+			return res, fmt.Errorf("tetra: send to %s: %w", dest, err)
 		}
 		g.msgsOut.Add(1)
 		g.lastOut.Store(time.Now().Unix())
@@ -523,8 +569,27 @@ func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) 
 		g.record(PacketRecord{Time: time.Now(), Bearer: BearerTetra, Dir: DirTX, From: g.selfSSI(), To: dest, Bytes: len(pdu), Text: CapPacketText(part), MsgRef: msg.MsgRef})
 		log.Info().Str("to", dest).Int("ref", int(ref)).Int("bytes", len(pdu)).Int("report_status", status).
 			Int("part", i+1).Int("parts", len(parts)).Str("text", part).Msg("tetra: SDS sent")
+		if ackCh == nil {
+			continue
+		}
+		if g.awaitAck(ctx, key, ackCh) {
+			log.Info().Str("to", dest).Int("ref", int(ref)).Int64("ack_ms", g.acks.lastAckMs.Load()).Msg("tetra: SDS acknowledged by a MeshSat Bridge")
+			continue
+		}
+		// Nobody acknowledged: a collision both radios missed, or the far
+		// kit's ack was lost. The worker retries; a repeat the far kit
+		// already had is acknowledged again and delivered once.
+		g.acks.unacked.Add(1)
+		g.acks.lastNoAck.Store(time.Now().Unix())
+		log.Warn().Str("to", dest).Int("ref", int(ref)).Int("part", i+1).Int("parts", len(parts)).
+			Dur("waited", g.ackTimeout).Msg("tetra: no MeshSat Bridge acknowledged the SDS; the delivery is retried")
+		return res, fmt.Errorf("tetra: no MeshSat Bridge acknowledged the SDS to %s within %s: %w", dest, g.ackTimeout, transport.ErrNoAck)
 	}
-	return nil
+	if !wantAck {
+		g.acks.unconfirmed.Add(1)
+	}
+	res.Confirmed = confirmed
+	return res, nil
 }
 
 func (g *TetraGateway) selfSSI() string {
@@ -550,6 +615,10 @@ func (g *TetraGateway) onSDS(r tetra.Received) {
 		log.Info().Str("from", r.From).Int("ref", int(r.Ref)).Int("delivery_status", int(r.DeliveryStatus)).Msg("tetra: SDS-TL report received")
 		return
 	}
+	if r.PID == tetra.LinkPID {
+		g.onLink(r)
+		return
+	}
 	if !r.IsText {
 		g.nonText.Add(1)
 		log.Info().Str("from", r.From).Str("to", r.To).Int("pid", int(r.PID)).Int("bytes", len(r.PDU)).
@@ -560,6 +629,7 @@ func (g *TetraGateway) onSDS(r tetra.Received) {
 	if text == "" {
 		return
 	}
+	g.ackText(r) // every text SDS, parts included, repeats included
 	if g.holdPart(r, text) {
 		return
 	}
@@ -568,6 +638,13 @@ func (g *TetraGateway) onSDS(r tetra.Received) {
 
 // deliver hands one whole text to the processor as tetra_0.
 func (g *TetraGateway) deliver(from, to, text string, nbytes int, senderID string, ref int) {
+	if g.isRepeat(from, text) {
+		// A retry whose acknowledgement was lost: acknowledged again
+		// (ackText), delivered once.
+		g.acks.repeats.Add(1)
+		log.Info().Str("from", from).Str("text", text).Msg("tetra: a text already delivered came again (its ack was lost?); acknowledged, not delivered twice")
+		return
+	}
 	inbound := InboundMessage{
 		Text:     text,
 		Source:   "tetra",
@@ -732,13 +809,25 @@ type TetraStatus struct {
 	RefusedTooLong int64          `json:"refused_too_long"`
 	NonTextIn      int64          `json:"non_text_in"`
 	NotSent        int64          `json:"not_sent"` // the radio took an SDS and reported it not sent (busy channel)
-	LastIn         *time.Time     `json:"last_in,omitempty"`
-	LastOut        *time.Time     `json:"last_out,omitempty"`
+	// Delivery confirmation between MeshSat Bridges (tetra_ack.go).
+	Acks         string     `json:"acks"`  // auto, on, off
+	Peers        int        `json:"peers"` // MeshSat Bridges heard on the group lately
+	LastPeerSeen *time.Time `json:"last_peer_seen,omitempty"`
+	WaitsForAcks bool       `json:"waits_for_acks"` // a send now waits for a peer's acknowledgement
+	Acked        int64      `json:"acked"`          // SDS a peer acknowledged
+	Unacked      int64      `json:"unacked"`        // SDS nobody acknowledged (retried)
+	Unconfirmed  int64      `json:"unconfirmed"`    // messages sent with no peer to confirm them
+	Repeats      int64      `json:"repeats"`        // texts that came again and were not delivered twice
+	LastAckMs    int64      `json:"last_ack_ms"`
+	LastIn       *time.Time `json:"last_in,omitempty"`
+	LastOut      *time.Time `json:"last_out,omitempty"`
 }
 
 // TetraStatus reports the radio, the link and the counters.
 func (g *TetraGateway) TetraStatus() TetraStatus {
 	dest, _ := g.destination(&transport.MeshMessage{})
+	peers, lastPeer := g.peerCount()
+	waits := g.wantAck()
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	st := TetraStatus{
@@ -760,6 +849,15 @@ func (g *TetraGateway) TetraStatus() TetraStatus {
 		RefusedTooLong: g.refusedLong.Load(),
 		NonTextIn:      g.nonText.Load(),
 		NotSent:        g.notSent.Load(),
+		Acks:           g.acksMode(),
+		Peers:          peers,
+		LastPeerSeen:   lastPeer,
+		WaitsForAcks:   waits,
+		Acked:          g.acks.acked.Load(),
+		Unacked:        g.acks.unacked.Load(),
+		Unconfirmed:    g.acks.unconfirmed.Load(),
+		Repeats:        g.acks.repeats.Load(),
+		LastAckMs:      g.acks.lastAckMs.Load(),
 	}
 	if g.state == tetraConnected && !g.since.IsZero() {
 		t := g.since

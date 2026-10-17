@@ -97,6 +97,11 @@ onUnmounted(() => clearInterval(timer))
         </div>
       </div>
 
+      <div class="text-[10px] mb-2" :class="gw.waits_for_acks ? 'text-gray-400' : 'text-gray-600'" data-testid="tetra-widget-acks">
+        <template v-if="gw.waits_for_acks">{{ gw.peers || 'A' }} MeshSat {{ gw.peers === 1 ? 'Bridge confirms' : 'Bridges confirm' }} what this kit sends: {{ gw.acked }} confirmed<template v-if="gw.unacked">, {{ gw.unacked }} sent again</template></template>
+        <template v-else>No MeshSat Bridge answered on group {{ gw.group }}: texts go unconfirmed</template>
+      </div>
+
       <div v-if="!up" class="text-[10px] text-amber-400 mb-2">Radio {{ gw.state }}<span v-if="gw.last_error" class="text-gray-500">: {{ gw.last_error }}</span></div>
 
       <div v-if="recent.length" class="space-y-1 mb-3">

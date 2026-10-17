@@ -100,6 +100,7 @@ type Received struct {
 	// table 29.16: 0x00 received, 0x02 consumed, ...); 0 for a message.
 	DeliveryStatus byte
 	Text           string // the words, with the radio's appended identity removed
+	Body           []byte // the text's bytes as they went on air (for TextHash)
 	SenderID       string // the identity the radio appended to the text, if any
 	Coding         byte
 }
@@ -198,6 +199,7 @@ func (r *Received) DecodePDU(hexLine string) error {
 	}
 	r.Coding = hdr & 0x7F
 	body, r.SenderID = splitSenderIDBytes(body)
+	r.Body = body
 	text, id := splitSenderID(decodeBody(r.Coding, body))
 	if id != "" && r.SenderID == "" {
 		r.SenderID = id

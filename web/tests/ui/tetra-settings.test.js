@@ -13,9 +13,10 @@ const status = {
   gateway: {
     state: 'connected', port: '/dev/ttyUSB1', mode: 'dmo', group: '2000', self: '100', destination: '2000',
     battery_pct: 100, max_text_bytes: 130, messages_in: 3, messages_out: 9, errors: 0, reports: 0,
-    refused_too_long: 0, non_text_in: 0,
+    refused_too_long: 0, non_text_in: 0, acks: 'auto', peers: 1, waits_for_acks: true, acked: 7, unacked: 1,
+    unconfirmed: 0, repeats: 1, last_peer_seen: '2026-10-17T23:40:00Z',
     radio: { model: 'MTP3550 350-470MHz PTBP952HE', firmware: 'R35.000.9426', itsi: '7530236100000100', gtsi: '7530236100002000' },
-    config: { mode: 'dmo', destination: '', prefix: '', port: '' }
+    config: { mode: 'dmo', destination: '', prefix: '', port: '', acks: 'auto' }
   }
 }
 
@@ -32,7 +33,8 @@ test('status_shows_the_radio_and_the_measured_limit', async () => {
   mountRoot(TetraSettings)
   await flush()
   const text = bodyText()
-  for (const want of ['connected', 'MTP3550', 'R35.000.9426', 'Direct Mode (DMO)', '2000 / 100', '100%', '130 bytes (126 Latin-1 characters)', '3 / 9']) {
+  for (const want of ['connected', 'MTP3550', 'R35.000.9426', 'Direct Mode (DMO)', '2000 / 100', '100%', '130 bytes (126 Latin-1 characters)', '3 / 9',
+    '7 / 1 / 0, 1 repeats not delivered twice', 'every text waits for its confirmation']) {
     assert.ok(text.includes(want), `missing ${want}`)
   }
 })
@@ -52,10 +54,13 @@ test('save_puts_the_gateway_config', async () => {
   const mode = document.querySelector('[data-testid="tetra-mode"]')
   mode.value = 'tmo'
   mode.dispatchEvent(new Event('change', { bubbles: true }))
+  const acks = document.querySelector('[data-testid="tetra-acks"]')
+  acks.value = 'on'
+  acks.dispatchEvent(new Event('change', { bubbles: true }))
   await input(document.querySelector('[data-testid="tetra-destination"]'), ' 2001 ')
   button('Save TETRA settings').click()
   await flush()
-  assert.deepEqual(puts, [{ path: '/api/gateways/tetra', body: { enabled: true, config: { mode: 'tmo', destination: '2001', prefix: '', port: '' } } }])
+  assert.deepEqual(puts, [{ path: '/api/gateways/tetra', body: { enabled: true, config: { mode: 'tmo', destination: '2001', prefix: '', port: '', acks: 'on' } } }])
   assert.match(bodyText(), /Saved/)
 })
 

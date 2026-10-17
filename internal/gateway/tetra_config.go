@@ -26,11 +26,16 @@ type TetraConfig struct {
 	// Prefix goes in front of a text relayed from the mesh, before the
 	// sender's name. Empty sends "<sender>: <text>".
 	Prefix string `json:"prefix"`
+	// Acks: delivery confirmation between MeshSat Bridges on the group
+	// (tetra_ack.go). auto (default): acknowledge every text received, and
+	// wait for an acknowledgement while a MeshSat peer is known; on: always
+	// wait; off: neither.
+	Acks string `json:"acks"`
 }
 
 // DefaultTetraConfig is Direct Mode to the radio's own group.
 func DefaultTetraConfig() TetraConfig {
-	return TetraConfig{Mode: "dmo"}
+	return TetraConfig{Mode: "dmo", Acks: "auto"}
 }
 
 // ParseTetraConfig reads a stored config over the defaults.
@@ -46,6 +51,10 @@ func ParseTetraConfig(raw string) (*TetraConfig, error) {
 		cfg.Mode = "dmo"
 	}
 	cfg.Destination = strings.TrimSpace(cfg.Destination)
+	cfg.Acks = strings.ToLower(strings.TrimSpace(cfg.Acks))
+	if cfg.Acks == "" {
+		cfg.Acks = "auto"
+	}
 	cfg.Port = strings.TrimSpace(cfg.Port)
 	return &cfg, nil
 }
@@ -56,6 +65,11 @@ func (c *TetraConfig) Validate() error {
 	case "dmo", "tmo", "keep":
 	default:
 		return fmt.Errorf("tetra: mode %q: dmo, tmo or keep", c.Mode)
+	}
+	switch c.Acks {
+	case "auto", "on", "off":
+	default:
+		return fmt.Errorf("tetra: acks %q: auto, on or off", c.Acks)
 	}
 	if c.Destination != "" {
 		if _, ok := tetra.ParseAddress(c.Destination); !ok {

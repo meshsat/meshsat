@@ -7,7 +7,7 @@ import api from '@/api/client'
 
 const st = ref(null)
 const loadError = ref('')
-const form = ref({ mode: 'dmo', destination: '', prefix: '', port: '' })
+const form = ref({ mode: 'dmo', destination: '', prefix: '', port: '', acks: 'auto' })
 const formLoaded = ref(false)
 const saving = ref(false)
 const saveMsg = ref('')
@@ -38,7 +38,7 @@ async function load() {
     loadError.value = ''
     if (!formLoaded.value && st.value?.gateway?.config) {
       const c = st.value.gateway.config
-      form.value = { mode: c.mode || 'dmo', destination: c.destination || '', prefix: c.prefix || '', port: c.port || '' }
+      form.value = { mode: c.mode || 'dmo', destination: c.destination || '', prefix: c.prefix || '', port: c.port || '', acks: c.acks || 'auto' }
       formLoaded.value = true
     }
   } catch (e) {
@@ -55,6 +55,7 @@ async function save() {
       destination: form.value.destination.trim(),
       prefix: form.value.prefix.trim(),
       port: form.value.port.trim(),
+      acks: form.value.acks,
     }
     await api.put('/gateways/tetra', { enabled: true, config: cfg })
     saveMsg.value = 'Saved. The gateway restarted with the new settings.'
@@ -140,6 +141,13 @@ onUnmounted(() => clearInterval(timer))
           <span class="text-gray-300">{{ gw.errors }} / {{ gw.refused_too_long }} / {{ gw.non_text_in }}</span></div>
         <div class="flex justify-between"><span class="text-gray-500">Last in / last out</span>
           <span class="text-gray-300">{{ when(gw.last_in) }} / {{ when(gw.last_out) }}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">MeshSat Bridges on the group</span>
+          <span class="text-gray-300" data-testid="tetra-peers">{{ gw.peers }}<span v-if="gw.last_peer_seen" class="text-gray-500"> (last heard {{ when(gw.last_peer_seen) }})</span></span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Confirmed / not confirmed / no peer to confirm</span>
+          <span class="text-gray-300">{{ gw.acked }} / {{ gw.unacked }} / {{ gw.unconfirmed }}<span v-if="gw.repeats" class="text-gray-500">, {{ gw.repeats }} repeats not delivered twice</span></span></div>
+        <p class="text-gray-500">{{ gw.waits_for_acks
+          ? 'A MeshSat Bridge listens on this group: every text waits for its confirmation, and one it did not confirm is sent again.'
+          : 'No MeshSat Bridge has answered on this group: texts go once, unconfirmed, as to any handheld.' }}</p>
         <p class="text-gray-500">While the Bridge runs, incoming texts come here instead of to the radio's screen; the screen gets them back when the gateway stops.</p>
       </div>
     </div>
@@ -162,6 +170,14 @@ onUnmounted(() => clearInterval(timer))
         <label class="space-y-1">
           <span class="text-gray-400">Prefix for texts relayed from the mesh</span>
           <input v-model="form.prefix" type="text" maxlength="20" placeholder="empty: none" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        </label>
+        <label class="space-y-1">
+          <span class="text-gray-400">Delivery confirmation between MeshSat Bridges</span>
+          <select v-model="form.acks" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" data-testid="tetra-acks">
+            <option value="auto">When a MeshSat Bridge is on the group (default)</option>
+            <option value="on">Always wait for a confirmation</option>
+            <option value="off">Off: send once, never confirm</option>
+          </select>
         </label>
         <label class="space-y-1">
           <span class="text-gray-400">Data port</span>

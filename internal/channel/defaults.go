@@ -267,6 +267,7 @@ func RegisterDefaults(r *Registry) {
 			{Key: "mode", Label: "Radio mode (dmo, tmo or keep)", Type: "select", Default: "dmo", Options: []string{"dmo", "tmo", "keep"}},
 			{Key: "destination", Label: "Default destination SSI (empty: the radio's selected group)", Type: "text", Default: ""},
 			{Key: "prefix", Label: "Prefix for texts relayed from the mesh", Type: "text", Default: ""},
+			{Key: "acks", Label: "Delivery confirmation between MeshSat Bridges (auto, on, off)", Type: "select", Default: "auto", Options: []string{"auto", "on", "off"}},
 		},
 	})
 

@@ -378,3 +378,33 @@ func TestSendSDSReportsARadioThatDidNotSend(t *testing.T) {
 		t.Fatalf("good send: %+v %v", rep, err)
 	}
 }
+
+func TestLinkRoundTripAndTheHashBothEndsAgreeOn(t *testing.T) {
+	for _, l := range []Link{{Kind: LinkAck, Ref: 0xF8, Hash: 0xDEADBEEF}, {Kind: LinkHello, Tag: 0x01020304}, {Kind: LinkHelloReply, Tag: 7}} {
+		pdu, bits := EncodeLink(l)
+		if bits != len(pdu)*8 || pdu[0] != LinkPID {
+			t.Fatalf("encode %+v: %x", l, pdu)
+		}
+		got, err := DecodeLink(pdu)
+		if err != nil || got != l {
+			t.Fatalf("round trip %+v -> %+v %v", l, got, err)
+		}
+	}
+	if _, err := DecodeLink([]byte{LinkPID, 0x21, 0}); err == nil {
+		t.Fatal("a version 2 PDU decoded")
+	}
+	// The receiver's Body (identity stripped) hashes as the sender's text.
+	r, _ := ParseCTSDSR(liveHeader)
+	if err := r.DecodePDU(liveRecvHex); err != nil {
+		t.Fatal(err)
+	}
+	if TextHash(r.Body) != TextHash(BodyOf("MeshSat DMO test 2 tesseract to parallax")) {
+		t.Fatal("sender and receiver hash differently")
+	}
+	greek := "Γειά σου"
+	pdu, _ := EncodeText(9, greek)
+	g := Received{}
+	if err := g.DecodePDU(hex.EncodeToString(append(pdu, "\r\r100"...))); err != nil || TextHash(g.Body) != TextHash(BodyOf(greek)) {
+		t.Fatalf("UTF-16 hash: %v", err)
+	}
+}

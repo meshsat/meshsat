@@ -405,6 +405,10 @@ func (s *Session) Battery(ctx context.Context) (int, error) {
 // screen while it runs.
 var TextPIDs = []byte{PIDText, PIDImmediateText}
 
+// routedPIDs are what RouteTexts registers: the texts and the MeshSat link
+// control (acks, hello), which the radio's screen has no use for.
+var routedPIDs = append(append([]byte{}, TextPIDs...), LinkPID)
+
 // RouteTexts sends incoming texts to the PEI (toPEI) or back to the
 // radio's own screen. The MTP3550 refuses "both" (service profile 2) with
 // +CME ERROR: 3, so a text goes to one or the other.
@@ -413,7 +417,7 @@ func (s *Session) RouteTexts(ctx context.Context, toPEI bool) error {
 	if toPEI {
 		profile = 1
 	}
-	for _, pid := range TextPIDs {
+	for _, pid := range routedPIDs {
 		if _, err := s.Command(ctx, fmt.Sprintf("AT+CTSP=%d,3,%d", profile, pid), 3*time.Second); err != nil {
 			return err
 		}
@@ -475,7 +479,11 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 		case code := <-s.lateErrs:
 			cme = code // the report usually follows; keep waiting for it
 		case r := <-s.reports:
-			if r.Ref != int(ref) {
+			// A PDU without the SDS-TL header (PID below 0x80, the MeshSat
+			// link control) has no message reference for the report to
+			// carry, so its report is the next one; an SDS-TL text's report
+			// carries the text's reference (live: ref 181 for ref 0xB5).
+			if r.Ref != int(ref) && !(len(pdu) > 0 && pdu[0] < 0x80) {
 				continue
 			}
 			if r.Status != sentStatus || cme != 0 {
