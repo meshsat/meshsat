@@ -303,7 +303,7 @@ func TestTetraInbound(t *testing.T) {
 	f.incoming("+CTSDSR: 12,100,0,2000,0,496",
 		"8202F8014D65736853617420444D4F207465737420322074657373657261637420746F20706172616C6C61780D0D37353330323336313030303030313030")
 	// A report and a non-text SDS are not messages.
-	f.incoming("+CTSDSR: 12,100,0,2000,0,24", "821031")
+	f.incoming("+CTSDSR: 12,100,0,2000,0,32", "82100231")
 	f.incoming("+CTSDSR: 12,100,0,2000,0,24", "0A0102")
 	select {
 	case m := <-g.Receive():

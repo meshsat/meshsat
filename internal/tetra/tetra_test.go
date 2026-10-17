@@ -81,11 +81,12 @@ func TestDecodeSimpleTextGreekAndReport(t *testing.T) {
 		t.Fatalf("simple greek: %+v", r)
 	}
 	r = Received{}
-	// SDS-TL report (message type 1) for reference 0x31.
-	if err := r.DecodePDU("821031"); err != nil {
+	// SDS-REPORT (message type 1): delivery status 0x02 (consumed) for
+	// reference 0x31.
+	if err := r.DecodePDU("82100231"); err != nil {
 		t.Fatal(err)
 	}
-	if !r.IsReport || r.IsText || r.Ref != 0x31 {
+	if !r.IsReport || r.IsText || r.Ref != 0x31 || r.DeliveryStatus != 0x02 {
 		t.Fatalf("report: %+v", r)
 	}
 	r = Received{}

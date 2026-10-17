@@ -93,12 +93,15 @@ type Received struct {
 	Bits     int    // PDU length in bits as the radio reported it
 	PDU      []byte // the user data
 	PID      byte
-	IsText   bool   // a text message (PIDs 0x02, 0x09, 0x82, 0x89)
-	IsReport bool   // an SDS-TL report (a delivery report), not a message
-	Ref      byte   // SDS-TL message reference (0 for simple text)
-	Text     string // the words, with the radio's appended identity removed
-	SenderID string // the identity the radio appended to the text, if any
-	Coding   byte
+	IsText   bool // a text message (PIDs 0x02, 0x09, 0x82, 0x89)
+	IsReport bool // an SDS-TL report or ack, not a message
+	Ref      byte // SDS-TL message reference (0 for simple text)
+	// DeliveryStatus is a report's or ack's delivery status (TS 100 392-2
+	// table 29.16: 0x00 received, 0x02 consumed, ...); 0 for a message.
+	DeliveryStatus byte
+	Text           string // the words, with the radio's appended identity removed
+	SenderID       string // the identity the radio appended to the text, if any
+	Coding         byte
 }
 
 var ctsdsrRe = regexp.MustCompile(`^\+CTSDSR:\s*(.*)$`)
@@ -159,8 +162,14 @@ func (r *Received) DecodePDU(hexLine string) error {
 		switch pdu[1] >> 4 {
 		case sdsTransfer:
 		case sdsReport, sdsAck:
+			// SDS-REPORT and SDS-ACK: PID, type and flags, delivery
+			// status, then the reference of the message they answer.
 			r.IsReport = true
-			r.Ref = pdu[2]
+			if len(pdu) < 4 {
+				return fmt.Errorf("tetra: SDS-TL report of %d bytes", len(pdu))
+			}
+			r.DeliveryStatus = pdu[2]
+			r.Ref = pdu[3]
 			return nil
 		default:
 			return fmt.Errorf("tetra: SDS-TL message type %d", pdu[1]>>4)
