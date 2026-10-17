@@ -493,6 +493,13 @@ func (m *Manager) Start(ctx context.Context) error {
 			}
 		}
 
+		// The TETRA radio is found through the device supervisor, which is
+		// wired after this start: the start-up reconcile starts it, and a
+		// try here only logged "no radio" at every boot. [MESHSAT-1588]
+		if cfg.Type == "tetra" && m.supervisor == nil {
+			continue
+		}
+
 		gw, err := m.createGatewayForInstance(cfg.Type, instanceID, cfg.Config)
 		if err != nil {
 			log.Error().Err(err).Str("type", cfg.Type).Str("instance", instanceID).Msg("failed to create gateway")

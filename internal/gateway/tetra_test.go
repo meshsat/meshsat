@@ -87,6 +87,12 @@ func (f *tetraFake) serve(r io.Reader, w io.Writer) {
 				f.say(w, "+CME ERROR: 3")
 				continue
 			}
+			// The MTP3550 adds its 18-byte ID inside the 148-byte budget:
+			// a PDU over 130 bytes is "too long" (measured 17 Oct 2026).
+			if pdu, err := hex.DecodeString(strings.TrimSpace(strings.TrimSuffix(data, "\x1a"))); err == nil && len(pdu) > 130 {
+				f.say(w, "+CME ERROR: 24")
+				continue
+			}
 			// The late report carries the PDU's message reference.
 			ref := "0"
 			if raw, err := hex.DecodeString(strings.TrimSpace(strings.TrimSuffix(data, "\x1a"))); err == nil && len(raw) > 2 {
@@ -174,7 +180,7 @@ func TestTetraStartPutsTheRadioInDMOAndTakesItsTexts(t *testing.T) {
 	g := startTetra(t, f, DefaultTetraConfig())
 	st := g.TetraStatus()
 	if st.State != tetraConnected || st.Mode != "dmo" || st.Group != "2000" || st.Self != "100" || st.Destination != "2000" ||
-		st.MaxTextBytes != 148 || st.BatteryPct != 100 || st.Radio.Firmware != "R35.000.9426" || st.Port != "/dev/ttyUSB1" {
+		st.MaxTextBytes != 130 || st.BatteryPct != 100 || st.Radio.Firmware != "R35.000.9426" || st.Port != "/dev/ttyUSB1" {
 		t.Fatalf("status %+v", st)
 	}
 	cmds := f.commands()
@@ -245,8 +251,8 @@ func TestTetraForwardLongText(t *testing.T) {
 	var joined []string
 	for i, h := range sent {
 		raw, _ := hex.DecodeString(h)
-		if len(raw) > 148 {
-			t.Fatalf("part %d is %d bytes, one SDS holds 148", i+1, len(raw))
+		if len(raw) > 130 {
+			t.Fatalf("part %d is %d bytes, the radio takes 130", i+1, len(raw))
 		}
 		r := tetra.Received{}
 		if err := r.DecodePDU(h); err != nil {
@@ -489,5 +495,28 @@ func TestTetraFirstOpenFailsThenConnectsInTheBackground(t *testing.T) {
 			t.Fatalf("never connected: %+v", g.TetraStatus())
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A PDU the radio calls too long (+CME ERROR: 24) is refused for good, and
+// a text right at the measured edge goes in one SDS.
+func TestTetraTooLongIsPermanentAndTheEdgeFits(t *testing.T) {
+	f := newTetraFake(1)
+	g := startTetra(t, f, DefaultTetraConfig())
+	edge := strings.Repeat("e", 126) // 126 + 4 = 130 bytes
+	if err := g.Forward(context.Background(), &transport.MeshMessage{DecodedText: edge, AsWritten: true}); err != nil {
+		t.Fatalf("126 characters: %v", err)
+	}
+	if n := len(f.sent()); n != 1 {
+		t.Fatalf("126 characters went as %d SDS", n)
+	}
+	// A destination the gateway's own limit cannot see past: force a
+	// 131-byte PDU through the session to check the error mapping.
+	g.mu.Lock()
+	g.maxBits = 2000 // pretend the radio advertised more than it takes
+	g.mu.Unlock()
+	err := g.Forward(context.Background(), &transport.MeshMessage{DecodedText: strings.Repeat("e", 127), AsWritten: true})
+	if !errors.Is(err, transport.ErrPayloadTooLong) {
+		t.Fatalf("+CME ERROR: 24 mapped to %v", err)
 	}
 }
