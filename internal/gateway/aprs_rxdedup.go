@@ -12,13 +12,18 @@ import (
 // sender with an ack id sends the same frame again when our ack is late
 // (the PicoAPRS held its ack twice on a busy channel on 17 Oct 2026 and the
 // far kit stored the text twice), and a TXRepeat copy is the same frame
-// 1.5 s later; the comments that said "the far kit dedups" had no dedup
-// behind them. A copy is the same sender, the same ack id and the same body:
+// 1.5 s later. A copy is the same sender, the same ack id and the same body:
 // a ciphertext carries a fresh nonce for every message, so an identical one
 // is a copy; a plain text without an id is a copy only within a few
 // seconds, so a short reply sent twice on purpose still gets through.
-// The ack goes out for every copy before this check, so the sender is
-// released either way. [MESHSAT-1584]
+//
+// Admission and memory are one step (review APRS-RX1): a message is
+// remembered only once the inbound queue took it. A frame the full queue
+// refused is not remembered and not acked, so the sender transmits it again
+// (APRS retransmits until acknowledged) and that copy is taken when there is
+// room; acking it would have released the sender with the message lost.
+// A copy of a message that was taken is acked again, also while the queue
+// is full. [MESHSAT-1584]
 
 const (
 	// aprsRxDedupWindow covers a sender's whole retry ladder (attempts x
@@ -30,14 +35,30 @@ const (
 	aprsRxDedupMax         = 1024
 )
 
+// rxAdmission is what became of a received message.
+type rxAdmission int
+
+const (
+	rxNotInbound rxAdmission = iota // protocol traffic or heard-list only: never for the queue
+	rxAdmitted                      // a new message, now on the inbound queue
+	rxCopy                          // a copy of a message taken before: dropped
+	rxRejected                      // the queue was full: not taken, not remembered
+)
+
+// ackable says whether a message with an ack id may be acked: everything
+// except a frame the full queue refused.
+func (a rxAdmission) ackable() bool { return a != rxRejected }
+
 type aprsRxSeen struct {
 	mu sync.Mutex
 	m  map[string]time.Time
 }
 
-// duplicate says whether this message was taken already within its window,
-// and records it when it was not.
-func (s *aprsRxSeen) duplicate(from, ackID, body string, encrypted bool, now time.Time) bool {
+// admit takes one message once: under one lock it looks the message up,
+// hands a new one to enqueue (which must not block) and remembers it only
+// when enqueue took it, so two copies arriving at once cannot both be taken
+// and a refused one stays eligible.
+func (s *aprsRxSeen) admit(from, ackID, body string, encrypted bool, now time.Time, enqueue func() bool) rxAdmission {
 	window := aprsRxDedupPlainWindow
 	if ackID != "" || encrypted {
 		window = aprsRxDedupWindow
@@ -50,7 +71,10 @@ func (s *aprsRxSeen) duplicate(from, ackID, body string, encrypted bool, now tim
 		s.m = map[string]time.Time{}
 	}
 	if t, ok := s.m[key]; ok && now.Sub(t) < window {
-		return true
+		return rxCopy
+	}
+	if !enqueue() {
+		return rxRejected
 	}
 	s.m[key] = now
 	if len(s.m) > aprsRxDedupMax {
@@ -60,14 +84,25 @@ func (s *aprsRxSeen) duplicate(from, ackID, body string, encrypted bool, now tim
 			}
 		}
 	}
-	return false
+	return rxAdmitted
 }
 
-// rxDuplicate drops a copy of a message this gateway already took.
-func (g *APRSGateway) rxDuplicate(from, ackID, body string, encrypted bool) bool {
-	if !g.rxSeen.duplicate(from, ackID, body, encrypted, time.Now()) {
-		return false
+// admitInbound puts msg on the inbound queue once, without blocking.
+func (g *APRSGateway) admitInbound(msg InboundMessage, ackID string, encrypted bool) rxAdmission {
+	a := g.rxSeen.admit(msg.FromAddr, ackID, msg.Text, encrypted, time.Now(), func() bool {
+		select {
+		case g.inCh <- msg:
+			return true
+		default:
+			return false
+		}
+	})
+	switch a {
+	case rxAdmitted:
+		g.msgsIn.Add(1)
+		g.lastActive.Store(time.Now().Unix())
+	case rxCopy:
+		g.rxDuplicates.Add(1)
 	}
-	g.rxDuplicates.Add(1)
-	return true
+	return a
 }
