@@ -103,7 +103,7 @@ Every channel carries a status, the same as on [meshsat.net](https://meshsat.net
 | | [WiFi](https://docs.meshsat.net/transports/wifi) | LIVE |
 | | [10 m HF gateway](https://docs.meshsat.net/transports/hf-10m) | CODE |
 | | [HF data](https://docs.meshsat.net/transports/hf-data) | COMING SOON |
-| | [TETRA Direct Mode](https://docs.meshsat.net/transports/tetra) | BENCH |
+| | [TETRA Direct Mode](https://docs.meshsat.net/transports/tetra) | LIVE |
 | | [Wi-Fi HaLow](https://docs.meshsat.net/transports/halow) | COMING SOON |
 | | [Own 2G cell](https://docs.meshsat.net/transports/gsm-cell) | BENCH |
 | Wired | [Fiber](https://docs.meshsat.net/transports/fiber) | COMING SOON |

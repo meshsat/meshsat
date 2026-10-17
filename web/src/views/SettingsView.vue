@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
 import TimeSyncPanel from '@/components/TimeSyncPanel.vue'
+import TetraSettings from '@/components/TetraSettings.vue'
 import api from '@/api/client'
 
 const store = useMeshsatStore()
@@ -20,6 +21,7 @@ const allTabs = [
   { id: 'iridium',       label: 'Satellite',     tier: 'operator' },
   { id: 'cellular',      label: 'Cellular',      tier: 'operator' },
   { id: 'cell',          label: '2G Cell',       tier: 'operator' },
+  { id: 'tetra',         label: 'TETRA',         tier: 'operator' },
   { id: 'canned',        label: 'Canned Msg',    tier: 'engineer' },
   { id: 'mqtt',          label: 'MQTT',          tier: 'engineer' },
   { id: 'device_mqtt',   label: 'Device MQTT',   tier: 'engineer' },
@@ -2151,6 +2153,8 @@ onUnmounted(() => {
         </template>
       </div>
     </div>
+
+    <TetraSettings v-if="activeTab === 'tetra'" />
 
     <div v-if="activeTab === 'cellular'">
       <!-- Modem Status (read-only) -->
