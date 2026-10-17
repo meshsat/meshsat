@@ -956,6 +956,25 @@ func (db *DB) SetSystemConfig(key, value string) error {
 	return err
 }
 
+// SetSystemConfigs upserts several key-value pairs in one transaction:
+// all of them or none. [MESHSAT-1584]
+func (db *DB) SetSystemConfigs(pairs ...[2]string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, kv := range pairs {
+		if _, err := tx.Exec(
+			`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, datetime('now'))
+			 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')`,
+			kv[0], kv[1]); err != nil {
+			return fmt.Errorf("%s: %w", kv[0], err)
+		}
+	}
+	return tx.Commit()
+}
+
 // ---- Credit Summary ----
 
 // CreditSummary aggregates credit usage with budget limits.

@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -30,7 +31,8 @@ type reviewBundleModem struct {
 	inBody      bool
 	writes      int
 	afterBody   string
-	ctrlZFail   bool // the Ctrl-Z write reaches the modem and reports an error
+	ctrlZFail   bool   // the Ctrl-Z write reaches the modem and reports an error
+	exitAt      string // "cmgs" or "ctrlz": the process exits there (crash tests)
 	cmgsSeen    int
 	bodyEntered chan struct{}
 	bodyRelease chan struct{}
@@ -46,6 +48,9 @@ func (m *reviewBundleModem) Write(b []byte) (int, error) {
 	defer m.mu.Unlock()
 	switch {
 	case m.inBody:
+		if bytes.Contains(b, []byte{0x1a}) && m.exitAt == "ctrlz" {
+			os.Exit(79)
+		}
 		if bytes.Contains(b, []byte{0x1a}) {
 			m.inBody = false
 			m.writes++
@@ -55,6 +60,9 @@ func (m *reviewBundleModem) Write(b []byte) (int, error) {
 			m.reply = append(m.reply, m.afterBody...)
 		}
 	case bytes.HasPrefix(b, []byte("AT+CMGS=")):
+		if m.exitAt == "cmgs" {
+			os.Exit(79)
+		}
 		m.cmgsSeen++
 		m.inBody = true
 		m.reply = append(m.reply, "\r\n> "...)
@@ -279,10 +287,10 @@ func TestSMSBundle_PossibleUseAcrossRestart(t *testing.T) {
 	if st := again.Status(); st.Uncertain != 1 || st.Remaining != 0 || !st.Empty {
 		t.Fatalf("after a restart: %+v; want uncertain 1, nothing left", st)
 	}
-	if ok, why := again.AllowSMS(1); ok {
+	if err := again.CheckSMS(1); err == nil {
 		t.Fatal("possible use was forgotten across a restart")
 	} else {
-		t.Log(why)
+		t.Log(err)
 	}
 	if err := again.Reset(1, 0); err != nil {
 		t.Fatal(err)
