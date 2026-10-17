@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
+import { watchIntent } from '@/composables/useIntentEvents'
 
 // One delivery intent's status (MESHSAT_DELIVERY_INTENTS): to whom, the
 // outcome in the bridge's own words (r3 D11: "accepted, not confirmed" is
@@ -10,7 +11,10 @@ import { useMeshsatStore } from '@/stores/meshsat'
 // and, once closed, every 10 s for up to 15 minutes while a transmission
 // is still with a radio or modem: a closed intent's outcome and cost can
 // still change when that settles (review of B10). Refresh fetches it on
-// demand. [MESHSAT-1584]
+// demand. And it reads again whenever the bridge's event stream says it
+// wrote about this intent (useIntentEvents), so a change shows at once and a
+// card that stopped polling still shows a late answer; the polls stay as
+// the fallback for an event that never arrives. [MESHSAT-1584]
 
 const props = defineProps({
   intentId: { type: String, required: true },
@@ -33,6 +37,17 @@ let closedEmitted = false
 // or a read from before Cancel never overwrites a newer status (review
 // B10-R5).
 let gen = 0
+// Reads still out, and whether an event came while they were: their
+// answers may predate it, so one more read follows the last.
+let reading = 0
+let again = false
+let unwatch = null
+
+function onChange() {
+  if (stopped) return
+  if (reading) { again = true; return }
+  load()
+}
 
 const active = computed(() => view.value?.state === 'active')
 // A transmission authorized or handed off and not yet done: its outcome
@@ -54,12 +69,19 @@ async function load() {
   const id = props.intentId
   let next = null
   let err = ''
+  reading++
   try {
     next = await store.fetchIntent(id)
   } catch (e) {
     err = e.message || 'Status not available'
   }
-  if (my !== gen || id !== props.intentId || stopped) return
+  reading--
+  const rerun = again && reading === 0 && !stopped
+  if (rerun) again = false
+  if (my !== gen || id !== props.intentId || stopped) {
+    if (rerun) load()
+    return
+  }
   if (next) {
     view.value = next
     loadError.value = ''
@@ -67,6 +89,7 @@ async function load() {
   } else {
     loadError.value = err
   }
+  if (rerun) { load(); return }
   schedule()
 }
 
@@ -82,9 +105,18 @@ function schedule() {
   timer = setTimeout(load, loadError.value ? 10000 : every)
 }
 
-onMounted(load)
-onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer) })
-watch(() => props.intentId, () => {
+onMounted(() => {
+  unwatch = watchIntent(props.intentId, onChange)
+  load()
+})
+onUnmounted(() => {
+  stopped = true
+  if (timer) clearTimeout(timer)
+  if (unwatch) unwatch()
+})
+watch(() => props.intentId, (id) => {
+  if (unwatch) unwatch()
+  unwatch = watchIntent(id, onChange)
   if (timer) clearTimeout(timer)
   timer = null
   gen++

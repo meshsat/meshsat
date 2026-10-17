@@ -1,7 +1,8 @@
 // The compose and delivery-status views under test: the real components with
 // the real store and API client in jsdom. Only HTTP answers (serve), timers
 // (a queue the test runs with tick) and confirm() are controlled. Moved here
-// from the scratch harness the B10 reviews ran on. [MESHSAT-1584]
+// from the scratch harness the B10 reviews ran on. The bridge's event stream
+// is a fake EventSource the test speaks through (streams). [MESHSAT-1584]
 import assert from 'node:assert/strict'
 import { createApp, nextTick } from 'vue'
 import { createPinia } from 'pinia'
@@ -10,6 +11,25 @@ import ComposeView from '@/views/ComposeView.vue'
 import IntentStatus from '@/components/IntentStatus.vue'
 
 export const timers = new Map()
+export const streams = []
+
+// FakeEventSource is the page's /api/events stream: emit sends an event,
+// reopen is the browser reconnecting.
+class FakeEventSource {
+  constructor(url) {
+    this.url = url
+    this.closed = false
+    this.onmessage = null
+    this.onopen = null
+    streams.push(this)
+  }
+  close() { this.closed = true }
+  emit(event) { if (!this.closed && this.onmessage) this.onmessage({ data: JSON.stringify(event) }) }
+  reopen() { if (!this.closed && this.onopen) this.onopen() }
+}
+
+// openStreams are the streams the page holds open now.
+export function openStreams() { return streams.filter(s => !s.closed) }
 let serial = 0
 let app = null
 let api = null
@@ -18,19 +38,20 @@ const saved = {}
 // useHarness installs the controlled globals around every test of a file.
 export function useHarness() {
   beforeEach(() => {
-    for (const k of ['setTimeout', 'clearTimeout', 'fetch', 'confirm']) saved[k] = globalThis[k]
+    for (const k of ['setTimeout', 'clearTimeout', 'fetch', 'confirm', 'EventSource']) saved[k] = globalThis[k]
     timers.clear()
+    streams.length = 0
     serial = 0
     api = null
     globalThis.setTimeout = (fn, ms) => { const id = ++serial; timers.set(id, { fn, ms }); return id }
     globalThis.clearTimeout = id => timers.delete(id)
     globalThis.fetch = (...args) => api(...args)
     globalThis.confirm = () => true
+    globalThis.EventSource = FakeEventSource
     document.body.innerHTML = '<div id="app"></div>'
   })
   afterEach(() => {
-    if (app) app.unmount()
-    app = null
+    unmount()
     timers.clear()
     for (const k of Object.keys(saved)) globalThis[k] = saved[k]
   })
@@ -39,19 +60,21 @@ export function useHarness() {
 // serve answers every request of the test with fn(url, opts).
 export function serve(fn) { api = fn }
 
-export function mountCompose() {
-  app = createApp(ComposeView)
+export function mountRoot(component, props) {
+  app = createApp(component, props)
   app.use(createPinia())
   app.mount('#app')
   return app
 }
 
-export function mountStatus(props) {
-  app = createApp(IntentStatus, props)
-  app.use(createPinia())
-  app.mount('#app')
-  return app
+export function unmount() {
+  if (app) app.unmount()
+  app = null
 }
+
+export function mountCompose() { return mountRoot(ComposeView) }
+
+export function mountStatus(props) { return mountRoot(IntentStatus, props) }
 
 export const contacts = [
   { id: 'alice', display_name: 'Alice', trust_level: 3, team: 'red', addresses: [{ kind: 'MESHTASTIC', value: '!00000001' }] },

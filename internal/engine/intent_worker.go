@@ -122,6 +122,7 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 			Detail: "handoff not recorded: " + err.Error()})
 		return
 	}
+	w.intents.Changed(del.IntentID, "handed_off")
 
 	var out SendOutcome
 	switch {
