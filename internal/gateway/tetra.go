@@ -538,7 +538,7 @@ func (g *TetraGateway) stateString() string {
 func (g *TetraGateway) onSDS(r tetra.Received) {
 	if r.IsReport {
 		g.reports.Add(1)
-		log.Info().Str("from", r.From).Int("ref", int(r.Ref)).Msg("tetra: SDS-TL report received")
+		log.Info().Str("from", r.From).Int("ref", int(r.Ref)).Int("delivery_status", int(r.DeliveryStatus)).Msg("tetra: SDS-TL report received")
 		return
 	}
 	if !r.IsText {
