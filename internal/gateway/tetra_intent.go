@@ -18,12 +18,18 @@ import (
 // One SDS per submission, the wire text as written, to the contact's SSI:
 // today a DMO talk group (both MTP3550s carry one DMO ITSI, so an
 // individual address cannot be told apart), later an individual ITSI.
-// The radio reporting it sent (+CMGS status 4) is the most it says today,
-// not that it arrived: a group SDS carries no delivery report, and two
-// radios keying up at once both report it sent while neither arrives
-// (half duplex, the TETRA session's collision test, 18 Oct 2026). So the
-// outcome is accepted, not confirmed, never stronger; the route is free
-// (Direct Mode, our own radio). A text
+// The radio reporting it sent (+CMGS status 4) is not that it arrived: a
+// group SDS carries no delivery report, and two radios keying up at once
+// both report it sent while neither arrives (half duplex, the TETRA
+// session's collision test, 18 Oct 2026). What can say more is a MeshSat
+// Bridge on the group: it acknowledges every text it receives with a link
+// SDS (tetra_ack.go), and while one is known the gateway's Send waits for
+// that. Every SDS acknowledged is acked by a station, unauthenticated
+// (anyone on the group can send that SDS, as with an APRS ack); sent with
+// no peer known is accepted, not confirmed; sent with a peer known and no
+// acknowledgement is unknown (a collision both radios missed, or the
+// acknowledgement was lost), never sent again on this route. The route is
+// free (Direct Mode, our own radio). A text
 // over one SDS is refused for intents, not split: a later part failing
 // after the first went would leave the message half sent. The gateway's
 // Forward does the send, so its refusals keep their meaning: the radio's
@@ -35,8 +41,8 @@ import (
 // went: not sent, tried again. Should the radio be wrong, the retry is a
 // duplicate on a free route.
 
-// TetraIntentCorrKind is the correlation kind of a TETRA submission. No
-// answer carries it yet (group SDS have no reports).
+// TetraIntentCorrKind is the correlation kind of a TETRA submission. Only
+// the answer inside the call carries it (a peer's acknowledgement).
 const TetraIntentCorrKind = "tetra_ref"
 
 // IntentCorrKind implements IntentAdapter.
@@ -51,8 +57,8 @@ func (g *TetraGateway) IntentNewCorr() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SetIntentReceiptSink implements IntentAdapter: no report comes for a
-// group SDS.
+// SetIntentReceiptSink implements IntentAdapter: a peer's acknowledgement
+// comes inside the call or not at all (Send stops waiting for it).
 func (g *TetraGateway) SetIntentReceiptSink(func(IntentReceipt)) {}
 
 // IntentAdmit implements IntentAdapter.
@@ -77,15 +83,29 @@ func (g *TetraGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutco
 	if reason, detail := g.IntentAdmit(s.Destination, []byte(s.Text), s.Encrypted); reason != "" {
 		return IntentOutcome{Class: IntentNotSent, Reason: reason, Detail: detail}
 	}
-	err := g.Forward(ctx, &transport.MeshMessage{PortNum: 1, DecodedText: s.Text, Destination: s.Destination,
+	res, err := g.Send(ctx, &transport.MeshMessage{PortNum: 1, DecodedText: s.Text, Destination: s.Destination,
 		AsWritten: true, Encrypted: s.Encrypted, RawText: s.Encrypted, MsgRef: s.MsgRef})
 	switch {
+	case err == nil && res.Confirmed:
+		// A MeshSat Bridge on the group acknowledged the SDS (its reference
+		// and the hash of its bytes). Unauthenticated: any radio on the
+		// group can send that link SDS. [MESHSAT-1584]
+		r := &IntentReceipt{CorrKind: TetraIntentCorrKind, CorrValue: s.CorrValue, Peer: s.Destination,
+			Source: "station", Event: "ack", Completes: "acked_station", Trust: "unauthenticated"}
+		return IntentOutcome{Class: IntentAccepted, AcceptedBy: "radio", Receipt: r,
+			Detail: "a MeshSat Bridge on the TETRA group acknowledged the SDS"}
 	case err == nil:
-		// The radio believes it sent it (+CMGS status 4, or no report): not
+		// The radio believes it sent it (+CMGS status 4, or no report) and
+		// no MeshSat Bridge is known on the group to acknowledge it: not
 		// that it arrived. In the TETRA session's collision test both radios
 		// once reported 4 and neither SDS arrived (half duplex). [MESHSAT-1584]
 		return IntentOutcome{Class: IntentAccepted, AcceptedBy: "radio",
-			Detail: "the TETRA radio reports it sent; a group SDS carries no report, so arrival is not known"}
+			Detail: "the TETRA radio reports it sent; no MeshSat Bridge is known on the group to acknowledge it, so arrival is not known"}
+	case errors.Is(err, transport.ErrNoAck):
+		// Sent, and the MeshSat Bridge known on the group did not
+		// acknowledge it: lost in a collision both radios missed, or
+		// received and the acknowledgement lost. Not known either way.
+		return IntentOutcome{Class: IntentUnknown, Detail: "may have been sent: " + err.Error()}
 	case errors.Is(err, transport.ErrNotConnected):
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: err.Error()}
 	case errors.Is(err, transport.ErrPayloadTooLong):
