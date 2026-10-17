@@ -63,7 +63,8 @@ type SMSBudget struct {
 	warnAt       int
 	alertNumber  string
 	resetAt      time.Time
-	alerted      bool // the reminder SMS was accepted by the network for this bundle
+	expiresAt    time.Time // the carrier bundle's end, as the operator recorded it; zero = not known
+	alerted      bool      // the reminder SMS was accepted by the network for this bundle
 	alertTriedAt time.Time
 	warned       bool // warning logged and emitted for this bundle (in memory)
 
@@ -78,7 +79,8 @@ type SMSBudget struct {
 const (
 	cfgSMSBundleSize    = "sms_bundle_size"
 	cfgSMSBundleSent    = "sms_bundle_sent"
-	cfgSMSBundleUnsure  = "sms_bundle_uncertain" // [MESHSAT-1584]
+	cfgSMSBundleUnsure  = "sms_bundle_uncertain"  // [MESHSAT-1584]
+	cfgSMSBundleExpires = "sms_bundle_expires_at" // RFC 3339, empty = not known [MESHSAT-1584]
 	cfgSMSBundleResetAt = "sms_bundle_reset_at"
 	cfgSMSBundleWarnAt  = "sms_bundle_warn_at"
 	cfgSMSAlertNumber   = "sms_alert_number"
@@ -88,6 +90,10 @@ const (
 // ErrSMSBundleStorage is a change to the bundle refused because its state
 // could not be read or stored (B9FIX-R4). [MESHSAT-1584]
 var ErrSMSBundleStorage = errors.New("the SMS bundle is unavailable")
+
+// smsExpiryWarn is how long before its recorded end a bundle reports
+// degraded. [MESHSAT-1584]
+const smsExpiryWarn = 48 * time.Hour
 
 // smsAlertRetry is how long a failed reminder send blocks the next attempt.
 const smsAlertRetry = 10 * time.Minute
@@ -177,17 +183,24 @@ func (b *SMSBudget) loadLocked() error {
 	}
 	size, sent, uncertain := num(cfgSMSBundleSize, b.opts.Size), num(cfgSMSBundleSent, 0), num(cfgSMSBundleUnsure, 0)
 	warnAt, alertNumber, alerted := num(cfgSMSBundleWarnAt, b.opts.WarnAt), str(cfgSMSAlertNumber, b.opts.AlertNumber), num(cfgSMSBundleAlerted, 0) == 1
-	var resetAt time.Time
+	var resetAt, expiresAt time.Time
 	if v := str(cfgSMSBundleResetAt, ""); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			resetAt = t
 		}
 	}
+	if v := strings.TrimSpace(str(cfgSMSBundleExpires, "")); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %q is not a time", cfgSMSBundleExpires, v))
+		}
+		expiresAt = t
+	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
 	b.size, b.sent, b.uncertain = size, sent, max(uncertain, 0)
-	b.warnAt, b.alertNumber, b.alerted, b.resetAt = warnAt, alertNumber, alerted, resetAt
+	b.warnAt, b.alertNumber, b.alerted, b.resetAt, b.expiresAt = warnAt, alertNumber, alerted, resetAt, expiresAt
 	return nil
 }
 
@@ -286,6 +299,16 @@ func (b *SMSBudget) Record(to, text string) {
 // accepted, what may have gone and what the running command holds.
 func (b *SMSBudget) leftLocked() int { return b.size - b.sent - b.uncertain - b.held }
 
+// expiredLocked: the bundle has a recorded end and it has come (at the
+// end itself the bundle is over).
+func (b *SMSBudget) expiredLocked() bool {
+	return !b.expiresAt.IsZero() && !b.now().Before(b.expiresAt)
+}
+
+func (b *SMSBudget) expiredText() string {
+	return fmt.Sprintf("the prepaid SMS bundle ended at %s; renew it and record the new one", b.expiresAt.UTC().Format(time.RFC3339))
+}
+
 // HoldSMS implements transport.SMSSpend: the share of one SMS, taken on
 // the modem's I/O loop before its first byte. A delivery intent's SMS
 // (enforce) is refused when what is left does not cover it (r3 D8,
@@ -305,6 +328,11 @@ func (b *SMSBudget) HoldSMS(to, text string, enforce bool) (transport.SMSHold, e
 	}
 	if b.size <= 0 {
 		return smsNoHold{}, nil
+	}
+	if enforce && b.expiredLocked() {
+		// Checked here, on the loop, so a command that waited in the
+		// queue past the end is refused too. Counted-only paths go.
+		return nil, fmt.Errorf("%w: %s", transport.ErrSMSBundle, b.expiredText())
 	}
 	if left := b.leftLocked(); enforce && left < segs {
 		return nil, fmt.Errorf("%w: %s", transport.ErrSMSBundle, b.shortLocked(left, segs))
@@ -332,12 +360,11 @@ func (smsNoHold) Settle(transport.SMSPhase) {}
 // outage hold is a counted-only SMS sent while the counter could not be
 // read: it is tallied apart and folded in once a read succeeds.
 type smsHold struct {
-	b                *SMSBudget
-	to               string
-	segs             int
-	enforce, outage  bool
-	possible, done   bool
-	possibleInMemory bool // possible use the store refused (counted-only SMS)
+	b               *SMSBudget
+	to              string
+	segs            int
+	enforce, outage bool
+	possible, done  bool
 }
 
 // Possible implements transport.SMSHold: the SMS goes to the modem now.
@@ -360,8 +387,9 @@ func (h *smsHold) Possible() error {
 		if h.enforce {
 			return fmt.Errorf("%w: its share could not be stored: %v", transport.ErrSMSBundleNotReady, err)
 		}
+		// Counted in memory; the next commit of the counts, whichever it
+		// is, stores it with them.
 		b.uncertain += h.segs
-		h.possibleInMemory = true
 	}
 	h.possible = true
 	b.held = max(b.held-h.segs, 0)
@@ -402,9 +430,11 @@ func (h *smsHold) Settle(p transport.SMSPhase) {
 		log.Info().Str("to", h.to).Int("segments", h.segs).Int("sent", b.sent).Int("size", b.size).Int("remaining", b.leftLocked()).
 			Msg("sms budget: segment counted")
 	case given:
-		if h.possibleInMemory {
-			b.uncertain = max(b.uncertain-h.segs, 0)
-		} else if b.commitLocked(b.sent, max(b.uncertain-h.segs, 0)) != nil {
+		// Always through a commit of the counts: a share first counted in
+		// memory only may be on disk by now (a later commit or a top-up
+		// stored it), so a release in memory alone could leave it spent
+		// there (B9FIX-R7). When the commit fails the share stays.
+		if b.commitLocked(b.sent, max(b.uncertain-h.segs, 0)) != nil {
 			log.Warn().Str("to", h.to).Int("segments", h.segs).Msg("sms budget: not sent, but not stored; kept as possible use")
 		}
 		return
@@ -481,17 +511,35 @@ func (b *SMSBudget) sendAlert(remaining int) {
 	}
 }
 
-// Apply changes any of the fields under one lock and evaluates the
-// thresholds once at the end, so a PUT that sets size, warn_at and the
-// reminder number together never fires on a half-configured state. A nil
-// leaves that field alone; sent needs size. A changed number re-arms the
-// reminder; a new size records a top-up and re-arms warning and reminder,
-// and its figures replace the uncertain count (the carrier's balance is
-// what the operator read), except the share of a command still running,
-// which may submit after that balance was read and stays possible use
-// (B9FIX-R6). Every field is stored in one transaction; when it fails
-// nothing changes and the error is returned (B9FIX-R4).
+// SMSBundleUpdate is one change to the bundle; a nil leaves that field
+// alone. Sent needs Size. A new Size records a top-up: its ExpiresAt is the
+// new bundle's end, or not known when none is given (the old end belonged
+// to the old bundle). ExpiresAt without Size corrects the end;
+// ClearExpiry forgets it. [MESHSAT-1161, MESHSAT-1584]
+type SMSBundleUpdate struct {
+	Size, Sent, WarnAt *int
+	AlertNumber        *string
+	ExpiresAt          *time.Time
+	ClearExpiry        bool
+}
+
+// Apply is Update for the counts, the threshold and the reminder number.
 func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
+	return b.Update(SMSBundleUpdate{Size: size, Sent: sent, WarnAt: warnAt, AlertNumber: alertNumber})
+}
+
+// Update changes any of the fields under one lock and evaluates the
+// thresholds once at the end, so a PUT that sets size, warn_at and the
+// reminder number together never fires on a half-configured state. A
+// changed number re-arms the reminder; a new size records a top-up and
+// re-arms warning and reminder, and its figures replace the uncertain
+// count (the carrier's balance is what the operator read), except the
+// share of a command still running, which may submit after that balance
+// was read and stays possible use (B9FIX-R6). Every field is stored in one
+// transaction; when it fails nothing changes and the error is returned
+// (B9FIX-R4).
+func (b *SMSBudget) Update(u SMSBundleUpdate) error {
+	size, sent, warnAt, alertNumber := u.Size, u.Sent, u.WarnAt, u.AlertNumber
 	if size != nil && *size <= 0 {
 		return errors.New("bundle size must be positive")
 	}
@@ -503,6 +551,9 @@ func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
 	}
 	if warnAt != nil && *warnAt < 0 {
 		return errors.New("warn_at must not be negative")
+	}
+	if u.ExpiresAt != nil && u.ClearExpiry {
+		return errors.New("give an end or clear it, not both")
 	}
 	var number string
 	if alertNumber != nil {
@@ -543,6 +594,20 @@ func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
 			[2]string{cfgSMSBundleResetAt, newReset.UTC().Format(time.RFC3339)})
 		rearmAlert = true
 	}
+	newExpires, expiryChanged := b.expiresAt, false
+	switch {
+	case u.ExpiresAt != nil:
+		newExpires, expiryChanged = u.ExpiresAt.UTC(), true
+	case u.ClearExpiry || size != nil:
+		newExpires, expiryChanged = time.Time{}, true
+	}
+	if expiryChanged {
+		v := ""
+		if !newExpires.IsZero() {
+			v = newExpires.Format(time.RFC3339)
+		}
+		pairs = append(pairs, [2]string{cfgSMSBundleExpires, v})
+	}
 	if rearmAlert {
 		pairs = append(pairs, [2]string{cfgSMSBundleAlerted, "0"})
 	}
@@ -558,6 +623,7 @@ func (b *SMSBudget) Apply(size, sent, warnAt *int, alertNumber *string) error {
 	if warnAt != nil {
 		b.warnAt, b.warned = newWarn, false
 	}
+	b.expiresAt = newExpires
 	if size != nil {
 		b.size, b.sent, b.uncertain, b.resetAt, b.storeErr = newSize, newSent, newUnsure, newReset, nil
 		b.warned = false
@@ -599,10 +665,19 @@ func (b *SMSBudget) Status() *transport.SMSBundleStatus {
 	if b.size <= 0 {
 		return nil
 	}
-	remaining := b.leftLocked()
+	remaining, expired := b.leftLocked(), b.expiredLocked()
+	usable := max(remaining, 0)
+	if expired {
+		usable = 0
+	}
 	st := &transport.SMSBundleStatus{
-		Size: b.size, Sent: b.sent, Uncertain: b.uncertain, Remaining: remaining, WarnAt: b.warnAt,
-		Low: remaining <= b.warnAt, Empty: remaining <= 0, Alerted: b.alerted, AlertSet: b.alertNumber != "",
+		Size: b.size, Sent: b.sent, Uncertain: b.uncertain, Remaining: remaining, Usable: usable, WarnAt: b.warnAt,
+		Low: remaining <= b.warnAt, Empty: remaining <= 0, Expired: expired, Alerted: b.alerted, AlertSet: b.alertNumber != "",
+	}
+	if !b.expiresAt.IsZero() {
+		t := b.expiresAt
+		st.ExpiresAt = &t
+		st.ExpiringSoon = !expired && b.expiresAt.Sub(b.now()) <= smsExpiryWarn
 	}
 	if b.storeErr != nil {
 		st.Error = "the SMS bundle count could not be stored: " + b.storeErr.Error()
@@ -632,8 +707,12 @@ func (b *SMSBudget) HealthStatus() (state, detail string) {
 	}
 	remaining := b.leftLocked()
 	switch {
+	case b.expiredLocked():
+		return HealthStateFailed, "SMS bundle ended: " + b.expiredText()
 	case remaining <= 0:
 		return HealthStateFailed, fmt.Sprintf("SMS credit spent: %d of %d used, top up the prepaid SIM", b.size-remaining, b.size)
+	case !b.expiresAt.IsZero() && b.expiresAt.Sub(b.now()) <= smsExpiryWarn:
+		return HealthStateDegraded, fmt.Sprintf("SMS bundle ends at %s, %d of %d left: renew it", b.expiresAt.UTC().Format(time.RFC3339), remaining, b.size)
 	case b.storeErr != nil:
 		return HealthStateDegraded, fmt.Sprintf("SMS credit %d of %d left, but the count could not be stored: %v", remaining, b.size, b.storeErr)
 	case remaining <= b.warnAt:
@@ -654,6 +733,9 @@ func (b *SMSBudget) CheckSMS(segments int) error {
 	}
 	if b.size <= 0 {
 		return nil
+	}
+	if b.expiredLocked() {
+		return fmt.Errorf("%w: %s", transport.ErrSMSBundle, b.expiredText())
 	}
 	if left := b.leftLocked(); left < segments {
 		return fmt.Errorf("%w: %s", transport.ErrSMSBundle, b.shortLocked(left, segments))

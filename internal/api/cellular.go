@@ -877,11 +877,11 @@ func (s *Server) handleGetSMSBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary Record a top-up or tune the prepaid SMS bundle counter
-// @Description size (with optional sent, default 0) records a top-up and re-arms the warning and the reminder, and its figures replace the uncertain count; warn_at and alert_number (E.164) change the threshold and the reminder number; each field is optional [MESHSAT-1161, MESHSAT-1584]
+// @Description size (with optional sent, default 0) records a top-up and re-arms the warning and the reminder, and its figures replace the uncertain count; warn_at and alert_number (E.164) change the threshold and the reminder number; expires_at (RFC 3339, "" forgets it) or valid_days (1-366, from now) records when the carrier's bundle ends, after which delivery-intent SMS are refused (other send paths are counted, never refused); a top-up without either leaves the new bundle's end unknown; each field is optional [MESHSAT-1161, MESHSAT-1584]
 // @Tags cellular
 // @Accept json
 // @Produce json
-// @Param body body object true "{size?, sent?, warn_at?, alert_number?}"
+// @Param body body object true "{size?, sent?, warn_at?, alert_number?, expires_at?, valid_days?}"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} map[string]string "invalid value"
 // @Failure 500 {object} map[string]string "the bundle could not be read or stored; nothing changed"
@@ -897,18 +897,42 @@ func (s *Server) handleSetSMSBundle(w http.ResponseWriter, r *http.Request) {
 		Sent        *int    `json:"sent"`
 		WarnAt      *int    `json:"warn_at"`
 		AlertNumber *string `json:"alert_number"`
+		ExpiresAt   *string `json:"expires_at"`
+		ValidDays   *int    `json:"valid_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.Size == nil && req.WarnAt == nil && req.AlertNumber == nil {
-		writeError(w, http.StatusBadRequest, "nothing to change: give size, warn_at or alert_number")
+	if req.Size == nil && req.WarnAt == nil && req.AlertNumber == nil && req.ExpiresAt == nil && req.ValidDays == nil {
+		writeError(w, http.StatusBadRequest, "nothing to change: give size, warn_at, alert_number, expires_at or valid_days")
 		return
+	}
+	u := gateway.SMSBundleUpdate{Size: req.Size, Sent: req.Sent, WarnAt: req.WarnAt, AlertNumber: req.AlertNumber}
+	switch {
+	case req.ExpiresAt != nil && req.ValidDays != nil:
+		writeError(w, http.StatusBadRequest, "give expires_at or valid_days, not both")
+		return
+	case req.ValidDays != nil:
+		if *req.ValidDays < 1 || *req.ValidDays > 366 {
+			writeError(w, http.StatusBadRequest, "valid_days must be 1 to 366")
+			return
+		}
+		t := time.Now().Add(time.Duration(*req.ValidDays) * 24 * time.Hour)
+		u.ExpiresAt = &t
+	case req.ExpiresAt != nil && strings.TrimSpace(*req.ExpiresAt) == "":
+		u.ClearExpiry = true
+	case req.ExpiresAt != nil:
+		t, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.ExpiresAt))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "expires_at must be an RFC 3339 time")
+			return
+		}
+		u.ExpiresAt = &t
 	}
 	// One call under one lock: the thresholds are evaluated after every
 	// field is in place, never between the number and the size.
-	if err := s.smsBudget.Apply(req.Size, req.Sent, req.WarnAt, req.AlertNumber); err != nil {
+	if err := s.smsBudget.Update(u); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, gateway.ErrSMSBundleStorage) {
 			status = http.StatusInternalServerError

@@ -406,3 +406,112 @@ func TestSMSBudget_StoreFailureByPath(t *testing.T) {
 		t.Fatalf("refused: %+v; want the share back", st)
 	}
 }
+
+// The bundle's recorded end (D8 validity): intent SMS are refused from the
+// end on, before it they go; counts stay as they are; counted-only paths
+// still go; the end survives a restart; a renewal keeps a running share;
+// a top-up without an end leaves it unknown. [MESHSAT-1584]
+func TestSMSBudget_Expiry(t *testing.T) {
+	db := newBudgetDB(t)
+	t0 := time.Date(2026, 10, 17, 1, 34, 0, 0, time.UTC)
+	now := t0
+	b := NewSMSBudget(db, "kitA", SMSBudgetOptions{}, (&fakeSender{}).send)
+	b.now = func() time.Time { return now }
+	end := t0.Add(31 * 24 * time.Hour)
+	size, sent := 250, 1
+	if err := b.Update(SMSBundleUpdate{Size: &size, Sent: &sent, ExpiresAt: &end}); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.Status(); st.ExpiresAt == nil || !st.ExpiresAt.Equal(end) || st.Expired || st.ExpiringSoon || st.Usable != 249 {
+		t.Fatalf("a fresh bundle: %+v", st)
+	}
+	now = end.Add(-47 * time.Hour)
+	if state, _ := b.HealthStatus(); state != HealthStateDegraded || !b.Status().ExpiringSoon {
+		t.Fatalf("47 h before the end: health %s; want degraded, ending soon", state)
+	}
+	now = end.Add(-time.Nanosecond)
+	if err := b.CheckSMS(1); err != nil {
+		t.Fatalf("just before the end: %v", err)
+	}
+	h, err := b.HoldSMS("+311", "x", true)
+	if err != nil {
+		t.Fatalf("hold just before the end: %v", err)
+	}
+	h.Settle(transport.SMSNotSent)
+	for _, at := range []time.Time{end, end.Add(time.Second)} {
+		now = at
+		if err := b.CheckSMS(1); !errors.Is(err, transport.ErrSMSBundle) {
+			t.Fatalf("at %v: check %v; want ErrSMSBundle", at, err)
+		}
+		if _, err := b.HoldSMS("+311", "x", true); !errors.Is(err, transport.ErrSMSBundle) {
+			t.Fatalf("at %v: intent hold %v; want ErrSMSBundle", at, err)
+		}
+		st := b.Status()
+		if !st.Expired || st.Usable != 0 || st.Sent != 1 || st.Remaining != 249 {
+			t.Fatalf("at %v: %+v; want ended, nothing usable, the counts as they were", at, st)
+		}
+		if state, _ := b.HealthStatus(); state != HealthStateFailed {
+			t.Fatalf("at %v: health %s; want failed", at, state)
+		}
+	}
+	hl, err := b.HoldSMS("+311", "legacy", false)
+	if err != nil {
+		t.Fatalf("a counted-only SMS was refused after the end: %v", err)
+	}
+	if err := hl.Possible(); err != nil {
+		t.Fatal(err)
+	}
+
+	again := NewSMSBudget(db, "kitA", SMSBudgetOptions{}, (&fakeSender{}).send)
+	again.now = b.now
+	if st := again.Status(); st.ExpiresAt == nil || !st.ExpiresAt.Equal(end) || !st.Expired {
+		t.Fatalf("after a restart: %+v; want the same end, ended", st)
+	}
+
+	// Renewal while the counted-only SMS runs: its share stays.
+	next := now.Add(31 * 24 * time.Hour)
+	zero := 0
+	if err := b.Update(SMSBundleUpdate{Size: &size, Sent: &zero, ExpiresAt: &next}); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.Status(); st.Expired || st.Uncertain != 1 || st.Usable != 249 || !st.ExpiresAt.Equal(next) {
+		t.Fatalf("renewed during a send: %+v; want the running share kept, the new end", st)
+	}
+	hl.Settle(transport.SMSAccepted)
+	if st := b.Status(); st.Sent != 1 || st.Uncertain != 0 {
+		t.Fatalf("the running SMS settled after the renewal: %+v", st)
+	}
+
+	// A top-up without an end: not known. An end alone corrects it; a
+	// clear forgets it.
+	if err := b.Reset(250, 0); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.Status(); st.ExpiresAt != nil || st.Expired {
+		t.Fatalf("a top-up without an end: %+v; want it not known", st)
+	}
+	if err := b.Update(SMSBundleUpdate{ExpiresAt: &end}); err != nil {
+		t.Fatal(err)
+	}
+	if !b.Status().Expired {
+		t.Fatal("a corrected end in the past is not ended")
+	}
+	if err := b.Update(SMSBundleUpdate{ClearExpiry: true}); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.Status(); st.ExpiresAt != nil || st.Expired {
+		t.Fatalf("cleared: %+v", st)
+	}
+	if err := b.Update(SMSBundleUpdate{ExpiresAt: &end, ClearExpiry: true}); err == nil {
+		t.Fatal("an end and a clear together were taken")
+	}
+
+	// A stored end that is not a time is a failed read, not an unknown end.
+	if err := db.SetSystemConfig("sms_bundle_expires_at", "next month"); err != nil {
+		t.Fatal(err)
+	}
+	bad := NewSMSBudget(db, "kitA", SMSBudgetOptions{}, (&fakeSender{}).send)
+	if err := bad.CheckSMS(1); !errors.Is(err, transport.ErrSMSBundleNotReady) {
+		t.Fatalf("an unreadable end: %v; want ErrSMSBundleNotReady", err)
+	}
+}

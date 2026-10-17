@@ -377,3 +377,68 @@ func TestSMSBundle_ProcessExitAtEachPoint(t *testing.T) {
 		})
 	}
 }
+
+// B9FIX-R7 for a definite non-send: a counted-only SMS whose share was
+// first counted in memory only, stored by a top-up while it ran, then not
+// sent at all (the body write failed): released in memory and on disk.
+func TestSMSBundle_NotSentAfterTopUpReleasesOnDisk(t *testing.T) {
+	m := &reviewBundleModem{bodyFail: true, bodyEntered: make(chan struct{}), bodyRelease: make(chan struct{})}
+	_, tr, b, db := bundleLoop(t, m, 1, 200*time.Millisecond)
+	if err := b.Reset(1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_possible BEFORE INSERT ON system_config
+		WHEN NEW.key = 'sms_bundle_uncertain' AND CAST(NEW.value AS INTEGER) > 0
+		BEGIN SELECT RAISE(ABORT, 'possible-use write rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- tr.SendSMS(context.Background(), "+15550000000", "review first") }()
+	<-m.bodyEntered
+	if _, err := db.Exec("DROP TRIGGER fail_possible"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Reset(1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := db.GetSystemConfig("sms_bundle_uncertain"); v != "1" {
+		t.Fatalf("the top-up stored uncertain %q; want the running share, 1", v)
+	}
+	m.release()
+	if err := <-done; err == nil {
+		t.Fatal("a failed body write was not returned")
+	}
+	if st := b.Status(); st.Uncertain != 0 || st.Remaining != 1 {
+		t.Fatalf("live after the non-send: %+v; want the share back", st)
+	}
+	if st := gateway.NewSMSBudget(db, "review", gateway.SMSBudgetOptions{}, nil).Status(); st.Uncertain != 0 || st.Remaining != 1 {
+		t.Fatalf("reloaded after the non-send: %+v; want the share back on disk too", st)
+	}
+}
+
+// D8 validity on the loop: an intent SMS that passed the check before the
+// bundle's end but waited in the queue past it is refused when its turn
+// comes, before any byte. [MESHSAT-1584]
+func TestSMSBundle_EndPassesWhileQueued(t *testing.T) {
+	m := &reviewBundleModem{afterBody: "\r\n+CMGS: 70\r\n\r\nOK\r\n"}
+	g, tr, b, _ := bundleLoop(t, m, 5, 200*time.Millisecond)
+	end := time.Now().Add(400 * time.Millisecond)
+	size := 5
+	if err := b.Update(gateway.SMSBundleUpdate{Size: &size, ExpiresAt: &end}); err != nil {
+		t.Fatal(err)
+	}
+	release, done := transport.HoldSMSLoopForTest(tr)
+	res := make(chan gateway.IntentOutcome, 1)
+	go func() { res <- reviewBundleSend(g, "review first") }()
+	for transport.SMSQueueLenForTest(tr) < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(time.Until(end) + 100*time.Millisecond)
+	release()
+	<-done
+	o := <-res
+	st := b.Status()
+	if o.Class != gateway.IntentNotSent || o.Reason != "skipped_budget" || m.cmgs() != 0 || !st.Expired || st.Sent != 0 {
+		t.Fatalf("queued past the end: %+v, %d CMGS, bundle %+v; want refused on the loop, nothing sent", o, m.cmgs(), st)
+	}
+}
