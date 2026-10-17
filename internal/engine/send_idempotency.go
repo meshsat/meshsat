@@ -76,10 +76,10 @@ func (d *Dispatcher) queueLegacyKeyed(opts SendOptions, fp string, kinds []direc
 		for i, id := range ids {
 			out.DeliveryIDs[kinds[i]] = append(out.DeliveryIDs[kinds[i]], id)
 		}
+		// An address that could not be queued keeps its error beside the
+		// rows of the same bearer, as an unkeyed send reports it (B10-R6).
 		for k, e := range res.Errors {
-			if len(out.DeliveryIDs[k]) == 0 {
-				out.Errors[k] = e.Error()
-			}
+			out.Errors[k] = e.Error()
 		}
 		b, err := json.Marshal(out)
 		return string(b), err
@@ -96,7 +96,6 @@ func (d *Dispatcher) queueLegacyKeyed(opts SendOptions, fp string, kinds []direc
 	for i, id := range ids {
 		d.directSendQueued(dels[i], id)
 		res.DeliveryIDs[kinds[i]] = append(res.DeliveryIDs[kinds[i]], id)
-		delete(res.Errors, kinds[i])
 	}
 	res.Legacy = &sub
 	return res, nil
