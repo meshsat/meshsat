@@ -1499,24 +1499,6 @@ func main() {
 	}
 	dispatcher.SetTransformPipeline(transforms)
 	// KeyResolver wired after keystore init below [MESHSAT-447]
-	// DTN reassembly buffer (MESHSAT-408)
-	reassemblyBuf := engine.NewReassemblyBuffer(5*time.Minute, 100)
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if n := reassemblyBuf.Reap(); n > 0 {
-					log.Info().Int("expired", n).Msg("DTN: reaped incomplete bundles")
-				}
-			}
-		}
-	}()
-	dispatcher.SetFragmentManager(reassemblyBuf)
-
 	// Wire Reticulum packet senders into dispatcher for HeMB bearer resolution.
 	dispatcher.SetPacketSenderProvider(proc)
 
@@ -1552,14 +1534,16 @@ func main() {
 				Str("source", fmt.Sprintf("%x", offer.SourceHash[:8])).
 				Int("payload", len(offer.Payload)).
 				Msg("DTN: accepting custody of payload")
-			// Accept: create a local delivery for the payload. Custody-
-			// transferred bundles carry no precedence on the wire today;
-			// pass "" so the schema default (Routine) wins.
-			if dispatcher != nil {
-				_, _, qErr := dispatcher.QueueDirectSend("mesh", string(offer.Payload), "")
-				if qErr != nil {
-					log.Warn().Err(qErr).Msg("DTN: failed to queue custody payload")
-				}
+			// Accept: queue the payload on our mesh interface. Custody is
+			// acknowledged only once it is queued: an ACK for a payload
+			// nothing will send tells the offering node it may stop
+			// trying. [MESHSAT-1584]
+			if dispatcher == nil {
+				return
+			}
+			if _, qErr := dispatcher.AcceptCustody(offer.Payload); qErr != nil {
+				log.Warn().Err(qErr).Msg("DTN: custody not taken, no ACK sent")
+				return
 			}
 			// Send ACK back on the same interface (point-to-point)
 			if routingID != nil && signingService != nil {
@@ -1594,7 +1578,7 @@ func main() {
 			}
 		},
 	)
-	log.Info().Msg("DTN custody + fragment managers wired")
+	log.Info().Msg("DTN custody manager wired")
 
 	// Delivery intents (HeMB-NG stage 1a): a send-to-contact becomes an
 	// intent with a frozen route plan, its attempts ordinary delivery rows,
