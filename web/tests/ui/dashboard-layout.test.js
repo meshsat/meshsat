@@ -13,9 +13,10 @@ const KITLIKE = [
   { type: 'zigbee', enabled: false, connected: false },     // dongle out: hidden
 ]
 
-function fakeStore(gateways = [], loaded = false) {
-  return reactive({ gateways, gatewaysLoaded: loaded })
+function fakeStore(gateways = [], loaded = false, devices = []) {
+  return reactive({ gateways, gatewaysLoaded: loaded, devices, devicesLoaded: loaded })
 }
+const RADIO = [{ port: '/dev/ttyUSB1', device_type: 'tetra' }, { port: '/dev/ttyUSB2', device_type: 'tetra_aux' }]
 
 beforeEach(() => localStorage.clear())
 
@@ -36,6 +37,9 @@ test('nothing_hides_or_is_announced_before_the_gateways_load', async () => {
   store.gateways = KITLIKE
   store.gatewaysLoaded = true
   await nextTick()
+  assert.ok(l.visible.value.includes('tetra'), 'nothing hides while the device scan has not answered')
+  store.devicesLoaded = true
+  await nextTick()
   assert.ok(!l.visible.value.includes('zigbee'), 'an unplugged dongle hides its widget')
   assert.ok(!l.visible.value.includes('tetra'), 'no radio, no TETRA widget')
   assert.ok(l.visible.value.includes('iridium'), 'a modem without sky is still there')
@@ -48,19 +52,25 @@ test('a_radio_plugged_in_brings_its_widget_once', async () => {
   const store = fakeStore(KITLIKE, true)
   const l = useDashboardLayout(store)
   await nextTick()
-  store.gateways = [...KITLIKE, { type: 'tetra', enabled: true, connected: true }]
+  // The scan sees the radio before its gateway is up: it counts.
+  store.devices = RADIO
   await nextTick()
   assert.ok(l.visible.value.includes('tetra'))
   assert.deepEqual(l.arrivals.value.map(a => [a.id, a.offered]), [['tetra', false]])
   assert.ok(l.fresh.value.includes('tetra'), 'the arrival ring')
   l.dismissArrival('tetra')
+  store.gateways = [...KITLIKE, { type: 'tetra', enabled: true, connected: true }]
+  await nextTick()
+  assert.deepEqual(l.arrivals.value, [], 'one announcement, not one per signal')
 
-  // Unplugged: the widget hides by itself; plugged in again: it comes
-  // back without a second announcement.
-  store.gateways = [...KITLIKE, { type: 'tetra', enabled: false, connected: false }]
+  // Unplugged at runtime: the scan loses it and the gateway stops, but its
+  // config stays enabled until the next restart. The widget hides now.
+  store.devices = []
+  store.gateways = [...KITLIKE, { type: 'tetra', enabled: true, connected: false }]
   await nextTick()
   assert.ok(!l.visible.value.includes('tetra'))
-  store.gateways = [...KITLIKE, { type: 'tetra', enabled: true, connected: true }]
+  // Plugged in again: back, without a second announcement.
+  store.devices = RADIO
   await nextTick()
   assert.ok(l.visible.value.includes('tetra'))
   assert.deepEqual(l.arrivals.value, [])
@@ -71,7 +81,7 @@ test('a_removed_widget_is_offered_not_forced_when_its_device_arrives', async () 
   const l = useDashboardLayout(store)
   await nextTick()
   l.remove('tetra')
-  store.gateways = [...KITLIKE, { type: 'tetra', enabled: true, connected: true }]
+  store.devices = RADIO
   await nextTick()
   assert.ok(!l.visible.value.includes('tetra'), 'removed stays removed')
   assert.deepEqual(l.arrivals.value.map(a => [a.id, a.offered]), [['tetra', true]])
@@ -84,7 +94,7 @@ test('the_announcements_remove_undoes_the_arrival', async () => {
   const store = fakeStore(KITLIKE, true)
   const l = useDashboardLayout(store)
   await nextTick()
-  store.gateways = [...KITLIKE, { type: 'tetra', enabled: true, connected: true }]
+  store.devices = RADIO
   await nextTick()
   l.undoArrival('tetra')
   assert.ok(!l.visible.value.includes('tetra'))
