@@ -264,6 +264,20 @@ func (g *TetraGateway) connect(ctx context.Context) (*tetra.Session, error) {
 	return sess, nil
 }
 
+// textLimit is how many bytes of SDS-TL text (header included) the radio
+// takes for one SDS. AT+CMGS=? says 1184 bits (148 bytes), but the MTP3550
+// adds CR CR and its own ITSI to every text inside that budget and answers
+// +CME ERROR: 24 (too long) past it: measured on 17 Oct 2026, a 130-byte
+// PDU went, 131 was refused, 148 - 130 = 18 = 2 + the 16-digit ITSI.
+// Must be called with g.mu held.
+func (g *TetraGateway) textLimit() int {
+	appended := 2 + len(g.ident.ITSI)
+	if g.ident.ITSI == "" {
+		appended = 18
+	}
+	return g.maxBits/8 - appended
+}
+
 func modeName(mode int) string {
 	switch mode {
 	case 0:
@@ -441,7 +455,7 @@ func splitText(text string, maxBytes int) []string {
 // is refused (transport.ErrPayloadTooLong): cutting it would destroy it.
 func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
 	g.mu.RLock()
-	sess, maxBits := g.sess, g.maxBits
+	sess, maxBytes := g.sess, g.textLimit()
 	g.mu.RUnlock()
 	if sess == nil {
 		return fmt.Errorf("tetra: radio %s: %w", g.stateString(), transport.ErrNotConnected)
@@ -454,7 +468,6 @@ func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) 
 	if strings.TrimSpace(text) == "" {
 		return errors.New("tetra: nothing to send")
 	}
-	maxBytes := maxBits / 8
 	parts := []string{text}
 	if tetra.TextBytes(text) > maxBytes {
 		if msg.Encrypted || msg.RawText {
@@ -479,6 +492,10 @@ func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) 
 			switch {
 			case errors.Is(err, tetra.ErrClosed):
 				return fmt.Errorf("tetra: the radio's port closed: %w", transport.ErrNotConnected)
+			case errors.As(err, &cme) && cme.Code == 24 && i == 0:
+				// Too long for the radio: no retry can help.
+				g.refusedLong.Add(1)
+				return fmt.Errorf("tetra: the radio refused the SDS to %s as too long (%d bytes): %v: %w", dest, len(pdu), err, transport.ErrPayloadTooLong)
 			case errors.As(err, &cme) && i == 0:
 				// The radio refused before anything went on air.
 				return fmt.Errorf("tetra: the radio refused the SDS to %s: %v: %w", dest, err, transport.ErrNotSubmitted)
@@ -596,7 +613,7 @@ func (g *TetraGateway) holdPart(r tetra.Received, text string) bool {
 		return false
 	}
 	g.mu.RLock()
-	maxBytes := g.maxBits / 8
+	maxBytes := g.textLimit()
 	g.mu.RUnlock()
 	if k < n && tetra.TextBytes(text) < maxBytes/2 {
 		return false
@@ -697,7 +714,7 @@ type TetraStatus struct {
 	Self           string         `json:"self,omitempty"`  // the radio's own SSI
 	Destination    string         `json:"destination"`     // where an unaddressed message goes
 	BatteryPct     int            `json:"battery_pct"`     // -1 unknown
-	MaxTextBytes   int            `json:"max_text_bytes"`  // one SDS-TL text, header included
+	MaxTextBytes   int            `json:"max_text_bytes"`  // one SDS-TL text, header included, after the ID the radio adds
 	Config         TetraConfig    `json:"config"`
 	MessagesIn     int64          `json:"messages_in"`
 	MessagesOut    int64          `json:"messages_out"`
@@ -724,7 +741,7 @@ func (g *TetraGateway) TetraStatus() TetraStatus {
 		Self:           tetra.SSIOf(g.ident.ITSI),
 		Destination:    dest,
 		BatteryPct:     g.battery,
-		MaxTextBytes:   g.maxBits / 8,
+		MaxTextBytes:   g.textLimit(),
 		Config:         g.config,
 		MessagesIn:     g.msgsIn.Load(),
 		MessagesOut:    g.msgsOut.Load(),
