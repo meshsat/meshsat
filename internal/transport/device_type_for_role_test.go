@@ -15,6 +15,7 @@ func TestDeviceTypeForRole(t *testing.T) {
 		{RoleCellular, "cellular"},
 		{RoleZigBee, "zigbee"},
 		{RoleGPS, "gps"},
+		{RoleTetra, "tetra"},
 		{RoleNone, ""},
 		{DeviceRole("something-new"), ""},
 	}
@@ -34,6 +35,21 @@ func TestDeviceTypeForRole_AmbiguousVIDPIDStaysAmbiguousWithoutRole(t *testing.T
 	for vidpid := range ambiguousZigBeeVIDPIDs {
 		if got := ClassifyDevice(vidpid); got != "ambiguous" {
 			t.Errorf("ClassifyDevice(%q) = %q, want ambiguous", vidpid, got)
+		}
+	}
+}
+
+// TestTetraPEIClaimedByID: a Motorola TETRA radio answers a bare AT with OK,
+// so it must be claimed by USB id before the 9603 AT probe ever sees it.
+// [MESHSAT-1588]
+func TestTetraPEIClaimedByID(t *testing.T) {
+	s := &DeviceSupervisor{skipPorts: make(map[string]bool)}
+	for _, vidpid := range []string{"0cad:9011", "0cad:9012", "0cad:9013", "0cad:9015", "0cad:9016"} {
+		if got := s.classifyByVIDPID(vidpid, "/dev/ttyUSB0"); got != RoleTetra {
+			t.Errorf("classifyByVIDPID(%q) = %q, want %q", vidpid, got, RoleTetra)
+		}
+		if got := ClassifyDevice(vidpid); got != "tetra" {
+			t.Errorf("ClassifyDevice(%q) = %q, want tetra", vidpid, got)
 		}
 	}
 }

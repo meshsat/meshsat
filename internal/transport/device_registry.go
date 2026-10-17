@@ -23,7 +23,11 @@ const (
 	// meshsat-cell image): known by USB id, never opened by the bridge (its
 	// tty is a Linux console), adopted through the host agent. [MESHSAT-1578]
 	RoleCellSDR DeviceRole = "cell_sdr"
-	RoleNone    DeviceRole = ""
+	// RoleTetra is a Motorola TETRA radio's PEI (MTP3550 and kin): known by
+	// USB id and never probed, because it answers a bare AT with OK and the
+	// 9603 probe would claim it. [MESHSAT-1588]
+	RoleTetra DeviceRole = "tetra"
+	RoleNone  DeviceRole = ""
 )
 
 // DeviceState tracks a device's lifecycle from detection through connection.
