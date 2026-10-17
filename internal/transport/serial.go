@@ -456,6 +456,18 @@ var knownCellSDRVIDPIDs = map[string]bool{
 	"0456:b674": true,
 }
 
+// Motorola TETRA radios' PEI (kernel usb-serial-simple "motorola_tetra"; the
+// MTP3550 is 0cad:9013 and enumerates two ports, AT on interface 0). It
+// answers a bare AT with OK, so without this the 9603 probe claims it.
+// [MESHSAT-1588]
+var knownTetraVIDPIDs = map[string]bool{
+	"0cad:9011": true, // Motorola Solutions TETRA PEI
+	"0cad:9012": true, // MTP6550
+	"0cad:9013": true, // MTP3xxx
+	"0cad:9015": true, // MTP85xx
+	"0cad:9016": true, // TPG2200
+}
+
 // GPS VID:PID pairs to exclude from radio scan
 var gpsVIDPIDs = map[string]bool{
 	"1546:01a6": true, // u-blox 7 older variant (ACM)
@@ -701,7 +713,7 @@ func findUSBProduct(port string) string {
 }
 
 // ClassifyDevice returns the device type for a given VID:PID string.
-// Returns one of: "meshtastic", "iridium", "cellular", "zigbee", "gps",
+// Returns one of: "meshtastic", "iridium", "cellular", "zigbee", "gps", "tetra",
 // "ambiguous", or "unknown".
 //
 // Some VID:PIDs (CP210x, CH343) are shared across multiple device classes.
@@ -718,9 +730,10 @@ func ClassifyDevice(vidpid string) string {
 	inZ := knownZigBeeOnlyVIDPIDs[vidpid] || ambiguousZigBeeVIDPIDs[vidpid]
 	inG := gpsVIDPIDs[vidpid]
 	inS := knownCellSDRVIDPIDs[vidpid]
+	inT := knownTetraVIDPIDs[vidpid]
 
 	n := 0
-	for _, b := range []bool{inM, inI, inC, inZ, inG, inS} {
+	for _, b := range []bool{inM, inI, inC, inZ, inG, inS, inT} {
 		if b {
 			n++
 		}
@@ -740,6 +753,8 @@ func ClassifyDevice(vidpid string) string {
 		return "zigbee"
 	case inS:
 		return "cell_sdr"
+	case inT:
+		return "tetra"
 	case inG:
 		return "gps"
 	}
@@ -776,6 +791,8 @@ func DeviceTypeForRole(role DeviceRole) string {
 		return "rnode"
 	case RoleCellSDR:
 		return "cell_sdr"
+	case RoleTetra:
+		return "tetra"
 	}
 	return ""
 }

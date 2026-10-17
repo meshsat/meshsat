@@ -815,6 +815,12 @@ func (s *DeviceSupervisor) classifyByVIDPID(vidpid, port string) DeviceRole {
 		return RoleCellSDR
 	}
 
+	// A TETRA radio's PEI: claimed by id so the AT probe never takes it
+	// for a 9603. [MESHSAT-1588]
+	if knownTetraVIDPIDs[vidpid] {
+		return RoleTetra
+	}
+
 	// Check for unambiguous Meshtastic (not shared with ZigBee or cellular)
 	if knownMeshtasticVIDPIDs[vidpid] && !ambiguousZigBeeVIDPIDs[vidpid] && !knownCellularVIDPIDs[vidpid] {
 		return RoleMeshtastic
