@@ -1526,48 +1526,34 @@ func main() {
 		}
 	}()
 
-	// Wire custody packet handlers into processor
+	// Wire custody packet handlers into processor. An offer goes through
+	// the acceptor: taken only when the mesh worker sends the payload
+	// whole, ACKed only once it is queued, a repeat of a taken id ACKed
+	// again and not queued twice (review B12-R1). [MESHSAT-1584]
+	custodyAcceptor := engine.NewCustodyAcceptor(dispatcher, func(sourceIface string, offer *engine.CustodyOffer) error {
+		if routingID == nil || signingService == nil {
+			return fmt.Errorf("no routing identity or signing key to sign the ACK")
+		}
+		ack := &engine.CustodyACK{
+			CustodyID:    offer.CustodyID,
+			AcceptorHash: routingID.DestHash(),
+		}
+		sigData := append(ack.CustodyID[:], ack.AcceptorHash[:]...)
+		sig := signingService.Sign(sigData)
+		copy(ack.Signature[:], sig)
+		// Back on the interface the offer came in on (point-to-point).
+		return proc.SendReticulumPacketTo(sourceIface, engine.MarshalCustodyACK(ack))
+	})
 	proc.SetCustodyHandlers(
 		// Custody offer handler: another node offers us custody of a payload.
 		func(data []byte, sourceIface string) {
-			offer, err := engine.UnmarshalCustodyOffer(data)
+			take, err := custodyAcceptor.HandleOffer(data, sourceIface)
 			if err != nil {
-				log.Warn().Err(err).Msg("DTN: invalid custody offer")
+				log.Warn().Err(err).Msg("DTN: custody not taken, no ACK sent")
 				return
 			}
-			log.Info().
-				Str("custody_id", fmt.Sprintf("%x", offer.CustodyID[:8])).
-				Str("source", fmt.Sprintf("%x", offer.SourceHash[:8])).
-				Int("payload", len(offer.Payload)).
-				Msg("DTN: accepting custody of payload")
-			// Accept: queue the payload on our mesh interface. Custody is
-			// acknowledged only once it is queued: an ACK for a payload
-			// nothing will send tells the offering node it may stop
-			// trying. [MESHSAT-1584]
-			if dispatcher == nil {
-				return
-			}
-			if _, qErr := dispatcher.AcceptCustody(offer.Payload); qErr != nil {
-				log.Warn().Err(qErr).Msg("DTN: custody not taken, no ACK sent")
-				return
-			}
-			// Send ACK back on the same interface (point-to-point)
-			if routingID != nil && signingService != nil {
-				ack := &engine.CustodyACK{
-					CustodyID:    offer.CustodyID,
-					AcceptorHash: routingID.DestHash(),
-				}
-				sigData := append(ack.CustodyID[:], ack.AcceptorHash[:]...)
-				sig := signingService.Sign(sigData)
-				copy(ack.Signature[:], sig)
-				ackData := engine.MarshalCustodyACK(ack)
-				if err := proc.SendReticulumPacketTo(sourceIface, ackData); err != nil {
-					log.Warn().Err(err).Msg("DTN: failed to send custody ACK")
-				} else {
-					log.Info().Str("custody_id", fmt.Sprintf("%x", offer.CustodyID[:8])).
-						Msg("DTN: custody ACK sent")
-				}
-			}
+			log.Info().Int64("row", take.RowID).Bool("repeat", take.Repeat).Bool("acked", take.Acked).
+				Msg("DTN: custody taken")
 		},
 		// Custody ACK handler: a relay accepted our custody offer.
 		func(data []byte) {
