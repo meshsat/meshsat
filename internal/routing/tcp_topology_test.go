@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -33,8 +32,6 @@ func TestTCPTopology_ThreeNodeLinear(t *testing.T) {
 	var packetsA, packetsC [][]byte
 
 	// Node B listens on two ports (one for A, one for C)
-	portAB := freePortNum(t)
-	portBC := freePortNum(t)
 
 	// Node B's transport node
 	regB := NewInterfaceRegistry()
@@ -44,7 +41,7 @@ func TestTCPTopology_ThreeNodeLinear(t *testing.T) {
 	// TCP interface: B listens for A
 	tcpBA := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "tcp_ba",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portAB),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		// B receives from A — process announce or forward
 		hdr, err := reticulum.UnmarshalHeader(packet)
@@ -68,7 +65,7 @@ func TestTCPTopology_ThreeNodeLinear(t *testing.T) {
 	// TCP interface: B listens for C
 	tcpBC := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "tcp_bc",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portBC),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		hdr, err := reticulum.UnmarshalHeader(packet)
 		if err != nil {
@@ -95,7 +92,7 @@ func TestTCPTopology_ThreeNodeLinear(t *testing.T) {
 	// Node A connects to B
 	tcpA := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "tcp_a",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", portAB),
+		ConnectAddr: tcpBA.BoundAddr(),
 	}, func(packet []byte) {
 		muA.Lock()
 		cp := make([]byte, len(packet))
@@ -111,7 +108,7 @@ func TestTCPTopology_ThreeNodeLinear(t *testing.T) {
 	// Node C connects to B
 	tcpC := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "tcp_c",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", portBC),
+		ConnectAddr: tcpBC.BoundAddr(),
 	}, func(packet []byte) {
 		muC.Lock()
 		cp := make([]byte, len(packet))
@@ -207,9 +204,6 @@ func TestTCPTopology_AnnounceReachesAllNodes(t *testing.T) {
 	idB := testIdentity(t)
 	idC := testIdentity(t)
 
-	portAB := freePortNum(t)
-	portBC := freePortNum(t)
-
 	// Track what A receives
 	var mu sync.Mutex
 	var receivedByA [][]byte
@@ -221,7 +215,7 @@ func TestTCPTopology_AnnounceReachesAllNodes(t *testing.T) {
 
 	tcpBA := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "tcp_ba",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portAB),
+		ListenAddr: "127.0.0.1:0",
 	}, nil) // B doesn't need to process A's packets for this test
 	if err := tcpBA.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -230,7 +224,7 @@ func TestTCPTopology_AnnounceReachesAllNodes(t *testing.T) {
 
 	tcpBC := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "tcp_bc",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", portBC),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		// B receives C's announce → learn route + relay to A
 		hdr, _ := reticulum.UnmarshalHeader(packet)
@@ -255,7 +249,7 @@ func TestTCPTopology_AnnounceReachesAllNodes(t *testing.T) {
 	// A connects to B
 	tcpA := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "tcp_a",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", portAB),
+		ConnectAddr: tcpBA.BoundAddr(),
 	}, func(packet []byte) {
 		mu.Lock()
 		cp := make([]byte, len(packet))
@@ -271,7 +265,7 @@ func TestTCPTopology_AnnounceReachesAllNodes(t *testing.T) {
 	// C connects to B
 	tcpC := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "tcp_c",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", portBC),
+		ConnectAddr: tcpBC.BoundAddr(),
 	}, nil)
 	if err := tcpC.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -317,13 +311,12 @@ func TestTCPTopology_ConcurrentSends(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	port := freePortNum(t)
 	var mu sync.Mutex
 	var received [][]byte
 
 	srv := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		mu.Lock()
 		cp := make([]byte, len(packet))
@@ -338,7 +331,7 @@ func TestTCPTopology_ConcurrentSends(t *testing.T) {
 
 	cli := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "cli",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ConnectAddr: srv.BoundAddr(),
 	}, nil)
 	if err := cli.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -384,11 +377,9 @@ func TestTCPTopology_ConnectionDrop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	port := freePortNum(t)
-
 	srv := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: "127.0.0.1:0",
 	}, nil)
 	if err := srv.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -397,7 +388,7 @@ func TestTCPTopology_ConnectionDrop(t *testing.T) {
 
 	cli := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "cli",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ConnectAddr: srv.BoundAddr(),
 	}, nil)
 	if err := cli.Start(ctx); err != nil {
 		t.Fatal(err)
@@ -425,13 +416,12 @@ func TestTCPTopology_ReconnectAfterDrop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	port := freePortNum(t)
 	var received int32
 	var mu sync.Mutex
 
 	srv := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		mu.Lock()
 		received++
@@ -444,7 +434,7 @@ func TestTCPTopology_ReconnectAfterDrop(t *testing.T) {
 
 	cli := NewTCPInterface(TCPInterfaceConfig{
 		Name:              "cli",
-		ConnectAddr:       fmt.Sprintf("127.0.0.1:%d", port),
+		ConnectAddr:       srv.BoundAddr(),
 		Reconnect:         true,
 		ReconnectInterval: 200 * time.Millisecond,
 	}, nil)
@@ -480,7 +470,7 @@ func TestTCPTopology_ReconnectAfterDrop(t *testing.T) {
 	// Restart server on same port
 	srv2 := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv2",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: cli.config.ConnectAddr, // the address srv had
 	}, func(packet []byte) {
 		mu.Lock()
 		received++
@@ -515,7 +505,6 @@ func TestTCPTopology_LinkEstablishment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	port := freePortNum(t)
 	idA := testIdentity(t)
 	idB := testIdentity(t)
 
@@ -529,7 +518,7 @@ func TestTCPTopology_LinkEstablishment(t *testing.T) {
 	// B is the server (responder)
 	srv := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		// B receives link request → processes it
 		if len(packet) > 0 && packet[0] == PacketLinkRequest {
@@ -550,7 +539,7 @@ func TestTCPTopology_LinkEstablishment(t *testing.T) {
 	// A is the client (initiator)
 	cli := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "cli",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ConnectAddr: srv.BoundAddr(),
 	}, func(packet []byte) {
 		if len(packet) > 0 && packet[0] == PacketLinkProof {
 			proofMu.Lock()
@@ -638,14 +627,12 @@ func TestTCPTopology_ResourceTransfer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	port := freePortNum(t)
-
 	var senderRT, receiverRT *ResourceTransfer
 
 	// Receiver (server)
 	srv := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		hdr, err := reticulum.UnmarshalHeader(packet)
 		if err != nil {
@@ -669,7 +656,7 @@ func TestTCPTopology_ResourceTransfer(t *testing.T) {
 	// Sender (client)
 	cli := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "cli",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ConnectAddr: srv.BoundAddr(),
 	}, func(packet []byte) {
 		hdr, err := reticulum.UnmarshalHeader(packet)
 		if err != nil {
@@ -735,8 +722,6 @@ func TestTCPTopology_PathDiscovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	port := freePortNum(t)
-
 	_ = testIdentity(t) // idA
 	idB := testIdentity(t)
 	idC := testIdentity(t)
@@ -752,7 +737,7 @@ func TestTCPTopology_PathDiscovery(t *testing.T) {
 	var pfB *PathFinder
 	srv := NewTCPInterface(TCPInterfaceConfig{
 		Name:       "srv",
-		ListenAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ListenAddr: "127.0.0.1:0",
 	}, func(packet []byte) {
 		hdr, err := reticulum.UnmarshalHeader(packet)
 		if err != nil {
@@ -788,7 +773,7 @@ func TestTCPTopology_PathDiscovery(t *testing.T) {
 	var pathResponseCh = make(chan []byte, 1)
 	cli := NewTCPInterface(TCPInterfaceConfig{
 		Name:        "cli",
-		ConnectAddr: fmt.Sprintf("127.0.0.1:%d", port),
+		ConnectAddr: srv.BoundAddr(),
 	}, func(packet []byte) {
 		hdr, err := reticulum.UnmarshalHeader(packet)
 		if err != nil {

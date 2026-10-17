@@ -342,6 +342,18 @@ func (t *TCPInterface) outboundLoop(ctx context.Context, ob *outboundPeer) {
 // ListenAddr returns the configured listen address (may be empty).
 func (t *TCPInterface) ListenAddr() string { return t.config.ListenAddr }
 
+// BoundAddr is the address the server listens on: for a configured port 0
+// the one the kernel picked. Before Start, or as a client, it is the
+// configured listen address.
+func (t *TCPInterface) BoundAddr() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.listener != nil {
+		return t.listener.Addr().String()
+	}
+	return t.config.ListenAddr
+}
+
 // ============================================================================
 // Client mode
 // ============================================================================
@@ -427,7 +439,7 @@ func (t *TCPInterface) startServer(ctx context.Context) error {
 
 	log.Info().
 		Str("name", t.config.Name).
-		Str("addr", t.config.ListenAddr).
+		Str("addr", ln.Addr().String()).
 		Msg("tcp interface listening")
 
 	go t.acceptLoop(ctx, ln)
