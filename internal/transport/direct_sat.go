@@ -765,11 +765,15 @@ func (t *DirectSatTransport) isConnected() bool {
 // session ran), and a session whose answer the link lost is settled from
 // the node's account (sbdixSettledLocked).
 func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult, error) {
+	// Every failure before the SBDIX wraps ErrNotSubmitted: no session ran,
+	// and a buffer this send loaded is emptied (clearMOAfterSendLocked, and
+	// every later session clears a leftover first), so nothing of it can go
+	// out. A delivery intent reads that as proven not sent (r3 D18). [MESHSAT-1584]
 	if len(data) == 0 {
-		return nil, fmt.Errorf("data is empty")
+		return nil, fmt.Errorf("%w: data is empty", ErrNotSubmitted)
 	}
 	if len(data) > 340 {
-		return nil, fmt.Errorf("data too large (max 340 bytes for SBD)")
+		return nil, fmt.Errorf("%w: data too large (max 340 bytes for SBD)", ErrNotSubmitted)
 	}
 
 	t.sessionMu.Lock()
@@ -786,7 +790,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("failed to clear MO buffer: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("failed to clear MO buffer")
+		return nil, fmt.Errorf("%w: failed to clear MO buffer", ErrNotSubmitted)
 	}
 	defer t.clearMOAfterSendLocked()
 
@@ -796,10 +800,10 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("AT+SBDWB failed: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("AT+SBDWB failed: %w", err)
+		return nil, fmt.Errorf("%w: AT+SBDWB failed: %w", ErrNotSubmitted, err)
 	}
 	if !strings.Contains(resp, "READY") {
-		return nil, fmt.Errorf("modem did not respond READY for binary write")
+		return nil, fmt.Errorf("%w: modem did not respond READY for binary write", ErrNotSubmitted)
 	}
 
 	// Calculate checksum and write
@@ -812,13 +816,13 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 	binary.Write(&payload, binary.BigEndian, checksum)
 
 	if t.file == nil {
-		return nil, fmt.Errorf("disconnected")
+		return nil, fmt.Errorf("disconnected: %w", ErrNotConnected)
 	}
 	if _, err := t.file.Write(payload.Bytes()); err != nil {
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("binary write failed: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("binary write failed: %w", err)
+		return nil, fmt.Errorf("%w: binary write failed: %w", ErrNotSubmitted, err)
 	}
 
 	// Read write result
@@ -827,7 +831,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("binary write response failed: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("binary write response failed: %w", err)
+		return nil, fmt.Errorf("%w: binary write response failed: %w", ErrNotSubmitted, err)
 	}
 	writeOK := false
 	for _, line := range strings.Split(writeResp, "\n") {
@@ -836,15 +840,15 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		case "0":
 			writeOK = true
 		case "1":
-			return nil, fmt.Errorf("binary write timeout on modem")
+			return nil, fmt.Errorf("%w: binary write timeout on modem", ErrNotSubmitted)
 		case "2":
-			return nil, fmt.Errorf("binary write checksum mismatch")
+			return nil, fmt.Errorf("%w: binary write checksum mismatch", ErrNotSubmitted)
 		case "3":
-			return nil, fmt.Errorf("binary write wrong size")
+			return nil, fmt.Errorf("%w: binary write wrong size", ErrNotSubmitted)
 		}
 	}
 	if !writeOK {
-		return nil, fmt.Errorf("binary write: no success confirmation from modem")
+		return nil, fmt.Errorf("%w: binary write: no success confirmation from modem", ErrNotSubmitted)
 	}
 
 	// Drain any residual bytes from the binary write before SBDIX.
@@ -905,12 +909,13 @@ func (t *DirectSatTransport) clearMOAfterSendLocked() {
 // mu except where sbdixLocked lets go of it, as Send does; from the load
 // on the MO buffer is emptied again however the send ends.
 func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDResult, error) {
+	// Failures before the SBDIX wrap ErrNotSubmitted, as in Send.
 	if len(text) > 120 {
-		return nil, fmt.Errorf("text too long (max 120 chars for AT+SBDWT)")
+		return nil, fmt.Errorf("%w: text too long (max 120 chars for AT+SBDWT)", ErrNotSubmitted)
 	}
 	// Reject characters that corrupt AT command framing
 	if strings.ContainsAny(text, "\r\n\x00") {
-		return nil, fmt.Errorf("text contains invalid characters (CR, LF, or null)")
+		return nil, fmt.Errorf("%w: text contains invalid characters (CR, LF, or null)", ErrNotSubmitted)
 	}
 
 	t.sessionMu.Lock()
@@ -935,8 +940,9 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 			// connect.
 			return nil, fmt.Errorf("AT+SBDWT failed: %w: %w", ErrNotConnected, err)
 		}
-		// The modem may have taken the text though its OK was lost.
-		return nil, fmt.Errorf("AT+SBDWT failed: %s", resp)
+		// The modem may have taken the text though its OK was lost; the
+		// clear after the send (and before any later session) empties it.
+		return nil, fmt.Errorf("%w: AT+SBDWT failed: %s", ErrNotSubmitted, resp)
 	}
 
 	// SBDIX; the MO buffer is cleared after it (clearMOAfterSendLocked). A
@@ -1882,6 +1888,10 @@ func (t *DirectSatTransport) sbdixSessionLocked(ctx context.Context, settle bool
 			// read (the node read them off its UART). An answer of ERROR
 			// alone runs no session: a plain failure, as over a cable.
 			return t.settleLocked(mark, fmt.Errorf("SBDIX answer not readable: %w", err))
+		}
+		if !strings.Contains(resp, "IX:") {
+			// ERROR alone: the modem refused the command, no session ran.
+			return nil, fmt.Errorf("%w: %w", ErrNotSubmitted, err)
 		}
 		return nil, err
 	}

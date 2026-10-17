@@ -27,15 +27,25 @@ const (
 	modeAPRS = "aprs"
 	modeSMS  = "sms"
 	modeIMT  = "imt"
+	modeSBD  = "sbd"
 )
 
 // gatewayModes are the adapter modes a gateway carries.
-var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true}
+var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true, modeSBD: true}
 
 // billed reports whether an adapter's submissions cost money (B9).
 func billed(ad gateway.IntentAdapter) bool {
 	b, ok := ad.(gateway.IntentBilled)
 	return ok && b.IntentBilled()
+}
+
+// billedBytes is how many bytes the provider bills for this wire: the
+// adapter's frame where it says (gateway.IntentSized), else the wire.
+func billedBytes(ad gateway.IntentAdapter, wire []byte) int {
+	if sz, ok := ad.(gateway.IntentSized); ok {
+		return sz.IntentBilledBytes(wire)
+	}
+	return len(wire)
 }
 
 // intentAdapter is the running gateway of an interface when it can carry
@@ -109,7 +119,7 @@ func (e *Escalator) admitGateway(p *database.RoutePlanEntry, kind directory.Kind
 		}
 		// A tariff that cannot price this intent (another currency, out of
 		// bounds, a cost past int64) is no price (B9SMS-R3, R5).
-		units, minor, err := t.Cost(len(wire))
+		units, minor, err := t.Cost(billedBytes(ad, wire))
 		if err != nil {
 			log.Warn().Err(err).Str("iface", ifaceID).Int64("tariff", t.ID).Msg("intent: the tariff cannot price this route")
 			p.Reason = reasonNoPrice
@@ -142,7 +152,7 @@ func (w *DeliveryWorker) intentPrice(ad gateway.IntentAdapter, del database.Mess
 		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice,
 			Detail: fmt.Sprintf("the tariff is in %s and the intent in %s; nothing is converted", t.Currency, in.Currency)}
 	}
-	units, minor, err = t.Cost(len(text))
+	units, minor, err = t.Cost(billedBytes(ad, []byte(text)))
 	if err != nil {
 		return nil, 0, 0, &intentRefusal{Reason: reasonNoPrice, Detail: "the tariff cannot price this send: " + err.Error()}
 	}
@@ -235,7 +245,7 @@ func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.Mes
 		// B9SMS-R4); only the provider's confirmed figure replaces it.
 		units := o.ChargedUnits
 		if !o.ChargeConfirmed {
-			units = max(units, tariff.Units(len(text)))
+			units = max(units, tariff.Units(billedBytes(ad, []byte(text))))
 		}
 		out.Charges = append(out.Charges, Charge{UnitKind: tariff.UnitKind, Units: units,
 			Minor: tariff.Price(units), Confirmed: o.ChargeConfirmed})
