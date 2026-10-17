@@ -1,4 +1,6 @@
-FROM node:22-alpine AS web-builder
+# The SPA is static files, the same for every target, so it is built once on
+# the build platform rather than under emulation per target. [MESHSAT-1584]
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
 
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./

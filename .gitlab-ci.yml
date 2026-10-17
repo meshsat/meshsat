@@ -155,6 +155,22 @@ test:agent:
     - when: always
 
 # -----------------------------------------------------------------------------
+# TEST:WEB — the compose view and the delivery status card in jsdom (vitest):
+# the real components, store and API client; only HTTP answers, timers and
+# confirm() are controlled. A failure blocks the deploy. [MESHSAT-1584]
+# -----------------------------------------------------------------------------
+test:web:
+  stage: validate
+  tags: [multiarch]
+  image: node:22-alpine
+  script:
+    - cd web
+    - npm ci --no-audit --no-fund
+    - npm test
+  rules:
+    - when: always
+
+# -----------------------------------------------------------------------------
 # TEST — Run Go test suite (gate: regressions block deploy)
 # -----------------------------------------------------------------------------
 test:

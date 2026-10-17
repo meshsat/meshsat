@@ -21,5 +21,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true
+  },
+  // UI tests: the real views with the real store and API client in jsdom;
+  // only HTTP answers, timers and confirm() are controlled. [MESHSAT-1584]
+  test: {
+    environment: 'jsdom',
+    environmentOptions: { jsdom: { url: 'http://review.local/?shell=engineer' } },
+    include: ['tests/**/*.test.js']
   }
 })
