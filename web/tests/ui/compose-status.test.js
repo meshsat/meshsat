@@ -4,7 +4,7 @@
 import { test } from 'vitest'
 import {
   bodyText, button, contacts, failWith, flush, input, intent, json, label, mountCompose, mountStatus,
-  pick, send, serve, startTick, timers, useHarness
+  pick, reconciling, send, serve, startTick, timers, useHarness
 } from './harness.js'
 
 useHarness()
@@ -82,8 +82,9 @@ test('poll_and_refresh_overlap_newest_wins', async () => {
   const newest = label()
   releaseFirstPoll(json(intent('x', 'alice', { state: 'closed', outcome: 'may_have_been_sent', label: 'may have been sent', routes: tx('handed_off') })))
   await flush()
-  const ev = { newest, after_old_poll: label(), timers: timers.size }
-  failWith(ev.newest === 'delivered to device' && ev.after_old_poll === 'delivered to device' && ev.timers === 0, 'an older poll overwrote a newer Refresh', ev)
+  const ev = { newest, after_old_poll: label(), timers: [...timers.values()].map(t => t.ms) }
+  // Settled: only the one-minute check is left (EVT-R1; it was no timer).
+  failWith(ev.newest === 'delivered to device' && ev.after_old_poll === 'delivered to device' && reconciling(), 'an older poll overwrote a newer Refresh', ev)
 })
 
 test('read_from_before_cancel_does_not_restore_active', async () => {

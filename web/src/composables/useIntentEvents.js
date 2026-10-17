@@ -3,13 +3,14 @@
 // whenever it writes about it (a new intent, a handoff, an attempt's end,
 // matched evidence, a transition); a card watching that intent reads it
 // again at once. The stream is opened by the first card and closed with the
-// last. Events are hints: the card's read is the authority, and after the
-// stream reconnects every watched card reads again, since events in the gap
-// are lost. [MESHSAT-1584]
+// last. Events are hints: the card's read is the authority, and every time
+// the stream opens, the first time included, every watched card reads
+// again: the subscription only exists once the stream is open, so a change
+// between a card's first read and that moment, or in a reconnect's gap,
+// has no event (review EVT-R1). [MESHSAT-1584]
 
 const listeners = new Map() // intent id -> Set of callbacks
 let source = null
-let opened = false
 
 function call(fns) {
   for (const fn of [...fns]) {
@@ -26,8 +27,7 @@ function onMessage(e) {
 }
 
 function onOpen() {
-  if (opened) for (const fns of listeners.values()) call(fns)
-  opened = true
+  for (const fns of listeners.values()) call(fns)
 }
 
 function open() {
@@ -38,7 +38,6 @@ function open() {
     source = null
     return
   }
-  opened = false
   source.onmessage = onMessage
   source.onopen = onOpen
 }
@@ -46,7 +45,6 @@ function open() {
 function close() {
   if (source) source.close()
   source = null
-  opened = false
 }
 
 // watchIntent calls fn whenever the bridge says it wrote about intent id;

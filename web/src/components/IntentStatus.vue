@@ -6,15 +6,16 @@ import { watchIntent } from '@/composables/useIntentEvents'
 // One delivery intent's status (MESHSAT_DELIVERY_INTENTS): to whom, the
 // outcome in the bridge's own words (r3 D11: "accepted, not confirmed" is
 // never shown as delivered), what is known per route, the money, and
-// Cancel while it runs. Fetched when shown, even from a snapshot, then
-// polled while the intent is active (every 2 s for 3 minutes, then 10 s)
-// and, once closed, every 10 s for up to 15 minutes while a transmission
-// is still with a radio or modem: a closed intent's outcome and cost can
-// still change when that settles (review of B10). Refresh fetches it on
-// demand. And it reads again whenever the bridge's event stream says it
-// wrote about this intent (useIntentEvents), so a change shows at once and a
-// card that stopped polling still shows a late answer; the polls stay as
-// the fallback for an event that never arrives. [MESHSAT-1584]
+// Cancel while it runs. Fetched when shown, even from a snapshot, and read
+// again whenever the bridge's event stream says it wrote about this intent
+// (useIntentEvents), or the stream (re)opens, so a change shows at once.
+// Events are hints a slow reader can lose, so the card also polls: every
+// 2 s for 3 minutes while the intent is active, then 10 s; once closed,
+// every 10 s for up to 15 minutes while a transmission is still with a
+// radio or modem (review of B10), else once a minute while it is shown:
+// a late answer whose event was lost shows within that minute. A failed
+// read is retried, active or closed, after 10 s, doubling up to a minute
+// (review EVT-R1). Refresh fetches it on demand. [MESHSAT-1584]
 
 const props = defineProps({
   intentId: { type: String, required: true },
@@ -42,6 +43,10 @@ let gen = 0
 let reading = 0
 let again = false
 let unwatch = null
+// A closed card's freshness bound while it is shown (EVT-R1).
+const RECONCILE_MS = 60000
+// Failed reads in a row, for the retry's backoff.
+let failures = 0
 
 function onChange() {
   if (stopped) return
@@ -95,14 +100,21 @@ async function load() {
 
 function schedule() {
   if (stopped || timer) return
+  if (loadError.value) {
+    failures++
+    timer = setTimeout(load, Math.min(10000 * 2 ** (failures - 1), RECONCILE_MS))
+    return
+  }
+  failures = 0
   if (view.value && !active.value) {
     if (!closedAt) closedAt = Date.now()
     if (!closedEmitted) { closedEmitted = true; emit('closed', view.value) }
-    if (unsettled.value && Date.now() - closedAt < 900000) timer = setTimeout(load, 10000)
+    const settling = unsettled.value && Date.now() - closedAt < 900000
+    timer = setTimeout(load, settling ? 10000 : RECONCILE_MS)
     return
   }
   const every = Date.now() - startedAt < 180000 ? 2000 : 10000
-  timer = setTimeout(load, loadError.value ? 10000 : every)
+  timer = setTimeout(load, every)
 }
 
 onMounted(() => {

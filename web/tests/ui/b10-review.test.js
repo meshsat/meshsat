@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { expect, test } from 'vitest'
 import {
   bodyText, button, contacts, failWith, flush, input, intent, json, label, mountCompose, mountStatus,
-  pick, send, serve, tick, timers, useHarness
+  pick, reconciling, send, serve, tick, timers, useHarness
 } from './harness.js'
 
 useHarness()
@@ -110,7 +110,9 @@ test('active_poll_then_closed_control', async () => {
   const interval = await tick()
   assert.equal(interval, 2000)
   assert.equal(label(), 'accepted, not confirmed')
-  assert.equal(timers.size, 0)
+  // Closed and settled: only the one-minute check is left (EVT-R1; it was
+  // assert.equal(timers.size, 0) before).
+  assert.ok(reconciling(), JSON.stringify([...timers.values()]))
 })
 
 // A card closed by a cancel, with no send of its own in flight, stops
@@ -138,7 +140,7 @@ test('cancelled_in_flight_status_observation', async () => {
   await flush()
   await tick()
   phase = 'settled'
-  assert.equal(timers.size, 0)
+  assert.ok(reconciling(), JSON.stringify([...timers.values()])) // was timers.size 0 (EVT-R1)
   assert.equal(label(), 'may have been sent')
 })
 
@@ -275,10 +277,11 @@ test('closed_card_keeps_checking_while_a_send_settles', async () => {
   if (recheck.length) await tick()
   const ev = {
     closed_label: closedLabel, recheck_ms: recheck, displayed: label(),
-    cost: document.querySelector('[data-role=money]').textContent.trim(), timers_after_settle: timers.size
+    cost: document.querySelector('[data-role=money]').textContent.trim(), timers_after_settle: [...timers.values()].map(t => t.ms)
   }
+  // Settled: only the one-minute check is left (EVT-R1; it was no timer).
   failWith(closedLabel === 'may have been sent' && recheck.length === 1 && recheck[0] === 10000 &&
-    ev.displayed === 'accepted, not confirmed' && ev.timers_after_settle === 0, 'the closed card did not follow the settling send', ev)
+    ev.displayed === 'accepted, not confirmed' && reconciling(), 'the closed card did not follow the settling send', ev)
 })
 
 test('closed_card_refresh_and_fetch_on_open', async () => {
