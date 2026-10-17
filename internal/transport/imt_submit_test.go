@@ -17,40 +17,54 @@ import (
 // A delivery intent's MO through the 9704, and one MO at a time. [MESHSAT-1584]
 
 // The 14 final MO statuses of RockBLOCK-9704 v1.1.2 (jsprFinalMoStatus_t in
-// src/jspr.h, wire strings in src/jspr.c), each with what it means here.
+// src/jspr.h, wire strings in src/jspr.c), each with what it means here
+// once this send's payload went to the modem: only an ack, a cancel before
+// transit and a missing segment have a stated basis; the rest may have left
+// (review IMT-R4). Before the payload went, nothing can have.
 func TestClassifyIMTMO_EveryOfficialFinalStatus(t *testing.T) {
-	want := map[string]IMTPhase{
+	afterPayload := map[string]IMTPhase{
 		"mo_ack_received":                 IMTAccepted,
-		"message_discarded_on_overflow":   IMTNotSent,
+		"message_discarded_on_overflow":   IMTUnknown,
 		"message_expired":                 IMTUnknown,
 		"message_transfer_timeout":        IMTUnknown,
 		"segment_not_supplied":            IMTNotSent,
-		"segment_incorrect":               IMTNotSent,
+		"segment_incorrect":               IMTUnknown,
 		"network_error":                   IMTUnknown,
 		"message_cancelled_pre_transit":   IMTNotSent,
 		"message_cancelled_in_transit":    IMTUnknown,
-		"subscription_invalid":            IMTNotSent,
+		"subscription_invalid":            IMTUnknown,
 		"protocol_error":                  IMTUnknown,
-		"message_dropped_local_crc_error": IMTNotSent,
+		"message_dropped_local_crc_error": IMTUnknown,
 		"crc_error_in_transfer":           IMTUnknown,
-		"user_supplied_crc_error":         IMTNotSent,
+		"user_supplied_crc_error":         IMTUnknown,
 	}
-	if len(imtFinalStatus) != len(want) {
-		t.Fatalf("the table has %d statuses, the library %d", len(imtFinalStatus), len(want))
+	if len(imtStatusBasis) != len(afterPayload) {
+		t.Fatalf("the table has %d statuses, the library %d", len(imtStatusBasis), len(afterPayload))
 	}
-	for status, phase := range want {
-		// Whatever this side thinks of the payload, the modem's word decides.
-		for _, sup := range []moSupplied{moSuppliedUnknown, moSuppliedNo, moSuppliedYes} {
-			got := classifyIMTMO(moResult{Status: status, Supplied: sup})
-			if got.Phase != phase {
-				t.Errorf("%s (supplied %d): phase %d, want %d", status, sup, got.Phase, phase)
+	for status, phase := range afterPayload {
+		if e, ok := imtStatusBasis[status]; !ok || e.basis == "" {
+			t.Errorf("%s: no recorded basis", status)
+		}
+		if got := classifyIMTMO(moResult{Status: status, Supplied: moSuppliedYes}); got.Phase != phase {
+			t.Errorf("%s after the payload: phase %d, want %d", status, got.Phase, phase)
+		}
+		before := classifyIMTMO(moResult{Status: status, Supplied: moSuppliedNo})
+		switch {
+		case status == "mo_ack_received":
+			if before.Phase != IMTUnknown || !before.Inconsistent {
+				t.Errorf("an ack for a payload never supplied: %+v, want unknown and inconsistent", before)
 			}
+		case before.Phase != IMTNotSent:
+			t.Errorf("%s before the payload: phase %d, want not sent", status, before.Phase)
 		}
 	}
-	if classifyIMTMO(moResult{Status: "subscription_invalid"}).Retry {
+	if got := classifyIMTMO(moResult{Status: "mo_ack_received"}); got.Phase != IMTUnknown || !got.Inconsistent {
+		t.Errorf("an ack without the helper's account of the payload: %+v, want unknown", got)
+	}
+	if classifyIMTMO(moResult{Status: "subscription_invalid", Supplied: moSuppliedNo}).Retry {
 		t.Error("an invalid subscription is retried")
 	}
-	if !classifyIMTMO(moResult{Status: "message_cancelled_pre_transit"}).Retry {
+	if !classifyIMTMO(moResult{Status: "message_cancelled_pre_transit", Supplied: moSuppliedYes}).Retry {
 		t.Error("a message cancelled before transit (no sky) is not retried")
 	}
 }
@@ -68,7 +82,7 @@ func TestClassifyIMTMO_EndsWithoutAModemStatus(t *testing.T) {
 		{"refused at messageOriginate (a 4xx)", moResult{Supplied: moSuppliedNo}, IMTNotSent, true},
 		{"overflow at messageOriginate", moResult{Status: "message_discarded_on_overflow", Supplied: moSuppliedNo}, IMTNotSent, true},
 		{"invalid subscription at messageOriginate", moResult{Status: "subscription_invalid", Supplied: moSuppliedNo}, IMTNotSent, false},
-		{"no 200 and no segment request", moResult{Status: "no_response", Supplied: moSuppliedNo}, IMTNotSent, true},
+		{"no originate reply", moResult{Status: "no_response", Supplied: moSuppliedNo}, IMTNotSent, true},
 		{"helper timeout before the segment", moResult{Status: "helper_timeout", Supplied: moSuppliedNo}, IMTNotSent, true},
 		{"helper timeout after the segment", moResult{Status: "helper_timeout", Supplied: moSuppliedYes}, IMTUnknown, false},
 		{"Go stopped waiting", moResult{}, IMTUnknown, false},
@@ -275,7 +289,8 @@ func TestIMT_CancelOnlyALegacyMO(t *testing.T) {
 func TestIMT_IntentMOSkipsAnotherCommandsReply(t *testing.T) {
 	stray := func(cmd map[string]any) []string {
 		b, _ := json.Marshal(map[string]any{"type": "response", "code": 400, "target": "constellationState", "json": map[string]any{}})
-		return append([]string{string(b)}, ackOrCancel(cmd)...)
+		return []string{string(b), moLine(200, "messageOriginateStatus", map[string]any{"final_mo_status": "mo_ack_received",
+			"message_id": 5, "topic_id": 244, "request_reference": refOf(cmd), "segment_supplied": true})}
 	}
 	f := &fakeIMTHelper{answer: stray, delay: 50 * time.Millisecond}
 	tr := newIMTTestTransport(t, f)
@@ -312,6 +327,12 @@ func TestIMT_SubmitMOOutcomes(t *testing.T) {
 		{"the modem never answered", func(r int) string {
 			return moLine(200, "messageOriginateStatus", map[string]any{"final_mo_status": "no_response", "request_reference": r, "segment_supplied": false})
 		}, IMTNotSent, true},
+		{"an ack for a payload the helper never supplied", func(r int) string {
+			return moLine(200, "messageOriginateStatus", map[string]any{"final_mo_status": "mo_ack_received", "message_id": 22, "request_reference": r, "segment_supplied": false})
+		}, IMTUnknown, false},
+		{"a local CRC error after the payload went", func(r int) string {
+			return moLine(200, "messageOriginateStatus", map[string]any{"final_mo_status": "message_dropped_local_crc_error", "request_reference": r, "segment_supplied": true})
+		}, IMTUnknown, false},
 		{"the helper gave up with the payload on the modem", func(r int) string {
 			return moLine(200, "messageOriginateStatus", map[string]any{"final_mo_status": "helper_timeout", "request_reference": r, "segment_supplied": true})
 		}, IMTUnknown, false},
@@ -364,7 +385,7 @@ type instantHelper struct{ h *jsprHelperPort }
 func (w instantHelper) Write(p []byte) (int, error) {
 	var cmd map[string]any
 	if json.Unmarshal([]byte(strings.TrimSpace(string(p))), &cmd) == nil && cmd["cmd"] == "send_mo" {
-		line := fmt.Sprintf("200 messageOriginateStatus {\"final_mo_status\": \"mo_ack_received\", \"request_reference\": %d}\r", refOf(cmd))
+		line := fmt.Sprintf("200 messageOriginateStatus {\"final_mo_status\": \"mo_ack_received\", \"request_reference\": %d, \"segment_supplied\": true}\r", refOf(cmd))
 		w.h.mu.Lock()
 		w.h.byteBuf = append(w.h.byteBuf, line...)
 		w.h.mu.Unlock()

@@ -46,12 +46,19 @@ def line(code, target, obj):
     return {"code": code, "target": target, "json_str": json.dumps(obj)}
 
 
+def accepted_reply(message_id=23, request_reference=7, topic_id=244):
+    """The modem's originate reply, as the real 9704 sends it: with the
+    reference and topic of the command it answers."""
+    return line(200, "messageOriginate", {"topic_id": topic_id, "request_reference": request_reference,
+                                          "message_id": message_id, "message_response": "message_accepted"})
+
+
 def modem(final_after_cancel):
     """Accepts the MO, never gets a satellite, answers a cancel with
     final_after_cancel (None = stays silent)."""
     def on_write(method, target, body):
         if target == "messageOriginate":
-            return [line(200, "messageOriginate", {"message_id": 23, "message_response": "message_accepted"})]
+            return [accepted_reply()]
         if target == "messageOriginateStatus" and body.get("action") == "cancel":
             replies = [line(200, "messageOriginateStatus", {"message_id": 23})]
             if final_after_cancel:
@@ -107,9 +114,9 @@ class MOTimeoutTest(unittest.TestCase):
     def test_late_status_of_another_message_is_not_this_result(self):
         def on_write(method, target, body):
             if target == "messageOriginate":
-                return [line(200, "messageOriginate", {"message_id": 23, "message_response": "message_accepted"}),
-                        line(299, "messageOriginateStatus", {"message_id": 22, "final_mo_status": "mo_ack_received"}),
-                        line(299, "messageOriginateStatus", {"message_id": 23, "final_mo_status": "mo_ack_received"})]
+                return [accepted_reply(),
+                        line(299, "messageOriginateStatus", {"topic_id": 244, "message_id": 22, "final_mo_status": "mo_ack_received"}),
+                        line(299, "messageOriginateStatus", {"topic_id": 244, "message_id": 23, "final_mo_status": "mo_ack_received"})]
             return []
         h = FakeHelper(on_write)
         h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5)
@@ -183,7 +190,8 @@ class MTDuringMOTest(unittest.TestCase):
         def on_write(method, target, body):
             if target == "messageOriginate":
                 return (seg[half:] +
-                        b'200 messageOriginate {"message_id": 23, "message_response": "message_accepted"}\r')
+                        b'200 messageOriginate {"topic_id": 244, "request_reference": 7, "message_id": 23, '
+                        b'"message_response": "message_accepted"}\r')
             if target == "messageOriginateStatus" and body.get("action") == "cancel":
                 return (b'200 messageOriginateStatus {"message_id": 23}\r'
                         b'299 messageOriginateStatus {"topic_id": 244, "message_id": 23, '
@@ -273,12 +281,12 @@ class PayloadAccountTest(unittest.TestCase):
         self.assertEqual(res[0][3]["final_mo_status"], "no_response")
         self.assertIs(res[0][3]["segment_supplied"], False)
 
-    def test_a_lost_200_with_the_payload_supplied_waits_for_the_modem(self):
-        """The modem's 200 never came but it asked for the segment and got
-        it: it may send the message, so the helper waits for its final
-        status instead of reporting no_response at 30 s."""
-        state = {"reads": 0}
-
+    def test_a_lost_originate_reply_supplies_nothing(self):
+        """The modem's originate reply never came, then a prompt: the send
+        has no identity of its own, so the prompt is not answered (a prompt
+        cannot prove it is this send's), and the send ends no_response with
+        nothing supplied. The modem cannot transmit a message it has no data
+        for. [MESHSAT-1584, review IMT-R1]"""
         def on_write(method, target, body):
             if target == "messageOriginate":
                 return [line(299, "messageOriginateSegment",
@@ -286,27 +294,19 @@ class PayloadAccountTest(unittest.TestCase):
             return []
 
         h = FakeHelper(on_write)
-        orig = h.serial_read_lines
-
-        def reads():
-            state["reads"] += 1
-            if state["reads"] == 40:  # well past the 30 s first-answer deadline
-                return [line(299, "messageOriginateStatus",
-                             {"topic_id": 244, "message_id": 23, "final_mo_status": "mo_ack_received"})]
-            return orig()
-        h.serial_read_lines = reads
         self.run_with_clock(h, 1, 240)
         segs = [w for w in h.written if w[1] == "messageOriginateSegment"]
-        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs, [])
         res = h.results()
         self.assertEqual(len(res), 1, res)
-        self.assertEqual(res[0][3]["final_mo_status"], "mo_ack_received")
-        self.assertIs(res[0][3]["segment_supplied"], True)
+        self.assertEqual(res[0][3]["final_mo_status"], "no_response")
+        self.assertIs(res[0][3]["segment_supplied"], False)
 
     def test_a_refusal_at_originate_is_marked(self):
         def on_write(method, target, body):
             if target == "messageOriginate":
-                return [line(200, "messageOriginate", {"message_response": "subscription_invalid"})]
+                return [line(200, "messageOriginate", {"topic_id": 244, "request_reference": 7,
+                                                        "message_response": "subscription_invalid"})]
             return []
         h = FakeHelper(on_write)
         h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5)
@@ -333,7 +333,7 @@ class PayloadAccountTest(unittest.TestCase):
         for asked, want in ((False, False), (True, True)):
             def on_write(method, target, body, asked=asked):
                 if target == "messageOriginate":
-                    out = [line(200, "messageOriginate", {"message_id": 23, "message_response": "message_accepted"})]
+                    out = [accepted_reply()]
                     if asked:
                         out.append(line(299, "messageOriginateSegment",
                                         {"topic_id": 244, "message_id": 23, "segment_length": 3, "segment_start": 0}))

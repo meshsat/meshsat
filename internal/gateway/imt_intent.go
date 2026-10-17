@@ -120,9 +120,14 @@ func (g *IMTGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcome
 			Detail: "acknowledged by the Iridium network (mo_ack_received)"}
 	case transport.IMTUnknown:
 		// It may have left, so its price stays counted as possible and
-		// nothing is sent again for it (r3 D17).
+		// nothing is sent again for it (r3 D17). A result that contradicts
+		// itself is never acceptance either. [review IMT-R1]
 		g.errors.Add(1)
-		log.Warn().Str("corr", s.CorrValue).Str("status", res.Status).Err(err).Msg("imt: intent MO may have left")
+		log.Warn().Str("corr", s.CorrValue).Str("status", res.Status).Bool("inconsistent", res.Inconsistent).Err(err).
+			Msg("imt: intent MO may have left")
+		if res.Inconsistent {
+			detail = "the modem helper's result contradicts itself (" + detail + ")"
+		}
 		return IntentOutcome{Class: IntentUnknown, Detail: "may have left: " + detail}
 	}
 	if errors.Is(err, transport.ErrNotConnected) {

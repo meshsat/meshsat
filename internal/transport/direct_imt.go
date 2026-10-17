@@ -64,11 +64,13 @@ type DirectIMTTransport struct {
 	excludePort   string
 	excludePortFn func() string
 
-	// One MO at a time (acquireMO), and whether the MO with the modem may
-	// be cancelled: a delivery intent's may not (SubmitMO). [MESHSAT-1584]
-	moSem      chan struct{}
-	moSemOnce  sync.Once
-	moNoCancel bool // guarded by mu
+	// One MO at a time (acquireMO), and the MO with the modem now: its
+	// request_reference and whether it may be cancelled (a delivery
+	// intent's may not). A cancel decides on this snapshot and names its
+	// reference. [MESHSAT-1584]
+	moSem     chan struct{}
+	moSemOnce sync.Once
+	moCur     *moOp // guarded by mu
 
 	cancelFunc     context.CancelFunc
 	pollDone       chan struct{}
@@ -369,7 +371,7 @@ func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SatResult,
 	release, err := t.acquireMO(ctx)
 	if err != nil {
 		return &SatResult{MOStatus: IMTStatusGenericFail, StatusText: err.Error()},
-			fmt.Errorf("imt: not started, the modem was busy with another message: %w", err)
+			fmt.Errorf("imt: not started: %w", err)
 	}
 	defer release()
 
@@ -379,9 +381,13 @@ func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SatResult,
 		return nil, fmt.Errorf("imt: not connected")
 	}
 	conn := t.conn
+	ref := conn.nextRef()
+	t.moCur = &moOp{ref: ref, cancellable: true}
 	t.mu.Unlock()
+	defer t.endMO()
 
-	status, err := conn.jsprSendMO(jsprRawTopic, data)
+	r, err := conn.jsprSendMOResult(jsprRawTopic, data, ref, false)
+	status := r.Status
 	if err != nil {
 		return &SatResult{
 			MOStatus:   IMTStatusGenericFail,
@@ -1237,13 +1243,28 @@ func findJSPRHelper() string {
 // CancelMO cancels the MO the modem is sending, if any; its Send then
 // returns the modem's verdict (cancelled, or sent when it was too late).
 // [MESHSAT-1282]
+//
+// The decision and its target are one snapshot of the MO with the modem,
+// taken under the lock: a cancel decided while a legacy send ran can only
+// ever name that send's reference, never an intent's MO that started
+// after it (review IMT-R2). [MESHSAT-1584]
 func (t *DirectIMTTransport) CancelMO() bool {
 	t.mu.Lock()
+	op := t.moCur
 	helper, ok := t.file.(*jsprHelperPort)
-	noCancel := t.moNoCancel // a delivery intent's MO [MESHSAT-1584]
 	t.mu.Unlock()
-	return ok && !noCancel && helper.CancelMO()
+	if imtCancelSnapshotHook != nil {
+		imtCancelSnapshotHook()
+	}
+	if op == nil || !op.cancellable || !ok {
+		return false
+	}
+	return helper.CancelRef(op.ref)
 }
+
+// imtCancelSnapshotHook is nil outside tests: a test pauses CancelMO here,
+// after its snapshot, to replay a send starting in between.
+var imtCancelSnapshotHook func()
 
 // Reconnect re-runs the JSPR connect sequence. Soft level of the OOB RESET
 // command. [MESHSAT-756]

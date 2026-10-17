@@ -222,6 +222,16 @@ class JSPRHelper:
         Matches the standalone test script exactly."""
         mlog = lambda msg: log(f"MO: {msg}")
 
+        # A cancel Go wrote for an earlier send is void now: it must never
+        # wait here until a later send reuses that reference (they wrap at
+        # 100). One for this send, written while it queued, still counts.
+        # [MESHSAT-1584]
+        refs = getattr(self, "_cancel_refs", None)
+        if refs:
+            for r in list(refs):
+                if r != request_reference:
+                    refs.discard(r)
+                    mlog(f"dropped a cancel for ref={r}, not the send now starting (ref={request_reference})")
         try:
             self._do_send_mo_inner(topic_id, payload_b64, length, request_reference, mlog, timeout_s)
         finally:
@@ -238,7 +248,13 @@ class JSPRHelper:
         refs.discard(request_reference)
         return True
 
-    def _cancel_and_settle(self, topic_id, msg_id, request_reference, mlog, settle_s=20):
+    @staticmethod
+    def _mismatch(mlog, what, want, got):
+        """A frame that does not belong to this send: never acted on, always
+        logged with both identities so it can be seen. [MESHSAT-1584]"""
+        mlog(f"MISMATCH {what}: this send {want}, frame {got}; ignored")
+
+    def _cancel_and_settle(self, topic_id, msg_id, request_reference, mlog, settle_s=20, supplied=None):
         """Give up on an MO the modem has already accepted, the official way.
 
         Walking away is not enough: the modem keeps the message and may
@@ -268,11 +284,13 @@ class JSPRHelper:
                             d = json.loads(json_str)
                         except json.JSONDecodeError:
                             continue
-                        if d.get("message_id", -1) != msg_id:
-                            mlog(f"LATE status for msg_id={d.get('message_id')} final={d.get('final_mo_status')} (not this MO)")
+                        if d.get("message_id") != msg_id or d.get("topic_id") != topic_id:
+                            self._mismatch(mlog, "final status after cancel", (msg_id, topic_id),
+                                           (d.get("message_id"), d.get("topic_id"), d.get("final_mo_status")))
                             continue
                         mlog(f"settled after cancel: msg_id={msg_id} final={d.get('final_mo_status')}")
-                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference)
+                        extra = None if supplied is None else {"segment_supplied": supplied}
+                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference, extra)
                         return True
                     if code >= 400:
                         mlog(f"cancel refused by the modem: {code} {json_str[:80]}")
@@ -284,6 +302,19 @@ class JSPRHelper:
         return False
 
     def _do_send_mo_inner(self, topic_id, payload_b64, length, request_reference, mlog, timeout_s=240):
+        """One MO, bound to one modem message the whole way.
+
+        The send's identity is the message_id of the originate reply that
+        names this send's request_reference and topic, as the modem returns
+        both. After that a segment prompt is answered only when it names
+        that message and topic and asks for the whole payload at offset 0
+        (one segment), and only that message's final status ends the send:
+        Ground Control's library checks message id and topic the same way
+        (rockblock_9704.c). Anything else, an earlier send's late ack or a
+        prompt for another message, is logged and ignored. A send whose
+        originate reply never came has no identity and supplies nothing:
+        the modem cannot transmit a message it has no data for, so it ends
+        "no_response", not sent. [MESHSAT-1584]"""
         # Hand over every complete line already waiting. A partial line stays
         # in the buffer and completes with the next read: the modem pushes
         # an MT (messageTerminate and its segments) whenever it arrives, it
@@ -310,20 +341,17 @@ class JSPRHelper:
         self._serial_write_raw("PUT", "messageOriginate", cmd)
 
         # 2. Poll for responses — handle entire flow inline
-        msg_id = None
+        msg_id = None  # this send's identity, from its own originate reply only
         segment_sent = False
-        # Two-phase timeout: 30s for initial 200 response, then 4 min for satellite
+        want = (request_reference, topic_id)
+        # Two-phase timeout: 30s for this send's originate reply, then the
+        # satellite budget.
         initial_deadline = time.monotonic() + 30
         full_deadline = time.monotonic() + timeout_s
-        got_200 = False
 
         while self.running:
-            # Check appropriate deadline. Once the payload is with the modem
-            # (its 200 lost, the segment request answered) the modem may
-            # send it: wait for its final status like any other send.
-            # [MESHSAT-1584]
-            if not got_200 and not segment_sent and time.monotonic() > initial_deadline:
-                mlog("no 200 response to messageOriginate within 30s — modem not responding")
+            if msg_id is None and time.monotonic() > initial_deadline:
+                mlog("no originate reply for this send within 30s — modem not responding")
                 self.emit_mo_result(200, "messageOriginateStatus",
                                     jd({"final_mo_status": "no_response", "message_id": 0, "topic_id": topic_id}),
                                     request_reference, {"segment_supplied": False})
@@ -335,7 +363,7 @@ class JSPRHelper:
             # message). Only possible once the modem has named the message.
             if msg_id is not None and self._take_cancel(request_reference):
                 mlog(f"host cancelled msg_id={msg_id}")
-                if self._cancel_and_settle(topic_id, msg_id, request_reference, mlog):
+                if self._cancel_and_settle(topic_id, msg_id, request_reference, mlog, supplied=segment_sent):
                     return
                 mlog("cancel did not settle, still waiting for the modem")
 
@@ -355,42 +383,59 @@ class JSPRHelper:
                     self.emit("unsolicited", code, target, json_str)
                     continue
 
-                # 200 messageOriginate — extract message_id
+                try:
+                    d = json.loads(json_str)
+                    if not isinstance(d, dict):
+                        d = {}
+                except (json.JSONDecodeError, TypeError):
+                    d = {}
+
+                # 200 messageOriginate: this send's identity, when it names
+                # this send's reference and topic.
                 if code == 200 and target == "messageOriginate":
-                    try:
-                        d = json.loads(json_str)
-                        msg_id = d.get("message_id")
-                        resp_str = d.get("message_response", "")
-                        got_200 = True
-                        mlog(f"message_id={msg_id} response={resp_str}")
-                        self.emit("response", code, target, json_str)
-                        if resp_str != "message_accepted":
-                            self.emit_mo_result(200, "messageOriginateStatus",
-                                                jd({"final_mo_status": resp_str, "message_id": msg_id or 0, "topic_id": topic_id}),
-                                                request_reference, {"refused_at": "originate", "segment_supplied": False})
-                            return
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                    got = (d.get("request_reference"), d.get("topic_id"))
+                    if got != want:
+                        self._mismatch(mlog, "originate reply", {"ref": request_reference, "topic": topic_id},
+                                       {"ref": got[0], "topic": got[1], "msg": d.get("message_id")})
+                        continue
+                    if msg_id is not None:
+                        self._mismatch(mlog, "second originate reply", {"msg": msg_id}, {"msg": d.get("message_id")})
+                        continue
+                    resp_str = d.get("message_response", "")
+                    mlog(f"message_id={d.get('message_id')} response={resp_str}")
+                    self.emit("response", code, target, json_str)
+                    if resp_str != "message_accepted":
+                        self.emit_mo_result(200, "messageOriginateStatus",
+                                            jd({"final_mo_status": resp_str, "message_id": d.get("message_id") or 0, "topic_id": topic_id}),
+                                            request_reference, {"refused_at": "originate", "segment_supplied": False})
+                        return
+                    if not isinstance(d.get("message_id"), int):
+                        mlog("originate accepted without a message id: no identity, nothing supplied")
+                        continue
+                    msg_id = d["message_id"]
                     continue
 
-                # 299 messageOriginateSegment — respond IMMEDIATELY (raw write)
-                if code == 299 and target == "messageOriginateSegment" and not segment_sent:
-                    try:
-                        d = json.loads(json_str)
-                        if msg_id is None:
-                            msg_id = d.get("message_id")  # its 200 never came
-                        seg_cmd = jd({
-                            "topic_id": d.get("topic_id", topic_id),
-                            "message_id": d.get("message_id", msg_id),
-                            "segment_length": d.get("segment_length", length),
-                            "segment_start": d.get("segment_start", 0),
-                            "data": payload_b64,
-                        })
-                        mlog(f"TX PUT messageOriginateSegment (msg_id={d.get('message_id', msg_id)})")
-                        self._serial_write_raw("PUT", "messageOriginateSegment", seg_cmd)
-                        segment_sent = True
-                    except (json.JSONDecodeError, KeyError) as e:
-                        mlog(f"segment parse error: {e}")
+                # 299 messageOriginateSegment: answered once, for this
+                # message and topic, whole payload at offset 0.
+                if code == 299 and target == "messageOriginateSegment":
+                    got = {"msg": d.get("message_id"), "topic": d.get("topic_id"),
+                           "start": d.get("segment_start"), "len": d.get("segment_length")}
+                    if msg_id is None or segment_sent or got["msg"] != msg_id or got["topic"] != topic_id:
+                        self._mismatch(mlog, "segment prompt", {"msg": msg_id, "topic": topic_id, "supplied": segment_sent}, got)
+                        continue
+                    if got["start"] != 0 or got["len"] != length:
+                        self._mismatch(mlog, "segment geometry (one segment only)", {"start": 0, "len": length}, got)
+                        continue
+                    seg_cmd = jd({
+                        "topic_id": topic_id,
+                        "message_id": msg_id,
+                        "segment_length": length,
+                        "segment_start": 0,
+                        "data": payload_b64,
+                    })
+                    mlog(f"TX PUT messageOriginateSegment (msg_id={msg_id})")
+                    self._serial_write_raw("PUT", "messageOriginateSegment", seg_cmd)
+                    segment_sent = True
                     continue
 
                 # 200 messageOriginateSegment — segment accepted
@@ -399,25 +444,24 @@ class JSPRHelper:
                     self.emit("response", code, target, json_str)
                     continue
 
-                # 299 messageOriginateStatus — final result
+                # 299 messageOriginateStatus: this message's final result
                 if code == 299 and target == "messageOriginateStatus":
-                    try:
-                        d = json.loads(json_str)
-                        status_msg_id = d.get("message_id", -1)
-                        final = d.get("final_mo_status", "unknown")
-                        mlog(f"status msg_id={status_msg_id} final={final}")
-                        if msg_id is not None and status_msg_id != msg_id:
-                            mlog(f"LATE status for msg_id={status_msg_id} final={final} (expected msg_id={msg_id}), not this MO")
-                            continue
-                        self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference,
-                                            {"segment_supplied": segment_sent})
-                        return
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-                    continue
+                    got = {"msg": d.get("message_id"), "topic": d.get("topic_id"), "final": d.get("final_mo_status")}
+                    if msg_id is None or got["msg"] != msg_id or got["topic"] != topic_id:
+                        self._mismatch(mlog, "final status", {"msg": msg_id, "topic": topic_id}, got)
+                        continue
+                    mlog(f"status msg_id={msg_id} final={got['final']}")
+                    self.emit_mo_result(200, "messageOriginateStatus", json_str, request_reference,
+                                        {"segment_supplied": segment_sent})
+                    return
 
-                # Non-200 error for messageOriginate
+                # An error answer to messageOriginate before this send has an
+                # identity is the answer to this send's command; after, it
+                # belongs to something else.
                 if code >= 400 and target == "messageOriginate":
+                    if msg_id is not None:
+                        self._mismatch(mlog, "originate error after acceptance", {"msg": msg_id}, {"code": code})
+                        continue
                     mlog(f"messageOriginate error: {code}")
                     self.emit_mo_result(code, target, json_str, request_reference,
                                         {"refused_at": "originate", "segment_supplied": False})
@@ -432,7 +476,7 @@ class JSPRHelper:
         # Timeout. If the modem had accepted the message, cancel it and take
         # the modem's word for what happened to it.
         mlog("TIMEOUT waiting for MO completion")
-        if msg_id is not None and self._cancel_and_settle(topic_id, msg_id, request_reference, mlog):
+        if msg_id is not None and self._cancel_and_settle(topic_id, msg_id, request_reference, mlog, supplied=segment_sent):
             return
         self.emit_mo_result(200, "messageOriginateStatus",
                             jd({"final_mo_status": "helper_timeout", "message_id": msg_id or 0, "topic_id": topic_id}),
