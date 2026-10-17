@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +60,19 @@ func TestSMSBundlePut_Expiry(t *testing.T) {
 	st := s.smsBudget.Status()
 	if st.ExpiresAt == nil || st.ExpiresAt.Before(before.Add(31*24*time.Hour-time.Minute)) || st.ExpiresAt.After(time.Now().Add(31*24*time.Hour)) {
 		t.Fatalf("valid_days 31: %+v", st)
+	}
+	if st.ExpiresAt.Nanosecond() != 0 {
+		t.Fatalf("valid_days end %s; want whole seconds, as stored (B9EXP-R1)", st.ExpiresAt.Format(time.RFC3339Nano))
+	}
+	var got struct {
+		Bundle struct {
+			ExpiresAt time.Time `json:"expires_at"`
+		} `json:"bundle"`
+	}
+	w := httptest.NewRecorder()
+	s.Router().ServeHTTP(w, httptest.NewRequest("GET", "/api/cellular/bundle", nil))
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil || !got.Bundle.ExpiresAt.Equal(*st.ExpiresAt) {
+		t.Fatalf("GET returned %v (%v); want the stored end %v", got.Bundle.ExpiresAt, err, st.ExpiresAt)
 	}
 	if w := put(`{"expires_at":"2026-11-17T01:33:59Z"}`); w.Code != http.StatusOK {
 		t.Fatalf("expires_at: %d %s", w.Code, w.Body.String())

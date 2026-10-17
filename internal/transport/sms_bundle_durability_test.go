@@ -418,25 +418,44 @@ func TestSMSBundle_NotSentAfterTopUpReleasesOnDisk(t *testing.T) {
 
 // D8 validity on the loop: an intent SMS that passed the check before the
 // bundle's end but waited in the queue past it is refused when its turn
-// comes, before any byte. [MESHSAT-1584]
+// comes, before any byte. The end is moved into the past while the SMS
+// waits, so no timing decides the test. [MESHSAT-1584]
 func TestSMSBundle_EndPassesWhileQueued(t *testing.T) {
 	m := &reviewBundleModem{afterBody: "\r\n+CMGS: 70\r\n\r\nOK\r\n"}
 	g, tr, b, _ := bundleLoop(t, m, 5, 200*time.Millisecond)
-	end := time.Now().Add(400 * time.Millisecond)
 	size := 5
-	if err := b.Update(gateway.SMSBundleUpdate{Size: &size, ExpiresAt: &end}); err != nil {
+	later := time.Now().Add(time.Hour)
+	if err := b.Update(gateway.SMSBundleUpdate{Size: &size, ExpiresAt: &later}); err != nil {
 		t.Fatal(err)
 	}
 	release, done := transport.HoldSMSLoopForTest(tr)
+	defer release()
 	res := make(chan gateway.IntentOutcome, 1)
 	go func() { res <- reviewBundleSend(g, "review first") }()
+	deadline := time.Now().Add(time.Second)
 	for transport.SMSQueueLenForTest(tr) < 1 {
+		select {
+		case o := <-res:
+			t.Fatalf("returned before it queued: %+v", o)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the intent SMS never queued")
+		}
 		time.Sleep(time.Millisecond)
 	}
-	time.Sleep(time.Until(end) + 100*time.Millisecond)
+	past := time.Now().Add(-time.Minute)
+	if err := b.Update(gateway.SMSBundleUpdate{ExpiresAt: &past}); err != nil {
+		t.Fatal(err)
+	}
 	release()
 	<-done
-	o := <-res
+	var o gateway.IntentOutcome
+	select {
+	case o = <-res:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the queued intent SMS did not return")
+	}
 	st := b.Status()
 	if o.Class != gateway.IntentNotSent || o.Reason != "skipped_budget" || m.cmgs() != 0 || !st.Expired || st.Sent != 0 {
 		t.Fatalf("queued past the end: %+v, %d CMGS, bundle %+v; want refused on the loop, nothing sent", o, m.cmgs(), st)

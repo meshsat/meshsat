@@ -140,6 +140,19 @@ func reviewBundleGateway(t *testing.T, m *reviewBundleModem) (*gateway.CellularG
 	return g, tr, b
 }
 
+// waitQueued waits, at most two seconds, until n commands wait for the
+// loop.
+func waitQueued(t *testing.T, tr *transport.DirectCellTransport, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for transport.SMSQueueLenForTest(tr) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d commands never queued", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func reviewBundleSend(g *gateway.CellularGateway, text string) gateway.IntentOutcome {
 	return g.IntentSend(context.Background(), gateway.IntentSend{Destination: "+15550000000", Text: text, CorrValue: text})
 }
@@ -382,13 +395,9 @@ func TestSMSBundle_QueuedBehindIsCheckedOnTheLoop(t *testing.T) {
 	release, done := transport.HoldSMSLoopForTest(tr)
 	results := make(chan gateway.IntentOutcome, 2)
 	go func() { results <- reviewBundleSend(g, "review first") }()
-	for transport.SMSQueueLenForTest(tr) < 1 {
-		time.Sleep(time.Millisecond)
-	}
+	waitQueued(t, tr, 1)
 	go func() { results <- reviewBundleSend(g, "review second") }()
-	for transport.SMSQueueLenForTest(tr) < 2 {
-		time.Sleep(time.Millisecond)
-	}
+	waitQueued(t, tr, 2)
 	release()
 	<-done
 	a, c := <-results, <-results
