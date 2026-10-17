@@ -462,3 +462,32 @@ func TestTetraMissingPartGoesOnWithTheGapMarked(t *testing.T) {
 		t.Fatal("the part never went on")
 	}
 }
+
+// A first open that fails (the 17 Oct 2026 boot: the driver refused the
+// modem-line ioctl) is retried in the background, because the reconcile at
+// boot starts a gateway once and never again.
+func TestTetraFirstOpenFailsThenConnectsInTheBackground(t *testing.T) {
+	f := newTetraFake(1)
+	var opens atomic.Int32
+	g := NewTetraGateway(DefaultTetraConfig(), "tetra_0", func() string { return "/dev/ttyUSB1" })
+	g.open = func(p string) (io.ReadWriteCloser, error) {
+		if opens.Add(1) == 1 {
+			return nil, errors.New("open /dev/ttyUSB1: inappropriate ioctl for device")
+		}
+		return f.open(p)
+	}
+	if err := g.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned %v; it must keep trying", err)
+	}
+	defer g.Stop()
+	if g.Status().Connected {
+		t.Fatal("connected without a radio")
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	for !g.Status().Connected {
+		if time.Now().After(deadline) {
+			t.Fatalf("never connected: %+v", g.TetraStatus())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
