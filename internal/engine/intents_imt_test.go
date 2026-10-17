@@ -286,3 +286,36 @@ func TestIntentIMT_NoSkyPastTheQueueAllowance(t *testing.T) {
 		t.Fatalf("IMT route facts %q", facts)
 	}
 }
+
+// A stale or contradictory result from the modem side (an ack the helper
+// says came for a payload it never supplied) never makes the ledger record
+// acceptance or a charge: the transmission is unknown, its price possible,
+// nothing is resent, and the intent closes "may have been sent", not
+// "accepted". [review IMT-R1]
+func TestIntentIMT_AContradictoryAckIsNeverAcceptance(t *testing.T) {
+	h := newIntentHarness(t)
+	modem := &imtModem{answers: []transport.IMTSubmit{{Phase: transport.IMTUnknown, Status: "mo_ack_received", Inconsistent: true}}}
+	useIMT(t, h, modem, ifaceProv{})
+	id := h.submit(imtContact(h, imtDest), "x", directory.StrategyPrimaryOnly)
+	h.work("iridium_imt_0")
+	h.drain()
+	s := h.snap(id)
+	tx := s.Transmissions[0]
+	if tx.OutcomeClass != database.ClassUnknown || tx.AcceptedBy != "" || tx.ChargedMinor != 0 || !strings.Contains(tx.Detail, "contradicts itself") {
+		t.Fatalf("transmission %+v", tx)
+	}
+	if _, inc, pos := intentMoney(t, h, id); inc != 0 || pos != 17 {
+		t.Fatalf("incurred %d possible %d; want 0, 17", inc, pos)
+	}
+	h.clock.Advance(5 * time.Minute)
+	h.esc.Heartbeat()
+	h.drain()
+	h.due()
+	h.work("iridium_imt_0")
+	if modem.count() != 1 {
+		t.Fatalf("%d MOs", modem.count())
+	}
+	if s := h.snap(id); s.Intent.Outcome != database.OutcomeMayHaveBeenSent {
+		t.Fatalf("outcome %s; want may_have_been_sent", s.Intent.Outcome)
+	}
+}

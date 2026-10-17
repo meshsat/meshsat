@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -144,8 +145,11 @@ type jsprConn struct {
 // newJSPRConn wraps an already-opened serial port for JSPR communication.
 func newJSPRConn(port jsprPort) *jsprConn {
 	c := &jsprConn{
-		port:    port,
-		moRef:   0,
+		port: port,
+		// A random start, so the first send after a restart does not reuse
+		// the reference of a send the modem may still answer from before.
+		// [MESHSAT-1584]
+		moRef:   rand.IntN(100),
 		pending: make(map[string]*pendingRequest),
 		writeCh: make(chan jsprWriteRequest, 4),
 	}
@@ -962,21 +966,22 @@ func (c *jsprConn) jsprCheckProvisioning() ([]jsprProvisioningTopic, error) {
 // Handles the full flow: messageOriginate → segment responses → final status.
 // Returns final MO status string and any error.
 func (c *jsprConn) jsprSendMO(topicID int, payload []byte) (string, error) {
-	r, err := c.jsprSendMOResult(topicID, payload, false)
+	r, err := c.jsprSendMOResult(topicID, payload, c.nextRef(), false)
 	return r.Status, err
 }
 
-// jsprSendMOResult is jsprSendMO with the whole account of the send. strict
-// takes from the helper only a result tagged with this send's reference: a
-// delivery intent's MO must not be booked with another reply. [MESHSAT-1584]
-func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, strict bool) (moResult, error) {
+// jsprSendMOResult is jsprSendMO with the whole account of the send, under
+// the request_reference ref the caller took with nextRef (so it can name
+// this send to a cancel). strict takes from the helper only a result
+// tagged with ref: a delivery intent's MO must not be booked with another
+// reply. [MESHSAT-1584]
+func (c *jsprConn) jsprSendMOResult(topicID int, payload []byte, ref int, strict bool) (moResult, error) {
 	if len(payload) > jsprMaxPayload {
 		return moResult{Supplied: moSuppliedNo}, fmt.Errorf("payload too large: %d bytes (max %d)", len(payload), jsprMaxPayload)
 	}
 
 	// Append CRC to payload
 	dataWithCRC := appendIMTCRC(payload)
-	ref := c.nextRef()
 
 	// If using the helper subprocess, delegate the entire MO flow to it.
 	// The helper responds to segment requests inline on the serial thread,

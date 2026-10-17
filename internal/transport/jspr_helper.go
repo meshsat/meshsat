@@ -293,14 +293,17 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 	return nil
 }
 
-// CancelMO asks the helper to cancel the MO it is sending, with the
+// CancelRef asks the helper to cancel the MO that carried ref, with the
 // official messageOriginateStatus cancel. The send's own result still
 // arrives as usual: cancelled, or mo_ack_received when it was too late.
-// False when no MO is with the helper. [MESHSAT-1282]
-func (h *jsprHelperPort) CancelMO() bool {
+// The caller names the send it decided to cancel; this never looks up
+// whichever send is current, so a cancel decided for one send cannot
+// land on the next (review IMT-R2), and the helper drops a cancel for a
+// send that is no longer its own. False when that send is no longer with
+// the helper. [MESHSAT-1282, MESHSAT-1584]
+func (h *jsprHelperPort) CancelRef(ref int) bool {
 	h.mu.Lock()
-	ref := h.moRef
-	inFlight := ref != 0 && time.Now().Before(h.moInFlightUntil)
+	inFlight := ref != 0 && h.moRef == ref && time.Now().Before(h.moInFlightUntil)
 	h.mu.Unlock()
 	if !inFlight {
 		return false
