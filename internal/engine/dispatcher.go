@@ -108,8 +108,7 @@ type Dispatcher struct {
 	routingIdentity *routing.Identity
 
 	// DTN (MESHSAT-408)
-	fragmentMgr *ReassemblyBuffer
-	custodyMgr  *CustodyManager
+	custodyMgr *CustodyManager
 
 	// Directory-backed recipient resolution (MESHSAT-544 / S2-01).
 	// Nil until [Dispatcher.SetRecipientResolver] is called; when nil,
@@ -274,11 +273,6 @@ func (d *Dispatcher) SetPassStateProvider(ps PassStateProvider) {
 // SetRoutingIdentity sets the routing identity for delivery confirmations.
 func (d *Dispatcher) SetRoutingIdentity(id *routing.Identity) {
 	d.routingIdentity = id
-}
-
-// SetFragmentManager registers the DTN reassembly buffer for bundle fragmentation.
-func (d *Dispatcher) SetFragmentManager(fm *ReassemblyBuffer) {
-	d.fragmentMgr = fm
 }
 
 // SetCustodyManager registers the DTN custody transfer manager.
@@ -1037,35 +1031,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				del.SignerID = d.signing.SignerID()
 			}
 
-			// DTN bundle fragmentation (MESHSAT-408): if payload exceeds interface MTU,
-			// split into fragments and create one delivery per fragment.
-			if d.fragmentMgr != nil && desc.MaxPayload > 0 && len(wire) > desc.MaxPayload {
-				bundleID, fragments, fragErr := Fragment(wire, desc.MaxPayload)
-				if fragErr == nil && len(fragments) > 1 {
-					log.Info().
-						Int("fragments", len(fragments)).
-						Int("mtu", desc.MaxPayload).
-						Int("payload", len(wire)).
-						Str("bundle_id", fmt.Sprintf("%x", bundleID[:8])).
-						Str("dest", destInterface).
-						Msg("DTN: payload exceeds MTU, fragmenting")
-
-					for fi, frag := range fragments {
-						fragDel := del // copy base delivery
-						fragDel.Payload = frag
-						fragDel.TextPreview = fmt.Sprintf("[frag %d/%d] %s", fi+1, len(fragments), preview)
-						if seq, seqErr := d.db.IncrementEgressSeq(destInterface); seqErr == nil {
-							fragDel.SeqNum = seq
-						}
-						if _, fragInsertErr := d.db.InsertDelivery(fragDel); fragInsertErr != nil {
-							log.Error().Err(fragInsertErr).Int("fragment", fi).Msg("DTN: failed to insert fragment delivery")
-						} else {
-							count++
-						}
-					}
-					continue // skip single-delivery insertion below
-				}
-			}
+			// No DTN fragmenting (MESHSAT-408's bundle fragments): nothing
+			// reassembles them, not this Bridge, the Hub nor the apps, and a
+			// text bearer sends a row's preview, so each fragment went out as
+			// "[frag n/m]" and the same text again. The row goes whole and the
+			// bearer's own limit applies, as on a direct send. [MESHSAT-1584,
+			// r3 F8, B12]
 
 			delID, err := d.db.InsertDelivery(del)
 			if err != nil {

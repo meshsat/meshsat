@@ -282,3 +282,27 @@ func (cm *CustodyManager) Clear() {
 		}
 	}
 }
+
+// AcceptCustody queues the payload of a custody offer this node takes, for
+// its own mesh: on the enabled interface of channel type "mesh" (mesh_0),
+// whose worker sends it. It returns the row's id; with no enabled mesh
+// interface it queues nothing and fails, and the caller sends no ACK. The
+// accept used to queue on channel "mesh", which no worker serves (workers
+// run per interface id), while the ACK told the offering node custody was
+// taken: the payload was lost with nobody told. [MESHSAT-1584, r3 F13,
+// B12]
+func (d *Dispatcher) AcceptCustody(payload []byte) (int64, error) {
+	ifaces, err := d.db.GetInterfacesByType("mesh")
+	if err != nil {
+		return 0, fmt.Errorf("custody: look up the mesh interface: %w", err)
+	}
+	for _, iface := range ifaces {
+		if iface.Enabled {
+			// Custody-transferred bundles carry no precedence on the wire;
+			// "" lets the schema default (Routine) win.
+			id, _, err := d.QueueDirectSend(iface.ID, string(payload), "")
+			return id, err
+		}
+	}
+	return 0, fmt.Errorf("custody: no enabled mesh interface to deliver to")
+}
