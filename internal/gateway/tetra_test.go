@@ -23,6 +23,7 @@ type tetraFake struct {
 	pdus     []string
 	mode     int
 	refuse   bool
+	collide  bool // the radio takes the SDS, then reports it not sent
 	toGW     *io.PipeWriter
 	closeAll func()
 }
@@ -72,7 +73,7 @@ func (f *tetraFake) serve(r io.Reader, w io.Writer) {
 		cmd = strings.TrimSpace(cmd)
 		f.mu.Lock()
 		f.cmds = append(f.cmds, cmd)
-		mode, refuse := f.mode, f.refuse
+		mode, refuse, collide := f.mode, f.refuse, f.collide
 		f.mu.Unlock()
 		switch {
 		case strings.HasPrefix(cmd, "AT+CMGS=") && !strings.HasSuffix(cmd, "?"):
@@ -97,6 +98,10 @@ func (f *tetraFake) serve(r io.Reader, w io.Writer) {
 			ref := "0"
 			if raw, err := hex.DecodeString(strings.TrimSpace(strings.TrimSuffix(data, "\x1a"))); err == nil && len(raw) > 2 {
 				ref = itoa(int(raw[2]))
+			}
+			if collide {
+				f.say(w, "+CMGS: 0", "", "OK", "+CME ERROR: 42", "+CMGS: 0,5,"+ref)
+				continue
 			}
 			f.say(w, "+CMGS: 0", "", "OK", "+CMGS: 0,4,"+ref)
 		case cmd == "ATI":
@@ -518,5 +523,31 @@ func TestTetraTooLongIsPermanentAndTheEdgeFits(t *testing.T) {
 	err := g.Forward(context.Background(), &transport.MeshMessage{DecodedText: strings.Repeat("e", 127), AsWritten: true})
 	if !errors.Is(err, transport.ErrPayloadTooLong) {
 		t.Fatalf("+CME ERROR: 24 mapped to %v", err)
+	}
+}
+
+// A send the radio reports not sent (the 17 Oct 2026 collision) is an
+// error the delivery worker retries, not "delivered".
+func TestTetraRadioNotSentIsAFailure(t *testing.T) {
+	f := newTetraFake(1)
+	g := startTetra(t, f, DefaultTetraConfig())
+	f.mu.Lock()
+	f.collide = true
+	f.mu.Unlock()
+	err := g.Forward(context.Background(), &transport.MeshMessage{DecodedText: "lost", AsWritten: true})
+	if !errors.Is(err, tetra.ErrRadioNotSent) {
+		t.Fatalf("collision: %v", err)
+	}
+	if errors.Is(err, transport.ErrNotSubmitted) || errors.Is(err, transport.ErrPayloadTooLong) || errors.Is(err, transport.ErrNotConnected) {
+		t.Fatalf("collision mapped to a sentinel the worker treats differently: %v", err)
+	}
+	if st := g.TetraStatus(); st.NotSent != 1 || st.MessagesOut != 0 {
+		t.Fatalf("counters %+v", st)
+	}
+	f.mu.Lock()
+	f.collide = false
+	f.mu.Unlock()
+	if err := g.Forward(context.Background(), &transport.MeshMessage{DecodedText: "again", AsWritten: true}); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 }

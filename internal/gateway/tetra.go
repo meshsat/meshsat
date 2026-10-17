@@ -56,8 +56,8 @@ type TetraGateway struct {
 	asmMu sync.Mutex // parts of split texts waiting for the rest
 	asm   map[string]*tetraAssembly
 
-	msgsIn, msgsOut, errs, reports, refusedLong, nonText atomic.Int64
-	lastIn, lastOut                                      atomic.Int64
+	msgsIn, msgsOut, errs, reports, refusedLong, nonText, notSent atomic.Int64
+	lastIn, lastOut                                               atomic.Int64
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -499,6 +499,15 @@ func (g *TetraGateway) Forward(ctx context.Context, msg *transport.MeshMessage) 
 			case errors.As(err, &cme) && i == 0:
 				// The radio refused before anything went on air.
 				return fmt.Errorf("tetra: the radio refused the SDS to %s: %v: %w", dest, err, transport.ErrNotSubmitted)
+			case errors.Is(err, tetra.ErrRadioNotSent):
+				// The radio took it and then said it did not go, as when
+				// both kits sent at the same instant (17 Oct 2026: +CME
+				// ERROR: 42 and status 5, nothing arrived). The delivery
+				// is retried on the channel's clock; not ErrNotSubmitted,
+				// because what went on air in a collision is not known.
+				g.notSent.Add(1)
+				log.Warn().Err(err).Str("to", dest).Int("part", i+1).Int("parts", len(parts)).
+					Msg("tetra: the radio reports the SDS not sent (the channel was busy?); the delivery is retried")
 			case i > 0:
 				log.Warn().Str("to", dest).Int("part", i+1).Int("parts", len(parts)).
 					Msg("tetra: a later part failed; the retry sends every part again")
@@ -722,6 +731,7 @@ type TetraStatus struct {
 	Reports        int64          `json:"reports"`
 	RefusedTooLong int64          `json:"refused_too_long"`
 	NonTextIn      int64          `json:"non_text_in"`
+	NotSent        int64          `json:"not_sent"` // the radio took an SDS and reported it not sent (busy channel)
 	LastIn         *time.Time     `json:"last_in,omitempty"`
 	LastOut        *time.Time     `json:"last_out,omitempty"`
 }
@@ -749,6 +759,7 @@ func (g *TetraGateway) TetraStatus() TetraStatus {
 		Reports:        g.reports.Load(),
 		RefusedTooLong: g.refusedLong.Load(),
 		NonTextIn:      g.nonText.Load(),
+		NotSent:        g.notSent.Load(),
 	}
 	if g.state == tetraConnected && !g.since.IsZero() {
 		t := g.since

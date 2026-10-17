@@ -27,6 +27,38 @@ type CMEError struct{ Code int }
 
 func (e *CMEError) Error() string { return fmt.Sprintf("tetra: +CME ERROR: %d", e.Code) }
 
+// ErrRadioNotSent is wrapped by a send the radio took (+CMGS and OK) and
+// then reported as not sent: a late +CMGS status other than 4, or a
+// +CME ERROR while its report was awaited. Seen on 17 Oct 2026 when both
+// kits sent at the same instant: the losing radio answered OK, then
+// +CME ERROR: 42 and +CMGS: 0,5,<ref>, and nothing arrived; every SDS
+// that arrived was reported 4. Whether anything went on air is not known.
+var ErrRadioNotSent = errors.New("tetra: the radio reports the SDS not sent")
+
+// sentStatus is the late +CMGS status of an SDS that went out.
+const sentStatus = 4
+
+// NotSentError says what the radio reported for a send it did not make.
+type NotSentError struct {
+	Status int // the late +CMGS status, -1 when no report came
+	CME    int // a +CME ERROR that came while the report was awaited, 0 none
+}
+
+func (e *NotSentError) Error() string {
+	msg := ErrRadioNotSent.Error()
+	if e.Status >= 0 {
+		msg += fmt.Sprintf(" (status %d", e.Status)
+	} else {
+		msg += " (no report"
+	}
+	if e.CME != 0 {
+		msg += fmt.Sprintf(", +CME ERROR: %d", e.CME)
+	}
+	return msg + ")"
+}
+
+func (e *NotSentError) Unwrap() error { return ErrRadioNotSent }
+
 // SendReport is the radio's late account of an SDS it sent:
 // +CMGS: <SDS instance>,<SDS status>,<message reference>. The MTP3550
 // sends it a moment after the OK, and not every time (17 Oct 2026: two of
@@ -48,6 +80,10 @@ type Session struct {
 	resp    chan string
 
 	reports chan SendReport
+	// awaitingReport routes a +CME ERROR to lateErrs while SendSDS waits
+	// for a report, instead of to OnLine.
+	awaitingReport atomic.Bool
+	lateErrs       chan int
 
 	OnSDS        func(Received)
 	OnLine       func(string) // an unsolicited line nothing else claimed
@@ -62,12 +98,13 @@ type Session struct {
 // NewSession starts reading the port. Set the callbacks before calling it.
 func NewSession(port io.ReadWriteCloser, onSDS func(Received), onLine func(string)) *Session {
 	s := &Session{
-		port:    port,
-		resp:    make(chan string, 64),
-		reports: make(chan SendReport, 8),
-		OnSDS:   onSDS,
-		OnLine:  onLine,
-		done:    make(chan struct{}),
+		port:     port,
+		resp:     make(chan string, 64),
+		reports:  make(chan SendReport, 8),
+		lateErrs: make(chan int, 8),
+		OnSDS:    onSDS,
+		OnLine:   onLine,
+		done:     make(chan struct{}),
 	}
 	go s.readLoop()
 	return s
@@ -150,6 +187,15 @@ func (s *Session) readLoop() {
 					ref, _ := strconv.Atoi(m[3])
 					select {
 					case s.reports <- SendReport{Instance: inst, Status: st, Ref: ref}:
+					default:
+					}
+					continue
+				}
+				if s.awaitingReport.Load() && !s.waiting.Load() &&
+					(strings.HasPrefix(line, "+CME ERROR:") || strings.HasPrefix(line, "+CMS ERROR:")) {
+					code, _ := strconv.Atoi(strings.TrimSpace(line[strings.Index(line, ":")+1:]))
+					select {
+					case s.lateErrs <- code:
 					default:
 					}
 					continue
@@ -369,7 +415,10 @@ var reportWait = 4 * time.Second
 
 // SendSDS sends one SDS type 4 PDU to dest (an SSI or TSI). It returns
 // once the radio took it (+CMGS: <instance> and OK) and its report came or
-// reportWait passed; report is nil when none came. The line is held from
+// reportWait passed. The report decides: status 4 is sent; another status,
+// or a +CME ERROR while the report is awaited, is a *NotSentError
+// (ErrRadioNotSent); no report at all counts as sent (one live send
+// arrived without one) and returns a nil report. The line is held from
 // the service selection to the report, so nothing the radio says late
 // lands in another command.
 func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte, bits int) (*SendReport, error) {
@@ -384,10 +433,13 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 	for drained := false; !drained; {
 		select {
 		case <-s.reports:
+		case <-s.lateErrs:
 		default:
 			drained = true
 		}
 	}
+	s.awaitingReport.Store(true)
+	defer s.awaitingReport.Store(false)
 	cmd := fmt.Sprintf("AT+CMGS=%s,%d", dest, bits)
 	raw := []byte(cmd + "\r\n" + strings.ToUpper(hex.EncodeToString(pdu)) + "\x1a")
 	lines, err := s.exchangeHeld(ctx, cmd, raw, 20*time.Second)
@@ -405,13 +457,23 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 	}
 	t := time.NewTimer(reportWait)
 	defer t.Stop()
+	cme := 0
 	for {
 		select {
+		case code := <-s.lateErrs:
+			cme = code // the report usually follows; keep waiting for it
 		case r := <-s.reports:
-			if r.Ref == int(ref) {
-				return &r, nil
+			if r.Ref != int(ref) {
+				continue
 			}
+			if r.Status != sentStatus || cme != 0 {
+				return &r, &NotSentError{Status: r.Status, CME: cme}
+			}
+			return &r, nil
 		case <-t.C:
+			if cme != 0 {
+				return nil, &NotSentError{Status: -1, CME: cme}
+			}
 			return nil, nil
 		case <-ctx.Done():
 			return nil, nil

@@ -119,8 +119,9 @@ type fakeRadio struct {
 	fromSession *io.PipeReader
 	mu          sync.Mutex
 	got         []string
-	late        string // sent after the next CMGS's OK
-	failCMGS    int    // +CME ERROR for the next CMGS
+	late        string   // sent after the next CMGS's OK
+	failCMGS    int      // +CME ERROR for the next CMGS
+	afterOK     []string // lines after the next CMGS's OK (a collision)
 }
 
 type pipePort struct {
@@ -176,8 +177,8 @@ func (f *fakeRadio) serve() {
 			}
 			f.mu.Lock()
 			f.got = append(f.got, strings.TrimSpace(strings.TrimSuffix(data, "\x1a")))
-			late, fail := f.late, f.failCMGS
-			f.late, f.failCMGS = "", 0
+			late, fail, after := f.late, f.failCMGS, f.afterOK
+			f.late, f.failCMGS, f.afterOK = "", 0, nil
 			f.mu.Unlock()
 			if fail != 0 {
 				f.say("+CME ERROR: 3")
@@ -187,6 +188,7 @@ func (f *fakeRadio) serve() {
 			if late != "" {
 				f.say(late)
 			}
+			f.say(after...)
 		case cmd == "ATI":
 			f.say("Manufacturer: Motorola Solutions", "Model Type: MTP3550 350-470MHz PTBP952HE", "TEI: 00016B2B2264210",
 				"ITSI: 7530236100000100", "GTSI: 7530236100002000", "Radio Ver: R35.000.9426", "", "OK")
@@ -326,5 +328,53 @@ func TestSessionEndsWhenThePortCloses(t *testing.T) {
 	}
 	if _, err := s.Command(context.Background(), "AT", time.Second); !errors.Is(err, ErrClosed) {
 		t.Fatalf("command on a closed session: %v", err)
+	}
+}
+
+// The collision of 17 Oct 2026: both kits sent at once; the losing radio
+// answered OK, then +CME ERROR: 42 and +CMGS: 0,5,<ref>, and nothing
+// arrived. SendSDS must say so.
+func TestSendSDSReportsARadioThatDidNotSend(t *testing.T) {
+	old := reportWait
+	reportWait = 500 * time.Millisecond
+	defer func() { reportWait = old }()
+	f, port := newFakeRadio(t)
+	var unsolicited []string
+	var mu sync.Mutex
+	s := NewSession(port, nil, func(l string) { mu.Lock(); unsolicited = append(unsolicited, l); mu.Unlock() })
+	defer s.Close()
+	ctx := context.Background()
+	pdu, bits := EncodeText(0x10, "lost in a collision")
+
+	cases := []struct {
+		after  []string
+		status int
+		cme    int
+	}{
+		{[]string{"+CME ERROR: 42", "+CMGS: 0,5,16"}, 5, 42}, // as seen live
+		{[]string{"+CMGS: 0,5,16"}, 5, 0},                    // status alone
+		{[]string{"+CME ERROR: 42"}, -1, 42},                 // error, no report
+	}
+	for _, c := range cases {
+		f.mu.Lock()
+		f.afterOK = c.after
+		f.mu.Unlock()
+		_, err := s.SendSDS(ctx, "2000", 0x10, pdu, bits)
+		var ns *NotSentError
+		if !errors.Is(err, ErrRadioNotSent) || !errors.As(err, &ns) || ns.Status != c.status || ns.CME != c.cme {
+			t.Fatalf("after %q: %v (%+v)", c.after, err, ns)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(unsolicited) != 0 {
+		t.Fatalf("a late +CME ERROR leaked to OnLine: %q", unsolicited)
+	}
+	// And a good send right after still goes.
+	f.mu.Lock()
+	f.afterOK = []string{"+CMGS: 0,4,16"}
+	f.mu.Unlock()
+	if rep, err := s.SendSDS(ctx, "2000", 0x10, pdu, bits); err != nil || rep == nil || rep.Status != 4 {
+		t.Fatalf("good send: %+v %v", rep, err)
 	}
 }
