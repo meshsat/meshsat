@@ -63,12 +63,14 @@ func OpenKISSSerial(path string, baud int) (io.ReadWriteCloser, error) {
 }
 
 // OpenTetraPEI opens a Motorola TETRA radio's PEI (the AT port the
-// kernel's motorola_tetra driver makes of USB interface 0) with DTR and
-// RTS low and a 200 ms read timeout, so the PEI reader can tell silence
-// from a dead port. The baud rate is ignored on USB. Exported for the
-// TETRA gateway. [MESHSAT-1588]
+// kernel's motorola_tetra driver makes of USB interface 0) with a 200 ms
+// read timeout, so the PEI reader can tell silence from a dead port. The
+// modem lines are left alone: the driver has none, and asking for them
+// (TIOCMGET) fails the open with "inappropriate ioctl for device", as the
+// first deploy found on both kits on 17 Oct 2026. The baud rate is ignored
+// on USB. Exported for the TETRA gateway. [MESHSAT-1588]
 func OpenTetraPEI(path string) (io.ReadWriteCloser, error) {
-	port, err := openSerialLinesLow(path, 115200)
+	port, err := openSerial(path, 115200)
 	if err != nil {
 		return nil, err
 	}

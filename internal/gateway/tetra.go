@@ -134,17 +134,22 @@ func (g *TetraGateway) record(rec PacketRecord) {
 	sink(rec)
 }
 
-// Start opens the radio and sets it up; after that the gateway reopens it
-// by itself until Stop. A first open that fails is returned, so the
-// manager's retry ladder sees it.
+// Start opens the radio and sets it up, and from then on reopens it by
+// itself until Stop: a first open that fails is retried in the background
+// (the reconcile at boot starts a gateway once and never again). With no
+// radio on USB at all it returns transport.ErrNotConnected and runs
+// nothing.
 func (g *TetraGateway) Start(ctx context.Context) error {
+	if g.config.Port == "" && (g.findPort == nil || g.findPort() == "") {
+		g.setState(tetraDisconnected, "no TETRA radio on USB")
+		return fmt.Errorf("tetra: no radio: %w", transport.ErrNotConnected)
+	}
 	ctx, cancel := context.WithCancel(ctx)
+	g.cancel = cancel
 	sess, err := g.connect(ctx)
 	if err != nil {
-		cancel()
-		return err
+		log.Warn().Err(err).Msg("tetra: the radio did not open, retrying in the background")
 	}
-	g.cancel = cancel
 	g.wg.Add(1)
 	go g.run(ctx, sess)
 	return nil
