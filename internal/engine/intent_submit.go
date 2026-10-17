@@ -596,9 +596,30 @@ func classifyMeshReceipt(t database.DeliveryTransmission, e database.DeliveryEvi
 		return "relay_ack", "radio", "unauthenticated", ""
 	case e.CorrPeer == t.CorrPeer:
 		return "nak:" + name, "destination_node", "unauthenticated", ""
+	case e.Source == meshOwnRadio && meshLocalRefusal[reason]:
+		// Our own radio refused the packet and sent nothing (live, 17 Oct
+		// 2026: a DM to a node whose public key the radio did not have,
+		// PKI_SEND_FAIL_PUBLIC_KEY): the transmission is not sent, whatever
+		// the serial handoff said. [MESHSAT-1584]
+		return "dropped:" + name, meshOwnRadio, "unauthenticated", ""
 	}
 	return "nak:" + name, "radio", "unauthenticated", ""
 }
+
+// meshOwnRadio is the source of a ROUTING_APP answer our own radio
+// addressed to itself (from = to = our node): the radio's verdict on a
+// packet we handed it, not a relay's or the destination's.
+const meshOwnRadio = "own_radio"
+
+// meshLocalRefusal are the Routing.Error values with which our own radio
+// refuses a packet before anything goes on air (Meshtastic mesh.proto):
+// NO_INTERFACE 4, NO_CHANNEL 6, TOO_LARGE 7 ("exceeds interface MTU after
+// encoding"), DUTY_CYCLE_LIMIT 9 ("cannot send currently"), PKI_FAILED 34
+// ("did not send the message at all"), RATE_LIMIT_EXCEEDED 38,
+// PKI_SEND_FAIL_PUBLIC_KEY 39 ("no public key for the remote node"). The
+// same codes from a relay mean the packet left us; MAX_RETRANSMIT and the
+// rest mean it was sent and nobody answered.
+var meshLocalRefusal = map[uint64]bool{4: true, 6: true, 7: true, 9: true, 34: true, 38: true, 39: true}
 
 // MeshRoutingReceipt takes a ROUTING_APP packet from the mesh (r3 B7(a)):
 // stored as evidence and matched by its request_id to the transmission
@@ -621,8 +642,12 @@ func (e *Escalator) MeshRoutingReceipt(ifaceID string, msg transport.MeshMessage
 	}
 	// What the answer said, kept with it: an answer that overtakes its
 	// send's finalization is matched later from this (reconcile).
+	source := "radio"
+	if msg.From != 0 && msg.From == msg.To {
+		source = meshOwnRadio
+	}
 	ev := database.DeliveryEvidence{
-		Source: "radio", Event: fmt.Sprintf("routing:%d:%s", reason, name), Trust: "unauthenticated",
+		Source: source, Event: fmt.Sprintf("routing:%d:%s", reason, name), Trust: "unauthenticated",
 		CorrKind: meshCorrKind, CorrValue: fmt.Sprintf("%08x", msg.RequestID), CorrScope: ifaceID, CorrPeer: fmt.Sprintf("!%08x", msg.From),
 	}
 	stored, err := e.db.RecordEvidence(ev, meshCorrWindowS, func(t database.DeliveryTransmission) (string, string, string, string) {

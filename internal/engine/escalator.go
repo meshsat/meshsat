@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -433,6 +434,7 @@ type rowFacts struct {
 	handedOff bool // a transmission of this row reached the adapter
 	completed bool // matched completion evidence on one of its transmissions
 	noReceipt bool // matched evidence that no receipt will come (a NAK)
+	dropped   bool // matched evidence that our own radio sent nothing
 }
 
 func planEntry(plan []database.RoutePlanEntry, idx int) database.RoutePlanEntry {
@@ -462,10 +464,13 @@ func factsOf(s *database.IntentSnapshot) []rowFacts {
 		if f == nil || !ev.Matched {
 			continue
 		}
-		if ev.Completes != "" {
+		switch {
+		case ev.Completes != "":
 			f.completed = true
-		} else if len(ev.Event) >= 3 && ev.Event[:3] == "nak" {
+		case strings.HasPrefix(ev.Event, "nak"):
 			f.noReceipt = true
+		case strings.HasPrefix(ev.Event, "dropped"):
+			f.noReceipt, f.dropped = true, true
 		}
 	}
 	return out
@@ -532,9 +537,12 @@ func outcomeRule(s *database.IntentSnapshot) string {
 			return ev.Completes
 		}
 	}
+	dropped := droppedTransmissions(s)
 	accepted, unknown := false, false
 	for _, t := range s.Transmissions {
 		switch {
+		case dropped[t.ID]:
+			// Our own radio sent nothing: not accepted by anyone.
 		case t.State == database.TxDone && t.OutcomeClass == database.ClassAccepted:
 			accepted = true
 		case t.State == database.TxDone && t.OutcomeClass == database.ClassUnknown, t.State == database.TxHandedOff:
@@ -548,6 +556,19 @@ func outcomeRule(s *database.IntentSnapshot) string {
 		return database.OutcomeMayHaveBeenSent
 	}
 	return database.OutcomeFailed
+}
+
+// droppedTransmissions are the transmissions our own radio refused and sent
+// nothing of (matched "dropped" evidence, classifyMeshReceipt): the serial
+// handoff made them accepted, the radio's own NAK says nothing left.
+func droppedTransmissions(s *database.IntentSnapshot) map[int64]bool {
+	m := map[int64]bool{}
+	for _, ev := range s.Evidence {
+		if ev.Matched && ev.TransmissionID != 0 && strings.HasPrefix(ev.Event, "dropped") {
+			m[ev.TransmissionID] = true
+		}
+	}
+	return m
 }
 
 // outcomeStrength orders outcomes for T14: evidence beats acceptance beats
@@ -574,7 +595,11 @@ func possibleDuplicate(s *database.IntentSnapshot) bool {
 		return true
 	}
 	rows := map[int64]bool{}
+	dropped := droppedTransmissions(s)
 	for _, t := range s.Transmissions {
+		if dropped[t.ID] {
+			continue // our own radio sent nothing of it
+		}
 		if t.State == database.TxHandedOff || (t.State == database.TxDone && t.OutcomeClass != database.ClassNotSent) {
 			rows[t.AttemptID] = true
 		}
