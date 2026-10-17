@@ -205,6 +205,12 @@ func (s *Session) readLoop() {
 					case s.resp <- line:
 					default:
 					}
+					// A command's final line ends it here, on the reader:
+					// what the radio says next (a send's late +CME ERROR
+					// right after its OK) is late, not this command's.
+					if isFinal(line) {
+						s.waiting.Store(false)
+					}
 					continue
 				}
 				if s.OnLine != nil {
@@ -226,6 +232,12 @@ func (s *Session) readLoop() {
 			return
 		}
 	}
+}
+
+// isFinal says whether a line ends an AT command's answer.
+func isFinal(line string) bool {
+	return line == "OK" || line == "ERROR" ||
+		strings.HasPrefix(line, "+CME ERROR:") || strings.HasPrefix(line, "+CMS ERROR:")
 }
 
 func indexNL(b []byte) int {
