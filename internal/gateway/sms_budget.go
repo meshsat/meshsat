@@ -515,7 +515,10 @@ func (b *SMSBudget) sendAlert(remaining int) {
 // alone. Sent needs Size. A new Size records a top-up: its ExpiresAt is the
 // new bundle's end, or not known when none is given (the old end belonged
 // to the old bundle). ExpiresAt without Size corrects the end;
-// ClearExpiry forgets it. [MESHSAT-1161, MESHSAT-1584]
+// ClearExpiry forgets it. The end is kept to the whole second (a fraction
+// is dropped). From the end on, no new hold is given to a delivery
+// intent's SMS; a hold taken before it goes on (this is the local
+// boundary, not the carrier's cut-off). [MESHSAT-1161, MESHSAT-1584]
 type SMSBundleUpdate struct {
 	Size, Sent, WarnAt *int
 	AlertNumber        *string
@@ -597,7 +600,9 @@ func (b *SMSBudget) Update(u SMSBundleUpdate) error {
 	newExpires, expiryChanged := b.expiresAt, false
 	switch {
 	case u.ExpiresAt != nil:
-		newExpires, expiryChanged = u.ExpiresAt.UTC(), true
+		// Whole seconds, as it is stored, so the end and every decision
+		// on it are the same before and after a restart (B9EXP-R1).
+		newExpires, expiryChanged = u.ExpiresAt.UTC().Truncate(time.Second), true
 	case u.ClearExpiry || size != nil:
 		newExpires, expiryChanged = time.Time{}, true
 	}

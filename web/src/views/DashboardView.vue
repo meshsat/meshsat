@@ -2425,7 +2425,7 @@ function widgetGridClass(id) {
           <div v-if="store.cellularStatus?.sms_bundle?.size" class="flex justify-between" :title="store.cellularStatus.sms_bundle.reset_at ? 'bundle set ' + new Date(store.cellularStatus.sms_bundle.reset_at).toLocaleString() : ''">
             <span class="text-gray-500">SMS Credit</span>
             <span class="font-mono" :class="store.cellularStatus.sms_bundle.empty || store.cellularStatus.sms_bundle.expired ? 'text-red-400' : store.cellularStatus.sms_bundle.low ? 'text-amber-400' : 'text-gray-300'">
-              {{ store.cellularStatus.sms_bundle.remaining }} of {{ store.cellularStatus.sms_bundle.size }} left{{ store.cellularStatus.sms_bundle.uncertain ? ', ' + store.cellularStatus.sms_bundle.uncertain + ' unconfirmed' : '' }}{{ store.cellularStatus.sms_bundle.expires_at ? (store.cellularStatus.sms_bundle.expired ? ', ended ' : ', ends ') + new Date(store.cellularStatus.sms_bundle.expires_at).toLocaleDateString() : '' }}{{ store.cellularStatus.sms_bundle.low ? ', top up' : '' }}
+              {{ store.cellularStatus.sms_bundle.remaining }} of {{ store.cellularStatus.sms_bundle.size }} left{{ store.cellularStatus.sms_bundle.uncertain ? ', ' + store.cellularStatus.sms_bundle.uncertain + ' unconfirmed' : '' }}{{ store.cellularStatus.sms_bundle.expires_at ? (store.cellularStatus.sms_bundle.expired ? ', ended ' : ', ends ') + new Date(store.cellularStatus.sms_bundle.expires_at).toLocaleDateString() : ', expiry unknown' }}{{ store.cellularStatus.sms_bundle.low ? ', top up' : '' }}
             </span>
           </div>
           <div v-if="store.cellularDataStatus" class="flex justify-between">
