@@ -533,6 +533,7 @@ func (g *APRSGateway) aprsISStatus() map[string]interface{} {
 		"errors":              g.errors.Load(),
 		"bad_frames":          g.badFrames.Load(),
 		"third_party_dropped": g.thirdPartyDropped.Load(),
+		"duplicates_dropped":  g.rxDuplicates.Load(),
 		"acks_sent":           g.acksSent.Load(),
 		"acks_received":       g.acksReceived.Load(),
 		"heard_count":         len(g.tracker.GetHeardStations()),
