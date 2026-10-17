@@ -120,7 +120,9 @@ func BuildIntentView(s *database.IntentSnapshot) IntentView {
 				addFact("cancelled")
 			case database.AttemptSuperseded:
 				if r.Reason == reasonOffline {
-					addFact("skipped: offline past its queue allowance")
+					// Down, or tried and not out (a 9704 with no sky): not
+					// "offline" alone. [MESHSAT-1584]
+					addFact("skipped: not sent within its queue allowance")
 				}
 			case database.AttemptNotSent:
 				addFact("not sent: " + r.Reason)
