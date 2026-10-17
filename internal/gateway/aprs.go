@@ -48,6 +48,8 @@ type APRSGateway struct {
 	// stayed in the heard list instead of entering the message pipeline.
 	// [MESHSAT-1128]
 	thirdPartyDropped atomic.Int64
+	rxSeen            aprsRxSeen   // copies of a message already taken [MESHSAT-1584]
+	rxDuplicates      atomic.Int64 // copies dropped
 	lastActive        atomic.Int64
 	startTime         time.Time
 
@@ -362,6 +364,7 @@ func (g *APRSGateway) GetAPRSStatus() map[string]interface{} {
 		"bad_frames":          g.badFrames.Load(),
 		"repaired_frames":     g.kiss.Repaired.Load(),
 		"third_party_dropped": g.thirdPartyDropped.Load(),
+		"duplicates_dropped":  g.rxDuplicates.Load(),
 		"cts_deferred":        g.ctsDeferred.Load(),
 		"acks_sent":           g.acksSent.Load(),
 		"acks_received":       g.acksReceived.Load(),
@@ -794,6 +797,10 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			if ackID != "" && !g.isOwnSource(frame.Src) {
 				g.sendAck(frame.Src, ackID)
 			}
+			if g.rxDuplicate(srcAddr, ackID, body, true) {
+				log.Debug().Str("from", srcAddr).Str("ack_id", ackID).Msg("aprs: copy of a message already taken, acked and dropped")
+				continue
+			}
 			msg := InboundMessage{
 				Text:     body,
 				Source:   "aprs",
@@ -878,6 +885,10 @@ func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) {
 	}
 
 	text := g.formatInboundText(pkt)
+	if g.rxDuplicate(srcAddr, pkt.MsgID, text, false) {
+		log.Debug().Str("from", srcAddr).Str("msg_id", pkt.MsgID).Msg("aprs: copy of a message already taken, dropped")
+		return
+	}
 	msg := InboundMessage{
 		Text:     text,
 		Source:   "aprs",
