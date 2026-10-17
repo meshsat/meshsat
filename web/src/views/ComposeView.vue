@@ -19,16 +19,8 @@ const strategy = ref('')  // empty → server picks (contact policy → preceden
 const bearerOverride = ref('')  // single kind when Engineer wants to force one bearer
 const text = ref('')
 
-// One-tap team broadcast [MESHSAT-568]. The endpoint already
-// accepts {group_id} instead of {contact_id}; Compose just surfaces
-// a toggle + a group picker driven by contact.team distinctness.
-const groupMode = ref(false)
-const groupTeam = ref('')
-const teams = computed(() => {
-  const set = new Set()
-  for (const c of (store.directoryContacts || [])) if (c.team) set.add(c.team)
-  return Array.from(set).sort()
-})
+// No team broadcast here: the bridge has no team fan-out and answers a
+// group_id with 400 (it used to be offered and fail). [MESHSAT-1584]
 
 const sending = ref(false)
 const result = ref(null)
@@ -98,26 +90,54 @@ function newKey() {
   return 'spa-' + Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
 }
 
+// A definitive answer from the bridge: it refused the request before
+// anything was written (a 4xx: invalid, conflicting, too long, no route),
+// or its own "no bearer took it" (503 with its per-bearer body). Anything
+// else (no answer, a 500, or a 502/503/504 from something between) leaves
+// the first send unresolved: it may have been queued, so the key stays and
+// Send again retries the same message without sending it twice (review
+// B10-R1). [MESHSAT-1584]
+function definitive(e) {
+  if (!e.status) return false
+  if (e.status >= 400 && e.status < 500) return true
+  return e.status === 503 && !!e.body && Array.isArray(e.body.per_bearer)
+}
+
 function refusalText(e) {
   switch (e.status) {
     case 413: return 'Too long for every route this contact has.'
     case 422: return 'No route of this contact can carry this message.'
-    case 503: return 'No bearer took the message.'
+    case 503: if (definitive(e)) return 'No bearer took the message.'
+  }
+  if (!definitive(e)) {
+    const why = e.status ? `HTTP ${e.status}` : 'no answer'
+    return `Not known whether it was queued (${why}). Send again to retry the same message: it is not sent twice.`
   }
   return e.message || 'Send failed'
 }
 
 // The latest delivery intents to the picked contact (empty with delivery
-// intents off). [MESHSAT-1584]
+// intents off). Each answer belongs to the contact and the request that
+// asked: a slow answer for an earlier contact, or its error, never lands
+// under the one picked now (review B10-R2). [MESHSAT-1584]
 const recent = ref([])
+const recentFor = ref('')
 const openRecent = ref('')
+let recentGen = 0
 async function refreshRecent() {
-  if (groupMode.value || !contact.value?.id) { recent.value = []; return }
-  try { recent.value = (await store.fetchIntents(String(contact.value.id), 5)) || [] } catch { recent.value = [] }
+  const gen = ++recentGen
+  const id = contact.value?.id ? String(contact.value.id) : ''
+  if (!id) { recent.value = []; recentFor.value = ''; return }
+  let list = []
+  try { list = (await store.fetchIntents(id, 5)) || [] } catch { list = [] }
+  if (gen !== recentGen || id !== String(contact.value?.id || '')) return
+  recent.value = list.filter(r => r.contact_id === id)
+  recentFor.value = id
 }
-watch(contact, () => { openRecent.value = ''; refreshRecent() })
+watch(contact, () => { openRecent.value = ''; recent.value = []; recentFor.value = ''; refreshRecent() })
 const recentOthers = computed(() => {
   const shown = new Set(result.value?.intent_ids || [])
+  if (recentFor.value !== String(contact.value?.id || '')) return []
   return recent.value.filter(r => !shown.has(r.id))
 })
 function labelTone(o) {
@@ -131,7 +151,6 @@ function labelTone(o) {
 const canSend = computed(() => {
   if (sending.value) return false
   if (!text.value.trim()) return false
-  if (groupMode.value) return !!groupTeam.value
   return !!contact.value
 })
 
@@ -151,15 +170,7 @@ async function onSend() {
       text: text.value,
       precedence: precedence.value
     }
-    if (groupMode.value) {
-      // Team broadcast — dispatcher fans out to every contact with
-      // this team value via the directory_groups join. The backend
-      // accepts group_id as the team label for this MVP.
-      // [MESHSAT-568]
-      payload.group_id = groupTeam.value
-    } else {
-      payload.contact_id = String(contact.value.id)
-    }
+    payload.contact_id = String(contact.value.id)
     // Engineer-mode force single bearer via strategy=PRIMARY_ONLY and
     // a contact-scoped filter isn't supported yet — for now pass the
     // strategy through and let the dispatcher pick. A follow-up
@@ -173,9 +184,9 @@ async function onSend() {
     if (result.value?.queued) text.value = ''
     refreshRecent()
   } catch (e) {
-    // The bridge answered: nothing more to protect. Only a lost answer
-    // keeps the key for the retry.
-    if (e.status) pendingKey = ''
+    // A definitive refusal ends this message: the next Send is a new one.
+    // An unresolved answer keeps the key for the retry.
+    if (definitive(e)) pendingKey = ''
     if (e.body?.per_bearer) result.value = e.body
     error.value = refusalText(e)
   } finally {
@@ -188,30 +199,8 @@ async function onSend() {
   <div class="max-w-2xl mx-auto space-y-4">
     <h1 class="text-lg font-display font-semibold text-gray-200 tracking-wide">Compose</h1>
 
-    <!-- 1a. Single vs team toggle [MESHSAT-568] -->
-    <div v-if="teams.length" class="flex items-center gap-2 text-[10px]">
-      <button type="button" @click="groupMode = false"
-        class="px-3 py-1.5 rounded border"
-        :class="!groupMode ? 'border-tactical-iridium text-tactical-iridium bg-tactical-iridium/10' : 'border-tactical-border text-gray-500'">
-        One contact
-      </button>
-      <button type="button" @click="groupMode = true"
-        class="px-3 py-1.5 rounded border"
-        :class="groupMode ? 'border-tactical-iridium text-tactical-iridium bg-tactical-iridium/10' : 'border-tactical-border text-gray-500'">
-        Whole team
-      </button>
-    </div>
-
-    <!-- 1b. Contact picker OR team dropdown -->
-    <ContactPicker v-if="!groupMode" v-model="contact" source="directory" />
-    <div v-else>
-      <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">Team</label>
-      <select v-model="groupTeam"
-        class="w-full px-3 py-2 rounded bg-tactical-surface border border-tactical-border text-sm min-h-[48px]">
-        <option value="">Select a team…</option>
-        <option v-for="t in teams" :key="t" :value="t">{{ t }}</option>
-      </select>
-    </div>
+    <!-- 1. Contact picker (directory contacts) -->
+    <ContactPicker v-model="contact" source="directory" />
 
     <!-- 2. Bearer availability preview -->
     <div v-if="contact">

@@ -69,3 +69,27 @@ func TestListDirectoryContacts(t *testing.T) {
 		t.Fatalf("team red: %+v", red)
 	}
 }
+
+// A team send is refused as unsupported, not answered 503 as if a bearer
+// were down: the dispatcher has no team fan-out (review B10-R3).
+func TestSendToContact_TeamIsNotSupported(t *testing.T) {
+	s, store := testServerWithDispatcher(t, directory.KindSMS)
+	router := s.Router()
+	c := &directory.Contact{DisplayName: "Ann", Team: "red"}
+	if err := store.CreateContact(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{`{"group_id":"red","text":"team message"}`, `{"text":"to nobody"}`} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/messages/send-to-contact", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s; want 400", body, rr.Code, rr.Body.String())
+		}
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM message_deliveries`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d deliveries written (%v)", n, err)
+	}
+}

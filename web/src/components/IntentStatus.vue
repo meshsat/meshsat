@@ -2,11 +2,15 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
-// One delivery intent's status (MESHSAT_DELIVERY_INTENTS): the outcome in
-// the bridge's own words (r3 D11: "accepted, not confirmed" is never shown
-// as delivered), what is known per route, the money, and Cancel while it
-// runs. Polls GET /api/deliveries/intents/{id} while the intent is active:
-// every 2 s for the first 3 minutes, then every 10 s. [MESHSAT-1584]
+// One delivery intent's status (MESHSAT_DELIVERY_INTENTS): to whom, the
+// outcome in the bridge's own words (r3 D11: "accepted, not confirmed" is
+// never shown as delivered), what is known per route, the money, and
+// Cancel while it runs. Fetched when shown, even from a snapshot, then
+// polled while the intent is active (every 2 s for 3 minutes, then 10 s)
+// and, once closed, every 10 s for up to 15 minutes while a transmission
+// is still with a radio or modem: a closed intent's outcome and cost can
+// still change when that settles (review of B10). Refresh fetches it on
+// demand. [MESHSAT-1584]
 
 const props = defineProps({
   intentId: { type: String, required: true },
@@ -18,17 +22,33 @@ const store = useMeshsatStore()
 const view = ref(props.initial)
 const loadError = ref('')
 const cancelling = ref(false)
+const checkedAt = ref(null)
 let timer = null
 let startedAt = Date.now()
+let closedAt = 0
 let stopped = false
+let closedEmitted = false
 
 const active = computed(() => view.value?.state === 'active')
+// A transmission authorized or handed off and not yet done: its outcome
+// and charge are still to come.
+const unsettled = computed(() => (view.value?.routes || []).some(r =>
+  (r.attempts || []).some(a => (a.transmissions || []).some(t => t.state === 'authorized' || t.state === 'handed_off'))))
+
+const recipient = computed(() => {
+  const id = view.value?.contact_id
+  if (!id) return ''
+  const list = Array.isArray(store.directoryContacts) ? store.directoryContacts : []
+  const c = list.find(x => x.id === id)
+  return c ? c.display_name : id.slice(0, 8)
+})
 
 async function load() {
-  timer = null
+  if (timer) { clearTimeout(timer); timer = null }
   try {
     view.value = await store.fetchIntent(props.intentId)
     loadError.value = ''
+    checkedAt.value = new Date()
   } catch (e) {
     loadError.value = e.message || 'Status not available'
   }
@@ -38,19 +58,23 @@ async function load() {
 function schedule() {
   if (stopped || timer) return
   if (view.value && !active.value) {
-    emit('closed', view.value)
+    if (!closedAt) closedAt = Date.now()
+    if (!closedEmitted) { closedEmitted = true; emit('closed', view.value) }
+    if (unsettled.value && Date.now() - closedAt < 900000) timer = setTimeout(load, 10000)
     return
   }
   const every = Date.now() - startedAt < 180000 ? 2000 : 10000
   timer = setTimeout(load, loadError.value ? 10000 : every)
 }
 
-onMounted(() => { if (view.value && !active.value) return; load() })
+onMounted(load)
 onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer) })
 watch(() => props.intentId, () => {
   if (timer) clearTimeout(timer)
   timer = null
   startedAt = Date.now()
+  closedAt = 0
+  closedEmitted = false
   view.value = null
   load()
 })
@@ -99,8 +123,8 @@ function kindName(k) { return kinds[k] || (k || '').toLowerCase() }
 
 function when(ts) {
   if (!ts) return ''
-  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z')
-  return isNaN(d) ? ts : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const d = ts instanceof Date ? ts : new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z')
+  return isNaN(d) ? String(ts) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 </script>
 
@@ -116,7 +140,9 @@ function when(ts) {
           <div class="font-semibold text-sm" :class="tone" data-role="label">
             <span v-if="active" class="inline-block w-2 h-2 rounded-full bg-sky-400 animate-pulse mr-1.5 align-middle"></span>{{ view.label }}
           </div>
-          <div v-if="view.text" class="text-gray-500 truncate mt-0.5" :title="view.text">“{{ view.text }}”</div>
+          <div class="text-gray-500 truncate mt-0.5" data-role="recipient">
+            <span v-if="recipient">to {{ recipient }}</span><span v-if="recipient && view.text"> · </span><span v-if="view.text" :title="view.text">“{{ view.text }}”</span>
+          </div>
         </div>
         <button v-if="active" type="button" @click="onCancel" :disabled="cancelling"
           class="shrink-0 px-3 py-1.5 rounded border border-tactical-border text-gray-400 text-[11px] min-h-[36px] disabled:opacity-40">
@@ -158,8 +184,12 @@ function when(ts) {
         </div>
       </details>
 
-      <div class="text-[10px] text-gray-600">
-        {{ when(view.created_at) }}<span v-if="loadError" class="text-red-400"> · {{ loadError }}</span>
+      <div class="flex items-center justify-between gap-2 text-[10px] text-gray-600">
+        <span>
+          {{ when(view.created_at) }}<span v-if="checkedAt"> · checked {{ when(checkedAt) }}</span><span v-if="!active && unsettled"> · still settling</span><span v-if="loadError" class="text-red-400"> · {{ loadError }}</span>
+        </span>
+        <button v-if="!active" type="button" @click="load"
+          class="px-2 py-1 rounded border border-tactical-border text-gray-400 min-h-[32px]" data-role="refresh">Refresh</button>
       </div>
     </template>
   </div>

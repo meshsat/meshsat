@@ -19,7 +19,10 @@ import (
 // bearer picker. [MESHSAT-545]
 
 type sendToContactRequest struct {
-	ContactID  string `json:"contact_id,omitempty"`
+	ContactID string `json:"contact_id,omitempty"`
+	// GroupID is not supported: the dispatcher sends to one contact (or a
+	// raw address) and has no team fan-out, so a request with only a
+	// group_id is 400. [MESHSAT-1584]
 	GroupID    string `json:"group_id,omitempty"`
 	Text       string `json:"text"`
 	Precedence string `json:"precedence,omitempty"` // Override|Flash|Immediate|Priority|Routine|Deferred, or ACP-127 prosign
@@ -83,7 +86,8 @@ type sendToContactResponse struct {
 // @Description first submission; the same key with a different request is
 // @Description 409. Without a key a retried request sends again. 413: no
 // @Description route can carry a message that long; 422: no route of the
-// @Description contact can be used (per_bearer says why).
+// @Description contact can be used (per_bearer says why). A team send
+// @Description (group_id without contact_id) is not supported: 400.
 // @Tags messages
 // @Accept json
 // @Produce json
@@ -113,8 +117,14 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
 	}
-	if req.ContactID == "" && req.GroupID == "" && req.RawInterfaceID == "" {
-		writeError(w, http.StatusBadRequest, "contact_id, group_id, or raw_interface_id is required")
+	if req.ContactID == "" && req.RawInterfaceID == "" {
+		if req.GroupID != "" {
+			// The dispatcher has no team fan-out: this used to reach it and
+			// come back 503, which reads as a passing outage. [MESHSAT-1584]
+			writeError(w, http.StatusBadRequest, "sending to a team (group_id) is not supported; send to each contact")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "contact_id or raw_interface_id is required")
 		return
 	}
 
