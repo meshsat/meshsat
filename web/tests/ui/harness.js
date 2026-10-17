@@ -146,6 +146,14 @@ export async function startTick() {
   await flush()
 }
 
+// A closed card's one-minute check (IntentStatus RECONCILE_MS, review
+// EVT-R1): reconciling says the only timers left are that check, so the
+// card polls no faster than once a minute.
+export const RECONCILE_MS = 60000
+export function reconciling() {
+  return timers.size > 0 && [...timers.values()].every(t => t.ms === RECONCILE_MS)
+}
+
 export function label() {
   return document.querySelector('[data-role=label]').textContent.trim()
 }
