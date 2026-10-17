@@ -382,11 +382,12 @@ func (t *DirectIMTTransport) Send(ctx context.Context, data []byte) (*SatResult,
 	}
 	conn := t.conn
 	ref := conn.nextRef()
-	t.moCur = &moOp{ref: ref, cancellable: true}
+	op := &moOp{ref: ref, token: newMOOpToken(), cancellable: true}
+	t.moCur = op
 	t.mu.Unlock()
 	defer t.endMO()
 
-	r, err := conn.jsprSendMOResult(jsprRawTopic, data, ref, false)
+	r, err := conn.jsprSendMOResult(jsprRawTopic, data, ref, op.token, false)
 	status := r.Status
 	if err != nil {
 		return &SatResult{
@@ -1259,7 +1260,7 @@ func (t *DirectIMTTransport) CancelMO() bool {
 	if op == nil || !op.cancellable || !ok {
 		return false
 	}
-	return helper.CancelRef(op.ref)
+	return helper.CancelOp(op.token)
 }
 
 // imtCancelSnapshotHook is nil outside tests: a test pauses CancelMO here,

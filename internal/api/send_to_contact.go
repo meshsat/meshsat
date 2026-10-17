@@ -83,8 +83,11 @@ type sendToContactResponse struct {
 // @Description tried by the strategy (ORDERED_FALLBACK as well), and
 // @Description GET /api/deliveries/intents/{id} reports what is known. An
 // @Description Idempotency-Key header makes a retried request return the
-// @Description first submission; the same key with a different request is
-// @Description 409. Without a key a retried request sends again. 413: no
+// @Description first submission, with delivery intents on or off (off: its
+// @Description submission_id and the delivery rows it queued, existing
+// @Description true), also when the flag changed between the requests; the
+// @Description same key with a different request is 409. Without a key a
+// @Description retried request sends again. 413: no
 // @Description route can carry a message that long; 422: no route of the
 // @Description contact can be used (per_bearer says why). A team send
 // @Description (group_id without contact_id) is not supported: 400.
@@ -92,7 +95,7 @@ type sendToContactResponse struct {
 // @Accept json
 // @Produce json
 // @Param body body sendToContactRequest true "Target contact and message text"
-// @Param Idempotency-Key header string false "Retry protection for this request (intent path)"
+// @Param Idempotency-Key header string false "Retry protection for this request, with delivery intents on or off: a request again under the same key returns the first send's result and queues nothing"
 // @Success 200 {object} sendToContactResponse
 // @Success 207 {object} sendToContactResponse
 // @Failure 400 {object} map[string]string
@@ -236,6 +239,9 @@ func sendToContactResponseFrom(res engine.SendResult) sendToContactResponse {
 		resp.SubmissionID = sub.Submission.ID
 		resp.IntentIDs = sub.Submission.IntentIDs
 		resp.Existing = sub.Existing
+	} else if res.Legacy != nil {
+		// A keyed send outside delivery intents (B10-R4). [MESHSAT-1584]
+		resp.SubmissionID, resp.Existing = res.Legacy.ID, res.Existing
 	}
 	kinds := map[string]struct{}{}
 	for k := range res.DeliveryIDs {

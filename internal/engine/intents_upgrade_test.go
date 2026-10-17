@@ -239,13 +239,15 @@ func TestUpgradeV63DatabaseIsRepaired(t *testing.T) {
 	if _, err := db.Exec(`UPDATE schema_version SET version = 63`); err != nil {
 		t.Fatal(err)
 	}
-	// A v63 database has none of the later schema (v65 B5, v66 A-13): undo
-	// it, or reopening would add it twice. [MESHSAT-1584]
+	// A v63 database has none of the later schema (v65 B5, v66 A-13, v68
+	// B10-R4): undo it, or reopening would add it twice. [MESHSAT-1584]
 	for _, q := range []string{
 		`ALTER TABLE directory_dispatch_policy DROP COLUMN seeded`,
 		`DROP INDEX idx_delivery_tx_proof`,
 		`ALTER TABLE delivery_transmissions DROP COLUMN proof_hash`,
 		`ALTER TABLE delivery_transmissions DROP COLUMN proof_key`,
+		`ALTER TABLE delivery_submissions DROP COLUMN mode`,
+		`ALTER TABLE delivery_submissions DROP COLUMN legacy_result`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)

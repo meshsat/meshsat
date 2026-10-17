@@ -61,7 +61,8 @@ type jsprHelperPort struct {
 	// serial watchdog an MO waiting for a satellite looks exactly like a
 	// dead port. [MESHSAT-1282]
 	moInFlightUntil time.Time
-	moRef           int // request_reference of the MO with the helper, 0 when none
+	moRef           int    // request_reference of the MO with the helper, 0 when none
+	moOp            string // its op token, never reused (cancels name it) [MESHSAT-1584]
 }
 
 // startJSPRHelper launches the helper subprocess (Python or C).
@@ -143,7 +144,7 @@ func (h *jsprHelperPort) readLoop() {
 		h.lastRead = time.Now()
 		if msg.Target == "messageOriginateStatus" {
 			h.moInFlightUntil = time.Time{} // final status: the MO is over
-			h.moRef = 0
+			h.moRef, h.moOp = 0, ""
 		}
 		h.mu.Unlock()
 		h.byteCond.Signal()
@@ -248,7 +249,7 @@ func (h *jsprHelperPort) Write(data []byte) (int, error) {
 // SendMOCommand sends a send_mo command to the helper, which handles the entire
 // MO flow inline (messageOriginate + segment exchange + wait for status).
 // The helper returns the result as a mo_result message on stdout.
-func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, requestRef int, budget time.Duration) error {
+func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, requestRef int, op string, budget time.Duration) error {
 	cmdObj := struct {
 		Cmd              string `json:"cmd"`
 		TopicID          int    `json:"topic_id"`
@@ -256,6 +257,7 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 		Length           int    `json:"length"`
 		RequestReference int    `json:"request_reference"`
 		TimeoutS         int    `json:"timeout_s"`
+		Op               string `json:"op,omitempty"`
 	}{
 		Cmd:              "send_mo",
 		TopicID:          topicID,
@@ -263,6 +265,7 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 		Length:           length,
 		RequestReference: requestRef,
 		TimeoutS:         int(budget.Seconds()),
+		Op:               op,
 	}
 	cmdBytes, err := json.Marshal(cmdObj)
 	if err != nil {
@@ -283,7 +286,7 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 	h.mu.Lock()
 	h.lastRead = time.Now()
 	h.moInFlightUntil = time.Now().Add(jsprMOTimeout + 30*time.Second)
-	h.moRef = requestRef
+	h.moRef, h.moOp = requestRef, op
 	h.mu.Unlock()
 
 	_, writeErr := h.stdin.Write(cmdBytes)
@@ -293,27 +296,28 @@ func (h *jsprHelperPort) SendMOCommand(topicID int, dataB64 string, length int, 
 	return nil
 }
 
-// CancelRef asks the helper to cancel the MO that carried ref, with the
+// CancelOp asks the helper to cancel the MO that carried op, with the
 // official messageOriginateStatus cancel. The send's own result still
 // arrives as usual: cancelled, or mo_ack_received when it was too late.
-// The caller names the send it decided to cancel; this never looks up
-// whichever send is current, so a cancel decided for one send cannot
-// land on the next (review IMT-R2), and the helper drops a cancel for a
-// send that is no longer its own. False when that send is no longer with
-// the helper. [MESHSAT-1282, MESHSAT-1584]
-func (h *jsprHelperPort) CancelRef(ref int) bool {
+// The caller names the send it decided to cancel by its op token, which is
+// never reused: not by its request_reference, which wraps at 100, so a
+// cancel delayed past a whole cycle could otherwise name a later send
+// (review IMT-R2). This never looks up whichever send is current, and the
+// helper cancels only the send that carried op. False when that send is no
+// longer with the helper. [MESHSAT-1282, MESHSAT-1584]
+func (h *jsprHelperPort) CancelOp(op string) bool {
 	h.mu.Lock()
-	inFlight := ref != 0 && h.moRef == ref && time.Now().Before(h.moInFlightUntil)
+	inFlight := op != "" && h.moOp == op && time.Now().Before(h.moInFlightUntil)
 	h.mu.Unlock()
 	if !inFlight {
 		return false
 	}
 	cmd, _ := json.Marshal(struct {
-		Cmd              string `json:"cmd"`
-		RequestReference int    `json:"request_reference"`
-	}{"cancel_mo", ref})
+		Cmd string `json:"cmd"`
+		Op  string `json:"op"`
+	}{"cancel_mo", op})
 	if _, err := h.stdin.Write(append(cmd, '\n')); err != nil {
-		log.Warn().Err(err).Int("ref", ref).Msg("imt: write cancel_mo")
+		log.Warn().Err(err).Str("op", op).Msg("imt: write cancel_mo")
 		return false
 	}
 	return true

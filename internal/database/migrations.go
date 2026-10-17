@@ -1614,6 +1614,14 @@ var migrations = []string{
 			AND e.corr_kind = 'aprs_msgid' AND e.completes = 'acked_station')
 		AND NOT EXISTS (SELECT 1 FROM delivery_evidence e WHERE e.intent_id = delivery_intents.id AND e.matched = 1
 			AND e.completes = 'delivered_device');`,
+
+	// v68: B10-R4. A send-to-contact made outside delivery intents (the
+	// flag off) with an idempotency key is a submission too: mode 'legacy'
+	// and its result (the delivery rows it queued per bearer), written in
+	// the same transaction as those rows, so a retried request returns it
+	// in either mode instead of queueing the message again. [MESHSAT-1584]
+	`ALTER TABLE delivery_submissions ADD COLUMN mode TEXT NOT NULL DEFAULT 'intent';
+	ALTER TABLE delivery_submissions ADD COLUMN legacy_result TEXT NOT NULL DEFAULT '';`,
 }
 
 func (db *DB) migrate() error {

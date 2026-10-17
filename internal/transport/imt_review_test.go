@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -169,9 +170,13 @@ func TestReviewIMTCancelLegacyToIntentHandoff(t *testing.T) {
 	close(resume)
 	cancelled := <-cancelDone
 	<-intentDone
+	sends := f.cmds("send_mo")
+	if len(sends) != 2 || opOf(sends[0]) == "" || opOf(sends[0]) == opOf(sends[1]) {
+		t.Fatalf("each MO needs its own op token: %v", sends)
+	}
 	for _, c := range f.cmds("cancel_mo") {
-		if refOf(c) == intentRef {
-			t.Fatalf("the intent's MO (ref %d) was cancelled", intentRef)
+		if opOf(c) == opOf(sends[1]) {
+			t.Fatalf("the intent's MO (ref %d, op %s) was cancelled", intentRef, opOf(c))
 		}
 	}
 	t.Logf("legacy ref %d, intent ref %d, late cancel written: %v, commands %v", legacyRef, intentRef, cancelled, f.cmds("cancel_mo"))
@@ -213,5 +218,142 @@ func TestIMT_CancelledWhileQueuedDoesNotSubmit(t *testing.T) {
 	}
 	if n := len(f.cmds("send_mo")); n != 0 {
 		t.Fatalf("%d MOs started for callers cancelled while queued", n)
+	}
+}
+
+func opOf(cmd map[string]any) string { v, _ := cmd["op"].(string); return v }
+
+// The cumulative review's counterexample (17 Oct 2026, IMT-R2 residual), as
+// supplied: a cancel decided for a legacy MO and delayed across a whole
+// cycle of references, until the protected intent's MO carries the same
+// reference. It names the legacy MO's op token, which is never reused, so
+// it cancels nothing.
+func TestCumulativeIMTCancelAfterReferenceWrap(t *testing.T) {
+	snapped := make(chan struct{})
+	resume := make(chan struct{})
+	imtCancelSnapshotHook = func() { close(snapped); <-resume }
+	defer func() { imtCancelSnapshotHook = nil }()
+	legacyStarted := make(chan int, 1)
+	intentStarted := make(chan int, 1)
+	finishLegacy := make(chan struct{})
+	finishIntent := make(chan struct{})
+	var count atomic.Int32
+	f := &fakeIMTHelper{answer: func(cmd map[string]any) []string {
+		n := count.Add(1)
+		if n == 1 {
+			legacyStarted <- refOf(cmd)
+			<-finishLegacy
+		}
+		if n == 101 {
+			intentStarted <- refOf(cmd)
+			<-finishIntent
+		}
+		return reviewAck(cmd, true)
+	}}
+	tr := newIMTTestTransport(t, f)
+	legacyDone := make(chan struct{})
+	go func() { defer close(legacyDone); _, _ = tr.Send(context.Background(), []byte("legacy")) }()
+	oldRef := <-legacyStarted
+	cancelDone := make(chan bool, 1)
+	go func() { cancelDone <- tr.CancelMO() }()
+	<-snapped
+	close(finishLegacy)
+	<-legacyDone
+	for i := 0; i < 99; i++ {
+		s, err := tr.SubmitMO(context.Background(), []byte("intervening"))
+		if err != nil || s.Phase != IMTAccepted {
+			t.Fatalf("MO %d: %+v %v", i, s, err)
+		}
+	}
+	intentDone := make(chan struct{})
+	go func() { defer close(intentDone); _, _ = tr.SubmitMO(context.Background(), []byte("protected")) }()
+	newRef := <-intentStarted
+	tr.mu.Lock()
+	protected := tr.moCur != nil && !tr.moCur.cancellable
+	tr.mu.Unlock()
+	close(resume)
+	cancelled := <-cancelDone
+	deadline := time.Now().Add(time.Second)
+	for len(f.cmds("cancel_mo")) == 0 && cancelled && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	commands := f.cmds("cancel_mo")
+	close(finishIntent)
+	<-intentDone
+	t.Logf("legacy ref=%d, new intent ref=%d, protected=%v, CancelMO=%v, commands=%v", oldRef, newRef, protected, cancelled, commands)
+	if oldRef != newRef || !protected {
+		t.Fatal("reference-wrap precondition missing")
+	}
+	if cancelled || len(commands) != 0 {
+		t.Fatal("a late legacy cancel targeted a protected intent after reference reuse")
+	}
+}
+
+// The same cycle with a cancellable legacy MO at the far end: the late
+// cancel still names only the first MO, so the later legacy MO with the
+// same reference runs to its own result; a cancel decided for that MO
+// itself still reaches it. [review IMT-R2]
+func TestIMT_LateCancelSparesALaterLegacyMOWithTheSameReference(t *testing.T) {
+	snapped := make(chan struct{})
+	resume := make(chan struct{})
+	var hookOnce atomic.Bool
+	imtCancelSnapshotHook = func() {
+		if hookOnce.CompareAndSwap(false, true) {
+			close(snapped)
+			<-resume
+		}
+	}
+	defer func() { imtCancelSnapshotHook = nil }()
+	firstStarted := make(chan int, 1)
+	lastStarted := make(chan int, 1)
+	finishFirst := make(chan struct{})
+	finishLast := make(chan struct{})
+	var count atomic.Int32
+	f := &fakeIMTHelper{answer: func(cmd map[string]any) []string {
+		n := count.Add(1)
+		if n == 1 {
+			firstStarted <- refOf(cmd)
+			<-finishFirst
+		}
+		if n == 101 {
+			lastStarted <- refOf(cmd)
+			<-finishLast
+		}
+		return reviewAck(cmd, true)
+	}}
+	tr := newIMTTestTransport(t, f)
+	firstDone := make(chan struct{})
+	go func() { defer close(firstDone); _, _ = tr.Send(context.Background(), []byte("first")) }()
+	oldRef := <-firstStarted
+	cancelDone := make(chan bool, 1)
+	go func() { cancelDone <- tr.CancelMO() }()
+	<-snapped
+	close(finishFirst)
+	<-firstDone
+	for i := 0; i < 99; i++ {
+		if _, err := tr.Send(context.Background(), []byte("intervening")); err != nil {
+			t.Fatalf("MO %d: %v", i, err)
+		}
+	}
+	lastDone := make(chan struct{})
+	go func() { defer close(lastDone); _, _ = tr.Send(context.Background(), []byte("last")) }()
+	newRef := <-lastStarted
+	close(resume)
+	if <-cancelDone {
+		t.Fatal("the late cancel was written while a later MO with the same reference ran")
+	}
+	if n := len(f.cmds("cancel_mo")); n != 0 {
+		t.Fatalf("%d cancel commands for a finished MO", n)
+	}
+	// Control: a cancel decided now names the MO with the modem.
+	if !tr.CancelMO() {
+		t.Fatal("a cancel decided for the MO in flight was refused")
+	}
+	sends := f.cmds("send_mo")
+	cancels := f.cmds("cancel_mo")
+	close(finishLast)
+	<-lastDone
+	if oldRef != newRef || len(cancels) != 1 || opOf(cancels[0]) != opOf(sends[len(sends)-1]) {
+		t.Fatalf("refs %d/%d, cancels %v", oldRef, newRef, cancels)
 	}
 }

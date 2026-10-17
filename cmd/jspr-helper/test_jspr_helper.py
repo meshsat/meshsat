@@ -211,30 +211,60 @@ class HostCancelTest(unittest.TestCase):
         """Go asks to cancel the MT poll for a waiting message: the helper
         cancels it officially and reports the modem's verdict. [MESHSAT-1282]"""
         h = FakeHelper(modem("message_cancelled_pre_transit"))
-        h._cancel_refs = {7}
-        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5)
+        h._cancel_ops = {"op-a"}
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5, op="op-a")
         cancels = [w for w in h.written if w[1] == "messageOriginateStatus"]
         self.assertEqual(len(cancels), 1)
         res = h.results()
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0][3]["final_mo_status"], "message_cancelled_pre_transit")
-        self.assertEqual(h._cancel_refs, set())
+        self.assertEqual(h._cancel_ops, set())
 
     def test_cancel_for_another_send_is_ignored(self):
         h = FakeHelper(modem("message_cancelled_pre_transit"))
-        h._cancel_refs = {6}
-        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=0.05)
+        h._cancel_ops = {"op-b"}
+        h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=0.05, op="op-a")
         res = h.results()
-        # Only the timeout path cancelled it, not the request for ref 6.
+        # Only the timeout path cancelled it, not the request for op-b.
         self.assertEqual(len(res), 1)
-        self.assertEqual(h._cancel_refs, {6})
+        self.assertEqual(h._cancel_ops, {"op-b"})
+
+    def test_a_cancel_names_the_op_not_the_reference(self):
+        """Two sends with the same request_reference (it wraps at 100): a
+        cancel for the first one's op never touches the second, which
+        goes through; the same cancel for the second's own op cancels it.
+        [MESHSAT-1584]"""
+        def acking_modem(method, target, body):
+            if target == "messageOriginate":
+                return [accepted_reply(), line(299, "messageOriginateSegment",
+                        {"topic_id": 244, "message_id": 23, "segment_length": 3, "segment_start": 0})]
+            if target == "messageOriginateSegment":
+                return [line(299, "messageOriginateStatus", {"topic_id": 244, "message_id": 23, "final_mo_status": "mo_ack_received"})]
+            if target == "messageOriginateStatus" and body.get("action") == "cancel":
+                return [line(200, "messageOriginateStatus", {"message_id": 23}),
+                        line(299, "messageOriginateStatus", {"topic_id": 244, "message_id": 23,
+                                                             "final_mo_status": "message_cancelled_pre_transit"})]
+            return []
+        for cancel_op, want_cancel in (("op-first", False), ("op-second", True)):
+            h = FakeHelper(acking_modem)
+            h._cancel_ops = {cancel_op}
+            h._do_send_mo_inner(244, "QUJD", 3, 7, lambda m: None, timeout_s=5, op="op-second")
+            cancels = [w for w in h.written if w[1] == "messageOriginateStatus" and w[2].get("action") == "cancel"]
+            res = h.results()
+            self.assertEqual(len(res), 1)
+            self.assertEqual(bool(cancels), want_cancel, (cancel_op, h.written))
+            if not want_cancel:
+                self.assertEqual(res[0][3]["final_mo_status"], "mo_ack_received")
+            # (With its own op the cancel is written; this modem had already
+            # queued the ack, so the modem's word, too late, still wins.)
 
     def test_stdin_cancel_skips_the_queue(self):
         import os
         r, w = os.pipe()
         h = FakeHelper(modem(None))
-        h._cancel_refs = set()
-        os.write(w, b'{"cmd":"cancel_mo","request_reference":9}\n{"cmd":"send","method":"GET","target":"x","json":{}}\n')
+        h._cancel_ops = set()
+        os.write(w, b'{"cmd":"cancel_mo","op":"op-9"}\n{"cmd":"cancel_mo","request_reference":9}\n'
+                 b'{"cmd":"send","method":"GET","target":"x","json":{}}\n')
         os.close(w)
         old = sys.stdin
         sys.stdin = os.fdopen(r)
@@ -242,7 +272,8 @@ class HostCancelTest(unittest.TestCase):
             h.stdin_reader()
         finally:
             sys.stdin = old
-        self.assertEqual(h._cancel_refs, {9})
+        # A cancel without an op cannot name a send and is dropped.
+        self.assertEqual(h._cancel_ops, {"op-9"})
         self.assertEqual(h._cmd_queue.qsize(), 1)
 
 
