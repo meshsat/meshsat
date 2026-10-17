@@ -1189,6 +1189,11 @@ func (d *Dispatcher) QueueDirectSend(interfaceID, text, precedence string) (int6
 	return d.QueueDirectSendTo(interfaceID, text, DirectSendOptions{Precedence: precedence})
 }
 
+// directPreviewMax is how much of a direct send's text its row keeps as the
+// preview, which is what the mesh worker sends (AcceptCustody bounds a
+// custody payload by it). [MESHSAT-1584]
+const directPreviewMax = 200
+
 // DirectSendOptions extends QueueDirectSend with a per-row bearer address
 // and a delivery class. [MESHSAT-756]
 type DirectSendOptions struct {
@@ -1268,8 +1273,8 @@ func (d *Dispatcher) prepareDirectSend(interfaceID, text string, opts DirectSend
 		payload = opts.Payload
 	}
 	preview := text
-	if len(preview) > 200 {
-		preview = preview[:200]
+	if len(preview) > directPreviewMax {
+		preview = preview[:directPreviewMax]
 	}
 
 	del := database.MessageDelivery{

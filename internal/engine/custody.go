@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/database"
 )
 
 // Custody Transfer Protocol
@@ -285,24 +288,142 @@ func (cm *CustodyManager) Clear() {
 
 // AcceptCustody queues the payload of a custody offer this node takes, for
 // its own mesh: on the enabled interface of channel type "mesh" (mesh_0),
-// whose worker sends it. It returns the row's id; with no enabled mesh
-// interface it queues nothing and fails, and the caller sends no ACK. The
-// accept used to queue on channel "mesh", which no worker serves (workers
-// run per interface id), while the ACK told the offering node custody was
-// taken: the payload was lost with nobody told. [MESHSAT-1584, r3 F13,
-// B12]
+// whose worker sends it. It returns the row's id; it queues nothing and
+// fails when there is no enabled mesh interface or the worker could not
+// send the payload whole (custodyFits), and then no ACK may go. The accept
+// used to queue on channel "mesh", which no worker serves (workers run per
+// interface id), while the ACK told the offering node custody was taken:
+// the payload was lost with nobody told (r3 F13, B12). [MESHSAT-1584]
 func (d *Dispatcher) AcceptCustody(payload []byte) (int64, error) {
 	ifaces, err := d.db.GetInterfacesByType("mesh")
 	if err != nil {
 		return 0, fmt.Errorf("custody: look up the mesh interface: %w", err)
 	}
 	for _, iface := range ifaces {
-		if iface.Enabled {
-			// Custody-transferred bundles carry no precedence on the wire;
-			// "" lets the schema default (Routine) win.
-			id, _, err := d.QueueDirectSend(iface.ID, string(payload), "")
-			return id, err
+		if !iface.Enabled {
+			continue
 		}
+		if err := d.custodyFits(iface, payload); err != nil {
+			return 0, err
+		}
+		// Custody-transferred bundles carry no precedence on the wire;
+		// "" lets the schema default (Routine) win.
+		id, _, err := d.QueueDirectSend(iface.ID, string(payload), "")
+		return id, err
 	}
 	return 0, fmt.Errorf("custody: no enabled mesh interface to deliver to")
+}
+
+// custodyFits says whether the mesh worker sends this payload whole, the
+// contract of this first, text-only version (review B12-R1). The worker
+// sends a direct row as a text message: with no egress transforms that is
+// the row's preview, which keeps directPreviewMax bytes; with transforms it
+// is their output plus the version byte. Either must fit the mesh's
+// payload limit. A payload that is not UTF-8 text is not taken: the mesh
+// carries it as a text message.
+func (d *Dispatcher) custodyFits(iface database.Interface, payload []byte) error {
+	if len(payload) == 0 {
+		return fmt.Errorf("custody: the payload is empty")
+	}
+	if !utf8.Valid(payload) {
+		return fmt.Errorf("custody: the payload is not text; this node takes custody of text only, which its mesh sends as a text message")
+	}
+	limit := 237
+	if d.registry != nil {
+		if desc, ok := d.registry.Get("mesh"); ok && desc.MaxPayload > 0 {
+			limit = desc.MaxPayload
+		}
+	}
+	if chain := iface.EgressTransforms; chain != "" && chain != "[]" {
+		if d.transforms == nil {
+			return fmt.Errorf("custody: %s has egress transforms and no transform pipeline", iface.ID)
+		}
+		out, err := d.transforms.ApplyEgress(payload, chain)
+		if err != nil {
+			return fmt.Errorf("custody: %s's egress transforms failed: %w", iface.ID, err)
+		}
+		if n := len(out) + 1; n > limit {
+			return fmt.Errorf("custody: %d bytes become %d on %s after its transforms; it takes %d", len(payload), n, iface.ID, limit)
+		}
+		return nil
+	}
+	if len(payload) > directPreviewMax || len(payload) > limit {
+		return fmt.Errorf("custody: %d bytes; %s's worker sends %d whole", len(payload), iface.ID, min(directPreviewMax, limit))
+	}
+	return nil
+}
+
+// custodyRepeatWindow is how long a custody id this node took is
+// remembered: an offering node whose ACK was lost offers the same id again
+// with its delivery's retries.
+const custodyRepeatWindow = 24 * time.Hour
+
+// CustodyAcceptor takes the custody offers that reach this node (the
+// offer's whole path: decode, take, ACK), so the ACK boundary is one piece
+// of code and testable (review B12-R1). The ACK goes only once the payload
+// is queued whole. An offer whose id it took within the window is ACKed
+// again and not queued again: the offering node missed the first ACK. The
+// memory is this process's only; after a restart a repeat is taken again.
+type CustodyAcceptor struct {
+	d   *Dispatcher
+	ack func(sourceIface string, offer *CustodyOffer) error
+	now func() time.Time
+
+	mu   sync.Mutex
+	seen map[[16]byte]time.Time
+}
+
+// CustodyTake is what one offer came to.
+type CustodyTake struct {
+	RowID  int64 // the queued row; 0 for a repeat
+	Repeat bool  // an id taken within the window
+	Acked  bool  // the ACK went
+}
+
+// NewCustodyAcceptor makes an acceptor over d that ACKs through ack.
+func NewCustodyAcceptor(d *Dispatcher, ack func(sourceIface string, offer *CustodyOffer) error) *CustodyAcceptor {
+	return &CustodyAcceptor{d: d, ack: ack, now: time.Now, seen: map[[16]byte]time.Time{}}
+}
+
+// HandleOffer takes one offer packet that arrived on sourceIface. An error
+// means nothing was taken and no ACK went.
+func (a *CustodyAcceptor) HandleOffer(data []byte, sourceIface string) (CustodyTake, error) {
+	offer, err := UnmarshalCustodyOffer(data)
+	if err != nil {
+		return CustodyTake{}, err
+	}
+	a.mu.Lock()
+	now := a.now()
+	if at, ok := a.seen[offer.CustodyID]; ok && now.Sub(at) < custodyRepeatWindow {
+		a.mu.Unlock()
+		return CustodyTake{Repeat: true, Acked: a.sendACK(sourceIface, offer)}, nil
+	}
+	// The check, the queue and the memory are one step: two copies of one
+	// offer arriving together cannot both be queued.
+	id, err := a.d.AcceptCustody(offer.Payload)
+	if err != nil {
+		a.mu.Unlock()
+		return CustodyTake{}, err
+	}
+	a.seen[offer.CustodyID] = now
+	if len(a.seen) > 1024 {
+		for k, at := range a.seen {
+			if now.Sub(at) >= custodyRepeatWindow {
+				delete(a.seen, k)
+			}
+		}
+	}
+	a.mu.Unlock()
+	return CustodyTake{RowID: id, Acked: a.sendACK(sourceIface, offer)}, nil
+}
+
+func (a *CustodyAcceptor) sendACK(sourceIface string, offer *CustodyOffer) bool {
+	if a.ack == nil {
+		return false
+	}
+	if err := a.ack(sourceIface, offer); err != nil {
+		log.Warn().Err(err).Str("custody_id", fmt.Sprintf("%x", offer.CustodyID[:8])).Msg("DTN: custody ACK not sent")
+		return false
+	}
+	return true
 }
