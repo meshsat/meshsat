@@ -792,26 +792,20 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 				g.tracker.RecordAX25(srcAddr, "")
 			}
 			// A trailing message id asks for an ack. Our own frame echoed by
-			// the TNC is never acked. [MESHSAT-1021]
+			// the TNC is never acked. The ack follows the admission: a new
+			// message once the queue took it, a copy of a taken one again;
+			// a frame the full queue refused gets none, so its sender sends
+			// it again (APRS-RX1). [MESHSAT-1021, MESHSAT-1584]
 			body, ackID := splitAckRequest(string(frame.Info[len(aprsEncryptedPrefix):]))
-			if ackID != "" && !g.isOwnSource(frame.Src) {
+			adm := g.admitInbound(InboundMessage{Text: body, Source: "aprs", FromAddr: srcAddr}, ackID, true)
+			switch adm {
+			case rxRejected:
+				log.Warn().Str("from", srcAddr).Str("ack_id", ackID).Msg("aprs: inbound channel full (encrypted frame dropped, not acked: the sender sends it again)")
+			case rxCopy:
+				log.Debug().Str("from", srcAddr).Str("ack_id", ackID).Msg("aprs: copy of a message already taken, dropped")
+			}
+			if ackID != "" && !g.isOwnSource(frame.Src) && adm.ackable() {
 				g.sendAck(frame.Src, ackID)
-			}
-			if g.rxDuplicate(srcAddr, ackID, body, true) {
-				log.Debug().Str("from", srcAddr).Str("ack_id", ackID).Msg("aprs: copy of a message already taken, acked and dropped")
-				continue
-			}
-			msg := InboundMessage{
-				Text:     body,
-				Source:   "aprs",
-				FromAddr: srcAddr,
-			}
-			select {
-			case g.inCh <- msg:
-				g.msgsIn.Add(1)
-				g.lastActive.Store(time.Now().Unix())
-			default:
-				log.Warn().Msg("aprs: inbound channel full (encrypted frame dropped)")
 			}
 			continue
 		}
@@ -834,17 +828,19 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 			continue
 		}
 
+		adm := g.handleParsedPacket(pkt, srcAddr)
+
 		// A directed message to this station with a message id is
 		// acknowledged, as APRS 1.0.1 asks and mode is already does; a
-		// MeshSat sender's delivery intent waits for it. [MESHSAT-1584]
+		// MeshSat sender's delivery intent waits for it. Not when the full
+		// queue refused it: the sender's next copy is taken and acked
+		// (APRS-RX1). [MESHSAT-1584]
 		if frame != nil && pkt.DataType == ':' && pkt.MsgID != "" && !g.isOwnSource(frame.Src) &&
-			strings.EqualFold(strings.TrimSpace(pkt.MsgTo), g.ownCall()) && validAckID(pkt.MsgID) {
+			strings.EqualFold(strings.TrimSpace(pkt.MsgTo), g.ownCall()) && validAckID(pkt.MsgID) && adm.ackable() {
 			if _, _, isReply := aprsAckReply(pkt); !isReply {
 				g.sendAck(frame.Src, pkt.MsgID)
 			}
 		}
-
-		g.handleParsedPacket(pkt, srcAddr)
 	}
 }
 
@@ -852,8 +848,10 @@ func (g *APRSGateway) readWorker(ctx context.Context) {
 // the TNC or from APRS-IS, so both modes treat a packet alike: the heard
 // list, acks for our own frames, status frames that stop here, third-party
 // traffic that stays in the heard list, and what is for this bridge onto the
-// inbound channel. srcAddr is the sender as the message carries it. [MESHSAT-1421]
-func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) {
+// inbound channel. srcAddr is the sender as the message carries it. It says
+// what became of the packet, so the caller acks only what was taken or a
+// copy of it. [MESHSAT-1421, MESHSAT-1584]
+func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) rxAdmission {
 	// Track heard station and activity [MESHSAT-403]
 	g.tracker.RecordRX(pkt)
 
@@ -862,7 +860,7 @@ func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) {
 	// the mesh. [MESHSAT-1021]
 	if id, reject, ok := aprsAckReply(pkt); ok {
 		g.handleAckReply(pkt, id, reject)
-		return
+		return rxNotInbound
 	}
 
 	// Status frames ('>', the peer kit's beacon and any station's status
@@ -870,7 +868,7 @@ func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) {
 	// the receive health and stop here, so an aprs -> mesh relay rule
 	// never forwards a beacon to the handhelds. [MESHSAT-857]
 	if pkt.DataType == '>' {
-		return
+		return rxNotInbound
 	}
 
 	// Anything else from a station that is not talking to this bridge
@@ -881,27 +879,18 @@ func (g *APRSGateway) handleParsedPacket(pkt *APRSPacket, srcAddr string) {
 		g.thirdPartyDropped.Add(1)
 		log.Debug().Str("from", pkt.Source).Str("type", string(pkt.DataType)).
 			Msg("aprs: third-party frame kept out of the message pipeline")
-		return
+		return rxNotInbound
 	}
 
 	text := g.formatInboundText(pkt)
-	if g.rxDuplicate(srcAddr, pkt.MsgID, text, false) {
+	adm := g.admitInbound(InboundMessage{Text: text, Source: "aprs", FromAddr: srcAddr}, pkt.MsgID, false)
+	switch adm {
+	case rxRejected:
+		log.Warn().Str("from", srcAddr).Str("msg_id", pkt.MsgID).Msg("aprs: inbound channel full (frame dropped, not acked: the sender sends it again)")
+	case rxCopy:
 		log.Debug().Str("from", srcAddr).Str("msg_id", pkt.MsgID).Msg("aprs: copy of a message already taken, dropped")
-		return
 	}
-	msg := InboundMessage{
-		Text:     text,
-		Source:   "aprs",
-		FromAddr: srcAddr,
-	}
-
-	select {
-	case g.inCh <- msg:
-		g.msgsIn.Add(1)
-		g.lastActive.Store(time.Now().Unix())
-	default:
-		log.Warn().Msg("aprs: inbound channel full")
-	}
+	return adm
 }
 
 // writeWorker sends MeshSat messages as APRS packets via KISS.

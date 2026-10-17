@@ -354,12 +354,15 @@ func (g *APRSGateway) handleAPRSISLine(line string) {
 	}
 	g.is.rx.Add(1)
 	g.lastFrameAt.Store(time.Now().UnixNano())
-	if pkt.DataType == ':' && pkt.MsgID != "" && strings.EqualFold(strings.TrimSpace(pkt.MsgTo), g.aprsISCall()) {
+	// The ack follows the admission, as on the TNC: none for a message the
+	// full queue refused, so the sender sends it again (APRS-RX1).
+	// [MESHSAT-1584]
+	adm := g.handleParsedPacket(pkt, pkt.Source)
+	if pkt.DataType == ':' && pkt.MsgID != "" && strings.EqualFold(strings.TrimSpace(pkt.MsgTo), g.aprsISCall()) && adm.ackable() {
 		if _, _, isReply := aprsAckReply(pkt); !isReply {
 			g.aprsISAck(pkt.Source, pkt.MsgID)
 		}
 	}
-	g.handleParsedPacket(pkt, pkt.Source)
 }
 
 // aprsISAck acknowledges message id from to. Both come off the network, so
