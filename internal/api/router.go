@@ -600,6 +600,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/directory/import/vcard", s.handleImportVCard)
 		r.Post("/directory/import/csv", s.handleImportCSV)
 		r.Get("/directory/export/vcard", s.handleExportVCard)
+		r.Get("/directory/contacts", s.handleListDirectoryContacts) // the contacts send-to-contact resolves [MESHSAT-1584]
 		r.Get("/directory/policies", s.handleListDirectoryPolicies) // what each dispatch policy does [MESHSAT-1584]
 		r.Get("/delivery/tariffs", s.handleListTariffs)             // prices of the paid intent routes (B9) [MESHSAT-1584]
 		r.Post("/delivery/tariffs", s.handleCreateTariff)

@@ -140,15 +140,41 @@ export const useMeshsatStore = defineStore('meshsat', () => {
 
   // Contact-aware send — MESHSAT-545 / MESHSAT-551. Thin wrapper over
   // POST /api/messages/send-to-contact. Returns the per-bearer
-  // breakdown so the caller can render delivery ticks.
-  async function sendToContact(payload) {
+  // breakdown, and with delivery intents on the intent ids. The key
+  // makes a retried request return the first submission instead of
+  // sending again; the bridge scopes it to the SPA. [MESHSAT-1584]
+  async function sendToContact(payload, idempotencyKey = '') {
     error.value = null
+    const headers = { 'X-MeshSat-Client': 'spa' }
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
     try {
-      return await api.post('/messages/send-to-contact', payload)
+      return await api.post('/messages/send-to-contact', payload, headers)
     } catch (e) {
       error.value = e.message
       throw e
     }
+  }
+
+  // The directory's contacts: the ones send-to-contact resolves (the
+  // Hub's pushes, vCard and QR imports). /contacts is the older table.
+  // [MESHSAT-1584]
+  const directoryContacts = ref([])
+  async function fetchDirectoryContacts() {
+    try {
+      directoryContacts.value = await api.get('/directory/contacts')
+    } catch (e) { error.value = e.message }
+  }
+
+  // Delivery intents (MESHSAT_DELIVERY_INTENTS): one per recipient of a
+  // send-to-contact, with the outcome in words. [MESHSAT-1584]
+  async function fetchIntent(id) {
+    return await api.get(`/deliveries/intents/${encodeURIComponent(id)}`)
+  }
+  async function fetchIntents(contactId, limit = 10) {
+    return await api.get('/deliveries/intents', { contact: contactId, limit })
+  }
+  async function cancelIntent(id, reason = '') {
+    return await api.post(`/deliveries/intents/${encodeURIComponent(id)}/cancel`, reason ? { reason } : {})
   }
 
   // Pair-mode devices [MESHSAT-596 / MESHSAT-597].
@@ -1954,6 +1980,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     presets, sosStatus, dlq,
     loading, error,
     fetchMessages, fetchMessageStats, sendMessage, sendToContact,
+    directoryContacts, fetchDirectoryContacts, fetchIntent, fetchIntents, cancelIntent,
     verifyContact, fetchContactQR, importContactQR,
     pairedClients, armedPair, armPairMode, fetchPairedClients, revokePairedClient,
     purgeMessages,

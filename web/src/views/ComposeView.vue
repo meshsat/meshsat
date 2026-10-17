@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ContactPicker from '@/components/ContactPicker.vue'
+import IntentStatus from '@/components/IntentStatus.vue'
 import PrecedenceChips from '@/components/PrecedenceChips.vue'
 import USMTFForm from '@/components/USMTFForm.vue'
 import FieldHelp from '@/components/FieldHelp.vue'
@@ -25,7 +26,7 @@ const groupMode = ref(false)
 const groupTeam = ref('')
 const teams = computed(() => {
   const set = new Set()
-  for (const c of (store.contacts || [])) if (c.team) set.add(c.team)
+  for (const c of (store.directoryContacts || [])) if (c.team) set.add(c.team)
   return Array.from(set).sort()
 })
 
@@ -53,15 +54,23 @@ const bearers = computed(() => {
   if (!contact.value) return []
   const seen = new Map()
   for (const a of (contact.value.addresses || [])) {
-    const key = a.kind
+    const key = kindLabel(a.kind)
     if (!seen.has(key)) seen.set(key, { kind: key, count: 0 })
     seen.get(key).count++
   }
   return Array.from(seen.values())
 })
 
+// Directory kinds are upper case (MESHTASTIC, SMS, IRIDIUM_IMT, ...).
+function kindLabel(kind) {
+  const k = (kind || '').toLowerCase()
+  if (k === 'meshtastic') return 'mesh'
+  if (k === 'reticulum') return 'lxmf'
+  return k
+}
+
 function bearerColour(kind) {
-  switch (kind) {
+  switch (kindLabel(kind)) {
     case 'mesh':        return 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
     case 'iridium':
     case 'iridium_imt':
@@ -73,6 +82,50 @@ function bearerColour(kind) {
     case 'zigbee':      return 'text-fuchsia-400 border-fuchsia-500/40 bg-fuchsia-500/10'
     default:            return 'text-gray-400 border-gray-500/40 bg-gray-500/10'
   }
+}
+
+// One Idempotency-Key per message: a send whose answer never came (the
+// network dropped it) is retried under the same key, so the bridge returns
+// the first submission instead of sending twice; any answer, or a changed
+// message, starts a new key. crypto.randomUUID needs a secure context and
+// the kits serve plain http, so the key is built from getRandomValues.
+// [MESHSAT-1584]
+let pendingKey = ''
+let pendingFor = ''
+function newKey() {
+  const b = new Uint8Array(16)
+  crypto.getRandomValues(b)
+  return 'spa-' + Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+}
+
+function refusalText(e) {
+  switch (e.status) {
+    case 413: return 'Too long for every route this contact has.'
+    case 422: return 'No route of this contact can carry this message.'
+    case 503: return 'No bearer took the message.'
+  }
+  return e.message || 'Send failed'
+}
+
+// The latest delivery intents to the picked contact (empty with delivery
+// intents off). [MESHSAT-1584]
+const recent = ref([])
+const openRecent = ref('')
+async function refreshRecent() {
+  if (groupMode.value || !contact.value?.id) { recent.value = []; return }
+  try { recent.value = (await store.fetchIntents(String(contact.value.id), 5)) || [] } catch { recent.value = [] }
+}
+watch(contact, () => { openRecent.value = ''; refreshRecent() })
+const recentOthers = computed(() => {
+  const shown = new Set(result.value?.intent_ids || [])
+  return recent.value.filter(r => !shown.has(r.id))
+})
+function labelTone(o) {
+  if (['delivered_handset', 'delivered_device', 'accepted_destination_node', 'acked_station'].includes(o)) return 'text-emerald-400'
+  if (o === 'may_have_been_sent') return 'text-amber-400'
+  if (o === 'failed' || o === 'expired') return 'text-red-400'
+  if (o === 'pending') return 'text-sky-400'
+  return 'text-gray-300'
 }
 
 const canSend = computed(() => {
@@ -112,11 +165,19 @@ async function onSend() {
     // strategy through and let the dispatcher pick. A follow-up
     // (MESHSAT-552) adds per-bearer tick rendering in Inbox.
     if (strategy.value) payload.strategy = strategy.value
-    result.value = await store.sendToContact(payload)
+    const fingerprint = JSON.stringify(payload)
+    if (!pendingKey || fingerprint !== pendingFor) { pendingKey = newKey(); pendingFor = fingerprint }
+    result.value = await store.sendToContact(payload, pendingKey)
+    pendingKey = ''
     // Clear body on success; keep contact + precedence for quick resend.
     if (result.value?.queued) text.value = ''
+    refreshRecent()
   } catch (e) {
-    error.value = e.message || 'Send failed'
+    // The bridge answered: nothing more to protect. Only a lost answer
+    // keeps the key for the retry.
+    if (e.status) pendingKey = ''
+    if (e.body?.per_bearer) result.value = e.body
+    error.value = refusalText(e)
   } finally {
     sending.value = false
   }
@@ -142,7 +203,7 @@ async function onSend() {
     </div>
 
     <!-- 1b. Contact picker OR team dropdown -->
-    <ContactPicker v-if="!groupMode" v-model="contact" />
+    <ContactPicker v-if="!groupMode" v-model="contact" source="directory" />
     <div v-else>
       <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">Team</label>
       <select v-model="groupTeam"
@@ -211,7 +272,10 @@ async function onSend() {
     <!-- 6. Send + feedback -->
     <div class="flex items-center justify-between gap-3">
       <div class="text-xs text-gray-500">
-        <span v-if="result?.queued" class="text-emerald-400">
+        <span v-if="result?.queued && result.intent_ids?.length" class="text-gray-300">
+          <span v-if="result.existing">Already sent; its status is below.</span><span v-else>Sent to the delivery queue; its status is below.</span>
+        </span>
+        <span v-else-if="result?.queued" class="text-gray-300">
           Queued on {{ result.per_bearer?.length || 0 }} bearer<span v-if="(result.per_bearer?.length || 0) !== 1">s</span>.
         </span>
         <span v-else-if="error" class="text-red-400">{{ error }}</span>
@@ -253,20 +317,43 @@ async function onSend() {
       </div>
     </div>
 
-    <!-- Per-bearer delivery breakdown -->
-    <div v-if="result?.per_bearer?.length" class="border border-tactical-border rounded p-3">
+    <!-- Delivery intents: the status of each recipient's message [MESHSAT-1584] -->
+    <div v-if="result?.intent_ids?.length" class="space-y-2">
+      <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wide">Delivery status</div>
+      <IntentStatus v-for="id in result.intent_ids" :key="id" :intent-id="id" @closed="refreshRecent" />
+    </div>
+
+    <!-- Per-bearer breakdown: queued is not delivered, so no tick -->
+    <div v-else-if="result?.per_bearer?.length" class="border border-tactical-border rounded p-3">
       <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-2">
-        Per-bearer delivery
+        Per bearer
       </div>
       <div class="space-y-1">
-        <div v-for="b in result.per_bearer" :key="b.kind" class="flex items-center justify-between text-xs">
-          <span class="font-mono">{{ b.kind }}</span>
-          <span v-if="b.delivery_ids?.length" class="text-emerald-400">
-            ✓ {{ b.delivery_ids.join(', ') }}
+        <div v-for="b in result.per_bearer" :key="b.kind" class="flex items-center justify-between gap-2 text-xs">
+          <span class="font-mono">{{ kindLabel(b.kind) }}</span>
+          <span v-if="b.delivery_ids?.length" class="text-gray-300">
+            queued #{{ b.delivery_ids.join(', #') }}
           </span>
-          <span v-else-if="b.error" class="text-red-400">{{ b.error }}</span>
+          <span v-else-if="b.error" class="text-red-400 text-right">{{ b.error }}</span>
         </div>
       </div>
+    </div>
+
+    <!-- Recent messages to this contact [MESHSAT-1584] -->
+    <div v-if="recentOthers.length" class="border border-tactical-border rounded p-3">
+      <div class="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+        Recent to {{ contact?.display_name }}
+      </div>
+      <ul class="divide-y divide-tactical-border">
+        <li v-for="r in recentOthers" :key="r.id" class="py-1">
+          <button type="button" @click="openRecent = openRecent === r.id ? '' : r.id"
+            class="w-full flex items-center justify-between gap-3 text-left text-xs min-h-[36px]">
+            <span class="truncate text-gray-400">“{{ r.text }}”</span>
+            <span class="shrink-0" :class="labelTone(r.outcome)">{{ r.label }}</span>
+          </button>
+          <IntentStatus v-if="openRecent === r.id" :intent-id="r.id" :initial="r" class="mt-1" />
+        </li>
+      </ul>
     </div>
   </div>
 </template>

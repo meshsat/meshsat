@@ -10,7 +10,12 @@ const BASE = '/api'
 // `timeoutMs` aborts the fetch so a caller that must not wait forever (the
 // booth route selector during a bridge restart) gets an error instead of
 // a hung promise. [MESHSAT-826]
-async function request(method, path, body = null, params = null, timeoutMs = 0) {
+//
+// `headers` adds request headers (Idempotency-Key on a send). A failed
+// request's error carries `status` and the parsed `body`, so a caller can
+// show what the bridge said per route instead of the raw JSON; a request
+// that never got an answer has no `status`. [MESHSAT-1584]
+async function request(method, path, body = null, params = null, timeoutMs = 0, headers = null) {
   let url = `${BASE}${path}`
   if (params) {
     const qs = new URLSearchParams()
@@ -23,7 +28,7 @@ async function request(method, path, body = null, params = null, timeoutMs = 0) 
 
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json' }
+    headers: { 'Content-Type': 'application/json', ...(headers || {}) }
   }
   if (body && method !== 'GET') {
     opts.body = JSON.stringify(body)
@@ -36,8 +41,12 @@ async function request(method, path, body = null, params = null, timeoutMs = 0) 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     let msg = text || `HTTP ${res.status}`
-    try { const j = JSON.parse(text); if (j.error) msg = j.error } catch {}
-    throw new Error(msg)
+    let parsed = null
+    try { parsed = JSON.parse(text); if (parsed.error) msg = parsed.error } catch {}
+    const err = new Error(msg)
+    err.status = res.status
+    err.body = parsed
+    throw err
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return null
   const text = await res.text()
@@ -46,7 +55,7 @@ async function request(method, path, body = null, params = null, timeoutMs = 0) 
 
 export default {
   get: (path, params) => request('GET', path, null, params),
-  post: (path, body) => request('POST', path, body),
+  post: (path, body, headers = null) => request('POST', path, body, null, 0, headers),
   put: (path, body, timeoutMs = 0) => request('PUT', path, body, null, timeoutMs),
   del: (path) => request('DELETE', path),
   patch: (path, body) => request('PATCH', path, body),
