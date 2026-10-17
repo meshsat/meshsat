@@ -331,8 +331,8 @@ async function onSend() {
       <div class="space-y-1">
         <div v-for="b in result.per_bearer" :key="b.kind" class="flex items-center justify-between gap-2 text-xs">
           <span class="font-mono">{{ kindLabel(b.kind) }}</span>
-          <span v-if="b.delivery_ids?.length" class="text-gray-300">
-            queued #{{ b.delivery_ids.join(', #') }}
+          <span v-if="b.delivery_ids?.length" class="text-gray-300 text-right">
+            queued #{{ b.delivery_ids.join(', #') }}<span v-if="b.error" class="text-red-400" data-role="bearer-error"> · not all: {{ b.error }}</span>
           </span>
           <span v-else-if="b.error" class="text-red-400 text-right">{{ b.error }}</span>
         </div>

@@ -140,3 +140,110 @@ func TestSendToContact_KeyHoldsForARawSend(t *testing.T) {
 		t.Fatalf("%d rows, retry %+v", n, r2)
 	}
 }
+
+// A key the bridge took with ORDERED_FALLBACK (delivery intents on) still
+// names that send once they are off; a fresh key for ORDERED_FALLBACK is
+// refused, and another request under the old key is 409. [review B10-R4]
+func TestSendToContact_OrderedFallbackKeyAfterTheFlagWentOff(t *testing.T) {
+	s, id := keyedServer(t)
+	withIntents(t, s, true)
+	body := fmt.Sprintf(`{"contact_id":%q,"text":"ordered","strategy":"ORDERED_FALLBACK"}`, id)
+	c1, r1 := keyedPost(t, s, body, "k-ordered")
+	if c1 != http.StatusOK || r1.SubmissionID == "" || len(r1.IntentIDs) != 1 {
+		t.Fatalf("first: %d %+v", c1, r1)
+	}
+	rows, subs := rowCount(t, s, "message_deliveries"), rowCount(t, s, "delivery_submissions")
+	withIntents(t, s, false)
+	c2, r2 := keyedPost(t, s, body, "k-ordered")
+	if c2 != http.StatusOK || r2.SubmissionID != r1.SubmissionID || !r2.Existing || len(r2.IntentIDs) != 1 || r2.IntentIDs[0] != r1.IntentIDs[0] {
+		t.Fatalf("retry after the flag went off: %d %+v", c2, r2)
+	}
+	if c, _ := keyedPost(t, s, strings.Replace(body, "ordered", "changed", 1), "k-ordered"); c != http.StatusConflict {
+		t.Fatalf("another request under the key: %d, want 409", c)
+	}
+	if c, _ := keyedPost(t, s, body, "k-fresh"); c != http.StatusBadRequest {
+		t.Fatalf("a fresh ORDERED_FALLBACK key with intents off: %d, want 400", c)
+	}
+	if rowCount(t, s, "message_deliveries") != rows || rowCount(t, s, "delivery_submissions") != subs {
+		t.Fatal("new work was queued")
+	}
+}
+
+// One address queued and another of the same bearer refused is a partial
+// send: 207 with the error beside the row, with intents on or off, keyed
+// or not, and on a keyed replay. Two good addresses are a clean 200, and
+// an error on another bearer stays visible. [review B10-R6]
+func TestSendToContact_PartialSendKeepsEveryError(t *testing.T) {
+	store := func(s *Server) *directory.SQLStore { return directory.NewSQLStore(s.db.DB) }
+	add := func(t *testing.T, s *Server, id string, kind directory.Kind, v string, rank int) {
+		t.Helper()
+		if err := store(s).AddAddress(t.Context(), &directory.Address{ContactID: id, Kind: kind, Value: v, PrimaryRank: rank}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	perKind := func(r sendToContactResponse) map[string]perBearerStatus {
+		m := map[string]perBearerStatus{}
+		for _, b := range r.PerBearer {
+			m[b.Kind] = b
+		}
+		return m
+	}
+	for _, on := range []bool{false, true} {
+		for _, keyed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("intents_%v_keyed_%v", on, keyed), func(t *testing.T) {
+				key := ""
+				if keyed {
+					key = "k-partial"
+				}
+				// Same bearer: one good mesh address, one that is no node id.
+				s, id := keyedServer(t)
+				withIntents(t, s, on)
+				add(t, s, id, directory.KindMeshtastic, "!zzzzzzzz", 1)
+				body := fmt.Sprintf(`{"contact_id":%q,"text":"partial","strategy":"ALL_BEARERS"}`, id)
+				c, r := keyedPost(t, s, body, key)
+				m := perKind(r)["MESHTASTIC"]
+				if c != http.StatusMultiStatus || len(m.DeliveryIDs) != 1 || m.Error == "" {
+					t.Fatalf("same bearer: %d %+v", c, r.PerBearer)
+				}
+				if keyed {
+					c2, r2 := keyedPost(t, s, body, key)
+					m2 := perKind(r2)["MESHTASTIC"]
+					if c2 != http.StatusMultiStatus || !r2.Existing || len(m2.DeliveryIDs) != 1 || m2.DeliveryIDs[0] != m.DeliveryIDs[0] || m2.Error != m.Error {
+						t.Fatalf("replay: %d %+v", c2, r2)
+					}
+				}
+				if n := rowCount(t, s, "message_deliveries"); n != 1 {
+					t.Fatalf("%d rows; want 1", n)
+				}
+
+				// Two good addresses: clean. Without intents both are
+				// queued; an intent's plan uses one interface once (r3 D3),
+				// a planned skip and no error.
+				s, id = keyedServer(t)
+				withIntents(t, s, on)
+				add(t, s, id, directory.KindMeshtastic, "!00000002", 1)
+				body = fmt.Sprintf(`{"contact_id":%q,"text":"partial","strategy":"ALL_BEARERS"}`, id)
+				c, r = keyedPost(t, s, body, key)
+				m = perKind(r)["MESHTASTIC"]
+				want := 2
+				if on {
+					want = 1
+				}
+				if c != http.StatusOK || len(m.DeliveryIDs) != want || m.Error != "" {
+					t.Fatalf("two good addresses: %d %+v", c, r.PerBearer)
+				}
+
+				// Another bearer refused: its error is shown, the mesh row too.
+				s, id = keyedServer(t)
+				withIntents(t, s, on)
+				add(t, s, id, directory.KindReticulum, "not-a-hash", 1)
+				body = fmt.Sprintf(`{"contact_id":%q,"text":"partial","strategy":"ALL_BEARERS"}`, id)
+				c, r = keyedPost(t, s, body, key)
+				pk := perKind(r)
+				if c != http.StatusMultiStatus || len(pk["MESHTASTIC"].DeliveryIDs) != 1 || pk["RETICULUM"].Error == "" || len(pk["RETICULUM"].DeliveryIDs) != 0 {
+					t.Fatalf("another bearer: %d %+v", c, r.PerBearer)
+				}
+			})
+		}
+	}
+}

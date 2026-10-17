@@ -150,27 +150,14 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		res.Precedence = types.DefaultPrecedence
 	}
 
-	// An explicit strategy is checked before any branch can queue (r3
-	// D12, B5-R1). A raw send is one destination on a named interface and
-	// never becomes a delivery intent, so only PRIMARY_ONLY describes it,
-	// whatever MESHSAT_DELIVERY_INTENTS says. [MESHSAT-1584]
-	if opts.Strategy != "" {
-		supported := SupportedStrategies(d.DeliveryIntents())
-		if rcpt.Raw != nil {
-			supported = []directory.Strategy{directory.StrategyPrimaryOnly}
-		}
-		if err := explicitStrategyError(opts.Strategy, supported, rcpt.Raw != nil); err != nil {
-			return res, err
-		}
-	}
-
-	// Raw escape hatch: no directory lookup, queue directly on the
-	// named interface with the caller's precedence.
 	// A key names one send whatever the mode: a request that comes again
 	// under it (an answer lost on the way back) gets the first send's
 	// result, made with delivery intents or without, and nothing is queued
 	// again, also when MESHSAT_DELIVERY_INTENTS changed in between
-	// (B10-R4). [MESHSAT-1584]
+	// (B10-R4). The key is looked up before anything that depends on the
+	// mode, the strategy check included: a request the bridge took is
+	// answered for what it was, and only new work meets today's rules
+	// (review of 5bef352). [MESHSAT-1584]
 	fp := d.sendFingerprint(rcpt, body, opts, res.Precedence)
 	if opts.IdempotencyKey != "" {
 		prev, err := d.db.GetSubmissionByKey(sendSource(opts), opts.IdempotencyKey)
@@ -191,6 +178,22 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		}
 	}
 
+	// An explicit strategy is checked before any branch can queue (r3
+	// D12, B5-R1). A raw send is one destination on a named interface and
+	// never becomes a delivery intent, so only PRIMARY_ONLY describes it,
+	// whatever MESHSAT_DELIVERY_INTENTS says. [MESHSAT-1584]
+	if opts.Strategy != "" {
+		supported := SupportedStrategies(d.DeliveryIntents())
+		if rcpt.Raw != nil {
+			supported = []directory.Strategy{directory.StrategyPrimaryOnly}
+		}
+		if err := explicitStrategyError(opts.Strategy, supported, rcpt.Raw != nil); err != nil {
+			return res, err
+		}
+	}
+
+	// Raw escape hatch: no directory lookup, queue directly on the
+	// named interface with the caller's precedence.
 	if rcpt.Raw != nil {
 		if rcpt.Raw.InterfaceID == "" {
 			return res, fmt.Errorf("RawRecipient requires InterfaceID")
@@ -306,10 +309,16 @@ func (d *Dispatcher) sendViaIntent(ctx context.Context, rcpt RecipientRef, body 
 	in := sub.Intents[0]
 	res.Strategy = directory.Strategy(in.EffectiveStrategy)
 	res.RequestedStrategy, res.StrategyReason = directory.Strategy(in.RequestedStrategy), in.StrategyReason
+	// A route not used keeps its reason beside the rows of the same bearer
+	// (a second mesh address that is no node id, say): one route queued
+	// must not hide another that could not be (B10-R6). A second route on
+	// an interface the plan already uses is left out by design (r3 D3) and
+	// is no failure; the intent's status still lists it as not used.
+	// [MESHSAT-1584]
 	kindOf := map[int]directory.Kind{}
 	for _, p := range in.RoutePlan {
 		kindOf[p.RouteIndex] = directory.Kind(p.Kind)
-		if !p.Admitted {
+		if !p.Admitted && p.Reason != reasonSameInterface {
 			res.Errors[directory.Kind(p.Kind)] = fmt.Errorf("not used: %s", p.Reason)
 		}
 	}
@@ -318,7 +327,6 @@ func (d *Dispatcher) sendViaIntent(ctx context.Context, rcpt RecipientRef, body 
 			if row, err := d.db.GetDelivery(id); err == nil {
 				k := kindOf[row.RouteIndex]
 				res.DeliveryIDs[k] = append(res.DeliveryIDs[k], id)
-				delete(res.Errors, k)
 			}
 		}
 	}
