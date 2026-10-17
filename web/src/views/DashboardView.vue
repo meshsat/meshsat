@@ -66,10 +66,13 @@ function moveWidget(sourceId, targetId) {
   layout.reorder(order)
 }
 
-// The ring a widget arrives with is its bearer's colour.
-const ARRIVAL_COLOR = { tetra: '34 211 238', zigbee: '250 204 21', aprs: '192 132 252', cellular: '251 191 36', iridium: '248 113 113' }
-function arrivalStyle(id) {
-  return { '--acquire': ARRIVAL_COLOR[id] || '45 212 191' }
+// The ring a widget arrives with is Sand, the brand's one hue for bearers
+// (tailwind.config.js: cyan, sky, blue, violet and purple are Sand; orange
+// is kept for actions and live traffic; green, amber, red for state). The
+// motion carries the moment, not a new colour.
+const ARRIVAL_RGB = '200 184 154' // Sand #C8B89A
+function arrivalStyle() {
+  return { '--acquire': ARRIVAL_RGB }
 }
 function toggleCustomize() {
   dashCustomizing.value = !dashCustomizing.value
@@ -2058,7 +2061,7 @@ function widgetGridClass(id) {
         :style="arrivalStyle(wid)">
 
       <button v-if="dashCustomizing" type="button" @click="layout.remove(wid)" :aria-label="'Remove the ' + layout.label(wid) + ' widget'"
-        class="absolute top-2 right-2 z-10 px-2 py-0.5 rounded border border-gray-600 bg-gray-950/90 text-[10px] text-gray-200 hover:border-red-400 hover:text-red-300"
+        class="absolute -top-2.5 right-4 z-10 px-2 py-0.5 rounded border border-gray-600 bg-gray-950 text-[10px] text-gray-200 hover:border-red-400 hover:text-red-300"
         data-testid="dash-remove">Remove</button>
       <span v-if="dashPresent[wid] === false" class="absolute bottom-2 right-2 z-10 px-1.5 py-0.5 rounded bg-gray-800 text-[9px] text-gray-400"
         title="Shown although its hardware is not connected">not connected</span>

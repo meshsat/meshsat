@@ -87,7 +87,7 @@ const barClass = computed(() => {
     case 'tak':      return 'fill-blue-400/70'
     case 'zigbee':   return 'fill-pink-400/70'
     case 'bond':     return 'fill-teal-400/70'
-    case 'tetra':    return 'fill-cyan-400/70'
+    case 'tetra':    return 'fill-cyan-400/70' // cyan is Sand in the brand palette
     case 'mesh':
     default:         return 'fill-emerald-400/70'
   }
