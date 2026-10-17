@@ -9,7 +9,11 @@ import { useMeshsatStore } from '@/stores/meshsat'
 // [MESHSAT-551]
 
 const props = defineProps({
-  modelValue: { type: Object, default: null }  // { id, display_name, addresses }
+  modelValue: { type: Object, default: null },  // { id, display_name, addresses }
+  // 'directory' lists the contacts send-to-contact resolves
+  // (/api/directory/contacts); the default is the older /api/contacts.
+  // [MESHSAT-1584]
+  source: { type: String, default: 'contacts' }
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -18,15 +22,17 @@ const query = ref('')
 const open = ref(false)
 const active = ref(0)
 
+const fromDirectory = computed(() => props.source === 'directory')
+const contactList = computed(() => (fromDirectory.value ? store.directoryContacts : store.contacts) || [])
+
 onMounted(() => {
-  if (!store.contacts || store.contacts.length === 0) {
-    store.fetchContacts()
-  }
+  if (fromDirectory.value) store.fetchDirectoryContacts()
+  else if (!store.contacts || store.contacts.length === 0) store.fetchContacts()
 })
 
 const matches = computed(() => {
   const q = query.value.trim().toLowerCase()
-  const list = store.contacts || []
+  const list = contactList.value
   if (!q) return list.slice(0, 12)
   return list.filter(c => {
     if ((c.display_name || '').toLowerCase().includes(q)) return true
