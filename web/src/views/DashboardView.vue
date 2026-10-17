@@ -6,6 +6,8 @@ import { buildPolyline, buildAreaPath } from '@/composables/useSVGChart'
 import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, formatTimeHHMM, shortId, isNodeActive, nodeStatusDot, gatewayHealthIssue } from '@/utils/format'
 import SpectrumWidget from '@/components/SpectrumWidget.vue'
 import GatewayRateSparkline from '@/components/GatewayRateSparkline.vue'
+import TetraWidget from '@/components/TetraWidget.vue'
+import { useDashboardLayout } from '@/composables/useDashboardLayout'
 
 const store = useMeshsatStore()
 
@@ -42,16 +44,41 @@ const statsData = ref(null)
 const queueDetailModal = ref(false)
 const queueDetailItem = ref(null)
 
-// ── Widget drag-and-drop ──
-const DEFAULT_WIDGET_ORDER = ['iridium', 'mesh', 'cellular', 'aprs', 'zigbee', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity']
-function loadWidgetOrder() {
-  try {
-    const stored = JSON.parse(localStorage.getItem('meshsat-widget-order'))
-    if (Array.isArray(stored) && stored.length === DEFAULT_WIDGET_ORDER.length) return stored
-  } catch { /* corrupt data */ }
-  return [...DEFAULT_WIDGET_ORDER]
+// ── Widgets: this screen's layout, following the hardware [MESHSAT-1588] ──
+// useDashboardLayout decides which widgets show (a widget whose device is
+// not connected hides, a device seen for the first time brings its widget)
+// and keeps the order, the removed widgets and what was seen per screen.
+const layout = useDashboardLayout(store)
+const {
+  visible: widgetOrder, customizing: dashCustomizing, arrivals: dashArrivals, fresh: dashFresh,
+  notDetected: dashNotDetected, removedWidgets: dashRemoved, present: dashPresent,
+} = layout
+
+// moveWidget puts source where target is, in the full order, so widgets
+// hidden now keep their places for when they come back.
+function moveWidget(sourceId, targetId) {
+  const order = [...layout.order.value]
+  const srcIdx = order.indexOf(sourceId)
+  const tgtIdx = order.indexOf(targetId)
+  if (srcIdx === -1 || tgtIdx === -1) return
+  order.splice(srcIdx, 1)
+  order.splice(tgtIdx, 0, sourceId)
+  layout.reorder(order)
 }
-const widgetOrder = ref(loadWidgetOrder())
+
+// The ring a widget arrives with is its bearer's colour.
+const ARRIVAL_COLOR = { tetra: '34 211 238', zigbee: '250 204 21', aprs: '192 132 252', cellular: '251 191 36', iridium: '248 113 113' }
+function arrivalStyle(id) {
+  return { '--acquire': ARRIVAL_COLOR[id] || '45 212 191' }
+}
+function toggleCustomize() {
+  dashCustomizing.value = !dashCustomizing.value
+}
+function capitalize(t) {
+  return t ? t[0].toUpperCase() + t.slice(1) : t
+}
+
+// ── Widget drag-and-drop ──
 const dragWidget = ref(null)
 const dragOver = ref(null)
 
@@ -76,14 +103,7 @@ function onDrop(e, targetId) {
   dragOver.value = null
   const sourceId = dragWidget.value
   if (!sourceId || sourceId === targetId) return
-  const order = [...widgetOrder.value]
-  const srcIdx = order.indexOf(sourceId)
-  const tgtIdx = order.indexOf(targetId)
-  if (srcIdx === -1 || tgtIdx === -1) return
-  order.splice(srcIdx, 1)
-  order.splice(tgtIdx, 0, sourceId)
-  widgetOrder.value = order
-  localStorage.setItem('meshsat-widget-order', JSON.stringify(order))
+  moveWidget(sourceId, targetId)
 }
 
 function onDragEnd() {
@@ -138,14 +158,7 @@ function onTouchEnd() {
   dragWidget.value = null
   dragOver.value = null
   if (!sourceId || !targetId || sourceId === targetId) return
-  const order = [...widgetOrder.value]
-  const srcIdx = order.indexOf(sourceId)
-  const tgtIdx = order.indexOf(targetId)
-  if (srcIdx === -1 || tgtIdx === -1) return
-  order.splice(srcIdx, 1)
-  order.splice(tgtIdx, 0, sourceId)
-  widgetOrder.value = order
-  localStorage.setItem('meshsat-widget-order', JSON.stringify(order))
+  moveWidget(sourceId, targetId)
 }
 
 // ── Helpers from NodesView ──
@@ -875,6 +888,10 @@ const opZigbeeOK = computed(() => {
   return !!(g && g.connected)
 })
 const opTAKOK = opHubOK // bridge-side TAK visibility depends on the Hub relay
+const opTetraOK = computed(() => {
+  const g = (store.gateways || []).find(x => x.type === 'tetra')
+  return !!(g && g.connected)
+})
 
 // Device health watchdog (MESHSAT-817): a chip whose device is being
 // healed (degraded, healing, failed) shows amber with the ladder's detail
@@ -896,17 +913,21 @@ const chipHealth = computed(() => ({
   zigbee: healingState('zigbee'),
 }))
 
+// A chip whose hardware is not connected is not shown (the widget's
+// detection, useDashboardLayout): a kit without a ZigBee dongle has no ZIG
+// chip, and a TETRA radio plugged in brings its chip. [MESHSAT-1588]
 const channelMatrix = computed(() => [
   { key: 'mesh',    label: 'MESH',  ok: opMeshOK.value, hint: 'Meshtastic LoRa' },
-  { key: 'aprs',    label: 'APRS',  ok: opAprsOK.value, hint: 'AX.25 / Direwolf' },
-  { key: 'sms',     label: 'SMS',   ok: opCellOK.value, hint: 'Cellular SMS' },
-  { key: 'sat',     label: 'SAT',   ok: opSatOK.value,  hint: 'Iridium' },
+  { key: 'aprs',    label: 'APRS',  ok: opAprsOK.value, hint: 'AX.25 / Direwolf', widget: 'aprs' },
+  { key: 'sms',     label: 'SMS',   ok: opCellOK.value, hint: 'Cellular SMS', widget: 'cellular' },
+  { key: 'sat',     label: 'SAT',   ok: opSatOK.value,  hint: 'Iridium', widget: 'iridium' },
+  { key: 'tetra',   label: 'TETRA', ok: opTetraOK.value, hint: 'TETRA Direct Mode radio', widget: 'tetra' },
   { key: 'ble',     label: 'BLE',   ok: opBLEOK.value,  hint: 'Bridge-to-bridge BLE peer' },
   { key: 'wifip2p', label: 'P2P',   ok: opWifiP2POK.value, hint: 'WiFi-Direct overlay' },
-  { key: 'zigbee',  label: 'ZIG',   ok: opZigbeeOK.value,  hint: 'ZigBee sensors' },
+  { key: 'zigbee',  label: 'ZIG',   ok: opZigbeeOK.value,  hint: 'ZigBee sensors', widget: 'zigbee' },
   { key: 'tak',     label: 'TAK',   ok: opTAKOK.value,  hint: 'TAK / CoT via Hub' },
   { key: 'hub',     label: 'HUB',   ok: opHubOK.value,  hint: 'Hub MQTT WSS+mTLS' },
-].map(c => {
+].filter(c => !c.widget || dashPresent.value[c.widget] !== false).map(c => {
   const h = chipHealth.value[c.key]
   return h ? { ...c, healing: true, hint: `${c.hint} — ${h.detail}` } : { ...c, healing: false }
 }))
@@ -1970,10 +1991,66 @@ function widgetGridClass(id) {
       </div>
     </div>
 
-    <!-- 7-Panel Grid (drag-and-drop reorderable) -->
+    <!-- Widgets on this screen: what the hardware allows, and what the
+         person chose (useDashboardLayout). [MESHSAT-1588] -->
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-2" data-testid="dash-toolbar">
+      <p class="text-[11px] text-gray-500">
+        {{ widgetOrder.length }} widgets on this screen<template v-if="dashNotDetected.length">, {{ dashNotDetected.length }} hidden because their hardware is not connected</template>
+      </p>
+      <div class="flex items-center gap-2">
+        <button v-if="dashCustomizing" type="button" @click="layout.reset()"
+          class="px-3 py-1 rounded text-[11px] text-gray-400 border border-gray-700 hover:text-gray-200 hover:border-gray-500 transition-colors">Reset to default</button>
+        <button type="button" @click="toggleCustomize" :aria-pressed="dashCustomizing" data-testid="dash-customize"
+          class="px-3 py-1 rounded text-[11px] font-medium border transition-colors"
+          :class="dashCustomizing ? 'bg-teal-600 border-teal-500 text-white hover:bg-teal-500' : 'border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300'">
+          {{ dashCustomizing ? 'Done' : 'Customize' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-for="a in dashArrivals" :key="'arrival-' + a.id" role="status" :style="arrivalStyle(a.id)"
+      class="dash-arrival flex flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2 mb-2 text-[11px] text-gray-200" data-testid="dash-arrival">
+      <span v-if="!a.offered">{{ capitalize(a.device) }} connected. Its widget is on the dashboard.</span>
+      <span v-else>{{ capitalize(a.device) }} connected. Its widget was removed from this screen.</span>
+      <span class="flex items-center gap-2">
+        <button v-if="!a.offered" type="button" @click="layout.undoArrival(a.id)"
+          class="px-2 py-0.5 rounded border border-gray-600 text-gray-300 hover:border-gray-400">Remove widget</button>
+        <button v-else type="button" @click="layout.acceptOffer(a.id)"
+          class="px-2 py-0.5 rounded border border-teal-500/60 text-teal-300 hover:bg-teal-500/10">Show widget</button>
+        <button type="button" @click="layout.dismissArrival(a.id)" class="px-2 py-0.5 rounded text-gray-400 hover:text-gray-200">OK</button>
+      </span>
+    </div>
+
+    <div v-if="dashCustomizing" class="rounded-lg border border-dashed border-gray-700 bg-gray-900/60 p-3 mb-3 space-y-2" data-testid="dash-tray">
+      <p class="text-[11px] text-gray-400">Drag a card to move it, or remove what this screen does not need. Removed widgets wait here. A widget whose hardware is unplugged hides by itself and comes back when it is plugged in again.</p>
+      <div v-if="dashRemoved.length" class="flex flex-wrap items-center gap-2">
+        <span class="text-[11px] text-gray-500 w-28 shrink-0">Removed</span>
+        <button v-for="w in dashRemoved" :key="'rm-' + w.id" type="button" @click="layout.add(w.id)"
+          class="px-2 py-1 rounded border border-gray-700 bg-gray-800/60 text-[11px] text-gray-200 hover:border-teal-500 hover:text-teal-300">Add {{ w.label }}</button>
+      </div>
+      <div v-if="dashNotDetected.length" class="flex flex-wrap items-center gap-2">
+        <span class="text-[11px] text-gray-500 w-28 shrink-0">Not connected</span>
+        <span v-for="w in dashNotDetected" :key="'nd-' + w.id"
+          class="flex items-center gap-2 px-2 py-1 rounded border border-dashed border-gray-700 text-[11px] text-gray-400">
+          {{ w.label }}<span class="text-gray-600">no {{ w.device }}</span>
+          <button type="button" @click="layout.showAnyway(w.id)" class="text-teal-400 hover:text-teal-300">Show anyway</button>
+        </span>
+      </div>
+      <p v-if="!dashRemoved.length && !dashNotDetected.length" class="text-[11px] text-gray-500">Every widget is on this screen.</p>
+    </div>
+
+    <!-- Widget grid (drag-and-drop reorderable) -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 
-      <template v-for="wid in widgetOrder" :key="wid">
+      <div v-for="wid in widgetOrder" :key="wid"
+        :class="['dash-cell relative', widgetGridClass(wid), dashFresh.includes(wid) ? 'dash-arrived' : '', dashCustomizing ? 'dash-editing' : '']"
+        :style="arrivalStyle(wid)">
+
+      <button v-if="dashCustomizing" type="button" @click="layout.remove(wid)" :aria-label="'Remove the ' + layout.label(wid) + ' widget'"
+        class="absolute top-2 right-2 z-10 px-2 py-0.5 rounded border border-gray-600 bg-gray-950/90 text-[10px] text-gray-200 hover:border-red-400 hover:text-red-300"
+        data-testid="dash-remove">Remove</button>
+      <span v-if="dashPresent[wid] === false" class="absolute bottom-2 right-2 z-10 px-1.5 py-0.5 rounded bg-gray-800 text-[9px] text-gray-400"
+        title="Shown although its hardware is not connected">not connected</span>
 
       <!-- ═══ Iridium (SBD 9603 / IMT 9704) ═══ -->
       <div v-if="wid === 'iridium'"
@@ -2953,6 +3030,17 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
         </div>
       </div>
 
+      <!-- ═══ TETRA (Direct Mode radio) ═══ [MESHSAT-1588] -->
+      <div v-if="wid === 'tetra'"
+        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-cyan-400/40' : '']"
+        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
+        <TetraWidget :samples="sparkSamples('tetra')">
+          <template #handle>
+            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
+          </template>
+        </TetraWidget>
+      </div>
+
       <!-- ═══ Reticulum Network ═══ -->
       <div v-if="wid === 'reticulum'"
         :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
@@ -3161,7 +3249,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
         </div>
       </div>
 
-      </template>
+      </div>
     </div>
 
     <!-- ═══ Stats Modal (Widget Diagnostics) ═══ -->
@@ -3426,3 +3514,36 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
 
   </div>
 </template>
+
+<style scoped>
+/* A grid cell holds one card; the card fills it (the queue spans rows). */
+.dash-cell > [data-widget-id] {
+  height: 100%;
+}
+.dash-editing > [data-widget-id] {
+  outline: 1px dashed rgb(75 85 99);
+  outline-offset: 3px;
+}
+/* A device plugged in for the first time: its card slides into place and
+   its bearer's ring pulses twice, then stays a moment. [MESHSAT-1588] */
+.dash-arrived > [data-widget-id] {
+  box-shadow: 0 0 0 1px rgb(var(--acquire) / 0.8);
+  animation: dash-enter 420ms ease-out, dash-acquire 1.4s ease-out 420ms 2;
+}
+.dash-arrival {
+  border: 1px solid rgb(var(--acquire) / 0.45);
+  background: rgb(var(--acquire) / 0.08);
+}
+@keyframes dash-enter {
+  from { transform: translateY(8px); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes dash-acquire {
+  0% { box-shadow: 0 0 0 0 rgb(var(--acquire) / 0.7); }
+  70% { box-shadow: 0 0 0 12px rgb(var(--acquire) / 0); }
+  100% { box-shadow: 0 0 0 1px rgb(var(--acquire) / 0.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dash-arrived > [data-widget-id] { animation: none; }
+}
+</style>
