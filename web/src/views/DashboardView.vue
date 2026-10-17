@@ -538,7 +538,9 @@ const cellStatus = computed(() => {
   if (issue === 'healing') return { dot: 'bg-amber-400', text: 'Healing' }
   // Prepaid bundle nearly or fully spent: the modem is fine, the card is not. [MESHSAT-1161]
   if (cs?.connected && cs?.sms_bundle?.error && !cs?.sms_bundle?.size) return { dot: 'bg-red-400', text: 'SMS credit unreadable' }
+  if (cs?.connected && cs?.sms_bundle?.expired) return { dot: 'bg-red-400', text: 'SMS bundle ended' }
   if (cs?.connected && cs?.sms_bundle?.empty) return { dot: 'bg-red-400', text: 'SMS credit spent' }
+  if (cs?.connected && cs?.sms_bundle?.expiring_soon) return { dot: 'bg-amber-400', text: 'SMS bundle ends soon' }
   if (cs?.connected && cs?.sms_bundle?.low) return { dot: 'bg-amber-400', text: 'SMS credit low' }
   // Check transport status first (direct modem connection)
   if (cs?.connected) return { dot: 'bg-sky-400', text: 'Connected' }
@@ -2422,8 +2424,8 @@ function widgetGridClass(id) {
           </div>
           <div v-if="store.cellularStatus?.sms_bundle?.size" class="flex justify-between" :title="store.cellularStatus.sms_bundle.reset_at ? 'bundle set ' + new Date(store.cellularStatus.sms_bundle.reset_at).toLocaleString() : ''">
             <span class="text-gray-500">SMS Credit</span>
-            <span class="font-mono" :class="store.cellularStatus.sms_bundle.empty ? 'text-red-400' : store.cellularStatus.sms_bundle.low ? 'text-amber-400' : 'text-gray-300'">
-              {{ store.cellularStatus.sms_bundle.remaining }} of {{ store.cellularStatus.sms_bundle.size }} left{{ store.cellularStatus.sms_bundle.uncertain ? ', ' + store.cellularStatus.sms_bundle.uncertain + ' unconfirmed' : '' }}{{ store.cellularStatus.sms_bundle.low ? ', top up' : '' }}
+            <span class="font-mono" :class="store.cellularStatus.sms_bundle.empty || store.cellularStatus.sms_bundle.expired ? 'text-red-400' : store.cellularStatus.sms_bundle.low ? 'text-amber-400' : 'text-gray-300'">
+              {{ store.cellularStatus.sms_bundle.remaining }} of {{ store.cellularStatus.sms_bundle.size }} left{{ store.cellularStatus.sms_bundle.uncertain ? ', ' + store.cellularStatus.sms_bundle.uncertain + ' unconfirmed' : '' }}{{ store.cellularStatus.sms_bundle.expires_at ? (store.cellularStatus.sms_bundle.expired ? ', ended ' : ', ends ') + new Date(store.cellularStatus.sms_bundle.expires_at).toLocaleDateString() : '' }}{{ store.cellularStatus.sms_bundle.low ? ', top up' : '' }}
             </span>
           </div>
           <div v-if="store.cellularDataStatus" class="flex justify-between">

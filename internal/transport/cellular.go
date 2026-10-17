@@ -21,16 +21,23 @@ type CellEvent struct {
 // have been billed); Remaining is the size less sent, uncertain and the
 // SMS being sent now. [MESHSAT-1584]
 type SMSBundleStatus struct {
-	Size      int        `json:"size"`
-	Sent      int        `json:"sent"`
-	Uncertain int        `json:"uncertain"`
-	Remaining int        `json:"remaining"`
-	WarnAt    int        `json:"warn_at"`
-	Low       bool       `json:"low"`     // remaining at or below warn_at
-	Empty     bool       `json:"empty"`   // nothing left
-	Alerted   bool       `json:"alerted"` // the top-up reminder SMS went out for this bundle
-	AlertSet  bool       `json:"alert_configured"`
-	ResetAt   *time.Time `json:"reset_at,omitempty"`
+	Size      int `json:"size"`
+	Sent      int `json:"sent"`
+	Uncertain int `json:"uncertain"`
+	Remaining int `json:"remaining"`
+	// Usable is what a delivery intent may still send: Remaining, or 0
+	// once the bundle's recorded end has come. ExpiresAt is that end as
+	// the operator recorded it (absent = not known). [MESHSAT-1584]
+	Usable       int        `json:"usable"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	Expired      bool       `json:"expired"`
+	ExpiringSoon bool       `json:"expiring_soon"`
+	WarnAt       int        `json:"warn_at"`
+	Low          bool       `json:"low"`     // remaining at or below warn_at
+	Empty        bool       `json:"empty"`   // nothing left
+	Alerted      bool       `json:"alerted"` // the top-up reminder SMS went out for this bundle
+	AlertSet     bool       `json:"alert_configured"`
+	ResetAt      *time.Time `json:"reset_at,omitempty"`
 	// Error: the stored bundle could not be read (nothing else is known)
 	// or its count could not be stored. [MESHSAT-1584]
 	Error string `json:"error,omitempty"`

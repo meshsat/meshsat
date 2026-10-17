@@ -33,6 +33,7 @@ type reviewBundleModem struct {
 	afterBody   string
 	ctrlZFail   bool   // the Ctrl-Z write reaches the modem and reports an error
 	exitAt      string // "cmgs" or "ctrlz": the process exits there (crash tests)
+	bodyFail    bool   // the body write fails with nothing written: definitely not sent
 	cmgsSeen    int
 	bodyEntered chan struct{}
 	bodyRelease chan struct{}
@@ -43,6 +44,9 @@ func (m *reviewBundleModem) Write(b []byte) (int, error) {
 	if bytes.Equal(b, []byte("review first")) && m.bodyEntered != nil {
 		close(m.bodyEntered)
 		<-m.bodyRelease
+	}
+	if bytes.Equal(b, []byte("review first")) && m.bodyFail {
+		return 0, errors.New("review: body write failed")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
