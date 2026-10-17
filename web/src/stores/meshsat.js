@@ -46,6 +46,9 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   const nodes = ref([])
   const status = ref(null)
   const gateways = ref([])
+  // True once /api/gateways answered: before that the dashboard neither
+  // hides a widget nor announces hardware. [MESHSAT-1588]
+  const gatewaysLoaded = ref(false)
   const loading = ref(false)
   const error = ref(null)
   const sseConnected = ref(false)
@@ -296,6 +299,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
       const data = await api.get('/gateways')
       const list = Array.isArray(data) ? data : (data.gateways || data.items || [])
       gateways.value = list
+      gatewaysLoaded.value = true
       // [MESHSAT-686] Feed per-gateway counter samples into the rate
       // history ring buffer so the widgets' sparklines update live.
       pushGatewayRateSamples(list)
@@ -1971,7 +1975,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   return {
     shellMode, isOperator, isEngineer, setShellMode, toggleShellMode,
     themeMode, isNVIS, setThemeMode, toggleNVIS, setBacklight,
-    messages, messageStats, telemetry, positions, nodes, status, gateways, config, neighborInfo, rangeTests,
+    messages, messageStats, telemetry, positions, nodes, status, gateways, gatewaysLoaded, config, neighborInfo, rangeTests,
     iridiumSignal, satModem, battery, fetchBattery,
     signalHistory, gssHistory, creditSummary, passes, locations, schedulerStatus,
     locationSources, iridiumGeoHistory,

@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
 import TimeSyncPanel from '@/components/TimeSyncPanel.vue'
@@ -7,6 +8,7 @@ import TetraSettings from '@/components/TetraSettings.vue'
 import api from '@/api/client'
 
 const store = useMeshsatStore()
+const route = useRoute()
 const activeTab = ref('radio')
 
 // Tabs are labelled "operator" (5 primary in the new IQ-70 grouping)
@@ -1742,6 +1744,10 @@ async function loadSpectrumStatus() {
 }
 
 onMounted(async () => {
+  // /settings?tab=<id> opens that tab (the dashboard's links: the TETRA
+  // card, Links > Manage). An unknown or hidden tab is ignored. [MESHSAT-1588]
+  const wanted = route?.query?.tab
+  if (wanted && tabs.value.some(t => t.id === wanted)) activeTab.value = wanted
   store.fetchConfig()
   await store.fetchGateways()
   store.fetchIridiumSignalFast()
