@@ -363,6 +363,32 @@ func (m *Manager) SetLinkCreator(fn func(database.Interface) error) {
 	m.linkCreator = fn
 }
 
+// GetTetraGateway returns the running TETRA gateway, if any.
+func (m *Manager) GetTetraGateway() *TetraGateway {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, gw := range m.running {
+		if t, ok := gw.(*TetraGateway); ok {
+			return t
+		}
+	}
+	return nil
+}
+
+// tetraPort is the AT port of the TETRA radio the device supervisor
+// claimed (USB interface 0), or "". [MESHSAT-1588]
+func (m *Manager) tetraPort() string {
+	if m.supervisor == nil {
+		return ""
+	}
+	for _, entry := range m.supervisor.Registry().ListAll() {
+		if entry != nil && entry.Role == transport.RoleTetra {
+			return entry.DevPath
+		}
+	}
+	return ""
+}
+
 // GetHFGateway returns the running HF gateway, if any.
 func (m *Manager) GetHFGateway() *HFGateway {
 	m.mu.RLock()
@@ -646,6 +672,10 @@ func (m *Manager) handleDeviceEvent(ctx context.Context, ev transport.DeviceEven
 				Msg("gwmgr: device connected, re-enabling gateway")
 			m.db.SaveGatewayConfigInstance(gwType, instanceID, true, cfg.Config)
 		}
+		// Plug in = configured: a gateway type that never had a link gets
+		// its <type>_0 now, so a rule can reach the device at once (the
+		// TETRA radio's tetra_0). A type with a link keeps it. [MESHSAT-1588]
+		m.ensureLink(gwType, true)
 
 		log.Info().Str("type", gwType).Str("instance", instanceID).Str("port", ev.Device.DevPath).
 			Msg("gwmgr: device connected, starting gateway")
@@ -758,6 +788,8 @@ func roleToGatewayType(role transport.DeviceRole) string {
 		return "cellular"
 	case transport.RoleZigBee:
 		return "zigbee"
+	case transport.RoleTetra:
+		return "tetra"
 	default:
 		return ""
 	}
@@ -775,6 +807,8 @@ func gatewayTypeToRole(gwType string) transport.DeviceRole {
 		return transport.RoleCellular
 	case "zigbee":
 		return transport.RoleZigBee
+	case "tetra":
+		return transport.RoleTetra
 	default:
 		return transport.RoleNone
 	}
@@ -909,6 +943,8 @@ func (m *Manager) ReconcileWithHardware(ctx context.Context) {
 				m.db.SaveGatewayConfigInstance(gwType, instanceID, true, cfg.Config)
 			}
 
+			// Its link too, as when the device is plugged in later. [MESHSAT-1588]
+			m.ensureLink(gwType, true)
 			log.Info().Str("type", gwType).Str("instance", instanceID).
 				Msg("gwmgr: reconcile — starting gateway for detected hardware")
 			if err := m.StartGatewayInstance(ctx, instanceID); err != nil {
@@ -1250,6 +1286,15 @@ func (m *Manager) TestGateway(gwType string) error {
 		}
 		if !cg.Bound() {
 			return fmt.Errorf("cell: not bound (%s)", cg.linkState())
+		}
+		return nil
+	case "tetra":
+		tg := m.GetTetraGateway()
+		if tg == nil {
+			return fmt.Errorf("tetra gateway not running")
+		}
+		if !tg.Status().Connected {
+			return fmt.Errorf("tetra radio %s: %w", tg.stateString(), transport.ErrNotConnected)
 		}
 		return nil
 	case "zigbee":
@@ -1683,6 +1728,25 @@ func (m *Manager) createGatewayForInstance(gwType, instanceID, configJSON string
 			return nil, err
 		}
 		gw := NewCellGateway(*cfg, m.db, instanceID)
+		if m.onEventEmit != nil {
+			gw.SetEventEmitter(m.onEventEmit)
+		}
+		if m.nodeNameFn != nil {
+			gw.SetNodeNameResolver(m.nodeNameFn)
+		}
+		if m.packetSink != nil {
+			gw.SetPacketSink(m.packetSink, instanceID)
+		}
+		return gw, nil
+	case "tetra":
+		cfg, err := ParseTetraConfig(configJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
+		gw := NewTetraGateway(*cfg, instanceID, m.tetraPort)
 		if m.onEventEmit != nil {
 			gw.SetEventEmitter(m.onEventEmit)
 		}

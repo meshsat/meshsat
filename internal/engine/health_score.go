@@ -192,7 +192,7 @@ func (h *HealthScorer) getAvgLatency(interfaceID string) int {
 // 100 = free, 0 = expensive.
 func channelCostScore(channelType string) int {
 	switch channelType {
-	case "mesh", "mqtt", "webhook":
+	case "mesh", "mqtt", "webhook", "tetra":
 		return 100
 	case "cellular", "sms", "cell":
 		return 60

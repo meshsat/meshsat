@@ -269,6 +269,8 @@ func (fr *FailoverResolver) SelectBearers(groupID string, sendFnProvider func(if
 			mtu = 102400
 		case "cellular", "sms", "cell":
 			mtu = 160
+		case "tetra":
+			mtu = 140
 		case "zigbee":
 			mtu = 100
 		case "aprs":

@@ -62,6 +62,20 @@ func OpenKISSSerial(path string, baud int) (io.ReadWriteCloser, error) {
 	return port, nil
 }
 
+// OpenTetraPEI opens a Motorola TETRA radio's PEI (the AT port the
+// kernel's motorola_tetra driver makes of USB interface 0) with DTR and
+// RTS low and a 200 ms read timeout, so the PEI reader can tell silence
+// from a dead port. The baud rate is ignored on USB. Exported for the
+// TETRA gateway. [MESHSAT-1588]
+func OpenTetraPEI(path string) (io.ReadWriteCloser, error) {
+	port, err := openSerialLinesLow(path, 115200)
+	if err != nil {
+		return nil, err
+	}
+	port.SetReadTimeout(200 * time.Millisecond)
+	return port, nil
+}
+
 // openSerialLinesLow opens a port with DTR and RTS both cleared and keeps
 // them equal. On the LilyGO T-Call the CH9102's DTR and RTS drive the
 // ESP32's EN and IO0 through the classic auto-reset pair: DTR low with RTS
@@ -793,6 +807,8 @@ func DeviceTypeForRole(role DeviceRole) string {
 		return "cell_sdr"
 	case RoleTetra:
 		return "tetra"
+	case RoleTetraAux:
+		return "tetra_aux" // matches no link, so the AT port alone binds tetra_0
 	}
 	return ""
 }

@@ -27,7 +27,11 @@ const (
 	// USB id and never probed, because it answers a bare AT with OK and the
 	// 9603 probe would claim it. [MESHSAT-1588]
 	RoleTetra DeviceRole = "tetra"
-	RoleNone  DeviceRole = ""
+	// RoleTetraAux is the radio's second USB port (interface 1): claimed so
+	// nothing probes it, and no gateway of its own; the AT port is
+	// interface 0. [MESHSAT-1588]
+	RoleTetraAux DeviceRole = "tetra_aux"
+	RoleNone     DeviceRole = ""
 )
 
 // DeviceState tracks a device's lifecycle from detection through connection.

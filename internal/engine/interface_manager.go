@@ -517,6 +517,12 @@ func (m *InterfaceManager) scanDevices() {
 	// Build device_id → port lookup from detected devices
 	devicePorts := make(map[string]string) // device_id → port
 	for i := range detected {
+		// A second port of the same device (a TETRA radio's interface 1)
+		// shares its device id: never let it stand for the device's port.
+		// [MESHSAT-1588]
+		if strings.HasSuffix(detected[i].DeviceType, "_aux") {
+			continue
+		}
 		devicePorts[detected[i].DeviceID] = detected[i].Port
 		// Also index by VID:PID only for fallback matching
 		devicePorts[detected[i].VIDPID] = detected[i].Port

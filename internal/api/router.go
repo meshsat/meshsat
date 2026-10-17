@@ -589,6 +589,10 @@ func (s *Server) Router() http.Handler {
 		// The MeshSat 2G cell over SMPP (gateway type cell, link cell_0). [MESHSAT-1557]
 		r.Post("/cell/sms/send", s.handleCellSend)
 		r.Get("/cell/status", s.handleCellStatus)
+
+		// TETRA SDS through a radio's PEI (gateway type tetra, link tetra_0). [MESHSAT-1588]
+		r.Post("/tetra/send", s.handleTetraSend)
+		r.Get("/tetra/status", s.handleTetraStatus)
 		r.Get("/cell/peers", s.handleCellPeers)
 		r.Post("/cell/radio", s.handleCellRadio) // the operator keys the radio, with a purpose [MESHSAT-1578]
 		r.Post("/cell/core", s.handleCellCore)

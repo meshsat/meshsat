@@ -105,11 +105,11 @@ func TestRegisterDefaults(t *testing.T) {
 	RegisterDefaults(r)
 
 	list := r.List()
-	if len(list) != 12 {
-		t.Fatalf("RegisterDefaults produced %d channels, want 12", len(list))
+	if len(list) != 13 {
+		t.Fatalf("RegisterDefaults produced %d channels, want 13", len(list))
 	}
 
-	expectedIDs := []string{"mesh", "iridium", "iridium_imt", "cellular", "zigbee", "webhook", "aprs", "tak", "mqtt", "lxmf", "cell", "ipougrs"}
+	expectedIDs := []string{"mesh", "iridium", "iridium_imt", "cellular", "zigbee", "webhook", "aprs", "tak", "mqtt", "lxmf", "cell", "tetra", "ipougrs"}
 	// Order: hardware transports first (binary), then software gateways (text)
 	ids := r.IDs()
 	for i, want := range expectedIDs {

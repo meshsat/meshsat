@@ -763,6 +763,12 @@ func main() {
 	// before and after a restart (APRS-R2). [MESHSAT-1584]
 	intentReceipts := engine.NewIntentReceiptRecorder(db)
 	gateway.SetDefaultIntentReceiptSink(intentReceipts.Record)
+	// Until the dispatcher is up, a link the gateway manager makes (a TETRA
+	// radio already on USB gets tetra_0 in the start-up reconcile) goes
+	// through the interface manager, so it is listed and bound at once; the
+	// dispatcher's start gives it its worker. The full creator further down
+	// replaces this one. [MESHSAT-1588]
+	gwMgr.SetLinkCreator(ifaceMgr.CreateInterface)
 	if err := gwMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("gateway manager start failed")
 	}

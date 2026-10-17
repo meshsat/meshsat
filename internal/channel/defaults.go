@@ -243,6 +243,33 @@ func RegisterDefaults(r *Registry) {
 		},
 	})
 
+	// TETRA SDS through a radio's PEI (a Motorola MTP3550 on USB): texts
+	// radio to radio, in Direct Mode on the kits. Free (our radio), a text
+	// bearer. One SDS holds about 140 characters; MaxPayload 0 because the
+	// gateway decides: plain words go in numbered parts, a sealed payload
+	// that does not fit is refused, never cut. [MESHSAT-1588]
+	r.Register(ChannelDescriptor{
+		ID:         "tetra",
+		Label:      "TETRA SDS",
+		IsPaid:     false,
+		CanSend:    true,
+		CanReceive: true,
+		MaxPayload: 0,
+		DefaultTTL: 3600 * time.Second,
+		RetryConfig: RetryConfig{
+			Enabled:     true,
+			InitialWait: 30 * time.Second,
+			MaxWait:     5 * time.Minute,
+			MaxRetries:  3,
+			BackoffFunc: "exponential",
+		},
+		Options: []OptionField{
+			{Key: "mode", Label: "Radio mode (dmo, tmo or keep)", Type: "select", Default: "dmo", Options: []string{"dmo", "tmo", "keep"}},
+			{Key: "destination", Label: "Default destination SSI (empty: the radio's selected group)", Type: "text", Default: ""},
+			{Key: "prefix", Label: "Prefix for texts relayed from the mesh", Type: "text", Default: ""},
+		},
+	})
+
 	// IPoUGRS is RESERVED AND NOT IMPLEMENTED. It originates from an
 	// April-1st RFC-tradition draft and has no transmit or receive driver
 	// anywhere in the tree — only this descriptor, a HeMB bearer profile

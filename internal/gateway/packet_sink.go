@@ -43,11 +43,12 @@ type PacketSink func(PacketRecord)
 
 // Bearer and direction values of PacketRecord.
 const (
-	BearerLoRa = "lora"
-	BearerAPRS = "aprs"
-	BearerSMS  = "sms"
-	BearerSat  = "sat" // Iridium MO/MT, SBD or IMT [MESHSAT-962]
-	BearerHF   = "hf"  // 10 m HF shouts, Data Slayer's public codec [MESHSAT-1353]
+	BearerLoRa  = "lora"
+	BearerAPRS  = "aprs"
+	BearerSMS   = "sms"
+	BearerSat   = "sat"   // Iridium MO/MT, SBD or IMT [MESHSAT-962]
+	BearerHF    = "hf"    // 10 m HF shouts, Data Slayer's public codec [MESHSAT-1353]
+	BearerTetra = "tetra" // TETRA SDS through a radio's PEI [MESHSAT-1588]
 
 	DirRX = "rx"
 	DirTX = "tx"
