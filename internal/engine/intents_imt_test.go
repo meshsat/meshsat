@@ -248,3 +248,41 @@ func TestIntentIMT_AsTheNextRoute(t *testing.T) {
 		t.Fatalf("incurred %d; want the one MO", inc)
 	}
 }
+
+// The live run of 17 Oct 2026 on parallax, replayed: the 9704 has no sky, its
+// one attempt takes longer than the queue allowance and ends cancelled
+// before transit; nothing is charged, the reservation is released, and the
+// SMS takes over (T4). The status says what happened, not "offline".
+func TestIntentIMT_NoSkyPastTheQueueAllowance(t *testing.T) {
+	h := newIntentHarness(t)
+	modem := &imtModem{answers: []transport.IMTSubmit{{Phase: transport.IMTNotSent, Retry: true, Status: "message_cancelled_pre_transit"}}}
+	sms := &fakeSMS{answer: gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "carrier", Charged: true, ChargedUnits: 1}}
+	prov := ifaceProv{"cellular_0": sms}
+	useIMT(t, h, modem, prov)
+	h.workers["cellular_0"] = &DeliveryWorker{db: h.db, channelID: "cellular_0", gwProv: prov, intents: h.esc,
+		desc: channel.ChannelDescriptor{ID: "cellular_0", CanSend: true}}
+	smsTariff(t, h, 3)
+	id := h.submit(h.contact(directory.Address{Kind: directory.KindIridiumIMT, Value: imtDest},
+		directory.Address{Kind: directory.KindSMS, Value: "+31612345678"}), "x", directory.StrategyOrderedFallback)
+	h.work("iridium_imt_0") // 150 s on the modem, then cancelled before transit
+	h.clock.Advance(151 * time.Second)
+	h.esc.Heartbeat()
+	h.drain()
+	h.work("cellular_0")
+	h.drain()
+	if modem.count() != 1 || sms.count() != 1 {
+		t.Fatalf("%d MOs, %d SMS; want one each", modem.count(), sms.count())
+	}
+	if r, inc, pos := intentMoney(t, h, id); r != 0 || inc != 3 || pos != 0 {
+		t.Fatalf("reserved %d incurred %d possible %d; want 0, 3, 0", r, inc, pos)
+	}
+	s := h.snap(id)
+	if s.Intent.State != database.IntentClosed || s.Intent.Outcome != database.OutcomeAcceptedUnconfirmed {
+		t.Fatalf("%s/%s", s.Intent.State, s.Intent.Outcome)
+	}
+	v := BuildIntentView(s)
+	facts := strings.Join(v.Routes[0].Facts, "; ")
+	if !strings.Contains(facts, "not sent within its queue allowance") || strings.Contains(facts, "offline") {
+		t.Fatalf("IMT route facts %q", facts)
+	}
+}
