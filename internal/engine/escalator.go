@@ -13,6 +13,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -140,15 +141,37 @@ func NewEscalator(db *database.DB, d *Dispatcher, cfg EscalatorConfig, clock Int
 func (e *Escalator) Accepting() bool { return e != nil && e.accepting }
 
 // Notify asks the Escalator to look at an intent again. Never blocks: a
-// dropped notice is picked up by the next heartbeat.
+// dropped notice is picked up by the next heartbeat. Every caller has just
+// written about the intent (a new intent, an attempt's end, matched
+// evidence), so a status view is told too.
 func (e *Escalator) Notify(intentID string) {
 	if e == nil || intentID == "" {
 		return
 	}
+	e.Changed(intentID, "written")
 	select {
 	case e.notify <- intentID:
 	default:
 	}
+}
+
+// Changed tells the event stream that something about an intent was
+// written (change: "written", "handed_off"), so a status view reads it
+// again now instead of at its next poll; a closed view that stopped polling
+// learns of late evidence this way. A hint only: the view's read is the
+// authority, and a slow reader that drops the event still has its poll.
+// [MESHSAT-1584]
+func (e *Escalator) Changed(intentID, change string) {
+	if e == nil || intentID == "" || e.d == nil || e.d.emit == nil {
+		return
+	}
+	data, _ := json.Marshal(map[string]string{"intent_id": intentID, "change": change})
+	e.d.emit(transport.MeshEvent{
+		Type:    "delivery_intent",
+		Message: fmt.Sprintf("Delivery intent %s: %s", intentID, change),
+		Data:    data,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 // elapsedMs is an intent's elapsed time now: its persisted value carried
