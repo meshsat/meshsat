@@ -12,8 +12,8 @@ import (
 // The 2G cell as a delivery-intent route, over the test SMPP server: a
 // phone on the cell and one part whole; the phone's acknowledgement
 // (submit_sm answered 0 in forward mode) is the handset's receipt; a phone
-// off the cell, a refusal and an answer that never came are each read for
-// what they are. [MESHSAT-1584]
+// off the cell, a delivery failure, a refusal and an answer that never came
+// are each read for what they are. [MESHSAT-1584]
 
 func TestCellIntent_AdmitsAPhoneOnTheCellAndOnePart(t *testing.T) {
 	r := startCell(t, nil)
@@ -42,6 +42,8 @@ func TestCellIntent_EachAnswer(t *testing.T) {
 		switch sm.DestAddr {
 		case "2002":
 			return smpp.StatusInvalidDstAddr, 0, ""
+		case "3003":
+			return smpp.StatusDeliveryFailure, 0, ""
 		case "4004":
 			return smpp.StatusSysErr, 0, ""
 		case "5005":
@@ -68,6 +70,13 @@ func TestCellIntent_EachAnswer(t *testing.T) {
 		if o.Class != tc.class || o.Reason != tc.reason || o.Retryable != tc.retry || o.ConsumeRetry != tc.spend || o.Receipt != nil {
 			t.Fatalf("%s: %+v", tc.name, o)
 		}
+	}
+	// A delivery failure (0xFE): paging expired, the phone refused it, or
+	// the cell lost track after it went (osmo-msc 1.16.0). Not proof that
+	// the phone did not get it (review 2026-10-18 13:47, CELL-R1).
+	if o := r.gw.IntentSend(context.Background(), IntentSend{Destination: "3003", Text: "x", CorrValue: "c2b"}); o.Class != IntentUnknown || o.Retryable || o.Receipt != nil ||
+		!strings.Contains(o.Detail, "may have been sent") {
+		t.Fatalf("delivery failure: %+v", o)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

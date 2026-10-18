@@ -351,7 +351,9 @@ func (e *Escalator) Evaluate(id string) {
 // shows that send never left (our own radio's refusal after the intent
 // closed, review RADIO-R2): accepted, not confirmed, or may have been sent
 // become what the intent closed as with nothing sent, cancelled, expired
-// or failed. Still closed, nothing sent again; any completion stays.
+// or failed; accepted becomes may have been sent while another route's
+// outcome is unknown. Still closed, nothing sent again; any completion
+// stays.
 func (e *Escalator) evaluateClosed(id string) {
 	up, err := e.db.ReviewClosedIntent(id, func(s *database.IntentSnapshot) (string, bool) {
 		return closedOutcome(s), possibleDuplicate(s)
@@ -606,12 +608,20 @@ func closedOutcome(s *database.IntentSnapshot) string {
 	return out
 }
 
-// correctsAcceptance: a nothing-sent outcome replacing one an accepted or
-// possibly sent transmission made (RADIO-R2). Transmissions never change
-// class, so the rule only gives such an outcome once evidence dropped them.
+// correctsAcceptance: a weaker outcome replacing one an accepted or
+// possibly sent transmission made (RADIO-R2): nothing sent in place of
+// either, and may have been sent in place of accepted, when the accepted
+// transmission never left and another route's outcome is unknown (review
+// 2026-10-18 13:47). Transmissions never change class, so the rule only
+// gives such an outcome once evidence dropped them; a completion is never
+// replaced (it is not an acceptance).
 func correctsAcceptance(next, current string) bool {
 	switch current {
-	case database.OutcomeAcceptedUnconfirmed, database.OutcomeMayHaveBeenSent:
+	case database.OutcomeAcceptedUnconfirmed:
+		if next == database.OutcomeMayHaveBeenSent {
+			return true
+		}
+	case database.OutcomeMayHaveBeenSent:
 	default:
 		return false
 	}

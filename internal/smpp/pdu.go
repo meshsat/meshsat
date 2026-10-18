@@ -59,7 +59,7 @@ const (
 	StatusInvalidSystemID uint32 = 0x0000000F
 	StatusMsgQueueFull    uint32 = 0x00000014
 	StatusThrottled       uint32 = 0x00000058
-	StatusDeliveryFailure uint32 = 0x000000FE // osmo-msc: transaction mode, the phone did not take it
+	StatusDeliveryFailure uint32 = 0x000000FE // osmo-msc: transaction mode, paging expired, RP-ERROR or an unknown error
 	StatusUnknownErr      uint32 = 0x000000FF
 )
 
@@ -573,7 +573,7 @@ func StatusText(status uint32) string {
 	case StatusThrottled:
 		return "throttled"
 	case StatusDeliveryFailure:
-		return "the cell could not deliver to the phone (paging failed)"
+		return "the cell could not complete the delivery to the phone (paging failed, the phone refused it, or it is unknown whether the phone got it)"
 	case StatusUnknownErr:
 		return "unknown error"
 	}

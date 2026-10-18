@@ -17,6 +17,15 @@ import (
 // ErrClosed is returned once the PEI port has closed or failed.
 var ErrClosed = errors.New("tetra: PEI closed")
 
+// ErrSDSInFlight is wrapped beside ErrClosed by SendSDS when the port
+// closed after the whole SDS was written to it and before the radio
+// answered: the radio may have sent it. A port that closed before the
+// write returns ErrClosed alone. [MESHSAT-1584]
+var ErrSDSInFlight = errors.New("tetra: the port closed after the SDS was written, before the radio answered")
+
+// errClosedAfterWrite is exchangeHeld's ErrClosed once its write went out.
+var errClosedAfterWrite = fmt.Errorf("%w after the command was written", ErrClosed)
+
 // ErrTimeout is returned when the radio did not finish a command in time.
 var ErrTimeout = errors.New("tetra: no answer from the radio")
 
@@ -288,7 +297,7 @@ func (s *Session) exchangeHeld(ctx context.Context, cmd string, raw []byte, time
 		case <-ctx.Done():
 			return lines, ctx.Err()
 		case <-s.done:
-			return lines, ErrClosed
+			return lines, errClosedAfterWrite
 		case <-deadline.C:
 			return lines, fmt.Errorf("%w (%s)", ErrTimeout, cmd)
 		case line := <-s.resp:
@@ -459,6 +468,9 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 	cmd := fmt.Sprintf("AT+CMGS=%s,%d", dest, bits)
 	raw := []byte(cmd + "\r\n" + strings.ToUpper(hex.EncodeToString(pdu)) + "\x1a")
 	lines, err := s.exchangeHeld(ctx, cmd, raw, 20*time.Second)
+	if errors.Is(err, errClosedAfterWrite) {
+		return nil, fmt.Errorf("%w (%w)", ErrSDSInFlight, ErrClosed)
+	}
 	if err != nil {
 		return nil, err
 	}

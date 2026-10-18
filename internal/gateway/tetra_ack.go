@@ -25,8 +25,10 @@ import (
 // the Bridges confirm receipt themselves, in link control SDS a plain
 // handheld does not show (tetra.LinkPID):
 //
-//   - every text a Bridge receives is acknowledged with its SDS-TL
-//     reference and the hash of its bytes (the text itself is unchanged);
+//   - every text a Bridge receives and takes in (a part held, a whole text
+//     in the processor's queue, a repeat of one that was) is acknowledged
+//     with its SDS-TL reference and the hash of its bytes (the text itself
+//     is unchanged); one a full queue dropped is not, so it comes again;
 //   - a Bridge that knows a MeshSat peer on the group waits for that
 //     acknowledgement, and a send nobody acknowledged is ErrNoAck, which
 //     the delivery worker retries; a retried text the far end already had
@@ -277,9 +279,14 @@ func (g *TetraGateway) ackText(r tetra.Received) {
 		100*time.Millisecond+g.jitter(500*time.Millisecond))
 }
 
-// isRepeat says the same text from the same sender was delivered within
-// tetraRepeatWindow, and records this one.
-func (g *TetraGateway) isRepeat(from, text string) bool {
+// admit puts a whole text in the processor's queue unless the same text
+// from the same sender was queued within tetraRepeatWindow (a repeat). A
+// text is remembered only once it is in the queue: one the full queue
+// refused is not, so the sender's retry, which the missing ack brings, is
+// taken in (review 2026-10-18 13:47, TETRA-RX1). The queue never blocks
+// the PEI reader. Taken in is the processor's queue in memory, not the
+// database: a restart in between loses an acknowledged text. [MESHSAT-1584]
+func (g *TetraGateway) admit(from, text string, in InboundMessage) tetraTaken {
 	key := from + "|" + strings.TrimSpace(text)
 	now := time.Now()
 	g.acks.mu.Lock()
@@ -290,10 +297,15 @@ func (g *TetraGateway) isRepeat(from, text string) bool {
 		}
 	}
 	if t, ok := g.acks.recent[key]; ok && now.Sub(t) <= tetraRepeatWindow {
-		return true
+		return tetraRepeat
+	}
+	select {
+	case g.inCh <- in:
+	default:
+		return tetraRefused
 	}
 	g.acks.recent[key] = now
-	return false
+	return tetraQueued
 }
 
 func (g *TetraGateway) peerCount() (int, *time.Time) {

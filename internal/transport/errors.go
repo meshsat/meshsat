@@ -64,5 +64,7 @@ var ErrOutcomeUnknown = errors.New("the outcome of the satellite session is unkn
 // back in range registers at once and its periodic location update is at
 // most 30 minutes, so the delivery worker keeps the row and retries on a
 // schedule of its own instead of spending the channel's retries.
-// [MESHSAT-1557]
+// [MESHSAT-1557] 0xFE also covers a phone that may have got the text
+// (gateway.ErrCellDeliveryFailure): a delivery intent reads it as may
+// have been sent and never sends it again by itself. [MESHSAT-1584]
 var ErrSubscriberAbsent = errors.New("the phone is not on the cell right now")

@@ -539,6 +539,11 @@ func (g *TetraGateway) Send(ctx context.Context, msg *transport.MeshMessage) (Te
 			g.errs.Add(1)
 			var cme *tetra.CMEError
 			switch {
+			case errors.Is(err, tetra.ErrSDSInFlight):
+				// The whole SDS reached the radio before its port closed: it
+				// may be on air. The worker waits for the radio as before; a
+				// delivery intent reads it as may have been sent.
+				return res, fmt.Errorf("tetra: the radio's port closed after the SDS to %s was written: %w (%w)", dest, transport.ErrNotConnected, tetra.ErrSDSInFlight)
 			case errors.Is(err, tetra.ErrClosed):
 				return res, fmt.Errorf("tetra: the radio's port closed: %w", transport.ErrNotConnected)
 			case errors.As(err, &cme) && cme.Code == 24 && i == 0:
@@ -632,34 +637,48 @@ func (g *TetraGateway) onSDS(r tetra.Received) {
 	if text == "" {
 		return
 	}
-	g.ackText(r) // every text SDS, parts included, repeats included
-	if g.holdPart(r, text) {
-		return
+	held, got := g.holdPart(r, text)
+	if !held {
+		got = g.deliver(r.From, r.To, text, len(r.PDU), r.SenderID, int(r.Ref))
 	}
-	g.deliver(r.From, r.To, text, len(r.PDU), r.SenderID, int(r.Ref))
+	// Acknowledged once taken in: a part held for the rest, a whole text in
+	// the processor's queue, or a repeat of one that was. A text the full
+	// queue dropped is not, so its sender tries again (review 2026-10-18
+	// 13:47, TETRA-RX1). [MESHSAT-1584]
+	if got != tetraRefused {
+		g.ackText(r)
+	}
 }
 
+// tetraTaken is what became of a received text.
+type tetraTaken int
+
+const (
+	tetraQueued  tetraTaken = iota // in the processor's queue now
+	tetraRepeat                    // the same text was queued within tetraRepeatWindow
+	tetraHeld                      // a part, held for the rest of its text
+	tetraRefused                   // the queue was full: dropped and not remembered
+)
+
 // deliver hands one whole text to the processor as tetra_0.
-func (g *TetraGateway) deliver(from, to, text string, nbytes int, senderID string, ref int) {
-	if g.isRepeat(from, text) {
-		// A retry whose acknowledgement was lost: acknowledged again
-		// (ackText), delivered once.
-		g.acks.repeats.Add(1)
-		log.Info().Str("from", from).Str("text", text).Msg("tetra: a text already delivered came again (its ack was lost?); acknowledged, not delivered twice")
-		return
-	}
+func (g *TetraGateway) deliver(from, to, text string, nbytes int, senderID string, ref int) tetraTaken {
 	inbound := InboundMessage{
 		Text:     text,
 		Source:   "tetra",
 		FromAddr: tetra.Address(from), // reply address and attribution; never used for authentication
 		To:       tetra.Address(to),
 	}
-	select {
-	case g.inCh <- inbound:
-	default:
+	switch g.admit(from, text, inbound) {
+	case tetraRepeat:
+		// A retry whose acknowledgement was lost: acknowledged again,
+		// delivered once.
+		g.acks.repeats.Add(1)
+		log.Info().Str("from", from).Str("text", text).Msg("tetra: a text already delivered came again (its ack was lost?); acknowledged, not delivered twice")
+		return tetraRepeat
+	case tetraRefused:
 		g.errs.Add(1)
-		log.Warn().Str("from", from).Msg("tetra: inbound queue full, SDS dropped")
-		return
+		log.Warn().Str("from", from).Msg("tetra: inbound queue full, SDS dropped and not acknowledged (the sender tries again)")
+		return tetraRefused
 	}
 	g.msgsIn.Add(1)
 	g.lastIn.Store(time.Now().Unix())
@@ -667,6 +686,7 @@ func (g *TetraGateway) deliver(from, to, text string, nbytes int, senderID strin
 	log.Info().Str("from", from).Str("to", to).Str("sender_id", senderID).Int("ref", ref).
 		Str("text", text).Msg("tetra: SDS received, forwarding")
 	g.emit("tetra", fmt.Sprintf("SDS received from %s, forwarding", from))
+	return tetraQueued
 }
 
 // A text Forward split goes as "1/3 ...", "2/3 ...", "3/3 ..." with
@@ -690,22 +710,23 @@ type tetraAssembly struct {
 // holdPart keeps a part of a split text and delivers the whole once the
 // last part is in. A text that only looks like a part ("1/2 cup of
 // sugar") is not one: every part before the last fills at least half an
-// SDS, as Forward cuts them.
-func (g *TetraGateway) holdPart(r tetra.Received, text string) bool {
+// SDS, as Forward cuts them. The part that completes a text is taken in
+// as its whole text is (deliver); every other part is held.
+func (g *TetraGateway) holdPart(r tetra.Received, text string) (bool, tetraTaken) {
 	m := tetraPartRe.FindStringSubmatch(text)
 	if m == nil {
-		return false
+		return false, 0
 	}
 	k, _ := strconv.Atoi(m[1])
 	n, _ := strconv.Atoi(m[2])
 	if k > n {
-		return false
+		return false, 0
 	}
 	g.mu.RLock()
 	maxBytes := g.textLimit()
 	g.mu.RUnlock()
 	if k < n && tetra.TextBytes(text) < maxBytes/2 {
-		return false
+		return false, 0
 	}
 	base := (int(r.Ref) - (k - 1) + 256) % 256
 	key := r.From + "|" + strconv.Itoa(n) + "|" + strconv.Itoa(base)
@@ -729,20 +750,23 @@ func (g *TetraGateway) holdPart(r tetra.Received, text string) bool {
 	g.asmMu.Unlock()
 	log.Info().Str("from", r.From).Int("part", k).Int("parts", n).Int("ref", int(r.Ref)).Msg("tetra: part of a longer text held for the rest")
 	if done {
-		g.flushParts(key, false)
+		return true, g.flushParts(key, false)
 	}
-	return true
+	return true, tetraHeld
 }
 
 // flushParts delivers an assembly: whole, or after the wait with "[...]"
 // where a part never came.
-func (g *TetraGateway) flushParts(key string, timedOut bool) {
+func (g *TetraGateway) flushParts(key string, timedOut bool) tetraTaken {
 	g.asmMu.Lock()
 	a := g.asm[key]
 	delete(g.asm, key)
 	g.asmMu.Unlock()
 	if a == nil {
-		return
+		// The wait's own flush took it first, and whether that got into the
+		// queue is not known here: no ack, and a retry that finds it there
+		// is a repeat.
+		return tetraRefused
 	}
 	a.timer.Stop()
 	parts := make([]string, len(a.parts))
@@ -756,7 +780,7 @@ func (g *TetraGateway) flushParts(key string, timedOut bool) {
 		log.Warn().Str("from", a.from).Int("got", a.got).Int("parts", len(a.parts)).
 			Msg("tetra: not every part of a longer text came; forwarding what did, gaps marked")
 	}
-	g.deliver(a.from, a.to, strings.Join(parts, " "), a.nbytes, "", -1)
+	return g.deliver(a.from, a.to, strings.Join(parts, " "), a.nbytes, "", -1)
 }
 
 // onLine logs what the radio says on its own.

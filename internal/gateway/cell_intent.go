@@ -21,8 +21,10 @@ import (
 // of it. In forward mode osmo-msc answers a submit_sm only once the phone
 // acknowledged it (RP-ACK) or the delivery failed (r3 section 4): status 0
 // is the handset's receipt, delivered_handset, inside the call; a phone not
-// on the cell (0x0B) or not answering its paging (0xFE) is not sent and may
-// be tried again; any other refusal reached no phone. The cell is licensed
+// on the cell (0x0B) is not sent and may be tried again; a delivery failure
+// (0xFE) may have reached the phone (ErrCellDeliveryFailure), so it is
+// unknown and never sent again by itself (review 2026-10-18 13:47,
+// CELL-R1); any other refusal reached no phone. The cell is licensed
 // airtime, no charge.
 
 // CellIntentCorrKind is the correlation kind of a cell submission.
@@ -79,6 +81,10 @@ func (g *CellGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcom
 			Detail: "the phone acknowledged it on the cell (submit_sm in forward mode)"}
 	case errors.Is(err, transport.ErrNotConnected):
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: err.Error()}
+	case errors.Is(err, ErrCellDeliveryFailure):
+		// Paging expired, the phone refused it, or the cell lost track:
+		// the cell's answer alone cannot say the phone did not get it.
+		return IntentOutcome{Class: IntentUnknown, Detail: "may have been sent: " + err.Error()}
 	case errors.Is(err, transport.ErrSubscriberAbsent):
 		// Not on the cell now; a phone that comes back registers at once.
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "not_sent", Detail: err.Error()}

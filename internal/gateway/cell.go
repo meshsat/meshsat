@@ -288,10 +288,20 @@ func (g *CellGateway) Destinations(ruleDests []string) []string {
 	return out
 }
 
+// ErrCellDeliveryFailure is wrapped beside transport.ErrSubscriberAbsent
+// when the cell answers a submit_sm 0xFE. osmo-msc 1.16.0 gives it for a
+// paging that expired, but also for a phone that answered RP-ERROR (its
+// memory full, any other cause) and for a transaction freed with the text
+// still in it, as after a lost RP-ACK (smpp_sms_cb, gsm_04_11.c): the
+// phone may have the text, so it is not proof that nothing was delivered.
+// [MESHSAT-1584]
+var ErrCellDeliveryFailure = errors.New("the cell reports the delivery failed, which does not say the phone did not get it")
+
 // Forward sends one delivery to the one phone it names, synchronously,
 // and reports what the cell said. [transport.ErrNotConnected while the
 // session is down, transport.ErrSubscriberAbsent when the phone is not on
-// the cell, transport.ErrNoRecipient without an address.]
+// the cell (with ErrCellDeliveryFailure for 0xFE, which may also mean it
+// got the text), transport.ErrNoRecipient without an address.]
 func (g *CellGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
 	if msg.Destination == "" {
 		return fmt.Errorf("cell: %w (address it cell:<msisdn>)", transport.ErrNoRecipient)
@@ -353,6 +363,11 @@ func (g *CellGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 			if i > 0 {
 				log.Warn().Str("to", msisdn).Int("part", i+1).Int("parts", len(parts)).
 					Msg("cell: a later part of a concatenated text was refused; the retry sends every part again")
+			}
+			if status == smpp.StatusDeliveryFailure {
+				// Kept on the absent phone's clock, as before; a delivery
+				// intent reads ErrCellDeliveryFailure: the phone may have it.
+				return fmt.Errorf("cell: %s: %w (%w)", smpp.StatusText(status), transport.ErrSubscriberAbsent, ErrCellDeliveryFailure)
 			}
 			return fmt.Errorf("cell: %s: %w", smpp.StatusText(status), transport.ErrSubscriberAbsent)
 		default:

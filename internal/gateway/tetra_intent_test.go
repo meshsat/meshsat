@@ -69,12 +69,15 @@ func TestTetraIntent_RefusedAndNoRadio(t *testing.T) {
 	if o := g.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c1"}); o.Class != IntentNotSent || !o.Retryable || !o.ConsumeRetry || o.Reason != "not_sent" {
 		t.Fatalf("refused by the radio: %+v", o)
 	}
-	// The radio takes it, then reports it not sent (a collision): not sent,
-	// tried again, never accepted.
+	// The radio takes it, then reports it not sent (a collision): it may
+	// have gone on air (another radio can decode it by capture), so unknown,
+	// never sent again by itself, the radio's report kept (review
+	// 2026-10-18 13:47).
 	f.mu.Lock()
 	f.refuse, f.collide = false, true
 	f.mu.Unlock()
-	if o := g.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c1b"}); o.Class != IntentNotSent || !o.Retryable || !o.ConsumeRetry || o.Reason != "not_sent" {
+	if o := g.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c1b"}); o.Class != IntentUnknown || o.Retryable || o.Receipt != nil ||
+		!strings.Contains(o.Detail, "may have been sent") || !strings.Contains(o.Detail, "not sent") {
 		t.Fatalf("reported not sent by the radio: %+v", o)
 	}
 	idle := NewTetraGateway(DefaultTetraConfig(), "tetra_0", func() string { return "" })

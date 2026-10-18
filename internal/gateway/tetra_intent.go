@@ -33,13 +33,17 @@ import (
 // over one SDS is refused for intents, not split: a later part failing
 // after the first went would leave the message half sent. The gateway's
 // Forward does the send, so its refusals keep their meaning: the radio's
-// port gone is not connected, CME 24 too long, any other CME error before
-// anything went on air not submitted, and everything else unknown. A send
-// the radio took and then reported not sent (tetra.ErrRadioNotSent: a late
-// +CMGS status other than 4, or +CME ERROR 42, as when both kits sent at
-// the same instant on 17 Oct 2026) is the radio's own account that nothing
-// went: not sent, tried again. Should the radio be wrong, the retry is a
-// duplicate on a free route.
+// port gone before the SDS was written is not connected, CME 24 too long,
+// any other CME error before anything went on air not submitted, and
+// everything else unknown (review 2026-10-18 13:47, TETRA-TX1): the port
+// closing after the whole SDS was written (tetra.ErrSDSInFlight), and a
+// send the radio took and then reported not sent (tetra.ErrRadioNotSent: a
+// late +CMGS status other than 4, or +CME ERROR 42, as when both kits sent
+// at the same instant on 17 Oct 2026). ETSI EN 300 392-5 keeps the
+// terminal taking an SDS apart from its later transmission status, and
+// status 5 is a failed transmission, not that no radio heard any of it
+// (another may have decoded it by capture), so neither is sent again by
+// itself on this route; the radio's report stays in the detail.
 
 // TetraIntentCorrKind is the correlation kind of a TETRA submission. Only
 // the answer inside the call carries it (a peer's acknowledgement).
@@ -106,13 +110,17 @@ func (g *TetraGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutco
 		// acknowledge it: lost in a collision both radios missed, or
 		// received and the acknowledgement lost. Not known either way.
 		return IntentOutcome{Class: IntentUnknown, Detail: "may have been sent: " + err.Error()}
+	case errors.Is(err, tetra.ErrSDSInFlight), errors.Is(err, tetra.ErrRadioNotSent):
+		// Written whole before the port closed, or taken and then reported
+		// not sent: either may have gone on air.
+		return IntentOutcome{Class: IntentUnknown, Detail: "may have been sent: " + err.Error()}
 	case errors.Is(err, transport.ErrNotConnected):
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: err.Error()}
 	case errors.Is(err, transport.ErrPayloadTooLong):
 		return IntentOutcome{Class: IntentNotSent, Reason: "skipped_oversize", Detail: err.Error()}
 	case errors.Is(err, transport.ErrNoRecipient):
 		return IntentOutcome{Class: IntentNotSent, Reason: "skipped_unsupported", Detail: err.Error()}
-	case errors.Is(err, transport.ErrNotSubmitted), errors.Is(err, tetra.ErrRadioNotSent):
+	case errors.Is(err, transport.ErrNotSubmitted):
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: err.Error()}
 	}
 	// A timeout or a reply that did not come: the radio may have sent it.
