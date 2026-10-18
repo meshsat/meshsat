@@ -1,6 +1,6 @@
 package api
 
-// The closure review of 5bef352 (17 Oct 2026 16:51 CEST), its API cases as
+// The closure review of 33d2776 (17 Oct 2026 16:51 CEST), its API cases as
 // supplied: a keyed ORDERED_FALLBACK send replayed after delivery intents
 // were turned off (B10-R4 residual), a partial send whose failed address
 // shares a bearer with a queued one (B10-R6), and 16 concurrent requests

@@ -15,7 +15,7 @@ import (
 	"meshsat/internal/routing"
 )
 
-// The A13 review's reproducers (16 Oct 2026, review of 6307bb4).
+// The A13 review's reproducers (16 Oct 2026, review of d556d73).
 // A13-R1 is as supplied. A13-R2's adverse case now starts the stack the
 // way production does (rnsstack.Build, which installs the listener before
 // the node is handed to the ingress) instead of enabling the listener after

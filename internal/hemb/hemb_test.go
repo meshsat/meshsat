@@ -555,7 +555,7 @@ func TestGF256Consistency(t *testing.T) {
 	// Retry on rank deficiency — three random rows in GF(2^8) can be linearly
 	// dependent by chance (~0.4% per encoding attempt), and the test takes
 	// TWO encodings so the flake rate compounds. Same pattern as
-	// TestEncodeDecodeRoundtrip's fix in commit 7d7d959 [MESHSAT-513].
+	// TestEncodeDecodeRoundtrip's fix in commit ed2ab6f [MESHSAT-513].
 	segments := make([][]byte, 3)
 	for i := range segments {
 		segments[i] = make([]byte, 50)
@@ -728,7 +728,7 @@ func TestEncodeFrameDecode(t *testing.T) {
 	// The first K of N symbols carry K random GF(256) coefficient vectors, which
 	// are independent with probability about 1 - 1/256. A rank-deficient draw is a
 	// property of random coding, not a decoder bug, so take another generation
-	// rather than fail on it — the same retry the sibling tests use since 7d7d959
+	// rather than fail on it — the same retry the sibling tests use since ed2ab6f
 	// [MESHSAT-513]. This one was missed and took pipeline 54429 red on
 	// 2026-09-16, blocking a deploy. [MESHSAT-1154]
 	const maxAttempts = 10

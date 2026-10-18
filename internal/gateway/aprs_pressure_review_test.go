@@ -1,6 +1,6 @@
 package gateway
 
-// The closure review of 8ebfaa1 (17 Oct 2026 18:10 CEST), its APRS-RX1
+// The closure review of 87ee890 (17 Oct 2026 18:10 CEST), its APRS-RX1
 // cases as supplied: a frame the full inbound queue refused must be taken
 // when its sender sends it again, through the parsed handler and both
 // KISS receive branches. [MESHSAT-1584]

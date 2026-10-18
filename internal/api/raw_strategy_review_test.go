@@ -13,7 +13,7 @@ import (
 	"meshsat/internal/engine"
 )
 
-// Reviewer's regression (B5-R1, stage 0b review of e2cacd2): a raw send
+// Reviewer's regression (B5-R1, stage 0b review of 101f1d2): a raw send
 // with an unsupported explicit strategy is refused before anything is
 // queued; a raw send without one still queues. [MESHSAT-1584]
 func TestReviewB5RawStrategyRefusedBeforeQueue(t *testing.T) {

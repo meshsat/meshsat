@@ -1,6 +1,6 @@
 package engine
 
-// The review of b833dd9 (17 Oct 2026 22:03 CEST), B12-R1 and the
+// The review of fa4bd47 (17 Oct 2026 22:03 CEST), B12-R1 and the
 // subscriber-loss control, as supplied but for one branch: the review's
 // acceptance is that the 220-byte case "either sends all accepted bytes or
 // is rejected with no accepted row/ACK"; the supplied test failed on any

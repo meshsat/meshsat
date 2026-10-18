@@ -1,6 +1,6 @@
 package gateway
 
-// The closure review of 0d75008 (17 Oct 2026 20:48 CEST), its added case
+// The closure review of 20443a7 (17 Oct 2026 20:48 CEST), its added case
 // as supplied: 64 concurrent arrivals against the gateway's own queue while
 // it is full, after it drains, and while it is full again. [MESHSAT-1584]
 

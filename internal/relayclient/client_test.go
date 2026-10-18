@@ -56,7 +56,7 @@ func newTestCA(t *testing.T) *testCA {
 	return &testCA{cert: cert, key: key, pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
 }
 
-// issue mirrors the Hub's IssueBridgeCert after 21f6289: ClientAuth plus
+// issue mirrors the Hub's IssueBridgeCert after 9c01be4: ClientAuth plus
 // ServerAuth and a DNS SAN equal to the bridge id. serverOK=false produces
 // the pre-2026-09-15 shape (ClientAuth only, no SAN).
 func (ca *testCA) issue(t *testing.T, id string, serverOK bool) (certPEM, keyPEM []byte) {

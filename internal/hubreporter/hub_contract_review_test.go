@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Reviewer's regression (B5-R2, stage 0b review of e2cacd2): snapshots
+// Reviewer's regression (B5-R2, stage 0b review of 101f1d2): snapshots
 // signed by the Hub's own types and signer, with and without contact
 // metadata, verify and reach the applier with the per-row report.
 // REVIEW_HUB_FIXTURES overrides the reviewer's fixture file. [MESHSAT-1584]

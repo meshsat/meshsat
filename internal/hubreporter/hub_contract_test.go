@@ -35,7 +35,7 @@ func loadHubFixtures(t *testing.T) []hubFixture {
 
 // The bridge-hub contract for directory_push (B5-R2): payloads made by
 // the Hub's own types, SignSnapshot and DirectoryPushCommand at
-// meshsat-hub a98e938 (generator in the B5 review bundle; ephemeral key,
+// meshsat-hub 3b6413e (generator in the B5 review bundle; ephemeral key,
 // public half only). One of them sets every field of every Hub type,
 // including contact metadata, keys, groups and policy fields the bridge
 // does not use. Each verifies, reaches the applier intact, and the reply

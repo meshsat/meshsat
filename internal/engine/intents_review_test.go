@@ -1,6 +1,6 @@
 package engine
 
-// The red-team review of stage 1a (16 Oct 2026, commit 2a91688) reproduced
+// The red-team review of stage 1a (16 Oct 2026, commit 72e6eac) reproduced
 // four defects with these tests; they are kept here as regressions, as the
 // reviewer wrote them, except TestReviewDistinctLXMFIntentsHaveDistinctHashes:
 // its rows were built for a plan entry with no wire timestamp, which no
@@ -308,9 +308,9 @@ func TestReviewDistinctLXMFIntentsHaveDistinctHashes(t *testing.T) {
 	}
 }
 
-// The closure review of the corrective patch (7a8702e) added three more;
+// The closure review of the corrective patch (433bcb6) added three more;
 // kept as written, except: reviewV62Upgrade falls back to the fixture in
-// testdata (made by 2a91688, see v62-intents.json) and accepts any version
+// testdata (made by 72e6eac, see v62-intents.json) and accepts any version
 // from 63 on (v64 came with the fix); the reuse test no longer asserts at
 // setup that the old id was released, which the fix stopped doing on
 // purpose (the radio reuses it anyway, which is the case under test).

@@ -1,6 +1,6 @@
 package engine
 
-// Upgrade from schema v62 (stage 1a as first shipped, 2a91688) with real
+// Upgrade from schema v62 (stage 1a as first shipped, 72e6eac) with real
 // data: testdata/v62-intents.sqlite.gz was written by that code (the
 // generator is TestGenerateV62UpgradeFixture there; v62-intents.json names
 // the intents and holds the synthetic test identity of the known router).
