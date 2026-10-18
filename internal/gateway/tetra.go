@@ -473,6 +473,10 @@ type TetraSendResult struct {
 	// or acks off), so arrival is not known.
 	Confirmed bool
 	Parts     int
+	// RadioReport is the radio's own account of a failure that a MeshSat
+	// Bridge's acknowledgement outweighed (TETRA-ACK1): kept for the
+	// record, the text arrived.
+	RadioReport string
 }
 
 // Forward sends one message as SDS (Send without its result).
@@ -534,6 +538,20 @@ func (g *TetraGateway) Send(ctx context.Context, msg *transport.MeshMessage) (Te
 		g.sendMu.Lock()
 		rep, err := sess.SendSDS(ctx, dest, ref, pdu, bits)
 		g.sendMu.Unlock()
+		// A MeshSat Bridge's acknowledgement of this very SDS that came
+		// while the radio still had it outweighs the radio's later account
+		// of a failure: something arrived, so something was sent (review
+		// 2026-10-18 14:53, TETRA-ACK1). [MESHSAT-1584]
+		ackedFirst := false
+		if err != nil && ackCh != nil && afterSubmission(err) && g.takeAck(key, ackCh) {
+			ackedFirst = true
+			if res.RadioReport == "" {
+				res.RadioReport = err.Error()
+			}
+			log.Warn().Err(err).Str("to", dest).Int("ref", int(ref)).Int("part", i+1).Int("parts", len(parts)).
+				Msg("tetra: the radio reports the SDS not sent, but a MeshSat Bridge on the group acknowledged it first; delivered")
+			err = nil
+		}
 		if err != nil {
 			g.dropAck(key)
 			g.errs.Add(1)
@@ -577,7 +595,7 @@ func (g *TetraGateway) Send(ctx context.Context, msg *transport.MeshMessage) (Te
 		g.record(PacketRecord{Time: time.Now(), Bearer: BearerTetra, Dir: DirTX, From: g.selfSSI(), To: dest, Bytes: len(pdu), Text: CapPacketText(part), MsgRef: msg.MsgRef})
 		log.Info().Str("to", dest).Int("ref", int(ref)).Int("bytes", len(pdu)).Int("report_status", status).
 			Int("part", i+1).Int("parts", len(parts)).Str("text", part).Msg("tetra: SDS sent")
-		if ackCh == nil {
+		if ackCh == nil || ackedFirst {
 			continue
 		}
 		if g.awaitAck(ctx, key, ackCh) {

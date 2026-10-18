@@ -43,7 +43,11 @@ import (
 // terminal taking an SDS apart from its later transmission status, and
 // status 5 is a failed transmission, not that no radio heard any of it
 // (another may have decoded it by capture), so neither is sent again by
-// itself on this route; the radio's report stays in the detail.
+// itself on this route; the radio's report stays in the detail. A
+// MeshSat Bridge's acknowledgement of the SDS that came while the radio
+// still had it outweighs either (review 2026-10-18 14:53, TETRA-ACK1): acked
+// by a station, the radio's report kept in the detail. One that comes
+// after Send returned is not collected; the outcome stays unknown.
 
 // TetraIntentCorrKind is the correlation kind of a TETRA submission. Only
 // the answer inside the call carries it (a peer's acknowledgement).
@@ -96,8 +100,13 @@ func (g *TetraGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutco
 		// group can send that link SDS. [MESHSAT-1584]
 		r := &IntentReceipt{CorrKind: TetraIntentCorrKind, CorrValue: s.CorrValue, Peer: s.Destination,
 			Source: "station", Event: "ack", Completes: "acked_station", Trust: "unauthenticated"}
-		return IntentOutcome{Class: IntentAccepted, AcceptedBy: "radio", Receipt: r,
-			Detail: "a MeshSat Bridge on the TETRA group acknowledged the SDS"}
+		detail := "a MeshSat Bridge on the TETRA group acknowledged the SDS"
+		if res.RadioReport != "" {
+			// The acknowledgement came first; the radio's report stays on
+			// record (TETRA-ACK1).
+			detail += "; the radio had reported: " + res.RadioReport
+		}
+		return IntentOutcome{Class: IntentAccepted, AcceptedBy: "radio", Receipt: r, Detail: detail}
 	case err == nil:
 		// The radio believes it sent it (+CMGS status 4, or no report) and
 		// no MeshSat Bridge is known on the group to acknowledge it: not

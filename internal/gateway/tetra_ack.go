@@ -32,7 +32,9 @@ import (
 //   - a Bridge that knows a MeshSat peer on the group waits for that
 //     acknowledgement, and a send nobody acknowledged is ErrNoAck, which
 //     the delivery worker retries; a retried text the far end already had
-//     is acknowledged again and delivered once;
+//     is acknowledged again and delivered once; an acknowledgement that
+//     came while the radio still had the SDS outweighs the radio's later
+//     report that it failed (the text arrived);
 //   - a Bridge says hello when its radio comes up, and the others answer,
 //     so each knows whether anyone will acknowledge. With only plain
 //     handhelds on the group nobody does, nothing waits and nothing is
@@ -131,6 +133,38 @@ func (g *TetraGateway) dropAck(key tetraAckKey) {
 	g.acks.mu.Lock()
 	delete(g.acks.pending, key)
 	g.acks.mu.Unlock()
+}
+
+// takeAck lets the key go and says whether its acknowledgement had
+// already come, in one step with onLink's signal.
+func (g *TetraGateway) takeAck(key tetraAckKey, ch chan struct{}) bool {
+	g.acks.mu.Lock()
+	defer g.acks.mu.Unlock()
+	delete(g.acks.pending, key)
+	select {
+	case <-ch:
+		g.acks.acked.Add(1)
+		return true
+	default:
+		return false
+	}
+}
+
+// afterSubmission says a send's error came once the SDS may have reached
+// the radio: not a port that closed before the SDS was written, not the
+// radio refusing the command (+CME ERROR as its answer). An
+// acknowledgement matched to the SDS's reference and hash then outweighs
+// the error (review 2026-10-18 14:53, TETRA-ACK1); before that it can
+// only be an old one for the same reference and text. [MESHSAT-1584]
+func afterSubmission(err error) bool {
+	var cme *tetra.CMEError
+	switch {
+	case errors.Is(err, tetra.ErrSDSInFlight):
+		return true
+	case errors.Is(err, tetra.ErrClosed), errors.As(err, &cme):
+		return false
+	}
+	return true
 }
 
 // awaitAck waits for the far Bridge's acknowledgement of one SDS.
@@ -246,19 +280,18 @@ func (g *TetraGateway) onLink(r tetra.Received) {
 	if l.Tag != 0 && l.Tag != g.acks.selfTag {
 		g.acks.peers[l.Tag] = now
 	}
-	var ch chan struct{}
 	if l.Kind == tetra.LinkAck {
-		ch = g.acks.pending[tetraAckKey{l.Ref, l.Hash}]
-	}
-	g.acks.mu.Unlock()
-	switch l.Kind {
-	case tetra.LinkAck:
-		if ch != nil {
+		// Signalled under the lock, so takeAck either sees it or the send
+		// has already let the key go: an ack is never left in between.
+		if ch := g.acks.pending[tetraAckKey{l.Ref, l.Hash}]; ch != nil {
 			select {
 			case ch <- struct{}{}:
 			default:
 			}
 		}
+	}
+	g.acks.mu.Unlock()
+	switch l.Kind {
 	case tetra.LinkHello:
 		if l.Tag == g.acks.selfTag || g.acksMode() == "off" {
 			return

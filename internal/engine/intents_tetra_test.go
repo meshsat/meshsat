@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -135,5 +136,43 @@ func TestIntentTETRA_NoAckIsUnknownAndTheNextRouteTakesOver(t *testing.T) {
 	h2.drain()
 	if s := h2.snap(sub.Intents[0].ID); s.Intent.State != database.IntentClosed || s.Intent.Outcome != database.OutcomeMayHaveBeenSent || radio2.count() != 1 {
 		t.Fatalf("%s/%s after %d SDS; want closed may_have_been_sent after one", s.Intent.State, s.Intent.Outcome, radio2.count())
+	}
+}
+
+// A MeshSat Bridge acknowledged the SDS before the radio reported it
+// failed (review 2026-10-18 14:53, TETRA-ACK1): the adapter returns the
+// station's receipt with the radio's report in the detail, and the intent
+// closes acked by a station at T9 without the next route.
+func TestIntentTETRA_AnAckBeforeTheRadiosFailureReportCompletesIt(t *testing.T) {
+	h := newIntentHarness(t)
+	radio := &fakeAPRS{answer: func(s gateway.IntentSend) gateway.IntentOutcome {
+		return gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "radio",
+			Detail: "a MeshSat Bridge on the TETRA group acknowledged the SDS; the radio had reported: tetra: the radio reports the SDS not sent (status 5, +CME ERROR: 42)",
+			Receipt: &gateway.IntentReceipt{CorrKind: gateway.TetraIntentCorrKind, CorrValue: s.CorrValue, Peer: s.Destination,
+				Source: "station", Event: "ack", Completes: database.OutcomeAckedStation, Trust: "unauthenticated"}}
+	}}
+	useTetra(t, h, radio, ifaceProv{})
+	id := h.submit(h.contact(directory.Address{Kind: directory.KindTETRA, Value: "2000", PrimaryRank: 1}, meshAddr(2)),
+		"acked before the report", directory.StrategyOrderedFallback)
+	h.work("tetra_0")
+	h.drain()
+	h.clock.Advance(3 * time.Minute)
+	h.esc.Heartbeat()
+	h.drain()
+	h.work("mesh_0")
+	h.drain()
+	s := h.snap(id)
+	if s.Intent.State != database.IntentClosed || s.Intent.Outcome != database.OutcomeAckedStation || s.Intent.LastTransition != "T9" {
+		t.Fatalf("%s/%s/%s; want closed acked_station at T9", s.Intent.State, s.Intent.Outcome, s.Intent.LastTransition)
+	}
+	if radio.count() != 1 || h.mesh.sends() != 0 {
+		t.Fatalf("%d SDS, %d mesh sends; want one SDS and no fallback", radio.count(), h.mesh.sends())
+	}
+	kept := false
+	for _, tx := range s.Transmissions {
+		kept = kept || strings.Contains(tx.Detail, "status 5")
+	}
+	if !kept {
+		t.Fatal("the radio's report is not kept on the transmission")
 	}
 }
