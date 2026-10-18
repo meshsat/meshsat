@@ -1,0 +1,90 @@
+{
+  "cases": [
+    {
+      "apply_version": 42,
+      "case": "a v2 snapshot with a field the verifier does not know",
+      "envelope": {
+        "alg": "ES256",
+        "key_id": "6877951ef0c8eb773f7719262eb91f4d8420ebc418efd726eb1774f42f7b1176",
+        "payload": "eyJjb250YWN0cyI6W3siYWRkcmVzc2VzIjpbeyJraW5kIjoiTVFUVCIsIm9yaWdpbiI6Imh1Yjp0LTEiLCJ2YWx1ZSI6ImJyaWRnZTpraXQtYiJ9LHsia2luZCI6IlRFVFJBIiwib3JpZ2luIjoiaHViOnQtMSIsInZhbHVlIjoiMTAwMSJ9XSwiaWQiOiJjLTEiLCJuYW1lIjoiS2l0IEIiLCJvcmlnaW4iOiJodWI6dC0xIn1dLCJncm91cHMiOlt7ImlkIjoiZy0xIiwia2luZCI6InRlYW0iLCJtZW1iZXJzIjpbImMtMSJdLCJuYW1lIjoiTm9ydGggdGVhbSJ9XSwic2VlZGVkIjpmYWxzZSwidGVuYW50X2lkIjoidC0xIiwidmVyc2lvbiI6NDIsInhfZnV0dXJlX2ZpZWxkIjp7Im5vdGUiOiJhIGZpZWxkIHRoaXMgdmVyc2lvbiBkb2VzIG5vdCBrbm93In19",
+        "sig": "MEUCIQCSkDDI/+0/bV3xTcMUpsCPVv8P7raUTUUGN6dVPZJ2ygIgC3c4z7jpjYx/jX6ZTraEvdmSLY3U198LmZmfBCs04mQ=",
+        "v": 2
+      },
+      "trusted_key": "old",
+      "verify": true
+    },
+    {
+      "case": "a payload changed after signing",
+      "envelope": {
+        "alg": "ES256",
+        "key_id": "6877951ef0c8eb773f7719262eb91f4d8420ebc418efd726eb1774f42f7b1176",
+        "payload": "eyJjb250YWN0cyI6W3siYWRkcmVzc2VzIjpbeyJraW5kIjoiTVFUVCIsIm9yaWdpbiI6Imh1Yjp0LTEiLCJ2YWx1ZSI6ImJyaWRnZTpraXQtYiJ9LHsia2luZCI6IlRFVFJBIiwib3JpZ2luIjoiaHViOnQtMSIsInZhbHVlIjoiMTAwMSJ9XSwiaWQiOiJjLTEiLCJuYW1lIjoiS2l0IEIiLCJvcmlnaW4iOiJodWI6dC0xIn1dLCJncm91cHMiOlt7ImlkIjoiZy0xIiwia2luZCI6InRlYW0iLCJtZW1iZXJzIjpbImMtMSJdLCJuYW1lIjoiTm9ydGggdGVhbSJ9XSwic2VlZGVkIjpmYWxzZSwidGVuYW50X2lkIjoidC0xIiwidmVyc2lvbiI6NDMsInhfZnV0dXJlX2ZpZWxkIjp7Im5vdGUiOiJhIGZpZWxkIHRoaXMgdmVyc2lvbiBkb2VzIG5vdCBrbm93In19",
+        "sig": "MEUCIQCSkDDI/+0/bV3xTcMUpsCPVv8P7raUTUUGN6dVPZJ2ygIgC3c4z7jpjYx/jX6ZTraEvdmSLY3U198LmZmfBCs04mQ=",
+        "v": 2
+      },
+      "trusted_key": "old",
+      "verify": false
+    },
+    {
+      "case": "a rotation record signed by the old key names the new key",
+      "envelope": {
+        "alg": "ES256",
+        "key_id": "6877951ef0c8eb773f7719262eb91f4d8420ebc418efd726eb1774f42f7b1176",
+        "payload": "eyJuZXdfa2V5X2lkIjoiNGE1YzZjMjhjMTliMGY3OGRiOGJiNDIxZWIxZTM1YzZmNzYxYmY5YjRlNjJlZGRmNDJkNmUwMmNlNTM4YWJkZiIsIm5ld19rZXlfcGtpeCI6Ik1Ga3dFd1lIS29aSXpqMENBUVlJS29aSXpqMERBUWNEUWdBRVUrTEp1MzQzdENMMFRGdFRrTE1qVk1meThDeGhMa0NGcnVsdWdIa09lbFdNVk13RFl5VHU1SGlaSkttODBkTnF3WHJ0bzVmSFljN0NGQStjK0ZZQzJRPT0iLCJ0ZW5hbnRfaWQiOiJ0LTEiLCJ0eXBlIjoicm90YXRpb24iLCJ2ZXJzaW9uIjo0M30=",
+        "sig": "MEQCIEzeF3FmdrY01eSL48kqteEsRqIzfv/KbBHXyS9+bw5tAiBLbLmavlEgWv+0gXxza0aToF9RSxcEhapsNeafIiwcQw==",
+        "v": 2
+      },
+      "rotates_to": "new",
+      "trusted_key": "old",
+      "verify": true
+    },
+    {
+      "apply_version": 44,
+      "case": "after the rotation the new key signs the snapshot",
+      "envelope": {
+        "alg": "ES256",
+        "key_id": "4a5c6c28c19b0f78db8bb421eb1e35c6f761bf9b4e62eddf42d6e02ce538abdf",
+        "payload": "eyJjb250YWN0cyI6W3siYWRkcmVzc2VzIjpbeyJraW5kIjoiTVFUVCIsIm9yaWdpbiI6Imh1Yjp0LTEiLCJ2YWx1ZSI6ImJyaWRnZTpraXQtYiJ9LHsia2luZCI6IlRFVFJBIiwib3JpZ2luIjoiaHViOnQtMSIsInZhbHVlIjoiMTAwMSJ9XSwiaWQiOiJjLTEiLCJuYW1lIjoiS2l0IEIiLCJvcmlnaW4iOiJodWI6dC0xIn1dLCJncm91cHMiOlt7ImlkIjoiZy0xIiwia2luZCI6InRlYW0iLCJtZW1iZXJzIjpbImMtMSJdLCJuYW1lIjoiTm9ydGggdGVhbSJ9XSwic2VlZGVkIjpmYWxzZSwidGVuYW50X2lkIjoidC0xIiwidmVyc2lvbiI6NDQsInhfZnV0dXJlX2ZpZWxkIjp7Im5vdGUiOiJhIGZpZWxkIHRoaXMgdmVyc2lvbiBkb2VzIG5vdCBrbm93In19",
+        "sig": "MEUCIHXO9a1eIwW8fpcA+1ALymU5kYjaKNuktd+NZGQ5T4ILAiEAzzmonvjFva+LzuHQjyoiIeikXmHyQ64IuwJ+q7GPfmI=",
+        "v": 2
+      },
+      "trusted_key": "new",
+      "verify": true
+    },
+    {
+      "case": "the same snapshot is not trusted under the old key",
+      "envelope": {
+        "alg": "ES256",
+        "key_id": "4a5c6c28c19b0f78db8bb421eb1e35c6f761bf9b4e62eddf42d6e02ce538abdf",
+        "payload": "eyJjb250YWN0cyI6W3siYWRkcmVzc2VzIjpbeyJraW5kIjoiTVFUVCIsIm9yaWdpbiI6Imh1Yjp0LTEiLCJ2YWx1ZSI6ImJyaWRnZTpraXQtYiJ9LHsia2luZCI6IlRFVFJBIiwib3JpZ2luIjoiaHViOnQtMSIsInZhbHVlIjoiMTAwMSJ9XSwiaWQiOiJjLTEiLCJuYW1lIjoiS2l0IEIiLCJvcmlnaW4iOiJodWI6dC0xIn1dLCJncm91cHMiOlt7ImlkIjoiZy0xIiwia2luZCI6InRlYW0iLCJtZW1iZXJzIjpbImMtMSJdLCJuYW1lIjoiTm9ydGggdGVhbSJ9XSwic2VlZGVkIjpmYWxzZSwidGVuYW50X2lkIjoidC0xIiwidmVyc2lvbiI6NDQsInhfZnV0dXJlX2ZpZWxkIjp7Im5vdGUiOiJhIGZpZWxkIHRoaXMgdmVyc2lvbiBkb2VzIG5vdCBrbm93In19",
+        "sig": "MEUCIHXO9a1eIwW8fpcA+1ALymU5kYjaKNuktd+NZGQ5T4ILAiEAzzmonvjFva+LzuHQjyoiIeikXmHyQ64IuwJ+q7GPfmI=",
+        "v": 2
+      },
+      "trusted_key": "old",
+      "verify": false
+    },
+    {
+      "case": "a rotation signed only by the new key is refused",
+      "envelope": {
+        "alg": "ES256",
+        "key_id": "4a5c6c28c19b0f78db8bb421eb1e35c6f761bf9b4e62eddf42d6e02ce538abdf",
+        "payload": "eyJuZXdfa2V5X2lkIjoiNGE1YzZjMjhjMTliMGY3OGRiOGJiNDIxZWIxZTM1YzZmNzYxYmY5YjRlNjJlZGRmNDJkNmUwMmNlNTM4YWJkZiIsIm5ld19rZXlfcGtpeCI6Ik1Ga3dFd1lIS29aSXpqMENBUVlJS29aSXpqMERBUWNEUWdBRVUrTEp1MzQzdENMMFRGdFRrTE1qVk1meThDeGhMa0NGcnVsdWdIa09lbFdNVk13RFl5VHU1SGlaSkttODBkTnF3WHJ0bzVmSFljN0NGQStjK0ZZQzJRPT0iLCJ0ZW5hbnRfaWQiOiJ0LTEiLCJ0eXBlIjoicm90YXRpb24iLCJ2ZXJzaW9uIjo0M30=",
+        "sig": "MEQCIB6VJ7RsbiWAE3I2tLJJ6A+zrVbRskNMKFj67fuoClWxAiArtA9ffURRVu7s8FdZlcHelOfxPv8SX3oE52BIhWLJnQ==",
+        "v": 2
+      },
+      "trusted_key": "old",
+      "verify": false
+    }
+  ],
+  "keys": {
+    "new": {
+      "key_id": "4a5c6c28c19b0f78db8bb421eb1e35c6f761bf9b4e62eddf42d6e02ce538abdf",
+      "pkix_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEU+LJu343tCL0TFtTkLMjVMfy8CxhLkCFrulugHkOelWMVMwDYyTu5HiZJKm80dNqwXrto5fHYc7CFA+c+FYC2Q=="
+    },
+    "old": {
+      "key_id": "6877951ef0c8eb773f7719262eb91f4d8420ebc418efd726eb1774f42f7b1176",
+      "pkix_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAETLhlSeJtww9gqKeVlahGiamgs4JHOKEia2cbgndqW8WzhoE+Ekqi80fbbot+hI73g34EZnUq0yZBuWq4UVOItQ=="
+    }
+  },
+  "note": "test keys only; the signatures are RFC 6979 deterministic so the file is reproducible; verify sig over the decoded payload bytes before parsing them"
+}

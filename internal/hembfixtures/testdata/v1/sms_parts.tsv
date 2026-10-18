@@ -1,0 +1,11 @@
+# parts	reports (part:report, in arrival order)	completion    one send; the message is delivered when every part is
+2	1:Delivered	Open
+2	1:Delivered,0:Delivered	Delivered
+2	0:Delivered,1:Delivered	Delivered
+3	1:Delivered,1:Delivered,0:Delivered	Open
+2	0:Delivered,1:CompletedUnconfirmed	Open
+2	0:Failed,1:Delivered	Failed
+2	0:Delivered,1:Failed,1:Delivered	Delivered
+2	0:Delivered,0:Pending,1:Delivered	Delivered
+1	0:Delivered	Delivered
+2	2:Delivered	Open

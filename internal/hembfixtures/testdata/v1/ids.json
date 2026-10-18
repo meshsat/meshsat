@@ -1,0 +1,113 @@
+{
+  "cases": [
+    {
+      "case": "a v7 mid",
+      "context": {},
+      "field": "mid",
+      "id": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+      "valid": true
+    },
+    {
+      "case": "a v7 op_id",
+      "context": {},
+      "field": "op_id",
+      "id": "01a14f31-668a-7132-b334-353637383940",
+      "valid": true
+    },
+    {
+      "case": "a v4 id is refused",
+      "context": {},
+      "field": "mid",
+      "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "valid": false
+    },
+    {
+      "case": "a variant other than 10 is refused",
+      "context": {},
+      "field": "mid",
+      "id": "01a14f31-6680-7a0b-cc0d-0e0f10111213",
+      "valid": false
+    },
+    {
+      "case": "upper case is not the canonical text",
+      "context": {},
+      "field": "mid",
+      "id": "01A14F31-6680-7A0B-8C0D-0E0F10111213",
+      "valid": false
+    },
+    {
+      "case": "C1c: a Hub ingress mid",
+      "context": {
+        "name": "twilio:SM0123456789abcdef0123456789abcdef",
+        "sender": "hub"
+      },
+      "field": "mid",
+      "id": "de69db04-7a9d-5f2f-bfb8-0e56550d6723",
+      "valid": true
+    },
+    {
+      "case": "C1c: the same v5 mid from a Bridge is refused",
+      "context": {
+        "sender": "bridge:kit-a"
+      },
+      "field": "mid",
+      "id": "de69db04-7a9d-5f2f-bfb8-0e56550d6723",
+      "valid": false
+    },
+    {
+      "case": "C1c: a v5 mid whose name does not derive it",
+      "context": {
+        "name": "twilio:SMother",
+        "sender": "hub"
+      },
+      "field": "mid",
+      "id": "de69db04-7a9d-5f2f-bfb8-0e56550d6723",
+      "valid": false
+    },
+    {
+      "case": "C10: a legacy SOS run",
+      "context": {
+        "bridge_id": "kit-a",
+        "legacy_run_ms": 1792330000123
+      },
+      "field": "sos_id",
+      "id": "862a1976-7edf-5287-b08d-3fa253439180",
+      "valid": true
+    },
+    {
+      "case": "C10: a v5 sos_id without its legacy run",
+      "context": {
+        "bridge_id": "kit-a"
+      },
+      "field": "sos_id",
+      "id": "862a1976-7edf-5287-b08d-3fa253439180",
+      "valid": false
+    },
+    {
+      "case": "C10: a legacy run of another Bridge",
+      "context": {
+        "bridge_id": "kit-b",
+        "legacy_run_ms": 1792330000123
+      },
+      "field": "sos_id",
+      "id": "862a1976-7edf-5287-b08d-3fa253439180",
+      "valid": false
+    },
+    {
+      "case": "a v5 op_id is refused",
+      "context": {
+        "bridge_id": "kit-a",
+        "legacy_run_ms": 1792330000123
+      },
+      "field": "op_id",
+      "id": "862a1976-7edf-5287-b08d-3fa253439180",
+      "valid": false
+    }
+  ],
+  "namespace": "a389cf74-e475-53d9-b656-d994a485fe0a",
+  "namespace_derivation": "UUIDv5(NAMESPACE_URL, \"https://meshsat.net/ns/hemb-ng/v1\")",
+  "v5_names": {
+    "C10": "<bridge id>:<run start unix ms>",
+    "C1c": "<provider>:<provider message id>"
+  }
+}

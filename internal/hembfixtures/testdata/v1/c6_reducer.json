@@ -1,0 +1,751 @@
+{
+  "consumers": "reduce every permutation and every duplicate of each set; each must give expect",
+  "escalation": [
+    {
+      "action": "raise_outcome",
+      "attempt_current": true,
+      "case": "completed while the attempt is current",
+      "class": "completed",
+      "intent_expired": false,
+      "intent_open": true
+    },
+    {
+      "action": "raise_outcome",
+      "attempt_current": false,
+      "case": "completed after the intent moved to another route",
+      "class": "completed",
+      "intent_expired": false,
+      "intent_open": true
+    },
+    {
+      "action": "raise_outcome",
+      "attempt_current": false,
+      "case": "completed after the intent closed",
+      "class": "completed",
+      "intent_expired": true,
+      "intent_open": false
+    },
+    {
+      "action": "may_plan_next_route",
+      "attempt_current": true,
+      "case": "failed while the attempt is current",
+      "class": "failed",
+      "intent_expired": false,
+      "intent_open": true
+    },
+    {
+      "action": "may_plan_next_route",
+      "attempt_current": true,
+      "case": "expired while the attempt is current",
+      "class": "expired",
+      "intent_expired": false,
+      "intent_open": true
+    },
+    {
+      "action": "record_only",
+      "attempt_current": false,
+      "case": "failed after the intent moved on",
+      "class": "failed",
+      "intent_expired": false,
+      "intent_open": true
+    },
+    {
+      "action": "record_only",
+      "attempt_current": true,
+      "case": "failed after the intent expired",
+      "class": "failed",
+      "intent_expired": true,
+      "intent_open": true
+    },
+    {
+      "action": "record_only",
+      "attempt_current": true,
+      "case": "forwarded changes no transition",
+      "class": "forwarded",
+      "intent_expired": false,
+      "intent_open": true
+    },
+    {
+      "action": "record_only",
+      "attempt_current": true,
+      "case": "unknown changes no transition",
+      "class": "unknown",
+      "intent_expired": false,
+      "intent_open": true
+    }
+  ],
+  "operation": {
+    "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+    "op_id": "01a14f31-668a-7132-b334-353637383940",
+    "recipient": "bridge:kit-b"
+  },
+  "projection_order": [
+    "completed",
+    "failed",
+    "expired",
+    "forwarded",
+    "unknown",
+    "accepted",
+    "pending"
+  ],
+  "rule": "state = the strongest class in the set of validated events (union by event_id); rev decides nothing; completed and failed together set conflict",
+  "sets": [
+    {
+      "case": "the review's counterexample: completed rev 3 and failed rev 4",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:04Z",
+          "authority": "hub",
+          "class": "failed",
+          "detail": "",
+          "event_id": "01a14f31-7620-7000-8000-000000000004",
+          "kind": "hub_refused",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "refused_not_admitted",
+          "recipient": "bridge:kit-b",
+          "rev": 4,
+          "scope": "the Hub",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": true,
+        "evidence": [
+          "01a14f31-7238-7000-8000-000000000003",
+          "01a14f31-7620-7000-8000-000000000004"
+        ],
+        "failed_reasons": [
+          "refused_not_admitted"
+        ],
+        "rejected": [],
+        "state": "completed"
+      }
+    },
+    {
+      "case": "completion after a higher-revision weaker event",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:07Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-81d8-7000-8000-000000000007",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 7,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-7238-7000-8000-000000000003",
+          "01a14f31-81d8-7000-8000-000000000007"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "completed"
+      }
+    },
+    {
+      "case": "completion after expiry",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:05Z",
+          "authority": "hub",
+          "class": "expired",
+          "detail": "",
+          "event_id": "01a14f31-7a08-7000-8000-000000000005",
+          "kind": "hub_expired",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "expired",
+          "recipient": "bridge:kit-b",
+          "rev": 5,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-7238-7000-8000-000000000003",
+          "01a14f31-7a08-7000-8000-000000000005"
+        ],
+        "failed_reasons": [
+          "expired"
+        ],
+        "rejected": [],
+        "state": "completed"
+      }
+    },
+    {
+      "case": "completion after a timeout reported unknown",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:06Z",
+          "authority": "hub",
+          "class": "unknown",
+          "detail": "",
+          "event_id": "01a14f31-7df0-7000-8000-000000000006",
+          "kind": "hub_unknown",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "publish_timeout",
+          "recipient": "bridge:kit-b",
+          "rev": 6,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-7238-7000-8000-000000000003",
+          "01a14f31-7df0-7000-8000-000000000006"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "completed"
+      }
+    },
+    {
+      "case": "failed, and nothing stronger",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:01Z",
+          "authority": "local",
+          "class": "accepted",
+          "detail": "",
+          "event_id": "01a14f31-6a68-7000-8000-000000000001",
+          "kind": "hub_broker_puback",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 0,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:04Z",
+          "authority": "hub",
+          "class": "failed",
+          "detail": "",
+          "event_id": "01a14f31-7620-7000-8000-000000000004",
+          "kind": "hub_refused",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "refused_not_admitted",
+          "recipient": "bridge:kit-b",
+          "rev": 4,
+          "scope": "the Hub",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6a68-7000-8000-000000000001",
+          "01a14f31-6e50-7000-8000-000000000002",
+          "01a14f31-7620-7000-8000-000000000004"
+        ],
+        "failed_reasons": [
+          "refused_not_admitted"
+        ],
+        "rejected": [],
+        "state": "failed"
+      }
+    },
+    {
+      "case": "expired after forwarding",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:01Z",
+          "authority": "local",
+          "class": "accepted",
+          "detail": "",
+          "event_id": "01a14f31-6a68-7000-8000-000000000001",
+          "kind": "hub_broker_puback",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 0,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:05Z",
+          "authority": "hub",
+          "class": "expired",
+          "detail": "",
+          "event_id": "01a14f31-7a08-7000-8000-000000000005",
+          "kind": "hub_expired",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "expired",
+          "recipient": "bridge:kit-b",
+          "rev": 5,
+          "scope": "the Hub",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6a68-7000-8000-000000000001",
+          "01a14f31-6e50-7000-8000-000000000002",
+          "01a14f31-7a08-7000-8000-000000000005"
+        ],
+        "failed_reasons": [
+          "expired"
+        ],
+        "rejected": [],
+        "state": "expired"
+      }
+    },
+    {
+      "case": "forwarded outranks unknown",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:06Z",
+          "authority": "hub",
+          "class": "unknown",
+          "detail": "",
+          "event_id": "01a14f31-7df0-7000-8000-000000000006",
+          "kind": "hub_unknown",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "publish_timeout",
+          "recipient": "bridge:kit-b",
+          "rev": 6,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6e50-7000-8000-000000000002",
+          "01a14f31-7df0-7000-8000-000000000006"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "forwarded"
+      }
+    },
+    {
+      "case": "unknown alone",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:01Z",
+          "authority": "local",
+          "class": "accepted",
+          "detail": "",
+          "event_id": "01a14f31-6a68-7000-8000-000000000001",
+          "kind": "hub_broker_puback",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 0,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:06Z",
+          "authority": "hub",
+          "class": "unknown",
+          "detail": "",
+          "event_id": "01a14f31-7df0-7000-8000-000000000006",
+          "kind": "hub_unknown",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "publish_timeout",
+          "recipient": "bridge:kit-b",
+          "rev": 6,
+          "scope": "the Hub",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6a68-7000-8000-000000000001",
+          "01a14f31-7df0-7000-8000-000000000006"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "unknown"
+      }
+    },
+    {
+      "case": "accepted alone",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:01Z",
+          "authority": "local",
+          "class": "accepted",
+          "detail": "",
+          "event_id": "01a14f31-6a68-7000-8000-000000000001",
+          "kind": "hub_broker_puback",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 0,
+          "scope": "the Hub",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6a68-7000-8000-000000000001"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "accepted"
+      }
+    },
+    {
+      "case": "a duplicate event counts once",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6e50-7000-8000-000000000002",
+          "01a14f31-7238-7000-8000-000000000003"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "completed"
+      }
+    },
+    {
+      "case": "evidence for another op, recipient or mid stays out",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:08Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-85c0-7000-8000-000000000008",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-66a8-7162-a364-656667686970",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 1,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:09Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-89a8-7000-8000-000000000009",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-c",
+          "rev": 1,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:10Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-8d90-7000-8000-00000000000a",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6681-7a1b-9c1d-1e1f20212223",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 1,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6e50-7000-8000-000000000002"
+        ],
+        "failed_reasons": [],
+        "rejected": [
+          "01a14f31-85c0-7000-8000-000000000008",
+          "01a14f31-89a8-7000-8000-000000000009",
+          "01a14f31-8d90-7000-8000-00000000000a"
+        ],
+        "state": "forwarded"
+      }
+    },
+    {
+      "case": "a completion the Hub claims for the recipient is not completion",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:11Z",
+          "authority": "hub",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-9178-7000-8000-00000000000b",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 8,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6e50-7000-8000-000000000002"
+        ],
+        "failed_reasons": [],
+        "rejected": [
+          "01a14f31-9178-7000-8000-00000000000b"
+        ],
+        "state": "forwarded"
+      }
+    },
+    {
+      "case": "no valid evidence",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:08Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-85c0-7000-8000-000000000008",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-66a8-7162-a364-656667686970",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 1,
+          "scope": "the recipient's MeshSat app",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [],
+        "failed_reasons": [],
+        "rejected": [
+          "01a14f31-85c0-7000-8000-000000000008"
+        ],
+        "state": "pending"
+      }
+    }
+  ]
+}

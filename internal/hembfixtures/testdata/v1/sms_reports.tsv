@@ -1,0 +1,15 @@
+# format	status_hex	report    TP-Status: 3GPP TS 23.040 9.2.3.15; CDMA: error class bits 25-24, status code bits 23-16
+3gpp	00000000	Delivered
+3gpp	00000001	CompletedUnconfirmed
+3gpp	00000002	CompletedUnconfirmed
+3gpp	0000001f	CompletedUnconfirmed
+3gpp	00000020	Pending
+3gpp	0000003f	Pending
+3gpp	00000040	Failed
+3gpp	00000065	Failed
+3gpp2	00020000	Delivered
+3gpp2	00000000	Pending
+3gpp2	00030000	Pending
+3gpp2	02020000	Pending
+3gpp2	03070000	Failed
+ims	00000000	unreadable

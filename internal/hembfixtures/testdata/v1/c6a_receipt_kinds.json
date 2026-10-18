@@ -1,0 +1,52 @@
+{
+  "kinds": [
+    {
+      "authority": "local",
+      "class": "accepted",
+      "kind": "hub_broker_puback",
+      "outcome": "accepted, not confirmed"
+    },
+    {
+      "authority": "hub",
+      "class": "forwarded",
+      "kind": "hub_forwarded",
+      "outcome": "evidence only"
+    },
+    {
+      "authority": "recipient",
+      "class": "completed",
+      "kind": "recipient_app_stored",
+      "outcome": "delivered_app"
+    },
+    {
+      "authority": "recipient",
+      "class": "failed",
+      "kind": "recipient_refused",
+      "outcome": "none"
+    },
+    {
+      "authority": "recipient",
+      "class": "expired",
+      "kind": "recipient_refused",
+      "outcome": "none"
+    },
+    {
+      "authority": "hub",
+      "class": "failed",
+      "kind": "hub_refused",
+      "outcome": "none"
+    },
+    {
+      "authority": "hub",
+      "class": "expired",
+      "kind": "hub_expired",
+      "outcome": "none"
+    },
+    {
+      "authority": "hub",
+      "class": "unknown",
+      "kind": "hub_unknown",
+      "outcome": "none"
+    }
+  ]
+}

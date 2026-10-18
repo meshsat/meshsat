@@ -1,0 +1,6 @@
+{
+  "fields_msgpack_hex": "82ccfbad6d6573687361742e6d69642f31ccfcc41001a14f3166807a0b8c0d0e0f10111213",
+  "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+  "rule": "a message that already carries another custom type is sent without the mid",
+  "what": "the LXMF fields map {0xFB: \"meshsat.mid/1\", 0xFC: bin(16) mid} in msgpack; FIELD_CUSTOM_TYPE = 0xFB, FIELD_CUSTOM_DATA = 0xFC (LXMF 1.2.0)"
+}

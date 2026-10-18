@@ -1,0 +1,367 @@
+{
+  "cases": [
+    {
+      "case": "a new op is admitted",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "a repeat with the same immutable fields replays every event",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "",
+            "result": "replay_all_events"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "a repeat with another recipient is refused",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "op_conflict",
+            "result": "refused"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-c"
+          }
+        }
+      ]
+    },
+    {
+      "case": "a repeat with another deadline is refused",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "op_conflict",
+            "result": "refused"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600001,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "the same op id from another tenant is another op",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-2",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "the same op id from another sender is another op",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "device:phone-1",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "a new op of a known mid with the same content is admitted",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-6694-7142-8344-454647484950",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "a new op of a known mid with changed content is refused",
+      "steps": [
+        {
+          "expect": {
+            "reason": "",
+            "result": "admitted"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        },
+        {
+          "expect": {
+            "reason": "mid_conflict",
+            "result": "refused"
+          },
+          "submission": {
+            "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-6694-7142-8344-454647484950",
+            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "a digest the Hub does not recompute is refused",
+      "steps": [
+        {
+          "expect": {
+            "reason": "digest_mismatch",
+            "result": "refused"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "an op deadline past the message deadline is refused",
+      "steps": [
+        {
+          "expect": {
+            "reason": "bad_expiry",
+            "result": "refused"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792333600001,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "case": "an op id that is not a v7 is refused",
+      "steps": [
+        {
+          "expect": {
+            "reason": "bad_id",
+            "result": "refused"
+          },
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "sender": "bridge:kit-a",
+            "tenant": "t-1",
+            "to": "bridge:kit-b"
+          }
+        }
+      ]
+    }
+  ],
+  "key": "(tenant, sender principal, op_id)",
+  "mid_index": "(tenant, sender principal, mid)"
+}

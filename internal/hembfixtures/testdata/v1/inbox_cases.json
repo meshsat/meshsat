@@ -1,0 +1,590 @@
+{
+  "capacity_target": 50000,
+  "cases": [
+    {
+      "capacity": 50000,
+      "case": "a first commit",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a repeat with the same digest is acknowledged again, not stored again",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": false
+          },
+          "now": 1792330005000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a repeat of the op with another digest is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "op_conflict",
+            "result": "refused"
+          },
+          "now": 1792330005000,
+          "submission": {
+            "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a repeat of the op with another mid is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "op_conflict",
+            "result": "refused"
+          },
+          "now": 1792330005000,
+          "submission": {
+            "content_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6681-7a1b-9c1d-1e1f20212223",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a second op of the same message is stored once and acknowledged",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": false
+          },
+          "now": 1792330005000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-6694-7142-8344-454647484950",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a second op of the same mid with changed content is refused, never acknowledged as the old message",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "mid_conflict",
+            "result": "refused"
+          },
+          "now": 1792330005000,
+          "submission": {
+            "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-6694-7142-8344-454647484950",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "the same op id from another origin is another operation",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330005000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-c",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a carried digest that the recomputation does not give is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "digest_mismatch",
+            "result": "refused"
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "an op deadline past the message deadline is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "bad_expiry",
+            "result": "refused"
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792333600001,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "an op id that is not a v7 is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "bad_id",
+            "result": "refused"
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a first commit inside the skew allowance is stored",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330700000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a first commit after expiry plus skew is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "expired_at_recipient",
+            "result": "refused"
+          },
+          "now": 1792330720001,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "with the clock not established it is stored and marked unjudged",
+      "steps": [
+        {
+          "clock_established": false,
+          "expect": {
+            "expiry_unjudged": true,
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330720001,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a committed op repeated after its expiry is acknowledged again",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": false
+          },
+          "now": 1792334320001,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a queued publication arriving after expiry is refused at commit; a new op cannot extend the message deadline",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "expired_at_recipient",
+            "result": "refused"
+          },
+          "now": 1792330720001,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "bad_expiry",
+            "result": "refused"
+          },
+          "now": 1792330720001,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792333660000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-6694-7142-8344-454647484950",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 2,
+      "case": "at capacity a new op is refused receiver_busy; an entry past its retention goes first",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "expires_at": 1792330001000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792330000000,
+          "submission": {
+            "content_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6681-7a1b-9c1d-1e1f20212223",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-6694-7142-8344-454647484950",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "receiver_busy",
+            "result": "refused"
+          },
+          "now": 1792330000001,
+          "submission": {
+            "content_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6682-7a2b-ac2d-2e2f30313233",
+            "mid_expires_at": 1792333600000,
+            "op_id": "01a14f31-669e-7152-9354-555657585960",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4"
+          }
+        },
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "",
+            "result": "stored",
+            "stored_now": true
+          },
+          "now": 1792416521001,
+          "submission": {
+            "content_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4",
+            "expires_at": 1792417121000,
+            "mid": "01a14f31-6682-7a2b-ac2d-2e2f30313233",
+            "mid_expires_at": 1792420121000,
+            "op_id": "01a14f31-669e-7152-9354-555657585960",
+            "origin": "bridge:kit-a",
+            "recomputed_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4"
+          }
+        }
+      ]
+    }
+  ],
+  "check_order": [
+    "ids (C1e)",
+    "digest recomputed (C1d)",
+    "expires_at <= mid_expires_at",
+    "known (origin, op_id)",
+    "known (origin, mid)",
+    "expiry at commit",
+    "capacity"
+  ],
+  "note": "recomputed_sha256 stands for the receiver's own recomputation of the digest from the delivered fields",
+  "retention_after_expiry_ms": 86400000,
+  "skew_ms": 120000
+}

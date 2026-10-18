@@ -1,0 +1,108 @@
+{
+  "frames": [
+    {
+      "hex": "4d530102056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c910",
+      "type": "0x02",
+      "what": "SOS today: header, bridge id, device id, lat, lon (float32 BE), text, unix s"
+    },
+    {
+      "hex": "4d530107056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c91001a14f3166807a7bbc7d7e7f80818283",
+      "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283",
+      "type": "0x07",
+      "what": "SOS start: 0x02's body unchanged, then the 16-byte sos_id"
+    },
+    {
+      "hex": "4d530108056b69742d6101a14f3166807a7bbc7d7e7f808182836ad4cb6800",
+      "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283",
+      "type": "0x08",
+      "what": "SOS cancel: header, bridge id, sos_id, unix s (4 bytes BE), reason (00 operator, 01 test ended)"
+    }
+  ],
+  "legacy_sos_id": {
+    "bridge_id": "kit-a",
+    "run_ms": 1792330000123,
+    "sos_id": "862a1976-7edf-5287-b08d-3fa253439180"
+  },
+  "state_key": "(tenant, origin principal, sos_id)",
+  "states": [
+    {
+      "case": "a cancel before the start is terminal; the start that follows does not page",
+      "expect": {
+        "pages": 0,
+        "state": "cancelled"
+      },
+      "steps": [
+        {
+          "event": "cancel",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        },
+        {
+          "event": "start",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        }
+      ]
+    },
+    {
+      "case": "a start then its cancel",
+      "expect": {
+        "pages": 1,
+        "state": "cancelled"
+      },
+      "steps": [
+        {
+          "event": "start",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        },
+        {
+          "event": "cancel",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        }
+      ]
+    },
+    {
+      "case": "the same start by three bearers pages once",
+      "expect": {
+        "pages": 1,
+        "state": "active"
+      },
+      "steps": [
+        {
+          "bearer": "imt",
+          "event": "start",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        },
+        {
+          "bearer": "sms",
+          "event": "start",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        },
+        {
+          "bearer": "mqtt",
+          "event": "start",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        }
+      ]
+    },
+    {
+      "case": "a new run with a new sos_id after a cancel alerts as usual",
+      "expect": {
+        "pages": 2,
+        "state": "active"
+      },
+      "steps": [
+        {
+          "event": "start",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        },
+        {
+          "event": "cancel",
+          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+        },
+        {
+          "event": "start",
+          "sos_id": "01a14f31-6689-7000-8000-000000000000"
+        }
+      ]
+    }
+  ]
+}
