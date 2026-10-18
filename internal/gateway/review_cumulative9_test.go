@@ -1,6 +1,6 @@
 package gateway
 
-// The review of c591fb28 (18 Oct 2026 15:37 CEST): TETRA-ACK2, its cases
+// The review of c491c811 (18 Oct 2026 15:37 CEST): TETRA-ACK2, its cases
 // as supplied. [MESHSAT-1584]
 
 import (
