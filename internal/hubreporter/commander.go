@@ -85,7 +85,9 @@ type CommandClaim struct {
 // it. [MESHSAT-1584]
 type CommandLog interface {
 	ClaimHubCommand(requestID, cmd, argsSHA256, runID string, now time.Time) (CommandClaim, error)
-	FinishHubCommand(requestID, runID, response string) error
+	// FinishHubCommand stores a reply only under the claim of runID with
+	// these arguments, and only while none is stored.
+	FinishHubCommand(requestID, runID, argsSHA256, response string) error
 }
 
 // CommandArgsDigest is the digest of what a command asks for: its name,
@@ -397,9 +399,16 @@ func (ch *CommandHandler) HandleCommand(payload []byte) {
 		return
 	}
 
+	// claimed: this invocation holds the command's log entry, and only then
+	// may it store the reply. A command that ran without a claim (the log
+	// was down) publishes its reply and stores nothing, or it could finish
+	// another invocation's unfinished entry under the same id (review
+	// 2026-10-18 19:34, FA-R3).
+	claimed := false
 	if ch.cmdLog != nil && cmd.RequestID != "" {
 		c, err := ch.cmdLog.ClaimHubCommand(cmd.RequestID, cmd.Cmd, commandArgsDigest(cmd), ch.runID, time.Now())
 		fresh, prev := c.Fresh, c.Response
+		claimed = err == nil && fresh
 		switch {
 		case err != nil:
 			// Without the log a repeat cannot be told apart: only a command
@@ -439,15 +448,16 @@ func (ch *CommandHandler) HandleCommand(payload []byte) {
 	result, err := handler(cmd)
 	if err != nil {
 		log.Error().Err(err).Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: command execution failed")
-		ch.sendErrorResponse(cmd, err.Error())
+		ch.sendErrorResponse(cmd, err.Error(), claimed)
 		return
 	}
 
-	ch.sendOkResponse(cmd, result)
+	ch.sendOkResponse(cmd, result, claimed)
 }
 
-// sendOkResponse publishes a successful command response to the Hub.
-func (ch *CommandHandler) sendOkResponse(cmd Command, result json.RawMessage) {
+// sendOkResponse publishes a successful command response to the Hub, and
+// stores it when this invocation holds the command's claim.
+func (ch *CommandHandler) sendOkResponse(cmd Command, result json.RawMessage, claimed bool) {
 	resp := CommandResponse{
 		Protocol:  ProtocolVersion,
 		RequestID: cmd.RequestID,
@@ -456,11 +466,12 @@ func (ch *CommandHandler) sendOkResponse(cmd Command, result json.RawMessage) {
 		Result:    result,
 		Timestamp: time.Now().UTC(),
 	}
-	ch.finish(resp)
+	ch.finish(cmd, resp, claimed)
 }
 
-// sendErrorResponse publishes an error command response to the Hub.
-func (ch *CommandHandler) sendErrorResponse(cmd Command, errMsg string) {
+// sendErrorResponse publishes an error command response to the Hub, and
+// stores it when this invocation holds the command's claim.
+func (ch *CommandHandler) sendErrorResponse(cmd Command, errMsg string, claimed bool) {
 	resp := CommandResponse{
 		Protocol:  ProtocolVersion,
 		RequestID: cmd.RequestID,
@@ -469,7 +480,7 @@ func (ch *CommandHandler) sendErrorResponse(cmd Command, errMsg string) {
 		Error:     errMsg,
 		Timestamp: time.Now().UTC(),
 	}
-	ch.finish(resp)
+	ch.finish(cmd, resp, claimed)
 }
 
 // refuse answers a command it did not run, without storing the answer: a
@@ -492,12 +503,13 @@ func (ch *CommandHandler) safeWithoutLog(name string) bool {
 	return false
 }
 
-// finish stores a command's reply under its request id, then publishes it.
-// The log keeps the first reply of the run that claimed the id.
-func (ch *CommandHandler) finish(resp CommandResponse) {
-	if ch.cmdLog != nil && resp.RequestID != "" {
+// finish stores a command's reply under the claim this invocation holds,
+// then publishes it. The log keeps the first reply of the run that claimed
+// the id with these arguments.
+func (ch *CommandHandler) finish(cmd Command, resp CommandResponse, claimed bool) {
+	if claimed && ch.cmdLog != nil && resp.RequestID != "" {
 		if data, err := json.Marshal(resp); err == nil {
-			if err := ch.cmdLog.FinishHubCommand(resp.RequestID, ch.runID, string(data)); err != nil {
+			if err := ch.cmdLog.FinishHubCommand(resp.RequestID, ch.runID, commandArgsDigest(cmd), string(data)); err != nil {
 				log.Warn().Err(err).Str("request_id", resp.RequestID).Msg("commander: reply not stored")
 			}
 		}

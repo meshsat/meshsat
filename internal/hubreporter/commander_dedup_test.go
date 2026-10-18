@@ -2,6 +2,7 @@ package hubreporter
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,8 +10,9 @@ import (
 
 // memCommandLog is CommandLog in memory, with the database's rules.
 type memCommandLog struct {
-	mu   sync.Mutex
-	rows map[string]*memCommand
+	mu       sync.Mutex
+	rows     map[string]*memCommand
+	finishes int
 }
 
 type memCommand struct{ resp, run, args string }
@@ -32,10 +34,11 @@ func (l *memCommandLog) ClaimHubCommand(id, _, args, run string, _ time.Time) (C
 	return CommandClaim{Response: r.resp}, nil
 }
 
-func (l *memCommandLog) FinishHubCommand(id, run, resp string) error {
+func (l *memCommandLog) FinishHubCommand(id, run, args, resp string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if r, ok := l.rows[id]; ok && r.run == run && r.resp == "" {
+	l.finishes++
+	if r, ok := l.rows[id]; ok && r.run == run && r.args == args && r.resp == "" {
 		r.resp = resp
 	}
 	return nil
@@ -119,5 +122,32 @@ func TestARefusalWhileTheCommandRunsDoesNotTakeItsReply(t *testing.T) {
 	ch.HandleCommand(b)
 	if got := l.rows["req-7"].resp; got != "" {
 		t.Fatalf("the refusal was stored as the running command's reply: %s", got)
+	}
+}
+
+// claimFailsLog is a command log whose claims fail and whose finishes are
+// counted.
+type claimFailsLog struct{ *memCommandLog }
+
+func (claimFailsLog) ClaimHubCommand(string, string, string, string, time.Time) (CommandClaim, error) {
+	return CommandClaim{}, errors.New("disk full")
+}
+
+// A command that ran without a claim publishes its reply and stores none:
+// storing it could finish another invocation's unfinished claim under the
+// same id (review 2026-10-18 19:34, FA-R3). [MESHSAT-1584]
+func TestACommandRunWithoutAClaimStoresNoReply(t *testing.T) {
+	l := &memCommandLog{rows: map[string]*memCommand{}}
+	runs := 0
+	ch := newDedupHandler(claimFailsLog{l}, &runs)
+	ch.deps.SendTextKeyed = func(string, string, string, string) (int64, string, error) { return 1, "", nil }
+	var replies []CommandResponse
+	ch.onResponse = func(r CommandResponse) { replies = append(replies, r) }
+	sendText(ch, "req-7", "hello")
+	if runs != 1 || len(replies) != 1 || replies[0].Status != "ok" {
+		t.Fatalf("runs %d, replies %+v; want the keyed send run and answered", runs, replies)
+	}
+	if l.finishes != 0 {
+		t.Fatalf("%d replies stored without a claim; want none", l.finishes)
 	}
 }

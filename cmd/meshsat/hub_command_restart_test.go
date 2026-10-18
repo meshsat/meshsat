@@ -64,11 +64,11 @@ func (l flakyLog) ClaimHubCommand(id, cmd, args, run string, now time.Time) (hub
 	return l.hubCommandLog.ClaimHubCommand(id, cmd, args, run, now)
 }
 
-func (l flakyLog) FinishHubCommand(id, run, resp string) error {
+func (l flakyLog) FinishHubCommand(id, run, args, resp string) error {
 	if l.failFinish {
 		return errors.New("disk full")
 	}
-	return l.hubCommandLog.FinishHubCommand(id, run, resp)
+	return l.hubCommandLog.FinishHubCommand(id, run, args, resp)
 }
 
 // handler is a new process's command handler (its own run id).
@@ -193,5 +193,30 @@ func TestACommandClaimedBeforeACrashRunsOnceAfterIt(t *testing.T) {
 	r.send(ch, "req-5", "send_text", textPayload)
 	if r.rows() != 1 {
 		t.Fatalf("%d rows; want the claimed command run once after the crash", r.rows())
+	}
+}
+
+// Review 2026-10-18 19:34, FA-R3 (the reviewer's counterexample): a request
+// whose reply could not be stored leaves its claim unfinished; a request
+// under the same id with other arguments, run while the log cannot claim,
+// is refused by the keyed queue, and that refusal must not become the first
+// request's stored reply. After a restart the first request replays its own
+// delivery.
+func TestAClaimThatFailedNeverSavesItsReplyUnderAnotherRequestsClaim(t *testing.T) {
+	r := newCommandRig(t)
+	ch := r.handler(flakyLog{hubCommandLog: hubCommandLog{r.db}, failFinish: true})
+	r.send(ch, "req-6", "send_text", textPayload)
+	first := deliveryID(t, r.last())
+
+	ch.SetCommandLog(flakyLog{hubCommandLog: hubCommandLog{r.db}, failClaim: true})
+	r.send(ch, "req-6", "send_text", `{"interface_id":"mesh_0","text":"other arguments"}`)
+	if r.last().Status != "error" {
+		t.Fatalf("the request with other arguments was not refused: %+v", r.last())
+	}
+
+	r.reopen()
+	r.send(r.handler(hubCommandLog{r.db}), "req-6", "send_text", textPayload)
+	if resp := r.last(); resp.Status != "ok" || deliveryID(t, resp) != first || r.rows() != 1 {
+		t.Fatalf("the first request replays %+v with %d rows; want its delivery %d, one row", resp, r.rows(), first)
 	}
 }

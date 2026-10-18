@@ -31,13 +31,13 @@ func TestHubCommandLogClaimsOnceAndKeepsTheReply(t *testing.T) {
 	if c := claim("req-1", "a1", "run-B", t0.Add(time.Minute)); !c.Fresh || c.Conflict {
 		t.Fatalf("after a restart: %+v", c)
 	}
-	if err := db.FinishHubCommand("req-1", "run-A", `{"status":"stale run"}`); err != nil {
+	if err := db.FinishHubCommand("req-1", "run-A", "a1", `{"status":"stale run"}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishHubCommand("req-1", "run-B", `{"status":"ok"}`); err != nil {
+	if err := db.FinishHubCommand("req-1", "run-B", "a1", `{"status":"ok"}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishHubCommand("req-1", "run-B", `{"status":"overwritten"}`); err != nil {
+	if err := db.FinishHubCommand("req-1", "run-B", "a1", `{"status":"overwritten"}`); err != nil {
 		t.Fatal(err)
 	}
 	if c := claim("req-1", "a1", "run-C", t0.Add(time.Hour)); c.Fresh || c.Response != `{"status":"ok"}` {
@@ -51,5 +51,27 @@ func TestHubCommandLogClaimsOnceAndKeepsTheReply(t *testing.T) {
 	}
 	if c := claim("req-1", "a2", "run-C", t0.Add(HubCommandWindow+time.Hour)); !c.Fresh || c.Conflict {
 		t.Fatalf("a day later: %+v", c)
+	}
+}
+
+// A reply is stored only under the claim it belongs to: the same id and run
+// with other arguments finish nothing (review 2026-10-18 19:34, FA-R3).
+func TestHubCommandReplyNeedsTheClaimsArguments(t *testing.T) {
+	db := testDB(t)
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	if c, err := db.ClaimHubCommand("req-1", "send_text", "a1", "run-A", t0); err != nil || !c.Fresh {
+		t.Fatalf("claim: %+v %v", c, err)
+	}
+	if err := db.FinishHubCommand("req-1", "run-A", "a2", `{"status":"error"}`); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := db.ClaimHubCommand("req-1", "send_text", "a1", "run-A", t0.Add(time.Second)); c.Response != "" {
+		t.Fatalf("a reply for other arguments was stored: %q", c.Response)
+	}
+	if err := db.FinishHubCommand("req-1", "run-A", "a1", `{"status":"ok"}`); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := db.ClaimHubCommand("req-1", "send_text", "a1", "run-B", t0.Add(time.Minute)); c.Response != `{"status":"ok"}` {
+		t.Fatalf("the claim's own reply: %q", c.Response)
 	}
 }
