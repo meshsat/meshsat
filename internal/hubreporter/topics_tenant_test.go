@@ -69,6 +69,13 @@ func TestATenantReporterUsesTheTenantRootEverywhere(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer r.Stop()
+	// Start returns at the CONNACK; paho runs the connect handler, which marks
+	// the reporter connected, on its own goroutine just after.
+	for deadline := time.Now().Add(10 * time.Second); !r.IsConnected(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("never connected")
+		}
+	}
 
 	if err := r.PublishDevicePosition("dev-1", DevicePosition{}); err != nil {
 		t.Fatalf("position: %v", err)

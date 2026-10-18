@@ -52,6 +52,11 @@ func TestHubTenantLive(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer r.Stop()
+	for deadline := time.Now().Add(15 * time.Second); !r.IsConnected(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("never connected")
+		}
+	}
 	t.Logf("connected as %s on root %q", b.BridgeID, r.topics.Root())
 	elapsed, err := r.Ping()
 	if err != nil {
