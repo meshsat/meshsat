@@ -128,31 +128,40 @@ func TestSendSDSMarksEveryFailureBeforeTheSDSWasWritten(t *testing.T) {
 		}
 	}
 	wait := func(br *bufio.Reader, c net.Conn) { br.ReadString('\r'); time.Sleep(4 * time.Second) }
+	// holdAfterSDS takes the SDS and keeps the port open past the context's
+	// deadline, so the send ends by cancellation, not by a closed port.
+	holdAfterSDS := func(br *bufio.Reader, c net.Conn) {
+		br.ReadString('\r')
+		c.Write([]byte("OK\r\n"))
+		br.ReadString('\x1a')
+		time.Sleep(time.Second)
+	}
 	for _, tc := range []struct {
 		name    string
 		refuse  string
 		script  func(*bufio.Reader, net.Conn)
 		ctxWait time.Duration
 		before  bool
+		want    error // the error the send must also carry, when set
 	}{
-		{"selection +CME ERROR", "", answer("+CME ERROR: 3\r\n"), 0, true},
-		{"selection ERROR", "", answer("ERROR\r\n"), 0, true},
-		{"selection never answered (timeout)", "", wait, 0, true},
-		{"cancelled while the selection waits", "", wait, 300 * time.Millisecond, true},
-		{"selection write refused", "AT+CTSDS", wait, 0, true},
+		{"selection +CME ERROR", "", answer("+CME ERROR: 3\r\n"), 0, true, nil},
+		{"selection ERROR", "", answer("ERROR\r\n"), 0, true, nil},
+		{"selection never answered (timeout)", "", wait, 0, true, nil},
+		{"cancelled while the selection waits", "", wait, 300 * time.Millisecond, true, context.DeadlineExceeded},
+		{"selection write refused", "AT+CTSDS", wait, 0, true, nil},
 		{"AT+CMGS write refused", "AT+CMGS", func(br *bufio.Reader, c net.Conn) {
 			br.ReadString('\r')
 			c.Write([]byte("OK\r\n"))
 			time.Sleep(200 * time.Millisecond)
-		}, 0, true},
-		{"AT+CMGS answered ERROR", "", afterSelection("ERROR\r\n"), 0, false},
-		{"AT+CMGS answered +CME ERROR", "", afterSelection("+CME ERROR: 3\r\n"), 0, false},
+		}, 0, true, nil},
+		{"AT+CMGS answered ERROR", "", afterSelection("ERROR\r\n"), 0, false, nil},
+		{"AT+CMGS answered +CME ERROR", "", afterSelection("+CME ERROR: 3\r\n"), 0, false, nil},
 		{"closed after the SDS", "", func(br *bufio.Reader, c net.Conn) {
 			br.ReadString('\r')
 			c.Write([]byte("OK\r\n"))
 			br.ReadString('\x1a')
-		}, 0, false},
-		{"cancelled after the SDS", "", afterSelection(""), 300 * time.Millisecond, false},
+		}, 0, false, nil},
+		{"cancelled after the SDS", "", holdAfterSDS, 300 * time.Millisecond, false, context.DeadlineExceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := session(t, tc.refuse, tc.script)
@@ -165,6 +174,9 @@ func TestSendSDSMarksEveryFailureBeforeTheSDSWasWritten(t *testing.T) {
 			_, err := s.SendSDS(ctx, "2000", 0x31, pdu, bits)
 			if err == nil || errors.Is(err, ErrSDSNotWritten) != tc.before {
 				t.Fatalf("%v; ErrSDSNotWritten %t, want %t", err, errors.Is(err, ErrSDSNotWritten), tc.before)
+			}
+			if tc.want != nil && (!errors.Is(err, tc.want) || errors.Is(err, ErrClosed)) {
+				t.Fatalf("%v; want %v and the port still open", err, tc.want)
 			}
 		})
 	}
