@@ -151,17 +151,22 @@ func (g *TetraGateway) takeAck(key tetraAckKey, ch chan struct{}) bool {
 }
 
 // afterSubmission says a send's error came once the SDS may have reached
-// the radio: not a port that closed before the SDS was written, not the
-// radio refusing the command (+CME ERROR as its answer). An
+// the radio. SendSDS marks every failure before the SDS was written
+// (tetra.ErrSDSNotWritten: the service selection failing in any way, the
+// port closed or refusing the write), so only those and the radio refusing
+// the AT+CMGS itself (+CME ERROR or ERROR as its answer) say no. An
 // acknowledgement matched to the SDS's reference and hash then outweighs
-// the error (review 2026-10-18 14:53, TETRA-ACK1); before that it can
-// only be an old one for the same reference and text. [MESHSAT-1584]
+// the error (review 2026-10-18 14:53, TETRA-ACK1); before submission it
+// can only be an old one for the same reference and text (review
+// 2026-10-18 15:37, TETRA-ACK2). [MESHSAT-1584]
 func afterSubmission(err error) bool {
 	var cme *tetra.CMEError
 	switch {
+	case errors.Is(err, tetra.ErrSDSNotWritten):
+		return false
 	case errors.Is(err, tetra.ErrSDSInFlight):
 		return true
-	case errors.Is(err, tetra.ErrClosed), errors.As(err, &cme):
+	case errors.Is(err, tetra.ErrClosed), errors.As(err, &cme), errors.Is(err, tetra.ErrAnsweredERROR):
 		return false
 	}
 	return true

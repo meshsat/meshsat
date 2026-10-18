@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,5 +144,91 @@ func TestTetraForward_AnAckBeforeTheRadiosFailureReportIsDelivered(t *testing.T)
 	}
 	if st := g.TetraStatus(); st.MessagesOut != 1 || st.NotSent != 0 {
 		t.Fatalf("counters %+v", st)
+	}
+}
+
+// refusingTetraPort fails, writing nothing, every write that starts with
+// prefix.
+type refusingTetraPort struct {
+	net.Conn
+	prefix string
+}
+
+func (p refusingTetraPort) Write(b []byte) (int, error) {
+	if p.prefix != "" && strings.HasPrefix(string(b), p.prefix) {
+		time.Sleep(300 * time.Millisecond) // the old ack comes in meanwhile
+		return 0, errors.New("write refused")
+	}
+	return p.Conn.Write(b)
+}
+
+// An old acknowledgement for the same reference and text, already in hand
+// when the send fails before the SDS was written, is not this send's: no
+// receipt, and the send is not sent (review 2026-10-18 15:37, TETRA-ACK2).
+// Nor is it when the radio answers AT+CMGS with a plain ERROR, its refusal.
+func TestTetraIntent_AnOldAckDoesNotMakeAReceiptForASendThatNeverWent(t *testing.T) {
+	text := "the same text, reference 0 again"
+	staleAck := ackLine(0, tetra.BodyOf(text))
+	for _, tc := range []struct {
+		name   string
+		refuse string
+		script func(br *bufio.Reader, c net.Conn)
+	}{
+		{"the selection never answered", "", func(br *bufio.Reader, c net.Conn) {
+			br.ReadString('\r')
+			c.Write([]byte(staleAck))
+			time.Sleep(4 * time.Second)
+		}},
+		{"the selection write refused", "AT+CTSDS", func(br *bufio.Reader, c net.Conn) {
+			time.Sleep(100 * time.Millisecond)
+			c.Write([]byte(staleAck))
+			time.Sleep(time.Second)
+		}},
+		{"the AT+CMGS write refused", "AT+CMGS", func(br *bufio.Reader, c net.Conn) {
+			br.ReadString('\r')
+			c.Write([]byte(staleAck + "OK\r\n"))
+			time.Sleep(time.Second)
+		}},
+		{"AT+CMGS answered ERROR", "", func(br *bufio.Reader, c net.Conn) {
+			br.ReadString('\r')
+			c.Write([]byte("OK\r\n"))
+			br.ReadString('\x1a')
+			c.Write([]byte(staleAck + "ERROR\r\n"))
+			time.Sleep(time.Second)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, radio := net.Pipe()
+			go func() {
+				defer radio.Close()
+				tc.script(bufio.NewReader(radio), radio)
+			}()
+			cfg := DefaultTetraConfig()
+			cfg.Acks = "on"
+			g := NewTetraGateway(cfg, "tetra_0", nil)
+			g.ref.Store(255) // the next SDS is reference 0, as the old ack's
+			g.jitter = func(time.Duration) time.Duration { return 0 }
+			g.ackTimeout = 300 * time.Millisecond
+			var matched atomic.Bool
+			g.sess = tetra.NewSession(refusingTetraPort{Conn: client, prefix: tc.refuse}, func(r tetra.Received) {
+				g.onSDS(r)
+				if l, err := tetra.DecodeLink(r.PDU); err == nil && l.Kind == tetra.LinkAck {
+					g.acks.mu.Lock()
+					ch := g.acks.pending[tetraAckKey{l.Ref, l.Hash}]
+					matched.Store(ch != nil && len(ch) == 1)
+					g.acks.mu.Unlock()
+				}
+			}, nil)
+			t.Cleanup(func() { g.sess.Close() })
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			o := g.IntentSend(ctx, IntentSend{Destination: "2000", Text: text, CorrValue: "c-old-ack"})
+			if !matched.Load() {
+				t.Fatal("setup: the old ack did not match the pending send")
+			}
+			if o.Class != IntentNotSent || o.Reason != "not_sent" || o.Receipt != nil {
+				t.Fatalf("%+v", o)
+			}
+		})
 	}
 }

@@ -23,8 +23,24 @@ var ErrClosed = errors.New("tetra: PEI closed")
 // write returns ErrClosed alone. [MESHSAT-1584]
 var ErrSDSInFlight = errors.New("tetra: the port closed after the SDS was written, before the radio answered")
 
+// ErrSDSNotWritten is wrapped by SendSDS when it failed before any of the
+// SDS was written to the port: the service selection failed in any way
+// (+CME ERROR, ERROR, a timeout, a cancelled context, a failed write), or
+// the port was closed or refused the AT+CMGS write. Nothing was submitted,
+// so nothing the radio says later is about this SDS (review 2026-10-18
+// 15:37, TETRA-ACK2). [MESHSAT-1584]
+var ErrSDSNotWritten = errors.New("tetra: the SDS was not written to the radio")
+
+// ErrAnsweredERROR is wrapped when the radio answered a command with a
+// plain ERROR, its refusal without a code.
+var ErrAnsweredERROR = errors.New("ERROR")
+
 // errClosedAfterWrite is exchangeHeld's ErrClosed once its write went out.
 var errClosedAfterWrite = fmt.Errorf("%w after the command was written", ErrClosed)
+
+// errNotWritten marks an exchangeHeld that failed before any byte of its
+// command reached the port.
+var errNotWritten = errors.New("the command was not written")
 
 // ErrTimeout is returned when the radio did not finish a command in time.
 var ErrTimeout = errors.New("tetra: no answer from the radio")
@@ -274,7 +290,7 @@ func (s *Session) exchange(ctx context.Context, cmd string, raw []byte, timeout 
 func (s *Session) exchangeHeld(ctx context.Context, cmd string, raw []byte, timeout time.Duration) ([]string, error) {
 	select {
 	case <-s.done:
-		return nil, ErrClosed
+		return nil, fmt.Errorf("%w (%w)", ErrClosed, errNotWritten)
 	default:
 	}
 	for drained := false; !drained; {
@@ -286,7 +302,10 @@ func (s *Session) exchangeHeld(ctx context.Context, cmd string, raw []byte, time
 	}
 	s.waiting.Store(true)
 	defer s.waiting.Store(false)
-	if _, err := s.port.Write(raw); err != nil {
+	if n, err := s.port.Write(raw); err != nil {
+		if n == 0 {
+			return nil, fmt.Errorf("tetra: write %s: %w (%w)", cmd, err, errNotWritten)
+		}
 		return nil, fmt.Errorf("tetra: write %s: %w", cmd, err)
 	}
 	deadline := time.NewTimer(timeout)
@@ -305,7 +324,7 @@ func (s *Session) exchangeHeld(ctx context.Context, cmd string, raw []byte, time
 			case line == "OK":
 				return lines, nil
 			case line == "ERROR":
-				return lines, fmt.Errorf("tetra: %s: ERROR", cmd)
+				return lines, fmt.Errorf("tetra: %s: %w", cmd, ErrAnsweredERROR)
 			case strings.HasPrefix(line, "+CME ERROR:"), strings.HasPrefix(line, "+CMS ERROR:"):
 				code, _ := strconv.Atoi(strings.TrimSpace(line[strings.Index(line, ":")+1:]))
 				return lines, &CMEError{Code: code}
@@ -453,7 +472,9 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 	// encryption: the radio's own default (AT+CTSDS? 12,0,0,0,0).
 	const sel = "AT+CTSDS=12,0,0,0,0"
 	if _, err := s.exchangeHeld(ctx, sel, []byte(sel+"\r"), 3*time.Second); err != nil {
-		return nil, err
+		// The selection only sets parameters for the next send: however it
+		// failed, no SDS was written.
+		return nil, fmt.Errorf("%w: %w", ErrSDSNotWritten, err)
 	}
 	for drained := false; !drained; {
 		select {
@@ -468,10 +489,12 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 	cmd := fmt.Sprintf("AT+CMGS=%s,%d", dest, bits)
 	raw := []byte(cmd + "\r\n" + strings.ToUpper(hex.EncodeToString(pdu)) + "\x1a")
 	lines, err := s.exchangeHeld(ctx, cmd, raw, 20*time.Second)
-	if errors.Is(err, errClosedAfterWrite) {
+	switch {
+	case errors.Is(err, errNotWritten):
+		return nil, fmt.Errorf("%w: %w", ErrSDSNotWritten, err)
+	case errors.Is(err, errClosedAfterWrite):
 		return nil, fmt.Errorf("%w (%w)", ErrSDSInFlight, ErrClosed)
-	}
-	if err != nil {
+	case err != nil:
 		return nil, err
 	}
 	accepted := false

@@ -568,9 +568,14 @@ func (g *TetraGateway) Send(ctx context.Context, msg *transport.MeshMessage) (Te
 				// Too long for the radio: no retry can help.
 				g.refusedLong.Add(1)
 				return res, fmt.Errorf("tetra: the radio refused the SDS to %s as too long (%d bytes): %v: %w", dest, len(pdu), err, transport.ErrPayloadTooLong)
-			case errors.As(err, &cme) && i == 0:
+			case (errors.As(err, &cme) || errors.Is(err, tetra.ErrAnsweredERROR)) && i == 0:
 				// The radio refused before anything went on air.
 				return res, fmt.Errorf("tetra: the radio refused the SDS to %s: %v: %w", dest, err, transport.ErrNotSubmitted)
+			case errors.Is(err, tetra.ErrSDSNotWritten) && i == 0:
+				// The send failed before the SDS reached the radio (the
+				// service selection, a refused write): nothing went
+				// (TETRA-ACK2).
+				return res, fmt.Errorf("tetra: the SDS to %s was never written to the radio: %v: %w", dest, err, transport.ErrNotSubmitted)
 			case errors.Is(err, tetra.ErrRadioNotSent):
 				// The radio took it and then said it did not go, as when
 				// both kits sent at the same instant (17 Oct 2026: +CME
