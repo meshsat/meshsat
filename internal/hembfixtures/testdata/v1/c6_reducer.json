@@ -88,7 +88,7 @@
     "accepted",
     "pending"
   ],
-  "rule": "state = the strongest class in the set of validated events (union by event_id); rev decides nothing; completed and failed together set conflict",
+  "rule": "state = the strongest class in the set of validated events (union by event_id); rev decides nothing; completed and failed together set conflict; an event is valid only from the source its authority has (local: the party's own broker session; hub, recipient: its msg/status topic)",
   "sets": [
     {
       "case": "the review's counterexample: completed rev 3 and failed rev 4",
@@ -106,6 +106,7 @@
           "recipient": "bridge:kit-b",
           "rev": 3,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -121,6 +122,7 @@
           "recipient": "bridge:kit-b",
           "rev": 4,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -153,6 +155,7 @@
           "recipient": "bridge:kit-b",
           "rev": 7,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -168,6 +171,7 @@
           "recipient": "bridge:kit-b",
           "rev": 3,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -198,6 +202,7 @@
           "recipient": "bridge:kit-b",
           "rev": 5,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -213,6 +218,7 @@
           "recipient": "bridge:kit-b",
           "rev": 3,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -245,6 +251,7 @@
           "recipient": "bridge:kit-b",
           "rev": 6,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -260,6 +267,7 @@
           "recipient": "bridge:kit-b",
           "rev": 3,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -290,6 +298,7 @@
           "recipient": "bridge:kit-b",
           "rev": 0,
           "scope": "the Hub",
+          "source": "local",
           "v": 1
         },
         {
@@ -305,6 +314,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -320,6 +330,7 @@
           "recipient": "bridge:kit-b",
           "rev": 4,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -353,6 +364,7 @@
           "recipient": "bridge:kit-b",
           "rev": 0,
           "scope": "the Hub",
+          "source": "local",
           "v": 1
         },
         {
@@ -368,6 +380,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -383,6 +396,7 @@
           "recipient": "bridge:kit-b",
           "rev": 5,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -416,6 +430,7 @@
           "recipient": "bridge:kit-b",
           "rev": 6,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -431,6 +446,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -461,6 +477,7 @@
           "recipient": "bridge:kit-b",
           "rev": 0,
           "scope": "the Hub",
+          "source": "local",
           "v": 1
         },
         {
@@ -476,6 +493,7 @@
           "recipient": "bridge:kit-b",
           "rev": 6,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -506,6 +524,7 @@
           "recipient": "bridge:kit-b",
           "rev": 0,
           "scope": "the Hub",
+          "source": "local",
           "v": 1
         }
       ],
@@ -535,6 +554,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -550,6 +570,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -565,6 +586,7 @@
           "recipient": "bridge:kit-b",
           "rev": 3,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -580,6 +602,7 @@
           "recipient": "bridge:kit-b",
           "rev": 3,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -610,6 +633,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -625,6 +649,7 @@
           "recipient": "bridge:kit-b",
           "rev": 1,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -640,6 +665,7 @@
           "recipient": "bridge:kit-c",
           "rev": 1,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -655,6 +681,7 @@
           "recipient": "bridge:kit-b",
           "rev": 1,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -688,6 +715,7 @@
           "recipient": "bridge:kit-b",
           "rev": 2,
           "scope": "the Hub",
+          "source": "status_topic",
           "v": 1
         },
         {
@@ -703,6 +731,7 @@
           "recipient": "bridge:kit-b",
           "rev": 8,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -734,6 +763,7 @@
           "recipient": "bridge:kit-b",
           "rev": 1,
           "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
           "v": 1
         }
       ],
@@ -746,6 +776,183 @@
         ],
         "state": "pending"
       }
+    },
+    {
+      "case": "a busy recipient is unknown, not failed",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:01Z",
+          "authority": "local",
+          "class": "accepted",
+          "detail": "",
+          "event_id": "01a14f31-6a68-7000-8000-000000000001",
+          "kind": "hub_broker_puback",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 0,
+          "scope": "the Hub",
+          "source": "local",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:12Z",
+          "authority": "recipient",
+          "class": "unknown",
+          "detail": "",
+          "event_id": "01a14f31-9560-7000-8000-00000000000c",
+          "kind": "recipient_busy",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "receiver_busy",
+          "recipient": "bridge:kit-b",
+          "rev": 9,
+          "scope": "the Hub",
+          "source": "status_topic",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6a68-7000-8000-000000000001",
+          "01a14f31-9560-7000-8000-00000000000c"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "unknown"
+      }
+    },
+    {
+      "case": "a busy recipient that stores it later is completed",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:12Z",
+          "authority": "recipient",
+          "class": "unknown",
+          "detail": "",
+          "event_id": "01a14f31-9560-7000-8000-00000000000c",
+          "kind": "recipient_busy",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "receiver_busy",
+          "recipient": "bridge:kit-b",
+          "rev": 9,
+          "scope": "the Hub",
+          "source": "status_topic",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:03Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-7238-7000-8000-000000000003",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 3,
+          "scope": "the recipient's MeshSat app",
+          "source": "status_topic",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-7238-7000-8000-000000000003",
+          "01a14f31-9560-7000-8000-00000000000c"
+        ],
+        "failed_reasons": [],
+        "rejected": [],
+        "state": "completed"
+      }
+    },
+    {
+      "case": "a broker PUBACK that arrives on the status topic is not evidence",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:13Z",
+          "authority": "local",
+          "class": "accepted",
+          "detail": "",
+          "event_id": "01a14f31-9948-7000-8000-00000000000d",
+          "kind": "hub_broker_puback",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 10,
+          "scope": "the Hub",
+          "source": "status_topic",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [],
+        "failed_reasons": [],
+        "rejected": [
+          "01a14f31-9948-7000-8000-00000000000d"
+        ],
+        "state": "pending"
+      }
+    },
+    {
+      "case": "a completion made locally is not the recipient's",
+      "events": [
+        {
+          "at": "2026-10-17T14:46:02Z",
+          "authority": "hub",
+          "class": "forwarded",
+          "detail": "",
+          "event_id": "01a14f31-6e50-7000-8000-000000000002",
+          "kind": "hub_forwarded",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 2,
+          "scope": "the Hub",
+          "source": "status_topic",
+          "v": 1
+        },
+        {
+          "at": "2026-10-17T14:46:14Z",
+          "authority": "recipient",
+          "class": "completed",
+          "detail": "",
+          "event_id": "01a14f31-9d30-7000-8000-00000000000e",
+          "kind": "recipient_app_stored",
+          "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+          "op_id": "01a14f31-668a-7132-b334-353637383940",
+          "reason": "",
+          "recipient": "bridge:kit-b",
+          "rev": 11,
+          "scope": "the recipient's MeshSat app",
+          "source": "local",
+          "v": 1
+        }
+      ],
+      "expect": {
+        "conflict": false,
+        "evidence": [
+          "01a14f31-6e50-7000-8000-000000000002"
+        ],
+        "failed_reasons": [],
+        "rejected": [
+          "01a14f31-9d30-7000-8000-00000000000e"
+        ],
+        "state": "forwarded"
+      }
     }
-  ]
+  ],
+  "source_by_authority": {
+    "hub": "status_topic",
+    "local": "local",
+    "recipient": "status_topic"
+  }
 }

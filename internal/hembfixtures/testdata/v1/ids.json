@@ -68,7 +68,7 @@
       "case": "C10: a legacy SOS run",
       "context": {
         "bridge_id": "kit-a",
-        "legacy_run_ms": 1792330000123
+        "run_start_ms": 1792330000123
       },
       "field": "sos_id",
       "id": "862a1976-7edf-5287-b08d-3fa253439180",
@@ -87,7 +87,17 @@
       "case": "C10: a legacy run of another Bridge",
       "context": {
         "bridge_id": "kit-b",
-        "legacy_run_ms": 1792330000123
+        "run_start_ms": 1792330000123
+      },
+      "field": "sos_id",
+      "id": "862a1976-7edf-5287-b08d-3fa253439180",
+      "valid": false
+    },
+    {
+      "case": "C10: the same run with its start cut to whole seconds",
+      "context": {
+        "bridge_id": "kit-a",
+        "run_start_ms": 1792330000000
       },
       "field": "sos_id",
       "id": "862a1976-7edf-5287-b08d-3fa253439180",
@@ -97,7 +107,7 @@
       "case": "a v5 op_id is refused",
       "context": {
         "bridge_id": "kit-a",
-        "legacy_run_ms": 1792330000123
+        "run_start_ms": 1792330000123
       },
       "field": "op_id",
       "id": "862a1976-7edf-5287-b08d-3fa253439180",
@@ -106,6 +116,7 @@
   ],
   "namespace": "a389cf74-e475-53d9-b656-d994a485fe0a",
   "namespace_derivation": "UUIDv5(NAMESPACE_URL, \"https://meshsat.net/ns/hemb-ng/v1\")",
+  "sos_rule": "an SOS frame or event carries run_start_ms; a v7 sos_id carries that time in its first 48 bits, a v5 sos_id is UUIDv5(namespace, \"<authenticated bridge id>:<run_start_ms>\")",
   "v5_names": {
     "C10": "<bridge id>:<run start unix ms>",
     "C1c": "<provider>:<provider message id>"

@@ -47,6 +47,12 @@
       "class": "unknown",
       "kind": "hub_unknown",
       "outcome": "none"
+    },
+    {
+      "authority": "recipient",
+      "class": "unknown",
+      "kind": "recipient_busy",
+      "outcome": "none; retryable, the Hub keeps trying until expires_at"
     }
   ]
 }

@@ -1,3 +1,3 @@
-tag fixtures-v1.0
-sha256 94f560dac19c1c49932668410a239c265d254cab210dedfbc4c93f6c3f5ab2dc
-source https://github.com/meshsat/meshsat-hub/tree/fixtures-v1.0/docs/fixtures/v1
+tag fixtures-v1.1
+sha256 433684467695e3061e41157276e50c62e57e00eb13aeb7e55c8c4c8ba499e91d
+source https://github.com/meshsat/meshsat-hub/tree/fixtures-v1.1/docs/fixtures/v1

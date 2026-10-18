@@ -1,32 +1,156 @@
 {
   "frames": [
     {
+      "case": "SOS today (type 0x02): header, bridge id, device id, lat, lon (float32 BE), text, unix s",
       "hex": "4d530102056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c910",
-      "type": "0x02",
-      "what": "SOS today: header, bridge id, device id, lat, lon (float32 BE), text, unix s"
+      "type": "0x02"
     },
     {
-      "hex": "4d530107056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c91001a14f3166807a7bbc7d7e7f80818283",
-      "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283",
+      "case": "a start under sos_v2",
+      "decoded": {
+        "bridge_id": "kit-a",
+        "device_id": "",
+        "run_start_ms": 1792330000123,
+        "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283",
+        "text": "Injured, need help",
+        "type": "0x07"
+      },
+      "hex": "4d530107056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c91001a14f3166fb7a7bbc7d7e7f80818283000001a14f3166fb",
       "type": "0x07",
-      "what": "SOS start: 0x02's body unchanged, then the 16-byte sos_id"
+      "valid": true
     },
     {
-      "hex": "4d530108056b69742d6101a14f3166807a7bbc7d7e7f808182836ad4cb6800",
-      "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283",
+      "case": "a cancel under sos_v2",
+      "decoded": {
+        "bridge_id": "kit-a",
+        "reason": 0,
+        "run_start_ms": 1792330000123,
+        "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283",
+        "type": "0x08"
+      },
+      "hex": "4d530108056b69742d6101a14f3166fb7a7bbc7d7e7f80818283000001a14f3166fb6ad4cb6800",
       "type": "0x08",
-      "what": "SOS cancel: header, bridge id, sos_id, unix s (4 bytes BE), reason (00 operator, 01 test ended)"
+      "valid": true
+    },
+    {
+      "case": "a run from before sos_v2, started again after an upgrade",
+      "decoded": {
+        "bridge_id": "kit-a",
+        "device_id": "",
+        "run_start_ms": 1792330000123,
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "text": "Injured, need help",
+        "type": "0x07"
+      },
+      "hex": "4d530107056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c910862a19767edf5287b08d3fa253439180000001a14f3166fb",
+      "type": "0x07",
+      "valid": true
+    },
+    {
+      "case": "its cancel, which may reach the Hub first",
+      "decoded": {
+        "bridge_id": "kit-a",
+        "reason": 0,
+        "run_start_ms": 1792330000123,
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "type": "0x08"
+      },
+      "hex": "4d530108056b69742d61862a19767edf5287b08d3fa253439180000001a14f3166fb6ad4cb6800",
+      "type": "0x08",
+      "valid": true
+    },
+    {
+      "case": "a v5 id with the start cut to seconds",
+      "decoded": {
+        "bridge_id": "kit-a",
+        "device_id": "",
+        "run_start_ms": 1792330000000,
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "text": "Injured, need help",
+        "type": "0x07"
+      },
+      "hex": "4d530107056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c910862a19767edf5287b08d3fa253439180000001a14f316680",
+      "type": "0x07",
+      "valid": false
+    },
+    {
+      "case": "a v5 id from another Bridge's frame",
+      "decoded": {
+        "bridge_id": "kit-b",
+        "reason": 0,
+        "run_start_ms": 1792330000123,
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "type": "0x08"
+      },
+      "hex": "4d530108056b69742d62862a19767edf5287b08d3fa253439180000001a14f3166fb6ad4c91000",
+      "type": "0x08",
+      "valid": false
+    },
+    {
+      "case": "a v7 id whose time is not the run's start",
+      "decoded": {
+        "bridge_id": "kit-a",
+        "device_id": "",
+        "run_start_ms": 1792330000124,
+        "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283",
+        "text": "Injured, need help",
+        "type": "0x07"
+      },
+      "hex": "4d530107056b69742d61004250a3d7408fae1412496e6a757265642c206e6565642068656c706ad4c91001a14f3166fb7a7bbc7d7e7f80818283000001a14f3166fc",
+      "type": "0x07",
+      "valid": false
     }
   ],
+  "layouts": {
+    "0x07": "header (4D 53 01 07), the 0x02 body unchanged, sos_id (16), run_start_ms (8, big-endian)",
+    "0x08": "header (4D 53 01 08), bridge id (1-byte length + bytes), sos_id (16), run_start_ms (8, BE), unix s (4, BE), reason (1: 00 operator, 01 test ended)"
+  },
   "legacy_sos_id": {
     "bridge_id": "kit-a",
-    "run_ms": 1792330000123,
+    "run_start_ms": 1792330000123,
     "sos_id": "862a1976-7edf-5287-b08d-3fa253439180"
   },
+  "mqtt": [
+    {
+      "case": "a start over MQTT",
+      "json": {
+        "kind": "start",
+        "lat": 52.16,
+        "lon": 4.49,
+        "run_start_ms": 1792330000123,
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "text": "Injured, need help",
+        "v": 2
+      },
+      "valid": true
+    },
+    {
+      "case": "its cancel over MQTT",
+      "json": {
+        "kind": "cancel",
+        "reason": 0,
+        "run_start_ms": 1792330000123,
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "v": 2
+      },
+      "valid": true
+    },
+    {
+      "case": "a v5 start over MQTT without run_start_ms",
+      "json": {
+        "kind": "start",
+        "sos_id": "862a1976-7edf-5287-b08d-3fa253439180",
+        "text": "x",
+        "v": 2
+      },
+      "valid": false
+    }
+  ],
+  "rule": "run_start_ms is in every frame and event; the Hub validates sos_id from it and the bridge id the ingress authenticated (SBD/IMT: the IMEI's bridge; SMS: the sender number's bridge; MQTT: the topic); a sender uses 0x07/0x08 and v2 JSON only after the Hub reports sos_v2",
   "state_key": "(tenant, origin principal, sos_id)",
   "states": [
     {
-      "case": "a cancel before the start is terminal; the start that follows does not page",
+      "case": "a migrated run's cancel before its start is terminal; the start that follows does not page",
       "expect": {
         "pages": 0,
         "state": "cancelled"
@@ -34,11 +158,11 @@
       "steps": [
         {
           "event": "cancel",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "862a1976-7edf-5287-b08d-3fa253439180"
         },
         {
           "event": "start",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "862a1976-7edf-5287-b08d-3fa253439180"
         }
       ]
     },
@@ -51,11 +175,11 @@
       "steps": [
         {
           "event": "start",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         },
         {
           "event": "cancel",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         }
       ]
     },
@@ -69,17 +193,17 @@
         {
           "bearer": "imt",
           "event": "start",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         },
         {
           "bearer": "sms",
           "event": "start",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         },
         {
           "bearer": "mqtt",
           "event": "start",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         }
       ]
     },
@@ -92,15 +216,15 @@
       "steps": [
         {
           "event": "start",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         },
         {
           "event": "cancel",
-          "sos_id": "01a14f31-6680-7a7b-bc7d-7e7f80818283"
+          "sos_id": "01a14f31-66fb-7a7b-bc7d-7e7f80818283"
         },
         {
           "event": "start",
-          "sos_id": "01a14f31-6689-7000-8000-000000000000"
+          "sos_id": "01a14f31-8a23-7000-8000-000000000000"
         }
       ]
     }

@@ -12,8 +12,10 @@ anything is written; a mismatch stops the run.
 
 Needs Python 3.10+ and the `cryptography` package (OpenSSL 3.2+ for the
 deterministic signatures). The contract is "HeMB-NG stage 2 and stage 3: the
-cross-repo contract", r3 (18 Oct 2026); the decision numbers below (C1d, C3,
-C6, ...) are its.
+cross-repo contract", r4 (18 Oct 2026); the decision numbers below (C1d, C3,
+C6, ...) are its. v1.1 corrects v1.0 after the review of 18 Oct 2026 19:34
+(C10-R1, FIX-R1): the receivers recompute the digest from the delivered
+fields, and the SOS frames carry the run's start in milliseconds.
 """
 
 import base64
@@ -29,7 +31,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RELEASE = "fixtures-v1.0"
+RELEASE = "fixtures-v1.1"
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://meshsat.net/ns/hemb-ng/v1")
 SKEW_MS = 120_000
 KEEP_AFTER_EXPIRY_MS = 24 * 3600_000
@@ -64,9 +66,24 @@ def id_valid(text, field, context):
         return False
     if field == "mid" and context.get("sender") == "hub":
         return context.get("name") is not None and str(uuid.uuid5(NAMESPACE, context["name"])) == text
-    if field == "sos_id" and "legacy_run_ms" in context:
-        return str(uuid.uuid5(NAMESPACE, "%s:%d" % (context["bridge_id"], context["legacy_run_ms"]))) == text
+    if field == "sos_id" and "run_start_ms" in context and "bridge_id" in context:
+        return str(uuid.uuid5(NAMESPACE, "%s:%d" % (context["bridge_id"], context["run_start_ms"]))) == text
     return False
+
+
+def sos_id_valid(text, bridge_id, run_start_ms):
+    """C10 (r4): every SOS frame and JSON event carries the run's start in ms. A v7 sos_id
+    must carry that time; a v5 one (a run that began before sos_v2) must derive from the
+    authenticated bridge id and that time."""
+    try:
+        u = uuid.UUID(text)
+    except ValueError:
+        return False
+    if str(u) != text or (u.bytes[8] >> 6) != 0b10:
+        return False
+    if u.version == 7:
+        return int.from_bytes(u.bytes[:6], "big") == run_start_ms
+    return id_valid(text, "sos_id", {"bridge_id": bridge_id, "run_start_ms": run_start_ms})
 
 
 T0 = 1_792_330_000_000  # 2026-10-17T14:46:40Z, the fixtures' clock
@@ -82,7 +99,7 @@ V4 = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 def ids():
     c1c_name = "twilio:SM0123456789abcdef0123456789abcdef"
-    c10 = {"bridge_id": "kit-a", "legacy_run_ms": 1_792_330_000_123}
+    c10 = {"bridge_id": "kit-a", "run_start_ms": 1_792_330_000_123}
     mid_v5 = str(uuid.uuid5(NAMESPACE, c1c_name))
     sos_v5 = str(uuid.uuid5(NAMESPACE, "kit-a:1792330000123"))
     bad_variant = MID_A[:19] + "c" + MID_A[20:]
@@ -97,7 +114,8 @@ def ids():
         {"case": "C1c: a v5 mid whose name does not derive it", "field": "mid", "id": mid_v5, "context": {"sender": "hub", "name": "twilio:SMother"}, "valid": False},
         {"case": "C10: a legacy SOS run", "field": "sos_id", "id": sos_v5, "context": c10, "valid": True},
         {"case": "C10: a v5 sos_id without its legacy run", "field": "sos_id", "id": sos_v5, "context": {"bridge_id": "kit-a"}, "valid": False},
-        {"case": "C10: a legacy run of another Bridge", "field": "sos_id", "id": sos_v5, "context": {"bridge_id": "kit-b", "legacy_run_ms": 1_792_330_000_123}, "valid": False},
+        {"case": "C10: a legacy run of another Bridge", "field": "sos_id", "id": sos_v5, "context": {"bridge_id": "kit-b", "run_start_ms": 1_792_330_000_123}, "valid": False},
+        {"case": "C10: the same run with its start cut to whole seconds", "field": "sos_id", "id": sos_v5, "context": {"bridge_id": "kit-a", "run_start_ms": 1_792_330_000_000}, "valid": False},
         {"case": "a v5 op_id is refused", "field": "op_id", "id": sos_v5, "context": c10, "valid": False},
     ]
     for c in cases:
@@ -106,6 +124,7 @@ def ids():
         "namespace": str(NAMESPACE),
         "namespace_derivation": "UUIDv5(NAMESPACE_URL, \"https://meshsat.net/ns/hemb-ng/v1\")",
         "v5_names": {"C1c": "<provider>:<provider message id>", "C10": "<bridge id>:<run start unix ms>"},
+        "sos_rule": "an SOS frame or event carries run_start_ms; a v7 sos_id carries that time in its first 48 bits, a v5 sos_id is UUIDv5(namespace, \"<authenticated bridge id>:<run_start_ms>\")",
         "cases": cases,
     }
 
@@ -151,10 +170,13 @@ def digests():
             "vectors": out}
 
 
-D_A = content_sha256(MID_A, "bridge:kit-b", TEXT, MID_EXPIRES, b"Water at the north gate")
-D_A2 = content_sha256(MID_A, "bridge:kit-b", TEXT, MID_EXPIRES, b"Water at the south gate")
-D_B = content_sha256(MID_B, "bridge:kit-b", TEXT, MID_EXPIRES, b"Ten minutes")
-D_C = content_sha256(MID_C, "bridge:kit-b", TEXT, MID_EXPIRES, b"x")
+NORTH = b"Water at the north gate"
+SOUTH = b"Water at the south gate"
+
+
+def recompute(s):
+    """What every receiver does: the digest from the delivered fields, never a carried value."""
+    return content_sha256(s["mid"], s["recipient"], s["content_type"], s["mid_expires_at"], bytes.fromhex(s["body_hex"]))
 
 
 # --- C3: the receiver inbox --------------------------------------------------
@@ -175,7 +197,7 @@ class Inbox:
         origin, op = s["origin"], s["op_id"]
         if not (id_valid(op, "op_id", {}) and id_valid(s["mid"], "mid", {})):
             return {"result": "refused", "reason": "bad_id"}
-        if s["content_sha256"] != s["recomputed_sha256"]:
+        if s["content_sha256"] != recompute(s):
             return {"result": "refused", "reason": "digest_mismatch"}
         if s["expires_at"] > s["mid_expires_at"]:
             return {"result": "refused", "reason": "bad_expiry"}
@@ -187,11 +209,13 @@ class Inbox:
         known = self.mids.get((origin, s["mid"]))
         if known is not None and known != s["content_sha256"]:
             return {"result": "refused", "reason": "mid_conflict"}
-        unjudged = False
+        unjudged = within_skew = False
         if now > s["expires_at"] + SKEW_MS:
             if clock_established:
                 return {"result": "refused", "reason": "expired_at_recipient"}
             unjudged = True
+        elif now > s["expires_at"]:
+            within_skew = True
         self.prune(now)
         if len(self.ops) >= self.capacity:
             return {"result": "refused", "reason": "receiver_busy"}
@@ -201,12 +225,19 @@ class Inbox:
         r = {"result": "stored", "reason": "", "stored_now": stored_now}
         if unjudged:
             r["expiry_unjudged"] = True
+        if within_skew:
+            r["accepted_within_skew"] = True
         return r
 
 
-def sub(op, mid=MID_A, digest=D_A, origin="bridge:kit-a", expires=T0 + 600_000, recomputed=None, mid_expires=MID_EXPIRES):
-    return {"origin": origin, "op_id": op, "mid": mid, "content_sha256": digest,
-            "recomputed_sha256": recomputed or digest, "expires_at": expires, "mid_expires_at": mid_expires}
+def sub(op, mid=MID_A, body=NORTH, origin="bridge:kit-a", expires=T0 + 600_000, mid_expires=MID_EXPIRES,
+        recipient="bridge:kit-b", carried=None):
+    """A submission as delivered: the fields the digest covers, and the digest the sender carried
+    (by default the right one; `carried` replaces it with what a faulty sender computed)."""
+    s = {"origin": origin, "op_id": op, "mid": mid, "recipient": recipient, "content_type": TEXT,
+         "mid_expires_at": mid_expires, "expires_at": expires, "body_hex": body.hex()}
+    s["content_sha256"] = carried if carried is not None else recompute(s)
+    return s
 
 
 def step(s, now, expect, clock_established=True):
@@ -223,29 +254,32 @@ def refused(reason):
 
 def inbox_cases():
     inside = T0 + 700_000   # the op expires at T0 + 600 s; with the 120 s skew it is still in time
+    stale = recompute(sub(OP_1))  # the digest of the north-gate message under its first deadline
     after = T0 + 720_001    # 1 ms past expires_at + skew
     cases = [
         ("a first commit", [step(sub(OP_1), T0, OK_NEW)]),
         ("a repeat with the same digest is acknowledged again, not stored again",
          [step(sub(OP_1), T0, OK_NEW), step(sub(OP_1), T0 + 5000, OK_AGAIN)]),
         ("a repeat of the op with another digest is refused",
-         [step(sub(OP_1), T0, OK_NEW), step(sub(OP_1, digest=D_A2), T0 + 5000, refused("op_conflict"))]),
+         [step(sub(OP_1), T0, OK_NEW), step(sub(OP_1, body=SOUTH), T0 + 5000, refused("op_conflict"))]),
         ("a repeat of the op with another mid is refused",
-         [step(sub(OP_1), T0, OK_NEW), step(sub(OP_1, mid=MID_B, digest=D_B), T0 + 5000, refused("op_conflict"))]),
+         [step(sub(OP_1), T0, OK_NEW), step(sub(OP_1, mid=MID_B, body=b"Ten minutes"), T0 + 5000, refused("op_conflict"))]),
         ("a second op of the same message is stored once and acknowledged",
          [step(sub(OP_1), T0, OK_NEW), step(sub(OP_2), T0 + 5000, OK_AGAIN)]),
         ("a second op of the same mid with changed content is refused, never acknowledged as the old message",
-         [step(sub(OP_1), T0, OK_NEW), step(sub(OP_2, digest=D_A2), T0 + 5000, refused("mid_conflict"))]),
+         [step(sub(OP_1), T0, OK_NEW), step(sub(OP_2, body=SOUTH), T0 + 5000, refused("mid_conflict"))]),
         ("the same op id from another origin is another operation",
          [step(sub(OP_1), T0, OK_NEW), step(sub(OP_1, origin="bridge:kit-c"), T0 + 5000, OK_NEW)]),
         ("a carried digest that the recomputation does not give is refused",
-         [step(sub(OP_1, recomputed=D_A2), T0, refused("digest_mismatch"))]),
+         [step(sub(OP_1, carried=recompute(sub(OP_1, body=SOUTH))), T0, refused("digest_mismatch"))]),
+        ("a changed deadline that keeps the old digest is refused",
+         [step(sub(OP_1, mid_expires=MID_EXPIRES + 60_000, carried=stale), T0, refused("digest_mismatch"))]),
         ("an op deadline past the message deadline is refused",
          [step(sub(OP_1, expires=MID_EXPIRES + 1), T0, refused("bad_expiry"))]),
         ("an op id that is not a v7 is refused",
          [step(sub(V4), T0, refused("bad_id"))]),
-        ("a first commit inside the skew allowance is stored",
-         [step(sub(OP_1), inside, OK_NEW)]),
+        ("a first commit inside the skew allowance is stored and marked as such",
+         [step(sub(OP_1), inside, dict(OK_NEW, accepted_within_skew=True))]),
         ("a first commit after expiry plus skew is refused",
          [step(sub(OP_1), after, refused("expired_at_recipient"))]),
         ("with the clock not established it is stored and marked unjudged",
@@ -267,9 +301,9 @@ def inbox_cases():
     # once the first is past its retention it is pruned and the third goes in
     retained_until = T0 + 1000 + SKEW_MS + KEEP_AFTER_EXPIRY_MS
     cap = [step(sub(OP_1, expires=T0 + 1000), T0, OK_NEW),
-           step(sub(OP_2, mid=MID_B, digest=D_B), T0, OK_NEW),
-           step(sub(OP_3, mid=MID_C, digest=D_C), T0 + 1, refused("receiver_busy")),
-           step(sub(OP_3, mid=MID_C, digest=D_C, expires=retained_until + 600_000, mid_expires=retained_until + 3600_000), retained_until + 1, OK_NEW)]
+           step(sub(OP_2, mid=MID_B, body=b"Ten minutes"), T0, OK_NEW),
+           step(sub(OP_3, mid=MID_C, body=b"x"), T0 + 1, refused("receiver_busy")),
+           step(sub(OP_3, mid=MID_C, body=b"x", expires=retained_until + 600_000, mid_expires=retained_until + 3600_000), retained_until + 1, OK_NEW)]
     box = Inbox(capacity=2)
     for st in cap:
         got = box.commit(st["submission"], st["now"], st["clock_established"])
@@ -278,7 +312,8 @@ def inbox_cases():
     return {"skew_ms": SKEW_MS, "retention_after_expiry_ms": KEEP_AFTER_EXPIRY_MS, "capacity_target": CAPACITY,
             "check_order": ["ids (C1e)", "digest recomputed (C1d)", "expires_at <= mid_expires_at", "known (origin, op_id)",
                             "known (origin, mid)", "expiry at commit", "capacity"],
-            "note": "recomputed_sha256 stands for the receiver's own recomputation of the digest from the delivered fields",
+            "rule": "the receiver recomputes content_sha256 from mid, recipient, content_type, mid_expires_at and body_hex (C1d) and refuses a carried value that differs",
+            "receiver_busy": "retryable: the Hub keeps the op and publishes class unknown, kind recipient_busy (C6a); never failed",
             "cases": out}
 
 
@@ -295,11 +330,11 @@ class HubOps:
         key = (s["tenant"], s["sender"], s["op_id"])
         if not (id_valid(s["op_id"], "op_id", {}) and id_valid(s["mid"], "mid", {})):
             return {"result": "refused", "reason": "bad_id"}
-        if s["content_sha256"] != s["recomputed_sha256"]:
+        if s["content_sha256"] != recompute(s):
             return {"result": "refused", "reason": "digest_mismatch"}
         if s["expires_at"] > s["mid_expires_at"]:
             return {"result": "refused", "reason": "bad_expiry"}
-        imm = (s["to"], s["mid"], s["content_sha256"], s["expires_at"])
+        imm = (s["recipient"], s["mid"], s["content_sha256"], s["expires_at"])
         if key in self.ops:
             if self.ops[key] == imm:
                 return {"result": "replay_all_events", "reason": ""}
@@ -312,9 +347,10 @@ class HubOps:
         return {"result": "admitted", "reason": ""}
 
 
-def hsub(op, tenant="t-1", sender="bridge:kit-a", to="bridge:kit-b", mid=MID_A, digest=D_A, expires=T0 + 600_000, recomputed=None):
-    return {"tenant": tenant, "sender": sender, "op_id": op, "to": to, "mid": mid, "content_sha256": digest,
-            "recomputed_sha256": recomputed or digest, "expires_at": expires, "mid_expires_at": MID_EXPIRES}
+def hsub(op, tenant="t-1", sender="bridge:kit-a", to="bridge:kit-b", mid=MID_A, body=NORTH, expires=T0 + 600_000, carried=None):
+    s = sub(op, mid=mid, body=body, expires=expires, recipient=to, carried=carried)
+    del s["origin"]
+    return dict(s, tenant=tenant, sender=sender)
 
 
 def hub_cases():
@@ -328,8 +364,8 @@ def hub_cases():
         ("the same op id from another tenant is another op", [(hsub(OP_1), A), (hsub(OP_1, tenant="t-2"), A)]),
         ("the same op id from another sender is another op", [(hsub(OP_1), A), (hsub(OP_1, sender="device:phone-1"), A)]),
         ("a new op of a known mid with the same content is admitted", [(hsub(OP_1), A), (hsub(OP_2), A)]),
-        ("a new op of a known mid with changed content is refused", [(hsub(OP_1), A), (hsub(OP_2, digest=D_A2), refused("mid_conflict"))]),
-        ("a digest the Hub does not recompute is refused", [(hsub(OP_1, recomputed=D_A2), refused("digest_mismatch"))]),
+        ("a new op of a known mid with changed content is refused", [(hsub(OP_1), A), (hsub(OP_2, body=SOUTH), refused("mid_conflict"))]),
+        ("a digest the Hub does not recompute is refused", [(hsub(OP_1, carried=recompute(sub(OP_1, body=SOUTH))), refused("digest_mismatch"))]),
         ("an op deadline past the message deadline is refused", [(hsub(OP_1, expires=MID_EXPIRES + 1), refused("bad_expiry"))]),
         ("an op id that is not a v7 is refused", [(hsub(V4), refused("bad_id"))]),
     ]
@@ -340,7 +376,8 @@ def hub_cases():
             got = hub.submit(s)
             assert got == want, (name, got, want)
         out.append({"case": name, "steps": [{"submission": s, "expect": w} for s, w in steps]})
-    return {"key": "(tenant, sender principal, op_id)", "mid_index": "(tenant, sender principal, mid)", "cases": out}
+    return {"key": "(tenant, sender principal, op_id)", "mid_index": "(tenant, sender principal, mid)",
+            "rule": "the Hub recomputes content_sha256 from the delivered fields (C1d); recipient is the payload's to", "cases": out}
 
 
 # --- C6 and C6a: the reducer -------------------------------------------------
@@ -354,7 +391,12 @@ KINDS = [
     {"kind": "hub_refused", "class": "failed", "authority": "hub", "outcome": "none"},
     {"kind": "hub_expired", "class": "expired", "authority": "hub", "outcome": "none"},
     {"kind": "hub_unknown", "class": "unknown", "authority": "hub", "outcome": "none"},
+    {"kind": "recipient_busy", "class": "unknown", "authority": "recipient", "outcome": "none; retryable, the Hub keeps trying until expires_at"},
 ]
+# Where a party's evidence comes from: its own broker session ("local") or its own msg/status
+# topic, which only the Hub may publish ("status_topic"). Local evidence never arrives on the
+# topic, and the Hub's and the recipient's never arise locally.
+SOURCE = {"local": "local", "hub": "status_topic", "recipient": "status_topic"}
 ALLOWED = {(k["kind"], k["class"], k["authority"]) for k in KINDS}
 ORDER = ["completed", "failed", "expired", "forwarded", "unknown", "accepted", "pending"]
 OPERATION = {"op_id": OP_1, "mid": MID_A, "recipient": "bridge:kit-b"}
@@ -362,7 +404,8 @@ OPERATION = {"op_id": OP_1, "mid": MID_A, "recipient": "bridge:kit-b"}
 
 def valid_event(op, e):
     return (e["op_id"] == op["op_id"] and e["mid"] == op["mid"] and e["recipient"] == op["recipient"]
-            and (e["kind"], e["class"], e["authority"]) in ALLOWED and id_valid(e["event_id"], "event_id", {}))
+            and (e["kind"], e["class"], e["authority"]) in ALLOWED and SOURCE[e["authority"]] == e["source"]
+            and id_valid(e["event_id"], "event_id", {}))
 
 
 def reduce_events(op, events):
@@ -387,9 +430,9 @@ def reduce_events(op, events):
 EV_SEQ = itertools.count(1)
 
 
-def ev(cls, kind, authority, rev, reason="", op=None, mid=None, recipient=None):
+def ev(cls, kind, authority, rev, reason="", op=None, mid=None, recipient=None, source=None):
     n = next(EV_SEQ)
-    return {"v": 1, "op_id": op or OP_1, "mid": mid or MID_A, "recipient": recipient or "bridge:kit-b",
+    return {"v": 1, "source": source or SOURCE[authority], "op_id": op or OP_1, "mid": mid or MID_A, "recipient": recipient or "bridge:kit-b",
             "event_id": str(uuid7(T0 + 1000 * n, n.to_bytes(10, "big"))), "rev": rev,
             "class": cls, "kind": kind, "reason": reason, "authority": authority,
             "scope": "the recipient's MeshSat app" if cls == "completed" else "the Hub",
@@ -408,6 +451,9 @@ def reducer_cases():
     other_rcpt = ev("completed", "recipient_app_stored", "recipient", 1, recipient="bridge:kit-c")
     other_mid = ev("completed", "recipient_app_stored", "recipient", 1, mid=MID_B)
     wrong_auth = ev("completed", "recipient_app_stored", "hub", 8)
+    busy = ev("unknown", "recipient_busy", "recipient", 9, "receiver_busy")
+    puback_on_topic = ev("accepted", "hub_broker_puback", "local", 10, source="status_topic")
+    hub_event_made_locally = ev("completed", "recipient_app_stored", "recipient", 11, source="local")
     sets = [
         ("the review's counterexample: completed rev 3 and failed rev 4", [done, fail], "completed", True),
         ("completion after a higher-revision weaker event", [fwd_hi, done], "completed", False),
@@ -422,6 +468,10 @@ def reducer_cases():
         ("evidence for another op, recipient or mid stays out", [fwd, other_op, other_rcpt, other_mid], "forwarded", False),
         ("a completion the Hub claims for the recipient is not completion", [fwd, wrong_auth], "forwarded", False),
         ("no valid evidence", [other_op], "pending", False),
+        ("a busy recipient is unknown, not failed", [acc, busy], "unknown", False),
+        ("a busy recipient that stores it later is completed", [busy, done], "completed", False),
+        ("a broker PUBACK that arrives on the status topic is not evidence", [puback_on_topic], "pending", False),
+        ("a completion made locally is not the recipient's", [fwd, hub_event_made_locally], "forwarded", False),
     ]
     out = []
     for name, events, state, conflict in sets:
@@ -450,7 +500,8 @@ def reducer_cases():
             action = "record_only"
         assert action == c["action"], c["case"]
     return {"operation": OPERATION, "projection_order": ORDER,
-            "rule": "state = the strongest class in the set of validated events (union by event_id); rev decides nothing; completed and failed together set conflict",
+            "rule": "state = the strongest class in the set of validated events (union by event_id); rev decides nothing; completed and failed together set conflict; an event is valid only from the source its authority has (local: the party's own broker session; hub, recipient: its msg/status topic)",
+            "source_by_authority": SOURCE,
             "consumers": "reduce every permutation and every duplicate of each set; each must give expect",
             "sets": out, "escalation": escalation}
 
@@ -525,37 +576,116 @@ def lp(s):
     return bytes([len(b)]) + b
 
 
+def sos_body(bridge, device, lat, lon, text, ts):
+    return lp(bridge) + lp(device) + struct.pack(">ff", lat, lon) + lp(text) + struct.pack(">I", ts)
+
+
+def hdr(t):
+    return bytes([0x4D, 0x53, 0x01, t])
+
+
+def frame07(body, sos_id, run_ms):
+    return hdr(0x07) + body + uuid.UUID(sos_id).bytes + struct.pack(">Q", run_ms)
+
+
+def frame08(bridge, sos_id, run_ms, ts, reason):
+    return hdr(0x08) + lp(bridge) + uuid.UUID(sos_id).bytes + struct.pack(">Q", run_ms) + struct.pack(">I", ts) + bytes([reason])
+
+
+def decode(frame):
+    """Reference decoder of 0x07/0x08 (C10, r4)."""
+    assert frame[:3] == bytes([0x4D, 0x53, 0x01])
+    t, off = frame[3], 4
+
+    def take_lp():
+        nonlocal off
+        n = frame[off]
+        v = frame[off + 1:off + 1 + n].decode()
+        off += 1 + n
+        return v
+    out = {"type": "0x%02x" % t, "bridge_id": take_lp()}
+    if t == 0x07:
+        out["device_id"] = take_lp()
+        off += 8
+        out["text"] = take_lp()
+        off += 4
+    out["sos_id"] = str(uuid.UUID(bytes=frame[off:off + 16]))
+    out["run_start_ms"] = struct.unpack(">Q", frame[off + 16:off + 24])[0]
+    off += 24
+    if t == 0x08:
+        out["reason"] = frame[off + 4]
+        off += 5
+    assert off == len(frame), (t, off, len(frame))
+    return out
+
+
+def sos_state(steps):
+    """Reference for the Hub's SOS state per (tenant, origin, sos_id): a cancel is terminal."""
+    state, pages = {}, 0
+    for st in steps:
+        key = st["sos_id"]
+        if st["event"] == "cancel":
+            state[key] = "cancelled"
+        elif state.get(key) is None:
+            state[key] = "active"
+            pages += 1
+    return state, pages
+
+
 def sos():
-    hdr = lambda t: bytes([0x4D, 0x53, 0x01, t])
-    sos_id = uuid7(T0, bytes.fromhex("7a7b7c7d7e7f80818283"))
-    body = lp("kit-a") + lp("") + struct.pack(">ff", 52.16, 4.49) + lp("Injured, need help") + struct.pack(">I", 1_792_330_000)
+    run_ms = 1_792_330_000_123            # nonzero milliseconds on purpose
+    v7 = str(uuid7(run_ms, bytes.fromhex("7a7b7c7d7e7f80818283")))
+    legacy = str(uuid.uuid5(NAMESPACE, "kit-a:%d" % run_ms))
+    body = sos_body("kit-a", "", 52.16, 4.49, "Injured, need help", run_ms // 1000)
     f02 = hdr(0x02) + body
-    f07 = hdr(0x07) + body + sos_id.bytes
-    f08 = hdr(0x08) + lp("kit-a") + sos_id.bytes + struct.pack(">I", 1_792_330_600) + bytes([0x00])
-    assert len(f07) == len(f02) + 16
-    second = str(uuid7(T0 + 9, bytes(10)))
+    frames = [
+        {"case": "SOS today (type 0x02): header, bridge id, device id, lat, lon (float32 BE), text, unix s", "type": "0x02", "hex": f02.hex()},
+        {"case": "a start under sos_v2", "type": "0x07", "hex": frame07(body, v7, run_ms).hex(), "valid": True},
+        {"case": "a cancel under sos_v2", "type": "0x08", "hex": frame08("kit-a", v7, run_ms, run_ms // 1000 + 600, 0).hex(), "valid": True},
+        {"case": "a run from before sos_v2, started again after an upgrade", "type": "0x07", "hex": frame07(body, legacy, run_ms).hex(), "valid": True},
+        {"case": "its cancel, which may reach the Hub first", "type": "0x08", "hex": frame08("kit-a", legacy, run_ms, run_ms // 1000 + 600, 0).hex(), "valid": True},
+        {"case": "a v5 id with the start cut to seconds", "type": "0x07", "hex": frame07(body, legacy, run_ms // 1000 * 1000).hex(), "valid": False},
+        {"case": "a v5 id from another Bridge's frame", "type": "0x08", "hex": frame08("kit-b", legacy, run_ms, run_ms // 1000, 0).hex(), "valid": False},
+        {"case": "a v7 id whose time is not the run's start", "type": "0x07", "hex": frame07(body, v7, run_ms + 1).hex(), "valid": False},
+    ]
+    for f in frames[1:]:
+        d = decode(bytes.fromhex(f["hex"]))
+        f["decoded"] = d
+        assert sos_id_valid(d["sos_id"], d["bridge_id"], d["run_start_ms"]) == f["valid"], f["case"]
+    assert len(bytes.fromhex(frames[1]["hex"])) == len(f02) + 24
+    mqtt = [
+        {"case": "a start over MQTT", "json": {"v": 2, "kind": "start", "sos_id": legacy, "run_start_ms": run_ms, "text": "Injured, need help", "lat": 52.16, "lon": 4.49}, "valid": True},
+        {"case": "its cancel over MQTT", "json": {"v": 2, "kind": "cancel", "sos_id": legacy, "run_start_ms": run_ms, "reason": 0}, "valid": True},
+        {"case": "a v5 start over MQTT without run_start_ms", "json": {"v": 2, "kind": "start", "sos_id": legacy, "text": "x"}, "valid": False},
+    ]
+    for m in mqtt:
+        j = m["json"]
+        ok = "run_start_ms" in j and sos_id_valid(j["sos_id"], "kit-a", j["run_start_ms"])
+        assert ok == m["valid"], m["case"]
+    second = str(uuid7(run_ms + 9_000, bytes(10)))
     states = [
-        {"case": "a cancel before the start is terminal; the start that follows does not page",
-         "steps": [{"event": "cancel", "sos_id": str(sos_id)}, {"event": "start", "sos_id": str(sos_id)}],
-         "expect": {"state": "cancelled", "pages": 0}},
+        {"case": "a migrated run's cancel before its start is terminal; the start that follows does not page",
+         "steps": [{"event": "cancel", "sos_id": legacy}, {"event": "start", "sos_id": legacy}], "expect": {"state": "cancelled", "pages": 0}},
         {"case": "a start then its cancel",
-         "steps": [{"event": "start", "sos_id": str(sos_id)}, {"event": "cancel", "sos_id": str(sos_id)}],
-         "expect": {"state": "cancelled", "pages": 1}},
+         "steps": [{"event": "start", "sos_id": v7}, {"event": "cancel", "sos_id": v7}], "expect": {"state": "cancelled", "pages": 1}},
         {"case": "the same start by three bearers pages once",
-         "steps": [{"event": "start", "sos_id": str(sos_id), "bearer": b} for b in ("imt", "sms", "mqtt")],
-         "expect": {"state": "active", "pages": 1}},
+         "steps": [{"event": "start", "sos_id": v7, "bearer": b} for b in ("imt", "sms", "mqtt")], "expect": {"state": "active", "pages": 1}},
         {"case": "a new run with a new sos_id after a cancel alerts as usual",
-         "steps": [{"event": "start", "sos_id": str(sos_id)}, {"event": "cancel", "sos_id": str(sos_id)},
-                   {"event": "start", "sos_id": second}],
+         "steps": [{"event": "start", "sos_id": v7}, {"event": "cancel", "sos_id": v7}, {"event": "start", "sos_id": second}],
          "expect": {"state": "active", "pages": 2}},
     ]
+    for c in states:
+        st, pages = sos_state(c["steps"])
+        assert st[c["steps"][-1]["sos_id"]] == c["expect"]["state"] and pages == c["expect"]["pages"], c["case"]
     return {
-        "frames": [
-            {"type": "0x02", "what": "SOS today: header, bridge id, device id, lat, lon (float32 BE), text, unix s", "hex": f02.hex()},
-            {"type": "0x07", "what": "SOS start: 0x02's body unchanged, then the 16-byte sos_id", "hex": f07.hex(), "sos_id": str(sos_id)},
-            {"type": "0x08", "what": "SOS cancel: header, bridge id, sos_id, unix s (4 bytes BE), reason (00 operator, 01 test ended)", "hex": f08.hex(), "sos_id": str(sos_id)},
-        ],
-        "legacy_sos_id": {"bridge_id": "kit-a", "run_ms": 1_792_330_000_123, "sos_id": str(uuid.uuid5(NAMESPACE, "kit-a:1792330000123"))},
+        "layouts": {
+            "0x07": "header (4D 53 01 07), the 0x02 body unchanged, sos_id (16), run_start_ms (8, big-endian)",
+            "0x08": "header (4D 53 01 08), bridge id (1-byte length + bytes), sos_id (16), run_start_ms (8, BE), unix s (4, BE), reason (1: 00 operator, 01 test ended)",
+        },
+        "rule": "run_start_ms is in every frame and event; the Hub validates sos_id from it and the bridge id the ingress authenticated (SBD/IMT: the IMEI's bridge; SMS: the sender number's bridge; MQTT: the topic); a sender uses 0x07/0x08 and v2 JSON only after the Hub reports sos_v2",
+        "frames": frames,
+        "mqtt": mqtt,
+        "legacy_sos_id": {"bridge_id": "kit-a", "run_start_ms": run_ms, "sos_id": legacy},
         "state_key": "(tenant, origin principal, sos_id)",
         "states": states,
     }

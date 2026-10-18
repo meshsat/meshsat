@@ -14,13 +14,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -38,13 +40,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -56,13 +60,15 @@
           },
           "now": 1792330005000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -80,13 +86,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -97,13 +105,15 @@
           },
           "now": 1792330005000,
           "submission": {
+            "body_hex": "57617465722061742074686520736f7574682067617465",
             "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -121,13 +131,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -138,13 +150,15 @@
           },
           "now": 1792330005000,
           "submission": {
+            "body_hex": "54656e206d696e75746573",
             "content_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6681-7a1b-9c1d-1e1f20212223",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -162,13 +176,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -180,13 +196,15 @@
           },
           "now": 1792330005000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-6694-7142-8344-454647484950",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -204,13 +222,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -221,13 +241,15 @@
           },
           "now": 1792330005000,
           "submission": {
+            "body_hex": "57617465722061742074686520736f7574682067617465",
             "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-6694-7142-8344-454647484950",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -245,13 +267,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -263,13 +287,15 @@
           },
           "now": 1792330005000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-c",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -286,13 +312,40 @@
           },
           "now": 1792330000000,
           "submission": {
-            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
+            "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4"
+            "recipient": "bridge:kit-b"
+          }
+        }
+      ]
+    },
+    {
+      "capacity": 50000,
+      "case": "a changed deadline that keeps the old digest is refused",
+      "steps": [
+        {
+          "clock_established": true,
+          "expect": {
+            "reason": "digest_mismatch",
+            "result": "refused"
+          },
+          "now": 1792330000000,
+          "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
+            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
+            "expires_at": 1792330600000,
+            "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
+            "mid_expires_at": 1792333660000,
+            "op_id": "01a14f31-668a-7132-b334-353637383940",
+            "origin": "bridge:kit-a",
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -309,13 +362,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792333600001,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -332,37 +387,42 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
     },
     {
       "capacity": 50000,
-      "case": "a first commit inside the skew allowance is stored",
+      "case": "a first commit inside the skew allowance is stored and marked as such",
       "steps": [
         {
           "clock_established": true,
           "expect": {
+            "accepted_within_skew": true,
             "reason": "",
             "result": "stored",
             "stored_now": true
           },
           "now": 1792330700000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -379,13 +439,15 @@
           },
           "now": 1792330720001,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -404,13 +466,15 @@
           },
           "now": 1792330720001,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -428,13 +492,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -446,13 +512,15 @@
           },
           "now": 1792334320001,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -469,13 +537,15 @@
           },
           "now": 1792330720001,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -486,13 +556,15 @@
           },
           "now": 1792330720001,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792333660000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-6694-7142-8344-454647484950",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -510,13 +582,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330001000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -528,13 +602,15 @@
           },
           "now": 1792330000000,
           "submission": {
+            "body_hex": "54656e206d696e75746573",
             "content_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6681-7a1b-9c1d-1e1f20212223",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-6694-7142-8344-454647484950",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "304d201ccd7fc515e885421419935eb944e17822a2596598c89c7f5462a7f829"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -545,13 +621,15 @@
           },
           "now": 1792330000001,
           "submission": {
+            "body_hex": "78",
             "content_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6682-7a2b-ac2d-2e2f30313233",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-669e-7152-9354-555657585960",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4"
+            "recipient": "bridge:kit-b"
           }
         },
         {
@@ -563,13 +641,15 @@
           },
           "now": 1792416521001,
           "submission": {
-            "content_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4",
+            "body_hex": "78",
+            "content_sha256": "6614c77d1e80dae2b0e30f1ede18c5f1cd0be17f9b3032dfb6054cfc52d296bb",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792417121000,
             "mid": "01a14f31-6682-7a2b-ac2d-2e2f30313233",
             "mid_expires_at": 1792420121000,
             "op_id": "01a14f31-669e-7152-9354-555657585960",
             "origin": "bridge:kit-a",
-            "recomputed_sha256": "9fed8704808d1471a97c55c82b5393ea08b9e719c7d53ca3587c989d71d226f4"
+            "recipient": "bridge:kit-b"
           }
         }
       ]
@@ -584,7 +664,8 @@
     "expiry at commit",
     "capacity"
   ],
-  "note": "recomputed_sha256 stands for the receiver's own recomputation of the digest from the delivered fields",
+  "receiver_busy": "retryable: the Hub keeps the op and publishes class unknown, kind recipient_busy (C6a); never failed",
   "retention_after_expiry_ms": 86400000,
+  "rule": "the receiver recomputes content_sha256 from mid, recipient, content_type, mid_expires_at and body_hex (C1d) and refuses a carried value that differs",
   "skew_ms": 120000
 }

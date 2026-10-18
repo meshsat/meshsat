@@ -9,15 +9,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -31,15 +32,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -48,15 +50,16 @@
             "result": "replay_all_events"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -70,15 +73,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -87,15 +91,16 @@
             "result": "refused"
           },
           "submission": {
-            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
+            "content_sha256": "754c079e60f39aa6874e83faef51c33a63d71604a8299d55e80c4690e02153f5",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-c",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-c"
+            "tenant": "t-1"
           }
         }
       ]
@@ -109,15 +114,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -126,15 +132,16 @@
             "result": "refused"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600001,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -148,15 +155,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -165,15 +173,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-2",
-            "to": "bridge:kit-b"
+            "tenant": "t-2"
           }
         }
       ]
@@ -187,15 +196,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -204,15 +214,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "device:phone-1",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -226,15 +237,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -243,15 +255,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-6694-7142-8344-454647484950",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -265,15 +278,16 @@
             "result": "admitted"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         },
         {
@@ -282,15 +296,16 @@
             "result": "refused"
           },
           "submission": {
+            "body_hex": "57617465722061742074686520736f7574682067617465",
             "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-6694-7142-8344-454647484950",
-            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -304,15 +319,16 @@
             "result": "refused"
           },
           "submission": {
-            "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
+            "content_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "2372b0c6cd8bb4ea0b4ca517ad6b54428741390e250dd8570da2d5e14b5556b4",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -326,15 +342,16 @@
             "result": "refused"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792333600001,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "01a14f31-668a-7132-b334-353637383940",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
@@ -348,20 +365,22 @@
             "result": "refused"
           },
           "submission": {
+            "body_hex": "576174657220617420746865206e6f7274682067617465",
             "content_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "content_type": "text/plain;charset=utf-8",
             "expires_at": 1792330600000,
             "mid": "01a14f31-6680-7a0b-8c0d-0e0f10111213",
             "mid_expires_at": 1792333600000,
             "op_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
-            "recomputed_sha256": "5edbe46d74d9e1159e5ad48456aa587c884854b996810f78f0317d9a5206358a",
+            "recipient": "bridge:kit-b",
             "sender": "bridge:kit-a",
-            "tenant": "t-1",
-            "to": "bridge:kit-b"
+            "tenant": "t-1"
           }
         }
       ]
     }
   ],
   "key": "(tenant, sender principal, op_id)",
-  "mid_index": "(tenant, sender principal, mid)"
+  "mid_index": "(tenant, sender principal, mid)",
+  "rule": "the Hub recomputes content_sha256 from the delivered fields (C1d); recipient is the payload's to"
 }

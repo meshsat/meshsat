@@ -1,10 +1,10 @@
 # HeMB-NG fixtures, release v1
 
-The shared test vectors of the HeMB-NG stage 2 contract (MESHSAT-1584): the Bridge (meshsat), the Hub (this repo), MeshSat Android and MeshSat iOS test against the same bytes. The decision numbers (C1d, C3, C6, ...) are the contract's, r3 of 18 Oct 2026.
+The shared test vectors of the HeMB-NG stage 2 contract (MESHSAT-1584): the Bridge (meshsat), the Hub (this repo), MeshSat Android and MeshSat iOS test against the same bytes. The decision numbers (C1d, C3, C6, ...) are the contract's, r4 of 18 Oct 2026.
 
 ## The release
 
-- This folder is the release. The tag `fixtures-v1.0` marks it. `RELEASE` names it.
+- This folder is the release; each version is a tag (`fixtures-v1.0`, `fixtures-v1.1`, ...) and `RELEASE` names the one this commit holds. A tag never moves.
 - `SHA256SUMS` lists every file but itself.
 - `generate.py` writes every file but this README and itself, byte for byte the same on every run (the ES256 signatures are RFC 6979 deterministic). `python3 generate.py --check` regenerates in memory and compares. Each expected value is written by hand in the script and checked against a small reference implementation before anything is written.
 - Every other repo keeps an exact copy and a `fixtures.lock` with the tag and the SHA-256 of this `SHA256SUMS`. Its test fails when the copy differs from the lock. Taking a new release means changing the lock; a repo cannot change the expected checksum on its own.
@@ -24,5 +24,12 @@ The shared test vectors of the HeMB-NG stage 2 contract (MESHSAT-1584): the Brid
 | `sos.json` | C10 | the `0x02`, `0x07` and `0x08` frames, the legacy `sos_id` derivation, the state cases |
 | `lxmf_mid_field.json` | C2 | the LXMF fields map carrying the `mid` |
 | `sms_reports.tsv`, `sms_parts.tsv` | C6a | an SMS delivery report's status by format, and the completion of a multipart send |
+
+## Changes in v1.1 (after the review of 18 Oct 2026 19:34)
+
+- **FIX-R1:** the inbox and Hub cases carry the delivered fields (`recipient`, `content_type`, `mid_expires_at`, `body_hex`) and the references recompute `content_sha256` from them; no case carries a stand-in "recomputed" value any more. The capacity case's last step now has the digest of its new deadline, and a new case keeps the old digest under a changed deadline and is refused `digest_mismatch`.
+- **C10-R1:** `0x07` and `0x08` carry `run_start_ms` (8 bytes, big-endian) after the `sos_id`, and so does the MQTT event. A v7 `sos_id` carries that time in its first 48 bits; a v5 one derives from the authenticated bridge id and that time. Migrated start and cancel frames with nonzero milliseconds are decoded and validated, a cancel before its start stays terminal.
+- An inbox commit after `expires_at` but within the skew allowance is marked `accepted_within_skew`.
+- C6: evidence is valid only from the source its authority has (`local` for the party's own broker PUBACK, the `msg/status` topic for the Hub's and the recipient's). New kind `recipient_busy`, class `unknown`: the retryable `receiver_busy` never reads as a failure.
 
 Every id, name and number here is made up. No key in this folder protects anything.
