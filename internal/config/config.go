@@ -211,6 +211,7 @@ type Config struct {
 	HubTLSKey         string // path to client TLS key
 	HubTLSCA          string // path to CA certificate for hub server verification
 	HubHealthInterval int    // health publish interval in seconds (default 30)
+	HubTopicPrefix    string // tenant topic root; empty = platform tenant ("meshsat"); the bundle's mqtt_topic_prefix in hub_connection wins [MESHSAT-1467]
 
 	// Satellite fallback uplink to the Hub when MQTT is down [MESHSAT-963]
 	HubSatFallback         bool   // enable the fallback monitor (default true; needs a Hub URL)
@@ -343,6 +344,7 @@ func Load() *Config {
 		HubTLSKey:         envStr("MESHSAT_HUB_TLS_KEY", ""),
 		HubTLSCA:          envStr("MESHSAT_HUB_TLS_CA", ""),
 		HubHealthInterval: envInt("MESHSAT_HUB_HEALTH_INTERVAL", 30),
+		HubTopicPrefix:    envStr("MESHSAT_HUB_TOPIC_PREFIX", ""),
 
 		HubSatFallback:         envBool("MESHSAT_HUB_SAT_FALLBACK", true),
 		HubSMSNumber:           envStr("MESHSAT_HUB_SMS_NUMBER", ""),

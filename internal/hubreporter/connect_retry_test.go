@@ -24,6 +24,8 @@ type fakeBroker struct {
 	mu        sync.Mutex
 	conns     []net.Conn
 	pubs      chan fakePublish // every PUBLISH received, while there is room
+	subs      chan string      // every SUBSCRIBE's topic filters, while there is room
+	wills     chan string      // the will topic of every CONNECT that carries one
 }
 
 // fakePublish is one PUBLISH as the broker received it.
@@ -50,7 +52,7 @@ func newFakeBroker(t *testing.T, addr string) *fakeBroker {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	b := &fakeBroker{ln: ln, closeOnce: make(chan struct{}), pubs: make(chan fakePublish, 64)}
+	b := &fakeBroker{ln: ln, closeOnce: make(chan struct{}), pubs: make(chan fakePublish, 64), subs: make(chan string, 64), wills: make(chan string, 8)}
 	go b.serve()
 	t.Cleanup(func() { b.Close() })
 	return b
@@ -105,6 +107,12 @@ func (b *fakeBroker) session(c net.Conn) {
 		switch pktType {
 		case 1: // CONNECT
 			b.connects.Add(1)
+			if will, ok := connectWillTopic(body); ok {
+				select {
+				case b.wills <- will:
+				default:
+				}
+			}
 			// CONNACK: session present 0, return code 0 (accepted)
 			if _, err := c.Write([]byte{0x20, 0x02, 0x00, 0x00}); err != nil {
 				return
@@ -130,6 +138,17 @@ func (b *fakeBroker) session(c net.Conn) {
 		case 8: // SUBSCRIBE — SUBACK granting QoS 0
 			if len(body) >= 2 {
 				c.Write([]byte{0x90, 0x03, body[0], body[1], 0x00})
+				for rest := body[2:]; len(rest) >= 3; {
+					n := int(binary.BigEndian.Uint16(rest[:2]))
+					if len(rest) < 2+n+1 {
+						break
+					}
+					select {
+					case b.subs <- string(rest[2 : 2+n]):
+					default:
+					}
+					rest = rest[2+n+1:]
+				}
 			}
 		case 12: // PINGREQ
 			c.Write([]byte{0xD0, 0x00})
@@ -137,6 +156,35 @@ func (b *fakeBroker) session(c net.Conn) {
 			return
 		}
 	}
+}
+
+// connectWillTopic reads the will topic out of a CONNECT body (MQTT 3.1.1).
+func connectWillTopic(body []byte) (string, bool) {
+	if len(body) < 2 {
+		return "", false
+	}
+	i := 2 + int(binary.BigEndian.Uint16(body[:2])) // protocol name
+	if len(body) < i+4 {
+		return "", false
+	}
+	flags := body[i+1]
+	i += 4 // level, flags, keep-alive
+	field := func() (string, bool) {
+		if len(body) < i+2 {
+			return "", false
+		}
+		n := int(binary.BigEndian.Uint16(body[i : i+2]))
+		if len(body) < i+2+n {
+			return "", false
+		}
+		s := string(body[i+2 : i+2+n])
+		i += 2 + n
+		return s, true
+	}
+	if _, ok := field(); !ok || flags&0x04 == 0 { // client id, then the will flag
+		return "", false
+	}
+	return field()
 }
 
 func readRemainingLength(r io.Reader) (int, error) {

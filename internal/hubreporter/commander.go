@@ -527,7 +527,7 @@ func (ch *CommandHandler) publishResponse(resp CommandResponse) {
 		return
 	}
 
-	topic := TopicBridgeCmdResp(ch.bridgeID)
+	topic := ch.reporter.topics.BridgeCmdResp(ch.bridgeID)
 	if err := ch.reporter.publish(topic, 1, false, resp); err != nil {
 		log.Error().Err(err).Str("request_id", resp.RequestID).Msg("commander: failed to publish response")
 	} else {

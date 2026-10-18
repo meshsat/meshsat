@@ -17,26 +17,27 @@ import (
 // ProtocolVersion identifies this protocol revision. The Hub rejects unknown versions.
 const ProtocolVersion = "meshsat-uplink/v1"
 
-// MQTT topic patterns. Use the Topic* functions for safe formatting.
+// MQTT topic patterns, below the tenant's root (Topics). Use the Topics
+// methods, or the Topic* functions for the platform tenant.
 const (
-	topicBridgeBirth   = "meshsat/bridge/%s/birth"
-	topicBridgeDeath   = "meshsat/bridge/%s/death"
-	topicBridgeHealth  = "meshsat/bridge/%s/health"
-	topicBridgeCmd     = "meshsat/bridge/%s/cmd"
-	topicBridgeCmdResp = "meshsat/bridge/%s/cmd/response"
-	topicDeviceBirth   = "meshsat/bridge/%s/device/%s/birth"
-	topicDeviceDeath   = "meshsat/bridge/%s/device/%s/death"
+	topicBridgeBirth   = "%s/bridge/%s/birth"
+	topicBridgeDeath   = "%s/bridge/%s/death"
+	topicBridgeHealth  = "%s/bridge/%s/health"
+	topicBridgeCmd     = "%s/bridge/%s/cmd"
+	topicBridgeCmdResp = "%s/bridge/%s/cmd/response"
+	topicDeviceBirth   = "%s/bridge/%s/device/%s/birth"
+	topicDeviceDeath   = "%s/bridge/%s/device/%s/death"
 
 	// Legacy device topics — existing Hub TAK subscriber listens on these.
-	topicDevicePosition  = "meshsat/%s/position"
-	topicDeviceTelemetry = "meshsat/%s/telemetry"
-	topicDeviceSOS       = "meshsat/%s/sos"
-	topicDeviceMessage   = "meshsat/%s/mo/decoded"
+	topicDevicePosition  = "%s/%s/position"
+	topicDeviceTelemetry = "%s/%s/telemetry"
+	topicDeviceSOS       = "%s/%s/sos"
+	topicDeviceMessage   = "%s/%s/mo/decoded"
 
 	// Spectrum alerts are per-bridge (the scan is a property of the kit's
 	// RTL-SDR, not a paired device), so the topic is scoped to the bridge
 	// ID and the band identifier is inside the payload.
-	topicBridgeSpectrum = "meshsat/bridge/%s/spectrum"
+	topicBridgeSpectrum = "%s/bridge/%s/spectrum"
 
 	// CoT XML the TAK gateway exports to the Hub ("MQTT Export to Hub"), on
 	// the bridge's OWN subtree. It was meshsat/<id>/tak/cot/out until
@@ -44,14 +45,135 @@ const (
 	// the broker grants each bridge meshsat/bridge/<its id>/# and nothing
 	// device-shaped for TAK, so the export went nowhere. The Hub listens here
 	// (meshsat-hub MESHSAT-1458) and forwards to the tenant's TAK servers.
-	topicTAKCoTOut = "meshsat/bridge/%s/tak/cot/out"
+	topicTAKCoTOut = "%s/bridge/%s/tak/cot/out"
 
 	// What the Hub delivers back (meshsat-hub MESHSAT-1461): an event from one
 	// of the tenant's TAK servers on this topic, and an event another bridge
 	// of the tenant exported one level below it, with that bridge's id as the
 	// last segment.
-	topicTAKCoTIn = "meshsat/broadcast/tak/cot/in"
+	topicTAKCoTIn = "%s/broadcast/tak/cot/in"
 )
+
+// DefaultTopicRoot is the platform tenant's topic root.
+const DefaultTopicRoot = "meshsat"
+
+// reservedTenantIDs are second topic segments that are not tenants on the Hub
+// (meshsat-hub store.ReservedTenantIDs and hubmqtt reservedSecond).
+var reservedTenantIDs = map[string]bool{
+	"bridge": true, "hub": true, "broadcast": true, "reticulum": true, "federation": true, "routed": true, "relay": true,
+}
+
+// Topics builds every Hub topic under one tenant's root (MESHSAT-1467, HeMB-NG
+// contract C13): "meshsat" for the platform tenant, "meshsat/{tenant}" for a
+// customer tenant, as the Hub's provisioning bundle gives it in
+// mqtt_topic_prefix. The broker confines a customer bridge's credential to its
+// tenant's root, so a bridge on the wrong root can publish nothing at all.
+type Topics struct{ root string }
+
+// NewTopics checks a topic root from the Hub's bundle. Empty is the platform
+// tenant. Anything but "meshsat" or "meshsat/{tenant}" with a plain tenant id
+// is refused: a wildcard, a slash or a dot there would move the bridge onto
+// other topics (a dot splits a NATS subject).
+func NewTopics(prefix string) (Topics, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" || prefix == DefaultTopicRoot {
+		return Topics{root: DefaultTopicRoot}, nil
+	}
+	tenant, ok := strings.CutPrefix(prefix, DefaultTopicRoot+"/")
+	if !ok || !validTenantSegment(tenant) {
+		return Topics{}, fmt.Errorf("hub topic prefix %q: want %q or %q", prefix, DefaultTopicRoot, DefaultTopicRoot+"/<tenant>")
+	}
+	if reservedTenantIDs[tenant] {
+		return Topics{}, fmt.Errorf("hub topic prefix %q: %q is not a tenant", prefix, tenant)
+	}
+	return Topics{root: prefix}, nil
+}
+
+func validTenantSegment(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// Root is the tenant's topic root.
+func (t Topics) Root() string {
+	if t.root == "" {
+		return DefaultTopicRoot
+	}
+	return t.root
+}
+
+func (t Topics) BridgeBirth(bridgeID string) string {
+	return fmt.Sprintf(topicBridgeBirth, t.Root(), bridgeID)
+}
+func (t Topics) BridgeDeath(bridgeID string) string {
+	return fmt.Sprintf(topicBridgeDeath, t.Root(), bridgeID)
+}
+func (t Topics) BridgeHealth(bridgeID string) string {
+	return fmt.Sprintf(topicBridgeHealth, t.Root(), bridgeID)
+}
+func (t Topics) BridgeCmd(bridgeID string) string {
+	return fmt.Sprintf(topicBridgeCmd, t.Root(), bridgeID)
+}
+func (t Topics) BridgeCmdResp(bridgeID string) string {
+	return fmt.Sprintf(topicBridgeCmdResp, t.Root(), bridgeID)
+}
+func (t Topics) DeviceBirth(bridgeID, deviceID string) string {
+	return fmt.Sprintf(topicDeviceBirth, t.Root(), bridgeID, deviceID)
+}
+func (t Topics) DeviceDeath(bridgeID, deviceID string) string {
+	return fmt.Sprintf(topicDeviceDeath, t.Root(), bridgeID, deviceID)
+}
+func (t Topics) DevicePosition(deviceID string) string {
+	return fmt.Sprintf(topicDevicePosition, t.Root(), deviceID)
+}
+func (t Topics) DeviceTelemetry(deviceID string) string {
+	return fmt.Sprintf(topicDeviceTelemetry, t.Root(), deviceID)
+}
+func (t Topics) DeviceSOS(deviceID string) string {
+	return fmt.Sprintf(topicDeviceSOS, t.Root(), deviceID)
+}
+func (t Topics) DeviceMessage(deviceID string) string {
+	return fmt.Sprintf(topicDeviceMessage, t.Root(), deviceID)
+}
+func (t Topics) BridgeSpectrum(bridgeID string) string {
+	return fmt.Sprintf(topicBridgeSpectrum, t.Root(), bridgeID)
+}
+
+// TAKCoTOut is where the TAK gateway's CoT XML goes:
+// {root}/bridge/<bridge id>/tak/cot/out.
+func (t Topics) TAKCoTOut(bridgeID string) string {
+	return fmt.Sprintf(topicTAKCoTOut, t.Root(), topicSegment(bridgeID))
+}
+
+func (t Topics) takCoTIn() string { return fmt.Sprintf(topicTAKCoTIn, t.Root()) }
+
+// TAKCoTInFilters are the two subscriptions that receive what the Hub
+// delivers: the topic itself and one level below it.
+func (t Topics) TAKCoTInFilters() []string {
+	return []string{t.takCoTIn(), t.takCoTIn() + "/+"}
+}
+
+// TAKCoTSender returns the bridge that exported an event the Hub delivered, as
+// the topic names it, or "" for an event that came from a TAK server (or for
+// any other topic). The value is the topic segment, percent-encoded as the Hub
+// writes it; compare it with topicSegment(own id).
+func (t Topics) TAKCoTSender(topic string) string {
+	rest, ok := strings.CutPrefix(topic, t.takCoTIn()+"/")
+	if !ok || rest == "" || strings.Contains(rest, "/") {
+		return ""
+	}
+	return rest
+}
+
+// platformTopics are the platform tenant's, for the Topic* functions.
+var platformTopics = Topics{root: DefaultTopicRoot}
 
 // CoT type constants (MIL-STD-2525 symbology).
 const (
@@ -75,51 +197,37 @@ const (
 	DeviceAPRS       = "aprs"
 )
 
-// --- Topic builders ---
+// --- Topic builders (the platform tenant's; a reporter uses its own Topics) ---
 
-func TopicBridgeBirth(bridgeID string) string   { return fmt.Sprintf(topicBridgeBirth, bridgeID) }
-func TopicBridgeDeath(bridgeID string) string   { return fmt.Sprintf(topicBridgeDeath, bridgeID) }
-func TopicBridgeHealth(bridgeID string) string  { return fmt.Sprintf(topicBridgeHealth, bridgeID) }
-func TopicBridgeCmd(bridgeID string) string     { return fmt.Sprintf(topicBridgeCmd, bridgeID) }
-func TopicBridgeCmdResp(bridgeID string) string { return fmt.Sprintf(topicBridgeCmdResp, bridgeID) }
+func TopicBridgeBirth(bridgeID string) string   { return platformTopics.BridgeBirth(bridgeID) }
+func TopicBridgeDeath(bridgeID string) string   { return platformTopics.BridgeDeath(bridgeID) }
+func TopicBridgeHealth(bridgeID string) string  { return platformTopics.BridgeHealth(bridgeID) }
+func TopicBridgeCmd(bridgeID string) string     { return platformTopics.BridgeCmd(bridgeID) }
+func TopicBridgeCmdResp(bridgeID string) string { return platformTopics.BridgeCmdResp(bridgeID) }
 
 func TopicDeviceBirth(bridgeID, deviceID string) string {
-	return fmt.Sprintf(topicDeviceBirth, bridgeID, deviceID)
+	return platformTopics.DeviceBirth(bridgeID, deviceID)
 }
 
 func TopicDeviceDeath(bridgeID, deviceID string) string {
-	return fmt.Sprintf(topicDeviceDeath, bridgeID, deviceID)
+	return platformTopics.DeviceDeath(bridgeID, deviceID)
 }
 
-func TopicDevicePosition(deviceID string) string  { return fmt.Sprintf(topicDevicePosition, deviceID) }
-func TopicDeviceTelemetry(deviceID string) string { return fmt.Sprintf(topicDeviceTelemetry, deviceID) }
-func TopicDeviceSOS(deviceID string) string       { return fmt.Sprintf(topicDeviceSOS, deviceID) }
-func TopicDeviceMessage(deviceID string) string   { return fmt.Sprintf(topicDeviceMessage, deviceID) }
-func TopicBridgeSpectrum(bridgeID string) string  { return fmt.Sprintf(topicBridgeSpectrum, bridgeID) }
+func TopicDevicePosition(deviceID string) string  { return platformTopics.DevicePosition(deviceID) }
+func TopicDeviceTelemetry(deviceID string) string { return platformTopics.DeviceTelemetry(deviceID) }
+func TopicDeviceSOS(deviceID string) string       { return platformTopics.DeviceSOS(deviceID) }
+func TopicDeviceMessage(deviceID string) string   { return platformTopics.DeviceMessage(deviceID) }
+func TopicBridgeSpectrum(bridgeID string) string  { return platformTopics.BridgeSpectrum(bridgeID) }
 
 // TopicTAKCoTOut is where the TAK gateway's CoT XML goes:
 // meshsat/bridge/<bridge id>/tak/cot/out.
-func TopicTAKCoTOut(bridgeID string) string {
-	return fmt.Sprintf(topicTAKCoTOut, topicSegment(bridgeID))
-}
+func TopicTAKCoTOut(bridgeID string) string { return platformTopics.TAKCoTOut(bridgeID) }
 
-// TAKCoTInFilters are the two subscriptions that receive what the Hub
-// delivers: the topic itself and one level below it.
-func TAKCoTInFilters() []string {
-	return []string{topicTAKCoTIn, topicTAKCoTIn + "/+"}
-}
+// TAKCoTInFilters are the platform tenant's two TAK delivery subscriptions.
+func TAKCoTInFilters() []string { return platformTopics.TAKCoTInFilters() }
 
-// TAKCoTSender returns the bridge that exported an event the Hub delivered, as
-// the topic names it, or "" for an event that came from a TAK server (or for
-// any other topic). The value is the topic segment, percent-encoded as the Hub
-// writes it; compare it with topicSegment(own id).
-func TAKCoTSender(topic string) string {
-	rest, ok := strings.CutPrefix(topic, topicTAKCoTIn+"/")
-	if !ok || rest == "" || strings.Contains(rest, "/") {
-		return ""
-	}
-	return rest
-}
+// TAKCoTSender is Topics.TAKCoTSender for the platform tenant.
+func TAKCoTSender(topic string) string { return platformTopics.TAKCoTSender(topic) }
 
 // topicSegment writes an id as the Hub writes one into a topic: + # / and %
 // percent-encoded (meshsat-hub hubmqtt.EncodeSegment). Ordinary bridge ids are

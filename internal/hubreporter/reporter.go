@@ -39,6 +39,10 @@ type ReporterConfig struct {
 	TLSCAPEM       []byte // inline CA PEM (from DB) — takes priority over file path
 	TLSInsecure    bool   // skip server certificate verification (dev only)
 	HealthInterval time.Duration
+	// TopicPrefix is the tenant's topic root from the Hub's bundle
+	// (mqtt_topic_prefix): "meshsat" or empty for the platform tenant,
+	// "meshsat/{tenant}" for a customer's (MESHSAT-1467).
+	TopicPrefix string
 }
 
 // Validate checks that the minimum required config is present.
@@ -48,6 +52,9 @@ func (c ReporterConfig) Validate() error {
 	}
 	if c.BridgeID == "" {
 		return fmt.Errorf("bridge ID is required")
+	}
+	if _, err := NewTopics(c.TopicPrefix); err != nil {
+		return err
 	}
 	if c.HealthInterval <= 0 {
 		c.HealthInterval = 30 * time.Second
@@ -59,6 +66,7 @@ func (c ReporterConfig) Validate() error {
 // bridge lifecycle events, device births/deaths, and telemetry.
 type HubReporter struct {
 	cfg           ReporterConfig
+	topics        Topics // every Hub topic, under the tenant's root
 	client        mqtt.Client
 	birthData     func() BridgeBirth
 	healthData    func() BridgeHealth
@@ -98,8 +106,16 @@ type HubReporter struct {
 // birthFn is called on connect to collect the birth certificate data.
 // healthFn is called periodically to collect health metrics.
 func NewHubReporter(cfg ReporterConfig, birthFn func() BridgeBirth, healthFn func() BridgeHealth) *HubReporter {
+	topics, err := NewTopics(cfg.TopicPrefix)
+	if err != nil {
+		// Validate refuses this config; a caller that skipped it stays on the
+		// platform root rather than on a topic the prefix made up.
+		log.Error().Err(err).Msg("hubreporter: unusable topic prefix, using the platform root")
+		topics = platformTopics
+	}
 	return &HubReporter{
 		cfg:        cfg,
+		topics:     topics,
 		birthData:  birthFn,
 		healthData: healthFn,
 		stopCh:     make(chan struct{}),
@@ -180,7 +196,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		Timestamp: time.Now().UTC(),
 	}
 	lwtPayload, _ := json.Marshal(lwtDeath)
-	opts.SetWill(TopicBridgeDeath(r.cfg.BridgeID), string(lwtPayload), 1, false)
+	opts.SetWill(r.topics.BridgeDeath(r.cfg.BridgeID), string(lwtPayload), 1, false)
 
 	opts.SetOnConnectHandler(func(_ mqtt.Client) {
 		r.mu.Lock()
@@ -455,7 +471,7 @@ func (r *HubReporter) Stop() {
 		}
 		payload, err := json.Marshal(death)
 		if err == nil {
-			token := r.client.Publish(TopicBridgeDeath(r.cfg.BridgeID), 1, false, payload)
+			token := r.client.Publish(r.topics.BridgeDeath(r.cfg.BridgeID), 1, false, payload)
 			token.WaitTimeout(500 * time.Millisecond)
 		}
 
@@ -482,28 +498,28 @@ func (r *HubReporter) PublishDeviceBirth(device DeviceBirth) error {
 	device.Protocol = ProtocolVersion
 	device.BridgeID = r.cfg.BridgeID
 	r.takMsgsOut.Add(1)
-	return r.publishOrQueue(TopicDeviceBirth(r.cfg.BridgeID, device.DeviceID), 1, false, device)
+	return r.publishOrQueue(r.topics.DeviceBirth(r.cfg.BridgeID, device.DeviceID), 1, false, device)
 }
 
 // PublishDeviceDeath publishes a device death notice to the Hub.
 func (r *HubReporter) PublishDeviceDeath(device DeviceDeath) error {
 	device.Protocol = ProtocolVersion
 	device.BridgeID = r.cfg.BridgeID
-	return r.publishOrQueue(TopicDeviceDeath(r.cfg.BridgeID, device.DeviceID), 1, false, device)
+	return r.publishOrQueue(r.topics.DeviceDeath(r.cfg.BridgeID, device.DeviceID), 1, false, device)
 }
 
 // PublishDevicePosition publishes a device position update to the Hub.
 func (r *HubReporter) PublishDevicePosition(deviceID string, pos DevicePosition) error {
 	pos.BridgeID = r.cfg.BridgeID
 	r.takMsgsOut.Add(1)
-	return r.publishOrQueue(TopicDevicePosition(deviceID), 0, false, pos)
+	return r.publishOrQueue(r.topics.DevicePosition(deviceID), 0, false, pos)
 }
 
 // PublishDeviceTelemetry publishes device telemetry to the Hub.
 func (r *HubReporter) PublishDeviceTelemetry(deviceID string, tel DeviceTelemetry) error {
 	tel.BridgeID = r.cfg.BridgeID
 	r.takMsgsOut.Add(1)
-	return r.publishOrQueue(TopicDeviceTelemetry(deviceID), 0, false, tel)
+	return r.publishOrQueue(r.topics.DeviceTelemetry(deviceID), 0, false, tel)
 }
 
 // PublishDeviceMessage publishes inbound mesh text to the Hub. QoS 1 and
@@ -513,14 +529,14 @@ func (r *HubReporter) PublishDeviceMessage(msg DeviceMessage) error {
 	msg.Protocol = ProtocolVersion
 	msg.BridgeID = r.cfg.BridgeID
 	r.takMsgsOut.Add(1)
-	return r.publishOrQueue(TopicDeviceMessage(msg.DeviceID), 1, false, msg)
+	return r.publishOrQueue(r.topics.DeviceMessage(msg.DeviceID), 1, false, msg)
 }
 
 // PublishDeviceSOS publishes a device SOS event to the Hub.
 func (r *HubReporter) PublishDeviceSOS(sos DeviceSOS) error {
 	sos.BridgeID = r.cfg.BridgeID
 	r.takMsgsOut.Add(1)
-	return r.publishOrQueue(TopicDeviceSOS(sos.DeviceID), 1, false, sos)
+	return r.publishOrQueue(r.topics.DeviceSOS(sos.DeviceID), 1, false, sos)
 }
 
 // SOSAlert is an SOS as the Hub's SOS detector reads it on
@@ -555,11 +571,11 @@ func (r *HubReporter) PublishSOSNow(alert SOSAlert, event DeviceSOS) error {
 	}
 	alert.BridgeID = r.cfg.BridgeID
 	event.BridgeID = r.cfg.BridgeID
-	if err := r.publish(TopicDeviceMessage(alert.IMEI), 1, false, alert); err != nil {
+	if err := r.publish(r.topics.DeviceMessage(alert.IMEI), 1, false, alert); err != nil {
 		return err
 	}
 	r.takMsgsOut.Add(1)
-	return r.publish(TopicDeviceSOS(event.DeviceID), 1, false, event)
+	return r.publish(r.topics.DeviceSOS(event.DeviceID), 1, false, event)
 }
 
 // PublishSpectrumAlert publishes an RTL-SDR jamming-detection alert to the
@@ -571,7 +587,7 @@ func (r *HubReporter) PublishSOSNow(alert SOSAlert, event DeviceSOS) error {
 // exactly the scenario where jamming alerts matter most.
 func (r *HubReporter) PublishSpectrumAlert(alert SpectrumAlert) error {
 	alert.BridgeID = r.cfg.BridgeID
-	return r.publishOrQueue(TopicBridgeSpectrum(r.cfg.BridgeID), 1, false, alert)
+	return r.publishOrQueue(r.topics.BridgeSpectrum(r.cfg.BridgeID), 1, false, alert)
 }
 
 // PublishTAKCoT publishes one CoT XML document, as the TAK gateway built it,
@@ -585,7 +601,7 @@ func (r *HubReporter) PublishTAKCoT(xml []byte) error {
 	if r.client == nil || !r.IsConnected() {
 		return ErrNotConnected
 	}
-	topic := TopicTAKCoTOut(r.cfg.BridgeID)
+	topic := r.topics.TAKCoTOut(r.cfg.BridgeID)
 	token := r.client.Publish(topic, 1, false, xml)
 	if !token.WaitTimeout(5 * time.Second) {
 		return fmt.Errorf("publish timeout on %s", topic)
@@ -613,7 +629,7 @@ func (r *HubReporter) publishBirth() {
 		birth.Signature = sig
 	}
 
-	if err := r.publish(TopicBridgeBirth(r.cfg.BridgeID), 1, true, birth); err != nil {
+	if err := r.publish(r.topics.BridgeBirth(r.cfg.BridgeID), 1, true, birth); err != nil {
 		log.Error().Err(err).Msg("hubreporter: failed to publish birth")
 	} else {
 		r.takMsgsOut.Add(1)
@@ -624,7 +640,7 @@ func (r *HubReporter) publishBirth() {
 
 // subscribeCmd subscribes to the command topic for this bridge.
 func (r *HubReporter) subscribeCmd() {
-	topic := TopicBridgeCmd(r.cfg.BridgeID)
+	topic := r.topics.BridgeCmd(r.cfg.BridgeID)
 
 	const maxRetries = 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -658,7 +674,7 @@ func (r *HubReporter) subscribeCmd() {
 // CoT XML and stores positions in its local DB, making them visible on the bridge
 // map alongside mesh node positions. [MESHSAT-1462]
 func (r *HubReporter) subscribeTAKCoT() {
-	for _, topic := range TAKCoTInFilters() {
+	for _, topic := range r.topics.TAKCoTInFilters() {
 		if !r.subscribeTAKCoTFilter(topic) {
 			return
 		}
@@ -707,7 +723,7 @@ func (r *HubReporter) onTAKCoT(_ mqtt.Client, msg mqtt.Message) {
 // TOPIC, not by the event's uid, because this bridge exports events for mesh
 // nodes other than itself and those carry their uid, not ours.
 func (r *HubReporter) handleTAKCoT(topic string, payload []byte) {
-	if sender := TAKCoTSender(topic); sender != "" && sender == topicSegment(r.cfg.BridgeID) {
+	if sender := r.topics.TAKCoTSender(topic); sender != "" && sender == topicSegment(r.cfg.BridgeID) {
 		return
 	}
 	r.takMsgsIn.Add(1)
@@ -831,7 +847,7 @@ func (r *HubReporter) healthLoop(ctx context.Context) {
 			health.BridgeID = r.cfg.BridgeID
 			health.Timestamp = time.Now().UTC()
 
-			if err := r.publish(TopicBridgeHealth(r.cfg.BridgeID), 0, false, health); err != nil {
+			if err := r.publish(r.topics.BridgeHealth(r.cfg.BridgeID), 0, false, health); err != nil {
 				log.Debug().Err(err).Msg("hubreporter: health publish failed (will retry)")
 			} else {
 				r.takMsgsOut.Add(1)

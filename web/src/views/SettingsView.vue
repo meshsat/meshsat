@@ -1658,7 +1658,7 @@ watch(activeTab, (v) => {
 onUnmounted(() => { if (dynTimer) clearInterval(dynTimer) })
 
 // Hub connection
-const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false, tls_ca: '', tls_insecure: false })
+const hubForm = ref({ url: '', bridge_id: '', username: '', password: '', has_password: false, tls_ca: '', tls_insecure: false, mqtt_topic_prefix: '' })
 const hubWarning = ref('')
 const restarting = ref(false)
 
@@ -3643,6 +3643,12 @@ onUnmounted(() => {
               <label class="text-[10px] text-gray-500 block mb-1">Password</label>
               <input type="password" v-model="hubForm.password" placeholder="paste from Fleet page (shown only once)"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+            </div>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">Topic root <span class="text-gray-600">(mqtt_topic_prefix in the Hub's bundle)</span></label>
+              <input type="text" v-model="hubForm.mqtt_topic_prefix" placeholder="meshsat"
+                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
+              <span class="text-[9px] text-gray-600 mt-0.5 block">Empty for the Hub's own tenant; meshsat/&lt;tenant&gt; for an organisation's</span>
             </div>
             <div>
               <label class="text-[10px] text-gray-500 block mb-1">Client Certificate PEM <span class="text-gray-600">(from Fleet > Issue TLS Certificate)</span></label>

@@ -572,7 +572,11 @@ type hubConnectionConfig struct {
 	Callsign       string `json:"callsign,omitempty"`
 	HealthInterval int    `json:"health_interval,omitempty"`
 	APIURL         string `json:"api_url,omitempty"`
-	Warning        string `json:"warning,omitempty"`
+	// TopicPrefix is the tenant's topic root from the Hub's bundle
+	// (mqtt_topic_prefix): empty or "meshsat" for the platform tenant,
+	// "meshsat/{tenant}" for a customer's. [MESHSAT-1467]
+	TopicPrefix string `json:"mqtt_topic_prefix,omitempty"`
+	Warning     string `json:"warning,omitempty"`
 	// Link is the state of the MQTT session behind these settings, for the
 	// apps' Hub lane: "connected", "disconnected" (the reporter keeps trying by
 	// itself), or "" when no reporter runs (settings saved, the Bridge not
@@ -601,6 +605,7 @@ type hubConnectionUpdate struct {
 	Callsign       *string `json:"callsign"`
 	HealthInterval *int    `json:"health_interval"`
 	APIURL         *string `json:"api_url"`
+	TopicPrefix    *string `json:"mqtt_topic_prefix"`
 }
 
 // hubEnabled reads the stored switch: absent is on.
@@ -644,7 +649,7 @@ func (s *Server) hubLinkState() string {
 
 // handleSetHubConfig saves Hub MQTT credentials. Takes effect on next restart.
 // @Summary Set Hub connection config
-// @Description Fields left out keep what is stored; url, bridge_id, username, password and the client certificate are also kept when sent empty. tls_ca_pem sent empty clears the CA. Takes effect at the Bridge's next start.
+// @Description Fields left out keep what is stored; url, bridge_id, username, password and the client certificate are also kept when sent empty. tls_ca_pem sent empty clears the CA. mqtt_topic_prefix is the bundle's tenant topic root ("meshsat" or "meshsat/<tenant>"; empty = platform tenant); any other value is refused. Takes effect at the Bridge's next start.
 // @Tags routing
 // @Accept json
 // @Produce json
@@ -661,6 +666,12 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 	if req.HealthInterval != nil && (*req.HealthInterval < 0 || *req.HealthInterval > 9999) {
 		writeError(w, http.StatusBadRequest, "health_interval must be 0 to 9999 seconds")
 		return
+	}
+	if req.TopicPrefix != nil {
+		if _, err := hubreporter.NewTopics(*req.TopicPrefix); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	prev := s.loadHubConfig()
@@ -704,6 +715,9 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.APIURL != nil {
 		prev.APIURL = strings.TrimSpace(*req.APIURL)
+	}
+	if req.TopicPrefix != nil {
+		prev.TopicPrefix = strings.TrimSpace(*req.TopicPrefix)
 	}
 	prev.HasCert = prev.TLSCertPEM != "" && prev.TLSKeyPEM != ""
 

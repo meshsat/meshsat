@@ -132,7 +132,7 @@ func (r *HubReporter) Ping() (time.Duration, error) {
 		return 0, ErrNotConnected
 	}
 	start := time.Now()
-	token := r.client.Publish(TopicBridgeHealth(r.cfg.BridgeID), 1, false, []byte(`{"ping":true}`))
+	token := r.client.Publish(r.topics.BridgeHealth(r.cfg.BridgeID), 1, false, []byte(`{"ping":true}`))
 	if !token.WaitTimeout(pingWait) {
 		return 0, fmt.Errorf("no answer within %s", pingWait)
 	}

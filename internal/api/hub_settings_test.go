@@ -120,3 +120,30 @@ func TestHubPing_NoReporterIsNotConnected(t *testing.T) {
 		t.Fatalf("ping without a reporter: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The bundle's tenant topic root is kept and shown, a PUT without it keeps it,
+// and a root that is not "meshsat" or "meshsat/<tenant>" is refused and stores
+// nothing. [MESHSAT-1467]
+func TestHubSettings_TopicPrefix(t *testing.T) {
+	s := newTestServerWithDB(t)
+	if code, got := hubCall(t, s, http.MethodPut, `{"url":"wss://mqtt-hub.example/mqtt","mqtt_topic_prefix":"meshsat/acme"}`); code != 200 || got["mqtt_topic_prefix"] != "meshsat/acme" {
+		t.Fatalf("save: %d %v", code, got)
+	}
+	if code, _ := hubCall(t, s, http.MethodPut, `{"callsign":"A"}`); code != 200 {
+		t.Fatalf("second save: %d", code)
+	}
+	if _, got := hubCall(t, s, http.MethodGet, ""); got["mqtt_topic_prefix"] != "meshsat/acme" {
+		t.Fatalf("GET after a PUT without the prefix: %v", got)
+	}
+	for _, bad := range []string{`"meshsat/+"`, `"meshsat/bridge"`, `"acme"`, `"meshsat/a/b"`} {
+		if code, _ := hubCall(t, s, http.MethodPut, `{"mqtt_topic_prefix":`+bad+`}`); code != http.StatusBadRequest {
+			t.Errorf("prefix %s: %d, want 400", bad, code)
+		}
+	}
+	if _, got := hubCall(t, s, http.MethodGet, ""); got["mqtt_topic_prefix"] != "meshsat/acme" {
+		t.Fatalf("a refused prefix changed the stored one: %v", got)
+	}
+	if code, got := hubCall(t, s, http.MethodPut, `{"mqtt_topic_prefix":""}`); code != 200 || got["mqtt_topic_prefix"] != nil {
+		t.Fatalf("back to the platform tenant: %d %v", code, got)
+	}
+}
