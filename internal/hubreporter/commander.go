@@ -54,7 +54,22 @@ type CommandHandler struct {
 	// mgmtPeer registers the OOB peer for a Hub-provisioned management
 	// key (key_rotate with channel_type "mgmt"). [MESHSAT-964]
 	mgmtPeer func(alias string, rawKey []byte) (uint16, error)
+	// cmdLog remembers request ids, so a command delivered twice runs
+	// once. [MESHSAT-1584]
+	cmdLog CommandLog
 }
+
+// CommandLog keeps each Hub command's request id and reply for a day
+// (database.DB implements it). [MESHSAT-1584]
+type CommandLog interface {
+	ClaimHubCommand(requestID, cmd string, now time.Time) (fresh bool, response string, err error)
+	FinishHubCommand(requestID, response string) error
+}
+
+// SetCommandLog makes a repeated request id run once: the broker delivers
+// a QoS 1 command again after a reconnect, and a Hub send_text then queued
+// the text twice.
+func (ch *CommandHandler) SetCommandLog(l CommandLog) { ch.cmdLog = l }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
 // The healthFn callback is used by the built-in "ping" handler to return bridge health data.
@@ -335,6 +350,27 @@ func (ch *CommandHandler) HandleCommand(payload []byte) {
 		return
 	}
 
+	if ch.cmdLog != nil && cmd.RequestID != "" {
+		fresh, prev, err := ch.cmdLog.ClaimHubCommand(cmd.RequestID, cmd.Cmd, time.Now())
+		switch {
+		case err != nil:
+			// Run it: losing a command is worse than a rare repeat.
+			log.Warn().Err(err).Str("request_id", cmd.RequestID).Msg("commander: command log unavailable, running the command anyway")
+		case !fresh && prev == "":
+			log.Info().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: the same command came again while it runs; not run twice")
+			return
+		case !fresh:
+			var resp CommandResponse
+			if err := json.Unmarshal([]byte(prev), &resp); err == nil {
+				log.Info().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: the same command came again; its first reply sent again, not run twice")
+				ch.publishResponse(resp)
+				return
+			}
+			log.Warn().Str("request_id", cmd.RequestID).Msg("commander: the stored reply is unreadable; not run twice")
+			return
+		}
+	}
+
 	log.Info().
 		Str("cmd", cmd.Cmd).
 		Str("request_id", cmd.RequestID).
@@ -361,7 +397,7 @@ func (ch *CommandHandler) sendOkResponse(cmd Command, result json.RawMessage) {
 		Result:    result,
 		Timestamp: time.Now().UTC(),
 	}
-	ch.publishResponse(resp)
+	ch.finish(resp)
 }
 
 // sendErrorResponse publishes an error command response to the Hub.
@@ -373,6 +409,18 @@ func (ch *CommandHandler) sendErrorResponse(cmd Command, errMsg string) {
 		Status:    "error",
 		Error:     errMsg,
 		Timestamp: time.Now().UTC(),
+	}
+	ch.finish(resp)
+}
+
+// finish stores a command's reply under its request id, then publishes it.
+func (ch *CommandHandler) finish(resp CommandResponse) {
+	if ch.cmdLog != nil && resp.RequestID != "" {
+		if data, err := json.Marshal(resp); err == nil {
+			if err := ch.cmdLog.FinishHubCommand(resp.RequestID, string(data)); err != nil {
+				log.Warn().Err(err).Str("request_id", resp.RequestID).Msg("commander: reply not stored")
+			}
+		}
 	}
 	ch.publishResponse(resp)
 }

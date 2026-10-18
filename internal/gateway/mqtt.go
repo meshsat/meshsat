@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -25,8 +26,11 @@ type MQTTGateway struct {
 	client mqtt.Client
 	inCh   chan InboundMessage
 
-	// dedup tracks packet IDs we published to avoid re-ingesting our own echoes
-	dedup   map[uint32]time.Time
+	// dedup holds the SHA-256 of every payload we published, to drop our
+	// own echo. Keyed on the bytes, not the packet id: a direct send has
+	// packet id 0, and keying on it dropped every inbound message without an
+	// id for five minutes after one. [MESHSAT-1584]
+	dedup   map[[32]byte]time.Time
 	dedupMu sync.Mutex
 
 	connected  atomic.Bool
@@ -45,7 +49,7 @@ func NewMQTTGateway(cfg MQTTConfig) *MQTTGateway {
 	return &MQTTGateway{
 		config: cfg,
 		inCh:   make(chan InboundMessage, 64),
-		dedup:  make(map[uint32]time.Time),
+		dedup:  make(map[[32]byte]time.Time),
 		done:   make(chan struct{}),
 	}
 }
@@ -162,9 +166,10 @@ func (g *MQTTGateway) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		return
 	}
 
-	// Skip if this is our own echo
+	// Skip if this is our own echo: the broker hands back the bytes we
+	// published.
 	g.dedupMu.Lock()
-	if _, ours := g.dedup[payload.PacketID]; ours {
+	if _, ours := g.dedup[sha256.Sum256(msg.Payload())]; ours {
 		g.dedupMu.Unlock()
 		return
 	}
@@ -228,9 +233,9 @@ func (g *MQTTGateway) Forward(ctx context.Context, msg *transport.MeshMessage) e
 		return fmt.Errorf("marshal mqtt payload: %w", err)
 	}
 
-	// Record packet ID in dedup map before publishing
+	// Record what we publish before publishing, so its echo is ours.
 	g.dedupMu.Lock()
-	g.dedup[msg.ID] = time.Now()
+	g.dedup[sha256.Sum256(payload)] = time.Now()
 	g.dedupMu.Unlock()
 
 	token := g.client.Publish(topic, byte(g.config.QoS), false, payload)

@@ -2638,6 +2638,7 @@ func main() {
 			},
 		})
 		cmdHandler.SetCredentialStore(&bridgeCredentialStore{db: db})
+		cmdHandler.SetCommandLog(db) // a command delivered twice runs once [MESHSAT-1584]
 		if ks != nil {
 			cmdHandler.SetKeyStore(ks) // [MESHSAT-447] Hub-driven key rotation
 			// A key_rotate for channel_type "mgmt" also has to register the

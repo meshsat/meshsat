@@ -1622,6 +1622,18 @@ var migrations = []string{
 	// in either mode instead of queueing the message again. [MESHSAT-1584]
 	`ALTER TABLE delivery_submissions ADD COLUMN mode TEXT NOT NULL DEFAULT 'intent';
 	ALTER TABLE delivery_submissions ADD COLUMN legacy_result TEXT NOT NULL DEFAULT '';`,
+
+	// v69: the Hub's commands by request id, a day each, so a command the
+	// broker delivers twice (QoS 1, a reconnect) runs once and the repeat
+	// gets the first reply. response is the reply as published, empty while
+	// the command runs. [MESHSAT-1584]
+	`CREATE TABLE IF NOT EXISTS hub_command_log (
+		request_id  TEXT PRIMARY KEY,
+		cmd         TEXT NOT NULL,
+		response    TEXT NOT NULL DEFAULT '',
+		received_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_hub_command_log_received ON hub_command_log(received_at);`,
 }
 
 func (db *DB) migrate() error {
