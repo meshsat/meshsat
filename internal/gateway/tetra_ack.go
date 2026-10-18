@@ -45,6 +45,11 @@ var (
 	tetraAckTimeout = 15 * time.Second
 	// tetraPeerTTL is how long a peer heard from counts as there.
 	tetraPeerTTL = 24 * time.Hour
+	// tetraHelloEvery: a Bridge that knows no peer says hello again this
+	// often. Two kits whose radios come up in the same second (a deploy
+	// restarts both) say hello at once and miss each other: seen live on
+	// 18 Oct 2026, both kits ready at 00:00:09, neither heard the other.
+	tetraHelloEvery = 5 * time.Minute
 	// tetraRepeatWindow: the same text from the same sender within it is
 	// a repeat of one already delivered (a retry whose ack was lost).
 	tetraRepeatWindow = 2 * time.Minute
@@ -72,6 +77,7 @@ type tetraAcks struct {
 	selfTag  uint32
 
 	acked, unacked, unconfirmed, repeats, linkSent, linkFailed atomic.Int64
+	lastHello                                                  atomic.Int64
 	lastAckMs                                                  atomic.Int64
 	lastNoAck                                                  atomic.Int64
 }
@@ -201,16 +207,27 @@ func (g *TetraGateway) sendLink(l tetra.Link, dest string, pause time.Duration) 
 	g.acks.linkFailed.Add(1)
 }
 
-// sayHello tells the group a MeshSat Bridge listens, once the radio is up.
+// sayHello tells the group a MeshSat Bridge listens, once the radio is up
+// and then every tetraHelloEvery while no peer has answered (helloDue).
 func (g *TetraGateway) sayHello() {
 	if g.acksMode() == "off" {
 		return
 	}
+	g.acks.lastHello.Store(time.Now().Unix())
 	dest, err := g.destination(&transport.MeshMessage{})
 	if err != nil {
 		return
 	}
 	g.sendLink(tetra.Link{Kind: tetra.LinkHello, Tag: g.acks.selfTag}, dest, time.Second+g.jitter(3*time.Second))
+}
+
+// helloDue says a Bridge that knows no peer should say hello again.
+func (g *TetraGateway) helloDue() bool {
+	if g.acksMode() == "off" || g.peerKnown() {
+		return false
+	}
+	last := g.acks.lastHello.Load()
+	return last == 0 || time.Since(time.Unix(last, 0)) >= tetraHelloEvery
 }
 
 // onLink handles a link control SDS from another Bridge.

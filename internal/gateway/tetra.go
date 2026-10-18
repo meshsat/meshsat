@@ -356,6 +356,9 @@ func (g *TetraGateway) hold(ctx context.Context, sess *tetra.Session) {
 			log.Warn().Err(sess.Err()).Msg("tetra: the radio's port closed, reopening")
 			return
 		case <-t.C:
+			if g.helloDue() {
+				go g.sayHello()
+			}
 			battery, err := sess.Battery(ctx)
 			mode := -1
 			if err == nil {

@@ -715,3 +715,28 @@ func TestTetraAcksOffNeitherAcksNorWaits(t *testing.T) {
 		t.Fatal("acks sometimes accepted")
 	}
 }
+
+// A Bridge that knows no peer says hello again until one answers: two
+// kits started in the same second miss each other's first hello.
+func TestTetraHelloRepeatsUntilAPeerAnswers(t *testing.T) {
+	old := tetraHelloEvery
+	tetraHelloEvery = 0
+	defer func() { tetraHelloEvery = old }()
+	f := newTetraFake(1)
+	g := startTetra(t, f, DefaultTetraConfig())
+	if !g.helloDue() {
+		t.Fatal("no peer and no hello due")
+	}
+	hello, bits := tetra.EncodeLink(tetra.Link{Kind: tetra.LinkHelloReply, Tag: 9})
+	f.incoming("+CTSDSR: 12,100,0,2000,0,"+itoa(bits), hex.EncodeToString(hello))
+	waitTetra(t, "the peer recorded", func() bool { return g.peerKnown() })
+	if g.helloDue() {
+		t.Fatal("hello still due with a peer known")
+	}
+	cfg := DefaultTetraConfig()
+	cfg.Acks = "off"
+	off := NewTetraGateway(cfg, "tetra_0", nil)
+	if off.helloDue() {
+		t.Fatal("acks off says hello")
+	}
+}
