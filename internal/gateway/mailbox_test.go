@@ -350,6 +350,13 @@ func TestStartMailboxCheck_SBDFirstConflictAndOutcome(t *testing.T) {
 		if imtSat.checkCount() != 0 || sat.callCount() != 1 {
 			t.Fatalf("imt checks %d, sbd checks %d", imtSat.checkCount(), sat.callCount())
 		}
+		// The finished event follows the state by a moment (it is emitted
+		// after the lock is let go): wait for it.
+		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if events, _ := log.snapshot(); len(events) >= 2 {
+				break
+			}
+		}
 		events, texts := log.snapshot()
 		if len(events) != 2 || !events[0].Running || events[0].Result != nil || events[0].FinishedAt != nil ||
 			events[1].Running || *events[1].Result != checked(1, 2) || events[1].FinishedAt == nil {

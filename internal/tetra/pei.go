@@ -498,6 +498,14 @@ func (s *Session) SendSDS(ctx context.Context, dest string, ref byte, pdu []byte
 			if r.Ref != int(ref) && !(len(pdu) > 0 && pdu[0] < 0x80) {
 				continue
 			}
+			// The reader queues a +CME ERROR before the report that follows
+			// it, but both can be waiting here at once and select picks
+			// either: take the error too, so its code is never lost.
+			select {
+			case code := <-s.lateErrs:
+				cme = code
+			default:
+			}
 			if r.Status != sentStatus || cme != 0 {
 				return &r, &NotSentError{Status: r.Status, CME: cme}
 			}
