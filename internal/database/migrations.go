@@ -1634,6 +1634,15 @@ var migrations = []string{
 		received_at INTEGER NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_hub_command_log_received ON hub_command_log(received_at);`,
+
+	// v70: review of the stage 2 contract (18 Oct 2026 17:22, S2-R1). A
+	// claim the process never finished (it died mid-command) must not keep
+	// the command from running for a day: run_id names the process that
+	// claimed it, and a later process runs it again. args_sha256 is the
+	// command's arguments: the same request id with other arguments is
+	// refused, not run. [MESHSAT-1584]
+	`ALTER TABLE hub_command_log ADD COLUMN run_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE hub_command_log ADD COLUMN args_sha256 TEXT NOT NULL DEFAULT '';`,
 }
 
 func (db *DB) migrate() error {

@@ -6,27 +6,44 @@ import (
 )
 
 // A Hub command's request id is claimed once a day: a repeat while it runs
-// gets nothing, a repeat after it finished gets the stored reply, and a day
-// later the id is new again. [MESHSAT-1584]
+// in this process gets nothing, a repeat after it finished gets the stored
+// reply, a claim an earlier process never finished is run again by the next
+// one, other arguments under the same id are a conflict, and a day later the
+// id is new again. [MESHSAT-1584]
 func TestHubCommandLogClaimsOnceAndKeepsTheReply(t *testing.T) {
 	db := testDB(t)
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
-	if fresh, prev, err := db.ClaimHubCommand("req-1", "send_text", t0); err != nil || !fresh || prev != "" {
-		t.Fatalf("first claim: %t %q %v", fresh, prev, err)
+	claim := func(id, args, run string, at time.Time) HubCommandClaim {
+		t.Helper()
+		c, err := db.ClaimHubCommand(id, "send_text", args, run, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
-	if fresh, prev, err := db.ClaimHubCommand("req-1", "send_text", t0.Add(time.Second)); err != nil || fresh || prev != "" {
-		t.Fatalf("while it runs: %t %q %v", fresh, prev, err)
+	if c := claim("req-1", "a1", "run-A", t0); !c.Fresh || c.Response != "" || c.Conflict {
+		t.Fatalf("first claim: %+v", c)
+	}
+	if c := claim("req-1", "a1", "run-A", t0.Add(time.Second)); c.Fresh || c.Response != "" || c.Conflict {
+		t.Fatalf("while it runs in this process: %+v", c)
+	}
+	// The process died before it finished; the next one runs it.
+	if c := claim("req-1", "a1", "run-B", t0.Add(time.Minute)); !c.Fresh || c.Conflict {
+		t.Fatalf("after a restart: %+v", c)
 	}
 	if err := db.FinishHubCommand("req-1", `{"status":"ok"}`); err != nil {
 		t.Fatal(err)
 	}
-	if fresh, prev, err := db.ClaimHubCommand("req-1", "send_text", t0.Add(time.Hour)); err != nil || fresh || prev != `{"status":"ok"}` {
-		t.Fatalf("after it finished: %t %q %v", fresh, prev, err)
+	if c := claim("req-1", "a1", "run-C", t0.Add(time.Hour)); c.Fresh || c.Response != `{"status":"ok"}` {
+		t.Fatalf("after it finished: %+v", c)
 	}
-	if fresh, _, err := db.ClaimHubCommand("req-2", "ping", t0.Add(time.Hour)); err != nil || !fresh {
-		t.Fatalf("another id: %t %v", fresh, err)
+	if c := claim("req-1", "a2", "run-C", t0.Add(time.Hour)); !c.Conflict || c.Fresh {
+		t.Fatalf("other arguments under the same id: %+v", c)
 	}
-	if fresh, _, err := db.ClaimHubCommand("req-1", "send_text", t0.Add(HubCommandWindow+time.Minute)); err != nil || !fresh {
-		t.Fatalf("a day later: %t %v", fresh, err)
+	if c := claim("req-2", "a1", "run-C", t0.Add(time.Hour)); !c.Fresh {
+		t.Fatalf("another id: %+v", c)
+	}
+	if c := claim("req-1", "a2", "run-C", t0.Add(HubCommandWindow+time.Hour)); !c.Fresh || c.Conflict {
+		t.Fatalf("a day later: %+v", c)
 	}
 }

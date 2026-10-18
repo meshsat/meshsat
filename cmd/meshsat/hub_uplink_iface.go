@@ -142,3 +142,16 @@ func hubUplinkGatewayStatus(gwMgr interface {
 		return st.Connected, st.LastActivity, true
 	}
 }
+
+// hubCommandLog is the Hub command log (hubreporter.CommandLog) in the
+// database. [MESHSAT-1584]
+type hubCommandLog struct{ db *database.DB }
+
+func (l hubCommandLog) ClaimHubCommand(id, cmd, args, run string, now time.Time) (hubreporter.CommandClaim, error) {
+	c, err := l.db.ClaimHubCommand(id, cmd, args, run, now)
+	return hubreporter.CommandClaim{Fresh: c.Fresh, Response: c.Response, Conflict: c.Conflict}, err
+}
+
+func (l hubCommandLog) FinishHubCommand(id, resp string) error {
+	return l.db.FinishHubCommand(id, resp)
+}

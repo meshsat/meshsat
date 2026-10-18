@@ -2,6 +2,8 @@ package hubreporter
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -55,15 +57,38 @@ type CommandHandler struct {
 	// key (key_rotate with channel_type "mgmt"). [MESHSAT-964]
 	mgmtPeer func(alias string, rawKey []byte) (uint16, error)
 	// cmdLog remembers request ids, so a command delivered twice runs
-	// once. [MESHSAT-1584]
+	// once; runID names this process in it. [MESHSAT-1584]
 	cmdLog CommandLog
+	runID  string
+	// onResponse sees every reply before it is published (tests).
+	onResponse func(CommandResponse)
 }
 
-// CommandLog keeps each Hub command's request id and reply for a day
-// (database.DB implements it). [MESHSAT-1584]
+// CommandClaim is what the command log found for a request id: run it now
+// (Fresh: new, or claimed by a process that died before it finished), its
+// first reply (Response, empty while it runs here), or the id seen with
+// other arguments (Conflict).
+type CommandClaim struct {
+	Fresh    bool
+	Response string
+	Conflict bool
+}
+
+// CommandLog keeps each Hub command's request id, its arguments' digest,
+// the process running it and its reply for a day. The request ids are the
+// Hub's, on this Bridge's own command topic, so they need no scope beyond
+// it. [MESHSAT-1584]
 type CommandLog interface {
-	ClaimHubCommand(requestID, cmd string, now time.Time) (fresh bool, response string, err error)
+	ClaimHubCommand(requestID, cmd, argsSHA256, runID string, now time.Time) (CommandClaim, error)
 	FinishHubCommand(requestID, response string) error
+}
+
+// commandArgsDigest is the digest of what a command asks for.
+func commandArgsDigest(cmd Command) string {
+	h := sha256.New()
+	h.Write([]byte(cmd.Cmd + "\x00" + cmd.TargetDevice + "\x00"))
+	h.Write(cmd.Payload)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // SetCommandLog makes a repeated request id run once: the broker delivers
@@ -74,10 +99,13 @@ func (ch *CommandHandler) SetCommandLog(l CommandLog) { ch.cmdLog = l }
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
 // The healthFn callback is used by the built-in "ping" handler to return bridge health data.
 func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() BridgeHealth) *CommandHandler {
+	run := make([]byte, 8)
+	_, _ = rand.Read(run)
 	ch := &CommandHandler{
 		reporter: reporter,
 		bridgeID: bridgeID,
 		handlers: make(map[string]func(cmd Command) (json.RawMessage, error)),
+		runID:    hex.EncodeToString(run),
 	}
 
 	ch.handlers["ping"] = func(cmd Command) (json.RawMessage, error) {
@@ -351,11 +379,17 @@ func (ch *CommandHandler) HandleCommand(payload []byte) {
 	}
 
 	if ch.cmdLog != nil && cmd.RequestID != "" {
-		fresh, prev, err := ch.cmdLog.ClaimHubCommand(cmd.RequestID, cmd.Cmd, time.Now())
+		c, err := ch.cmdLog.ClaimHubCommand(cmd.RequestID, cmd.Cmd, commandArgsDigest(cmd), ch.runID, time.Now())
+		fresh, prev := c.Fresh, c.Response
 		switch {
 		case err != nil:
 			// Run it: losing a command is worse than a rare repeat.
 			log.Warn().Err(err).Str("request_id", cmd.RequestID).Msg("commander: command log unavailable, running the command anyway")
+		case c.Conflict:
+			log.Warn().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: a request id came again with other arguments; not run")
+			ch.publishResponse(CommandResponse{Protocol: ProtocolVersion, RequestID: cmd.RequestID, Cmd: cmd.Cmd, Status: "error",
+				Error: "request id " + cmd.RequestID + " was used before with other arguments; not run", Timestamp: time.Now().UTC()})
+			return
 		case !fresh && prev == "":
 			log.Info().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: the same command came again while it runs; not run twice")
 			return
@@ -427,6 +461,9 @@ func (ch *CommandHandler) finish(resp CommandResponse) {
 
 // publishResponse marshals and publishes a CommandResponse via the HubReporter.
 func (ch *CommandHandler) publishResponse(resp CommandResponse) {
+	if ch.onResponse != nil {
+		ch.onResponse(resp)
+	}
 	if ch.reporter == nil || !ch.reporter.IsConnected() {
 		log.Warn().Str("request_id", resp.RequestID).Msg("commander: cannot publish response (not connected)")
 		return

@@ -240,8 +240,10 @@ func TestUpgradeV63DatabaseIsRepaired(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A v63 database has none of the later schema (v65 B5, v66 A-13, v68
-	// B10-R4): undo it, or reopening would add it twice. [MESHSAT-1584]
+	// B10-R4, v69-v70 the Hub command log): undo it, or reopening would add
+	// it twice. [MESHSAT-1584]
 	for _, q := range []string{
+		`DROP TABLE hub_command_log`,
 		`ALTER TABLE directory_dispatch_policy DROP COLUMN seeded`,
 		`DROP INDEX idx_delivery_tx_proof`,
 		`ALTER TABLE delivery_transmissions DROP COLUMN proof_hash`,
