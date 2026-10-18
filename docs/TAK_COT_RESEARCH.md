@@ -1,7 +1,7 @@
 # TAK/CoT Integration Research — MeshSat
 
 _Created: 2026-03-17_
-_Author: Claude Code (research for MESHSAT TAK adapter)_
+_Author: Kyriakos Papadopoulos (research for the MeshSat TAK adapter)_
 
 ## 1. CoT Event Type Taxonomy Relevant to MeshSat
 

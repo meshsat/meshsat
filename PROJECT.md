@@ -1,6 +1,6 @@
 # Project Charter — MeshSat Bridge
 
-> Component-scoped. Parent: `/home/claude-runner/gitlab/products/cubeos/docs/PROJECT.md` (Track B). CGC-grounded 2026-05-18.
+> Component-scoped. Parent: `~/gitlab/products/cubeos/docs/PROJECT.md` (Track B). CGC-grounded 2026-05-18.
 
 ## Role in the MeshSat family
 
@@ -30,7 +30,7 @@ command beside it.
 - No CGO — the tree contains no C imports and builds with `CGO_ENABLED=0`
 
 Recount before quoting any of these externally — the audit found stale counts in every
-repository's README, CLAUDE.md and PROJECT.md. Do not copy a number forward without rechecking.
+repository's README, local notes and PROJECT.md. Do not copy a number forward without rechecking.
 
 ## What this repo owns (CGC-verified packages)
 
@@ -69,7 +69,7 @@ Inherits CubeOS project-level constitution + MeshSat sub-family. Component const
 
 ## Source trace
 
-- `meshsat/CLAUDE.md` (local-only)
+- the repo's local working notes (not committed)
 - `meshsat/README.md` (CGC-confirmed)
 - `meshsat/EXECUTION-PLAN.md` (9-phase plan)
 - `meshsat/UX-MULTI-ACCESS-KIOSK-PAIRING.md` (kiosk + pair protocol design)

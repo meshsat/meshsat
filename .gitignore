@@ -28,12 +28,10 @@ test-results/
 test/e2e/test-results/
 test/e2e/node_modules/
 
-# Claude Code — local-only, NEVER commit
-CLAUDE.md
-.claude/
+# Local-only working files, never committed
 .meshsat-issue-manifest.tsv
 
-# Claude plan docs (local-only per CLAUDE.md)
+# Local plan docs (never committed)
 EXECUTION-PLAN.md
 UX-AUDIT-AND-REDESIGN.md
 UX-MULTI-ACCESS-KIOSK-PAIRING.md

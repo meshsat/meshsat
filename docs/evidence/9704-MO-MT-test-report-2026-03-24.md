@@ -1,7 +1,7 @@
 # RockBLOCK 9704 Comprehensive Test Report
 
 **Date:** 2026-03-24
-**Tester:** kyriakosp (automated via Claude Code)
+**Tester:** kyriakosp (automated)
 **Modem:** RockBLOCK 9704, IMEI 30025806XXXXXXX, Serial 1a07ty, HW 0x0601
 **ICCID:** 8988169771XXXXXXXXX (internal eSIM)
 **JSPR API:** v1.7.0 (also supports v1.6.1, v1.6.0)

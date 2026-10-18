@@ -698,7 +698,7 @@ Both were stopped at 20:00 UTC: docker first (`systemctl stop docker.service doc
 
 The four routes were four labels floating above four captions, and the sub of one route sat closer to the next route's label than to its own; the "tap a path to choose it" hint read as a fifth option; and two of the four routes had no icon at all. Each route is now **one line of text riding its own lane line**: icon at the inner end, name plus the fact that identifies the bearer above the line, state word pinned to the outer end, and the explaining sentence under the **chosen route only**. All four carry an icon of one family at one size in the bearer's colour, filled when chosen.
 
-Constraints for anyone editing `web/src/views/TtcView.vue` later (also in `.claude/rules/web-spa.md`): the detail sentence has about **42 characters** of room; a state word beyond about **8 characters** collides with the fact on one mirror and the name on the other; no boxes, because the lane must keep running off the screen edge; Signal Orange stays reserved for live traffic, never selection; each glyph needs its own vertical nudge to sit on the wire.
+Constraints for anyone editing `web/src/views/TtcView.vue` later (also in the local web-spa rules): the detail sentence has about **42 characters** of room; a state word beyond about **8 characters** collides with the fact on one mirror and the name on the other; no boxes, because the lane must keep running off the screen edge; Signal Orange stays reserved for live traffic, never selection; each glyph needs its own vertical nudge to sit on the wire.
 
 Same screen also got: footer counters labelled `packets in/out, last minute` with a slash instead of the middle dot that read as a decimal, finger-sized footer buttons that say what they do, and plain words for the foreign-mesh packet line.
 
@@ -1109,7 +1109,7 @@ At 12:37 parallax's dongle was stalling again (6 failed scans, `healing`). Pausi
 
 **Closed by the owner tonight:** 716 (booth confirmed; Thomas's OK for the leaflets and the stand-up card is asked on the spot), 772 (stickers applied), 803 (print set in hand; caps due Fri 18 Sep), 748 (PicoAPRS chain), 786 (StarTech swap), 819 (SD card), 824 (black panels; no recurrence since the overlay pin, cause never established, power cycle remains the workaround), 821 (five days of live use replace the bench items; the TNC port cut is waived; the K5 + AIOC may leave the pouch), 1091 (Touch Display 2). **The no-warm-reboot rule is lifted**; the overlay block and the 98-char config.txt line limit still bind, and the post-boot checks (docker ps, date, ordering-cycle grep, panel) stay. 1125 (EIRP check) was deleted as never asked for; the EIRP note lives in the hardware context only. 860 lost its `ttc26` tag. `ttc26` stands at 24 unresolved.
 
-**Booth extras, all logged in the laptop Invoices (ttc26 orders 21 to 24, 24 orders, EUR 1.633,32):** DJI Osmo Mobile 7P gimbal, two UGREEN laptop stands, NETUM ZJ-5809 receipt printer with 20 rolls. The printer becomes a host service on tesseract (MESHSAT-1154): follows both kits' `/api/events`, one slip per relayed message with a meshsat.net QR, USB on hub B from 17 Sep, no laptop in the loop. Sticker set and handling labels decided (stencil type, UN 3481 mark, RF notice, prototype plate, no `EMERGENCY COMMS` wording); detail in `.claude/context/ttc-booth.md`.
+**Booth extras, all logged in the laptop Invoices (ttc26 orders 21 to 24, 24 orders, EUR 1.633,32):** DJI Osmo Mobile 7P gimbal, two UGREEN laptop stands, NETUM ZJ-5809 receipt printer with 20 rolls. The printer becomes a host service on tesseract (MESHSAT-1154): follows both kits' `/api/events`, one slip per relayed message with a meshsat.net QR, USB on hub B from 17 Sep, no laptop in the loop. Sticker set and handling labels decided (stencil type, UN 3481 mark, RF notice, prototype plate, no `EMERGENCY COMMS` wording); detail in the local booth notes.
 
 **Git.** This section is committed locally and unpushed under the freeze.
 
@@ -1144,7 +1144,7 @@ Not done over the air: a forged `{E1}` frame (needs a second key on a transmitte
 
 ## 43. 15 Sep 2026, evening: where the APRS loss lives (MESHSAT-1021), and the serial watchdog's two-hour window (MESHSAT-1122)
 
-**Owner ruling:** research the kit-to-kit APRS loss properly and fix it now, not after TTC. Plan `~/.claude/plans/reactive-exploring-cerf.md`. Sources: PicoAPRS V4 manual (WiMo, May 2024), picoaprs.de V4 changelog (V6 added Busy Data Channel Detection and TX delay after receiving, V21 an internal AFSK RX volume setting, newest V26), WB2OSZ "A Better APRS Packet Demodulator, Part 1" (strong clean signals failing where weak ones decode), the bridge code (`waitClearToSend` is a post-decode holdoff, no KISS parameter frames go to the TNC). Link budget: two 0.8 W radios 1 m apart put roughly +13 dBm into each other's receiver; two 30 dB pads make that about -47 dBm.
+**Owner ruling:** research the kit-to-kit APRS loss properly and fix it now, not after TTC. Plan kept locally. Sources: PicoAPRS V4 manual (WiMo, May 2024), picoaprs.de V4 changelog (V6 added Busy Data Channel Detection and TX delay after receiving, V21 an internal AFSK RX volume setting, newest V26), WB2OSZ "A Better APRS Packet Demodulator, Part 1" (strong clean signals failing where weak ones decode), the bridge code (`waitClearToSend` is a post-decode holdoff, no KISS parameter frames go to the TNC). Link budget: two 0.8 W radios 1 m apart put roughly +13 dBm into each other's receiver; two 30 dB pads make that about -47 dBm.
 
 **Tooling, committed (3f7e6f8):** `scripts/aprs-linktest.sh <sender> <count> [gap] [block] [outdir]` injects tagged texts through the real relay path one direction at a time and snapshots both kits' counters, deliveries, messages and packet rings per block; `scripts/aprs-linkstats.py <outdir> <block> <sender> <receiver> [t_start] [t_end]` turns the two rings into per-frame data loss, ack loss, first-attempt success and, for every lost frame, whether the receiving kit was keying (overlap), had just unkeyed (turnaround) or was idle (unrelated). Raw AX.25 hex is identical on both sides; the 0.81 s offset is pipeline latency (kit clocks agree to 0.3 ms). Config changes via `PUT /api/gateways/aprs` restart the gateway and zero the counters, so snapshot per block.
 
@@ -1268,7 +1268,7 @@ the `[#A7]` inbound case.
 The kits travel behind a **GL.iNet GL-E5800 (Mudi 7)** 5G travel router that holds a VPN tunnel back
 to the estate, so a push to main still reaches them at a stand. Each kit therefore answers on **two
 names**: `nllei01<kit>01` on the house network and `nllei01<kit>01-field` through the tunnel.
-Addresses, subnets and the tunnel design are local-only — `.claude/context/field-kit-hardware.md`,
+Addresses, subnets and the tunnel design are local-only — the local field-kit hardware notes,
 memory `reference_kit_field_fqdn_tunnel`, and the infrastructure repo for the router/firewall side.
 
 **The name that answers is not a location.** The travel router advertises the same SSID as the house

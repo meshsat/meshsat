@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-04
 **Scope:** meshsat (bridge), meshsat-hub, meshsat-android, meshsat-website
-**Auditor:** Claude Code (comprehensive codebase + documentation + YouTrack analysis)
+**Auditor:** Kyriakos Papadopoulos (comprehensive codebase + documentation + YouTrack analysis)
 
 ---
 
@@ -35,7 +35,7 @@ The MeshSat ecosystem is a **remarkably ambitious and well-executed** project sp
 | Test Coverage | 85 | 1,058 tests (35% LOC ratio), 23 Playwright E2E, 3 integration tests |
 | CI/CD | 70 | **CRITICAL GAP: no `go test` in CI pipeline** — 7 consistency checks but tests only run locally |
 | Security | 82 | No hardcoded secrets, credential redaction, cert pinning — but no rate limiting on API |
-| Documentation | 88 | 89% Swagger coverage (211/236 endpoints), comprehensive CLAUDE.md |
+| Documentation | 88 | 89% Swagger coverage (211/236 endpoints), comprehensive project notes |
 | Deployment | 90 | Multi-arch Docker, parallel deploy to 2 devices, rollback support |
 | Monitoring | 78 | SSE events, health endpoints, Hub telemetry — no Prometheus/metrics endpoint |
 | Resilience | 88 | DLQ with ISU-aware backoff, failover resolver, delivery retries, graceful shutdown |
@@ -72,7 +72,7 @@ The MeshSat ecosystem is a **remarkably ambitious and well-executed** project sp
 | Test Coverage | 88 | 915 tests across 46 packages, 13 Playwright E2E fleet tests |
 | CI/CD | **95** | **Best in ecosystem:** 11 stages incl. gosec, govulncheck, Galera health gate, OWASP |
 | Security | **92** | JWT/OIDC, RBAC, tenant isolation, SAST+SCA in CI, webhook signature verification |
-| Documentation | 85 | 375+ Swagger endpoints, detailed CLAUDE.md (633 lines) |
+| Documentation | 85 | 375+ Swagger endpoints, detailed project notes (633 lines) |
 | Deployment | 90 | Dual-site Galera, garbd arbitrator, pre-deploy health gate, rolling updates |
 | Monitoring | 85 | 12 observability features, 3 Grafana dashboards, OTel scaffold, Prometheus metrics |
 | Resilience | 82 | MQTT reconnect, store-and-forward, fragmentation — **P0 bug: MESHSAT-154** |
@@ -101,7 +101,7 @@ The MeshSat ecosystem is a **remarkably ambitious and well-executed** project sp
 | Test Coverage | 78 | 539 tests concentrated in phases A-C; Phase E (routing) thin |
 | CI/CD | 65 | **Only 3 stages (build, release)** — no lint, no security scan, no test gate |
 | Security | 85 | AES-256-GCM, MSVQ-SC compression, mTLS Hub connection |
-| Documentation | 80 | CLAUDE.md comprehensive (314 lines), in-code docs adequate |
+| Documentation | 80 | Project notes comprehensive (314 lines), in-code docs adequate |
 | Deployment | 72 | Debug APK only (129M), no release signing, no Play Store pipeline |
 | Monitoring | 70 | Local API server (localhost:6051), Hub telemetry — no crash reporting |
 | Resilience | 80 | Delivery ledger, failover groups, dead man switch — no background service recovery |
@@ -150,7 +150,7 @@ The three-repo separation (Bridge/Hub/Android) is the correct architecture:
 - Hub: SaaS platform (server) — multi-tenant, full auth stack, HA database
 - Android: mobile app — standalone, BLE/SPP transports, offline-first
 
-The CLAUDE.md boundary rules are well-enforced and have prevented cross-contamination.
+The repo boundary rules are well-enforced and have prevented cross-contamination.
 
 ### 3.2 Protocol Completeness — STRONG (90/100)
 
@@ -261,11 +261,11 @@ The CLAUDE.md boundary rules are well-enforced and have prevented cross-contamin
 3. **Test discipline** — 2,512 test functions across 217K LOC (1.16 tests per 100 LOC)
 4. **Hub CI/CD** — 11-stage pipeline with mandatory security gates is production-grade
 5. **Reticulum integration** — 9 transport interfaces, TCP interop with Python RNS verified
-6. **Architecture boundaries** — Clean repo separation enforced by CLAUDE.md rules
+6. **Architecture boundaries** — Clean repo separation enforced by the repo boundary rules
 7. **Delivery pipeline** — message_deliveries table + DeliveryWorker + DLQ with ISU-aware backoff
 8. **Database discipline** — Append-only migrations enforced in CI, no schema corruption risk
 9. **Multi-arch builds** — ARM64 + AMD64 Docker images, cross-compilation working
-10. **Documentation** — 633-line Hub CLAUDE.md, 192 VitePress pages, 89% Swagger coverage
+10. **Documentation** — 633-line Hub project notes, 192 VitePress pages, 89% Swagger coverage
 
 ---
 

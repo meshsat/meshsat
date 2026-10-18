@@ -14,7 +14,7 @@
 #   2. /etc/modprobe.d/brcmfmac.conf — roamoff=1, hands roaming decisions to
 #      wpa_supplicant instead of the firmware. NEEDS A REBOOT to take effect.
 #   3. /etc/modprobe.d/mt76_usb.conf — disable_usb_sg=1 for the MT7612U
-#      dongle, mandated by CLAUDE.md but never installed by any script.
+#      dongle, mandated by the kit notes but never installed by any script.
 #   4. meshsat-wifi-tune.service — power save off on every wireless interface
 #      at each boot.
 #   5. meshsat-mgmt-keepalive.timer — a 30s outbound ping to the management
