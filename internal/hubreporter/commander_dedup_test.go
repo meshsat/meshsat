@@ -32,10 +32,10 @@ func (l *memCommandLog) ClaimHubCommand(id, _, args, run string, _ time.Time) (C
 	return CommandClaim{Response: r.resp}, nil
 }
 
-func (l *memCommandLog) FinishHubCommand(id, resp string) error {
+func (l *memCommandLog) FinishHubCommand(id, run, resp string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if r, ok := l.rows[id]; ok {
+	if r, ok := l.rows[id]; ok && r.run == run && r.resp == "" {
 		r.resp = resp
 	}
 	return nil
@@ -105,5 +105,19 @@ func TestHandleCommandAClaimTheLastProcessNeverFinishedRunsAgain(t *testing.T) {
 	sendText(ch, "req-9", "hello")
 	if runs != 1 {
 		t.Fatal("ran twice in one process")
+	}
+}
+
+// A refusal that comes while the command owning the id still runs in this
+// process is not stored: the command's own reply is (FA-R2). [MESHSAT-1584]
+func TestARefusalWhileTheCommandRunsDoesNotTakeItsReply(t *testing.T) {
+	l := &memCommandLog{rows: map[string]*memCommand{}}
+	runs := 0
+	ch := newDedupHandler(l, &runs)
+	l.rows["req-7"] = &memCommand{run: ch.runID, args: "running"}
+	b, _ := json.Marshal(Command{Protocol: ProtocolVersion, Cmd: "not_a_registered_command", RequestID: "req-7"})
+	ch.HandleCommand(b)
+	if got := l.rows["req-7"].resp; got != "" {
+		t.Fatalf("the refusal was stored as the running command's reply: %s", got)
 	}
 }

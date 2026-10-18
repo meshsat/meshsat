@@ -19,6 +19,11 @@ func decodeBase64(s string) ([]byte, error) {
 
 // CommandDeps holds optional subsystem references for command execution.
 type CommandDeps struct {
+	// SendTextKeyed is SendText under the command's request id and argument
+	// digest: run again for the same command (after a restart whose reply
+	// was never stored), it answers the delivery it queued the first time
+	// (FA-R1). Used when set and the command has a request id. [MESHSAT-1584]
+	SendTextKeyed func(requestID, fingerprint, interfaceID, text string) (int64, string, error)
 	// SendText queues a text message to an interface via the delivery pipeline.
 	// Parameters: interfaceID, text. Returns deliveryID, msgRef, error.
 	SendText func(interfaceID, text string) (int64, string, error)
@@ -80,10 +85,13 @@ type CommandClaim struct {
 // it. [MESHSAT-1584]
 type CommandLog interface {
 	ClaimHubCommand(requestID, cmd, argsSHA256, runID string, now time.Time) (CommandClaim, error)
-	FinishHubCommand(requestID, response string) error
+	FinishHubCommand(requestID, runID, response string) error
 }
 
-// commandArgsDigest is the digest of what a command asks for.
+// CommandArgsDigest is the digest of what a command asks for: its name,
+// target and payload bytes.
+func CommandArgsDigest(cmd Command) string { return commandArgsDigest(cmd) }
+
 func commandArgsDigest(cmd Command) string {
 	h := sha256.New()
 	h.Write([]byte(cmd.Cmd + "\x00" + cmd.TargetDevice + "\x00"))
@@ -95,6 +103,9 @@ func commandArgsDigest(cmd Command) string {
 // a QoS 1 command again after a reconnect, and a Hub send_text then queued
 // the text twice.
 func (ch *CommandHandler) SetCommandLog(l CommandLog) { ch.cmdLog = l }
+
+// SetResponseObserver sees every reply before it is published.
+func (ch *CommandHandler) SetResponseObserver(fn func(CommandResponse)) { ch.onResponse = fn }
 
 // NewCommandHandler creates a new CommandHandler that delegates to registered handlers.
 // The healthFn callback is used by the built-in "ping" handler to return bridge health data.
@@ -265,6 +276,14 @@ type sendTextPayload struct {
 	Text        string `json:"text"`
 }
 
+// sendText queues a command's text: keyed by the command when it can be.
+func (ch *CommandHandler) sendText(cmd Command, ifaceID, text string) (int64, string, error) {
+	if ch.deps.SendTextKeyed != nil && cmd.RequestID != "" {
+		return ch.deps.SendTextKeyed(cmd.RequestID, commandArgsDigest(cmd), ifaceID, text)
+	}
+	return ch.deps.SendText(ifaceID, text)
+}
+
 // handleSendText sends a text message via the delivery pipeline.
 func (ch *CommandHandler) handleSendText(cmd Command) (json.RawMessage, error) {
 	if ch.deps.SendText == nil {
@@ -282,7 +301,7 @@ func (ch *CommandHandler) handleSendText(cmd Command) (json.RawMessage, error) {
 		return nil, fmt.Errorf("interface_id is required")
 	}
 
-	deliveryID, msgRef, err := ch.deps.SendText(p.InterfaceID, p.Text)
+	deliveryID, msgRef, err := ch.sendText(cmd, p.InterfaceID, p.Text)
 	if err != nil {
 		return nil, fmt.Errorf("queue send: %w", err)
 	}
@@ -330,7 +349,7 @@ func (ch *CommandHandler) handleSendMT(cmd Command) (json.RawMessage, error) {
 
 	// Route to first available satellite interface
 	ifaceID := "iridium_imt_0"
-	deliveryID, msgRef, err := ch.deps.SendText(ifaceID, text)
+	deliveryID, msgRef, err := ch.sendText(cmd, ifaceID, text)
 	if err != nil {
 		return nil, fmt.Errorf("queue MT: %w", err)
 	}
@@ -361,20 +380,20 @@ func (ch *CommandHandler) HandleCommand(payload []byte) {
 			Str("protocol", cmd.Protocol).
 			Str("expected", ProtocolVersion).
 			Msg("commander: unknown protocol version, ignoring command")
-		ch.sendErrorResponse(cmd, "unsupported protocol version: "+cmd.Protocol)
+		ch.refuse(cmd, "unsupported protocol version: "+cmd.Protocol)
 		return
 	}
 
 	if cmd.Cmd == "" {
 		log.Warn().Str("request_id", cmd.RequestID).Msg("commander: empty cmd field")
-		ch.sendErrorResponse(cmd, "cmd field is required")
+		ch.refuse(cmd, "cmd field is required")
 		return
 	}
 
 	handler, ok := ch.handlers[cmd.Cmd]
 	if !ok {
 		log.Warn().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: unknown command")
-		ch.sendErrorResponse(cmd, fmt.Sprintf("unknown command: %s", cmd.Cmd))
+		ch.refuse(cmd, fmt.Sprintf("unknown command: %s", cmd.Cmd))
 		return
 	}
 
@@ -383,12 +402,18 @@ func (ch *CommandHandler) HandleCommand(payload []byte) {
 		fresh, prev := c.Fresh, c.Response
 		switch {
 		case err != nil:
-			// Run it: losing a command is worse than a rare repeat.
-			log.Warn().Err(err).Str("request_id", cmd.RequestID).Msg("commander: command log unavailable, running the command anyway")
+			// Without the log a repeat cannot be told apart: only a command
+			// whose own admission is keyed (send_text, send_mt) or that
+			// changes nothing (ping) still runs (FA-R1).
+			if !ch.safeWithoutLog(cmd.Cmd) {
+				log.Warn().Err(err).Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: command log unavailable; a command that changes something is not run without it")
+				ch.refuse(cmd, "the Bridge cannot record this command right now; not run, send it again")
+				return
+			}
+			log.Warn().Err(err).Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: command log unavailable; running a command that is safe without it")
 		case c.Conflict:
 			log.Warn().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: a request id came again with other arguments; not run")
-			ch.publishResponse(CommandResponse{Protocol: ProtocolVersion, RequestID: cmd.RequestID, Cmd: cmd.Cmd, Status: "error",
-				Error: "request id " + cmd.RequestID + " was used before with other arguments; not run", Timestamp: time.Now().UTC()})
+			ch.refuse(cmd, "request id "+cmd.RequestID+" was used before with other arguments; not run")
 			return
 		case !fresh && prev == "":
 			log.Info().Str("cmd", cmd.Cmd).Str("request_id", cmd.RequestID).Msg("commander: the same command came again while it runs; not run twice")
@@ -447,11 +472,32 @@ func (ch *CommandHandler) sendErrorResponse(cmd Command, errMsg string) {
 	ch.finish(resp)
 }
 
+// refuse answers a command it did not run, without storing the answer: a
+// refusal must never replace the reply of the command that owns the id
+// (review 2026-10-18 18:26, FA-R2). [MESHSAT-1584]
+func (ch *CommandHandler) refuse(cmd Command, errMsg string) {
+	ch.publishResponse(CommandResponse{Protocol: ProtocolVersion, RequestID: cmd.RequestID, Cmd: cmd.Cmd,
+		Status: "error", Error: errMsg, Timestamp: time.Now().UTC()})
+}
+
+// safeWithoutLog says a command may run when the command log is down: it
+// changes nothing, or its admission is keyed by the command itself.
+func (ch *CommandHandler) safeWithoutLog(name string) bool {
+	switch name {
+	case "ping":
+		return true
+	case "send_text", "send_mt":
+		return ch.deps.SendTextKeyed != nil
+	}
+	return false
+}
+
 // finish stores a command's reply under its request id, then publishes it.
+// The log keeps the first reply of the run that claimed the id.
 func (ch *CommandHandler) finish(resp CommandResponse) {
 	if ch.cmdLog != nil && resp.RequestID != "" {
 		if data, err := json.Marshal(resp); err == nil {
-			if err := ch.cmdLog.FinishHubCommand(resp.RequestID, string(data)); err != nil {
+			if err := ch.cmdLog.FinishHubCommand(resp.RequestID, ch.runID, string(data)); err != nil {
 				log.Warn().Err(err).Str("request_id", resp.RequestID).Msg("commander: reply not stored")
 			}
 		}

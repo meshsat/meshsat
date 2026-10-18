@@ -101,6 +101,48 @@ func (d *Dispatcher) queueLegacyKeyed(opts SendOptions, fp string, kinds []direc
 	return res, nil
 }
 
+// HubCommandSource is the submission source of a Hub command's sends.
+const HubCommandSource = "hub_command"
+
+type directKeyedResult struct {
+	DeliveryID int64  `json:"delivery_id"`
+	MsgRef     string `json:"msg_ref"`
+}
+
+// QueueDirectSendKeyed is QueueDirectSendTo under an idempotency key: the
+// delivery row and its key commit in one transaction, and the same key with
+// the same fingerprint answers the row the first send queued (replayed)
+// instead of queueing again. Another fingerprint under the key is
+// database.ErrIdempotencyConflict. A Hub command's request id is its key, so
+// a command run again after a restart (its reply never stored) queues
+// nothing twice (review 2026-10-18 18:26, FA-R1). [MESHSAT-1584]
+func (d *Dispatcher) QueueDirectSendKeyed(source, key, fingerprint, interfaceID, text string, opts DirectSendOptions) (int64, string, bool, error) {
+	del := d.prepareDirectSend(interfaceID, text, opts)
+	id, err := uuid.NewV7()
+	if err != nil {
+		return 0, "", false, err
+	}
+	sub := database.DeliverySubmission{ID: id.String(), Source: source, IdempotencyKey: key, RequestSHA256: fingerprint,
+		Mode: database.SubmissionLegacy}
+	existing, ids, err := d.db.CreateLegacySubmission(sub, []database.MessageDelivery{del}, func(ids []int64) (string, error) {
+		b, err := json.Marshal(directKeyedResult{DeliveryID: ids[0], MsgRef: del.MsgRef})
+		return string(b), err
+	})
+	if err != nil {
+		return 0, "", false, err
+	}
+	if existing != nil {
+		var out directKeyedResult
+		if existing.Mode != database.SubmissionLegacy || json.Unmarshal([]byte(existing.LegacyResult), &out) != nil || out.DeliveryID == 0 {
+			return 0, "", false, fmt.Errorf("key %s names another kind of submission", key)
+		}
+		log.Info().Str("key", key).Int64("delivery_id", out.DeliveryID).Msg("direct send: the key named an earlier send; nothing queued again")
+		return out.DeliveryID, out.MsgRef, true, nil
+	}
+	d.directSendQueued(del, ids[0])
+	return ids[0], del.MsgRef, false, nil
+}
+
 // replayLegacySend answers a retried request with the result its key's
 // first send stored.
 func replayLegacySend(prev *database.DeliverySubmission, res SendResult) (SendResult, error) {

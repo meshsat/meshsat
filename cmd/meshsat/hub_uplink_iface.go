@@ -152,6 +152,6 @@ func (l hubCommandLog) ClaimHubCommand(id, cmd, args, run string, now time.Time)
 	return hubreporter.CommandClaim{Fresh: c.Fresh, Response: c.Response, Conflict: c.Conflict}, err
 }
 
-func (l hubCommandLog) FinishHubCommand(id, resp string) error {
-	return l.db.FinishHubCommand(id, resp)
+func (l hubCommandLog) FinishHubCommand(id, run, resp string) error {
+	return l.db.FinishHubCommand(id, run, resp)
 }

@@ -73,9 +73,12 @@ func (db *DB) ClaimHubCommand(requestID, cmd, argsSHA256, runID string, now time
 	return c, nil
 }
 
-// FinishHubCommand stores the reply a Hub command published.
-func (db *DB) FinishHubCommand(requestID, response string) error {
-	if _, err := db.Exec(`UPDATE hub_command_log SET response = ? WHERE request_id = ?`, response, requestID); err != nil {
+// FinishHubCommand stores the reply a Hub command published, once: only
+// for the run that claimed it and only while none is stored, so nothing
+// replaces a finished command's reply (review 2026-10-18 18:26, FA-R2).
+func (db *DB) FinishHubCommand(requestID, runID, response string) error {
+	if _, err := db.Exec(`UPDATE hub_command_log SET response = ? WHERE request_id = ? AND run_id = ? AND response = ''`,
+		response, requestID, runID); err != nil {
 		return fmt.Errorf("finish hub command %s: %w", requestID, err)
 	}
 	return nil

@@ -2610,6 +2610,12 @@ func main() {
 				// (MESHSAT-546) extends the command envelope.
 				return dispatcher.QueueDirectSend(ifaceID, text, "")
 			},
+			// A command run again after a restart answers the delivery it
+			// queued the first time (FA-R1). [MESHSAT-1584]
+			SendTextKeyed: func(requestID, fp, ifaceID, text string) (int64, string, error) {
+				id, ref, _, err := dispatcher.QueueDirectSendKeyed(engine.HubCommandSource, requestID, fp, ifaceID, text, engine.DirectSendOptions{})
+				return id, ref, err
+			},
 			FlushBurst: func(ctx context.Context) ([]byte, int, error) {
 				return burstQueue.Flush(ctx)
 			},

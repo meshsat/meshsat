@@ -31,7 +31,13 @@ func TestHubCommandLogClaimsOnceAndKeepsTheReply(t *testing.T) {
 	if c := claim("req-1", "a1", "run-B", t0.Add(time.Minute)); !c.Fresh || c.Conflict {
 		t.Fatalf("after a restart: %+v", c)
 	}
-	if err := db.FinishHubCommand("req-1", `{"status":"ok"}`); err != nil {
+	if err := db.FinishHubCommand("req-1", "run-A", `{"status":"stale run"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishHubCommand("req-1", "run-B", `{"status":"ok"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishHubCommand("req-1", "run-B", `{"status":"overwritten"}`); err != nil {
 		t.Fatal(err)
 	}
 	if c := claim("req-1", "a1", "run-C", t0.Add(time.Hour)); c.Fresh || c.Response != `{"status":"ok"}` {
