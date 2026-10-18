@@ -217,7 +217,7 @@ Not yet observed, each for a reason outside this protocol: the reply leg paralla
 
 ### Field status update (2026-09-03 to 04)
 
-Both kits on the image of b84af42 (pipelines 51745, 51749, 51751). The SMS reply leg is now
+Both kits on the image of f5a9651 (pipelines 51745, 51749, 51751). The SMS reply leg is now
 proven in both directions: the silence from parallax's SIM since April was an empty KPN prepaid
 balance, not the protocol; after a top-up, six PING round trips completed in 12 to 54 s,
 encrypted and clear. RESET aprs level 3 was executed on tesseract from a parallax request over

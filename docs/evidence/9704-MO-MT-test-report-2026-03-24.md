@@ -740,9 +740,9 @@ payload_with_crc = payload + struct.pack('>H', crc16(payload))
 After fixing three root cause bugs, MO+MT was verified working through the full MeshSat bridge pipeline on mule01:
 
 ### Bugs Fixed
-1. **Split-line bug in jspr_helper.py** (c49c7be) — `_rx_buf` was local to `jspr_receive()`, discarded on timeout. At 230400 baud on ARM64, JSPR lines can arrive in chunks that split across reads, silently dropping messageTerminate messages. Fix: persist `_rx_buf` as instance variable across calls.
-2. **Missing mt_received event handler** (c49c7be) — `IridiumGateway.ringAlertListener()` had no case for `mt_received` events from the IMT transport. MT messages were buffered in `mtPending` but the gateway never triggered `handleRingAlert()`.
-3. **Modem hung state** (4e848ab) — RockBLOCK 9704 firmware stops responding to all JSPR commands (except cold-start GET apiVersion) after repeated failed serial sessions. USB driver unbind/bind forces full re-initialization. Auto-triggered after 3 handshake failures.
+1. **Split-line bug in jspr_helper.py** (6ad680b) — `_rx_buf` was local to `jspr_receive()`, discarded on timeout. At 230400 baud on ARM64, JSPR lines can arrive in chunks that split across reads, silently dropping messageTerminate messages. Fix: persist `_rx_buf` as instance variable across calls.
+2. **Missing mt_received event handler** (6ad680b) — `IridiumGateway.ringAlertListener()` had no case for `mt_received` events from the IMT transport. MT messages were buffered in `mtPending` but the gateway never triggered `handleRingAlert()`.
+3. **Modem hung state** (7f800b8) — RockBLOCK 9704 firmware stops responding to all JSPR commands (except cold-start GET apiVersion) after repeated failed serial sessions. USB driver unbind/bind forces full re-initialization. Auto-triggered after 3 handshake failures.
 
 ### Bridge MO Result
 ```
