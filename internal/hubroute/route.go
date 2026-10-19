@@ -446,12 +446,14 @@ func (r *Route) repeat(op database.HubOp, now time.Time) bool {
 // where the bridge records that the outcome is unknown and stops: given up, not recovered.
 func (r *Route) RequestReplays() {
 	now := r.now()
-	r.giveUpPastBound(now)
+	// Strike what is kept by now first, then judge the bound; the bound reads the evidence
+	// itself, so a strike that cannot be written does not make a kept event missing.
 	if n, err := r.db.ResolveKeptHubOpMissing(); err != nil {
 		log.Warn().Err(err).Msg("hub_msg: kept events not struck from the missing ones")
 	} else if n > 0 {
 		log.Info().Int("events", n).Msg("hub_msg: missing events kept by now struck")
 	}
+	r.giveUpPastBound(now)
 	if !r.pub.IsConnected() {
 		return
 	}
@@ -504,7 +506,11 @@ func (r *Route) RequestReplays() {
 			continue
 		}
 		if op.ExpiresAt+ReplayWithin.Milliseconds() < now.UnixMilli() {
-			r.giveUp(*op, now)
+			// At the bound only what is still missing is given up; an event kept by now (by
+			// another route, or a strike that came later) is not.
+			if r.stillMissing(id) {
+				r.giveUp(*op, now)
+			}
 			continue
 		}
 		if !r.stillMissing(id) {

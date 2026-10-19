@@ -226,6 +226,13 @@ const hubOpCompleted = `EXISTS (SELECT 1 FROM hub_op_events e WHERE e.op_id = hu
 const hubOpTerminal = `EXISTS (SELECT 1 FROM hub_op_events e WHERE e.op_id = hub_ops.op_id AND e.valid = 1
 	AND e.class IN ('completed', 'failed', 'expired'))`
 
+// hubOpStillMissing is true for an operation with an event really missing: a missing row
+// whose event is not kept. An unnamed row (an empty event_id) never names a kept event, so it is
+// always missing. A row whose event is kept by now is a cleanup still to do, not something
+// missing, whether or not its strike could be written yet.
+const hubOpStillMissing = `EXISTS (SELECT 1 FROM hub_op_missing m WHERE m.op_id = hub_ops.op_id
+	AND NOT EXISTS (SELECT 1 FROM hub_op_events k WHERE k.event_id = m.event_id AND k.op_id = m.op_id))`
+
 // MissingAnyEvent names, in hub_op_missing, an obligation whose event is not known (one
 // carried over from v72-v73, which kept no event ids): only a completion ends it, or the
 // bound.
@@ -366,12 +373,13 @@ type HubOpCursor struct {
 }
 
 // HubOpsOwedReplay lists, after cursor and ordered by (replay_at, op_id), the operations with
-// a missing event, not given up, with a kept submission, whose deadline is not more than
-// within before now. The Hub answers a repeat from what it stores, a day past the deadline,
+// an event still missing (hubOpStillMissing: not one whose only rows name events kept by
+// now), not given up, with a kept submission, whose deadline is not more than within before
+// now. The Hub answers a repeat from what it stores, a day past the deadline,
 // so a repeat well inside that is a replay, never a new submission it would refuse as late.
 // A caller that pages with the cursor and starts again at the end visits every one.
 func (db *DB) HubOpsOwedReplay(now time.Time, within time.Duration, after HubOpCursor, limit int) ([]HubOp, error) {
-	return queryHubOps(db, `replay_at IS NOT NULL AND submission != '' AND replay_given_up_at IS NULL
+	return queryHubOps(db, `replay_at IS NOT NULL AND `+hubOpStillMissing+` AND submission != '' AND replay_given_up_at IS NULL
 		AND expires_at + ? >= ? AND (replay_at, op_id) > (?, ?) ORDER BY replay_at, op_id LIMIT ?`,
 		within.Milliseconds(), now.UnixMilli(), after.Key, after.OpID, limitOr(limit))
 }
@@ -387,11 +395,13 @@ func (db *DB) HubOpsToReconcile(now time.Time, within time.Duration, after HubOp
 }
 
 // HubOpsToGiveUp lists the operations past the bound whose outcome this bridge cannot say:
-// one with a missing event, or one with no outcome kept at all. One past the bound with a
-// weaker outcome kept and nothing known missing has its outcome, and is not listed.
+// one with an event still missing, or one with no outcome kept at all. The decision is made
+// from the evidence, not from replay_at: a missing row whose event is kept by now (its strike
+// not written yet) is not missing. One past the bound with a weaker outcome kept and nothing
+// still missing has its outcome, and is not listed.
 func (db *DB) HubOpsToGiveUp(now time.Time, within time.Duration, limit int) ([]HubOp, error) {
 	return queryHubOps(db, `replay_given_up_at IS NULL AND expires_at + ? < ? AND NOT `+hubOpCompleted+`
-		AND (replay_at IS NOT NULL OR NOT `+hubOpTerminal+`) ORDER BY created_at, op_id LIMIT ?`,
+		AND (`+hubOpStillMissing+` OR NOT `+hubOpTerminal+`) ORDER BY created_at, op_id LIMIT ?`,
 		within.Milliseconds(), now.UnixMilli(), limitOr(limit))
 }
 
