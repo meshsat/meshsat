@@ -143,7 +143,48 @@ func TestHubSettings_TopicPrefix(t *testing.T) {
 	if _, got := hubCall(t, s, http.MethodGet, ""); got["mqtt_topic_prefix"] != "meshsat/acme" {
 		t.Fatalf("a refused prefix changed the stored one: %v", got)
 	}
-	if code, got := hubCall(t, s, http.MethodPut, `{"mqtt_topic_prefix":""}`); code != 200 || got["mqtt_topic_prefix"] != nil {
+	if code, got := hubCall(t, s, http.MethodPut, `{"mqtt_topic_prefix":""}`); code != 200 || got["mqtt_topic_prefix"] != "meshsat" {
 		t.Fatalf("back to the platform tenant: %d %v", code, got)
+	}
+}
+
+// TP-R1 (review 2026-10-19 02:07): what the Bridge starts with, through the real
+// settings handler and database and the resolver main.go uses, with
+// MESHSAT_HUB_TOPIC_PREFIX set to a tenant. A root the settings never set
+// leaves the environment's; a blank one sent returns the Bridge to the platform
+// root; a refused one changes nothing.
+func TestHubTopicPrefixAtStart(t *testing.T) {
+	s := newTestServerWithDB(t)
+	const env = "meshsat/acme"
+	atStart := func() string {
+		raw, _ := s.db.GetSystemConfig(hubConfigKey)
+		return HubTopicPrefixAtStart(raw, env)
+	}
+	if got := atStart(); got != env {
+		t.Fatalf("nothing saved: %q, want the environment's %q", got, env)
+	}
+	if got := HubTopicPrefixAtStart("", ""); got != "" {
+		t.Fatalf("nothing saved, no environment: %q, want the reporter's platform default", got)
+	}
+	for _, c := range []struct{ body, want string }{
+		{`{"url":"wss://mqtt-hub.example/mqtt"}`, env}, // settings saved without a root: the environment's
+		{`{"mqtt_topic_prefix":"meshsat/beta"}`, "meshsat/beta"},
+		{`{"mqtt_topic_prefix":""}`, "meshsat"}, // the blank reset (TP-R1)
+		{`{"callsign":"A"}`, "meshsat"},         // a later save without the field keeps it
+		{`{"mqtt_topic_prefix":" meshsat/beta "}`, "meshsat/beta"},
+		{`{"mqtt_topic_prefix":"meshsat"}`, "meshsat"},
+	} {
+		if code, _ := hubCall(t, s, http.MethodPut, c.body); code != 200 {
+			t.Fatalf("%s: %d", c.body, code)
+		}
+		if got := atStart(); got != c.want {
+			t.Errorf("after %s the Bridge starts on %q, want %q", c.body, got, c.want)
+		}
+	}
+	if code, _ := hubCall(t, s, http.MethodPut, `{"mqtt_topic_prefix":"meshsat/+"}`); code != http.StatusBadRequest {
+		t.Fatalf("an invalid root: %d, want 400", code)
+	}
+	if got := atStart(); got != "meshsat" {
+		t.Errorf("after a refused root the Bridge starts on %q, want the stored meshsat", got)
 	}
 }

@@ -573,8 +573,11 @@ type hubConnectionConfig struct {
 	HealthInterval int    `json:"health_interval,omitempty"`
 	APIURL         string `json:"api_url,omitempty"`
 	// TopicPrefix is the tenant's topic root from the Hub's bundle
-	// (mqtt_topic_prefix): empty or "meshsat" for the platform tenant,
-	// "meshsat/{tenant}" for a customer's. [MESHSAT-1467]
+	// (mqtt_topic_prefix): "meshsat" for the platform tenant, "meshsat/{tenant}"
+	// for a customer's. Absent until the settings set it, and then the
+	// environment's MESHSAT_HUB_TOPIC_PREFIX applies (HubTopicPrefixAtStart). A
+	// blank one sent is stored as "meshsat", so it wins over the environment
+	// (review 2026-10-19 02:07, TP-R1). [MESHSAT-1467]
 	TopicPrefix string `json:"mqtt_topic_prefix,omitempty"`
 	Warning     string `json:"warning,omitempty"`
 	// Link is the state of the MQTT session behind these settings, for the
@@ -717,7 +720,9 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 		prev.APIURL = strings.TrimSpace(*req.APIURL)
 	}
 	if req.TopicPrefix != nil {
-		prev.TopicPrefix = strings.TrimSpace(*req.TopicPrefix)
+		// Canonical: blank is the platform root, stored as such (TP-R1).
+		t, _ := hubreporter.NewTopics(*req.TopicPrefix) // checked above
+		prev.TopicPrefix = t.Root()
 	}
 	prev.HasCert = prev.TLSCertPEM != "" && prev.TLSKeyPEM != ""
 
@@ -757,6 +762,28 @@ func (s *Server) handleHubPing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"elapsed_ms": elapsed.Milliseconds()})
+}
+
+// HubTopicPrefixAtStart is the tenant topic root the Bridge starts its Hub link
+// with, from the stored hub_connection settings (raw JSON) and the
+// environment's MESHSAT_HUB_TOPIC_PREFIX (fallback): the stored root once the
+// settings have set one, the environment's while they never have. Settings
+// saved with a blank root store "meshsat", so a blank reset returns a Bridge to
+// the platform tenant whatever the environment says (review 2026-10-19 02:07,
+// TP-R1). [MESHSAT-1467]
+func HubTopicPrefixAtStart(raw, fallback string) string {
+	var hc struct {
+		TopicPrefix *string `json:"mqtt_topic_prefix"`
+	}
+	if raw == "" || json.Unmarshal([]byte(raw), &hc) != nil || hc.TopicPrefix == nil {
+		return fallback
+	}
+	if strings.TrimSpace(*hc.TopicPrefix) == "" {
+		// Only a hand edit stores a blank (the handler stores "meshsat"); it
+		// means the platform root, as a blank sent to the API does.
+		return hubreporter.DefaultTopicRoot
+	}
+	return *hc.TopicPrefix
 }
 
 func (s *Server) loadHubConfig() hubConnectionConfig {

@@ -2289,9 +2289,8 @@ func main() {
 			TLSKeyPEM      string `json:"tls_key_pem"`
 			TLSCAPEM       string `json:"tls_ca_pem"`
 			TLSInsecure    bool   `json:"tls_insecure"`
-			APIURL         string `json:"api_url"`           // optional; the relay derives it from the MQTT URL otherwise
-			TopicPrefix    string `json:"mqtt_topic_prefix"` // the bundle's tenant topic root; empty = platform tenant [MESHSAT-1467]
-			Enabled        *bool  `json:"enabled"`           // the apps' "Use the Hub"; absent = on [MESHSAT-1417]
+			APIURL         string `json:"api_url"` // optional; the relay derives it from the MQTT URL otherwise
+			Enabled        *bool  `json:"enabled"` // the apps' "Use the Hub"; absent = on [MESHSAT-1417]
 			Callsign       string `json:"callsign"`
 			HealthInterval int    `json:"health_interval"`
 		}
@@ -2302,9 +2301,8 @@ func main() {
 			if hc.APIURL != "" {
 				hubAPIURL = hc.APIURL
 			}
-			if hc.TopicPrefix != "" {
-				hubTopicPrefix = hc.TopicPrefix
-			}
+			// The stored root once the settings set one, else the environment's (TP-R1).
+			hubTopicPrefix = api.HubTopicPrefixAtStart(raw, cfg.HubTopicPrefix)
 			if hc.BridgeID != "" {
 				hubBridgeID = hc.BridgeID
 			}
