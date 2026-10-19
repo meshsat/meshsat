@@ -198,8 +198,16 @@ func (r *Route) HandleStatus(payload []byte) {
 		if ref.Mid != op.Mid {
 			return
 		}
-		// The Hub did not take this submission: the attempt has no receipt to wait for.
-		rc.Source, rc.Event = "hub", "nak:hub_refusal:"+ref.Reason
+		// Every Hub replica answers the same frame, so a refusal can come twice: kept once.
+		added, err := r.db.AddHubOpEvent(hubmsg.Event{OpID: op.OpID, EventID: "refusal:" + op.OpID + ":" + ref.Reason,
+			Class: "failed", Kind: "hub_refusal", Reason: ref.Reason, Authority: "hub", At: r.now().UTC().Format(time.RFC3339)}, true, r.now())
+		if err != nil || !added {
+			return
+		}
+		// The Hub did not take the submission, so nothing left the Hub: the broker's PUBACK
+		// accepted a message nobody carried on, as a radio that refused a packet sent nothing.
+		// The attempt has no receipt to wait for, and the message is not sent.
+		rc.Source, rc.Event = "hub", "dropped:hub_refusal:"+ref.Reason
 		log.Info().Str("op_id", op.OpID).Str("reason", ref.Reason).Msg("hub_msg: the Hub refused the submission")
 		r.record(rc)
 		return

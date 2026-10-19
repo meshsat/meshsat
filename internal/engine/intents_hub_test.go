@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -235,6 +236,36 @@ func TestIntentHub_ARefusalOrAFailureHandsOverToTheNextRoute(t *testing.T) {
 				t.Fatalf("round %d", s.Intent.ActiveRound)
 			}
 		})
+	}
+}
+
+// The Hub refusing the submission is not sent: nothing left the Hub (seen live on 19 Oct
+// 2026, where it read "accepted, not confirmed"). Each Hub replica refuses its copy of the
+// frame; the refusal is evidence once.
+func TestIntentHub_ARefusedSubmissionIsNotSentAndCountedOnce(t *testing.T) {
+	h := newIntentHarness(t)
+	sess := &fakeHubSession{up: true}
+	r := useHub(t, h, sess)
+	id := h.submit(h.contact(hubAddr(1)), "to nobody", "")
+	h.work("hub_0")
+	h.drain()
+	s := sess.submissions(t)[0]
+	b, _ := json.Marshal(hubmsg.Refusal{V: 1, Type: "refusal", OpID: s.OpID, Mid: s.Mid, Reason: "refused_unknown_recipient"})
+	r.HandleStatus(b)
+	r.HandleStatus(b)
+	h.drain()
+	st := h.snap(id)
+	if st.Intent.State != database.IntentClosed || st.Intent.Outcome != database.OutcomeFailed || outcomeLabel(st.Intent.Outcome) != "not sent" {
+		t.Fatalf("%s/%s", st.Intent.State, st.Intent.Outcome)
+	}
+	n := 0
+	for _, ev := range st.Evidence {
+		if strings.Contains(ev.Event, "hub_refusal") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d refusal evidence rows; two replicas' copies are one refusal", n)
 	}
 }
 
