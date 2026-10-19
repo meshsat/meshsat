@@ -110,14 +110,24 @@ func NewInterfaceManager(db *database.DB) *InterfaceManager {
 	}
 }
 
+// devicelessExtra are channel types this process takes as device-less on top of the fixed
+// ones: hub_0's "hub" while the Hub app route is on. [MESHSAT-1584]
+var devicelessExtra sync.Map
+
+// RegisterDevicelessChannel makes a channel type device-less (online when on) in this
+// process. Call it before the interface manager starts: it reads the states then.
+func RegisterDevicelessChannel(channelType string) { devicelessExtra.Store(channelType, true) }
+
 // channelNeedsDevice returns true if the channel type requires a USB serial device binding.
 func channelNeedsDevice(channelType string) bool {
 	switch channelType {
 	case "mqtt", "webhook", "lxmf", "cell":
 		return false
-	default:
-		return true // mesh, iridium, cellular, zigbee all need hardware
 	}
+	if _, ok := devicelessExtra.Load(channelType); ok {
+		return false
+	}
+	return true // mesh, iridium, cellular, zigbee all need hardware
 }
 
 // SetPortClassifier installs the function scanDevices uses to label a serial

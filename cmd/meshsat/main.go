@@ -578,6 +578,15 @@ func main() {
 			return transport.ClassifyDevice(vidpid)
 		})
 	}
+	// hub_0 reads online while the Hub app route is on in this process, and only then: the
+	// link is made, and its type taken as device-less, before the manager reads the links.
+	// With the route off, a hub_0 left from an earlier run stays unbound. [MESHSAT-1584]
+	if hubroute.Enabled() {
+		engine.RegisterDevicelessChannel("hub")
+		if err := hubroute.EnsureInterface(db); err != nil {
+			log.Error().Err(err).Msg("hub_msg: the link hub_0 could not be made")
+		}
+	}
 	if err := ifaceMgr.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("interface manager start failed")
 	}

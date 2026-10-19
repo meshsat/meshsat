@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -378,5 +380,39 @@ func TestIntentHub_ADisconnectBeforeTheSendWaitsWithoutSpendingARetry(t *testing
 	}
 	if len(sess.submissions(t)) != 0 {
 		t.Fatal("published while down")
+	}
+}
+
+// hub_0 reads online only in a process where the route is on (seen on the kits after the live
+// runs: "unbound", the manager took it for a link that needs a device).
+func TestTheHubLinkIsOnlineOnlyWhereTheRouteIsOn(t *testing.T) {
+	t.Cleanup(func() { devicelessExtra.Delete("hub") })
+	state := func() InterfaceState {
+		t.Helper()
+		db, err := database.New(filepath.Join(t.TempDir(), "bridge.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if err := hubroute.EnsureInterface(db); err != nil {
+			t.Fatal(err)
+		}
+		m := NewInterfaceManager(db)
+		if err := m.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		defer m.Stop()
+		st, err := m.GetStatus("hub_0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.State
+	}
+	if got := state(); got != StateUnbound {
+		t.Fatalf("route off: %v", got)
+	}
+	RegisterDevicelessChannel("hub")
+	if got := state(); got != StateOnline {
+		t.Fatalf("route on: %v", got)
 	}
 }
