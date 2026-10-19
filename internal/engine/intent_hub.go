@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"meshsat/internal/directory"
 	"meshsat/internal/gateway"
 	"meshsat/internal/hubmsg"
+	"meshsat/internal/rules"
 )
 
 // The Hub app route on the intent path (hub_msg, HeMB-NG stage 2, contract C4): a contact's
@@ -50,6 +52,20 @@ func (d *Dispatcher) SetHubRoute(ad gateway.IntentAdapter) {
 		return
 	}
 	d.hubRoute.v.Store(&ad)
+}
+
+// HubHandoff takes a message the Hub route stored to the ingress rules of hub_0 (A10). The
+// work it makes is listed under the stored message (DispatchAccessKeyed), so a hand-off
+// tried again after a failed write or a restart makes only what is missing; it returns an
+// error while any of that work could not be made, and the route then tries it again. No
+// rule matching is a hand-off done. [MESHSAT-1584]
+func (d *Dispatcher) HubHandoff(h database.HubHandoff) error {
+	res := d.DispatchAccessKeyed(hubRouteInterface, rules.RouteMessage{Text: h.Text, From: h.From, PortNum: 1, Plain: true},
+		[]byte(h.Text), database.HubHandoffOrigin(h.MessageID))
+	if res.Failed > 0 {
+		return fmt.Errorf("%d piece(s) of work not made (%d made now, %d before)", res.Failed, res.Queued, res.Existing)
+	}
+	return nil
 }
 
 // intentCreatedMs is when the intent was made, from its UUIDv7 id.

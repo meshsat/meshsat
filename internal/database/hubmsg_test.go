@@ -100,8 +100,8 @@ func TestHubOpEventsAreKeptOncePerID(t *testing.T) {
 	ev := hubmsg.Event{V: 1, OpID: op.OpID, Mid: op.Mid, Recipient: op.Recipient, EventID: hubmsg.NewV7(now), Rev: 1,
 		Class: "forwarded", Kind: "hub_forwarded", Authority: "hub", At: now.UTC().Format(time.RFC3339)}
 	for i, want := range []bool{true, false} {
-		if added, err := db.AddHubOpEvent(ev, true, now); err != nil || added != want {
-			t.Fatalf("copy %d: added %v %v", i+1, added, err)
+		if k, err := db.AddHubOpEvent(ev, true, now); err != nil || k.Added != want || !k.Valid || k.Applied || k.Event.EventID != ev.EventID {
+			t.Fatalf("copy %d: %+v %v", i+1, k, err)
 		}
 	}
 	evs, valid, err := db.HubOpEvents(op.OpID)

@@ -235,6 +235,12 @@ type DeliveryEvidence struct {
 	Candidates     []int64 `json:"candidates,omitempty"`
 	Applied        bool    `json:"applied"`
 	ReceivedAt     string  `json:"received_at"`
+	// DedupKey is the answer's own identity (a Hub event's id): the ledger keeps one row
+	// per key, so evidence applied again after a failure or a restart is recorded once.
+	DedupKey string `json:"-"`
+	// Repeat is set by RecordEvidence when the key was recorded before: the row returned
+	// is that one.
+	Repeat bool `json:"-"`
 }
 
 // IntentAttempt is an attempt row with what the Escalator reads of it.
@@ -1033,11 +1039,15 @@ func insertEvidenceTx(tx *sqlx.Tx, e DeliveryEvidence) (int64, error) {
 	if e.TransmissionID != 0 {
 		txID = e.TransmissionID
 	}
+	var dedup any
+	if e.DedupKey != "" {
+		dedup = e.DedupKey
+	}
 	res, err := tx.Exec(`INSERT INTO delivery_evidence (intent_id, attempt_id, transmission_id, source, event, completes,
-		corr_kind, corr_value, corr_scope, corr_peer, trust, matched, ambiguous, candidates)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		corr_kind, corr_value, corr_scope, corr_peer, trust, matched, ambiguous, candidates, dedup_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		intentID, attemptID, txID, e.Source, e.Event, e.Completes, e.CorrKind, e.CorrValue, e.CorrScope, e.CorrPeer,
-		e.Trust, boolInt(e.Matched), boolInt(e.Ambiguous), string(cands))
+		e.Trust, boolInt(e.Matched), boolInt(e.Ambiguous), string(cands), dedup)
 	if err != nil {
 		return 0, fmt.Errorf("insert evidence: %w", err)
 	}
@@ -1149,9 +1159,22 @@ func (db *DB) CorrelationInUse(kind, value, scope string, windowS int) (bool, er
 // (0 = no bound). Exactly one: matched, and classify says what it proves.
 // None: stored unmatched (a later finalization may still reconcile it).
 // More than one: stored ambiguous with the candidates; it completes
-// nothing. Returns the stored row.
+// nothing. Evidence with a DedupKey recorded before is not stored again:
+// the earlier row comes back with Repeat set. Returns the stored row.
 func (db *DB) RecordEvidence(e DeliveryEvidence, windowS int, classify EvidenceClassifier) (DeliveryEvidence, error) {
 	err := db.withTx(func(tx *sqlx.Tx) error {
+		if e.DedupKey != "" {
+			prev, err := scanEvidence(tx.QueryRow(`SELECT `+evidenceColumns+` FROM delivery_evidence WHERE dedup_key = ?`, e.DedupKey))
+			switch {
+			case err == nil:
+				key := e.DedupKey
+				e = *prev
+				e.DedupKey, e.Repeat = key, true
+				return nil
+			case !errors.Is(err, sql.ErrNoRows):
+				return err
+			}
+		}
 		var now string
 		if err := tx.QueryRow(`SELECT datetime('now')`).Scan(&now); err != nil {
 			return err

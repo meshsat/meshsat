@@ -650,8 +650,62 @@ func meshEnvelopeText(body []byte) (string, bool) {
 }
 
 func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessage, payload []byte) int {
+	return d.dispatchAccess(sourceInterface, msg, payload, nil).Queued
+}
+
+// DispatchResult is what one evaluation of the ingress rules made of a message. Matched
+// counts rules; the others count pieces of work (a rule to the cell makes one per phone).
+type DispatchResult struct {
+	Matched  int // rules that matched
+	Queued   int // work this call made: rows queued, bonded sends made
+	Existing int // work an earlier dispatch under the same origin made, not made again
+	Skipped  int // matches the rules or the dispatcher's limits carry nowhere (loop, recent copy, no interface, queue full, HeMB off, a bad address)
+	Failed   int // work that could not be made (a write or a bonded send failed): a keyed dispatch tried again makes only this
+}
+
+// dispatchOrigin is a keyed dispatch's message identity and the work listed for it.
+type dispatchOrigin struct {
+	key  string
+	done map[string]bool
+}
+
+func (o *dispatchOrigin) madeFor(prefix string) bool {
+	for w := range o.done {
+		if strings.HasPrefix(w, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// DispatchAccessKeyed is DispatchAccess for a message with a durable identity of its own
+// (origin): each piece of work it makes is listed under origin, its rule, the rule's
+// target and its destination, in the transaction that queues it, and a dispatch under the
+// same origin again, after a failure or a restart, makes only the work that is missing.
+// The result says what was made, made before, carried nowhere, or could not be made.
+// [MESHSAT-1584]
+func (d *Dispatcher) DispatchAccessKeyed(sourceInterface string, msg rules.RouteMessage, payload []byte, origin string) DispatchResult {
+	done, err := d.db.DispatchWorkFor(origin)
+	if err != nil {
+		log.Warn().Err(err).Str("origin", origin).Msg("dispatch: the work made before could not be read; tried again later")
+		return DispatchResult{Failed: 1}
+	}
+	return d.dispatchAccess(sourceInterface, msg, payload, &dispatchOrigin{key: origin, done: done})
+}
+
+// insertWork queues del, listed under origin as work when the dispatch is keyed.
+func (d *Dispatcher) insertWork(origin *dispatchOrigin, work string, del database.MessageDelivery) (int64, bool, error) {
+	if origin == nil {
+		id, err := d.db.InsertDelivery(del)
+		return id, err == nil, err
+	}
+	return d.db.InsertDeliveryOnce(origin.key, work, del)
+}
+
+func (d *Dispatcher) dispatchAccess(sourceInterface string, msg rules.RouteMessage, payload []byte, origin *dispatchOrigin) DispatchResult {
+	var res DispatchResult
 	if d.access == nil {
-		return 0
+		return res
 	}
 
 	// Max hop count: drop messages that have traversed too many interfaces
@@ -660,7 +714,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		log.Warn().Int("hops", len(msg.Visited)).Int("max", d.maxHops).
 			Strs("visited", msg.Visited).Str("source", sourceInterface).
 			Msg("loop prevention: max hop count exceeded, dropping message")
-		return 0
+		return res
 	}
 
 	// An SMS one of its chat's keys opens (sms:<from>, then sms:*) goes on as
@@ -705,14 +759,17 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 	}
 
 	matches := d.access.EvaluateIngress(sourceInterface, msg)
+	res.Matched = len(matches)
 	if len(matches) == 0 {
-		return 0
+		return res
 	}
 
 	msgRef := fmt.Sprintf("%s-%d", time.Now().UTC().Format("20060102-150405"), time.Now().UnixNano()%100000)
 
-	count := 0
 	for _, m := range matches {
+		// The rule's work, as a keyed dispatch lists it: the rule and its target as written
+		// (a failover group, not the interface it resolves to now), then the destination.
+		workPrefix := fmt.Sprintf("rule:%d/%s/", m.Rule.ID, m.ForwardTo)
 		// Check if the forwarding target is a HeMB bond group.
 		if d.db.IsBondGroup(m.ForwardTo) {
 			// HeMB is experimental and opt-in: with it off, a rule that
@@ -722,6 +779,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				if d.signing != nil {
 					d.signing.AuditEvent("drop", nil, nil, nil, nil, "HeMB experimental off: bond group "+m.ForwardTo)
 				}
+				res.Skipped++
+				continue
+			}
+			// A bonded send keeps no row; a keyed dispatch lists it once it went.
+			if origin != nil && origin.done[workPrefix] {
+				res.Existing++
 				continue
 			}
 			if d.failover != nil {
@@ -770,6 +833,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 						if tErr != nil {
 							log.Error().Err(tErr).Str("bond_group", m.ForwardTo).
 								Msg("hemb: bond egress transforms failed — dropping send")
+							res.Skipped++
 							continue
 						}
 						bondPayload = transformed
@@ -786,6 +850,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 					if len(bondPayload) > 0xFFFF {
 						log.Error().Int("bytes", len(bondPayload)).Str("bond_group", m.ForwardTo).
 							Msg("hemb: bond payload exceeds 65535 bytes — dropping")
+						res.Skipped++
 						continue
 					}
 					framed := make([]byte, 2+len(bondPayload))
@@ -800,10 +865,16 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 						EventCh:   hemb.GlobalEventBus.Channel(), // fan-out to SSE subscribers
 					})
 					if err := bdr.Send(context.Background(), bondPayload); err != nil {
+						res.Failed++
 						log.Error().Err(err).Str("bond_group", m.ForwardTo).
 							Msg("hemb: bonded send failed")
 					} else {
-						count++
+						res.Queued++
+						if origin != nil {
+							if err := d.db.NoteDispatchWork(origin.key, workPrefix); err != nil {
+								log.Warn().Err(err).Str("origin", origin.key).Msg("hemb: bonded send not listed; a dispatch tried again sends it again")
+							}
+						}
 						log.Info().Str("bond_group", m.ForwardTo).Int("bearers", len(bearers)).
 							Int("payload_in", len(payload)).Int("payload_wire", len(bondPayload)).
 							Msg("hemb: payload sent via bond group")
@@ -812,6 +883,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				}
 			}
 			log.Warn().Str("bond_group", m.ForwardTo).Msg("hemb: no online bearers in bond group")
+			res.Skipped++
 			continue
 		}
 
@@ -821,6 +893,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			resolved := d.failover.Resolve(m.ForwardTo)
 			if resolved == "" {
 				log.Warn().Str("target", m.ForwardTo).Msg("failover: no available interface, dropping delivery")
+				res.Skipped++
 				continue
 			}
 			destInterface = resolved
@@ -831,6 +904,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			d.loopMetrics.SelfLoopDrops.Add(1)
 			log.Debug().Str("target", destInterface).Str("source", sourceInterface).
 				Msg("failover: resolved target is source interface, skipping")
+			res.Skipped++
 			continue
 		}
 		if len(msg.Visited) > 0 {
@@ -845,6 +919,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				}
 			}
 			if skip {
+				res.Skipped++
 				continue
 			}
 		}
@@ -905,10 +980,17 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			ttlSeconds = int(desc.DefaultTTL / time.Second)
 		}
 
-		// Content-hash dedup: suppress duplicate payload→interface deliveries within TTL window
-		if d.isDeliveryDuplicate(destInterface, wire) {
+		// A keyed dispatch tried again: what this rule made before is not made again, and
+		// what is missing of it skips the checks the rule passed the first time (its own
+		// earlier work would read as the recent copy).
+		again := origin != nil && origin.madeFor(workPrefix)
+
+		// Content-hash dedup: suppress duplicate payload→interface deliveries within TTL
+		// window. A payload counts as delivered once a row for it is queued.
+		if !again && d.recentlyDelivered(destInterface, wire) {
 			d.loopMetrics.DeliveryDedups.Add(1)
 			log.Debug().Str("dest", destInterface).Msg("delivery dedup: same payload recently delivered to this interface, skipping")
+			res.Skipped++
 			continue
 		}
 
@@ -925,7 +1007,11 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			if words, ok := cannedText(text); ok {
 				text = words
 			}
-			count += d.queueLXMFForward(m.Rule, sourceInterface, destInterface, msgRef, text, fwdOpts, visited, maxRetries, ttlSeconds)
+			r := d.queueLXMFForward(m.Rule, sourceInterface, destInterface, msgRef, text, fwdOpts, visited, maxRetries, ttlSeconds, origin, workPrefix)
+			res.Queued, res.Existing, res.Skipped, res.Failed = res.Queued+r.Queued, res.Existing+r.Existing, res.Skipped+r.Skipped, res.Failed+r.Failed
+			if r.Queued > 0 {
+				d.noteDelivered(destInterface, wire)
+			}
 			continue
 		}
 
@@ -939,7 +1025,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 		// for now we default to Routine so operators still get the
 		// Deferred-evicted-by-Routine win from the DB-level ordering.
 		// [MESHSAT-546 / S2-03]
-		if d.maxQueueDepth > 0 {
+		if d.maxQueueDepth > 0 && !again {
 			depth, dErr := d.db.QueueDepth(destInterface)
 			if dErr == nil && depth >= d.maxQueueDepth {
 				weakest, wErr := d.db.WeakestEvictable(destInterface)
@@ -951,12 +1037,14 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 						Int("new_priority", m.Rule.Priority).
 						Str("new_precedence", newPrec).
 						Msg("queue depth limit reached, rejecting delivery")
+					res.Skipped++
 					continue
 				}
 				reason := fmt.Sprintf("evicted: queue full, preempted by %s/%d", newPrec, m.Rule.Priority)
 				if n, eErr := d.db.EvictDelivery(weakest.ID, reason); eErr != nil || n == 0 {
 					log.Warn().Str("dest", destInterface).Err(eErr).
 						Msg("queue depth limit: eviction failed, rejecting delivery")
+					res.Skipped++
 					continue
 				}
 				log.Info().Str("dest", destInterface).
@@ -975,11 +1063,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				}
 			}
 		}
-		if d.maxQueueBytes > 0 {
+		if d.maxQueueBytes > 0 && !again {
 			qBytes, bErr := d.db.QueueBytes(destInterface)
 			if bErr == nil && qBytes+int64(len(wire)) > d.maxQueueBytes {
 				log.Warn().Str("dest", destInterface).Int64("bytes", qBytes).Int64("max", d.maxQueueBytes).
 					Msg("queue bytes limit reached, rejecting delivery")
+				res.Skipped++
 				continue
 			}
 		}
@@ -1002,6 +1091,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				destinations = dests
 			}
 		}
+		made := false
 		for _, destination := range destinations {
 			del := database.MessageDelivery{
 				MsgRef:      msgRef,
@@ -1042,11 +1132,17 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 			// bearer's own limit applies, as on a direct send. [MESHSAT-1584,
 			// r3 F8, B12]
 
-			delID, err := d.db.InsertDelivery(del)
+			delID, created, err := d.insertWork(origin, workPrefix+destination, del)
 			if err != nil {
 				log.Error().Err(err).Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Msg("failed to create access delivery")
+				res.Failed++
 				continue
 			}
+			if !created {
+				res.Existing++
+				continue
+			}
+			made = true
 			del.ID = delID
 
 			// Audit the dispatch event
@@ -1056,7 +1152,7 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				d.signing.AuditEvent("dispatch", ifacePtr, &dir, &delID, &ruleID, preview)
 			}
 
-			count++
+			res.Queued++
 			log.Info().Int64("rule_id", m.Rule.ID).Str("dest", destInterface).Str("msg_ref", msgRef).Msg("access delivery queued")
 
 			if d.emit != nil {
@@ -1072,9 +1168,12 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 				})
 			}
 		}
+		if made {
+			d.noteDelivered(destInterface, wire)
+		}
 	}
 
-	return count
+	return res
 }
 
 // cellDestinations asks the running cell gateway where a rule's text goes
@@ -1101,9 +1200,11 @@ const lxmfHashLen = 32
 // destination queues nothing: an LXMF message has no default recipient.
 // [MESHSAT-1554]
 func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface, destInterface, msgRef, text string,
-	opts forwardOptions, visited string, maxRetries, ttlSeconds int) int {
+	opts forwardOptions, visited string, maxRetries, ttlSeconds int, origin *dispatchOrigin, workPrefix string) DispatchResult {
+	var res DispatchResult
 	if text == "" {
-		return 0
+		res.Skipped++
+		return res
 	}
 	body, _ := json.Marshal(map[string]string{"content": text, "title": opts.LXMFTitle})
 	preview := text
@@ -1111,12 +1212,12 @@ func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface,
 		preview = preview[:200]
 	}
 	ruleID := rule.ID
-	count := 0
 	seen := make(map[string]bool)
 	for _, raw := range opts.LXMFDestinations {
 		dest := strings.ToLower(strings.TrimSpace(raw))
 		if b, err := hex.DecodeString(dest); err != nil || len(dest) != lxmfHashLen || len(b) != lxmfHashLen/2 {
 			log.Warn().Int64("rule_id", rule.ID).Str("destination", raw).Msg("lxmf forward: not a 32-hex lxmf.delivery hash, skipped")
+			res.Skipped++
 			continue
 		}
 		if seen[dest] {
@@ -1149,9 +1250,14 @@ func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface,
 			del.Signature = d.signing.Sign(body)
 			del.SignerID = d.signing.SignerID()
 		}
-		delID, err := d.db.InsertDelivery(del)
+		delID, created, err := d.insertWork(origin, workPrefix+dest, del)
 		if err != nil {
 			log.Error().Err(err).Int64("rule_id", rule.ID).Str("destination", dest).Msg("lxmf forward: failed to queue")
+			res.Failed++
+			continue
+		}
+		if !created {
+			res.Existing++
 			continue
 		}
 		del.ID = delID
@@ -1159,7 +1265,7 @@ func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface,
 			dir := "egress"
 			d.signing.AuditEvent("dispatch", &sourceInterface, &dir, &delID, &ruleID, preview)
 		}
-		count++
+		res.Queued++
 		log.Info().Int64("rule_id", rule.ID).Str("dest", destInterface).Str("destination", dest).Str("msg_ref", msgRef).Msg("access delivery queued for lxmf")
 		if d.emit != nil {
 			d.emit(transport.MeshEvent{
@@ -1174,10 +1280,10 @@ func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface,
 			})
 		}
 	}
-	if count == 0 {
+	if res.Queued+res.Existing+res.Failed == 0 {
 		log.Warn().Int64("rule_id", rule.ID).Str("rule", rule.Name).Msg("lxmf forward: the rule names no destination, nothing queued")
 	}
-	return count
+	return res
 }
 
 // QueueDirectSend inserts a delivery record for a direct API send (no access rule).
@@ -1331,23 +1437,36 @@ func (d *Dispatcher) directSendQueued(del database.MessageDelivery, delID int64)
 	}
 }
 
-// isDeliveryDuplicate checks whether the same payload was recently dispatched to
-// the same interface. Uses a SHA-256 content hash with a configurable TTL window.
-func (d *Dispatcher) isDeliveryDuplicate(destInterface string, payload []byte) bool {
+// deliveryDedupKey is the delivery dedup cache's key for a payload to an
+// interface: a SHA-256 content hash, kept for a configurable TTL window.
+func deliveryDedupKey(destInterface string, payload []byte) string {
+	h := sha256.Sum256(append([]byte(destInterface+"|"), payload...))
+	return fmt.Sprintf("%x", h[:12])
+}
+
+// recentlyDelivered reports whether the same payload was queued to the interface within
+// the TTL window. It records nothing: noteDelivered does, once a row is queued, so a
+// dispatch whose write failed is not taken for its own copy when it is tried again.
+func (d *Dispatcher) recentlyDelivered(destInterface string, payload []byte) bool {
 	if len(payload) == 0 {
 		return false
 	}
-	h := sha256.Sum256(append([]byte(destInterface+"|"), payload...))
-	key := fmt.Sprintf("%x", h[:12])
-
+	key := deliveryDedupKey(destInterface, payload)
 	d.deliveryDedupMu.Lock()
 	defer d.deliveryDedupMu.Unlock()
+	ts, ok := d.deliveryDedup[key]
+	return ok && time.Since(ts) < d.deliveryDedupTTL
+}
 
-	if ts, ok := d.deliveryDedup[key]; ok && time.Since(ts) < d.deliveryDedupTTL {
-		return true
+// noteDelivered records that the payload was queued to the interface.
+func (d *Dispatcher) noteDelivered(destInterface string, payload []byte) {
+	if len(payload) == 0 {
+		return
 	}
+	key := deliveryDedupKey(destInterface, payload)
+	d.deliveryDedupMu.Lock()
 	d.deliveryDedup[key] = time.Now()
-	return false
+	d.deliveryDedupMu.Unlock()
 }
 
 // pruneDeliveryDedup removes expired entries from the delivery dedup cache.

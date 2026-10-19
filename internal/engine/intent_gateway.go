@@ -239,7 +239,11 @@ func (w *DeliveryWorker) reserveCorr(kind string, next func() (string, error)) (
 // sendIntentGateway makes the submission through the adapter. Answers that
 // come after it returns reach the ledger through the receipt sink.
 func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.MessageDelivery, ad gateway.IntentAdapter, text string, encrypted bool, corrValue string, tariff *database.Tariff) SendOutcome {
-	ad.SetIntentReceiptSink(w.intentGatewayReceipt)
+	if es, ok := ad.(gateway.IntentEvidenceSinker); ok {
+		es.SetIntentEvidenceSink(w.intentGatewayEvidence)
+	} else {
+		ad.SetIntentReceiptSink(w.intentGatewayReceipt)
+	}
 	send := gateway.IntentSend{Destination: del.Destination, Text: text, Encrypted: encrypted,
 		PlainText: string(del.Payload), CorrValue: corrValue, MsgRef: del.MsgRef, MessageID: del.IntentID}
 	if in, err := w.db.GetIntent(del.IntentID); err == nil && in != nil {
@@ -274,11 +278,21 @@ func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.Mes
 // intentGatewayReceipt records an answer that came after the send returned
 // (IntentReceiptRecorder), and tells the Escalator.
 func (w *DeliveryWorker) intentGatewayReceipt(r gateway.IntentReceipt) {
+	w.intentRecorder().Record(r)
+}
+
+// intentGatewayEvidence is intentGatewayReceipt for an adapter that keeps
+// its answers and applies them until the ledger has them.
+func (w *DeliveryWorker) intentGatewayEvidence(r gateway.IntentReceipt) error {
+	return w.intentRecorder().Apply(r)
+}
+
+func (w *DeliveryWorker) intentRecorder() *IntentReceiptRecorder {
 	rec := &IntentReceiptRecorder{db: w.db, scope: w.channelID}
 	if w.intents != nil {
 		rec.notify = w.intents.Notify
 	}
-	rec.Record(r)
+	return rec
 }
 
 // gatewayCorrWindowS bounds how long after its handoff a kept transmission
@@ -318,23 +332,36 @@ func samePeer(a, b string) bool {
 }
 
 // Record stores r against the one kept transmission with its correlation
+// within the window (Apply), and logs what it could not store.
+func (rec *IntentReceiptRecorder) Record(r gateway.IntentReceipt) {
+	if err := rec.Apply(r); err != nil {
+		log.Warn().Err(err).Str("corr", r.CorrValue).Msg("intent: late answer not recorded")
+	}
+}
+
+// Apply stores r against the one kept transmission with its correlation
 // within the window. What it completes is decided against that
 // transmission: CompletesIfPeer, and Completes too, only when the answer
-// came from the peer the transmission went to.
-func (rec *IntentReceiptRecorder) Record(r gateway.IntentReceipt) {
+// came from the peer the transmission went to. It returns an error when the
+// ledger could not take r, nil when it has it (under r.Key once, however
+// often r comes) or when no kept transmission uses the correlation.
+func (rec *IntentReceiptRecorder) Apply(r gateway.IntentReceipt) error {
 	if rec == nil || rec.db == nil || r.CorrKind == "" || r.CorrValue == "" {
-		return
+		return nil
 	}
 	if r.Scope == "" {
 		r.Scope = rec.scope
 	}
 	window := gatewayCorrWindowS[r.CorrKind]
 	inUse, err := rec.db.CorrelationInUse(r.CorrKind, r.CorrValue, r.Scope, window)
-	if err != nil || !inUse {
-		return
+	if err != nil {
+		return fmt.Errorf("correlation not read: %w", err)
+	}
+	if !inUse {
+		return nil
 	}
 	e, err := rec.db.RecordEvidence(database.DeliveryEvidence{Source: r.Source, Event: r.Event,
-		CorrKind: r.CorrKind, CorrValue: r.CorrValue, CorrScope: r.Scope, CorrPeer: r.Peer, Trust: r.Trust}, window,
+		CorrKind: r.CorrKind, CorrValue: r.CorrValue, CorrScope: r.Scope, CorrPeer: r.Peer, Trust: r.Trust, DedupKey: r.Key}, window,
 		func(t database.DeliveryTransmission) (string, string, string, string) {
 			completes := ""
 			if samePeer(t.CorrPeer, r.Peer) {
@@ -346,8 +373,7 @@ func (rec *IntentReceiptRecorder) Record(r gateway.IntentReceipt) {
 			return r.Event, r.Source, r.Trust, completes
 		})
 	if err != nil {
-		log.Warn().Err(err).Str("corr", r.CorrValue).Msg("intent: late answer not recorded")
-		return
+		return err
 	}
 	rec.mu.Lock()
 	notify := rec.notify
@@ -355,6 +381,9 @@ func (rec *IntentReceiptRecorder) Record(r gateway.IntentReceipt) {
 	if e.Matched && notify != nil {
 		notify(e.IntentID)
 	}
-	log.Info().Str("corr", fmt.Sprintf("%s:%s", r.CorrKind, r.CorrValue)).Str("event", r.Event).Bool("matched", e.Matched).
-		Str("completes", e.Completes).Msg("intent: late answer recorded")
+	if !e.Repeat {
+		log.Info().Str("corr", fmt.Sprintf("%s:%s", r.CorrKind, r.CorrValue)).Str("event", r.Event).Bool("matched", e.Matched).
+			Str("completes", e.Completes).Msg("intent: late answer recorded")
+	}
+	return nil
 }

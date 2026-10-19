@@ -40,8 +40,8 @@ type hubFrame struct {
 }
 
 // contractHub does what the Hub does with a frame: a submission is admitted and delivered on
-// the recipient's msg/in with hub_forwarded to the sender; an answer becomes the sender's
-// evidence by C5/C6a.
+// the recipient's msg/in with hub_forwarded to the sender, and a repeat of one is answered
+// with every event of it again; an answer becomes the sender's evidence by C5/C6a.
 type contractHub struct {
 	mu      sync.Mutex
 	queue   []hubFrame
@@ -52,6 +52,7 @@ type contractHub struct {
 	deliveries []hubFrame
 	statuses   []hubFrame
 	hold       bool // keep what is published instead of handing it on
+	replays    int  // repeats answered with every event again
 }
 
 func newContractHub() *contractHub {
@@ -116,6 +117,22 @@ func (c *contractHub) pump(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.mu.Lock()
+			if prev, ok := c.ops[s.OpID]; ok && c.senders[s.OpID] == f.from && prev == s {
+				// A repeat (C4): every event of the operation again, under its own id.
+				var again []hubFrame
+				for _, st := range c.statuses {
+					var e hubmsg.Event
+					if json.Unmarshal(st.payload, &e) == nil && e.OpID == s.OpID {
+						again = append(again, st)
+					}
+				}
+				c.replays++
+				c.mu.Unlock()
+				for _, st := range again {
+					c.replay(st)
+				}
+				continue
+			}
 			c.ops[s.OpID], c.senders[s.OpID] = s, f.from
 			c.mu.Unlock()
 			d, _ := json.Marshal(hubmsg.Delivery{V: 1, OpID: s.OpID, Mid: s.Mid, From: f.from, To: s.To, ContentType: s.ContentType,

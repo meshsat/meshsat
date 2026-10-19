@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -60,10 +61,13 @@ type Route struct {
 	pub Publisher
 	cfg Config
 
-	mu      sync.Mutex
-	sink    func(gateway.IntentReceipt)
-	handoff func(database.HubHandoff) error
-	wake    chan struct{}
+	mu       sync.Mutex
+	evidence func(gateway.IntentReceipt) error
+	handoff  func(database.HubHandoff) error
+	stored   func(from, text string)
+	wake     chan struct{}
+	// replay holds the operations owed a repeat whose mark could not be kept either.
+	replay map[string]bool
 }
 
 // New makes the route.
@@ -77,17 +81,27 @@ func New(db *database.DB, pub Publisher, cfg Config) *Route {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Route{db: db, pub: pub, cfg: cfg, wake: make(chan struct{}, 1)}
+	return &Route{db: db, pub: pub, cfg: cfg, wake: make(chan struct{}, 1), replay: map[string]bool{}}
 }
 
 func (r *Route) now() time.Time { return r.cfg.Now() }
 
 func (r *Route) established() bool { return r.cfg.ClockEstablished == nil || r.cfg.ClockEstablished() }
 
-// SetHandoff sets who takes a stored message on to the access rules.
+// SetHandoff sets who takes a stored message on to the access rules. It returns an error
+// while any of the work the message makes could not be stored; the hand-off is then tried
+// again, and must make only what is missing (engine's Dispatcher.HubHandoff).
 func (r *Route) SetHandoff(fn func(database.HubHandoff) error) {
 	r.mu.Lock()
 	r.handoff = fn
+	r.mu.Unlock()
+}
+
+// SetStoredNotify sets who hears of a message the moment it is stored (the live view),
+// once per message.
+func (r *Route) SetStoredNotify(fn func(from, text string)) {
+	r.mu.Lock()
+	r.stored = fn
 	r.mu.Unlock()
 }
 
@@ -137,9 +151,10 @@ func (r *Route) IntentSend(_ context.Context, s gateway.IntentSend) gateway.Inte
 	}
 	payload, _ := json.Marshal(sub)
 	// The operation is kept before it is published, so evidence that names it, however soon
-	// and whatever the outcome of this call, can be checked against it.
+	// and whatever the outcome of this call, can be checked against it; with it the payload,
+	// to repeat unchanged when an event is lost.
 	if err := r.db.PutHubOp(database.HubOp{OpID: sub.OpID, Mid: sub.Mid, Recipient: sub.To, IntentID: s.MessageID,
-		ExpiresAt: exp, CreatedAt: now.UnixMilli()}); err != nil {
+		ExpiresAt: exp, CreatedAt: now.UnixMilli(), Submission: string(payload)}); err != nil {
 		return gateway.IntentOutcome{Class: gateway.IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent",
 			Detail: "the operation could not be kept: " + err.Error()}
 	}
@@ -156,26 +171,56 @@ func (r *Route) IntentSend(_ context.Context, s gateway.IntentSend) gateway.Inte
 	}
 }
 
-// SetIntentReceiptSink takes the evidence that comes after a send.
-func (r *Route) SetIntentReceiptSink(fn func(gateway.IntentReceipt)) {
-	r.mu.Lock()
-	r.sink = fn
-	r.mu.Unlock()
-}
+// SetIntentReceiptSink is the adapter interface's sink, which cannot say whether the ledger
+// took an answer. The route keeps every event before it is applied and applies it until the
+// ledger has it, so it takes SetIntentEvidenceSink, which says; this one is not used.
+func (r *Route) SetIntentReceiptSink(func(gateway.IntentReceipt)) {}
 
-func (r *Route) record(rc gateway.IntentReceipt) {
+// SetIntentEvidenceSink takes the evidence that comes after a send: nil when the ledger has
+// it (or nothing in the ledger can take it), an error when it must be applied again.
+func (r *Route) SetIntentEvidenceSink(fn func(gateway.IntentReceipt) error) {
 	r.mu.Lock()
-	fn := r.sink
+	r.evidence = fn
 	r.mu.Unlock()
-	if fn != nil {
-		fn(rc)
-	}
 }
 
 // ---- msg/status ----
 
+// refusalEventID is a refusal's id among the operation's kept events: one per reason, so
+// the copy every Hub replica sends is kept once. A Hub event id is a UUID and never this.
+func refusalEventID(opID, reason string) string { return "refusal:" + opID + ":" + reason }
+
+func isRefusal(e hubmsg.Event) bool { return strings.HasPrefix(e.EventID, "refusal:") }
+
+// receiptFor is what a kept event is to the intent ledger. Its key is the event id: the
+// ledger records each event once however often it is applied.
+func receiptFor(op *database.HubOp, e hubmsg.Event) gateway.IntentReceipt {
+	rc := gateway.IntentReceipt{CorrKind: CorrKind, CorrValue: op.OpID, Scope: InterfaceID, Peer: op.Recipient, Trust: "session",
+		Key: "hub_event:" + e.EventID}
+	if isRefusal(e) {
+		// The Hub did not take the submission, so nothing left the Hub: the broker's PUBACK
+		// accepted a message nobody carried on, as a radio that refused a packet sent nothing.
+		// The attempt has no receipt to wait for, and the message is not sent.
+		rc.Source, rc.Event = "hub", "dropped:hub_refusal:"+e.Reason
+		return rc
+	}
+	rc.Source = e.Authority
+	switch e.Class {
+	case "completed":
+		rc.Source, rc.Event, rc.Completes = "recipient_app", e.Kind, database.OutcomeDeliveredApp
+	case "failed", "expired":
+		rc.Event = "nak:" + e.Kind + ":" + e.Reason
+	default:
+		rc.Event = e.Kind
+	}
+	return rc
+}
+
 // HandleStatus takes one msg/status payload: an event of one of this bridge's operations, or
-// the Hub's refusal of a submission.
+// the Hub's refusal of a submission. The event is kept first, as received; the ledger gets it
+// next, and an event it did not get stays pending until it does (ApplyPending), so a failed
+// write loses nothing. An event that could not even be kept makes the operation owed a
+// repeat, which the Hub answers with every event again (C4).
 func (r *Route) HandleStatus(payload []byte) {
 	ev, ref, ok := hubmsg.ParseStatus(payload)
 	if !ok {
@@ -189,53 +234,145 @@ func (r *Route) HandleStatus(payload []byte) {
 		opID = ref.OpID
 	}
 	op, err := r.db.GetHubOp(opID)
-	if err != nil || op == nil {
+	if err != nil {
+		log.Warn().Err(err).Str("op_id", opID).Msg("hub_msg: status not read against its operation; a repeat is owed")
+		r.oweReplay(opID)
+		return
+	}
+	if op == nil {
 		log.Debug().Str("op_id", opID).Msg("hub_msg: status for an operation this bridge does not keep, ignored")
 		return
 	}
-	rc := gateway.IntentReceipt{CorrKind: CorrKind, CorrValue: op.OpID, Scope: InterfaceID, Peer: op.Recipient, Trust: "session"}
+	var e hubmsg.Event
+	valid := true
 	if ref != nil {
 		if ref.Mid != op.Mid {
 			return
 		}
-		// Every Hub replica answers the same frame, so a refusal can come twice: kept once.
-		added, err := r.db.AddHubOpEvent(hubmsg.Event{OpID: op.OpID, EventID: "refusal:" + op.OpID + ":" + ref.Reason,
-			Class: "failed", Kind: "hub_refusal", Reason: ref.Reason, Authority: "hub", At: r.now().UTC().Format(time.RFC3339)}, true, r.now())
-		if err != nil || !added {
-			return
-		}
-		// The Hub did not take the submission, so nothing left the Hub: the broker's PUBACK
-		// accepted a message nobody carried on, as a radio that refused a packet sent nothing.
-		// The attempt has no receipt to wait for, and the message is not sent.
-		rc.Source, rc.Event = "hub", "dropped:hub_refusal:"+ref.Reason
-		log.Info().Str("op_id", op.OpID).Str("reason", ref.Reason).Msg("hub_msg: the Hub refused the submission")
-		r.record(rc)
-		return
+		e = hubmsg.Event{OpID: op.OpID, EventID: refusalEventID(op.OpID, ref.Reason), Class: "failed", Kind: "hub_refusal",
+			Reason: ref.Reason, Authority: "hub", At: r.now().UTC().Format(time.RFC3339)}
+	} else {
+		e = *ev
+		e.Source = "status_topic"
+		valid = hubmsg.Valid(hubmsg.Operation{OpID: op.OpID, Mid: op.Mid, Recipient: op.Recipient}, e)
 	}
-	ev.Source = "status_topic"
-	valid := hubmsg.Valid(hubmsg.Operation{OpID: op.OpID, Mid: op.Mid, Recipient: op.Recipient}, *ev)
-	added, err := r.db.AddHubOpEvent(*ev, valid, r.now())
+	kept, err := r.db.AddHubOpEvent(e, valid, r.now())
 	if err != nil {
-		log.Warn().Err(err).Str("event_id", ev.EventID).Msg("hub_msg: event not kept")
+		log.Warn().Err(err).Str("event_id", e.EventID).Msg("hub_msg: event not kept; a repeat is owed")
+		r.oweReplay(op.OpID)
 		return
 	}
-	if !valid {
-		log.Warn().Str("op_id", op.OpID).Str("kind", ev.Kind).Str("class", ev.Class).Msg("hub_msg: an event that may not join this operation, kept as rejected")
+	switch {
+	case !kept.Valid:
+		if kept.Added {
+			log.Warn().Str("op_id", op.OpID).Str("kind", e.Kind).Str("class", e.Class).Msg("hub_msg: an event that may not join this operation, kept as rejected")
+		}
+		return
+	case kept.Applied:
+		return // the union by event id: a copy of what the ledger has changes nothing
+	}
+	if kept.Added && ref != nil {
+		log.Info().Str("op_id", op.OpID).Str("reason", ref.Reason).Msg("hub_msg: the Hub refused the submission")
+	}
+	r.apply(op, kept.Event)
+}
+
+// apply gives a kept event to the ledger and marks it applied once the ledger has it.
+func (r *Route) apply(op *database.HubOp, e hubmsg.Event) {
+	r.mu.Lock()
+	fn := r.evidence
+	r.mu.Unlock()
+	if fn == nil {
+		return // pending until a sink is set
+	}
+	if err := fn(receiptFor(op, e)); err != nil {
+		log.Warn().Err(err).Str("event_id", e.EventID).Msg("hub_msg: event not in the ledger yet, applied again later")
 		return
 	}
-	if !added {
-		return // the union by event id: a copy changes nothing
+	if err := r.db.MarkHubOpEventApplied(e.EventID, r.now()); err != nil {
+		// The ledger has it under its key: applied again, it is not recorded twice.
+		log.Warn().Err(err).Str("event_id", e.EventID).Msg("hub_msg: event not marked applied")
 	}
-	rc.Source = ev.Authority
-	switch ev.Class {
-	case "completed":
-		rc.Source, rc.Event, rc.Completes = "recipient_app", ev.Kind, database.OutcomeDeliveredApp
-	case "failed", "expired":
-		rc.Event = "nak:" + ev.Kind + ":" + ev.Reason
-	default:
-		rc.Event = ev.Kind
+}
+
+// ApplyPending gives the ledger every kept event it does not have yet: after a failed write
+// and after a restart, without waiting for the Hub.
+func (r *Route) ApplyPending() {
+	evs, err := r.db.PendingHubOpEvents(100)
+	if err != nil {
+		log.Warn().Err(err).Msg("hub_msg: pending events not listed")
+		return
 	}
-	r.record(rc)
+	for _, k := range evs {
+		op, err := r.db.GetHubOp(k.Event.OpID)
+		if err != nil || op == nil {
+			continue
+		}
+		r.apply(op, k.Event)
+	}
+}
+
+// oweReplay records that an operation is owed a repeat, in the database when it can and in
+// memory when even that fails.
+func (r *Route) oweReplay(opID string) {
+	if err := r.db.WantHubOpReplay(opID, r.now()); err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.replay[opID] = true
+	r.mu.Unlock()
+}
+
+// ReplayWithin bounds the repeats: an operation is repeated until this long after its
+// deadline. The Hub answers a repeat from what it stores for a day past the deadline (C4),
+// so a repeat inside this bound is always a replay, never refused as late.
+const ReplayWithin = time.Hour
+
+// RequestReplays publishes once more, unchanged, the submission of every operation owed a
+// repeat; the Hub answers with every event of it again, under the same event ids (C4).
+func (r *Route) RequestReplays() {
+	if !r.pub.IsConnected() {
+		return
+	}
+	now := r.now()
+	ops, err := r.db.HubOpsOwedReplay(now, ReplayWithin, 50)
+	if err != nil {
+		log.Warn().Err(err).Msg("hub_msg: owed repeats not listed")
+	}
+	r.mu.Lock()
+	var held []string
+	for id := range r.replay {
+		held = append(held, id)
+	}
+	r.mu.Unlock()
+	for _, id := range held {
+		op, err := r.db.GetHubOp(id)
+		if err != nil {
+			continue // still owed
+		}
+		r.mu.Lock()
+		delete(r.replay, id)
+		r.mu.Unlock()
+		if op != nil && op.Submission != "" && op.ExpiresAt+ReplayWithin.Milliseconds() >= now.UnixMilli() {
+			ops = append(ops, *op)
+		}
+	}
+	seen := map[string]bool{}
+	for _, op := range ops {
+		if seen[op.OpID] {
+			continue
+		}
+		seen[op.OpID] = true
+		if err := r.pub.PublishMsg("out", []byte(op.Submission), r.cfg.PublishWait); err != nil {
+			log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: repeat not published, tried again later")
+			r.oweReplay(op.OpID)
+			continue
+		}
+		if op.ReplayAt > 0 {
+			_ = r.db.ClearHubOpReplay(op.OpID, op.ReplayAt)
+		}
+		log.Info().Str("op_id", op.OpID).Msg("hub_msg: submission repeated, the Hub replays its events")
+	}
 }
 
 // ---- msg/in ----
@@ -265,6 +402,12 @@ func (r *Route) HandleIn(payload []byte) {
 	log.Info().Str("from", d.From).Str("op_id", d.OpID).Str("result", ans.Result).Str("reason", ans.Reason).
 		Bool("stored_now", ans.StoredNow).Bool("within_skew", ans.WithinSkew).Bool("unjudged", ans.Unjudged).Msg("hub_msg: delivery answered")
 	if ans.StoredNow {
+		r.mu.Lock()
+		fn := r.stored
+		r.mu.Unlock()
+		if fn != nil {
+			fn(d.From, d.Body)
+		}
 		select {
 		case r.wake <- struct{}{}:
 		default:
@@ -274,9 +417,10 @@ func (r *Route) HandleIn(payload []byte) {
 
 // ---- the hand-off worker ----
 
-// Run hands stored messages to the access rules (at start, after each commit and every
-// interval, so a crash between commit and hand-off loses nothing) and prunes the inbox and
-// the kept operations once an hour.
+// Run hands stored messages to the access rules, gives the ledger the events it does not
+// have and repeats the submissions owed a repeat (at start, after each commit and every
+// interval, so a crash or a failed write loses nothing), and prunes the inbox and the kept
+// operations once an hour.
 func (r *Route) Run(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -286,6 +430,8 @@ func (r *Route) Run(ctx context.Context, interval time.Duration) {
 	lastPrune := time.Time{}
 	for {
 		r.HandOff()
+		r.ApplyPending()
+		r.RequestReplays()
 		if now := r.now(); now.Sub(lastPrune) >= time.Hour {
 			if n, err := r.db.PruneHubInbox(now); err != nil {
 				log.Warn().Err(err).Msg("hub_msg: inbox prune failed")

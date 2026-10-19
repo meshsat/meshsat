@@ -35,6 +35,14 @@ type IntentAdapter interface {
 	SetIntentReceiptSink(fn func(IntentReceipt))
 }
 
+// IntentEvidenceSinker is an adapter that keeps every later answer before
+// it is applied (the Hub route's events): its sink says whether the ledger
+// took an answer, so an answer the ledger did not take is applied again,
+// never consumed. The engine sets it in place of SetIntentReceiptSink.
+type IntentEvidenceSinker interface {
+	SetIntentEvidenceSink(fn func(IntentReceipt) error)
+}
+
 // IntentBilled is an adapter whose submissions cost money (r3 D8, B9):
 // the engine prices each with the interface's tariff, reserves it against
 // the intent's cap before the send, and the adapter reports what it was
@@ -107,6 +115,9 @@ type IntentReceipt struct {
 	// gateway forgot the send, APRS-R2).
 	CompletesIfPeer string
 	Trust           string // "unauthenticated", "signed", ...
+	// Key is the answer's own identity, when it has one (a Hub event id): the
+	// ledger records an answer under a key once, however often it is applied.
+	Key string
 }
 
 // The process-wide receipt sink: answers that arrive while no send waits

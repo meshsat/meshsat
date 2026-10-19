@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // precedenceRankSQL is a CASE expression that maps STANAG 4406
@@ -146,6 +148,62 @@ func insertDelivery(q execer, d MessageDelivery) (int64, error) {
 		return 0, fmt.Errorf("insert delivery: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// InsertDeliveryOnce creates d as the piece of work work of a message with a durable
+// identity of its own (origin), unless that work is listed already: the row and its line
+// in dispatch_work go in one transaction, so a dispatch of the same message tried again,
+// after a failure or a restart, makes only what is missing. created is false, and id the
+// earlier row (0 for a send that kept none), when it was made before. [MESHSAT-1584]
+func (db *DB) InsertDeliveryOnce(origin, work string, d MessageDelivery) (id int64, created bool, err error) {
+	err = db.withTx(func(tx *sqlx.Tx) error {
+		var prev sql.NullInt64
+		switch err := tx.QueryRow(`SELECT delivery_id FROM dispatch_work WHERE origin = ? AND work = ?`, origin, work).Scan(&prev); {
+		case err == nil:
+			id = prev.Int64
+			return nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		var err error
+		if id, err = insertDelivery(tx, d); err != nil {
+			return err
+		}
+		created = true
+		_, err = tx.Exec(`INSERT INTO dispatch_work (origin, work, delivery_id, created_at) VALUES (?, ?, ?, ?)`,
+			origin, work, id, time.Now().UnixMilli())
+		return err
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return id, created, nil
+}
+
+// DispatchWorkFor lists the work made for origin by earlier dispatches.
+func (db *DB) DispatchWorkFor(origin string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT work FROM dispatch_work WHERE origin = ?`, origin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	done := map[string]bool{}
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, err
+		}
+		done[w] = true
+	}
+	return done, rows.Err()
+}
+
+// NoteDispatchWork lists work of origin that was made without a delivery row (a send
+// that keeps none, a HeMB bond's).
+func (db *DB) NoteDispatchWork(origin, work string) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO dispatch_work (origin, work, created_at) VALUES (?, ?, ?)`,
+		origin, work, time.Now().UnixMilli())
+	return err
 }
 
 // GetDelivery returns a single delivery by ID.

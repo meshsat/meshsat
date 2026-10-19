@@ -1696,6 +1696,32 @@ var migrations = []string{
 		received_at INTEGER NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_hub_op_events_op ON hub_op_events(op_id);`,
+
+	// v72: hub_msg, nothing taken is lost on a failed write (r8 review HM-R1, HM-R2). A Hub
+	// event is kept as received first; applied_at says the ledger has it, and until then
+	// the route applies it again, after a restart too. The ledger keeps an answer once by
+	// its own key (dedup_key), so applying it twice records it once. A sender keeps each
+	// operation's submission, to repeat it when it lost an event (C4: a repeat replays
+	// them all; replay_at = a repeat is owed). The work the access rules make of a stored
+	// Hub message is listed in dispatch_work under the message and the rule, target and
+	// destination, in the transaction that queues it, so a hand-off tried again makes only
+	// what is missing; the list goes in the transaction that marks the hand-off done.
+	// Events kept before v72 were applied by the code of their day and are not again.
+	// [MESHSAT-1584]
+	`ALTER TABLE hub_op_events ADD COLUMN applied_at INTEGER;
+	UPDATE hub_op_events SET applied_at = received_at;
+	CREATE INDEX IF NOT EXISTS idx_hub_op_events_pending ON hub_op_events(applied_at, valid);
+	ALTER TABLE delivery_evidence ADD COLUMN dedup_key TEXT;
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_evidence_dedup ON delivery_evidence(dedup_key) WHERE dedup_key IS NOT NULL;
+	ALTER TABLE hub_ops ADD COLUMN submission TEXT NOT NULL DEFAULT '';
+	ALTER TABLE hub_ops ADD COLUMN replay_at INTEGER;
+	CREATE TABLE IF NOT EXISTS dispatch_work (
+		origin      TEXT NOT NULL,
+		work        TEXT NOT NULL,
+		delivery_id INTEGER,
+		created_at  INTEGER NOT NULL,
+		PRIMARY KEY (origin, work)
+	);`,
 }
 
 func (db *DB) migrate() error {

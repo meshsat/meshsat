@@ -149,11 +149,22 @@ func (db *DB) PendingHubHandoffs(limit int) ([]HubHandoff, error) {
 	return out, rows.Err()
 }
 
-// MarkHubHandoffDone records that a stored message went to the access rules.
+// HubHandoffOrigin is the identity the work made of a stored message carries in
+// dispatch_work: the message, so a hand-off tried again finds what it made before.
+func HubHandoffOrigin(messageID int64) string { return fmt.Sprintf("hub:%d", messageID) }
+
+// MarkHubHandoffDone records that a stored message went to the access rules, and forgets
+// the list of the work it made in the same transaction: a hand-off marked done is never
+// tried again, and one not marked still finds its list.
 func (db *DB) MarkHubHandoffDone(messageID int64, at time.Time) error {
-	_, err := db.Exec(`UPDATE hub_inbox_handoff SET state = 'done', done_at = ? WHERE message_id = ? AND state = 'pending'`,
-		at.UnixMilli(), messageID)
-	return err
+	return db.withTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.Exec(`UPDATE hub_inbox_handoff SET state = 'done', done_at = ? WHERE message_id = ? AND state = 'pending'`,
+			at.UnixMilli(), messageID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`DELETE FROM dispatch_work WHERE origin = ?`, HubHandoffOrigin(messageID))
+		return err
+	})
 }
 
 // ---- the sender's operations and their evidence (C4, C6) ----
@@ -166,21 +177,18 @@ type HubOp struct {
 	IntentID  string
 	ExpiresAt int64
 	CreatedAt int64
+	// Submission is the payload published, kept to publish again unchanged: a repeat is how
+	// a sender that lost an event asks for every event again (C4).
+	Submission string
+	// ReplayAt is when a repeat was found owed (ms), 0 when none is.
+	ReplayAt int64
 }
 
-// PutHubOp records an operation before it is published, so an event that names it can be
-// checked against it whenever it comes.
-func (db *DB) PutHubOp(op HubOp) error {
-	_, err := db.Exec(`INSERT INTO hub_ops (op_id, mid, recipient, intent_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		op.OpID, op.Mid, op.Recipient, op.IntentID, op.ExpiresAt, op.CreatedAt)
-	return err
-}
+const hubOpCols = `op_id, mid, recipient, intent_id, expires_at, created_at, submission, COALESCE(replay_at, 0)`
 
-// GetHubOp returns an operation, nil when this bridge has none under the id.
-func (db *DB) GetHubOp(opID string) (*HubOp, error) {
+func scanHubOp(row interface{ Scan(...any) error }) (*HubOp, error) {
 	var op HubOp
-	err := db.QueryRow(`SELECT op_id, mid, recipient, intent_id, expires_at, created_at FROM hub_ops WHERE op_id = ?`, opID).
-		Scan(&op.OpID, &op.Mid, &op.Recipient, &op.IntentID, &op.ExpiresAt, &op.CreatedAt)
+	err := row.Scan(&op.OpID, &op.Mid, &op.Recipient, &op.IntentID, &op.ExpiresAt, &op.CreatedAt, &op.Submission, &op.ReplayAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -190,18 +198,129 @@ func (db *DB) GetHubOp(opID string) (*HubOp, error) {
 	return &op, nil
 }
 
-// AddHubOpEvent keeps one event of an operation once per event id (C6's union); valid says
-// whether it joined the operation's evidence or was kept as rejected. added is false for an
-// event id already kept.
-func (db *DB) AddHubOpEvent(ev hubmsg.Event, valid bool, at time.Time) (added bool, err error) {
-	res, err := db.Exec(`INSERT OR IGNORE INTO hub_op_events (event_id, op_id, rev, class, kind, reason, authority, at, valid, received_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ev.EventID, ev.OpID, ev.Rev, ev.Class, ev.Kind, ev.Reason, ev.Authority, ev.At,
-		boolInt(valid), at.UnixMilli())
-	if err != nil {
-		return false, err
+// PutHubOp records an operation before it is published, so an event that names it can be
+// checked against it whenever it comes.
+func (db *DB) PutHubOp(op HubOp) error {
+	_, err := db.Exec(`INSERT INTO hub_ops (op_id, mid, recipient, intent_id, expires_at, created_at, submission)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, op.OpID, op.Mid, op.Recipient, op.IntentID, op.ExpiresAt, op.CreatedAt, op.Submission)
+	return err
+}
+
+// GetHubOp returns an operation, nil when this bridge has none under the id.
+func (db *DB) GetHubOp(opID string) (*HubOp, error) {
+	return scanHubOp(db.QueryRow(`SELECT `+hubOpCols+` FROM hub_ops WHERE op_id = ?`, opID))
+}
+
+// WantHubOpReplay records that an operation's submission is owed again: an event of it
+// could not be kept, and only a repeat brings it back (C4).
+func (db *DB) WantHubOpReplay(opID string, at time.Time) error {
+	_, err := db.Exec(`UPDATE hub_ops SET replay_at = COALESCE(replay_at, ?) WHERE op_id = ?`, at.UnixMilli(), opID)
+	return err
+}
+
+// HubOpsOwedReplay lists the operations owed a repeat whose deadline is not more than
+// within before now, oldest first: the Hub answers a repeat from what it stores, and it
+// stores an operation a day past its deadline, so a repeat well inside that is a replay,
+// never a new submission it would refuse as late.
+func (db *DB) HubOpsOwedReplay(now time.Time, within time.Duration, limit int) ([]HubOp, error) {
+	if limit <= 0 {
+		limit = 50
 	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+	rows, err := db.Query(`SELECT `+hubOpCols+` FROM hub_ops WHERE replay_at IS NOT NULL AND submission != ''
+		AND expires_at + ? >= ? ORDER BY replay_at LIMIT ?`, within.Milliseconds(), now.UnixMilli(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HubOp
+	for rows.Next() {
+		op, err := scanHubOp(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *op)
+	}
+	return out, rows.Err()
+}
+
+// ClearHubOpReplay records that the repeat owed since owedAt went out; a repeat found owed
+// later is kept.
+func (db *DB) ClearHubOpReplay(opID string, owedAt int64) error {
+	_, err := db.Exec(`UPDATE hub_ops SET replay_at = NULL WHERE op_id = ? AND replay_at <= ?`, opID, owedAt)
+	return err
+}
+
+// KeptHubOpEvent is an event as this bridge keeps it: the first copy under its id decides
+// what it says and whether it is valid; Applied says the ledger has it.
+type KeptHubOpEvent struct {
+	Event   hubmsg.Event
+	Valid   bool
+	Applied bool
+	// Added is true when this call kept it, false for a copy of one kept before.
+	Added bool
+}
+
+const hubOpEventCols = `event_id, op_id, rev, class, kind, reason, authority, at, valid, applied_at IS NOT NULL`
+
+func scanHubOpEvent(row interface{ Scan(...any) error }) (KeptHubOpEvent, error) {
+	var k KeptHubOpEvent
+	var valid, applied int
+	e := &k.Event
+	err := row.Scan(&e.EventID, &e.OpID, &e.Rev, &e.Class, &e.Kind, &e.Reason, &e.Authority, &e.At, &valid, &applied)
+	k.Valid, k.Applied = valid != 0, applied != 0
+	return k, err
+}
+
+// AddHubOpEvent keeps one event of an operation once per event id (C6's union), as
+// received: valid says whether it joined the operation's evidence or was kept as rejected.
+// It returns the event as kept, which a copy does not change.
+func (db *DB) AddHubOpEvent(ev hubmsg.Event, valid bool, at time.Time) (KeptHubOpEvent, error) {
+	var k KeptHubOpEvent
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		res, err := tx.Exec(`INSERT OR IGNORE INTO hub_op_events (event_id, op_id, rev, class, kind, reason, authority, at, valid, received_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ev.EventID, ev.OpID, ev.Rev, ev.Class, ev.Kind, ev.Reason, ev.Authority, ev.At,
+			boolInt(valid), at.UnixMilli())
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if k, err = scanHubOpEvent(tx.QueryRow(`SELECT `+hubOpEventCols+` FROM hub_op_events WHERE event_id = ?`, ev.EventID)); err != nil {
+			return err
+		}
+		k.Added = n == 1
+		return nil
+	})
+	return k, err
+}
+
+// MarkHubOpEventApplied records that the ledger has an event.
+func (db *DB) MarkHubOpEventApplied(eventID string, at time.Time) error {
+	_, err := db.Exec(`UPDATE hub_op_events SET applied_at = ? WHERE event_id = ? AND applied_at IS NULL`, at.UnixMilli(), eventID)
+	return err
+}
+
+// PendingHubOpEvents lists the valid events the ledger does not have yet, of operations
+// still kept, oldest first.
+func (db *DB) PendingHubOpEvents(limit int) ([]KeptHubOpEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.Query(`SELECT e.event_id, e.op_id, e.rev, e.class, e.kind, e.reason, e.authority, e.at, e.valid, e.applied_at IS NOT NULL
+		FROM hub_op_events e JOIN hub_ops o ON o.op_id = e.op_id
+		WHERE e.applied_at IS NULL AND e.valid = 1 ORDER BY e.received_at, e.event_id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KeptHubOpEvent
+	for rows.Next() {
+		k, err := scanHubOpEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
 }
 
 // HubOpEvents lists an operation's kept events (valid and rejected) by revision.

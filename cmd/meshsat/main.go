@@ -2509,19 +2509,17 @@ func main() {
 					ClockEstablished: clockGuard.Trusted,
 				})
 				// Evidence after a restart, before this process sent anything, still
-				// reaches the ledger.
-				hubMsgRoute.SetIntentReceiptSink(intentReceipts.Record)
-				hubMsgRoute.SetHandoff(func(h database.HubHandoff) error {
-					data, _ := json.Marshal(map[string]any{"source": "hub", "iface": hubroute.InterfaceID, "from": h.From,
-						"text": h.Text, "bytes": len(h.Text), "plain": true})
+				// reaches the ledger, and an event it did not take is applied again.
+				hubMsgRoute.SetIntentEvidenceSink(intentReceipts.Apply)
+				hubMsgRoute.SetStoredNotify(func(from, text string) {
+					data, _ := json.Marshal(map[string]any{"source": "hub", "iface": hubroute.InterfaceID, "from": from,
+						"text": text, "bytes": len(text), "plain": true})
 					if proc != nil {
-						proc.Emit(transport.MeshEvent{Type: "inbound", Message: fmt.Sprintf("Received from %s through the Hub", h.From),
+						proc.Emit(transport.MeshEvent{Type: "inbound", Message: fmt.Sprintf("Received from %s through the Hub", from),
 							Data: data, Time: time.Now().UTC().Format(time.RFC3339Nano)})
 					}
-					dispatcher.DispatchAccess(hubroute.InterfaceID, rules.RouteMessage{Text: h.Text, From: h.From, PortNum: 1, Plain: true},
-						[]byte(h.Text))
-					return nil
 				})
+				hubMsgRoute.SetHandoff(dispatcher.HubHandoff)
 				hubReporter.SetMsgHandlers(hubMsgRoute.HandleIn, hubMsgRoute.HandleStatus)
 				dispatcher.SetHubRoute(hubMsgRoute)
 				dispatcher.StartWorker(ctx, hubroute.InterfaceID, "hub")
