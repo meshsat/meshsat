@@ -1722,6 +1722,14 @@ var migrations = []string{
 		created_at  INTEGER NOT NULL,
 		PRIMARY KEY (origin, work)
 	);`,
+
+	// v73: hub_msg, a lost event stays asked for (r9 review HM-R4). An owed repeat
+	// (hub_ops.replay_at) is cleared only by the operation's settling (a valid terminal
+	// event kept), never by a repeat going out; a process start asks once for every
+	// operation not settled inside the bound, since a lost event may have left no mark;
+	// at the bound the bridge stops asking and says so: replay_given_up_at, and evidence
+	// hub_outcome_unknown in the ledger. [MESHSAT-1584]
+	`ALTER TABLE hub_ops ADD COLUMN replay_given_up_at INTEGER;`,
 }
 
 func (db *DB) migrate() error {
