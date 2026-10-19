@@ -95,79 +95,106 @@ func TestHubDurability_PendingEventsAndTheLedgerKeySurviveAReopen(t *testing.T) 
 	}
 }
 
-// An owed repeat stays owed until the operation is settled, however often it goes out; it is
-// listed only inside the bound, and past it the operation is listed for giving up. A process
-// start lists every operation not settled, owed or not.
-func TestHubDurability_AnOwedRepeatStaysOwedUntilTheOperationSettles(t *testing.T) {
+// An obligation names its missing event and ends only when that event is kept, or a
+// completion is: a weaker terminal ends nothing but itself, since C6 lets a completion follow
+// it. The listings page with a cursor; past the bound only an operation whose outcome cannot
+// be said is listed for giving up, and a given-up one is listed nowhere again.
+func TestHubDurability_AnObligationEndsOnlyWithItsEventOrACompletion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kit.db")
 	db := reopen(t, path, nil)
 	now := time.Now()
-	op := HubOp{OpID: hubmsg.NewV7(now), Mid: hubmsg.NewV7(now), Recipient: "bridge:kit-b", IntentID: "i-1",
-		ExpiresAt: now.Add(2 * time.Minute).UnixMilli(), CreatedAt: now.UnixMilli(), Submission: `{"v":1}`}
-	quiet := op
-	quiet.OpID, quiet.Mid = hubmsg.NewV7(now), hubmsg.NewV7(now)
+	mk := func(i int) HubOp {
+		return HubOp{OpID: hubmsg.NewV7(now.Add(time.Duration(i) * time.Millisecond)), Mid: hubmsg.NewV7(now), Recipient: "bridge:kit-b",
+			IntentID: "i-1", ExpiresAt: now.Add(2 * time.Minute).UnixMilli(), CreatedAt: now.UnixMilli() + int64(i), Submission: `{"v":1}`}
+	}
+	op, quiet := mk(0), mk(1)
 	for _, o := range []HubOp{op, quiet} {
 		if err := db.PutHubOp(o); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if ops, err := db.HubOpsOwedReplay(now, time.Hour, 10); err != nil || len(ops) != 0 {
+	all := HubOpCursor{}
+	if ops, err := db.HubOpsOwedReplay(now, time.Hour, all, 10); err != nil || len(ops) != 0 {
 		t.Fatalf("owed before anything failed: %+v %v", ops, err)
 	}
-	if ops, err := db.UnsettledHubOps(now, time.Hour, 10); err != nil || len(ops) != 2 {
-		t.Fatalf("not settled: %+v %v", ops, err)
+	if ops, err := db.HubOpsToReconcile(now, time.Hour, all, 10); err != nil || len(ops) != 2 {
+		t.Fatalf("without a completion: %+v %v", ops, err)
 	}
-	if err := db.WantHubOpReplay(op.OpID, now); err != nil {
+	expired := hubmsg.Event{OpID: op.OpID, EventID: hubmsg.NewV7(now), Rev: 1, Class: "expired", Kind: "hub_expired", Reason: "expired", Authority: "hub"}
+	completed := hubmsg.Event{OpID: op.OpID, EventID: hubmsg.NewV7(now), Rev: 2, Class: "completed", Kind: "recipient_app_stored", Authority: "recipient"}
+	if _, err := db.AddHubOpEvent(expired, true, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.WantHubOpReplay(op.OpID, now.Add(time.Second)); err != nil { // first owed stays
+	// The completion is lost after the expiry was kept: owed, named.
+	if err := db.WantHubOpReplay(op.OpID, completed.EventID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WantHubOpReplay(op.OpID, completed.EventID, now.Add(time.Second)); err != nil { // first owed stays
+		t.Fatal(err)
+	}
+	if err := db.WantHubOpReplay("not-ours", "x", now); err != nil {
 		t.Fatal(err)
 	}
 	db = reopen(t, path, db)
-	ops, err := db.HubOpsOwedReplay(now, time.Hour, 10)
+	ops, err := db.HubOpsOwedReplay(now, time.Hour, all, 10)
 	if err != nil || len(ops) != 1 || ops[0].ReplayAt != now.UnixMilli() {
 		t.Fatalf("owed after a reopen: %+v %v", ops, err)
 	}
-	if err := db.SettleHubOpReplay(op.OpID); err != nil { // not settled: nothing clears it
-		t.Fatal(err)
+	if m, _ := db.HubOpMissing(op.OpID); len(m) != 1 || m[0] != completed.EventID {
+		t.Fatalf("missing: %v", m)
 	}
-	if n, err := db.SettleHubOpReplays(); err != nil || n != 0 {
-		t.Fatalf("cleared %d unsettled: %v", n, err)
+	if m, _ := db.HubOpMissing("not-ours"); len(m) != 0 {
+		t.Fatalf("an operation this bridge does not keep: %v", m)
 	}
-	if ops, _ := db.HubOpsOwedReplay(now, time.Hour, 10); len(ops) != 1 {
-		t.Fatalf("cleared without settling: %+v", ops)
-	}
-	later := time.UnixMilli(op.ExpiresAt).Add(time.Hour + time.Second)
-	if ops, _ := db.HubOpsOwedReplay(later, time.Hour, 10); len(ops) != 0 {
-		t.Fatalf("owed past the bound: %+v", ops)
-	}
-	if ops, _ := db.UnsettledHubOpsPastBound(later, time.Hour, 10); len(ops) != 2 {
-		t.Fatalf("past the bound: %+v", ops)
-	}
-	// A forwarded event does not settle it; a completion does, and the mark goes.
-	for i, ev := range []hubmsg.Event{
-		{OpID: op.OpID, EventID: hubmsg.NewV7(now), Rev: 1, Class: "forwarded", Kind: "hub_forwarded", Authority: "hub"},
-		{OpID: op.OpID, EventID: hubmsg.NewV7(now), Rev: 2, Class: "completed", Kind: "recipient_app_stored", Authority: "recipient"},
-	} {
-		if _, err := db.AddHubOpEvent(ev, true, now); err != nil {
+	// The kept expiry, and a copy of it, end nothing.
+	for i := 0; i < 2; i++ {
+		if err := db.ResolveHubOpMissing(op.OpID, expired.EventID); err != nil {
 			t.Fatal(err)
 		}
-		settled, _ := db.HubOpSettled(op.OpID)
-		if settled != (i == 1) {
-			t.Fatalf("after %s settled=%v", ev.Class, settled)
+		if err := db.ResolveCompletedHubOp(op.OpID); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := db.ResolveKeptHubOpMissing(); err != nil || n != 0 {
+			t.Fatalf("struck %d: %v", n, err)
 		}
 	}
-	if n, err := db.SettleHubOpReplays(); err != nil || n != 1 {
-		t.Fatalf("settled cleared %d %v", n, err)
+	if ops, _ := db.HubOpsOwedReplay(now, time.Hour, all, 10); len(ops) != 1 {
+		t.Fatalf("an expiry ended the obligation of a lost completion: %+v", ops)
+	}
+	if ops, _ := db.HubOpsToReconcile(now, time.Hour, all, 10); len(ops) != 2 {
+		t.Fatalf("an expiry took it off the start's list: %+v", ops)
+	}
+	later := time.UnixMilli(op.ExpiresAt).Add(time.Hour + time.Second)
+	if ops, _ := db.HubOpsOwedReplay(later, time.Hour, all, 10); len(ops) != 0 {
+		t.Fatalf("owed past the bound: %+v", ops)
+	}
+	// Past the bound: op (a completion missing) and quiet (no outcome at all) are given up.
+	if ops, _ := db.HubOpsToGiveUp(later, time.Hour, 10); len(ops) != 2 {
+		t.Fatalf("to give up: %+v", ops)
+	}
+	// The completion is kept: everything of op ends, in one pass too.
+	if _, err := db.AddHubOpEvent(completed, true, now); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.ResolveKeptHubOpMissing(); err != nil || n != 1 {
+		t.Fatalf("struck %d %v", n, err)
 	}
 	if got, _ := db.GetHubOp(op.OpID); got.ReplayAt != 0 {
-		t.Fatal("a settled operation still owed")
+		t.Fatal("still owed once the completion is kept")
 	}
-	if ops, _ := db.UnsettledHubOps(now, time.Hour, 10); len(ops) != 1 || ops[0].OpID != quiet.OpID {
-		t.Fatalf("not settled after the completion: %+v", ops)
+	if ops, _ := db.HubOpsToReconcile(now, time.Hour, all, 10); len(ops) != 1 || ops[0].OpID != quiet.OpID {
+		t.Fatalf("the start's list after the completion: %+v", ops)
 	}
-	// Given up is not recovered: the owed mark stays, and it is listed nowhere again.
-	if err := db.WantHubOpReplay(quiet.OpID, now); err != nil {
+	// quiet ends expired and nothing is missing: past the bound its outcome is known.
+	if _, err := db.AddHubOpEvent(hubmsg.Event{OpID: quiet.OpID, EventID: hubmsg.NewV7(now), Rev: 1, Class: "expired", Kind: "hub_expired",
+		Reason: "expired", Authority: "hub"}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	if ops, _ := db.HubOpsToGiveUp(later, time.Hour, 10); len(ops) != 0 {
+		t.Fatalf("an outcome known was listed for giving up: %+v", ops)
+	}
+	// Given up is not recovered: the obligation stays, and it is listed nowhere again.
+	if err := db.WantHubOpReplay(quiet.OpID, MissingAnyEvent, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.GiveUpHubOpReplay(quiet.OpID, later); err != nil {
@@ -179,12 +206,59 @@ func TestHubDurability_AnOwedRepeatStaysOwedUntilTheOperationSettles(t *testing.
 		t.Fatalf("given up: %+v", got)
 	}
 	for _, list := range []func() ([]HubOp, error){
-		func() ([]HubOp, error) { return db.HubOpsOwedReplay(now, time.Hour, 10) },
-		func() ([]HubOp, error) { return db.UnsettledHubOps(now, time.Hour, 10) },
-		func() ([]HubOp, error) { return db.UnsettledHubOpsPastBound(later, time.Hour, 10) },
+		func() ([]HubOp, error) { return db.HubOpsOwedReplay(now, time.Hour, all, 10) },
+		func() ([]HubOp, error) { return db.HubOpsToReconcile(now, time.Hour, all, 10) },
+		func() ([]HubOp, error) { return db.HubOpsToGiveUp(later, time.Hour, 10) },
 	} {
 		if ops, err := list(); err != nil || len(ops) != 0 {
 			t.Fatalf("a given-up operation listed: %+v %v", ops, err)
+		}
+	}
+}
+
+// The listings page: a cursor after the last one taken lists the rest, and every one is
+// listed once across the pages.
+func TestHubDurability_TheListingsPageWithACursor(t *testing.T) {
+	db := testDB(t)
+	now := time.Now()
+	for i := 0; i < 7; i++ {
+		op := HubOp{OpID: hubmsg.NewV7(now.Add(time.Duration(i) * time.Millisecond)), Mid: hubmsg.NewV7(now), Recipient: "bridge:kit-b",
+			ExpiresAt: now.Add(time.Hour).UnixMilli(), CreatedAt: now.UnixMilli(), Submission: `{"v":1}`} // one created_at: the op id breaks the tie
+		if err := db.PutHubOp(op); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.WantHubOpReplay(op.OpID, "e", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, page := range map[string]func(HubOpCursor) ([]HubOp, error){
+		"reconcile": func(c HubOpCursor) ([]HubOp, error) { return db.HubOpsToReconcile(now, time.Hour, c, 3) },
+		"owed":      func(c HubOpCursor) ([]HubOp, error) { return db.HubOpsOwedReplay(now, time.Hour, c, 3) },
+	} {
+		seen := map[string]bool{}
+		var c HubOpCursor
+		for pages := 0; pages < 5; pages++ {
+			ops, err := page(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, op := range ops {
+				if seen[op.OpID] {
+					t.Fatalf("%s: %s listed twice", name, op.OpID)
+				}
+				seen[op.OpID] = true
+			}
+			if len(ops) < 3 {
+				break
+			}
+			last := ops[len(ops)-1]
+			c = HubOpCursor{Key: last.CreatedAt, OpID: last.OpID}
+			if name == "owed" {
+				c.Key = last.ReplayAt
+			}
+		}
+		if len(seen) != 7 {
+			t.Fatalf("%s: %d of 7 listed", name, len(seen))
 		}
 	}
 }
@@ -263,5 +337,42 @@ func TestHubDurability_V72TakesEarlierEventsAsApplied(t *testing.T) {
 	var applied int64
 	if err := db.QueryRow(`SELECT applied_at FROM hub_op_events WHERE event_id = 'e-1'`).Scan(&applied); err != nil || applied != 1234 {
 		t.Fatalf("applied_at %d %v", applied, err)
+	}
+}
+
+// v74 carries an operation owed before it (no event id was kept) over as one unnamed missing
+// event: a kept event of another id does not end it, a completion does.
+func TestHubDurability_V74CarriesAnOwedOperationOver(t *testing.T) {
+	db := openStaged(t, 73)
+	if _, err := db.Exec(`INSERT INTO hub_ops (op_id, mid, recipient, intent_id, expires_at, created_at, submission, replay_at)
+		VALUES ('op-1', 'mid-1', 'bridge:kit-b', 'i-1', 9999999999999, 1, '{"v":1}', 1234)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(migrations[73]); err != nil {
+		t.Fatalf("v74: %v", err)
+	}
+	if m, err := db.HubOpMissing("op-1"); err != nil || len(m) != 1 || m[0] != MissingAnyEvent {
+		t.Fatalf("carried over: %v %v", m, err)
+	}
+	if _, err := db.AddHubOpEvent(hubmsg.Event{OpID: "op-1", EventID: "e-fwd", Rev: 1, Class: "forwarded", Kind: "hub_forwarded", Authority: "hub"}, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ResolveHubOpMissing("op-1", "e-fwd"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.ResolveKeptHubOpMissing(); err != nil || n != 0 {
+		t.Fatalf("struck %d %v", n, err)
+	}
+	if got, _ := db.GetHubOp("op-1"); got.ReplayAt != 1234 {
+		t.Fatalf("an unnamed obligation ended by another event: %+v", got)
+	}
+	if _, err := db.AddHubOpEvent(hubmsg.Event{OpID: "op-1", EventID: "e-done", Rev: 2, Class: "completed", Kind: "recipient_app_stored", Authority: "recipient"}, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ResolveCompletedHubOp("op-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := db.GetHubOp("op-1"); got.ReplayAt != 0 {
+		t.Fatal("still owed after the completion")
 	}
 }

@@ -1730,6 +1730,21 @@ var migrations = []string{
 	// at the bound the bridge stops asking and says so: replay_given_up_at, and evidence
 	// hub_outcome_unknown in the ledger. [MESHSAT-1584]
 	`ALTER TABLE hub_ops ADD COLUMN replay_given_up_at INTEGER;`,
+
+	// v74: hub_msg, recovery names what is missing (r10 review HM-R5). An obligation is a row
+	// per missing event, written with replay_at in one transaction; it ends when that event is
+	// kept, or a completion is (C6's strongest class), never because a weaker terminal
+	// (failed, expired) is kept, since C6 lets a completion follow it. An operation owed
+	// before v74 kept no event id: it is carried over as one unnamed missing event, which only
+	// a completion or the bound ends. [MESHSAT-1584]
+	`CREATE TABLE IF NOT EXISTS hub_op_missing (
+		op_id    TEXT NOT NULL,
+		event_id TEXT NOT NULL,
+		since    INTEGER NOT NULL,
+		PRIMARY KEY (op_id, event_id)
+	);
+	INSERT OR IGNORE INTO hub_op_missing (op_id, event_id, since)
+		SELECT op_id, '', replay_at FROM hub_ops WHERE replay_at IS NOT NULL;`,
 }
 
 func (db *DB) migrate() error {

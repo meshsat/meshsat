@@ -215,19 +215,123 @@ func (db *DB) GetHubOp(opID string) (*HubOp, error) {
 	return scanHubOp(db.QueryRow(`SELECT `+hubOpCols+` FROM hub_ops WHERE op_id = ?`, opID))
 }
 
-// hubOpSettled is true for an operation whose outcome this bridge keeps: a valid event of
-// a terminal class (completed, failed, expired; a refusal is kept as failed). Nothing a
-// replay could bring matters to it after that.
-const hubOpSettled = `EXISTS (SELECT 1 FROM hub_op_events e WHERE e.op_id = hub_ops.op_id AND e.valid = 1
+// hubOpCompleted is true for an operation whose completion this bridge keeps: a valid event
+// of class completed, C6's strongest. Nothing a replay could bring raises it; a weaker
+// terminal (failed, expired) is not this, since C6 lets a completion follow it.
+const hubOpCompleted = `EXISTS (SELECT 1 FROM hub_op_events e WHERE e.op_id = hub_ops.op_id AND e.valid = 1
+	AND e.class = 'completed')`
+
+// hubOpTerminal is true for an operation with any outcome kept: completed, failed or expired
+// (a refusal is kept as failed).
+const hubOpTerminal = `EXISTS (SELECT 1 FROM hub_op_events e WHERE e.op_id = hub_ops.op_id AND e.valid = 1
 	AND e.class IN ('completed', 'failed', 'expired'))`
 
-// WantHubOpReplay records that an operation's events are owed again: one could not be kept
-// (or read against its operation), and only a repeat brings it back (C4). replay_at is when
-// it was first owed; only the operation's settling clears it (SettleHubOpReplay), never a
-// repeat going out, so an event lost while a repeat is in flight stays owed.
-func (db *DB) WantHubOpReplay(opID string, at time.Time) error {
-	_, err := db.Exec(`UPDATE hub_ops SET replay_at = COALESCE(replay_at, ?) WHERE op_id = ?`, at.UnixMilli(), opID)
+// MissingAnyEvent names, in hub_op_missing, an obligation whose event is not known (one
+// carried over from v72-v73, which kept no event ids): only a completion ends it, or the
+// bound.
+const MissingAnyEvent = ""
+
+// WantHubOpReplay records that an event of an operation is missing: it could not be kept,
+// or read against its operation, and only a repeat brings it back (C4). The missing event
+// is named (hub_op_missing) and replay_at, when the operation was first owed, is set in the
+// same transaction; only that event being kept, or a completion, ends it
+// (ResolveHubOpMissing, ResolveCompletedHubOp), never a repeat going out. For an operation
+// this bridge does not keep it records nothing.
+func (db *DB) WantHubOpReplay(opID, eventID string, at time.Time) error {
+	return db.withTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.Exec(`UPDATE hub_ops SET replay_at = COALESCE(replay_at, ?) WHERE op_id = ?`, at.UnixMilli(), opID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT OR IGNORE INTO hub_op_missing (op_id, event_id, since)
+			SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM hub_ops WHERE op_id = ?)`, opID, eventID, at.UnixMilli(), opID)
+		return err
+	})
+}
+
+// clearIdleReplay clears replay_at of an operation with nothing missing any more.
+func clearIdleReplay(tx *sqlx.Tx, opID string) error {
+	_, err := tx.Exec(`UPDATE hub_ops SET replay_at = NULL WHERE op_id = ? AND replay_at IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM hub_op_missing m WHERE m.op_id = hub_ops.op_id)`, opID)
 	return err
+}
+
+// ResolveHubOpMissing records that an event is kept: it is not missing any more, and the
+// operation is owed nothing when nothing else of it is.
+func (db *DB) ResolveHubOpMissing(opID, eventID string) error {
+	return db.withTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM hub_op_missing WHERE op_id = ? AND event_id = ?`, opID, eventID); err != nil {
+			return err
+		}
+		return clearIdleReplay(tx, opID)
+	})
+}
+
+// ResolveCompletedHubOp ends every obligation of an operation whose completion is kept;
+// for one without, it changes nothing.
+func (db *DB) ResolveCompletedHubOp(opID string) error {
+	return db.withTx(func(tx *sqlx.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM hub_op_missing WHERE op_id = ? AND EXISTS (SELECT 1 FROM hub_ops WHERE op_id = ? AND `+
+			hubOpCompleted+`)`, opID, opID); err != nil {
+			return err
+		}
+		return clearIdleReplay(tx, opID)
+	})
+}
+
+// ResolveKeptHubOpMissing ends, in one pass, the obligations whose event is kept by now and
+// those of completed operations (where a resolve could not be written at the time).
+func (db *DB) ResolveKeptHubOpMissing() (int, error) {
+	var n int
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		res, err := tx.Exec(`DELETE FROM hub_op_missing WHERE event_id != '' AND EXISTS
+			(SELECT 1 FROM hub_op_events e WHERE e.event_id = hub_op_missing.event_id)`)
+		if err != nil {
+			return err
+		}
+		a, _ := res.RowsAffected()
+		res, err = tx.Exec(`DELETE FROM hub_op_missing WHERE op_id IN (SELECT op_id FROM hub_ops WHERE ` + hubOpCompleted + `)`)
+		if err != nil {
+			return err
+		}
+		b, _ := res.RowsAffected()
+		n = int(a + b)
+		_, err = tx.Exec(`UPDATE hub_ops SET replay_at = NULL WHERE replay_at IS NOT NULL
+			AND NOT EXISTS (SELECT 1 FROM hub_op_missing m WHERE m.op_id = hub_ops.op_id)`)
+		return err
+	})
+	return n, err
+}
+
+// HubOpMissing lists an operation's missing events.
+func (db *DB) HubOpMissing(opID string) ([]string, error) {
+	rows, err := db.Query(`SELECT event_id FROM hub_op_missing WHERE op_id = ? ORDER BY since, event_id`, opID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// HubOpEventKept reports whether an event is kept (valid or rejected).
+func (db *DB) HubOpEventKept(eventID string) (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM hub_op_events WHERE event_id = ?`, eventID).Scan(&n)
+	return n > 0, err
+}
+
+// HubOpCompleted reports whether this bridge keeps an operation's completion.
+func (db *DB) HubOpCompleted(opID string) (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM hub_ops WHERE op_id = ? AND `+hubOpCompleted, opID).Scan(&n)
+	return n > 0, err
 }
 
 func queryHubOps(db *DB, where string, args ...any) ([]HubOp, error) {
@@ -254,54 +358,41 @@ func limitOr(limit int) int {
 	return limit
 }
 
-// HubOpsOwedReplay lists the operations owed a repeat, not settled, not given up, whose
-// deadline is not more than within before now, oldest first. The Hub answers a repeat from
-// what it stores, a day past the deadline, so a repeat well inside that is a replay, never a
-// new submission it would refuse as late.
-func (db *DB) HubOpsOwedReplay(now time.Time, within time.Duration, limit int) ([]HubOp, error) {
+// HubOpCursor is a position in a listing of operations: the sort key and the op id of the
+// last one taken, zero for the start.
+type HubOpCursor struct {
+	Key  int64
+	OpID string
+}
+
+// HubOpsOwedReplay lists, after cursor and ordered by (replay_at, op_id), the operations with
+// a missing event, not given up, with a kept submission, whose deadline is not more than
+// within before now. The Hub answers a repeat from what it stores, a day past the deadline,
+// so a repeat well inside that is a replay, never a new submission it would refuse as late.
+// A caller that pages with the cursor and starts again at the end visits every one.
+func (db *DB) HubOpsOwedReplay(now time.Time, within time.Duration, after HubOpCursor, limit int) ([]HubOp, error) {
 	return queryHubOps(db, `replay_at IS NOT NULL AND submission != '' AND replay_given_up_at IS NULL
-		AND expires_at + ? >= ? AND NOT `+hubOpSettled+` ORDER BY replay_at LIMIT ?`,
-		within.Milliseconds(), now.UnixMilli(), limitOr(limit))
+		AND expires_at + ? >= ? AND (replay_at, op_id) > (?, ?) ORDER BY replay_at, op_id LIMIT ?`,
+		within.Milliseconds(), now.UnixMilli(), after.Key, after.OpID, limitOr(limit))
 }
 
-// UnsettledHubOps lists the operations whose outcome this bridge does not keep, inside the
-// same bound, oldest first: what a process start asks the Hub for once, because an event it
-// lost may have left no mark at all.
-func (db *DB) UnsettledHubOps(now time.Time, within time.Duration, limit int) ([]HubOp, error) {
+// HubOpsToReconcile lists, after cursor and ordered by (created_at, op_id), the operations a
+// process start asks the Hub for once: a kept submission, no completion kept, not given up,
+// inside the same bound. An event lost with its mark leaves nothing else to find, and a
+// weaker terminal kept does not mean a completion was not lost.
+func (db *DB) HubOpsToReconcile(now time.Time, within time.Duration, after HubOpCursor, limit int) ([]HubOp, error) {
 	return queryHubOps(db, `submission != '' AND replay_given_up_at IS NULL AND expires_at + ? >= ?
-		AND NOT `+hubOpSettled+` ORDER BY created_at LIMIT ?`, within.Milliseconds(), now.UnixMilli(), limitOr(limit))
+		AND NOT `+hubOpCompleted+` AND (created_at, op_id) > (?, ?) ORDER BY created_at, op_id LIMIT ?`,
+		within.Milliseconds(), now.UnixMilli(), after.Key, after.OpID, limitOr(limit))
 }
 
-// UnsettledHubOpsPastBound lists the operations whose outcome this bridge does not keep and
-// that are past the bound, not given up yet.
-func (db *DB) UnsettledHubOpsPastBound(now time.Time, within time.Duration, limit int) ([]HubOp, error) {
-	return queryHubOps(db, `replay_given_up_at IS NULL AND expires_at + ? < ? AND NOT `+hubOpSettled+`
-		ORDER BY created_at LIMIT ?`, within.Milliseconds(), now.UnixMilli(), limitOr(limit))
-}
-
-// HubOpSettled reports whether this bridge keeps an operation's outcome.
-func (db *DB) HubOpSettled(opID string) (bool, error) {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM hub_ops WHERE op_id = ? AND `+hubOpSettled, opID).Scan(&n)
-	return n > 0, err
-}
-
-// SettleHubOpReplay clears an operation's owed repeat once it is settled; for an operation
-// not settled it changes nothing.
-func (db *DB) SettleHubOpReplay(opID string) error {
-	_, err := db.Exec(`UPDATE hub_ops SET replay_at = NULL WHERE op_id = ? AND replay_at IS NOT NULL AND `+hubOpSettled, opID)
-	return err
-}
-
-// SettleHubOpReplays clears every owed repeat whose operation is settled (one whose
-// settling could not clear its own mark).
-func (db *DB) SettleHubOpReplays() (int, error) {
-	res, err := db.Exec(`UPDATE hub_ops SET replay_at = NULL WHERE replay_at IS NOT NULL AND ` + hubOpSettled)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+// HubOpsToGiveUp lists the operations past the bound whose outcome this bridge cannot say:
+// one with a missing event, or one with no outcome kept at all. One past the bound with a
+// weaker outcome kept and nothing known missing has its outcome, and is not listed.
+func (db *DB) HubOpsToGiveUp(now time.Time, within time.Duration, limit int) ([]HubOp, error) {
+	return queryHubOps(db, `replay_given_up_at IS NULL AND expires_at + ? < ? AND NOT `+hubOpCompleted+`
+		AND (replay_at IS NOT NULL OR NOT `+hubOpTerminal+`) ORDER BY created_at, op_id LIMIT ?`,
+		within.Milliseconds(), now.UnixMilli(), limitOr(limit))
 }
 
 // GiveUpHubOpReplay records that this bridge stopped asking for an operation's events at
@@ -412,6 +503,9 @@ func (db *DB) PruneHubOps(now time.Time) (int, error) {
 	var n int
 	err := db.withTx(func(tx *sqlx.Tx) error {
 		if _, err := tx.Exec(`DELETE FROM hub_op_events WHERE op_id IN (SELECT op_id FROM hub_ops WHERE expires_at < ?)`, cutoff); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM hub_op_missing WHERE op_id IN (SELECT op_id FROM hub_ops WHERE expires_at < ?)`, cutoff); err != nil {
 			return err
 		}
 		res, err := tx.Exec(`DELETE FROM hub_ops WHERE expires_at < ?`, cutoff)

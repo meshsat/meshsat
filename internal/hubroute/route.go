@@ -66,21 +66,32 @@ type Route struct {
 	handoff  func(database.HubHandoff) error
 	stored   func(from, text string)
 	wake     chan struct{}
-	// replay holds the operations owed a repeat whose mark could not be kept either.
-	replay map[string]bool
-	// asks is each operation's repeats in this process: how many, when, and whether the Hub
-	// answered since the last one (a Hub that does not answer is asked less often).
+	// replay holds, per operation, the missing events whose mark could not be kept either.
+	replay map[string]map[string]bool
+	// asks is each operation's repeats in this process: how many, when, and whether an event
+	// of it failed to be kept since the last one (then the next may follow at once).
 	asks map[string]*replayAsk
-	// reconciled is set once this process asked for every operation not settled (its first
-	// pass connected to the Hub).
-	reconciled bool
+	// start is this process's walk over the operations a start asks for: a cursor over all
+	// of them, a batch per pass, done once the last batch is taken.
+	start     database.HubOpCursor
+	startDone bool
+	// owed is the cursor of the owed operations, a batch per pass, round and round, so
+	// none waits behind a first batch that stays owed.
+	owed database.HubOpCursor
 }
 
 type replayAsk struct {
-	n        int
-	at       time.Time
-	answered bool
+	n      int
+	at     time.Time
+	failed bool
 }
+
+// The batches of one pass: a start's walk takes startBatch operations per pass, the owed
+// listing owedBatch.
+const (
+	startBatch = 100
+	owedBatch  = 50
+)
 
 // New makes the route.
 func New(db *database.DB, pub Publisher, cfg Config) *Route {
@@ -93,7 +104,7 @@ func New(db *database.DB, pub Publisher, cfg Config) *Route {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Route{db: db, pub: pub, cfg: cfg, wake: make(chan struct{}, 1), replay: map[string]bool{}, asks: map[string]*replayAsk{}}
+	return &Route{db: db, pub: pub, cfg: cfg, wake: make(chan struct{}, 1), replay: map[string]map[string]bool{}, asks: map[string]*replayAsk{}}
 }
 
 func (r *Route) now() time.Time { return r.cfg.Now() }
@@ -239,17 +250,16 @@ func (r *Route) HandleStatus(payload []byte) {
 		log.Warn().Int("bytes", len(payload)).Msg("hub_msg: a status that is neither an event nor a refusal, ignored")
 		return
 	}
-	opID := ""
+	opID, eventID := "", ""
 	if ev != nil {
-		opID = ev.OpID
+		opID, eventID = ev.OpID, ev.EventID
 	} else {
-		opID = ref.OpID
+		opID, eventID = ref.OpID, refusalEventID(ref.OpID, ref.Reason)
 	}
-	r.noteAnswered(opID)
 	op, err := r.db.GetHubOp(opID)
 	if err != nil {
 		log.Warn().Err(err).Str("op_id", opID).Msg("hub_msg: status not read against its operation; a repeat is owed")
-		r.oweReplay(opID)
+		r.oweReplay(opID, eventID)
 		return
 	}
 	if op == nil {
@@ -272,12 +282,10 @@ func (r *Route) HandleStatus(payload []byte) {
 	kept, err := r.db.AddHubOpEvent(e, valid, r.now())
 	if err != nil {
 		log.Warn().Err(err).Str("event_id", e.EventID).Msg("hub_msg: event not kept; a repeat is owed")
-		r.oweReplay(op.OpID)
+		r.oweReplay(op.OpID, e.EventID)
 		return
 	}
-	if kept.Valid && settles(kept.Event) {
-		r.settle(op.OpID)
-	}
+	r.resolve(op.OpID, kept)
 	switch {
 	case !kept.Valid:
 		if kept.Added {
@@ -328,42 +336,51 @@ func (r *Route) ApplyPending() {
 	}
 }
 
-// settles is true for an event of a terminal class: the bridge then keeps the operation's
-// outcome, and nothing a replay could bring matters to it.
-func settles(e hubmsg.Event) bool {
-	return e.Class == "completed" || e.Class == "failed" || e.Class == "expired"
-}
-
-// settle clears an operation's owed repeat once its outcome is kept. Only this clears one:
-// a repeat going out does not, so an event lost while a repeat is in flight stays owed.
-func (r *Route) settle(opID string) {
-	if err := r.db.SettleHubOpReplay(opID); err != nil {
-		log.Warn().Err(err).Str("op_id", opID).Msg("hub_msg: owed repeat not cleared; cleared on the next pass")
+// resolve ends what a kept event ends: the obligation that named it, and every obligation of
+// the operation when it is a valid completion (C6's strongest class: nothing a replay could
+// bring raises it). A weaker terminal ends nothing but itself, since C6 lets a completion
+// follow it.
+func (r *Route) resolve(opID string, kept database.KeptHubOpEvent) {
+	completed := kept.Valid && kept.Event.Class == "completed"
+	var err error
+	if completed {
+		err = r.db.ResolveCompletedHubOp(opID)
+	} else {
+		err = r.db.ResolveHubOpMissing(opID, kept.Event.EventID)
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("op_id", opID).Msg("hub_msg: a kept event not struck from the missing ones; struck on the next pass")
 	}
 	r.mu.Lock()
-	delete(r.replay, opID)
-	delete(r.asks, opID)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if m := r.replay[opID]; m != nil {
+		delete(m, kept.Event.EventID)
+		if completed || len(m) == 0 {
+			delete(r.replay, opID)
+		}
+	}
+	if completed {
+		delete(r.asks, opID)
+	}
 }
 
-// oweReplay records that an operation is owed a repeat, in the database when it can and in
-// memory when even that fails (a process start then finds it among the operations not
-// settled).
-func (r *Route) oweReplay(opID string) {
-	if err := r.db.WantHubOpReplay(opID, r.now()); err == nil {
+// oweReplay records that an event of an operation is missing, in the database when it can
+// and in memory when even that fails (a process start then finds the operation among those
+// without a completion). The next repeat of it may follow at once.
+func (r *Route) oweReplay(opID, eventID string) {
+	r.mu.Lock()
+	if a := r.asks[opID]; a != nil {
+		a.failed = true
+	}
+	r.mu.Unlock()
+	if err := r.db.WantHubOpReplay(opID, eventID, r.now()); err == nil {
 		return
 	}
 	r.mu.Lock()
-	r.replay[opID] = true
-	r.mu.Unlock()
-}
-
-// noteAnswered records that the Hub sent something about an operation since its last repeat.
-func (r *Route) noteAnswered(opID string) {
-	r.mu.Lock()
-	if a := r.asks[opID]; a != nil {
-		a.answered = true
+	if r.replay[opID] == nil {
+		r.replay[opID] = map[string]bool{}
 	}
+	r.replay[opID][eventID] = true
 	r.mu.Unlock()
 }
 
@@ -373,13 +390,13 @@ func (r *Route) noteAnswered(opID string) {
 // was off the Hub for an evening still gets its outcomes.
 const ReplayWithin = 12 * time.Hour
 
-// replayDue says whether an operation may be asked again now: at once while the Hub answers
-// each repeat (the database may still be failing), otherwise after 30 s doubling to 30 min.
+// replayDue says whether an operation may be asked again now: at once while each answer
+// fails to be kept (the database is still failing), otherwise after 30 s doubling to 30 min.
 func (r *Route) replayDue(opID string, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a := r.asks[opID]
-	if a == nil || a.answered {
+	if a == nil || a.failed {
 		return true
 	}
 	wait := 30 * time.Second
@@ -389,132 +406,217 @@ func (r *Route) replayDue(opID string, now time.Time) bool {
 	return now.Sub(a.at) >= min(wait, 30*time.Minute)
 }
 
+// repeat publishes an operation's kept submission once more, unchanged. False when it did
+// not go out.
+func (r *Route) repeat(op database.HubOp, now time.Time) bool {
+	r.mu.Lock()
+	a := r.asks[op.OpID]
+	if a == nil {
+		a = &replayAsk{}
+		r.asks[op.OpID] = a
+	}
+	// From here a failure to keep an answer counts against this repeat, one that comes
+	// before the publish returns included.
+	a.failed = false
+	r.mu.Unlock()
+	if err := r.pub.PublishMsg("out", []byte(op.Submission), r.cfg.PublishWait); err != nil {
+		log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: repeat not published, tried again later")
+		r.mu.Lock()
+		a.failed = true // nothing went out: not a reason to wait
+		r.mu.Unlock()
+		return false
+	}
+	r.mu.Lock()
+	a.n, a.at = a.n+1, now
+	r.mu.Unlock()
+	log.Info().Str("op_id", op.OpID).Msg("hub_msg: submission repeated, the Hub replays its events")
+	return true
+}
+
 // RequestReplays asks the Hub again, with the kept submission unchanged, for the events of
 // every operation that may be missing one, and the Hub answers with every event under the
-// same ids (C4):
-//   - the operations owed a repeat, in the database or in memory;
-//   - once per process start, every operation whose outcome is not kept, inside the bound:
-//     an event lost with its mark leaves nothing else to find.
+// same ids (C4). Each pass:
+//   - the next batch of the operations with a missing event, in the database or in
+//     memory, round and round, so every one is asked however many stay owed;
+//   - while this process's start has not walked them all, the next batch of the operations
+//     without a completion inside the bound, each once: an event lost with its mark leaves
+//     nothing else to find, and a weaker terminal kept says nothing about a completion lost.
 //
-// An operation stops being asked for when its outcome is kept (settle) or at the bound,
+// An obligation ends when its event is kept, or a completion is (resolve), or at the bound,
 // where the bridge records that the outcome is unknown and stops: given up, not recovered.
 func (r *Route) RequestReplays() {
 	now := r.now()
 	r.giveUpPastBound(now)
-	if n, err := r.db.SettleHubOpReplays(); err != nil {
-		log.Warn().Err(err).Msg("hub_msg: settled repeats not cleared")
+	if n, err := r.db.ResolveKeptHubOpMissing(); err != nil {
+		log.Warn().Err(err).Msg("hub_msg: kept events not struck from the missing ones")
 	} else if n > 0 {
-		log.Info().Int("operations", n).Msg("hub_msg: owed repeats of settled operations cleared")
+		log.Info().Int("events", n).Msg("hub_msg: missing events kept by now struck")
 	}
 	if !r.pub.IsConnected() {
 		return
 	}
-	ops, err := r.db.HubOpsOwedReplay(now, ReplayWithin, 50)
+	asked := map[string]bool{}
+	ask := func(op database.HubOp) bool {
+		if asked[op.OpID] {
+			return true
+		}
+		asked[op.OpID] = true
+		if !r.replayDue(op.OpID, now) {
+			return true
+		}
+		return r.repeat(op, now)
+	}
+
+	// The owed, a batch round and round.
+	r.mu.Lock()
+	cur := r.owed
+	r.mu.Unlock()
+	owed, err := r.db.HubOpsOwedReplay(now, ReplayWithin, cur, owedBatch)
 	if err != nil {
 		log.Warn().Err(err).Msg("hub_msg: owed repeats not listed")
 	}
+	for _, op := range owed {
+		ask(op)
+	}
 	r.mu.Lock()
-	reconciled := r.reconciled
+	if len(owed) < owedBatch {
+		r.owed = database.HubOpCursor{} // the end: the next pass starts again at the first
+	} else {
+		last := owed[len(owed)-1]
+		r.owed = database.HubOpCursor{Key: last.ReplayAt, OpID: last.OpID}
+	}
 	var held []string
 	for id := range r.replay {
 		held = append(held, id)
 	}
 	r.mu.Unlock()
-	if !reconciled {
-		unsettled, err := r.db.UnsettledHubOps(now, ReplayWithin, 200)
-		if err != nil {
-			log.Warn().Err(err).Msg("hub_msg: operations without their outcome not listed; asked for at the next pass")
-		} else {
-			if len(unsettled) > 0 {
-				log.Info().Int("operations", len(unsettled)).Msg("hub_msg: operations without their outcome at start; asking the Hub for their events")
-			}
-			ops = append(ops, unsettled...)
-			r.mu.Lock()
-			r.reconciled = true
-			r.mu.Unlock()
-		}
-	}
+
+	// The owed in memory only.
 	for _, id := range held {
 		op, err := r.db.GetHubOp(id)
 		if err != nil {
 			continue // still owed
 		}
-		settled, err := r.db.HubOpSettled(id)
-		if err != nil {
-			continue
-		}
-		if op == nil || op.Submission == "" || settled || op.ReplayGivenUpAt > 0 || op.ExpiresAt+ReplayWithin.Milliseconds() < now.UnixMilli() {
+		if op == nil || op.Submission == "" || op.ReplayGivenUpAt > 0 {
 			r.mu.Lock()
 			delete(r.replay, id)
 			r.mu.Unlock()
 			continue
 		}
-		ops = append(ops, *op)
+		if op.ExpiresAt+ReplayWithin.Milliseconds() < now.UnixMilli() {
+			r.giveUp(*op, now)
+			continue
+		}
+		if !r.stillMissing(id) {
+			continue
+		}
+		ask(*op)
 	}
-	seen := map[string]bool{}
+
+	// The start's walk, a batch per pass until the last.
+	r.mu.Lock()
+	done, cur := r.startDone, r.start
+	r.mu.Unlock()
+	if done {
+		return
+	}
+	ops, err := r.db.HubOpsToReconcile(now, ReplayWithin, cur, startBatch)
+	if err != nil {
+		log.Warn().Err(err).Msg("hub_msg: operations without a completion not listed; listed at the next pass")
+		return
+	}
+	if cur == (database.HubOpCursor{}) && len(ops) > 0 {
+		log.Info().Int("first_batch", len(ops)).Msg("hub_msg: operations without a completion at start; asking the Hub for their events")
+	}
 	for _, op := range ops {
-		if seen[op.OpID] || !r.replayDue(op.OpID, now) {
-			continue
-		}
-		seen[op.OpID] = true
-		r.mu.Lock()
-		a := r.asks[op.OpID]
-		if a == nil {
-			a = &replayAsk{}
-			r.asks[op.OpID] = a
-		}
-		// From here an answer counts for this repeat, one that comes before the publish
-		// returns included.
-		a.answered = false
-		r.mu.Unlock()
-		if err := r.pub.PublishMsg("out", []byte(op.Submission), r.cfg.PublishWait); err != nil {
-			log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: repeat not published, tried again later")
-			r.oweReplay(op.OpID)
-			r.mu.Lock()
-			a.answered = true // nothing went out: not a silent Hub
-			r.mu.Unlock()
-			continue
+		if !ask(op) {
+			// Not published (off the Hub at once, or no answer from the broker): the walk
+			// stays here and goes on from it at the next pass.
+			return
 		}
 		r.mu.Lock()
-		a.n, a.at = a.n+1, now
+		r.start = database.HubOpCursor{Key: op.CreatedAt, OpID: op.OpID}
 		r.mu.Unlock()
-		log.Info().Str("op_id", op.OpID).Msg("hub_msg: submission repeated, the Hub replays its events")
+	}
+	if len(ops) < startBatch {
+		r.mu.Lock()
+		r.startDone = true
+		r.mu.Unlock()
 	}
 }
 
+// stillMissing strikes from an operation's in-memory missing events those kept by now, and
+// reports whether any is left; a completion kept ends them all.
+func (r *Route) stillMissing(opID string) bool {
+	if done, err := r.db.HubOpCompleted(opID); err == nil && done {
+		r.mu.Lock()
+		delete(r.replay, opID)
+		r.mu.Unlock()
+		return false
+	}
+	r.mu.Lock()
+	var ids []string
+	for id := range r.replay[opID] {
+		ids = append(ids, id)
+	}
+	r.mu.Unlock()
+	left := 0
+	for _, id := range ids {
+		kept, err := r.db.HubOpEventKept(id)
+		if err == nil && kept && id != database.MissingAnyEvent {
+			r.mu.Lock()
+			delete(r.replay[opID], id)
+			r.mu.Unlock()
+			continue
+		}
+		left++
+	}
+	if left == 0 {
+		r.mu.Lock()
+		delete(r.replay, opID)
+		r.mu.Unlock()
+	}
+	return left > 0
+}
+
 // giveUpPastBound ends the asking for each operation past the bound whose outcome this
-// bridge does not keep: the ledger gets hub_outcome_unknown (evidence only, once), then the
-// operation is marked given up. Its owed mark stays, so it never reads as recovered.
+// bridge cannot say: one with a missing event, or one with no outcome kept at all.
 func (r *Route) giveUpPastBound(now time.Time) {
-	ops, err := r.db.UnsettledHubOpsPastBound(now, ReplayWithin, 50)
+	ops, err := r.db.HubOpsToGiveUp(now, ReplayWithin, 50)
 	if err != nil {
 		log.Warn().Err(err).Msg("hub_msg: operations past the bound not listed")
 		return
 	}
+	for _, op := range ops {
+		r.giveUp(op, now)
+	}
+}
+
+// giveUp records hub_outcome_unknown in the ledger (evidence only, once), then marks the
+// operation given up. Its missing events stay, so it never reads as recovered.
+func (r *Route) giveUp(op database.HubOp, now time.Time) {
 	r.mu.Lock()
 	fn := r.evidence
 	r.mu.Unlock()
-	for _, op := range ops {
-		if fn == nil {
-			return
-		}
-		rc := gateway.IntentReceipt{CorrKind: CorrKind, CorrValue: op.OpID, Scope: InterfaceID, Peer: op.Recipient, Trust: "session",
-			Source: "bridge", Event: "hub_outcome_unknown", Key: "hub_outcome_unknown:" + op.OpID}
-		if err := fn(rc); err != nil {
-			log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: unknown outcome not in the ledger yet, recorded again later")
-			continue
-		}
-		if err := r.db.GiveUpHubOpReplay(op.OpID, now); err != nil {
-			log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: given up not marked; marked again later")
-			continue
-		}
-		r.mu.Lock()
-		delete(r.replay, op.OpID)
-		delete(r.asks, op.OpID)
-		r.mu.Unlock()
-		log.Warn().Str("op_id", op.OpID).Bool("owed", op.ReplayAt > 0).
-			Msg("hub_msg: the Hub's outcome of an operation never reached this kit inside the bound; stopped asking")
+	if fn == nil {
+		return
 	}
+	rc := gateway.IntentReceipt{CorrKind: CorrKind, CorrValue: op.OpID, Scope: InterfaceID, Peer: op.Recipient, Trust: "session",
+		Source: "bridge", Event: "hub_outcome_unknown", Key: "hub_outcome_unknown:" + op.OpID}
+	if err := fn(rc); err != nil {
+		log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: unknown outcome not in the ledger yet, recorded again later")
+		return
+	}
+	if err := r.db.GiveUpHubOpReplay(op.OpID, now); err != nil {
+		log.Warn().Err(err).Str("op_id", op.OpID).Msg("hub_msg: given up not marked; marked again later")
+		return
+	}
+	r.mu.Lock()
+	delete(r.replay, op.OpID)
+	delete(r.asks, op.OpID)
+	r.mu.Unlock()
+	log.Warn().Str("op_id", op.OpID).Bool("owed", op.ReplayAt > 0).
+		Msg("hub_msg: the Hub's outcome of an operation never reached this kit inside the bound; stopped asking")
 }
 
 // ---- msg/in ----
