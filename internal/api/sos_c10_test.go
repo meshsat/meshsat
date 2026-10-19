@@ -482,12 +482,13 @@ func withHubSMS(t *testing.T, s *Server) *sosSMSRecorder {
 	rec := &sosSMSRecorder{frames: map[string][]byte{}}
 	s.satFallback = hubreporter.NewSatFallback(hubreporter.SatFallbackConfig{BridgeID: "msa-flaneur",
 		SOSSendFn: func(frame []byte, ref string) error {
-			rec.mu.Lock()
-			rec.frames[ref] = append([]byte(nil), frame...)
-			rec.mu.Unlock()
+			// The row first: a test that sees the frame reads the row next.
 			_, _, err := s.dispatcher.QueueDirectSendTo("cellular_0", base64Std(frame), engine.DirectSendOptions{
 				Precedence: "Override", Class: database.DeliveryClassHubUplink, Critical: hubreporter.IsSatSOS(frame),
 				Destination: "+3197010258258", MsgRef: ref})
+			rec.mu.Lock()
+			rec.frames[ref] = append([]byte(nil), frame...)
+			rec.mu.Unlock()
 			return err
 		}})
 	return rec
